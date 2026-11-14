@@ -1,0 +1,178 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 1200 930" width="1200" height="930" role="img" aria-labelledby="title desc" font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+<title id="title">Diagram 9. Deployment and trust boundaries for Bottle: device, Databricks account and workspaces, browser and IdP</title>
+<desc id="desc">Three trust zones for Bottle. Zone 1 is the device: WebView windows hold no secrets and the hidden brain hosts T12 ConsentService; the Rust core secret boundary holds CLI access tokens, the SQLCipher key and journal keys in memory only, plus the native REC indicator and the native consent dialog of R11; the OS keychain holds the CLI token cache (CLI 1.17 or later); local disk holds the encrypted SQLite memory store (MVP, BC2) and the session journal; the main agents get no token. Zone 2 is the Databricks account with workspace A (Unity Gateway, Genie One MCP, UC Pages drafts, optional v1 Lakebase) and workspace B. Zone 3 is the browser and IdP. Numbered flows show the data that crosses each boundary; flow 5 is v1 only. The MVP admin prerequisites need a genie_one_mcp QPM of 40 or more per user, or no limit and no Lakebase.</desc>
+<defs>
+<marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#111827"/></marker>
+<style type="text/css"><![CDATA[
+text{font-size:13px;fill:#111827}
+.s{font-size:12px}
+.h{font-size:16px;font-weight:700}
+.zl{font-weight:700}
+.b{font-weight:700}
+.red{fill:#B91C1C}
+.halo{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
+.ln{stroke:#111827;stroke-width:1.5;fill:none}
+.da{stroke-dasharray:6 4}
+.do{stroke-dasharray:2 3}
+.box{fill:#FFFFFF;stroke:#111827;stroke-width:1.2}
+]]></style>
+</defs>
+<rect x="0" y="0" width="1200" height="930" fill="#FFFFFF"/>
+<text x="20" y="28" class="h">Diagram 9. Deployment and trust boundaries: where tokens live and which data crosses each boundary</text>
+
+<!-- Zone 1: Device -->
+<rect x="20" y="44" width="450" height="704" fill="#EFF6FF" stroke="#1D4ED8" stroke-width="1.5"/>
+<text x="30" y="62" class="zl">Trust zone 1: Device running Bottle (macOS 14.4+ / Windows 11)</text>
+
+<rect x="36" y="72" width="418" height="110" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="46" y="90" class="zl s">WebView windows (hub, MOG views, cards, hidden brain)</text>
+<text x="46" y="112" class="s">Holds: cleaned text, blurbs, mood, MOG config (no secrets)</text>
+<text x="46" y="130" class="s">T12 ConsentService (brain): notice, attestation, records</text>
+<text x="46" y="148" class="s">CSP: no external connect-src; Rive asset CDN off</text>
+<text x="46" y="166" class="s">Events only, never a key · panels never contentProtected</text>
+
+<rect x="120" y="192" width="250" height="26" fill="#FFFFFF" stroke="#C2410C" stroke-width="1.5"/>
+<text x="245" y="210" text-anchor="middle" class="s b">R12 IpcGateway: schema + scrubbing</text>
+
+<rect x="36" y="228" width="418" height="230" fill="#FFF7ED" stroke="#C2410C" stroke-width="1.5"/>
+<rect x="39" y="231" width="412" height="224" fill="none" stroke="#DC2626" stroke-width="2" stroke-dasharray="6 4"/>
+<text x="48" y="248" class="zl s red">Rust core · secret boundary: no token crosses</text>
+<rect x="50" y="254" width="390" height="94" class="box"/>
+<text x="60" y="272" class="s b">In memory only (zeroised on 401, sleep, sign-out):</text>
+<text x="60" y="290" class="s">• CLI access token per profile (≤ 60 min, refresh −60 s)</text>
+<text x="60" y="306" class="s">• v1 only: Lakebase credential, new per connection</text>
+<text x="60" y="322" class="s">• SQLCipher key and per-session journal DEK</text>
+<text x="60" y="338" class="s">• a token goes only to its own host; agents (BC4) get none</text>
+<rect x="50" y="358" width="190" height="90" class="box"/>
+<text x="145" y="376" text-anchor="middle" class="s b">Native REC indicator</text>
+<text x="145" y="392" text-anchor="middle" class="s">fail-closed: no indicator,</text>
+<text x="145" y="408" text-anchor="middle" class="s">no capture; visible in</text>
+<text x="145" y="424" text-anchor="middle" class="s">screen share; pause</text>
+<text x="145" y="440" text-anchor="middle" class="s">closes the mic</text>
+<rect x="250" y="358" width="190" height="90" class="box"/>
+<text x="345" y="376" text-anchor="middle" class="s b">Native consent dialog</text>
+<text x="345" y="392" text-anchor="middle" class="s">(R11 WindowHost) shows</text>
+<text x="345" y="408" text-anchor="middle" class="s">what T12 asks; T12</text>
+<text x="345" y="424" text-anchor="middle" class="s">keeps records 13 months</text>
+<text x="345" y="440" text-anchor="middle" class="s">(content-free)</text>
+
+<rect x="36" y="474" width="418" height="82" fill="#F3F4F6" stroke="#6B7280" stroke-width="1.5"/>
+<text x="46" y="492" class="zl s">OS keychain (secure storage)</text>
+<text x="46" y="510" class="s">• CLI token cache (U2M refresh + access), CLI ≥ 1.17</text>
+<text x="46" y="526" class="s">• SQLCipher key and journal KEK (this device only)</text>
+<text x="46" y="542" class="s">• plaintext CLI storage gives a blocking warning (D39)</text>
+
+<rect x="36" y="566" width="418" height="86" fill="#FFFFFF" stroke="#6B7280" stroke-width="1.5"/>
+<text x="46" y="584" class="zl s">Local disk (encrypted)</text>
+<text x="46" y="602" class="s">• SQLite memory store (BC2): SQLCipher, WAL, FTS5, sqlite-vec</text>
+<text x="46" y="618" class="s">• Session journal: AEAD Ogg-Opus, new file every 60 s,</text>
+<text x="46" y="634" class="s">   crypto-shred ≤ 5 min after transcript commit</text>
+
+<rect x="36" y="662" width="200" height="76" fill="#F3F4F6" stroke="#6B7280" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="136" y="682" text-anchor="middle" class="s b">databricks CLI ≥ 1.17</text>
+<text x="136" y="700" text-anchor="middle" class="s">subprocess, absolute</text>
+<text x="136" y="716" text-anchor="middle" class="s">path, clean env</text>
+<rect x="248" y="662" width="206" height="76" fill="#F3F4F6" stroke="#6B7280" stroke-width="1.2"/>
+<text x="351" y="682" text-anchor="middle" class="s b">Mic (You) + system audio</text>
+<text x="351" y="700" text-anchor="middle" class="s">(Others, MVP-M); mic closed</text>
+<text x="351" y="716" text-anchor="middle" class="s">when idle; zero-buffer</text>
+<text x="351" y="732" text-anchor="middle" class="s">check at 5 s</text>
+
+<!-- Zone 2: Account -->
+<rect x="700" y="44" width="480" height="620" fill="#FFFFFF" stroke="#7F1D1D" stroke-width="2" stroke-dasharray="10 4"/>
+<text x="710" y="62" class="zl">Trust zone 2: Databricks account (customer tenancy)</text>
+<rect x="716" y="72" width="448" height="70" class="box"/>
+<text x="728" y="90" class="s b">Account OAuth apps</text>
+<text x="728" y="108" class="s">• databricks-cli published app (default U2M client)</text>
+<text x="728" y="124" class="s">• optional custom public app via auth login --client-id (S)</text>
+
+<rect x="716" y="152" width="448" height="250" fill="#FEF2F2" stroke="#B91C1C" stroke-width="1.5"/>
+<text x="726" y="170" class="zl">Workspace A (home profile)</text>
+<rect x="732" y="180" width="416" height="52" class="box"/>
+<text x="742" y="198" class="s b">Unity Gateway model services (/ai-gateway/mlflow/v1)</text>
+<text x="742" y="216" class="s">system.ai.* names; FMAPI may keep inputs ≤ 30 d (abuse)</text>
+<rect x="732" y="240" width="416" height="52" class="box"/>
+<text x="742" y="258" class="s b">Genie One MCP ?o=&lt;workspace_id A&gt;</text>
+<text x="742" y="276" class="s">Genie history, audit and query history keep questions</text>
+<rect x="732" y="300" width="416" height="52" fill="#F0FDF4" stroke="#15803D" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="742" y="318" class="s b">Lakebase project: optional v1 sync (BC2), PITR 2 d</text>
+<text x="742" y="336" class="s">v1: items, sessions, summary + key numbers + pointer</text>
+<rect x="732" y="360" width="416" height="34" class="box"/>
+<text x="742" y="382" class="s">UC Pages DRAFTs (BC3, scope knowledge); usage: tags only</text>
+
+<rect x="716" y="412" width="448" height="100" fill="#FEF2F2" stroke="#B91C1C" stroke-width="1.5"/>
+<text x="726" y="430" class="zl">Workspace B (target profile)</text>
+<rect x="732" y="440" width="416" height="62" class="box"/>
+<text x="742" y="458" class="s b">Genie One MCP ?o=&lt;workspace_id B&gt;</text>
+<text x="742" y="476" class="s">token B only; conversations stay pinned to B</text>
+<text x="742" y="492" class="s">memory stores a pointer only for B answers (MEM-25)</text>
+
+<rect x="716" y="522" width="448" height="130" class="box"/>
+<text x="728" y="540" class="s b">Admin prerequisites (ADM)</text>
+<text x="728" y="558" class="s">• Genie One on; EXECUTE on system.ai.genie_one_mcp</text>
+<text x="728" y="574" class="s">• USE CATALOG system, USE SCHEMA system.ai</text>
+<text x="728" y="590" class="s">• egress port 443; Lakebase and 5432 are v1 only (BC2)</text>
+<text x="728" y="606" class="s">• model services granted; cross-geo routing if needed</text>
+<text x="728" y="622" class="s">• genie_one_mcp MCP QPM ≥ 40 per user, or no limit</text>
+<text x="728" y="638" class="s">• MDM keys; custom OAuth app scopes incl. knowledge</text>
+
+<!-- Zone 3: Browser / IdP -->
+<rect x="700" y="700" width="480" height="60" fill="#F3F4F6" stroke="#6B7280" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="710" y="720" class="zl s">Trust zone 3: Browser / corporate IdP</text>
+<text x="710" y="742" class="s">SSO for databricks auth login (OAuth U2M, loopback redirect)</text>
+
+<!-- Crossing arrows -->
+<line x1="454" y1="262" x2="730" y2="204" class="ln" marker-end="url(#arw)"/>
+<text x="592" y="229" text-anchor="middle" class="s" style="fill:#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">① audio ≤ 30 s chunks (cloud ASR only)</text><text x="592" y="229" text-anchor="middle" class="s">① audio ≤ 30 s chunks (cloud ASR only)</text>
+<line x1="454" y1="282" x2="730" y2="220" class="ln" marker-end="url(#arw)"/>
+<text x="592" y="262" text-anchor="middle" class="s" style="fill:#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">② text: cleanup, classifier, embed, agent</text><text x="592" y="262" text-anchor="middle" class="s">② text: cleanup, classifier, embed, agent</text>
+<line x1="454" y1="306" x2="730" y2="262" class="ln" marker-end="url(#arw)"/>
+<text x="592" y="280" text-anchor="middle" class="s" style="fill:#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">③ question + approved preamble ≤ 800</text><text x="592" y="280" text-anchor="middle" class="s">③ question + approved preamble ≤ 800</text>
+<line x1="730" y1="280" x2="456" y2="322" class="ln da" marker-end="url(#arw)"/>
+<text x="592" y="316" text-anchor="middle" class="s" style="fill:#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">④ progress, answer (serial polls)</text><text x="592" y="316" text-anchor="middle" class="s">④ progress, answer (serial polls)</text>
+<line x1="454" y1="390" x2="730" y2="326" class="ln da" marker-end="url(#arw)"/>
+<text x="592" y="350" text-anchor="middle" class="s" style="fill:#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">⑤ v1 only: sync items · TLS 5432</text><text x="592" y="350" text-anchor="middle" class="s">⑤ v1 only: sync items · TLS 5432</text>
+<line x1="454" y1="420" x2="730" y2="470" class="ln" marker-end="url(#arw)"/>
+<text x="592" y="438" text-anchor="middle" class="s" style="fill:#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">⑥ question to B; no A context by default</text><text x="592" y="438" text-anchor="middle" class="s">⑥ question to B; no A context by default</text>
+<polyline points="136,738 136,772 640,772 640,730 698,730" class="ln do" marker-end="url(#arw)"/>
+<text x="388" y="766" text-anchor="middle" class="s" style="fill:#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">⑦ auth login: SSO in browser, OAuth code back to the CLI</text><text x="388" y="766" text-anchor="middle" class="s">⑦ auth login: SSO in browser, OAuth code back to the CLI</text>
+
+<!-- Legend -->
+<rect x="20" y="784" width="680" height="108" fill="#FFFFFF" stroke="#6B7280" stroke-width="1"/>
+<text x="30" y="801" class="zl s">Legend</text>
+<rect x="36" y="808" width="28" height="16" fill="#EFF6FF" stroke="#1D4ED8"/>
+<text x="70" y="821" class="s">Device</text>
+<rect x="200" y="808" width="28" height="16" fill="#FFF7ED" stroke="#DC2626" stroke-width="2" stroke-dasharray="6 4"/>
+<text x="234" y="821" class="s">Rust core (secret)</text>
+<rect x="364" y="808" width="28" height="16" fill="#DBEAFE" stroke="#1D4ED8"/>
+<text x="398" y="821" class="s">WebView window</text>
+<rect x="528" y="808" width="28" height="16" fill="#FEF2F2" stroke="#B91C1C"/>
+<text x="562" y="821" class="s">Databricks workspace</text>
+<rect x="36" y="834" width="28" height="16" fill="#F0FDF4" stroke="#15803D" stroke-dasharray="6 4"/>
+<text x="70" y="847" class="s">Lakebase (v1)</text>
+<rect x="200" y="834" width="28" height="16" fill="#F3F4F6" stroke="#6B7280"/>
+<text x="234" y="847" class="s">OS services</text>
+<rect x="364" y="834" width="28" height="16" fill="#F3F4F6" stroke="#6B7280" stroke-dasharray="6 4"/>
+<text x="398" y="847" class="s">Browser / IdP</text>
+<rect x="528" y="834" width="28" height="16" fill="#FFFFFF" stroke="#7F1D1D" stroke-width="2" stroke-dasharray="10 4"/>
+<text x="562" y="847" class="s">Account boundary</text>
+<line x1="36" y1="874" x2="86" y2="874" class="ln" marker-end="url(#arw)"/>
+<text x="94" y="878" class="s">request / data</text>
+<line x1="200" y1="874" x2="250" y2="874" class="ln da" marker-end="url(#arw)"/>
+<text x="258" y="878" class="s">event / stream</text>
+<line x1="364" y1="874" x2="414" y2="874" class="ln do" marker-end="url(#arw)"/>
+<text x="422" y="878" class="s">credential fetch</text>
+<text x="528" y="878" class="s">① to ⑦ = data that crosses</text>
+
+<!-- Never crosses -->
+<rect x="716" y="784" width="464" height="108" fill="#FFFBEB" stroke="#B45309" stroke-width="1"/>
+<text x="728" y="801" class="s b">Never crosses a boundary (default)</text>
+<text x="728" y="818" class="s">• tokens, Lakebase password or keys to a WebView or another host</text>
+<text x="728" y="834" class="s">• raw audio for storage; full transcripts unless v1 sync opt-in</text>
+<text x="728" y="850" class="s">• workspace A memory to Genie B (cross-workspace off)</text>
+<text x="728" y="866" class="s">• full B answers to memory; telemetry until OtlpTable</text>
+<text x="728" y="882" class="s">• voiceprints, diarization or emotion data (never made)</text>
+
+<text x="20" y="916" class="s">Diagram 9. Trust boundaries. Secrets stay in the Rust core and the OS keychain. Only the numbered data flows leave the device, and each goes only to its own profile host.</text>
+</svg>

@@ -1,0 +1,375 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 1200 1480" width="1200" height="1480" role="img" aria-labelledby="title desc" font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+<title id="title">Diagram 2. Components (35): thin views, hidden TS brain with bottle-mcp, per-MOG main agents, Rust core and the IPC boundary</title>
+<desc id="desc">Three lanes inside the device: view windows (V1 hub, V2 MOG views, V3 cards), the hidden brain window (T1-T15, bottle-mcp, AgentGuard) and the Rust core (R1-R17, with R16 AgentHost and R17 BottleMcpServer) inside the red dashed secret boundary, with R12 IpcGateway on the boundary. A main agent harness per MOG (Claude Agent SDK or Codex) calls bottle-mcp tools and Genie One MCP. The external column holds the Databricks CLI process, the OS keychain, the workspaces, optional Lakebase (v1) and the browser. The IPC contract lists insert_text for UC1. The Rust loopback adds the token for agent model and Genie One MCP calls (ARC-7). A lower panel shows restart and crash recovery.</desc>
+<defs>
+<marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#111827"/></marker>
+<style type="text/css"><![CDATA[
+text{font-size:13px;fill:#111827}
+.s{font-size:12px}
+.b{font-weight:700}
+.it{font-style:italic}
+.h{font-size:16px;font-weight:700}
+.halo{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
+]]></style>
+</defs>
+<rect x="0" y="0" width="1200" height="1480" fill="#FFFFFF"/>
+<text x="20" y="28" style="font-size:16px;font-weight:700">Diagram 2. Components: views, hidden brain, main agents, Rust core, IPC boundary (35 components: V1-V3, T1-T15, R1-R17)</text>
+<rect x="20" y="44" width="784" height="986" rx="4" fill="#EFF6FF" stroke="#1D4ED8" stroke-width="1.5"/>
+<text x="30" y="62" style="font-weight:700">Device: Bottle (one OS process; agent harnesses are child processes)</text>
+<rect x="36" y="70" width="752" height="330" rx="4" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.5"/>
+<text x="46" y="88" style="font-weight:700">WebView windows (Tauri 2.12.5+): thin views + hidden brain, no secrets</text>
+<rect x="70" y="96" width="170" height="46" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="155" y="115.3" text-anchor="middle" style="font-size:12px;font-weight:700">V1 Hub</text>
+<text x="155" y="131.3" text-anchor="middle" style="font-size:11px">wizard, settings, history</text>
+<rect x="310" y="96" width="190" height="46" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="405" y="115.3" text-anchor="middle" style="font-size:12px;font-weight:700">V2 MOG view × N</text>
+<text x="405" y="131.3" text-anchor="middle" style="font-size:11px">one Rive instance, badges</text>
+<rect x="570" y="96" width="180" height="46" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="660" y="115.3" text-anchor="middle" style="font-size:12px;font-weight:700">V3 Card view</text>
+<text x="660" y="131.3" text-anchor="middle" style="font-size:11px">blurbs, chips, answer</text>
+<rect x="44" y="160" width="736" height="230" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="54" y="178" style="font-size:12px;font-weight:700">Hidden brain window (TS): all domain logic</text>
+<rect x="52" y="186" width="108" height="58" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="106" y="205.3" text-anchor="middle" style="font-size:12px;font-weight:700">T1</text>
+<text x="106" y="219.3" text-anchor="middle" style="font-size:10px">MogManager</text>
+<text x="106" y="233.3" text-anchor="middle" style="font-size:10px">defs, cap 8</text>
+<rect x="166" y="186" width="108" height="58" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="220" y="205.3" text-anchor="middle" style="font-size:12px;font-weight:700">T11</text>
+<text x="220" y="219.3" text-anchor="middle" style="font-size:10px">MoodMapper</text>
+<text x="220" y="233.3" text-anchor="middle" style="font-size:10px">pure mood function</text>
+<rect x="280" y="186" width="108" height="58" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="334" y="205.3" text-anchor="middle" style="font-size:12px;font-weight:700">T12</text>
+<text x="334" y="219.3" text-anchor="middle" style="font-size:10px">ConsentService</text>
+<text x="334" y="233.3" text-anchor="middle" style="font-size:10px">notice, attestation</text>
+<rect x="394" y="186" width="108" height="58" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="448" y="205.3" text-anchor="middle" style="font-size:12px;font-weight:700">T3</text>
+<text x="448" y="219.3" text-anchor="middle" style="font-size:10px">CapturePolicy</text>
+<text x="448" y="233.3" text-anchor="middle" style="font-size:10px">1.5 s preview timer</text>
+<rect x="508" y="186" width="108" height="58" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="562" y="205.3" text-anchor="middle" style="font-size:12px;font-weight:700">T4</text>
+<text x="562" y="219.3" text-anchor="middle" style="font-size:10px">SttProvider</text>
+<text x="562" y="233.3" text-anchor="middle" style="font-size:10px">chain, demotion</text>
+<rect x="52" y="250" width="108" height="58" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="106" y="269.3" text-anchor="middle" style="font-size:12px;font-weight:700">T5</text>
+<text x="106" y="283.3" text-anchor="middle" style="font-size:10px">CleanupProvider</text>
+<text x="106" y="297.3" text-anchor="middle" style="font-size:10px">900 ms deadline</text>
+<rect x="166" y="250" width="108" height="58" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="220" y="262.3" text-anchor="middle" style="font-size:12px;font-weight:700">T6</text>
+<text x="220" y="276.3" text-anchor="middle" style="font-size:10px">Classifier</text>
+<text x="220" y="290.3" text-anchor="middle" style="font-size:10px">fallback router;</text>
+<text x="220" y="304.3" text-anchor="middle" style="font-size:10px">ContextGate</text>
+<rect x="280" y="250" width="108" height="58" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="334" y="269.3" text-anchor="middle" style="font-size:12px;font-weight:700">T7</text>
+<text x="334" y="283.3" text-anchor="middle" style="font-size:10px">ProfileService</text>
+<text x="334" y="297.3" text-anchor="middle" style="font-size:10px">hop, never a token</text>
+<rect x="394" y="250" width="108" height="58" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="448" y="269.3" text-anchor="middle" style="font-size:12px;font-weight:700">T8</text>
+<text x="448" y="283.3" text-anchor="middle" style="font-size:10px">GenieBridge</text>
+<text x="448" y="297.3" text-anchor="middle" style="font-size:10px">contracts, pinning</text>
+<rect x="508" y="250" width="108" height="58" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="562" y="269.3" text-anchor="middle" style="font-size:12px;font-weight:700">T9</text>
+<text x="562" y="283.3" text-anchor="middle" style="font-size:10px">ConversationMgr</text>
+<text x="562" y="297.3" text-anchor="middle" style="font-size:10px">PollActors</text>
+<rect x="52" y="314" width="108" height="58" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="106" y="333.3" text-anchor="middle" style="font-size:12px;font-weight:700">T10</text>
+<text x="106" y="347.3" text-anchor="middle" style="font-size:10px">MemoryService</text>
+<text x="106" y="361.3" text-anchor="middle" style="font-size:10px">RecallGate, Writer</text>
+<rect x="166" y="314" width="108" height="58" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="220" y="333.3" text-anchor="middle" style="font-size:12px;font-weight:700">T2</text>
+<text x="220" y="347.3" text-anchor="middle" style="font-size:10px">OperationTracker</text>
+<text x="220" y="361.3" text-anchor="middle" style="font-size:10px">SENDING, ACK, …</text>
+<rect x="280" y="314" width="108" height="58" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="334" y="333.3" text-anchor="middle" style="font-size:12px;font-weight:700">T13</text>
+<text x="334" y="347.3" text-anchor="middle" style="font-size:10px">RecoveryManager</text>
+<text x="334" y="361.3" text-anchor="middle" style="font-size:10px">see panel below</text>
+<rect x="394" y="314" width="108" height="58" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="448" y="333.3" text-anchor="middle" style="font-size:12px;font-weight:700">T14</text>
+<text x="448" y="347.3" text-anchor="middle" style="font-size:10px">PageService</text>
+<text x="448" y="361.3" text-anchor="middle" style="font-size:10px">UC Page drafts</text>
+<rect x="508" y="314" width="108" height="58" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="562" y="333.3" text-anchor="middle" style="font-size:12px;font-weight:700">T15</text>
+<text x="562" y="347.3" text-anchor="middle" style="font-size:10px">AgentBridge</text>
+<text x="562" y="361.3" text-anchor="middle" style="font-size:10px">agent turn, guards</text>
+<rect x="628" y="186" width="144" height="76" rx="4" fill="#F5F3FF" stroke="#6D28D9" stroke-width="1.2"/>
+<text x="700" y="207.3" text-anchor="middle" style="font-size:12px;font-weight:700">bottle-mcp (BC4)</text>
+<text x="700" y="221.3" text-anchor="middle" style="font-size:10px">local MCP tools:</text>
+<text x="700" y="235.3" text-anchor="middle" style="font-size:10px">transcript/search,</text>
+<text x="700" y="249.3" text-anchor="middle" style="font-size:10px">memory recall/write,</text>
+<text x="700" y="274" style="font-size:10px"></text>
+<rect x="628" y="268" width="144" height="118" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="700" y="286.3" text-anchor="middle" style="font-size:12px;font-weight:700">AgentGuard (BC4)</text>
+<text x="700" y="301.3" text-anchor="middle" style="font-size:10px">show_blurb, set_mood,</text>
+<text x="700" y="316.3" text-anchor="middle" style="font-size:10px">propose_page, ask_user.</text>
+<text x="700" y="331.3" text-anchor="middle" style="font-size:10px">Agent never starts capture,</text>
+<text x="700" y="346.3" text-anchor="middle" style="font-size:10px">approves context, publishes</text>
+<text x="700" y="361.3" text-anchor="middle" style="font-size:10px">or hops without the user;</text>
+<text x="700" y="376.3" text-anchor="middle" style="font-size:10px">logs every action per MOG.</text>
+<polyline points="700,268 700,264" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<polyline points="155,142 155,184" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="161" y="156" style="font-size:11px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">view_emit (via R12)</text>
+<text x="161" y="156" style="font-size:11px">view_emit (via R12)</text>
+<polyline points="660,184 660,144" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="654" y="156" text-anchor="end" style="font-size:11px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">mog.view_state, card.update</text>
+<text x="654" y="156" text-anchor="end" style="font-size:11px">mog.view_state, card.update</text>
+<rect x="36" y="400" width="564" height="112" rx="4" fill="#F5F3FF" stroke="#6D28D9" stroke-width="1.5"/>
+<text x="46" y="418" style="font-size:12px;font-weight:700">Main agent harness × N (one per MOG, BC4)</text>
+<text x="46" y="436" style="font-size:11px">Claude Agent SDK / Claude Code headless, or Codex SDK / CLI.</text>
+<text x="46" y="452" style="font-size:11px">First step = router; T6 classifier is the fallback when the agent is</text>
+<text x="46" y="468" style="font-size:11px">not available. Model via &lt;host&gt;/ai-gateway/anthropic, or local.</text>
+<text x="46" y="484" style="font-size:11px">MCP clients: bottle-mcp and Genie One MCP. UC1 dictation bypasses it.</text>
+<polyline points="600,430 690,430 690,384" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="606" y="424" style="font-size:11px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">tools/call</text>
+<text x="606" y="424" style="font-size:11px">tools/call</text>
+<polyline points="710,384 710,444 600,444" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="606" y="458" style="font-size:11px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">results</text>
+<text x="606" y="458" style="font-size:11px">results</text>
+<rect x="610" y="480" width="178" height="44" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="699" y="493" text-anchor="middle" style="font-size:11px;font-weight:700">R12 IpcGateway</text>
+<text x="699" y="506" text-anchor="middle" style="font-size:10px">capability check per window,</text>
+<text x="699" y="519" text-anchor="middle" style="font-size:10px">JSON Schema, secret scrub</text>
+<polyline points="744,390 744,478" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="750" y="404" style="font-size:10px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">cmds</text>
+<text x="750" y="404" style="font-size:10px">cmds</text>
+<polyline points="766,476 766,392" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="760" y="470" text-anchor="end" style="font-size:10px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">events</text>
+<text x="760" y="470" text-anchor="end" style="font-size:10px">events</text>
+<polyline points="744,524 744,556" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<polyline points="766,556 766,526" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<polyline points="300,512 300,556" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="306" y="526" style="font-size:10px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">agent model + Genie MCP calls: R17 loopback adds the token (ARC-7)</text>
+<text x="306" y="526" style="font-size:10px">agent model + Genie MCP calls: R17 loopback adds the token (ARC-7)</text>
+<rect x="36" y="532" width="752" height="420" rx="4" fill="#FFF7ED" stroke="#C2410C" stroke-width="1.5"/>
+<rect x="39" y="535" width="746" height="414" rx="3" fill="none" stroke="#DC2626" stroke-width="2" stroke-dasharray="6 4"/>
+<text x="46" y="550" style="font-weight:700">Rust core mog-core · secret boundary: no token crosses</text>
+<rect x="48" y="562" width="136" height="76" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="116" y="588.3" text-anchor="middle" style="font-size:12px;font-weight:700">R1 HotkeyService</text>
+<text x="116" y="604.3" text-anchor="middle" style="font-size:11px">listen-only tap, LL</text>
+<text x="116" y="620.3" text-anchor="middle" style="font-size:11px">hook, SEI chord</text>
+<rect x="196" y="562" width="136" height="76" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="264" y="588.3" text-anchor="middle" style="font-size:12px;font-weight:700">R3 SessionGuard</text>
+<text x="264" y="604.3" text-anchor="middle" style="font-size:11px">D27 stop policy,</text>
+<text x="264" y="620.3" text-anchor="middle" style="font-size:11px">lock, mic release</text>
+<rect x="344" y="562" width="136" height="76" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="412" y="588.3" text-anchor="middle" style="font-size:12px;font-weight:700">R11 WindowHost</text>
+<text x="412" y="604.3" text-anchor="middle" style="font-size:11px">panels, tray, REC,</text>
+<text x="412" y="620.3" text-anchor="middle" style="font-size:11px">per-display positions</text>
+<rect x="492" y="562" width="136" height="76" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="560" y="588.3" text-anchor="middle" style="font-size:12px;font-weight:700">R6 TokenBroker</text>
+<text x="560" y="604.3" text-anchor="middle" style="font-size:11px">memory only,</text>
+<text x="560" y="620.3" text-anchor="middle" style="font-size:11px">refresh expiry − 60 s</text>
+<rect x="640" y="562" width="136" height="76" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="708" y="588.3" text-anchor="middle" style="font-size:12px;font-weight:700">R7 HttpTransport</text>
+<text x="708" y="604.3" text-anchor="middle" style="font-size:11px">allowlist, tags,</text>
+<text x="708" y="620.3" text-anchor="middle" style="font-size:11px">40/min bucket, AIMD</text>
+<rect x="48" y="660" width="136" height="76" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="116" y="686.3" text-anchor="middle" style="font-size:12px;font-weight:700">R10 LocalStore</text>
+<text x="116" y="702.3" text-anchor="middle" style="font-size:11px">SQLite + SQLCipher,</text>
+<text x="116" y="718.3" text-anchor="middle" style="font-size:11px">WAL, FTS5, sqlite-vec</text>
+<rect x="196" y="660" width="136" height="76" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="264" y="686.3" text-anchor="middle" style="font-size:12px;font-weight:700">R14 Retention</text>
+<text x="264" y="702.3" text-anchor="middle" style="font-size:11px">local: start, every 6 h;</text>
+<text x="264" y="718.3" text-anchor="middle" style="font-size:11px">remote: 1st conn./day</text>
+<rect x="344" y="660" width="136" height="76" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="412" y="686.3" text-anchor="middle" style="font-size:12px;font-weight:700">R15 mog-core-ffi</text>
+<text x="412" y="702.3" text-anchor="middle" style="font-size:11px">C ABI, JSON in/out,</text>
+<text x="412" y="718.3" text-anchor="middle" style="font-size:11px">Flutter shell</text>
+<rect x="492" y="660" width="136" height="76" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="560" y="686.3" text-anchor="middle" style="font-size:12px;font-weight:700">R9 LakebasePool</text>
+<text x="560" y="702.3" text-anchor="middle" style="font-size:11px">v1 only (BC2): max 3,</text>
+<text x="560" y="718.3" text-anchor="middle" style="font-size:11px">new credential each</text>
+<rect x="640" y="660" width="136" height="76" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="708" y="686.3" text-anchor="middle" style="font-size:12px;font-weight:700">R5 CliRunner</text>
+<text x="708" y="702.3" text-anchor="middle" style="font-size:11px">absolute path, env,</text>
+<text x="708" y="718.3" text-anchor="middle" style="font-size:11px">≥ 1.17, cli_install</text>
+<rect x="48" y="758" width="136" height="76" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="116" y="784.3" text-anchor="middle" style="font-size:12px;font-weight:700">R2 CaptureService</text>
+<text x="116" y="800.3" text-anchor="middle" style="font-size:11px">only mic owner,</text>
+<text x="116" y="816.3" text-anchor="middle" style="font-size:11px">You + Others, journal</text>
+<rect x="196" y="758" width="136" height="76" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="264" y="784.3" text-anchor="middle" style="font-size:12px;font-weight:700">R4 SttEngine</text>
+<text x="264" y="800.3" text-anchor="middle" style="font-size:11px">Parakeet v3 int8;</text>
+<text x="264" y="816.3" text-anchor="middle" style="font-size:11px">segments (segmentId)</text>
+<rect x="344" y="758" width="136" height="76" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="412" y="784.3" text-anchor="middle" style="font-size:12px;font-weight:700">R13 PolicyStore</text>
+<text x="412" y="800.3" text-anchor="middle" style="font-size:11px">MDM keys,</text>
+<text x="412" y="816.3" text-anchor="middle" style="font-size:11px">telemetry gate</text>
+<rect x="640" y="758" width="136" height="76" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="708" y="784.3" text-anchor="middle" style="font-size:12px;font-weight:700">R8 McpTransport</text>
+<text x="708" y="800.3" text-anchor="middle" style="font-size:11px">thin JSON-RPC, fresh</text>
+<text x="708" y="816.3" text-anchor="middle" style="font-size:11px">token, Mcp-Session-Id</text>
+<rect x="344" y="856" width="136" height="76" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="412" y="882.3" text-anchor="middle" style="font-size:12px;font-weight:700">R16 AgentHost</text>
+<text x="412" y="898.3" text-anchor="middle" style="font-size:11px">harness child per MOG,</text>
+<text x="412" y="914.3" text-anchor="middle" style="font-size:11px">no token, action log</text>
+<rect x="492" y="856" width="136" height="76" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="560" y="882.3" text-anchor="middle" style="font-size:11px;font-weight:700">R17 BottleMcpServer</text>
+<text x="560" y="898.3" text-anchor="middle" style="font-size:11px">bottle-mcp on loopback,</text>
+<text x="560" y="914.3" text-anchor="middle" style="font-size:11px">model proxy + token</text>
+<rect x="640" y="856" width="136" height="76" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="708" y="882.3" text-anchor="middle" style="font-size:12px;font-weight:700">Agent loopback</text>
+<text x="708" y="898.3" text-anchor="middle" style="font-size:11px">adopted (ARC-7,</text>
+<text x="708" y="914.3" text-anchor="middle" style="font-size:11px">RTR-27, RTR-28)</text>
+<rect x="492" y="758" width="136" height="76" rx="4" fill="#FFFBEB" stroke="#B45309" stroke-width="1.2"/>
+<text x="560" y="779" text-anchor="middle" style="font-size:11px">R10 also holds:</text>
+<text x="560" y="793" text-anchor="middle" style="font-size:11px">outbox, embed queue,</text>
+<text x="560" y="807" text-anchor="middle" style="font-size:11px">audit log, agent</text>
+<text x="560" y="821" text-anchor="middle" style="font-size:11px">action log (BC4)</text>
+<rect x="36" y="960" width="752" height="56" rx="4" fill="#F3F4F6" stroke="#6B7280" stroke-width="1.5"/>
+<text x="46" y="978" style="font-size:12px;font-weight:700"></text>
+<text x="46" y="976" style="font-size:11px;font-weight:700">OS services</text>
+<rect x="48" y="982" width="136" height="26" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="116" y="999" text-anchor="middle" style="font-size:11px">Mic (You) → R2</text>
+<rect x="196" y="982" width="136" height="26" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="264" y="999" text-anchor="middle" style="font-size:11px">System audio → R2</text>
+<rect x="344" y="982" width="136" height="26" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="412" y="999" text-anchor="middle" style="font-size:11px">Event tap / hook → R1</text>
+<rect x="492" y="982" width="136" height="26" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="560" y="999" text-anchor="middle" style="font-size:11px">Tray, notify ← R11</text>
+<rect x="640" y="982" width="136" height="26" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="708" y="999" text-anchor="middle" style="font-size:11px">Displays ← R11</text>
+<polyline points="100,982 100,836" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="106" y="970" style="font-size:10px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">audio</text>
+<text x="106" y="970" style="font-size:10px">audio</text>
+<polyline points="256,982 140,836" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="200" y="862" style="font-size:10px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">Others</text>
+<text x="200" y="862" style="font-size:10px">Others</text>
+<text x="820" y="58" style="font-weight:700">External column (outside the boundary)</text>
+<rect x="820" y="68" width="360" height="64" rx="4" fill="#F3F4F6" stroke="#6B7280" stroke-width="1.2"/>
+<text x="1000" y="88.3" text-anchor="middle" style="font-size:12px;font-weight:700">databricks CLI process (≥ 1.17)</text>
+<text x="1000" y="104.3" text-anchor="middle" style="font-size:11px">spawned by R5; auth token / auth login;</text>
+<text x="1000" y="120.3" text-anchor="middle" style="font-size:11px">token cache in the OS keychain</text>
+<rect x="820" y="140" width="360" height="46" rx="4" fill="#F3F4F6" stroke="#6B7280" stroke-width="1.2"/>
+<text x="1000" y="159.3" text-anchor="middle" style="font-size:12px;font-weight:700">OS keychain</text>
+<text x="1000" y="175.3" text-anchor="middle" style="font-size:11px">CLI token cache, SQLCipher key, journal KEK</text>
+<rect x="820" y="198" width="360" height="300" rx="4" fill="#FEF2F2" stroke="#B91C1C" stroke-width="1.5"/>
+<text x="830" y="216" style="font-weight:700">Workspace A (home profile)</text>
+<rect x="832" y="224" width="336" height="46" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="1000" y="243.3" text-anchor="middle" style="font-size:12px;font-weight:700">Unity Gateway models (/ai-gateway/mlflow/v1)</text>
+<text x="1000" y="259.3" text-anchor="middle" style="font-size:11px">ASR, cleanup, classifier, writer, judge, embed</text>
+<rect x="832" y="278" width="336" height="46" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="1000" y="297.3" text-anchor="middle" style="font-size:12px;font-weight:700">Agent model route (BC4)</text>
+<text x="1000" y="313.3" text-anchor="middle" style="font-size:11px">/ai-gateway/anthropic, user identity</text>
+<rect x="832" y="332" width="336" height="46" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="1000" y="351.3" text-anchor="middle" style="font-size:12px;font-weight:700">Genie One MCP ?o=&lt;id A&gt;</text>
+<text x="1000" y="367.3" text-anchor="middle" style="font-size:11px">initialize, tools/list, genie_* tools</text>
+<rect x="832" y="386" width="336" height="56" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="1000" y="402.3" text-anchor="middle" style="font-size:12px;font-weight:700">UC Pages (Beta, BC3)</text>
+<text x="1000" y="418.3" text-anchor="middle" style="font-size:11px">POST /api/2.0/knowledge/pages, DRAFT,</text>
+<text x="1000" y="434.3" text-anchor="middle" style="font-size:11px">request_id; OAuth scope knowledge</text>
+<rect x="832" y="450" width="336" height="38" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="1000" y="473" text-anchor="middle" style="font-size:11px">v1: genie_agent REST, custom_agent App</text>
+<rect x="820" y="508" width="360" height="76" rx="4" fill="#FEF2F2" stroke="#B91C1C" stroke-width="1.5"/>
+<text x="830" y="526" style="font-weight:700">Workspace B (target profile)</text>
+<rect x="832" y="532" width="336" height="42" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="1000" y="549.3" text-anchor="middle" style="font-size:12px;font-weight:700">Genie One MCP ?o=&lt;id B&gt;</text>
+<text x="1000" y="565.3" text-anchor="middle" style="font-size:11px">own token, own bucket</text>
+<rect x="820" y="594" width="360" height="86" rx="4" fill="#F0FDF4" stroke="#15803D" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="830" y="612" style="font-weight:700">Lakebase (optional v1, BC2)</text>
+<rect x="832" y="618" width="336" height="52" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="1000" y="640.5" text-anchor="middle" style="font-size:11px">Per-user project: sync, backup, team MOGs</text>
+<text x="1000" y="655.5" text-anchor="middle" style="font-size:11px">pgvector HNSW + GIN; not an MVP prerequisite</text>
+<rect x="820" y="690" width="360" height="60" rx="4" fill="#F3F4F6" stroke="#6B7280" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="830" y="708" style="font-weight:700">Browser / IdP</text>
+<rect x="832" y="714" width="336" height="28" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="1000" y="732" text-anchor="middle" style="font-size:11px">Browser SSO (OAuth U2M)</text>
+<polyline points="772,700 798,700 798,100 818,100" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="792" y="120" text-anchor="end" style="font-size:10px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">spawn</text>
+<text x="792" y="120" text-anchor="end" style="font-size:10px">spawn</text>
+<polyline points="772,600 806,600 806,248 830,248" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<polyline points="806,302 830,302" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<polyline points="806,414 830,414" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<polyline points="772,796 812,796 812,356 830,356" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<polyline points="812,552 830,552" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<polyline points="1000,132 1000,138" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="2 3" marker-end="url(#arw)"/>
+<polyline points="1180,100 1190,100 1190,728 1170,728" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="1186" y="760" text-anchor="end" style="font-size:11px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">auth login</text>
+<text x="1186" y="760" text-anchor="end" style="font-size:11px">auth login</text>
+<rect x="820" y="760" width="360" height="124" rx="4" fill="#FFFBEB" stroke="#B45309" stroke-width="1.2"/>
+<text x="1000" y="780.5" text-anchor="middle" style="font-size:11px;font-weight:700">IPC contract (R12)</text>
+<text x="1000" y="796" text-anchor="middle" style="font-size:10px">Commands: cli_status / cli_install, capture_*,</text>
+<text x="1000" y="810" text-anchor="middle" style="font-size:10px">session_attest, stt_transcribe {segmentId, provider, …},</text>
+<text x="1000" y="824" text-anchor="middle" style="font-size:10px">model_invoke, mcp_call, dbx_http (route ids),</text>
+<text x="1000" y="838" text-anchor="middle" style="font-size:10px">mem_local_exec, insert_text {mogId, text} (UC1, COL-79),</text>
+<text x="1000" y="852" text-anchor="middle" style="font-size:10px">config_*, view_emit (view to brain only), audit.</text>
+<text x="1000" y="870" text-anchor="middle" style="font-size:10px;font-style:italic">insert_text: clipboard paste, no Enter (MOG-06a..d)</text>
+<rect x="820" y="892" width="360" height="64" rx="4" fill="#FFFBEB" stroke="#B45309" stroke-width="1.2"/>
+<text x="1000" y="909" text-anchor="middle" style="font-size:10px">No payload carries a token, a Lakebase password</text>
+<text x="1000" y="923" text-anchor="middle" style="font-size:10px">or the SQLCipher key. Events: hotkey.ptt, capture.*,</text>
+<text x="1000" y="937" text-anchor="middle" style="font-size:10px">session.stop_signal, mog.view_state, card.update,</text>
+<text x="1000" y="951" text-anchor="middle" style="font-size:10px">agent.tool_call (R17 to brain).</text>
+<rect x="20" y="1046" width="1160" height="230" rx="4" fill="#EFF6FF" stroke="#1D4ED8" stroke-width="1.5"/>
+<text x="30" y="1066" style="font-weight:700">Restart and crash recovery (ARC-F10, MB-11, MB-12, MOG-11, CAP-30)</text>
+<rect x="36" y="1080" width="270" height="84" rx="4" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="171" y="1102.3" text-anchor="middle" style="font-size:12px;font-weight:700">View window stops (MB-11)</text>
+<text x="171" y="1118.3" text-anchor="middle" style="font-size:11px">R11 WindowHost restarts the window.</text>
+<text x="171" y="1134.3" text-anchor="middle" style="font-size:11px">The brain sends mog.view_state and</text>
+<text x="171" y="1150.3" text-anchor="middle" style="font-size:11px">the open cards again: same mood ≤ 2 s.</text>
+<rect x="322" y="1080" width="270" height="84" rx="4" fill="#FFF7ED" stroke="#C2410C" stroke-width="1.2"/>
+<text x="457" y="1102.3" text-anchor="middle" style="font-size:12px;font-weight:700">Brain window stops (MB-12)</text>
+<text x="457" y="1118.3" text-anchor="middle" style="font-size:11px">Rust keeps the REC indicator and</text>
+<text x="457" y="1134.3" text-anchor="middle" style="font-size:11px">SessionGuard active, then restarts the</text>
+<text x="457" y="1150.3" text-anchor="middle" style="font-size:11px">brain. The stop policy never pauses.</text>
+<rect x="608" y="1080" width="270" height="84" rx="4" fill="#FEE2E2" stroke="#B91C1C" stroke-width="1.2"/>
+<text x="743" y="1102.3" text-anchor="middle" style="font-size:12px;font-weight:700">App crash (ARC-F10)</text>
+<text x="743" y="1118.3" text-anchor="middle" style="font-size:11px">The outbox and PollActor state (IDs,</text>
+<text x="743" y="1134.3" text-anchor="middle" style="font-size:11px">profile) persist in R10. At launch R11</text>
+<text x="743" y="1150.3" text-anchor="middle" style="font-size:11px">and the brain start; T13 runs.</text>
+<rect x="894" y="1080" width="270" height="84" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="1029" y="1102.3" text-anchor="middle" style="font-size:12px;font-weight:700">T13 RecoveryManager (MOG-11)</text>
+<text x="1029" y="1118.3" text-anchor="middle" style="font-size:11px">reconciles open asks and late re-polls</text>
+<text x="1029" y="1134.3" text-anchor="middle" style="font-size:11px">with the same conversation_id and</text>
+<text x="1029" y="1150.3" text-anchor="middle" style="font-size:11px">response_id; drops stale callbacks.</text>
+<polyline points="878,1036 892,1036" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<rect x="608" y="1178" width="270" height="84" rx="4" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="743" y="1200.3" text-anchor="middle" style="font-size:12px;font-weight:700">Journal recovery prompt (CAP-30)</text>
+<text x="743" y="1216.3" text-anchor="middle" style="font-size:11px">"Transcribe it on this device, or delete</text>
+<text x="743" y="1232.3" text-anchor="middle" style="font-size:11px">it?" Recovered audio keeps its consent</text>
+<text x="743" y="1248.3" text-anchor="middle" style="font-size:11px">record. Unrecovered audio: deleted 24 h.</text>
+<rect x="894" y="1178" width="270" height="84" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="1029" y="1200.3" text-anchor="middle" style="font-size:12px;font-weight:700">Polls resume, never a re-ask</text>
+<text x="1029" y="1216.3" text-anchor="middle" style="font-size:11px">An UNCERTAIN ask waits for the user</text>
+<text x="1029" y="1232.3" text-anchor="middle" style="font-size:11px">(Check again / Ask again). A late</text>
+<text x="1029" y="1248.3" text-anchor="middle" style="font-size:11px">completion shows "Genie finished".</text>
+<polyline points="743,1078 743,1090" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<polyline points="1029,1078 1029,1090" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<rect x="36" y="1178" width="556" height="84" rx="4" fill="#FFFBEB" stroke="#B45309" stroke-width="1.2"/>
+<text x="314" y="1200.3" text-anchor="middle" style="font-size:12px;font-weight:700">Why this is safe</text>
+<text x="314" y="1216.3" text-anchor="middle" style="font-size:11px">Only the Rust core owns the mic, the indicator and SessionGuard, so a brain or view failure</text>
+<text x="314" y="1232.3" text-anchor="middle" style="font-size:11px">cannot leave hidden recording. Crash during a session: the journal holds ≤ 60 s files;</text>
+<text x="314" y="1248.3" text-anchor="middle" style="font-size:11px">SessionGuard rows still apply after restart (app crash row of Section 7.2).</text>
+<rect x="20" y="1292" width="760" height="174" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1"/>
+<text x="30" y="1310" style="font-weight:700">Legend</text>
+<rect x="30" y="1320" width="24" height="14" rx="4" fill="#EFF6FF" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="60" y="1332" style="font-size:12px">Device zone</text>
+<rect x="410" y="1320" width="24" height="14" rx="4" fill="#FFF7ED" stroke="#C2410C" stroke-width="1.2"/>
+<rect x="412" y="1322" width="20" height="10" rx="1" fill="none" stroke="#DC2626" stroke-width="1.2" stroke-dasharray="3 2"/>
+<text x="440" y="1332" style="font-size:12px">Rust core (secret boundary)</text>
+<rect x="30" y="1342" width="24" height="14" rx="4" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="60" y="1354" style="font-size:12px">WebView window</text>
+<rect x="410" y="1342" width="24" height="14" rx="4" fill="#FEF2F2" stroke="#B91C1C" stroke-width="1.2"/>
+<text x="440" y="1354" style="font-size:12px">Databricks workspace</text>
+<rect x="30" y="1364" width="24" height="14" rx="4" fill="#F5F3FF" stroke="#6D28D9" stroke-width="1.2"/>
+<text x="60" y="1376" style="font-size:12px">Main agent harness (BC4)</text>
+<rect x="410" y="1364" width="24" height="14" rx="4" fill="#F3F4F6" stroke="#6B7280" stroke-width="1.2"/>
+<text x="440" y="1376" style="font-size:12px">OS services</text>
+<rect x="30" y="1386" width="24" height="14" rx="4" fill="#F0FDF4" stroke="#15803D" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="60" y="1398" style="font-size:12px">Lakebase (optional, v1)</text>
+<rect x="410" y="1386" width="24" height="14" rx="4" fill="#F3F4F6" stroke="#6B7280" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="440" y="1398" style="font-size:12px">Browser / IdP</text>
+<polyline points="30,1330 66,1330" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="72" y="1420" style="font-size:12px">request / data</text>
+<polyline points="276.7,1330 312.7,1330" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="318.7" y="1420" style="font-size:12px">event / stream</text>
+<polyline points="523.3,1330 559.3,1330" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="2 3" marker-end="url(#arw)"/>
+<text x="565.3" y="1420" style="font-size:12px">credential fetch</text>
+<rect x="30" y="1430" width="24" height="14" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="60" y="1442" style="font-size:12px">v1 / optional (not in the MVP)</text>
+<rect x="410" y="1430" width="24" height="14" rx="4" fill="#FFFBEB" stroke="#B45309" stroke-width="1.2"/>
+<text x="440" y="1442" style="font-size:12px">note / rule</text>
+<text x="800" y="1308" style="font-size:12px">Diagram 2. Components. The hidden brain window</text>
+<text x="800" y="1325" style="font-size:12px">owns domain logic; the main agent decides through</text>
+<text x="800" y="1342" style="font-size:12px">bottle-mcp under AgentGuard. The Rust core owns</text>
+<text x="800" y="1359" style="font-size:12px">capture, credentials and every socket. R12 checks</text>
+<text x="800" y="1376" style="font-size:12px">every command. V = view, T = TS brain, R = Rust core.</text>
+</svg>

@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="590" viewBox="0 0 1500 590" role="img" aria-labelledby="ov-title ov-desc">
+  <title id="ov-title">Motherbricks one-page MVP architecture</title>
+  <desc id="ov-desc">A user holds a key to talk to a MOG. Motherbricks captures audio through its native Audio Broker, transcribes and cleans the utterance, and applies an explicit route. Dictation stays local. An approved question goes through a workspace-bound Databricks CLI identity to Genie One MCP. Genie progress and the response return as a short blurb. Local encrypted memory supports immediate recall. Lakebase provides optional durable synchronization. Meetings and custom agents are later additions.</desc>
+  <defs>
+    <marker id="ov-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#315b7d"/></marker>
+    <style>
+      .ov-bg{fill:#f7f9fb}.ov-title{font:700 27px -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;fill:#172636}.ov-sub{font:15px -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;fill:#526579}
+      .ov-box{fill:#fff;stroke:#9fb0bf;stroke-width:2;rx:14}.ov-core{fill:#fff6f2;stroke:#e65a3c;stroke-width:2.5;rx:18}.ov-local{fill:#eef6fb;stroke:#5686aa;stroke-width:2;rx:14}.ov-later{fill:#fafafa;stroke:#98a3ad;stroke-width:2;stroke-dasharray:8 6;rx:14}
+      .ov-h{font:700 18px -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;fill:#172636}.ov-t{font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;fill:#263b4d}.ov-s{font:12.5px -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;fill:#526579}.ov-tag{font:700 12px -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;fill:#a62e1b;letter-spacing:1px}
+      .ov-line{fill:none;stroke:#315b7d;stroke-width:2.4;marker-end:url(#ov-arrow)}.ov-return{fill:none;stroke:#668298;stroke-width:2;stroke-dasharray:6 5;marker-end:url(#ov-arrow)}.ov-later-line{fill:none;stroke:#98a3ad;stroke-width:2;stroke-dasharray:6 5;marker-end:url(#ov-arrow)}
+    </style>
+  </defs>
+  <rect class="ov-bg" width="1500" height="590"/>
+  <text class="ov-title" x="35" y="43">Motherbricks MVP: one native core, explicit routes, local-first memory</text>
+  <text class="ov-sub" x="35" y="70">Solid lines are MVP. Dashed gray boxes are later capabilities. No arrow gives a model or webview permission to start capture.</text>
+
+  <rect class="ov-box" x="35" y="145" width="175" height="140"/>
+  <text class="ov-h" x="122" y="185" text-anchor="middle">User + MOG</text>
+  <text class="ov-t" x="122" y="216" text-anchor="middle">Hold key to talk</text>
+  <text class="ov-t" x="122" y="240" text-anchor="middle">Review route + target</text>
+  <text class="ov-t" x="122" y="264" text-anchor="middle">Read response blurb</text>
+
+  <rect class="ov-core" x="270" y="100" width="650" height="375"/>
+  <text class="ov-tag" x="295" y="130">MOTHERBRICKS · TRUSTED NATIVE CORE</text>
+  <rect class="ov-box" x="295" y="150" width="185" height="115"/>
+  <text class="ov-h" x="387" y="182" text-anchor="middle">Audio Broker</text>
+  <text class="ov-t" x="387" y="210" text-anchor="middle">Hotkey + mic lease</text>
+  <text class="ov-t" x="387" y="234" text-anchor="middle">Visible listening state</text>
+  <rect class="ov-box" x="505" y="150" width="185" height="115"/>
+  <text class="ov-h" x="597" y="182" text-anchor="middle">STT + cleanup</text>
+  <text class="ov-t" x="597" y="210" text-anchor="middle">Local STT first</text>
+  <text class="ov-t" x="597" y="234" text-anchor="middle">Raw text preserved</text>
+  <rect class="ov-box" x="715" y="150" width="180" height="115"/>
+  <text class="ov-h" x="805" y="182" text-anchor="middle">Route + context</text>
+  <text class="ov-t" x="805" y="210" text-anchor="middle">Dictate / Ask / Save</text>
+  <text class="ov-t" x="805" y="234" text-anchor="middle">Exact send approval</text>
+  <rect class="ov-box" x="295" y="295" width="275" height="145"/>
+  <text class="ov-h" x="432" y="328" text-anchor="middle">Credential + backend broker</text>
+  <text class="ov-t" x="432" y="356" text-anchor="middle">Databricks CLI OAuth U2M</text>
+  <text class="ov-t" x="432" y="380" text-anchor="middle">Workspace + conversation pinned</text>
+  <text class="ov-t" x="432" y="404" text-anchor="middle">Serial poll; no duplicate ask</text>
+  <rect class="ov-local" x="595" y="295" width="300" height="145"/>
+  <text class="ov-h" x="745" y="328" text-anchor="middle">Encrypted local memory</text>
+  <text class="ov-t" x="745" y="356" text-anchor="middle">Fast recall without network</text>
+  <text class="ov-t" x="745" y="380" text-anchor="middle">Scope + provenance + retention</text>
+  <text class="ov-t" x="745" y="404" text-anchor="middle">Save ≠ sync ≠ Genie approval</text>
+
+  <rect class="ov-box" x="1000" y="115" width="210" height="150"/>
+  <text class="ov-h" x="1105" y="151" text-anchor="middle">Databricks CLI</text>
+  <text class="ov-t" x="1105" y="180" text-anchor="middle">Selected profile</text>
+  <text class="ov-t" x="1105" y="204" text-anchor="middle">Workspace ID + host</text>
+  <text class="ov-t" x="1105" y="228" text-anchor="middle">Native token lease</text>
+  <rect class="ov-box" x="1260" y="115" width="205" height="150"/>
+  <text class="ov-h" x="1362" y="151" text-anchor="middle">Genie One MCP</text>
+  <text class="ov-t" x="1362" y="180" text-anchor="middle">genie_ask</text>
+  <text class="ov-t" x="1362" y="204" text-anchor="middle">poll / result / cancel</text>
+  <text class="ov-t" x="1362" y="228" text-anchor="middle">Response + deep link</text>
+
+  <rect class="ov-local" x="1000" y="340" width="210" height="120"/>
+  <text class="ov-h" x="1105" y="376" text-anchor="middle">Lakebase · optional</text>
+  <text class="ov-t" x="1105" y="404" text-anchor="middle">Durable sync + recovery</text>
+  <text class="ov-t" x="1105" y="428" text-anchor="middle">Not interactive recall</text>
+  <rect class="ov-later" x="1260" y="340" width="205" height="120"/>
+  <text class="ov-h" x="1362" y="376" text-anchor="middle">Later</text>
+  <text class="ov-t" x="1362" y="404" text-anchor="middle">Meetings + hosted ASR</text>
+  <text class="ov-t" x="1362" y="428" text-anchor="middle">Custom agents + companions</text>
+
+  <path class="ov-line" d="M210 215H270"/>
+  <text class="ov-s" x="240" y="202" text-anchor="middle">audio</text>
+  <path class="ov-line" d="M920 190H1000"/>
+  <text class="ov-s" x="960" y="177" text-anchor="middle">token request</text>
+  <path class="ov-line" d="M1210 190H1260"/>
+  <text class="ov-s" x="1235" y="177" text-anchor="middle">TLS</text>
+  <path class="ov-return" d="M1362 265V510H122V285"/>
+  <text class="ov-s" x="740" y="533" text-anchor="middle">Progress + grounded response → bounded blurb with numbers, units, caveats and Databricks link</text>
+  <path class="ov-line" d="M920 400H1000"/>
+  <text class="ov-s" x="960" y="387" text-anchor="middle">approved sync</text>
+  <path class="ov-later-line" d="M1210 400H1260"/>
+  <text class="ov-s" x="1235" y="387" text-anchor="middle">later</text>
+  <text class="ov-sub" x="35" y="570">Privacy invariants: explicit capture · independent indicator · one audio owner · approved context only · tokens stay native · no automatic reconnect submission</text>
+</svg>

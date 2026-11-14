@@ -1,0 +1,501 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 1200 2200" width="1200" height="2200" role="img" aria-labelledby="title desc" font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+<title id="title">Diagram 7. MOG state machine: 7 Rive moods driven by MoodMapper, with lifecycle region A, capture region B and request region C, plus orthogonal overlays and badges</title>
+<desc id="desc">Top: the mood layer of the Rive scene (enum idle, listening, processing, answering, success, error, sleeping). T11 MoodMapper computes the mood as a pure function with the priority paused, capture, error 3 s, success 2.5 s, answering, processing, dozing, idle. At load Bottle sets demo=false and level=0. Overlays attention (M) and recording (S) and badges offline, hop target, sync paused (v1) and STT are orthogonal and never change the mood. Below: three compact swimlanes from the ux-mascot specification. Region A lifecycle nodes A0 to A7 with edges e1 to e11. Region B capture nodes B0 to B8 with edges e1 to e15 (only one MOG owns the mic). Region C request nodes C0 to C20 with edges e1 to e23 (max 2 in flight per MOG). C19 AskUncertain maps to idle with the attention overlay (UX-40). Each lane has an edge table with the triggers.</desc>
+<defs>
+<marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#111827"/></marker>
+<style type="text/css"><![CDATA[
+text{font-size:13px;fill:#111827}
+.s{font-size:12px}
+.h{font-size:16px;font-weight:700}
+.b{font-weight:700}
+.it{font-style:italic}
+.red{fill:#B91C1C}
+.grey{fill:#374151}
+.halo{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
+]]></style>
+</defs>
+<rect x="0" y="0" width="1200" height="2200" fill="#FFFFFF"/>
+<text x="20" y="30" class="h">Diagram 7. MOG state machine and Rive mood mapping</text>
+<rect x="20" y="45" width="1160" height="570" rx="6" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.5"/>
+<text x="30" y="63" class="b">V2 MOG view: Rive mood enum (computed by T11 MoodMapper in the brain)</text>
+<rect x="90" y="270" width="150" height="50" rx="12" fill="#FFFFFF" stroke="#1D4ED8" stroke-width="1.5"/>
+<text x="165" y="290" text-anchor="middle" class="b">idle</text>
+<text x="165" y="306" text-anchor="middle">ready, mic closed</text>
+<rect x="330" y="120" width="150" height="50" rx="12" fill="#FFFFFF" stroke="#1D4ED8" stroke-width="1.5"/>
+<text x="405" y="140" text-anchor="middle" class="b">listening</text>
+<text x="405" y="156" text-anchor="middle">mic open (owner)</text>
+<rect x="570" y="270" width="150" height="50" rx="12" fill="#FFFFFF" stroke="#1D4ED8" stroke-width="1.5"/>
+<text x="645" y="290" text-anchor="middle" class="b">processing</text>
+<text x="645" y="306" text-anchor="middle">STT ... Genie work</text>
+<rect x="810" y="120" width="150" height="50" rx="12" fill="#FFFFFF" stroke="#1D4ED8" stroke-width="1.5"/>
+<text x="885" y="140" text-anchor="middle" class="b">answering</text>
+<text x="885" y="156" text-anchor="middle">reveal &lt;= 1.2 s</text>
+<rect x="810" y="400" width="150" height="50" rx="12" fill="#FFFFFF" stroke="#1D4ED8" stroke-width="1.5"/>
+<text x="885" y="420" text-anchor="middle" class="b">success</text>
+<text x="885" y="436" text-anchor="middle">2.5 s window</text>
+<rect x="570" y="430" width="150" height="50" rx="12" fill="#FFFFFF" stroke="#1D4ED8" stroke-width="1.5"/>
+<text x="645" y="450" text-anchor="middle" class="b">error</text>
+<text x="645" y="466" text-anchor="middle">3 s window</text>
+<rect x="90" y="450" width="150" height="50" rx="12" fill="#FFFFFF" stroke="#1D4ED8" stroke-width="1.5"/>
+<text x="165" y="470" text-anchor="middle" class="b">sleeping</text>
+<text x="165" y="486" text-anchor="middle">paused or doze</text>
+<circle cx="60" cy="250" r="7" fill="#111827"/>
+<polyline points="60,257 60,282 90,282" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="40" y="238" class="s" style="fill:#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">load: demo=false, level=0</text><text x="40" y="238" class="s">load: demo=false, level=0</text>
+<polyline points="230,270 340,170" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="196" y="212" class="s" style="fill:#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">PTT down, hands-free, click</text><text x="196" y="212" class="s">PTT down, hands-free, click</text>
+<polyline points="350,170 240,292" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="306" y="250" class="s" style="fill:#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">cancel, Esc, tap, panic</text><text x="306" y="250" class="s">cancel, Esc, tap, panic</text>
+<polyline points="480,160 600,270" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="548" y="200" class="s" style="fill:#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">key-up, segment end</text><text x="548" y="200" class="s">key-up, segment end</text>
+<polyline points="690,270 820,170" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="760" y="232" class="s" style="fill:#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">partial or reveal</text><text x="760" y="232" class="s">partial or reveal</text>
+<polyline points="885,170 885,400" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="891" y="300" class="s" style="fill:#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">completed</text><text x="891" y="300" class="s">completed</text>
+<polyline points="885,450 885,595 60,595 60,312 90,312" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="940" y="590" text-anchor="middle" class="s" style="fill:#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">2.5 s elapsed</text><text x="940" y="590" text-anchor="middle" class="s">2.5 s elapsed</text>
+<polyline points="645,320 645,430" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="651" y="372" class="s" style="fill:#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">failed, sign-in needed</text><text x="651" y="372" class="s">failed, sign-in needed</text>
+<text x="651" y="388" class="s" style="fill:#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">(UNCERTAIN, C19: idle + attention)</text><text x="651" y="388" class="s">(UNCERTAIN, C19: idle + attention)</text>
+<polyline points="570,452 240,304" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="405" y="395" text-anchor="middle" class="s" style="fill:#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">3 s elapsed</text><text x="405" y="395" text-anchor="middle" class="s">3 s elapsed</text>
+<polyline points="570,292 240,292" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="405" y="286" text-anchor="middle" class="s" style="fill:#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">chip shown, cancelled, gave up</text><text x="405" y="286" text-anchor="middle" class="s">chip shown, cancelled, gave up</text>
+<polyline points="130,320 130,450" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="124" y="390" text-anchor="end" class="s" style="fill:#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">pause, doze</text><text x="124" y="390" text-anchor="end" class="s">pause, doze</text>
+<polyline points="200,450 200,320" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="206" y="390" class="s" style="fill:#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">resume, hover</text><text x="206" y="390" class="s">resume, hover</text>
+<path d="M380,120 C380,85 430,85 430,120" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="440" y="100" class="s" style="fill:#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">level 0..1 (RMS ~30 Hz)</text><text x="440" y="100" class="s">level 0..1 (RMS ~30 Hz)</text>
+<rect x="280" y="505" width="580" height="80" rx="4" fill="#FFFBEB" stroke="#92400E" stroke-width="1.5"/>
+<text x="570" y="532" text-anchor="middle" class="s">Region to mood: B1-B3 listening; B5 idle + recording; C1-C10, C18 processing;</text>
+<text x="570" y="547" text-anchor="middle" class="s">C11 and reveal answering; C13, C6 success; C14, A5 error; A4, A3 sleeping;</text>
+<text x="570" y="562" text-anchor="middle" class="s">C5, C12, C19 idle + attention. Mood holds &gt;= 400 ms; listening shows in &lt; 100 ms.</text>
+<text x="1010" y="100" class="b">Overlays and badges</text>
+<text x="1010" y="116" class="s">(orthogonal to mood)</text>
+<rect x="1005" y="128" width="165" height="42" rx="4" fill="#FFFFFF" stroke="#6B7280" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="1088" y="144" text-anchor="middle" class="s b">attention (M)</text>
+<text x="1088" y="159" text-anchor="middle" class="s">&quot;?&quot; badge: chip waiting</text>
+<rect x="1005" y="178" width="165" height="42" rx="4" fill="#FFFFFF" stroke="#6B7280" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="1088" y="194" text-anchor="middle" class="s b">recording (S)</text>
+<text x="1088" y="209" text-anchor="middle" class="s">REC ring + timer (DOM)</text>
+<rect x="1005" y="228" width="165" height="42" rx="4" fill="#FFFFFF" stroke="#6B7280" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="1088" y="244" text-anchor="middle" class="s b">badge: offline</text>
+<text x="1088" y="259" text-anchor="middle" class="s">cloud-off glyph</text>
+<rect x="1005" y="278" width="165" height="42" rx="4" fill="#FFFFFF" stroke="#6B7280" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="1088" y="294" text-anchor="middle" class="s b">badge: hop target</text>
+<text x="1088" y="309" text-anchor="middle" class="s">&quot;sales-ws · Genie One&quot;</text>
+<rect x="1005" y="328" width="165" height="42" rx="4" fill="#FFFFFF" stroke="#6B7280" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="1088" y="344" text-anchor="middle" class="s b">badge: sync paused (v1)</text>
+<text x="1088" y="359" text-anchor="middle" class="s">Lakebase sync off (COL-33)</text>
+<polyline points="960,150 1005,150" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="982" y="144" text-anchor="middle" class="s" style="fill:#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">set</text><text x="982" y="144" text-anchor="middle" class="s">set</text>
+<rect x="1005" y="378" width="165" height="42" rx="4" fill="#FFFFFF" stroke="#6B7280" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="1088" y="394" text-anchor="middle" class="s b">badge: STT</text>
+<text x="1088" y="409" text-anchor="middle" class="s">local or Databricks ASR</text>
+<rect x="1005" y="429" width="165" height="176" rx="4" fill="#FFFBEB" stroke="#92400E" stroke-width="1.5"/>
+<text x="1013" y="444" class="s b">Priority (first match)</text>
+<text x="1013" y="459" class="s">1 paused: sleeping</text>
+<text x="1013" y="474" class="s">2 capture: listening</text>
+<text x="1013" y="489" class="s">3 error, 3 s</text>
+<text x="1013" y="504" class="s">4 success, 2.5 s</text>
+<text x="1013" y="519" class="s">5 answering</text>
+<text x="1013" y="534" class="s">6 processing</text>
+<text x="1013" y="549" class="s">7 dozing: sleeping</text>
+<text x="1013" y="564" class="s">8 else: idle</text>
+<rect x="20" y="630" width="1160" height="260" rx="6" fill="#EFF6FF" stroke="#1D4ED8" stroke-width="1.5"/>
+<text x="30" y="648" class="b">Region A: MOG lifecycle (A0-A7)</text>
+<rect x="40" y="675" width="120" height="40" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="100" y="690" text-anchor="middle" class="s b">A0</text>
+<text x="100" y="705" text-anchor="middle" class="s">Defined</text>
+<rect x="200" y="675" width="120" height="40" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="260" y="690" text-anchor="middle" class="s b">A1</text>
+<text x="260" y="705" text-anchor="middle" class="s">Starting</text>
+<rect x="380" y="675" width="120" height="40" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="440" y="690" text-anchor="middle" class="s b">A2</text>
+<text x="440" y="705" text-anchor="middle" class="s">Ready</text>
+<rect x="540" y="675" width="120" height="40" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="600" y="690" text-anchor="middle" class="s b">A3</text>
+<text x="600" y="705" text-anchor="middle" class="s">Dozing</text>
+<rect x="40" y="775" width="120" height="40" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="100" y="790" text-anchor="middle" class="s b">A7</text>
+<text x="100" y="805" text-anchor="middle" class="s">Stopped</text>
+<rect x="200" y="775" width="120" height="40" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="260" y="790" text-anchor="middle" class="s b">A5</text>
+<text x="260" y="805" text-anchor="middle" class="s">LoginRequired</text>
+<rect x="380" y="775" width="120" height="40" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="440" y="790" text-anchor="middle" class="s b">A6</text>
+<text x="440" y="805" text-anchor="middle" class="s">Offline</text>
+<rect x="540" y="775" width="120" height="40" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="600" y="790" text-anchor="middle" class="s b">A4</text>
+<text x="600" y="805" text-anchor="middle" class="s">Paused</text>
+<polyline points="160,695 200,695" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="180" cy="695" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="180" y="699.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e1</text>
+<polyline points="320,695 380,695" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="350" cy="695" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="350" y="699.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e2</text>
+<polyline points="260,715 260,775" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="260" cy="745" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="260" y="749.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e3</text>
+<polyline points="320,785 400,715" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="360" cy="750" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="360" y="754.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e4</text>
+<polyline points="500,687 540,687" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="520" cy="675" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="520" y="679.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e5</text>
+<polyline points="540,705 500,705" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="520" cy="717" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="520" y="721.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e6</text>
+<polyline points="470,715 550,775" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="494" cy="733" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="494" y="737.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e7</text>
+<polyline points="570,775 490,715" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="546" cy="757" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="546" y="761.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e8</text>
+<polyline points="420,715 420,775" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="420" cy="757" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="420" y="761.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e9</text>
+<polyline points="450,775 450,715" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="450" cy="745" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="450" y="749.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e10</text>
+<polyline points="200,805 160,805" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<circle cx="180" cy="805" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="180" y="809.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e11</text>
+<text x="40" y="845" class="s">e11 starts from any node.</text>
+<text x="680" y="667" class="s b">Edge triggers (region A)</text>
+<text x="680" y="684" class="s">e1 A0 -&gt; A1: user Start, or app start with autoStart (refused at running cap)</text>
+<text x="680" y="701" class="s">e2 A1 -&gt; A2: window up, Rive (or PNG fallback) loaded, token OK</text>
+<text x="680" y="718" class="s">e3 A1 or A2 -&gt; A5: databricks auth token fails, or 401 after refresh</text>
+<text x="680" y="735" class="s">e4 A5 -&gt; A2: login done (chip &quot;Sign in&quot;)</text>
+<text x="680" y="752" class="s">e5 A2 -&gt; A3: no activity for dozeAfterMin, no session, no request</text>
+<text x="680" y="769" class="s">e6 A3 -&gt; A2: hover, click, hotkey or request event</text>
+<text x="680" y="786" class="s">e7 A2 or A3 -&gt; A4: user Pause MOG, or &quot;Pause all&quot; in the tray</text>
+<text x="680" y="803" class="s">e8 A4 -&gt; A2: Resume</text>
+<text x="680" y="820" class="s">e9 A2 -&gt; A6: reachability probe to the profile host fails 2 times</text>
+<text x="680" y="837" class="s">e10 A6 -&gt; A2: probe OK; queued asks flush in order</text>
+<text x="680" y="854" class="s">e11 any -&gt; A7: Stop or quit; in-flight asks abandoned, late re-poll</text>
+<rect x="20" y="905" width="1160" height="290" rx="6" fill="#EFF6FF" stroke="#1D4ED8" stroke-width="1.5"/>
+<text x="30" y="923" class="b">Region B: capture (B0-B8; one MOG owns the mic, D20)</text>
+<rect x="200" y="960" width="120" height="40" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="260" y="975" text-anchor="middle" class="s b">B1</text>
+<text x="260" y="990" text-anchor="middle" class="s">Armed</text>
+<rect x="380" y="960" width="120" height="40" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="440" y="975" text-anchor="middle" class="s b">B2</text>
+<text x="440" y="990" text-anchor="middle" class="s">PTT</text>
+<rect x="540" y="960" width="120" height="40" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="600" y="975" text-anchor="middle" class="s b">B8</text>
+<text x="600" y="990" text-anchor="middle" class="s">SessionDeleted</text>
+<rect x="40" y="1040" width="120" height="40" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="100" y="1055" text-anchor="middle" class="s b">B0</text>
+<text x="100" y="1070" text-anchor="middle" class="s">MicClosed</text>
+<rect x="200" y="1040" width="120" height="40" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="260" y="1055" text-anchor="middle" class="s b">B3</text>
+<text x="260" y="1070" text-anchor="middle" class="s">HandsFree</text>
+<rect x="540" y="1040" width="120" height="40" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="600" y="1055" text-anchor="middle" class="s b">B7</text>
+<text x="600" y="1070" text-anchor="middle" class="s">SessionStopping</text>
+<rect x="200" y="1120" width="120" height="40" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="260" y="1135" text-anchor="middle" class="s b">B4</text>
+<text x="260" y="1150" text-anchor="middle" class="s">SessionAttest</text>
+<rect x="380" y="1120" width="120" height="40" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="440" y="1135" text-anchor="middle" class="s b">B5</text>
+<text x="440" y="1150" text-anchor="middle" class="s">SessionRecording</text>
+<rect x="540" y="1120" width="120" height="40" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="600" y="1135" text-anchor="middle" class="s b">B6</text>
+<text x="600" y="1150" text-anchor="middle" class="s">SessionPaused</text>
+<polyline points="60,1040 200,985" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="118" cy="1017" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="118" y="1021.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e1</text>
+<polyline points="320,980 380,980" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="350" cy="980" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="350" y="984.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e2</text>
+<polyline points="200,997 100,1040" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="168" cy="1011" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="168" y="1015.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e3</text>
+<polyline points="440,960 440,945 100,945 100,1040" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="300" cy="945" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="300" y="949.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e4</text>
+<polyline points="160,1055 200,1055" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="180" cy="1043" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="180" y="1047.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e5</text>
+<polyline points="200,1070 160,1070" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="180" cy="1084" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="180" y="1088.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e6</text>
+<polyline points="85,1080 85,1140 200,1140" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="85" cy="1110" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="85" y="1114.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e7</text>
+<polyline points="320,1140 380,1140" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="350" cy="1140" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="350" y="1144.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e8</text>
+<polyline points="210,1120 140,1080" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="189" cy="1108" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="189" y="1112.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e9</text>
+<polyline points="500,1133 540,1133" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="520" cy="1121" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="520" y="1125.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e10</text>
+<polyline points="540,1149 500,1149" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="520" cy="1162" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="520" y="1166.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e10</text>
+<polyline points="480,1120 580,1080" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="530" cy="1100" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="530" y="1104.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e11</text>
+<polyline points="540,1065 340,1065 340,1025 150,1025 150,1040" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="440" cy="1065" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="440" y="1069.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e12</text>
+<polyline points="600,1040 600,1000" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="612" cy="1020" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="612" y="1024.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e13</text>
+<polyline points="580,960 580,937 50,937 50,1040" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<circle cx="500" cy="937" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="500" y="941.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e13</text>
+<path d="M420,1160 v18 h40 v-18" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="440" cy="1178" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="440" y="1182.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e15</text>
+<text x="680" y="945" class="s b">Edge triggers (region B)</text>
+<text x="680" y="962" class="s">e1 B0 -&gt; B1: PTT key-down (global key to last-focused MOG)</text>
+<text x="680" y="979" class="s">e2 B1 -&gt; B2: first audio frame</text>
+<text x="680" y="996" class="s">e3 B1 -&gt; B0: hold &lt; 250 ms (tap), other key in first 1 s, Esc</text>
+<text x="680" y="1013" class="s">e4 B2 -&gt; B0 + utterance: key-up (120 s hold safety stop)</text>
+<text x="680" y="1030" class="s">e5 B0 -&gt; B3: double-tap PTT, mascot click, &quot;Talk&quot; button</text>
+<text x="680" y="1047" class="s">e6 B3 -&gt; B0 + utterance: tap, Esc or 5 min cap (CAP-14)</text>
+<text x="680" y="1064" class="s">e7 B0 -&gt; B4: &quot;Start session&quot; (menu, hotkey, accepted prompt)</text>
+<text x="680" y="1081" class="s">e8 B4 -&gt; B5: user picks the attestation + Start</text>
+<text x="680" y="1098" class="s">e9 B4 -&gt; B0: Cancel</text>
+<text x="680" y="1115" class="s">e10 B5 &lt;-&gt; B6: Pause / Resume (pause closes the mic)</text>
+<text x="680" y="1132" class="s">e11 B5 -&gt; B7: stop signal (SessionGuard, diagram 8) or panic</text>
+<text x="680" y="1149" class="s">e12 B7 -&gt; B0: journal flushed, transcript committed</text>
+<text x="680" y="1166" class="s">e13 B5, B6 or B7 -&gt; B8 -&gt; B0: &quot;Stop and delete this session&quot;</text>
+<text x="680" y="1183" class="s">e14 any capture -&gt; B0: panic key, MOG paused, app quit</text>
+<text x="680" y="1200" class="s">e15 B5 -&gt; B5: PTT span goes to the target MOG; no auto-ask</text>
+<rect x="20" y="1210" width="1160" height="570" rx="6" fill="#EFF6FF" stroke="#1D4ED8" stroke-width="1.5"/>
+<text x="30" y="1228" class="b">Region C: request (C0-C20; max 2 in flight per MOG, D31; the main agent drives C3-C17, BC4)</text>
+<rect x="40" y="1320" width="112" height="36" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="96" y="1333" text-anchor="middle" class="s b">C0</text>
+<text x="96" y="1348" text-anchor="middle" class="s">Utterance</text>
+<rect x="180" y="1320" width="112" height="36" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="236" y="1333" text-anchor="middle" class="s b">C1</text>
+<text x="236" y="1348" text-anchor="middle" class="s">Transcribing</text>
+<rect x="320" y="1320" width="112" height="36" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="376" y="1333" text-anchor="middle" class="s b">C2</text>
+<text x="376" y="1348" text-anchor="middle" class="s">Cleaning</text>
+<rect x="460" y="1320" width="112" height="36" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="516" y="1333" text-anchor="middle" class="s b">C3</text>
+<text x="516" y="1348" text-anchor="middle" class="s">Routing</text>
+<rect x="600" y="1320" width="112" height="36" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="656" y="1333" text-anchor="middle" class="s b">C4</text>
+<text x="656" y="1348" text-anchor="middle" class="s">Preview</text>
+<rect x="740" y="1320" width="112" height="36" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="796" y="1333" text-anchor="middle" class="s b">C7</text>
+<text x="796" y="1348" text-anchor="middle" class="s">Acknowledged</text>
+<rect x="880" y="1320" width="112" height="36" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="936" y="1333" text-anchor="middle" class="s b">C8</text>
+<text x="936" y="1348" text-anchor="middle" class="s">Working</text>
+<rect x="1020" y="1320" width="112" height="36" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="1076" y="1333" text-anchor="middle" class="s b">C11</text>
+<text x="1076" y="1348" text-anchor="middle" class="s">Partial</text>
+<rect x="600" y="1255" width="112" height="36" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="656" y="1268" text-anchor="middle" class="s b">C5</text>
+<text x="656" y="1283" text-anchor="middle" class="s">ChipOffered</text>
+<rect x="740" y="1255" width="112" height="36" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="796" y="1268" text-anchor="middle" class="s b">C18</text>
+<text x="796" y="1283" text-anchor="middle" class="s">QueuedOffline</text>
+<rect x="880" y="1255" width="112" height="36" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="936" y="1268" text-anchor="middle" class="s b">C9</text>
+<text x="936" y="1283" text-anchor="middle" class="s">RateLimited</text>
+<rect x="1020" y="1255" width="112" height="36" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="1076" y="1268" text-anchor="middle" class="s b">C12</text>
+<text x="1076" y="1283" text-anchor="middle" class="s">NeedsInput</text>
+<rect x="460" y="1385" width="112" height="36" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="516" y="1398" text-anchor="middle" class="s b">C20 (v1)</text>
+<text x="516" y="1413" text-anchor="middle" class="s">SplitParent</text>
+<rect x="600" y="1385" width="112" height="36" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="656" y="1398" text-anchor="middle" class="s b">C6</text>
+<text x="656" y="1413" text-anchor="middle" class="s">MemoryAnswer</text>
+<rect x="740" y="1385" width="112" height="36" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="796" y="1398" text-anchor="middle" class="s b">C19</text>
+<text x="796" y="1413" text-anchor="middle" class="s">AskUncertain</text>
+<rect x="880" y="1385" width="112" height="36" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="936" y="1398" text-anchor="middle" class="s b">C10</text>
+<text x="936" y="1413" text-anchor="middle" class="s">SoftNotice</text>
+<rect x="1020" y="1385" width="112" height="36" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="1076" y="1398" text-anchor="middle" class="s b">C13</text>
+<text x="1076" y="1413" text-anchor="middle" class="s">Completed</text>
+<rect x="600" y="1460" width="112" height="36" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="656" y="1473" text-anchor="middle" class="s b">C15</text>
+<text x="656" y="1488" text-anchor="middle" class="s">Cancelled</text>
+<rect x="740" y="1460" width="112" height="36" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="796" y="1473" text-anchor="middle" class="s b">C14</text>
+<text x="796" y="1488" text-anchor="middle" class="s">Failed</text>
+<rect x="880" y="1460" width="112" height="36" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="936" y="1473" text-anchor="middle" class="s b">C16</text>
+<text x="936" y="1488" text-anchor="middle" class="s">GaveUp</text>
+<rect x="1020" y="1460" width="112" height="36" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.5"/>
+<text x="1076" y="1473" text-anchor="middle" class="s b">C17</text>
+<text x="1076" y="1488" text-anchor="middle" class="s">LateFinished</text>
+<rect x="320" y="1460" width="200" height="36" rx="4" fill="#FFFFFF" stroke="#6B7280" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="420" y="1480" text-anchor="middle" class="s">any active (C7-C11)</text>
+<polyline points="152,1338 180,1338" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="166" cy="1338" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="166" y="1342.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e1</text>
+<polyline points="292,1338 320,1338" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="306" cy="1338" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="306" y="1342.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e1</text>
+<polyline points="432,1338 460,1338" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="446" cy="1338" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="446" y="1342.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e1</text>
+<polyline points="572,1338 600,1338" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="586" cy="1338" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="586" y="1342.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e2</text>
+<polyline points="552,1320 610,1291" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="581" cy="1306" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="581" y="1310.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e3</text>
+<polyline points="470,1320 470,1292" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="470" cy="1284" r="7" fill="none" stroke="#111827" stroke-width="1.5"/><circle cx="470" cy="1284" r="3.5" fill="#111827"/>
+<text x="460" y="1288" text-anchor="end" class="s" style="fill:#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">e4 end</text><text x="460" y="1288" text-anchor="end" class="s">e4 end</text>
+<polyline points="552,1356 610,1385" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="581" cy="1371" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="581" y="1375.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e5</text>
+<polyline points="712,1391 750,1356" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="731" cy="1373" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="731" y="1377.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e6</text>
+<polyline points="712,1338 740,1338" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="726" cy="1338" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="726" y="1342.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e7</text>
+<polyline points="600,1350 590,1350 590,1470 600,1470" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="590" cy="1448" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="590" y="1452.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e8</text>
+<polyline points="712,1285 760,1320" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="736" cy="1306" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="736" y="1310.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e9</text>
+<polyline points="516,1356 516,1385" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="516" cy="1370" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="516" y="1374.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e10</text>
+<polyline points="796,1320 796,1291" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="810" cy="1306" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="810" y="1310.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e11</text>
+<polyline points="852,1338 880,1338" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="866" cy="1338" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="866" y="1342.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e12</text>
+<polyline points="920,1320 920,1291" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<polyline points="952,1291 952,1320" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="936" cy="1306" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="936" y="1310.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e13</text>
+<polyline points="936,1356 936,1385" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="950" cy="1370" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="950" y="1374.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e14</text>
+<polyline points="992,1338 1020,1338" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="1006" cy="1338" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="1006" y="1342.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e15</text>
+<polyline points="1076,1320 1076,1291" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="1090" cy="1306" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="1090" y="1310.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e16</text>
+<polyline points="1020,1285 985,1320" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="1006" cy="1310" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="1006" y="1314.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e16</text>
+<polyline points="1076,1356 1076,1385" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="1090" cy="1370" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="1090" y="1374.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e17</text>
+<polyline points="420,1496 420,1512 796,1512 796,1496" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="680" cy="1512" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="680" y="1516.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e18</text>
+<polyline points="520,1485 600,1485" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="560" cy="1485" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="560" y="1489.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e19</text>
+<polyline points="936,1421 936,1460" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="950" cy="1435" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="950" y="1439.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e20</text>
+<polyline points="992,1478 1020,1478" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="1006" cy="1478" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="1006" y="1482.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e21</text>
+<polyline points="796,1356 796,1385" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="810" cy="1370" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="810" y="1374.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e22</text>
+<polyline points="740,1466 726,1466 726,1350 740,1350" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<circle cx="726" cy="1446" r="10" fill="#1D4ED8" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="726" y="1450.5" text-anchor="middle" class="s b" fill="#FFFFFF" style="fill:#FFFFFF">e23</text>
+<text x="40" y="1550" class="s b">Edge triggers (region C)</text>
+<text x="40" y="1567" class="s">e1 C0 -&gt; C1 -&gt; C2 -&gt; C3: STT done; cleanup done or skipped (&lt; 4 words)</text>
+<text x="40" y="1584" class="s">e2 C3 -&gt; C4: question, conf &gt;= 0.7, PTT or hands-free (D30)</text>
+<text x="40" y="1601" class="s">e3 C3 -&gt; C5: conf &lt; 0.7 (PTT), or any session question (no auto-ask, BC1)</text>
+<text x="40" y="1618" class="s">e4 C3 -&gt; end: context to memory; noise dropped; command + toast</text>
+<text x="40" y="1635" class="s">e5 C3 -&gt; C6: memory_question or gated hit (same space, &lt;= 24 h)</text>
+<text x="40" y="1652" class="s">e6 C6 -&gt; C7: chip &quot;Ask Genie anyway&quot;</text>
+<text x="40" y="1669" class="s">e7 C4 -&gt; C7: 1.5 s elapse or Enter</text>
+<text x="40" y="1686" class="s">e8 C4 -&gt; C15: Esc or Cancel (&quot;Edit&quot; returns to C0)</text>
+<text x="40" y="1703" class="s">e9 C5 -&gt; C7: chip &quot;Ask Genie&quot;</text>
+<text x="40" y="1720" class="s">e10 (v1) C3 -&gt; C20: split, &lt;= 3 parts; each part runs C7-C16</text>
+<text x="40" y="1737" class="s">e11 C7 -&gt; C18: MOG offline</text>
+<text x="40" y="1754" class="s">e12 C7 -&gt; C8: first progress (or elapsed time if steps are null)</text>
+<text x="610" y="1550" class="s b"> </text>
+<text x="610" y="1567" class="s">e13 C8 &lt;-&gt; C9: retrying or queued, 429 backoff</text>
+<text x="610" y="1584" class="s">e14 C8 -&gt; C10: 4 min since ask</text>
+<text x="610" y="1601" class="s">e15 C8 or C10 -&gt; C11: partial</text>
+<text x="610" y="1618" class="s">e16 C8 or C11 -&gt; C12 -&gt; C8: needs_input; user answers or picks</text>
+<text x="610" y="1635" class="s">e17 C8, C10 or C11 -&gt; C13: completed</text>
+<text x="610" y="1652" class="s">e18 any active -&gt; C14: failed(code); POLICY_DENIED retries once first</text>
+<text x="610" y="1669" class="s">e19 any active -&gt; C15: Esc on card, genie_cancel_response</text>
+<text x="610" y="1686" class="s">e20 C10 -&gt; C16: 10 min since ask</text>
+<text x="610" y="1703" class="s">e21 C16 -&gt; C17: late re-poll at +15 or +60 min completes</text>
+<text x="610" y="1720" class="s">e22 C7 -&gt; C19: timeout after send; user: Check again / Ask again</text>
+<text x="610" y="1737" class="s">e23 C14 -&gt; C7: Retry, or &quot;Resend without context&quot;</text>
+<rect x="20" y="1800" width="1160" height="196" rx="4" fill="#EFF6FF" stroke="#1D4ED8" stroke-width="1.5"/>
+<text x="30" y="1820" style="font-weight:700">Tray menu, Pause all and window positions (MB-04, MOG-15; edge e7 in region A)</text>
+<rect x="36" y="1834" width="330" height="148" rx="4" fill="#F3F4F6" stroke="#6B7280" stroke-width="1.2"/>
+<text x="201" y="1864.3" text-anchor="middle" style="font-size:12px;font-weight:700">R11 tray menu (MB-04)</text>
+<text x="201" y="1880.3" text-anchor="middle" style="font-size:11px">recording state (REC + timer)</text>
+<text x="201" y="1896.3" text-anchor="middle" style="font-size:11px">running MOGs (click: focus)</text>
+<text x="201" y="1912.3" text-anchor="middle" style="font-size:11px">"Pause all": every Ready or Dozing MOG → A4</text>
+<text x="201" y="1928.3" text-anchor="middle" style="font-size:11px">"Stop all recording": capture_stop_all</text>
+<text x="201" y="1944.3" text-anchor="middle" style="font-size:11px">"New MOG" · "Settings"</text>
+<text x="201" y="1960.3" text-anchor="middle" style="font-size:11px">every item works with the keyboard</text>
+<rect x="382" y="1834" width="330" height="148" rx="4" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="547" y="1872.3" text-anchor="middle" style="font-size:12px;font-weight:700">"Pause all" (e7) and resume (e8)</text>
+<text x="547" y="1888.3" text-anchor="middle" style="font-size:11px">a paused MOG shows mood sleeping;</text>
+<text x="547" y="1904.3" text-anchor="middle" style="font-size:11px">its capture goes to B0 (region B, e14)</text>
+<text x="547" y="1920.3" text-anchor="middle" style="font-size:11px">and its mic closes;</text>
+<text x="547" y="1936.3" text-anchor="middle" style="font-size:11px">Resume returns each MOG to A2</text>
+<text x="547" y="1952.3" text-anchor="middle" style="font-size:11px">(per MOG or from the tray)</text>
+<rect x="728" y="1834" width="436" height="148" rx="4" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="946" y="1880.3" text-anchor="middle" style="font-size:12px;font-weight:700">Positions per display (MOG-15)</text>
+<text x="946" y="1896.3" text-anchor="middle" style="font-size:11px">R11 saves each MOG position as display UUID</text>
+<text x="946" y="1912.3" text-anchor="middle" style="font-size:11px">+ normalised position. When a display is removed,</text>
+<text x="946" y="1928.3" text-anchor="middle" style="font-size:11px">its MOGs move to the primary display, so every</text>
+<text x="946" y="1944.3" text-anchor="middle" style="font-size:11px">MOG stays visible (AT-01).</text>
+<rect x="20" y="2012" width="760" height="174" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1"/>
+<text x="30" y="2030" style="font-weight:700">Legend</text>
+<rect x="30" y="2040" width="24" height="14" rx="4" fill="#EFF6FF" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="60" y="2052" style="font-size:12px">Device zone</text>
+<rect x="410" y="2040" width="24" height="14" rx="4" fill="#FFF7ED" stroke="#C2410C" stroke-width="1.2"/>
+<rect x="412" y="2042" width="20" height="10" rx="1" fill="none" stroke="#DC2626" stroke-width="1.2" stroke-dasharray="3 2"/>
+<text x="440" y="2052" style="font-size:12px">Rust core (secret boundary)</text>
+<rect x="30" y="2062" width="24" height="14" rx="4" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="60" y="2074" style="font-size:12px">WebView window</text>
+<rect x="410" y="2062" width="24" height="14" rx="4" fill="#FEF2F2" stroke="#B91C1C" stroke-width="1.2"/>
+<text x="440" y="2074" style="font-size:12px">Databricks workspace</text>
+<rect x="30" y="2084" width="24" height="14" rx="4" fill="#F5F3FF" stroke="#6D28D9" stroke-width="1.2"/>
+<text x="60" y="2096" style="font-size:12px">Main agent harness (BC4)</text>
+<rect x="410" y="2084" width="24" height="14" rx="4" fill="#F3F4F6" stroke="#6B7280" stroke-width="1.2"/>
+<text x="440" y="2096" style="font-size:12px">OS services</text>
+<rect x="30" y="2106" width="24" height="14" rx="4" fill="#F0FDF4" stroke="#15803D" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="60" y="2118" style="font-size:12px">Lakebase (optional, v1)</text>
+<rect x="410" y="2106" width="24" height="14" rx="4" fill="#F3F4F6" stroke="#6B7280" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="440" y="2118" style="font-size:12px">Browser / IdP</text>
+<polyline points="30,2136 66,2136" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="72" y="2140" style="font-size:12px">request / data</text>
+<polyline points="276.7,2136 312.7,2136" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="318.7" y="2140" style="font-size:12px">event / stream</text>
+<polyline points="523.3,2136 559.3,2136" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="2 3" marker-end="url(#arw)"/>
+<text x="565.3" y="2140" style="font-size:12px">credential fetch</text>
+<rect x="30" y="2150" width="24" height="14" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="60" y="2162" style="font-size:12px">v1 / optional (not in the MVP)</text>
+<rect x="410" y="2150" width="24" height="14" rx="4" fill="#FFFBEB" stroke="#B45309" stroke-width="1.2"/>
+<text x="440" y="2162" style="font-size:12px">note / rule</text>
+<text x="800" y="2028" style="font-size:12px">Diagram 7. MOG state machine. Seven Rive moods follow a</text>
+<text x="800" y="2045" style="font-size:12px">priority function of regions A, B and C. Overlays and</text>
+<text x="800" y="2062" style="font-size:12px">badges never change the mood. Edge ids link each arrow to</text>
+<text x="800" y="2079" style="font-size:12px">its trigger table. The split (C20, e10) is v1.</text>
+<text x="800" y="2096" style="font-size:12px">IDs: UX-01..04, UX-09, MOG-03, MOG-12, MOG-15, MB-04,</text>
+<text x="800" y="2113" style="font-size:12px">CAP-14, CAP-44, RTR-05, RTR-06, D19, D64, D65, D82, BC1.</text>
+</svg>

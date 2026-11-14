@@ -1,0 +1,353 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 1200 2854" width="1200" height="2854" role="img" aria-labelledby="title desc" font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+<title id="title">Diagram 3. Push-to-talk sequence in Bottle: hotkey, mic lease, VAD, STT, cleanup and classifier in parallel with the RecallGate, then insert or copy (UC1), a 1.5 s preview or an Ask Genie chip (UC2)</title>
+<desc id="desc">UML-style sequence for one push-to-talk utterance. Key-down: R1 sends hotkey.ptt, R2 takes the mic lease and opens the stream, then the mood becomes listening in under 100 ms and the warm-ups start. A hold under 250 ms or another key in the first 1 s cancels. Key-up adds 120 ms post-roll. STT is local Parakeet by default. Databricks ASR runs only when the user selected it, the probe passed and the speech is 300 ms or more (CAP-57c, CAP-57e). A pre-pass shows the raw draft. Cleanup and the classifier run in parallel on the pre-pass text with a 900 ms deadline, and the RecallGate semantic tier runs in parallel with them. Dictation is inserted into the active app without the main agent (UC1). Context shows Copy with concealed clipboard flags and a context memory item. A question goes to the main agent: a memory answer, a 1.5 s preview with Send now, Edit and Cancel at confidence 0.7 or more, or an Ask Genie chip below 0.7. The blurb shows bold numbers and Open in Databricks. Lower panels: hands-free double-tap, STT fallback chain and safeguards, hotkey edge cases and the latency budget.</desc>
+<defs>
+<marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#111827"/></marker>
+<style type="text/css"><![CDATA[
+text{font-size:13px;fill:#111827}
+.s{font-size:12px}
+.b{font-weight:700}
+.it{font-style:italic}
+.h{font-size:16px;font-weight:700}
+.halo{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
+]]></style>
+</defs>
+<rect x="0" y="0" width="1200" height="2854" fill="#FFFFFF"/>
+<polyline points="45,100 45,2048" fill="none" stroke="#9CA3AF" stroke-width="1.2" stroke-dasharray="6 4"/>
+<polyline points="150,100 150,2048" fill="none" stroke="#9CA3AF" stroke-width="1.2" stroke-dasharray="6 4"/>
+<polyline points="275,100 275,2048" fill="none" stroke="#9CA3AF" stroke-width="1.2" stroke-dasharray="6 4"/>
+<polyline points="425,100 425,2048" fill="none" stroke="#9CA3AF" stroke-width="1.2" stroke-dasharray="6 4"/>
+<polyline points="565,100 565,2048" fill="none" stroke="#9CA3AF" stroke-width="1.2" stroke-dasharray="6 4"/>
+<polyline points="705,100 705,2048" fill="none" stroke="#9CA3AF" stroke-width="1.2" stroke-dasharray="6 4"/>
+<polyline points="865,100 865,2048" fill="none" stroke="#9CA3AF" stroke-width="1.2" stroke-dasharray="6 4"/>
+<polyline points="1050,100 1050,2048" fill="none" stroke="#9CA3AF" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="20" y="30" style="font-size:16px;font-weight:700">Diagram 3. Push-to-talk dictation and question sequence (MVP-D: UC1 dictation, UC2 entry)</text>
+<rect x="5" y="50" width="80" height="50" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="45" y="79.7" text-anchor="middle" style="font-weight:700">User</text>
+<rect x="92" y="50" width="116" height="50" rx="4" fill="#F3F4F6" stroke="#6B7280" stroke-width="1.2"/>
+<text x="150" y="71.2" text-anchor="middle" style="font-weight:700">OS services</text>
+<text x="150" y="88.2" text-anchor="middle">talk key, mic</text>
+<rect x="209" y="50" width="132" height="50" rx="4" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="275" y="71.2" text-anchor="middle" style="font-weight:700">MOG view + card</text>
+<text x="275" y="88.2" text-anchor="middle">(WebView, Rive)</text>
+<rect x="359" y="50" width="132" height="50" rx="4" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="425" y="71.2" text-anchor="middle" style="font-weight:700">Brain window</text>
+<text x="425" y="88.2" text-anchor="middle">T3 T4 T5 T6 T10</text>
+<rect x="505" y="50" width="120" height="50" rx="4" fill="#F5F3FF" stroke="#6D28D9" stroke-width="1.2"/>
+<text x="565" y="71.2" text-anchor="middle" style="font-weight:700">Main agent</text>
+<text x="565" y="88.2" text-anchor="middle">(BC4, UC2 only)</text>
+<rect x="645" y="50" width="120" height="50" rx="4" fill="#FFF7ED" stroke="#C2410C" stroke-width="1.2"/>
+<text x="705" y="71.2" text-anchor="middle" style="font-weight:700">Rust core</text>
+<text x="705" y="88.2" text-anchor="middle">R1 R2 R4 R7</text>
+<rect x="790" y="50" width="150" height="50" rx="4" fill="#FEF2F2" stroke="#B91C1C" stroke-width="1.2"/>
+<text x="865" y="71.2" text-anchor="middle" style="font-weight:700">Unity Gateway</text>
+<text x="865" y="88.2" text-anchor="middle">workspace A (home)</text>
+<rect x="995" y="50" width="110" height="50" rx="4" fill="#F3F4F6" stroke="#6B7280" stroke-width="1.2"/>
+<text x="1050" y="71.2" text-anchor="middle" style="font-weight:700">Active app</text>
+<text x="1050" y="88.2" text-anchor="middle">(OS)</text>
+<rect x="219" y="116" width="112" height="20" rx="10" fill="#FFFFFF" stroke="#7C3AED" stroke-width="1.5"/>
+<text x="275" y="130" text-anchor="middle" style="font-size:12px;font-weight:700;fill:#6D28D9">idle</text>
+<polyline points="45,156 149,156" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="97.5" y="151" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">hold talk key</text>
+<text x="97.5" y="151" text-anchor="middle" style="font-size:12px">hold talk key</text>
+<polyline points="150,186 704,186" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="427.5" y="181" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">key-down (listen-only CGEventTap, CAP-35a)</text>
+<text x="427.5" y="181" text-anchor="middle" style="font-size:12px">key-down (listen-only CGEventTap, CAP-35a)</text>
+<polyline points="705,216 426,216" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="565" y="211" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">hotkey.ptt {down, mogId} (last-interacted MOG)</text>
+<text x="565" y="211" text-anchor="middle" style="font-size:12px">hotkey.ptt {down, mogId} (last-interacted MOG)</text>
+<polyline points="705,238 731,238 731,252 707,252" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="737" y="249" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">R2 mic lease, mic open, stream starts (F1 step 2)</text>
+<text x="737" y="249" style="font-size:12px">R2 mic lease, mic open, stream starts (F1 step 2)</text>
+<polyline points="425,276 276,276" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="350" y="271" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">mood listening &lt; 100 ms + target toast</text>
+<text x="350" y="271" text-anchor="middle" style="font-size:12px">mood listening &lt; 100 ms + target toast</text>
+<rect x="219" y="280" width="112" height="20" rx="10" fill="#FFFFFF" stroke="#7C3AED" stroke-width="1.5"/>
+<text x="275" y="294" text-anchor="middle" style="font-size:12px;font-weight:700;fill:#6D28D9">listening</text>
+<polyline points="705,314 731,314 731,328 707,328" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="737" y="325" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">warm-ups: token check, HTTP/2, model preload</text>
+<text x="737" y="325" style="font-size:12px">warm-ups: token check, HTTP/2, model preload</text>
+<polyline points="705,378 426,378" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="565" y="373" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">hotkey.ptt {cancel}: audio discarded, never journaled</text>
+<text x="565" y="373" text-anchor="middle" style="font-size:12px">hotkey.ptt {cancel}: audio discarded, never journaled</text>
+<polyline points="425,408 276,408" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="350" y="403" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">mood idle; a tap stops hands-free (panel A)</text>
+<text x="350" y="403" text-anchor="middle" style="font-size:12px">mood idle; a tap stops hands-free (panel A)</text>
+<rect x="105" y="338" width="685" height="94" rx="0" fill="none" stroke="#374151" stroke-width="1.2"/>
+<path d="M105,338 h33.9 v14 l-6,6 h-27.9 z" fill="#F9FAFB" stroke="#374151" stroke-width="1.2"/>
+<text x="110" y="353" style="font-size:12px;font-weight:700">opt</text>
+<text x="146.9" y="353" style="font-size:12px">hold &lt; 250 ms (tap) or another key in the first 1 s (CAP-44a)</text>
+<polyline points="45,456 149,456" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="97.5" y="451" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">speech</text>
+<text x="97.5" y="451" text-anchor="middle" style="font-size:12px">speech</text>
+<polyline points="150,486 704,486" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="427.5" y="481" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">audio frames, 16 kHz mono (stays in Rust)</text>
+<text x="427.5" y="481" text-anchor="middle" style="font-size:12px">audio frames, 16 kHz mono (stays in Rust)</text>
+<polyline points="705,516 276,516" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="490" y="511" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">level ring ~30 Hz (Channel via brain)</text>
+<text x="490" y="511" text-anchor="middle" style="font-size:12px">level ring ~30 Hz (Channel via brain)</text>
+<polyline points="705,564 731,564 731,578 707,578" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="737" y="575" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">Silero VAD; closed segments decode early</text>
+<text x="737" y="575" style="font-size:12px">Silero VAD; closed segments decode early</text>
+<rect x="600" y="532" width="410" height="64" rx="0" fill="none" stroke="#374151" stroke-width="1.2"/>
+<path d="M600,532 h41.7 v14 l-6,6 h-35.7 z" fill="#F9FAFB" stroke="#374151" stroke-width="1.2"/>
+<text x="605" y="547" style="font-size:12px;font-weight:700">loop</text>
+<text x="649.7" y="547" style="font-size:12px">while the key is held</text>
+<polyline points="705,638 731,638 731,652 707,652" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="737" y="649" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">safety stop: stop capture, keep the clip</text>
+<text x="737" y="649" style="font-size:12px">safety stop: stop capture, keep the clip</text>
+<rect x="600" y="606" width="410" height="64" rx="0" fill="none" stroke="#374151" stroke-width="1.2"/>
+<path d="M600,606 h33.9 v14 l-6,6 h-27.9 z" fill="#F9FAFB" stroke="#374151" stroke-width="1.2"/>
+<text x="605" y="621" style="font-size:12px;font-weight:700">opt</text>
+<text x="641.9" y="621" style="font-size:12px">hold reaches 120 s (D54, CAP-04)</text>
+<polyline points="45,694 149,694" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="97.5" y="689" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">release key</text>
+<text x="97.5" y="689" text-anchor="middle" style="font-size:12px">release key</text>
+<polyline points="150,724 704,724" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="427.5" y="719" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">key-up</text>
+<text x="427.5" y="719" text-anchor="middle" style="font-size:12px">key-up</text>
+<polyline points="705,746 731,746 731,760 707,760" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="737" y="757" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">post-roll 120 ms, mic closed, VAD flush</text>
+<text x="737" y="757" style="font-size:12px">post-roll 120 ms, mic closed, VAD flush</text>
+<polyline points="705,784 426,784" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="565" y="779" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">capture.segment {final, segmentId}</text>
+<text x="565" y="779" text-anchor="middle" style="font-size:12px">capture.segment {final, segmentId}</text>
+<polyline points="425,814 276,814" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="350" y="809" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">processing, pill "Transcribing" ≤ 100 ms</text>
+<text x="350" y="809" text-anchor="middle" style="font-size:12px">processing, pill "Transcribing" ≤ 100 ms</text>
+<rect x="219" y="818" width="112" height="20" rx="10" fill="#FFFFFF" stroke="#7C3AED" stroke-width="1.5"/>
+<text x="275" y="832" text-anchor="middle" style="font-size:12px;font-weight:700;fill:#6D28D9">processing</text>
+<polyline points="425,860 704,860" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="565" y="855" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">stt_transcribe {segmentId, provider, …}</text>
+<text x="565" y="855" text-anchor="middle" style="font-size:12px">stt_transcribe {segmentId, provider, …}</text>
+<polyline points="705,916 864,916" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="785" y="911" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">POST …/mlflow/v1/chat/completions (ASR)</text>
+<text x="785" y="911" text-anchor="middle" style="font-size:12px">POST …/mlflow/v1/chat/completions (ASR)</text>
+<polyline points="705,962 731,962 731,976 707,976" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="737" y="973" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">Parakeet TDT 0.6B v3 int8 (CPU)</text>
+<text x="737" y="973" style="font-size:12px">Parakeet TDT 0.6B v3 int8 (CPU)</text>
+<rect x="600" y="876" width="410" height="118" rx="0" fill="none" stroke="#374151" stroke-width="1.2"/>
+<path d="M600,876 h30.5 v14 l-6,6 h-24.5 z" fill="#F9FAFB" stroke="#374151" stroke-width="1.2"/>
+<text x="605" y="891" style="font-size:12px;font-weight:700">alt</text>
+<text x="638.5" y="891" style="font-size:12px">[user selected ASR, probe passed, ≥ 300 ms]</text>
+<polyline points="600,932 1010,932" fill="none" stroke="#374151" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="608" y="947" style="font-size:12px">[else, the default: local Parakeet (panel B)]</text>
+<polyline points="705,1018 426,1018" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="565" y="1013" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">transcript (raw text) after the hallucination guard</text>
+<text x="565" y="1013" text-anchor="middle" style="font-size:12px">transcript (raw text) after the hallucination guard</text>
+<polyline points="425,1040 451,1040 451,1054 427,1054" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="457" y="1051" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">T5 deterministic pre-pass; T10 RecallGate lexical tier (FTS5) starts</text>
+<text x="457" y="1051" style="font-size:12px">T5 deterministic pre-pass; T10 RecallGate lexical tier (FTS5) starts</text>
+<polyline points="425,1078 276,1078" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="350" y="1073" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">raw draft text shown</text>
+<text x="350" y="1073" text-anchor="middle" style="font-size:12px">raw draft text shown</text>
+<polyline points="425,1134 864,1134" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="645" y="1129" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">model_invoke cleanup via R7 (skip &lt; 4 words)</text>
+<text x="645" y="1129" text-anchor="middle" style="font-size:12px">model_invoke cleanup via R7 (skip &lt; 4 words)</text>
+<polyline points="865,1164 426,1164" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="645" y="1159" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">cleaned text</text>
+<text x="645" y="1159" text-anchor="middle" style="font-size:12px">cleaned text</text>
+<polyline points="425,1218 864,1218" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="645" y="1213" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">model_invoke router: strict json_schema</text>
+<text x="645" y="1213" text-anchor="middle" style="font-size:12px">model_invoke router: strict json_schema</text>
+<polyline points="865,1248 426,1248" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="645" y="1243" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">RouterDecision {intent, confidence, directed_mog_id}</text>
+<text x="645" y="1243" text-anchor="middle" style="font-size:12px">RouterDecision {intent, confidence, directed_mog_id}</text>
+<polyline points="425,1302 864,1302" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="645" y="1297" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">model_invoke embed (query vector); offline: FTS5 only</text>
+<text x="645" y="1297" text-anchor="middle" style="font-size:12px">model_invoke embed (query vector); offline: FTS5 only</text>
+<rect x="330" y="1094" width="680" height="232" rx="0" fill="none" stroke="#374151" stroke-width="1.2"/>
+<path d="M330,1094 h37.4 v14 l-6,6 h-31.4 z" fill="#F9FAFB" stroke="#374151" stroke-width="1.2"/>
+<text x="335" y="1109" style="font-size:12px;font-weight:700">par</text>
+<text x="375.4" y="1109" style="font-size:12px">on the pre-pass text, deadline 900 ms (D69, CAP-67, RTR-09, MEM-16)</text>
+<polyline points="330,1180 1010,1180" fill="none" stroke="#374151" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="338" y="1195" style="font-size:12px">[classifier: fast-path intent (T6; for questions the agent routes first, BC4)]</text>
+<polyline points="330,1264 1010,1264" fill="none" stroke="#374151" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="338" y="1279" style="font-size:12px">[RecallGate semantic tier, in parallel with the router (MEM-16)]</text>
+<polyline points="425,1342 451,1342 451,1356 427,1356" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="457" y="1353" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">number + entity check; fail: pre-pass text "not cleaned"</text>
+<text x="457" y="1353" style="font-size:12px">number + entity check; fail: pre-pass text "not cleaned"</text>
+<polyline points="425,1380 276,1380" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="350" y="1375" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">cleaned text replaces the draft, with Copy</text>
+<text x="350" y="1375" text-anchor="middle" style="font-size:12px">cleaned text replaces the draft, with Copy</text>
+<polyline points="425,1436 704,1436" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="565" y="1431" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">insert_text (M, UC1; no Enter)</text>
+<text x="565" y="1431" text-anchor="middle" style="font-size:12px">insert_text (M, UC1; no Enter)</text>
+<polyline points="705,1466 1049,1466" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="877.5" y="1461" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">paste into the active app (Accessibility only for insertion, MOG-05a..06d)</text>
+<text x="877.5" y="1461" text-anchor="middle" style="font-size:12px">paste into the active app (Accessibility only for insertion, MOG-05a..06d)</text>
+<polyline points="425,1496 276,1496" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="350" y="1491" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">mood success 2.5 s, then idle</text>
+<text x="350" y="1491" text-anchor="middle" style="font-size:12px">mood success 2.5 s, then idle</text>
+<polyline points="45,1550 274,1550" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="160" y="1545" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">click Copy</text>
+<text x="160" y="1545" text-anchor="middle" style="font-size:12px">click Copy</text>
+<polyline points="275,1580 704,1580" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="490" y="1575" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">clipboard write: concealed + transient flags (SEC-30)</text>
+<text x="490" y="1575" text-anchor="middle" style="font-size:12px">clipboard write: concealed + transient flags (SEC-30)</text>
+<polyline points="425,1602 451,1602 451,1616 427,1616" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="457" y="1613" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">T10 writes a context memory item locally (MEM-10, MEM-28)</text>
+<text x="457" y="1613" style="font-size:12px">T10 writes a context memory item locally (MEM-10, MEM-28)</text>
+<polyline points="425,1664 564,1664" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="495" y="1659" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">utterance + RouterDecision</text>
+<text x="495" y="1659" text-anchor="middle" style="font-size:12px">utterance + RouterDecision</text>
+<polyline points="565,1720 276,1720" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="430" y="1715" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">show_blurb "From memory · &lt;age&gt;" + "Ask Genie anyway"</text>
+<text x="430" y="1715" text-anchor="middle" style="font-size:12px">show_blurb "From memory · &lt;age&gt;" + "Ask Genie anyway"</text>
+<polyline points="565,1774 276,1774" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="420" y="1769" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">card "Sending in 1.5 s" [Send now] [Edit] [Cancel]</text>
+<text x="420" y="1769" text-anchor="middle" style="font-size:12px">card "Sending in 1.5 s" [Send now] [Edit] [Cancel]</text>
+<polyline points="565,1804 864,1804" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="760" y="1799" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">after 1.5 s: genie_ask through R8 (diagram 4)</text>
+<text x="760" y="1799" text-anchor="middle" style="font-size:12px">after 1.5 s: genie_ask through R8 (diagram 4)</text>
+<polyline points="565,1858 276,1858" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="420" y="1853" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">chip "Ask Genie": nothing is sent before the click</text>
+<text x="420" y="1853" text-anchor="middle" style="font-size:12px">chip "Ask Genie": nothing is sent before the click</text>
+<rect x="230" y="1680" width="780" height="202" rx="0" fill="none" stroke="#374151" stroke-width="1.2"/>
+<path d="M230,1680 h30.5 v14 l-6,6 h-24.5 z" fill="#F9FAFB" stroke="#374151" stroke-width="1.2"/>
+<text x="235" y="1695" style="font-size:12px;font-weight:700">alt</text>
+<text x="268.5" y="1695" style="font-size:12px">gate answers (F4, diagram 6)</text>
+<polyline points="230,1736 1010,1736" fill="none" stroke="#374151" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="238" y="1751" style="font-size:12px">[confidence ≥ 0.7 (RTR-04)]</text>
+<polyline points="230,1820 1010,1820" fill="none" stroke="#374151" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="238" y="1835" style="font-size:12px">[confidence &lt; 0.7 (RTR-05)]</text>
+<polyline points="565,1906 276,1906" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="430" y="1901" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">blurb: $4.2M in bold + "Open in Databricks"</text>
+<text x="430" y="1901" text-anchor="middle" style="font-size:12px">blurb: $4.2M in bold + "Open in Databricks"</text>
+<rect x="219" y="1910" width="112" height="20" rx="10" fill="#FFFFFF" stroke="#7C3AED" stroke-width="1.5"/>
+<text x="275" y="1924" text-anchor="middle" style="font-size:12px;font-weight:700;fill:#6D28D9">answering</text>
+<polyline points="425,1970 451,1970 451,1984 427,1984" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="457" y="1981" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">run the command + toast, or drop the noise</text>
+<text x="457" y="1981" style="font-size:12px">run the command + toast, or drop the noise</text>
+<rect x="105" y="1396" width="1005" height="606" rx="0" fill="none" stroke="#374151" stroke-width="1.2"/>
+<path d="M105,1396 h30.5 v14 l-6,6 h-24.5 z" fill="#F9FAFB" stroke="#374151" stroke-width="1.2"/>
+<text x="110" y="1411" style="font-size:12px;font-weight:700">alt</text>
+<text x="143.5" y="1411" style="font-size:12px">intent dictation (UC1, RTR-01b): no main agent, no Genie</text>
+<polyline points="105,1512 1110,1512" fill="none" stroke="#374151" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="113" y="1527" style="font-size:12px">[intent context (SC-2): Copy + context memory item]</text>
+<polyline points="105,1626 1110,1626" fill="none" stroke="#374151" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="113" y="1641" style="font-size:12px">[intent question (UC2): to the main agent, RecallGate verdict ≤ 300 ms (MEM-16a)]</text>
+<polyline points="105,1940 1110,1940" fill="none" stroke="#374151" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="113" y="1955" style="font-size:12px">[command or noise]</text>
+<rect x="219" y="2016" width="112" height="20" rx="10" fill="#FFFFFF" stroke="#7C3AED" stroke-width="1.5"/>
+<text x="275" y="2030" text-anchor="middle" style="font-size:12px;font-weight:700;fill:#6D28D9">idle</text>
+<text x="20" y="2082" style="font-weight:700">Panel A. Hands-free (SC-2 steps 1-2, CAP-14, MOG-12)</text>
+<rect x="20" y="2094" width="280" height="78" rx="4" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="160" y="2113.3" text-anchor="middle" style="font-size:12px;font-weight:700">Start</text>
+<text x="160" y="2129.3" text-anchor="middle" style="font-size:11px">double-tap the talk key within</text>
+<text x="160" y="2145.3" text-anchor="middle" style="font-size:11px">400 ms, a mascot click (&lt; 4 px,</text>
+<text x="160" y="2161.3" text-anchor="middle" style="font-size:11px">&lt; 300 ms) or the "Talk" button</text>
+<polyline points="300,2133 320,2133" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<rect x="320" y="2094" width="280" height="78" rx="4" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="460" y="2113.3" text-anchor="middle" style="font-size:12px;font-weight:700">Hands-free capture</text>
+<text x="460" y="2129.3" text-anchor="middle" style="font-size:11px">mood listening and a timer for</text>
+<text x="460" y="2145.3" text-anchor="middle" style="font-size:11px">the whole span; mic lease</text>
+<text x="460" y="2161.3" text-anchor="middle" style="font-size:11px">priority below PTT (ARC-F9)</text>
+<polyline points="600,2133 620,2133" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<rect x="620" y="2094" width="280" height="78" rx="4" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="760" y="2113.3" text-anchor="middle" style="font-size:12px;font-weight:700">Stop</text>
+<text x="760" y="2129.3" text-anchor="middle" style="font-size:11px">a tap, Esc, or the 5 min cap</text>
+<text x="760" y="2145.3" text-anchor="middle" style="font-size:11px">(Opus or ≤ 30 s chunks keep</text>
+<text x="760" y="2161.3" text-anchor="middle" style="font-size:11px">cloud ASR under 4 MB)</text>
+<polyline points="900,2133 900,2133" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<rect x="900" y="2094" width="280" height="78" rx="4" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="1040" y="2113.3" text-anchor="middle" style="font-size:12px;font-weight:700">Then</text>
+<text x="1040" y="2129.3" text-anchor="middle" style="font-size:11px">capture.segment {final}: the same</text>
+<text x="1040" y="2145.3" text-anchor="middle" style="font-size:11px">path as above (STT, pre-pass,</text>
+<text x="1040" y="2161.3" text-anchor="middle" style="font-size:11px">cleanup ∥ classifier)</text>
+<text x="20" y="2206" style="font-weight:700">Panel B. STT fallback chain (Section 8.3) and safeguards: local Parakeet is the PTT default (CAP-57c)</text>
+<rect x="20" y="2218" width="270" height="62" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="155" y="2237.3" text-anchor="middle" style="font-size:12px;font-weight:700">1 Databricks ASR (opt-in)</text>
+<text x="155" y="2253.3" text-anchor="middle" style="font-size:11px">only if the user selected it and</text>
+<text x="155" y="2269.3" text-anchor="middle" style="font-size:11px">the probe passed; else start at 2</text>
+<polyline points="290,2249 315,2249" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<rect x="315" y="2218" width="270" height="62" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="450" y="2237.3" text-anchor="middle" style="font-size:12px;font-weight:700">2 Local Parakeet (default)</text>
+<text x="450" y="2253.3" text-anchor="middle" style="font-size:11px">TDT 0.6B v3 int8, CPU, one thread;</text>
+<text x="450" y="2269.3" text-anchor="middle" style="font-size:11px">also the 1.2 s hedge for step 1</text>
+<polyline points="585,2249 610,2249" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<rect x="610" y="2218" width="270" height="62" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="745" y="2245.3" text-anchor="middle" style="font-size:12px;font-weight:700">3 Whisper endpoint</text>
+<text x="745" y="2261.3" text-anchor="middle" style="font-size:11px">only if configured</text>
+<polyline points="880,2249 905,2249" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<rect x="905" y="2218" width="270" height="62" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="1040" y="2237.3" text-anchor="middle" style="font-size:12px;font-weight:700">4 "Could not transcribe.</text>
+<text x="1040" y="2253.3" text-anchor="middle" style="font-size:11px">Retry"</text>
+<text x="1040" y="2269.3" text-anchor="middle" style="font-size:11px">audio kept in RAM for 60 s</text>
+<text x="20" y="2298" style="font-size:12px">Sessions: local Parakeet → Databricks ASR (if allowed) → queue. MDM SttPolicy=local_only removes every cloud step (CAP-60).</text>
+<rect x="20" y="2310" width="575" height="92" rx="4" fill="#FFFBEB" stroke="#B45309" stroke-width="1.2"/>
+<text x="28" y="2328.3" style="font-size:12px">CAP-54  no ASR call for &lt; 300 ms of speech; silence is trimmed first</text>
+<text x="28" y="2344.3" style="font-size:12px">CAP-56  hallucination guard: &gt; 6 words per second of speech, or a known</text>
+<text x="28" y="2360.3" style="font-size:12px">        hallucination phrase → local STT for that utterance</text>
+<text x="28" y="2376.3" style="font-size:12px">CAP-58  rolling p95 &gt; 1.3 s or 3 errors in 10 min → PTT uses local STT;</text>
+<text x="28" y="2392.3" style="font-size:12px">        a notice shows and a re-probe runs after 24 h</text>
+<rect x="605" y="2310" width="575" height="92" rx="4" fill="#FFFBEB" stroke="#B45309" stroke-width="1.2"/>
+<text x="613" y="2328.3" style="font-size:12px">CAP-57  first-run probe: 22 requests, p95 ≤ 1.0 s, WER ≤ 10 %;</text>
+<text x="613" y="2344.3" style="font-size:12px">        re-probe every 7 d and on a network change</text>
+<text x="613" y="2360.3" style="font-size:12px">CAP-64  language not covered by Parakeet → Databricks ASR if allowed,</text>
+<text x="613" y="2376.3" style="font-size:12px">        else "This language is not supported on this device"</text>
+<text x="613" y="2392.3" style="font-size:12px">CAP-60  SttPolicy=local_only: no ASR request leaves the device</text>
+<text x="20" y="2436" style="font-weight:700">Panel C. Talk-key edge cases (CAP-35..46)</text>
+<rect x="20" y="2448" width="282" height="84" rx="4" fill="#FFF7ED" stroke="#C2410C" stroke-width="1.2"/>
+<text x="161" y="2470.3" text-anchor="middle" style="font-size:12px;font-weight:700">Secure Event Input (CAP-39)</text>
+<text x="161" y="2486.3" text-anchor="middle" style="font-size:11px">end an active PTT ≤ 250 ms; switch to</text>
+<text x="161" y="2502.3" text-anchor="middle" style="font-size:11px">the Carbon chord ⌃⇧Space. Pill: "Talk key</text>
+<text x="161" y="2518.3" text-anchor="middle" style="font-size:11px">paused: another app protects typing."</text>
+<rect x="312" y="2448" width="282" height="84" rx="4" fill="#FFF7ED" stroke="#C2410C" stroke-width="1.2"/>
+<text x="453" y="2470.3" text-anchor="middle" style="font-size:12px;font-weight:700">Tap or early key (CAP-44a)</text>
+<text x="453" y="2486.3" text-anchor="middle" style="font-size:11px">a hold &lt; 250 ms is a tap (audio</text>
+<text x="453" y="2502.3" text-anchor="middle" style="font-size:11px">discarded); another key in the first</text>
+<text x="453" y="2518.3" text-anchor="middle" style="font-size:11px">1 s cancels the PTT</text>
+<rect x="604" y="2448" width="282" height="84" rx="4" fill="#FFF7ED" stroke="#C2410C" stroke-width="1.2"/>
+<text x="745" y="2470.3" text-anchor="middle" style="font-size:12px;font-weight:700">Elevated window (CAP-42)</text>
+<text x="745" y="2486.3" text-anchor="middle" style="font-size:11px">the talk key cannot work while an</text>
+<text x="745" y="2502.3" text-anchor="middle" style="font-size:11px">elevated window has focus: a tooltip</text>
+<text x="745" y="2518.3" text-anchor="middle" style="font-size:11px">shows on the first failure</text>
+<rect x="896" y="2448" width="282" height="84" rx="4" fill="#FFF7ED" stroke="#C2410C" stroke-width="1.2"/>
+<text x="1037" y="2470.3" text-anchor="middle" style="font-size:12px;font-weight:700">Tap watchdog (CAP-38)</text>
+<text x="1037" y="2486.3" text-anchor="middle" style="font-size:11px">re-enable the tap after a timeout or</text>
+<text x="1037" y="2502.3" text-anchor="middle" style="font-size:11px">user-input disable; re-create it on wake,</text>
+<text x="1037" y="2518.3" text-anchor="middle" style="font-size:11px">session activation, permission grant</text>
+<text x="20" y="2564" style="font-weight:700">Panel D. Latency budget, key-up to chip (p50 / p95, Section 8.1)</text>
+<rect x="20" y="2574" width="1160" height="76" rx="4" fill="#FFFBEB" stroke="#B45309" stroke-width="1.2"/>
+<text x="28" y="2592.3" style="font-size:12px">0 key-up seen 3 / 10 ms · ack (mood + pill) ≤ 100 ms · 1 post-roll 120 ms · 2 VAD flush 10 / 20 ms</text>
+<text x="28" y="2608.3" style="font-size:12px">3 STT tail: local 120 / 400 ms, cloud 600 / 1,000 ms · 4 pre-pass 3 / 5 ms · 5 cleanup ∥ classifier 350 / 800 ms (deadline 900)</text>
+<text x="28" y="2624.3" style="font-size:12px">6 number check 2 / 5 ms · 7 chip render 20 / 40 ms · total local 0.63 / 1.40 s, cloud 1.11 / 2.00 s · NFR-01: 1.5 s / 2.2 s</text>
+<text x="28" y="2640.3" style="font-size:12px">RecallGate adds ≤ 300 ms before genie_ask and never blocks the UI; a late memory hit shows as a chip (MEM-16).</text>
+<rect x="20" y="2666" width="760" height="174" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1"/>
+<text x="30" y="2684" style="font-weight:700">Legend</text>
+<rect x="30" y="2694" width="24" height="14" rx="4" fill="#EFF6FF" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="60" y="2706" style="font-size:12px">Device zone</text>
+<rect x="410" y="2694" width="24" height="14" rx="4" fill="#FFF7ED" stroke="#C2410C" stroke-width="1.2"/>
+<rect x="412" y="2696" width="20" height="10" rx="1" fill="none" stroke="#DC2626" stroke-width="1.2" stroke-dasharray="3 2"/>
+<text x="440" y="2706" style="font-size:12px">Rust core (secret boundary)</text>
+<rect x="30" y="2716" width="24" height="14" rx="4" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="60" y="2728" style="font-size:12px">WebView window</text>
+<rect x="410" y="2716" width="24" height="14" rx="4" fill="#FEF2F2" stroke="#B91C1C" stroke-width="1.2"/>
+<text x="440" y="2728" style="font-size:12px">Databricks workspace</text>
+<rect x="30" y="2738" width="24" height="14" rx="4" fill="#F5F3FF" stroke="#6D28D9" stroke-width="1.2"/>
+<text x="60" y="2750" style="font-size:12px">Main agent harness (BC4)</text>
+<rect x="410" y="2738" width="24" height="14" rx="4" fill="#F3F4F6" stroke="#6B7280" stroke-width="1.2"/>
+<text x="440" y="2750" style="font-size:12px">OS services</text>
+<rect x="30" y="2760" width="24" height="14" rx="4" fill="#F0FDF4" stroke="#15803D" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="60" y="2772" style="font-size:12px">Lakebase (optional, v1)</text>
+<rect x="410" y="2760" width="24" height="14" rx="4" fill="#F3F4F6" stroke="#6B7280" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="440" y="2772" style="font-size:12px">Browser / IdP</text>
+<polyline points="30,2790 66,2790" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="72" y="2794" style="font-size:12px">request / data</text>
+<polyline points="276.7,2790 312.7,2790" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="318.7" y="2794" style="font-size:12px">event / stream</text>
+<polyline points="523.3,2790 559.3,2790" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="2 3" marker-end="url(#arw)"/>
+<text x="565.3" y="2794" style="font-size:12px">credential fetch</text>
+<rect x="30" y="2804" width="24" height="14" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="60" y="2816" style="font-size:12px">v1 / optional (not in the MVP)</text>
+<rect x="410" y="2804" width="24" height="14" rx="4" fill="#FFFBEB" stroke="#B45309" stroke-width="1.2"/>
+<text x="440" y="2816" style="font-size:12px">note / rule</text>
+<text x="800" y="2682" style="font-size:12px">Diagram 3. Push-to-talk. The mic opens before the</text>
+<text x="800" y="2699" style="font-size:12px">listening mood shows. Dictation never reaches the</text>
+<text x="800" y="2716" style="font-size:12px">agent or Genie. IDs: CAP-04, CAP-12a..c, CAP-35a,</text>
+<text x="800" y="2733" style="font-size:12px">CAP-44a, CAP-47a..59b, CAP-66a..68, MOG-05a..06d,</text>
+<text x="800" y="2750" style="font-size:12px">RTR-01b/c, RTR-04a, RTR-05, MEM-16a..e, SEC-30, D69.</text>
+<text x="800" y="2767" style="font-size:12px">Purple pill = Rive mood on the MOG view.</text>
+</svg>

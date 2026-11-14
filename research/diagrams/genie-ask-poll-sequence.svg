@@ -1,0 +1,327 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 1200 2910" width="1200" height="2910" role="img" aria-labelledby="title desc" font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+<title id="title">Diagram 4. Genie ask and poll (UC2) and send context to Genie (UC3): MCP session, guardrails, queue and caps, serial polls, outcomes, ContextGate and UC Pages drafts</title>
+<desc id="desc">Part 1 (UC2): R8 initialises the Genie One MCP session (protocol 2025-06-18, Mcp-Session-Id, tools/list) and re-initialises once on a 404 with a session. The main agent asks through AgentGuard: in-flight caps of 2 per MOG, 4 per profile and 1 per conversation, and a per-conversation FIFO queue of max 3 with a busy chip. genie_ask carries warehouse_id in _meta on the polling path. Polls are serial on the D31/D55 cadence. Outcomes: completed blurb with Open in Databricks, incomplete as Partial answer or failure, needs_input clarify, cancel and give-up. Part 2 (UC3): the ContextAssembler filters and PII-scrubs at most 5 items into a preamble of 800 chars or less, the user previews it before the first send, the ContextGate binds the approval to payload, target, conversation and attempt, the card shows context included N chars, a POLICY_DENIED resend goes once without the preamble, and later turns send new items only. Approved definitions become the user DRAFT UC Pages.</desc>
+<defs>
+<marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#111827"/></marker>
+<style type="text/css"><![CDATA[
+text{font-size:13px;fill:#111827}
+.s{font-size:12px}
+.b{font-weight:700}
+.it{font-style:italic}
+.h{font-size:16px;font-weight:700}
+.halo{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
+]]></style>
+</defs>
+<rect x="0" y="0" width="1200" height="2910" fill="#FFFFFF"/>
+<polyline points="40,100 40,2702" fill="none" stroke="#9CA3AF" stroke-width="1.2" stroke-dasharray="6 4"/>
+<polyline points="140,100 140,2702" fill="none" stroke="#9CA3AF" stroke-width="1.2" stroke-dasharray="6 4"/>
+<polyline points="268,100 268,2702" fill="none" stroke="#9CA3AF" stroke-width="1.2" stroke-dasharray="6 4"/>
+<polyline points="420,100 420,2702" fill="none" stroke="#9CA3AF" stroke-width="1.2" stroke-dasharray="6 4"/>
+<polyline points="585,100 585,2702" fill="none" stroke="#9CA3AF" stroke-width="1.2" stroke-dasharray="6 4"/>
+<polyline points="720,100 720,2702" fill="none" stroke="#9CA3AF" stroke-width="1.2" stroke-dasharray="6 4"/>
+<polyline points="900,100 900,2702" fill="none" stroke="#9CA3AF" stroke-width="1.2" stroke-dasharray="6 4"/>
+<polyline points="1105,100 1105,2702" fill="none" stroke="#9CA3AF" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="20" y="30" style="font-size:16px;font-weight:700">Diagram 4. Genie ask and poll (UC2) and send context to Genie (UC3), genie_one_mcp backend</text>
+<rect x="5" y="50" width="70" height="50" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="40" y="79.7" text-anchor="middle" style="font-weight:700">User</text>
+<rect x="90" y="50" width="100" height="50" rx="4" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="140" y="71.2" text-anchor="middle" style="font-weight:700">MOG view</text>
+<text x="140" y="88.2" text-anchor="middle">+ card</text>
+<rect x="208" y="50" width="120" height="50" rx="4" fill="#F5F3FF" stroke="#6D28D9" stroke-width="1.2"/>
+<text x="268" y="71.2" text-anchor="middle" style="font-weight:700">Main agent</text>
+<text x="268" y="88.2" text-anchor="middle">(BC4)</text>
+<rect x="345" y="50" width="150" height="50" rx="4" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="420" y="71.2" text-anchor="middle" style="font-weight:700">Brain</text>
+<text x="420" y="88.2" text-anchor="middle">AgentGuard, T2, T10</text>
+<rect x="525" y="50" width="120" height="50" rx="4" fill="#FFF7ED" stroke="#C2410C" stroke-width="1.2"/>
+<text x="585" y="71.2" text-anchor="middle" style="font-weight:700">Rust core</text>
+<text x="585" y="88.2" text-anchor="middle">R6 R7 R8</text>
+<rect x="660" y="50" width="120" height="50" rx="4" fill="#F3F4F6" stroke="#6B7280" stroke-width="1.2"/>
+<text x="720" y="71.2" text-anchor="middle" style="font-weight:700">databricks CLI</text>
+<text x="720" y="88.2" text-anchor="middle">(subprocess)</text>
+<rect x="800" y="50" width="200" height="50" rx="4" fill="#FEF2F2" stroke="#B91C1C" stroke-width="1.2"/>
+<text x="900" y="71.2" text-anchor="middle" style="font-weight:700">Workspace A ?o=&lt;wsid&gt;</text>
+<text x="900" y="88.2" text-anchor="middle">Genie One MCP, UC Pages</text>
+<rect x="1040" y="50" width="130" height="50" rx="4" fill="#FFF7ED" stroke="#C2410C" stroke-width="1.2"/>
+<text x="1105" y="71.2" text-anchor="middle" style="font-weight:700">R10 LocalStore</text>
+<text x="1105" y="88.2" text-anchor="middle">SQLite (BC2)</text>
+<text x="20" y="126" style="font-weight:700">Part 1. UC2 ask and poll. The agent calls the Genie tools; R8 enforces every rule. Without an agent, T8/T9 make the same calls.</text>
+<polyline points="585,178 899,178" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="742.5" y="173" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">POST initialize {protocolVersion: 2025-06-18}, Bearer A</text>
+<text x="742.5" y="173" text-anchor="middle" style="font-size:12px">POST initialize {protocolVersion: 2025-06-18}, Bearer A</text>
+<polyline points="900,208 586,208" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="742.5" y="203" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">Mcp-Session-Id</text>
+<text x="742.5" y="203" text-anchor="middle" style="font-size:12px">Mcp-Session-Id</text>
+<polyline points="585,238 899,238" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="742.5" y="233" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">tools/list → genie_ask, genie_poll_response, …</text>
+<text x="742.5" y="233" text-anchor="middle" style="font-size:12px">tools/list → genie_ask, genie_poll_response, …</text>
+<rect x="520" y="138" width="490" height="124" rx="0" fill="none" stroke="#374151" stroke-width="1.2"/>
+<path d="M520,138 h33.9 v14 l-6,6 h-27.9 z" fill="#F9FAFB" stroke="#374151" stroke-width="1.2"/>
+<text x="525" y="153" style="font-size:12px;font-weight:700">opt</text>
+<text x="561.9" y="153" style="font-size:12px">no MCP session yet for this profile (G-04, ARC-F6)</text>
+<rect x="84" y="276" width="112" height="20" rx="10" fill="#FFFFFF" stroke="#7C3AED" stroke-width="1.5"/>
+<text x="140" y="290" text-anchor="middle" style="font-size:12px;font-weight:700;fill:#6D28D9">processing</text>
+<polyline points="268,316 419,316" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="344" y="311" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">tools/call genie_ask {question} (after the 1.5 s preview)</text>
+<text x="344" y="311" text-anchor="middle" style="font-size:12px">tools/call genie_ask {question} (after the 1.5 s preview)</text>
+<polyline points="420,338 446,338 446,352 422,352" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="452" y="349" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">AgentGuard: in-flight ≤ 2 per MOG, ≤ 4 per profile, 1 per conversation (G-11)</text>
+<text x="452" y="349" style="font-size:12px">AgentGuard: in-flight ≤ 2 per MOG, ≤ 4 per profile, 1 per conversation (G-11)</text>
+<polyline points="420,394 446,394 446,408 422,408" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="452" y="405" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">FIFO queue on the conversation, max 3; send after the active one ends</text>
+<text x="452" y="405" style="font-size:12px">FIFO queue on the conversation, max 3; send after the active one ends</text>
+<polyline points="420,432 141,432" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="280" y="427" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">chip "busy" when the queue is full; a 5th profile ask waits visibly</text>
+<text x="280" y="427" text-anchor="middle" style="font-size:12px">chip "busy" when the queue is full; a 5th profile ask waits visibly</text>
+<rect x="105" y="362" width="655" height="94" rx="0" fill="none" stroke="#374151" stroke-width="1.2"/>
+<path d="M105,362 h33.9 v14 l-6,6 h-27.9 z" fill="#F9FAFB" stroke="#374151" stroke-width="1.2"/>
+<text x="110" y="377" style="font-size:12px;font-weight:700">opt</text>
+<text x="146.9" y="377" style="font-size:12px">the conversation has an active response (ARC-F2)</text>
+<polyline points="420,472 446,472 446,486 422,486" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="452" y="483" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">T2 OperationTracker: SENDING</text>
+<text x="452" y="483" style="font-size:12px">T2 OperationTracker: SENDING</text>
+<polyline points="420,510 141,510" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="280" y="505" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">"Asking Genie in &lt;host&gt; (profile p)" &lt; 1 s</text>
+<text x="280" y="505" text-anchor="middle" style="font-size:12px">"Asking Genie in &lt;host&gt; (profile p)" &lt; 1 s</text>
+<polyline points="585,566 719,566" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="2 3" marker-end="url(#arw)"/>
+<text x="652.5" y="561" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">auth token --profile p --output json</text>
+<text x="652.5" y="561" text-anchor="middle" style="font-size:12px">auth token --profile p --output json</text>
+<polyline points="720,596 586,596" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="2 3" marker-end="url(#arw)"/>
+<text x="652.5" y="591" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">token JSON (memory only)</text>
+<text x="652.5" y="591" text-anchor="middle" style="font-size:12px">token JSON (memory only)</text>
+<rect x="520" y="526" width="270" height="94" rx="0" fill="none" stroke="#374151" stroke-width="1.2"/>
+<path d="M520,526 h33.9 v14 l-6,6 h-27.9 z" fill="#F9FAFB" stroke="#374151" stroke-width="1.2"/>
+<text x="525" y="541" style="font-size:12px;font-weight:700">opt</text>
+<text x="561.9" y="541" style="font-size:12px">token not cached, or expiry − 60 s</text>
+<polyline points="420,644 584,644" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="502.5" y="639" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">mcp_call genie_ask {question, conversation_id?}</text>
+<text x="502.5" y="639" text-anchor="middle" style="font-size:12px">mcp_call genie_ask {question, conversation_id?}</text>
+<polyline points="585,674 899,674" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="742.5" y="669" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">tools/call genie_ask, _meta {warehouse_id}; polling path, no progressToken</text>
+<text x="742.5" y="669" text-anchor="middle" style="font-size:12px">tools/call genie_ask, _meta {warehouse_id}; polling path, no progressToken</text>
+<rect x="520" y="690" width="555" height="130" rx="0" fill="none" stroke="#374151" stroke-width="1.2"/>
+<path d="M520,690 h30.5 v14 l-6,6 h-24.5 z" fill="#F9FAFB" stroke="#374151" stroke-width="1.2"/>
+<text x="525" y="705" style="font-size:12px;font-weight:700">alt</text>
+<text x="558.5" y="705" style="font-size:12px">401: drop the token, run the CLI again, resend once (ARC-F5)</text>
+<polyline points="520,716 1075,716" fill="none" stroke="#374151" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="528" y="731" style="font-size:12px">[404 with Mcp-Session-Id: re-initialise once, resend (G-05)]</text>
+<polyline points="520,740 1075,740" fill="none" stroke="#374151" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="528" y="755" style="font-size:12px">[404 without a session: GENIE_ONE_OFF, "Genie One isn't available in &lt;host&gt;"]</text>
+<polyline points="520,764 1075,764" fill="none" stroke="#374151" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="528" y="779" style="font-size:12px">[busy text "stream closed before response.created": CONVERSATION_BUSY, no re-ask]</text>
+<polyline points="520,788 1075,788" fill="none" stroke="#374151" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="528" y="803" style="font-size:12px">[timeout after send: UNCERTAIN; the user picks Check again / Ask again]</text>
+<polyline points="900,844 586,844" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="742.5" y="839" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">conversation_id, response_id, status in_progress</text>
+<text x="742.5" y="839" text-anchor="middle" style="font-size:12px">conversation_id, response_id, status in_progress</text>
+<polyline points="585,874 269,874" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="426.5" y="869" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">ids → T2 ACKNOWLEDGED</text>
+<text x="426.5" y="869" text-anchor="middle" style="font-size:12px">ids → T2 ACKNOWLEDGED</text>
+<polyline points="268,930 584,930" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="426.5" y="925" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">genie_poll_response (R8: 1 in flight, else E_POLL_INFLIGHT)</text>
+<text x="426.5" y="925" text-anchor="middle" style="font-size:12px">genie_poll_response (R8: 1 in flight, else E_POLL_INFLIGHT)</text>
+<polyline points="585,960 899,960" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="742.5" y="955" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">tools/call genie_poll_response</text>
+<text x="742.5" y="955" text-anchor="middle" style="font-size:12px">tools/call genie_poll_response</text>
+<polyline points="900,990 586,990" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="742.5" y="985" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">status, progress_steps or null, query_items</text>
+<text x="742.5" y="985" text-anchor="middle" style="font-size:12px">status, progress_steps or null, query_items</text>
+<polyline points="268,1046 141,1046" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="204" y="1041" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">progress line ≤ 25 words</text>
+<text x="204" y="1041" text-anchor="middle" style="font-size:12px">progress line ≤ 25 words</text>
+<polyline points="268,1100 141,1100" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="204" y="1095" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">"Working… 0:12"</text>
+<text x="204" y="1095" text-anchor="middle" style="font-size:12px">"Working… 0:12"</text>
+<rect x="105" y="1006" width="395" height="118" rx="0" fill="none" stroke="#374151" stroke-width="1.2"/>
+<path d="M105,1006 h30.5 v14 l-6,6 h-24.5 z" fill="#F9FAFB" stroke="#374151" stroke-width="1.2"/>
+<text x="110" y="1021" style="font-size:12px;font-weight:700">alt</text>
+<text x="143.5" y="1021" style="font-size:12px">progress_steps present</text>
+<polyline points="105,1062 500,1062" fill="none" stroke="#374151" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="113" y="1077" style="font-size:12px">[progress_steps null]</text>
+<polyline points="585,1166 611,1166 611,1180 587,1180" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="617" y="1177" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">re-poll the same IDs, never re-ask; 429: Retry-After, AIMD</text>
+<text x="617" y="1177" style="font-size:12px">re-poll the same IDs, never re-ask; 429: Retry-After, AIMD</text>
+<rect x="520" y="1134" width="480" height="64" rx="0" fill="none" stroke="#374151" stroke-width="1.2"/>
+<path d="M520,1134 h33.9 v14 l-6,6 h-27.9 z" fill="#F9FAFB" stroke="#374151" stroke-width="1.2"/>
+<text x="525" y="1149" style="font-size:12px;font-weight:700">opt</text>
+<text x="561.9" y="1149" style="font-size:12px">poll timeout, 5xx or 429</text>
+<rect x="105" y="890" width="905" height="326" rx="0" fill="none" stroke="#374151" stroke-width="1.2"/>
+<path d="M105,890 h41.7 v14 l-6,6 h-35.7 z" fill="#F9FAFB" stroke="#374151" stroke-width="1.2"/>
+<text x="110" y="905" style="font-size:12px;font-weight:700">loop</text>
+<text x="154.7" y="905" style="font-size:12px">2/3/5 s then ×1.5 to 15 s; delay ≥ 1.5 s × in-flight; soft 4 min; give up 10 min; late re-polls +15 / +60 min</text>
+<polyline points="40,1266 139,1266" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="90" y="1261" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">Esc</text>
+<text x="90" y="1261" text-anchor="middle" style="font-size:12px">Esc</text>
+<polyline points="268,1296 899,1296" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="600" y="1291" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">genie_cancel_response {conversation_id} via R8</text>
+<text x="600" y="1291" text-anchor="middle" style="font-size:12px">genie_cancel_response {conversation_id} via R8</text>
+<polyline points="268,1326 141,1326" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="204" y="1321" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">"Cancellation requested"; polling stops; mood idle</text>
+<text x="204" y="1321" text-anchor="middle" style="font-size:12px">"Cancellation requested"; polling stops; mood idle</text>
+<polyline points="268,1380 141,1380" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="420" y="1375" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">"No answer after 10 min"; chip "Genie finished" if a late poll completes</text>
+<text x="420" y="1375" text-anchor="middle" style="font-size:12px">"No answer after 10 min"; chip "Genie finished" if a late poll completes</text>
+<rect x="25" y="1226" width="985" height="178" rx="0" fill="none" stroke="#374151" stroke-width="1.2"/>
+<path d="M25,1226 h30.5 v14 l-6,6 h-24.5 z" fill="#F9FAFB" stroke="#374151" stroke-width="1.2"/>
+<text x="30" y="1241" style="font-size:12px;font-weight:700">alt</text>
+<text x="63.5" y="1241" style="font-size:12px">user presses Esc on the card (ARC-F11)</text>
+<polyline points="25,1342 1010,1342" fill="none" stroke="#374151" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="33" y="1357" style="font-size:12px">[no terminal status after 10 min]</text>
+<polyline points="900,1454 586,1454" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="760" y="1449" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">final_answer, deep_link (null: /one/chat/threads/&lt;cid&gt;?o=&lt;wsid&gt;), query_items</text>
+<text x="760" y="1449" text-anchor="middle" style="font-size:12px">final_answer, deep_link (null: /one/chat/threads/&lt;cid&gt;?o=&lt;wsid&gt;), query_items</text>
+<polyline points="268,1484 141,1484" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="204" y="1479" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">show_blurb: 1-3 lines, bold numbers, "Open in Databricks"</text>
+<text x="204" y="1479" text-anchor="middle" style="font-size:12px">show_blurb: 1-3 lines, bold numbers, "Open in Databricks"</text>
+<rect x="84" y="1484" width="112" height="20" rx="10" fill="#FFFFFF" stroke="#7C3AED" stroke-width="1.5"/>
+<text x="140" y="1498" text-anchor="middle" style="font-size:12px;font-weight:700;fill:#6D28D9">answering</text>
+<polyline points="268,1552 141,1552" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="430" y="1547" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">clarify card; the next utterance within 5 min goes to the same conversation</text>
+<text x="430" y="1547" text-anchor="middle" style="font-size:12px">clarify card; the next utterance within 5 min goes to the same conversation</text>
+<polyline points="268,1606 141,1606" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="430" y="1601" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">with an answer: "Partial answer" blurb; without an answer: failure card</text>
+<text x="430" y="1601" text-anchor="middle" style="font-size:12px">with an answer: "Partial answer" blurb; without an answer: failure card</text>
+<rect x="25" y="1414" width="985" height="216" rx="0" fill="none" stroke="#374151" stroke-width="1.2"/>
+<path d="M25,1414 h30.5 v14 l-6,6 h-24.5 z" fill="#F9FAFB" stroke="#374151" stroke-width="1.2"/>
+<text x="30" y="1429" style="font-size:12px;font-weight:700">alt</text>
+<text x="63.5" y="1429" style="font-size:12px">status completed</text>
+<polyline points="25,1514 1010,1514" fill="none" stroke="#374151" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="33" y="1529" style="font-size:12px">[completed, &lt; 400 chars, ends with "?", no query items: needs_input(clarify) (G-22)]</text>
+<polyline points="25,1568 1010,1568" fill="none" stroke="#374151" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="33" y="1583" style="font-size:12px">[status incomplete (G-23)]</text>
+<rect x="84" y="1644" width="112" height="20" rx="10" fill="#FFFFFF" stroke="#7C3AED" stroke-width="1.5"/>
+<text x="140" y="1658" text-anchor="middle" style="font-size:12px;font-weight:700;fill:#6D28D9">success 2.5 s</text>
+<polyline points="420,1686 1104,1686" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="762.5" y="1681" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">genie_exchange + memory item, local first: summary, key numbers, pointer (D60)</text>
+<text x="762.5" y="1681" text-anchor="middle" style="font-size:12px">genie_exchange + memory item, local first: summary, key numbers, pointer (D60)</text>
+<polyline points="268,1742 899,1742" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="600" y="1737" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">genie_get_query_result {item_id pub_…_output} via R8</text>
+<text x="600" y="1737" text-anchor="middle" style="font-size:12px">genie_get_query_result {item_id pub_…_output} via R8</text>
+<polyline points="268,1772 141,1772" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="204" y="1767" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">table: first 50 rows, SQL, the exact "Sent to Genie" text</text>
+<text x="204" y="1767" text-anchor="middle" style="font-size:12px">table: first 50 rows, SQL, the exact "Sent to Genie" text</text>
+<rect x="25" y="1702" width="985" height="94" rx="0" fill="none" stroke="#374151" stroke-width="1.2"/>
+<path d="M25,1702 h33.9 v14 l-6,6 h-27.9 z" fill="#F9FAFB" stroke="#374151" stroke-width="1.2"/>
+<text x="30" y="1717" style="font-size:12px;font-weight:700">opt</text>
+<text x="66.9" y="1717" style="font-size:12px">user expands the card</text>
+<polyline points="20,1816 1180,1816" fill="none" stroke="#6B7280" stroke-width="1"/>
+<text x="20" y="1844" style="font-weight:700">Part 2. UC3 send context to Genie (SC-7, F3, G-28..G-37) and UC Pages drafts (BC3)</text>
+<polyline points="40,1872 139,1872" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="200" y="1867" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">"Share context with Genie" on, or pick items from a transcript or memory</text>
+<text x="200" y="1867" style="font-size:12px">"Share context with Genie" on, or pick items from a transcript or memory</text>
+<polyline points="420,1894 446,1894 446,1908 422,1908" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="452" y="1905" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">T10 ContextAssembler: ≤ 5 decision, fact, entity, open-question items, cosine ≥ 0.75 (G-29)</text>
+<text x="452" y="1905" style="font-size:12px">T10 ContextAssembler: ≤ 5 decision, fact, entity, open-question items, cosine ≥ 0.75 (G-29)</text>
+<polyline points="420,1924 446,1924 446,1938 422,1938" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="452" y="1935" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">filter: other workspaces, Others-track lines, restricted, quarantined (G-31, SEC-24)</text>
+<text x="452" y="1935" style="font-size:12px">filter: other workspaces, Others-track lines, restricted, quarantined (G-31, SEC-24)</text>
+<polyline points="420,1954 446,1954 446,1968 422,1968" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="452" y="1965" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">PII scrub: emails, phones, card numbers, national IDs, IPs; drop secrets or &gt; 50 % loss (G-37)</text>
+<text x="452" y="1965" style="font-size:12px">PII scrub: emails, phones, card numbers, national IDs, IPs; drop secrets or &gt; 50 % loss (G-37)</text>
+<polyline points="420,1984 446,1984 446,1998 422,1998" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="452" y="1995" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">preamble ≤ 800 chars, same workspace only</text>
+<text x="452" y="1995" style="font-size:12px">preamble ≤ 800 chars, same workspace only</text>
+<polyline points="420,2048 141,2048" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="280" y="2043" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">preview of the exact preamble before the first send</text>
+<text x="280" y="2043" text-anchor="middle" style="font-size:12px">preview of the exact preamble before the first send</text>
+<polyline points="40,2078 139,2078" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="90" y="2073" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">approve</text>
+<text x="90" y="2073" text-anchor="middle" style="font-size:12px">approve</text>
+<rect x="25" y="2008" width="985" height="94" rx="0" fill="none" stroke="#374151" stroke-width="1.2"/>
+<path d="M25,2008 h33.9 v14 l-6,6 h-27.9 z" fill="#F9FAFB" stroke="#374151" stroke-width="1.2"/>
+<text x="30" y="2023" style="font-size:12px;font-weight:700">opt</text>
+<text x="66.9" y="2023" style="font-size:12px">first send with context (UX-24)</text>
+<polyline points="420,2118 446,2118 446,2132 422,2132" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="452" y="2129" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">ContextGate (G-34): approval bound to one payload, target, conversation, attempt</text>
+<text x="452" y="2129" style="font-size:12px">ContextGate (G-34): approval bound to one payload, target, conversation, attempt</text>
+<rect x="640" y="2138" width="380" height="42" rx="4" fill="#FFFBEB" stroke="#B45309" stroke-width="1.2"/>
+<text x="648" y="2155.5" style="font-size:11px">Any change to the payload, target, conversation or attempt</text>
+<text x="648" y="2170.5" style="font-size:11px">cancels the approval. The agent can never approve (BC4).</text>
+<polyline points="268,2196 584,2196" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="426.5" y="2191" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">genie_ask {preamble + question} with the approval reference</text>
+<text x="426.5" y="2191" text-anchor="middle" style="font-size:12px">genie_ask {preamble + question} with the approval reference</text>
+<polyline points="585,2226 899,2226" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="742.5" y="2221" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">tools/call genie_ask (guard checks the bound hash)</text>
+<text x="742.5" y="2221" text-anchor="middle" style="font-size:12px">tools/call genie_ask (guard checks the bound hash)</text>
+<polyline points="268,2256 141,2256" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="410" y="2251" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">card "context included (N chars)"; expanded: exact text, preamble shaded,</text>
+<text x="410" y="2251" text-anchor="middle" style="font-size:12px">card "context included (N chars)"; expanded: exact text, preamble shaded,</text>
+<text x="410" y="2269" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">"Resend without context" (G-35)</text>
+<text x="410" y="2269" text-anchor="middle" style="font-size:12px">"Resend without context" (G-35)</text>
+<polyline points="585,2324 899,2324" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="742.5" y="2319" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">resend once without the preamble; never with more context</text>
+<text x="742.5" y="2319" text-anchor="middle" style="font-size:12px">resend once without the preamble; never with more context</text>
+<polyline points="268,2354 141,2354" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="204" y="2349" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">second denial: "A workspace policy blocked this question."</text>
+<text x="204" y="2349" text-anchor="middle" style="font-size:12px">second denial: "A workspace policy blocked this question."</text>
+<polyline points="420,2400 446,2400 446,2414 422,2414" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="452" y="2411" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">preamble only for new eligible items; no new items: no preamble; never repeats</text>
+<text x="452" y="2411" style="font-size:12px">preamble only for new eligible items; no new items: no preamble; never repeats</text>
+<rect x="25" y="2284" width="985" height="148" rx="0" fill="none" stroke="#374151" stroke-width="1.2"/>
+<path d="M25,2284 h30.5 v14 l-6,6 h-24.5 z" fill="#F9FAFB" stroke="#374151" stroke-width="1.2"/>
+<text x="30" y="2299" style="font-size:12px;font-weight:700">alt</text>
+<text x="63.5" y="2299" style="font-size:12px">POLICY_DENIED with a preamble (G-33)</text>
+<polyline points="25,2370 1010,2370" fill="none" stroke="#374151" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="33" y="2385" style="font-size:12px">[a later turn in the same conversation (G-32)]</text>
+<polyline points="268,2482 419,2482" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="344" y="2477" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">bottle-mcp propose_page {display_name, body, synonyms ≤ 50}</text>
+<text x="344" y="2477" text-anchor="middle" style="font-size:12px">bottle-mcp propose_page {display_name, body, synonyms ≤ 50}</text>
+<polyline points="420,2512 141,2512" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="280" y="2507" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">review card: edit, Approve, Discard (agent cannot publish)</text>
+<text x="280" y="2507" text-anchor="middle" style="font-size:12px">review card: edit, Approve, Discard (agent cannot publish)</text>
+<polyline points="40,2542 139,2542" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="90" y="2537" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">Approve</text>
+<text x="90" y="2537" text-anchor="middle" style="font-size:12px">Approve</text>
+<polyline points="420,2572 584,2572" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="502.5" y="2567" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">dbx_http route pages.create (scope knowledge)</text>
+<text x="502.5" y="2567" text-anchor="middle" style="font-size:12px">dbx_http route pages.create (scope knowledge)</text>
+<polyline points="585,2602 899,2602" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="760" y="2597" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">POST /api/2.0/knowledge/pages {domain: "domains/&lt;id&gt;", …, state: "DRAFT"} + request_id</text>
+<text x="760" y="2597" text-anchor="middle" style="font-size:12px">POST /api/2.0/knowledge/pages {domain: "domains/&lt;id&gt;", …, state: "DRAFT"} + request_id</text>
+<polyline points="900,2632 586,2632" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="760" y="2627" text-anchor="middle" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">page (DRAFT, owner = user); a retry with the same request_id is idempotent</text>
+<text x="760" y="2627" text-anchor="middle" style="font-size:12px">page (DRAFT, owner = user); a retry with the same request_id is idempotent</text>
+<polyline points="420,2654 446,2654 446,2668 422,2668" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="452" y="2665" style="font-size:12px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">Genie One uses the DRAFT only in the owner's chats; publish / update = v1</text>
+<text x="452" y="2665" style="font-size:12px">Genie One uses the DRAFT only in the owner's chats; publish / update = v1</text>
+<rect x="25" y="2442" width="985" height="244" rx="0" fill="none" stroke="#374151" stroke-width="1.2"/>
+<path d="M25,2442 h33.9 v14 l-6,6 h-27.9 z" fill="#F9FAFB" stroke="#374151" stroke-width="1.2"/>
+<text x="30" y="2457" style="font-size:12px;font-weight:700">opt</text>
+<text x="66.9" y="2457" style="font-size:12px">a business definition is detected in a transcript (BC3, MVP: create own drafts)</text>
+<rect x="20" y="2722" width="760" height="174" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1"/>
+<text x="30" y="2740" style="font-weight:700">Legend</text>
+<rect x="30" y="2750" width="24" height="14" rx="4" fill="#EFF6FF" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="60" y="2762" style="font-size:12px">Device zone</text>
+<rect x="410" y="2750" width="24" height="14" rx="4" fill="#FFF7ED" stroke="#C2410C" stroke-width="1.2"/>
+<rect x="412" y="2752" width="20" height="10" rx="1" fill="none" stroke="#DC2626" stroke-width="1.2" stroke-dasharray="3 2"/>
+<text x="440" y="2762" style="font-size:12px">Rust core (secret boundary)</text>
+<rect x="30" y="2772" width="24" height="14" rx="4" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="60" y="2784" style="font-size:12px">WebView window</text>
+<rect x="410" y="2772" width="24" height="14" rx="4" fill="#FEF2F2" stroke="#B91C1C" stroke-width="1.2"/>
+<text x="440" y="2784" style="font-size:12px">Databricks workspace</text>
+<rect x="30" y="2794" width="24" height="14" rx="4" fill="#F5F3FF" stroke="#6D28D9" stroke-width="1.2"/>
+<text x="60" y="2806" style="font-size:12px">Main agent harness (BC4)</text>
+<rect x="410" y="2794" width="24" height="14" rx="4" fill="#F3F4F6" stroke="#6B7280" stroke-width="1.2"/>
+<text x="440" y="2806" style="font-size:12px">OS services</text>
+<rect x="30" y="2816" width="24" height="14" rx="4" fill="#F0FDF4" stroke="#15803D" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="60" y="2828" style="font-size:12px">Lakebase (optional, v1)</text>
+<rect x="410" y="2816" width="24" height="14" rx="4" fill="#F3F4F6" stroke="#6B7280" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="440" y="2828" style="font-size:12px">Browser / IdP</text>
+<polyline points="30,2846 66,2846" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="72" y="2850" style="font-size:12px">request / data</text>
+<polyline points="276.7,2846 312.7,2846" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="318.7" y="2850" style="font-size:12px">event / stream</text>
+<polyline points="523.3,2846 559.3,2846" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="2 3" marker-end="url(#arw)"/>
+<text x="565.3" y="2850" style="font-size:12px">credential fetch</text>
+<rect x="30" y="2860" width="24" height="14" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="60" y="2872" style="font-size:12px">v1 / optional (not in the MVP)</text>
+<rect x="410" y="2860" width="24" height="14" rx="4" fill="#FFFBEB" stroke="#B45309" stroke-width="1.2"/>
+<text x="440" y="2872" style="font-size:12px">note / rule</text>
+<text x="800" y="2738" style="font-size:12px">Diagram 4. Genie ask and poll. One serial poll per</text>
+<text x="800" y="2755" style="font-size:12px">conversation. Timeouts re-poll the same IDs; busy text</text>
+<text x="800" y="2772" style="font-size:12px">and uncertain sends wait for the user. Context leaves</text>
+<text x="800" y="2789" style="font-size:12px">only with a bound user approval. IDs: G-02..G-27,</text>
+<text x="800" y="2806" style="font-size:12px">G-28..G-37, UX-24, MOG-10, ARC-F1..F6, F11, D31, D55,</text>
+<text x="800" y="2823" style="font-size:12px">D56, D60, BC3, BC4.</text>
+</svg>

@@ -1,0 +1,167 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1700" height="1740" viewBox="0 0 1700 1740" role="img" aria-labelledby="voice-title voice-desc">
+  <title id="voice-title">MOG push-to-talk and Genie question sequence</title>
+  <desc id="voice-desc">A user holds a global hotkey. Motherbricks obtains the microphone lease, shows a listening indicator, captures audio and transcribes it locally or with an approved hosted service. A cleanup service returns text while preserving the raw transcript. The user selects an explicit route. Dictation returns text without Genie. An explicit Genie question causes scoped memory recall, genie_ask with an approved bounded context envelope, sequential genie_poll_response calls, an optional query-result request and a short response blurb with a Databricks link. Only an approved memory event is cached and synchronized to Lakebase. Context-only input stays local by default because Genie One MCP has no separate context-upload tool.</desc>
+  <defs>
+    <marker id="voice-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#234f78"/>
+    </marker>
+    <marker id="voice-arrow-alt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#925313"/>
+    </marker>
+    <style>
+      .voice-bg { fill: #ffffff; }
+      .voice-title { font: 700 28px Arial, Helvetica, sans-serif; fill: #14243a; }
+      .voice-subtitle { font: 16px Arial, Helvetica, sans-serif; fill: #40536b; }
+      .voice-head { fill: #e8f3fb; stroke: #2c648c; stroke-width: 2; rx: 10; }
+      .voice-head-text { font: 700 16px Arial, Helvetica, sans-serif; fill: #14243a; text-anchor: middle; }
+      .voice-head-small { font: 13px Arial, Helvetica, sans-serif; fill: #40536b; text-anchor: middle; }
+      .voice-life { stroke: #9aabbd; stroke-width: 1.5; stroke-dasharray: 5 5; }
+      .voice-flow { fill: none; stroke: #234f78; stroke-width: 2.3; marker-end: url(#voice-arrow); }
+      .voice-return { fill: none; stroke: #356c49; stroke-width: 2.2; marker-end: url(#voice-arrow); }
+      .voice-alt { fill: none; stroke: #925313; stroke-width: 2.2; stroke-dasharray: 7 5; marker-end: url(#voice-arrow-alt); }
+      .voice-label { font: 14px Arial, Helvetica, sans-serif; fill: #172b42; }
+      .voice-small { font: 13px Arial, Helvetica, sans-serif; fill: #40536b; }
+      .voice-fragment { fill: #fbfcfe; stroke: #72869b; stroke-width: 1.6; rx: 10; }
+      .voice-fragment-alt { fill: #fffaf1; stroke: #9a6716; stroke-width: 1.6; stroke-dasharray: 7 5; rx: 10; }
+      .voice-tag { font: 700 14px Arial, Helvetica, sans-serif; fill: #14243a; }
+      .voice-note { fill: #fff1ec; stroke: #a44325; stroke-width: 2; stroke-dasharray: 7 5; rx: 12; }
+      .voice-note-title { font: 700 16px Arial, Helvetica, sans-serif; fill: #7f321b; }
+      .voice-note-text { font: 14px Arial, Helvetica, sans-serif; fill: #542b20; }
+    </style>
+  </defs>
+
+  <rect class="voice-bg" x="0" y="0" width="1700" height="1740"/>
+  <text class="voice-title" x="40" y="48">Voice to answer: default Genie question path</text>
+  <text class="voice-subtitle" x="40" y="78">The backend adapter owns Genie IDs and polling. The UI never owns a token. Poll calls for one response never overlap.</text>
+
+  <rect class="voice-head" x="35" y="110" width="160" height="82"/>
+  <text class="voice-head-text" x="115" y="145">User</text>
+  <text class="voice-head-small" x="115" y="170">Speaker / approver</text>
+
+  <rect class="voice-head" x="215" y="110" width="160" height="82"/>
+  <text class="voice-head-text" x="295" y="141">MOG UI</text>
+  <text class="voice-head-small" x="295" y="166">Status + transcript</text>
+  <text class="voice-head-small" x="295" y="184">Blurb + deep link</text>
+
+  <rect class="voice-head" x="395" y="110" width="180" height="82"/>
+  <text class="voice-head-text" x="485" y="141">Audio Broker</text>
+  <text class="voice-head-small" x="485" y="166">Lease + VAD + tracks</text>
+  <text class="voice-head-small" x="485" y="184">Recording indicator</text>
+
+  <rect class="voice-head" x="595" y="110" width="160" height="82"/>
+  <text class="voice-head-text" x="675" y="141">STT Provider</text>
+  <text class="voice-head-small" x="675" y="166">Parakeet local or</text>
+  <text class="voice-head-small" x="675" y="184">approved hosted ASR</text>
+
+  <rect class="voice-head" x="775" y="110" width="170" height="82"/>
+  <text class="voice-head-text" x="860" y="141">Cleanup Provider</text>
+  <text class="voice-head-small" x="860" y="166">Pre-pass + SLM</text>
+  <text class="voice-head-small" x="860" y="184">Deadline + fallback</text>
+
+  <rect class="voice-head" x="965" y="110" width="190" height="82"/>
+  <text class="voice-head-text" x="1060" y="137">Context Gate +</text>
+  <text class="voice-head-text" x="1060" y="159">Backend Adapter</text>
+  <text class="voice-head-small" x="1060" y="182">Route + recall + poll</text>
+
+  <rect class="voice-head" x="1175" y="110" width="200" height="82"/>
+  <text class="voice-head-text" x="1275" y="137">Memory Service</text>
+  <text class="voice-head-small" x="1275" y="162">Encrypted local cache</text>
+  <text class="voice-head-small" x="1275" y="182">+ Lakebase durable store</text>
+
+  <rect class="voice-head" x="1395" y="110" width="260" height="82"/>
+  <text class="voice-head-text" x="1525" y="137">Genie One MCP</text>
+  <text class="voice-head-small" x="1525" y="162">Selected workspace only</text>
+  <text class="voice-head-small" x="1525" y="182">Bearer token supplied by native core</text>
+
+  <path class="voice-life" d="M115 192 V1535 M295 192 V1535 M485 192 V1535 M675 192 V1535 M860 192 V1535 M1060 192 V1535 M1275 192 V1535 M1525 192 V1535"/>
+
+  <path class="voice-flow" d="M115 230 H295"/>
+  <text class="voice-label" x="130" y="219">1. Hold hotkey</text>
+
+  <path class="voice-flow" d="M295 275 H485"/>
+  <text class="voice-label" x="310" y="264">2. Request push-to-talk microphone lease</text>
+
+  <path class="voice-return" d="M485 320 H295"/>
+  <text class="voice-label" x="310" y="309">3. Lease granted; show Listening</text>
+  <text class="voice-small" x="1100" y="325">If another MOG owns the microphone, reject visibly. Retry needs a new user action.</text>
+
+  <path class="voice-flow" d="M115 370 H485"/>
+  <text class="voice-label" x="130" y="359">4. Speak; release hotkey or reach a VAD segment boundary</text>
+
+  <path class="voice-flow" d="M485 425 H675"/>
+  <text class="voice-label" x="500" y="414">5. Audio segment + track ID + timing</text>
+
+  <path class="voice-alt" d="M675 455 H735 V500 H675"/>
+  <text class="voice-label" x="748" y="467">6. Select provider</text>
+  <text class="voice-small" x="748" y="490">Local keeps audio on device.</text>
+  <text class="voice-small" x="748" y="511">Hosted ASR sends audio to the selected workspace.</text>
+
+  <path class="voice-flow" d="M675 555 H860"/>
+  <text class="voice-label" x="690" y="544">7. Raw transcript + timing + confidence</text>
+
+  <path class="voice-alt" d="M860 585 H920 V630 H860"/>
+  <text class="voice-label" x="933" y="596">8. Clean with a strict deadline</text>
+  <text class="voice-small" x="933" y="619">Preserve numbers, names, negation and meaning.</text>
+  <text class="voice-small" x="933" y="640">On timeout, return raw text with a cleanup-degraded flag.</text>
+
+  <path class="voice-flow" d="M860 685 H1060"/>
+  <text class="voice-label" x="875" y="674">9. Cleaned text + quality flags</text>
+
+  <path class="voice-return" d="M1060 730 H295"/>
+  <text class="voice-label" x="310" y="719">10. Show cleaned text, raw-restore action, explicit routes and selected workspace</text>
+
+  <path class="voice-flow" d="M115 775 H295"/>
+  <text class="voice-label" x="130" y="764">11. Edit / choose an explicit command</text>
+  <path class="voice-flow" d="M295 815 H1060"/>
+  <text class="voice-label" x="310" y="804">12. Dictate, Ask Genie or Save local; ambiguity makes no network call</text>
+
+  <rect class="voice-fragment-alt" x="55" y="845" width="1580" height="120"/>
+  <text class="voice-tag" x="75" y="873">ALTERNATE — DICTATION ONLY; GENIE IS NOT CALLED</text>
+  <path class="voice-return" d="M1060 910 H295"/>
+  <text class="voice-label" x="310" y="899">13a. Return final text for copy or accessibility-safe paste</text>
+  <path class="voice-return" d="M295 945 H115"/>
+  <text class="voice-label" x="130" y="934">13b. Text returned to the user</text>
+
+  <path class="voice-flow" d="M1060 1010 H1275"/>
+  <text class="voice-label" x="1075" y="999">14. Recall: user + MOG + workspace scope</text>
+  <path class="voice-return" d="M1275 1055 H1060"/>
+  <text class="voice-label" x="1075" y="1044">15. Local-only hits + provenance; no network wait</text>
+
+  <path class="voice-flow" d="M1060 1110 H1525"/>
+  <text class="voice-label" x="1075" y="1099">16. Preview exact payload + target; approve context; native core calls genie_ask</text>
+  <path class="voice-return" d="M1525 1155 H1060"/>
+  <text class="voice-label" x="1075" y="1144">17. conversation_id + response_id + in_progress</text>
+
+  <rect class="voice-fragment" x="55" y="1180" width="1580" height="190"/>
+  <text class="voice-tag" x="75" y="1208">LOOP — SEQUENTIAL POLLING UNTIL completed, failed OR incomplete; reconcile cancellation separately</text>
+  <path class="voice-flow" d="M1060 1250 H1525"/>
+  <text class="voice-label" x="1075" y="1239">18. genie_poll_response(conversation_id, response_id)</text>
+  <path class="voice-return" d="M1525 1295 H1060"/>
+  <text class="voice-label" x="1075" y="1284">19. status + progress_steps + final_answer + deep_link + query item IDs</text>
+  <text class="voice-small" x="75" y="1320">Wait for each poll to return before the next call. Use bounded backoff. Persist IDs for recovery.</text>
+  <text class="voice-small" x="75" y="1345">Esc requests cancellation when supported. Reconcile uncertain outcomes on the original IDs.</text>
+
+  <path class="voice-alt" d="M1060 1400 H1525"/>
+  <text class="voice-label" x="1075" y="1389">20. OPTIONAL genie_get_query_result(conversation_id, response_id, item_id)</text>
+  <path class="voice-return" d="M1525 1445 H1060"/>
+  <text class="voice-label" x="1075" y="1434">21. Rows + schema + truncation flag, only when needed and permitted</text>
+
+  <path class="voice-return" d="M1060 1490 H295"/>
+  <text class="voice-label" x="310" y="1479">22. Short blurb + key numbers + Databricks deep link; failure stays explicit</text>
+  <path class="voice-return" d="M295 1535 H115"/>
+  <text class="voice-label" x="130" y="1524">23. Show answer; user opens the full result</text>
+
+  <path class="voice-flow" d="M1060 1580 H1275"/>
+  <text class="voice-label" x="1075" y="1569">24. Write approved memory event + source + time + retention</text>
+  <text class="voice-small" x="1075" y="1605">Update the encrypted cache now. Synchronize to Lakebase when connected. Raw audio is excluded by default.</text>
+
+  <rect class="voice-note" x="55" y="1630" width="770" height="86"/>
+  <text class="voice-note-title" x="75" y="1658">BASELINE — CONTEXT-ONLY ROUTE</text>
+  <text class="voice-note-text" x="75" y="1683">Save context locally. Add only approved items to the next explicit question envelope.</text>
+  <text class="voice-note-text" x="75" y="1705">Show the exact outbound payload. Do not create a standalone or hidden Genie turn.</text>
+
+  <rect class="voice-note" x="850" y="1630" width="785" height="86"/>
+  <text class="voice-note-title" x="870" y="1658">OFFLINE AND DEGRADED PATH</text>
+  <text class="voice-note-text" x="870" y="1683">Submission states: NOT_SENT, SENDING, ACKNOWLEDGED, UNCERTAIN. Never repeat an uncertain ask.</text>
+  <text class="voice-note-text" x="870" y="1705">Local STT and dictation can continue offline. Never auto-send a queued question after reconnect.</text>
+</svg>

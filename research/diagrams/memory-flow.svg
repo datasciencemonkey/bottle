@@ -1,0 +1,278 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 1200 1444" width="1200" height="1444" role="img" aria-labelledby="title desc" font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+<title id="title">Diagram 6. Memory: local SQLite write path, RecallGate recall path, and optional v1 Lakebase sync</title>
+<desc id="desc">MVP memory is one local encrypted SQLite file per device (SQLCipher with the key in the OS keychain, WAL, FTS5, sqlite-vec). The MemoryWriter runs at session end, every 10 min or 40 utterances, after each completed exchange and on remember this. Embeddings come from a Databricks endpoint and are queued while offline. Recall: the lexical tier starts at once, the semantic tier runs in parallel with the router, the gate decides within 300 ms, and the judge confirms. The answer gate allows Genie data answers of the same workspace and space up to 24 h, and decisions and facts up to 30 d or pinned. Retention runs locally at start and every 6 h. Lakebase is an optional v1 sync target: outbox push, pull by server_seq with forget_log, conflict rules, backfill, migrations under an advisory lock and a local-key-loss rebuild.</desc>
+<defs>
+<marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#111827"/></marker>
+<style type="text/css"><![CDATA[
+text{font-size:13px;fill:#111827}
+.s{font-size:12px}
+.b{font-weight:700}
+.it{font-style:italic}
+.h{font-size:16px;font-weight:700}
+.halo{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
+]]></style>
+</defs>
+<rect x="0" y="0" width="1200" height="1444" fill="#FFFFFF"/>
+<text x="20" y="30" style="font-size:16px;font-weight:700">Diagram 6. Memory: local SQLite store (MVP, BC2), recall gate, optional v1 Lakebase sync</text>
+<rect x="20" y="45" width="760" height="860" rx="4" fill="#EFF6FF" stroke="#1D4ED8" stroke-width="1.5"/>
+<text x="30" y="63" style="font-weight:700">Device: Bottle</text>
+<rect x="35" y="75" width="730" height="470" rx="4" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.5"/>
+<text x="45" y="93" style="font-weight:700">Hidden brain window (TS)</text>
+<text x="45" y="112" style="font-size:12px;font-weight:700">T10 MemoryService</text>
+<text x="250" y="112" style="font-size:12px;font-weight:700">WRITE PATH (W)</text>
+<rect x="50" y="122" width="210" height="92" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="155" y="148.3" text-anchor="middle" style="font-size:12px;font-weight:700">Sources</text>
+<text x="155" y="164.3" text-anchor="middle" style="font-size:11px">utterances (You track),</text>
+<text x="155" y="180.3" text-anchor="middle" style="font-size:11px">context items, completed</text>
+<text x="155" y="196.3" text-anchor="middle" style="font-size:11px">Genie exchanges, sessions</text>
+<rect x="280" y="122" width="230" height="92" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="395" y="140.3" text-anchor="middle" style="font-size:12px;font-weight:700">MemoryWriter (MEM-28)</text>
+<text x="395" y="156.3" text-anchor="middle" style="font-size:11px">session end; every 10 min or</text>
+<text x="395" y="172.3" text-anchor="middle" style="font-size:11px">40 utterances; after each</text>
+<text x="395" y="188.3" text-anchor="middle" style="font-size:11px">exchange; "remember this"</text>
+<text x="395" y="204.3" text-anchor="middle" style="font-size:11px">(pinned, confidence 1.0)</text>
+<rect x="530" y="122" width="225" height="92" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="642.5" y="148.3" text-anchor="middle" style="font-size:12px;font-weight:700">Embed (client)</text>
+<text x="642.5" y="164.3" text-anchor="middle" style="font-size:11px">qwen3-0.6B 1024-d via the</text>
+<text x="642.5" y="180.3" text-anchor="middle" style="font-size:11px">home profile, L2-normalised;</text>
+<text x="642.5" y="196.3" text-anchor="middle" style="font-size:11px">offline: queue (BC2)</text>
+<polyline points="45,228 755,228" fill="none" stroke="#6B7280" stroke-width="1" stroke-dasharray="6 4"/>
+<text x="250" y="251" style="font-size:12px;font-weight:700">RECALL PATH (Q)</text>
+<rect x="50" y="256" width="210" height="70" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="155" y="279.3" text-anchor="middle" style="font-size:12px;font-weight:700">Pre-pass text</text>
+<text x="155" y="295.3" text-anchor="middle" style="font-size:11px">from diagram 3; lexical</text>
+<text x="155" y="311.3" text-anchor="middle" style="font-size:11px">tier starts at once</text>
+<rect x="280" y="256" width="230" height="70" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="395" y="279.3" text-anchor="middle" style="font-size:12px;font-weight:700">RecallGate (MEM-16a..e)</text>
+<text x="395" y="295.3" text-anchor="middle" style="font-size:11px">delays genie_ask ≤ 300 ms,</text>
+<text x="395" y="311.3" text-anchor="middle" style="font-size:11px">never blocks the UI</text>
+<rect x="530" y="256" width="225" height="70" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="642.5" y="279.3" text-anchor="middle" style="font-size:12px;font-weight:700">Semantic tier</text>
+<text x="642.5" y="295.3" text-anchor="middle" style="font-size:11px">query embedding in parallel</text>
+<text x="642.5" y="311.3" text-anchor="middle" style="font-size:11px">with the router (MEM-16d)</text>
+<rect x="280" y="346" width="230" height="66" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="395" y="367.3" text-anchor="middle" style="font-size:12px;font-weight:700">Score + gate G1-G5 (MEM-17a)</text>
+<text x="395" y="383.3" text-anchor="middle" style="font-size:11px">S = .50 sem + .20 lex + .15 rec</text>
+<text x="395" y="399.3" text-anchor="middle" style="font-size:11px">+ .10 conf + .05 type_w</text>
+<rect x="50" y="346" width="210" height="66" rx="4" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="155" y="367.3" text-anchor="middle" style="font-size:12px;font-weight:700">Card "From memory · &lt;age&gt;"</text>
+<text x="155" y="383.3" text-anchor="middle" style="font-size:11px">+ "Ask Genie anyway"</text>
+<text x="155" y="399.3" text-anchor="middle" style="font-size:11px">(MEM-18); late hit: chip</text>
+<rect x="280" y="430" width="230" height="52" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="395" y="452.3" text-anchor="middle" style="font-size:12px;font-weight:700">Verdict</text>
+<text x="395" y="468.3" text-anchor="middle" style="font-size:11px">answer_from_memory | augment | pass</text>
+<rect x="280" y="494" width="230" height="40" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="395" y="518.3" text-anchor="middle" style="font-size:12px;font-weight:700">Ask Genie (diagram 4)</text>
+<rect x="530" y="346" width="225" height="136" rx="4" fill="#FFFBEB" stroke="#B45309" stroke-width="1.2"/>
+<text x="642.5" y="362.3" text-anchor="middle" style="font-size:12px;font-weight:700">Answer gate (MEM-16a..17c)</text>
+<text x="642.5" y="378.3" text-anchor="middle" style="font-size:11px">Genie data answers: same</text>
+<text x="642.5" y="394.3" text-anchor="middle" style="font-size:11px">workspace + space, ≤ 24 h old.</text>
+<text x="642.5" y="410.3" text-anchor="middle" style="font-size:11px">Decisions and facts: ≤ 30 d</text>
+<text x="642.5" y="426.3" text-anchor="middle" style="font-size:11px">old, or pinned.</text>
+<text x="642.5" y="442.3" text-anchor="middle" style="font-size:11px">Precision ≥ 0.95 (golden set).</text>
+<text x="642.5" y="458.3" text-anchor="middle" style="font-size:11px">Judge ≤ 600 ms: Llama 3.1 8B</text>
+<text x="642.5" y="474.3" text-anchor="middle" style="font-size:11px">(gpt-oss-20b in the EU).</text>
+<rect x="50" y="430" width="210" height="104" rx="4" fill="#FFFBEB" stroke="#B45309" stroke-width="1.2"/>
+<text x="155" y="446.3" text-anchor="middle" style="font-size:12px;font-weight:700">Fallbacks</text>
+<text x="155" y="462.3" text-anchor="middle" style="font-size:11px">Offline: FTS5 + recency only;</text>
+<text x="155" y="478.3" text-anchor="middle" style="font-size:11px">embeddings wait in the</text>
+<text x="155" y="494.3" text-anchor="middle" style="font-size:11px">queue. No remote store</text>
+<text x="155" y="510.3" text-anchor="middle" style="font-size:11px">in the MVP: no badge</text>
+<text x="155" y="526.3" text-anchor="middle" style="font-size:11px">needed for memory.</text>
+<rect x="35" y="560" width="730" height="330" rx="4" fill="#FFF7ED" stroke="#C2410C" stroke-width="1.5"/>
+<rect x="38" y="563" width="724" height="324" rx="3" fill="none" stroke="#DC2626" stroke-width="2" stroke-dasharray="6 4"/>
+<text x="45" y="578" style="font-weight:700">Rust core · secret boundary: no token crosses</text>
+<rect x="50" y="590" width="340" height="120" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="220" y="622.3" text-anchor="middle" style="font-size:12px;font-weight:700">R10 LocalStore: MVP memory store (BC2)</text>
+<text x="220" y="638.3" text-anchor="middle" style="font-size:11px">one SQLite file, SQLCipher 4, key in the</text>
+<text x="220" y="654.3" text-anchor="middle" style="font-size:11px">OS keychain; WAL mode; FTS5 keyword</text>
+<text x="220" y="670.3" text-anchor="middle" style="font-size:11px">index; sqlite-vec vectors; memory_item,</text>
+<text x="220" y="686.3" text-anchor="middle" style="font-size:11px">genie_exchange, embed queue, outbox</text>
+<rect x="410" y="590" width="165" height="120" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="492.5" y="622.3" text-anchor="middle" style="font-size:12px;font-weight:700">Embed queue</text>
+<text x="492.5" y="638.3" text-anchor="middle" style="font-size:11px">rows wait while</text>
+<text x="492.5" y="654.3" text-anchor="middle" style="font-size:11px">offline; a worker</text>
+<text x="492.5" y="670.3" text-anchor="middle" style="font-size:11px">embeds them on</text>
+<text x="492.5" y="686.3" text-anchor="middle" style="font-size:11px">reconnect (BC2)</text>
+<rect x="590" y="590" width="165" height="120" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="672.5" y="606.3" text-anchor="middle" style="font-size:12px;font-weight:700">R14 Retention</text>
+<text x="672.5" y="622.3" text-anchor="middle" style="font-size:10px">(D36, MEM-33)</text>
+<text x="672.5" y="638.3" text-anchor="middle" style="font-size:10px">local: at start and</text>
+<text x="672.5" y="654.3" text-anchor="middle" style="font-size:10px">every 6 h; remote</text>
+<text x="672.5" y="670.3" text-anchor="middle" style="font-size:10px">(v1): first conn.</text>
+<text x="672.5" y="686.3" text-anchor="middle" style="font-size:10px">each day, advisory</text>
+<text x="672.5" y="702.3" text-anchor="middle" style="font-size:10px">lock</text>
+<rect x="410" y="730" width="345" height="70" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="582.5" y="753.3" text-anchor="middle" style="font-size:12px;font-weight:700">v1: SyncWorker (MEM-11a..d)</text>
+<text x="582.5" y="769.3" text-anchor="middle" style="font-size:11px">outbox FIFO push, retry 30 s to 15 min,</text>
+<text x="582.5" y="785.3" text-anchor="middle" style="font-size:11px">survives restart, HLC guard; forget ≤ 1 min (MEM-11d)</text>
+<rect x="410" y="810" width="345" height="70" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="582.5" y="833.3" text-anchor="middle" style="font-size:12px;font-weight:700">v1: R9 LakebasePool</text>
+<text x="582.5" y="849.3" text-anchor="middle" style="font-size:11px">direct TLS, max 3, idle 300 s, life 50 min;</text>
+<text x="582.5" y="865.3" text-anchor="middle" style="font-size:11px">new credential per connection (D51)</text>
+<rect x="50" y="730" width="340" height="150" rx="4" fill="#FFFBEB" stroke="#B45309" stroke-width="1.2"/>
+<text x="220" y="753.3" text-anchor="middle" style="font-size:12px;font-weight:700">Forget</text>
+<text x="220" y="769.3" text-anchor="middle" style="font-size:11px">Local rows: deleted at once (MVP).</text>
+<text x="220" y="785.3" text-anchor="middle" style="font-size:11px">v1 with sync: remote delete queued with</text>
+<text x="220" y="801.3" text-anchor="middle" style="font-size:11px">priority (≤ 1 min online, MEM-11d), forget_log</text>
+<text x="220" y="817.3" text-anchor="middle" style="font-size:11px">for other devices; Lakebase PITR keeps</text>
+<text x="220" y="833.3" text-anchor="middle" style="font-size:11px">history 2 d (D72); the UI says so.</text>
+<text x="220" y="849.3" text-anchor="middle" style="font-size:11px">Also: review Genie One memories</text>
+<text x="220" y="865.3" text-anchor="middle" style="font-size:11px">(deep link, D61).</text>
+<rect x="800" y="45" width="380" height="240" rx="4" fill="#FEF2F2" stroke="#B91C1C" stroke-width="1.5"/>
+<text x="810" y="63" style="font-weight:700">Workspace A (home profile)</text>
+<rect x="815" y="75" width="350" height="36" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="990" y="97.3" text-anchor="middle" style="font-size:12px;font-weight:700">Genie One MCP (answers, diagram 4)</text>
+<rect x="815" y="119" width="350" height="36" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="990" y="141.3" text-anchor="middle" style="font-size:12px;font-weight:700">embeddings: system.ai qwen3-0.6B</text>
+<rect x="815" y="163" width="350" height="36" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="990" y="185.3" text-anchor="middle" style="font-size:12px;font-weight:700">writer: system.ai gpt-oss-120b</text>
+<rect x="815" y="207" width="350" height="36" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="990" y="229.3" text-anchor="middle" style="font-size:12px;font-weight:700">judge: system.ai Llama 3.1 8B</text>
+<text x="990" y="270" text-anchor="middle" style="font-size:11px">all via /ai-gateway/mlflow/v1, request tags</text>
+<rect x="800" y="300" width="380" height="330" rx="4" fill="#F0FDF4" stroke="#15803D" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="810" y="318" style="font-weight:700">Lakebase: optional v1 sync / backup (BC2)</text>
+<rect x="815" y="330" width="350" height="84" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="990" y="352.3" text-anchor="middle" style="font-size:12px;font-weight:700">bottle schema (v1)</text>
+<text x="990" y="368.3" text-anchor="middle" style="font-size:11px">memory_item 180 d sliding, session 180 d,</text>
+<text x="990" y="384.3" text-anchor="middle" style="font-size:11px">genie_exchange 90 d: summary + pointer</text>
+<text x="990" y="400.3" text-anchor="middle" style="font-size:11px">(pointer only if not home, D60)</text>
+<rect x="815" y="422" width="350" height="56" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="990" y="446.3" text-anchor="middle" style="font-size:12px;font-weight:700">pgvector HNSW + GIN;</text>
+<text x="990" y="462.3" text-anchor="middle" style="font-size:11px">lakebase_ann after Lakebase Search</text>
+<rect x="815" y="486" width="350" height="56" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="990" y="510.3" text-anchor="middle" style="font-size:12px;font-weight:700">mem.recall.hybrid (v1 extra tier)</text>
+<text x="990" y="526.3" text-anchor="middle" style="font-size:11px">ANN + lexical, ≤ 300 ms p95 warm</text>
+<rect x="815" y="550" width="350" height="68" rx="4" fill="#FFFBEB" stroke="#B45309" stroke-width="1.2"/>
+<text x="990" y="572.3" text-anchor="middle" style="font-size:12px;font-weight:700">Not an MVP admin prerequisite.</text>
+<text x="990" y="588.3" text-anchor="middle" style="font-size:11px">Cold wake: retry 250/500/1000 ms (MEM-07b);</text>
+<text x="990" y="604.3" text-anchor="middle" style="font-size:11px">that turn uses local hits only.</text>
+<polyline points="260,168 278,168" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="268" y="160" text-anchor="middle" style="font-size:10px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">W1</text>
+<text x="268" y="160" text-anchor="middle" style="font-size:10px">W1</text>
+<polyline points="510,150 528,150" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="519" y="142" text-anchor="middle" style="font-size:10px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">W3</text>
+<text x="519" y="142" text-anchor="middle" style="font-size:10px">W3</text>
+<polyline points="395,122 395,100 790,100 790,181 813,181" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="600" y="96" text-anchor="middle" style="font-size:11px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">W2 writer SLM (home profile)</text>
+<text x="600" y="96" text-anchor="middle" style="font-size:11px">W2 writer SLM (home profile)</text>
+<polyline points="755,140 813,137" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="784" y="132" text-anchor="middle" style="font-size:10px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">embed</text>
+<text x="784" y="132" text-anchor="middle" style="font-size:10px">embed</text>
+<polyline points="270,214 270,232 30,232 30,650 48,650" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="34" y="640" style="font-size:10px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">W4</text>
+<text x="34" y="640" style="font-size:10px">W4</text>
+<polyline points="640,214 640,222 770,222 770,600 757,600" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="766" y="560" text-anchor="end" style="font-size:10px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">W5 queue</text>
+<text x="766" y="560" text-anchor="end" style="font-size:10px">W5 queue</text>
+<polyline points="390,650 408,650" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<polyline points="390,700 400,700 400,765 408,765" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="402" y="724" style="font-size:10px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">W6</text>
+<text x="402" y="724" style="font-size:10px">W6</text>
+<polyline points="582,800 582,808" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<polyline points="755,845 790,845 790,372 813,372" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="786" y="700" text-anchor="end" style="font-size:10px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">W7 v1</text>
+<text x="786" y="700" text-anchor="end" style="font-size:10px">W7 v1</text>
+<polyline points="672,710 672,728" fill="none" stroke="#111827" stroke-width="1.5"/>
+<polyline points="260,291 278,291" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="268" y="284" text-anchor="middle" style="font-size:10px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">Q1</text>
+<text x="268" y="284" text-anchor="middle" style="font-size:10px">Q1</text>
+<polyline points="530,291 512,291" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="520" y="284" text-anchor="middle" style="font-size:10px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">Q2</text>
+<text x="520" y="284" text-anchor="middle" style="font-size:10px">Q2</text>
+<polyline points="395,326 395,344" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="401" y="340" style="font-size:10px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">Q3 hits</text>
+<text x="401" y="340" style="font-size:10px">Q3 hits</text>
+<polyline points="280,380 262,380" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="271" y="374" text-anchor="middle" style="font-size:10px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">Q6</text>
+<text x="271" y="374" text-anchor="middle" style="font-size:10px">Q6</text>
+<polyline points="510,380 528,380" fill="none" stroke="#111827" stroke-width="1.5"/>
+<text x="519" y="374" text-anchor="middle" style="font-size:10px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">Q4</text>
+<text x="519" y="374" text-anchor="middle" style="font-size:10px">Q4</text>
+<polyline points="395,412 395,428" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="401" y="424" style="font-size:10px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">Q5</text>
+<text x="401" y="424" style="font-size:10px">Q5</text>
+<polyline points="395,482 395,492" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<polyline points="642,256 642,236 780,236 780,128 813,128" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<polyline points="220,326 220,560 220,588" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="226" y="556" style="font-size:10px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">FTS5 + sqlite-vec ≤ 50 ms</text>
+<text x="226" y="556" style="font-size:10px">FTS5 + sqlite-vec ≤ 50 ms</text>
+<polyline points="755,506 775,506 775,514 813,514" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="2 3" marker-end="url(#arw)"/>
+<text x="778" y="528" style="font-size:10px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">v1</text>
+<text x="778" y="528" style="font-size:10px">v1</text>
+<polyline points="990,75 990,62" fill="none" stroke="#111827" stroke-width="1.5"/>
+<rect x="20" y="920" width="1160" height="214" rx="4" fill="#FFFFFF" stroke="#15803D" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="30" y="940" style="font-weight:700">v1 multi-device sync (needs Lakebase; not in the MVP, BC2)</text>
+<rect x="30" y="954" width="220" height="110" rx="4" fill="#F0FDF4" stroke="#15803D" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="140" y="981.3" text-anchor="middle" style="font-size:12px;font-weight:700">Pull (MEM-12)</text>
+<text x="140" y="997.3" text-anchor="middle" style="font-size:11px">SyncWorker pulls by server_seq</text>
+<text x="140" y="1013.3" text-anchor="middle" style="font-size:11px">with a 120 s overlap window;</text>
+<text x="140" y="1029.3" text-anchor="middle" style="font-size:11px">forget_log rows become local</text>
+<text x="140" y="1045.3" text-anchor="middle" style="font-size:11px">hard deletes within one pull.</text>
+<rect x="260" y="954" width="220" height="110" rx="4" fill="#F0FDF4" stroke="#15803D" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="370" y="989.3" text-anchor="middle" style="font-size:12px;font-weight:700">Conflicts (MEM-13)</text>
+<text x="370" y="1005.3" text-anchor="middle" style="font-size:11px">a forget always wins; then last</text>
+<text x="370" y="1021.3" text-anchor="middle" style="font-size:11px">writer by HLC; set fields are</text>
+<text x="370" y="1037.3" text-anchor="middle" style="font-size:11px">unioned; pinned stays pinned.</text>
+<rect x="490" y="954" width="220" height="110" rx="4" fill="#F0FDF4" stroke="#15803D" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="600" y="981.3" text-anchor="middle" style="font-size:12px;font-weight:700">New device (MEM-37)</text>
+<text x="600" y="997.3" text-anchor="middle" style="font-size:11px">backfill active items (90 d +</text>
+<text x="600" y="1013.3" text-anchor="middle" style="font-size:11px">pinned) and exchanges (30 d)</text>
+<text x="600" y="1029.3" text-anchor="middle" style="font-size:11px">by server_seq; recall works</text>
+<text x="600" y="1045.3" text-anchor="middle" style="font-size:11px">during the backfill.</text>
+<rect x="720" y="954" width="220" height="110" rx="4" fill="#F0FDF4" stroke="#15803D" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="830" y="981.3" text-anchor="middle" style="font-size:12px;font-weight:700">Migrations (MEM-35)</text>
+<text x="830" y="997.3" text-anchor="middle" style="font-size:11px">forward-only under</text>
+<text x="830" y="1013.3" text-anchor="middle" style="font-size:11px">pg_advisory_lock(72620001); a</text>
+<text x="830" y="1029.3" text-anchor="middle" style="font-size:11px">newer remote schema makes the</text>
+<text x="830" y="1045.3" text-anchor="middle" style="font-size:11px">remote read-only + update prompt.</text>
+<rect x="950" y="954" width="220" height="110" rx="4" fill="#F0FDF4" stroke="#15803D" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="1060" y="981.3" text-anchor="middle" style="font-size:12px;font-weight:700">Local key lost (MEM-09)</text>
+<text x="1060" y="997.3" text-anchor="middle" style="font-size:11px">rebuild the local store from</text>
+<text x="1060" y="1013.3" text-anchor="middle" style="font-size:11px">Lakebase; tell the user that</text>
+<text x="1060" y="1029.3" text-anchor="middle" style="font-size:11px">local transcripts are lost.</text>
+<text x="1060" y="1045.3" text-anchor="middle" style="font-size:11px">Without sync: no rebuild source.</text>
+<text x="30" y="1086" style="font-size:12px">Push = W6/W7 (outbox FIFO, MEM-11a..d; forget ≤ 1 min, MEM-11d). Remote retention runs on the first connection each day under an advisory lock (MEM-33).</text>
+<text x="30" y="1106" style="font-size:12px">Hop rule stays: A answers get summary + key numbers + pointer, B answers a pointer only (MEM-25a..c, D60).</text>
+<rect x="20" y="1150" width="1160" height="92" rx="4" fill="#FFFBEB" stroke="#B45309" stroke-width="1.2"/>
+<text x="28" y="1168.3" style="font-size:12px">W1 sources go to the MemoryWriter · W2 the writer SLM runs on the home profile · W3 items get embeddings · W4 commit to R10 first</text>
+<text x="28" y="1184.3" style="font-size:12px">W5 offline: embedding rows wait in the queue · W6 v1: the SyncWorker drains the outbox · W7 v1: upsert to Lakebase over TLS 5432</text>
+<text x="28" y="1200.3" style="font-size:12px">Q1 pre-pass text enters the RecallGate; lexical tier ≤ 50 ms · Q2 semantic tier in parallel with the router · Q3 hits are scored</text>
+<text x="28" y="1216.3" style="font-size:12px">Q4 gate rules G1-G5 + judge · Q5 verdict · Q6 answer_from_memory shows the card; else genie_ask is sent within the 300 ms budget</text>
+<text x="28" y="1232.3" style="font-size:12px">IDs: MEM-01..MEM-37, gate MEM-16a..17c, sync MEM-11a..d, MEM-07b (v1; also MEM-09, -12, -13, -35, -37), BC2.</text>
+<rect x="20" y="1256" width="760" height="174" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1"/>
+<text x="30" y="1274" style="font-weight:700">Legend</text>
+<rect x="30" y="1284" width="24" height="14" rx="4" fill="#EFF6FF" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="60" y="1296" style="font-size:12px">Device zone</text>
+<rect x="410" y="1284" width="24" height="14" rx="4" fill="#FFF7ED" stroke="#C2410C" stroke-width="1.2"/>
+<rect x="412" y="1286" width="20" height="10" rx="1" fill="none" stroke="#DC2626" stroke-width="1.2" stroke-dasharray="3 2"/>
+<text x="440" y="1296" style="font-size:12px">Rust core (secret boundary)</text>
+<rect x="30" y="1306" width="24" height="14" rx="4" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="60" y="1318" style="font-size:12px">WebView window</text>
+<rect x="410" y="1306" width="24" height="14" rx="4" fill="#FEF2F2" stroke="#B91C1C" stroke-width="1.2"/>
+<text x="440" y="1318" style="font-size:12px">Databricks workspace</text>
+<rect x="30" y="1328" width="24" height="14" rx="4" fill="#F5F3FF" stroke="#6D28D9" stroke-width="1.2"/>
+<text x="60" y="1340" style="font-size:12px">Main agent harness (BC4)</text>
+<rect x="410" y="1328" width="24" height="14" rx="4" fill="#F3F4F6" stroke="#6B7280" stroke-width="1.2"/>
+<text x="440" y="1340" style="font-size:12px">OS services</text>
+<rect x="30" y="1350" width="24" height="14" rx="4" fill="#F0FDF4" stroke="#15803D" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="60" y="1362" style="font-size:12px">Lakebase (optional, v1)</text>
+<rect x="410" y="1350" width="24" height="14" rx="4" fill="#F3F4F6" stroke="#6B7280" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="440" y="1362" style="font-size:12px">Browser / IdP</text>
+<polyline points="30,1380 66,1380" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="72" y="1384" style="font-size:12px">request / data</text>
+<polyline points="276.7,1380 312.7,1380" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="318.7" y="1384" style="font-size:12px">event / stream</text>
+<polyline points="523.3,1380 559.3,1380" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="2 3" marker-end="url(#arw)"/>
+<text x="565.3" y="1384" style="font-size:12px">credential fetch</text>
+<rect x="30" y="1394" width="24" height="14" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="60" y="1406" style="font-size:12px">v1 / optional (not in the MVP)</text>
+<rect x="410" y="1394" width="24" height="14" rx="4" fill="#FFFBEB" stroke="#B45309" stroke-width="1.2"/>
+<text x="440" y="1406" style="font-size:12px">note / rule</text>
+<text x="800" y="1272" style="font-size:12px">Diagram 6. Memory. Writes go to the encrypted</text>
+<text x="800" y="1289" style="font-size:12px">local SQLite store first. Recall checks local FTS5</text>
+<text x="800" y="1306" style="font-size:12px">and sqlite-vec while the router runs, and the gate</text>
+<text x="800" y="1323" style="font-size:12px">decides before Genie is called. Lakebase is an</text>
+<text x="800" y="1340" style="font-size:12px">optional v1 sync and backup target.</text>
+</svg>

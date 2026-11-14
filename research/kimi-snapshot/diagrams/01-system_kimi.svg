@@ -1,0 +1,208 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="1180" viewBox="0 0 1500 1180" role="img" aria-labelledby="sys-title sys-desc">
+  <title id="sys-title">Motherbricks system and context architecture</title>
+  <desc id="sys-desc">A user interacts with several MOGs in the Motherbricks desktop application. Shared native services control audio, transcription, cleanup, context routing, backend access, memory and credentials. The Databricks CLI selects an OAuth profile. Requests use TLS to one selected Databricks workspace. Genie One MCP is the default backend. Lakebase is durable memory. Model serving and alternate agent backends are optional. Active conversations stay pinned to their original workspace.</desc>
+  <defs>
+    <marker id="sys-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#264a73"/>
+    </marker>
+    <marker id="sys-arrow-alt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#8a4b0f"/>
+    </marker>
+    <style>
+      .sys-bg { fill: #ffffff; }
+      .sys-title { font: 700 28px Arial, Helvetica, sans-serif; fill: #14243a; }
+      .sys-subtitle { font: 16px Arial, Helvetica, sans-serif; fill: #40536b; }
+      .sys-heading { font: 700 19px Arial, Helvetica, sans-serif; fill: #14243a; }
+      .sys-label { font: 700 16px Arial, Helvetica, sans-serif; fill: #14243a; }
+      .sys-text { font: 14px Arial, Helvetica, sans-serif; fill: #263c56; }
+      .sys-small { font: 13px Arial, Helvetica, sans-serif; fill: #40536b; }
+      .sys-device { fill: #f7faff; stroke: #4f6f92; stroke-width: 2; rx: 18; }
+      .sys-workspace { fill: #fbfcfe; stroke: #66788c; stroke-width: 2; rx: 18; }
+      .sys-mog { fill: #e5f3ff; stroke: #1f6394; stroke-width: 2; rx: 14; }
+      .sys-service { fill: #edf7ed; stroke: #39733d; stroke-width: 2; rx: 12; }
+      .sys-local { fill: #f1effb; stroke: #67549a; stroke-width: 2; rx: 12; }
+      .sys-cloud { fill: #fff8e8; stroke: #9a6716; stroke-width: 2; rx: 12; }
+      .sys-decision { fill: #fff1ec; stroke: #a44325; stroke-width: 2; stroke-dasharray: 7 5; rx: 12; }
+      .sys-flow { fill: none; stroke: #264a73; stroke-width: 2.4; marker-end: url(#sys-arrow); }
+      .sys-bidir { fill: none; stroke: #264a73; stroke-width: 2.4; marker-start: url(#sys-arrow); marker-end: url(#sys-arrow); }
+      .sys-alt { fill: none; stroke: #8a4b0f; stroke-width: 2.2; stroke-dasharray: 8 5; marker-end: url(#sys-arrow-alt); }
+      .sys-divider { stroke: #c6d2df; stroke-width: 1.5; }
+    </style>
+  </defs>
+
+  <rect class="sys-bg" x="0" y="0" width="1500" height="1180"/>
+  <text class="sys-title" x="40" y="48">Motherbricks: system and context</text>
+  <text class="sys-subtitle" x="40" y="78">Many MOGs share one native runtime. The selected profile resolves the host and workspace ID for each new conversation.</text>
+  <line class="sys-flow" x1="1050" y1="52" x2="1110" y2="52"/>
+  <text class="sys-small" x="1122" y="57">Default path</text>
+  <line class="sys-alt" x1="1250" y1="52" x2="1310" y2="52"/>
+  <text class="sys-small" x="1322" y="57">Optional path</text>
+
+  <rect class="sys-device" x="30" y="105" width="1440" height="630"/>
+  <text class="sys-heading" x="55" y="137">USER DEVICE — Motherbricks desktop application</text>
+
+  <rect class="sys-mog" x="60" y="160" width="210" height="112"/>
+  <text class="sys-label" x="165" y="190" text-anchor="middle">MOG A</text>
+  <text class="sys-text" x="165" y="216" text-anchor="middle">Floating UI + hotkey</text>
+  <text class="sys-text" x="165" y="240" text-anchor="middle">Home CLI profile</text>
+  <text class="sys-small" x="165" y="260" text-anchor="middle">Idle / listen / answer</text>
+
+  <rect class="sys-mog" x="295" y="160" width="210" height="112"/>
+  <text class="sys-label" x="400" y="190" text-anchor="middle">MOG B</text>
+  <text class="sys-text" x="400" y="216" text-anchor="middle">Floating UI + hotkey</text>
+  <text class="sys-text" x="400" y="240" text-anchor="middle">Different profile allowed</text>
+  <text class="sys-small" x="400" y="260" text-anchor="middle">Independent conversation</text>
+
+  <rect class="sys-mog" x="530" y="160" width="210" height="112"/>
+  <text class="sys-label" x="635" y="190" text-anchor="middle">MOG N</text>
+  <text class="sys-text" x="635" y="216" text-anchor="middle">Same shared services</text>
+  <text class="sys-text" x="635" y="240" text-anchor="middle">Separate configuration</text>
+  <text class="sys-small" x="635" y="260" text-anchor="middle">Separate memory scope</text>
+
+  <rect class="sys-decision" x="765" y="160" width="680" height="112"/>
+  <text class="sys-label" x="790" y="190">POLICY THAT MUST BE EXPLICIT</text>
+  <text class="sys-text" x="790" y="217">Always available does not mean always recording.</text>
+  <text class="sys-text" x="790" y="241">Meeting capture requires a user start action and a visible indicator.</text>
+  <text class="sys-text" x="790" y="263">Context sharing is off by default. Preview the exact outbound payload.</text>
+
+  <path class="sys-flow" d="M165 272 V300 H165 V330"/>
+  <path class="sys-flow" d="M400 272 V300 H400 V330"/>
+  <path class="sys-flow" d="M635 272 V300 H1000 V330"/>
+  <text class="sys-small" x="700" y="294">status, text and response events</text>
+
+  <rect class="sys-service" x="60" y="330" width="210" height="140"/>
+  <text class="sys-label" x="165" y="361" text-anchor="middle">Audio + Hotkey Broker</text>
+  <text class="sys-text" x="165" y="390" text-anchor="middle">One microphone owner</text>
+  <text class="sys-text" x="165" y="414" text-anchor="middle">Mic + system tracks</text>
+  <text class="sys-text" x="165" y="438" text-anchor="middle">VAD + crash-safe journal</text>
+
+  <rect class="sys-service" x="295" y="330" width="210" height="140"/>
+  <text class="sys-label" x="400" y="361" text-anchor="middle">STT Orchestrator</text>
+  <text class="sys-text" x="400" y="390" text-anchor="middle">Local Parakeet default</text>
+  <text class="sys-text" x="400" y="414" text-anchor="middle">Hosted ASR optional</text>
+  <text class="sys-text" x="400" y="438" text-anchor="middle">Text + timing + confidence</text>
+
+  <rect class="sys-service" x="530" y="330" width="210" height="140"/>
+  <text class="sys-label" x="635" y="361" text-anchor="middle">Utterance Cleanup</text>
+  <text class="sys-text" x="635" y="390" text-anchor="middle">Deterministic pre-pass</text>
+  <text class="sys-text" x="635" y="414" text-anchor="middle">Databricks SLM client</text>
+  <text class="sys-text" x="635" y="438" text-anchor="middle">Deadline + raw fallback</text>
+
+  <rect class="sys-decision" x="765" y="330" width="210" height="140"/>
+  <text class="sys-label" x="870" y="361" text-anchor="middle">Context Gate + Router</text>
+  <text class="sys-text" x="870" y="390" text-anchor="middle">Dictate / Ask Genie / Save local</text>
+  <text class="sys-text" x="870" y="414" text-anchor="middle">Bounded approved context envelope</text>
+  <text class="sys-text" x="870" y="438" text-anchor="middle">Ambiguous route: no network call</text>
+
+  <rect class="sys-service" x="1000" y="330" width="210" height="140"/>
+  <text class="sys-label" x="1105" y="361" text-anchor="middle">Backend Adapter</text>
+  <text class="sys-text" x="1105" y="390" text-anchor="middle">Ask + poll + cancel</text>
+  <text class="sys-text" x="1105" y="414" text-anchor="middle">Blurb + deep link</text>
+  <text class="sys-text" x="1105" y="438" text-anchor="middle">Capability detection</text>
+
+  <rect class="sys-service" x="1235" y="330" width="210" height="140"/>
+  <text class="sys-label" x="1340" y="361" text-anchor="middle">Memory Service</text>
+  <text class="sys-text" x="1340" y="390" text-anchor="middle">Local-first recall</text>
+  <text class="sys-text" x="1340" y="414" text-anchor="middle">Provenance + retention</text>
+  <text class="sys-text" x="1340" y="438" text-anchor="middle">Lakebase synchronization</text>
+
+  <path class="sys-flow" d="M270 400 H295"/>
+  <path class="sys-flow" d="M505 400 H530"/>
+  <path class="sys-flow" d="M740 400 H765"/>
+  <path class="sys-flow" d="M975 400 H1000"/>
+  <path class="sys-bidir" d="M975 428 H1235"/>
+  <text class="sys-small" x="1105" y="492" text-anchor="middle">recall candidates / approved memory writes</text>
+
+  <rect class="sys-local" x="60" y="525" width="445" height="100"/>
+  <text class="sys-label" x="82" y="555">Databricks CLI + profile store</text>
+  <text class="sys-text" x="82" y="582">auth profiles / auth token --profile / auth login</text>
+  <text class="sys-small" x="82" y="606">OAuth U2M only for the first release. CLI owns stored refresh tokens.</text>
+
+  <rect class="sys-local" x="530" y="525" width="445" height="100"/>
+  <text class="sys-label" x="552" y="555">Credential Broker — native process only</text>
+  <text class="sys-text" x="552" y="582">Short-lived access tokens + Lakebase credentials</text>
+  <text class="sys-small" x="552" y="606">Never in MOG configuration, WebView storage or logs.</text>
+
+  <rect class="sys-local" x="1000" y="525" width="210" height="100"/>
+  <text class="sys-label" x="1105" y="555" text-anchor="middle">Response Projector</text>
+  <text class="sys-text" x="1105" y="582" text-anchor="middle">Short blurb + key numbers</text>
+  <text class="sys-text" x="1105" y="606" text-anchor="middle">Databricks deep link</text>
+
+  <rect class="sys-local" x="1235" y="525" width="210" height="100"/>
+  <text class="sys-label" x="1340" y="555" text-anchor="middle">Encrypted Local Cache</text>
+  <text class="sys-text" x="1340" y="582" text-anchor="middle">Fast memory recall</text>
+  <text class="sys-text" x="1340" y="606" text-anchor="middle">Optional audio journal</text>
+
+  <path class="sys-flow" d="M282 575 H530"/>
+  <path class="sys-flow" d="M752 525 V490 H1105 V470"/>
+  <path class="sys-flow" d="M975 552 H1235"/>
+  <path class="sys-flow" d="M1105 470 V525"/>
+  <path class="sys-bidir" d="M1340 470 V525"/>
+  <path class="sys-flow" d="M1105 625 V652 H165 V272" opacity="0.45"/>
+
+  <text class="sys-heading" x="55" y="674">LOCAL / CLOUD BOUNDARY</text>
+  <text class="sys-text" x="325" y="674">TLS + user identity + selected workspace host. Raw audio is sent only when hosted ASR is selected.</text>
+  <line class="sys-divider" x1="50" y1="690" x2="1450" y2="690"/>
+
+  <rect class="sys-workspace" x="45" y="720" width="865" height="420"/>
+  <text class="sys-heading" x="70" y="754">DATABRICKS WORKSPACE A — selected example</text>
+
+  <rect class="sys-cloud" x="75" y="785" width="240" height="120"/>
+  <text class="sys-label" x="195" y="817" text-anchor="middle">Genie One MCP</text>
+  <text class="sys-text" x="195" y="844" text-anchor="middle">system.ai.genie_one_mcp</text>
+  <text class="sys-small" x="195" y="870" text-anchor="middle">genie_ask / poll / result / cancel</text>
+  <text class="sys-small" x="195" y="892" text-anchor="middle">Default question backend</text>
+
+  <rect class="sys-cloud" x="340" y="785" width="240" height="120"/>
+  <text class="sys-label" x="460" y="817" text-anchor="middle">Model Services</text>
+  <text class="sys-text" x="460" y="844" text-anchor="middle">Cleanup SLM</text>
+  <text class="sys-text" x="460" y="868" text-anchor="middle">Optional hosted ASR</text>
+  <text class="sys-small" x="460" y="892" text-anchor="middle">Endpoint support must be detected</text>
+
+  <rect class="sys-cloud" x="605" y="785" width="275" height="120"/>
+  <text class="sys-label" x="742" y="817" text-anchor="middle">Lakebase</text>
+  <text class="sys-text" x="742" y="844" text-anchor="middle">Durable MOG memory</text>
+  <text class="sys-text" x="742" y="868" text-anchor="middle">SQL + optional vector recall</text>
+  <text class="sys-small" x="742" y="892" text-anchor="middle">TLS + rotated short-lived credential</text>
+
+  <rect class="sys-cloud" x="75" y="945" width="805" height="160"/>
+  <text class="sys-label" x="100" y="977">ALTERNATE BACKENDS BEHIND THE SAME ADAPTER</text>
+  <text class="sys-text" x="100" y="1007">Genie Agent mode / Genie One API — Beta, SSE, feature detected</text>
+  <text class="sys-text" x="100" y="1034">Per-space Genie MCP — Public Preview, feature detected</text>
+  <text class="sys-text" x="100" y="1061">Custom agent on Databricks Apps or Model Serving — separate auth + contract</text>
+  <text class="sys-small" x="100" y="1087">GA Genie space REST can be a fallback. Deprecated /api/2.0/mcp/genie is excluded.</text>
+
+  <rect class="sys-workspace" x="940" y="720" width="530" height="420"/>
+  <text class="sys-heading" x="965" y="754">DATABRICKS WORKSPACE B</text>
+  <text class="sys-text" x="965" y="780">Different CLI profile and trust domain</text>
+
+  <rect class="sys-cloud" x="970" y="815" width="220" height="105"/>
+  <text class="sys-label" x="1080" y="847" text-anchor="middle">Genie One MCP</text>
+  <text class="sys-text" x="1080" y="874" text-anchor="middle">Selected Genie backend</text>
+  <text class="sys-small" x="1080" y="898" text-anchor="middle">New conversation on switch</text>
+
+  <rect class="sys-cloud" x="1215" y="815" width="225" height="105"/>
+  <text class="sys-label" x="1327" y="847" text-anchor="middle">Lakebase</text>
+  <text class="sys-text" x="1327" y="874" text-anchor="middle">Separate memory endpoint</text>
+  <text class="sys-small" x="1327" y="898" text-anchor="middle">Cross-workspace sharing: explicit export only</text>
+
+  <rect class="sys-cloud" x="970" y="955" width="470" height="105"/>
+  <text class="sys-label" x="1205" y="987" text-anchor="middle">Model Services + Alternate Agents</text>
+  <text class="sys-text" x="1205" y="1014" text-anchor="middle">Same adapters; workspace-specific capabilities</text>
+  <text class="sys-small" x="1205" y="1040" text-anchor="middle">No token or conversation reuse across hosts</text>
+
+  <path class="sys-flow" d="M1105 625 V700 H195 V785"/>
+  <text class="sys-small" x="215" y="714">question + approved context; response + deep link</text>
+  <path class="sys-alt" d="M1105 700 H1080 V815"/>
+  <path class="sys-alt" d="M195 920 V945"/>
+  <path class="sys-alt" d="M1080 920 V955"/>
+
+  <path class="sys-alt" d="M635 470 V498 H460 V785"/>
+  <text class="sys-small" x="472" y="775">cleanup text / optional ASR audio</text>
+
+  <path class="sys-bidir" d="M1340 625 V700 H742 V785"/>
+  <text class="sys-small" x="755" y="714">approved memory records</text>
+  <path class="sys-alt" d="M1340 700 H1327 V815"/>
+
+  <text class="sys-small" x="60" y="1162">Architecture rule: a workspace switch changes the default for new work only. An active conversation, its polling and its results remain on the original workspace.</text>
+</svg>

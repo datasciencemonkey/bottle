@@ -1,0 +1,39 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node / build output
+node_modules/
+dist/
+build/
+target/
+
+# Rive CLI build output (rebuild with `rive mog-rive --publish`)
+mog-rive/build/
+*.riv
+*.rev
+
+# Logs and temp files
+*.log
+tmp/
+.cache/
+
+# Secrets: never commit tokens or local config
+.env
+.env.*
+*.pem
+*.key
+.databrickscfg
+secrets/
+
+# Claude Code local state
+.claude/settings.local.json

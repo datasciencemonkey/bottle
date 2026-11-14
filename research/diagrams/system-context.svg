@@ -1,0 +1,286 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 1200 1516" width="1200" height="1516" role="img" aria-labelledby="title desc" font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+<title id="title">Diagram 1. System context: Bottle, MOGs and their main agents, the Databricks CLI, workspaces A and B, and optional Lakebase (v1)</title>
+<desc id="desc">The user talks to Bottle on one device. WebView windows (hub, MOG views with the Rive mascot, cards) send view_emit commands to the hidden brain window and get mog.view_state and card.update events back. The brain hosts the bottle-mcp tool server, the agent guardrails, the per-MOG agent action log and the classifier fallback. Each MOG has a main agent harness (Claude Agent SDK or Codex) that routes as its first step and calls bottle-mcp tools and Genie One MCP. Only the Rust core holds tokens and opens sockets. The MVP memory store is one local encrypted SQLite file (SQLCipher, WAL, FTS5, sqlite-vec) with an offline embedding queue. The Databricks CLI runs as a subprocess outside the secret boundary. Workspace A provides Unity Gateway models, the agent model route, Genie One MCP and UC Pages drafts. Workspace B provides Genie One MCP. Lakebase is an optional v1 sync target. The lower panels show the 8-step onboarding wizard and the MVP admin prerequisites.</desc>
+<defs>
+<marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#111827"/></marker>
+<style type="text/css"><![CDATA[
+text{font-size:13px;fill:#111827}
+.s{font-size:12px}
+.b{font-weight:700}
+.it{font-style:italic}
+.h{font-size:16px;font-weight:700}
+.halo{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
+]]></style>
+</defs>
+<rect x="0" y="0" width="1200" height="1516" fill="#FFFFFF"/>
+<text x="20" y="28" style="font-size:16px;font-weight:700">Diagram 1. System context: Bottle, MOGs, main agents, CLI, workspaces A / B, optional Lakebase (v1)</text>
+<rect x="20" y="90" width="120" height="40" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="80" y="114.7" text-anchor="middle" style="font-weight:700">User</text>
+<rect x="170" y="44" width="610" height="806" rx="4" fill="#EFF6FF" stroke="#1D4ED8" stroke-width="1.5"/>
+<text x="180" y="62" style="font-weight:700">Device (macOS 14.4+ first, Windows 11): Bottle app, one OS process</text>
+<polyline points="140,104 184,104" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="158" y="99" text-anchor="middle" style="font-size:11px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">talk</text>
+<text x="158" y="99" text-anchor="middle" style="font-size:11px">talk</text>
+<polyline points="184,120 142,120" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="158" y="136" text-anchor="middle" style="font-size:11px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">cards</text>
+<text x="158" y="136" text-anchor="middle" style="font-size:11px">cards</text>
+<polyline points="50,130 50,818 194,818" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="56" y="470" style="font-size:12px">speech</text>
+<polyline points="110,130 110,842 508,842 508,832" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="116" y="520" style="font-size:12px">talk key</text>
+<rect x="186" y="70" width="578" height="232" rx="4" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.5"/>
+<text x="196" y="88" style="font-weight:700">WebView windows (Tauri 2.12.5+): views get no secrets</text>
+<rect x="200" y="98" width="170" height="50" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="285" y="119.3" text-anchor="middle" style="font-size:12px;font-weight:700">V1 Hub</text>
+<text x="285" y="135.3" text-anchor="middle" style="font-size:11px">wizard, settings, tray menu</text>
+<rect x="384" y="98" width="170" height="50" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="469" y="119.3" text-anchor="middle" style="font-size:12px;font-weight:700">V2 MOG view × N</text>
+<text x="469" y="135.3" text-anchor="middle" style="font-size:11px">Rive mascot, ≤ 8 running</text>
+<rect x="568" y="98" width="182" height="50" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="659" y="119.3" text-anchor="middle" style="font-size:12px;font-weight:700">V3 Card view</text>
+<text x="659" y="135.3" text-anchor="middle" style="font-size:11px">blurbs, chips, previews</text>
+<rect x="200" y="188" width="550" height="104" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="475" y="210.3" text-anchor="middle" style="font-size:12px;font-weight:700">Hidden brain window (TS domain logic)</text>
+<text x="475" y="227.3" text-anchor="middle" style="font-size:11px">ConversationManager, MemoryService, ConsentService, ContextGate, MoodMapper</text>
+<text x="475" y="244.3" text-anchor="middle" style="font-size:11px">bottle-mcp server (BC4): transcript/search, memory recall + write,</text>
+<text x="475" y="261.3" text-anchor="middle" style="font-size:11px">show_blurb, set_mood, propose_page, ask_user</text>
+<text x="475" y="278.3" text-anchor="middle" style="font-size:11px">AgentGuard + per-MOG agent action log · T6 classifier = fallback router</text>
+<polyline points="330,148 330,186" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="324" y="172" text-anchor="end" style="font-size:11px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">view_emit (poked, chip_click …)</text>
+<text x="324" y="172" text-anchor="end" style="font-size:11px">view_emit (poked, chip_click …)</text>
+<polyline points="640,188 640,150" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="634" y="172" text-anchor="end" style="font-size:11px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">mog.view_state, card.update</text>
+<text x="634" y="172" text-anchor="end" style="font-size:11px">mog.view_state, card.update</text>
+<rect x="186" y="314" width="578" height="106" rx="4" fill="#F5F3FF" stroke="#6D28D9" stroke-width="1.5"/>
+<text x="196" y="332" style="font-size:12px;font-weight:700">Main agent per MOG (BC4), one harness process each</text>
+<text x="198" y="350" style="font-size:11px">Harness: Claude Agent SDK / Claude Code headless, or Codex SDK / CLI.</text>
+<text x="198" y="366" style="font-size:11px">First step = router. Decides when to ask Genie, use memory, draft a UC Page, summarise.</text>
+<text x="198" y="382" style="font-size:11px">MCP clients: bottle-mcp (local) and Genie One MCP (attached directly, token added in Rust).</text>
+<text x="198" y="398" style="font-size:11px">Never starts capture, approves context, publishes or hops without the user. UC1 bypasses it.</text>
+<polyline points="260,314 260,294" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<polyline points="290,294 290,314" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="296" y="309" style="font-size:11px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">MCP tools/call + results</text>
+<text x="296" y="309" style="font-size:11px">MCP tools/call + results</text>
+<rect x="200" y="432" width="400" height="26" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="400" y="449.3" text-anchor="middle" style="font-size:12px">R12 IpcGateway: schema check, no secret in a payload</text>
+<polyline points="400,292 400,314" fill="none" stroke="#111827" stroke-width="1.5"/>
+<polyline points="400,420 400,430" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<polyline points="616,420 616,470" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="624" y="441" style="font-size:10px">agent model + MCP calls</text>
+<text x="624" y="453" style="font-size:10px">via Rust loopback (ARC-7, RTR-27)</text>
+<rect x="186" y="470" width="578" height="230" rx="4" fill="#FFF7ED" stroke="#C2410C" stroke-width="1.5"/>
+<rect x="189" y="473" width="572" height="224" rx="3" fill="none" stroke="#DC2626" stroke-width="2" stroke-dasharray="6 4"/>
+<text x="196" y="488" style="font-weight:700">Rust core mog-core · secret boundary: no token crosses</text>
+<rect x="200" y="498" width="176" height="64" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="288" y="518.3" text-anchor="middle" style="font-size:12px;font-weight:700">Capture + SessionGuard</text>
+<text x="288" y="534.3" text-anchor="middle" style="font-size:11px">R1 hotkey, R2 mic lease,</text>
+<text x="288" y="550.3" text-anchor="middle" style="font-size:11px">R3 stop policy</text>
+<rect x="386" y="498" width="176" height="64" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="474" y="518.3" text-anchor="middle" style="font-size:12px;font-weight:700">R4 SttEngine</text>
+<text x="474" y="534.3" text-anchor="middle" style="font-size:11px">Parakeet v3 int8 (local);</text>
+<text x="474" y="550.3" text-anchor="middle" style="font-size:11px">cloud ASR via R7</text>
+<rect x="572" y="498" width="178" height="64" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="661" y="518.3" text-anchor="middle" style="font-size:12px;font-weight:700">R6 Token, R7 Http,</text>
+<text x="661" y="534.3" text-anchor="middle" style="font-size:11px">R8 McpTransport: token</text>
+<text x="661" y="550.3" text-anchor="middle" style="font-size:11px">per request, own host only</text>
+<rect x="200" y="572" width="362" height="118" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="381" y="603.3" text-anchor="middle" style="font-size:12px;font-weight:700">R10 LocalStore: MVP memory store (BC2)</text>
+<text x="381" y="619.3" text-anchor="middle" style="font-size:11px">one SQLite file, SQLCipher (key in OS keychain)</text>
+<text x="381" y="635.3" text-anchor="middle" style="font-size:11px">WAL mode, FTS5 keyword search, sqlite-vec vectors</text>
+<text x="381" y="651.3" text-anchor="middle" style="font-size:11px">embedding queue while offline; outbox for v1 sync</text>
+<text x="381" y="667.3" text-anchor="middle" style="font-size:11px">transcripts, answer cache 30 d, agent action log</text>
+<rect x="572" y="572" width="178" height="118" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="661" y="603.3" text-anchor="middle" style="font-size:12px;font-weight:700">R11 WindowHost</text>
+<text x="661" y="619.3" text-anchor="middle" style="font-size:11px">native REC indicator</text>
+<text x="661" y="635.3" text-anchor="middle" style="font-size:11px">and native consent</text>
+<text x="661" y="651.3" text-anchor="middle" style="font-size:11px">dialog; fail-closed,</text>
+<text x="661" y="667.3" text-anchor="middle" style="font-size:11px">never contentProtected</text>
+<rect x="560" y="714" width="190" height="70" rx="4" fill="#F3F4F6" stroke="#6B7280" stroke-width="1.2"/>
+<text x="655" y="732" text-anchor="middle" style="font-size:11px;font-weight:700">Databricks CLI ≥ 1.17</text>
+<text x="655" y="746" text-anchor="middle" style="font-size:10px">subprocess outside the</text>
+<text x="655" y="760" text-anchor="middle" style="font-size:10px">boundary; token cache in</text>
+<text x="655" y="774" text-anchor="middle" style="font-size:10px">keychain; installed after consent</text>
+<polyline points="620,700 620,712" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<polyline points="700,712 700,702" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="2 3" marker-end="url(#arw)"/>
+<text x="626" y="710" style="font-size:10px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">run</text>
+<text x="626" y="710" style="font-size:10px">run</text>
+<text x="706" y="711" style="font-size:10px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">token</text>
+<text x="706" y="711" style="font-size:10px">token</text>
+<rect x="186" y="792" width="578" height="50" rx="4" fill="#F3F4F6" stroke="#6B7280" stroke-width="1.5"/>
+<text x="196" y="810" style="font-size:12px;font-weight:700"></text>
+<text x="196" y="806" style="font-size:11px;font-weight:700">OS services</text>
+<rect x="196" y="808" width="92" height="24" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="242" y="824" text-anchor="middle" style="font-size:11px">Mic (You)</text>
+<rect x="294" y="808" width="170" height="24" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="379" y="824" text-anchor="middle" style="font-size:11px">System audio (MVP-M)</text>
+<rect x="470" y="808" width="76" height="24" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="508" y="824" text-anchor="middle" style="font-size:11px">Hotkeys</text>
+<rect x="552" y="808" width="80" height="24" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="592" y="824" text-anchor="middle" style="font-size:11px">Keychain</text>
+<rect x="638" y="808" width="112" height="24" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="694" y="824" text-anchor="middle" style="font-size:11px">Tray, notify</text>
+<polyline points="240,808 240,692" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="246" y="760" style="font-size:11px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">frames</text>
+<text x="246" y="760" style="font-size:11px">frames</text>
+<polyline points="378,808 378,692" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="384" y="760" style="font-size:11px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">Others</text>
+<text x="384" y="760" style="font-size:11px">Others</text>
+<polyline points="508,808 508,692" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="514" y="740" style="font-size:11px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">keys</text>
+<text x="514" y="740" style="font-size:11px">keys</text>
+<polyline points="592,808 592,786" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="2 3" marker-end="url(#arw)"/>
+<rect x="840" y="44" width="340" height="396" rx="4" fill="#FEF2F2" stroke="#B91C1C" stroke-width="1.5"/>
+<text x="850" y="62" style="font-weight:700">Workspace A (home profile)</text>
+<rect x="852" y="70" width="316" height="56" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="1010" y="86.3" text-anchor="middle" style="font-size:12px;font-weight:700">Unity Gateway model services</text>
+<text x="1010" y="102.3" text-anchor="middle" style="font-size:11px">POST /ai-gateway/mlflow/v1, system.ai.* names:</text>
+<text x="1010" y="118.3" text-anchor="middle" style="font-size:11px">ASR, cleanup, classifier, writer, judge, embed</text>
+<rect x="852" y="134" width="316" height="56" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="1010" y="150.3" text-anchor="middle" style="font-size:12px;font-weight:700">Agent model route (BC4)</text>
+<text x="1010" y="166.3" text-anchor="middle" style="font-size:11px">&lt;host&gt;/ai-gateway/anthropic, user identity;</text>
+<text x="1010" y="182.3" text-anchor="middle" style="font-size:11px">or a local model; cloud agent execution is v1</text>
+<rect x="852" y="198" width="316" height="56" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="1010" y="214.3" text-anchor="middle" style="font-size:12px;font-weight:700">Genie One MCP (GA, default backend)</text>
+<text x="1010" y="230.3" text-anchor="middle" style="font-size:11px">/ai-gateway/mcp-services/system.ai.</text>
+<text x="1010" y="246.3" text-anchor="middle" style="font-size:11px">genie_one_mcp?o=&lt;workspace_id A&gt;</text>
+<rect x="852" y="262" width="316" height="78" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="1010" y="281.3" text-anchor="middle" style="font-size:12px;font-weight:700">UC Pages (Beta, BC3)</text>
+<text x="1010" y="297.3" text-anchor="middle" style="font-size:11px">POST /api/2.0/knowledge/pages {domain:</text>
+<text x="1010" y="313.3" text-anchor="middle" style="font-size:11px">"domains/&lt;id&gt;", display_name, body, synonyms</text>
+<text x="1010" y="329.3" text-anchor="middle" style="font-size:11px">≤ 50, state "DRAFT"} + request_id; owner = user</text>
+<rect x="852" y="348" width="316" height="38" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="1010" y="363.5" text-anchor="middle" style="font-size:11px">v1: genie_agent REST, custom_agent App;</text>
+<text x="1010" y="378.5" text-anchor="middle" style="font-size:11px">per-space Genie MCP is not an MVP backend</text>
+<rect x="852" y="394" width="316" height="36" rx="4" fill="#FFFBEB" stroke="#B45309" stroke-width="1.2"/>
+<text x="1010" y="409" text-anchor="middle" style="font-size:11px">Genie One reads DRAFT pages only in the</text>
+<text x="1010" y="423" text-anchor="middle" style="font-size:11px">owner's own conversations (BC3)</text>
+<rect x="840" y="454" width="340" height="92" rx="4" fill="#FEF2F2" stroke="#B91C1C" stroke-width="1.5"/>
+<text x="850" y="472" style="font-weight:700">Workspace B (target profile)</text>
+<rect x="852" y="480" width="316" height="56" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="1010" y="496.3" text-anchor="middle" style="font-size:12px;font-weight:700">Genie One MCP ?o=&lt;workspace_id B&gt;</text>
+<text x="1010" y="512.3" text-anchor="middle" style="font-size:11px">token B, own bucket (40 calls/min);</text>
+<text x="1010" y="528.3" text-anchor="middle" style="font-size:11px">conversations stay pinned to B</text>
+<rect x="840" y="560" width="340" height="104" rx="4" fill="#F0FDF4" stroke="#15803D" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="850" y="578" style="font-size:12px;font-weight:700">Lakebase (optional v1 target, BC2)</text>
+<rect x="852" y="586" width="316" height="68" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="1010" y="609" text-anchor="middle" style="font-size:11px">Per-user project in workspace A: multi-device</text>
+<text x="1010" y="624" text-anchor="middle" style="font-size:11px">sync, backup, team MOGs. Not an MVP admin</text>
+<text x="1010" y="639" text-anchor="middle" style="font-size:11px">prerequisite. MVP memory stays in R10.</text>
+<rect x="840" y="678" width="340" height="74" rx="4" fill="#F3F4F6" stroke="#6B7280" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="850" y="696" style="font-weight:700">Browser / IdP</text>
+<rect x="852" y="704" width="316" height="38" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
+<text x="1010" y="719.5" text-anchor="middle" style="font-size:11px">SSO, OAuth U2M via databricks auth login;</text>
+<text x="1010" y="734.5" text-anchor="middle" style="font-size:11px">scopes include ai-gateway and knowledge</text>
+<polyline points="750,530 812,530" fill="none" stroke="#111827" stroke-width="2.5"/>
+<polyline points="812,98 812,530" fill="none" stroke="#111827" stroke-width="2.5"/>
+<polyline points="812,98 850,98" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<polyline points="812,162 850,162" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<polyline points="812,226 850,226" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<polyline points="812,300 850,300" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<polyline points="812,508 850,508" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="768" y="548" style="font-size:10px">TLS 443;</text>
+<text x="768" y="560" style="font-size:10px">each token</text>
+<text x="768" y="572" style="font-size:10px">to its own</text>
+<text x="768" y="584" style="font-size:10px">host only</text>
+<polyline points="764,640 850,620" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="770" y="656" style="font-size:11px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">v1 TLS 5432</text>
+<text x="770" y="656" style="font-size:11px">v1 TLS 5432</text>
+<polyline points="750,770 796,770 796,722 850,722" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="800" y="784" style="font-size:11px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">auth login</text>
+<text x="800" y="784" style="font-size:11px">auth login</text>
+<text x="20" y="882" style="font-weight:700">Onboarding: 8-step resumable wizard in V1 Hub (MB-07). After a failure, the next launch resumes at the first failed step.</text>
+<rect x="20" y="896" width="275" height="88" rx="4" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="157.5" y="928.3" text-anchor="middle" style="font-size:12px;font-weight:700">1 Notice (MB-08)</text>
+<text x="157.5" y="944.3" text-anchor="middle" style="font-size:11px">versioned legal notice;</text>
+<text x="157.5" y="960.3" text-anchor="middle" style="font-size:11px">no capture before accept</text>
+<polyline points="295,940 315,940" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<rect x="315" y="896" width="275" height="88" rx="4" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="452.5" y="928.3" text-anchor="middle" style="font-size:12px;font-weight:700">2 CLI (W-17, cli_install)</text>
+<text x="452.5" y="944.3" text-anchor="middle" style="font-size:11px">find CLI ≥ 1.17; else install the</text>
+<text x="452.5" y="960.3" text-anchor="middle" style="font-size:11px">official CLI only after consent</text>
+<polyline points="590,940 610,940" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<rect x="610" y="896" width="275" height="88" rx="4" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="747.5" y="928.3" text-anchor="middle" style="font-size:12px;font-weight:700">3 Profile</text>
+<text x="747.5" y="944.3" text-anchor="middle" style="font-size:11px">databricks auth login;</text>
+<text x="747.5" y="960.3" text-anchor="middle" style="font-size:11px">select the home profile</text>
+<polyline points="885,940 905,940" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<rect x="905" y="896" width="275" height="88" rx="4" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="1042.5" y="928.3" text-anchor="middle" style="font-size:12px;font-weight:700">4 Genie One probe</text>
+<text x="1042.5" y="944.3" text-anchor="middle" style="font-size:11px">initialize + tools/list;</text>
+<text x="1042.5" y="960.3" text-anchor="middle" style="font-size:11px">404: admin checklist (ADM-01/02)</text>
+<rect x="20" y="1000" width="275" height="88" rx="4" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="157.5" y="1016.3" text-anchor="middle" style="font-size:12px;font-weight:700">5 Memory (BC2, MEM-36)</text>
+<text x="157.5" y="1032.3" text-anchor="middle" style="font-size:11px">MVP: create the local SQLite store.</text>
+<text x="157.5" y="1048.3" text-anchor="middle" style="font-size:11px">v1 Lakebase: databricks postgres</text>
+<text x="157.5" y="1064.3" text-anchor="middle" style="font-size:11px">list-projects; 403, 404 or no region:</text>
+<text x="157.5" y="1080.3" text-anchor="middle" style="font-size:11px">local-only + admin checklist</text>
+<polyline points="295,1044 315,1044" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<rect x="315" y="1000" width="275" height="88" rx="4" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="452.5" y="1016.3" text-anchor="middle" style="font-size:12px;font-weight:700">6 STT (CAP-57)</text>
+<text x="452.5" y="1032.3" text-anchor="middle" style="font-size:11px">ASR probe: 22 requests, 10 s clip;</text>
+<text x="452.5" y="1048.3" text-anchor="middle" style="font-size:11px">pass if p95 ≤ 1.0 s, WER ≤ 10 %,</text>
+<text x="452.5" y="1064.3" text-anchor="middle" style="font-size:11px">all numbers exact; else local</text>
+<text x="452.5" y="1080.3" text-anchor="middle" style="font-size:11px">Parakeet. Re-probe every 7 d.</text>
+<polyline points="590,1044 610,1044" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<rect x="610" y="1000" width="275" height="88" rx="4" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="747.5" y="1032.3" text-anchor="middle" style="font-size:12px;font-weight:700">7 Hotkeys + permissions</text>
+<text x="747.5" y="1048.3" text-anchor="middle" style="font-size:11px">mic, Input Monitoring;</text>
+<text x="747.5" y="1064.3" text-anchor="middle" style="font-size:11px">talk key test</text>
+<polyline points="885,1044 905,1044" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<rect x="905" y="1000" width="275" height="88" rx="4" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="1042.5" y="1032.3" text-anchor="middle" style="font-size:12px;font-weight:700">8 First MOG</text>
+<text x="1042.5" y="1048.3" text-anchor="middle" style="font-size:11px">name, profile, mascot,</text>
+<text x="1042.5" y="1064.3" text-anchor="middle" style="font-size:11px">main agent harness (BC4)</text>
+<polyline points="1155,984 1155,992 40,992 40,998" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<rect x="20" y="1118" width="1160" height="196" rx="4" fill="#FEF2F2" stroke="#B91C1C" stroke-width="1.5"/>
+<text x="30" y="1136" style="font-weight:700">MVP admin prerequisites on the customer workspace (ADM, Section 10). Lakebase is not on this list (BC2).</text>
+<text x="30" y="1162" style="font-size:12px">ADM-01/02 Genie One on, partner-powered AI features on; EXECUTE</text>
+<text x="30" y="1182" style="font-size:12px">   on system.ai.genie_one_mcp, USE CATALOG system, USE SCHEMA system.ai</text>
+<text x="30" y="1202" style="font-size:12px">ADM-04/09 model services through Unity Gateway; cross-geo routing</text>
+<text x="30" y="1222" style="font-size:12px">   where Gemini needs it; inference tables off on the ASR service</text>
+<text x="30" y="1242" style="font-size:12px">ADM-07 genie_one_mcp MCP QPM &gt;= 40 per user, or no limit (fits the 40 calls/min bucket)</text>
+<text x="30" y="1262" style="font-size:12px">ADM-10 serverless SQL warehouse, CAN USE, 5-10 min auto-stop</text>
+<text x="30" y="1282" style="font-size:12px">ADM-11 IP access lists, PrivateLink DNS, /oidc/v1/*, proxy CA bundle</text>
+<text x="606" y="1162" style="font-size:12px">ADM-12/13 databricks-cli OAuth app on; CLI ≥ 1.17 via MDM (CliPath)</text>
+<text x="606" y="1182" style="font-size:12px">ADM-15 custom OAuth app scopes: ai-gateway, offline_access and</text>
+<text x="606" y="1202" style="font-size:12px">   knowledge (BC3), or all-apis; postgres only for v1 Lakebase</text>
+<text x="606" y="1222" style="font-size:12px">BC3: a UC domain exists for Pages (use its ID, not its name)</text>
+<text x="606" y="1242" style="font-size:12px">ADM-06 MDM keys · ADM-17 Genie and app=bottle budgets</text>
+<text x="606" y="1262" style="font-size:12px">ADM-18 legal pack before meeting sessions (MVP-M)</text>
+<text x="606" y="1282" style="font-size:12px">v1 / optional: ADM-03 (Lakebase, port 5432), -05, -08, -14, -16, -19</text>
+<rect x="20" y="1328" width="760" height="174" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1"/>
+<text x="30" y="1346" style="font-weight:700">Legend</text>
+<rect x="30" y="1356" width="24" height="14" rx="4" fill="#EFF6FF" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="60" y="1368" style="font-size:12px">Device zone</text>
+<rect x="410" y="1356" width="24" height="14" rx="4" fill="#FFF7ED" stroke="#C2410C" stroke-width="1.2"/>
+<rect x="412" y="1358" width="20" height="10" rx="1" fill="none" stroke="#DC2626" stroke-width="1.2" stroke-dasharray="3 2"/>
+<text x="440" y="1368" style="font-size:12px">Rust core (secret boundary)</text>
+<rect x="30" y="1378" width="24" height="14" rx="4" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.2"/>
+<text x="60" y="1390" style="font-size:12px">WebView window</text>
+<rect x="410" y="1378" width="24" height="14" rx="4" fill="#FEF2F2" stroke="#B91C1C" stroke-width="1.2"/>
+<text x="440" y="1390" style="font-size:12px">Databricks workspace</text>
+<rect x="30" y="1400" width="24" height="14" rx="4" fill="#F5F3FF" stroke="#6D28D9" stroke-width="1.2"/>
+<text x="60" y="1412" style="font-size:12px">Main agent harness (BC4)</text>
+<rect x="410" y="1400" width="24" height="14" rx="4" fill="#F3F4F6" stroke="#6B7280" stroke-width="1.2"/>
+<text x="440" y="1412" style="font-size:12px">OS services</text>
+<rect x="30" y="1422" width="24" height="14" rx="4" fill="#F0FDF4" stroke="#15803D" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="60" y="1434" style="font-size:12px">Lakebase (optional, v1)</text>
+<rect x="410" y="1422" width="24" height="14" rx="4" fill="#F3F4F6" stroke="#6B7280" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="440" y="1434" style="font-size:12px">Browser / IdP</text>
+<polyline points="30,1452 66,1452" fill="none" stroke="#111827" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="72" y="1456" style="font-size:12px">request / data</text>
+<polyline points="276.7,1452 312.7,1452" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+<text x="318.7" y="1456" style="font-size:12px">event / stream</text>
+<polyline points="523.3,1452 559.3,1452" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="2 3" marker-end="url(#arw)"/>
+<text x="565.3" y="1456" style="font-size:12px">credential fetch</text>
+<rect x="30" y="1466" width="24" height="14" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="60" y="1478" style="font-size:12px">v1 / optional (not in the MVP)</text>
+<rect x="410" y="1466" width="24" height="14" rx="4" fill="#FFFBEB" stroke="#B45309" stroke-width="1.2"/>
+<text x="440" y="1478" style="font-size:12px">note / rule</text>
+<text x="800" y="1344" style="font-size:12px">Diagram 1. System context. Only the Rust core holds</text>
+<text x="800" y="1361" style="font-size:12px">credentials and opens sockets. Views and the main</text>
+<text x="800" y="1378" style="font-size:12px">agent get no token. BCn = binding change n (message</text>
+<text x="800" y="1395" style="font-size:12px">board 19:37-19:40Z). MVP-M = meeting milestone.</text>
+<text x="800" y="1412" style="font-size:12px">IDs: MB-07, MB-08, W-17, MEM-36, CAP-57, ADM-01..19.</text>
+</svg>

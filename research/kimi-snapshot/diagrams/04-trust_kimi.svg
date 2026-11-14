@@ -1,0 +1,241 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1700" height="1700" viewBox="0 0 1700 1700" role="img" aria-labelledby="trust-title trust-desc">
+  <title id="trust-title">Motherbricks security trust boundaries and data classification</title>
+  <desc id="trust-desc">Motherbricks separates other desktop applications, a restricted WebView, the Databricks CLI, and a trusted native core. Sensitive audio stays on the device unless hosted transcription is selected. Transcripts go to cleanup only under policy. Questions and approved context go to Genie One MCP. Approved memory records move between an encrypted local cache and Lakebase. OAuth access tokens and Lakebase credentials remain in native process memory. Workspace leases go only to the selected workspace. A later Databricks Apps adapter uses a separate approved application-origin lease. The diagram classifies secrets, sensitive audio, business content, agentic memory and operational metadata and lists their required controls.</desc>
+  <defs>
+    <marker id="trust-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#264a73"/>
+    </marker>
+    <marker id="trust-arrow-alt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#925313"/>
+    </marker>
+    <style>
+      .trust-bg { fill: #ffffff; }
+      .trust-title { font: 700 28px Arial, Helvetica, sans-serif; fill: #14243a; }
+      .trust-subtitle { font: 16px Arial, Helvetica, sans-serif; fill: #40536b; }
+      .trust-heading { font: 700 18px Arial, Helvetica, sans-serif; fill: #14243a; }
+      .trust-label { font: 700 15px Arial, Helvetica, sans-serif; fill: #14243a; }
+      .trust-text { font: 13px Arial, Helvetica, sans-serif; fill: #263c56; }
+      .trust-small { font: 12px Arial, Helvetica, sans-serif; fill: #40536b; }
+      .trust-center { text-anchor: middle; }
+      .trust-device { fill: #f8fbff; stroke: #315f87; stroke-width: 2.5; rx: 18; }
+      .trust-core { fill: #f4faf4; stroke: #39733d; stroke-width: 2.5; rx: 16; }
+      .trust-restricted { fill: #fff8e8; stroke: #9a6716; stroke-width: 2; stroke-dasharray: 8 5; rx: 14; }
+      .trust-component { fill: #e8f3fb; stroke: #2c648c; stroke-width: 2; rx: 12; }
+      .trust-sensitive { fill: #fff1ec; stroke: #a44325; stroke-width: 2; rx: 12; }
+      .trust-secret { fill: #f1effb; stroke: #67549a; stroke-width: 2; rx: 12; }
+      .trust-cloud { fill: #fbfcfe; stroke: #66788c; stroke-width: 2.5; rx: 18; }
+      .trust-cloud-component { fill: #fff8e8; stroke: #9a6716; stroke-width: 2; rx: 12; }
+      .trust-flow { fill: none; stroke: #264a73; stroke-width: 2.3; marker-end: url(#trust-arrow); }
+      .trust-bidir { fill: none; stroke: #264a73; stroke-width: 2.3; marker-start: url(#trust-arrow); marker-end: url(#trust-arrow); }
+      .trust-alt { fill: none; stroke: #925313; stroke-width: 2.2; stroke-dasharray: 7 5; marker-end: url(#trust-arrow-alt); }
+      .trust-table { fill: #ffffff; stroke: #72869b; stroke-width: 1.4; }
+      .trust-table-head { fill: #e8f3fb; stroke: #72869b; stroke-width: 1.4; }
+    </style>
+  </defs>
+
+  <rect class="trust-bg" x="0" y="0" width="1700" height="1700"/>
+  <text class="trust-title" x="40" y="48">Motherbricks: trust boundaries and data flows</text>
+  <text class="trust-subtitle" x="40" y="78">The native core is the only component that handles tokens, Lakebase credentials, raw audio and unredacted IPC.</text>
+
+  <rect class="trust-device" x="30" y="105" width="1100" height="960"/>
+  <text class="trust-heading" x="55" y="138">TRUST BOUNDARY 1 — USER DEVICE / OS USER ACCOUNT</text>
+
+  <rect class="trust-restricted" x="60" y="165" width="280" height="220"/>
+  <text class="trust-label" x="80" y="196">Other apps + OS services</text>
+  <text class="trust-text" x="80" y="226">• Focused application for paste</text>
+  <text class="trust-text" x="80" y="252">• Meeting / call application</text>
+  <text class="trust-text" x="80" y="278">• Microphone + system audio</text>
+  <text class="trust-text" x="80" y="304">• Global hotkey events</text>
+  <text class="trust-small" x="80" y="340">External input is untrusted.</text>
+  <text class="trust-small" x="80" y="362">System audio needs explicit consent.</text>
+
+  <rect class="trust-restricted" x="60" y="425" width="280" height="250"/>
+  <text class="trust-label" x="80" y="456">Restricted WebView — MOG UI</text>
+  <text class="trust-text" x="80" y="486">Allowed:</text>
+  <text class="trust-text" x="80" y="512">• State + non-content audio level</text>
+  <text class="trust-text" x="80" y="538">• Transcript + response blurb</text>
+  <text class="trust-text" x="80" y="564">• Deep link + approved commands</text>
+  <text class="trust-small" x="80" y="600">Denied: bearer tokens, Lakebase credentials,</text>
+  <text class="trust-small" x="80" y="622">arbitrary IPC, hidden device control and raw</text>
+  <text class="trust-small" x="80" y="644">system audio. Use a strict IPC allowlist + CSP.</text>
+
+  <rect class="trust-restricted" x="60" y="715" width="280" height="175"/>
+  <text class="trust-label" x="80" y="746">Databricks CLI + profile store</text>
+  <text class="trust-text" x="80" y="776">OAuth U2M profiles only initially</text>
+  <text class="trust-text" x="80" y="802">CLI owns stored refresh tokens</text>
+  <text class="trust-text" x="80" y="828">Native core requests access tokens</text>
+  <text class="trust-small" x="80" y="860">Validate profile name, host and executable.</text>
+
+  <rect class="trust-restricted" x="60" y="925" width="280" height="105"/>
+  <text class="trust-label" x="80" y="956">Local diagnostics</text>
+  <text class="trust-text" x="80" y="984">Redacted events + error codes</text>
+  <text class="trust-small" x="80" y="1010">No token, audio or transcript by default.</text>
+
+  <rect class="trust-core" x="380" y="155" width="720" height="880"/>
+  <text class="trust-heading" x="405" y="188">TRUST BOUNDARY 2 — Motherbricks native core</text>
+
+  <rect class="trust-sensitive" x="410" y="220" width="200" height="130"/>
+  <text class="trust-label trust-center" x="510" y="251">Audio Capture</text>
+  <text class="trust-text trust-center" x="510" y="279">Mic + system tracks</text>
+  <text class="trust-text trust-center" x="510" y="303">VAD + hotkey lease</text>
+  <text class="trust-small trust-center" x="510" y="329">SENSITIVE AUDIO</text>
+
+  <rect class="trust-component" x="650" y="220" width="200" height="130"/>
+  <text class="trust-label trust-center" x="750" y="251">Cleanup Client</text>
+  <text class="trust-text trust-center" x="750" y="279">Pre-pass + SLM call</text>
+  <text class="trust-text trust-center" x="750" y="303">Meaning-preserving</text>
+  <text class="trust-small trust-center" x="750" y="329">BUSINESS CONTENT</text>
+
+  <rect class="trust-component" x="890" y="220" width="180" height="130"/>
+  <text class="trust-label trust-center" x="980" y="247">Backend Adapter</text>
+  <text class="trust-text trust-center" x="980" y="275">Context gate + Genie</text>
+  <text class="trust-text trust-center" x="980" y="299">Poll + cancel + blurb</text>
+  <text class="trust-small trust-center" x="980" y="329">CONTENT + METADATA</text>
+
+  <rect class="trust-sensitive" x="410" y="430" width="200" height="130"/>
+  <text class="trust-label trust-center" x="510" y="461">Local STT</text>
+  <text class="trust-text trust-center" x="510" y="489">Parakeet + VAD</text>
+  <text class="trust-text trust-center" x="510" y="513">Audio stays on device</text>
+  <text class="trust-small trust-center" x="510" y="539">AUDIO → TRANSCRIPT</text>
+
+  <rect class="trust-component" x="650" y="430" width="200" height="130"/>
+  <text class="trust-label trust-center" x="750" y="461">Memory Service</text>
+  <text class="trust-text trust-center" x="750" y="489">Scoped recall + writes</text>
+  <text class="trust-text trust-center" x="750" y="513">Provenance + retention</text>
+  <text class="trust-small trust-center" x="750" y="539">AGENTIC MEMORY</text>
+
+  <rect class="trust-secret" x="890" y="430" width="180" height="130"/>
+  <text class="trust-label trust-center" x="980" y="461">Token Broker</text>
+  <text class="trust-text trust-center" x="980" y="489">Refresh before expiry</text>
+  <text class="trust-text trust-center" x="980" y="513">Bind token to host</text>
+  <text class="trust-small trust-center" x="980" y="539">SECRET</text>
+
+  <rect class="trust-sensitive" x="410" y="650" width="300" height="175"/>
+  <text class="trust-label" x="430" y="681">Encrypted content + memory cache</text>
+  <text class="trust-text" x="430" y="711">Clean / raw transcript policy</text>
+  <text class="trust-text" x="430" y="737">Approved memory + embeddings</text>
+  <text class="trust-text" x="430" y="763">Genie IDs + provenance + deep links</text>
+  <text class="trust-small" x="430" y="799">OS-protected key; retention + deletion tombstones.</text>
+
+  <rect class="trust-secret" x="750" y="650" width="320" height="175"/>
+  <text class="trust-label" x="770" y="681">Volatile secret memory — never persisted</text>
+  <text class="trust-text" x="770" y="711">Workspace access token</text>
+  <text class="trust-text" x="770" y="737">Short-lived Lakebase credential</text>
+  <text class="trust-text" x="770" y="763">TLS-only authorization material</text>
+  <text class="trust-small" x="770" y="799">No WebView, configuration file, journal or log copy.</text>
+
+  <rect class="trust-sensitive" x="410" y="865" width="300" height="135"/>
+  <text class="trust-label" x="430" y="896">Optional encrypted audio journal</text>
+  <text class="trust-text" x="430" y="926">Crash-safe segments + track labels</text>
+  <text class="trust-text" x="430" y="952">Explicit meeting capture only</text>
+  <text class="trust-small" x="430" y="980">Retention, deletion and disk budget required.</text>
+
+  <rect class="trust-component" x="750" y="865" width="320" height="135"/>
+  <text class="trust-label" x="770" y="896">Policy + redaction boundary</text>
+  <text class="trust-text" x="770" y="926">Consent + context gate + host allowlist</text>
+  <text class="trust-text" x="770" y="952">Redact content and secrets from telemetry</text>
+  <text class="trust-small" x="770" y="980">Security failures block the affected operation.</text>
+
+  <path class="trust-flow" d="M340 265 H410"/>
+  <text class="trust-small" x="350" y="251">F1 audio + hotkey</text>
+  <path class="trust-flow" d="M510 350 V430"/>
+  <path class="trust-flow" d="M610 495 H630 V285 H650"/>
+  <text class="trust-small" x="614" y="408">raw transcript</text>
+  <path class="trust-flow" d="M850 285 H890"/>
+  <text class="trust-small" x="854" y="273">clean text</text>
+  <path class="trust-bidir" d="M850 495 H890"/>
+  <path class="trust-bidir" d="M610 737 H630 V495 H650"/>
+  <path class="trust-flow" d="M510 560 V650"/>
+  <path class="trust-flow" d="M510 560 V865" opacity="0.45"/>
+  <path class="trust-flow" d="M340 190 H360 V550 H340"/>
+  <text class="trust-small" x="72" y="410">Allowlisted IPC: commands / status / text / blurb; no secret or raw-audio channel.</text>
+  <path class="trust-flow" d="M340 790 H360 V495 H890"/>
+  <text class="trust-small" x="365" y="782">F7 access token</text>
+  <path class="trust-flow" d="M980 560 V650"/>
+  <path class="trust-flow" d="M980 650 V560" opacity="0.45"/>
+  <path class="trust-flow" d="M980 430 V350"/>
+  <path class="trust-flow" d="M890 737 H850 V495"/>
+  <path class="trust-flow" d="M750 915 H360 V960 H340"/>
+  <text class="trust-small" x="362" y="944">redacted events only</text>
+
+  <rect class="trust-cloud" x="1160" y="105" width="510" height="610"/>
+  <text class="trust-heading" x="1185" y="138">TRUST BOUNDARY 3 — WORKSPACE A</text>
+  <text class="trust-small" x="1185" y="161">Selected profile, user identity, workspace host and grants</text>
+
+  <rect class="trust-cloud-component" x="1190" y="185" width="450" height="105"/>
+  <text class="trust-label" x="1210" y="216">Genie One MCP — default</text>
+  <text class="trust-text" x="1210" y="243">Question + approved context; response + deep link</text>
+  <text class="trust-small" x="1210" y="270">No raw audio. Query rows only on explicit demand.</text>
+
+  <rect class="trust-cloud-component" x="1190" y="325" width="450" height="120"/>
+  <text class="trust-label" x="1210" y="356">Model Services</text>
+  <text class="trust-text" x="1210" y="383">Cleanup: transcript in / cleaned text out</text>
+  <text class="trust-text" x="1210" y="409">Optional hosted ASR: audio in / transcript out</text>
+  <text class="trust-small" x="1210" y="432">Endpoint support and inference logging must be verified.</text>
+
+  <rect class="trust-cloud-component" x="1190" y="480" width="450" height="105"/>
+  <text class="trust-label" x="1210" y="511">Lakebase — durable MOG memory</text>
+  <text class="trust-text" x="1210" y="538">Approved memory + embeddings + provenance</text>
+  <text class="trust-small" x="1210" y="565">TLS, least privilege, short-lived credential, retention + deletion.</text>
+
+  <rect class="trust-cloud-component" x="1190" y="615" width="450" height="75"/>
+  <text class="trust-label" x="1210" y="645">Alternate Genie / Custom Agent Backends</text>
+  <text class="trust-small" x="1210" y="672">Same content policy; adapter-specific auth and capabilities.</text>
+
+  <rect class="trust-cloud" x="1160" y="745" width="510" height="320"/>
+  <text class="trust-heading" x="1185" y="778">TRUST BOUNDARY 4 — WORKSPACE B</text>
+  <text class="trust-text" x="1185" y="809">Separate identity, grants, conversations and memory namespace.</text>
+  <rect class="trust-cloud-component" x="1190" y="840" width="450" height="165"/>
+  <text class="trust-label" x="1210" y="872">Genie One MCP + Lakebase + Model Services</text>
+  <text class="trust-text" x="1210" y="902">Reachable only after an explicit CLI profile selection.</text>
+  <text class="trust-text" x="1210" y="930">New conversations use B. Active A conversations stay on A.</text>
+  <text class="trust-text" x="1210" y="958">No automatic A-to-B content or memory replication.</text>
+  <text class="trust-small" x="1210" y="988">Cross-workspace recall or export needs a separate user policy.</text>
+
+  <path class="trust-flow" d="M1070 270 H1138 V237 H1190"/>
+  <text class="trust-small" x="1080" y="224">F4 TLS + Bearer</text>
+  <text class="trust-small" x="1080" y="253">question + context</text>
+
+  <path class="trust-alt" d="M510 220 V195 H1120 V380 H1190"/>
+  <text class="trust-small" x="540" y="185">F2 OPTIONAL HOSTED ASR — raw audio leaves the device</text>
+  <path class="trust-flow" d="M750 350 V390 H1135 V410 H1190"/>
+  <text class="trust-small" x="770" y="382">F3 cleanup transcript + TLS</text>
+
+  <path class="trust-bidir" d="M850 495 H1138 V532 H1190"/>
+  <text class="trust-small" x="870" y="484">F6 approved memory + TLS + Lakebase credential</text>
+  <path class="trust-alt" d="M1070 305 H1140 V905 H1190"/>
+  <text class="trust-small" x="1090" y="720" transform="rotate(90 1090 720)">explicit profile switch only</text>
+  <path class="trust-alt" d="M1070 330 H1148 V652 H1190"/>
+
+  <text class="trust-heading" x="40" y="1110">DATA CLASSIFICATION AND REQUIRED CONTROLS</text>
+
+  <rect class="trust-table-head" x="40" y="1135" width="230" height="50"/>
+  <rect class="trust-table-head" x="270" y="1135" width="410" height="50"/>
+  <rect class="trust-table-head" x="680" y="1135" width="410" height="50"/>
+  <rect class="trust-table-head" x="1090" y="1135" width="570" height="50"/>
+  <text class="trust-label" x="55" y="1166">Data class</text>
+  <text class="trust-label" x="285" y="1166">Examples</text>
+  <text class="trust-label" x="695" y="1166">Allowed storage / flow</text>
+  <text class="trust-label" x="1105" y="1166">Required controls</text>
+
+  <rect class="trust-table" x="40" y="1185" width="230" height="86"/><rect class="trust-table" x="270" y="1185" width="410" height="86"/><rect class="trust-table" x="680" y="1185" width="410" height="86"/><rect class="trust-table" x="1090" y="1185" width="570" height="86"/>
+  <text class="trust-label" x="55" y="1216">Secret</text><text class="trust-text" x="285" y="1216">OAuth access token; Lakebase credential;</text><text class="trust-text" x="695" y="1216">CLI refresh-token store; native volatile</text><text class="trust-text" x="1105" y="1216">TLS; host binding; least privilege; expiry checks;</text>
+  <text class="trust-small" x="55" y="1242">SECRET</text><text class="trust-small" x="285" y="1242">CLI-owned refresh token; cache encryption key</text><text class="trust-small" x="695" y="1242">memory; OS-protected cache key</text><text class="trust-small" x="1105" y="1242">never in UI, config, audio journal, telemetry or crash dump</text>
+
+  <rect class="trust-table" x="40" y="1271" width="230" height="96"/><rect class="trust-table" x="270" y="1271" width="410" height="96"/><rect class="trust-table" x="680" y="1271" width="410" height="96"/><rect class="trust-table" x="1090" y="1271" width="570" height="96"/>
+  <text class="trust-label" x="55" y="1302">Sensitive audio</text><text class="trust-text" x="285" y="1302">Microphone; system / loopback audio;</text><text class="trust-text" x="695" y="1302">Capture; local STT; optional encrypted</text><text class="trust-text" x="1105" y="1302">Explicit start + persistent indicator; participant consent;</text>
+  <text class="trust-small" x="55" y="1328">SENSITIVE</text><text class="trust-small" x="285" y="1328">crash-safe audio segments and track labels</text><text class="trust-small" x="695" y="1328">journal; hosted ASR only when selected</text><text class="trust-small" x="1105" y="1328">track separation; retention + disk cap; never sent to Genie</text>
+
+  <rect class="trust-table" x="40" y="1367" width="230" height="106"/><rect class="trust-table" x="270" y="1367" width="410" height="106"/><rect class="trust-table" x="680" y="1367" width="410" height="106"/><rect class="trust-table" x="1090" y="1367" width="570" height="106"/>
+  <text class="trust-label" x="55" y="1398">Business content</text><text class="trust-text" x="285" y="1398">Raw / clean transcript; question; context;</text><text class="trust-text" x="695" y="1398">Restricted UI; encrypted cache; selected</text><text class="trust-text" x="1105" y="1398">Context gate; workspace pinning; inference-log review;</text>
+  <text class="trust-text" x="285" y="1424">Genie answer; optional query rows</text><text class="trust-text" x="695" y="1424">cleanup, Genie or custom agent under policy</text><text class="trust-text" x="1105" y="1424">minimum necessary context; query rows on demand</text>
+  <text class="trust-small" x="55" y="1450">CONTENT</text><text class="trust-small" x="1105" y="1450">No hidden meeting upload; no cross-workspace reuse by default</text>
+
+  <rect class="trust-table" x="40" y="1473" width="230" height="96"/><rect class="trust-table" x="270" y="1473" width="410" height="96"/><rect class="trust-table" x="680" y="1473" width="410" height="96"/><rect class="trust-table" x="1090" y="1473" width="570" height="96"/>
+  <text class="trust-label" x="55" y="1504">Agentic memory</text><text class="trust-text" x="285" y="1504">Approved facts, preferences, summaries;</text><text class="trust-text" x="695" y="1504">Encrypted local cache + selected Lakebase;</text><text class="trust-text" x="1105" y="1504">User + MOG + workspace namespace; provenance;</text>
+  <text class="trust-small" x="55" y="1530">CONTENT</text><text class="trust-small" x="285" y="1530">embeddings, source IDs, timestamps, retention</text><text class="trust-small" x="695" y="1530">durable synchronization after local commit</text><text class="trust-small" x="1105" y="1530">write policy; retention; tombstones; export + delete controls</text>
+
+  <rect class="trust-table" x="40" y="1569" width="230" height="96"/><rect class="trust-table" x="270" y="1569" width="410" height="96"/><rect class="trust-table" x="680" y="1569" width="410" height="96"/><rect class="trust-table" x="1090" y="1569" width="570" height="96"/>
+  <text class="trust-label" x="55" y="1600">Operational metadata</text><text class="trust-text" x="285" y="1600">Profile / workspace host; MOG, conversation</text><text class="trust-text" x="695" y="1600">Native core; UI as needed; redacted local</text><text class="trust-text" x="1105" y="1600">Treat identifiers as sensitive; redact tokens and content;</text>
+  <text class="trust-small" x="55" y="1626">METADATA</text><text class="trust-small" x="285" y="1626">and response IDs; timestamps; status; latency</text><text class="trust-small" x="695" y="1626">diagnostics; encrypted cache for recovery IDs</text><text class="trust-small" x="1105" y="1626">bounded log retention; no content telemetry by default</text>
+</svg>
