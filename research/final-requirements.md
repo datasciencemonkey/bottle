@@ -1,6 +1,6 @@
 # Mother Databricks: Bottle and MOGs, end-to-end requirements
 
-**Document control.** Version 1.3 · Date 2026-11-15 · Status: decision-complete; user confirmations U1-U14 applied · Owner: requirements editor (Mother Databricks workflow) · Language: ASD-STE100 Simplified Technical English, Issue 9 · Single source of truth: this file supersedes REQUIREMENTS.md v0.2, MOG_RECOMMENDATIONS.md and all team round outputs where they conflict. Version 1.1 applies the binding rename to **Bottle** (B0), the user's binding changes B1-B5 (Section 12.0), the miss-finder cross-check of diagrams 01-09 and the ste-checker report. Version 1.2 makes local Parakeet the PTT default and Databricks ASR a probe-gated opt-in (CAP-57c, CAP-57e, D17, COL-97). Version 1.3 applies the user confirmations U1-U14 (Section 12.0b): no automatic deletion of user content (manual Wipe), one shared agent runtime, a home domain for each MOG, the companion position to Genie One, the public name MOG and the new mascot direction (COL-98..COL-103).
+**Document control.** Version 1.3 · Date 2026-11-15 · Status: decision-complete; user confirmations U1-U15 applied · Owner: requirements editor (Mother Databricks workflow) · Language: ASD-STE100 Simplified Technical English, Issue 9 · Single source of truth: this file supersedes REQUIREMENTS.md v0.2, MOG_RECOMMENDATIONS.md and all team round outputs where they conflict. Version 1.1 applies the binding rename to **Bottle** (B0), the user's binding changes B1-B5 (Section 12.0), the miss-finder cross-check of diagrams 01-09 and the ste-checker report. Version 1.2 makes local Parakeet the PTT default and Databricks ASR a probe-gated opt-in (CAP-57c, CAP-57e, D17, COL-97). Version 1.3 applies the user confirmations U1-U15 (Section 12.0b): no automatic deletion of user content (manual Wipe), one shared agent runtime, a home domain for each MOG, the companion position to Genie One, the public name MOG and the new mascot direction (COL-98..COL-104).
 
 **Inputs.** Director decisions D1-D84 (`research/director-decisions.md`), the binding user decisions B0-B5 of 2026-11-14 (message board, 19:25Z-19:40Z), the collision register COL-01..COL-46 plus C53-C82, the architect catalogue (178 rows) amended by D53-D84, team specifications (verifier, architect, genie-integration, memory-lakebase, security-governance, desktop-audio, ux-mascot, collision-analyst), the Kimi baseline (AT-01..AT-22) and the connector specification of 2026-11-14.
 
@@ -1044,6 +1044,8 @@ In this section, **the bridge** is GenieBridge in the brain together with the Mc
 | W-07a | M | MVP-D | The "Connect a workspace" dialog must ask the user for the workspace URL. | The app never guesses a URL. | T · AT-02 | v0.2 W-3 | ALL |
 | W-07b | M | MVP-D | The "Connect a workspace" dialog must check the URL domain against the Databricks domain list. | A non-Databricks domain is refused. | T · AT-02 | v0.2 W-3 | ALL |
 | W-07c | M | MVP-D | ProfileService must run `databricks auth login --host <url> --profile <name>` in the background. | The sign-in times out after 5 min. | T · AT-02 | v0.2 W-3 | ALL |
+| W-07d | M | MVP-D | At first run, ProfileService must list the `databricks-cli` profiles from `databricks auth profiles` and let the user select one or more to connect. Each selected profile becomes one connected workspace. | With 3 valid profiles, the user connects 2 and the hub shows 2 workspaces; setup does not finish with 0 connected workspaces. | T · AT-02 | U15 | ALL |
+| W-07e | M | MVP-D | Settings must let the user connect more profiles, add a workspace with "Connect a workspace" (W-07a..c) and disconnect a profile. | Disconnecting a profile leaves `~/.databrickscfg` unchanged (W-08). | T · AT-02 | U15 | ALL |
 | W-08 | M | MVP-D | ProfileService must not change a profile that exists, and its host in particular. | `~/.databrickscfg` is unchanged after setup. | I · AT-02 | v0.2 W-3, SG-AUTH-6 | ALL |
 | W-09 | M | MVP-D | CliRunner must run the CLI with a clean env that removes `DATABRICKS_TOKEN`, `DATABRICKS_HOST`, `DATABRICKS_CLIENT_*` and `DATABRICKS_AUTH_TYPE`. | Only PATH, HOME, config, proxy and CA variables remain. | T · AT-17 | v0.2 W-7, SG-AUTH-4 | ALL |
 | W-10a | M | MVP-D | If `databricks auth describe` shows plaintext token storage, the hub must show a warning that stops the use of the profile. | The app never reads the CLI token cache directly. | T · AT-02 | D39, SG-AUTH-5 | ALL |
@@ -1377,6 +1379,7 @@ Binding change B3: Bottle detects business definitions in transcripts and propos
 | NFR-14b | M | MVP-D | The shell must not need `macOSPrivateApi`. | The config has no `macOSPrivateApi` unless SP-01 fails. | I · AT-22 | D32 | ALL |
 | NFR-15a | M | MVP-D | The release process must sign and notarize the macOS DMG. | The signing review passes. | I · AT-22 | D32 | ALL |
 | NFR-15b | M | MVP-D | The release process must sign the Windows MSIX or NSIS installer. | The signing review passes. | I · AT-22 | D32 | ALL |
+| NFR-15c | M | MVP-D | The release process must publish the signed macOS and Windows installers on a download page that needs no Databricks sign-in. | A user without a workspace account can download the installer; the page shows the SHA-256 of each file. | I · AT-22 | U15 | ALL |
 | NFR-15c | M | MVP-D | The release process must not make a Mac App Store build. | No MAS target exists. | I · AT-22 | D32 | ALL |
 | NFR-16a | M | MVP-D | The app must use `@rive-app/webgl2` or `@rive-app/canvas` as SP-01 decides. | The lockfile has one of the two. | I · AT-37 | D32, D73 | ALL |
 | NFR-16b | M | MVP-D | The app must not use `@rive-app/webgl`. | The lockfile has no `@rive-app/webgl`. | I · AT-37 | D32 | ALL |
@@ -1882,7 +1885,7 @@ These decisions come from the user through the orchestrator. They override every
 | B4 | 19:39:49Z | **MOG brain:** each MOG has a main agent (Claude or Codex harness; model through the Databricks AI Gateway with the user's identity, or local; cloud execution v1). `bottle-mcp` gives the agent the local tools; Genie One MCP is attached directly. The agent can never start capture, approve outbound context, publish Pages or switch workspace without a user action or approval. Dictation bypasses the agent. Actions are logged per MOG. The router becomes the agent's first step, with a cheap classifier as a fallback. | RTR-01..RTR-30 (main agent rows RTR-21a..RTR-30), R16, R17, T15, ARC-7, SEC-23, UX-41, NFR-03d, SP-19, AT-42. Amends D25 and D33 (loopback proxies keep tokens in Rust). |
 | B5 | 19:40:08Z | **Three core use cases:** UC1 dictation (local STT, cleanup on Databricks, insert into the active app; no agent, no Genie; raw-text fallback at the cleanup deadline); UC2 Q&A (main agent, local memory, Genie One MCP, progress, blurb, deep link, follow-ups); UC3 send context to Genie (preview and approval) and draft UC Pages. Meeting recording feeds UC2 and UC3 and is required for the MVP. | UC column and Section 5.0, scenarios SC-1..SC-8, flows F1-F7, insertion is M / MVP-D (MOG-06a..d, CAP-37), intent `dictation` (RTR-01b). Amends D18 and D70. |
 
-### 12.0b User confirmations (2026-11-15)
+### 12.0b User confirmations (2026-11-15, U1-U15)
 
 These answers come from the user. They settle the `CONFIRM WITH USER` badges in Section 12 for the decisions named. Where a badge and a U row differ, the U row applies.
 
@@ -1902,6 +1905,7 @@ These answers come from the user. They settle the `CONFIRM WITH USER` badges in 
 | U12 | B3, PG-18..PG-20 | **A home domain for each MOG** in each workspace; the user can change it for one draft in the review card. |
 | U13 | D41, D80, COL-40 | The public name is **MOG** (Gen Z "mog": to dominate; the "mother of all genies"). The user accepts the trademark risk of USPTO 99762439. |
 | U14 | D64, COL-39 | **Mascot:** super cute and endearing, looking out of Genie's lamp, as an extension of the Databricks Genie logo. Needs Databricks brand approval before external release. Supersedes the "no lamp, no smoke tail, no Genie lockups" rule. |
+| U15 | D23 | **Audience:** Databricks customers, internal users and partners. The user downloads the desktop app and connects it to one or more Databricks CLI profiles; each profile maps to one workspace. |
 
 ### 12.1 Director decisions D1-D84
 
@@ -1931,7 +1935,7 @@ Status values: **Active**, **Amended** (the amendment shows in the same row), **
 | D20 | Many MOGs, one mic | One CaptureService owner; global PTT to last-focused MOG; one session at a time; panic key. | Active (refined by D63) | |
 | D21 | Platforms | macOS 14.4+ first, Windows 11 second, Linux best effort; no mobile or web. | Active | (with D1) |
 | D22 | Plugin relationship | Port with MIT attribution now; offer Sathish a shared contract later. | Active | **Confirmed (user instruction 2026-11-13)** |
-| D23 | Audience | Databricks users with the CLI and Genie One; internal and field first, customers later. | Active | **`CONFIRM WITH USER`** |
+| D23 | Audience | Databricks customers, internal users and partners. **Amended by U15.** | Amended by U15 | **Confirmed (U15)** |
 | D24 | Genie latency | Blurb acknowledgement < 1 s; first progress ≤ 5 s; typical 30-90 s; notification when ready. | Amended by D68 | |
 | D25 | Router | SLM classifier with a flat strict json_schema; intents question, memory_question, context, command, noise. **Amended by B4/B5:** the router is the first step of the main agent and the fallback classifier; intent `dictation` added. | Amended by D63, D69, B4, B5 | |
 | D26 | Deliverable | One self-contained HTML in ASD-STE100 with inline SVG, collisions, decisions and traceability. | Active | |
@@ -2107,6 +2111,7 @@ COL-01..COL-46 is the collision-analyst consolidated register (merging C1-C52, a
 | COL-101 | U9 no auto-delete vs D36 purges, D60 30 d answers, legal and storage | Data grows without limit; legal teams may ask for fixed periods. | Manual Wipe (30 d / 90 d / everything); security data keeps its expiry; MDM can still lock a Wipe policy in v1 if legal asks. | U9 | Med | RES | user 2026-11-15 |
 | COL-102 | U14 mascot from the Genie logo vs SEC-22a v1.2 and D41 "original mascot" | Genie logo artwork is a Databricks brand asset. | SEC-22a and UX-10b rewritten; brand approval before external release. | U14 | Med | AR | user 2026-11-15 |
 | COL-103 | U3 "Genie One shows the same content" vs unverified MCP conversation visibility | MCP conversations may not list in the Genie One desktop history. | Verify in SP-20b with a live U2M token; if they do not list, the blurb deep link stays the route. | U3 | Low | SPIKE (SP-20) | user 2026-11-15 |
+| COL-104 | U15 customers and partners from the first release vs "internal and field first" (D23), brand approval (U14, SEC-22b) and the MOG trademark (U13) | External users get the first release, so the brand and trademark gates apply to the MVP release, not later. | SEC-22b brand approval and a trademark check are release gates for the first public download (NFR-15c); internal builds can ship before them. | U13, U14, U15 | Med | AR | user 2026-11-15 |
 
 ---
 
@@ -2355,7 +2360,7 @@ There is **no mobile or web client** on the roadmap.
 
 **Existential questions: none (D83).** CLI auth works with Genie One MCP (verified), the Beta end of life is avoided, the overlap with Genie One desktop is a positioning risk, D50 sets the consent rules, the MVP memory needs no Lakebase (B2), and the main agent has a fallback classifier (B4).
 
-**Questions for user confirmation:** settled on 2026-11-15 by U1-U14 (Section 12.0b). Open work is only spikes: SP-20 (with a live U2M token: scopes `knowledge` and `domains`, DRAFT grounding, MCP conversations in Genie One), SP-10, SP-18, SP-09 and the device spikes. Probe 2026-11-15 (PAT): `GET /api/2.0/knowledge/pages` works; `GET /api/2.0/domains` works.
+**Questions for user confirmation:** settled on 2026-11-15 by U1-U15 (Section 12.0b). Open work is only spikes: SP-20 (with a live U2M token: scopes `knowledge` and `domains`, DRAFT grounding, MCP conversations in Genie One), SP-10, SP-18, SP-09 and the device spikes. Probe 2026-11-15 (PAT): `GET /api/2.0/knowledge/pages` works; `GET /api/2.0/domains` works.
 
 | Risk | Impact | Mitigation | Owner |
 |---|---|---|---|
