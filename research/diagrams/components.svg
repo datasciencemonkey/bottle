@@ -16,7 +16,7 @@ text{font-size:13px;fill:#111827}
 <rect x="0" y="0" width="1200" height="1480" fill="#FFFFFF"/>
 <text x="20" y="28" style="font-size:16px;font-weight:700">Diagram 2. Components: views, hidden brain, main agents, Rust core, IPC boundary (35 components: V1-V3, T1-T15, R1-R17)</text>
 <rect x="20" y="44" width="784" height="986" rx="4" fill="#EFF6FF" stroke="#1D4ED8" stroke-width="1.5"/>
-<text x="30" y="62" style="font-weight:700">Device: Bottle (one OS process; agent harnesses are child processes)</text>
+<text x="30" y="62" style="font-weight:700">Device: Bottle (one OS process; one shared agent runtime child)</text>
 <rect x="36" y="70" width="752" height="330" rx="4" fill="#DBEAFE" stroke="#1D4ED8" stroke-width="1.5"/>
 <text x="46" y="88" style="font-weight:700">WebView windows (Tauri 2.12.5+): thin views + hidden brain, no secrets</text>
 <rect x="70" y="96" width="170" height="46" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
@@ -113,7 +113,7 @@ text{font-size:13px;fill:#111827}
 <text x="654" y="156" text-anchor="end" style="font-size:11px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">mog.view_state, card.update</text>
 <text x="654" y="156" text-anchor="end" style="font-size:11px">mog.view_state, card.update</text>
 <rect x="36" y="400" width="564" height="112" rx="4" fill="#F5F3FF" stroke="#6D28D9" stroke-width="1.5"/>
-<text x="46" y="418" style="font-size:12px;font-weight:700">Main agent harness × N (one per MOG, BC4)</text>
+<text x="46" y="418" style="font-size:12px;font-weight:700">Main agent runtime: 1 process, N sessions (U11)</text>
 <text x="46" y="436" style="font-size:11px">Claude Agent SDK / Claude Code headless, or Codex SDK / CLI.</text>
 <text x="46" y="452" style="font-size:11px">First step = router; T6 classifier is the fallback when the agent is</text>
 <text x="46" y="468" style="font-size:11px">not available. Model via &lt;host&gt;/ai-gateway/anthropic, or local.</text>
@@ -167,7 +167,7 @@ text{font-size:13px;fill:#111827}
 <text x="116" y="702.3" text-anchor="middle" style="font-size:11px">SQLite + SQLCipher,</text>
 <text x="116" y="718.3" text-anchor="middle" style="font-size:11px">WAL, FTS5, sqlite-vec</text>
 <rect x="196" y="660" width="136" height="76" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
-<text x="264" y="686.3" text-anchor="middle" style="font-size:12px;font-weight:700">R14 Retention</text>
+<text x="264" y="686.3" text-anchor="middle" style="font-size:12px;font-weight:700">R14 Wipe</text>
 <text x="264" y="702.3" text-anchor="middle" style="font-size:11px">local: start, every 6 h;</text>
 <text x="264" y="718.3" text-anchor="middle" style="font-size:11px">remote: 1st conn./day</text>
 <rect x="344" y="660" width="136" height="76" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
@@ -200,7 +200,7 @@ text{font-size:13px;fill:#111827}
 <text x="708" y="816.3" text-anchor="middle" style="font-size:11px">token, Mcp-Session-Id</text>
 <rect x="344" y="856" width="136" height="76" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
 <text x="412" y="882.3" text-anchor="middle" style="font-size:12px;font-weight:700">R16 AgentHost</text>
-<text x="412" y="898.3" text-anchor="middle" style="font-size:11px">harness child per MOG,</text>
+<text x="412" y="898.3" text-anchor="middle" style="font-size:11px">one session per MOG,</text>
 <text x="412" y="914.3" text-anchor="middle" style="font-size:11px">no token, action log</text>
 <rect x="492" y="856" width="136" height="76" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
 <text x="560" y="882.3" text-anchor="middle" style="font-size:11px;font-weight:700">R17 BottleMcpServer</text>

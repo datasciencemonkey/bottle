@@ -53,7 +53,7 @@ text{font-size:13px;fill:#111827}
 <text x="634" y="172" text-anchor="end" style="font-size:11px;fill:#FFFFFF" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" aria-hidden="true">mog.view_state, card.update</text>
 <text x="634" y="172" text-anchor="end" style="font-size:11px">mog.view_state, card.update</text>
 <rect x="186" y="314" width="578" height="106" rx="4" fill="#F5F3FF" stroke="#6D28D9" stroke-width="1.5"/>
-<text x="196" y="332" style="font-size:12px;font-weight:700">Main agent per MOG (BC4), one harness process each</text>
+<text x="196" y="332" style="font-size:12px;font-weight:700">Main agent per MOG (BC4), one shared runtime</text>
 <text x="198" y="350" style="font-size:11px">Harness: Claude Agent SDK / Claude Code headless, or Codex SDK / CLI.</text>
 <text x="198" y="366" style="font-size:11px">First step = router. Decides when to ask Genie, use memory, draft a UC Page, summarise.</text>
 <text x="198" y="382" style="font-size:11px">MCP clients: bottle-mcp (local) and Genie One MCP (attached directly, token added in Rust).</text>
@@ -89,7 +89,7 @@ text{font-size:13px;fill:#111827}
 <text x="381" y="619.3" text-anchor="middle" style="font-size:11px">one SQLite file, SQLCipher (key in OS keychain)</text>
 <text x="381" y="635.3" text-anchor="middle" style="font-size:11px">WAL mode, FTS5 keyword search, sqlite-vec vectors</text>
 <text x="381" y="651.3" text-anchor="middle" style="font-size:11px">embedding queue while offline; outbox for v1 sync</text>
-<text x="381" y="667.3" text-anchor="middle" style="font-size:11px">transcripts, answer cache 30 d, agent action log</text>
+<text x="381" y="667.3" text-anchor="middle" style="font-size:11px">transcripts, answers until Wipe, agent action log</text>
 <rect x="572" y="572" width="178" height="118" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
 <text x="661" y="603.3" text-anchor="middle" style="font-size:12px;font-weight:700">R11 WindowHost</text>
 <text x="661" y="619.3" text-anchor="middle" style="font-size:11px">native REC indicator</text>

@@ -96,7 +96,7 @@ text{font-size:13px;fill:#111827}
 <text x="492.5" y="670.3" text-anchor="middle" style="font-size:11px">embeds them on</text>
 <text x="492.5" y="686.3" text-anchor="middle" style="font-size:11px">reconnect (BC2)</text>
 <rect x="590" y="590" width="165" height="120" rx="4" fill="#FFFFFF" stroke="#111827" stroke-width="1.2"/>
-<text x="672.5" y="606.3" text-anchor="middle" style="font-size:12px;font-weight:700">R14 Retention</text>
+<text x="672.5" y="606.3" text-anchor="middle" style="font-size:12px;font-weight:700">R14 Wipe</text>
 <text x="672.5" y="622.3" text-anchor="middle" style="font-size:10px">(D36, MEM-33)</text>
 <text x="672.5" y="638.3" text-anchor="middle" style="font-size:10px">local: at start and</text>
 <text x="672.5" y="654.3" text-anchor="middle" style="font-size:10px">every 6 h; remote</text>
@@ -233,7 +233,7 @@ text{font-size:13px;fill:#111827}
 <text x="1060" y="1013.3" text-anchor="middle" style="font-size:11px">Lakebase; tell the user that</text>
 <text x="1060" y="1029.3" text-anchor="middle" style="font-size:11px">local transcripts are lost.</text>
 <text x="1060" y="1045.3" text-anchor="middle" style="font-size:11px">Without sync: no rebuild source.</text>
-<text x="30" y="1086" style="font-size:12px">Push = W6/W7 (outbox FIFO, MEM-11a..d; forget ≤ 1 min, MEM-11d). Remote retention runs on the first connection each day under an advisory lock (MEM-33).</text>
+<text x="30" y="1086" style="font-size:12px">Push = W6/W7 (outbox FIFO, MEM-11a..d; forget ≤ 1 min, MEM-11d). A user Wipe runs remotely on the next connection under an advisory lock (MEM-33).</text>
 <text x="30" y="1106" style="font-size:12px">Hop rule stays: A answers get summary + key numbers + pointer, B answers a pointer only (MEM-25a..c, D60).</text>
 <rect x="20" y="1150" width="1160" height="92" rx="4" fill="#FFFBEB" stroke="#B45309" stroke-width="1.2"/>
 <text x="28" y="1168.3" style="font-size:12px">W1 sources go to the MemoryWriter · W2 the writer SLM runs on the home profile · W3 items get embeddings · W4 commit to R10 first</text>

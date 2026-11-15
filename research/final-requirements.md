@@ -1,6 +1,6 @@
 # Mother Databricks: Bottle and MOGs, end-to-end requirements
 
-**Document control.** Version 1.2 · Date 2026-11-14 · Status: decision-complete, items flagged for user confirmation · Owner: requirements editor (Mother Databricks workflow) · Language: ASD-STE100 Simplified Technical English, Issue 9 · Single source of truth: this file supersedes REQUIREMENTS.md v0.2, MOG_RECOMMENDATIONS.md and all team round outputs where they conflict. Version 1.1 applies the binding rename to **Bottle** (B0), the user's binding changes B1-B5 (Section 12.0), the miss-finder cross-check of diagrams 01-09 and the ste-checker report. Version 1.2 makes local Parakeet the PTT default and Databricks ASR a probe-gated opt-in (CAP-57c, CAP-57e, D17, COL-97).
+**Document control.** Version 1.3 · Date 2026-11-15 · Status: decision-complete; user confirmations U1-U14 applied · Owner: requirements editor (Mother Databricks workflow) · Language: ASD-STE100 Simplified Technical English, Issue 9 · Single source of truth: this file supersedes REQUIREMENTS.md v0.2, MOG_RECOMMENDATIONS.md and all team round outputs where they conflict. Version 1.1 applies the binding rename to **Bottle** (B0), the user's binding changes B1-B5 (Section 12.0), the miss-finder cross-check of diagrams 01-09 and the ste-checker report. Version 1.2 makes local Parakeet the PTT default and Databricks ASR a probe-gated opt-in (CAP-57c, CAP-57e, D17, COL-97). Version 1.3 applies the user confirmations U1-U14 (Section 12.0b): no automatic deletion of user content (manual Wipe), one shared agent runtime, a home domain for each MOG, the companion position to Genie One, the public name MOG and the new mascot direction (COL-98..COL-103).
 
 **Inputs.** Director decisions D1-D84 (`research/director-decisions.md`), the binding user decisions B0-B5 of 2026-11-14 (message board, 19:25Z-19:40Z), the collision register COL-01..COL-46 plus C53-C82, the architect catalogue (178 rows) amended by D53-D84, team specifications (verifier, architect, genie-integration, memory-lakebase, security-governance, desktop-audio, ux-mascot, collision-analyst), the Kimi baseline (AT-01..AT-22) and the connector specification of 2026-11-14.
 
@@ -89,7 +89,7 @@ The MVP is complete only when **both** milestones pass end to end on a physical 
 > - (v1) Genie agents and custom agents on Databricks Apps;
 > - memory per MOG that follows the MOG across workspaces.
 >
-> Bottle discloses that Genie One keeps its own memory. "Forget" in Bottle offers a link to review Genie One memories. **CONFIRM WITH USER** (D40/D61).
+> Bottle discloses that Genie One keeps its own memory. "Forget" in Bottle offers a link to review Genie One memories. **Confirmed (U3).**
 
 ---
 
@@ -239,7 +239,7 @@ The scenarios replace v0.2 Scenarios 1-5 as the collision-analyst audit requires
 3. The badge changes to "sales-ws · Genie One". The banner reads "Asking in sales-ws. Context from prod-finance is not shared." [W-20, UX-39a]
 4. New questions start a new conversation in sales-ws. Open conversations stay in their old workspace and are parked for 30 min. [W-12a, G-26c, G-26d, G-27a]
 5. STT, cleanup, the router step, the main agent model and memory still use the home profile. The UI discloses this. [W-21a, W-21b, SEC-17]
-6. The local store keeps the full answer for 30 d. With v1 Lakebase sync, Lakebase stores only a pointer for answers from sales-ws. [MEM-26, MEM-25c]
+6. The local store keeps the full answer until the user selects Wipe. With v1 Lakebase sync, Lakebase stores only a pointer for answers from sales-ws. [MEM-26, MEM-25c]
 
 ### SC-6 UC2: One question across workspaces (v1)
 
@@ -290,7 +290,7 @@ Bottle runs on one device. Only the Rust core holds credentials and talks to the
 | ARC-4 | Tauri v2 capabilities are scoped per window label. No window gets `http`, `shell`, `fs` or network plugins. CSP: `default-src 'self'; connect-src ipc: http://ipc.localhost; script-src 'self' 'wasm-unsafe-eval'`. | ARC-4 |
 | ARC-5 | Streams (level, partial text) use `tauri::ipc::Channel`. Low-rate notifications use events with `emit_to(label, …)`. | ARC-5 |
 | ARC-6 | **No Databricks token, Lakebase credential, SQLCipher key or journal key crosses IPC or the C ABI.** Commands take profile names, route IDs and statement IDs, not URLs or headers. | D33, ARC-6 |
-| ARC-7 | The AgentHost starts one harness child process for each active MOG. The harness gets three loopback endpoints with a per-session secret: `bottle-mcp`, the Genie One MCP proxy and the model proxy. The Rust core adds the token to each proxied call and applies the bridge rules (G-04a..G-20b). The harness never gets a token [U: SP-19]. | B4, D33 |
+| ARC-7 | The AgentHost starts one shared harness runtime (U11) and opens one session for each active MOG; sessions share no conversation state. The harness gets three loopback endpoints with a per-session secret: `bottle-mcp`, the Genie One MCP proxy and the model proxy. The Rust core adds the token to each proxied call and applies the bridge rules (G-04a..G-20b). The harness never gets a token [U: SP-19]. | B4, D33 |
 
 ### 4.3 Components (35)
 
@@ -315,7 +315,7 @@ Bottle runs on one device. Only the Rust core holds credentials and talks to the
 | R11 | WindowHost | Hub, MOG windows, cards, tray, native recording indicator (fail-closed, never `contentProtected`), the native window of the consent dialog (the logic is T12), cap of 8 active MOGs, per-display positions, `insert_text` paste. |
 | R12 | IpcGateway | Capability check per window label, JSON Schema validation (`deny_unknown_fields`), secret scrubbing for payloads, logs and errors. |
 | R13 | PolicyStore | MDM and admin keys (Appendix C) and the telemetry gate (D42). |
-| R14 | RetentionScheduler | D36 purge jobs: local at start and every 6 h, (v1) remote on the first connection each day, and the audio deletion deadline. |
+| R14 | WipeService | Deletes user content only when the user selects Wipe in Settings (older than 30 d, older than 90 d, or everything); (v1) applies the same selection to Lakebase on the next connection. Also runs the content-free security expiries: the audio deletion deadline, log rotation and consent records (U9). |
 | R15 | mog-core-ffi | C ABI: `mog_init`, `mog_call` (JSON in, JSON out), `mog_set_event_callback`, `mog_abi_version`. |
 | R16 | AgentHost | Starts and stops the harness child process of each active MOG (Claude or Codex), gives it the loopback endpoints and a per-session secret, gives it no token, writes the content-free agent action log. |
 | R17 | BottleMcpServer | The `bottle-mcp` server on loopback: `transcript.search`, `memory.recall`, `memory.write` (through R10), and the UI tools `show_blurb`, `set_mood`, `propose_page`, `ask_user` (relayed to the brain as `agent.tool_call`). No tool starts capture, approves context, publishes or switches the workspace. Model proxy to `/ai-gateway/…` with the token. |
@@ -512,7 +512,7 @@ export interface MemoryService {
     Promise<{ verdict: 'answer_from_memory'|'augment'|'pass'; hits: MemoryHit[]; tier: 'local'|'remote' /* remote = v1 */; degraded?: 'offline_fts_only'|'lakebase_timeout' }>;
   assembleContext(mogId: MogId, target: { workspaceId: string }, question: string): ContextPreamble | null;
   write(drafts: MemoryDraft[]): Promise<void>;          // local first, then outbox
-  recordExchange(x: GenieExchange): Promise<void>;      // D60: summary + key numbers + pointer; full answer local 30 d
+  recordExchange(x: GenieExchange): Promise<void>;      // D60/U8: summary + key numbers + pointer; full answer local until Wipe
   forget(scope: { sessionId?: string; mogId?: MogId; itemIds?: string[] }): Promise<{ local: number; remotePending: number; pitrWindowS: number }>;
   mode(): 'local'|'local_synced'|'sync_paused'; syncStatus(): { pending: number; lastOk?: string };   // MVP = 'local' (B2)
 }
@@ -595,7 +595,7 @@ Columns: **ID** · **Pri** (M/S/C) · **Phase** · **Requirement** · **Acceptan
 | MB-07 | M | MVP-D | The hub must run an 8-step wizard that resumes at the first failed step. | Steps: notice, CLI, profile, Genie One probe, local memory, STT, talk key and permissions (Input Monitoring, optional Accessibility for insertion), first MOG. | D · AT-01 | D82, UX-ONB-1, B2, B5 | ALL |
 | MB-08a | M | MVP-D | The hub must show the versioned legal notice before the first capture. | No capture occurs before the user accepts the current version. | T · AT-24 | D50, SG-CON-1, UX-CON-1/2 | ALL |
 | MB-08b | M | MVP-D | When the notice version increases, the hub must show the notice again before the next capture. | A version change blocks capture until the user accepts it. | T · AT-24 | D50, UX-CON-2 | ALL |
-| MB-09 | S | v1 | The hub must show a history of utterances, routes, conversations and blurbs with a filter for each MOG. | History obeys the D36 retention periods. | D · AT-01 | v0.2 MB-5 | ALL |
+| MB-09 | S | v1 | The hub must show a history of utterances, routes, conversations and blurbs with a filter for each MOG. | History obeys the Wipe selection (U9). | D · AT-01 | v0.2 MB-5 | ALL |
 | MB-10a | M | MVP-D | The app must use the product name "Bottle". | No UI text or package metadata contains "Mother Bricks" or "Motherbricks". | I · AT-37 | B0 (binding rename), D41, D80 | ALL |
 | MB-10b | M | MVP-D | The app must show the label "Databricks Labs / experimental". | The label shows in About and in the hub title bar. | I · AT-37 | D41 | ALL |
 | MB-10c | M | MVP-D | The UI must use "MOG" only as a UI noun. | No package or bundle ID contains "MOG". | I · AT-37 | D41 | ALL |
@@ -890,7 +890,7 @@ Binding change B4 replaces the fixed rule-based router. Each MOG has a **main ag
 | RTR-19 | M | MVP-D | The router step must receive no memory text. | Router input holds only the utterance, track, mode, topic labels and profile list. | I · AT-17 | GL-7.1 | UC2 |
 | RTR-20a | M | MVP-D | The router, cleanup, ASR and writer model calls must not use tools or function calls. | Inspection of each request shows no `tools` field. | I · AT-17 | SG-INJ-2 | ALL |
 | RTR-20b | M | MVP-D | The router step must only propose actions. | The router step cannot turn context on or pick a profile outside `AllowedWorkspaceHosts`. | I · AT-17 | SG-INJ-2 | UC2 |
-| RTR-21a | M | MVP-D | The MogManager must run one main agent for each active MOG. | 3 active MOGs show 3 agent sessions. | T · AT-42 | B4 | UC2 |
+| RTR-21a | M | MVP-D | The AgentHost must run one shared agent runtime (one sidecar process) with one main-agent session for each active MOG. | 3 active MOGs show 1 runtime process and 3 agent sessions; a crash of one session does not stop the others. | T · AT-42 | B4, U11 | UC2 |
 | RTR-21b | M | MVP-D | The main agent must decide when to call Genie One MCP, the memory tools, the Page tool and the UI tools. | The agent log shows each decision with its tool name. | T · AT-42 | B4 | UC2 |
 | RTR-22 | M | MVP-D | The AgentHost must operate with two harness kinds: Claude (Claude Agent SDK or Claude Code headless) and Codex (Codex SDK or CLI). | Each harness passes the AT-42 tool-contract test [U: SP-19]. | T · AT-42 | B4 | UC2 |
 | RTR-23 | M | MVP-D | The main agent must use a model through the Databricks AI Gateway with the user's identity, or a local model. | The Claude harness uses `ANTHROPIC_BASE_URL=<host>/ai-gateway/anthropic`; usage rows show the user. | T · AT-42 | B4 | UC2 |
@@ -1013,7 +1013,7 @@ In this section, **the bridge** is GenieBridge in the brain together with the Mc
 | G-46b | M | MVP-D | The bridge must replay the outbox in FIFO order for each conversation, one ask at a time. | The workspace line shows again before each replay. | T · AT-04 | ARC-F7 | UC2 |
 | G-47 | M | MVP-D | The question sanitizer must remove control, zero-width and bidi characters, code fences, HTML and markdown links. | The sanitized text has none of these. | T · AT-17 | SG-INJ-6 | UC2 |
 | G-48 | C | v2 | The `genie_agent` backend must offer `agent_mode` as a "deep analysis" action. | Agent mode uses chat on 404 `FEATURE_DISABLED`. | T · AT-11 | D28, GL-1b | UC2 |
-| G-49 | S | v1 | The bridge must delete a `genie_agent` conversation with `DELETE …/conversations/{cid}` when its memory retention ends. | Deleted conversations do not list. | T · AT-16 | GL-3, D36 | UC2 |
+| G-49 | S | v1 | When the user selects Wipe with "Also delete Genie conversations", the bridge must delete the matching `genie_agent` conversations with `DELETE …/conversations/{cid}`. | Deleted conversations do not list. | T · AT-16 | GL-3, D36, U9 | UC2 |
 | G-50 | S | v1 | The bridge must give each split part its own `genie_exchange` row with a shared `split_group_id`. | The merged card links to each part. | T · AT-12 | GL-6 | UC2 |
 | G-51 | M | MVP-M | The MOG must let the user select transcript lines, a meeting summary or memory items as context for Genie. | Each selection becomes a preview, not a send. | T · AT-41 | B1, B5 (UC3) | UC3 |
 | G-52 | M | MVP-M | The card must show a preview of the selected context and the question before the send. | The preview shows the exact text and the target workspace. | T · AT-41 | B5 (UC3), D29 | UC3 |
@@ -1137,7 +1137,7 @@ Binding change B2: the MVP memory store is one local encrypted SQLite file for e
 | MEM-25a | M | MVP-D | LocalStore must store each Genie exchange with its summary, key numbers and pointer. | Each exchange row has the 3 parts. | I · AT-16 | D37, D60, B2 | UC2 |
 | MEM-25b | C | v1 | For the home workspace, the SyncWorker must send only `answer_summary` (600 chars or less), key numbers and a pointer to Lakebase. | Full storage needs user opt-in and MDM `CrossWorkspaceAnswerStorage`. | I · AT-16 | D37, D60 | UC2 |
 | MEM-25c | C | v1 | For other workspaces, the SyncWorker must send only a pointer to Lakebase. | No answer text from workspace B is in Lakebase. | I · AT-16 | D37, D60 | UC2 |
-| MEM-26 | M | MVP-D | LocalStore must keep the full `final_answer_md` for 30 d. | The answer is gone after 30 d. | T · AT-16 | D37, D60 | UC2 |
+| MEM-26 | M | MVP-D | LocalStore must keep the full `final_answer_md` until the user selects Wipe. | The answer is present after 400 d without a Wipe; "older than 30 d" removes it. | T · AT-16 | D37, D60, U8, U9 | UC2 |
 | MEM-27a | M | MVP-M | LocalStore must keep full transcripts on the device. | No transcript text leaves the device for storage. | T · AT-28 | D15, MEM-L9, C-SG2 | MTG |
 | MEM-27b | C | v1 | The SyncWorker must send transcripts only when the user selects transcript sync for the MOG and MDM sets `TranscriptSyncAllowed=true`. | A change of the setting to off deletes the remote utterances. | T · AT-28 | D15, C-SG2 | MTG |
 | MEM-28a | M | MVP-M | The MemoryWriter must run on each trigger of Table MEM-WRITE. | Items appear at each trigger. | T · AT-28 | MEM-W1 | MTG |
@@ -1154,8 +1154,8 @@ Binding change B2: the MVP memory store is one local encrypted SQLite file for e
 | MEM-32c | M | MVP-D | When the user selects Forget, the bridge must delete the Genie conversations that the MOG created where an API permits it. | Else the dialog offers "Delete in Genie One". | T · AT-16 | D36, D76 | UC2 |
 | MEM-32d | M | MVP-D | The Forget dialog must link to the Genie One memory review. | The link opens the review page. | T · AT-16 | D61 | UC2 |
 | MEM-32e | C | v1 | If Lakebase sync is on, the Forget dialog must show the PITR window (172800 s). | The value comes from the project. | T · AT-16 | D72 | UC2 |
-| MEM-33a | M | MVP-D | The RetentionScheduler must apply the D36 periods in the local store at start and every 6 h. | Expired rows are gone after the next run. | T · AT-16 | D36, MEM-X2 | ALL |
-| MEM-33b | C | v1 | The RetentionScheduler must apply the D36 periods in Lakebase on the first connection each day under an advisory lock. | Expired remote rows are gone after the next run. | T · AT-16 | D36, MEM-X3 | UC2 |
+| MEM-33a | M | MVP-D | The WipeService must delete user content only when the user selects Wipe in Settings. The options are: older than 30 d, older than 90 d, everything. | No transcript, answer, memory item or dictation history row is deleted without a Wipe action; each option deletes only the matching rows; "everything" leaves an empty store. | T · AT-16 | U9 | ALL |
+| MEM-33b | C | v1 | When the user selects Wipe, the WipeService must apply the same selection in Lakebase on the next connection under an advisory lock. | The matching remote rows are gone after the next connection. | T · AT-16 | U9, MEM-X3 | UC2 |
 | MEM-34a | M | MVP-D | The Rust core must run only statements from the fixed catalogs. | `mem_local_exec` rejects an unknown `stmtId`. | T · AT-17 | D33, MEM-C1 | ALL |
 | MEM-34b | M | MVP-D | The brain must never send SQL. | No IPC payload contains SQL text. | T · AT-17 | D33 | ALL |
 | MEM-35a | M | MVP-D | Memory migrations must run forward-only. | No down migration exists. | T · AT-18 | MEM-D | UC2 |
@@ -1195,6 +1195,9 @@ Binding change B3: Bottle detects business definitions in transcripts and propos
 | PG-15 | M | MVP-D | The PageService must write a content-free audit entry for each Pages API call. | Entries hold IDs, sizes and hashes only. | I · AT-41 | B3, SEC-23 | UC3 |
 | PG-16 | S | v1 | The PageService must let the user request publication from the domain Page Manager or Domain Admin. | The request goes to the domain owner. | T · AT-41 | B3 | UC3 |
 | PG-17 | S | v1 | The PageService must check for conflicts before it updates a Page that exists. | A conflict shows a diff for review. | T · AT-41 | B3 | UC3 |
+| PG-18 | M | MVP-D | Each MOG must have one home domain for each workspace, set at MOG setup. The PageService must create drafts in the home domain. | A draft from the MOG goes to its home domain without a domain prompt. | T · AT-41 | U12 | UC3 |
+| PG-19 | M | MVP-D | The Page review card must let the user change the domain for one draft before approval. | The changed domain applies to that draft only. | T · AT-41 | U12 | UC3 |
+| PG-20 | M | MVP-D | The domain picker must list domains with `GET /api/2.0/domains` (Beta, scope `domains`). If the call fails (for example, no MANAGE DISCOVER permission), the picker must accept a domain ID or a Catalog Explorer URL that the user pastes. | A user without MANAGE DISCOVER can set a home domain by pasting its ID. | T · AT-41 | U12, COL-100 | UC3 |
 
 ### 5.9 SEC: Security, consent and governance
 
@@ -1230,7 +1233,7 @@ Binding change B3: Bottle detects business definitions in transcripts and propos
 | SEC-13c | M | MVP-D | The app must not recognise emotion. | No emotion field exists in any store. | I · AT-37 | D50, SG-CON-5 | ALL |
 | SEC-14a | M | MVP-M | The MOG must offer "Stop and delete this session" while the session records, while it pauses and for 24 h after the stop. | Delete removes local audio, transcript, items, exchanges and Genie conversations where possible. | T · AT-16 | SG-CON-7, UX-CON-20 | MTG |
 | SEC-14b | M | MVP-M | The delete dialog must show the confirm text of Section 9.3. | The text matches. | T · AT-16 | UX-CON-20 | MTG |
-| SEC-15a | M | MVP-D | The RetentionScheduler must apply the D36 retention periods. | The Section 9.2 table passes. | T · AT-16 | D36 | ALL |
+| SEC-15a | M | MVP-D | The WipeService must apply the Section 9.2 table: user content only on a Wipe action, content-free security data on its expiry. | The Section 9.2 table passes. | T · AT-16 | D36, U9 | ALL |
 | SEC-15b | M | MVP-D | ConsentService must keep consent records for 13 months. | A 14-month record is gone. | T · AT-16 | D36 | ALL |
 | SEC-15c | M | MVP-D | If an admin policy and a user setting differ, PolicyStore must apply the admin policy. | The settings UI shows the lock. | T · AT-16 | D36 | ALL |
 | SEC-16a | M | MVP-D | The telemetry exporter must stay off until an admin sets `OtlpTable`. | No OTLP traffic occurs without `OtlpTable`. | T · AT-17 | D42 | ALL |
@@ -1243,7 +1246,7 @@ Binding change B3: Bottle detects business definitions in transcripts and propos
 | SEC-20b | M | MVP-D | The installer must check each downloaded artefact against a pinned SHA-256. | A changed hash stops the install. | T · AT-37 | C76 | ALL |
 | SEC-21a | M | MVP-D | Ported files must keep the MIT notice of antigravity-bricks-plugin (commit a31fd2c). | Inspection finds the header in each ported file. | I · AT-37 | D22, SG-LIC-3/4 | ALL |
 | SEC-21b | M | MVP-D | About and THIRD_PARTY_NOTICES must show the CC-BY-4.0, Apache-2.0 and MIT notices of Section 20. | Inspection finds every notice. | I · AT-37 | SG-LIC-3/4 | ALL |
-| SEC-22a | M | MVP-D | The mascot must not show a lamp, a smoke tail, a blue genie, a Codex likeness or Databricks or Genie lockups. | The art review finds none of these. | I · AT-37 | D41, D64, SG-LIC-1 | ALL |
+| SEC-22a | M | MVP-D | The mascot must be an original, cute character that looks out of a lamp drawn as an extension of the Databricks Genie logo. It must not show a Codex likeness. Use of Genie logo artwork must have Databricks brand approval before any release outside the team. | The art review finds no Codex likeness; the brand approval record exists before an external build. | I · AT-37 | D41, D64, U14 | ALL |
 | SEC-22b | M | MVP-D | The release process must get a brand review sign-off before an external release. | The sign-off exists before release. | I · AT-37 | D64 | ALL |
 | SEC-23 | M | MVP-D | The app must write a content-free audit entry for each ask, context send, Page call, agent action and sync. | Entries hold IDs, sizes and hashes only. | I · AT-08 | Kimi SEC-017, B3, B4 | ALL |
 | SEC-24a | M | MVP-D | The MemoryWriter must quarantine items with imperative text that targets the assistant. | Patterns such as "ignore previous" quarantine the item. | T · AT-17 | SG-INJ-7 | UC3 |
@@ -1282,7 +1285,7 @@ Binding change B3: Bottle detects business definitions in transcripts and propos
 | UX-09a | M | MVP-D | The MOG view must use the Rive `DrawOnChanged` mode. | An idle MOG draws no frames. | T · AT-21 | UX-RIVE-9 | ALL |
 | UX-09b | M | MVP-D | If Rive does not load, the MOG must show a static PNG for each mood. | The PNG fallback shows all 7 moods. | T · AT-21 | UX-RIVE-10, CAP-WIN-10 | ALL |
 | UX-10a | M | MVP-D | The art owner must replace `Tail/Wisp` with a hover pad or small feet. | The new `.riv` has no tail node. | I · AT-37 | D64, UX-RIVE-6, C71 | ALL |
-| UX-10b | M | MVP-D | The art owner must move the hue of the mascot off FF3621. | No fill uses FF3621. | I · AT-37 | D64 | ALL |
+| UX-10b | M | MVP-D | The art owner must use colours from the approved Databricks Genie brand palette for the lamp and the mascot. | The brand review accepts the palette. | I · AT-37 | D64, U14 | ALL |
 | UX-10c | M | MVP-D | The art owner must review the brick torso with the brand team. | The review record exists. | I · AT-37 | D64 | ALL |
 | UX-10d | M | MVP-D | The art change must keep the view model unchanged. | The new `.riv` passes the SEC-22a review with the old bindings. | I · AT-37 | D64 | ALL |
 | UX-11a | M | MVP-D | The card must show 3 blurbs or less, with the newest on top. | Older blurbs go to History with "N more in History". | T · AT-09 | D82, UX-BL-1..3 | UC2 |
@@ -1746,26 +1749,28 @@ The full matrix is in Appendix B. Summary rules:
 - Telemetry stays off until an admin sets `OtlpTable`. [SEC-16a]
 - Side effects outside the app: `system.ai_gateway.usage` logs (no content); FMAPI abuse store up to 30 d; Genie history, `system.access.audit` and `system.query.history`; Genie One server-side memory. [SEC-17]
 
-### 9.2 Retention (D36 + D60 + D72)
+### 9.2 Retention (D36 + D60 + D72, amended by U9)
+
+**U9:** Bottle deletes no user content automatically. In Settings, the user selects **Wipe** and one option: older than 30 d, older than 90 d, or everything. Only content-free security data (the session audio journal after commit, logs, the action log and consent records) keeps an automatic expiry.
 
 | Store | Default | Admin range | Deletion |
 |---|---|---|---|
 | PTT / hands-free audio | RAM only, zeroized after STT | locked | n/a |
 | Session audio journal | crypto-shred ≤ 5 min after commit; ≤ 24 h if the commit fails | 0-30 d (`AudioRetentionDays`, default 0) | Destroy DEK, unlink |
-| Local dictation history | 7 d | 0-90 d | Purge at start and every 6 h |
-| Local transcripts (raw and cleaned) | 30 d | 0-365 d | Purge; "Delete session" |
-| Local full Genie answers (`final_answer_md`) | 30 d | 0-365 d | Purge (D60) |
-| Local memory items (MVP store) | 180 d sliding on `last_seen_at`; pinned never | `MemoryRetentionDays` (default 180; 0 = forever) | Purge at start and every 6 h; Forget |
+| Local dictation history | kept until Wipe | n/a (U9) | Wipe (older than 30 d / 90 d / everything); Forget; "Delete session" |
+| Local transcripts (raw and cleaned) | kept until Wipe | n/a (U9) | Wipe (older than 30 d / 90 d / everything); Forget; "Delete session" |
+| Local full Genie answers (`final_answer_md`) | kept until Wipe | n/a (U9) | Wipe (older than 30 d / 90 d / everything); Forget; "Delete session" |
+| Local memory items (MVP store) | kept until Wipe | n/a (U9) | Wipe (older than 30 d / 90 d / everything); Forget; "Delete session" |
 | Main agent action log | content-free, 30 d | 7-90 d | Rotation |
 | Draft UC Pages created by Bottle | owned by the user in Unity Catalog | n/a | The user deletes them in Unity Catalog; Bottle does not delete Pages |
 | Local logs | 7 d, content-free | 1-30 d | Rotation |
 | Consent records | 13 months, content-free | 12-84 months | Purge |
-| (v1) Lakebase `memory_item` | 180 d sliding on `last_seen_at`; pinned never | `MemoryRetentionDays` (default 180; 0 = forever) | Hard `DELETE` |
+| (v1) Lakebase `memory_item` | kept until Wipe | n/a (U9) | Wipe (older than 30 d / 90 d / everything); Forget; "Delete session" |
 | (v1) Lakebase `session` | 180 d | 7-365 d | Hard `DELETE` |
 | (v1) Lakebase `genie_exchange` (summary, key numbers, pointer) | 90 d | 7-365 d | Hard `DELETE` |
-| (v1) Lakebase utterances (opt-in only) | 30 d | 0-90 d | Hard `DELETE`; opt-out deletes all |
+| (v1) Lakebase utterances (opt-in only) | kept until Wipe | n/a (U9) | Wipe (older than 30 d / 90 d / everything); Forget; "Delete session" |
 | (v1) Lakebase PITR history | `history_retention_duration=172800s` (2 d), set explicitly | 2-30 d | Erasure complete after the configured window; the UI shows the value |
-| Genie conversations created by Bottle | deleted after 90 d where an API allows it (`GenieConversationRetentionDays`) | 0-365 d | `genie_agent`: GA `DELETE`; Genie One: Genie One API only if SP-11 passes, else a "Delete in Genie One" link |
+| Genie conversations created by Bottle | kept until Wipe with "Also delete Genie conversations" | n/a (U9) | `genie_agent`: GA `DELETE`; Genie One: Genie One API only if SP-11 passes, else a "Delete in Genie One" link |
 | Genie One server-side memory | Genie-managed | n/a | Forget offers a link to review Genie One memories (D61) |
 | System tables (`system.access.audit`, `system.query.history`, `system.ai_gateway.usage`) | admin-controlled [U] | admin | Users cannot delete; disclosed |
 | FMAPI abuse store | ≤ 30 d | none | Databricks-managed |
@@ -1871,11 +1876,32 @@ These decisions come from the user through the orchestrator. They override every
 | B | Time (UTC) | Decision | Effect in this document |
 |---|---|---|---|
 | B0 | 19:25:38Z | **Rename:** the desktop app is **Bottle**. A MOG is still a floating agent, and Bottle creates and manages MOGs. The repository folder stays `motherbricks/`. Settles K1. | All text, UI strings, tags (`app=bottle`), User-Agent `bottle/<ver>`, schema `bottle`, MDM domain `com.databricks.bottle`, group `bottle-users`, profiles `bottle-*`. MB-10a, AT-37. Supersedes the product name in D41 and D80. |
-| B1 | 19:37:39Z | **Meeting mode:** a MOG records and transcribes the meeting in the background (You + Others). Nothing goes to Genie automatically. The user chooses a moment, a question or the summary to send. Auto-ask and confidence-threshold auto-send are out of the MVP. Stop policy, consent and the indicator still apply. | RTR-07 (no send without a click), RTR-06, G-51..G-54, chip 18 removed, `GenieAutoAskAllowed` and `mog.genie.sessionAutoAsk` removed. Amends D8 and D30. **CONFIRM WITH USER:** the editor keeps the 1.5 s cancelable PTT preview (RTR-04a/b), because the user starts a PTT question on purpose (UC2); it is not auto-ask. |
+| B1 | 19:37:39Z | **Meeting mode:** a MOG records and transcribes the meeting in the background (You + Others). Nothing goes to Genie automatically. The user chooses a moment, a question or the summary to send. Auto-ask and confidence-threshold auto-send are out of the MVP. Stop policy, consent and the indicator still apply. | RTR-07 (no send without a click), RTR-06, G-51..G-54, chip 18 removed, `GenieAutoAskAllowed` and `mog.genie.sessionAutoAsk` removed. Amends D8 and D30. **Confirmed (U4):** the editor keeps the 1.5 s cancelable PTT preview (RTR-04a/b), because the user starts a PTT question on purpose (UC2); it is not auto-ask. |
 | B2 | 19:37:39Z | **Memory:** local SQLite is the MVP memory store for every MOG: one encrypted file (SQLCipher or a key in the OS keychain), WAL, FTS5 and `sqlite-vec`. Embeddings come from a Databricks endpoint and wait in a queue when offline. Lakebase is an OPTIONAL v1 sync and backup target, removed from the MVP admin prerequisites. | MEM-08a..f, MEM-19d, MEM-41; Lakebase rows Phase v1 Pri C; ADM-03b/c and ADM-05 v1; Section 10; Appendix A. Supersedes D12, K2 of D81; amends D13, D15, D34, D37, D51, D60, D72. |
 | B3 | 19:37:39Z | **Ontology hydration through UC Pages (Beta):** Bottle detects definitions, proposes a Page, and on approval creates the user's own DRAFT Page with `POST /api/2.0/knowledge/pages` (`domain`, `display_name`, `body`, `synonyms` ≤ 50, `description`, `state:"DRAFT"`, `request_id`). Scope `knowledge`. A domain must exist (use its ID). Pages ground Genie One only. MVP: detect, review, create drafts. v1: publish request, update, conflict checks. | Section 5.8 PG-01..PG-17, F7, SC-8, ADM-15, ADM-20, ADM-21, W-19, SP-20, AT-41. |
 | B4 | 19:39:49Z | **MOG brain:** each MOG has a main agent (Claude or Codex harness; model through the Databricks AI Gateway with the user's identity, or local; cloud execution v1). `bottle-mcp` gives the agent the local tools; Genie One MCP is attached directly. The agent can never start capture, approve outbound context, publish Pages or switch workspace without a user action or approval. Dictation bypasses the agent. Actions are logged per MOG. The router becomes the agent's first step, with a cheap classifier as a fallback. | RTR-01..RTR-30 (main agent rows RTR-21a..RTR-30), R16, R17, T15, ARC-7, SEC-23, UX-41, NFR-03d, SP-19, AT-42. Amends D25 and D33 (loopback proxies keep tokens in Rust). |
 | B5 | 19:40:08Z | **Three core use cases:** UC1 dictation (local STT, cleanup on Databricks, insert into the active app; no agent, no Genie; raw-text fallback at the cleanup deadline); UC2 Q&A (main agent, local memory, Genie One MCP, progress, blurb, deep link, follow-ups); UC3 send context to Genie (preview and approval) and draft UC Pages. Meeting recording feeds UC2 and UC3 and is required for the MVP. | UC column and Section 5.0, scenarios SC-1..SC-8, flows F1-F7, insertion is M / MVP-D (MOG-06a..d, CAP-37), intent `dictation` (RTR-01b). Amends D18 and D70. |
+
+### 12.0b User confirmations (2026-11-15)
+
+These answers come from the user. They settle the `CONFIRM WITH USER` badges in Section 12 for the decisions named. Where a badge and a U row differ, the U row applies.
+
+| U | Settles | Decision |
+|---|---|---|
+| U1 | D1, D32, COL-01 | **Tauri** shell (Tauri ≥ 2.12.5, TS/React UI, Rust core with a C ABI). Flutter is not used for the MVP. |
+| U2 | D3, D43, COL-03 | **Always on** means always resident and ready with the mic closed. The mic opens only for PTT or a session that the user starts, with an indicator that cannot be hidden. |
+| U3 | D40, D61, COL-41 | **Companion to Genie One.** Bottle gives what Genie One desktop does not: many MOGs, workspace hopping, dictation into any app, meeting capture and UC Pages hydration. Bottle does not hand off to Genie One desktop. Because Bottle uses Genie One MCP, the same conversations are expected to show in Genie One (verify in SP-20b). |
+| U4 | B1, D8, D30, COL-11, COL-75 | **Preview, then send.** The PTT question shows a 1.5 s cancelable preview of the exact text. Meetings show chips only; no send without a click. |
+| U5 | D17, B5, COL-97 | Local Parakeet is the STT default; Databricks ASR is an opt-in after a probe pass. |
+| U6 | D10, D39, COL-34 | **Reuse the Databricks CLI OAuth client**, hardened: no stored tokens, a token for each request, Bottle tags and User-Agent; `--client-id` is optional for admins. |
+| U7 | D21, COL-02 | No mobile or web client. |
+| U8 | D15, D60, COL-29, COL-50 | Memory keeps a distilled summary, key numbers and the deep link; the full answer stays only on the device; transcripts stay local; utterance upsert stays opt-in. |
+| U9 | D36, D72, COL-30 | **No automatic deletion of user content.** Settings has a Wipe button with three options: older than 30 d, older than 90 d, everything. Supersedes the purge periods of D36 and the 30 d answer period of D60. Content-free security data keeps its expiry. |
+| U10 | D9, D46, COL-20 | "Poll Genie for feedback" means progress polling, re-polls, memory and chips. |
+| U11 | B4, RTR-21a, ARC-7 | **One shared agent runtime** with one session for each MOG. |
+| U12 | B3, PG-18..PG-20 | **A home domain for each MOG** in each workspace; the user can change it for one draft in the review card. |
+| U13 | D41, D80, COL-40 | The public name is **MOG** (Gen Z "mog": to dominate; the "mother of all genies"). The user accepts the trademark risk of USPTO 99762439. |
+| U14 | D64, COL-39 | **Mascot:** super cute and endearing, looking out of Genie's lamp, as an extension of the Databricks Genie logo. Needs Databricks brand approval before external release. Supersedes the "no lamp, no smoke tail, no Genie lockups" rule. |
 
 ### 12.1 Director decisions D1-D84
 
@@ -1883,28 +1909,28 @@ Status values: **Active**, **Amended** (the amendment shows in the same row), **
 
 | D | Topic | Decision | Status | Confirm |
 |---|---|---|---|---|
-| D1 | Desktop shell | Tauri v2 with a TS (React) UI and a Rust core with a C ABI; all domain logic in platform-neutral TS. Flutter can reuse the core through `dart:ffi`. | Active (refined by D32, D73) | **`CONFIRM WITH USER`** |
+| D1 | Desktop shell | Tauri v2 with a TS (React) UI and a Rust core with a C ABI; all domain logic in platform-neutral TS. Flutter can reuse the core through `dart:ffi`. | Active (refined by D32, D73) | **Confirmed (U1)** |
 | D2 | Reuse of `genie_bridge.py` | Port the behaviour; ship no Python; keep the MIT notice; remove the 150 s / 3 min limits. | Amended by D33 (Rust/TS split) | |
-| D3 | Meaning of "always-on" | Always resident and ready with the mic closed; sessions only after an explicit start with an indicator; ambient listening is v2; all-day transcription is out of scope. | Active | **`CONFIRM WITH USER`** |
-| D4 | MVP capture modes | Original: PTT, hands-free, mic-only session in MVP; system audio, detection and calendar in v1. **Amended by D53:** MVP-D + MVP-M; system audio, mic-release and full SessionGuard are MVP-M; detection prompt S in MVP-M; calendar v1. | **Superseded by D53** | **`CONFIRM WITH USER`** (scope note: the user's binding decision already sets MVP-M) |
+| D3 | Meaning of "always-on" | Always resident and ready with the mic closed; sessions only after an explicit start with an indicator; ambient listening is v2; all-day transcription is out of scope. | Active | **Confirmed (U2)** |
+| D4 | MVP capture modes | Original: PTT, hands-free, mic-only session in MVP; system audio, detection and calendar in v1. **Amended by D53:** MVP-D + MVP-M; system audio, mic-release and full SessionGuard are MVP-M; detection prompt S in MVP-M; calendar v1. | **Superseded by D53** | **Confirmed (binding MVP scope)** |
 | D5 | Session duration | Signal-based stop with 60 min soft cap. **Amended by D27 (values), D53 (mic-release in MVP-M, calendar v1), D54 (PTT 120 s, hands-free 5 min), D71 (screen lock).** | **Amended** | |
 | D6 | Genie surfaces | One MogBackend interface: `genie_one_mcp` (MVP default), `genie_agent` via GA REST (v1), `custom_agent` (v1). Never the Beta endpoint. | Active (refined by D28, D62, D74, D75) | |
 | D7 | Context to Genie | Per-MOG setting, off by default; inline capped, scrubbed, visible preamble; no priming turns. | Amended by D29 (caps) | |
-| D8 | Auto-ask | PTT sends after a 1.5 s cancelable preview; sessions show chips; opt-in auto-ask with caps; admins can force it off. **Amended by B1:** no auto-ask; the PTT preview stays. | **Amended by B1** | **`CONFIRM WITH USER`** (PTT preview kept) |
-| D9 | "Poll Genie for feedback" | Progress polling, re-poll after timeout, answers into memory, chip-only suggestions; thumbs only where an API exists. | Active (refined by D46, D56) | **`CONFIRM WITH USER`** |
-| D10 | Auth source | Databricks CLI only; no stored tokens; U2M profiles only; a custom OAuth app later behind ProfileService. | Amended by D39 | **`CONFIRM WITH USER`** |
+| D8 | Auto-ask | PTT sends after a 1.5 s cancelable preview; sessions show chips; opt-in auto-ask with caps; admins can force it off. **Amended by B1:** no auto-ask; the PTT preview stays. | **Amended by B1** | **Confirmed (U4)** |
+| D9 | "Poll Genie for feedback" | Progress polling, re-poll after timeout, answers into memory, chip-only suggestions; thumbs only where an API exists. | Active (refined by D46, D56) | **Confirmed (U10)** |
+| D10 | Auth source | Databricks CLI only; no stored tokens; U2M profiles only; a custom OAuth app later behind ProfileService. | Amended by D39 | **Confirmed (U6)** |
 | D11 | Workspace hop | Home profile; hop per question or session; ask on ambiguity; conversations stay in their workspace; split is v1. | Active | |
 | D12 | Memory home | One home Lakebase per user through the home profile; per-MOG namespace; personal; shared team memory v2. **Superseded by B2:** the MVP store is local SQLite; Lakebase is v1 optional sync. | **Superseded by B2** | |
 | D13 | Fast lookup | Two tiers: local SQLCipher (50 ms) and Lakebase (300 ms warm); recall never blocks; writes queue. **Amended by B2:** MVP = local FTS5 + `sqlite-vec`; Lakebase tier v1. | **Amended by B2** | |
 | D14 | Managed Agent Memory | Self-managed schema behind MemoryService; managed adapter later. | Active | |
-| D15 | Data to Lakebase | Distilled items, exchanges, session metadata; transcripts local; transcript sync opt-in; raw audio never stored off-device. **Amended by B2:** applies only to v1 Lakebase sync. | Amended by B2 | **`CONFIRM WITH USER`** |
-| D16 | Retention defaults | 30 d transcripts, audio deleted at commit, 180 d Lakebase items. **Superseded by D36 (full table) and D60 (answer storage), D72 (PITR).** | **Superseded by D36** | **`CONFIRM WITH USER`** |
-| D17 | ASR | SttProvider ships local Parakeet and Databricks ASR; local Parakeet is the default for UC1 and UC2 (B5); Databricks ASR is an opt-in setting that the user or the admin (MDM) can select only after a probe pass (p95 ≤ 1.0 s); sessions default local; admin can force local. **Amended by COL-97.** | Active (refined by D38, D59) | **`CONFIRM WITH USER`** |
+| D15 | Data to Lakebase | Distilled items, exchanges, session metadata; transcripts local; transcript sync opt-in; raw audio never stored off-device. **Amended by B2:** applies only to v1 Lakebase sync. | Amended by B2 | **Confirmed (U8)** |
+| D16 | Retention defaults | 30 d transcripts, audio deleted at commit, 180 d Lakebase items. **Superseded by D36 (full table) and D60 (answer storage), D72 (PITR).** | **Superseded by D36** | **Confirmed (U9)** |
+| D17 | ASR | SttProvider ships local Parakeet and Databricks ASR; local Parakeet is the default for UC1 and UC2 (B5); Databricks ASR is an opt-in setting that the user or the admin (MDM) can select only after a probe pass (p95 ≤ 1.0 s); sessions default local; admin can force local. **Amended by COL-97.** | Active (refined by D38, D59) | **Confirmed (U5)** |
 | D18 | Cleanup | FMAPI cleanup after a deterministic pre-pass; skip under 4 words; number check; cleaned text shown with Copy; insertion is S. **Amended by B5:** insertion is UC1, M, MVP-D. | Amended by D69 (900 ms, parallel router), B5 | |
 | D19 | Mascot art | Rive with the existing `scene.rml`; one instance per MOG window; drop the Codex atlas; brand review. | Amended by D64 (art), D73 (fallback) | |
 | D20 | Many MOGs, one mic | One CaptureService owner; global PTT to last-focused MOG; one session at a time; panic key. | Active (refined by D63) | |
 | D21 | Platforms | macOS 14.4+ first, Windows 11 second, Linux best effort; no mobile or web. | Active | (with D1) |
-| D22 | Plugin relationship | Port with MIT attribution now; offer Sathish a shared contract later. | Active | **`CONFIRM WITH USER`** |
+| D22 | Plugin relationship | Port with MIT attribution now; offer Sathish a shared contract later. | Active | **Confirmed (user instruction 2026-11-13)** |
 | D23 | Audience | Databricks users with the CLI and Genie One; internal and field first, customers later. | Active | **`CONFIRM WITH USER`** |
 | D24 | Genie latency | Blurb acknowledgement < 1 s; first progress ≤ 5 s; typical 30-90 s; notification when ready. | Amended by D68 | |
 | D25 | Router | SLM classifier with a flat strict json_schema; intents question, memory_question, context, command, noise. **Amended by B4/B5:** the router is the first step of the main agent and the fallback classifier; intent `dictation` added. | Amended by D63, D69, B4, B5 | |
@@ -1918,12 +1944,12 @@ Status values: **Active**, **Amended** (the amendment shows in the same row), **
 | D33 | Bridge location | Rust: CLI, tokens, allowlist, transport, poll guard, scrubbing. TS: contracts, error text, pinning, routing. Fixed statement catalogs. | Active | |
 | D34 | Lakebase topology and pool | Per-user project 0.5-2 CU, 900 s suspend, 2 d PITR, tags; pooled RLS v1; direct TLS, max 3, idle 300 s, 50 min; pgvector HNSW; local-only on failure. **Amended by B2:** all of it is v1 optional sync. | Amended by B2 | |
 | D35 | Embeddings | Qwen3 0.6B 1024-d default with 256-d MRL cache; GTE-large 1024-d GA fallback; `embedding_model` per row; offline FTS only. | Active | |
-| D36 | Retention | Table in Section 9.2 (7 d dictation, 30 d transcripts, audio ≤ 5 min, items 180 d sliding, sessions 180 d, exchanges 90 d, consent 13 months, Genie conversations 90 d where possible, PITR disclosed). | Active (refined by D60, D72) | **`CONFIRM WITH USER`** |
+| D36 | Retention | Table in Section 9.2 (7 d dictation, 30 d transcripts, audio ≤ 5 min, items 180 d sliding, sessions 180 d, exchanges 90 d, consent 13 months, Genie conversations 90 d where possible, PITR disclosed). | Active (refined by D60, D72) | **Confirmed (U9)** |
 | D37 | Non-home answers (v1 Lakebase rules after B2) | Lakebase stores a pointer unless the user and MDM allow full storage; local 30 d; memory answers only same workspace and space, ≤ 24 h. **Amended by D60** (home answers also store only summary, key numbers and pointer). | **Amended** | |
 | D38 | Default models | Cleanup Llama 3.1 8B; router Llama 8B or Flash-Lite; writer gpt-oss-120b; judge Llama 8B; ASR Flash-Lite. **Amended by D57 (paths and names), D58 (regional fallback gpt-oss-20b; gpt-6-luna eval only), D59 (ASR residency).** | **Amended** | |
-| D39 | Auth hardening | CLI ≥ 1.17; absolute path; clean env; plaintext-storage warning; host-only tokens; tags and User-Agent; optional `--client-id` app (S); PAT profiles rejected. | Active | **`CONFIRM WITH USER`** |
-| D40 | Overlap with Genie One desktop | Proceed and differentiate. **Amended by D61** with the verified feature set. | **Amended by D61** | **`CONFIRM WITH USER`** |
-| D41 | Names and brand | Product name (former); MOG codename until trademark clearance; "Databricks Labs / experimental"; original mascot. **Product name superseded by B0: Bottle.** | Amended by B0 | **`CONFIRM WITH USER`** (MOG trademark, brand review) |
+| D39 | Auth hardening | CLI ≥ 1.17; absolute path; clean env; plaintext-storage warning; host-only tokens; tags and User-Agent; optional `--client-id` app (S); PAT profiles rejected. | Active | **Confirmed (U6)** |
+| D40 | Overlap with Genie One desktop | Proceed and differentiate. **Amended by D61** with the verified feature set. | **Amended by D61** | **Confirmed (U3)** |
+| D41 | Names and brand | Product name (former); MOG codename until trademark clearance; "Databricks Labs / experimental"; original mascot. **Product name superseded by B0: Bottle.** | Amended by B0 | **Confirmed (U13, U14)** |
 | D42 | Telemetry | Off until an admin sets `OtlpTable`; content-free spans; content logging needs both opt-ins. | Active | |
 | D43 | Wake word | MVP and v1: idle MOG never opens the mic. v2 wake word needs a new notice, admin policy, local-only processing, no storage before the wake word. | Active | |
 | D44 | Running MOGs | Any number defined; 8 running by default; one brain window; thin views. | Active (fallback in D73) | |
@@ -1935,18 +1961,18 @@ Status values: **Active**, **Amended** (the amendment shows in the same row), **
 | D50 | Consent UX | Versioned notice; per-session attestation without "don't ask again"; disclosure snippet; all-party consent; no voiceprints, diarization or emotion; unhideable indicator in screen share; pause closes the mic. | Active | |
 | D51 | Lakebase credentials | CLI `generate-database-credential` primary; REST `POST /api/2.0/postgres/credentials` S; home profile. | Active | |
 | D52 | ID scheme | MB, MOG, CAP, RTR, G, W, MEM, SEC, UX, NFR, ADM; team IDs kept as sources. | Active | |
-| D53 | MVP scope | MVP exit needs MVP-D and MVP-M end to end (Section 1.2). Calendar v1; Windows 10 Others off by default. | Active | **`CONFIRM WITH USER`** (scope note with D4) |
+| D53 | MVP scope | MVP exit needs MVP-D and MVP-M end to end (Section 1.2). Calendar v1; Windows 10 Others off by default. | Active | **Confirmed (binding MVP scope)** |
 | D54 | PTT cap | Hold-to-talk 120 s; hands-free 5 min; cloud chunks ≤ 30 s, body ≤ 3.5 MB. | Active | |
 | D55 | Poll budget | Poll delay = max(cadence step, 1.5 s × in-flight asks on the profile); polls first in the 40/min bucket; AIMD; Retry-After or `error.retry_after`. | Active | |
 | D56 | Live MCP behaviour | Busy text → CONVERSATION_BUSY, no retry; nullable `progress_steps` → elapsed text; status `unknown`; `deep_link` fallback; merge `query_items`; classify 3 error sources. | Active | |
 | D57 | Model path | `/ai-gateway/mlflow/v1/chat/completions` and `/embeddings` with `system.ai.*` names; no `/serving-endpoints`; tags and User-Agent. | Active | |
 | D58 | Regional models | Llama 3.1 8B where in region, else `gpt-oss-20b`; writer `gpt-oss-120b`; `gpt-6-luna` eval only; handle list-of-blocks content. | Active | |
 | D59 | ASR residency and languages | Flash-Lite treated as cross-geo until probed; 3.5 Flash-Lite residency candidate; 3.5 Flash and 4 Carbon only after an audio probe; non-European languages use cloud if allowed, else a message. | Active | |
-| D60 | Answer content in Lakebase (v1 after B2) | Summary (≤ 600 chars), key numbers and pointer; full answer local 30 d; non-home pointer only; full storage only with user opt-in and MDM. | Active | **`CONFIRM WITH USER`** |
-| D61 | Genie One desktop overlap | Proceed. Genie One desktop: Electron, macOS GA 2026-11-12, Windows Beta, server-side memory, no voice, no meetings, one workspace, no multiple agents. Disclose Genie One memory; Forget links to its review. | Active | **`CONFIRM WITH USER`** |
+| D60 | Answer content in Lakebase (v1 after B2) | Summary (≤ 600 chars), key numbers and pointer; full answer local 30 d; non-home pointer only; full storage only with user opt-in and MDM. | Active | **Confirmed (U8, U9)** |
+| D61 | Genie One desktop overlap | Proceed. Genie One desktop: Electron, macOS GA 2026-11-12, Windows Beta, server-side memory, no voice, no meetings, one workspace, no multiple agents. Disclose Genie One memory; Forget links to its review. | Active | **Confirmed (U3)** |
 | D62 | Companion binding | Every MOG keeps a Genie One MCP companion binding when Genie One is available. | Active | |
 | D63 | Directed segments | Router field `directed_mog_id`; a named MOG gets a chip; PTT in a session reuses the stream with `directed_to`. | Active | |
-| D64 | Mascot art | Replace the smoke tail; move the hue off FF3621; review the brick torso; add booleans `attention` (M) and `recording` (S); `demo=false`, `level=0` at load; brand review before external release. | Active | **`CONFIRM WITH USER`** |
+| D64 | Mascot art | Replace the smoke tail; move the hue off FF3621; review the brick torso; add booleans `attention` (M) and `recording` (S); `demo=false`, `level=0` at load; brand review before external release. | Active | **Confirmed (U14)** |
 | D65 | Click on the mascot | Click (< 4 px, < 300 ms) = poke + hands-free toggle (setting, default on); never a session; drag ≥ 4 px moves. | Active | |
 | D66 | Default global keys | PTT Right-Option / Right-Alt (else Right-Ctrl, else Ctrl+Win); Secure-Input fallback Ctrl+Shift+Space; panic Cmd+Shift+Esc / Ctrl+Win+Alt+K; session Ctrl+Shift+M / Ctrl+Win+Alt+R; open card Ctrl+Shift+O / Ctrl+Win+Alt+O; per-MOG Ctrl+Shift+1..8 / Ctrl+Win+Alt+1..8; no Ctrl+Option. | Active | |
 | D67 | Panic latency | ≤ 200 ms; works without Input Monitoring; also in the tray. | Active | |
@@ -1978,9 +2004,9 @@ COL-01..COL-46 is the collision-analyst consolidated register (merging C1-C52, a
 
 | ID | Between | Description | Resolution | Decision | Sev | Status | Merges |
 |---|---|---|---|---|---|---|---|
-| COL-01 | User (Flutter) vs research (Tauri) | Flutter desktop lacks key-up on Win/X11, NSPanel and stable multi-window. | Tauri ≥ 2.12.5, TS/React UI, Rust core with C ABI for a later Flutter shell. | D1, D32 | High | UC | C1 |
-| COL-02 | Vision (mobile/web portability) vs D21 | Global keys, overlays, system audio and the CLI do not port to mobile or web. | No mobile or web client; TS domain stays portable; C ABI kept; Genie One mobile covers phones. | D21, D1 | Med | UC | N-08, C78 |
-| COL-03 | Vision "always on, records" vs consent law | All-day listening creates legal exposure and an open mic. | Always resident with mic closed; explicit sessions with an unhideable indicator; wake word v2 under D43. | D3, D43, D50 | Crit | UC | C2, C41 |
+| COL-01 | User (Flutter) vs research (Tauri) | Flutter desktop lacks key-up on Win/X11, NSPanel and stable multi-window. | Tauri ≥ 2.12.5, TS/React UI, Rust core with C ABI for a later Flutter shell. | D1, D32, U1 | High | RES | C1 |
+| COL-02 | Vision (mobile/web portability) vs D21 | Global keys, overlays, system audio and the CLI do not port to mobile or web. | No mobile or web client; TS domain stays portable; C ABI kept; Genie One mobile covers phones. | D21, D1, U7 | Med | RES | N-08, C78 |
+| COL-03 | Vision "always on, records" vs consent law | All-day listening creates legal exposure and an open mic. | Always resident with mic closed; explicit sessions with an unhideable indicator; wake word v2 under D43. | D3, D43, D50, U2 | Crit | RES | C2, C41 |
 | COL-04 | User binding scope vs D4/D5/D27, v0.2 §8, Kimi K4 | Meetings were v1; now they are MVP exit. | MVP-D + MVP-M (Section 1.2); calendar v1; detection prompt S. | D53 | High | RES | N-01, K4, C53, architect N1, N14 |
 | COL-05 | Vision 60 min vs research 90/240 vs v0.2 | Different cap values. | 55/60/+30/5/15/4 h. | D5, D27 | Med | RES | C5, C25 |
 | COL-06 | Pre-roll buffer vs idle mic closed | Pre-roll needs audio before the trigger. | Pre-roll only inside an active capture; PTT has none. | D3, D43 | Med | RES | C51 |
@@ -1988,7 +2014,7 @@ COL-01..COL-46 is the collision-analyst consolidated register (merging C1-C52, a
 | COL-08 | v0.2 MB-4 "focused MOG" vs non-activating panels | "Focus" has no meaning. | Last-interacted MOG + target toast + marker. | D20 | Low | RES | N-11 |
 | COL-09 | v0.2 MOG-1 click-to-listen vs poke/drag/consent; ux-mascot vs collision-analyst | Accidental capture risk. | Click (< 4 px, < 300 ms) = poke + hands-free toggle (setting); never a session; drag ≥ 4 px. | D65 | Low | RES | N-12, C66 |
 | COL-10 | Dictation tool vs Genie agent | Two products in one. | B5 splits them: UC1 dictation (insertion, no agent) and UC2 Q&A; the preview shows the exact text sent. | D18, D8, B5 | Med | RES | C10, N-03 |
-| COL-11 | Vision auto blurb vs never auto-send vs v0.2 Scenario 2 | Auto-send risk. | PTT preview ≥ 0.7; chips < 0.7 and in sessions; no auto-ask (B1); Others' questions chips only. | D8, D30, B1 | High | UC | C11, C27, K3, N-13 |
+| COL-11 | Vision auto blurb vs never auto-send vs v0.2 Scenario 2 | Auto-send risk. | PTT preview ≥ 0.7; chips < 0.7 and in sessions; no auto-ask (B1); Others' questions chips only. | D8, D30, B1, U4 | High | RES | C11, C27, K3, N-13 |
 | COL-12 | Vision context knob vs no context tool vs local-only transcripts | Context only inline. | D29 preamble, off by default, ContextGate binding. | D7, D29 | High | RES | C3, C23, C26 |
 | COL-13 | "Through Genie MCP" vs Beta EOL vs per-space MCP vs REST | Several surfaces with different status. | Enum `genie_one_mcp` \| `genie_agent` \| `custom_agent`; Genie One MCP GA default; REST for `genie_agent`. | D6, D28 | High | RES | C4, C8, C30, A6, N-10 |
 | COL-14 | "Always paired with Genie MCP" vs `custom_agent` MOGs | A custom-agent MOG has no Genie to poll. | Genie One companion binding per MOG. | D62 | Med | RES | N-09, C79 |
@@ -1997,7 +2023,7 @@ COL-01..COL-46 is the collision-analyst consolidated register (merging C1-C52, a
 | COL-17 | `rmcp` static auth header vs rotating CLI tokens | Token cannot rotate in a live transport. | Thin JSON-RPC client on `reqwest`, fresh token per request. | D33 | Med | SPIKE (SP-09) | A3, C80 |
 | COL-18 | "Poll Genie" vs QPM; D31 bucket math | 4 × 2 s polls ≈ 120/min > 40/min. | Delay = max(cadence, 1.5 s × in-flight); polls first; AIMD. | D55 | Med | RES | C28, C43, N-07, C54 |
 | COL-19 | Ask timeout after send; 409 surface undocumented | Blind re-ask duplicates. | ASK_UNCERTAIN; user decides; classify 3 sources. | D48, D56 | Med | RES | A5 |
-| COL-20 | "Poll Genie for feedback" vs no feedback API on Genie One MCP | Ambiguous meaning. | Progress polling, re-polls, memory, chips; thumbs to Genie only for `genie_agent`. | D9, D46 | Med | UC | C12, C48 |
+| COL-20 | "Poll Genie for feedback" vs no feedback API on Genie One MCP | Ambiguous meaning. | Progress polling, re-polls, memory, chips; thumbs to Genie only for `genie_agent`. | D9, D46, U10 | Med | RES | C12, C48 |
 | COL-21 | "Instant" vs Genie turns of 30-90 s (70-260 s) | Promise Genie cannot meet. | Instant = capture and acknowledgement; notice at 4 min; give-up 10 min. | D24, D68 | Med | AR | C19 |
 | COL-22 | "Instant transcription" vs cleanup round-trip vs three NFR sets | Budgets conflict. | NFR-01: 1.5 s local / 2.2 s cloud p95; raw then cleaned text. | D68 | Med | RES | N-02, N-15, C69 |
 | COL-23 | Databricks ASR first vs residency, 4 MB cap, batch only | Cloud ASR may break residency. | Probe gate; local default for sessions; ≤ 30 s chunks; local-only policy. | D17, D54, D59 | High | SPIKE (SP-05, SP-06) | C9, C50, N-16 |
@@ -2006,19 +2032,19 @@ COL-01..COL-46 is the collision-analyst consolidated register (merging C1-C52, a
 | COL-26 | Fast lookup vs gate latency; semantic needs network; v0.2 Scenario 5 | Gate adds latency; over-promise. | RecallGate ≤ 300 ms; lexical first; late hit = chip; D37 gate. | D13, D35, D37 | Med | RES | N-05, N-14, N-18 |
 | COL-27 | Hop vs workspace-scoped Lakebase OAuth | Memory cannot follow by credential. | Home profile only for memory; provenance on items. | D12, D34, D51 | Med | RES | C13, C35 |
 | COL-28 | Cross-workspace answers into home Lakebase | B data lands in A. | Pointer only for non-home; local cache 30 d. | D37, D60 | Med | RES | C32 |
-| COL-29 | Lakebase memory vs transcripts local | Is a transcript memory? | Distilled items; utterance upsert opt-in. | D15 | Med | UC | C17 |
-| COL-30 | Forget vs PITR, no pg_cron, no MCP delete | Forget not immediate everywhere. | D36 table; PITR disclosed; purges while running; Genie One delete via SP-11 or link. | D36, D72, D76 | Med | UC + SPIKE (SP-11) | C31, C38, C39, C44 |
+| COL-29 | Lakebase memory vs transcripts local | Is a transcript memory? | Distilled items; utterance upsert opt-in. | D15, U8 | Med | RES | C17 |
+| COL-30 | Forget vs PITR, no pg_cron, no MCP delete | Forget not immediate everywhere. | D36 table; PITR disclosed; purges while running; Genie One delete via SP-11 or link. | D36, D72, D76, U9 | Med | RES | C31, C38, C39, C44 |
 | COL-31 | Embedding model choice | Open choice. | Qwen3 1024-d default; GTE fallback; `embedding_model` column. | D35 | Low | RES | C33 |
 | COL-32 | 8-16 CU default cost trap; Lakebase Search irreversible | Cost and admin surprise. | Create at 0.5-2 CU; pgvector first. | D34 | Med | RES | C37, C47 |
 | COL-33 | Vision Lakebase vs Kimi local-first | Is Lakebase required? | **B2:** local SQLite is the MVP store; Lakebase is optional v1 sync with a "Sync paused" badge. | D34, D81, B2 | Med | RES | K2, N-19 |
-| COL-34 | CLI client reuse vs custom OAuth app guidance | Governance vs zero setup. | CLI only, hardened; optional `--client-id`; tags and User-Agent. | D10, D39 | High | AR + UC | C7, C40 |
+| COL-34 | CLI client reuse vs custom OAuth app guidance | Governance vs zero setup. | CLI only, hardened; optional `--client-id`; tags and User-Agent. | D10, D39, U6 | High | AR (accepted, U6) | C7, C40 |
 | COL-35 | Python sidecar vs no Python; TS vs tokens | Runtime and trust split. | Port; Rust/TS split; no secret over IPC. | D2, D33 | Med | RES | C21, C45, C52 |
 | COL-36 | Rive vs sprite atlas; DMG transparency (#13415) | Mascot runtime and transparency. | Rive only; Tauri ≥ 2.12.5 without `macOSPrivateApi`; webgl2 or canvas; CDN off. | D19, D32, D73 | Med | SPIKE (SP-01) | C15, C29 |
 | COL-37 | One Rive per window vs memory budget | 8 WebViews may exceed RAM. | Cap 8; if SP-02 fails, one overlay window per display. | D44, D73 | Med | SPIKE (SP-02) | C49, C74, architect N4 |
 | COL-38 | 7 Rive moods vs ~10 states | State mismatch. | 7 moods; priority function; overlays `attention`, `recording`. | D19, D82 | Low | RES | C16 |
-| COL-39 | "Genie-inspired" vs D41; `scene.rml` smoke tail and FF3621 | Built asset breaks brand rules. | Behavioural inspiration; replace tail; move hue; brand review. | D41, D64 | Med | UC | C20, N-04, C71, UXC-1/2 |
-| COL-40 | "MOG" vs USPTO 99762439; former product names; Databricks mark in project name | Trademark and naming. | Bottle product (B0); Mother Databricks internal; MOG codename. | D41, D80, B0 | Med | UC | C42, K1, N-24 |
-| COL-41 | Bottle vs Genie One desktop app and plugins | Product overlap. | Proceed; differentiate (Section 1.3). | D40, D61 | High | UC | C34 |
+| COL-39 | "Genie-inspired" vs D41; `scene.rml` smoke tail and FF3621 | Built asset breaks brand rules. | Behavioural inspiration; replace tail; move hue; brand review. | D41, D64, U14 | Med | RES | C20, N-04, C71, UXC-1/2 |
+| COL-40 | "MOG" vs USPTO 99762439; former product names; Databricks mark in project name | Trademark and naming. | Bottle product (B0); Mother Databricks internal; MOG codename. | D41, D80, B0, U13 | Med | AR (accepted, U13) | C42, K1, N-24 |
+| COL-41 | Bottle vs Genie One desktop app and plugins | Product overlap. | Proceed; differentiate (Section 1.3). | D40, D61, U3 | High | RES | C34 |
 | COL-42 | Ask volume vs throughput and post-2027 cost | Budget and 429 risk. | No auto-ask (B1), rate caps, bucket, budget tags, no service principal; upper-bound model. | D30, D45, D84, B1 | Med | AR | C18, C46 |
 | COL-43 | Zero-setup app vs admin prerequisites | Users without grants cannot run a MOG. | ADM checklist, first-run probes, degraded modes. | D34, D39 | Med | AR | C24 |
 | COL-44 | Kimi "shall" and 4 diagrams vs STE "must" and 7+ | Document style. | must/should/can; 9 diagram slots. | D26, D81 | Low | RES | K5, K6 |
@@ -2027,7 +2053,7 @@ COL-01..COL-46 is the collision-analyst consolidated register (merging C1-C52, a
 | COL-47 | D48/GL 409 vs live Genie One MCP | Busy conversation returns "stream closed before response.created … Retry may succeed". | CONVERSATION_BUSY; no auto-retry; one in flight per conversation. | D56 | Med | RES | C56, C-V1, architect N10 |
 | COL-48 | D24 narration vs null `progress_steps` | Narration shows nothing. | Elapsed-time fallback. | D56, D68 | Low | RES | C57, C-V2, architect N11 |
 | COL-49 | Bottle memory and Forget vs Genie One server-side memory | Preambles can persist in Genie One memory. | Disclosure; Forget links to Genie One memory review; preamble off by default. | D61 | Med | AR | C58, C-V3, architect N6 |
-| COL-50 | D37 storage vs Genie One connector content | Full answers copy Gmail/Slack/Drive/Jira content. | Lakebase stores summary, key numbers, pointer; full answer local 30 d. | D60 | Med | UC | C59, C-V4, architect N7 |
+| COL-50 | D37 storage vs Genie One connector content | Full answers copy Gmail/Slack/Drive/Jira content. | Lakebase stores summary, key numbers, pointer; full answer local 30 d. | D60, U8 | Med | RES | C59, C-V4, architect N7 |
 | COL-51 | Llama 3.1 8B default vs EU availability | Not served in eu-west-1, eu-central-1. | `gpt-oss-20b` fallback per region. | D58 | Med | RES | C60, C-V5, architect N8 |
 | COL-52 | D38 "drop gpt-6-luna" vs it exists | Placeholder status changed. | Eval candidate only. | D58 | Low | RES | C61, C-V6, architect N9 |
 | COL-53 | Gemini ASR residency vs contradictory docs | Audio model lists and cross-geo notes disagree. | Assume cross-geo; probe-gated; documented candidates first. | D59 | Med | SPIKE (SP-05) | C62, C-V7 |
@@ -2052,7 +2078,7 @@ COL-01..COL-46 is the collision-analyst consolidated register (merging C1-C52, a
 | COL-72 | Rive default instance `demo=true`, `level=0.5` | Poke cycles moods. | App sets `demo=false`, `level=0` at load. | D64 | Low | RES | UXC-3 |
 | COL-73 | Request tags vs MCP_SERVICE usage rows | Tag logging for MCP rows undocumented. | Send tags anyway; SP-18 checks. | D57 | Low | SPIKE (SP-18) | verifier open issue |
 | COL-74 | Binding rename B0 vs text and diagrams | v1.0 text used the former name 30 times; diagrams 01, 02 and 09 too; diagram 06 showed the schema `mother_bricks`. | Text: Bottle everywhere; schema `bottle`, tags `app=bottle`, User-Agent `bottle/<ver>`. Diagram fixer renames 01, 02, 06, 09. | B0 | Med | RES | ste-checker, miss-finder |
-| COL-75 | Auto-ask (RTR-07 v1.0, D8, D30, T3, chip 1 and 18, MDM key, diagram 07 e3) vs B1 | The text and diagram 07 kept an opt-in session auto-ask. | Removed from MVP and v1; RTR-07 now forbids a send without a click; the PTT preview stays (CONFIRM WITH USER). Diagram 07 e3 drops "with auto-ask off". | B1 | High | RES + UC | ste-checker, miss-finder |
+| COL-75 | Auto-ask (RTR-07 v1.0, D8, D30, T3, chip 1 and 18, MDM key, diagram 07 e3) vs B1 | The text and diagram 07 kept an opt-in session auto-ask. | Removed from MVP and v1; RTR-07 now forbids a send without a click; the PTT preview stays (confirmed, U4). Diagram 07 e3 drops "with auto-ask off". | B1, U4 | High | RES | ste-checker, miss-finder |
 | COL-76 | Lakebase as MVP memory and admin prerequisite vs B2 | MEM rows, ADM-03, glossary, Section 1.1 and diagrams 01, 02, 05, 06, 09 made Lakebase the MVP store. | Local SQLite (SQLCipher, WAL, FTS5, `sqlite-vec`) is the MVP store; Lakebase rows Phase v1 Pri C; ADM-03b/c v1. Diagrams mark Lakebase "optional / v1". | B2 | High | RES | ste-checker, miss-finder |
 | COL-77 | Fixed rule-based router vs B4 main agent | RTR rows had the router as the decision maker. | Main agent decides; the router step is its first step; the fallback classifier replaces it when the harness is not available. | B4 | High | RES | ste-checker |
 | COL-78 | Main agent harness vs token isolation (D33, ARC-6) | Genie One MCP "attached directly" would put a token in the harness. | Loopback proxies in the Rust core add the token; the harness gets none (ARC-7, RTR-27, RTR-28). | B4, D33 | High | SPIKE (SP-19) | editor |
@@ -2074,7 +2100,13 @@ COL-01..COL-46 is the collision-analyst consolidated register (merging C1-C52, a
 | COL-94 | Diagram 06 "Decisions, context: any age" vs MEM-17 30 d | Two gate rules. | MEM-17c: decisions and facts 30 d or less, or pinned. | D37 | Low | RES | miss-finder |
 | COL-95 | Split and v1 items without a v1 marker in diagrams 05 and 07 | Phase unclear. | Split (W-13a..c, SC-6, F6, RTR-11b, C20, e10) is v1 and uses the "optional / v1" style. | D11 | Low | RES | miss-finder |
 | COL-96 | UC Pages (Beta) availability, scope `knowledge` and DRAFT visibility in Genie One | Not yet probed in a live workspace. | SP-20 checks the create call, the scope and the DRAFT grounding in the owner's conversations. | B3 | Med | SPIKE (SP-20) | editor |
-| COL-97 | Vision: Databricks ASR first, Parakeet optional vs B5: UC1 local STT | CAP-57c made cloud ASR the PTT default after a probe pass, so dictation audio could leave the device by default, possibly cross-geo (CAP-62b). | Local Parakeet is the default for UC1 and UC2; Databricks ASR is an opt-in setting for the user or MDM, only after a probe pass (CAP-57a/b, CAP-57c, CAP-57e). ADM-04b and checklist item 6 apply only to the opt-in. | D17, B5 | High | UC | director |
+| COL-97 | Vision: Databricks ASR first, Parakeet optional vs B5: UC1 local STT | CAP-57c made cloud ASR the PTT default after a probe pass, so dictation audio could leave the device by default, possibly cross-geo (CAP-62b). | Local Parakeet is the default for UC1 and UC2; Databricks ASR is an opt-in setting for the user or MDM, only after a probe pass (CAP-57a/b, CAP-57c, CAP-57e). ADM-04b and checklist item 6 apply only to the opt-in. | D17, B5, U5 | High | RES | director |
+| COL-98 | B4 "each MOG has a main agent" vs RAM and token-proxy cost | One harness process per MOG multiplies memory, start time and proxy endpoints. | One shared runtime with a session for each MOG (RTR-21a, ARC-7). | U11 | Med | RES | orchestrator gap review |
+| COL-99 | B3 "a domain must exist" vs no rule for which domain | Drafts had no defined target domain. | Home domain for each MOG and workspace; change per draft in review (PG-18, PG-19). | U12 | Med | RES | orchestrator gap review |
+| COL-100 | Home domain picker vs domains API permission | `GET /api/2.0/domains` (Beta, scope `domains`) needs MANAGE DISCOVER for external callers; many users do not have it. `GET /knowledge/domains` does not exist (probe 2026-11-15). | Paste a domain ID or URL as the fallback (PG-20); add scope `domains` to the SP-20 checks. | U12 | Med | SPIKE (SP-20) | probe 2026-11-15 |
+| COL-101 | U9 no auto-delete vs D36 purges, D60 30 d answers, legal and storage | Data grows without limit; legal teams may ask for fixed periods. | Manual Wipe (30 d / 90 d / everything); security data keeps its expiry; MDM can still lock a Wipe policy in v1 if legal asks. | U9 | Med | RES | user 2026-11-15 |
+| COL-102 | U14 mascot from the Genie logo vs SEC-22a v1.2 and D41 "original mascot" | Genie logo artwork is a Databricks brand asset. | SEC-22a and UX-10b rewritten; brand approval before external release. | U14 | Med | AR | user 2026-11-15 |
+| COL-103 | U3 "Genie One shows the same content" vs unverified MCP conversation visibility | MCP conversations may not list in the Genie One desktop history. | Verify in SP-20b with a live U2M token; if they do not list, the blurb deep link stays the route. | U3 | Low | SPIKE (SP-20) | user 2026-11-15 |
 
 ---
 
@@ -2323,7 +2355,7 @@ There is **no mobile or web client** on the roadmap.
 
 **Existential questions: none (D83).** CLI auth works with Genie One MCP (verified), the Beta end of life is avoided, the overlap with Genie One desktop is a positioning risk, D50 sets the consent rules, the MVP memory needs no Lakebase (B2), and the main agent has a fallback classifier (B4).
 
-**Questions for user confirmation (not existential):** see the `CONFIRM WITH USER` badges in Section 12. The most important are B1 (the PTT 1.5 s preview is kept as a user-started send), D53 (MVP scope already set by the user), D40/D61 (overlap), D3 (always-on meaning), D64 (mascot art change) and D41 (MOG trademark).
+**Questions for user confirmation:** settled on 2026-11-15 by U1-U14 (Section 12.0b). Open work is only spikes: SP-20 (with a live U2M token: scopes `knowledge` and `domains`, DRAFT grounding, MCP conversations in Genie One), SP-10, SP-18, SP-09 and the device spikes. Probe 2026-11-15 (PAT): `GET /api/2.0/knowledge/pages` works; `GET /api/2.0/domains` works.
 
 | Risk | Impact | Mitigation | Owner |
 |---|---|---|---|

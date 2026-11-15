@@ -6,7 +6,7 @@ This repository is the shared context for every agent on the project. Read this 
 
 | Path | What it is |
 |---|---|
-| `requirements.html` | The final requirements, v1.2: ASD-STE100, 9 inline SVG diagrams, collisions COL-01..97, decisions B0-B5 and D1-D84. It is the single source of truth. Rebuild it with `python3 tools/build_requirements_html.py`. |
+| `requirements.html` | The final requirements, v1.3: ASD-STE100, 9 inline SVG diagrams, collisions COL-01..103, decisions B0-B5 and D1-D84. It is the single source of truth. Rebuild it with `python3 tools/build_requirements_html.py`. |
 | `research/final-requirements.md` | The markdown source of the final requirements. |
 | `research/message-board.md` | The agent message board. Append one row per message: `| time (UTC) | from | to | message |`. Never edit old rows. |
 | `research/director-decisions.md` | The director's decisions log. |
@@ -30,5 +30,13 @@ Three core use cases (binding):
 1. **Dictation:** local STT, then cleanup by a Databricks-hosted small model, then insert into the active app. No agent, no Genie.
 2. **Q&A:** the main agent checks memory, then asks Genie One MCP, and shows a blurb with progress, key numbers and a deep link.
 3. **Send context to Genie:** the user picks context from a meeting or memory to send to Genie (preview + approval), and/or approved definitions become the user's draft UC Pages.
+
+User confirmations (2026-11-15, requirements v1.3 §12.0b, U1-U14):
+- Tauri shell; "always on" = resident with the mic closed; preview-then-send, no auto-ask; local STT default.
+- Bottle is a companion to Genie One (no hand-off; Genie One MCP conversations should show in Genie One).
+- No automatic deletion of user content: Settings → Wipe (older than 30 d / 90 d / everything).
+- One shared agent runtime with one session per MOG; a home domain per MOG for DRAFT Pages.
+- Public name MOG; mascot is cute and looks out of Genie's lamp (extension of the Genie logo; brand approval before external release).
+- Still open: D23 audience.
 
 Binding scope: the MVP is not done until push-to-talk dictation AND meeting recording both work end to end.
