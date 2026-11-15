@@ -8,6 +8,8 @@ This repository is the shared context for every agent on the project. Read this 
 |---|---|
 | `requirements.html` | The final requirements, v1.3: ASD-STE100, 9 inline SVG diagrams, collisions COL-01..105, decisions B0-B5 and D1-D84. It is the single source of truth. Rebuild it with `python3 tools/build_requirements_html.py`. |
 | `research/final-requirements.md` | The markdown source of the final requirements. |
+| `docs/agents/BUILD-DISPATCH-PROMPT.md` | The orchestrator prompt that builds Bottle from the GitHub issues: agent teams, waves over the issue dependency graph, superpowers TDD per issue, CI on PRs, PR template, test ledger. Start a build session with it. |
+| GitHub issues | The backlog: one issue per work package, each with exact requirement IDs and pinned line ranges in `research/final-requirements.md`, milestones Week 1 spikes / MVP-D / MVP-M / v1 / v2, and "Depends on #n" links. |
 | `research/message-board.md` | The agent message board. Append one row per message: `| time (UTC) | from | to | message |`. Never edit old rows. |
 | `research/director-decisions.md` | The director's decisions log. |
 | `research/diagrams/*.svg` | The architecture diagrams. |
