@@ -300,6 +300,7 @@ STATES = [
     ("success", "Green happy eyes and sparkles. Inserted (1.2 s), completed (2.5 s), memory answer (2.5 s)."),
     ("error", "Red X eyes, dim star. Failed (3 s), login required (3 s); attention if the user must act."),
     ("sleeping", "Closed eyes and Z marks. MOG paused or dozing."),
+    ("attention + recording", "Overlays over any mood: a \"?\" bubble (attention, UX-03) and a red ring with a REC dot (recording, UX-04a)."),
 ]
 def mascot_html():
     b64 = base64.b64encode(open(SHEET, "rb").read()).decode()
@@ -311,8 +312,8 @@ def mascot_html():
                      f'style="background-position:{col*100/3:.4f}% {row*100}%"></div>'
                      f'<figcaption><strong>{k+1}. <code>{name}</code></strong><br>{html.escape(d)}</figcaption></figure>')
     return (f"<style>{css}</style>"
-            '<section class="mascot" aria-labelledby="mascot-h"><h4 id="mascot-h">MOG mascot: the 7 Rive moods (sprite sheet)</h4>'
-            '<p class="note">Source: <code>mog-rive/shots/sheet.png</code> (1600 x 800 px, 4 x 2 grid, the 8th cell is empty), embedded in this file. '
+            '<section class="mascot" aria-labelledby="mascot-h"><h4 id="mascot-h">MOG mascot: the 7 Rive moods and 2 overlays (sprite sheet)</h4>'
+            '<p class="note">Source: <code>mog-rive/shots/sheet.png</code> (1600 x 800 px, 4 x 2 grid, the 8th cell shows the two overlays), embedded in this file. The MOG rises out of a Genie lamp (U14); regenerate with <code>tools/render_mog_shots.py</code>. '
             'The mood enum order is idle, listening, processing, answering, success, error, sleeping (Diagram 7).</p>'
             '<div class="mascot-grid">' + "".join(cells) + "</div></section>")
 MASCOT_HTML = ""
