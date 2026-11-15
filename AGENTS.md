@@ -6,7 +6,7 @@ This repository is the shared context for every agent on the project. Read this 
 
 | Path | What it is |
 |---|---|
-| `requirements.html` | The final requirements, v1.3: ASD-STE100, 9 inline SVG diagrams, collisions COL-01..104, decisions B0-B5 and D1-D84. It is the single source of truth. Rebuild it with `python3 tools/build_requirements_html.py`. |
+| `requirements.html` | The final requirements, v1.3: ASD-STE100, 9 inline SVG diagrams, collisions COL-01..105, decisions B0-B5 and D1-D84. It is the single source of truth. Rebuild it with `python3 tools/build_requirements_html.py`. |
 | `research/final-requirements.md` | The markdown source of the final requirements. |
 | `research/message-board.md` | The agent message board. Append one row per message: `| time (UTC) | from | to | message |`. Never edit old rows. |
 | `research/director-decisions.md` | The director's decisions log. |
@@ -31,12 +31,13 @@ Three core use cases (binding):
 2. **Q&A:** the main agent checks memory, then asks Genie One MCP, and shows a blurb with progress, key numbers and a deep link.
 3. **Send context to Genie:** the user picks context from a meeting or memory to send to Genie (preview + approval), and/or approved definitions become the user's draft UC Pages.
 
-User confirmations (2026-11-15, requirements v1.3 §12.0b, U1-U15):
+User confirmations (2026-11-15, requirements v1.3 §12.0b, U1-U16):
 - Tauri shell; "always on" = resident with the mic closed; preview-then-send, no auto-ask; local STT default.
 - Bottle is a companion to Genie One (no hand-off; Genie One MCP conversations should show in Genie One).
 - No automatic deletion of user content: Settings → Wipe (older than 30 d / 90 d / everything).
 - One shared agent runtime with one session per MOG; a home domain per MOG for DRAFT Pages.
 - Public name MOG; mascot is cute and looks out of Genie's lamp (extension of the Genie logo; brand approval before external release).
 - Audience (U15): Databricks customers, internal users and partners; download the app and connect one or more Databricks CLI profiles (one profile = one workspace).
+- Guided setup (U16): with no CLI or no usable profile, Bottle downloads the official CLI after consent (checksum-checked, user-only folder, no admin) and walks the user through `databricks auth login` to a `bottle-*` profile.
 
 Binding scope: the MVP is not done until push-to-talk dictation AND meeting recording both work end to end.
