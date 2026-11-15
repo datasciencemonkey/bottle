@@ -1,5 +1,0 @@
-# Publish only the self-contained requirements snapshot.
-# Keep research, diagram sources, builders, caches, and temporary files local.
-*
-!.gitignore
-!requirements_kimi.html
