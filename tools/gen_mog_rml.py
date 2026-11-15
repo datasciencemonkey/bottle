@@ -44,31 +44,33 @@ EASE = '<CubicEaseInterpolator x1="0.42" y1="0" x2="0.58" y2="1"/>'
 TAU = 6.2831855
 
 # ---------------------------------------------------------------- palette
-# Genie One lamp icon colours (Jira AIBI-1851): coral FF5F46, pale pink FABFBA.
-# Databricks Navy 800 1B3139 / 900 0B2026 and Oat F9F7F4 / EEEDE9.
-# Lava FF3621 is deliberately not used (UX-10b). Shades marked "derived" are
-# darker or lighter mixes of the brand coral and need the same brand review.
+# Every colour below is a value from the databricks.com stylesheet (checked
+# 2026-11-15). The Genie One lamp icon uses coral FF5F46 and pale pink FABFBA
+# (Jira AIBI-1851). Lava 600 FF3621 is deliberately not used (UX-10b).
 CORAL = "FFFF5F46"
-CORAL_D = "FFD9452F"    # derived: shaded coral
-CORAL_DD = "FFB23826"   # derived: deep shade for the lamp foot and handle
+CORAL_D = "FFBD2B26"    # lamp shade
+CORAL_DD = "FF801C17"   # lamp handle and neck
 PINK = "FFFABFBA"
+PINK_M = "FFFF9E94"
 NAVY = "FF0B2026"
 NAVY_800 = "FF1B3139"
-NAVY_EDGE = "FF2A4A55"  # derived: lighter navy rim
+NAVY_EDGE = "FF1B5162"
 OAT = "FFF9F7F4"
 OAT_M = "FFEEEDE9"
-REC_RED = "FFFF4D4D"
-GOLD = "FFFFC94A"
-GOLD_L = "FFFFF0B3"
+REC_RED = "FFEB1600"
+GREEN = "FF42BA91"
+GOLD = "FFFCBA33"
+GOLD_L = "FFFFF0D3"
 
 MOOD_COLORS = {
-    "idle": "FF8FF5FF",
-    "listening": "FF7CFFB2",
-    "processing": "FFB89CFF",
-    "answering": "FFFFD166",
-    "success": "FF6CFF8E",
-    "error": "FFFF5A5A",
-    "sleeping": "FF5C7C99",
+    # Brand values with at least 3:1 contrast on the navy face (WCAG 1.4.11).
+    "idle": "FF8ACAFF",        # 7.7:1
+    "listening": "FF70C4AB",   # 6.6:1
+    "processing": "FFFF9E94",  # 6.8:1, Genie pink
+    "answering": "FFFCBA33",   # 7.9:1
+    "success": "FF42BA91",     # 5.6:1
+    "error": "FFFF5F46",       # 4.5:1
+    "sleeping": "FF90A5B1",    # 5.3:1
 }
 MOODS = list(MOOD_COLORS)
 
@@ -142,12 +144,12 @@ def sparkle_group():
         f'<GradientStop colorValue="{GOLD_L}" position="0"/><GradientStop colorValue="{GOLD}" position="1"/>'
         f'</RadialGradient></Fill></Shape>'
         f'<Shape name="JewelGlow">{ellipse(40, 40)}'
-        f'<Fill fillRule="clockwise" name="Glow"><SolidColor colorValue="88FFC94A" name="Color"/>'
+        f'<Fill fillRule="clockwise" name="Glow"><SolidColor colorValue="88FCBA33" name="Color"/>'
         f'<Feather strength="14" name="F"/></Fill></Shape>'
         f'</Node>')
     # Orbiting sparkles shown while processing.
     orb = []
-    for i, (r, s) in enumerate([(132, 16), (132, 11), (132, 8)]):
+    for i, (r, s) in enumerate([(132, 22), (132, 16), (132, 12)]):
         a = i * TAU / 3 - math.pi / 2
         orb.append(f'<Shape x="{r*math.cos(a):.2f}" y="{r*math.sin(a):.2f}" name="Orb{i+1}">{star4(s)}{fill(GOLD)}</Shape>')
     orbit = f'<Node x="0" y="-6" opacity="0" name="Orbit" id="{I["orbit"]}">{"".join(orb)}</Node>'
@@ -156,21 +158,21 @@ def sparkle_group():
     for i in range(8):
         a = i * TAU / 8
         r = 128 if i % 2 == 0 else 112
-        sz = 14 if i % 2 == 0 else 8
-        col = GOLD if i % 2 == 0 else "FF6CFF8E"
+        sz = 20 if i % 2 == 0 else 12
+        col = GOLD if i % 2 == 0 else GREEN
         b.append(f'<Shape x="{r*math.cos(a):.2f}" y="{r*math.sin(a):.2f}" name="Burst{i+1}">{star4(sz)}{fill(col)}</Shape>')
     burst = f'<Node x="0" y="-10" opacity="0" name="Burst" id="{I["burst"]}">{"".join(b)}</Node>'
     # Sleeping Zz.
-    z = lambda s: polyline([(-s, -s), (s, -s), (-s, s), (s, s)])
+    z = lambda s: polyline([(-s * 1.3, -s * 1.3), (s * 1.3, -s * 1.3), (-s * 1.3, s * 1.3), (s * 1.3, s * 1.3)])
     zz = (f'<Node x="78" y="-96" opacity="0" name="Zz" id="{I["zz"]}">'
-          f'<Shape x="0" y="0" name="Z1">{z(9)}{stroke("FFB9D7EA", 4)}</Shape>'
-          f'<Shape x="24" y="-26" name="Z2">{z(6)}{stroke("FFB9D7EA", 3)}</Shape>'
+          f'<Shape x="0" y="0" name="Z1">{z(9)}{stroke("FFC4CCD6", 6)}</Shape>'
+          f'<Shape x="24" y="-26" name="Z2">{z(6)}{stroke("FFC4CCD6", 5)}</Shape>'
           f'</Node>')
     return jewel + orbit + burst + zz
 
 
 def face():
-    eye = lambda x, cid: (f'<Shape x="{x}" y="0" name="Eye">{rrect(24, 34, 12)}'
+    eye = lambda x, cid: (f'<Shape x="{x}" y="0" name="Eye">{rrect(28, 38, 14)}'
                           f'<Fill name="Fill"><SolidColor colorValue="{MOOD_COLORS["idle"]}" name="Color" id="{cid}"/></Fill>'
                           f'</Shape>')
     eyepair = (f'<Node name="EyePair" id="{I["eyepair"]}">'
@@ -195,8 +197,8 @@ def face():
     mouth = (f'<Shape x="0" y="24" name="Mouth" id="{I["mouth"]}">{rrect(18, 6, 3)}'
              f'<Fill name="Fill"><SolidColor colorValue="{MOOD_COLORS["idle"]}" name="Color" id="{I["mouth_col"]}"/></Fill></Shape>')
     dots = []
-    for i, (x, did, cid) in enumerate([(-16, I["dot1"], I["dots_col1"]), (0, I["dot2"], I["dots_col2"]), (16, I["dot3"], I["dots_col3"])]):
-        dots.append(f'<Shape x="{x}" y="0" name="Dot{i+1}" id="{did}">{ellipse(8, 8)}'
+    for i, (x, did, cid) in enumerate([(-18, I["dot1"], I["dots_col1"]), (0, I["dot2"], I["dots_col2"]), (18, I["dot3"], I["dots_col3"])]):
+        dots.append(f'<Shape x="{x}" y="0" name="Dot{i+1}" id="{did}">{ellipse(11, 11)}'
                     f'<Fill name="Fill"><SolidColor colorValue="{MOOD_COLORS["processing"]}" name="Color" id="{cid}"/></Fill></Shape>')
     think = f'<Node x="0" y="26" opacity="0" name="ThinkDots" id="{I["thinkdots"]}">{"".join(dots)}</Node>'
     screen = (f'<Shape x="0" y="0" name="Screen">{rrect(130, 88, 38)}'
@@ -205,7 +207,7 @@ def face():
               f'<GradientStop colorValue="{NAVY_800}" position="0"/><GradientStop colorValue="{NAVY}" position="1"/>'
               f'</LinearGradient></Fill></Shape>')
     glow = (f'<Shape x="0" y="0" name="ScreenGlow">{rrect(134, 92, 40)}'
-            f'<Stroke thickness="4" name="Glow"><SolidColor colorValue="408FF5FF" name="Color" id="{I["screen_glow"]}"/>'
+            f'<Stroke thickness="4" name="Glow"><SolidColor colorValue="408ACAFF" name="Color" id="{I["screen_glow"]}"/>'
             f'<Feather strength="6" name="F"/></Stroke></Shape>')
     return (f'<Node x="0" y="-6" name="FaceHover" id="{I["facehover"]}">'
             f'{look}{mouth}{think}{screen}{glow}</Node>')
@@ -225,12 +227,12 @@ def body():
     # The bottom of the body sits inside the lamp; the lamp front hides it.
     cheeks = "".join(
         f'<Shape x="{x}" y="50" name="Cheek">{ellipse(24, 13)}'
-        f'<Fill fillRule="clockwise" name="Fill"><SolidColor colorValue="DDFF7B6B" name="Color"/>'
+        f'<Fill fillRule="clockwise" name="Fill"><SolidColor colorValue="99FF5F46" name="Color"/>'
         f'<Feather strength="3" name="F"/></Fill></Shape>'
         for x in (-58, 58))
     torso = (f'<Shape x="0" y="22" name="Body" id="{I["torso"]}">{rrect(188, 186, 86)}'
              f'<Fill name="Fill"><LinearGradient startX="0" startY="-93" endX="0" endY="93" name="G">'
-             f'<GradientStop colorValue="{PINK}" position="0.1"/><GradientStop colorValue="FFFFA898" position="0.6"/>'
+             f'<GradientStop colorValue="{PINK}" position="0.1"/><GradientStop colorValue="{PINK_M}" position="0.6"/>'
              f'<GradientStop colorValue="{CORAL}" position="1"/></LinearGradient></Fill></Shape>')
     shine = f'<Shape x="-62" y="-44" name="Shine">{ellipse(18, 11)}{fill("88FFFFFF")}</Shape>'
     return (f'<Node name="MoodBody" id="{I["moodbody"]}">'
@@ -246,23 +248,23 @@ def lamp_front():
            f'</LinearGradient></Fill></Shape>')
     gleam = (f'<Shape x="-60" y="28" name="Gleam">{rrect(40, 9, 4.5)}'
              f'<Fill name="Fill"><SolidColor colorValue="AAFABFBA" name="Color"/></Fill></Shape>'
-             f'<Shape x="64" y="30" name="LampSparkle">{star4(14)}{fill(PINK)}</Shape>')
+             )
     bowl = (f'<Shape x="0" y="0" name="Bowl">'
             f'{polyline([(-112, 0), (112, 0), (88, 66), (-88, 66)], closed=True, radius=36)}'
             f'<Fill name="Fill"><LinearGradient startX="0" startY="0" endX="0" endY="66" name="G">'
             f'<GradientStop colorValue="{CORAL}" position="0"/><GradientStop colorValue="{CORAL_D}" position="1"/>'
             f'</LinearGradient></Fill></Shape>')
     spout = (f'<Shape x="0" y="0" name="Spout">'
-             f'{polyline([(92, 10), (132, 6), (156, -14), (172, -26), (166, -8), (136, 30), (82, 46)], closed=True, radius=9)}'
+             f'{polyline([(92, 10), (122, 6), (142, -12), (154, -22), (150, -6), (126, 28), (82, 46)], closed=True, radius=9)}'
              f'<Fill name="Fill"><LinearGradient startX="80" startY="0" endX="166" endY="-24" name="G">'
              f'<GradientStop colorValue="{CORAL_D}" position="0"/><GradientStop colorValue="{CORAL}" position="1"/>'
              f'</LinearGradient></Fill></Shape>')
-    handle = (f'<Shape x="-118" y="26" name="Handle">{ellipse(52, 46)}'
-              f'{stroke(CORAL_DD, 11)}</Shape>')
-    neck = f'<Shape x="0" y="72" name="Neck">{rrect(70, 14, 5)}{fill(CORAL_DD)}</Shape>'
-    foot = (f'<Shape x="0" y="84" name="Foot">{rrect(122, 16, 8)}'
+    handle = (f'<Shape x="-114" y="26" name="Handle">{ellipse(44, 40)}'
+              f'{stroke(CORAL_DD, 12)}</Shape>')
+    neck = f'<Shape x="0" y="68" name="Neck">{rrect(70, 10, 4)}{fill(CORAL_DD)}</Shape>'
+    foot = (f'<Shape x="0" y="78" name="Foot">{rrect(122, 14, 7)}'
             f'<Fill name="Fill"><LinearGradient startX="0" startY="-8" endX="0" endY="8" name="G">'
-            f'<GradientStop colorValue="{OAT_M}" position="0"/><GradientStop colorValue="FFD8D5CE" position="1"/>'
+            f'<GradientStop colorValue="{OAT_M}" position="0"/><GradientStop colorValue="FFDCE0E2" position="1"/>'
             f'</LinearGradient></Fill></Shape>')
     return (f'<Node x="200" y="276" name="Lamp" id="{I["lamp"]}">'
             f'{lip}{gleam}{bowl}{spout}{handle}{neck}{foot}</Node>')
@@ -279,23 +281,23 @@ def lamp_inside():
 
 def attention():
     # "?" bubble (UX-03), shown over any mood when attention == true.
-    q = (f'<Shape x="0" y="-3" name="Hook">'
+    q = (f'<Node scaleX="1.45" scaleY="1.45" name="Glyph"><Shape x="0" y="-3" name="Hook">'
          f'{polyline([(-7, -5), (-7, -10), (0, -14), (7, -10), (7, -4), (0, 1), (0, 6)], radius=5)}'
          f'{stroke(NAVY_800, 5)}</Shape>'
-         f'<Shape x="0" y="13" name="Dot">{ellipse(6, 6)}{fill(NAVY_800)}</Shape>')
-    bubble = (f'<Shape name="Bubble">{ellipse(48, 48)}'
-              f'<Stroke thickness="3" name="Rim"><SolidColor colorValue="{CORAL}" name="Color"/></Stroke>'
+         f'<Shape x="0" y="13" name="Dot">{ellipse(6.5, 6.5)}{fill(NAVY_800)}</Shape></Node>')
+    bubble = (f'<Shape name="Bubble">{ellipse(64, 64)}'
+              f'<Stroke thickness="5" name="Rim"><SolidColor colorValue="{CORAL}" name="Color"/></Stroke>'
               f'{fill(OAT)}</Shape>'
-              f'<Shape x="-16" y="20" name="BubbleTail">{ellipse(12, 12)}'
-              f'<Stroke thickness="3" name="Rim"><SolidColor colorValue="{CORAL}" name="Color"/></Stroke>{fill(OAT)}</Shape>')
+              f'<Shape x="-22" y="27" name="BubbleTail">{ellipse(15, 15)}'
+              f'<Stroke thickness="4" name="Rim"><SolidColor colorValue="{CORAL}" name="Color"/></Stroke>{fill(OAT)}</Shape>')
     return f'<Node x="104" y="-112" opacity="0" name="Attention" id="{I["attn"]}">{q}{bubble}</Node>'
 
 
 def recording():
     # Red ring and REC dot (UX-04a). The DOM REC pill stays the authoritative indicator (UX-04b).
-    dot = (f'<Shape x="-112" y="-118" name="RecDot" id="{I["recdot"]}">{ellipse(18, 18)}{fill(REC_RED)}</Shape>')
-    ring = (f'<Shape name="RecRing">{ellipse(292, 292)}{stroke("DDFF4D4D", 4)}</Shape>'
-            f'<Shape name="RecGlow">{ellipse(292, 292)}{stroke("66FF4D4D", 6, feather=8)}</Shape>')
+    dot = (f'<Shape x="-108" y="-110" name="RecDot" id="{I["recdot"]}">{ellipse(30, 30)}{fill(REC_RED)}</Shape>')
+    ring = (f'<Shape name="RecRing">{ellipse(276, 276)}{stroke("DDEB1600", 7)}</Shape>'
+            f'<Shape name="RecGlow">{ellipse(276, 276)}{stroke("66EB1600", 9, feather=8)}</Shape>')
     return f'<Node x="0" y="-14" opacity="0" name="Recording" id="{I["rec"]}">{dot}{ring}</Node>'
 
 
@@ -305,12 +307,12 @@ def rings():
             f'<Node name="LevelRing" id="{I["levelring"]}">'
             f'<DataBindContext sourcePathIds="{I["vm"]}-{I["p_level"]}" propertyKey="16" converterId="{I["conv_level"]}"/>'
             f'<DataBindContext sourcePathIds="{I["vm"]}-{I["p_level"]}" propertyKey="17" converterId="{I["conv_level"]}"/>'
-            f'{r(250, "AA7CFFB2", 4)}'
+            f'{r(220, "CC70C4AB", 7)}'
             f'<Node name="LevelGlow" id="{I["levelglow"]}">'
             f'<DataBindContext sourcePathIds="{I["vm"]}-{I["p_level"]}" propertyKey="18"/>'
-            f'<Shape name="GlowRing">{ellipse(250, 250)}{stroke("AA7CFFB2", 5, feather=8)}</Shape></Node>'
+            f'<Shape name="GlowRing">{ellipse(220, 220)}{stroke("AA70C4AB", 8, feather=8)}</Shape></Node>'
             f'</Node>'
-            f'{r(300, "557CFFB2", 3)}</Node>')
+            f'{r(270, "7770C4AB", 5)}</Node>')
 
 
 def scene_tree():
@@ -319,10 +321,12 @@ def scene_tree():
            f'{attention()}{recording()}{sparkle_group()}'
            f'<Node name="Squash" id="{I["squash"]}">{body()}</Node>'
            f'{rings()}</Node>')
-    shadow = (f'<Shape x="200" y="378" name="Shadow" id="{I["shadow"]}">{ellipse(150, 16)}'
+    shadow = (f'<Shape x="200" y="370" name="Shadow" id="{I["shadow"]}">{ellipse(150, 16)}'
               f'<Fill fillRule="clockwise" name="Fill"><SolidColor colorValue="44000000" name="Color"/>'
               f'<Feather strength="8" name="F"/></Fill></Shape>')
-    return lamp_front() + mog + lamp_inside() + shadow
+    # Rig scales the whole drawing so the mascot fills a small window (M = 112 px).
+    return (f'<Node x="200" y="200" scaleX="1.1" scaleY="1.1" name="Rig">'
+            f'<Node x="-200" y="-200" name="RigOrigin">{lamp_front() + mog + lamp_inside() + shadow}</Node></Node>')
 
 
 # ---------------------------------------------------------------- animation
@@ -614,7 +618,7 @@ def build():
     enum = (f'<DataEnumCustom name="MogMood" id="{I["enum"]}">' +
             "".join(f'<DataEnumValue key="{m}" value="{m.capitalize()}" id="{ENUMV[m]}"/>' for m in MOODS) +
             '</DataEnumCustom>')
-    conv = (f'<DataConverterRangeMapper minInput="0" maxInput="1" minOutput="0.92" maxOutput="1.28" '
+    conv = (f'<DataConverterRangeMapper minInput="0" maxInput="1" minOutput="0.92" maxOutput="1.2" '
             f'clampLower="true" clampUpper="true" name="LevelToScale" id="{I["conv_level"]}"/>')
     vm = (f'<ViewModel defaultInstanceId="{I["vmi"]}" name="Mog" id="{I["vm"]}">'
           f'<ViewModelPropertyEnumCustom enumId="{I["enum"]}" name="mood" id="{I["p_mood"]}"/>'
