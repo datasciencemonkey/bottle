@@ -129,7 +129,9 @@ describe('Table SEC-DISC disclosures', () => {
     const t = text('draft-pages');
     expect(t).toMatch(/DRAFT/);
     expect(t).toMatch(/Genie One can read your DRAFT Pages in your own conversations/);
-    expect(allCopy().join(' ')).not.toMatch(/Genie spaces? (can )?reads?|agents? (can )?reads? (your )?Pages/i);
+    expect(allCopy().join(' ')).not.toMatch(
+      /Genie spaces? (can )?reads?|agents? (can )?reads? (your )?Pages/i,
+    );
   });
 
   it('[SEC-17] the v1 Lakebase PITR window is disclosed with its 2-day default', () => {
@@ -150,8 +152,11 @@ describe('Table SEC-DISC disclosures', () => {
     expect(el.querySelectorAll('a, script, img, iframe').length).toBe(0);
   });
 
-  it('[SEC-17] the user doc lists every disclosure title', () => {
+  it('[SEC-17] the user doc lists every disclosure title and sentence', () => {
     const userDoc = readFileSync(resolve(root, 'docs/user/where-your-data-goes.md'), 'utf8');
-    for (const d of SEC_DISC) expect(userDoc).toContain(`## ${d.title}`);
+    for (const d of SEC_DISC) {
+      expect(userDoc).toContain(`## ${d.title}`);
+      for (const line of d.lines) expect(userDoc).toContain(`- ${line}`);
+    }
   });
 });
