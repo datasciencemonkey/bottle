@@ -1424,3 +1424,63 @@ fn mem_35a_migration_0002_is_forward_only_and_deletes_nothing() {
     }
     assert!(sql.contains("raise(abort"));
 }
+
+#[test]
+fn mem_01_a_session_replace_cannot_move_its_utterances_to_another_mog() {
+    let t = TempDir::new("01-sess-replace");
+    let s = open_store(t.path(), Arc::new(MemoryKeyVault::new()));
+    seed_mog(&s, MOG_A);
+    seed_mog(&s, MOG_B);
+    seed_session(&s, MOG_A, "sess-a", 1);
+    assert!(insert_utterance(&s, "u-1", "sess-a", MOG_A, 1).is_ok());
+    // A REPLACE deletes and inserts the session row, so no UPDATE trigger runs. Deferred
+    // foreign keys would let the delete through; the INSERT trigger still refuses.
+    let moved = s.with_conn(|c| {
+        c.execute_batch("PRAGMA defer_foreign_keys = ON")?;
+        c.execute(
+            "INSERT OR REPLACE INTO session (session_id, mog_id, kind, started_at, row_hlc, origin_device_id)
+             VALUES ('sess-a', ?1, 'meeting', 1, 1, ?1)",
+            [MOG_B],
+        )
+    });
+    assert!(moved.is_err());
+    assert_eq!(
+        count(&s, "SELECT count(*) FROM session WHERE session_id = 'sess-a' AND mog_id = '0f8b1a52-6c1e-4d0a-9a51-3a3d2f6f0a01'"),
+        1
+    );
+    assert!(insert_utterance(&s, "u-2", "sess-a", MOG_B, 1).is_err());
+}
+
+#[test]
+fn mem_35a_migration_0002_applies_to_a_store_that_has_0001_and_data() {
+    let t = TempDir::new("35a-upgrade");
+    let vault = Arc::new(MemoryKeyVault::new());
+    let s = open_store(t.path(), vault.clone());
+    seed_mog(&s, MOG_A);
+    seed_session(&s, MOG_A, "sess-a", 1);
+    assert!(insert_utterance(&s, "u-1", "sess-a", MOG_A, 1).is_ok());
+    // Make the file look like a 0001-only store with data (test setup only).
+    s.with_conn(|c| {
+        c.execute_batch(
+            "DROP TRIGGER utterance_session_mog_bi;
+             DROP TRIGGER utterance_session_mog_bu;
+             DROP TRIGGER session_mog_with_utterances_bu;
+             DROP TRIGGER session_mog_with_utterances_bi;
+             DELETE FROM schema_migrations WHERE version = 2;",
+        )
+    })
+    .unwrap();
+    s.close();
+    let s = open_store(t.path(), vault);
+    assert_eq!(
+        count(&s, "SELECT max(version) FROM schema_migrations"),
+        super::migrate::latest_version()
+    );
+    assert_eq!(
+        count(&s, "SELECT count(*) FROM utterance"),
+        1,
+        "the data stays"
+    );
+    seed_mog(&s, MOG_B);
+    assert!(insert_utterance(&s, "u-2", "sess-a", MOG_B, 2).is_err());
+}

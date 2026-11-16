@@ -28,3 +28,13 @@ WHEN NEW.mog_id IS NOT OLD.mog_id
 BEGIN
   SELECT RAISE(ABORT, 'session_mog_has_utterances');
 END;
+
+-- `INSERT OR REPLACE` of a session deletes and inserts the row, so no UPDATE trigger runs. With
+-- foreign keys off or deferred, it could move a session that has utterances to another MOG.
+CREATE TRIGGER session_mog_with_utterances_bi BEFORE INSERT ON session
+WHEN EXISTS (
+  SELECT 1 FROM utterance WHERE session_id = NEW.session_id AND mog_id IS NOT NEW.mog_id
+)
+BEGIN
+  SELECT RAISE(ABORT, 'session_mog_has_utterances');
+END;
