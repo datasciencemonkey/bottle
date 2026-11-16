@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MogId } from '../../shared/interfaces';
 import { asMogViewState, emitView, useViewEvent, type MogViewState } from '../view-ipc';
 import { LevelMeter, NO_MIC_LEVELS, type MicLevelSource } from './level-meter';
+import type { FrameProbe } from './frame-probe';
 import type { MascotRenderer } from './mascot';
 import { RiveMascot } from './rive-mascot';
 
@@ -12,6 +13,8 @@ export interface MogViewProps {
   createMascot?: () => MascotRenderer;
   /** Mic frames for the level meter (UX-06a). TODO(#4): the CaptureService level stream. */
   levels?: MicLevelSource;
+  /** The frame probe for the latency run (#13, ADR 0031). Only with the trace flag. */
+  probe?: FrameProbe | undefined;
 }
 
 /** One Rive instance per MOG view, with the PNG fallback (UX-09b). */
@@ -21,6 +24,7 @@ export function MogView({
   mogId,
   createMascot = defaultMascot,
   levels = NO_MIC_LEVELS,
+  probe,
 }: MogViewProps) {
   const ref = useRef<HTMLDivElement>(null);
   const mascot = useRef<MascotRenderer | undefined>(undefined);
@@ -65,10 +69,12 @@ export function MogView({
       mascot.current?.setMood(s.mood);
       // UX-03: the "?" cue over any mood; the renderer skips a value that did not change.
       mascot.current?.setAttention(s.overlays.attention);
+      // UX-36: the mood is on the mascot now, so the next frame draws it.
+      probe?.onApplied(s.mood, s.trace);
       last.current = s;
       setState(s);
     },
-    [mogId],
+    [mogId, probe],
   );
   useViewEvent('mog.view_state', onState);
 

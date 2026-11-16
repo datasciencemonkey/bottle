@@ -70,6 +70,19 @@ The device tests skip and print the reason when the fixture is not set:
 
 A skipped test is never a pass. Only a person on a reference device sets these variables.
 
+## View rows (#13, ADR 0031)
+
+| Row | Span | Samples | Limit |
+|---|---|---|---|
+| UX-05b | key-down in the brain to the `listening` frame in the MOG window | all PTT presses | p95 < 100 ms |
+| UX-36 | a step event in the brain to its frame in the MOG window | every traced `mog.view_state` | p95 ≤ 100 ms |
+
+- Tests with no device: `pnpm vitest run src/acceptance/at-21-view-latency.test.tsx` (sim clock,
+  each hop at its ADR 0031 allocation: 10 + 30 + 30 ms and one 60 Hz frame).
+- Device run: build with `VITE_BOTTLE_LATENCY_TRACE=1`, then read `__bottleLatency.toJSON()` in
+  Web Inspector on the `mog-<id>` window. The steps and the expected numbers are in #355.
+- The trace has times, a sequence number and mood names only. The flag is off in a normal build.
+
 ## Device steps (a person, about 30 min per device)
 
 These steps need a person. Do not run them on a machine that is not a reference device.

@@ -240,7 +240,8 @@ export interface HeldMood {
 /**
  * UX-05a: keep the shown mood for `MOOD_HOLD_MS` before a change. When a change must wait,
  * `recheckAt` says when to call again. `listening` shows at once so key-down feedback stays
- * under 100 ms (UX-05b, ADR 0018).
+ * under 100 ms (UX-05b, ADR 0018). `listening` -> `processing` (the user ends the capture)
+ * also shows at once, so key-up feedback stays within 100 ms (NFR-01c, UX-36, ADR 0031).
  */
 export function holdMood(
   prev: HeldMood | undefined,
@@ -250,6 +251,8 @@ export function holdMood(
   if (!prev) return { shown: { mood: target, since: now } };
   if (prev.mood === target) return { shown: prev };
   const end = prev.since + MOOD_HOLD_MS;
-  if (target === 'listening' || now >= end) return { shown: { mood: target, since: now } };
+  const userAction =
+    target === 'listening' || (prev.mood === 'listening' && target === 'processing');
+  if (userAction || now >= end) return { shown: { mood: target, since: now } };
   return { shown: prev, recheckAt: end };
 }
