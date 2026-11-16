@@ -792,7 +792,14 @@ fn at_30_cap_43b_device_the_altgr_layout_is_read_and_flagged() {
 #[test]
 #[ignore = "pending TODO(#66): the panic key and capture_stop_all are not built"]
 fn at_30_mb_05_panic_stops_all_capture_within_200_ms_without_input_monitoring() {
-    use mog_core::capture::{CaptureService, StubCaptureService};
+    use mog_core::capture::{CaptureCore, CaptureRequest, CaptureService};
+    use mog_core::testkit::capture::{FakeAudioDevice, RecordingCaptureEvents};
+    use mog_core::types::CaptureMode;
+    let request = |mog: &str, mode| CaptureRequest {
+        mog_id: mog.to_string(),
+        mode,
+        others_track: false,
+    };
     // The panic key is a registered chord, so it must work with Input Monitoring denied.
     let api = FakePermissions::new();
     api.set(Permission::InputMonitoring, PermissionStatus::Denied);
@@ -804,13 +811,20 @@ fn at_30_mb_05_panic_stops_all_capture_within_200_ms_without_input_monitoring() 
     );
     // TODO(#66): replace the stub with R2 and the panic handler, press the panic key on the
     // sim clock and read capture_status 200 ms later: no lease is left on any MOG.
-    let capture = StubCaptureService;
+    let capture = CaptureCore::new(
+        Box::new(FakeAudioDevice::new()),
+        Arc::new(SimClock::new()),
+        Arc::new(RecordingCaptureEvents::default()),
+    );
+    // One lease per MOG: a PTT on MOG B over MOG A's hands-free capture (ARC-F9).
     let a = capture
-        .acquire_lease("mog-a")
-        .expect("TODO(#4): lease for MOG A");
+        .start(request("mog-a", CaptureMode::HandsFree))
+        .expect("TODO(#4): lease for MOG A")
+        .id;
     let b = capture
-        .acquire_lease("mog-b")
-        .expect("TODO(#4): lease for MOG B");
+        .start(request("mog-b", CaptureMode::Ptt))
+        .expect("TODO(#4): lease for MOG B")
+        .id;
     assert_ne!(a, b);
     assert!(
         check_ptt_permission(&api).is_err(),
