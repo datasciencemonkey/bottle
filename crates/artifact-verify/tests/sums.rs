@@ -8,7 +8,7 @@ const B: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85
 
 /// [W-17d] the checksum file name follows databricks_cli_<ver>_SHA256SUMS
 #[test]
-fn checksum_file_name() {
+fn w_17d_checksum_file_name() {
     assert_eq!(
         sums_file_name("0.250.0"),
         "databricks_cli_0.250.0_SHA256SUMS"
@@ -21,7 +21,7 @@ fn checksum_file_name() {
 
 /// [W-17d] [SEC-20b] parses "<hex>  <filename>" lines and looks up the expected hash
 #[test]
-fn parses_release_sums() {
+fn w_17d_sec_20b_parses_release_sums() {
     let text = format!(
         "{A}  databricks_cli_0.250.0_darwin_arm64.zip\n\
          {B}  databricks_cli_0.250.0_linux_amd64.tar.gz\r\n\
@@ -60,7 +60,7 @@ fn parses_release_sums() {
 
 /// [W-17d] [SEC-20b] malformed or ambiguous SHA256SUMS files are rejected
 #[test]
-fn rejects_malformed_sums() {
+fn w_17d_sec_20b_rejects_malformed_sums() {
     assert!(matches!(
         Sha256Sums::parse("garbage\n"),
         Err(SumsError::BadLine { line: 1 })
