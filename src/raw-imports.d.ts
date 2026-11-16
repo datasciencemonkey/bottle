@@ -9,3 +9,9 @@ declare module '*.wasm?url' {
   const url: string;
   export default url;
 }
+
+/** Vite `?url` imports of the mascot PNG fallback (UX-09b, ADR 0027). */
+declare module '*.png?url' {
+  const url: string;
+  export default url;
+}

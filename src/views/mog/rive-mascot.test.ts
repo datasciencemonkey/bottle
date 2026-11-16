@@ -72,13 +72,17 @@ function fakeRive(
     opts = o;
     return rive;
   };
+  const built = (): OfflineRiveOptions => {
+    if (!opts) throw new Error('no Rive instance was built');
+    return opts;
+  };
   return {
     props,
     pokes,
     create,
-    opts: () => opts!,
-    load: () => opts!.onLoad?.(new Event('load') as never),
-    fail: () => opts!.onLoadError?.(new Event('error') as never),
+    opts: built,
+    load: () => built().onLoad?.(new Event('load') as never),
+    fail: () => built().onLoadError?.(new Event('error') as never),
     cleaned: () => cleaned,
   };
 }

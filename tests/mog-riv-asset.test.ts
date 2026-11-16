@@ -32,7 +32,7 @@ describe('the bundled mascot .riv (ADR 0027)', () => {
     expect(emitted).toHaveLength(1);
     expect(emitted[0]?.type).toBe('asset');
     expect(emitted[0]?.fileName).toBe('mascot/mog.riv');
-    expect(Array.from(emitted[0]!.source)).toEqual([82, 73, 86, 69]);
+    expect(Array.from(emitted[0]?.source ?? [])).toEqual([82, 73, 86, 69]);
     expect(warnings).toEqual([]);
   });
 

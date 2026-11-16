@@ -79,9 +79,7 @@ describe('UX-06a: level = clamp((dBFS + 60) / 50, 0, 1)', () => {
     }
     expect(times.length).toBeLessThanOrEqual(31);
     expect(times.length).toBeGreaterThan(20);
-    for (let i = 1; i < times.length; i++) {
-      expect(times[i]! - times[i - 1]!).toBeGreaterThanOrEqual(1000 / 30);
-    }
+    times.slice(1).forEach((t, i) => expect(t - (times[i] ?? 0)).toBeGreaterThanOrEqual(1000 / 30));
   });
 
   it('[UX-06a] [UX-09a] shows nothing new while the level does not change', () => {

@@ -2,17 +2,26 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MogId } from '../../shared/interfaces';
 import { asMogViewState, emitView, useViewEvent, type MogViewState } from '../view-ipc';
-import { PlaceholderMascot, type MascotRenderer } from './mascot';
+import { LevelMeter, NO_MIC_LEVELS, type MicLevelSource } from './level-meter';
+import type { MascotRenderer } from './mascot';
+import { RiveMascot } from './rive-mascot';
 
 export interface MogViewProps {
   mogId: MogId;
-  /** The renderer seam (ADR 0002). TODO(#12): the Rive renderer. */
+  /** The renderer seam (ADR 0002, ADR 0027). */
   createMascot?: () => MascotRenderer;
+  /** Mic frames for the level meter (UX-06a). TODO(#4): the CaptureService level stream. */
+  levels?: MicLevelSource;
 }
 
-const placeholder = () => new PlaceholderMascot();
+/** One Rive instance per MOG view, with the PNG fallback (UX-09b). */
+export const defaultMascot = (): MascotRenderer => new RiveMascot();
 
-export function MogView({ mogId, createMascot = placeholder }: MogViewProps) {
+export function MogView({
+  mogId,
+  createMascot = defaultMascot,
+  levels = NO_MIC_LEVELS,
+}: MogViewProps) {
   const ref = useRef<HTMLDivElement>(null);
   const mascot = useRef<MascotRenderer | undefined>(undefined);
   const [state, setState] = useState<MogViewState | undefined>(undefined);
@@ -29,12 +38,22 @@ export function MogView({ mogId, createMascot = placeholder }: MogViewProps) {
     };
   }, [createMascot]);
 
+  // UX-06a / UX-06b: the view computes the level, and only for the mic this MOG owns.
+  useEffect(() => {
+    const meter = new LevelMeter(mogId);
+    return levels.subscribe((frame) => {
+      const v = meter.push(frame);
+      if (v !== undefined) mascot.current?.setLevel(v);
+    });
+  }, [levels, mogId]);
+
   const onState = useCallback(
     (p: unknown) => {
       const s = asMogViewState(p);
       if (!s || s.mogId !== mogId) return;
       mascot.current?.setMood(s.mood);
-      if (s.level !== undefined) mascot.current?.setLevel(s.level);
+      // UX-03: the "?" cue over any mood; the renderer skips a value that did not change.
+      mascot.current?.setAttention(s.overlays.attention);
       setState(s);
     },
     [mogId],
@@ -46,9 +65,17 @@ export function MogView({ mogId, createMascot = placeholder }: MogViewProps) {
     <div>
       <div
         ref={ref}
+        className="mascot"
         aria-label="MOG"
-        onClick={() => void emitView(mogId, 'click')}
-        onMouseOver={() => void emitView(mogId, 'hover')}
+        onClick={() => {
+          mascot.current?.poke();
+          void emitView(mogId, 'click');
+        }}
+        onMouseOver={() => {
+          mascot.current?.setHover(true);
+          void emitView(mogId, 'hover');
+        }}
+        onMouseLeave={() => mascot.current?.setHover(false)}
       />
       {state?.overlays.attention && <span data-overlay="attention" aria-label="Needs attention" />}
       {state?.overlays.recording && <span data-overlay="recording">REC</span>}
