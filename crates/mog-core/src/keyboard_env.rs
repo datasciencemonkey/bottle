@@ -11,9 +11,16 @@
 //! - A process name lives only for one call of the visitor. [`read_keyboard_env`] keeps only
 //!   the [`VoiceApp`] matches, so no other name is stored. Nothing here logs.
 //!
+//! The Copilot key (#332, ADR 0025): Windows has no documented prompt-free read that tells
+//! if the keyboard has the key. So the read is a [`CopilotKeyFlag`]: the Windows hook sets it
+//! when it first sees Win+Shift+F23, and [`WithCopilotFlag`] gives it to the check. Settings
+//! (#77) and the wizard (#43) can also set it from the user's answer (option 1 of #332).
+//!
 //! Requirements: CAP-43b (AT-30).
 
 use crate::hotkey_bindings::{DictationShortcut, KeyboardEnv, Os, VoiceApp};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 /// The prompt-free OS reads of the first-run key check. Each method is one read.
 pub trait EnvReads: Send + Sync {
@@ -53,6 +60,62 @@ pub fn read_keyboard_env(os: Os, reads: &dyn EnvReads) -> KeyboardEnv {
             voice_apps,
             ..KeyboardEnv::default()
         },
+    }
+}
+
+/// The "keyboard has a Copilot key" flag (CAP-43b, #332, ADR 0025). It holds one bool and
+/// no key identity.
+pub trait CopilotKeyFlag: Send + Sync {
+    /// The keyboard has a Copilot key, as far as Bottle knows.
+    fn present(&self) -> bool;
+    /// Set the flag. The hook sets `true` on the first Copilot chord; a user answer in
+    /// Settings (#77) or the wizard (#43) sets either value. Returns `true` if it changed.
+    fn set(&self, present: bool) -> bool;
+}
+
+/// A [`CopilotKeyFlag`] in memory, off at start. The flag lasts until quit:
+/// TODO(#341) saves it as `app.keyboard.copilotKey` in the settings store (#77).
+#[derive(Debug, Default)]
+pub struct MemoryCopilotKeyFlag(AtomicBool);
+
+impl CopilotKeyFlag for MemoryCopilotKeyFlag {
+    fn present(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+    fn set(&self, present: bool) -> bool {
+        self.0.swap(present, Ordering::SeqCst) != present
+    }
+}
+
+/// [`EnvReads`] whose Copilot read is the device read or the [`CopilotKeyFlag`]. Every other
+/// read goes to the inner reads.
+pub struct WithCopilotFlag {
+    inner: Box<dyn EnvReads>,
+    flag: Arc<dyn CopilotKeyFlag>,
+}
+
+impl WithCopilotFlag {
+    /// Wrap `inner` with `flag`.
+    pub fn new(inner: Box<dyn EnvReads>, flag: Arc<dyn CopilotKeyFlag>) -> Self {
+        Self { inner, flag }
+    }
+}
+
+impl EnvReads for WithCopilotFlag {
+    fn dictation(&self) -> Option<DictationShortcut> {
+        self.inner.dictation()
+    }
+    fn voice_over(&self) -> bool {
+        self.inner.voice_over()
+    }
+    fn alt_gr_layout(&self) -> bool {
+        self.inner.alt_gr_layout()
+    }
+    fn copilot_key(&self) -> bool {
+        self.inner.copilot_key() || self.flag.present()
+    }
+    fn visit_process_names(&self, visit: &mut dyn FnMut(&str)) {
+        self.inner.visit_process_names(visit)
     }
 }
 
@@ -397,7 +460,9 @@ mod win32 {
             alt_gr_from_scans(&scans)
         }
         fn copilot_key(&self) -> bool {
-            // TODO(#332): Windows has no documented prompt-free read for the Copilot key.
+            // ADR 0025: Windows documents no prompt-free read that tells if the keyboard has
+            // a Copilot key. The `BrandedKey` values name only the key's target app. The
+            // answer comes from the hook through `WithCopilotFlag`.
             false
         }
         fn visit_process_names(&self, visit: &mut dyn FnMut(&str)) {
