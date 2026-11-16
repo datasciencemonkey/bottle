@@ -31,6 +31,10 @@ export const MOODS: readonly Mood[] = [
 export const ERROR_MS = 3000;
 export const SUCCESS_MS = 2500;
 export const INSERTED_MS = 1200;
+/** 4.8: a blurb reveal is `answering` for 1.2 s or less. */
+export const BLURB_REVEAL_MS = 1200;
+/** ADR 0018: an agent mood other than error or success ends after 10 s. */
+export const AGENT_MOOD_MS = 10_000;
 /** UX-05a: each mood holds for 400 ms or more. */
 export const MOOD_HOLD_MS = 400;
 /** 4.8: a chip offered below this router confidence shows `attention`. */
@@ -96,7 +100,13 @@ export interface MoodSources {
   capture: CaptureState;
   requests: readonly RequestView[];
   /** The last `set_mood` of the main agent for this MOG (UX-41). */
-  agentMood?: Mood;
+  agentMood?: AgentMood;
+}
+
+/** One `set_mood` call of the main agent and when it came (ms, brain clock). */
+export interface AgentMood {
+  mood: Mood;
+  at: number;
 }
 
 const PROCESSING: ReadonlySet<RequestPhase> = new Set([
@@ -111,13 +121,17 @@ const PROCESSING: ReadonlySet<RequestPhase> = new Set([
   'rate_limited',
   'soft_notice',
 ]);
-const ANSWERING: ReadonlySet<RequestPhase> = new Set(['partial', 'blurb_reveal']);
+const ANSWERING_FOR: Partial<Record<RequestPhase, number>> = {
+  partial: Infinity,
+  blurb_reveal: BLURB_REVEAL_MS,
+};
 const SUCCESS_FOR: Partial<Record<RequestPhase, number>> = {
   completed: SUCCESS_MS,
   memory_answer: SUCCESS_MS,
   inserted: INSERTED_MS,
 };
-const ERROR_FOR: ReadonlySet<RequestPhase> = new Set(['failed', 'gave_up']);
+// GaveUp (C16) is not a failure: its card says "I will check again later" (Appendix E).
+const ERROR_FOR: ReadonlySet<RequestPhase> = new Set(['failed']);
 
 function pick(s: MoodInput, t: number, agentMood?: Mood): Mood {
   if (s.paused) return 'sleeping';
@@ -125,7 +139,7 @@ function pick(s: MoodInput, t: number, agentMood?: Mood): Mood {
   if (s.errorUntil !== undefined && s.errorUntil > t) return 'error';
   if (s.successUntil !== undefined && s.successUntil > t) return 'success';
   // UX-41: the agent mood ranks below capture, error and success. UX-07: never `listening`.
-  if (agentMood !== undefined && agentMood !== 'listening') return agentMood;
+  if (agentMood !== undefined) return agentMood;
   if (s.answering) return 'answering';
   if (s.processing) return 'processing';
   if (s.dozing) return 'sleeping';
@@ -153,6 +167,18 @@ function ownsListeningCapture(mogId: MogId, c: CaptureState): boolean {
 }
 
 /**
+ * UX-41 (ADR 0018): the agent mood while it is live. A newer request phase or lifecycle state
+ * replaces it. An agent error lasts 3 s, a success 2.5 s and any other mood 10 s.
+ */
+function liveAgentMood(src: MoodSources, now: number): Mood | undefined {
+  const a = src.agentMood;
+  if (!a || a.mood === 'listening') return undefined;
+  if (src.mog.since > a.at || src.requests.some((r) => r.at > a.at)) return undefined;
+  const lasts = a.mood === 'error' ? ERROR_MS : a.mood === 'success' ? SUCCESS_MS : AGENT_MOOD_MS;
+  return a.at + lasts > now ? a.mood : undefined;
+}
+
+/**
  * UX-01a: the mood and overlays of one MOG, a pure function of its status, the capture state
  * and its request states at time `now`. The caller applies `holdMood` before it renders.
  */
@@ -172,7 +198,8 @@ export function mapMood(mogId: MogId, src: MoodSources, now: number): MoodOutput
   }
   for (const r of requests) {
     if (PROCESSING.has(r.phase)) input.processing = true;
-    if (ANSWERING.has(r.phase)) input.answering = true;
+    const answer = ANSWERING_FOR[r.phase];
+    if (answer !== undefined && r.at + answer > now) input.answering = true;
     const ok = SUCCESS_FOR[r.phase];
     if (ok !== undefined) input.successUntil = latest(input.successUntil, r.at + ok);
     if (ERROR_FOR.has(r.phase)) {
@@ -191,8 +218,9 @@ export function mapMood(mogId: MogId, src: MoodSources, now: number): MoodOutput
     offline: mog.lifecycle === 'offline',
     localOnly: mog.localOnly === true,
   };
+  // TODO(#100): the session "PAUSED" pill and dashed ring (4.8) need an overlay in the contract.
   if (mog.hop !== undefined) overlays.hop = mog.hop;
-  return { mood: pick(input, now, src.agentMood), overlays };
+  return { mood: pick(input, now, liveAgentMood(src, now)), overlays };
 }
 
 /** The mood a MOG shows and when it started showing. */
