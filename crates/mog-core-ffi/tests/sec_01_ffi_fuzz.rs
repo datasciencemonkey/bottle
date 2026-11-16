@@ -2,8 +2,8 @@
 //!
 //! Sends seeded, deterministic `mog_call` envelopes that hold fake secrets in the command name,
 //! the argument keys and the values, and scans every reply for the rule-7 patterns of 4.6.
-//! It uses only the ABI that is on main. TODO(#176): when `mog_call` dispatches through the
-//! hardened R12 gateway, this test covers that path with no change.
+//! It starts the core first, so every well-formed envelope reaches the hardened R12 gateway
+//! (`hardened_gateway_with`, #176) and not only the `not_initialized` path.
 //!
 //! Every fake secret is built at run time from pieces. No test reads a real profile or token.
 
@@ -83,6 +83,8 @@ fn call(request: &str) -> String {
 
 #[test]
 fn sec_01_at_17_ffi_fuzz_finds_no_secret() {
+    // SAFETY: null config is allowed (defaults).
+    assert_eq!(unsafe { mog_init(std::ptr::null()) }, 0);
     let secrets = fakes();
     let mut rng = Rng(36);
     for i in 0..3000 {
