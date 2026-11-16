@@ -243,7 +243,14 @@ impl ModelProxy {
                     let Ok(mut conn) = conn else { continue };
                     if s.active.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
                         s.active.fetch_sub(1, Ordering::SeqCst);
-                        fail(&mut conn, 503, "busy");
+                        // No drain wait on the accept thread.
+                        let body = br#"{"error":"busy"}"#;
+                        let head = format!(
+                            "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        );
+                        let _ = conn.write_all(head.as_bytes());
+                        let _ = conn.write_all(body);
                         continue;
                     }
                     let worker = s.clone();
@@ -328,7 +335,10 @@ fn find_end(buf: &[u8]) -> Option<usize> {
     buf.windows(4).position(|w| w == b"\r\n\r\n")
 }
 
+/// Read the request head. [`HEAD_TIMEOUT`] bounds the whole head, not each read, so a slow
+/// client cannot hold a connection slot for long.
 fn read_head(conn: &mut TcpStream) -> Option<Head> {
+    let deadline = std::time::Instant::now() + HEAD_TIMEOUT;
     let mut buf = Vec::with_capacity(4096);
     let mut chunk = [0u8; 4096];
     let end = loop {
@@ -338,6 +348,11 @@ fn read_head(conn: &mut TcpStream) -> Option<Head> {
         if buf.len() > MAX_HEAD {
             return None;
         }
+        let left = deadline.checked_duration_since(std::time::Instant::now())?;
+        if left.is_zero() {
+            return None;
+        }
+        conn.set_read_timeout(Some(left)).ok()?;
         let n = conn.read(&mut chunk).ok()?;
         if n == 0 {
             return None;

@@ -34,6 +34,9 @@ security-framework.workspace = true
 # R2 mic backend (#388). Only macOS and Windows: Bottle ships on these two.
 cpal.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = [
   "Win32_Foundation",

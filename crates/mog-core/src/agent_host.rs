@@ -259,6 +259,9 @@ impl SharedAgentHost {
         harness: Harness,
         model: Option<&str>,
     ) -> Result<String, AgentError> {
+        // The target lookup may run the CLI (#16, #18): do it before the lock, so it never
+        // stalls the other MOGs.
+        let target = self.deps.targets.target(mog_id);
         let mut st = self.lock();
         if let Some(s) = st.sessions.get(mog_id) {
             if s.state != SessionState::Failed && s.harness != harness {
@@ -270,7 +273,7 @@ impl SharedAgentHost {
             // A new start after a failure is a user action: replace the failed session.
             st.sessions.remove(mog_id);
         }
-        let target = self.deps.targets.target(mog_id)?;
+        let target = target?;
         let session = Session {
             id: new_session_id(),
             harness,

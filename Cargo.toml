@@ -16,8 +16,8 @@ serde_json = "1"
 schemars = "1.2"
 # R1 HotkeyService on Windows (#7): the WH_KEYBOARD_LL hook and its message loop.
 windows-sys = "0.61"
-# R16 AgentHost (#112): per-session secrets from the OS random source. Already in Cargo.lock.
-getrandom = "0.3"
+# R16 AgentHost (#112): stop the runtime process group on unix. Already in Cargo.lock.
+libc = "0.2"
 # NFR-14a / D32 / U1: Tauri 2.12.5 or later. The lockfile check belongs to #169.
 tauri = { version = "2.12.5", features = [] }
 tauri-build = { version = "2.7", features = [] }

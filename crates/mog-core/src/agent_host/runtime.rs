@@ -92,6 +92,8 @@ pub trait RuntimeProcess: Send + Sync {
     /// Queue one frame for the runtime. It must not block: the host may call it while it holds
     /// its state lock. A runtime that does not take its frames fails with
     /// [`AgentError::Unavailable`] and must end in [`RuntimeEvent::Exited`].
+    /// TODO(#111): a runtime that takes frames but never answers is caught only by an answer or
+    /// heartbeat deadline, which SP-19 defines with the sidecar protocol.
     fn send_frame(&self, frame: &Value) -> Result<(), AgentError>;
     /// Stop the process.
     fn stop(&self);
@@ -100,7 +102,8 @@ pub trait RuntimeProcess: Send + Sync {
 /// Starts runtime processes.
 pub trait RuntimeLauncher: Send + Sync {
     /// Start the runtime of `spec`. `events` gets its events until it exits. `launch` must not
-    /// call `events` before it returns.
+    /// call `events` before it returns. It runs under the host lock, so it must return quickly:
+    /// it spawns the process and never waits for the runtime to answer.
     fn launch(
         &self,
         spec: &LaunchSpec,
@@ -159,8 +162,21 @@ struct StdRuntimeProcess {
     frames: Mutex<Option<SyncSender<Vec<u8>>>>,
 }
 
+/// Stop the runtime and every process it started. On unix the runtime leads its own process
+/// group, so a wrapper (`npx`, `uv run`, a shell shim) and its children stop too.
+/// TODO(#111): on Windows put the runtime in a job object; today only the direct child stops.
 fn kill(child: &Mutex<Child>) {
     let mut c = child.lock().unwrap_or_else(|p| p.into_inner());
+    #[cfg(unix)]
+    {
+        if let Ok(pid) = i32::try_from(c.id()) {
+            // SAFETY: `kill` with a negative pid signals the process group that the child leads
+            // (`process_group(0)` at spawn). It touches no memory.
+            unsafe {
+                libc::kill(-pid, libc::SIGKILL);
+            }
+        }
+    }
     let _ = c.kill();
     let _ = c.wait();
 }
@@ -202,19 +218,69 @@ impl RuntimeLauncher for StdRuntimeLauncher {
         spec: &LaunchSpec,
         events: RuntimeEvents,
     ) -> Result<Box<dyn RuntimeProcess>, AgentError> {
-        let mut child = harness_command(spec)
+        let mut cmd = harness_command(spec);
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
+        let mut child = cmd
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
             .map_err(|_| AgentError::LaunchFailed)?;
-        let mut stdin = child.stdin.take().ok_or(AgentError::LaunchFailed)?;
+        let stdin = child.stdin.take().ok_or(AgentError::LaunchFailed)?;
         let stdout = child.stdout.take().ok_or(AgentError::LaunchFailed)?;
         let child = Arc::new(Mutex::new(child));
         let (tx, rx) = sync_channel::<Vec<u8>>(FRAME_QUEUE);
         let busy_since: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
         let done = Arc::new(AtomicBool::new(false));
+        // `Exited` goes out exactly once: from the reader at end of output, or from the watchdog
+        // after it stops a runtime whose pipes a grandchild still holds open.
+        let exited = Arc::new(AtomicBool::new(false));
+        let exit_once = {
+            let (exited, events) = (exited.clone(), events.clone());
+            move || {
+                if !exited.swap(true, Ordering::SeqCst) {
+                    events(RuntimeEvent::Exited);
+                }
+            }
+        };
+        let started = self.spawn_threads(
+            stdin,
+            stdout,
+            rx,
+            &child,
+            &busy_since,
+            &done,
+            events,
+            exit_once,
+        );
+        if started.is_err() {
+            kill(&child);
+            return Err(AgentError::LaunchFailed);
+        }
+        Ok(Box::new(StdRuntimeProcess {
+            child,
+            frames: Mutex::new(Some(tx)),
+        }))
+    }
+}
 
+impl StdRuntimeLauncher {
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_threads(
+        &self,
+        mut stdin: std::process::ChildStdin,
+        stdout: std::process::ChildStdout,
+        rx: std::sync::mpsc::Receiver<Vec<u8>>,
+        child: &Arc<Mutex<Child>>,
+        busy_since: &Arc<Mutex<Option<Instant>>>,
+        done: &Arc<AtomicBool>,
+        events: RuntimeEvents,
+        exit_once: impl Fn() + Clone + Send + 'static,
+    ) -> Result<(), AgentError> {
         let (busy, d) = (busy_since.clone(), done.clone());
         spawn_thread("bottle-agent-runtime-writer", move || {
             for line in rx {
@@ -229,6 +295,7 @@ impl RuntimeLauncher for StdRuntimeLauncher {
         })?;
 
         let (c, d, deadline) = (child.clone(), done.clone(), self.write_deadline);
+        let (busy_since, watchdog_exit) = (busy_since.clone(), exit_once.clone());
         let tick = (deadline / 4).clamp(Duration::from_millis(10), Duration::from_millis(500));
         spawn_thread("bottle-agent-runtime-watchdog", move || {
             while !d.load(Ordering::SeqCst) {
@@ -238,14 +305,16 @@ impl RuntimeLauncher for StdRuntimeLauncher {
                     .unwrap_or_else(|p| p.into_inner())
                     .is_some_and(|t| t.elapsed() > deadline);
                 if stuck {
-                    // The runtime does not take its frames: stop it, so its stdout ends.
+                    // The runtime does not take its frames (ARC-F14): stop its process group
+                    // and report the exit, even if a grandchild keeps the pipes open.
                     kill(&c);
+                    watchdog_exit();
                     break;
                 }
             }
         })?;
 
-        let d = done;
+        let d = done.clone();
         spawn_thread("bottle-agent-runtime-reader", move || {
             for line in BufReader::new(stdout).lines() {
                 let Ok(line) = line else { break };
@@ -254,13 +323,8 @@ impl RuntimeLauncher for StdRuntimeLauncher {
                 }
             }
             d.store(true, Ordering::SeqCst);
-            events(RuntimeEvent::Exited);
-        })?;
-
-        Ok(Box::new(StdRuntimeProcess {
-            child,
-            frames: Mutex::new(Some(tx)),
-        }))
+            exit_once();
+        })
     }
 }
 

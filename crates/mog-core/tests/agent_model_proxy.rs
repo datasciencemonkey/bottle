@@ -538,3 +538,40 @@ fn arc_7_host_header_must_name_the_loopback_listener() {
     assert_eq!(raw(&r.proxy, req.as_bytes()).0, 200);
     assert_eq!(r.upstream.calls.load(Ordering::SeqCst), 1);
 }
+
+#[test]
+fn arc_7_connection_cap_refuses_extra_connections_at_once() {
+    let r = rig();
+    let s = claude_session(&r);
+    let addr = host_of(&r.proxy);
+    let idle: Vec<TcpStream> = (0..mog_core::agent_host::model_proxy::MAX_CONNECTIONS)
+        .map(|_| TcpStream::connect(&addr).unwrap())
+        .collect();
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let t = std::time::Instant::now();
+    let (status, _) = post(
+        &r.proxy,
+        "/anthropic/v1/messages",
+        &[("x-api-key", s.as_str())],
+        "{}",
+    );
+    assert_eq!(status, 503);
+    assert!(t.elapsed() < std::time::Duration::from_secs(1));
+    assert_eq!(r.upstream.calls.load(Ordering::SeqCst), 0);
+    drop(idle);
+    let mut ok = false;
+    for _ in 0..40 {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let (status, _) = post(
+            &r.proxy,
+            "/anthropic/v1/messages",
+            &[("x-api-key", s.as_str())],
+            "{}",
+        );
+        if status == 200 {
+            ok = true;
+            break;
+        }
+    }
+    assert!(ok, "slots free up when the idle clients leave");
+}
