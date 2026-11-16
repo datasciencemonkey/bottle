@@ -707,28 +707,7 @@ fn arc_3_a_mog_gone_before_its_event_hands_its_card_to_be_destroyed() {
     assert_eq!(ledger.mog_window_missing("m2"), None, "m2 had no card");
 }
 
-#[test]
-fn arc_3_host_reopen_of_a_mog_whose_window_is_gone_waits_and_destroys_its_card() {
-    use tauri::Manager;
-    let (mut app, host, _rec, _clock) = host();
-    host.open_mog_window("m1").unwrap();
-    host.show_card("m1").unwrap();
-    // The MOG window leaves Tauri's manager; its Destroyed event is not handled yet.
-    app.get_webview_window("mog-m1").unwrap().destroy().unwrap();
-    // One mock event-loop step drops the destroyed window from the manager. The test does not
-    // loop, so the busy-loop that the deprecation warns about cannot happen.
-    #[allow(deprecated)]
-    app.run_iteration(|_, _| {});
-    assert!(
-        app.get_webview_window("mog-m1").is_none(),
-        "mock dropped the window"
-    );
-    assert_eq!(host.open_mog_window("m1"), Err(WindowError::Closing));
-    assert_eq!(host.active_mogs(), 0);
-    // The card of that MOG is being destroyed: its label waits for its event too.
-    host.window_destroyed("mog-m1");
-    host.open_mog_window("m1").unwrap();
-    assert_eq!(host.show_card("m1"), Err(WindowError::Closing));
-    host.window_destroyed("card-m1");
-    host.show_card("m1").unwrap();
-}
+// The host branch of `open_mog_window` that calls `mog_window_missing` needs a MOG window that
+// left Tauri's manager while the ledger still has it. The mock runtime drops a destroyed window
+// only inside `App::run`, which never returns, so a mock test cannot reach that branch. The
+// ledger tests above pin its decisions; the device check (#336) runs the real event loop.

@@ -210,10 +210,13 @@ impl WindowLedger {
         }
     }
 
-    /// A show of a hidden card failed: it stays hidden from `since`.
+    /// A show of a hidden card failed: it stays hidden from `since`. Only a card still
+    /// `Shown` (the state `begin_show` wrote) changes; a card that closed meanwhile stays as is.
     pub fn restore_hidden(&mut self, mog_id: &str, since: Instant) {
         if let Some(card) = self.mogs.get_mut(mog_id) {
-            *card = CardState::Hidden(since);
+            if *card == CardState::Shown {
+                *card = CardState::Hidden(since);
+            }
         }
     }
 
@@ -286,13 +289,14 @@ impl WindowLedger {
 
     /// The MOG window of `mog_id` left Tauri's manager, but its `Destroyed` event is not handled
     /// yet. The MOG is closed now and its label waits for that event, so a reopen does not make
-    /// a second window whose slot the late event then frees.
-    pub fn mog_window_missing(&mut self, mog_id: &str) {
-        if self.mogs.remove(mog_id).is_some() {
-            if let Some(kind) = WindowKind::mog(mog_id) {
-                self.closing.insert(kind.label());
-            }
-        }
+    /// a second window whose slot the late event then frees. Returns the MOG's card if it has
+    /// one: the caller must destroy it, as for a MOG destroyed outside the host.
+    pub fn mog_window_missing(&mut self, mog_id: &str) -> Option<WindowKind> {
+        let card = self.mogs.remove(mog_id)?;
+        let kind = WindowKind::mog(mog_id)?;
+        self.closing.insert(kind.label());
+        matches!(card, CardState::Shown | CardState::Hidden(_))
+            .then(|| WindowKind::Card(mog_id.to_owned()))
     }
 
     /// The card window of `mog_id` left Tauri's manager, but its `Destroyed` event is not
@@ -385,22 +389,6 @@ impl<R: tauri::Runtime> NativeWindowStyle<R> for PlainStyle {
 /// The time source of the host. Tests move a fake clock; the app uses `Instant::now`.
 pub type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
 
-/// True when the caller runs on the main thread. Tests use a double.
-pub type MainThreadProbe = Arc<dyn Fn() -> bool + Send + Sync>;
-
-/// The platform check for the main thread. Where none exists the probe says `false`.
-/// TODO(#80): a Windows main-thread check.
-fn platform_main_thread() -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        objc2::MainThreadMarker::new().is_some()
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        false
-    }
-}
-
 /// The R11 host for the Tauri shell. The app keeps one instance as managed state.
 ///
 /// Two locks: `ops` makes each public operation (open, close, show, hide, reap) one critical
@@ -417,8 +405,8 @@ fn platform_main_thread() -> bool {
 pub struct TauriWindowHost<R: tauri::Runtime> {
     app: tauri::AppHandle<R>,
     ops: Mutex<()>,
-    sealed: std::sync::atomic::AtomicBool,
-    on_main: MainThreadProbe,
+    /// The thread that sealed the host (the main thread, at the end of setup).
+    sealed: Mutex<Option<std::thread::ThreadId>>,
     ledger: Mutex<WindowLedger>,
     native: Box<dyn NativeWindowStyle<R>>,
     clock: Clock,
@@ -435,8 +423,7 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
         Self {
             app,
             ops: Mutex::new(()),
-            sealed: std::sync::atomic::AtomicBool::new(false),
-            on_main: Arc::new(platform_main_thread),
+            sealed: Mutex::new(None),
             ledger: Mutex::new(WindowLedger::default()),
             native,
             clock: Arc::new(Instant::now),
@@ -449,19 +436,15 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
         self
     }
 
-    /// Use `probe` to tell the main thread (tests).
-    pub fn with_main_thread_probe(mut self, probe: MainThreadProbe) -> Self {
-        self.on_main = probe;
-        self
-    }
-
-    /// End of setup: from now on the operations refuse to run on the main thread.
+    /// End of setup. Call on the main thread: from now on the operations refuse to run on
+    /// this thread. The check compares thread IDs, so it holds on every OS.
     pub fn seal_main_thread(&self) {
-        self.sealed.store(true, std::sync::atomic::Ordering::SeqCst);
+        *self.sealed.lock().unwrap_or_else(|p| p.into_inner()) = Some(std::thread::current().id());
     }
 
     fn op(&self) -> Result<std::sync::MutexGuard<'_, ()>, WindowError> {
-        if self.sealed.load(std::sync::atomic::Ordering::SeqCst) && (self.on_main)() {
+        let sealed = *self.sealed.lock().unwrap_or_else(|p| p.into_inner());
+        if sealed == Some(std::thread::current().id()) {
             return Err(WindowError::MainThread);
         }
         Ok(self.ops.lock().unwrap_or_else(|p| p.into_inner()))
@@ -518,21 +501,26 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
     /// it is gone.
     pub fn open_mog_window(&self, mog_id: &str) -> Result<(), WindowError> {
         let _op = self.op()?;
-        let (kind, existing) = {
+        let (kind, existing, missing) = {
             let mut ledger = self.ledger();
             match ledger.open_mog(mog_id)? {
-                OpenOutcome::Opened(kind) => (kind, None),
+                OpenOutcome::Opened(kind) => (kind, None, None),
                 OpenOutcome::AlreadyOpen => {
                     let kind = WindowKind::Mog(mog_id.to_owned());
-                    let Some(w) = self.window(&kind) else {
-                        // Mid-destroy: wait for its event (#338 review).
-                        ledger.mog_window_missing(mog_id);
-                        return Err(WindowError::Closing);
-                    };
-                    (kind, Some(w))
+                    match self.window(&kind) {
+                        Some(w) => (kind, Some(w), None),
+                        // Mid-destroy: the MOG waits for its event and its card goes with it.
+                        None => (kind, None, Some(ledger.mog_window_missing(mog_id))),
+                    }
                 }
             }
         };
+        if let Some(orphan) = missing {
+            if let Some(card) = orphan {
+                let _ = self.destroy(&card);
+            }
+            return Err(WindowError::Closing);
+        }
         if let Some(w) = existing {
             return self.native.show(&w, &kind);
         }
