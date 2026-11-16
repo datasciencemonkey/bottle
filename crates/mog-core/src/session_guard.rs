@@ -2,6 +2,9 @@
 //!
 //! Responsibilities: Stop-policy timers and OS signals (D27, D53, D71). Mic release as Active/Released/Unknown. Disk, sleep, lock and power watchers.
 
+use std::sync::Arc;
+
+use crate::clock::{MonotonicClock, SystemClock};
 use crate::error::{CoreError, CoreResult};
 
 const ID: &str = "R3";
@@ -26,8 +29,29 @@ pub trait SessionGuard: Send + Sync {
 }
 
 /// The R3 stub. Every method returns [`CoreError::NotImplemented`].
-#[derive(Debug, Default, Clone, Copy)]
-pub struct StubSessionGuard;
+#[derive(Debug, Clone)]
+pub struct StubSessionGuard {
+    clock: Arc<dyn MonotonicClock>,
+}
+
+impl StubSessionGuard {
+    /// A guard that reads time from `clock`. Tests pass a `SimClock` (#229).
+    pub fn new(clock: Arc<dyn MonotonicClock>) -> Self {
+        Self { clock }
+    }
+
+    /// The clock of this guard.
+    pub fn clock(&self) -> &dyn MonotonicClock {
+        self.clock.as_ref()
+    }
+}
+
+impl Default for StubSessionGuard {
+    /// A guard on the [`SystemClock`].
+    fn default() -> Self {
+        Self::new(Arc::new(SystemClock::new()))
+    }
+}
 
 impl SessionGuard for StubSessionGuard {
     fn arm(&self, _session_id: &str) -> CoreResult<()> {
