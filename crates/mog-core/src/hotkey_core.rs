@@ -534,7 +534,8 @@ impl HotkeyEngine {
     /// A PTT is held and it started less than [`OTHER_KEY_CANCEL_WINDOW`] ago. The macOS
     /// layer listens to other key-downs only while this is true (ADR 0017).
     pub fn other_key_window_open(&self) -> bool {
-        self.machine.is_held()
+        // Only a talk-key hold: under Secure Event Input (chord mode) taps get no KeyDown.
+        self.machine.held_by == Some(TalkKeyMode::TalkKey)
             && self
                 .held_since
                 .is_some_and(|t| self.clock.now().saturating_sub(t) < OTHER_KEY_CANCEL_WINDOW)
@@ -1540,6 +1541,21 @@ mod tests {
         assert!(!e.other_key_window_open());
         e.on_talk_key(Up);
         assert!(!e.other_key_window_open());
+    }
+
+    #[test]
+    fn cap_44c_other_key_window_stays_closed_for_a_chord_hold() {
+        let (sink, clock, mut e) = engine_at_zero();
+        let probe = FakeProbe::ready();
+        let ctl = FakeCtl::default();
+        *probe.secure.lock().unwrap() = true;
+        e.tick(clock.now(), &probe, &ctl);
+        e.on_chord(Down);
+        assert!(!e.other_key_window_open());
+        e.on_other_key_down();
+        clock.advance(TAP_MAX_HOLD);
+        e.on_chord(Up);
+        assert_eq!(sink.take(), vec![TalkKeyPaused, Ptt(PDown), Ptt(PUp)]);
     }
 
     #[test]

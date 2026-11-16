@@ -99,10 +99,13 @@ fn modifier_down_bit(keycode: u16) -> Option<u64> {
         55 => 0x08,        // Left-Command
         54 => 0x10,        // Right-Command
         63 => 0x0080_0000, // Fn / Globe (kCGEventFlagMaskSecondaryFn)
-        57 => 0x0001_0000, // Caps Lock (kCGEventFlagMaskAlphaShift)
         _ => return None,
     })
 }
+
+/// `kVK_CapsLock`. Its flag bit shows the lock state, not the key state, so each Caps Lock
+/// event counts as a key-down.
+const VK_CAPS_LOCK: u16 = 57;
 
 /// What one `FlagsChanged` event means for R1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,6 +122,9 @@ pub enum FlagsEvent {
 pub fn classify_flags_changed(key: TalkKey, keycode: u16, flags: u64) -> FlagsEvent {
     if let Some(edge) = decode_flags_changed(key, keycode, flags) {
         return FlagsEvent::Talk(edge);
+    }
+    if keycode == VK_CAPS_LOCK {
+        return FlagsEvent::OtherModifierDown;
     }
     match modifier_down_bit(keycode) {
         Some(bit) if flags & bit != 0 => FlagsEvent::OtherModifierDown,
@@ -295,6 +301,13 @@ mod tests {
             classify_flags_changed(TalkKey::RightOption, 55, 0x0010_0148),
             FlagsEvent::OtherModifierDown
         );
+        // Caps Lock (57) counts whether it turns the lock on or off.
+        for flags in [0x0001_0140u64, 0x0000_0140] {
+            assert_eq!(
+                classify_flags_changed(TalkKey::RightOption, 57, flags),
+                FlagsEvent::OtherModifierDown
+            );
+        }
         // Fn/Globe (63) goes down: kCGEventFlagMaskSecondaryFn.
         assert_eq!(
             classify_flags_changed(TalkKey::RightOption, 63, 0x0080_0140),
@@ -833,9 +846,9 @@ mod sys {
                 EVENT_HOT_KEY_RELEASED => KeyEdge::Up,
                 _ => return EVENT_NOT_HANDLED_ERR,
             };
-            let mut engine = lock(&shared.engine);
-            engine.on_chord(edge);
-            sync_other_key_tap(shared, &engine);
+            // No other-key sync here: the window opens only for a talk-key hold (taps get
+            // no KeyDown under Secure Event Input), and this runs on the main thread.
+            lock(&shared.engine).on_chord(edge);
             0
         }))
         .unwrap_or(EVENT_NOT_HANDLED_ERR)
@@ -850,7 +863,9 @@ mod sys {
         }
         let port = shared.other_port.load(Ordering::Acquire);
         if !port.is_null() {
-            // SAFETY: `port` is the live other-key tap; the tap thread clears it before release.
+            // SAFETY: the caller holds the engine lock (it passes `engine`), and the tap
+            // thread clears `other_port` under that lock before it invalidates and releases
+            // the port. So a non-null `port` read here stays alive until this call returns.
             unsafe { CGEventTapEnable(port, want) };
         }
     }
@@ -986,12 +1001,17 @@ mod sys {
                         Ordering::Acquire,
                     );
                     if !other.is_null() {
-                        let _ = owner.other_port.compare_exchange(
-                            other,
-                            ptr::null_mut(),
-                            Ordering::AcqRel,
-                            Ordering::Acquire,
-                        );
+                        // Clear the port under the engine lock, so no `sync_other_key_tap`
+                        // can hold a copy of it while it is released below.
+                        {
+                            let _engine = lock(&owner.engine);
+                            let _ = owner.other_port.compare_exchange(
+                                other,
+                                ptr::null_mut(),
+                                Ordering::AcqRel,
+                                Ordering::Acquire,
+                            );
+                        }
                         CFMachPortInvalidate(other);
                         if !other_source.is_null() {
                             CFRelease(other_source);

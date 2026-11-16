@@ -18,6 +18,7 @@
 //! Requirements: CAP-35a, CAP-36, CAP-37, CAP-39c, CAP-40a, MB-06a, AT-30.
 
 use crate::ipc::BrainChannel;
+use mog_core::clock::{MonotonicClock, SystemClock};
 use mog_core::error::CoreError;
 use mog_core::hotkey::HotkeyService;
 use mog_core::hotkey_core::{
@@ -229,8 +230,6 @@ where
 pub enum DeferredSignal {
     /// Esc went down during capture. The capture lifecycle (#14) ends hands-free capture.
     Escape,
-    /// Another key went down during a hold. The CAP-44c cancel (#24) consumes it.
-    OtherKeyDown,
     /// An elevated window blocks the talk key. The CAP-42 tooltip (#294) consumes it.
     TalkKeyBlocked,
     /// The hook was installed again (CAP-40b).
@@ -255,9 +254,6 @@ impl HookSignalSeam for PendingHookConsumers {
             DeferredSignal::Escape => {
                 // TODO(#14): the capture lifecycle ends hands-free capture on Esc.
             }
-            DeferredSignal::OtherKeyDown => {
-                // TODO(#24): `HotkeyEngine::on_other_key_down` cancels the PTT (CAP-44c).
-            }
             DeferredSignal::TalkKeyBlocked => {
                 // TODO(#294): one `hotkey.status` event makes the MOG show the CAP-42 tooltip.
             }
@@ -271,17 +267,19 @@ impl HookSignalSeam for PendingHookConsumers {
 /// Map one Windows hook signal (#7) to the shared R1 engine (#6).
 ///
 /// `TalkDown` and `TalkUp` go through [`forward_to_engine`] to the shared PTT machine, so
-/// Windows gives the same `hotkey.ptt` phases as macOS. The other signals return as a
-/// [`DeferredSignal`] for the seam.
+/// Windows gives the same `hotkey.ptt` phases as macOS. `OtherKeyDown` goes to
+/// `HotkeyEngine::on_other_key_down`, which cancels a PTT in its first 1 s (CAP-44c). The
+/// other signals return as a [`DeferredSignal`] for the seam.
 pub fn adapt_hook_signal(signal: HookSignal, engine: &mut HotkeyEngine) -> Option<DeferredSignal> {
     Some(match forward_to_engine(signal, engine)? {
         HookSignal::Escape => DeferredSignal::Escape,
-        HookSignal::OtherKeyDown => DeferredSignal::OtherKeyDown,
         HookSignal::TalkKeyBlocked => DeferredSignal::TalkKeyBlocked,
         HookSignal::HookReinstalled => DeferredSignal::HookReinstalled,
         HookSignal::HookFailed { reason } => DeferredSignal::HookFailed(reason),
-        // `forward_to_engine` takes the talk-key signals.
-        HookSignal::TalkDown { .. } | HookSignal::TalkUp { .. } => return None,
+        // `forward_to_engine` takes the talk-key signals and the other-key signal.
+        HookSignal::TalkDown { .. } | HookSignal::TalkUp { .. } | HookSignal::OtherKeyDown => {
+            return None
+        }
     })
 }
 
@@ -307,9 +305,23 @@ pub fn spawn_hook_adapter<D>(
 where
     D: HookSignalSeam + 'static,
 {
+    spawn_hook_adapter_with_clock(rx, sink, seam, Arc::new(SystemClock::new()))
+}
+
+/// [`spawn_hook_adapter`] with the clock that times the holds (CAP-44a, CAP-44c). Tests
+/// pass a simulated clock.
+pub fn spawn_hook_adapter_with_clock<D>(
+    rx: mpsc::Receiver<HookSignal>,
+    sink: Arc<dyn HotkeySink>,
+    seam: D,
+    clock: Arc<dyn MonotonicClock>,
+) -> std::io::Result<JoinHandle<()>>
+where
+    D: HookSignalSeam + 'static,
+{
     std::thread::Builder::new()
         .name("bottle-hotkey-signals".into())
-        .spawn(move || run_hook_adapter(rx, HotkeyEngine::new(sink), &seam))
+        .spawn(move || run_hook_adapter(rx, HotkeyEngine::with_clock(sink, clock), &seam))
 }
 
 /// The service to give the host, given the result of [`spawn_hook_adapter`].
@@ -1077,16 +1089,46 @@ mod tests {
 
     /// Run `signals` through a fake hook receiver, the adapter thread, the host queue and the
     /// forwarder thread, as `platform_service` wires them on Windows.
+    /// A clock that moves `step` forward on each read, so each hook signal that the engine
+    /// times lands `step` after the one before, whatever the thread timing (CAP-44a).
+    #[derive(Debug)]
+    struct StepClock {
+        now: Mutex<Duration>,
+        step: Duration,
+    }
+
+    impl MonotonicClock for StepClock {
+        fn now(&self) -> Duration {
+            let mut now = self.now.lock().unwrap();
+            *now += self.step;
+            *now
+        }
+    }
+
+    /// Run `signals` through the adapter; signals land 300 ms apart, so a press is no tap.
     fn run_windows_path(
         target: &Arc<PttTarget>,
         signals: &[HookSignal],
+    ) -> (Vec<(String, Value)>, Vec<HotkeyStatus>, Vec<DeferredSignal>) {
+        run_windows_path_stepped(target, signals, Duration::from_millis(300))
+    }
+
+    fn run_windows_path_stepped(
+        target: &Arc<PttTarget>,
+        signals: &[HookSignal],
+        step: Duration,
     ) -> (Vec<(String, Value)>, Vec<HotkeyStatus>, Vec<DeferredSignal>) {
         let (f, brain, status) = forwarder(target);
         let (sink, out_rx) = queue();
         let forward = spawn_forwarder(out_rx, f).unwrap();
         let (hook_tx, hook_rx) = mpsc::channel();
         let seam = FakeSeam::default();
-        let adapter = spawn_hook_adapter(hook_rx, Arc::new(sink), seam.clone()).unwrap();
+        let clock = Arc::new(StepClock {
+            now: Mutex::new(Duration::ZERO),
+            step,
+        });
+        let adapter =
+            spawn_hook_adapter_with_clock(hook_rx, Arc::new(sink), seam.clone(), clock).unwrap();
         for s in signals {
             hook_tx.send(*s).unwrap();
         }
@@ -1140,7 +1182,6 @@ mod tests {
             &target,
             &[
                 HookSignal::Escape,
-                HookSignal::OtherKeyDown,
                 HookSignal::TalkKeyBlocked,
                 HookSignal::HookReinstalled,
                 HookSignal::HookFailed {
@@ -1154,12 +1195,32 @@ mod tests {
             deferred,
             vec![
                 DeferredSignal::Escape,
-                DeferredSignal::OtherKeyDown,
                 DeferredSignal::TalkKeyBlocked,
                 DeferredSignal::HookReinstalled,
                 DeferredSignal::HookFailed("set_windows_hook_failed"),
             ]
         );
+    }
+
+    #[test]
+    fn cap_44c_at_03_a_windows_other_key_cancels_the_ptt_and_is_not_deferred() {
+        let target = Arc::new(PttTarget::default());
+        target.set("a1");
+        // The other key lands 300 ms into the hold: inside the 1 s window.
+        let (items, _, deferred) =
+            run_windows_path(&target, &[down(), HookSignal::OtherKeyDown, up()]);
+        assert_eq!(items, vec![ptt("a1", "down"), ptt("a1", "cancel")]);
+        assert!(deferred.is_empty());
+    }
+
+    #[test]
+    fn cap_44a_at_03_a_short_windows_press_reaches_the_brain_as_cancel() {
+        let target = Arc::new(PttTarget::default());
+        target.set("a1");
+        // 100 ms between down and up: a tap. The brain gets `cancel`, never `up`.
+        let (items, _, _) =
+            run_windows_path_stepped(&target, &[down(), up()], Duration::from_millis(100));
+        assert_eq!(items, vec![ptt("a1", "down"), ptt("a1", "cancel")]);
     }
 
     #[test]
@@ -1249,7 +1310,7 @@ mod tests {
             .split("\n}\n")
             .next()
             .unwrap();
-        for todo in ["TODO(#14)", "TODO(#24)", "TODO(#294)", "TODO(#297)"] {
+        for todo in ["TODO(#14)", "TODO(#294)", "TODO(#297)"] {
             assert!(seam.contains(todo), "the seam misses {todo}");
         }
     }
