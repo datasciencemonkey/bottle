@@ -33,7 +33,10 @@ else show(r.userText);                           // r.code: 'SECRET_IN_QUESTION'
 2. `sanitizeQuestion(raw)`: removes C0/C1 controls (keeps `\n` and `\t`, normalizes `\r\n`, U+2028, U+2029 to `\n`),
    every Unicode format character (`\p{Cf}`: zero-width, bidi embeddings, overrides and isolates, soft hyphen, tag characters),
    script and style elements with their content, HTML comments and tags (and autolinks `<https://…>`),
-   markdown inline links, images, reference links and reference definitions (the visible text stays, the URL goes),
+   markdown inline links, images, reference links and reference definitions (the visible text stays, the URL goes;
+   `src/links.ts` is a linear scanner, so balanced brackets in the text, balanced parentheses in the URL, titles with
+   parentheses, `<…>` destinations, nested labels and definitions with the URL on the next line are all covered;
+   a stray `](…)` without its opening bracket is removed too),
    and code fence delimiters (backtick and tilde runs of 3 or more, with the info string of a fence line).
    The passes repeat until the text does not change, so nested markup cannot rebuild itself. Then spaces collapse.
    An empty result returns `{ ok: false, code: 'CLIENT_BUG', reason: 'empty' }`.
@@ -74,4 +77,9 @@ Test fixtures use only obviously fake values (for example `dapi` + 32 zeros), bu
 
 - The `dose[0-9a-f]+` pattern is kept exactly as section 4.6 states it, so ordinary words such as "dosed" also block the send.
   A tighter pattern needs a requirements change.
+- Decision: anything that a browser would parse as an HTML tag (`<` + letter, up to the next `>`) is removed, even when it
+  was meant as prose: `a<b and c>d` becomes `ad`. This errs on the side of removal; `<` followed by a digit or a space stays.
+- Decision: bare URLs (`https://…`, `www.…`) are plain text, not markdown link syntax, so G-47 does not remove them.
+  Only the `[text](url)`, reference, image and `<url>` autolink forms count as markdown links here.
+- Markdown nested deeper than 64 levels of link text is dropped with its text.
 - "chars" are Unicode code points. A hard cut can split a grapheme cluster (for example a flag or a combining mark).
