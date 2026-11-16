@@ -9,7 +9,7 @@
  *
  * Badges are orthogonal to the mood (UX-39b): this function takes no mood source and returns
  * no mood, and `mapMood` takes none of these inputs. Each badge has text and an accessible
- * label, so no state is colour only (UX-33). A badge holds names only, never a token.
+ * label that starts with the text (WCAG 2.5.3), so no state is colour only (UX-33). A badge holds names only, never a token.
  *
  * TODO(#285): the brain sends this list in `mog:view_state` (with the mood) and routes the
  * `click` input `{ target: 'badge', badge }` to the badge `action`.
@@ -113,14 +113,14 @@ export function mapBadges(src: BadgeSources): MogBadge[] {
     {
       kind: 'identity',
       text: `${profile} · ${backend}`,
-      label: `Profile ${profile} on ${host}, backend ${backend}`,
+      label: `${profile} · ${backend}. Profile ${profile} on ${host}, backend ${backend}`,
       detail: host,
       hoverOnly: true,
     },
     {
       kind: 'stt',
       text: sttBadgeText(stt),
-      label: sttLabel(stt),
+      label: `${sttBadgeText(stt)}. ${sttLabel(stt)}`,
       hoverOnly: true,
       action: 'open_data_disclosures',
     },
@@ -130,7 +130,7 @@ export function mapBadges(src: BadgeSources): MogBadge[] {
     out.push({
       kind: 'hop',
       text: `Hop: ${hop.profile} (${scope})`,
-      label: `Asking in ${hop.profile} for ${scope}`,
+      label: `Hop: ${hop.profile} (${scope}). Asking in ${hop.profile} for ${scope}`,
       hoverOnly: false,
     });
   }
@@ -138,7 +138,7 @@ export function mapBadges(src: BadgeSources): MogBadge[] {
     out.push({
       kind: 'offline',
       text: 'Offline',
-      label: 'Offline: Databricks is not reachable',
+      label: 'Offline. Databricks is not reachable',
       hoverOnly: false,
     });
   }
@@ -146,7 +146,7 @@ export function mapBadges(src: BadgeSources): MogBadge[] {
     out.push({
       kind: 'sync',
       text: 'Sync paused',
-      label: 'Sync paused: all data stays on this device',
+      label: 'Sync paused. All data stays on this device',
       hoverOnly: false,
       action: 'open_setup',
     });
