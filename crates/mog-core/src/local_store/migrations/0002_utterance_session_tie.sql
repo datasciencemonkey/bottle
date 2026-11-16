@@ -22,9 +22,15 @@ BEGIN
   SELECT RAISE(ABORT, 'utterance_session_mog_mismatch');
 END;
 
-CREATE TRIGGER session_mog_with_utterances_bu BEFORE UPDATE OF mog_id ON session
-WHEN NEW.mog_id IS NOT OLD.mog_id
-  AND EXISTS (SELECT 1 FROM utterance WHERE session_id = OLD.session_id)
+-- A session update may not move utterances to another MOG. It may not rename a session that has
+-- utterances, and it may not take the ID of a session whose utterances have another MOG
+-- (`UPDATE OR REPLACE` with foreign keys off or deferred).
+CREATE TRIGGER session_mog_with_utterances_bu BEFORE UPDATE OF session_id, mog_id ON session
+WHEN (NEW.session_id IS NOT OLD.session_id
+      AND EXISTS (SELECT 1 FROM utterance WHERE session_id = OLD.session_id))
+  OR EXISTS (
+    SELECT 1 FROM utterance WHERE session_id = NEW.session_id AND mog_id IS NOT NEW.mog_id
+  )
 BEGIN
   SELECT RAISE(ABORT, 'session_mog_has_utterances');
 END;

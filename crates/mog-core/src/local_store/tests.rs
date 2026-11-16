@@ -1471,7 +1471,7 @@ fn mem_35a_migration_0002_applies_to_a_store_that_has_0001_and_data() {
     })
     .unwrap();
     s.close();
-    let s = open_store(t.path(), vault);
+    let s = open_store(t.path(), vault.clone());
     assert_eq!(
         count(&s, "SELECT max(version) FROM schema_migrations"),
         super::migrate::latest_version()
@@ -1481,6 +1481,69 @@ fn mem_35a_migration_0002_applies_to_a_store_that_has_0001_and_data() {
         1,
         "the data stays"
     );
+    let triggers = "SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND name IN \
+         ('utterance_session_mog_bi', 'utterance_session_mog_bu', \
+          'session_mog_with_utterances_bu', 'session_mog_with_utterances_bi')";
+    assert_eq!(count(&s, triggers), 4, "all four 0002 triggers exist");
     seed_mog(&s, MOG_B);
     assert!(insert_utterance(&s, "u-2", "sess-a", MOG_B, 2).is_err());
+    // A second open changes nothing: 0002 runs once.
+    s.close();
+    let s = open_store(t.path(), vault);
+    assert_eq!(count(&s, triggers), 4);
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM schema_migrations WHERE version = 2"
+        ),
+        1
+    );
+    assert_eq!(count(&s, "SELECT count(*) FROM utterance"), 1);
+}
+
+#[test]
+fn mem_01_a_session_with_utterances_cannot_be_renamed() {
+    let t = TempDir::new("01-sess-rename");
+    let s = open_store(t.path(), Arc::new(MemoryKeyVault::new()));
+    seed_mog(&s, MOG_A);
+    seed_session(&s, MOG_A, "sess-a", 1);
+    assert!(insert_utterance(&s, "u-1", "sess-a", MOG_A, 1).is_ok());
+    let renamed = s.with_conn(|c| {
+        c.execute_batch("PRAGMA foreign_keys = OFF")?;
+        c.execute(
+            "UPDATE session SET session_id = 'sess-z' WHERE session_id = 'sess-a'",
+            [],
+        )
+    });
+    assert!(renamed.is_err());
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM session WHERE session_id = 'sess-a'"
+        ),
+        1
+    );
+}
+
+#[test]
+fn mem_01_an_update_or_replace_cannot_take_the_id_of_another_mogs_session() {
+    let t = TempDir::new("01-sess-update-replace");
+    let s = open_store(t.path(), Arc::new(MemoryKeyVault::new()));
+    seed_mog(&s, MOG_A);
+    seed_mog(&s, MOG_B);
+    seed_session(&s, MOG_A, "sess-a", 1);
+    seed_session(&s, MOG_B, "sess-b", 2);
+    assert!(insert_utterance(&s, "u-1", "sess-a", MOG_A, 1).is_ok());
+    // sess-b (MOG B, no utterances) takes the ID sess-a. REPLACE would delete the MOG A row,
+    // and deferred foreign keys would let it through; the UPDATE trigger refuses.
+    let taken = s.with_conn(|c| {
+        c.execute_batch("PRAGMA defer_foreign_keys = ON")?;
+        c.execute(
+            "UPDATE OR REPLACE session SET session_id = 'sess-a' WHERE session_id = 'sess-b'",
+            [],
+        )
+    });
+    assert!(taken.is_err());
+    assert_eq!(count(&s, "SELECT count(*) FROM session"), 2);
+    assert!(insert_utterance(&s, "u-2", "sess-a", MOG_B, 1).is_err());
 }
