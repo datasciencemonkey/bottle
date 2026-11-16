@@ -4,8 +4,11 @@
 //! secrets and I/O stay in `mog-core` (section 4.4). The IPC command surface is in `ipc` (#223).
 
 pub mod ipc;
+pub mod window_host;
 pub mod windows;
 
+use tauri::Manager;
+use window_host::TauriWindowHost;
 use windows::WindowKind;
 
 /// The id of the demo MOG and card that a debug build opens when `BOTTLE_DEMO_WINDOWS=1`.
@@ -34,10 +37,27 @@ pub fn run() {
     tauri::Builder::default()
         .manage(ipc::BrainChannel::default())
         .invoke_handler(ipc::handler)
+        .on_window_event(|window, event| {
+            // R11: a window that closes outside the host frees its ledger slot.
+            if let tauri::WindowEvent::Destroyed = event {
+                if let Some(host) = window.try_state::<TauriWindowHost<tauri::Wry>>() {
+                    host.window_destroyed(window.label());
+                }
+            }
+        })
         .setup(move |app| {
             let handle = app.handle();
+            app.manage(TauriWindowHost::new(handle.clone()));
+            let host = app.state::<TauriWindowHost<tauri::Wry>>();
             for kind in startup_windows(demo) {
-                windows::build(handle, &kind.spec())?;
+                // MOG and card windows go through R11, so the cap and the ledger hold.
+                match &kind {
+                    WindowKind::Mog(id) => host.open_mog_window(id)?,
+                    WindowKind::Card(id) => host.show_card(id)?,
+                    _ => {
+                        windows::build(handle, &kind.spec())?;
+                    }
+                }
             }
             Ok(())
         })
