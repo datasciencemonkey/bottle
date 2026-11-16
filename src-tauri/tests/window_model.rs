@@ -7,6 +7,34 @@ use mog_core::ipc::{WindowClass, COMMANDS};
 use serde_json::Value;
 use std::path::PathBuf;
 
+// ---------- MB-10b / MB-10c (#71): the native window titles ----------
+
+#[test]
+fn mb_10b_hub_title_bar_shows_labs_label() {
+    assert_eq!(
+        WindowKind::Hub.spec().title,
+        "Bottle (Databricks Labs / experimental)"
+    );
+}
+
+#[test]
+fn mb_10c_window_titles_use_mog_only_as_a_noun() {
+    let kinds = [
+        WindowKind::Brain,
+        WindowKind::Hub,
+        WindowKind::mog("a").unwrap(),
+        WindowKind::card("a").unwrap(),
+    ];
+    for kind in kinds {
+        let title = kind.spec().title;
+        for word in title.split(|c: char| !c.is_alphanumeric()) {
+            if word.eq_ignore_ascii_case("mog") || word.eq_ignore_ascii_case("mogs") {
+                assert!(word.starts_with("MOG"), "{title}: write MOG, not {word}");
+            }
+        }
+    }
+}
+
 fn capabilities() -> Vec<Value> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("capabilities");
     let mut caps: Vec<Value> = std::fs::read_dir(dir)
