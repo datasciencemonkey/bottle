@@ -23,6 +23,13 @@ tauri-build = { version = "2.7", features = [] }
 getrandom = "0.3"
 # Tests only: the glob matcher that Tauri uses for capability window labels.
 glob = "0.3.3"
+# R10 LocalStore (#35). SP-21 (#34): SQLCipher 4 with a static OpenSSL, so the crypto
+# provider does not depend on the build machine. sqlite-vec is linked statically.
+rusqlite = { version = "0.42.0", features = ["bundled-sqlcipher-vendored-openssl"] }
+sqlite-vec = "0.1.9"
+# R10 macOS Keychain for the local store key (MEM-08b). OSX_10_15 gives the data
+# protection keychain, the only one that honours kSecAttrAccessible on macOS.
+security-framework = { version = "3", features = ["OSX_10_15"] }
 
 [profile.release]
 codegen-units = 1

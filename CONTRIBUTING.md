@@ -12,6 +12,7 @@ Read `AGENTS.md` first. The single source of truth is `research/final-requiremen
 | `src/brain` | The hidden brain window: all domain logic (ARC-2). |
 | `src/views` | Thin views: hub (V1), MOG (V2), card (V3). |
 | `src/shared` | Shared contracts (IPC and interfaces). Only the foundation lead changes them. `interfaces.ts` is the 4.7 contract; its IPC-facing types have a serde mirror in `mog_core::types`. A change to one needs the same change to the other and to `tests/fixtures/ipc-types`. |
+| `crates/mog-core/src/local_store/migrations` | Local store schema, forward-only (ADR 0033). A contract path: a change is a new numbered file through a `contract-change` issue. Never edit an applied file. |
 | `docs/adr` | Architecture decision records. |
 
 ## Branches
@@ -66,9 +67,13 @@ pnpm tauri build --debug        # macOS or Windows app bundle
 uv run --no-project --with pytest --with pyyaml pytest scripts/tests -q   # when scripts/tests exists
 ```
 
-On macOS, run `scripts/pre-push.sh` before every push, and paste its summary into the PR.
+App CI has no macOS runner (ADR 0045). On a Mac, run `scripts/pre-push.sh` before every push, and paste its summary into the PR. The script is the macOS gate: it runs the CI checks, the pinned cargo-nextest check, requirement coverage, the offline build (AT-37) and the golden set (SEC-26). A macOS-only break is caught only by this script. To run it on each `git push`, install it as the pre-push hook:
 
-CI runs these commands on Windows for each PR, and on macOS (arm64) and Windows on push to main, nightly and on dispatch, in `.github/workflows/app-ci.yml`. It also builds offline from the lockfiles (AT-37) and packages unsigned debug installers with a SHA-256 file each. The signing and notarization steps run only when the `APPLE_*` and `WINDOWS_*` secrets exist.
+```sh
+ln -sf ../../scripts/pre-push.sh "$(git rev-parse --git-common-dir)/hooks/pre-push"
+```
+
+CI runs these commands on Windows (`windows-2025`) and Linux (`ubuntu-24.04`) for each PR, on push to main, nightly and on dispatch, in `.github/workflows/app-ci.yml`. It also builds offline from the lockfiles (AT-37) and packages an unsigned debug NSIS installer with a SHA-256 file. The Windows signing step runs only when the `WINDOWS_*` secrets exist. On a Mac, `scripts/package-macos.sh` builds the DMG and its SHA-256 file. It signs and notarizes the DMG only when the `APPLE_*` secrets exist (NFR-15a).
 
 ## Pull requests and the merge gate
 

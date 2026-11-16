@@ -76,7 +76,8 @@ You (orchestrator) → **area leads** (one per area) → **issue implementers** 
 4. Concurrency: at most 6 implementers at a time on one machine. Always use worktree isolation.
 5. Re-read the graph after each merge. A merge can make new issues ready.
 6. Contract files (`src/shared/ipc.ts`, `src/shared/interfaces.ts`, `src-tauri/src/ipc.rs`, schema
-   migrations) change only through the foundation lead. An implementer who needs a contract change
+   migrations including `crates/mog-core/src/local_store/migrations/` (ADR 0033)) change only through
+   the foundation lead. An implementer who needs a contract change
    opens a `type:chore` issue labelled `contract-change` and blocks on it.
 
 ## 4. The per-issue SDLC (every implementer, every issue)

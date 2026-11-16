@@ -1,6 +1,7 @@
 //! Contract tests for the 17 Rust core components of section 4.3 (R1-R14, R16, R17; R15 is in
 //! `mog-core-ffi`). Each stub must report `NotImplemented` with its own component ID until its
-//! feature issue lands. ARC-6: only R6 TokenBroker names the token type.
+//! feature issue lands; R2 CaptureService has landed and is tested in `capture_service.rs`.
+//! ARC-6: only R6 TokenBroker names the token type.
 
 use std::path::{Path, PathBuf};
 
@@ -20,14 +21,6 @@ fn r1_hotkey_service_stub_reports_not_implemented() {
     not_implemented(s.start(), "R1");
     not_implemented(s.stop(), "R1");
     not_implemented(s.secure_input_active(), "R1");
-}
-
-#[test]
-fn r2_capture_service_stub_reports_not_implemented() {
-    use mog_core::capture::{CaptureService, StubCaptureService};
-    let s = StubCaptureService;
-    not_implemented(s.acquire_lease("demo"), "R2");
-    not_implemented(s.release_lease(1), "R2");
 }
 
 #[test]
