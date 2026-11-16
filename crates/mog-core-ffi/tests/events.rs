@@ -11,7 +11,9 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use mog_core_ffi::{emit_event, mog_set_event_callback, MOG_STATUS_OK};
+use mog_core_ffi::{
+    dropped_events, emit_event, mog_set_event_callback, MOG_EVENT_QUEUE_CAPACITY, MOG_STATUS_OK,
+};
 use serde_json::json;
 
 static SERIAL: Mutex<()> = Mutex::new(());
@@ -31,6 +33,8 @@ struct Recorder {
     overlapped: AtomicBool,
     sleep_ms: u64,
     clear_from_inside: bool,
+    /// While true, the callback does not return (a host that blocks).
+    hold: AtomicBool,
 }
 
 impl Recorder {
@@ -73,6 +77,9 @@ extern "C" fn record(event_json: *const c_char, user_data: *mut c_void) {
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .push((text, at));
+    while rec.hold.load(Ordering::SeqCst) {
+        thread::sleep(Duration::from_millis(1));
+    }
     if rec.sleep_ms > 0 {
         thread::sleep(Duration::from_millis(rec.sleep_ms));
     }
@@ -143,9 +150,12 @@ fn nfr_18b_event_reaches_the_callback_in_1_ms_or_less() {
         .map(|((_, at), start)| at.duration_since(*start))
         .collect();
     // The handoff to the delivery thread is an OS thread wake-up, so its tail depends on the
-    // scheduler. The bound is on the median; the core side bound is on p99.
-    let p50 = percentile(latencies, 0.50);
+    // scheduler: the tight bound is on the median, and p99 has a loose bound that still finds
+    // a lost wake-up or a lock held across the callback. The core side bound is on p99 emit.
+    let p50 = percentile(latencies.clone(), 0.50);
     assert!(p50 <= ONE_MS, "p50 delivery {p50:?} is over 1 ms");
+    let p99 = percentile(latencies, 0.99);
+    assert!(p99 <= 20 * ONE_MS, "p99 delivery {p99:?} is over 20 ms");
     let emit_p99 = percentile(emit_took, 0.99);
     assert!(emit_p99 <= ONE_MS, "p99 emit {emit_p99:?} is over 1 ms");
 }
@@ -250,4 +260,36 @@ fn arc_6_secret_shaped_event_never_reaches_the_callback() {
     thread::sleep(Duration::from_millis(50));
     clear();
     assert_eq!(rec.count.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn nfr_18b_full_event_queue_drops_and_counts_without_blocking() {
+    let _s = serial();
+    let rec = Recorder::default();
+    rec.hold.store(true, Ordering::SeqCst);
+    set(&rec);
+    let before = dropped_events();
+    let extra = 50;
+    let mut accepted = 0;
+    let start = Instant::now();
+    for i in 0..MOG_EVENT_QUEUE_CAPACITY + extra {
+        if emit_event("net:status", json!({ "seq": i })) {
+            accepted += 1;
+        }
+    }
+    let took = start.elapsed();
+    // The delivery thread may hold one event in the blocked callback; the queue holds the rest.
+    assert!(
+        (MOG_EVENT_QUEUE_CAPACITY..=MOG_EVENT_QUEUE_CAPACITY + 1).contains(&accepted),
+        "accepted {accepted}"
+    );
+    let dropped = dropped_events() - before;
+    assert_eq!(
+        dropped as usize,
+        MOG_EVENT_QUEUE_CAPACITY + extra - accepted
+    );
+    assert!(took <= Duration::from_secs(1), "emit blocked: {took:?}");
+    rec.hold.store(false, Ordering::SeqCst);
+    assert!(rec.wait_for(accepted, Duration::from_secs(10)));
+    clear();
 }

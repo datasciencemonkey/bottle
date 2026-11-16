@@ -42,6 +42,11 @@ fn nfr_18c_c_header_declares_every_abi_function() {
         "int32_t mog_set_event_callback(MogEventCallback callback, void *user_data);",
         "typedef void (*MogEventCallback)(const char *event_json, void *user_data);",
         "#define MOG_ABI_VERSION 1",
+        "#define MOG_EVENT_QUEUE_CAPACITY",
+        // N3, N4: the host rules for the callback.
+        "before it frees `user_data`",
+        "does not support unloading",
+        "while it holds a lock that the callback takes",
     ] {
         assert!(header.contains(item), "the header lacks `{item}`");
     }

@@ -5,7 +5,7 @@ use std::os::raw::c_char;
 use std::ptr;
 
 use mog_core_ffi::{
-    mog_abi_version, mog_call, mog_free_string, mog_init, MOG_ABI_VERSION,
+    emit_event, mog_abi_version, mog_call, mog_free_string, mog_init, MOG_ABI_VERSION,
     MOG_STATUS_INVALID_ARGUMENT, MOG_STATUS_OK,
 };
 
@@ -82,24 +82,25 @@ fn nfr_18a_mog_call_returns_not_implemented_through_r12() {
     ));
     assert_eq!(
         json(&reply),
-        serde_json::json!({"error": "not_implemented", "command": "profiles_list"})
+        serde_json::json!({"error": "not_implemented"})
     );
 }
 
 #[test]
 fn sec_02a_ffi_caller_has_the_brain_window_class() {
-    // A brain command passes the window check; a view-only command does not.
+    // A brain command passes the window check; a view-only command does not. Refusals cross
+    // only as fixed codes, with no command name or window label (ADR 0019 decision 2).
     let reply = call(Some(r#"{"command":"capture_status","args":{}}"#));
     assert_eq!(
         json(&reply),
-        serde_json::json!({"error": "not_implemented", "command": "capture_status"})
+        serde_json::json!({"error": "not_implemented"})
     );
     let reply = call(Some(
         r#"{"command":"view_emit","args":{"mogId":"m1","kind":"poked"}}"#,
     ));
     assert_eq!(
         json(&reply),
-        serde_json::json!({"error": "window_not_allowed", "command": "view_emit", "window": "brain"})
+        serde_json::json!({"error": "window_not_allowed"})
     );
 }
 
@@ -108,14 +109,7 @@ fn sec_02b_ffi_args_with_an_extra_field_are_rejected() {
     let reply = call(Some(
         r#"{"command":"profiles_list","args":{"refresh":true,"extra":1}}"#,
     ));
-    assert_eq!(
-        json(&reply),
-        serde_json::json!({
-            "error": "invalid_args",
-            "command": "profiles_list",
-            "reason": mog_core::ipc::INVALID_ARGS_REASON,
-        })
-    );
+    assert_eq!(json(&reply), serde_json::json!({"error": "invalid_args"}));
 }
 
 #[test]
@@ -133,10 +127,7 @@ fn nfr_18a_brain_subscribe_is_not_supported_over_the_abi() {
     let reply = call(Some(
         r#"{"command":"brain_subscribe","args":{"onEvent":"__CHANNEL__:1"}}"#,
     ));
-    assert_eq!(
-        json(&reply),
-        serde_json::json!({"error": "not_supported", "command": "brain_subscribe"})
-    );
+    assert_eq!(json(&reply), serde_json::json!({"error": "not_supported"}));
 }
 
 #[test]
@@ -308,6 +299,22 @@ fn sec_01_fuzzed_ffi_calls_return_json_without_secrets() {
         assert!(
             !looks_like_a_token(&reply),
             "reply echoes a secret: {reply}"
+        );
+    }
+}
+
+#[test]
+fn arc_6_password_in_any_ascii_case_is_blocked_over_the_abi() {
+    // ADR 0013: `password=` matches in any ASCII case. An event that holds it never leaves.
+    for key in ["PASSWORD=", "Password=", "pAsSwOrD="] {
+        let value = format!("{key}hunter2");
+        assert!(
+            !emit_event("auth:status", serde_json::json!({ "note": value })),
+            "{key} in the payload passed"
+        );
+        assert!(
+            !emit_event(&value, serde_json::json!({})),
+            "{key} in the name passed"
         );
     }
 }
