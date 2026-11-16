@@ -1,0 +1,77 @@
+//! Event names of 4.5 (ARC-5). Tauri allows only alphanumerics, `-`, `/`, `:` and `_` in
+//! event names, so each dotted name of the requirements maps `.` to `:` (ADR 0003).
+//! Streams (level, partial text) are Channels, not events: see `CaptureSubscribeArgs`.
+//! Core-to-brain items travel as `{ event, payload }` messages on the brain Channel.
+
+use serde::Serialize;
+
+/// Who emits the event and who gets it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Direction {
+    /// Rust core to the brain only, on the brain's private Channel (`brain_subscribe`).
+    /// Never a Tauri event: any window that may listen gets every Tauri event (ADR 0003).
+    CoreToBrain,
+    /// Brain to a view window as a Tauri event (`emitTo("mog-<id>" | "card-<id>" | "hub", ..)`).
+    /// Every view can listen to these; they carry only what views render.
+    BrainToView,
+}
+
+/// One event of 4.5.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventSpec {
+    /// The Tauri event name.
+    pub name: &'static str,
+    /// The name in the requirements.
+    pub spec_name: &'static str,
+    pub direction: Direction,
+}
+
+const fn core(name: &'static str, spec_name: &'static str) -> EventSpec {
+    EventSpec {
+        name,
+        spec_name,
+        direction: Direction::CoreToBrain,
+    }
+}
+
+pub const HOTKEY_PTT: &str = "hotkey:ptt";
+pub const HOTKEY_PANIC: &str = "hotkey:panic";
+pub const CAPTURE_STATE: &str = "capture:state";
+pub const CAPTURE_SEGMENT: &str = "capture:segment";
+pub const SESSION_STOP_SIGNAL: &str = "session:stop_signal";
+pub const AUTH_STATUS: &str = "auth:status";
+pub const NET_STATUS: &str = "net:status";
+pub const MEM_REMOTE_STATUS: &str = "mem:remote_status";
+pub const AGENT_TOOL_CALL: &str = "agent:tool_call";
+pub const AGENT_STATUS: &str = "agent:status";
+pub const MOG_VIEW_STATE: &str = "mog:view_state";
+pub const CARD_UPDATE: &str = "card:update";
+/// `view_emit` arrives in the brain under this name.
+pub const VIEW_INPUT: &str = "view:input";
+
+/// Every event of 4.5, in the order of the requirements.
+pub const ALL: &[EventSpec] = &[
+    core(HOTKEY_PTT, "hotkey.ptt"),
+    core(HOTKEY_PANIC, "hotkey.panic"),
+    core(CAPTURE_STATE, "capture.state"),
+    core(CAPTURE_SEGMENT, "capture.segment"),
+    core(SESSION_STOP_SIGNAL, "session.stop_signal"),
+    core(AUTH_STATUS, "auth.status"),
+    core(NET_STATUS, "net.status"),
+    core(MEM_REMOTE_STATUS, "mem.remote_status"),
+    core(AGENT_TOOL_CALL, "agent.tool_call"),
+    core(AGENT_STATUS, "agent.status"),
+    EventSpec {
+        name: MOG_VIEW_STATE,
+        spec_name: "mog.view_state",
+        direction: Direction::BrainToView,
+    },
+    EventSpec {
+        name: CARD_UPDATE,
+        spec_name: "card.update",
+        direction: Direction::BrainToView,
+    },
+    core(VIEW_INPUT, "view.input"),
+];

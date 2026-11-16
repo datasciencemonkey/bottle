@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-dbx-http"
+description = "Enables the dbx_http command without any pre-configured scope."
+commands.allow = ["dbx_http"]
+
+[[permission]]
+identifier = "deny-dbx-http"
+description = "Denies the dbx_http command without any pre-configured scope."
+commands.deny = ["dbx_http"]

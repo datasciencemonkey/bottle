@@ -214,7 +214,12 @@ fn arc_4_no_window_gets_plugin_permissions() {
                 .as_str()
                 .or_else(|| perm["identifier"].as_str())
                 .expect("permission id");
-            assert!(id.starts_with("core:"), "non-core permission {id}");
+            // Core permissions, or an app command permission (`allow-<command>`, no plugin prefix).
+            let app_command = id.starts_with("allow-") && !id.contains(':');
+            assert!(
+                id.starts_with("core:") || app_command,
+                "plugin permission {id}"
+            );
         }
     }
 }
@@ -235,22 +240,7 @@ fn arc_4_no_forbidden_plugin_crates() {
     }
 }
 
-#[test]
-fn arc_4_views_get_no_brain_permissions() {
-    for cap in capabilities() {
-        let id = cap["identifier"].as_str().unwrap();
-        if id == "brain" {
-            continue;
-        }
-        for perm in cap["permissions"].as_array().unwrap() {
-            let p = perm.as_str().unwrap();
-            assert!(
-                p == "core:event:allow-listen" || p == "core:event:allow-unlisten",
-                "view {id} has {p}"
-            );
-        }
-    }
-}
+// The view-permission rule moved to tests/ipc_capabilities.rs (#223).
 
 // ---------- MB-10a / MB-10c: product name Bottle, no MOG in package or bundle IDs ----------
 //

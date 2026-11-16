@@ -1,8 +1,9 @@
 //! The Bottle Tauri app (ARC-1). One OS process: this crate links `mog-core`.
 //!
 //! The app only hosts windows. Domain logic runs in the hidden `brain` window (ARC-2);
-//! secrets and I/O stay in `mog-core` (section 4.4). The IPC command surface lands in #223.
+//! secrets and I/O stay in `mog-core` (section 4.4). The IPC command surface is in `ipc` (#223).
 
+pub mod ipc;
 pub mod windows;
 
 use windows::WindowKind;
@@ -31,6 +32,8 @@ pub fn run() {
     let demo =
         cfg!(debug_assertions) && std::env::var("BOTTLE_DEMO_WINDOWS").is_ok_and(|v| v == "1");
     tauri::Builder::default()
+        .manage(ipc::BrainChannel::default())
+        .invoke_handler(ipc::handler)
         .setup(move |app| {
             let handle = app.handle();
             for kind in startup_windows(demo) {
