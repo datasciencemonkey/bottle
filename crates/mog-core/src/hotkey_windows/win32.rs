@@ -398,10 +398,15 @@ unsafe extern "system" fn ll_keyboard_proc(code: i32, wparam: WPARAM, lparam: LP
         match verdict {
             Some(Verdict::Swallow) => return 1,
             Some(Verdict::SwallowAndReplay { vk }) => {
-                // Replay after the callback returns, on the hook thread's loop.
+                // Replay after the callback returns, on the hook thread's loop. If the post
+                // fails, pass the key-up as it is, so Windows never keeps the key down.
                 // SAFETY: posting a message to this thread has no memory requirement.
-                unsafe { PostThreadMessageW(GetCurrentThreadId(), WM_APP_REPLAY, vk as usize, 0) };
-                return 1;
+                let posted = unsafe {
+                    PostThreadMessageW(GetCurrentThreadId(), WM_APP_REPLAY, vk as usize, 0)
+                };
+                if posted != 0 {
+                    return 1;
+                }
             }
             _ => {}
         }

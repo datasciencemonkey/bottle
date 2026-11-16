@@ -34,7 +34,8 @@ tooltip shows. Spike SP-03 (#5) is still open.
    Windows. Windows does not update the async state of a key that the hook swallowed, so the code does
    not end a PTT from that state. A lost key-up of a swallowed talk key is bounded by the 120 s hold stop.
 9. On resume, an active PTT ends and all key state clears (a hold cannot last through sleep), then the
-   hook is installed again. Windows can send two resume events; the second one only installs again.
+   hook is installed again. Windows can send two resume events; the second one only installs again. A key-up
+   of a key swallowed before the sleep then reaches the app without its key-down; that is harmless.
 10. A failure at start (hook, thread, or the 1 min timer) gives `CoreError::Unavailable { component: "R1",
     reason }`. A later failure (reinstall, resume notification, foreground hook) sends
     `HookSignal::HookFailed { reason }`. The next tick tries a failed reinstall again.
@@ -52,4 +53,7 @@ tooltip shows. Spike SP-03 (#5) is still open.
   stays on the in-process channel.
 - TODO(#5): SP-03 must confirm on a Windows device that UIPI blocks the hook under an elevated window, and
   measure the real callback p99 and the 8 h soak (AT-30). The device steps are in #296 (needs:windows).
-- When #6 merges its shared PTT state machine (`hotkey_core.rs`), the Windows signals map to its types.
+- #6 merged `hotkey_core.rs`. The shared `hotkey_core::TalkKey` converts to the Windows `TalkKey` (which adds
+  the Ctrl+Win chord), and `forward_to_engine` feeds `TalkDown`/`TalkUp` to the shared `HotkeyEngine`, so
+  both platforms give the same `hotkey.ptt` phases. The tap watchdog of #6 is macOS-specific; Windows uses
+  `HookSupervisor`. TODO(#14): the capture lifecycle creates the service and connects it to the engine.

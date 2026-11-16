@@ -42,6 +42,8 @@ pub mod vk {
     pub const LCONTROL: u32 = 0xA2;
     /// Right Ctrl.
     pub const RCONTROL: u32 = 0xA3;
+    /// Right Shift.
+    pub const RSHIFT: u32 = 0xA1;
     /// Left Alt.
     pub const LMENU: u32 = 0xA4;
     /// Right Alt (AltGr on some layouts).
@@ -59,8 +61,38 @@ pub enum TalkKey {
     RightAlt,
     /// Right-Ctrl.
     RightCtrl,
+    /// Right-Win (the Windows key of the shared `RightCommand`).
+    RightWin,
+    /// Right-Shift.
+    RightShift,
     /// Ctrl (either side) and Win (either side) held together.
     CtrlWin,
+}
+
+impl TalkKey {
+    /// The one virtual key of a single-key talk key; `None` for the Ctrl+Win chord.
+    pub fn single_vk(self) -> Option<u32> {
+        match self {
+            TalkKey::RightAlt => Some(vk::RMENU),
+            TalkKey::RightCtrl => Some(vk::RCONTROL),
+            TalkKey::RightWin => Some(vk::RWIN),
+            TalkKey::RightShift => Some(vk::RSHIFT),
+            TalkKey::CtrlWin => None,
+        }
+    }
+}
+
+impl From<crate::hotkey_core::TalkKey> for TalkKey {
+    /// The Windows key for the shared talk key setting of #6.
+    fn from(key: crate::hotkey_core::TalkKey) -> Self {
+        use crate::hotkey_core::TalkKey as Core;
+        match key {
+            Core::RightOption => TalkKey::RightAlt,
+            Core::RightControl => TalkKey::RightCtrl,
+            Core::RightCommand => TalkKey::RightWin,
+            Core::RightShift => TalkKey::RightShift,
+        }
+    }
 }
 
 /// One event from the low-level keyboard hook.
@@ -177,17 +209,19 @@ impl HookFilter {
     /// Whether `vk` is one key of the talk key.
     fn is_talk_part(&self, vk: u32) -> bool {
         match self.talk {
-            TalkKey::RightAlt => vk == vk::RMENU,
-            TalkKey::RightCtrl => vk == vk::RCONTROL,
             TalkKey::CtrlWin => is_ctrl(vk) || is_win(vk),
+            single => single.single_vk() == Some(vk),
         }
     }
 
     /// Whether the talk key is complete with the keys held now.
     fn talk_complete(&self) -> bool {
         match self.talk {
-            TalkKey::RightAlt => self.pressed[vk::RMENU as usize],
-            TalkKey::RightCtrl => self.pressed[vk::RCONTROL as usize],
+            TalkKey::RightAlt | TalkKey::RightCtrl | TalkKey::RightWin | TalkKey::RightShift => {
+                self.talk
+                    .single_vk()
+                    .is_some_and(|k| self.pressed[k as usize])
+            }
             TalkKey::CtrlWin => {
                 let held = |a: u32, b: u32| self.pressed[a as usize] || self.pressed[b as usize];
                 held(vk::LCONTROL, vk::RCONTROL) && held(vk::LWIN, vk::RWIN)
@@ -336,6 +370,22 @@ impl Elevation {
             (false, _) => Elevation::Unknown,
         }
     }
+}
+
+/// Feed a talk-key signal to the shared PTT machine of #6 (`hotkey_core`), so Windows and
+/// macOS give the same `hotkey.ptt` phases. Signals with no shared equivalent (Esc, another
+/// key, the elevated window, hook health) return to the host.
+pub fn forward_to_engine(
+    signal: HookSignal,
+    engine: &mut crate::hotkey_core::HotkeyEngine,
+) -> Option<HookSignal> {
+    use crate::hotkey_core::KeyEdge;
+    match signal {
+        HookSignal::TalkDown { .. } => engine.on_talk_key(KeyEdge::Down),
+        HookSignal::TalkUp { .. } => engine.on_talk_key(KeyEdge::Up),
+        other => return Some(other),
+    }
+    None
 }
 
 /// When the hook must be installed again (CAP-40b).
@@ -1177,7 +1227,10 @@ mod tests {
         assert_eq!(TalkKey::from(Core::RightControl), TalkKey::RightCtrl);
         assert_eq!(TalkKey::from(Core::RightCommand), TalkKey::RightWin);
         assert_eq!(TalkKey::from(Core::RightShift), TalkKey::RightShift);
-        for (key, code) in [(TalkKey::RightWin, vk::RWIN), (TalkKey::RightShift, vk::RSHIFT)] {
+        for (key, code) in [
+            (TalkKey::RightWin, vk::RWIN),
+            (TalkKey::RightShift, vk::RSHIFT),
+        ] {
             let mut f = HookFilter::new(key);
             assert_eq!(
                 f.on_key(KeyEvent::down(code), T0),
@@ -1201,8 +1254,14 @@ mod tests {
         use crate::hotkey_core::{HotkeyEngine, HotkeyOutput, PttPhase};
         let sink = Arc::new(RecordingSink::default());
         let mut engine = HotkeyEngine::new(sink.clone());
-        assert_eq!(forward_to_engine(HookSignal::TalkDown { at: T0 }, &mut engine), None);
-        assert_eq!(forward_to_engine(HookSignal::TalkUp { at: T0 }, &mut engine), None);
+        assert_eq!(
+            forward_to_engine(HookSignal::TalkDown { at: T0 }, &mut engine),
+            None
+        );
+        assert_eq!(
+            forward_to_engine(HookSignal::TalkUp { at: T0 }, &mut engine),
+            None
+        );
         assert_eq!(
             *sink.0.lock().unwrap(),
             vec![
