@@ -166,8 +166,9 @@ fn open_connection(path: &Path, key: &LocalKey) -> CoreResult<Connection> {
     if fts5 != 1 {
         return Err(unavailable(()));
     }
-    // TODO(#35): run the forward-only migrations and one warm-up KNN here. Blocked: writing the
-    // migration files needs the user's approval (permission denial, see the #35 report).
+    let mut conn = conn;
+    super::migrate::run(&mut conn)?;
+    super::migrate::warm_up(&conn)?;
     Ok(conn)
 }
 
