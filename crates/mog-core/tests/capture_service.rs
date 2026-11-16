@@ -134,7 +134,13 @@ fn req(mog: &str, mode: CaptureMode) -> CaptureRequest {
 }
 
 fn last_stop(r: &Rig) -> Stopped {
-    r.events.stops.lock().unwrap().last().cloned().expect("a stop event")
+    r.events
+        .stops
+        .lock()
+        .unwrap()
+        .last()
+        .cloned()
+        .expect("a stop event")
 }
 
 // ---------- CAP-01a: one owner, mic_busy ----------
@@ -430,7 +436,10 @@ fn cap_04a_missing_key_up_stops_ptt_at_120_s() {
     assert_eq!(stop.lease_id, lease.id);
     assert_eq!(stop.reason, StopReason::HoldCap);
     assert_eq!(stop.reason.code(), "hold_cap");
-    assert_eq!(r.svc.stop(lease.id).unwrap_err(), CaptureError::UnknownLease);
+    assert_eq!(
+        r.svc.stop(lease.id).unwrap_err(),
+        CaptureError::UnknownLease
+    );
 }
 
 #[test]
