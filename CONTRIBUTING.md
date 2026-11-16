@@ -11,7 +11,7 @@ Read `AGENTS.md` first. The single source of truth is `research/final-requiremen
 | `src-tauri` | The Tauri v2 app crate `bottle`. It links `mog-core`. Capabilities per window label are in `src-tauri/capabilities/`. |
 | `src/brain` | The hidden brain window: all domain logic (ARC-2). |
 | `src/views` | Thin views: hub (V1), MOG (V2), card (V3). |
-| `src/shared` | Shared contracts (IPC and interfaces). Only the foundation lead changes them. |
+| `src/shared` | Shared contracts (IPC and interfaces). Only the foundation lead changes them. `interfaces.ts` is the 4.7 contract; its IPC-facing types have a serde mirror in `mog_core::types`. A change to one needs the same change to the other and to `tests/fixtures/ipc-types`. |
 | `docs/adr` | Architecture decision records. |
 
 ## Branches

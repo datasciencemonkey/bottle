@@ -1,0 +1,6 @@
+{
+  "name": "legacy-pat",
+  "host": "https://example.azuredatabricks.net",
+  "authType": "pat",
+  "supported": false
+}

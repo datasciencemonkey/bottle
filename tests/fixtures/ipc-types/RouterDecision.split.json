@@ -1,0 +1,16 @@
+{
+  "intent": "question",
+  "cleaned_text": "Compare revenue in prod and churn in staging.",
+  "genie_question": "Compare revenue in prod and churn in staging.",
+  "target_profile_hint": "",
+  "confidence": 0.74,
+  "follow_up": true,
+  "topic_label": "revenue vs churn",
+  "part_questions": ["What was revenue last quarter?", "What was churn last quarter?"],
+  "part_profile_hints": ["prod", "staging"],
+  "command": "none",
+  "command_arg": "",
+  "context_note": "the user means fiscal quarters",
+  "injection_suspected": false,
+  "directed_mog_id": ""
+}

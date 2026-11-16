@@ -1,0 +1,16 @@
+{
+  "intent": "question",
+  "cleaned_text": "What was revenue last quarter in EMEA?",
+  "genie_question": "What was revenue last quarter in EMEA?",
+  "target_profile_hint": "",
+  "confidence": 0.92,
+  "follow_up": false,
+  "topic_label": "revenue",
+  "part_questions": [],
+  "part_profile_hints": [],
+  "command": "none",
+  "command_arg": "",
+  "context_note": "",
+  "injection_suspected": false,
+  "directed_mog_id": ""
+}

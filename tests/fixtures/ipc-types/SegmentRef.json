@@ -1,0 +1,10 @@
+{
+  "segmentId": "seg-0001",
+  "mogId": "6f1c2a9e-4b3d-4e8a-9c7f-2d5e8a1b3c4d",
+  "sessionId": "sess-01",
+  "track": "others",
+  "tStartMs": 12000,
+  "tEndMs": 15500,
+  "final": true,
+  "directedTo": "0a9b8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d"
+}

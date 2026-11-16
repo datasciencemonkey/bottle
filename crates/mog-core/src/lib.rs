@@ -5,6 +5,8 @@
 //! links this crate; `mog-core-ffi` exposes the same command and event envelope through
 //! a C ABI. The 17 component modules (R1-R17) land in #225.
 
+pub mod types;
+
 /// The crate version, so hosts can check which core they link.
 pub fn core_version() -> &'static str {
     env!("CARGO_PKG_VERSION")

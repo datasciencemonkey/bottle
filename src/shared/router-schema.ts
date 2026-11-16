@@ -1,0 +1,61 @@
+// The router json_schema of Appendix D of research/final-requirements.md, unchanged (#222).
+// Flat, strict, all fields required; "" or [] means not applicable.
+// src/shared/router-schema.test.ts checks that `required` equals the keys of RouterDecision.
+export const routerJsonSchema = {
+  name: 'mog_router_decision',
+  strict: true,
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      intent: {
+        type: 'string',
+        enum: ['question', 'memory_question', 'context', 'command', 'dictation', 'noise'],
+      },
+      cleaned_text: { type: 'string' },
+      genie_question: { type: 'string' },
+      target_profile_hint: { type: 'string' },
+      confidence: { type: 'number' },
+      follow_up: { type: 'boolean' },
+      topic_label: { type: 'string' },
+      part_questions: { type: 'array', items: { type: 'string' } },
+      part_profile_hints: { type: 'array', items: { type: 'string' } },
+      command: {
+        type: 'string',
+        enum: [
+          'none',
+          'switch_workspace_once',
+          'switch_workspace_session',
+          'reset_workspace',
+          'new_topic',
+          'cancel',
+          'stop_recording',
+          'pause',
+          'resume',
+          'forget_session',
+          'other',
+        ],
+      },
+      command_arg: { type: 'string' },
+      context_note: { type: 'string' },
+      injection_suspected: { type: 'boolean' },
+      directed_mog_id: { type: 'string' },
+    },
+    required: [
+      'intent',
+      'cleaned_text',
+      'genie_question',
+      'target_profile_hint',
+      'confidence',
+      'follow_up',
+      'topic_label',
+      'part_questions',
+      'part_profile_hints',
+      'command',
+      'command_arg',
+      'context_note',
+      'injection_suspected',
+      'directed_mog_id',
+    ],
+  },
+} as const;

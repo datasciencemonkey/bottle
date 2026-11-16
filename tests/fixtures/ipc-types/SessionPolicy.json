@@ -1,0 +1,11 @@
+{
+  "checkInAtMin": 55,
+  "softCapMin": 60,
+  "extendMin": 30,
+  "silenceNudgeMin": 5,
+  "silenceStopMin": 15,
+  "hardCapMin": 240,
+  "lockStopMin": 10,
+  "holdMaxSec": 120,
+  "handsFreeMaxMin": 5
+}

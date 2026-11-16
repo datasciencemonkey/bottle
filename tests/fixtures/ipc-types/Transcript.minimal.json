@@ -1,0 +1,9 @@
+{
+  "segmentId": "seg-0003",
+  "text": "Hello.",
+  "raw": "hello",
+  "provider": "dbx_whisper",
+  "model": "whisper-large-v3",
+  "runtime": "serving",
+  "latencyMs": 1300
+}
