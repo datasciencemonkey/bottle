@@ -30,8 +30,30 @@ pub trait EnvReads: Send + Sync {
 }
 
 /// Build the [`KeyboardEnv`] for `os` from `reads`. Only the reads of `os` run.
-pub fn read_keyboard_env(_os: Os, _reads: &dyn EnvReads) -> KeyboardEnv {
-    KeyboardEnv::default()
+pub fn read_keyboard_env(os: Os, reads: &dyn EnvReads) -> KeyboardEnv {
+    let mut voice_apps: Vec<VoiceApp> = Vec::new();
+    reads.visit_process_names(&mut |name| {
+        if let Some(app) = VoiceApp::from_process_name(name) {
+            if !voice_apps.contains(&app) {
+                voice_apps.push(app);
+            }
+        }
+    });
+    voice_apps.sort();
+    match os {
+        Os::MacOs => KeyboardEnv {
+            dictation: reads.dictation(),
+            voice_over: reads.voice_over(),
+            voice_apps,
+            ..KeyboardEnv::default()
+        },
+        Os::Windows => KeyboardEnv {
+            alt_gr_layout: reads.alt_gr_layout(),
+            copilot_key: reads.copilot_key(),
+            voice_apps,
+            ..KeyboardEnv::default()
+        },
+    }
 }
 
 /// The `com.apple.symbolichotkeys` entry 164 (Dictation).
@@ -57,8 +79,29 @@ pub struct DictationPrefs {
 
 /// The Dictation shortcut of `prefs`, or `None` when Dictation is off or the shortcut is
 /// not one that a Bottle key can share.
-pub fn decode_dictation(_prefs: &DictationPrefs) -> Option<DictationShortcut> {
-    None
+///
+/// The double-press shortcuts are entry 164 with no key (`65535, 65535`) and a modifier mask
+/// as the third parameter: Control `0x40000`, Command `0x100000`, plus the device bit of the
+/// left (`0x8`) or right (`0x10`) Command key. The real-device check of these values is #303.
+pub fn decode_dictation(prefs: &DictationPrefs) -> Option<DictationShortcut> {
+    const NO_KEY: i64 = 65535;
+    if !prefs.enabled {
+        return None;
+    }
+    if prefs.fn_usage_type == Some(3) {
+        return Some(DictationShortcut::Globe);
+    }
+    let hot = prefs.hot_key_164.as_ref().filter(|h| h.enabled)?;
+    match hot.parameters.as_slice() {
+        [NO_KEY, NO_KEY, mods] => Some(match *mods {
+            0x40000 => DictationShortcut::ControlTwice,
+            0x100010 => DictationShortcut::RightCommandTwice,
+            0x100008 => DictationShortcut::LeftCommandTwice,
+            0x100000 => DictationShortcut::EitherCommandTwice,
+            _ => return None,
+        }),
+        _ => None,
+    }
 }
 
 /// The characters that an AltGr layout types with Ctrl+Alt (Right-Alt).
@@ -67,13 +110,20 @@ pub const ALT_GR_PROBE: [char; 10] = ['@', '€', '{', '}', '[', ']', '\\', '|',
 /// `true` if one `VkKeyScanExW` result of the probe characters needs Ctrl and Alt together.
 /// A result is the virtual key in the low byte and the shift state in the high byte; `-1`
 /// means the layout has no key for the character.
-pub fn alt_gr_from_scans(_scans: &[i16]) -> bool {
-    false
+pub fn alt_gr_from_scans(scans: &[i16]) -> bool {
+    const CTRL_ALT: i16 = 0x06;
+    scans
+        .iter()
+        .any(|&scan| scan != -1 && (scan >> 8) & CTRL_ALT == CTRL_ALT)
 }
 
 /// The OS of this build. Other platforms use the macOS rules (they have no talk key).
 pub fn host_os() -> Os {
-    Os::MacOs
+    if cfg!(windows) {
+        Os::Windows
+    } else {
+        Os::MacOs
+    }
 }
 
 /// The reads of an OS without a first-run check: everything off, no process.
@@ -98,7 +148,275 @@ impl EnvReads for NoEnvReads {
 
 /// The OS reads of this platform.
 pub fn os_env_reads() -> Box<dyn EnvReads> {
-    Box::new(NoEnvReads)
+    #[cfg(target_os = "macos")]
+    return Box::new(macos::MacEnvReads);
+    #[cfg(windows)]
+    return Box::new(win32::WindowsEnvReads);
+    #[cfg(not(any(target_os = "macos", windows)))]
+    return Box::new(NoEnvReads);
+}
+
+/// The macOS reads: CFPreferences values and the BSD process names. None of them prompts.
+#[cfg(target_os = "macos")]
+mod macos {
+    use super::{decode_dictation, DictationPrefs, EnvReads, SymbolicHotKey};
+    use crate::hotkey_bindings::DictationShortcut;
+    use std::ffi::{c_char, c_int, c_void, CString};
+    use std::ptr;
+
+    type CFTypeRef = *const c_void;
+    type CFStringRef = *const c_void;
+
+    const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
+    const K_CF_NUMBER_SINT64_TYPE: c_int = 4;
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFPreferencesCopyAppValue(key: CFStringRef, application_id: CFStringRef) -> CFTypeRef;
+        fn CFStringCreateWithCString(
+            alloc: *const c_void,
+            c_str: *const c_char,
+            encoding: u32,
+        ) -> CFStringRef;
+        fn CFRelease(cf: CFTypeRef);
+        fn CFGetTypeID(cf: CFTypeRef) -> usize;
+        fn CFNumberGetTypeID() -> usize;
+        fn CFNumberGetValue(number: CFTypeRef, the_type: c_int, value_ptr: *mut c_void) -> bool;
+        fn CFBooleanGetTypeID() -> usize;
+        fn CFBooleanGetValue(boolean: CFTypeRef) -> bool;
+        fn CFDictionaryGetTypeID() -> usize;
+        fn CFDictionaryGetValue(dict: CFTypeRef, key: *const c_void) -> *const c_void;
+        fn CFArrayGetTypeID() -> usize;
+        fn CFArrayGetCount(array: CFTypeRef) -> isize;
+        fn CFArrayGetValueAtIndex(array: CFTypeRef, index: isize) -> *const c_void;
+    }
+
+    extern "C" {
+        fn proc_listallpids(buffer: *mut c_void, buffersize: c_int) -> c_int;
+        fn proc_name(pid: c_int, buffer: *mut c_void, buffersize: u32) -> c_int;
+    }
+
+    /// An owned CF object (released on drop).
+    struct Owned(CFTypeRef);
+
+    impl Owned {
+        fn new(cf: CFTypeRef) -> Option<Owned> {
+            // `then`, not `then_some`: a null pointer must never reach `Drop` (CFRelease(NULL) traps).
+            (!cf.is_null()).then(|| Owned(cf))
+        }
+    }
+
+    impl Drop for Owned {
+        fn drop(&mut self) {
+            // SAFETY: `self.0` is a non-null object that this process owns (Copy/Create rule).
+            unsafe { CFRelease(self.0) }
+        }
+    }
+
+    fn cf_string(s: &str) -> Option<Owned> {
+        let c = CString::new(s).ok()?;
+        // SAFETY: `c` is a valid NUL-terminated UTF-8 string for the call.
+        Owned::new(unsafe {
+            CFStringCreateWithCString(ptr::null(), c.as_ptr(), K_CF_STRING_ENCODING_UTF8)
+        })
+    }
+
+    /// Read one preference value of another app's domain (read-only, no prompt).
+    fn pref(domain: &str, key: &str) -> Option<Owned> {
+        let (domain, key) = (cf_string(domain)?, cf_string(key)?);
+        // SAFETY: both arguments are valid CFStrings; the result follows the Copy rule.
+        Owned::new(unsafe { CFPreferencesCopyAppValue(key.0, domain.0) })
+    }
+
+    /// A CFNumber or CFBoolean as an integer. Any other type gives `None`.
+    fn as_i64(cf: CFTypeRef) -> Option<i64> {
+        if cf.is_null() {
+            return None;
+        }
+        // SAFETY: `cf` is a valid, non-null CF object that the caller keeps alive.
+        unsafe {
+            let id = CFGetTypeID(cf);
+            if id == CFBooleanGetTypeID() {
+                Some(i64::from(CFBooleanGetValue(cf)))
+            } else if id == CFNumberGetTypeID() {
+                let mut v: i64 = 0;
+                CFNumberGetValue(cf, K_CF_NUMBER_SINT64_TYPE, (&mut v as *mut i64).cast())
+                    .then_some(v)
+            } else {
+                None
+            }
+        }
+    }
+
+    /// The value of `key` in a CFDictionary, borrowed from the dictionary.
+    fn dict_get(dict: CFTypeRef, key: &str) -> Option<CFTypeRef> {
+        // SAFETY: `dict` is a valid CF object; the type is checked before the lookup.
+        unsafe {
+            if dict.is_null() || CFGetTypeID(dict) != CFDictionaryGetTypeID() {
+                return None;
+            }
+            let key = cf_string(key)?;
+            let v = CFDictionaryGetValue(dict, key.0);
+            (!v.is_null()).then_some(v)
+        }
+    }
+
+    fn array_i64(array: CFTypeRef) -> Option<Vec<i64>> {
+        // SAFETY: `array` is a valid CF object; the type is checked before the reads.
+        unsafe {
+            if array.is_null() || CFGetTypeID(array) != CFArrayGetTypeID() {
+                return None;
+            }
+            (0..CFArrayGetCount(array))
+                .map(|i| as_i64(CFArrayGetValueAtIndex(array, i)))
+                .collect()
+        }
+    }
+
+    fn pref_i64(domain: &str, key: &str) -> Option<i64> {
+        pref(domain, key).and_then(|v| as_i64(v.0))
+    }
+
+    fn dictation_prefs() -> DictationPrefs {
+        let enabled = pref_i64("com.apple.HIToolbox", "AppleDictationAutoEnable") == Some(1)
+            || pref_i64("com.apple.assistant.support", "Dictation Enabled") == Some(1);
+        let hot_key_164 =
+            pref("com.apple.symbolichotkeys", "AppleSymbolicHotKeys").and_then(|all| {
+                let entry = dict_get(all.0, "164")?;
+                let enabled = dict_get(entry, "enabled").and_then(as_i64) == Some(1);
+                let parameters = dict_get(entry, "value")
+                    .and_then(|v| dict_get(v, "parameters"))
+                    .and_then(array_i64)
+                    .unwrap_or_default();
+                Some(SymbolicHotKey {
+                    enabled,
+                    parameters,
+                })
+            });
+        DictationPrefs {
+            enabled,
+            fn_usage_type: pref_i64("com.apple.HIToolbox", "AppleFnUsageType"),
+            hot_key_164,
+        }
+    }
+
+    #[cfg(test)]
+    mod owned_tests {
+        use super::*;
+
+        #[test]
+        fn cap_43b_a_missing_preference_is_never_released() {
+            // A missing value is a null pointer. Releasing it would trap (CFRelease(NULL)).
+            assert!(Owned::new(ptr::null()).is_none());
+        }
+    }
+
+    /// The macOS reads. Each one is a CFPreferences read or a BSD process-name read.
+    #[derive(Debug, Default, Clone, Copy)]
+    pub struct MacEnvReads;
+
+    impl EnvReads for MacEnvReads {
+        fn dictation(&self) -> Option<DictationShortcut> {
+            decode_dictation(&dictation_prefs())
+        }
+        fn voice_over(&self) -> bool {
+            pref_i64("com.apple.universalaccess", "voiceOverOnOffKey") == Some(1)
+        }
+        fn alt_gr_layout(&self) -> bool {
+            false
+        }
+        fn copilot_key(&self) -> bool {
+            false
+        }
+        fn visit_process_names(&self, visit: &mut dyn FnMut(&str)) {
+            // SAFETY: a null buffer asks for the count only.
+            let count = unsafe { proc_listallpids(ptr::null_mut(), 0) };
+            if count <= 0 {
+                return;
+            }
+            // Room for processes that start between the two calls.
+            let mut pids: Vec<c_int> = vec![0; count as usize + 32];
+            let bytes = (pids.len() * std::mem::size_of::<c_int>()) as c_int;
+            // SAFETY: `pids` has room for `bytes` bytes.
+            let n = unsafe { proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
+            let n = (n.max(0) as usize).min(pids.len());
+            let mut buf = [0u8; 256];
+            for &pid in &pids[..n] {
+                // SAFETY: `buf` has room for `buf.len()` bytes; the result is the length.
+                let len = unsafe { proc_name(pid, buf.as_mut_ptr().cast(), buf.len() as u32) };
+                if len > 0 {
+                    if let Ok(name) = std::str::from_utf8(&buf[..len as usize]) {
+                        visit(name);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The Windows reads: the keyboard layout and the Toolhelp process snapshot. None prompts.
+#[cfg(windows)]
+mod win32 {
+    use super::{alt_gr_from_scans, EnvReads, ALT_GR_PROBE};
+    use crate::hotkey_bindings::DictationShortcut;
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyboardLayout, VkKeyScanExW};
+
+    /// The Windows reads.
+    #[derive(Debug, Default, Clone, Copy)]
+    pub struct WindowsEnvReads;
+
+    impl EnvReads for WindowsEnvReads {
+        fn dictation(&self) -> Option<DictationShortcut> {
+            None
+        }
+        fn voice_over(&self) -> bool {
+            false
+        }
+        fn alt_gr_layout(&self) -> bool {
+            // SAFETY: plain reads of the input layout of this thread.
+            let scans: Vec<i16> = unsafe {
+                let layout = GetKeyboardLayout(0);
+                ALT_GR_PROBE
+                    .iter()
+                    .filter_map(|c| u16::try_from(u32::from(*c)).ok())
+                    .map(|c| VkKeyScanExW(c, layout))
+                    .collect()
+            };
+            alt_gr_from_scans(&scans)
+        }
+        fn copilot_key(&self) -> bool {
+            // TODO(#332): Windows has no documented prompt-free read for the Copilot key.
+            false
+        }
+        fn visit_process_names(&self, visit: &mut dyn FnMut(&str)) {
+            // SAFETY: the snapshot handle is closed below; `entry` has its size set.
+            unsafe {
+                let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+                if snap == INVALID_HANDLE_VALUE || snap.is_null() {
+                    return;
+                }
+                let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+                entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+                let mut more = Process32FirstW(snap, &mut entry) != 0;
+                while more {
+                    let len = entry
+                        .szExeFile
+                        .iter()
+                        .position(|&c| c == 0)
+                        .unwrap_or(entry.szExeFile.len());
+                    let name = String::from_utf16_lossy(&entry.szExeFile[..len]);
+                    visit(&name);
+                    more = Process32NextW(snap, &mut entry) != 0;
+                }
+                CloseHandle(snap);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

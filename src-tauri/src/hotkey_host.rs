@@ -403,14 +403,7 @@ impl HotkeyHost {
     /// [`HostState::NeedsPermission`] until [`HotkeyHost::request_ptt_permission`].
     pub fn start(&self) -> HostState {
         let mut state = lock(&self.state);
-        *state = match lock(&self.service).start() {
-            Ok(()) => HostState::Running,
-            Err(CoreError::Unavailable {
-                reason: "input_monitoring_required",
-                ..
-            }) => HostState::NeedsPermission,
-            Err(e) => HostState::Unavailable(e.code()),
-        };
+        *state = start_state(lock(&self.service).as_ref());
         *state
     }
 
@@ -440,8 +433,28 @@ impl HotkeyHost {
 
     /// Use `service` from now on (a new talk key, CAP-43a). The old service stops. The new
     /// one starts with no prompt (CAP-36), unless the host was stopped on quit.
-    pub fn replace_service(&self, _service: Box<dyn HotkeyService>) -> HostState {
-        self.state()
+    pub fn replace_service(&self, service: Box<dyn HotkeyService>) -> HostState {
+        let mut state = lock(&self.state);
+        let mut current = lock(&self.service);
+        // A stop error leaves nothing to undo: the old service is dropped next.
+        let _ = current.stop();
+        *current = service;
+        if *state != HostState::Stopped {
+            *state = start_state(current.as_ref());
+        }
+        *state
+    }
+}
+
+/// Start `service` with no prompt and map the result to a [`HostState`].
+fn start_state(service: &dyn HotkeyService) -> HostState {
+    match service.start() {
+        Ok(()) => HostState::Running,
+        Err(CoreError::Unavailable {
+            reason: "input_monitoring_required",
+            ..
+        }) => HostState::NeedsPermission,
+        Err(e) => HostState::Unavailable(e.code()),
     }
 }
 
@@ -459,9 +472,8 @@ pub struct HotkeyRuntime {
 
 impl HotkeyRuntime {
     /// Restart the talk key with `talk` (a new `app.hotkeys.ptt`, CAP-43a). No prompt.
-    pub fn set_talk_key(&self, _talk: TalkBinding) -> HostState {
-        let _ = &self.make_service;
-        self.host.state()
+    pub fn set_talk_key(&self, talk: TalkBinding) -> HostState {
+        self.host.replace_service((self.make_service)(talk))
     }
 }
 

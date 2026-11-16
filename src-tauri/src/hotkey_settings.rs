@@ -16,11 +16,19 @@
 //!
 //! Requirements: CAP-43a, CAP-43b (AT-30), MB-14 (host save rule).
 
-use mog_core::error::CoreResult;
-use mog_core::hotkey_bindings::{HotkeyBindings, KeyboardEnv, Os, TalkBinding};
+use mog_core::error::{CoreError, CoreResult};
+use mog_core::hotkey_bindings::{
+    self as hb, Binding, ConflictKind, FirstRunReport, HotkeyAction, HotkeyBindings, KeyboardEnv,
+    Os, TalkBinding,
+};
 use mog_core::ipc::JsonObject;
-use mog_core::keyboard_env::EnvReads;
-use serde_json::Value;
+use mog_core::keyboard_env::{read_keyboard_env, EnvReads};
+use serde_json::{json, Value};
+use std::sync::{Mutex, MutexGuard};
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|p| p.into_inner())
+}
 
 /// A settings save failed. The code is content-free.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,13 +44,14 @@ pub trait HotkeySettingsStore: Send + Sync {
 
 /// A store in memory. The values last until quit: TODO(#77) moves them to the settings store.
 #[derive(Debug, Default)]
-pub struct MemorySettingsStore(std::sync::Mutex<Option<JsonObject>>);
+pub struct MemorySettingsStore(Mutex<Option<JsonObject>>);
 
 impl HotkeySettingsStore for MemorySettingsStore {
     fn load(&self) -> Option<JsonObject> {
-        None
+        lock(&self.0).clone()
     }
-    fn save(&self, _values: &JsonObject) -> Result<(), SaveError> {
+    fn save(&self, values: &JsonObject) -> Result<(), SaveError> {
+        *lock(&self.0) = Some(values.clone());
         Ok(())
     }
 }
@@ -54,67 +63,151 @@ pub trait TalkKeySink: Send + Sync {
 }
 
 /// The bindings of saved `app.hotkeys.*` values. A missing or bad value gives the D66 default.
-pub fn bindings_from_settings(os: Os, _values: &JsonObject) -> HotkeyBindings {
-    mog_core::hotkey_bindings::default_bindings(os)
+pub fn bindings_from_settings(os: Os, values: &JsonObject) -> HotkeyBindings {
+    let defaults = hb::default_bindings(os);
+    let known: JsonObject = values
+        .iter()
+        .filter(|(k, _)| HotkeyAction::from_key(k).is_some())
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    // The pure logic reads each string and keeps the default for a bad one (ADR 0017, 7).
+    hb::hotkeys_set(os, &defaults, &known, &KeyboardEnv::default())
+        .map(|outcome| outcome.bindings)
+        .unwrap_or(defaults)
 }
 
 /// The `app.hotkeys.*` values of `bindings`.
-pub fn settings_from_bindings(_os: Os, _bindings: &HotkeyBindings) -> JsonObject {
-    JsonObject::new()
+pub fn settings_from_bindings(os: Os, bindings: &HotkeyBindings) -> JsonObject {
+    bindings
+        .iter()
+        .map(|(a, b)| (a.setting_key().to_owned(), Value::String(b.format(os))))
+        .collect()
+}
+
+fn talk_of(bindings: &HotkeyBindings) -> TalkBinding {
+    match bindings.get(HotkeyAction::Ptt) {
+        Some(Binding::Talk(t)) => t,
+        _ => TalkBinding::RightOption,
+    }
+}
+
+fn conflicts_json(os: Os, conflicts: &[hb::Conflict]) -> Value {
+    let items: Vec<Value> = conflicts.iter().map(|c| c.to_json(os)).collect();
+    json!({ "conflicts": items })
+}
+
+struct State {
+    bindings: HotkeyBindings,
+    first_run: Option<FirstRunReport>,
 }
 
 /// The host owner of the global key settings.
 pub struct HotkeySettings {
     os: Os,
-    _store: Box<dyn HotkeySettingsStore>,
-    _env: Box<dyn EnvReads>,
-    _talk: Box<dyn TalkKeySink>,
+    store: Box<dyn HotkeySettingsStore>,
+    env: Box<dyn EnvReads>,
+    talk: Box<dyn TalkKeySink>,
+    state: Mutex<State>,
 }
 
 impl HotkeySettings {
     /// Load the saved keys. On first run (nothing saved) run the first-run check, and save
     /// the D66 defaults with the first free talk key of the ladder (CAP-43a, CAP-43b).
+    /// If that save fails, the keys still apply until quit.
     pub fn load(
         os: Os,
         store: Box<dyn HotkeySettingsStore>,
         env: Box<dyn EnvReads>,
         talk: Box<dyn TalkKeySink>,
     ) -> Self {
+        let state = match store.load() {
+            Some(values) => State {
+                bindings: bindings_from_settings(os, &values),
+                first_run: None,
+            },
+            None => {
+                let report = hb::first_run_check(os, &read_keyboard_env(os, env.as_ref()));
+                // A failed save leaves the store empty: the keys apply until quit, and the
+                // next launch runs the first-run check again.
+                let _ = store.save(&settings_from_bindings(os, &report.suggested));
+                State {
+                    bindings: report.suggested.clone(),
+                    first_run: Some(report),
+                }
+            }
+        };
         Self {
             os,
-            _store: store,
-            _env: env,
-            _talk: talk,
+            store,
+            env,
+            talk,
+            state: Mutex::new(state),
         }
     }
 
     /// The keys now.
     pub fn bindings(&self) -> HotkeyBindings {
-        mog_core::hotkey_bindings::default_bindings(self.os)
+        lock(&self.state).bindings.clone()
     }
 
     /// The talk key now.
     pub fn talk_binding(&self) -> TalkBinding {
-        TalkBinding::RightOption
+        talk_of(&lock(&self.state).bindings)
     }
 
-    /// The `{conflicts}` of the first-run check, if this launch was the first run.
-    /// The first-run screen shows them, each with its fix: TODO(#43).
+    /// The `{conflicts}` of the first-run check, if this launch was the first run. Each item
+    /// has its fix (ADR 0017, decision 6). The first-run screen shows them: TODO(#43).
     pub fn first_run_conflicts(&self) -> Option<Value> {
-        None
+        let state = lock(&self.state);
+        let report = state.first_run.as_ref()?;
+        Some(conflicts_json(self.os, &report.conflicts))
     }
 
     /// The `hotkeys_set {bindings}` command: returns `{conflicts}` of
     /// `hotkey_bindings::hotkeys_set` with a fresh [`KeyboardEnv`]. Saves the new keys, but
     /// not a binding that duplicates another action (MB-14). A new talk key goes to the
     /// [`TalkKeySink`]. TODO(#331): the IPC route.
-    pub fn set(&self, _input: &JsonObject) -> CoreResult<Value> {
-        Ok(serde_json::json!({ "conflicts": [] }))
+    pub fn set(&self, input: &JsonObject) -> CoreResult<Value> {
+        let env = self.keyboard_env();
+        let mut state = lock(&self.state);
+        let outcome = hb::hotkeys_set(self.os, &state.bindings, input, &env)?;
+        let mut next = outcome.bindings.clone();
+        // MB-14: a changed action that now shares a binding with another action keeps its
+        // old binding. The conflict still goes back to the caller.
+        for dup in outcome
+            .conflicts
+            .iter()
+            .filter(|c| c.kind == ConflictKind::Duplicate)
+        {
+            for (action, binding) in outcome.bindings.iter() {
+                let old = state.bindings.get(action);
+                if binding == dup.binding && old != Some(binding) {
+                    if let Some(old) = old {
+                        next.set(action, old);
+                    }
+                }
+            }
+        }
+        if next != state.bindings {
+            self.store
+                .save(&settings_from_bindings(self.os, &next))
+                .map_err(|SaveError(reason)| CoreError::Unavailable {
+                    component: "R1",
+                    reason,
+                })?;
+            let old_talk = talk_of(&state.bindings);
+            state.bindings = next;
+            let new_talk = talk_of(&state.bindings);
+            if new_talk != old_talk {
+                self.talk.apply(new_talk);
+            }
+        }
+        Ok(outcome.result_json(self.os))
     }
 
     /// The keyboard environment now (prompt-free reads).
     pub fn keyboard_env(&self) -> KeyboardEnv {
-        KeyboardEnv::default()
+        read_keyboard_env(self.os, self.env.as_ref())
     }
 }
 
