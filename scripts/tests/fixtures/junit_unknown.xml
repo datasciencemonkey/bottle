@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<testsuite name="unknown" tests="3">
+  <testcase classname="src/x.test.ts" name="[CAP-99] names a missing requirement"/>
+  <testcase classname="mog_core::x::tests" name="mb_77_does_not_exist"/>
+  <testcase classname="src/y.test.ts" name="[MB-01] is a real requirement"/>
+</testsuite>

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+  <testsuite name="mixed" tests="7">
+    <testcase classname="scripts.tests.test_hub" name="test_mb_01_creates_mogs" file="scripts/tests/test_hub.py"/>
+    <testcase classname="src/brain/capture.test.ts" name="[CAP-14b] stops hands-free on Esc"/>
+    <testcase classname="mog_core::capture::tests" name="cap_14a_stops_on_esc">
+      <failure message="boom">assertion failed</failure>
+    </testcase>
+    <testcase classname="src/hub/config.test.ts" name="[MB-02, AT-02] rejects a token-like key"/>
+    <testcase classname="scripts.tests.test_cov" name="test_nfr_23a_flags_must_row_without_at"/>
+    <testcase classname="mog_core::mem::tests" name="mem_01_b_compresses">
+      <skipped/>
+    </testcase>
+    <testcase classname="src/misc.test.ts" name="renders the hub [slow]"/>
+  </testsuite>
+</testsuites>
