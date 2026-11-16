@@ -3,17 +3,17 @@
 
 Automated per profile (run once with an all-apis profile, once with a knowledge-only profile):
  1. GET /api/2.0/domains (Beta, scope `domains`, COL-100): status and count only.
- 2. POST /api/2.0/knowledge/pages with state DRAFT and request_id as a QUERY parameter (API docs),
-    then the same POST again: the second answer must name the same Page (idempotent).
- 3. The same pair with request_id in the BODY (B3 text lists it with the body fields). Both forms
-    are tried because the docs and the requirements differ (#187 comment by spike-lead).
- 4. Cleanup: delete the body-form Pages. Keep the query-form Page for the manual DRAFT-grounding
-    test unless --no-keep. Later: --cleanup-from <report> deletes only Pages that this script made
-    (name from the report AND display_name with the probe marker).
+ 2. POST /api/2.0/knowledge/pages with state DRAFT and request_id in the JSON BODY (B3, the
+    requirements win), two times with the same ID. The second answer must name the same Page.
+ 3. The same pair with request_id as a QUERY parameter (the API docs form). It is recorded only.
+ 4. Cleanup: keep one Page for the manual DRAFT-grounding test (the first form that made exactly
+    one Page; --no-keep keeps none) and delete every other Page that this run made. Later,
+    --cleanup-from <report> deletes the kept Page (name from the report AND the probe marker).
 Optional --mcp-check (SP-20b): make one Genie One MCP conversation with a marker question and
 record its ID, so a person can look for it in the Genie One history.
 
-Pass (per profile): 200 with state DRAFT and an idempotent retry. Grounding (owner only) is manual.
+Pass (per profile): 200 with state DRAFT and an idempotent retry on the B3 body form.
+Grounding (owner only) and SP-20b are manual steps.
 Fallback: keep Page drafts local with Copy as markdown; ask the account team.
 
 Run:
@@ -22,6 +22,7 @@ Run:
 import argparse
 import json
 import os
+import subprocess
 import sys
 import uuid
 
@@ -100,29 +101,49 @@ def delete_owned(api, names):
 
 
 def evaluate(r):
-    q = r.get("query_form", {})
-    first = q.get("first", {})
-    created = first.get("status") == 200 and first.get("state") == "DRAFT"
-    passed = created and q.get("idempotent") is True
-    return {"passed": passed, "created_draft": created, "idempotent_query_form": q.get("idempotent"),
+    """PASS on the B3 body form (the requirements win, review finding 1). The query form is recorded."""
+    def draft_ok(form):
+        first = r.get(form, {}).get("first", {})
+        return first.get("status") == 200 and first.get("state") == "DRAFT"
+
+    body_ok = draft_ok("body_form") and r.get("body_form", {}).get("idempotent") is True
+    query_ok = draft_ok("query_form") and r.get("query_form", {}).get("idempotent") is True
+    passed = body_ok
+    note = None
+    if not body_ok and query_ok:
+        note = ("Only the query-string request_id form is idempotent. B3 lists request_id with the body "
+                "fields; raise the difference on #187 before PageService uses the query form.")
+    return {"passed": passed, "created_draft_body_form": draft_ok("body_form"),
             "idempotent_body_form": r.get("body_form", {}).get("idempotent"),
             "body_form_status": r.get("body_form", {}).get("first", {}).get("status"),
+            "created_draft_query_form": draft_ok("query_form"),
+            "idempotent_query_form": r.get("query_form", {}).get("idempotent"),
+            "query_form_status": r.get("query_form", {}).get("first", {}).get("status"),
+            "working_forms": [f for f, ok in (("body", body_ok), ("query", query_ok)) if ok],
+            "note": note,
             "domains_readable": r.get("domains", {}).get("ok"),
             "domains_fallback": None if r.get("domains", {}).get("ok") else "Paste a domain ID or URL (PG-20).",
             "fallback": None if passed else "Keep Page drafts local with Copy as markdown; ask the account team."}
 
 
+def choose_kept(rep, no_keep):
+    """Keep one Page for manual grounding: the first form that made exactly one Page (body first)."""
+    if no_keep:
+        return []
+    for form in ("body_form", "query_form"):
+        names = rep[form]["created_names"]
+        if rep[form]["idempotent"] and len(names) == 1:
+            return names
+    return []
+
+
 def run(api, args, mcp_factory=None):
     rep = {"domains": domains_check(api)}
-    rep["query_form"] = pair(api, args.domain_id, "query")
     rep["body_form"] = pair(api, args.domain_id, "body")
-    to_delete = list(rep["body_form"]["created_names"])
-    if args.no_keep or len(rep["query_form"]["created_names"]) > 1:
-        to_delete += rep["query_form"]["created_names"]
-        rep["kept_for_grounding"] = []
-    else:
-        rep["kept_for_grounding"] = rep["query_form"]["created_names"]
-    rep["cleanup"] = delete_owned(api, to_delete)
+    rep["query_form"] = pair(api, args.domain_id, "query")
+    rep["kept_for_grounding"] = choose_kept(rep, args.no_keep)
+    made = rep["body_form"]["created_names"] + rep["query_form"]["created_names"]
+    rep["cleanup"] = delete_owned(api, [n for n in made if n not in rep["kept_for_grounding"]])
     if args.mcp_check and mcp_factory:
         rep["mcp_check"] = mcp_factory()
     rep["evaluation"] = evaluate(rep)
@@ -158,8 +179,8 @@ def main(argv=None):
     args = p.parse_args(argv)
 
     def go():
-        host = sl.get_host(args.profile)
-        token = sl.get_token(args.profile)
+        host = sl.get_host(args.profile, subprocess.run)
+        token = sl.get_token(args.profile, subprocess.run)
         api = sl.Api(host, token, sl.HttpxTransport(timeout=60))
         kind = sl.token_kind(token.reveal())
         if args.cleanup_from:
@@ -181,10 +202,12 @@ def main(argv=None):
         ev = rep["evaluation"]
         sl.say(f"  kept for grounding: {rep['kept_for_grounding']}  term: {TERM}")
         sl.say(sl.verdict(SPIKE, ev["passed"],
-                          f"scopes={sl.scopes_of(kind)} draft={ev['created_draft']} "
-                          f"idempotent(query)={ev['idempotent_query_form']} "
-                          f"body_form_status={ev['body_form_status']} idempotent(body)={ev['idempotent_body_form']} "
-                          f"domains_readable={ev['domains_readable']}"))
+                          f"scopes={sl.scopes_of(kind)} body_form: status={ev['body_form_status']} "
+                          f"draft={ev['created_draft_body_form']} idempotent={ev['idempotent_body_form']}; "
+                          f"query_form (recorded): status={ev['query_form_status']} "
+                          f"idempotent={ev['idempotent_query_form']}; domains_readable={ev['domains_readable']}"))
+        if ev["note"]:
+            sl.say(f"  NOTE: {ev['note']}")
         token.wipe()
         return 0 if ev["passed"] else 1
 

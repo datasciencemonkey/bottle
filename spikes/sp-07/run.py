@@ -3,7 +3,7 @@
 
 200 non-streaming calls per model and per kind through POST /ai-gateway/mlflow/v1/chat/completions
 (NFR-21a), with one warm httpx HTTP/2 client. Reports p50/p95 per model and kind.
-Pass: p95 <= 800 ms.
+Pass: p95 <= 800 ms for each model and kind, and every measured call used HTTP/2.
 
 Models (from the requirements, section 3 stack and D38/D58; CHECK the names against the
 supported-models page and region availability of your workspace):
@@ -15,6 +15,7 @@ Run:
 import argparse
 import json
 import os
+import subprocess
 import sys
 import time
 
@@ -75,12 +76,15 @@ def measure(api, body, n, warmup, pause_s=0.0, sleep=time.sleep):
     return lat, errors, versions
 
 
-def evaluate_one(lat, errors, n):
+def evaluate_one(lat, errors, n, versions):
+    """versions: HTTP versions of the measured calls. The criterion says warm HTTP/2, so any
+    other version fails the model (review finding 9)."""
     s = sl.summary(lat)
     enough = len(lat) >= MIN_SUCCESS * n
-    passed = enough and s["p95_ms"] is not None and s["p95_ms"] <= LIMIT_MS
+    http2 = set(versions) == {"HTTP/2"}
+    passed = enough and http2 and s["p95_ms"] is not None and s["p95_ms"] <= LIMIT_MS
     return dict(s, errors=len(errors), success_rate=round(len(lat) / n, 4) if n else 0,
-                enough_samples=enough, passed=passed)
+                enough_samples=enough, http2=http2, http_versions=sorted(versions), passed=passed)
 
 
 def evaluate(results):
@@ -108,8 +112,8 @@ def main(argv=None):
     args = p.parse_args(argv)
 
     def go():
-        host = sl.get_host(args.profile)
-        token = sl.get_token(args.profile)
+        host = sl.get_host(args.profile, subprocess.run)
+        token = sl.get_token(args.profile, subprocess.run)
         transport = sl.HttpxTransport(http2=True, timeout=30)
         api = sl.Api(host, token, transport)
         schema = load_router_schema()
@@ -120,7 +124,7 @@ def main(argv=None):
                 sl.say(f"{SPIKE}: {kind} {model} x{args.n} ...")
                 lat, errs, ver = measure(api, request(kind, model, schema), args.n, args.warmup,
                                          args.pause_ms / 1000)
-                ev = evaluate_one(lat, errs, args.n)
+                ev = evaluate_one(lat, errs, args.n, ver)
                 ev["error_samples"] = errs[:5]
                 ev["latencies_ms"] = lat
                 results[kind][model] = ev

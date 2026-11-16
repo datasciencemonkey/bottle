@@ -6,8 +6,10 @@ Sends audio data URIs to POST /ai-gateway/mlflow/v1/chat/completions with the de
 
 Cases:
 - 30 s clips as audio/ogg (Vorbis), audio/opus (Ogg Opus), audio/flac and audio/wav.
-- WAV request bodies of 3.5 MB (must be accepted) and 4.1 MB (must be rejected cleanly).
-  A 4.1 MiB case shows if the limit is decimal MB or binary MiB.
+- Request bodies of 3.5 MB (must be accepted) and 4.1 MB (must be rejected cleanly), in the first
+  size-controllable format (WAV, else FLAC of noise) whose 30 s case was accepted. A 4.1 MiB case
+  shows if the limit is decimal MB or binary MiB. If neither WAV nor FLAC is accepted, the size
+  cases do not run and the result is NOT PROVEN.
 
 Clip generator: a deterministic speech-band synth (stdlib `wave`) for WAV. `soundfile` encodes
 OGG, Opus and FLAC; if it fails, ffmpeg does. The report records which tool made each clip.
@@ -22,6 +24,7 @@ import io
 import json
 import math
 import os
+import random
 import shutil
 import struct
 import subprocess
@@ -138,6 +141,48 @@ def sized_wav_body(target, model, rate=44100):
     return body, secs, audio
 
 
+SIZABLE = ("wav", "flac")  # formats whose size grows with duration in a controlled way
+
+
+def noise_samples(seconds, rate, seed=606):
+    """Deterministic white noise (int16). FLAC cannot compress it, so the size follows the duration."""
+    rng = random.Random(seed)
+    return [rng.randint(-12000, 12000) for _ in range(int(seconds * rate))]
+
+
+def sized_body(fmt, target, model, encoder, rate=44100, tolerance=0.002):
+    """(body, seconds, audio, tool) for the largest clip of `fmt` whose body is <= target.
+
+    WAV is exact. FLAC uses a binary search on the duration of a noise clip."""
+    if fmt == "wav":
+        body, secs, audio = sized_wav_body(target, model, rate)
+        return body, secs, audio, "stdlib wave"
+    noise = noise_samples(60, rate)
+    lo, hi, best = 0.5, 60.0, None
+    for _ in range(18):
+        mid = (lo + hi) / 2
+        audio, tool = encoder(fmt, noise[:int(mid * rate)], rate)
+        body = request_body(model, MIME[fmt], audio)
+        if len(body) <= target:
+            best, lo = (body, mid, audio, tool), mid
+            if target - len(body) <= target * tolerance:
+                break
+        else:
+            hi = mid
+    if best is None:
+        raise sl.SpikeError(f"cannot size {fmt} to {target} bytes")
+    return best
+
+
+def pick_size_format(rows):
+    """The first of SIZABLE whose 30 s case was accepted, else None."""
+    ok = {r["format"] for r in rows if r["case"].startswith("30s-") and r["outcome"] == "accepted"}
+    for fmt in SIZABLE:
+        if fmt in ok:
+            return fmt
+    return None
+
+
 # ------------------------------------------------------------------ evaluation
 
 
@@ -174,16 +219,22 @@ def evaluate(rows):
     by = {r["case"]: r for r in rows}
     fmt_rows = [r for r in rows if r["case"].startswith("30s-")]
     formats_known = len(fmt_rows) == 4 and all(r["outcome"] != "transport_error" for r in fmt_rows)
-    ok_35 = by.get("size-3.5MB", {}).get("outcome") == "accepted"
-    rej_41 = by.get("size-4.1MB", {}).get("outcome") == "rejected_clean"
     accepted = sorted(r["format"] for r in fmt_rows if r["outcome"] == "accepted")
-    passed = formats_known and ok_35 and rej_41
-    detail = (f"formats_known={formats_known} accepted_formats={accepted} 3.5MB_accepted={ok_35} "
-              f"4.1MB_rejected_cleanly={rej_41} 4.1MiB={by.get('size-4.1MiB', {}).get('outcome')}")
+    size_fmt = next((r["format"] for r in rows if r["case"].startswith("size-")), None)
+    base_ok = size_fmt is not None and by.get(f"30s-{size_fmt}", {}).get("outcome") == "accepted"
+    ok_35 = base_ok and by.get("size-3.5MB", {}).get("outcome") == "accepted"
+    rej_41 = base_ok and by.get("size-4.1MB", {}).get("outcome") == "rejected_clean"
+    passed = formats_known and base_ok and ok_35 and rej_41
+    word = None
+    if formats_known and not base_ok:
+        word = "NOT PROVEN"  # no size-controllable format was accepted, so the size cases mean nothing
+    detail = (f"formats_known={formats_known} accepted_formats={accepted} size_format={size_fmt} "
+              f"3.5MB_accepted={ok_35} 4.1MB_rejected_cleanly={rej_41} "
+              f"4.1MiB={by.get('size-4.1MiB', {}).get('outcome')}")
     fallback = None if passed else "Use the accepted format; lower segments to 20 s."
-    return {"passed": passed, "formats_known": formats_known, "accepted_formats": accepted,
-            "accepted_3_5mb": ok_35, "rejected_4_1mb_cleanly": rej_41, "detail": detail,
-            "fallback": fallback}
+    return {"passed": passed, "word": word, "formats_known": formats_known, "accepted_formats": accepted,
+            "size_format": size_fmt, "size_base_accepted": base_ok, "accepted_3_5mb": ok_35,
+            "rejected_4_1mb_cleanly": rej_41, "detail": detail, "fallback": fallback}
 
 
 def run(args, api, encoder=None):
@@ -197,12 +248,15 @@ def run(args, api, encoder=None):
         sl.say(f"{SPIKE}: 30s {fmt} body={len(body)} bytes ...")
         resp = api.call("POST", PATH, raw=body)
         rows.append(result_row(f"30s-{fmt}", fmt, MIME[fmt], len(body), len(audio), 30, tool, resp))
+    size_fmt = pick_size_format(rows)
+    if size_fmt is None:
+        sl.say(f"{SPIKE}: no WAV or FLAC 30 s case was accepted; the size cases are not run (NOT PROVEN).")
+        return rows
     for name, target in SIZE_CASES.items():
-        body, secs, audio = sized_wav_body(target, args.model)
-        sl.say(f"{SPIKE}: size {name} body={len(body)} bytes ({secs:.1f} s WAV 44.1 kHz) ...")
+        body, secs, audio, tool = sized_body(size_fmt, target, args.model, encoder)
+        sl.say(f"{SPIKE}: size {name} {size_fmt} body={len(body)} bytes ({secs:.1f} s at 44.1 kHz) ...")
         resp = api.call("POST", PATH, raw=body)
-        rows.append(result_row(f"size-{name}", "wav", MIME["wav"], len(body), len(audio), secs,
-                               "stdlib wave", resp))
+        rows.append(result_row(f"size-{name}", size_fmt, MIME[size_fmt], len(body), len(audio), secs, tool, resp))
     return rows
 
 
@@ -214,8 +268,8 @@ def main(argv=None):
     args = p.parse_args(argv)
 
     def go():
-        host = sl.get_host(args.profile)
-        token = sl.get_token(args.profile)
+        host = sl.get_host(args.profile, subprocess.run)
+        token = sl.get_token(args.profile, subprocess.run)
         api = sl.Api(host, token, sl.HttpxTransport(timeout=120))
         rows = run(args, api)
         ev = evaluate(rows)
@@ -224,7 +278,7 @@ def main(argv=None):
         sl.write_report(args.out, report, secrets=[token.reveal()])
         for r in rows:
             sl.say(f"  {r['case']:<12} status={r['status']} outcome={r['outcome']} body={r['body_bytes']}")
-        sl.say(sl.verdict(SPIKE, ev["passed"], ev["detail"]))
+        sl.say(sl.verdict(SPIKE, ev["passed"], ev["detail"], ev["word"]))
         token.wipe()
         return 0 if ev["passed"] else 1
 

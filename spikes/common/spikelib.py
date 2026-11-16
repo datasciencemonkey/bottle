@@ -15,7 +15,6 @@ import base64
 import json
 import math
 import re
-import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
@@ -96,13 +95,16 @@ class CliResult:
         return json.loads(self.stdout) if self.stdout.strip() else {}
 
 
-def run_cli(args, runner=subprocess.run, timeout=300):
-    """Run `databricks <args>`. Returns a CliResult. Never echoes stdout."""
+def run_cli(args, runner, timeout=300):
+    """Run `databricks <args>` with `runner` (subprocess.run in main(), a fake in tests).
+
+    There is no default runner, so no test can start the real CLI by mistake.
+    Returns a CliResult. Never echoes stdout."""
     proc = runner(["databricks", *args], capture_output=True, text=True, timeout=timeout)
     return CliResult(proc.returncode, proc.stdout or "", proc.stderr or "")
 
 
-def cli_api(method, path, profile, body=None, runner=subprocess.run):
+def cli_api(method, path, profile, runner, body=None):
     """`databricks api <method> <path> --profile <p> [--json body]`. Returns a step dict."""
     args = ["api", method, path, "--profile", profile, "-o", "json"]
     if body is not None:
@@ -122,7 +124,7 @@ def cli_api(method, path, profile, body=None, runner=subprocess.run):
     return step
 
 
-def get_token(profile, runner=subprocess.run):
+def get_token(profile, runner):
     """Token from `databricks auth token --profile <p>`, kept in memory."""
     res = run_cli(["auth", "token", "--profile", profile, "-o", "json"], runner=runner, timeout=120)
     if not res.ok:
@@ -134,7 +136,7 @@ def get_token(profile, runner=subprocess.run):
     return Token(data.get("access_token"))
 
 
-def get_host(profile, runner=subprocess.run):
+def get_host(profile, runner):
     """Host of a profile from `databricks auth profiles --skip-validate` (no network call)."""
     res = run_cli(["auth", "profiles", "--skip-validate", "-o", "json"], runner=runner, timeout=60)
     if not res.ok:
@@ -495,9 +497,25 @@ def write_report(path, report, secrets=()):
     return text
 
 
-def verdict(spike, passed, detail):
-    word = "PASS" if passed else "FAIL"
+def verdict(spike, passed, detail, word=None):
+    """One result line. word overrides PASS/FAIL, for example "NOT PROVEN" or "NOT RUN"."""
+    word = word or ("PASS" if passed else "FAIL")
     return redact(f"{spike} {word}: {detail}")
+
+
+def confirm(message, yes=False, ask=input):
+    """Print a warning; continue only on --yes or a typed "yes"."""
+    print(redact(f"WARNING: {message}"), flush=True)
+    if yes:
+        print("  --yes given: continuing.", flush=True)
+        return True
+    try:
+        answer = ask("  Type yes to continue: ")
+    except EOFError:
+        answer = ""
+    if answer.strip().lower() != "yes":
+        raise SpikeError("not confirmed; stopped before the step")
+    return True
 
 
 def say(msg, secrets=()):

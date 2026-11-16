@@ -141,8 +141,8 @@ def main(argv=None):
 
     def go():
         def api_call():
-            host = sl.get_host(args.profile)
-            token = sl.get_token(args.profile)
+            host = sl.get_host(args.profile, subprocess.run)
+            token = sl.get_token(args.profile, subprocess.run)
             secrets.append(token.reveal())
             return sl.Api(host, token, sl.HttpxTransport(timeout=60))
 

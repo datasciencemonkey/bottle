@@ -10,7 +10,8 @@ Then run this script once per profile. It reads the scope claim of the token in 
 scope list is printed), then runs each MVP call:
   MVP: Genie One MCP initialize, MCP tools/list, a model call, a knowledge-pages call.
   Info (v1): Genie One API list (scope genie), Lakebase projects list (scope postgres).
-Pass: all MVP calls succeed. Fallback: stay on all-apis.
+Pass: all MVP calls succeed AND the token scope claim equals the narrow list under test (no all-apis).
+An opaque token or an empty scope list gives NOT PROVEN. Fallback: stay on all-apis.
 
 Run:
   uv run --no-project --with httpx spikes/sp-14/run.py --profile <your-bottle-profile> --out sp14.json \
@@ -19,6 +20,7 @@ Run:
 import argparse
 import json
 import os
+import subprocess
 import sys
 import uuid
 
@@ -89,17 +91,38 @@ def run_calls(api, workspace_id, domain_id=None, model=MODEL):
     return steps
 
 
-def evaluate(steps, scopes):
+def evaluate(steps, scopes, token_format="jwt", expect=None):
+    """PASS only when every MVP call succeeds AND the token is proven narrow (review finding 2).
+
+    Narrow means the token scope claim equals the list under test (W-19, the issue list, or
+    --expect-scopes) and has no all-apis. An opaque token or an empty scope list is NOT PROVEN:
+    the calls may have passed with a wide token."""
     failing = [c for c in MVP_CALLS if not steps.get(c, {}).get("ok")]
-    passed = not failing
-    matches = None
-    for name, want in (("W-19", W19_SCOPES), ("issue #167", ISSUE_SCOPES)):
-        if sorted(want) == sorted(scopes):
-            matches = name
-    return {"passed": passed, "failing_mvp_calls": failing, "token_scopes": scopes,
-            "scope_list_matches": matches,
+    lists = [("W-19", W19_SCOPES), ("issue #167", ISSUE_SCOPES)]
+    if expect:
+        lists.insert(0, ("--expect-scopes", expect))
+    matches = next((name for name, want in lists if sorted(want) == sorted(scopes)), None)
+    wide = "all-apis" in scopes
+    proven = token_format == "jwt" and bool(scopes) and not wide and matches is not None
+    if failing:
+        word, passed = "FAIL", False
+    elif not proven:
+        word, passed = "NOT PROVEN", False
+    else:
+        word, passed = "PASS", True
+    if wide:
+        why = "token has all-apis: log in again with --scopes"
+    elif token_format != "jwt" or not scopes:
+        why = "token scopes cannot be read (opaque token or no scope claim)"
+    elif matches is None:
+        why = f"token scopes {scopes} match no list under test"
+    else:
+        why = f"token scopes match {matches}"
+    return {"passed": passed, "word": word, "failing_mvp_calls": failing, "token_scopes": scopes,
+            "token_format": token_format, "scope_list_matches": matches, "scopes_proven_narrow": proven,
+            "scope_reason": why,
             "info_calls": {k: steps[k]["ok"] for k in ("genie_one_api_list", "postgres_projects_list") if k in steps},
-            "fallback": None if passed else "Stay on all-apis."}
+            "fallback": "Stay on all-apis." if failing else None}
 
 
 def main(argv=None):
@@ -109,25 +132,28 @@ def main(argv=None):
     p.add_argument("--workspace-id")
     p.add_argument("--domain-id", help="domain ID for the DRAFT create/delete pages call")
     p.add_argument("--model", default=MODEL)
+    p.add_argument("--expect-scopes", help="comma-separated scope list under test, if not W-19 or the issue list")
     args = p.parse_args(argv)
 
     def go():
-        host = sl.get_host(args.profile)
-        token = sl.get_token(args.profile)
+        host = sl.get_host(args.profile, subprocess.run)
+        token = sl.get_token(args.profile, subprocess.run)
         kind = sl.token_kind(token.reveal())
         scopes = sl.scopes_of(kind)
         sl.say(f"{SPIKE}: token format={kind.get('format')} scopes={scopes}")
         api = sl.Api(host, token, sl.HttpxTransport(timeout=60))
         wid = sl.resolve_workspace_id(api, args.workspace_id)
         steps = run_calls(api, wid, args.domain_id, args.model)
-        ev = evaluate(steps, scopes)
+        expect = args.expect_scopes.split(",") if args.expect_scopes else None
+        ev = evaluate(steps, scopes, kind.get("format"), expect)
         report = {"spike": SPIKE, "issue": 167, "profile_label": args.profile, "token": kind,
                   "steps": steps, "evaluation": ev}
         sl.write_report(args.out, report, secrets=[token.reveal()])
         for name, s in steps.items():
             sl.say(f"  {name:<24} ok={s.get('ok')} status={s.get('status')}")
-        sl.say(sl.verdict(SPIKE, ev["passed"], f"scopes={scopes} failing={ev['failing_mvp_calls']} "
-                                               f"info={json.dumps(ev['info_calls'])}"))
+        sl.say(sl.verdict(SPIKE, ev["passed"], f"scopes={scopes} ({ev['scope_reason']}) "
+                                               f"failing={ev['failing_mvp_calls']} "
+                                               f"info={json.dumps(ev['info_calls'])}", ev["word"]))
         token.wipe()
         return 0 if ev["passed"] else 1
 

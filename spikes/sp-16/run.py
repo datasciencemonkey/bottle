@@ -9,18 +9,35 @@ Pass: token type and scope known (for both modes). Fallback: origin-bound lease 
 
 Run:
   uv run --no-project --with httpx spikes/sp-16/run.py --profile <your-profile> \
-      --app-url https://<app>.databricksapps.com --mode on --out sp16-on.json
+      --app-name bottle-sp16 --mode on --out sp16-on.json
   uv run --no-project spikes/sp-16/run.py --merge sp16-on.json sp16-off.json --out sp16.json
 """
 import argparse
 import json
 import os
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "common"))
 import spikelib as sl  # noqa: E402
 
 SPIKE = "SP-16"
+
+
+def app_url_for_profile(app_name, profile, runner, given_url=None):
+    """4.6 rule 1: the app must be in the profile's workspace. `databricks apps get <name>
+    --profile <p>` answers only for an app in that workspace; its `url` is the only URL we use.
+    A --app-url that differs from it is refused (review finding 10)."""
+    res = sl.run_cli(["apps", "get", app_name, "--profile", profile, "-o", "json"], runner=runner, timeout=120)
+    if not res.ok:
+        raise sl.SpikeError(f"databricks apps get {app_name} failed: " + sl.redact(res.stderr.strip())[:300])
+    url = (res.json() or {}).get("url") or ""
+    if not url:
+        raise sl.SpikeError("databricks apps get returned no url (is the app deployed?)")
+    sl.check_app_url(url)
+    if given_url and given_url.rstrip("/") != url.rstrip("/"):
+        raise sl.SpikeError("--app-url is not the URL of this app in the profile's workspace")
+    return url.rstrip("/")
 
 
 class AppApi:
@@ -84,7 +101,8 @@ def evaluate(rows):
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--profile", help="Databricks CLI profile (you choose it)")
-    p.add_argument("--app-url", help="https://<app>.databricksapps.com")
+    p.add_argument("--app-name", help="name of the deployed probe app in the profile's workspace")
+    p.add_argument("--app-url", help="optional; must equal the url from `databricks apps get`")
     p.add_argument("--mode", choices=["on", "off"], help="user authorization state of the app now")
     p.add_argument("--merge", nargs=2, metavar="REPORT", help="combine the on and off reports")
     p.add_argument("--out", required=True)
@@ -100,10 +118,11 @@ def main(argv=None):
             sl.write_report(args.out, {"spike": SPIKE, "issue": 157, "results": rows, "evaluation": ev})
             sl.say(sl.verdict(SPIKE, ev["passed"], json.dumps(ev["modes"])))
             return 0 if ev["passed"] else 1
-        if not (args.profile and args.app_url and args.mode):
-            raise sl.SpikeError("--profile, --app-url and --mode are required (or use --merge)")
-        token = sl.get_token(args.profile)
-        api = AppApi(args.app_url, token, sl.HttpxTransport(timeout=60))
+        if not (args.profile and args.app_name and args.mode):
+            raise sl.SpikeError("--profile, --app-name and --mode are required (or use --merge)")
+        url = app_url_for_profile(args.app_name, args.profile, subprocess.run, args.app_url)
+        token = sl.get_token(args.profile, subprocess.run)
+        api = AppApi(url, token, sl.HttpxTransport(timeout=60))
         row = mode_result(args.mode, api.invoke(), sl.token_kind(token.reveal()))
         ok, detail = known(row)
         sl.write_report(args.out, {"spike": SPIKE, "issue": 157, "result": row}, secrets=[token.reveal()])
