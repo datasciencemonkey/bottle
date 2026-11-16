@@ -40,7 +40,7 @@ impl Read for Dribble<'_> {
 
 /// [SEC-20b] digest hex parsing accepts 64 hex chars in either case and rejects others
 #[test]
-fn digest_hex_round_trip_and_rejects_bad_input() {
+fn sec_20b_digest_hex_round_trip_and_rejects_bad_input() {
     let d = Sha256Digest::from_hex(ABC_SHA256).unwrap();
     assert_eq!(d.to_hex(), ABC_SHA256);
     assert_eq!(
@@ -56,7 +56,7 @@ fn digest_hex_round_trip_and_rejects_bad_input() {
 
 /// [SEC-20b] equality is a constant-time compare of all 32 bytes
 #[test]
-fn digest_constant_time_equality() {
+fn sec_20b_digest_constant_time_equality() {
     let a = Sha256Digest::from_hex(ABC_SHA256).unwrap();
     let mut bytes = *a.as_bytes();
     assert!(a.ct_eq(&Sha256Digest::from_bytes(bytes)));
@@ -69,7 +69,7 @@ fn digest_constant_time_equality() {
 
 /// [SEC-20b] streaming hash matches known vectors and a one-shot hash, across chunk sizes
 #[test]
-fn streaming_hash_matches_one_shot() {
+fn sec_20b_streaming_hash_matches_one_shot() {
     assert_eq!(sha256_reader(&b""[..]).unwrap().to_hex(), EMPTY_SHA256);
     assert_eq!(sha256_reader(&b"abc"[..]).unwrap().to_hex(), ABC_SHA256);
 
@@ -98,7 +98,7 @@ fn streaming_hash_matches_one_shot() {
 
 /// [SEC-20b] [AT-37] a matching artefact passes and is kept
 #[test]
-fn matching_artifact_passes_and_is_kept() {
+fn sec_20b_at_37_matching_artifact_passes_and_is_kept() {
     let dir = tempfile::tempdir().unwrap();
     let p = write(dir.path(), "model.onnx", b"abc");
     verify_file(&p, &Sha256Digest::from_hex(ABC_SHA256).unwrap()).unwrap();
@@ -107,7 +107,7 @@ fn matching_artifact_passes_and_is_kept() {
 
 /// [SEC-20b] [AT-37] a changed artefact stops the install: typed mismatch error, file deleted
 #[test]
-fn changed_artifact_is_rejected_and_deleted() {
+fn sec_20b_at_37_changed_artifact_is_rejected_and_deleted() {
     let dir = tempfile::tempdir().unwrap();
     let p = write(dir.path(), "model.onnx", b"abd");
     let err = verify_file(&p, &Sha256Digest::from_hex(ABC_SHA256).unwrap()).unwrap_err();
@@ -131,7 +131,7 @@ fn changed_artifact_is_rejected_and_deleted() {
 
 /// [SEC-20b] a pinned-artefact entry verifies; a bad pin is a typed error and keeps nothing
 #[test]
-fn pinned_artifact_verification() {
+fn sec_20b_pinned_artifact_verification() {
     let dir = tempfile::tempdir().unwrap();
     let ok = PinnedArtifact {
         file_name: "silero_vad.onnx",
@@ -164,7 +164,7 @@ fn pinned_artifact_verification() {
 
 /// [SEC-20b] a missing download is an Io error, not a pass
 #[test]
-fn missing_file_is_io_error() {
+fn sec_20b_missing_file_is_io_error() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("absent.bin");
     assert!(matches!(
@@ -175,7 +175,7 @@ fn missing_file_is_io_error() {
 
 /// [W-17d] [SEC-20b] [AT-37] the CLI archive is checked against the release SHA256SUMS
 #[test]
-fn cli_archive_checked_against_release_sums() {
+fn w_17d_sec_20b_at_37_cli_archive_checked_against_release_sums() {
     let dir = tempfile::tempdir().unwrap();
     let name = "databricks_cli_0.250.0_linux_amd64.zip";
     let sums = Sha256Sums::parse(&format!(
@@ -197,7 +197,7 @@ fn cli_archive_checked_against_release_sums() {
 
 /// [W-17d] [SEC-20b] an archive the SHA256SUMS file does not list stops the install and is deleted
 #[test]
-fn unlisted_cli_archive_is_rejected_and_deleted() {
+fn w_17d_sec_20b_unlisted_cli_archive_is_rejected_and_deleted() {
     let dir = tempfile::tempdir().unwrap();
     let sums = Sha256Sums::parse(&format!(
         "{ABC_SHA256}  databricks_cli_0.250.0_linux_amd64.zip\n"
@@ -241,7 +241,7 @@ fn make_undeletable(p: &Path) -> impl FnOnce() {
 /// [SEC-20b] if the bad download cannot be deleted, the error still stops the install and says so
 #[cfg(any(unix, windows))]
 #[test]
-fn mismatch_reports_failed_delete() {
+fn sec_20b_mismatch_reports_failed_delete() {
     let dir = tempfile::tempdir().unwrap();
     let sub = dir.path().join("dl");
     fs::create_dir(&sub).unwrap();

@@ -42,7 +42,7 @@ fn ported_rust_file(header: &str) -> String {
 
 /// [SEC-21b] [AT-37] the required-notice list covers every component of section 20.1
 #[test]
-fn required_notice_list_covers_section_20_1() {
+fn sec_21b_at_37_required_notice_list_covers_section_20_1() {
     let names: Vec<&str> = REQUIRED_NOTICES.iter().map(|n| n.component).collect();
     for want in [
         "antigravity-bricks-plugin",
@@ -64,14 +64,14 @@ fn required_notice_list_covers_section_20_1() {
 
 /// [SEC-21b] [AT-37] THIRD_PARTY_NOTICES.md at the repo root has every notice of section 20.1
 #[test]
-fn third_party_notices_file_has_every_notice() {
+fn sec_21b_at_37_third_party_notices_file_has_every_notice() {
     let text = notices_text();
     assert_eq!(missing_notices(&text), Vec::<&str>::new());
 }
 
 /// [SEC-21b] the CC-BY-4.0 Parakeet sentence and the MIT text are verbatim, not paraphrased
 #[test]
-fn notices_are_verbatim() {
+fn sec_21b_notices_are_verbatim() {
     let text = normalize(&notices_text());
     assert!(text.contains(&normalize(PARAKEET_ATTRIBUTION)));
     assert!(text.contains(&normalize(ANTIGRAVITY_MIT_HEADER)));
@@ -81,7 +81,7 @@ fn notices_are_verbatim() {
 
 /// [SEC-21b] removing one notice is detected
 #[test]
-fn missing_notice_is_detected() {
+fn sec_21b_missing_notice_is_detected() {
     let text = notices_text().replace(PARAKEET_ATTRIBUTION, "Speech recognition uses Parakeet.");
     assert_eq!(missing_notices(&text), vec!["NVIDIA Parakeet TDT 0.6B v3"]);
     let text = notices_text().replace("Silero", "S.");
@@ -90,7 +90,7 @@ fn missing_notice_is_detected() {
 
 /// [SEC-21a] a ported file with the MIT header in comments passes
 #[test]
-fn ported_file_with_header_passes() {
+fn sec_21a_ported_file_with_header_passes() {
     let rs = ported_rust_file(ANTIGRAVITY_MIT_HEADER);
     assert!(is_marked_ported(&rs));
     assert!(has_antigravity_mit_header(&rs));
@@ -118,7 +118,7 @@ fn ported_file_with_header_passes() {
 
 /// [SEC-21a] a ported file without the header, or with a changed header, fails
 #[test]
-fn ported_file_without_header_fails() {
+fn sec_21a_ported_file_without_header_fails() {
     let bare = format!("// {PORTED_MARKER}\nfn bridge() {{}}\n");
     assert_eq!(check_ported_text(&bare), PortedCheck::HeaderMissing);
 
@@ -132,7 +132,7 @@ fn ported_file_without_header_fails() {
 
 /// [SEC-21a] files not marked as ported are ignored; a mention of the marker inside code is not a mark
 #[test]
-fn unmarked_files_are_not_ported() {
+fn sec_21a_unmarked_files_are_not_ported() {
     assert_eq!(check_ported_text("fn main() {}\n"), PortedCheck::NotPorted);
     let mention = format!("let m = \"{PORTED_MARKER}\";\n");
     assert!(!is_marked_ported(&mention));
@@ -140,7 +140,7 @@ fn unmarked_files_are_not_ported() {
 
 /// [SEC-21a] the scanner finds ported files that lack the header and skips build output
 #[test]
-fn scanner_reports_ported_files_without_header() {
+fn sec_21a_scanner_reports_ported_files_without_header() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     fs::create_dir_all(root.join("src/genie")).unwrap();
@@ -177,7 +177,7 @@ fn scanner_reports_ported_files_without_header() {
 
 /// [SEC-21a] [AT-37] every ported file in this repository keeps the MIT header
 #[test]
-fn repository_ported_files_keep_header() {
+fn sec_21a_at_37_repository_ported_files_keep_header() {
     let missing = scan_ported_files(&repo_root()).unwrap();
     assert!(
         missing.is_empty(),
