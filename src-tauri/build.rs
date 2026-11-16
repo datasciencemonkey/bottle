@@ -32,4 +32,8 @@ fn embed_manifest_in_every_executable() {
     println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
     // Linker warnings (for example a manifest conflict) fail the build.
     println!("cargo:rustc-link-arg=/WX");
+    // Except LNK4099 only: the vendored OpenSSL of SQLCipher (#35, SP-21, ADR 0033) is a static
+    // library whose objects name an `ossl_static.pdb` that openssl-src does not ship. The warning
+    // is about third-party debug info only; every other warning still fails the link.
+    println!("cargo:rustc-link-arg=/IGNORE:4099");
 }

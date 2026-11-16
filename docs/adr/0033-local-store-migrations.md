@@ -83,5 +83,7 @@ details conflict with binding decision U9 (no automatic deletion of user content
 - Downstream memory issues (#37, #38, #63, #102, #114, #123, #124, #199-#202) build on this schema.
 - A new column or table needs a contract-change issue and migration 0002 or later.
 - The v1 Lakebase sync maps these columns back to Appendix A, including the nullable `expires_at`.
+- Windows: the vendored OpenSSL gives LNK4099 under `/WX`. `src-tauri/build.rs` ignores exactly that
+  warning (ADR 0036 amendment).
 - The requirements text should say that U9 removes the local retention columns and purge indexes
   (comment on #35).
