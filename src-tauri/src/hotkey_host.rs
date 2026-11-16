@@ -117,10 +117,8 @@ impl PttTarget {
                 WindowClass::Mog | WindowClass::Card,
                 WindowSignal::Opened | WindowSignal::Focused,
             ) => *target = Some(id.to_owned()),
-            (WindowClass::Mog, WindowSignal::Destroyed) => {
-                if target.as_deref() == Some(id) {
-                    *target = None;
-                }
+            (WindowClass::Mog, WindowSignal::Destroyed) if target.as_deref() == Some(id) => {
+                *target = None
             }
             _ => {}
         }
