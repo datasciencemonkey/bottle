@@ -9,6 +9,7 @@ use serde_json::json;
 
 use super::key_vault::{KeyVault, LocalKey, MemoryKeyVault, KEY_LEN};
 use super::mog_guard::{require_mog_id_filter, require_mog_id_param};
+use super::vec_codec::{quantize_int8, INT8_MAX};
 use super::{LocalStore, SqlCipherLocalStore, DB_FILE_NAME};
 use crate::error::CoreError;
 
@@ -22,10 +23,7 @@ impl TempDir {
     fn new(tag: &str) -> Self {
         static N: AtomicU64 = AtomicU64::new(0);
         let n = N.fetch_add(1, Ordering::Relaxed);
-        let p = std::env::temp_dir().join(format!(
-            "bottle-r10-{tag}-{}-{n}",
-            std::process::id()
-        ));
+        let p = std::env::temp_dir().join(format!("bottle-r10-{tag}-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         TempDir(p)
@@ -67,17 +65,24 @@ fn pragma_text(s: &SqlCipherLocalStore, sql: &str) -> String {
 fn mem_08a_memory_dir_holds_one_database_file() {
     let t = TempDir::new("08a");
     let s = open_store(t.path(), Arc::new(MemoryKeyVault::new()));
-    s.with_conn(|c| c.execute_batch("CREATE TABLE probe(mog_id TEXT NOT NULL); INSERT INTO probe VALUES ('x');"))
-        .unwrap();
+    s.with_conn(|c| {
+        c.execute_batch("CREATE TABLE probe(mog_id TEXT NOT NULL); INSERT INTO probe VALUES ('x');")
+    })
+    .unwrap();
     // While open, WAL adds only the companion files of the same database.
     for f in files_in(&t.path().join("memory")) {
         assert!(
-            f == DB_FILE_NAME || f == format!("{DB_FILE_NAME}-wal") || f == format!("{DB_FILE_NAME}-shm"),
+            f == DB_FILE_NAME
+                || f == format!("{DB_FILE_NAME}-wal")
+                || f == format!("{DB_FILE_NAME}-shm"),
             "unexpected file {f}"
         );
     }
     s.close();
-    assert_eq!(files_in(&t.path().join("memory")), vec![DB_FILE_NAME.to_string()]);
+    assert_eq!(
+        files_in(&t.path().join("memory")),
+        vec![DB_FILE_NAME.to_string()]
+    );
 }
 
 #[test]
@@ -93,7 +98,10 @@ fn mem_08a_all_mogs_share_one_file() {
     })
     .unwrap();
     s.close();
-    assert_eq!(files_in(&t.path().join("memory")), vec![DB_FILE_NAME.to_string()]);
+    assert_eq!(
+        files_in(&t.path().join("memory")),
+        vec![DB_FILE_NAME.to_string()]
+    );
     let s = open_store(t.path(), vault);
     let n: i64 = s
         .with_conn(|c| c.query_row("SELECT count(DISTINCT mog_id) FROM probe", [], |r| r.get(0)))
@@ -117,12 +125,20 @@ fn mem_08b_file_unreadable_without_key() {
     s.close();
     let path = t.path().join("memory").join(DB_FILE_NAME);
     let bytes = std::fs::read(&path).unwrap();
-    assert!(!bytes.starts_with(b"SQLite format 3\0"), "plain SQLite header");
+    assert!(
+        !bytes.starts_with(b"SQLite format 3\0"),
+        "plain SQLite header"
+    );
     let marker = b"PLAINTEXT-MARKER-0123456789";
-    assert!(!bytes.windows(marker.len()).any(|w| w == marker), "plaintext in file");
+    assert!(
+        !bytes.windows(marker.len()).any(|w| w == marker),
+        "plaintext in file"
+    );
     // Without a key, the same SQLCipher build cannot read the file.
     let c = rusqlite::Connection::open(&path).unwrap();
-    let r = c.query_row("SELECT count(*) FROM sqlite_master", [], |r| r.get::<_, i64>(0));
+    let r = c.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
+        r.get::<_, i64>(0)
+    });
     assert!(r.is_err(), "readable without a key");
 }
 
@@ -179,8 +195,14 @@ fn mem_08b_macos_key_uses_after_first_unlock_this_device_only() {
     use super::key_vault::macos::{Accessibility, KeychainVault};
     // Builds the item description only. It never calls the real Keychain.
     let spec = KeychainVault::bottle().spec();
-    assert_eq!(spec.accessibility, Accessibility::AfterFirstUnlockThisDeviceOnly);
-    assert!(spec.data_protection_keychain, "accessibility needs the data protection keychain");
+    assert_eq!(
+        spec.accessibility,
+        Accessibility::AfterFirstUnlockThisDeviceOnly
+    );
+    assert!(
+        spec.data_protection_keychain,
+        "accessibility needs the data protection keychain"
+    );
     assert!(!spec.synchronizable, "the key must not sync to iCloud");
 }
 
@@ -202,7 +224,10 @@ fn mem_09a_lost_key_does_not_delete_the_file() {
     let s = SqlCipherLocalStore::new(t.path().join("memory"), vault.clone());
     assert_eq!(s.open(), Err(CoreError::StoreKeyLost { component: "R10" }));
     // U9: R10 deletes nothing and makes no new key on its own.
-    assert_eq!(files_in(&t.path().join("memory")), vec![DB_FILE_NAME.to_string()]);
+    assert_eq!(
+        files_in(&t.path().join("memory")),
+        vec![DB_FILE_NAME.to_string()]
+    );
     assert!(vault.load().unwrap().is_none());
 }
 
@@ -268,7 +293,13 @@ fn mem_08e_sqlite_vec_is_registered() {
 fn mem_08e_knn_is_partitioned_by_mog_and_model() {
     let t = TempDir::new("08e-knn");
     let s = open_store(t.path(), Arc::new(MemoryKeyVault::new()));
-    let near = |x: i8| -> Vec<u8> { (0..256).map(|i| if i == 0 { x as u8 } else { 0 }).collect() };
+    let near = |x: f32| -> Vec<u8> {
+        quantize_int8(
+            &(0..256)
+                .map(|i| if i == 0 { x } else { 0.0 })
+                .collect::<Vec<f32>>(),
+        )
+    };
     let rows: Vec<i64> = s
         .with_conn(|c| {
             c.execute_batch(
@@ -279,21 +310,49 @@ fn mem_08e_knn_is_partitioned_by_mog_and_model() {
             let mut ins = c.prepare(
                 "INSERT INTO probe_vec(rowid, mog_id, embedding_model, embedding) VALUES (?1, ?2, ?3, vec_int8(?4))",
             )?;
-            ins.execute(rusqlite::params![1, MOG_A, "qwen3@256", near(100)])?;
-            ins.execute(rusqlite::params![2, MOG_B, "qwen3@256", near(100)])?;
-            ins.execute(rusqlite::params![3, MOG_A, "gte@256", near(100)])?;
-            ins.execute(rusqlite::params![4, MOG_A, "qwen3@256", near(-100)])?;
+            ins.execute(rusqlite::params![1, MOG_A, "qwen3@256", near(1.0)])?;
+            ins.execute(rusqlite::params![2, MOG_B, "qwen3@256", near(1.0)])?;
+            ins.execute(rusqlite::params![3, MOG_A, "gte@256", near(1.0)])?;
+            ins.execute(rusqlite::params![4, MOG_A, "qwen3@256", near(-1.0)])?;
             let mut q = c.prepare(
                 "SELECT rowid FROM probe_vec WHERE embedding MATCH vec_int8(?1) AND k = 10
                  AND mog_id = ?2 AND embedding_model = ?3 ORDER BY distance",
             )?;
             let ids = q
-                .query_map(rusqlite::params![near(100), MOG_A, "qwen3@256"], |r| r.get(0))?
+                .query_map(rusqlite::params![near(1.0), MOG_A, "qwen3@256"], |r| r.get(0))?
                 .collect::<rusqlite::Result<Vec<i64>>>()?;
             Ok(ids)
         })
         .unwrap();
     assert_eq!(rows, vec![1, 4], "other MOGs and models never meet");
+}
+
+#[test]
+fn mem_08e_int8_quantizer_keeps_every_difference_in_range() {
+    // sqlite-vec 0.1.9 NEON int8 L2 returns a NULL distance when a component difference leaves
+    // the i8 range. The quantizer keeps values in [-63, 63], so a difference is at most 126.
+    let q = quantize_int8(&[1.0, -1.0, 2.0, -2.0, 0.5, 0.0, f32::NAN]);
+    let v: Vec<i8> = q.iter().map(|b| *b as i8).collect();
+    assert_eq!(v, vec![INT8_MAX, -INT8_MAX, INT8_MAX, -INT8_MAX, 32, 0, 0]);
+    assert!(2 * i16::from(INT8_MAX) <= i16::from(i8::MAX));
+
+    let t = TempDir::new("08e-range");
+    let s = open_store(t.path(), Arc::new(MemoryKeyVault::new()));
+    let full: Vec<f32> = (0..256)
+        .map(|i| if i % 2 == 0 { 1.0 } else { -1.0 })
+        .collect();
+    let flip: Vec<f32> = full.iter().map(|x| -x).collect();
+    let d: Option<f64> = s
+        .with_conn(|c| {
+            c.query_row(
+                "SELECT vec_distance_l2(vec_int8(?1), vec_int8(?2))",
+                rusqlite::params![quantize_int8(&full), quantize_int8(&flip)],
+                |r| r.get(0),
+            )
+        })
+        .unwrap();
+    let d = d.expect("distance is not NULL");
+    assert!((d - (256.0f64 * 126.0 * 126.0).sqrt()).abs() < 1e-6, "{d}");
 }
 
 // ---- MEM-01: every statement filters by mog_id --------------------------------------------
@@ -325,6 +384,8 @@ fn mem_01_guard_rejects_statement_without_mog_id() {
         "SELECT item_id FROM memory_item WHERE item_id = ?1 -- mog_id = ?2",
         "SELECT item_id FROM memory_item WHERE mog_id = 'fixed-literal'",
         "SELECT item_id FROM memory_item WHERE mog_id = ?1 OR 1 = 1",
+        "SELECT item_id FROM memory_item WHERE 1 + mog_id = ?1",
+        "SELECT item_id FROM memory_item WHERE mog_id = ?1 + 1",
         "SELECT m.item_id FROM memory_item m WHERE m.mog_id = ?1 AND m.rid IN \
          (SELECT rowid FROM memory_item_fts WHERE memory_item_fts MATCH ?2)",
         "UPDATE memory_item SET pinned = 1",
@@ -342,14 +403,26 @@ fn mem_01_guard_rejects_statement_without_mog_id() {
 fn mem_01_exec_rejects_params_without_mog_id() {
     let refused = Err(CoreError::MogIdRequired { component: "R10" });
     assert_eq!(require_mog_id_param(&json!({})).map(|_| ()), refused);
-    assert_eq!(require_mog_id_param(&json!({"mogId": ""})).map(|_| ()), refused);
-    assert_eq!(require_mog_id_param(&json!({"mogId": 7})).map(|_| ()), refused);
-    assert_eq!(require_mog_id_param(&json!({"mogId": "not-a-uuid"})).map(|_| ()), refused);
+    assert_eq!(
+        require_mog_id_param(&json!({"mogId": ""})).map(|_| ()),
+        refused
+    );
+    assert_eq!(
+        require_mog_id_param(&json!({"mogId": 7})).map(|_| ()),
+        refused
+    );
+    assert_eq!(
+        require_mog_id_param(&json!({"mogId": "not-a-uuid"})).map(|_| ()),
+        refused
+    );
     assert_eq!(require_mog_id_param(&json!({"mogId": MOG_A})), Ok(MOG_A));
 
     let t = TempDir::new("01-exec");
     let s = open_store(t.path(), Arc::new(MemoryKeyVault::new()));
-    assert_eq!(s.exec("mem.item.get", json!({"itemId": "x"})).map(|_| ()), refused);
+    assert_eq!(
+        s.exec("mem.item.get", json!({"itemId": "x"})).map(|_| ()),
+        refused
+    );
 }
 
 #[test]

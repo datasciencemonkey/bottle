@@ -9,6 +9,7 @@ pub mod mog_guard;
 mod store;
 #[cfg(test)]
 mod tests;
+pub mod vec_codec;
 
 pub use store::{SqlCipherLocalStore, DB_FILE_NAME};
 
