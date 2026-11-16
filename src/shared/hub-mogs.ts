@@ -11,10 +11,10 @@
 export const HUB_MOGS_EVENT = 'hub:mogs';
 
 /**
- * The `mogId` of a hub-level `view_emit`. It cannot be a MOG ID, because MOG IDs are UUIDs.
- * #27 uses the same value. TODO(#407): a hub-level view input with no `mogId`.
+ * The `mogId` of a hub-level `view_emit`, shared with the #27 notice. It cannot be a MOG ID,
+ * because MOG IDs are UUIDs. TODO(#407): a hub-level view input with no `mogId`.
  */
-export const HUB_SCOPE = 'hub';
+export { HUB_SCOPE } from './hub-notice';
 
 /** One row of the hub MOG list. */
 export interface HubMogRow {
