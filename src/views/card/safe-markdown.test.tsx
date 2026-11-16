@@ -75,7 +75,7 @@ describe('safe markdown', () => {
   });
 
   it('[SEC-25b] a link never opens by itself and has no script hooks', () => {
-    const out = html('[o](https://app.example.com/x)');
+    const out = html('[o](https://app.example.com/base/x)');
     expect(out).toContain('rel="noopener noreferrer"');
     expect(out).not.toMatch(/onclick|onload|autofocus|<meta|<iframe|\starget=/i);
   });

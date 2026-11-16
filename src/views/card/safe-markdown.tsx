@@ -8,34 +8,41 @@ export interface LinkTrust {
   allowedAppUrls: readonly string[];
 }
 
-function hostOf(url: string): string | undefined {
-  try {
-    const u = new URL(url);
-    return u.protocol === 'https:' ? u.host.toLowerCase() : undefined;
-  } catch {
-    return undefined;
-  }
-}
+/** Answers longer than this are cut before parsing (bounds work on hostile input). */
+export const MAX_ANSWER_CHARS = 20_000;
 
-/** Returns the normalised URL when it is https, has no userinfo and its host is trusted. */
+/**
+ * Trust model (requirements do not define a match rule for `AllowedAppUrls`, so the stricter reading is used):
+ * the profile host matches by origin (https, host and port); each `AllowedAppUrls` entry must be an https URL
+ * and matches by origin plus path prefix on a segment boundary. Entries that are not https URLs trust nothing.
+ */
 export function trustedUrl(raw: string, trust: LinkTrust): string | undefined {
-  if (!/^https:\/\//i.test(raw) || /[\s<>"]/.test(raw)) return undefined;
+  if (!/^https:\/\//i.test(raw) || /[\s<>"]/.test(raw) || raw.includes('..')) return undefined;
   let u: URL;
   try {
     u = new URL(raw);
   } catch {
     return undefined;
   }
-  if (u.username || u.password) return undefined;
-  const hosts = new Set(
-    [trust.profileHost, ...trust.allowedAppUrls.map((a) => hostOf(a) ?? a)].map((h) =>
-      h.replace(/^https:\/\//i, '').toLowerCase(),
-    ),
-  );
-  return hosts.has(u.host.toLowerCase()) ? u.href : undefined;
+  if (u.username || u.password || u.protocol !== 'https:') return undefined;
+  if (u.host === trust.profileHost.toLowerCase()) return u.href;
+  for (const entry of trust.allowedAppUrls) {
+    let e: URL;
+    try {
+      e = new URL(entry);
+    } catch {
+      continue;
+    }
+    if (e.protocol !== 'https:' || e.origin !== u.origin) continue;
+    const base = e.pathname.replace(/\/+$/, '');
+    if (u.pathname === base || u.pathname.startsWith(`${base}/`)) return u.href;
+  }
+  return undefined;
 }
 
-const INLINE = /(!?)\[([^\]]*)\]\(([^)\s]*)\)|`([^`]+)`|\*\*([^*]+)\*\*|\*([^*]+)\*/g;
+// Every group is length-bounded so unmatched openers cost O(n), not O(n^2).
+const INLINE =
+  /(!?)\[([^\]]{0,500})\]\(([^)\s]{0,2048})\)|`([^`]{1,500})`|\*\*([^*]{1,500})\*\*|\*([^*]{1,500})\*/g;
 
 function inline(text: string, trust: LinkTrust, key: string): ReactNode[] {
   const out: ReactNode[] = [];
@@ -71,7 +78,7 @@ function inline(text: string, trust: LinkTrust, key: string): ReactNode[] {
 }
 
 export function SafeMarkdown({ text, trust }: { text: string; trust: LinkTrust }) {
-  const lines = text.split(/\r?\n/);
+  const lines = text.slice(0, MAX_ANSWER_CHARS).split(/\r?\n/);
   const blocks: ReactNode[] = [];
   let n = 0;
   let i = 0;
