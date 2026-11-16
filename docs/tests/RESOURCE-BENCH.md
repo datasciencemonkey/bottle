@@ -64,7 +64,7 @@ Each file has `Scope | part: NFR-04a, NFR-04b, NFR-05, NFR-06a, NFR-06b, NFR-09 
 (`docs/spikes/SP-04.md`). Its bench output gives NFR-05 `over` and the result `fail`:
 
 ```
-cargo run -p mog-core --example resource_bench -- init > /tmp/sp04.csv
+cargo run -p mog-core --example resource_bench -- init --out /tmp/sp04.csv
 cargo run -p mog-core --example resource_bench -- report --other-hardware --date 2026-11-16 \
   --run-by impl-44 --build "PR #281" --hardware "Apple M3 Max 64 GB" --os macOS \
   --stt-model "parakeet-tdt-0.6b-v3 int8" --samples /tmp/sp04.csv \
@@ -122,66 +122,83 @@ Do not run these steps on a machine that is not a reference device. They need no
 profile. Never put a token in a file. Quit every other app first (on macOS, Safari and Mail
 too: they share the WebKit process names).
 
-The steps have two parts. Each part takes about 30 min per device.
+The steps have two parts:
 
-- **Part A: Parakeet (NFR-05).** You can run it now. Steps 1, 6 and 7 below (Windows: the same
-  steps with `run.ps1`).
-- **Part B: memory and CPU (NFR-04a, NFR-04b, NFR-06a, NFR-06b, NFR-09).** It is BLOCKED until
-  the build can open N = 0, 1, 2, 4 and 8 MOGs and pause Rive (SP-02, TODO(#79)), and has the
-  30 Hz hit-poll (TODO(#81)). Steps 2 to 5 below. When Part B runs, write the report again with
-  the samples of both parts.
+- **Part A: Parakeet (NFR-05). You can run it now.** About 30 min: the SP-04 rerun (under 30 min,
+  `docs/spikes/SP-04.md`) plus about 2 min to build the runner. Steps A1 to A3.
+- **Part B: memory and CPU (NFR-04a, NFR-04b, NFR-06a, NFR-06b, NFR-09). BLOCKED** until the
+  build can open N = 0, 1, 2, 4 and 8 MOGs and pause Rive (SP-02, TODO(#79)), and has the 30 Hz
+  hit-poll (TODO(#81)). About 30 min. Steps B1 to B4, then step A3 again with the same file.
 
-Build the runner once in your Bottle checkout: `cargo build -p mog-core --example resource_bench`.
-Below, `rb` means `target/debug/examples/resource_bench` (`.exe` on Windows).
+The runner writes the sample file itself (`init --out`, then `--append` on each command). Do not
+use the shell `>` or `>>`: Windows PowerShell 5.1 writes UTF-16 with them. Write each `--name`
+flag in full in each command, as below (a shell variable with all the flags does not work in zsh
+or PowerShell).
 
-### macOS (about 30 min)
+### macOS
 
-Names: `--name Bottle --name com.apple.WebKit.WebContent --name com.apple.WebKit.GPU --name com.apple.WebKit.Networking`
-(below: `$NAMES`).
+In your Bottle checkout on `main`, in zsh or bash: `cargo build -p mog-core --example resource_bench`,
+then `RB=$PWD/target/debug/examples/resource_bench; rb() { "$RB" "$@"; }`.
 
-1. `rb init > ~/res.csv`.
-2. Start Bottle with local STT not loaded and no agent harness running. Wait 30 s.
-3. Memory, for N = 0, 1, 2, 4 and 8 open MOGs (with cards open): set N MOGs, wait 30 s, then
-   `rb sample-rss --mogs <N> $NAMES >> ~/res.csv` (10 samples, 20 s).
-4. CPU, with no capture, 2 min each. Hide or show the panels as the scenario says, wait 30 s, then
-   `sudo powermetrics -i 1000 -n 120 --samplers tasks > ~/pm-<scenario>.txt` and
-   `rb import-powermetrics --scenario <scenario> --mogs <N> $NAMES ~/pm-<scenario>.txt >> ~/res.csv`:
-   - `baseline`, N = 0 (no MOG panel, hit-poll off);
-   - `hidden_panels`, N = 8 (panels hidden, hit-poll on, TODO(#81));
-   - `rive_paused`, N = 8 (Rive paused);
-   - `rive_animating`, N = 8 (Rive animating).
-5. Focus steals (SP-02): type in TextEdit for 2 min while the 8 MOGs animate. Count each time
-   TextEdit loses the keyboard focus. `rb focus-steals <count> >> ~/res.csv`.
-6. Parakeet: run `spikes/sp-04/run.sh` (`docs/spikes/SP-04.md`, "Rerun on reference hardware").
-   It writes `~/sp04-work/out/bench-p.txt`.
-7. Report and device test:
-   ```
-   rb report --device mac-m1-8gb-14.4 --date $(date +%F) --run-by "<your name>" \
-     --build $(git rev-parse --short HEAD) \
-     --hardware "$(sysctl -n machdep.cpu.brand_string), $(( $(sysctl -n hw.memsize) / 1073741824 )) GB" \
-     --os "macOS $(sw_vers -productVersion)" --stt-model "parakeet-tdt-0.6b-v3 int8" \
-     --samples ~/res.csv --sp04-bench ~/sp04-work/out/bench-p.txt \
-     --out docs/evidence/AT-21-resources-mac-m1-8gb-14.4.md
-   BOTTLE_TEST_DEVICE=mac-m1-8gb-14.4 BOTTLE_RES_SAMPLES=~/res.csv \
-     BOTTLE_RES_SP04_BENCH=~/sp04-work/out/bench-p.txt \
-     cargo test -p mog-core --test resource_budget at_21_device
-   ```
-   Use `mac-m1-current` on the Mac with the current macOS. Expected today: NFR-05 is `over`
-   (SP-04 measured 1.91 GB), so the result is `fail` and the device test fails on NFR-05.
-   This is the true result: record it, do not change the limit.
+- **A1.** `rb init --out ~/res.csv`
+- **A2.** Run `spikes/sp-04/run.sh` (`docs/spikes/SP-04.md`, "Rerun on reference hardware"). It
+  writes `~/sp04-work/out/bench-p.txt`.
+- **A3.** Write the report and run the device test:
+  ```
+  rb report --device mac-m1-8gb-14.4 --date $(date +%F) --run-by "<your name>" \
+    --build $(git rev-parse --short HEAD) \
+    --hardware "$(sysctl -n machdep.cpu.brand_string), $(( $(sysctl -n hw.memsize) / 1073741824 )) GB" \
+    --os "macOS $(sw_vers -productVersion)" --stt-model "parakeet-tdt-0.6b-v3 int8" \
+    --samples ~/res.csv --sp04-bench ~/sp04-work/out/bench-p.txt \
+    --out docs/evidence/AT-21-resources-mac-m1-8gb-14.4.md
+  BOTTLE_TEST_DEVICE=mac-m1-8gb-14.4 BOTTLE_RES_SAMPLES=~/res.csv \
+    BOTTLE_RES_SP04_BENCH=~/sp04-work/out/bench-p.txt \
+    cargo test -p mog-core --test resource_budget at_21_device
+  ```
+  Use `mac-m1-current` on the Mac with the current macOS. Expected after Part A only: NFR-05 is
+  `over` (SP-04 measured 1.91 GB), the other rows are `no data`, the result is `fail` (exit 1),
+  and the device test fails on NFR-05. This is the true result: record it, do not change the limit.
+- **B1.** Start Bottle with local STT not loaded and no agent harness running. Wait 30 s.
+- **B2.** Memory, for N = 0, 1, 2, 4 and 8 open MOGs (with cards open). Set N MOGs, wait 30 s, then
+  (10 samples in 20 s):
+  ```
+  rb sample-rss --mogs <N> --name Bottle --name com.apple.WebKit.WebContent \
+    --name com.apple.WebKit.GPU --name com.apple.WebKit.Networking --append ~/res.csv
+  ```
+- **B3.** CPU, no capture, 2 min per scenario. Set the scenario, wait 30 s, then:
+  ```
+  sudo powermetrics -i 1000 -n 120 --samplers tasks -o ~/pm-<scenario>.txt
+  rb import-powermetrics --scenario <scenario> --mogs <N> --name Bottle \
+    --name com.apple.WebKit.WebContent --name com.apple.WebKit.GPU \
+    --name com.apple.WebKit.Networking --append ~/res.csv ~/pm-<scenario>.txt
+  ```
+  The scenarios: `baseline` with N = 0 (no MOG panel, hit-poll off); `hidden_panels` with N = 8
+  (panels hidden, hit-poll on); `rive_paused` with N = 8; `rive_animating` with N = 8.
+- **B4.** Focus steals (SP-02): type in TextEdit for 2 min while the 8 MOGs animate. Count each time
+  TextEdit loses the keyboard focus, then `rb focus-steals <count> --append ~/res.csv`.
 
-### Windows 11 (about 30 min)
+### Windows 11 (PowerShell)
 
-Names: `--name Bottle --name msedgewebview2` (below: `$NAMES`). Use PowerShell.
+In your Bottle checkout on `main`: `cargo build -p mog-core --example resource_bench`, then
+`Set-Alias rb "$PWD\target\debug\examples\resource_bench.exe"`.
 
-1. `rb init > $HOME\res.csv`, then step 2 and step 3 as on macOS (`rb sample-rss` reads `tasklist`).
-2. CPU, 2 min per scenario (same scenarios and N as on macOS):
-   `typeperf "\Process(Bottle*)\% Processor Time" "\Process(msedgewebview2*)\% Processor Time" -si 1 -sc 120 -f CSV -o $HOME\cpu-<scenario>.csv`
-   then `rb import-typeperf --scenario <scenario> --mogs <N> $NAMES $HOME\cpu-<scenario>.csv >> $HOME\res.csv`.
-3. For `rive_paused` and `rive_animating`, also record 60 s with PresentMon at the same time:
-   `PresentMon.exe --output_file $HOME\pm-<scenario>.csv --timed 60 --terminate_after_timed`
-   then `rb import-presentmon --scenario <scenario> --mogs 8 --seconds 60 $NAMES $HOME\pm-<scenario>.csv >> $HOME\res.csv`.
-4. Focus steals in Notepad as on macOS. Parakeet: `spikes/sp-04/run.ps1`. It writes
-   `$HOME\sp04-work\out\bench-p.txt`: give that path to `--sp04-bench` and `BOTTLE_RES_SP04_BENCH`.
-5. `rb report --device win11-i5-16gb ...` and the device test as on macOS, with
-   `--os "Windows 11 <version>"` and the hardware from `Get-ComputerInfo`.
+- **A1.** `rb init --out $HOME\res.csv`
+- **A2.** Run `spikes/sp-04/run.ps1`. It writes `$HOME\sp04-work\out\bench-p.txt`.
+- **A3.** As on macOS, with `--device win11-i5-16gb`, `--os "Windows 11 <version>"`, the hardware
+  from `Get-ComputerInfo -Property CsProcessors,CsTotalPhysicalMemory`,
+  `--samples $HOME\res.csv` and `--sp04-bench $HOME\sp04-work\out\bench-p.txt`. Set the test
+  variables with `$env:BOTTLE_TEST_DEVICE = "win11-i5-16gb"`, `$env:BOTTLE_RES_SAMPLES = "$HOME\res.csv"`
+  and `$env:BOTTLE_RES_SP04_BENCH = "$HOME\sp04-work\out\bench-p.txt"`, then run
+  `cargo test -p mog-core --test resource_budget at_21_device`.
+- **B1, B2, B4.** As on macOS, with `--name Bottle --name msedgewebview2` and `$HOME\res.csv`
+  (`rb sample-rss` reads `tasklist`). Type in Notepad for B4.
+- **B3.** For each scenario (2 min):
+  ```
+  typeperf "\Process(Bottle*)\% Processor Time" "\Process(msedgewebview2*)\% Processor Time" -si 1 -sc 120 -f CSV -o $HOME\cpu-<scenario>.csv
+  rb import-typeperf --scenario <scenario> --mogs <N> --name Bottle --name msedgewebview2 --append $HOME\res.csv $HOME\cpu-<scenario>.csv
+  ```
+  For `rive_paused` and `rive_animating`, also run PresentMon for 60 s at the same time:
+  ```
+  PresentMon.exe --output_file $HOME\pm-<scenario>.csv --timed 60 --terminate_after_timed
+  rb import-presentmon --scenario <scenario> --mogs 8 --seconds 60 --name Bottle --name msedgewebview2 --append $HOME\res.csv $HOME\pm-<scenario>.csv
+  ```

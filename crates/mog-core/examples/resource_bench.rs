@@ -11,7 +11,7 @@ use std::time::Duration;
 use mog_core::latency_bench::GateResult;
 use mog_core::resource_budget::doubles::demo_samples;
 use mog_core::resource_budget::import::{
-    parse_csv, parse_powermetrics, parse_presentmon_csv, parse_ps, parse_sp04_bench,
+    decode_text, parse_csv, parse_powermetrics, parse_presentmon_csv, parse_ps, parse_sp04_bench,
     parse_tasklist_csv, parse_time_l, parse_typeperf_csv, row, ProcessFilter, CSV_HEADER,
     CSV_MAGIC,
 };
@@ -23,7 +23,8 @@ resource_bench: Bottle memory and idle CPU benchmark (#173, docs/tests/RESOURCE-
 
 USAGE:
   resource_bench demo
-  resource_bench init                                  (prints the sample-file header)
+  resource_bench init --out <file.csv>                 (starts the sample file)
+  (each command below adds rows with --append <file.csv>, or prints them)
   resource_bench sample-rss --mogs <0-8> --name <process>... [--count 10] [--interval-s 2]
   resource_bench import-powermetrics --scenario <s> --mogs <n> --name <process>... <file>
   resource_bench import-typeperf     --scenario <s> --mogs <n> --name <process>... <file>
@@ -101,7 +102,26 @@ impl Args {
 }
 
 fn read(path: &str) -> Result<String, String> {
-    std::fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))
+    let bytes = std::fs::read(path).map_err(|e| format!("cannot read {path}: {e}"))?;
+    decode_text(&bytes).map_err(|e| format!("{path}: {e}"))
+}
+
+/// Write `text` to `--out` (new file), append it to `--append`, or print it. The file is
+/// always UTF-8, also on Windows PowerShell 5.1 (its `>` and `>>` write UTF-16).
+fn emit(a: &Args, text: &str) -> Result<(), String> {
+    use std::io::Write;
+    if let Some(p) = a.get("out") {
+        std::fs::write(p, text).map_err(|e| format!("cannot write {p}: {e}"))
+    } else if let Some(p) = a.get("append") {
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(p)
+            .and_then(|mut f| f.write_all(text.as_bytes()))
+            .map_err(|e| format!("cannot append to {p} (run `init --out {p}` first): {e}"))
+    } else {
+        print!("{text}");
+        Ok(())
+    }
 }
 
 /// Reads `ps` (macOS, Linux) or `tasklist` (Windows) once per sample.
@@ -245,7 +265,7 @@ fn run(cmd: &str, a: &Args) -> Result<ExitCode, String> {
         }
         _ => return Err(format!("unknown command {cmd}")),
     };
-    print!("{out}");
+    emit(a, &out)?;
     Ok(ExitCode::SUCCESS)
 }
 

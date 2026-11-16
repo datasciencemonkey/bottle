@@ -8,12 +8,12 @@
 //! 1. SP-02 has not run (a criterion has no data): [`WindowPlan::Undecided`], TODO(#79).
 //! 2. SP-02 passes: [`WindowPlan::Cap8`], one panel per MOG, up to 8 MOGs.
 //! 3. SP-02 fails with focus steals, or 4 MOGs do not fit (N=1 <= 250 MB and
-//!    (N=4 - N=1) / 3 <= 40 MB, with enough samples), or a CPU row is over:
+//!    (N=4 - N=1) / 3 <= 40 MB), or a CPU row is over:
 //!    [`WindowPlan::OverlayPerDisplay`]. A cap does not stop focus steals.
 //! 4. SP-02 fails, 4 MOGs fit, both CPU rows are within and there are 0 focus steals:
 //!    [`WindowPlan::Cap4ThenOverlay`]. The default cap is 4 MOG panels; more MOGs go into the
 //!    D73 overlay.
-//! 5. SP-02 fails, 4 MOGs fit, but a CPU row or the focus steals have no data:
+//! 5. SP-02 fails, and the N=1 or N=4 run, a CPU row or the focus steals have no data:
 //!    [`WindowPlan::Undecided`]. The plan never picks cap 4 from missing data (TODO(#79)).
 
 use super::budgets::{evaluate, Outcome, MIN_RSS_SAMPLES};
@@ -127,16 +127,15 @@ pub fn sp02(s: &Samples) -> Sp02Result {
     }
 }
 
-fn four_fit(s: &Samples) -> bool {
+/// Whether 4 MOGs fit the memory budget; `None` when N=1 or N=4 has no usable run.
+fn four_fit(s: &Samples) -> Option<bool> {
     let peak = |n: u8| {
         s.rss_run(n)
             .filter(|r| r.bytes.len() >= MIN_RSS_SAMPLES)
             .and_then(|r| r.peak())
     };
-    match (peak(1), peak(4)) {
-        (Some(one), Some(four)) => one <= 250 * MB && four.saturating_sub(one) <= 3 * 40 * MB,
-        _ => false,
-    }
+    let (one, four) = (peak(1)?, peak(4)?);
+    Some(one <= 250 * MB && four.saturating_sub(one) <= 3 * 40 * MB)
 }
 
 /// The window plan and the reason for it.
@@ -157,22 +156,25 @@ pub fn window_plan(s: &Samples) -> (WindowPlan, String) {
                     WindowPlan::OverlayPerDisplay,
                     format!("SP-02 fails ({why}); a cap does not stop focus steals"),
                 )
-            } else if !four_fit(s) {
+            } else if four_fit(s) == Some(false) {
                 (
                     WindowPlan::OverlayPerDisplay,
-                    format!("SP-02 fails ({why}); 4 MOGs do not fit, or have no N=4 run"),
+                    format!("SP-02 fails ({why}); 4 MOGs do not fit"),
                 )
             } else if CPU_ROWS.iter().any(|id| over(s, id)) {
                 (
                     WindowPlan::OverlayPerDisplay,
                     format!("SP-02 fails ({why}); a CPU row is over"),
                 )
-            } else if s.focus_steals != Some(0) || !CPU_ROWS.iter().all(|id| within_row(s, id)) {
+            } else if four_fit(s).is_none()
+                || s.focus_steals != Some(0)
+                || !CPU_ROWS.iter().all(|id| within_row(s, id))
+            {
                 (
                     WindowPlan::Undecided,
                     format!(
-                        "SP-02 fails ({why}); 4 MOGs fit, but cap 4 needs both CPU rows within \
-                         and 0 focus steals, TODO(#79)"
+                        "SP-02 fails ({why}); cap 4 needs N=1 and N=4 runs, both CPU rows \
+                         within and 0 focus steals, TODO(#79)"
                     ),
                 )
             } else {

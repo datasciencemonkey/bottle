@@ -39,6 +39,35 @@ impl fmt::Display for ImportError {
 
 impl std::error::Error for ImportError {}
 
+/// Decode a text file from a tool or a shell redirect: UTF-8 (with or without a BOM) or UTF-16
+/// with a BOM (Windows PowerShell 5.1 writes UTF-16LE for `>` and `>>`).
+pub fn decode_text(bytes: &[u8]) -> Result<String, String> {
+    let utf16 = |b: &[u8], le: bool| {
+        if b.len() % 2 != 0 {
+            return Err("the UTF-16 file has an odd length".to_string());
+        }
+        let units: Vec<u16> = b
+            .chunks_exact(2)
+            .map(|c| {
+                if le {
+                    u16::from_le_bytes([c[0], c[1]])
+                } else {
+                    u16::from_be_bytes([c[0], c[1]])
+                }
+            })
+            .collect();
+        String::from_utf16(&units).map_err(|_| "the UTF-16 file is not valid".to_string())
+    };
+    match bytes {
+        [0xEF, 0xBB, 0xBF, rest @ ..] => {
+            String::from_utf8(rest.to_vec()).map_err(|_| "the file is not valid UTF-8".into())
+        }
+        [0xFF, 0xFE, rest @ ..] => utf16(rest, true),
+        [0xFE, 0xFF, rest @ ..] => utf16(rest, false),
+        _ => String::from_utf8(bytes.to_vec()).map_err(|_| "the file is not valid UTF-8".into()),
+    }
+}
+
 /// One sample file row: a kind, a scenario, a MOG count and a value.
 pub fn row(kind: &str, scenario: &str, mogs: u8, value: impl fmt::Display) -> String {
     format!("{kind},{scenario},{mogs},{value}\n")

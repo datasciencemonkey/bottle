@@ -10,7 +10,7 @@ use mog_core::clock::{MonotonicClock, SimClock};
 use mog_core::latency_bench::GateResult;
 use mog_core::resource_budget::doubles::{demo_samples, ScriptedProbe};
 use mog_core::resource_budget::import::{
-    parse_csv, parse_powermetrics, parse_presentmon_csv, parse_ps, parse_sp04_bench,
+    decode_text, parse_csv, parse_powermetrics, parse_presentmon_csv, parse_ps, parse_sp04_bench,
     parse_tasklist_csv, parse_time_l, parse_typeperf_csv, to_csv, ProcessFilter, CSV_HEADER,
     CSV_MAGIC,
 };
@@ -214,7 +214,7 @@ fn nfr_06a_idle_cpu_within_1_percent_with_rive_paused() {
         ..Samples::default()
     };
     assert_eq!(outcome("NFR-06a", &s), Outcome::Within);
-    s.cpu[0].percent = vec![1.01; MIN_CPU_SAMPLES];
+    s.cpu[0].percent = vec![1.001; MIN_CPU_SAMPLES];
     assert_eq!(outcome("NFR-06a", &s), Outcome::Over);
     s.cpu[0].percent = vec![0.1; 59];
     assert_eq!(outcome("NFR-06a", &s), Outcome::TooFew);
@@ -239,7 +239,7 @@ fn nfr_06b_idle_cpu_within_3_percent_with_8_animating_mogs() {
         ..Samples::default()
     };
     assert_eq!(outcome("NFR-06b", &s), Outcome::Within);
-    s.cpu[0].percent = vec![3.01; MIN_CPU_SAMPLES];
+    s.cpu[0].percent = vec![3.001; MIN_CPU_SAMPLES];
     assert_eq!(outcome("NFR-06b", &s), Outcome::Over);
     // The row names 8 MOGs.
     let s4 = Samples {
@@ -320,6 +320,14 @@ fn sp_02_passes_only_when_every_criterion_holds() {
     let mut steals = s.clone();
     steals.focus_steals = Some(1);
     assert!(matches!(sp02(&steals), Sp02Result::Fail(_)));
+    // The 550 MB check needs the RSS sample minimum, like the other rows.
+    let mut few8 = s.clone();
+    few8.rss.retain(|r| r.mogs != 8);
+    few8.rss.push(RssRun {
+        mogs: 8,
+        bytes: vec![300 * MB; MIN_RSS_SAMPLES - 1],
+    });
+    assert!(matches!(sp02(&few8), Sp02Result::NotRun(r) if r.iter().any(|m| m.contains("550 MB"))));
     // 8 MOGs must stay at 550 MB or less without STT.
     let mut big = s.clone();
     big.rss = vec![rss(1, 250), rss(8, 551)];
@@ -342,10 +350,15 @@ fn d73_window_plan_is_cap_8_cap_4_or_one_overlay_per_display() {
     overlay.rss = vec![rss(1, 200), rss(4, 200 + 3 * 45), rss(8, 200 + 7 * 50)];
     assert_eq!(window_plan(&overlay).0, WindowPlan::OverlayPerDisplay);
 
-    // No N=4 run: the cap cannot be checked, so the overlay applies.
+    // No N=4 run: the cap cannot be checked, so no decision (never cap 4 from no data).
     let mut no4 = cap4.clone();
     no4.rss.retain(|r| r.mogs != 4);
-    assert_eq!(window_plan(&no4).0, WindowPlan::OverlayPerDisplay);
+    assert_eq!(window_plan(&no4).0, WindowPlan::Undecided);
+
+    // N=1 is over 250 MB: 4 MOGs do not fit, even with small steps.
+    let mut big1 = cap4.clone();
+    big1.rss = vec![rss(1, 251), rss(4, 251 + 3 * 30), rss(8, 251 + 7 * 30)];
+    assert_eq!(window_plan(&big1).0, WindowPlan::OverlayPerDisplay);
 
     // A cap does not stop focus steals.
     let mut steals = s.clone();
@@ -562,6 +575,26 @@ fn sec_16b_samples_and_imports_hold_only_numbers() {
 }
 
 #[test]
+fn at_21_sample_file_from_powershell_utf16_or_a_bom_decodes() {
+    let text = to_csv(&demo_samples());
+    let mut le = vec![0xFF, 0xFE];
+    le.extend(text.encode_utf16().flat_map(u16::to_le_bytes));
+    let mut be = vec![0xFE, 0xFF];
+    be.extend(text.encode_utf16().flat_map(u16::to_be_bytes));
+    let mut bom = vec![0xEF, 0xBB, 0xBF];
+    bom.extend(text.as_bytes());
+    for bytes in [le, be, bom, text.as_bytes().to_vec()] {
+        let decoded = decode_text(&bytes).unwrap();
+        assert_eq!(parse_csv(&decoded).unwrap(), demo_samples());
+    }
+    assert!(
+        decode_text(&[0xFF, 0xFE, 0x41]).is_err(),
+        "odd UTF-16 length"
+    );
+    assert!(decode_text(&[0xC3, 0x28]).is_err(), "bad UTF-8");
+}
+
+#[test]
 fn at_21_ps_and_tasklist_snapshots_sum_the_rss_of_bottle_processes() {
     let mac = ProcessFilter::names(&[
         "Bottle",
@@ -671,8 +704,8 @@ fn at_21_device_resource_samples_meet_the_budgets() {
         );
         return;
     };
-    let mut s = parse_csv(&std::fs::read_to_string(&path).expect("read the sample file"))
-        .expect("valid sample file");
+    let bytes = std::fs::read(&path).expect("read the sample file");
+    let mut s = parse_csv(&decode_text(&bytes).expect("text file")).expect("valid sample file");
     if let Some(bench) = env(ENV_SP04_BENCH) {
         let text = std::fs::read_to_string(&bench).expect("read the SP-04 bench output");
         s.parakeet = Some(parse_sp04_bench(&text).expect("SP-04 bench output"));
