@@ -393,8 +393,13 @@ fn arc_6_rule_6_contract_fails_a_policy_that_echoes_pages() {
 #[test]
 fn arc_6_egress_contract_covers_rules_2_3_and_6() {
     assert_eq!(egress_policy::CONTRACT_RULES, [2, 3, 6]);
-    // TODO(#207): run `egress_policy::contract_violations` against `http_policy::TokenPolicy`
-    // through a small adapter once #256 merges, and assert that it returns no violation.
+}
+
+#[test]
+fn arc_6_sec_04a_sec_04b_sec_05a_http_policy_passes_the_egress_contract() {
+    // #207: the shipped policy (`http_policy::TokenPolicy` through the adapter) has no violation.
+    let v = egress_policy::contract_violations(&egress_policy::HttpPolicyEgress);
+    assert!(v.is_empty(), "contract violations: {v:?}");
 }
 
 // ---------- rule 1: no command takes a URL ----------

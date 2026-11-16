@@ -17,3 +17,5 @@ pub use error::PolicyError;
 pub use execute::{execute, Attempt, ExecuteOutcome, OutboundRequest, RawResponse, MAX_ATTEMPTS};
 pub use host::{RedirectDecision, TokenPolicy, TokenTarget, DATABRICKS_DOMAINS, MAX_REDIRECTS};
 pub use response::{classify_response, ResponseClass, PROXY_PAGE_CARD_TEXT, PROXY_PAGE_CODE};
+/// The URL type that [`TokenPolicy::check_redirect`] takes, so callers need no own `url` version.
+pub use url::Url;

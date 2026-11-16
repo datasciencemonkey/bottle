@@ -14,7 +14,8 @@ const ID: &str = "R7";
 /// (SEC-06a). This trait method takes no `Tags` and no call kind, so the real transport needs
 /// them from the IPC `tags` argument and a route-ID-to-[`crate::request_identity::CallKind`]
 /// map: a trait change through the contract owner. TODO(#197): no issue owns the reqwest
-/// wiring yet (#207 / PR #256 owns only the host policy and lists SEC-06a/b out of scope).
+/// wiring yet. The host policy is done (#207): every token, redirect and reply decision goes
+/// through [`crate::egress_policy::HttpPolicyEgress`].
 pub trait HttpTransport: Send + Sync {
     /// Send one request on a fixed route ID for `profile` and return the JSON reply.
     fn request(
@@ -38,12 +39,12 @@ impl HttpTransport for StubHttpTransport {
         _route_id: &str,
         _body: Option<&serde_json::Value>,
     ) -> CoreResult<serde_json::Value> {
-        // TODO(#207): host allowlist, redirect and non-JSON page rules (rate bucket is #138).
+        // TODO(#197): send with reqwest; decide each case with `HttpPolicyEgress` (rate bucket is #138).
         Err(CoreError::NotImplemented { component: ID })
     }
 
     fn is_online(&self) -> CoreResult<bool> {
-        // TODO(#207): online/offline detection.
+        // TODO(#197): online/offline detection (ARC-F7; no issue owns it yet).
         Err(CoreError::NotImplemented { component: ID })
     }
 }
