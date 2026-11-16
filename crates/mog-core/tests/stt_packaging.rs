@@ -461,7 +461,7 @@ fn cap_50b_the_core_does_not_link_sherpa_onnx_without_the_local_stt_feature() {
 }
 
 #[test]
-fn cap_49_errors_are_content_free_codes() {
+fn cap_49a_cap_49c_errors_are_content_free_codes() {
     for (err, code) in [
         (InstallError::ConsentRequired, "stt_consent_required"),
         (InstallError::UrlNotAllowed, "stt_url_not_allowed"),
