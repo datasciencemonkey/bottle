@@ -1,5 +1,5 @@
 /**
- * WebView lockdown inspection for #208 (ADR 0020): SEC-07a, SEC-07b (AT-17) and the CSP half of
+ * WebView lockdown inspection for #208 (ADR 0021): SEC-07a, SEC-07b (AT-17) and the CSP half of
  * SEC-20a (AT-37). Each check runs on the repo and on bad fixtures, so a bad config fails it.
  */
 import { readFileSync, readdirSync } from 'node:fs';

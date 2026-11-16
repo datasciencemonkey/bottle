@@ -1,5 +1,5 @@
 /**
- * WebView lockdown inspection for #208 (ADR 0020).
+ * WebView lockdown inspection for #208 (ADR 0021).
  * SEC-07a and SEC-07b are inspection rows (AT-17): these pure functions read the CSP, the
  * capability files, the Cargo and npm manifests and the Rust sources as text, and return a list
  * of problems. An empty list is a pass. `webview-lockdown.test.ts` runs them on the repo and on

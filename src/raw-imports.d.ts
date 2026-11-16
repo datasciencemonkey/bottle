@@ -4,7 +4,7 @@ declare module '*.md?raw' {
   export default text;
 }
 
-/** Vite `?url` imports give the bundled file's URL on the app origin (the Rive wasm, ADR 0020). */
+/** Vite `?url` imports give the bundled file's URL on the app origin (the Rive wasm, ADR 0021). */
 declare module '*.wasm?url' {
   const url: string;
   export default url;

@@ -1,6 +1,6 @@
 /**
  * SEC-20a (AT-37, 4.6 rule 4): the MOG view builds Rive in one place, with the asset CDN off,
- * the runtime wasm from the bundle, and the `.riv` file from a bundled URL only (ADR 0020).
+ * the runtime wasm from the bundle, and the `.riv` file from a bundled URL only (ADR 0021).
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';

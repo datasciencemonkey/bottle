@@ -1,4 +1,4 @@
-# ADR 0020: WebView lockdown and the offline Rive loader
+# ADR 0021: WebView lockdown and the offline Rive loader
 
 - Status: Accepted
 - Date: 2026-11-16

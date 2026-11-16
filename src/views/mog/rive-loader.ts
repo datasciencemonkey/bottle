@@ -1,5 +1,5 @@
 /**
- * The one place the MOG view builds Rive (SEC-20a, 4.6 rule 4, ADR 0020).
+ * The one place the MOG view builds Rive (SEC-20a, 4.6 rule 4, ADR 0021).
  *
  * - Every instance gets `enableRiveAssetCDN: false`, so Rive never fetches a referenced asset
  *   from its CDN.
