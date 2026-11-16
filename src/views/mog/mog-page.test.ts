@@ -21,4 +21,16 @@ describe('MOG page (V2)', () => {
     const html = readFileSync(resolve(dir, '../../../mog.html'), 'utf8');
     expect(html).not.toMatch(/<style|style=/);
   });
+
+  it('[MOG-07] [UX-39a] the badges sit inside the window, over the mascot, with no background', () => {
+    const css = read('mog.css');
+    const rule = /\.badges\s*\{([^}]*)\}/.exec(css);
+    expect(rule, 'one rule for .badges').not.toBeNull();
+    expect(rule?.[1]).toMatch(/position:\s*absolute;/);
+    expect(rule?.[1]).toMatch(/bottom:\s*0;/);
+    expect(rule?.[1]).toMatch(/z-index:\s*1;/);
+    // Text on any desktop: a shadow, not a fill (MOG-01a keeps the page transparent).
+    expect(css).toMatch(/\.badges [^{]*\{[^}]*text-shadow:/);
+    expect(read('MogView.tsx')).toMatch(/className="badges"/);
+  });
 });

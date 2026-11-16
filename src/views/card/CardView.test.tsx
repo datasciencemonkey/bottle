@@ -205,4 +205,19 @@ describe('V3 card view', () => {
       { mogId: ID, kind: 'hover', payload: { blurbId: 'b2', on: false, via: 'focus' } },
     ]);
   });
+
+  it('[UX-38] [AT-36] the card footer shows the STT badge the brain sends', async () => {
+    const { el } = await mountCard(<CardView mogId={ID} />);
+    await tauri.emit('card:update', { ...update, sttBadge: 'STT: Databricks m1' });
+    const footer = el.querySelector('footer [data-badge="stt"]') as HTMLElement;
+    expect(footer.textContent).toBe('STT: Databricks m1');
+    await tauri.emit('card:update', update);
+    expect(el.querySelector('[data-badge="stt"]')).toBeNull();
+  });
+
+  it('[UX-38] drops a card update with a non-text STT badge', async () => {
+    const { el } = await mountCard(<CardView mogId={ID} />);
+    await tauri.emit('card:update', { ...update, sttBadge: 42 });
+    expect(el.textContent).not.toContain('Revenue');
+  });
 });

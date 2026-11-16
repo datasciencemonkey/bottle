@@ -25,6 +25,8 @@ export interface CardStackUpdate {
   blurbs: CardBlurb[];
   historyCount: number;
   chips: { id: string; label: string }[];
+  /** The STT badge of the card footer (UX-38), from `sttBadgeText` (ADR 0029). */
+  sttBadge?: string;
 }
 
 /** Run `fn` at monotonic time `atMs`. Returns a cancel function. */
@@ -43,6 +45,8 @@ export interface CardStack {
   complete(blurbId: string): void;
   /** Card input from `view_emit` (`hover`, `click`). Malformed input is dropped. */
   input(kind: ViewEmitKind, payload: unknown): void;
+  /** UX-38: set the footer STT badge. TODO(#52): call it with the provider of each Transcript. */
+  setSttBadge(text: string | undefined): void;
   dispose(): void;
 }
 
@@ -78,10 +82,13 @@ export function createCardStack(
   const stack = new BlurbStack(settings);
   let cancel: (() => void) | undefined;
   let armedAt: number | undefined;
+  let sttBadge: string | undefined;
 
   const publish = () => {
     const v = stack.view();
-    void deps.send({ mogId, blurbs: v.blurbs, historyCount: v.historyCount, chips: [] });
+    const u: CardStackUpdate = { mogId, blurbs: v.blurbs, historyCount: v.historyCount, chips: [] };
+    if (sttBadge !== undefined) u.sttBadge = sttBadge;
+    void deps.send(u);
   };
 
   const arm = () => {
@@ -123,6 +130,11 @@ export function createCardStack(
       }
       const pinned = stack.view().blurbs.find((b) => b.id === i.entryId)?.pinned;
       if (pinned ? stack.unpin(i.entryId, now) : stack.pin(i.entryId)) changed();
+    },
+    setSttBadge(text) {
+      if (text === sttBadge) return;
+      sttBadge = text;
+      publish();
     },
     dispose() {
       cancel?.();
