@@ -3,9 +3,11 @@
  * `research/final-requirements.md`, so a change there makes this test fail until the file follows.
  */
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { join, relative, resolve, sep } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
+/** A repo-relative path with POSIX separators, so the keys match on Windows too (#366). */
+const rel = (f: string): string => relative(root, f).split(sep).join('/');
 const NOTICES_PATH = resolve(root, 'THIRD_PARTY_NOTICES.md');
 const requirements = readFileSync(resolve(root, 'research/final-requirements.md'), 'utf8');
 
@@ -293,7 +295,7 @@ describe('ported and adapted file headers', () => {
 
   it('[SEC-21a] every ported file keeps the antigravity MIT header', () => {
     const problems = scannedFiles()
-      .map((f) => [relative(root, f), portedFileProblem(readFileSync(f, 'utf8'), MIT_HEADER)])
+      .map((f) => [rel(f), portedFileProblem(readFileSync(f, 'utf8'), MIT_HEADER)])
       .filter(([, p]) => p !== null);
     expect(problems).toEqual([]);
   });
@@ -306,8 +308,8 @@ describe('ported and adapted file headers', () => {
     for (const f of scannedFiles()) {
       const h = handyHeader(readFileSync(f, 'utf8'));
       if (!h) continue;
-      if ('error' in h) errors.push(`${relative(root, f)}: ${h.error}`);
-      else found.set(relative(root, f), h.path);
+      if ('error' in h) errors.push(`${rel(f)}: ${h.error}`);
+      else found.set(rel(f), h.path);
     }
     expect(errors).toEqual([]);
     expect(Object.fromEntries(found)).toEqual(Object.fromEntries(listed));
