@@ -33,6 +33,28 @@ pub enum CoreError {
         /// The stable, content-free code from `ipc_gateway::ERROR_CODES`.
         code: &'static str,
     },
+    /// R10 could not open or use the local store (I/O, wrong key, not a database). No detail is
+    /// kept, because a SQLite message can hold SQL or content.
+    StoreUnavailable {
+        /// The component ID, for example `"R10"`.
+        component: &'static str,
+    },
+    /// The OS key store has no local key, but a database file exists (MEM-09a). R10 does not
+    /// delete the file (U9); MemoryService decides what to do.
+    StoreKeyLost {
+        /// The component ID, for example `"R10"`.
+        component: &'static str,
+    },
+    /// The OS key store (macOS Keychain, Windows Credential Manager) failed or is missing.
+    KeychainUnavailable {
+        /// The component ID, for example `"R10"`.
+        component: &'static str,
+    },
+    /// A local store statement or its parameters have no `mog_id` filter (MEM-01).
+    MogIdRequired {
+        /// The component ID, for example `"R10"`.
+        component: &'static str,
+    },
 }
 
 impl CoreError {
@@ -43,6 +65,10 @@ impl CoreError {
             CoreError::TokenCommandRefused { .. } => "token_command_refused",
             CoreError::Unavailable { reason, .. } => reason,
             CoreError::IpcRefused { code } => code,
+            CoreError::StoreUnavailable { .. } => "store_unavailable",
+            CoreError::StoreKeyLost { .. } => "store_key_lost",
+            CoreError::KeychainUnavailable { .. } => "keychain_unavailable",
+            CoreError::MogIdRequired { .. } => "mog_id_required",
         }
     }
 }
@@ -60,6 +86,18 @@ impl fmt::Display for CoreError {
                 write!(f, "{component} is not available: {reason}")
             }
             CoreError::IpcRefused { code } => write!(f, "R12 refused the call: {code}"),
+            CoreError::StoreUnavailable { component } => {
+                write!(f, "{component} could not open or use the local store")
+            }
+            CoreError::StoreKeyLost { component } => {
+                write!(f, "{component} has a local store but no key for it")
+            }
+            CoreError::KeychainUnavailable { component } => {
+                write!(f, "{component} could not use the OS key store")
+            }
+            CoreError::MogIdRequired { component } => {
+                write!(f, "{component} needs a mog_id filter")
+            }
         }
     }
 }

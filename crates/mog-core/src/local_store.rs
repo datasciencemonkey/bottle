@@ -4,6 +4,14 @@
 
 use crate::error::{CoreError, CoreResult};
 
+pub mod key_vault;
+pub mod mog_guard;
+mod store;
+#[cfg(test)]
+mod tests;
+
+pub use store::{SqlCipherLocalStore, DB_FILE_NAME};
+
 const ID: &str = "R10";
 
 /// The encrypted local memory store. Callers run fixed statements by ID, never raw SQL.
