@@ -39,3 +39,5 @@ impl LocalStore for StubLocalStore {
         Err(CoreError::NotImplemented { component: ID })
     }
 }
+#[cfg(test)]
+mod catalog_tests;
