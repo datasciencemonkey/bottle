@@ -1,5 +1,5 @@
 /**
- * The chip row of the card (UX-20a, UX-20b, UX-20c) and the chip catalogue (Appendix E, ADR 0032).
+ * The chip row of the card (UX-20a, UX-20b, UX-20c) and the chip catalogue (Appendix E, ADR 0043).
  *
  * - UX-20a: the row shows 4 chips or less. A 5th chip, and later ones, go to the expanded card.
  * - UX-20b: each chip has a text label. A label with no letter or digit (an icon only) is refused.

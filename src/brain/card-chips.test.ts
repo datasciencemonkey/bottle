@@ -62,8 +62,74 @@ describe('card chip row', () => {
     );
   });
 
-  it('[UX-20a] the catalogue has the 24 chips of Appendix E', () => {
+  it('[UX-20a] the catalogue has the 24 chips of Appendix E, each with its expiry rule', () => {
+    const rule = (k: keyof typeof CHIP_CATALOGUE) => {
+      const d = CHIP_CATALOGUE[k];
+      return { ttlMs: d.ttlMs, newer: d.newer, onOpen: d.onOpen };
+    };
     expect(Object.keys(CHIP_CATALOGUE)).toHaveLength(24);
+    const timed = Object.entries(CHIP_CATALOGUE)
+      .filter(([, d]) => d.ttlMs !== undefined)
+      .map(([k, d]) => [k, d.ttlMs]);
+    expect(Object.fromEntries(timed)).toEqual({
+      ask_genie: 120 * S,
+      saved_to_memory: 8 * S,
+      synced_to_home: 8 * S,
+      genie_finished: 24 * 3600 * S,
+      meeting_may_have_ended: 600 * S,
+      switch_profile: 30 * S,
+      send_summary: 24 * 3600 * S,
+      copy: 30 * S,
+      draft_page: 24 * 3600 * S,
+    });
+    expect(rule('ask_genie').newer).toBe(3);
+    expect(rule('genie_finished').onOpen).toBe(true);
+    const noTtl = Object.entries(CHIP_CATALOGUE)
+      .filter(([, d]) => d.ttlMs === undefined)
+      .map(([k]) => k)
+      .sort();
+    expect(noTtl).toEqual(
+      [
+        'ask_genie_anyway',
+        'context_included',
+        'resend_without_context',
+        'genie_busy',
+        'sign_in',
+        'show_admin_checklist',
+        'keep_recording',
+        'still_recording',
+        'choose_profile',
+        'clarify_answer',
+        'new_topic',
+        'check_again',
+        'sync_paused',
+        'stt_badge',
+        'select_send',
+      ].sort(),
+    );
+  });
+
+  it.each(['genie_busy', 'keep_recording', 'still_recording'] as const)(
+    '[UX-20a] %s has no time limit: the caller removes it when its condition ends',
+    (kind) => {
+      const row = new ChipRow();
+      row.offer(chip('x', kind, 'Some label'), 0);
+      expect(row.nextDeadline()).toBeUndefined();
+      expect(row.tick(10 ** 13)).toEqual([]);
+      expect(row.remove('x')).toBe(true);
+      expect(row.view().chips).toEqual([]);
+    },
+  );
+
+  it('[UX-20a] the same ID offered again does not count as a newer chip for Ask Genie', () => {
+    const row = new ChipRow();
+    row.offer(chip('q', 'ask_genie', 'Ask Genie'), 0);
+    row.offer(chip('n1', 'saved_to_memory', 'Saved to memory'), 1);
+    for (let i = 0; i < 5; i++) row.offer(chip('n1', 'saved_to_memory', 'Saved to memory'), 2 + i);
+    row.offer(chip('n2', 'show_admin_checklist', 'Show admin checklist'), 10);
+    expect(row.view().chips.map((c) => c.id)).toContain('q');
+    row.offer(chip('n3', 'show_admin_checklist', 'Show admin checklist 2'), 11);
+    expect(row.view().chips.map((c) => c.id)).not.toContain('q');
   });
 
   it('[UX-20a] badges are not chips: the STT badge and the sync paused badge are refused', () => {

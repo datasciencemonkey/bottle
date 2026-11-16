@@ -1,5 +1,5 @@
 /**
- * The expanded card sections (UX-18, Table UX-EXP, ADR 0032). The brain builds the list and the
+ * The expanded card sections (UX-18, Table UX-EXP, ADR 0043). The brain builds the list and the
  * view renders it in the order it gets (ARC-2). The order is fixed: full answer, key numbers,
  * SQL (collapsed), table preview, "Sent to Genie", "Resend without context", Copy as Markdown or
  * CSV, footer, "Where your data goes". A section with no content is left out. The footer and

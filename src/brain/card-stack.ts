@@ -5,7 +5,7 @@
  * TODO(#285): the brain's `view_emit` handler routes the card's `hover` and `click` input to
  * `input()`, and the `card.update` payload type moves to the contract.
  * TODO(#77): the settings come from `mog.card.maxBlurbs` and `mog.card.autoHideSec` in the store.
- * TODO(#86): blurb templates. Chips and expanded sections: #89, ADR 0032.
+ * TODO(#86): blurb templates. Chips and expanded sections: #89, ADR 0043.
  */
 import type { MogId } from '../shared/interfaces';
 import type { ViewEmitKind } from '../shared/ipc';
