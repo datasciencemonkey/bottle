@@ -152,6 +152,10 @@ impl InsertHost for MacInsertHost {
             .collect())
     }
 
+    fn is_concealed(&self, _snapshot: &MacSnapshot) -> bool {
+        false
+    }
+
     fn write_concealed(&self, text: &str) -> CoreResult<()> {
         ClipboardWriter::new(MacPasteboard).write_text_for(ClipboardPlatform::MacOs, text)
     }

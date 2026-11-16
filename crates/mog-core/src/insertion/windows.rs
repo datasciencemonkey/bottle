@@ -225,6 +225,10 @@ impl InsertHost for WindowsInsertHost {
         Ok(saved)
     }
 
+    fn is_concealed(&self, _snapshot: &WindowsSnapshot) -> bool {
+        false
+    }
+
     fn write_concealed(&self, text: &str) -> CoreResult<()> {
         ClipboardWriter::new(WindowsClipboard).write_text_for(ClipboardPlatform::Windows, text)
     }

@@ -89,6 +89,60 @@ pub mod win_keys {
     pub const RETURN: u16 = 0x0D;
 }
 
+/// The macOS pasteboard types that mark a secret or a short-lived item (nspasteboard.org). A
+/// password manager writes them and clears its item after some seconds.
+pub const MAC_CONCEALED_TYPES: [&str; 2] = [
+    "org.nspasteboard.ConcealedType",
+    "org.nspasteboard.TransientType",
+];
+
+/// Whether the types of a saved macOS clipboard mark it as concealed or transient (ADR 0048,
+/// decision 12). Bottle then leaves the clipboard empty instead of restoring the secret.
+pub fn mac_snapshot_is_concealed<'a>(types: impl IntoIterator<Item = &'a str>) -> bool {
+    let _ = types;
+    false
+}
+
+/// Windows: the format that keeps a clipboard monitor away from the content.
+pub const WIN_EXCLUDE_FROM_MONITOR: &str = "ExcludeClipboardContentFromMonitorProcessing";
+/// Windows: the `DWORD` format whose 0 keeps the content out of the clipboard history.
+pub const WIN_CAN_INCLUDE_IN_HISTORY: &str = "CanIncludeInClipboardHistory";
+/// Windows: the `DWORD` format whose 0 keeps the content off the cloud clipboard.
+pub const WIN_CAN_UPLOAD_TO_CLOUD: &str = "CanUploadToCloudClipboard";
+
+/// Whether the (format name, data) pairs of a saved Windows clipboard mark it as concealed
+/// (ADR 0048, decision 12): the monitor opt-out is present, or a history or cloud flag is 0.
+pub fn windows_snapshot_is_concealed<'a>(
+    formats: impl IntoIterator<Item = (&'a str, &'a [u8])>,
+) -> bool {
+    let _ = formats;
+    false
+}
+
+/// Windows edit-control constants (`WinUser.h`).
+pub mod win_edit {
+    /// `ES_PASSWORD`, in `GWL_STYLE`.
+    pub const ES_PASSWORD: u32 = 0x20;
+    /// `EM_GETPASSWORDCHAR`: a nonzero reply is the mask character of a password box.
+    pub const EM_GETPASSWORDCHAR: u32 = 0x00D2;
+    /// The class-name buffer, in UTF-16 units (a window class name has at most 256).
+    pub const CLASS_BUFFER: usize = 256;
+}
+
+/// Whether `class` is a Win32 edit control: `Edit`, `RichEdit20W`, `RichEdit50W`,
+/// `RICHEDIT60W` or a WinForms `TextBox` (`WindowsForms10.EDIT.*`). Case does not matter.
+pub fn is_windows_edit_class(class: &str) -> bool {
+    let _ = class;
+    false
+}
+
+/// The focus of a focused Win32 control, from its class name, its `GWL_STYLE` and its
+/// `EM_GETPASSWORDCHAR` reply (ADR 0048, decision 3).
+pub fn windows_control_focus(class: &str, style: u32, password_char: usize) -> Focus {
+    let _ = (class, style, password_char);
+    Focus::Field
+}
+
 /// The wait between the clipboard write and the chord (Handy `paste_delay_ms` default).
 pub const SETTLE_BEFORE_PASTE: Duration = Duration::from_millis(60);
 /// How long the modifier stays down after the V key (Handy keeps 100 ms, Handy #165).
@@ -124,14 +178,16 @@ pub fn is_enter_key(platform: ClipboardPlatform, key: u16) -> bool {
 /// The OS side of the paste. Kept behind a trait so the sequence runs in tests without a real
 /// clipboard or real key events.
 pub trait InsertHost: Send + Sync {
-    /// The saved clipboard content.
-    type Snapshot;
+    /// The saved clipboard content. The default value is an empty clipboard.
+    type Snapshot: Default;
     /// Whether the OS lets Bottle send key input to the focused app.
     fn input_permitted(&self) -> bool;
     /// What has the keyboard focus.
     fn focus(&self) -> Focus;
     /// Save the whole clipboard content (every item and type).
     fn snapshot_clipboard(&self) -> CoreResult<Self::Snapshot>;
+    /// Whether the saved content is a concealed or transient item (a password manager secret).
+    fn is_concealed(&self, snapshot: &Self::Snapshot) -> bool;
     /// Put `text` on the clipboard with the concealed and transient flags (SEC-30).
     fn write_concealed(&self, text: &str) -> CoreResult<()>;
     /// A value that changes on every clipboard change (macOS `changeCount`, Windows sequence number).
@@ -154,6 +210,9 @@ impl<H: InsertHost> InsertHost for &H {
     }
     fn snapshot_clipboard(&self) -> CoreResult<Self::Snapshot> {
         (**self).snapshot_clipboard()
+    }
+    fn is_concealed(&self, snapshot: &Self::Snapshot) -> bool {
+        (**self).is_concealed(snapshot)
     }
     fn write_concealed(&self, text: &str) -> CoreResult<()> {
         (**self).write_concealed(text)
@@ -290,6 +349,8 @@ mod tests {
         fail_keys: bool,
         /// Simulates the user copying "newer" during the restore wait.
         user_copies_during_wait: bool,
+        /// The earlier clipboard is a password manager item (concealed or transient).
+        concealed: bool,
     }
 
     impl Fake {
@@ -303,6 +364,7 @@ mod tests {
                 fail_write: false,
                 fail_keys: false,
                 user_copies_during_wait: false,
+                concealed: false,
             }
         }
         fn log(&self) -> Vec<Ev> {
@@ -334,6 +396,9 @@ mod tests {
         fn snapshot_clipboard(&self) -> CoreResult<String> {
             self.log.lock().unwrap().push(Ev::Snapshot);
             Ok(self.clip())
+        }
+        fn is_concealed(&self, snapshot: &String) -> bool {
+            self.concealed && !snapshot.is_empty()
         }
         fn write_concealed(&self, text: &str) -> CoreResult<()> {
             self.log.lock().unwrap().push(Ev::Write(text.to_owned()));
@@ -582,5 +647,105 @@ mod tests {
         let err = c.call("insert_text", args).unwrap_err();
         assert_eq!(err.code(), "host_failed");
         assert!(!err.to_string().contains("secret"));
+    }
+
+    #[test]
+    fn mog_06c_a_concealed_clipboard_is_left_empty_not_restored() {
+        for p in BOTH {
+            let mut f = Fake::new("pw-from-manager");
+            f.concealed = true;
+            assert_eq!(
+                insert_text(&f, p, "hello").unwrap(),
+                InsertOutcome::Inserted
+            );
+            assert_eq!(f.clip(), "", "{p:?}");
+            assert!(
+                !f.log().contains(&Ev::Restore("pw-from-manager".into())),
+                "{p:?}: {:?}",
+                f.log()
+            );
+        }
+    }
+
+    #[test]
+    fn mog_06c_a_concealed_clipboard_stays_empty_when_the_write_fails() {
+        let mut f = Fake::new("pw-from-manager");
+        f.concealed = true;
+        f.fail_write = true;
+        assert!(insert_text(&f, ClipboardPlatform::MacOs, "hello").is_err());
+        assert_eq!(f.clip(), "");
+    }
+
+    #[test]
+    fn mog_06c_mac_concealed_or_transient_types_mark_a_secret() {
+        let manager = ["public.utf8-plain-text", "org.nspasteboard.ConcealedType"];
+        assert!(mac_snapshot_is_concealed(manager));
+        let transient = ["public.utf8-plain-text", "org.nspasteboard.TransientType"];
+        assert!(mac_snapshot_is_concealed(transient));
+        let plain = ["public.utf8-plain-text", "public.html"];
+        assert!(!mac_snapshot_is_concealed(plain));
+        assert!(!mac_snapshot_is_concealed([]));
+    }
+
+    #[test]
+    fn mog_06c_windows_monitor_or_history_opt_outs_mark_a_secret() {
+        let text: &[u8] = &[b'p', 0, b'w', 0, 0, 0];
+        let zero: &[u8] = &[0, 0, 0, 0];
+        let one: &[u8] = &[1, 0, 0, 0];
+        assert!(windows_snapshot_is_concealed([
+            ("CF_UNICODETEXT", text),
+            (WIN_EXCLUDE_FROM_MONITOR, &[][..]),
+        ]));
+        assert!(windows_snapshot_is_concealed([
+            ("CF_UNICODETEXT", text),
+            (WIN_CAN_INCLUDE_IN_HISTORY, zero),
+        ]));
+        assert!(windows_snapshot_is_concealed([
+            ("CF_UNICODETEXT", text),
+            (WIN_CAN_UPLOAD_TO_CLOUD, zero),
+        ]));
+        // A flag of 1 allows the history and the cloud: the content is not a secret.
+        assert!(!windows_snapshot_is_concealed([
+            ("CF_UNICODETEXT", text),
+            (WIN_CAN_INCLUDE_IN_HISTORY, one),
+            (WIN_CAN_UPLOAD_TO_CLOUD, one),
+        ]));
+        assert!(!windows_snapshot_is_concealed([("CF_UNICODETEXT", text)]));
+    }
+
+    #[test]
+    fn mog_06a_windows_edit_classes_include_rich_edit_and_winforms() {
+        for c in [
+            "Edit",
+            "EDIT",
+            "RichEdit20W",
+            "RichEdit50W",
+            "RICHEDIT60W",
+            "WindowsForms10.EDIT.app.0.141b42a_r6_ad1",
+        ] {
+            assert!(is_windows_edit_class(c), "{c}");
+        }
+        for c in ["Button", "Chrome_RenderWidgetHostHWND", "WindowsForms10.BUTTON.app.0.1"] {
+            assert!(!is_windows_edit_class(c), "{c}");
+        }
+    }
+
+    #[test]
+    fn mog_06a_windows_password_box_is_a_secure_field_by_style_or_mask_char() {
+        use win_edit::ES_PASSWORD;
+        let winforms = "WindowsForms10.EDIT.app.0.141b42a_r6_ad1";
+        for class in ["Edit", "RichEdit50W", winforms, "SomeOwnerDrawnEdit"] {
+            assert_eq!(
+                windows_control_focus(class, ES_PASSWORD, 0),
+                Focus::SecureField,
+                "{class} style"
+            );
+            assert_eq!(
+                windows_control_focus(class, 0, usize::from(b'*')),
+                Focus::SecureField,
+                "{class} mask char"
+            );
+            assert_eq!(windows_control_focus(class, 0, 0), Focus::Field, "{class}");
+        }
     }
 }
