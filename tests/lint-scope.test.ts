@@ -1,14 +1,16 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import eslintConfig from '../eslint.config.js';
-
 const root = resolve(import.meta.dirname, '..');
 const prettierIgnore = readFileSync(resolve(root, '.prettierignore'), 'utf8')
   .split('\n')
   .map((l) => l.trim())
   .filter((l) => l !== '' && !l.startsWith('#'));
-const eslintIgnores = (eslintConfig as { ignores?: string[] }[]).flatMap((c) => c.ignores ?? []);
+// The first `ignores: [...]` block of eslint.config.js, read as text (the config file has no types).
+const eslintText = readFileSync(resolve(root, 'eslint.config.js'), 'utf8');
+const eslintIgnores = [
+  ...(/ignores:\s*\[([^\]]*)\]/.exec(eslintText)?.[1] ?? '').matchAll(/'([^']+)'/g),
+].map((m) => m[1] ?? '');
 
 // App code that `pnpm lint` and `pnpm format:check` must keep in scope.
 const appPaths = ['src/', 'src/brain/', 'src/views/', 'src-tauri/src/', 'crates/', 'tests/'];
