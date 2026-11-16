@@ -174,38 +174,7 @@ pub enum Handled {
 
 // ---------- shared argument types ----------
 
-pub type MogId = String;
-pub type ProfileName = String;
-
-/// Budget tags (4.7 `Tags`). TODO(#222): use the shared `types::Tags` once it lands.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Tags {
-    pub app: TagApp,
-    pub mog: MogId,
-    pub op: TagOp,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum TagApp {
-    Bottle,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum TagOp {
-    Asr,
-    Cleanup,
-    Router,
-    Writer,
-    Judge,
-    Embed,
-    Genie,
-    Merge,
-    Agent,
-    Page,
-}
+pub use crate::types::{CaptureMode, MogId, ProfileName, SessionPolicy, Tags, TranscriptProvider};
 
 /// A Tauri `Channel` argument. On the wire it is the channel reference string.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -259,19 +228,11 @@ args!(ProfileSelectArgs {
     scope: SelectScope,
 });
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum CaptureMode {
-    Ptt,
-    HandsFree,
-    Session,
-}
 args!(CaptureStartArgs {
     mog_id: MogId,
     mode: CaptureMode,
-    /// `SessionPolicy` of 4.7. TODO(#222): use the shared type.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    policy: Option<JsonObject>,
+    policy: Option<SessionPolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     consent_token: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -295,16 +256,9 @@ args!(SessionAttestArgs {
     notice_version: u32,
 });
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum SttProviderKind {
-    LocalParakeet,
-    DbxGemini,
-    DbxWhisper,
-}
 args!(SttTranscribeArgs {
     segment_id: String,
-    provider: SttProviderKind,
+    provider: TranscriptProvider,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     profile: Option<ProfileName>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

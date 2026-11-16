@@ -9,6 +9,17 @@
  * carry a token, a header or a request URL (ARC-6).
  */
 import { Channel, invoke } from '@tauri-apps/api/core';
+import type {
+  CaptureMode,
+  CaptureState,
+  MogId,
+  ProfileInfo,
+  ProfileName,
+  SessionPolicy,
+  Tags,
+  TokenStatus,
+  Transcript,
+} from './interfaces';
 
 export type WindowClass = 'brain' | 'hub' | 'mog' | 'card';
 export type IpcPhase = 'MVP-D' | 'v1';
@@ -86,24 +97,6 @@ export type EventName = (typeof EVENTS)[keyof typeof EVENTS]['name'];
 
 // ---------- argument types (camelCase, as Rust serializes them) ----------
 
-export type MogId = string;
-export type ProfileName = string;
-/** 4.7 `Tags`. TODO(#222): import from `./interfaces` once it lands. */
-export interface IpcTags {
-  app: 'bottle';
-  mog: MogId;
-  op:
-    | 'asr'
-    | 'cleanup'
-    | 'router'
-    | 'writer'
-    | 'judge'
-    | 'embed'
-    | 'genie'
-    | 'merge'
-    | 'agent'
-    | 'page';
-}
 export type JsonObject = Record<string, unknown>;
 export type NoArgs = Record<string, never>;
 
@@ -145,8 +138,8 @@ export interface CommandArgs {
   profile_select: { mogId: MogId; profile: ProfileName; scope: 'question' | 'session' };
   capture_start: {
     mogId: MogId;
-    mode: 'ptt' | 'hands_free' | 'session';
-    policy?: JsonObject;
+    mode: CaptureMode;
+    policy?: SessionPolicy;
     consentToken?: string;
     othersTrack?: boolean;
   };
@@ -158,11 +151,11 @@ export interface CommandArgs {
   session_attest: { mogId: MogId; kind: 'only_me' | 'others_agreed'; noticeVersion: number };
   stt_transcribe: {
     segmentId: string;
-    provider: 'local_parakeet' | 'dbx_gemini' | 'dbx_whisper';
+    provider: Transcript['provider'];
     profile?: ProfileName;
     model?: string;
     language?: string;
-    tags: IpcTags;
+    tags: Tags;
   };
   insert_text: { mogId: MogId; text: string };
   agent_start: { mogId: MogId; harness: 'claude' | 'codex'; model?: string };
@@ -174,7 +167,7 @@ export interface CommandArgs {
     profile: ProfileName;
     request: JsonObject;
     deadlineMs?: number;
-    tags: IpcTags;
+    tags: Tags;
   };
   mcp_call: {
     profile: ProfileName;
@@ -183,7 +176,7 @@ export interface CommandArgs {
     args: JsonObject;
     meta?: JsonObject;
     opId: string;
-    tags: IpcTags;
+    tags: Tags;
     timeoutMs?: number;
   };
   dbx_http: {
@@ -192,7 +185,7 @@ export interface CommandArgs {
     params: JsonObject;
     body?: unknown;
     stream?: Channel<unknown>;
-    tags: IpcTags;
+    tags: Tags;
   };
   mem_local_exec: { stmtId: string; params: JsonObject };
   mem_remote_exec: { stmtId: string; params: JsonObject };
@@ -223,10 +216,65 @@ export type IpcError =
   | { error: 'invalid_args'; command: string; reason: string }
   | { error: 'not_implemented'; command: string };
 
-/**
- * Call a command. Return types follow 4.5 and land with each feature issue.
- * TODO(#222): type the returns with the shared 4.7 interfaces.
- */
-export function call<K extends CommandName>(name: K, args: CommandArgs[K]): Promise<unknown> {
-  return invoke(name, { args });
+type Empty = Record<string, never>;
+
+/** Return types of 4.5. `unknown` where a feature issue still defines the shape. */
+export interface CommandReturns {
+  cli_status: { path: string; version: string; found: boolean; plaintextStorage: boolean };
+  cli_install: { path: string; version: string; found: boolean; plaintextStorage: boolean };
+  profiles_list: ProfileInfo[];
+  profile_status: TokenStatus;
+  profile_login: { loginId: string };
+  profile_select: Empty;
+  capture_start: CaptureState;
+  capture_stop: CaptureState;
+  capture_pause: CaptureState;
+  capture_status: CaptureState;
+  capture_stop_all: CaptureState;
+  capture_subscribe: Empty;
+  session_attest: { consentToken: string };
+  stt_transcribe: Transcript;
+  insert_text: { result: 'inserted' | 'no_permission' | 'no_focus' | 'secure_field' };
+  agent_start: { agentSessionId: string };
+  agent_stop: Empty;
+  agent_send: Empty;
+  agent_tool_result: Empty;
+  model_invoke: { json: unknown };
+  mcp_call: {
+    structuredContent: unknown;
+    text: string;
+    isError: boolean;
+    httpStatus: number;
+    rpcError?: unknown;
+  };
+  dbx_http: { status: number; json?: unknown };
+  mem_local_exec: { rows: unknown[] };
+  mem_remote_exec: { rows: unknown[] };
+  mem_remote_status: {
+    endpoint: string;
+    state: 'ready' | 'cold' | 'auth_error' | 'unreachable';
+    lastOkAt?: string;
+  };
+  config_list: unknown;
+  config_read: unknown;
+  config_write: unknown;
+  config_delete: unknown;
+  policy_get: unknown;
+  hotkeys_set: { conflicts: unknown[] };
+  mog_set_active: Empty;
+  window_mog_open: Empty;
+  window_mog_close: Empty;
+  window_card_show: Empty;
+  window_card_hide: Empty;
+  view_emit: Empty;
+  audit_append: Empty;
+  telemetry_span: Empty;
+}
+
+/** Call a command. The gateway rejects it with an `IpcError` until its feature issue lands. */
+export function call<K extends CommandName>(
+  name: K,
+  args: CommandArgs[K],
+): Promise<CommandReturns[K]> {
+  return invoke<CommandReturns[K]>(name, { args });
 }

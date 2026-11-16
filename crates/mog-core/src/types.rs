@@ -10,6 +10,7 @@
 //! ARC-6: none of these types holds a token or another credential, so `Debug` output is
 //! safe to log.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// A MOG id (uuid v4).
@@ -18,7 +19,7 @@ pub type MogId = String;
 pub type ProfileName = String;
 
 /// The 7 moods of the mascot (4.8).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Mood {
     Idle,
@@ -31,7 +32,7 @@ pub enum Mood {
 }
 
 /// The audio track of a segment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Track {
     You,
@@ -39,14 +40,14 @@ pub enum Track {
 }
 
 /// `Tags.app`: always `"bottle"`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum TagApp {
     Bottle,
 }
 
 /// `Tags.op`: the operation a call belongs to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum TagOp {
     Asr,
@@ -62,7 +63,7 @@ pub enum TagOp {
 }
 
 /// Request tags.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Tags {
     pub app: TagApp,
@@ -71,7 +72,7 @@ pub struct Tags {
 }
 
 /// The capture mode (D53, D54, D63).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CaptureMode {
     Ptt,
@@ -81,7 +82,7 @@ pub enum CaptureMode {
 
 /// Session limits. In TS every field except `hard_cap_min` is a fixed literal
 /// (55, 60, 30, 5, 15, 10, 120, 5); `hard_cap_min` is 60..480, default 240.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionPolicy {
     pub check_in_at_min: u32,
@@ -96,7 +97,7 @@ pub struct SessionPolicy {
 }
 
 /// `CaptureState.othersTrack`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum OthersTrack {
     Off,
@@ -105,7 +106,7 @@ pub enum OthersTrack {
 }
 
 /// The `capture.state` event payload.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CaptureState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -125,7 +126,7 @@ pub struct CaptureState {
 }
 
 /// The `capture.segment` event payload.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SegmentRef {
     pub segment_id: String,
@@ -142,7 +143,7 @@ pub struct SegmentRef {
 }
 
 /// `Transcript.provider`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TranscriptProvider {
     LocalParakeet,
@@ -151,7 +152,7 @@ pub enum TranscriptProvider {
 }
 
 /// The result of `stt_transcribe`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Transcript {
     pub segment_id: String,
@@ -166,7 +167,7 @@ pub struct Transcript {
 }
 
 /// A Databricks CLI profile (D10, D39).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Profile {
     pub name: ProfileName,
@@ -181,7 +182,7 @@ pub struct Profile {
 pub type ProfileInfo = Profile;
 
 /// `TokenStatus.state`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TokenState {
     Valid,
@@ -191,7 +192,7 @@ pub enum TokenState {
 }
 
 /// The result of `profile_status` (4.5). It never holds a token (ARC-6).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TokenStatus {
     pub profile: ProfileName,
@@ -201,7 +202,7 @@ pub struct TokenStatus {
 }
 
 /// The router intent (`dictation` = UC1, B5).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Intent {
     Question,
@@ -213,7 +214,7 @@ pub enum Intent {
 }
 
 /// `RouterDecision.command`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RouterCommand {
     None,
@@ -231,7 +232,7 @@ pub enum RouterCommand {
 
 /// The router output (D25, D30, D63; schema in Appendix D). All fields are required;
 /// `""` or `[]` means not applicable. Field names are snake_case, as in TS.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RouterDecision {
     pub intent: Intent,

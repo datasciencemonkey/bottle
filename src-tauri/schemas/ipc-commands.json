@@ -137,12 +137,76 @@
     "capture_start": {
       "$defs": {
         "CaptureMode": {
+          "description": "The capture mode (D53, D54, D63).",
           "enum": [
             "ptt",
             "hands_free",
             "session"
           ],
           "type": "string"
+        },
+        "SessionPolicy": {
+          "additionalProperties": false,
+          "description": "Session limits. In TS every field except `hard_cap_min` is a fixed literal\n(55, 60, 30, 5, 15, 10, 120, 5); `hard_cap_min` is 60..480, default 240.",
+          "properties": {
+            "checkInAtMin": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "extendMin": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "handsFreeMaxMin": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "hardCapMin": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "holdMaxSec": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "lockStopMin": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "silenceNudgeMin": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "silenceStopMin": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "softCapMin": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "checkInAtMin",
+            "softCapMin",
+            "extendMin",
+            "silenceNudgeMin",
+            "silenceStopMin",
+            "hardCapMin",
+            "lockStopMin",
+            "holdMaxSec",
+            "handsFreeMaxMin"
+          ],
+          "type": "object"
         }
       },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -167,11 +231,13 @@
           ]
         },
         "policy": {
-          "additionalProperties": true,
-          "description": "`SessionPolicy` of 4.7. TODO(#222): use the shared type.",
-          "type": [
-            "object",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionPolicy"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },
@@ -342,12 +408,14 @@
           "type": "string"
         },
         "TagApp": {
+          "description": "`Tags.app`: always `\"bottle\"`.",
           "enum": [
             "bottle"
           ],
           "type": "string"
         },
         "TagOp": {
+          "description": "`Tags.op`: the operation a call belongs to.",
           "enum": [
             "asr",
             "cleanup",
@@ -364,7 +432,7 @@
         },
         "Tags": {
           "additionalProperties": false,
-          "description": "Budget tags (4.7 `Tags`). TODO(#222): use the shared `types::Tags` once it lands.",
+          "description": "Request tags.",
           "properties": {
             "app": {
               "$ref": "#/$defs/TagApp"
@@ -463,12 +531,14 @@
           "type": "string"
         },
         "TagApp": {
+          "description": "`Tags.app`: always `\"bottle\"`.",
           "enum": [
             "bottle"
           ],
           "type": "string"
         },
         "TagOp": {
+          "description": "`Tags.op`: the operation a call belongs to.",
           "enum": [
             "asr",
             "cleanup",
@@ -485,7 +555,7 @@
         },
         "Tags": {
           "additionalProperties": false,
-          "description": "Budget tags (4.7 `Tags`). TODO(#222): use the shared `types::Tags` once it lands.",
+          "description": "Request tags.",
           "properties": {
             "app": {
               "$ref": "#/$defs/TagApp"
@@ -616,12 +686,14 @@
           "type": "string"
         },
         "TagApp": {
+          "description": "`Tags.app`: always `\"bottle\"`.",
           "enum": [
             "bottle"
           ],
           "type": "string"
         },
         "TagOp": {
+          "description": "`Tags.op`: the operation a call belongs to.",
           "enum": [
             "asr",
             "cleanup",
@@ -638,7 +710,7 @@
         },
         "Tags": {
           "additionalProperties": false,
-          "description": "Budget tags (4.7 `Tags`). TODO(#222): use the shared `types::Tags` once it lands.",
+          "description": "Request tags.",
           "properties": {
             "app": {
               "$ref": "#/$defs/TagApp"
@@ -832,21 +904,15 @@
     },
     "stt_transcribe": {
       "$defs": {
-        "SttProviderKind": {
-          "enum": [
-            "local_parakeet",
-            "dbx_gemini",
-            "dbx_whisper"
-          ],
-          "type": "string"
-        },
         "TagApp": {
+          "description": "`Tags.app`: always `\"bottle\"`.",
           "enum": [
             "bottle"
           ],
           "type": "string"
         },
         "TagOp": {
+          "description": "`Tags.op`: the operation a call belongs to.",
           "enum": [
             "asr",
             "cleanup",
@@ -863,7 +929,7 @@
         },
         "Tags": {
           "additionalProperties": false,
-          "description": "Budget tags (4.7 `Tags`). TODO(#222): use the shared `types::Tags` once it lands.",
+          "description": "Request tags.",
           "properties": {
             "app": {
               "$ref": "#/$defs/TagApp"
@@ -881,6 +947,15 @@
             "op"
           ],
           "type": "object"
+        },
+        "TranscriptProvider": {
+          "description": "`Transcript.provider`.",
+          "enum": [
+            "local_parakeet",
+            "dbx_gemini",
+            "dbx_whisper"
+          ],
+          "type": "string"
         }
       },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -905,7 +980,7 @@
           ]
         },
         "provider": {
-          "$ref": "#/$defs/SttProviderKind"
+          "$ref": "#/$defs/TranscriptProvider"
         },
         "segmentId": {
           "type": "string"
