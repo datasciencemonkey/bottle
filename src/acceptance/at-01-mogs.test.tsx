@@ -32,7 +32,7 @@ const SECRET = /dapi[0-9a-f]{16,}|eyJ[A-Za-z0-9_-]{10,}|"(token|secret|password|
 describe('AT-01 create two MOGs (TS part)', () => {
   beforeEach(() => tauri.reset());
 
-  it('[AT-01] the secret check finds token shapes and secret keys', () => {
+  it('the secret check of the pending config tests finds token shapes and secret keys', () => {
     // The check that the pending tests below use, so a config that leaks a token fails them.
     expect(SECRET.test(JSON.stringify({ mogId: A, name: 'Sales', binding: binding('p') }))).toBe(
       false,
@@ -43,11 +43,14 @@ describe('AT-01 create two MOGs (TS part)', () => {
 
   it.skip('[AT-01] [MB-01] [MB-03a] two MOG configs survive a restart and hold no secret TODO(#26)', async () => {
     const before = createMogManager();
+    // MogManager has no create yet; #26 adds it with the config shape of #25.
+    expect(typeof (before as { create?: unknown }).create).toBe('function');
     const defs: MogDefinition[] = [
       { mogId: A, name: 'Sales', binding: binding('sales-ws') },
       { mogId: B, name: 'Ops', binding: binding('ops-ws') },
     ];
-    // TODO(#26): MogManager create; the restart is a new MogManager on the same store.
+    // TODO(#26): create each definition, then start it; the restart is a new MogManager on the
+    // same store.
     for (const d of defs) await before.start(d.mogId);
     const after = await createMogManager().list();
     expect(after.map((d) => [d.mogId, d.binding.home])).toEqual([

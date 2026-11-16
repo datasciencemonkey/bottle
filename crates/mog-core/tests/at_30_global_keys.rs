@@ -37,8 +37,13 @@ use mog_core::hotkey_windows::{
     HookSignal, HookSupervisor, KeyEvent, LatencyRecorder, TalkKey as WinTalkKey, Verdict,
     CALLBACK_BUDGET, REINSTALL_INTERVAL,
 };
-use mog_core::keyboard_env::{read_keyboard_env, EnvReads};
-use mog_core::latency_bench::import::{parse_sp03_secure_input, SecureInputVerdict};
+use mog_core::keyboard_env::{
+    read_keyboard_env, CopilotKeyFlag, EnvReads, MemoryCopilotKeyFlag, WithCopilotFlag,
+};
+use mog_core::latency_bench::import::{
+    parse_sp03_secure_input, SecureInputSamples, SecureInputVerdict,
+};
+use mog_core::latency_bench::KeySampleTool;
 use mog_core::testkit::hotkey::{
     FakePermissions, RecordingSink, RecordingTapControl, ScriptedProbe, TapCall,
 };
@@ -613,6 +618,52 @@ fn at_30_cap_43b_the_os_reads_feed_the_check_and_keep_only_known_voice_apps() {
     assert!(kinds.contains(&ConflictKind::AltGr) && kinds.contains(&ConflictKind::VoiceApp));
 }
 
+#[test]
+fn at_30_cap_43b_the_hook_sees_the_copilot_key_and_the_check_flags_right_ctrl() {
+    // The Copilot key sends Win+Shift+F23; the hook watch sets the flag once (#332, ADR 0025).
+    let (tx, rx) = mpsc::channel();
+    let clock: Arc<dyn MonotonicClock> = Arc::new(SimClock::new());
+    let mut core = HookCore::new(
+        WinTalkKey::RightAlt,
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(LatencyRecorder::with_capacity(16)),
+        clock,
+        tx,
+    );
+    for ev in [
+        KeyEvent::down(vk::LWIN),
+        KeyEvent::down(vk::LSHIFT),
+        KeyEvent::down(vk::F23),
+        KeyEvent::up(vk::F23),
+        KeyEvent::up(vk::LSHIFT),
+        KeyEvent::up(vk::LWIN),
+    ] {
+        assert_eq!(core.handle(ev), Verdict::Pass, "Copilot still opens");
+    }
+    let seen: Vec<_> = rx.try_iter().collect();
+    assert_eq!(seen, vec![HookSignal::CopilotKeySeen]);
+
+    let flag: Arc<dyn CopilotKeyFlag> = Arc::new(MemoryCopilotKeyFlag::default());
+    assert!(flag.set(true));
+    let reads = WithCopilotFlag::new(
+        Box::new(LayoutReads {
+            alt_gr: false,
+            copilot: false,
+        }),
+        flag,
+    );
+    let env = read_keyboard_env(Os::Windows, &reads);
+    assert!(env.copilot_key);
+    let mut bs = default_bindings(Os::Windows);
+    bs.set(HotkeyAction::Ptt, Binding::Talk(TalkBinding::RightControl));
+    let c = hotkey_bindings::check_conflicts(Os::Windows, &bs, &env);
+    let copilot = c
+        .iter()
+        .find(|c| c.kind == ConflictKind::CopilotKey)
+        .expect("conflict");
+    assert!(copilot.message(Os::Windows).contains("Fix:"));
+}
+
 // ---------- Secure Input evidence of the device run (CAP-39a, CAP-39b) ----------
 
 const SEI_LOG: &str = "\
@@ -632,7 +683,13 @@ fn at_30_cap_39a_cap_39b_the_sp03_secure_input_log_reads_the_end_time_and_chord_
     assert_eq!(s.secure_input_starts, 1);
     assert_eq!(s.sei_to_end, vec![Duration::from_micros(10_010)]);
     assert_eq!((s.chord_presses, s.chord_releases_seen), (1, 1));
-    assert_eq!(s.verdict(), SecureInputVerdict::Within);
+    // The SP-03 probe is not the shipped HotkeyService, so its best result is partial (#323).
+    assert_eq!(s.verdict(), SecureInputVerdict::WithinProbeOnly);
+    let shipped = SecureInputSamples {
+        tool: Some(KeySampleTool::HotkeyService),
+        ..s.clone()
+    };
+    assert_eq!(shipped.verdict(), SecureInputVerdict::Within);
 
     let slow = SEI_LOG.replace(
         "upper_bound_sei_to_end_ms=10.010",
@@ -684,15 +741,16 @@ fn at_30_cap_39a_cap_39b_device_secure_keyboard_entry_during_a_hold() {
     };
     let text = std::fs::read_to_string(path.trim()).expect("read the SP-03 Secure Input log");
     let s = parse_sp03_secure_input(&text);
-    assert_eq!(s.verdict(), SecureInputVerdict::Within, "{s:?}");
+    // A probe log gives at most a partial result: TODO(#323) for the HotkeyService log.
+    assert_eq!(s.verdict(), SecureInputVerdict::WithinProbeOnly, "{s:?}");
 }
 
 /// The env variable that tells the layout test which keyboard the person set up:
-/// `altgr`, `copilot`, `altgr+copilot` or `plain`.
+/// `altgr` or `plain`. The Copilot key is not a layout read: the hook sees it (ADR 0025).
 const ENV_LAYOUT: &str = "BOTTLE_TEST_LAYOUT";
 
 #[test]
-fn at_30_cap_43b_device_altgr_and_copilot_layouts_are_read_and_flagged() {
+fn at_30_cap_43b_device_the_altgr_layout_is_read_and_flagged() {
     let device = match testkit::device_from(|k| std::env::var(k).ok()) {
         Ok(Fixture::Ready(d)) => d,
         Ok(Fixture::Skip(reason)) => {
@@ -709,22 +767,16 @@ fn at_30_cap_43b_device_altgr_and_copilot_layouts_are_read_and_flagged() {
         );
         return;
     };
-    let (alt_gr, copilot) = match layout.as_str() {
-        "altgr" => (true, false),
-        "copilot" => (false, true),
-        "altgr+copilot" => (true, true),
-        "plain" => (false, false),
-        other => panic!("{ENV_LAYOUT} must be altgr, copilot, altgr+copilot or plain, not {other}"),
+    let alt_gr = match layout.as_str() {
+        "altgr" => true,
+        "plain" => false,
+        other => panic!("{ENV_LAYOUT} must be altgr or plain, not {other}"),
     };
     let os = mog_core::keyboard_env::host_os();
     assert_eq!(os, Os::Windows, "the layout run is a Windows step");
     // The real prompt-free OS reads of #322.
     let env = read_keyboard_env(os, mog_core::keyboard_env::os_env_reads().as_ref());
-    assert_eq!(
-        (env.alt_gr_layout, env.copilot_key),
-        (alt_gr, copilot),
-        "{layout}"
-    );
+    assert_eq!(env.alt_gr_layout, alt_gr, "{layout}");
     let r = first_run_check(os, &env);
     let kinds: Vec<_> = r.conflicts.iter().map(|c| c.kind).collect();
     assert_eq!(kinds.contains(&ConflictKind::AltGr), alt_gr, "{kinds:?}");

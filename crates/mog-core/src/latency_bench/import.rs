@@ -172,8 +172,13 @@ pub struct SecureInputSamples {
 /// What the Secure Input samples show against CAP-39a (250 ms) and CAP-39b (press and release).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecureInputVerdict {
-    /// Every PTT ended in time and every chord press had its release.
+    /// Every PTT ended in time and every chord press had its release, in a log of the
+    /// HotkeyService that ships.
     Within,
+    /// The same as [`SecureInputVerdict::Within`], but the log comes from the SP-03 probe. The
+    /// probe is not the HotkeyService that ships, so the AT-30 result is at most `partial`
+    /// (the same rule as the #171 bench). TODO(#323).
+    WithinProbeOnly,
     /// A PTT ended later than [`crate::hotkey_core::SECURE_INPUT_DEADLINE`].
     Over {
         /// The slowest end.
@@ -207,7 +212,10 @@ impl SecureInputSamples {
                 releases: self.chord_releases_seen,
             };
         }
-        SecureInputVerdict::Within
+        match self.tool {
+            Some(KeySampleTool::HotkeyService) => SecureInputVerdict::Within,
+            Some(KeySampleTool::Sp03Probe) | None => SecureInputVerdict::WithinProbeOnly,
+        }
     }
 }
 
@@ -221,7 +229,8 @@ fn field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
 ///
 /// It reads `src=sei event=on`, `src=sei event=ptt_end_by_sei upper_bound_sei_to_end_ms=<ms>`
 /// and `EV src=carbon kind=down|up`. Other lines are ignored. An end time that is not a finite,
-/// non-negative number is skipped, so it cannot count as fast.
+/// non-negative number (or too large for a `Duration`) is skipped. A run with no end time is
+/// never within.
 pub fn parse_sp03_secure_input(text: &str) -> SecureInputSamples {
     let mut out = SecureInputSamples {
         tool: Some(KeySampleTool::Sp03Probe),
@@ -256,8 +265,8 @@ pub fn parse_sp03_secure_input(text: &str) -> SecureInputSamples {
                 let ms = field(line, "upper_bound_sei_to_end_ms")
                     .and_then(|v| v.parse::<f64>().ok())
                     .filter(|v| v.is_finite() && *v >= 0.0);
-                if let Some(ms) = ms {
-                    out.sei_to_end.push(Duration::from_secs_f64(ms / 1e3));
+                if let Some(d) = ms.and_then(|ms| Duration::try_from_secs_f64(ms / 1e3).ok()) {
+                    out.sei_to_end.push(d);
                 }
             }
             _ => {}

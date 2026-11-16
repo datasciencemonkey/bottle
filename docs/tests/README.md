@@ -157,7 +157,8 @@ feature issues, and the device steps. The shared parts:
   `SimClock` with no OS call and no prompt.
 - Rust: `latency_bench::import::parse_sp03_secure_input`: the Secure Input end times and the Carbon
   chord presses of an SP-03 probe log (CAP-39a, CAP-39b). Variable `BOTTLE_BENCH_SP03_SEI_LOG`.
-  The layout run reads `BOTTLE_TEST_LAYOUT` (`altgr`, `copilot`, `altgr+copilot`, `plain`).
+  A probe log gives at most `WithinProbeOnly` (partial, TODO(#323)). The layout run reads
+  `BOTTLE_TEST_LAYOUT` (`altgr` or `plain`).
 - TS: `src/test-support/a11y.ts`: `accessibleText(el)` and `contrastRatio(fg, bg)`.
 - Pending tests: Rust `#[ignore = "pending TODO(#n) ..."]` with a `todo!` end; TS `it.skip` with
   `TODO(#n)` in the title. They never count as a pass.

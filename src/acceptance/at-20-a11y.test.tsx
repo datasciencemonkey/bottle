@@ -5,7 +5,9 @@
  * every state has text, Stop is visible and works by keyboard.
  *
  * What ships runs here against the thin views (#226, #78, #9): the 7 moods, the one-action card
- * Esc, chip labels and hover, overlay text, DOM-driven hover and click. The rest is pending with
+ * Esc, chip labels and hover, overlay text, DOM-driven hover and click. The Rive parts of AT-20
+ * (UX-02a poke rule, UX-02b first frame, UX-08b listeners off) shipped with #12 and are tested in
+ * `src/views/mog/rive-mascot.test.ts`; this file does not copy them. The rest is pending with
  * `it.skip` and the feature issue in the title; a skipped test never counts as a pass. The
  * screen-reader, greyscale and reduced-motion runs on a device are a person's steps:
  * docs/tests/AT-MOGS-TALKKEY-A11Y.md. The window part of UX-19a is `src-tauri/tests/at_01_mogs.rs`.
@@ -19,7 +21,6 @@ import { accessibleText, contrastRatio } from '../test-support/a11y';
 import { render, tauri, viewEmits } from '../views/test-tauri';
 import { CardView } from '../views/card/CardView';
 import { MogView } from '../views/mog/MogView';
-import { offlineRiveParams } from '../views/mog/rive-loader';
 import { Hub } from '../views/hub/Hub';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('../views/test-tauri')).coreModule);
@@ -56,7 +57,7 @@ describe('AT-20 without pointer or animation', () => {
 
   // ---------- Runs now ----------
 
-  it('[AT-20] [UX-02a] the app uses only the 7 moods of the Rive file', () => {
+  it('[AT-20] the mood mapper gives only the 7 moods of the Rive file', () => {
     const rive: readonly Mood[] = [
       'idle',
       'listening',
@@ -172,20 +173,6 @@ describe('AT-20 without pointer or animation', () => {
   });
 
   // ---------- Pending: each title names the feature issue ----------
-
-  it.skip('[AT-20] [UX-02b] the first frame is idle with demo=false, level=0, hover=false TODO(#12)', async () => {
-    const { el } = await mount(<MogView mogId={ID} />);
-    // TODO(#12): the Rive renderer replaces the placeholder and sets the inputs on load.
-    const canvas = el.querySelector('canvas');
-    expect(canvas).not.toBeNull();
-    expect(canvas?.dataset['inputs']).toBe('demo=false,level=0,hover=false,mood=idle');
-  });
-
-  it.skip('[AT-20] [UX-08a] [UX-08b] the MOG view keeps the Rive listeners off TODO(#83)', () => {
-    // TODO(#83): the MOG view builds its Rive instance with the listeners off.
-    const params = offlineRiveParams({ src: '/mog.riv', canvas: document.createElement('canvas') });
-    expect(params.shouldDisableRiveListeners).toBe(true);
-  });
 
   it.skip('[AT-20] [UX-31a] [UX-31b] the canvas is aria-hidden and a hidden button reads "<name>, <state>" TODO(#96)', async () => {
     const { el } = await mount(<MogView mogId={ID} />);

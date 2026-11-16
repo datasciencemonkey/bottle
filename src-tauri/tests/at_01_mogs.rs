@@ -114,21 +114,23 @@ fn at_01_mog_03a_at_20_ux_19a_the_card_is_the_only_key_window() {
 
 #[test]
 fn at_01_mog_01c_ux_27a_ux_27b_dragging_each_mog_starts_a_native_drag_and_no_click() {
-    for _mog in [MOG_A, MOG_B] {
-        let v = drag(40.0, -25.0);
+    // One gesture state per MOG window: the macOS monitor keeps one `DragGesture` per panel.
+    for (mog, (dx, dy)) in [(MOG_A, (40.0, -25.0)), (MOG_B, (-60.0, 10.0))] {
+        let label = WindowKind::mog(mog).expect("id").label();
+        let v = drag(dx, dy);
         assert_eq!(
             v[0],
             Verdict::Pass,
-            "the press reaches the page (hover, poke)"
+            "{label}: the press reaches the page (hover, poke)"
         );
         let start = v
             .iter()
             .position(|x| *x == Verdict::StartDrag)
-            .expect("a drag starts");
+            .unwrap_or_else(|| panic!("{label}: a drag starts"));
         // After the drag starts, the page gets nothing: no mouse-up, so no click, no capture.
         assert!(
             v[start + 1..].iter().all(|x| *x == Verdict::Swallow),
-            "{v:?}"
+            "{label}: {v:?}"
         );
     }
     // A move below 4 px is a click for the page (MOG-12a rules, #83).
@@ -209,7 +211,7 @@ fn at_01_the_9th_mog_window_is_refused_at_the_cap_of_8() {
 }
 
 // ---------- Pending: displays, click-through, Windows ----------
-// MOG definitions and restart (MB-01, MB-03a, MB-03b text) are TS: src/acceptance/at-01-mogs.test.ts.
+// MOG definitions and restart (MB-01, MB-03a, MB-03b text) are TS: src/acceptance/at-01-mogs.test.tsx.
 // These features have no interface yet, so each test ends in `todo!` with the assertion to add.
 
 #[test]

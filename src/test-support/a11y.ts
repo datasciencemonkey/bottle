@@ -1,14 +1,14 @@
 // Accessibility helpers for acceptance tests (#230, AT-20). They read the DOM only.
 //
-//   accessibleText(el): the text a screen reader reads for `el`: `aria-label`, else the text of
-//     the `aria-labelledby` elements, else the text content. Whitespace is collapsed.
+//   accessibleText(el): the text a screen reader reads for `el`: the text of the
+//     `aria-labelledby` elements, else `aria-label`, else the text content (accname 1.2 order).
+//     Whitespace is collapsed.
 //   contrastRatio(fg, bg): the WCAG 2.x contrast ratio of two `#rrggbb` colours (UX-34a).
 
 const squash = (s: string | null | undefined): string => (s ?? '').replace(/\s+/g, ' ').trim();
 
 export function accessibleText(el: Element): string {
-  const label = squash(el.getAttribute('aria-label'));
-  if (label) return label;
+  // accname 1.2: aria-labelledby first, then aria-label, then the content.
   const ids = squash(el.getAttribute('aria-labelledby'));
   if (ids) {
     const doc = el.ownerDocument;
@@ -20,6 +20,8 @@ export function accessibleText(el: Element): string {
     );
     if (text) return text;
   }
+  const label = squash(el.getAttribute('aria-label'));
+  if (label) return label;
   return squash(el.textContent);
 }
 
