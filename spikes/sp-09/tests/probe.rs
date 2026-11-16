@@ -329,3 +329,81 @@ async fn sp_09_probe_failed_force_refresh_is_fail_not_not_proven() {
     assert_eq!(pr["verdict"], "NOT YET");
     assert!(!out.pass);
 }
+
+#[tokio::test]
+async fn sp_09_capture_keeps_only_known_tools_and_drops_meta() {
+    let mut tools = common::fixture_tools()["tools"].clone();
+    {
+        let arr = tools.as_array_mut().unwrap();
+        let ask = arr.iter_mut().find(|t| t["name"] == "genie_ask").unwrap();
+        ask["description"] = json!("Ask Genie in adb-9876543210123456.7.azuredatabricks.net");
+        ask["_meta"] = json!({"alice@corp.com": "space 01ef"});
+        ask["annotations"] = json!({"title": "bob@corp.com"});
+        ask["outputSchema"] = json!({"type": "object", "properties": {"hr.salaries": {}}});
+        arr.push(json!({"name": "alice@corp.com", "description": "x", "inputSchema": {"type": "object"}}));
+    }
+    let (out, _server) = probe_cfg(Busy::IsError, Reply::Json, &[T1, T2], |s| {
+        s.tools_override = Some(tools.clone());
+    })
+    .await;
+    let doc = sp09::probe::capture_doc(out.tools.as_ref().unwrap(), &out.info);
+    let text = doc.to_string();
+    // Dropped: _meta, annotations, outputSchema and the extra tool.
+    for gone in [
+        "alice@corp.com",
+        "bob@corp.com",
+        "hr.salaries",
+        "_meta",
+        "annotations",
+        "outputSchema",
+    ] {
+        assert!(!text.contains(gone), "capture holds {gone:?}: {text}");
+    }
+    assert_eq!(doc["_capture"]["dropped_tools"], 1);
+    let names: Vec<&str> = doc["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names.len(), 4);
+    assert!(sp09::contract::check_tools(&doc).is_empty());
+    // A description is server text and stays: the doc must tell the person to
+    // read it, and the step 6 grep must cover the fixture.
+    assert!(
+        text.contains("azuredatabricks"),
+        "the description is kept for the person to review"
+    );
+    assert!(
+        doc["_capture"]["review"]
+            .as_str()
+            .unwrap()
+            .contains("Read every description")
+    );
+    let guide = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../docs/spikes/SP-09.md"
+    ))
+    .unwrap();
+    assert!(
+        guide.contains("Read the tool descriptions in `fixtures/genie_tools.json`"),
+        "doc warns about descriptions"
+    );
+    assert_eq!(
+        guide
+            .matches("/tmp/sp09-report.json fixtures/genie_tools.json")
+            .count(),
+        2,
+        "step 6 grep and draft step 6 cover the fixture"
+    );
+}
+
+#[test]
+fn sp_09_rpc_code_kept_only_in_range() {
+    use sp09::probe::safe_rpc_code;
+    assert_eq!(safe_rpc_code(-32603), json!(-32603));
+    assert_eq!(safe_rpc_code(-32000), json!(-32000));
+    assert_eq!(safe_rpc_code(1), json!(1));
+    assert_eq!(safe_rpc_code(9876543210123456), json!("out_of_range"));
+    assert_eq!(safe_rpc_code(-40000), json!("out_of_range"));
+}

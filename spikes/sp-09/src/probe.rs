@@ -65,16 +65,50 @@ pub fn now_unix() -> u64 {
 }
 
 /// The fixture format: the `tools/list` result plus a `_capture` header.
+///
+/// Only tools on `KNOWN_TOOLS` are kept, and of each only `name` (from the
+/// fixed list), `description` and `inputSchema`. `_meta`, `annotations`,
+/// `outputSchema` and every other tool are dropped. The description is server
+/// text and can name a host, space, catalog, table or person: the person must
+/// read it before committing or attaching the file (docs/spikes/SP-09.md).
 pub fn capture_doc(tools: &Value, info: &Value) -> Value {
+    let all: Vec<Value> = tools
+        .get("tools")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let kept: Vec<Value> = all
+        .iter()
+        .filter_map(|t| {
+            let name = t.get("name").and_then(Value::as_str)?;
+            let name = contract::KNOWN_TOOLS.iter().copied().find(|k| *k == name)?;
+            Some(json!({
+                "name": name,
+                "description": t.get("description").cloned().unwrap_or(Value::Null),
+                "inputSchema": t.get("inputSchema").cloned().unwrap_or(Value::Null),
+            }))
+        })
+        .collect();
     json!({
         "_capture": {
             "source": "live capture (spikes/sp-09 `live capture` or `live probe --capture`)",
             "captured_at_unix": now_unix(),
             "protocolVersion": info.get("protocol_version"),
             "server_name_len": info.get("server_name_len"),
+            "dropped_tools": all.len() - kept.len(),
+            "review": "Read every description before you commit or attach this file. Remove anything that names your workspace, host, space, catalog, table or a person.",
         },
-        "tools": tools.get("tools").cloned().unwrap_or(json!([])),
+        "tools": kept,
     })
+}
+
+/// A JSON-RPC error code only if it is in the reserved range or small.
+pub fn safe_rpc_code(code: i64) -> Value {
+    if (-32768..=-32000).contains(&code) || (-999..=999).contains(&code) {
+        json!(code)
+    } else {
+        json!("out_of_range")
+    }
 }
 
 struct Run<'a, T> {
@@ -109,7 +143,7 @@ impl<T: TokenSource> Run<'_, T> {
         match out {
             ToolCallOutcome::RpcError(e) => json!({
                 "envelope": out.kind(),
-                "rpc_code": e.code,
+                "rpc_code": safe_rpc_code(e.code),
                 "rpc_message_chars": e.message.chars().count(),
                 "rpc_data_shape": e.data.as_ref().map(shape),
                 "signal": signal,
@@ -343,7 +377,7 @@ pub async fn run_probe<T: TokenSource>(client: &McpClient<T>, opts: &ProbeOption
                 rpc_error,
             }) => json!({
                 "envelope": "http_error", "http_status": status, "signal": body_signal,
-                "rpc_code": rpc_error.as_ref().map(|e| e.code),
+                "rpc_code": rpc_error.as_ref().map(|e| safe_rpc_code(e.code)),
             }),
             Err(e) => json!({"envelope": "client_error", "error": e.to_string()}),
         };

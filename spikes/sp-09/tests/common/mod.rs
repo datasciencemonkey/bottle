@@ -54,6 +54,8 @@ pub struct State {
     pub extra_tool: Option<Value>,
     /// tools/list answers with this JSON-RPC error code.
     pub tools_list_error_code: Option<Value>,
+    /// Replace the tools/list array.
+    pub tools_override: Option<Value>,
     /// tools/call answers 429 with this Retry-After value.
     pub rate_limit: Option<String>,
 }
@@ -81,6 +83,7 @@ impl FakeGenie {
             extra_tool: None,
             tools_list_error_code: None,
             rate_limit: None,
+            tools_override: None,
         })))
     }
     pub fn with<R>(&self, f: impl FnOnce(&mut State) -> R) -> R {
@@ -188,6 +191,9 @@ impl Respond for FakeGenie {
             ),
             "tools/list" => {
                 let mut t = fixture_tools();
+                if let Some(o) = &s.tools_override {
+                    t["tools"] = o.clone();
+                }
                 if let Some(x) = &s.extra_tool {
                     t["tools"].as_array_mut().unwrap().push(x.clone());
                 }
