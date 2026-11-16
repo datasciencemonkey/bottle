@@ -87,8 +87,9 @@ pub enum CardState {
 pub struct WindowLedger {
     cap: usize,
     mogs: BTreeMap<String, CardState>,
-    /// Labels of windows the host destroyed, with the number of `Destroyed` events still due.
-    closing: BTreeMap<String, usize>,
+    /// Labels of windows the host destroyed and whose `Destroyed` event is still due. One
+    /// window gives one event, so a label is in the set at most once.
+    closing: BTreeSet<String>,
 }
 
 impl Default for WindowLedger {
@@ -103,12 +104,13 @@ impl WindowLedger {
         Self {
             cap,
             mogs: BTreeMap::new(),
-            closing: BTreeMap::new(),
+            closing: BTreeSet::new(),
         }
     }
 
-    fn is_closing(&self, kind: &WindowKind) -> bool {
-        self.closing.contains_key(&kind.label())
+    /// True if a `Destroyed` event of the window of `kind` is due.
+    pub fn is_closing(&self, kind: &WindowKind) -> bool {
+        self.closing.contains(&kind.label())
     }
 
     /// Reserve a MOG window. Idempotent for a MOG that is open already.
@@ -193,6 +195,13 @@ impl WindowLedger {
         }
     }
 
+    /// A show of a hidden card failed: it stays hidden from `since`.
+    pub fn restore_hidden(&mut self, mog_id: &str, since: Instant) {
+        if let Some(card) = self.mogs.get_mut(mog_id) {
+            *card = CardState::Hidden(since);
+        }
+    }
+
     /// A card that failed to open is not open: the next show makes it again.
     pub fn card_failed(&mut self, mog_id: &str) {
         if let Some(card) = self.mogs.get_mut(mog_id) {
@@ -200,9 +209,38 @@ impl WindowLedger {
         }
     }
 
-    /// The host destroyed the window `label`; its `Destroyed` event is due.
+    /// The `Destroyed` event of the window `label` is due. A second call for the same window
+    /// changes nothing.
     pub fn expect_destroyed(&mut self, label: &str) {
-        *self.closing.entry(label.to_owned()).or_default() += 1;
+        self.closing.insert(label.to_owned());
+    }
+
+    /// Record a destroy before it is sent, so its event can never come first. `window_exists`
+    /// is whether Tauri still has the window, read under the same ledger lock. Tauri drops a
+    /// window from its manager before the app's `Destroyed` handler runs, and that handler
+    /// needs this lock, so a live window here means its event is still to come. `false`: do not
+    /// destroy (the window is gone, or a destroy is on its way already).
+    pub fn begin_closing(&mut self, label: &str, window_exists: bool) -> bool {
+        window_exists && self.closing.insert(label.to_owned())
+    }
+
+    /// The destroy that `begin_closing` recorded failed: no event comes.
+    pub fn cancel_closing(&mut self, label: &str) {
+        self.closing.remove(label);
+    }
+
+    /// The card window of `mog_id` left Tauri's manager, but its `Destroyed` event is not
+    /// handled yet. The card is absent, and its label waits for that event, so a show does
+    /// not make a new window that the late event then marks absent.
+    pub fn card_window_missing(&mut self, mog_id: &str) {
+        if let Some(card) = self.mogs.get_mut(mog_id) {
+            if matches!(*card, CardState::Shown | CardState::Hidden(_)) {
+                *card = CardState::Absent;
+                if let Some(kind) = WindowKind::card(mog_id) {
+                    self.closing.insert(kind.label());
+                }
+            }
+        }
     }
 
     /// Follow a `Destroyed` event. An event the host expects (it destroyed the window) only
@@ -211,11 +249,7 @@ impl WindowLedger {
     /// `card-<id>` is no longer open. Other labels change nothing.
     pub fn window_destroyed(&mut self, label: &str) -> Vec<WindowKind> {
         let kind = WindowKind::from_label(label);
-        if let Some(n) = self.closing.get_mut(label) {
-            *n -= 1;
-            if *n == 0 {
-                self.closing.remove(label);
-            }
+        if self.closing.remove(label) {
             if let Some(WindowKind::Card(id)) = &kind {
                 if self.card_state(id) == Some(CardState::Closing) {
                     self.card_failed(id);
@@ -258,6 +292,14 @@ pub trait NativeWindowStyle<R: tauri::Runtime>: Send + Sync {
         -> Result<(), WindowError>;
     /// Show the window. It must not activate Bottle or take focus for a MOG window.
     fn show(&self, window: &tauri::WebviewWindow<R>, kind: &WindowKind) -> Result<(), WindowError>;
+    /// Hide the window (`orderOut` on macOS).
+    fn hide(
+        &self,
+        window: &tauri::WebviewWindow<R>,
+        _kind: &WindowKind,
+    ) -> Result<(), WindowError> {
+        window.hide().map_err(|_| WindowError::HostFailed)
+    }
 }
 
 /// No native step: Tauri shows the window. Used on platforms without a native style yet.
@@ -278,8 +320,14 @@ impl<R: tauri::Runtime> NativeWindowStyle<R> for PlainStyle {
 pub type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
 
 /// The R11 host for the Tauri shell. The app keeps one instance as managed state.
+///
+/// Two locks: `ops` makes each public operation (open, close, show, hide, reap) one critical
+/// section from its ledger read to its ledger write, so the ledger always matches the window
+/// (UX-19b). `ledger` guards the state and is held only briefly. `window_destroyed` takes
+/// `ledger` only, because it runs on the main thread and must never wait for an operation.
 pub struct TauriWindowHost<R: tauri::Runtime> {
     app: tauri::AppHandle<R>,
+    ops: Mutex<()>,
     ledger: Mutex<WindowLedger>,
     native: Box<dyn NativeWindowStyle<R>>,
     clock: Clock,
@@ -295,6 +343,7 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
     pub fn with_style(app: tauri::AppHandle<R>, native: Box<dyn NativeWindowStyle<R>>) -> Self {
         Self {
             app,
+            ops: Mutex::new(()),
             ledger: Mutex::new(WindowLedger::default()),
             native,
             clock: Arc::new(Instant::now),
@@ -307,22 +356,8 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
         self
     }
 
-    /// Build a window hidden if it is a panel, apply the native step, then show it.
-    fn make(&self, kind: &WindowKind) -> Result<tauri::WebviewWindow<R>, WindowError> {
-        let w =
-            windows::build(&self.app, &kind.build_spec()).map_err(|_| WindowError::HostFailed)?;
-        // A MOG window that is not a panel could take focus: do not keep a half-made window.
-        if let Err(e) = self
-            .native
-            .style(&w, kind)
-            .and_then(|()| self.native.show(&w, kind))
-        {
-            if w.destroy().is_ok() {
-                self.ledger().expect_destroyed(&kind.label());
-            }
-            return Err(e);
-        }
-        Ok(w)
+    fn op(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.ops.lock().unwrap_or_else(|p| p.into_inner())
     }
 
     fn ledger(&self) -> std::sync::MutexGuard<'_, WindowLedger> {
@@ -334,23 +369,48 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
         self.app.get_webview_window(&kind.label())
     }
 
-    /// Destroy the window of `kind` if it exists and is not closing already. Its `Destroyed`
-    /// event is then expected.
+    /// Build a window hidden if it is a panel, apply the native step, then show it.
+    fn make(&self, kind: &WindowKind) -> Result<tauri::WebviewWindow<R>, WindowError> {
+        let w =
+            windows::build(&self.app, &kind.build_spec()).map_err(|_| WindowError::HostFailed)?;
+        // A MOG window that is not a panel could take focus: do not keep a half-made window.
+        if let Err(e) = self
+            .native
+            .style(&w, kind)
+            .and_then(|()| self.native.show(&w, kind))
+        {
+            let _ = self.destroy(kind);
+            return Err(e);
+        }
+        Ok(w)
+    }
+
+    /// Destroy the window of `kind` if it exists and no destroy of it is on its way. The
+    /// `Destroyed` event is recorded before the destroy is sent, in the same ledger lock as the
+    /// window lookup (`WindowLedger::begin_closing`), so the event never comes first.
     fn destroy(&self, kind: &WindowKind) -> Result<(), WindowError> {
         let label = kind.label();
-        if self.ledger().closing.contains_key(&label) {
-            return Ok(());
+        let w = {
+            let mut ledger = self.ledger();
+            let w = self.window(kind);
+            if !ledger.begin_closing(&label, w.is_some()) {
+                return Ok(());
+            }
+            w
+        };
+        match w.map(|w| w.destroy()) {
+            Some(Err(_)) => {
+                self.ledger().cancel_closing(&label);
+                Err(WindowError::HostFailed)
+            }
+            _ => Ok(()),
         }
-        if let Some(w) = self.window(kind) {
-            w.destroy().map_err(|_| WindowError::HostFailed)?;
-            self.ledger().expect_destroyed(&label);
-        }
-        Ok(())
     }
 
     /// Open the MOG window of `mog_id`. A second call shows the window, or makes it again if
-    /// it is gone. The ledger lock is not held while the window is built.
+    /// it is gone.
     pub fn open_mog_window(&self, mog_id: &str) -> Result<(), WindowError> {
+        let _op = self.op();
         let outcome = self.ledger().open_mog(mog_id)?;
         let kind = match outcome {
             OpenOutcome::Opened(kind) => kind,
@@ -372,6 +432,7 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
     /// Close the MOG window of `mog_id` and its card window. The slot is freed only after
     /// both windows are destroyed; the label is used again after their `Destroyed` events.
     pub fn close_mog_window(&self, mog_id: &str) -> Result<(), WindowError> {
+        let _op = self.op();
         let mog = WindowKind::mog(mog_id).ok_or(WindowError::InvalidId)?;
         if !self.ledger().open_ids().contains(mog_id) {
             return Err(WindowError::UnknownMog);
@@ -403,50 +464,81 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
     pub fn window_destroyed(&self, label: &str) {
         let orphans = self.ledger().window_destroyed(label);
         for card in orphans {
-            // If the destroy fails, the card's own `Destroyed` event never comes; nothing waits.
+            // A failed destroy takes its record back, so nothing waits for an event.
             let _ = self.destroy(&card);
         }
     }
 
+    /// The card window of `mog_id` if the ledger has one. A card the ledger has but Tauri has
+    /// not is mid-destroy: it becomes absent and waits for its event (`card_window_missing`).
+    fn card_window(
+        &self,
+        mog_id: &str,
+        kind: &WindowKind,
+    ) -> Result<Option<tauri::WebviewWindow<R>>, WindowError> {
+        let mut ledger = self.ledger();
+        match ledger.card_state(mog_id) {
+            None => Err(WindowError::UnknownMog),
+            Some(CardState::Absent | CardState::Closing) => Ok(None),
+            Some(CardState::Shown | CardState::Hidden(_)) => {
+                let w = self.window(kind);
+                if w.is_none() {
+                    ledger.card_window_missing(mog_id);
+                }
+                Ok(w)
+            }
+        }
+    }
+
     /// Show the card window of an open MOG; make it on the first show (MOG-18a). The card
-    /// shows through the native step only, which never activates Bottle (MOG-03b).
+    /// shows through the native step only, which never activates Bottle (MOG-03b). If the show
+    /// fails, the card keeps its earlier state.
     pub fn show_card(&self, mog_id: &str) -> Result<(), WindowError> {
-        let (was, kind) = {
+        let _op = self.op();
+        let kind = WindowKind::card(mog_id).ok_or(WindowError::InvalidId)?;
+        let existing = self.card_window(mog_id, &kind)?;
+        let was = {
             let mut ledger = self.ledger();
             let was = ledger.card_state(mog_id);
-            (was, ledger.show_card(mog_id)?)
+            ledger.show_card(mog_id)?;
+            was
         };
-        // The ledger lock is released before the window is built.
-        let existing = match was {
-            Some(CardState::Absent) | None => None,
-            _ => self.window(&kind),
+        let shown = match &existing {
+            Some(w) => self.native.show(w, &kind),
+            None => self.make(&kind).map(|_| ()),
         };
-        match existing {
-            Some(w) => self.native.show(&w, &kind),
-            None => self.make(&kind).map(|_| ()).inspect_err(|_| {
-                // The card did not open: clear its mark, so the next show makes it again.
-                self.ledger().card_failed(mog_id);
-            }),
+        if shown.is_err() {
+            let mut ledger = self.ledger();
+            match (existing, was) {
+                // The card is still there, hidden as before.
+                (Some(_), Some(CardState::Hidden(since))) => ledger.restore_hidden(mog_id, since),
+                // The card did not open: the next show makes it again.
+                (None, _) => ledger.card_failed(mog_id),
+                _ => {}
+            }
         }
+        shown
     }
 
     /// Hide the card window of `mog_id`. The ledger marks it hidden only after the window
     /// hid, so a failed hide leaves no half state (UX-19b). The reaper destroys it later.
     pub fn hide_card(&self, mog_id: &str) -> Result<(), WindowError> {
+        let _op = self.op();
         let kind = WindowKind::card(mog_id).ok_or(WindowError::InvalidId)?;
-        match self.ledger().card_state(mog_id) {
-            None | Some(CardState::Absent) => return Err(WindowError::UnknownMog),
-            Some(CardState::Closing) => return Ok(()),
-            Some(CardState::Shown | CardState::Hidden(_)) => {}
+        if self.card_state(mog_id) == Some(CardState::Closing) {
+            return Ok(());
         }
-        let w = self.window(&kind).ok_or(WindowError::UnknownMog)?;
-        w.hide().map_err(|_| WindowError::HostFailed)?;
+        let w = self
+            .card_window(mog_id, &kind)?
+            .ok_or(WindowError::UnknownMog)?;
+        self.native.hide(&w, &kind)?;
         let now = (self.clock)();
         self.ledger().hide_card(mog_id, now).map(|_| ())
     }
 
     /// Destroy every card hidden for `CARD_HIDDEN_TTL` (MOG-18b). Returns how many went.
     pub fn reap_hidden_cards(&self) -> usize {
+        let _op = self.op();
         let now = (self.clock)();
         let due = self.ledger().take_due_cards(now);
         let mut reaped = 0;
@@ -454,20 +546,16 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
             let WindowKind::Card(id) = &kind else {
                 continue;
             };
-            match self.window(&kind) {
-                Some(w) => match w.destroy() {
-                    Ok(()) => {
-                        self.ledger().expect_destroyed(&kind.label());
-                        reaped += 1;
-                    }
-                    Err(_) => self.ledger().reap_failed(id, now),
-                },
-                // The window is gone already: no event will come.
-                None => {
-                    self.ledger().card_failed(id);
-                    reaped += 1;
-                }
+            if self.destroy(&kind).is_err() {
+                self.ledger().reap_failed(id, now);
+                continue;
             }
+            let mut ledger = self.ledger();
+            if !ledger.is_closing(&kind) {
+                // No window to destroy, or its event came already: the card is gone.
+                ledger.card_failed(id);
+            }
+            reaped += 1;
         }
         reaped
     }
