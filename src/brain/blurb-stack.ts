@@ -92,26 +92,35 @@ export class BlurbStack {
   private entries: Entry[] = [];
   private historyIds: string[] = [];
   private historyTotal = 0;
+  /** Every entry ID and blurb ID that went to History. It has no cap, so no blurb comes back. */
+  private gone = new Set<string>();
 
   constructor(settings?: Partial<StackSettings>) {
     this.settings = settingsFrom(settings);
   }
 
-  /** Add a blurb, or update a blurb with the same ID. A split part joins its entry. */
-  add(b: BlurbInput, now: number): void {
+  /**
+   * Add a blurb, or update a blurb with the same ID. A split part joins its entry. A blurb or a
+   * split part whose ID or group went to History stays there (the store keeps it, G-38a), and
+   * a new entry never takes the ID of an entry on the card. Returns false when nothing changed.
+   */
+  add(b: BlurbInput, now: number): boolean {
     const known = this.findPart(b.id);
     if (known) {
       known.part.text = b.text;
       if (b.completed) this.markComplete(known.entry, known.part, now);
-      return;
+      return true;
     }
+    if (this.gone.has(b.id) || (b.splitGroupId !== undefined && this.gone.has(b.splitGroupId)))
+      return false;
     const part: Part = { id: b.id, text: b.text, completed: b.completed === true };
     const group = b.splitGroupId && this.entries.find((e) => e.split && e.id === b.splitGroupId);
     if (group) {
       group.parts.push(part);
       group.quietSince = now;
-      return;
+      return true;
     }
+    if (this.entry(b.splitGroupId ?? b.id)) return false;
     this.entries.unshift({
       id: b.splitGroupId ?? b.id,
       split: b.splitGroupId !== undefined,
@@ -121,6 +130,7 @@ export class BlurbStack {
       quietSince: now,
     });
     this.evict();
+    return true;
   }
 
   /** Mark a blurb (or a split part) complete. False if it is not on the card. */
@@ -229,6 +239,8 @@ export class BlurbStack {
   private toHistory(e: Entry): void {
     this.entries = this.entries.filter((x) => x !== e);
     this.historyIds = [e.id, ...this.historyIds].slice(0, HISTORY_IDS_MAX);
+    this.gone.add(e.id);
+    for (const p of e.parts) this.gone.add(p.id);
     this.historyTotal += 1;
   }
 }

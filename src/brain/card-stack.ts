@@ -46,10 +46,16 @@ export interface CardStack {
   dispose(): void;
 }
 
-/** A `Scheduler` on `setTimeout` for the production clock. */
+/** The longest `setTimeout` delay. A longer one fires at once, so the delay is capped. */
+const MAX_TIMEOUT_MS = 2 ** 31 - 1;
+
+/**
+ * A `Scheduler` on `setTimeout` for the production clock. A capped timer fires early; the
+ * controller then finds nothing due and arms again for the rest of the time.
+ */
 export function timeoutScheduler(clock: MonotonicClock): Scheduler {
   return (at, fn) => {
-    const h = setTimeout(fn, Math.max(0, at - clock.now()));
+    const h = setTimeout(fn, Math.min(MAX_TIMEOUT_MS, Math.max(0, at - clock.now())));
     return () => clearTimeout(h);
   };
 }
@@ -101,8 +107,7 @@ export function createCardStack(
 
   return {
     add(b) {
-      stack.add(b, deps.clock.now());
-      changed();
+      if (stack.add(b, deps.clock.now())) changed();
     },
     complete(blurbId) {
       if (stack.complete(blurbId, deps.clock.now())) changed();
