@@ -10,7 +10,7 @@
 # in-process load and every fresh-process load in load.txt, cold load included), 1 = one or more
 # fail, 2 = error (a download, build, test, load run or clip length failed). Any failed setup step
 # (curl, shasum, tar, cargo, sudo purge) exits 2 through the ERR trap; tool codes are never passed through.
-set -euo pipefail
+set -Eeuo pipefail
 trap 'echo "error: a setup step failed (exit $?), overall exit=2"; exit 2' ERR
 # norm: 0 and 1 keep their meaning; any other code (crash, signal, tool error) becomes 2.
 norm() { case "$1" in 0|1) echo "$1" ;; *) echo 2 ;; esac; }
@@ -88,7 +88,7 @@ for i in 1 2 3 4 5; do
   if [ "$rc" -ne 0 ]; then echo "load run $i failed the criterion or errored (exit $rc)"; [ "$rc" -gt "$LOAD_RC" ] && LOAD_RC=$rc; fi
 done
 [ "$(grep -c '^load_ms=' load.txt)" -eq 5 ] || { echo "a load run printed no load_ms"; LOAD_RC=2; }
-set -e; trap 'echo "error: a setup step failed (exit $?), overall exit=2"; exit 2' ERR
+set -Ee; trap 'echo "error: a setup step failed (exit $?), overall exit=2"; exit 2' ERR
 
 echo "== 6. bench, threads = P-cores ($P)"
 trap - ERR; set +e
@@ -98,7 +98,7 @@ grep -E "maximum resident set size|real" time-p.txt
 echo "== 7. bench, threads = all physical cores ($ALL), for the thread sensitivity"
 /usr/bin/time -l "$BIN" bench --model-dir "$M" --audio-dir "$A" --threads "$ALL" --runs "$RUNS" --long-secs 0 2> time-all.txt | tee bench-all.txt
 grep -E "maximum resident set size|real" time-all.txt
-set -e; trap 'echo "error: a setup step failed (exit $?), overall exit=2"; exit 2' ERR
+set -Ee; trap 'echo "error: a setup step failed (exit $?), overall exit=2"; exit 2' ERR
 uptime
 echo "outputs: $WORK/out (paste load.txt, bench-p.txt, bench-all.txt and time-*.txt into the issue)"
 echo "pass rule: the 'SP04_RESULT' line of bench-p.txt is PASS and every load.txt load_ms <= 3000"
