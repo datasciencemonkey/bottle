@@ -72,31 +72,21 @@ const WM_APP_RESUME: u32 = WM_APP + 1;
 /// Posted to the hook thread by the callback: replay a masked key-up (`wparam` = the key).
 const WM_APP_REPLAY: u32 = WM_APP + 2;
 /// The class name of the message-only window that gets the session notifications
-/// ("BottleHotkeySession", UTF-16, NUL-terminated).
-const SESSION_CLASS: &[u16] = &[
-    b'B' as u16,
-    b'o' as u16,
-    b't' as u16,
-    b't' as u16,
-    b'l' as u16,
-    b'e' as u16,
-    b'H' as u16,
-    b'o' as u16,
-    b't' as u16,
-    b'k' as u16,
-    b'e' as u16,
-    b'y' as u16,
-    b'S' as u16,
-    b'e' as u16,
-    b's' as u16,
-    b's' as u16,
-    b'i' as u16,
-    b'o' as u16,
-    b'n' as u16,
-    0,
-];
+/// (UTF-16, NUL-terminated).
+const SESSION_CLASS: [u16; 20] = ascii_wide(b"BottleHotkeySession\0");
 /// Samples kept for the p99.
 const LATENCY_SAMPLES: usize = 10_000;
+
+/// Widen an ASCII byte string to UTF-16 at compile time.
+const fn ascii_wide<const N: usize>(s: &[u8; N]) -> [u16; N] {
+    let mut out = [0u16; N];
+    let mut i = 0;
+    while i < N {
+        out[i] = s[i] as u16;
+        i += 1;
+    }
+    out
+}
 
 thread_local! {
     /// The hook state. A low-level hook is called on the thread that installed it, so the
