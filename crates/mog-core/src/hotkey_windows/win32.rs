@@ -99,7 +99,7 @@ thread_local! {
 /// The Windows R1 HotkeyService (CAP-40a, CAP-40b, CAP-41, CAP-42, CAP-45).
 ///
 /// The Tauri host creates and starts it (#314, `src-tauri/src/hotkey_host.rs`) and adapts its
-/// signals. TODO(#14): the capture lifecycle calls `set_hands_free`; until then no caller turns
+/// signals. TODO(#434): the host calls `set_hands_free` when hands-free starts and stops; until then no caller turns
 /// hands-free on.
 pub struct WindowsHotkeyService {
     talk: TalkKey,

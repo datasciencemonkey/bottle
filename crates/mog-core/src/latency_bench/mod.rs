@@ -16,7 +16,7 @@
 //!
 //! The real call sites are not wired yet (TODO(#319) wires them):
 //! - key-down and key-up: HotkeyService, TODO(#319); its HID rig log for AT-30, TODO(#323).
-//! - mic live: CaptureService, TODO(#14), with the SP-08 result TODO(#15).
+//! - mic live: CaptureService (the #14 lease on key-down), TODO(#425) for the host path, with the SP-08 result TODO(#15).
 //! - local acknowledgement and preview chip: the brain and the view, TODO(#142). The chip renders
 //!   in the view, so its time needs an IPC event: TODO(#318).
 //! - inserted text: `insert_text`, TODO(#58).
