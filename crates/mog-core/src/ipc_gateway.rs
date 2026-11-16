@@ -3,7 +3,7 @@
 //! Responsibilities: Capability check per window label, JSON Schema validation (`deny_unknown_fields`), secret scrubbing for payloads, logs and errors.
 //!
 //! The command table, the schemas and the per-window checks are `crate::ipc::handle` (#223),
-//! which the Tauri app calls. [`CheckedGateway`] is the hardened R12 entry (#36, ADR 0017):
+//! which the Tauri app calls. [`CheckedGateway`] is the hardened R12 entry (#36, ADR 0019):
 //! it runs `crate::ipc::handle`, turns every refusal into a content-free code and writes one
 //! content-free log line per call. [`hardened_gateway`] wraps it in [`ScrubbingGateway`], so
 //! every reply also gets the rule-7 scrub (SEC-01, SEC-02a, SEC-02b, SEC-03).
@@ -119,7 +119,7 @@ impl GatewayLog for NoLog {
     fn record(&self, _line: &str) {}
 }
 
-/// The hardened R12 gateway (#36, ADR 0017).
+/// The hardened R12 gateway (#36, ADR 0019).
 ///
 /// 1. SEC-02a: `ipc::handle` permits each command only for its window classes. A label outside
 ///    ARC-3 (for example `ffi`) gets `window_not_allowed` for every command.

@@ -14,10 +14,10 @@ use std::sync::{Arc, Mutex};
 use mog_core::error::{CoreError, CoreResult};
 use mog_core::ipc::{self, IpcError, WindowClass, COMMANDS};
 use mog_core::ipc_gateway::{
-    hardened_gateway, ipc_error_code, CheckedGateway, GatewayLog, IpcGateway, ScrubbingGateway,
-    ERROR_CODES,
+    hardened_gateway, hardened_gateway_with, ipc_error_code, CheckedGateway, GatewayComponents,
+    GatewayLog, IpcGateway, ScrubbingGateway, ERROR_CODES,
 };
-use mog_core::token_guard::{contains_secret, json_contains_secret};
+use mog_core::token_guard::{contains_secret, json_contains_secret, REDACTED};
 use serde_json::{json, Map, Value};
 
 // ---------- fakes and fixtures ----------
@@ -108,6 +108,24 @@ fn sample(command: &str) -> (&'static str, Value) {
     ("brain", args)
 }
 
+/// A careless component: it echoes the command and its arguments, plus a fake secret, in its
+/// reply, and counts its calls.
+#[derive(Clone, Default)]
+struct Leaky(Arc<Mutex<usize>>);
+
+impl GatewayComponents for Leaky {
+    fn call(&self, command: &'static str, args: Value) -> CoreResult<Value> {
+        *self.0.lock().unwrap() += 1;
+        Ok(json!({"command": command, "args": args, "upstream": fakes()[1]}))
+    }
+}
+
+impl Leaky {
+    fn calls(&self) -> usize {
+        *self.0.lock().unwrap()
+    }
+}
+
 fn code_of(r: &CoreResult<Value>) -> &'static str {
     match r {
         Ok(_) => "ok",
@@ -193,11 +211,7 @@ fn sec_02b_every_sample_payload_passes_the_schema() {
     for c in COMMANDS {
         let (label, args) = sample(c.name);
         let code = code_of(&gw.dispatch(label, c.name, args));
-        assert!(
-            code == "not_implemented" || code == "host_failed",
-            "{} sample: {code}",
-            c.name
-        );
+        assert_eq!(code, "not_implemented", "{} sample", c.name);
     }
 }
 
@@ -290,6 +304,49 @@ fn sec_02b_every_object_schema_denies_unknown_fields() {
 // ---------- SEC-03 / SEC-01: content-free errors and logs ----------
 
 #[test]
+fn sec_03_hardened_gateway_scrubs_component_replies() {
+    let (_, mut args) = sample("insert_text");
+    args["text"] = json!(fakes()[0]);
+    // Without the scrub wrapper the component's reply leaks: the wrapper is what scrubs.
+    let raw = CheckedGateway::with_components(Recorder::default(), Leaky::default())
+        .dispatch("brain", "insert_text", args.clone())
+        .unwrap();
+    assert!(json_contains_secret(&raw), "{raw}");
+    let reply = hardened_gateway_with(Recorder::default(), Leaky::default())
+        .dispatch("brain", "insert_text", args)
+        .unwrap();
+    assert!(!json_contains_secret(&reply), "{reply}");
+    assert_eq!(reply["upstream"], json!(REDACTED));
+    assert_eq!(reply["command"], json!("insert_text"));
+}
+
+#[test]
+fn sec_02a_sec_02b_refused_calls_never_reach_a_component() {
+    let c = Leaky::default();
+    let gw = hardened_gateway_with(Recorder::default(), c.clone());
+    let (_, args) = sample("mcp_call");
+    for label in ["hub", "mog-a1", "card-a1", "ffi"] {
+        assert_eq!(
+            code_of(&gw.dispatch(label, "mcp_call", args.clone())),
+            "window_not_allowed"
+        );
+    }
+    let mut extra = args.clone();
+    extra["extra"] = json!(1);
+    assert_eq!(
+        code_of(&gw.dispatch("brain", "mcp_call", extra)),
+        "invalid_args"
+    );
+    assert_eq!(
+        code_of(&gw.dispatch("brain", "nope", json!({}))),
+        "unknown_command"
+    );
+    assert_eq!(c.calls(), 0, "a refused call reached the component");
+    assert_eq!(code_of(&gw.dispatch("brain", "mcp_call", args)), "ok");
+    assert_eq!(c.calls(), 1);
+}
+
+#[test]
 fn sec_03_unknown_command_and_label_are_not_echoed() {
     let log = Recorder::default();
     let gw = hardened_gateway(log.clone());
@@ -351,12 +408,19 @@ fn sec_03_gateway_log_line_is_content_free() {
     let _ = gw.dispatch("brain", "insert_text", args);
     let _ = gw.dispatch("mog-a1", "mcp_call", json!({"tool": secret}));
     let _ = gw.dispatch("card-zz", &secret, json!({}));
+    let (label, view) = sample("view_emit");
+    let _ = gw.dispatch(label, "view_emit", view);
+    let with = CheckedGateway::with_components(log.clone(), Leaky::default());
+    let (_, ok) = sample("cli_status");
+    let _ = with.dispatch("hub", "cli_status", ok);
     assert_eq!(
         log.lines(),
         vec![
             "ipc command=insert_text window=brain outcome=not_implemented",
             "ipc command=mcp_call window=mog outcome=window_not_allowed",
             "ipc command=unknown window=card outcome=unknown_command",
+            "ipc command=view_emit window=mog outcome=not_implemented",
+            "ipc command=cli_status window=hub outcome=ok",
         ]
     );
 }
@@ -388,7 +452,11 @@ fn sec_03_production_code_has_no_direct_print() {
             continue;
         }
         let text = std::fs::read_to_string(&path).unwrap();
-        let code = text.split("#[cfg(test)]").next().unwrap_or_default();
+        // Skip only the trailing unit-test module, not code after another `#[cfg(test)]` item.
+        let code = text
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .unwrap_or_default();
         for (n, line) in code.lines().enumerate() {
             if line.trim_start().starts_with("//") {
                 continue;
@@ -525,7 +593,7 @@ fn fuzz(gw: &dyn IpcGateway, log: &Recorder, seed: u64, cases: usize) -> FuzzSta
             }
             _ => {}
         }
-        if matches!(code_of(&r), "not_implemented" | "host_failed" | "ok") {
+        if matches!(code_of(&r), "not_implemented" | "ok") {
             stats.reached_component += 1;
         }
     }
@@ -540,7 +608,8 @@ fn fuzz(gw: &dyn IpcGateway, log: &Recorder, seed: u64, cases: usize) -> FuzzSta
 #[test]
 fn sec_01_at_17_ipc_fuzz_finds_no_secret() {
     let log = Recorder::default();
-    let gw = hardened_gateway(log.clone());
+    // The component echoes every accepted payload with a secret, as a careless upstream would.
+    let gw = hardened_gateway_with(log.clone(), Leaky::default());
     for seed in [1, 36, 0x5EC0] {
         let stats = fuzz(&gw, &log, seed, 3000);
         assert!(stats.leaks.is_empty(), "seed {seed}: {:#?}", stats.leaks);
