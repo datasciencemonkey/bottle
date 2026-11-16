@@ -47,7 +47,11 @@ fn ipc_route_ids() -> Vec<String> {
 #[test]
 fn sec_06a_unity_gateway_model_routes_carry_the_tags_header() {
     for route in ["mlflow.chat_completions", "mlflow.embeddings"] {
-        assert_eq!(route_call_kind(route), Some(CallKind::UnityGateway), "{route}");
+        assert_eq!(
+            route_call_kind(route),
+            Some(CallKind::UnityGateway),
+            "{route}"
+        );
         let h = outbound_headers(&BottleIdentity::new(), route, &tags("a1")).unwrap();
         assert_eq!(names(&h), vec![USER_AGENT_HEADER, TAGS_HEADER], "{route}");
         let value = &h[1].1;
@@ -113,5 +117,8 @@ fn sec_06a_bad_tags_fail_closed_with_a_content_free_code() {
 fn sec_06a_the_stub_transport_takes_the_tags_argument() {
     let s = StubHttpTransport;
     let r = s.request("p", "scim.me", None, &tags("a1"));
-    assert!(matches!(r, Err(CoreError::NotImplemented { component: "R7" })));
+    assert!(matches!(
+        r,
+        Err(CoreError::NotImplemented { component: "R7" })
+    ));
 }
