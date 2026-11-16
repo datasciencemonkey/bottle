@@ -741,10 +741,10 @@ fn arc_7_rule_9_open_connections_are_capped() {
         .filter_map(|_| TcpStream::connect(a).ok())
         .collect();
     std::thread::sleep(Duration::from_millis(300));
-    assert!(
-        s.open_connections() <= MAX_CONNECTIONS * LoopbackEndpoint::ALL.len(),
-        "{} connections for {} clients",
+    assert_eq!(
         s.open_connections(),
+        MAX_CONNECTIONS,
+        "open connections for {} clients",
         idle.len()
     );
 }

@@ -467,6 +467,9 @@ fn serve(mut stream: TcpStream, endpoint: LoopbackEndpoint, port: u16, shared: &
         match name.trim().to_ascii_lowercase().as_str() {
             "host" => host.push(value),
             "authorization" => auth.push(value),
+            "content-length" if !value.bytes().all(|b| b.is_ascii_digit()) => {
+                return error(&mut stream, 400, "bad_request");
+            }
             "content-length" => match value.parse() {
                 Ok(n) if length.is_none() => length = Some(n),
                 _ => return error(&mut stream, 400, "bad_request"),
@@ -517,6 +520,8 @@ fn serve(mut stream: TcpStream, endpoint: LoopbackEndpoint, port: u16, shared: &
         body,
     };
     let handler = &shared.handler;
+    // TODO(#113): the default panic hook prints a handler's panic message to stderr. The real
+    // handlers must never put a token in a panic message, or the app sets a scrubbing hook.
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handler.handle(&req))) {
         Ok(resp) => reply(&mut stream, resp.status, &resp.body),
         Err(_) => error(&mut stream, 500, "internal"),
