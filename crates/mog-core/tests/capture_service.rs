@@ -1106,3 +1106,316 @@ fn cap_01a_stress_every_granted_lease_has_an_open_mic() {
     );
     assert_eq!(log.max_in_flight, 1, "one open at a time");
 }
+
+// ---------- round 5: one commit path (sync before events), device loss, resume ----------
+
+use std::sync::atomic::AtomicBool as Flag;
+use std::sync::atomic::{AtomicU64, Ordering as AtOrd};
+
+/// A host-like sink: it can restart capture on `device_lost`, or panic on one kind of event.
+#[derive(Default)]
+struct HostSink {
+    svc: OnceLock<Weak<CaptureCore>>,
+    restart_on_lost: Flag,
+    restarted: std::sync::Mutex<Option<Result<mog_core::capture::Lease, CaptureError>>>,
+    panic_on_stop: std::sync::Mutex<Option<StopReason>>,
+    panic_on_paused_state: Flag,
+    panic_on_recording_state: Flag,
+    panic_every_nth_stop: AtomicU64,
+    stops: AtomicU64,
+}
+
+impl CaptureEvents for HostSink {
+    fn state(&self, state: &CaptureState) {
+        if state.paused && self.panic_on_paused_state.swap(false, AtOrd::SeqCst) {
+            panic!("sink panic on a paused state");
+        }
+        if state.recording && self.panic_on_recording_state.swap(false, AtOrd::SeqCst) {
+            panic!("sink panic on a recording state");
+        }
+    }
+    fn stopped(&self, stopped: &Stopped) {
+        let n = self.stops.fetch_add(1, AtOrd::SeqCst) + 1;
+        let every = self.panic_every_nth_stop.load(AtOrd::SeqCst);
+        if every > 0 && n % every == 0 {
+            panic!("sink panic on stop {n}");
+        }
+        let once = self
+            .panic_on_stop
+            .lock()
+            .unwrap()
+            .take_if(|r| *r == stopped.reason);
+        if once.is_some() {
+            panic!("sink panic on {:?}", stopped.reason);
+        }
+        if stopped.reason == StopReason::DeviceLost
+            && self.restart_on_lost.swap(false, AtOrd::SeqCst)
+        {
+            if let Some(svc) = self.svc.get().and_then(Weak::upgrade) {
+                *self.restarted.lock().unwrap() = Some(svc.start(req("a", CaptureMode::HandsFree)));
+            }
+        }
+    }
+}
+
+fn host_rig() -> (Arc<CaptureCore>, FakeAudioDevice, Arc<HostSink>, SimClock) {
+    let clock = SimClock::new();
+    let device = FakeAudioDevice::new();
+    let sink = Arc::new(HostSink::default());
+    let svc = Arc::new(CaptureCore::new(
+        Box::new(device.clone()),
+        Arc::new(clock.clone()),
+        sink.clone(),
+    ));
+    sink.svc.set(Arc::downgrade(&svc)).ok();
+    (svc, device, sink, clock)
+}
+
+fn wait_for(what: &str, cond: impl Fn() -> bool) {
+    let t = Instant::now();
+    while !cond() {
+        assert!(t.elapsed() < Duration::from_secs(5), "waited for {what}");
+        std::thread::yield_now();
+    }
+}
+
+#[test]
+fn cap_01a_a_sink_that_restarts_on_device_lost_gets_an_open_mic() {
+    let (svc, device, sink, _) = host_rig();
+    svc.start(req("a", CaptureMode::HandsFree)).unwrap();
+    sink.restart_on_lost.store(true, AtOrd::SeqCst);
+    svc.device_failed(AudioSource::Mic);
+    let lease = sink
+        .restarted
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("the sink restarted capture")
+        .expect("the restart is granted");
+    assert_eq!(svc.status().lease_id, Some(lease.lease_id()));
+    let log = device.log();
+    assert!(log.mic_open, "the restarted lease has an open mic");
+    assert_eq!(log.mic_opens, 2, "the dead stream was not reused");
+}
+
+#[test]
+fn cap_01a_device_failed_against_a_start_loop_never_leaves_a_lease_on_a_closed_mic() {
+    for run in 0..300 {
+        let r = Arc::new(rig());
+        r.svc.start(req("a", CaptureMode::HandsFree)).unwrap();
+        let failer = {
+            let r = Arc::clone(&r);
+            std::thread::spawn(move || r.svc.device_failed(AudioSource::Mic))
+        };
+        let starter = {
+            let r = Arc::clone(&r);
+            std::thread::spawn(move || {
+                for _ in 0..200 {
+                    if r.svc.start(req("b", CaptureMode::HandsFree)).is_ok() {
+                        return;
+                    }
+                    std::thread::yield_now();
+                }
+            })
+        };
+        failer.join().unwrap();
+        starter.join().unwrap();
+        if r.svc.status().recording {
+            assert!(
+                r.device.log().mic_open,
+                "run {run}: a live lease on a closed mic"
+            );
+        }
+    }
+}
+
+#[test]
+fn cap_13b_a_sink_panic_in_stop_all_stop_or_pause_still_closes_the_mic() {
+    // stop_all
+    let (svc, device, sink, _) = host_rig();
+    svc.start(req("a", CaptureMode::HandsFree)).unwrap();
+    *sink.panic_on_stop.lock().unwrap() = Some(StopReason::Panic);
+    assert!(catch_unwind(AssertUnwindSafe(|| svc.stop_all())).is_err());
+    assert!(
+        !device.log().mic_open,
+        "stop_all: the mic closed before the event"
+    );
+    // stop
+    let (svc, device, sink, _) = host_rig();
+    let hf = svc.start(req("a", CaptureMode::HandsFree)).unwrap();
+    *sink.panic_on_stop.lock().unwrap() = Some(StopReason::Manual);
+    assert!(catch_unwind(AssertUnwindSafe(|| svc.stop(hf.id))).is_err());
+    assert!(
+        !device.log().mic_open,
+        "stop: the mic closed before the event"
+    );
+    // pause
+    let (svc, device, sink, _) = host_rig();
+    let session = svc.start(req("a", CaptureMode::Session)).unwrap();
+    sink.panic_on_paused_state.store(true, AtOrd::SeqCst);
+    assert!(catch_unwind(AssertUnwindSafe(|| svc.pause(session.id))).is_err());
+    assert!(
+        !device.log().mic_open,
+        "pause: the mic closed before the event"
+    );
+}
+
+#[test]
+fn cap_01a_the_unwind_guard_does_not_lose_a_concurrent_stop() {
+    let r = Arc::new(rig());
+    let hf = r.svc.start(req("a", CaptureMode::HandsFree)).unwrap();
+    let (release, gate) = std::sync::mpsc::channel();
+    {
+        let mut log = r.device.log();
+        log.panic_next_open = true;
+        log.close_gate = Some(gate);
+    }
+    let starter = {
+        let r = Arc::clone(&r);
+        std::thread::spawn(move || {
+            catch_unwind(AssertUnwindSafe(|| {
+                r.svc.start(CaptureRequest {
+                    others_track: true,
+                    ..req("b", CaptureMode::Session)
+                })
+            }))
+            .is_err()
+        })
+    };
+    // The system-audio open panics; the guard's close waits at the gate.
+    wait_for("the guard's close", || r.device.log().closing);
+    r.svc.stop(hf.id).unwrap();
+    release.send(()).unwrap();
+    assert!(starter.join().unwrap(), "the open panicked");
+    let log = r.device.log();
+    assert!(
+        !log.mic_open && !log.system_open,
+        "no stream left with no lease"
+    );
+}
+
+#[test]
+fn cap_13b_a_resume_stays_paused_until_its_mic_opens_and_a_device_loss_keeps_the_session() {
+    let r = Arc::new(rig());
+    let session = r.svc.start(req("a", CaptureMode::Session)).unwrap();
+    r.svc.pause(session.id).unwrap();
+    r.device.log().open_delay = Duration::from_millis(300);
+    let resumer = {
+        let r = Arc::clone(&r);
+        std::thread::spawn(move || r.svc.resume(session.id))
+    };
+    wait_for("the resume's open", || r.device.log().opening);
+    let s = r.svc.status();
+    assert!(
+        s.paused && !s.recording,
+        "no recording before the mic opens"
+    );
+    r.svc.device_failed(AudioSource::Mic);
+    assert_eq!(
+        resumer.join().unwrap(),
+        Err(CaptureError::Device(DeviceError {
+            code: "device_lost"
+        }))
+    );
+    let s = r.svc.status();
+    assert_eq!(s.lease_id, Some(session.lease_id()), "the session is kept");
+    assert!(s.paused);
+    assert!(!r.device.log().mic_open);
+    r.device.log().open_delay = Duration::ZERO;
+    assert!(r.svc.resume(session.id).unwrap().recording);
+}
+
+#[test]
+fn cap_02a_a_stop_during_a_resume_makes_the_resume_unknown_lease() {
+    let r = Arc::new(rig());
+    let session = r.svc.start(req("a", CaptureMode::Session)).unwrap();
+    r.svc.pause(session.id).unwrap();
+    r.device.log().open_delay = Duration::from_millis(200);
+    let resumer = {
+        let r = Arc::clone(&r);
+        std::thread::spawn(move || r.svc.resume(session.id))
+    };
+    wait_for("the resume's open", || r.device.log().opening);
+    r.svc.stop(session.id).unwrap();
+    assert_eq!(resumer.join().unwrap(), Err(CaptureError::UnknownLease));
+    assert!(!r.device.log().mic_open);
+}
+
+#[test]
+fn mb_05_stop_all_recovers_a_lease_whose_grant_event_panicked() {
+    let (svc, device, sink, _) = host_rig();
+    sink.panic_on_recording_state.store(true, AtOrd::SeqCst);
+    assert!(catch_unwind(AssertUnwindSafe(
+        || svc.start(req("a", CaptureMode::Session))
+    ))
+    .is_err());
+    // The caller never got the lease ID, but the lease exists: stop_all is the recovery.
+    assert!(svc.status().recording);
+    svc.stop_all();
+    assert!(!device.log().mic_open);
+    svc.start(req("b", CaptureMode::Ptt)).unwrap();
+}
+
+#[test]
+fn cap_01a_stress_with_pause_resume_device_loss_and_sink_panics_ends_consistent() {
+    let (svc, device, sink, clock) = host_rig();
+    sink.panic_every_nth_stop.store(97, AtOrd::SeqCst);
+    let call = |f: &dyn Fn()| {
+        let _ = catch_unwind(AssertUnwindSafe(f));
+    };
+    let workers: Vec<_> = (0..3u64)
+        .map(|t| {
+            let svc = Arc::clone(&svc);
+            std::thread::spawn(move || {
+                let modes = [
+                    CaptureMode::HandsFree,
+                    CaptureMode::Ptt,
+                    CaptureMode::Session,
+                ];
+                for i in 0..2_000u64 {
+                    let mode = modes[((i + t) % 3) as usize];
+                    let svc2 = Arc::clone(&svc);
+                    let got = catch_unwind(AssertUnwindSafe(move || {
+                        svc2.start(req(&format!("m{t}"), mode))
+                    }));
+                    if let Ok(Ok(lease)) = got {
+                        if mode == CaptureMode::Session {
+                            let _ = catch_unwind(AssertUnwindSafe(|| svc.pause(lease.id)));
+                            let _ = catch_unwind(AssertUnwindSafe(|| svc.resume(lease.id)));
+                        }
+                        let _ = catch_unwind(AssertUnwindSafe(|| svc.stop(lease.id)));
+                    }
+                }
+            })
+        })
+        .collect();
+    for i in 0..2_000u32 {
+        call(&|| {
+            svc.tick();
+        });
+        call(&|| {
+            svc.status();
+        });
+        if i % 50 == 0 {
+            call(&|| svc.device_failed(AudioSource::Mic));
+            clock.advance(Duration::from_millis(1_000));
+        }
+    }
+    for w in workers {
+        w.join().unwrap();
+    }
+    sink.panic_every_nth_stop.store(0, AtOrd::SeqCst);
+    // Quiescent: a live lease has an open mic.
+    if svc.status().recording {
+        assert!(device.log().mic_open, "a live lease on a closed mic");
+    }
+    // After stop_all nothing is open, no open slot is stuck, and no open ran twice at once.
+    svc.stop_all();
+    {
+        let log = device.log();
+        assert!(!log.mic_open && !log.system_open, "a stream with no lease");
+        assert_eq!(log.max_in_flight, 1);
+    }
+    svc.start(req("z", CaptureMode::Ptt)).unwrap();
+    assert!(device.log().mic_open);
+}
