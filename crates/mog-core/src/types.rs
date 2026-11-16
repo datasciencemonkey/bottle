@@ -177,6 +177,10 @@ impl SessionPolicy {
     /// The fixed values (55 < 60) and the `hard_cap_min` range (60..=480) also give the
     /// ordering check-in < soft cap <= ceiling.
     pub fn validate(&self) -> Result<(), SessionPolicyError> {
+        // Fixed to match the literal types in `interfaces.ts` and the D27 defaults. Section 7.1
+        // and Appendix C also list admin keys `SessionSoftCapMinutes`, `SessionExtendMinutes`,
+        // `SilenceNudgeMinutes` and `SilenceStopMinutes` (the check-in follows the soft cap).
+        // Making them configurable must change the TS and Rust mirrors together (#368).
         let fixed = [
             ("checkInAtMin", self.check_in_at_min, 55),
             ("softCapMin", self.soft_cap_min, 60),
