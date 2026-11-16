@@ -141,6 +141,8 @@ const SCANNED = [
   'crates',
   'scripts',
   'tools',
+  // Spike crates hold adapted Handy code too (SP-03, #5); `target/` is skipped above.
+  'spikes',
 ];
 
 function scannedFiles(): string[] {

@@ -1,0 +1,21 @@
+[package]
+name = "sp-03-talk-key"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "Spike SP-03 (#5): talk-key key-up, Secure Event Input, Carbon chord and clamshell probe"
+
+# Standalone: not a member of the root workspace.
+[workspace]
+
+[lib]
+name = "sp03"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sp03-probe"
+path = "src/main.rs"
+
+# No dependencies: the probe calls CoreGraphics, Carbon, IOKit and CoreFoundation through raw FFI.
+[dependencies]
