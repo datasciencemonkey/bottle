@@ -221,3 +221,107 @@ describe('V3 card view', () => {
     expect(el.textContent).not.toContain('Revenue');
   });
 });
+
+describe('V3 card view: expanded sections and chips', () => {
+  beforeEach(() => tauri.reset());
+  afterEach(async () => {
+    await act(async () => roots.forEach((r) => r.unmount()));
+    roots = [];
+  });
+
+  const sections = [
+    { id: 'answer', md: '**4.2M** in Q3' },
+    { id: 'keyNumbers', items: ['4.2M', '1.1M'] },
+    { id: 'sql', sql: 'SELECT 1', collapsed: true },
+    {
+      id: 'tablePreview',
+      columns: ['region', 'revenue'],
+      rows: [['EMEA', '4.2M']],
+      moreRows: 0,
+    },
+    { id: 'sentToGenie', text: 'Context sent: 12 characters' },
+    { id: 'resend' },
+    { id: 'copy', formats: ['markdown', 'csv'] },
+    { id: 'footer', sttBadge: 'STT: local', deepLink: 'https://example.com/g' },
+    { id: 'dataFlow', text: 'Audio stays on this Mac.' },
+  ];
+
+  it('[UX-18] [AT-09] renders the sections in the order the brain sends', async () => {
+    const { el } = await mountCard(<CardView mogId={ID} />);
+    await tauri.emit('card:update', { ...update, sections });
+    const ids = [...el.querySelectorAll('[data-section]')].map((n) =>
+      n.getAttribute('data-section'),
+    );
+    expect(ids).toEqual(sections.map((s) => s.id));
+    expect(el.querySelector('[data-section="keyNumbers"]')?.textContent).toContain('4.2M');
+    expect(el.querySelector('[data-section="tablePreview"] td')?.textContent).toBe('EMEA');
+    expect(el.querySelector('[data-section="footer"] [data-badge="stt"]')?.textContent).toBe(
+      'STT: local',
+    );
+  });
+
+  it('[UX-18] the SQL section is collapsed until the user opens it', async () => {
+    const { el } = await mountCard(<CardView mogId={ID} />);
+    await tauri.emit('card:update', { ...update, sections });
+    const d = el.querySelector('[data-section="sql"] details') as HTMLDetailsElement;
+    expect(d.open).toBe(false);
+  });
+
+  it('[UX-18] Resend without context and Copy send a click to the brain', async () => {
+    const { el } = await mountCard(<CardView mogId={ID} />);
+    await tauri.emit('card:update', { ...update, sections });
+    await act(async () =>
+      (el.querySelector('button[data-action="resend"]') as HTMLElement).click(),
+    );
+    await act(async () => (el.querySelector('button[data-copy="csv"]') as HTMLElement).click());
+    expect(viewEmits()).toEqual([
+      { mogId: ID, kind: 'click', payload: { target: 'resend' } },
+      { mogId: ID, kind: 'click', payload: { target: 'copy', format: 'csv' } },
+    ]);
+  });
+
+  it('[UX-20a] [AT-20] chips beyond the 4th show in the expanded card', async () => {
+    const { el } = await mountCard(<CardView mogId={ID} />);
+    await tauri.emit('card:update', {
+      ...update,
+      sections,
+      overflowChips: [{ id: 'c5', label: 'Check again' }],
+    });
+    expect(el.querySelector('[data-section="footer"] button[data-chip="c5"]')?.textContent).toBe(
+      'Check again',
+    );
+  });
+
+  it('[UX-20b] [AT-20] every chip is a button with a text label', async () => {
+    const { el } = await mountCard(<CardView mogId={ID} />);
+    await tauri.emit('card:update', update);
+    const chips = [...el.querySelectorAll('[data-chip]')];
+    expect(chips.length).toBeGreaterThan(0);
+    for (const c of chips) {
+      expect(c.tagName).toBe('BUTTON');
+      expect((c.textContent ?? '').trim().length).toBeGreaterThan(0);
+    }
+  });
+
+  it('[UX-20c] [AT-20] hover and focus on a chip send nothing; a click sends one chip_click', async () => {
+    const { el } = await mountCard(<CardView mogId={ID} />);
+    await tauri.emit('card:update', update);
+    const chip = el.querySelector('button[data-chip="c1"]') as HTMLElement;
+    await act(async () => {
+      chip.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      chip.dispatchEvent(new MouseEvent('mouseenter'));
+      chip.dispatchEvent(new PointerEvent('pointermove', { bubbles: true }));
+    });
+    await act(async () => chip.focus());
+    await act(async () => chip.blur());
+    expect(viewEmits().filter((e) => e.kind === 'chip_click')).toEqual([]);
+    await act(async () => chip.click());
+    expect(viewEmits()).toEqual([{ mogId: ID, kind: 'chip_click', payload: { chipId: 'c1' } }]);
+  });
+
+  it('[UX-18] drops a card update with a bad section list', async () => {
+    const { el } = await mountCard(<CardView mogId={ID} />);
+    await tauri.emit('card:update', { ...update, sections: [{ id: 'nope' }] });
+    expect(el.textContent).not.toContain('Revenue');
+  });
+});
