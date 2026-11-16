@@ -126,7 +126,11 @@ fn g_02_endpoint_refuses_a_bad_host() {
         "h cloud",
         ".cloud.databricks.com",
     ] {
-        assert!(GenieOneEndpoint::new(host, "1").is_err(), "{host:?}");
+        assert_eq!(
+            GenieOneEndpoint::new(host, "1").unwrap_err(),
+            EndpointError::BadHost,
+            "{host:?}"
+        );
     }
 }
 
@@ -215,7 +219,7 @@ fn g_03_allowed_urls_are_not_flagged() {
         "https://my-app-123.aws.databricksapps.com",
         "https://h.cloud.databricks.com/api/2.0/genie/spaces/01ef/start-conversation",
         "https://h.cloud.databricks.com/api/2.0/mcp/genies",
-        "ask about /api/2.0 limits",
+        "/api/2.0/limits",
     ] {
         assert_eq!(rejected_backend(url), None, "{url}");
     }
@@ -279,4 +283,140 @@ fn g_01_at_11_ddl_check_lists_exactly_the_enum() {
     let columns = ddl.matches("backend_kind TEXT NOT NULL").count();
     assert!(columns >= 2, "mog and genie_exchange carry backend_kind");
     assert_eq!(ddl.matches(want.as_str()).count(), columns, "{want}");
+}
+
+// ---------- G-03 canonical match (review of #423) ----------
+
+fn custom_agent(app_url: &str) -> JsonObject {
+    config_with_backend(json!({"kind": "custom_agent", "profile": "dev",
+        "protocol": "invocations", "appUrl": app_url}))
+}
+
+#[test]
+fn g_03_at_07_config_loader_rejects_non_canonical_forms_of_rejected_urls() {
+    let h = "https://h.cloud.databricks.com";
+    let cases = [
+        ("/api/2.0/mcp/%67enie", "genie_beta_mcp_rejected"),
+        ("/api/2.0/mcp/%47ENIE", "genie_beta_mcp_rejected"),
+        ("/ap%69/2.0/genie/one/stream", "genie_one_sse_rejected"),
+        ("//api/2.0/mcp/genie", "genie_beta_mcp_rejected"),
+        ("/api/2.0//mcp/genie", "genie_beta_mcp_rejected"),
+        ("/api/2.0/./mcp/genie", "genie_beta_mcp_rejected"),
+        ("/api/2.0/%2e/mcp/genie", "genie_beta_mcp_rejected"),
+        ("/x/../api/2.0/mcp/genie", "genie_beta_mcp_rejected"),
+        (
+            "/x/%2E%2E/api/2.0/mcp/genie/01ef",
+            "genie_space_mcp_rejected",
+        ),
+        ("/../api/2.0/mcp/genie", "genie_beta_mcp_rejected"),
+        ("/api/2.0/mcp/genie;v=1", "genie_beta_mcp_rejected"),
+        ("/api;x/2.0/genie/one;y/stream", "genie_one_sse_rejected"),
+        ("/api/2.0/mcp/genie%20", "genie_beta_mcp_rejected"),
+        ("/api/2.0/mcp/genie%2F01ef", "mcp_url_not_canonical"),
+        ("/api/2.0/mcp/genie%2f01ef", "mcp_url_not_canonical"),
+        ("/api/2.0/mcp%5Cgenie", "mcp_url_not_canonical"),
+        ("/api/2.0/mcp\\genie", "mcp_url_not_canonical"),
+        ("/api/2.0/mcp/genie%", "mcp_url_not_canonical"),
+        ("/api/2.0/mcp/genie%zz", "mcp_url_not_canonical"),
+        ("/api/2.0/mcp/gen ie", "mcp_url_not_canonical"),
+    ];
+    for (path, code) in cases {
+        let url = format!("{h}{path}");
+        assert_eq!(
+            rejected_backend(&url).map(|e| e.code()),
+            Some(code),
+            "{url}"
+        );
+        let err = parse_config(&custom_agent(&url)).unwrap_err();
+        assert_eq!(err.code(), code, "{url}");
+        assert!(!err.to_string().contains("h.cloud.databricks.com"));
+    }
+}
+
+#[test]
+fn g_03_canonical_allowed_urls_still_load() {
+    for url in [
+        "https://my-app-1.aws.databricksapps.com/api/2.0/genie/spaces",
+        "https://my-app-1.aws.databricksapps.com/a%3Bb/%7Euser",
+        "https://my-app-1.aws.databricksapps.com/x/./y/../z",
+    ] {
+        assert_eq!(rejected_backend(url), None, "{url}");
+        assert!(parse_config(&custom_agent(url)).is_ok(), "{url}");
+    }
+}
+
+#[test]
+fn g_03_only_url_fields_are_scanned() {
+    let cfg = obj(json!({
+        "schemaVersion": 1,
+        "name": "Sales MOG",
+        "binding": {"home": "/api/2.0/genie/one",
+                    "backend": {"kind": "genie_one_mcp", "profile": "/api/2.0/mcp/genie"}}
+    }));
+    assert!(parse_config(&cfg).is_ok());
+    let cfg = config_with_backend(json!({"kind": "genie_agent", "profile": "dev",
+        "spaceId": "/api/2.0/mcp/genie", "mode": "chat"}));
+    assert!(parse_config(&cfg).is_ok());
+}
+
+#[test]
+fn g_02_endpoint_new_normalizes_scheme_and_trailing_slashes() {
+    for host in [
+        "HTTPS://h.cloud.databricks.com",
+        "Https://h.cloud.databricks.com//",
+        "h.cloud.databricks.com///",
+    ] {
+        assert_eq!(
+            GenieOneEndpoint::new(host, "1").unwrap().host(),
+            "h.cloud.databricks.com",
+            "{host}"
+        );
+    }
+}
+
+#[test]
+fn g_02_endpoint_refuses_ip_and_numeric_hosts() {
+    for host in [
+        "1.2.3.4",
+        "123",
+        "https://10.0.0.1/",
+        "0x7f.0.0.1",
+        "h.0x1f",
+        "a.b.42",
+    ] {
+        assert_eq!(
+            GenieOneEndpoint::new(host, "1").unwrap_err(),
+            EndpointError::BadHost,
+            "{host}"
+        );
+    }
+}
+
+#[test]
+fn g_02_endpoint_refuses_workspace_ids_with_leading_zeros() {
+    for id in ["01", "0001", "00"] {
+        assert_eq!(
+            GenieOneEndpoint::new("h.cloud.databricks.com", id).unwrap_err(),
+            EndpointError::MissingWorkspaceId,
+            "{id}"
+        );
+    }
+    assert!(GenieOneEndpoint::new("h.cloud.databricks.com", "0").is_ok());
+}
+
+#[test]
+fn g_02_parse_names_an_extra_query_key() {
+    let base = format!("https://h.cloud.databricks.com{GENIE_ONE_PATH}");
+    for q in ["?x=1&o=1", "?o=1&", "?o=1&x=2"] {
+        assert_eq!(
+            GenieOneEndpoint::parse(&format!("{base}{q}")).unwrap_err(),
+            EndpointError::ExtraQuery,
+            "{q}"
+        );
+    }
+    assert_eq!(EndpointError::ExtraQuery.code(), "mcp_url_extra_query");
+    assert_eq!(
+        EndpointError::NonCanonicalUrl.code(),
+        "mcp_url_not_canonical"
+    );
 }

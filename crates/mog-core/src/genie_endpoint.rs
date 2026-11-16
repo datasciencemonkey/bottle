@@ -34,8 +34,12 @@ pub enum EndpointError {
     BadHost,
     /// The path is not [`GENIE_ONE_PATH`].
     WrongPath,
-    /// G-02: `?o=` is missing, repeated or not all digits.
+    /// G-02: `?o=` is missing, repeated, not all digits or has a leading zero.
     MissingWorkspaceId,
+    /// G-02: the query has a key other than the one `o=`.
+    ExtraQuery,
+    /// G-03: the URL path cannot be made canonical (bad or encoded `/` or `\\`, white space).
+    NonCanonicalUrl,
 }
 
 impl EndpointError {
@@ -49,6 +53,8 @@ impl EndpointError {
             EndpointError::BadHost => "mcp_url_bad_host",
             EndpointError::WrongPath => "mcp_url_wrong_path",
             EndpointError::MissingWorkspaceId => "mcp_url_missing_workspace_id",
+            EndpointError::ExtraQuery => "mcp_url_extra_query",
+            EndpointError::NonCanonicalUrl => "mcp_url_not_canonical",
         }
     }
 
@@ -82,6 +88,13 @@ impl EndpointError {
             EndpointError::MissingWorkspaceId => {
                 "mcp_url_missing_workspace_id: the MCP URL must carry ?o=<workspace_id> with \
                  digits only."
+            }
+            EndpointError::ExtraQuery => {
+                "mcp_url_extra_query: the MCP URL query must hold only o=<workspace_id>."
+            }
+            EndpointError::NonCanonicalUrl => {
+                "mcp_url_not_canonical: the URL path has an encoded / or \\, a bad percent \
+                 escape or white space, so Bottle cannot check it."
             }
         }
     }
@@ -241,8 +254,11 @@ mod tests {
     #[test]
     fn g_02_parse_refuses_extra_query_keys_and_upper_case_hosts() {
         let base = format!("https://h.cloud.databricks.com{GENIE_ONE_PATH}");
-        assert!(GenieOneEndpoint::parse(&format!("{base}?o=1&x=2")).is_err());
+        assert_eq!(
+            GenieOneEndpoint::parse(&format!("{base}?o=1&x=2")),
+            Err(EndpointError::ExtraQuery)
+        );
         let upper = format!("https://H.cloud.databricks.com{GENIE_ONE_PATH}?o=1");
-        assert!(GenieOneEndpoint::parse(&upper).is_err());
+        assert_eq!(GenieOneEndpoint::parse(&upper), Err(EndpointError::BadHost));
     }
 }
