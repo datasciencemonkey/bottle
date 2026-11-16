@@ -13,6 +13,7 @@
 //! file is reported, never deleted (no automatic deletion of user content).
 
 use crate::error::{CoreError, CoreResult};
+use crate::genie_endpoint::EndpointError;
 use crate::ipc::{ConfigIdArgs, ConfigWriteArgs, JsonObject};
 use crate::ipc_gateway::GatewayComponents;
 use crate::token_guard::{self, ConfigSecret};
@@ -62,6 +63,8 @@ pub enum ConfigError {
     LimitReached,
     /// The file system call failed.
     StorageFailed,
+    /// G-03: the backend names a rejected Genie endpoint.
+    RejectedBackend(EndpointError),
 }
 
 impl ConfigError {
@@ -76,6 +79,7 @@ impl ConfigError {
             ConfigError::NotFound => "config_not_found",
             ConfigError::LimitReached => "config_limit_reached",
             ConfigError::StorageFailed => "config_storage_failed",
+            ConfigError::RejectedBackend(e) => e.code(),
         }
     }
 }
@@ -179,6 +183,31 @@ pub enum CustomAgentProtocol {
     Responses,
 }
 
+/// The 4.7 `BackendKind` enum (G-01, D28).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackendKind {
+    GenieOneMcp,
+    GenieAgent,
+    CustomAgent,
+}
+
+/// Every backend kind, in the 4.7 order.
+pub const BACKEND_KINDS: [BackendKind; 3] = [
+    BackendKind::GenieOneMcp,
+    BackendKind::GenieAgent,
+    BackendKind::CustomAgent,
+];
+
+impl BackendKind {
+    pub fn as_str(&self) -> &'static str {
+        ""
+    }
+    pub fn parse(_s: &str) -> Option<Self> {
+        None
+    }
+}
+
 /// `mog.binding.backend`: the 4.7 `BackendBinding` union (G-01 kinds only).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -201,6 +230,13 @@ pub enum BackendConfig {
         app_url: String,
         protocol: CustomAgentProtocol,
     },
+}
+
+impl BackendConfig {
+    /// The G-01 kind of this backend.
+    pub fn kind(&self) -> BackendKind {
+        BackendKind::CustomAgent
+    }
 }
 
 /// `mog.binding.*` (D62).
