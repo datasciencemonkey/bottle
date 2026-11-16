@@ -3,122 +3,45 @@
 //! A fake clock and a fake device keep these tests free of real audio hardware.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, OnceLock, Weak};
+use std::time::{Duration, Instant};
 
 use mog_core::capture::{
-    parse_lease, AudioDevice, AudioSource, CaptureCore, CaptureError, CaptureEvents,
-    CaptureRequest, CaptureService, Clock, DeviceError, StopReason, Stopped, HANDS_FREE_MAX_MS,
-    HOLD_MAX_MS,
+    parse_lease, AudioSource, CaptureCore, CaptureError, CaptureEvents, CaptureRequest,
+    CaptureService, DeviceError, StopReason, Stopped, HANDS_FREE_MAX_MS, HOLD_MAX_MS,
 };
+use mog_core::clock::SimClock;
 use mog_core::ipc::IpcError;
+use mog_core::testkit::capture::{FakeAudioDevice, RecordingCaptureEvents};
 use mog_core::types::{CaptureMode, CaptureState, OthersTrack};
 
-// ---------- fakes ----------
-
-#[derive(Default)]
-struct FakeClock {
-    mono_ms: AtomicU64,
-}
-
-impl FakeClock {
-    fn advance(&self, ms: u64) {
-        self.mono_ms.fetch_add(ms, Ordering::SeqCst);
-    }
-}
+// ---------- rig: one SimClock (#229), the testkit fake device and event sink ----------
 
 const EPOCH_BASE_MS: u64 = 1_800_000_000_000;
 
-impl Clock for FakeClock {
-    fn monotonic_ms(&self) -> u64 {
-        self.mono_ms.load(Ordering::SeqCst)
-    }
-    fn epoch_ms(&self) -> u64 {
-        EPOCH_BASE_MS + self.monotonic_ms()
-    }
-}
-
-#[derive(Default)]
-struct DeviceLog {
-    mic_open: bool,
-    system_open: bool,
-    mic_opens: u32,
-    system_opens: u32,
-    fail_next_open: Option<&'static str>,
-    panic_next_open: bool,
-}
-
-#[derive(Default, Clone)]
-struct FakeDevice(Arc<Mutex<DeviceLog>>);
-
-impl FakeDevice {
-    fn log(&self) -> std::sync::MutexGuard<'_, DeviceLog> {
-        self.0.lock().unwrap_or_else(|e| e.into_inner())
-    }
-}
-
-impl AudioDevice for FakeDevice {
-    fn open(&self, source: AudioSource) -> Result<(), DeviceError> {
-        let mut log = self.log();
-        if log.panic_next_open {
-            log.panic_next_open = false;
-            drop(log);
-            panic!("fake device panic");
-        }
-        if let Some(code) = log.fail_next_open.take() {
-            return Err(DeviceError { code });
-        }
-        match source {
-            AudioSource::Mic => {
-                assert!(!log.mic_open, "the mic must not open twice");
-                log.mic_open = true;
-                log.mic_opens += 1;
-            }
-            AudioSource::SystemAudio => {
-                assert!(!log.system_open, "system audio must not open twice");
-                log.system_open = true;
-                log.system_opens += 1;
-            }
-        }
-        Ok(())
-    }
-
-    fn close(&self, source: AudioSource) {
-        let mut log = self.log();
-        match source {
-            AudioSource::Mic => log.mic_open = false,
-            AudioSource::SystemAudio => log.system_open = false,
-        }
-    }
-}
-
-#[derive(Default)]
-struct RecordingEvents {
-    states: Mutex<Vec<CaptureState>>,
-    stops: Mutex<Vec<Stopped>>,
-}
-
-impl CaptureEvents for RecordingEvents {
-    fn state(&self, state: &CaptureState) {
-        self.states.lock().unwrap().push(state.clone());
-    }
-    fn stopped(&self, stopped: &Stopped) {
-        self.stops.lock().unwrap().push(stopped.clone());
-    }
-}
-
 struct Rig {
     svc: CaptureCore,
-    clock: Arc<FakeClock>,
-    device: FakeDevice,
-    events: Arc<RecordingEvents>,
+    clock: SimClock,
+    device: FakeAudioDevice,
+    events: Arc<RecordingCaptureEvents>,
+}
+
+impl Rig {
+    fn advance(&self, ms: u64) {
+        self.clock.advance(Duration::from_millis(ms));
+    }
 }
 
 fn rig() -> Rig {
-    let clock = Arc::new(FakeClock::default());
-    let device = FakeDevice::default();
-    let events = Arc::new(RecordingEvents::default());
-    let svc = CaptureCore::new(Box::new(device.clone()), clock.clone(), events.clone());
+    let clock = SimClock::new();
+    let device = FakeAudioDevice::new();
+    let events = Arc::new(RecordingCaptureEvents::default());
+    let svc = CaptureCore::new(
+        Box::new(device.clone()),
+        Arc::new(clock.clone()),
+        events.clone(),
+    )
+    .with_epoch_origin_ms(EPOCH_BASE_MS);
     Rig {
         svc,
         clock,
@@ -136,13 +59,7 @@ fn req(mog: &str, mode: CaptureMode) -> CaptureRequest {
 }
 
 fn last_stop(r: &Rig) -> Stopped {
-    r.events
-        .stops
-        .lock()
-        .unwrap()
-        .last()
-        .cloned()
-        .expect("a stop event")
+    r.events.last_stop().expect("a stop event")
 }
 
 // ---------- CAP-01a: one owner, mic_busy ----------
@@ -204,7 +121,7 @@ fn cap_01a_one_mic_stream_serves_every_lease() {
 #[test]
 fn cap_01a_device_failure_leaves_no_lease() {
     let r = rig();
-    r.device.log().fail_next_open = Some("permission_denied");
+    r.device.log().fail_next_open = Some((None, "permission_denied"));
     let err = r.svc.start(req("a", CaptureMode::Ptt)).unwrap_err();
     assert_eq!(
         err,
@@ -239,10 +156,11 @@ fn cap_01a_service_recovers_from_a_panic_without_stop_all() {
     r.device.log().panic_next_open = true;
     let res = catch_unwind(AssertUnwindSafe(|| r.svc.start(req("a", CaptureMode::Ptt))));
     assert!(res.is_err(), "the fake device panics");
-    // The half-made lease is gone: the next caller gets the mic, not mic_busy.
+    // The half-made lease is gone: the next caller gets the mic, not mic_busy. `start`
+    // never returned that lease, so no stop event names it.
     assert!(!r.svc.status().recording);
     assert!(r.svc.status().owner.is_none());
-    assert_eq!(last_stop(&r).reason, StopReason::Panic);
+    assert!(r.events.stops().is_empty());
     r.svc.start(req("b", CaptureMode::Ptt)).unwrap();
     assert!(r.device.log().mic_open);
 }
@@ -283,7 +201,7 @@ fn cap_01b_state_events_carry_only_capture_state_fields() {
         "directedTo",
         "othersTrack",
     ];
-    let states = r.events.states.lock().unwrap();
+    let states = r.events.states();
     assert!(!states.is_empty());
     for s in states.iter() {
         let json = serde_json::to_value(s).unwrap();
@@ -337,7 +255,7 @@ fn cap_02a_capture_state_carries_the_lease_that_owns_the_mic() {
     r.svc.stop(hf.id).unwrap();
     assert_eq!(r.svc.status().lease_id, None);
     // Every state event with an owner names a lease.
-    for s in r.events.states.lock().unwrap().iter() {
+    for s in r.events.states().iter() {
         assert_eq!(s.owner.is_some(), s.lease_id.is_some());
     }
 }
@@ -360,7 +278,7 @@ fn cap_02a_wire_lease_ids_match_the_contract_and_parse_back() {
     assert!(!wire.is_empty() && wire.len() <= 64);
     assert!(wire.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
     assert_eq!(parse_lease(&wire), Ok(lease.id));
-    for bad in ["", "abc", "-1", "0", "99999999999999999999999"] {
+    for bad in ["", "abc", "-1", "0", "007", "+7", "99999999999999999999999"] {
         assert_eq!(parse_lease(bad), Err(CaptureError::UnknownLease), "{bad:?}");
     }
 }
@@ -421,7 +339,7 @@ fn cap_03_hands_free_starts_and_stops() {
     let lease = r.svc.start(req("a", CaptureMode::HandsFree)).unwrap();
     assert_eq!(r.svc.status().mode, Some(CaptureMode::HandsFree));
     assert!(r.device.log().mic_open);
-    r.clock.advance(10_000);
+    r.advance(10_000);
     r.svc.stop(lease.id).unwrap();
     assert!(!r.device.log().mic_open);
     assert_eq!(last_stop(&r).reason, StopReason::Manual);
@@ -514,16 +432,17 @@ fn cap_04a_caps_are_locked_at_120_s_and_5_min() {
 fn cap_04a_missing_key_up_stops_ptt_at_120_s() {
     let r = rig();
     let lease = r.svc.start(req("a", CaptureMode::Ptt)).unwrap();
-    r.clock.advance(HOLD_MAX_MS - 1);
+    r.advance(HOLD_MAX_MS - 1);
     r.svc.tick();
     assert!(r.svc.status().recording, "still recording at 119.999 s");
-    r.clock.advance(1);
+    r.advance(1);
     r.svc.tick();
-    assert!(!r.svc.status().recording);
+    // tick() did the stop: check the device and the event before status() runs.
     assert!(!r.device.log().mic_open);
     let stop = last_stop(&r);
     assert_eq!(stop.lease_id, lease.id);
     assert_eq!(stop.reason, StopReason::HoldCap);
+    assert!(!r.svc.status().recording);
     assert_eq!(stop.reason.code(), "hold_cap");
     assert_eq!(
         r.svc.stop(lease.id).unwrap_err(),
@@ -535,7 +454,7 @@ fn cap_04a_missing_key_up_stops_ptt_at_120_s() {
 fn cap_04a_status_enforces_the_cap_without_a_tick() {
     let r = rig();
     r.svc.start(req("a", CaptureMode::Ptt)).unwrap();
-    r.clock.advance(HOLD_MAX_MS + 5_000);
+    r.advance(HOLD_MAX_MS + 5_000);
     assert!(!r.svc.status().recording);
     assert_eq!(last_stop(&r).reason, StopReason::HoldCap);
 }
@@ -544,7 +463,7 @@ fn cap_04a_status_enforces_the_cap_without_a_tick() {
 fn cap_04a_tick_returns_the_next_deadline() {
     let r = rig();
     assert_eq!(r.svc.tick(), None, "no deadline when idle");
-    r.clock.advance(1_000);
+    r.advance(1_000);
     r.svc.start(req("a", CaptureMode::Ptt)).unwrap();
     assert_eq!(r.svc.tick(), Some(1_000 + HOLD_MAX_MS));
 }
@@ -554,7 +473,7 @@ fn cap_04a_directed_ptt_in_a_session_stops_at_120_s_and_the_session_goes_on() {
     let r = rig();
     let session = r.svc.start(req("a", CaptureMode::Session)).unwrap();
     let ptt = r.svc.start(req("b", CaptureMode::Ptt)).unwrap();
-    r.clock.advance(HOLD_MAX_MS);
+    r.advance(HOLD_MAX_MS);
     r.svc.tick();
     let stop = last_stop(&r);
     assert_eq!(stop.lease_id, ptt.id);
@@ -570,16 +489,17 @@ fn cap_04a_directed_ptt_in_a_session_stops_at_120_s_and_the_session_goes_on() {
 fn cap_04b_hands_free_stops_at_5_min() {
     let r = rig();
     let lease = r.svc.start(req("a", CaptureMode::HandsFree)).unwrap();
-    r.clock.advance(HANDS_FREE_MAX_MS - 1);
+    r.advance(HANDS_FREE_MAX_MS - 1);
     r.svc.tick();
     assert!(r.svc.status().recording);
-    r.clock.advance(1);
+    r.advance(1);
     r.svc.tick();
-    assert!(!r.svc.status().recording);
+    // tick() did the stop: check the device and the event before status() runs.
     assert!(!r.device.log().mic_open);
     let stop = last_stop(&r);
     assert_eq!(stop.lease_id, lease.id);
     assert_eq!(stop.reason, StopReason::HandsFreeCap);
+    assert!(!r.svc.status().recording);
     assert_eq!(stop.reason.code(), "hands_free_cap");
 }
 
@@ -587,9 +507,9 @@ fn cap_04b_hands_free_stops_at_5_min() {
 fn cap_04b_suspended_hands_free_still_stops_at_5_min() {
     let r = rig();
     let hf = r.svc.start(req("a", CaptureMode::HandsFree)).unwrap();
-    r.clock.advance(HANDS_FREE_MAX_MS - 10_000);
+    r.advance(HANDS_FREE_MAX_MS - 10_000);
     let ptt = r.svc.start(req("b", CaptureMode::Ptt)).unwrap();
-    r.clock.advance(10_000);
+    r.advance(10_000);
     r.svc.tick();
     let stop = last_stop(&r);
     assert_eq!(stop.lease_id, hf.id);
@@ -607,7 +527,7 @@ fn cap_04b_suspended_hands_free_still_stops_at_5_min() {
 fn cap_04b_session_has_no_hands_free_cap() {
     let r = rig();
     r.svc.start(req("a", CaptureMode::Session)).unwrap();
-    r.clock.advance(HANDS_FREE_MAX_MS * 4);
+    r.advance(HANDS_FREE_MAX_MS * 4);
     assert_eq!(r.svc.tick(), None);
     assert!(r.svc.status().recording);
 }
@@ -725,7 +645,7 @@ fn mb_05_stop_all_stops_every_lease_and_closes_every_stream() {
     let log = r.device.log();
     assert!(!log.mic_open && !log.system_open);
     drop(log);
-    let stops = r.events.stops.lock().unwrap().clone();
+    let stops = r.events.stops();
     let mut ids: Vec<u64> = stops
         .iter()
         .filter(|s| s.reason == StopReason::Panic)
@@ -741,7 +661,7 @@ fn mb_05_stop_all_when_idle_is_harmless() {
     let r = rig();
     let s = r.svc.stop_all();
     assert!(!s.recording);
-    assert!(r.events.stops.lock().unwrap().is_empty());
+    assert!(r.events.stops().is_empty());
 }
 
 // ---------- MOG-09 / UX-07: idle and owner ----------
@@ -749,7 +669,7 @@ fn mb_05_stop_all_when_idle_is_harmless() {
 #[test]
 fn mog_09_an_idle_service_never_opens_the_mic() {
     let r = rig();
-    r.clock.advance(3_600_000);
+    r.advance(3_600_000);
     r.svc.tick();
     let _ = r.svc.status();
     assert_eq!(r.device.log().mic_opens, 0);
@@ -763,14 +683,7 @@ fn ux_07_state_names_only_the_mog_that_owns_the_capture() {
     let ptt = r.svc.start(req("b", CaptureMode::Ptt)).unwrap();
     r.svc.stop(ptt.id).unwrap();
     r.svc.stop(hf.id).unwrap();
-    let owners: Vec<Option<String>> = r
-        .events
-        .states
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|s| s.owner.clone())
-        .collect();
+    let owners: Vec<Option<String>> = r.events.states().iter().map(|s| s.owner.clone()).collect();
     assert_eq!(
         owners,
         vec![
@@ -780,4 +693,163 @@ fn ux_07_state_names_only_the_mog_that_owns_the_capture() {
             None
         ]
     );
+}
+
+// ---------- review fixes: N2, N3, N4, N9 ----------
+
+#[test]
+fn arc_f9_a_failed_session_start_keeps_the_hands_free_capture() {
+    let r = rig();
+    let hf = r.svc.start(req("a", CaptureMode::HandsFree)).unwrap();
+    r.device.log().fail_next_open = Some((Some(AudioSource::SystemAudio), "no_device"));
+    let err = r
+        .svc
+        .start(CaptureRequest {
+            others_track: true,
+            ..req("b", CaptureMode::Session)
+        })
+        .unwrap_err();
+    assert_eq!(err, CaptureError::Device(DeviceError { code: "no_device" }));
+    // The hands-free capture was not preempted and still owns the mic.
+    assert!(r.events.stops().is_empty(), "no preempted stop");
+    let s = r.svc.status();
+    assert_eq!(s.owner.as_deref(), Some("a"));
+    assert_eq!(s.mode, Some(CaptureMode::HandsFree));
+    assert_eq!(s.lease_id, Some(hf.lease_id()));
+    let log = r.device.log();
+    assert!(log.mic_open && !log.system_open);
+}
+
+#[test]
+fn mb_05_stop_all_does_not_wait_for_a_slow_device_open() {
+    let r = Arc::new(rig());
+    r.device.log().open_delay = Duration::from_millis(600);
+    let starter = {
+        let r = Arc::clone(&r);
+        std::thread::spawn(move || r.svc.start(req("a", CaptureMode::Session)))
+    };
+    let waited = Instant::now();
+    while !r.device.log().opening {
+        assert!(waited.elapsed() < Duration::from_secs(5), "the open began");
+        std::thread::yield_now();
+    }
+    // status() and stop_all() answer while the open is still running (MB-05: 200 ms).
+    let t = Instant::now();
+    assert!(!r.svc.status().recording);
+    r.svc.stop_all();
+    assert!(
+        t.elapsed() < Duration::from_millis(200),
+        "stop_all took {:?}",
+        t.elapsed()
+    );
+    assert!(r.device.log().opening, "the slow open is still running");
+    // The start ends without a lease, and the stream that opened late is closed.
+    assert_eq!(starter.join().unwrap(), Err(CaptureError::UnknownLease));
+    assert!(!r.device.log().mic_open);
+    assert!(!r.svc.status().recording);
+    r.device.log().open_delay = Duration::ZERO;
+    r.svc.start(req("b", CaptureMode::Ptt)).unwrap();
+}
+
+/// A sink that reads the service back while it handles an event.
+#[derive(Default)]
+struct ReentrantEvents {
+    svc: OnceLock<Weak<CaptureCore>>,
+    seen: std::sync::Mutex<Vec<Option<String>>>,
+}
+
+impl CaptureEvents for ReentrantEvents {
+    fn state(&self, _state: &CaptureState) {
+        if let Some(svc) = self.svc.get().and_then(Weak::upgrade) {
+            self.seen.lock().unwrap().push(svc.status().owner);
+        }
+    }
+    fn stopped(&self, _stopped: &Stopped) {}
+}
+
+#[test]
+fn cap_01a_events_are_sent_without_the_state_lock() {
+    let events = Arc::new(ReentrantEvents::default());
+    let svc = Arc::new(CaptureCore::new(
+        Box::new(FakeAudioDevice::new()),
+        Arc::new(SimClock::new()),
+        events.clone(),
+    ));
+    events.svc.set(Arc::downgrade(&svc)).ok();
+    let lease = svc.start(req("a", CaptureMode::Ptt)).unwrap();
+    svc.stop(lease.id).unwrap();
+    assert_eq!(
+        *events.seen.lock().unwrap(),
+        vec![Some("a".to_string()), None]
+    );
+}
+
+#[test]
+fn cap_01a_a_lost_mic_stops_the_capture_and_the_next_start_reopens_it() {
+    let r = rig();
+    let hf = r.svc.start(req("a", CaptureMode::HandsFree)).unwrap();
+    let ptt = r.svc.start(req("b", CaptureMode::Ptt)).unwrap();
+    r.svc.device_failed(AudioSource::Mic);
+    let mut stopped: Vec<(u64, StopReason)> = r
+        .events
+        .stops()
+        .iter()
+        .map(|s| (s.lease_id, s.reason))
+        .collect();
+    stopped.sort_unstable_by_key(|s| s.0);
+    assert_eq!(
+        stopped,
+        vec![
+            (hf.id, StopReason::DeviceLost),
+            (ptt.id, StopReason::DeviceLost)
+        ]
+    );
+    assert_eq!(StopReason::DeviceLost.code(), "device_lost");
+    assert!(!r.device.log().mic_open);
+    assert!(!r.svc.status().recording);
+    r.svc.start(req("a", CaptureMode::Ptt)).unwrap();
+    assert_eq!(r.device.log().mic_opens, 2, "the mic opens again");
+}
+
+#[test]
+fn cap_01a_lost_system_audio_stops_only_the_session_that_uses_it() {
+    let r = rig();
+    let session = r
+        .svc
+        .start(CaptureRequest {
+            others_track: true,
+            ..req("a", CaptureMode::Session)
+        })
+        .unwrap();
+    let ptt = r.svc.start(req("b", CaptureMode::Ptt)).unwrap();
+    r.svc.device_failed(AudioSource::SystemAudio);
+    let stop = last_stop(&r);
+    assert_eq!(
+        (stop.lease_id, stop.reason),
+        (session.id, StopReason::DeviceLost)
+    );
+    // The directed PTT keeps the mic.
+    let s = r.svc.status();
+    assert_eq!(s.lease_id, Some(ptt.lease_id()));
+    assert_eq!(s.others_track, OthersTrack::Off);
+    assert!(r.device.log().mic_open && !r.device.log().system_open);
+}
+
+#[test]
+fn arc_f9_stopping_a_session_turns_its_directed_ptt_into_a_plain_ptt() {
+    let r = rig();
+    let session = r.svc.start(req("a", CaptureMode::Session)).unwrap();
+    let ptt = r.svc.start(req("b", CaptureMode::Ptt)).unwrap();
+    r.svc.stop(session.id).unwrap();
+    let s = r.svc.status();
+    assert_eq!(s.owner.as_deref(), Some("b"));
+    assert_eq!(s.mode, Some(CaptureMode::Ptt));
+    assert_eq!(s.lease_id, Some(ptt.lease_id()));
+    assert!(s.directed_to.is_none() && s.session_id.is_none());
+    assert!(r.device.log().mic_open);
+    assert_eq!(r.device.log().mic_opens, 1, "the stream stays open");
+    // It keeps its own 120 s cap.
+    r.advance(HOLD_MAX_MS);
+    r.svc.tick();
+    assert_eq!(last_stop(&r).reason, StopReason::HoldCap);
 }
