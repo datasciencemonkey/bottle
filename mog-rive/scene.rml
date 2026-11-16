@@ -163,7 +163,7 @@
                             </Fill>
                         </Shape>
                     </Node>
-                    <Node x="0" y="28" opacity="0" name="Orbit" id="0:28">
+                    <Node x="0" y="44" opacity="0" name="Orbit" id="0:28">
                         <Shape x="0.00" y="-118.00" name="Orb1">
                             <Star width="22" height="22" points="4" innerRadius="0.32" cornerRadius="1.5" originX="0.5" originY="0.5" name="Sparkle"/>
                             <Fill name="Fill">
@@ -183,7 +183,7 @@
                             </Fill>
                         </Shape>
                     </Node>
-                    <Node x="0" y="-56" opacity="0" name="Burst" id="0:29">
+                    <Node x="0" y="-44" opacity="0" name="Burst" id="0:29">
                         <Shape x="112.00" y="0.00" name="Burst1">
                             <Star width="20" height="20" points="4" innerRadius="0.32" cornerRadius="1.5" originX="0.5" originY="0.5" name="Sparkle"/>
                             <Fill name="Fill">
@@ -264,31 +264,57 @@
                                 <Node name="Peek" id="0:78">
                                     <Node name="Squash" id="0:23">
                                         <Node name="MoodBody" id="0:25">
-                                            <Node x="-94" y="34" name="ArmL" id="0:31">
-                                                <Shape x="0" y="18" name="Nub">
-                                                    <Rectangle width="24" height="42" originX="0.5" originY="0.5" cornerRadiusTL="12" name="Path"/>
+                                            <Node x="-62" y="52" name="ArmL" id="0:31">
+                                                <Shape x="0" y="58" name="Hand">
+                                                    <PointsPath isClosed="false" name="Path">
+                                                        <StraightVertex x="-9" y="-6" radius="6"/>
+                                                        <StraightVertex x="-10" y="3" radius="6"/>
+                                                        <StraightVertex x="-5" y="9" radius="6"/>
+                                                        <StraightVertex x="5" y="9" radius="6"/>
+                                                        <StraightVertex x="10" y="3" radius="6"/>
+                                                        <StraightVertex x="9" y="-6" radius="6"/>
+                                                    </PointsPath>
+                                                    <Stroke thickness="7" cap="round" join="round" name="Stroke">
+                                                        <SolidColor colorValue="FFF9F7F4" name="Color"/>
+                                                    </Stroke>
+                                                </Shape>
+                                                <Shape x="0" y="24" name="Sleeve">
+                                                    <Rectangle width="24" height="50" originX="0.5" originY="0.5" cornerRadiusTL="11" name="Path"/>
                                                     <Fill name="Fill">
-                                                        <LinearGradient startX="0" startY="-21" endX="0" endY="21" name="G">
+                                                        <LinearGradient startX="0" startY="-25" endX="0" endY="25" name="G">
                                                             <GradientStop colorValue="FFFABFBA" position="0"/>
-                                                            <GradientStop colorValue="FFFF5F46" position="1"/>
+                                                            <GradientStop colorValue="FFFF9E94" position="1"/>
                                                         </LinearGradient>
                                                     </Fill>
                                                 </Shape>
                                             </Node>
-                                            <Node x="94" y="34" name="ArmR" id="0:32">
-                                                <Shape x="0" y="18" name="Nub">
-                                                    <Rectangle width="24" height="42" originX="0.5" originY="0.5" cornerRadiusTL="12" name="Path"/>
+                                            <Node x="62" y="52" name="ArmR" id="0:32">
+                                                <Shape x="0" y="58" name="Hand">
+                                                    <PointsPath isClosed="false" name="Path">
+                                                        <StraightVertex x="-9" y="-6" radius="6"/>
+                                                        <StraightVertex x="-10" y="3" radius="6"/>
+                                                        <StraightVertex x="-5" y="9" radius="6"/>
+                                                        <StraightVertex x="5" y="9" radius="6"/>
+                                                        <StraightVertex x="10" y="3" radius="6"/>
+                                                        <StraightVertex x="9" y="-6" radius="6"/>
+                                                    </PointsPath>
+                                                    <Stroke thickness="7" cap="round" join="round" name="Stroke">
+                                                        <SolidColor colorValue="FFF9F7F4" name="Color"/>
+                                                    </Stroke>
+                                                </Shape>
+                                                <Shape x="0" y="24" name="Sleeve">
+                                                    <Rectangle width="24" height="50" originX="0.5" originY="0.5" cornerRadiusTL="11" name="Path"/>
                                                     <Fill name="Fill">
-                                                        <LinearGradient startX="0" startY="-21" endX="0" endY="21" name="G">
+                                                        <LinearGradient startX="0" startY="-25" endX="0" endY="25" name="G">
                                                             <GradientStop colorValue="FFFABFBA" position="0"/>
-                                                            <GradientStop colorValue="FFFF5F46" position="1"/>
+                                                            <GradientStop colorValue="FFFF9E94" position="1"/>
                                                         </LinearGradient>
                                                     </Fill>
                                                 </Shape>
                                             </Node>
                                             <Node opacity="0" name="Headphones" id="0:81">
-                                                <Shape x="-98" y="-2" name="Cup">
-                                                    <Rectangle width="24" height="44" originX="0.5" originY="0.5" cornerRadiusTL="11" name="Path"/>
+                                                <Shape x="-80" y="-6" name="Cup">
+                                                    <Rectangle width="20" height="40" originX="0.5" originY="0.5" cornerRadiusTL="9" name="Path"/>
                                                     <Fill name="Fill">
                                                         <SolidColor colorValue="FF1B3139" name="Color"/>
                                                     </Fill>
@@ -296,14 +322,14 @@
                                                         <SolidColor colorValue="FFFF5F46" name="Color"/>
                                                     </Stroke>
                                                 </Shape>
-                                                <Shape x="-98" y="-12" name="CupLight">
-                                                    <Ellipse width="8" height="8" originX="0.5" originY="0.5" name="Path"/>
+                                                <Shape x="-80" y="-15" name="CupLight">
+                                                    <Ellipse width="7" height="7" originX="0.5" originY="0.5" name="Path"/>
                                                     <Fill name="Fill">
                                                         <SolidColor colorValue="FFEB1600" name="Color"/>
                                                     </Fill>
                                                 </Shape>
-                                                <Shape x="98" y="-2" name="Cup">
-                                                    <Rectangle width="24" height="44" originX="0.5" originY="0.5" cornerRadiusTL="11" name="Path"/>
+                                                <Shape x="80" y="-6" name="Cup">
+                                                    <Rectangle width="20" height="40" originX="0.5" originY="0.5" cornerRadiusTL="9" name="Path"/>
                                                     <Fill name="Fill">
                                                         <SolidColor colorValue="FF1B3139" name="Color"/>
                                                     </Fill>
@@ -311,23 +337,23 @@
                                                         <SolidColor colorValue="FFFF5F46" name="Color"/>
                                                     </Stroke>
                                                 </Shape>
-                                                <Shape x="98" y="-12" name="CupLight">
-                                                    <Ellipse width="8" height="8" originX="0.5" originY="0.5" name="Path"/>
+                                                <Shape x="80" y="-15" name="CupLight">
+                                                    <Ellipse width="7" height="7" originX="0.5" originY="0.5" name="Path"/>
                                                     <Fill name="Fill">
                                                         <SolidColor colorValue="FFEB1600" name="Color"/>
                                                     </Fill>
                                                 </Shape>
                                                 <Shape name="Band">
                                                     <PointsPath isClosed="false" name="Path">
-                                                        <StraightVertex x="-96" y="-4" radius="34"/>
-                                                        <StraightVertex x="-86" y="-52" radius="34"/>
-                                                        <StraightVertex x="-46" y="-78" radius="34"/>
-                                                        <StraightVertex x="0" y="-84" radius="34"/>
-                                                        <StraightVertex x="46" y="-78" radius="34"/>
-                                                        <StraightVertex x="86" y="-52" radius="34"/>
-                                                        <StraightVertex x="96" y="-4" radius="34"/>
+                                                        <StraightVertex x="-78" y="-6" radius="30"/>
+                                                        <StraightVertex x="-72" y="-44" radius="30"/>
+                                                        <StraightVertex x="-42" y="-66" radius="30"/>
+                                                        <StraightVertex x="0" y="-72" radius="30"/>
+                                                        <StraightVertex x="42" y="-66" radius="30"/>
+                                                        <StraightVertex x="72" y="-44" radius="30"/>
+                                                        <StraightVertex x="78" y="-6" radius="30"/>
                                                     </PointsPath>
-                                                    <Stroke thickness="9" cap="round" join="round" name="Stroke">
+                                                    <Stroke thickness="8" cap="round" join="round" name="Stroke">
                                                         <SolidColor colorValue="FF1B3139" name="Color"/>
                                                     </Stroke>
                                                 </Shape>
@@ -337,13 +363,13 @@
                                                     <Node name="EyePair" id="0:35">
                                                         <Node name="Lids" id="0:34">
                                                             <Shape x="-30" y="0" name="Eye">
-                                                                <Rectangle width="28" height="38" originX="0.5" originY="0.5" cornerRadiusTL="14" name="Path"/>
+                                                                <Rectangle width="26" height="34" originX="0.5" originY="0.5" cornerRadiusTL="13" name="Path"/>
                                                                 <Fill name="Fill">
                                                                     <SolidColor colorValue="FF8ACAFF" name="Color" id="0:36"/>
                                                                 </Fill>
                                                             </Shape>
                                                             <Shape x="30" y="0" name="Eye">
-                                                                <Rectangle width="28" height="38" originX="0.5" originY="0.5" cornerRadiusTL="14" name="Path"/>
+                                                                <Rectangle width="26" height="34" originX="0.5" originY="0.5" cornerRadiusTL="13" name="Path"/>
                                                                 <Fill name="Fill">
                                                                     <SolidColor colorValue="FF8ACAFF" name="Color" id="0:37"/>
                                                                 </Fill>
@@ -402,13 +428,13 @@
                                                         </Stroke>
                                                     </Shape>
                                                 </Node>
-                                                <Shape x="0" y="24" name="Mouth" id="0:44">
+                                                <Shape x="0" y="21" name="Mouth" id="0:44">
                                                     <Rectangle width="18" height="6" originX="0.5" originY="0.5" cornerRadiusTL="3" name="Path"/>
                                                     <Fill name="Fill">
                                                         <SolidColor colorValue="FF8ACAFF" name="Color" id="0:45"/>
                                                     </Fill>
                                                 </Shape>
-                                                <Node x="0" y="26" opacity="0" name="ThinkDots" id="0:46">
+                                                <Node x="0" y="21" opacity="0" name="ThinkDots" id="0:46">
                                                     <Shape x="-18" y="0" name="Dot1" id="0:47">
                                                         <Ellipse width="11" height="11" originX="0.5" originY="0.5" name="Path"/>
                                                         <Fill name="Fill">
@@ -429,84 +455,115 @@
                                                     </Shape>
                                                 </Node>
                                                 <Shape x="0" y="0" name="Screen">
-                                                    <Rectangle width="130" height="88" originX="0.5" originY="0.5" cornerRadiusTL="38" name="Path"/>
+                                                    <Rectangle width="108" height="68" originX="0.5" originY="0.5" cornerRadiusTL="24" name="Path"/>
                                                     <Stroke thickness="3" name="Rim">
                                                         <SolidColor colorValue="FF1B5162" name="Color"/>
                                                     </Stroke>
                                                     <Fill name="Fill">
-                                                        <LinearGradient startX="0" startY="-44" endX="0" endY="44" name="G">
+                                                        <LinearGradient startX="0" startY="-34" endX="0" endY="34" name="G">
                                                             <GradientStop colorValue="FF1B3139" position="0"/>
                                                             <GradientStop colorValue="FF0B2026" position="1"/>
                                                         </LinearGradient>
                                                     </Fill>
                                                 </Shape>
                                                 <Shape x="0" y="0" name="ScreenGlow">
-                                                    <Rectangle width="134" height="92" originX="0.5" originY="0.5" cornerRadiusTL="40" name="Path"/>
+                                                    <Rectangle width="112" height="72" originX="0.5" originY="0.5" cornerRadiusTL="26" name="Path"/>
                                                     <Stroke thickness="4" name="Glow">
                                                         <SolidColor colorValue="408ACAFF" name="Color" id="0:53"/>
                                                         <Feather strength="6" name="F"/>
                                                     </Stroke>
                                                 </Shape>
                                             </Node>
-                                            <Shape x="-58" y="52" name="Cheek">
-                                                <Ellipse width="24" height="13" originX="0.5" originY="0.5" name="Path"/>
+                                            <Shape x="-62" y="24" name="Cheek">
+                                                <Ellipse width="12" height="9" originX="0.5" originY="0.5" name="Path"/>
                                                 <Fill fillRule="clockwise" name="Fill">
-                                                    <SolidColor colorValue="99FF5F46" name="Color"/>
-                                                    <Feather strength="3" name="F"/>
+                                                    <SolidColor colorValue="AAFF5F46" name="Color"/>
+                                                    <Feather strength="2" name="F"/>
                                                 </Fill>
                                             </Shape>
-                                            <Shape x="58" y="52" name="Cheek">
-                                                <Ellipse width="24" height="13" originX="0.5" originY="0.5" name="Path"/>
+                                            <Shape x="62" y="24" name="Cheek">
+                                                <Ellipse width="12" height="9" originX="0.5" originY="0.5" name="Path"/>
                                                 <Fill fillRule="clockwise" name="Fill">
-                                                    <SolidColor colorValue="99FF5F46" name="Color"/>
-                                                    <Feather strength="3" name="F"/>
+                                                    <SolidColor colorValue="AAFF5F46" name="Color"/>
+                                                    <Feather strength="2" name="F"/>
                                                 </Fill>
                                             </Shape>
-                                            <Shape x="-60" y="-42" name="Shine">
-                                                <Ellipse width="18" height="11" originX="0.5" originY="0.5" name="Path"/>
+                                            <Shape x="-50" y="-38" name="Shine">
+                                                <Ellipse width="16" height="10" originX="0.5" originY="0.5" name="Path"/>
                                                 <Fill name="Fill">
                                                     <SolidColor colorValue="88FFFFFF" name="Color"/>
                                                 </Fill>
                                             </Shape>
-                                            <Shape x="0" y="24" name="Body" id="0:54">
-                                                <Rectangle width="188" height="176" originX="0.5" originY="0.5" cornerRadiusTL="84" name="Path"/>
+                                            <Shape x="0" y="-8" name="Head" id="0:54">
+                                                <Rectangle width="140" height="92" originX="0.5" originY="0.5" cornerRadiusTL="30" name="Path"/>
                                                 <Fill name="Fill">
-                                                    <LinearGradient startX="0" startY="-88" endX="0" endY="88" name="G">
-                                                        <GradientStop colorValue="FFFABFBA" position="0.1"/>
-                                                        <GradientStop colorValue="FFFF9E94" position="0.6"/>
+                                                    <LinearGradient startX="0" startY="-46" endX="0" endY="46" name="G">
+                                                        <GradientStop colorValue="FFFABFBA" position="0"/>
+                                                        <GradientStop colorValue="FFFF9E94" position="1"/>
+                                                    </LinearGradient>
+                                                </Fill>
+                                            </Shape>
+                                            <Shape x="0" y="-58" name="Stud">
+                                                <Rectangle width="46" height="14" originX="0.5" originY="0.5" cornerRadiusTL="6" name="Path"/>
+                                                <Fill name="Fill">
+                                                    <SolidColor colorValue="FFFF9E94" name="Color"/>
+                                                </Fill>
+                                            </Shape>
+                                            <Shape x="0" y="42" name="Neck">
+                                                <Rectangle width="42" height="10" originX="0.5" originY="0.5" cornerRadiusTL="3" name="Path"/>
+                                                <Fill name="Fill">
+                                                    <SolidColor colorValue="FFFF9E94" name="Color"/>
+                                                </Fill>
+                                            </Shape>
+                                            <Shape x="0" y="76" name="Emblem">
+                                                <Star width="24" height="24" points="4" innerRadius="0.32" cornerRadius="1.5" originX="0.5" originY="0.5" name="Sparkle"/>
+                                                <Fill name="Fill">
+                                                    <SolidColor colorValue="FFFCBA33" name="Color"/>
+                                                </Fill>
+                                            </Shape>
+                                            <Shape x="0" y="0" name="Torso">
+                                                <PointsPath isClosed="true" name="Path">
+                                                    <StraightVertex x="-56" y="46" radius="10"/>
+                                                    <StraightVertex x="56" y="46" radius="10"/>
+                                                    <StraightVertex x="72" y="106" radius="10"/>
+                                                    <StraightVertex x="-72" y="106" radius="10"/>
+                                                </PointsPath>
+                                                <Fill name="Fill">
+                                                    <LinearGradient startX="0" startY="46" endX="0" endY="106" name="G">
+                                                        <GradientStop colorValue="FFFF9E94" position="0"/>
                                                         <GradientStop colorValue="FFFF5F46" position="1"/>
                                                     </LinearGradient>
                                                 </Fill>
                                             </Shape>
-                                            <Node x="-34" y="100" name="LegL" id="0:79">
-                                                <Shape x="-3" y="31" name="Shoe">
-                                                    <Ellipse width="32" height="15" originX="0.5" originY="0.5" name="Path"/>
+                                            <Shape x="0" y="111" name="Hips">
+                                                <Rectangle width="148" height="12" originX="0.5" originY="0.5" cornerRadiusTL="4" name="Path"/>
+                                                <Fill name="Fill">
+                                                    <SolidColor colorValue="FFBD2B26" name="Color"/>
+                                                </Fill>
+                                            </Shape>
+                                            <Node x="-36" y="116" name="LegL" id="0:79">
+                                                <Shape x="0" y="27" name="Shoe">
+                                                    <Rectangle width="64" height="10" originX="0.5" originY="0.5" cornerRadiusTL="4" name="Path"/>
                                                     <Fill name="Fill">
-                                                        <SolidColor colorValue="FFF9F7F4" name="Color"/>
+                                                        <SolidColor colorValue="FF801C17" name="Color"/>
                                                     </Fill>
-                                                    <Stroke thickness="2" name="Edge">
-                                                        <SolidColor colorValue="FFEEEDE9" name="Color"/>
-                                                    </Stroke>
                                                 </Shape>
-                                                <Shape x="0" y="14" name="Shin">
-                                                    <Rectangle width="18" height="32" originX="0.5" originY="0.5" cornerRadiusTL="9" name="Path"/>
+                                                <Shape x="0" y="14" name="Block">
+                                                    <Rectangle width="60" height="28" originX="0.5" originY="0.5" cornerRadiusTL="6" name="Path"/>
                                                     <Fill name="Fill">
                                                         <SolidColor colorValue="FFFF5F46" name="Color"/>
                                                     </Fill>
                                                 </Shape>
                                             </Node>
-                                            <Node x="34" y="100" name="LegR" id="0:80">
-                                                <Shape x="3" y="31" name="Shoe">
-                                                    <Ellipse width="32" height="15" originX="0.5" originY="0.5" name="Path"/>
+                                            <Node x="36" y="116" name="LegR" id="0:80">
+                                                <Shape x="0" y="27" name="Shoe">
+                                                    <Rectangle width="64" height="10" originX="0.5" originY="0.5" cornerRadiusTL="4" name="Path"/>
                                                     <Fill name="Fill">
-                                                        <SolidColor colorValue="FFF9F7F4" name="Color"/>
+                                                        <SolidColor colorValue="FF801C17" name="Color"/>
                                                     </Fill>
-                                                    <Stroke thickness="2" name="Edge">
-                                                        <SolidColor colorValue="FFEEEDE9" name="Color"/>
-                                                    </Stroke>
                                                 </Shape>
-                                                <Shape x="0" y="14" name="Shin">
-                                                    <Rectangle width="18" height="32" originX="0.5" originY="0.5" cornerRadiusTL="9" name="Path"/>
+                                                <Shape x="0" y="14" name="Block">
+                                                    <Rectangle width="60" height="28" originX="0.5" originY="0.5" cornerRadiusTL="6" name="Path"/>
                                                     <Fill name="Fill">
                                                         <SolidColor colorValue="FFFF5F46" name="Color"/>
                                                     </Fill>
@@ -518,7 +575,7 @@
                             </Node>
                         </Node>
                     </Node>
-                    <Node x="0" y="12" opacity="0" name="ListenRings" id="0:56">
+                    <Node x="0" y="22" opacity="0" name="ListenRings" id="0:56">
                         <Node name="LevelRing" id="0:57">
                             <DataBindContext sourcePathIds="0:14-0:18" propertyKey="16" converterId="0:60"/>
                             <DataBindContext sourcePathIds="0:14-0:18" propertyKey="17" converterId="0:60"/>
@@ -1890,7 +1947,7 @@
             </KeyedObject>
             <KeyedObject objectId="0:76">
                 <KeyedProperty property="y">
-                    <KeyFrameDouble value="72" frame="0" interpolationType="linear"/>
+                    <KeyFrameDouble value="76" frame="0" interpolationType="linear"/>
                 </KeyedProperty>
             </KeyedObject>
         </LinearAnimation>
@@ -1962,13 +2019,13 @@
             </KeyedObject>
             <KeyedObject objectId="0:31">
                 <KeyedProperty property="rotation">
-                    <KeyFrameDouble value="-2.95" frame="0" interpolationType="cubic">
+                    <KeyFrameDouble value="-3.3" frame="0" interpolationType="cubic">
                         <CubicEaseInterpolator x1="0.42" y1="0" x2="0.58" y2="1"/>
                     </KeyFrameDouble>
-                    <KeyFrameDouble value="-2.82" frame="45" interpolationType="cubic">
+                    <KeyFrameDouble value="-3.18" frame="45" interpolationType="cubic">
                         <CubicEaseInterpolator x1="0.42" y1="0" x2="0.58" y2="1"/>
                     </KeyFrameDouble>
-                    <KeyFrameDouble value="-2.95" frame="90" interpolationType="linear"/>
+                    <KeyFrameDouble value="-3.3" frame="90" interpolationType="linear"/>
                 </KeyedProperty>
                 <KeyedProperty property="scaleY">
                     <KeyFrameDouble value="1" frame="0" interpolationType="linear"/>
@@ -1976,13 +2033,13 @@
             </KeyedObject>
             <KeyedObject objectId="0:32">
                 <KeyedProperty property="rotation">
-                    <KeyFrameDouble value="2.95" frame="0" interpolationType="cubic">
+                    <KeyFrameDouble value="3.3" frame="0" interpolationType="cubic">
                         <CubicEaseInterpolator x1="0.42" y1="0" x2="0.58" y2="1"/>
                     </KeyFrameDouble>
-                    <KeyFrameDouble value="2.82" frame="45" interpolationType="cubic">
+                    <KeyFrameDouble value="3.18" frame="45" interpolationType="cubic">
                         <CubicEaseInterpolator x1="0.42" y1="0" x2="0.58" y2="1"/>
                     </KeyFrameDouble>
-                    <KeyFrameDouble value="2.95" frame="90" interpolationType="linear"/>
+                    <KeyFrameDouble value="3.3" frame="90" interpolationType="linear"/>
                 </KeyedProperty>
                 <KeyedProperty property="scaleY">
                     <KeyFrameDouble value="1" frame="0" interpolationType="linear"/>
@@ -2115,7 +2172,7 @@
             </KeyedObject>
             <KeyedObject objectId="0:76">
                 <KeyedProperty property="y">
-                    <KeyFrameDouble value="18" frame="0" interpolationType="linear"/>
+                    <KeyFrameDouble value="30" frame="0" interpolationType="linear"/>
                 </KeyedProperty>
             </KeyedObject>
         </LinearAnimation>
@@ -2220,16 +2277,16 @@
             </KeyedObject>
             <KeyedObject objectId="0:31">
                 <KeyedProperty property="rotation">
-                    <KeyFrameDouble value="-1.75" frame="0" interpolationType="cubic">
+                    <KeyFrameDouble value="-2.7" frame="0" interpolationType="cubic">
                         <CubicEaseInterpolator x1="0.42" y1="0" x2="0.58" y2="1"/>
                     </KeyFrameDouble>
-                    <KeyFrameDouble value="-1.6" frame="60" interpolationType="cubic">
+                    <KeyFrameDouble value="-2.55" frame="60" interpolationType="cubic">
                         <CubicEaseInterpolator x1="0.42" y1="0" x2="0.58" y2="1"/>
                     </KeyFrameDouble>
-                    <KeyFrameDouble value="-1.75" frame="120" interpolationType="linear"/>
+                    <KeyFrameDouble value="-2.7" frame="120" interpolationType="linear"/>
                 </KeyedProperty>
                 <KeyedProperty property="scaleY">
-                    <KeyFrameDouble value="1.15" frame="0" interpolationType="linear"/>
+                    <KeyFrameDouble value="0.75" frame="0" interpolationType="linear"/>
                 </KeyedProperty>
             </KeyedObject>
             <KeyedObject objectId="0:32">
@@ -2357,7 +2414,7 @@
             </KeyedObject>
             <KeyedObject objectId="0:76">
                 <KeyedProperty property="y">
-                    <KeyFrameDouble value="40" frame="0" interpolationType="linear"/>
+                    <KeyFrameDouble value="52" frame="0" interpolationType="linear"/>
                 </KeyedProperty>
             </KeyedObject>
         </LinearAnimation>
@@ -2489,7 +2546,7 @@
                     <KeyFrameDouble value="0.12" frame="40" interpolationType="cubic">
                         <CubicEaseInterpolator x1="0.42" y1="0" x2="0.58" y2="1"/>
                     </KeyFrameDouble>
-                    <KeyFrameDouble value="-1.75" frame="60" interpolationType="linear"/>
+                    <KeyFrameDouble value="-2.7" frame="60" interpolationType="linear"/>
                 </KeyedProperty>
                 <KeyedProperty property="scaleY">
                     <KeyFrameDouble value="1" frame="0" interpolationType="cubic">
@@ -2498,7 +2555,7 @@
                     <KeyFrameDouble value="1" frame="40" interpolationType="cubic">
                         <CubicEaseInterpolator x1="0.42" y1="0" x2="0.58" y2="1"/>
                     </KeyFrameDouble>
-                    <KeyFrameDouble value="1.15" frame="60" interpolationType="linear"/>
+                    <KeyFrameDouble value="0.75" frame="60" interpolationType="linear"/>
                 </KeyedProperty>
             </KeyedObject>
             <KeyedObject objectId="0:32">
@@ -2506,10 +2563,10 @@
                     <KeyFrameDouble value="-0.12" frame="0" interpolationType="cubic">
                         <CubicEaseInterpolator x1="0.42" y1="0" x2="0.58" y2="1"/>
                     </KeyFrameDouble>
-                    <KeyFrameDouble value="2.6" frame="18" interpolationType="cubic">
+                    <KeyFrameDouble value="3.03" frame="18" interpolationType="cubic">
                         <CubicEaseInterpolator x1="0.42" y1="0" x2="0.58" y2="1"/>
                     </KeyFrameDouble>
-                    <KeyFrameDouble value="2.6" frame="44" interpolationType="cubic">
+                    <KeyFrameDouble value="3.03" frame="44" interpolationType="cubic">
                         <CubicEaseInterpolator x1="0.42" y1="0" x2="0.58" y2="1"/>
                     </KeyFrameDouble>
                     <KeyFrameDouble value="-0.12" frame="60" interpolationType="linear"/>
@@ -2518,10 +2575,10 @@
                     <KeyFrameDouble value="1" frame="0" interpolationType="cubic">
                         <CubicEaseInterpolator x1="0.42" y1="0" x2="0.58" y2="1"/>
                     </KeyFrameDouble>
-                    <KeyFrameDouble value="1.8" frame="18" interpolationType="cubic">
+                    <KeyFrameDouble value="1.72" frame="18" interpolationType="cubic">
                         <CubicEaseInterpolator x1="0.42" y1="0" x2="0.58" y2="1"/>
                     </KeyFrameDouble>
-                    <KeyFrameDouble value="1.8" frame="44" interpolationType="cubic">
+                    <KeyFrameDouble value="1.72" frame="44" interpolationType="cubic">
                         <CubicEaseInterpolator x1="0.42" y1="0" x2="0.58" y2="1"/>
                     </KeyFrameDouble>
                     <KeyFrameDouble value="1" frame="60" interpolationType="linear"/>
@@ -2651,7 +2708,7 @@
             </KeyedObject>
             <KeyedObject objectId="0:76">
                 <KeyedProperty property="y">
-                    <KeyFrameDouble value="40" frame="0" interpolationType="linear"/>
+                    <KeyFrameDouble value="52" frame="0" interpolationType="linear"/>
                 </KeyedProperty>
             </KeyedObject>
         </LinearAnimation>
@@ -2808,7 +2865,7 @@
             </KeyedObject>
             <KeyedObject objectId="0:26">
                 <KeyedProperty property="y">
-                    <KeyFrameDouble value="-136" frame="0" interpolationType="linear"/>
+                    <KeyFrameDouble value="-142" frame="0" interpolationType="linear"/>
                 </KeyedProperty>
                 <KeyedProperty property="rotation">
                     <KeyFrameDouble value="0" frame="0" interpolationType="linear"/>
@@ -2903,7 +2960,7 @@
             </KeyedObject>
             <KeyedObject objectId="0:76">
                 <KeyedProperty property="y">
-                    <KeyFrameDouble value="-53" frame="0" interpolationType="linear"/>
+                    <KeyFrameDouble value="-62" frame="0" interpolationType="linear"/>
                 </KeyedProperty>
             </KeyedObject>
         </LinearAnimation>
@@ -3072,10 +3129,10 @@
                     <KeyFrameDouble value="-60" frame="0" interpolationType="cubic">
                         <CubicEaseInterpolator x1="0.42" y1="0" x2="0.58" y2="1"/>
                     </KeyFrameDouble>
-                    <KeyFrameDouble value="-136" frame="28" interpolationType="cubic">
+                    <KeyFrameDouble value="-142" frame="28" interpolationType="cubic">
                         <CubicEaseInterpolator x1="0.42" y1="0" x2="0.58" y2="1"/>
                     </KeyFrameDouble>
-                    <KeyFrameDouble value="-136" frame="36" interpolationType="linear"/>
+                    <KeyFrameDouble value="-142" frame="36" interpolationType="linear"/>
                 </KeyedProperty>
                 <KeyedProperty property="rotation">
                     <KeyFrameDouble value="0" frame="0" interpolationType="linear"/>
@@ -3167,10 +3224,10 @@
                     <KeyFrameDouble value="-22" frame="18" interpolationType="cubic">
                         <CubicEaseInterpolator x1="0.42" y1="0" x2="0.58" y2="1"/>
                     </KeyFrameDouble>
-                    <KeyFrameDouble value="-53" frame="28" interpolationType="cubic">
+                    <KeyFrameDouble value="-62" frame="28" interpolationType="cubic">
                         <CubicEaseInterpolator x1="0.42" y1="0" x2="0.58" y2="1"/>
                     </KeyFrameDouble>
-                    <KeyFrameDouble value="-53" frame="36" interpolationType="linear"/>
+                    <KeyFrameDouble value="-62" frame="36" interpolationType="linear"/>
                 </KeyedProperty>
             </KeyedObject>
         </LinearAnimation>
@@ -3321,7 +3378,7 @@
             </KeyedObject>
             <KeyedObject objectId="0:26">
                 <KeyedProperty property="y">
-                    <KeyFrameDouble value="-136" frame="0" interpolationType="linear"/>
+                    <KeyFrameDouble value="-142" frame="0" interpolationType="linear"/>
                 </KeyedProperty>
                 <KeyedProperty property="rotation">
                     <KeyFrameDouble value="0" frame="0" interpolationType="linear"/>
@@ -3417,7 +3474,7 @@
             </KeyedObject>
             <KeyedObject objectId="0:76">
                 <KeyedProperty property="y">
-                    <KeyFrameDouble value="-53" frame="0" interpolationType="linear"/>
+                    <KeyFrameDouble value="-62" frame="0" interpolationType="linear"/>
                 </KeyedProperty>
             </KeyedObject>
         </LinearAnimation>
@@ -3663,7 +3720,7 @@
             </KeyedObject>
             <KeyedObject objectId="0:76">
                 <KeyedProperty property="y">
-                    <KeyFrameDouble value="26" frame="0" interpolationType="linear"/>
+                    <KeyFrameDouble value="40" frame="0" interpolationType="linear"/>
                 </KeyedProperty>
             </KeyedObject>
         </LinearAnimation>
@@ -3867,7 +3924,7 @@
             </KeyedObject>
             <KeyedObject objectId="0:76">
                 <KeyedProperty property="y">
-                    <KeyFrameDouble value="200" frame="0" interpolationType="linear"/>
+                    <KeyFrameDouble value="230" frame="0" interpolationType="linear"/>
                 </KeyedProperty>
             </KeyedObject>
         </LinearAnimation>
@@ -3884,25 +3941,25 @@
                     <KeyFrameDouble value="0" frame="0" interpolationType="cubic">
                         <CubicEaseInterpolator x1="0.42" y1="0" x2="0.58" y2="1"/>
                     </KeyFrameDouble>
-                    <KeyFrameDouble value="-43.75" frame="14" interpolationType="cubic">
+                    <KeyFrameDouble value="-48.3" frame="14" interpolationType="cubic">
                         <CubicEaseInterpolator x1="0.42" y1="0" x2="0.58" y2="1"/>
                     </KeyFrameDouble>
-                    <KeyFrameDouble value="-43.75" frame="20" interpolationType="cubic">
+                    <KeyFrameDouble value="-48.3" frame="20" interpolationType="cubic">
                         <CubicEaseInterpolator x1="0.42" y1="0" x2="0.58" y2="1"/>
                     </KeyFrameDouble>
-                    <KeyFrameDouble value="-87.5" frame="34" interpolationType="cubic">
+                    <KeyFrameDouble value="-96.6" frame="34" interpolationType="cubic">
                         <CubicEaseInterpolator x1="0.42" y1="0" x2="0.58" y2="1"/>
                     </KeyFrameDouble>
-                    <KeyFrameDouble value="-87.5" frame="40" interpolationType="cubic">
+                    <KeyFrameDouble value="-96.6" frame="40" interpolationType="cubic">
                         <CubicEaseInterpolator x1="0.42" y1="0" x2="0.58" y2="1"/>
                     </KeyFrameDouble>
-                    <KeyFrameDouble value="-125" frame="54" interpolationType="cubic">
+                    <KeyFrameDouble value="-138" frame="54" interpolationType="cubic">
                         <CubicEaseInterpolator x1="0.42" y1="0" x2="0.58" y2="1"/>
                     </KeyFrameDouble>
-                    <KeyFrameDouble value="-125" frame="108" interpolationType="cubic">
+                    <KeyFrameDouble value="-138" frame="108" interpolationType="cubic">
                         <CubicEaseInterpolator x1="0.42" y1="0" x2="0.58" y2="1"/>
                     </KeyFrameDouble>
-                    <KeyFrameDouble value="-68.75" frame="122" interpolationType="cubic">
+                    <KeyFrameDouble value="-75.9" frame="122" interpolationType="cubic">
                         <CubicEaseInterpolator x1="0.42" y1="0" x2="0.58" y2="1"/>
                     </KeyFrameDouble>
                     <KeyFrameDouble value="0" frame="132" interpolationType="cubic">
@@ -4088,10 +4145,10 @@
                     <KeyFrameDouble value="-24" frame="0" interpolationType="cubic">
                         <CubicEaseInterpolator x1="0.42" y1="0" x2="0.58" y2="1"/>
                     </KeyFrameDouble>
-                    <KeyFrameDouble value="-136" frame="54" interpolationType="cubic">
+                    <KeyFrameDouble value="-142" frame="54" interpolationType="cubic">
                         <CubicEaseInterpolator x1="0.42" y1="0" x2="0.58" y2="1"/>
                     </KeyFrameDouble>
-                    <KeyFrameDouble value="-136" frame="108" interpolationType="cubic">
+                    <KeyFrameDouble value="-142" frame="108" interpolationType="cubic">
                         <CubicEaseInterpolator x1="0.42" y1="0" x2="0.58" y2="1"/>
                     </KeyFrameDouble>
                     <KeyFrameDouble value="-24" frame="132" interpolationType="cubic">

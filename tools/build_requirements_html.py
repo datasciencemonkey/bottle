@@ -293,7 +293,7 @@ def figure(slug, svgs, desc):
 
 # ---------------- mascot ----------------
 STATES = [
-    ("idle", "Hides in the lamp, blue eyes peeking over the rim, glancing around. Ready, mic closed. Hover: climbs out, looks around, hops back in."),
+    ("idle", "A small block figure (stud, head with a screen face, torso, hips, legs). Hides in the lamp, blue eyes peeking over the rim, glancing around. Ready, mic closed. Hover: climbs out, looks around, hops back in."),
     ("listening", "Green eyes, face up, both hands cupped to its ears; the ring follows the mic level. PTT down or held, hands-free capture."),
     ("processing", "Sinks back, touches its head with its eyes closed, then a thinking pose with pink eyes, dots and orbiting sparkles. Transcribing, cleaning, routing, preview, main agent turn, progress, rate-limited."),
     ("answering", "Climbs out on its legs, stands on the rim, amber eyes, talks and presents. Partial answer and blurb reveal (1.2 s or less)."),
