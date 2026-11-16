@@ -313,7 +313,7 @@ fn ux_19a_only_the_card_panel_can_become_key() {
         assert!(!k.spec().focusable, "{k:?} must not take focus");
     }
     // The hub is the normal app window that the user opens from the Dock; it is not a
-    // floating surface (ADR 0020).
+    // floating surface (ADR 0022).
 }
 
 // ---------- UX-19b: Esc leaves no half state ----------

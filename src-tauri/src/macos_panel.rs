@@ -10,7 +10,7 @@
 //! TODO(#316): the on-screen checks on a Mac (0 focus steals in 100 clicks, the drag moves the
 //! panel, a fullscreen Space). The unit and AppKit tests cannot show a window.
 //!
-//! Each `card-<id>` window becomes a `BottleCardPanel` (#78, MOG-03a, ADR 0020): the same
+//! Each `card-<id>` window becomes a `BottleCardPanel` (#78, MOG-03a, ADR 0022): the same
 //! non-activating NSPanel, but it can become key, so typing and the IME work while the
 //! frontmost app stays (MOG-03b). It shows at Floating level and is never dragged.
 //! TODO(#336): the on-screen card checks on a Mac (20 opens, typing and IME, memory after 5 min).

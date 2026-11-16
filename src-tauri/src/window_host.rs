@@ -7,7 +7,7 @@
 //! TODO(#285): the gateway does not route `window_mog_open`, `window_mog_close`,
 //! `window_card_show` and `window_card_hide` to this host yet (contract change).
 //!
-//! The card window (#78, ADR 0020) is made on the first show (MOG-18a). `spawn_card_reaper`
+//! The card window (#78, ADR 0022) is made on the first show (MOG-18a). `spawn_card_reaper`
 //! destroys a card that is hidden for `CARD_HIDDEN_TTL` (MOG-18b). A window that the host
 //! destroys stays "closing" until its `Destroyed` event comes, so a late event never frees the
 //! slot of a new window with the same label, and the new window never adopts the dying one.

@@ -1,4 +1,4 @@
-# ADR 0020: The card window: key-capable panel, lazy create, reaper and Esc
+# ADR 0022: The card window: key-capable panel, lazy create, reaper and Esc
 
 - Status: Accepted
 - Date: 2026-11-16

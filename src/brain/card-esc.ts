@@ -4,7 +4,7 @@
  * One Esc does exactly one thing. A request in flight is cancelled and the card stays, so it can
  * show "cancellation requested". With no request in flight the card hides. The brain never
  * cancels and hides on the same press, and a failed action is not followed by the other one,
- * so the card is never left half closed. See ADR 0020.
+ * so the card is never left half closed. See ADR 0022.
  *
  * TODO(#285): the gateway does not route `window_card_hide` from the brain yet, and the
  * `view_emit` handler that calls `handleCardEsc` comes with that contract change.

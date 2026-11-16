@@ -15,7 +15,7 @@ pub const MAX_ACTIVE_MOGS: usize = 8;
 pub const CARD_HIDDEN_TTL: Duration = Duration::from_secs(5 * 60);
 
 /// How often the R11 reaper looks for cards hidden for `CARD_HIDDEN_TTL`. A hidden card goes
-/// between 5:00 and 5:15 after its hide (ADR 0020).
+/// between 5:00 and 5:15 after its hide (ADR 0022).
 pub const CARD_REAP_TICK: Duration = Duration::from_secs(15);
 
 /// The longest MOG or card id we accept in a window label (a uuid v4 is 36).
@@ -154,7 +154,7 @@ impl WindowKind {
                 width: 160,
                 height: 160,
             },
-            // macOS: `panel()` makes it a key-capable non-activating NSPanel (#78, ADR 0020).
+            // macOS: `panel()` makes it a key-capable non-activating NSPanel (#78, ADR 0022).
             // R11 makes it on the first show and the reaper destroys it after 5 min hidden.
             // TODO(#80): the Windows card that keeps the foreground app.
             WindowKind::Card(_) => WindowSpec {
