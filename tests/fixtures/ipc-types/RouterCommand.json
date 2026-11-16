@@ -1,0 +1,13 @@
+[
+  "none",
+  "switch_workspace_once",
+  "switch_workspace_session",
+  "reset_workspace",
+  "new_topic",
+  "cancel",
+  "stop_recording",
+  "pause",
+  "resume",
+  "forget_session",
+  "other"
+]

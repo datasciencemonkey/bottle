@@ -32,28 +32,97 @@ const PROFILE_FULL = {
   workspaceId: '1234567890123456',
 } satisfies Profile;
 
+// Every value of each string union, one fixture per union (the Rust enum name). The `Equal`
+// checks make `pnpm typecheck` fail if a value is missing or extra, so a Rust enum that drops
+// or renames a value fails the round trip.
+type Equal<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+const MOODS = [
+  'idle',
+  'listening',
+  'processing',
+  'answering',
+  'success',
+  'error',
+  'sleeping',
+] as const satisfies Mood[];
+const TRACKS = ['you', 'others'] as const satisfies Track[];
+const CAPTURE_MODES = ['ptt', 'hands_free', 'session'] as const satisfies CaptureMode[];
+const INTENTS = [
+  'question',
+  'memory_question',
+  'context',
+  'command',
+  'dictation',
+  'noise',
+] as const satisfies Intent[];
+const TAG_APPS = ['bottle'] as const satisfies Tags['app'][];
+const TAG_OPS = [
+  'asr',
+  'cleanup',
+  'router',
+  'writer',
+  'judge',
+  'embed',
+  'genie',
+  'merge',
+  'agent',
+  'page',
+] as const satisfies Tags['op'][];
+const OTHERS_TRACKS = [
+  'off',
+  'ok',
+  'zero_buffers',
+] as const satisfies CaptureState['othersTrack'][];
+const PROVIDERS = [
+  'local_parakeet',
+  'dbx_gemini',
+  'dbx_whisper',
+] as const satisfies Transcript['provider'][];
+const TOKEN_STATES = [
+  'valid',
+  'expiring',
+  'login_required',
+  'unknown',
+] as const satisfies TokenStatus['state'][];
+const ROUTER_COMMANDS = [
+  'none',
+  'switch_workspace_once',
+  'switch_workspace_session',
+  'reset_workspace',
+  'new_topic',
+  'cancel',
+  'stop_recording',
+  'pause',
+  'resume',
+  'forget_session',
+  'other',
+] as const satisfies RouterDecision['command'][];
+const everyUnionValueListed: [
+  Equal<(typeof MOODS)[number], Mood>,
+  Equal<(typeof TRACKS)[number], Track>,
+  Equal<(typeof CAPTURE_MODES)[number], CaptureMode>,
+  Equal<(typeof INTENTS)[number], Intent>,
+  Equal<(typeof TAG_APPS)[number], Tags['app']>,
+  Equal<(typeof TAG_OPS)[number], Tags['op']>,
+  Equal<(typeof OTHERS_TRACKS)[number], CaptureState['othersTrack']>,
+  Equal<(typeof PROVIDERS)[number], Transcript['provider']>,
+  Equal<(typeof TOKEN_STATES)[number], TokenStatus['state']>,
+  Equal<(typeof ROUTER_COMMANDS)[number], RouterDecision['command']>,
+] = [true, true, true, true, true, true, true, true, true, true];
+
 const typed: Record<string, unknown> = {
   MogId: MOG satisfies MogId,
   ProfileName: 'DEFAULT' satisfies ProfileName,
-  Mood: [
-    'idle',
-    'listening',
-    'processing',
-    'answering',
-    'success',
-    'error',
-    'sleeping',
-  ] satisfies Mood[],
-  Track: ['you', 'others'] satisfies Track[],
-  CaptureMode: ['ptt', 'hands_free', 'session'] satisfies CaptureMode[],
-  Intent: [
-    'question',
-    'memory_question',
-    'context',
-    'command',
-    'dictation',
-    'noise',
-  ] satisfies Intent[],
+  Mood: MOODS,
+  Track: TRACKS,
+  CaptureMode: CAPTURE_MODES,
+  Intent: INTENTS,
+  TagApp: TAG_APPS,
+  TagOp: TAG_OPS,
+  OthersTrack: OTHERS_TRACKS,
+  TranscriptProvider: PROVIDERS,
+  TokenState: TOKEN_STATES,
+  RouterCommand: ROUTER_COMMANDS,
   Tags: { app: 'bottle', mog: MOG, op: 'router' } satisfies Tags,
   SessionPolicy: {
     checkInAtMin: 55,
@@ -209,6 +278,10 @@ const noCredentialField: [
 describe('IPC type fixtures', () => {
   it('every fixture file has a typed twin, and every twin has a file', () => {
     expect(files.map((f) => f.replace(/\.json$/, '')).sort()).toEqual(Object.keys(typed).sort());
+  });
+
+  it('each union fixture lists every value of its TS union', () => {
+    expect(everyUnionValueListed.every(Boolean)).toBe(true);
   });
 
   it.each(files)('%s equals its typed twin', (file) => {

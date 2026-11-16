@@ -135,11 +135,24 @@ export interface MoodMapper { (s: { paused: boolean; ownsCapture: boolean; error
 /** One entry of `profiles_list` (4.5). The same shape as `Profile`. */
 export type ProfileInfo = Profile;
 /** The result of `profile_status` (4.5). It never holds a token (ARC-6). */
-export interface TokenStatus { profile: ProfileName; state: 'valid'|'expiring'|'login_required'|'unknown'; expiresAt?: string }
+export interface TokenStatus {
+  profile: ProfileName;
+  state: 'valid' | 'expiring' | 'login_required' | 'unknown';
+  expiresAt?: string;
+}
 
 // ---------- mood priority (4.8, UX-01a): data only; the MoodMapper is #226 ----------
 /**
  * The conditions that pick the mood, from high to low priority:
  * paused > capture > error (3 s) > success (2.5 s) > answering > processing > dozing > idle.
  */
-export const MOOD_PRIORITY = ['paused', 'capture', 'error', 'success', 'answering', 'processing', 'dozing', 'idle'] as const;
+export const MOOD_PRIORITY = [
+  'paused',
+  'capture',
+  'error',
+  'success',
+  'answering',
+  'processing',
+  'dozing',
+  'idle',
+] as const;

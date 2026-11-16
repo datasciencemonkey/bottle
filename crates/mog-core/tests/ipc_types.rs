@@ -8,8 +8,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use mog_core::types::{
-    CaptureMode, CaptureState, Intent, MogId, Mood, Profile, ProfileInfo, ProfileName,
-    RouterDecision, SegmentRef, SessionPolicy, Tags, TokenStatus, Track, Transcript,
+    CaptureMode, CaptureState, Intent, MogId, Mood, OthersTrack, Profile, ProfileInfo, ProfileName,
+    RouterCommand, RouterDecision, SegmentRef, SessionPolicy, TagApp, TagOp, Tags, TokenState,
+    TokenStatus, Track, Transcript, TranscriptProvider,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -53,6 +54,12 @@ fn round_trip_by_name(type_name: &str, json: &Value) -> Result<Value, String> {
         "Track" => round_trip::<Vec<Track>>(json),
         "CaptureMode" => round_trip::<Vec<CaptureMode>>(json),
         "Intent" => round_trip::<Vec<Intent>>(json),
+        "TagApp" => round_trip::<Vec<TagApp>>(json),
+        "TagOp" => round_trip::<Vec<TagOp>>(json),
+        "OthersTrack" => round_trip::<Vec<OthersTrack>>(json),
+        "TranscriptProvider" => round_trip::<Vec<TranscriptProvider>>(json),
+        "TokenState" => round_trip::<Vec<TokenState>>(json),
+        "RouterCommand" => round_trip::<Vec<RouterCommand>>(json),
         "Tags" => round_trip::<Tags>(json),
         "SessionPolicy" => round_trip::<SessionPolicy>(json),
         "CaptureState" => round_trip::<CaptureState>(json),
@@ -92,6 +99,12 @@ fn every_ipc_type_has_a_fixture() {
         "Track",
         "CaptureMode",
         "Intent",
+        "TagApp",
+        "TagOp",
+        "OthersTrack",
+        "TranscriptProvider",
+        "TokenState",
+        "RouterCommand",
         "Tags",
         "SessionPolicy",
         "CaptureState",
