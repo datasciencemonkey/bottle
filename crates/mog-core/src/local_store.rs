@@ -24,13 +24,13 @@ pub trait LocalStore: Send + Sync {
     fn exec(&self, stmt_id: &str, params: serde_json::Value) -> CoreResult<serde_json::Value>;
 }
 
-/// The R10 stub. Every method returns [`CoreError::NotImplemented`].
+/// A store that is not there: every method returns [`CoreError::NotImplemented`]. Hosts and tests
+/// use it where no memory is wired. The real store is [`SqlCipherLocalStore`].
 #[derive(Debug, Default, Clone, Copy)]
 pub struct StubLocalStore;
 
 impl LocalStore for StubLocalStore {
     fn open(&self) -> CoreResult<()> {
-        // TODO(#35): SQLCipher, WAL, FTS5 and sqlite-vec.
         Err(CoreError::NotImplemented { component: ID })
     }
 

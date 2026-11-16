@@ -24,8 +24,13 @@ pub const DB_FILE_NAME: &str = "memory.db";
 /// The `sqlite-vec` version this build links (MEM-08e).
 pub const SQLITE_VEC_VERSION: &str = "v0.1.9";
 
-/// Page cache in KiB (SP-21: it holds the 50k-item index, so a warm query decrypts nothing).
-const CACHE_KIB: i64 = 65_536;
+/// The pragmas every connection sets after the key (MEM-08c, SP-21). `secure_delete` is set
+/// explicitly even though SQLCipher defaults it on, so a build change cannot drop it silently.
+/// The page cache is 64 MiB (-65536 KiB): it holds the 50k-item index, so a warm query decrypts
+/// nothing. `foreign_keys` makes the MEM-33a RESTRICT and SET NULL rules of migration 0001 hold.
+pub(crate) const CONNECTION_PRAGMAS: &str =
+    "PRAGMA secure_delete = ON; PRAGMA synchronous = NORMAL; \
+     PRAGMA cache_size = -65536; PRAGMA foreign_keys = ON;";
 
 fn unavailable<E>(_: E) -> CoreError {
     CoreError::StoreUnavailable { component: ID }
@@ -104,8 +109,9 @@ impl SqlCipherLocalStore {
     fn key(&self) -> CoreResult<LocalKey> {
         match self.vault.load()? {
             Some(k) => Ok(k),
-            // MEM-09a: the key is gone but the file is not. Do not delete the file (U9) and do
-            // not make a new key; MemoryService decides.
+            // The key is gone but the file is not. R10 deletes nothing (U9) and makes no new key.
+            // TODO(#190): MemoryService handles the lost key (MEM-09a "start a new empty store"
+            // vs U9 and MEM-08a's one file), and the MOG tells the user (MEM-09b).
             None if self.db_path().exists() => Err(CoreError::StoreKeyLost { component: ID }),
             None => {
                 let k = LocalKey::generate()?;
@@ -147,11 +153,8 @@ fn open_connection(path: &Path, key: &LocalKey) -> CoreResult<Connection> {
     if !mode.eq_ignore_ascii_case("wal") {
         return Err(unavailable(()));
     }
-    conn.execute_batch(&format!(
-        "PRAGMA secure_delete = ON; PRAGMA synchronous = NORMAL; \
-         PRAGMA cache_size = -{CACHE_KIB}; PRAGMA foreign_keys = ON;"
-    ))
-    .map_err(unavailable)?;
+    conn.execute_batch(CONNECTION_PRAGMAS)
+        .map_err(unavailable)?;
     let vec: String = conn
         .query_row("SELECT vec_version()", [], |r| r.get(0))
         .map_err(unavailable)?;

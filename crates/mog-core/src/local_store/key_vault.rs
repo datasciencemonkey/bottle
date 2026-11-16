@@ -3,8 +3,9 @@
 //! The key is 256 random bits. It is kept only in the OS key store: the macOS Keychain with
 //! `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, or the Windows Credential Manager (DPAPI).
 //! It is never logged, never sent over IPC and never written to a file. Tests use
-//! [`MemoryKeyVault`]; they never touch the real key store.
+//! `MemoryKeyVault` (tests and the `test-support` feature only); they never touch the real key store.
 
+#[cfg(any(test, feature = "test-support"))]
 use std::sync::Mutex;
 
 use crate::error::{CoreError, CoreResult};
@@ -98,24 +99,28 @@ pub trait KeyVault: Send + Sync {
     fn store(&self, key: &LocalKey) -> CoreResult<()>;
 }
 
-/// The in-memory test double. It holds the key in process memory only.
+/// The in-memory test double. It holds the key in process memory only, so it exists only in
+/// tests and with the `test-support` feature: a release build can reach only the OS key store.
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Default)]
 pub struct MemoryKeyVault {
     slot: Mutex<Option<LocalKey>>,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl MemoryKeyVault {
     /// An empty vault.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Lose the key, as when the keychain loses it (MEM-09a).
+    /// Lose the key, as when the keychain loses it.
     pub fn forget(&self) {
         *self.slot.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl KeyVault for MemoryKeyVault {
     fn load(&self) -> CoreResult<Option<LocalKey>> {
         Ok(self.slot.lock().unwrap_or_else(|e| e.into_inner()).clone())

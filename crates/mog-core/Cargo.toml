@@ -11,6 +11,8 @@ rust-version.workspace = true
 default = []
 # R9 LakebasePool (v1, optional). Off by default.
 lakebase = []
+# Test doubles (for example the in-memory key vault) for other crates' tests. Never in a release build.
+test-support = []
 
 [dependencies]
 getrandom.workspace = true

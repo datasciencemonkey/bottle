@@ -216,7 +216,8 @@ fn mem_08b_windows_key_is_local_machine_generic_credential() {
 }
 
 #[test]
-fn mem_09a_lost_key_does_not_delete_the_file() {
+fn u9_lost_key_keeps_the_file() {
+    // MEM-09a (a new empty store) is MemoryService's job: TODO(#190).
     let t = TempDir::new("09a");
     let vault = Arc::new(MemoryKeyVault::new());
     open_store(t.path(), vault.clone()).close();

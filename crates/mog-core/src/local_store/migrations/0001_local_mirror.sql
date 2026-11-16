@@ -15,6 +15,11 @@
 -- * genie_exchange keeps final_answer_md locally (B2, D60); the Lakebase table does not.
 -- * Raw audio has no column anywhere. No table has a token, secret or credential column.
 -- * Triggers only keep the derived FTS5 and vec0 tables in step with their content rows.
+-- * MEM-33a: no foreign key deletes a row for another table. References to a MOG and from an
+--   utterance to its session are RESTRICT; the optional pointers genie_exchange.session_id and
+--   memory_item.source_exchange_id are SET NULL. So an age-based Wipe deletes only the rows that
+--   match its own age rule, and the WipeService (#124) deletes child rows before their parent.
+-- * FTS5 uses the porter stemmer, as Appendix A uses to_tsvector('english', ...).
 
 -- ---- mog ---------------------------------------------------------------------------------
 CREATE TABLE mog (
@@ -39,7 +44,7 @@ CREATE TABLE mog (
 -- ---- session -----------------------------------------------------------------------------
 CREATE TABLE session (
   session_id TEXT PRIMARY KEY NOT NULL,
-  mog_id TEXT NOT NULL REFERENCES mog(mog_id) ON DELETE CASCADE,
+  mog_id TEXT NOT NULL REFERENCES mog(mog_id) ON DELETE RESTRICT,
   owner_principal TEXT,
   kind TEXT NOT NULL CHECK (kind IN ('push_to_talk','hands_free','meeting')),
   title TEXT CHECK (length(title) <= 200),
@@ -70,8 +75,8 @@ CREATE TABLE session (
 CREATE TABLE utterance (
   rid INTEGER PRIMARY KEY,
   utterance_id TEXT NOT NULL UNIQUE,
-  session_id TEXT NOT NULL REFERENCES session(session_id) ON DELETE CASCADE,
-  mog_id TEXT NOT NULL REFERENCES mog(mog_id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL REFERENCES session(session_id) ON DELETE RESTRICT,
+  mog_id TEXT NOT NULL REFERENCES mog(mog_id) ON DELETE RESTRICT,
   owner_principal TEXT,
   seq INTEGER NOT NULL,
   speaker_track TEXT NOT NULL CHECK (speaker_track IN ('you','others')),
@@ -97,8 +102,8 @@ CREATE TABLE utterance (
 CREATE TABLE genie_exchange (
   exchange_id TEXT PRIMARY KEY NOT NULL,
   request_id TEXT NOT NULL UNIQUE,
-  mog_id TEXT NOT NULL REFERENCES mog(mog_id) ON DELETE CASCADE,
-  session_id TEXT REFERENCES session(session_id) ON DELETE CASCADE,
+  mog_id TEXT NOT NULL REFERENCES mog(mog_id) ON DELETE RESTRICT,
+  session_id TEXT REFERENCES session(session_id) ON DELETE SET NULL,
   owner_principal TEXT,
   backend_kind TEXT NOT NULL CHECK (backend_kind IN ('genie_one_mcp','genie_agent','custom_agent')),
   profile_name TEXT NOT NULL,
@@ -139,7 +144,7 @@ CREATE TABLE genie_exchange (
 CREATE TABLE memory_item (
   rid INTEGER PRIMARY KEY,
   item_id TEXT NOT NULL UNIQUE,
-  mog_id TEXT NOT NULL REFERENCES mog(mog_id) ON DELETE CASCADE,
+  mog_id TEXT NOT NULL REFERENCES mog(mog_id) ON DELETE RESTRICT,
   owner_principal TEXT,
   item_type TEXT NOT NULL CHECK (item_type IN ('decision','fact','entity','open_question','genie_answer')),
   text TEXT NOT NULL CHECK (length(text) BETWEEN 1 AND 600),
@@ -155,7 +160,7 @@ CREATE TABLE memory_item (
   sensitivity TEXT NOT NULL DEFAULT 'normal' CHECK (sensitivity IN ('normal','restricted')),
   source_session_ids TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(source_session_ids)),
   source_utterance_ids TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(source_utterance_ids)),
-  source_exchange_id TEXT REFERENCES genie_exchange(exchange_id) ON DELETE CASCADE,
+  source_exchange_id TEXT REFERENCES genie_exchange(exchange_id) ON DELETE SET NULL,
   workspace_host TEXT,
   workspace_id INTEGER,
   space_id TEXT,
@@ -197,13 +202,12 @@ CREATE TABLE consent_record (
 -- ---- sync_state --------------------------------------------------------------------------
 CREATE TABLE sync_state (
   device_id TEXT NOT NULL,
-  mog_id TEXT NOT NULL REFERENCES mog(mog_id) ON DELETE CASCADE,
+  mog_id TEXT NOT NULL REFERENCES mog(mog_id) ON DELETE RESTRICT,
   owner_principal TEXT,
   device_name TEXT,
   app_version TEXT NOT NULL,
   last_pull_seq INTEGER NOT NULL DEFAULT 0,
   last_push_at INTEGER,
-  last_retention_run_at INTEGER,
   local_schema_version INTEGER NOT NULL,
   updated_at INTEGER NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER) * 1000),
   PRIMARY KEY (device_id, mog_id)
@@ -265,9 +269,9 @@ CREATE INDEX outbox_due ON outbox (mog_id, next_attempt_at);
 
 -- ---- FTS5 keyword search (MEM-08d): external content, so the text is stored once. ----------
 CREATE VIRTUAL TABLE memory_item_fts USING fts5(
-  text, mog_id UNINDEXED, content='memory_item', content_rowid='rid', tokenize='unicode61');
+  text, mog_id UNINDEXED, content='memory_item', content_rowid='rid', tokenize='porter unicode61');
 CREATE VIRTUAL TABLE utterance_fts USING fts5(
-  text_clean, mog_id UNINDEXED, content='utterance', content_rowid='rid', tokenize='unicode61');
+  text_clean, mog_id UNINDEXED, content='utterance', content_rowid='rid', tokenize='porter unicode61');
 
 CREATE TRIGGER memory_item_fts_ai AFTER INSERT ON memory_item BEGIN
   INSERT INTO memory_item_fts (rowid, text, mog_id) VALUES (new.rid, new.text, new.mog_id);
@@ -292,8 +296,9 @@ END;
 
 -- ---- sqlite-vec int8 index (MEM-08e, MEM-21a, SP-21) -----------------------------------------
 -- rowid = memory_item.rid. Partitioned by MOG and embedding model, so a KNN never crosses a MOG.
--- Values come from vec_codec::quantize_int8, which clamps to [-63, 63]: the NEON build of
--- sqlite-vec 0.1.9 returns a NULL L2 distance when a component difference leaves the i8 range.
+-- Values come from vec_codec::quantize_int8, which clamps to [-90, 90]. The NEON int8 L2 of
+-- sqlite-vec 0.1.9 squares the i16 difference with vmulq_s16, which wraps at |diff| >= 182 and
+-- gives a NULL distance; a difference of at most 180 is exact. TODO(#269): re-measure recall.
 CREATE VIRTUAL TABLE memory_item_vec_256 USING vec0(
   mog_id text partition key, embedding_model text partition key, embedding int8[256] distance_metric=l2);
 CREATE VIRTUAL TABLE memory_item_vec_1024 USING vec0(
