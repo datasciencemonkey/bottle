@@ -571,3 +571,115 @@ fn mog_18b_a_failed_show_of_a_hidden_card_keeps_it_hidden_for_the_reaper() {
     clock.advance(CARD_HIDDEN_TTL);
     assert_eq!(host.reap_hidden_cards(), 1);
 }
+
+// ---------- PR #338 review round 2 ----------
+
+use bottle_lib::window_host::ShowPlan;
+
+#[test]
+fn ux_19b_begin_show_reads_the_window_and_writes_the_state_in_one_step() {
+    let mut ledger = WindowLedger::default();
+    ledger.open_mog("m1").unwrap();
+    assert_eq!(ledger.begin_show("m1", false), Ok(ShowPlan::Make));
+    ledger.hide_card("m1", Instant::now()).unwrap();
+    let hidden = ledger.card_state("m1").unwrap();
+    assert_eq!(ledger.begin_show("m1", true), Ok(ShowPlan::Reuse(hidden)));
+    assert_eq!(ledger.card_state("m1"), Some(CardState::Shown));
+}
+
+#[test]
+fn ux_19b_an_outside_close_handled_before_a_show_lets_the_show_make_a_new_card() {
+    // Round 2, MEDIUM A: the Destroyed event of an outside close came first. The show sees
+    // `Absent` and no window in the same step, so it makes a new card and records nothing.
+    let mut ledger = WindowLedger::default();
+    ledger.open_mog("m1").unwrap();
+    ledger.show_card("m1").unwrap();
+    ledger.hide_card("m1", Instant::now()).unwrap();
+    ledger.window_destroyed("card-m1");
+    assert_eq!(ledger.begin_show("m1", false), Ok(ShowPlan::Make));
+    assert!(!ledger.is_closing(&WindowKind::Card("m1".into())));
+}
+
+#[test]
+fn ux_19b_a_card_gone_before_its_event_refuses_show_and_hide_until_the_event() {
+    let mut ledger = WindowLedger::default();
+    ledger.open_mog("m1").unwrap();
+    ledger.show_card("m1").unwrap();
+    assert_eq!(ledger.begin_show("m1", false), Err(WindowError::Closing));
+    assert_eq!(ledger.card_state("m1"), Some(CardState::Absent));
+    assert_eq!(ledger.begin_hide("m1", false), Err(WindowError::UnknownMog));
+    ledger.window_destroyed("card-m1");
+    assert_eq!(ledger.begin_show("m1", false), Ok(ShowPlan::Make));
+}
+
+#[test]
+fn ux_19b_begin_hide_needs_a_live_card_window() {
+    let mut ledger = WindowLedger::default();
+    ledger.open_mog("m1").unwrap();
+    assert_eq!(ledger.begin_hide("m1", false), Err(WindowError::UnknownMog));
+    assert_eq!(ledger.begin_hide("zz", false), Err(WindowError::UnknownMog));
+    ledger.show_card("m1").unwrap();
+    assert_eq!(ledger.begin_hide("m1", true), Ok(true));
+    ledger.hide_card("m1", Instant::now()).unwrap();
+    ledger.take_due_cards(Instant::now() + CARD_HIDDEN_TTL);
+    assert_eq!(
+        ledger.begin_hide("m1", true),
+        Ok(false),
+        "a closing card needs no hide"
+    );
+}
+
+#[test]
+fn arc_3_a_mog_window_gone_before_its_event_is_not_made_again() {
+    // Round 2, LOW C: the late event must not free the slot of a second window.
+    let mut ledger = WindowLedger::default();
+    ledger.open_mog("m1").unwrap();
+    ledger.mog_window_missing("m1");
+    assert_eq!(ledger.active_mogs(), 0);
+    assert_eq!(ledger.open_mog("m1"), Err(WindowError::Closing));
+    ledger.window_destroyed("mog-m1");
+    assert!(ledger.open_mog("m1").is_ok());
+    assert_eq!(ledger.active_mogs(), 1);
+}
+
+#[test]
+fn arc_3_host_refuses_main_thread_operations_once_other_threads_run() {
+    // Round 2, MEDIUM B: an operation may wait for the main thread (a window build), so
+    // after setup a main-thread call could deadlock with another thread's operation.
+    let (_app, host, _rec, _clock) = host();
+    let host = host.with_main_thread_probe(Arc::new(|| true));
+    host.open_mog_window("m1").unwrap();
+    host.seal_main_thread();
+    assert_eq!(host.show_card("m1"), Err(WindowError::MainThread));
+    assert_eq!(host.hide_card("m1"), Err(WindowError::MainThread));
+    assert_eq!(host.open_mog_window("m2"), Err(WindowError::MainThread));
+    assert_eq!(host.close_mog_window("m1"), Err(WindowError::MainThread));
+    assert_eq!(host.reap_hidden_cards(), 0);
+    assert_eq!(WindowError::MainThread.code(), "main_thread");
+    // Main-thread event handling still works.
+    host.window_destroyed("mog-m1");
+    assert_eq!(host.active_mogs(), 0);
+}
+
+#[test]
+fn arc_3_host_runs_operations_off_the_main_thread_after_the_seal() {
+    let (_app, host, _rec, _clock) = host();
+    let host = host.with_main_thread_probe(Arc::new(|| false));
+    host.seal_main_thread();
+    host.open_mog_window("m1").unwrap();
+    host.show_card("m1").unwrap();
+}
+
+#[test]
+fn arc_3_app_seals_the_main_thread_after_setup_and_before_the_reaper() {
+    let lib = code_of("src/lib.rs");
+    let seal = lib
+        .find(".seal_main_thread()")
+        .expect("setup seals the main thread");
+    let reaper = lib.find("window_host::spawn_card_reaper(").unwrap();
+    let windows = lib.find("for kind in startup_windows(demo)").unwrap();
+    assert!(
+        windows < seal && seal < reaper,
+        "startup windows, seal, then the reaper"
+    );
+}
