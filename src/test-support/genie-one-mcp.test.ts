@@ -266,4 +266,52 @@ describe('Genie One MCP double', () => {
     await ask(d, 'q');
     expect(JSON.stringify(d.calls())).not.toMatch(/token|bearer|dapi/i);
   });
+
+  it('[AT-22] outcome scenarios end in their terminal status with the scripted answer', async () => {
+    const cases = [
+      { s: scenarios.incompleteWithAnswer(), status: 'incomplete', answer: /\$410,500/ },
+      { s: scenarios.incompleteNoAnswer(), status: 'incomplete', answer: null },
+      { s: scenarios.failed(), status: 'failed', answer: null },
+      { s: scenarios.needsInput(), status: 'completed', answer: /\?$/ },
+    ] as const;
+    for (const c of cases) {
+      const d = createGenieOneMcpDouble({ host: HOST, workspaceId: WSID, responses: [c.s] });
+      const ref = ids(await ask(d, 'q'));
+      let last: Record<string, unknown> = {};
+      for (let i = 0; i < 3; i++) {
+        last = (await d.call('genie_poll_response', ref)).structuredContent as Record<
+          string,
+          unknown
+        >;
+      }
+      expect(last.status).toBe(c.status);
+      if (c.answer === null) expect(last.final_answer).toBeNull();
+      else expect(String(last.final_answer)).toMatch(c.answer);
+      expect(last.query_items).toBeNull();
+    }
+  });
+
+  it('[AT-22] the needs-input answer is short and has no query items (the G-22 shape)', async () => {
+    const step = scenarios.needsInput().polls[0];
+    expect(step?.final_answer?.length).toBeLessThan(400);
+    expect(step?.final_answer?.endsWith('?')).toBe(true);
+    expect(step?.query_items).toBeNull();
+  });
+
+  it('[AT-22] the truncated scenario returns a cut result with more than 50 rows', async () => {
+    const d = createGenieOneMcpDouble({
+      host: HOST,
+      workspaceId: WSID,
+      responses: [scenarios.truncated(60)],
+    });
+    const ref = ids(await ask(d, 'q'));
+    const done = (await d.call('genie_poll_response', ref)).structuredContent as {
+      query_items: { item_id: string }[];
+    };
+    expect(done.query_items.map((q) => q.item_id)).toEqual(['pub_q1_output']);
+    const r = await d.call('genie_get_query_result', { ...ref, item_id: 'pub_q1_output' });
+    const res = r.structuredContent as { rows: unknown[][]; truncated?: boolean };
+    expect(res.rows).toHaveLength(60);
+    expect(res.truncated).toBe(true);
+  });
 });
