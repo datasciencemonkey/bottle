@@ -746,6 +746,11 @@ impl CaptureCore {
             let resumes = rec.paused && !paused;
             if paused {
                 rec.paused = true;
+                // The user's pause wins over a resume whose open is still running (CAP-13b):
+                // cancel it, so its grant does not make the session live.
+                if matches!(inner.pending, Some(Pending::Resume(id)) if id == lease_id) {
+                    inner.pending = Some(Pending::Cancelled);
+                }
             }
             if resumes {
                 inner.pending = Some(Pending::Resume(lease_id));
@@ -762,8 +767,14 @@ impl CaptureCore {
             guard.mine.set(None);
             match inner.pending.take() {
                 Some(Pending::Resume(id)) if id == lease_id => {}
-                // A stop_all ran while the device opened; the open slot is free again.
-                Some(Pending::Cancelled) => return Err(CaptureError::UnknownLease),
+                // A pause, stop or stop_all ran while the device opened; the open slot is free
+                // again. A paused session that still exists is the result (it stays paused).
+                Some(Pending::Cancelled) => {
+                    return match inner.find(lease_id) {
+                        Some(_) => Ok(inner.state()),
+                        None => Err(CaptureError::UnknownLease),
+                    };
+                }
                 other => {
                     inner.pending = other;
                     return Err(CaptureError::UnknownLease);
