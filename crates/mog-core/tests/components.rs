@@ -276,6 +276,17 @@ fn arc_6_cli_runner_run_json_refuses_auth_token() {
         &["auth", "token", "--profile", "p"][..],
         &["--debug", "auth", "token"][..],
         &["AUTH", "Token"][..],
+        &["auth", "--profile", "p", "token"][..],
+        &["auth", "-p", "p", "token"][..],
+        &["auth", "--debug", "token"][..],
+        &["auth", "--profile=p", "token"][..],
+        &[
+            "--output=json",
+            "auth",
+            "--profile=p",
+            "token",
+            "--force-refresh",
+        ][..],
     ] {
         match s.run_json(args) {
             Err(e) => assert_eq!(e.code(), "token_command_refused", "args {args:?}"),
