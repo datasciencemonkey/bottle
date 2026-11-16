@@ -4,9 +4,11 @@
 //! #207 (`crates/http-policy`, PR #256). It holds the trait that R7 HttpTransport and R8
 //! McpTransport call, and a contract suite that any implementation must pass.
 //!
-//! TODO(#207): implement [`TokenEgressPolicy`] with an adapter over `http_policy::TokenPolicy`
-//! once #256 merges, and add a test that `contract_violations` returns no violation for it.
+//! [`HttpPolicyEgress`] is the shipped implementation: an adapter over `http_policy::TokenPolicy`
+//! and `http_policy::classify_response` (#207). `tests/token_isolation.rs` runs
+//! [`contract_violations`] against it.
 
+use http_policy::{classify_response, ResponseClass, TokenPolicy};
 use serde_json::Value;
 
 /// The 4.6 rules that [`contract_violations`] checks.
@@ -132,4 +134,52 @@ pub fn contract_violations(policy: &dyn TokenEgressPolicy) -> Vec<Violation> {
         "a non-JSON page must not be retried with the token".into(),
     );
     out
+}
+
+/// The shipped [`TokenEgressPolicy`]: `http_policy` decides every case (#207).
+///
+/// A profile host that `TokenPolicy::new` refuses (not a Databricks domain, `accounts.*`, an IP
+/// literal) gets no token anywhere.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct HttpPolicyEgress;
+
+impl HttpPolicyEgress {
+    fn policy(profile_host: &str) -> Option<TokenPolicy> {
+        TokenPolicy::new(&format!("https://{profile_host}/")).ok()
+    }
+}
+
+impl TokenEgressPolicy for HttpPolicyEgress {
+    fn may_send_token(&self, profile_host: &str, url: &str) -> bool {
+        Self::policy(profile_host).is_some_and(|p| p.check_request(url).is_ok())
+    }
+
+    fn may_follow_redirect_with_authorization(
+        &self,
+        profile_host: &str,
+        from_url: &str,
+        location_url: &str,
+    ) -> bool {
+        let Some(policy) = Self::policy(profile_host) else {
+            return false;
+        };
+        if policy.check_request(from_url).is_err() {
+            return false;
+        }
+        let Ok(from) = http_policy::Url::parse(from_url) else {
+            return false;
+        };
+        policy.check_redirect(&from, Some(location_url), 0).is_ok()
+    }
+
+    fn reply_for_ts(&self, content_type: Option<&str>, body: &[u8]) -> Option<Value> {
+        match classify_response(200, content_type, body) {
+            Ok(ResponseClass::Json) => serde_json::from_slice(body).ok(),
+            Ok(ResponseClass::Empty) | Err(_) => None,
+        }
+    }
+
+    fn may_retry_with_token_after_non_json(&self) -> bool {
+        http_policy::PolicyError::ProxyPage { status: 200 }.may_retry()
+    }
 }

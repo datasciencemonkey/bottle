@@ -1281,6 +1281,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "http-policy"
+version = "0.1.0"
+dependencies = [
+ "url",
+]
+
+[[package]]
 name = "httparse"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1837,6 +1844,7 @@ name = "mog-core"
 version = "0.1.0"
 dependencies = [
  "getrandom 0.3.4",
+ "http-policy",
  "schemars 1.2.3",
  "serde",
  "serde_json",

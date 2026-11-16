@@ -1,0 +1,11 @@
+[package]
+name = "http-policy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+description = "Pure token-isolation and response policy for Bottle's HttpTransport (R7)."
+
+[dependencies]
+url = "2.5"

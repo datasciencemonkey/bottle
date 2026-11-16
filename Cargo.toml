@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/mog-core", "crates/mog-core-ffi", "src-tauri"]
+members = ["crates/http-policy", "crates/mog-core", "crates/mog-core-ffi", "src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,6 +11,8 @@ rust-version = "1.85"
 
 [workspace.dependencies]
 mog-core = { path = "crates/mog-core" }
+# R7 token host allowlist, redirect and non-JSON page rules (#207).
+http-policy = { path = "crates/http-policy" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = "1.2"
