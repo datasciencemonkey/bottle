@@ -7,7 +7,8 @@ The gate passes only when docs/release/BRAND-APPROVAL.md has Status approved, an
 Date approved (YYYY-MM-DD), an Approval reference and the tracking issue #129.
 Automated art checks (every mode): no Lava FF3621 and no Tail, Wisp or Brick node in
 mog-rive/scene.rml (UX-10a, UX-10b); no `@rive-app/webgl` in package.json or pnpm-lock.yaml (NFR-16b).
-Also a ticked AT-37 row in the release checklist needs a passed gate.
+A ticked AT-37 row in the release checklist needs a passed gate and a link to the record in its
+Evidence cell (check_gate_evidence.py also needs a docs/evidence file there). With --external a missing art file fails.
 
 Exit 1 on an art problem or an inconsistent record. A gate that is not passed exits 0, so internal
 builds stay unblocked (COL-104). With --external (the first public download) it exits 1 too.
@@ -21,7 +22,10 @@ from pathlib import Path
 RECORD = "docs/release/BRAND-APPROVAL.md"
 PLACEHOLDER = re.compile(r"^\s*(<[^>]*>|TODO\b.*|tbd|-|n/?a)?\s*$", re.IGNORECASE)
 WEBGL = re.compile(r"@rive-app/webgl(?![\w-])")
-AT37_TICKED = re.compile(r"^\|\s*\[x\]\s*\|\s*AT-37\s*\|", re.IGNORECASE | re.MULTILINE)
+AT37_TICKED = re.compile(r"^\|\s*\[x\]\s*\|\s*AT-37\s*\|", re.IGNORECASE)
+BAD_APPROVERS = {"pending", "approved", "tbd", "me", "none", "unknown", "n/a"}
+REFERENCE = re.compile(r"https?://\S+|[A-Z][A-Z0-9]*-\d+")
+ART_FILES = ("mog-rive/scene.rml", "package.json", "pnpm-lock.yaml")
 
 
 def art_problems(scene):
@@ -43,31 +47,39 @@ def package_problems(package_json, lockfile):
 
 
 def fields(text):
-    out = {}
+    """Return ({field: value}, [duplicate field names]) of the record table."""
+    out, dups = {}, []
     for line in text.splitlines():
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
         if line.startswith("|") and len(cells) >= 2 and cells[0] not in ("Field", "") and not set(cells[0]) <= set("-:"):
+            if cells[0] in out:
+                dups.append(cells[0])
             out[cells[0]] = cells[1]
-    return out
+    return out, dups
 
 
-def gate_status(record_text):
+def gate_status(record_text, today=None):
     """Return (passed, reason). The reason is empty when the gate is passed."""
     if record_text is None:
         return False, f"no brand approval record ({RECORD}); approval is tracked in #129"
-    f = fields(record_text)
+    f, dups = fields(record_text)
+    if dups:
+        return False, f"duplicate field(s) in the record: {', '.join(sorted(set(dups)))}"
     status = f.get("Status", "").lower()
     if status != "approved":
         return False, f"brand approval is {status or 'missing'} (tracked in #129)"
-    if "#129" not in f.get("Tracking issue", ""):
-        return False, "the record must name the tracking issue #129"
+    if f.get("Tracking issue", "") != "#129":
+        return False, "the Tracking issue must be exactly #129"
     try:
-        date.fromisoformat(f.get("Date approved", ""))
+        approved = date.fromisoformat(f.get("Date approved", ""))
     except ValueError:
         return False, "Date approved is missing or not YYYY-MM-DD"
-    for name in ("Approver", "Approval reference"):
-        if PLACEHOLDER.match(f.get(name, "")):
-            return False, f"{name} is empty"
+    if approved > (today or date.today()):
+        return False, "Date approved is in the future"
+    if PLACEHOLDER.match(f.get("Approver", "")) or f["Approver"].lower() in BAD_APPROVERS:
+        return False, "Approver is empty or a placeholder"
+    if not REFERENCE.fullmatch(f.get("Approval reference", "")):
+        return False, "Approval reference must be a URL or a ticket ID"
     return True, ""
 
 
@@ -76,16 +88,30 @@ def read(root, rel):
     return path.read_text(encoding="utf-8") if path.exists() else None
 
 
-def check(root):
+def check(root, external=False):
     """Return (problems, passed, reason). Problems fail in every mode."""
-    problems = art_problems(read(root, "mog-rive/scene.rml") or "")
-    problems += package_problems(read(root, "package.json") or "", read(root, "pnpm-lock.yaml") or "")
+    problems = []
+    texts = {}
+    for rel in ART_FILES:
+        texts[rel] = read(root, rel)
+        if texts[rel] is None and external:
+            problems.append(f"missing {rel}: the art checks cannot run")
+    problems += art_problems(texts["mog-rive/scene.rml"] or "")
+    problems += package_problems(texts["package.json"] or "", texts["pnpm-lock.yaml"] or "")
     record = read(root, RECORD)
     passed, reason = gate_status(record)
-    if record and re.search(r"^\|\s*Status\s*\|\s*approved\s*\|", record, re.IGNORECASE | re.MULTILINE) and not passed:
-        problems.append(f"{RECORD} says approved but is incomplete: {reason}")
-    if not passed and AT37_TICKED.search(read(root, "docs/release/RELEASE-CHECKLIST.md") or ""):
-        problems.append(f"AT-37 is ticked but the brand gate is not passed: {reason}")
+    if record is not None:
+        f, dups = fields(record)
+        problems += [f"{RECORD} has a duplicate {name} row" for name in sorted(set(dups))]
+        if f.get("Status", "").lower() == "approved" and not passed:
+            problems.append(f"{RECORD} says approved but is incomplete: {reason}")
+    checklist = read(root, "docs/release/RELEASE-CHECKLIST.md") or ""
+    for line in checklist.splitlines():
+        if AT37_TICKED.match(line):
+            if not passed:
+                problems.append(f"AT-37 is ticked but the brand gate is not passed: {reason}")
+            if RECORD not in line.rsplit("|", 2)[-2]:
+                problems.append(f"AT-37 is ticked but its Evidence cell does not link {RECORD}")
     return problems, passed, reason
 
 
@@ -94,7 +120,7 @@ def main(argv=None):
     ap.add_argument("--root", default=".")
     ap.add_argument("--external", action="store_true", help="release outside the team: a gate not passed fails")
     args = ap.parse_args(argv)
-    problems, passed, reason = check(args.root)
+    problems, passed, reason = check(args.root, args.external)
     for p in problems:
         print(f"FAIL brand gate: {p}")
     if passed:

@@ -76,7 +76,7 @@ complete `docs/release/BRAND-APPROVAL.md` (Status approved, approver, date, refe
 It also checks the art: no FF3621, no Tail, Wisp or Brick node, no `@rive-app/webgl`.
 A gate that is not passed prints `NOT PASSED` with the reason and exits 0, so internal builds stay
 unblocked. The release pipeline for the first public download runs it with `--external`, which exits 1.
-`tools/ci_checks.py brandgate` runs it without `--external`.
+`tools/ci_checks.py brandapproval` runs it without `--external`.
 
 ```
 uv run --no-project scripts/check_brand_gate.py [--external]
