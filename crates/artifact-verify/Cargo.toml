@@ -1,0 +1,16 @@
+[package]
+name = "artifact-verify"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+description = "SHA-256 verification of downloaded artefacts for Bottle (SEC-20b)."
+
+
+[dependencies]
+sha2 = "0.10"
+subtle = "2.5"
+
+[dev-dependencies]
+tempfile = "3"
