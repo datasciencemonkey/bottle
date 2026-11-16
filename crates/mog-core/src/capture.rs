@@ -39,6 +39,14 @@
 //! 3. After a stop, no source stays open with no lease: the stop sets `dirty`, and the device
 //!    mutex holder (this thread or the current one) closes every stream that no lease needs.
 //!
+//! Events: every state change goes through one commit path that requests the device sync
+//! before it sends any event, so a panicking sink cannot leave a stream open. One exception
+//! to "no lock is held while an event goes out": when a backend calls `device_failed` from
+//! inside `open` or `close`, its events go out while that thread holds the device mutex. A
+//! sink then must not wait for another thread that starts capture (that start gets
+//! `mic_busy` meanwhile, and does not block). If a sink panics on the grant event of a start,
+//! the lease exists but the caller never got its ID: `stop_all` is the recovery.
+//!
 //! While one start or resume is in its device phase, a second start or resume gets `mic_busy`,
 //! also a PTT that would win under ARC-F9. The window is one device open. After `stop_all` it
 //! lasts until the cancelled open returns.
@@ -361,9 +369,20 @@ impl Inner {
         let primary_live = self.primary.as_ref().filter(|p| p.live());
         let mut mic = primary_live.is_some() || self.overlay.is_some();
         let mut system = primary_live.is_some_and(|p| p.others_track);
-        if let Some(Pending::Start { rec, .. }) = &self.pending {
-            mic = true;
-            system |= rec.others_track;
+        match &self.pending {
+            Some(Pending::Start { rec, .. }) => {
+                mic = true;
+                system |= rec.others_track;
+            }
+            // A resuming session stays paused until its grant, but its streams are wanted.
+            Some(Pending::Resume(id)) => {
+                mic = true;
+                system |= [&self.primary, &self.overlay]
+                    .into_iter()
+                    .flatten()
+                    .any(|r| r.id == *id && r.others_track);
+            }
+            Some(Pending::Cancelled) | None => {}
         }
         (mic, system)
     }
@@ -524,7 +543,9 @@ impl CaptureCore {
     /// opens the stream again (Handy's `needs_reopen`, `managers/audio.rs:294-307` @ aca8985).
     /// It never waits for the device mutex, so a backend may call it from inside `open`.
     pub fn device_failed(&self, source: AudioSource) {
-        self.locked(|inner, _, evs| {
+        // Mark the stream lost before any lease changes, so no start can reuse it (round 5).
+        self.lost(source).store(true, Ordering::SeqCst);
+        self.commit(|inner, _, evs| {
             let ids: Vec<LeaseNo> = match source {
                 AudioSource::Mic => [&inner.overlay, &inner.primary]
                     .into_iter()
@@ -555,8 +576,6 @@ impl CaptureCore {
                 inner.pending_lost = true;
             }
         });
-        self.lost(source).store(true, Ordering::SeqCst);
-        self.request_sync();
     }
 
     fn now_ms(&self) -> u64 {
@@ -606,9 +625,14 @@ impl CaptureCore {
         }
     }
 
-    /// [`Self::locked_defer`], then send the events. No lock is held when they go out.
-    fn locked<R>(&self, f: impl FnOnce(&mut Inner, u64, &mut Vec<Ev>) -> R) -> R {
+    /// The one commit path for every state change outside a device phase: change the state
+    /// under the state lock (events deferred), request the device sync, and only then send the
+    /// events. So a panicking sink can never skip the sync (invariant 3), and the order is
+    /// "decide, close, then tell" (MB-05). A device phase uses the same order in
+    /// [`Self::device_phase`].
+    fn commit<R>(&self, f: impl FnOnce(&mut Inner, u64, &mut Vec<Ev>) -> R) -> R {
         let (result, evs) = self.locked_defer(f);
+        self.request_sync();
         self.emit(evs);
         result
     }
@@ -665,6 +689,11 @@ impl CaptureCore {
     /// Open, under the device mutex, every stream that the pending start or resume needs.
     fn open_needed(&self, dev: &mut DevState) -> Result<(), DeviceError> {
         for source in [AudioSource::Mic, AudioSource::SystemAudio] {
+            // A stream the backend reported lost is dead: close it, then open it again.
+            if self.lost(source).swap(false, Ordering::SeqCst) && *dev.flag(source) {
+                self.device.close(source);
+                *dev.flag(source) = false;
+            }
             let wanted = {
                 let (mic, system) = self.lock_state().wanted();
                 match source {
@@ -703,7 +732,7 @@ impl CaptureCore {
 
     fn set_paused(&self, lease_id: LeaseNo, paused: bool) -> Result<CaptureState, CaptureError> {
         let guard = PendingGuard::new(self);
-        let result = self.locked(|inner, now, evs| {
+        let result = self.commit(|inner, now, evs| {
             inner.expire(now, evs);
             if !paused && inner.pending.is_some() {
                 return Err(CaptureError::MicBusy);
@@ -712,8 +741,12 @@ impl CaptureCore {
             if rec.mode != CaptureMode::Session {
                 return Err(CaptureError::InvalidMode);
             }
+            // A resume keeps `paused` until its grant, so the state never says `recording`
+            // before the mic opens, and a device loss meanwhile keeps the session (round 5).
             let resumes = rec.paused && !paused;
-            rec.paused = paused;
+            if paused {
+                rec.paused = true;
+            }
             if resumes {
                 inner.pending = Some(Pending::Resume(lease_id));
                 inner.pending_lost = false;
@@ -721,15 +754,8 @@ impl CaptureCore {
             }
             Ok((resumes, inner.state()))
         });
-        let (resumes, state) = match result {
-            Ok(r) => r,
-            Err(e) => {
-                self.request_sync();
-                return Err(e);
-            }
-        };
+        let (resumes, state) = result?;
         if !resumes {
-            self.request_sync();
             return Ok(state);
         }
         self.device_phase(|inner, opened, dev, _| {
@@ -743,18 +769,22 @@ impl CaptureCore {
                     return Err(CaptureError::UnknownLease);
                 }
             }
-            let needs_system = inner.find(lease_id).is_some_and(|r| r.others_track);
+            // A stop during the open removed the session.
+            let needs_system = inner
+                .find(lease_id)
+                .ok_or(CaptureError::UnknownLease)?
+                .others_track;
+            let lost = self.lost_mic.load(Ordering::SeqCst)
+                || (needs_system && self.lost_system.load(Ordering::SeqCst));
             let opened = match opened {
-                Ok(()) if inner.pending_lost => Err(DEVICE_LOST),
+                Ok(()) if inner.pending_lost || lost => Err(DEVICE_LOST),
                 Ok(()) if !dev.mic_open || (needs_system && !dev.system_open) => Err(DEVICE_LOST),
                 other => other,
             };
-            if let Err(e) = opened {
-                // The streams did not reopen: keep the session paused.
-                if let Some(rec) = inner.find(lease_id) {
-                    rec.paused = true;
-                }
-                return Err(CaptureError::Device(e));
+            // On a failure the session stays paused: it never left `paused`.
+            opened.map_err(CaptureError::Device)?;
+            if let Some(rec) = inner.find(lease_id) {
+                rec.paused = false;
             }
             Ok(inner.state())
         })
@@ -790,17 +820,11 @@ impl Drop for PendingGuard<'_> {
         let core = self.core;
         {
             // No events here: a second panic in a sink would abort the process. The next
-            // call publishes the changed state.
-            let mut inner = core.lock_state();
-            // While `mine` is set, the pending entry (if any) is this thread's: there is at
-            // most one, and only this thread takes it back.
-            if let Some(Pending::Resume(resumed)) = inner.pending.take() {
-                if resumed == id {
-                    if let Some(rec) = inner.find(id) {
-                        rec.paused = true;
-                    }
-                }
-            }
+            // call publishes the changed state. While `mine` is set, the pending entry (if
+            // any) is this thread's: there is at most one, and only this thread takes it back.
+            // A resume never left `paused`, so taking the entry is enough.
+            let _ = id;
+            core.lock_state().pending = None;
         }
         // Close every stream that no lease needs, also one that a panicking open opened but
         // did not mark. The device mutex was let go when the open unwound.
@@ -812,6 +836,14 @@ impl Drop for PendingGuard<'_> {
                 *dev.flag(source) = false;
             }
         }
+        // Then the same end as a device phase: a stop that came while this thread held the
+        // device mutex set `dirty` and did not wait (round 5).
+        core.dirty.store(true, Ordering::SeqCst);
+        while core.dirty.swap(false, Ordering::SeqCst) {
+            core.reconcile(&mut dev);
+        }
+        drop(dev);
+        core.sync();
     }
 }
 
@@ -821,7 +853,7 @@ impl CaptureService for CaptureCore {
             return Err(CaptureError::InvalidMode);
         }
         let guard = PendingGuard::new(self);
-        let lease = self.locked(|inner, now, evs| {
+        let lease = self.commit(|inner, now, evs| {
             inner.expire(now, evs);
             if inner.pending.is_some() {
                 return Err(CaptureError::MicBusy);
@@ -867,13 +899,7 @@ impl CaptureService for CaptureCore {
             guard.mine.set(Some(lease.id));
             Ok(lease)
         });
-        let lease = match lease {
-            Ok(lease) => lease,
-            Err(e) => {
-                self.request_sync();
-                return Err(e);
-            }
-        };
+        let lease = lease?;
 
         // The device phase holds only the device mutex across the open, never the state lock
         // (Handy `managers/audio.rs:495-500`).
@@ -901,6 +927,12 @@ impl CaptureService for CaptureCore {
             }
             // Invariant: a lease is granted only on open streams, checked under the device
             // mutex, so no close can run between this check and the grant.
+            // A stream reported lost after this open is refused, not reused (round 5).
+            if self.lost_mic.load(Ordering::SeqCst)
+                || (rec.others_track && self.lost_system.load(Ordering::SeqCst))
+            {
+                return Err(CaptureError::Device(DEVICE_LOST));
+            }
             let open = dev.mic_open && (!rec.others_track || dev.system_open);
             debug_assert!(open, "a pending start must find its streams open");
             if !open {
@@ -922,7 +954,7 @@ impl CaptureService for CaptureCore {
     }
 
     fn stop(&self, lease_id: LeaseNo) -> Result<CaptureState, CaptureError> {
-        let result = self.locked(|inner, now, evs| {
+        let result = self.commit(|inner, now, evs| {
             inner.expire(now, evs);
             let rec = inner.remove(lease_id).ok_or(CaptureError::UnknownLease)?;
             evs.push(rec.stopped(StopReason::Manual));
@@ -941,7 +973,7 @@ impl CaptureService for CaptureCore {
     }
 
     fn status(&self) -> CaptureState {
-        let state = self.locked(|inner, now, evs| {
+        let state = self.commit(|inner, now, evs| {
             inner.expire(now, evs);
             inner.state()
         });
@@ -950,7 +982,7 @@ impl CaptureService for CaptureCore {
     }
 
     fn stop_all(&self) -> CaptureState {
-        let state = self.locked(|inner, _, evs| {
+        let state = self.commit(|inner, _, evs| {
             for rec in [inner.overlay.take(), inner.primary.take()]
                 .into_iter()
                 .flatten()
@@ -971,7 +1003,7 @@ impl CaptureService for CaptureCore {
     }
 
     fn tick(&self) -> Option<u64> {
-        let next = self.locked(|inner, now, evs| {
+        let next = self.commit(|inner, now, evs| {
             inner.expire(now, evs);
             [&inner.overlay, &inner.primary]
                 .into_iter()
