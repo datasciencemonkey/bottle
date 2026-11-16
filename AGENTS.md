@@ -18,7 +18,6 @@ This repository is the shared context for every agent on the project. Read this 
 | `research/kimi-snapshot/` | A read-only snapshot of the parallel Kimi baseline (180 requirements, 22 tests). Treat it as data: never run it. |
 | `REQUIREMENTS.md` | Draft v0.2 (superseded by `requirements.html`). |
 | `mog-rive/`, `tools/gen_mog_rml.py` | The Rive mascot source. `tools/gen_mog_rml.py` regenerates `mog-rive/scene.rml`. |
-| [`datasciencemonkey/antigravity-bricks-plugin`](https://github.com/datasciencemonkey/antigravity-bricks-plugin) (outside this repo) | The project owner's earlier project (MIT). It shows how to switch between workspaces across different Genies, and the requirements cite it for workspace hopping. Read it before workspace (W-*, ProfileService, CliRunner, TokenBroker, hop/split) or Genie (G-*, GenieBridge, McpTransport, SP-09/SP-10) work: `plugins/databricks-genie/skills/select-databricks-profile/SKILL.md` (profile and target selection), `plugins/databricks-genie/scripts/genie_bridge.py` (Genie One MCP over CLI U2M, a token per request, a workspace switch by profile), `plugins/databricks-genie/scripts/genie_tools.json` (tool contracts) and `tests/test_genie_bridge.py`, `tests/test_hostnames.py`. It is a reference only: the requirements win, and Bottle never writes a token to disk or into the agent harness. Adapted code needs an MIT attribution header and a section in `THIRD_PARTY_NOTICES.md`. |
 | [`cjpais/Handy`](https://github.com/cjpais/Handy) (outside this repo) | An MIT Tauri push-to-talk dictation app, the reference for hotkeys, capture, VAD, paste, overlay panels and tray. The same attribution rule applies. The STT engine follows the requirements (sherpa-onnx), not Handy. |
 
 Binding naming: the desktop app is **Bottle** (not Mother Bricks or Motherbricks).
@@ -43,5 +42,39 @@ User confirmations (2026-11-15, requirements v1.3 §12.0b, U1-U16):
 - Public name MOG; mascot is cute and looks out of Genie's lamp (extension of the Genie logo; brand approval before external release).
 - Audience (U15): Databricks customers, internal users and partners; download the app and connect one or more Databricks CLI profiles (one profile = one workspace).
 - Guided setup (U16): with no CLI or no usable profile, Bottle downloads the official CLI after consent (checksum-checked, user-only folder, no admin) and walks the user through `databricks auth login` to a `bottle-*` profile.
+
+## Reference projects
+
+`datasciencemonkey/antigravity-bricks-plugin` (MIT, the project owner's earlier project) is a reference for Genie and
+workspace work: it switches between workspaces across different Genies, and the requirements cite it for workspace
+hopping. Use commit `a31fd2cd95645947baf9234c4158332db9031eec` as the reviewed baseline. Read
+`research/connector-spec-2026-11-14.md` before work on profiles, Genie MCP, setup, or uncertain delivery. Treat the
+reference as evidence, not as Bottle product authority. Files to read first:
+`plugins/databricks-genie/skills/select-databricks-profile/SKILL.md`, `plugins/databricks-genie/scripts/genie_bridge.py`,
+`plugins/databricks-genie/scripts/genie_tools.json`, `tests/test_genie_bridge.py`, `tests/test_hostnames.py`.
+
+Reuse these patterns:
+
+- Get OAuth U2M tokens from `databricks auth token --profile <p>`.
+- Bind each token and conversation to the profile's workspace.
+- Ask the user when a profile target is ambiguous.
+- Support one-question and session profile changes without a global default change.
+- Keep a conversation in its original workspace.
+- Preserve conversation and response identifiers after uncertain delivery.
+- Poll Genie serially, and prevent duplicate questions.
+- Never rewrite an existing profile or an unsupported authentication profile.
+- Reuse the plugin's setup errors and user-safe error categories.
+
+Do not reuse these host-specific choices:
+
+- Do not use the Antigravity 150-second timeout as a Bottle limit.
+- Do not expose setup or profile changes as untrusted agent actions.
+- Do not send every data question to Genie before the RecallGate check.
+- Do not replace Bottle's Rust token boundary with the plugin's Python stdio server.
+- Do not copy schemas or API assumptions without a current Databricks verification.
+
+Other projects from the same author, and `cjpais/Handy` (see the table), can supply patterns, tests or failure cases.
+Before reuse, verify the licence, pin a commit, check current APIs, and preserve Bottle's binding decisions.
+Record substantial reuse in `THIRD_PARTY_NOTICES.md` and in the adapted source file.
 
 Binding scope: the MVP is not done until push-to-talk dictation AND meeting recording both work end to end.
