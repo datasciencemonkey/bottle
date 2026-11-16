@@ -91,7 +91,7 @@ async fn sp_09_parses_json_reply() {
     let fake = FakeGenie::new(&["t1"]);
     let (_server, client) = ready(&fake, RotatingTokens::new(&["t1"])).await;
     let tools = client.list_tools().await.unwrap();
-    assert_eq!(tools["tools"].as_array().unwrap().len(), 4);
+    assert_eq!(tools["tools"], common::fixture_tools()["tools"]);
     assert!(
         client
             .exchanges()
@@ -107,7 +107,13 @@ async fn sp_09_parses_sse_reply_with_notification_before_response() {
     let (_server, client) = ready(&fake, RotatingTokens::new(&["t1"])).await;
     assert_eq!(client.session_id().as_deref(), Some("sess-1"));
     let tools = client.list_tools().await.unwrap();
-    assert_eq!(tools["tools"][0]["name"], "genie_ask");
+    assert!(
+        tools["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == "genie_ask")
+    );
     let out = client
         .call_tool("genie_ask", contract::ask_args("q", None), None)
         .await
@@ -220,7 +226,7 @@ async fn g_05a_404_with_session_initialises_again_once() {
     let (_server, client) = ready(&fake, RotatingTokens::new(&["t1"])).await;
     fake.with(|s| s.expire_next_call = true);
     let tools = client.list_tools().await.unwrap();
-    assert_eq!(tools["tools"].as_array().unwrap().len(), 4);
+    assert_eq!(tools["tools"], common::fixture_tools()["tools"]);
     assert_eq!(fake.with(|s| s.sessions_issued), 2);
     assert_eq!(client.session_id().as_deref(), Some("sess-2"));
 }

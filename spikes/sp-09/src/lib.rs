@@ -8,6 +8,7 @@
 pub mod contract;
 pub mod endpoint;
 pub mod envelope;
+pub mod probe;
 pub mod shape;
 pub mod sse;
 pub mod token;

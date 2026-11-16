@@ -22,8 +22,11 @@ pub enum Reply {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Busy {
+    /// Never busy.
     None,
+    /// A genie_ask that names a conversation gets the busy text as isError.
     IsError,
+    /// A genie_ask that names a conversation gets the busy text as a JSON-RPC error.
     RpcError,
 }
 
@@ -75,9 +78,7 @@ fn rpc_result(id: &Value, result: Value) -> Value {
 
 fn reply(state: &State, msg: Value) -> ResponseTemplate {
     match state.reply {
-        Reply::Json => ResponseTemplate::new(200)
-            .insert_header("content-type", "application/json")
-            .set_body_string(msg.to_string()),
+        Reply::Json => ResponseTemplate::new(200).set_body_raw(msg.to_string(), "application/json"),
         Reply::Sse => {
             // A progress notification first, then the response, as the spec allows.
             let note = json!({"jsonrpc": "2.0", "method": "notifications/progress",
@@ -85,9 +86,7 @@ fn reply(state: &State, msg: Value) -> ResponseTemplate {
             let body = format!(
                 ": keep-alive\r\nevent: message\r\nid: 1\r\ndata: {note}\r\n\r\nevent: message\nid: 2\ndata: {msg}\n\n"
             );
-            ResponseTemplate::new(200)
-                .insert_header("content-type", "text/event-stream")
-                .set_body_string(body)
+            ResponseTemplate::new(200).set_body_raw(body, "text/event-stream")
         }
     }
 }
@@ -151,20 +150,23 @@ impl Respond for FakeGenie {
             "tools/call" => {
                 let name = body["params"]["name"].as_str().unwrap_or("");
                 match name {
-                    "genie_ask" => match s.busy {
-                        Busy::IsError => reply(
+                    "genie_ask" => match (
+                        s.busy,
+                        body["params"]["arguments"].get("conversation_id").is_some(),
+                    ) {
+                        (Busy::IsError, true) => reply(
                             &s,
                             rpc_result(
                                 &id,
                                 json!({"content": [{"type": "text", "text": BUSY_TEXT}], "isError": true}),
                             ),
                         ),
-                        Busy::RpcError => reply(
+                        (Busy::RpcError, true) => reply(
                             &s,
                             json!({"jsonrpc": "2.0", "id": id,
                                    "error": {"code": -32603, "message": BUSY_TEXT}}),
                         ),
-                        Busy::None => {
+                        _ => {
                             let sc = json!({"conversation_id": "conv-1", "response_id": "resp-1",
                                             "status": "in_progress"});
                             reply(
