@@ -144,7 +144,9 @@ impl WindowLedger {
 /// On macOS, `macos_panel::MacPanelStyle` makes each MOG window a non-activating NSPanel
 /// (MOG-02). Tests use a double, because the Tauri mock runtime has no real window.
 pub trait NativeWindowStyle<R: tauri::Runtime>: Send + Sync {
-    /// Called once, after the window is built and before it shows.
+    /// Called once, after the window is built and before it shows. Off the main thread an
+    /// implementation may queue the native step and return `Ok` before it runs; it must then
+    /// destroy the window itself if the step fails (the Destroyed event frees the slot).
     fn style(&self, window: &tauri::WebviewWindow<R>, kind: &WindowKind)
         -> Result<(), WindowError>;
     /// Show the window. It must not activate Bottle or take focus for a MOG window.
@@ -254,6 +256,11 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
         self.ledger().active_mogs()
     }
 
+    /// True if the MOG has a card window in the ledger.
+    pub fn has_card(&self, mog_id: &str) -> bool {
+        self.ledger().has_card(mog_id)
+    }
+
     /// Call from the app's `WindowEvent::Destroyed` handler, so the ledger follows the windows.
     pub fn window_destroyed(&self, label: &str) {
         self.ledger().window_destroyed(label);
@@ -265,7 +272,10 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
         // The ledger lock is released before the window is built.
         match self.window(&kind) {
             Some(w) => self.native.show(&w, &kind),
-            None => self.make(&kind).map(|_| ()),
+            None => self.make(&kind).map(|_| ()).inspect_err(|_| {
+                // The card did not open: clear its mark, so the next show makes it again.
+                self.ledger().window_destroyed(&kind.label());
+            }),
         }
     }
 

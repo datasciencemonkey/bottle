@@ -7,6 +7,8 @@
 //! `create_recording_overlay`. Handy gets them from `tauri-nspanel`; Bottle does the same class
 //! swap with objc2 directly, as SP-01 (#10) tested, so it adds no crate and no git dependency.
 //! TODO(#10): the signed-DMG checks of SP-01 (alpha over the desktop, white flash, halo).
+//! TODO(#316): the on-screen checks on a Mac (0 focus steals in 100 clicks, the drag moves the
+//! panel, a fullscreen Space). The unit and AppKit tests cannot show a window.
 
 use crate::mog_drag::{DragGesture, MouseInput, Verdict};
 use crate::window_host::{NativeWindowStyle, WindowError};
@@ -104,30 +106,61 @@ fn class_name(cls: &AnyClass) -> String {
     cls.name().to_string_lossy().into_owned()
 }
 
+fn is_kvo_subclass(cls: &AnyClass) -> bool {
+    class_name(cls).starts_with("NSKVONotifying_")
+}
+
+/// Swap the class of `window` to `MogPanel`. Refuses a class that is larger than the object, so
+/// the swap never reads past it.
+fn swap_class(window: &NSWindow) -> Result<(), WindowError> {
+    let target: &AnyClass = MogPanel::class();
+    let current = window.class();
+    if std::ptr::eq(current, target) {
+        return Ok(());
+    }
+    if target.instance_size() > current.instance_size() {
+        return Err(WindowError::HostFailed);
+    }
+    let obj = window as *const NSWindow as *mut AnyObject;
+    // SAFETY: main thread (caller). `MogPanel` adds no instance variables, NSPanel adds none to
+    // NSWindow, and the size check above holds, so every instance variable of the new class lies
+    // inside the object. The old class's instance variables stay in place for tao.
+    unsafe { objc2::ffi::object_setClass(obj, target) };
+    Ok(())
+}
+
 /// Turn a window into a MOG panel: swap its class to `MogPanel` (an NSPanel subclass), then set
 /// the style mask, level, collection behavior and transparency of `spec`.
 ///
-/// Refuses a key-capable spec (TODO(#78): the card panel needs its own class) and a window that
-/// key-value observing has subclassed, because a class swap would break the observer.
+/// WebKit observes the window of each WKWebView (key-value observing), so a wry window has an
+/// `NSKVONotifying_*` class. A bare class swap (what `tauri-nspanel` does) drops the class that
+/// notifies WebKit. So the step takes the content view out of the window first (WebKit removes
+/// its observers), swaps the class, and puts the content view back (WebKit observes the panel
+/// again, on an `NSKVONotifying_BottleMogPanel` class). AppKit keeps the old KVO class after the
+/// last observer goes, so the class name alone does not tell if observers are left, and
+/// `observationInfo` is not nil even on a plain window. An observer that is not in the content
+/// view would stop getting notifications; none is known for a tao window (ADR 0009).
+///
+/// Refuses a key-capable spec (TODO(#78): the card panel needs its own class).
 ///
 /// # Safety
-/// Call on the main thread with a live window that no other code swaps or observes. The window
-/// keeps its memory: the old class's instance variables stay in place, and tao reads them only
-/// through its own typed pointer (the same swap that `tauri-nspanel` does).
+/// Call on the main thread with a live window that no other code swaps. tao reads its own
+/// instance variables only through its typed pointer (the same swap that `tauri-nspanel` does).
 pub unsafe fn apply_panel(window: &NSWindow, spec: &PanelSpec) -> Result<(), WindowError> {
     if spec.can_become_key || spec.can_become_main {
         return Err(WindowError::HostFailed);
     }
-    let target: &AnyClass = MogPanel::class();
-    let current = window.class();
-    if !std::ptr::eq(current, target) {
-        if class_name(current).starts_with("NSKVONotifying_") {
-            return Err(WindowError::HostFailed);
+    if !std::ptr::eq(window.class(), MogPanel::class()) {
+        let content = window.contentView();
+        let detach = content.is_some() && is_kvo_subclass(window.class());
+        if detach {
+            window.setContentView(None);
         }
-        let obj = window as *const NSWindow as *mut AnyObject;
-        // SAFETY: the caller's contract. `MogPanel` adds no instance variables, so the object
-        // stays large enough for the new class.
-        unsafe { objc2::ffi::object_setClass(obj, target) };
+        let swapped = swap_class(window);
+        if detach {
+            window.setContentView(content.as_deref());
+        }
+        swapped?;
     }
     let mut mask = window.styleMask();
     if spec.nonactivating {
