@@ -14,6 +14,10 @@
 //! `src-tauri/src/managers/audio.rs:495-500` @ aca8985). Only the pattern is used; no Handy code
 //! is copied.
 //!
+//! While one start or resume opens the device, a second start or resume gets `mic_busy`, also
+//! a PTT that would win under ARC-F9. The window is one device open. After `stop_all` it lasts
+//! until the cancelled open returns, so a source never opens twice at once.
+//!
 //! Lease boundaries for the segment pipeline (#116): the device sees only open and close, and a
 //! PTT over hands-free or a directed PTT in a session reuses the open mic. The pipeline cuts
 //! audio per lease from the [`Lease`] that `start` returns, the [`Stopped`] events and the
@@ -296,7 +300,15 @@ enum Pending {
     },
     /// A paused session that resumes.
     Resume(LeaseNo),
+    /// `stop_all` cancelled the start or resume, but its open is still running. The open slot
+    /// stays taken until that open returns, so no second open of a source can run beside it.
+    Cancelled,
 }
+
+/// The error of a start or resume whose stream the device lost before the grant.
+const DEVICE_LOST: DeviceError = DeviceError {
+    code: "device_lost",
+};
 
 /// An event, sent after the state lock is released.
 enum Ev {
@@ -312,6 +324,9 @@ struct Inner {
     /// directed segment of a session.
     overlay: Option<LeaseRec>,
     pending: Option<Pending>,
+    /// The device reported a lost stream that the pending start or resume needs, before its
+    /// lease was granted. The grant then fails with `device_lost`.
+    pending_lost: bool,
     next_no: LeaseNo,
     last_state: Option<CaptureState>,
 }
@@ -482,6 +497,16 @@ impl CaptureCore {
                     evs.push(rec.stopped(StopReason::DeviceLost));
                 }
             }
+            // A pending start or resume that needs this source must not get a lease on a
+            // closed stream.
+            let needs = match &inner.pending {
+                Some(Pending::Start { rec, .. }) => source == AudioSource::Mic || rec.others_track,
+                Some(Pending::Resume(_)) => true,
+                Some(Pending::Cancelled) | None => false,
+            };
+            if needs {
+                inner.pending_lost = true;
+            }
         });
         self.close_unwanted();
     }
@@ -603,6 +628,7 @@ impl CaptureCore {
             rec.paused = paused;
             if resumes {
                 inner.pending = Some(Pending::Resume(lease_id));
+                inner.pending_lost = false;
             }
             Ok(resumes)
         });
@@ -618,11 +644,17 @@ impl CaptureCore {
             if resumes {
                 match inner.pending.take() {
                     Some(Pending::Resume(id)) if id == lease_id => {}
+                    // A stop_all ran while the device opened; the open slot is free again.
+                    Some(Pending::Cancelled) => return Err(CaptureError::UnknownLease),
                     other => {
                         inner.pending = other;
                         return Err(CaptureError::UnknownLease);
                     }
                 }
+                let opened = match opened {
+                    Ok(()) if inner.pending_lost => Err(DEVICE_LOST),
+                    other => other,
+                };
                 if let Err(e) = opened {
                     // The streams did not reopen: keep the session paused.
                     if let Some(rec) = inner.find(lease_id) {
@@ -684,6 +716,7 @@ impl CaptureService for CaptureCore {
                 overlay,
                 preempt,
             });
+            inner.pending_lost = false;
             Ok(lease)
         })?;
 
@@ -697,7 +730,9 @@ impl CaptureService for CaptureCore {
                     overlay,
                     preempt,
                 }) if rec.id == lease.id => (rec, overlay, preempt),
-                // A stop_all ran while the device opened: no lease was granted.
+                // A stop_all ran while the device opened: no lease was granted, and the open
+                // slot is free again now that this open has returned.
+                Some(Pending::Cancelled) => return Err(CaptureError::UnknownLease),
                 other => {
                     inner.pending = other;
                     return Err(CaptureError::UnknownLease);
@@ -706,6 +741,9 @@ impl CaptureService for CaptureCore {
             // A failed open drops only the new lease; a hands-free capture it would preempt
             // keeps the mic.
             opened.map_err(CaptureError::Device)?;
+            if inner.pending_lost {
+                return Err(CaptureError::Device(DEVICE_LOST));
+            }
             if let Some(id) = preempt {
                 if let Some(hf) = inner.remove(id) {
                     evs.push(hf.stopped(StopReason::Preempted));
@@ -759,8 +797,11 @@ impl CaptureService for CaptureCore {
             {
                 evs.push(rec.stopped(StopReason::Panic));
             }
-            // A start in progress gets no lease (it returns `unknown_lease`).
-            inner.pending = None;
+            // A start in progress gets no lease (it returns `unknown_lease`), but its open slot
+            // stays taken until its open returns: a new start meanwhile gets `mic_busy`.
+            if inner.pending.is_some() {
+                inner.pending = Some(Pending::Cancelled);
+            }
             inner.state()
         });
         // Close both streams without a condition and without waiting for an open in
