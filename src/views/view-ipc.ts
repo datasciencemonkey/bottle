@@ -4,7 +4,8 @@
  */
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import { asHubNotice, HUB_NOTICE_EVENT, HUB_SCOPE, type HubNotice } from '../shared/hub-notice';
 import type { Mood, MogId } from '../shared/interfaces';
 import {
   call,
@@ -222,4 +223,41 @@ export function viewMicLevels(): {
       };
     },
   };
+}
+
+/**
+ * The hub notice state the brain sends (#27, ADR 0044), or null before the brain answers.
+ * On mount it asks the brain with `notice.ready`. TODO(#393): the event moves into `EVENTS`.
+ */
+export function useHubNotice(): HubNotice | null {
+  const [notice, setNotice] = useState<HubNotice | null>(null);
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    let gone = false;
+    const target = getCurrentWindow().label;
+    void listen<unknown>(
+      HUB_NOTICE_EVENT,
+      (e) => {
+        const n = asHubNotice(e.payload);
+        if (n) setNotice(n);
+      },
+      { target },
+    ).then((u) => {
+      if (gone) u();
+      else {
+        off = u;
+        void emitView(HUB_SCOPE, 'click', { action: 'notice.ready' }).catch(() => undefined);
+      }
+    });
+    return () => {
+      gone = true;
+      off?.();
+    };
+  }, []);
+  return notice;
+}
+
+/** Send the hub's Continue click for notice `version` to the brain. */
+export function acceptNotice(version: number): Promise<unknown> {
+  return emitView(HUB_SCOPE, 'click', { action: 'notice.accept', noticeVersion: version });
 }

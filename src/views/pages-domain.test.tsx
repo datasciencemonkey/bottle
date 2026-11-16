@@ -7,6 +7,7 @@ import { act } from 'react';
 import type { Root } from 'react-dom/client';
 import { CardView } from './card/CardView';
 import { Hub } from './hub/Hub';
+import { HUB_SCOPE } from '../shared/hub-notice';
 import { render, tauri, viewEmits } from './test-tauri';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('./test-tauri')).coreModule);
@@ -22,6 +23,9 @@ const options = [
   { id: D1, name: 'Finance' },
   { id: D2, name: 'Sales' },
 ];
+
+/** The MOG emits of the hub: drop its first-run notice request (#27). */
+const mogEmits = () => viewEmits().filter((e) => (e as { mogId?: unknown }).mogId !== HUB_SCOPE);
 
 let roots: Root[] = [];
 const mount = async (node: Parameters<typeof render>[0]) => {
@@ -70,7 +74,7 @@ describe('domain picker views', () => {
     expect(select.value).toBe(D1);
     expect([...select.options].map((o) => o.textContent)).toEqual(['Finance', 'Sales']);
     await choose(select, D2);
-    expect(viewEmits()).toEqual([
+    expect(mogEmits()).toEqual([
       { mogId: ID, kind: 'click', payload: { target: 'domain', scope: 'home', domainId: D2 } },
     ]);
   });
@@ -87,7 +91,7 @@ describe('domain picker views', () => {
     expect(select.value).toBe('');
     expect([...select.options].map((o) => o.value)).toEqual(['', D1, D2]);
     await choose(select, D1);
-    expect(viewEmits()).toEqual([
+    expect(mogEmits()).toEqual([
       { mogId: ID, kind: 'click', payload: { target: 'domain', scope: 'home', domainId: D1 } },
     ]);
   });
@@ -110,7 +114,7 @@ describe('domain picker views', () => {
     expect(input.getAttribute('aria-label')).toBe('Domain ID or Catalog Explorer URL');
     await type(input, ` domains/${D1} `);
     await act(async () => (picker.querySelector('button') as HTMLButtonElement).click());
-    expect(viewEmits()).toEqual([
+    expect(mogEmits()).toEqual([
       {
         mogId: ID,
         kind: 'click',

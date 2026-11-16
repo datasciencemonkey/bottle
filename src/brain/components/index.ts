@@ -3,6 +3,7 @@
  * `startBrain()` constructs each component once; all domain state lives in these objects.
  */
 import { BrainBus, subscribeBrain } from '../bus';
+import { wireNotice } from '../notice-wiring';
 import { createAgentBridge } from './agent-bridge';
 import { createCapturePolicy } from './capture-policy';
 import { createCleanupProvider } from './cleanup-provider';
@@ -67,6 +68,8 @@ export function startBrain(): Brain {
     ) as BrainComponents;
     const bus = new BrainBus();
     // TODO(#8, #14, #141): components register their handlers (view:input, hotkey:ptt, ...) on `bus`.
+    // MB-08a, MB-08b: the hub notice talks to T12 (#27).
+    wireNotice(bus, components.T12);
     brain = { components, bus, ready: subscribeBrain(bus) };
   }
   return brain;
