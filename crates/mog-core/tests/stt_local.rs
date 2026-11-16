@@ -20,6 +20,13 @@ fn tmp(tag: &str) -> PathBuf {
 fn tar_bz2(entries: &[(&str, &[u8])]) -> Vec<u8> {
     let enc = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::fast());
     let mut b = tar::Builder::new(enc);
+    // A symlink named like a model file comes first; it must not be followed or written.
+    let mut link = tar::Header::new_gnu();
+    link.set_entry_type(tar::EntryType::Symlink);
+    link.set_size(0);
+    link.set_mode(0o777);
+    b.append_link(&mut link, "m/tokens.txt", "/etc/passwd")
+        .unwrap();
     for (path, body) in entries {
         let mut h = tar::Header::new_gnu();
         h.set_size(body.len() as u64);
@@ -55,6 +62,10 @@ fn cap_49c_extract_writes_only_the_pinned_model_files() {
             ("m/README.md", b"skip"),
             ("other/tokens.txt", b"wrong top folder"),
             ("m/sub/tokens.txt", b"too deep"),
+            (
+                "./m/joiner.int8.onnx",
+                b"dot prefix, not a pinned name here",
+            ),
         ]),
     )
     .unwrap();
@@ -67,6 +78,10 @@ fn cap_49c_extract_writes_only_the_pinned_model_files() {
         .collect();
     assert_eq!(names, vec!["tokens.txt".to_string()]);
     assert_eq!(fs::read(dest.join("tokens.txt")).unwrap(), body);
+    assert!(!fs::symlink_metadata(dest.join("tokens.txt"))
+        .unwrap()
+        .file_type()
+        .is_symlink());
 }
 
 #[test]

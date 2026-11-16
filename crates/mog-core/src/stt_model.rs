@@ -279,7 +279,10 @@ impl ModelInstaller {
         self.root.join(format!("{}.partial", file.name))
     }
 
-    /// What is on disk (sizes only; [`ModelInstaller::install`] checks the hashes).
+    /// What is on disk, from file sizes only. A corrupt file of the right size still shows
+    /// [`ModelStatus::Installed`] here; [`ModelInstaller::install`] (and [`ModelInstaller::verify`])
+    /// check the hashes. The wizard (#413) must call `install` (a no-op when the files are good)
+    /// before it marks the STT step done.
     pub fn status(&self) -> ModelStatus {
         let dir = self.model_dir();
         let installed = self.spec.files.iter().all(|f| {
@@ -360,6 +363,12 @@ impl ModelInstaller {
             }
         }
         self.verify_installed().map(|()| dir)
+    }
+
+    /// Check every model file against its pinned SHA-256 (CAP-49c). On a mismatch the model
+    /// folder is deleted, so the next `install` downloads it again.
+    pub fn verify(&self) -> Result<(), InstallError> {
+        self.verify_installed()
     }
 
     /// Check every model file against its pin; delete the model folder on a mismatch.

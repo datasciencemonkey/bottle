@@ -79,6 +79,34 @@ pub fn perf_core_count() -> usize {
         .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()))
 }
 
+/// The `EfficiencyClass` of each `RelationProcessorCore` record in the buffer that
+/// `GetLogicalProcessorInformationEx(RelationProcessorCore, ...)` writes. Each record is
+/// `Relationship: u32`, `Size: u32`, then `PROCESSOR_RELATIONSHIP` (`Flags: u8`,
+/// `EfficiencyClass: u8`, ...); a core record is 48 bytes on x64, shorter than the 80-byte
+/// `SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX` union. The walk uses each record's own `Size` and
+/// stops at a record that is too small or runs past the end. Pure, so it is tested on every OS.
+pub fn efficiency_classes_from_slpi(buf: &[u8]) -> Vec<u8> {
+    const RELATION_PROCESSOR_CORE: u32 = 0;
+    const MIN_RECORD: usize = 10; // the header (8) + Flags + EfficiencyClass
+    let mut classes = Vec::new();
+    let mut off = 0usize;
+    while let Some(head) = buf.get(off..off + 8) {
+        let relationship = u32::from_le_bytes([head[0], head[1], head[2], head[3]]);
+        let size = u32::from_le_bytes([head[4], head[5], head[6], head[7]]) as usize;
+        let Some(end) = off.checked_add(size) else {
+            break;
+        };
+        if size < MIN_RECORD || end > buf.len() {
+            break;
+        }
+        if relationship == RELATION_PROCESSOR_CORE {
+            classes.push(buf[off + 9]);
+        }
+        off = end;
+    }
+    classes
+}
+
 #[cfg(target_os = "macos")]
 mod platform {
     use std::ffi::{c_char, c_int, c_void, CStr};
@@ -119,7 +147,6 @@ mod platform {
 mod platform {
     use windows_sys::Win32::System::SystemInformation::{
         GetLogicalProcessorInformationEx, RelationProcessorCore,
-        SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
     };
 
     pub(super) fn perf_core_count() -> Option<usize> {
@@ -131,9 +158,9 @@ mod platform {
         if len == 0 {
             return None;
         }
-        // u64 words keep the records aligned.
-        let mut buf = vec![0u64; (len as usize).div_ceil(8)];
-        // SAFETY: `buf` holds at least `len` bytes and `len` is its size in bytes.
+        let mut buf = vec![0u8; len as usize];
+        // SAFETY: `buf` holds `len` bytes and `len` is its size in bytes. The call writes
+        // variable-size records; they are parsed as bytes, never as a struct reference.
         let ok = unsafe {
             GetLogicalProcessorInformationEx(
                 RelationProcessorCore,
@@ -144,26 +171,8 @@ mod platform {
         if ok == 0 {
             return None;
         }
-        let base = buf.as_ptr().cast::<u8>();
-        let mut classes = Vec::new();
-        let mut off = 0usize;
-        while off + std::mem::size_of::<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>() <= len as usize {
-            // SAFETY: `off` is the start of a record inside the `len` bytes that the call wrote;
-            // each record holds its own size.
-            let rec = unsafe {
-                &*base
-                    .add(off)
-                    .cast::<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>()
-            };
-            if rec.Relationship == RelationProcessorCore {
-                // SAFETY: the union holds `Processor` for `RelationProcessorCore` records.
-                classes.push(unsafe { rec.Anonymous.Processor.EfficiencyClass });
-            }
-            if rec.Size == 0 {
-                break;
-            }
-            off += rec.Size as usize;
-        }
+        buf.truncate(len as usize);
+        let classes = super::efficiency_classes_from_slpi(&buf);
         (!classes.is_empty()).then(|| super::p_cores_from_efficiency_classes(&classes))
     }
 }

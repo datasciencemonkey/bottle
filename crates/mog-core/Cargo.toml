@@ -16,7 +16,7 @@ test-support = []
 # R4 local Parakeet STT on sherpa-onnx (#45, CAP-48, CAP-50a, CAP-50b, ADR in docs/adr/0049-local-stt-packaging.md).
 # Off by default: it links the vendored sherpa-onnx static libraries, and build.rs refuses the
 # build unless SHERPA_ONNX_ARCHIVE_DIR holds the hash-pinned archive (no build-time download).
-local-stt = ["dep:sherpa-onnx", "dep:ureq", "dep:bzip2", "dep:tar"]
+local-stt = ["dep:sherpa-onnx", "dep:sherpa-onnx-sys", "dep:ureq", "dep:bzip2", "dep:tar"]
 
 [dependencies]
 getrandom.workspace = true
@@ -31,14 +31,18 @@ sqlite-vec.workspace = true
 sha2 = "0.10"
 # CAP-48: the official sherpa-onnx crate, 2.0.x, static (feature `local-stt`).
 sherpa-onnx = { version = "=2.0.1", optional = true, default-features = false, features = ["static"] }
+# A direct dependency with `links`, so its build script runs before build.rs checks its output.
+sherpa-onnx-sys = { version = "=2.0.1", optional = true, default-features = false, features = ["static"] }
 # CAP-49b: the model download client (feature `local-stt`; same crates as the sherpa-onnx build).
 ureq = { version = "2.12", optional = true }
 bzip2 = { version = "0.4", optional = true }
 tar = { version = "0.4", optional = true }
 
 [build-dependencies]
-# CAP-50a: build.rs checks the vendored sherpa-onnx archive against its pinned SHA-256.
+# CAP-50a: build.rs checks the vendored sherpa-onnx archive and the linked lib dir.
 sha2 = "0.10"
+bzip2 = { version = "0.4", optional = true }
+tar = { version = "0.4", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.5"

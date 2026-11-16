@@ -131,6 +131,9 @@ pub fn extract_model_archive(spec: &ModelSpec, archive: &Path, dest: &Path) -> i
     let mut tar = tar::Archive::new(bzip2::read::BzDecoder::new(File::open(archive)?));
     for entry in tar.entries()? {
         let mut entry = entry?;
+        if !entry.header().entry_type().is_file() {
+            continue; // no links, folders or devices
+        }
         let path = entry.path()?.into_owned();
         let mut parts = path.components();
         let (Some(top), Some(name), None) = (parts.next(), parts.next(), parts.next()) else {

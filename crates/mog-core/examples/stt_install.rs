@@ -8,6 +8,9 @@
 //!
 //! `--i-consent` stands in for the onboarding wizard's consent step (CAP-49a, #43). Without it,
 //! the tool shows that the install refuses to start.
+//!
+//! Dev only: it prints the transcript to stdout. Never wire it into the app (SEC rules: no
+//! transcript in logs).
 
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;

@@ -22,15 +22,24 @@ what the build does when the archive is missing.
    The default build, and so App CI today, links no native STT library and fetches nothing. The
    release build and the app turn the feature on. An offline CI job for `local-stt` is a CI change
    (follow-up issue; this PR does not edit workflows).
-2. **build.rs enforces CAP-50a and CAP-50b.** With `local-stt`, `crates/mog-core/build.rs` stops
-   the build unless `SHERPA_ONNX_ARCHIVE_DIR` is set and the archive for the target matches
-   `crates/mog-core/sherpa-onnx-archives.sha256`. It prints
-   `CAP-50a vendored sherpa-onnx archive <name> sha256 <hash> OK` in the build log. Without the
-   variable, `sherpa-onnx-sys` would download an unchecked archive; our build then fails, so no
-   build output ever uses a downloaded library. Pinned targets: macOS arm64 and x64, Windows x64
-   (`static-MT-Release`), Linux x64.
-3. **`scripts/vendor_sherpa_onnx.py` fetches the archives once** from the v2.0.1 GitHub release,
-   with resume, and checks the same pin file. After that, `cargo build --offline` works with no
+2. **The build links only the vendored archive (CAP-50a, CAP-50b).** Three parts:
+   - `.cargo/config.toml` sets `SHERPA_ONNX_ARCHIVE_DIR` to `vendor/sherpa-onnx` (gitignored).
+     So `sherpa-onnx-sys` never takes its download branch: with no archive there, it stops with
+     "does not contain expected archive". A value in the environment wins over this one.
+   - `sherpa-onnx-sys` is a direct optional dependency of `mog-core`. It has `links`, so Cargo
+     runs its build script before ours.
+   - `crates/mog-core/build.rs` (logic in `build_support/sherpa_vendor.rs`, tested in
+     `tests/stt_build_check.rs`) refuses `SHERPA_ONNX_LIB_DIR`. It checks the archive against
+     `crates/mog-core/sherpa-onnx-archives.sha256`. Then it checks that the folder that
+     `sherpa-onnx-sys` links (`<target>/sherpa-onnx-prebuilt/<stem>/lib`) is byte-equal to the
+     archive's `lib/` files, so an old unchecked download in the cache stops the build. The build
+     log line is `CAP-50a vendored sherpa-onnx archive <name> sha256 <hash> OK; linked lib dir
+     <dir> matches it (<n> files)`.
+   - Pinned targets: macOS arm64 and x64, Windows x64 (`static-MT-Release`), Linux x64.
+   - `CARGO_NET_OFFLINE` does not stop a build script from opening a socket. The CI proof (#414)
+     must use a clean target folder with the network blocked at the OS level.
+3. **`scripts/vendor_sherpa_onnx.py` fetches the archives once** into `vendor/sherpa-onnx` from
+   the v2.0.1 GitHub release, with resume, and checks the same pin file. After that, `cargo build --offline` works with no
    network (verified on macOS with a dead proxy and `CARGO_NET_OFFLINE=true`).
 4. **Thread count (CAP-48).** `stt::perf_core_count()`: macOS `hw.perflevel0.physicalcpu`;
    Windows the physical cores of the highest `EfficiencyClass`
@@ -41,7 +50,9 @@ what the build does when the archive is missing.
    `csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8` at the fixed commit `ed5d745`, file by
    file (it has no archive). `is_allowed_url` accepts only plain file names under these two
    prefixes. Handy downloads Parakeet from its own host and HF in GGUF form; Bottle does not use
-   those (the requirements name sherpa-onnx).
+   those (the requirements name sherpa-onnx). CAP-49b allowlists the URL that Bottle requests.
+   The HTTPS client follows the hosts' redirects to their CDNs (GitHub release assets, HF LFS).
+   The integrity of the bytes comes from the pins (CAP-49c), not from the redirect host.
 6. **Pins (CAP-49c).** The archive size and SHA-256 (the GitHub asset digest), and the size and
    SHA-256 of the 4 model files (equal to the HF LFS digests). Each download and each extracted
    file is checked. A mismatch deletes the file and stops the install. The extract writes only the

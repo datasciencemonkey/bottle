@@ -23,7 +23,10 @@ fn tmp(tag: &str) -> PathBuf {
 }
 
 fn hex(b: &[u8]) -> String {
-    Sha256::digest(b).iter().map(|x| format!("{x:02x}")).collect()
+    Sha256::digest(b)
+        .iter()
+        .map(|x| format!("{x:02x}"))
+        .collect()
 }
 
 #[test]
@@ -48,7 +51,10 @@ fn cap_50a_the_archive_must_match_its_pin() {
     let name = archive_name("macos", "aarch64").unwrap();
     let path = dir.join(name);
     fs::write(&path, b"vendored").unwrap();
-    assert_eq!(check_archive(&path, &hex(b"vendored")).unwrap(), hex(b"vendored"));
+    assert_eq!(
+        check_archive(&path, &hex(b"vendored")).unwrap(),
+        hex(b"vendored")
+    );
     let err = check_archive(&path, &hex(b"other")).unwrap_err();
     assert!(err.contains("mismatch"), "{err}");
     assert!(check_archive(&dir.join("missing"), &hex(b"x")).is_err());
@@ -87,11 +93,15 @@ fn cap_50a_a_cached_lib_dir_must_equal_the_pinned_archive() {
     check_lib_dir(&want, &lib).unwrap();
     // A file that differs (for example an old unchecked download) stops the build.
     fs::write(lib.join("libonnxruntime.a"), b"downloaded").unwrap();
-    assert!(check_lib_dir(&want, &lib).unwrap_err().contains("libonnxruntime.a"));
+    assert!(check_lib_dir(&want, &lib)
+        .unwrap_err()
+        .contains("libonnxruntime.a"));
     fs::write(lib.join("libonnxruntime.a"), b"ort").unwrap();
     // An extra library in the folder stops the build too.
     fs::write(lib.join("libextra.a"), b"x").unwrap();
-    assert!(check_lib_dir(&want, &lib).unwrap_err().contains("libextra.a"));
+    assert!(check_lib_dir(&want, &lib)
+        .unwrap_err()
+        .contains("libextra.a"));
     fs::remove_file(lib.join("libextra.a")).unwrap();
     // A missing library stops the build.
     fs::remove_file(lib.join("libonnxruntime.a")).unwrap();

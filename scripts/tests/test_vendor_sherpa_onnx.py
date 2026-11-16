@@ -64,3 +64,23 @@ def test_cap_50a_a_changed_hash_stops_the_vendor_step(tmp_path, monkeypatch):
     assert vendor.fetch("a.tar.bz2", want, tmp_path) == 1
     assert not (tmp_path / "a.tar.bz2").exists()
     assert not (tmp_path / "a.tar.bz2.partial").exists()
+
+
+def test_cap_50b_a_complete_partial_is_used_without_a_request(tmp_path, monkeypatch):
+    """[CAP-50b] A complete .partial file (download ended before the rename) needs no request."""
+    body = b"complete"
+    (tmp_path / "a.tar.bz2.partial").write_bytes(body)
+
+    def no_network(*_a, **_k):
+        raise AssertionError("a download started")
+
+    monkeypatch.setattr(vendor.urllib.request, "urlopen", no_network)
+    assert vendor.fetch("a.tar.bz2", hashlib.sha256(body).hexdigest(), tmp_path) == 0
+    assert (tmp_path / "a.tar.bz2").read_bytes() == body
+
+
+def test_cap_50b_the_default_dest_is_the_cargo_env_folder():
+    """[CAP-50b] The default folder is the one .cargo/config.toml gives SHERPA_ONNX_ARCHIVE_DIR."""
+    cfg = (ROOT / ".cargo" / "config.toml").read_text(encoding="utf-8")
+    assert 'SHERPA_ONNX_ARCHIVE_DIR = { value = "vendor/sherpa-onnx", relative = true }' in cfg
+    assert vendor.DEFAULT_DEST == ROOT / "vendor" / "sherpa-onnx"

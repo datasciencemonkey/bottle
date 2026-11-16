@@ -5,7 +5,8 @@ download them, so this script fetches them once from the pinned sherpa-onnx GitH
 checks each one against `crates/mog-core/sherpa-onnx-archives.sha256`. Then build with
 `SHERPA_ONNX_ARCHIVE_DIR=<dest>`; that build works offline.
 
-Run:  uv run --no-project python scripts/vendor_sherpa_onnx.py --dest <dir> [--all | --name <archive>]
+Run:  uv run --no-project python scripts/vendor_sherpa_onnx.py [--dest <dir>] [--all | --name <archive>]
+      (default dest: vendor/sherpa-onnx, where .cargo/config.toml points SHERPA_ONNX_ARCHIVE_DIR)
 Exit: 0 = every archive is present and matches its pin, 1 = a hash mismatch, 2 = a download error.
 """
 from __future__ import annotations
@@ -20,6 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PINS = ROOT / "crates" / "mog-core" / "sherpa-onnx-archives.sha256"
 RELEASE = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v2.0.1/"
+DEFAULT_DEST = ROOT / "vendor" / "sherpa-onnx"
 
 
 def read_pins(path: Path = PINS) -> dict[str, str]:
@@ -67,6 +69,11 @@ def fetch(name: str, sha: str, dest: Path) -> int:
         print(f"sha256 OK {sha} {name} (already vendored)")
         return 0
     part = dest / f"{name}.partial"
+    if matches(part, sha):
+        # A complete partial file: a Range request would get HTTP 416.
+        part.replace(target)
+        print(f"sha256 OK {sha} {name}")
+        return 0
     have = part.stat().st_size if part.exists() else 0
     req = urllib.request.Request(RELEASE + name)
     if have:
@@ -92,7 +99,7 @@ def fetch(name: str, sha: str, dest: Path) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--dest", required=True, type=Path)
+    ap.add_argument("--dest", type=Path, default=DEFAULT_DEST)
     group = ap.add_mutually_exclusive_group()
     group.add_argument("--all", action="store_true", help="every pinned archive")
     group.add_argument("--name", help="one archive name from the pin file")
