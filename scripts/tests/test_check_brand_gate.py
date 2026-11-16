@@ -121,3 +121,74 @@ def test_sec_22b_repo_record_exists_and_is_not_passed():
     ok, reason = cbg.gate_status(text)
     assert not ok and "pending" in reason
     assert run_script("check_brand_gate.py").returncode == 0
+
+
+def test_sec_22b_tracking_issue_must_match_exactly():
+    """[SEC-22b] #1290, #1295 and "see #129x" do not pass as #129."""
+    for bad in ("#1290", "#1295", "see #129x", "#12"):
+        ok, reason = cbg.gate_status(record().replace("| #129 |", f"| {bad} |"))
+        assert not ok and "#129" in reason, bad
+
+
+def test_sec_22b_future_date_is_not_passed():
+    """[SEC-22b] A Date approved after today does not pass."""
+    ok, reason = cbg.gate_status(record(date="2099-01-01"))
+    assert not ok and "future" in reason
+    assert cbg.gate_status(record(date="2026-12-01"), today=__import__("datetime").date(2026, 12, 1))[0]
+
+
+def test_sec_22b_junk_approver_is_not_passed():
+    """[SEC-22b] Placeholder approvers do not pass."""
+    for bad in ("pending", "me", "tbd", "", "approved", "n/a"):
+        ok, reason = cbg.gate_status(record(approver=bad))
+        assert not ok and "Approver" in reason, bad
+
+
+def test_sec_22b_reference_must_be_url_or_ticket_id():
+    """[SEC-22b] The Approval reference is a URL or a ticket ID."""
+    for bad in ("x", "ok", "see email"):
+        assert not cbg.gate_status(record(ref=bad))[0], bad
+    for good in ("https://example.com/a/1", "BRAND-123", "AIBI-1851"):
+        assert cbg.gate_status(record(ref=good))[0], good
+
+
+def test_sec_22b_duplicate_field_is_a_problem(tmp_path):
+    """[SEC-22b] A duplicate Status row is an error, whichever row comes last."""
+    rec = record(status="pending", approver="", date="", ref="") + "| Status | approved |\n"
+    ok, reason = cbg.gate_status(rec)
+    assert not ok and "duplicate" in reason
+    assert any("duplicate" in p for p in cbg.check(tree(tmp_path, rec=rec))[0])
+
+
+def test_sec_22b_approved_but_incomplete_uses_parsed_fields(tmp_path):
+    """[SEC-22b] Status approved with a bad field is a problem, also when the cell has extra spacing or case."""
+    rec = record(status=" Approved ", approver="me")
+    assert any("incomplete" in p for p in cbg.check(tree(tmp_path, rec=rec))[0])
+
+
+def test_at_37_ticked_row_must_link_the_brand_record(tmp_path):
+    """[AT-37, SEC-22b] A ticked AT-37 row names docs/release/BRAND-APPROVAL.md in its Evidence cell."""
+    root = tree(tmp_path, rec=record(), ticked=True)
+    assert any("Evidence" in p for p in cbg.check(root)[0])
+    cl = root / "docs" / "release" / "RELEASE-CHECKLIST.md"
+    cl.write_text("| [x] | AT-37 | T | release | P | C | [a](docs/evidence/AT-37.md) [b](docs/release/BRAND-APPROVAL.md) |\n")
+    assert cbg.check(root)[0] == []
+
+
+def test_col_104_missing_files_fail_only_under_external(tmp_path):
+    """[COL-104, AT-37] A missing scene.rml, package.json or pnpm-lock.yaml fails under --external."""
+    root = tree(tmp_path, rec=record())
+    (root / "mog-rive" / "scene.rml").unlink()
+    (root / "pnpm-lock.yaml").unlink()
+    assert run_script("check_brand_gate.py", "--root", root).returncode == 0
+    proc = run_script("check_brand_gate.py", "--root", root, "--external")
+    assert proc.returncode == 1 and "missing mog-rive/scene.rml" in proc.stdout and "missing pnpm-lock.yaml" in proc.stdout
+
+
+def test_at_37_ci_brand_check_uses_the_one_art_implementation():
+    """[AT-37, UX-10a, UX-10b] tools/ci_checks.py check_brand calls check_brand_gate.art_problems."""
+    import sys
+    sys.path.insert(0, str(ROOT / "tools"))
+    import ci_checks
+    assert ci_checks.art_problems is cbg.art_problems
+    assert "brandapproval" in ci_checks.CHECKS and "brandgate" not in ci_checks.CHECKS
