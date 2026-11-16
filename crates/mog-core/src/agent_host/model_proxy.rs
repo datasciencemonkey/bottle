@@ -233,6 +233,16 @@ impl ModelProxy {
         });
         let stop = Arc::new(AtomicBool::new(false));
         let (s, st) = (shared.clone(), stop.clone());
+        // One thread finishes the rejected (503) connections: it reads what the client still
+        // sends, so the close does not reset the connection. The accept thread never waits.
+        let (busy_tx, busy_rx) = std::sync::mpsc::sync_channel::<TcpStream>(MAX_CONNECTIONS);
+        std::thread::Builder::new()
+            .name("bottle-model-proxy-busy".into())
+            .spawn(move || {
+                for mut conn in busy_rx {
+                    fail(&mut conn, 503, "busy");
+                }
+            })?;
         std::thread::Builder::new()
             .name("bottle-model-proxy".into())
             .spawn(move || {
@@ -240,17 +250,11 @@ impl ModelProxy {
                     if st.load(Ordering::SeqCst) {
                         break;
                     }
-                    let Ok(mut conn) = conn else { continue };
+                    let Ok(conn) = conn else { continue };
                     if s.active.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
                         s.active.fetch_sub(1, Ordering::SeqCst);
-                        // No drain wait on the accept thread.
-                        let body = br#"{"error":"busy"}"#;
-                        let head = format!(
-                            "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                            body.len()
-                        );
-                        let _ = conn.write_all(head.as_bytes());
-                        let _ = conn.write_all(body);
+                        // A full queue drops the connection: under a flood a reset is fine.
+                        let _ = busy_tx.try_send(conn);
                         continue;
                     }
                     let worker = s.clone();
