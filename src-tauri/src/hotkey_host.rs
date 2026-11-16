@@ -248,6 +248,9 @@ pub fn ptt_payload(mog_id: &str, phase: PttPhase) -> Value {
     json!({ "mogId": mog_id, "phase": phase.as_str() })
 }
 
+/// Whether a Shift key (not the talk key) is down now (RTR-17a).
+pub type ShiftProbe = Box<dyn Fn() -> bool + Send>;
+
 /// Turns R1 outputs into brain items and status changes.
 ///
 /// The target is read at `down` and kept until `up` or `cancel`, so one press goes to one
@@ -272,6 +275,12 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
             held: None,
             last: None,
         }
+    }
+
+    /// Read the Shift state at each key-down with `probe` (RTR-17a).
+    pub fn with_shift_probe(self, probe: ShiftProbe) -> Self {
+        let _ = probe;
+        self
     }
 
     /// Forward one output.
@@ -907,6 +916,36 @@ mod tests {
         f.on_output(HotkeyOutput::Ptt(PttPhase::Down));
         f.on_output(HotkeyOutput::Ptt(PttPhase::Up));
         assert_eq!(brain.items(), vec![ptt("a1", "down"), ptt("a1", "up")]);
+    }
+
+    #[test]
+    fn rtr_17a_ptt_down_with_shift_held_carries_shift() {
+        let target = Arc::new(PttTarget::default());
+        target.set("a1");
+        let (f, brain, _) = forwarder(&target);
+        let mut f = f.with_shift_probe(Box::new(|| true));
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Down));
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Up));
+        assert_eq!(
+            brain.items(),
+            vec![
+                (
+                    "hotkey:ptt".to_owned(),
+                    json!({ "mogId": "a1", "phase": "down", "shift": true })
+                ),
+                ptt("a1", "up")
+            ]
+        );
+    }
+
+    #[test]
+    fn rtr_17a_ptt_down_without_shift_keeps_the_plain_payload() {
+        let target = Arc::new(PttTarget::default());
+        target.set("a1");
+        let (f, brain, _) = forwarder(&target);
+        let mut f = f.with_shift_probe(Box::new(|| false));
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Down));
+        assert_eq!(brain.items(), vec![ptt("a1", "down")]);
     }
 
     #[test]

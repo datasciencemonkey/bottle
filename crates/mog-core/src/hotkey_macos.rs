@@ -167,10 +167,27 @@ pub fn physical_from_hid(talk_key_down: bool, flags: u64, space_down: bool) -> P
     }
 }
 
+/// RTR-17a: whether a Shift key other than the talk key is down in `flags` (device bits).
+pub fn shift_held_from_flags(flags: u64, talk: TalkKey) -> bool {
+    let _ = (flags, talk);
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::hotkey_core::{HotkeyOutput, PttMachine, PttPhase};
+
+    #[test]
+    fn rtr_17a_shift_from_flags_ignores_the_talk_key_shift() {
+        assert!(shift_held_from_flags(0x02, TalkKey::RightOption));
+        assert!(shift_held_from_flags(0x04, TalkKey::RightOption));
+        assert!(!shift_held_from_flags(0x40, TalkKey::RightOption));
+        // Right-Shift is the talk key: only Left-Shift counts.
+        assert!(!shift_held_from_flags(0x04, TalkKey::RightShift));
+        assert!(shift_held_from_flags(0x06, TalkKey::RightShift));
+        assert!(!shift_held_from_flags(0, TalkKey::RightControl));
+    }
 
     #[test]
     fn cap_35a_at_30_the_tap_is_listen_only() {

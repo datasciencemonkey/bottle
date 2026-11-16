@@ -40,4 +40,16 @@ describe('hotkey:ptt in the brain (#6 payload, #13)', () => {
     bus.dispatch({ event: 'hotkey:ptt', payload: { mogId: MOG, phase: 'up' } });
     expect(got).toHaveLength(1);
   });
+
+  it('[RTR-17a] a key-down with Shift held carries shift: true; other items never do', () => {
+    expect(asPttEvent({ mogId: MOG, phase: 'down', shift: true }, 3)).toEqual({
+      mogId: MOG,
+      phase: 'down',
+      at: 3,
+      shift: true,
+    });
+    expect(asPttEvent({ mogId: MOG, phase: 'down' }, 3)).not.toHaveProperty('shift');
+    expect(asPttEvent({ mogId: MOG, phase: 'down', shift: 'yes' }, 3)).not.toHaveProperty('shift');
+    expect(asPttEvent({ mogId: MOG, phase: 'up', shift: true }, 3)).not.toHaveProperty('shift');
+  });
 });
