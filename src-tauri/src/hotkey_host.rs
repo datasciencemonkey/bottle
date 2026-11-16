@@ -125,10 +125,16 @@ pub struct BrainStatus<B: BrainSink>(pub B);
 
 impl<B: BrainSink> StatusSink for BrainStatus<B> {
     fn status(&self, status: HotkeyStatus) {
-        // `false` means no brain listens yet; the Channel keeps the item for it.
-        let _ = self
-            .0
-            .deliver_sticky(events::HOTKEY_STATUS, status_payload(status));
+        let payload = status_payload(status);
+        // CAP-42: the elevated-window tooltip shows on the first failure only. R1 sends
+        // `Blocked` once per elevated process and no signal ends it, so it is not sticky: a
+        // reloaded brain must not show the tooltip again (ADR 0039). Every other status is
+        // a state, and the Channel keeps the last one for a brain that subscribes later.
+        let _ = if status == HotkeyStatus::Blocked {
+            self.0.deliver(events::HOTKEY_STATUS, payload)
+        } else {
+            self.0.deliver_sticky(events::HOTKEY_STATUS, payload)
+        };
     }
 }
 
@@ -1880,8 +1886,24 @@ mod tests {
         let seam = HookConsumers::default().with_status(Arc::new(BrainStatus(brain.clone())));
         seam.deferred(DeferredSignal::TalkKeyBlocked);
         assert_eq!(
-            *brain.sticky.lock().unwrap(),
+            *brain.plain.lock().unwrap(),
             vec![status_item("paused", json!("elevated_foreground"))]
+        );
+    }
+
+    #[test]
+    fn cap_42_the_elevated_tooltip_is_not_sticky_so_a_reloaded_brain_does_not_see_it_again() {
+        // R1 sends `Blocked` once per elevated process and nothing ends it. A sticky copy would
+        // replay the tooltip and a false "paused" to every new brain Channel (CAP-42: first
+        // failure only).
+        let brain = StickyBrain::default();
+        let seam = HookConsumers::default().with_status(Arc::new(BrainStatus(brain.clone())));
+        seam.deferred(DeferredSignal::HookReinstalled);
+        seam.deferred(DeferredSignal::TalkKeyBlocked);
+        assert_eq!(
+            *brain.sticky.lock().unwrap(),
+            vec![status_item("active", Value::Null)],
+            "the kept state stays the last real state"
         );
     }
 

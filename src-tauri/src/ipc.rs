@@ -574,7 +574,8 @@ mod tests {
 
     // ---- ARC-5, SEC-01 (#297, ADR 0039): sticky delivery ----
 
-    const SECRET: &str = concat!("dap", "i0123456789abcdef0123456789abcdef");
+    /// A plainly fake value that the rule-7 scrub still matches (`password=`).
+    const SECRET: &str = "password=test-not-real";
 
     fn status(talk_key: &str, reason: Value) -> Value {
         json!({ "talkKey": talk_key, "reason": reason })
