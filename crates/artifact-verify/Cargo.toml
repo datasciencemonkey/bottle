@@ -1,12 +1,12 @@
 [package]
 name = "artifact-verify"
-version = "0.1.0"
-edition = "2021"
-license = "MIT"
-publish = false
-description = "SHA-256 verification of downloaded artefacts and third-party notice checks for Bottle (SEC-20b, SEC-21a, SEC-21b)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+description = "SHA-256 verification of downloaded artefacts for Bottle (SEC-20b)."
 
-[workspace]
 
 [dependencies]
 sha2 = "0.10"
