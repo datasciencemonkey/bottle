@@ -1181,6 +1181,66 @@ mod tests {
     }
 
     #[test]
+    fn cap_45_an_adapter_that_ends_during_a_hold_cancels_the_ptt() {
+        // A talk-key restart stops the Windows hook with no key-up. The old adapter must
+        // still end the PTT, or capture stays open.
+        let (tx, rx) = mpsc::channel();
+        let (sink, out) = queue();
+        tx.send(down()).unwrap();
+        drop(tx);
+        run_hook_adapter(rx, HotkeyEngine::new(Arc::new(sink)), &PendingHookConsumers);
+        let got: Vec<HotkeyOutput> = out.try_iter().collect();
+        assert_eq!(
+            got,
+            vec![
+                HotkeyOutput::Ptt(PttPhase::Down),
+                HotkeyOutput::Ptt(PttPhase::Cancel)
+            ]
+        );
+    }
+
+    /// A service whose stop fails, as `stop_post_failed` on Windows.
+    struct StuckService(FakeService);
+
+    impl HotkeyService for StuckService {
+        fn start(&self) -> CoreResult<()> {
+            self.0.start()
+        }
+        fn stop(&self) -> CoreResult<()> {
+            self.0.stop()?;
+            Err(CoreError::Unavailable {
+                component: "R1",
+                reason: "stop_post_failed",
+            })
+        }
+        fn secure_input_active(&self) -> CoreResult<bool> {
+            Ok(false)
+        }
+    }
+
+    #[test]
+    fn cap_43a_a_failed_stop_keeps_the_old_service_and_never_starts_a_second() {
+        let old = FakeService::default();
+        old.granted.store(true, Ordering::SeqCst);
+        let h = HotkeyHost::new(
+            Box::new(StuckService(old.clone())),
+            Box::new(NoOsPermission),
+        );
+        assert_eq!(h.start(), HostState::Running);
+        let new = FakeService::default();
+        new.granted.store(true, Ordering::SeqCst);
+        assert_eq!(
+            h.replace_service(Box::new(new.clone())),
+            HostState::Unavailable("stop_post_failed")
+        );
+        assert_eq!(new.starts.load(Ordering::SeqCst), 0, "no second hook");
+        // The old service still runs the talk key.
+        assert_eq!(h.state(), HostState::Running);
+        h.stop();
+        assert_eq!(old.stops.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
     fn cap_36_replace_service_without_input_monitoring_never_prompts() {
         let (h, _old, perms) = host(true);
         assert_eq!(h.start(), HostState::NeedsPermission);

@@ -504,6 +504,66 @@ mod tests {
         assert_eq!(saved["app.hotkeys.openCard"], json!("Ctrl+Shift+O"));
     }
 
+    fn assert_no_saved_duplicate(store: &FakeStore) {
+        let saved = store.saved.lock().unwrap().clone().unwrap();
+        let mut values: Vec<&Value> = saved.values().collect();
+        values.sort_by_key(|v| v.to_string());
+        let n = values.len();
+        values.dedup();
+        assert_eq!(values.len(), n, "a duplicate was saved: {saved:?}");
+    }
+
+    #[test]
+    fn mb_14_a_revert_that_makes_a_new_duplicate_reverts_again() {
+        let store = FakeStore::default();
+        let s = settings(MAC, &store, &FakeEnv::default(), &FakeTalk::default());
+        // Session copies open card, so session keeps Ctrl+Shift+M; panic took that chord.
+        let got = s
+            .set(&obj(
+                json!({ "panic": "Ctrl+Shift+M", "session": "Ctrl+Shift+O" }),
+            ))
+            .unwrap();
+        assert_no_saved_duplicate(&store);
+        let saved = store.saved.lock().unwrap().clone().unwrap();
+        assert_eq!(saved["app.hotkeys.panic"], json!("Cmd+Shift+Esc"));
+        assert_eq!(saved["app.hotkeys.session"], json!("Ctrl+Shift+M"));
+        assert_eq!(saved["app.hotkeys.openCard"], json!("Ctrl+Shift+O"));
+        // The reply names each action that was not saved, with a fix that is its saved key.
+        let dups: Vec<&Value> = got["conflicts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|c| c["kind"] == "duplicate")
+            .collect();
+        let mut actions: Vec<&str> = dups.iter().map(|c| c["action"].as_str().unwrap()).collect();
+        actions.sort();
+        assert_eq!(actions, vec!["panic", "session"], "{got}");
+        for c in dups {
+            let key = HotkeyAction::from_key(c["action"].as_str().unwrap()).unwrap();
+            assert_eq!(c["fix"]["kind"], "use_binding");
+            assert_eq!(c["fix"]["binding"], saved[key.setting_key()], "{c}");
+        }
+    }
+
+    #[test]
+    fn mb_14_a_duplicate_hidden_by_another_conflict_is_not_saved() {
+        let store = FakeStore::default();
+        let env = FakeEnv::default();
+        env.env.lock().unwrap().voice_over = true;
+        let s = settings(MAC, &store, &env, &FakeTalk::default());
+        // Both get a VoiceOver conflict, so the pure check reports no duplicate.
+        let got = s
+            .set(&obj(
+                json!({ "session": "Ctrl+Option+S", "openCard": "Ctrl+Option+S" }),
+            ))
+            .unwrap();
+        assert_no_saved_duplicate(&store);
+        let saved = store.saved.lock().unwrap().clone().unwrap();
+        assert_eq!(saved["app.hotkeys.session"], json!("Ctrl+Shift+M"));
+        assert_eq!(saved["app.hotkeys.openCard"], json!("Ctrl+Shift+O"));
+        assert!(kinds(&got).contains(&"duplicate".to_owned()), "{got}");
+    }
+
     #[test]
     fn cap_43a_a_new_talk_key_goes_to_the_service_once() {
         let store = FakeStore::default();
