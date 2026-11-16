@@ -1,6 +1,7 @@
 /** V3 card view (thin): blurbs, chips and the expanded answer from `card.update`. */
 import { useCallback, useEffect, useState } from 'react';
 import type { MogId } from '../../shared/interfaces';
+import { DomainPicker } from '../DomainPicker';
 import {
   asCardUpdate,
   emitView,
@@ -242,6 +243,17 @@ export function CardView({ mogId }: { mogId: MogId }) {
       ))}
       {card?.sections === undefined && card?.answerMd !== undefined && (
         <div data-answer>{card.answerMd}</div>
+      )}
+      {card?.pageDomain && <DomainPicker mogId={mogId} picker={card.pageDomain} />}
+      {card?.pagesChecklist && (
+        <div data-pages-checklist role="alert">
+          <p>{card.pagesChecklist.text}</p>
+          <ol aria-label="Admin checklist">
+            {card.pagesChecklist.items.map((i) => (
+              <li key={i}>{i}</li>
+            ))}
+          </ol>
+        </div>
       )}
       {card?.sections === undefined && card?.sttBadge !== undefined && (
         <footer>

@@ -43,7 +43,8 @@ export type HopScope = 'question' | 'session';
 /**
  * Everything the badges depend on.
  * TODO(#17): `profile` and `host` come from ProfileService (`home(mogId)` and `list()`).
- * TODO(#25): `backend` and `backendName` come from the MOG config.
+ * TODO(#26): `backend` and `backendName` come from `MogConfig.binding.backend` (#25), when
+ *   MogManager loads the config.
  * TODO(#52): `stt` is the provider of the last Transcript, or the selected provider before one.
  * TODO(#164): `hop` comes from the ProfileService hop target and scope.
  * TODO(#98): `lifecycle` comes from the MogManager lifecycle.

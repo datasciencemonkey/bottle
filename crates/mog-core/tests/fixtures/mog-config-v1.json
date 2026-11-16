@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "name": "MOG 1",
+  "ui": { "variant": "auto", "size": "M", "dozeAfterMin": 20 },
+  "binding": {
+    "home": "dev",
+    "backend": { "kind": "genie_one_mcp", "profile": "dev" },
+    "genieCompanion": true,
+    "profileAliases": {}
+  },
+  "capture": { "modes": ["ptt", "hands_free"], "clickTogglesListening": true, "vadEndMs": 1500 },
+  "hotkeys": {},
+  "genie": {
+    "autoSendPtt": true,
+    "previewMs": 1500,
+    "shareContext": false,
+    "shareContextCrossWorkspace": false
+  },
+  "agent": { "harness": "claude" },
+  "pages": {},
+  "memory": { "enabled": true, "lakebaseSync": false, "transcriptSync": false },
+  "persona": "",
+  "stt": {},
+  "autoStart": false,
+  "card": { "autoHideSec": 60, "maxBlurbs": 3 }
+}
