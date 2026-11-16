@@ -13,9 +13,17 @@ describe('hotkey:ptt in the brain (#6 payload, #13)', () => {
     });
     expect(asPttEvent({ mogId: MOG, phase: 'up' }, 0)?.phase).toBe('up');
     expect(asPttEvent({ mogId: MOG, phase: 'cancel' }, 0)?.phase).toBe('cancel');
-    expect(asPttEvent({ mogId: MOG, phase: 'double_tap' }, 0)).toBeUndefined();
+    expect(asPttEvent({ mogId: MOG, phase: 'tap' }, 0)).toBeUndefined();
     expect(asPttEvent({ phase: 'down' }, 0)).toBeUndefined();
     expect(asPttEvent(null, 0)).toBeUndefined();
+  });
+
+  it('[CAP-14a] parses the double_tap phase of section 4.5', () => {
+    expect(asPttEvent({ mogId: MOG, phase: 'double_tap' }, 7)).toEqual({
+      mogId: MOG,
+      phase: 'double_tap',
+      at: 7,
+    });
   });
 
   it('[UX-05b] a key-down on the Channel reaches the handler in the same task, with the brain time', () => {

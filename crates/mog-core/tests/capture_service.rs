@@ -1445,3 +1445,256 @@ fn cap_13b_a_pause_during_a_resume_keeps_the_session_paused() {
     r.device.log().open_delay = Duration::ZERO;
     assert!(r.svc.resume(session.id).unwrap().recording);
 }
+
+// ---------- #14: the PTT and hands-free lifecycle rules in R2 ----------
+//
+// "200 ms or less" (CAP-14b): every stop below runs on the sim clock with no advance between
+// the trigger and the check, so the mic is closed 0 ms after the trigger. A cap or VAD end
+// fires at the exact deadline that `tick()` returns; the host timer calls `tick()` then
+// (TODO(#425)).
+
+use mog_core::capture::{HandsFreeStop, DEFAULT_VAD_END_MS, POST_ROLL_MS};
+
+#[test]
+fn cap_12a_key_down_lease_opens_the_mic_at_once() {
+    let r = rig();
+    r.svc.start(req("a", CaptureMode::Ptt)).unwrap();
+    // No advance: the mic is live when `start` returns (NFR-02 budget left to the device).
+    assert!(r.device.log().mic_open);
+    let state = r.events.states().last().cloned().unwrap();
+    assert!(state.recording);
+    assert_eq!(state.mode, Some(CaptureMode::Ptt));
+}
+
+#[test]
+fn cap_12b_release_keeps_the_mic_open_for_the_120_ms_post_roll() {
+    let r = rig();
+    let lease = r.svc.start(req("a", CaptureMode::Ptt)).unwrap();
+    r.advance(1_000);
+    let deadline = r.svc.release(lease.id).unwrap();
+    assert_eq!(POST_ROLL_MS, 120);
+    assert_eq!(deadline, 1_000 + POST_ROLL_MS);
+    assert_eq!(r.svc.tick(), Some(1_000 + POST_ROLL_MS));
+    r.advance(POST_ROLL_MS - 1);
+    r.svc.tick();
+    assert!(r.device.log().mic_open, "the last word is still recorded");
+    assert!(r.svc.status().recording);
+    r.advance(1);
+    assert_eq!(r.svc.tick(), None);
+    assert!(!r.device.log().mic_open);
+    let stop = last_stop(&r);
+    assert_eq!((stop.lease_id, stop.reason), (lease.id, StopReason::Released));
+    assert!(!stop.reason.discards_audio());
+    assert_eq!(StopReason::Released.code(), "released");
+}
+
+#[test]
+fn cap_12b_a_second_release_does_not_move_the_post_roll() {
+    let r = rig();
+    let lease = r.svc.start(req("a", CaptureMode::Ptt)).unwrap();
+    assert_eq!(r.svc.release(lease.id).unwrap(), POST_ROLL_MS);
+    r.advance(100);
+    assert_eq!(r.svc.release(lease.id).unwrap(), POST_ROLL_MS);
+}
+
+#[test]
+fn cap_12b_release_is_only_for_ptt() {
+    let r = rig();
+    let hf = r.svc.start(req("a", CaptureMode::HandsFree)).unwrap();
+    assert_eq!(r.svc.release(hf.id).unwrap_err(), CaptureError::InvalidMode);
+    assert_eq!(r.svc.release(999).unwrap_err(), CaptureError::UnknownLease);
+}
+
+#[test]
+fn cap_12b_post_roll_of_a_ptt_over_hands_free_keeps_hands_free() {
+    let r = rig();
+    let hf = r.svc.start(req("a", CaptureMode::HandsFree)).unwrap();
+    let ptt = r.svc.start(req("a", CaptureMode::Ptt)).unwrap();
+    r.svc.release(ptt.id).unwrap();
+    r.advance(POST_ROLL_MS);
+    r.svc.tick();
+    let state = r.svc.status();
+    assert_eq!(state.lease_id, Some(hf.id.to_string()));
+    assert_eq!(state.mode, Some(CaptureMode::HandsFree));
+    assert!(r.device.log().mic_open);
+}
+
+#[test]
+fn cap_44b_discard_stops_the_tap_at_once_and_drops_its_audio() {
+    let r = rig();
+    let lease = r.svc.start(req("a", CaptureMode::Ptt)).unwrap();
+    r.advance(100);
+    let state = r.svc.discard(lease.id).unwrap();
+    assert!(!state.recording);
+    assert!(!r.device.log().mic_open);
+    let stop = last_stop(&r);
+    assert_eq!((stop.lease_id, stop.reason), (lease.id, StopReason::Discarded));
+    // The segment pipeline (#116) drops the audio of a lease that stops with this reason.
+    assert!(stop.reason.discards_audio());
+    assert_eq!(StopReason::Discarded.code(), "discarded");
+    assert!(!StopReason::Manual.discards_audio());
+}
+
+#[test]
+fn cap_44b_discard_during_the_post_roll_still_drops_the_audio() {
+    let r = rig();
+    let lease = r.svc.start(req("a", CaptureMode::Ptt)).unwrap();
+    r.svc.release(lease.id).unwrap();
+    r.svc.discard(lease.id).unwrap();
+    assert_eq!(last_stop(&r).reason, StopReason::Discarded);
+    assert_eq!(r.svc.discard(lease.id).unwrap_err(), CaptureError::UnknownLease);
+}
+
+#[test]
+fn cap_14b_a_tap_stops_hands_free_and_keeps_its_audio() {
+    let r = rig();
+    let hf = r.svc.start(req("a", CaptureMode::HandsFree)).unwrap();
+    r.advance(30_000);
+    let state = r.svc.stop_hands_free(HandsFreeStop::Tap);
+    assert!(!state.recording);
+    assert!(!r.device.log().mic_open, "closed 0 ms after the tap (<= 200 ms)");
+    let stop = last_stop(&r);
+    assert_eq!((stop.lease_id, stop.reason), (hf.id, StopReason::Tap));
+    assert!(!stop.reason.discards_audio());
+}
+
+#[test]
+fn cap_14b_esc_stops_hands_free_and_drops_its_audio() {
+    let r = rig();
+    let hf = r.svc.start(req("a", CaptureMode::HandsFree)).unwrap();
+    r.advance(30_000);
+    r.svc.stop_hands_free(HandsFreeStop::Escape);
+    assert!(!r.device.log().mic_open, "closed 0 ms after Esc (<= 200 ms)");
+    let stop = last_stop(&r);
+    assert_eq!((stop.lease_id, stop.reason), (hf.id, StopReason::Escape));
+    assert!(stop.reason.discards_audio());
+}
+
+#[test]
+fn cap_14b_stop_hands_free_leaves_ptt_and_sessions_alone() {
+    let r = rig();
+    r.svc.start(req("a", CaptureMode::Ptt)).unwrap();
+    assert!(r.svc.stop_hands_free(HandsFreeStop::Escape).recording);
+    let r = rig();
+    r.svc.start(req("a", CaptureMode::Session)).unwrap();
+    assert!(r.svc.stop_hands_free(HandsFreeStop::Tap).recording);
+    assert!(r.events.stops().is_empty());
+}
+
+#[test]
+fn cap_14b_the_5_min_cap_closes_the_mic_at_its_deadline() {
+    let r = rig();
+    let hf = r.svc.start(req("a", CaptureMode::HandsFree)).unwrap();
+    assert_eq!(r.svc.tick(), Some(HANDS_FREE_MAX_MS));
+    r.advance(HANDS_FREE_MAX_MS);
+    r.svc.tick();
+    assert!(!r.device.log().mic_open, "closed 0 ms after the cap (<= 200 ms)");
+    assert_eq!(
+        (last_stop(&r).lease_id, last_stop(&r).reason),
+        (hf.id, StopReason::HandsFreeCap)
+    );
+}
+
+#[test]
+fn cap_14c_hands_free_stops_after_1500_ms_of_silence_by_default() {
+    let r = rig();
+    let hf = r.svc.start(req("a", CaptureMode::HandsFree)).unwrap();
+    assert_eq!(DEFAULT_VAD_END_MS, 1_500);
+    r.advance(500);
+    r.svc.voice_activity(true);
+    r.advance(2_000);
+    // Speech ends at 2,500 ms: the VAD end is 1,500 ms later.
+    assert_eq!(r.svc.voice_activity(false), Some(4_000));
+    r.advance(1_499);
+    r.svc.tick();
+    assert!(r.svc.status().recording);
+    r.advance(1);
+    r.svc.tick();
+    assert!(!r.device.log().mic_open);
+    let stop = last_stop(&r);
+    assert_eq!((stop.lease_id, stop.reason), (hf.id, StopReason::VadEnd));
+    assert!(!stop.reason.discards_audio());
+    assert_eq!(StopReason::VadEnd.code(), "vad_end");
+}
+
+#[test]
+fn cap_14c_speech_again_resets_the_silence() {
+    let r = rig();
+    r.svc.start(req("a", CaptureMode::HandsFree)).unwrap();
+    r.svc.voice_activity(true);
+    r.svc.voice_activity(false);
+    r.advance(1_000);
+    r.svc.voice_activity(true);
+    r.advance(1_000);
+    r.svc.tick();
+    assert!(r.svc.status().recording);
+    r.svc.voice_activity(false);
+    r.advance(1_500);
+    r.svc.tick();
+    assert!(!r.svc.status().recording);
+}
+
+#[test]
+fn cap_14c_no_vad_end_before_the_first_speech() {
+    // ADR: the silence counts only after speech, so a user who thinks first keeps the mic.
+    let r = rig();
+    r.svc.start(req("a", CaptureMode::HandsFree)).unwrap();
+    r.svc.voice_activity(false);
+    r.advance(10_000);
+    r.svc.tick();
+    assert!(r.svc.status().recording);
+    assert_eq!(r.svc.tick(), Some(HANDS_FREE_MAX_MS));
+}
+
+#[test]
+fn cap_14c_zero_turns_the_vad_end_off() {
+    let r = rig();
+    r.svc.set_vad_end_ms("a", 0);
+    r.svc.start(req("a", CaptureMode::HandsFree)).unwrap();
+    r.svc.voice_activity(true);
+    r.svc.voice_activity(false);
+    r.advance(60_000);
+    r.svc.tick();
+    assert!(r.svc.status().recording);
+    assert_eq!(r.svc.tick(), Some(HANDS_FREE_MAX_MS));
+}
+
+#[test]
+fn cap_14c_the_vad_end_is_per_mog() {
+    let r = rig();
+    r.svc.set_vad_end_ms("b", 3_000);
+    r.svc.start(req("b", CaptureMode::HandsFree)).unwrap();
+    r.svc.voice_activity(true);
+    assert_eq!(r.svc.voice_activity(false), Some(3_000));
+}
+
+#[test]
+fn cap_14c_no_vad_end_while_a_ptt_holds_the_mic_and_the_silence_restarts_after_it() {
+    let r = rig();
+    r.svc.start(req("a", CaptureMode::HandsFree)).unwrap();
+    r.svc.voice_activity(true);
+    r.svc.voice_activity(false);
+    let ptt = r.svc.start(req("a", CaptureMode::Ptt)).unwrap();
+    r.advance(5_000);
+    r.svc.tick();
+    assert!(r.svc.status().recording);
+    r.svc.stop(ptt.id).unwrap();
+    // The silence counts again from the end of the PTT.
+    r.advance(1_499);
+    r.svc.tick();
+    assert_eq!(r.svc.status().mode, Some(CaptureMode::HandsFree));
+    r.advance(1);
+    r.svc.tick();
+    assert!(!r.svc.status().recording);
+}
+
+#[test]
+fn cap_14c_voice_activity_without_hands_free_does_nothing() {
+    let r = rig();
+    r.svc.start(req("a", CaptureMode::Ptt)).unwrap();
+    r.svc.voice_activity(true);
+    r.svc.voice_activity(false);
+    r.advance(5_000);
+    r.svc.tick();
+    assert!(r.svc.status().recording);
+}

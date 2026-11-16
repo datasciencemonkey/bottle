@@ -1478,6 +1478,82 @@ mod tests {
         assert_eq!(HotkeyOutput::Tap.pill_text(), None);
     }
 
+    // ---- CAP-14a: a double-tap (key-downs 400 ms or less apart) starts hands-free ----
+
+    fn tap_at(e: &mut HotkeyEngine, clock: &SimClock, hold_ms: u64) {
+        e.on_talk_key(Down);
+        clock.advance(Duration::from_millis(hold_ms));
+        e.on_talk_key(Up);
+    }
+
+    #[test]
+    fn cap_14a_two_taps_with_key_downs_400_ms_apart_give_double_tap() {
+        for gap in [0u64, 150, 300] {
+            let (sink, clock, mut e) = engine_at_zero();
+            tap_at(&mut e, &clock, 100);
+            clock.advance(Duration::from_millis(gap));
+            tap_at(&mut e, &clock, 100);
+            assert_eq!(
+                sink.take(),
+                vec![
+                    Ptt(PDown),
+                    Ptt(Cancel),
+                    HotkeyOutput::Tap,
+                    Ptt(PDown),
+                    Ptt(Cancel),
+                    HotkeyOutput::Tap,
+                    Ptt(PttPhase::DoubleTap),
+                ],
+                "key-downs {} ms apart",
+                100 + gap
+            );
+        }
+        assert_eq!(PttPhase::DoubleTap.as_str(), "double_tap");
+        assert_eq!(DOUBLE_TAP_MAX_GAP, Duration::from_millis(400));
+    }
+
+    #[test]
+    fn cap_14a_key_downs_more_than_400_ms_apart_are_two_single_taps() {
+        let (sink, clock, mut e) = engine_at_zero();
+        tap_at(&mut e, &clock, 100);
+        clock.advance(Duration::from_millis(301));
+        tap_at(&mut e, &clock, 100);
+        assert!(!sink.take().contains(&Ptt(PttPhase::DoubleTap)));
+    }
+
+    #[test]
+    fn cap_14a_a_hold_between_taps_and_a_third_tap_give_no_double_tap() {
+        let (sink, clock, mut e) = engine_at_zero();
+        // A tap, then a PTT hold: the hold resets the double-tap rule.
+        tap_at(&mut e, &clock, 50);
+        tap_at(&mut e, &clock, 300);
+        tap_at(&mut e, &clock, 50);
+        assert!(!sink.take().contains(&Ptt(PttPhase::DoubleTap)));
+        // A double-tap, then a third tap: the third tap is a new single tap.
+        let (sink, clock, mut e) = engine_at_zero();
+        tap_at(&mut e, &clock, 50);
+        tap_at(&mut e, &clock, 50);
+        tap_at(&mut e, &clock, 50);
+        let doubles = sink
+            .take()
+            .into_iter()
+            .filter(|o| *o == Ptt(PttPhase::DoubleTap))
+            .count();
+        assert_eq!(doubles, 1);
+    }
+
+    #[test]
+    fn cap_14a_a_cancelled_press_is_not_the_first_tap() {
+        // CAP-44c: another key cancels the press. It is no tap, so no double-tap follows.
+        let (sink, clock, mut e) = engine_at_zero();
+        e.on_talk_key(Down);
+        e.on_other_key_down();
+        e.on_talk_key(Up);
+        clock.advance(Duration::from_millis(50));
+        tap_at(&mut e, &clock, 50);
+        assert!(!sink.take().contains(&Ptt(PttPhase::DoubleTap)));
+    }
+
     #[test]
     fn cap_44c_at_03_another_key_in_the_first_second_cancels_the_ptt() {
         for ms in [0u64, 300, 999] {

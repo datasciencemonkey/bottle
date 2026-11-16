@@ -886,6 +886,24 @@ mod tests {
     }
 
     #[test]
+    fn cap_14a_double_tap_goes_to_the_mog_of_the_two_taps() {
+        let target = Arc::new(PttTarget::default());
+        target.set("a1");
+        let (mut f, brain, _) = forwarder(&target);
+        for _ in 0..2 {
+            f.on_output(HotkeyOutput::Ptt(PttPhase::Down));
+            f.on_output(HotkeyOutput::Ptt(PttPhase::Cancel));
+            f.on_output(HotkeyOutput::Tap);
+        }
+        // The target changes after the taps: the double-tap stays with the tapped MOG.
+        target.set("b2");
+        f.on_output(HotkeyOutput::Ptt(PttPhase::DoubleTap));
+        let items = brain.items();
+        assert_eq!(items.last(), Some(&ptt("a1", "double_tap")));
+        assert_eq!(items.len(), 5);
+    }
+
+    #[test]
     fn mb_06a_no_target_means_no_ptt_event() {
         let target = Arc::new(PttTarget::default());
         let (mut f, brain, _) = forwarder(&target);
