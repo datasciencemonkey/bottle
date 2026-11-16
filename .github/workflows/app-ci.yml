@@ -1,0 +1,280 @@
+# App CI (#227): lint, type-check and test the TS brain and the Rust core, build offline from the
+# locked lockfiles, and package unsigned debug installers on macOS (arm64) and Windows (NFR-13a).
+# Signing and notarization read secrets and are skipped when the secrets are absent; the release
+# gate rel-03 (#170) supplies the secrets (NFR-15a, NFR-15b). Every action is pinned to a commit
+# SHA (AT-37). Repo checks for the requirements and the mascot stay in repo-checks.yml.
+name: App CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: "1.100.0"
+  NODE_VERSION: "24"
+  NEXTEST_VERSION: "0.9.152"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  checks:
+    name: Checks (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+          - os: windows-2025
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      # Keep LF line endings on Windows so prettier and rustfmt see the committed bytes.
+      - name: Keep LF line endings
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable branch
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
+        with:
+          tool: cargo-nextest@${{ env.NEXTEST_VERSION }}
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          python-version: "3.12"
+
+      - name: Install JS dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: pnpm lint
+      - name: Format check
+        run: pnpm format:check
+      - name: Type-check
+        run: pnpm typecheck
+      - name: TS tests (writes reports/junit-ts.xml)
+        run: pnpm test:ci
+
+      - name: Rust format check
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Rust tests (writes reports/junit-rust.xml)
+        run: |
+          cargo nextest run --workspace --locked --profile ci
+          mkdir -p reports
+          cp target/nextest/ci/junit.xml reports/junit-rust.xml
+      - name: Rust doc tests
+        run: cargo test --workspace --locked --doc
+
+      - name: Script tests (writes reports/junit-py.xml)
+        run: >-
+          uv run --no-project --with pytest==9.0.2 --with pyyaml==6.0.3
+          pytest scripts/tests -q --junitxml=reports/junit-py.xml
+      - name: Requirement coverage (NFR-23a)
+        run: >-
+          uv run --no-project scripts/req_coverage.py
+          --requirements research/final-requirements.md
+          --junit reports/junit-ts.xml reports/junit-rust.xml reports/junit-py.xml
+          --out reports/requirements-coverage.md
+          --json reports/requirements-coverage.json
+      - name: Coverage summary
+        if: always()
+        run: if [ -f reports/requirements-coverage.md ]; then cat reports/requirements-coverage.md >> "$GITHUB_STEP_SUMMARY"; fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: reports-${{ matrix.os }}
+          path: reports/
+          if-no-files-found: warn
+
+  offline-build:
+    # AT-37: fetch with the locked lockfiles, then build with the network off. The AT-37 lockfile
+    # checks (hashes pinned, no @rive-app/webgl) run here too.
+    name: Offline build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+          - os: windows-2025
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - name: Keep LF line endings
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable branch
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          python-version: "3.12"
+
+      - name: AT-37 lockfile checks (hashes pinned, no @rive-app/webgl)
+        run: >-
+          uv run --no-project --with pytest==9.0.2 --with pyyaml==6.0.3
+          pytest scripts/tests/test_app_ci_workflow.py -q -k "at_37 or nfr_16b"
+      - name: Fetch dependencies from the lockfiles (online)
+        run: |
+          pnpm install --frozen-lockfile
+          cargo fetch --locked
+      - name: Build offline
+        env:
+          CARGO_NET_OFFLINE: "true"
+        run: |
+          rm -rf node_modules
+          pnpm install --offline --frozen-lockfile
+          pnpm build
+          cargo build --workspace --locked --offline
+
+  golden-set:
+    # SEC-26 hook: the adversarial golden set runs here. Its tests are named with SEC-26 (TS) or
+    # sec_26 (Rust); until they land, the filters match no test and the job passes.
+    name: Adversarial golden set (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+          - os: windows-2025
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - name: Keep LF line endings
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable branch
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Install JS dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Golden set (TS brain)
+        run: pnpm exec vitest run -t "SEC-26" --passWithNoTests
+      - name: Golden set (Rust core)
+        run: cargo test --locked -p mog-core -p mog-core-ffi sec_26
+
+  package:
+    name: Package (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            bundles: dmg
+          - os: windows-2025
+            bundles: nsis
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      HAS_APPLE_SIGNING: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_SIGNING_IDENTITY != '' }}
+      HAS_APPLE_NOTARY: ${{ secrets.APPLE_ID != '' && secrets.APPLE_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' }}
+      HAS_WINDOWS_SIGNING: ${{ secrets.WINDOWS_CERTIFICATE != '' && secrets.WINDOWS_CERTIFICATE_PASSWORD != '' }}
+      BUNDLE_DIR: target/debug/bundle/${{ matrix.bundles }}
+    steps:
+      - name: Keep LF line endings
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable branch
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Install JS dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the unsigned debug installer
+        run: pnpm tauri build --debug --bundles ${{ matrix.bundles }} -- --locked
+
+      # macOS (NFR-15a). Tauri signs the app and the DMG when the APPLE_* variables are set.
+      - name: Sign the macOS app and DMG
+        if: runner.os == 'macOS' && env.HAS_APPLE_SIGNING == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: pnpm tauri build --debug --bundles dmg -- --locked
+      - name: Notarize and staple the macOS DMG
+        if: runner.os == 'macOS' && env.HAS_APPLE_SIGNING == 'true' && env.HAS_APPLE_NOTARY == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for f in "$BUNDLE_DIR"/*.dmg; do
+            xcrun notarytool submit "$f" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" --wait
+            xcrun stapler staple "$f"
+          done
+      - name: macOS signing skipped (no secrets)
+        if: runner.os == 'macOS' && env.HAS_APPLE_SIGNING != 'true'
+        run: echo "::notice::APPLE_* secrets are absent; the DMG is unsigned and not notarized."
+
+      # Windows (NFR-15b).
+      - name: Sign the Windows NSIS installer
+        if: runner.os == 'Windows' && env.HAS_WINDOWS_SIGNING == 'true'
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          cert="$RUNNER_TEMP/cert.pfx"
+          echo "$WINDOWS_CERTIFICATE" | base64 --decode > "$cert"
+          signtool=$(ls "/c/Program Files (x86)/Windows Kits/10/bin/"10.*/x64/signtool.exe | sort | tail -n 1)
+          for f in "$BUNDLE_DIR"/*.exe; do
+            "$signtool" sign //fd sha256 //tr http://timestamp.digicert.com //td sha256 \
+              //f "$cert" //p "$WINDOWS_CERTIFICATE_PASSWORD" "$f"
+          done
+          rm -f "$cert"
+      - name: Windows signing skipped (no secrets)
+        if: runner.os == 'Windows' && env.HAS_WINDOWS_SIGNING != 'true'
+        run: echo "::notice::WINDOWS_* secrets are absent; the NSIS installer is unsigned."
+
+      - name: Write a SHA-256 file for each installer (dmg, nsis)
+        run: |
+          cd "$BUNDLE_DIR"
+          shopt -s nullglob
+          files=(*.dmg *.exe)
+          [ ${#files[@]} -gt 0 ] || { echo "no installer in $BUNDLE_DIR"; exit 1; }
+          for f in "${files[@]}"; do
+            if command -v sha256sum >/dev/null; then sha256sum "$f"; else shasum -a 256 "$f"; fi > "$f.sha256"
+            cat "$f.sha256" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bottle-debug-${{ matrix.bundles }}
+          path: |
+            ${{ env.BUNDLE_DIR }}/*.dmg
+            ${{ env.BUNDLE_DIR }}/*.exe
+            ${{ env.BUNDLE_DIR }}/*.sha256
+          if-no-files-found: error

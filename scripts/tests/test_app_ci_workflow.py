@@ -137,7 +137,8 @@ def test_nfr_15d_package_publishes_a_sha256_file_for_each_artifact(app_ci):
     job = app_ci["jobs"]["package"]
     text = runs(job)
     assert "pnpm tauri build --debug" in text
-    assert "dmg" in text and "nsis" in text
+    bundles = {item.get("bundles") for item in job["strategy"]["matrix"]["include"]}
+    assert {"dmg", "nsis"} <= bundles
     assert "sha256" in text.lower()
     uploads = [s for s in steps(job) if "actions/upload-artifact" in s.get("uses", "")]
     assert uploads and all(".sha256" in str(s.get("with", {}).get("path", "")) for s in uploads)

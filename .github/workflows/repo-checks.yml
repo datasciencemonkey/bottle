@@ -1,6 +1,5 @@
 # Repository checks for the files that exist today: the requirements build and the
-# mascot source. The app build, lint and test matrix (macOS, Windows) comes with #227
-# and is meant to sit beside this workflow.
+# mascot source. The app build, lint and test matrix (macOS, Windows) is app-ci.yml (#227).
 name: Repo checks
 
 on:

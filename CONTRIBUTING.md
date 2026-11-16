@@ -61,9 +61,12 @@ pnpm test                       # Vitest; pnpm test:ci writes reports/junit-ts.x
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+cargo nextest run --workspace --locked --profile ci   # CI form; writes target/nextest/ci/junit.xml
 pnpm tauri build --debug        # macOS or Windows app bundle
-uv run --no-project --with pytest pytest scripts/tests -q   # when scripts/tests exists
+uv run --no-project --with pytest --with pyyaml pytest scripts/tests -q   # when scripts/tests exists
 ```
+
+CI runs these commands on macOS (arm64) and Windows in `.github/workflows/app-ci.yml`. It also builds offline from the lockfiles (AT-37) and packages unsigned debug installers with a SHA-256 file each. The signing and notarization steps run only when the `APPLE_*` and `WINDOWS_*` secrets exist.
 
 ## Pull requests and the merge gate
 
