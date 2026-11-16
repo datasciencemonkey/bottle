@@ -234,7 +234,7 @@ pub fn require_mog_id_filter(sql: &str) -> CoreResult<()> {
     Ok(())
 }
 
-fn is_uuid(s: &str) -> bool {
+pub(crate) fn is_uuid(s: &str) -> bool {
     let b = s.as_bytes();
     b.len() == 36
         && b.iter().enumerate().all(|(i, c)| match i {
