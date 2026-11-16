@@ -588,14 +588,25 @@ fn at_40_device_golden_set_meets_the_gate() {
 #[test]
 #[ignore = "pending TODO(#23): the input peak normalisation to -3 dBFS is not built"]
 fn at_40_cap_20_quiet_input_reaches_minus_3_dbfs_before_stt() {
-    use mog_core::capture::{CaptureService, StubCaptureService};
+    use mog_core::capture::{CaptureCore, CaptureRequest, CaptureService};
+    use mog_core::clock::SimClock;
+    use mog_core::testkit::capture::{FakeAudioDevice, RecordingCaptureEvents};
+    use mog_core::types::CaptureMode;
     // TODO(#23): R2 with a quiet synthetic tone at -30 dBFS: the segment handed to R4 peaks at
     // -3 dBFS +- 0.5 dB.
-    let r2 = StubCaptureService;
+    let r2 = CaptureCore::new(
+        Box::new(FakeAudioDevice::new()),
+        std::sync::Arc::new(SimClock::new()),
+        std::sync::Arc::new(RecordingCaptureEvents::default()),
+    );
     let lease = r2
-        .acquire_lease("00000000-0000-4000-8000-0000000000a1")
+        .start(CaptureRequest {
+            mog_id: "00000000-0000-4000-8000-0000000000a1".to_string(),
+            mode: CaptureMode::Ptt,
+            others_track: false,
+        })
         .expect("TODO(#23): a lease");
-    r2.release_lease(lease).expect("TODO(#23): release");
+    r2.stop(lease.id).expect("TODO(#23): release");
     todo!("TODO(#23): read the peak of the segment that R2 hands to R4 and assert -3 dBFS");
 }
 

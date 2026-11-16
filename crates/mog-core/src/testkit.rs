@@ -11,6 +11,7 @@
 
 use std::fmt;
 
+pub mod capture;
 pub mod hotkey;
 
 /// The Databricks CLI profile for live tests (U2M, no Lakebase).
