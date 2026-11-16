@@ -11,8 +11,8 @@ use mog_core::latency_bench::doubles::{ScriptedPipeline, ScriptedTiming};
 use mog_core::latency_bench::import::{parse_csv, parse_sp03_log, to_csv, CSV_HEADER, CSV_MAGIC};
 use mog_core::latency_bench::{
     budget, budgets, evaluate, percentile, BudgetConfig, Gate, GateResult, HotkeySamples,
-    LatencyRecorder, Mark, MarkError, Outcome, Report, ResourceUse, Route, RunInfo, SampleSource,
-    SttPath, Summary, Trial,
+    KeySampleTool, LatencyRecorder, Mark, MarkError, Outcome, Report, ResourceUse, Route, RunInfo,
+    SampleSource, SttPath, Summary, Trial,
 };
 use mog_core::testkit::{self, Fixture, ReferenceDevice};
 
@@ -43,7 +43,10 @@ fn outcome(id: &str, trials: &[Trial], hk: &HotkeySamples, cfg: BudgetConfig) ->
 }
 
 fn full_hotkey(cycles: u32, seen: u32, latency: Duration) -> HotkeySamples {
-    let mut hk = HotkeySamples::default();
+    let mut hk = HotkeySamples {
+        tool: Some(KeySampleTool::HotkeyService),
+        ..HotkeySamples::default()
+    };
     for i in 0..cycles {
         hk.record_cycle(i < seen, &[latency, latency]);
     }
@@ -272,6 +275,9 @@ fn nfr_01a_preview_chip_p95_within_1_5_s_with_local_stt() {
     // Cloud trials do not count for the local row.
     t.chip = Some(ms(2_100));
     presses(&p, 20, SttPath::Cloud, Route::Question, t);
+    // UC1 dictation trials do not count for the UC2 chip row, even with a slow chip.
+    t.chip = Some(ms(3_000));
+    presses(&p, 20, SttPath::Local, Route::Dictation, t);
     assert_eq!(
         outcome("NFR-01a", &p.recorder().trials(), &hk, cfg),
         Outcome::Within
@@ -295,6 +301,10 @@ fn nfr_01b_preview_chip_p95_within_2_2_s_with_cloud_stt() {
     let mut t = good();
     t.chip = Some(ms(2_100));
     presses(&p, 20, SttPath::Cloud, Route::Question, t);
+    // UC1 dictation trials do not count for the UC2 chip row.
+    let mut dict = t;
+    dict.chip = Some(ms(3_000));
+    presses(&p, 20, SttPath::Cloud, Route::Dictation, dict);
     assert_eq!(
         outcome("NFR-01b", &p.recorder().trials(), &hk, cfg),
         Outcome::Within
@@ -343,6 +353,8 @@ fn nfr_01d_dictation_insert_p95_within_1_5_s_with_local_stt() {
     // A question press with a slow insert time does not count for UC1.
     t.insert = Some(ms(3_000));
     presses(&p, 5, SttPath::Local, Route::Question, t);
+    // A dictation with cloud STT does not count for the local row.
+    presses(&p, 20, SttPath::Cloud, Route::Dictation, t);
     assert_eq!(
         outcome("NFR-01d", &p.recorder().trials(), &hk, cfg),
         Outcome::Within
@@ -560,6 +572,7 @@ fn at_21_report_fills_the_evidence_template() {
         "| Hardware | Apple M1 8 GB (mac-m1-8gb-14.4) |",
         "| Profile | none |",
         "| Requirements | NFR-01a, NFR-01b, NFR-01c, NFR-02 |",
+        "| Scope | part: NFR-01a, NFR-01b, NFR-01c, NFR-02 only |",
         "## Method",
         "## Raw evidence",
         "## Result against the criterion",
@@ -679,7 +692,7 @@ fn at_21_at_43_device_samples_meet_the_latency_budgets() {
 
 #[test]
 fn at_30_nfr_08a_nfr_08b_hid_rig_1000_cycles() {
-    // TODO(#5, #7): the macOS log comes from the SP-03 probe; the Windows hook has no log yet.
+    // TODO(#323): the log comes from the SP-03 probe; the HotkeyService log (macOS, Windows) is #323.
     let rig = match testkit::hid_rig_from(env).expect("valid HID rig fixture") {
         Fixture::Ready(r) => r,
         Fixture::Skip(reason) => {
@@ -717,4 +730,72 @@ fn at_21_demo_doubles_are_within_budget_but_never_a_pass() {
         );
         assert_eq!(r.result(), GateResult::NotRun);
     }
+}
+
+#[test]
+fn nfr_01c_nfr_01a_nfr_02_a_press_with_no_end_step_is_over() {
+    let cfg = BudgetConfig::default();
+    let hk = HotkeySamples::default();
+    let mut trials = good_trials();
+    // A local question with key-down and key-up only: no mic, no ack, no chip.
+    let mut lost = Trial::new(999, SttPath::Local, Route::Question);
+    lost.record(Mark::KeyDown, ms(1_000_000)).unwrap();
+    lost.record(Mark::KeyUp, ms(1_001_000)).unwrap();
+    trials.push(lost);
+    for id in ["NFR-01a", "NFR-01c", "NFR-02"] {
+        let r = evaluate(&budget(id, cfg).unwrap(), &trials, &hk);
+        assert_eq!(r.outcome, Outcome::Over, "{id}");
+        assert_eq!(r.incomplete, 1, "{id}");
+    }
+    // The cloud and dictation rows do not see the local question.
+    for id in ["NFR-01b", "NFR-01d"] {
+        let r = evaluate(&budget(id, cfg).unwrap(), &trials, &hk);
+        assert_eq!(r.outcome, Outcome::Within, "{id}");
+        assert_eq!(r.incomplete, 0, "{id}");
+    }
+    let r = Report::build(Gate::At21, device(), device_info(), &trials, &hk);
+    assert_eq!(r.result(), GateResult::Fail);
+    let md = r.to_markdown();
+    assert!(md.contains("(+1 with no preview_chip)"), "{md}");
+    assert!(md.contains("1 presses have no local_ack"), "{md}");
+    // The same rule holds for samples read from a device file.
+    let back = parse_csv(&to_csv(&trials)).unwrap();
+    let r = Report::build(Gate::At21, device(), device_info(), &back, &hk);
+    assert_eq!(r.result(), GateResult::Fail);
+}
+
+#[test]
+fn at_30_samples_from_the_sp03_probe_are_at_most_partial() {
+    let trials: Vec<Trial> = Vec::new();
+    let mut log = String::new();
+    for i in 0..1_000u64 {
+        log.push_str(&format!("EV src=tap kind=down t_ns={} lat_ms=0.2\n", 2 * i));
+        log.push_str(&format!(
+            "EV src=tap kind=up t_ns={} lat_ms=0.3\n",
+            2 * i + 1
+        ));
+    }
+    let probe = parse_sp03_log(&log);
+    assert_eq!(probe.tool, Some(KeySampleTool::Sp03Probe));
+    let r = Report::build(Gate::At30, device(), device_info(), &trials, &probe);
+    assert!(r.results.iter().all(|b| b.outcome == Outcome::Within));
+    assert_eq!(r.result(), GateResult::Partial);
+    assert!(
+        r.missing().iter().any(|m| m.contains("SP-03 spike probe")),
+        "{:?}",
+        r.missing()
+    );
+    assert!(r
+        .to_markdown()
+        .contains("Key samples recorded by: the SP-03 spike probe tap"));
+
+    let mut unknown = probe.clone();
+    unknown.tool = None;
+    let r = Report::build(Gate::At30, device(), device_info(), &trials, &unknown);
+    assert_eq!(r.result(), GateResult::Partial);
+
+    let mut shipped = probe;
+    shipped.tool = Some(KeySampleTool::HotkeyService);
+    let r = Report::build(Gate::At30, device(), device_info(), &trials, &shipped);
+    assert_eq!(r.result(), GateResult::Pass, "{:?}", r.missing());
 }

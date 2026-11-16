@@ -43,6 +43,12 @@ The report writes `pass` only when all these rules hold:
 3. The run has a date (YYYY-MM-DD), a runner, the build, the hardware and the OS.
 4. AT-21 also needs the models and the resource use (peak RSS and mean CPU).
 
+Each file has `Scope | part: <IDs> only`. `scripts/check_gate_evidence.py` does not accept a
+`part` file alone for a ticked checklist row: the other parts of the AT need their own file.
+A press with a start mark and no end mark (for example no chip) counts as over the limit.
+For AT-30, the key samples must come from the shipped HotkeyService (TODO(#323)); samples from the
+SP-03 probe give at most `partial`.
+
 When a rule does not hold, the result is `partial` (some rows within) or `not run`. The report
 lists each reason. `scripts/check_gate_evidence.py` checks the file like any other evidence file.
 
@@ -72,13 +78,11 @@ Never put a token or a profile secret in a file. These steps need no Databricks 
 ### Part A: AT-30 talk key on the HID rig, macOS (about 20 min)
 
 You need: a reference Mac, a Raspberry Pi Pico with CircuitPython 9.x and `adafruit_hid`, and the
-SP-03 probe. The probe is in `spikes/sp-03/` (PR #298 for #5). If #298 is not merged, use its branch:
+SP-03 probe. The probe is in `spikes/sp-03/` on `main` (#5):
 
 ```
-cd <your bottle checkout>
-git fetch origin pull/298/head:sp03-probe
-git worktree add ../bottle-sp03 sp03-probe
-cd ../bottle-sp03/spikes/sp-03 && cargo build --release
+cd <your bottle checkout> && git checkout main && git pull
+cd spikes/sp-03 && cargo build --release
 ./target/release/sp03-probe status
 ```
 
@@ -87,13 +91,15 @@ System Settings > Privacy & Security, then run `status` again.
 
 1. Connect GP14 of the Pico to GND (this stops a run). Copy `spikes/sp-03/pico/code.py` to the
    Pico as `code.py`. Open TextEdit and put it in front.
-2. Start the probe for 6 minutes, with the talk key only:
+2. Start the probe for 6 minutes, with the talk key only. The command prints nothing and keeps
+   the terminal busy for 360 s. Do step 3 while it runs:
    ```
    ./target/release/sp03-probe listen --seconds 360 --no-carbon --no-sei --no-clamshell > ~/at30-mac.log
    ```
-3. Disconnect GP14 from GND, then press the Pico reset (or unplug and plug it in). After 10 s the
-   Pico presses Right Option 1,000 times (about 4 to 5 minutes). Do not touch the keyboard.
-4. When the Pico prints `DONE` (or the LED stops), wait for the probe to stop. Then check the log:
+3. In the first minute of the 360 s, disconnect GP14 from GND, then press the Pico reset (or unplug
+   and plug it in). After 10 s the Pico presses Right Option 1,000 times (about 4 to 5 minutes).
+   Do not touch the keyboard. The run must end before the 360 s end.
+4. When the LED stops, wait for the probe to stop (the prompt comes back). Then check the log:
    ```
    ./target/release/sp03-probe analyze ~/at30-mac.log
    ```
@@ -109,14 +115,18 @@ System Settings > Privacy & Security, then run `status` again.
    BOTTLE_TEST_DEVICE=mac-m1-8gb-14.4 BOTTLE_TEST_HID_PORT=/dev/cu.usbmodemXXXX \
      BOTTLE_BENCH_SP03_LOG=~/at30-mac.log cargo test -p mog-core --test latency_bench at_30
    ```
-   Use `mac-m1-current` on the Mac with the current macOS. Expected: the runner prints
-   `RESULT AT-30 pass` and the test passes. Keep `~/at30-mac.log` with the evidence (link it).
-   The probe log has only talk-key events and times, no other keys.
+   Use `mac-m1-current` on the Mac with the current macOS. Expected: NFR-08a and NFR-08b are
+   `within`, the test passes, and the runner prints `RESULT AT-30 partial` with the reason "the key
+   samples come from the SP-03 spike probe, not the shipped HotkeyService". This is correct: the
+   probe is not the HotkeyService that ships. The `pass` needs the HotkeyService log: TODO(#323).
+   Keep `~/at30-mac.log` with the evidence (link it). The probe log has only talk-key events and
+   times, no other keys.
 6. Do it again on the second Mac. Write each device to its own file, for example
    `docs/evidence/AT-30-latency-mac-m1-current.md` (copy the output and change `--out`).
 
-Windows 11: not possible yet. The SP-03 probe has no Windows mode (TODO(#5)) and the Windows hook is
-#7. When they land, use the same `report --gate AT-30 --device win11-i5-16gb` step with the Windows log.
+Windows 11: not possible yet. The SP-03 probe has no Windows mode (TODO(#5)), and the Windows
+HotkeyService writes no benchmark log yet (TODO(#323)). When one of them lands, use the same
+`report --gate AT-30 --device win11-i5-16gb` step with the Windows log.
 
 ### Part B: AT-21 and AT-43 PTT pipeline (blocked)
 
@@ -127,10 +137,12 @@ When #319 lands, the steps are:
 2. Do 25 PTT questions (UC2) and 25 dictations (UC1) into TextEdit or Notepad. Hold the talk key
    for 1 to 3 s each time.
 3. If the cloud STT probe passed (#51), turn on Databricks ASR and do 25 PTT questions again.
-4. While you do steps 2 and 3, record the resource use of Bottle:
-   - macOS: `while sleep 5; do ps -o rss=,%cpu= -p $(pgrep -x Bottle); done | tee ~/bottle-res.txt`
-   - Windows: `while ($true) { Get-Process Bottle | Select-Object WS,CPU; Start-Sleep 5 }`
-   Write down the peak RSS in MB and the mean CPU percent.
+4. While you do steps 2 and 3, record the resource use of Bottle every 5 s. Each line is the
+   memory in MB and the CPU in percent of one core:
+   - macOS: `while sleep 5; do ps -o rss=,%cpu= -p $(pgrep -x Bottle) | awk '{print int($1/1024), $2}'; done | tee ~/bottle-res.txt`
+     (`ps` gives RSS in KB; the `awk` step makes it MB.)
+   - Windows (PowerShell): `while ($true) { $m = [math]::Round((Get-Process Bottle).WorkingSet64 / 1MB); $c = (Get-Counter '\Process(Bottle)\% Processor Time').CounterSamples[0].CookedValue; "$m $([math]::Round($c))" | Tee-Object -Append $HOME\bottle-res.txt; Start-Sleep 5 }`
+   Use the largest first number as `--rss-mb` and the mean of the second numbers as `--cpu-pct`.
 5. Write the evidence files (one per gate) and run the device test:
    ```
    cargo run -p mog-core --example latency_bench -- report --gate AT-21 \
@@ -143,3 +155,8 @@ When #319 lands, the steps are:
      cargo test -p mog-core --test latency_bench at_21_at_43
    ```
    Use `--gate AT-43` with the same sample file for `docs/evidence/AT-43-latency.md`.
+   If you did not do step 3 (no cloud STT), NFR-01b has no data. Then the AT-21 result is
+   `partial` and the device test fails on NFR-01b. This is the expected result, not a bug: record
+   it and open a follow-up for the cloud run.
+6. Do not cancel a press during the run. A press with no chip, acknowledgement, mic or inserted
+   text counts as over the limit, so the row is `over`.

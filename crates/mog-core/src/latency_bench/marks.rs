@@ -287,9 +287,31 @@ impl LatencyRecorder {
     }
 }
 
+/// The program that recorded the talk-key samples.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeySampleTool {
+    /// The tap of the SP-03 spike probe (`spikes/sp-03`, #5). It is not the HotkeyService that
+    /// ships, so an AT-30 file from it is at most `partial`. TODO(#323).
+    Sp03Probe,
+    /// The HotkeyService that ships (its benchmark log is TODO(#323)).
+    HotkeyService,
+}
+
+impl KeySampleTool {
+    /// The tool as report text.
+    pub fn text(self) -> &'static str {
+        match self {
+            KeySampleTool::Sp03Probe => "the SP-03 spike probe tap (spikes/sp-03, #5)",
+            KeySampleTool::HotkeyService => "the shipped HotkeyService",
+        }
+    }
+}
+
 /// Talk-key samples from the HID rig (NFR-08a, NFR-08b).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct HotkeySamples {
+    /// The program that recorded the samples (`None` = not recorded).
+    pub tool: Option<KeySampleTool>,
     /// Key-down presses.
     pub cycles: u32,
     /// Presses whose key-up HotkeyService saw.

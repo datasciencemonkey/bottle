@@ -8,6 +8,7 @@
 //!     [--samples <file.csv>] [--sp03-log <file.log>] [--out docs/evidence/AT-30-latency.md]
 //! ```
 //!
+//! Exit codes: 0 for pass, partial and not run; 1 for fail; 2 for a usage or file error.
 //! `demo` runs the test doubles and prints a report whose Result is always `not run`. `report`
 //! reads samples that a person recorded on a reference device. The runner never measures by
 //! itself and never writes `pass` for missing or doubled samples.
@@ -17,7 +18,8 @@ use std::process::ExitCode;
 use mog_core::latency_bench::doubles::{demo_hotkey, demo_pipeline};
 use mog_core::latency_bench::import::{parse_csv, parse_sp03_log};
 use mog_core::latency_bench::{
-    BudgetConfig, Gate, HotkeySamples, Report, ResourceUse, RunInfo, SampleSource, Trial,
+    BudgetConfig, Gate, GateResult, HotkeySamples, Report, ResourceUse, RunInfo, SampleSource,
+    Trial,
 };
 use mog_core::testkit::{self, Fixture};
 
@@ -198,6 +200,10 @@ fn main() -> ExitCode {
     );
     for m in report.missing() {
         eprintln!("  not a pass because {m}");
+    }
+    // A row over its budget exits 1, so a script can stop on it.
+    if report.result() == GateResult::Fail {
+        return ExitCode::from(1);
     }
     ExitCode::SUCCESS
 }

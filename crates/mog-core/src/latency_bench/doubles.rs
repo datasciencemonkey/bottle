@@ -5,7 +5,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::marks::{HotkeySamples, LatencyRecorder, Mark, MarkError, Route, SttPath, TrialId};
+use super::marks::{
+    HotkeySamples, KeySampleTool, LatencyRecorder, Mark, MarkError, Route, SttPath, TrialId,
+};
 use crate::clock::{MonotonicClock, SimClock};
 
 /// The timing of one scripted press. `mic_live` and `hold` count from key-down; `ack`, `chip`
@@ -128,7 +130,10 @@ pub fn demo_pipeline(n: u64) -> ScriptedPipeline {
 
 /// A demo HID rig run from the double: `cycles` presses, every key-up seen, 1-10 ms delivery.
 pub fn demo_hotkey(cycles: u32) -> HotkeySamples {
-    let mut hk = HotkeySamples::default();
+    let mut hk = HotkeySamples {
+        tool: Some(KeySampleTool::HotkeyService),
+        ..HotkeySamples::default()
+    };
     for i in 0..u64::from(cycles) {
         hk.record_cycle(true, &[spread(1, i, 9), spread(1, i + 3, 9)]);
     }

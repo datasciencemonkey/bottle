@@ -33,8 +33,14 @@ view reports the chip time.
 7. The chip and the acknowledgement render in the view. Their times need a view-to-core event,
    which is a contract change (#318). Until it lands, the API stays internal to `mog-core`.
    The pipeline wiring and the sample export are #319.
-8. AT-30 on macOS reads the `EV` lines of the SP-03 probe (#5), so the rig run works before the
-   Windows hook (#7) and the pipeline wiring land.
+8. AT-30 on macOS reads the `EV` lines of the SP-03 probe (#5), so the rig run can start now.
+   NFR-08a and NFR-08b name HotkeyService, and the probe is not the HotkeyService that ships. So a
+   file from probe samples is at most `partial`. The HotkeyService log is #323.
+9. A press with the start mark of a row but no end mark (no chip, no acknowledgement, no mic, no
+   inserted text) counts as over the limit. A missed step is the failure that the rows guard against.
+10. Each benchmark file has `Scope | part: <IDs> only`. `scripts/check_gate_evidence.py` does not
+    accept `part` files alone for a ticked checklist row, so the latency rows cannot stand in for
+    the whole AT.
 
 ## Consequences
 

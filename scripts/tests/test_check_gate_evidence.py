@@ -195,3 +195,16 @@ def test_at_22_empty_code_fence_is_not_raw_evidence(tmp_path):
     d = evidence(tmp_path, "SP-03.md", "SP-03", kind="spike", raw="```text\n```")
     errors = run(checklist(tmp_path, {}), d)
     assert any("SP-03" in e and "Raw evidence" in e for e in errors), errors
+
+
+def test_at_22_part_scope_evidence_alone_cannot_tick_a_row(tmp_path):
+    """[AT-22] A file with Scope part (for example the #171 latency file) is not enough alone."""
+    d = evidence(tmp_path, "AT-21-latency.md", "AT-21", kind="device")
+    p = d / "AT-21-latency.md"
+    p.write_text(p.read_text().replace("| Profile | bottle-test |",
+                                       "| Profile | bottle-test |\n| Scope | part: NFR-01a only |"))
+    errors = run(checklist(tmp_path, {"AT-21": "docs/evidence/AT-21-latency.md"}), d)
+    assert any("AT-21" in e and "Scope part" in e for e in errors), errors
+    evidence(tmp_path, "AT-21.md", "AT-21", kind="device")
+    both = "docs/evidence/AT-21-latency.md, docs/evidence/AT-21.md"
+    assert run(checklist(tmp_path, {"AT-21": both}), d) == []

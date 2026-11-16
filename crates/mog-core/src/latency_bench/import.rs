@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::time::Duration;
 
-use super::marks::{HotkeySamples, Mark, Route, SttPath, Trial};
+use super::marks::{HotkeySamples, KeySampleTool, Mark, Route, SttPath, Trial};
 
 /// The first line of a sample file.
 pub const CSV_MAGIC: &str = "# bottle-latency-samples v1";
@@ -100,9 +100,13 @@ pub fn parse_csv(text: &str) -> Result<Vec<Trial>, ImportError> {
 ///
 /// It uses only `src=tap` lines (the Carbon chord is not the talk key). A key-down that is not
 /// followed by a key-up before the next key-down, or at the end of the log, is a missed key-up.
-/// A numeric, non-negative `lat_ms` is a delivery time. TODO(#7): the Windows hook log.
+/// A numeric, non-negative `lat_ms` is a delivery time. The samples are marked
+/// [`KeySampleTool::Sp03Probe`]. TODO(#323): the HotkeyService log on macOS and Windows.
 pub fn parse_sp03_log(text: &str) -> HotkeySamples {
-    let mut out = HotkeySamples::default();
+    let mut out = HotkeySamples {
+        tool: Some(KeySampleTool::Sp03Probe),
+        ..HotkeySamples::default()
+    };
     let mut pending = false;
     for line in text.lines() {
         let Some(start) = line.find("EV ") else {

@@ -249,6 +249,9 @@ pub struct BudgetResult {
     pub summary: Option<Summary>,
     /// Key-ups seen and cycles, for NFR-08a.
     pub key_ups: Option<(u32, u32)>,
+    /// Span rows: trials of the row with the start mark but no end mark (the chip, the ack, the
+    /// mic or the text never came). Each one counts as over the limit.
+    pub incomplete: usize,
     /// The outcome.
     pub outcome: Outcome,
 }
@@ -261,12 +264,33 @@ pub fn span_samples(
     path: Option<SttPath>,
     route: Option<Route>,
 ) -> Vec<Duration> {
-    trials
-        .iter()
-        .filter(|t| path.is_none_or(|p| t.path() == p))
-        .filter(|t| route.is_none_or(|r| t.route() == r))
+    row_trials(trials, path, route)
         .filter_map(|t| t.span(from, to))
         .collect()
+}
+
+fn row_trials(
+    trials: &[Trial],
+    path: Option<SttPath>,
+    route: Option<Route>,
+) -> impl Iterator<Item = &Trial> {
+    trials
+        .iter()
+        .filter(move |t| path.is_none_or(|p| t.path() == p))
+        .filter(move |t| route.is_none_or(|r| t.route() == r))
+}
+
+/// The trials of a span row that have `from` but no `to`.
+pub fn incomplete_trials(
+    trials: &[Trial],
+    from: Mark,
+    to: Mark,
+    path: Option<SttPath>,
+    route: Option<Route>,
+) -> usize {
+    row_trials(trials, path, route)
+        .filter(|t| t.at(from).is_some() && t.at(to).is_none())
+        .count()
 }
 
 fn time_outcome(samples: &[Duration], stat: Stat, max: Duration) -> (Option<Summary>, Outcome) {
@@ -294,6 +318,7 @@ fn time_outcome(samples: &[Duration], stat: Stat, max: Duration) -> (Option<Summ
 
 /// Compare the samples with one budget.
 pub fn evaluate(budget: &Budget, trials: &[Trial], hotkey: &HotkeySamples) -> BudgetResult {
+    let mut incomplete = 0;
     let (summary, key_ups, outcome) = match budget.check {
         Check::Span {
             from,
@@ -303,7 +328,10 @@ pub fn evaluate(budget: &Budget, trials: &[Trial], hotkey: &HotkeySamples) -> Bu
             stat,
             max,
         } => {
+            incomplete = incomplete_trials(trials, from, to, path, route);
             let (s, o) = time_outcome(&span_samples(trials, from, to, path, route), stat, max);
+            // A press whose end step never came is over the limit, whatever the other samples say.
+            let o = if incomplete > 0 { Outcome::Over } else { o };
             (s, None, o)
         }
         Check::KeyEventDelivery { stat, max } => {
@@ -331,6 +359,7 @@ pub fn evaluate(budget: &Budget, trials: &[Trial], hotkey: &HotkeySamples) -> Bu
         budget: *budget,
         summary,
         key_ups,
+        incomplete,
         outcome,
     }
 }

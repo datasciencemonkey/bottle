@@ -10,7 +10,7 @@
 
 use std::time::Duration;
 
-use super::marks::{HotkeySamples, SttPath, Trial};
+use super::marks::{HotkeySamples, KeySampleTool, SttPath, Trial};
 use super::stats::{
     budget, evaluate, span_samples, BudgetConfig, BudgetResult, Check, Outcome, Summary,
 };
@@ -175,6 +175,10 @@ pub struct Report {
     pub results: Vec<BudgetResult>,
     /// The p50/p95 of each span row for the local and the cloud STT path.
     pub paths: Vec<PathRow>,
+    /// The program that recorded the talk-key samples (AT-30).
+    pub key_tool: Option<KeySampleTool>,
+    /// The talk-key cycles in the samples (AT-30).
+    pub key_cycles: u32,
 }
 
 fn fmt_ms(d: Duration) -> String {
@@ -243,6 +247,8 @@ impl Report {
             info,
             results,
             paths,
+            key_tool: hotkey.tool,
+            key_cycles: hotkey.cycles,
         }
     }
 
@@ -276,6 +282,19 @@ impl Report {
         ] {
             if value.trim().is_empty() {
                 out.push(format!("the {name} is not recorded"));
+            }
+        }
+        if self.gate == Gate::At30 {
+            match self.key_tool {
+                Some(KeySampleTool::Sp03Probe) => out.push(
+                    "the key samples come from the SP-03 spike probe, not the shipped \
+                     HotkeyService (TODO(#323))"
+                        .into(),
+                ),
+                None if self.key_cycles > 0 => {
+                    out.push("the program that recorded the key samples is not recorded".into())
+                }
+                _ => {}
             }
         }
         if self.gate == Gate::At21 {
@@ -350,6 +369,10 @@ impl Report {
         line(format!("| Hardware | {hardware} |"));
         line("| Profile | none |".into());
         line(format!(
+            "| Scope | part: {} only |",
+            self.gate.budget_ids().join(", ")
+        ));
+        line(format!(
             "| Requirements | {} |",
             self.gate.budget_ids().join(", ")
         ));
@@ -369,6 +392,10 @@ impl Report {
             SampleSource::Device { device, .. } => format!("reference device `{}`", device.id()),
         };
         line(format!("- Samples: {source}."));
+        if self.gate == Gate::At30 {
+            let tool = self.key_tool.map_or("not recorded", KeySampleTool::text);
+            line(format!("- Key samples recorded by: {tool}."));
+        }
         line(format!("- OS: {}.", cell(&self.info.os)));
         let models = if self.info.models.is_empty() {
             "not recorded".to_string()
@@ -431,6 +458,10 @@ impl Report {
                 (Some(s), None) => (s.n.to_string(), fmt_ms(s.p50), fmt_ms(s.p95), fmt_ms(s.max)),
                 (None, None) => ("0".into(), "-".into(), "-".into(), "-".into()),
             };
+            let n = match (r.incomplete, r.budget.check) {
+                (k, Check::Span { to, .. }) if k > 0 => format!("{n} (+{k} with no {})", to.name()),
+                _ => n,
+            };
             line(format!(
                 "| {} | {} | {n} | {p50} | {p95} | {max} | {} | {} |",
                 r.budget.id,
@@ -467,14 +498,23 @@ impl Report {
                 r.budget.limit_text(),
                 r.outcome.text()
             ));
+            if let (k, Check::Span { to, .. }) = (r.incomplete, r.budget.check) {
+                if k > 0 {
+                    line(format!(
+                        "  - {k} presses have no {}; each counts as over the limit.",
+                        to.name()
+                    ));
+                }
+            }
         }
         line(format!("- Result: `{}`.", result.as_str()));
         for m in self.missing() {
             line(format!("  - Not a pass because {m}."));
         }
         line(format!(
-            "- This file covers only the rows above. The other parts of {} ({}) need their own \
-             evidence.",
+            "- Scope `part`: this file covers only the rows above. The other parts of {} ({}) \
+             need their own evidence, and `scripts/check_gate_evidence.py` does not accept a \
+             `part` file alone for a ticked row.",
             self.gate.id(),
             self.gate.other_parts()
         ));
@@ -482,8 +522,9 @@ impl Report {
 
         line("## Follow-ups".into());
         line(String::new());
+        line("- HotkeyService HID rig log: #323.".into());
         line(
-            "- Pipeline marks not wired yet (#319): #7 and #5 (key events), #14 and #15 (mic live), #142 \
+            "- Pipeline marks not wired yet (#319): HotkeyService (key events), #14 and #15 (mic live), #142 \
              and #318 (acknowledgement and chip), #58 (insertion), #46, #44 and #52 (STT path)."
                 .into(),
         );

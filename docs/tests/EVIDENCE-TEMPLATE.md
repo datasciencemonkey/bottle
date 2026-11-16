@@ -17,6 +17,8 @@ section for the gate type. `scripts/check_gate_evidence.py` checks the files (#2
 - A `pass` needs a real **Date run** (YYYY-MM-DD), **Run by**, and a filled **Raw evidence** section.
 - Never paste a token, a `.databrickscfg` file, a PAT, a client secret or customer data. Write the
   CLI profile name only. Redact host names if the workspace is private.
+- **Scope** is optional. Write `part: <IDs> only` when the file covers only some rows of the gate
+  (for example the latency file of #171). A ticked row needs one or more files without Scope `part`.
 - To tick a row in `docs/release/RELEASE-CHECKLIST.md`, put the evidence path in its Evidence
   cell, for example `[log](docs/evidence/AT-07.md)`. The file must say Result `pass` for that AT.
 
@@ -36,6 +38,7 @@ section for the gate type. `scripts/check_gate_evidence.py` checks the files (#2
 | Hardware | <reference device, for example Apple M1 8 GB, macOS 14.4> |
 | Profile | <CLI profile name only, or "none"> |
 | Requirements | <IDs that this run verifies, for example NFR-15a, NFR-15b> |
+| Scope | <optional: "part: <IDs> only" when the file covers only some rows of the gate> |
 
 ## Method
 

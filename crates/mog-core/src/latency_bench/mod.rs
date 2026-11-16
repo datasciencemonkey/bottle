@@ -15,7 +15,7 @@
 //! and times. [`Mark`] is a closed enum with no payload, so no transcript, audio or token can go in.
 //!
 //! The real call sites are not wired yet (TODO(#319) wires them):
-//! - key-down and key-up: HotkeyService, TODO(#7) (Windows) and TODO(#5) (SP-03 rig).
+//! - key-down and key-up: HotkeyService, TODO(#319); its HID rig log for AT-30, TODO(#323).
 //! - mic live: CaptureService, TODO(#14), with the SP-08 result TODO(#15).
 //! - local acknowledgement and preview chip: the brain and the view, TODO(#142). The chip renders
 //!   in the view, so its time needs an IPC event: TODO(#318).
@@ -30,7 +30,9 @@ pub mod marks;
 pub mod report;
 pub mod stats;
 
-pub use marks::{HotkeySamples, LatencyRecorder, Mark, MarkError, Route, SttPath, Trial, TrialId};
+pub use marks::{
+    HotkeySamples, KeySampleTool, LatencyRecorder, Mark, MarkError, Route, SttPath, Trial, TrialId,
+};
 pub use report::{Gate, GateResult, Report, ResourceUse, RunInfo, SampleSource};
 pub use stats::{
     budget, budgets, evaluate, percentile, Budget, BudgetConfig, BudgetResult, Check, Outcome,
