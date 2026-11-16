@@ -2,7 +2,7 @@
 
 The benchmark checks the memory and idle CPU of Bottle against the budget rows. It writes the
 AT-21 evidence for these rows in the format of `docs/tests/EVIDENCE-TEMPLATE.md`.
-The design choices are in `docs/adr/0020-resource-budget-harness.md`. It uses the same report
+The design choices are in `docs/adr/0024-resource-budget-harness.md`. It uses the same report
 rules as the latency benchmark (`docs/tests/LATENCY-BENCH.md`).
 
 ## Rows and budgets
@@ -156,8 +156,9 @@ then `RB=$PWD/target/debug/examples/resource_bench; rb() { "$RB" "$@"; }`.
     cargo test -p mog-core --test resource_budget at_21_device
   ```
   Use `mac-m1-current` on the Mac with the current macOS. Expected after Part A only: NFR-05 is
-  `over` (SP-04 measured 1.91 GB), the other rows are `no data`, the result is `fail` (exit 1),
-  and the device test fails on NFR-05. This is the true result: record it, do not change the limit.
+  `over` (SP-04 measured 1.91 GB), the other rows are `no data`, and the result is `fail`
+  (exit 1). The device test fails too: it stops on the first row that is not `within` (NFR-04a,
+  `no data`, until Part B runs). This is the true result: record it, do not change the limit.
 - **B1.** Start Bottle with local STT not loaded and no agent harness running. Wait 30 s.
 - **B2.** Memory, for N = 0, 1, 2, 4 and 8 open MOGs (with cards open). Set N MOGs, wait 30 s, then
   (10 samples in 20 s):
@@ -184,20 +185,30 @@ In your Bottle checkout on `main`: `cargo build -p mog-core --example resource_b
 
 - **A1.** `rb init --out $HOME\res.csv`
 - **A2.** Run `spikes/sp-04/run.ps1`. It writes `$HOME\sp04-work\out\bench-p.txt`.
-- **A3.** As on macOS, with `--device win11-i5-16gb`, `--os "Windows 11 <version>"`, the hardware
-  from `Get-ComputerInfo -Property CsProcessors,CsTotalPhysicalMemory`,
-  `--samples $HOME\res.csv` and `--sp04-bench $HOME\sp04-work\out\bench-p.txt`. Set the test
-  variables with `$env:BOTTLE_TEST_DEVICE = "win11-i5-16gb"`, `$env:BOTTLE_RES_SAMPLES = "$HOME\res.csv"`
-  and `$env:BOTTLE_RES_SP04_BENCH = "$HOME\sp04-work\out\bench-p.txt"`, then run
-  `cargo test -p mog-core --test resource_budget at_21_device`.
+- **A3.** Write the report and run the device test (the result is as on macOS):
+  ```
+  $cpu = (Get-CimInstance Win32_Processor).Name
+  $gb = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
+  $os = (Get-CimInstance Win32_OperatingSystem)
+  rb report --device win11-i5-16gb --date (Get-Date -Format yyyy-MM-dd) --run-by "<your name>" `
+    --build (git rev-parse --short HEAD) --hardware "$cpu, $gb GB" `
+    --os "$($os.Caption) $($os.Version)" --stt-model "parakeet-tdt-0.6b-v3 int8" `
+    --samples $HOME\res.csv --sp04-bench $HOME\sp04-work\out\bench-p.txt `
+    --out docs\evidence\AT-21-resources-win11-i5-16gb.md
+  $env:BOTTLE_TEST_DEVICE = "win11-i5-16gb"
+  $env:BOTTLE_RES_SAMPLES = "$HOME\res.csv"
+  $env:BOTTLE_RES_SP04_BENCH = "$HOME\sp04-work\out\bench-p.txt"
+  cargo test -p mog-core --test resource_budget at_21_device
+  ```
 - **B1, B2, B4.** As on macOS, with `--name Bottle --name msedgewebview2` and `$HOME\res.csv`
   (`rb sample-rss` reads `tasklist`). Type in Notepad for B4.
 - **B3.** For each scenario (2 min):
   ```
-  typeperf "\Process(Bottle*)\% Processor Time" "\Process(msedgewebview2*)\% Processor Time" -si 1 -sc 120 -f CSV -o $HOME\cpu-<scenario>.csv
+  typeperf "\Process(Bottle*)\% Processor Time" "\Process(msedgewebview2*)\% Processor Time" -si 1 -sc 120 -f CSV -y -o $HOME\cpu-<scenario>.csv
   rb import-typeperf --scenario <scenario> --mogs <N> --name Bottle --name msedgewebview2 --append $HOME\res.csv $HOME\cpu-<scenario>.csv
   ```
-  For `rive_paused` and `rive_animating`, also run PresentMon for 60 s at the same time:
+  For `rive_paused` and `rive_animating`, also run PresentMon for 60 s at the same time, in a
+  second PowerShell window that you open as administrator (PresentMon needs it):
   ```
   PresentMon.exe --output_file $HOME\pm-<scenario>.csv --timed 60 --terminate_after_timed
   rb import-presentmon --scenario <scenario> --mogs 8 --seconds 60 --name Bottle --name msedgewebview2 --append $HOME\res.csv $HOME\pm-<scenario>.csv

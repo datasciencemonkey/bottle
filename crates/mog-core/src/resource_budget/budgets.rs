@@ -199,7 +199,7 @@ fn nfr_04b(s: &Samples) -> BudgetResult {
 }
 
 /// The largest step per MOG between two measured MOG counts (N >= 1), as a note when it is over
-/// 40 MB. The row is the mean from N=1 to N=8 (ADR 0020); a large step is shown, not hidden.
+/// 40 MB. The row is the mean from N=1 to N=8 (ADR 0024); a large step is shown, not hidden.
 fn largest_step(s: &Samples) -> Option<String> {
     let mut peaks: Vec<(u8, u64)> = s
         .rss

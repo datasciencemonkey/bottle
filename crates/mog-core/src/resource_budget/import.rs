@@ -7,8 +7,12 @@
 //! - CPU: `powermetrics --samplers tasks` text (macOS, CPU ms/s) or a `typeperf` CSV of
 //!   `\Process(*)\% Processor Time` (Windows). Both give percent of one core.
 //! - PresentMon CSV: the presents per second of the Bottle processes (Rive paused or animating).
-//! - Parakeet: the SP-04 bench output (`long_secs=`, `peak_rss_mb=`) and `/usr/bin/time -l`.
-//!   The SP-04 import reads only these numeric keys; it never reads the transcript table.
+//! - Parakeet: the SP-04 bench output and `/usr/bin/time -l`. The import reads only the lines
+//!   that start with `long_secs=` or `peak_rss_mb=`, and the lines with "maximum resident set
+//!   size"; it takes only numbers from them and never reads the transcript table.
+//!
+//! The filters match process names. On a shared machine, the WebKit or WebView2 processes of
+//! other apps also count, so the device steps quit every other app first.
 //!
 //! The tool imports sum every process that the [`ProcessFilter`] names. The sums count shared
 //! pages more than once, so they are on the safe side of a limit.

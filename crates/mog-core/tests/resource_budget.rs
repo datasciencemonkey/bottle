@@ -90,7 +90,7 @@ fn at_21_budget_ids_match_the_nfr_rows() {
         ]
     );
     assert!(results.iter().all(|r| r.outcome == Outcome::NoData));
-    // The minimums are part of the method (docs/tests/RESOURCE-BENCH.md, ADR 0020).
+    // The minimums are part of the method (docs/tests/RESOURCE-BENCH.md, ADR 0024).
     assert_eq!((MIN_RSS_SAMPLES, MIN_CPU_SAMPLES), (5, 60));
     assert_eq!(MIN_CLIP_SECS, 240.0);
     assert!(evaluate("NFR-99", &Samples::default()).is_none());
@@ -137,7 +137,7 @@ fn nfr_04b_each_extra_mog_within_40_mb_measured_with_8() {
     let r = evaluate("NFR-04b", &s).unwrap();
     assert_eq!(r.outcome, Outcome::NoData);
     assert!(r.note.unwrap().contains("N=8"));
-    // The row is the mean (ADR 0020), but a large measured step shows as a note.
+    // The row is the mean (ADR 0024), but a large measured step shows as a note.
     let s = Samples {
         rss: vec![rss(1, 180), rss(2, 230), rss(8, 180 + 7 * 30)],
         ..Samples::default()
@@ -591,6 +591,15 @@ fn at_21_sample_file_from_powershell_utf16_or_a_bom_decodes() {
         decode_text(&[0xFF, 0xFE, 0x41]).is_err(),
         "odd UTF-16 length"
     );
+    // The SP-04 bench output of run.ps1 (Tee-Object in PowerShell 5.1) is UTF-16LE.
+    let mut bench = vec![0xFF, 0xFE];
+    bench.extend(
+        fixture("sp04-bench-m3max.txt")
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes),
+    );
+    let run = parse_sp04_bench(&decode_text(&bench).unwrap()).unwrap();
+    assert_eq!((run.clip_secs, run.peak_bytes), (240.0, 1_910_500_000));
     assert!(decode_text(&[0xC3, 0x28]).is_err(), "bad UTF-8");
 }
 
@@ -707,7 +716,9 @@ fn at_21_device_resource_samples_meet_the_budgets() {
     let bytes = std::fs::read(&path).expect("read the sample file");
     let mut s = parse_csv(&decode_text(&bytes).expect("text file")).expect("valid sample file");
     if let Some(bench) = env(ENV_SP04_BENCH) {
-        let text = std::fs::read_to_string(&bench).expect("read the SP-04 bench output");
+        // run.ps1 writes UTF-16 in Windows PowerShell 5.1 (Tee-Object), so decode like the runner.
+        let bytes = std::fs::read(&bench).expect("read the SP-04 bench output");
+        let text = decode_text(&bytes).expect("SP-04 bench text");
         s.parakeet = Some(parse_sp04_bench(&text).expect("SP-04 bench output"));
     }
     for r in evaluate_all(&s) {

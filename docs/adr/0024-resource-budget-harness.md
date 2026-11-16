@@ -1,4 +1,4 @@
-# ADR 0020: The memory and idle CPU budgets are a mog-core harness with test doubles
+# ADR 0024: The memory and idle CPU budgets are a mog-core harness with test doubles
 
 - Status: Accepted
 - Date: 2026-11-16
