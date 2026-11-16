@@ -4,9 +4,11 @@
 #   bash spikes/sp-04/run.sh            # from the repository root
 #   SP04_PURGE=1 bash spikes/sp-04/run.sh   # also measure a cold-file-cache load (asks for sudo)
 #
-# Needs: Rust stable (1.88 or later), curl, shasum, say, /usr/bin/time. About 1 GB of downloads
-# go into $SP04_WORK (default ~/sp04-work). Nothing from $SP04_WORK is committed.
-# Exit code: 0 = all four SP-04 criteria pass on this machine, 1 = one or more fail, 2 = error.
+# Needs: Rust stable (1.88 or later), curl, shasum, say, /usr/bin/time. The files
+# go into $SP04_WORK (default ~/sp04-work): 0.51 GB of downloads. Nothing from $SP04_WORK is committed.
+# Exit code: 0 = every SP-04 criterion passes on this machine (10 s p95, tail p95, peak RSS, the
+# in-process load and every fresh-process load in load.txt, cold load included), 1 = one or more
+# fail, 2 = error (a download, build, test, load run or clip length failed).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -71,7 +73,17 @@ cd "$WORK/out"
 if [ "${SP04_PURGE:-0}" = "1" ]; then
   sudo purge && echo "file cache purged (cold load next)"
 fi
-for i in 1 2 3 4 5; do "$BIN" load --model-dir "$M" --threads "$P" || true; done | tee load.txt
+: > load.txt
+LOAD_RC=0
+set +e
+for i in 1 2 3 4 5; do
+  # Each run is a fresh process. Exit 1 = load over 3 s, 2 = load error.
+  "$BIN" load --model-dir "$M" --threads "$P" | tee -a load.txt
+  rc=${PIPESTATUS[0]}
+  if [ "$rc" -ne 0 ]; then echo "load run $i failed the criterion or errored (exit $rc)"; [ "$rc" -gt "$LOAD_RC" ] && LOAD_RC=$rc; fi
+done
+[ "$(grep -c '^load_ms=' load.txt)" -eq 5 ] || { echo "a load run printed no load_ms"; LOAD_RC=2; }
+set -e
 
 echo "== 6. bench, threads = P-cores ($P)"
 set +e
@@ -85,4 +97,7 @@ set -e
 uptime
 echo "outputs: $WORK/out (paste load.txt, bench-p.txt, bench-all.txt and time-*.txt into the issue)"
 echo "pass rule: the 'SP04_RESULT' line of bench-p.txt is PASS and every load.txt load_ms <= 3000"
-exit "$RC"
+FINAL=$RC
+[ "$LOAD_RC" -gt "$FINAL" ] && FINAL=$LOAD_RC
+echo "bench exit=$RC load exit=$LOAD_RC overall exit=$FINAL (0 pass, 1 fail, 2 error)"
+exit "$FINAL"

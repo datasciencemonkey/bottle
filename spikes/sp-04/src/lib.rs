@@ -171,6 +171,13 @@ pub fn pad_to_secs(samples: &[f32], secs: f64) -> Vec<f32> {
     out
 }
 
+/// Seconds by which `samples` is longer than `nominal_secs`, if that is more than `tol_secs`.
+/// The bench uses it to warn when a "10 s" clip is not 10 s.
+pub fn excess_secs(samples: &[f32], nominal_secs: f64, tol_secs: f64) -> Option<f64> {
+    let excess = samples.len() as f64 / f64::from(SAMPLE_RATE) - nominal_secs;
+    (excess > tol_secs).then_some(excess)
+}
+
 /// Split into (head, tail): the tail is the last `tail_secs` seconds (or all audio if shorter).
 pub fn split_tail(samples: &[f32], tail_secs: f64) -> (&[f32], &[f32]) {
     let tail = ((tail_secs * f64::from(SAMPLE_RATE)).round() as usize).min(samples.len());

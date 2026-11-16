@@ -1,8 +1,8 @@
 //! SP-04 (#44) tests. Names carry the requirement ID so the coverage tools pick them up.
 
 use sp04_bench::{
-    p_core_count, pad_to_secs, parse_wav, peak_rss_bytes, percentile, read_wav, split_tail, stats,
-    wer, Engine, WavError, SAMPLE_RATE,
+    excess_secs, p_core_count, pad_to_secs, parse_wav, peak_rss_bytes, percentile, read_wav,
+    split_tail, stats, wer, Engine, WavError, SAMPLE_RATE,
 };
 use std::path::PathBuf;
 
@@ -140,6 +140,15 @@ fn sp_04_pad_to_secs_adds_trailing_silence_only() {
     assert_eq!(p[8_000], 0.0);
     let long = vec![0.1f32; 40_000];
     assert_eq!(pad_to_secs(&long, 2.0).len(), 40_000);
+}
+
+#[test]
+fn sp_04_clip_length_check_flags_long_clips() {
+    let ten = vec![0.0f32; 160_320]; // 10.02 s: inside the 0.2 s tolerance
+    assert_eq!(excess_secs(&ten, 10.0, 0.2), None);
+    let long = vec![0.0f32; 168_000]; // 10.5 s
+    let e = excess_secs(&long, 10.0, 0.2).expect("over length");
+    assert!((e - 0.5).abs() < 1e-9);
 }
 
 #[test]

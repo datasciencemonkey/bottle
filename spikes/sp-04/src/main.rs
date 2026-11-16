@@ -6,8 +6,8 @@
 //!                  [--platform mac|windows]
 
 use sp04_bench::{
-    p_core_count, pad_to_secs, peak_rss_bytes, read_wav, split_tail, stats, wer, Engine, Stats,
-    SAMPLE_RATE,
+    excess_secs, p_core_count, pad_to_secs, peak_rss_bytes, read_wav, split_tail, stats, wer,
+    Engine, Stats, SAMPLE_RATE,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -19,6 +19,8 @@ const CLIP_SECS: [u32; 4] = [2, 5, 10, 30];
 const POST_ROLL_SECS: f64 = 0.120;
 /// Length of the closed VAD segment decoded just before the tail.
 const PREV_SEGMENT_SECS: f64 = 5.0;
+/// A clip may be this much longer than its nominal length (the 10 s say(1) clip is 10.02 s).
+const LENGTH_TOLERANCE_SECS: f64 = 0.2;
 const LOAD_LIMIT_MS: f64 = 3_000.0;
 const TAIL_LIMIT_MS: f64 = 400.0;
 const RSS_LIMIT_BYTES: u64 = 1_000_000_000;
@@ -153,10 +155,18 @@ fn bench(args: &Args) -> Result<bool, String> {
     let mut p95_10s = f64::NAN;
     let mut texts = Vec::new();
     let mut speech: HashMap<u32, Vec<f32>> = HashMap::new();
+    let mut length_ok = true;
     for secs in CLIP_SECS {
         let path = audio.join(format!("clip_{secs}s.wav"));
         let raw = read_wav(&path).map_err(|e| e.to_string())?;
         let clip = pad_to_secs(&raw, f64::from(secs));
+        if let Some(e) = excess_secs(&raw, f64::from(secs), LENGTH_TOLERANCE_SECS) {
+            println!(
+                "WARNING: clip_{secs}s.wav is {e:.2} s longer than {secs} s; its row is not a {secs} s measurement. \
+                 Make the clip shorter (faster speech rate) and run again."
+            );
+            length_ok = false;
+        }
         let dur = clip.len() as f64 / f64::from(SAMPLE_RATE);
         for _ in 0..warmup {
             engine.transcribe(&clip);
@@ -271,7 +281,7 @@ fn bench(args: &Args) -> Result<bool, String> {
     let checks = [
         ("10 s p95", p95_10s, limit_10s, "ms"),
         (
-            &*format!("tail p95 ({tail_primary} s tail)"),
+            &*format!("tail p95 ({tail_primary} s tail; CONDITIONAL on the PTT VAD, #283)"),
             primary_tail_p95,
             TAIL_LIMIT_MS,
             "ms",
@@ -288,7 +298,17 @@ fn bench(args: &Args) -> Result<bool, String> {
             verdict(ok)
         );
     }
+    // If the PTT VAD closes no segment before key-up (for example the R2 15-20 s target), the
+    // tail is the whole utterance: this row shows that case. It is not part of SP04_RESULT.
+    println!(
+        "| tail p95 if the tail is the whole 10 s utterance (informational, #283) | {p95_10s:.1} ms | <= {TAIL_LIMIT_MS:.0} ms | {} |",
+        verdict(p95_10s <= TAIL_LIMIT_MS)
+    );
     println!();
+    if !length_ok {
+        println!("SP04_RESULT INVALID (a clip is longer than its nominal length)");
+        return Err("a clip is longer than its nominal length; see the WARNING lines".into());
+    }
     println!("SP04_RESULT {}", verdict(all));
     Ok(all)
 }
