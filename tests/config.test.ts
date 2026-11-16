@@ -17,6 +17,10 @@ describe('front-end package rules', () => {
     expect(forbidden).toEqual([]);
   });
 
+  it('[NFR-16b] no @rive-app/webgl package (the runtime choice belongs to SP-01 and #169)', () => {
+    expect(deps).not.toContain('@rive-app/webgl');
+  });
+
   it('[MB-10a] [MB-10c] the npm package is named bottle with no MOG in it', () => {
     expect(pkg.name).toBe('bottle');
     expect(pkg.name.toLowerCase()).not.toContain('mog');

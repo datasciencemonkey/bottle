@@ -221,14 +221,16 @@ fn arc_4_no_window_gets_plugin_permissions() {
 
 #[test]
 fn arc_4_no_forbidden_plugin_crates() {
-    let manifest = read(&app_dir().join("Cargo.toml"));
-    for line in manifest
+    // Cargo.lock covers every crate of the workspace, including mog-core and its deps.
+    let lock = read(&repo_root().join("Cargo.lock"));
+    for name in lock
         .lines()
-        .filter(|l| !l.trim_start().starts_with('#'))
+        .filter_map(|l| l.strip_prefix("name = \""))
+        .map(|l| l.trim_end_matches('"'))
     {
         assert!(
-            !line.contains("tauri-plugin-"),
-            "no Tauri plugin crates in the skeleton: {line}"
+            !name.starts_with("tauri-plugin-"),
+            "no Tauri plugin crates in the skeleton: {name}"
         );
     }
 }
@@ -251,6 +253,10 @@ fn arc_4_views_get_no_brain_permissions() {
 }
 
 // ---------- MB-10a / MB-10c: product name Bottle, no MOG in package or bundle IDs ----------
+//
+// MB-10c scope (ADR 0001): the bundle ID, the product name, the npm package and the app crate.
+// The internal crates `mog-core` and `mog-core-ffi` are named by ARC-1, are `publish = false`
+// and never ship as a package or bundle ID, so they are out of scope.
 
 fn has_banned_name(s: &str) -> bool {
     let l = s.to_lowercase();
@@ -276,7 +282,8 @@ fn mb_10a_product_name_is_bottle() {
 fn mb_10c_no_mog_in_bundle_or_package_ids() {
     let conf = tauri_conf();
     let identifier = conf["identifier"].as_str().unwrap();
-    assert_eq!(identifier, "com.databricks.labs.bottle");
+    // B0 and Appendix C: the bundle ID equals the macOS MDM domain.
+    assert_eq!(identifier, "com.databricks.bottle");
     let package = json(&repo_root().join("package.json"));
     let app_manifest = read(&app_dir().join("Cargo.toml"));
     for id in [
@@ -287,5 +294,14 @@ fn mb_10c_no_mog_in_bundle_or_package_ids() {
         assert!(!id.to_lowercase().contains("mog"), "{id} contains MOG");
     }
     assert!(app_manifest.contains("name = \"bottle\""));
+    for internal in [
+        "crates/mog-core/Cargo.toml",
+        "crates/mog-core-ffi/Cargo.toml",
+    ] {
+        assert!(
+            read(&repo_root().join(internal)).contains("publish.workspace = true"),
+            "{internal} must stay unpublished to be out of MB-10c scope"
+        );
+    }
     assert!(app_manifest.contains("name = \"bottle_lib\""));
 }

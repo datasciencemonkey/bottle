@@ -2,10 +2,10 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Bottle",
   "version": "0.1.0",
-  "identifier": "com.databricks.labs.bottle",
+  "identifier": "com.databricks.bottle",
   "build": {
     "beforeDevCommand": "pnpm dev",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://127.0.0.1:1420",
     "beforeBuildCommand": "pnpm build",
     "frontendDist": "../dist"
   },
@@ -14,7 +14,7 @@
     "withGlobalTauri": false,
     "security": {
       "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; script-src 'self' 'wasm-unsafe-eval'",
-      "devCsp": "default-src 'self'; connect-src ipc: http://ipc.localhost ws://localhost:1420; script-src 'self' 'wasm-unsafe-eval'",
+      "devCsp": "default-src 'self'; connect-src ipc: http://ipc.localhost ws://127.0.0.1:1420; script-src 'self' 'wasm-unsafe-eval'",
       "capabilities": ["brain", "hub", "mog", "card"]
     }
   },

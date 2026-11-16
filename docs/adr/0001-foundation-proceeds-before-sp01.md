@@ -29,3 +29,9 @@ The window model (labels `brain`, `hub`, `mog-<id>`, `card-<id>`), the CSP, the 
 - On macOS the MOG window is not transparent until SP-01 or #11 applies its result. This is a known gap, marked `TODO(#10)` in code.
 - #169 (pin the Tauri shell and Rive runtime) stays open. It adds the Rive package and the lockfile checks after SP-01. The skeleton does not contradict #169: Tauri is pinned at `2.12.5` or later, and no `@rive-app/webgl` exists.
 - If SP-01 fails all the way to the `macOSPrivateApi` fallback, the change is one Cargo feature, one config key and the body of `transparency::apply`.
+
+## Also decided in the skeleton (#221)
+
+- **Bundle ID.** The bundle ID is `com.databricks.bottle`. It equals the macOS MDM domain of B0 and Appendix C, so managed preferences and the app use one identifier.
+- **MB-10c scope.** MB-10c applies to the bundle ID, the product name, the npm package (`bottle`) and the app crate (`bottle`). The internal Rust crates `mog-core` and `mog-core-ffi` keep the names that ARC-1 gives them. They are `publish = false` and never ship as a package or bundle ID, so they are out of MB-10c scope. The test `mb_10c_no_mog_in_bundle_or_package_ids` checks both rules.
+- **Windows 11.** This Mac cannot build or start the Windows app. The Windows part of the #221 acceptance criteria moves to a `needs:windows` follow-up issue with the steps.
