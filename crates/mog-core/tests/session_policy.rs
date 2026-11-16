@@ -25,28 +25,58 @@ fn parse(v: Value) -> Result<SessionPolicy, serde_json::Error> {
 
 fn fixed_error(field: &str, value: u64) -> SessionPolicyError {
     let e = parse(with(field, value)).expect_err("a value off the spec must be rejected");
-    // The typed error is reachable through `validate` on the same values.
-    let mut p: SessionPolicy = serde_json::from_value(spec()).unwrap();
-    match field {
-        "checkInAtMin" => p.check_in_at_min = value as u32,
-        "softCapMin" => p.soft_cap_min = value as u32,
-        "extendMin" => p.extend_min = value as u32,
-        "silenceNudgeMin" => p.silence_nudge_min = value as u32,
-        "silenceStopMin" => p.silence_stop_min = value as u32,
-        "lockStopMin" => p.lock_stop_min = value as u32,
-        "holdMaxSec" => p.hold_max_sec = value as u32,
-        "handsFreeMaxMin" => p.hands_free_max_min = value as u32,
-        other => panic!("unknown field {other}"),
-    }
-    let err = p.validate().expect_err("validate must reject the value");
     assert!(e.to_string().contains(field), "message names {field}: {e}");
-    err
+    // The typed error is reachable through `validate` on the same value.
+    let v = u32::try_from(value).expect("test value fits u32");
+    let ok: SessionPolicy = serde_json::from_value(spec()).unwrap();
+    let p = match field {
+        "checkInAtMin" => SessionPolicy {
+            check_in_at_min: v,
+            ..ok
+        },
+        "softCapMin" => SessionPolicy {
+            soft_cap_min: v,
+            ..ok
+        },
+        "extendMin" => SessionPolicy {
+            extend_min: v,
+            ..ok
+        },
+        "silenceNudgeMin" => SessionPolicy {
+            silence_nudge_min: v,
+            ..ok
+        },
+        "silenceStopMin" => SessionPolicy {
+            silence_stop_min: v,
+            ..ok
+        },
+        "lockStopMin" => SessionPolicy {
+            lock_stop_min: v,
+            ..ok
+        },
+        "holdMaxSec" => SessionPolicy {
+            hold_max_sec: v,
+            ..ok
+        },
+        "handsFreeMaxMin" => SessionPolicy {
+            hands_free_max_min: v,
+            ..ok
+        },
+        other => panic!("unknown field {other}"),
+    };
+    p.validate().expect_err("validate must reject the value")
 }
 
 #[test]
 fn cap_74b_spec_policy_is_accepted() {
     let p = parse(spec()).expect("the spec values are valid");
     assert_eq!(p.validate(), Ok(()));
+}
+
+#[test]
+fn cap_74b_valid_policy_serializes_to_the_exact_spec_json() {
+    let p = parse(spec()).expect("the spec values are valid");
+    assert_eq!(serde_json::to_value(&p).unwrap(), spec());
 }
 
 #[test]
