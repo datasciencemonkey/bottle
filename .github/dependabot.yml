@@ -12,30 +12,30 @@ updates:
     schedule:
       interval: weekly
       day: monday
-      time: "09:00"
+      time: '09:00'
       timezone: America/New_York
     open-pull-requests-limit: 1
     groups:
       github-actions:
         patterns:
-          - "*"
+          - '*'
 
   - package-ecosystem: npm
     directory: /
     schedule:
       interval: weekly
       day: monday
-      time: "09:15"
+      time: '09:15'
       timezone: America/New_York
     open-pull-requests-limit: 2
     versioning-strategy: increase-if-necessary
     ignore:
-      - dependency-name: "@tauri-apps/*"
-      - dependency-name: "@rive-app/*"
+      - dependency-name: '@tauri-apps/*'
+      - dependency-name: '@rive-app/*'
     groups:
       npm-minor-and-patch:
         patterns:
-          - "*"
+          - '*'
         update-types:
           - minor
           - patch
@@ -45,17 +45,17 @@ updates:
     schedule:
       interval: weekly
       day: monday
-      time: "09:30"
+      time: '09:30'
       timezone: America/New_York
     open-pull-requests-limit: 2
     ignore:
-      - dependency-name: "tauri"
-      - dependency-name: "tauri-build"
-      - dependency-name: "tauri-*"
+      - dependency-name: 'tauri'
+      - dependency-name: 'tauri-build'
+      - dependency-name: 'tauri-*'
     groups:
       cargo-minor-and-patch:
         patterns:
-          - "*"
+          - '*'
         update-types:
           - minor
           - patch
