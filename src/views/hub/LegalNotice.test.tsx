@@ -25,6 +25,12 @@ const box = (el: HTMLElement) => must(el.querySelector<HTMLInputElement>('input[
 const cont = (el: HTMLElement) =>
   must([...el.querySelectorAll('button')].find((b) => b.textContent === 'Continue'));
 
+/** The notice emits of the hub: drop the MOG list request `mogs.ready` (#26). */
+const noticeEmits = () =>
+  viewEmits().filter(
+    (e) => (e as { payload?: { action?: unknown } }).payload?.action !== 'mogs.ready',
+  );
+
 describe('V1 hub: first-run legal notice (#27)', () => {
   beforeEach(() => {
     tauri.reset();
@@ -35,7 +41,7 @@ describe('V1 hub: first-run legal notice (#27)', () => {
     await render(<Hub />);
     expect(tauri.listeners(HUB_NOTICE_EVENT)).toBe(1);
     expect(tauri.listenOptions.get(HUB_NOTICE_EVENT)).toEqual([{ target: 'hub' }]);
-    expect(viewEmits()).toEqual([
+    expect(noticeEmits()).toEqual([
       { mogId: HUB_SCOPE, kind: 'click', payload: { action: 'notice.ready' } },
     ]);
   });
@@ -70,7 +76,7 @@ describe('V1 hub: first-run legal notice (#27)', () => {
     expect(box(el).closest('label')?.textContent).toBe(CHECKBOX);
     expect(cont(el).disabled).toBe(true);
     await act(async () => cont(el).click());
-    expect(viewEmits()).toHaveLength(1); // only notice.ready
+    expect(noticeEmits()).toHaveLength(1); // only notice.ready
     await act(async () => box(el).click());
     expect(cont(el).disabled).toBe(false);
     await act(async () => box(el).click());
