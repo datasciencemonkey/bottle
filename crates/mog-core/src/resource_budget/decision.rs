@@ -7,12 +7,16 @@
 //! The rule:
 //! 1. SP-02 has not run (a criterion has no data): [`WindowPlan::Undecided`], TODO(#79).
 //! 2. SP-02 passes: [`WindowPlan::Cap8`], one panel per MOG, up to 8 MOGs.
-//! 3. SP-02 fails, and 4 MOGs fit (N=1 <= 250 MB, (N=4 - N=1) / 3 <= 40 MB), no CPU row is over
-//!    and there are 0 focus steals: [`WindowPlan::Cap4ThenOverlay`]. The default cap is 4 MOG
-//!    panels; more MOGs go into the D73 overlay.
-//! 4. All other fails: [`WindowPlan::OverlayPerDisplay`]. A cap does not stop focus steals.
+//! 3. SP-02 fails with focus steals, or 4 MOGs do not fit (N=1 <= 250 MB and
+//!    (N=4 - N=1) / 3 <= 40 MB, with enough samples), or a CPU row is over:
+//!    [`WindowPlan::OverlayPerDisplay`]. A cap does not stop focus steals.
+//! 4. SP-02 fails, 4 MOGs fit, both CPU rows are within and there are 0 focus steals:
+//!    [`WindowPlan::Cap4ThenOverlay`]. The default cap is 4 MOG panels; more MOGs go into the
+//!    D73 overlay.
+//! 5. SP-02 fails, 4 MOGs fit, but a CPU row or the focus steals have no data:
+//!    [`WindowPlan::Undecided`]. The plan never picks cap 4 from missing data (TODO(#79)).
 
-use super::budgets::{evaluate, Outcome};
+use super::budgets::{evaluate, Outcome, MIN_RSS_SAMPLES};
 use super::samples::{Samples, MB};
 
 /// The SP-02 result from the samples.
@@ -69,6 +73,10 @@ impl WindowPlan {
 const SP02_ROWS: [&str; 4] = ["NFR-04a", "NFR-04b", "NFR-06a", "NFR-06b"];
 const CPU_ROWS: [&str; 2] = ["NFR-06a", "NFR-06b"];
 
+fn within_row(s: &Samples, id: &str) -> bool {
+    evaluate(id, s).is_some_and(|r| r.outcome == Outcome::Within)
+}
+
 fn over(s: &Samples, id: &str) -> bool {
     evaluate(id, s).is_some_and(|r| r.outcome == Outcome::Over)
 }
@@ -93,7 +101,11 @@ pub fn sp02(s: &Samples) -> Sp02Result {
             )),
         }
     }
-    match s.rss_run(8).and_then(|r| r.peak()) {
+    match s
+        .rss_run(8)
+        .filter(|r| r.bytes.len() >= MIN_RSS_SAMPLES)
+        .and_then(|r| r.peak())
+    {
         Some(peak) if peak > 550 * MB => fails.push(format!(
             "8 MOGs use {:.1} MB; SP-02 needs 550 MB or less without STT",
             peak as f64 / MB as f64
@@ -118,7 +130,7 @@ pub fn sp02(s: &Samples) -> Sp02Result {
 fn four_fit(s: &Samples) -> bool {
     let peak = |n: u8| {
         s.rss_run(n)
-            .filter(|r| r.bytes.len() >= super::budgets::MIN_RSS_SAMPLES)
+            .filter(|r| r.bytes.len() >= MIN_RSS_SAMPLES)
             .and_then(|r| r.peak())
     };
     match (peak(1), peak(4)) {
@@ -145,15 +157,28 @@ pub fn window_plan(s: &Samples) -> (WindowPlan, String) {
                     WindowPlan::OverlayPerDisplay,
                     format!("SP-02 fails ({why}); a cap does not stop focus steals"),
                 )
-            } else if four_fit(s) && !CPU_ROWS.iter().any(|id| over(s, id)) {
-                (
-                    WindowPlan::Cap4ThenOverlay,
-                    format!("SP-02 fails ({why}); 4 MOGs fit the memory budget"),
-                )
-            } else {
+            } else if !four_fit(s) {
                 (
                     WindowPlan::OverlayPerDisplay,
                     format!("SP-02 fails ({why}); 4 MOGs do not fit, or have no N=4 run"),
+                )
+            } else if CPU_ROWS.iter().any(|id| over(s, id)) {
+                (
+                    WindowPlan::OverlayPerDisplay,
+                    format!("SP-02 fails ({why}); a CPU row is over"),
+                )
+            } else if s.focus_steals != Some(0) || !CPU_ROWS.iter().all(|id| within_row(s, id)) {
+                (
+                    WindowPlan::Undecided,
+                    format!(
+                        "SP-02 fails ({why}); 4 MOGs fit, but cap 4 needs both CPU rows within \
+                         and 0 focus steals, TODO(#79)"
+                    ),
+                )
+            } else {
+                (
+                    WindowPlan::Cap4ThenOverlay,
+                    format!("SP-02 fails ({why}); 4 MOGs fit the memory budget"),
                 )
             }
         }

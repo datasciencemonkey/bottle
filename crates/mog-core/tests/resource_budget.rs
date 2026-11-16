@@ -17,7 +17,7 @@ use mog_core::resource_budget::import::{
 use mog_core::resource_budget::{
     collect_rss, evaluate, evaluate_all, sp02, window_plan, CpuRun, CpuScenario, Outcome,
     ParakeetRun, Report, RssRun, RunInfo, Samples, Source, Sp02Result, WindowPlan, IDS, MB,
-    MIN_CPU_SAMPLES, MIN_RSS_SAMPLES,
+    MIN_CLIP_SECS, MIN_CPU_SAMPLES, MIN_RSS_SAMPLES,
 };
 use mog_core::testkit::{self, Fixture, ReferenceDevice};
 
@@ -90,6 +90,9 @@ fn at_21_budget_ids_match_the_nfr_rows() {
         ]
     );
     assert!(results.iter().all(|r| r.outcome == Outcome::NoData));
+    // The minimums are part of the method (docs/tests/RESOURCE-BENCH.md, ADR 0020).
+    assert_eq!((MIN_RSS_SAMPLES, MIN_CPU_SAMPLES), (5, 60));
+    assert_eq!(MIN_CLIP_SECS, 240.0);
     assert!(evaluate("NFR-99", &Samples::default()).is_none());
 }
 
@@ -134,6 +137,14 @@ fn nfr_04b_each_extra_mog_within_40_mb_measured_with_8() {
     let r = evaluate("NFR-04b", &s).unwrap();
     assert_eq!(r.outcome, Outcome::NoData);
     assert!(r.note.unwrap().contains("N=8"));
+    // The row is the mean (ADR 0020), but a large measured step shows as a note.
+    let s = Samples {
+        rss: vec![rss(1, 180), rss(2, 230), rss(8, 180 + 7 * 30)],
+        ..Samples::default()
+    };
+    let r = evaluate("NFR-04b", &s).unwrap();
+    assert_eq!(r.outcome, Outcome::Within);
+    assert!(r.note.unwrap().contains("N=1 to N=2 adds 50.0 MB"));
 }
 
 #[test]
@@ -205,8 +216,14 @@ fn nfr_06a_idle_cpu_within_1_percent_with_rive_paused() {
     assert_eq!(outcome("NFR-06a", &s), Outcome::Within);
     s.cpu[0].percent = vec![1.01; MIN_CPU_SAMPLES];
     assert_eq!(outcome("NFR-06a", &s), Outcome::Over);
-    s.cpu[0].percent = vec![0.1; MIN_CPU_SAMPLES - 1];
+    s.cpu[0].percent = vec![0.1; 59];
     assert_eq!(outcome("NFR-06a", &s), Outcome::TooFew);
+    // With 0 MOGs no Rive is paused: the run does not measure the row.
+    let none = Samples {
+        cpu: vec![cpu(CpuScenario::RivePaused, 0, 0.1)],
+        ..Samples::default()
+    };
+    assert_eq!(outcome("NFR-06a", &none), Outcome::Invalid);
     // PresentMon shows frames, so Rive is not paused: the run does not count.
     s.cpu[0].percent = vec![0.1; MIN_CPU_SAMPLES];
     s.cpu[0].presents_per_s = Some(30.0);
@@ -222,7 +239,7 @@ fn nfr_06b_idle_cpu_within_3_percent_with_8_animating_mogs() {
         ..Samples::default()
     };
     assert_eq!(outcome("NFR-06b", &s), Outcome::Within);
-    s.cpu[0].percent = vec![3.1; MIN_CPU_SAMPLES];
+    s.cpu[0].percent = vec![3.01; MIN_CPU_SAMPLES];
     assert_eq!(outcome("NFR-06b", &s), Outcome::Over);
     // The row names 8 MOGs.
     let s4 = Samples {
@@ -267,6 +284,17 @@ fn nfr_09_hidden_panels_and_hit_poll_cost_less_than_0_2_percent() {
         ..Samples::default()
     };
     assert_eq!(outcome("NFR-09", &s), Outcome::NoData);
+    // A baseline with MOGs is not the baseline: a negative cost must not look within.
+    let s = Samples {
+        cpu: vec![
+            cpu(CpuScenario::Baseline, 8, 2.0),
+            cpu(CpuScenario::HiddenPanels, 8, 0.375),
+        ],
+        ..Samples::default()
+    };
+    let r = evaluate("NFR-09", &s).unwrap();
+    assert_eq!(r.outcome, Outcome::Invalid);
+    assert!(r.note.unwrap().contains("baseline"));
     // Hidden panels with 0 MOGs measure nothing.
     let s = Samples {
         cpu: vec![
@@ -323,6 +351,22 @@ fn d73_window_plan_is_cap_8_cap_4_or_one_overlay_per_display() {
     let mut steals = s.clone();
     steals.focus_steals = Some(2);
     assert_eq!(window_plan(&steals).0, WindowPlan::OverlayPerDisplay);
+
+    // 4 MOGs fit, but the focus steals or the CPU rows have no data: never cap 4 from no data.
+    let mut no_focus = cap4.clone();
+    no_focus.focus_steals = None;
+    assert_eq!(window_plan(&no_focus).0, WindowPlan::Undecided);
+    let mut no_cpu = cap4.clone();
+    no_cpu.cpu.clear();
+    assert_eq!(window_plan(&no_cpu).0, WindowPlan::Undecided);
+
+    // 4 MOGs fit, but a CPU row is over: the overlay applies.
+    let mut cpu_over = cap4.clone();
+    cpu_over.cpu = vec![
+        cpu(CpuScenario::RivePaused, 8, 0.5),
+        cpu(CpuScenario::RiveAnimating, 8, 4.0),
+    ];
+    assert_eq!(window_plan(&cpu_over).0, WindowPlan::OverlayPerDisplay);
 
     // SP-02 has not run: no decision (TODO(#79)).
     let (plan, why) = window_plan(&Samples::default());
@@ -506,6 +550,10 @@ fn sec_16b_samples_and_imports_hold_only_numbers() {
         assert!(!out.contains("sales dashboard"), "{out}");
         assert!(!out.contains("Open the"), "{out}");
     }
+    // Only lines that start with a key count: a key inside a table row is not read.
+    let text = "| 2 s | long_secs=999 peak_rss_mb=1 |\npeak_rss_mb=500.0 (in-process)\n";
+    let run = parse_sp04_bench(text).unwrap();
+    assert_eq!((run.clip_secs, run.peak_bytes), (0.0, 500 * MB));
     for line in csv.lines().skip(2) {
         let cols: Vec<_> = line.split(',').collect();
         assert_eq!(cols.len(), 4, "{line}");
@@ -571,6 +619,9 @@ fn nfr_06a_presentmon_import_gives_presents_per_second() {
         "no Application column"
     );
     assert!(parse_presentmon_csv(&fixture("presentmon.csv"), &f, 0.0).is_err());
+    // A wrong process name is an error, not 0 presents/s (that would look "paused").
+    let none = ProcessFilter::names(&["Nothing"]);
+    assert!(parse_presentmon_csv(&fixture("presentmon.csv"), &none, 2.0).is_err());
 }
 
 #[test]

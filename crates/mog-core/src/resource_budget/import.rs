@@ -414,13 +414,18 @@ pub fn parse_presentmon_csv(
                 .is_some_and(|a| filter.matches(a))
         })
         .count();
+    if n == 0 {
+        return Err(no_match("PresentMon"));
+    }
     Ok(n as f64 / seconds)
 }
 
+/// The value of `key=` in the last line that starts with `key=`. Only such lines are read, so
+/// the transcript table of the bench is never read.
 fn key_value(text: &str, key: &str) -> Option<f64> {
-    text.split_whitespace()
-        .filter_map(|tok| tok.strip_prefix(key)?.strip_prefix('='))
-        .filter_map(|v| v.parse::<f64>().ok())
+    text.lines()
+        .filter_map(|l| l.trim_start().strip_prefix(key)?.strip_prefix('='))
+        .filter_map(|v| v.split_whitespace().next()?.parse::<f64>().ok())
         .next_back()
 }
 

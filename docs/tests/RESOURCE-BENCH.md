@@ -25,8 +25,12 @@ rules as the latency benchmark (`docs/tests/LATENCY-BENCH.md`).
 - PresentMon gives presents per second, not CPU. It checks the run: more than 1 present/s in
   `rive_paused` means Rive is not paused; less than 10 present/s in `rive_animating` means Rive
   does not animate. Such a run is an `invalid run`, not `within`.
-- `baseline` is shell + brain with no MOG panel and the hit-poll off. `hidden_panels` has the
-  MOG panels hidden and the 30 Hz hit-poll on (TODO(#81): the hit-poll lands with #81).
+- `baseline` is shell + brain with no MOG panel (0 MOGs) and the hit-poll off. `hidden_panels`
+  has the MOG panels hidden (1 MOG or more) and the 30 Hz hit-poll on (TODO(#81): the hit-poll
+  lands with #81). `rive_paused` needs 1 MOG or more. A run that breaks these rules is an
+  `invalid run`.
+- NFR-04b is the mean from N=1 to N=8. When the N=2 or N=4 runs show a step of more than 40 MB
+  per MOG, the report shows that step as a note.
 
 ## SP-02 and the D73 window plan
 
@@ -34,10 +38,13 @@ The report also gives the SP-02 result from the same samples and the window plan
 
 1. SP-02 passes (NFR-04a, NFR-04b, 8 MOGs ≤ 550 MB, NFR-06a, NFR-06b, 0 focus steals): cap 8,
    one panel per MOG.
-2. SP-02 fails, but 4 MOGs fit (N=1 ≤ 250 MB and (N=4 − N=1) / 3 ≤ 40 MB), no CPU row is over
-   and there are 0 focus steals: a default cap of 4 MOG panels; more MOGs go into the D73 overlay.
-3. Any other fail: one overlay window per display hosts all mascots (D73).
-4. A criterion with no data: undecided. SP-02 is open: TODO(#79).
+2. SP-02 fails with focus steals, or 4 MOGs do not fit (N=1 ≤ 250 MB and (N=4 − N=1) / 3 ≤ 40 MB),
+   or a CPU row is over: one overlay window per display hosts all mascots (D73).
+3. SP-02 fails, 4 MOGs fit, NFR-06a and NFR-06b are within, and there are 0 focus steals: a
+   default cap of 4 MOG panels; more MOGs go into the D73 overlay.
+4. SP-02 fails, 4 MOGs fit, but a CPU row or the focus steals have no data: undecided. The plan
+   never picks cap 4 from missing data.
+5. SP-02 has not run (a criterion has no data and none fails): undecided. SP-02 is open: TODO(#79).
 
 ## Rules for a pass
 
@@ -74,8 +81,9 @@ and Windows, so the fallback chain of section 8.3 (SP-04 row) applies.
   transcript, audio or token can go in (SEC-16b, SEC-16c).
 - `budgets`: the rows. `decision`: SP-02 and the window plan. `report`: the evidence file.
 - `import`: the sample CSV and the tool outputs (`ps`, `tasklist`, `powermetrics`, `typeperf`,
-  PresentMon, the SP-04 bench, `/usr/bin/time -l`). The SP-04 import reads only `long_secs=`
-  and `peak_rss_mb=`; it never reads the transcript table of the bench.
+  PresentMon, the SP-04 bench, `/usr/bin/time -l`). The SP-04 import reads only the lines that
+  start with `long_secs=` or `peak_rss_mb=`, so it never reads the transcript table of the bench.
+  Every import gives an error when no process matches the names (not a value of 0).
 - `sampler`: `collect_rss` on any `RssProbe`. The tests use `ScriptedProbe` and the #229 `SimClock`.
 - `cargo run -p mog-core --example resource_bench -- --help`: the runner.
 
@@ -108,11 +116,20 @@ The device test skips and prints the reason when the fixture is not set:
 
 A skipped test is never a pass. Only a person on a reference device sets these variables.
 
-## Device steps (a person, about 30 min per device)
+## Device steps (a person)
 
 Do not run these steps on a machine that is not a reference device. They need no Databricks
 profile. Never put a token in a file. Quit every other app first (on macOS, Safari and Mail
 too: they share the WebKit process names).
+
+The steps have two parts. Each part takes about 30 min per device.
+
+- **Part A: Parakeet (NFR-05).** You can run it now. Steps 1, 6 and 7 below (Windows: the same
+  steps with `run.ps1`).
+- **Part B: memory and CPU (NFR-04a, NFR-04b, NFR-06a, NFR-06b, NFR-09).** It is BLOCKED until
+  the build can open N = 0, 1, 2, 4 and 8 MOGs and pause Rive (SP-02, TODO(#79)), and has the
+  30 Hz hit-poll (TODO(#81)). Steps 2 to 5 below. When Part B runs, write the report again with
+  the samples of both parts.
 
 Build the runner once in your Bottle checkout: `cargo build -p mog-core --example resource_bench`.
 Below, `rb` means `target/debug/examples/resource_bench` (`.exe` on Windows).
@@ -164,6 +181,7 @@ Names: `--name Bottle --name msedgewebview2` (below: `$NAMES`). Use PowerShell.
 3. For `rive_paused` and `rive_animating`, also record 60 s with PresentMon at the same time:
    `PresentMon.exe --output_file $HOME\pm-<scenario>.csv --timed 60 --terminate_after_timed`
    then `rb import-presentmon --scenario <scenario> --mogs 8 --seconds 60 $NAMES $HOME\pm-<scenario>.csv >> $HOME\res.csv`.
-4. Focus steals in Notepad as on macOS. Parakeet: `spikes/sp-04/run.ps1`.
+4. Focus steals in Notepad as on macOS. Parakeet: `spikes/sp-04/run.ps1`. It writes
+   `$HOME\sp04-work\out\bench-p.txt`: give that path to `--sp04-bench` and `BOTTLE_RES_SP04_BENCH`.
 5. `rb report --device win11-i5-16gb ...` and the device test as on macOS, with
    `--os "Windows 11 <version>"` and the hardware from `Get-ComputerInfo`.

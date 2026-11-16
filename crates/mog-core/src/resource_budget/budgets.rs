@@ -194,8 +194,34 @@ fn nfr_04b(s: &Samples) -> BudgetResult {
         one.0.bytes.len() + eight.0.bytes.len(),
         Some(format!("{per:.1} MB per extra MOG")),
         within(extra <= 7 * 40 * MB),
-        None,
+        largest_step(s),
     )
+}
+
+/// The largest step per MOG between two measured MOG counts (N >= 1), as a note when it is over
+/// 40 MB. The row is the mean from N=1 to N=8 (ADR 0020); a large step is shown, not hidden.
+fn largest_step(s: &Samples) -> Option<String> {
+    let mut peaks: Vec<(u8, u64)> = s
+        .rss
+        .iter()
+        .filter(|r| r.mogs >= 1 && r.bytes.len() >= MIN_RSS_SAMPLES)
+        .filter_map(|r| Some((r.mogs, r.peak()?)))
+        .collect();
+    peaks.sort_unstable();
+    peaks
+        .windows(2)
+        .map(|w| {
+            let per = w[1].1.saturating_sub(w[0].1) as f64 / f64::from(w[1].0 - w[0].0);
+            (per, w[0].0, w[1].0)
+        })
+        .filter(|(per, ..)| *per > 40.0 * MB as f64)
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(per, a, b)| {
+            format!(
+                "the step from N={a} to N={b} adds {:.1} MB per MOG",
+                per / MB as f64
+            )
+        })
 }
 
 fn nfr_05(s: &Samples) -> BudgetResult {
@@ -238,7 +264,16 @@ fn nfr_06a(s: &Samples) -> BudgetResult {
         Ok(v) => v,
     };
     let measured = Some(format!("{} mean", pct(mean)));
-    if let Some(fps) = run.and_then(|r| r.presents_per_s) {
+    let run = run.expect("cpu_mean checked the run");
+    if run.mogs == 0 {
+        return row.result(
+            n,
+            measured,
+            Outcome::Invalid,
+            Some("the rive_paused run has 0 MOGs, so no Rive is paused".into()),
+        );
+    }
+    if let Some(fps) = run.presents_per_s {
         if fps > PAUSED_MAX_PRESENTS_PER_S {
             return row.result(
                 n,
@@ -303,7 +338,8 @@ fn nfr_09(s: &Samples) -> BudgetResult {
         Err((o, why)) => return row.none(o, format!("{why}; the cost needs both runs")),
         Ok(v) => v,
     };
-    let (nb, mb_) = match cpu_mean(s.cpu_run(CpuScenario::Baseline), "baseline") {
+    let baseline = s.cpu_run(CpuScenario::Baseline);
+    let (nb, mb_) = match cpu_mean(baseline, "baseline") {
         Err((o, why)) => return row.none(o, format!("{why}; the cost needs both runs")),
         Ok(v) => v,
     };
@@ -315,6 +351,17 @@ fn nfr_09(s: &Samples) -> BudgetResult {
             measured,
             Outcome::Invalid,
             Some("the hidden_panels run has 0 MOGs, so it has no hidden panel".into()),
+        );
+    }
+    if let Some(b) = baseline.filter(|b| b.mogs != 0) {
+        return row.result(
+            nh + nb,
+            measured,
+            Outcome::Invalid,
+            Some(format!(
+                "the baseline run has {} MOGs; it needs 0 MOGs and the hit-poll off",
+                b.mogs
+            )),
         );
     }
     row.result(nh + nb, measured, within(delta < 0.2 - EPS), None)
