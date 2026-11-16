@@ -71,7 +71,13 @@ fn mog_08a_hub_holds_only_view_commands_and_the_4_5_hub_rows() {
             "hub holds {p}"
         );
     }
-    for brain_only in ["mcp_call", "dbx_http", "capture_start", "insert_text", "model_invoke"] {
+    for brain_only in [
+        "mcp_call",
+        "dbx_http",
+        "capture_start",
+        "insert_text",
+        "model_invoke",
+    ] {
         assert!(!app_commands(&capability("hub")).contains(&allow(brain_only)));
     }
 }
@@ -138,7 +144,10 @@ fn arc_3_window_host_reopen_is_idempotent_and_close_frees_a_slot() {
     assert!(ledger.open_mog("a").is_ok());
     assert_eq!(ledger.open_mog("a"), Ok(OpenOutcome::AlreadyOpen));
     assert!(ledger.open_mog("b").is_ok());
-    assert_eq!(ledger.open_mog("c"), Err(WindowError::CapReached { cap: 2 }));
+    assert_eq!(
+        ledger.open_mog("c"),
+        Err(WindowError::CapReached { cap: 2 })
+    );
     assert!(ledger.close_mog("a"));
     assert!(!ledger.close_mog("a"), "a second close is a no-op");
     assert!(ledger.open_mog("c").is_ok());
@@ -149,7 +158,11 @@ fn arc_3_window_host_rejects_ids_that_are_not_label_safe() {
     let mut ledger = WindowLedger::default();
     for bad in ["", "a/b", "a b", "x:y", &"x".repeat(65)] {
         assert_eq!(ledger.open_mog(bad), Err(WindowError::InvalidId), "{bad:?}");
-        assert_eq!(ledger.show_card(bad), Err(WindowError::InvalidId), "{bad:?}");
+        assert_eq!(
+            ledger.show_card(bad),
+            Err(WindowError::InvalidId),
+            "{bad:?}"
+        );
     }
     assert_eq!(ledger.active_mogs(), 0);
 }

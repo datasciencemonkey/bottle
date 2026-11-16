@@ -8,7 +8,7 @@ import { useEffect } from 'react';
 import type { Mood, MogId, MoodMapper } from '../shared/interfaces';
 import { call, EVENTS, type ViewEmitKind } from '../shared/ipc';
 
-/** `mog.view_state` payload: what the brain computed for one MOG. TODO(#8): move to the contract. */
+/** `mog.view_state` payload: what the brain computed for one MOG. TODO(#285): move to the contract. */
 export interface MogViewState {
   mogId: MogId;
   mood: Mood;
@@ -16,7 +16,7 @@ export interface MogViewState {
   level?: number;
 }
 
-/** `card.update` payload: what the card of one MOG shows. TODO(#85): move to the contract. */
+/** `card.update` payload: what the card of one MOG shows. TODO(#285): move to the contract. */
 export interface CardUpdate {
   mogId: MogId;
   blurbs: { id: string; text: string }[];
@@ -78,7 +78,9 @@ export function useViewEvent(
   useEffect(() => {
     let off: (() => void) | undefined;
     let gone = false;
-    void listen<unknown>(EVENTS[key].name, (e) => onPayload(e.payload)).then((u) => {
+    // ARC-5: only events sent to this window (`emitTo(<own label>)`), not those of other views.
+    const target = getCurrentWindow().label;
+    void listen<unknown>(EVENTS[key].name, (e) => onPayload(e.payload), { target }).then((u) => {
       if (gone) u();
       else off = u;
     });
