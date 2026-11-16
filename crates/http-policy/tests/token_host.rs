@@ -26,7 +26,10 @@ fn accepts_every_databricks_domain() {
     for d in DATABRICKS_DOMAINS {
         let host = format!("https://ws-1.{d}/");
         let p = TokenPolicy::new(&host).unwrap_or_else(|e| panic!("{d}: {e:?}"));
-        assert_eq!(p.check_request(&format!("{host}api/2.0/x")), Ok(TokenTarget::ProfileHost));
+        assert_eq!(
+            p.check_request(&format!("{host}api/2.0/x")),
+            Ok(TokenTarget::ProfileHost)
+        );
     }
     let azure = TokenPolicy::new("https://adb-123.4.azuredatabricks.net").unwrap();
     assert_eq!(azure.profile_host(), "adb-123.4.azuredatabricks.net");
@@ -42,7 +45,11 @@ fn rejects_accounts_hosts() {
         "https://ACCOUNTS.cloud.databricks.us",
         "https://accounts.databricks.azure.us",
     ] {
-        assert_eq!(TokenPolicy::new(h).unwrap_err(), PolicyError::AccountsHost, "{h}");
+        assert_eq!(
+            TokenPolicy::new(h).unwrap_err(),
+            PolicyError::AccountsHost,
+            "{h}"
+        );
     }
     assert_eq!(
         policy().check_request("https://accounts.cloud.databricks.com/api/2.0/accounts"),
@@ -77,12 +84,23 @@ fn rejects_non_databricks_and_suffix_tricks() {
     ] {
         let err = p.check_request(u).unwrap_err();
         assert!(
-            matches!(err, PolicyError::NotDatabricksDomain | PolicyError::HostMismatch),
+            matches!(
+                err,
+                PolicyError::NotDatabricksDomain | PolicyError::HostMismatch
+            ),
             "{u}: {err:?}"
         );
     }
-    for h in ["https://evil.example.com", "https://cloud.databricks.com", "https://x.databricks.com"] {
-        assert_eq!(TokenPolicy::new(h).unwrap_err(), PolicyError::NotDatabricksDomain, "{h}");
+    for h in [
+        "https://evil.example.com",
+        "https://cloud.databricks.com",
+        "https://x.databricks.com",
+    ] {
+        assert_eq!(
+            TokenPolicy::new(h).unwrap_err(),
+            PolicyError::NotDatabricksDomain,
+            "{h}"
+        );
     }
 }
 
@@ -189,7 +207,10 @@ fn refuses_ip_literals() {
     ] {
         assert_eq!(p.check_request(u), Err(PolicyError::IpLiteral), "{u}");
     }
-    assert_eq!(TokenPolicy::new("https://10.0.0.1").unwrap_err(), PolicyError::IpLiteral);
+    assert_eq!(
+        TokenPolicy::new("https://10.0.0.1").unwrap_err(),
+        PolicyError::IpLiteral
+    );
 }
 
 /// [SEC-04a] [AT-17] IDN homographs become punycode and never match
@@ -201,13 +222,20 @@ fn idn_homographs_do_not_match() {
         .check_request("https://dbc-1234.cloud.databr\u{456}cks.com/api")
         .unwrap_err();
     assert_eq!(err, PolicyError::NotDatabricksDomain);
+    let puny = url::Url::parse("https://dbc-1234.cloud.databr\u{456}cks.com/").unwrap();
+    let puny = format!("https://{}/api", puny.host_str().unwrap());
+    assert!(puny.contains("xn--"), "{puny}");
     assert_eq!(
-        p.check_request("https://dbc-1234.cloud.xn--databrcks-xyz.com/api"),
+        p.check_request(&puny),
         Err(PolicyError::NotDatabricksDomain)
     );
     // A Unicode label in the workspace part is punycoded and compared exactly.
     let idn = TokenPolicy::new("https://d\u{e9}mo.cloud.databricks.com").unwrap();
-    assert!(idn.profile_host().starts_with("xn--"), "{}", idn.profile_host());
+    assert!(
+        idn.profile_host().starts_with("xn--"),
+        "{}",
+        idn.profile_host()
+    );
     assert_eq!(
         idn.check_request("https://D\u{c9}MO.cloud.databricks.com/api"),
         Ok(TokenTarget::ProfileHost)
@@ -249,13 +277,34 @@ fn accepts_app_urls() {
 fn refuses_bad_app_urls() {
     let p = policy();
     for (u, want) in [
-        ("http://my-agent.aws.databricksapps.com/api", PolicyError::NotHttps),
-        ("https://my-agent.aws.databricksapps.com:8443/api", PolicyError::NotPort443),
-        ("https://databricksapps.com/api", PolicyError::NotDatabricksDomain),
-        ("https://evildatabricksapps.com/api", PolicyError::NotDatabricksDomain),
-        ("https://my-agent.databricksapps.com.evil.com/api", PolicyError::NotDatabricksDomain),
-        ("https://u:p@my-agent.aws.databricksapps.com/api", PolicyError::UserInfo),
-        ("https://my-agent.aws.databricksapps.com./api", PolicyError::NonCanonicalHost),
+        (
+            "http://my-agent.aws.databricksapps.com/api",
+            PolicyError::NotHttps,
+        ),
+        (
+            "https://my-agent.aws.databricksapps.com:8443/api",
+            PolicyError::NotPort443,
+        ),
+        (
+            "https://databricksapps.com/api",
+            PolicyError::NotDatabricksDomain,
+        ),
+        (
+            "https://evildatabricksapps.com/api",
+            PolicyError::NotDatabricksDomain,
+        ),
+        (
+            "https://my-agent.databricksapps.com.evil.com/api",
+            PolicyError::NotDatabricksDomain,
+        ),
+        (
+            "https://u:p@my-agent.aws.databricksapps.com/api",
+            PolicyError::UserInfo,
+        ),
+        (
+            "https://my-agent.aws.databricksapps.com./api",
+            PolicyError::NonCanonicalHost,
+        ),
     ] {
         assert_eq!(p.check_request(u), Err(want), "{u}");
     }

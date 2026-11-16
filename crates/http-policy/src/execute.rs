@@ -1,8 +1,9 @@
 use url::Url;
 
-use crate::{PolicyError, ResponseClass, TokenPolicy, TokenTarget};
+use crate::{classify_response, PolicyError, RedirectDecision, ResponseClass, TokenPolicy};
 
-/// The most attempts (first try plus retries) for one request.
+/// The most attempts (first try plus retries) for one request. Only a JSON
+/// 502/503/504 is retried; a non-JSON page never is (SEC-05b).
 pub const MAX_ATTEMPTS: u8 = 2;
 
 /// One request handed to the injected sender. The sender attaches the token
@@ -14,12 +15,23 @@ pub struct OutboundRequest {
 }
 
 /// A raw upstream response as seen by the transport.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct RawResponse {
     pub status: u16,
     pub content_type: Option<String>,
     pub location: Option<String>,
     pub body: Vec<u8>,
+}
+
+/// `Debug` never prints the location or the body.
+impl std::fmt::Debug for RawResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RawResponse")
+            .field("status", &self.status)
+            .field("content_type", &self.content_type)
+            .field("body_len", &self.body.len())
+            .finish_non_exhaustive()
+    }
 }
 
 /// One content-free trace entry: what was sent and the status that came back.
@@ -40,10 +52,65 @@ pub struct ExecuteOutcome {
 }
 
 /// Runs one token-bearing request through the policy with an injected `send`.
-pub fn execute<F>(policy: &TokenPolicy, url: &str, send: F) -> ExecuteOutcome
+///
+/// - The URL must pass [`TokenPolicy::check_request`]; otherwise nothing is sent.
+/// - A 3xx is followed only when [`TokenPolicy::check_redirect`] allows it.
+/// - A non-JSON page ends the request with `PROXY_PAGE` and drops the body.
+/// - A JSON 502/503/504 is sent again, up to [`MAX_ATTEMPTS`] in total.
+pub fn execute<F>(policy: &TokenPolicy, url: &str, mut send: F) -> ExecuteOutcome
 where
     F: FnMut(&OutboundRequest) -> RawResponse,
 {
-    let _ = (policy, url, send, TokenTarget::ProfileHost);
-    todo!("not implemented")
+    let mut trace = Vec::new();
+    let result = run(policy, url, &mut send, &mut trace);
+    ExecuteOutcome { result, trace }
+}
+
+fn run<F>(
+    policy: &TokenPolicy,
+    url: &str,
+    send: &mut F,
+    trace: &mut Vec<Attempt>,
+) -> Result<(ResponseClass, Vec<u8>), PolicyError>
+where
+    F: FnMut(&OutboundRequest) -> RawResponse,
+{
+    policy.check_request(url)?;
+    let mut url = Url::parse(url).map_err(|_| PolicyError::InvalidUrl)?;
+    let mut hops = 0u8;
+    let mut attempts = 0u8;
+    loop {
+        let req = OutboundRequest {
+            url,
+            with_token: true,
+        };
+        let resp = send(&req);
+        url = req.url;
+        trace.push(Attempt {
+            host: url.host_str().unwrap_or_default().to_owned(),
+            with_token: req.with_token,
+            status: resp.status,
+        });
+        if is_redirect(resp.status) {
+            let RedirectDecision::Follow(next) =
+                policy.check_redirect(&url, resp.location.as_deref(), hops)?;
+            url = next;
+            hops += 1;
+            continue;
+        }
+        let class = classify_response(resp.status, resp.content_type.as_deref(), &resp.body)?;
+        attempts += 1;
+        if class == ResponseClass::Json && is_transient(resp.status) && attempts < MAX_ATTEMPTS {
+            continue;
+        }
+        return Ok((class, resp.body));
+    }
+}
+
+fn is_redirect(status: u16) -> bool {
+    matches!(status, 301 | 302 | 303 | 307 | 308)
+}
+
+fn is_transient(status: u16) -> bool {
+    matches!(status, 502..=504)
 }
