@@ -16,7 +16,7 @@ Bottle marks its calls so that an admin can find them in usage tables (SEC-06a, 
 Run this query in a SQL warehouse of the workspace. You need access to the `system.ai_gateway` schema.
 
 ```sql
-SELECT event_time, endpoint_name, request_tags, user_agent
+SELECT event_time, service_type, endpoint_name, request_tags, user_agent
 FROM system.ai_gateway.usage
 WHERE event_time > current_timestamp() - INTERVAL 1 DAY
   AND (request_tags['app'] = 'bottle' OR user_agent LIKE 'bottle/%')
