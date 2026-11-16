@@ -44,6 +44,13 @@ jobs:
       - name: Keep LF line endings
         run: git config --global core.autocrlf false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The vendored OpenSSL in the SQLCipher build (#35) runs Configure with perl. Git Bash's
+      # MSYS perl lacks Locale::Maketext::Simple, so point openssl-src at Strawberry Perl (#375).
+      - name: Use Strawberry Perl for vendored OpenSSL (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          test -x /c/Strawberry/perl/bin/perl.exe
+          echo 'OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl.exe' >> "$GITHUB_ENV"
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -121,6 +128,13 @@ jobs:
       - name: Keep LF line endings
         run: git config --global core.autocrlf false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The vendored OpenSSL in the SQLCipher build (#35) runs Configure with perl. Git Bash's
+      # MSYS perl lacks Locale::Maketext::Simple, so point openssl-src at Strawberry Perl (#375).
+      - name: Use Strawberry Perl for vendored OpenSSL (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          test -x /c/Strawberry/perl/bin/perl.exe
+          echo 'OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl.exe' >> "$GITHUB_ENV"
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -165,6 +179,13 @@ jobs:
       - name: Keep LF line endings
         run: git config --global core.autocrlf false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The vendored OpenSSL in the SQLCipher build (#35) runs Configure with perl. Git Bash's
+      # MSYS perl lacks Locale::Maketext::Simple, so point openssl-src at Strawberry Perl (#375).
+      - name: Use Strawberry Perl for vendored OpenSSL (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          test -x /c/Strawberry/perl/bin/perl.exe
+          echo 'OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl.exe' >> "$GITHUB_ENV"
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -202,6 +223,13 @@ jobs:
       - name: Keep LF line endings
         run: git config --global core.autocrlf false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The vendored OpenSSL in the SQLCipher build (#35) runs Configure with perl. Git Bash's
+      # MSYS perl lacks Locale::Maketext::Simple, so point openssl-src at Strawberry Perl (#375).
+      - name: Use Strawberry Perl for vendored OpenSSL (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          test -x /c/Strawberry/perl/bin/perl.exe
+          echo 'OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl.exe' >> "$GITHUB_ENV"
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
