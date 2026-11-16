@@ -41,6 +41,24 @@ fn nfr_13a_build_script_embeds_one_manifest_in_every_windows_executable() {
     assert!(build.contains("cargo:rustc-link-arg=/WX"), "{build}");
 }
 
+#[test]
+fn nfr_13a_build_script_ignores_only_the_missing_vendored_pdb_warning() {
+    // The vendored OpenSSL of SQLCipher (#35, SP-21) is a static library whose objects point at
+    // an `ossl_static.pdb` that openssl-src does not ship, so link.exe gives LNK4099 for each one.
+    // /WX must stay on for every other warning, including a manifest conflict.
+    let build = app_file("build.rs");
+    assert!(build.contains("cargo:rustc-link-arg=/WX"), "{build}");
+    assert!(
+        build.contains("cargo:rustc-link-arg=/IGNORE:4099"),
+        "{build}"
+    );
+    let ignores: Vec<&str> = build
+        .match_indices("/IGNORE:")
+        .map(|(i, _)| &build[i..build[i..].find('"').map_or(build.len(), |e| i + e)])
+        .collect();
+    assert_eq!(ignores, vec!["/IGNORE:4099"], "only LNK4099 is ignored");
+}
+
 /// Reads the manifest resource (ID 1, type RT_MANIFEST = 24) of the running test executable.
 #[cfg(windows)]
 #[test]
