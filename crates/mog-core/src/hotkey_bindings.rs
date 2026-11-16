@@ -1167,6 +1167,14 @@ mod tests {
     }
 
     #[test]
+    fn cap_43a_windows_talk_keys_outside_d66_fall_back_to_the_default() {
+        // D66 gives Windows only Right-Alt, Right-Ctrl and Ctrl+Win (#313).
+        use crate::hotkey_windows::TalkKey as Win;
+        assert_eq!(TalkBinding::RightCommand.windows_talk_key(), Win::RightAlt);
+        assert_eq!(TalkBinding::RightShift.windows_talk_key(), Win::RightAlt);
+    }
+
+    #[test]
     fn cap_43a_binding_strings_round_trip() {
         for (os, s) in [
             (MAC, "RightOption"),
@@ -1681,5 +1689,77 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code(), "unknown_hotkey_action");
+    }
+
+    // ---- #313: Windows talk keys outside D66 ----
+
+    #[test]
+    fn cap_43b_windows_rejects_right_win_and_right_shift_talk_keys() {
+        let cur = default_bindings(WIN);
+        for s in ["RightWin", "RightShift", "RightCommand"] {
+            let out = hotkeys_set(
+                WIN,
+                &cur,
+                &input(&[("ptt", json!(s))]),
+                &KeyboardEnv::default(),
+            )
+            .unwrap();
+            assert_eq!(out.bindings, cur, "{s} keeps the old talk key");
+            assert_eq!(kinds(&out.conflicts), vec![ConflictKind::Invalid], "{s}");
+            assert_eq!(
+                out.conflicts[0].fix,
+                Fix::UseBinding {
+                    action: HotkeyAction::Ptt,
+                    binding: Binding::Talk(TalkBinding::RightOption)
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn cap_43b_macos_still_accepts_right_command_and_right_shift() {
+        for s in ["RightCommand", "RightShift"] {
+            let out = hotkeys_set(
+                MAC,
+                &default_bindings(MAC),
+                &input(&[("ptt", json!(s))]),
+                &KeyboardEnv::default(),
+            )
+            .unwrap();
+            assert_eq!(out.bindings.get(HotkeyAction::Ptt), Some(b(MAC, s)), "{s}");
+            assert_eq!(out.conflicts, vec![], "{s}");
+        }
+    }
+
+    #[test]
+    fn cap_43b_stored_windows_right_shift_is_flagged_with_a_ladder_fix() {
+        let mut bs = default_bindings(WIN);
+        bs.set(HotkeyAction::Ptt, Binding::Talk(TalkBinding::RightShift));
+        let env = KeyboardEnv {
+            alt_gr_layout: true,
+            ..KeyboardEnv::default()
+        };
+        let c = check_conflicts(WIN, &bs, &env);
+        assert_eq!(kinds(&c), vec![ConflictKind::Invalid]);
+        // The fix is the first free step of the D66 ladder (AltGr rules out Right-Alt).
+        assert_eq!(
+            c[0].fix,
+            Fix::UseBinding {
+                action: HotkeyAction::Ptt,
+                binding: Binding::Talk(TalkBinding::RightControl)
+            }
+        );
+        assert_eq!(
+            c[0].message(WIN),
+            "Bottle cannot use this talk key. Fix: use Right-Ctrl as the talk key."
+        );
+    }
+
+    #[test]
+    fn cap_43b_stored_windows_right_win_is_flagged() {
+        let mut bs = default_bindings(WIN);
+        bs.set(HotkeyAction::Ptt, Binding::Talk(TalkBinding::RightCommand));
+        let c = check_conflicts(WIN, &bs, &KeyboardEnv::default());
+        assert_eq!(kinds(&c), vec![ConflictKind::Invalid]);
     }
 }
