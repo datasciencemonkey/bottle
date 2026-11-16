@@ -21,7 +21,10 @@ use mog_core::resource_budget::{
 };
 use mog_core::testkit::{self, Fixture, ReferenceDevice};
 
-const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/resource_budget");
+const FIXTURES: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/resource_budget"
+);
 
 fn fixture(name: &str) -> String {
     std::fs::read_to_string(format!("{FIXTURES}/{name}")).expect("fixture file")
@@ -186,7 +189,10 @@ fn nfr_05_sp04_m3_max_run_is_reported_as_a_fail() {
 
 #[test]
 fn nfr_05_time_l_gives_the_peak_rss_in_bytes() {
-    assert_eq!(parse_time_l(&fixture("time-l-m3max.txt")), Some(1_910_472_704));
+    assert_eq!(
+        parse_time_l(&fixture("time-l-m3max.txt")),
+        Some(1_910_472_704)
+    );
     assert_eq!(parse_time_l("no such line"), None);
 }
 
@@ -280,7 +286,9 @@ fn sp_02_passes_only_when_every_criterion_holds() {
     assert_eq!(sp02(&s), Sp02Result::Pass);
     let mut no_steals = s.clone();
     no_steals.focus_steals = None;
-    assert!(matches!(sp02(&no_steals), Sp02Result::NotRun(r) if r.iter().any(|m| m.contains("focus steals"))));
+    assert!(
+        matches!(sp02(&no_steals), Sp02Result::NotRun(r) if r.iter().any(|m| m.contains("focus steals")))
+    );
     let mut steals = s.clone();
     steals.focus_steals = Some(1);
     assert!(matches!(sp02(&steals), Sp02Result::Fail(_)));
@@ -327,7 +335,9 @@ fn d73_window_plan_is_cap_8_cap_4_or_one_overlay_per_display() {
 #[test]
 fn at_21_report_refuses_pass_when_samples_come_from_doubles() {
     let s = demo_samples();
-    assert!(evaluate_all(&s).iter().all(|r| r.outcome == Outcome::Within));
+    assert!(evaluate_all(&s)
+        .iter()
+        .all(|r| r.outcome == Outcome::Within));
     let r = Report::build(Source::Doubles, device_info(), &s);
     assert_eq!(r.result(), GateResult::NotRun);
     let md = r.to_markdown();
@@ -343,14 +353,42 @@ fn at_21_report_device_pass_needs_every_row_and_the_run_record() {
     assert!(r.missing().is_empty());
 
     for (field, info) in [
-        ("build", RunInfo { build: " ".into(), ..device_info() }),
-        ("hardware", RunInfo { hardware: String::new(), ..device_info() }),
-        ("OS", RunInfo { os: String::new(), ..device_info() }),
-        ("STT model", RunInfo { stt_model: String::new(), ..device_info() }),
+        (
+            "build",
+            RunInfo {
+                build: " ".into(),
+                ..device_info()
+            },
+        ),
+        (
+            "hardware",
+            RunInfo {
+                hardware: String::new(),
+                ..device_info()
+            },
+        ),
+        (
+            "OS",
+            RunInfo {
+                os: String::new(),
+                ..device_info()
+            },
+        ),
+        (
+            "STT model",
+            RunInfo {
+                stt_model: String::new(),
+                ..device_info()
+            },
+        ),
     ] {
         let r = Report::build(device(), info, &s);
         assert_eq!(r.result(), GateResult::Partial, "{field}");
-        assert!(r.missing().iter().any(|m| m.contains(field)), "{field}: {:?}", r.missing());
+        assert!(
+            r.missing().iter().any(|m| m.contains(field)),
+            "{field}: {:?}",
+            r.missing()
+        );
     }
 
     let bad_date = Source::Device {
@@ -365,7 +403,9 @@ fn at_21_report_device_pass_needs_every_row_and_the_run_record() {
 
     // A missing row is not a pass.
     let mut no_hidden = s.clone();
-    no_hidden.cpu.retain(|c| c.scenario != CpuScenario::HiddenPanels);
+    no_hidden
+        .cpu
+        .retain(|c| c.scenario != CpuScenario::HiddenPanels);
     let r = Report::build(device(), device_info(), &no_hidden);
     assert_eq!(r.result(), GateResult::Partial);
     assert!(r.missing().iter().any(|m| m.starts_with("NFR-09")));
@@ -389,7 +429,10 @@ fn at_21_report_from_other_hardware_is_never_a_pass() {
     };
     let r = Report::build(source, device_info(), &demo_samples());
     assert_eq!(r.result(), GateResult::Partial);
-    assert!(r.missing().iter().any(|m| m.contains("not a reference device")));
+    assert!(r
+        .missing()
+        .iter()
+        .any(|m| m.contains("not a reference device")));
 }
 
 #[test]
@@ -429,7 +472,10 @@ fn at_21_sample_csv_round_trips_and_rejects_bad_rows() {
     assert!(text.starts_with(&format!("{CSV_MAGIC}\n{CSV_HEADER}\n")));
     assert_eq!(parse_csv(&text).unwrap(), s);
 
-    assert!(parse_csv("kind,scenario,mogs,value\n").is_err(), "no magic line");
+    assert!(
+        parse_csv("kind,scenario,mogs,value\n").is_err(),
+        "no magic line"
+    );
     let head = format!("{CSV_MAGIC}\n{CSV_HEADER}\n");
     for (bad, line) in [
         ("rss,shell,1,abc\n", 3),
@@ -494,7 +540,10 @@ fn nfr_06a_powermetrics_import_gives_percent_of_one_core() {
     let f = ProcessFilter::names(&["Bottle", "com.apple.WebKit.WebContent"]);
     let v = parse_powermetrics(&fixture("powermetrics-tasks.txt"), &f).unwrap();
     assert_eq!(v.len(), 2);
-    assert!((v[0] - 0.6).abs() < 1e-9 && (v[1] - 1.2).abs() < 1e-9, "{v:?}");
+    assert!(
+        (v[0] - 0.6).abs() < 1e-9 && (v[1] - 1.2).abs() < 1e-9,
+        "{v:?}"
+    );
     assert!(parse_powermetrics("nothing here", &f).is_err());
 }
 
@@ -504,7 +553,10 @@ fn nfr_06b_typeperf_import_sums_the_bottle_instances() {
     let v = parse_typeperf_csv(&fixture("typeperf.csv"), &f).unwrap();
     // The third row has no value for Bottle, so it is dropped (not counted as 0).
     assert_eq!(v.len(), 2, "{v:?}");
-    assert!((v[0] - 0.8).abs() < 1e-9 && (v[1] - 1.6).abs() < 1e-9, "{v:?}");
+    assert!(
+        (v[0] - 0.8).abs() < 1e-9 && (v[1] - 1.6).abs() < 1e-9,
+        "{v:?}"
+    );
     let none = ProcessFilter::names(&["Nothing"]);
     assert!(parse_typeperf_csv(&fixture("typeperf.csv"), &none).is_err());
 }
@@ -514,7 +566,10 @@ fn nfr_06a_presentmon_import_gives_presents_per_second() {
     let f = ProcessFilter::names(&["Bottle.exe", "msedgewebview2.exe"]);
     let v = parse_presentmon_csv(&fixture("presentmon.csv"), &f, 2.0).unwrap();
     assert!((v - 1.5).abs() < 1e-9, "{v}");
-    assert!(parse_presentmon_csv("a,b\n1,2\n", &f, 2.0).is_err(), "no Application column");
+    assert!(
+        parse_presentmon_csv("a,b\n1,2\n", &f, 2.0).is_err(),
+        "no Application column"
+    );
     assert!(parse_presentmon_csv(&fixture("presentmon.csv"), &f, 0.0).is_err());
 }
 
@@ -523,8 +578,10 @@ fn nfr_04a_sampler_collects_rss_on_the_sim_clock() {
     let clock = SimClock::new();
     let mut probe = ScriptedProbe::new(vec![Ok(180 * MB), Ok(182 * MB), Ok(181 * MB)]);
     let c = clock.clone();
-    let run = collect_rss(&mut probe, 1, 3, Duration::from_secs(2), &mut |d| c.advance(d))
-        .unwrap();
+    let run = collect_rss(&mut probe, 1, 3, Duration::from_secs(2), &mut |d| {
+        c.advance(d)
+    })
+    .unwrap();
     assert_eq!(run.mogs, 1);
     assert_eq!(run.bytes, vec![180 * MB, 182 * MB, 181 * MB]);
     // It waits between samples, not after the last one.
@@ -570,6 +627,13 @@ fn at_21_device_resource_samples_meet_the_budgets() {
         s.parakeet = Some(parse_sp04_bench(&text).expect("SP-04 bench output"));
     }
     for r in evaluate_all(&s) {
-        assert_eq!(r.outcome, Outcome::Within, "{}: {:?} {:?}", r.id, r.measured, r.note);
+        assert_eq!(
+            r.outcome,
+            Outcome::Within,
+            "{}: {:?} {:?}",
+            r.id,
+            r.measured,
+            r.note
+        );
     }
 }

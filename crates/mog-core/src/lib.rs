@@ -29,6 +29,7 @@ pub mod loopback;
 pub mod mcp_transport;
 pub mod policy_store;
 pub mod request_identity;
+pub mod resource_budget;
 pub mod session_guard;
 pub mod stt;
 pub mod testkit;

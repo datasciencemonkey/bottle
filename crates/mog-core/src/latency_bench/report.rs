@@ -185,7 +185,7 @@ fn fmt_ms(d: Duration) -> String {
     format!("{:.1} ms", d.as_secs_f64() * 1e3)
 }
 
-fn valid_date(s: &str) -> bool {
+pub(crate) fn valid_date(s: &str) -> bool {
     let b = s.as_bytes();
     b.len() == 10
         && b.iter().enumerate().all(|(i, c)| match i {
@@ -194,7 +194,7 @@ fn valid_date(s: &str) -> bool {
         })
 }
 
-fn cell(s: &str) -> String {
+pub(crate) fn cell(s: &str) -> String {
     let s = s.trim().replace('|', "/").replace('\n', " ");
     if s.is_empty() {
         "-".into()
