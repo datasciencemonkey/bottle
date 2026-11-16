@@ -6,6 +6,7 @@
  */
 import type { MogBinding, MogId } from '../../shared/interfaces';
 import { NotImplementedError } from '../errors';
+import type { MogPagesConfig } from '../pages/home-domain';
 
 /**
  * One MOG definition. It holds no secret. The saved config is `MogConfig` (`./mog-config`, #25);
@@ -15,6 +16,8 @@ export interface MogDefinition {
   mogId: MogId;
   name: string;
   binding: MogBinding;
+  /** `mog.pages`: the home domain for each workspace (PG-18, `PageDomains.config`). */
+  pages?: MogPagesConfig;
 }
 
 export interface MogManager {
