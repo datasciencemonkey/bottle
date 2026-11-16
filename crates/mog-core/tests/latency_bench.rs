@@ -119,7 +119,10 @@ fn at_21_mark_api_rejects_duplicate_missing_and_unknown_marks() {
         })
     );
     rec.mark(t, Mark::KeyDown).unwrap();
-    assert_eq!(rec.mark(t, Mark::KeyDown), Err(MarkError::Duplicate(Mark::KeyDown)));
+    assert_eq!(
+        rec.mark(t, Mark::KeyDown),
+        Err(MarkError::Duplicate(Mark::KeyDown))
+    );
     assert_eq!(
         rec.mark(t, Mark::TextInserted),
         Err(MarkError::MissingPrior {
@@ -207,7 +210,10 @@ fn at_21_sample_csv_round_trips_and_rejects_bad_rows() {
     let trials = good_trials();
     let back = parse_csv(&to_csv(&trials)).expect("round trip");
     assert_eq!(back, trials);
-    assert!(parse_csv("trial,path,route,mark,t_us\n").is_err(), "needs the magic line");
+    assert!(
+        parse_csv("trial,path,route,mark,t_us\n").is_err(),
+        "needs the magic line"
+    );
     let bad_mark = format!("{CSV_MAGIC}\n{CSV_HEADER}\n1,local,question,transcript,5\n");
     assert!(parse_csv(&bad_mark).is_err());
     let bad_order = format!("{CSV_MAGIC}\n{CSV_HEADER}\n1,local,question,key_up,5\n");
@@ -266,13 +272,19 @@ fn nfr_01a_preview_chip_p95_within_1_5_s_with_local_stt() {
     // Cloud trials do not count for the local row.
     t.chip = Some(ms(2_100));
     presses(&p, 20, SttPath::Cloud, Route::Question, t);
-    assert_eq!(outcome("NFR-01a", &p.recorder().trials(), &hk, cfg), Outcome::Within);
+    assert_eq!(
+        outcome("NFR-01a", &p.recorder().trials(), &hk, cfg),
+        Outcome::Within
+    );
     // A second slow press moves the nearest-rank p95 (21st of 22) over 1.5 s.
     let mut slow = good();
     slow.chip = Some(ms(1_600));
     p.press(SttPath::Local, Route::Question, slow).unwrap();
     p.press(SttPath::Local, Route::Question, slow).unwrap();
-    assert_eq!(outcome("NFR-01a", &p.recorder().trials(), &hk, cfg), Outcome::Over);
+    assert_eq!(
+        outcome("NFR-01a", &p.recorder().trials(), &hk, cfg),
+        Outcome::Over
+    );
 }
 
 #[test]
@@ -283,11 +295,20 @@ fn nfr_01b_preview_chip_p95_within_2_2_s_with_cloud_stt() {
     let mut t = good();
     t.chip = Some(ms(2_100));
     presses(&p, 20, SttPath::Cloud, Route::Question, t);
-    assert_eq!(outcome("NFR-01b", &p.recorder().trials(), &hk, cfg), Outcome::Within);
-    assert_eq!(outcome("NFR-01a", &p.recorder().trials(), &hk, cfg), Outcome::NoData);
+    assert_eq!(
+        outcome("NFR-01b", &p.recorder().trials(), &hk, cfg),
+        Outcome::Within
+    );
+    assert_eq!(
+        outcome("NFR-01a", &p.recorder().trials(), &hk, cfg),
+        Outcome::NoData
+    );
     t.chip = Some(ms(2_300));
     presses(&p, 2, SttPath::Cloud, Route::Question, t);
-    assert_eq!(outcome("NFR-01b", &p.recorder().trials(), &hk, cfg), Outcome::Over);
+    assert_eq!(
+        outcome("NFR-01b", &p.recorder().trials(), &hk, cfg),
+        Outcome::Over
+    );
 }
 
 #[test]
@@ -298,11 +319,17 @@ fn nfr_01c_every_local_ack_within_100_ms() {
     let mut t = good();
     t.ack = ms(100);
     presses(&p, 30, SttPath::Local, Route::Dictation, t);
-    assert_eq!(outcome("NFR-01c", &p.recorder().trials(), &hk, cfg), Outcome::Within);
+    assert_eq!(
+        outcome("NFR-01c", &p.recorder().trials(), &hk, cfg),
+        Outcome::Within
+    );
     // The row has no percentile: one ack over 100 ms fails it.
     t.ack = ms(101);
     presses(&p, 1, SttPath::Cloud, Route::Question, t);
-    assert_eq!(outcome("NFR-01c", &p.recorder().trials(), &hk, cfg), Outcome::Over);
+    assert_eq!(
+        outcome("NFR-01c", &p.recorder().trials(), &hk, cfg),
+        Outcome::Over
+    );
 }
 
 #[test]
@@ -316,10 +343,16 @@ fn nfr_01d_dictation_insert_p95_within_1_5_s_with_local_stt() {
     // A question press with a slow insert time does not count for UC1.
     t.insert = Some(ms(3_000));
     presses(&p, 5, SttPath::Local, Route::Question, t);
-    assert_eq!(outcome("NFR-01d", &p.recorder().trials(), &hk, cfg), Outcome::Within);
+    assert_eq!(
+        outcome("NFR-01d", &p.recorder().trials(), &hk, cfg),
+        Outcome::Within
+    );
     t.insert = Some(ms(1_550));
     presses(&p, 2, SttPath::Local, Route::Dictation, t);
-    assert_eq!(outcome("NFR-01d", &p.recorder().trials(), &hk, cfg), Outcome::Over);
+    assert_eq!(
+        outcome("NFR-01d", &p.recorder().trials(), &hk, cfg),
+        Outcome::Over
+    );
 }
 
 #[test]
@@ -453,7 +486,11 @@ fn at_21_report_device_pass_needs_every_row_models_and_resource_use() {
     no_models.models.clear();
     let r = Report::build(Gate::At21, device(), no_models, &trials, &hk);
     assert_eq!(r.result(), GateResult::Partial);
-    assert!(r.missing().iter().any(|m| m.contains("models")), "{:?}", r.missing());
+    assert!(
+        r.missing().iter().any(|m| m.contains("models")),
+        "{:?}",
+        r.missing()
+    );
 
     let mut no_rss = device_info();
     no_rss.resources.peak_rss_mb = None;
@@ -466,7 +503,11 @@ fn at_21_report_device_pass_needs_every_row_models_and_resource_use() {
         .cloned()
         .collect();
     let r = Report::build(Gate::At21, device(), device_info(), &local_only, &hk);
-    assert_eq!(r.result(), GateResult::Partial, "NFR-01b has no cloud samples");
+    assert_eq!(
+        r.result(),
+        GateResult::Partial,
+        "NFR-01b has no cloud samples"
+    );
 
     let r = Report::build(Gate::At21, device(), device_info(), &[], &hk);
     assert_eq!(r.result(), GateResult::NotRun);
@@ -548,11 +589,15 @@ fn at_21_report_shows_p50_and_p95_for_the_local_and_cloud_stt_paths() {
         .filter(|l| l.contains("key_up -> preview_chip"))
         .collect();
     assert!(
-        chip_rows.iter().any(|l| l.contains("| local |") && l.contains("900.0 ms")),
+        chip_rows
+            .iter()
+            .any(|l| l.contains("| local |") && l.contains("900.0 ms")),
         "{md}"
     );
     assert!(
-        chip_rows.iter().any(|l| l.contains("| cloud |") && l.contains("1900.0 ms")),
+        chip_rows
+            .iter()
+            .any(|l| l.contains("| cloud |") && l.contains("1900.0 ms")),
         "{md}"
     );
     assert!(md.contains("| p50 | p95 |"), "{md}");
@@ -655,5 +700,21 @@ fn at_30_nfr_08a_nfr_08b_hid_rig_1000_cycles() {
     for id in ["NFR-08a", "NFR-08b"] {
         let r = evaluate(&budget(id, BudgetConfig::default()).unwrap(), &[], &hk);
         assert_eq!(r.outcome, Outcome::Within, "{id}: {:?}", r.summary);
+    }
+}
+
+#[test]
+fn at_21_demo_doubles_are_within_budget_but_never_a_pass() {
+    use mog_core::latency_bench::doubles::{demo_hotkey, demo_pipeline};
+    let trials = demo_pipeline(40).recorder().trials();
+    let hk = demo_hotkey(1_000);
+    for gate in [Gate::At21, Gate::At30, Gate::At43] {
+        let r = Report::build(gate, SampleSource::Doubles, device_info(), &trials, &hk);
+        assert!(
+            r.results.iter().all(|b| b.outcome == Outcome::Within),
+            "{gate:?}: {:?}",
+            r.results
+        );
+        assert_eq!(r.result(), GateResult::NotRun);
     }
 }
