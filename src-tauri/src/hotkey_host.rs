@@ -11,10 +11,11 @@
 //! - No `tauri-plugin-global-shortcut` (ARC-4): the platform service owns the OS hook.
 //!
 //! Platform seam: [`platform_service`] picks the service by `cfg`. macOS uses
-//! `MacHotkeyService` (#6). Other platforms use the R1 stub until the Windows hook is wired:
-//! TODO(#314).
+//! `MacHotkeyService` (#6). Windows uses `WindowsHotkeyService` (#7) through the
+//! [`HookSignal`] adapter (#314): one thread feeds the hook signals to the shared R1 engine,
+//! which emits into the same queue sink. Other platforms use the R1 stub.
 //!
-//! Requirements: CAP-35a, CAP-36, CAP-37, CAP-39c, MB-06a, AT-30.
+//! Requirements: CAP-35a, CAP-36, CAP-37, CAP-39c, CAP-40a, MB-06a, AT-30.
 
 use crate::ipc::BrainChannel;
 use mog_core::error::CoreError;
@@ -23,7 +24,7 @@ use mog_core::hotkey_core::{
     self, HotkeyEngine, HotkeyOutput, HotkeySink, PermissionApi, PermissionStatus, PttPhase,
     TalkKey, UserAction,
 };
-use mog_core::hotkey_windows::HookSignal;
+use mog_core::hotkey_windows::{forward_to_engine, HookSignal};
 use mog_core::ipc::{events, WindowClass};
 use serde_json::{json, Value};
 use std::sync::{mpsc, Arc, Mutex, MutexGuard};
@@ -245,15 +246,39 @@ pub trait HookSignalSeam: Send {
 pub struct PendingHookConsumers;
 
 impl HookSignalSeam for PendingHookConsumers {
-    fn deferred(&self, _signal: DeferredSignal) {}
+    fn deferred(&self, signal: DeferredSignal) {
+        match signal {
+            DeferredSignal::Escape => {
+                // TODO(#14): the capture lifecycle ends hands-free capture on Esc.
+            }
+            DeferredSignal::OtherKeyDown => {
+                // TODO(#24): `HotkeyEngine::on_other_key_down` cancels the PTT (CAP-44c).
+            }
+            DeferredSignal::TalkKeyBlocked => {
+                // TODO(#294): one `hotkey.status` event makes the MOG show the CAP-42 tooltip.
+            }
+            DeferredSignal::HookReinstalled | DeferredSignal::HookFailed(_) => {
+                // TODO(#297): the hook health goes on the `hotkey.status` event.
+            }
+        }
+    }
 }
 
 /// Map one Windows hook signal (#7) to the shared R1 engine (#6).
-pub fn adapt_hook_signal(
-    _signal: HookSignal,
-    _engine: &mut HotkeyEngine,
-) -> Option<DeferredSignal> {
-    None
+///
+/// `TalkDown` and `TalkUp` go through [`forward_to_engine`] to the shared PTT machine, so
+/// Windows gives the same `hotkey.ptt` phases as macOS. The other signals return as a
+/// [`DeferredSignal`] for the seam.
+pub fn adapt_hook_signal(signal: HookSignal, engine: &mut HotkeyEngine) -> Option<DeferredSignal> {
+    Some(match forward_to_engine(signal, engine)? {
+        HookSignal::Escape => DeferredSignal::Escape,
+        HookSignal::OtherKeyDown => DeferredSignal::OtherKeyDown,
+        HookSignal::TalkKeyBlocked => DeferredSignal::TalkKeyBlocked,
+        HookSignal::HookReinstalled => DeferredSignal::HookReinstalled,
+        HookSignal::HookFailed { reason } => DeferredSignal::HookFailed(reason),
+        // `forward_to_engine` takes the talk-key signals.
+        HookSignal::TalkDown { .. } | HookSignal::TalkUp { .. } => return None,
+    })
 }
 
 /// Drain `rx` until the service drops its sender.
@@ -284,11 +309,36 @@ where
 }
 
 /// The service to give the host, given the result of [`spawn_hook_adapter`].
+/// With no adapter thread the talk key cannot work, so the host gets a service whose `start`
+/// reports `hook_adapter_spawn_failed` and the real hook is never installed.
 pub fn with_hook_adapter(
     service: Box<dyn HotkeyService>,
-    _adapter: std::io::Result<JoinHandle<()>>,
+    adapter: std::io::Result<JoinHandle<()>>,
 ) -> Box<dyn HotkeyService> {
-    service
+    match adapter {
+        // The thread is detached; it ends when the service drops its sender.
+        Ok(_) => service,
+        Err(_) => Box::new(AdapterFailed),
+    }
+}
+
+/// The service when the adapter thread did not start.
+#[derive(Debug, Clone, Copy)]
+struct AdapterFailed;
+
+impl HotkeyService for AdapterFailed {
+    fn start(&self) -> mog_core::error::CoreResult<()> {
+        Err(CoreError::Unavailable {
+            component: "R1",
+            reason: "hook_adapter_spawn_failed",
+        })
+    }
+    fn stop(&self) -> mog_core::error::CoreResult<()> {
+        Ok(())
+    }
+    fn secure_input_active(&self) -> mog_core::error::CoreResult<bool> {
+        Ok(false)
+    }
 }
 
 /// The talk key of the settings value (D66). Unknown or missing values give Right-Option.
@@ -397,13 +447,30 @@ pub fn platform_service(
     )
 }
 
-/// The platform service and permission API (no hook yet on this OS).
-#[cfg(not(target_os = "macos"))]
+/// The platform service and permission API (Windows, #7 and #314).
+///
+/// The hook sends [`HookSignal`]s on its own channel; the adapter thread feeds them to the
+/// shared engine, which emits into `sink`. The hook needs no OS prompt.
+#[cfg(windows)]
+pub fn platform_service(
+    talk_key: TalkKey,
+    sink: Arc<dyn HotkeySink>,
+) -> (Box<dyn HotkeyService>, Box<dyn PermissionApi>) {
+    use mog_core::hotkey_windows::win32::WindowsHotkeyService;
+    let (service, rx) = WindowsHotkeyService::new(talk_key.into());
+    let adapter = spawn_hook_adapter(rx, sink, PendingHookConsumers);
+    (
+        with_hook_adapter(Box::new(service), adapter),
+        Box::new(NoOsPermission),
+    )
+}
+
+/// The platform service and permission API (no hook on this OS).
+#[cfg(not(any(target_os = "macos", windows)))]
 pub fn platform_service(
     _talk_key: TalkKey,
     _sink: Arc<dyn HotkeySink>,
 ) -> (Box<dyn HotkeyService>, Box<dyn PermissionApi>) {
-    // TODO(#314): `WindowsHotkeyService` (#7) plugs in here through a `HookSignal` adapter.
     (
         Box::new(mog_core::hotkey::StubHotkeyService),
         Box::new(NoOsPermission),
@@ -1159,7 +1226,10 @@ mod tests {
             "with_hook_adapter(Box::new(service), adapter)",
             "Box::new(NoOsPermission)",
         ] {
-            assert!(windows.contains(part), "windows platform_service misses {part}");
+            assert!(
+                windows.contains(part),
+                "windows platform_service misses {part}"
+            );
         }
         assert!(!windows.contains("StubHotkeyService"));
     }
