@@ -2,8 +2,9 @@
  * The card stack controller of one MOG (UX-11a..UX-12, ADR 0028). It owns a `BlurbStack`, sends
  * `card.update` after each change, and keeps one timer armed at the next collapse time.
  *
- * TODO(#285): the brain's `view_emit` handler routes the card's `hover` and `click` input to
- * `input()`, and the `card.update` payload type moves to the contract.
+ * The `card.update` payload is the contract `CardUpdate` (#285).
+ * TODO(#374): the brain's `view_emit` handler routes the card's `hover` and `click` input to
+ * `input()`.
  * TODO(#77): the settings come from `mog.card.maxBlurbs` and `mog.card.autoHideSec` in the store.
  * TODO(#86): blurb templates. Chips and expanded sections: #89, ADR 0043.
  */

@@ -11,18 +11,31 @@ rust-version.workspace = true
 default = []
 # R9 LakebasePool (v1, optional). Off by default.
 lakebase = []
+# Test doubles (for example the in-memory key vault) for other crates' tests. Never in a release build.
+test-support = []
 
 [dependencies]
 getrandom.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+rusqlite.workspace = true
+sqlite-vec.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.5"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSPasteboard", "NSPasteboardItem"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSData", "NSString"] }
+security-framework.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = [
   "Win32_Foundation",
   "Win32_Graphics_Gdi",
   "Win32_Security",
+  "Win32_Security_Credentials",
   "Win32_System_Diagnostics_ToolHelp",
   "Win32_System_LibraryLoader",
   "Win32_System_Power",
@@ -32,8 +45,3 @@ windows-sys = { workspace = true, features = [
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_WindowsAndMessaging",
 ] }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-objc2 = "0.6.5"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSPasteboard", "NSPasteboardItem"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSData", "NSString"] }

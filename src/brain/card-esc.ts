@@ -6,8 +6,8 @@
  * cancels and hides on the same press, and a failed action is not followed by the other one,
  * so the card is never left half closed. See ADR 0022.
  *
- * TODO(#285): the gateway does not route `window_card_hide` from the brain yet, and the
- * `view_emit` handler that calls `handleCardEsc` comes with that contract change.
+ * The gateway routes `window_card_hide` to R11 (#285, ADR 0040).
+ * TODO(#374): the brain's `view_emit` handler calls `handleCardEsc` for `cancel` from a card.
  */
 import type { ExchangeRef, MogId } from '../shared/interfaces';
 

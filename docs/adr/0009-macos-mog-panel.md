@@ -22,5 +22,5 @@ MOG-01a, MOG-01b, MOG-01c and MOG-02 need each `mog-<id>` window to be transpare
 ## Consequences
 
 - A person must check on a Mac that the desktop shows through, that 100 clicks steal no focus, that a drag moves the MOG, and that the panel shows over a fullscreen Space. The script is `tools/mac/mog-check.swift`; the steps are on #316 (`needs:human`, `needs:mac`, `TODO(#316)`). The signed-DMG checks stay with SP-01 (`TODO(#10)`).
-- The brain cannot open MOG windows yet (`TODO(#285)`). The device check uses the debug demo MOG (`BOTTLE_DEMO_WINDOWS=1`).
+- The gateway routes `window_mog_open` since ADR 0040, but no brain code opens MOG windows yet. The device check uses the debug demo MOG (`BOTTLE_DEMO_WINDOWS=1`).
 - Not in this ADR: host-forwarded hover (UX-08a, an SP-01 follow-up), the card panel (#78), Windows `WS_EX_NOACTIVATE` (#80), click-through (#81), and the poke and click rules (#83). The NFR-14b / COL-36 owner decision of SP-01 (wry always uses the private `drawsBackground` key) is not changed here.

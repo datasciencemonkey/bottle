@@ -14,6 +14,8 @@ import type {
   CaptureState,
   LeaseId,
   MogId,
+  Mood,
+  MoodMapper,
   ProfileInfo,
   ProfileName,
   SessionPolicy,
@@ -93,6 +95,8 @@ export const EVENTS = {
   'agent.status': { name: 'agent:status', direction: 'core_to_brain' },
   'mog.view_state': { name: 'mog:view_state', direction: 'brain_to_view' },
   'card.update': { name: 'card:update', direction: 'brain_to_view' },
+  /** Not in 4.5 (ADR 0040): mic frames for the MOG level meter (UX-06a), sent to `mog-<owner>`. */
+  'mog.level': { name: 'mog:level', direction: 'brain_to_view' },
   'view.input': { name: 'view:input', direction: 'core_to_brain' },
 } as const;
 
@@ -224,17 +228,152 @@ export interface CommandArgs {
   brain_subscribe: { onEvent: Channel<BrainMessage> };
 }
 
-/** The gateway's refusal reasons (`mog_core::ipc::IpcError`). They never carry argument values (4.6 rule 7). */
-export type IpcError =
-  | { error: 'unknown_command'; command: string }
-  | { error: 'window_not_allowed'; command: string; window: string }
-  | { error: 'invalid_args'; command: string; reason: string }
-  | { error: 'not_implemented'; command: string }
-  | { error: 'host_failed'; command: string }
-  | { error: 'unknown_lease'; command: string }
-  | { error: 'mic_busy'; command: string }
-  | { error: 'consent_required'; command: string }
-  | { error: 'invalid_mode'; command: string };
+/**
+ * Every code a rejection can carry (`mog_core::ipc_gateway::ERROR_CODES`). A test checks this
+ * list against the generated schema document.
+ */
+export const IPC_ERROR_CODES = [
+  'unknown_command',
+  'window_not_allowed',
+  'invalid_args',
+  'not_implemented',
+  'host_failed',
+  'unknown_lease',
+  'mic_busy',
+  'consent_required',
+  'invalid_mode',
+  'mog_cap_reached',
+  'unknown_mog',
+  'window_closing',
+  /** `config_*`: the config store is missing or failed (routed in #379). */
+  'config_storage_failed',
+] as const;
+
+export type IpcErrorCode = (typeof IPC_ERROR_CODES)[number];
+
+/**
+ * What a refused call rejects with (#333, ADR 0040): only a fixed code. It never names the
+ * command, the window label or an argument value (SEC-03, 4.6 rule 7).
+ */
+export interface IpcError {
+  error: IpcErrorCode;
+}
+
+// ---------- brain-to-view payloads (#285, ADR 0040; Rust mirror in `mog_core::types`) ----------
+
+/** Frame-probe times of one `mog.view_state` (#13, ADR 0031). Numbers only. */
+export interface ViewTrace {
+  seq: number;
+  /** When the event that caused this state reached the brain. */
+  eventAt: number;
+  /** When the brain sent this state. */
+  sentAt: number;
+  /** For `listening`: when the key-down reached the brain (UX-05b). */
+  keyDownAt?: number;
+}
+
+/** One MOG badge (MOG-07, UX-38, UX-39a). `hoverOnly` badges show while the pointer is on the MOG. */
+export interface MogBadgeView {
+  kind: string;
+  text: string;
+  label: string;
+  detail?: string;
+  hoverOnly: boolean;
+  /** Set when a click on the badge does something; the brain decides what (ADR 0029). */
+  action?: string;
+}
+
+/** `mog.view_state` payload: what the brain computed for one MOG. */
+export interface MogViewState {
+  mogId: MogId;
+  mood: Mood;
+  overlays: ReturnType<MoodMapper>['overlays'];
+  /** The badges the brain computed (`mapBadges`, ADR 0029). Each has text and a label. */
+  badges?: MogBadgeView[];
+  /** The home domain picker of this MOG in its home workspace (PG-18, PG-20). */
+  homeDomain?: DomainPickerView;
+  /** Only with `VITE_BOTTLE_LATENCY_TRACE=1`: times for the frame probe (#13, ADR 0031). */
+  trace?: ViewTrace;
+}
+
+/**
+ * The domain picker (PG-20): the domain list, or `paste` (the reason text) when the list cannot
+ * be read. `scope` 'home' sets the MOG home domain (PG-18); 'draft' changes one draft (PG-19).
+ */
+export interface DomainPickerView {
+  scope: 'home' | 'draft';
+  /** Set for scope 'draft': the Page review that the change applies to. */
+  reviewId?: string;
+  current?: { id: string; name?: string };
+  options?: { id: string; name: string }[];
+  paste?: string;
+  error?: string;
+}
+
+/** The admin checklist for a failed Pages preflight (PG-11, PG-12): the reason and the items. */
+export interface PagesChecklistView {
+  text: string;
+  items: string[];
+}
+
+/** One card slot (ADR 0028): a blurb, or a split answer with its parts in one slot (UX-11b). */
+export interface CardBlurbView {
+  id: string;
+  text: string;
+  pinned?: boolean;
+  completed?: boolean;
+  parts?: { id: string; text: string }[];
+}
+
+/** One expanded card section (mirrors `ExpandedSection` of the brain). */
+export type CardSection =
+  | { id: 'answer'; md: string }
+  | { id: 'keyNumbers'; items: string[] }
+  | { id: 'sql'; sql: string; collapsed: true }
+  | {
+      id: 'tablePreview';
+      columns: string[];
+      rows: string[][];
+      moreRows: number;
+      moreColumns?: number;
+    }
+  | { id: 'sentToGenie'; text: string }
+  | { id: 'resend' }
+  | { id: 'copy'; formats: ('markdown' | 'csv')[] }
+  | { id: 'footer'; sttBadge?: string; deepLink?: string }
+  | { id: 'dataFlow'; text: string };
+
+/**
+ * `card.update` payload: what the card of one MOG shows. The brain orders and limits the blurbs
+ * (`src/brain/blurb-stack.ts`); `historyCount` drives "N more in History" (UX-11a).
+ */
+export interface CardUpdate {
+  mogId: MogId;
+  blurbs: CardBlurbView[];
+  chips: { id: string; label: string }[];
+  /** Chips after the 4th (UX-20a): the view shows them in the expanded card. */
+  overflowChips?: { id: string; label: string }[];
+  /** The expanded card sections in the UX-EXP order (UX-18), from `src/brain/card-sections.ts`. */
+  sections?: CardSection[];
+  answerMd?: string;
+  historyCount?: number;
+  /** The STT badge for the card footer (UX-38), for example "STT: local". */
+  sttBadge?: string;
+  /** The domain of the Page draft in review (PG-19). */
+  pageDomain?: DomainPickerView;
+  pagesChecklist?: PagesChecklistView;
+}
+
+/**
+ * `mog.level` payload: one mic level sample (UX-06a). `owner` is the MOG that owns the open
+ * mic, or `null` when the mic closed: the brain sends one such frame on close (UX-06b).
+ */
+export interface MicLevelFrame {
+  owner: MogId | null;
+  dbfs: number;
+  /** Milliseconds on a monotonic clock. */
+  t: number;
+}
 
 type Empty = Record<string, never>;
 
@@ -292,7 +431,7 @@ export interface CommandReturns {
   brain_subscribe: Empty;
 }
 
-/** Call a command. The gateway rejects it with an `IpcError` until its feature issue lands. */
+/** Call a command. A refused call rejects with an `IpcError` (a code only). */
 export function call<K extends CommandName>(
   name: K,
   args: CommandArgs[K],

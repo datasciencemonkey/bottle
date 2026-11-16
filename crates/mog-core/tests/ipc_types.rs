@@ -8,9 +8,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use mog_core::types::{
-    CaptureMode, CaptureState, Intent, MogId, Mood, OthersTrack, Profile, ProfileInfo, ProfileName,
-    RouterCommand, RouterDecision, SegmentRef, SessionPolicy, TagApp, TagOp, Tags, TokenState,
-    TokenStatus, Track, Transcript, TranscriptProvider,
+    CaptureMode, CaptureState, CardUpdate, Intent, MicLevelFrame, MogId, MogViewState, Mood,
+    OthersTrack, Profile, ProfileInfo, ProfileName, RouterCommand, RouterDecision, SegmentRef,
+    SessionPolicy, TagApp, TagOp, Tags, TokenState, TokenStatus, Track, Transcript,
+    TranscriptProvider,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -69,6 +70,10 @@ fn round_trip_by_name(type_name: &str, json: &Value) -> Result<Value, String> {
         "ProfileInfo" => round_trip::<Vec<ProfileInfo>>(json),
         "TokenStatus" => round_trip::<TokenStatus>(json),
         "RouterDecision" => round_trip::<RouterDecision>(json),
+        // Brain-to-view payloads (#285, ADR 0040).
+        "MogViewState" => round_trip::<MogViewState>(json),
+        "CardUpdate" => round_trip::<CardUpdate>(json),
+        "MicLevelFrame" => round_trip::<MicLevelFrame>(json),
         other => panic!("fixture for unknown type {other}: add it to round_trip_by_name"),
     }
 }
@@ -84,6 +89,9 @@ const STRUCTS: &[&str] = &[
     "ProfileInfo",
     "TokenStatus",
     "RouterDecision",
+    "MogViewState",
+    "CardUpdate",
+    "MicLevelFrame",
 ];
 
 #[test]
@@ -114,6 +122,9 @@ fn every_ipc_type_has_a_fixture() {
         "ProfileInfo",
         "TokenStatus",
         "RouterDecision",
+        "MogViewState",
+        "CardUpdate",
+        "MicLevelFrame",
     ] {
         assert!(names.iter().any(|n| n == t), "no fixture for {t}");
     }
@@ -218,4 +229,14 @@ fn cap_02a_every_segment_names_its_lease() {
     // A segment without a lease does not parse.
     let no_lease = serde_json::json!({"segmentId": "s", "mogId": "m", "track": "you", "tStartMs": 0, "tEndMs": 1, "final": true});
     assert!(serde_json::from_value::<SegmentRef>(no_lease).is_err());
+}
+
+#[test]
+fn arc_5_ux_06b_a_closed_mic_frame_has_a_null_owner() {
+    let closed: MicLevelFrame =
+        serde_json::from_str(r#"{"owner":null,"dbfs":-120.5,"t":900.5}"#).unwrap();
+    assert_eq!(closed.owner, None);
+    // `owner` is required: a frame must say who owns the mic, or `null`.
+    assert!(serde_json::from_str::<MicLevelFrame>(r#"{"dbfs":-1.5,"t":1.5}"#).is_err());
+    assert_eq!(serde_json::to_value(&closed).unwrap()["owner"], Value::Null);
 }

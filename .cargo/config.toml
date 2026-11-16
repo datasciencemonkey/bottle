@@ -1,0 +1,5 @@
+# SP-21 (#34): build sqlite-vec with its NEON kernels on Apple silicon. The
+# sqlite-vec build script does not set this define. Only [env] here: never put
+# registry, source or proxy settings in this file.
+[env]
+CFLAGS_aarch64_apple_darwin = "-DSQLITE_VEC_ENABLE_NEON"

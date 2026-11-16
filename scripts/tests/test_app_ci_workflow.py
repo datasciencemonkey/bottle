@@ -1,12 +1,16 @@
 """Tests for the app CI workflow and the pinned lockfiles (NFR-13a, NFR-15a/b, SEC-26, AT-37, #227).
 
-On pull_request App CI runs on Windows only; push to main, the nightly schedule and dispatch run
-macOS and Windows. Developers run scripts/pre-push.sh on macOS before each push.
+App CI runs on Windows and Linux on every event. macOS is not in CI: GitHub's hosted macOS queue
+held runs for hours, so the developer runs scripts/pre-push.sh on a Mac before each push, and
+scripts/package-macos.sh builds, signs and notarizes the DMG (ADR 0045).
 
 Run:  uv run --no-project --with pytest --with pyyaml pytest scripts/tests -q
 """
 import json
+import os
 import re
+import shutil
+import subprocess
 
 import pytest
 import yaml
@@ -14,6 +18,9 @@ from conftest import ROOT
 
 WORKFLOWS = ROOT / ".github" / "workflows"
 APP_CI = WORKFLOWS / "app-ci.yml"
+PRE_PUSH = ROOT / "scripts" / "pre-push.sh"
+PACKAGE_MACOS = ROOT / "scripts" / "package-macos.sh"
+CI_OSES = {"ubuntu-24.04", "windows-2025"}
 SHA_PIN = re.compile(r"^[\w.-]+/[\w./-]+@[0-9a-f]{40}$")
 
 
@@ -60,21 +67,81 @@ def matrix_oses(job, event=None):
     return {e.get("os") for ev in ([event] if event else EVENTS) for e in matrix_entries(job, ev)}
 
 
-def test_nfr_13a_app_ci_runs_on_macos_arm64_and_windows(app_ci):
-    """[NFR-13a] On push to main, the nightly schedule and dispatch, the jobs run on macOS (arm64) and Windows."""
-    for event in ("push", "schedule", "workflow_dispatch"):
-        for name in MATRIX_JOBS:
+def test_nfr_13a_app_ci_runs_on_windows_and_linux_on_every_event(app_ci):
+    """[NFR-13a] On every event the checks, offline build and golden set jobs run on Windows and Linux."""
+    for event in EVENTS:
+        for name in ("checks", "offline-build", "golden-set"):
             oses = matrix_oses(app_ci["jobs"][name], event)
-            assert "macos-15" in oses, f"{name} on {event}: no arm64 macOS runner in {oses}"
-            assert "windows-2025" in oses, f"{name} on {event}: no Windows runner in {oses}"
+            assert oses == CI_OSES, f"{name} on {event} runs on {oses}, not {CI_OSES}"
 
 
-def test_nfr_13a_app_ci_pull_requests_run_on_windows_only(app_ci):
-    """[NFR-13a] On pull_request the jobs run on Windows only; macOS is checked locally with scripts/pre-push.sh."""
-    for name in MATRIX_JOBS:
-        oses = matrix_oses(app_ci["jobs"][name], "pull_request")
-        assert oses == {"windows-2025"}, f"{name} on pull_request runs on {oses}"
-    assert (ROOT / "scripts" / "pre-push.sh").exists(), "scripts/pre-push.sh does not exist"
+def test_nfr_13a_app_ci_has_no_macos_runner(app_ci):
+    """[NFR-13a] No App CI job runs on a hosted macOS runner; the macOS gate is scripts/pre-push.sh."""
+    for name, job in app_ci["jobs"].items():
+        oses = matrix_oses(job) | {str(job.get("runs-on", ""))}
+        assert not any("macos" in o.lower() for o in oses if o), f"{name} runs on macOS: {oses}"
+    assert "runner.os == 'macOS'" not in APP_CI.read_text(encoding="utf-8"), "a macOS-only step is left in CI"
+    assert PRE_PUSH.exists(), "scripts/pre-push.sh does not exist"
+
+
+def test_nfr_13a_linux_jobs_install_the_tauri_system_libraries_first(app_ci):
+    """[NFR-13a] Linux jobs that compile Rust install WebKitGTK and the other Tauri libraries first."""
+    for name, job in app_ci["jobs"].items():
+        if not any(o and o.startswith("ubuntu") for o in matrix_oses(job)):
+            continue
+        body = steps(job)
+        builds = [i for i, s in enumerate(body) if re.search(r"\bcargo\b|tauri build", s.get("run", ""))]
+        if not builds:
+            continue
+        apt = [i for i, s in enumerate(body)
+               if "apt-get install" in s.get("run", "") and "libwebkit2gtk-4.1-dev" in s.get("run", "")
+               and "runner.os == 'Linux'" in str(s.get("if", ""))]
+        assert apt, f"{name}: no Linux-only step installs libwebkit2gtk-4.1-dev"
+        assert apt[0] < builds[0], f"{name}: the Tauri libraries are installed after the first cargo step"
+
+
+@pytest.fixture(scope="module")
+def pre_push():
+    assert PRE_PUSH.exists(), "scripts/pre-push.sh does not exist"
+    return PRE_PUSH.read_text(encoding="utf-8")
+
+
+def test_nfr_13a_pre_push_runs_the_ci_checks_on_macos(app_ci, pre_push):
+    """[NFR-13a, NFR-23a] pre-push.sh runs the commands of the CI checks job, with requirement coverage."""
+    for cmd in ("pnpm install --frozen-lockfile", "pnpm lint", "pnpm format:check", "pnpm typecheck",
+                "pnpm test:ci", "cargo fmt --all --check",
+                "cargo clippy --workspace --all-targets --locked -- -D warnings",
+                "cargo nextest run --workspace --locked --profile ci", "reports/junit-rust.xml",
+                "cargo test --workspace --locked --doc", "tools/ci_checks.py", "pytest scripts/tests",
+                "reports/junit-py.xml", "scripts/req_coverage.py", "reports/requirements-coverage.md"):
+        assert cmd in pre_push, f"pre-push.sh does not run {cmd!r}"
+
+
+def test_nfr_13a_pre_push_checks_the_pinned_nextest_version(app_ci, pre_push):
+    """[NFR-13a] pre-push.sh fails when cargo-nextest is not the version that App CI pins (0.9.152)."""
+    assert app_ci["env"]["NEXTEST_VERSION"] == "0.9.152"
+    assert "NEXTEST_VERSION" in pre_push and "app-ci.yml" in pre_push, "pre-push.sh does not read the CI pin"
+    assert "cargo nextest --version" in pre_push
+    assert "cargo test --workspace --locked\n" not in pre_push, "pre-push.sh must not fall back to cargo test"
+
+
+def test_at_37_pre_push_builds_offline_from_the_lockfiles(pre_push):
+    """[AT-37] pre-push.sh fetches with the locked lockfiles, then builds with the network off."""
+    for cmd in ("cargo fetch --locked", "pnpm install --offline --frozen-lockfile", "pnpm build",
+                "CARGO_NET_OFFLINE=true", "cargo build --workspace --locked --offline"):
+        assert cmd in pre_push, f"pre-push.sh does not run {cmd!r}"
+
+
+def test_sec_26_pre_push_runs_the_adversarial_golden_set(pre_push):
+    """[SEC-26] pre-push.sh runs the adversarial golden set on macOS (TS SEC-26 and Rust sec_26)."""
+    assert 'vitest run -t "SEC-26" --passWithNoTests' in pre_push
+    assert "cargo test --locked -p mog-core -p mog-core-ffi sec_26" in pre_push
+
+
+def test_nfr_13a_pre_push_prints_a_summary_and_fails_nonzero(pre_push):
+    """[NFR-13a] pre-push.sh prints PASS or FAIL for each step and exits non-zero when one fails."""
+    assert "Result: PASS" in pre_push and "Result: FAIL" in pre_push
+    assert re.search(r"Result: FAIL\"\s*\n\s*exit 1", pre_push)
 
 
 def test_nfr_13a_app_ci_has_a_nightly_schedule_and_all_triggers(app_ci):
@@ -160,16 +227,41 @@ def test_nfr_16b_pnpm_lock_has_no_rive_webgl():
     assert "@rive-app/webgl" not in names
 
 
-def test_nfr_15a_macos_signing_and_notarization_skip_without_secrets(app_ci):
-    """[NFR-15a] The macOS sign and notarize steps read secrets and run only when the secrets exist."""
-    job = app_ci["jobs"]["package"]
-    env = {**app_ci.get("env", {}), **job.get("env", {})}
-    assert "secrets.APPLE_CERTIFICATE" in str(env)
-    sign = [s for s in steps(job) if "notarytool" in s.get("run", "")]
-    assert sign, "no notarization step"
-    for s in sign:
-        assert "HAS_APPLE_SIGNING == 'true'" in s.get("if", ""), f"step {s.get('name')} is not gated"
-        assert "runner.os == 'macOS'" in s.get("if", "")
+APPLE_SIGNING = {"APPLE_CERTIFICATE": "x", "APPLE_CERTIFICATE_PASSWORD": "x", "APPLE_SIGNING_IDENTITY": "x"}
+APPLE_NOTARY = {"APPLE_ID": "x", "APPLE_PASSWORD": "x", "APPLE_TEAM_ID": "x"}
+
+
+def package_macos_plan(extra):
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is not on PATH")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("APPLE_")}
+    env.update(extra)
+    proc = subprocess.run([bash, str(PACKAGE_MACOS), "--plan"], cwd=ROOT, env=env,
+                          capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    return dict(line.split(": ", 1) for line in proc.stdout.splitlines() if ": " in line)
+
+
+@pytest.mark.parametrize("extra, sign, notarize", [
+    ({}, "skip", "skip"),
+    (APPLE_SIGNING, "yes", "skip"),
+    (APPLE_NOTARY, "skip", "skip"),
+    ({**APPLE_SIGNING, **APPLE_NOTARY}, "yes", "yes"),
+])
+def test_nfr_15a_macos_signing_and_notarization_skip_without_secrets(extra, sign, notarize):
+    """[NFR-15a] package-macos.sh signs only with the APPLE_* signing secrets, and notarizes only when signed."""
+    assert PACKAGE_MACOS.exists(), "scripts/package-macos.sh does not exist"
+    plan = package_macos_plan(extra)
+    assert plan.get("sign") == sign and plan.get("notarize") == notarize, plan
+
+
+def test_nfr_15a_package_macos_builds_notarizes_and_hashes_the_dmg():
+    """[NFR-15a, NFR-15d] package-macos.sh builds the DMG, notarizes and staples it, and writes a SHA-256 file."""
+    text = PACKAGE_MACOS.read_text(encoding="utf-8")
+    for cmd in ("pnpm tauri build --debug --bundles dmg -- --locked", "xcrun notarytool submit",
+                "xcrun stapler staple", "shasum -a 256", ".sha256"):
+        assert cmd in text, f"package-macos.sh does not run {cmd!r}"
 
 
 def test_nfr_15b_windows_signing_skips_without_secrets(app_ci):
@@ -185,13 +277,13 @@ def test_nfr_15b_windows_signing_skips_without_secrets(app_ci):
 
 
 def test_nfr_15d_package_publishes_a_sha256_file_for_each_artifact(app_ci):
-    """[NFR-15d] The package job builds the DMG and NSIS installers and writes a SHA-256 file for each."""
+    """[NFR-15d] The package job builds the NSIS installer on every event and writes a SHA-256 file for it."""
     job = app_ci["jobs"]["package"]
     text = runs(job)
     assert "pnpm tauri build --debug" in text
-    bundles = {e.get("os"): e.get("bundles") for e in matrix_entries(job, "push")}
-    assert bundles == {"macos-15": "dmg", "windows-2025": "nsis"}
-    assert [e.get("bundles") for e in matrix_entries(job, "pull_request")] == ["nsis"]
+    for event in EVENTS:
+        bundles = {e.get("os"): e.get("bundles") for e in matrix_entries(job, event)}
+        assert bundles == {"windows-2025": "nsis"}, f"package on {event}: {bundles}"
     assert "sha256" in text.lower()
     uploads = [s for s in steps(job) if "actions/upload-artifact" in s.get("uses", "")]
     assert uploads and all(".sha256" in str(s.get("with", {}).get("path", "")) for s in uploads)
@@ -203,9 +295,9 @@ def test_nfr_15c_app_ci_makes_no_mac_app_store_build(app_ci):
 
 
 def test_sec_26_app_ci_has_an_adversarial_golden_set_hook(app_ci):
-    """[SEC-26] A CI job runs the adversarial golden set tests (tagged SEC-26) on both OSes on push to main."""
+    """[SEC-26] A CI job runs the adversarial golden set tests (tagged SEC-26) on Windows and Linux."""
     job = app_ci["jobs"]["golden-set"]
-    assert matrix_oses(job, "push") == {"macos-15", "windows-2025"}
+    assert matrix_oses(job) == CI_OSES
     text = runs(job)
     assert "SEC-26" in text and "sec_26" in text
 

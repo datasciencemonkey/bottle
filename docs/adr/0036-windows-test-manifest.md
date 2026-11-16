@@ -74,3 +74,12 @@ windows-2025. Both runs failed on main and on every PR. A failed Format step hid
   20 AppKit tests, so the requirement coverage report counts their requirement IDs.
 - A GNU (`windows-gnu`) build keeps the tauri-build default manifest. The app supports MSVC only.
 - If tauri-build changes its default manifest, update `src-tauri/windows-app-manifest.xml` too.
+
+## Amendment (2026-11-16, #35)
+
+`/WX` stays on. The build script adds one exception, `/IGNORE:4099`. The vendored OpenSSL that
+SQLCipher needs (#35, SP-21, ADR 0033) is a static library whose objects name an
+`ossl_static.pdb` that `openssl-src` does not ship, so `link.exe` gives LNK4099 ("PDB not found")
+for each object, and `/WX` turned that into LNK1218. LNK4099 is about third-party debug info only.
+A test (`nfr_13a_build_script_ignores_only_the_missing_vendored_pdb_warning`) checks that 4099 is
+the only ignored warning.

@@ -245,19 +245,20 @@ fn sec_02b_extra_field_in_a_nested_struct_is_rejected() {
         let code = code_of(&gw.dispatch(label, cmd, args));
         assert_eq!(code, "invalid_args", "{cmd}.{field}");
     }
+    // The spec policy values (#259): any other value is now rejected as `invalid_args`.
     let mut policy = Map::new();
-    for f in [
-        "checkInAtMin",
-        "softCapMin",
-        "extendMin",
-        "silenceNudgeMin",
-        "silenceStopMin",
-        "hardCapMin",
-        "lockStopMin",
-        "holdMaxSec",
-        "handsFreeMaxMin",
+    for (f, v) in [
+        ("checkInAtMin", 55),
+        ("softCapMin", 60),
+        ("extendMin", 30),
+        ("silenceNudgeMin", 5),
+        ("silenceStopMin", 15),
+        ("hardCapMin", 240),
+        ("lockStopMin", 10),
+        ("holdMaxSec", 120),
+        ("handsFreeMaxMin", 5),
     ] {
-        policy.insert(f.into(), json!(1));
+        policy.insert(f.into(), json!(v));
     }
     let ok = json!({"mogId": "a1", "mode": "session", "policy": policy.clone()});
     assert_eq!(
@@ -371,11 +372,8 @@ fn sec_03_each_ipc_error_maps_to_a_fixed_code() {
     let secret = fakes()[1].clone();
     let s = || secret.clone();
     let all = [
-        IpcError::UnknownCommand { command: s() },
-        IpcError::WindowNotAllowed {
-            command: s(),
-            window: s(),
-        },
+        IpcError::UnknownCommand,
+        IpcError::WindowNotAllowed { command: s() },
         IpcError::InvalidArgs {
             command: s(),
             reason: s(),
@@ -386,7 +384,12 @@ fn sec_03_each_ipc_error_maps_to_a_fixed_code() {
         IpcError::MicBusy { command: s() },
         IpcError::ConsentRequired { command: s() },
         IpcError::InvalidMode { command: s() },
+        IpcError::MogCapReached { command: s() },
+        IpcError::UnknownMog { command: s() },
+        IpcError::WindowClosing { command: s() },
+        IpcError::ConfigStorageFailed { command: s() },
     ];
+    assert_eq!(all.len(), ERROR_CODES.len(), "one code per variant");
     for e in &all {
         let code = ipc_error_code(e);
         // The code is the serde tag of the variant, never a field value.
