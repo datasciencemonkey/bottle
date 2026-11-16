@@ -6,8 +6,8 @@
  * Handled forms (the visible text stays, the destination goes):
  * - inline links and images: [text](dest "title"), ![alt](<dest with spaces>)
  * - full and collapsed reference links: [text][label], [text][]
- * - reference definitions at the start of a line, with the destination on the same
- *   or the next line: [label]: dest "title"
+ * - reference definitions at the start of a line (after any quote or list markers),
+ *   with the destination on the same or the next line: [label]: dest "title"
  * - a stray "](dest)" that is left without its opening bracket.
  *
  * It errs on the side of removal: a parenthesised group right after "]" is treated as
@@ -16,6 +16,13 @@
 
 /** Link text deeper than this is dropped instead of scanned, which also bounds recursion. */
 const MAX_DEPTH = 64;
+
+/**
+ * Characters that may lead a line before a reference definition: indentation, block
+ * quote markers and list markers ("-", "*", "+", "1.", "1)"). Erring towards removal,
+ * any mix of them counts.
+ */
+const LINE_PREFIX = /^[ \t>*+\-0-9.)]$/;
 
 interface Index {
   readonly s: string;
@@ -130,7 +137,9 @@ function scan(ix: Index, from: number, to: number, depth: number): string {
       }
     }
     if (c === '\n') lineBlank = true;
-    else if (c !== ' ' && c !== '\t') lineBlank = false;
+    else if (lineBlank && LINE_PREFIX.test(c)) {
+      // Spaces, quote markers and list markers may come before a definition.
+    } else lineBlank = false;
     out.push(c);
     i++;
   }

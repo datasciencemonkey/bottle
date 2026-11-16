@@ -190,9 +190,9 @@ describe('sanitizeQuestion on hostile input', () => {
 
   it('[G-47] removes reference definitions inside quotes and lists', () => {
     for (const prefix of ['> ', '- ', '* ', '+ ', '1. ', '> > ', '  - ']) {
-      const out = sanitizeQuestion('see [r]\n' + prefix + '[r]: https://evil.invalid/x');
+      const out = sanitizeQuestion('see [x][r]\n' + prefix + '[r]: https://evil.invalid/x');
       expect(out).not.toContain('evil.invalid');
-      expect(out).toContain('see r');
+      expect(out).toContain('see x');
     }
   });
 

@@ -13,7 +13,12 @@ const SCRIPT_OR_STYLE_OPEN = /<(script|style)\b[^<>]*>/gi;
 const CLOSE_TAG = { script: /<\/script\b[^<>]*>/gi, style: /<\/style\b[^<>]*>/gi } as const;
 const HTML_COMMENT = /<!--[\s\S]*?(?:-->|$)/g;
 const HTML_TAG = /<\/?[A-Za-z!?][^<>]*>/g; // also covers autolinks such as <https://...>
-const STRAY_TAG_OPEN = /<(?=[A-Za-z!/?])/g; // an unclosed tag start that is left after the passes
+// An unclosed tag start that is left after the passes. A whole run of "<" goes, so that
+// "<<img" cannot turn into "<img" when only the last "<" is removed.
+const STRAY_TAG_OPEN = /(?<!<)<+(?=[A-Za-z!/?])/g; // the lookbehind keeps it linear on long "<" runs
+// Every character that can open HTML, a markdown link or a code fence. Used to fail
+// closed when the passes do not reach a fixpoint.
+const MARKUP_CHARS = /[<>[\]`~]/g;
 const FENCE_LINE = /^[ \t]*(?:`{3,}[^`\n]*|~{3,}.*)$/gm; // a fence line with its info string
 const FENCE_RUN = /`{3,}|~{3,}/g; // a fence run inside a line
 
@@ -60,16 +65,22 @@ function normalizeSpace(s: string): string {
     .trim();
 }
 
-/** G-47: returns the question text with no banned characters or markup. */
+/**
+ * G-47: returns the question text with no banned characters or markup. Nesting can need
+ * one pass per layer, so after MAX_PASSES without a fixpoint it fails closed: every
+ * character that could still form a tag, a link or a fence is removed.
+ */
 export function sanitizeQuestion(raw: string): string {
   let s = stripInvisible(raw);
-  for (let i = 0; i < MAX_PASSES; i++) {
+  let stable = false;
+  for (let i = 0; i < MAX_PASSES && !stable; i++) {
     const before = s;
     s = markupPass(s);
     if (s === before) {
       s = s.replace(STRAY_TAG_OPEN, '');
-      if (s === before) break;
+      stable = s === before;
     }
   }
+  if (!stable) s = s.replace(MARKUP_CHARS, '');
   return normalizeSpace(s);
 }
