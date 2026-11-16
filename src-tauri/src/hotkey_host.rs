@@ -739,6 +739,92 @@ mod tests {
         assert_eq!(service.stops.load(Ordering::SeqCst), 1);
     }
 
+    #[test]
+    fn mb_06a_an_opened_mog_window_becomes_the_target() {
+        // MOG windows are not focusable (MOG-01b), so opening one must set the target.
+        let target = PttTarget::default();
+        target.on_window("mog-a1", WindowSignal::Opened);
+        assert_eq!(target.current().as_deref(), Some("a1"));
+        target.on_window("mog-b2", WindowSignal::Opened);
+        assert_eq!(target.current().as_deref(), Some("b2"));
+    }
+
+    #[test]
+    fn mb_06a_a_card_open_or_focus_targets_its_mog() {
+        let target = PttTarget::default();
+        target.on_window("mog-a1", WindowSignal::Opened);
+        target.on_window("mog-b2", WindowSignal::Opened);
+        target.on_window("card-a1", WindowSignal::Focused);
+        assert_eq!(target.current().as_deref(), Some("a1"));
+        target.on_window("card-b2", WindowSignal::Opened);
+        assert_eq!(target.current().as_deref(), Some("b2"));
+        // A closed card does not clear its MOG.
+        target.on_window("card-b2", WindowSignal::Destroyed);
+        assert_eq!(target.current().as_deref(), Some("b2"));
+    }
+
+    #[test]
+    fn mb_06a_window_events_and_page_loads_map_to_signals() {
+        use tauri::webview::PageLoadEvent;
+        use tauri::WindowEvent;
+        assert_eq!(
+            signal_of_window_event(&WindowEvent::Focused(true)),
+            Some(WindowSignal::Focused)
+        );
+        assert_eq!(
+            signal_of_window_event(&WindowEvent::Destroyed),
+            Some(WindowSignal::Destroyed)
+        );
+        assert_eq!(signal_of_window_event(&WindowEvent::Focused(false)), None);
+        assert_eq!(
+            signal_of_page_load(PageLoadEvent::Finished),
+            Some(WindowSignal::Opened)
+        );
+        assert_eq!(signal_of_page_load(PageLoadEvent::Started), None);
+    }
+
+    #[test]
+    fn mb_06a_a_real_mog_window_load_and_close_move_the_target() {
+        // The real path: install, a `mog-a1` webview window, the page-load and window hooks.
+        let app = tauri::test::mock_app();
+        install_with(app.handle(), |_key, _sink| {
+            (
+                Box::new(FakeService::default()) as Box<dyn HotkeyService>,
+                Box::new(FakePermissions::default()) as Box<dyn PermissionApi>,
+            )
+        })
+        .unwrap();
+        let win = tauri::WebviewWindowBuilder::new(&app, "mog-a1", tauri::WebviewUrl::default())
+            .build()
+            .unwrap();
+        apply_signal(
+            app.handle(),
+            win.label(),
+            signal_of_page_load(tauri::webview::PageLoadEvent::Finished),
+        );
+        let rt = app.state::<HotkeyRuntime>();
+        assert_eq!(rt.target.current().as_deref(), Some("a1"));
+        on_window_event(&win.as_ref().window(), &tauri::WindowEvent::Destroyed);
+        assert_eq!(rt.target.current(), None);
+    }
+
+    #[test]
+    fn at_30_lib_wires_the_page_load_window_and_exit_hooks() {
+        let lib = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"),
+        )
+        .unwrap();
+        for hook in [
+            ".on_page_load(hotkey_host::on_page_load)",
+            "hotkey_host::on_window_event(window, event)",
+            "hotkey_host::install(handle)",
+            "tauri::RunEvent::Exit",
+            "hotkey_host::shutdown(app)",
+        ] {
+            assert!(lib.contains(hook), "lib.rs misses {hook}");
+        }
+    }
+
     fn production_code(text: &str) -> String {
         text.split("#[cfg(test)]")
             .next()
