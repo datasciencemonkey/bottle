@@ -22,7 +22,7 @@ device. `docs/spikes/SP-04.md` has five twelve-thread runs on it (runs 1-5).
 2. **macOS result:**
    - Load: PASS with a warm cache (0.82-1.56 s). The cold cache was not measured (#432).
    - Peak RSS: FAIL in every run (1.77-1.98 GB).
-   - 10 s p95: PASS in 1 of 4 runs (run 1, 593.1 ms at load average 23-24). FAIL in the others
+   - 10 s p95: PASS in 1 of 5 runs (run 1, 593.1 ms at load average 23-24). FAIL in the others
      (1.9-3.2 s at load averages from 13 at the start up to 163).
    - Tail p95 (CONDITIONAL on #283): PASS in run 1 only (232.6 ms).
 3. **No step down the fallback chain now.** Local Parakeet on sherpa-onnx stays the STT default
