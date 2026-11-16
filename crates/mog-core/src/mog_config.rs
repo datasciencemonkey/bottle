@@ -348,12 +348,23 @@ impl Default for CardConfig {
     }
 }
 
-/// True if `id` can name a config file (and a `mog-<id>` window label): 1 to
-/// [`MAX_ID_LEN`] ASCII letters, digits and `-`. So an ID never holds a path separator or a dot.
+/// Windows device names. `con.json` and the like name a device, not a file.
+const DEVICE_NAMES: [&str; 22] = [
+    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+    "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+];
+
+/// True if `id` can name a config file: 1 to [`MAX_ID_LEN`] lower-case ASCII letters, digits and
+/// `-`, and not a Windows device name. So an ID never holds a path separator or a dot, two IDs
+/// never share a file on a case-insensitive file system, and each ID also names a `mog-<id>`
+/// window (the window-label rule is wider: it allows upper case).
 pub fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= MAX_ID_LEN
-        && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        && !DEVICE_NAMES.contains(&id)
 }
 
 const MAX_NAME_CHARS: usize = 64;
@@ -587,7 +598,12 @@ impl MogConfigStore {
     pub fn write(&self, id: &str, json: &JsonObject) -> Result<MogConfig, ConfigError> {
         let path = self.path(id)?;
         let cfg = parse_config(json)?;
-        let bytes = serde_json::to_vec_pretty(&cfg).map_err(|_| ConfigError::InvalidConfig)?;
+        // The saved file has the defaults filled in, so it can be larger than the request. It
+        // gets the same cap that `read` applies, so every saved config can be read back.
+        let bytes = serde_json::to_vec(&cfg).map_err(|_| ConfigError::InvalidConfig)?;
+        if bytes.len() > MAX_CONFIG_BYTES {
+            return Err(ConfigError::TooLarge);
+        }
         let _guard = self.lock.lock().unwrap_or_else(|p| p.into_inner());
         if !path.exists() && self.ids()?.len() >= MAX_CONFIGS {
             return Err(ConfigError::LimitReached);
