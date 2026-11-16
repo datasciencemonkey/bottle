@@ -87,6 +87,13 @@ pub fn decode_flags_changed(key: TalkKey, keycode: u16, flags: u64) -> Option<Ke
     })
 }
 
+/// The physical state from the HID key state of the talk key, the HID flag state and the
+/// HID key state of Space (CAP-45). The talk key uses its own key state, not the
+/// device-dependent flag bits, which a source-state read may not carry.
+pub fn physical_from_hid(_talk_key_down: bool, _flags: u64, _space_down: bool) -> PhysicalState {
+    todo!()
+}
+
 /// The physical state from the HID flag state and the Space key state (CAP-45).
 pub fn physical_from_flags(key: TalkKey, flags: u64, space_down: bool) -> PhysicalState {
     let (_, mask) = talk_key_code(key);
@@ -196,6 +203,17 @@ mod tests {
         assert!(physical_from_flags(TalkKey::RightOption, chord, true).chord_down);
         assert!(!physical_from_flags(TalkKey::RightOption, chord, false).chord_down);
         assert!(!physical_from_flags(TalkKey::RightOption, CG_FLAG_SHIFT, true).chord_down);
+    }
+
+    #[test]
+    fn cap_45_physical_state_uses_the_talk_key_state_not_device_bits() {
+        // No device bits in the flags: the key state alone decides.
+        assert!(physical_from_hid(true, 0, false).talk_key_down);
+        assert!(!physical_from_hid(false, 0x0008_0140, false).talk_key_down);
+        let chord = CG_FLAG_CONTROL | CG_FLAG_SHIFT;
+        assert!(physical_from_hid(false, chord, true).chord_down);
+        assert!(!physical_from_hid(false, chord, false).chord_down);
+        assert!(!physical_from_hid(false, CG_FLAG_CONTROL, true).chord_down);
     }
 }
 
@@ -590,6 +608,10 @@ mod sys {
         fn recreate(&self) {
             // The watchdog thread does it, outside the engine lock and off the tap thread.
             self.recreate_requested.store(true, Ordering::Release);
+        }
+
+        fn tap_alive(&self) -> bool {
+            !self.tap_port.load(Ordering::Acquire).is_null()
         }
 
         fn set_chord(&self, on: bool) {

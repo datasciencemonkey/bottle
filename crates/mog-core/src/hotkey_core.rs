@@ -38,6 +38,14 @@ pub const TAP_FAILURE_LIMIT: usize = 3;
 /// The window for [`TAP_FAILURE_LIMIT`].
 pub const TAP_FAILURE_WINDOW: Duration = Duration::from_secs(10);
 
+/// While Input Monitoring is granted and no tap is alive, the watchdog asks for a new tap
+/// this often (CAP-38b). `CGEventTapCreate` can fail for a short time after a wake.
+pub const TAP_RETRY_INTERVAL: Duration = Duration::from_secs(1);
+
+/// While Secure Event Input is on and the chord could not be registered, the watchdog tries
+/// again this often (CAP-39b).
+pub const CHORD_RETRY_INTERVAL: Duration = Duration::from_secs(1);
+
 /// A modifier-only talk key (CAP-35b, D66). The default is Right-Option.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum TalkKey {
@@ -101,6 +109,11 @@ pub enum HotkeyOutput {
     TalkKeyPaused,
     /// Hide the pill: the talk key works again.
     TalkKeyRestored,
+    /// Secure Event Input is on, but the OS refused the fallback chord (for example another
+    /// app owns Ctrl+Shift+Space). PTT does not work until the chord registers or Secure
+    /// Event Input ends. The watchdog keeps trying (CAP-39b). The pill text for this case
+    /// waits for contract change #297.
+    FallbackChordUnavailable,
 }
 
 impl HotkeyOutput {
@@ -420,8 +433,21 @@ pub trait TapControl: Send + Sync {
     fn re_enable(&self);
     /// Remove the tap and create a new one. The OS layer may do it later, off the tap thread.
     fn recreate(&self);
-    /// Register (`true`) or unregister (`false`) the Carbon fallback chord.
+    /// Register (`true`) or unregister (`false`) the Carbon fallback chord. The OS layer
+    /// reports the result of a register with [`HotkeyEngine::on_chord_registered`].
     fn set_chord(&self, on: bool);
+    /// A tap exists now. When it is false and Input Monitoring is granted, the watchdog asks
+    /// for a new tap every [`TAP_RETRY_INTERVAL`] (CAP-38b).
+    fn tap_alive(&self) -> bool;
+}
+
+/// The state of the fallback chord registration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChordState {
+    Off,
+    Pending,
+    On,
+    Failed { at: Duration },
 }
 
 /// R1 core: the machine, the watchdog and the Secure Event Input monitor, wired to a sink.
@@ -433,6 +459,9 @@ pub struct HotkeyEngine {
     slept: Option<Duration>,
     session_active: Option<bool>,
     granted: Option<bool>,
+    chord: ChordState,
+    chord_reported: bool,
+    last_tap_retry: Option<Duration>,
 }
 
 impl std::fmt::Debug for HotkeyEngine {
@@ -454,7 +483,16 @@ impl HotkeyEngine {
             slept: None,
             session_active: None,
             granted: None,
+            chord: ChordState::Off,
+            chord_reported: false,
+            last_tap_retry: None,
         }
+    }
+
+    /// The OS layer tried to register the fallback chord. On a failure R1 emits
+    /// [`HotkeyOutput::FallbackChordUnavailable`] once and retries (CAP-39b).
+    pub fn on_chord_registered(&mut self, _ok: bool, _now: Duration) {
+        todo!()
     }
 
     /// The PTT machine (read only).
@@ -620,9 +658,16 @@ mod tests {
         Recreate,
         Chord(bool),
     }
-    #[derive(Default)]
-    struct FakeCtl(Mutex<Vec<Ctl>>);
+    struct FakeCtl(Mutex<Vec<Ctl>>, Mutex<bool>);
+    impl Default for FakeCtl {
+        fn default() -> Self {
+            Self(Mutex::new(Vec::new()), Mutex::new(true))
+        }
+    }
     impl TapControl for FakeCtl {
+        fn tap_alive(&self) -> bool {
+            *self.1.lock().unwrap()
+        }
         fn re_enable(&self) {
             self.0.lock().unwrap().push(Ctl::ReEnable);
         }
@@ -908,6 +953,115 @@ mod tests {
     }
 
     #[test]
+    fn cap_38b_failed_recreate_is_retried_until_a_tap_is_alive() {
+        let sink = Arc::new(RecSink::default());
+        let probe = FakeProbe::ready();
+        let ctl = FakeCtl::default();
+        let clock = SimClock::new();
+        let mut e = HotkeyEngine::new(sink.clone());
+        e.tick(clock.now(), &probe, &ctl);
+        assert_eq!(ctl.take(), vec![]);
+        // The recreate after a wake failed: no tap is alive.
+        *ctl.1.lock().unwrap() = false;
+        let mut recreates = 0;
+        for _ in 0..30 {
+            clock.advance(WATCHDOG_TICK);
+            e.tick(clock.now(), &probe, &ctl);
+            recreates += ctl.take().iter().filter(|c| **c == Ctl::Recreate).count();
+        }
+        // 3 s of ticks with a 1 s retry interval.
+        assert_eq!(recreates, 3);
+        // The tap comes back: no more retries.
+        *ctl.1.lock().unwrap() = true;
+        for _ in 0..30 {
+            clock.advance(WATCHDOG_TICK);
+            e.tick(clock.now(), &probe, &ctl);
+        }
+        assert_eq!(ctl.take(), vec![]);
+    }
+
+    #[test]
+    fn cap_38b_no_tap_retry_without_input_monitoring() {
+        let sink = Arc::new(RecSink::default());
+        let probe = FakeProbe::ready();
+        *probe.granted.lock().unwrap() = false;
+        let ctl = FakeCtl::default();
+        *ctl.1.lock().unwrap() = false;
+        let mut e = HotkeyEngine::new(sink);
+        for i in 0..30 {
+            e.tick(WATCHDOG_TICK * i, &probe, &ctl);
+        }
+        assert_eq!(ctl.take(), vec![]);
+    }
+
+    #[test]
+    fn cap_39b_failed_chord_registration_is_reported_once_and_retried() {
+        let sink = Arc::new(RecSink::default());
+        let probe = FakeProbe::ready();
+        let ctl = FakeCtl::default();
+        let clock = SimClock::new();
+        let mut e = HotkeyEngine::new(sink.clone());
+        e.tick(clock.now(), &probe, &ctl);
+        *probe.secure.lock().unwrap() = true;
+        clock.advance(WATCHDOG_TICK);
+        e.tick(clock.now(), &probe, &ctl);
+        assert_eq!(ctl.take(), vec![Ctl::Chord(true)]);
+        assert_eq!(sink.take(), vec![TalkKeyPaused]);
+        // The OS refuses the chord.
+        e.on_chord_registered(false, clock.now());
+        assert_eq!(sink.take(), vec![HotkeyOutput::FallbackChordUnavailable]);
+        // The watchdog retries every second; a second failure is not reported again.
+        let mut retries = 0;
+        for _ in 0..20 {
+            clock.advance(WATCHDOG_TICK);
+            e.tick(clock.now(), &probe, &ctl);
+            let n = ctl
+                .take()
+                .iter()
+                .filter(|c| **c == Ctl::Chord(true))
+                .count();
+            if n > 0 {
+                retries += n;
+                e.on_chord_registered(false, clock.now());
+            }
+        }
+        assert_eq!(retries, 2);
+        assert_eq!(sink.take(), vec![]);
+        // A retry works: the pill shows again and the chord drives PTT.
+        clock.advance(CHORD_RETRY_INTERVAL);
+        e.tick(clock.now(), &probe, &ctl);
+        assert_eq!(ctl.take(), vec![Ctl::Chord(true)]);
+        e.on_chord_registered(true, clock.now());
+        assert_eq!(sink.take(), vec![TalkKeyPaused]);
+        clock.advance(WATCHDOG_TICK * 20);
+        e.tick(clock.now(), &probe, &ctl);
+        assert_eq!(ctl.take(), vec![], "no retry once the chord is on");
+        e.on_chord(Down);
+        e.on_chord(Up);
+        assert_eq!(sink.take(), vec![Ptt(PDown), Ptt(PUp)]);
+    }
+
+    #[test]
+    fn cap_39b_late_chord_result_after_secure_input_ends_is_ignored() {
+        let sink = Arc::new(RecSink::default());
+        let probe = FakeProbe::ready();
+        let ctl = FakeCtl::default();
+        let mut e = HotkeyEngine::new(sink.clone());
+        e.tick(Duration::ZERO, &probe, &ctl);
+        *probe.secure.lock().unwrap() = true;
+        e.tick(WATCHDOG_TICK, &probe, &ctl);
+        *probe.secure.lock().unwrap() = false;
+        e.tick(WATCHDOG_TICK * 2, &probe, &ctl);
+        sink.take();
+        e.on_chord_registered(false, WATCHDOG_TICK * 3);
+        assert_eq!(sink.take(), vec![]);
+        for i in 4..40 {
+            e.tick(WATCHDOG_TICK * i, &probe, &ctl);
+        }
+        assert_eq!(ctl.take(), vec![Ctl::Chord(true), Ctl::Chord(false)]);
+    }
+
+    #[test]
     fn cap_39a_secure_input_ends_an_active_ptt() {
         let mut m = PttMachine::new();
         m.on_talk_key(Down);
@@ -1018,6 +1172,7 @@ mod tests {
         );
         assert_eq!(TalkKeyPaused.pill_text(), Some(TALK_KEY_PAUSED_PILL));
         assert_eq!(TalkKeyRestored.pill_text(), None);
+        assert_eq!(HotkeyOutput::FallbackChordUnavailable.pill_text(), None);
         assert_eq!(Ptt(PDown).pill_text(), None);
     }
 
