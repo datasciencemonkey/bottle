@@ -9,7 +9,7 @@
 //!   command has a result yet) or `{"error": "<code>", ...}` on failure. The caller frees it
 //!   with `mog_free_string`.
 //! - Every command goes through R12 `mog_core::ipc::handle`, the same gateway as the Tauri host
-//!   (ADR 0003, ADR 0004). The FFI caller has the brain window class. Errors are the serialized
+//!   (ADR 0003, ADR 0006). The FFI caller has the brain window class. Errors are the serialized
 //!   `IpcError` (for example `{"error":"not_implemented","command":"cli_status"}`), except that
 //!   an unknown command name is never echoed.
 //! - Events reach the host as `{"event": "<name>", "payload": {...}}`, the message shape of the
@@ -45,7 +45,7 @@ pub const MOG_STATUS_INVALID_ARGUMENT: i32 = 1;
 pub const MOG_STATUS_INTERNAL: i32 = 3;
 
 /// The window label that R12 sees for calls through the C ABI. The ABI host takes the place of
-/// the brain window, so it gets the brain window class (ADR 0004).
+/// the brain window, so it gets the brain window class (ADR 0006).
 pub const FFI_WINDOW_LABEL: &str = "brain";
 
 /// The event callback: a JSON event as a C string, plus the host's `user_data`. Null clears it.

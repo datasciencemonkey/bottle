@@ -1,4 +1,4 @@
-# ADR 0004: The C ABI caller and the IPC gateway
+# ADR 0006: The C ABI caller and the IPC gateway
 
 - Status: Proposed
 - Date: 2026-11-16
