@@ -1,0 +1,80 @@
+/**
+ * G-47: the question sanitizer. It removes control, zero-width and bidi characters,
+ * code fences, HTML and markdown links. It runs to a fixpoint, so that nested markup
+ * cannot rebuild itself after one pass.
+ */
+
+/** C0 and C1 controls except tab and newline, all Unicode format characters (Cf: zero-width, bidi, tags, soft hyphen). */
+const INVISIBLE = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\p{Cf}\u00AD\u061C\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/gu;
+
+const SCRIPT_OR_STYLE_OPEN = /<(script|style)\b[^<>]*>/gi;
+const HTML_COMMENT = /<!--[\s\S]*?(?:-->|$)/g;
+const HTML_TAG = /<\/?[A-Za-z!?][^<>]*>/g; // also covers autolinks such as <https://...>
+const STRAY_TAG_OPEN = /<(?=[A-Za-z!/?])/g; // an unclosed tag start that is left after the passes
+const MD_INLINE_LINK = /!?\[([^[\]]*)\]\([^()]*\)/g; // [text](url "title") and ![alt](url)
+const MD_REFERENCE_LINK = /!?\[([^[\]]+)\]\[[^[\]]*\]/g; // [text][ref] and [text][]
+const MD_REFERENCE_DEF = /^[ \t]*\[[^[\]]+\]:[ \t]*\S.*$/gm; // [ref]: url "title"
+const FENCE_LINE = /^[ \t]*(?:`{3,}|~{3,}).*$/gm; // a fence line with its info string
+const FENCE_RUN = /`{3,}|~{3,}/g; // a fence run inside a line
+
+const MAX_PASSES = 32;
+
+/** Removes control, zero-width and bidi characters (G-47). Exported for the secret check. */
+export function stripInvisible(raw: string): string {
+  return raw.replace(/\r\n?|[\u2028\u2029]/g, '\n').replace(INVISIBLE, '');
+}
+
+/**
+ * Removes script and style elements with their content in linear time. An unclosed
+ * element is removed to the end of the text, as a browser would treat it.
+ */
+function removeScriptAndStyle(s: string): string {
+  const lower = s.toLowerCase();
+  let out = '';
+  let pos = 0;
+  SCRIPT_OR_STYLE_OPEN.lastIndex = 0;
+  for (let m = SCRIPT_OR_STYLE_OPEN.exec(s); m; m = SCRIPT_OR_STYLE_OPEN.exec(s)) {
+    if (m.index < pos) continue;
+    out += s.slice(pos, m.index);
+    const close = lower.indexOf('</' + (m[1] ?? '').toLowerCase(), m.index + m[0].length);
+    const closeEnd = close < 0 ? -1 : s.indexOf('>', close);
+    pos = closeEnd < 0 ? s.length : closeEnd + 1;
+    SCRIPT_OR_STYLE_OPEN.lastIndex = pos;
+  }
+  return out + s.slice(pos);
+}
+
+function markupPass(s: string): string {
+  return removeScriptAndStyle(s)
+    .replace(HTML_COMMENT, '')
+    .replace(HTML_TAG, '')
+    .replace(MD_REFERENCE_DEF, '')
+    .replace(MD_INLINE_LINK, '$1')
+    .replace(MD_REFERENCE_LINK, '$1')
+    .replace(FENCE_LINE, '')
+    .replace(FENCE_RUN, '');
+}
+
+function normalizeSpace(s: string): string {
+  return s
+    .replace(/[^\S\n\t]/g, ' ')
+    .replace(/ {2,}/g, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/** G-47: returns the question text with no banned characters or markup. */
+export function sanitizeQuestion(raw: string): string {
+  let s = stripInvisible(raw);
+  for (let i = 0; i < MAX_PASSES; i++) {
+    const before = s;
+    s = markupPass(s);
+    if (s === before) {
+      s = s.replace(STRAY_TAG_OPEN, '');
+      if (s === before) break;
+    }
+  }
+  return normalizeSpace(s);
+}

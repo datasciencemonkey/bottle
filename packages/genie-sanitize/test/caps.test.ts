@@ -140,3 +140,9 @@ describe('whole message caps', () => {
     }
   });
 });
+
+describe('byte length', () => {
+  it('[G-30c] counts a lone surrogate as the 3 bytes of its replacement character', () => {
+    expect(utf8ByteLength('\uD800')).toBe(3);
+  });
+});

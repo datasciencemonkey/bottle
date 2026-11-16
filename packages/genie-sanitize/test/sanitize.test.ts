@@ -97,3 +97,18 @@ describe('sanitizeQuestion', () => {
     if (!r.ok) expect(r.reason).toBe('empty');
   });
 });
+
+describe('sanitizeQuestion on hostile input', () => {
+  it('[G-47] removes an unclosed script element to the end of the text', () => {
+    expect(sanitizeQuestion('ask <script>alert(1) and more')).toBe('ask');
+  });
+
+  it('[G-47] runs in linear time on long runs of unclosed markup', () => {
+    for (const unit of ['<script>', '[a](', '<!--', '<a ', '[x][']) {
+      const t = Date.now();
+      const out = sanitizeQuestion(unit.repeat(20_000));
+      expect(Date.now() - t).toBeLessThan(500);
+      expect(out).not.toMatch(/<\/?[a-z!]/i);
+    }
+  });
+});
