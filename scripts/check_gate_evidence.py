@@ -8,6 +8,8 @@
 Rules (docs/tests/EVIDENCE-TEMPLATE.md has the file format):
 1. Each docs/evidence/*.md file (not README.md) has a field table with a known Gate (an AT-nn or
    SP-nn ID of the requirements), a known Gate type and a Result of pass, fail, partial or not run.
+   An SP-nn Gate has the type spike; a review type (signing, admin preflight, MDM keys, legal)
+   has the Gate AT-22 or AT-37.
 2. A Result of pass needs a Date run (YYYY-MM-DD), a Run by value and a filled "Raw evidence"
    section. So an unrun spike cannot be a pass.
 3. A ticked ([x]) row of the release checklist names one or more docs/evidence/*.md files in its
@@ -29,6 +31,7 @@ import req_parse  # noqa: E402
 GATE_TYPES = ("spike", "device", "live", "release", "MVP exit",
               "signing review", "admin preflight", "MDM keys", "legal review")
 REVIEW_TYPES = ("signing review", "admin preflight", "MDM keys", "legal review")
+REVIEW_GATES = ("AT-22", "AT-37")
 RESULTS = ("pass", "fail", "partial", "not run")
 REQUIRED = ("Gate", "Gate type", "Result")
 EVIDENCE_LINK = re.compile(r"docs/evidence/[\w.-]+\.md")
@@ -53,7 +56,9 @@ def parse_evidence(text):
 
 
 def is_placeholder(text):
-    return all(PLACEHOLDER.match(line) for line in text.splitlines()) if text else True
+    """True when the text has no content: only placeholders, blanks or code-fence lines."""
+    lines = [line for line in text.splitlines() if not line.strip().startswith("```")]
+    return all(PLACEHOLDER.match(line) for line in lines)
 
 
 def valid_date(text):
@@ -84,6 +89,12 @@ def load_evidence(evidence_dir, doc, errors):
             errors.append(f"{name}: Gate {gate} is not an AT or SP ID of the requirements")
         if kind not in GATE_TYPES:
             errors.append(f"{name}: Gate type {kind} is not one of {', '.join(GATE_TYPES)}")
+        if gate.startswith("SP-") and kind != "spike":
+            errors.append(f"{name}: Gate {gate} is a spike, so its Gate type must be spike, not {kind}")
+        if kind == "spike" and not gate.startswith("SP-"):
+            errors.append(f"{name}: Gate type spike needs an SP-nn Gate, not {gate}")
+        if kind in REVIEW_TYPES and gate not in REVIEW_GATES:
+            errors.append(f"{name}: Gate type {kind} needs Gate {' or '.join(REVIEW_GATES)}, not {gate}")
         if result not in RESULTS:
             errors.append(f"{name}: Result {fields['Result']} is not one of {', '.join(RESULTS)}")
         if result == "pass":
@@ -130,11 +141,12 @@ def check_release(doc, files, ticked, rows, errors):
     for at in rows:
         if at != "AT-22" and at not in ticked:
             errors.append(f"AT-22 is ticked but {at} is not ticked")
-    run_spikes = {f["Gate"] for f in files.values() if f["Result"] in ("pass", "fail", "partial")}
+    run_spikes = {f["Gate"] for f in files.values()
+                  if f["Gate type"] == "spike" and f["Result"] in ("pass", "fail", "partial")}
     for sp in sorted((i for i in doc.known_ids if re.fullmatch(r"SP-\d+", i)), key=req_parse.id_sort_key):
         if sp not in run_spikes:
             errors.append(f"AT-22 is ticked but spike {sp} has no run evidence (pass, fail or partial)")
-    passed = {f["Gate type"] for f in files.values() if f["Result"] == "pass"}
+    passed = {f["Gate type"] for f in files.values() if f["Result"] == "pass" and f["Gate"] in REVIEW_GATES}
     for review in REVIEW_TYPES:
         if review not in passed:
             errors.append(f"AT-22 is ticked but no {review} evidence has Result pass")

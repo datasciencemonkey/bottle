@@ -4,7 +4,8 @@
 // `mcp_call` result shape `{ structuredContent, text, isError, httpStatus, rpcError? }`
 // (section 4.4). Facts come from research/connector-spec-2026-11-14.md and the live probe of
 // 2026-11-14 (D56):
-// - tools: genie_ask, genie_poll_response, genie_get_query_result, genie_cancel_response, view_ask;
+// - tools: genie_ask, genie_poll_response, genie_get_query_result, genie_cancel_response
+//   (view_ask is for MCP Apps clients only, so the double does not list it);
 // - poll status: in_progress | completed | incomplete | failed | unknown;
 // - progress_steps is string[] or null; query_items is [{ item_id, sql? }] or null;
 // - deep_link is https://<host>/one/chat/threads/<cid>?o=<wsid>&utm_source=genie_chat_mcp, or null;
@@ -19,7 +20,6 @@ export const GENIE_ONE_TOOLS = [
   'genie_poll_response',
   'genie_get_query_result',
   'genie_cancel_response',
-  'view_ask',
 ] as const;
 export type GenieOneTool = (typeof GENIE_ONE_TOOLS)[number];
 
@@ -303,7 +303,7 @@ export function createGenieOneMcpDouble(opts: GenieOneMcpDoubleOptions) {
       case 'tools/call': {
         const p = asArgs(req.params);
         const name = String(p.name);
-        if (!(GENIE_ONE_TOOLS as readonly string[]).includes(name) || name === 'view_ask') {
+        if (!(GENIE_ONE_TOOLS as readonly string[]).includes(name)) {
           return fail(-32602, `unknown tool ${name}`);
         }
         const r = await call(name, p.arguments);
