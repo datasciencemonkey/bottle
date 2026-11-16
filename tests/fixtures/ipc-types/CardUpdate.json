@@ -1,0 +1,18 @@
+{
+  "mogId": "6f1c2a9e-4b3d-4e8a-9c7f-2d5e8a1b3c4d",
+  "blurbs": [
+    { "id": "b1", "text": "Revenue last quarter was 4.2 M.", "pinned": true, "completed": true },
+    {
+      "id": "b2",
+      "text": "Two answers",
+      "parts": [
+        { "id": "b2-1", "text": "Prod revenue rose." },
+        { "id": "b2-2", "text": "Staging churn fell." }
+      ]
+    }
+  ],
+  "chips": [{ "id": "c1", "label": "Show the SQL" }],
+  "answerMd": "**4.2 M** in EMEA.",
+  "historyCount": 3,
+  "sttBadge": "STT: local"
+}

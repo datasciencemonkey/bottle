@@ -17,6 +17,7 @@ import type {
   Track,
   Transcript,
 } from '../src/shared/interfaces';
+import type { CardUpdate, MicLevelFrame, MogViewState } from '../src/shared/ipc';
 
 // Each JSON fixture in tests/fixtures/ipc-types has a typed twin here. `satisfies` makes
 // `pnpm typecheck` fail if a fixture does not fit its TS type; the test below checks that the
@@ -110,7 +111,70 @@ const everyUnionValueListed: [
   Equal<(typeof ROUTER_COMMANDS)[number], RouterDecision['command']>,
 ] = [true, true, true, true, true, true, true, true, true, true];
 
+// Brain-to-view payloads (#285, ADR 0032).
+const VIEW_STATE = {
+  mogId: MOG,
+  mood: 'listening',
+  overlays: {
+    attention: false,
+    recording: true,
+    offline: false,
+    hop: 'staging',
+    localOnly: false,
+  },
+  badges: [
+    {
+      kind: 'identity',
+      text: 'DEFAULT · Genie',
+      label: 'DEFAULT · Genie, workspace example.cloud.databricks.com',
+      detail: 'example.cloud.databricks.com',
+      hoverOnly: true,
+    },
+    {
+      kind: 'stt',
+      text: 'STT: local',
+      label: 'STT: local, speech stays on this device',
+      hoverOnly: true,
+      action: 'open_data_disclosures',
+    },
+  ],
+  trace: {
+    seq: 7,
+    eventAt: 1763251200000.25,
+    sentAt: 1763251200001.5,
+    keyDownAt: 1763251199999.75,
+  },
+} satisfies MogViewState;
+const CARD_UPDATE = {
+  mogId: MOG,
+  blurbs: [
+    { id: 'b1', text: 'Revenue last quarter was 4.2 M.', pinned: true, completed: true },
+    {
+      id: 'b2',
+      text: 'Two answers',
+      parts: [
+        { id: 'b2-1', text: 'Prod revenue rose.' },
+        { id: 'b2-2', text: 'Staging churn fell.' },
+      ],
+    },
+  ],
+  chips: [{ id: 'c1', label: 'Show the SQL' }],
+  answerMd: '**4.2 M** in EMEA.',
+  historyCount: 3,
+  sttBadge: 'STT: local',
+} satisfies CardUpdate;
+
 const typed: Record<string, unknown> = {
+  MogViewState: VIEW_STATE,
+  'MogViewState.minimal': {
+    mogId: OTHER_MOG,
+    mood: 'idle',
+    overlays: { attention: false, recording: false, offline: false, localOnly: true },
+  } satisfies MogViewState,
+  CardUpdate: CARD_UPDATE,
+  'CardUpdate.minimal': { mogId: OTHER_MOG, blurbs: [], chips: [] } satisfies CardUpdate,
+  MicLevelFrame: { owner: MOG, dbfs: -42.5, t: 1250.5 } satisfies MicLevelFrame,
+  'MicLevelFrame.closed': { owner: null, dbfs: -120.5, t: 1300.25 } satisfies MicLevelFrame,
   MogId: MOG satisfies MogId,
   ProfileName: 'DEFAULT' satisfies ProfileName,
   Mood: MOODS,
@@ -276,7 +340,10 @@ const noCredentialField: [
   NoCredential<SegmentRef>,
   NoCredential<Transcript>,
   NoCredential<RouterDecision>,
-] = [true, true, true, true, true, true];
+  NoCredential<MogViewState>,
+  NoCredential<CardUpdate>,
+  NoCredential<MicLevelFrame>,
+] = [true, true, true, true, true, true, true, true, true];
 
 describe('IPC type fixtures', () => {
   it('every fixture file has a typed twin, and every twin has a file', () => {

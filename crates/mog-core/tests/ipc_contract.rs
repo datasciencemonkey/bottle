@@ -232,6 +232,8 @@ fn arc_5_event_names_are_valid_tauri_names() {
         "agent.status",
         "mog.view_state",
         "card.update",
+        // #285 (ADR 0032): mic frames for the MOG level meter (UX-06a).
+        "mog.level",
         "view.input",
     ];
     let names: Vec<&str> = events::ALL.iter().map(|e| e.name).collect();
@@ -249,7 +251,7 @@ fn arc_5_core_events_go_to_the_brain_and_view_events_come_from_it() {
     use events::Direction::*;
     for e in events::ALL {
         let expected = match e.spec_name {
-            "mog.view_state" | "card.update" => BrainToView,
+            "mog.view_state" | "card.update" | "mog.level" => BrainToView,
             _ => CoreToBrain,
         };
         assert_eq!(e.direction, expected, "{}", e.spec_name);
@@ -410,4 +412,68 @@ fn cap_02a_schema_states_the_lease_rule() {
     let schemas = ipc::schemas();
     let text = schemas["capture_stop"].to_string();
     assert!(text.contains(ipc::LEASE_PATTERN), "{text}");
+}
+
+// ---------- #285 / #333 (ADR 0032): content-free errors and the R11 codes ----------
+
+#[test]
+fn sec_03_window_not_allowed_names_no_window_label() {
+    let label = format!("mog-{}", "a1b2c3");
+    let err = ipc::handle(&label, "cli_status", json!({})).unwrap_err();
+    let wire = serde_json::to_value(&err).unwrap();
+    assert_eq!(
+        wire,
+        json!({"error": "window_not_allowed", "command": "cli_status"})
+    );
+    let shown = format!("{err} {err:?} {wire}");
+    assert!(!shown.contains("a1b2c3"), "the label leaked: {shown}");
+}
+
+#[test]
+fn sec_03_unknown_command_echoes_no_name() {
+    let err = ipc::handle("brain", SECRET, json!({})).unwrap_err();
+    assert_eq!(err, IpcError::UnknownCommand);
+    let wire = serde_json::to_value(&err).unwrap();
+    assert_eq!(wire, json!({"error": "unknown_command"}));
+    let shown = format!("{err} {err:?} {wire}");
+    assert!(!shown.contains(SECRET), "the name leaked: {shown}");
+}
+
+#[test]
+fn arc_3_mb_03b_r11_refusals_have_their_own_codes() {
+    for (e, code) in [
+        (
+            IpcError::MogCapReached {
+                command: "window_mog_open".into(),
+            },
+            "mog_cap_reached",
+        ),
+        (
+            IpcError::UnknownMog {
+                command: "window_card_show".into(),
+            },
+            "unknown_mog",
+        ),
+        (
+            IpcError::WindowClosing {
+                command: "window_mog_open".into(),
+            },
+            "window_closing",
+        ),
+    ] {
+        assert_eq!(serde_json::to_value(&e).unwrap()["error"], code);
+        assert!(!e.to_string().is_empty());
+    }
+}
+
+#[test]
+fn sec_03_schema_document_lists_every_error_code() {
+    let doc = ipc::schema_document();
+    let codes: Vec<&str> = doc["errors"]
+        .as_array()
+        .expect("errors list")
+        .iter()
+        .map(|c| c.as_str().unwrap())
+        .collect();
+    assert_eq!(codes, mog_core::ipc_gateway::ERROR_CODES);
 }

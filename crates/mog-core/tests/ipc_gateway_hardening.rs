@@ -371,11 +371,8 @@ fn sec_03_each_ipc_error_maps_to_a_fixed_code() {
     let secret = fakes()[1].clone();
     let s = || secret.clone();
     let all = [
-        IpcError::UnknownCommand { command: s() },
-        IpcError::WindowNotAllowed {
-            command: s(),
-            window: s(),
-        },
+        IpcError::UnknownCommand,
+        IpcError::WindowNotAllowed { command: s() },
         IpcError::InvalidArgs {
             command: s(),
             reason: s(),
@@ -386,7 +383,11 @@ fn sec_03_each_ipc_error_maps_to_a_fixed_code() {
         IpcError::MicBusy { command: s() },
         IpcError::ConsentRequired { command: s() },
         IpcError::InvalidMode { command: s() },
+        IpcError::MogCapReached { command: s() },
+        IpcError::UnknownMog { command: s() },
+        IpcError::WindowClosing { command: s() },
     ];
+    assert_eq!(all.len(), ERROR_CODES.len(), "one code per variant");
     for e in &all {
         let code = ipc_error_code(e);
         // The code is the serde tag of the variant, never a field value.

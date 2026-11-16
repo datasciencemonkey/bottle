@@ -153,6 +153,65 @@ mod tests {
     }
 
     #[test]
+    fn sec_01_brain_channel_scrubs_every_payload() {
+        use std::sync::{Arc, Mutex};
+        use tauri::ipc::InvokeResponseBody;
+        let got: Arc<Mutex<Vec<String>>> = Arc::default();
+        let sink = Arc::clone(&got);
+        let channel = Channel::<Value>::new(move |body| {
+            if let InvokeResponseBody::Json(text) = body {
+                sink.lock().unwrap().push(text);
+            }
+            Ok(())
+        });
+        let brain = BrainChannel::default();
+        brain.set(channel);
+        let secret = concat!("dap", "i0123456789abcdef0123456789abcdef");
+        assert!(brain.send(
+            events::VIEW_INPUT,
+            json!({"from": "mog-a1", "input": {"payload": {"note": format!("x {secret} y")}}})
+        ));
+        let sent = got.lock().unwrap().clone();
+        assert_eq!(sent.len(), 1);
+        assert!(!sent[0].contains(secret), "the brain got a secret: {}", sent[0]);
+        assert!(sent[0].contains(mog_core::token_guard::REDACTED), "{}", sent[0]);
+        assert!(sent[0].contains("\"event\":\"view:input\""), "{}", sent[0]);
+    }
+
+    /// The production part of a source file: before the test module, no comment lines.
+    fn production_code(text: &str) -> String {
+        text.split("#[cfg(test)]")
+            .next()
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn sec_03_the_host_dispatches_only_through_hardened_gateway_with() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut uses = 0;
+        for entry in std::fs::read_dir(&src).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let code = production_code(&std::fs::read_to_string(&path).unwrap());
+            for banned in ["ipc::handle(", "CheckedGateway", "hardened_gateway(", "StubIpcGateway"] {
+                assert!(!code.contains(banned), "{} uses {banned}", path.display());
+            }
+            uses += code.matches("hardened_gateway_with(").count();
+        }
+        assert_eq!(uses, 1, "one gateway entry for every command (#333)");
+        let ipc = production_code(&std::fs::read_to_string(src.join("ipc.rs")).unwrap());
+        assert!(ipc.contains("hardened_gateway_with("));
+        // ADR 0022 decision 6: the R11 ops run on a worker, not on the IPC thread.
+        assert!(ipc.contains("spawn_blocking("));
+    }
+
+    #[test]
     fn arc_5_core_to_brain_items_are_never_tauri_events() {
         // Any `emit`/`emit_to` in the app crate would broadcast to every listening window.
         fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {

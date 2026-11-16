@@ -2,7 +2,18 @@
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { tauri } from './test-tauri';
-import { emitView, mogIdFromLabel, ownMogId, useViewEvent } from './view-ipc';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import {
+  asCardUpdate,
+  asMicLevelFrame,
+  asMogViewState,
+  emitView,
+  mogIdFromLabel,
+  ownMogId,
+  useViewEvent,
+  viewMicLevels,
+} from './view-ipc';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('./test-tauri')).coreModule);
 vi.mock('@tauri-apps/api/event', async () => (await import('./test-tauri')).eventModule);
@@ -81,5 +92,63 @@ describe('view IPC helpers', () => {
     await tauri.emitTo('hub', 'mog:view_state', { mogId: ID, n: 2 });
     expect(got).toEqual([{ mogId: ID, n: 2 }]);
     await act(async () => root.unmount());
+  });
+});
+
+const fixture = (name: string): unknown =>
+  JSON.parse(
+    readFileSync(join(import.meta.dirname, '../../tests/fixtures/ipc-types', `${name}.json`), 'utf8'),
+  );
+
+describe('contract view payloads (#285, ADR 0032)', () => {
+  beforeEach(() => tauri.reset());
+
+  it('[ARC-5] the view shape checks accept the contract fixtures', () => {
+    for (const name of ['MogViewState', 'MogViewState.minimal']) {
+      expect(asMogViewState(fixture(name))).toEqual(fixture(name));
+    }
+    for (const name of ['CardUpdate', 'CardUpdate.minimal']) {
+      expect(asCardUpdate(fixture(name))).toEqual(fixture(name));
+    }
+    for (const name of ['MicLevelFrame', 'MicLevelFrame.closed']) {
+      expect(asMicLevelFrame(fixture(name))).toEqual(fixture(name));
+    }
+  });
+
+  it('[ARC-5] [UX-06a] asMicLevelFrame drops a frame the meter cannot read', () => {
+    for (const bad of [
+      null,
+      { dbfs: -1, t: 1 },
+      { owner: 7, dbfs: -1, t: 1 },
+      { owner: ID, dbfs: '-1', t: 1 },
+      { owner: ID, dbfs: -1 },
+    ]) {
+      expect(asMicLevelFrame(bad)).toBeUndefined();
+    }
+  });
+
+  it('[UX-06a] [UX-06b] [ARC-5] the MOG view gets mog.level frames sent to its own window only', async () => {
+    tauri.label = `mog-${ID}`;
+    const got: unknown[] = [];
+    const off = viewMicLevels().subscribe((f) => got.push(f));
+    await act(async () => undefined);
+    expect(tauri.listenOptions.get('mog:level')).toEqual([{ target: `mog-${ID}` }]);
+    const OTHER = '00000000-0000-4000-8000-000000000002';
+    await tauri.emitTo(`mog-${OTHER}`, 'mog:level', { owner: OTHER, dbfs: -10, t: 1 });
+    await tauri.emitTo(`mog-${ID}`, 'mog:level', { owner: ID, dbfs: -20, t: 2 });
+    await tauri.emitTo(`mog-${ID}`, 'mog:level', { owner: ID, dbfs: 'loud', t: 3 });
+    await tauri.emitTo(`mog-${ID}`, 'mog:level', { owner: null, dbfs: -120, t: 4 });
+    expect(got).toEqual([
+      { owner: ID, dbfs: -20, t: 2 },
+      { owner: null, dbfs: -120, t: 4 },
+    ]);
+    off();
+    await act(async () => undefined);
+    expect(tauri.listeners('mog:level')).toBe(0);
+  });
+
+  it('[UX-06a] the MOG window entry feeds the level meter from mog.level', () => {
+    const main = readFileSync(join(import.meta.dirname, 'mog', 'main.tsx'), 'utf8');
+    expect(main).toMatch(/levels=\{viewMicLevels\(\)\}/);
   });
 });

@@ -1,11 +1,13 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
+import type { MogViewState } from '../shared/ipc';
 import { core } from './test-core';
 import {
   BrainBus,
   emitToView,
   onViewInput,
   sendCardUpdate,
+  sendMicLevel,
   sendMogViewState,
   subscribeBrain,
 } from './bus';
@@ -101,7 +103,11 @@ describe('brain-to-view routing (#8)', () => {
   beforeEach(() => core.reset());
 
   it('[MOG-08b] [ARC-5] sendMogViewState emits mog:view_state to the mog-<id> window and the hub only', async () => {
-    const state = { mogId: MOG, mood: 'idle', overlays: {} };
+    const state: MogViewState = {
+      mogId: MOG,
+      mood: 'idle',
+      overlays: { attention: false, recording: false, offline: false, localOnly: false },
+    };
     await sendMogViewState(MOG, state);
     // The hub (V1) lists every MOG with its mood, so it gets a copy (ADR 0008, decision 4).
     expect(core.emitTo.mock.calls).toEqual([
@@ -115,6 +121,18 @@ describe('brain-to-view routing (#8)', () => {
     const update = { mogId: MOG, blurbs: [], chips: [] };
     await sendCardUpdate(MOG, update);
     expect(core.emitTo.mock.calls).toEqual([[`card-${MOG}`, 'card:update', update]]);
+  });
+
+  it('[UX-06a] [ARC-5] sendMicLevel emits mog:level to the mog-<id> window only', async () => {
+    const frame = { owner: MOG, dbfs: -30, t: 5 };
+    await sendMicLevel(MOG, frame);
+    // UX-06b: when the mic closes, the MOG that owned it gets one frame with no owner.
+    await sendMicLevel(MOG, { owner: null, dbfs: -120, t: 6 });
+    expect(core.emitTo.mock.calls).toEqual([
+      [`mog-${MOG}`, 'mog:level', frame],
+      [`mog-${MOG}`, 'mog:level', { owner: null, dbfs: -120, t: 6 }],
+    ]);
+    expect(core.emit).not.toHaveBeenCalled();
   });
 
   it('[MOG-08b] [ARC-3] refuses a MOG ID that is not label-safe and sends nothing', async () => {
