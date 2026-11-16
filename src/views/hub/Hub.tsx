@@ -1,16 +1,17 @@
 /** V1 hub view (thin): lists the MOGs the brain reports and sends selections with view_emit. */
 import { useCallback, useState } from 'react';
-import type { Mood, MogId } from '../../shared/interfaces';
-import { asMogViewState, emitView, useViewEvent } from '../view-ipc';
+import type { MogId } from '../../shared/interfaces';
+import { DomainPicker } from '../DomainPicker';
+import { asMogViewState, emitView, useViewEvent, type MogViewState } from '../view-ipc';
 import { About } from './About';
 import { DataPanel } from './DataDisclosures';
 
 export function Hub() {
-  const [moods, setMoods] = useState<ReadonlyMap<MogId, Mood>>(new Map());
+  const [mogs, setMogs] = useState<ReadonlyMap<MogId, MogViewState>>(new Map());
 
   const onState = useCallback((p: unknown) => {
     const s = asMogViewState(p);
-    if (s) setMoods((m) => new Map(m).set(s.mogId, s.mood));
+    if (s) setMogs((m) => new Map(m).set(s.mogId, s));
   }, []);
   useViewEvent('mog.view_state', onState);
 
@@ -20,11 +21,12 @@ export function Hub() {
       <h1>Bottle</h1>
       <p>Databricks Labs / experimental</p>
       <ul aria-label="MOGs">
-        {[...moods].map(([id, mood]) => (
-          <li key={id} data-mog={id} data-mood={mood}>
+        {[...mogs].map(([id, s]) => (
+          <li key={id} data-mog={id} data-mood={s.mood}>
             <button type="button" onClick={() => void emitView(id, 'click')}>
-              MOG {id.slice(0, 8)} ({mood})
+              MOG {id.slice(0, 8)} ({s.mood})
             </button>
+            {s.homeDomain && <DomainPicker mogId={id} picker={s.homeDomain} />}
           </li>
         ))}
       </ul>

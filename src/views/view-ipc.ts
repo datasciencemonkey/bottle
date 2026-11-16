@@ -16,6 +16,8 @@ export interface MogViewState {
   level?: number;
   /** The badges the brain computed (`mapBadges`, ADR 0029). Each has text and a label. */
   badges?: MogBadgeView[];
+  /** The home domain picker of this MOG in its home workspace (PG-18, PG-20). */
+  homeDomain?: DomainPickerView;
   /** Only with `VITE_BOTTLE_LATENCY_TRACE=1`: times for the frame probe (#13, ADR 0031). */
   trace?: unknown;
 }
@@ -29,6 +31,26 @@ export interface MogBadgeView {
   hoverOnly: boolean;
   /** Set when a click on the badge does something; the brain decides what (ADR 0029). */
   action?: string;
+}
+
+/**
+ * The domain picker (PG-20): the domain list, or `paste` (the reason text) when the list cannot
+ * be read. `scope` 'home' sets the MOG home domain (PG-18); 'draft' changes one draft (PG-19).
+ */
+export interface DomainPickerView {
+  scope: 'home' | 'draft';
+  /** Set for scope 'draft': the Page review that the change applies to. */
+  reviewId?: string;
+  current?: { id: string; name?: string };
+  options?: { id: string; name: string }[];
+  paste?: string;
+  error?: string;
+}
+
+/** The admin checklist for a failed Pages preflight (PG-11, PG-12): the reason and the items. */
+export interface PagesChecklistView {
+  text: string;
+  items: string[];
 }
 
 /** One card slot (ADR 0028): a blurb, or a split answer with its parts in one slot (UX-11b). */
@@ -75,6 +97,9 @@ export interface CardUpdate {
   historyCount?: number;
   /** The STT badge for the card footer (UX-38), for example "STT: local". */
   sttBadge?: string;
+  /** The domain of the Page draft in review (PG-19). */
+  pageDomain?: DomainPickerView;
+  pagesChecklist?: PagesChecklistView;
 }
 
 const MOODS: readonly Mood[] = [
@@ -134,6 +159,23 @@ function isSections(v: unknown): v is CardSection[] {
   );
 }
 
+function isDomainPicker(v: unknown): v is DomainPickerView {
+  if (!isObj(v) || (v['scope'] !== 'home' && v['scope'] !== 'draft')) return false;
+  const rid = v['reviewId'];
+  if (v['scope'] === 'draft' && !(typeof rid === 'string' && rid !== '')) return false;
+  const cur = v['current'];
+  if (cur !== undefined && !(isObj(cur) && typeof cur['id'] === 'string' && optStr(cur['name'])))
+    return false;
+  if (v['options'] !== undefined && !isItems(v['options'], ['id', 'name'])) return false;
+  return optStr(rid) && optStr(v['paste']) && optStr(v['error']);
+}
+
+const isChecklist = (v: unknown): v is PagesChecklistView =>
+  isObj(v) &&
+  typeof v['text'] === 'string' &&
+  Array.isArray(v['items']) &&
+  v['items'].every((i) => typeof i === 'string');
+
 /** Shape check only: drop a payload the view cannot render. */
 export function asMogViewState(p: unknown): MogViewState | undefined {
   if (!isObj(p) || typeof p['mogId'] !== 'string' || !isObj(p['overlays'])) return undefined;
@@ -152,6 +194,7 @@ export function asMogViewState(p: unknown): MogViewState | undefined {
     )
   )
     return undefined;
+  if (p['homeDomain'] !== undefined && !isDomainPicker(p['homeDomain'])) return undefined;
   return p as unknown as MogViewState;
 }
 
@@ -169,6 +212,8 @@ export function asCardUpdate(p: unknown): CardUpdate | undefined {
   if (p['sections'] !== undefined && !isSections(p['sections'])) return undefined;
   const stt = p['sttBadge'];
   if (stt !== undefined && typeof stt !== 'string') return undefined;
+  if (p['pageDomain'] !== undefined && !isDomainPicker(p['pageDomain'])) return undefined;
+  if (p['pagesChecklist'] !== undefined && !isChecklist(p['pagesChecklist'])) return undefined;
   return p as unknown as CardUpdate;
 }
 
