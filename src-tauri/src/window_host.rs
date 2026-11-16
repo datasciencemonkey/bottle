@@ -4,8 +4,9 @@
 //! open MOG. `TauriWindowHost` applies the ledger to real windows. Every label it makes matches
 //! exactly one capability glob (`mog-*`, `card-*`), so the window gets only `view_emit`.
 //!
-//! TODO(#285): the gateway does not route `window_mog_open`, `window_mog_close`,
-//! `window_card_show` and `window_card_hide` to this host yet (contract change).
+//! The IPC gateway routes `window_mog_open`, `window_mog_close`, `window_card_show` and
+//! `window_card_hide` to this host through `mog_core::window_host::WindowHost` (#285,
+//! ADR 0040). The commands run on a worker thread, never on the main thread (ADR 0022).
 //!
 //! The card window (#78, ADR 0022) is made on the first show (MOG-18a). `spawn_card_reaper`
 //! destroys a card that is hidden for `CARD_HIDDEN_TTL` (MOG-18b). A window that the host
@@ -13,6 +14,8 @@
 //! slot of a new window with the same label, and the new window never adopts the dying one.
 
 use crate::windows::{self, WindowKind, CARD_HIDDEN_TTL, CARD_REAP_TICK, MAX_ACTIVE_MOGS};
+use mog_core::error::{CoreError, CoreResult};
+use mog_core::ipc::Geometry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::{Arc, Mutex};
@@ -47,6 +50,25 @@ impl WindowError {
             WindowError::Closing => "window_closing",
             WindowError::MainThread => "main_thread",
         }
+    }
+}
+
+impl WindowError {
+    /// The IPC code of this refusal (`ipc_gateway::ERROR_CODES`, ADR 0040 decision 3).
+    pub fn ipc_code(&self) -> &'static str {
+        match self {
+            WindowError::InvalidId => "invalid_args",
+            WindowError::CapReached { .. } => "mog_cap_reached",
+            WindowError::UnknownMog => "unknown_mog",
+            WindowError::Closing => "window_closing",
+            WindowError::HostFailed | WindowError::MainThread => "host_failed",
+        }
+    }
+}
+
+impl From<WindowError> for CoreError {
+    fn from(e: WindowError) -> Self {
+        CoreError::IpcRefused { code: e.ipc_code() }
     }
 }
 
@@ -401,7 +423,7 @@ pub type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
 /// (off the main thread, a window build blocks until the main thread made the window). So
 /// after `seal_main_thread` (end of setup) the operations refuse to run on the main thread
 /// (`WindowError::MainThread`): a main-thread caller could wait for `ops` while the holder
-/// waits for the main thread. Callers use async commands or other threads (TODO(#285)).
+/// waits for the main thread. The IPC host runs the `window_*` commands on a worker (ADR 0040).
 pub struct TauriWindowHost<R: tauri::Runtime> {
     app: tauri::AppHandle<R>,
     ops: Mutex<()>,
@@ -459,14 +481,18 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
         self.app.get_webview_window(&kind.label())
     }
 
-    /// Build a window hidden if it is a panel, apply the native step, then show it.
-    fn make(&self, kind: &WindowKind) -> Result<tauri::WebviewWindow<R>, WindowError> {
+    /// Build a window hidden if it is a panel, place it at `geometry` if given, apply the
+    /// native step, then show it.
+    fn make(
+        &self,
+        kind: &WindowKind,
+        geometry: Option<&Geometry>,
+    ) -> Result<tauri::WebviewWindow<R>, WindowError> {
         let w =
             windows::build(&self.app, &kind.build_spec()).map_err(|_| WindowError::HostFailed)?;
         // A MOG window that is not a panel could take focus: do not keep a half-made window.
-        if let Err(e) = self
-            .native
-            .style(&w, kind)
+        if let Err(e) = place(&w, geometry)
+            .and_then(|()| self.native.style(&w, kind))
             .and_then(|()| self.native.show(&w, kind))
         {
             let _ = self.destroy(kind);
@@ -500,6 +526,16 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
     /// Open the MOG window of `mog_id`. A second call shows the window, or makes it again if
     /// it is gone.
     pub fn open_mog_window(&self, mog_id: &str) -> Result<(), WindowError> {
+        self.open_mog_window_at(mog_id, None)
+    }
+
+    /// Open the MOG window of `mog_id` at `geometry` (logical units). A second call moves
+    /// the open window there and shows it.
+    pub fn open_mog_window_at(
+        &self,
+        mog_id: &str,
+        geometry: Option<&Geometry>,
+    ) -> Result<(), WindowError> {
         let _op = self.op()?;
         let (kind, existing, missing) = {
             let mut ledger = self.ledger();
@@ -522,9 +558,11 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
             return Err(WindowError::Closing);
         }
         if let Some(w) = existing {
+            place(&w, geometry)?;
             return self.native.show(&w, &kind);
         }
-        if let Err(e) = self.make(&kind) {
+        // Only this call made the reservation, and its window does not exist: roll it back.
+        if let Err(e) = self.make(&kind, geometry) {
             self.ledger().close_mog(mog_id);
             return Err(e);
         }
@@ -584,7 +622,7 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
         };
         let shown = match (plan, &existing) {
             (ShowPlan::Reuse(_), Some(w)) => self.native.show(w, &kind),
-            _ => self.make(&kind).map(|_| ()),
+            _ => self.make(&kind, None).map(|_| ()),
         };
         if shown.is_err() {
             let mut ledger = self.ledger();
@@ -646,6 +684,39 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
             reaped += 1;
         }
         reaped
+    }
+}
+
+/// Move and size `w` to `geometry` (logical units). `None` changes nothing.
+fn place<R: tauri::Runtime>(
+    w: &tauri::WebviewWindow<R>,
+    geometry: Option<&Geometry>,
+) -> Result<(), WindowError> {
+    let Some(g) = geometry else {
+        return Ok(());
+    };
+    w.set_size(tauri::LogicalSize::new(g.width, g.height))
+        .and_then(|()| w.set_position(tauri::LogicalPosition::new(g.x, g.y)))
+        .map_err(|_| WindowError::HostFailed)
+}
+
+/// R11 through the core trait, for the IPC gateway (#285, ADR 0040). Each refusal is
+/// `CoreError::IpcRefused` with the code of [`WindowError::ipc_code`].
+impl<R: tauri::Runtime> mog_core::window_host::WindowHost for TauriWindowHost<R> {
+    fn open_mog_window(&self, mog_id: &str, geometry: Option<&Geometry>) -> CoreResult<()> {
+        Ok(self.open_mog_window_at(mog_id, geometry)?)
+    }
+
+    fn close_mog_window(&self, mog_id: &str) -> CoreResult<()> {
+        Ok(TauriWindowHost::close_mog_window(self, mog_id)?)
+    }
+
+    fn show_card(&self, mog_id: &str) -> CoreResult<()> {
+        Ok(TauriWindowHost::show_card(self, mog_id)?)
+    }
+
+    fn hide_card(&self, mog_id: &str) -> CoreResult<()> {
+        Ok(TauriWindowHost::hide_card(self, mog_id)?)
     }
 }
 

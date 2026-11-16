@@ -1,0 +1,38 @@
+{
+  "mogId": "6f1c2a9e-4b3d-4e8a-9c7f-2d5e8a1b3c4d",
+  "mood": "listening",
+  "overlays": {
+    "attention": false,
+    "recording": true,
+    "offline": false,
+    "hop": "staging",
+    "localOnly": false
+  },
+  "badges": [
+    {
+      "kind": "identity",
+      "text": "DEFAULT \u00b7 Genie",
+      "label": "DEFAULT \u00b7 Genie, workspace example.cloud.databricks.com",
+      "detail": "example.cloud.databricks.com",
+      "hoverOnly": true
+    },
+    {
+      "kind": "stt",
+      "text": "STT: local",
+      "label": "STT: local, speech stays on this device",
+      "hoverOnly": true,
+      "action": "open_data_disclosures"
+    }
+  ],
+  "trace": {
+    "seq": 7,
+    "eventAt": 1763251200000.25,
+    "sentAt": 1763251200001.5,
+    "keyDownAt": 1763251199999.75
+  },
+  "homeDomain": {
+    "scope": "home",
+    "paste": "The domain list cannot be read.",
+    "error": "Paste a domain ID."
+  }
+}

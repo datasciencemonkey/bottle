@@ -1,12 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { COMMANDS, EVENTS, type CommandName } from './ipc';
+import { COMMANDS, EVENTS, IPC_ERROR_CODES, type CommandName, type IpcError } from './ipc';
 
 const schemaDoc = JSON.parse(
   readFileSync(resolve(import.meta.dirname, '../../src-tauri/schemas/ipc-commands.json'), 'utf8'),
 ) as {
   commands: { name: string; windows: string[]; phase: string }[];
   events: { name: string; specName: string; direction: string }[];
+  errors: string[];
 };
 
 describe('IPC contract (TS side)', () => {
@@ -46,5 +47,23 @@ describe('capture lease (contract)', () => {
     for (const cmd of ['capture_stop', 'capture_pause']) {
       expect(doc.arguments[cmd]?.required).toEqual(['mogId', 'leaseId']);
     }
+  });
+});
+
+describe('content-free IPC errors (#333, ADR 0040)', () => {
+  it('[SEC-03] the TS error codes equal the Rust ERROR_CODES', () => {
+    expect([...IPC_ERROR_CODES]).toEqual(schemaDoc.errors);
+  });
+
+  it('[SEC-03] an IpcError carries only its code', () => {
+    const cap: IpcError = { error: 'mog_cap_reached' };
+    // @ts-expect-error a rejection names no window label
+    const leaky: IpcError = { error: 'window_not_allowed', window: 'mog-a1' };
+    expect(Object.keys(cap)).toEqual(['error']);
+    expect(leaky.error).toBe('window_not_allowed');
+  });
+
+  it('[ARC-5] [UX-06a] mog.level is a brain-to-view event', () => {
+    expect(EVENTS['mog.level']).toEqual({ name: 'mog:level', direction: 'brain_to_view' });
   });
 });

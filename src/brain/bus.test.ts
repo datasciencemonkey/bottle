@@ -1,11 +1,13 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
+import type { CardUpdate, MogViewState } from '../shared/ipc';
 import { core } from './test-core';
 import {
   BrainBus,
   emitToView,
   onViewInput,
   sendCardUpdate,
+  sendMicLevel,
   sendMogViewState,
   subscribeBrain,
 } from './bus';
@@ -14,6 +16,12 @@ vi.mock('@tauri-apps/api/core', async () => (await import('./test-core')).coreMo
 vi.mock('@tauri-apps/api/event', async () => (await import('./test-core')).eventModule);
 
 const MOG = '00000000-0000-4000-8000-000000000001';
+const VIEW_STATE: MogViewState = {
+  mogId: MOG,
+  mood: 'idle',
+  overlays: { attention: false, recording: false, offline: false, localOnly: false },
+};
+const CARD: CardUpdate = { mogId: MOG, blurbs: [], chips: [] };
 
 describe('brain Channel (ADR 0003, decision 3)', () => {
   beforeEach(() => core.reset());
@@ -65,11 +73,11 @@ describe('brain Channel (ADR 0003, decision 3)', () => {
   });
 
   it('[ARC-2] sends brain-to-view events with emitTo to one window label', async () => {
-    await emitToView(`mog-${MOG}`, 'mog.view_state', { mogId: MOG });
-    await emitToView(`card-${MOG}`, 'card.update', { mogId: MOG });
+    await emitToView(`mog-${MOG}`, 'mog.view_state', VIEW_STATE);
+    await emitToView(`card-${MOG}`, 'card.update', CARD);
     expect(core.emitTo.mock.calls).toEqual([
-      [`mog-${MOG}`, 'mog:view_state', { mogId: MOG }],
-      [`card-${MOG}`, 'card:update', { mogId: MOG }],
+      [`mog-${MOG}`, 'mog:view_state', VIEW_STATE],
+      [`card-${MOG}`, 'card:update', CARD],
     ]);
     expect(core.emit).not.toHaveBeenCalled();
   });
@@ -101,7 +109,11 @@ describe('brain-to-view routing (#8)', () => {
   beforeEach(() => core.reset());
 
   it('[MOG-08b] [ARC-5] sendMogViewState emits mog:view_state to the mog-<id> window and the hub only', async () => {
-    const state = { mogId: MOG, mood: 'idle', overlays: {} };
+    const state: MogViewState = {
+      mogId: MOG,
+      mood: 'idle',
+      overlays: { attention: false, recording: false, offline: false, localOnly: false },
+    };
     await sendMogViewState(MOG, state);
     // The hub (V1) lists every MOG with its mood, so it gets a copy (ADR 0008, decision 4).
     expect(core.emitTo.mock.calls).toEqual([
@@ -117,10 +129,25 @@ describe('brain-to-view routing (#8)', () => {
     expect(core.emitTo.mock.calls).toEqual([[`card-${MOG}`, 'card:update', update]]);
   });
 
+  it('[UX-06a] [ARC-5] sendMicLevel emits mog:level to the mog-<id> window only', async () => {
+    const frame = { owner: MOG, dbfs: -30, t: 5 };
+    await sendMicLevel(MOG, frame);
+    // UX-06b: when the mic closes, the MOG that owned it gets one frame with no owner.
+    await sendMicLevel(MOG, { owner: null, dbfs: -120, t: 6 });
+    expect(core.emitTo.mock.calls).toEqual([
+      [`mog-${MOG}`, 'mog:level', frame],
+      [`mog-${MOG}`, 'mog:level', { owner: null, dbfs: -120, t: 6 }],
+    ]);
+    expect(core.emit).not.toHaveBeenCalled();
+  });
+
   it('[MOG-08b] [ARC-3] refuses a MOG ID that is not label-safe and sends nothing', async () => {
     for (const bad of ['', 'a/b', 'a b', '*', 'x'.repeat(65)]) {
-      await expect(sendMogViewState(bad, {})).rejects.toThrow(/window label/);
-      await expect(sendCardUpdate(bad, {})).rejects.toThrow(/window label/);
+      await expect(sendMogViewState(bad, VIEW_STATE)).rejects.toThrow(/window label/);
+      await expect(sendCardUpdate(bad, CARD)).rejects.toThrow(/window label/);
+      await expect(sendMicLevel(bad, { owner: null, dbfs: -1, t: 1 })).rejects.toThrow(
+        /window label/,
+      );
     }
     expect(core.emitTo).not.toHaveBeenCalled();
   });

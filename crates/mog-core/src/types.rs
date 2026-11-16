@@ -394,3 +394,237 @@ pub struct RouterDecision {
     /// `""` = none (D63).
     pub directed_mog_id: String,
 }
+
+// ---------- brain-to-view payloads (#285, ADR 0040) ----------
+// The brain (TS) sends these as Tauri events; Rust never sends them. The mirror keeps the
+// shared fixtures honest on both sides.
+
+/// `MoodMapper` overlays (4.7) as `mog.view_state` carries them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MoodOverlays {
+    pub attention: bool,
+    pub recording: bool,
+    pub offline: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hop: Option<String>,
+    pub local_only: bool,
+}
+
+/// One MOG badge (MOG-07, UX-38, UX-39a, ADR 0029).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MogBadgeView {
+    pub kind: String,
+    pub text: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    pub hover_only: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+}
+
+/// Frame-probe times of one `mog.view_state` (#13, ADR 0031). Numbers only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ViewTrace {
+    pub seq: u64,
+    pub event_at: f64,
+    pub sent_at: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_down_at: Option<f64>,
+}
+
+/// The `mog.view_state` payload: what the brain computed for one MOG.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MogViewState {
+    pub mog_id: MogId,
+    pub mood: Mood,
+    pub overlays: MoodOverlays,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub badges: Option<Vec<MogBadgeView>>,
+    /// The home domain picker of this MOG (PG-18, PG-20).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home_domain: Option<DomainPickerView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace: Option<ViewTrace>,
+}
+
+/// One part of a split answer (UX-11b).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BlurbPart {
+    pub id: String,
+    pub text: String,
+}
+
+/// One card slot (ADR 0028).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CardBlurbView {
+    pub id: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parts: Option<Vec<BlurbPart>>,
+}
+
+/// One card chip.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CardChip {
+    pub id: String,
+    pub label: String,
+}
+
+/// The scope of a domain picker (PG-18 home domain, PG-19 one draft).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum DomainScope {
+    Home,
+    Draft,
+}
+
+/// The current domain of a picker.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DomainRef {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// One domain the picker offers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DomainOption {
+    pub id: String,
+    pub name: String,
+}
+
+/// The domain picker (PG-20): the list, or `paste` (the reason text) when it cannot be read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DomainPickerView {
+    pub scope: DomainScope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current: Option<DomainRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<DomainOption>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paste: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// The admin checklist for a failed Pages preflight (PG-11, PG-12).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PagesChecklistView {
+    pub text: String,
+    pub items: Vec<String>,
+}
+
+/// A copy format of the expanded card (UX-18).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum CopyFormat {
+    Markdown,
+    Csv,
+}
+
+/// One expanded card section in the UX-EXP order (UX-18), tagged by `id` (#89, ADR 0040).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(
+    tag = "id",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum CardSection {
+    Answer {
+        md: String,
+    },
+    KeyNumbers {
+        items: Vec<String>,
+    },
+    /// The SQL section is always collapsed first (`collapsed: true`).
+    Sql {
+        sql: String,
+        collapsed: bool,
+    },
+    TablePreview {
+        columns: Vec<String>,
+        rows: Vec<Vec<String>>,
+        more_rows: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        more_columns: Option<u32>,
+    },
+    SentToGenie {
+        text: String,
+    },
+    Resend,
+    Copy {
+        formats: Vec<CopyFormat>,
+    },
+    Footer {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stt_badge: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        deep_link: Option<String>,
+    },
+    DataFlow {
+        text: String,
+    },
+}
+
+/// The `card.update` payload: what the card of one MOG shows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CardUpdate {
+    pub mog_id: MogId,
+    pub blurbs: Vec<CardBlurbView>,
+    pub chips: Vec<CardChip>,
+    /// Chips after the 4th (UX-20a).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overflow_chips: Option<Vec<CardChip>>,
+    /// The expanded card sections (UX-18).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sections: Option<Vec<CardSection>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer_md: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_count: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stt_badge: Option<String>,
+    /// The domain of the Page draft in review (PG-19).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_domain: Option<DomainPickerView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pages_checklist: Option<PagesChecklistView>,
+}
+
+/// The `mog.level` payload: one mic level sample (UX-06a). `owner` is the MOG that owns the
+/// open mic, or `null` when the mic closed (UX-06b). It is always present.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MicLevelFrame {
+    /// Required and nullable: a frame with no `owner` key fails to parse.
+    #[serde(deserialize_with = "nullable")]
+    pub owner: Option<MogId>,
+    pub dbfs: f64,
+    /// Milliseconds on a monotonic clock.
+    pub t: f64,
+}
+
+/// A required field that may be `null`. Plain `Option` would also accept a missing key.
+fn nullable<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    Option::<String>::deserialize(d)
+}

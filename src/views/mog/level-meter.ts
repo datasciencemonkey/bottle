@@ -9,6 +9,10 @@
  * - Only frames whose owner is this MOG move the level. Any other frame sets 0 at once (UX-06b).
  */
 import type { MogId } from '../../shared/interfaces';
+import type { MicLevelFrame } from '../../shared/ipc';
+
+/** One mic level sample: the contract `mog.level` payload (#285, ADR 0040). */
+export type { MicLevelFrame } from '../../shared/ipc';
 
 /** Table UX-LEVEL. */
 export const LEVEL = {
@@ -23,20 +27,13 @@ const MIN_GAP_MS = 1000 / LEVEL.maxHz;
 /** A change smaller than this is not worth a frame. */
 const EPSILON = 1e-4;
 
-/** One mic level sample. `owner` is the MOG that owns the open mic, or null when it is closed. */
-export interface MicLevelFrame {
-  owner: MogId | null;
-  dbfs: number;
-  /** Milliseconds on a monotonic clock. */
-  t: number;
-}
-
 /**
  * Where the MOG view gets mic frames. When the mic closes or moves to another MOG, the source
  * must send one frame with the new owner (`null` when closed): the meter sets 0 only on such a
  * frame (UX-06b), so a source that just stops would leave the last level on screen.
- * TODO(#4): the CaptureService level stream (`capture_subscribe` `onLevel`) feeds this.
- * TODO(#285): the brain-to-view payload that carries the frames to the `mog-<id>` window.
+ * The MOG window uses `viewMicLevels()` (`view-ipc.ts`), which reads the `mog.level` event.
+ * TODO(#4): the brain feeds `sendMicLevel` from the CaptureService level stream
+ * (`capture_subscribe` `onLevel`) and sends the `owner: null` frame when the mic closes.
  */
 export interface MicLevelSource {
   subscribe(onFrame: (frame: MicLevelFrame) => void): () => void;

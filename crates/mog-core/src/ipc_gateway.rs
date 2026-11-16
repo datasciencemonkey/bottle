@@ -38,9 +38,9 @@ impl IpcGateway for StubIpcGateway {
         _command: &str,
         _args: serde_json::Value,
     ) -> CoreResult<serde_json::Value> {
-        // The table, schemas and window checks are `crate::ipc::handle` (#223). The Tauri host
-        // calls it directly. TODO(#176): route the C ABI through it once the ABI decides the
-        // window class of an `ffi` caller (ADR 0003).
+        // The Tauri host dispatches through `hardened_gateway_with` (ADR 0040).
+        // TODO(#176): route the C ABI through it once the ABI decides the window class of an
+        // `ffi` caller (ADR 0003).
         Err(CoreError::NotImplemented { component: ID })
     }
 }
@@ -87,6 +87,10 @@ pub const ERROR_CODES: &[&str] = &[
     "mic_busy",
     "consent_required",
     "invalid_mode",
+    "mog_cap_reached",
+    "unknown_mog",
+    "window_closing",
+    "config_storage_failed",
 ];
 
 /// The fixed, content-free code of an [`IpcError`] (its serde tag). It never holds the
@@ -94,7 +98,7 @@ pub const ERROR_CODES: &[&str] = &[
 pub fn ipc_error_code(e: &IpcError) -> &'static str {
     // No wildcard: a new variant must get a code here.
     match e {
-        IpcError::UnknownCommand { .. } => "unknown_command",
+        IpcError::UnknownCommand => "unknown_command",
         IpcError::WindowNotAllowed { .. } => "window_not_allowed",
         IpcError::InvalidArgs { .. } => "invalid_args",
         IpcError::NotImplemented { .. } => "not_implemented",
@@ -103,6 +107,10 @@ pub fn ipc_error_code(e: &IpcError) -> &'static str {
         IpcError::MicBusy { .. } => "mic_busy",
         IpcError::ConsentRequired { .. } => "consent_required",
         IpcError::InvalidMode { .. } => "invalid_mode",
+        IpcError::MogCapReached { .. } => "mog_cap_reached",
+        IpcError::UnknownMog { .. } => "unknown_mog",
+        IpcError::WindowClosing { .. } => "window_closing",
+        IpcError::ConfigStorageFailed { .. } => "config_storage_failed",
     }
 }
 

@@ -5,102 +5,33 @@
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useEffect } from 'react';
-import type { Mood, MogId, MoodMapper } from '../shared/interfaces';
-import { call, EVENTS, type ViewEmitKind } from '../shared/ipc';
+import type { Mood, MogId } from '../shared/interfaces';
+import {
+  call,
+  EVENTS,
+  type CardSection,
+  type CardUpdate,
+  type DomainPickerView,
+  type MicLevelFrame,
+  type MogViewState,
+  type PagesChecklistView,
+  type ViewEmitKind,
+} from '../shared/ipc';
 
-/** `mog.view_state` payload: what the brain computed for one MOG. TODO(#285): move to the contract. */
-export interface MogViewState {
-  mogId: MogId;
-  mood: Mood;
-  overlays: ReturnType<MoodMapper>['overlays'];
-  level?: number;
-  /** The badges the brain computed (`mapBadges`, ADR 0029). Each has text and a label. */
-  badges?: MogBadgeView[];
-  /** The home domain picker of this MOG in its home workspace (PG-18, PG-20). */
-  homeDomain?: DomainPickerView;
-  /** Only with `VITE_BOTTLE_LATENCY_TRACE=1`: times for the frame probe (#13, ADR 0031). */
-  trace?: unknown;
-}
+// The payload types are in the contract (#285, ADR 0040). The views keep the shape checks.
+export type {
+  CardBlurbView,
+  CardSection,
+  CardUpdate,
+  DomainPickerView,
+  MicLevelFrame,
+  MogBadgeView,
+  MogViewState,
+  PagesChecklistView,
+} from '../shared/ipc';
 
-/** One MOG badge (MOG-07, UX-38, UX-39a). `hoverOnly` badges show while the pointer is on the MOG. */
-export interface MogBadgeView {
-  kind: string;
-  text: string;
-  label: string;
-  detail?: string;
-  hoverOnly: boolean;
-  /** Set when a click on the badge does something; the brain decides what (ADR 0029). */
-  action?: string;
-}
-
-/**
- * The domain picker (PG-20): the domain list, or `paste` (the reason text) when the list cannot
- * be read. `scope` 'home' sets the MOG home domain (PG-18); 'draft' changes one draft (PG-19).
- */
-export interface DomainPickerView {
-  scope: 'home' | 'draft';
-  /** Set for scope 'draft': the Page review that the change applies to. */
-  reviewId?: string;
-  current?: { id: string; name?: string };
-  options?: { id: string; name: string }[];
-  paste?: string;
-  error?: string;
-}
-
-/** The admin checklist for a failed Pages preflight (PG-11, PG-12): the reason and the items. */
-export interface PagesChecklistView {
-  text: string;
-  items: string[];
-}
-
-/** One card slot (ADR 0028): a blurb, or a split answer with its parts in one slot (UX-11b). */
-export interface CardBlurbView {
-  id: string;
-  text: string;
-  pinned?: boolean;
-  completed?: boolean;
-  parts?: { id: string; text: string }[];
-}
-
-/** One expanded card section (mirrors `ExpandedSection` of the brain). TODO(#285): contract. */
-export type CardSection =
-  | { id: 'answer'; md: string }
-  | { id: 'keyNumbers'; items: string[] }
-  | { id: 'sql'; sql: string; collapsed: true }
-  | {
-      id: 'tablePreview';
-      columns: string[];
-      rows: string[][];
-      moreRows: number;
-      moreColumns?: number;
-    }
-  | { id: 'sentToGenie'; text: string }
-  | { id: 'resend' }
-  | { id: 'copy'; formats: ('markdown' | 'csv')[] }
-  | { id: 'footer'; sttBadge?: string; deepLink?: string }
-  | { id: 'dataFlow'; text: string };
-
-/**
- * `card.update` payload: what the card of one MOG shows. The brain orders and limits the blurbs
- * (`src/brain/blurb-stack.ts`); `historyCount` drives "N more in History" (UX-11a).
- * TODO(#285): move to the contract.
- */
-export interface CardUpdate {
-  mogId: MogId;
-  blurbs: CardBlurbView[];
-  chips: { id: string; label: string }[];
-  /** Chips after the 4th (UX-20a): the view shows them in the expanded card. */
-  overflowChips?: { id: string; label: string }[];
-  /** The expanded card sections in the UX-EXP order (UX-18), from `src/brain/card-sections.ts`. */
-  sections?: CardSection[];
-  answerMd?: string;
-  historyCount?: number;
-  /** The STT badge for the card footer (UX-38), for example "STT: local". */
-  sttBadge?: string;
-  /** The domain of the Page draft in review (PG-19). */
-  pageDomain?: DomainPickerView;
-  pagesChecklist?: PagesChecklistView;
-}
+/** The brain-to-view events a view can listen to. */
+export type ViewEventKey = 'mog.view_state' | 'card.update' | 'mog.level';
 
 const MOODS: readonly Mood[] = [
   'idle',
@@ -217,6 +148,15 @@ export function asCardUpdate(p: unknown): CardUpdate | undefined {
   return p as unknown as CardUpdate;
 }
 
+/** Shape check of a `mog.level` frame: an owner (or `null`) and two finite numbers. */
+export function asMicLevelFrame(p: unknown): MicLevelFrame | undefined {
+  if (!isObj(p)) return undefined;
+  const { owner, dbfs, t } = p;
+  if (owner !== null && typeof owner !== 'string') return undefined;
+  if (typeof dbfs !== 'number' || typeof t !== 'number' || !Number.isFinite(t)) return undefined;
+  return { owner, dbfs, t };
+}
+
 /** The MOG ID in a `mog-<id>` or `card-<id>` window label (ARC-3). */
 export function mogIdFromLabel(label: string, kind: 'mog' | 'card'): MogId | undefined {
   const prefix = `${kind}-`;
@@ -236,10 +176,7 @@ export function emitView(mogId: MogId, kind: ViewEmitKind, payload?: unknown): P
 }
 
 /** Subscribe to a brain-to-view event while the component is mounted. `onPayload` must be stable. */
-export function useViewEvent(
-  key: 'mog.view_state' | 'card.update',
-  onPayload: (payload: unknown) => void,
-): void {
+export function useViewEvent(key: ViewEventKey, onPayload: (payload: unknown) => void): void {
   useEffect(() => {
     let off: (() => void) | undefined;
     let gone = false;
@@ -254,4 +191,35 @@ export function useViewEvent(
       off?.();
     };
   }, [key, onPayload]);
+}
+
+/**
+ * The mic frames the brain sends to this MOG window as `mog.level` (UX-06a, ADR 0040). It
+ * listens only to events sent to its own label and drops a frame with a bad shape.
+ */
+export function viewMicLevels(): {
+  subscribe(onFrame: (frame: MicLevelFrame) => void): () => void;
+} {
+  return {
+    subscribe(onFrame) {
+      let off: (() => void) | undefined;
+      let gone = false;
+      const target = getCurrentWindow().label;
+      void listen<unknown>(
+        EVENTS['mog.level'].name,
+        (e) => {
+          const frame = asMicLevelFrame(e.payload);
+          if (frame) onFrame(frame);
+        },
+        { target },
+      ).then((u) => {
+        if (gone) u();
+        else off = u;
+      });
+      return () => {
+        gone = true;
+        off?.();
+      };
+    },
+  };
 }

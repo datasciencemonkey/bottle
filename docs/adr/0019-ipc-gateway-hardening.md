@@ -22,6 +22,7 @@ Issue #36 asks R12 IpcGateway to permit each command only for its window labels 
 
 ## Gaps
 
+- **Update (ADR 0040, #333):** the Tauri host now dispatches every command through `hardened_gateway_with`, rejects with the code only, and scrubs every brain Channel payload. `IpcError::UnknownCommand` and `WindowNotAllowed` no longer hold the name or the label. The gaps below on the Tauri host are closed; the C ABI gap (#176) stays.
 - **No production caller yet, so #36 stays open.** The Tauri host (`src-tauri/src/ipc.rs`, contract) calls `ipc::handle` directly, and the C ABI uses `StubIpcGateway` (PR #277, #176). Until one of them calls `hardened_gateway_with`, SEC-03 holds for this gateway in tests only.
 - The Tauri host calls `ipc::handle` directly. Its errors hold only a command name from `COMMANDS` and a label that the app set, and its replies are `{}` today. A later contract change can route its replies, errors and brain Channel items through the scrub. This is reported to security-lead.
 - `ipc::IpcError::UnknownCommand` and `WindowNotAllowed` still hold the raw name and label (contract file). The gateway does not send them, and the Tauri host cannot reach them with a name that is not in `COMMANDS`.
