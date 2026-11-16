@@ -37,3 +37,7 @@ secrets/
 
 # Claude Code local state
 .claude/settings.local.json
+
+# Agent runtime state and test reports
+.omc/
+reports/
