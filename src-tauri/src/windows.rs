@@ -170,24 +170,14 @@ impl WindowKind {
 mod transparency {
     use tauri::{Runtime, WebviewWindowBuilder};
 
-    /// Apply the transparent flag where the platform allows it without `macOSPrivateApi`.
-    ///
-    /// On macOS, Tauri gates `transparent` behind the `macos-private-api` feature. NFR-14b
-    /// forbids it unless SP-01 fails, so macOS gets no transparency here yet.
-    /// TODO(#10): apply the SP-01 result (own objc2 fix, or `macOSPrivateApi` as the fallback).
+    /// Apply the transparent flag. Tauri 2.12 makes the window and the WebView background
+    /// transparent on every desktop OS without `macOSPrivateApi` (NFR-14b).
+    /// TODO(#10): apply the SP-01 result here (white-flash and halo fixes, or a fallback).
     pub fn apply<'a, R: Runtime, M: tauri::Manager<R>>(
         builder: WebviewWindowBuilder<'a, R, M>,
         transparent: bool,
     ) -> WebviewWindowBuilder<'a, R, M> {
-        #[cfg(not(target_os = "macos"))]
-        {
-            builder.transparent(transparent)
-        }
-        #[cfg(target_os = "macos")]
-        {
-            let _ = transparent;
-            builder
-        }
+        builder.transparent(transparent)
     }
 }
 

@@ -17,7 +17,7 @@ We treat #10 as a soft dependency of #221. The skeleton lands now. Each skeleton
 
 | SP-01 can change | Seam in the skeleton | Default until SP-01 ends |
 |---|---|---|
-| How a MOG window becomes transparent on macOS | `transparency::apply` in `src-tauri/src/windows.rs` | No transparency on macOS (Tauri gates it behind `macos-private-api`); `transparent(true)` on Windows and Linux. |
+| How a MOG window becomes transparent, and any white-flash or halo fix | `transparency::apply` in `src-tauri/src/windows.rs` | `transparent(true)` on every desktop OS. Tauri 2.12 clears the window and WebView background without `macOSPrivateApi`. SP-01 measures if this passes in a signed DMG. |
 | `macOSPrivateApi` | `tauri.conf.json` and the Cargo `tauri` features | Off. No `macos-private-api` feature. |
 | The Rive runtime package | The MOG view renders through a mascot renderer interface (`src/views/mog/mascot.ts`) | A DOM placeholder. No `@rive-app/*` package is installed. |
 | Non-activating panel and hover delivery (UX-08a) | `WindowSpec.focusable` and #11, #80, #81 | `focusable(false)` on MOG windows. |
@@ -26,7 +26,7 @@ The window model (labels `brain`, `hub`, `mog-<id>`, `card-<id>`), the CSP, the 
 
 ## Consequences
 
-- On macOS the MOG window is not transparent until SP-01 or #11 applies its result. This is a known gap, marked `TODO(#10)` in code.
+- The MOG window is transparent in the skeleton, but nobody has measured it in a signed DMG (alpha, white flash, halo). SP-01 does that. The gap is marked `TODO(#10)` in code.
 - #169 (pin the Tauri shell and Rive runtime) stays open. It adds the Rive package and the lockfile checks after SP-01. The skeleton does not contradict #169: Tauri is pinned at `2.12.5` or later, and no `@rive-app/webgl` exists.
 - If SP-01 fails all the way to the `macOSPrivateApi` fallback, the change is one Cargo feature, one config key and the body of `transparency::apply`.
 
