@@ -1838,6 +1838,7 @@ name = "mog-core-ffi"
 version = "0.1.0"
 dependencies = [
  "mog-core",
+ "serde_json",
 ]
 
 [[package]]

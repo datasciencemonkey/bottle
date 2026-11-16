@@ -6,7 +6,7 @@ Read `AGENTS.md` first. The single source of truth is `research/final-requiremen
 
 | Path | What it is |
 |---|---|
-| `crates/mog-core` | Rust core: secrets, I/O, the IPC gateway (inside the secret boundary). |
+| `crates/mog-core` | Rust core: secrets, I/O, the IPC gateway (inside the secret boundary). One module per component R1-R14, R16, R17 (section 4.3): a trait plus a `Stub*` type until its feature issue lands. R9 `lakebase_pool` needs the cargo feature `lakebase` (off by default). Only `token_broker` (R6) names the token type. |
 | `crates/mog-core-ffi` | C ABI over `mog-core` (R15). |
 | `src-tauri` | The Tauri v2 app crate `bottle`. It links `mog-core`. Capabilities per window label are in `src-tauri/capabilities/`. |
 | `src/brain` | The hidden brain window: all domain logic (ARC-2). |

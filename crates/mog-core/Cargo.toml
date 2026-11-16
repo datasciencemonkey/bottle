@@ -7,8 +7,11 @@ license.workspace = true
 publish.workspace = true
 rust-version.workspace = true
 
+[features]
+default = []
+# R9 LakebasePool (v1, optional). Off by default.
+lakebase = []
+
 [dependencies]
 serde = { workspace = true }
-
-[dev-dependencies]
 serde_json = { workspace = true }
