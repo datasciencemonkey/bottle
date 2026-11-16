@@ -9,6 +9,7 @@ pub mod ipc;
 #[cfg(target_os = "macos")]
 pub mod macos_panel;
 pub mod mog_drag;
+pub mod webview_media;
 pub mod window_host;
 pub mod windows;
 
@@ -73,6 +74,8 @@ pub fn run() {
     builder
         .manage(ipc::BrainChannel::default())
         .invoke_handler(ipc::handler)
+        // CAP-02b: every WebView denies mic, camera and other permission requests (#387).
+        .on_permission_request(webview_media::on_permission_request)
         // R1: an opened MOG or card view moves the talk-key target (#305).
         .on_page_load(hotkey_host::on_page_load)
         .on_window_event(|window, event| {

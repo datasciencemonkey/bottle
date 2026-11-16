@@ -15,7 +15,10 @@
     "security": {
       "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; script-src 'self' 'wasm-unsafe-eval'",
       "devCsp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:1420; script-src 'self' 'wasm-unsafe-eval'",
-      "capabilities": ["brain", "hub", "mog", "card"]
+      "capabilities": ["brain", "hub", "mog", "card"],
+      "headers": {
+        "Permissions-Policy": "camera=(), microphone=(), display-capture=()"
+      }
     }
   },
   "bundle": {
