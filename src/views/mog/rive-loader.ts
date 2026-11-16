@@ -10,11 +10,19 @@
  * The CSP (`connect-src 'self' ipc: http://ipc.localhost`) blocks every remote host as a second
  * line, so a mistake here still loads nothing from the network.
  *
- * TODO(#3): the mascot renderer (MascotRenderer, ADR 0002) builds its Rive instance through
- * `createOfflineRive` with the bundled `.riv` URL. Assets in the `.riv` must be embedded; if the
- * mascot uses referenced assets, add a bundled `assetLoader` here.
+ * The mascot renderer (`RiveMascot`, ADR 0027) builds its Rive instance through
+ * `createOfflineRive` with the bundled `.riv` URL. The mascot `.riv` embeds its assets; if it
+ * ever uses referenced assets, add a bundled `assetLoader` here.
  */
-import { Rive, RuntimeLoader, type RiveParameters } from '@rive-app/canvas';
+import {
+  DrawOptimizationOptions,
+  Rive,
+  RuntimeLoader,
+  type RiveParameters,
+} from '@rive-app/canvas';
+
+/** Re-exported so this stays the only `src/` file that imports `@rive-app` (ADR 0021). */
+export { DrawOptimizationOptions };
 import riveWasmUrl from '@rive-app/canvas/rive.wasm?url';
 
 /** The bundled runtime wasm (a path on the app origin). */

@@ -51,6 +51,18 @@ Regenerate the mascot scene:
 uv run python tools/gen_mog_rml.py
 ```
 
+Build the mascot `.riv` before `pnpm build` (needs `rive login`; never commit the `.riv`). Without it, the MOG view shows the PNG fallback (ADR 0027):
+
+```sh
+rive mog-rive --publish
+```
+
+Regenerate the transparent PNG fallback after an art change (no login needed):
+
+```sh
+uv run --no-project --with pillow python tools/render_mog_fallback.py
+```
+
 ## License
 
 MIT. See [`LICENSE`](LICENSE).
