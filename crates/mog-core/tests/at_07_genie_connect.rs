@@ -1,10 +1,10 @@
 //! AT-07 "Connect and poll Genie One" (#234), section 15: the Rust part. Pass: the URL has `?o=`;
 //! polls are serial with the D31 cadence; IDs persist; the Beta URL is rejected.
 //!
-//! What runs here is the `mcp_call` contract part: only the brain may call Genie One MCP, the
-//! server is always `genie_one`, and no argument can carry a URL, so a view or the brain cannot
-//! point R8 at the Beta `/api/2.0/mcp/genie` endpoint or a per-space MCP (G-03, G-06a contract
-//! part). The behaviour is not built: the endpoint config is #28, the thin JSON-RPC client R8 is
+//! What runs here is the `mcp_call` contract part: only the brain may call Genie One MCP
+//! (SEC-02a), the server is always `genie_one`, and no argument can carry a URL, so a view or the
+//! brain cannot point R8 at the Beta `/api/2.0/mcp/genie` endpoint or a per-space MCP. These two
+//! IPC checks carry no G-03 tag: G-03 itself (the config loader refuses the Beta URL) is #28. The behaviour is not built: the endpoint config is #28, the thin JSON-RPC client R8 is
 //! #30 (the SP-09 spike client in `spikes/sp-09` proves the design offline, #29), and the
 //! workspace ID of R6 is #18. Those tests are `#[ignore = "pending TODO(#n)"]`. The serial poll
 //! queue (G-07b) is TS and runs in `src/acceptance/at-07-genie-connect.test.ts`. The live run
@@ -27,7 +27,7 @@ fn ask_args() -> Value {
 }
 
 #[test]
-fn at_07_g_06a_only_the_brain_may_call_genie_one_mcp() {
+fn at_07_sec_02a_only_the_brain_may_call_genie_one_mcp() {
     let spec = ipc::command("mcp_call").expect("mcp_call is in the 4.5 table");
     assert_eq!(spec.windows, [WindowClass::Brain]);
     for label in ["hub", "mog-b7", "card-b7"] {
@@ -37,13 +37,14 @@ fn at_07_g_06a_only_the_brain_may_call_genie_one_mcp() {
             "{label}: {err:?}"
         );
     }
-    // The brain passes the gateway; the transport itself is #30.
+    // The brain passes the gateway; the transport itself is #30. TODO(#30): when R8 lands, this
+    // call reaches it, so replace the NotImplemented check with the scripted-server result.
     let err = ipc::handle("brain", "mcp_call", ask_args()).unwrap_err();
     assert!(matches!(err, IpcError::NotImplemented { .. }), "{err:?}");
 }
 
 #[test]
-fn at_07_g_03_mcp_call_names_only_the_genie_one_server() {
+fn at_07_mcp_call_names_only_the_genie_one_server() {
     for server in ["genie", "genie_space", "genie_one_api", "", "GENIE_ONE"] {
         let mut a = ask_args();
         a["server"] = json!(server);
@@ -56,7 +57,7 @@ fn at_07_g_03_mcp_call_names_only_the_genie_one_server() {
 }
 
 #[test]
-fn at_07_g_03_mcp_call_takes_no_url() {
+fn at_07_mcp_call_takes_no_url() {
     for (key, url) in [
         ("url", "https://h.example.test/api/2.0/mcp/genie"),
         (

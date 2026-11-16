@@ -6,7 +6,7 @@
  * The card parts ship, so they run here with the outcomes of the #229 Genie One MCP double
  * (completed, incomplete, failed, truncated, needs-input): the blurb stack (UX-11a, UX-11b,
  * UX-11c, UX-12; #85), the expanded sections and the 50-row table cap (UX-18, the display part
- * of G-24b; #89), the chip row that acts only on a click (G-38b, UX-20c), the notification
+ * of G-24b; #89), the chip row that acts only on a click (UX-20c), the notification
  * service (UX-26a, UX-26b, UX-26c; #95) and the MoodMapper (UX-01a). The event normaliser that
  * turns a poll into an AskEvent is #33, so `finalPoll` below is test glue that reads the double
  * directly; it is not the bridge. The blurb lines, key numbers and templates (#86), the banned
@@ -18,7 +18,7 @@
 import type { MogId } from '../shared/interfaces';
 import { BlurbStack } from '../brain/blurb-stack';
 import { buildSections, PREVIEW_ROWS, type Table } from '../brain/card-sections';
-import { ChipRow } from '../brain/card-chips';
+import { CHIP_CATALOGUE, ChipRow } from '../brain/card-chips';
 import { createSimClock } from '../brain/clock';
 import type { Scheduler } from '../brain/card-stack';
 import { mapMood, type MoodSources, type RequestPhase } from '../brain/components/mood-mapper';
@@ -157,12 +157,13 @@ describe('AT-09 show every response outcome', () => {
     expect(preview.moreRows).toBe(10);
   });
 
-  it('[AT-09] [G-38b] a suggestion chip sends nothing until the user clicks it', () => {
+  it('[AT-09] [UX-20c] a suggestion chip that sends gives an action only on a click', () => {
+    expect(CHIP_CATALOGUE.ask_genie.sends).toBe(true);
     const row = new ChipRow();
+    // An offer, a view and a tick return no action: only booleans, views and expired IDs.
     expect(row.offer({ id: 'c1', kind: 'ask_genie', label: 'Ask Genie' }, 0)).toBe(true);
-    // An offer, a view and an expiry tick are not actions.
-    row.view();
-    row.tick(1000);
+    expect(row.view().chips).toEqual([{ id: 'c1', label: 'Ask Genie' }]);
+    expect(row.tick(1000)).toEqual([]);
     expect(row.click('c1')).toEqual({ id: 'c1', kind: 'ask_genie' });
     expect(row.click('missing')).toBeUndefined();
   });
@@ -182,7 +183,7 @@ describe('AT-09 show every response outcome', () => {
     expect(mapMood(MOG_A, src('failed'), at + 3_100).mood).toBe('idle');
   });
 
-  it('[AT-09] [UX-26a] [UX-26b] [UX-26c] answers with the card hidden give one merged notification', async () => {
+  function notifier(opts: { visible?: MogId[]; focus?: boolean } = {}) {
     const clock = createSimClock();
     let timers: { at: number; fn: () => void }[] = [];
     const schedule: Scheduler = (at, fn) => {
@@ -195,8 +196,8 @@ describe('AT-09 show every response outcome', () => {
       clock,
       schedule,
       host: {
-        cardVisible: async () => false,
-        focusAllows: async () => true,
+        cardVisible: async (id) => opts.visible?.includes(id) ?? false,
+        focusAllows: async () => opts.focus ?? true,
         notify: async (n) => void sent.push(n),
       },
     });
@@ -207,16 +208,42 @@ describe('AT-09 show every response outcome', () => {
       due.forEach((t) => t.fn());
       for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
     };
+    return { svc, sent, flush };
+  }
+
+  it('[AT-09] [UX-26b] [UX-26c] a burst of answers from 2 MOGs with hidden cards gives one merged notification', async () => {
+    const { svc, sent, flush } = notifier();
     const f = await finalPoll(OUTCOMES.completed());
     for (let i = 0; i < 3; i++)
       svc.report({ kind: 'answer', mogId: MOG_A, text: f.final_answer ?? '' });
     svc.report({ kind: 'answer', mogId: MOG_B, text: 'Done.' });
-    svc.report({ kind: 'chip', mogId: MOG_B, text: 'Ask Genie' });
     await flush(5_000);
     await flush(10_000);
     expect(sent).toHaveLength(1);
     expect(sent[0]?.mogIds).toEqual([MOG_A, MOG_B]);
     svc.dispose();
+  });
+
+  it('[AT-09] [UX-26a] no notification for a chip, a visible card or a Focus mode that blocks', async () => {
+    const f = await finalPoll(OUTCOMES.completed());
+    const chip = notifier();
+    chip.svc.report({ kind: 'chip', mogId: MOG_A, text: 'Ask Genie' });
+    await chip.flush(15_000);
+    expect(chip.sent).toEqual([]);
+    const visible = notifier({ visible: [MOG_A] });
+    visible.svc.report({ kind: 'answer', mogId: MOG_A, text: f.final_answer ?? '' });
+    await visible.flush(15_000);
+    expect(visible.sent).toEqual([]);
+    const focus = notifier({ focus: false });
+    focus.svc.report({ kind: 'answer', mogId: MOG_A, text: f.final_answer ?? '' });
+    await focus.flush(15_000);
+    expect(focus.sent).toEqual([]);
+    // Control: the same answer with the card hidden and Focus open does notify.
+    const open = notifier();
+    open.svc.report({ kind: 'answer', mogId: MOG_A, text: f.final_answer ?? '' });
+    await open.flush(15_000);
+    expect(open.sent).toHaveLength(1);
+    for (const n of [chip, visible, focus, open]) n.svc.dispose();
   });
 
   it.skip('[AT-09] [G-21a] [G-21b] [G-22] [G-23a] [G-23b] each outcome gives one normalised terminal event TODO(#33)', () => {
@@ -245,6 +272,12 @@ describe('AT-09 show every response outcome', () => {
 
   it.skip('[AT-09] [G-24a] [G-24c] the table loads only on expand; truncated shows "Full result in Databricks" TODO(#150)', () => {
     expect.unreachable('#150: the on-demand table preview is not built');
+  });
+
+  it.skip('[AT-09] [G-38b] proactive suggestions show only as chips TODO(#40)', () => {
+    // When #40 lands: a proactive suggestion from the bridge becomes a chip offer, and no
+    // genie_ask reaches the double until the chip is clicked.
+    expect.unreachable('#40: the suggestion path is not built');
   });
 
   it.skip('[AT-09] [G-38a] each terminal answer is saved as one genie_exchange row TODO(#40)', () => {

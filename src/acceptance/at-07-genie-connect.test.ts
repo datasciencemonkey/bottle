@@ -42,7 +42,7 @@ async function accepted(d: ReturnType<typeof createGenieOneMcpDouble>) {
 }
 
 describe('AT-07 connect and poll Genie One', () => {
-  it('[AT-07] [G-07b] control: unguarded concurrent poll callers overlap on the double', async () => {
+  it('[AT-22] control: unguarded concurrent poll callers overlap on the double', async () => {
     const d = slowPollDouble();
     const ref = await accepted(d);
     await Promise.all([1, 2, 3].map(() => d.call('genie_poll_response', ref)));
@@ -81,7 +81,7 @@ describe('AT-07 connect and poll Genie One', () => {
     expect(d.maxConcurrentPolls()).toBe(1);
   });
 
-  it('[AT-07] tools/list gives the four G-06a tools of the contract file and no other', async () => {
+  it('[AT-22] the double lists the four tools of the contract file and no other', async () => {
     const d = slowPollDouble();
     const list = await d.handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
     const tools = (list.result as { tools: { name: string; inputSchema: unknown }[] }).tools;

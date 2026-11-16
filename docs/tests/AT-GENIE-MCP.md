@@ -24,11 +24,11 @@ pnpm vitest run src/acceptance/at-07-genie-connect.test.ts src/acceptance/at-08-
 
 | AT | File | Runs now on shipped code |
 |---|---|---|
-| AT-07 | `crates/mog-core/tests/at_07_genie_connect.rs` | The `mcp_call` contract part: only the brain may call it (G-06a); the server is only `genie_one`, and no argument can carry a URL, so the Beta or per-space MCP cannot be reached through IPC (G-03). |
-| AT-07 | `src/acceptance/at-07-genie-connect.test.ts` | G-07b: concurrent poll callers on one conversation go through the shipped `ConversationManager.enqueuePoll` (brain actor). The double sees 1 open poll at most, and every poll keeps the same IDs. A control case without the queue sees an overlap, so the check can fail. A failed poll does not block the next one. |
+| AT-07 | `crates/mog-core/tests/at_07_genie_connect.rs` | The `mcp_call` contract part: only the brain may call it (SEC-02a); the server is only `genie_one`, and no argument can carry a URL, so the Beta or per-space MCP cannot be reached through IPC. These IPC checks do not count as G-03 or G-06a: those are #28 and #30. |
+| AT-07 | `src/acceptance/at-07-genie-connect.test.ts` | G-07b: concurrent poll callers on one conversation go through the shipped `ConversationManager.enqueuePoll` (brain actor). The double sees 1 open poll at most, and every poll keeps the same IDs. A control case without the queue (`[AT-22]`) sees an overlap, so the check can fail. A failed poll does not block the next one. The double lists the four tools of the contract file (`[AT-22]`). |
 | AT-08 | `src/acceptance/at-08-context-approval.test.ts` | The display part of G-35a and G-35b (#89): the expanded card shows the exact "Sent to Genie" text and offers "Resend without context" only when a preamble went. |
-| AT-09 | `src/acceptance/at-09-outcomes.test.ts` | Six double outcomes (completed, incomplete with and without an answer, failed, truncated, needs-input) on the shipped card parts: 3 blurbs newest on top and History (UX-11a, UX-12), a split takes one slot and a pin stays (UX-11b, UX-11c), every expanded section in order (UX-18), a 60-row truncated result shows 50 rows (G-24b display part), a chip acts only on a click (G-38b), success and error moods (UX-01a), and one merged notification for a burst from 2 MOGs (UX-26a, UX-26b, UX-26c). |
-| AT-10 | `src/acceptance/at-10-cancel.test.ts` | The brain entry of G-25a (UX-19b, #78): Esc during a turn makes exactly one cancel call with the exchange ref, and the card stays to show "Cancellation requested", also when the cancel transport fails. |
+| AT-09 | `src/acceptance/at-09-outcomes.test.ts` | Six double outcomes (completed, incomplete with and without an answer, failed, truncated, needs-input) on the shipped card parts: 3 blurbs newest on top and History (UX-11a, UX-12), a split takes one slot and a pin stays (UX-11b, UX-11c), every expanded section in order (UX-18), a 60-row truncated result shows 50 rows (G-24b display part), a chip that sends gives an action only on a click (UX-20c), success and error moods (UX-01a), one merged notification for a burst from 2 MOGs (UX-26b, UX-26c), and no notification for a chip, a visible card or a blocking Focus mode (UX-26a). |
+| AT-10 | `src/acceptance/at-10-cancel.test.ts` | UX-19b (#78): Esc during a turn makes exactly one cancel call with the exchange ref, and the card stays to show "Cancellation requested", also when the cancel transport fails. The `genie_cancel_response` call is test glue in the callback; G-25a itself is #151. |
 | AT-33 | `src/acceptance/at-33-genie-behaviour.test.ts` | G-19b (SEC-25a, #210): the double's deep link on the profile host passes `trustedUrl`; another host, a look-alike host, http and a link with credentials do not. |
 | AT-34 | `crates/mog-core/tests/at_34_poll_budget.rs`, `src/acceptance/at-34-poll-budget.test.ts` | Nothing yet: all pending. |
 | all | `src/test-support/genie-tools.json` | The Genie One tool contracts: a verbatim copy of the user's antigravity-bricks-plugin `plugins/databricks-genie/scripts/genie_tools.json` @ `a31fd2c` (MIT, `THIRD_PARTY_NOTICES.md`). The double serves them on `tools/list` and records each call that breaks an input schema (`contractViolations()`). The AT-07, AT-09 and AT-10 tests check that their calls have none. From the contract, `genie_cancel_response` takes only `conversation_id` and its status is always `cancellation_requested`, so the double never says that a turn stopped. |
@@ -61,7 +61,7 @@ implementer removes the mark and finishes the test.
 | AT-09 | UX-16a, UX-16b | #88 |
 | AT-09 | G-12a, G-12b, G-12c | #149 |
 | AT-09 | G-24a, G-24c | #150 |
-| AT-09 | G-38a | #40 |
+| AT-09 | G-38a, G-38b | #40 |
 | AT-10 | G-25a (the bridge call), G-25b, G-25c, G-25d | #151 |
 | AT-10 | the acknowledged, no-effect and unknown cancel outcomes | #39 |
 | AT-33 | G-14, G-15a, G-15b | #32 |
@@ -140,3 +140,7 @@ Common setup (5 min):
    counts and times only). Expected: 40 calls/min or less; polls leave before queued asks.
 3. The admin sets the QPM to 10 to force a 429. Expected: the rate halves for 5 min and then
    comes back by 5 calls/min each minute; with `Retry-After` the next call waits for it.
+4. Record whether the live 429 carries `Retry-After` (SP-18, #136). For a 429 without it,
+   expected: a new ask retries per Table G-BACKOFF (2 s start, factor 2, 60 s maximum, 5 tries or
+   less, full jitter), and a poll only makes its interval longer. If the live 429 always has the
+   header, the scripted 429 of `at_34_g_10b_*` (#138) is the evidence for this case.

@@ -69,6 +69,7 @@ Add one row for each Bottle file that holds code or data from antigravity-bricks
 | Bottle file | antigravity-bricks-plugin path |
 |---|---|
 | `src/test-support/genie-tools.json` | `plugins/databricks-genie/scripts/genie_tools.json` (verbatim copy) |
+| `src/test-support/genie-one-mcp.ts` (the contract loader and `contractProblems`) | `plugins/databricks-genie/scripts/genie_tools.json` |
 
 ## Handy (MIT)
 

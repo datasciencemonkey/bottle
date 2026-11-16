@@ -3,8 +3,9 @@
  * "Cancellation requested"; polling stops; no remote-success claim appears.
  *
  * The card Esc rule ships (UX-19b, #78): Esc during a turn makes exactly one cancel call with the
- * exchange ref, and the card stays so it can show "Cancellation requested". That is the brain
- * entry of G-25a and runs here, with the #229 Genie One MCP double as the remote side. The bridge
+ * exchange ref, and the card stays so it can show "Cancellation requested". That runs here, with
+ * the #229 Genie One MCP double as the remote side. The `genie_cancel_response` call in the test
+ * is test glue in the cancel callback; the bridge call itself (G-25a) is #151. The bridge
  * cancel (`genie_cancel_response`, the text, the poll stop and the `cancelled` row) is #151, and
  * the acknowledgement / no effect / unknown transport cases are the OperationTracker (#39).
  * Those are pending. The live run is a person step (docs/tests/AT-GENIE-MCP.md).
@@ -38,7 +39,7 @@ async function turnInFlight() {
 }
 
 describe('AT-10 cancel with uncertain result', () => {
-  it('[AT-10] [G-25a] Esc during a turn makes one cancel call with the ref and keeps the card', async () => {
+  it('[AT-10] [UX-19b] Esc during a turn makes one cancel call with the ref and keeps the card', async () => {
     const { d, ref } = await turnInFlight();
     const cancelled: ExchangeRef[] = [];
     const hidden: MogId[] = [];
@@ -62,7 +63,7 @@ describe('AT-10 cancel with uncertain result', () => {
     expect(d.contractViolations()).toEqual([]);
   });
 
-  it('[AT-10] [G-25a] a cancel whose transport fails does not hide the card either', async () => {
+  it('[AT-10] [UX-19b] a cancel whose transport fails does not hide the card either', async () => {
     const { ref } = await turnInFlight();
     const hidden: MogId[] = [];
     const r = await handleCardEsc(

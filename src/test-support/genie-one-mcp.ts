@@ -10,6 +10,7 @@
 // - progress_steps is string[] or null; query_items is [{ item_id, sql? }] or null;
 // - deep_link is https://<host>/one/chat/threads/<cid>?o=<wsid>&utm_source=genie_chat_mcp, or null;
 // - a second ask on a busy conversation fails with BUSY_TEXT (not a 409).
+// Adapted from datasciencemonkey/antigravity-bricks-plugin plugins/databricks-genie/scripts/genie_tools.json @ a31fd2c (MIT).
 // The tool contracts (names, descriptions, input schemas) are `genie-tools.json`, a verbatim copy
 // of datasciencemonkey/antigravity-bricks-plugin plugins/databricks-genie/scripts/genie_tools.json
 // @ a31fd2c (MIT, see THIRD_PARTY_NOTICES.md). From it: `genie_cancel_response` takes only
