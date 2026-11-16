@@ -155,3 +155,26 @@ def test_sec_26_app_ci_has_an_adversarial_golden_set_hook(app_ci):
     assert len(matrix_oses(job)) >= 2
     text = runs(job)
     assert "SEC-26" in text and "sec_26" in text
+
+
+STRAWBERRY_PERL = r"C:\Strawberry\perl\bin\perl.exe"
+
+
+def test_nfr_13a_windows_jobs_build_vendored_openssl_with_strawberry_perl(app_ci):
+    """[NFR-13a] Windows jobs that compile Rust set OPENSSL_SRC_PERL to Strawberry Perl first (#375).
+
+    The vendored OpenSSL in the SQLCipher build (#35) runs Configure with perl; Git Bash's MSYS
+    perl lacks Locale::Maketext::Simple, so the build fails on windows runners without this.
+    """
+    for name, job in app_ci["jobs"].items():
+        if not any(o and o.startswith("windows") for o in matrix_oses(job)):
+            continue
+        body = steps(job)
+        builds = [i for i, s in enumerate(body) if re.search(r"\bcargo\b|tauri build", s.get("run", ""))]
+        if not builds:
+            continue
+        sets = [i for i, s in enumerate(body)
+                if "OPENSSL_SRC_PERL" in s.get("run", "") and STRAWBERRY_PERL in s.get("run", "")
+                and "runner.os == 'Windows'" in str(s.get("if", ""))]
+        assert sets, f"{name}: no Windows-only step sets OPENSSL_SRC_PERL to {STRAWBERRY_PERL}"
+        assert sets[0] < builds[0], f"{name}: OPENSSL_SRC_PERL is set after the first cargo or tauri build step"
