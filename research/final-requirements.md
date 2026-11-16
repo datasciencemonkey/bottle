@@ -1388,7 +1388,7 @@ Binding change B3: Bottle detects business definitions in transcripts and propos
 | NFR-14b | M | MVP-D | The shell must not need `macOSPrivateApi`. | The config has no `macOSPrivateApi` unless SP-01 fails. | I · AT-22 | D32 | ALL |
 | NFR-15a | M | MVP-D | The release process must sign and notarize the macOS DMG. | The signing review passes. | I · AT-22 | D32 | ALL |
 | NFR-15b | M | MVP-D | The release process must sign the Windows MSIX or NSIS installer. | The signing review passes. | I · AT-22 | D32 | ALL |
-| NFR-15c | M | MVP-D | The release process must publish the signed macOS and Windows installers on a download page that needs no Databricks sign-in. | A user without a workspace account can download the installer; the page shows the SHA-256 of each file. | I · AT-22 | U15 | ALL |
+| NFR-15d | M | MVP-D | The release process must publish the signed macOS and Windows installers on a download page that needs no Databricks sign-in. | A user without a workspace account can download the installer; the page shows the SHA-256 of each file. | I · AT-22 | U15 | ALL |
 | NFR-15c | M | MVP-D | The release process must not make a Mac App Store build. | No MAS target exists. | I · AT-22 | D32 | ALL |
 | NFR-16a | M | MVP-D | The app must use `@rive-app/webgl2` or `@rive-app/canvas` as SP-01 decides. | The lockfile has one of the two. | I · AT-37 | D32, D73 | ALL |
 | NFR-16b | M | MVP-D | The app must not use `@rive-app/webgl`. | The lockfile has no `@rive-app/webgl`. | I · AT-37 | D32 | ALL |
@@ -2121,7 +2121,7 @@ COL-01..COL-46 is the collision-analyst consolidated register (merging C1-C52, a
 | COL-101 | U9 no auto-delete vs D36 purges, D60 30 d answers, legal and storage | Data grows without limit; legal teams may ask for fixed periods. | Manual Wipe (30 d / 90 d / everything); security data keeps its expiry; MDM can still lock a Wipe policy in v1 if legal asks. | U9 | Med | RES | user 2026-11-15 |
 | COL-102 | U14 mascot from the Genie logo vs SEC-22a v1.2 and D41 "original mascot" | Genie logo artwork is a Databricks brand asset. | SEC-22a and UX-10b rewritten; brand approval before external release. | U14 | Med | AR | user 2026-11-15 |
 | COL-103 | U3 "Genie One shows the same content" vs unverified MCP conversation visibility | MCP conversations may not list in the Genie One desktop history. | Verify in SP-20b with a live U2M token; if they do not list, the blurb deep link stays the route. | U3 | Low | SPIKE (SP-20) | user 2026-11-15 |
-| COL-104 | U15 customers and partners from the first release vs "internal and field first" (D23), brand approval (U14, SEC-22b) and the MOG trademark (U13) | External users get the first release, so the brand and trademark gates apply to the MVP release, not later. | SEC-22b brand approval and a trademark check are release gates for the first public download (NFR-15c); internal builds can ship before them. | U13, U14, U15 | Med | AR | user 2026-11-15 |
+| COL-104 | U15 customers and partners from the first release vs "internal and field first" (D23), brand approval (U14, SEC-22b) and the MOG trademark (U13) | External users get the first release, so the brand and trademark gates apply to the MVP release, not later. | SEC-22b brand approval and a trademark check are release gates for the first public download (NFR-15d); internal builds can ship before them. | U13, U14, U15 | Med | AR | user 2026-11-15 |
 | COL-105 | U16 CLI download by the app vs W-17a "no bundled CLI", SEC-20b and MDM control | The app downloads and runs a binary. | Not bundled: the official release only, after consent, checksum checked, user-only folder, no admin rights, MDM can turn it off (W-17c..W-17g). | U16 | Med | RES | user 2026-11-15 |
 
 ---
@@ -2230,7 +2230,7 @@ By use case (a row can carry two UC values): UC1 95, UC2 350, UC3 50, MTG 118, A
 | AT-19 | CAP-12a, CAP-12b, CAP-12c, CAP-34 |
 | AT-20 | UX-02a, UX-02b, UX-08a, UX-08b, UX-19a, UX-19b, UX-20a, UX-20b, UX-20c, UX-23a, UX-23b, UX-28, UX-30, UX-31a, UX-31b, UX-32a, UX-32b, UX-33, UX-34a, UX-34b, UX-34c, UX-35 |
 | AT-21 | MOG-18a, MOG-18b, CAP-21, CAP-51a, CAP-51b, CAP-51c, CAP-52, CAP-59a, CAP-59b, CAP-67a, CAP-67b, CAP-85, RTR-09a, RTR-09b, MEM-07a, MEM-21a, MEM-21b, UX-05a, UX-05b, UX-09a, UX-09b, UX-36, NFR-01a, NFR-01b, NFR-01c, NFR-02, NFR-03a, NFR-03b, NFR-03c, NFR-04a, NFR-04b, NFR-05, NFR-06a, NFR-06b, NFR-09, NFR-11a, NFR-11b |
-| AT-22 | MB-15, MOG-19a, MOG-19b, CAP-73, W-19, MEM-39a, MEM-39b, NFR-13a, NFR-13b, NFR-14a, NFR-14b, NFR-15a, NFR-15b, NFR-15c, NFR-19a, NFR-19b, NFR-20, NFR-23a, NFR-23b, ADM-01a, ADM-01b, ADM-01c, ADM-02, ADM-03a, ADM-06, ADM-09, ADM-10, ADM-11, ADM-12a, ADM-12b, ADM-13a, ADM-13b, ADM-15, ADM-18 |
+| AT-22 | MB-15, MOG-19a, MOG-19b, CAP-73, W-19, MEM-39a, MEM-39b, NFR-13a, NFR-13b, NFR-14a, NFR-14b, NFR-15a, NFR-15b, NFR-15c, NFR-15d, NFR-19a, NFR-19b, NFR-20, NFR-23a, NFR-23b, ADM-01a, ADM-01b, ADM-01c, ADM-02, ADM-03a, ADM-06, ADM-09, ADM-10, ADM-11, ADM-12a, ADM-12b, ADM-13a, ADM-13b, ADM-15, ADM-18 |
 | AT-23 | SEC-11a, SEC-11b, SEC-11c, SEC-11d, SEC-12, UX-04a, UX-04b, UX-22a, UX-22b, UX-29a, UX-29b, UX-29c |
 | AT-24 | MB-08a, MB-08b, CAP-06, CAP-11a, CAP-11b, CAP-11c, SEC-08a, SEC-08b, SEC-08c, SEC-08d, SEC-09a, SEC-09b, SEC-10a, SEC-10b, SEC-17, SEC-32a, SEC-32b, UX-21a, UX-21b, UX-21c, UX-24a, UX-24b, UX-25 |
 | AT-25 | CAP-74a, CAP-74b, CAP-76a, CAP-76b, CAP-76c, CAP-77a, CAP-77b, CAP-78a, CAP-78b, CAP-81a, CAP-81b, CAP-81c |
@@ -2330,7 +2330,7 @@ AT-01..AT-22 merge the Kimi baseline, with Bottle names and the D-values. AT-23.
 | SP-17 | (SPIKE-COST-1) DBU per Genie question | Read `GENIE_FREE_USAGE` rows in `system.billing.usage` during the free period. | Measured mean and p95 DBU per question. | Keep the 2 DBU assumption; ask the account team. |
 | SP-18 | Tags on MCP rows and MCP 429 | Check `request_tags` on `MCP_SERVICE` usage rows; set a QPM limit and force a 429. | Tags present; 429 shape and `Retry-After` known. | Rely on User-Agent and IP attribution; backoff without header. |
 | SP-19 | Main agent harness through loopback proxies (B4) | Run Claude Code headless and the Codex CLI as child processes with `ANTHROPIC_BASE_URL` (or the Codex equivalent) set to the Rust model proxy, Genie One MCP and `bottle-mcp` on loopback with a per-session secret; measure the first tool call and tokens per turn; scan the process for tokens. | First tool call ≤ 2.0 s p95; no token in the harness; the proxy applies the bridge rules; token cost per turn known. | One harness only (Claude); or the fallback classifier only, with the bridge asking Genie directly. |
-| SP-20 | UC Pages API (B3) | With the Beta on, call `POST /api/2.0/knowledge/pages` with a CLI U2M profile (`all-apis`, then `knowledge` only); repeat with the same `request_id`; ask Genie One a question that needs the DRAFT definition. | 200 with state DRAFT; idempotent retry; Genie One uses the DRAFT for the owner only. | Keep Page drafts local with Copy as markdown; ask the account team. |
+| SP-20 | UC Pages API (B3); includes SP-20b | With the Beta on, call `POST /api/2.0/knowledge/pages` with a CLI U2M profile (`all-apis`, then `knowledge` only); repeat with the same `request_id`; ask Genie One a question that needs the DRAFT definition. SP-20b: check the `domains` scope for `GET /api/2.0/domains` (COL-100) and whether Genie One MCP conversations list in Genie One (COL-103). | 200 with state DRAFT; idempotent retry; Genie One uses the DRAFT for the owner only. | Keep Page drafts local with Copy as markdown; ask the account team. |
 | SP-21 | `sqlite-vec` in SQLCipher (B2) | Load `sqlite-vec` into the `bundled-sqlcipher` build; 50k vectors at 256-d f16; KNN p95; queue 1,000 embeddings offline and replay. | KNN p95 ≤ 50 ms on M1; extension loads in the signed build; replay drains with no loss. | Brute-force cosine in Rust over the f16 cache. |
 
 ---
@@ -2690,13 +2690,13 @@ Destinations: **Local** (encrypted disk, the MVP memory store), **UG** (Unity Ga
 | Data | Local | UG ASR/SLM | Genie | Lakebase | OTLP |
 |---|---|---|---|---|---|
 | Audio (mic, Others) | PTT/hands-free: RAM only (N on disk). Session: D, encrypted journal, shredded ≤ 5 min after commit; O keep N days | D only when STT is cloud: VAD-gated chunks ≤ 30 s; N when local or `SttPolicy=local_only` | N | N | N |
-| Raw transcript | D (encrypted, 30 d) | D (input to cleanup on PTT) | N | O (`TranscriptSyncAllowed`, off) | N (content logging needs user + admin opt-in) |
+| Raw transcript | D (encrypted, kept until Wipe, U9) | D (input to cleanup on PTT) | N | O (`TranscriptSyncAllowed`, off) | N (content logging needs user + admin opt-in) |
 | Cleaned utterance | D | D (router, writer, embeddings) | Only as a Genie question | O (same switch) | N |
 | Context preamble | D (with the exchange) | N (built by code) | O per MOG: ≤ 800 chars, ≤ 5 items, scrubbed, same workspace; cross-workspace needs the flag (MDM can forbid) | Item IDs only | N (length only) |
 | Genie question | D | D (router step and main agent model see it) | Only after a PTT preview or a chip click; never automatically (B1) | Home: question text + hash; non-home: hash only | N |
-| Genie answer | D (full, 30 d) | D (writer distils it) | Comes from Genie | Home: summary ≤ 600 chars + key numbers + pointer; non-home: pointer only; O full with MDM | N |
+| Genie answer | D (full, kept until Wipe, U9) | D (writer distils it) | Comes from Genie | Home: summary ≤ 600 chars + key numbers + pointer; non-home: pointer only; O full with MDM | N |
 | Memory item | D (the MVP store) | D (embedding, recall judge, main agent through `memory.recall`) | Only through the O preamble after a preview approval | O (v1 sync) | N |
-| Dictation text (UC1) | D (history 7 d) | D (cleanup) | N | N | N |
+| Dictation text (UC1) | D (history kept until Wipe, U9) | D (cleanup) | N | N | N |
 | Draft UC Page (UC3) | D (review copy) | N | N (Pages API in the home workspace after approval; Genie One reads the DRAFT for the owner) | N | N |
 | Main agent action log | D (content-free, 30 d) | N | N | N | N |
 | Embeddings | D (`sqlite-vec`, 256-d or 1024-d) | D (computed; queued when offline) | N | O (v1 sync) | N |
@@ -2719,7 +2719,7 @@ macOS domain `com.databricks.bottle`; Windows `HKLM\Software\Policies\Databricks
 | Main agent and Pages | `AgentHarnessAllowed` (claude, codex), `AgentModelRoute` (AI Gateway; local allowed: false), `AgentCloudExecutionAllowed` (v1, false), `PageDraftsAllowed` (true), `PageDomainId` (unset) |
 | Sessions and consent | `SessionsAllowed` (true), `OthersTrackAllowed` (true; per-session default off), `ConsentAttestationRequired` (true, locked), `LegalNoticeUrl`, `DisclosureText`, `ConsentRecordUpload` (false), `MeetingDetectionPrompt` (true) |
 | Stop policy | `SessionSoftCapMinutes` (60), `SessionExtendMinutes` (30), `SilenceNudgeMinutes` (5), `SilenceStopMinutes` (15), `SessionCeilingHours` (4; 1-8), `CalendarPrompt` (v1, true) |
-| Retention and memory | `AudioRetentionDays` (0), `TranscriptRetentionDays` (30), `DictationHistoryDays` (7), `GenieConversationRetentionDays` (90), `GenieExchangeRetentionDays` (90), `MemoryEnabled` (true), `MemoryRetentionDays` (180), `LakebaseSyncAllowed` (v1, false), `LakebaseProject` (v1), `TranscriptSyncAllowed` (v1, false) |
+| Retention and memory | `AudioRetentionDays` (0), `TranscriptRetentionDays` (unset = keep until Wipe, U9), `DictationHistoryDays` (unset, U9), `GenieConversationRetentionDays` (unset, U9), `GenieExchangeRetentionDays` (unset, U9), `MemoryEnabled` (true), `MemoryRetentionDays` (unset, U9), `LakebaseSyncAllowed` (v1, false), `LakebaseProject` (v1), `TranscriptSyncAllowed` (v1, false) |
 | Telemetry and other | `OtlpTable` (unset), `ContentTelemetryAllowed` (false), `CrashReporterAllowed` (false), `DiarizationAllowed` (false, locked), `MaxRunningMogs` (8), `UpdateChannel` |
 
 ---
