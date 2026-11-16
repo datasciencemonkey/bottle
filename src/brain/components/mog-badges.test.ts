@@ -30,6 +30,7 @@ describe('MOG status badges (#50)', () => {
       kind: 'identity',
       text: 'prod-finance · Genie One',
       label: 'Profile prod-finance on adb-111.azuredatabricks.net, backend Genie One',
+      detail: 'adb-111.azuredatabricks.net',
       hoverOnly: true,
     });
   });
@@ -70,6 +71,31 @@ describe('MOG status badges (#50)', () => {
     const b = byKind(mapBadges(src), 'identity');
     expect(b?.text).toBe('sales-ws · Genie One');
     expect(b?.label).toContain('adb-222.azuredatabricks.net');
+    expect(b?.detail).toBe('adb-222.azuredatabricks.net');
+  });
+
+  it('[MOG-07] [W-11a] a hop asks Genie One in the target unless the hop names its backend', () => {
+    const agentHome: BadgeSources = {
+      ...home,
+      backend: { kind: 'genie_agent', profile: 'prod-finance', spaceId: 's1', mode: 'chat' },
+      backendName: 'Finance',
+    };
+    expect(byKind(mapBadges(agentHome), 'identity')?.text).toBe('prod-finance · Genie: Finance');
+    const hop = { profile: 'sales-ws', host: 'h', scope: 'session' as const };
+    expect(byKind(mapBadges({ ...agentHome, hop }), 'identity')?.text).toBe('sales-ws · Genie One');
+    const named = {
+      ...hop,
+      backend: {
+        kind: 'genie_agent' as const,
+        profile: 'sales-ws',
+        spaceId: 's2',
+        mode: 'chat' as const,
+      },
+      backendName: 'Pipeline',
+    };
+    expect(byKind(mapBadges({ ...agentHome, hop: named }), 'identity')?.text).toBe(
+      'sales-ws · Genie: Pipeline',
+    );
   });
 
   it('[UX-38] [AT-36] the STT badge matches the provider that STT used', () => {
@@ -88,6 +114,7 @@ describe('MOG status badges (#50)', () => {
       text: 'STT: local',
       label: 'Speech to text runs on this device',
       hoverOnly: true,
+      action: 'open_data_disclosures',
     });
     const cloud = byKind(
       mapBadges({ ...home, stt: { provider: 'dbx_gemini', model: 'm1' } }),
@@ -95,6 +122,8 @@ describe('MOG status badges (#50)', () => {
     );
     expect(cloud?.text).toBe('STT: Databricks m1');
     expect(cloud?.label).toBe('Speech to text runs on Databricks, model m1');
+    // No model name yet: no trailing space.
+    expect(sttBadgeText({ provider: 'dbx_gemini', model: '' })).toBe('STT: Databricks');
   });
 
   it('[UX-38] [CAP-57c] with no STT provider known yet, the badge shows the local default', () => {
@@ -141,6 +170,7 @@ describe('MOG status badges (#50)', () => {
       text: 'Sync paused',
       label: 'Sync paused: all data stays on this device',
       hoverOnly: false,
+      action: 'open_setup',
     });
     expect(byKind(mapBadges({ ...home, sync: 'on' }), 'sync')).toBeUndefined();
     expect(byKind(mapBadges({ ...home, sync: 'off' }), 'sync')).toBeUndefined();
@@ -239,6 +269,27 @@ describe('UX-39b: badges are orthogonal to the mood', () => {
         },
       };
       expect(mapMood(A, withBadges, T).mood).toBe(mood);
+    },
+  );
+
+  it.each(['processing', 'answering', 'idle'] as const)(
+    '[UX-39b] [AT-12] going offline and back keeps the agent mood "%s" (a real transition)',
+    (m) => {
+      const said = { mood: m, at: T - 100 };
+      const ready: MoodSources = {
+        mog: { lifecycle: 'ready', since: 0 },
+        capture: noCapture,
+        requests: [],
+        agentMood: said,
+      };
+      const before = mapMood(A, ready, T).mood;
+      expect(before).toBe(m);
+      // The MOG goes offline after the agent spoke, then comes back: `since` moves each time.
+      const offline: MoodSources = { ...ready, mog: { lifecycle: 'offline', since: T - 50 } };
+      expect(mapMood(A, offline, T).mood).toBe(before);
+      const back: MoodSources = { ...ready, mog: { lifecycle: 'ready', since: T - 10 } };
+      expect(mapMood(A, back, T).mood).toBe(before);
+      expect(byKind(mapBadges({ ...home, lifecycle: 'offline' }), 'offline')).toBeDefined();
     },
   );
 

@@ -170,6 +170,7 @@ describe('V2 MOG view', () => {
       kind: 'identity',
       text: 'prod-finance · Genie One',
       label: 'Profile prod-finance on adb-111.azuredatabricks.net, backend Genie One',
+      detail: 'adb-111.azuredatabricks.net',
       hoverOnly: true,
     },
     {
@@ -177,6 +178,7 @@ describe('V2 MOG view', () => {
       text: 'STT: local',
       label: 'Speech to text runs on this device',
       hoverOnly: true,
+      action: 'open_data_disclosures',
     },
     {
       kind: 'hop',
@@ -195,6 +197,7 @@ describe('V2 MOG view', () => {
       text: 'Sync paused',
       label: 'Sync paused: all data stays on this device',
       hoverOnly: false,
+      action: 'open_setup',
     },
   ];
   const shown = (el: HTMLElement) =>
@@ -220,9 +223,17 @@ describe('V2 MOG view', () => {
     await hoverOn(target);
     expect(shown(el)).toEqual(['identity', 'stt']);
     const identity = el.querySelector('[data-badge="identity"]') as HTMLElement;
-    expect(identity.textContent).toBe('prod-finance · Genie One');
+    // MOG-07: the host shows as visible text next to "<profile> · <backend label>".
+    expect(identity.querySelector('[data-badge-text]')?.textContent).toBe(
+      'prod-finance · Genie One',
+    );
+    expect(identity.querySelector('[data-badge-detail]')?.textContent).toBe(
+      'adb-111.azuredatabricks.net',
+    );
     expect(identity.getAttribute('aria-label')).toContain('adb-111.azuredatabricks.net');
-    expect(el.querySelector('[data-badge="stt"]')?.textContent).toBe('STT: local');
+    expect(el.querySelector('[data-badge="stt"] [data-badge-text]')?.textContent).toBe(
+      'STT: local',
+    );
     await hoverOff(target);
     expect(shown(el)).toEqual([]);
   });
@@ -243,7 +254,7 @@ describe('V2 MOG view', () => {
     expect(el.textContent?.match(/Offline/g)).toHaveLength(1);
     for (const b of badges.slice(2)) {
       const node = el.querySelector(`[data-badge="${b.kind}"]`) as HTMLElement;
-      expect(node.textContent).toBe(b.text);
+      expect(node.querySelector('[data-badge-text]')?.textContent).toBe(b.text);
       expect(node.getAttribute('aria-label')).toBe(b.label);
     }
     // The state no longer applies: the brain sends no badge, and the view shows none.
@@ -279,5 +290,34 @@ describe('V2 MOG view', () => {
       badges: [{ kind: 'hop', text: 't', label: 'l', hoverOnly: 'no' }],
     });
     expect(calls).toEqual(['mount']);
+  });
+
+  it('[UX-38] [UX-39a] a badge with an action is a button that tells the brain which badge', async () => {
+    const { m } = fakeMascot();
+    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    await tauri.emit('mog:view_state', { mogId: ID, mood: 'idle', overlays, badges });
+    const target = el.querySelector('[aria-label="MOG"]') as HTMLElement;
+    await hoverOn(target);
+    const stt = el.querySelector('button[data-badge="stt"]') as HTMLElement;
+    const sync = el.querySelector('button[data-badge="sync"]') as HTMLElement;
+    expect(el.querySelector('button[data-badge="hop"]')).toBeNull();
+    await act(async () => stt.click());
+    await act(async () => sync.click());
+    expect(viewEmits().slice(-2)).toEqual([
+      { mogId: ID, kind: 'click', payload: { target: 'badge', badge: 'stt' } },
+      { mogId: ID, kind: 'click', payload: { target: 'badge', badge: 'sync' } },
+    ]);
+  });
+
+  it('[UX-39a] when the brain sends badges, the old offline overlay text does not show', async () => {
+    const { m } = fakeMascot();
+    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    await tauri.emit('mog:view_state', {
+      mogId: ID,
+      mood: 'idle',
+      overlays: { ...overlays, offline: true },
+      badges: [],
+    });
+    expect(el.querySelector('[data-overlay="offline"]')).toBeNull();
   });
 });
