@@ -19,5 +19,7 @@ base64 = "0.22"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSResponder", "NSView", "NSColor", "NSGraphics", "NSRunningApplication", "NSApplication"] }
-objc2-foundation = "0.3"
+objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSResponder", "NSView", "NSColor", "NSGraphics", "NSRunningApplication", "NSApplication", "NSEvent", "NSTrackingArea", "NSPanel", "NSImage"] }
+objc2-foundation = { version = "0.3", features = ["NSData", "NSError", "NSGeometry"] }
+objc2-web-kit = { version = "0.3", features = ["WKWebView", "block2", "objc2-app-kit"] }
+block2 = "0.6"

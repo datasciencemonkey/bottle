@@ -37,15 +37,19 @@ final class Panel: NSPanel {
 }
 
 final class Win: NSWindow {
-    override var canBecomeKey: Bool { false }
-    override var canBecomeMain: Bool { false }
+    // SP01_KEY=1 makes this the key-window control.
+    override var canBecomeKey: Bool { e("SP01_KEY", "0") == "1" }
+    override var canBecomeMain: Bool { e("SP01_KEY", "0") == "1" }
 }
 
 let csp = "default-src 'self'; connect-src ipc: http://ipc.localhost; script-src 'self' 'wasm-unsafe-eval'"
 
 // Fallback "own fix" B: a native tracking area (always active) whose owner forwards
 // mouse moves into the page as synthetic DOM PointerEvents (kind "pointer", fwd=true).
-final class Forwarder: NSObject {
+// NSResponder subclass with overrides, so the selectors are mouseMoved:,
+// mouseEntered: and mouseExited: (a plain NSObject with @objc func
+// mouseMoved(with:) exports mouseMovedWith:, which AppKit never calls).
+final class Forwarder: NSResponder {
     weak var web: WKWebView?
     var sent = 0
     func fwd(_ ev: NSEvent, _ type: String) {
@@ -56,9 +60,9 @@ final class Forwarder: NSObject {
         logLine(["kind": "native", "type": type])
         w.evaluateJavaScript("window.sp01Forward && window.sp01Forward('\(type)', \(p.x), \(y))")
     }
-    @objc func mouseMoved(with ev: NSEvent) { fwd(ev, "pointermove") }
-    @objc func mouseEntered(with ev: NSEvent) { fwd(ev, "pointerenter") }
-    @objc func mouseExited(with ev: NSEvent) { fwd(ev, "pointerleave") }
+    override func mouseMoved(with ev: NSEvent) { fwd(ev, "pointermove") }
+    override func mouseEntered(with ev: NSEvent) { fwd(ev, "pointerenter") }
+    override func mouseExited(with ev: NSEvent) { fwd(ev, "pointerleave") }
 }
 let forwarder = Forwarder()
 
@@ -196,7 +200,12 @@ final class App: NSObject, NSApplicationDelegate {
             webView.addTrackingArea(area)
         }
         webView.load(URLRequest(url: URL(string: "sp01://app/index.html")!))
-        win.orderFrontRegardless()
+        if e("SP01_KEY", "0") == "1" {
+            NSApp.activate(ignoringOtherApps: true)
+            win.makeKeyAndOrderFront(nil)
+        } else {
+            win.orderFrontRegardless()
+        }
 
         logLine(["kind": "info", "msg": "shown", "kind_window": kind, "front_before": front0,
                  "pid": ProcessInfo.processInfo.processIdentifier,
@@ -210,7 +219,8 @@ final class App: NSObject, NSApplicationDelegate {
                          "front_is_probe": NSWorkspace.shared.frontmostApplication?.processIdentifier
                              == ProcessInfo.processInfo.processIdentifier,
                          "app_active": NSApp.isActive, "is_key": self.win.isKeyWindow,
-                         "is_main": self.win.isMainWindow, "key_window_nil": NSApp.keyWindow == nil])
+                         "is_main": self.win.isMainWindow,
+                         "occlusion_visible": self.win.occlusionState.contains(.visible), "key_window_nil": NSApp.keyWindow == nil])
             }
         }
 
@@ -239,6 +249,19 @@ final class App: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + s) { NSApp.terminate(nil) }
         }
     }
+}
+
+if e("SP01_SELFTEST", "0") == "1" {
+    // Offscreen proof that the tracking-area owner answers the AppKit selectors.
+    let f = Forwarder()
+    let out: [String: Any] = [
+        "mouseMoved:": f.responds(to: NSSelectorFromString("mouseMoved:")),
+        "mouseEntered:": f.responds(to: NSSelectorFromString("mouseEntered:")),
+        "mouseExited:": f.responds(to: NSSelectorFromString("mouseExited:")),
+        "mouseMovedWith:": f.responds(to: NSSelectorFromString("mouseMovedWith:")),
+    ]
+    print(String(data: try! JSONSerialization.data(withJSONObject: out, options: [.sortedKeys]), encoding: .utf8)!)
+    exit(0)
 }
 
 let app = NSApplication.shared

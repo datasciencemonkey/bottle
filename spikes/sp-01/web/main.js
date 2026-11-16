@@ -5,9 +5,10 @@
   const log = (rec) => window.sp01.log(Object.assign({ t: now() }, rec));
   for (const type of ["pointermove", "pointerenter", "mouseover"]) {
     document.addEventListener(type, (e) => {
-      log({ kind: "pointer", type: type, x: e.clientX, y: e.clientY });
+      log({ kind: "pointer", type: type, x: e.clientX, y: e.clientY, trusted: e.isTrusted });
     }, { capture: true, passive: true });
   }
+  document.addEventListener("visibilitychange", () => log({ kind: "info", msg: "visibility", state: document.visibilityState }));
   window.addEventListener("error", (e) => log({ kind: "error", msg: String(e.message) }));
 
   const cfg = await window.sp01.config();
@@ -84,5 +85,5 @@ window.sp01Forward = function (type, x, y) {
   let n = 0;
   const tick = () => { n++; requestAnimationFrame(tick); };
   requestAnimationFrame(tick);
-  setInterval(() => { window.sp01.log({ kind: "info", msg: "raf", frames_5s: n, t: Date.now() }); n = 0; }, 5000);
+  setInterval(() => { window.sp01.log({ kind: "info", msg: "raf", frames_5s: n, t: Date.now(), visibility: document.visibilityState }); n = 0; }, 5000);
 })();

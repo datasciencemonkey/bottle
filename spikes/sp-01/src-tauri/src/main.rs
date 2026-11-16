@@ -6,12 +6,21 @@
 //! - `SP01_RUNTIME` `webgl2` (default) or `canvas`
 //! - `SP01_MODE`    `animating` (default) or `idle`
 //! - `SP01_LOG`     JSONL log path (default `/tmp/sp01-events.jsonl`)
-//! - `SP01_PANEL`   `1` to also apply the objc2 fallback (NSWindow tweaks below)
+//! - `SP01_PANEL`   `1` (default) to apply the objc2 overlay step, `0` to use `show()`
+//! - `SP01_POLICY`  `accessory` (default), `prohibited` or `regular`
+//! - `SP01_AIOA`    `1` (default, tao behaviour) or `0`: `activate_ignoring_other_apps`
+//! - `SP01_DEACTIVATE` `1` to call `NSApp.deactivate()` on Ready and after samples
+//! - `SP01_FOCUSABLE` `1` to keep the window focusable (key-window control)
+//! - `SP01_KEY`     `1` to make the window key and activate the app (control)
+//! - `SP01_TRACK`, `SP01_PANEL_SWAP`, `SP01_SNAP`: see `macos.rs`
 
 use std::{fs::OpenOptions, io::Write, path::PathBuf, time::SystemTime};
 
 use base64::Engine as _;
 use tauri::Manager;
+
+#[cfg(target_os = "macos")]
+mod macos;
 
 fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
@@ -92,8 +101,23 @@ fn macos_overlay(win: &tauri::WebviewWindow) -> Result<(), String> {
     ns.setOpaque(false);
     ns.setBackgroundColor(Some(&NSColor::clearColor()));
     ns.setHasShadow(false);
-    // Show without activating the app or making the window key.
-    ns.orderFrontRegardless();
+    if let Some(mtm) = objc2_foundation::MainThreadMarker::new() {
+        macos::log_tracker_selectors(mtm);
+        if macos::want("SP01_PANEL_SWAP") {
+            macos::panel_swap(ns);
+        }
+        if macos::want("SP01_TRACK") {
+            macos::install_tracker(win, ns, mtm);
+        }
+    }
+    if macos::want("SP01_KEY") {
+        // Key-window control: activate and make key (steals focus on purpose).
+        win.set_focus().map_err(|e| e.to_string())?;
+        ns.makeKeyAndOrderFront(None);
+    } else {
+        // Show without activating the app or making the window key.
+        ns.orderFrontRegardless();
+    }
     Ok(())
 }
 
@@ -101,7 +125,7 @@ fn macos_overlay(win: &tauri::WebviewWindow) -> Result<(), String> {
 /// activation back once the run loop is ready (`SP01_DEACTIVATE=1`, default).
 fn deactivate_app() {
     #[cfg(target_os = "macos")]
-    if env_or("SP01_DEACTIVATE", "1") == "1" {
+    if env_or("SP01_DEACTIVATE", "0") == "1" {
         if let Some(mtm) = objc2_foundation::MainThreadMarker::new() {
             objc2_app_kit::NSApplication::sharedApplication(mtm).deactivate();
         }
@@ -120,8 +144,22 @@ fn log_focus(app: &tauri::AppHandle, after: f64) {
         .unwrap_or(false);
     #[cfg(not(target_os = "macos"))]
     let active = false;
+    #[cfg(target_os = "macos")]
+    let visible = app
+        .get_webview_window("mog-spike")
+        .and_then(|w| w.ns_window().ok())
+        .map(|p| {
+            // SAFETY: tao's live NSWindow, read on the main thread.
+            let ns: &objc2_app_kit::NSWindow = unsafe { &*(p as *mut objc2_app_kit::NSWindow) };
+            ns.occlusionState()
+                .contains(objc2_app_kit::NSWindowOcclusionState::Visible)
+        })
+        .unwrap_or(false);
+    #[cfg(not(target_os = "macos"))]
+    let visible = true;
     let line = serde_json::json!({
         "kind": "focus", "seq": after, "is_key": key, "app_active": active,
+        "occlusion_visible": visible,
     });
     let _ = sp01_log(line.to_string());
     if active {
@@ -132,12 +170,15 @@ fn log_focus(app: &tauri::AppHandle, after: f64) {
 
 fn main() {
     tauri::Builder::default()
+        .activate_ignoring_other_apps(env_or("SP01_AIOA", "1") == "1")
         .invoke_handler(tauri::generate_handler![sp01_config, sp01_blob, sp01_log])
         .setup(|app| {
             // Activation policy: `accessory` (no Dock icon, like a mog) or `regular`.
             #[cfg(target_os = "macos")]
-            if env_or("SP01_POLICY", "accessory") == "accessory" {
-                app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            match env_or("SP01_POLICY", "accessory").as_str() {
+                "accessory" => app.set_activation_policy(tauri::ActivationPolicy::Accessory),
+                "prohibited" => app.set_activation_policy(tauri::ActivationPolicy::Prohibited),
+                _ => app.set_activation_policy(tauri::ActivationPolicy::Regular),
             }
             let win = app
                 .get_webview_window("mog-spike")
@@ -174,6 +215,14 @@ fn main() {
                     let h = handle.clone();
                     let _ = handle.run_on_main_thread(move || log_focus(&h, after));
                 }
+            });
+            #[cfg(target_os = "macos")]
+            let snap_win = win.clone();
+            #[cfg(target_os = "macos")]
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(3));
+                let w = snap_win.clone();
+                let _ = snap_win.run_on_main_thread(move || macos::snapshot(&w));
             });
             Ok(())
         })

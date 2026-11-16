@@ -7,7 +7,9 @@
 #   APPLE_SIGNING_IDENTITY  e.g. "Developer ID Application: Example Corp (TEAMID1234)"
 #   NOTARY_PROFILE          keychain profile made once with:
 #       xcrun notarytool store-credentials <your-profile> --apple-id <id> --team-id <team>
-#   SP01_RIV                path to the built MOG mascot .riv (rive mog-rive --publish)
+#   SP01_RIV                path to the built MOG mascot .riv:
+#       cp -R mog-rive /tmp/mog-rive && rive login && SP01_RIV=$(rive /tmp/mog-rive --publish --quiet | tail -1)
+#       (rive writes build/<project name>.riv, here /tmp/mog-rive/build/mog-rive.riv)
 # Usage:
 #   APPLE_SIGNING_IDENTITY=... NOTARY_PROFILE=<your-profile> SP01_RIV=/path/mog-rive.riv \
 #     spikes/sp-01/sign_and_rerun.sh
@@ -51,6 +53,9 @@ ditto "$MNT/SP01 Rive Transparent.app" "/Applications/SP01 Rive Transparent.app"
 hdiutil detach "$MNT"
 spctl -a -vv "/Applications/SP01 Rive Transparent.app" 2>&1 | tee "$OUT/spctl-app.txt"
 
-# 4. Rerun the full matrix on the installed, signed app.
+# 4. Rerun on the installed, signed app: the offscreen activation matrix, then
+#    the one batched on-screen matrix (hover fixes, key and non-key controls,
+#    CPU/memory, snapshots, and screen captures if Screen Recording is granted).
+OUT="$OUT/activation" "$HERE/run_activation_offscreen.sh" "/Applications/SP01 Rive Transparent.app" "$SP01_RIV" | tee "$OUT/activation.txt"
 OUT="$OUT/run" "$HERE/run_measurements.sh" "/Applications/SP01 Rive Transparent.app" "$SP01_RIV" | tee "$OUT/summary.txt"
 echo "Signed rerun output: $OUT"

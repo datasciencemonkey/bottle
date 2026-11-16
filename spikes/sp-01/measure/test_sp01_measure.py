@@ -176,3 +176,19 @@ def test_sp_01_parse_top_sums_processes_and_drops_first_sample():
     assert r["samples"] == 2
     assert r["cpu_mean"] == pytest.approx((4.0 + 4.0) / 2)
     assert r["mem_mb_max"] == pytest.approx(1024 + 30)
+
+
+def test_sp_01_ux_08a_hover_breakdown_splits_native_trusted_synthetic():
+    """[SP-01][UX-08a] Native AppKit calls, trusted and forwarded DOM events count apart."""
+    lines = [
+        json.dumps({"kind": "native", "type": "pointermove"}),
+        json.dumps({"kind": "native", "type": "pointerenter"}),
+        json.dumps({"kind": "pointer", "type": "pointermove", "trusted": True}),
+        json.dumps({"kind": "pointer", "type": "pointermove", "trusted": False}),
+        json.dumps({"kind": "pointer", "type": "pointermove"}),
+        json.dumps({"kind": "info", "msg": "ready"}),
+    ]
+    b = m.hover_breakdown(lines)
+    assert b["native"] == {"pointermove": 1, "pointerenter": 1}
+    assert b["page_trusted"] == {"pointermove": 2}
+    assert b["page_synthetic"] == {"pointermove": 1}

@@ -241,6 +241,27 @@ def parse_hover_log(lines):
     return counts
 
 
+def hover_breakdown(lines) -> dict:
+    """Split events into native AppKit calls, trusted DOM events and synthetic
+    (host-forwarded, isTrusted=false) DOM events, counted by type."""
+    out = {"native": {}, "page_trusted": {}, "page_synthetic": {}}
+    for line in lines:
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(rec, dict) or not rec.get("type"):
+            continue
+        if rec.get("kind") == "native":
+            bucket = out["native"]
+        elif rec.get("kind") == "pointer":
+            bucket = out["page_synthetic"] if rec.get("trusted") is False else out["page_trusted"]
+        else:
+            continue
+        bucket[rec["type"]] = bucket.get(rec["type"], 0) + 1
+    return out
+
+
 def hover_summary(sent: int, counts: dict) -> dict:
     moves = int(counts.get("pointermove", 0))
     ratio = moves / sent if sent else 0.0
@@ -294,8 +315,10 @@ def _cmd_flash(a):
 
 
 def _cmd_hover(a):
-    lines = Path(a.log).read_text().splitlines()
-    print(json.dumps(hover_summary(a.sent, parse_hover_log(lines)), indent=2))
+    lines = Path(a.log).read_text().splitlines() if Path(a.log).exists() else []
+    out = hover_summary(a.sent, parse_hover_log(lines))
+    out["breakdown"] = hover_breakdown(lines)
+    print(json.dumps(out))
 
 
 def _cmd_checker(a):

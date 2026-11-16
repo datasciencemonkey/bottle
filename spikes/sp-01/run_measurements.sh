@@ -32,10 +32,10 @@ sample() { # $1 label, $2 pid of app; 31 samples of 1 s over app + its WebKit pi
   M top "$OUT/top-$1.txt" > "$OUT/cpu-$1.json"
 }
 
-hover() { # $1 label; 3 bursts of 200 moves at 10 ms
-  for i in 1 2 3; do
-    "$HERE/out/post_moves" "$TX" "$TY" "$SIZE" "$SIZE" 200 10 hid > "$OUT/sent-$1-$i.json"
-    sleep 0.7
+hover() { # $1 label; 2 bursts of 100 moves at 10 ms (kept short: real cursor moves)
+  for i in 1 2; do
+    "$HERE/out/post_moves" "$TX" "$TY" "$SIZE" "$SIZE" 100 10 hid > "$OUT/sent-$1-$i.json"
+    sleep 0.5
   done
 }
 
@@ -45,42 +45,86 @@ hover_count() { # $1 label, $2 log
   M hover "$2" --sent "$sent" > "$OUT/hover-$1.json"
 }
 
-# ---- Tauri cases (primary evidence) --------------------------------------
+stop() { kill "$1" 2>/dev/null || true; wait "$1" 2>/dev/null || true; sleep 0.7; }
+
+# Default mog config (best activation config from run_activation_offscreen.sh):
+# Accessory policy, activate_ignoring_other_apps(false), not focusable, overlay step.
+MOG_ENV=(SP01_POLICY=accessory SP01_AIOA=0 SP01_SIZE=$SIZE SP01_X=$TX SP01_Y=$TY SP01_RIV="$RIV")
+
+# ---- Tauri: runtime x mode (hover, on-screen snapshot, CPU/memory) ----------
 for RT in webgl2 canvas; do
   for MODE in animating idle; do
     L="tauri-$RT-$MODE"; LOG="$OUT/$L.jsonl"
     BEFORE_WK=$(webkit_pids); FRONT0=$(front)
-    SP01_LOG="$LOG" SP01_RIV="$RIV" SP01_RUNTIME=$RT SP01_MODE=$MODE \
-      SP01_SIZE=$SIZE SP01_X=$TX SP01_Y=$TY "$BIN" > "$OUT/$L.stdout" 2>&1 &
+    env "${MOG_ENV[@]}" SP01_LOG="$LOG" SP01_RUNTIME=$RT SP01_MODE=$MODE \
+      "$BIN" > "$OUT/$L.stdout" 2>&1 &
     PID=$!
     sleep 1; FRONT1=$(front)
-    sleep 1.5
+    sleep 2.5
     NEWWK=$(comm -13 <(echo "$BEFORE_WK") <(webkit_pids) | tr '\n' ' ')
-    echo "{\"front_before\":\"$FRONT0\",\"front_1s\":\"$FRONT1\",\"webkit_pids\":\"$NEWWK\"}" > "$OUT/front-$L.json"
-    if [ "$MODE" = animating ]; then hover "$L"; sleep 2; fi
+    if [ "$MODE" = animating ]; then hover "$L"; sleep 1; fi
     sample "$L" "$PID"
     FRONT2=$(front)
-    echo "{\"front_end\":\"$FRONT2\"}" >> "$OUT/front-$L.json"
-    kill "$PID"; wait "$PID" 2>/dev/null || true
-    [ "$MODE" = animating ] && hover_count "$L" "$LOG"
-    sleep 1
+    echo "{\"front_before\":\"$FRONT0\",\"front_1s\":\"$FRONT1\",\"front_end\":\"$FRONT2\",\"webkit_pids\":\"$NEWWK\"}" > "$OUT/front-$L.json"
+    stop "$PID"
+    if [ "$MODE" = animating ]; then hover_count "$L" "$LOG"; fi
   done
 done
 
-# ---- WKWebView + NSPanel probe (not Tauri): hover variants ----------------
-for TRACK in 0 2; do
-  L="probe-panel-track$TRACK"; LOG="$OUT/$L.jsonl"
-  SP01_WEB="$HERE/web" SP01_LOG="$LOG" SP01_RIV="$RIV" SP01_KIND=panel SP01_TRACK=$TRACK \
-    SP01_SIZE=$SIZE SP01_X=$BX SP01_Y=$BY "$HERE/out/probe" > /dev/null 2>&1 &
-  PID=$!
-  sleep 2.5; hover "$L"; sleep 0.5
-  kill "$PID"; wait "$PID" 2>/dev/null || true
+# ---- Tauri: hover fixes and controls (webgl2, no CPU sample) --------------
+tauri_hover() { # $1 label, rest: extra env
+  local L="tauri-hover-$1"; shift
+  local LOG="$OUT/$L.jsonl" F0 F1
+  F0=$(front)
+  env "${MOG_ENV[@]}" SP01_LOG="$LOG" "$@" "$BIN" > /dev/null 2>&1 &
+  local PID=$!
+  sleep 3; F1=$(front)
+  hover "$L"; sleep 0.5
+  echo "{\"front_before\":\"$F0\",\"front_3s\":\"$F1\",\"front_end\":\"$(front)\"}" > "$OUT/front-$L.json"
+  stop "$PID"
   hover_count "$L" "$LOG"
-  sleep 1
+}
+tauri_hover track SP01_TRACK=1
+tauri_hover panelswap SP01_PANEL_SWAP=1
+tauri_hover panelswap-track SP01_PANEL_SWAP=1 SP01_TRACK=1
+# Key-window control: focusable, regular policy, activates on purpose.
+tauri_hover keycontrol SP01_FOCUSABLE=1 SP01_KEY=1 SP01_POLICY=regular SP01_AIOA=1
+
+# ---- WKWebView + NSPanel probe (not Tauri) --------------------------------
+probe_hover() { # $1 label, rest: extra env
+  local L="probe-$1"; shift
+  local LOG="$OUT/$L.jsonl"
+  env SP01_WEB="$HERE/web" SP01_LOG="$LOG" SP01_RIV="$RIV" SP01_SIZE=$SIZE SP01_X=$BX SP01_Y=$BY \
+    "$@" "$HERE/out/probe" > /dev/null 2>&1 &
+  local PID=$!
+  sleep 2.5; hover "$L"; sleep 0.5
+  stop "$PID"
+  hover_count "$L" "$LOG"
+}
+probe_hover panel-track0 SP01_KIND=panel SP01_TRACK=0
+probe_hover panel-track1 SP01_KIND=panel SP01_TRACK=1
+# Non-key positive control: a native .activeAlways owner that counts mouseMoved:.
+probe_hover panel-track2 SP01_KIND=panel SP01_TRACK=2
+probe_hover keycontrol SP01_KIND=window SP01_KEY=1
+
+# Tauri WKWebView snapshots (on-screen, 5 s per runtime, no cursor moves).
+for RT in webgl2 canvas; do
+  env "${MOG_ENV[@]}" SP01_LOG="$OUT/tauri-snap-$RT.jsonl" SP01_RUNTIME=$RT \
+    SP01_SNAP="$OUT/tauri-snap-$RT.tiff" "$BIN" > /dev/null 2>&1 &
+  PID=$!; sleep 5; stop "$PID"
+done
+
+# Convert the Tauri on-screen snapshots and measure their alpha.
+[ -f "$OUT/checker.png" ] || M checker "$OUT/checker.png" --w 480 --h 480 --cell 16
+for T in "$OUT"/tauri-snap-*.tiff; do
+  [ -f "$T" ] || continue
+  B="${T%.tiff}"
+  M composite "$T" "$OUT/checker.png" "$B-comp.png" > "$B-alpha.json"
+  M transparency "$OUT/checker.png" "$B-comp.png" > "$B-transparency.json"
 done
 
 # ---- Offscreen probe snapshots: alpha, Delta E, halo, early frames --------
-M checker "$OUT/checker.png" --w 480 --h 480 --cell 16
+[ -f "$OUT/checker.png" ] || M checker "$OUT/checker.png" --w 480 --h 480 --cell 16
 for RT in webgl2 canvas; do
   D="$OUT/snap-$RT"; mkdir -p "$D/flash"
   SP01_WEB="$HERE/web" SP01_LOG="$OUT/snap-$RT.jsonl" SP01_RIV="$RIV" SP01_RUNTIME=$RT SP01_SIZE=$SIZE \
@@ -108,7 +152,7 @@ if screencapture -x -R"$TX,$TY,$SIZE,$SIZE" "$OUT/screencapture-test.png" 2> "$O
   for RT in webgl2 canvas; do
     D="$OUT/screen-$RT"; mkdir -p "$D/flash"
     screencapture -x -R"$TX,$TY,$SIZE,$SIZE" "$D/ref.png"
-    SP01_LOG="$D/log.jsonl" SP01_RIV="$RIV" SP01_RUNTIME=$RT SP01_SIZE=$SIZE SP01_X=$TX SP01_Y=$TY \
+    env "${MOG_ENV[@]}" SP01_LOG="$D/log.jsonl" SP01_RUNTIME=$RT \
       "$BIN" > /dev/null 2>&1 &
     PID=$!; T0=$(uv run --no-project python -I -c "import time;print(time.time())")
     for i in $(seq 1 40); do
@@ -127,7 +171,7 @@ fi
 
 echo "results in $OUT"
 for f in "$OUT"/front-*.json "$OUT"/hover-*.json "$OUT"/cpu-*.json "$OUT"/snap-*/alpha.json \
-         "$OUT"/snap-*/transparency.json "$OUT"/snap-*/flash.json "$OUT"/screen-*/*.json "$OUT"/screencapture.json; do
+         "$OUT"/snap-*/transparency.json "$OUT"/snap-*/flash.json "$OUT"/tauri-snap-*.json "$OUT"/screen-*/*.json "$OUT"/screencapture.json; do
   [ -f "$f" ] || continue
   echo "== ${f#$OUT/}"; tr -d '\n' < "$f"; echo
 done
