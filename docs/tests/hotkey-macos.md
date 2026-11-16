@@ -40,7 +40,7 @@ These steps check the host wiring of `src-tauri/src/hotkey_host.rs`. Use a debug
 |---|---|---|---|
 | H1 | Start the app with no Input Monitoring. Wait 10 s. | No Input Monitoring prompt and no Accessibility prompt show. | CAP-36, CAP-37 |
 | H2 | Grant Input Monitoring to the app that runs the build. Quit and start the app again. | No prompt shows. | CAP-36 |
-| H3 | In Safari > Develop, open the Web Inspector of the `brain` WebView. In `src/brain/bus.ts`, add a logpoint in `BrainBus.dispatch` that logs `msg`. Click the demo MOG, then hold and release Right-Option 5 times. | 5 `{event: "hotkey:ptt", payload: {mogId: "demo", phase: "down"}}` items and 5 with `phase: "up"`. | CAP-35a, MB-06a |
+| H3 | In Safari > Develop, open the Web Inspector of the `brain` WebView. In `src/brain/bus.ts`, add a logpoint in `BrainBus.dispatch` that logs `msg`. Hold and release Right-Option 5 times. The demo MOG is the target because it opened last. | 5 `{event: "hotkey:ptt", payload: {mogId: "demo", phase: "down"}}` items and 5 with `phase: "up"`. | CAP-35a, MB-06a |
 | H4 | Close the demo MOG window. Hold and release Right-Option. | No `hotkey:ptt` item: no MOG is the target. | MB-06a |
 | H5 | Quit the app (Cmd+Q). Run `pgrep -fl bottle`. | No Bottle process is left. | AT-30 |
 

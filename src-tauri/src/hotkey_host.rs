@@ -1,4 +1,4 @@
-//! The host wiring of R1 HotkeyService (#305, ADR 0013).
+//! The host wiring of R1 HotkeyService (#305, ADR 0015).
 //!
 //! The Tauri host creates the platform HotkeyService with the D66 talk key and forwards its
 //! outputs to the brain. `HotkeyOutput::Ptt(phase)` becomes the `hotkey:ptt` item
@@ -75,6 +75,8 @@ impl StatusSink for PendingStatusEvent {
 /// A window signal that changes the PTT target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowSignal {
+    /// The window's page finished loading: R11 opened it (or the view reloaded).
+    Opened,
     /// The window got focus (the user interacted with it).
     Focused,
     /// The window is gone.
@@ -83,8 +85,13 @@ pub enum WindowSignal {
 
 /// The last-interacted MOG: the target of the talk key (MB-06a).
 ///
-/// Interim input: a `mog-<id>` window that gets focus. The brain's `mog_set_active` (click,
-/// drag, card open, chord use) replaces it: TODO(#73).
+/// Interim inputs, until the brain's `mog_set_active` (click, drag, card open, chord use)
+/// replaces them: TODO(#73).
+/// - A `mog-<id>` window opens: the last-opened MOG is the target. MOG windows cannot take
+///   focus (MOG-01b), so their focus never counts.
+/// - A `card-<id>` window opens or gets focus: its MOG is the target (a card open is an
+///   interaction with that MOG).
+/// - A `mog-<id>` window that is the target closes: no target.
 #[derive(Debug, Default)]
 pub struct PttTarget(Mutex<Option<String>>);
 
@@ -99,19 +106,23 @@ impl PttTarget {
         lock(&self.0).clone()
     }
 
-    /// Apply a window signal for the window `label`. Only `mog-<id>` windows count.
+    /// Apply a window signal for the window `label`. Only `mog-<id>` and `card-<id>` count.
     pub fn on_window(&self, label: &str, signal: WindowSignal) {
-        let Some((WindowClass::Mog, Some(id))) = WindowClass::of_label(label) else {
+        let Some((class, Some(id))) = WindowClass::of_label(label) else {
             return;
         };
         let mut target = lock(&self.0);
-        match signal {
-            WindowSignal::Focused => *target = Some(id.to_owned()),
-            WindowSignal::Destroyed => {
+        match (class, signal) {
+            (
+                WindowClass::Mog | WindowClass::Card,
+                WindowSignal::Opened | WindowSignal::Focused,
+            ) => *target = Some(id.to_owned()),
+            (WindowClass::Mog, WindowSignal::Destroyed) => {
                 if target.as_deref() == Some(id) {
                     *target = None;
                 }
             }
+            _ => {}
         }
     }
 }
@@ -364,16 +375,49 @@ where
     Ok(())
 }
 
-/// Update the talk-key target from a window event.
-pub fn on_window_event<R: Runtime>(window: &tauri::Window<R>, event: &tauri::WindowEvent) {
-    let signal = match event {
-        tauri::WindowEvent::Focused(true) => WindowSignal::Focused,
-        tauri::WindowEvent::Destroyed => WindowSignal::Destroyed,
-        _ => return,
-    };
-    if let Some(rt) = window.try_state::<HotkeyRuntime>() {
-        rt.target.on_window(window.label(), signal);
+/// The target signal of a window event, if any.
+pub fn signal_of_window_event(event: &tauri::WindowEvent) -> Option<WindowSignal> {
+    match event {
+        tauri::WindowEvent::Focused(true) => Some(WindowSignal::Focused),
+        tauri::WindowEvent::Destroyed => Some(WindowSignal::Destroyed),
+        _ => None,
     }
+}
+
+/// The target signal of a page load, if any.
+pub fn signal_of_page_load(event: tauri::webview::PageLoadEvent) -> Option<WindowSignal> {
+    match event {
+        tauri::webview::PageLoadEvent::Finished => Some(WindowSignal::Opened),
+        tauri::webview::PageLoadEvent::Started => None,
+    }
+}
+
+/// Apply `signal` for the window `label` to the talk-key target.
+pub fn apply_signal<R: Runtime>(app: &AppHandle<R>, label: &str, signal: Option<WindowSignal>) {
+    if let (Some(signal), Some(rt)) = (signal, app.try_state::<HotkeyRuntime>()) {
+        rt.target.on_window(label, signal);
+    }
+}
+
+/// Update the talk-key target from a window event (`Builder::on_window_event`).
+pub fn on_window_event<R: Runtime>(window: &tauri::Window<R>, event: &tauri::WindowEvent) {
+    apply_signal(
+        window.app_handle(),
+        window.label(),
+        signal_of_window_event(event),
+    );
+}
+
+/// Update the talk-key target when a view finishes loading (`Builder::on_page_load`).
+pub fn on_page_load<R: Runtime>(
+    webview: &tauri::Webview<R>,
+    payload: &tauri::webview::PageLoadPayload<'_>,
+) {
+    apply_signal(
+        webview.app_handle(),
+        webview.label(),
+        signal_of_page_load(payload.event()),
+    );
 }
 
 /// Stop the service on app quit.
@@ -491,8 +535,8 @@ mod tests {
         let target = PttTarget::default();
         target.on_window("mog-a1", WindowSignal::Focused);
         assert_eq!(target.current().as_deref(), Some("a1"));
-        // The hub, the brain, cards and bad labels do not change the target.
-        for label in ["hub", "brain", "card-b2", "mog-", "mog-a b", "other"] {
+        // The hub, the brain and bad labels do not change the target (cards: see below).
+        for label in ["hub", "brain", "card-", "mog-", "mog-a b", "other"] {
             target.on_window(label, WindowSignal::Focused);
         }
         assert_eq!(target.current().as_deref(), Some("a1"));
