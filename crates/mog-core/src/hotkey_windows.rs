@@ -939,7 +939,7 @@ mod tests {
         clock.advance(REINSTALL_INTERVAL);
         s.installer.fail_next = true;
         let err = s.on_timer(clock.now()).unwrap_err();
-        assert_eq!(err.code(), "unavailable");
+        assert_eq!(err.code(), "set_windows_hook_failed");
         assert!(
             s.is_installed(),
             "the old hook stays when the new one fails"
@@ -984,7 +984,13 @@ mod tests {
             fail_next: true,
             ..FakeInstaller::default()
         });
-        assert_eq!(s.start(T0).unwrap_err().code(), "unavailable");
+        assert_eq!(
+            s.start(T0).unwrap_err(),
+            CoreError::Unavailable {
+                component: "R1",
+                reason: "set_windows_hook_failed"
+            }
+        );
         assert!(!s.is_installed());
     }
 
@@ -1162,6 +1168,57 @@ mod tests {
         assert_eq!(rec.count(), 20_000);
         let p99 = rec.p99().unwrap();
         assert!(p99 < CALLBACK_BUDGET, "p99 {p99:?}");
+    }
+
+    #[test]
+    fn cap_41_shared_talk_keys_map_to_windows_keys() {
+        use crate::hotkey_core::TalkKey as Core;
+        assert_eq!(TalkKey::from(Core::RightOption), TalkKey::RightAlt);
+        assert_eq!(TalkKey::from(Core::RightControl), TalkKey::RightCtrl);
+        assert_eq!(TalkKey::from(Core::RightCommand), TalkKey::RightWin);
+        assert_eq!(TalkKey::from(Core::RightShift), TalkKey::RightShift);
+        for (key, code) in [(TalkKey::RightWin, vk::RWIN), (TalkKey::RightShift, vk::RSHIFT)] {
+            let mut f = HookFilter::new(key);
+            assert_eq!(
+                f.on_key(KeyEvent::down(code), T0),
+                (Verdict::Swallow, Some(HookSignal::TalkDown { at: T0 }))
+            );
+            assert_eq!(f.on_key(KeyEvent::up(code), T0).0, Verdict::Swallow);
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingSink(std::sync::Mutex<Vec<crate::hotkey_core::HotkeyOutput>>);
+
+    impl crate::hotkey_core::HotkeySink for RecordingSink {
+        fn emit(&self, output: crate::hotkey_core::HotkeyOutput) {
+            self.0.lock().unwrap().push(output);
+        }
+    }
+
+    #[test]
+    fn cap_41_talk_signals_drive_the_shared_ptt_machine() {
+        use crate::hotkey_core::{HotkeyEngine, HotkeyOutput, PttPhase};
+        let sink = Arc::new(RecordingSink::default());
+        let mut engine = HotkeyEngine::new(sink.clone());
+        assert_eq!(forward_to_engine(HookSignal::TalkDown { at: T0 }, &mut engine), None);
+        assert_eq!(forward_to_engine(HookSignal::TalkUp { at: T0 }, &mut engine), None);
+        assert_eq!(
+            *sink.0.lock().unwrap(),
+            vec![
+                HotkeyOutput::Ptt(PttPhase::Down),
+                HotkeyOutput::Ptt(PttPhase::Up)
+            ]
+        );
+        // Signals with no shared equivalent go back to the host.
+        assert_eq!(
+            forward_to_engine(HookSignal::TalkKeyBlocked, &mut engine),
+            Some(HookSignal::TalkKeyBlocked)
+        );
+        assert_eq!(
+            forward_to_engine(HookSignal::Escape, &mut engine),
+            Some(HookSignal::Escape)
+        );
     }
 
     // ---- CAP-42: tooltip when an elevated window blocks the talk key ----
