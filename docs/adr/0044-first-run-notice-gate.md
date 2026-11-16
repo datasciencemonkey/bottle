@@ -28,8 +28,12 @@ and no hub-level view input. The final legal text is not in the requirements.
    one. `user` is null until a profile is signed in. `device` is a random ID, made once.
    A corrupt store value reads as "not accepted": the gate fails closed.
 3. **Storage.** The record goes through the `ConsentStore` port. The default adapter is the Web
-   Storage of the brain window (key `bottle.consent.notice`). It is local to the device and the OS
-   user, and it holds no content. #63 moves the records to the local store, with the SEC-32a
+   Storage of the app origin (key `bottle.consent.notice`). It is local to the device and the OS
+   user, and it holds no content. It is not private to the brain: the hub, MOG and card views use
+   the same origin and share this Web Storage. Code in a view could write the record without a
+   Continue click. The views run only bundled code (CSP `script-src 'self'`, Genie content is
+   plain text), which limits this risk. A key in the same origin cannot fix it, so #63 must move
+   the record behind the Rust local store before MVP-D. #63 moves the records to the local store, with the SEC-32a
    fields and the 13-month purge. #25 and #26 (MOG config) are not used: they are per MOG, and the
    notice is per app.
 4. **Hub and brain.** Until contract issue #393 lands, the brain sends `hub:notice`
@@ -43,7 +47,8 @@ and no hub-level view input. The final legal text is not in the requirements.
    stays off until the box is checked. The notice closes only when the brain reports the record.
    A new version shows a fresh, unchecked notice.
 6. **Notice text.** The copy in `LEGAL_NOTICE` follows the 9.3 step 2 items. It is a draft and
-   is not approved legal text. #394 (`needs:human`, `needs:admin`) gets the final text. A text
+   is not approved legal text. While `LEGAL_NOTICE.draft` is true, the notice shows
+   "Draft notice. This text is not yet approved." #394 (`needs:human`, `needs:admin`) gets the final text. A text
    change increases `NOTICE_VERSION` by 1.
 
 ## Consequences

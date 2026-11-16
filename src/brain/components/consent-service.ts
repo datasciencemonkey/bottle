@@ -70,7 +70,13 @@ export function memoryConsentStore(initial: string | null = null): ConsentStore 
 /** The Web Storage key of the notice records (ADR 0044). */
 export const CONSENT_STORAGE_KEY = 'bottle.consent.notice';
 
-/** A store in the Web Storage of the brain window: local to this device and this OS user. */
+/**
+ * A store in the Web Storage of the app origin: local to this device and this OS user.
+ * It is NOT private to the brain: the hub, MOG and card views load from the same origin and
+ * share this Web Storage, so code in a view could write the record without a Continue click.
+ * The views run only bundled code (CSP `script-src 'self'`, no HTML from Genie), which limits this.
+ * TODO(#63): before MVP-D, move the record behind the Rust local store, out of view reach.
+ */
 export function webConsentStore(storage: Storage): ConsentStore {
   return {
     read: () => storage.getItem(CONSENT_STORAGE_KEY),

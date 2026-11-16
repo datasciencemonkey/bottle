@@ -104,7 +104,7 @@ describe('V1 hub: first-run legal notice (#27)', () => {
     expect(cont(el).disabled).toBe(true);
   });
 
-  it('[MB-08a] [UX-30] the notice takes focus and is labelled for a screen reader', async () => {
+  it('[MB-08a] the notice takes focus and is labelled for a screen reader', async () => {
     const { el } = await hubWithNotice(1);
     const d = must(dialog(el));
     expect(document.activeElement).toBe(d);
@@ -116,6 +116,13 @@ describe('V1 hub: first-run legal notice (#27)', () => {
     // Native controls: the checkbox and the button are in the Tab order and work by keyboard.
     expect(box(el).tabIndex).toBe(0);
     expect(cont(el).getAttribute('type')).toBe('button');
+  });
+
+  it('[MB-08a] marks draft copy as not approved while LEGAL_NOTICE.draft is true', async () => {
+    const { el } = await hubWithNotice(1);
+    const d = must(dialog(el));
+    expect(LEGAL_NOTICE.draft).toBe(true);
+    expect(d.textContent).toContain('Draft notice. This text is not yet approved.');
   });
 
   it('[MB-08a] ignores a malformed notice payload', async () => {

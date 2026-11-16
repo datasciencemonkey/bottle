@@ -30,6 +30,8 @@ export function LegalNotice({
     >
       <h2 id={`${id}-title`}>{LEGAL_NOTICE.title}</h2>
       <p>Notice version {version}</p>
+      {/* TODO(#394): the copy is a draft until legal or admin review approves it. */}
+      {LEGAL_NOTICE.draft && <p>Draft notice. This text is not yet approved.</p>}
       <div id={`${id}-body`}>
         {LEGAL_NOTICE.paragraphs.map((p) => (
           <p key={p.id}>{p.text}</p>

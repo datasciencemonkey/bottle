@@ -20,7 +20,7 @@ describe('T12 ConsentService: first-run notice (#27)', () => {
     expect(await t.noticeState()).toEqual({ version: NOTICE_VERSION, accepted: false });
   });
 
-  it('[MB-08a] [SEC-32a] stores the record with version, time, user and device on accept', async () => {
+  it('[MB-08a] stores the record with version, time, user and device on accept', async () => {
     const store = memoryConsentStore();
     const t = service(store);
     expect(await t.acceptNotice(NOTICE_VERSION)).toBe(true);
