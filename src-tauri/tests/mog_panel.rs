@@ -54,12 +54,8 @@ fn mog_01b_mog_is_built_hidden_and_shown_by_the_native_style() {
         !mog().build_spec().visible,
         "built hidden, then styled, then shown"
     );
-    let card = WindowKind::card(ID).unwrap();
-    assert_eq!(
-        card.build_spec(),
-        card.spec(),
-        "no MOG panel step for a card"
-    );
+    // The card is a panel too (#78), so it is built hidden; the hub is not a panel.
+    assert!(!WindowKind::card(ID).unwrap().build_spec().visible);
     assert_eq!(WindowKind::Hub.build_spec(), WindowKind::Hub.spec());
 }
 
@@ -106,8 +102,9 @@ fn mog_02_panel_joins_all_spaces_stationary_fullscreen_aux_and_ignores_cycle() {
 fn mog_02_only_mog_windows_are_status_panels() {
     assert!(WindowKind::Brain.panel().is_none());
     assert!(WindowKind::Hub.panel().is_none());
-    // TODO(#78): the card becomes a key-capable panel at Floating level.
-    assert!(WindowKind::card(ID).unwrap().panel().is_none());
+    // The card is a key-capable panel at Floating level (#78, MOG-03a), not a Status panel.
+    let card = WindowKind::card(ID).unwrap().panel().expect("card panel");
+    assert_eq!(card.level, PanelLevel::Floating);
 }
 
 #[test]

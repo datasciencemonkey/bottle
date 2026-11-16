@@ -1,5 +1,6 @@
 //! #11 MOG-02 / MOG-01c: make real AppKit windows, apply the MOG panel step and read it back,
 //! and feed synthetic mouse events to the drag decision.
+//! #78 MOG-03a / UX-19a: apply the card panel step (key-capable, Floating level) the same way.
 //!
 //! AppKit windows must be made on the main thread, and the default test harness runs each
 //! test on a worker thread. So this file has its own `main` (`harness = false` in Cargo.toml).
@@ -9,7 +10,8 @@
 #[cfg(target_os = "macos")]
 fn main() {
     use bottle_lib::macos_panel::{
-        appkit_collection_behavior, appkit_level, apply_panel, decide, read_panel, PanelReadback,
+        appkit_collection_behavior, appkit_level, apply_panel, decide, focus_web_view, read_panel,
+        PanelReadback,
     };
     use bottle_lib::mog_drag::{DragGesture, Verdict};
     use bottle_lib::windows::{PanelLevel, WindowKind};
@@ -98,13 +100,21 @@ fn main() {
         applied.is_ok(),
         format!("{applied:?}"),
     );
-    let mut keyed = spec;
-    keyed.can_become_key = true;
+    let mut main_capable = spec;
+    main_capable.can_become_main = true;
     // SAFETY: as above.
-    let refused = unsafe { apply_panel(&window, &keyed) };
+    let refused = unsafe { apply_panel(&new_window(), &main_capable) };
     check(
-        "mog_02_panel_step_refuses_a_key_capable_spec",
+        "mog_02_panel_step_refuses_a_main_capable_spec",
         refused.is_err(),
+        format!("{refused:?}"),
+    );
+    let card_spec = WindowKind::card("m1").unwrap().panel().unwrap();
+    // SAFETY: as above.
+    let refused = unsafe { apply_panel(&window, &card_spec) };
+    check(
+        "ux_19a_panel_step_never_turns_a_mog_panel_into_a_key_panel",
+        refused.is_err() && !read_panel(&window).can_become_key,
         format!("{refused:?}"),
     );
     let got = read_panel(&window);
@@ -159,6 +169,72 @@ fn main() {
         "mog_02_webkit_observes_the_panel_again_after_the_step",
         class_name(&web_window) == "NSKVONotifying_BottleMogPanel",
         class_name(&web_window),
+    );
+
+    // ---- #78 MOG-03a: the card panel, on a window with a WKWebView ----
+    let card_window = new_window();
+    let card_content = NSView::initWithFrame(NSView::alloc(mtm), rect);
+    card_window.setContentView(Some(&card_content));
+    // SAFETY: main thread; a default configuration, no page is loaded.
+    let card_web: Retained<WKWebView> = unsafe {
+        WKWebView::initWithFrame_configuration(
+            WKWebView::alloc(mtm),
+            card_content.bounds(),
+            &WKWebViewConfiguration::new(mtm),
+        )
+    };
+    card_content.addSubview(&card_web);
+    // SAFETY: main thread, our own window.
+    let applied = unsafe { apply_panel(&card_window, &card_spec) };
+    let got = read_panel(&card_window);
+    let want_card = PanelReadback {
+        is_panel: true,
+        can_become_key: true,
+        can_become_main: false,
+        nonactivating: true,
+        level: 3,
+        collection_behavior: appkit_collection_behavior(&card_spec),
+        hides_on_deactivate: false,
+        // The card is not transparent: the step keeps the window's own opacity and shadow.
+        opaque: true,
+        has_shadow: true,
+    };
+    check(
+        "mog_03a_appkit_reads_back_a_key_capable_floating_nspanel",
+        applied.is_ok() && got == want_card,
+        format!("{applied:?}\n  got {got:?}\n  want {want_card:?}"),
+    );
+    check(
+        "mog_03a_webkit_observes_the_card_panel_after_the_step",
+        class_name(&card_window) == "NSKVONotifying_BottleCardPanel"
+            && card_web
+                .window()
+                .is_some_and(|w| std::ptr::eq(&*w, &*card_window)),
+        class_name(&card_window),
+    );
+    // SAFETY: main thread, our own window.
+    let refused = unsafe { apply_panel(&card_window, &spec) };
+    check(
+        "ux_19a_panel_step_never_turns_a_card_panel_into_a_mog_panel",
+        refused.is_err() && read_panel(&card_window).can_become_key,
+        format!("{refused:?}"),
+    );
+    let focused = focus_web_view(&card_window);
+    let responder_is_web = card_window.firstResponder().is_some_and(|r| {
+        std::ptr::eq(
+            &*r as *const _ as *const u8,
+            &*card_web as *const WKWebView as *const u8,
+        )
+    });
+    check(
+        "mog_03a_card_makes_its_web_view_the_first_responder",
+        focused && responder_is_web,
+        format!("focused={focused} responder_is_web={responder_is_web}"),
+    );
+    check(
+        "mog_03a_focus_finds_no_web_view_in_a_plain_window",
+        !focus_web_view(&new_window()),
+        String::new(),
     );
 
     // ---- MOG-01c: the drag decision for real AppKit events ----
@@ -253,6 +329,24 @@ fn main() {
             &window,
         ),
     ];
+    let mut g = DragGesture::default();
+    let on_card = [
+        decide(
+            &mut g,
+            &event(NSEventType::LeftMouseDown, 20.0, 20.0),
+            &card_window,
+        ),
+        decide(
+            &mut g,
+            &event(NSEventType::LeftMouseDragged, 90.0, 20.0),
+            &card_window,
+        ),
+    ];
+    check(
+        "ux_19a_appkit_events_on_a_card_panel_are_not_dragged",
+        on_card == [None, None],
+        format!("{on_card:?}"),
+    );
     check(
         "mog_01c_appkit_events_on_other_windows_or_buttons_are_not_touched",
         other == [None, None, None] && !g.is_dragging(),
@@ -261,6 +355,7 @@ fn main() {
 
     window.close();
     web_window.close();
+    card_window.close();
     plain.close();
     println!(
         "\ntest result: {}. {failed} failed",
