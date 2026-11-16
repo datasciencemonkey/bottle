@@ -11,7 +11,7 @@ fn policy() -> TokenPolicy {
 
 /// [SEC-04a] accepts the exact profile host over https on 443
 #[test]
-fn accepts_exact_profile_host() {
+fn sec_04a_accepts_exact_profile_host() {
     let p = policy();
     assert_eq!(p.profile_host(), "dbc-1234.cloud.databricks.com");
     assert_eq!(
@@ -22,7 +22,7 @@ fn accepts_exact_profile_host() {
 
 /// [SEC-04a] accepts every Databricks domain of Section 4.6 as a profile host
 #[test]
-fn accepts_every_databricks_domain() {
+fn sec_04a_accepts_every_databricks_domain() {
     for d in DATABRICKS_DOMAINS {
         let host = format!("https://ws-1.{d}/");
         let p = TokenPolicy::new(&host).unwrap_or_else(|e| panic!("{d}: {e:?}"));
@@ -37,7 +37,7 @@ fn accepts_every_databricks_domain() {
 
 /// [SEC-04a] [AT-17] rejects accounts.* hosts as profile hosts and request targets
 #[test]
-fn rejects_accounts_hosts() {
+fn sec_04a_at_17_rejects_accounts_hosts() {
     for h in [
         "https://accounts.cloud.databricks.com",
         "https://accounts.azuredatabricks.net",
@@ -63,7 +63,7 @@ fn rejects_accounts_hosts() {
 
 /// [SEC-04a] [AT-17] rejects another Databricks workspace host
 #[test]
-fn rejects_other_workspace_host() {
+fn sec_04a_at_17_rejects_other_workspace_host() {
     assert_eq!(
         policy().check_request("https://dbc-9999.cloud.databricks.com/api/2.0/x"),
         Err(PolicyError::HostMismatch)
@@ -72,7 +72,7 @@ fn rejects_other_workspace_host() {
 
 /// [SEC-04a] [AT-17] rejects non-Databricks hosts and suffix tricks
 #[test]
-fn rejects_non_databricks_and_suffix_tricks() {
+fn sec_04a_at_17_rejects_non_databricks_and_suffix_tricks() {
     let p = policy();
     for u in [
         "https://evil.example.com/",
@@ -106,7 +106,7 @@ fn rejects_non_databricks_and_suffix_tricks() {
 
 /// [SEC-04a] [AT-17] the userinfo and fragment tricks do not move the token
 #[test]
-fn rejects_userinfo_and_at_tricks() {
+fn sec_04a_at_17_rejects_userinfo_and_at_tricks() {
     let p = policy();
     assert_eq!(
         p.check_request("https://dbc-1234.cloud.databricks.com@evil.example.com/"),
@@ -132,7 +132,7 @@ fn rejects_userinfo_and_at_tricks() {
 
 /// [SEC-04a] normalises uppercase hosts before the exact match
 #[test]
-fn uppercase_hosts_are_normalised() {
+fn sec_04a_uppercase_hosts_are_normalised() {
     let p = TokenPolicy::new("https://DBC-1234.Cloud.Databricks.COM/").unwrap();
     assert_eq!(p.profile_host(), "dbc-1234.cloud.databricks.com");
     assert_eq!(
@@ -143,7 +143,7 @@ fn uppercase_hosts_are_normalised() {
 
 /// [SEC-04a] refuses trailing-dot hosts (non-canonical)
 #[test]
-fn trailing_dot_is_refused() {
+fn sec_04a_trailing_dot_is_refused() {
     assert_eq!(
         TokenPolicy::new("https://dbc-1234.cloud.databricks.com.").unwrap_err(),
         PolicyError::NonCanonicalHost
@@ -156,7 +156,7 @@ fn trailing_dot_is_refused() {
 
 /// [SEC-04a] accepts an explicit :443 and refuses any other port
 #[test]
-fn port_rules() {
+fn sec_04a_port_rules() {
     let p = policy();
     assert_eq!(
         p.check_request("https://dbc-1234.cloud.databricks.com:443/api"),
@@ -176,7 +176,7 @@ fn port_rules() {
 
 /// [SEC-04a] [AT-17] refuses http and other schemes (downgrade)
 #[test]
-fn refuses_http_downgrade() {
+fn sec_04a_at_17_refuses_http_downgrade() {
     let p = policy();
     for u in [
         "http://dbc-1234.cloud.databricks.com/api",
@@ -195,7 +195,7 @@ fn refuses_http_downgrade() {
 
 /// [SEC-04a] [AT-17] refuses IPv4 and IPv6 literals, also in hex and decimal forms
 #[test]
-fn refuses_ip_literals() {
+fn sec_04a_at_17_refuses_ip_literals() {
     let p = policy();
     for u in [
         "https://127.0.0.1/api",
@@ -215,7 +215,7 @@ fn refuses_ip_literals() {
 
 /// [SEC-04a] [AT-17] IDN homographs become punycode and never match
 #[test]
-fn idn_homographs_do_not_match() {
+fn sec_04a_at_17_idn_homographs_do_not_match() {
     let p = policy();
     // Cyrillic small letter i (U+0456) in "databr\u{456}cks".
     let err = p
@@ -248,7 +248,7 @@ fn idn_homographs_do_not_match() {
 
 /// [SEC-04a] refuses unparsable or host-less URLs
 #[test]
-fn refuses_invalid_urls() {
+fn sec_04a_refuses_invalid_urls() {
     let p = policy();
     assert_eq!(p.check_request("not a url"), Err(PolicyError::InvalidUrl));
     assert_eq!(p.check_request("/api/2.0/x"), Err(PolicyError::InvalidUrl));
@@ -259,7 +259,7 @@ fn refuses_invalid_urls() {
 
 /// [SEC-04a] accepts the allowlisted Databricks App URL forms (AWS, Azure, GCP)
 #[test]
-fn accepts_app_urls() {
+fn sec_04a_accepts_app_urls() {
     let p = policy();
     for u in [
         "https://my-agent-1234567890.aws.databricksapps.com/api/invocations",
@@ -274,7 +274,7 @@ fn accepts_app_urls() {
 
 /// [SEC-04a] [AT-17] refuses look-alike or downgraded app URLs
 #[test]
-fn refuses_bad_app_urls() {
+fn sec_04a_at_17_refuses_bad_app_urls() {
     let p = policy();
     for (u, want) in [
         (
@@ -317,7 +317,7 @@ fn refuses_bad_app_urls() {
 
 /// [SEC-04a] a profile host with a path or trailing slash is accepted; only the host counts
 #[test]
-fn profile_host_with_path() {
+fn sec_04a_profile_host_with_path() {
     let p = TokenPolicy::new("https://dbc-1234.cloud.databricks.com/?o=123").unwrap();
     assert_eq!(p.profile_host(), "dbc-1234.cloud.databricks.com");
 }

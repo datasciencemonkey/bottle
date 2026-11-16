@@ -23,7 +23,7 @@ fn page(status: u16, ct: Option<&str>, body: &[u8]) -> RawResponse {
 
 /// [SEC-05a] accepts JSON content types with a JSON body
 #[test]
-fn json_is_json() {
+fn sec_05a_json_is_json() {
     for ct in [
         "application/json",
         "application/json; charset=utf-8",
@@ -53,7 +53,7 @@ fn json_is_json() {
 
 /// [SEC-05a] an empty body is Empty, not a page
 #[test]
-fn empty_body_is_empty() {
+fn sec_05a_empty_body_is_empty() {
     assert_eq!(classify_response(204, None, b""), Ok(ResponseClass::Empty));
     assert_eq!(
         classify_response(200, Some("application/json"), b"  \r\n"),
@@ -63,7 +63,7 @@ fn empty_body_is_empty() {
 
 /// [SEC-05a] [AT-17] an HTML login page is PROXY_PAGE
 #[test]
-fn html_login_page_is_proxy_page() {
+fn sec_05a_at_17_html_login_page_is_proxy_page() {
     assert_eq!(
         classify_response(200, Some("text/html; charset=utf-8"), LOGIN_PAGE),
         Err(PolicyError::ProxyPage { status: 200 })
@@ -76,7 +76,7 @@ fn html_login_page_is_proxy_page() {
 
 /// [SEC-05a] [AT-17] an HTML body behind a JSON content type is PROXY_PAGE (body sniff)
 #[test]
-fn html_with_json_content_type_is_proxy_page() {
+fn sec_05a_at_17_html_with_json_content_type_is_proxy_page() {
     assert_eq!(
         classify_response(200, Some("application/json"), LOGIN_PAGE),
         Err(PolicyError::ProxyPage { status: 200 })
@@ -89,7 +89,7 @@ fn html_with_json_content_type_is_proxy_page() {
 
 /// [SEC-05a] a JSON body with a missing or non-JSON content type is PROXY_PAGE
 #[test]
-fn non_json_content_type_is_proxy_page() {
+fn sec_05a_non_json_content_type_is_proxy_page() {
     for ct in [
         None,
         Some("text/plain"),
@@ -108,7 +108,7 @@ fn non_json_content_type_is_proxy_page() {
 
 /// [SEC-05a] [AT-17] the typed error carries the PROXY_PAGE code and safe card text, never the body
 #[test]
-fn error_carries_code_and_safe_text_only() {
+fn sec_05a_at_17_error_carries_code_and_safe_text_only() {
     let err = classify_response(200, Some("text/html"), LOGIN_PAGE).unwrap_err();
     assert_eq!(err.code(), PROXY_PAGE_CODE);
     assert_eq!(PROXY_PAGE_CODE, "PROXY_PAGE");
@@ -128,7 +128,7 @@ fn error_carries_code_and_safe_text_only() {
 
 /// [SEC-05a] other refusals have a code and text without URLs
 #[test]
-fn other_errors_have_codes() {
+fn sec_05a_other_errors_have_codes() {
     for e in [
         PolicyError::InvalidUrl,
         PolicyError::NotHttps,
@@ -157,7 +157,7 @@ fn other_errors_have_codes() {
 
 /// [SEC-05a] [AT-17] the driver drops the body and returns only PROXY_PAGE
 #[test]
-fn execute_returns_proxy_page_without_body() {
+fn sec_05a_at_17_execute_returns_proxy_page_without_body() {
     let out = execute(
         &policy(),
         "https://dbc-1234.cloud.databricks.com/api/2.0/x",
@@ -171,7 +171,7 @@ fn execute_returns_proxy_page_without_body() {
 
 /// [SEC-05b] [AT-17] the trace shows no retry for a non-JSON page, also on 5xx
 #[test]
-fn execute_never_retries_proxy_page() {
+fn sec_05b_at_17_execute_never_retries_proxy_page() {
     for status in [200, 401, 403, 502, 503, 504] {
         let mut sends = 0;
         let out = execute(
@@ -191,7 +191,7 @@ fn execute_never_retries_proxy_page() {
 
 /// [SEC-05b] a transient JSON 503 is retried, at most MAX_ATTEMPTS times; a page on the retry stops it
 #[test]
-fn execute_retries_only_json_transient() {
+fn sec_05b_execute_retries_only_json_transient() {
     let mut sends = 0;
     let out = execute(
         &policy(),

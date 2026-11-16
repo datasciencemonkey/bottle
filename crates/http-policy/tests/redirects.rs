@@ -34,7 +34,7 @@ fn json_ok() -> RawResponse {
 
 /// [SEC-04b] follows a same-host https redirect (absolute and relative)
 #[test]
-fn follows_same_host_redirect() {
+fn sec_04b_follows_same_host_redirect() {
     let p = policy();
     let want = Url::parse("https://dbc-1234.cloud.databricks.com/api/2.0/genie/y").unwrap();
     assert_eq!(
@@ -57,7 +57,7 @@ fn follows_same_host_redirect() {
 
 /// [SEC-04b] [AT-17] refuses a redirect to another host
 #[test]
-fn refuses_cross_host_redirect() {
+fn sec_04b_at_17_refuses_cross_host_redirect() {
     let p = policy();
     for loc in [
         "https://evil.example.com/steal",
@@ -78,7 +78,7 @@ fn refuses_cross_host_redirect() {
 
 /// [SEC-04b] [AT-17] refuses a same-host redirect that drops https, port 443 or adds userinfo
 #[test]
-fn refuses_downgrade_redirect() {
+fn sec_04b_at_17_refuses_downgrade_redirect() {
     let p = policy();
     for loc in [
         "http://dbc-1234.cloud.databricks.com/api",
@@ -110,7 +110,7 @@ fn refuses_downgrade_redirect() {
 
 /// [SEC-04b] refuses a redirect with no Location and stops after MAX_REDIRECTS hops
 #[test]
-fn missing_location_and_hop_limit() {
+fn sec_04b_missing_location_and_hop_limit() {
     let p = policy();
     assert_eq!(
         p.check_redirect(&here(), None, 0),
@@ -131,7 +131,7 @@ fn missing_location_and_hop_limit() {
 
 /// [SEC-04b] an app-URL request may only redirect within the same app host
 #[test]
-fn app_url_redirect_same_host_only() {
+fn sec_04b_app_url_redirect_same_host_only() {
     let p = policy();
     let app = Url::parse("https://my-agent.aws.databricksapps.com/api/invocations").unwrap();
     assert!(p.check_redirect(&app, Some("/api/responses"), 0).is_ok());
@@ -147,7 +147,7 @@ fn app_url_redirect_same_host_only() {
 
 /// [SEC-04b] [AT-17] malicious redirect fails in the driver: the token never leaves the host
 #[test]
-fn execute_malicious_redirect_fails() {
+fn sec_04b_at_17_execute_malicious_redirect_fails() {
     let p = policy();
     let mut sent: Vec<OutboundRequest> = Vec::new();
     let out = execute(
@@ -169,7 +169,7 @@ fn execute_malicious_redirect_fails() {
 
 /// [SEC-04b] the driver follows a same-host redirect with the token
 #[test]
-fn execute_follows_same_host_redirect() {
+fn sec_04b_execute_follows_same_host_redirect() {
     let p = policy();
     let mut n = 0;
     let out = execute(
@@ -193,7 +193,7 @@ fn execute_follows_same_host_redirect() {
 
 /// [SEC-04b] the driver stops a same-host redirect loop
 #[test]
-fn execute_stops_redirect_loop() {
+fn sec_04b_execute_stops_redirect_loop() {
     let p = policy();
     let out = execute(&p, "https://dbc-1234.cloud.databricks.com/a", |_| {
         redirect("/a")
@@ -204,7 +204,7 @@ fn execute_stops_redirect_loop() {
 
 /// [SEC-04a] the driver sends nothing to a refused host
 #[test]
-fn execute_refuses_bad_host_before_send() {
+fn sec_04a_execute_refuses_bad_host_before_send() {
     let p = policy();
     let out = execute(&p, "https://accounts.cloud.databricks.com/api", |_| {
         panic!("must not send")
