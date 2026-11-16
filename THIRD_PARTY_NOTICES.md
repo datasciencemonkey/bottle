@@ -383,6 +383,9 @@ SOFTWARE.
 `@rive-app/webgl2` / `@rive-app/canvas`, built from rive-wasm
 (https://github.com/rive-app/rive-wasm).
 
+Bottle ships `@rive-app/canvas` 2.50.0 (npm, exact pin). SP-01 chose this runtime
+provisionally (#10, ADR 0012).
+
 ```text
 MIT License
 
