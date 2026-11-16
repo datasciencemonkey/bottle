@@ -67,10 +67,16 @@ fn mog_01b_mog_is_built_hidden_and_shown_by_the_native_style() {
 fn mog_01b_app_does_not_activate_ignoring_other_apps() {
     // SP-01 section 4.2: the tao default (`true`) activates Bottle at launch and takes the
     // frontmost app away from the user.
+    assert!(!bottle_lib::ACTIVATE_IGNORING_OTHER_APPS);
     let lib = app_file("src/lib.rs");
+    let code: String = lib
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(
-        lib.contains(".activate_ignoring_other_apps(false)"),
-        "lib.rs must turn off activate_ignoring_other_apps on macOS"
+        code.contains(".activate_ignoring_other_apps(ACTIVATE_IGNORING_OTHER_APPS)"),
+        "the macOS builder must use the constant"
     );
 }
 
@@ -202,6 +208,35 @@ fn mog_02_host_frees_the_slot_when_the_panel_step_fails() {
     );
     let left = app.get_webview_window("mog-m1");
     assert!(left.is_none() || left.unwrap().destroy().is_ok());
+}
+
+/// Styles MOG windows and refuses card windows.
+struct RefuseCards;
+
+impl<R: tauri::Runtime> NativeWindowStyle<R> for RefuseCards {
+    fn style(&self, _: &tauri::WebviewWindow<R>, kind: &WindowKind) -> Result<(), WindowError> {
+        match kind {
+            WindowKind::Card(_) => Err(WindowError::HostFailed),
+            _ => Ok(()),
+        }
+    }
+
+    fn show(&self, _: &tauri::WebviewWindow<R>, _: &WindowKind) -> Result<(), WindowError> {
+        Ok(())
+    }
+}
+
+#[test]
+fn arc_3_host_clears_the_card_mark_when_the_card_window_fails() {
+    let app = tauri::test::mock_app();
+    let host = TauriWindowHost::with_style(app.handle().clone(), Box::new(RefuseCards));
+    host.open_mog_window("m1").unwrap();
+    assert_eq!(host.show_card("m1"), Err(WindowError::HostFailed));
+    assert!(
+        !host.has_card("m1"),
+        "a card that failed to open is not open"
+    );
+    assert_eq!(host.active_mogs(), 1, "the MOG stays open");
 }
 
 #[test]

@@ -1,19 +1,26 @@
-//! #11 MOG-02: make a real NSWindow, apply the MOG panel step and read it back from AppKit.
+//! #11 MOG-02 / MOG-01c: make real AppKit windows, apply the MOG panel step and read it back,
+//! and feed synthetic mouse events to the drag decision.
 //!
 //! AppKit windows must be made on the main thread, and the default test harness runs each
 //! test on a worker thread. So this file has its own `main` (`harness = false` in Cargo.toml).
-//! The window is never ordered front, so nothing shows on screen.
+//! No window is ordered front, so nothing shows on screen, and no event is posted.
 //! On other OSes the file prints a skip line.
 
 #[cfg(target_os = "macos")]
 fn main() {
     use bottle_lib::macos_panel::{
-        appkit_collection_behavior, appkit_level, apply_panel, read_panel, PanelReadback,
+        appkit_collection_behavior, appkit_level, apply_panel, decide, read_panel, PanelReadback,
     };
+    use bottle_lib::mog_drag::{DragGesture, Verdict};
     use bottle_lib::windows::{PanelLevel, WindowKind};
-    use objc2::MainThreadMarker;
-    use objc2_app_kit::{NSBackingStoreType, NSWindow, NSWindowStyleMask};
+    use objc2::rc::Retained;
+    use objc2::{MainThreadMarker, MainThreadOnly};
+    use objc2_app_kit::{
+        NSBackingStoreType, NSEvent, NSEventModifierFlags, NSEventType, NSView, NSWindow,
+        NSWindowStyleMask,
+    };
     use objc2_foundation::{NSPoint, NSRect, NSSize};
+    use objc2_web_kit::{WKWebView, WKWebViewConfiguration};
 
     let mtm = MainThreadMarker::new().expect("harness = false runs on the main thread");
     let mut failed = 0;
@@ -23,6 +30,39 @@ fn main() {
             println!("  {detail}");
             failed += 1;
         }
+    };
+    let class_name = |w: &NSWindow| w.class().name().to_string_lossy().into_owned();
+
+    let rect = NSRect::new(NSPoint::new(-4000.0, -4000.0), NSSize::new(160.0, 160.0));
+    let new_window = || {
+        // SAFETY: main thread; a plain borderless window that is never shown.
+        let w = unsafe {
+            NSWindow::initWithContentRect_styleMask_backing_defer(
+                NSWindow::alloc(mtm),
+                rect,
+                NSWindowStyleMask::Borderless,
+                NSBackingStoreType::Buffered,
+                true,
+            )
+        };
+        // SAFETY: we own the window and it is on the main thread.
+        unsafe { w.setReleasedWhenClosed(false) };
+        // Start from the opposite of every value the panel step sets, so each setter is proved.
+        w.setHidesOnDeactivate(true);
+        w.setHasShadow(true);
+        w.setOpaque(true);
+        w
+    };
+    let want = PanelReadback {
+        is_panel: true,
+        can_become_key: false,
+        can_become_main: false,
+        nonactivating: true,
+        level: 25,
+        collection_behavior: 0x151,
+        hides_on_deactivate: false,
+        opaque: false,
+        has_shadow: false,
     };
 
     // AppKit constants (NSWindow.h): NSFloatingWindowLevel = 3, NSStatusWindowLevel = 25.
@@ -43,26 +83,15 @@ fn main() {
         format!("{:#x}", appkit_collection_behavior(&spec)),
     );
 
-    let rect = NSRect::new(NSPoint::new(-4000.0, -4000.0), NSSize::new(160.0, 160.0));
-    // SAFETY: main thread; a plain borderless window that is never shown.
-    let window = unsafe {
-        NSWindow::initWithContentRect_styleMask_backing_defer(
-            mtm.alloc(),
-            rect,
-            NSWindowStyleMask::Borderless,
-            NSBackingStoreType::Buffered,
-            true,
-        )
-    };
-    // SAFETY: we own the window, it is on the main thread and nothing observes it yet.
-    unsafe { window.setReleasedWhenClosed(false) };
+    // ---- A plain window ----
+    let window = new_window();
     let before: PanelReadback = read_panel(&window);
     check(
         "mog_02_plain_window_is_not_a_panel_before_the_step",
-        !before.is_panel,
+        !before.is_panel && before.has_shadow && before.hides_on_deactivate && before.opaque,
         format!("{before:?}"),
     );
-    // SAFETY: as above.
+    // SAFETY: main thread, our own window.
     let applied = unsafe { apply_panel(&window, &spec) };
     check(
         "mog_02_panel_step_accepts_the_mog_spec",
@@ -79,24 +108,160 @@ fn main() {
         format!("{refused:?}"),
     );
     let got = read_panel(&window);
-    let want = PanelReadback {
-        is_panel: true,
-        can_become_key: false,
-        can_become_main: false,
-        nonactivating: true,
-        level: 25,
-        collection_behavior: 0x151,
-        hides_on_deactivate: false,
-        opaque: false,
-        has_shadow: false,
-    };
     check(
         "mog_02_appkit_reads_back_a_status_nspanel_that_never_becomes_key",
         got == want,
         format!("got {got:?}\n  want {want:?}"),
     );
-    window.close();
 
+    // ---- A window with a WKWebView, as wry builds it: WebKit observes the window (KVO) ----
+    let web_window = new_window();
+    let content = NSView::initWithFrame(NSView::alloc(mtm), rect);
+    web_window.setContentView(Some(&content));
+    // SAFETY: main thread; a default configuration, no page is loaded.
+    let web: Retained<WKWebView> = unsafe {
+        WKWebView::initWithFrame_configuration(
+            WKWebView::alloc(mtm),
+            content.bounds(),
+            &WKWebViewConfiguration::new(mtm),
+        )
+    };
+    content.addSubview(&web);
+    let observed = class_name(&web_window);
+    check(
+        "mog_02_webkit_observes_the_window_before_the_step",
+        observed.starts_with("NSKVONotifying_"),
+        observed.clone(),
+    );
+    // SAFETY: main thread, our own window.
+    let applied = unsafe { apply_panel(&web_window, &spec) };
+    let got = read_panel(&web_window);
+    check(
+        "mog_02_panel_step_makes_a_webview_window_a_status_nspanel",
+        applied.is_ok() && got == want,
+        format!(
+            "{applied:?} {observed} -> {}\n  got {got:?}",
+            class_name(&web_window)
+        ),
+    );
+    let still_in = web
+        .window()
+        .is_some_and(|w| std::ptr::eq(&*w, &*web_window))
+        && web_window
+            .contentView()
+            .is_some_and(|c| std::ptr::eq(&*c, &*content));
+    check(
+        "mog_02_panel_step_keeps_the_webview_in_the_window",
+        still_in,
+        format!("webview window: {:?}", web.window().map(|w| class_name(&w))),
+    );
+    check(
+        "mog_02_webkit_observes_the_panel_again_after_the_step",
+        class_name(&web_window) == "NSKVONotifying_BottleMogPanel",
+        class_name(&web_window),
+    );
+
+    // ---- MOG-01c: the drag decision for real AppKit events ----
+    let event = |t: NSEventType, x: f64, y: f64| -> Retained<NSEvent> {
+        NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+            t,
+            NSPoint::new(x, y),
+            NSEventModifierFlags::empty(),
+            0.0,
+            0,
+            None,
+            0,
+            1,
+            1.0,
+        )
+        .expect("a synthetic mouse event")
+    };
+    let mut g = DragGesture::default();
+    let steps = [
+        decide(
+            &mut g,
+            &event(NSEventType::LeftMouseDown, 20.0, 20.0),
+            &window,
+        ),
+        decide(
+            &mut g,
+            &event(NSEventType::LeftMouseDragged, 22.0, 21.0),
+            &window,
+        ),
+        decide(
+            &mut g,
+            &event(NSEventType::LeftMouseDragged, 30.0, 20.0),
+            &window,
+        ),
+        decide(
+            &mut g,
+            &event(NSEventType::LeftMouseDragged, 60.0, 20.0),
+            &window,
+        ),
+        decide(
+            &mut g,
+            &event(NSEventType::LeftMouseUp, 60.0, 20.0),
+            &window,
+        ),
+    ];
+    check(
+        "mog_01c_appkit_events_on_a_mog_panel_drag_and_swallow_the_mouse_up",
+        steps
+            == [
+                Some(Verdict::Pass),
+                Some(Verdict::Pass),
+                Some(Verdict::StartDrag),
+                Some(Verdict::Swallow),
+                Some(Verdict::Swallow),
+            ],
+        format!("{steps:?}"),
+    );
+    let mut g = DragGesture::default();
+    let click = [
+        decide(
+            &mut g,
+            &event(NSEventType::LeftMouseDown, 20.0, 20.0),
+            &window,
+        ),
+        decide(
+            &mut g,
+            &event(NSEventType::LeftMouseUp, 21.0, 20.0),
+            &window,
+        ),
+    ];
+    check(
+        "mog_01c_appkit_click_on_a_mog_panel_passes_to_the_page",
+        click == [Some(Verdict::Pass), Some(Verdict::Pass)],
+        format!("{click:?}"),
+    );
+    let plain = new_window();
+    let mut g = DragGesture::default();
+    let other = [
+        decide(
+            &mut g,
+            &event(NSEventType::LeftMouseDown, 20.0, 20.0),
+            &plain,
+        ),
+        decide(
+            &mut g,
+            &event(NSEventType::LeftMouseDragged, 90.0, 20.0),
+            &plain,
+        ),
+        decide(
+            &mut g,
+            &event(NSEventType::RightMouseDown, 20.0, 20.0),
+            &window,
+        ),
+    ];
+    check(
+        "mog_01c_appkit_events_on_other_windows_or_buttons_are_not_touched",
+        other == [None, None, None] && !g.is_dragging(),
+        format!("{other:?}"),
+    );
+
+    window.close();
+    web_window.close();
+    plain.close();
     println!(
         "\ntest result: {}. {failed} failed",
         if failed == 0 { "ok" } else { "FAILED" }

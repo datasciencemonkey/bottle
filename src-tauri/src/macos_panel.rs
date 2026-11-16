@@ -232,35 +232,48 @@ pub fn install_drag_monitor(_mtm: MainThreadMarker) {
     std::mem::forget(monitor);
 }
 
+/// The drag decision for one AppKit event on `window` (MOG-01c). `None` means the event is not
+/// ours: the window is not a MOG panel, or it is not a left-mouse event. The position is the
+/// event's own position in screen points, not where the pointer is now.
+pub fn decide(gesture: &mut DragGesture, ev: &NSEvent, window: &NSWindow) -> Option<Verdict> {
+    if !window.isKindOfClass(MogPanel::class()) {
+        return None;
+    }
+    let input = match ev.r#type() {
+        NSEventType::LeftMouseDown | NSEventType::LeftMouseDragged => {
+            let p = window.convertPointToScreen(ev.locationInWindow());
+            if ev.r#type() == NSEventType::LeftMouseDown {
+                MouseInput::Down { x: p.x, y: p.y }
+            } else {
+                MouseInput::Dragged { x: p.x, y: p.y }
+            }
+        }
+        NSEventType::LeftMouseUp => MouseInput::Up,
+        _ => return None,
+    };
+    Some(gesture.on(input))
+}
+
 /// `Some(())` when the event is consumed (a drag), `None` to pass it on.
 fn handle(ev: &NSEvent) -> Option<()> {
     let mtm = MainThreadMarker::new()?;
     let window = ev.window(mtm)?;
-    if !window.isKindOfClass(MogPanel::class()) {
-        return None;
-    }
-    let p = NSEvent::mouseLocation();
-    let input = match ev.r#type() {
-        NSEventType::LeftMouseDown => MouseInput::Down { x: p.x, y: p.y },
-        NSEventType::LeftMouseDragged => MouseInput::Dragged { x: p.x, y: p.y },
-        NSEventType::LeftMouseUp => MouseInput::Up,
-        _ => return None,
-    };
     let verdict = GESTURE.with(|g| {
         let mut gesture = g.get();
-        let v = gesture.on(input);
+        let v = decide(&mut gesture, ev, &window);
         g.set(gesture);
         v
-    });
-    match input {
-        MouseInput::Down { .. } => PRESS.with(|p| *p.borrow_mut() = Some(ev.retain())),
-        MouseInput::Up => PRESS.with(|p| *p.borrow_mut() = None),
-        MouseInput::Dragged { .. } => {}
+    })?;
+    match ev.r#type() {
+        NSEventType::LeftMouseDown => PRESS.with(|p| *p.borrow_mut() = Some(ev.retain())),
+        NSEventType::LeftMouseUp => PRESS.with(|p| *p.borrow_mut() = None),
+        _ => {}
     }
     match verdict {
         Verdict::Pass => None,
         Verdict::Swallow => Some(()),
         Verdict::StartDrag => {
+            // AppKit starts the drag from the press, so the MOG keeps its offset to the pointer.
             let press = PRESS.with(|p| p.borrow().clone());
             window.performWindowDragWithEvent(press.as_deref().unwrap_or(ev));
             Some(())
