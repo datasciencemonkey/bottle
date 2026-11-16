@@ -1,0 +1,10 @@
+[package]
+name = "mog-core"
+description = "Bottle Rust core: secrets, I/O and the IPC gateway (inside the secret boundary)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]

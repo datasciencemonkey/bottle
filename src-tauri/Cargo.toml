@@ -1,0 +1,23 @@
+[package]
+name = "bottle"
+description = "Bottle desktop app: the Tauri v2 shell that links mog-core."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[lib]
+# The `_lib` suffix avoids a name clash with the binary on Windows (Tauri template rule).
+name = "bottle_lib"
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+mog-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# ARC-4: no tauri-plugin-http, -shell, -fs or any network plugin. A test checks this file.
+tauri.workspace = true
