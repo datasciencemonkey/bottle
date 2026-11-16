@@ -15,6 +15,8 @@ export default tseslint.config(
       'research/**',
       'tools/**',
       'node_modules/**',
+      // Throwaway spike code: each spikes/sp-nn/ folder is standalone with its own tooling (docs/spikes/).
+      'spikes/**',
     ],
   },
   js.configs.recommended,
