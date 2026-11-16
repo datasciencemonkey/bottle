@@ -61,6 +61,17 @@ pub enum CoreError {
         /// The component ID, for example `"R10"`.
         component: &'static str,
     },
+    /// The statement ID is not in the fixed local catalog (MEM-34a).
+    UnknownStatement {
+        /// The component ID, for example `"R10"`.
+        component: &'static str,
+    },
+    /// The params do not match the statement: an unknown or missing key, or a value of the
+    /// wrong type or size (MEM-34a). No value is kept.
+    InvalidStatementParams {
+        /// The component ID, for example `"R10"`.
+        component: &'static str,
+    },
 }
 
 impl CoreError {
@@ -76,6 +87,8 @@ impl CoreError {
             CoreError::KeychainUnavailable { .. } => "keychain_unavailable",
             CoreError::StoreSchemaNewer { .. } => "store_schema_newer",
             CoreError::MogIdRequired { .. } => "mog_id_required",
+            CoreError::UnknownStatement { .. } => "unknown_statement",
+            CoreError::InvalidStatementParams { .. } => "invalid_statement_params",
         }
     }
 }
@@ -110,6 +123,12 @@ impl fmt::Display for CoreError {
             }
             CoreError::MogIdRequired { component } => {
                 write!(f, "{component} needs a mog_id filter")
+            }
+            CoreError::UnknownStatement { component } => {
+                write!(f, "{component} has no such catalog statement")
+            }
+            CoreError::InvalidStatementParams { component } => {
+                write!(f, "{component} got params that do not match the statement")
             }
         }
     }

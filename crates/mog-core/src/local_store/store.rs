@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex, Once};
 
 use rusqlite::{Connection, OpenFlags};
 
+use super::catalog;
 use super::key_vault::{KeyVault, LocalKey};
 use super::mog_guard::require_mog_id_param;
 use super::LocalStore;
@@ -187,18 +188,63 @@ impl LocalStore for SqlCipherLocalStore {
         Ok(())
     }
 
-    fn exec(&self, _stmt_id: &str, params: serde_json::Value) -> CoreResult<serde_json::Value> {
+    fn exec(&self, stmt_id: &str, params: serde_json::Value) -> CoreResult<serde_json::Value> {
+        // MEM-34a: only fixed catalog statements run.
+        let stmt = catalog::find(stmt_id).ok_or(CoreError::UnknownStatement { component: ID })?;
         require_mog_id_param(&params)?;
-        if self
-            .conn
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .is_none()
-        {
-            return Err(CoreError::StoreUnavailable { component: ID });
-        }
-        // TODO(#37): fixed local statement catalog. Each catalog statement passes
-        // `mog_guard::require_mog_id_filter` and binds this `mogId`.
-        Err(CoreError::NotImplemented { component: ID })
+        let g = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = g
+            .as_ref()
+            .ok_or(CoreError::StoreUnavailable { component: ID })?;
+        let values = catalog::validate(stmt, &params)?;
+        run_statement(conn, stmt, &values).map_err(unavailable)
     }
+}
+
+/// A SQLite value as JSON. The catalog selects no BLOB column; one would answer `null`.
+fn json_of(v: rusqlite::types::ValueRef<'_>) -> serde_json::Value {
+    use rusqlite::types::ValueRef;
+    match v {
+        ValueRef::Null | ValueRef::Blob(_) => serde_json::Value::Null,
+        ValueRef::Integer(n) => n.into(),
+        ValueRef::Real(f) => {
+            serde_json::Number::from_f64(f).map_or(serde_json::Value::Null, Into::into)
+        }
+        ValueRef::Text(t) => String::from_utf8_lossy(t).into_owned().into(),
+    }
+}
+
+/// Bind each `:name` of the statement and run it. A query answers its rows as objects; a write
+/// answers `[{ "changes": n }]`.
+fn run_statement(
+    conn: &Connection,
+    stmt: &catalog::Stmt,
+    values: &[(&'static str, rusqlite::types::Value)],
+) -> rusqlite::Result<serde_json::Value> {
+    let mut st = conn.prepare_cached(stmt.sql)?;
+    for (name, value) in values {
+        if let Some(i) = st.parameter_index(&format!(":{name}"))? {
+            st.raw_bind_parameter(i, value)?;
+        }
+    }
+    let rows = match stmt.kind {
+        catalog::Kind::Write => {
+            let n = st.raw_execute()?;
+            vec![serde_json::json!({ "changes": n })]
+        }
+        catalog::Kind::Query => {
+            let names: Vec<String> = st.column_names().map(str::to_owned).collect();
+            let mut out = Vec::new();
+            let mut rows = st.raw_query();
+            while let Some(r) = rows.next()? {
+                let mut obj = serde_json::Map::new();
+                for (i, n) in names.iter().enumerate() {
+                    obj.insert(n.clone(), json_of(r.get_ref(i)?));
+                }
+                out.push(serde_json::Value::Object(obj));
+            }
+            out
+        }
+    };
+    Ok(serde_json::json!({ "rows": rows }))
 }

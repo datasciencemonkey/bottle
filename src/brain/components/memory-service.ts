@@ -3,6 +3,11 @@
  *
  * Responsibilities: ContextAssembler, MemoryWriter (with Page candidates), RecallGate (300 ms),
  * embedding queue, SyncWorker (v1), D37/D60 storage rules.
+ *
+ * MVP (B2, MEM-41): memory is the local R10 store only, so `mode()` is `'local'` and nothing waits
+ * for sync. The service reaches the store only through `LocalMemoryStore` (MEM-39a), which sends
+ * catalog ids and params, never SQL (MEM-34b). The feature issues fill in the methods below.
+ * TODO(#427): the live AT-31/AT-32 run on a workspace without Lakebase (MEM-41, needs:human).
  */
 import type {
   ContextPreamble,
@@ -12,6 +17,7 @@ import type {
   MogId,
 } from '../../shared/interfaces';
 import { NotImplementedError } from '../errors';
+import { IpcLocalMemoryStore, type LocalMemoryStore } from './memory-store';
 
 type GateQuery = Parameters<MemoryService['gate']>[0];
 type GateResult = Awaited<ReturnType<MemoryService['gate']>>;
@@ -19,7 +25,10 @@ type ForgetResult = Awaited<ReturnType<MemoryService['forget']>>;
 
 const C = 'MemoryService';
 
-export class MemoryServiceStub implements MemoryService {
+export class LocalMemoryService implements MemoryService {
+  /** The local store; tests pass a double (MEM-39a). */
+  constructor(readonly store: LocalMemoryStore = new IpcLocalMemoryStore()) {}
+
   async gate(_q: GateQuery, _budgetMs?: 300): Promise<GateResult> {
     throw new NotImplementedError(C, 'gate', 200); // TODO(#200)
   }
@@ -43,14 +52,16 @@ export class MemoryServiceStub implements MemoryService {
   }): Promise<ForgetResult> {
     throw new NotImplementedError(C, 'forget', 123); // TODO(#123)
   }
+  /** B2: the MVP has no Lakebase sync. The v1 SyncWorker (#102) adds the other modes. */
   mode(): 'local' | 'local_synced' | 'sync_paused' {
-    throw new NotImplementedError(C, 'mode', 102); // TODO(#102)
+    return 'local';
   }
+  /** Nothing waits for a remote sync in local mode. */
   syncStatus(): { pending: number; lastOk?: string } {
-    throw new NotImplementedError(C, 'syncStatus', 102); // TODO(#102)
+    return { pending: 0 };
   }
 }
 
-export function createMemoryService(): MemoryService {
-  return new MemoryServiceStub();
+export function createMemoryService(store?: LocalMemoryStore): MemoryService {
+  return new LocalMemoryService(store);
 }

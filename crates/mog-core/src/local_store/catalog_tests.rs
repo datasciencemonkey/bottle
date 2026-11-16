@@ -47,8 +47,7 @@ fn open(t: &TempDir) -> SqlCipherLocalStore {
 }
 
 fn exec(s: &SqlCipherLocalStore, id: &str, params: Value) -> Value {
-    s.exec(id, params)
-        .unwrap_or_else(|e| panic!("{id}: {e:?}"))
+    s.exec(id, params).unwrap_or_else(|e| panic!("{id}: {e:?}"))
 }
 
 fn rows(v: &Value) -> &Vec<Value> {
@@ -279,7 +278,12 @@ fn sql_params(sql: &str) -> BTreeSet<String> {
 fn mem_34a_every_declared_param_is_bound_and_every_bound_param_is_declared() {
     for st in STATEMENTS {
         let declared: BTreeSet<String> = st.params.iter().map(|p| p.name.to_owned()).collect();
-        assert_eq!(declared.len(), st.params.len(), "{}: duplicate param", st.id);
+        assert_eq!(
+            declared.len(),
+            st.params.len(),
+            "{}: duplicate param",
+            st.id
+        );
         assert_eq!(sql_params(st.sql), declared, "{}", st.id);
         let mog = st.params.iter().find(|p| p.name == "mogId");
         assert!(
@@ -290,7 +294,11 @@ fn mem_34a_every_declared_param_is_bound_and_every_bound_param_is_declared() {
         // No positional or other parameter styles.
         assert!(!st.sql.contains('?') && !st.sql.contains('@') && !st.sql.contains('$'));
         // One statement per entry.
-        assert!(!st.sql.trim_end().trim_end_matches(';').contains(';'), "{}", st.id);
+        assert!(
+            !st.sql.trim_end().trim_end_matches(';').contains(';'),
+            "{}",
+            st.id
+        );
         let starts = st.sql.trim_start().to_ascii_lowercase();
         let is_query = starts.starts_with("select") || starts.starts_with("with");
         assert_eq!(is_query, st.kind == Kind::Query, "{}", st.id);
@@ -309,12 +317,10 @@ fn mem_34a_every_statement_prepares_on_the_migrated_schema() {
 
 #[test]
 fn mem_34a_ts_statement_ids_match_the_brain_catalog() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../src/brain/components/memory-store.ts");
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/brain/components/memory-store.ts");
     let ts = std::fs::read_to_string(&path).expect("memory-store.ts");
-    let start = ts
-        .find("LOCAL_STMT_IDS = [")
-        .expect("LOCAL_STMT_IDS list");
+    let start = ts.find("LOCAL_STMT_IDS = [").expect("LOCAL_STMT_IDS list");
     let body = &ts[start..start + ts[start..].find(']').expect("end of list")];
     let ts_ids: BTreeSet<&str> = body.split('\'').skip(1).step_by(2).collect();
     let brain: BTreeSet<&str> = STATEMENTS
@@ -343,12 +349,20 @@ fn mem_01_reads_writes_and_deletes_stay_inside_their_mog() {
     seed_mog(&s, MOG_B);
     exec(&s, "mem.item.upsert", item(MOG_A, "Use the EU region."));
     // B cannot read A's item.
-    let got = exec(&s, "mem.item.get", json!({"mogId": MOG_B, "itemId": ITEM_1}));
+    let got = exec(
+        &s,
+        "mem.item.get",
+        json!({"mogId": MOG_B, "itemId": ITEM_1}),
+    );
     assert!(rows(&got).is_empty());
     // B cannot overwrite A's item through the upsert conflict path.
     let up = exec(&s, "mem.item.upsert", item(MOG_B, "Use the US region."));
     assert_eq!(changes(&up), 0);
-    let got = exec(&s, "mem.item.get", json!({"mogId": MOG_A, "itemId": ITEM_1}));
+    let got = exec(
+        &s,
+        "mem.item.get",
+        json!({"mogId": MOG_A, "itemId": ITEM_1}),
+    );
     assert_eq!(rows(&got)[0]["text"], "Use the EU region.");
     // B's recall does not see A's item.
     let hits = exec(
@@ -358,7 +372,11 @@ fn mem_01_reads_writes_and_deletes_stay_inside_their_mog() {
     );
     assert!(rows(&hits).is_empty());
     // B cannot forget A's item.
-    let del = exec(&s, "mem.forget.item", json!({"mogId": MOG_B, "itemId": ITEM_1}));
+    let del = exec(
+        &s,
+        "mem.forget.item",
+        json!({"mogId": MOG_B, "itemId": ITEM_1}),
+    );
     assert_eq!(changes(&del), 0);
     // Same for exchanges.
     exec(&s, "mem.exchange.upsert", exchange(MOG_A, "pending"));
@@ -458,10 +476,7 @@ fn mem_41_brain_statements_run_on_the_local_store_with_no_lakebase() {
     );
     assert!(rows(&due).is_empty());
     assert_eq!(
-        changes(&run(
-            "mem.outbox.done",
-            json!({"mogId": MOG_A, "oid": oid})
-        )),
+        changes(&run("mem.outbox.done", json!({"mogId": MOG_A, "oid": oid}))),
         1
     );
 
@@ -553,7 +568,11 @@ fn mem_34b_recall_query_text_is_data_not_fts_or_sql_syntax() {
         Err(CoreError::InvalidStatementParams { component: "R10" })
     );
     // The table is still there.
-    let got = exec(&s, "mem.item.get", json!({"mogId": MOG_A, "itemId": ITEM_1}));
+    let got = exec(
+        &s,
+        "mem.item.get",
+        json!({"mogId": MOG_A, "itemId": ITEM_1}),
+    );
     assert_eq!(rows(&got).len(), 1);
 }
 
