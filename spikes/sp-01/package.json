@@ -1,0 +1,17 @@
+{
+  "name": "sp-01-rive-transparent",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build:web": "node scripts/copy-vendor.mjs",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@rive-app/canvas": "2.50.0",
+    "@rive-app/webgl2": "2.50.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.4"
+  }
+}

@@ -163,3 +163,16 @@ def test_sp_01_nfr_16b_no_rive_webgl_v1():
     deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
     assert "@rive-app/webgl" not in deps
     assert {"@rive-app/webgl2", "@rive-app/canvas"} <= set(deps)
+
+
+def test_sp_01_parse_top_sums_processes_and_drops_first_sample():
+    """[SP-01] CPU/RSS sampler sums app + WebKit rows per sample, skips sample 1."""
+    text = "\n".join([
+        "Processes: 1", "PID %CPU MEM", "10 99.0 10M", "11 99.0 10M",
+        "Processes: 1", "PID %CPU MEM", "10 1.5 20M", "11 2.5 512K",
+        "Processes: 1", "PID %CPU MEM", "10 3.0 1G", "11 1.0 30M",
+    ])
+    r = m.parse_top(text)
+    assert r["samples"] == 2
+    assert r["cpu_mean"] == pytest.approx((4.0 + 4.0) / 2)
+    assert r["mem_mb_max"] == pytest.approx(1024 + 30)
