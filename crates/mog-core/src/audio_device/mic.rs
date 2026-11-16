@@ -213,8 +213,8 @@ impl AudioDevice for MicDevice {
             let mut c = lock(&self.control);
             match &mut c.slot {
                 Slot::Closed => return,
-                // Do not wait for a slow open (MB-05). The open drops its stream before it
-                // returns, and R2 calls close again after that.
+                // R2 never gets here (one device call at a time). For any other caller: do
+                // not wait for a slow open (MB-05); the open drops its stream before it returns.
                 Slot::Opening { cancel, .. } => {
                     *cancel = true;
                     return;

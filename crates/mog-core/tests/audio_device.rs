@@ -703,7 +703,12 @@ fn mog_09_stop_all_during_a_slow_open_is_quick_and_leaves_the_mic_closed() {
     within(Duration::from_millis(200), move || panic.stop_all());
     held.release();
     assert!(starter.join().unwrap().is_err());
-    assert_eq!(probe.events(), vec![Ev::Built(1), Ev::Dropped(1)]);
+    // R2 runs one device call at a time, so the open finishes and the start's thread closes
+    // the stream before `start` returns.
+    assert_eq!(
+        probe.events(),
+        vec![Ev::Built(1), Ev::Played(1), Ev::Dropped(1)]
+    );
     assert!(!core.status().recording);
 }
 

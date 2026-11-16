@@ -12,9 +12,10 @@
 //! - **Close** drops the stream on the audio thread and waits for that. The stream, and with it
 //!   the OS mic indicator, is off before `close` returns (MOG-09, CAP-13b). There is no idle
 //!   timeout, no lazy close and no always-on mode.
-//! - **Close during an open** does not wait for the slow open (the 200 ms panic stop, MB-05).
-//!   It cancels the open: the open drops its stream and returns [`codes::OPEN_CANCELLED`].
-//!   R2 calls `close` again after the open returns.
+//! - **Close during an open.** R2 runs one device call at a time, so it never does this. If
+//!   another caller does, `close` does not wait for the slow open (the 200 ms panic stop,
+//!   MB-05). It cancels the open: the open drops its stream and returns
+//!   [`codes::OPEN_CANCELLED`].
 //! - **Failure.** A fatal stream error after open stops the stream on the audio thread. Then a
 //!   notifier thread calls [`CaptureCore::device_failed`](crate::capture::CaptureCore::device_failed)
 //!   through the [`FailureLink`]. Transient errors (a route change, an overrun) do not stop
