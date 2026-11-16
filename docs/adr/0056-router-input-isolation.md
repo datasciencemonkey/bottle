@@ -51,7 +51,10 @@ points open:
    MDM. Hosts compare in lowercase with no scheme, path, port 443 or trailing dot. A profile on
    another host is never sent to the model. A hint to it is cleared (`profile_hint_host`). Split
    parts that name it are cleared (`parts_host`). A switch command to it, or to any host-shaped
-   argument, becomes command `none` and intent `context` (`command_host`).
+   argument, becomes command `none` and intent `context` (`command_host`). A switch command to a
+   name that is not a listed profile or alias also becomes command `none` and intent `context`
+   (`command_profile_unknown`), because its host is unknown. A listed alias stays as spoken, so
+   the hop resolver (#164) and AT-12 see the alias.
 7. **Context cannot be turned on.** The decision has no context field. The strict schema refuses
    an extra field such as `include_context`, so such a reply falls back to no action. The router
    step calls only `model_invoke`. Only a user action through `ContextGate.approve` (#152) turns

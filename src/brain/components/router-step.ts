@@ -83,6 +83,7 @@ export type FieldRule =
   | 'profile_hint_host'
   | 'parts_host'
   | 'command_host'
+  | 'command_profile_unknown'
   | 'injection_suspected';
 
 export type AttemptFailure = 'invoke_failed' | 'no_content' | 'not_json' | 'schema_failed';
@@ -378,19 +379,22 @@ export function applyFieldRules(
     return p && allowed(p) ? p.name : undefined;
   };
 
-  // RTR-20b: a switch command names a listed profile on an allowed host, never a host or URL.
+  // RTR-20b: a switch command names a listed profile (or its alias) on an allowed host, never a
+  // host, a URL or an unlisted name. The argument keeps the spoken alias (AT-12, #164 resolves it).
   if (
     (out.command === 'switch_workspace_once' || out.command === 'switch_workspace_session') &&
     out.command_arg !== ''
   ) {
     const p = lookup(out.command_arg);
-    const hostShaped = /[./:@]/.test(out.command_arg);
-    if ((p !== undefined && !allowed(p)) || (p === undefined && hostShaped)) {
+    const drop = (rule: FieldRule) => {
       out.intent = 'context';
       out.command = 'none';
       out.command_arg = '';
-      fix('command_host');
-    }
+      fix(rule);
+    };
+    if (p === undefined)
+      drop(/[./:@]/.test(out.command_arg) ? 'command_host' : 'command_profile_unknown');
+    else if (!allowed(p)) drop('command_host');
   }
 
   if (out.target_profile_hint !== '') {

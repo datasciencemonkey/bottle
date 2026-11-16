@@ -422,18 +422,6 @@ describe('the router step only proposes (RTR-20b)', () => {
     },
   );
 
-  it('[RTR-20b] a switch command to an alias names the profile', () => {
-    const d = routerDecision({
-      intent: 'command',
-      command: 'switch_workspace_session',
-      command_arg: 'MAIN',
-      genie_question: '',
-    });
-    const r = applyFieldRules(d, input);
-    expect(r.decision.command_arg).toBe('home');
-    expect(r.fixes).toContain('command_profile_alias');
-  });
-
   it('[RTR-20b] a switch command to an allowed profile stays a proposal', () => {
     const d = routerDecision({
       intent: 'command',
