@@ -37,7 +37,7 @@ export function DataPanel() {
 export function OnboardingDisclosures() {
   return (
     <section data-view="onboarding-disclosures" aria-labelledby="onboarding-disclosures-title">
-      <h2 id="onboarding-disclosures-title">Before you start: where your data goes</h2>
+      <h2 id="onboarding-disclosures-title">Setup: where your data goes</h2>
       <DisclosureList />
     </section>
   );

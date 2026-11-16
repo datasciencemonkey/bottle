@@ -94,11 +94,11 @@ describe('Table SEC-DISC disclosures', () => {
     const t = text('stt-location');
     expect(t).toMatch(/on this computer by default/);
     expect(t).toMatch(/Parakeet/);
-    expect(t).toMatch(/Databricks speech-to-text only if you turn it on/);
+    expect(t).toMatch(/Databricks speech-to-text only if you or your admin turn it on/);
     expect(t).toMatch(/never written to disk/);
   });
 
-  it('[SEC-17] [W-21b] home-profile processing names the model calls and the hop sentence', () => {
+  it('[SEC-17] home-profile processing names the model calls and the hop sentence', () => {
     const t = text('home-profile');
     for (const w of ['cleanup', 'router step', 'memory writer', 'embeddings', 'main agent model']) {
       expect(t).toContain(w);
@@ -116,6 +116,20 @@ describe('Table SEC-DISC disclosures', () => {
     expect(text('where-data-goes')).toMatch(/tokens stay in the Bottle core/);
   });
 
+  it('[SEC-17] the summary names cleanup egress and the Appendix B side effects', () => {
+    const t = text('where-data-goes');
+    expect(t).toMatch(/Dictation text goes to your home workspace for cleanup/);
+    expect(t).not.toMatch(/stay in an encrypted file/);
+    for (const w of [
+      'system.ai_gateway.usage',
+      'abuse-check store',
+      'inference tables',
+      'Gemini global endpoint',
+    ]) {
+      expect(t).toContain(w);
+    }
+  });
+
   it('[SEC-17] Genie history and Genie One memory are disclosed', () => {
     expect(text('genie-history')).toMatch(/Genie history/);
     expect(text('genie-history')).toMatch(/system\.access\.audit/);
@@ -125,7 +139,7 @@ describe('Table SEC-DISC disclosures', () => {
     expect(text('genie-one-memory')).toMatch(/Forget/);
   });
 
-  it('[SEC-17] [PG-13] DRAFT Pages are visible to Genie One for the owner; no claim about spaces or agents', () => {
+  it('[SEC-17] DRAFT Pages are visible to Genie One for the owner; no claim about spaces or agents', () => {
     const t = text('draft-pages');
     expect(t).toMatch(/DRAFT/);
     expect(t).toMatch(/Genie One can read your DRAFT Pages in your own conversations/);

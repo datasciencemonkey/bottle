@@ -7,21 +7,23 @@ The copy comes from one file: `src/views/hub/disclosures.ts`. If you change the 
 ## What leaves this computer
 
 - Bottle sends data only to your own Databricks workspaces, and only for the jobs on this page.
-- Dictation text goes only to the app you type in.
+- Dictation text goes to your home workspace for cleanup, then only to the app you type in.
 - Nothing goes to Genie until you send it: a question after its preview, or a chip you click.
 - Your sign-in tokens stay in the Bottle core. They are never written to disk or logs, and the agent never sees them.
-- Your transcripts, answers and memory stay in an encrypted file on this computer.
+- Bottle stores your transcripts, answers and memory in an encrypted file on this computer.
+- Text for cleanup, routing, the memory writer and embeddings goes to your home workspace, as the next sections say.
 - Telemetry is off unless your admin turns it on.
 - Databricks logs each model call in system.ai_gateway.usage: who called, from where and how many tokens, but no content.
 - Databricks keeps model requests in an abuse-check store for up to 30 days.
 - A model on the Gemini global endpoint can send requests to other regions.
+- If an admin turns on inference tables, Databricks stores model requests there. They stay off for speech-to-text.
 
 ## Where speech-to-text runs
 
 - Speech-to-text runs on this computer by default, with the local Parakeet model.
 - Push-to-talk audio stays in memory and is never written to disk.
 - Meeting audio is kept encrypted on disk and deleted within 5 minutes after transcription, unless your admin keeps it longer.
-- Bottle uses Databricks speech-to-text only if you turn it on, after a check passes.
+- Bottle uses Databricks speech-to-text only if you or your admin turn it on, after a check passes.
 - Then audio goes to your home workspace in short chunks, and Bottle does not store it there.
 - The STT badge on each MOG shows which one is on.
 
