@@ -1196,7 +1196,11 @@ mod tests {
         let (sink, out) = queue();
         tx.send(down()).unwrap();
         drop(tx);
-        run_hook_adapter(rx, HotkeyEngine::new(Arc::new(sink)), &PendingHookConsumers);
+        run_hook_adapter(
+            rx,
+            HotkeyEngine::new(Arc::new(sink)),
+            &HookConsumers::default(),
+        );
         let got: Vec<HotkeyOutput> = out.try_iter().collect();
         assert_eq!(
             got,
@@ -1553,7 +1557,7 @@ mod tests {
             .unwrap();
         for part in [
             "WindowsHotkeyService::new(talk.windows_talk_key())",
-            "spawn_hook_adapter(rx, sink, PendingHookConsumers)",
+            "spawn_hook_adapter(rx, sink, HookConsumers::new(copilot))",
             "with_hook_adapter(Box::new(service), adapter)",
             "Box::new(NoOsPermission)",
         ] {
@@ -1570,7 +1574,7 @@ mod tests {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let text = std::fs::read_to_string(root.join("src/hotkey_host.rs")).unwrap();
         let seam = text
-            .split("impl HookSignalSeam for PendingHookConsumers")
+            .split("impl HookSignalSeam for HookConsumers")
             .nth(1)
             .unwrap()
             .split("\n}\n")
@@ -1578,6 +1582,66 @@ mod tests {
             .unwrap();
         for todo in ["TODO(#14)", "TODO(#294)", "TODO(#297)"] {
             assert!(seam.contains(todo), "the seam misses {todo}");
+        }
+    }
+
+    // ---- CAP-43b (#332, ADR 0025): the hook sets the Copilot key flag ----
+
+    #[test]
+    fn cap_43b_copilot_key_seen_is_deferred_to_the_seam() {
+        let (sink, _out) = queue();
+        let mut engine = HotkeyEngine::new(Arc::new(sink));
+        assert_eq!(
+            adapt_hook_signal(HookSignal::CopilotKeySeen, &mut engine),
+            Some(DeferredSignal::CopilotKeySeen)
+        );
+    }
+
+    #[test]
+    fn cap_43b_the_seam_sets_the_shared_copilot_flag() {
+        let flag = Arc::new(MemoryCopilotKeyFlag::default());
+        let seam = HookConsumers::new(flag.clone());
+        seam.deferred(DeferredSignal::Escape);
+        assert!(!flag.present(), "only the Copilot signal sets the flag");
+        seam.deferred(DeferredSignal::CopilotKeySeen);
+        assert!(flag.present());
+    }
+
+    #[test]
+    fn cap_43b_the_hook_adapter_sets_the_flag_with_no_ptt_output() {
+        let flag = Arc::new(MemoryCopilotKeyFlag::default());
+        let (tx, rx) = mpsc::channel();
+        let (sink, out) = queue();
+        tx.send(HookSignal::CopilotKeySeen).unwrap();
+        drop(tx);
+        run_hook_adapter(
+            rx,
+            HotkeyEngine::new(Arc::new(sink)),
+            &HookConsumers::new(flag.clone()),
+        );
+        assert!(flag.present());
+        assert!(out.try_iter().next().is_none());
+    }
+
+    #[test]
+    fn cap_43b_install_shares_one_copilot_flag_with_the_env_reads_and_the_hook() {
+        // The `cfg(windows)` factory cannot build on a macOS host, so this checks the source.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let code =
+            production_code(&std::fs::read_to_string(root.join("src/hotkey_host.rs")).unwrap());
+        let install = code
+            .split("pub fn install<R: Runtime>")
+            .nth(1)
+            .unwrap()
+            .split("\n}\n")
+            .next()
+            .unwrap();
+        for part in [
+            "MemoryCopilotKeyFlag::default()",
+            "WithCopilotFlag::new(keyboard_env::os_env_reads(), Arc::clone(&copilot))",
+            "platform_service(talk, sink, Arc::clone(&copilot))",
+        ] {
+            assert!(install.contains(part), "install misses {part}");
         }
     }
 }

@@ -492,6 +492,34 @@ mod tests {
     }
 
     #[test]
+    fn cap_43b_at_30_a_seen_copilot_key_flags_right_ctrl_in_hotkeys_set() {
+        // #332, ADR 0025: the hook sets the flag after the first run; the next
+        // `hotkeys_set` (Settings #77, wizard #43) shows the Copilot conflict with its fix.
+        use mog_core::keyboard_env::{CopilotKeyFlag, MemoryCopilotKeyFlag, WithCopilotFlag};
+        let env = FakeEnv::default();
+        env.env.lock().unwrap().alt_gr_layout = true;
+        let flag = std::sync::Arc::new(MemoryCopilotKeyFlag::default());
+        let s = HotkeySettings::load(
+            WIN,
+            Box::new(FakeStore::default()),
+            Box::new(WithCopilotFlag::new(Box::new(env.clone()), flag.clone())),
+            Box::new(FakeTalk::default()),
+        );
+        // AltGr skips Right-Alt; the key is not seen yet, so the ladder takes Right-Ctrl.
+        assert_eq!(s.talk_binding(), TalkBinding::RightControl);
+        assert!(!kinds(&s.set(&JsonObject::new()).unwrap()).contains(&"copilot_key".to_owned()));
+        flag.set(true);
+        let got = s.set(&JsonObject::new()).unwrap();
+        assert!(kinds(&got).contains(&"copilot_key".to_owned()), "{got}");
+        assert_eq!(
+            got["conflicts"][0]["fix"]["binding"],
+            json!("Ctrl+Win"),
+            "{got}"
+        );
+        assert!(s.keyboard_env().copilot_key);
+    }
+
+    #[test]
     fn cap_43b_an_unknown_action_is_an_error_and_saves_nothing() {
         let store = FakeStore::default();
         let s = settings(MAC, &store, &FakeEnv::default(), &FakeTalk::default());

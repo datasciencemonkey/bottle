@@ -1641,4 +1641,130 @@ mod tests {
         assert_eq!(rx.try_recv(), Ok(HookSignal::TalkDown { at: T0 }));
         assert_eq!(rx.try_recv(), Ok(HookSignal::TalkUp { at: T0 }));
     }
+
+    // ---- CAP-43b (#332, ADR 0025): the hook sees the Copilot key once ----
+
+    /// Run `events` through a filter and a Copilot watch, as `HookCore` does. Returns how
+    /// many times the watch fired and the filter verdicts.
+    fn watch(events: &[KeyEvent]) -> (usize, Vec<Verdict>) {
+        let mut f = HookFilter::new(TalkKey::RightAlt);
+        let mut w = CopilotWatch::default();
+        let mut fired = 0;
+        let mut verdicts = Vec::new();
+        for e in events {
+            verdicts.push(f.on_key(*e, T0).0);
+            if w.on_key(*e, &f) {
+                fired += 1;
+            }
+        }
+        (fired, verdicts)
+    }
+
+    fn copilot_press(win: u32, shift: u32) -> [KeyEvent; 6] {
+        [
+            KeyEvent::down(win),
+            KeyEvent::down(shift),
+            KeyEvent::down(vk::F23),
+            KeyEvent::up(vk::F23),
+            KeyEvent::up(shift),
+            KeyEvent::up(win),
+        ]
+    }
+
+    #[test]
+    fn cap_43b_the_copilot_chord_is_seen_once() {
+        let mut events = copilot_press(vk::LWIN, vk::LSHIFT).to_vec();
+        events.extend(copilot_press(vk::LWIN, vk::LSHIFT));
+        events.extend(copilot_press(vk::RWIN, vk::RSHIFT));
+        assert_eq!(watch(&events).0, 1);
+    }
+
+    #[test]
+    fn cap_43b_either_win_and_either_shift_make_the_chord() {
+        assert_eq!(watch(&copilot_press(vk::RWIN, vk::RSHIFT)).0, 1);
+        assert_eq!(watch(&copilot_press(vk::LWIN, vk::RSHIFT)).0, 1);
+    }
+
+    #[test]
+    fn cap_43b_f23_needs_win_and_shift() {
+        let alone = [KeyEvent::down(vk::F23), KeyEvent::up(vk::F23)];
+        let shift_only = [
+            KeyEvent::down(vk::LSHIFT),
+            KeyEvent::down(vk::F23),
+            KeyEvent::up(vk::F23),
+            KeyEvent::up(vk::LSHIFT),
+        ];
+        let win_only = [
+            KeyEvent::down(vk::LWIN),
+            KeyEvent::down(vk::F23),
+            KeyEvent::up(vk::F23),
+            KeyEvent::up(vk::LWIN),
+        ];
+        let not_f23 = [
+            KeyEvent::down(vk::LWIN),
+            KeyEvent::down(vk::LSHIFT),
+            KeyEvent::down(0x85), // F22
+            KeyEvent::up(0x85),
+            KeyEvent::up(vk::LSHIFT),
+            KeyEvent::up(vk::LWIN),
+        ];
+        for events in [&alone[..], &shift_only, &win_only, &not_f23] {
+            assert_eq!(watch(events).0, 0, "{} events", events.len());
+        }
+    }
+
+    #[test]
+    fn cap_43b_an_injected_copilot_chord_is_ignored() {
+        // SendInput (a remap tool, a test) is not a keyboard with the key.
+        let injected: Vec<KeyEvent> = copilot_press(vk::LWIN, vk::LSHIFT)
+            .iter()
+            .map(|e| KeyEvent {
+                injected: true,
+                ..*e
+            })
+            .collect();
+        assert_eq!(watch(&injected).0, 0);
+    }
+
+    #[test]
+    fn cap_43b_the_copilot_chord_passes_to_windows() {
+        // Copilot still opens: the hook only looks.
+        let (_, verdicts) = watch(&copilot_press(vk::LWIN, vk::LSHIFT));
+        assert!(verdicts.iter().all(|v| *v == Verdict::Pass), "{verdicts:?}");
+    }
+
+    #[test]
+    fn cap_43b_a_watch_that_saw_the_key_stops_looking() {
+        let mut f = HookFilter::new(TalkKey::RightAlt);
+        let mut w = CopilotWatch::default();
+        for e in copilot_press(vk::LWIN, vk::LSHIFT) {
+            f.on_key(e, T0);
+            w.on_key(e, &f);
+        }
+        assert!(w.seen());
+    }
+
+    #[test]
+    fn cap_43b_hook_core_sends_copilot_key_seen_once() {
+        let (mut c, rx, rec) = core(TalkKey::RightAlt);
+        for _ in 0..2 {
+            for e in copilot_press(vk::LWIN, vk::LSHIFT) {
+                assert_eq!(c.handle(e), Verdict::Pass);
+            }
+        }
+        assert_eq!(rx.try_recv(), Ok(HookSignal::CopilotKeySeen));
+        assert!(rx.try_recv().is_err(), "one signal only");
+        assert_eq!(rec.count(), 12, "every callback is still timed (CAP-40a)");
+    }
+
+    #[test]
+    fn cap_43b_copilot_key_seen_goes_to_the_host_not_the_engine() {
+        let sink = Arc::new(RecordingSink::default());
+        let mut engine = crate::hotkey_core::HotkeyEngine::new(sink.clone());
+        assert_eq!(
+            forward_to_engine(HookSignal::CopilotKeySeen, &mut engine),
+            Some(HookSignal::CopilotKeySeen)
+        );
+        assert!(sink.0.lock().unwrap().is_empty(), "no PTT output");
+    }
 }
