@@ -133,15 +133,28 @@ impl TalkBinding {
         }
     }
 
-    /// The Windows talk key of `hotkey_windows`.
+    /// The Windows talk key of `hotkey_windows`. D66 gives Windows only Right-Alt,
+    /// Right-Ctrl and Ctrl+Win, so Right-Win and Right-Shift fall back to the D66 default
+    /// (Right-Alt). [`check_conflicts`] flags them as invalid on Windows (#313).
     pub fn windows_talk_key(self) -> crate::hotkey_windows::TalkKey {
         use crate::hotkey_windows::TalkKey as Win;
         match self {
-            TalkBinding::RightOption => Win::RightAlt,
             TalkBinding::RightControl => Win::RightCtrl,
-            TalkBinding::RightCommand => Win::RightWin,
-            TalkBinding::RightShift => Win::RightShift,
             TalkBinding::CtrlWin => Win::CtrlWin,
+            TalkBinding::RightOption | TalkBinding::RightCommand | TalkBinding::RightShift => {
+                Win::RightAlt
+            }
+        }
+    }
+
+    /// Whether `os` has this talk key. Windows has only the D66 keys (#313).
+    fn on(self, os: Os) -> bool {
+        match os {
+            Os::MacOs => self != TalkBinding::CtrlWin,
+            Os::Windows => matches!(
+                self,
+                TalkBinding::RightOption | TalkBinding::RightControl | TalkBinding::CtrlWin
+            ),
         }
     }
 
@@ -845,6 +858,7 @@ fn talk_conflict(os: Os, talk: TalkBinding, env: &KeyboardEnv) -> Option<Conflic
             }
         }
         Os::Windows => match talk {
+            _ if !talk.on(os) => Some(ConflictKind::Invalid),
             TalkBinding::RightOption if env.alt_gr_layout => Some(ConflictKind::AltGr),
             TalkBinding::RightControl if env.copilot_key => Some(ConflictKind::CopilotKey),
             _ => None,
@@ -994,10 +1008,11 @@ impl HotkeysSetOutcome {
     }
 }
 
-/// The binding fits the action: the talk key is modifier-only, every other key is a chord.
-fn fits(action: HotkeyAction, binding: Binding) -> bool {
+/// The binding fits the action: the talk key is modifier-only and exists on `os`, every
+/// other key is a chord.
+fn fits(os: Os, action: HotkeyAction, binding: Binding) -> bool {
     match binding {
-        Binding::Talk(_) => action == HotkeyAction::Ptt,
+        Binding::Talk(t) => action == HotkeyAction::Ptt && t.on(os),
         Binding::Chord { .. } => action != HotkeyAction::Ptt,
     }
 }
@@ -1022,7 +1037,7 @@ pub fn hotkeys_set(
         let parsed = value
             .as_str()
             .and_then(|s| Binding::parse(os, s).ok())
-            .filter(|b| fits(action, *b));
+            .filter(|b| fits(os, action, *b));
         match parsed {
             Some(b) => bindings.set(action, b),
             None => {
