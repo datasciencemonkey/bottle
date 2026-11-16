@@ -10,7 +10,7 @@
 import type { SegmentRef, Tags } from '../shared/interfaces';
 import { createSttProvider } from '../brain/components/stt-provider';
 import { core } from '../brain/test-core';
-import { callsTo } from '../test-support/cloud-calls';
+import { argsOf, callsTo } from '../test-support/cloud-calls';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('../brain/test-core')).coreModule);
 
@@ -28,7 +28,7 @@ const seg = (ms: number): SegmentRef => ({
 const sttProviders = () =>
   core.invoke.mock.calls
     .filter(([cmd]) => cmd === 'stt_transcribe')
-    .map(([, a]) => (a as { provider: string }).provider);
+    .map(([, a]) => (argsOf(a) as { provider: string }).provider);
 
 describe('AT-40 SttProvider rules', () => {
   beforeEach(() => core.reset());
@@ -54,7 +54,7 @@ describe('AT-40 SttProvider rules', () => {
 
   it.skip('[AT-40] [CAP-56a] [CAP-56b] ASR text above 6 words per second or a known hallucination phrase is dropped and local STT runs TODO(#49)', async () => {
     core.invoke.mockImplementation(async (_cmd: string, args?: unknown) => {
-      const p = (args as { provider?: string } | undefined)?.provider;
+      const p = (argsOf(args) as { provider?: string } | undefined)?.provider;
       const text = p === 'dbx_gemini' ? 'Thank you for watching.' : '';
       return {
         segmentId: 's',

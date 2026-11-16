@@ -1,5 +1,5 @@
 import { COMMANDS } from '../shared/ipc';
-import { CALL_CLASS, callsTo, cloudCalls, isCloudCall } from './cloud-calls';
+import { CALL_CLASS, argsOf, callsTo, cloudCalls, isCloudCall } from './cloud-calls';
 
 const tags = { app: 'bottle', mog: 'm1', op: 'asr' } as const;
 
@@ -48,6 +48,14 @@ describe('cloud-call classifier (AT-04, AT-43 harness)', () => {
     // Unknown shapes count as cloud, so a bug cannot hide a request.
     expect(isCloudCall('stt_transcribe', undefined)).toBe(true);
     expect(isCloudCall('not_a_command', {})).toBe(true);
+  });
+
+  it('[AT-22] reads the { args } payload that call() gives invoke', () => {
+    const local = { args: { segmentId: 's', provider: 'local_parakeet', tags } };
+    const cloud = { args: { segmentId: 's', provider: 'dbx_gemini', tags } };
+    expect(argsOf(local)).toEqual(local.args);
+    expect(isCloudCall('stt_transcribe', local)).toBe(false);
+    expect(isCloudCall('stt_transcribe', cloud)).toBe(true);
   });
 
   it('[AT-22] reads an invoke log and names only the commands', () => {

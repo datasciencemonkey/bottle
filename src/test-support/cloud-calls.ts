@@ -1,6 +1,6 @@
 // Which brain IPC calls leave the device (#231, AT-04 "no cloud request", AT-43 "no agent turn
 // and no Genie call"). Brain tests mock `@tauri-apps/api/core` with `src/brain/test-core.ts`, so
-// `core.invoke.mock.calls` is the list of `[command, args]` the brain sent. The core is the only
+// `core.invoke.mock.calls` is the list of `[command, { args }]` the brain sent. The core is the only
 // network path (ARC-4), so a brain call that is classed `local` sends nothing off the device.
 //
 // The class map is typed over every 4.5 command: a new command fails the typecheck until someone
@@ -52,12 +52,23 @@ export const CALL_CLASS = {
   brain_subscribe: 'local',
 } as const satisfies Record<keyof typeof COMMANDS, CallClass>;
 
-/** True when the call would leave the device. Unknown commands and shapes count as cloud. */
+/** The command arguments of an invoke log entry: `call()` sends them as `{ args }` (ADR 0003). */
+export function argsOf(payload: unknown): unknown {
+  if (payload !== null && typeof payload === 'object' && 'args' in payload) {
+    return (payload as { args: unknown }).args;
+  }
+  return payload;
+}
+
+/**
+ * True when the call would leave the device. `args` is the command arguments or the `{ args }`
+ * payload that `invoke` gets. Unknown commands and shapes count as cloud.
+ */
 export function isCloudCall(cmd: string, args: unknown): boolean {
   const cls = (CALL_CLASS as Record<string, CallClass | undefined>)[cmd];
   if (cls === undefined || cls === 'cloud') return true;
   if (cls === 'local') return false;
-  const provider = (args as { provider?: unknown } | null | undefined)?.provider;
+  const provider = (argsOf(args) as { provider?: unknown } | null | undefined)?.provider;
   return provider !== 'local_parakeet';
 }
 

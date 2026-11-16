@@ -14,15 +14,26 @@ import type { SegmentRef, Tags } from '../shared/interfaces';
 import { createGenieBridge } from '../brain/components/genie-bridge';
 import { createMemoryService } from '../brain/components/memory-service';
 import { createRouterContextGate } from '../brain/components/router-context-gate';
+import type { RouterInput } from '../brain/components/router-step';
 import { createSttProvider } from '../brain/components/stt-provider';
 import { core } from '../brain/test-core';
-import { cloudCalls } from '../test-support/cloud-calls';
+import { argsOf, callsTo, cloudCalls } from '../test-support/cloud-calls';
 import { createGenieOneMcpDouble } from '../test-support/genie-one-mcp';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('../brain/test-core')).coreModule);
 
 const MOG = '00000000-0000-4000-8000-0000000000a1';
 const tags: Tags = { app: 'bottle', mog: MOG, op: 'asr' };
+const routerInput: RouterInput = {
+  profile: 'caller-profile',
+  speakerTrack: 'you',
+  captureMode: 'ptt',
+  pendingClarification: '',
+  recentTopics: [],
+  activeMogs: [{ id: MOG, name: 'Finance' }],
+  profiles: [{ name: 'home', host: 'https://home.example.test', aliases: [] }],
+  currentTarget: 'home',
+};
 const seg: SegmentRef = {
   segmentId: 's1',
   leaseId: 'lease-1',
@@ -39,7 +50,7 @@ describe('AT-04 dictate offline', () => {
   it.skip('[AT-04] [CAP-60a] each STT failure step goes to the next provider TODO(#52)', async () => {
     // Databricks ASR selected and failing: the chain goes to local Parakeet (8.3).
     core.invoke.mockImplementation(async (cmd: string, args?: unknown) => {
-      const p = (args as { provider?: string } | undefined)?.provider;
+      const p = (argsOf(args) as { provider?: string } | undefined)?.provider;
       if (cmd === 'stt_transcribe' && p === 'dbx_gemini') throw new Error('OFFLINE');
       return {
         segmentId: 's1',
@@ -62,7 +73,7 @@ describe('AT-04 dictate offline', () => {
   });
 
   it.skip('[AT-04] [RTR-15a] "stop recording" works offline through the command grammar TODO(#143)', async () => {
-    const d = await createRouterContextGate().route('stop recording', MOG);
+    const d = await createRouterContextGate().route('stop recording', MOG, routerInput);
     expect([d.intent, d.command]).toEqual(['command', 'stop_recording']);
     expect(cloudCalls(core.invoke.mock.calls)).toEqual([]);
   });
@@ -73,15 +84,16 @@ describe('AT-04 dictate offline', () => {
       return {};
     });
     const gate = createRouterContextGate();
-    expect((await gate.route('what were the sales in march', MOG)).intent).toBe('question');
-    expect((await gate.route('the sales in march?', MOG)).intent).toBe('question');
-    expect((await gate.route('the sales in march were fine', MOG)).intent).toBe('dictation');
-    // TODO(#143): the question shows an "Ask Genie" chip and goes to the outbox only on a click.
-    expect(cloudCalls(core.invoke.mock.calls)).toEqual([
-      'model_invoke',
-      'model_invoke',
-      'model_invoke',
-    ]);
+    expect((await gate.route('what were the sales in march', MOG, routerInput)).intent).toBe(
+      'question',
+    );
+    expect((await gate.route('the sales in march?', MOG, routerInput)).intent).toBe('question');
+    expect((await gate.route('the sales in march were fine', MOG, routerInput)).intent).toBe(
+      'dictation',
+    );
+    // TODO(#143): the question shows an "Ask Genie" chip and goes to the outbox only on a click;
+    // with no click, nothing is sent to Genie.
+    expect(callsTo(core.invoke.mock.calls, ['mcp_call'])).toEqual([]);
   });
 
   it.skip('[AT-04] [G-46a] [G-46b] confirmed offline asks queue with a 24 h TTL and replay FIFO one at a time TODO(#41)', async () => {
