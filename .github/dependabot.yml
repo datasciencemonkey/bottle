@@ -1,0 +1,61 @@
+version: 2
+
+# Dependency update PRs. Notes:
+# - Tauri and the Rive runtime are pinned on purpose (#169, NFR-14a/NFR-16a, ADR 0012), and
+#   tests/packaging-pins.test.ts enforces the pins. Dependabot ignores them; bump them in a deliberate PR.
+# - macOS CI runners are scarce on this private repo, so the open-PR limits stay low and updates are grouped.
+# - Security updates (from "automated security fixes") are not limited by these schedules.
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: America/New_York
+    open-pull-requests-limit: 1
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:15"
+      timezone: America/New_York
+    open-pull-requests-limit: 2
+    versioning-strategy: increase-if-necessary
+    ignore:
+      - dependency-name: "@tauri-apps/*"
+      - dependency-name: "@rive-app/*"
+    groups:
+      npm-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:30"
+      timezone: America/New_York
+    open-pull-requests-limit: 2
+    ignore:
+      - dependency-name: "tauri"
+      - dependency-name: "tauri-build"
+      - dependency-name: "tauri-*"
+    groups:
+      cargo-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
