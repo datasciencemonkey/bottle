@@ -22,10 +22,13 @@ Unit tests cover the logic of R1 HotkeyService with fakes. These steps check the
 | 8 | Hold Right-Option. Close the lid (or Apple menu > Sleep). Release the key. Wake the Mac and unlock it. | `ptt up` shows after wake. Right-Option works again. | CAP-38b, CAP-45 |
 | 9 | Hold Right-Option. Press Ctrl+Cmd+Q to lock. Release the key. Unlock. | `ptt up` after unlock. Right-Option works again. | CAP-45 |
 | 10 | In a second terminal, run `kill -STOP $(pgrep -n hotkey_probe)`. Press Right-Option 5 times. Wait 5 s. Run `kill -CONT $(pgrep -n hotkey_probe)`. Then hold and release Right-Option. | The macOS tap timeout turns the tap off; the watchdog turns it on again. The last hold gives `ptt down` and `ptt up`. No PTT stays active. | CAP-38a |
-| 11 | With the SP-03 HID rig (`BOTTLE_TEST_HID_PORT`), run 1,000 Right-Option hold-and-release cycles. | 1,000 `ptt up` lines. | CAP-35b, AT-30 |
+| 11 | With the SP-03 HID rig (`BOTTLE_TEST_HID_PORT`), run 1,000 Right-Option hold-and-release cycles. | 1,000 PTT ends: a hold of 250 ms or more gives `ptt up`; a shorter hold gives `ptt cancel` and `Tap` (CAP-44a). The SP-03 rig holds for 50-150 ms, so expect 1,000 `ptt cancel` lines and 1,000 `Tap` lines. | CAP-35b, CAP-44a, AT-30 |
 | 12 | Hold Right-Option for 10 s while you run step 10 (`kill -STOP`, wait, `kill -CONT`) a second time. | One `ptt down` before and one `ptt up` only when you release the key. No early `ptt up`. | CAP-45 |
 | 13 | Turn Secure Keyboard Entry on. Hold Ctrl+Shift+Space for 5 s, then release it. | Exactly one `ptt down` and one `ptt up`. | CAP-39b, CAP-45 |
 | 14 | Optional: start an app that owns Ctrl+Shift+Space as a global key (for example a launcher set to it). Turn Secure Keyboard Entry on and look at the probe. | With such an app: `FallbackChordUnavailable`. Without one: no such line. | CAP-39b |
+| 15 | Tap Right-Option quickly (about 0.1 s). Do this 10 times. | Each tap: `ptt down`, `ptt cancel`, then `Tap`. No `ptt up`. | CAP-44a, AT-03 |
+| 16 | Hold Right-Option. In the first 0.5 s, press another key (for example `e`, or Left-Shift). Release both. | `ptt down`, then `ptt cancel` when the other key goes down. No `ptt up` on release. The probe prints no key name. | CAP-44c, AT-03 |
+| 17 | Hold Right-Option for 2 s, then press `e`, then release both. | `ptt down`, then `ptt up` on release. No `ptt cancel`. | CAP-44c |
 
 Step 11 needs the Pi Pico HID rig of SP-03. Without the rig, report steps 1-10 only.
 
