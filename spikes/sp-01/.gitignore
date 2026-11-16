@@ -1,0 +1,5 @@
+web/vendor/
+src-tauri/gen/
+src-tauri/target/
+out/
+*.riv

@@ -1,0 +1,49 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "SP01 Rive Transparent",
+  "version": "0.0.0",
+  "identifier": "dev.bottle.spike.sp01",
+  "build": {
+    "frontendDist": "../web",
+    "beforeBuildCommand": "node scripts/copy-vendor.mjs"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "mog-spike",
+        "title": "mog-spike",
+        "url": "index.html",
+        "width": 240,
+        "height": 240,
+        "x": 1468,
+        "y": 857,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "focus": false,
+        "shadow": false,
+        "resizable": false,
+        "skipTaskbar": true,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; script-src 'self' 'wasm-unsafe-eval'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app",
+      "dmg"
+    ],
+    "icon": [],
+    "macOS": {
+      "minimumSystemVersion": "14.4"
+    },
+    "resources": {
+      "../web/vendor/": "vendor/"
+    }
+  }
+}

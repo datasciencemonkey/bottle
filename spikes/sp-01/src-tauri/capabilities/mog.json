@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "mog-spike",
+  "description": "SP-01: the mog window may only call the spike log commands (ARC-4: no http, shell, fs or network plugins).",
+  "windows": ["mog-spike"],
+  "permissions": ["core:event:default"]
+}
