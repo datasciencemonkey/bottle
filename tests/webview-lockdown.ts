@@ -59,7 +59,8 @@ export function effectiveSources(csp: Csp, directive: string): string[] {
 }
 
 /** Source keywords and hashes that do not name a host. */
-const KEYWORD = /^'(self|none|wasm-unsafe-eval|strict-dynamic|(nonce|sha256|sha384|sha512)-[^']+)'$/;
+const KEYWORD =
+  /^'(self|none|wasm-unsafe-eval|strict-dynamic|(nonce|sha256|sha384|sha512)-[^']+)'$/;
 /** The Tauri IPC transports (macOS and Linux use `ipc:`, Windows uses `http://ipc.localhost`). */
 const IPC_SOURCES = new Set(['ipc:', 'http://ipc.localhost']);
 /** The Vite dev server on loopback (`devCsp` only, never the release CSP). */
@@ -99,7 +100,8 @@ function matchHostSource(source: string, url: URL, self: URL): boolean {
   if (scheme) {
     const want = `${scheme.toLowerCase()}:`;
     const upgrade =
-      (want === 'http:' && url.protocol === 'https:') || (want === 'ws:' && url.protocol === 'wss:');
+      (want === 'http:' && url.protocol === 'https:') ||
+      (want === 'ws:' && url.protocol === 'wss:');
     if (url.protocol !== want && !upgrade) return false;
   } else if (url.protocol !== self.protocol && !NETWORK_SCHEMES.has(url.protocol)) {
     return false;
@@ -118,7 +120,12 @@ function matchHostSource(source: string, url: URL, self: URL): boolean {
  * A small CSP source matcher: does `csp` let `directive` load `url` on a page at `selfOrigin`?
  * It covers 'self', 'none', `*`, scheme sources and host sources, which is all this app uses.
  */
-export function cspAllows(csp: string, directive: string, url: string, selfOrigin: string): boolean {
+export function cspAllows(
+  csp: string,
+  directive: string,
+  url: string,
+  selfOrigin: string,
+): boolean {
   const target = new URL(url);
   const self = new URL(selfOrigin);
   const sources = effectiveSources(parseCsp(csp), directive);
@@ -148,10 +155,12 @@ export function checkWebviewSettings(conf: unknown, caps: unknown[]): string[] {
     problems.push('dangerousRemoteDomainIpcAccess is set');
   }
   for (const w of (app['windows'] ?? []) as { url?: string }[]) {
-    if (w.url && /^[a-z][a-z0-9+.-]*:/i.test(w.url)) problems.push(`window url ${w.url} is not an app URL`);
+    if (w.url && /^[a-z][a-z0-9+.-]*:/i.test(w.url))
+      problems.push(`window url ${w.url} is not an app URL`);
   }
   for (const c of caps as { identifier?: string; remote?: unknown }[]) {
-    if (c.remote !== undefined) problems.push(`capability ${c.identifier ?? '?'} has a remote scope`);
+    if (c.remote !== undefined)
+      problems.push(`capability ${c.identifier ?? '?'} has a remote scope`);
   }
   return problems;
 }
@@ -222,14 +231,12 @@ export function checkForbiddenPlugins(input: PluginInputs): string[] {
   const perm = new RegExp(`^(${PLUGIN}):`);
   for (const cap of input.capabilities) {
     for (const p of cap.permissions ?? []) {
-      const id = typeof p === 'string' ? p : (p as { identifier?: string }).identifier ?? '';
+      const id = typeof p === 'string' ? p : ((p as { identifier?: string }).identifier ?? '');
       if (perm.test(id)) problems.push(`capability ${cap.identifier ?? '?'} grants ${id}`);
     }
   }
-  const plugins = ((input.tauriConf as { plugins?: Record<string, unknown> }).plugins ?? {}) as Record<
-    string,
-    unknown
-  >;
+  const plugins = ((input.tauriConf as { plugins?: Record<string, unknown> }).plugins ??
+    {}) as Record<string, unknown>;
   for (const name of FORBIDDEN_PLUGINS) {
     if (name in plugins) problems.push(`tauri.conf.json configures the ${name} plugin`);
   }
@@ -240,7 +247,11 @@ export function checkForbiddenPlugins(input: PluginInputs): string[] {
   }
   const pkg = input.packageJson;
   const npm = new RegExp(`^@tauri-apps/plugin-(${PLUGIN})$`);
-  for (const d of Object.keys({ ...pkg.dependencies, ...pkg.devDependencies, ...pkg.optionalDependencies })) {
+  for (const d of Object.keys({
+    ...pkg.dependencies,
+    ...pkg.devDependencies,
+    ...pkg.optionalDependencies,
+  })) {
     if (npm.test(d)) problems.push(`package.json depends on ${d}`);
   }
   const rust = new RegExp(`\\btauri_plugin_(${PLUGIN})\\b`);

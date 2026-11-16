@@ -23,7 +23,9 @@ const conf = JSON.parse(read('src-tauri/tauri.conf.json')) as {
 };
 const csp = conf.app.security.csp;
 const devCsp = conf.app.security.devCsp;
-const capFiles = readdirSync(resolve(root, 'src-tauri/capabilities')).filter((f) => f.endsWith('.json'));
+const capFiles = readdirSync(resolve(root, 'src-tauri/capabilities')).filter((f) =>
+  f.endsWith('.json'),
+);
 const caps = capFiles.map(
   (f) => JSON.parse(read(`src-tauri/capabilities/${f}`)) as PluginInputs['capabilities'][number],
 );
@@ -75,7 +77,10 @@ describe('[SEC-07a] [AT-17] each WebView CSP has no external source', () => {
   });
 
   it('[SEC-07a] [AT-17] no HTML entry links an external file', () => {
-    const html = ['brain.html', 'hub.html', 'mog.html', 'card.html'].map((p) => ({ path: p, text: read(p) }));
+    const html = ['brain.html', 'hub.html', 'mog.html', 'card.html'].map((p) => ({
+      path: p,
+      text: read(p),
+    }));
     expect(checkHtmlEntries(html)).toEqual([]);
   });
 
@@ -98,7 +103,9 @@ describe('[SEC-07a] [AT-17] each WebView CSP has no external source', () => {
     expect(checkCspSources(`${good}; img-src https://cdn.example`)).toEqual([
       'img-src allows https://cdn.example',
     ]);
-    expect(checkCspSources("connect-src 'self'")).toEqual(['no default-src: unlisted fetches are open']);
+    expect(checkCspSources("connect-src 'self'")).toEqual([
+      'no default-src: unlisted fetches are open',
+    ]);
     expect(checkCspSources("default-src 'self'")).toEqual(['connect-src must be explicit']);
     expect(checkCspSources(`${good} ws://127.0.0.1:1420`, true)).toEqual([]);
     expect(checkCspSources(`${good} ws://127.0.0.1:9999`, true)).toEqual([
@@ -112,21 +119,29 @@ describe('[SEC-07a] [AT-17] each WebView CSP has no external source', () => {
     };
     bad.app.security['dangerousDisableAssetCspModification'] = true;
     bad.app.windows = [{ url: 'https://evil.example' }];
-    expect(checkWebviewSettings(bad, [{ identifier: 'mog', remote: { urls: ['https://x'] } }])).toEqual([
+    expect(
+      checkWebviewSettings(bad, [{ identifier: 'mog', remote: { urls: ['https://x'] } }]),
+    ).toEqual([
       'dangerousDisableAssetCspModification is set',
       'window url https://evil.example is not an app URL',
       'capability mog has a remote scope',
     ]);
     expect(
-      checkWindowUrls([{ path: 'w.rs', text: 'WebviewUrl::External("https://x".parse().unwrap())' }]),
+      checkWindowUrls([
+        { path: 'w.rs', text: 'WebviewUrl::External("https://x".parse().unwrap())' },
+      ]),
     ).toEqual(['w.rs uses WebviewUrl::External']);
-    expect(checkWindowUrls([{ path: 'w.rs', text: '// WebviewUrl::External is banned' }])).toEqual([]);
+    expect(checkWindowUrls([{ path: 'w.rs', text: '// WebviewUrl::External is banned' }])).toEqual(
+      [],
+    );
     expect(
-      checkHtmlEntries([{ path: 'x.html', text: '<script src="https://cdn.example/a.js"></script>' }]),
+      checkHtmlEntries([
+        { path: 'x.html', text: '<script src="https://cdn.example/a.js"></script>' },
+      ]),
     ).toEqual(['x.html links https://cdn.example/a.js']);
-    expect(checkHtmlEntries([{ path: 'x.html', text: '<link href="//cdn.example/a.css">' }])).toEqual([
-      'x.html links //cdn.example/a.css',
-    ]);
+    expect(
+      checkHtmlEntries([{ path: 'x.html', text: '<link href="//cdn.example/a.css">' }]),
+    ).toEqual(['x.html links //cdn.example/a.css']);
   });
 });
 
@@ -146,7 +161,9 @@ describe('[SEC-07a] [SEC-20a] [AT-37] the CSP blocks remote Rive hosts and allow
   it('[SEC-20a] [AT-37] connect-src lets the runtime fetch the bundled rive.wasm and .riv', () => {
     for (const origin of APP_ORIGINS) {
       for (const file of ['/assets/rive.wasm', '/assets/mascot.riv']) {
-        expect(cspAllows(csp, 'connect-src', `${origin}${file}`, origin), `${origin}${file}`).toBe(true);
+        expect(cspAllows(csp, 'connect-src', `${origin}${file}`, origin), `${origin}${file}`).toBe(
+          true,
+        );
       }
     }
   });
@@ -159,8 +176,12 @@ describe('[SEC-07a] [SEC-20a] [AT-37] the CSP blocks remote Rive hosts and allow
     const o = 'tauri://localhost';
     expect(cspAllows('default-src *', 'img-src', 'https://unpkg.com/x', o)).toBe(true);
     expect(cspAllows('connect-src https:', 'connect-src', 'https://unpkg.com/x', o)).toBe(true);
-    expect(cspAllows('connect-src *.rive.app', 'connect-src', 'https://public.rive.app/cdn/x', o)).toBe(true);
-    expect(cspAllows('connect-src http://unpkg.com', 'connect-src', 'https://unpkg.com/x', o)).toBe(true);
+    expect(
+      cspAllows('connect-src *.rive.app', 'connect-src', 'https://public.rive.app/cdn/x', o),
+    ).toBe(true);
+    expect(cspAllows('connect-src http://unpkg.com', 'connect-src', 'https://unpkg.com/x', o)).toBe(
+      true,
+    );
     expect(cspAllows("default-src 'self'", 'font-src', 'tauri://localhost/f.woff2', o)).toBe(true);
     expect(cspAllows("default-src 'none'", 'font-src', 'tauri://localhost/f.woff2', o)).toBe(false);
     expect(cspAllows("default-src 'self'", 'connect-src', 'https://unpkg.com/x', o)).toBe(false);
@@ -193,23 +214,43 @@ describe('[SEC-07b] [AT-17] no WebView gets the http, shell or fs plugin', () =>
 
       const cfg = repoInputs();
       (cfg.tauriConf as Record<string, unknown>)['plugins'] = { [plugin]: {} };
-      expect(checkForbiddenPlugins(cfg)).toEqual([`tauri.conf.json configures the ${plugin} plugin`]);
+      expect(checkForbiddenPlugins(cfg)).toEqual([
+        `tauri.conf.json configures the ${plugin} plugin`,
+      ]);
 
       const lock = repoInputs();
-      lock.cargoFiles.push({ path: 'Cargo.lock', text: `[[package]]\nname = "tauri-plugin-${plugin}"\n` });
+      lock.cargoFiles.push({
+        path: 'Cargo.lock',
+        text: `[[package]]\nname = "tauri-plugin-${plugin}"\n`,
+      });
       expect(checkForbiddenPlugins(lock)).toEqual([`Cargo.lock names tauri-plugin-${plugin}`]);
 
       const toml = repoInputs();
-      toml.cargoFiles.push({ path: 'src-tauri/Cargo.toml', text: `tauri-plugin-${plugin} = "2"\n` });
-      expect(checkForbiddenPlugins(toml)).toEqual([`src-tauri/Cargo.toml names tauri-plugin-${plugin}`]);
+      toml.cargoFiles.push({
+        path: 'src-tauri/Cargo.toml',
+        text: `tauri-plugin-${plugin} = "2"\n`,
+      });
+      expect(checkForbiddenPlugins(toml)).toEqual([
+        `src-tauri/Cargo.toml names tauri-plugin-${plugin}`,
+      ]);
 
       const npm = repoInputs();
-      npm.packageJson.dependencies = { ...npm.packageJson.dependencies, [`@tauri-apps/plugin-${plugin}`]: '2.0.0' };
-      expect(checkForbiddenPlugins(npm)).toEqual([`package.json depends on @tauri-apps/plugin-${plugin}`]);
+      npm.packageJson.dependencies = {
+        ...npm.packageJson.dependencies,
+        [`@tauri-apps/plugin-${plugin}`]: '2.0.0',
+      };
+      expect(checkForbiddenPlugins(npm)).toEqual([
+        `package.json depends on @tauri-apps/plugin-${plugin}`,
+      ]);
 
       const rs = repoInputs();
-      rs.rustSources.push({ path: 'src-tauri/src/lib.rs', text: `.plugin(tauri_plugin_${plugin}::init())` });
-      expect(checkForbiddenPlugins(rs)).toEqual([`src-tauri/src/lib.rs uses tauri_plugin_${plugin}`]);
+      rs.rustSources.push({
+        path: 'src-tauri/src/lib.rs',
+        text: `.plugin(tauri_plugin_${plugin}::init())`,
+      });
+      expect(checkForbiddenPlugins(rs)).toEqual([
+        `src-tauri/src/lib.rs uses tauri_plugin_${plugin}`,
+      ]);
     }
   });
 
