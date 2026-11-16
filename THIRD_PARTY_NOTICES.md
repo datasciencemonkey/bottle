@@ -62,6 +62,14 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+### Adapted files
+
+Add one row for each Bottle file that holds code or data from antigravity-bricks-plugin.
+
+| Bottle file | antigravity-bricks-plugin path |
+|---|---|
+| `src/test-support/genie-tools.json` | `plugins/databricks-genie/scripts/genie_tools.json` (verbatim copy) |
+
 ## Handy (MIT)
 
 Source: https://github.com/cjpais/Handy, commit `aca8985`. Bottle adapts code from Handy

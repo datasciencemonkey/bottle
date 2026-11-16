@@ -204,7 +204,9 @@ the live steps. The shared parts:
 
 - TS: `src/test-support/genie-one-mcp.ts`: the Genie One MCP double. #234 adds the outcome
   scenarios `incompleteWithAnswer`, `incompleteNoAnswer`, `failed`, `truncated(rows)` and
-  `needsInput`, and `QueryResult.truncated`.
+  `needsInput`, and `QueryResult.truncated`. It serves the tool contracts of
+  `src/test-support/genie-tools.json` (from antigravity-bricks-plugin, MIT) and records calls that
+  break them: `contractProblems(tool, args)` and `contractViolations()`.
 - The live tests read `BOTTLE_TEST_PROFILE` through `liveFixture` (TS) and `live_or_skip!` (Rust).
   They are also pending, because the transport (#30) is not built.
 

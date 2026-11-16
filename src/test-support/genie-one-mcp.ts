@@ -10,10 +10,49 @@
 // - progress_steps is string[] or null; query_items is [{ item_id, sql? }] or null;
 // - deep_link is https://<host>/one/chat/threads/<cid>?o=<wsid>&utm_source=genie_chat_mcp, or null;
 // - a second ask on a busy conversation fails with BUSY_TEXT (not a 409).
-// TODO(#29): SP-09 records genie_tools.json and the busy envelope (isError or JSON-RPC error).
-// Switch the tool list and schemas to genie_tools.json, and set the default busyEnvelope.
+// The tool contracts (names, descriptions, input schemas) are `genie-tools.json`, a verbatim copy
+// of datasciencemonkey/antigravity-bricks-plugin plugins/databricks-genie/scripts/genie_tools.json
+// @ a31fd2c (MIT, see THIRD_PARTY_NOTICES.md). From it: `genie_cancel_response` takes only
+// `conversation_id`, is best-effort, and its result status is always `cancellation_requested`.
+// TODO(#29): the SP-09 live capture confirms the contracts and records the busy envelope (isError
+// or JSON-RPC error); then set the default busyEnvelope.
 
+import { readFileSync } from 'node:fs';
 import type { CommandReturns } from '../shared/ipc';
+
+export interface ToolContract {
+  name: string;
+  description: string;
+  inputSchema: {
+    type: 'object';
+    properties: Record<string, { type: string; description?: string }>;
+    required?: string[];
+  };
+}
+
+/** The Genie One tool contracts (genie-tools.json). */
+export const GENIE_TOOL_CONTRACTS: readonly ToolContract[] = JSON.parse(
+  readFileSync(new URL('./genie-tools.json', import.meta.url), 'utf8'),
+) as ToolContract[];
+
+/**
+ * The ways `args` breaks the input schema of `tool`: an unknown tool, a missing required
+ * property, a property that the schema does not name, or a value of the wrong JSON type.
+ */
+export function contractProblems(tool: string, args: Record<string, unknown>): string[] {
+  const c = GENIE_TOOL_CONTRACTS.find((t) => t.name === tool);
+  if (!c) return [`${tool}: not a Genie One tool`];
+  const { properties, required = [] } = c.inputSchema;
+  const out: string[] = [];
+  for (const k of required) if (!(k in args)) out.push(`${tool}: ${k} is required`);
+  for (const [k, v] of Object.entries(args)) {
+    const prop = properties[k];
+    if (!prop) out.push(`${tool}: ${k} is not in the schema`);
+    else if (prop.type === 'string' && typeof v !== 'string')
+      out.push(`${tool}: ${k} must be a string`);
+  }
+  return out;
+}
 
 export const GENIE_ONE_TOOLS = [
   'genie_ask',
@@ -212,6 +251,7 @@ export function createGenieOneMcpDouble(opts: GenieOneMcpDoubleOptions) {
   const active = new Map<string, ResponseState>(); // conversation id -> unfinished response
   const log: RecordedCall[] = [];
   const accepted: RecordedCall[] = [];
+  const violations: string[] = [];
   let seq = 0;
   let asked = 0;
   let pollsInFlight = 0;
@@ -312,12 +352,14 @@ export function createGenieOneMcpDouble(opts: GenieOneMcpDoubleOptions) {
       state.cancelled = true;
       active.delete(cid);
     }
-    return ok({ conversation_id: cid, cancelled: Boolean(state) });
+    // Best-effort and conversation-scoped: the status never says that the turn stopped.
+    return ok({ conversation_id: cid, status: 'cancellation_requested' });
   }
 
   async function call(tool: string, rawArgs: unknown): Promise<McpCallResult> {
     const args = asArgs(rawArgs);
     log.push({ tool, args: { ...args } });
+    violations.push(...contractProblems(tool, args));
     const isPoll = tool === 'genie_poll_response';
     if (isPoll) peakPolls = Math.max(peakPolls, ++pollsInFlight);
     try {
@@ -355,7 +397,11 @@ export function createGenieOneMcpDouble(opts: GenieOneMcpDoubleOptions) {
         });
       case 'tools/list':
         return reply({
-          tools: GENIE_ONE_TOOLS.map((name) => ({ name, inputSchema: { type: 'object' } })),
+          tools: GENIE_TOOL_CONTRACTS.map((t) => ({
+            name: t.name,
+            description: t.description,
+            inputSchema: t.inputSchema,
+          })),
         });
       case 'tools/call': {
         const p = asArgs(req.params);
@@ -386,5 +432,7 @@ export function createGenieOneMcpDouble(opts: GenieOneMcpDoubleOptions) {
     polls: (): RecordedCall[] => log.filter((c) => c.tool === 'genie_poll_response'),
     /** The peak number of genie_poll_response calls open at one time (G-07b wants 1). */
     maxConcurrentPolls: () => peakPolls,
+    /** Every tools/call that broke its genie-tools.json input schema, in order. */
+    contractViolations: (): string[] => [...violations],
   };
 }
