@@ -5,9 +5,13 @@
   "description": "Question sanitizer, secret guard and message caps for the Bottle brain window (G-47, G-36, G-30a..c).",
   "type": "module",
   "license": "SEE LICENSE IN ../../LICENSE",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "main": "./src/index.ts",
-  "exports": { ".": "./src/index.ts" },
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit"

@@ -111,7 +111,8 @@ function scan(ix: Index, from: number, to: number, depth: number): string {
         if (lineBlank && next === ':') {
           // A reference definition: drop the line, and the next one when the destination is there.
           let k = Math.min(at(ix.nextNewline, j + 2, s.length), to);
-          if (s.slice(j + 2, k).trim() === '' && k < to) k = Math.min(at(ix.nextNewline, k + 1, s.length), to);
+          if (s.slice(j + 2, k).trim() === '' && k < to)
+            k = Math.min(at(ix.nextNewline, k + 1, s.length), to);
           i = k;
           continue;
         }

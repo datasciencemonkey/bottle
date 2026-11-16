@@ -16,7 +16,8 @@ export type PrepareResult =
   | ({ ok: true } & ComposedMessage)
   | Blocked<'secret' | 'empty' | 'message_chars' | 'message_bytes'>;
 
-const SECRET_TEXT = 'This question looks like it contains a secret (a token or a key), so Bottle did not send it. Remove it and try again.';
+const SECRET_TEXT =
+  'This question looks like it contains a secret (a token or a key), so Bottle did not send it. Remove it and try again.';
 
 /**
  * The full pre-send pipeline: secret check (G-36) on the raw, the de-invisibled and the
@@ -25,13 +26,22 @@ const SECRET_TEXT = 'This question looks like it contains a secret (a token or a
 export function prepareAsk(input: { question: string; preamble?: ContextPreamble }): PrepareResult {
   const sanitized = sanitizeQuestion(input.question);
   for (const candidate of [input.question, stripInvisible(input.question), sanitized]) {
-    if (findSecret(candidate)) return { ok: false, code: 'SECRET_IN_QUESTION', reason: 'secret', userText: SECRET_TEXT };
+    if (findSecret(candidate))
+      return { ok: false, code: 'SECRET_IN_QUESTION', reason: 'secret', userText: SECRET_TEXT };
   }
   if (sanitized === '') {
-    return { ok: false, code: 'CLIENT_BUG', reason: 'empty', userText: 'There is no question to send.' };
+    return {
+      ok: false,
+      code: 'CLIENT_BUG',
+      reason: 'empty',
+      userText: 'There is no question to send.',
+    };
   }
   const capped = capQuestion(sanitized);
   const composed = composeMessage(capped.text, input.preamble);
   if (!composed.ok) return composed;
-  return { ...composed, notices: capped.notice ? [capped.notice, ...composed.notices] : composed.notices };
+  return {
+    ...composed,
+    notices: capped.notice ? [capped.notice, ...composed.notices] : composed.notices,
+  };
 }

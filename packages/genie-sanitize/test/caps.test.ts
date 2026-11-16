@@ -1,12 +1,27 @@
 import { describe, expect, it } from 'vitest';
 import {
-  capQuestion, charCount, checkByteLimit, composeMessage, prepareAsk, renderMessage, utf8ByteLength,
-  MESSAGE_MAX_BYTES, MESSAGE_MAX_CHARS, QUESTION_MAX_CHARS, type ContextPreamble,
+  capQuestion,
+  charCount,
+  checkByteLimit,
+  composeMessage,
+  prepareAsk,
+  renderMessage,
+  utf8ByteLength,
+  MESSAGE_MAX_BYTES,
+  MESSAGE_MAX_CHARS,
+  QUESTION_MAX_CHARS,
+  type ContextPreamble,
 } from '../src/index.ts';
 
 const HEADER = 'Context (from my notes, may be wrong):' as const;
 function preamble(texts: string[]): ContextPreamble {
-  const items = texts.map((text, i) => ({ id: `item-${i + 1}`, text, source: 'you' as const, ts: i, truncated: false }));
+  const items = texts.map((text, i) => ({
+    id: `item-${i + 1}`,
+    text,
+    source: 'you' as const,
+    ts: i,
+    truncated: false,
+  }));
   return { header: HEADER, items, chars: 0 };
 }
 const words = (n: number, w = 'word') => Array.from({ length: n }, () => w).join(' ');
@@ -127,8 +142,16 @@ describe('whole message caps', () => {
 
   it('[G-30c] the byte guard blocks a message over 25,000 UTF-8 bytes', () => {
     const r = checkByteLimit('\u{1F600}'.repeat(6_251)); // 25,004 bytes
-    expect(r).toEqual({ ok: false, code: 'CLIENT_BUG', reason: 'message_bytes', userText: expect.any(String) });
-    expect(checkByteLimit('\u{1F600}'.repeat(6_250))).toEqual({ ok: true, bytes: MESSAGE_MAX_BYTES });
+    expect(r).toEqual({
+      ok: false,
+      code: 'CLIENT_BUG',
+      reason: 'message_bytes',
+      userText: expect.any(String),
+    });
+    expect(checkByteLimit('\u{1F600}'.repeat(6_250))).toEqual({
+      ok: true,
+      bytes: MESSAGE_MAX_BYTES,
+    });
   });
 
   it('[G-30c] every composed message reports its byte size within the guard', () => {

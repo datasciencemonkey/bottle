@@ -33,7 +33,10 @@ describe('findSecret and the SECRET_IN_QUESTION block', () => {
   });
 
   it('[G-36] blocks a secret that hides inside a markdown link or an HTML attribute', () => {
-    for (const q of [`see [here](https://x.invalid/?t=${FAKE.ghp})`, `<a title="${FAKE.akia}">x</a>`]) {
+    for (const q of [
+      `see [here](https://x.invalid/?t=${FAKE.ghp})`,
+      `<a title="${FAKE.akia}">x</a>`,
+    ]) {
       const r = prepareAsk({ question: q });
       expect(r.ok).toBe(false);
       if (!r.ok) expect(r.code).toBe('SECRET_IN_QUESTION');

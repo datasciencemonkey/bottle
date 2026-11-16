@@ -1,7 +1,13 @@
 /** The preamble shape of research/final-requirements.md section 4.7 (built by the ContextAssembler). */
 export interface ContextPreamble {
   header: 'Context (from my notes, may be wrong):';
-  items: { id: string; text: string; source: 'you' | 'confirmed'; ts: number; truncated: boolean }[];
+  items: {
+    id: string;
+    text: string;
+    source: 'you' | 'confirmed';
+    ts: number;
+    truncated: boolean;
+  }[];
   chars: number;
 }
 

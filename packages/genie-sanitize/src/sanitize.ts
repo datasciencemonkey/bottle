@@ -5,7 +5,9 @@
  */
 
 /** C0 and C1 controls except tab and newline, all Unicode format characters (Cf: zero-width, bidi, tags, soft hyphen). */
-const INVISIBLE = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\p{Cf}\u00AD\u061C\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/gu;
+// eslint-disable-next-line no-control-regex -- G-47: matching control characters is the purpose of this pattern.
+const INVISIBLE =
+  /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\p{Cf}\u00AD\u061C\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/gu;
 
 import { stripMarkdownLinks } from './links.ts';
 

@@ -7,9 +7,7 @@ export const MESSAGE_MAX_BYTES = 25_000;
 
 /** Counts characters as Unicode code points. */
 export function charCount(text: string): number {
-  let n = 0;
-  for (const _ of text) n++;
-  return n;
+  return Array.from(text).length;
 }
 
 /** UTF-8 byte length; a lone surrogate counts 3 bytes, as its U+FFFD replacement does. */
@@ -22,7 +20,11 @@ export function utf8ByteLength(text: string): number {
   return n;
 }
 
-export interface CappedQuestion { text: string; cut: boolean; notice?: string }
+export interface CappedQuestion {
+  text: string;
+  cut: boolean;
+  notice?: string;
+}
 
 /** G-30a: cuts the sanitized question to 1,000 chars at a word edge, with a notice. */
 export function capQuestion(text: string): CappedQuestion {
@@ -54,7 +56,12 @@ export type ByteCheck = { ok: true; bytes: number } | Blocked<'message_bytes'>;
 export function checkByteLimit(text: string): ByteCheck {
   const bytes = utf8ByteLength(text);
   if (bytes <= MESSAGE_MAX_BYTES) return { ok: true, bytes };
-  return { ok: false, code: 'CLIENT_BUG', reason: 'message_bytes', userText: 'This message is too large to send to Genie.' };
+  return {
+    ok: false,
+    code: 'CLIENT_BUG',
+    reason: 'message_bytes',
+    userText: 'This message is too large to send to Genie.',
+  };
 }
 
 export interface ComposedMessage {
@@ -67,7 +74,8 @@ export interface ComposedMessage {
   bytes: number;
 }
 
-export type ComposeResult = ({ ok: true } & ComposedMessage) | Blocked<'message_chars' | 'message_bytes'>;
+export type ComposeResult =
+  ({ ok: true } & ComposedMessage) | Blocked<'message_chars' | 'message_bytes'>;
 
 /**
  * G-30b and G-30c: builds the whole message. Over 2,000 chars, it drops preamble items
@@ -76,12 +84,18 @@ export type ComposeResult = ({ ok: true } & ComposedMessage) | Blocked<'message_
 export function composeMessage(question: string, preamble?: ContextPreamble): ComposeResult {
   const items = preamble ? [...preamble.items] : [];
   const droppedItemIds: string[] = [];
-  const kept = (): ContextPreamble | undefined => (preamble && items.length > 0 ? { ...preamble, items } : undefined);
+  const kept = (): ContextPreamble | undefined =>
+    preamble && items.length > 0 ? { ...preamble, items } : undefined;
   let text = renderMessage(question, kept());
   while (charCount(text) > MESSAGE_MAX_CHARS) {
     const last = items.pop();
     if (!last) {
-      return { ok: false, code: 'CLIENT_BUG', reason: 'message_chars', userText: 'This question is too long to send to Genie.' };
+      return {
+        ok: false,
+        code: 'CLIENT_BUG',
+        reason: 'message_chars',
+        userText: 'This question is too long to send to Genie.',
+      };
     }
     droppedItemIds.push(last.id);
     text = renderMessage(question, kept());
@@ -90,7 +104,9 @@ export function composeMessage(question: string, preamble?: ContextPreamble): Co
   if (!bytes.ok) return bytes;
   const p = kept();
   const notices = droppedItemIds.length
-    ? [`Bottle left out ${droppedItemIds.length} context item(s) to keep the message within 2,000 characters.`]
+    ? [
+        `Bottle left out ${droppedItemIds.length} context item(s) to keep the message within 2,000 characters.`,
+      ]
     : [];
   return {
     ok: true,
