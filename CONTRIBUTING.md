@@ -66,7 +66,9 @@ pnpm tauri build --debug        # macOS or Windows app bundle
 uv run --no-project --with pytest --with pyyaml pytest scripts/tests -q   # when scripts/tests exists
 ```
 
-CI runs these commands on macOS (arm64) and Windows in `.github/workflows/app-ci.yml`. It also builds offline from the lockfiles (AT-37) and packages unsigned debug installers with a SHA-256 file each. The signing and notarization steps run only when the `APPLE_*` and `WINDOWS_*` secrets exist.
+On macOS, run `scripts/pre-push.sh` before every push, and paste its summary into the PR.
+
+CI runs these commands on Windows for each PR, and on macOS (arm64) and Windows on push to main, nightly and on dispatch, in `.github/workflows/app-ci.yml`. It also builds offline from the lockfiles (AT-37) and packages unsigned debug installers with a SHA-256 file each. The signing and notarization steps run only when the `APPLE_*` and `WINDOWS_*` secrets exist.
 
 ## Pull requests and the merge gate
 
