@@ -140,18 +140,67 @@ impl WindowLedger {
     }
 }
 
+/// The platform step that turns a built window into its native kind and shows it.
+/// On macOS, `macos_panel::MacPanelStyle` makes each MOG window a non-activating NSPanel
+/// (MOG-02). Tests use a double, because the Tauri mock runtime has no real window.
+pub trait NativeWindowStyle<R: tauri::Runtime>: Send + Sync {
+    /// Called once, after the window is built and before it shows.
+    fn style(&self, window: &tauri::WebviewWindow<R>, kind: &WindowKind)
+        -> Result<(), WindowError>;
+    /// Show the window. It must not activate Bottle or take focus for a MOG window.
+    fn show(&self, window: &tauri::WebviewWindow<R>, kind: &WindowKind) -> Result<(), WindowError>;
+}
+
+/// No native step: Tauri shows the window. Used on platforms without a native style yet.
+/// TODO(#80): the Windows `WS_EX_NOACTIVATE` style.
+pub struct PlainStyle;
+
+impl<R: tauri::Runtime> NativeWindowStyle<R> for PlainStyle {
+    fn style(&self, _: &tauri::WebviewWindow<R>, _: &WindowKind) -> Result<(), WindowError> {
+        Ok(())
+    }
+
+    fn show(&self, window: &tauri::WebviewWindow<R>, _: &WindowKind) -> Result<(), WindowError> {
+        window.show().map_err(|_| WindowError::HostFailed)
+    }
+}
+
 /// The R11 host for the Tauri shell. The app keeps one instance as managed state.
 pub struct TauriWindowHost<R: tauri::Runtime> {
     app: tauri::AppHandle<R>,
     ledger: Mutex<WindowLedger>,
+    native: Box<dyn NativeWindowStyle<R>>,
 }
 
 impl<R: tauri::Runtime> TauriWindowHost<R> {
+    /// A host with no native window step (`PlainStyle`).
     pub fn new(app: tauri::AppHandle<R>) -> Self {
+        Self::with_style(app, Box::new(PlainStyle))
+    }
+
+    /// A host that applies `native` to every window it makes.
+    pub fn with_style(app: tauri::AppHandle<R>, native: Box<dyn NativeWindowStyle<R>>) -> Self {
         Self {
             app,
             ledger: Mutex::new(WindowLedger::default()),
+            native,
         }
+    }
+
+    /// Build a window hidden if it is a panel, apply the native step, then show it.
+    fn make(&self, kind: &WindowKind) -> Result<tauri::WebviewWindow<R>, WindowError> {
+        let w =
+            windows::build(&self.app, &kind.build_spec()).map_err(|_| WindowError::HostFailed)?;
+        // A MOG window that is not a panel could take focus: do not keep a half-made window.
+        if let Err(e) = self
+            .native
+            .style(&w, kind)
+            .and_then(|()| self.native.show(&w, kind))
+        {
+            let _ = w.destroy();
+            return Err(e);
+        }
+        Ok(w)
     }
 
     fn ledger(&self) -> std::sync::MutexGuard<'_, WindowLedger> {
@@ -172,14 +221,14 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
             OpenOutcome::AlreadyOpen => {
                 let kind = WindowKind::Mog(mog_id.to_owned());
                 if let Some(w) = self.window(&kind) {
-                    return w.show().map_err(|_| WindowError::HostFailed);
+                    return self.native.show(&w, &kind);
                 }
                 kind
             }
         };
-        if windows::build(&self.app, &kind.spec()).is_err() {
+        if let Err(e) = self.make(&kind) {
             self.ledger().close_mog(mog_id);
-            return Err(WindowError::HostFailed);
+            return Err(e);
         }
         Ok(())
     }
@@ -214,8 +263,10 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
     pub fn show_card(&self, mog_id: &str) -> Result<(), WindowError> {
         let kind = self.ledger().show_card(mog_id)?;
         // The ledger lock is released before the window is built.
-        let w = windows::build(&self.app, &kind.spec()).map_err(|_| WindowError::HostFailed)?;
-        w.show().map_err(|_| WindowError::HostFailed)
+        match self.window(&kind) {
+            Some(w) => self.native.show(&w, &kind),
+            None => self.make(&kind).map(|_| ()),
+        }
     }
 
     /// Hide the card window of `mog_id`. The reaper of #78 destroys it later.

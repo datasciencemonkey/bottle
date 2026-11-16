@@ -161,6 +161,7 @@ dependencies = [
 name = "bottle"
 version = "0.1.0"
 dependencies = [
+ "block2",
  "glob",
  "mog-core",
  "objc2",

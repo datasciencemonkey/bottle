@@ -1,0 +1,9 @@
+/* MOG-01a: the MOG page paints nothing, so the desktop shows through every pixel outside the
+   mascot. The window and the WebView are transparent too (src-tauri, ADR 0009). */
+html,
+body,
+#root {
+  background: transparent;
+  margin: 0;
+  overflow: hidden;
+}

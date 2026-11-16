@@ -105,6 +105,7 @@ Add one row for each Bottle file that holds adapted Handy code.
 | `crates/mog-core/src/hotkey_macos.rs` | `src-tauri/src/secure_input.rs` |
 | `spikes/sp-03/src/clamshell.rs` | `src-tauri/src/helpers/clamshell.rs` |
 | `spikes/sp-03/src/secure_input.rs` | `src-tauri/src/secure_input.rs` |
+| `src-tauri/src/macos_panel.rs` | `src-tauri/src/overlay.rs` |
 
 ## NVIDIA Parakeet TDT 0.6B v3 (weights, CC-BY-4.0)
 

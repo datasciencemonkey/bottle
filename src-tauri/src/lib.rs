@@ -5,6 +5,9 @@
 
 pub mod hotkey_host;
 pub mod ipc;
+#[cfg(target_os = "macos")]
+pub mod macos_panel;
+pub mod mog_drag;
 pub mod window_host;
 pub mod windows;
 
@@ -35,7 +38,12 @@ pub fn linked_core_version() -> &'static str {
 pub fn run() {
     let demo =
         cfg!(debug_assertions) && std::env::var("BOTTLE_DEMO_WINDOWS").is_ok_and(|v| v == "1");
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // MOG-01b: the tao default (`true`) activates Bottle at launch and takes the frontmost app
+    // away from the user (SP-01 section 4.2).
+    #[cfg(target_os = "macos")]
+    let builder = builder.activate_ignoring_other_apps(false);
+    builder
         .manage(ipc::BrainChannel::default())
         .invoke_handler(ipc::handler)
         // R1: an opened MOG or card view moves the talk-key target (#305).
@@ -52,6 +60,19 @@ pub fn run() {
         })
         .setup(move |app| {
             let handle = app.handle();
+            // MOG-02 / MOG-01c: MOG windows are non-activating NSPanels that a native drag moves.
+            #[cfg(target_os = "macos")]
+            {
+                use objc2::MainThreadMarker;
+                if let Some(mtm) = MainThreadMarker::new() {
+                    macos_panel::install_drag_monitor(mtm);
+                }
+                app.manage(TauriWindowHost::with_style(
+                    handle.clone(),
+                    Box::new(macos_panel::MacPanelStyle),
+                ));
+            }
+            #[cfg(not(target_os = "macos"))]
             app.manage(TauriWindowHost::new(handle.clone()));
             // R1: start the talk key. This never prompts (CAP-36, #305). If the forwarder
             // thread cannot start, the app still runs without the talk key.

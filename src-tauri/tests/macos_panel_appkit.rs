@@ -29,7 +29,11 @@ fn main() {
     check(
         "mog_02_appkit_status_level_is_25",
         appkit_level(PanelLevel::Status) == 25 && appkit_level(PanelLevel::Floating) == 3,
-        format!("{} {}", appkit_level(PanelLevel::Status), appkit_level(PanelLevel::Floating)),
+        format!(
+            "{} {}",
+            appkit_level(PanelLevel::Status),
+            appkit_level(PanelLevel::Floating)
+        ),
     );
     let spec = WindowKind::mog("m1").unwrap().panel().unwrap();
     // canJoinAllSpaces 1<<0 | stationary 1<<4 | ignoresCycle 1<<6 | fullScreenAuxiliary 1<<8.
@@ -59,7 +63,21 @@ fn main() {
         format!("{before:?}"),
     );
     // SAFETY: as above.
-    unsafe { apply_panel(&window, &spec) };
+    let applied = unsafe { apply_panel(&window, &spec) };
+    check(
+        "mog_02_panel_step_accepts_the_mog_spec",
+        applied.is_ok(),
+        format!("{applied:?}"),
+    );
+    let mut keyed = spec;
+    keyed.can_become_key = true;
+    // SAFETY: as above.
+    let refused = unsafe { apply_panel(&window, &keyed) };
+    check(
+        "mog_02_panel_step_refuses_a_key_capable_spec",
+        refused.is_err(),
+        format!("{refused:?}"),
+    );
     let got = read_panel(&window);
     let want = PanelReadback {
         is_panel: true,
@@ -79,7 +97,10 @@ fn main() {
     );
     window.close();
 
-    println!("\ntest result: {}. {failed} failed", if failed == 0 { "ok" } else { "FAILED" });
+    println!(
+        "\ntest result: {}. {failed} failed",
+        if failed == 0 { "ok" } else { "FAILED" }
+    );
     if failed > 0 {
         std::process::exit(101);
     }

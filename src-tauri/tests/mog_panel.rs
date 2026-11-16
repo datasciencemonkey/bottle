@@ -27,7 +27,10 @@ fn mog_01a_mog_spec_is_transparent_frameless_on_top_without_shadow() {
     assert!(spec.transparent, "the desktop must show through");
     assert!(!spec.decorations, "frameless");
     assert!(spec.always_on_top);
-    assert!(!spec.shadow, "a shadow draws a halo round the transparent pixels");
+    assert!(
+        !spec.shadow,
+        "a shadow draws a halo round the transparent pixels"
+    );
 }
 
 #[test]
@@ -47,9 +50,16 @@ fn mog_01b_mog_spec_never_takes_focus_and_accepts_the_first_click() {
 fn mog_01b_mog_is_built_hidden_and_shown_by_the_native_style() {
     // A visible build would order the window front before it is a non-activating panel.
     assert!(mog().spec().visible, "the MOG shows once it is open");
-    assert!(!mog().build_spec().visible, "built hidden, then styled, then shown");
+    assert!(
+        !mog().build_spec().visible,
+        "built hidden, then styled, then shown"
+    );
     let card = WindowKind::card(ID).unwrap();
-    assert_eq!(card.build_spec(), card.spec(), "no MOG panel step for a card");
+    assert_eq!(
+        card.build_spec(),
+        card.spec(),
+        "no MOG panel step for a card"
+    );
     assert_eq!(WindowKind::Hub.build_spec(), WindowKind::Hub.spec());
 }
 
@@ -110,8 +120,14 @@ fn mog_02_macos_panel_code_is_gated_to_macos() {
         .split("[target.'cfg(target_os = \"macos\")'.dependencies]")
         .next()
         .unwrap();
-    assert!(!before.contains("objc2"), "objc2 must not be a dependency on every OS");
-    assert!(!cargo.contains("git ="), "no git dependency (supply chain, #160)");
+    assert!(
+        !before.contains("objc2"),
+        "objc2 must not be a dependency on every OS"
+    );
+    assert!(
+        !cargo.contains("git ="),
+        "no git dependency (supply chain, #160)"
+    );
 }
 
 // ---------- MOG-02 / MOG-01b: the host applies the native style ----------
@@ -126,15 +142,25 @@ impl Recorder {
 }
 
 impl<R: tauri::Runtime> NativeWindowStyle<R> for Recorder {
-    fn style(&self, window: &tauri::WebviewWindow<R>, kind: &WindowKind) -> Result<(), WindowError> {
+    fn style(
+        &self,
+        window: &tauri::WebviewWindow<R>,
+        kind: &WindowKind,
+    ) -> Result<(), WindowError> {
         assert_eq!(window.label(), kind.label());
-        self.0.lock().unwrap().push(format!("style {}", kind.label()));
+        self.0
+            .lock()
+            .unwrap()
+            .push(format!("style {}", kind.label()));
         Ok(())
     }
 
     fn show(&self, window: &tauri::WebviewWindow<R>, kind: &WindowKind) -> Result<(), WindowError> {
         assert_eq!(window.label(), kind.label());
-        self.0.lock().unwrap().push(format!("show {}", kind.label()));
+        self.0
+            .lock()
+            .unwrap()
+            .push(format!("show {}", kind.label()));
         Ok(())
     }
 }
@@ -169,7 +195,11 @@ fn mog_02_host_frees_the_slot_when_the_panel_step_fails() {
     let app = tauri::test::mock_app();
     let host = TauriWindowHost::with_style(app.handle().clone(), Box::new(Refuse));
     assert_eq!(host.open_mog_window("m1"), Err(WindowError::HostFailed));
-    assert_eq!(host.active_mogs(), 0, "a MOG that is not a panel must not stay open");
+    assert_eq!(
+        host.active_mogs(),
+        0,
+        "a MOG that is not a panel must not stay open"
+    );
     let left = app.get_webview_window("mog-m1");
     assert!(left.is_none() || left.unwrap().destroy().is_ok());
 }
@@ -238,7 +268,10 @@ fn mog_01c_the_threshold_is_the_distance_not_one_axis() {
     let mut g = DragGesture::default();
     g.on(MouseInput::Down { x: 0.0, y: 0.0 });
     // 3 and 3 is 4.24 pt.
-    assert_eq!(g.on(MouseInput::Dragged { x: 3.0, y: -3.0 }), Verdict::StartDrag);
+    assert_eq!(
+        g.on(MouseInput::Dragged { x: 3.0, y: -3.0 }),
+        Verdict::StartDrag
+    );
 }
 
 #[test]
@@ -265,7 +298,10 @@ fn mog_01c_a_drag_swallows_the_mouse_up_so_no_click_and_no_capture_starts() {
 #[test]
 fn mog_01c_moves_and_ups_without_a_press_pass_through() {
     let mut g = DragGesture::default();
-    assert_eq!(g.on(MouseInput::Dragged { x: 99.0, y: 99.0 }), Verdict::Pass);
+    assert_eq!(
+        g.on(MouseInput::Dragged { x: 99.0, y: 99.0 }),
+        Verdict::Pass
+    );
     assert_eq!(g.on(MouseInput::Up), Verdict::Pass);
     assert!(!g.is_dragging());
 }
