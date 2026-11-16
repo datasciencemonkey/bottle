@@ -293,14 +293,14 @@ def figure(slug, svgs, desc):
 
 # ---------------- mascot ----------------
 STATES = [
-    ("idle", "Cyan eyes, calm face. Ready, mic closed; also ask uncertain, needs input and session recording (with overlays)."),
-    ("listening", "Green eyes, green listening ring, one arm up. PTT down or held, hands-free capture."),
-    ("processing", "Violet eyes and a dot pattern. Transcribing, cleaning, routing, preview, main agent turn, progress, rate-limited."),
-    ("answering", "Amber eyes, arm out. Partial answer and blurb reveal (1.2 s or less)."),
-    ("success", "Green happy eyes and sparkles. Inserted (1.2 s), completed (2.5 s), memory answer (2.5 s)."),
-    ("error", "Red X eyes, dim star. Failed (3 s), login required (3 s); attention if the user must act."),
-    ("sleeping", "Closed eyes and Z marks. MOG paused or dozing."),
-    ("attention + recording", "Overlays over any mood: a \"?\" bubble (attention, UX-03) and a red ring with a REC dot (recording, UX-04a)."),
+    ("idle", "Hides in the lamp, blue eyes peeking over the rim, glancing around. Ready, mic closed. Hover: climbs out, looks around, hops back in."),
+    ("listening", "Green eyes, face up, both hands cupped to its ears; the ring follows the mic level. PTT down or held, hands-free capture."),
+    ("processing", "Sinks back, touches its head with its eyes closed, then a thinking pose with pink eyes, dots and orbiting sparkles. Transcribing, cleaning, routing, preview, main agent turn, progress, rate-limited."),
+    ("answering", "Climbs out on its legs, stands on the rim, amber eyes, talks and presents. Partial answer and blurb reveal (1.2 s or less)."),
+    ("success", "Stands on the rim, happy eyes, arms up, hop and sparkle burst. Inserted (1.2 s), completed (2.5 s), memory answer (2.5 s)."),
+    ("error", "Face up, X eyes, shakes its head and shrugs, the star falls. Failed (3 s), login required (3 s); attention if the user must act."),
+    ("sleeping", "Fully inside the lamp; Z marks float up out of the mouth. MOG paused or dozing."),
+    ("attention + recording", "Overlays over any mood. Attention: pops up with a curious tilt and a \"?\" bubble (UX-03). Recording: wears headphones, with a red ring and a REC dot (UX-04a)."),
 ]
 def mascot_html():
     b64 = base64.b64encode(open(SHEET, "rb").read()).decode()

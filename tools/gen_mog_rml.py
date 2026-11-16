@@ -20,6 +20,19 @@ It is driven entirely by a view model so any host
   attention bool "?" bubble over any mood (needs input, sign-in), UX-03
   recording bool red ring and REC dot over any mood (meeting session), UX-04a
 
+Behaviour per mood (Section 4.8 state-to-mood table):
+  idle        hides in the lamp, eyes peeking over the rim, glances around
+  listening   face up, both hands cupped to its ears, leaning in
+  processing  sinks back, touches its head and closes its eyes, then thinks
+              (hand to cheek, eyes up, dots, orbiting sparkles)
+  answering   climbs out on its legs, stands on the rim and talks
+  success     stands on the rim, cheers and hops
+  error       face up, X eyes, shakes its head and shrugs
+  sleeping    fully inside the lamp, Zz float up out of the mouth
+  attention   pops up higher with a curious tilt and a "?" bubble
+  recording   wears headphones, plus the red ring and REC dot
+  hover       (idle only) climbs out, looks left and right, hops back in
+
 At load: mood=idle, level=0, hover=false, demo=false, attention=false,
 recording=false (D64, UX-02b).
 
@@ -93,6 +106,7 @@ ENUMV = {m: nid() for m in MOODS}
 # New ids are allocated after the old ones so the existing ids stay unchanged.
 I.update({k: nid() for k in [
     "p_attention", "p_recording", "attn", "rec", "recdot", "lamp", "lampglow",
+    "rise", "attnlift", "peek", "legL", "legR", "phones", "clip", "hit",
 ]})
 
 # ---------------------------------------------------------------- helpers
@@ -136,9 +150,10 @@ def bind(path_prop, key, converter=None, write=False):
 
 # ---------------------------------------------------------------- scene
 def sparkle_group():
-    # Floating genie "jewel" above the head, plus a halo glow.
+    # Floating genie "jewel" above the head, plus a halo glow. Its height follows the
+    # head per mood (spY), so it stays just above the genie in or out of the lamp.
     jewel = (
-        f'<Node x="0" y="-124" name="Sparkle" id="{I["sparkle"]}">'
+        f'<Node x="0" y="-24" name="Sparkle" id="{I["sparkle"]}">'
         f'<Shape name="Jewel" id="{I["sparkle_shape"]}">{star4(34)}'
         f'<Fill name="Fill"><RadialGradient startX="0" startY="0" endX="17" endY="0" name="G">'
         f'<GradientStop colorValue="{GOLD_L}" position="0"/><GradientStop colorValue="{GOLD}" position="1"/>'
@@ -147,26 +162,26 @@ def sparkle_group():
         f'<Fill fillRule="clockwise" name="Glow"><SolidColor colorValue="88FCBA33" name="Color"/>'
         f'<Feather strength="14" name="F"/></Fill></Shape>'
         f'</Node>')
-    # Orbiting sparkles shown while processing.
+    # Orbiting sparkles around the thinking face (processing).
     orb = []
-    for i, (r, s) in enumerate([(132, 22), (132, 16), (132, 12)]):
+    for i, (r, s) in enumerate([(118, 22), (118, 16), (118, 12)]):
         a = i * TAU / 3 - math.pi / 2
         orb.append(f'<Shape x="{r*math.cos(a):.2f}" y="{r*math.sin(a):.2f}" name="Orb{i+1}">{star4(s)}{fill(GOLD)}</Shape>')
-    orbit = f'<Node x="0" y="-6" opacity="0" name="Orbit" id="{I["orbit"]}">{"".join(orb)}</Node>'
-    # Success burst: ring of small sparkles + confetti dots.
+    orbit = f'<Node x="0" y="28" opacity="0" name="Orbit" id="{I["orbit"]}">{"".join(orb)}</Node>'
+    # Success burst around the standing genie.
     b = []
     for i in range(8):
         a = i * TAU / 8
-        r = 128 if i % 2 == 0 else 112
+        r = 112 if i % 2 == 0 else 98
         sz = 20 if i % 2 == 0 else 12
         col = GOLD if i % 2 == 0 else GREEN
         b.append(f'<Shape x="{r*math.cos(a):.2f}" y="{r*math.sin(a):.2f}" name="Burst{i+1}">{star4(sz)}{fill(col)}</Shape>')
-    burst = f'<Node x="0" y="-10" opacity="0" name="Burst" id="{I["burst"]}">{"".join(b)}</Node>'
-    # Sleeping Zz.
+    burst = f'<Node x="0" y="-56" opacity="0" name="Burst" id="{I["burst"]}">{"".join(b)}</Node>'
+    # Sleeping Zz, rising out of the lamp mouth.
     z = lambda s: polyline([(-s * 1.3, -s * 1.3), (s * 1.3, -s * 1.3), (-s * 1.3, s * 1.3), (s * 1.3, s * 1.3)])
-    zz = (f'<Node x="78" y="-96" opacity="0" name="Zz" id="{I["zz"]}">'
+    zz = (f'<Node x="40" y="40" opacity="0" name="Zz" id="{I["zz"]}">'
           f'<Shape x="0" y="0" name="Z1">{z(9)}{stroke("FFC4CCD6", 6)}</Shape>'
-          f'<Shape x="24" y="-26" name="Z2">{z(6)}{stroke("FFC4CCD6", 5)}</Shape>'
+          f'<Shape x="26" y="-28" name="Z2">{z(6)}{stroke("FFC4CCD6", 5)}</Shape>'
           f'</Node>')
     return jewel + orbit + burst + zz
 
@@ -188,10 +203,11 @@ def face():
              f'{polyline([(21, -9), (39, 9)], name="R1")}{polyline([(39, -9), (21, 9)], name="R2")}'
              f'<Stroke thickness="6" cap="round" join="round" name="Stroke"><SolidColor colorValue="{MOOD_COLORS["error"]}" name="Color" id="{I["xeyes_col"]}"/></Stroke>'
              f'</Shape>')
-    sleepy = (f'<Shape opacity="0" name="SleepEyes" id="{I["sleepy"]}">'
+    # Closed eyes: sleeping, and the "close your eyes and think" beat of processing.
+    sleepy = (f'<Shape opacity="0" name="ClosedEyes" id="{I["sleepy"]}">'
               f'{polyline([(-42, 0), (-30, 5), (-18, 0)], radius=8, name="L")}'
               f'{polyline([(18, 0), (30, 5), (42, 0)], radius=8, name="R")}'
-              f'<Stroke thickness="5" cap="round" join="round" name="Stroke"><SolidColor colorValue="{MOOD_COLORS["sleeping"]}" name="Color" id="{I["sleepy_col"]}"/></Stroke>'
+              f'<Stroke thickness="6" cap="round" join="round" name="Stroke"><SolidColor colorValue="{MOOD_COLORS["sleeping"]}" name="Color" id="{I["sleepy_col"]}"/></Stroke>'
               f'</Shape>')
     look = f'<Node x="0" y="-6" name="EyesLook" id="{I["eyeslook"]}">{eyepair}{happy}{xeyes}{sleepy}</Node>'
     mouth = (f'<Shape x="0" y="24" name="Mouth" id="{I["mouth"]}">{rrect(18, 6, 3)}'
@@ -214,29 +230,52 @@ def face():
 
 
 def arm(side, aid):
+    # Pivot at the shoulder. Rotation swings the nub; scaleY stretches it (cartoon reach).
     x = -94 if side == "L" else 94
-    return (f'<Node x="{x}" y="22" name="Arm{side}" id="{aid}">'
+    return (f'<Node x="{x}" y="34" name="Arm{side}" id="{aid}">'
             f'<Shape x="0" y="18" name="Nub">{rrect(24, 42, 12)}'
             f'<Fill name="Fill"><LinearGradient startX="0" startY="-21" endX="0" endY="21" name="G">'
             f'<GradientStop colorValue="{PINK}" position="0"/><GradientStop colorValue="{CORAL}" position="1"/>'
             f'</LinearGradient></Fill></Shape></Node>')
 
 
+def leg(side, lid):
+    # Small legs with oat shoes, pivot at the hip. Seen only when the genie climbs out.
+    x = -34 if side == "L" else 34
+    return (f'<Node x="{x}" y="100" name="Leg{side}" id="{lid}">'
+            f'<Shape x="{-3 if side == "L" else 3}" y="31" name="Shoe">{ellipse(32, 15)}{fill(OAT)}'
+            f'<Stroke thickness="2" name="Edge"><SolidColor colorValue="{OAT_M}" name="Color"/></Stroke></Shape>'
+            f'<Shape x="0" y="14" name="Shin">{rrect(18, 32, 9)}{fill(CORAL)}</Shape></Node>')
+
+
+def headphones():
+    # Worn while a meeting session records (recording overlay): "I am listening to the meeting".
+    band = (f'<Shape name="Band">'
+            f'{polyline([(-96, -4), (-86, -52), (-46, -78), (0, -84), (46, -78), (86, -52), (96, -4)], radius=34)}'
+            f'{stroke(NAVY_800, 9)}</Shape>')
+    cups = "".join(
+        f'<Shape x="{x}" y="-2" name="Cup">{rrect(24, 44, 11)}{fill(NAVY_800)}'
+        f'<Stroke thickness="3" name="Edge"><SolidColor colorValue="{CORAL}" name="Color"/></Stroke></Shape>'
+        f'<Shape x="{x}" y="-12" name="CupLight">{ellipse(8, 8)}{fill(REC_RED)}</Shape>'
+        for x in (-98, 98))
+    return f'<Node opacity="0" name="Headphones" id="{I["phones"]}">{cups}{band}</Node>'
+
+
 def body():
-    # Soft genie body: pale pink at the top, Genie coral where it rises out of the lamp.
-    # The bottom of the body sits inside the lamp; the lamp front hides it.
+    # Soft chibi genie: pale pink at the top, Genie coral lower down, little legs.
     cheeks = "".join(
-        f'<Shape x="{x}" y="50" name="Cheek">{ellipse(24, 13)}'
+        f'<Shape x="{x}" y="52" name="Cheek">{ellipse(24, 13)}'
         f'<Fill fillRule="clockwise" name="Fill"><SolidColor colorValue="99FF5F46" name="Color"/>'
         f'<Feather strength="3" name="F"/></Fill></Shape>'
         for x in (-58, 58))
-    torso = (f'<Shape x="0" y="22" name="Body" id="{I["torso"]}">{rrect(188, 186, 86)}'
-             f'<Fill name="Fill"><LinearGradient startX="0" startY="-93" endX="0" endY="93" name="G">'
+    torso = (f'<Shape x="0" y="24" name="Body" id="{I["torso"]}">{rrect(188, 176, 84)}'
+             f'<Fill name="Fill"><LinearGradient startX="0" startY="-88" endX="0" endY="88" name="G">'
              f'<GradientStop colorValue="{PINK}" position="0.1"/><GradientStop colorValue="{PINK_M}" position="0.6"/>'
              f'<GradientStop colorValue="{CORAL}" position="1"/></LinearGradient></Fill></Shape>')
-    shine = f'<Shape x="-62" y="-44" name="Shine">{ellipse(18, 11)}{fill("88FFFFFF")}</Shape>'
+    shine = f'<Shape x="-60" y="-42" name="Shine">{ellipse(18, 11)}{fill("88FFFFFF")}</Shape>'
     return (f'<Node name="MoodBody" id="{I["moodbody"]}">'
-            f'{arm("L", I["armL"])}{arm("R", I["armR"])}{face()}{cheeks}{shine}{torso}</Node>')
+            f'{arm("L", I["armL"])}{arm("R", I["armR"])}{headphones()}{face()}{cheeks}{shine}{torso}'
+            f'{leg("L", I["legL"])}{leg("R", I["legR"])}</Node>')
 
 
 def lamp_front():
@@ -247,8 +286,7 @@ def lamp_front():
            f'<GradientStop colorValue="{OAT}" position="0"/><GradientStop colorValue="{OAT_M}" position="1"/>'
            f'</LinearGradient></Fill></Shape>')
     gleam = (f'<Shape x="-60" y="28" name="Gleam">{rrect(40, 9, 4.5)}'
-             f'<Fill name="Fill"><SolidColor colorValue="AAFABFBA" name="Color"/></Fill></Shape>'
-             )
+             f'<Fill name="Fill"><SolidColor colorValue="AAFABFBA" name="Color"/></Fill></Shape>')
     bowl = (f'<Shape x="0" y="0" name="Bowl">'
             f'{polyline([(-112, 0), (112, 0), (88, 66), (-88, 66)], closed=True, radius=36)}'
             f'<Fill name="Fill"><LinearGradient startX="0" startY="0" endX="0" endY="66" name="G">'
@@ -290,7 +328,7 @@ def attention():
               f'{fill(OAT)}</Shape>'
               f'<Shape x="-22" y="27" name="BubbleTail">{ellipse(15, 15)}'
               f'<Stroke thickness="4" name="Rim"><SolidColor colorValue="{CORAL}" name="Color"/></Stroke>{fill(OAT)}</Shape>')
-    return f'<Node x="104" y="-112" opacity="0" name="Attention" id="{I["attn"]}">{q}{bubble}</Node>'
+    return f'<Node x="118" y="-58" opacity="0" name="Attention" id="{I["attn"]}">{q}{bubble}</Node>'
 
 
 def recording():
@@ -302,8 +340,9 @@ def recording():
 
 
 def rings():
+    # Listening rings, centred on the face at its listening height (RISE["listening"]).
     r = lambda w, a, t: f'<Shape name="Ring">{ellipse(w, w)}{stroke(a, t)}</Shape>'
-    return (f'<Node x="0" y="-16" opacity="0" name="ListenRings" id="{I["rings"]}">'
+    return (f'<Node x="0" y="{RISE["listening"] - 6}" opacity="0" name="ListenRings" id="{I["rings"]}">'
             f'<Node name="LevelRing" id="{I["levelring"]}">'
             f'<DataBindContext sourcePathIds="{I["vm"]}-{I["p_level"]}" propertyKey="16" converterId="{I["conv_level"]}"/>'
             f'<DataBindContext sourcePathIds="{I["vm"]}-{I["p_level"]}" propertyKey="17" converterId="{I["conv_level"]}"/>'
@@ -315,18 +354,42 @@ def rings():
             f'{r(270, "7770C4AB", 5)}</Node>')
 
 
+# How far the genie sits below its "standing on the rim" height, per mood
+# (Mog-local y offset of the Rise node). The lamp rim clips everything below it.
+RISE = {
+    "sleeping": 200,   # fully inside the lamp
+    "idle": 72,        # hiding; only the eyes peek over the rim
+    "processing": 40,  # sunk back; only the face shows while it thinks
+    "error": 26,       # face up, shaking its head
+    "listening": 18,   # face and cheeks up, hands to its ears
+    "answering": -53,  # climbed out, standing on the rim
+    "success": -53,
+}
+ATTN_LIFT = -40        # attention: pops up a little higher to ask
+PEEK = RISE["answering"] - RISE["idle"]   # hover: climb from hiding to standing
+
+
 def scene_tree():
-    # Front to back: lamp front, genie (floats), lamp inside, shadow.
-    mog = (f'<Node x="200" y="186" name="Mog" id="{I["mog"]}">'
-           f'{attention()}{recording()}{sparkle_group()}'
-           f'<Node name="Squash" id="{I["squash"]}">{body()}</Node>'
-           f'{rings()}</Node>')
+    # Front to back: lamp front, genie (floats; clipped at the lamp rim), lamp inside, shadow.
+    genie = (f'<Node name="InLamp">'
+             f'<ClippingShape sourceId="{I["clip"]}" name="LampRimClip"/>'
+             f'<Node name="Rise" id="{I["rise"]}"><Node name="AttnLift" id="{I["attnlift"]}">'
+             f'<Node name="Peek" id="{I["peek"]}">'
+             f'<Node name="Squash" id="{I["squash"]}">{body()}</Node>'
+             f'</Node></Node></Node></Node>')
+    mog = (f'<Node x="200" y="185" name="Mog" id="{I["mog"]}">'
+           f'{attention()}{recording()}{sparkle_group()}{genie}{rings()}</Node>')
     shadow = (f'<Shape x="200" y="370" name="Shadow" id="{I["shadow"]}">{ellipse(150, 16)}'
               f'<Fill fillRule="clockwise" name="Fill"><SolidColor colorValue="44000000" name="Color"/>'
               f'<Feather strength="8" name="F"/></Fill></Shape>')
+    # The clip mask: everything above the middle of the lamp lip. It has no paint.
+    clip = (f'<Shape x="200" y="38" name="LampRimMask" id="{I["clip"]}">{rrect(800, 476, 0)}</Shape>')
+    # Invisible hit area over the lamp and the genie for the hover and poke listeners.
+    hit = (f'<Shape x="200" y="214" name="HitArea" id="{I["hit"]}">{rrect(250, 300, 40)}'
+           f'<Fill name="Fill"><SolidColor colorValue="00000000" name="Color"/></Fill></Shape>')
     # Rig scales the whole drawing so the mascot fills a small window (M = 112 px).
     return (f'<Node x="200" y="200" scaleX="1.1" scaleY="1.1" name="Rig">'
-            f'<Node x="-200" y="-200" name="RigOrigin">{lamp_front() + mog + lamp_inside() + shadow}</Node></Node>')
+            f'<Node x="-200" y="-200" name="RigOrigin">{hit + lamp_front() + mog + lamp_inside() + shadow + clip}</Node></Node>')
 
 
 # ---------------------------------------------------------------- animation
@@ -342,6 +405,9 @@ P = {
     "thinkO": (I["thinkdots"], "opacity", "d"),
     "dot1Y": (I["dot1"], "y", "d"), "dot2Y": (I["dot2"], "y", "d"), "dot3Y": (I["dot3"], "y", "d"),
     "armL": (I["armL"], "rotation", "d"), "armR": (I["armR"], "rotation", "d"),
+    "armLSY": (I["armL"], "scaleY", "d"), "armRSY": (I["armR"], "scaleY", "d"),
+    "legL": (I["legL"], "rotation", "d"), "legR": (I["legR"], "rotation", "d"),
+    "riseY": (I["rise"], "y", "d"),
     "bodyX": (I["moodbody"], "x", "d"), "bodyY": (I["moodbody"], "y", "d"),
     "bodyR": (I["moodbody"], "rotation", "d"), "bodySY": (I["moodbody"], "scaleY", "d"),
     "spY": (I["sparkle"], "y", "d"), "spR": (I["sparkle"], "rotation", "d"),
@@ -355,16 +421,21 @@ P = {
     "ringsS2": (I["rings"], "scaleY", "d"),
     "colL": (I["eyeL_col"], "colorValue", "c"), "colR": (I["eyeR_col"], "colorValue", "c"),
     "colM": (I["mouth_col"], "colorValue", "c"), "colG": (I["screen_glow"], "colorValue", "c"),
+    "colS": (I["sleepy_col"], "colorValue", "c"),
 }
 
+# Arm rotation: 0 hangs down; +pi points up. Right arm (+x): positive swings it up
+# and inward, negative swings it out. The left arm mirrors that.
 BASE = {
     "lookX": 0, "lookY": -6, "eyeSX": 1, "eyeSY": 1, "eyeO": 1, "happyO": 0, "xO": 0, "sleepO": 0,
     "mouthSX": 1, "mouthSY": 1, "mouthO": 1, "thinkO": 0, "dot1Y": 0, "dot2Y": 0, "dot3Y": 0,
-    "armL": 0.12, "armR": -0.12, "bodyX": 0, "bodyY": 0, "bodyR": 0, "bodySY": 1,
-    "spY": -124, "spR": 0, "spSX": 1, "spSY": 1, "spO": 1, "orbO": 0, "orbR": 0,
-    "burstO": 0, "burstS": 0.6, "burstS2": 0.6, "burstR": 0, "zzO": 0, "zzY": -96,
+    "armL": 0.12, "armR": -0.12, "armLSY": 1, "armRSY": 1, "legL": 0, "legR": 0,
+    "bodyX": 0, "bodyY": 0, "bodyR": 0, "bodySY": 1,
+    "spY": -24, "spR": 0, "spSX": 1, "spSY": 1, "spO": 1, "orbO": 0, "orbR": 0,
+    "burstO": 0, "burstS": 0.6, "burstS2": 0.6, "burstR": 0, "zzO": 0, "zzY": 40,
     "ringsO": 0, "ringsS": 1, "ringsS2": 1,
 }
+STAND_SP = -136   # sparkle height above the standing genie
 
 
 def glow(c):
@@ -372,55 +443,87 @@ def glow(c):
 
 
 def mood_spec(m):
+    """Return (loop spec, duration, loop mode, intro or None). An intro is (spec, duration):
+    a one-shot that plays when the mood starts, before the loop."""
     c = MOOD_COLORS[m]
     s = dict(BASE)
-    s.update(colL=c, colR=c, colM=c, colG=glow(c))
-    D = 120
-    loop = "loop"
+    s.update(colL=c, colR=c, colM=c, colG=glow(c), colS=c, riseY=RISE[m])
+    D, loop, intro = 120, "loop", None
     if m == "idle":
-        D = 180
-        s.update(spY=[(0, -124), (90, -132), (180, -124)], spR=[(0, -0.15), (90, 0.15), (180, -0.15)],
-                 armL=[(0, 0.12), (90, 0.2), (180, 0.12)], armR=[(0, -0.12), (90, -0.2), (180, -0.12)])
+        # Not doing anything: hide in the lamp, eyes peeking over the rim, glance around.
+        D = 240
+        s.update(lookX=[(0, 0), (150, 0), (160, -10), (184, -10), (194, 10), (220, 10), (230, 0), (240, 0)],
+                 spY=[(0, -24), (120, -32), (240, -24)], spR=[(0, -0.15), (120, 0.15), (240, -0.15)])
     elif m == "listening":
+        # PTT or hands-free: face up, both hands cupped to its ears, leaning in to listen.
         D = 90
         s.update(ringsO=1, ringsS=[(0, 0.96), (45, 1.06), (90, 0.96)], ringsS2=[(0, 0.96), (45, 1.06), (90, 0.96)],
                  eyeSX=1.12, eyeSY=1.18, lookY=-8, mouthSX=0.6, mouthSY=1.6,
-                 armR=[(0, -2.3), (45, -2.45), (90, -2.3)], armL=0.25, bodyR=-0.04,
-                 spY=-132, spSX=0.85, spSY=0.85)
+                 armL=[(0, -2.95), (45, -2.82), (90, -2.95)], armR=[(0, 2.95), (45, 2.82), (90, 2.95)],
+                 bodyR=[(0, -0.04), (45, 0.04), (90, -0.04)],
+                 spY=-84, spSX=0.85, spSY=0.85)
     elif m == "processing":
-        D = 120
-        s.update(orbO=1, orbR=[(0, 0, "linear"), (120, TAU)], spR=[(0, 0, "linear"), (120, TAU)],
-                 lookX=10, lookY=-12, eyeSX=0.9, eyeSY=0.55, mouthO=0, thinkO=1,
-                 dot1Y=[(0, 0), (20, -7), (40, 0), (120, 0)],
-                 dot2Y=[(0, 0), (20, 0), (40, -7), (60, 0), (120, 0)],
-                 dot3Y=[(0, 0), (40, 0), (60, -7), (80, 0), (120, 0)],
-                 armL=0.35, armR=-0.35, spY=-134)
+        # Sink back into the lamp, touch its head and close its eyes, then a thinking pose.
+        loop_think = dict(
+            armL=[(0, -1.75), (60, -1.6), (120, -1.75)], armLSY=1.15, armR=-0.12,
+            lookX=10, lookY=-12, eyeSX=0.9, eyeSY=0.55, mouthO=0, thinkO=1,
+            dot1Y=[(0, 0), (20, -7), (40, 0), (120, 0)],
+            dot2Y=[(0, 0), (20, 0), (40, -7), (60, 0), (120, 0)],
+            dot3Y=[(0, 0), (40, 0), (60, -7), (80, 0), (120, 0)],
+            orbO=1, orbR=[(0, 0, "linear"), (120, TAU)], spR=[(0, 0, "linear"), (120, TAU)],
+            spY=-60, bodyR=[(0, -0.03), (60, 0.03), (120, -0.03)])
+        i = dict(s)
+        i.update(armR=[(0, -0.12), (18, 2.6), (44, 2.6), (60, -0.12)],
+                 armRSY=[(0, 1), (18, 1.8), (44, 1.8), (60, 1)],
+                 armL=[(0, 0.12), (40, 0.12), (60, -1.75)], armLSY=[(0, 1), (40, 1), (60, 1.15)],
+                 eyeO=[(0, 1), (10, 0), (46, 0), (56, 1)], sleepO=[(0, 0), (10, 1), (46, 1), (56, 0)],
+                 bodyR=[(0, 0), (18, 0.07), (44, 0.07), (60, -0.03)],
+                 lookX=[(0, 0), (46, 0), (60, 10)], lookY=[(0, -6), (46, -6), (60, -12)],
+                 eyeSX=[(0, 1), (46, 1), (60, 0.9)], eyeSY=[(0, 1), (46, 1), (60, 0.55)],
+                 mouthO=[(0, 1), (12, 0), (60, 0)], thinkO=[(0, 0), (48, 0), (60, 1)],
+                 orbO=[(0, 0), (48, 0), (60, 1)], spY=-60)
+        intro = (i, 60)
+        s.update(loop_think)
     elif m == "answering":
+        # Talking: climb out of the lamp on its legs, stand on the rim and present the answer.
+        i = dict(s)
+        i.update(riseY=[(0, 30), (10, 4), (18, -22), (28, RISE["answering"]), (36, RISE["answering"])],
+                 legL=[(0, 0), (6, 0.45), (14, -0.45), (22, 0.45), (30, 0), (36, 0)],
+                 legR=[(0, 0), (6, -0.45), (14, 0.45), (22, -0.45), (30, 0), (36, 0)],
+                 armL=[(0, 2.4), (10, 1.4), (18, 2.4), (28, 0.5), (36, 0.5)],
+                 armR=[(0, -2.4), (10, -1.4), (18, -2.4), (28, -1.25), (36, -1.25)],
+                 spY=[(0, -60), (28, STAND_SP), (36, STAND_SP)])
+        intro = (i, 36)
         D = 60
         s.update(mouthSY=[(0, 1), (8, 3.2), (18, 1.5), (28, 2.8), (40, 1.2), (50, 2.4), (60, 1)],
                  mouthSX=[(0, 1), (8, 0.8), (28, 0.85), (60, 1)],
-                 armR=[(0, -0.6), (30, -0.95), (60, -0.6)], armL=[(0, 0.15), (30, 0.3), (60, 0.15)],
-                 spSX=[(0, 1.1), (30, 1.25), (60, 1.1)], spSY=[(0, 1.1), (30, 1.25), (60, 1.1)],
+                 armR=[(0, -1.25), (30, -1.55), (60, -1.25)], armL=[(0, 0.5), (30, 0.62), (60, 0.5)],
+                 spY=STAND_SP, spSX=[(0, 1.1), (30, 1.25), (60, 1.1)], spSY=[(0, 1.1), (30, 1.25), (60, 1.1)],
                  bodyR=[(0, 0.02), (30, -0.02), (60, 0.02)])
     elif m == "success":
+        # Done: stand on the rim, cheer with both arms up and hop, legs tucked.
         D = 90
         s.update(eyeO=0, happyO=1, burstO=1, burstS=[(0, 0.9), (45, 1.12), (90, 0.9)],
                  burstS2=[(0, 0.9), (45, 1.12), (90, 0.9)], burstR=[(0, 0, "linear"), (90, 0.785)],
                  armL=[(0, 2.5), (45, 2.75), (90, 2.5)], armR=[(0, -2.5), (45, -2.75), (90, -2.5)],
-                 bodyY=[(0, 0), (22, -12), (45, 0), (90, 0)], mouthSX=1.6, mouthSY=1.4,
-                 spY=-140, spSX=1.3, spSY=1.3)
+                 bodyY=[(0, 0), (22, -16), (45, 0), (90, 0)],
+                 legL=[(0, 0), (12, -0.5), (30, 0), (90, 0)], legR=[(0, 0), (12, 0.5), (30, 0), (90, 0)],
+                 mouthSX=1.6, mouthSY=1.4, spY=STAND_SP, spSX=1.3, spSY=1.3)
     elif m == "error":
+        # Failed: face up, X eyes, shake its head and shrug; the sparkle falls.
         D = 90
         s.update(eyeO=0, xO=1, mouthSX=1.3, mouthSY=0.8,
                  bodyX=[(0, 0), (5, -7), (10, 7), (15, -6), (20, 6), (25, -3), (30, 0), (90, 0)],
-                 armL=0.02, armR=-0.02, spY=-110, spO=0.35, spR=0.6, bodyR=0.03)
+                 armL=[(0, 0.6), (40, 0.6), (52, 0.95), (64, 0.6), (90, 0.6)],
+                 armR=[(0, -0.6), (40, -0.6), (52, -0.95), (64, -0.6), (90, -0.6)],
+                 spY=[(0, -74), (30, -56), (90, -56)], spO=0.35, spR=0.6, bodyR=0.03)
     elif m == "sleeping":
+        # Paused or dozing: fully inside the lamp; Zz float up out of the mouth.
         D = 240
         loop = "pingPong"
-        s.update(eyeO=0, sleepO=1, mouthO=0.4, mouthSX=0.6, zzO=[(0, 0.3), (240, 1)], zzY=[(0, -92), (240, -112)],
-                 bodySY=[(0, 1), (240, 0.97)], spY=-108, spO=0.35, spSX=0.8, spSY=0.8, armL=0.05, armR=-0.05,
-                 lookY=2)
-    return s, D, loop
+        s.update(eyeO=0, sleepO=1, mouthO=0.4, mouthSX=0.6, zzO=[(0, 0.3), (240, 1)], zzY=[(0, 40), (240, 4)],
+                 bodySY=[(0, 1), (240, 0.97)], spY=52, spO=0.3, spSX=0.7, spSY=0.7, lookY=2)
+    return s, D, loop, intro
 
 
 def keyframes(kind, spec, D):
@@ -485,27 +588,75 @@ def write_mood(mood):
 
 def build():
     anims = []
-    # Mood layer
-    mood_state = {m: nid() for m in MOODS}
-    mood_anim = {m: nid() for m in MOODS}
+    # Mood layer. A mood with an intro plays it once, then loops; every state can
+    # leave for any other mood, and entering a mood always starts at its intro.
+    loop_state = {m: nid() for m in MOODS}
+    loop_anim = {m: nid() for m in MOODS}
+    intro_state, intro_anim, intro_dur = {}, {}, {}
+    specs = {m: mood_spec(m) for m in MOODS}
     for m in MOODS:
-        s, D, loop = mood_spec(m)
-        anims.append(anim(f"Mood {m}", mood_anim[m], D, loop, s))
+        s, D, loop, intro = specs[m]
+        anims.append(anim(f"Mood {m}", loop_anim[m], D, loop, s))
+        if intro:
+            intro_state[m], intro_anim[m] = nid(), nid()
+            anims.append(anim(f"Mood {m} intro", intro_anim[m], intro[1], "oneShot", intro[0]))
+    target = {m: intro_state.get(m, loop_state[m]) for m in MOODS}
+
+    def leave(m):
+        return "".join(
+            f'<StateTransition stateToId="{target[t]}" duration="260" enableEarlyExit="true">{cond_enum(t)}</StateTransition>'
+            for t in MOODS if t != m)
     mood_states = []
     for i, m in enumerate(MOODS):
-        trans = "".join(
-            f'<StateTransition stateToId="{mood_state[t]}" duration="260" enableEarlyExit="true">{cond_enum(t)}</StateTransition>'
-            for t in MOODS if t != m)
-        mood_states.append(f'<AnimationState x="{160 + 200*i}" y="{0 if i % 2 == 0 else 160}" animationId="{mood_anim[m]}" id="{mood_state[m]}">{trans}</AnimationState>')
+        if m in intro_state:
+            mood_states.append(
+                f'<AnimationState x="{160 + 200*i}" y="320" animationId="{intro_anim[m]}" id="{intro_state[m]}">'
+                f'<StateTransition stateToId="{loop_state[m]}" enableExitTime="true" exitTimeIsPercetange="true" exitTime="100"/>'
+                f'{leave(m)}</AnimationState>')
+        mood_states.append(f'<AnimationState x="{160 + 200*i}" y="{0 if i % 2 == 0 else 160}" animationId="{loop_anim[m]}" id="{loop_state[m]}">{leave(m)}</AnimationState>')
     mood_layer = (f'<StateMachineLayer name="Mood" id="{nid()}"><AnyState x="160" y="-160"/><ExitState x="1600" y="-160"/>'
-                  f'<EntryState x="0" y="0"><StateTransition stateToId="{mood_state["idle"]}"/></EntryState>'
+                  f'<EntryState x="0" y="0"><StateTransition stateToId="{target["idle"]}"/></EntryState>'
                   f'{"".join(mood_states)}</StateMachineLayer>')
+
+    # Peek layer: on hover while idle, climb out of the lamp, look around, hop back in.
+    a_prest, a_peek = nid(), nid()
+    anims.append(simple_anim("Peek rest", a_prest, 1, "oneShot", [(I["peek"], "y", [(0, 0)])]))
+    up = PEEK
+    anims.append(simple_anim("Peek", a_peek, 140, "oneShot", [
+        (I["peek"], "y", [(0, 0), (14, up * 0.35), (20, up * 0.35), (34, up * 0.7), (40, up * 0.7),
+                          (54, up), (108, up), (122, up * 0.55), (132, 0), (140, 0)]),
+        (I["legL"], "rotation", [(0, 0), (7, 0.45), (14, 0), (20, 0), (27, -0.45), (34, 0), (40, 0), (47, 0.45),
+                                 (54, 0), (108, 0), (115, -0.5), (130, -0.5), (140, 0)]),
+        (I["legR"], "rotation", [(0, 0), (7, -0.45), (14, 0), (20, 0), (27, 0.45), (34, 0), (40, 0), (47, -0.45),
+                                 (54, 0), (108, 0), (115, 0.5), (130, 0.5), (140, 0)]),
+        (I["armL"], "rotation", [(0, 0.12), (10, 2.3), (20, 1.2), (30, 2.3), (40, 1.2), (50, 2.3), (58, 0.4),
+                                 (108, 0.4), (118, 2.4), (140, 0.12)]),
+        (I["armR"], "rotation", [(0, -0.12), (10, -2.3), (20, -1.2), (30, -2.3), (40, -1.2), (50, -2.3), (58, -0.4),
+                                 (108, -0.4), (118, -2.4), (140, -0.12)]),
+        (I["eyeslook"], "x", [(0, 0), (60, 0), (70, -14), (82, -14), (90, 14), (102, 14), (108, 0), (140, 0)]),
+        # The sparkle rises with the genie and settles back over the rim.
+        (I["sparkle"], "y", [(0, BASE["spY"]), (54, STAND_SP), (108, STAND_SP), (132, BASE["spY"]), (140, BASE["spY"])]),
+    ]))
+    s_prest, s_peek, s_peeked = nid(), nid(), nid()
+    # Stop the peek when the mood changes or attention turns on (it lifts the genie itself).
+    away = "".join(f'<StateTransition stateToId="{s_prest}" duration="200" enableEarlyExit="true">{cond_enum(t)}</StateTransition>'
+                   for t in MOODS if t != "idle")
+    away += f'<StateTransition stateToId="{s_prest}" duration="200" enableEarlyExit="true">{cond_bool(I["p_attention"], "true")}</StateTransition>'
+    peek_layer = (f'<StateMachineLayer name="Peek" id="{nid()}"><AnyState x="160" y="-160"/><ExitState x="760" y="-160"/>'
+                  f'<EntryState><StateTransition stateToId="{s_prest}"/></EntryState>'
+                  f'<AnimationState x="160" animationId="{a_prest}" id="{s_prest}">'
+                  f'<StateTransition stateToId="{s_peek}" duration="120">{cond_bool(I["p_hover"], "true")}{cond_enum("idle")}{cond_bool(I["p_attention"], "false")}</StateTransition></AnimationState>'
+                  f'<AnimationState x="360" animationId="{a_peek}" reset="true" id="{s_peek}">'
+                  f'<StateTransition stateToId="{s_peeked}" enableExitTime="true" exitTimeIsPercetange="true" exitTime="100"/>{away}</AnimationState>'
+                  f'<AnimationState x="560" animationId="{a_prest}" id="{s_peeked}">'
+                  f'<StateTransition stateToId="{s_prest}">{cond_bool(I["p_hover"], "false")}</StateTransition></AnimationState>'
+                  f'</StateMachineLayer>')
 
     # Float layer (always on)
     a_float = nid()
     anims.append(simple_anim("Float", a_float, 150, "pingPong", [
-        # The genie bobs inside the lamp; the lamp stays still and its mouth glows.
-        (I["mog"], "y", [(0, 192), (150, 178)]),
+        # The genie bobs gently; the lamp stays still and its mouth glows.
+        (I["mog"], "y", [(0, 188), (150, 182)]),
         (I["lampglow"], "opacity", [(0, 0.7), (150, 1)]),
     ]))
     s_float = nid()
@@ -578,9 +729,9 @@ def build():
                   f'<AnimationState x="160" animationId="{a_tick}" id="{s_wait}"/>{"".join(sets)}</StateMachineLayer>')
 
     # Overlay layers (D64): orthogonal to the mood, driven by booleans.
-    def overlay_layer(name, prop, node, on_keys, on_dur):
+    def overlay_layer(name, prop, node, on_keys, on_dur, off_keys=()):
         a_off, a_on = nid(), nid()
-        anims.append(simple_anim(f"{name} off", a_off, 1, "oneShot", [(node, "opacity", [(0, 0)])]))
+        anims.append(simple_anim(f"{name} off", a_off, 1, "oneShot", [(node, "opacity", [(0, 0)])] + list(off_keys)))
         anims.append(simple_anim(f"{name} on", a_on, on_dur, "loop", [(node, "opacity", [(0, 1)])] + on_keys))
         s0, s1 = nid(), nid()
         return (f'<StateMachineLayer name="{name}" id="{nid()}"><AnyState x="160" y="-160"/><ExitState x="560" y="-160"/>'
@@ -591,13 +742,20 @@ def build():
                 f'<StateTransition stateToId="{s0}" duration="160" enableEarlyExit="true">{cond_bool(prop, "false")}</StateTransition></AnimationState>'
                 f'</StateMachineLayer>')
 
-    attn_layer = overlay_layer("Attention", I["p_attention"], I["attn"],
-                               [(I["attn"], "y", [(0, -112), (45, -120), (90, -112)])], 90)
-    rec_layer = overlay_layer("Recording", I["p_recording"], I["rec"],
-                              [(I["recdot"], "opacity", [(0, 1), (40, 0.25), (80, 1)])], 80)
+    attn_layer = overlay_layer("Attention", I["p_attention"], I["attn"], [
+        (I["attn"], "y", [(0, -58), (45, -66), (90, -58)]),
+        # Pop up a little higher and tilt the head, curious: "I need you".
+        (I["attnlift"], "y", [(0, ATTN_LIFT)]),
+        (I["attnlift"], "rotation", [(0, 0.08), (45, 0.13), (90, 0.08)]),
+        (I["sparkle"], "y", [(0, BASE["spY"] + ATTN_LIFT)]),   # keep the sparkle above the lifted head
+    ], 90, off_keys=[(I["attnlift"], "y", [(0, 0)]), (I["attnlift"], "rotation", [(0, 0)])])
+    rec_layer = overlay_layer("Recording", I["p_recording"], I["rec"], [
+        (I["recdot"], "opacity", [(0, 1), (40, 0.25), (80, 1)]),
+        (I["phones"], "opacity", [(0, 1)]),   # headphones on: listening to the meeting
+    ], 80, off_keys=[(I["phones"], "opacity", [(0, 0)])])
 
     def lst(kind, name, action):
-        return f'<StateMachineListenerSingle targetId="{I["torso"]}" listenerTypeValue="{kind}" name="{name}">{action}</StateMachineListenerSingle>'
+        return f'<StateMachineListenerSingle targetId="{I["hit"]}" listenerTypeValue="{kind}" name="{name}">{action}</StateMachineListenerSingle>'
 
     wbool = lambda p, v: (f'<ListenerViewModelChange><BindablePropertyBoolean propertyValue="{v}">'
                           f'{bind(p, 634, write=True)}</BindablePropertyBoolean></ListenerViewModelChange>')
@@ -607,7 +765,7 @@ def build():
                                       f'{bind(I["p_poke"], 686, write=True)}</BindablePropertyTrigger></ListenerViewModelChange>'))
 
     sm = (f'<StateMachine name="Mog" id="{I["sm"]}">{listeners}'
-          f'{float_layer}{blink_layer}{mood_layer}{hover_layer}{poke_layer}{demo_layer}{attn_layer}{rec_layer}</StateMachine>')
+          f'{float_layer}{blink_layer}{mood_layer}{peek_layer}{hover_layer}{poke_layer}{demo_layer}{attn_layer}{rec_layer}</StateMachine>')
 
     artboard = (f'<Artboard defaultStateMachineId="{I["sm"]}" viewModelId="{I["vm"]}" viewModelInstanceId="{I["vmi"]}" '
                 f'styleId="{I["abstyle"]}" width="400" height="400" clip="false" name="Mog" id="{I["artboard"]}">'
