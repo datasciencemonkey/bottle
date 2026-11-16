@@ -5,7 +5,7 @@
 // whose meaning must survive cleanup exactly: numbers with their units, negations, names, table
 // names, and for a self-correction the corrected value. The oracle compares tokens (lower case,
 // punctuation removed, decimals, percents and dotted table names kept, thousands commas dropped),
-// the same rules as the Rust STT scorer `mog_core::stt_bench::normalize` (ADR 0032).
+// the same rules as the Rust STT scorer `mog_core::stt_bench::normalize` (ADR 0034).
 //
 // The oracle checks the test side of Table CAP-CHECK that a corpus can decide: a kept token
 // changes, the length ratio is outside 0.5-1.3, a new URL or new code appears. "An answer to

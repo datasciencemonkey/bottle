@@ -1,4 +1,4 @@
-//! The STT benchmark scorer for AT-40 (#231, ADR 0032).
+//! The STT benchmark scorer for AT-40 (#231, ADR 0034).
 //!
 //! It reads a golden-set manifest and one result file for each provider and route, and checks the
 //! AT-40 pass rules: WER 10 % or less (7 % or less for quiet English), numbers 97 % or more,
@@ -7,7 +7,7 @@
 //! needs people, and the result files need the engine (#46), the Databricks ASR client (#49) and
 //! the benchmark runner (#53).
 //!
-//! Rules (ADR 0032):
+//! Rules (ADR 0034):
 //! - Text is compared as [`normalize`] tokens: lower case, punctuation removed, decimals,
 //!   percents and dotted table names kept, thousands commas dropped.
 //! - WER is corpus level: word edits over reference words, for the speech utterances.
@@ -229,7 +229,7 @@ fn is_ten_s(u: &Utterance) -> bool {
     (TEN_S_MIN_MS..=TEN_S_MAX_MS).contains(&u.audio_ms)
 }
 
-/// The comparison tokens of a text (ADR 0032).
+/// The comparison tokens of a text (ADR 0034).
 pub fn normalize(text: &str) -> Vec<String> {
     let chars: Vec<char> = text.to_lowercase().chars().collect();
     let mut s = String::with_capacity(chars.len());

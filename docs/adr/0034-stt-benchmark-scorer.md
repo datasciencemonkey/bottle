@@ -1,4 +1,4 @@
-# ADR 0032: The STT benchmark scorer rules (AT-40)
+# ADR 0034: The STT benchmark scorer rules (AT-40)
 
 - Status: Accepted
 - Date: 2026-11-16

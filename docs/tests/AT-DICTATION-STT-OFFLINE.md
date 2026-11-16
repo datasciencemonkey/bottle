@@ -24,7 +24,7 @@ pnpm vitest run src/acceptance/at-04-offline.test.ts src/acceptance/at-05-meanin
 | AT-05 | `src/acceptance/at-05-meaning.test.ts` | Nothing yet: all pending. |
 | AT-05 | `src/test-support/meaning.ts` | The corpus (30 synthetic items: numbers, units, negation, names, table names, self-corrections) and the meaning oracle. Self-tests `[AT-22]` in `meaning.test.ts`. |
 | AT-04, AT-43 | `src/test-support/cloud-calls.ts` | The class (local or cloud) of every 4.5 command. A new command fails the typecheck until it has a class. Self-tests `[AT-22]` in `cloud-calls.test.ts`. |
-| AT-40 | `crates/mog-core/tests/at_40_stt_bench.rs` | The scorer `mog_core::stt_bench` (ADR 0032): golden-set rules, WER, numbers, entities, hallucinations, p95 on 10 s, Opus delta, the gate. Self-tests `at_22_*`. The device run skips. |
+| AT-40 | `crates/mog-core/tests/at_40_stt_bench.rs` | The scorer `mog_core::stt_bench` (ADR 0034): golden-set rules, WER, numbers, entities, hallucinations, p95 on 10 s, Opus delta, the gate. Self-tests `at_22_*`. The device run skips. |
 | AT-40 | `src/acceptance/at-40-stt-provider.test.ts` | Nothing yet: the SttProvider rules are pending. |
 | AT-43 | `crates/mog-core/tests/at_43_dictation.rs` | Only the brain may call `insert_text`; its arguments have no key, submit or Enter field; a multi-line text is one argument (MOG-06b, contract part). |
 | AT-43 | `src/acceptance/at-43-dictation.test.ts` | Nothing yet: all pending. |
@@ -75,7 +75,7 @@ result to `docs/evidence/<AT>-<part>.md` in the format of `docs/tests/EVIDENCE-T
    example `noise`, `far_field`, `accent`). Record 20 or more clips of 10 s each (9 to 11 s).
 2. Record 20 or more non-speech clips: room noise, music, keyboard, cough, silence.
 3. Keep the audio and the manifest outside the repository, on an encrypted disk. They are voices
-   of real people. Write the manifest in the format of ADR 0032, decision 2. Do not commit it.
+   of real people. Write the manifest in the format of ADR 0034, decision 2. Do not commit it.
 
 ### AT-40 part B: run the benchmark (macOS M1 8 GB, about 20 min; blocked on #46, #49, #53)
 

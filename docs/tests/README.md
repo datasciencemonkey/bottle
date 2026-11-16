@@ -169,7 +169,7 @@ feature issues, and the device steps. The shared parts:
 issues, and the device steps. The shared parts:
 
 - Rust: `mog_core::stt_bench`: the AT-40 STT benchmark scorer (golden-set rules, WER, numbers,
-  entities, hallucinations, p95 on 10 s clips, Opus delta, the gate). ADR 0032 has the rules. The
+  entities, hallucinations, p95 on 10 s clips, Opus delta, the gate). ADR 0034 has the rules. The
   device run reads `BOTTLE_STT_GOLDEN` and `BOTTLE_STT_RESULTS`. Doubles never pass.
 - TS: `src/test-support/cloud-calls.ts`: `cloudCalls(log)` and `callsTo(log, commands)` over the
   `core.invoke` log of brain tests ("no cloud request", "no agent turn and no Genie call").

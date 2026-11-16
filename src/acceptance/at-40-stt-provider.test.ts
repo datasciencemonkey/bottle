@@ -1,7 +1,7 @@
 /**
  * AT-40 "STT benchmark gate" (#231), section 15: the SttProvider rules that the benchmark gates.
  * The scorer and the device run are `crates/mog-core/tests/at_40_stt_bench.rs`
- * (`mog_core::stt_bench`, ADR 0032).
+ * (`mog_core::stt_bench`, ADR 0034).
  *
  * SttProvider (#52) and the Databricks ASR client with its guards (#49) are not built, so these
  * tests stay `it.skip` with the feature issue. The release record (CAP-65a, CAP-65b) is #53.

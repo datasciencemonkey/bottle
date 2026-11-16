@@ -6,7 +6,7 @@
 //! p95 1.0 s or less on 10 s clips, Opus delta 0.5 pp or less.
 //!
 //! The scorer `mog_core::stt_bench` runs here on synthetic data (the `at_22_*` harness
-//! self-tests, ADR 0032). The golden set audio needs people (needs:human) and the result files
+//! self-tests, ADR 0034). The golden set audio needs people (needs:human) and the result files
 //! need the STT engine (#46), the Databricks ASR client (#49) and the benchmark runner (#53), so
 //! the device run skips until a person sets the variables. The capture parts are pending tests.
 //! docs/tests/AT-DICTATION-STT-OFFLINE.md has the steps.
