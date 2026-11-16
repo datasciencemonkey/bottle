@@ -35,6 +35,14 @@ describe('sanitizeQuestion', () => {
     expect(out).toContain('What does this return?');
   });
 
+  it('[G-47] keeps the text of a one-line fenced snippet and drops only the fences', () => {
+    expect(sanitizeQuestion('```SELECT 1``` what does this return?')).toBe('SELECT 1 what does this return?');
+  });
+
+  it('[G-47] removes script content next to case-folding characters', () => {
+    expect(sanitizeQuestion('\u0130\u0130 <SCRIPT>x</Script> ok')).toBe('\u0130\u0130 ok');
+  });
+
   it('[G-47] removes inline fence runs that are not on their own line', () => {
     expect(sanitizeQuestion('a ```` b ``` c')).toBe('a b c');
   });

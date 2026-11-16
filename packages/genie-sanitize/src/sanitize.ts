@@ -8,13 +8,14 @@
 const INVISIBLE = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\p{Cf}\u00AD\u061C\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/gu;
 
 const SCRIPT_OR_STYLE_OPEN = /<(script|style)\b[^<>]*>/gi;
+const CLOSE_TAG = { script: /<\/script\b[^<>]*>/gi, style: /<\/style\b[^<>]*>/gi } as const;
 const HTML_COMMENT = /<!--[\s\S]*?(?:-->|$)/g;
 const HTML_TAG = /<\/?[A-Za-z!?][^<>]*>/g; // also covers autolinks such as <https://...>
 const STRAY_TAG_OPEN = /<(?=[A-Za-z!/?])/g; // an unclosed tag start that is left after the passes
 const MD_INLINE_LINK = /!?\[([^[\]]*)\]\([^()]*\)/g; // [text](url "title") and ![alt](url)
 const MD_REFERENCE_LINK = /!?\[([^[\]]+)\]\[[^[\]]*\]/g; // [text][ref] and [text][]
 const MD_REFERENCE_DEF = /^[ \t]*\[[^[\]]+\]:[ \t]*\S.*$/gm; // [ref]: url "title"
-const FENCE_LINE = /^[ \t]*(?:`{3,}|~{3,}).*$/gm; // a fence line with its info string
+const FENCE_LINE = /^[ \t]*(?:`{3,}[^`\n]*|~{3,}.*)$/gm; // a fence line with its info string
 const FENCE_RUN = /`{3,}|~{3,}/g; // a fence run inside a line
 
 const MAX_PASSES = 32;
@@ -29,16 +30,16 @@ export function stripInvisible(raw: string): string {
  * element is removed to the end of the text, as a browser would treat it.
  */
 function removeScriptAndStyle(s: string): string {
-  const lower = s.toLowerCase();
   let out = '';
   let pos = 0;
   SCRIPT_OR_STYLE_OPEN.lastIndex = 0;
   for (let m = SCRIPT_OR_STYLE_OPEN.exec(s); m; m = SCRIPT_OR_STYLE_OPEN.exec(s)) {
     if (m.index < pos) continue;
     out += s.slice(pos, m.index);
-    const close = lower.indexOf('</' + (m[1] ?? '').toLowerCase(), m.index + m[0].length);
-    const closeEnd = close < 0 ? -1 : s.indexOf('>', close);
-    pos = closeEnd < 0 ? s.length : closeEnd + 1;
+    const close = CLOSE_TAG[(m[1] ?? 'script').toLowerCase() as keyof typeof CLOSE_TAG];
+    close.lastIndex = m.index + m[0].length;
+    const end = close.exec(s);
+    pos = end ? end.index + end[0].length : s.length;
     SCRIPT_OR_STYLE_OPEN.lastIndex = pos;
   }
   return out + s.slice(pos);
