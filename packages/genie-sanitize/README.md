@@ -35,10 +35,13 @@ else show(r.userText);                           // r.code: 'SECRET_IN_QUESTION'
    script and style elements with their content, HTML comments and tags (and autolinks `<https://…>`),
    markdown inline links, images, reference links and reference definitions (the visible text stays, the URL goes;
    `src/links.ts` is a linear scanner, so balanced brackets in the text, balanced parentheses in the URL, titles with
-   parentheses, `<…>` destinations, nested labels and definitions with the URL on the next line are all covered;
+   parentheses, `<…>` destinations, nested labels, definitions with the URL on the next line and definitions after
+   block quote or list markers (`> [r]: …`, `- [r]: …`) are all covered;
    a stray `](…)` without its opening bracket is removed too),
    and code fence delimiters (backtick and tilde runs of 3 or more, with the info string of a fence line).
-   The passes repeat until the text does not change, so nested markup cannot rebuild itself. Then spaces collapse.
+   The passes repeat until the text does not change, so nested markup cannot rebuild itself. A whole run of `<`
+   before a tag start is then removed. If 32 passes do not reach a fixpoint (markup nested deeper than that), the
+   sanitizer fails closed and removes every `<`, `>`, `[`, `]`, backtick and tilde. Then spaces collapse.
    An empty result returns `{ ok: false, code: 'CLIENT_BUG', reason: 'empty' }`.
 3. `capQuestion(text)`: over 1,000 code points, cuts at the last whitespace (a hard cut at 1,000 code points if there is none)
    and gives the notice "Bottle shortened the question to 1,000 characters."
