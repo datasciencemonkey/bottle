@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/cli-runner", "crates/mog-core", "crates/mog-core-ffi", "src-tauri"]
+members = ["crates/artifact-verify", "crates/cli-runner", "crates/mog-core", "crates/mog-core-ffi", "src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
