@@ -30,6 +30,10 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSData", "NSString"] }
 security-framework.workspace = true
 
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+# R2 mic backend (#388). Only macOS and Windows: Bottle ships on these two.
+cpal.workspace = true
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = [
   "Win32_Foundation",
