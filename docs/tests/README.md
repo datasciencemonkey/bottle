@@ -129,6 +129,14 @@ prints `skipped: <VAR> is not set, so <kind> tests do not run`. A malformed valu
 
 The devices, the profile and the rig need a person: TODO(#270) has the steps.
 
+### Latency benchmark (#171)
+
+`mog_core::latency_bench`: the mark API (`LatencyRecorder` on the simulated clock), the budgets of
+NFR-01a..d, NFR-02, NFR-08a and NFR-08b, and the AT-21 / AT-30 / AT-43 evidence report. The runner is
+`cargo run -p mog-core --example latency_bench`. The report never writes `pass` for samples from
+test doubles or for missing samples. `docs/tests/LATENCY-BENCH.md` has the rules, the fixture
+variables (`BOTTLE_BENCH_SP03_LOG`, `BOTTLE_BENCH_SAMPLES`) and the device steps.
+
 ### Gate evidence (AT-22)
 
 Each gate run is a file in `docs/evidence/` in the format of `docs/tests/EVIDENCE-TEMPLATE.md`.

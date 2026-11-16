@@ -14,7 +14,7 @@
 //! Privacy (SEC-16b, SEC-16c): the harness records only event names, the STT path, the route
 //! and times. [`Mark`] is a closed enum with no payload, so no transcript, audio or token can go in.
 //!
-//! The real call sites are not wired yet:
+//! The real call sites are not wired yet (TODO(#319) wires them):
 //! - key-down and key-up: HotkeyService, TODO(#7) (Windows) and TODO(#5) (SP-03 rig).
 //! - mic live: CaptureService, TODO(#14), with the SP-08 result TODO(#15).
 //! - local acknowledgement and preview chip: the brain and the view, TODO(#142). The chip renders

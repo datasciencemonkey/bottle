@@ -483,7 +483,7 @@ impl Report {
         line("## Follow-ups".into());
         line(String::new());
         line(
-            "- Pipeline marks not wired yet: #7 and #5 (key events), #14 and #15 (mic live), #142 \
+            "- Pipeline marks not wired yet (#319): #7 and #5 (key events), #14 and #15 (mic live), #142 \
              and #318 (acknowledgement and chip), #58 (insertion), #46, #44 and #52 (STT path)."
                 .into(),
         );

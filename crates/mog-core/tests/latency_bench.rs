@@ -648,7 +648,7 @@ fn env(k: &str) -> Option<String> {
 
 #[test]
 fn at_21_at_43_device_samples_meet_the_latency_budgets() {
-    // TODO(#14, #46, #142, #58): the real PTT pipeline does not call the mark API yet, so no device
+    // TODO(#319): the real PTT pipeline does not call the mark API yet, so no device
     // sample file exists. When it does, a person sets these variables and this test checks it.
     let device = match testkit::device_from(env).expect("valid BOTTLE_TEST_DEVICE") {
         Fixture::Ready(d) => d,
