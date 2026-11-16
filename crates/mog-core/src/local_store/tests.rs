@@ -1333,3 +1333,94 @@ fn mem_08a_local_mirror_has_every_appendix_a_column() {
         assert_eq!(got, cols, "columns of {table}");
     }
 }
+
+// ---- MEM-01: an utterance belongs to the MOG of its session (#410, migration 0002) --------
+
+fn insert_utterance(
+    s: &SqlCipherLocalStore,
+    id: &str,
+    session: &str,
+    mog: &str,
+    seq: i64,
+) -> Result<usize, CoreError> {
+    s.with_conn(|c| {
+        c.execute(
+            "INSERT INTO utterance (utterance_id, session_id, mog_id, seq, speaker_track, started_at,
+               duration_ms, text_clean, route, stt_provider, row_hlc, origin_device_id)
+             VALUES (?1, ?2, ?3, ?4, 'you', 1, 10, 'hello', 'noise', 'local_parakeet', 1, ?3)",
+            rusqlite::params![id, session, mog, seq],
+        )
+    })
+}
+
+#[test]
+fn mem_01_an_utterance_cannot_point_at_a_session_of_another_mog() {
+    let t = TempDir::new("01-utt-tie");
+    let s = open_store(t.path(), Arc::new(MemoryKeyVault::new()));
+    seed_mog(&s, MOG_A);
+    seed_mog(&s, MOG_B);
+    seed_session(&s, MOG_A, "sess-a", 1);
+    assert!(insert_utterance(&s, "u-ok", "sess-a", MOG_A, 1).is_ok());
+    assert!(
+        insert_utterance(&s, "u-bad", "sess-a", MOG_B, 2).is_err(),
+        "MOG B may not write into a session of MOG A"
+    );
+    // An update cannot move an utterance to another MOG, or to a session of another MOG.
+    seed_session(&s, MOG_B, "sess-b", 1);
+    let moved = s.with_conn(|c| {
+        c.execute(
+            "UPDATE utterance SET mog_id = ?1 WHERE utterance_id = 'u-ok'",
+            [MOG_B],
+        )
+    });
+    assert!(moved.is_err());
+    let moved = s.with_conn(|c| {
+        c.execute(
+            "UPDATE utterance SET session_id = 'sess-b' WHERE utterance_id = 'u-ok'",
+            [],
+        )
+    });
+    assert!(moved.is_err());
+    // A session with utterances cannot change its MOG.
+    let moved = s.with_conn(|c| {
+        c.execute(
+            "UPDATE session SET mog_id = ?1 WHERE session_id = 'sess-a'",
+            [MOG_B],
+        )
+    });
+    assert!(moved.is_err());
+    assert_eq!(
+        count(&s, "SELECT count(*) FROM utterance WHERE mog_id = '0f8b1a52-6c1e-4d0a-9a51-3a3d2f6f0a01' AND session_id = 'sess-a'"),
+        1,
+        "nothing was deleted or moved (U9)"
+    );
+}
+
+#[test]
+fn mem_01_session_id_and_seq_are_unique_across_mogs() {
+    let t = TempDir::new("01-utt-seq");
+    let s = open_store(t.path(), Arc::new(MemoryKeyVault::new()));
+    seed_mog(&s, MOG_A);
+    seed_mog(&s, MOG_B);
+    seed_session(&s, MOG_A, "sess-a", 1);
+    assert!(insert_utterance(&s, "u-1", "sess-a", MOG_A, 1).is_ok());
+    // Appendix A: UNIQUE (session_id, seq). The same MOG hits the unique index; another MOG
+    // hits the session tie, so no (session_id, seq) pair can repeat.
+    assert!(insert_utterance(&s, "u-2", "sess-a", MOG_A, 1).is_err());
+    assert!(insert_utterance(&s, "u-3", "sess-a", MOG_B, 1).is_err());
+    assert!(insert_utterance(&s, "u-4", "sess-a", MOG_A, 2).is_ok());
+}
+
+#[test]
+fn mem_35a_migration_0002_is_forward_only_and_deletes_nothing() {
+    let sql = super::migrate::MIGRATIONS
+        .iter()
+        .find(|m| m.version == 2)
+        .expect("migration 0002 exists")
+        .sql
+        .to_ascii_lowercase();
+    for bad in ["drop table", "delete from", "drop index", "alter table"] {
+        assert!(!sql.contains(bad), "0002 has `{bad}`");
+    }
+    assert!(sql.contains("raise(abort"));
+}
