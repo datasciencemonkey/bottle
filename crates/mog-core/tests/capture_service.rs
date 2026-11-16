@@ -1419,3 +1419,29 @@ fn cap_01a_stress_with_pause_resume_device_loss_and_sink_panics_ends_consistent(
     svc.start(req("z", CaptureMode::Ptt)).unwrap();
     assert!(device.log().mic_open);
 }
+
+// ---------- round 6: a pause during a resume wins (CAP-13b) ----------
+
+#[test]
+fn cap_13b_a_pause_during_a_resume_keeps_the_session_paused() {
+    let r = Arc::new(rig());
+    let session = r.svc.start(req("a", CaptureMode::Session)).unwrap();
+    r.svc.pause(session.id).unwrap();
+    r.device.log().open_delay = Duration::from_millis(300);
+    let resumer = {
+        let r = Arc::clone(&r);
+        std::thread::spawn(move || r.svc.resume(session.id))
+    };
+    wait_for("the resume's open", || r.device.log().opening);
+    let paused = r.svc.pause(session.id).unwrap();
+    assert!(paused.paused && !paused.recording);
+    // The resume ends without making the session live: the user's pause wins.
+    let resumed = resumer.join().unwrap().unwrap();
+    assert!(resumed.paused && !resumed.recording);
+    let s = r.svc.status();
+    assert!(s.paused && !s.recording, "the session stays paused");
+    assert!(!r.device.log().mic_open, "the mic is closed");
+    // A later resume works.
+    r.device.log().open_delay = Duration::ZERO;
+    assert!(r.svc.resume(session.id).unwrap().recording);
+}
