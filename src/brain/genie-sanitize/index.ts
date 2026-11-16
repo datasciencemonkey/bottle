@@ -2,15 +2,15 @@
  * Question sanitizer, secret guard and message caps for the Genie bridge
  * (research/final-requirements.md: G-47, G-36, G-30a, G-30b, G-30c).
  */
-import { capQuestion, composeMessage, type ComposedMessage } from './caps.ts';
-import { sanitizeQuestion, stripInvisible } from './sanitize.ts';
-import { findSecret } from './secrets.ts';
-import type { Blocked, ContextPreamble } from './types.ts';
+import { capQuestion, composeMessage, type ComposedMessage } from './caps';
+import { sanitizeQuestion, stripInvisible } from './sanitize';
+import { findSecret } from './secrets';
+import type { Blocked, ContextPreamble } from './types';
 
-export * from './caps.ts';
-export * from './sanitize.ts';
-export * from './secrets.ts';
-export type * from './types.ts';
+export * from './caps';
+export * from './sanitize';
+export * from './secrets';
+export type * from './types';
 
 export type PrepareResult =
   | ({ ok: true } & ComposedMessage)

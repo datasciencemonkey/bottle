@@ -1,5 +1,5 @@
 /** G-30a, G-30b, G-30c: the question cap, the whole-message cap and the UTF-8 byte guard. */
-import type { Blocked, ContextPreamble } from './types.ts';
+import type { Blocked, ContextPreamble } from './types';
 
 export const QUESTION_MAX_CHARS = 1_000;
 export const MESSAGE_MAX_CHARS = 2_000;

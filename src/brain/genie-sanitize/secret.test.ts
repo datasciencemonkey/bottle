@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findSecret, prepareAsk } from '../src/index.ts';
+import { findSecret, prepareAsk } from './index';
 
 // Obviously fake values, built at run time so that no literal secret sits in the repo.
 const FAKE = {

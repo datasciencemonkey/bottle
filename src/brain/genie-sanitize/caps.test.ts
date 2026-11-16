@@ -11,7 +11,7 @@ import {
   MESSAGE_MAX_CHARS,
   QUESTION_MAX_CHARS,
   type ContextPreamble,
-} from '../src/index.ts';
+} from './index';
 
 const HEADER = 'Context (from my notes, may be wrong):' as const;
 function preamble(texts: string[]): ContextPreamble {

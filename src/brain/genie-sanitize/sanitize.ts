@@ -10,7 +10,7 @@ const INVISIBLE =
   /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\p{Cf}\u00AD\u061C\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/gu;
 /* eslint-enable no-control-regex */
 
-import { stripMarkdownLinks } from './links.ts';
+import { stripMarkdownLinks } from './links';
 
 const SCRIPT_OR_STYLE_OPEN = /<(script|style)\b[^<>]*>/gi;
 const CLOSE_TAG = { script: /<\/script\b[^<>]*>/gi, style: /<\/style\b[^<>]*>/gi } as const;

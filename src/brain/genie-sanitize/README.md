@@ -1,8 +1,9 @@
-# @bottle/genie-sanitize
+# genie-sanitize (`src/brain/genie-sanitize`)
 
 Domain logic for the Bottle brain window that runs before any question goes to Genie:
 the question sanitizer, the secret block and the message caps. No UI, no network, no
-dependencies at run time. Issue #90.
+dependencies at run time. Issue #90. T8 GenieBridge `submit` (#33) calls `prepareAsk` before
+any `genie_ask`.
 
 ## Requirements covered
 
@@ -19,7 +20,7 @@ Every test title carries the IDs it verifies, for example `[G-30a] cuts a longer
 ## API
 
 ```ts
-import { prepareAsk } from '@bottle/genie-sanitize';
+import { prepareAsk } from '../genie-sanitize';
 
 const r = prepareAsk({ question, preamble });   // preamble: ContextPreamble of section 4.7, optional
 if (r.ok) send(r.text);                          // r.notices: texts to show on the card; r.droppedItemIds
@@ -58,12 +59,12 @@ Secret patterns (section 4.6 rule 7, unchanged): `eyJ[\w-]+\.`, `dapi[0-9a-f]{32
 
 ## Test
 
-Node 22 or later.
+The root checks cover it (App CI runs them on macOS and Windows):
 
 ```sh
-npm ci
-npm run typecheck
-npm test
+pnpm typecheck
+pnpm lint
+pnpm exec vitest run src/brain/genie-sanitize
 ```
 
 Test fixtures use only obviously fake values (for example `dapi` + 32 zeros), built at run time.

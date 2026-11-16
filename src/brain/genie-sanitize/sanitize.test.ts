@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { prepareAsk, sanitizeQuestion } from '../src/index.ts';
+import { prepareAsk, sanitizeQuestion } from './index';
 
 /* eslint-disable no-control-regex -- G-47: matching control characters is the purpose of this pattern. */
 const BANNED_INVISIBLE =
