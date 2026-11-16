@@ -11,8 +11,8 @@
 //! - No `tauri-plugin-global-shortcut` (ARC-4): the platform service owns the OS hook.
 //!
 //! Platform seam: [`platform_service`] picks the service by `cfg`. macOS uses
-//! `MacHotkeyService` (#6). Other platforms use the R1 stub until the Windows hook lands:
-//! TODO(#7).
+//! `MacHotkeyService` (#6). Other platforms use the R1 stub until the Windows hook is wired:
+//! TODO(#314).
 //!
 //! Requirements: CAP-35a, CAP-36, CAP-37, CAP-39c, MB-06a, AT-30.
 
@@ -317,7 +317,7 @@ pub fn platform_service(
     _talk_key: TalkKey,
     _sink: Arc<dyn HotkeySink>,
 ) -> (Box<dyn HotkeyService>, Box<dyn PermissionApi>) {
-    // TODO(#7): the Windows HotkeyService plugs in here with the same sink.
+    // TODO(#314): `WindowsHotkeyService` (#7) plugs in here through a `HookSignal` adapter.
     (
         Box::new(mog_core::hotkey::StubHotkeyService),
         Box::new(NoOsPermission),
