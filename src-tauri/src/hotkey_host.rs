@@ -20,8 +20,10 @@ use crate::ipc::BrainChannel;
 use mog_core::error::CoreError;
 use mog_core::hotkey::HotkeyService;
 use mog_core::hotkey_core::{
-    self, HotkeyOutput, HotkeySink, PermissionApi, PermissionStatus, PttPhase, TalkKey, UserAction,
+    self, HotkeyEngine, HotkeyOutput, HotkeySink, PermissionApi, PermissionStatus, PttPhase,
+    TalkKey, UserAction,
 };
+use mog_core::hotkey_windows::HookSignal;
 use mog_core::ipc::{events, WindowClass};
 use serde_json::{json, Value};
 use std::sync::{mpsc, Arc, Mutex, MutexGuard};
@@ -214,6 +216,81 @@ where
         })
 }
 
+/// A Windows hook signal that has no consumer in the host yet (#314).
+///
+/// Each kind has its own consumer issue, so the adapter never drops a signal in silence.
+/// No kind carries the identity of a key (SEC rules).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeferredSignal {
+    /// Esc went down during capture. The capture lifecycle (#14) ends hands-free capture.
+    Escape,
+    /// Another key went down during a hold. The CAP-44c cancel (#24) consumes it.
+    OtherKeyDown,
+    /// An elevated window blocks the talk key. The CAP-42 tooltip (#294) consumes it.
+    TalkKeyBlocked,
+    /// The hook was installed again (CAP-40b).
+    HookReinstalled,
+    /// A hook install failed. The reason is a fixed, content-free string.
+    HookFailed(&'static str),
+}
+
+/// Receives the [`DeferredSignal`]s of the Windows hook.
+pub trait HookSignalSeam: Send {
+    /// Take one deferred signal.
+    fn deferred(&self, signal: DeferredSignal);
+}
+
+/// The app's seam until each consumer exists. Each arm names the issue that consumes it.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct PendingHookConsumers;
+
+impl HookSignalSeam for PendingHookConsumers {
+    fn deferred(&self, _signal: DeferredSignal) {}
+}
+
+/// Map one Windows hook signal (#7) to the shared R1 engine (#6).
+pub fn adapt_hook_signal(
+    _signal: HookSignal,
+    _engine: &mut HotkeyEngine,
+) -> Option<DeferredSignal> {
+    None
+}
+
+/// Drain `rx` until the service drops its sender.
+pub fn run_hook_adapter(
+    rx: mpsc::Receiver<HookSignal>,
+    mut engine: HotkeyEngine,
+    seam: &dyn HookSignalSeam,
+) {
+    for signal in rx {
+        if let Some(deferred) = adapt_hook_signal(signal, &mut engine) {
+            seam.deferred(deferred);
+        }
+    }
+}
+
+/// Start the adapter thread. The engine sends its outputs to `sink` (the host [`QueueSink`]).
+pub fn spawn_hook_adapter<D>(
+    rx: mpsc::Receiver<HookSignal>,
+    sink: Arc<dyn HotkeySink>,
+    seam: D,
+) -> std::io::Result<JoinHandle<()>>
+where
+    D: HookSignalSeam + 'static,
+{
+    std::thread::Builder::new()
+        .name("bottle-hotkey-signals".into())
+        .spawn(move || run_hook_adapter(rx, HotkeyEngine::new(sink), &seam))
+}
+
+/// The service to give the host, given the result of [`spawn_hook_adapter`].
+pub fn with_hook_adapter(
+    service: Box<dyn HotkeyService>,
+    _adapter: std::io::Result<JoinHandle<()>>,
+) -> Box<dyn HotkeyService> {
+    service
+}
+
 /// The talk key of the settings value (D66). Unknown or missing values give Right-Option.
 pub fn talk_key_from_setting(value: Option<&str>) -> TalkKey {
     match value {
@@ -333,12 +410,11 @@ pub fn platform_service(
     )
 }
 
-/// The permission API of an OS that has no PTT permission prompt.
-#[cfg(not(target_os = "macos"))]
+/// The permission API of an OS that has no PTT permission prompt (Windows has no prompt for
+/// a `WH_KEYBOARD_LL` hook). It never opens an OS prompt.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NoOsPermission;
 
-#[cfg(not(target_os = "macos"))]
 impl PermissionApi for NoOsPermission {
     fn status(&self, _permission: hotkey_core::Permission) -> PermissionStatus {
         PermissionStatus::Granted
@@ -900,6 +976,207 @@ mod tests {
         for manifest in [root.join("Cargo.toml"), root.join("../Cargo.toml")] {
             let text = std::fs::read_to_string(&manifest).unwrap();
             assert!(!text.contains("global-shortcut"), "{}", manifest.display());
+        }
+    }
+
+    // ---- Windows hook adapter (#314): a fake `Receiver<HookSignal>`, never a real hook ----
+
+    use std::time::Duration;
+
+    #[derive(Default, Clone)]
+    struct FakeSeam(Arc<Mutex<Vec<DeferredSignal>>>);
+
+    impl HookSignalSeam for FakeSeam {
+        fn deferred(&self, signal: DeferredSignal) {
+            self.0.lock().unwrap().push(signal);
+        }
+    }
+
+    fn down() -> HookSignal {
+        HookSignal::TalkDown {
+            at: Duration::from_millis(1),
+        }
+    }
+
+    fn up() -> HookSignal {
+        HookSignal::TalkUp {
+            at: Duration::from_millis(2),
+        }
+    }
+
+    /// Run `signals` through a fake hook receiver, the adapter thread, the host queue and the
+    /// forwarder thread, as `platform_service` wires them on Windows.
+    fn run_windows_path(
+        target: &Arc<PttTarget>,
+        signals: &[HookSignal],
+    ) -> (Vec<(String, Value)>, Vec<HotkeyStatus>, Vec<DeferredSignal>) {
+        let (f, brain, status) = forwarder(target);
+        let (sink, out_rx) = queue();
+        let forward = spawn_forwarder(out_rx, f).unwrap();
+        let (hook_tx, hook_rx) = mpsc::channel();
+        let seam = FakeSeam::default();
+        let adapter = spawn_hook_adapter(hook_rx, Arc::new(sink), seam.clone()).unwrap();
+        for s in signals {
+            hook_tx.send(*s).unwrap();
+        }
+        // The service drops its sender on quit: the adapter ends, then the forwarder.
+        drop(hook_tx);
+        adapter.join().unwrap();
+        forward.join().unwrap();
+        let statuses = status.0.lock().unwrap().clone();
+        let deferred = seam.0.lock().unwrap().clone();
+        (brain.items(), statuses, deferred)
+    }
+
+    #[test]
+    fn cap_40a_mb_06a_talk_down_and_up_reach_the_brain_as_hotkey_ptt() {
+        let target = Arc::new(PttTarget::default());
+        target.set("a1");
+        let (items, statuses, deferred) = run_windows_path(&target, &[down(), up()]);
+        assert_eq!(items, vec![ptt("a1", "down"), ptt("a1", "up")]);
+        assert!(statuses.is_empty());
+        assert!(deferred.is_empty());
+    }
+
+    #[test]
+    fn cap_40a_a_repeated_talk_down_gives_one_ptt_down() {
+        // The shared PTT machine (#6) drops a second `down` while the key is held, so
+        // Windows gives the same phases as macOS.
+        let target = Arc::new(PttTarget::default());
+        target.set("a1");
+        let (items, _, _) = run_windows_path(&target, &[down(), down(), up(), up()]);
+        assert_eq!(items, vec![ptt("a1", "down"), ptt("a1", "up")]);
+    }
+
+    #[test]
+    fn mb_06a_a_windows_press_goes_to_the_mog_that_got_down() {
+        let target = Arc::new(PttTarget::default());
+        let mut engine = HotkeyEngine::new(Arc::new(queue().0));
+        // No target: nothing reaches the brain, and the adapter keeps no state of its own.
+        assert_eq!(adapt_hook_signal(down(), &mut engine), None);
+        let (items, _, _) = run_windows_path(&target, &[down(), up()]);
+        assert!(items.is_empty());
+        target.set("b2");
+        let (items, _, _) = run_windows_path(&target, &[down(), up()]);
+        assert_eq!(items, vec![ptt("b2", "down"), ptt("b2", "up")]);
+    }
+
+    #[test]
+    fn cap_40a_deferred_hook_signals_go_to_the_seam_not_the_brain() {
+        let target = Arc::new(PttTarget::default());
+        target.set("a1");
+        let (items, statuses, deferred) = run_windows_path(
+            &target,
+            &[
+                HookSignal::Escape,
+                HookSignal::OtherKeyDown,
+                HookSignal::TalkKeyBlocked,
+                HookSignal::HookReinstalled,
+                HookSignal::HookFailed {
+                    reason: "set_windows_hook_failed",
+                },
+            ],
+        );
+        assert!(items.is_empty());
+        assert!(statuses.is_empty());
+        assert_eq!(
+            deferred,
+            vec![
+                DeferredSignal::Escape,
+                DeferredSignal::OtherKeyDown,
+                DeferredSignal::TalkKeyBlocked,
+                DeferredSignal::HookReinstalled,
+                DeferredSignal::HookFailed("set_windows_hook_failed"),
+            ]
+        );
+    }
+
+    #[test]
+    fn cap_40a_talk_key_signals_are_not_deferred() {
+        let mut engine = HotkeyEngine::new(Arc::new(queue().0));
+        assert_eq!(adapt_hook_signal(down(), &mut engine), None);
+        assert!(engine.machine().is_held());
+        assert_eq!(adapt_hook_signal(up(), &mut engine), None);
+        assert!(!engine.machine().is_held());
+    }
+
+    #[test]
+    fn at_30_a_failed_adapter_spawn_reports_unavailable_at_start() {
+        let service = FakeService::default();
+        let failed = with_hook_adapter(
+            Box::new(service.clone()),
+            Err(std::io::Error::other("spawn")),
+        );
+        let h = HotkeyHost::new(failed, Box::new(NoOsPermission));
+        assert_eq!(
+            h.start(),
+            HostState::Unavailable("hook_adapter_spawn_failed")
+        );
+        // The real service never starts without its adapter.
+        assert_eq!(service.starts.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn at_30_a_spawned_adapter_keeps_the_real_service() {
+        let service = FakeService::default();
+        service.granted.store(true, Ordering::SeqCst);
+        let ok = with_hook_adapter(
+            Box::new(service.clone()),
+            std::thread::Builder::new().spawn(|| {}),
+        );
+        let h = HotkeyHost::new(ok, Box::new(NoOsPermission));
+        assert_eq!(h.start(), HostState::Running);
+        assert_eq!(service.starts.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn at_30_the_windows_permission_api_never_prompts() {
+        // Windows has no OS prompt for the hook: status and request both say granted.
+        let p = NoOsPermission;
+        for perm in [Permission::InputMonitoring, Permission::Accessibility] {
+            assert_eq!(p.status(perm), PermissionStatus::Granted);
+            assert_eq!(p.request(perm), PermissionStatus::Granted);
+        }
+    }
+
+    #[test]
+    fn at_30_the_windows_platform_service_wires_the_hook_adapter() {
+        // The `cfg(windows)` branch cannot build on a macOS host (tauri-winres needs
+        // llvm-rc), so this checks its source. CI on Windows (#227) and #296 build and run it.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let code =
+            production_code(&std::fs::read_to_string(root.join("src/hotkey_host.rs")).unwrap());
+        let windows = code
+            .split("#[cfg(windows)]\npub fn platform_service")
+            .nth(1)
+            .expect("a cfg(windows) platform_service")
+            .split("\n}\n")
+            .next()
+            .unwrap();
+        for part in [
+            "WindowsHotkeyService::new(talk_key.into())",
+            "spawn_hook_adapter(rx, sink, PendingHookConsumers)",
+            "with_hook_adapter(Box::new(service), adapter)",
+            "Box::new(NoOsPermission)",
+        ] {
+            assert!(windows.contains(part), "windows platform_service misses {part}");
+        }
+        assert!(!windows.contains("StubHotkeyService"));
+    }
+
+    #[test]
+    fn cap_40a_every_deferred_signal_names_its_consumer_issue() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let text = std::fs::read_to_string(root.join("src/hotkey_host.rs")).unwrap();
+        let seam = text
+            .split("impl HookSignalSeam for PendingHookConsumers")
+            .nth(1)
+            .unwrap()
+            .split("\n}\n")
+            .next()
+            .unwrap();
+        for todo in ["TODO(#14)", "TODO(#24)", "TODO(#294)", "TODO(#297)"] {
+            assert!(seam.contains(todo), "the seam misses {todo}");
         }
     }
 }
