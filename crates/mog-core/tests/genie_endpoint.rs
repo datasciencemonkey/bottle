@@ -36,7 +36,14 @@ fn g_01_backend_enum_is_exactly_the_three_kinds() {
 
 #[test]
 fn g_01_at_11_schema_rejects_other_backend_kinds() {
-    for kind in ["genie_mcp", "genie", "GENIE_ONE_MCP", "custom", "", "genie_one_api"] {
+    for kind in [
+        "genie_mcp",
+        "genie",
+        "GENIE_ONE_MCP",
+        "custom",
+        "",
+        "genie_one_api",
+    ] {
         assert_eq!(BackendKind::parse(kind), None, "{kind}");
         let cfg = config_with_backend(json!({"kind": kind, "profile": "dev"}));
         assert_eq!(
@@ -63,8 +70,10 @@ fn g_01_genie_agent_mode_is_chat_or_agent_mode_only() {
 
 #[test]
 fn g_01_config_backend_kind_names_the_enum() {
-    let cfg = parse_config(&config_with_backend(json!({"kind": "genie_one_mcp", "profile": "dev"})))
-        .unwrap();
+    let cfg = parse_config(&config_with_backend(
+        json!({"kind": "genie_one_mcp", "profile": "dev"}),
+    ))
+    .unwrap();
     assert_eq!(
         cfg.binding.backend.as_ref().unwrap().kind(),
         BackendKind::GenieOneMcp

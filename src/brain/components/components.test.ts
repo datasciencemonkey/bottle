@@ -197,7 +197,7 @@ describe('brain component stubs', () => {
 
   it('[T8] GenieBridge implements the 4.7 interface as stubs', async () => {
     const t = createGenieBridge();
-    await expectStub(() => t.backendFor(binding), 28);
+    expect(t.backendFor(binding).kind).toBe('genie_one_mcp'); // G-02, #28
     await expectStub(() => t.submit(ask), 33);
     await expectStub(() => t.operations(MOG), 39);
     await expectStub(() => t.mapError({ httpStatus: 500 }), 32);
