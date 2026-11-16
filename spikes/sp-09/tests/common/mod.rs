@@ -39,6 +39,10 @@ pub struct State {
     pub busy: Busy,
     pub poll: Value,
     pub server_protocol: String,
+    /// Serve tools/list in two pages with nextCursor.
+    pub paginate: bool,
+    /// Extra structuredContent on the busy isError result.
+    pub busy_extra: Option<Value>,
 }
 
 #[derive(Clone)]
@@ -55,6 +59,8 @@ impl FakeGenie {
             busy: Busy::None,
             poll: json!({"status": "in_progress", "progress_steps": null}),
             server_protocol: "2025-06-18".into(),
+            paginate: false,
+            busy_extra: None,
         })))
     }
     pub fn with<R>(&self, f: impl FnOnce(&mut State) -> R) -> R {
@@ -146,6 +152,15 @@ impl Respond for FakeGenie {
         }
         match method.as_str() {
             "notifications/initialized" => ResponseTemplate::new(202),
+            "tools/list" if s.paginate => {
+                let all = fixture_tools()["tools"].as_array().unwrap().clone();
+                let page = if body["params"]["cursor"] == "page-2" {
+                    json!({"tools": all[2..]})
+                } else {
+                    json!({"tools": all[..2], "nextCursor": "page-2"})
+                };
+                reply(&s, rpc_result(&id, page))
+            }
             "tools/list" => reply(&s, rpc_result(&id, fixture_tools())),
             "tools/call" => {
                 let name = body["params"]["name"].as_str().unwrap_or("");
@@ -156,10 +171,13 @@ impl Respond for FakeGenie {
                     ) {
                         (Busy::IsError, true) => reply(
                             &s,
-                            rpc_result(
-                                &id,
-                                json!({"content": [{"type": "text", "text": BUSY_TEXT}], "isError": true}),
-                            ),
+                            rpc_result(&id, {
+                                let mut r = json!({"content": [{"type": "text", "text": BUSY_TEXT}], "isError": true});
+                                if let Some(x) = &s.busy_extra {
+                                    r["structuredContent"] = x.clone();
+                                }
+                                r
+                            }),
                         ),
                         (Busy::RpcError, true) => reply(
                             &s,

@@ -1,9 +1,12 @@
 //! The SP-09 live probe flow, generic over the token source so tests can run it
-//! against the fake server. The report holds status codes and envelope shapes only:
-//! no token, question, answer, host, workspace ID, conversation ID or session ID.
+//! against the fake server. The report holds status codes, fixed protocol words
+//! (envelope kind, content types, poll status from a fixed list, JSON-RPC code)
+//! and value-free shapes (key names, types, lengths, counts). It holds no token,
+//! question, answer, result value, host, workspace ID, conversation ID, session ID
+//! or CLI text.
 use crate::contract;
 use crate::envelope::{SignalRules, ToolCallOutcome};
-use crate::shape::shape;
+use crate::shape::{envelope_facts, known_status, shape};
 use crate::token::{TokenError, TokenSource};
 use crate::transport::{McpClient, McpError};
 use serde_json::{Value, json};
@@ -110,6 +113,7 @@ impl<T: TokenSource> Run<'_, T> {
             }),
             ToolCallOutcome::ToolError(r) | ToolCallOutcome::Ok(r) => json!({
                 "envelope": out.kind(),
+                "facts": envelope_facts(&r.raw),
                 "text_chars": r.text().chars().count(),
                 "structured_from": if r.raw.get("structuredContent").is_some() { "structuredContent" } else { "text" },
                 "result_shape": shape(&r.raw),
@@ -189,7 +193,7 @@ fn poll_summary(rules: &SignalRules, sc: &Option<Value>) -> Value {
     };
     let answer = sc.get("final_answer").and_then(Value::as_str).unwrap_or("");
     json!({
-        "status": sc.get("status"),
+        "status": known_status(sc.get("status")),
         "keys": sc.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()),
         "final_answer_chars": answer.chars().count(),
         "final_answer_ends_with_question_mark": answer.trim_end().ends_with('?'),
@@ -220,6 +224,7 @@ pub async fn run_probe<T: TokenSource>(client: &McpClient<T>, opts: &ProbeOption
         pass: false,
     };
     let mut pass_refresh = false;
+    let mut token_changed: Option<bool> = None;
     let mut busy_envelope: Option<Value> = None;
     let mut contract_ok = false;
 
@@ -289,7 +294,11 @@ pub async fn run_probe<T: TokenSource>(client: &McpClient<T>, opts: &ProbeOption
         }
         .await;
         match refresh {
-            Ok(changed) => run.step("force_refresh", true, json!({"token_changed": changed})),
+            Ok(changed) => {
+                token_changed = Some(changed);
+                // AT-22: an unchanged token proves nothing about rotation.
+                run.step("force_refresh", changed, json!({"token_changed": changed}))
+            }
             Err(e) => run.step("force_refresh", false, json!({"error": e.to_string()})),
         }
 
@@ -303,10 +312,8 @@ pub async fn run_probe<T: TokenSource>(client: &McpClient<T>, opts: &ProbeOption
             Ok(o) => {
                 let mut d = run.outcome_detail(o);
                 if let ToolCallOutcome::Ok(r) = o {
-                    first_status = r
-                        .structured()
-                        .and_then(|s| s.get("status").cloned())
-                        .unwrap_or(Value::Null);
+                    first_status =
+                        known_status(r.structured().as_ref().and_then(|s| s.get("status")));
                 }
                 d["session_unchanged"] = json!(same_session);
                 d["status"] = first_status.clone();
@@ -387,19 +394,35 @@ pub async fn run_probe<T: TokenSource>(client: &McpClient<T>, opts: &ProbeOption
         }
     }
 
-    out.pass = pass_refresh && busy_envelope.is_some() && contract_ok;
+    // Refresh item: pass only if the next call worked on the same session AND the
+    // token really changed; an OK call with the same token is "not_proven".
+    let refresh_verdict = match (pass_refresh, token_changed) {
+        (true, Some(true)) => "pass",
+        (true, _) => "not_proven",
+        (false, _) => "fail",
+    };
+    out.pass = refresh_verdict == "pass" && busy_envelope.is_some() && contract_ok;
+    let verdict = if out.pass {
+        "PASS"
+    } else if refresh_verdict == "not_proven" {
+        "NOT PROVEN"
+    } else {
+        "NOT YET"
+    };
     out.report = json!({
         "spike": "SP-09",
         "issue": 29,
         "created_unix": now_unix(),
         "harness_version": env!("CARGO_PKG_VERSION"),
-        "redaction": "no token, question, answer, host, workspace ID, conversation ID or session ID is in this file",
+        "redaction": "no token, question, answer, result value, CLI text, host, workspace ID, profile, conversation ID or session ID is in this file; shapes keep key names, types and lengths only",
         "pass_rule": {
-            "token_refresh_mid_session_works": pass_refresh,
+            "token_refresh_mid_session": refresh_verdict,
+            "token_changed_after_force_refresh": token_changed,
             "busy_envelope_recorded": busy_envelope.is_some(),
             "busy_envelope": busy_envelope,
             "contract_matches_live_tools_list": contract_ok,
             "pass": out.pass,
+            "verdict": verdict,
         },
         "steps": run.steps,
     });

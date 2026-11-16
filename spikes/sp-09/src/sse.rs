@@ -1,6 +1,6 @@
 //! Minimal `text/event-stream` parser for MCP Streamable HTTP replies
 //! (WHATWG event-stream rules: `data:` lines join with `\n`, `:` lines are comments,
-//! a blank line ends an event, CRLF and LF both end a line).
+//! a blank line ends an event, CRLF, LF and a bare CR end a line).
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SseEvent {
@@ -22,8 +22,9 @@ pub fn parse_events(body: &str) -> Vec<SseEvent> {
         }
         data_lines.clear();
     };
-    for line in body.split('\n') {
-        let line = line.strip_suffix('\r').unwrap_or(line);
+    // CRLF, LF and a bare CR all end a line.
+    let normalised = body.replace("\r\n", "\n").replace('\r', "\n");
+    for line in normalised.split('\n') {
         if line.is_empty() {
             flush(&mut cur, &mut data_lines, &mut out);
             continue;

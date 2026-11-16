@@ -112,10 +112,10 @@ async fn run(cmd: Cmd) -> Result<bool, String> {
             let pr = &out.report["pass_rule"];
             println!(
                 "\nSP-09 pass rule: refresh_mid_session={} busy_envelope_recorded={} contract={} => {}",
-                pr["token_refresh_mid_session_works"],
+                pr["token_refresh_mid_session"],
                 pr["busy_envelope_recorded"],
                 pr["contract_matches_live_tools_list"],
-                if out.pass { "PASS" } else { "NOT YET" }
+                pr["verdict"].as_str().unwrap_or("NOT YET")
             );
             println!("report written to {}", report.display());
             Ok(out.pass)

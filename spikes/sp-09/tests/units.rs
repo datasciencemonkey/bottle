@@ -5,9 +5,11 @@ use sp09::endpoint::{EndpointError, GenieOneEndpoint};
 use sp09::envelope::{
     EnvelopeKind, RpcError, Signal, SignalRules, TextSource, ToolCallOutcome, ToolResult,
 };
-use sp09::shape::shape;
+use sp09::shape::{envelope_facts, known_status, shape};
 use sp09::sse::parse_events;
-use sp09::token::{CliTokenSource, RotatingTokens, Token, TokenError, TokenSource, scrub};
+use sp09::token::{
+    CliErrorClass, CliTokenSource, RotatingTokens, Token, TokenError, TokenSource, scrub,
+};
 
 const GOOD: &str =
     "https://adb-1.azuredatabricks.net/ai-gateway/mcp-services/system.ai.genie_one_mcp?o=1234";
@@ -107,6 +109,15 @@ fn sp_09_sse_parser_handles_crlf_comments_and_multiline_data() {
     // A final event with no blank line after it still counts.
     assert_eq!(parse_events("data: tail").len(), 1);
     assert!(parse_events(": only a comment\n\n").is_empty());
+}
+
+#[test]
+fn sp_09_sse_parser_accepts_bare_cr_line_ends() {
+    let ev = parse_events("data: a\rdata: b\r\rid: 3\rdata: c\r");
+    assert_eq!(ev.len(), 2);
+    assert_eq!(ev[0].data, "a\nb");
+    assert_eq!(ev[1].id.as_deref(), Some("3"));
+    assert_eq!(ev[1].data, "c");
 }
 
 // ---------- envelopes and signals ----------
@@ -269,6 +280,19 @@ fn sp_09_contract_fixture_lists_required_tools_and_request_shapes_match() {
 }
 
 #[test]
+fn sp_09_contract_holds_for_any_tool_order_and_extra_tools() {
+    // A capture can list the tools in another order and add view_ask.
+    let mut f = fixture();
+    let tools = f["tools"].as_array_mut().unwrap();
+    tools.reverse();
+    tools.insert(
+        0,
+        json!({"name": "view_ask", "inputSchema": {"type": "object"}}),
+    );
+    assert!(contract::check_tools(&f).is_empty());
+}
+
+#[test]
 fn sp_09_contract_detects_missing_tool_and_bad_schema() {
     let mut f = fixture();
     f["tools"]
@@ -276,7 +300,13 @@ fn sp_09_contract_detects_missing_tool_and_bad_schema() {
         .unwrap()
         .retain(|t| t["name"] != "genie_cancel_response");
     // genie_ask now needs an argument the client does not send.
-    f["tools"][0]["inputSchema"]["required"] = json!(["question", "space_id"]);
+    let ask = f["tools"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|t| t["name"] == "genie_ask")
+        .unwrap();
+    ask["inputSchema"]["required"] = json!(["question", "space_id"]);
     let v = contract::check_tools(&f);
     assert!(
         v.iter()
@@ -353,6 +383,23 @@ fn sp_09_scrub_removes_token_like_words() {
         scrub("refresh failed for eyJhbGciOiJSUzI1NiJ9.e30.sig and dapi0123456789abcdef0123 ok");
     assert!(!s.contains("eyJhbGci") && !s.contains("dapi0123"), "{s}");
     assert!(s.contains("refresh failed") && s.contains("ok"));
+    // Embedded forms: key:value, JSON values, key=value, tabs, URLs and IDs.
+    let s = scrub(
+        "token:eyJabc.def {\"access_token\":\"dose-abc\"} x=eyJhbGciOiJIUzI1NiJ9.a.b Bearer\tdapi123 \
+         https://adb-9876543210123456.7.azuredatabricks.net/?o=9876543210123456 h.cloud.databricks.com",
+    );
+    for leak in [
+        "eyJabc",
+        "dose-abc",
+        "eyJhbGci",
+        "dapi123",
+        "9876543210123456",
+        "azuredatabricks",
+        "cloud.databricks",
+    ] {
+        assert!(!s.contains(leak), "scrub kept {leak:?}: {s}");
+    }
+    assert!(s.contains("token:") && s.contains("Bearer\t"), "{s}");
 }
 
 #[tokio::test]
@@ -430,18 +477,37 @@ async fn sp_09_cli_token_source_runs_auth_token_with_profile() {
 #[tokio::test]
 async fn sp_09_cli_token_errors_do_not_leak_secrets() {
     let dir = tempfile::tempdir().unwrap();
+    // The CLI text names the host, the workspace ID, the profile and a token.
     let cli = fake_cli(
         dir.path(),
-        "echo 'cannot refresh eyJhbGciOiJIUzI1NiJ9.leakme.sig' >&2\nexit 3",
+        "echo 'Error: refresh failed for https://adb-9876543210123456.7.azuredatabricks.net profile secretprof (workspace 9876543210123456): invalid_grant token:eyJhbGciOiJIUzI1NiJ9.leakme.sig' >&2\nexit 3",
     );
-    let err = CliTokenSource::new(&cli, "p1")
+    let err = CliTokenSource::new(&cli, "secretprof")
         .unwrap()
         .token(false)
         .await
         .unwrap_err();
     let text = format!("{err} {err:?}");
-    assert!(matches!(err, TokenError::Exit { code: Some(3), .. }));
-    assert!(!text.contains("leakme"), "{text}");
+    assert!(
+        matches!(
+            err,
+            TokenError::Exit {
+                code: Some(3),
+                class: CliErrorClass::LoginRequired
+            }
+        ),
+        "{text}"
+    );
+    for leak in [
+        "leakme",
+        "eyJ",
+        "secretprof",
+        "9876543210123456",
+        "azuredatabricks",
+        "invalid_grant",
+    ] {
+        assert!(!text.contains(leak), "error holds {leak:?}: {text}");
+    }
     let cli2 = fake_cli(dir.path(), "echo '{\"token_type\":\"Bearer\"}'");
     assert!(matches!(
         CliTokenSource::new(&cli2, "p1").unwrap().token(false).await,
@@ -454,27 +520,75 @@ async fn sp_09_cli_token_errors_do_not_leak_secrets() {
     ));
 }
 
+#[test]
+fn sp_09_cli_error_classes() {
+    use sp09::token::classify_cli_error as c;
+    assert_eq!(
+        c("Error: invalid_grant: refresh token expired"),
+        CliErrorClass::LoginRequired
+    );
+    assert_eq!(
+        c("Error: profile foo not found in ~/.databrickscfg"),
+        CliErrorClass::ProfileNotFound
+    );
+    assert_eq!(
+        c("M2M authentication is not supported"),
+        CliErrorClass::NotU2m
+    );
+    assert_eq!(c("context deadline exceeded"), CliErrorClass::Timeout);
+    assert_eq!(c("boom"), CliErrorClass::Other);
+}
+
 // ---------- shapes for the live report ----------
 
 #[test]
-fn sp_09_shape_redacts_content_and_keeps_envelope_keys() {
-    let v = json!({"jsonrpc": "2.0", "result": {"isError": true, "content": [{"type": "text", "text": "user data"}],
-        "structuredContent": {"status": "completed", "final_answer": "secret answer", "query_items": null, "n": 3}}});
+fn sp_09_shape_keeps_no_value_at_any_depth() {
+    let v = json!({"jsonrpc": "2.0", "result": {"isError": true,
+        "content": [{"type": "alice@corp.com", "text": "user data"}],
+        "structuredContent": {"status": "completed", "final_answer": "secret answer", "query_items": [
+            {"name": "hr.salaries_of_alice_smith", "code": "SELECT ssn FROM hr.people", "type": "alice@corp.com"}],
+            "n": 3}}});
     let s = shape(&v);
     let text = s.to_string();
-    assert!(
-        !text.contains("user data") && !text.contains("secret answer"),
-        "{text}"
-    );
-    assert_eq!(s["jsonrpc"], "2.0");
-    assert_eq!(s["result"]["isError"], true);
-    assert_eq!(s["result"]["structuredContent"]["status"], "completed");
+    for leak in [
+        "user data",
+        "secret answer",
+        "hr.salaries_of_alice_smith",
+        "SELECT ssn",
+        "alice@corp.com",
+        "completed",
+        "2.0",
+    ] {
+        assert!(!text.contains(leak), "shape holds {leak:?}: {text}");
+    }
+    assert_eq!(s["result"]["isError"], "<bool>");
     assert_eq!(
         s["result"]["structuredContent"]["final_answer"],
         "<string len=13>"
     );
-    assert_eq!(s["result"]["structuredContent"]["query_items"], Value::Null);
+    assert_eq!(
+        s["result"]["structuredContent"]["query_items"]["array_len"],
+        1
+    );
+    assert_eq!(
+        s["result"]["structuredContent"]["query_items"]["first"]["name"],
+        "<string len=26>"
+    );
     assert_eq!(s["result"]["structuredContent"]["n"], "<number>");
-    assert_eq!(s["result"]["content"]["array_len"], 1);
-    assert_eq!(s["result"]["content"]["first"]["type"], "text");
+}
+
+#[test]
+fn sp_09_envelope_facts_keep_only_fixed_words_at_fixed_paths() {
+    let r = json!({"isError": true, "content": [{"type": "text", "text": "x"}, {"type": "alice@corp.com"}],
+        "structuredContent": {"status": "completed", "name": "hr.people"}});
+    let f = envelope_facts(&r);
+    assert_eq!(f["isError"], true);
+    assert_eq!(f["content_types"], json!(["text", "<other>"]));
+    assert_eq!(f["structured_status"], "completed");
+    assert!(!f.to_string().contains("alice") && !f.to_string().contains("hr.people"));
+    assert_eq!(known_status(Some(&json!("SELECT 1"))), json!("<other>"));
+    assert_eq!(
+        known_status(Some(&json!("in_progress"))),
+        json!("in_progress")
+    );
 }

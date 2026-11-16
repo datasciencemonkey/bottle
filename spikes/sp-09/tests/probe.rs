@@ -25,15 +25,25 @@ fn opts() -> ProbeOptions {
 }
 
 async fn probe_with(busy: Busy, reply: Reply) -> (sp09::probe::ProbeOutput, wiremock::MockServer) {
+    probe_cfg(busy, reply, &[T1, T2], |_| {}).await
+}
+
+async fn probe_cfg(
+    busy: Busy,
+    reply: Reply,
+    tokens: &[&str],
+    extra: impl FnOnce(&mut common::State),
+) -> (sp09::probe::ProbeOutput, wiremock::MockServer) {
     let fake = FakeGenie::new(&[T1, T2]);
     fake.with(|s| {
         s.busy = busy;
         s.reply = reply;
         s.poll = json!({"status": "completed", "final_answer": ANSWER, "query_items": null,
                         "progress_steps": null, "deep_link": null});
+        extra(s);
     });
     let (server, ep) = start(&fake).await;
-    let client = McpClient::new(ep, RotatingTokens::new(&[T1, T2]));
+    let client = McpClient::new(ep, RotatingTokens::new(tokens));
     (run_probe(&client, &opts()).await, server)
 }
 
@@ -117,6 +127,105 @@ async fn sp_09_probe_reports_busy_not_reproduced() {
     assert!(!out.pass);
     let pr = &out.report["pass_rule"];
     assert_eq!(pr["busy_envelope_recorded"], false);
-    assert_eq!(pr["token_refresh_mid_session_works"], true);
+    assert_eq!(pr["token_refresh_mid_session"], "pass");
     assert_eq!(out.report["steps"][5]["detail"]["busy_reproduced"], false);
+}
+
+const SENSITIVE: [&str; 5] = [
+    "hr.salaries_of_alice_smith",
+    "SELECT ssn FROM hr.people",
+    "alice@corp.com",
+    "bob@corp.com",
+    "finance.revenue_q3",
+];
+
+#[tokio::test]
+async fn sp_09_probe_report_holds_no_genie_result_values() {
+    // Table names, SQL and emails under the keys name, code and type, in a poll
+    // result and in an isError result.
+    let (out, _server) = probe_cfg(Busy::IsError, Reply::Json, &[T1, T2], |s| {
+        s.poll = json!({"status": "completed", "final_answer": ANSWER,
+            "query_items": [{"item_id": "pub_1_output", "name": "hr.salaries_of_alice_smith",
+                             "code": "SELECT ssn FROM hr.people", "type": "alice@corp.com",
+                             "sql": "SELECT ssn FROM hr.people"}],
+            "progress_steps": ["Reading finance.revenue_q3"], "deep_link": null});
+        s.busy_extra = Some(
+            json!({"name": "finance.revenue_q3", "code": "bob@corp.com", "type": "alice@corp.com"}),
+        );
+    })
+    .await;
+    let text = out.report.to_string();
+    for leak in SENSITIVE {
+        assert!(!text.contains(leak), "report holds {leak:?}");
+    }
+    // The facts that are kept are fixed words.
+    assert_eq!(out.report["steps"][6]["detail"]["status"], "completed");
+    assert_eq!(
+        out.report["steps"][5]["detail"]["facts"]["content_types"],
+        json!(["text"])
+    );
+}
+
+#[tokio::test]
+async fn sp_09_probe_refresh_with_same_token_is_not_proven() {
+    // --force-refresh gives back the same token: the next call works, but no
+    // rotation was shown, so the pass rule must not say PASS (AT-22).
+    let (out, _server) = probe_cfg(Busy::IsError, Reply::Json, &[T1, T1], |_| {}).await;
+    let pr = &out.report["pass_rule"];
+    assert_eq!(pr["token_changed_after_force_refresh"], false);
+    assert_eq!(pr["token_refresh_mid_session"], "not_proven");
+    assert_eq!(pr["verdict"], "NOT PROVEN");
+    assert_eq!(pr["pass"], false);
+    assert!(!out.pass);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn sp_09_probe_report_holds_no_cli_text() {
+    use std::os::unix::fs::PermissionsExt;
+    // A fake CLI that gives a token 4 times, then fails with text that names the
+    // host, the workspace ID, the profile and a token-shaped key:value.
+    let dir = tempfile::tempdir().unwrap();
+    let count = dir.path().join("count");
+    let cli = dir.path().join("databricks");
+    std::fs::write(
+        &cli,
+        format!(
+            "#!/bin/sh\nn=$(cat '{c}' 2>/dev/null || echo 0); n=$((n+1)); echo $n > '{c}'\n\
+             if [ $n -le 4 ]; then printf '{{\"access_token\":\"{T1}\"}}\\n'; exit 0; fi\n\
+             echo 'Error: refresh failed for https://adb-9876543210123456.7.azuredatabricks.net profile secretprof workspace 9876543210123456: invalid_grant token:eyJhbGciOiJIUzI1NiJ9.leak.sig' >&2\nexit 1\n",
+            c = count.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let fake = FakeGenie::new(&[T1]);
+    let (_server, ep) = start(&fake).await;
+    let client = McpClient::new(
+        ep,
+        sp09::token::CliTokenSource::new(&cli, "secretprof").unwrap(),
+    );
+    let out = run_probe(&client, &opts()).await;
+    let text = out.report.to_string();
+    for leak in [
+        "secretprof",
+        "9876543210123456",
+        "azuredatabricks",
+        "eyJ",
+        "leak.sig",
+        "invalid_grant",
+        T1,
+    ] {
+        assert!(!text.contains(leak), "report holds {leak:?}: {text}");
+    }
+    let refresh = &out.report["steps"][3];
+    assert_eq!(refresh["step"], "force_refresh");
+    assert_eq!(refresh["ok"], false);
+    assert!(
+        refresh["detail"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("class login_required")
+    );
+    assert!(!out.pass);
 }

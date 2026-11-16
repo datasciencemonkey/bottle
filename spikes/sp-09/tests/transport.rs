@@ -406,3 +406,51 @@ async fn sp_09_trace_and_errors_hold_no_token() {
         assert!(!dump.contains(secret) && !json.contains(secret));
     }
 }
+
+#[tokio::test]
+async fn sp_09_tools_list_follows_next_cursor() {
+    let fake = FakeGenie::new(&["t1"]);
+    fake.with(|s| s.paginate = true);
+    let (server, client) = ready(&fake, RotatingTokens::new(&["t1"])).await;
+    let tools = client.list_tools().await.unwrap();
+    assert_eq!(tools["tools"], common::fixture_tools()["tools"]);
+    let reqs = server.received_requests().await.unwrap();
+    let lists: Vec<serde_json::Value> = reqs
+        .iter()
+        .map(|r| serde_json::from_slice::<serde_json::Value>(&r.body).unwrap())
+        .filter(|b| b["method"] == "tools/list")
+        .collect();
+    assert_eq!(lists.len(), 2);
+    assert!(lists[0]["params"].get("cursor").is_none());
+    assert_eq!(lists[1]["params"]["cursor"], "page-2");
+}
+
+#[tokio::test]
+async fn sp_09_redirects_are_not_followed() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(sp09::endpoint::GENIE_ONE_PATH))
+        .respond_with(ResponseTemplate::new(307).insert_header("location", "/evil"))
+        .mount(&server)
+        .await;
+    Mock::given(path("/evil"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let url = format!(
+        "{}{}?o={}",
+        server.uri(),
+        sp09::endpoint::GENIE_ONE_PATH,
+        WORKSPACE_ID
+    );
+    let ep = sp09::endpoint::GenieOneEndpoint::parse_loopback_for_tests(&url).unwrap();
+    let client = McpClient::new(ep, RotatingTokens::new(&["t1"]));
+    let err = client.initialize().await.unwrap_err();
+    assert!(matches!(err, McpError::Http { status: 307, .. }), "{err:?}");
+    let reqs = server.received_requests().await.unwrap();
+    assert_eq!(reqs.len(), 1);
+    assert!(reqs.iter().all(|r| r.url.path() != "/evil"));
+}

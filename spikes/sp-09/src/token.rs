@@ -31,12 +31,78 @@ pub enum TokenError {
     BadProfile,
     #[error("could not start the Databricks CLI: {0:?}")]
     Spawn(std::io::ErrorKind),
-    #[error("databricks auth token failed (exit {code:?}): {stderr}")]
-    Exit { code: Option<i32>, stderr: String },
+    /// The CLI failed. Only the exit code and a fixed class are kept: the CLI
+    /// text can name the host, the workspace ID or the profile, so it is dropped.
+    #[error("databricks auth token failed (exit {code:?}, class {class})")]
+    Exit {
+        code: Option<i32>,
+        class: CliErrorClass,
+    },
     #[error("databricks auth token printed no access_token")]
     BadOutput,
     #[error("the token source has no more tokens")]
     Exhausted,
+}
+
+/// A fixed category for a failed `databricks auth token`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CliErrorClass {
+    LoginRequired,
+    NotU2m,
+    ProfileNotFound,
+    Timeout,
+    Other,
+}
+
+impl std::fmt::Display for CliErrorClass {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            CliErrorClass::LoginRequired => "login_required",
+            CliErrorClass::NotU2m => "not_u2m",
+            CliErrorClass::ProfileNotFound => "profile_not_found",
+            CliErrorClass::Timeout => "timeout",
+            CliErrorClass::Other => "other",
+        })
+    }
+}
+
+/// Map CLI stderr to a class. The text itself is never kept.
+pub fn classify_cli_error(stderr: &str) -> CliErrorClass {
+    let t = stderr.to_lowercase();
+    let has = |words: &[&str]| words.iter().any(|w| t.contains(w));
+    if has(&["timeout", "deadline exceeded", "timed out"]) {
+        CliErrorClass::Timeout
+    } else if has(&[
+        "m2m",
+        "u2m",
+        "not supported",
+        "pat ",
+        "personal access token",
+    ]) {
+        CliErrorClass::NotU2m
+    } else if t.contains("profile")
+        && has(&[
+            "not found",
+            "no such",
+            "does not exist",
+            "cannot find",
+            "has no",
+        ])
+    {
+        CliErrorClass::ProfileNotFound
+    } else if has(&[
+        "invalid_grant",
+        "login",
+        "refresh",
+        "expired",
+        "reauth",
+        "unauthorized",
+    ]) {
+        CliErrorClass::LoginRequired
+    } else {
+        CliErrorClass::Other
+    }
 }
 
 /// Gives a token for each request (G-04d). `force_refresh` asks for a new token
@@ -98,13 +164,9 @@ impl TokenSource for CliTokenSource {
             .await
             .map_err(|e| TokenError::Spawn(e.kind()))?;
         if !out.status.success() {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            let first: String = stderr.lines().take(3).collect::<Vec<_>>().join(" ");
-            let mut s = scrub(&first);
-            s.truncate(300);
             return Err(TokenError::Exit {
                 code: out.status.code(),
-                stderr: s,
+                class: classify_cli_error(&String::from_utf8_lossy(&out.stderr)),
             });
         }
         // stdout holds the token: parse it, never log or keep the raw bytes.
@@ -117,23 +179,46 @@ impl TokenSource for CliTokenSource {
     }
 }
 
-fn token_like(word: &str) -> bool {
-    let w = word.trim_matches(|c: char| !c.is_ascii_alphanumeric());
-    let charset = w
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~' | '+' | '/' | '='));
-    w.starts_with("eyJ")
-        || w.starts_with("dapi")
-        || w.starts_with("dose")
-        || (w.len() >= 32 && charset)
+fn token_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~' | '+' | '/')
 }
 
-/// Replace words that look like tokens (JWTs, PATs, long opaque strings).
+fn secret_like(run: &str) -> bool {
+    let digits = run.chars().filter(char::is_ascii_digit).count();
+    run.starts_with("eyJ")
+        || run.starts_with("dapi")
+        || run.starts_with("dose")
+        || run.len() >= 32
+        // A workspace ID or another long number.
+        || (digits >= 10 && digits * 2 >= run.len())
+        // A host name.
+        || run.contains("databricks.")
+        || run.contains(".azuredatabricks.")
+        || run.contains("cloud.databricks")
+}
+
+/// Replace token-like, host-like and long-number runs, wherever they sit:
+/// after `:` or `=`, inside JSON strings, after a tab or inside a URL.
+/// The report does not use CLI text at all; this is a second guard for logs.
 pub fn scrub(text: &str) -> String {
-    text.split(' ')
-        .map(|w| if token_like(w) { "<redacted>" } else { w })
-        .collect::<Vec<_>>()
-        .join(" ")
+    let mut out = String::with_capacity(text.len());
+    let mut run = String::new();
+    let flush = |run: &mut String, out: &mut String| {
+        if !run.is_empty() {
+            out.push_str(if secret_like(run) { "<redacted>" } else { run });
+            run.clear();
+        }
+    };
+    for c in text.chars() {
+        if token_char(c) {
+            run.push(c);
+        } else {
+            flush(&mut run, &mut out);
+            out.push(c);
+        }
+    }
+    flush(&mut run, &mut out);
+    out
 }
 
 /// Test double: a list of tokens.
