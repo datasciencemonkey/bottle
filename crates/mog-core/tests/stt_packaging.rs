@@ -42,11 +42,7 @@ struct FakeNet {
 impl RangeFetch for FakeNet {
     fn open(&self, url: &str, offset: u64) -> Result<(u64, Box<dyn Read + '_>), FetchError> {
         self.calls.borrow_mut().push((url.to_string(), offset));
-        let body = self
-            .bodies
-            .get(url)
-            .ok_or(FetchError::Status(404))?
-            .clone();
+        let body = self.bodies.get(url).ok_or(FetchError::Status(404))?.clone();
         let start = if self.ignore_range { 0 } else { offset };
         let mut rest = body[start as usize..].to_vec();
         if let Some(n) = self.break_after.borrow_mut().take() {
@@ -91,7 +87,10 @@ fn fake_spec() -> (ModelSpec, BTreeMap<&'static str, Vec<u8>>) {
     let archive = b"fake archive bytes".repeat(400);
     let spec = ModelSpec {
         name: "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
-        archive: pinned("sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2", &archive),
+        archive: pinned(
+            "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2",
+            &archive,
+        ),
         files,
     };
     bodies.insert("archive", archive);
@@ -179,7 +178,10 @@ fn cap_49a_no_download_starts_before_consent() {
         .unwrap_err();
         assert_eq!(err, InstallError::ConsentRequired);
         assert_eq!(err.code(), "stt_consent_required");
-        assert!(net.calls.borrow().is_empty(), "a request went out before consent");
+        assert!(
+            net.calls.borrow().is_empty(),
+            "a request went out before consent"
+        );
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 0, "a file was written");
         assert_eq!(installer.status(), ModelStatus::Missing);
     }
@@ -354,7 +356,12 @@ fn cap_49c_the_archive_and_the_extracted_files_are_checked() {
         bodies["archive"].clone(),
     );
     let good = |_a: &Path, dest: &Path| -> io::Result<()> {
-        for f in ["encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt"] {
+        for f in [
+            "encoder.int8.onnx",
+            "decoder.int8.onnx",
+            "joiner.int8.onnx",
+            "tokens.txt",
+        ] {
             fs::write(dest.join(f), &fake_spec().1[f])?;
         }
         Ok(())
@@ -370,7 +377,10 @@ fn cap_49c_the_archive_and_the_extracted_files_are_checked() {
     )
     .unwrap();
     assert_eq!(installer.status(), ModelStatus::Installed);
-    assert!(!dir.join(spec.archive.name).exists(), "the archive is removed after the extract");
+    assert!(
+        !dir.join(spec.archive.name).exists(),
+        "the archive is removed after the extract"
+    );
 
     // An archive whose contents do not match the pinned file hashes stops the install.
     let bad = |_a: &Path, dest: &Path| -> io::Result<()> {
@@ -427,7 +437,9 @@ fn cap_50a_sherpa_onnx_archive_pins_cover_the_ci_and_release_targets() {
             .find(|(n, _)| *n == name)
             .unwrap_or_else(|| panic!("no pin for {name}"));
         assert_eq!(sha.len(), 64);
-        assert!(sha.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
+        assert!(sha
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
     }
     // The build script and the vendor script read the same pin file.
     let file = include_str!("../sherpa-onnx-archives.sha256");
@@ -439,7 +451,7 @@ fn cap_50a_sherpa_onnx_archive_pins_cover_the_ci_and_release_targets() {
 #[test]
 fn cap_50b_the_core_does_not_link_sherpa_onnx_without_the_local_stt_feature() {
     // Without `local-stt` the build fetches nothing; with it, build.rs refuses a build that has no
-    // vendored, hash-checked archive (see docs/stt-local.md).
+    // vendored, hash-checked archive (see docs/adr/0049-local-stt-packaging.md).
     let manifest = include_str!("../Cargo.toml");
     assert!(manifest.contains("local-stt = ["));
     assert!(manifest.contains("sherpa-onnx = { version = \"=2.0.1\", optional = true"));
@@ -454,7 +466,10 @@ fn cap_49_errors_are_content_free_codes() {
         (InstallError::ConsentRequired, "stt_consent_required"),
         (InstallError::UrlNotAllowed, "stt_url_not_allowed"),
         (InstallError::Cancelled, "stt_download_cancelled"),
-        (InstallError::HashMismatch { file: "tokens.txt" }, "stt_hash_mismatch"),
+        (
+            InstallError::HashMismatch { file: "tokens.txt" },
+            "stt_hash_mismatch",
+        ),
     ] {
         assert_eq!(err.code(), code);
     }

@@ -118,6 +118,7 @@ Add one row for each Bottle file that holds adapted Handy code.
 | `crates/mog-core/src/audio_device/cpal_backend.rs` | `src-tauri/src/managers/audio.rs` |
 | `crates/mog-core/src/audio_device/sink.rs` | `src-tauri/src/audio_toolkit/audio/sink.rs` |
 | `crates/mog-core/src/hotkey_macos.rs` | `src-tauri/src/secure_input.rs` |
+| `crates/mog-core/src/stt_model.rs` | `src-tauri/src/managers/model/download.rs` |
 | `spikes/sp-03/src/clamshell.rs` | `src-tauri/src/helpers/clamshell.rs` |
 | `spikes/sp-03/src/secure_input.rs` | `src-tauri/src/secure_input.rs` |
 | `src-tauri/src/macos_panel.rs` | `src-tauri/src/overlay.rs` |
@@ -136,6 +137,8 @@ restrictions to the CC-BY-4.0 licence.
 Source: https://github.com/k2-fsa/sherpa-onnx. The licence text of its LICENSE
 file follows. The upstream repository has no NOTICE file at the time of
 writing; if a release that Bottle uses adds one, its text must be added here.
+Bottle links the sherpa-onnx 2.0.1 static libraries (with onnxruntime) only in the
+`local-stt` build of `mog-core` (#45, ADR 0049).
 
 ```text
                                  Apache License
