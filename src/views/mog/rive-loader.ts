@@ -41,11 +41,28 @@ export type OfflineRiveOptions = Omit<
   src: string;
 };
 
-/** A bundled URL is a path on the app origin: no scheme and no host. */
-export function isBundledUrl(url: string): boolean {
+/** `scheme://host[:port]`; it also works for `tauri:`, whose WHATWG `origin` is "null". */
+function originOf(u: URL): string {
+  return `${u.protocol}//${u.host}`;
+}
+
+/** The page the MOG view runs on, or the macOS app origin outside a browser (tests). */
+function pageUrl(): string {
+  return globalThis.location?.href ?? 'tauri://localhost/mog.html';
+}
+
+/**
+ * A bundled URL is a path on the app origin: no scheme and no host. The URL parser strips
+ * leading spaces and control characters and reads `\` as `/`, so those are refused first.
+ * Then the path must resolve to the origin of `base` (the page URL by default).
+ */
+export function isBundledUrl(url: string, base: string = pageUrl()): boolean {
   if (url === '') return false;
-  if (/^[a-z][a-z0-9+.-]*:/i.test(url)) return false;
-  return !url.startsWith('//') && !url.startsWith('\\');
+  if (/[\s\\]/.test(url)) return false;
+  if ([...url].some((c) => c.charCodeAt(0) < 0x20 || c.charCodeAt(0) === 0x7f)) return false;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(url) || url.startsWith('//')) return false;
+  const page = new URL(base);
+  return originOf(new URL(url, page)) === originOf(page);
 }
 
 /** Point the runtime at the bundled wasm and turn off its CDN fallbacks. */

@@ -91,11 +91,25 @@ describe('[SEC-20a] [AT-37] offline Rive loader', () => {
       'blob:https://example.com/1',
       'HTTPS://EXAMPLE.COM/m.riv',
       '\\\\example.com\\m.riv',
+      '/\\evil.com/x.riv',
+      ' https://evil.com/x.riv',
+      '\t//evil.com/x.riv',
+      '\n/assets/m.riv',
       '',
     ]) {
       const { deps, built } = fakeDeps();
       expect(() => createOfflineRive({ src, canvas }, deps), src).toThrow(/bundled/);
       expect(built).toHaveLength(0);
+    }
+  });
+
+  it('[SEC-20a] [AT-37] a path is bundled only if it resolves to the app origin on each OS', () => {
+    for (const base of ['tauri://localhost/mog.html', 'http://tauri.localhost/mog.html']) {
+      for (const src of ['/\\evil.com/x.riv', ' https://evil.com/x.riv', '\t//evil.com/x.riv']) {
+        expect(isBundledUrl(src, base), `${base} ${JSON.stringify(src)}`).toBe(false);
+      }
+      expect(isBundledUrl('/assets/mascot.riv', base), base).toBe(true);
+      expect(isBundledUrl('../assets/mascot.riv', base), base).toBe(true);
     }
   });
 
