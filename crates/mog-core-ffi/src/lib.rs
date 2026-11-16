@@ -124,6 +124,7 @@ fn call_json(text: &str) -> String {
         return error_json("invalid_json");
     };
     let args = envelope.remove("args").unwrap_or(serde_json::Value::Null);
+    // TODO(#176): dispatch through the core instance that `mog_init` creates, not a stub.
     match StubIpcGateway.dispatch(FFI_WINDOW_LABEL, &command, args) {
         Ok(value) => value.to_string(),
         Err(e) => error_json(e.code()),

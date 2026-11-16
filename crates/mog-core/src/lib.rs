@@ -3,7 +3,7 @@
 //! The core owns everything inside the secret boundary: the CLI child process, tokens,
 //! HTTP and MCP transport, audio, the local store and the IPC gateway. The Tauri app
 //! links this crate; `mog-core-ffi` exposes the same command and event envelope through
-//! a C ABI. The 17 component modules (R1-R17) land in #225.
+//! a C ABI. There is one module per component (R1-R14, R16, R17); R15 is `mog-core-ffi`.
 
 pub mod agent_host;
 pub mod bottle_mcp;

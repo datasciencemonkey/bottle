@@ -1,6 +1,9 @@
 //! R16 AgentHost (section 4.3).
 //!
 //! Responsibilities: Starts and stops the harness child process of each active MOG (Claude or Codex), gives it the loopback endpoints and a per-session secret, gives it no token, writes the content-free agent action log.
+//!
+//! Binding override (U11, ARC-7, `AGENTS.md`): there is one shared harness runtime with one
+//! session per active MOG, not one child process per MOG. The trait below follows U11.
 
 use crate::error::{CoreError, CoreResult};
 

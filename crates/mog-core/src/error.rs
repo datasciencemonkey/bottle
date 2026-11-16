@@ -14,6 +14,11 @@ pub enum CoreError {
         /// The component ID, for example `"R1"`.
         component: &'static str,
     },
+    /// A component refused a command that would return a token outside R6 TokenBroker (ARC-6).
+    TokenCommandRefused {
+        /// The component ID that refused, for example `"R5"`.
+        component: &'static str,
+    },
 }
 
 impl CoreError {
@@ -21,6 +26,7 @@ impl CoreError {
     pub fn code(&self) -> &'static str {
         match self {
             CoreError::NotImplemented { .. } => "not_implemented",
+            CoreError::TokenCommandRefused { .. } => "token_command_refused",
         }
     }
 }
@@ -30,6 +36,9 @@ impl fmt::Display for CoreError {
         match self {
             CoreError::NotImplemented { component } => {
                 write!(f, "{component} is not implemented yet")
+            }
+            CoreError::TokenCommandRefused { component } => {
+                write!(f, "{component} refused a command that returns a token")
             }
         }
     }
