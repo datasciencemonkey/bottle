@@ -7,7 +7,7 @@ use bottle_lib::hotkey_settings::{
     HotkeySettings, HotkeySettingsStore, MemorySettingsStore, SaveError, TalkKeySink,
 };
 use bottle_lib::ipc::{
-    rejection, route, runs_off_main_thread, BrainLink, HostComponents, HotkeysRoute,
+    rejection, route, runs_off_main_thread, schedule, BrainLink, HostComponents, HotkeysRoute,
 };
 use bottle_lib::window_host::{TauriWindowHost, WindowError};
 use mog_core::error::{CoreError, CoreResult};
@@ -463,7 +463,7 @@ fn cap_43b_hotkeys_set_reaches_the_host_settings_and_returns_conflicts() {
 }
 
 #[test]
-fn mb_14_hotkeys_set_unknown_action_is_invalid_args() {
+fn cap_43b_hotkeys_set_unknown_action_is_invalid_args() {
     let settings = hotkeys(Box::new(MemorySettingsStore::default()));
     assert_eq!(
         set("brain", Some(&settings), json!({"bogus": "Ctrl+Shift+B"})),
@@ -576,9 +576,75 @@ fn sec_03_a_component_code_outside_the_list_becomes_host_failed() {
 }
 
 #[test]
-fn sec_01_window_op_replies_are_scrubbed() {
-    // The gateway's rule-7 scrub covers the host replies too: a reply never holds a token.
-    let w = FakeWindows::default();
-    let got = brain_call(&w, "window_card_show", json!({"mogId": "a1"})).unwrap();
-    assert!(!mog_core::token_guard::json_contains_secret(&got));
+fn sec_01_host_component_replies_are_scrubbed() {
+    // The gateway's rule-7 scrub covers the host replies: a reply never carries a token.
+    let fake = FakeHotkeys(
+        Ok(json!({"conflicts": [{"app": format!("x {SECRET} y")}]})),
+        Mutex::default(),
+    );
+    let got = set("brain", Some(&fake), json!({})).unwrap();
+    assert!(!mog_core::token_guard::json_contains_secret(&got), "{got}");
+    assert!(!got.to_string().contains(SECRET), "{got}");
+    assert_eq!(got["conflicts"].as_array().map(Vec::len), Some(1));
+}
+
+#[test]
+fn mb_14_hotkeys_set_route_does_not_save_a_duplicate_binding() {
+    let settings = hotkeys(Box::new(MemorySettingsStore::default()));
+    let before = settings.bindings();
+    // The open-card key asks for the chord of the panic key (Mac default).
+    let got = set(
+        "hub",
+        Some(&settings),
+        json!({"openCard": "Cmd+Shift+Esc", "session": "Ctrl+Shift+J"}),
+    )
+    .unwrap();
+    let kinds: Vec<&str> = got["conflicts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|c| c["kind"].as_str())
+        .collect();
+    assert!(kinds.contains(&"duplicate"), "{got}");
+    let after = settings.bindings();
+    use mog_core::hotkey_bindings::HotkeyAction;
+    assert_eq!(
+        after.get(HotkeyAction::OpenCard),
+        before.get(HotkeyAction::OpenCard)
+    );
+    assert_ne!(
+        after.get(HotkeyAction::Session),
+        before.get(HotkeyAction::Session)
+    );
+}
+
+#[test]
+fn arc_3_schedule_runs_window_ops_on_a_worker_and_others_inline() {
+    use std::sync::mpsc;
+    let caller = std::thread::current().id();
+    for c in COMMANDS {
+        let (tx, rx) = mpsc::channel();
+        schedule(c.name, move || {
+            let _ = tx.send(std::thread::current().id());
+        });
+        let ran_on = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the job ran");
+        if c.name.starts_with("window_") {
+            assert_ne!(ran_on, caller, "{} ran on the calling thread", c.name);
+        } else {
+            assert_eq!(ran_on, caller, "{} left the calling thread", c.name);
+        }
+    }
+}
+
+#[test]
+fn arc_5_an_inline_command_has_run_when_schedule_returns() {
+    // view_emit order: an inline job is done before the next call is scheduled.
+    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = std::sync::Arc::clone(&done);
+    schedule("view_emit", move || {
+        flag.store(true, std::sync::atomic::Ordering::SeqCst)
+    });
+    assert!(done.load(std::sync::atomic::Ordering::SeqCst));
 }

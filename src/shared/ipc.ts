@@ -245,6 +245,8 @@ export const IPC_ERROR_CODES = [
   'mog_cap_reached',
   'unknown_mog',
   'window_closing',
+  /** `config_*`: the config store is missing or failed (routed in #379). */
+  'config_storage_failed',
 ] as const;
 
 export type IpcErrorCode = (typeof IPC_ERROR_CODES)[number];

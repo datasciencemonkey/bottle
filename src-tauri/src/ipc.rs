@@ -201,6 +201,7 @@ impl GatewayComponents for HostComponents<'_> {
                     .map_err(|e| hotkeys_error(command, e))
             }
             // Each feature issue wires its R1-R17 component here.
+            // TODO(#379): `config_*` goes to the config component of #372 (`config_storage_failed`).
             _ => Err(refused(IpcError::NotImplemented {
                 command: command.to_owned(),
             })),
@@ -293,21 +294,25 @@ pub fn handler<R: Runtime>(invoke: Invoke<R>) -> bool {
         }
     };
     let resolver = invoke.resolver;
-    if runs_off_main_thread(&name) {
-        // ADR 0022 decision 6: an R11 op may wait for the main thread, so never run it here.
-        tauri::async_runtime::spawn_blocking(move || {
-            match route_from(&webview, &label, &name, args) {
-                Ok(v) => resolver.resolve(v),
-                Err(e) => resolver.reject(e),
-            }
-        });
-    } else {
+    let command = name.clone();
+    schedule(&command, move || {
         match route_from(&webview, &label, &name, args) {
             Ok(v) => resolver.resolve(v),
             Err(e) => resolver.reject(e),
         }
-    }
+    });
     true
+}
+
+/// Run the job of one call. An R11 op goes to a worker (`spawn_blocking`) and resolves later,
+/// because it can wait for the main thread (ADR 0022 decision 6). Every other command runs
+/// now, on the calling thread, so `view_emit` keeps its order.
+pub fn schedule<F: FnOnce() + Send + 'static>(command: &str, job: F) {
+    if runs_off_main_thread(command) {
+        tauri::async_runtime::spawn_blocking(job);
+    } else {
+        job();
+    }
 }
 
 fn channel_on<R: Runtime>(c: &ChannelRef, webview: &tauri::Webview<R>) -> Option<Channel<Value>> {
@@ -429,6 +434,10 @@ mod tests {
         assert!(ipc.contains("hardened_gateway_with("));
         // ADR 0022 decision 6: the R11 ops run on a worker, not on the IPC thread.
         assert!(ipc.contains("spawn_blocking("));
+        assert!(
+            ipc.contains("schedule(&command"),
+            "the handler schedules every call"
+        );
     }
 
     #[test]

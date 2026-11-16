@@ -194,6 +194,11 @@ pub enum IpcError {
     WindowClosing {
         command: String,
     },
+    /// `config_*`: the config store is missing or could not read or write. The routing of
+    /// `config_*` is #379 (ADR 0040); the code exists now so that change adds no code.
+    ConfigStorageFailed {
+        command: String,
+    },
 }
 
 impl std::fmt::Display for IpcError {
@@ -222,6 +227,9 @@ impl std::fmt::Display for IpcError {
             IpcError::UnknownMog { command } => write!(f, "{command}: no such MOG window"),
             IpcError::WindowClosing { command } => {
                 write!(f, "{command}: the old window is still closing")
+            }
+            IpcError::ConfigStorageFailed { command } => {
+                write!(f, "{command}: the config store failed")
             }
         }
     }

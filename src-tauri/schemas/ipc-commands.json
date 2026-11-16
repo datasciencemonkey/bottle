@@ -1512,7 +1512,8 @@
     "invalid_mode",
     "mog_cap_reached",
     "unknown_mog",
-    "window_closing"
+    "window_closing",
+    "config_storage_failed"
   ],
   "events": [
     {
