@@ -19,8 +19,7 @@ use crate::error::{CoreError, CoreResult};
 const ID: &str = "R1";
 
 /// The text of the "Talk key paused" pill (Appendix E, CAP-39c).
-pub const TALK_KEY_PAUSED_PILL: &str =
-    "Talk key paused: another app protects typing. Use ⌃⇧Space.";
+pub const TALK_KEY_PAUSED_PILL: &str = "Talk key paused: another app protects typing. Use ⌃⇧Space.";
 
 /// How often the watchdog polls Secure Event Input, the session and the permission.
 /// The OS has no Secure Event Input notification, so a poll is the only way (ADR 0008).
@@ -76,7 +75,11 @@ pub enum PttPhase {
 impl PttPhase {
     /// The `phase` value of the `hotkey.ptt` event.
     pub fn as_str(self) -> &'static str {
-        todo!()
+        match self {
+            PttPhase::Down => "down",
+            PttPhase::Up => "up",
+            PttPhase::Cancel => "cancel",
+        }
     }
 }
 
@@ -103,7 +106,10 @@ pub enum HotkeyOutput {
 impl HotkeyOutput {
     /// The pill text for this output, if it shows a pill.
     pub fn pill_text(self) -> Option<&'static str> {
-        todo!()
+        match self {
+            HotkeyOutput::TalkKeyPaused => Some(TALK_KEY_PAUSED_PILL),
+            _ => None,
+        }
     }
 }
 
@@ -138,7 +144,10 @@ impl Default for PttMachine {
 impl PttMachine {
     /// A machine in talk-key mode with no PTT held.
     pub fn new() -> Self {
-        todo!()
+        Self {
+            mode: TalkKeyMode::TalkKey,
+            held_by: None,
+        }
     }
 
     /// The input that drives PTT now.
@@ -152,24 +161,78 @@ impl PttMachine {
     }
 
     /// The talk key went down or came up. It is ignored in chord mode.
-    pub fn on_talk_key(&mut self, _edge: KeyEdge) -> Vec<HotkeyOutput> {
-        todo!()
+    pub fn on_talk_key(&mut self, edge: KeyEdge) -> Vec<HotkeyOutput> {
+        self.on_edge(TalkKeyMode::TalkKey, edge)
     }
 
     /// The fallback chord was pressed or released. It is ignored in talk-key mode.
-    pub fn on_chord(&mut self, _edge: KeyEdge) -> Vec<HotkeyOutput> {
-        todo!()
+    pub fn on_chord(&mut self, edge: KeyEdge) -> Vec<HotkeyOutput> {
+        self.on_edge(TalkKeyMode::Chord, edge)
+    }
+
+    fn on_edge(&mut self, source: TalkKeyMode, edge: KeyEdge) -> Vec<HotkeyOutput> {
+        if self.mode != source {
+            return Vec::new();
+        }
+        match (edge, self.held_by) {
+            (KeyEdge::Down, None) => {
+                self.held_by = Some(source);
+                vec![HotkeyOutput::Ptt(PttPhase::Down)]
+            }
+            (KeyEdge::Up, Some(held)) if held == source => {
+                self.held_by = None;
+                vec![HotkeyOutput::Ptt(PttPhase::Up)]
+            }
+            _ => Vec::new(),
+        }
     }
 
     /// Secure Event Input started or ended. `physical` is read after the change.
-    pub fn on_secure_input(&mut self, _active: bool, _physical: PhysicalState) -> Vec<HotkeyOutput> {
-        todo!()
+    ///
+    /// Start: an active PTT ends with `cancel` (the focused field is protected, so nothing
+    /// may go into it; ADR 0008), the chord takes over and the pill shows.
+    /// End: a chord PTT ends with `up` (the chord is unregistered, so its release would be
+    /// lost), the talk key takes over and the pill hides. A re-read never starts a PTT.
+    pub fn on_secure_input(&mut self, active: bool, physical: PhysicalState) -> Vec<HotkeyOutput> {
+        let target = if active {
+            TalkKeyMode::Chord
+        } else {
+            TalkKeyMode::TalkKey
+        };
+        if self.mode == target {
+            return self.on_gap(physical);
+        }
+        let mut out = Vec::new();
+        if self.held_by.take().is_some() {
+            let phase = if active {
+                PttPhase::Cancel
+            } else {
+                PttPhase::Up
+            };
+            out.push(HotkeyOutput::Ptt(phase));
+        }
+        self.mode = target;
+        out.push(if active {
+            HotkeyOutput::TalkKeyPaused
+        } else {
+            HotkeyOutput::TalkKeyRestored
+        });
+        out
     }
 
     /// A gap (wake, unlock, session change, tap restart): read the physical state again.
     /// A PTT whose key is no longer down ends. A re-read never starts a PTT.
-    pub fn on_gap(&mut self, _physical: PhysicalState) -> Vec<HotkeyOutput> {
-        todo!()
+    pub fn on_gap(&mut self, physical: PhysicalState) -> Vec<HotkeyOutput> {
+        let still_down = match self.held_by {
+            None => return Vec::new(),
+            Some(TalkKeyMode::TalkKey) => physical.talk_key_down,
+            Some(TalkKeyMode::Chord) => physical.chord_down,
+        };
+        if still_down {
+            return Vec::new();
+        }
+        self.held_by = None;
+        vec![HotkeyOutput::Ptt(PttPhase::Up)]
     }
 }
 
@@ -217,8 +280,32 @@ impl TapWatchdog {
     }
 
     /// Decide what to do for `signal` at monotonic time `now`.
-    pub fn on_signal(&mut self, _signal: TapSignal, _now: Duration) -> TapAction {
-        todo!()
+    pub fn on_signal(&mut self, signal: TapSignal, now: Duration) -> TapAction {
+        match signal {
+            TapSignal::HealthCheck { enabled: true } => TapAction::None,
+            TapSignal::Wake | TapSignal::SessionActive | TapSignal::PermissionGranted => {
+                self.disables.clear();
+                TapAction::Recreate
+            }
+            TapSignal::DisabledByTimeout
+            | TapSignal::DisabledByUserInput
+            | TapSignal::HealthCheck { enabled: false } => {
+                while self
+                    .disables
+                    .front()
+                    .is_some_and(|t| now.saturating_sub(*t) > TAP_FAILURE_WINDOW)
+                {
+                    self.disables.pop_front();
+                }
+                self.disables.push_back(now);
+                if self.disables.len() >= TAP_FAILURE_LIMIT {
+                    self.disables.clear();
+                    TapAction::Recreate
+                } else {
+                    TapAction::ReEnable
+                }
+            }
+        }
     }
 }
 
@@ -240,8 +327,12 @@ impl SecureInputMonitor {
     }
 
     /// Take one poll. Returns `Some(new_state)` on a change.
-    pub fn poll(&mut self, _active: bool) -> Option<bool> {
-        todo!()
+    pub fn poll(&mut self, active: bool) -> Option<bool> {
+        if active == self.active {
+            return None;
+        }
+        self.active = active;
+        Some(active)
     }
 }
 
@@ -286,21 +377,27 @@ impl UserAction {
 }
 
 /// Check, with no prompt, that PTT can start. HotkeyService start calls this (CAP-36).
-pub fn check_ptt_permission(_api: &dyn PermissionApi) -> CoreResult<()> {
-    todo!()
+pub fn check_ptt_permission(api: &dyn PermissionApi) -> CoreResult<()> {
+    match api.status(Permission::InputMonitoring) {
+        PermissionStatus::Granted => Ok(()),
+        PermissionStatus::Denied | PermissionStatus::Unknown => Err(CoreError::Unavailable {
+            component: ID,
+            reason: "input_monitoring_required",
+        }),
+    }
 }
 
 /// Ask for the PTT permission after a user action: Input Monitoring only (CAP-36).
-pub fn request_ptt_permission(_api: &dyn PermissionApi, _action: UserAction) -> PermissionStatus {
-    todo!()
+pub fn request_ptt_permission(api: &dyn PermissionApi, _action: UserAction) -> PermissionStatus {
+    api.request(Permission::InputMonitoring)
 }
 
 /// Ask for Accessibility after the user selects text insertion, and only then (CAP-37).
 pub fn request_insertion_permission(
-    _api: &dyn PermissionApi,
+    api: &dyn PermissionApi,
     _action: UserAction,
 ) -> PermissionStatus {
-    todo!()
+    api.request(Permission::Accessibility)
 }
 
 /// What the watchdog reads from the OS on each tick. Every read must be cheap and prompt-free.
@@ -371,29 +468,96 @@ impl HotkeyEngine {
     }
 
     /// The tap saw the talk key.
-    pub fn on_talk_key(&mut self, _edge: KeyEdge) {
-        todo!()
+    pub fn on_talk_key(&mut self, edge: KeyEdge) {
+        let out = self.machine.on_talk_key(edge);
+        self.emit(out);
     }
 
     /// The Carbon chord fired.
-    pub fn on_chord(&mut self, _edge: KeyEdge) {
-        todo!()
+    pub fn on_chord(&mut self, edge: KeyEdge) {
+        let out = self.machine.on_chord(edge);
+        self.emit(out);
     }
 
-    /// The tap reported a health signal.
+    /// The tap reported a health signal. A key-up can be lost while the tap is off, so every
+    /// action is followed by a key-state re-read (CAP-45).
     pub fn on_tap_signal(
         &mut self,
-        _signal: TapSignal,
-        _now: Duration,
-        _probe: &dyn PlatformProbe,
-        _ctl: &dyn TapControl,
+        signal: TapSignal,
+        now: Duration,
+        probe: &dyn PlatformProbe,
+        ctl: &dyn TapControl,
     ) {
-        todo!()
+        match self.watchdog.on_signal(signal, now) {
+            TapAction::None => return,
+            TapAction::ReEnable => ctl.re_enable(),
+            TapAction::Recreate => ctl.recreate(),
+        }
+        let out = self.machine.on_gap(probe.physical_state());
+        self.emit(out);
     }
 
-    /// One watchdog tick, every [`WATCHDOG_TICK`].
-    pub fn tick(&mut self, _now: Duration, _probe: &dyn PlatformProbe, _ctl: &dyn TapControl) {
-        todo!()
+    /// One watchdog tick, every [`WATCHDOG_TICK`]. The first tick records the baseline.
+    pub fn tick(&mut self, now: Duration, probe: &dyn PlatformProbe, ctl: &dyn TapControl) {
+        // Secure Event Input first: it has the 250 ms deadline (CAP-39a).
+        if let Some(active) = self.secure.poll(probe.secure_input_active()) {
+            ctl.set_chord(active);
+            let out = self.machine.on_secure_input(active, probe.physical_state());
+            self.emit(out);
+        }
+
+        let slept = probe.slept();
+        let woke = self
+            .slept
+            .is_some_and(|before| slept.saturating_sub(before) > WAKE_THRESHOLD);
+        self.slept = Some(slept);
+        if woke {
+            self.on_tap_signal(TapSignal::Wake, now, probe, ctl);
+        }
+
+        let session = probe.session_active();
+        if let Some(before) = self.session_active.replace(session) {
+            if before != session {
+                if session {
+                    self.on_tap_signal(TapSignal::SessionActive, now, probe, ctl);
+                } else {
+                    // Lock or switch away: the key-up can be lost (CAP-45).
+                    let out = self.machine.on_gap(probe.physical_state());
+                    self.emit(out);
+                }
+            }
+        }
+
+        let granted = probe.input_monitoring_granted();
+        if self.granted.replace(granted) == Some(false) && granted {
+            self.on_tap_signal(TapSignal::PermissionGranted, now, probe, ctl);
+        }
+    }
+
+    /// Go back to the start state when the service stops. An active PTT ends with `cancel`
+    /// and a shown pill hides, so a later start sees Secure Event Input as a new edge and
+    /// registers the chord again (CAP-39b).
+    pub fn reset(&mut self) {
+        let mut out = Vec::new();
+        if self.machine.is_held() {
+            out.push(HotkeyOutput::Ptt(PttPhase::Cancel));
+        }
+        if self.machine.mode() == TalkKeyMode::Chord {
+            out.push(HotkeyOutput::TalkKeyRestored);
+        }
+        self.machine = PttMachine::new();
+        self.watchdog = TapWatchdog::new();
+        self.secure = SecureInputMonitor::new();
+        self.slept = None;
+        self.session_active = None;
+        self.granted = None;
+        self.emit(out);
+    }
+
+    fn emit(&self, out: Vec<HotkeyOutput>) {
+        for o in out {
+            self.sink.emit(o);
+        }
     }
 }
 
@@ -617,11 +781,17 @@ mod tests {
             TapAction::ReEnable
         );
         assert_eq!(
-            w.on_signal(TapSignal::HealthCheck { enabled: false }, Duration::from_secs(120)),
+            w.on_signal(
+                TapSignal::HealthCheck { enabled: false },
+                Duration::from_secs(120)
+            ),
             TapAction::ReEnable
         );
         assert_eq!(
-            w.on_signal(TapSignal::HealthCheck { enabled: true }, Duration::from_secs(121)),
+            w.on_signal(
+                TapSignal::HealthCheck { enabled: true },
+                Duration::from_secs(121)
+            ),
             TapAction::None
         );
     }
@@ -630,7 +800,10 @@ mod tests {
     fn cap_38a_repeated_tap_failures_recreate_the_tap() {
         let mut w = TapWatchdog::new();
         let t = Duration::from_secs(100);
-        assert_eq!(w.on_signal(TapSignal::DisabledByTimeout, t), TapAction::ReEnable);
+        assert_eq!(
+            w.on_signal(TapSignal::DisabledByTimeout, t),
+            TapAction::ReEnable
+        );
         assert_eq!(
             w.on_signal(TapSignal::DisabledByTimeout, t + Duration::from_secs(1)),
             TapAction::ReEnable
@@ -662,7 +835,12 @@ mod tests {
         let mut e = HotkeyEngine::new(sink.clone());
         e.on_talk_key(Down);
         // The key-up is lost while the tap is off; the re-read ends the PTT.
-        e.on_tap_signal(TapSignal::DisabledByTimeout, Duration::from_secs(1), &probe, &ctl);
+        e.on_tap_signal(
+            TapSignal::DisabledByTimeout,
+            Duration::from_secs(1),
+            &probe,
+            &ctl,
+        );
         assert_eq!(ctl.take(), vec![Ctl::ReEnable]);
         assert_eq!(sink.take(), vec![Ptt(PDown), Ptt(PUp)]);
         e.on_talk_key(Down);
@@ -690,7 +868,11 @@ mod tests {
         let clock = SimClock::new();
         let mut e = HotkeyEngine::new(sink.clone());
         e.tick(clock.now(), &probe, &ctl);
-        assert_eq!(ctl.take(), vec![], "the first tick only records the baseline");
+        assert_eq!(
+            ctl.take(),
+            vec![],
+            "the first tick only records the baseline"
+        );
 
         // Sleep and wake.
         *probe.slept.lock().unwrap() = Duration::from_secs(3600);
@@ -764,7 +946,10 @@ mod tests {
                 t += WATCHDOG_TICK;
             }
             let ended_at = ended_at.expect("PTT must end");
-            assert!(ended_at - started <= SECURE_INPUT_DEADLINE, "offset {offset_ms}");
+            assert!(
+                ended_at - started <= SECURE_INPUT_DEADLINE,
+                "offset {offset_ms}"
+            );
         }
     }
 
@@ -808,6 +993,24 @@ mod tests {
     }
 
     #[test]
+    fn cap_39b_reset_after_stop_registers_the_chord_again() {
+        let sink = Arc::new(RecSink::default());
+        let probe = FakeProbe::ready();
+        let ctl = FakeCtl::default();
+        let mut e = HotkeyEngine::new(sink.clone());
+        *probe.secure.lock().unwrap() = true;
+        e.tick(Duration::ZERO, &probe, &ctl);
+        e.on_chord(Down);
+        assert_eq!(ctl.take(), vec![Ctl::Chord(true)]);
+        sink.take();
+        e.reset();
+        assert_eq!(sink.take(), vec![Ptt(Cancel), TalkKeyRestored]);
+        assert!(!e.machine().is_held());
+        e.tick(WATCHDOG_TICK, &probe, &ctl);
+        assert_eq!(ctl.take(), vec![Ctl::Chord(true)]);
+    }
+
+    #[test]
     fn cap_39c_pill_text_matches_appendix_e() {
         assert_eq!(
             TALK_KEY_PAUSED_PILL,
@@ -822,7 +1025,10 @@ mod tests {
     fn cap_39c_secure_input_start_shows_the_pill_once() {
         let mut m = PttMachine::new();
         m.on_talk_key(Down);
-        assert_eq!(m.on_secure_input(true, down()), vec![Ptt(Cancel), TalkKeyPaused]);
+        assert_eq!(
+            m.on_secure_input(true, down()),
+            vec![Ptt(Cancel), TalkKeyPaused]
+        );
         assert_eq!(m.on_secure_input(true, down()), vec![]);
         assert_eq!(m.on_secure_input(false, up()), vec![TalkKeyRestored]);
     }
