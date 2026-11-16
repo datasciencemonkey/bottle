@@ -5,8 +5,19 @@
 //! This module is the device-free core (#4): one owner of the mic and system-audio streams
 //! (CAP-01a), capture leases with IDs (CAP-02a), the three modes (CAP-03), the locked 120 s
 //! hold and 5 min hands-free caps (CAP-04a, CAP-04b), ARC-F9 priority and the panic stop
-//! (MB-05). Time comes from an injectable [`Clock`], audio streams from an [`AudioDevice`]
-//! and state changes go to [`CaptureEvents`].
+//! (MB-05). Time comes from the shared [`MonotonicClock`] (#229), audio streams from an
+//! [`AudioDevice`] and state changes go to [`CaptureEvents`].
+//!
+//! Locking: the state lock is never held across a device call or an event. A slow CoreAudio
+//! or WASAPI open therefore cannot block `status()` or the 200 ms panic stop (MB-05). Handy hit
+//! the same deadlock and keeps a lock-free `recording_active` flag for it (cjpais/Handy
+//! `src-tauri/src/managers/audio.rs:495-500` @ aca8985). Only the pattern is used; no Handy code
+//! is copied.
+//!
+//! Lease boundaries for the segment pipeline (#116): the device sees only open and close, and a
+//! PTT over hands-free or a directed PTT in a session reuses the open mic. The pipeline cuts
+//! audio per lease from the [`Lease`] that `start` returns, the [`Stopped`] events and the
+//! `leaseId` / `directedTo` fields of each `capture.state` event.
 //!
 //! Audio never leaves Rust (CAP-01b): no method or event here carries a sample. The
 //! [`AudioDevice`] only opens and closes streams; the frames stay inside the device backend
@@ -20,9 +31,11 @@
 //! cannot build a [`CaptureCore`] that opens a real mic.
 
 use std::fmt;
-use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::clock::MonotonicClock;
 use crate::ipc::IpcError;
 use crate::types::{self, CaptureMode, CaptureState, MogId, OthersTrack};
 
@@ -39,43 +52,9 @@ pub type LeaseNo = u64;
 /// [`LeaseNo`]. Text that R2 never issued is [`CaptureError::UnknownLease`].
 pub fn parse_lease(wire: &str) -> Result<LeaseNo, CaptureError> {
     match wire.parse::<LeaseNo>() {
-        Ok(no) if no > 0 && wire.bytes().all(|b| b.is_ascii_digit()) => Ok(no),
+        // `no.to_string() == wire` rejects "+7" and "007": R2 never issues them.
+        Ok(no) if no > 0 && no.to_string() == wire => Ok(no),
         _ => Err(CaptureError::UnknownLease),
-    }
-}
-
-/// A time source. Tests use a fake clock; [`SystemClock`] is the real one.
-pub trait Clock: Send + Sync {
-    /// Monotonic milliseconds. The caps use this time.
-    fn monotonic_ms(&self) -> u64;
-    /// Epoch milliseconds, for `CaptureState.startedAt`.
-    fn epoch_ms(&self) -> u64;
-}
-
-/// The real clock: [`Instant`] for the caps, [`SystemTime`] for `startedAt`.
-#[derive(Debug)]
-pub struct SystemClock {
-    base: Instant,
-}
-
-impl Default for SystemClock {
-    fn default() -> Self {
-        Self {
-            base: Instant::now(),
-        }
-    }
-}
-
-impl Clock for SystemClock {
-    fn monotonic_ms(&self) -> u64 {
-        u64::try_from(self.base.elapsed().as_millis()).unwrap_or(u64::MAX)
-    }
-
-    fn epoch_ms(&self) -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-            .unwrap_or(0)
     }
 }
 
@@ -95,13 +74,23 @@ pub struct DeviceError {
     pub code: &'static str,
 }
 
-/// The audio device backend. CaptureService is its only caller, and it opens each source
-/// at most once at a time. A cpal stream is not `Send`, so a real backend owns its streams on
-/// its own audio thread and takes open and close as messages.
+/// The audio device backend. CaptureService is its only caller. It opens each source at most
+/// once at a time and never holds its state lock during a call. A cpal stream is not `Send`, so
+/// a real backend owns its streams on its own audio thread and takes open and close as messages.
+///
+/// When a stream fails after it opened (an unplugged mic), the backend calls
+/// [`CaptureCore::device_failed`]. This is the place of Handy's failure handler and
+/// `needs_reopen` (cjpais/Handy `src-tauri/src/managers/audio.rs:294-307`, `:413-423`,
+/// `:1051-1101` @ aca8985): the next start opens the stream again.
 pub trait AudioDevice: Send + Sync {
-    /// Open the stream of `source`.
+    /// Open the stream of `source`. It may be slow.
     fn open(&self, source: AudioSource) -> Result<(), DeviceError>;
-    /// Close the stream of `source`. Closing a closed stream does nothing.
+    /// Close the stream of `source`. The stream, and with it the OS mic indicator, must be
+    /// stopped before `close` returns: no idle timeout, no lazy close and no always-on mode
+    /// (MOG-09, CAP-13b; Handy's `MicrophoneMode::AlwaysOn` and `schedule_lazy_close` are not
+    /// ported). Closing a closed stream does nothing. `close` may run on another thread while
+    /// an `open` of the same source is in progress; R2 then calls `close` again after that
+    /// `open` returns.
     fn close(&self, source: AudioSource);
 }
 
@@ -118,6 +107,8 @@ pub enum StopReason {
     Preempted,
     /// `capture_stop_all`, for example from the panic key (MB-05).
     Panic,
+    /// The device reported a failed stream, for example an unplugged mic.
+    DeviceLost,
 }
 
 impl StopReason {
@@ -129,6 +120,7 @@ impl StopReason {
             StopReason::HandsFreeCap => "hands_free_cap",
             StopReason::Preempted => "preempted",
             StopReason::Panic => "panic",
+            StopReason::DeviceLost => "device_lost",
         }
     }
 }
@@ -147,7 +139,7 @@ pub struct Stopped {
 }
 
 /// The receiver of CaptureService events (the `capture.state` event for the brain). The core
-/// calls it with its state lock held, so it must not call back into the service.
+/// calls it after it releases its state lock, so a sink may call back into the service.
 pub trait CaptureEvents: Send + Sync {
     /// The capture state changed.
     fn state(&self, state: &CaptureState);
@@ -234,7 +226,9 @@ impl std::error::Error for CaptureError {}
 
 /// The only owner of the mic and system audio. Callers hold a lease while they capture.
 pub trait CaptureService: Send + Sync {
-    /// Start a capture. Returns a new lease, or `mic_busy` (ARC-F9 priority).
+    /// Start a capture. Returns a new lease, or `mic_busy` (ARC-F9 priority). A second start
+    /// while a start or resume still opens the device also gets `mic_busy`. If `stop_all` runs
+    /// while the device opens, the start returns `unknown_lease` and no lease is granted.
     fn start(&self, request: CaptureRequest) -> Result<Lease, CaptureError>;
     /// Stop the capture of a lease.
     fn stop(&self, lease_id: LeaseNo) -> Result<CaptureState, CaptureError>;
@@ -274,6 +268,40 @@ impl LeaseRec {
             CaptureMode::Session => None,
         }
     }
+
+    fn live(&self) -> bool {
+        !self.paused
+    }
+
+    fn stopped(self, reason: StopReason) -> Ev {
+        Ev::Stopped(Stopped {
+            lease_id: self.id,
+            mog_id: self.mog_id,
+            mode: self.mode,
+            reason,
+        })
+    }
+}
+
+/// A start or resume whose streams are opening. There is at most one.
+#[derive(Debug)]
+enum Pending {
+    /// A new lease. It owns nothing until the open succeeds; then it takes its place and, if
+    /// `preempt` is set, the hands-free lease it preempts stops (ARC-F9, and no loss on a
+    /// failed open).
+    Start {
+        rec: LeaseRec,
+        overlay: bool,
+        preempt: Option<LeaseNo>,
+    },
+    /// A paused session that resumes.
+    Resume(LeaseNo),
+}
+
+/// An event, sent after the state lock is released.
+enum Ev {
+    State(CaptureState),
+    Stopped(Stopped),
 }
 
 #[derive(Default)]
@@ -283,75 +311,45 @@ struct Inner {
     /// A PTT on top of the primary lease: it suspends a hands-free lease (ARC-F9) or is a
     /// directed segment of a session.
     overlay: Option<LeaseRec>,
-    next_id: LeaseNo,
-    mic_open: bool,
-    system_open: bool,
+    pending: Option<Pending>,
+    next_no: LeaseNo,
     last_state: Option<CaptureState>,
 }
 
-/// The CaptureService core over an [`AudioDevice`], a [`Clock`] and [`CaptureEvents`].
-pub struct CaptureCore {
-    device: Box<dyn AudioDevice>,
-    clock: Arc<dyn Clock>,
-    events: Arc<dyn CaptureEvents>,
-    inner: Mutex<Inner>,
-}
-
-impl CaptureCore {
-    /// Build the core. No stream opens until a lease starts (MOG-09).
-    pub fn new(
-        device: Box<dyn AudioDevice>,
-        clock: Arc<dyn Clock>,
-        events: Arc<dyn CaptureEvents>,
-    ) -> Self {
-        Self {
-            device,
-            clock,
-            events,
-            inner: Mutex::new(Inner {
-                last_state: Some(Self::state_of(&Inner::default())),
-                ..Inner::default()
-            }),
+impl Inner {
+    /// The streams that the leases (and a pending start) need: (mic, system audio).
+    fn wanted(&self) -> (bool, bool) {
+        let primary_live = self.primary.as_ref().filter(|p| p.live());
+        let mut mic = primary_live.is_some() || self.overlay.is_some();
+        let mut system = primary_live.is_some_and(|p| p.others_track);
+        if let Some(Pending::Start { rec, .. }) = &self.pending {
+            mic = true;
+            system |= rec.others_track;
         }
+        (mic, system)
     }
 
-    /// Lock the state. A panic in another call must not keep the mic locked or held: a
-    /// poisoned lock is taken over, every lease stops with [`StopReason::Panic`] and both
-    /// streams close.
-    fn lock(&self) -> MutexGuard<'_, Inner> {
-        match self.inner.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                let mut guard = poisoned.into_inner();
-                self.inner.clear_poison();
-                self.release_all(&mut guard);
-                guard
-            }
+    /// Take a lease out. When the primary goes, the overlay PTT (if any) becomes primary.
+    fn remove(&mut self, lease_id: LeaseNo) -> Option<LeaseRec> {
+        if self.overlay.as_ref().is_some_and(|o| o.id == lease_id) {
+            return self.overlay.take();
         }
+        if self.primary.as_ref().is_some_and(|p| p.id == lease_id) {
+            let rec = self.primary.take();
+            self.primary = self.overlay.take();
+            return rec;
+        }
+        None
     }
 
-    /// Stop every lease with [`StopReason::Panic`] and close both streams, even if a panic
-    /// left the open flags out of line.
-    fn release_all(&self, inner: &mut Inner) -> CaptureState {
-        for rec in [inner.overlay.take(), inner.primary.take()]
+    fn find(&mut self, lease_id: LeaseNo) -> Option<&mut LeaseRec> {
+        [&mut self.primary, &mut self.overlay]
             .into_iter()
             .flatten()
-        {
-            self.report_stop(rec, StopReason::Panic);
-        }
-        self.device.close(AudioSource::SystemAudio);
-        self.device.close(AudioSource::Mic);
-        inner.system_open = false;
-        inner.mic_open = false;
-        self.publish(inner)
+            .find(|rec| rec.id == lease_id)
     }
 
-    fn state_of(inner: &Inner) -> CaptureState {
-        let others_track = if inner.system_open {
-            OthersTrack::Ok
-        } else {
-            OthersTrack::Off
-        };
+    fn state(&self) -> CaptureState {
         let idle = CaptureState {
             owner: None,
             mode: None,
@@ -361,12 +359,12 @@ impl CaptureCore {
             session_id: None,
             started_at: None,
             directed_to: None,
-            others_track,
+            others_track: OthersTrack::Off,
         };
-        let Some(primary) = &inner.primary else {
+        let Some(primary) = &self.primary else {
             return idle;
         };
-        match (&inner.overlay, primary.mode) {
+        match (&self.overlay, primary.mode) {
             (Some(ptt), CaptureMode::HandsFree) => CaptureState {
                 owner: Some(ptt.mog_id.clone()),
                 mode: Some(CaptureMode::Ptt),
@@ -380,77 +378,24 @@ impl CaptureCore {
                 mode: Some(mode),
                 // A directed PTT uses the session stream; the session lease owns the mic.
                 lease_id: Some(primary.id.to_string()),
-                recording: !primary.paused || overlay.is_some(),
+                recording: primary.live() || overlay.is_some(),
                 paused: primary.paused,
                 session_id: (mode == CaptureMode::Session)
                     .then(|| format!("session-{}", primary.id)),
                 started_at: Some(primary.started_epoch),
                 directed_to: overlay.as_ref().map(|o| o.mog_id.clone()),
-                ..idle
+                others_track: if primary.live() && primary.others_track {
+                    OthersTrack::Ok
+                } else {
+                    OthersTrack::Off
+                },
             },
         }
     }
 
-    /// Open or close the streams so they match the leases.
-    fn reconcile(&self, inner: &mut Inner) -> Result<(), DeviceError> {
-        let primary_live = inner.primary.as_ref().is_some_and(|p| !p.paused);
-        let want_mic = primary_live || inner.overlay.is_some();
-        let want_system = primary_live && inner.primary.as_ref().is_some_and(|p| p.others_track);
-
-        if !want_system && inner.system_open {
-            self.device.close(AudioSource::SystemAudio);
-            inner.system_open = false;
-        }
-        if !want_mic && inner.mic_open {
-            self.device.close(AudioSource::Mic);
-            inner.mic_open = false;
-        }
-        if want_mic && !inner.mic_open {
-            self.device.open(AudioSource::Mic)?;
-            inner.mic_open = true;
-        }
-        if want_system && !inner.system_open {
-            self.device.open(AudioSource::SystemAudio)?;
-            inner.system_open = true;
-        }
-        Ok(())
-    }
-
-    fn publish(&self, inner: &mut Inner) -> CaptureState {
-        let state = Self::state_of(inner);
-        if inner.last_state.as_ref() != Some(&state) {
-            self.events.state(&state);
-            inner.last_state = Some(state.clone());
-        }
-        state
-    }
-
-    fn report_stop(&self, rec: LeaseRec, reason: StopReason) {
-        self.events.stopped(&Stopped {
-            lease_id: rec.id,
-            mog_id: rec.mog_id,
-            mode: rec.mode,
-            reason,
-        });
-    }
-
-    /// Take a lease out. When the primary goes, the overlay PTT (if any) becomes primary.
-    fn remove(inner: &mut Inner, lease_id: LeaseNo) -> Option<LeaseRec> {
-        if inner.overlay.as_ref().is_some_and(|o| o.id == lease_id) {
-            return inner.overlay.take();
-        }
-        if inner.primary.as_ref().is_some_and(|p| p.id == lease_id) {
-            let rec = inner.primary.take();
-            inner.primary = inner.overlay.take();
-            return rec;
-        }
-        None
-    }
-
     /// Stop every lease whose cap has passed.
-    fn expire(&self, inner: &mut Inner) {
-        let now = self.clock.monotonic_ms();
-        let due: Vec<(LeaseNo, StopReason)> = [&inner.overlay, &inner.primary]
+    fn expire(&mut self, now: u64, evs: &mut Vec<Ev>) {
+        let due: Vec<(LeaseNo, StopReason)> = [&self.overlay, &self.primary]
             .into_iter()
             .flatten()
             .filter_map(|rec| match rec.deadline() {
@@ -459,44 +404,237 @@ impl CaptureCore {
             })
             .collect();
         for (id, reason) in due {
-            if let Some(rec) = Self::remove(inner, id) {
-                self.report_stop(rec, reason);
+            if let Some(rec) = self.remove(id) {
+                evs.push(rec.stopped(reason));
+            }
+        }
+    }
+}
+
+/// The CaptureService core over an [`AudioDevice`], a [`MonotonicClock`] and [`CaptureEvents`].
+pub struct CaptureCore {
+    device: Box<dyn AudioDevice>,
+    clock: Arc<dyn MonotonicClock>,
+    events: Arc<dyn CaptureEvents>,
+    /// Epoch milliseconds at the clock's origin, for `CaptureState.startedAt`.
+    epoch_origin_ms: u64,
+    inner: Mutex<Inner>,
+    /// The streams that are open now, as far as R2 knows. Read and changed without the state
+    /// lock, like Handy's `recording_active`.
+    mic_open: AtomicBool,
+    system_open: AtomicBool,
+}
+
+impl CaptureCore {
+    /// Build the core. No stream opens until a lease starts (MOG-09).
+    pub fn new(
+        device: Box<dyn AudioDevice>,
+        clock: Arc<dyn MonotonicClock>,
+        events: Arc<dyn CaptureEvents>,
+    ) -> Self {
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+        let mono_ms = u64::try_from(clock.now().as_millis()).unwrap_or(u64::MAX);
+        Self {
+            device,
+            clock,
+            events,
+            epoch_origin_ms: now_ms.saturating_sub(mono_ms),
+            inner: Mutex::new(Inner {
+                last_state: Some(Inner::default().state()),
+                ..Inner::default()
+            }),
+            mic_open: AtomicBool::new(false),
+            system_open: AtomicBool::new(false),
+        }
+    }
+
+    /// Set the epoch time of the clock's origin, so `startedAt` is fixed in tests.
+    pub fn with_epoch_origin_ms(mut self, epoch_ms: u64) -> Self {
+        self.epoch_origin_ms = epoch_ms;
+        self
+    }
+
+    /// The backend reports that the stream of `source` failed (for example an unplugged mic).
+    /// Every live lease that uses it stops with [`StopReason::DeviceLost`], and the next start
+    /// opens the stream again (Handy's `needs_reopen`, `managers/audio.rs:294-307` @ aca8985).
+    pub fn device_failed(&self, source: AudioSource) {
+        self.flag(source).store(false, Ordering::SeqCst);
+        self.device.close(source);
+        self.locked(|inner, _, evs| {
+            let ids: Vec<LeaseNo> = match source {
+                AudioSource::Mic => [&inner.overlay, &inner.primary]
+                    .into_iter()
+                    .flatten()
+                    .filter(|r| r.live())
+                    .map(|r| r.id)
+                    .collect(),
+                AudioSource::SystemAudio => inner
+                    .primary
+                    .iter()
+                    .filter(|p| p.live() && p.others_track)
+                    .map(|p| p.id)
+                    .collect(),
+            };
+            for id in ids {
+                if let Some(rec) = inner.remove(id) {
+                    evs.push(rec.stopped(StopReason::DeviceLost));
+                }
+            }
+        });
+        self.close_unwanted();
+    }
+
+    fn now_ms(&self) -> u64 {
+        u64::try_from(self.clock.now().as_millis()).unwrap_or(u64::MAX)
+    }
+
+    fn flag(&self, source: AudioSource) -> &AtomicBool {
+        match source {
+            AudioSource::Mic => &self.mic_open,
+            AudioSource::SystemAudio => &self.system_open,
+        }
+    }
+
+    /// Run `f` under the state lock, then publish a changed state and send the events after
+    /// the lock is released. A poisoned lock is taken over: no device call runs under it.
+    fn locked<R>(&self, f: impl FnOnce(&mut Inner, u64, &mut Vec<Ev>) -> R) -> R {
+        let mut evs = Vec::new();
+        let result = {
+            let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+            self.inner.clear_poison();
+            let now = self.now_ms();
+            let result = f(&mut inner, now, &mut evs);
+            let state = inner.state();
+            if inner.last_state.as_ref() != Some(&state) {
+                inner.last_state = Some(state.clone());
+                evs.push(Ev::State(state));
+            }
+            result
+        };
+        for ev in evs {
+            match ev {
+                Ev::State(s) => self.events.state(&s),
+                Ev::Stopped(s) => self.events.stopped(&s),
+            }
+        }
+        result
+    }
+
+    fn wanted(&self) -> (bool, bool) {
+        self.inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .wanted()
+    }
+
+    /// Close every stream that no lease needs. It never waits for an open in progress.
+    fn close_unwanted(&self) {
+        let (mic, system) = self.wanted();
+        for (source, want) in [(AudioSource::SystemAudio, system), (AudioSource::Mic, mic)] {
+            if !want && self.flag(source).swap(false, Ordering::SeqCst) {
+                self.device.close(source);
             }
         }
     }
 
-    /// Close the streams and settle the state; device errors on close cannot happen.
-    fn settle(&self, inner: &mut Inner) -> CaptureState {
-        // Leases only went away, so this closes streams and opens none.
-        let _ = self.reconcile(inner);
-        self.publish(inner)
+    /// Open the streams that the leases need. Only the thread with the pending start or resume
+    /// calls this, so a source never opens twice. A stream that is no longer needed when its
+    /// open returns (a `stop_all` ran meanwhile) closes again.
+    fn open_wanted(&self) -> Result<(), DeviceError> {
+        for source in [AudioSource::Mic, AudioSource::SystemAudio] {
+            let (mic, system) = self.wanted();
+            let want = match source {
+                AudioSource::Mic => mic,
+                AudioSource::SystemAudio => system,
+            };
+            if want && !self.flag(source).load(Ordering::SeqCst) {
+                self.device.open(source)?;
+                self.flag(source).store(true, Ordering::SeqCst);
+            }
+        }
+        Ok(())
+    }
+
+    /// Open the streams for the pending start or resume. If the device call panics, the
+    /// pending entry goes and every stream that no lease needs closes, also one that the
+    /// panicking open may have opened.
+    fn open_pending(&self) -> Result<(), DeviceError> {
+        struct Unwind<'a>(&'a CaptureCore);
+        impl Drop for Unwind<'_> {
+            fn drop(&mut self) {
+                if std::thread::panicking() {
+                    let core = self.0;
+                    core.locked(|inner, _, _| {
+                        if let Some(Pending::Resume(id)) = inner.pending.take() {
+                            if let Some(rec) = inner.find(id) {
+                                rec.paused = true;
+                            }
+                        }
+                    });
+                    let (mic, system) = core.wanted();
+                    for (source, want) in
+                        [(AudioSource::SystemAudio, system), (AudioSource::Mic, mic)]
+                    {
+                        if !want {
+                            core.flag(source).store(false, Ordering::SeqCst);
+                            core.device.close(source);
+                        }
+                    }
+                }
+            }
+        }
+        let _unwind = Unwind(self);
+        self.open_wanted()
     }
 
     fn set_paused(&self, lease_id: LeaseNo, paused: bool) -> Result<CaptureState, CaptureError> {
-        let mut inner = self.lock();
-        self.expire(&mut inner);
-        self.settle(&mut inner);
-        let rec = Self::find(&mut inner, lease_id).ok_or(CaptureError::UnknownLease)?;
-        if rec.mode != CaptureMode::Session {
-            return Err(CaptureError::InvalidMode);
-        }
-        rec.paused = paused;
-        if let Err(e) = self.reconcile(&mut inner) {
-            // The streams did not reopen: keep the session paused.
-            if let Some(rec) = Self::find(&mut inner, lease_id) {
-                rec.paused = true;
+        let result = self.locked(|inner, now, evs| {
+            inner.expire(now, evs);
+            if !paused && inner.pending.is_some() {
+                return Err(CaptureError::MicBusy);
             }
-            self.settle(&mut inner);
-            return Err(CaptureError::Device(e));
-        }
-        Ok(self.publish(&mut inner))
-    }
-
-    fn find(inner: &mut Inner, lease_id: LeaseNo) -> Option<&mut LeaseRec> {
-        [&mut inner.primary, &mut inner.overlay]
-            .into_iter()
-            .flatten()
-            .find(|rec| rec.id == lease_id)
+            let rec = inner.find(lease_id).ok_or(CaptureError::UnknownLease)?;
+            if rec.mode != CaptureMode::Session {
+                return Err(CaptureError::InvalidMode);
+            }
+            let resumes = rec.paused && !paused;
+            rec.paused = paused;
+            if resumes {
+                inner.pending = Some(Pending::Resume(lease_id));
+            }
+            Ok(resumes)
+        });
+        let resumes = match result {
+            Ok(resumes) => resumes,
+            Err(e) => {
+                self.close_unwanted();
+                return Err(e);
+            }
+        };
+        let opened = if resumes { self.open_pending() } else { Ok(()) };
+        let result = self.locked(|inner, _, _| {
+            if resumes {
+                match inner.pending.take() {
+                    Some(Pending::Resume(id)) if id == lease_id => {}
+                    other => {
+                        inner.pending = other;
+                        return Err(CaptureError::UnknownLease);
+                    }
+                }
+                if let Err(e) = opened {
+                    // The streams did not reopen: keep the session paused.
+                    if let Some(rec) = inner.find(lease_id) {
+                        rec.paused = true;
+                    }
+                    return Err(CaptureError::Device(e));
+                }
+            }
+            Ok(inner.state())
+        });
+        self.close_unwanted();
+        result
     }
 }
 
@@ -505,69 +643,95 @@ impl CaptureService for CaptureCore {
         if request.others_track && request.mode != CaptureMode::Session {
             return Err(CaptureError::InvalidMode);
         }
-        let mut inner = self.lock();
-        self.expire(&mut inner);
-        self.settle(&mut inner);
-
-        // ARC-F9: one lease owns the streams; priority PTT > session > hands-free.
-        let primary_mode = inner.primary.as_ref().map(|p| p.mode);
-        let as_overlay = match (primary_mode, inner.overlay.is_some(), request.mode) {
-            (None, _, _) => false,
-            // A PTT suspends a hands-free capture, or is a directed segment of a session.
-            (Some(CaptureMode::HandsFree | CaptureMode::Session), false, CaptureMode::Ptt) => true,
-            // A session takes the mic from a hands-free capture.
-            (Some(CaptureMode::HandsFree), false, CaptureMode::Session) => {
-                if let Some(rec) = inner.primary.take() {
-                    self.report_stop(rec, StopReason::Preempted);
-                }
-                false
+        let lease = self.locked(|inner, now, evs| {
+            inner.expire(now, evs);
+            if inner.pending.is_some() {
+                return Err(CaptureError::MicBusy);
             }
-            _ => return Err(CaptureError::MicBusy),
-        };
+            // ARC-F9: one lease owns the streams; priority PTT > session > hands-free.
+            let primary = inner.primary.as_ref().map(|p| (p.id, p.mode));
+            let (overlay, preempt) = match (primary, inner.overlay.is_some(), request.mode) {
+                (None, _, _) => (false, None),
+                // A PTT suspends a hands-free capture, or is a directed segment of a session.
+                (
+                    Some((_, CaptureMode::HandsFree | CaptureMode::Session)),
+                    false,
+                    CaptureMode::Ptt,
+                ) => (true, None),
+                // A session takes the mic from a hands-free capture, once its streams open.
+                (Some((id, CaptureMode::HandsFree)), false, CaptureMode::Session) => {
+                    (false, Some(id))
+                }
+                _ => return Err(CaptureError::MicBusy),
+            };
+            inner.next_no += 1;
+            let rec = LeaseRec {
+                id: inner.next_no,
+                mog_id: request.mog_id,
+                mode: request.mode,
+                started_mono: now,
+                started_epoch: self.epoch_origin_ms.saturating_add(now),
+                others_track: request.others_track,
+                paused: false,
+            };
+            let lease = Lease {
+                id: rec.id,
+                mog_id: rec.mog_id.clone(),
+                mode: rec.mode,
+            };
+            inner.pending = Some(Pending::Start {
+                rec,
+                overlay,
+                preempt,
+            });
+            Ok(lease)
+        })?;
 
-        inner.next_id += 1;
-        let rec = LeaseRec {
-            id: inner.next_id,
-            mog_id: request.mog_id,
-            mode: request.mode,
-            started_mono: self.clock.monotonic_ms(),
-            started_epoch: self.clock.epoch_ms(),
-            others_track: request.others_track,
-            paused: false,
-        };
-        let lease = Lease {
-            id: rec.id,
-            mog_id: rec.mog_id.clone(),
-            mode: rec.mode,
-        };
-        if as_overlay {
-            inner.overlay = Some(rec);
-        } else {
-            inner.primary = Some(rec);
-        }
+        // The device opens with no lock held (Handy `managers/audio.rs:495-500`).
+        let opened = self.open_pending();
 
-        if let Err(e) = self.reconcile(&mut inner) {
-            // Roll back: the failed lease never existed.
-            Self::remove(&mut inner, lease.id);
-            self.settle(&mut inner);
-            return Err(CaptureError::Device(e));
-        }
-        self.publish(&mut inner);
-        Ok(lease)
+        let result = self.locked(|inner, _, evs| {
+            let (rec, overlay, preempt) = match inner.pending.take() {
+                Some(Pending::Start {
+                    rec,
+                    overlay,
+                    preempt,
+                }) if rec.id == lease.id => (rec, overlay, preempt),
+                // A stop_all ran while the device opened: no lease was granted.
+                other => {
+                    inner.pending = other;
+                    return Err(CaptureError::UnknownLease);
+                }
+            };
+            // A failed open drops only the new lease; a hands-free capture it would preempt
+            // keeps the mic.
+            opened.map_err(CaptureError::Device)?;
+            if let Some(id) = preempt {
+                if let Some(hf) = inner.remove(id) {
+                    evs.push(hf.stopped(StopReason::Preempted));
+                }
+            }
+            match (overlay, inner.primary.is_some()) {
+                (true, true) => inner.overlay = Some(rec),
+                (_, false) => inner.primary = Some(rec),
+                // Not reachable: one start at a time, and leases only go away meanwhile.
+                (false, true) => return Err(CaptureError::MicBusy),
+            }
+            Ok(lease)
+        });
+        self.close_unwanted();
+        result
     }
 
     fn stop(&self, lease_id: LeaseNo) -> Result<CaptureState, CaptureError> {
-        let mut inner = self.lock();
-        self.expire(&mut inner);
-        let result = match Self::remove(&mut inner, lease_id) {
-            Some(rec) => {
-                self.report_stop(rec, StopReason::Manual);
-                Ok(())
-            }
-            None => Err(CaptureError::UnknownLease),
-        };
-        let state = self.settle(&mut inner);
-        result.map(|()| state)
+        let result = self.locked(|inner, now, evs| {
+            inner.expire(now, evs);
+            let rec = inner.remove(lease_id).ok_or(CaptureError::UnknownLease)?;
+            evs.push(rec.stopped(StopReason::Manual));
+            Ok(inner.state())
+        });
+        self.close_unwanted();
+        result
     }
 
     fn pause(&self, lease_id: LeaseNo) -> Result<CaptureState, CaptureError> {
@@ -579,37 +743,54 @@ impl CaptureService for CaptureCore {
     }
 
     fn status(&self) -> CaptureState {
-        let mut inner = self.lock();
-        self.expire(&mut inner);
-        self.settle(&mut inner)
+        let state = self.locked(|inner, now, evs| {
+            inner.expire(now, evs);
+            inner.state()
+        });
+        self.close_unwanted();
+        state
     }
 
     fn stop_all(&self) -> CaptureState {
-        let mut inner = self.lock();
-        self.release_all(&mut inner)
+        let state = self.locked(|inner, _, evs| {
+            for rec in [inner.overlay.take(), inner.primary.take()]
+                .into_iter()
+                .flatten()
+            {
+                evs.push(rec.stopped(StopReason::Panic));
+            }
+            // A start in progress gets no lease (it returns `unknown_lease`).
+            inner.pending = None;
+            inner.state()
+        });
+        // Close both streams without a condition and without waiting for an open in
+        // progress; that open closes its stream again when it returns.
+        for source in [AudioSource::SystemAudio, AudioSource::Mic] {
+            self.flag(source).store(false, Ordering::SeqCst);
+            self.device.close(source);
+        }
+        state
     }
 
     fn tick(&self) -> Option<u64> {
-        let mut inner = self.lock();
-        self.expire(&mut inner);
-        self.settle(&mut inner);
-        [&inner.overlay, &inner.primary]
-            .into_iter()
-            .flatten()
-            .filter_map(|rec| rec.deadline().map(|(at, _)| at))
-            .min()
+        let next = self.locked(|inner, now, evs| {
+            inner.expire(now, evs);
+            [&inner.overlay, &inner.primary]
+                .into_iter()
+                .flatten()
+                .filter_map(|rec| rec.deadline().map(|(at, _)| at))
+                .min()
+        });
+        self.close_unwanted();
+        next
     }
 }
 
 impl Drop for CaptureCore {
-    /// The mic never stays open after the service goes, also when a panic unwinds it.
+    /// The mic never stays open after the service goes. Both sources close without a
+    /// condition, so a stream that a panicking open left open also closes.
     fn drop(&mut self) {
-        let inner = self.inner.get_mut().unwrap_or_else(|e| e.into_inner());
-        if inner.system_open {
-            self.device.close(AudioSource::SystemAudio);
-        }
-        if inner.mic_open {
-            self.device.close(AudioSource::Mic);
-        }
+        self.device.close(AudioSource::SystemAudio);
+        self.device.close(AudioSource::Mic);
     }
 }
