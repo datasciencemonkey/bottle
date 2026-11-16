@@ -181,12 +181,119 @@ fn arc_3_card_opens_only_for_an_open_mog_and_closes_with_it() {
 #[test]
 fn arc_3_window_errors_name_no_id() {
     // Errors cross IPC later (#285); they never echo the caller's argument.
-    for e in [
-        WindowError::InvalidId,
-        WindowError::UnknownMog,
-        WindowError::CapReached { cap: 8 },
-    ] {
-        assert!(!e.to_string().contains("m1"));
-        assert!(!e.code().is_empty());
+    let bad = "dapi0123456789abcdef/secret";
+    let mut ledger = WindowLedger::new(1);
+    let mut errors = vec![
+        ledger.open_mog(bad).unwrap_err(),
+        ledger.show_card(bad).unwrap_err(),
+        ledger.show_card("zz-unknown-mog-zz").unwrap_err(),
+    ];
+    ledger.open_mog("m1").unwrap();
+    errors.push(ledger.open_mog("zz-second-mog-zz").unwrap_err());
+    for e in errors {
+        let text = format!("{e} {e:?} {}", e.code());
+        for leaked in ["dapi0123", "secret", "zz-unknown", "zz-second", "m1"] {
+            assert!(!text.contains(leaked), "{text}");
+        }
+    }
+}
+
+#[test]
+fn arc_3_ledger_follows_windows_destroyed_outside_the_host() {
+    let mut ledger = WindowLedger::new(1);
+    ledger.open_mog("m1").unwrap();
+    ledger.show_card("m1").unwrap();
+    ledger.window_destroyed("card-m1");
+    assert!(!ledger.has_card("m1"), "a destroyed card is no longer open");
+    assert_eq!(ledger.active_mogs(), 1);
+    ledger.window_destroyed("mog-m1");
+    assert_eq!(ledger.active_mogs(), 0, "a destroyed MOG frees its slot");
+    for other in ["brain", "hub", "mog-", "nope"] {
+        ledger.window_destroyed(other);
+    }
+    assert!(ledger.open_mog("m2").is_ok());
+}
+
+// ---------- ARC-3 / R11: TauriWindowHost on the Tauri mock runtime ----------
+
+mod host {
+    use bottle_lib::window_host::{TauriWindowHost, WindowError};
+    use tauri::test::{mock_app, MockRuntime};
+    use tauri::{App, Manager};
+
+    fn setup() -> (App<MockRuntime>, TauriWindowHost<MockRuntime>) {
+        let app = mock_app();
+        let host = TauriWindowHost::new(app.handle().clone());
+        (app, host)
+    }
+
+    fn exists(app: &App<MockRuntime>, label: &str) -> bool {
+        app.get_webview_window(label).is_some()
+    }
+
+    #[test]
+    fn arc_3_host_makes_and_closes_mog_and_card_windows() {
+        let (app, host) = setup();
+        host.open_mog_window("m1").unwrap();
+        assert!(exists(&app, "mog-m1"));
+        assert!(
+            !exists(&app, "card-m1"),
+            "the card is made on the first show"
+        );
+        host.show_card("m1").unwrap();
+        assert!(exists(&app, "card-m1"));
+        host.hide_card("m1").unwrap();
+        assert!(
+            exists(&app, "card-m1"),
+            "hide keeps the card for the reaper (#78)"
+        );
+        host.close_mog_window("m1").unwrap();
+        assert!(!exists(&app, "mog-m1") && !exists(&app, "card-m1"));
+        assert_eq!(host.close_mog_window("m1"), Err(WindowError::UnknownMog));
+    }
+
+    #[test]
+    fn arc_3_host_enforces_the_cap_of_8() {
+        let (app, host) = setup();
+        for n in 0..8 {
+            host.open_mog_window(&format!("m{n}")).unwrap();
+        }
+        assert_eq!(
+            host.open_mog_window("m9"),
+            Err(WindowError::CapReached { cap: 8 })
+        );
+        assert!(!exists(&app, "mog-m9"));
+    }
+
+    #[test]
+    fn arc_3_host_reopen_rebuilds_a_window_that_is_gone() {
+        let (app, host) = setup();
+        host.open_mog_window("m1").unwrap();
+        app.get_webview_window("mog-m1").unwrap().destroy().unwrap();
+        host.open_mog_window("m1").unwrap();
+        assert!(
+            exists(&app, "mog-m1"),
+            "a second open makes the window again"
+        );
+    }
+
+    #[test]
+    fn arc_3_host_frees_the_slot_of_a_destroyed_window() {
+        let (app, host) = setup();
+        for n in 0..8 {
+            host.open_mog_window(&format!("m{n}")).unwrap();
+        }
+        app.get_webview_window("mog-m0").unwrap().destroy().unwrap();
+        host.window_destroyed("mog-m0");
+        host.open_mog_window("m8").unwrap();
+        assert!(exists(&app, "mog-m8"));
+    }
+
+    #[test]
+    fn arc_3_host_rejects_bad_ids_and_unknown_mogs() {
+        let (_app, host) = setup();
+        assert_eq!(host.open_mog_window("a/b"), Err(WindowError::InvalidId));
+        assert_eq!(host.show_card("m1"), Err(WindowError::UnknownMog));
+        assert_eq!(host.hide_card("m1"), Err(WindowError::UnknownMog));
     }
 }

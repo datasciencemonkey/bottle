@@ -51,4 +51,35 @@ describe('view IPC helpers', () => {
     expect(tauri.listenOptions.get('mog:view_state')).toEqual([{ target: `mog-${ID}` }]);
     await act(async () => root.unmount());
   });
+
+  async function probe(label: string, key: 'mog.view_state' | 'card.update') {
+    tauri.label = label;
+    const got: unknown[] = [];
+    const onPayload = (p: unknown) => got.push(p);
+    function Probe() {
+      useViewEvent(key, onPayload);
+      return null;
+    }
+    const root = createRoot(document.createElement('div'));
+    await act(async () => root.render(<Probe />));
+    return { got, root };
+  }
+
+  it('[MOG-08a] [ARC-5] a MOG view does not get the events sent to another MOG window', async () => {
+    const OTHER = '00000000-0000-4000-8000-000000000002';
+    const { got, root } = await probe(`mog-${ID}`, 'mog.view_state');
+    await tauri.emitTo(`mog-${OTHER}`, 'mog:view_state', { mogId: OTHER });
+    await tauri.emitTo('hub', 'mog:view_state', { mogId: OTHER });
+    await tauri.emitTo(`mog-${ID}`, 'mog:view_state', { mogId: ID });
+    expect(got).toEqual([{ mogId: ID }]);
+    await act(async () => root.unmount());
+  });
+
+  it('[MOG-08a] [ARC-5] the hub gets the events sent to the hub only', async () => {
+    const { got, root } = await probe('hub', 'mog.view_state');
+    await tauri.emitTo(`mog-${ID}`, 'mog:view_state', { mogId: ID, n: 1 });
+    await tauri.emitTo('hub', 'mog:view_state', { mogId: ID, n: 2 });
+    expect(got).toEqual([{ mogId: ID, n: 2 }]);
+    await act(async () => root.unmount());
+  });
 });

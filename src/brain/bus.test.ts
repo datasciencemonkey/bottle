@@ -100,10 +100,14 @@ describe('brain Channel (ADR 0003, decision 3)', () => {
 describe('brain-to-view routing (#8)', () => {
   beforeEach(() => core.reset());
 
-  it('[MOG-08b] [ARC-5] sendMogViewState emits mog:view_state to the mog-<id> window only', async () => {
+  it('[MOG-08b] [ARC-5] sendMogViewState emits mog:view_state to the mog-<id> window and the hub only', async () => {
     const state = { mogId: MOG, mood: 'idle', overlays: {} };
     await sendMogViewState(MOG, state);
-    expect(core.emitTo.mock.calls).toEqual([[`mog-${MOG}`, 'mog:view_state', state]]);
+    // The hub (V1) lists every MOG with its mood, so it gets a copy (ADR 0008, decision 4).
+    expect(core.emitTo.mock.calls).toEqual([
+      [`mog-${MOG}`, 'mog:view_state', state],
+      ['hub', 'mog:view_state', state],
+    ]);
     expect(core.emit).not.toHaveBeenCalled();
   });
 

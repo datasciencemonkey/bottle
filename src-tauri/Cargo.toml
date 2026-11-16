@@ -26,3 +26,5 @@ tauri.workspace = true
 [dev-dependencies]
 # ARC-4 test: match window labels the way Tauri matches capability globs.
 glob.workspace = true
+# `tauri::test::mock_app` for the R11 host tests. The `test` feature adds no crate.
+tauri = { workspace = true, features = ["test"] }
