@@ -29,6 +29,23 @@ Unit tests cover the logic of R1 HotkeyService with fakes. These steps check the
 
 Step 11 needs the Pi Pico HID rig of SP-03. Without the rig, report steps 1-10 only.
 
+## In the app (#305)
+
+These steps check the host wiring of `src-tauri/src/hotkey_host.rs`. Use a debug build, so the brain WebView can be inspected. Time: about 10 minutes.
+
+- Remove Bottle (and your terminal app, if it runs the build) from System Settings > Privacy & Security > Input Monitoring before step H1.
+- Run `BOTTLE_DEMO_WINDOWS=1 pnpm tauri dev`. The demo MOG window opens.
+
+| # | Do this | Expected result | Requirement |
+|---|---|---|---|
+| H1 | Start the app with no Input Monitoring. Wait 10 s. | No Input Monitoring prompt and no Accessibility prompt show. | CAP-36, CAP-37 |
+| H2 | Grant Input Monitoring to the app that runs the build. Quit and start the app again. | No prompt shows. | CAP-36 |
+| H3 | In Safari > Develop, open the Web Inspector of the `brain` WebView. In `src/brain/bus.ts`, add a logpoint in `BrainBus.dispatch` that logs `msg`. Click the demo MOG, then hold and release Right-Option 5 times. | 5 `{event: "hotkey:ptt", payload: {mogId: "demo", phase: "down"}}` items and 5 with `phase: "up"`. | CAP-35a, MB-06a |
+| H4 | Close the demo MOG window. Hold and release Right-Option. | No `hotkey:ptt` item: no MOG is the target. | MB-06a |
+| H5 | Quit the app (Cmd+Q). Run `pgrep -fl bottle`. | No Bottle process is left. | AT-30 |
+
+Report H1-H5 on #303 with the macOS version. Do not post key contents or other terminal output.
+
 ## Report
 
 Post on #6 (or #5): the macOS version, the Mac model, the step numbers that passed, and the probe output of steps 3, 5 and 6. Do not post anything else from the terminal.

@@ -39,6 +39,8 @@ pub fn run() {
         .manage(ipc::BrainChannel::default())
         .invoke_handler(ipc::handler)
         .on_window_event(|window, event| {
+            // R1: a focused or closed MOG window moves the talk-key target (#305).
+            hotkey_host::on_window_event(window, event);
             // R11: a window that closes outside the host frees its ledger slot.
             if let tauri::WindowEvent::Destroyed = event {
                 if let Some(host) = window.try_state::<TauriWindowHost<tauri::Wry>>() {
@@ -49,6 +51,8 @@ pub fn run() {
         .setup(move |app| {
             let handle = app.handle();
             app.manage(TauriWindowHost::new(handle.clone()));
+            // R1: start the talk key. This never prompts (CAP-36, #305).
+            hotkey_host::install(handle)?;
             let host = app.state::<TauriWindowHost<tauri::Wry>>();
             for kind in startup_windows(demo) {
                 // MOG and card windows go through R11, so the cap and the ledger hold.
@@ -62,6 +66,12 @@ pub fn run() {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running the Bottle app");
+        .build(tauri::generate_context!())
+        .expect("error while building the Bottle app")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                // R1: remove the key tap on quit (#305).
+                hotkey_host::shutdown(app);
+            }
+        });
 }
