@@ -87,18 +87,13 @@ describe('brain component registry (4.3)', () => {
     ]);
   });
 
-  it('[MOG-08b] [ARC-2] startBrain constructs every component once', async () => {
+  it('[MOG-08b] [ARC-2] startBrain constructs every component and the Channel once', async () => {
     const a = startBrain();
     const b = startBrain();
     expect(b).toBe(a);
     expect(Object.keys(a.components)).toEqual(BRAIN_COMPONENTS.map((c) => c.id));
     for (const c of BRAIN_COMPONENTS) expect(a.components[c.id]).toBeDefined();
-    await a.ready;
-  });
-
-  it('[ARC-2] startBrain subscribes the brain Channel once', async () => {
-    const a = startBrain();
-    await a.ready;
+    await expect(a.ready).resolves.toBe(true);
     expect(core.invoke.mock.calls.filter(([c]) => c === 'brain_subscribe')).toHaveLength(1);
     expect(core.channels).toHaveLength(1);
   });

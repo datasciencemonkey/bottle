@@ -2,6 +2,7 @@
  * The registry of the hidden TS brain components T1-T15 of 4.3 (ARC-2, MOG-08b).
  * `startBrain()` constructs each component once; all domain state lives in these objects.
  */
+import { BrainBus, subscribeBrain } from '../bus';
 import { createAgentBridge } from './agent-bridge';
 import { createCapturePolicy } from './capture-policy';
 import { createCleanupProvider } from './cleanup-provider';
@@ -48,10 +49,25 @@ type Entry = (typeof BRAIN_COMPONENTS)[number];
 /** The constructed components, keyed by 4.3 ID. */
 export type BrainComponents = { readonly [E in Entry as E['id']]: ReturnType<E['factory']> };
 
-let brain: BrainComponents | undefined;
+/** The started brain: the components, the Channel bus and the subscription result. */
+export interface Brain {
+  readonly components: BrainComponents;
+  readonly bus: BrainBus;
+  /** True once `brain_subscribe` succeeds. TODO(#8): retry and surface a refusal. */
+  readonly ready: Promise<boolean>;
+}
 
-/** Construct T1..T15 once. Later calls return the same objects. */
-export function startBrain(): BrainComponents {
-  brain ??= Object.fromEntries(BRAIN_COMPONENTS.map((c) => [c.id, c.factory()])) as BrainComponents;
+let brain: Brain | undefined;
+
+/** Construct T1..T15 once and subscribe the brain Channel once. Later calls return the same brain. */
+export function startBrain(): Brain {
+  if (!brain) {
+    const components = Object.fromEntries(
+      BRAIN_COMPONENTS.map((c) => [c.id, c.factory()]),
+    ) as BrainComponents;
+    const bus = new BrainBus();
+    // TODO(#8, #14, #141): components register their handlers (view:input, hotkey:ptt, ...) on `bus`.
+    brain = { components, bus, ready: subscribeBrain(bus) };
+  }
   return brain;
 }
