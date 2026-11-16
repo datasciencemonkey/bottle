@@ -67,7 +67,8 @@ fn mog_01b_mog_is_built_hidden_and_shown_by_the_native_style() {
 fn mog_01b_app_does_not_activate_ignoring_other_apps() {
     // SP-01 section 4.2: the tao default (`true`) activates Bottle at launch and takes the
     // frontmost app away from the user.
-    assert!(!bottle_lib::ACTIVATE_IGNORING_OTHER_APPS);
+    let ignoring = std::hint::black_box(bottle_lib::ACTIVATE_IGNORING_OTHER_APPS);
+    assert!(!ignoring, "Bottle must not activate itself at launch");
     let lib = app_file("src/lib.rs");
     let code: String = lib
         .lines()
