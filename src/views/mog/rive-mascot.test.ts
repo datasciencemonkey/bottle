@@ -35,10 +35,11 @@ function fakeRive(
     'Sleeping',
   ],
 ) {
-  const mood = Object.assign(new Prop<string>('Idle'), { values: enumValues });
+  // The art defaults differ from the first frame, so the UX-02b test sees each init write.
+  const mood = Object.assign(new Prop<string>('Error'), { values: enumValues });
   const props = {
     mood,
-    level: new Prop<number>(0.3),
+    level: new Prop<number>(0.7),
     hover: new Prop<boolean>(true),
     demo: new Prop<boolean>(true),
     attention: new Prop<boolean>(false),
@@ -119,11 +120,11 @@ describe('RiveMascot', () => {
     const r = fakeRive();
     mountWith(r.create);
     r.load();
-    expect(r.props.demo.value).toBe(false);
-    expect(r.props.level.value).toBe(0);
-    expect(r.props.hover.value).toBe(false);
-    expect(r.props.mood.value).toBe('Idle');
-    expect(r.props.attention.value).toBe(false);
+    expect(r.props.demo.writes).toEqual([false]);
+    expect(r.props.level.writes).toEqual([0]);
+    expect(r.props.hover.writes).toEqual([false]);
+    expect(r.props.mood.writes).toEqual(['Idle']);
+    expect(r.props.attention.writes).toEqual([]);
   });
 
   it('[UX-02b] [AT-20] state that arrives before the load is applied after the first frame', () => {
@@ -133,7 +134,8 @@ describe('RiveMascot', () => {
     m.setAttention(true);
     expect(r.props.mood.writes).toEqual([]);
     r.load();
-    expect(r.props.mood.value).toBe('Processing');
+    // The first frame comes first, then the state the brain sent.
+    expect(r.props.mood.writes).toEqual(['Idle', 'Processing']);
     expect(r.props.attention.value).toBe(true);
   });
 
@@ -272,7 +274,7 @@ describe('PngMascot (UX-09b fallback)', () => {
     const el = document.createElement('div');
     const m = new PngMascot();
     m.mount(el);
-    expect(pngMood(el)?.getAttribute('src')).toMatch(/mood-idle\.png/);
+    expect(pngMood(el)?.getAttribute('src')).toMatch(/fallback\/mood-idle\.png/);
     const seen = new Set<string>();
     for (const mood of MOODS) {
       m.setMood(mood);
@@ -301,7 +303,7 @@ describe('PngMascot (UX-09b fallback)', () => {
     m.setAttention(true);
     for (const mood of MOODS) {
       m.setMood(mood);
-      expect(cue()?.getAttribute('src')).toMatch(/overlay-attention\.png/);
+      expect(cue()?.getAttribute('src')).toMatch(/fallback\/attention\.png/);
     }
     m.setAttention(false);
     expect(cue()).toBeNull();

@@ -24,6 +24,7 @@ export function MogView({
 }: MogViewProps) {
   const ref = useRef<HTMLDivElement>(null);
   const mascot = useRef<MascotRenderer | undefined>(undefined);
+  const last = useRef<MogViewState | undefined>(undefined);
   const [state, setState] = useState<MogViewState | undefined>(undefined);
 
   useEffect(() => {
@@ -31,6 +32,12 @@ export function MogView({
     if (!el) return;
     const m = createMascot();
     m.mount(el);
+    // A new renderer starts from the last state the brain sent.
+    const s = last.current;
+    if (s) {
+      m.setMood(s.mood);
+      m.setAttention(s.overlays.attention);
+    }
     mascot.current = m;
     return () => {
       m.destroy();
@@ -39,13 +46,14 @@ export function MogView({
   }, [createMascot]);
 
   // UX-06a / UX-06b: the view computes the level, and only for the mic this MOG owns.
+  // A new renderer gets a new meter, so the meter never skips its first write.
   useEffect(() => {
     const meter = new LevelMeter(mogId);
     return levels.subscribe((frame) => {
       const v = meter.push(frame);
       if (v !== undefined) mascot.current?.setLevel(v);
     });
-  }, [levels, mogId]);
+  }, [levels, mogId, createMascot]);
 
   const onState = useCallback(
     (p: unknown) => {
@@ -54,6 +62,7 @@ export function MogView({
       mascot.current?.setMood(s.mood);
       // UX-03: the "?" cue over any mood; the renderer skips a value that did not change.
       mascot.current?.setAttention(s.overlays.attention);
+      last.current = s;
       setState(s);
     },
     [mogId],
@@ -77,6 +86,7 @@ export function MogView({
         }}
         onMouseLeave={() => mascot.current?.setHover(false)}
       />
+      {/* The visual "?" cue is the renderer's (UX-03); this empty span is the accessible badge. */}
       {state?.overlays.attention && <span data-overlay="attention" aria-label="Needs attention" />}
       {state?.overlays.recording && <span data-overlay="recording">REC</span>}
       {state?.overlays.offline && <span data-overlay="offline">Offline</span>}

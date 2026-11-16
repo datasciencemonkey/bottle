@@ -57,6 +57,12 @@ Build the mascot `.riv` before `pnpm build` (needs `rive login`; never commit th
 rive mog-rive --publish
 ```
 
+Regenerate the transparent PNG fallback after an art change (no login needed):
+
+```sh
+uv run --no-project --with pillow python tools/render_mog_fallback.py
+```
+
 ## License
 
 MIT. See [`LICENSE`](LICENSE).

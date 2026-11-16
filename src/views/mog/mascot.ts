@@ -4,14 +4,14 @@
  * A renderer only shows what the brain sends: it never picks a mood (UX-01b).
  */
 import type { Mood } from '../../shared/interfaces';
-import answeringPng from '../../../mog-rive/shots/mood-answering.png?url';
-import errorPng from '../../../mog-rive/shots/mood-error.png?url';
-import idlePng from '../../../mog-rive/shots/mood-idle.png?url';
-import listeningPng from '../../../mog-rive/shots/mood-listening.png?url';
-import processingPng from '../../../mog-rive/shots/mood-processing.png?url';
-import sleepingPng from '../../../mog-rive/shots/mood-sleeping.png?url';
-import successPng from '../../../mog-rive/shots/mood-success.png?url';
-import attentionPng from '../../../mog-rive/shots/overlay-attention.png?url';
+import answeringPng from '../../../mog-rive/fallback/mood-answering.png?url';
+import errorPng from '../../../mog-rive/fallback/mood-error.png?url';
+import idlePng from '../../../mog-rive/fallback/mood-idle.png?url';
+import listeningPng from '../../../mog-rive/fallback/mood-listening.png?url';
+import processingPng from '../../../mog-rive/fallback/mood-processing.png?url';
+import sleepingPng from '../../../mog-rive/fallback/mood-sleeping.png?url';
+import successPng from '../../../mog-rive/fallback/mood-success.png?url';
+import attentionPng from '../../../mog-rive/fallback/attention.png?url';
 
 export interface MascotRenderer {
   mount(el: HTMLElement): void;
@@ -41,7 +41,7 @@ export const MOODS: readonly Mood[] = [
 /** UX-02b: the inputs a renderer sets when it loads, before the brain's first state. */
 export const FIRST_FRAME = { demo: false, level: 0, hover: false, mood: 'idle' } as const;
 
-/** UX-09b: one static PNG per mood (the committed shots of `mog-rive/`). */
+/** UX-09b: one transparent PNG per mood (`mog-rive/fallback/`, `tools/render_mog_fallback.py`). */
 export const MOOD_PNG: Readonly<Record<Mood, string>> = {
   idle: idlePng,
   listening: listeningPng,
@@ -52,7 +52,7 @@ export const MOOD_PNG: Readonly<Record<Mood, string>> = {
   sleeping: sleepingPng,
 };
 
-/** UX-03: the "?" glyph art for the fallback. */
+/** UX-03: only the "?" bubble, transparent elsewhere, so it shows over any mood. */
 export const ATTENTION_PNG: string = attentionPng;
 
 /** The static fallback when Rive does not load (UX-09b). */

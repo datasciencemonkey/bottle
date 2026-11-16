@@ -32,7 +32,9 @@ export interface MicLevelFrame {
 }
 
 /**
- * Where the MOG view gets mic frames.
+ * Where the MOG view gets mic frames. When the mic closes or moves to another MOG, the source
+ * must send one frame with the new owner (`null` when closed): the meter sets 0 only on such a
+ * frame (UX-06b), so a source that just stops would leave the last level on screen.
  * TODO(#4): the CaptureService level stream (`capture_subscribe` `onLevel`) feeds this.
  * TODO(#285): the brain-to-view payload that carries the frames to the `mog-<id>` window.
  */

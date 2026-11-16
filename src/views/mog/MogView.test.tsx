@@ -147,4 +147,20 @@ describe('V2 MOG view', () => {
     act(() => root.unmount());
     expect(subs).toBe(0);
   });
+
+  it('[UX-03] [UX-02b] a new renderer starts from the last state the brain sent', async () => {
+    const a = fakeMascot();
+    const b = fakeMascot();
+    const first = () => a.m;
+    const second = () => b.m;
+    const { root } = await render(<MogView mogId={ID} createMascot={first} />);
+    await tauri.emit('mog:view_state', {
+      mogId: ID,
+      mood: 'error',
+      overlays: { ...overlays, attention: true },
+    });
+    await act(async () => root.render(<MogView mogId={ID} createMascot={second} />));
+    expect(a.calls.at(-1)).toBe('destroy');
+    expect(b.calls).toEqual(['mount', 'mood:error', 'attention:true']);
+  });
 });
