@@ -81,7 +81,7 @@ The parse rules are in `docs/adr/0001-requirement-coverage-rules.md`.
 ## Test harness (#229, AT-22)
 
 The shared parts that unit and acceptance tests use. Harness self-tests carry the ID `[AT-22]`.
-ADR 0004 records that the harness lands before the app-build CI (#227).
+ADR 0005 records that the harness lands before the app-build CI (#227).
 
 ### Genie One MCP double
 

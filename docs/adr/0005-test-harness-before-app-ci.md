@@ -1,4 +1,4 @@
-# ADR 0004: The test harness lands before the app-build CI
+# ADR 0005: The test harness lands before the app-build CI
 
 - Status: Accepted
 - Date: 2026-11-15

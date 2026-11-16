@@ -11,7 +11,8 @@
 // - a second ask on a busy conversation fails with BUSY_TEXT (not a 409).
 // TODO(#29): SP-09 records genie_tools.json and the busy envelope (isError or JSON-RPC error).
 // Switch the tool list and schemas to genie_tools.json, and set the default busyEnvelope.
-// TODO(#223): use the contract McpCallResult type from src/shared/ipc.ts when it lands.
+
+import type { CommandReturns } from '../shared/ipc';
 
 export const GENIE_ONE_TOOLS = [
   'genie_ask',
@@ -50,13 +51,8 @@ export interface ScriptedResponse {
   queryResults?: Record<string, QueryResult>;
 }
 
-export interface McpCallResult {
-  structuredContent: unknown;
-  text: string;
-  isError: boolean;
-  httpStatus: number;
-  rpcError?: unknown;
-}
+/** The IPC `mcp_call` result (src/shared/ipc.ts). */
+export type McpCallResult = CommandReturns['mcp_call'];
 export interface JsonRpcRequest {
   jsonrpc: '2.0';
   id: number | string;
