@@ -19,6 +19,14 @@ pub enum CoreError {
         /// The component ID that refused, for example `"R5"`.
         component: &'static str,
     },
+    /// A component cannot run on this device now. `reason` is a stable, content-free code
+    /// (for example `"input_monitoring_required"` from R1). It crosses IPC as the code.
+    Unavailable {
+        /// The component ID, for example `"R1"`.
+        component: &'static str,
+        /// The stable reason code.
+        reason: &'static str,
+    },
 }
 
 impl CoreError {
@@ -27,6 +35,7 @@ impl CoreError {
         match self {
             CoreError::NotImplemented { .. } => "not_implemented",
             CoreError::TokenCommandRefused { .. } => "token_command_refused",
+            CoreError::Unavailable { reason, .. } => reason,
         }
     }
 }
@@ -39,6 +48,9 @@ impl fmt::Display for CoreError {
             }
             CoreError::TokenCommandRefused { component } => {
                 write!(f, "{component} refused a command that returns a token")
+            }
+            CoreError::Unavailable { component, reason } => {
+                write!(f, "{component} is not available: {reason}")
             }
         }
     }
