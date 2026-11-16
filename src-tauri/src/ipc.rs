@@ -288,7 +288,7 @@ impl GatewayComponents for HostComponents<'_> {
             }
             // Each feature issue wires its R1-R17 component here.
             // TODO(#379): `config_*` goes to the config component of #372 (`config_storage_failed`).
-            // TODO(#4): `capture_resume` goes to R2 `resume(lease_id)` (ADR 0039).
+            // TODO(#425): `capture_resume` goes to R2 `resume(lease_id)` (ADR 0039).
             _ => Err(refused(IpcError::NotImplemented {
                 command: command.to_owned(),
             })),

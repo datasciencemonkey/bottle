@@ -119,7 +119,9 @@ pub trait StatusSink: Send + Sync {
 }
 
 /// The app's status sink: each change goes to the brain as the sticky `hotkey:status` item
-/// (#297, ADR 0039), so a brain that subscribes later still gets the last status.
+/// (#297, ADR 0039), so a brain that subscribes later still gets the last status. The one
+/// exception is `elevated_foreground`: a one-shot CAP-42 tooltip notice, sent with plain
+/// `deliver` and never kept. It does not change the talk-key state (ADR 0039, decision 4).
 #[derive(Debug, Clone)]
 pub struct BrainStatus<B: BrainSink>(pub B);
 

@@ -91,7 +91,9 @@ export const EVENTS = {
   'hotkey.panic': { name: 'hotkey:panic', direction: 'core_to_brain' },
   /**
    * Not in 4.5 yet (ADR 0039): the talk-key status (`TalkKeyStatus`). Sticky: the host sends
-   * the last one again when the brain subscribes.
+   * the last one again when the brain subscribes. One exception: `reason: 'elevated_foreground'`
+   * is a one-shot CAP-42 tooltip notice. It is not sticky, and the brain must not change its
+   * talk-key state for it: the brain shows the tooltip and keeps the last other status.
    */
   'hotkey.status': { name: 'hotkey:status', direction: 'core_to_brain' },
   'capture.state': { name: 'capture:state', direction: 'core_to_brain' },
