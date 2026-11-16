@@ -39,3 +39,12 @@ describe('IPC contract (TS side)', () => {
     expect(viewCommands).toEqual(['view_emit']);
   });
 });
+
+describe('capture lease (contract)', () => {
+  it('[CAP-02a] capture_stop and capture_pause take mogId and leaseId', () => {
+    const doc = schemaDoc as unknown as { arguments: Record<string, { required?: string[] }> };
+    for (const cmd of ['capture_stop', 'capture_pause']) {
+      expect(doc.arguments[cmd]?.required).toEqual(['mogId', 'leaseId']);
+    }
+  });
+});

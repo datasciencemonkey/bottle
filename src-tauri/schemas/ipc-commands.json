@@ -123,7 +123,7 @@
     "brain_subscribe": {
       "$defs": {
         "ChannelRef": {
-          "description": "A Tauri `Channel` argument. On the wire it is `__CHANNEL__:<numeric id>`; other strings fail.",
+          "pattern": "^__CHANNEL__:[0-9]+$",
           "type": "string"
         }
       },
@@ -141,17 +141,28 @@
       "type": "object"
     },
     "capture_pause": {
+      "$defs": {
+        "LeaseRef": {
+          "pattern": "^[A-Za-z0-9-]{1,64}$",
+          "type": "string"
+        }
+      },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
+      "description": "CAP-02a: stop and pause name the lease they act on. R2 rejects a stale one.",
       "properties": {
+        "leaseId": {
+          "$ref": "#/$defs/LeaseRef"
+        },
         "mogId": {
           "type": "string"
         }
       },
       "required": [
-        "mogId"
+        "mogId",
+        "leaseId"
       ],
-      "title": "MogArgs",
+      "title": "CaptureLeaseArgs",
       "type": "object"
     },
     "capture_start": {
@@ -276,17 +287,28 @@
       "type": "object"
     },
     "capture_stop": {
+      "$defs": {
+        "LeaseRef": {
+          "pattern": "^[A-Za-z0-9-]{1,64}$",
+          "type": "string"
+        }
+      },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
+      "description": "CAP-02a: stop and pause name the lease they act on. R2 rejects a stale one.",
       "properties": {
+        "leaseId": {
+          "$ref": "#/$defs/LeaseRef"
+        },
         "mogId": {
           "type": "string"
         }
       },
       "required": [
-        "mogId"
+        "mogId",
+        "leaseId"
       ],
-      "title": "MogArgs",
+      "title": "CaptureLeaseArgs",
       "type": "object"
     },
     "capture_stop_all": {
@@ -299,7 +321,7 @@
     "capture_subscribe": {
       "$defs": {
         "ChannelRef": {
-          "description": "A Tauri `Channel` argument. On the wire it is `__CHANNEL__:<numeric id>`; other strings fail.",
+          "pattern": "^__CHANNEL__:[0-9]+$",
           "type": "string"
         }
       },
@@ -399,7 +421,7 @@
     "dbx_http": {
       "$defs": {
         "ChannelRef": {
-          "description": "A Tauri `Channel` argument. On the wire it is `__CHANNEL__:<numeric id>`; other strings fail.",
+          "pattern": "^__CHANNEL__:[0-9]+$",
           "type": "string"
         },
         "RouteId": {

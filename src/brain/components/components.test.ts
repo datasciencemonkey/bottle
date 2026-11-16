@@ -38,6 +38,7 @@ const ref = { backend: 'genie_one_mcp', profile: 'p', host: 'h', conversationId:
 const seg: SegmentRef = {
   segmentId: 's',
   mogId: MOG,
+  leaseId: '1',
   track: 'you',
   tStartMs: 0,
   tEndMs: 1,

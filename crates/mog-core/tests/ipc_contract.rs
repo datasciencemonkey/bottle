@@ -345,3 +345,69 @@ fn arc_5_only_the_brain_can_take_the_core_to_brain_channel() {
         ));
     }
 }
+
+#[test]
+fn cap_02a_stop_and_pause_need_the_lease_id() {
+    for cmd in ["capture_stop", "capture_pause"] {
+        // No lease: rejected.
+        let err = ipc::handle("brain", cmd, json!({"mogId": "a1"})).unwrap_err();
+        assert!(
+            matches!(err, IpcError::InvalidArgs { .. }),
+            "{cmd}: {err:?}"
+        );
+        // A malformed lease: rejected.
+        for bad in [json!(""), json!(17), json!("a b"), json!("x".repeat(65))] {
+            let err =
+                ipc::handle("brain", cmd, json!({"mogId": "a1", "leaseId": bad})).unwrap_err();
+            assert!(matches!(err, IpcError::InvalidArgs { .. }), "{cmd} {bad}");
+        }
+        // A well-formed lease reaches R2 (still a stub).
+        let err = ipc::handle("brain", cmd, json!({"mogId": "a1", "leaseId": "17"})).unwrap_err();
+        assert!(
+            matches!(err, IpcError::NotImplemented { .. }),
+            "{cmd}: {err:?}"
+        );
+    }
+}
+
+#[test]
+fn cap_02a_an_unknown_lease_has_a_typed_error() {
+    // The same wire code as R2 CaptureError::UnknownLease (PR #273).
+    let err = IpcError::UnknownLease {
+        command: "capture_stop".into(),
+    };
+    assert_eq!(
+        serde_json::to_value(&err).unwrap(),
+        json!({"error": "unknown_lease", "command": "capture_stop"})
+    );
+    assert!(!err.to_string().is_empty());
+    for (e, code) in [
+        (
+            IpcError::MicBusy {
+                command: "capture_start".into(),
+            },
+            "mic_busy",
+        ),
+        (
+            IpcError::ConsentRequired {
+                command: "capture_start".into(),
+            },
+            "consent_required",
+        ),
+        (
+            IpcError::InvalidMode {
+                command: "capture_pause".into(),
+            },
+            "invalid_mode",
+        ),
+    ] {
+        assert_eq!(serde_json::to_value(&e).unwrap()["error"], code);
+    }
+}
+
+#[test]
+fn cap_02a_schema_states_the_lease_rule() {
+    let schemas = ipc::schemas();
+    let text = schemas["capture_stop"].to_string();
+    assert!(text.contains(ipc::LEASE_PATTERN), "{text}");
+}
