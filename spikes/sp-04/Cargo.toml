@@ -1,0 +1,24 @@
+# SP-04 (#44): Parakeet TDT 0.6B v3 int8 latency benchmark on the sherpa-onnx crate.
+# Standalone crate with its own workspace. It is not part of the app build.
+[package]
+name = "sp04-bench"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+description = "SP-04 spike: local Parakeet STT latency, RSS and load time"
+
+[workspace]
+
+[dependencies]
+# Requirements section 4 pins the sherpa-onnx crate 2.0.x (CAP-48, D78).
+sherpa-onnx = "=2.0.1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
+
+[profile.release]
+debug = false
