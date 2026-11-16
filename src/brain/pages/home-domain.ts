@@ -63,13 +63,18 @@ export function parseDomainInput(text: string): string | undefined {
   return id && ID.test(id) ? id : undefined;
 }
 
-/** One key for one workspace: the host in lower case, with no scheme and no trailing slash. */
+/**
+ * One key for one workspace: the host name of the workspace URL in lower case, with no scheme,
+ * port, path or query. This is how a CLI profile host names its workspace (one profile = one
+ * workspace, U15), so a home domain follows the workspace, not the profile name.
+ */
 export function workspaceKey(host: string): string {
-  return host
-    .trim()
-    .toLowerCase()
-    .replace(/^https?:\/\//, '')
-    .replace(/\/+$/, '');
+  const t = host.trim();
+  try {
+    return new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(t) ? t : `https://${t}`).hostname;
+  } catch {
+    return t.toLowerCase().replace(/\/+$/, '');
+  }
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
