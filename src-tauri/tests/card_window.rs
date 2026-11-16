@@ -418,3 +418,156 @@ fn arc_3_closing_error_has_a_stable_code_and_names_no_id() {
     let text = format!("{e} {e:?}");
     assert!(!text.contains("m1") && !text.contains("mog-"), "{text}");
 }
+
+// ---------- PR #338 review: closing races and one critical section per card operation ----------
+
+#[test]
+fn arc_3_two_expectations_for_one_window_leave_the_label_reusable() {
+    // The reaper and a MOG close can both destroy the same card; one window gives one event.
+    let mut ledger = WindowLedger::default();
+    ledger.open_mog("m1").unwrap();
+    ledger.show_card("m1").unwrap();
+    ledger.expect_destroyed("card-m1");
+    ledger.expect_destroyed("card-m1");
+    ledger.window_destroyed("card-m1");
+    assert_eq!(ledger.show_card("m1"), Ok(WindowKind::Card("m1".into())));
+}
+
+#[test]
+fn arc_3_begin_closing_records_only_a_live_window_once() {
+    let mut ledger = WindowLedger::default();
+    ledger.open_mog("m1").unwrap();
+    ledger.show_card("m1").unwrap();
+    // The Destroyed event came first (Tauri drops the window from its manager before the
+    // handler runs): no live window, so nothing is expected and the label stays free.
+    ledger.window_destroyed("card-m1");
+    assert!(!ledger.begin_closing("card-m1", false));
+    assert_eq!(ledger.show_card("m1"), Ok(WindowKind::Card("m1".into())));
+    // A live window is recorded once; a second destroy of it is skipped.
+    assert!(ledger.begin_closing("card-m1", true));
+    assert!(!ledger.begin_closing("card-m1", true));
+    // A destroy that failed takes the record back.
+    ledger.cancel_closing("card-m1");
+    assert_eq!(ledger.show_card("m1"), Ok(WindowKind::Card("m1".into())));
+}
+
+#[test]
+fn ux_19b_a_card_window_gone_before_its_event_waits_for_the_event() {
+    // The window left the manager but its Destroyed event is not handled yet: a show must not
+    // make a new window that the late event then marks absent.
+    let mut ledger = WindowLedger::default();
+    ledger.open_mog("m1").unwrap();
+    ledger.show_card("m1").unwrap();
+    ledger.card_window_missing("m1");
+    assert_eq!(ledger.card_state("m1"), Some(CardState::Absent));
+    assert_eq!(ledger.show_card("m1"), Err(WindowError::Closing));
+    ledger.window_destroyed("card-m1");
+    assert_eq!(ledger.show_card("m1"), Ok(WindowKind::Card("m1".into())));
+}
+
+/// Records shows and hides; the card show waits, so another thread can run in between.
+#[derive(Default, Clone)]
+struct SlowShow(Arc<Mutex<Vec<String>>>);
+
+impl<R: tauri::Runtime> NativeWindowStyle<R> for SlowShow {
+    fn style(&self, _: &tauri::WebviewWindow<R>, _: &WindowKind) -> Result<(), WindowError> {
+        Ok(())
+    }
+
+    fn show(&self, _: &tauri::WebviewWindow<R>, kind: &WindowKind) -> Result<(), WindowError> {
+        if matches!(kind, WindowKind::Card(_)) {
+            std::thread::sleep(Duration::from_millis(150));
+        }
+        self.0
+            .lock()
+            .unwrap()
+            .push(format!("show {}", kind.label()));
+        Ok(())
+    }
+
+    fn hide(&self, _: &tauri::WebviewWindow<R>, kind: &WindowKind) -> Result<(), WindowError> {
+        self.0
+            .lock()
+            .unwrap()
+            .push(format!("hide {}", kind.label()));
+        Ok(())
+    }
+}
+
+#[test]
+fn ux_19b_a_hide_during_a_show_leaves_the_ledger_matching_the_window() {
+    let app = tauri::test::mock_app();
+    let rec = SlowShow::default();
+    let host = Arc::new(TauriWindowHost::with_style(
+        app.handle().clone(),
+        Box::new(rec.clone()),
+    ));
+    host.open_mog_window("m1").unwrap();
+    host.show_card("m1").unwrap();
+    host.hide_card("m1").unwrap();
+    let shower = {
+        let host = host.clone();
+        std::thread::spawn(move || host.show_card("m1"))
+    };
+    std::thread::sleep(Duration::from_millis(40));
+    let hid = host.hide_card("m1");
+    shower.join().unwrap().unwrap();
+    hid.unwrap();
+    let last = rec
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|c| c.ends_with("card-m1"))
+        .cloned()
+        .unwrap();
+    let state = host.card_state("m1").unwrap();
+    match last.as_str() {
+        "show card-m1" => assert_eq!(state, CardState::Shown, "the card shows"),
+        _ => assert!(
+            matches!(state, CardState::Hidden(_)),
+            "{last} but {state:?}"
+        ),
+    }
+}
+
+/// Shows a MOG, and fails every card show after the first.
+#[derive(Default)]
+struct FailSecondCardShow(Mutex<usize>);
+
+impl<R: tauri::Runtime> NativeWindowStyle<R> for FailSecondCardShow {
+    fn style(&self, _: &tauri::WebviewWindow<R>, _: &WindowKind) -> Result<(), WindowError> {
+        Ok(())
+    }
+
+    fn show(&self, _: &tauri::WebviewWindow<R>, kind: &WindowKind) -> Result<(), WindowError> {
+        if matches!(kind, WindowKind::Card(_)) {
+            let mut n = self.0.lock().unwrap();
+            *n += 1;
+            if *n > 1 {
+                return Err(WindowError::HostFailed);
+            }
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn mog_18b_a_failed_show_of_a_hidden_card_keeps_it_hidden_for_the_reaper() {
+    let app = tauri::test::mock_app();
+    let clock = FakeClock::new();
+    let host = TauriWindowHost::with_style(
+        app.handle().clone(),
+        Box::new(FailSecondCardShow::default()),
+    )
+    .with_clock(clock.source());
+    host.open_mog_window("m1").unwrap();
+    host.show_card("m1").unwrap();
+    host.hide_card("m1").unwrap();
+    let hidden = host.card_state("m1");
+    assert_eq!(host.show_card("m1"), Err(WindowError::HostFailed));
+    assert_eq!(host.card_state("m1"), hidden, "the card did not show");
+    clock.advance(CARD_HIDDEN_TTL);
+    assert_eq!(host.reap_hidden_cards(), 1);
+}
