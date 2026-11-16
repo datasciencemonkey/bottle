@@ -3,7 +3,7 @@
  *
  * One call of `model_invoke` (role `router`) with the strict json_schema of Appendix D
  * (`src/shared/router-schema.ts`, reused unchanged). The client validates every response
- * against that schema, applies the GL-7.2 field rules (ADR 0008), retries once when the output
+ * against that schema, applies the GL-7.2 field rules (ADR 0032), retries once when the output
  * does not parse, and falls back to intent `context` when the retry also fails.
  *
  * The router step only proposes. It never calls Genie, the agent, capture or a workspace switch.
@@ -54,7 +54,7 @@ export type ModelInvoker = (
   args: CommandArgs['model_invoke'],
 ) => Promise<CommandReturns['model_invoke']>;
 
-/** The GL-7.2 field rules the client checks (RTR-13b, ADR 0008). */
+/** The GL-7.2 field rules the client checks (RTR-13b, ADR 0032). */
 export type FieldRule =
   | 'confidence_clamp'
   | 'empty_text'
@@ -262,7 +262,7 @@ function numbers(s: string): string[] {
   return s.match(/\d+(?:[.,]\d+)*/g) ?? [];
 }
 
-/** Applies the GL-7.2 rules of ADR 0008. Returns the fixed decision and the rules that fired. */
+/** Applies the GL-7.2 rules of ADR 0032. Returns the fixed decision and the rules that fired. */
 export function applyFieldRules(
   d: RouterDecision,
   input: RouterInput,

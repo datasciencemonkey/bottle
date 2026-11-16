@@ -1,4 +1,4 @@
-# ADR 0008: Router step client checks (GL-7.2 rules, retry and fallback)
+# ADR 0032: Router step client checks (GL-7.2 rules, retry and fallback)
 
 - Status: Accepted
 - Date: 2026-11-16
