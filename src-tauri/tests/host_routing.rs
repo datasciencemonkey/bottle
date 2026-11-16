@@ -8,11 +8,13 @@ use bottle_lib::hotkey_settings::{
 };
 use bottle_lib::ipc::{
     rejection, route, runs_off_main_thread, schedule, BrainLink, HostComponents, HotkeysRoute,
+    PermissionRoute,
 };
 use bottle_lib::window_host::{TauriWindowHost, WindowError};
 use mog_core::error::{CoreError, CoreResult};
 use mog_core::hotkey_bindings::{DictationShortcut, Os, TalkBinding};
-use mog_core::ipc::{events, ChannelRef, Geometry, JsonObject, COMMANDS};
+use mog_core::hotkey_core::{PermissionStatus, UserAction};
+use mog_core::ipc::{events, ChannelRef, Geometry, JsonObject, PermissionKind, COMMANDS};
 use mog_core::ipc_gateway::ERROR_CODES;
 use mog_core::keyboard_env::EnvReads;
 use mog_core::window_host::WindowHost;
@@ -129,6 +131,7 @@ fn comps<'a>(
         brain,
         windows,
         hotkeys,
+        permissions: None,
     }
 }
 
@@ -319,10 +322,11 @@ fn mog_18a_r11_makes_the_card_on_the_first_show_through_the_route() {
 #[test]
 fn arc_3_window_ops_run_off_the_main_thread_and_other_commands_inline() {
     // ADR 0022 decision 6: an R11 op may wait for the main thread, so it runs on a worker.
+    // ADR 0039: `permission_request` waits for an OS prompt, so it runs on a worker too.
     for c in COMMANDS {
         assert_eq!(
             runs_off_main_thread(c.name),
-            c.name.starts_with("window_"),
+            c.name.starts_with("window_") || c.name == "permission_request",
             "{}",
             c.name
         );
@@ -630,7 +634,7 @@ fn arc_3_schedule_runs_window_ops_on_a_worker_and_others_inline() {
         let ran_on = rx
             .recv_timeout(std::time::Duration::from_secs(5))
             .expect("the job ran");
-        if c.name.starts_with("window_") {
+        if c.name.starts_with("window_") || c.name == "permission_request" {
             assert_ne!(ran_on, caller, "{} ran on the calling thread", c.name);
         } else {
             assert_eq!(ran_on, caller, "{} left the calling thread", c.name);
@@ -647,4 +651,148 @@ fn arc_5_an_inline_command_has_run_when_schedule_returns() {
         flag.store(true, std::sync::atomic::Ordering::SeqCst)
     });
     assert!(done.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+// ---------- permission_request (CAP-36, CAP-37, #312, ADR 0039) ----------
+
+/// A fake permission route: it records each ask and answers with `answer`.
+struct FakePermissionRoute {
+    asked: Mutex<Vec<PermissionKind>>,
+    answer: PermissionStatus,
+}
+
+impl FakePermissionRoute {
+    fn answering(answer: PermissionStatus) -> Self {
+        Self {
+            asked: Mutex::default(),
+            answer,
+        }
+    }
+    fn asked(&self) -> Vec<PermissionKind> {
+        self.asked.lock().unwrap().clone()
+    }
+}
+
+impl PermissionRoute for FakePermissionRoute {
+    fn request_permission(
+        &self,
+        permission: PermissionKind,
+        _action: UserAction,
+    ) -> PermissionStatus {
+        self.asked.lock().unwrap().push(permission);
+        self.answer
+    }
+}
+
+fn ask(from: &str, route_to: Option<&dyn PermissionRoute>, args: Value) -> Result<Value, Value> {
+    let brain = FakeBrain::default();
+    let components = HostComponents {
+        from,
+        brain: &brain,
+        windows: None,
+        hotkeys: None,
+        permissions: route_to,
+    };
+    route(components, "permission_request", args)
+}
+
+#[test]
+fn cap_36_permission_request_input_monitoring_reaches_the_ptt_permission_call() {
+    let p = FakePermissionRoute::answering(PermissionStatus::Granted);
+    assert_eq!(
+        ask("hub", Some(&p), json!({"permission": "input_monitoring"})),
+        Ok(json!({"status": "granted"}))
+    );
+    assert_eq!(p.asked(), vec![PermissionKind::InputMonitoring]);
+}
+
+#[test]
+fn cap_37_permission_request_accessibility_reaches_the_insertion_permission_call() {
+    for (answer, status) in [
+        (PermissionStatus::Granted, "granted"),
+        (PermissionStatus::Denied, "denied"),
+        (PermissionStatus::Unknown, "unknown"),
+    ] {
+        let p = FakePermissionRoute::answering(answer);
+        assert_eq!(
+            ask("hub", Some(&p), json!({"permission": "accessibility"})),
+            Ok(json!({ "status": status }))
+        );
+        assert_eq!(p.asked(), vec![PermissionKind::Accessibility]);
+    }
+}
+
+#[test]
+fn cap_36_cap_37_permission_request_is_hub_only() {
+    let p = FakePermissionRoute::answering(PermissionStatus::Granted);
+    for label in ["brain", "mog-a1", "card-a1"] {
+        assert_eq!(
+            ask(label, Some(&p), json!({"permission": "input_monitoring"})),
+            err("window_not_allowed"),
+            "{label}"
+        );
+    }
+    assert!(p.asked().is_empty(), "a refused call reached the OS prompt");
+}
+
+#[test]
+fn cap_36_cap_37_permission_request_bad_args_are_invalid_args() {
+    let p = FakePermissionRoute::answering(PermissionStatus::Granted);
+    for bad in [
+        json!({}),
+        json!({"permission": "camera"}),
+        json!({"permission": "accessibility", "prompt": true}),
+        json!({"permission": SECRET}),
+    ] {
+        assert_eq!(
+            ask("hub", Some(&p), bad.clone()),
+            err("invalid_args"),
+            "{bad}"
+        );
+    }
+    assert!(p.asked().is_empty());
+}
+
+#[test]
+fn cap_36_permission_request_without_the_hotkey_runtime_is_host_failed() {
+    assert_eq!(
+        ask("hub", None, json!({"permission": "input_monitoring"})),
+        err("host_failed")
+    );
+}
+
+// ---------- capture_resume (CAP-02a, #279, ADR 0039) ----------
+
+#[test]
+fn cap_02a_capture_resume_is_brain_only_and_not_implemented_until_4() {
+    let brain = FakeBrain::default();
+    let lease = json!({"mogId": "a1", "leaseId": "17"});
+    assert_eq!(
+        route(
+            comps("brain", &brain, None, None),
+            "capture_resume",
+            lease.clone()
+        ),
+        err("not_implemented")
+    );
+    for label in ["hub", "mog-a1", "card-a1"] {
+        assert_eq!(
+            route(
+                comps(label, &brain, None, None),
+                "capture_resume",
+                lease.clone()
+            ),
+            err("window_not_allowed"),
+            "{label}"
+        );
+    }
+    assert_eq!(
+        route(
+            comps("brain", &brain, None, None),
+            "capture_resume",
+            json!({"mogId": "a1", "leaseId": "a b"})
+        ),
+        err("invalid_args")
+    );
+    assert!(brain.items().is_empty());
 }

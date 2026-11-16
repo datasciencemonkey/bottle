@@ -16,6 +16,8 @@ const SPEC_COMMANDS: &[(&str, &[WindowClass])] = {
         ("capture_start", &[B]),
         ("capture_stop", &[B]),
         ("capture_pause", &[B]),
+        // #279 (ADR 0039): a separate row, not a `capture_pause` toggle.
+        ("capture_resume", &[B]),
         ("capture_status", &[B]),
         ("capture_stop_all", &[B]),
         ("capture_subscribe", &[B]),
@@ -38,6 +40,8 @@ const SPEC_COMMANDS: &[(&str, &[WindowClass])] = {
         ("config_delete", &[B, H]),
         ("policy_get", &[B, H]),
         ("hotkeys_set", &[B, H]),
+        // #312 (ADR 0039): the wizard and Settings ask for an OS permission.
+        ("permission_request", &[H]),
         ("mog_set_active", &[B]),
         ("window_mog_open", &[B]),
         ("window_mog_close", &[B]),
@@ -222,6 +226,8 @@ fn arc_5_event_names_are_valid_tauri_names() {
     let spec_names = [
         "hotkey.ptt",
         "hotkey.panic",
+        // #297, #294 (ADR 0039): the talk-key status for the pill and the tooltip.
+        "hotkey.status",
         "capture.state",
         "capture.segment",
         "session.stop_signal",
@@ -476,4 +482,99 @@ fn sec_03_schema_document_lists_every_error_code() {
         .map(|c| c.as_str().unwrap())
         .collect();
     assert_eq!(codes, mog_core::ipc_gateway::ERROR_CODES);
+}
+
+// ---------- #297, #294, #312, #279 (ADR 0039) ----------
+
+#[test]
+fn arc_5_cap_39c_hotkey_status_is_the_only_sticky_core_to_brain_event() {
+    let e = events::ALL
+        .iter()
+        .find(|e| e.spec_name == "hotkey.status")
+        .expect("hotkey.status is in the event list");
+    assert_eq!(e.name, events::HOTKEY_STATUS);
+    assert_eq!(e.name, "hotkey:status");
+    assert_eq!(e.direction, events::Direction::CoreToBrain);
+    assert_eq!(events::STICKY, [events::HOTKEY_STATUS]);
+    assert!(events::is_sticky(events::HOTKEY_STATUS));
+    assert!(!events::is_sticky(events::HOTKEY_PTT));
+    assert!(!events::is_sticky(events::VIEW_INPUT));
+}
+
+#[test]
+fn cap_02a_capture_resume_is_brain_only_and_needs_a_valid_lease_id() {
+    let row = ipc::command("capture_resume").expect("a capture_resume row");
+    assert_eq!(row.windows, [WindowClass::Brain]);
+    assert_eq!(row.phase, Phase::MvpD);
+    let good = json!({"mogId": "a1", "leaseId": "17"});
+    for label in ["hub", "mog-a1", "card-a1"] {
+        assert!(
+            matches!(
+                ipc::handle(label, "capture_resume", good.clone()).unwrap_err(),
+                IpcError::WindowNotAllowed { .. }
+            ),
+            "{label}"
+        );
+    }
+    for bad in [
+        json!({"mogId": "a1"}),
+        json!({"mogId": "a1", "leaseId": ""}),
+        json!({"mogId": "a1", "leaseId": "a b"}),
+        json!({"mogId": "a1", "leaseId": "x".repeat(65)}),
+        json!({"mogId": "a1", "leaseId": "17", "resume": true}),
+    ] {
+        assert!(
+            matches!(
+                ipc::handle("brain", "capture_resume", bad.clone()).unwrap_err(),
+                IpcError::InvalidArgs { .. }
+            ),
+            "{bad}"
+        );
+    }
+    // Until the capture IPC wiring of #4, a valid call answers not_implemented.
+    assert!(matches!(
+        ipc::handle("brain", "capture_resume", good).unwrap_err(),
+        IpcError::NotImplemented { .. }
+    ));
+    // The same argument schema as capture_pause.
+    let schemas = ipc::schemas();
+    assert_eq!(schemas["capture_resume"], schemas["capture_pause"]);
+}
+
+#[test]
+fn cap_36_cap_37_permission_request_is_hub_only_and_takes_one_known_permission() {
+    let row = ipc::command("permission_request").expect("a permission_request row");
+    assert_eq!(row.windows, [WindowClass::Hub]);
+    assert_eq!(row.phase, Phase::MvpD);
+    for p in ["input_monitoring", "accessibility"] {
+        let args = json!({ "permission": p });
+        // The gateway checks pass; the host makes the user action and asks the OS.
+        assert!(matches!(
+            ipc::handle("hub", "permission_request", args.clone()).unwrap_err(),
+            IpcError::NotImplemented { .. }
+        ));
+        for label in ["brain", "mog-a1", "card-a1"] {
+            assert!(
+                matches!(
+                    ipc::handle(label, "permission_request", args.clone()).unwrap_err(),
+                    IpcError::WindowNotAllowed { .. }
+                ),
+                "{label} {p}"
+            );
+        }
+    }
+    for bad in [
+        json!({}),
+        json!({"permission": "camera"}),
+        json!({"permission": "inputMonitoring"}),
+        json!({"permission": "accessibility", "prompt": false}),
+    ] {
+        assert!(
+            matches!(
+                ipc::handle("hub", "permission_request", bad.clone()).unwrap_err(),
+                IpcError::InvalidArgs { .. }
+            ),
+            "{bad}"
+        );
+    }
 }

@@ -17,7 +17,14 @@ import type {
   Track,
   Transcript,
 } from '../src/shared/interfaces';
-import type { CardUpdate, MicLevelFrame, MogViewState } from '../src/shared/ipc';
+import type {
+  CardUpdate,
+  MicLevelFrame,
+  MogViewState,
+  TalkKeyReason,
+  TalkKeyState,
+  TalkKeyStatus,
+} from '../src/shared/ipc';
 
 // Each JSON fixture in tests/fixtures/ipc-types has a typed twin here. `satisfies` makes
 // `pnpm typecheck` fail if a fixture does not fit its TS type; the test below checks that the
@@ -98,6 +105,14 @@ const ROUTER_COMMANDS = [
   'forget_session',
   'other',
 ] as const satisfies RouterDecision['command'][];
+// The `hotkey.status` payload (#297, #294, ADR 0039).
+const TALK_KEY_STATES = ['active', 'paused', 'unavailable'] as const satisfies TalkKeyState[];
+const TALK_KEY_REASONS = [
+  'secure_input',
+  'elevated_foreground',
+  'fallback_chord_unavailable',
+  'hook_failed',
+] as const satisfies TalkKeyReason[];
 const everyUnionValueListed: [
   Equal<(typeof MOODS)[number], Mood>,
   Equal<(typeof TRACKS)[number], Track>,
@@ -109,7 +124,11 @@ const everyUnionValueListed: [
   Equal<(typeof PROVIDERS)[number], Transcript['provider']>,
   Equal<(typeof TOKEN_STATES)[number], TokenStatus['state']>,
   Equal<(typeof ROUTER_COMMANDS)[number], RouterDecision['command']>,
-] = [true, true, true, true, true, true, true, true, true, true];
+  Equal<(typeof TALK_KEY_STATES)[number], TalkKeyState>,
+  Equal<(typeof TALK_KEY_REASONS)[number], TalkKeyReason>,
+  Equal<TalkKeyStatus['talkKey'], TalkKeyState>,
+  Equal<TalkKeyStatus['reason'], TalkKeyReason | null>,
+] = [true, true, true, true, true, true, true, true, true, true, true, true, true, true];
 
 // Brain-to-view payloads (#285, ADR 0040).
 const VIEW_STATE = {
@@ -220,6 +239,10 @@ const typed: Record<string, unknown> = {
   'CardUpdate.minimal': { mogId: OTHER_MOG, blurbs: [], chips: [] } satisfies CardUpdate,
   MicLevelFrame: { owner: MOG, dbfs: -42.5, t: 1250.5 } satisfies MicLevelFrame,
   'MicLevelFrame.closed': { owner: null, dbfs: -120.5, t: 1300.25 } satisfies MicLevelFrame,
+  TalkKeyStatus: { talkKey: 'paused', reason: 'secure_input' } satisfies TalkKeyStatus,
+  'TalkKeyStatus.active': { talkKey: 'active', reason: null } satisfies TalkKeyStatus,
+  TalkKeyState: TALK_KEY_STATES,
+  TalkKeyReason: TALK_KEY_REASONS,
   MogId: MOG satisfies MogId,
   ProfileName: 'DEFAULT' satisfies ProfileName,
   Mood: MOODS,
@@ -388,7 +411,8 @@ const noCredentialField: [
   NoCredential<MogViewState>,
   NoCredential<CardUpdate>,
   NoCredential<MicLevelFrame>,
-] = [true, true, true, true, true, true, true, true, true];
+  NoCredential<TalkKeyStatus>,
+] = [true, true, true, true, true, true, true, true, true, true];
 
 describe('IPC type fixtures', () => {
   it('every fixture file has a typed twin, and every twin has a file', () => {
@@ -437,5 +461,20 @@ describe('capture lease (CAP-02a)', () => {
     for (const key of ['SegmentRef', 'SegmentRef.minimal']) {
       expect((typed[key] as SegmentRef).leaseId).toMatch(/^[A-Za-z0-9-]{1,64}$/);
     }
+  });
+});
+
+describe('talk-key status (CAP-39c, CAP-42)', () => {
+  it('[CAP-39c] [CAP-42] reason is required and nullable, and the payload names no window or key', () => {
+    // @ts-expect-error reason is required (null when the talk key works)
+    const noReason: TalkKeyStatus = { talkKey: 'active' };
+    expect(noReason.talkKey).toBe('active');
+    // @ts-expect-error the payload carries no window title
+    const leaky: TalkKeyStatus = { talkKey: 'paused', reason: 'elevated_foreground', title: 'x' };
+    expect(leaky.reason).toBe('elevated_foreground');
+    expect(Object.keys(typed['TalkKeyStatus.active'] as TalkKeyStatus).sort()).toEqual([
+      'reason',
+      'talkKey',
+    ]);
   });
 });

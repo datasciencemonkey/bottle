@@ -475,4 +475,108 @@ mod tests {
             }
         }
     }
+
+    // ---- ARC-5, SEC-01 (#297, ADR 0039): sticky delivery ----
+
+    const SECRET: &str = concat!("dap", "i0123456789abcdef0123456789abcdef");
+
+    fn status(talk_key: &str, reason: Value) -> Value {
+        json!({ "talkKey": talk_key, "reason": reason })
+    }
+
+    #[test]
+    fn arc_5_sticky_events_keep_only_the_last_payload_of_a_sticky_event() {
+        let mut sticky = StickyEvents::default();
+        assert!(sticky.replay().is_empty());
+        assert!(sticky.keep(
+            events::HOTKEY_STATUS,
+            &status("paused", json!("secure_input"))
+        ));
+        assert!(sticky.keep(events::HOTKEY_STATUS, &status("active", Value::Null)));
+        // A plain event is not kept.
+        assert!(!sticky.keep(events::HOTKEY_PTT, &json!({"mogId": "a1", "phase": "down"})));
+        assert!(!sticky.keep(events::VIEW_INPUT, &json!({})));
+        assert_eq!(
+            sticky.replay(),
+            vec![brain_message(
+                events::HOTKEY_STATUS,
+                status("active", Value::Null)
+            )]
+        );
+    }
+
+    #[test]
+    fn sec_01_sticky_replay_is_scrubbed() {
+        let mut sticky = StickyEvents::default();
+        sticky.keep(
+            events::HOTKEY_STATUS,
+            &json!({"talkKey": format!("x {SECRET}")}),
+        );
+        let text = serde_json::to_string(&sticky.replay()).unwrap();
+        assert!(!text.contains(SECRET), "{text}");
+        assert!(text.contains(mog_core::token_guard::REDACTED), "{text}");
+    }
+
+    fn recorder() -> (Channel<Value>, std::sync::Arc<Mutex<Vec<Value>>>) {
+        use tauri::ipc::InvokeResponseBody;
+        let got: std::sync::Arc<Mutex<Vec<Value>>> = Default::default();
+        let sink = std::sync::Arc::clone(&got);
+        let channel = Channel::<Value>::new(move |body| {
+            if let InvokeResponseBody::Json(text) = body {
+                sink.lock()
+                    .unwrap()
+                    .push(serde_json::from_str(&text).unwrap());
+            }
+            Ok(())
+        });
+        (channel, got)
+    }
+
+    #[test]
+    fn arc_5_a_new_brain_channel_gets_the_sticky_status_replayed() {
+        let brain = BrainChannel::default();
+        // No brain yet: the status is kept, not lost.
+        assert!(!brain.send_sticky(
+            events::HOTKEY_STATUS,
+            status("unavailable", json!("hook_failed"))
+        ));
+        assert!(!brain.send(events::HOTKEY_PTT, json!({"mogId": "a1", "phase": "down"})));
+        let (first, got) = recorder();
+        brain.set(first);
+        assert_eq!(
+            *got.lock().unwrap(),
+            vec![brain_message(
+                events::HOTKEY_STATUS,
+                status("unavailable", json!("hook_failed"))
+            )],
+            "only the sticky item is replayed"
+        );
+        // A live change goes out now and replaces the kept one.
+        assert!(brain.send_sticky(events::HOTKEY_STATUS, status("active", Value::Null)));
+        assert_eq!(got.lock().unwrap().len(), 2);
+        // A brain reload subscribes again and gets the latest status once.
+        let (second, again) = recorder();
+        brain.set(second);
+        assert_eq!(
+            *again.lock().unwrap(),
+            vec![brain_message(
+                events::HOTKEY_STATUS,
+                status("active", Value::Null)
+            )]
+        );
+    }
+
+    #[test]
+    fn sec_01_a_replayed_sticky_payload_is_scrubbed() {
+        let brain = BrainChannel::default();
+        brain.send_sticky(
+            events::HOTKEY_STATUS,
+            json!({"talkKey": format!("x {SECRET} y")}),
+        );
+        let (ch, got) = recorder();
+        brain.set(ch);
+        let text = serde_json::to_string(&*got.lock().unwrap()).unwrap();
+        assert!(!text.contains(SECRET), "{text}");
+        assert!(text.contains(mog_core::token_guard::REDACTED), "{text}");
+    }
 }

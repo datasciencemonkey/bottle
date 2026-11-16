@@ -72,7 +72,9 @@ fn sample(command: &str) -> (&'static str, Value) {
         }
         "profile_select" => json!({"mogId": "a1", "profile": "p", "scope": "question"}),
         "capture_start" => json!({"mogId": "a1", "mode": "ptt"}),
-        "capture_stop" | "capture_pause" => json!({"mogId": "a1", "leaseId": "l1"}),
+        "capture_stop" | "capture_pause" | "capture_resume" => {
+            json!({"mogId": "a1", "leaseId": "l1"})
+        }
         "capture_subscribe" => {
             json!({"onLevel": "__CHANNEL__:1", "onPartial": "__CHANNEL__:2"})
         }
@@ -96,6 +98,7 @@ fn sample(command: &str) -> (&'static str, Value) {
         "config_read" | "config_delete" => json!({"id": "a1"}),
         "config_write" => json!({"id": "a1", "json": {}}),
         "hotkeys_set" => json!({"bindings": {}}),
+        "permission_request" => return ("hub", json!({"permission": "accessibility"})),
         "window_mog_open" => json!({
             "mogId": "a1", "geometry": {"x": 0.0, "y": 0.0, "width": 10.0, "height": 10.0}
         }),

@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use mog_core::types::{
     CaptureMode, CaptureState, CardUpdate, Intent, MicLevelFrame, MogId, MogViewState, Mood,
     OthersTrack, Profile, ProfileInfo, ProfileName, RouterCommand, RouterDecision, SegmentRef,
-    SessionPolicy, TagApp, TagOp, Tags, TokenState, TokenStatus, Track, Transcript,
-    TranscriptProvider,
+    SessionPolicy, TagApp, TagOp, Tags, TalkKeyReason, TalkKeyState, TalkKeyStatus, TokenState,
+    TokenStatus, Track, Transcript, TranscriptProvider,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -74,6 +74,10 @@ fn round_trip_by_name(type_name: &str, json: &Value) -> Result<Value, String> {
         "MogViewState" => round_trip::<MogViewState>(json),
         "CardUpdate" => round_trip::<CardUpdate>(json),
         "MicLevelFrame" => round_trip::<MicLevelFrame>(json),
+        // The `hotkey.status` payload (#297, #294, ADR 0039).
+        "TalkKeyStatus" => round_trip::<TalkKeyStatus>(json),
+        "TalkKeyState" => round_trip::<Vec<TalkKeyState>>(json),
+        "TalkKeyReason" => round_trip::<Vec<TalkKeyReason>>(json),
         other => panic!("fixture for unknown type {other}: add it to round_trip_by_name"),
     }
 }
@@ -92,6 +96,7 @@ const STRUCTS: &[&str] = &[
     "MogViewState",
     "CardUpdate",
     "MicLevelFrame",
+    "TalkKeyStatus",
 ];
 
 #[test]
@@ -125,6 +130,9 @@ fn every_ipc_type_has_a_fixture() {
         "MogViewState",
         "CardUpdate",
         "MicLevelFrame",
+        "TalkKeyStatus",
+        "TalkKeyState",
+        "TalkKeyReason",
     ] {
         assert!(names.iter().any(|n| n == t), "no fixture for {t}");
     }
@@ -239,4 +247,30 @@ fn arc_5_ux_06b_a_closed_mic_frame_has_a_null_owner() {
     // `owner` is required: a frame must say who owns the mic, or `null`.
     assert!(serde_json::from_str::<MicLevelFrame>(r#"{"dbfs":-1.5,"t":1.5}"#).is_err());
     assert_eq!(serde_json::to_value(&closed).unwrap()["owner"], Value::Null);
+}
+
+#[test]
+fn cap_39c_cap_42_talk_key_status_reason_is_required_and_nullable() {
+    let active: TalkKeyStatus =
+        serde_json::from_str(r#"{"talkKey":"active","reason":null}"#).unwrap();
+    assert_eq!(active.talk_key, TalkKeyState::Active);
+    assert_eq!(active.reason, None);
+    assert_eq!(
+        serde_json::to_value(&active).unwrap()["reason"],
+        Value::Null
+    );
+    // `reason` is required: a status with no `reason` key does not parse.
+    assert!(serde_json::from_str::<TalkKeyStatus>(r#"{"talkKey":"active"}"#).is_err());
+    let blocked: TalkKeyStatus =
+        serde_json::from_str(r#"{"talkKey":"paused","reason":"elevated_foreground"}"#).unwrap();
+    assert_eq!(blocked.reason, Some(TalkKeyReason::ElevatedForeground));
+    // No other value, and no window title, process name or key field.
+    assert!(serde_json::from_str::<TalkKeyStatus>(r#"{"talkKey":"off","reason":null}"#).is_err());
+    assert!(
+        serde_json::from_str::<TalkKeyStatus>(r#"{"talkKey":"paused","reason":"vpn"}"#).is_err()
+    );
+    for key in ["windowTitle", "processName", "key"] {
+        let v = serde_json::json!({"talkKey": "paused", "reason": "secure_input", key: "x"});
+        assert!(serde_json::from_value::<TalkKeyStatus>(v).is_err(), "{key}");
+    }
 }

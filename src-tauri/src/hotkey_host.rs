@@ -1110,6 +1110,7 @@ mod tests {
             ".on_page_load(hotkey_host::on_page_load)",
             "hotkey_host::on_window_event(window, event)",
             "hotkey_host::install(handle)",
+            "hotkey_host::report_unavailable(handle)",
             "tauri::RunEvent::Exit",
             "hotkey_host::shutdown(app)",
         ] {
@@ -1600,7 +1601,7 @@ mod tests {
             .unwrap();
         for part in [
             "WindowsHotkeyService::new(talk.windows_talk_key())",
-            "spawn_hook_adapter(rx, sink, HookConsumers::new(copilot))",
+            "HookConsumers::new(copilot).with_status(status)",
             "with_hook_adapter(Box::new(service), adapter)",
             "Box::new(NoOsPermission)",
         ] {
@@ -1623,8 +1624,19 @@ mod tests {
             .split("\n}\n")
             .next()
             .unwrap();
-        for todo in ["TODO(#14)", "TODO(#294)", "TODO(#297)", "TODO(#346)"] {
+        for todo in ["TODO(#14)", "TODO(#346)"] {
             assert!(seam.contains(todo), "the seam misses {todo}");
+        }
+        // #294 and #297 are done: those arms send `hotkey.status` (ADR 0039).
+        for done in ["TODO(#294)", "TODO(#297)"] {
+            assert!(!seam.contains(done), "the seam still has {done}");
+        }
+        for status in [
+            "HotkeyStatus::Blocked",
+            "HotkeyStatus::Restored",
+            "HotkeyStatus::Unavailable",
+        ] {
+            assert!(seam.contains(status), "the seam misses {status}");
         }
     }
 
@@ -1684,9 +1696,233 @@ mod tests {
         for part in [
             "MemoryCopilotKeyFlag::default()",
             "WithCopilotFlag::new(keyboard_env::os_env_reads(),Arc::clone(&copilot)",
-            "platform_service(talk,sink,Arc::clone(&copilot))",
+            "platform_service(talk,sink,Arc::clone(&copilot),Arc::clone(&status))",
+            "BrainStatus(app.clone())",
         ] {
             assert!(flat.contains(part), "install misses {part}");
         }
+    }
+
+    // ---- CAP-39c, CAP-42, CAP-40a (#297, #294, ADR 0039): the `hotkey.status` event ----
+
+    /// A brain double that keeps sticky items apart from plain ones.
+    #[derive(Default, Clone)]
+    struct StickyBrain {
+        plain: Arc<Mutex<Vec<(String, Value)>>>,
+        sticky: Arc<Mutex<Vec<(String, Value)>>>,
+    }
+
+    impl BrainSink for StickyBrain {
+        fn deliver(&self, event: &str, payload: Value) -> bool {
+            self.plain.lock().unwrap().push((event.to_owned(), payload));
+            true
+        }
+        fn deliver_sticky(&self, event: &str, payload: Value) -> bool {
+            self.sticky
+                .lock()
+                .unwrap()
+                .push((event.to_owned(), payload));
+            true
+        }
+    }
+
+    fn status_item(talk_key: &str, reason: Value) -> (String, Value) {
+        (
+            "hotkey:status".to_owned(),
+            json!({ "talkKey": talk_key, "reason": reason }),
+        )
+    }
+
+    #[test]
+    fn cap_39c_cap_42_each_status_maps_to_its_talk_key_payload() {
+        for (status, want) in [
+            (
+                HotkeyStatus::Paused,
+                json!({"talkKey": "paused", "reason": "secure_input"}),
+            ),
+            (
+                HotkeyStatus::Restored,
+                json!({"talkKey": "active", "reason": null}),
+            ),
+            (
+                HotkeyStatus::ChordUnavailable,
+                json!({"talkKey": "paused", "reason": "fallback_chord_unavailable"}),
+            ),
+            (
+                HotkeyStatus::Blocked,
+                json!({"talkKey": "paused", "reason": "elevated_foreground"}),
+            ),
+            (
+                HotkeyStatus::Unavailable,
+                json!({"talkKey": "unavailable", "reason": "hook_failed"}),
+            ),
+        ] {
+            assert_eq!(status_payload(status), want, "{status:?}");
+        }
+    }
+
+    #[test]
+    fn cap_39c_arc_5_pill_outputs_go_sticky_on_hotkey_status_and_restore_clears() {
+        let target = Arc::new(PttTarget::default());
+        target.set("a1");
+        let brain = StickyBrain::default();
+        let mut f = PttForwarder::new(
+            Arc::clone(&target),
+            brain.clone(),
+            BrainStatus(brain.clone()),
+        );
+        f.on_output(HotkeyOutput::TalkKeyPaused);
+        f.on_output(HotkeyOutput::FallbackChordUnavailable);
+        f.on_output(HotkeyOutput::TalkKeyRestored);
+        assert!(brain.plain.lock().unwrap().is_empty(), "status is sticky");
+        assert_eq!(
+            *brain.sticky.lock().unwrap(),
+            vec![
+                status_item("paused", json!("secure_input")),
+                status_item("paused", json!("fallback_chord_unavailable")),
+                status_item("active", Value::Null),
+            ]
+        );
+    }
+
+    #[test]
+    fn cap_42_an_elevated_window_gives_paused_elevated_foreground() {
+        let brain = StickyBrain::default();
+        let seam = HookConsumers::default().with_status(Arc::new(BrainStatus(brain.clone())));
+        seam.deferred(DeferredSignal::TalkKeyBlocked);
+        assert_eq!(
+            *brain.sticky.lock().unwrap(),
+            vec![status_item("paused", json!("elevated_foreground"))]
+        );
+    }
+
+    #[test]
+    fn cap_40a_sec_01_hook_health_goes_on_hotkey_status_with_no_reason_text() {
+        let brain = StickyBrain::default();
+        let seam = HookConsumers::default().with_status(Arc::new(BrainStatus(brain.clone())));
+        seam.deferred(DeferredSignal::HookFailed("set_windows_hook_failed"));
+        seam.deferred(DeferredSignal::HookReinstalled);
+        let got = brain.sticky.lock().unwrap().clone();
+        assert_eq!(
+            got,
+            vec![
+                status_item("unavailable", json!("hook_failed")),
+                status_item("active", Value::Null),
+            ]
+        );
+        assert!(!format!("{got:?}").contains("set_windows_hook_failed"));
+        // Escape and the Copilot key are not talk-key status.
+        seam.deferred(DeferredSignal::Escape);
+        seam.deferred(DeferredSignal::CopilotKeySeen);
+        assert_eq!(brain.sticky.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn cap_40a_a_seam_with_no_status_sink_still_takes_every_signal() {
+        let seam = HookConsumers::default();
+        for s in [
+            DeferredSignal::TalkKeyBlocked,
+            DeferredSignal::HookReinstalled,
+            DeferredSignal::HookFailed("x"),
+        ] {
+            seam.deferred(s);
+        }
+    }
+
+    /// A brain Channel on `app` that records each message; returns the record.
+    fn subscribe_recorder<R: Runtime>(app: &AppHandle<R>) -> Arc<Mutex<Vec<Value>>> {
+        use tauri::ipc::{Channel, InvokeResponseBody};
+        let got: Arc<Mutex<Vec<Value>>> = Arc::default();
+        let sink = Arc::clone(&got);
+        let channel = Channel::<Value>::new(move |body| {
+            if let InvokeResponseBody::Json(text) = body {
+                sink.lock()
+                    .unwrap()
+                    .push(serde_json::from_str(&text).unwrap());
+            }
+            Ok(())
+        });
+        app.state::<BrainChannel>().set(channel);
+        got
+    }
+
+    #[test]
+    fn at_30_arc_5_a_failed_install_reaches_a_brain_that_subscribes_later() {
+        let app = tauri::test::mock_app();
+        app.manage(BrainChannel::default());
+        // Setup runs before the brain subscribes.
+        report_unavailable(app.handle());
+        let got = subscribe_recorder(app.handle());
+        assert_eq!(
+            *got.lock().unwrap(),
+            vec![json!({
+                "event": "hotkey:status",
+                "payload": {"talkKey": "unavailable", "reason": "hook_failed"}
+            })]
+        );
+    }
+
+    #[test]
+    fn cap_39c_install_sends_r1_pill_outputs_on_the_brain_channel() {
+        let app = tauri::test::mock_app();
+        app.manage(BrainChannel::default());
+        let sinks: Arc<Mutex<Vec<Arc<dyn HotkeySink>>>> = Arc::default();
+        let keep = Arc::clone(&sinks);
+        install_with(app.handle(), memory_settings(), move |_key, sink| {
+            keep.lock().unwrap().push(sink);
+            (
+                Box::new(FakeService::default()) as Box<dyn HotkeyService>,
+                Box::new(FakePermissions::default()) as Box<dyn PermissionApi>,
+            )
+        })
+        .unwrap();
+        let got = subscribe_recorder(app.handle());
+        let sink = Arc::clone(&sinks.lock().unwrap()[0]);
+        sink.emit(HotkeyOutput::TalkKeyPaused);
+        let want = json!({
+            "event": "hotkey:status",
+            "payload": {"talkKey": "paused", "reason": "secure_input"}
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while got.lock().unwrap().is_empty() && std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(*got.lock().unwrap(), vec![want]);
+    }
+
+    // ---- CAP-36, CAP-37 (#312, ADR 0039): the runtime is the permission route ----
+
+    #[test]
+    fn cap_36_cap_37_the_runtime_routes_each_permission_to_its_host_call() {
+        use crate::ipc::PermissionRoute;
+        use mog_core::ipc::PermissionKind;
+        let app = tauri::test::mock_app();
+        let factory = FakeFactory {
+            perms: FakePermissions {
+                grant: true,
+                ..FakePermissions::default()
+            },
+            ..FakeFactory::default()
+        };
+        let f2 = factory.clone();
+        install_with(app.handle(), memory_settings(), move |k, _| f2.make(k)).unwrap();
+        let rt = app.state::<HotkeyRuntime>();
+        assert_eq!(
+            rt.request_permission(PermissionKind::Accessibility, UserAction::from_user_click()),
+            PermissionStatus::Granted
+        );
+        assert_eq!(
+            rt.request_permission(
+                PermissionKind::InputMonitoring,
+                UserAction::from_user_click()
+            ),
+            PermissionStatus::Granted
+        );
+        assert_eq!(
+            *factory.perms.prompts.lock().unwrap(),
+            vec![Permission::Accessibility, Permission::InputMonitoring]
+        );
+        // A granted Input Monitoring starts R1 again (CAP-36); Accessibility does not.
+        assert_eq!(factory.service(0).starts.load(Ordering::SeqCst), 2);
     }
 }
