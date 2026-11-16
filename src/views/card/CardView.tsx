@@ -38,14 +38,55 @@ export function CardView({ mogId }: { mogId: MogId }) {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [mogId]);
 
-  // TODO(#85, #86, #89): blurb stack, footer and chip rules. TODO(#210): safe markdown.
+  // The brain orders, limits, pins and collapses the blurbs (UX-11a..UX-12, ADR 0028); the view
+  // renders them in the order it gets and reports pointer hover and keyboard focus.
+  // TODO(#86, #89): blurb lines, footer and chip rules. TODO(#210): safe markdown (plain text now).
+  const hover = (blurbId: string, via: 'pointer' | 'focus', on: boolean) =>
+    void emitView(mogId, 'hover', { blurbId, on, via });
+  const historyCount = card?.historyCount ?? 0;
   return (
     <section aria-label="MOG card">
-      <ul>
+      <ul aria-label="Answers">
         {card?.blurbs.map((b) => (
-          <li key={b.id}>{b.text}</li>
+          <li
+            key={b.id}
+            data-blurb={b.id}
+            onMouseEnter={() => hover(b.id, 'pointer', true)}
+            onMouseLeave={() => hover(b.id, 'pointer', false)}
+            onFocus={() => hover(b.id, 'focus', true)}
+            onBlur={() => hover(b.id, 'focus', false)}
+          >
+            {b.parts ? (
+              <ul aria-label="Answer parts">
+                {b.parts.map((p) => (
+                  <li key={p.id} data-part={p.id}>
+                    {p.text}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              b.text
+            )}
+            <button
+              type="button"
+              data-action="pin"
+              aria-pressed={b.pinned === true}
+              onClick={() => void emitView(mogId, 'click', { target: 'pin', blurbId: b.id })}
+            >
+              Pin
+            </button>
+          </li>
         ))}
       </ul>
+      {historyCount > 0 && (
+        <button
+          type="button"
+          data-action="history"
+          onClick={() => void emitView(mogId, 'click', { target: 'history' })}
+        >
+          {`${historyCount} more in History`}
+        </button>
+      )}
       <div>
         {card?.chips.map((c) => (
           <button

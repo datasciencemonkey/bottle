@@ -16,12 +16,26 @@ export interface MogViewState {
   level?: number;
 }
 
-/** `card.update` payload: what the card of one MOG shows. TODO(#285): move to the contract. */
+/** One card slot (ADR 0028): a blurb, or a split answer with its parts in one slot (UX-11b). */
+export interface CardBlurbView {
+  id: string;
+  text: string;
+  pinned?: boolean;
+  completed?: boolean;
+  parts?: { id: string; text: string }[];
+}
+
+/**
+ * `card.update` payload: what the card of one MOG shows. The brain orders and limits the blurbs
+ * (`src/brain/blurb-stack.ts`); `historyCount` drives "N more in History" (UX-11a).
+ * TODO(#285): move to the contract.
+ */
 export interface CardUpdate {
   mogId: MogId;
-  blurbs: { id: string; text: string }[];
+  blurbs: CardBlurbView[];
   chips: { id: string; label: string }[];
   answerMd?: string;
+  historyCount?: number;
 }
 
 const MOODS: readonly Mood[] = [
@@ -48,6 +62,11 @@ export function asMogViewState(p: unknown): MogViewState | undefined {
 export function asCardUpdate(p: unknown): CardUpdate | undefined {
   if (!isObj(p) || typeof p['mogId'] !== 'string') return undefined;
   if (!isItems(p['blurbs'], ['id', 'text']) || !isItems(p['chips'], ['id', 'label']))
+    return undefined;
+  const parts = (p['blurbs'] as Record<string, unknown>[]).map((b) => b['parts']);
+  if (!parts.every((v) => v === undefined || isItems(v, ['id', 'text']))) return undefined;
+  const n = p['historyCount'];
+  if (n !== undefined && !(typeof n === 'number' && Number.isInteger(n) && n >= 0))
     return undefined;
   return p as unknown as CardUpdate;
 }

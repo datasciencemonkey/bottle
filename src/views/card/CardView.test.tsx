@@ -154,6 +154,14 @@ describe('V3 card view', () => {
     expect(el.querySelector('button[data-action="history"]')).toBeNull();
   });
 
+  it('[UX-11a] [UX-11b] drops a payload with bad split parts or a bad History count', async () => {
+    const { el } = await mountCard(<CardView mogId={ID} />);
+    await tauri.emit('card:update', { ...stack, historyCount: -1 });
+    await tauri.emit('card:update', { ...stack, historyCount: '4' });
+    await tauri.emit('card:update', { ...stack, blurbs: [{ id: 'g', text: 't', parts: 'x' }] });
+    expect(items(el)).toHaveLength(0);
+  });
+
   it('[UX-11b] renders a 3-part split as one blurb with its parts', async () => {
     const { el } = await mountCard(<CardView mogId={ID} />);
     await tauri.emit('card:update', stack);
@@ -181,7 +189,9 @@ describe('V3 card view', () => {
     const li = el.querySelector('li[data-blurb="b2"]') as HTMLElement;
     const pin = li.querySelector('button[data-action="pin"]') as HTMLElement;
     await act(async () => {
-      li.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body }));
+      li.dispatchEvent(
+        new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body }),
+      );
     });
     await act(async () => {
       li.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body }));

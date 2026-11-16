@@ -100,7 +100,12 @@ describe('BlurbStack', () => {
     expect(s.pin('b3')).toBe(false); // the last slot is for the newest answer
     s.add({ id: 'b4', text: 'answer 4' }, 4 * S);
     expect(ids(s.view())).toEqual(['b4', 'b2', 'b1']);
-    expect(s.view().blurbs.filter((b) => b.pinned).map((b) => b.id)).toEqual(['b2', 'b1']);
+    expect(
+      s
+        .view()
+        .blurbs.filter((b) => b.pinned)
+        .map((b) => b.id),
+    ).toEqual(['b2', 'b1']);
   });
 
   it('[UX-11c] an unpinned blurb is the next one to go to History', () => {
@@ -108,7 +113,7 @@ describe('BlurbStack', () => {
     s.pin('b1');
     s.add({ id: 'b2', text: 'a2' }, 2 * S);
     s.add({ id: 'b3', text: 'a3' }, 3 * S);
-    expect(s.unpin('b1')).toBe(true);
+    expect(s.unpin('b1', 3 * S)).toBe(true);
     s.add({ id: 'b4', text: 'a4' }, 4 * S);
     expect(ids(s.view())).toEqual(['b4', 'b3', 'b2']);
     expect(s.history()).toEqual(['b1']);
@@ -118,7 +123,7 @@ describe('BlurbStack', () => {
     const s = stackWith(4);
     expect(s.pin('nope')).toBe(false);
     expect(s.pin('b1')).toBe(false);
-    expect(s.unpin('b1')).toBe(false);
+    expect(s.unpin('b1', 5 * S)).toBe(false);
     expect(s.view().historyCount).toBe(1);
   });
 
@@ -169,8 +174,7 @@ describe('BlurbStack', () => {
     s.pin('b1');
     expect(s.nextDeadline()).toBeUndefined();
     expect(s.tick(600 * S)).toEqual([]);
-    s.unpin('b1');
-    s.tick(600 * S);
+    s.unpin('b1', 600 * S);
     expect(s.nextDeadline()).toBe(660 * S);
   });
 
