@@ -12,6 +12,7 @@ Read `AGENTS.md` first. The single source of truth is `research/final-requiremen
 | `src/brain` | The hidden brain window: all domain logic (ARC-2). |
 | `src/views` | Thin views: hub (V1), MOG (V2), card (V3). |
 | `src/shared` | Shared contracts (IPC and interfaces). Only the foundation lead changes them. `interfaces.ts` is the 4.7 contract; its IPC-facing types have a serde mirror in `mog_core::types`. A change to one needs the same change to the other and to `tests/fixtures/ipc-types`. |
+| `crates/mog-core/src/local_store/migrations` | Local store schema, forward-only (ADR 0033). A contract path: a change is a new numbered file through a `contract-change` issue. Never edit an applied file. |
 | `docs/adr` | Architecture decision records. |
 
 ## Branches
