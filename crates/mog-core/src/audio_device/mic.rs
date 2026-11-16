@@ -215,6 +215,8 @@ impl AudioDevice for MicDevice {
                 Slot::Closed => return,
                 // R2 never gets here (one device call at a time). For any other caller: do
                 // not wait for a slow open (MB-05); the open drops its stream before it returns.
+                // So this close returns before the stream stops: during `play()` the OS mic
+                // indicator stays on until that open returns (ADR 0038 decision 5).
                 Slot::Opening { cancel, .. } => {
                     *cancel = true;
                     return;

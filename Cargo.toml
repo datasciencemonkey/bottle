@@ -27,7 +27,7 @@ reqwest = { version = "=0.13.5", default-features = false, features = ["blocking
 # The rustls crypto provider of R7: ring (a plain `cc` build on Windows; aws-lc-rs needs NASM).
 rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 # R2 mic backend on macOS and Windows (#388): the SP-08 pin (#15). Supply-chain review: #160.
-cpal = { version = "0.18.2", default-features = false }
+cpal = { version = "=0.18.2", default-features = false }
 # Tests only: the glob matcher that Tauri uses for capability window labels.
 glob = "0.3.3"
 # R10 LocalStore (#35). SP-21 (#34): SQLCipher 4 with a static OpenSSL, so the crypto

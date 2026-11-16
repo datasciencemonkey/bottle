@@ -32,6 +32,8 @@ impl MicFrame<'_> {
 
 /// The receiver of mic frames. It runs on the host's real-time audio thread, so it must be
 /// fast and must not block. It must keep audio in RAM only: no disk, no log, no telemetry.
+/// It must not panic: it runs inside the host's C audio callback, where a panic aborts the
+/// process.
 pub trait FrameSink: Send + 'static {
     /// One block of mono audio, in order.
     fn frame(&mut self, frame: MicFrame<'_>);

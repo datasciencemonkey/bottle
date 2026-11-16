@@ -595,6 +595,18 @@ fn cap_01a_a_transient_fault_keeps_the_stream() {
     }
     r.device.open(AudioSource::Mic).unwrap();
     r.probe.fault(1, StreamFault::Transient);
+    // Give the audio thread time to act on a (wrong) fault message before we look.
+    thread::sleep(Duration::from_millis(100));
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "a transient fault is not reported"
+    );
+    assert_eq!(
+        r.probe.events(),
+        vec![Ev::Built(1), Ev::Played(1)],
+        "a transient fault keeps the stream"
+    );
     r.probe.push(1, &[0.5], 1, 16_000);
     assert_eq!(r.sink.frames().len(), 1);
     // A later fatal fault is the only report.
@@ -622,6 +634,24 @@ fn cap_01a_a_late_fault_of_an_old_stream_is_ignored() {
     // The old stream faults late, then the new one faults. Faults reach the audio thread in
     // order, so when the second is reported the first was handled.
     r.probe.fault(1, StreamFault::Fatal);
+    // Give the audio thread time to act on the old fault, then check stream 2 still runs.
+    thread::sleep(Duration::from_millis(100));
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "an old stream's fault is not reported"
+    );
+    assert!(
+        !r.probe.events().contains(&Ev::Dropped(2)),
+        "an old stream's fault never stops the new stream"
+    );
+    let before = r.sink.frames().len();
+    r.probe.push(2, &[0.5], 1, 16_000);
+    assert_eq!(
+        r.sink.frames().len(),
+        before + 1,
+        "stream 2 still delivers frames"
+    );
     r.probe.fault(2, StreamFault::Fatal);
     wait_until("the failure report", || calls.load(Ordering::SeqCst) >= 1);
     thread::sleep(Duration::from_millis(50));
