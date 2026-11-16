@@ -1,7 +1,13 @@
 /** V3 card view (thin): blurbs, chips and the expanded answer from `card.update`. */
 import { useCallback, useEffect, useState } from 'react';
 import type { MogId } from '../../shared/interfaces';
-import { asCardUpdate, emitView, useViewEvent, type CardUpdate } from '../view-ipc';
+import {
+  asCardUpdate,
+  emitView,
+  useViewEvent,
+  type CardSection,
+  type CardUpdate,
+} from '../view-ipc';
 
 /** The MOG ID of the debug demo card (`DEMO_ID` in `src-tauri/src/lib.rs`). */
 const DEMO_ID = 'demo';
@@ -13,6 +19,133 @@ const DEMO_ID = 'demo';
  */
 function isCardEsc(e: KeyboardEvent): boolean {
   return e.key === 'Escape' && !e.repeat && !e.isComposing && e.keyCode !== 229;
+}
+
+/** A chip is a native button: it acts on a click, Enter or Space and never on hover (UX-20c). */
+function Chip({ mogId, chip }: { mogId: MogId; chip: { id: string; label: string } }) {
+  return (
+    <button
+      type="button"
+      data-chip={chip.id}
+      onClick={() => void emitView(mogId, 'chip_click', { chipId: chip.id })}
+    >
+      {chip.label}
+    </button>
+  );
+}
+
+/** One expanded section. The brain sends the sections in the UX-EXP order (UX-18). */
+function Section({
+  mogId,
+  s,
+  stt,
+  overflow,
+}: {
+  mogId: MogId;
+  s: CardSection;
+  stt?: string | undefined;
+  overflow: { id: string; label: string }[];
+}) {
+  const click = (payload: object) => void emitView(mogId, 'click', payload);
+  switch (s.id) {
+    case 'answer':
+      return (
+        <section data-section="answer" aria-label="Full answer">
+          <div data-answer>{s.md}</div>
+        </section>
+      );
+    case 'keyNumbers':
+      return (
+        <section data-section="keyNumbers" aria-label="Key numbers">
+          <ul>
+            {s.items.map((n, i) => (
+              <li key={i}>{n}</li>
+            ))}
+          </ul>
+        </section>
+      );
+    case 'sql':
+      return (
+        <section data-section="sql" aria-label="SQL">
+          <details>
+            <summary>SQL</summary>
+            <pre>{s.sql}</pre>
+          </details>
+        </section>
+      );
+    case 'tablePreview':
+      return (
+        <section data-section="tablePreview" aria-label="Table preview">
+          <table>
+            <thead>
+              <tr>
+                {s.columns.map((c, i) => (
+                  <th key={i}>{c}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {s.rows.map((r, i) => (
+                <tr key={i}>
+                  {r.map((c, j) => (
+                    <td key={j}>{c}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {s.moreRows > 0 && <p>{`${s.moreRows} more rows`}</p>}
+          {(s.moreColumns ?? 0) > 0 && <p>{`${s.moreColumns} more columns`}</p>}
+        </section>
+      );
+    case 'sentToGenie':
+      return (
+        <section data-section="sentToGenie" aria-label="Sent to Genie">
+          <h3>Sent to Genie</h3>
+          <p>{s.text}</p>
+        </section>
+      );
+    case 'resend':
+      return (
+        <section data-section="resend">
+          <button type="button" data-action="resend" onClick={() => click({ target: 'resend' })}>
+            Resend without context
+          </button>
+        </section>
+      );
+    case 'copy':
+      return (
+        <section data-section="copy" aria-label="Copy">
+          {s.formats.map((f) => (
+            <button
+              key={f}
+              type="button"
+              data-copy={f}
+              onClick={() => click({ target: 'copy', format: f })}
+            >
+              {f === 'csv' ? 'Copy as CSV' : 'Copy as Markdown'}
+            </button>
+          ))}
+        </section>
+      );
+    case 'footer':
+      return (
+        <footer data-section="footer">
+          {(s.sttBadge ?? stt) !== undefined && <span data-badge="stt">{s.sttBadge ?? stt}</span>}
+          {s.deepLink !== undefined && <span data-deeplink>{s.deepLink}</span>}
+          {overflow.map((c) => (
+            <Chip key={c.id} mogId={mogId} chip={c} />
+          ))}
+        </footer>
+      );
+    case 'dataFlow':
+      return (
+        <section data-section="dataFlow" aria-label="Where your data goes">
+          <h3>Where your data goes</h3>
+          <p>{s.text}</p>
+        </section>
+      );
+  }
 }
 
 export function CardView({ mogId }: { mogId: MogId }) {
@@ -40,7 +173,8 @@ export function CardView({ mogId }: { mogId: MogId }) {
 
   // The brain orders, limits, pins and collapses the blurbs (UX-11a..UX-12, ADR 0028); the view
   // renders them in the order it gets and reports pointer hover and keyboard focus.
-  // TODO(#86, #89): blurb lines, footer and chip rules. TODO(#210): safe markdown (plain text now).
+  // TODO(#86): blurb lines. TODO(#210): answer text goes through `safe-markdown.tsx` (plain text
+  // now, at `data-answer` and `data-section="answer"`); the deep link becomes a trusted link.
   const hover = (blurbId: string, via: 'pointer' | 'focus', on: boolean) =>
     void emitView(mogId, 'hover', { blurbId, on, via });
   const historyCount = card?.historyCount ?? 0;
@@ -89,14 +223,7 @@ export function CardView({ mogId }: { mogId: MogId }) {
       )}
       <div>
         {card?.chips.map((c) => (
-          <button
-            key={c.id}
-            type="button"
-            data-chip={c.id}
-            onClick={() => void emitView(mogId, 'chip_click', { chipId: c.id })}
-          >
-            {c.label}
-          </button>
+          <Chip key={c.id} mogId={mogId} chip={c} />
         ))}
       </div>
       {card && (
@@ -104,8 +231,19 @@ export function CardView({ mogId }: { mogId: MogId }) {
           Expand
         </button>
       )}
-      {card?.answerMd !== undefined && <div data-answer>{card.answerMd}</div>}
-      {card?.sttBadge !== undefined && (
+      {card?.sections?.map((s) => (
+        <Section
+          key={s.id}
+          mogId={mogId}
+          s={s}
+          stt={card.sttBadge}
+          overflow={card.overflowChips ?? []}
+        />
+      ))}
+      {card?.sections === undefined && card?.answerMd !== undefined && (
+        <div data-answer>{card.answerMd}</div>
+      )}
+      {card?.sections === undefined && card?.sttBadge !== undefined && (
         <footer>
           <span data-badge="stt">{card.sttBadge}</span>
         </footer>

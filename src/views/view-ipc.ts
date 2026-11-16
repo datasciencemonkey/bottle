@@ -40,6 +40,24 @@ export interface CardBlurbView {
   parts?: { id: string; text: string }[];
 }
 
+/** One expanded card section (mirrors `ExpandedSection` of the brain). TODO(#285): contract. */
+export type CardSection =
+  | { id: 'answer'; md: string }
+  | { id: 'keyNumbers'; items: string[] }
+  | { id: 'sql'; sql: string; collapsed: true }
+  | {
+      id: 'tablePreview';
+      columns: string[];
+      rows: string[][];
+      moreRows: number;
+      moreColumns?: number;
+    }
+  | { id: 'sentToGenie'; text: string }
+  | { id: 'resend' }
+  | { id: 'copy'; formats: ('markdown' | 'csv')[] }
+  | { id: 'footer'; sttBadge?: string; deepLink?: string }
+  | { id: 'dataFlow'; text: string };
+
 /**
  * `card.update` payload: what the card of one MOG shows. The brain orders and limits the blurbs
  * (`src/brain/blurb-stack.ts`); `historyCount` drives "N more in History" (UX-11a).
@@ -49,6 +67,10 @@ export interface CardUpdate {
   mogId: MogId;
   blurbs: CardBlurbView[];
   chips: { id: string; label: string }[];
+  /** Chips after the 4th (UX-20a): the view shows them in the expanded card. */
+  overflowChips?: { id: string; label: string }[];
+  /** The expanded card sections in the UX-EXP order (UX-18), from `src/brain/card-sections.ts`. */
+  sections?: CardSection[];
   answerMd?: string;
   historyCount?: number;
   /** The STT badge for the card footer (UX-38), for example "STT: local". */
@@ -68,6 +90,49 @@ const MOODS: readonly Mood[] = [
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
 const isItems = (v: unknown, keys: string[]): boolean =>
   Array.isArray(v) && v.every((i) => isObj(i) && keys.every((k) => typeof i[k] === 'string'));
+
+const isStrs = (v: unknown): v is string[] =>
+  Array.isArray(v) && v.every((s) => typeof s === 'string');
+const optStr = (v: unknown) => v === undefined || typeof v === 'string';
+
+/** Shape check of the section list: a known ID with the fields the view reads. */
+function isSections(v: unknown): v is CardSection[] {
+  return (
+    Array.isArray(v) &&
+    v.every((s) => {
+      if (!isObj(s)) return false;
+      switch (s['id']) {
+        case 'answer':
+          return typeof s['md'] === 'string';
+        case 'keyNumbers':
+          return isStrs(s['items']);
+        case 'sql':
+          return typeof s['sql'] === 'string';
+        case 'tablePreview':
+          return (
+            isStrs(s['columns']) &&
+            Array.isArray(s['rows']) &&
+            s['rows'].every(isStrs) &&
+            typeof s['moreRows'] === 'number'
+          );
+        case 'sentToGenie':
+        case 'dataFlow':
+          return typeof s['text'] === 'string';
+        case 'resend':
+          return true;
+        case 'copy':
+          return (
+            Array.isArray(s['formats']) &&
+            s['formats'].every((f) => f === 'markdown' || f === 'csv')
+          );
+        case 'footer':
+          return optStr(s['sttBadge']) && optStr(s['deepLink']);
+        default:
+          return false;
+      }
+    })
+  );
+}
 
 /** Shape check only: drop a payload the view cannot render. */
 export function asMogViewState(p: unknown): MogViewState | undefined {
@@ -99,6 +164,9 @@ export function asCardUpdate(p: unknown): CardUpdate | undefined {
   const n = p['historyCount'];
   if (n !== undefined && !(typeof n === 'number' && Number.isInteger(n) && n >= 0))
     return undefined;
+  const oc = p['overflowChips'];
+  if (oc !== undefined && !isItems(oc, ['id', 'label'])) return undefined;
+  if (p['sections'] !== undefined && !isSections(p['sections'])) return undefined;
   const stt = p['sttBadge'];
   if (stt !== undefined && typeof stt !== 'string') return undefined;
   return p as unknown as CardUpdate;
