@@ -13,3 +13,7 @@ crate-type = ["rlib", "staticlib", "cdylib"]
 [dependencies]
 mog-core.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+# Pinned: the committed header must not change with a cbindgen release (tests/header.rs).
+cbindgen = { version = "=0.29.4", default-features = false }
