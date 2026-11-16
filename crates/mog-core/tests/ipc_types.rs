@@ -121,7 +121,10 @@ fn optional_fields_absent_stay_absent() {
         .into_iter()
         .filter(|(n, _)| n.ends_with(".minimal"))
         .collect();
-    assert!(minimal.len() >= 5, "expected the optional-field-absent cases");
+    assert!(
+        minimal.len() >= 5,
+        "expected the optional-field-absent cases"
+    );
     for (name, json) in minimal {
         let back = round_trip_by_name(type_of(&name), &json).unwrap();
         let keys = |v: &Value| v.as_object().unwrap().keys().cloned().collect::<Vec<_>>();

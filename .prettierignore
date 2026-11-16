@@ -17,3 +17,4 @@ AGENTS.md
 .omc/
 .github/workflows/
 scripts/
+src/shared/interfaces.ts

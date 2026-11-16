@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { Intent, RouterDecision } from './interfaces';
 import { MOOD_PRIORITY } from './interfaces';
 import { routerJsonSchema } from './router-schema';
@@ -28,6 +30,16 @@ describe('router json_schema (Appendix D)', () => {
   it('its intent and command enums equal the TS unions', () => {
     expect(intentEnumIsIntent).toBe(true);
     expect(commandEnumIsCommand).toBe(true);
+  });
+
+  it('equals the json block of Appendix D in the requirements', () => {
+    const md = readFileSync(
+      join(import.meta.dirname, '../../research/final-requirements.md'),
+      'utf8',
+    );
+    const start = md.indexOf('```json', md.indexOf('## Appendix D: Router json_schema'));
+    const end = md.indexOf('```', start + 7);
+    expect(routerJsonSchema).toEqual(JSON.parse(md.slice(start + 7, end)));
   });
 
   it('is flat and strict', () => {
