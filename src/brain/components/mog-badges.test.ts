@@ -29,7 +29,8 @@ describe('MOG status badges (#50)', () => {
     expect(b).toEqual({
       kind: 'identity',
       text: 'prod-finance · Genie One',
-      label: 'Profile prod-finance on adb-111.azuredatabricks.net, backend Genie One',
+      label:
+        'prod-finance · Genie One. Profile prod-finance on adb-111.azuredatabricks.net, backend Genie One',
       detail: 'adb-111.azuredatabricks.net',
       hoverOnly: true,
     });
@@ -112,7 +113,7 @@ describe('MOG status badges (#50)', () => {
     expect(local).toEqual({
       kind: 'stt',
       text: 'STT: local',
-      label: 'Speech to text runs on this device',
+      label: 'STT: local. Speech to text runs on this device',
       hoverOnly: true,
       action: 'open_data_disclosures',
     });
@@ -121,7 +122,7 @@ describe('MOG status badges (#50)', () => {
       'stt',
     );
     expect(cloud?.text).toBe('STT: Databricks m1');
-    expect(cloud?.label).toBe('Speech to text runs on Databricks, model m1');
+    expect(cloud?.label).toBe('STT: Databricks m1. Speech to text runs on Databricks, model m1');
     // No model name yet: no trailing space.
     expect(sttBadgeText({ provider: 'dbx_gemini', model: '' })).toBe('STT: Databricks');
   });
@@ -143,7 +144,7 @@ describe('MOG status badges (#50)', () => {
     expect(byKind(q, 'hop')).toEqual({
       kind: 'hop',
       text: 'Hop: sales-ws (this question)',
-      label: 'Asking in sales-ws for this question',
+      label: 'Hop: sales-ws (this question). Asking in sales-ws for this question',
       hoverOnly: false,
     });
     const s = mapBadges({ ...home, hop: { profile: 'sales-ws', host: 'h', scope: 'session' } });
@@ -156,7 +157,7 @@ describe('MOG status badges (#50)', () => {
     expect(b).toEqual({
       kind: 'offline',
       text: 'Offline',
-      label: 'Offline: Databricks is not reachable',
+      label: 'Offline. Databricks is not reachable',
       hoverOnly: false,
     });
     for (const l of ['ready', 'dozing', 'paused', 'starting'] as const) {
@@ -168,7 +169,7 @@ describe('MOG status badges (#50)', () => {
     expect(byKind(mapBadges({ ...home, sync: 'paused' }), 'sync')).toEqual({
       kind: 'sync',
       text: 'Sync paused',
-      label: 'Sync paused: all data stays on this device',
+      label: 'Sync paused. All data stays on this device',
       hoverOnly: false,
       action: 'open_setup',
     });
@@ -272,7 +273,7 @@ describe('UX-39b: badges are orthogonal to the mood', () => {
     },
   );
 
-  it.each(['processing', 'answering', 'idle'] as const)(
+  it.each(['processing', 'answering'] as const)(
     '[UX-39b] [AT-12] going offline and back keeps the agent mood "%s" (a real transition)',
     (m) => {
       const said = { mood: m, at: T - 100 };
@@ -284,12 +285,41 @@ describe('UX-39b: badges are orthogonal to the mood', () => {
       };
       const before = mapMood(A, ready, T).mood;
       expect(before).toBe(m);
-      // The MOG goes offline after the agent spoke, then comes back: `since` moves each time.
-      const offline: MoodSources = { ...ready, mog: { lifecycle: 'offline', since: T - 50 } };
+      // The MOG goes offline after the agent spoke, then comes back: `since` moves each time,
+      // `moodSince` (the last change that is not ready <-> offline) does not.
+      const offline: MoodSources = {
+        ...ready,
+        mog: { lifecycle: 'offline', since: T - 50, moodSince: 0 },
+      };
       expect(mapMood(A, offline, T).mood).toBe(before);
-      const back: MoodSources = { ...ready, mog: { lifecycle: 'ready', since: T - 10 } };
+      const back: MoodSources = {
+        ...ready,
+        mog: { lifecycle: 'ready', since: T - 10, moodSince: 0 },
+      };
       expect(mapMood(A, back, T).mood).toBe(before);
       expect(byKind(mapBadges({ ...home, lifecycle: 'offline' }), 'offline')).toBeDefined();
+    },
+  );
+
+  it.each(['paused', 'login_required', 'dozing', 'starting'] as const)(
+    '[UX-41] [UX-39b] a %s -> ready change after set_mood still ends the agent mood',
+    (l) => {
+      const said = { mood: 'processing' as const, at: T - 5000 };
+      const base = { capture: noCapture, requests: [], agentMood: said };
+      // The MOG went `l` at T-4 s and back to ready at T-1 s: both are real lifecycle changes.
+      const went: MoodSources = { ...base, mog: { lifecycle: l, since: T - 4000 } };
+      expect(mapMood(A, went, T).mood).not.toBe('processing');
+      const back: MoodSources = {
+        ...base,
+        mog: { lifecycle: 'ready', since: T - 1000, moodSince: T - 1000 },
+      };
+      expect(mapMood(A, back, T).mood).toBe('idle');
+      // From `l` to offline is not a ready <-> offline move either, so it ends the agent mood.
+      const off: MoodSources = {
+        ...base,
+        mog: { lifecycle: 'offline', since: T - 1000, moodSince: T - 1000 },
+      };
+      expect(mapMood(A, off, T).mood).toBe('idle');
     },
   );
 
