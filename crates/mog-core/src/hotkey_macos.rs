@@ -827,7 +827,7 @@ mod sys {
         }
     }
 
-    /// R1 HotkeyService on macOS (#6). No host creates it yet: TODO(#305).
+    /// R1 HotkeyService on macOS (#6). The Tauri host creates it in `src-tauri/src/hotkey_host.rs` (#305).
     ///
     /// The sink is called with the engine lock held, from the tap thread, the watchdog thread
     /// or the main thread. It must return fast and must not call back into this service.

@@ -3,6 +3,7 @@
 //! The app only hosts windows. Domain logic runs in the hidden `brain` window (ARC-2);
 //! secrets and I/O stay in `mog-core` (section 4.4). The IPC command surface is in `ipc` (#223).
 
+pub mod hotkey_host;
 pub mod ipc;
 pub mod window_host;
 pub mod windows;
@@ -37,7 +38,11 @@ pub fn run() {
     tauri::Builder::default()
         .manage(ipc::BrainChannel::default())
         .invoke_handler(ipc::handler)
+        // R1: an opened MOG or card view moves the talk-key target (#305).
+        .on_page_load(hotkey_host::on_page_load)
         .on_window_event(|window, event| {
+            // R1: a focused card or a closed MOG window moves the talk-key target (#305).
+            hotkey_host::on_window_event(window, event);
             // R11: a window that closes outside the host frees its ledger slot.
             if let tauri::WindowEvent::Destroyed = event {
                 if let Some(host) = window.try_state::<TauriWindowHost<tauri::Wry>>() {
@@ -48,6 +53,11 @@ pub fn run() {
         .setup(move |app| {
             let handle = app.handle();
             app.manage(TauriWindowHost::new(handle.clone()));
+            // R1: start the talk key. This never prompts (CAP-36, #305). If the forwarder
+            // thread cannot start, the app still runs without the talk key.
+            if hotkey_host::install(handle).is_err() {
+                // TODO(#297): report the talk key as unavailable once `hotkey.status` exists.
+            }
             let host = app.state::<TauriWindowHost<tauri::Wry>>();
             for kind in startup_windows(demo) {
                 // MOG and card windows go through R11, so the cap and the ledger hold.
@@ -61,6 +71,12 @@ pub fn run() {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running the Bottle app");
+        .build(tauri::generate_context!())
+        .expect("error while building the Bottle app")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                // R1: remove the key tap on quit (#305).
+                hotkey_host::shutdown(app);
+            }
+        });
 }
