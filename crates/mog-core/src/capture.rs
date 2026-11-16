@@ -12,6 +12,9 @@
 //! [`AudioDevice`] only opens and closes streams; the frames stay inside the device backend
 //! and the Rust pipeline behind it.
 //!
+//! Segments (`SegmentRef`, with its required `leaseId`) are not made here yet: the VAD and
+//! segment pipeline (#116) builds them from [`Lease::lease_id`].
+//!
 //! Follow-up: this crate has no real [`AudioDevice`] yet. The cpal mic backend and the
 //! system-audio backends (#15, #107, #108, #109) implement the trait. Until one lands, a host
 //! cannot build a [`CaptureCore`] that opens a real mic.
@@ -20,15 +23,26 @@ use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use crate::types::{CaptureMode, CaptureState, MogId, OthersTrack};
+use crate::ipc::IpcError;
+use crate::types::{self, CaptureMode, CaptureState, MogId, OthersTrack};
 
 /// The locked hold-to-talk safety stop: 120 s (section 7.1, D54, CAP-04a).
 pub const HOLD_MAX_MS: u64 = 120_000;
 /// The locked hands-free cap: 5 min (section 7.1, D54, CAP-04b).
 pub const HANDS_FREE_MAX_MS: u64 = 300_000;
 
-/// A capture lease ID. IDs start at 1 and are never reused in one process.
-pub type LeaseId = u64;
+/// The number of a capture lease inside R2. Numbers start at 1 and are never reused in one
+/// process. On the wire it is [`types::LeaseId`], the decimal text of this number (ADR 0007).
+pub type LeaseNo = u64;
+
+/// Read a wire lease ID ([`types::LeaseId`] or a checked `ipc::LeaseRef`) back into a
+/// [`LeaseNo`]. Text that R2 never issued is [`CaptureError::UnknownLease`].
+pub fn parse_lease(wire: &str) -> Result<LeaseNo, CaptureError> {
+    match wire.parse::<LeaseNo>() {
+        Ok(no) if no > 0 && wire.bytes().all(|b| b.is_ascii_digit()) => Ok(no),
+        _ => Err(CaptureError::UnknownLease),
+    }
+}
 
 /// A time source. Tests use a fake clock; [`SystemClock`] is the real one.
 pub trait Clock: Send + Sync {
@@ -123,7 +137,7 @@ impl StopReason {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Stopped {
     /// The lease that stopped.
-    pub lease_id: LeaseId,
+    pub lease_id: LeaseNo,
     /// The MOG that held it.
     pub mog_id: MogId,
     /// Its mode.
@@ -156,11 +170,19 @@ pub struct CaptureRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Lease {
     /// The lease ID. `capture_stop` and `capture_pause` need it.
-    pub id: LeaseId,
+    pub id: LeaseNo,
     /// The MOG that holds the lease.
     pub mog_id: MogId,
     /// The capture mode of the lease.
     pub mode: CaptureMode,
+}
+
+impl Lease {
+    /// The wire lease ID of `CaptureState.leaseId`, `SegmentRef.leaseId` and the
+    /// `capture_stop` / `capture_pause` arguments (ADR 0007).
+    pub fn lease_id(&self) -> types::LeaseId {
+        self.id.to_string()
+    }
 }
 
 /// A CaptureService error. Only [`CaptureError::code`] crosses IPC.
@@ -188,6 +210,20 @@ impl CaptureError {
     }
 }
 
+impl CaptureError {
+    /// The typed IPC error of `command` (ADR 0007). The codes are the same; a device fault
+    /// is `host_failed`, so no device detail crosses IPC.
+    pub fn to_ipc(&self, command: &str) -> IpcError {
+        let command = command.to_string();
+        match self {
+            CaptureError::MicBusy => IpcError::MicBusy { command },
+            CaptureError::UnknownLease => IpcError::UnknownLease { command },
+            CaptureError::InvalidMode => IpcError::InvalidMode { command },
+            CaptureError::Device(_) => IpcError::HostFailed { command },
+        }
+    }
+}
+
 impl fmt::Display for CaptureError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "capture error: {}", self.code())
@@ -201,11 +237,11 @@ pub trait CaptureService: Send + Sync {
     /// Start a capture. Returns a new lease, or `mic_busy` (ARC-F9 priority).
     fn start(&self, request: CaptureRequest) -> Result<Lease, CaptureError>;
     /// Stop the capture of a lease.
-    fn stop(&self, lease_id: LeaseId) -> Result<CaptureState, CaptureError>;
+    fn stop(&self, lease_id: LeaseNo) -> Result<CaptureState, CaptureError>;
     /// Pause a session lease. The streams close (CAP-13b).
-    fn pause(&self, lease_id: LeaseId) -> Result<CaptureState, CaptureError>;
+    fn pause(&self, lease_id: LeaseNo) -> Result<CaptureState, CaptureError>;
     /// Resume a paused session lease.
-    fn resume(&self, lease_id: LeaseId) -> Result<CaptureState, CaptureError>;
+    fn resume(&self, lease_id: LeaseNo) -> Result<CaptureState, CaptureError>;
     /// The current capture state.
     fn status(&self) -> CaptureState;
     /// Stop every lease and close every stream (the panic stop, MB-05).
@@ -217,7 +253,7 @@ pub trait CaptureService: Send + Sync {
 
 #[derive(Debug, Clone)]
 struct LeaseRec {
-    id: LeaseId,
+    id: LeaseNo,
     mog_id: MogId,
     mode: CaptureMode,
     started_mono: u64,
@@ -247,7 +283,7 @@ struct Inner {
     /// A PTT on top of the primary lease: it suspends a hands-free lease (ARC-F9) or is a
     /// directed segment of a session.
     overlay: Option<LeaseRec>,
-    next_id: LeaseId,
+    next_id: LeaseNo,
     mic_open: bool,
     system_open: bool,
     last_state: Option<CaptureState>,
@@ -319,6 +355,7 @@ impl CaptureCore {
         let idle = CaptureState {
             owner: None,
             mode: None,
+            lease_id: None,
             recording: false,
             paused: false,
             session_id: None,
@@ -333,6 +370,7 @@ impl CaptureCore {
             (Some(ptt), CaptureMode::HandsFree) => CaptureState {
                 owner: Some(ptt.mog_id.clone()),
                 mode: Some(CaptureMode::Ptt),
+                lease_id: Some(ptt.id.to_string()),
                 recording: true,
                 started_at: Some(ptt.started_epoch),
                 ..idle
@@ -340,6 +378,8 @@ impl CaptureCore {
             (overlay, mode) => CaptureState {
                 owner: Some(primary.mog_id.clone()),
                 mode: Some(mode),
+                // A directed PTT uses the session stream; the session lease owns the mic.
+                lease_id: Some(primary.id.to_string()),
                 recording: !primary.paused || overlay.is_some(),
                 paused: primary.paused,
                 session_id: (mode == CaptureMode::Session)
@@ -395,7 +435,7 @@ impl CaptureCore {
     }
 
     /// Take a lease out. When the primary goes, the overlay PTT (if any) becomes primary.
-    fn remove(inner: &mut Inner, lease_id: LeaseId) -> Option<LeaseRec> {
+    fn remove(inner: &mut Inner, lease_id: LeaseNo) -> Option<LeaseRec> {
         if inner.overlay.as_ref().is_some_and(|o| o.id == lease_id) {
             return inner.overlay.take();
         }
@@ -410,7 +450,7 @@ impl CaptureCore {
     /// Stop every lease whose cap has passed.
     fn expire(&self, inner: &mut Inner) {
         let now = self.clock.monotonic_ms();
-        let due: Vec<(LeaseId, StopReason)> = [&inner.overlay, &inner.primary]
+        let due: Vec<(LeaseNo, StopReason)> = [&inner.overlay, &inner.primary]
             .into_iter()
             .flatten()
             .filter_map(|rec| match rec.deadline() {
@@ -432,7 +472,7 @@ impl CaptureCore {
         self.publish(inner)
     }
 
-    fn set_paused(&self, lease_id: LeaseId, paused: bool) -> Result<CaptureState, CaptureError> {
+    fn set_paused(&self, lease_id: LeaseNo, paused: bool) -> Result<CaptureState, CaptureError> {
         let mut inner = self.lock();
         self.expire(&mut inner);
         self.settle(&mut inner);
@@ -452,7 +492,7 @@ impl CaptureCore {
         Ok(self.publish(&mut inner))
     }
 
-    fn find(inner: &mut Inner, lease_id: LeaseId) -> Option<&mut LeaseRec> {
+    fn find(inner: &mut Inner, lease_id: LeaseNo) -> Option<&mut LeaseRec> {
         [&mut inner.primary, &mut inner.overlay]
             .into_iter()
             .flatten()
@@ -516,7 +556,7 @@ impl CaptureService for CaptureCore {
         Ok(lease)
     }
 
-    fn stop(&self, lease_id: LeaseId) -> Result<CaptureState, CaptureError> {
+    fn stop(&self, lease_id: LeaseNo) -> Result<CaptureState, CaptureError> {
         let mut inner = self.lock();
         self.expire(&mut inner);
         let result = match Self::remove(&mut inner, lease_id) {
@@ -530,11 +570,11 @@ impl CaptureService for CaptureCore {
         result.map(|()| state)
     }
 
-    fn pause(&self, lease_id: LeaseId) -> Result<CaptureState, CaptureError> {
+    fn pause(&self, lease_id: LeaseNo) -> Result<CaptureState, CaptureError> {
         self.set_paused(lease_id, true)
     }
 
-    fn resume(&self, lease_id: LeaseId) -> Result<CaptureState, CaptureError> {
+    fn resume(&self, lease_id: LeaseNo) -> Result<CaptureState, CaptureError> {
         self.set_paused(lease_id, false)
     }
 

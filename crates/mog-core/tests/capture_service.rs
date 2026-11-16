@@ -275,6 +275,7 @@ fn cap_01b_state_events_carry_only_capture_state_fields() {
     let allowed = [
         "owner",
         "mode",
+        "leaseId",
         "recording",
         "paused",
         "sessionId",
