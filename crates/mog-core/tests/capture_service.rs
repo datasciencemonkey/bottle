@@ -1022,3 +1022,87 @@ fn cap_01a_a_sink_panic_during_resume_leaves_the_core_usable() {
     svc.stop_all();
     svc.start(req("c", CaptureMode::Ptt)).unwrap();
 }
+
+// ---------- round 4: R2 (grant on a closed mic) ----------
+
+#[test]
+fn cap_01a_a_start_during_a_close_is_granted_only_on_an_open_mic() {
+    let r = Arc::new(rig());
+    let hf = r.svc.start(req("a", CaptureMode::HandsFree)).unwrap();
+    let (release, gate) = std::sync::mpsc::channel();
+    r.device.log().close_gate = Some(gate);
+    // Thread X stops the only lease; its mic close waits at the gate.
+    let stopper = {
+        let r = Arc::clone(&r);
+        std::thread::spawn(move || r.svc.stop(hf.id).map(|_| ()))
+    };
+    let waited = Instant::now();
+    while !r.device.log().closing {
+        assert!(waited.elapsed() < Duration::from_secs(5), "the close began");
+        std::thread::yield_now();
+    }
+    // Thread Y starts while the close is in progress.
+    let starter = {
+        let r = Arc::clone(&r);
+        std::thread::spawn(move || r.svc.start(req("b", CaptureMode::Ptt)))
+    };
+    std::thread::sleep(Duration::from_millis(50));
+    release.send(()).unwrap();
+    stopper.join().unwrap().unwrap();
+    let lease = starter.join().unwrap().unwrap();
+    // The granted lease has an open mic: Y opened it again after X's close.
+    let log = r.device.log();
+    assert!(log.mic_open, "the lease of B is on an open mic");
+    assert_eq!(log.mic_opens, 2);
+    drop(log);
+    assert_eq!(r.svc.status().lease_id, Some(lease.lease_id()));
+}
+
+#[test]
+fn cap_01a_stress_every_granted_lease_has_an_open_mic() {
+    let r = Arc::new(rig());
+    let workers: Vec<_> = (0..3)
+        .map(|t| {
+            let r = Arc::clone(&r);
+            std::thread::spawn(move || {
+                let modes = [CaptureMode::HandsFree, CaptureMode::Ptt, CaptureMode::Ptt];
+                let mut grants = 0u32;
+                for i in 0..3_000u32 {
+                    let mode = modes[((i as usize) + t) % 3];
+                    if let Ok(lease) = r.svc.start(req(&format!("m{t}"), mode)) {
+                        grants += 1;
+                        // Only this thread stops its lease, and no cap runs: the mic must be open.
+                        assert!(
+                            r.device.log().mic_open,
+                            "lease {} on a closed mic",
+                            lease.id
+                        );
+                        r.svc.stop(lease.id).unwrap();
+                    }
+                }
+                grants
+            })
+        })
+        .collect();
+    let poller = {
+        let r = Arc::clone(&r);
+        std::thread::spawn(move || {
+            for _ in 0..3_000 {
+                r.svc.tick();
+                r.svc.status();
+            }
+        })
+    };
+    let grants: u32 = workers.into_iter().map(|w| w.join().unwrap()).sum();
+    poller.join().unwrap();
+    assert!(grants > 0);
+    // No lease is left, so no stream is left open.
+    let s = r.svc.status();
+    assert!(s.owner.is_none());
+    let log = r.device.log();
+    assert!(
+        !log.mic_open && !log.system_open,
+        "no stream open with no lease"
+    );
+    assert_eq!(log.max_in_flight, 1, "one open at a time");
+}

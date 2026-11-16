@@ -30,6 +30,10 @@ pub struct FakeDeviceLog {
     pub in_flight: u32,
     /// The most opens that were in progress at the same time.
     pub max_in_flight: u32,
+    /// The next close waits for a message on this channel before it closes the stream.
+    pub close_gate: Option<std::sync::mpsc::Receiver<()>>,
+    /// A close waits at the gate now.
+    pub closing: bool,
 }
 
 /// A fake audio device. Clones share one [`FakeDeviceLog`]. It panics if a source opens twice.
@@ -90,7 +94,17 @@ impl AudioDevice for FakeAudioDevice {
     }
 
     fn close(&self, source: AudioSource) {
+        let gate = {
+            let mut log = self.log();
+            let gate = log.close_gate.take();
+            log.closing = gate.is_some();
+            gate
+        };
+        if let Some(gate) = gate {
+            let _ = gate.recv();
+        }
         let mut log = self.log();
+        log.closing = false;
         match source {
             AudioSource::Mic => log.mic_open = false,
             AudioSource::SystemAudio => log.system_open = false,
