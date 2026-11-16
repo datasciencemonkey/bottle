@@ -92,7 +92,10 @@ fn at_22_session_guard_default_uses_the_system_clock() {
 fn at_22_live_fixture_skips_with_a_clear_reason_when_unset() {
     match testkit::live_from(env(&[])).expect("no error") {
         Fixture::Skip(reason) => {
-            assert!(reason.contains("BOTTLE_TEST_PROFILE is not set"), "{reason}");
+            assert!(
+                reason.contains("BOTTLE_TEST_PROFILE is not set"),
+                "{reason}"
+            );
             assert!(reason.contains("docs/tests/README.md"), "{reason}");
         }
         Fixture::Ready(_) => panic!("expected a skip"),

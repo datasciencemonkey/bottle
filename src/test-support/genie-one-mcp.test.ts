@@ -5,7 +5,11 @@ import { BUSY_TEXT, GENIE_ONE_TOOLS, createGenieOneMcpDouble, scenarios } from '
 const HOST = 'example.cloud.databricks.com';
 const WSID = '1234567890';
 
-function ask(d: ReturnType<typeof createGenieOneMcpDouble>, question: string, conversation_id?: string) {
+function ask(
+  d: ReturnType<typeof createGenieOneMcpDouble>,
+  question: string,
+  conversation_id?: string,
+) {
   return d.call('genie_ask', conversation_id ? { question, conversation_id } : { question });
 }
 
@@ -18,7 +22,11 @@ describe('Genie One MCP double', () => {
   it('[AT-22] answers initialize and lists the Genie One tools over JSON-RPC', async () => {
     const d = createGenieOneMcpDouble({ host: HOST, workspaceId: WSID });
     const init = await d.handle({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} });
-    expect(init).toMatchObject({ jsonrpc: '2.0', id: 1, result: { serverInfo: { name: 'genie_one_mcp' } } });
+    expect(init).toMatchObject({
+      jsonrpc: '2.0',
+      id: 1,
+      result: { serverInfo: { name: 'genie_one_mcp' } },
+    });
     const list = await d.handle({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
     const names = (list.result as { tools: { name: string }[] }).tools.map((t) => t.name);
     expect(names).toEqual([...GENIE_ONE_TOOLS]);
@@ -30,19 +38,31 @@ describe('Genie One MCP double', () => {
     const d = createGenieOneMcpDouble({ host: HOST, workspaceId: WSID });
     const bad = await d.handle({ jsonrpc: '2.0', id: 3, method: 'nope' });
     expect(bad.error?.code).toBe(-32601);
-    const tool = await d.handle({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'x', arguments: {} } });
+    const tool = await d.handle({
+      jsonrpc: '2.0',
+      id: 4,
+      method: 'tools/call',
+      params: { name: 'x', arguments: {} },
+    });
     expect(tool.error?.code).toBe(-32602);
   });
 
   it('[AT-22] normal answer: ask is accepted, polls progress, then completes with a deep link', async () => {
-    const d = createGenieOneMcpDouble({ host: HOST, workspaceId: WSID, responses: [scenarios.normalAnswer()] });
+    const d = createGenieOneMcpDouble({
+      host: HOST,
+      workspaceId: WSID,
+      responses: [scenarios.normalAnswer()],
+    });
     const a = await ask(d, 'What was revenue last quarter?');
     expect(a.isError).toBe(false);
     expect(a.httpStatus).toBe(200);
     expect(a.structuredContent).toMatchObject({ status: 'in_progress' });
     const ref = ids(a);
     const p1 = await d.call('genie_poll_response', ref);
-    expect(p1.structuredContent).toMatchObject({ status: 'in_progress', progress_steps: ['Reading the tables'] });
+    expect(p1.structuredContent).toMatchObject({
+      status: 'in_progress',
+      progress_steps: ['Reading the tables'],
+    });
     const p2 = await d.call('genie_poll_response', ref);
     const done = p2.structuredContent as Record<string, unknown>;
     expect(done.status).toBe('completed');
@@ -55,7 +75,11 @@ describe('Genie One MCP double', () => {
   });
 
   it('[AT-22] a poll after the terminal status repeats the terminal status', async () => {
-    const d = createGenieOneMcpDouble({ host: HOST, workspaceId: WSID, responses: [scenarios.normalAnswer()] });
+    const d = createGenieOneMcpDouble({
+      host: HOST,
+      workspaceId: WSID,
+      responses: [scenarios.normalAnswer()],
+    });
     const ref = ids(await ask(d, 'q'));
     await d.call('genie_poll_response', ref);
     await d.call('genie_poll_response', ref);
@@ -64,7 +88,11 @@ describe('Genie One MCP double', () => {
   });
 
   it('[AT-22] busy conversation: a second ask returns the live busy text as an isError result', async () => {
-    const d = createGenieOneMcpDouble({ host: HOST, workspaceId: WSID, responses: [scenarios.normalAnswer()] });
+    const d = createGenieOneMcpDouble({
+      host: HOST,
+      workspaceId: WSID,
+      responses: [scenarios.normalAnswer()],
+    });
     const first = ids(await ask(d, 'first'));
     const second = await ask(d, 'second', first.conversation_id);
     expect(second.isError).toBe(true);
@@ -108,7 +136,11 @@ describe('Genie One MCP double', () => {
   });
 
   it('[AT-22] unknown status: the double keeps returning unknown, then completes with the same IDs', async () => {
-    const d = createGenieOneMcpDouble({ host: HOST, workspaceId: WSID, responses: [scenarios.unknownStatus(3)] });
+    const d = createGenieOneMcpDouble({
+      host: HOST,
+      workspaceId: WSID,
+      responses: [scenarios.unknownStatus(3)],
+    });
     const ref = ids(await ask(d, 'q'));
     const statuses: string[] = [];
     for (let i = 0; i < 4; i++) {
@@ -121,14 +153,22 @@ describe('Genie One MCP double', () => {
   });
 
   it('[AT-22] null deep_link: the terminal poll has deep_link null', async () => {
-    const d = createGenieOneMcpDouble({ host: HOST, workspaceId: WSID, responses: [scenarios.nullDeepLink()] });
+    const d = createGenieOneMcpDouble({
+      host: HOST,
+      workspaceId: WSID,
+      responses: [scenarios.nullDeepLink()],
+    });
     const ref = ids(await ask(d, 'q'));
     const p = await d.call('genie_poll_response', ref);
     expect(p.structuredContent).toMatchObject({ status: 'completed', deep_link: null });
   });
 
   it('[AT-22] null progress_steps: in-progress polls have progress_steps null', async () => {
-    const d = createGenieOneMcpDouble({ host: HOST, workspaceId: WSID, responses: [scenarios.nullProgressSteps()] });
+    const d = createGenieOneMcpDouble({
+      host: HOST,
+      workspaceId: WSID,
+      responses: [scenarios.nullProgressSteps()],
+    });
     const ref = ids(await ask(d, 'q'));
     const p = await d.call('genie_poll_response', ref);
     expect(p.structuredContent).toMatchObject({ status: 'in_progress', progress_steps: null });
@@ -152,7 +192,11 @@ describe('Genie One MCP double', () => {
   });
 
   it('[AT-22] serial polls keep the overlap peak at 1', async () => {
-    const d = createGenieOneMcpDouble({ host: HOST, workspaceId: WSID, responses: [scenarios.normalAnswer()] });
+    const d = createGenieOneMcpDouble({
+      host: HOST,
+      workspaceId: WSID,
+      responses: [scenarios.normalAnswer()],
+    });
     const ref = ids(await ask(d, 'q'));
     await d.call('genie_poll_response', ref);
     await d.call('genie_poll_response', ref);
@@ -181,17 +225,28 @@ describe('Genie One MCP double', () => {
   });
 
   it('[AT-22] returns a scripted query result and an error for an unknown item', async () => {
-    const d = createGenieOneMcpDouble({ host: HOST, workspaceId: WSID, responses: [scenarios.normalAnswer()] });
+    const d = createGenieOneMcpDouble({
+      host: HOST,
+      workspaceId: WSID,
+      responses: [scenarios.normalAnswer()],
+    });
     const ref = ids(await ask(d, 'q'));
     const ok = await d.call('genie_get_query_result', { ...ref, item_id: 'q1' });
     expect(ok.isError).toBe(false);
-    expect(ok.structuredContent).toMatchObject({ columns: [{ name: 'revenue' }], rows: [[1200000]] });
+    expect(ok.structuredContent).toMatchObject({
+      columns: [{ name: 'revenue' }],
+      rows: [[1200000]],
+    });
     const bad = await d.call('genie_get_query_result', { ...ref, item_id: 'nope' });
     expect(bad.isError).toBe(true);
   });
 
   it('[AT-22] the double never sees a token: requests carry only tool arguments', async () => {
-    const d = createGenieOneMcpDouble({ host: HOST, workspaceId: WSID, responses: [scenarios.normalAnswer()] });
+    const d = createGenieOneMcpDouble({
+      host: HOST,
+      workspaceId: WSID,
+      responses: [scenarios.normalAnswer()],
+    });
     await ask(d, 'q');
     expect(JSON.stringify(d.calls())).not.toMatch(/token|bearer|dapi/i);
   });

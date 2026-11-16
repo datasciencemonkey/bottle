@@ -15,8 +15,13 @@ describe('gate fixtures (#229)', () => {
   });
 
   it('[AT-22] the live fixture reads the profile name and the optional warehouse', () => {
-    expect(liveFixture({ BOTTLE_TEST_PROFILE: 'bottle-test' })).toEqual({ enabled: true, profile: 'bottle-test' });
-    expect(liveFixture({ BOTTLE_TEST_PROFILE: 'bottle-test', BOTTLE_TEST_WAREHOUSE_ID: 'abc123' })).toEqual({
+    expect(liveFixture({ BOTTLE_TEST_PROFILE: 'bottle-test' })).toEqual({
+      enabled: true,
+      profile: 'bottle-test',
+    });
+    expect(
+      liveFixture({ BOTTLE_TEST_PROFILE: 'bottle-test', BOTTLE_TEST_WAREHOUSE_ID: 'abc123' }),
+    ).toEqual({
       enabled: true,
       profile: 'bottle-test',
       warehouseId: 'abc123',
@@ -24,7 +29,9 @@ describe('gate fixtures (#229)', () => {
   });
 
   it('[AT-22] a malformed profile name is an error, not a silent skip', () => {
-    expect(() => liveFixture({ BOTTLE_TEST_PROFILE: 'a b; rm -rf' })).toThrow(/BOTTLE_TEST_PROFILE/);
+    expect(() => liveFixture({ BOTTLE_TEST_PROFILE: 'a b; rm -rf' })).toThrow(
+      /BOTTLE_TEST_PROFILE/,
+    );
   });
 
   it('[AT-22] the device fixture accepts only the reference devices', () => {
@@ -41,7 +48,12 @@ describe('gate fixtures (#229)', () => {
     const off = hidRigFixture({ BOTTLE_TEST_DEVICE: 'mac-m1-current' });
     expect(off.enabled).toBe(false);
     if (!off.enabled) expect(off.reason).toContain('BOTTLE_TEST_HID_PORT');
-    expect(hidRigFixture({ BOTTLE_TEST_DEVICE: 'mac-m1-current', BOTTLE_TEST_HID_PORT: '/dev/cu.usbmodem1' })).toEqual({
+    expect(
+      hidRigFixture({
+        BOTTLE_TEST_DEVICE: 'mac-m1-current',
+        BOTTLE_TEST_HID_PORT: '/dev/cu.usbmodem1',
+      }),
+    ).toEqual({
       enabled: true,
       device: 'mac-m1-current',
       port: '/dev/cu.usbmodem1',
