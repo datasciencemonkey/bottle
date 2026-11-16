@@ -5,7 +5,7 @@
  * The tests in `packaging-pins.test.ts` run them on the repo and on bad fixtures.
  */
 import { readdirSync, readFileSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, sep } from 'node:path';
 
 /** NFR-14a, U1, D32: the lowest allowed version of the Rust `tauri` crate. */
 export const MIN_TAURI_CRATE = '2.12.5';
@@ -271,7 +271,8 @@ export function findFiles(root: string, names: (name: string) => boolean): TextF
         if (SKIP_DIRS.has(e.name) || rel === join('research', 'kimi-snapshot')) continue;
         walk(full);
       } else if (e.isFile() && names(e.name)) {
-        out.push({ path: rel, text: readFileSync(full, 'utf8') });
+        // POSIX separators, so the paths match on Windows too (#366).
+        out.push({ path: rel.split(sep).join('/'), text: readFileSync(full, 'utf8') });
       }
     }
   };

@@ -19,3 +19,6 @@ AGENTS.md
 scripts/
 src/shared/interfaces.ts
 src-tauri/schemas/
+# Throwaway spike code (docs/spikes/). Each spikes/sp-nn/ folder is standalone with its own tooling,
+# and some files (for example sp-13 golden.json) are byte-exact fixtures. Same scope as eslint.config.js (#300).
+spikes/
