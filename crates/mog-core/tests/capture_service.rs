@@ -1067,7 +1067,7 @@ fn cap_01a_stress_every_granted_lease_has_an_open_mic() {
             std::thread::spawn(move || {
                 let modes = [CaptureMode::HandsFree, CaptureMode::Ptt, CaptureMode::Ptt];
                 let mut grants = 0u32;
-                for i in 0..3_000u32 {
+                for i in 0..10_000u32 {
                     let mode = modes[((i as usize) + t) % 3];
                     if let Ok(lease) = r.svc.start(req(&format!("m{t}"), mode)) {
                         grants += 1;
@@ -1087,7 +1087,7 @@ fn cap_01a_stress_every_granted_lease_has_an_open_mic() {
     let poller = {
         let r = Arc::clone(&r);
         std::thread::spawn(move || {
-            for _ in 0..3_000 {
+            for _ in 0..10_000 {
                 r.svc.tick();
                 r.svc.status();
             }

@@ -8,15 +8,40 @@
 //! (MB-05). Time comes from the shared [`MonotonicClock`] (#229), audio streams from an
 //! [`AudioDevice`] and state changes go to [`CaptureEvents`].
 //!
-//! Locking: the state lock is never held across a device call or an event. A slow CoreAudio
-//! or WASAPI open therefore cannot block `status()` or the 200 ms panic stop (MB-05). Handy hit
-//! the same deadlock and keeps a lock-free `recording_active` flag for it (cjpais/Handy
-//! `src-tauri/src/managers/audio.rs:495-500` @ aca8985). Only the pattern is used; no Handy code
-//! is copied.
+//! Lock protocol (review R2). There are two locks:
 //!
-//! While one start or resume opens the device, a second start or resume gets `mic_busy`, also
-//! a PTT that would win under ARC-F9. The window is one device open. After `stop_all` it lasts
-//! until the cancelled open returns, so a source never opens twice at once.
+//! - the state lock (`inner`): leases, the pending start or resume, the published state;
+//! - the device mutex (`dev`): every `open` and `close`, and the open flags of the two sources.
+//!
+//! The lock order is device, then state. No thread takes the device mutex while it holds the
+//! state lock, and no lock is held while an event goes out. Every device call runs under the
+//! device mutex, and the device mutex holder reads the leases under the state lock just before
+//! each call. A start or resume grants its lease under the state lock while it still holds the
+//! device mutex, after it saw its sources open. So no close can run between that check and the
+//! grant, and a new grant cannot appear while a close decides.
+//!
+//! Only a start or resume waits for the device mutex: it waits for a bounded close, or for
+//! one other device phase. Every other call (`stop`, `stop_all`, `status`, `tick`, `pause`,
+//! `device_failed`) changes the state, sets a `dirty` flag and then only *tries* the device
+//! mutex. If the mutex is free, the call closes the unneeded streams itself. If it is held, the
+//! holder sees `dirty` before it lets go, or right after, and closes them. So the MB-05 panic
+//! stop never waits for a slow CoreAudio or WASAPI open; a stream that a slow open is still
+//! opening closes when that open returns. Handy keeps device work on one owner for the same
+//! reason (cjpais/Handy `src-tauri/src/managers/audio.rs:495-500` @ aca8985; pattern only, no
+//! Handy code is copied).
+//!
+//! Invariants:
+//!
+//! 1. Every granted lease has its sources open (checked under the device mutex at the grant,
+//!    with a `debug_assert`).
+//! 2. A source never opens twice at once: opens run only under the device mutex, and at most
+//!    one start or resume is pending.
+//! 3. After a stop, no source stays open with no lease: the stop sets `dirty`, and the device
+//!    mutex holder (this thread or the current one) closes every stream that no lease needs.
+//!
+//! While one start or resume is in its device phase, a second start or resume gets `mic_busy`,
+//! also a PTT that would win under ARC-F9. The window is one device open. After `stop_all` it
+//! lasts until the cancelled open returns.
 //!
 //! Lease boundaries for the segment pipeline (#116): the device sees only open and close, and a
 //! PTT over hands-free or a directed PTT in a session reuses the open mic. The pipeline cuts
@@ -37,7 +62,7 @@
 use std::cell::Cell;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::clock::MonotonicClock;
@@ -93,9 +118,7 @@ pub trait AudioDevice: Send + Sync {
     /// Close the stream of `source`. The stream, and with it the OS mic indicator, must be
     /// stopped before `close` returns: no idle timeout, no lazy close and no always-on mode
     /// (MOG-09, CAP-13b; Handy's `MicrophoneMode::AlwaysOn` and `schedule_lazy_close` are not
-    /// ported). Closing a closed stream does nothing. `close` may run on another thread while
-    /// an `open` of the same source is in progress; R2 then calls `close` again after that
-    /// `open` returns.
+    /// ported). Closing a closed stream does nothing. R2 never runs two device calls at once.
     fn close(&self, source: AudioSource);
 }
 
@@ -427,6 +450,23 @@ impl Inner {
     }
 }
 
+/// The streams that are open now. Only a holder of the device mutex reads or changes it, and
+/// every `open` and `close` runs under that mutex, so these flags are always the truth.
+#[derive(Debug, Default)]
+struct DevState {
+    mic_open: bool,
+    system_open: bool,
+}
+
+impl DevState {
+    fn flag(&mut self, source: AudioSource) -> &mut bool {
+        match source {
+            AudioSource::Mic => &mut self.mic_open,
+            AudioSource::SystemAudio => &mut self.system_open,
+        }
+    }
+}
+
 /// The CaptureService core over an [`AudioDevice`], a [`MonotonicClock`] and [`CaptureEvents`].
 pub struct CaptureCore {
     device: Box<dyn AudioDevice>,
@@ -434,11 +474,16 @@ pub struct CaptureCore {
     events: Arc<dyn CaptureEvents>,
     /// Epoch milliseconds at the clock's origin, for `CaptureState.startedAt`.
     epoch_origin_ms: u64,
+    /// The state lock: leases, the pending start or resume, the last published state.
     inner: Mutex<Inner>,
-    /// The streams that are open now, as far as R2 knows. Read and changed without the state
-    /// lock, like Handy's `recording_active`.
-    mic_open: AtomicBool,
-    system_open: AtomicBool,
+    /// The device mutex: every device call, and the open flags. Lock order: device, then
+    /// state. Never take the device mutex while the state lock is held.
+    dev: Mutex<DevState>,
+    /// The leases changed since the device mutex holder last made the streams match them.
+    dirty: AtomicBool,
+    /// The backend reported these streams as failed; the next device holder closes them.
+    lost_mic: AtomicBool,
+    lost_system: AtomicBool,
 }
 
 impl CaptureCore {
@@ -461,8 +506,10 @@ impl CaptureCore {
                 last_state: Some(Inner::default().state()),
                 ..Inner::default()
             }),
-            mic_open: AtomicBool::new(false),
-            system_open: AtomicBool::new(false),
+            dev: Mutex::new(DevState::default()),
+            dirty: AtomicBool::new(false),
+            lost_mic: AtomicBool::new(false),
+            lost_system: AtomicBool::new(false),
         }
     }
 
@@ -475,9 +522,8 @@ impl CaptureCore {
     /// The backend reports that the stream of `source` failed (for example an unplugged mic).
     /// Every live lease that uses it stops with [`StopReason::DeviceLost`], and the next start
     /// opens the stream again (Handy's `needs_reopen`, `managers/audio.rs:294-307` @ aca8985).
+    /// It never waits for the device mutex, so a backend may call it from inside `open`.
     pub fn device_failed(&self, source: AudioSource) {
-        self.flag(source).store(false, Ordering::SeqCst);
-        self.device.close(source);
         self.locked(|inner, _, evs| {
             let ids: Vec<LeaseNo> = match source {
                 AudioSource::Mic => [&inner.overlay, &inner.primary]
@@ -509,78 +555,150 @@ impl CaptureCore {
                 inner.pending_lost = true;
             }
         });
-        self.close_unwanted();
+        self.lost(source).store(true, Ordering::SeqCst);
+        self.request_sync();
     }
 
     fn now_ms(&self) -> u64 {
         u64::try_from(self.clock.now().as_millis()).unwrap_or(u64::MAX)
     }
 
-    fn flag(&self, source: AudioSource) -> &AtomicBool {
+    fn lost(&self, source: AudioSource) -> &AtomicBool {
         match source {
-            AudioSource::Mic => &self.mic_open,
-            AudioSource::SystemAudio => &self.system_open,
+            AudioSource::Mic => &self.lost_mic,
+            AudioSource::SystemAudio => &self.lost_system,
         }
     }
 
-    /// Run `f` under the state lock, then publish a changed state and send the events after
-    /// the lock is released. A poisoned lock is taken over: no device call runs under it.
-    fn locked<R>(&self, f: impl FnOnce(&mut Inner, u64, &mut Vec<Ev>) -> R) -> R {
+    fn lock_state(&self) -> MutexGuard<'_, Inner> {
+        let guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        self.inner.clear_poison();
+        guard
+    }
+
+    fn lock_dev(&self) -> MutexGuard<'_, DevState> {
+        let guard = self.dev.lock().unwrap_or_else(PoisonError::into_inner);
+        self.dev.clear_poison();
+        guard
+    }
+
+    /// Run `f` under the state lock and publish a changed state. The events are returned, to
+    /// be sent once no lock is held.
+    fn locked_defer<R>(&self, f: impl FnOnce(&mut Inner, u64, &mut Vec<Ev>) -> R) -> (R, Vec<Ev>) {
         let mut evs = Vec::new();
-        let result = {
-            let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-            self.inner.clear_poison();
-            let now = self.now_ms();
-            let result = f(&mut inner, now, &mut evs);
-            let state = inner.state();
-            if inner.last_state.as_ref() != Some(&state) {
-                inner.last_state = Some(state.clone());
-                evs.push(Ev::State(state));
-            }
-            result
-        };
+        let mut inner = self.lock_state();
+        let now = self.now_ms();
+        let result = f(&mut inner, now, &mut evs);
+        let state = inner.state();
+        if inner.last_state.as_ref() != Some(&state) {
+            inner.last_state = Some(state.clone());
+            evs.push(Ev::State(state));
+        }
+        (result, evs)
+    }
+
+    fn emit(&self, evs: Vec<Ev>) {
         for ev in evs {
             match ev {
                 Ev::State(s) => self.events.state(&s),
                 Ev::Stopped(s) => self.events.stopped(&s),
             }
         }
+    }
+
+    /// [`Self::locked_defer`], then send the events. No lock is held when they go out.
+    fn locked<R>(&self, f: impl FnOnce(&mut Inner, u64, &mut Vec<Ev>) -> R) -> R {
+        let (result, evs) = self.locked_defer(f);
+        self.emit(evs);
         result
     }
 
-    fn wanted(&self) -> (bool, bool) {
-        self.inner
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .wanted()
-    }
-
-    /// Close every stream that no lease needs. It never waits for an open in progress.
-    fn close_unwanted(&self) {
-        let (mic, system) = self.wanted();
-        for (source, want) in [(AudioSource::SystemAudio, system), (AudioSource::Mic, mic)] {
-            if !want && self.flag(source).swap(false, Ordering::SeqCst) {
+    /// Close every stream that no lease (and no pending start or resume) needs, and every stream
+    /// the backend reported lost. Runs under the device mutex; reads the leases under the state
+    /// lock just before each device call (lock order: device, then state).
+    fn reconcile(&self, dev: &mut DevState) {
+        for source in [AudioSource::SystemAudio, AudioSource::Mic] {
+            let lost = self.lost(source).swap(false, Ordering::SeqCst);
+            let wanted = {
+                let (mic, system) = self.lock_state().wanted();
+                match source {
+                    AudioSource::Mic => mic,
+                    AudioSource::SystemAudio => system,
+                }
+            };
+            if *dev.flag(source) && (lost || !wanted) {
+                // New grants need the device mutex, which this thread holds, so no lease can
+                // start to use this stream before it closes.
                 self.device.close(source);
+                *dev.flag(source) = false;
             }
         }
     }
 
-    /// Open the streams that the leases need. Only the thread with the pending start or resume
-    /// calls this, so a source never opens twice. A stream that is no longer needed when its
-    /// open returns (a `stop_all` ran meanwhile) closes again.
-    fn open_wanted(&self) -> Result<(), DeviceError> {
-        for source in [AudioSource::Mic, AudioSource::SystemAudio] {
-            let (mic, system) = self.wanted();
-            let want = match source {
-                AudioSource::Mic => mic,
-                AudioSource::SystemAudio => system,
+    /// Make the streams match the leases while `dirty` is set. Never waits for the device
+    /// mutex: if another thread holds it, that thread sees `dirty` before or after it lets go.
+    fn sync(&self) {
+        loop {
+            let mut dev = match self.dev.try_lock() {
+                Ok(dev) => dev,
+                Err(TryLockError::Poisoned(p)) => {
+                    self.dev.clear_poison();
+                    p.into_inner()
+                }
+                Err(TryLockError::WouldBlock) => return,
             };
-            if want && !self.flag(source).load(Ordering::SeqCst) {
+            while self.dirty.swap(false, Ordering::SeqCst) {
+                self.reconcile(&mut dev);
+            }
+            drop(dev);
+            if !self.dirty.load(Ordering::SeqCst) {
+                return;
+            }
+        }
+    }
+
+    fn request_sync(&self) {
+        self.dirty.store(true, Ordering::SeqCst);
+        self.sync();
+    }
+
+    /// Open, under the device mutex, every stream that the pending start or resume needs.
+    fn open_needed(&self, dev: &mut DevState) -> Result<(), DeviceError> {
+        for source in [AudioSource::Mic, AudioSource::SystemAudio] {
+            let wanted = {
+                let (mic, system) = self.lock_state().wanted();
+                match source {
+                    AudioSource::Mic => mic,
+                    AudioSource::SystemAudio => system,
+                }
+            };
+            if wanted && !*dev.flag(source) {
                 self.device.open(source)?;
-                self.flag(source).store(true, Ordering::SeqCst);
+                *dev.flag(source) = true;
             }
         }
         Ok(())
+    }
+
+    /// The device phase of a start or resume: take the device mutex (it waits only for a
+    /// bounded close or another device phase), open what is needed, then grant or refuse under
+    /// the state lock while the device mutex is still held, so the grant sees the true open
+    /// flags. Then close what is no longer needed, let the device mutex go and send the events.
+    fn device_phase<R>(
+        &self,
+        commit: impl FnOnce(&mut Inner, Result<(), DeviceError>, &DevState, &mut Vec<Ev>) -> R,
+    ) -> R {
+        let mut dev = self.lock_dev();
+        let opened = self.open_needed(&mut dev);
+        let (result, evs) = self.locked_defer(|inner, _, evs| commit(inner, opened, &dev, evs));
+        self.dirty.store(true, Ordering::SeqCst);
+        while self.dirty.swap(false, Ordering::SeqCst) {
+            self.reconcile(&mut dev);
+        }
+        drop(dev);
+        self.sync();
+        self.emit(evs);
+        result
     }
 
     fn set_paused(&self, lease_id: LeaseNo, paused: bool) -> Result<CaptureState, CaptureError> {
@@ -601,44 +719,45 @@ impl CaptureCore {
                 inner.pending_lost = false;
                 guard.mine.set(Some(lease_id));
             }
-            Ok(resumes)
+            Ok((resumes, inner.state()))
         });
-        let resumes = match result {
-            Ok(resumes) => resumes,
+        let (resumes, state) = match result {
+            Ok(r) => r,
             Err(e) => {
-                self.close_unwanted();
+                self.request_sync();
                 return Err(e);
             }
         };
-        let opened = if resumes { self.open_wanted() } else { Ok(()) };
-        let result = self.locked(|inner, _, _| {
-            if resumes {
-                guard.mine.set(None);
-                match inner.pending.take() {
-                    Some(Pending::Resume(id)) if id == lease_id => {}
-                    // A stop_all ran while the device opened; the open slot is free again.
-                    Some(Pending::Cancelled) => return Err(CaptureError::UnknownLease),
-                    other => {
-                        inner.pending = other;
-                        return Err(CaptureError::UnknownLease);
-                    }
-                }
-                let opened = match opened {
-                    Ok(()) if inner.pending_lost => Err(DEVICE_LOST),
-                    other => other,
-                };
-                if let Err(e) = opened {
-                    // The streams did not reopen: keep the session paused.
-                    if let Some(rec) = inner.find(lease_id) {
-                        rec.paused = true;
-                    }
-                    return Err(CaptureError::Device(e));
+        if !resumes {
+            self.request_sync();
+            return Ok(state);
+        }
+        self.device_phase(|inner, opened, dev, _| {
+            guard.mine.set(None);
+            match inner.pending.take() {
+                Some(Pending::Resume(id)) if id == lease_id => {}
+                // A stop_all ran while the device opened; the open slot is free again.
+                Some(Pending::Cancelled) => return Err(CaptureError::UnknownLease),
+                other => {
+                    inner.pending = other;
+                    return Err(CaptureError::UnknownLease);
                 }
             }
+            let needs_system = inner.find(lease_id).is_some_and(|r| r.others_track);
+            let opened = match opened {
+                Ok(()) if inner.pending_lost => Err(DEVICE_LOST),
+                Ok(()) if !dev.mic_open || (needs_system && !dev.system_open) => Err(DEVICE_LOST),
+                other => other,
+            };
+            if let Err(e) = opened {
+                // The streams did not reopen: keep the session paused.
+                if let Some(rec) = inner.find(lease_id) {
+                    rec.paused = true;
+                }
+                return Err(CaptureError::Device(e));
+            }
             Ok(inner.state())
-        });
-        self.close_unwanted();
-        result
+        })
     }
 }
 
@@ -672,25 +791,25 @@ impl Drop for PendingGuard<'_> {
         {
             // No events here: a second panic in a sink would abort the process. The next
             // call publishes the changed state.
-            let mut inner = core.inner.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut inner = core.lock_state();
             // While `mine` is set, the pending entry (if any) is this thread's: there is at
             // most one, and only this thread takes it back.
-            match inner.pending.take() {
-                Some(Pending::Resume(resumed)) if resumed == id => {
+            if let Some(Pending::Resume(resumed)) = inner.pending.take() {
+                if resumed == id {
                     if let Some(rec) = inner.find(id) {
                         rec.paused = true;
                     }
                 }
-                // This thread's start, or its start or resume that stop_all cancelled.
-                _ => {}
             }
         }
-        // Close every stream that no lease needs, also one that a panicking open opened.
-        let (mic, system) = core.wanted();
+        // Close every stream that no lease needs, also one that a panicking open opened but
+        // did not mark. The device mutex was let go when the open unwound.
+        let mut dev = core.lock_dev();
+        let (mic, system) = core.lock_state().wanted();
         for (source, want) in [(AudioSource::SystemAudio, system), (AudioSource::Mic, mic)] {
             if !want {
-                core.flag(source).store(false, Ordering::SeqCst);
                 core.device.close(source);
+                *dev.flag(source) = false;
             }
         }
     }
@@ -747,12 +866,18 @@ impl CaptureService for CaptureCore {
             // Armed before the events of this section go out (N14).
             guard.mine.set(Some(lease.id));
             Ok(lease)
-        })?;
+        });
+        let lease = match lease {
+            Ok(lease) => lease,
+            Err(e) => {
+                self.request_sync();
+                return Err(e);
+            }
+        };
 
-        // The device opens with no lock held (Handy `managers/audio.rs:495-500`).
-        let opened = self.open_wanted();
-
-        let result = self.locked(|inner, _, evs| {
+        // The device phase holds only the device mutex across the open, never the state lock
+        // (Handy `managers/audio.rs:495-500`).
+        self.device_phase(|inner, opened, dev, evs| {
             guard.mine.set(None);
             let (rec, overlay, preempt) = match inner.pending.take() {
                 Some(Pending::Start {
@@ -774,6 +899,13 @@ impl CaptureService for CaptureCore {
             if inner.pending_lost {
                 return Err(CaptureError::Device(DEVICE_LOST));
             }
+            // Invariant: a lease is granted only on open streams, checked under the device
+            // mutex, so no close can run between this check and the grant.
+            let open = dev.mic_open && (!rec.others_track || dev.system_open);
+            debug_assert!(open, "a pending start must find its streams open");
+            if !open {
+                return Err(CaptureError::Device(DEVICE_LOST));
+            }
             if let Some(id) = preempt {
                 if let Some(hf) = inner.remove(id) {
                     evs.push(hf.stopped(StopReason::Preempted));
@@ -786,9 +918,7 @@ impl CaptureService for CaptureCore {
                 (false, true) => return Err(CaptureError::MicBusy),
             }
             Ok(lease)
-        });
-        self.close_unwanted();
-        result
+        })
     }
 
     fn stop(&self, lease_id: LeaseNo) -> Result<CaptureState, CaptureError> {
@@ -798,7 +928,7 @@ impl CaptureService for CaptureCore {
             evs.push(rec.stopped(StopReason::Manual));
             Ok(inner.state())
         });
-        self.close_unwanted();
+        self.request_sync();
         result
     }
 
@@ -815,7 +945,7 @@ impl CaptureService for CaptureCore {
             inner.expire(now, evs);
             inner.state()
         });
-        self.close_unwanted();
+        self.request_sync();
         state
     }
 
@@ -834,12 +964,9 @@ impl CaptureService for CaptureCore {
             }
             inner.state()
         });
-        // Close both streams without a condition and without waiting for an open in
-        // progress; that open closes its stream again when it returns.
-        for source in [AudioSource::SystemAudio, AudioSource::Mic] {
-            self.flag(source).store(false, Ordering::SeqCst);
-            self.device.close(source);
-        }
+        // MB-05: the decision above never waits for the device. The streams close now if the
+        // device mutex is free; else its holder closes them when its device call returns.
+        self.request_sync();
         state
     }
 
@@ -852,7 +979,7 @@ impl CaptureService for CaptureCore {
                 .filter_map(|rec| rec.deadline().map(|(at, _)| at))
                 .min()
         });
-        self.close_unwanted();
+        self.request_sync();
         next
     }
 }
