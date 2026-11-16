@@ -1,8 +1,9 @@
 //! Win32 glue for the Windows HotkeyService (#7). Compiled on Windows only.
 //!
 //! One dedicated thread owns the `WH_KEYBOARD_LL` hook and runs its message loop (CAP-40a).
-//! The callback calls [`HookCore::handle`] (O(1), no lock, no allocation on the hot path)
-//! and returns. A 1 min `SetTimer` tick lets [`HookSupervisor`] install the hook again every
+//! The callback calls [`HookCore::handle`] (O(1), no lock, no I/O; the unbounded channel send
+//! may allocate a block now and then) and returns. A mask replay is posted to the loop, so
+//! `SendInput` never runs inside the callback. A 1 min `SetTimer` tick lets [`HookSupervisor`] install the hook again every
 //! 10 min, and a suspend/resume notification installs it again after resume (CAP-40b). A
 //! foreground WinEvent hook sends the foreground process id to a second thread, which reads
 //! the token elevation and feeds [`ElevationGate`] (CAP-42).
@@ -35,7 +36,8 @@ use windows_sys::Win32::System::Threading::{
 };
 use windows_sys::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
+    GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
+    KEYEVENTF_KEYUP,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, GetWindowThreadProcessId, KillTimer,
@@ -46,8 +48,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::{
-    unavailable, Elevation, ElevationGate, HookCore, HookInstaller, HookSignal, HookSupervisor,
-    KeyEvent, LatencyRecorder, TalkKey, Verdict,
+    reinstall_signal, unavailable, Elevation, ElevationGate, HookCore, HookInstaller, HookSignal,
+    HookSupervisor, KeyEvent, LatencyRecorder, TalkKey, Verdict,
 };
 use crate::clock::{MonotonicClock, SystemClock};
 use crate::error::CoreResult;
@@ -57,6 +59,8 @@ use crate::hotkey::HotkeyService;
 const TICK_MS: u32 = 60_000;
 /// Posted to the hook thread on resume from sleep.
 const WM_APP_RESUME: u32 = WM_APP + 1;
+/// Posted to the hook thread by the callback: replay a masked key-up (`wparam` = the key).
+const WM_APP_REPLAY: u32 = WM_APP + 2;
 /// Samples kept for the p99.
 const LATENCY_SAMPLES: usize = 10_000;
 
@@ -69,6 +73,9 @@ thread_local! {
 }
 
 /// The Windows R1 HotkeyService (CAP-40a, CAP-40b, CAP-41, CAP-42).
+///
+/// TODO(#14): the capture lifecycle starts this service and calls `set_hands_free`; until then
+/// nothing in the app creates it.
 pub struct WindowsHotkeyService {
     talk: TalkKey,
     signals: Sender<HookSignal>,
@@ -148,7 +155,11 @@ impl HotkeyService for WindowsHotkeyService {
             .take();
         if let Some(r) = running {
             // SAFETY: posting a message to a thread id has no memory-safety requirement.
-            unsafe { PostThreadMessageW(r.thread_id, WM_QUIT, 0, 0) };
+            if unsafe { PostThreadMessageW(r.thread_id, WM_QUIT, 0, 0) } == 0 {
+                // The thread did not get the quit message: do not wait on it forever.
+                *self.running.lock().unwrap_or_else(PoisonError::into_inner) = Some(r);
+                return Err(unavailable("stop_post_failed"));
+            }
             let _ = r.join.join();
         }
         Ok(())
@@ -173,12 +184,12 @@ struct ThreadCtx {
     recorder: Arc<LatencyRecorder>,
 }
 
-struct Win32Installer {
-    hook: HHOOK,
-}
+struct Win32Installer;
 
 impl HookInstaller for Win32Installer {
-    fn install(&mut self) -> Result<(), &'static str> {
+    type Handle = HHOOK;
+
+    fn install(&mut self) -> Result<HHOOK, &'static str> {
         // SAFETY: `ll_keyboard_proc` has the HOOKPROC signature; a null module name returns
         // the handle of this executable.
         let hook = unsafe {
@@ -192,16 +203,12 @@ impl HookInstaller for Win32Installer {
         if hook.is_null() {
             return Err("set_windows_hook_failed");
         }
-        self.hook = hook;
-        Ok(())
+        Ok(hook)
     }
 
-    fn uninstall(&mut self) {
-        if !self.hook.is_null() {
-            // SAFETY: `self.hook` came from SetWindowsHookExW and is removed once.
-            unsafe { UnhookWindowsHookEx(self.hook) };
-            self.hook = null_mut();
-        }
+    fn uninstall(&mut self, hook: HHOOK) {
+        // SAFETY: `hook` came from SetWindowsHookExW; the supervisor removes each one once.
+        unsafe { UnhookWindowsHookEx(hook) };
     }
 }
 
@@ -224,7 +231,7 @@ fn hook_thread(ctx: ThreadCtx, ready: SyncSender<CoreResult<u32>>) {
         ));
     });
 
-    let mut supervisor = HookSupervisor::new(Win32Installer { hook: null_mut() });
+    let mut supervisor = HookSupervisor::new(Win32Installer);
     if let Err(e) = supervisor.start(clock.now()) {
         CORE.with(|c| c.borrow_mut().take());
         let _ = ready.send(Err(e));
@@ -263,7 +270,38 @@ fn hook_thread(ctx: ThreadCtx, ready: SyncSender<CoreResult<u32>>) {
             if status == 0 { power } else { null_mut() },
         )
     };
+    if timer == 0 {
+        // Without the tick there is no periodic reinstall (CAP-40b): refuse to start.
+        // SAFETY: each handle came from the matching register call above.
+        unsafe {
+            if !foreground_hook.is_null() {
+                UnhookWinEvent(foreground_hook);
+            }
+            if !power.is_null() {
+                PowerUnregisterSuspendResumeNotification(power as isize);
+            }
+        }
+        supervisor.stop();
+        FOREGROUND.with(|f| f.borrow_mut().take());
+        CORE.with(|c| c.borrow_mut().take());
+        let _ = ready.send(Err(unavailable("set_timer_failed")));
+        if let Some((tx, join)) = elevation {
+            drop(tx);
+            let _ = join.join();
+        }
+        return;
+    }
     let _ = ready.send(Ok(thread_id));
+    if power.is_null() {
+        send_signal(HookSignal::HookFailed {
+            reason: "resume_notification_failed",
+        });
+    }
+    if foreground_hook.is_null() {
+        send_signal(HookSignal::HookFailed {
+            reason: "foreground_hook_failed",
+        });
+    }
 
     loop {
         // SAFETY: `msg` is a valid out-pointer; a null HWND reads thread messages too.
@@ -272,17 +310,29 @@ fn hook_thread(ctx: ThreadCtx, ready: SyncSender<CoreResult<u32>>) {
         if got == 0 || got == -1 || msg.message == WM_QUIT {
             break;
         }
-        let reinstalled = match msg.message {
-            WM_TIMER if msg.hwnd.is_null() => supervisor.on_timer(clock.now()).unwrap_or(false),
-            WM_APP_RESUME => supervisor.on_resume(clock.now()).is_ok(),
+        match msg.message {
+            WM_TIMER if msg.hwnd.is_null() => {
+                let result = supervisor.on_timer(clock.now());
+                if matches!(result, Ok(true)) {
+                    reconcile_passed_keys();
+                }
+                if let Some(signal) = reinstall_signal(&result) {
+                    send_signal(signal);
+                }
+            }
+            WM_APP_RESUME => {
+                // A hold cannot last through sleep: end it before the new hook goes in.
+                with_core(HookCore::on_resume);
+                let result = supervisor.on_resume(clock.now()).map(|()| true);
+                if let Some(signal) = reinstall_signal(&result) {
+                    send_signal(signal);
+                }
+            }
+            WM_APP_REPLAY => replay_with_mask(msg.wParam as u32),
             _ => {
                 // SAFETY: `msg` came from GetMessageW.
                 unsafe { DispatchMessageW(&msg) };
-                false
             }
-        };
-        if reinstalled {
-            after_reinstall();
         }
     }
 
@@ -307,17 +357,27 @@ fn hook_thread(ctx: ThreadCtx, ready: SyncSender<CoreResult<u32>>) {
     }
 }
 
-/// After a reinstall, read the physical key state again (a key-up may have been lost while
-/// the old hook was gone) and report the reinstall.
-fn after_reinstall() {
+/// Run `f` on the hook state of this thread, if it is there and not in use.
+fn with_core(f: impl FnOnce(&mut HookCore)) {
     CORE.with(|c| {
         if let Ok(mut core) = c.try_borrow_mut() {
             if let Some(core) = core.as_mut() {
-                // SAFETY: GetAsyncKeyState takes any virtual-key code.
-                core.reconcile(|vk| unsafe { GetAsyncKeyState(vk as i32) } as u16 & 0x8000 != 0);
-                core.send(HookSignal::HookReinstalled);
+                f(core);
             }
         }
+    });
+}
+
+fn send_signal(signal: HookSignal) {
+    with_core(|core| core.send(signal));
+}
+
+/// After a reinstall, read the key state again for the keys whose key-down reached Windows
+/// (see [`HookCore::reconcile`]; swallowed keys are skipped).
+fn reconcile_passed_keys() {
+    with_core(|core| {
+        // SAFETY: GetAsyncKeyState takes any virtual-key code.
+        core.reconcile(|vk| unsafe { GetAsyncKeyState(vk as i32) } as u16 & 0x8000 != 0);
     });
 }
 
@@ -338,7 +398,9 @@ unsafe extern "system" fn ll_keyboard_proc(code: i32, wparam: WPARAM, lparam: LP
         match verdict {
             Some(Verdict::Swallow) => return 1,
             Some(Verdict::SwallowAndReplay { vk }) => {
-                replay_with_mask(vk);
+                // Replay after the callback returns, on the hook thread's loop.
+                // SAFETY: posting a message to this thread has no memory requirement.
+                unsafe { PostThreadMessageW(GetCurrentThreadId(), WM_APP_REPLAY, vk as usize, 0) };
                 return 1;
             }
             _ => {}
@@ -357,7 +419,12 @@ fn replay_with_mask(vk: u32) {
             ki: KEYBDINPUT {
                 wVk: vk as u16,
                 wScan: 0,
-                dwFlags: if up { KEYEVENTF_KEYUP } else { 0 },
+                dwFlags: (if up { KEYEVENTF_KEYUP } else { 0 })
+                    | (if is_extended(vk) {
+                        KEYEVENTF_EXTENDEDKEY
+                    } else {
+                        0
+                    }),
                 time: 0,
                 dwExtraInfo: 0,
             },
@@ -376,6 +443,11 @@ fn replay_with_mask(vk: u32) {
             std::mem::size_of::<INPUT>() as i32,
         )
     };
+}
+
+/// The Win keys are extended keys.
+fn is_extended(vk: u32) -> bool {
+    vk == super::vk::LWIN || vk == super::vk::RWIN
 }
 
 unsafe extern "system" fn on_foreground(
@@ -418,8 +490,7 @@ fn spawn_elevation_worker(signals: Sender<HookSignal>) -> Option<(Sender<u32>, J
         .name("bottle-hotkey-elevation".into())
         .spawn(move || {
             // SAFETY: GetCurrentProcess returns a pseudo handle that needs no close.
-            let self_elevated =
-                token_elevation(unsafe { GetCurrentProcess() }) == Elevation::Elevated;
+            let self_elevated = token_elevated(unsafe { GetCurrentProcess() }) == Some(true);
             let mut gate = ElevationGate::new(self_elevated);
             for pid in rx {
                 if let Some(signal) = gate.on_foreground(pid, process_elevation(pid)) {
@@ -436,20 +507,21 @@ fn process_elevation(pid: u32) -> Elevation {
     unsafe {
         let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
         if process.is_null() {
-            return Elevation::Unknown;
+            return Elevation::from_probe(false, None);
         }
-        let e = token_elevation(process);
+        let e = Elevation::from_probe(true, token_elevated(process));
         CloseHandle(process);
         e
     }
 }
 
-fn token_elevation(process: HANDLE) -> Elevation {
+/// The token elevation of `process`, or `None` when the token query is refused.
+fn token_elevated(process: HANDLE) -> Option<bool> {
     // SAFETY: valid out-pointers and sizes; the token handle is closed once.
     unsafe {
         let mut token: HANDLE = null_mut();
         if OpenProcessToken(process, TOKEN_QUERY, &mut token) == 0 {
-            return Elevation::Unknown;
+            return None;
         }
         let mut info = TOKEN_ELEVATION { TokenIsElevated: 0 };
         let mut len = 0u32;
@@ -461,10 +533,6 @@ fn token_elevation(process: HANDLE) -> Elevation {
             &mut len,
         );
         CloseHandle(token);
-        match (ok != 0, info.TokenIsElevated != 0) {
-            (false, _) => Elevation::Unknown,
-            (true, true) => Elevation::Elevated,
-            (true, false) => Elevation::NotElevated,
-        }
+        (ok != 0).then_some(info.TokenIsElevated != 0)
     }
 }

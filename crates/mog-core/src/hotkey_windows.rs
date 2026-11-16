@@ -274,8 +274,10 @@ impl HookFilter {
         (verdict, signal)
     }
 
-    /// After a reinstall or a resume, read the physical key state again. If the talk key is
-    /// active but no talk key is down, the key-up was lost: end the PTT.
+    /// After a reinstall, read the key state again for the keys whose key-down reached
+    /// Windows. A key the hook swallowed is skipped: Windows does not update its async key
+    /// state, so "up" proves nothing (a stuck PTT is bounded by the 120 s hold stop). If a
+    /// passed key of the talk key (the first key of Ctrl+Win) is up, the PTT ends.
     pub fn reconcile(
         &mut self,
         physically_down: impl Fn(u32) -> bool,
@@ -283,7 +285,7 @@ impl HookFilter {
     ) -> Option<HookSignal> {
         for k in 0..256u32 {
             let i = k as usize;
-            if self.pressed[i] && !physically_down(k) {
+            if self.pressed[i] && !self.swallowed[i] && !physically_down(k) {
                 self.pressed[i] = false;
                 self.swallowed[i] = false;
                 self.mask_on_up[i] = false;
@@ -300,7 +302,13 @@ impl HookFilter {
 impl HookFilter {
     /// The device resumed from sleep. A hold cannot last through sleep, so an active PTT
     /// ends and all key state is cleared.
-    pub fn on_resume(&mut self, _at: Duration) -> Option<HookSignal> {
+    pub fn on_resume(&mut self, at: Duration) -> Option<HookSignal> {
+        self.pressed = [false; 256];
+        self.swallowed = [false; 256];
+        self.mask_on_up = [false; 256];
+        if std::mem::take(&mut self.talk_active) {
+            return Some(HookSignal::TalkUp { at });
+        }
         None
     }
 }
@@ -309,7 +317,11 @@ impl HookFilter {
 pub fn reinstall_signal(result: &CoreResult<bool>) -> Option<HookSignal> {
     match result {
         Ok(true) => Some(HookSignal::HookReinstalled),
-        _ => None,
+        Ok(false) => None,
+        Err(CoreError::Unavailable { reason, .. }) => Some(HookSignal::HookFailed { reason }),
+        Err(_) => Some(HookSignal::HookFailed {
+            reason: "reinstall_failed",
+        }),
     }
 }
 
@@ -318,9 +330,10 @@ impl Elevation {
     /// the token elevation, or `None` when the token query was refused.
     pub fn from_probe(opened: bool, token_elevated: Option<bool>) -> Self {
         match (opened, token_elevated) {
-            (true, Some(true)) => Elevation::Elevated,
+            // A refused token query on a process that opened: most likely elevated.
+            (true, Some(true)) | (true, None) => Elevation::Elevated,
             (true, Some(false)) => Elevation::NotElevated,
-            _ => Elevation::Unknown,
+            (false, _) => Elevation::Unknown,
         }
     }
 }
@@ -435,13 +448,14 @@ impl<I: HookInstaller> HookSupervisor<I> {
         }
     }
 
-    /// Remove the old hook, then install a new one. Windows calls a low-level hook on the
-    /// installing thread only, so no callback runs between the two calls.
+    /// Install a new hook, then remove the old one. If the install fails, the old hook stays.
+    /// Windows calls a low-level hook on the installing thread only, so no callback runs
+    /// between the two calls.
     fn reinstall(&mut self, now: Duration) -> CoreResult<()> {
-        if let Some(h) = self.current.take() {
-            self.installer.uninstall(h);
+        let new = self.installer.install().map_err(unavailable)?;
+        if let Some(old) = self.current.replace(new) {
+            self.installer.uninstall(old);
         }
-        self.current = Some(self.installer.install().map_err(unavailable)?);
         self.policy.installed(now);
         Ok(())
     }

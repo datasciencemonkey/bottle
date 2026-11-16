@@ -17,21 +17,32 @@ tooltip shows. Spike SP-03 (#5) is still open.
 1. The decision logic is platform-neutral code in `crates/mog-core/src/hotkey_windows.rs`. Tests run it on
    every OS. The Win32 glue is in `hotkey_windows/win32.rs` and builds only on Windows.
 2. One thread owns the hook and its message loop. The callback runs `HookCore::handle`: a fixed-size
-   filter, one channel send and one latency sample. It takes no lock and does no I/O.
+   filter, one channel send and one latency sample. It takes no lock and does no I/O. The unbounded
+   channel send can allocate a block now and then. A mask replay is posted to the loop, so `SendInput`
+   never runs inside the callback.
 3. The filter swallows the key-down that completes the talk key, its auto-repeats and its key-up. It
    swallows Esc while the talk key is held or hands-free capture is on. Esc in a meeting session passes.
 4. The filter swallows a key-up only when it swallowed the key-down, so no key sticks in the focused app.
 5. Injected events (`LLKHF_INJECTED`) pass. Bottle's own paste and the mask replay must reach the app.
 6. For the Ctrl+Win talk key, a Win key that went down before the chord gets a masked key-up: a tap of
-   `vkE8`, then the Win key-up, all injected. This stops the Start menu from opening.
-7. A 1 min timer drives `HookSupervisor`. It removes the old hook and installs a new one every 10 min. A
-   suspend/resume notification does the same on resume. After each reinstall, the code reads the physical
-   key state with `GetAsyncKeyState`. A talk key that is no longer down ends the PTT (a lost key-up).
-8. An install failure gives `CoreError::Unavailable { component: "R1", reason }`. The next tick tries again.
-9. Elevated window: a foreground WinEvent hook sends the process ID to a second thread. That thread reads
-   the token elevation. If Bottle is not elevated and the foreground process is, the core sends
-   `TalkKeyBlocked` once per process ID per run. An unknown elevation (access denied) sends nothing.
-10. Signals name only the talk key, Esc or "another key". No signal, error or log names another key.
+   `vkE8`, then the Win key-up, all injected. This stops the Start menu from opening. When Win goes
+   down first, Windows saw the Win key-down, so a key pressed during that hold can fire a Win+key
+   shortcut. The default talk key (Right-Alt) does not have this problem.
+7. A 1 min timer drives `HookSupervisor`. Every 10 min it installs a new hook and then removes the old
+   one, so there is no gap. If the install fails, the old hook stays.
+8. After a timer reinstall, the code reads `GetAsyncKeyState` only for keys whose key-down reached
+   Windows. Windows does not update the async state of a key that the hook swallowed, so the code does
+   not end a PTT from that state. A lost key-up of a swallowed talk key is bounded by the 120 s hold stop.
+9. On resume, an active PTT ends and all key state clears (a hold cannot last through sleep), then the
+   hook is installed again. Windows can send two resume events; the second one only installs again.
+10. A failure at start (hook, thread, or the 1 min timer) gives `CoreError::Unavailable { component: "R1",
+    reason }`. A later failure (reinstall, resume notification, foreground hook) sends
+    `HookSignal::HookFailed { reason }`. The next tick tries a failed reinstall again.
+11. Elevated window: a foreground WinEvent hook sends the process ID to a second thread. That thread reads
+    the token elevation. If Bottle is not elevated and the foreground process is, the core sends
+    `TalkKeyBlocked` once per process ID per run. A process that opens but refuses the token query counts
+    as elevated. A process that does not open counts as unknown and sends nothing.
+12. Signals name only the talk key, Esc or "another key". No signal, error or log names another key.
 
 ## Consequences
 
