@@ -5,18 +5,127 @@
  *
  * Priority (4.8, UX-01a): paused > capture > error > success > answering > processing >
  * dozing > idle. A paused or dozing MOG is `sleeping`; capture is `listening`. The error and
- * success windows end at `errorUntil` and `successUntil` (the caller sets 3 s and 2.5 s).
+ * success windows end at `errorUntil` and `successUntil` (3 s and 2.5 s; 1.2 s after Inserted).
+ *
+ * The brain owns the mood; view windows only render it (UX-01b). See ADR 0018 for the inputs,
+ * the agent `set_mood` slot (UX-41) and the 400 ms hold (UX-05a).
  */
-import type { Mood, MoodMapper } from '../../shared/interfaces';
+import type { CaptureState, Mood, MogId, MoodMapper } from '../../shared/interfaces';
 
 type MoodInput = Parameters<MoodMapper>[0];
 type MoodOutput = ReturnType<MoodMapper>;
+type Overlays = MoodOutput['overlays'];
 
-function pick(s: MoodInput, t: number): Mood {
+/** The 7 moods of the Rive file (UX-02a). */
+export const MOODS: readonly Mood[] = [
+  'idle',
+  'listening',
+  'processing',
+  'answering',
+  'success',
+  'error',
+  'sleeping',
+];
+
+/** 4.8: error shows 3 s, success 2.5 s, success after an Inserted (UC1) 1.2 s. */
+export const ERROR_MS = 3000;
+export const SUCCESS_MS = 2500;
+export const INSERTED_MS = 1200;
+/** UX-05a: each mood holds for 400 ms or more. */
+export const MOOD_HOLD_MS = 400;
+/** 4.8: a chip offered below this router confidence shows `attention`. */
+const CHIP_ATTENTION_BELOW = 0.7;
+
+/** Region A (4.8): the MOG lifecycle. TODO(#98): take the MogManager lifecycle type when #98 adds it. */
+export type Lifecycle =
+  'defined' | 'starting' | 'ready' | 'dozing' | 'paused' | 'login_required' | 'offline' | 'stopped';
+
+/** Region C (4.8): the request phases that pick a mood (C0-C19, plus Inserted for UC1). */
+export const REQUEST_PHASES = [
+  'utterance',
+  'transcribing',
+  'cleaning',
+  'routing',
+  'preview',
+  'agent_turn',
+  'acknowledged',
+  'working',
+  'rate_limited',
+  'soft_notice',
+  'partial',
+  'blurb_reveal',
+  'chip_offered',
+  'needs_input',
+  'ask_uncertain',
+  'memory_answer',
+  'completed',
+  'inserted',
+  'failed',
+  'gave_up',
+  'cancelled',
+  'late_finished',
+  'queued_offline',
+] as const;
+export type RequestPhase = (typeof REQUEST_PHASES)[number];
+
+/** One request of this MOG. `at` is when the request entered `phase` (ms, brain clock). */
+export interface RequestView {
+  phase: RequestPhase;
+  at: number;
+  /** A failure the user must act on (4.8: `attention` if the user must act). */
+  userMustAct?: boolean;
+  /** Router confidence for `chip_offered`. Missing means low. */
+  confidence?: number;
+}
+
+/** Region A: the MOG status and its badges. `since` is when the MOG entered `lifecycle`. */
+export interface MogStatus {
+  lifecycle: Lifecycle;
+  since: number;
+  hop?: string;
+  localOnly?: boolean;
+}
+
+/**
+ * Everything the mood depends on. TODO(#4): `capture` comes from the CaptureService.
+ * TODO(#39): `requests` come from the OperationTracker and the pipeline.
+ * TODO(#113): `agentMood` comes from the main agent `set_mood` tool.
+ */
+export interface MoodSources {
+  mog: MogStatus;
+  capture: CaptureState;
+  requests: readonly RequestView[];
+  /** The last `set_mood` of the main agent for this MOG (UX-41). */
+  agentMood?: Mood;
+}
+
+const PROCESSING: ReadonlySet<RequestPhase> = new Set([
+  'utterance',
+  'transcribing',
+  'cleaning',
+  'routing',
+  'preview',
+  'agent_turn',
+  'acknowledged',
+  'working',
+  'rate_limited',
+  'soft_notice',
+]);
+const ANSWERING: ReadonlySet<RequestPhase> = new Set(['partial', 'blurb_reveal']);
+const SUCCESS_FOR: Partial<Record<RequestPhase, number>> = {
+  completed: SUCCESS_MS,
+  memory_answer: SUCCESS_MS,
+  inserted: INSERTED_MS,
+};
+const ERROR_FOR: ReadonlySet<RequestPhase> = new Set(['failed', 'gave_up']);
+
+function pick(s: MoodInput, t: number, agentMood?: Mood): Mood {
   if (s.paused) return 'sleeping';
   if (s.ownsCapture) return 'listening';
   if (s.errorUntil !== undefined && s.errorUntil > t) return 'error';
   if (s.successUntil !== undefined && s.successUntil > t) return 'success';
+  // UX-41: the agent mood ranks below capture, error and success. UX-07: never `listening`.
+  if (agentMood !== undefined && agentMood !== 'listening') return agentMood;
   if (s.answering) return 'answering';
   if (s.processing) return 'processing';
   if (s.dozing) return 'sleeping';
@@ -25,11 +134,86 @@ function pick(s: MoodInput, t: number): Mood {
 
 /**
  * Build the MoodMapper with a clock. The result depends only on the input and `now()`.
- * TODO(#9): hold times, the overlay rules of 4.8 and the agent `set_mood` tool.
+ * Overlays are not in the 4.7 input, so this form returns none; `mapMood` derives them.
  */
 export function createMoodMapper(now: () => number = Date.now): MoodMapper {
   return (s: MoodInput): MoodOutput => ({
     mood: pick(s, now()),
     overlays: { attention: false, recording: false, offline: false, localOnly: false },
   });
+}
+
+const latest = (a: number | undefined, b: number): number => (a === undefined ? b : Math.max(a, b));
+
+/** UX-07: only the owner of an open PTT or hands-free capture is `listening`. */
+function ownsListeningCapture(mogId: MogId, c: CaptureState): boolean {
+  return (
+    c.owner === mogId && c.recording && !c.paused && (c.mode === 'ptt' || c.mode === 'hands_free')
+  );
+}
+
+/**
+ * UX-01a: the mood and overlays of one MOG, a pure function of its status, the capture state
+ * and its request states at time `now`. The caller applies `holdMood` before it renders.
+ */
+export function mapMood(mogId: MogId, src: MoodSources, now: number): MoodOutput {
+  const { mog, capture, requests } = src;
+  const input: MoodInput = {
+    paused: mog.lifecycle === 'paused',
+    ownsCapture: ownsListeningCapture(mogId, capture),
+    answering: false,
+    processing: false,
+    dozing: mog.lifecycle === 'dozing',
+  };
+  let attention = false;
+  if (mog.lifecycle === 'login_required') {
+    input.errorUntil = mog.since + ERROR_MS;
+    attention = true;
+  }
+  for (const r of requests) {
+    if (PROCESSING.has(r.phase)) input.processing = true;
+    if (ANSWERING.has(r.phase)) input.answering = true;
+    const ok = SUCCESS_FOR[r.phase];
+    if (ok !== undefined) input.successUntil = latest(input.successUntil, r.at + ok);
+    if (ERROR_FOR.has(r.phase)) {
+      input.errorUntil = latest(input.errorUntil, r.at + ERROR_MS);
+      if (r.userMustAct) attention = true;
+    }
+    if (r.phase === 'needs_input' || r.phase === 'ask_uncertain') attention = true;
+    if (r.phase === 'chip_offered' && !((r.confidence ?? 0) >= CHIP_ATTENTION_BELOW)) {
+      attention = true;
+    }
+  }
+  const overlays: Overlays = {
+    attention,
+    recording:
+      capture.owner === mogId && capture.mode === 'session' && capture.recording && !capture.paused,
+    offline: mog.lifecycle === 'offline',
+    localOnly: mog.localOnly === true,
+  };
+  if (mog.hop !== undefined) overlays.hop = mog.hop;
+  return { mood: pick(input, now, src.agentMood), overlays };
+}
+
+/** The mood a MOG shows and when it started showing. */
+export interface HeldMood {
+  mood: Mood;
+  since: number;
+}
+
+/**
+ * UX-05a: keep the shown mood for `MOOD_HOLD_MS` before a change. When a change must wait,
+ * `recheckAt` says when to call again. `listening` shows at once so key-down feedback stays
+ * under 100 ms (UX-05b, ADR 0018).
+ */
+export function holdMood(
+  prev: HeldMood | undefined,
+  target: Mood,
+  now: number,
+): { shown: HeldMood; recheckAt?: number } {
+  if (!prev) return { shown: { mood: target, since: now } };
+  if (prev.mood === target) return { shown: prev };
+  const end = prev.since + MOOD_HOLD_MS;
+  if (target === 'listening' || now >= end) return { shown: { mood: target, since: now } };
+  return { shown: prev, recheckAt: end };
 }

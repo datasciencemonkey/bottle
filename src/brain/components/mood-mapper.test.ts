@@ -1,4 +1,4 @@
-import type { CaptureState, Mood } from '../../shared/interfaces';
+import type { CaptureState, Mood, MoodMapper } from '../../shared/interfaces';
 import {
   createMoodMapper,
   ERROR_MS,
@@ -135,7 +135,12 @@ const req = (phase: RequestPhase, extra: Partial<RequestView> = {}): RequestView
   ...extra,
 });
 const withReq = (r: RequestView): MoodSources => ({ ...quiet, requests: [r] });
-const off = { attention: false, recording: false, offline: false, localOnly: false };
+const off: ReturnType<MoodMapper>['overlays'] = {
+  attention: false,
+  recording: false,
+  offline: false,
+  localOnly: false,
+};
 
 /** Every row of the 4.8 table: pipeline or capture state -> mood and overlay. */
 const ROWS: { row: string; src: MoodSources; mood: Mood; overlays?: Partial<typeof off> }[] = [
@@ -374,7 +379,12 @@ describe('T11 mapMood (#9, 4.8 table)', () => {
   });
 
   it('[UX-07] a capture with no owner, a closed mic or a paused capture is not listening', () => {
-    const { owner: _owner, ...noOwner } = ptt;
+    const noOwner: CaptureState = {
+      mode: 'ptt',
+      recording: true,
+      paused: false,
+      othersTrack: 'off',
+    };
     expect(mapMood(A, { ...quiet, capture: noOwner }, T).mood).toBe('idle');
     expect(mapMood(A, { ...quiet, capture: { ...ptt, recording: false } }, T).mood).toBe('idle');
     expect(mapMood(A, { ...quiet, capture: { ...ptt, paused: true } }, T).mood).toBe('idle');
