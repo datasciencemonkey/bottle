@@ -1,0 +1,7 @@
+# cargo-nextest settings. CI runs `cargo nextest run --profile ci`, which writes
+# target/nextest/ci/junit.xml for the requirement coverage report (NFR-23a, #227).
+[profile.ci]
+fail-fast = false
+
+[profile.ci.junit]
+path = "junit.xml"
