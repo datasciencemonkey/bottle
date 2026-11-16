@@ -264,3 +264,19 @@ fn g_03_a_valid_custom_agent_url_still_loads() {
         "protocol": "invocations", "appUrl": "https://my-app-1.aws.databricksapps.com"}));
     assert!(parse_config(&cfg).is_ok());
 }
+
+#[test]
+fn g_01_at_11_ddl_check_lists_exactly_the_enum() {
+    let ddl = include_str!("../src/local_store/migrations/0001_local_mirror.sql");
+    let want = format!(
+        "CHECK (backend_kind IN ({}))",
+        BACKEND_KINDS
+            .iter()
+            .map(|k| format!("'{}'", k.as_str()))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let columns = ddl.matches("backend_kind TEXT NOT NULL").count();
+    assert!(columns >= 2, "mog and genie_exchange carry backend_kind");
+    assert_eq!(ddl.matches(want.as_str()).count(), columns, "{want}");
+}
