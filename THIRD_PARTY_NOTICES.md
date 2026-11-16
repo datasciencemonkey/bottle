@@ -120,6 +120,9 @@ Add one row for each Bottle file that holds adapted Handy code.
 | `crates/mog-core/src/audio_device/cpal_backend.rs` | `src-tauri/src/managers/audio.rs` |
 | `crates/mog-core/src/audio_device/sink.rs` | `src-tauri/src/audio_toolkit/audio/sink.rs` |
 | `crates/mog-core/src/hotkey_macos.rs` | `src-tauri/src/secure_input.rs` |
+| `crates/mog-core/src/insertion.rs` | `src-tauri/src/clipboard.rs` |
+| `crates/mog-core/src/insertion/macos.rs` | `src-tauri/src/input.rs` |
+| `crates/mog-core/src/insertion/windows.rs` | `src-tauri/src/utils.rs` |
 | `crates/mog-core/src/stt_model.rs` | `src-tauri/src/managers/model/download.rs` |
 | `spikes/sp-03/src/clamshell.rs` | `src-tauri/src/helpers/clamshell.rs` |
 | `spikes/sp-03/src/secure_input.rs` | `src-tauri/src/secure_input.rs` |

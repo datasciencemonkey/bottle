@@ -26,7 +26,8 @@ pnpm vitest run src/acceptance/at-04-offline.test.ts src/acceptance/at-05-meanin
 | AT-04, AT-43 | `src/test-support/cloud-calls.ts` | The class (local or cloud) of every 4.5 command. A new command fails the typecheck until it has a class. Self-tests `[AT-22]` in `cloud-calls.test.ts`. |
 | AT-40 | `crates/mog-core/tests/at_40_stt_bench.rs` | The scorer `mog_core::stt_bench` (ADR 0034): golden-set rules, WER, numbers, entities, hallucinations, p95 on 10 s, Opus delta, the gate. Self-tests `at_22_*`. The device run skips. |
 | AT-40 | `src/acceptance/at-40-stt-provider.test.ts` | Nothing yet: the SttProvider rules are pending. |
-| AT-43 | `crates/mog-core/tests/at_43_dictation.rs` | Only the brain may call `insert_text`; its arguments have no key, submit or Enter field; a multi-line text is one argument (MOG-06b, contract part). |
+| AT-43 | `crates/mog-core/tests/at_43_dictation.rs` | Only the brain may call `insert_text`; its arguments have no key, submit or Enter field; a multi-line text is one argument (MOG-06b, contract part). Through the hardened gateway, the R11 paste over a clipboard and key double sends only the paste chord, writes the text once, and restores the earlier clipboard (MOG-06a, MOG-06c, #58). |
+| AT-43 | `crates/mog-core/src/insertion.rs` (#58, ADR 0048) | The paste sequence: checks before any clipboard change (`no_permission`, `no_focus`, `secure_field`), no Enter key, a newer copy wins, a failed write or chord still restores. |
 | AT-43 | `src/acceptance/at-43-dictation.test.ts`, `src/brain/utterance-route.test.ts` (#59, ADR 0053) | A dictation decision ends at `insert_text` with only `model_invoke` before it, no agent turn and no Genie call (RTR-01b, RTR-01c); Shift held forces the ask route, skips only the intent gate and keeps the 1.5 s preview (RTR-17a, RTR-17b). `hotkey_host` puts `shift: true` on the `down` item. |
 | AT-43 | `src/acceptance/at-43-dictation.test.ts` | The router step part (#57), with a model reply from the IPC double: a `dictation` decision stays `dictation` for PTT and hands-free and not for a session (RTR-01b), and the step calls only `model_invoke` role `router`, never the agent, Genie or `insert_text` (RTR-01c). Whether a real model gives `dictation` for plain sentences is the router golden set (#56, AT-06). |
 | AT-43 | `crates/mog-core/tests/latency_bench.rs` (#171) | NFR-01d: `nfr_01d_dictation_insert_p95_within_1_5_s_with_local_stt` and the device run `at_21_at_43_device_samples_meet_the_latency_budgets`. This PR does not copy them. |
@@ -57,7 +58,7 @@ When the feature issue lands, its implementer removes the mark and finishes the 
 | AT-40 | CAP-47a, CAP-47b, CAP-64a, CAP-64b | #52 |
 | AT-40 | CAP-54a, CAP-54b, CAP-56a, CAP-56b | #49 |
 | AT-40 | CAP-65a, CAP-65b (the runner and the release record) | #53 |
-| AT-43 | MOG-06a, MOG-06c (the paste and the clipboard restore) | #58 |
+| AT-43 | MOG-06a, MOG-06c (the paste and the clipboard restore on a device) | #408 |
 | AT-43 | MOG-06d, UX-42 | #60 |
 
 ## Device and person steps
@@ -119,14 +120,14 @@ Do one session for each of 10 or more speakers. Each session is one part.
 2. For one long sentence, edit the card text before cleanup returns (slow network). Expected: the
    late cleanup result does not change the edit. "Use raw text" puts the raw text back.
 
-### AT-43: dictation into the active app (macOS and Windows, about 25 min; blocked on #58, #60)
+### AT-43: dictation into the active app (macOS and Windows, about 25 min; blocked on #60; the paste trials are #408)
 
 1. Copy the word `earlier` to the clipboard.
 2. Dictate "echo the dictation test works" into TextEdit (Notepad), a browser text field, Terminal
    (Windows Terminal) and a password field. Expected: in the first three the text appears with no
    Enter (in Terminal the text waits at the prompt and does not run); the pill shows "Inserted";
    after 1 s the clipboard holds `earlier`. The password field shows the reason and Copy. The
-   multi-line case (no Enter between lines) is the automated MOG-06b test and #58.
+   multi-line case (no Enter between lines) is the automated MOG-06b test (#58).
 3. Remove the Accessibility permission for Bottle and dictate into TextEdit. Expected: the card
    shows the text, the reason and Copy.
 4. Hold Shift with the talk key and dictate a plain sentence. Expected: the preview chip (the ask

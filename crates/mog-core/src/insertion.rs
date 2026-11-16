@@ -1,5 +1,5 @@
 // Adapted from cjpais/Handy src-tauri/src/clipboard.rs @ aca8985 (MIT, Copyright (c) 2025 CJ Pais). See THIRD_PARTY_NOTICES.
-//! R11 `insert_text` (#58, MOG-06a..c, ADR 0044): the UC1 paste of cleaned dictation text into
+//! R11 `insert_text` (#58, MOG-06a..c, ADR 0048): the UC1 paste of cleaned dictation text into
 //! the focused app.
 //!
 //! The sequence is Handy's clipboard paste (`paste_via_clipboard`): save the clipboard, write the
@@ -22,6 +22,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
+
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(windows)]
+mod windows;
+
+#[cfg(target_os = "macos")]
+pub use macos::MacInsertHost;
+#[cfg(windows)]
+pub use windows::{WindowsClipboard, WindowsInsertHost};
 
 /// The reply of `insert_text` (section 4.5): `{result: inserted|no_permission|no_focus|secure_field}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,8 +100,17 @@ pub const RESTORE_AFTER: Duration = Duration::from_millis(250);
 /// The paste chord for `platform`: modifier down, V down, V up, modifier up. It never holds
 /// Return or Enter (MOG-06b).
 pub fn paste_chord(platform: ClipboardPlatform) -> Vec<KeyStroke> {
-    let _ = platform;
-    Vec::new()
+    let (modifier, v) = match platform {
+        ClipboardPlatform::MacOs => (mac_keys::COMMAND, mac_keys::V),
+        ClipboardPlatform::Windows => (win_keys::CONTROL, win_keys::V),
+    };
+    let ks = |key, down| KeyStroke { key, down };
+    vec![
+        ks(modifier, true),
+        ks(v, true),
+        ks(v, false),
+        ks(modifier, false),
+    ]
 }
 
 /// Whether `key` is an Enter or Return key on `platform`.
@@ -125,6 +144,34 @@ pub trait InsertHost: Send + Sync {
     fn sleep(&self, d: Duration);
 }
 
+impl<H: InsertHost> InsertHost for &H {
+    type Snapshot = H::Snapshot;
+    fn input_permitted(&self) -> bool {
+        (**self).input_permitted()
+    }
+    fn focus(&self) -> Focus {
+        (**self).focus()
+    }
+    fn snapshot_clipboard(&self) -> CoreResult<Self::Snapshot> {
+        (**self).snapshot_clipboard()
+    }
+    fn write_concealed(&self, text: &str) -> CoreResult<()> {
+        (**self).write_concealed(text)
+    }
+    fn clipboard_mark(&self) -> u64 {
+        (**self).clipboard_mark()
+    }
+    fn send_keys(&self, keys: &[KeyStroke]) -> CoreResult<()> {
+        (**self).send_keys(keys)
+    }
+    fn restore_clipboard(&self, snapshot: Self::Snapshot) -> CoreResult<()> {
+        (**self).restore_clipboard(snapshot)
+    }
+    fn sleep(&self, d: Duration) {
+        (**self).sleep(d)
+    }
+}
+
 /// Serializes pastes: overlapping ones would save each other's text as the user's clipboard.
 static PASTE_LOCK: Mutex<()> = Mutex::new(());
 
@@ -135,11 +182,42 @@ pub fn insert_text<H: InsertHost>(
     platform: ClipboardPlatform,
     text: &str,
 ) -> CoreResult<InsertOutcome> {
-    let _ = (host, platform, text, &PASTE_LOCK, PoisonError::<()>::into_inner);
-    Err(CoreError::NotImplemented { component: "R11" })
+    let _paste = PASTE_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+    // Check first, so a refusal leaves the clipboard and the keyboard alone (MOG-06d shows Copy).
+    if !host.input_permitted() {
+        return Ok(InsertOutcome::NoPermission);
+    }
+    match host.focus() {
+        Focus::Nothing => return Ok(InsertOutcome::NoFocus),
+        Focus::SecureField => return Ok(InsertOutcome::SecureField),
+        Focus::Field => {}
+    }
+    let saved = host.snapshot_clipboard()?;
+    if let Err(e) = host.write_concealed(text) {
+        // The writer cleared the clipboard (fail closed); put the user's content back.
+        let _ = host.restore_clipboard(saved);
+        return Err(e);
+    }
+    let ours = host.clipboard_mark();
+    host.sleep(SETTLE_BEFORE_PASTE);
+    let chord = paste_chord(platform);
+    let (press, release) = chord.split_at(chord.len() - 1);
+    let pressed = host.send_keys(press);
+    host.sleep(CHORD_HOLD);
+    // Always release the modifier, even when a press failed.
+    let released = host.send_keys(release);
+    host.sleep(RESTORE_AFTER);
+    // A copy made after our write is the user's newest action: it wins (Handy paste_tx rule 2).
+    let restored = if host.clipboard_mark() == ours {
+        host.restore_clipboard(saved)
+    } else {
+        Ok(())
+    };
+    pressed.and(released).and(restored)?;
+    Ok(InsertOutcome::Inserted)
 }
 
-/// The `insert_text` component behind the hardened gateway (ADR 0040, ADR 0044).
+/// The `insert_text` component behind the hardened gateway (ADR 0040, ADR 0048).
 #[derive(Debug)]
 pub struct InsertTextComponent<H> {
     host: H,
@@ -156,9 +234,36 @@ impl<H: InsertHost> InsertTextComponent<H> {
 
 impl<H: InsertHost> GatewayComponents for InsertTextComponent<H> {
     fn call(&self, command: &'static str, args: Value) -> CoreResult<Value> {
-        let _ = (command, args, &self.host, self.platform, json!({}));
-        Err(CoreError::NotImplemented { component: "R11" })
+        let refused = |code| CoreError::IpcRefused { code };
+        if command != "insert_text" {
+            return Err(refused("not_implemented"));
+        }
+        let a: InsertTextArgs =
+            serde_json::from_value(args).map_err(|_| refused("invalid_args"))?;
+        let platform = self.platform.ok_or(refused("host_failed"))?;
+        // A host error never carries the text; it crosses only as `host_failed` (SEC-03).
+        let outcome =
+            insert_text(&self.host, platform, &a.text).map_err(|_| refused("host_failed"))?;
+        Ok(json!({ "result": outcome }))
     }
+}
+
+/// The `insert_text` component over the OS of this build: macOS and Windows.
+#[cfg(target_os = "macos")]
+pub fn os_component() -> InsertTextComponent<MacInsertHost> {
+    InsertTextComponent::new(
+        MacInsertHost,
+        crate::window_host::current_clipboard_platform(),
+    )
+}
+
+/// The `insert_text` component over the OS of this build: macOS and Windows.
+#[cfg(windows)]
+pub fn os_component() -> InsertTextComponent<WindowsInsertHost> {
+    InsertTextComponent::new(
+        WindowsInsertHost,
+        crate::window_host::current_clipboard_platform(),
+    )
 }
 
 #[cfg(test)]
@@ -270,7 +375,10 @@ mod tests {
     fn mog_06a_pastes_the_text_with_the_chord_and_reports_inserted() {
         for p in BOTH {
             let f = Fake::new("earlier");
-            assert_eq!(insert_text(&f, p, "hello").unwrap(), InsertOutcome::Inserted);
+            assert_eq!(
+                insert_text(&f, p, "hello").unwrap(),
+                InsertOutcome::Inserted
+            );
             let log = f.log();
             assert_eq!(log[0], Ev::Snapshot);
             assert_eq!(log[1], Ev::Write("hello".into()));
@@ -326,7 +434,11 @@ mod tests {
                 .into_iter()
                 .filter(|e| matches!(e, Ev::Write(_)))
                 .collect();
-            assert_eq!(writes, vec![Ev::Write(text.into())], "one write, unchanged text");
+            assert_eq!(
+                writes,
+                vec![Ev::Write(text.into())],
+                "one write, unchanged text"
+            );
             assert!(!f.keys().is_empty());
             assert!(f.keys().iter().all(|k| !is_enter_key(p, k.key)), "{p:?}");
         }
@@ -338,7 +450,10 @@ mod tests {
             assert!(paste_chord(p).iter().all(|k| !is_enter_key(p, k.key)));
         }
         assert!(is_enter_key(ClipboardPlatform::MacOs, mac_keys::RETURN));
-        assert!(is_enter_key(ClipboardPlatform::MacOs, mac_keys::KEYPAD_ENTER));
+        assert!(is_enter_key(
+            ClipboardPlatform::MacOs,
+            mac_keys::KEYPAD_ENTER
+        ));
         assert!(is_enter_key(ClipboardPlatform::Windows, win_keys::RETURN));
     }
 
@@ -404,7 +519,10 @@ mod tests {
             let mut f = Fake::new("earlier");
             f.permitted = permitted;
             f.focus = focus;
-            assert_eq!(insert_text(&f, ClipboardPlatform::MacOs, "pw").unwrap(), want);
+            assert_eq!(
+                insert_text(&f, ClipboardPlatform::MacOs, "pw").unwrap(),
+                want
+            );
             assert!(f.log().is_empty(), "{want:?}: {:?}", f.log());
             assert_eq!(f.clip(), "earlier");
         }
@@ -442,7 +560,9 @@ mod tests {
             "not_implemented"
         );
         assert_eq!(
-            c.call("insert_text", json!({"text": 1})).unwrap_err().code(),
+            c.call("insert_text", json!({"text": 1}))
+                .unwrap_err()
+                .code(),
             "invalid_args"
         );
         let none = InsertTextComponent::new(Fake::new("e"), None);
