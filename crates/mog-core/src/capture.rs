@@ -132,7 +132,8 @@ pub struct Stopped {
     pub reason: StopReason,
 }
 
-/// The receiver of CaptureService events (the `capture.state` event for the brain).
+/// The receiver of CaptureService events (the `capture.state` event for the brain). The core
+/// calls it with its state lock held, so it must not call back into the service.
 pub trait CaptureEvents: Send + Sync {
     /// The capture state changed.
     fn state(&self, state: &CaptureState);
@@ -278,10 +279,35 @@ impl CaptureCore {
         }
     }
 
-    /// Lock the state. A panic in another call must not keep the mic locked, so a poisoned
-    /// lock is taken over; `stop_all` then brings the state and the streams back in line.
+    /// Lock the state. A panic in another call must not keep the mic locked or held: a
+    /// poisoned lock is taken over, every lease stops with [`StopReason::Panic`] and both
+    /// streams close.
     fn lock(&self) -> MutexGuard<'_, Inner> {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+        match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                let mut guard = poisoned.into_inner();
+                self.inner.clear_poison();
+                self.release_all(&mut guard);
+                guard
+            }
+        }
+    }
+
+    /// Stop every lease with [`StopReason::Panic`] and close both streams, even if a panic
+    /// left the open flags out of line.
+    fn release_all(&self, inner: &mut Inner) -> CaptureState {
+        for rec in [inner.overlay.take(), inner.primary.take()]
+            .into_iter()
+            .flatten()
+        {
+            self.report_stop(rec, StopReason::Panic);
+        }
+        self.device.close(AudioSource::SystemAudio);
+        self.device.close(AudioSource::Mic);
+        inner.system_open = false;
+        inner.mic_open = false;
+        self.publish(inner)
     }
 
     fn state_of(inner: &Inner) -> CaptureState {
@@ -520,18 +546,7 @@ impl CaptureService for CaptureCore {
 
     fn stop_all(&self) -> CaptureState {
         let mut inner = self.lock();
-        for rec in [inner.overlay.take(), inner.primary.take()]
-            .into_iter()
-            .flatten()
-        {
-            self.report_stop(rec, StopReason::Panic);
-        }
-        // Close both streams even if a panic left the flags out of line.
-        self.device.close(AudioSource::SystemAudio);
-        self.device.close(AudioSource::Mic);
-        inner.system_open = false;
-        inner.mic_open = false;
-        self.publish(&mut inner)
+        self.release_all(&mut inner)
     }
 
     fn tick(&self) -> Option<u64> {
