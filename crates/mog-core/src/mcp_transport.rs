@@ -36,10 +36,9 @@ pub fn forwardable_tool_args(mut args: JsonObject) -> JsonObject {
 /// TODO(#136): SP-18 confirms if `MCP_SERVICE` usage rows keep the tags; else attribution
 /// relies on the User-Agent.
 pub fn outbound_identity_headers(
-    _tags: &Tags,
+    tags: &Tags,
 ) -> Result<Vec<(&'static str, String)>, IdentityError> {
-    let _ = (BottleIdentity::default, CallKind::Mcp);
-    todo!("#197 green")
+    BottleIdentity::new().headers(CallKind::Mcp, Some(tags))
 }
 
 /// The R8 stub. Every method returns [`CoreError::NotImplemented`].

@@ -77,7 +77,11 @@ impl LoopbackEndpoint {
     /// [`crate::request_identity::RequestDecorator`] with the session's MOG tags.
     /// TODO(#113): the model proxy handler. TODO(#139): the Genie One MCP proxy handler.
     pub fn call_kind(&self) -> Option<CallKind> {
-        todo!("#197 green")
+        match self {
+            LoopbackEndpoint::BottleMcp => None,
+            LoopbackEndpoint::GenieOneMcp => Some(CallKind::Mcp),
+            LoopbackEndpoint::ModelProxy => Some(CallKind::UnityGateway),
+        }
     }
 }
 

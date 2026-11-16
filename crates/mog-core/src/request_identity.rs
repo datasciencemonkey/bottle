@@ -14,6 +14,7 @@
 
 use std::fmt;
 
+use crate::token_guard::contains_secret;
 use crate::types::{TagApp, TagOp, Tags};
 
 /// The AI Gateway request tags header (SEC-06a).
@@ -45,7 +46,14 @@ pub enum IdentityError {
 impl IdentityError {
     /// The stable, content-free code.
     pub fn code(&self) -> &'static str {
-        todo!("#197 green")
+        match self {
+            IdentityError::MogIdEmpty => "tags_mog_empty",
+            IdentityError::MogIdTooLong => "tags_mog_too_long",
+            IdentityError::MogIdChars => "tags_mog_chars",
+            IdentityError::SecretInTags => "tags_secret",
+            IdentityError::TagsTooLong => "tags_too_long",
+            IdentityError::MissingTags => "tags_missing",
+        }
     }
 }
 
@@ -69,23 +77,58 @@ pub enum CallKind {
 }
 
 /// The `<os>` token of the User-Agent for an OS name of `std::env::consts::OS`.
-pub fn os_token(_os: &str) -> &'static str {
-    todo!("#197 green")
+pub fn os_token(os: &str) -> &'static str {
+    match os {
+        "macos" => "macos",
+        "windows" => "windows",
+        "linux" => "linux",
+        _ => "other",
+    }
 }
 
 /// `bottle/<version> (<os>; mog)` for a given version and OS name.
-pub fn user_agent_for(_version: &str, _os: &str) -> String {
-    todo!("#197 green")
+pub fn user_agent_for(version: &str, os: &str) -> String {
+    format!("bottle/{version} ({}; mog)", os_token(os))
 }
 
 /// The User-Agent of this build: the crate version (the app version) and this OS.
 pub fn user_agent() -> String {
-    todo!("#197 green")
+    user_agent_for(env!("CARGO_PKG_VERSION"), std::env::consts::OS)
+}
+
+fn check_mog_id(mog: &str) -> Result<(), IdentityError> {
+    if mog.is_empty() {
+        return Err(IdentityError::MogIdEmpty);
+    }
+    if mog.len() > MAX_MOG_ID_LEN {
+        return Err(IdentityError::MogIdTooLong);
+    }
+    if !mog
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    {
+        return Err(IdentityError::MogIdChars);
+    }
+    Ok(())
 }
 
 /// The tags header value for `tags`: `{"app":"bottle","mog":"<id>","op":"<op>"}`.
-pub fn tags_header_value(_tags: &Tags) -> Result<String, IdentityError> {
-    todo!("#197 green")
+pub fn tags_header_value(tags: &Tags) -> Result<String, IdentityError> {
+    check_mog_id(&tags.mog)?;
+    // The MOG ID is a slug, so it needs no JSON escape.
+    let value = format!(
+        r#"{{"app":"{}","mog":"{}","op":"{}"}}"#,
+        tag_app(tags.app),
+        tags.mog,
+        tag_op(tags.op)
+    );
+    if contains_secret(&value) {
+        return Err(IdentityError::SecretInTags);
+    }
+    if value.len() > MAX_TAGS_HEADER_LEN {
+        return Err(IdentityError::TagsTooLong);
+    }
+    Ok(value)
 }
 
 /// Adds the Bottle identity headers to every outbound request.
@@ -101,11 +144,16 @@ pub trait RequestDecorator: Send + Sync {
     /// then add [`RequestDecorator::headers`]. On error `headers` is unchanged.
     fn decorate(
         &self,
-        _headers: &mut Vec<(String, String)>,
-        _kind: CallKind,
-        _tags: Option<&Tags>,
+        headers: &mut Vec<(String, String)>,
+        kind: CallKind,
+        tags: Option<&Tags>,
     ) -> Result<(), IdentityError> {
-        todo!("#197 green")
+        let add = self.headers(kind, tags)?;
+        headers.retain(|(n, _)| {
+            !n.eq_ignore_ascii_case(USER_AGENT_HEADER) && !n.eq_ignore_ascii_case(TAGS_HEADER)
+        });
+        headers.extend(add.into_iter().map(|(n, v)| (n.to_owned(), v)));
+        Ok(())
     }
 }
 
@@ -118,7 +166,9 @@ pub struct BottleIdentity {
 impl BottleIdentity {
     /// The decorator of this build.
     pub fn new() -> Self {
-        todo!("#197 green")
+        Self {
+            user_agent: user_agent(),
+        }
     }
 }
 
@@ -131,22 +181,41 @@ impl Default for BottleIdentity {
 impl RequestDecorator for BottleIdentity {
     fn headers(
         &self,
-        _kind: CallKind,
-        _tags: Option<&Tags>,
+        kind: CallKind,
+        tags: Option<&Tags>,
     ) -> Result<Vec<(&'static str, String)>, IdentityError> {
-        let _ = &self.user_agent;
-        todo!("#197 green")
+        let mut out = vec![(USER_AGENT_HEADER, self.user_agent.clone())];
+        match kind {
+            CallKind::UnityGateway | CallKind::Mcp => {
+                let tags = tags.ok_or(IdentityError::MissingTags)?;
+                out.push((TAGS_HEADER, tags_header_value(tags)?));
+            }
+            // Data minimisation: the MOG ID goes only where usage rows record it.
+            CallKind::Workspace => {}
+        }
+        Ok(out)
     }
 }
 
-#[allow(dead_code)]
-fn tag_app(_app: TagApp) -> &'static str {
-    todo!("#197 green")
+fn tag_app(app: TagApp) -> &'static str {
+    match app {
+        TagApp::Bottle => "bottle",
+    }
 }
 
-#[allow(dead_code)]
-fn tag_op(_op: TagOp) -> &'static str {
-    todo!("#197 green")
+fn tag_op(op: TagOp) -> &'static str {
+    match op {
+        TagOp::Asr => "asr",
+        TagOp::Cleanup => "cleanup",
+        TagOp::Router => "router",
+        TagOp::Writer => "writer",
+        TagOp::Judge => "judge",
+        TagOp::Embed => "embed",
+        TagOp::Genie => "genie",
+        TagOp::Merge => "merge",
+        TagOp::Agent => "agent",
+        TagOp::Page => "page",
+    }
 }
 
 #[cfg(test)]
