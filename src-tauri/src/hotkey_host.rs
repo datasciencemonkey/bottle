@@ -19,7 +19,11 @@
 //! [`crate::hotkey_settings::HotkeySettings`] (#322, ADR 0020). A new talk key replaces the
 //! service: the host stops the old one and starts a new one, with no prompt.
 //!
-//! Requirements: CAP-35a, CAP-36, CAP-37, CAP-39c, CAP-40a, CAP-43a, MB-06a, AT-30.
+//! Copilot key (#332, ADR 0025): one [`CopilotKeyFlag`] is shared by the key check reads
+//! ([`WithCopilotFlag`]) and the Windows hook seam ([`HookConsumers`]). The hook sets it when
+//! it first sees Win+Shift+F23, so the next check flags the Copilot key.
+//!
+//! Requirements: CAP-35a, CAP-36, CAP-37, CAP-39c, CAP-40a, CAP-43a, CAP-43b, MB-06a, AT-30.
 
 use crate::hotkey_settings::{HotkeySettings, MemorySettingsStore, TalkKeySink};
 use crate::ipc::BrainChannel;
@@ -33,7 +37,7 @@ use mog_core::hotkey_core::{
 };
 use mog_core::hotkey_windows::{forward_to_engine, HookSignal};
 use mog_core::ipc::{events, WindowClass};
-use mog_core::keyboard_env;
+use mog_core::keyboard_env::{self, CopilotKeyFlag, MemoryCopilotKeyFlag, WithCopilotFlag};
 use serde_json::{json, Value};
 use std::sync::{mpsc, Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
@@ -243,6 +247,8 @@ pub enum DeferredSignal {
     HookReinstalled,
     /// A hook install failed. The reason is a fixed, content-free string.
     HookFailed(&'static str),
+    /// The hook saw the Copilot key (CAP-43b, #332). [`HookConsumers`] sets the flag.
+    CopilotKeySeen,
 }
 
 /// Receives the [`DeferredSignal`]s of the Windows hook.
@@ -251,13 +257,36 @@ pub trait HookSignalSeam: Send {
     fn deferred(&self, signal: DeferredSignal);
 }
 
-/// The app's seam until each consumer exists. Each arm names the issue that consumes it.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct PendingHookConsumers;
+/// The app's seam. The Copilot signal sets the shared flag; each other arm names the issue
+/// that consumes it.
+pub struct HookConsumers {
+    copilot: Arc<dyn CopilotKeyFlag>,
+}
 
-impl HookSignalSeam for PendingHookConsumers {
+impl HookConsumers {
+    /// A seam that sets `copilot` when the hook sees the Copilot key.
+    pub fn new(copilot: Arc<dyn CopilotKeyFlag>) -> Self {
+        Self { copilot }
+    }
+}
+
+impl Default for HookConsumers {
+    /// A seam with its own flag in memory (tests and platforms with no key check).
+    fn default() -> Self {
+        Self::new(Arc::new(MemoryCopilotKeyFlag::default()))
+    }
+}
+
+impl HookSignalSeam for HookConsumers {
     fn deferred(&self, signal: DeferredSignal) {
         match signal {
+            DeferredSignal::CopilotKeySeen => {
+                // The next key check flags the Copilot key: `hotkeys_set` returns the
+                // conflict for Settings (#77) and the wizard (#43).
+                if self.copilot.set(true) {
+                    // TODO(#346): on this change, show the conflict of the current keys.
+                }
+            }
             DeferredSignal::Escape => {
                 // TODO(#14): the capture lifecycle ends hands-free capture on Esc.
             }
@@ -283,6 +312,7 @@ pub fn adapt_hook_signal(signal: HookSignal, engine: &mut HotkeyEngine) -> Optio
         HookSignal::TalkKeyBlocked => DeferredSignal::TalkKeyBlocked,
         HookSignal::HookReinstalled => DeferredSignal::HookReinstalled,
         HookSignal::HookFailed { reason } => DeferredSignal::HookFailed(reason),
+        HookSignal::CopilotKeySeen => DeferredSignal::CopilotKeySeen,
         // `forward_to_engine` takes the talk-key signals and the other-key signal.
         HookSignal::TalkDown { .. } | HookSignal::TalkUp { .. } | HookSignal::OtherKeyDown => {
             return None
@@ -497,10 +527,12 @@ impl<R: Runtime> TalkKeySink for AppTalkKey<R> {
 }
 
 /// The platform service and permission API (macOS).
+/// macOS has no Copilot key, so `_copilot` is unused.
 #[cfg(target_os = "macos")]
 pub fn platform_service(
     talk: TalkBinding,
     sink: Arc<dyn HotkeySink>,
+    _copilot: Arc<dyn CopilotKeyFlag>,
 ) -> (Box<dyn HotkeyService>, Box<dyn PermissionApi>) {
     use mog_core::hotkey_macos::{MacHotkeyService, MacPermissions};
     // Ctrl+Win is a Windows key: macOS settings never hold it, so it gives the D66 default.
@@ -514,15 +546,17 @@ pub fn platform_service(
 /// The platform service and permission API (Windows, #7 and #314).
 ///
 /// The hook sends [`HookSignal`]s on its own channel; the adapter thread feeds them to the
-/// shared engine, which emits into `sink`. The hook needs no OS prompt.
+/// shared engine, which emits into `sink`. The hook needs no OS prompt. A Copilot chord
+/// seen by the hook sets `copilot` (#332).
 #[cfg(windows)]
 pub fn platform_service(
     talk: TalkBinding,
     sink: Arc<dyn HotkeySink>,
+    copilot: Arc<dyn CopilotKeyFlag>,
 ) -> (Box<dyn HotkeyService>, Box<dyn PermissionApi>) {
     use mog_core::hotkey_windows::win32::WindowsHotkeyService;
     let (service, rx) = WindowsHotkeyService::new(talk.windows_talk_key());
-    let adapter = spawn_hook_adapter(rx, sink, PendingHookConsumers);
+    let adapter = spawn_hook_adapter(rx, sink, HookConsumers::new(copilot));
     (
         with_hook_adapter(Box::new(service), adapter),
         Box::new(NoOsPermission),
@@ -534,6 +568,7 @@ pub fn platform_service(
 pub fn platform_service(
     _talk: TalkBinding,
     _sink: Arc<dyn HotkeySink>,
+    _copilot: Arc<dyn CopilotKeyFlag>,
 ) -> (Box<dyn HotkeyService>, Box<dyn PermissionApi>) {
     (
         Box::new(mog_core::hotkey::StubHotkeyService),
@@ -556,15 +591,23 @@ impl PermissionApi for NoOsPermission {
 }
 
 /// Load the key settings, create the host with the platform service and start it (no
-/// prompt). The settings store is in memory until #77 (see `hotkey_settings`).
+/// prompt). The settings store is in memory until #77 (see `hotkey_settings`). One Copilot
+/// key flag goes to the key check reads and to the hook (#332, ADR 0025); it is in memory
+/// until #341.
 pub fn install<R: Runtime>(app: &AppHandle<R>) -> std::io::Result<()> {
+    let copilot: Arc<dyn CopilotKeyFlag> = Arc::new(MemoryCopilotKeyFlag::default());
     let settings = HotkeySettings::load(
         keyboard_env::host_os(),
         Box::new(MemorySettingsStore::default()),
-        keyboard_env::os_env_reads(),
+        Box::new(WithCopilotFlag::new(
+            keyboard_env::os_env_reads(),
+            Arc::clone(&copilot),
+        )),
         Box::new(AppTalkKey(app.clone())),
     );
-    install_with(app, settings, platform_service)
+    install_with(app, settings, move |talk, sink| {
+        platform_service(talk, sink, Arc::clone(&copilot))
+    })
 }
 
 /// Create the host with `factory` and the saved talk key of `settings`, start the forwarder
@@ -1196,7 +1239,11 @@ mod tests {
         let (sink, out) = queue();
         tx.send(down()).unwrap();
         drop(tx);
-        run_hook_adapter(rx, HotkeyEngine::new(Arc::new(sink)), &PendingHookConsumers);
+        run_hook_adapter(
+            rx,
+            HotkeyEngine::new(Arc::new(sink)),
+            &HookConsumers::default(),
+        );
         let got: Vec<HotkeyOutput> = out.try_iter().collect();
         assert_eq!(
             got,
@@ -1553,7 +1600,7 @@ mod tests {
             .unwrap();
         for part in [
             "WindowsHotkeyService::new(talk.windows_talk_key())",
-            "spawn_hook_adapter(rx, sink, PendingHookConsumers)",
+            "spawn_hook_adapter(rx, sink, HookConsumers::new(copilot))",
             "with_hook_adapter(Box::new(service), adapter)",
             "Box::new(NoOsPermission)",
         ] {
@@ -1570,14 +1617,76 @@ mod tests {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let text = std::fs::read_to_string(root.join("src/hotkey_host.rs")).unwrap();
         let seam = text
-            .split("impl HookSignalSeam for PendingHookConsumers")
+            .split("impl HookSignalSeam for HookConsumers")
             .nth(1)
             .unwrap()
             .split("\n}\n")
             .next()
             .unwrap();
-        for todo in ["TODO(#14)", "TODO(#294)", "TODO(#297)"] {
+        for todo in ["TODO(#14)", "TODO(#294)", "TODO(#297)", "TODO(#346)"] {
             assert!(seam.contains(todo), "the seam misses {todo}");
+        }
+    }
+
+    // ---- CAP-43b (#332, ADR 0025): the hook sets the Copilot key flag ----
+
+    #[test]
+    fn cap_43b_copilot_key_seen_is_deferred_to_the_seam() {
+        let (sink, _out) = queue();
+        let mut engine = HotkeyEngine::new(Arc::new(sink));
+        assert_eq!(
+            adapt_hook_signal(HookSignal::CopilotKeySeen, &mut engine),
+            Some(DeferredSignal::CopilotKeySeen)
+        );
+    }
+
+    #[test]
+    fn cap_43b_the_seam_sets_the_shared_copilot_flag() {
+        let flag = Arc::new(MemoryCopilotKeyFlag::default());
+        let seam = HookConsumers::new(flag.clone());
+        seam.deferred(DeferredSignal::Escape);
+        assert!(!flag.present(), "only the Copilot signal sets the flag");
+        seam.deferred(DeferredSignal::CopilotKeySeen);
+        assert!(flag.present());
+    }
+
+    #[test]
+    fn cap_43b_the_hook_adapter_sets_the_flag_with_no_ptt_output() {
+        let flag = Arc::new(MemoryCopilotKeyFlag::default());
+        let (tx, rx) = mpsc::channel();
+        let (sink, out) = queue();
+        tx.send(HookSignal::CopilotKeySeen).unwrap();
+        drop(tx);
+        run_hook_adapter(
+            rx,
+            HotkeyEngine::new(Arc::new(sink)),
+            &HookConsumers::new(flag.clone()),
+        );
+        assert!(flag.present());
+        assert!(out.try_iter().next().is_none());
+    }
+
+    #[test]
+    fn cap_43b_install_shares_one_copilot_flag_with_the_env_reads_and_the_hook() {
+        // The `cfg(windows)` factory cannot build on a macOS host, so this checks the source.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let code =
+            production_code(&std::fs::read_to_string(root.join("src/hotkey_host.rs")).unwrap());
+        let install = code
+            .split("pub fn install<R: Runtime>")
+            .nth(1)
+            .unwrap()
+            .split("\n}\n")
+            .next()
+            .unwrap();
+        // rustfmt may wrap a call, so compare with no whitespace.
+        let flat: String = install.split_whitespace().collect();
+        for part in [
+            "MemoryCopilotKeyFlag::default()",
+            "WithCopilotFlag::new(keyboard_env::os_env_reads(),Arc::clone(&copilot)",
+            "platform_service(talk,sink,Arc::clone(&copilot))",
+        ] {
+            assert!(flat.contains(part), "install misses {part}");
         }
     }
 }

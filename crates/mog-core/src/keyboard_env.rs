@@ -11,9 +11,16 @@
 //! - A process name lives only for one call of the visitor. [`read_keyboard_env`] keeps only
 //!   the [`VoiceApp`] matches, so no other name is stored. Nothing here logs.
 //!
+//! The Copilot key (#332, ADR 0025): Windows has no documented prompt-free read that tells
+//! if the keyboard has the key. So the read is a [`CopilotKeyFlag`]: the Windows hook sets it
+//! when it first sees Win+Shift+F23, and [`WithCopilotFlag`] gives it to the check. Settings
+//! (#77) and the wizard (#43) can also set it from the user's answer (option 1 of #332).
+//!
 //! Requirements: CAP-43b (AT-30).
 
 use crate::hotkey_bindings::{DictationShortcut, KeyboardEnv, Os, VoiceApp};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 /// The prompt-free OS reads of the first-run key check. Each method is one read.
 pub trait EnvReads: Send + Sync {
@@ -53,6 +60,62 @@ pub fn read_keyboard_env(os: Os, reads: &dyn EnvReads) -> KeyboardEnv {
             voice_apps,
             ..KeyboardEnv::default()
         },
+    }
+}
+
+/// The "keyboard has a Copilot key" flag (CAP-43b, #332, ADR 0025). It holds one bool and
+/// no key identity.
+pub trait CopilotKeyFlag: Send + Sync {
+    /// The keyboard has a Copilot key, as far as Bottle knows.
+    fn present(&self) -> bool;
+    /// Set the flag. The hook sets `true` on the first Copilot chord; a user answer in
+    /// Settings (#77) or the wizard (#43) sets either value. Returns `true` if it changed.
+    fn set(&self, present: bool) -> bool;
+}
+
+/// A [`CopilotKeyFlag`] in memory, off at start. The flag lasts until quit:
+/// TODO(#341) saves it as `app.keyboard.copilotKey` in the settings store (#77).
+#[derive(Debug, Default)]
+pub struct MemoryCopilotKeyFlag(AtomicBool);
+
+impl CopilotKeyFlag for MemoryCopilotKeyFlag {
+    fn present(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+    fn set(&self, present: bool) -> bool {
+        self.0.swap(present, Ordering::SeqCst) != present
+    }
+}
+
+/// [`EnvReads`] whose Copilot read is the device read or the [`CopilotKeyFlag`]. Every other
+/// read goes to the inner reads.
+pub struct WithCopilotFlag {
+    inner: Box<dyn EnvReads>,
+    flag: Arc<dyn CopilotKeyFlag>,
+}
+
+impl WithCopilotFlag {
+    /// Wrap `inner` with `flag`.
+    pub fn new(inner: Box<dyn EnvReads>, flag: Arc<dyn CopilotKeyFlag>) -> Self {
+        Self { inner, flag }
+    }
+}
+
+impl EnvReads for WithCopilotFlag {
+    fn dictation(&self) -> Option<DictationShortcut> {
+        self.inner.dictation()
+    }
+    fn voice_over(&self) -> bool {
+        self.inner.voice_over()
+    }
+    fn alt_gr_layout(&self) -> bool {
+        self.inner.alt_gr_layout()
+    }
+    fn copilot_key(&self) -> bool {
+        self.inner.copilot_key() || self.flag.present()
+    }
+    fn visit_process_names(&self, visit: &mut dyn FnMut(&str)) {
+        self.inner.visit_process_names(visit)
     }
 }
 
@@ -397,7 +460,9 @@ mod win32 {
             alt_gr_from_scans(&scans)
         }
         fn copilot_key(&self) -> bool {
-            // TODO(#332): Windows has no documented prompt-free read for the Copilot key.
+            // ADR 0025: Windows documents no prompt-free read that tells if the keyboard has
+            // a Copilot key. The `BrandedKey` values name only the key's target app. The
+            // answer comes from the hook through `WithCopilotFlag`.
             false
         }
         fn visit_process_names(&self, visit: &mut dyn FnMut(&str)) {
@@ -430,7 +495,7 @@ mod win32 {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     /// An [`EnvReads`] double that counts each read.
     #[derive(Default)]
@@ -691,5 +756,109 @@ mod tests {
         assert!(code.contains("proc_listallpids"));
         assert!(code.contains("VkKeyScanExW"));
         assert!(code.contains("CreateToolhelp32Snapshot"));
+    }
+
+    // ---- #332, ADR 0025: the Copilot key flag ----
+
+    #[test]
+    fn cap_43b_copilot_flag_starts_off_and_reports_each_change() {
+        let flag = MemoryCopilotKeyFlag::default();
+        assert!(!flag.present());
+        assert!(flag.set(true), "off to on is a change");
+        assert!(flag.present());
+        assert!(!flag.set(true), "on to on is no change");
+        assert!(flag.set(false), "a user answer can turn it off (option 1)");
+        assert!(!flag.present());
+    }
+
+    #[test]
+    fn cap_43b_the_windows_copilot_read_is_the_flag() {
+        let flag: Arc<MemoryCopilotKeyFlag> = Arc::new(MemoryCopilotKeyFlag::default());
+        let reads = WithCopilotFlag::new(Box::new(NoEnvReads), flag.clone());
+        assert!(!read_keyboard_env(Os::Windows, &reads).copilot_key);
+        flag.set(true);
+        assert!(read_keyboard_env(Os::Windows, &reads).copilot_key);
+    }
+
+    #[test]
+    fn cap_43b_the_copilot_flag_keeps_the_other_reads() {
+        let flag: Arc<MemoryCopilotKeyFlag> = Arc::new(MemoryCopilotKeyFlag::default());
+        let inner = FakeReads {
+            copilot: false,
+            processes: vec!["natspeak.exe"],
+            ..all_on()
+        };
+        let reads = WithCopilotFlag::new(Box::new(inner), flag);
+        assert_eq!(
+            read_keyboard_env(Os::Windows, &reads),
+            KeyboardEnv {
+                alt_gr_layout: true,
+                copilot_key: false,
+                voice_apps: vec![VoiceApp::Dragon],
+                ..KeyboardEnv::default()
+            }
+        );
+        assert_eq!(
+            read_keyboard_env(Os::MacOs, &reads).dictation,
+            Some(DictationShortcut::ControlTwice)
+        );
+    }
+
+    #[test]
+    fn cap_43b_at_30_a_seen_copilot_key_flags_right_ctrl_and_win_shift_f23() {
+        use crate::hotkey_bindings::{
+            check_conflicts, default_bindings, first_run_check, Binding, ConflictKind,
+            HotkeyAction, TalkBinding,
+        };
+        let flag: Arc<MemoryCopilotKeyFlag> = Arc::new(MemoryCopilotKeyFlag::default());
+        let inner = FakeReads {
+            alt_gr: true,
+            ..FakeReads::default()
+        };
+        let reads = WithCopilotFlag::new(Box::new(inner), flag.clone());
+        let talk = |env: &KeyboardEnv| {
+            first_run_check(Os::Windows, env)
+                .suggested
+                .get(HotkeyAction::Ptt)
+        };
+        // AltGr skips Right-Alt. Before the key is seen, the ladder takes Right-Ctrl.
+        let before = read_keyboard_env(Os::Windows, &reads);
+        assert_eq!(
+            talk(&before),
+            Some(Binding::Talk(TalkBinding::RightControl))
+        );
+        flag.set(true);
+        let env = read_keyboard_env(Os::Windows, &reads);
+        assert_eq!(talk(&env), Some(Binding::Talk(TalkBinding::CtrlWin)));
+        // Right-Ctrl as the talk key and Win+Shift+F23 as a chord are Copilot conflicts.
+        let mut bindings = default_bindings(Os::Windows);
+        bindings.set(HotkeyAction::Ptt, Binding::Talk(TalkBinding::RightControl));
+        bindings.set(
+            HotkeyAction::OpenCard,
+            Binding::parse(Os::Windows, "Win+Shift+F23").unwrap(),
+        );
+        let kinds: Vec<(HotkeyAction, ConflictKind)> =
+            check_conflicts(Os::Windows, &bindings, &env)
+                .iter()
+                .map(|c| (c.action, c.kind))
+                .collect();
+        assert!(kinds.contains(&(HotkeyAction::Ptt, ConflictKind::CopilotKey)));
+        assert!(kinds.contains(&(HotkeyAction::OpenCard, ConflictKind::CopilotKey)));
+    }
+
+    #[test]
+    fn cap_43b_the_windows_device_read_stays_off_with_no_open_todo() {
+        // ADR 0025: Microsoft documents no prompt-free read of the key, so the device read
+        // stays `false` and the flag carries the answer. The #332 gap is closed.
+        let code = include_str!("keyboard_env.rs")
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .unwrap();
+        assert!(!code.contains("TODO(#332)"));
+        assert!(code.contains("ADR 0025"));
+        assert!(
+            code.contains("TODO(#341)"),
+            "the persisted flag waits on #341"
+        );
     }
 }
