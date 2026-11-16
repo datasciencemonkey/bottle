@@ -21,5 +21,5 @@ T12 ConsentService keeps the notice and attestation logic in the brain (section 
 ## Consequences
 
 - #37 must keep the `DeviceWide` statements out of `mem_local_exec`, or add an explicit device-wide entry for them. The MEM-01 test lists the statement IDs, so a new consent statement must state its scope.
-- The first-run notice (#27) and `session_attest` (#64) need an IPC path to reach `ConsentRecords`. That path is a contract change and is not in this ADR.
+- The first-run notice (#27) and `session_attest` (#64) need an IPC path to reach `ConsentRecords`. That path is contract change #430; the wiring is #431. Neither is in this ADR.
 - An admin who shortens the retention deletes older records on the next purge.

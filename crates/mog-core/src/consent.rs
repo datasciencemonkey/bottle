@@ -21,7 +21,7 @@
 //! TODO(#37): fold [`STATEMENTS`] into the fixed local catalog with these IDs.
 //! TODO(#186): read the admin retention from PolicyStore once Appendix C names its key.
 //! TODO(#64): the consent token flow of `session_attest` calls [`ConsentRecords::record_session`].
-//! TODO(#27): the first-run notice calls [`ConsentRecords::record_notice`] (needs an IPC command).
+//! TODO(#431): the first-run notice calls [`ConsentRecords::record_notice`] through the IPC command of #430.
 
 use std::sync::Arc;
 

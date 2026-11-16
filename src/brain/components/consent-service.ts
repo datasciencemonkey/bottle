@@ -48,7 +48,7 @@ export interface ConsentService {
 }
 
 /**
- * Where the notice records live: one text value. TODO(#63): move the records to the local store
+ * Where the notice records live: one text value. TODO(#431): move the records to the local store
  * (SEC-32a fields, 13-month purge) once `mem_local_exec` is routed.
  */
 export interface ConsentStore {
@@ -75,7 +75,7 @@ export const CONSENT_STORAGE_KEY = 'bottle.consent.notice';
  * It is NOT private to the brain: the hub, MOG and card views load from the same origin and
  * share this Web Storage, so code in a view could write the record without a Continue click.
  * The views run only bundled code (CSP `script-src 'self'`, no HTML from Genie), which limits this.
- * TODO(#63): before MVP-D, move the record behind the Rust local store, out of view reach.
+ * TODO(#431): before MVP-D, move the record behind the Rust local store, out of view reach.
  */
 export function webConsentStore(storage: Storage): ConsentStore {
   return {
@@ -123,7 +123,7 @@ export interface ConsentServiceOptions {
   version?: number;
   now?: () => Date;
   newId?: () => string;
-  /** The signed-in user. TODO(#63): ask T7 ProfileService. */
+  /** The signed-in user. TODO(#431): ask T7 ProfileService. */
   user?: () => string | null;
 }
 
@@ -193,7 +193,7 @@ export class BrainConsentService implements ConsentService {
   }
 
   async records(): Promise<ConsentRecord[]> {
-    throw new NotImplementedError(C, 'records', 63); // TODO(#63)
+    throw new NotImplementedError(C, 'records', 431); // TODO(#431)
   }
 }
 
