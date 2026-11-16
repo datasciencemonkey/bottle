@@ -643,34 +643,6 @@ fn arc_3_a_mog_window_gone_before_its_event_is_not_made_again() {
 }
 
 #[test]
-fn arc_3_host_refuses_main_thread_operations_once_other_threads_run() {
-    // Round 2, MEDIUM B: an operation may wait for the main thread (a window build), so
-    // after setup a main-thread call could deadlock with another thread's operation.
-    let (_app, host, _rec, _clock) = host();
-    let host = host.with_main_thread_probe(Arc::new(|| true));
-    host.open_mog_window("m1").unwrap();
-    host.seal_main_thread();
-    assert_eq!(host.show_card("m1"), Err(WindowError::MainThread));
-    assert_eq!(host.hide_card("m1"), Err(WindowError::MainThread));
-    assert_eq!(host.open_mog_window("m2"), Err(WindowError::MainThread));
-    assert_eq!(host.close_mog_window("m1"), Err(WindowError::MainThread));
-    assert_eq!(host.reap_hidden_cards(), 0);
-    assert_eq!(WindowError::MainThread.code(), "main_thread");
-    // Main-thread event handling still works.
-    host.window_destroyed("mog-m1");
-    assert_eq!(host.active_mogs(), 0);
-}
-
-#[test]
-fn arc_3_host_runs_operations_off_the_main_thread_after_the_seal() {
-    let (_app, host, _rec, _clock) = host();
-    let host = host.with_main_thread_probe(Arc::new(|| false));
-    host.seal_main_thread();
-    host.open_mog_window("m1").unwrap();
-    host.show_card("m1").unwrap();
-}
-
-#[test]
 fn arc_3_app_seals_the_main_thread_after_setup_and_before_the_reaper() {
     let lib = code_of("src/lib.rs");
     let seal = lib
@@ -682,4 +654,81 @@ fn arc_3_app_seals_the_main_thread_after_setup_and_before_the_reaper() {
         windows < seal && seal < reaper,
         "startup windows, seal, then the reaper"
     );
+}
+
+// ---------- PR #338 review round 3 ----------
+
+#[test]
+fn arc_3_sealed_host_refuses_operations_on_the_sealing_thread_on_every_os() {
+    // Setup seals on the main thread; the check compares thread IDs, so it holds on every OS.
+    let (_app, host, _rec, _clock) = host();
+    host.open_mog_window("m1").unwrap();
+    host.seal_main_thread();
+    assert_eq!(host.show_card("m1"), Err(WindowError::MainThread));
+    assert_eq!(host.open_mog_window("m2"), Err(WindowError::MainThread));
+    assert_eq!(host.reap_hidden_cards(), 0);
+    let host = Arc::new(host);
+    let other = host.clone();
+    std::thread::spawn(move || other.show_card("m1"))
+        .join()
+        .unwrap()
+        .unwrap();
+    assert_eq!(host.card_state("m1"), Some(CardState::Shown));
+}
+
+#[test]
+fn mog_18b_a_failed_show_does_not_write_hidden_over_a_card_closed_meanwhile() {
+    let mut ledger = WindowLedger::default();
+    ledger.open_mog("m1").unwrap();
+    ledger.show_card("m1").unwrap();
+    let t0 = Instant::now();
+    ledger.hide_card("m1", t0).unwrap();
+    assert_eq!(
+        ledger.begin_show("m1", true),
+        Ok(ShowPlan::Reuse(CardState::Hidden(t0)))
+    );
+    // An outside close is handled before the native show fails.
+    ledger.window_destroyed("card-m1");
+    ledger.restore_hidden("m1", t0);
+    assert_eq!(ledger.card_state("m1"), Some(CardState::Absent));
+    assert_eq!(ledger.begin_show("m1", false), Ok(ShowPlan::Make));
+}
+
+#[test]
+fn arc_3_a_mog_gone_before_its_event_hands_its_card_to_be_destroyed() {
+    let mut ledger = WindowLedger::default();
+    ledger.open_mog("m1").unwrap();
+    ledger.show_card("m1").unwrap();
+    assert_eq!(
+        ledger.mog_window_missing("m1"),
+        Some(WindowKind::Card("m1".into()))
+    );
+    ledger.open_mog("m2").unwrap();
+    assert_eq!(ledger.mog_window_missing("m2"), None, "m2 had no card");
+}
+
+#[test]
+fn arc_3_host_reopen_of_a_mog_whose_window_is_gone_waits_and_destroys_its_card() {
+    use tauri::Manager;
+    let (mut app, host, _rec, _clock) = host();
+    host.open_mog_window("m1").unwrap();
+    host.show_card("m1").unwrap();
+    // The MOG window leaves Tauri's manager; its Destroyed event is not handled yet.
+    app.get_webview_window("mog-m1").unwrap().destroy().unwrap();
+    // One mock event-loop step drops the destroyed window from the manager. The test does not
+    // loop, so the busy-loop that the deprecation warns about cannot happen.
+    #[allow(deprecated)]
+    app.run_iteration(|_, _| {});
+    assert!(
+        app.get_webview_window("mog-m1").is_none(),
+        "mock dropped the window"
+    );
+    assert_eq!(host.open_mog_window("m1"), Err(WindowError::Closing));
+    assert_eq!(host.active_mogs(), 0);
+    // The card of that MOG is being destroyed: its label waits for its event too.
+    host.window_destroyed("mog-m1");
+    host.open_mog_window("m1").unwrap();
+    assert_eq!(host.show_card("m1"), Err(WindowError::Closing));
+    host.window_destroyed("card-m1");
+    host.show_card("m1").unwrap();
 }
