@@ -9,6 +9,9 @@ import {
   MOODS,
   REQUEST_PHASES,
   SUCCESS_MS,
+  AGENT_MOOD_MS,
+  BLURB_REVEAL_MS,
+  type AgentMood,
   type HeldMood,
   type MoodSources,
   type RequestPhase,
@@ -135,6 +138,8 @@ const req = (phase: RequestPhase, extra: Partial<RequestView> = {}): RequestView
   ...extra,
 });
 const withReq = (r: RequestView): MoodSources => ({ ...quiet, requests: [r] });
+/** An agent `set_mood` call at time `at` (default T). */
+const agent = (mood: Mood, at = T): AgentMood => ({ mood, at });
 const off: ReturnType<MoodMapper>['overlays'] = {
   attention: false,
   recording: false,
@@ -281,7 +286,7 @@ describe('T11 mapMood (#9, 4.8 table)', () => {
     completed: 'success',
     inserted: 'success',
     failed: 'error',
-    gave_up: 'error',
+    gave_up: 'idle',
     cancelled: 'idle',
     late_finished: 'idle',
     queued_offline: 'idle',
@@ -364,6 +369,17 @@ describe('T11 mapMood (#9, 4.8 table)', () => {
     expect(mapMood(A, ins, T + INSERTED_MS).mood).toBe('idle');
   });
 
+  it('[UX-01a] a blurb reveal is answering for 1.2 s or less', () => {
+    expect(BLURB_REVEAL_MS).toBe(1200);
+    const src = withReq(req('blurb_reveal'));
+    expect(mapMood(A, src, T + BLURB_REVEAL_MS - 1).mood).toBe('answering');
+    expect(mapMood(A, src, T + BLURB_REVEAL_MS).mood).toBe('idle');
+  });
+
+  it('[UX-01a] GaveUp is not a failure: no error, the card says it checks again later', () => {
+    expect(mapMood(A, withReq(req('gave_up')), T)).toEqual({ mood: 'idle', overlays: off });
+  });
+
   it('[UX-01a] login required shows error for 3 s, then attention stays', () => {
     const src: MoodSources = { ...quiet, mog: { lifecycle: 'login_required', since: T } };
     expect(ERROR_MS).toBe(3000);
@@ -398,11 +414,13 @@ describe('T11 mapMood (#9, 4.8 table)', () => {
 
   it('[UX-41] agent set_mood applies when nothing above it has priority', () => {
     for (const p of ['partial', 'working'] as const) {
-      expect(mapMood(A, { ...withReq(req(p)), agentMood: 'answering' }, T).mood).toBe('answering');
+      expect(mapMood(A, { ...withReq(req(p)), agentMood: agent('answering') }, T).mood).toBe(
+        'answering',
+      );
     }
-    expect(mapMood(A, { ...quiet, agentMood: 'processing' }, T).mood).toBe('processing');
+    expect(mapMood(A, { ...quiet, agentMood: agent('processing') }, T).mood).toBe('processing');
     const dozing: MoodSources = { ...quiet, mog: { lifecycle: 'dozing', since: 0 } };
-    expect(mapMood(A, { ...dozing, agentMood: 'idle' }, T).mood).toBe('idle');
+    expect(mapMood(A, { ...dozing, agentMood: agent('idle') }, T).mood).toBe('idle');
   });
 
   it.each([
@@ -415,14 +433,52 @@ describe('T11 mapMood (#9, 4.8 table)', () => {
       mood: 'sleeping' as Mood,
     },
   ])('[UX-41] [AT-42] a set_mood during $name has no effect', ({ src, mood }) => {
-    for (const agentMood of MOODS) {
-      expect(mapMood(A, { ...src, agentMood }, T).mood).toBe(mood);
+    for (const m of MOODS) {
+      expect(mapMood(A, { ...src, agentMood: agent(m) }, T).mood).toBe(mood);
     }
   });
 
+  it('[UX-41] a newer request phase replaces the agent mood', () => {
+    const src: MoodSources = { ...quiet, agentMood: agent('idle', T) };
+    expect(mapMood(A, { ...src, requests: [req('working', { at: T + 1 })] }, T + 1).mood).toBe(
+      'processing',
+    );
+    expect(mapMood(A, { ...src, requests: [req('partial', { at: T + 1 })] }, T + 1).mood).toBe(
+      'answering',
+    );
+    // A request that was already in its phase when the agent spoke does not replace it.
+    expect(mapMood(A, { ...src, requests: [req('working', { at: T })] }, T + 1).mood).toBe('idle');
+  });
+
+  it('[UX-41] a newer lifecycle state replaces the agent mood', () => {
+    const src: MoodSources = {
+      ...quiet,
+      mog: { lifecycle: 'dozing', since: T + 1 },
+      agentMood: agent('answering', T),
+    };
+    expect(mapMood(A, src, T + 1).mood).toBe('sleeping');
+  });
+
+  it('[UX-41] an agent error lasts 3 s, an agent success 2.5 s', () => {
+    const working: MoodSources = { ...withReq(req('working', { at: T - 1 })) };
+    const err = { ...working, agentMood: agent('error') };
+    expect(mapMood(A, err, T + ERROR_MS - 1).mood).toBe('error');
+    expect(mapMood(A, err, T + ERROR_MS).mood).toBe('processing');
+    const ok = { ...working, agentMood: agent('success') };
+    expect(mapMood(A, ok, T + SUCCESS_MS - 1).mood).toBe('success');
+    expect(mapMood(A, ok, T + SUCCESS_MS).mood).toBe('processing');
+  });
+
+  it('[UX-41] any other agent mood ends after AGENT_MOOD_MS', () => {
+    expect(AGENT_MOOD_MS).toBe(10_000);
+    const src: MoodSources = { ...quiet, agentMood: agent('answering') };
+    expect(mapMood(A, src, T + AGENT_MOOD_MS - 1).mood).toBe('answering');
+    expect(mapMood(A, src, T + AGENT_MOOD_MS).mood).toBe('idle');
+  });
+
   it('[UX-41] [UX-07] the agent can never set listening', () => {
-    expect(mapMood(A, { ...quiet, agentMood: 'listening' }, T).mood).toBe('idle');
-    expect(mapMood(A, { ...withReq(req('working')), agentMood: 'listening' }, T).mood).toBe(
+    expect(mapMood(A, { ...quiet, agentMood: agent('listening') }, T).mood).toBe('idle');
+    expect(mapMood(A, { ...withReq(req('working')), agentMood: agent('listening') }, T).mood).toBe(
       'processing',
     );
   });
