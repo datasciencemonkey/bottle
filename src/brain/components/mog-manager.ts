@@ -161,7 +161,12 @@ export function ipcMogWindowClient(): MogWindowClient {
   };
 }
 
-/** The code of a gateway or component refusal (`{ error }` or `{ reason }`), else ''. */
+/**
+ * The code of a gateway or component refusal (`{ error }` or `{ reason }`), else ''.
+ * TODO(#379): `config_not_found`, `secret_named_key`, `token_like_value` and
+ * `config_limit_reached` must cross the gateway as `{ error: <code> }`. If #379 maps them to one
+ * code, these refusals show the generic save text.
+ */
 function codeOf(e: unknown): string {
   if (!isObj(e)) return '';
   if (isStr(e['error'])) return e['error'];
@@ -211,6 +216,7 @@ class Manager implements MogManager {
   readonly #configs: MogConfigClient;
   readonly #windows: MogWindowClient;
   readonly #newId: () => MogId;
+  /** Brain memory only. TODO(#419): sync with the R11 window events. */
   readonly #running = new Set<MogId>();
   readonly #listeners = new Set<() => void>();
   readonly #actor = new BrainActor();

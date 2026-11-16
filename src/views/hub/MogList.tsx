@@ -22,8 +22,11 @@ function send(action: MogAction): void {
 }
 
 /** The list the brain sends to this window, or null before the brain answers. */
-function useHubMogs(): HubMogList | null {
-  const [list, setList] = useState<HubMogList | null>(null);
+function useHubMogs(): { list: HubMogList | null; seq: number } {
+  const [state, setState] = useState<{ list: HubMogList | null; seq: number }>({
+    list: null,
+    seq: 0,
+  });
   useEffect(() => {
     let off: (() => void) | undefined;
     let gone = false;
@@ -33,7 +36,8 @@ function useHubMogs(): HubMogList | null {
       HUB_MOGS_EVENT,
       (e) => {
         const l = asHubMogList(e.payload);
-        if (l) setList(l);
+        // `seq` counts notices, so the same text twice is a new alert (read again).
+        if (l) setState((s) => ({ list: l, seq: l.notice ? s.seq + 1 : s.seq }));
       },
       { target },
     ).then((u) => {
@@ -48,7 +52,7 @@ function useHubMogs(): HubMogList | null {
       off?.();
     };
   }, []);
-  return list;
+  return state;
 }
 
 function CreateForm() {
@@ -124,8 +128,17 @@ function EditForm({ row, onDone }: { row: HubMogRow; onDone: () => void }) {
   );
 }
 
-function DeleteDialog({ row, onDone }: { row: HubMogRow; onDone: () => void }) {
+function DeleteDialog({
+  row,
+  onDone,
+  onDeleted,
+}: {
+  row: HubMogRow;
+  onDone: () => void;
+  onDeleted: () => void;
+}) {
   const cancel = useRef<HTMLButtonElement>(null);
+  const del = useRef<HTMLButtonElement>(null);
   const id = useId();
   useEffect(() => cancel.current?.focus(), []);
   return (
@@ -136,6 +149,11 @@ function DeleteDialog({ row, onDone }: { row: HubMogRow; onDone: () => void }) {
       aria-describedby={`${id}-text`}
       onKeyDown={(e) => {
         if (e.key === 'Escape') onDone();
+        if (e.key === 'Tab') {
+          // aria-modal: Tab and Shift+Tab move between the two buttons only.
+          e.preventDefault();
+          (document.activeElement === cancel.current ? del : cancel).current?.focus();
+        }
       }}
     >
       <p id={`${id}-title`}>Delete {row.name}?</p>
@@ -145,9 +163,10 @@ function DeleteDialog({ row, onDone }: { row: HubMogRow; onDone: () => void }) {
       </p>
       <button
         type="button"
+        ref={del}
         onClick={() => {
           send({ action: 'mog.delete', mogId: row.mogId, confirmed: true });
-          onDone();
+          onDeleted();
         }}
       >
         Delete
@@ -159,9 +178,15 @@ function DeleteDialog({ row, onDone }: { row: HubMogRow; onDone: () => void }) {
   );
 }
 
-function Row({ row }: { row: HubMogRow }) {
+function Row({ row, onDeleted }: { row: HubMogRow; onDeleted: () => void }) {
   const [mode, setMode] = useState<'view' | 'edit' | 'delete'>('view');
-  const done = () => setMode('view');
+  const editBtn = useRef<HTMLButtonElement>(null);
+  const deleteBtn = useRef<HTMLButtonElement>(null);
+  // WCAG 2.4.3: when the form or the dialog closes, focus goes back to the button that opened it.
+  const done = (back: { current: HTMLButtonElement | null }) => () => {
+    setMode('view');
+    back.current?.focus();
+  };
   return (
     <li data-mog-row={row.mogId} data-running={String(row.running)}>
       <span>{row.name}</span> <span>{row.running ? '(running)' : '(stopped)'}</span>
@@ -182,7 +207,12 @@ function Row({ row }: { row: HubMogRow }) {
           Start
         </button>
       )}
-      <button type="button" aria-label={`Edit ${row.name}`} onClick={() => setMode('edit')}>
+      <button
+        type="button"
+        ref={editBtn}
+        aria-label={`Edit ${row.name}`}
+        onClick={() => setMode('edit')}
+      >
         Edit
       </button>
       <button
@@ -192,34 +222,53 @@ function Row({ row }: { row: HubMogRow }) {
       >
         Duplicate
       </button>
-      <button type="button" aria-label={`Delete ${row.name}`} onClick={() => setMode('delete')}>
+      <button
+        type="button"
+        ref={deleteBtn}
+        aria-label={`Delete ${row.name}`}
+        onClick={() => setMode('delete')}
+      >
         Delete
       </button>
-      {mode === 'edit' && <EditForm row={row} onDone={done} />}
-      {mode === 'delete' && <DeleteDialog row={row} onDone={done} />}
+      {mode === 'edit' && <EditForm row={row} onDone={done(editBtn)} />}
+      {mode === 'delete' && (
+        <DeleteDialog
+          row={row}
+          onDone={done(deleteBtn)}
+          onDeleted={() => {
+            setMode('view');
+            onDeleted();
+          }}
+        />
+      )}
     </li>
   );
 }
 
 /** The hub section that lists, creates, edits, duplicates, starts, stops and deletes MOGs. */
 export function MogList() {
-  const list = useHubMogs();
+  const { list, seq } = useHubMogs();
   const id = useId();
+  const heading = useRef<HTMLHeadingElement>(null);
   const notice = list?.notice;
   return (
     <section aria-labelledby={`${id}-h`}>
-      <h2 id={`${id}-h`}>MOGs</h2>
+      <h2 id={`${id}-h`} ref={heading} tabIndex={-1}>
+        MOGs
+      </h2>
       <p role="status">
         {list ? `${list.runningCount} of ${list.maxRunning} MOGs are running.` : ''}
       </p>
-      <p role="alert">{notice?.kind === 'error' ? notice.text : ''}</p>
+      <p role="alert" key={seq}>
+        {notice?.kind === 'error' ? notice.text : ''}
+      </p>
       <p aria-live="polite">{notice?.kind === 'info' ? notice.text : ''}</p>
       {list && list.unreadable.length > 0 && (
         <p>{`${list.unreadable.length} MOG configs cannot be read. Bottle keeps the files.`}</p>
       )}
       <ul aria-label="Defined MOGs">
         {(list?.mogs ?? []).map((r) => (
-          <Row key={r.mogId} row={r} />
+          <Row key={r.mogId} row={r} onDeleted={() => heading.current?.focus()} />
         ))}
       </ul>
       <CreateForm />
