@@ -175,4 +175,55 @@ describe('card stack controller', () => {
     card.setSttBadge('STT: Databricks m1');
     expect(last()?.sttBadge).toBe('STT: Databricks m1');
   });
+
+  it('[UX-20a] [AT-20] sends at most 4 chips and the rest as overflow chips', () => {
+    const { card, last } = setup();
+    for (let i = 1; i <= 5; i++)
+      card.offerChip({ id: `c${i}`, kind: 'show_admin_checklist', label: `Chip ${i}` });
+    expect(last()?.chips.map((c) => c.id)).toEqual(['c1', 'c2', 'c3', 'c4']);
+    expect(last()?.overflowChips.map((c) => c.id)).toEqual(['c5']);
+  });
+
+  it('[UX-20a] a timed chip leaves the card update when its time ends', () => {
+    const { card, sim, last } = setup();
+    card.offerChip({ id: 'm', kind: 'saved_to_memory', label: 'Saved to memory' });
+    expect(last()?.chips.map((c) => c.id)).toEqual(['m']);
+    sim.advance(8 * S);
+    expect(last()?.chips).toEqual([]);
+  });
+
+  it('[UX-20c] [B1] a chip acts only on a chip_click; offering and hover do not', () => {
+    const acted: string[] = [];
+    const clock = createSimClock();
+    const sent: CardStackUpdate[] = [];
+    const card = createCardStack(MOG, {
+      clock,
+      schedule: simScheduler(clock).scheduler,
+      send: (u) => void sent.push(u),
+      openHistory: () => undefined,
+      onChip: (a) => void acted.push(a.kind),
+    });
+    card.add({ id: 'b1', text: 'a' });
+    card.offerChip({ id: 'q', kind: 'ask_genie', label: 'Ask Genie' });
+    card.input('hover', { blurbId: 'b1', on: true, via: 'pointer' });
+    card.input('click', { target: 'pin', blurbId: 'b1' });
+    expect(acted).toEqual([]);
+    card.input('chip_click', { chipId: 'zzz' });
+    card.input('chip_click', { chipId: 5 });
+    expect(acted).toEqual([]);
+    card.input('chip_click', { chipId: 'q' });
+    expect(acted).toEqual(['ask_genie']);
+  });
+
+  it('[UX-18] [AT-09] the expanded card sends the sections in order, with the STT badge', () => {
+    const { card, last } = setup();
+    card.setSttBadge('STT: local');
+    card.setExpanded({ answerMd: 'x', sql: 'SELECT 1', dataFlowText: 'd' });
+    expect(last()?.sections?.map((s) => s.id)).toEqual(['answer', 'sql', 'footer', 'dataFlow']);
+    expect(last()?.sections?.find((s) => s.id === 'footer')).toMatchObject({
+      sttBadge: 'STT: local',
+    });
+    card.setExpanded(undefined);
+    expect(last()?.sections).toBeUndefined();
+  });
 });

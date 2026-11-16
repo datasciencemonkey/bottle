@@ -37,6 +37,8 @@ const MAX_BODY: usize = 1024 * 1024;
 /// The whole request (head and body) must arrive within this time, or the connection closes.
 const REQUEST_DEADLINE: Duration = Duration::from_secs(5);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+/// A blocked read wakes at least this often to check whether the session closed.
+const STOP_POLL: Duration = Duration::from_millis(50);
 /// The most open connections per endpoint. Further connections to that endpoint close at once.
 /// A local process can still fill one endpoint before auth for up to [`REQUEST_DEADLINE`] at a
 /// time; TODO(#111): revisit the limits with the SP-19 traffic numbers.
@@ -408,30 +410,46 @@ fn error(stream: &mut TcpStream, status: u16, code: &str) {
     reply(stream, status, &json!({ "error": code }));
 }
 
-/// Read some bytes before `deadline`. `Err(408)` when the time is up, `Err(400)` on EOF.
-fn read_some(stream: &mut TcpStream, buf: &mut [u8], deadline: Instant) -> Result<usize, u16> {
-    let left = deadline.saturating_duration_since(Instant::now());
-    if left.is_zero() {
-        return Err(408);
-    }
-    let _ = stream.set_read_timeout(Some(left));
-    match stream.read(buf) {
-        Ok(0) => Err(400),
-        Ok(n) => Ok(n),
-        Err(e)
-            if matches!(
-                e.kind(),
-                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-            ) =>
-        {
-            Err(408)
+/// Read some bytes before `deadline`. `Err(408)` when the time is up, `Err(400)` on EOF or
+/// when the session closes (`stop`).
+///
+/// ARC-7 rule 9 (#381): `close` shuts each open socket, which wakes a blocked read on macOS
+/// and Linux but not on Windows. So the read waits in slices of [`STOP_POLL`] and checks `stop`
+/// between them; `close` then never waits for the request deadline.
+fn read_some(
+    stream: &mut TcpStream,
+    buf: &mut [u8],
+    deadline: Instant,
+    stop: &AtomicBool,
+) -> Result<usize, u16> {
+    loop {
+        if stop.load(Ordering::SeqCst) {
+            return Err(400);
         }
-        Err(_) => Err(400),
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(408);
+        }
+        let _ = stream.set_read_timeout(Some(left.min(STOP_POLL)));
+        match stream.read(buf) {
+            Ok(0) => return Err(400),
+            Ok(n) => return Ok(n),
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            Err(_) => return Err(400),
+        }
     }
 }
 
 /// Read the request head (up to the blank line) and any bytes after it.
-fn read_head(stream: &mut TcpStream, deadline: Instant) -> Result<(Vec<u8>, Vec<u8>), u16> {
+fn read_head(
+    stream: &mut TcpStream,
+    deadline: Instant,
+    stop: &AtomicBool,
+) -> Result<(Vec<u8>, Vec<u8>), u16> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 2048];
     loop {
@@ -442,7 +460,7 @@ fn read_head(stream: &mut TcpStream, deadline: Instant) -> Result<(Vec<u8>, Vec<
         if buf.len() > MAX_HEAD {
             return Err(431);
         }
-        let n = read_some(stream, &mut chunk, deadline)?;
+        let n = read_some(stream, &mut chunk, deadline, stop)?;
         buf.extend_from_slice(&chunk[..n]);
     }
 }
@@ -453,7 +471,7 @@ fn serve(mut stream: TcpStream, endpoint: LoopbackEndpoint, port: u16, shared: &
     if shared.stop.load(Ordering::SeqCst) {
         return;
     }
-    let (head, mut body) = match read_head(&mut stream, deadline) {
+    let (head, mut body) = match read_head(&mut stream, deadline, &shared.stop) {
         Ok(x) => x,
         Err(408) => return error(&mut stream, 408, "timeout"),
         Err(status) => return error(&mut stream, status, "bad_request"),
@@ -517,7 +535,7 @@ fn serve(mut stream: TcpStream, endpoint: LoopbackEndpoint, port: u16, shared: &
     let mut chunk = [0u8; 8192];
     while body.len() < length {
         let want = (length - body.len()).min(chunk.len());
-        match read_some(&mut stream, &mut chunk[..want], deadline) {
+        match read_some(&mut stream, &mut chunk[..want], deadline, &shared.stop) {
             Ok(n) => body.extend_from_slice(&chunk[..n]),
             Err(408) => return error(&mut stream, 408, "timeout"),
             Err(status) => return error(&mut stream, status, "bad_request"),
@@ -565,6 +583,28 @@ mod tests {
         assert!(ct_eq(b"abc", b"abc"));
         assert!(!ct_eq(b"abc", b"abd"));
         assert!(!ct_eq(b"abc", b"abcd"));
+    }
+
+    /// #381: Windows does not wake a blocked read when another thread shuts the socket, so the
+    /// read must see `stop` by itself. This test never shuts the socket, so it holds on every OS.
+    #[test]
+    fn arc_7_rule_9_a_blocked_read_returns_soon_after_stop_without_a_shutdown() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let reader_stop = Arc::clone(&stop);
+        let reader = std::thread::spawn(move || {
+            let mut buf = [0u8; 16];
+            let t = Instant::now();
+            let got = read_some(&mut server, &mut buf, t + REQUEST_DEADLINE, &reader_stop);
+            (got, t.elapsed())
+        });
+        std::thread::sleep(Duration::from_millis(200));
+        stop.store(true, Ordering::SeqCst);
+        let (got, waited) = reader.join().unwrap();
+        assert_eq!(got, Err(400));
+        assert!(waited < Duration::from_secs(1), "read waited {waited:?}");
     }
 
     #[test]
