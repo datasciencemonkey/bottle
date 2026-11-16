@@ -151,6 +151,33 @@ describe('V2 MOG view', () => {
     expect(subs).toBe(0);
   });
 
+  it('[UX-06a] [UX-06b] a new renderer gets level writes from a new meter during an owned mic stream', async () => {
+    const a = fakeMascot();
+    const b = fakeMascot();
+    let push: (f: MicLevelFrame) => void = () => undefined;
+    const levels: MicLevelSource = {
+      subscribe: (fn) => {
+        push = fn;
+        return () => undefined;
+      },
+    };
+    const first = () => a.m;
+    const second = () => b.m;
+    const { root } = await render(<MogView mogId={ID} createMascot={first} levels={levels} />);
+    act(() => {
+      for (let t = 0; t <= 300; t += 10) push({ owner: ID, dbfs: -10, t });
+    });
+    expect(a.calls.some((c) => c.startsWith('level:'))).toBe(true);
+    await act(async () => root.render(<MogView mogId={ID} createMascot={second} levels={levels} />));
+    expect(b.calls.some((c) => c.startsWith('level:'))).toBe(false);
+    // The stream goes on with the same owner. The new meter starts from 0, so it writes at once.
+    act(() => push({ owner: ID, dbfs: -10, t: 310 }));
+    act(() => push({ owner: ID, dbfs: -10, t: 400 }));
+    expect(b.calls.some((c) => c.startsWith('level:'))).toBe(true);
+    expect(a.calls.filter((c) => c.startsWith('level:')).length).toBeGreaterThan(0);
+    expect(a.calls.at(-1)).toBe('destroy');
+  });
+
   it('[UX-03] [UX-02b] a new renderer starts from the last state the brain sent', async () => {
     const a = fakeMascot();
     const b = fakeMascot();
