@@ -68,8 +68,5 @@ fn arc_f14_std_launcher_fails_cleanly_for_a_missing_program() {
     let cfg = RuntimeConfig::new("/nonexistent/bottle-harness-runtime", Vec::new());
     let spec = launch_spec(Harness::Claude, &cfg, "http://127.0.0.1:1");
     let r = StdRuntimeLauncher.launch(&spec, Arc::new(|_| {}));
-    assert_eq!(
-        r.err().map(|e| e.code()),
-        Some("agent_launch_failed")
-    );
+    assert_eq!(r.err().map(|e| e.code()), Some("agent_launch_failed"));
 }

@@ -14,7 +14,10 @@ use mog_core::agent_host::Harness;
 const SECRETS: [(&str, &str); 9] = [
     ("DATABRICKS_TOKEN", "dapi-FAKE-INHERITED-TOKEN-1"),
     ("DATABRICKS_CLIENT_SECRET", "fake-client-secret-2"),
-    ("DATABRICKS_HOST", "https://fake-inherited.cloud.databricks.com"),
+    (
+        "DATABRICKS_HOST",
+        "https://fake-inherited.cloud.databricks.com",
+    ),
     ("ANTHROPIC_API_KEY", "sk-ant-fake-3"),
     ("ANTHROPIC_AUTH_TOKEN", "fake-auth-4"),
     ("OPENAI_API_KEY", "sk-fake-5"),

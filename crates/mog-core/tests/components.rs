@@ -1,6 +1,7 @@
 //! Contract tests for the 17 Rust core components of section 4.3 (R1-R14, R16, R17; R15 is in
 //! `mog-core-ffi`). Each stub must report `NotImplemented` with its own component ID until its
-//! feature issue lands; R2 CaptureService has landed and is tested in `capture_service.rs`.
+//! feature issue lands; R2 CaptureService has landed and is tested in `capture_service.rs`;
+//! R16 AgentHost has landed and is tested in `agent_host.rs` (#112).
 //! ARC-6: only R6 TokenBroker names the token type.
 
 use std::path::{Path, PathBuf};
@@ -179,15 +180,6 @@ fn r14_wipe_service_stub_reports_not_implemented() {
         not_implemented(s.wipe(scope), "R14");
     }
     not_implemented(s.run_security_expiries(), "R14");
-}
-
-#[test]
-fn r16_agent_host_stub_reports_not_implemented() {
-    use mog_core::agent_host::{AgentHost, Harness, StubAgentHost};
-    let s = StubAgentHost;
-    not_implemented(s.start_session("demo", Harness::Claude), "R16");
-    not_implemented(s.start_session("demo", Harness::Codex), "R16");
-    not_implemented(s.stop_session("demo"), "R16");
 }
 
 #[test]

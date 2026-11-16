@@ -245,7 +245,9 @@ fn rtr_21a_sessions_share_no_conversation_state() {
     assert_eq!(turns[0]["sessionId"], a.as_str());
     assert_eq!(turns[0]["turn"], turn());
     assert!(
-        frames_for(&p, &b).iter().all(|f| f["type"] == "open_session"),
+        frames_for(&p, &b)
+            .iter()
+            .all(|f| f["type"] == "open_session"),
         "MOG b gets nothing from MOG a's turn"
     );
 }
@@ -275,8 +277,15 @@ fn rtr_21a_at_42_one_session_crash_does_not_stop_the_others() {
         },
     );
 
-    assert_eq!(r.launcher.launches(), 1, "a session crash does not relaunch the runtime");
-    assert!(!*p.stopped.lock().unwrap(), "the shared runtime keeps running");
+    assert_eq!(
+        r.launcher.launches(),
+        1,
+        "a session crash does not relaunch the runtime"
+    );
+    assert!(
+        !*p.stopped.lock().unwrap(),
+        "the shared runtime keeps running"
+    );
     assert_eq!(frames_for(&p, &a).len(), before_a, "MOG a is not touched");
     assert_eq!(frames_for(&p, &c).len(), before_c, "MOG c is not touched");
     assert_eq!(r.host.session_state("a"), Some(SessionState::Running));
@@ -296,9 +305,16 @@ fn rtr_21a_stop_session_closes_only_that_session() {
     assert_eq!(closes.len(), 1);
     assert_eq!(closes[0]["sessionId"], a.as_str());
     assert_eq!(r.host.session_count(), 1);
-    assert_eq!(r.proxy.session_count(), 1, "the closed session's secret is revoked");
+    assert_eq!(
+        r.proxy.session_count(),
+        1,
+        "the closed session's secret is revoked"
+    );
     assert!(!*p.stopped.lock().unwrap());
-    assert_eq!(r.host.stop_session("a").unwrap_err(), AgentError::UnknownMog);
+    assert_eq!(
+        r.host.stop_session("a").unwrap_err(),
+        AgentError::UnknownMog
+    );
 }
 
 #[test]
@@ -309,13 +325,20 @@ fn rtr_21a_last_session_stop_stops_the_runtime() {
     assert!(*r.launcher.proc(0).stopped.lock().unwrap());
     assert_eq!(r.host.runtime_count(), 0);
     r.host.start_session("b", Harness::Claude).unwrap();
-    assert_eq!(r.launcher.launches(), 2, "a later start launches a fresh runtime");
+    assert_eq!(
+        r.launcher.launches(),
+        2,
+        "a later start launches a fresh runtime"
+    );
 }
 
 #[test]
 fn rtr_23_start_fails_without_a_model_target() {
     let r = rig();
-    let e = r.host.start_session("no-home", Harness::Claude).unwrap_err();
+    let e = r
+        .host
+        .start_session("no-home", Harness::Claude)
+        .unwrap_err();
     assert_eq!(e, AgentError::TargetUnavailable);
     assert_eq!(r.launcher.launches(), 0, "no runtime without a model route");
 }
@@ -445,8 +468,18 @@ fn arc_7_session_secret_is_not_in_env_or_args() {
 fn arc_7_status_and_errors_are_content_free() {
     let r = rig();
     let a = r.host.start_session("a", Harness::Claude).unwrap();
-    r.launcher.fire(0, RuntimeEvent::SessionFailed { session_id: a.clone() });
-    r.launcher.fire(0, RuntimeEvent::SessionFailed { session_id: a.clone() });
+    r.launcher.fire(
+        0,
+        RuntimeEvent::SessionFailed {
+            session_id: a.clone(),
+        },
+    );
+    r.launcher.fire(
+        0,
+        RuntimeEvent::SessionFailed {
+            session_id: a.clone(),
+        },
+    );
     let e = r.host.send("a", &turn()).unwrap_err();
     let text = format!("{e} {e:?}");
     assert!(!text.contains("revenue"), "an error never echoes the turn");
@@ -467,7 +500,12 @@ fn arc_f14_restarts_a_failed_session_once_with_a_new_secret() {
     let p = r.launcher.proc(0);
     let first = secret_of(&frames_of(&p, "open_session")[0]);
 
-    r.launcher.fire(0, RuntimeEvent::SessionFailed { session_id: a.clone() });
+    r.launcher.fire(
+        0,
+        RuntimeEvent::SessionFailed {
+            session_id: a.clone(),
+        },
+    );
 
     let opens = frames_of(&p, "open_session");
     assert_eq!(opens.len(), 2, "the session is reopened once");
@@ -485,10 +523,24 @@ fn arc_f14_second_failure_marks_the_session_failed_for_the_fallback() {
     let r = rig();
     let a = r.host.start_session("a", Harness::Claude).unwrap();
     r.host.start_session("b", Harness::Claude).unwrap();
-    r.launcher.fire(0, RuntimeEvent::SessionFailed { session_id: a.clone() });
-    r.launcher.fire(0, RuntimeEvent::SessionFailed { session_id: a.clone() });
+    r.launcher.fire(
+        0,
+        RuntimeEvent::SessionFailed {
+            session_id: a.clone(),
+        },
+    );
+    r.launcher.fire(
+        0,
+        RuntimeEvent::SessionFailed {
+            session_id: a.clone(),
+        },
+    );
 
-    assert_eq!(frames_of(&r.launcher.proc(0), "open_session").len(), 3, "no 2nd restart");
+    assert_eq!(
+        frames_of(&r.launcher.proc(0), "open_session").len(),
+        3,
+        "no 2nd restart"
+    );
     assert_eq!(r.host.session_state("a"), Some(SessionState::Failed));
     let e = r.host.send("a", &turn()).unwrap_err();
     assert_eq!(e, AgentError::Unavailable);
@@ -504,8 +556,18 @@ fn arc_f14_second_failure_marks_the_session_failed_for_the_fallback() {
 fn arc_f14_a_failed_mog_can_start_again_after_a_user_action() {
     let r = rig();
     let a = r.host.start_session("a", Harness::Claude).unwrap();
-    r.launcher.fire(0, RuntimeEvent::SessionFailed { session_id: a.clone() });
-    r.launcher.fire(0, RuntimeEvent::SessionFailed { session_id: a.clone() });
+    r.launcher.fire(
+        0,
+        RuntimeEvent::SessionFailed {
+            session_id: a.clone(),
+        },
+    );
+    r.launcher.fire(
+        0,
+        RuntimeEvent::SessionFailed {
+            session_id: a.clone(),
+        },
+    );
     let a2 = r.host.start_session("a", Harness::Claude).unwrap();
     assert_ne!(a, a2, "a new session after the failed one");
     assert_eq!(r.host.session_state("a"), Some(SessionState::Running));
@@ -528,13 +590,20 @@ fn arc_f14_runtime_exit_relaunches_once_and_reopens_the_sessions() {
     assert!(reopened.contains(&a) && reopened.contains(&b));
     assert_eq!(r.host.session_state("a"), Some(SessionState::Restarted));
     r.host.send("a", &turn()).unwrap();
-    assert_eq!(frames_of(&p2, "turn").len(), 1, "turns go to the new process");
+    assert_eq!(
+        frames_of(&p2, "turn").len(),
+        1,
+        "turns go to the new process"
+    );
 
     r.launcher.fire(1, RuntimeEvent::Exited);
     assert_eq!(r.launcher.launches(), 2, "no second runtime restart");
     assert_eq!(r.host.session_state("a"), Some(SessionState::Failed));
     assert_eq!(r.host.session_state("b"), Some(SessionState::Failed));
-    assert_eq!(r.host.send("b", &turn()).unwrap_err(), AgentError::Unavailable);
+    assert_eq!(
+        r.host.send("b", &turn()).unwrap_err(),
+        AgentError::Unavailable
+    );
     assert_eq!(r.proxy.session_count(), 0);
 }
 
@@ -545,7 +614,10 @@ fn arc_f14_runtime_exit_of_one_kind_does_not_touch_the_other_kind() {
     r.host.start_session("b", Harness::Codex).unwrap();
     let codex_frames = r.launcher.proc(1).frames.lock().unwrap().len();
     r.launcher.fire(0, RuntimeEvent::Exited);
-    assert_eq!(r.launcher.proc(1).frames.lock().unwrap().len(), codex_frames);
+    assert_eq!(
+        r.launcher.proc(1).frames.lock().unwrap().len(),
+        codex_frames
+    );
     assert_eq!(r.host.session_state("b"), Some(SessionState::Running));
 }
 
@@ -557,7 +629,12 @@ fn arc_f14_stale_events_from_an_old_process_are_ignored() {
     assert_eq!(r.launcher.launches(), 2);
     // A late event from the dead first process must not spend the new budget.
     r.launcher.fire(0, RuntimeEvent::Exited);
-    r.launcher.fire(0, RuntimeEvent::SessionFailed { session_id: a.clone() });
+    r.launcher.fire(
+        0,
+        RuntimeEvent::SessionFailed {
+            session_id: a.clone(),
+        },
+    );
     assert_eq!(r.launcher.launches(), 2);
     assert_eq!(r.host.session_state("a"), Some(SessionState::Restarted));
 }

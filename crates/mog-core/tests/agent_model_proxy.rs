@@ -146,7 +146,9 @@ fn header<'a>(seen: &'a Seen, name: &str) -> Option<&'a str> {
 fn rtr_23_claude_route_goes_to_ai_gateway_anthropic_with_the_token() {
     let r = rig();
     let s = SessionSecret::generate();
-    r.proxy.register(&s, gateway("mog-a", Harness::Claude)).unwrap();
+    r.proxy
+        .register(&s, gateway("mog-a", Harness::Claude))
+        .unwrap();
     let (status, body) = post(
         &r.proxy,
         "/anthropic/v1/messages",
@@ -170,8 +172,16 @@ fn rtr_23_claude_route_goes_to_ai_gateway_anthropic_with_the_token() {
     assert_eq!(seen.mog_id, "mog-a");
     assert_eq!(header(&seen, "anthropic-version"), Some("2023-06-01"));
     assert_eq!(header(&seen, "content-type"), Some("application/json"));
-    assert_eq!(header(&seen, "x-api-key"), None, "the session secret stays local");
-    assert_eq!(header(&seen, "authorization"), None, "auth is only the token field");
+    assert_eq!(
+        header(&seen, "x-api-key"),
+        None,
+        "the session secret stays local"
+    );
+    assert_eq!(
+        header(&seen, "authorization"),
+        None,
+        "auth is only the token field"
+    );
     assert_eq!(*r.tokens.profiles.lock().unwrap(), vec!["bottle-home"]);
 }
 
@@ -179,12 +189,17 @@ fn rtr_23_claude_route_goes_to_ai_gateway_anthropic_with_the_token() {
 fn rtr_23_codex_route_goes_to_ai_gateway_mlflow_v1_with_the_token() {
     let r = rig();
     let s = SessionSecret::generate();
-    r.proxy.register(&s, gateway("mog-b", Harness::Codex)).unwrap();
+    r.proxy
+        .register(&s, gateway("mog-b", Harness::Codex))
+        .unwrap();
     let bearer = format!("Bearer {}", s.as_str());
     let (status, _) = post(
         &r.proxy,
         "/openai/v1/chat/completions",
-        &[("Authorization", &bearer), ("content-type", "application/json")],
+        &[
+            ("Authorization", &bearer),
+            ("content-type", "application/json"),
+        ],
         "{}",
     );
     assert_eq!(status, 200);
@@ -259,7 +274,11 @@ fn rtr_23_gateway_host_must_be_a_bare_host_name() {
                 host: bad.into(),
             },
         };
-        assert_eq!(r.proxy.register(&s, route).unwrap_err(), AgentError::InvalidTarget, "{bad}");
+        assert_eq!(
+            r.proxy.register(&s, route).unwrap_err(),
+            AgentError::InvalidTarget,
+            "{bad}"
+        );
     }
 }
 
@@ -275,7 +294,9 @@ fn rtr_23_proxy_listens_on_loopback_only() {
 fn arc_7_rtr_28_unknown_secret_is_refused_and_never_forwarded() {
     let r = rig();
     let s = SessionSecret::generate();
-    r.proxy.register(&s, gateway("mog-a", Harness::Claude)).unwrap();
+    r.proxy
+        .register(&s, gateway("mog-a", Harness::Claude))
+        .unwrap();
     for headers in [
         vec![("x-api-key", "wrong")],
         vec![("Authorization", "Bearer wrong")],
@@ -286,14 +307,19 @@ fn arc_7_rtr_28_unknown_secret_is_refused_and_never_forwarded() {
         assert!(!body.contains(FAKE_TOKEN));
     }
     assert_eq!(r.upstream.calls.load(Ordering::SeqCst), 0);
-    assert!(r.tokens.profiles.lock().unwrap().is_empty(), "no token is read");
+    assert!(
+        r.tokens.profiles.lock().unwrap().is_empty(),
+        "no token is read"
+    );
 }
 
 #[test]
 fn arc_7_unregistered_secret_is_refused() {
     let r = rig();
     let s = SessionSecret::generate();
-    r.proxy.register(&s, gateway("mog-a", Harness::Claude)).unwrap();
+    r.proxy
+        .register(&s, gateway("mog-a", Harness::Claude))
+        .unwrap();
     r.proxy.unregister(&s);
     let (status, _) = post(
         &r.proxy,
@@ -309,7 +335,9 @@ fn arc_7_unregistered_secret_is_refused() {
 fn arc_7_rtr_29c_only_model_paths_are_forwarded() {
     let r = rig();
     let s = SessionSecret::generate();
-    r.proxy.register(&s, gateway("mog-a", Harness::Claude)).unwrap();
+    r.proxy
+        .register(&s, gateway("mog-a", Harness::Claude))
+        .unwrap();
     for path in [
         "/anthropic/api/2.0/knowledge/pages",
         "/anthropic/v1/messages/../../api/2.0/knowledge/pages",
@@ -333,7 +361,9 @@ fn arc_7_rtr_29c_only_model_paths_are_forwarded() {
 fn arc_7_chunked_and_oversize_bodies_are_refused() {
     let r = rig();
     let s = SessionSecret::generate();
-    r.proxy.register(&s, gateway("mog-a", Harness::Claude)).unwrap();
+    r.proxy
+        .register(&s, gateway("mog-a", Harness::Claude))
+        .unwrap();
     let chunked = format!(
         "POST /anthropic/v1/messages HTTP/1.1\r\nx-api-key: {}\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
         s.as_str()
@@ -360,7 +390,9 @@ fn arc_7_upstream_failure_gives_a_fixed_content_free_error() {
     });
     let proxy = ModelProxy::start(tokens, Arc::new(Down)).unwrap();
     let s = SessionSecret::generate();
-    proxy.register(&s, gateway("mog-a", Harness::Claude)).unwrap();
+    proxy
+        .register(&s, gateway("mog-a", Harness::Claude))
+        .unwrap();
     let (status, body) = post(
         &proxy,
         "/anthropic/v1/messages",

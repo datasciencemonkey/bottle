@@ -1,12 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import type {
-  AskRequest,
-  PageDraft,
-  RouterDecision,
-  SegmentRef,
-  Tags,
-} from '../../shared/interfaces';
+import type { AskRequest, PageDraft, SegmentRef, Tags } from '../../shared/interfaces';
 import { BrainActor } from '../actor';
 import { core } from '../test-core';
 import { NotImplementedError } from '../errors';
@@ -54,7 +48,6 @@ const page: PageDraft = {
   requestId: 'r',
   source: 'you',
 };
-const decision = {} as RouterDecision;
 
 /** Calls `fn` and checks that it throws (or rejects with) a NotImplementedError for `issue`. */
 async function expectStub(fn: () => unknown, issue: number): Promise<void> {
