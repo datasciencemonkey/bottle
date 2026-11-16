@@ -260,14 +260,17 @@ impl MicHost for FakeHost {
     }
 }
 
+/// One frame the sink got: mono samples and the sample rate.
+type Got = (Vec<f32>, u32);
+
 /// An in-RAM test sink: it keeps every frame it gets.
 #[derive(Clone, Default)]
 struct RamSink {
-    frames: Arc<Mutex<Vec<(Vec<f32>, u32)>>>,
+    frames: Arc<Mutex<Vec<Got>>>,
 }
 
 impl RamSink {
-    fn frames(&self) -> Vec<(Vec<f32>, u32)> {
+    fn frames(&self) -> Vec<Got> {
         self.frames.lock().unwrap().clone()
     }
 }

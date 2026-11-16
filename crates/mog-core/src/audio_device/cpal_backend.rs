@@ -109,14 +109,27 @@ where
 
 /// The content-free code of a cpal error (Handy `recording_notice_code`).
 pub fn code_for(kind: ErrorKind) -> DeviceError {
-    let _ = kind;
-    todo!("#388 green")
+    match kind {
+        ErrorKind::PermissionDenied => codes::PERMISSION_DENIED,
+        ErrorKind::DeviceNotAvailable | ErrorKind::HostUnavailable => codes::NO_DEVICE,
+        ErrorKind::DeviceBusy => codes::DEVICE_BUSY,
+        ErrorKind::UnsupportedConfig
+        | ErrorKind::UnsupportedOperation
+        | ErrorKind::InvalidInput => codes::UNSUPPORTED_FORMAT,
+        // `ErrorKind` is non-exhaustive: a new kind is a plain device failure.
+        _ => codes::DEVICE_FAILED,
+    }
 }
 
 /// Whether a cpal stream error after open ends the stream.
 pub fn fault_for(kind: ErrorKind) -> StreamFault {
-    let _ = kind;
-    todo!("#388 green")
+    match kind {
+        // cpal rerouted the stream to the new default device; it still runs.
+        ErrorKind::DeviceChanged => StreamFault::Transient,
+        // A glitch or a refused real-time priority: audio still flows.
+        ErrorKind::Xrun | ErrorKind::RealtimeDenied => StreamFault::Transient,
+        _ => StreamFault::Fatal,
+    }
 }
 
 #[cfg(test)]

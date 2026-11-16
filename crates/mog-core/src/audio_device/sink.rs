@@ -48,6 +48,16 @@ impl FrameSink for DiscardSink {
 /// Mix interleaved samples down to mono into `out` (cleared first): the mean of the channels
 /// of each frame. A trailing part frame is dropped. `channels` 0 counts as 1.
 pub fn mix_to_mono(interleaved: &[f32], channels: u16, out: &mut Vec<f32>) {
-    let _ = (interleaved, channels, out);
-    todo!("#388 green")
+    out.clear();
+    let channels = channels.max(1);
+    if channels == 1 {
+        out.extend_from_slice(interleaved);
+        return;
+    }
+    let scale = f32::from(channels);
+    out.extend(
+        interleaved
+            .chunks_exact(usize::from(channels))
+            .map(|f| f.iter().sum::<f32>() / scale),
+    );
 }
