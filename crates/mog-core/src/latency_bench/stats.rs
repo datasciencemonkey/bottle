@@ -249,8 +249,8 @@ pub struct BudgetResult {
     pub summary: Option<Summary>,
     /// Key-ups seen and cycles, for NFR-08a.
     pub key_ups: Option<(u32, u32)>,
-    /// Span rows: trials of the row with the start mark but no end mark (the chip, the ack, the
-    /// mic or the text never came). Each one counts as over the limit.
+    /// Span rows: trials of the row that started (key-down) but have no end mark (no key-up, or
+    /// the chip, the ack, the mic or the text never came). Each one counts as over the limit.
     pub incomplete: usize,
     /// The outcome.
     pub outcome: Outcome,
@@ -280,16 +280,16 @@ fn row_trials(
         .filter(move |t| route.is_none_or(|r| t.route() == r))
 }
 
-/// The trials of a span row that have `from` but no `to`.
+/// The trials of a span row that started (key-down) but have no `to`. A press with no key-up
+/// counts too, so a lost key-up cannot hide a key-up row sample.
 pub fn incomplete_trials(
     trials: &[Trial],
-    from: Mark,
     to: Mark,
     path: Option<SttPath>,
     route: Option<Route>,
 ) -> usize {
     row_trials(trials, path, route)
-        .filter(|t| t.at(from).is_some() && t.at(to).is_none())
+        .filter(|t| t.at(Mark::KeyDown).is_some() && t.at(to).is_none())
         .count()
 }
 
@@ -328,7 +328,7 @@ pub fn evaluate(budget: &Budget, trials: &[Trial], hotkey: &HotkeySamples) -> Bu
             stat,
             max,
         } => {
-            incomplete = incomplete_trials(trials, from, to, path, route);
+            incomplete = incomplete_trials(trials, to, path, route);
             let (s, o) = time_outcome(&span_samples(trials, from, to, path, route), stat, max);
             // A press whose end step never came is over the limit, whatever the other samples say.
             let o = if incomplete > 0 { Outcome::Over } else { o };

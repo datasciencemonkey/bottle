@@ -36,8 +36,8 @@ view reports the chip time.
 8. AT-30 on macOS reads the `EV` lines of the SP-03 probe (#5), so the rig run can start now.
    NFR-08a and NFR-08b name HotkeyService, and the probe is not the HotkeyService that ships. So a
    file from probe samples is at most `partial`. The HotkeyService log is #323.
-9. A press with the start mark of a row but no end mark (no chip, no acknowledgement, no mic, no
-   inserted text) counts as over the limit. A missed step is the failure that the rows guard against.
+9. A press with a key-down but no end mark of a row (no key-up, no chip, no acknowledgement, no
+   mic, no inserted text) counts as over the limit. A missed step is the failure that the rows guard against.
 10. Each benchmark file has `Scope | part: <IDs> only`. `scripts/check_gate_evidence.py` does not
     accept `part` files alone for a ticked checklist row, so the latency rows cannot stand in for
     the whole AT.

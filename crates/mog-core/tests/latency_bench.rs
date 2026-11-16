@@ -799,3 +799,30 @@ fn at_30_samples_from_the_sp03_probe_are_at_most_partial() {
     let r = Report::build(Gate::At30, device(), device_info(), &trials, &shipped);
     assert_eq!(r.result(), GateResult::Pass, "{:?}", r.missing());
 }
+
+#[test]
+fn at_21_at_43_a_press_with_no_key_up_is_over_for_the_key_up_rows() {
+    let cfg = BudgetConfig::default();
+    let hk = HotkeySamples::default();
+    let mut trials = good_trials();
+    // A local question and a local dictation whose key-up never came.
+    for (id, route) in [(900, Route::Question), (901, Route::Dictation)] {
+        let mut lost = Trial::new(id, SttPath::Local, route);
+        lost.record(Mark::KeyDown, ms(2_000_000)).unwrap();
+        lost.record(Mark::MicLive, ms(2_000_040)).unwrap();
+        trials.push(lost);
+    }
+    for id in ["NFR-01a", "NFR-01c", "NFR-01d"] {
+        let r = evaluate(&budget(id, cfg).unwrap(), &trials, &hk);
+        assert_eq!(r.outcome, Outcome::Over, "{id}");
+        assert!(r.incomplete >= 1, "{id}");
+    }
+    // The mic did go live, so NFR-02 still has every sample.
+    let r = evaluate(&budget("NFR-02", cfg).unwrap(), &trials, &hk);
+    assert_eq!(r.outcome, Outcome::Within);
+    let back = parse_csv(&to_csv(&trials)).unwrap();
+    for gate in [Gate::At21, Gate::At43] {
+        let r = Report::build(gate, device(), device_info(), &back, &hk);
+        assert_eq!(r.result(), GateResult::Fail, "{gate:?}");
+    }
+}

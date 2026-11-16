@@ -45,7 +45,7 @@ The report writes `pass` only when all these rules hold:
 
 Each file has `Scope | part: <IDs> only`. `scripts/check_gate_evidence.py` does not accept a
 `part` file alone for a ticked checklist row: the other parts of the AT need their own file.
-A press with a start mark and no end mark (for example no chip) counts as over the limit.
+A press with a key-down and no end mark (no key-up, or for example no chip) counts as over the limit.
 For AT-30, the key samples must come from the shipped HotkeyService (TODO(#323)); samples from the
 SP-03 probe give at most `partial`.
 
@@ -143,6 +143,7 @@ When #319 lands, the steps are:
      (`ps` gives RSS in KB; the `awk` step makes it MB.)
    - Windows (PowerShell): `while ($true) { $m = [math]::Round((Get-Process Bottle).WorkingSet64 / 1MB); $c = (Get-Counter '\Process(Bottle)\% Processor Time').CounterSamples[0].CookedValue; "$m $([math]::Round($c))" | Tee-Object -Append $HOME\bottle-res.txt; Start-Sleep 5 }`
    Use the largest first number as `--rss-mb` and the mean of the second numbers as `--cpu-pct`.
+   Both tools give the CPU in percent of one core, so the value can be over 100 on a multi-core CPU.
 5. Write the evidence files (one per gate) and run the device test:
    ```
    cargo run -p mog-core --example latency_bench -- report --gate AT-21 \
@@ -158,5 +159,5 @@ When #319 lands, the steps are:
    If you did not do step 3 (no cloud STT), NFR-01b has no data. Then the AT-21 result is
    `partial` and the device test fails on NFR-01b. This is the expected result, not a bug: record
    it and open a follow-up for the cloud run.
-6. Do not cancel a press during the run. A press with no chip, acknowledgement, mic or inserted
-   text counts as over the limit, so the row is `over`.
+6. Do not cancel a press during the run. A press with no key-up, chip, acknowledgement, mic or
+   inserted text counts as over the limit, so the row is `over`.
