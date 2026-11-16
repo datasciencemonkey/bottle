@@ -58,13 +58,49 @@ pub struct ClipboardFormat {
 }
 
 /// The formats to write for `text` on `platform` (SEC-30): the text and the privacy flags.
-pub fn clipboard_formats(_platform: ClipboardPlatform, _text: &str) -> Vec<ClipboardFormat> {
-    Vec::new()
+pub fn clipboard_formats(platform: ClipboardPlatform, text: &str) -> Vec<ClipboardFormat> {
+    let marker = |name| ClipboardFormat {
+        name,
+        data: Vec::new(),
+    };
+    let dword_zero = |name| ClipboardFormat {
+        name,
+        data: 0u32.to_le_bytes().to_vec(),
+    };
+    match platform {
+        ClipboardPlatform::MacOs => vec![
+            ClipboardFormat {
+                name: "public.utf8-plain-text",
+                data: text.as_bytes().to_vec(),
+            },
+            marker("org.nspasteboard.ConcealedType"),
+            marker("org.nspasteboard.TransientType"),
+        ],
+        ClipboardPlatform::Windows => vec![
+            ClipboardFormat {
+                name: "CF_UNICODETEXT",
+                data: text
+                    .encode_utf16()
+                    .chain([0])
+                    .flat_map(u16::to_le_bytes)
+                    .collect(),
+            },
+            marker("ExcludeClipboardContentFromMonitorProcessing"),
+            dword_zero("CanIncludeInClipboardHistory"),
+            dword_zero("CanUploadToCloudClipboard"),
+        ],
+    }
 }
 
 /// The platform of this build, or `None` where no clipboard flags are defined.
 pub fn current_clipboard_platform() -> Option<ClipboardPlatform> {
-    None
+    if cfg!(target_os = "macos") {
+        Some(ClipboardPlatform::MacOs)
+    } else if cfg!(windows) {
+        Some(ClipboardPlatform::Windows)
+    } else {
+        None
+    }
 }
 
 /// The OS clipboard. Kept behind a trait so tests run without a real clipboard.
@@ -86,13 +122,39 @@ impl<B: ClipboardBackend> ClipboardWriter<B> {
     }
 
     /// Write `text` for `platform` with the privacy flags set.
-    pub fn write_text_for(&self, _platform: ClipboardPlatform, _text: &str) -> CoreResult<()> {
-        Ok(())
+    pub fn write_text_for(&self, platform: ClipboardPlatform, text: &str) -> CoreResult<()> {
+        self.backend.write(&clipboard_formats(platform, text))
     }
 
     /// Write `text` for the platform of this build.
-    pub fn write_text(&self, _text: &str) -> CoreResult<()> {
-        let _ = &self.backend;
+    /// On a platform without flags it fails closed and writes nothing.
+    pub fn write_text(&self, text: &str) -> CoreResult<()> {
+        match current_clipboard_platform() {
+            Some(platform) => self.write_text_for(platform, text),
+            None => Err(CoreError::NotImplemented { component: ID }),
+        }
+    }
+}
+
+/// The macOS clipboard: the general `NSPasteboard`.
+#[cfg(target_os = "macos")]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct MacPasteboard;
+
+#[cfg(target_os = "macos")]
+impl ClipboardBackend for MacPasteboard {
+    fn write(&self, formats: &[ClipboardFormat]) -> CoreResult<()> {
+        use objc2_app_kit::NSPasteboard;
+        use objc2_foundation::{NSData, NSString};
+
+        let pasteboard = NSPasteboard::generalPasteboard();
+        pasteboard.clearContents();
+        for format in formats {
+            let ty = NSString::from_str(format.name);
+            if !pasteboard.setData_forType(Some(&NSData::with_bytes(&format.data)), &ty) {
+                return Err(CoreError::NotImplemented { component: ID });
+            }
+        }
         Ok(())
     }
 }
