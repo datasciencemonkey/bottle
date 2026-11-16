@@ -5,6 +5,9 @@
 
 pub mod hotkey_host;
 pub mod ipc;
+#[cfg(target_os = "macos")]
+pub mod macos_panel;
+pub mod mog_drag;
 pub mod window_host;
 pub mod windows;
 
@@ -14,6 +17,10 @@ use windows::WindowKind;
 
 /// The id of the demo MOG and card that a debug build opens when `BOTTLE_DEMO_WINDOWS=1`.
 pub const DEMO_ID: &str = "demo";
+
+/// MOG-01b: macOS `activateIgnoringOtherApps` at launch. The tao default (`true`) activates Bottle
+/// and takes the frontmost app away from the user (SP-01 section 4.2).
+pub const ACTIVATE_IGNORING_OTHER_APPS: bool = false;
 
 /// The windows Bottle opens at start: the hidden brain and the hub.
 /// MOG and card windows open on demand (ARC-3).
@@ -35,7 +42,10 @@ pub fn linked_core_version() -> &'static str {
 pub fn run() {
     let demo =
         cfg!(debug_assertions) && std::env::var("BOTTLE_DEMO_WINDOWS").is_ok_and(|v| v == "1");
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let builder = builder.activate_ignoring_other_apps(ACTIVATE_IGNORING_OTHER_APPS);
+    builder
         .manage(ipc::BrainChannel::default())
         .invoke_handler(ipc::handler)
         // R1: an opened MOG or card view moves the talk-key target (#305).
@@ -52,6 +62,19 @@ pub fn run() {
         })
         .setup(move |app| {
             let handle = app.handle();
+            // MOG-02 / MOG-01c: MOG windows are non-activating NSPanels that a native drag moves.
+            #[cfg(target_os = "macos")]
+            {
+                // `setup` runs on the main thread; without it the native drag (MOG-01c) is lost.
+                let mtm = objc2::MainThreadMarker::new()
+                    .ok_or("Bottle setup is not on the main thread")?;
+                macos_panel::install_drag_monitor(mtm);
+                app.manage(TauriWindowHost::with_style(
+                    handle.clone(),
+                    Box::new(macos_panel::MacPanelStyle),
+                ));
+            }
+            #[cfg(not(target_os = "macos"))]
             app.manage(TauriWindowHost::new(handle.clone()));
             // R1: start the talk key. This never prompts (CAP-36, #305). If the forwarder
             // thread cannot start, the app still runs without the talk key.

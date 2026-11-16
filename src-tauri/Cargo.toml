@@ -23,8 +23,26 @@ serde_json.workspace = true
 # ARC-4: no tauri-plugin-http, -shell, -fs or any network plugin. A test checks this file.
 tauri.workspace = true
 
+# MOG-02 / MOG-01c: the NSPanel class swap and the drag monitor. tao and wry already use these
+# versions, so they add no crate to Cargo.lock (ADR 0009). No git dependency (#160).
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+objc2 = "0.6.5"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSColor", "NSEvent", "NSGraphics", "NSPanel", "NSResponder", "NSWindow"] }
+
 [dev-dependencies]
 # ARC-4 test: match window labels the way Tauri matches capability globs.
 glob.workspace = true
 # `tauri::test::mock_app` for the R11 host tests. The `test` feature adds no crate.
 tauri = { workspace = true, features = ["test"] }
+
+# MOG-02 AppKit read-back: AppKit windows are made on the main thread, so this test has its own main.
+[[test]]
+name = "macos_panel_appkit"
+harness = false
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2 = "0.6.5"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSEvent", "NSGraphics", "NSGraphicsContext", "NSResponder", "NSView", "NSWindow"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSGeometry"] }
+objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "objc2-app-kit", "WKWebView", "WKWebViewConfiguration"] }
