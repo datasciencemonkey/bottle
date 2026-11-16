@@ -16,6 +16,8 @@ export interface MogViewState {
   level?: number;
   /** The badges the brain computed (`mapBadges`, ADR 0029). Each has text and a label. */
   badges?: MogBadgeView[];
+  /** Only with `VITE_BOTTLE_LATENCY_TRACE=1`: times for the frame probe (#13, ADR 0031). */
+  trace?: unknown;
 }
 
 /** One MOG badge (MOG-07, UX-38, UX-39a). `hoverOnly` badges show while the pointer is on the MOG. */

@@ -1,7 +1,8 @@
 import type { CaptureState } from '../shared/interfaces';
 import { createSimScheduler } from '../test-support/sim-scheduler';
 import { MOOD_HOLD_MS, type MoodSources, type RequestView } from './components/mood-mapper';
-import { createMoodPublisher, type PublishedViewState } from './mood-publisher';
+import { epochNow } from '../shared/latency';
+import { createMoodPublisher, latencyTraceClock, type PublishedViewState } from './mood-publisher';
 
 const MOG = '00000000-0000-4000-8000-000000000001';
 const closed: CaptureState = { recording: false, paused: false, othersTrack: 'off' };
@@ -112,5 +113,11 @@ describe('mood publisher: mood to mog:view_state (#13, ADR 0031)', () => {
       [MOG, 'processing'],
       [other, 'listening'],
     ]);
+  });
+
+  it('[UX-36] the trace clock is the shared time base, and only with the flag set to 1', () => {
+    expect(latencyTraceClock('1')).toBe(epochNow);
+    expect(latencyTraceClock(undefined)).toBeUndefined();
+    expect(latencyTraceClock('true')).toBeUndefined();
   });
 });
