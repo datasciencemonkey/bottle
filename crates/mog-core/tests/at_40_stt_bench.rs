@@ -34,7 +34,9 @@ fn golden() -> GoldenSet {
             condition: CONDITIONS[i % 4].to_owned(),
             lang: "en".to_owned(),
             kind: Kind::Speech,
-            reference: format!("Put {i}.5 percent of the budget on main.sales.orders for Acme Corp"),
+            reference: format!(
+                "Put {i}.5 percent of the budget on main.sales.orders for Acme Corp"
+            ),
             numbers: vec![format!("{i}.5")],
             entities: vec!["main.sales.orders".to_owned(), "Acme Corp".to_owned()],
             audio_ms: if i < 40 { 10_000 } else { 4_000 },
@@ -102,7 +104,15 @@ fn edit(run: &mut RunResults, id: &str, f: impl FnOnce(&mut Hypothesis)) {
 fn at_22_stt_bench_normalize_keeps_numbers_and_table_names() {
     assert_eq!(
         normalize("Put 3.5% on main.sales_orders, then 1,000 rows."),
-        ["put", "3.5%", "on", "main.sales_orders", "then", "1000", "rows"]
+        [
+            "put",
+            "3.5%",
+            "on",
+            "main.sales_orders",
+            "then",
+            "1000",
+            "rows"
+        ]
     );
     assert!(normalize("  ...  ").is_empty());
 }
@@ -112,7 +122,10 @@ fn at_22_stt_bench_word_errors_count_substitutions_insertions_and_deletions() {
     let r = normalize("show me the sales for march");
     assert_eq!(word_errors(&r, &r), 0);
     assert_eq!(word_errors(&r, &normalize("show me the sale for march")), 1);
-    assert_eq!(word_errors(&r, &normalize("show me all the sales for march")), 1);
+    assert_eq!(
+        word_errors(&r, &normalize("show me all the sales for march")),
+        1
+    );
     assert_eq!(word_errors(&r, &normalize("show the sales march")), 2);
     assert_eq!(word_errors(&r, &[]), r.len());
 }
@@ -124,13 +137,22 @@ fn at_22_stt_bench_the_synthetic_golden_set_meets_every_rule() {
 
 #[test]
 fn at_22_stt_bench_golden_set_rules_name_each_gap() {
-    let speech = |g: &GoldenSet| g.utterances.iter().filter(|u| u.kind == Kind::Speech).count();
+    let speech = |g: &GoldenSet| {
+        g.utterances
+            .iter()
+            .filter(|u| u.kind == Kind::Speech)
+            .count()
+    };
 
     let mut g = golden();
     let pos = g.utterances.iter().position(|u| u.id == "u239").unwrap();
     g.utterances.remove(pos);
     assert_eq!(speech(&g), MIN_SPEECH - 1);
-    assert!(g.problems().iter().any(|p| p.contains("240")), "{:?}", g.problems());
+    assert!(
+        g.problems().iter().any(|p| p.contains("240")),
+        "{:?}",
+        g.problems()
+    );
 
     let mut g = golden();
     for u in &mut g.utterances {
@@ -138,7 +160,11 @@ fn at_22_stt_bench_golden_set_rules_name_each_gap() {
             u.speaker = "s8".into();
         }
     }
-    assert!(g.problems().iter().any(|p| p.contains("speakers")), "{:?}", g.problems());
+    assert!(
+        g.problems().iter().any(|p| p.contains("speakers")),
+        "{:?}",
+        g.problems()
+    );
 
     let mut g = golden();
     for u in &mut g.utterances {
@@ -146,7 +172,11 @@ fn at_22_stt_bench_golden_set_rules_name_each_gap() {
             u.condition = "noise".into();
         }
     }
-    assert!(g.problems().iter().any(|p| p.contains("conditions")), "{:?}", g.problems());
+    assert!(
+        g.problems().iter().any(|p| p.contains("conditions")),
+        "{:?}",
+        g.problems()
+    );
     assert_eq!(MIN_CONDITIONS, 4);
 
     let mut g = golden();
@@ -155,33 +185,58 @@ fn at_22_stt_bench_golden_set_rules_name_each_gap() {
             u.condition = "studio".into();
         }
     }
-    assert!(g.problems().iter().any(|p| p.contains("quiet")), "{:?}", g.problems());
+    assert!(
+        g.problems().iter().any(|p| p.contains("quiet")),
+        "{:?}",
+        g.problems()
+    );
 
     let mut g = golden();
     g.utterances.retain(|u| u.id != "n19");
-    assert!(g.problems().iter().any(|p| p.contains("non-speech")), "{:?}", g.problems());
+    assert!(
+        g.problems().iter().any(|p| p.contains("non-speech")),
+        "{:?}",
+        g.problems()
+    );
 
     let mut g = golden();
     for u in &mut g.utterances {
         u.audio_ms = 4_000;
     }
-    assert!(g.problems().iter().any(|p| p.contains("10 s")), "{:?}", g.problems());
+    assert!(
+        g.problems().iter().any(|p| p.contains("10 s")),
+        "{:?}",
+        g.problems()
+    );
     assert_eq!(MIN_TEN_S_CLIPS, 20);
 
     let mut g = golden();
     let dup = g.utterances[0].clone();
     g.utterances.push(dup);
-    assert!(g.problems().iter().any(|p| p.contains("duplicate")), "{:?}", g.problems());
+    assert!(
+        g.problems().iter().any(|p| p.contains("duplicate")),
+        "{:?}",
+        g.problems()
+    );
 
     let mut g = golden();
     g.utterances[0].numbers.push("42".into());
-    assert!(g.problems().iter().any(|p| p.contains("not in its reference")), "{:?}", g.problems());
+    assert!(
+        g.problems()
+            .iter()
+            .any(|p| p.contains("not in its reference")),
+        "{:?}",
+        g.problems()
+    );
 }
 
 #[test]
 fn at_22_stt_bench_a_perfect_run_scores_zero_wer_and_full_accuracy() {
     let g = golden();
-    let s = score(&g, &perfect(&g, TranscriptProvider::LocalParakeet, SttRoute::Direct));
+    let s = score(
+        &g,
+        &perfect(&g, TranscriptProvider::LocalParakeet, SttRoute::Direct),
+    );
     assert_eq!(s.speech_n, 240);
     assert_eq!(s.wer_pct, 0.0);
     assert_eq!(s.wer_quiet_en_pct, Some(0.0));
@@ -199,7 +254,9 @@ fn at_22_stt_bench_numbers_and_entities_count_only_exact_tokens() {
     let g = golden();
     let mut run = perfect(&g, TranscriptProvider::LocalParakeet, SttRoute::Direct);
     edit(&mut run, "u001", |h| h.text = h.text.replace("1.5", "15"));
-    edit(&mut run, "u002", |h| h.text = h.text.replace("main.sales.orders", "main sales orders"));
+    edit(&mut run, "u002", |h| {
+        h.text = h.text.replace("main.sales.orders", "main sales orders")
+    });
     let s = score(&g, &run);
     // 240 numbers, one changed; 480 entities, one changed.
     assert!((s.numbers_pct.unwrap() - 239.0 / 240.0 * 100.0).abs() < 1e-9);
@@ -211,7 +268,9 @@ fn at_22_stt_bench_numbers_and_entities_count_only_exact_tokens() {
 fn at_22_stt_bench_text_on_a_non_speech_clip_is_a_hallucination() {
     let g = golden();
     let mut run = perfect(&g, TranscriptProvider::DbxGemini, SttRoute::Direct);
-    edit(&mut run, "n03", |h| h.text = "Thank you for watching.".into());
+    edit(&mut run, "n03", |h| {
+        h.text = "Thank you for watching.".into()
+    });
     edit(&mut run, "n04", |h| h.text = " . ".into());
     let s = score(&g, &run);
     assert_eq!(s.hallucinations, 1, "punctuation only is no text");
@@ -221,7 +280,8 @@ fn at_22_stt_bench_text_on_a_non_speech_clip_is_a_hallucination() {
 fn at_22_stt_bench_a_missing_result_counts_as_deleted_and_over_the_limit() {
     let g = golden();
     let mut run = perfect(&g, TranscriptProvider::LocalParakeet, SttRoute::Direct);
-    run.items.retain(|h| !matches!(h.id.as_str(), "u000" | "u001" | "u002"));
+    run.items
+        .retain(|h| !matches!(h.id.as_str(), "u000" | "u001" | "u002"));
     let s = score(&g, &run);
     assert_eq!(s.missing, 3);
     assert!(s.wer_pct > 0.0);
@@ -242,15 +302,23 @@ fn at_22_stt_bench_p95_uses_only_the_10_s_clips() {
     for id in ["u000", "u001", "u002"] {
         edit(&mut run, id, |h| h.latency_ms = 1_200);
     }
-    assert_eq!(score(&g, &run).p95_ten_s, Some(Duration::from_millis(1_200)));
+    assert_eq!(
+        score(&g, &run).p95_ten_s,
+        Some(Duration::from_millis(1_200))
+    );
 }
 
 #[test]
 fn at_22_stt_bench_opus_delta_is_the_wer_difference_in_points() {
     let g = golden();
-    let direct = score(&g, &perfect(&g, TranscriptProvider::LocalParakeet, SttRoute::Direct));
+    let direct = score(
+        &g,
+        &perfect(&g, TranscriptProvider::LocalParakeet, SttRoute::Direct),
+    );
     let mut opus_run = perfect(&g, TranscriptProvider::LocalParakeet, SttRoute::Opus);
-    edit(&mut opus_run, "u010", |h| h.text = h.text.replace("budget", "budgie"));
+    edit(&mut opus_run, "u010", |h| {
+        h.text = h.text.replace("budget", "budgie")
+    });
     let opus = score(&g, &opus_run);
     let words: usize = g
         .utterances
@@ -276,11 +344,17 @@ fn at_22_stt_bench_doubles_never_pass_the_gate() {
 #[test]
 fn at_22_stt_bench_the_gate_fails_each_threshold_with_its_reason() {
     let g = golden();
-    let cases: Vec<(&str, Box<dyn Fn(&mut Vec<RunResults>)>)> = vec![
+    type Breaker = Box<dyn Fn(&mut Vec<RunResults>)>;
+    let cases: Vec<(&str, Breaker)> = vec![
         (
             "WER",
             Box::new(|runs| {
-                for h in runs[0].items.iter_mut().filter(|h| h.id.starts_with('u')).take(60) {
+                for h in runs[0]
+                    .items
+                    .iter_mut()
+                    .filter(|h| h.id.starts_with('u'))
+                    .take(60)
+                {
                     h.text = "something else entirely and wrong".into();
                 }
             }),
@@ -289,7 +363,13 @@ fn at_22_stt_bench_the_gate_fails_each_threshold_with_its_reason() {
             "quiet English",
             Box::new(|runs| {
                 // Only quiet items (every 4th): total WER stays under 10 %, quiet WER goes over 7 %.
-                for h in runs[0].items.iter_mut().filter(|h| h.id.starts_with('u')).step_by(4).take(10) {
+                for h in runs[0]
+                    .items
+                    .iter_mut()
+                    .filter(|h| h.id.starts_with('u'))
+                    .step_by(4)
+                    .take(10)
+                {
                     h.text = "nothing".into();
                 }
             }),
@@ -328,12 +408,22 @@ fn at_22_stt_bench_the_gate_fails_each_threshold_with_its_reason() {
         (
             "Opus",
             Box::new(|runs| {
-                for h in runs[2].items.iter_mut().filter(|h| h.id.starts_with('u')).take(20) {
+                for h in runs[2]
+                    .items
+                    .iter_mut()
+                    .filter(|h| h.id.starts_with('u'))
+                    .take(20)
+                {
                     h.text = h.text.replace("budget", "budgie");
                 }
             }),
         ),
-        ("no run", Box::new(|runs| { runs.remove(1); })),
+        (
+            "no run",
+            Box::new(|runs| {
+                runs.remove(1);
+            }),
+        ),
     ];
     for (want, f) in cases {
         let mut runs = all_runs(&g);
@@ -355,7 +445,11 @@ fn at_22_stt_bench_an_invalid_golden_set_fails_the_gate() {
     let runs = all_runs(&golden());
     let r = gate(&g, &runs, &device());
     assert!(!r.passed());
-    assert!(r.failures.iter().any(|m| m.contains("golden set")), "{:?}", r.failures);
+    assert!(
+        r.failures.iter().any(|m| m.contains("golden set")),
+        "{:?}",
+        r.failures
+    );
 }
 
 #[test]
@@ -372,14 +466,18 @@ fn at_22_stt_bench_files_parse_and_reject_unknown_fields() {
     )
     .expect("a valid result file");
     assert_eq!(r.route, SttRoute::Opus);
-    assert!(RunResults::from_json(r#"{"provider":"whisper_x","route":"direct","items":[]}"#).is_err());
+    assert!(
+        RunResults::from_json(r#"{"provider":"whisper_x","route":"direct","items":[]}"#).is_err()
+    );
 }
 
 #[test]
 fn at_22_stt_bench_the_summary_holds_numbers_and_no_text() {
     let g = golden();
     let mut runs = all_runs(&g);
-    edit(&mut runs[0], "u005", |h| h.text = "a private sentence that must not print".into());
+    edit(&mut runs[0], "u005", |h| {
+        h.text = "a private sentence that must not print".into()
+    });
     let r = gate(&g, &runs, &device());
     let text = r.summary();
     assert!(text.contains("local_parakeet"), "{text}");
@@ -397,7 +495,7 @@ fn env(k: &str) -> Option<String> {
 }
 
 #[test]
-fn at_40_cap_47a_cap_65b_device_golden_set_meets_the_gate() {
+fn at_40_device_golden_set_meets_the_gate() {
     // TODO(#53): the runner that writes the result files; it needs #46 (local) and #49 (ASR).
     let device = match testkit::device_from(env).expect("valid BOTTLE_TEST_DEVICE") {
         Fixture::Ready(d) => d,
@@ -414,8 +512,9 @@ fn at_40_cap_47a_cap_65b_device_golden_set_meets_the_gate() {
         );
         return;
     };
-    let g = GoldenSet::from_json(&std::fs::read_to_string(&golden_path).expect("read the golden set"))
-        .expect("valid golden set");
+    let g =
+        GoldenSet::from_json(&std::fs::read_to_string(&golden_path).expect("read the golden set"))
+            .expect("valid golden set");
     let runs: Vec<RunResults> = results
         .split(',')
         .map(|p| {
@@ -443,7 +542,9 @@ fn at_40_cap_20_quiet_input_reaches_minus_3_dbfs_before_stt() {
     // TODO(#23): R2 with a quiet synthetic tone at -30 dBFS: the segment handed to R4 peaks at
     // -3 dBFS +- 0.5 dB.
     let r2 = StubCaptureService;
-    let lease = r2.acquire_lease("00000000-0000-4000-8000-0000000000a1").expect("TODO(#23): a lease");
+    let lease = r2
+        .acquire_lease("00000000-0000-4000-8000-0000000000a1")
+        .expect("TODO(#23): a lease");
     r2.release_lease(lease).expect("TODO(#23): release");
     todo!("TODO(#23): read the peak of the segment that R2 hands to R4 and assert -3 dBFS");
 }
@@ -456,7 +557,10 @@ fn at_40_cap_33a_cap_33b_opus_penalty_is_listed_and_over_0_5_pp_selects_32_kbps(
     // the delta in the report (CAP-33a), and when it is over 0.5 pp read the journal config and
     // assert 32 kbps (CAP-33b).
     let g = golden();
-    let direct = score(&g, &perfect(&g, TranscriptProvider::LocalParakeet, SttRoute::Direct));
+    let direct = score(
+        &g,
+        &perfect(&g, TranscriptProvider::LocalParakeet, SttRoute::Direct),
+    );
     assert_eq!(direct.wer_pct, 0.0);
     todo!("TODO(#126): encode with the journal Opus path and read the journal bitrate config");
 }

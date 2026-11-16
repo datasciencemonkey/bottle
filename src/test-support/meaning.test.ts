@@ -61,7 +61,9 @@ describe('AT-05 meaning corpus and oracle', () => {
   it('[AT-22] a self-correction must keep the corrected value', () => {
     const x = item('fix-1');
     expect(meaningFailures(x, { text: 'Set the limit to 500 rows.', usedRaw: false })).toEqual([]);
-    expect(meaningFailures(x, { text: 'Set the limit to 50 rows.', usedRaw: false })).not.toEqual([]);
+    expect(meaningFailures(x, { text: 'Set the limit to 50 rows.', usedRaw: false })).not.toEqual(
+      [],
+    );
   });
 
   it('[AT-22] the oracle flags a bad length ratio, a new URL, new code and a fake raw', () => {

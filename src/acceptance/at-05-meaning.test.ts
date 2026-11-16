@@ -48,7 +48,15 @@ describe('AT-05 preserve transcript meaning', () => {
 
   it.skip('[AT-05] [CAP-70a] [CAP-70b] raw and cleaned text are kept apart and "Use raw text" restores the raw TODO(#61)', async () => {
     const t = await createSttProvider().transcribe(
-      { segmentId: 's1', mogId: MOG, track: 'you', tStartMs: 0, tEndMs: 2_000, final: true },
+      {
+        segmentId: 's1',
+        leaseId: 'lease-1',
+        mogId: MOG,
+        track: 'you',
+        tStartMs: 0,
+        tEndMs: 2_000,
+        final: true,
+      },
       { ...tags, op: 'asr' },
     );
     // Both texts exist for the utterance (CAP-70a).

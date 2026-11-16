@@ -11,7 +11,7 @@
 //! outbox, offline recall) are in `src/acceptance/at-04-offline.test.ts`. The network-off run is
 //! a person's step (#175): docs/tests/AT-DICTATION-STT-OFFLINE.md.
 
-use mog_core::stt::{StubSttEngine, SttEngine};
+use mog_core::stt::{SttEngine, StubSttEngine};
 use mog_core::types::{Transcript, TranscriptProvider};
 use serde_json::{json, Value};
 
@@ -48,8 +48,11 @@ fn at_04_cap_72_local_stt_records_the_model_and_runtime_offline() {
     // TODO(#46): with no network, load the local model and transcribe a fixture segment; the
     // Transcript of stt_transcribe has provider local_parakeet and a non-empty model and runtime.
     let r4 = StubSttEngine;
-    r4.load_model().expect("TODO(#46): the local model loads with no network");
-    let text = r4.transcribe("seg-1").expect("TODO(#46): a local transcript");
+    r4.load_model()
+        .expect("TODO(#46): the local model loads with no network");
+    let text = r4
+        .transcribe("seg-1")
+        .expect("TODO(#46): a local transcript");
     assert!(!text.is_empty());
     todo!("TODO(#46): assert the stt_transcribe Transcript names provider, model and runtime");
 }

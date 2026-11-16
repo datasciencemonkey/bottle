@@ -18,6 +18,7 @@ const MOG = '00000000-0000-4000-8000-0000000000a1';
 const tags: Tags = { app: 'bottle', mog: MOG, op: 'asr' };
 const seg = (ms: number): SegmentRef => ({
   segmentId: `s${ms}`,
+  leaseId: 'lease-1',
   mogId: MOG,
   track: 'you',
   tStartMs: 0,
@@ -55,7 +56,15 @@ describe('AT-40 SttProvider rules', () => {
     core.invoke.mockImplementation(async (_cmd: string, args?: unknown) => {
       const p = (args as { provider?: string } | undefined)?.provider;
       const text = p === 'dbx_gemini' ? 'Thank you for watching.' : '';
-      return { segmentId: 's', text, raw: text, provider: p, model: 'm', runtime: 'r', latencyMs: 300 };
+      return {
+        segmentId: 's',
+        text,
+        raw: text,
+        provider: p,
+        model: 'm',
+        runtime: 'r',
+        latencyMs: 300,
+      };
     });
     const t = await createSttProvider().transcribe(seg(2_000), tags);
     expect(t.provider).toBe('local_parakeet');

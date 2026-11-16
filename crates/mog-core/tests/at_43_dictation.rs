@@ -26,7 +26,10 @@ fn at_43_mog_06b_only_the_brain_may_call_insert_text() {
     let args = json!({"mogId": MOG, "text": "hello"});
     for label in ["hub", "mog-a1", "card-a1"] {
         let err = ipc::handle(label, "insert_text", args.clone()).unwrap_err();
-        assert!(matches!(err, IpcError::WindowNotAllowed { .. }), "{label}: {err:?}");
+        assert!(
+            matches!(err, IpcError::WindowNotAllowed { .. }),
+            "{label}: {err:?}"
+        );
     }
     // The brain passes the gateway; the paste itself is #58.
     let err = ipc::handle("brain", "insert_text", args).unwrap_err();
@@ -35,11 +38,21 @@ fn at_43_mog_06b_only_the_brain_may_call_insert_text() {
 
 #[test]
 fn at_43_mog_06b_insert_text_takes_no_key_or_submit_field() {
-    for extra in ["pressEnter", "enter", "submit", "keys", "keystrokes", "sendKeys"] {
+    for extra in [
+        "pressEnter",
+        "enter",
+        "submit",
+        "keys",
+        "keystrokes",
+        "sendKeys",
+    ] {
         let mut args = json!({"mogId": MOG, "text": "hello"});
         args[extra] = json!(true);
         let err = ipc::handle("brain", "insert_text", args).unwrap_err();
-        assert!(matches!(err, IpcError::InvalidArgs { .. }), "{extra}: {err:?}");
+        assert!(
+            matches!(err, IpcError::InvalidArgs { .. }),
+            "{extra}: {err:?}"
+        );
     }
 }
 
@@ -61,8 +74,12 @@ fn at_43_mog_06a_mog_06c_paste_inserts_with_no_enter_and_restores_the_clipboard(
     // 3. the key log has the paste chord only, never Return or Enter (MOG-06b);
     // 4. 1 s after the paste the clipboard holds "earlier" again (MOG-06c);
     // 5. the clipboard write had the concealed and transient flags (#213).
-    let err = ipc::handle("brain", "insert_text", json!({"mogId": MOG, "text": "line one\nline two"}))
-        .expect_err("TODO(#58): R10 is a stub");
+    let err = ipc::handle(
+        "brain",
+        "insert_text",
+        json!({"mogId": MOG, "text": "line one\nline two"}),
+    )
+    .expect_err("TODO(#58): R10 is a stub");
     assert!(matches!(err, IpcError::NotImplemented { .. }));
     todo!("TODO(#58): assert the key log has no Enter and the earlier clipboard is back after 1 s");
 }

@@ -33,13 +33,15 @@ describe('cloud-call classifier (AT-04, AT-43 harness)', () => {
     ]) {
       expect(isCloudCall(cmd, {}), cmd).toBe(false);
     }
-    expect(isCloudCall('stt_transcribe', { segmentId: 's', provider: 'local_parakeet', tags })).toBe(
-      false,
-    );
+    expect(
+      isCloudCall('stt_transcribe', { segmentId: 's', provider: 'local_parakeet', tags }),
+    ).toBe(false);
   });
 
   it('[AT-22] stt_transcribe is a cloud call for a Databricks provider or a malformed one', () => {
-    expect(isCloudCall('stt_transcribe', { segmentId: 's', provider: 'dbx_gemini', tags })).toBe(true);
+    expect(isCloudCall('stt_transcribe', { segmentId: 's', provider: 'dbx_gemini', tags })).toBe(
+      true,
+    );
     expect(isCloudCall('stt_transcribe', { segmentId: 's', provider: 'dbx_whisper', tags })).toBe(
       true,
     );

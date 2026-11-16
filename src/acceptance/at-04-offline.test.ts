@@ -10,7 +10,7 @@
  * step (docs/tests/AT-DICTATION-STT-OFFLINE.md). The transcript identity contract (CAP-72) runs in
  * `crates/mog-core/tests/at_04_offline.rs`.
  */
-import type { Tags } from '../shared/interfaces';
+import type { SegmentRef, Tags } from '../shared/interfaces';
 import { createGenieBridge } from '../brain/components/genie-bridge';
 import { createMemoryService } from '../brain/components/memory-service';
 import { createRouterContextGate } from '../brain/components/router-context-gate';
@@ -23,7 +23,15 @@ vi.mock('@tauri-apps/api/core', async () => (await import('../brain/test-core'))
 
 const MOG = '00000000-0000-4000-8000-0000000000a1';
 const tags: Tags = { app: 'bottle', mog: MOG, op: 'asr' };
-const seg = { segmentId: 's1', mogId: MOG, track: 'you', tStartMs: 0, tEndMs: 3_000, final: true } as const;
+const seg: SegmentRef = {
+  segmentId: 's1',
+  leaseId: 'lease-1',
+  mogId: MOG,
+  track: 'you',
+  tStartMs: 0,
+  tEndMs: 3_000,
+  final: true,
+};
 
 describe('AT-04 dictate offline', () => {
   beforeEach(() => core.reset());
@@ -33,7 +41,15 @@ describe('AT-04 dictate offline', () => {
     core.invoke.mockImplementation(async (cmd: string, args?: unknown) => {
       const p = (args as { provider?: string } | undefined)?.provider;
       if (cmd === 'stt_transcribe' && p === 'dbx_gemini') throw new Error('OFFLINE');
-      return { segmentId: 's1', text: 'hi', raw: 'hi', provider: p, model: 'm', runtime: 'r', latencyMs: 300 };
+      return {
+        segmentId: 's1',
+        text: 'hi',
+        raw: 'hi',
+        provider: p,
+        model: 'm',
+        runtime: 'r',
+        latencyMs: 300,
+      };
     });
     const t = await createSttProvider().transcribe(seg, tags);
     expect(t.provider).toBe('local_parakeet');
@@ -61,11 +77,18 @@ describe('AT-04 dictate offline', () => {
     expect((await gate.route('the sales in march?', MOG)).intent).toBe('question');
     expect((await gate.route('the sales in march were fine', MOG)).intent).toBe('dictation');
     // TODO(#143): the question shows an "Ask Genie" chip and goes to the outbox only on a click.
-    expect(cloudCalls(core.invoke.mock.calls)).toEqual(['model_invoke', 'model_invoke', 'model_invoke']);
+    expect(cloudCalls(core.invoke.mock.calls)).toEqual([
+      'model_invoke',
+      'model_invoke',
+      'model_invoke',
+    ]);
   });
 
   it.skip('[AT-04] [G-46a] [G-46b] confirmed offline asks queue with a 24 h TTL and replay FIFO one at a time TODO(#41)', async () => {
-    const genie = createGenieOneMcpDouble({ host: 'dbc-fake.cloud.databricks.com', workspaceId: '1' });
+    const genie = createGenieOneMcpDouble({
+      host: 'dbc-fake.cloud.databricks.com',
+      workspaceId: '1',
+    });
     const bridge = createGenieBridge();
     // TODO(#41): offline, submit two confirmed asks and one unconfirmed chip; the outbox holds the
     // two asks only (G-46a). Online again, the bridge shows the workspace line and replays them in
