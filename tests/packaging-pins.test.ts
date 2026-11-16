@@ -236,6 +236,26 @@ describe('[NFR-16a] [NFR-16b] [AT-37] Rive runtime pin', () => {
     ]);
   });
 
+  it('[NFR-16a] [NFR-14a] [AT-37] self-test: the lockfile parser reads CRLF files and skips dependenciesMeta', () => {
+    const crlf = (t: string): string => t.replace(/\n/g, '\r\n');
+    expect(checkRiveRuntime(pkg, crlf(lock))).toEqual([]);
+    expect(checkTauriNpm(pkg, crlf(lock), crate)).toEqual([]);
+    expect(checkRiveRuntime(canvasPkg, crlf(canvasLock))).toEqual([]);
+    expect(checkNoWebgl([{ path: 'x.ts', text: crlf("a\nimport '@rive-app/webgl';\n") }])).toEqual([
+      'x.ts:2 names @rive-app/webgl',
+    ]);
+    const meta = canvasLock.replace(
+      'packages:',
+      "    dependenciesMeta:\n      '@rive-app/canvas':\n        injected: true\n\npackages:",
+    );
+    expect(meta).toContain('dependenciesMeta:');
+    expect(pnpmImporter(meta)['@rive-app/canvas']).toEqual({
+      specifier: '2.50.0',
+      version: '2.50.0',
+    });
+    expect(checkRiveRuntime(canvasPkg, meta)).toEqual([]);
+  });
+
   it('[NFR-16b] [AT-37] lockfile has no @rive-app/webgl', () => {
     const files = findFiles(root, (n) =>
       ['package.json', 'pnpm-lock.yaml', 'package-lock.json', 'yarn.lock'].includes(n),
@@ -275,7 +295,11 @@ describe('[NFR-16a] [NFR-16b] [AT-37] Rive runtime pin', () => {
     const start = notices.indexOf('## Rive runtimes (MIT)');
     expect(start).toBeGreaterThanOrEqual(0);
     const section = notices.slice(start, notices.indexOf('\n## ', start + 1));
-    const version = pkg.dependencies?.['@rive-app/canvas'] ?? 'missing';
-    expect(section).toContain(`\`@rive-app/canvas\` ${version}`);
+    const allowed: readonly string[] = ALLOWED_RIVE;
+    const chosen = Object.keys(pkg.dependencies ?? {}).filter((d) => allowed.includes(d));
+    expect(chosen).toHaveLength(1);
+    const [name = 'missing'] = chosen;
+    const version = pkg.dependencies?.[name] ?? 'missing';
+    expect(section).toContain(`\`${name}\` ${version}`);
   });
 });

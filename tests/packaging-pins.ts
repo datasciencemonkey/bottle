@@ -86,20 +86,28 @@ export function checkTauriCrate(cargoLock: string): string[] {
  * and optionalDependencies). The version keeps only the part before a peer suffix "(".
  */
 export function pnpmImporter(lock: string, importer = '.'): Record<string, LockEntry> {
-  const lines = lock.split('\n');
+  const lines = lock.split(/\r?\n/);
   const start = lines.findIndex((l) => l === 'importers:');
   if (start < 0) throw new Error('pnpm lockfile has no importers section');
   const names = [importer, `'${importer}'`];
   let i = lines.findIndex((l, n) => n > start && names.some((m) => l === `  ${m}:`));
   if (i < 0) throw new Error(`pnpm lockfile has no importer "${importer}"`);
   const out: Record<string, LockEntry> = {};
+  const depSections = new Set(['dependencies', 'devDependencies', 'optionalDependencies']);
+  let inDeps = false;
   let current: string | undefined;
   for (i += 1; i < lines.length; i++) {
     const line = lines[i] ?? '';
     if (line.trim() === '') continue;
     const indent = line.length - line.trimStart().length;
     if (indent <= 2) break;
-    if (indent === 6) {
+    if (indent === 4) {
+      // A section such as dependencies or dependenciesMeta. Only the three dependency sections count.
+      inDeps = depSections.has(line.trim().replace(/:$/, ''));
+      current = undefined;
+    } else if (!inDeps) {
+      continue;
+    } else if (indent === 6) {
       current = line
         .trim()
         .replace(/:$/, '')
@@ -113,8 +121,6 @@ export function pnpmImporter(lock: string, importer = '.'): Record<string, LockE
         if (m[1] === 'specifier') entry.specifier = value;
         else entry.version = value.split('(')[0] ?? '';
       }
-    } else if (indent === 4) {
-      current = undefined;
     }
   }
   return out;
@@ -182,7 +188,7 @@ export function checkNoPrivateApi(
   cargoTomls: TextFile[],
   sp01Report: string,
 ): string[] {
-  if (sp01Report.split('\n').some((l) => l.trim() === SP01_PRIVATE_API_FALLBACK)) return [];
+  if (sp01Report.split(/\r?\n/).some((l) => l.trim() === SP01_PRIVATE_API_FALLBACK)) return [];
   const problems: string[] = [];
   for (const f of tauriConfigs) {
     for (const p of findKeyDeep(JSON.parse(f.text) as unknown, 'macOSPrivateApi')) {
@@ -191,7 +197,7 @@ export function checkNoPrivateApi(
   }
   for (const f of cargoTomls) {
     const code = f.text
-      .split('\n')
+      .split(/\r?\n/)
       .map((l) => l.replace(/#.*$/, ''))
       .join('\n');
     if (code.includes('macos-private-api')) {
@@ -243,7 +249,7 @@ export function checkRiveRuntime(pkg: PackageJson, lock: string): string[] {
 export function checkNoWebgl(files: TextFile[]): string[] {
   return files.flatMap((f) =>
     f.text
-      .split('\n')
+      .split(/\r?\n/)
       .map((line, i) => (BANNED_RIVE.test(line) ? `${f.path}:${i + 1} names @rive-app/webgl` : ''))
       .filter((p) => p !== ''),
   );
