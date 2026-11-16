@@ -65,7 +65,7 @@ describe('UX-01b: views never set the mood', () => {
     }
   });
 
-  it('[UX-01b] [UX-02b] the only literal mood in a view is the first-frame idle', () => {
+  it('[UX-01b] the only literal mood in a view is the first-frame idle (UX-02b)', () => {
     const text = readFileSync(join(views, FIRST_FRAME.file), 'utf8');
     expect(moodWrites(text)).toEqual([`mood${FIRST_FRAME.write.slice(4)}`]);
   });

@@ -471,7 +471,7 @@ describe('T11 holdMood (#9, UX-05a)', () => {
     expect(shown.at(-1)?.mood).toBe('idle');
   });
 
-  it('[UX-05a] [UX-05b] listening shows at once, so key-down is not delayed by the hold', () => {
+  it('[UX-05a] listening shows at once, so the hold never delays key-down (UX-05b, ADR 0018)', () => {
     const prev = { mood: 'processing' as Mood, since: T };
     expect(holdMood(prev, 'listening', T + 50)).toEqual({
       shown: { mood: 'listening', since: T + 50 },
