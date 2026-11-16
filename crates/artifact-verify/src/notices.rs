@@ -8,6 +8,7 @@
 //! Text is compared after comment markers are removed and white space is collapsed,
 //! so the header can sit in a `//`, `#`, `/* */` or `<!-- -->` comment.
 
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -54,26 +55,140 @@ pub struct RequiredNotice {
 }
 
 /// Every notice of requirements section 20.1.
-pub const REQUIRED_NOTICES: &[RequiredNotice] = &[];
+pub const REQUIRED_NOTICES: &[RequiredNotice] = &[
+    RequiredNotice {
+        component: "antigravity-bricks-plugin",
+        needles: &[
+            "github.com/datasciencemonkey/antigravity-bricks-plugin",
+            "a31fd2c",
+            ANTIGRAVITY_MIT_HEADER,
+        ],
+    },
+    RequiredNotice {
+        component: "NVIDIA Parakeet TDT 0.6B v3",
+        needles: &["CC-BY-4.0", PARAKEET_ATTRIBUTION],
+    },
+    RequiredNotice {
+        component: "sherpa-onnx",
+        needles: &[
+            "sherpa-onnx",
+            "Apache License",
+            "Version 2.0, January 2004",
+            "END OF TERMS AND CONDITIONS",
+        ],
+    },
+    RequiredNotice {
+        component: "onnxruntime",
+        needles: &[
+            "onnxruntime",
+            "Copyright (c) Microsoft Corporation",
+            MIT_PERMISSION,
+        ],
+    },
+    RequiredNotice {
+        component: "Silero VAD v6",
+        needles: &["Silero VAD", "Copyright (c) 2020-present Silero Team"],
+    },
+    RequiredNotice {
+        component: "Rive runtimes",
+        needles: &[
+            "@rive-app/webgl2",
+            "@rive-app/canvas",
+            "rive-wasm",
+            "Copyright (c) 2020-2021 Rive",
+        ],
+    },
+    RequiredNotice {
+        component: "Tauri",
+        needles: &[
+            "Copyright (c) 2017 - Present Tauri Apps Contributors",
+            "The Tauri Programme in the Commons Conservancy",
+        ],
+    },
+    RequiredNotice {
+        component: "tauri-nspanel",
+        needles: &["tauri-nspanel", "Copyright (c) 2023 - Present Victor Aremu"],
+    },
+    RequiredNotice {
+        component: "tauri-plugin-global-shortcut",
+        needles: &["tauri-plugin-global-shortcut"],
+    },
+    RequiredNotice {
+        component: "Gemini on Databricks",
+        needles: &["Gemini on Databricks", "accepts the Gemini terms"],
+    },
+    RequiredNotice {
+        component: "Databricks CLI",
+        needles: &["Databricks CLI", "Databricks License", "not bundled"],
+    },
+];
+
+/// The permission and warranty paragraphs shared by every MIT licence text.
+pub const MIT_PERMISSION: &str = "\
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the \"Software\"), to deal
+in the Software without restriction";
+
+/// Comment markers removed from the start (and end) of each line before comparing.
+const COMMENT_MARKERS: &[&str] = &["<!--", "-->", "///", "//!", "//", "/*", "*/", "#", "*", ";"];
 
 /// Components of [`REQUIRED_NOTICES`] whose texts are not all in `text`.
-pub fn missing_notices(_text: &str) -> Vec<&'static str> {
-    unimplemented!()
+pub fn missing_notices(text: &str) -> Vec<&'static str> {
+    let hay = normalize(text);
+    REQUIRED_NOTICES
+        .iter()
+        .filter(|n| {
+            !n.needles
+                .iter()
+                .all(|needle| hay.contains(&normalize(needle)))
+        })
+        .map(|n| n.component)
+        .collect()
+}
+
+/// Removes comment markers at the start and end of one line, then trims it.
+fn strip_comment(line: &str) -> &str {
+    let mut l = line.trim();
+    loop {
+        let before = l;
+        for m in COMMENT_MARKERS {
+            if let Some(rest) = l.strip_prefix(m) {
+                l = rest.trim_start();
+            }
+        }
+        for m in ["-->", "*/"] {
+            if let Some(rest) = l.strip_suffix(m) {
+                l = rest.trim_end();
+            }
+        }
+        if l == before {
+            return l;
+        }
+    }
 }
 
 /// Collapses white space and removes leading comment markers on each line.
-pub fn normalize(_text: &str) -> String {
-    unimplemented!()
+pub fn normalize(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        for word in strip_comment(line).split_whitespace() {
+            if !out.is_empty() {
+                out.push(' ');
+            }
+            out.push_str(word);
+        }
+    }
+    out
 }
 
 /// True if `text` carries the full antigravity-bricks-plugin MIT header.
-pub fn has_antigravity_mit_header(_text: &str) -> bool {
-    unimplemented!()
+pub fn has_antigravity_mit_header(text: &str) -> bool {
+    normalize(text).contains(&normalize(ANTIGRAVITY_MIT_HEADER))
 }
 
 /// True if a line of `text` is the [`PORTED_MARKER`].
-pub fn is_marked_ported(_text: &str) -> bool {
-    unimplemented!()
+pub fn is_marked_ported(text: &str) -> bool {
+    text.lines().any(|l| strip_comment(l) == PORTED_MARKER)
 }
 
 /// Result of checking one file.
@@ -88,17 +203,51 @@ pub enum PortedCheck {
 }
 
 /// Checks the text of one file.
-pub fn check_ported_text(_text: &str) -> PortedCheck {
-    unimplemented!()
+pub fn check_ported_text(text: &str) -> PortedCheck {
+    if !is_marked_ported(text) {
+        PortedCheck::NotPorted
+    } else if has_antigravity_mit_header(text) {
+        PortedCheck::HeaderPresent
+    } else {
+        PortedCheck::HeaderMissing
+    }
 }
 
 /// Checks one file on disk. Files that are not UTF-8 are treated as not ported.
-pub fn check_ported_file(_path: &Path) -> io::Result<PortedCheck> {
-    unimplemented!()
+pub fn check_ported_file(path: &Path) -> io::Result<PortedCheck> {
+    let bytes = fs::read(path)?;
+    Ok(match std::str::from_utf8(&bytes) {
+        Ok(text) => check_ported_text(text),
+        Err(_) => PortedCheck::NotPorted,
+    })
 }
+
+/// Directory names [`scan_ported_files`] does not enter.
+const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules"];
 
 /// Walks `root` and returns every file marked as ported that lacks the MIT header.
 /// Skips `.git`, `target` and `node_modules` directories, and symbolic links.
-pub fn scan_ported_files(_root: &Path) -> io::Result<Vec<PathBuf>> {
-    unimplemented!()
+/// The result is sorted.
+pub fn scan_ported_files(root: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut missing = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            let kind = entry.file_type()?;
+            let path = entry.path();
+            if kind.is_dir() {
+                let skip = SKIP_DIRS
+                    .iter()
+                    .any(|d| entry.file_name().to_str() == Some(d));
+                if !skip {
+                    stack.push(path);
+                }
+            } else if kind.is_file() && check_ported_file(&path)? == PortedCheck::HeaderMissing {
+                missing.push(path);
+            }
+        }
+    }
+    missing.sort();
+    Ok(missing)
 }

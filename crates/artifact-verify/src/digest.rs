@@ -22,8 +22,16 @@ impl Sha256Digest {
     }
 
     /// Parses 64 hex characters (upper or lower case).
-    pub fn from_hex(_hex: &str) -> Result<Self, DigestParseError> {
-        unimplemented!()
+    pub fn from_hex(hex: &str) -> Result<Self, DigestParseError> {
+        let raw = hex.as_bytes();
+        if raw.len() != 64 {
+            return Err(DigestParseError::BadLength(hex.chars().count()));
+        }
+        let mut out = [0u8; 32];
+        for (i, byte) in out.iter_mut().enumerate() {
+            *byte = (nibble(raw[2 * i])? << 4) | nibble(raw[2 * i + 1])?;
+        }
+        Ok(Self(out))
     }
 
     /// The raw digest bytes.
@@ -33,12 +41,27 @@ impl Sha256Digest {
 
     /// Lower-case hex form.
     pub fn to_hex(&self) -> String {
-        unimplemented!()
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut s = String::with_capacity(64);
+        for b in self.0 {
+            s.push(HEX[usize::from(b >> 4)] as char);
+            s.push(HEX[usize::from(b & 0x0f)] as char);
+        }
+        s
     }
 
     /// Constant-time equality.
-    pub fn ct_eq(&self, _other: &Self) -> bool {
-        unimplemented!()
+    pub fn ct_eq(&self, other: &Self) -> bool {
+        subtle::ConstantTimeEq::ct_eq(&self.0[..], &other.0[..]).into()
+    }
+}
+
+fn nibble(c: u8) -> Result<u8, DigestParseError> {
+    match c {
+        b'0'..=b'9' => Ok(c - b'0'),
+        b'a'..=b'f' => Ok(c - b'a' + 10),
+        b'A'..=b'F' => Ok(c - b'A' + 10),
+        _ => Err(DigestParseError::BadChar),
     }
 }
 

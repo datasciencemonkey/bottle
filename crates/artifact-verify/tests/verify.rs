@@ -43,7 +43,10 @@ impl Read for Dribble<'_> {
 fn digest_hex_round_trip_and_rejects_bad_input() {
     let d = Sha256Digest::from_hex(ABC_SHA256).unwrap();
     assert_eq!(d.to_hex(), ABC_SHA256);
-    assert_eq!(Sha256Digest::from_hex(&ABC_SHA256.to_uppercase()).unwrap(), d);
+    assert_eq!(
+        Sha256Digest::from_hex(&ABC_SHA256.to_uppercase()).unwrap(),
+        d
+    );
     assert!(Sha256Digest::from_hex(&ABC_SHA256[..63]).is_err());
     assert!(Sha256Digest::from_hex(&format!("{ABC_SHA256}0")).is_err());
     let bad = format!("{}g", &ABC_SHA256[..63]);
@@ -70,7 +73,9 @@ fn streaming_hash_matches_one_shot() {
     assert_eq!(sha256_reader(&b""[..]).unwrap().to_hex(), EMPTY_SHA256);
     assert_eq!(sha256_reader(&b"abc"[..]).unwrap().to_hex(), ABC_SHA256);
 
-    let data: Vec<u8> = (0..(3 * 1024 * 1024 + 17)).map(|i| (i % 251) as u8).collect();
+    let data: Vec<u8> = (0..(3 * 1024 * 1024 + 17))
+        .map(|i| (i % 251) as u8)
+        .collect();
     let one_shot: [u8; 32] = Sha256::digest(&data).into();
     assert_eq!(
         sha256_reader(&data[..]).unwrap(),
@@ -198,7 +203,11 @@ fn unlisted_cli_archive_is_rejected_and_deleted() {
         "{ABC_SHA256}  databricks_cli_0.250.0_linux_amd64.zip\n"
     ))
     .unwrap();
-    let p = write(dir.path(), "databricks_cli_0.250.0_windows_arm64.zip", b"abc");
+    let p = write(
+        dir.path(),
+        "databricks_cli_0.250.0_windows_arm64.zip",
+        b"abc",
+    );
     let err =
         verify_against_sums(&p, &sums, "databricks_cli_0.250.0_windows_arm64.zip").unwrap_err();
     assert!(matches!(err, VerifyError::NotListed { deleted: true, .. }));
