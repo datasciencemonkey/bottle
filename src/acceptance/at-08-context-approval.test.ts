@@ -19,7 +19,9 @@ const MOG = '00000000-0000-4000-8000-0000000000c8';
 const HEADER: ContextPreamble['header'] = 'Context (from my notes, may be wrong):';
 const preamble: ContextPreamble = {
   header: HEADER,
-  items: [{ id: 'm1', text: 'Q3 means the fiscal quarter.', source: 'you', ts: 1, truncated: false }],
+  items: [
+    { id: 'm1', text: 'Q3 means the fiscal quarter.', source: 'you', ts: 1, truncated: false },
+  ],
   chars: 28,
 };
 const req = (over: Partial<AskRequest> = {}): AskRequest => ({

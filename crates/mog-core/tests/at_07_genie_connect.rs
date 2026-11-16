@@ -59,13 +59,19 @@ fn at_07_g_03_mcp_call_names_only_the_genie_one_server() {
 fn at_07_g_03_mcp_call_takes_no_url() {
     for (key, url) in [
         ("url", "https://h.example.test/api/2.0/mcp/genie"),
-        ("endpoint", "https://h.example.test/api/2.0/mcp/genie/space-1"),
+        (
+            "endpoint",
+            "https://h.example.test/api/2.0/mcp/genie/space-1",
+        ),
         ("baseUrl", "https://h.example.test/api/2.0/genie/one/sse"),
     ] {
         let mut a = ask_args();
         a[key] = json!(url);
         let err = ipc::handle("brain", "mcp_call", a).unwrap_err();
-        assert!(matches!(err, IpcError::InvalidArgs { .. }), "{key}: {err:?}");
+        assert!(
+            matches!(err, IpcError::InvalidArgs { .. }),
+            "{key}: {err:?}"
+        );
     }
 }
 

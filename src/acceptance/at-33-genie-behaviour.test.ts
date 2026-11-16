@@ -52,7 +52,9 @@ describe('AT-33 live Genie One MCP behaviours', () => {
     expect(trustedUrl(link.replace(HOST, 'evil.example.test'), trust)).toBeUndefined();
     expect(trustedUrl(link.replace(HOST, `${HOST}.evil.example.test`), trust)).toBeUndefined();
     expect(trustedUrl(link.replace('https://', 'http://'), trust)).toBeUndefined();
-    expect(trustedUrl(link.replace(`https://${HOST}`, `https://u:p@${HOST}`), trust)).toBeUndefined();
+    expect(
+      trustedUrl(link.replace(`https://${HOST}`, `https://u:p@${HOST}`), trust),
+    ).toBeUndefined();
   });
 
   it.skip('[AT-33] [G-14] [G-15a] [G-15b] the busy text maps to CONVERSATION_BUSY and nothing is sent again TODO(#32)', () => {
