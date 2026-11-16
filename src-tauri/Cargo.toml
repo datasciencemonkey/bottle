@@ -41,6 +41,10 @@ tauri = { workspace = true, features = ["test"] }
 name = "macos_panel_appkit"
 harness = false
 
+# NFR-13a / #381: read the manifest resource of a Windows test executable.
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_LibraryLoader"] }
+
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 objc2 = "0.6.5"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSEvent", "NSGraphics", "NSGraphicsContext", "NSResponder", "NSView", "NSWindow"] }
