@@ -1,4 +1,4 @@
-# ADR 0019: The hardened IPC gateway
+# ADR 0020: The hardened IPC gateway
 
 - Status: Accepted
 - Date: 2026-11-16

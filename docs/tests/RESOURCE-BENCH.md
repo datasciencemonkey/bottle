@@ -2,7 +2,7 @@
 
 The benchmark checks the memory and idle CPU of Bottle against the budget rows. It writes the
 AT-21 evidence for these rows in the format of `docs/tests/EVIDENCE-TEMPLATE.md`.
-The design choices are in `docs/adr/0019-resource-budget-harness.md`. It uses the same report
+The design choices are in `docs/adr/0020-resource-budget-harness.md`. It uses the same report
 rules as the latency benchmark (`docs/tests/LATENCY-BENCH.md`).
 
 ## Rows and budgets
