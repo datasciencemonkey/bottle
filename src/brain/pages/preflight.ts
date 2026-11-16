@@ -31,13 +31,15 @@ export interface PreflightInput {
   scopes?: readonly string[];
   /** The picker result, when Bottle has it. A paste result cannot prove that a domain exists. */
   domains?: DomainList;
+  /** The `request_id` of the create call. Only a 409 with this ID counts as created (ARC-F15). */
+  requestId?: string;
 }
 
 /** Section 10, items 10 and 18 (ADM-20, ADM-21, ADM-15). */
 const ITEM_10 =
   '10. Unity Catalog Pages (Beta) is on in the home workspace, and a domain exists for the users. Give users the domain ID.';
 const ITEM_18 =
-  '18. Any custom OAuth app for Bottle has the ai-gateway, offline_access and knowledge scopes, or all-apis.';
+  '18. Any custom OAuth app for Bottle has the ai-gateway, offline_access and knowledge scopes (plus genie for genie_agent and postgres for v1 Lakebase sync), or all-apis.';
 
 const PAGE_SCOPES = ['knowledge', 'all-apis'];
 
@@ -81,7 +83,8 @@ export function pagesPreflight(input: PreflightInput): PreflightResult {
   if (!id) return { ok: false, failure: failure('NO_DOMAIN', input) };
   if (input.scopes && !input.scopes.some((s) => PAGE_SCOPES.includes(s)))
     return { ok: false, failure: failure('NO_SCOPE', input) };
-  if (input.domains?.kind === 'list' && !input.domains.domains.some((d) => d.id === id))
+  const list = input.domains?.kind === 'list' ? input.domains : undefined;
+  if (list && !list.truncated && !list.domains.some((d) => d.id === id))
     return { ok: false, failure: failure('DOMAIN_NOT_FOUND', input) };
   return { ok: true, domainId: id };
 }
@@ -89,39 +92,48 @@ export function pagesPreflight(input: PreflightInput): PreflightResult {
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
 
 /**
- * The meaning of a Pages API reply (ARC-F15). A 409 with the same `request_id` counts as
- * created. 'other' goes back to the caller, which keeps the draft with [Retry].
+ * The meaning of a Pages API reply (ARC-F15). A 409 counts as created only when it carries the
+ * `request_id` that was sent; any other 409 (for example ALREADY_EXISTS for a name) is 'other'.
+ * 'other' goes back to the caller, which keeps the reviewed draft with [Retry].
  */
-export function classifyPagesResponse(res: {
-  status: number;
-  json?: unknown;
-}): 'ok' | 'NO_SCOPE' | 'PAGES_BETA_OFF' | 'other' {
+export function classifyPagesResponse(
+  res: { status: number; json?: unknown },
+  sent: { requestId?: string | undefined } = {},
+): 'ok' | 'NO_SCOPE' | 'PAGES_BETA_OFF' | 'DOMAIN_NOT_FOUND' | 'other' {
   const body = isObj(res.json) ? res.json : {};
   const code = typeof body['error_code'] === 'string' ? body['error_code'] : '';
   const message = typeof body['message'] === 'string' ? body['message'] : '';
-  if ((res.status >= 200 && res.status < 300) || res.status === 409) return 'ok';
+  if (res.status >= 200 && res.status < 300) return 'ok';
+  if (res.status === 409)
+    return sent.requestId !== undefined && body['request_id'] === sent.requestId ? 'ok' : 'other';
   if (res.status === 403 || (res.status === 401 && /scope/i.test(message))) return 'NO_SCOPE';
   if (
     (res.status === 404 || res.status === 501) &&
     ['FEATURE_DISABLED', 'ENDPOINT_NOT_FOUND', 'NOT_IMPLEMENTED'].includes(code)
   )
     return 'PAGES_BETA_OFF';
+  if (
+    (res.status === 404 && code === 'RESOURCE_DOES_NOT_EXIST') ||
+    (res.status === 400 && /\bdomain/i.test(message))
+  )
+    return 'DOMAIN_NOT_FOUND';
   return 'other';
 }
 
 /**
  * Run the preflight, then `send` only when it passes (PG-11, PG-12). A reply that shows a missing
- * scope or a Beta that is off becomes the admin checklist; other replies go back as they are.
+ * scope, a Beta that is off or a domain that does not exist becomes the admin checklist. Other
+ * replies go back with `created`: false means the caller keeps the draft with [Retry].
  */
 export async function withPagesPreflight<R extends { status: number; json?: unknown }>(
   input: PreflightInput,
   send: (domainId: string) => Promise<R>,
-): Promise<{ ok: true; res: R } | { ok: false; failure: PreflightFailure }> {
+): Promise<{ ok: true; created: boolean; res: R } | { ok: false; failure: PreflightFailure }> {
   const pre = pagesPreflight(input);
   if (!pre.ok) return pre;
   const res = await send(pre.domainId);
-  const kind = classifyPagesResponse(res);
-  return kind === 'NO_SCOPE' || kind === 'PAGES_BETA_OFF'
-    ? { ok: false, failure: failure(kind, input) }
-    : { ok: true, res };
+  const kind = classifyPagesResponse(res, { requestId: input.requestId });
+  return kind === 'ok' || kind === 'other'
+    ? { ok: true, created: kind === 'ok', res }
+    : { ok: false, failure: failure(kind, input) };
 }

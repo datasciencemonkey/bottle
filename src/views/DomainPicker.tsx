@@ -21,10 +21,12 @@ export function DomainPicker({ mogId, picker }: { mogId: MogId; picker: DomainPi
       {picker.options ? (
         <select
           aria-label={label}
-          value={picker.current?.id ?? ''}
+          value={picker.options.some((o) => o.id === picker.current?.id) ? picker.current?.id : ''}
           onChange={(e) => send({ target: 'domain', domainId: e.target.value })}
         >
-          {picker.current === undefined && <option value="">Pick a domain</option>}
+          {!picker.options.some((o) => o.id === picker.current?.id) && (
+            <option value="">Pick a domain</option>
+          )}
           {picker.options.map((o) => (
             <option key={o.id} value={o.id}>
               {o.name}

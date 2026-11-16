@@ -22,8 +22,9 @@ export interface DomainOption {
 
 /** The picker content: the domain list, or the paste fallback with the reason as text. */
 export type DomainList =
-  | { kind: 'list'; domains: readonly DomainOption[] }
-  | { kind: 'paste'; reason: 'no_permission' | 'failed' | 'empty'; text: string };
+  /** `truncated`: the list stopped at MAX_PAGES, so a domain that is not in it can still exist. */
+  | { kind: 'list'; domains: readonly DomainOption[]; truncated: boolean }
+  | { kind: 'paste'; reason: 'no_permission' | 'auth' | 'failed' | 'empty'; text: string };
 
 export type DomainChoice = { ok: true; domainId: string } | { ok: false; text: string };
 
@@ -53,7 +54,12 @@ export function parseDomainInput(text: string): string | undefined {
     }
   }
   const m = /(?:^|\/)domains\/([^/?#]+)/.exec(path);
-  const id = m?.[1] ? decodeURIComponent(m[1]) : undefined;
+  let id: string | undefined;
+  try {
+    id = m?.[1] ? decodeURIComponent(m[1]) : undefined;
+  } catch {
+    return undefined; // a malformed % escape (URIError) is not an ID
+  }
   return id && ID.test(id) ? id : undefined;
 }
 
@@ -81,7 +87,12 @@ function option(d: unknown): DomainOption | undefined {
 export async function listDomains(profile: ProfileName, mogId: MogId): Promise<DomainList> {
   const domains: DomainOption[] = [];
   let token: string | undefined;
-  for (let n = 0; n < MAX_PAGES; n++) {
+  let truncated = false;
+  for (let n = 0; ; n++) {
+    if (n === MAX_PAGES) {
+      truncated = true;
+      break;
+    }
     let res: { status: number; json?: unknown };
     try {
       res = await call('dbx_http', {
@@ -93,7 +104,13 @@ export async function listDomains(profile: ProfileName, mogId: MogId): Promise<D
     } catch {
       return { kind: 'paste', reason: 'failed', text: `Bottle cannot list domains. ${PASTE}` };
     }
-    if (res.status === 401 || res.status === 403)
+    if (res.status === 401)
+      return {
+        kind: 'paste',
+        reason: 'auth',
+        text: `Your sign-in to this workspace expired. Sign in again to list domains, or ${PASTE.charAt(0).toLowerCase()}${PASTE.slice(1)}`,
+      };
+    if (res.status === 403)
       return {
         kind: 'paste',
         reason: 'no_permission',
@@ -112,7 +129,7 @@ export async function listDomains(profile: ProfileName, mogId: MogId): Promise<D
     token = next;
   }
   return domains.length > 0
-    ? { kind: 'list', domains }
+    ? { kind: 'list', domains, truncated }
     : {
         kind: 'paste',
         reason: 'empty',

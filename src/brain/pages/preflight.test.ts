@@ -55,7 +55,11 @@ describe('Pages preflight (PG-11, PG-12, ARC-F15)', () => {
   });
 
   it('[ADM-20] a domain ID that the domain list does not have shows checklist item 10', () => {
-    const domains = { kind: 'list', domains: [{ id: D2, name: 'Sales' }] } as const;
+    const domains = {
+      kind: 'list',
+      domains: [{ id: D2, name: 'Sales' }],
+      truncated: false,
+    } as const;
     const r = pagesPreflight({ ...base, domainId: D1, scopes: ['knowledge'], domains });
     expect(r.ok ? '' : r.failure.code).toBe('DOMAIN_NOT_FOUND');
     expect(r.ok ? [] : r.failure.checklist).toEqual([10]);
