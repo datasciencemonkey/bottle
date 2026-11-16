@@ -1,0 +1,4 @@
+[
+  {"number": 11, "state": "OPEN", "title": "Hub", "body": "Intro.\n\n### Requirements to implement\n`MB-01`, `MB-02`\n\n### Tasks\n- [ ] `CAP-14a` is only mentioned here"},
+  {"number": 12, "state": "CLOSED", "title": "Capture", "body": "### Requirements to implement\n`CAP-14a`, `CAP-14b`, `MB-01`\n"}
+]
