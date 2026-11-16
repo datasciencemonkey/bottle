@@ -44,6 +44,8 @@ export interface PollStep {
 export interface QueryResult {
   columns: { name: string; type_text: string }[];
   rows: unknown[][];
+  /** Set when Genie cut the result (G-24c, TablePreview.truncated). Omitted when not cut. */
+  truncated?: boolean;
 }
 export interface ScriptedResponse {
   /** Poll replies in order. After the last one, the last one repeats. */
@@ -128,6 +130,61 @@ export const scenarios = {
   nullDeepLink(): ScriptedResponse {
     return {
       polls: [{ status: 'completed', final_answer: 'Done.', deep_link: null, query_items: null }],
+    };
+  },
+  /** Status incomplete with a partial answer (G-23a: "Partial answer"). */
+  incompleteWithAnswer(): ScriptedResponse {
+    return {
+      polls: [
+        { status: 'in_progress', progress_steps: ['Reading the tables'] },
+        {
+          status: 'incomplete',
+          final_answer: 'Revenue in EMEA was **$410,500** in Q3; other regions did not finish.',
+          query_items: null,
+        },
+      ],
+    };
+  },
+  /** Status incomplete with no answer (G-23b: the card shows a failure). */
+  incompleteNoAnswer(): ScriptedResponse {
+    return { polls: [{ status: 'incomplete', final_answer: null, query_items: null }] };
+  },
+  /** Status failed with no answer. */
+  failed(): ScriptedResponse {
+    return { polls: [{ status: 'failed', final_answer: null, query_items: null }] };
+  },
+  /** A completed answer whose query result has `rows` rows and is cut (G-24b, G-24c). */
+  truncated(rows = 60): ScriptedResponse {
+    return {
+      polls: [
+        {
+          status: 'completed',
+          final_answer: `The top ${rows} accounts by spend are in the table.`,
+          query_items: [{ item_id: 'pub_q1_output', sql: 'SELECT account, spend FROM t' }],
+        },
+      ],
+      queryResults: {
+        pub_q1_output: {
+          columns: [
+            { name: 'account', type_text: 'STRING' },
+            { name: 'spend', type_text: 'DECIMAL(12,2)' },
+          ],
+          rows: Array.from({ length: rows }, (_, i) => [`acct-${i + 1}`, `${1000 + i}.50`]),
+          truncated: true,
+        },
+      },
+    };
+  },
+  /** A short completed answer that ends with "?" and has no query items (G-22: clarify). */
+  needsInput(): ScriptedResponse {
+    return {
+      polls: [
+        {
+          status: 'completed',
+          final_answer: 'Do you mean gross revenue or net revenue?',
+          query_items: null,
+        },
+      ],
     };
   },
   /** In-progress polls with progress_steps null, then completed (G-17a). */

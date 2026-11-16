@@ -197,6 +197,17 @@ steps on live workspaces (needs:u2m). The tests reuse the router model double
 (`src/test-support/model-invoke.ts`), the Genie One MCP double and the simulated clock. They add no
 new helper.
 
+### Acceptance tests AT-07, AT-08, AT-09, AT-10, AT-33, AT-34 (#234)
+
+`docs/tests/AT-GENIE-MCP.md` lists what runs, the pending tests with their feature issues, and
+the live steps. The shared parts:
+
+- TS: `src/test-support/genie-one-mcp.ts`: the Genie One MCP double. #234 adds the outcome
+  scenarios `incompleteWithAnswer`, `incompleteNoAnswer`, `failed`, `truncated(rows)` and
+  `needsInput`, and `QueryResult.truncated`.
+- The live tests read `BOTTLE_TEST_PROFILE` through `liveFixture` (TS) and `live_or_skip!` (Rust).
+  They are also pending, because the transport (#30) is not built.
+
 ### Gate evidence (AT-22)
 
 Each gate run is a file in `docs/evidence/` in the format of `docs/tests/EVIDENCE-TEMPLATE.md`.
