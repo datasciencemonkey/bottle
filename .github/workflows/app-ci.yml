@@ -1,18 +1,14 @@
 # App CI (#227): lint, type-check and test the TS brain and the Rust core, build offline from the
-# locked lockfiles, and package unsigned debug installers on macOS (arm64) and Windows (NFR-13a).
-# Signing and notarization read secrets and are skipped when the secrets are absent; the release
-# gate rel-03 (#170) supplies the secrets (NFR-15a, NFR-15b). Every action is pinned to a commit
-# SHA (AT-37). Repo checks for the requirements and the mascot stay in repo-checks.yml.
+# locked lockfiles, and package an unsigned debug NSIS installer on Windows (NFR-13a). Windows
+# signing reads secrets and is skipped when the secrets are absent; the release gate rel-03 (#170)
+# supplies the secrets (NFR-15b). Every action is pinned to a commit SHA (AT-37). Repo checks for
+# the requirements and the mascot stay in repo-checks.yml.
 #
-# Runner policy (#227 follow-up): GitHub's macOS queue held PRs for hours, so the matrix depends on
-# the event.
-# - pull_request: Windows (windows-2025) only. Every PR is built and tested on the author's macOS
-#   (Apple Silicon) machine with scripts/pre-push.sh, and reviewers re-run the checks in fresh
-#   worktrees. Repo checks (repo-checks.yml, Linux) are unchanged.
-# - push to main, the nightly schedule and workflow_dispatch: the full matrix (macos-15 and
-#   windows-2025). A macOS-only break is caught on main or overnight, not on the PR.
-# To run macOS on PRs again, replace each `github.event_name == 'pull_request' && '<windows>' ||`
-# expression below with its second JSON list.
+# Runner policy (ADR 0045): GitHub's hosted macOS queue held runs for hours,
+# so no job runs on macOS. Every event runs on windows-2025 and ubuntu-24.04 (package: Windows
+# only; Linux is not a product target). The macOS gate is local: run scripts/pre-push.sh on a Mac
+# (Apple Silicon) before each push. scripts/package-macos.sh builds, signs and notarizes the DMG
+# (NFR-15a). A macOS-only break is caught only by that local run.
 name: App CI
 
 on:
@@ -46,7 +42,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(github.event_name == 'pull_request' && '["windows-2025"]' || '["macos-15","windows-2025"]') }}
+        os: [ubuntu-24.04, windows-2025]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
@@ -61,6 +57,14 @@ jobs:
         run: |
           test -x /c/Strawberry/perl/bin/perl.exe
           echo 'OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl.exe' >> "$GITHUB_ENV"
+      # Tauri on Linux links WebKitGTK, GTK 3, libsoup 3 and the app indicator library.
+      - name: Install the Tauri system libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev \
+            libjavascriptcoregtk-4.1-dev libsoup-3.0-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev libssl-dev pkg-config build-essential
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -129,7 +133,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(github.event_name == 'pull_request' && '["windows-2025"]' || '["macos-15","windows-2025"]') }}
+        os: [ubuntu-24.04, windows-2025]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
@@ -143,6 +147,14 @@ jobs:
         run: |
           test -x /c/Strawberry/perl/bin/perl.exe
           echo 'OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl.exe' >> "$GITHUB_ENV"
+      # Tauri on Linux links WebKitGTK, GTK 3, libsoup 3 and the app indicator library.
+      - name: Install the Tauri system libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev \
+            libjavascriptcoregtk-4.1-dev libsoup-3.0-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev libssl-dev pkg-config build-essential
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -178,7 +190,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(github.event_name == 'pull_request' && '["windows-2025"]' || '["macos-15","windows-2025"]') }}
+        os: [ubuntu-24.04, windows-2025]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -192,6 +204,14 @@ jobs:
         run: |
           test -x /c/Strawberry/perl/bin/perl.exe
           echo 'OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl.exe' >> "$GITHUB_ENV"
+      # Tauri on Linux links WebKitGTK, GTK 3, libsoup 3 and the app indicator library.
+      - name: Install the Tauri system libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev \
+            libjavascriptcoregtk-4.1-dev libsoup-3.0-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev libssl-dev pkg-config build-essential
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -213,12 +233,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"windows-2025","bundles":"nsis"}]' || '[{"os":"macos-15","bundles":"dmg"},{"os":"windows-2025","bundles":"nsis"}]') }}
+        include:
+          - { os: windows-2025, bundles: nsis }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
-      HAS_APPLE_SIGNING: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_SIGNING_IDENTITY != '' }}
-      HAS_APPLE_NOTARY: ${{ secrets.APPLE_ID != '' && secrets.APPLE_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' }}
       HAS_WINDOWS_SIGNING: ${{ secrets.WINDOWS_CERTIFICATE != '' && secrets.WINDOWS_CERTIFICATE_PASSWORD != '' }}
       BUNDLE_DIR: target/debug/bundle/${{ matrix.bundles }}
     steps:
@@ -247,30 +266,6 @@ jobs:
       - name: Build the unsigned debug installer
         run: pnpm tauri build --debug --bundles ${{ matrix.bundles }} -- --locked
 
-      # macOS (NFR-15a). Tauri signs the app and the DMG when the APPLE_* variables are set.
-      - name: Sign the macOS app and DMG
-        if: runner.os == 'macOS' && env.HAS_APPLE_SIGNING == 'true'
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-        run: pnpm tauri build --debug --bundles dmg -- --locked
-      - name: Notarize and staple the macOS DMG
-        if: runner.os == 'macOS' && env.HAS_APPLE_SIGNING == 'true' && env.HAS_APPLE_NOTARY == 'true'
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          for f in "$BUNDLE_DIR"/*.dmg; do
-            xcrun notarytool submit "$f" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
-              --team-id "$APPLE_TEAM_ID" --wait
-            xcrun stapler staple "$f"
-          done
-      - name: macOS signing skipped (no secrets)
-        if: runner.os == 'macOS' && env.HAS_APPLE_SIGNING != 'true'
-        run: echo "::notice::APPLE_* secrets are absent; the DMG is unsigned and not notarized."
-
       # Windows (NFR-15b).
       - name: Sign the Windows NSIS installer
         if: runner.os == 'Windows' && env.HAS_WINDOWS_SIGNING == 'true'
@@ -290,11 +285,11 @@ jobs:
         if: runner.os == 'Windows' && env.HAS_WINDOWS_SIGNING != 'true'
         run: echo "::notice::WINDOWS_* secrets are absent; the NSIS installer is unsigned."
 
-      - name: Write a SHA-256 file for each installer (dmg, nsis)
+      - name: Write a SHA-256 file for each installer (nsis)
         run: |
           cd "$BUNDLE_DIR"
           shopt -s nullglob
-          files=(*.dmg *.exe)
+          files=(*.exe)
           [ ${#files[@]} -gt 0 ] || { echo "no installer in $BUNDLE_DIR"; exit 1; }
           for f in "${files[@]}"; do
             if command -v sha256sum >/dev/null; then sha256sum "$f"; else shasum -a 256 "$f"; fi > "$f.sha256"
@@ -304,7 +299,6 @@ jobs:
         with:
           name: bottle-debug-${{ matrix.bundles }}
           path: |
-            ${{ env.BUNDLE_DIR }}/*.dmg
             ${{ env.BUNDLE_DIR }}/*.exe
             ${{ env.BUNDLE_DIR }}/*.sha256
           if-no-files-found: error

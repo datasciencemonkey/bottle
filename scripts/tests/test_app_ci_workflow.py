@@ -2,7 +2,7 @@
 
 App CI runs on Windows and Linux on every event. macOS is not in CI: GitHub's hosted macOS queue
 held runs for hours, so the developer runs scripts/pre-push.sh on a Mac before each push, and
-scripts/package-macos.sh builds, signs and notarizes the DMG (see the ADR "ci-macos-local").
+scripts/package-macos.sh builds, signs and notarizes the DMG (ADR 0045).
 
 Run:  uv run --no-project --with pytest --with pyyaml pytest scripts/tests -q
 """
