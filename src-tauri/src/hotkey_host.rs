@@ -15,18 +15,25 @@
 //! [`HookSignal`] adapter (#314): one thread feeds the hook signals to the shared R1 engine,
 //! which emits into the same queue sink. Other platforms use the R1 stub.
 //!
-//! Requirements: CAP-35a, CAP-36, CAP-37, CAP-39c, CAP-40a, MB-06a, AT-30.
+//! Talk key: the service gets the saved `app.hotkeys.ptt` key from
+//! [`crate::hotkey_settings::HotkeySettings`] (#322, ADR 0020). A new talk key replaces the
+//! service: the host stops the old one and starts a new one, with no prompt.
+//!
+//! Requirements: CAP-35a, CAP-36, CAP-37, CAP-39c, CAP-40a, CAP-43a, MB-06a, AT-30.
 
+use crate::hotkey_settings::{HotkeySettings, MemorySettingsStore, TalkKeySink};
 use crate::ipc::BrainChannel;
 use mog_core::clock::{MonotonicClock, SystemClock};
 use mog_core::error::CoreError;
 use mog_core::hotkey::HotkeyService;
+use mog_core::hotkey_bindings::TalkBinding;
 use mog_core::hotkey_core::{
     self, HotkeyEngine, HotkeyOutput, HotkeySink, PermissionApi, PermissionStatus, PttPhase,
-    TalkKey, UserAction,
+    UserAction,
 };
 use mog_core::hotkey_windows::{forward_to_engine, HookSignal};
 use mog_core::ipc::{events, WindowClass};
+use mog_core::keyboard_env;
 use serde_json::{json, Value};
 use std::sync::{mpsc, Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
@@ -294,6 +301,9 @@ pub fn run_hook_adapter(
             seam.deferred(deferred);
         }
     }
+    // The hook stopped (quit or a talk-key restart) with no key-up: end a held PTT with
+    // `cancel`, so no capture stays open (CAP-45).
+    engine.reset();
 }
 
 /// Start the adapter thread. The engine sends its outputs to `sink` (the host [`QueueSink`]).
@@ -357,16 +367,6 @@ impl HotkeyService for AdapterFailed {
     }
 }
 
-/// The talk key of the settings value (D66). Unknown or missing values give Right-Option.
-pub fn talk_key_from_setting(value: Option<&str>) -> TalkKey {
-    match value {
-        Some("right_control") => TalkKey::RightControl,
-        Some("right_command") => TalkKey::RightCommand,
-        Some("right_shift") => TalkKey::RightShift,
-        _ => TalkKey::RightOption,
-    }
-}
-
 /// The state of the host's HotkeyService.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostState {
@@ -382,7 +382,7 @@ pub enum HostState {
 
 /// Owns the HotkeyService and the permission API of the platform.
 pub struct HotkeyHost {
-    service: Box<dyn HotkeyService>,
+    service: Mutex<Box<dyn HotkeyService>>,
     permissions: Box<dyn PermissionApi>,
     state: Mutex<HostState>,
 }
@@ -391,7 +391,7 @@ impl HotkeyHost {
     /// A stopped host.
     pub fn new(service: Box<dyn HotkeyService>, permissions: Box<dyn PermissionApi>) -> Self {
         Self {
-            service,
+            service: Mutex::new(service),
             permissions,
             state: Mutex::new(HostState::Stopped),
         }
@@ -406,14 +406,7 @@ impl HotkeyHost {
     /// [`HostState::NeedsPermission`] until [`HotkeyHost::request_ptt_permission`].
     pub fn start(&self) -> HostState {
         let mut state = lock(&self.state);
-        *state = match self.service.start() {
-            Ok(()) => HostState::Running,
-            Err(CoreError::Unavailable {
-                reason: "input_monitoring_required",
-                ..
-            }) => HostState::NeedsPermission,
-            Err(e) => HostState::Unavailable(e.code()),
-        };
+        *state = start_state(lock(&self.service).as_ref());
         *state
     }
 
@@ -437,10 +430,44 @@ impl HotkeyHost {
     pub fn stop(&self) {
         let mut state = lock(&self.state);
         // A stop error leaves nothing to undo at quit.
-        let _ = self.service.stop();
+        let _ = lock(&self.service).stop();
         *state = HostState::Stopped;
     }
+
+    /// Use `service` from now on (a new talk key, CAP-43a). The old service stops. The new
+    /// one starts with no prompt (CAP-36), unless the host was stopped on quit. If the old
+    /// service does not stop, it stays, the state does not change, and the result is
+    /// [`HostState::Unavailable`] with the stop code.
+    pub fn replace_service(&self, service: Box<dyn HotkeyService>) -> HostState {
+        let mut state = lock(&self.state);
+        let mut current = lock(&self.service);
+        // If the old service does not stop (Windows `stop_post_failed`), its hook may still
+        // run. Keep it, so two hooks never run, and do not start the new one.
+        if let Err(e) = current.stop() {
+            return HostState::Unavailable(e.code());
+        }
+        *current = service;
+        if *state != HostState::Stopped {
+            *state = start_state(current.as_ref());
+        }
+        *state
+    }
 }
+
+/// Start `service` with no prompt and map the result to a [`HostState`].
+fn start_state(service: &dyn HotkeyService) -> HostState {
+    match service.start() {
+        Ok(()) => HostState::Running,
+        Err(CoreError::Unavailable {
+            reason: "input_monitoring_required",
+            ..
+        }) => HostState::NeedsPermission,
+        Err(e) => HostState::Unavailable(e.code()),
+    }
+}
+
+/// Makes the platform service for a talk key, with the host sink inside.
+type MakeService = Box<dyn Fn(TalkBinding) -> Box<dyn HotkeyService> + Send + Sync>;
 
 /// The host state that the app manages.
 pub struct HotkeyRuntime {
@@ -448,15 +475,36 @@ pub struct HotkeyRuntime {
     pub host: HotkeyHost,
     /// The talk-key target.
     pub target: Arc<PttTarget>,
+    make_service: MakeService,
+}
+
+impl HotkeyRuntime {
+    /// Restart the talk key with `talk` (a new `app.hotkeys.ptt`, CAP-43a). No prompt.
+    pub fn set_talk_key(&self, talk: TalkBinding) -> HostState {
+        self.host.replace_service((self.make_service)(talk))
+    }
+}
+
+/// The app's [`TalkKeySink`]: a new talk key restarts the managed [`HotkeyRuntime`].
+pub struct AppTalkKey<R: Runtime>(pub AppHandle<R>);
+
+impl<R: Runtime> TalkKeySink for AppTalkKey<R> {
+    fn apply(&self, talk: TalkBinding) {
+        if let Some(rt) = self.0.try_state::<HotkeyRuntime>() {
+            rt.set_talk_key(talk);
+        }
+    }
 }
 
 /// The platform service and permission API (macOS).
 #[cfg(target_os = "macos")]
 pub fn platform_service(
-    talk_key: TalkKey,
+    talk: TalkBinding,
     sink: Arc<dyn HotkeySink>,
 ) -> (Box<dyn HotkeyService>, Box<dyn PermissionApi>) {
     use mog_core::hotkey_macos::{MacHotkeyService, MacPermissions};
+    // Ctrl+Win is a Windows key: macOS settings never hold it, so it gives the D66 default.
+    let talk_key = talk.core_talk_key().unwrap_or_default();
     (
         Box::new(MacHotkeyService::new(talk_key, sink)),
         Box::new(MacPermissions),
@@ -469,11 +517,11 @@ pub fn platform_service(
 /// shared engine, which emits into `sink`. The hook needs no OS prompt.
 #[cfg(windows)]
 pub fn platform_service(
-    talk_key: TalkKey,
+    talk: TalkBinding,
     sink: Arc<dyn HotkeySink>,
 ) -> (Box<dyn HotkeyService>, Box<dyn PermissionApi>) {
     use mog_core::hotkey_windows::win32::WindowsHotkeyService;
-    let (service, rx) = WindowsHotkeyService::new(talk_key.into());
+    let (service, rx) = WindowsHotkeyService::new(talk.windows_talk_key());
     let adapter = spawn_hook_adapter(rx, sink, PendingHookConsumers);
     (
         with_hook_adapter(Box::new(service), adapter),
@@ -484,7 +532,7 @@ pub fn platform_service(
 /// The platform service and permission API (no hook on this OS).
 #[cfg(not(any(target_os = "macos", windows)))]
 pub fn platform_service(
-    _talk_key: TalkKey,
+    _talk: TalkBinding,
     _sink: Arc<dyn HotkeySink>,
 ) -> (Box<dyn HotkeyService>, Box<dyn PermissionApi>) {
     (
@@ -507,16 +555,31 @@ impl PermissionApi for NoOsPermission {
     }
 }
 
-/// Create the host with the platform service and start it (no prompt).
+/// Load the key settings, create the host with the platform service and start it (no
+/// prompt). The settings store is in memory until #77 (see `hotkey_settings`).
 pub fn install<R: Runtime>(app: &AppHandle<R>) -> std::io::Result<()> {
-    install_with(app, platform_service)
+    let settings = HotkeySettings::load(
+        keyboard_env::host_os(),
+        Box::new(MemorySettingsStore::default()),
+        keyboard_env::os_env_reads(),
+        Box::new(AppTalkKey(app.clone())),
+    );
+    install_with(app, settings, platform_service)
 }
 
-/// Create the host with `factory`, start the forwarder thread and start the service.
-pub fn install_with<R, F>(app: &AppHandle<R>, factory: F) -> std::io::Result<()>
+/// Create the host with `factory` and the saved talk key of `settings`, start the forwarder
+/// thread and start the service. The app then manages `settings` and the runtime.
+pub fn install_with<R, F>(
+    app: &AppHandle<R>,
+    settings: HotkeySettings,
+    factory: F,
+) -> std::io::Result<()>
 where
     R: Runtime,
-    F: FnOnce(TalkKey, Arc<dyn HotkeySink>) -> (Box<dyn HotkeyService>, Box<dyn PermissionApi>),
+    F: Fn(TalkBinding, Arc<dyn HotkeySink>) -> (Box<dyn HotkeyService>, Box<dyn PermissionApi>)
+        + Send
+        + Sync
+        + 'static,
 {
     let target = Arc::new(PttTarget::default());
     let (sink, rx) = queue();
@@ -524,11 +587,18 @@ where
         rx,
         PttForwarder::new(Arc::clone(&target), app.clone(), PendingStatusEvent),
     )?;
-    // TODO(#77): read the talk key from Settings (`hotkeys_set`); D66 default until then.
-    let (service, permissions) = factory(talk_key_from_setting(None), Arc::new(sink));
+    let sink: Arc<dyn HotkeySink> = Arc::new(sink);
+    let (service, permissions) = factory(settings.talk_binding(), Arc::clone(&sink));
     let host = HotkeyHost::new(service, permissions);
     host.start();
-    app.manage(HotkeyRuntime { host, target });
+    // A later talk key keeps the permission API and makes only a new service.
+    let make_service: MakeService = Box::new(move |talk| factory(talk, Arc::clone(&sink)).0);
+    app.manage(HotkeyRuntime {
+        host,
+        target,
+        make_service,
+    });
+    app.manage(settings);
     Ok(())
 }
 
@@ -750,28 +820,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn cap_43a_talk_key_setting_defaults_to_right_option() {
-        assert_eq!(talk_key_from_setting(None), TalkKey::RightOption);
-        assert_eq!(talk_key_from_setting(Some("bogus")), TalkKey::RightOption);
-        assert_eq!(
-            talk_key_from_setting(Some("right_option")),
-            TalkKey::RightOption
-        );
-        assert_eq!(
-            talk_key_from_setting(Some("right_control")),
-            TalkKey::RightControl
-        );
-        assert_eq!(
-            talk_key_from_setting(Some("right_command")),
-            TalkKey::RightCommand
-        );
-        assert_eq!(
-            talk_key_from_setting(Some("right_shift")),
-            TalkKey::RightShift
-        );
-    }
-
     /// A HotkeyService double: start fails until `granted` is set.
     #[derive(Default, Clone)]
     struct FakeService {
@@ -925,15 +973,15 @@ mod tests {
         let (s2, p2) = (service.clone(), perms.clone());
         let keys = Arc::new(Mutex::new(Vec::new()));
         let k2 = Arc::clone(&keys);
-        install_with(app.handle(), move |key, _sink| {
+        install_with(app.handle(), memory_settings(), move |key, _sink| {
             k2.lock().unwrap().push(key);
             (
-                Box::new(s2) as Box<dyn HotkeyService>,
-                Box::new(p2) as Box<dyn PermissionApi>,
+                Box::new(s2.clone()) as Box<dyn HotkeyService>,
+                Box::new(p2.clone()) as Box<dyn PermissionApi>,
             )
         })
         .unwrap();
-        assert_eq!(*keys.lock().unwrap(), vec![TalkKey::RightOption]);
+        assert_eq!(*keys.lock().unwrap(), vec![TalkBinding::RightOption]);
         assert_eq!(service.starts.load(Ordering::SeqCst), 1);
         assert!(perms.prompts.lock().unwrap().is_empty());
         shutdown(app.handle());
@@ -988,7 +1036,7 @@ mod tests {
     fn mb_06a_a_real_mog_window_load_and_close_move_the_target() {
         // The real path: install, a `mog-a1` webview window, the page-load and window hooks.
         let app = tauri::test::mock_app();
-        install_with(app.handle(), |_key, _sink| {
+        install_with(app.handle(), memory_settings(), |_key, _sink| {
             (
                 Box::new(FakeService::default()) as Box<dyn HotkeyService>,
                 Box::new(FakePermissions::default()) as Box<dyn PermissionApi>,
@@ -1024,6 +1072,224 @@ mod tests {
         ] {
             assert!(lib.contains(hook), "lib.rs misses {hook}");
         }
+    }
+
+    /// Settings with an empty memory store and no OS reads (first run, D66 defaults).
+    fn memory_settings() -> HotkeySettings {
+        settings_with(MemorySettingsStore::default(), Box::new(NoTalk))
+    }
+
+    fn settings_with(store: MemorySettingsStore, talk: Box<dyn TalkKeySink>) -> HotkeySettings {
+        HotkeySettings::load(
+            mog_core::hotkey_bindings::Os::MacOs,
+            Box::new(store),
+            Box::new(mog_core::keyboard_env::NoEnvReads),
+            talk,
+        )
+    }
+
+    struct NoTalk;
+
+    impl TalkKeySink for NoTalk {
+        fn apply(&self, _talk: TalkBinding) {}
+    }
+
+    /// A factory double: each call makes a new granted [`FakeService`] and records the key.
+    #[derive(Default, Clone)]
+    struct FakeFactory {
+        keys: Arc<Mutex<Vec<TalkBinding>>>,
+        services: Arc<Mutex<Vec<FakeService>>>,
+        perms: FakePermissions,
+    }
+
+    impl FakeFactory {
+        fn make(&self, key: TalkBinding) -> (Box<dyn HotkeyService>, Box<dyn PermissionApi>) {
+            let service = FakeService::default();
+            service.granted.store(true, Ordering::SeqCst);
+            self.keys.lock().unwrap().push(key);
+            self.services.lock().unwrap().push(service.clone());
+            (Box::new(service), Box::new(self.perms.clone()))
+        }
+        fn service(&self, i: usize) -> FakeService {
+            self.services.lock().unwrap()[i].clone()
+        }
+    }
+
+    #[test]
+    fn cap_43a_install_gives_the_saved_talk_key_to_the_service() {
+        let app = tauri::test::mock_app();
+        let store = MemorySettingsStore::default();
+        let mut saved =
+            mog_core::hotkey_bindings::default_bindings(mog_core::hotkey_bindings::Os::MacOs);
+        saved.set(
+            mog_core::hotkey_bindings::HotkeyAction::Ptt,
+            mog_core::hotkey_bindings::Binding::Talk(TalkBinding::RightControl),
+        );
+        use crate::hotkey_settings::HotkeySettingsStore;
+        store
+            .save(&crate::hotkey_settings::settings_from_bindings(
+                mog_core::hotkey_bindings::Os::MacOs,
+                &saved,
+            ))
+            .unwrap();
+        let factory = FakeFactory::default();
+        let f2 = factory.clone();
+        install_with(
+            app.handle(),
+            settings_with(store, Box::new(NoTalk)),
+            move |k, _| f2.make(k),
+        )
+        .unwrap();
+        assert_eq!(
+            *factory.keys.lock().unwrap(),
+            vec![TalkBinding::RightControl]
+        );
+        assert_eq!(
+            app.state::<HotkeyRuntime>().host.state(),
+            HostState::Running
+        );
+    }
+
+    #[test]
+    fn cap_43a_a_new_talk_key_from_hotkeys_set_restarts_the_service_with_no_prompt() {
+        let app = tauri::test::mock_app();
+        let factory = FakeFactory::default();
+        let f2 = factory.clone();
+        let settings = settings_with(
+            MemorySettingsStore::default(),
+            Box::new(AppTalkKey(app.handle().clone())),
+        );
+        install_with(app.handle(), settings, move |k, _| f2.make(k)).unwrap();
+        let s = app.state::<HotkeySettings>();
+        let input: mog_core::ipc::JsonObject =
+            serde_json::from_value(serde_json::json!({ "ptt": "RightControl" })).unwrap();
+        s.set(&input).unwrap();
+        assert_eq!(
+            *factory.keys.lock().unwrap(),
+            vec![TalkBinding::RightOption, TalkBinding::RightControl]
+        );
+        let (old, new) = (factory.service(0), factory.service(1));
+        assert_eq!(old.stops.load(Ordering::SeqCst), 1, "the old service stops");
+        assert_eq!(
+            new.starts.load(Ordering::SeqCst),
+            1,
+            "the new service starts"
+        );
+        assert_eq!(
+            app.state::<HotkeyRuntime>().host.state(),
+            HostState::Running
+        );
+        assert!(
+            factory.perms.prompts.lock().unwrap().is_empty(),
+            "no prompt"
+        );
+        // Quit stops the new service.
+        shutdown(app.handle());
+        assert_eq!(new.stops.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn cap_45_an_adapter_that_ends_during_a_hold_cancels_the_ptt() {
+        // A talk-key restart stops the Windows hook with no key-up. The old adapter must
+        // still end the PTT, or capture stays open.
+        let (tx, rx) = mpsc::channel();
+        let (sink, out) = queue();
+        tx.send(down()).unwrap();
+        drop(tx);
+        run_hook_adapter(rx, HotkeyEngine::new(Arc::new(sink)), &PendingHookConsumers);
+        let got: Vec<HotkeyOutput> = out.try_iter().collect();
+        assert_eq!(
+            got,
+            vec![
+                HotkeyOutput::Ptt(PttPhase::Down),
+                HotkeyOutput::Ptt(PttPhase::Cancel)
+            ]
+        );
+    }
+
+    /// A service whose stop fails, as `stop_post_failed` on Windows.
+    struct StuckService(FakeService);
+
+    impl HotkeyService for StuckService {
+        fn start(&self) -> CoreResult<()> {
+            self.0.start()
+        }
+        fn stop(&self) -> CoreResult<()> {
+            self.0.stop()?;
+            Err(CoreError::Unavailable {
+                component: "R1",
+                reason: "stop_post_failed",
+            })
+        }
+        fn secure_input_active(&self) -> CoreResult<bool> {
+            Ok(false)
+        }
+    }
+
+    #[test]
+    fn cap_43a_a_failed_stop_keeps_the_old_service_and_never_starts_a_second() {
+        let old = FakeService::default();
+        old.granted.store(true, Ordering::SeqCst);
+        let h = HotkeyHost::new(
+            Box::new(StuckService(old.clone())),
+            Box::new(NoOsPermission),
+        );
+        assert_eq!(h.start(), HostState::Running);
+        let new = FakeService::default();
+        new.granted.store(true, Ordering::SeqCst);
+        assert_eq!(
+            h.replace_service(Box::new(new.clone())),
+            HostState::Unavailable("stop_post_failed")
+        );
+        assert_eq!(new.starts.load(Ordering::SeqCst), 0, "no second hook");
+        // The old service still runs the talk key.
+        assert_eq!(h.state(), HostState::Running);
+        h.stop();
+        assert_eq!(old.stops.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn cap_36_replace_service_without_input_monitoring_never_prompts() {
+        let (h, _old, perms) = host(true);
+        assert_eq!(h.start(), HostState::NeedsPermission);
+        let new = FakeService::default();
+        assert_eq!(
+            h.replace_service(Box::new(new.clone())),
+            HostState::NeedsPermission
+        );
+        assert_eq!(new.starts.load(Ordering::SeqCst), 1);
+        assert!(perms.prompts.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn cap_43a_replace_service_after_quit_does_not_start_it() {
+        let (h, old, _) = host(true);
+        old.granted.store(true, Ordering::SeqCst);
+        assert_eq!(h.start(), HostState::Running);
+        h.stop();
+        let new = FakeService::default();
+        new.granted.store(true, Ordering::SeqCst);
+        assert_eq!(h.replace_service(Box::new(new.clone())), HostState::Stopped);
+        assert_eq!(new.starts.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn cap_43a_replace_service_stops_the_old_and_runs_the_new() {
+        let (h, old, _) = host(true);
+        old.granted.store(true, Ordering::SeqCst);
+        h.start();
+        let new = FakeService::default();
+        new.granted.store(true, Ordering::SeqCst);
+        assert_eq!(h.replace_service(Box::new(new.clone())), HostState::Running);
+        assert_eq!(old.stops.load(Ordering::SeqCst), 1);
+        assert_eq!(new.starts.load(Ordering::SeqCst), 1);
+        h.stop();
+        assert_eq!(new.stops.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            old.stops.load(Ordering::SeqCst),
+            1,
+            "the old service stops once"
+        );
     }
 
     fn production_code(text: &str) -> String {
@@ -1286,7 +1552,7 @@ mod tests {
             .next()
             .unwrap();
         for part in [
-            "WindowsHotkeyService::new(talk_key.into())",
+            "WindowsHotkeyService::new(talk.windows_talk_key())",
             "spawn_hook_adapter(rx, sink, PendingHookConsumers)",
             "with_hook_adapter(Box::new(service), adapter)",
             "Box::new(NoOsPermission)",

@@ -41,3 +41,9 @@ R1 HotkeyService on macOS (`MacHotkeyService`, #6) calls its sink from the tap t
 7. **Platform-neutral code.** The adapter is not behind `cfg`, so its tests run on every OS with a fake receiver. The `#[cfg(windows)]` part of `platform_service` is four lines.
 
 Consequence: the full `src-tauri` crate does not build for `x86_64-pc-windows-msvc` on a macOS host (the `tauri-winres` build script needs `llvm-rc`). The Windows build of the host is checked by the Windows CI job (#227) and by the device run (#296).
+
+## Amendment 2: the saved talk key and the restart (#322)
+
+- Date: 2026-11-16. Owner: impl-322 (capture-lead).
+
+The talk key now comes from the saved `app.hotkeys.ptt` setting, not the fixed D66 default. A change restarts the service with no prompt. See ADR 0020, decision 8.

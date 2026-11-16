@@ -49,6 +49,20 @@ These steps check the host wiring of `src-tauri/src/hotkey_host.rs`. Use a debug
 
 Report H1-H5 on #303 with the macOS version. Do not post key contents or other terminal output.
 
+## First-run key reads (#322)
+
+These steps check the prompt-free reads of `crates/mog-core/src/keyboard_env.rs` (ADR 0020). Time: about 10 minutes. Use Terminal. Post only the numbers that the commands print.
+
+| # | Do this | Expected result | Requirement |
+|---|---|---|---|
+| K1 | In System Settings > Keyboard > Dictation, turn Dictation on. Set the shortcut to "Press Control Key Twice". Run `defaults read com.apple.HIToolbox AppleDictationAutoEnable` and `defaults read com.apple.symbolichotkeys AppleSymbolicHotKeys \| sed -n '/164 =/,/};/p'`. | `1`. Entry 164 has `enabled = 1` and the parameters `65535, 65535, 262144`. | CAP-43b |
+| K2 | Set the shortcut to "Press Right Command Key Twice", then "Press Left Command Key Twice", then "Press Either Command Key Twice". Run the entry 164 command after each one. | The third parameter is `1048592`, then `1048584`, then `1048576`. | CAP-43b |
+| K3 | Set the shortcut to "Press 🌐". Run `defaults read com.apple.HIToolbox AppleFnUsageType`. | `3`. | CAP-43b |
+| K4 | Turn VoiceOver on (Cmd+F5). Run `defaults read com.apple.universalaccess voiceOverOnOffKey`. Turn VoiceOver off. | `1` while VoiceOver is on. | CAP-43b |
+| K5 | Quit Bottle. Start it again with `pnpm tauri dev`. Wait 10 s. | No prompt shows. The hub window opens. | CAP-36, CAP-43b |
+
+If a value differs, post the value and the macOS version on #303. The decoder in `decode_dictation` must change to match.
+
 ## Report
 
 Post on #6 (or #5): the macOS version, the Mac model, the step numbers that passed, and the probe output of steps 3, 5 and 6. Do not post anything else from the terminal.
