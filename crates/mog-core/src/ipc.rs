@@ -165,7 +165,7 @@ pub enum IpcError {
     },
     /// CAP-02a: no live lease with this ID belongs to `mogId`. R2 `CaptureError::UnknownLease`
     /// maps here; the host that wires R2 (#4) also returns it when the lease owner is another
-    /// MOG, so a caller cannot probe the leases of other MOGs (ADR 0005).
+    /// MOG, so a caller cannot probe the leases of other MOGs (ADR 0007).
     UnknownLease {
         command: String,
     },

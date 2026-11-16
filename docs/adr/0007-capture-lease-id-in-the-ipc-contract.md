@@ -1,4 +1,4 @@
-# ADR 0005: The capture lease ID in the IPC contract
+# ADR 0007: The capture lease ID in the IPC contract
 
 - Status: Accepted
 - Date: 2026-11-16

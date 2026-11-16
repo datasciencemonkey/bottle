@@ -18,7 +18,7 @@ pub type MogId = String;
 /// A Databricks CLI profile name.
 pub type ProfileName = String;
 
-/// A capture lease ID from R2 (CAP-02a, ADR 0005). Opaque on the wire; R2 never reuses one.
+/// A capture lease ID from R2 (CAP-02a, ADR 0007). Opaque on the wire; R2 never reuses one.
 pub type LeaseId = String;
 
 /// The 7 moods of the mascot (4.8).
@@ -116,7 +116,7 @@ pub struct CaptureState {
     pub owner: Option<MogId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<CaptureMode>,
-    /// CAP-02a: the lease that owns the mic now (ADR 0005). A suspended lease (ARC-F9) is not
+    /// CAP-02a: the lease that owns the mic now (ADR 0007). A suspended lease (ARC-F9) is not
     /// shown here until it resumes. Absent when no capture is live.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lease_id: Option<LeaseId>,
@@ -138,7 +138,7 @@ pub struct CaptureState {
 pub struct SegmentRef {
     pub segment_id: String,
     pub mog_id: MogId,
-    /// CAP-02a / AT-17: the lease of the capture that made this segment (ADR 0005).
+    /// CAP-02a / AT-17: the lease of the capture that made this segment (ADR 0007).
     pub lease_id: LeaseId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,

@@ -156,7 +156,7 @@ export interface CommandArgs {
     consentToken?: string;
     othersTrack?: boolean;
   };
-  /** CAP-02a: name the lease (ADR 0005). */
+  /** CAP-02a: name the lease (ADR 0007). */
   capture_stop: { mogId: MogId; leaseId: LeaseId };
   capture_pause: { mogId: MogId; leaseId: LeaseId };
   capture_status: NoArgs;

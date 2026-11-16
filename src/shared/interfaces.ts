@@ -133,7 +133,7 @@ export interface MoodMapper { (s: { paused: boolean; ownsCapture: boolean; error
 
 // ---------- amendments to 4.7 (the 4.7 block above stays verbatim) ----------
 /**
- * CAP-02a (MUST) wins over the 4.7 sketch: every capture has a lease (ADR 0005).
+ * CAP-02a (MUST) wins over the 4.7 sketch: every capture has a lease (ADR 0007).
  * Declaration merging adds the field to the 4.7 `CaptureState`. Set while capture is live.
  */
 export interface CaptureState {
