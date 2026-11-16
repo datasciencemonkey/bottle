@@ -410,36 +410,49 @@ fn error(stream: &mut TcpStream, status: u16, code: &str) {
     reply(stream, status, &json!({ "error": code }));
 }
 
-/// Read some bytes before `deadline`. `Err(408)` when the time is up, `Err(400)` on EOF or
-/// when the session closes (`stop`).
+/// Why a request read ended without the bytes it wanted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReadEnd {
+    /// Answer the client with this HTTP status.
+    Status(u16),
+    /// The session closed (`stop`). The connection ends with no reply (#400, ARC-7 rule 9).
+    Closed,
+}
+
+/// Read some bytes before `deadline`. `Status(408)` when the time is up, `Status(400)` on EOF
+/// or a socket error, and `Closed` when the session closes (`stop`).
 ///
 /// ARC-7 rule 9 (#381): `close` shuts each open socket, which wakes a blocked read on macOS
 /// and Linux but not on Windows. So the read waits in slices of [`STOP_POLL`] and checks `stop`
 /// between them; `close` then never waits for the request deadline.
+///
+/// #400: `close` sets `stop` before it shuts the sockets, so a slice can see `stop` while the
+/// socket is still open. That is why `Closed` is not a 400: a closed session must not answer.
 fn read_some(
     stream: &mut TcpStream,
     buf: &mut [u8],
     deadline: Instant,
     stop: &AtomicBool,
-) -> Result<usize, u16> {
+) -> Result<usize, ReadEnd> {
     loop {
         if stop.load(Ordering::SeqCst) {
-            return Err(400);
+            return Err(ReadEnd::Closed);
         }
         let left = deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
-            return Err(408);
+            return Err(ReadEnd::Status(408));
         }
         let _ = stream.set_read_timeout(Some(left.min(STOP_POLL)));
         match stream.read(buf) {
-            Ok(0) => return Err(400),
+            Ok(0) => return Err(ReadEnd::Status(400)),
             Ok(n) => return Ok(n),
             Err(e)
                 if matches!(
                     e.kind(),
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                 ) => {}
-            Err(_) => return Err(400),
+            Err(_) if stop.load(Ordering::SeqCst) => return Err(ReadEnd::Closed),
+            Err(_) => return Err(ReadEnd::Status(400)),
         }
     }
 }
@@ -449,7 +462,7 @@ fn read_head(
     stream: &mut TcpStream,
     deadline: Instant,
     stop: &AtomicBool,
-) -> Result<(Vec<u8>, Vec<u8>), u16> {
+) -> Result<(Vec<u8>, Vec<u8>), ReadEnd> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 2048];
     loop {
@@ -458,7 +471,7 @@ fn read_head(
             return Ok((buf, rest));
         }
         if buf.len() > MAX_HEAD {
-            return Err(431);
+            return Err(ReadEnd::Status(431));
         }
         let n = read_some(stream, &mut chunk, deadline, stop)?;
         buf.extend_from_slice(&chunk[..n]);
@@ -473,8 +486,9 @@ fn serve(mut stream: TcpStream, endpoint: LoopbackEndpoint, port: u16, shared: &
     }
     let (head, mut body) = match read_head(&mut stream, deadline, &shared.stop) {
         Ok(x) => x,
-        Err(408) => return error(&mut stream, 408, "timeout"),
-        Err(status) => return error(&mut stream, status, "bad_request"),
+        Err(ReadEnd::Closed) => return,
+        Err(ReadEnd::Status(408)) => return error(&mut stream, 408, "timeout"),
+        Err(ReadEnd::Status(status)) => return error(&mut stream, status, "bad_request"),
     };
     let Ok(head) = std::str::from_utf8(&head) else {
         return error(&mut stream, 400, "bad_request");
@@ -537,8 +551,9 @@ fn serve(mut stream: TcpStream, endpoint: LoopbackEndpoint, port: u16, shared: &
         let want = (length - body.len()).min(chunk.len());
         match read_some(&mut stream, &mut chunk[..want], deadline, &shared.stop) {
             Ok(n) => body.extend_from_slice(&chunk[..n]),
-            Err(408) => return error(&mut stream, 408, "timeout"),
-            Err(status) => return error(&mut stream, status, "bad_request"),
+            Err(ReadEnd::Closed) => return,
+            Err(ReadEnd::Status(408)) => return error(&mut stream, 408, "timeout"),
+            Err(ReadEnd::Status(status)) => return error(&mut stream, status, "bad_request"),
         }
     }
     body.truncate(length);
@@ -603,8 +618,63 @@ mod tests {
         std::thread::sleep(Duration::from_millis(200));
         stop.store(true, Ordering::SeqCst);
         let (got, waited) = reader.join().unwrap();
-        assert_eq!(got, Err(400));
+        assert_eq!(got, Err(ReadEnd::Closed));
         assert!(waited < Duration::from_secs(1), "read waited {waited:?}");
+    }
+
+    struct CountingHandler(std::sync::atomic::AtomicUsize);
+    impl LoopbackHandler for CountingHandler {
+        fn handle(&self, _req: &LoopbackRequest) -> LoopbackResponse {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            LoopbackResponse {
+                status: 200,
+                body: json!({}),
+            }
+        }
+    }
+
+    /// #400: `close` sets `stop` before it shuts the open sockets. A read that wakes in that gap
+    /// must end the connection with no reply, so the client sees only EOF (ARC-7 rule 9).
+    /// The socket is never shut here, so only the stop path of `serve` can end it.
+    #[test]
+    fn arc_7_rule_9_a_read_cut_by_close_sends_no_reply() {
+        let handler = Arc::new(CountingHandler(std::sync::atomic::AtomicUsize::new(0)));
+        let shared = Arc::new(Shared {
+            authorization: Arc::new(new_authorization().unwrap()),
+            handler: handler.clone(),
+            stop: AtomicBool::new(false),
+            conns: Mutex::new(Conns::default()),
+        });
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        // Half a request with the right secret: the body never completes.
+        let head = format!(
+            "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: {}\r\nContent-Length: 10\r\n\r\n{{",
+            shared.authorization.as_str()
+        );
+        client.write_all(head.as_bytes()).unwrap();
+        let serve_shared = Arc::clone(&shared);
+        let server_thread = std::thread::spawn(move || {
+            serve(server, LoopbackEndpoint::GenieOneMcp, port, &serve_shared);
+        });
+        // Give `serve` time to block in the body read, so the stop path below is the one under
+        // test. The assertions hold for any timing: an earlier stop also ends with no reply.
+        std::thread::sleep(Duration::from_millis(200));
+        shared.stop.store(true, Ordering::SeqCst);
+        server_thread.join().unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut buf = [0u8; 64];
+        let got = client.read(&mut buf);
+        assert!(
+            matches!(got, Ok(0) | Err(_)),
+            "a closed session answered: {:?}",
+            got.map(|n| String::from_utf8_lossy(&buf[..n]).into_owned())
+        );
+        assert_eq!(handler.0.load(Ordering::SeqCst), 0);
     }
 
     #[test]
