@@ -1,7 +1,19 @@
 /** V3 card view (thin): blurbs, chips and the expanded answer from `card.update`. */
-import { useCallback, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { MogId } from '../../shared/interfaces';
 import { asCardUpdate, emitView, useViewEvent, type CardUpdate } from '../view-ipc';
+
+/** The MOG ID of the debug demo card (`DEMO_ID` in `src-tauri/src/lib.rs`). */
+const DEMO_ID = 'demo';
+
+/**
+ * UX-19b: one Esc press sends one `cancel`; the brain then cancels the request or hides the card
+ * (`src/brain/card-esc.ts`). A key repeat sends nothing more. An Esc while the IME composes
+ * (MOG-03a) only ends the composition, so it never closes the card under the user's text.
+ */
+function isCardEsc(e: KeyboardEvent): boolean {
+  return e.key === 'Escape' && !e.repeat && !e.isComposing && e.keyCode !== 229;
+}
 
 export function CardView({ mogId }: { mogId: MogId }) {
   const [card, setCard] = useState<CardUpdate | undefined>(undefined);
@@ -15,13 +27,20 @@ export function CardView({ mogId }: { mogId: MogId }) {
   );
   useViewEvent('card.update', onUpdate);
 
-  const onKeyDown = (e: KeyboardEvent) => {
-    if (e.key === 'Escape') void emitView(mogId, 'cancel');
-  };
+  // The card is the only key window (UX-19a), so every key of the card reaches this window.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!isCardEsc(e)) return;
+      e.preventDefault();
+      void emitView(mogId, 'cancel');
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [mogId]);
 
   // TODO(#85, #86, #89): blurb stack, footer and chip rules. TODO(#210): safe markdown.
   return (
-    <section aria-label="MOG card" onKeyDown={onKeyDown}>
+    <section aria-label="MOG card">
       <ul>
         {card?.blurbs.map((b) => (
           <li key={b.id}>{b.text}</li>
@@ -45,6 +64,10 @@ export function CardView({ mogId }: { mogId: MogId }) {
         </button>
       )}
       {card?.answerMd !== undefined && <div data-answer>{card.answerMd}</div>}
+      {/* Dev builds only: a field for the typing and IME check of #78 (tools/mac/card-check.swift). */}
+      {import.meta.env.DEV && mogId === DEMO_ID && (
+        <textarea data-probe aria-label="Typing probe (dev demo card)" />
+      )}
     </section>
   );
 }

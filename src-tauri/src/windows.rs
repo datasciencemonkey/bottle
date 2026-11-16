@@ -11,9 +11,12 @@ use std::time::Duration;
 /// ARC-3 / MB-03b: at most 8 MOG windows are active by default.
 pub const MAX_ACTIVE_MOGS: usize = 8;
 
-/// ARC-3: a hidden card window is destroyed after 5 min.
-/// TODO(#78): the reaper timer that uses this value.
+/// ARC-3 / MOG-18b: a hidden card window is destroyed after 5 min.
 pub const CARD_HIDDEN_TTL: Duration = Duration::from_secs(5 * 60);
+
+/// How often the R11 reaper looks for cards hidden for `CARD_HIDDEN_TTL`. A hidden card goes
+/// between 5:00 and 5:15 after its hide (ADR 0020).
+pub const CARD_REAP_TICK: Duration = Duration::from_secs(15);
 
 /// The longest MOG or card id we accept in a window label (a uuid v4 is 36).
 const MAX_ID_LEN: usize = 64;
@@ -151,7 +154,9 @@ impl WindowKind {
                 width: 160,
                 height: 160,
             },
-            // TODO(#78): key-capable non-activating panel at Floating level, lazy create, reaper.
+            // macOS: `panel()` makes it a key-capable non-activating NSPanel (#78, ADR 0020).
+            // R11 makes it on the first show and the reaper destroys it after 5 min hidden.
+            // TODO(#80): the Windows card that keeps the foreground app.
             WindowKind::Card(_) => WindowSpec {
                 label,
                 url: "card.html",
@@ -183,7 +188,7 @@ impl WindowKind {
     }
 
     /// The macOS panel attributes of this kind, or `None` for a plain window (MOG-02).
-    /// TODO(#78): the card becomes a key-capable non-activating panel at Floating level.
+    /// The card is the only panel that can become key (MOG-03a, UX-19a).
     pub fn panel(&self) -> Option<PanelSpec> {
         match self {
             WindowKind::Mog(_) => Some(PanelSpec {
@@ -196,6 +201,21 @@ impl WindowKind {
                 stationary: true,
                 full_screen_auxiliary: true,
                 ignores_cycle: true,
+                transparent: true,
+            }),
+            // Typing and the IME need a key window; `nonactivating` keeps the frontmost app
+            // (MOG-03b). It shows on every Space and over fullscreen apps, like its MOG.
+            WindowKind::Card(_) => Some(PanelSpec {
+                level: PanelLevel::Floating,
+                can_become_key: true,
+                can_become_main: false,
+                nonactivating: true,
+                hides_on_deactivate: false,
+                join_all_spaces: true,
+                stationary: true,
+                full_screen_auxiliary: true,
+                ignores_cycle: true,
+                transparent: false,
             }),
             _ => None,
         }
@@ -230,6 +250,8 @@ pub struct PanelSpec {
     pub full_screen_auxiliary: bool,
     /// Collection behavior `ignoresCycle` (Cmd-` skips it).
     pub ignores_cycle: bool,
+    /// The panel paints nothing itself: no background, no shadow (MOG-01a). The card is not.
+    pub transparent: bool,
 }
 
 /// Platform seam for window transparency (SP-01, #10).

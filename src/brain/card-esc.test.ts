@@ -3,11 +3,11 @@ import { decideCardEsc, handleCardEsc, type CardEscDeps } from './card-esc';
 
 const MOG = '00000000-0000-4000-8000-000000000001';
 const ref: ExchangeRef = {
-  backend: 'genie',
+  backend: 'genie_one_mcp',
   profile: 'p',
   host: 'h',
   conversationId: 'c1',
-} as ExchangeRef;
+};
 
 function deps(fail?: 'cancel' | 'hide') {
   const calls: string[] = [];
