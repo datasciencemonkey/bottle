@@ -3,7 +3,6 @@
 use super::*;
 use crate::ipc_gateway::{hardened_gateway_with, IpcGateway, NoLog};
 use serde_json::json;
-use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// A fresh directory under the OS temp dir, removed on drop. It holds only test files.
@@ -441,6 +440,7 @@ fn mb_02_write_replaces_atomically_and_leaves_no_temp_file() {
 #[test]
 fn mb_02_files_are_private_to_the_user() {
     use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
     let s = Scratch::new();
     s.store().write("m1", &minimal()).unwrap();
     let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;

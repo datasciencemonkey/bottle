@@ -1,4 +1,4 @@
-//! The host side of the MOG config store (#25, MB-02, ADR 0033).
+//! The host side of the MOG config store (#25, MB-02, ADR 0035).
 //!
 //! The store lives in `<app config dir>/mogs`. The host finds the app config dir with the Tauri
 //! path API in Rust, so no window gets the `fs` plugin (ARC-4). `mog_core::mog_config` does the

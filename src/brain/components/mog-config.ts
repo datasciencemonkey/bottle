@@ -1,5 +1,5 @@
 /**
- * The MOG config JSON that `config_read` returns and `config_write` takes (#25, MB-02, ADR 0033).
+ * The MOG config JSON that `config_read` returns and `config_write` takes (#25, MB-02, ADR 0035).
  *
  * The fields are the `mog.*` keys of Appendix F without the `mog.` prefix. The Rust core
  * (`mog_core::mog_config`) owns the schema: it rejects unknown fields, values out of bounds,

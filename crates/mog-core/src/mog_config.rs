@@ -1,4 +1,4 @@
-//! MOG configs as local JSON (#25, MB-02, ADR 0033).
+//! MOG configs as local JSON (#25, MB-02, ADR 0035).
 //!
 //! - [`MogConfig`] is the schema of one MOG config: the `mog.*` fields of Appendix F, with
 //!   `deny_unknown_fields` on every level and a `schemaVersion`.

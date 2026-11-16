@@ -1,4 +1,4 @@
-# ADR 0033: MOG configs as local JSON files
+# ADR 0035: MOG configs as local JSON files
 
 - Status: Accepted
 - Date: 2026-11-16
