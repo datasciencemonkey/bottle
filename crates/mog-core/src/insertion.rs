@@ -99,8 +99,7 @@ pub const MAC_CONCEALED_TYPES: [&str; 2] = [
 /// Whether the types of a saved macOS clipboard mark it as concealed or transient (ADR 0048,
 /// decision 12). Bottle then leaves the clipboard empty instead of restoring the secret.
 pub fn mac_snapshot_is_concealed<'a>(types: impl IntoIterator<Item = &'a str>) -> bool {
-    let _ = types;
-    false
+    types.into_iter().any(|t| MAC_CONCEALED_TYPES.contains(&t))
 }
 
 /// Windows: the format that keeps a clipboard monitor away from the content.
@@ -115,8 +114,14 @@ pub const WIN_CAN_UPLOAD_TO_CLOUD: &str = "CanUploadToCloudClipboard";
 pub fn windows_snapshot_is_concealed<'a>(
     formats: impl IntoIterator<Item = (&'a str, &'a [u8])>,
 ) -> bool {
-    let _ = formats;
-    false
+    formats.into_iter().any(|(name, data)| match name {
+        WIN_EXCLUDE_FROM_MONITOR => true,
+        // The flag is a DWORD. A short or empty value counts as 0: fail closed for a secret.
+        WIN_CAN_INCLUDE_IN_HISTORY | WIN_CAN_UPLOAD_TO_CLOUD => {
+            data.iter().take(4).all(|b| *b == 0)
+        }
+        _ => false,
+    })
 }
 
 /// Windows edit-control constants (`WinUser.h`).
@@ -132,15 +137,23 @@ pub mod win_edit {
 /// Whether `class` is a Win32 edit control: `Edit`, `RichEdit20W`, `RichEdit50W`,
 /// `RICHEDIT60W` or a WinForms `TextBox` (`WindowsForms10.EDIT.*`). Case does not matter.
 pub fn is_windows_edit_class(class: &str) -> bool {
-    let _ = class;
-    false
+    let c = class.to_ascii_lowercase();
+    matches!(
+        c.as_str(),
+        "edit" | "richedit20w" | "richedit50w" | "richedit60w"
+    ) || c.starts_with("windowsforms10.edit.")
 }
 
 /// The focus of a focused Win32 control, from its class name, its `GWL_STYLE` and its
-/// `EM_GETPASSWORDCHAR` reply (ADR 0048, decision 3).
+/// `EM_GETPASSWORDCHAR` reply (ADR 0048, decision 3). An edit control with `ES_PASSWORD` or a
+/// mask character is a secure field. A control of an unknown class (a superclassed or
+/// owner-drawn edit can have any name) with either signal is a secure field too: fail closed.
 pub fn windows_control_focus(class: &str, style: u32, password_char: usize) -> Focus {
-    let _ = (class, style, password_char);
-    Focus::Field
+    let password = style & win_edit::ES_PASSWORD != 0 || password_char != 0;
+    match (is_windows_edit_class(class), password) {
+        (_, false) => Focus::Field,
+        (true, true) | (false, true) => Focus::SecureField,
+    }
 }
 
 /// The wait between the clipboard write and the chord (Handy `paste_delay_ms` default).
@@ -252,6 +265,13 @@ pub fn insert_text<H: InsertHost>(
         Focus::Field => {}
     }
     let saved = host.snapshot_clipboard()?;
+    // A password manager secret is not restored: the restore gives it a new change count, and the
+    // manager's auto-clear then never fires. An empty snapshot leaves the clipboard empty.
+    let saved = if host.is_concealed(&saved) {
+        H::Snapshot::default()
+    } else {
+        saved
+    };
     if let Err(e) = host.write_concealed(text) {
         // The writer cleared the clipboard (fail closed); put the user's content back.
         let _ = host.restore_clipboard(saved);
@@ -725,7 +745,11 @@ mod tests {
         ] {
             assert!(is_windows_edit_class(c), "{c}");
         }
-        for c in ["Button", "Chrome_RenderWidgetHostHWND", "WindowsForms10.BUTTON.app.0.1"] {
+        for c in [
+            "Button",
+            "Chrome_RenderWidgetHostHWND",
+            "WindowsForms10.BUTTON.app.0.1",
+        ] {
             assert!(!is_windows_edit_class(c), "{c}");
         }
     }

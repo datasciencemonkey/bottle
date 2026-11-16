@@ -102,6 +102,9 @@ impl InsertHost for Desk {
     fn snapshot_clipboard(&self) -> CoreResult<String> {
         Ok(self.clipboard.lock().unwrap().clone())
     }
+    fn is_concealed(&self, _snapshot: &String) -> bool {
+        false
+    }
     fn write_concealed(&self, text: &str) -> CoreResult<()> {
         self.writes.lock().unwrap().push(text.to_owned());
         *self.clipboard.lock().unwrap() = text.to_owned();

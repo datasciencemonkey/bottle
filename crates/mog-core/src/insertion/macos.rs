@@ -8,7 +8,8 @@
 //!   (Handy `secure_input.rs`), is `secure_field`. Any other AX error (for example an app with no
 //!   AX tree) is a field: Bottle tries the paste rather than refuse a working app.
 //! - Clipboard: the general `NSPasteboard`. The snapshot keeps every item with every type; the
-//!   write is [`MacPasteboard`] with the concealed and transient types (SEC-30, #213).
+//!   write is [`MacPasteboard`] with the concealed and transient types (SEC-30, #213). A saved
+//!   item with the concealed or transient type is a password manager secret: it is not restored.
 //! - Keys: Handy's chord (`send_paste_ctrl_v`): Command down, V click, hold, Command up, posted
 //!   with `CGEventPost` and explicit flags, so a still-held Shift or Option does not change the
 //!   chord. Handy resolves the layout key of V with TIS, which must run on the main thread;
@@ -16,7 +17,7 @@
 //!
 //! None of these calls needs the main thread, so `insert_text` can run on a worker.
 
-use super::{mac_keys, Focus, InsertHost, KeyStroke};
+use super::{mac_keys, mac_snapshot_is_concealed, Focus, InsertHost, KeyStroke};
 use crate::error::{CoreError, CoreResult};
 use crate::window_host::{ClipboardPlatform, ClipboardWriter, MacPasteboard};
 use objc2::rc::Retained;
@@ -38,7 +39,7 @@ extern "C" {
 
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
-    fn AXIsProcessTrusted() -> bool;
+    fn AXIsProcessTrusted() -> u8;
     fn AXUIElementCreateSystemWide() -> CFTypeRef;
     fn AXUIElementCopyAttributeValue(
         element: CFTypeRef,
@@ -109,7 +110,7 @@ impl InsertHost for MacInsertHost {
 
     fn input_permitted(&self) -> bool {
         // SAFETY: no arguments; reads the TCC state of this process.
-        unsafe { AXIsProcessTrusted() }
+        unsafe { AXIsProcessTrusted() != 0 }
     }
 
     fn focus(&self) -> Focus {
@@ -152,8 +153,8 @@ impl InsertHost for MacInsertHost {
             .collect())
     }
 
-    fn is_concealed(&self, _snapshot: &MacSnapshot) -> bool {
-        false
+    fn is_concealed(&self, snapshot: &MacSnapshot) -> bool {
+        mac_snapshot_is_concealed(snapshot.iter().flatten().map(|(ty, _)| ty.as_str()))
     }
 
     fn write_concealed(&self, text: &str) -> CoreResult<()> {

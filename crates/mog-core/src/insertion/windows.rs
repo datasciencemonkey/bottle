@@ -4,17 +4,24 @@
 //! - Permission: Windows drops input sent to a window of a higher integrity level (an app run as
 //!   administrator) and `SendInput` does not say so. Handy's check
 //!   (`foreground_window_is_elevated`) runs first; a blocked window is `no_permission`.
-//! - Focus: no foreground window is `no_focus`. A focused `Edit` control with `ES_PASSWORD` is
-//!   `secure_field`. Browser and UWP password fields need UI Automation: TODO(#409).
+//! - Focus: no foreground window is `no_focus`. The focused control is `secure_field` when it has
+//!   `ES_PASSWORD` or answers `EM_GETPASSWORDCHAR` with a mask character
+//!   ([`super::windows_control_focus`]). Browser and UWP password fields need UI Automation (#409).
 //! - Clipboard: [`WindowsClipboard`] writes all formats of
 //!   [`crate::window_host::clipboard_formats`] (text plus the history, cloud and monitor
-//!   opt-outs, SEC-30) in one open and close, so a listener never sees the text alone. The
+//!   opt-outs, SEC-30) in one open and close, so a listener never sees the text alone. It sets the
+//!   opt-outs first and the text last, so a failed opt-out leaves no unflagged text. The
 //!   snapshot keeps every memory (`HGLOBAL`) format; GDI handle formats (`CF_BITMAP`,
-//!   `CF_ENHMETAFILE`, and others) come back through the `CF_DIB` copy that Windows makes.
+//!   `CF_ENHMETAFILE`, and others) come back through the `CF_DIB` copy that Windows makes. A
+//!   snapshot with a monitor, history or cloud opt-out is a password manager secret: it is not
+//!   restored ([`super::windows_snapshot_is_concealed`]).
 //! - Keys: Handy's chord (`input.rs`, `send_paste_ctrl_v`): Ctrl down, V click, hold, Ctrl up,
 //!   with `SendInput` and the virtual key `VK_V` (layout independent).
 
-use super::{Focus, InsertHost, KeyStroke};
+use super::{
+    win_edit, windows_control_focus, windows_snapshot_is_concealed, Focus, InsertHost, KeyStroke,
+    WIN_CAN_INCLUDE_IN_HISTORY, WIN_CAN_UPLOAD_TO_CLOUD, WIN_EXCLUDE_FROM_MONITOR,
+};
 use crate::error::{CoreError, CoreResult};
 use crate::window_host::{ClipboardBackend, ClipboardFormat, ClipboardPlatform, ClipboardWriter};
 use std::time::Duration;
@@ -41,13 +48,19 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetClassNameW, GetForegroundWindow, GetGUIThreadInfo, GetWindowLongW, GetWindowThreadProcessId,
-    GUITHREADINFO, GWL_STYLE,
+    SendMessageTimeoutW, GUITHREADINFO, GWL_STYLE, SMTO_ABORTIFHUNG,
 };
 
 const ID: &str = "R11";
 const CF_UNICODETEXT: u32 = 13;
-/// `ES_PASSWORD` of an `Edit` control.
-const ES_PASSWORD: i32 = 0x20;
+/// The longest wait for the `EM_GETPASSWORDCHAR` reply of a busy app.
+const PASSWORD_CHAR_TIMEOUT_MS: u32 = 50;
+/// The formats that mark a password manager secret (ADR 0048, decision 12).
+const CONCEALING_FORMATS: [&str; 3] = [
+    WIN_EXCLUDE_FROM_MONITOR,
+    WIN_CAN_INCLUDE_IN_HISTORY,
+    WIN_CAN_UPLOAD_TO_CLOUD,
+];
 
 fn failed() -> CoreError {
     CoreError::NotImplemented { component: ID }
@@ -140,7 +153,12 @@ impl ClipboardBackend for WindowsClipboard {
             .collect::<CoreResult<Vec<_>>>()?;
         let open = Open::new()?;
         open.empty()?;
-        for (id, f) in ids.into_iter().zip(formats) {
+        // The opt-outs first, the text last: if an opt-out fails, the close publishes no text.
+        let (text, flags): (Vec<_>, Vec<_>) = ids
+            .into_iter()
+            .zip(formats)
+            .partition(|(id, _)| *id == CF_UNICODETEXT);
+        for (id, f) in flags.into_iter().chain(text) {
             open.set(id, &f.data)?;
         }
         Ok(())
@@ -180,18 +198,31 @@ impl InsertHost for WindowsInsertHost {
             if thread == 0 || GetGUIThreadInfo(thread, &mut info) == 0 || info.hwndFocus.is_null() {
                 return Focus::Field;
             }
-            let mut class = [0u16; 16];
-            let n = GetClassNameW(info.hwndFocus, class.as_mut_ptr(), class.len() as i32);
-            let is_edit = n > 0
-                && String::from_utf16_lossy(&class[..n as usize]).eq_ignore_ascii_case("Edit");
-            if is_edit && GetWindowLongW(info.hwndFocus, GWL_STYLE) & ES_PASSWORD != 0 {
-                return Focus::SecureField;
-            }
+            let control = info.hwndFocus;
+            let mut class = [0u16; win_edit::CLASS_BUFFER];
+            let n = GetClassNameW(control, class.as_mut_ptr(), class.len() as i32);
+            let class = String::from_utf16_lossy(&class[..n.max(0) as usize]);
+            let style = GetWindowLongW(control, GWL_STYLE) as u32;
+            // Works across processes for edit controls. A hung app or a timeout leaves 0.
+            let mut password_char = 0usize;
+            SendMessageTimeoutW(
+                control,
+                win_edit::EM_GETPASSWORDCHAR,
+                0,
+                0,
+                SMTO_ABORTIFHUNG,
+                PASSWORD_CHAR_TIMEOUT_MS,
+                &mut password_char,
+            );
+            windows_control_focus(&class, style, password_char)
         }
-        Focus::Field
     }
 
     fn snapshot_clipboard(&self) -> CoreResult<WindowsSnapshot> {
+        let concealing: Vec<u32> = CONCEALING_FORMATS
+            .iter()
+            .filter_map(|n| format_id(n).ok())
+            .collect();
         let _open = Open::new()?;
         let mut saved = Vec::new();
         let mut format = 0;
@@ -207,14 +238,19 @@ impl InsertHost for WindowsInsertHost {
             // SAFETY: a memory format's data is an HGLOBAL owned by the clipboard; it is only read.
             unsafe {
                 let mem = GetClipboardData(format);
-                if mem.is_null() {
+                let src = if mem.is_null() {
+                    std::ptr::null_mut()
+                } else {
+                    GlobalLock(mem)
+                };
+                if src.is_null() {
+                    // An opt-out marks a secret even with no readable data.
+                    if concealing.contains(&format) {
+                        saved.push((format, Vec::new()));
+                    }
                     continue;
                 }
                 let size = GlobalSize(mem);
-                let src = GlobalLock(mem);
-                if src.is_null() {
-                    continue;
-                }
                 saved.push((
                     format,
                     std::slice::from_raw_parts(src.cast::<u8>(), size).to_vec(),
@@ -225,8 +261,17 @@ impl InsertHost for WindowsInsertHost {
         Ok(saved)
     }
 
-    fn is_concealed(&self, _snapshot: &WindowsSnapshot) -> bool {
-        false
+    fn is_concealed(&self, snapshot: &WindowsSnapshot) -> bool {
+        let named: Vec<(u32, &str)> = CONCEALING_FORMATS
+            .iter()
+            .filter_map(|n| format_id(n).ok().map(|id| (id, *n)))
+            .collect();
+        windows_snapshot_is_concealed(snapshot.iter().filter_map(|(format, data)| {
+            named
+                .iter()
+                .find(|(id, _)| id == format)
+                .map(|(_, name)| (*name, data.as_slice()))
+        }))
     }
 
     fn write_concealed(&self, text: &str) -> CoreResult<()> {
