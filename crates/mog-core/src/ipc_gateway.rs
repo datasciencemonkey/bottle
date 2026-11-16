@@ -8,7 +8,8 @@
 //! content-free log line per call. Only checked calls reach [`GatewayComponents`].
 //! [`hardened_gateway_with`] wraps it in [`ScrubbingGateway`], so
 //! every reply also gets the rule-7 scrub (SEC-01, SEC-02a, SEC-02b, SEC-03).
-//! TODO(#176): the C ABI dispatches through [`hardened_gateway_with`] instead of the stub.
+//! The C ABI (`mog_call`, R15) dispatches through [`hardened_gateway_with`] with the label
+//! `brain` (#176, ADR 0006).
 
 use crate::error::{CoreError, CoreResult};
 use crate::ipc::{self, IpcError, WindowClass};
@@ -38,16 +39,16 @@ impl IpcGateway for StubIpcGateway {
         _command: &str,
         _args: serde_json::Value,
     ) -> CoreResult<serde_json::Value> {
-        // The table, schemas and window checks are `crate::ipc::handle` (#223). The Tauri host
-        // calls it directly. TODO(#176): route the C ABI through it once the ABI decides the
-        // window class of an `ffi` caller (ADR 0003).
+        // The table, schemas and window checks are `crate::ipc::handle` (#223). Neither host
+        // uses this stub: the Tauri host calls `ipc::handle`, the C ABI the hardened gateway.
         Err(CoreError::NotImplemented { component: ID })
     }
 }
 
 /// Wraps any R12 gateway and scrubs every reply with the rule-7 patterns (4.6, ARC-6).
 /// Errors already cross only as content-free codes ([`CoreError::code`]).
-/// [`hardened_gateway`] uses it; TODO(#176) the C ABI dispatches through that gateway.
+/// [`hardened_gateway`] and [`hardened_gateway_with`] use it; the C ABI dispatches through the
+/// latter (#176).
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ScrubbingGateway<G> {
     inner: G,

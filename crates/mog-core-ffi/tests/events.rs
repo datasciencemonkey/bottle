@@ -191,7 +191,11 @@ fn nfr_18b_callback_is_thread_safe_and_never_runs_twice_at_once() {
         for t in 0..threads {
             s.spawn(move || {
                 for i in 0..per_thread {
-                    assert!(emit_event("capture:state", json!({ "t": t, "i": i })));
+                    // 4,000 events can outrun the bounded queue on a loaded machine; a full
+                    // queue drops the event, so try again until it fits.
+                    while !emit_event("capture:state", json!({ "t": t, "i": i })) {
+                        thread::sleep(Duration::from_micros(100));
+                    }
                 }
             });
         }

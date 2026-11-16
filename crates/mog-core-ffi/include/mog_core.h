@@ -23,10 +23,15 @@
 // Code 2 stays unused: the stubs returned it as "not implemented".
 #define MOG_STATUS_INTERNAL 3
 
+// The number of events the queue holds while the host callback runs. When the queue is full,
+// `emit_event` drops the new event and counts it, so the core never waits (NFR-18b).
+#define MOG_EVENT_QUEUE_CAPACITY 1024
+
 // The event callback: a JSON event as a C string, plus the host's `user_data`. Null clears it.
 //
 // The string is valid only during the call; the host must copy it and must not free it.
-// The callback must return in 1 ms or less (NFR-18b). It may call any ABI function.
+// The callback must return in 1 ms or less (NFR-18b). It may call any ABI function. One thread
+// calls it, never two at once.
 typedef void (*MogEventCallback)(const char *event_json, void *user_data);
 
 #ifdef __cplusplus
@@ -66,7 +71,14 @@ void mog_free_string(char *s);
 // Set the one event callback, or clear it with null. `user_data` goes back to each call.
 //
 // When this returns, the old callback is not running and is never called again, except when
-// a callback calls this function itself. Returns a `MOG_STATUS_*` code.
+// a callback calls this function itself. So this call blocks until a callback in flight
+// returns: the host must not call it while it holds a lock that the callback takes.
+//
+// The host must call `mog_set_event_callback(NULL, NULL)` to clear the callback
+// before it frees `user_data` or exits. The library does not support unloading: the delivery
+// thread never exits.
+//
+// Returns a `MOG_STATUS_*` code.
 int32_t mog_set_event_callback(MogEventCallback callback, void *user_data);
 
 #ifdef __cplusplus
