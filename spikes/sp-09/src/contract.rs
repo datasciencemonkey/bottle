@@ -4,6 +4,30 @@
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 
+/// Tool names the report may show by name: the required tools plus the known extra.
+pub const KNOWN_TOOLS: [&str; 5] = [
+    "genie_ask",
+    "genie_poll_response",
+    "genie_get_query_result",
+    "genie_cancel_response",
+    "view_ask",
+];
+
+/// Argument names the client sends; only these appear by name in a violation.
+pub const ARG_NAMES: [&str; 4] = ["question", "conversation_id", "response_id", "item_id"];
+
+const JSON_TYPES: [&str; 7] = [
+    "string", "integer", "number", "boolean", "object", "array", "null",
+];
+
+/// A server-given name as a fixed word, or its length.
+fn safe_name(name: &str, list: &[&'static str]) -> String {
+    match list.iter().find(|n| **n == name) {
+        Some(n) => (*n).to_string(),
+        None => format!("<name len={}>", name.chars().count()),
+    }
+}
+
 /// G-06a: the bridge calls only these tools (plus `tools/list`).
 pub const REQUIRED_TOOLS: [&str; 4] = [
     "genie_ask",
@@ -71,7 +95,10 @@ pub fn check_args(schema: &Value, args: &Value) -> Vec<String> {
         .flatten()
     {
         if let Some(name) = r.as_str().filter(|n| !obj.contains_key(*n)) {
-            problems.push(format!("the client does not send required argument {name}"));
+            problems.push(format!(
+                "the client does not send required argument {}",
+                safe_name(name, &ARG_NAMES)
+            ));
         }
     }
     for (k, v) in obj {
@@ -83,6 +110,8 @@ pub fn check_args(schema: &Value, args: &Value) -> Vec<String> {
                     _ => vec![],
                 };
                 if !types.is_empty() && !types.iter().any(|t| type_ok(t, v)) {
+                    let types: Vec<String> =
+                        types.iter().map(|t| safe_name(t, &JSON_TYPES)).collect();
                     problems.push(format!("argument {k} does not match type {types:?}"));
                 }
             }

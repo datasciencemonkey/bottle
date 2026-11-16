@@ -229,3 +229,103 @@ async fn sp_09_probe_report_holds_no_cli_text() {
     );
     assert!(!out.pass);
 }
+
+const KEY_LEAKS: [&str; 7] = [
+    "hr.salaries_of_alice",
+    "alice@corp.com",
+    "bob@corp.com",
+    "SELECT ssn FROM hr.people",
+    "finance.revenue_q3",
+    "9876543210123456",
+    "azuredatabricks",
+];
+
+fn assert_no_key_leaks(out: &sp09::probe::ProbeOutput) {
+    let text = out.report.to_string();
+    for leak in KEY_LEAKS {
+        assert!(!text.contains(leak), "report holds {leak:?}: {text}");
+    }
+}
+
+#[tokio::test]
+async fn sp_09_probe_report_holds_no_result_keys_or_server_text() {
+    // Poll structuredContent keyed by a table name and an email; an isError
+    // _meta keyed by an email; a host in serverInfo.name; an extra tool name.
+    let (out, _server) = probe_cfg(Busy::IsError, Reply::Json, &[T1, T2], |s| {
+        s.poll = json!({"status": "completed", "final_answer": ANSWER,
+            "row_counts": {"hr.salaries_of_alice": 5, "alice@corp.com": 1},
+            "bob@corp.com": {"finance.revenue_q3": 1},
+            "query_items": [{"SELECT ssn FROM hr.people": "x"}]});
+        s.busy_meta = Some(json!({"alice@corp.com": 1}));
+        s.server_name = "adb-9876543210123456.7.azuredatabricks.net".into();
+        s.extra_tool =
+            Some(json!({"name": "hr.salaries_of_alice", "inputSchema": {"type": "object"}}));
+    })
+    .await;
+    assert_no_key_leaks(&out);
+    let tl = &out.report["steps"][1]["detail"]["tool_names"];
+    assert_eq!(tl["other_count"], 1);
+    assert_eq!(out.report["steps"][6]["detail"]["keys"]["other_keys"], 2);
+}
+
+#[tokio::test]
+async fn sp_09_probe_report_holds_no_keys_from_text_json_poll() {
+    // No structuredContent: the poll is JSON text (the structured() fallback).
+    let (out, _server) = probe_cfg(Busy::IsError, Reply::Json, &[T1, T2], |s| {
+        s.poll_as_text = true;
+        s.poll = json!({"status": "completed", "alice@corp.com": {"SELECT ssn FROM hr.people": 1}});
+    })
+    .await;
+    assert_no_key_leaks(&out);
+    assert_eq!(out.report["steps"][6]["detail"]["status"], "completed");
+}
+
+#[tokio::test]
+async fn sp_09_probe_report_holds_no_keys_from_json_rpc_error_data() {
+    let (out, _server) = probe_cfg(Busy::RpcError, Reply::Json, &[T1, T2], |s| {
+        s.busy_rpc_data =
+            Some(json!({"alice@corp.com": "hr.salaries_of_alice", "bob@corp.com": [1]}));
+    })
+    .await;
+    assert_no_key_leaks(&out);
+    assert_eq!(
+        out.report["pass_rule"]["busy_envelope"]["envelope"],
+        "json_rpc_error"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn sp_09_probe_failed_force_refresh_is_fail_not_not_proven() {
+    use std::os::unix::fs::PermissionsExt;
+    // The CLI gives a token, but `--force-refresh` fails. The next call works with
+    // the cached token, so nothing about rotation was shown: the item is "fail".
+    let dir = tempfile::tempdir().unwrap();
+    let cli = dir.path().join("databricks");
+    std::fs::write(
+        &cli,
+        format!(
+            "#!/bin/sh\ncase \"$*\" in *--force-refresh*) echo 'refresh failed' >&2; exit 1;; esac\n\
+             printf '{{\"access_token\":\"{T1}\"}}\\n'\n"
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let fake = FakeGenie::new(&[T1]);
+    fake.with(|s| {
+        s.busy = Busy::IsError;
+        s.poll = json!({"status": "completed", "final_answer": ANSWER});
+    });
+    let (_server, ep) = start(&fake).await;
+    let client = McpClient::new(ep, sp09::token::CliTokenSource::new(&cli, "p1").unwrap());
+    let out = run_probe(&client, &opts()).await;
+    let pr = &out.report["pass_rule"];
+    assert_eq!(out.report["steps"][4]["ok"], true, "the next call worked");
+    assert_eq!(
+        pr["token_changed_after_force_refresh"],
+        serde_json::Value::Null
+    );
+    assert_eq!(pr["token_refresh_mid_session"], "fail");
+    assert_eq!(pr["verdict"], "NOT YET");
+    assert!(!out.pass);
+}

@@ -5,7 +5,9 @@ use sp09::endpoint::{EndpointError, GenieOneEndpoint};
 use sp09::envelope::{
     EnvelopeKind, RpcError, Signal, SignalRules, TextSource, ToolCallOutcome, ToolResult,
 };
-use sp09::shape::{envelope_facts, known_status, shape};
+use sp09::shape::{
+    envelope_facts, known_status, poll_keys, poll_shape, result_shape, shape, tool_names,
+};
 use sp09::sse::parse_events;
 use sp09::token::{
     CliErrorClass, CliTokenSource, RotatingTokens, Token, TokenError, TokenSource, scrub,
@@ -315,7 +317,7 @@ fn sp_09_contract_detects_missing_tool_and_bad_schema() {
     );
     assert!(
         v.iter()
-            .any(|x| x.tool == "genie_ask" && x.problem.contains("space_id")),
+            .any(|x| x.tool == "genie_ask" && x.problem.contains("required argument <name len=8>")),
         "{v:#?}"
     );
 }
@@ -548,7 +550,7 @@ fn sp_09_shape_keeps_no_value_at_any_depth() {
         "structuredContent": {"status": "completed", "final_answer": "secret answer", "query_items": [
             {"name": "hr.salaries_of_alice_smith", "code": "SELECT ssn FROM hr.people", "type": "alice@corp.com"}],
             "n": 3}}});
-    let s = shape(&v);
+    let s = serde_json::to_value(shape(&v)).unwrap();
     let text = s.to_string();
     for leak in [
         "user data",
@@ -558,23 +560,100 @@ fn sp_09_shape_keeps_no_value_at_any_depth() {
         "alice@corp.com",
         "completed",
         "2.0",
+        "jsonrpc",
+        "structuredContent",
+        "final_answer",
+        "query_items",
     ] {
         assert!(!text.contains(leak), "shape holds {leak:?}: {text}");
     }
-    assert_eq!(s["result"]["isError"], "<bool>");
-    assert_eq!(
-        s["result"]["structuredContent"]["final_answer"],
-        "<string len=13>"
+    // Types, lengths and counts only.
+    assert_eq!(s["t"], "object");
+    assert_eq!(s["keys"], 2);
+    assert_eq!(s["fields"][0]["key"]["key_len"], 7);
+    assert_eq!(s["fields"][0]["value"], json!({"t": "string", "len": 3}));
+}
+
+#[test]
+fn sp_09_shape_keeps_key_names_only_at_fixed_protocol_paths() {
+    // A result map keyed by table names, SQL and emails, under a known poll key
+    // and at the top level of structuredContent.
+    let r = json!({"isError": false, "_meta": {"alice@corp.com": 1},
+        "content": [{"type": "text", "text": "x"}],
+        "structuredContent": {"status": "completed",
+            "row_counts": {"hr.salaries_of_alice": 5, "alice@corp.com": 1},
+            "query_items": [{"SELECT ssn FROM hr.people": "pub_1_output"}],
+            "bob@corp.com": {"finance.revenue_q3": 1}}});
+    let text = serde_json::to_string(&result_shape(&r)).unwrap();
+    for leak in [
+        "alice",
+        "hr.salaries",
+        "SELECT ssn",
+        "bob@corp.com",
+        "finance.revenue_q3",
+        "row_counts",
+        "pub_1_output",
+    ] {
+        assert!(!text.contains(leak), "result_shape holds {leak:?}: {text}");
+    }
+    for kept in [
+        "\"isError\"",
+        "\"_meta\"",
+        "\"content\"",
+        "\"structuredContent\"",
+        "\"status\"",
+        "\"query_items\"",
+    ] {
+        assert!(text.contains(kept), "missing {kept}: {text}");
+    }
+    let k = poll_keys(&r["structuredContent"]);
+    assert_eq!(k.known, vec!["status", "query_items"]);
+    assert_eq!(k.other_keys, 2);
+    let t =
+        serde_json::to_string(&poll_shape(&json!({"alice@corp.com": {"SELECT ssn": 1}}))).unwrap();
+    assert!(!t.contains("alice") && !t.contains("SELECT"), "{t}");
+}
+
+#[test]
+fn sp_09_tool_names_keep_only_known_names() {
+    let tl = json!({"tools": [{"name": "genie_ask"}, {"name": "hr.salaries_of_alice"}, {"name": "view_ask"}]});
+    let n = tool_names(&tl, &contract::KNOWN_TOOLS);
+    assert_eq!(n.known, vec!["genie_ask", "view_ask"]);
+    assert_eq!(n.other_count, 1);
+    assert_eq!(n.other_name_lens, vec![20]);
+    assert!(!serde_json::to_string(&n).unwrap().contains("salaries"));
+}
+
+#[test]
+fn sp_09_contract_violation_text_has_no_server_names() {
+    let mut f = fixture();
+    let ask = f["tools"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|t| t["name"] == "genie_ask")
+        .unwrap();
+    ask["inputSchema"]["required"] = json!(["question", "alice@corp.com"]);
+    ask["inputSchema"]["properties"]["question"]["type"] = json!("SELECT ssn");
+    let text = serde_json::to_string(&contract::check_tools(&f)).unwrap();
+    assert!(
+        !text.contains("alice") && !text.contains("SELECT"),
+        "{text}"
     );
+    assert!(text.contains("<name len=14>"), "{text}");
+    // An unknown type word gives no type problem, so no server type text is printed.
+}
+
+#[test]
+fn sp_09_retry_after_is_parsed_not_echoed() {
+    use sp09::transport::{RetryAfter, parse_retry_after};
+    assert_eq!(parse_retry_after("120"), RetryAfter::Seconds(120));
     assert_eq!(
-        s["result"]["structuredContent"]["query_items"]["array_len"],
-        1
+        parse_retry_after("Wed, 21 Oct 2015 07:28:00 GMT"),
+        RetryAfter::HttpDate
     );
-    assert_eq!(
-        s["result"]["structuredContent"]["query_items"]["first"]["name"],
-        "<string len=26>"
-    );
-    assert_eq!(s["result"]["structuredContent"]["n"], "<number>");
+    assert_eq!(parse_retry_after("alice@corp.com"), RetryAfter::Invalid);
+    assert_eq!(parse_retry_after(""), RetryAfter::Invalid);
 }
 
 #[test]

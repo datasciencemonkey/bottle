@@ -1,12 +1,15 @@
 //! The SP-09 live probe flow, generic over the token source so tests can run it
 //! against the fake server. The report holds status codes, fixed protocol words
 //! (envelope kind, content types, poll status from a fixed list, JSON-RPC code)
-//! and value-free shapes (key names, types, lengths, counts). It holds no token,
+//! and typed value-free shapes (types, lengths, counts; key names only from fixed
+//! protocol lists). Default deny: no server `Value` goes in. It holds no token,
 //! question, answer, result value, host, workspace ID, conversation ID, session ID
 //! or CLI text.
 use crate::contract;
 use crate::envelope::{SignalRules, ToolCallOutcome};
-use crate::shape::{envelope_facts, known_status, shape};
+use crate::shape::{
+    envelope_facts, known_status, poll_keys, poll_shape, result_shape, shape, tool_names,
+};
 use crate::token::{TokenError, TokenSource};
 use crate::transport::{McpClient, McpError};
 use serde_json::{Value, json};
@@ -68,7 +71,7 @@ pub fn capture_doc(tools: &Value, info: &Value) -> Value {
             "source": "live capture (spikes/sp-09 `live capture` or `live probe --capture`)",
             "captured_at_unix": now_unix(),
             "protocolVersion": info.get("protocol_version"),
-            "server_name": info.get("server_name"),
+            "server_name_len": info.get("server_name_len"),
         },
         "tools": tools.get("tools").cloned().unwrap_or(json!([])),
     })
@@ -116,7 +119,7 @@ impl<T: TokenSource> Run<'_, T> {
                 "facts": envelope_facts(&r.raw),
                 "text_chars": r.text().chars().count(),
                 "structured_from": if r.raw.get("structuredContent").is_some() { "structuredContent" } else { "text" },
-                "result_shape": shape(&r.raw),
+                "result_shape": result_shape(&r.raw),
                 "signal": signal,
             }),
         }
@@ -194,7 +197,7 @@ fn poll_summary(rules: &SignalRules, sc: &Option<Value>) -> Value {
     let answer = sc.get("final_answer").and_then(Value::as_str).unwrap_or("");
     json!({
         "status": known_status(sc.get("status")),
-        "keys": sc.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()),
+        "keys": poll_keys(sc),
         "final_answer_chars": answer.chars().count(),
         "final_answer_ends_with_question_mark": answer.trim_end().ends_with('?'),
         "query_items_count": sc.get("query_items").and_then(Value::as_array).map(Vec::len),
@@ -202,7 +205,7 @@ fn poll_summary(rules: &SignalRules, sc: &Option<Value>) -> Value {
         "deep_link_is_null": sc.get("deep_link").is_none_or(Value::is_null),
         "narration_instruction_present": sc.get("narration_instruction").is_some_and(|v| !v.is_null()),
         "clarify_signal": rules.clarify(sc),
-        "shape": shape(sc),
+        "shape": poll_shape(sc),
     })
 }
 
@@ -245,10 +248,7 @@ pub async fn run_probe<T: TokenSource>(client: &McpClient<T>, opts: &ProbeOption
         // 2. tools/list + contract against the live list
         match client.list_tools().await {
             Ok(tools) => {
-                let names: Vec<Value> = tools["tools"]
-                    .as_array()
-                    .map(|a| a.iter().map(|t| t["name"].clone()).collect())
-                    .unwrap_or_default();
+                let names = tool_names(&tools, &contract::KNOWN_TOOLS);
                 let violations = contract::check_tools(&tools);
                 contract_ok = violations.is_empty();
                 run.step(
@@ -398,8 +398,10 @@ pub async fn run_probe<T: TokenSource>(client: &McpClient<T>, opts: &ProbeOption
     // token really changed; an OK call with the same token is "not_proven".
     let refresh_verdict = match (pass_refresh, token_changed) {
         (true, Some(true)) => "pass",
-        (true, _) => "not_proven",
-        (false, _) => "fail",
+        // The next call worked, but the same token came back: rotation not shown.
+        (true, Some(false)) => "not_proven",
+        // `--force-refresh` itself failed, or the next call failed.
+        _ => "fail",
     };
     out.pass = refresh_verdict == "pass" && busy_envelope.is_some() && contract_ok;
     let verdict = if out.pass {
@@ -414,7 +416,7 @@ pub async fn run_probe<T: TokenSource>(client: &McpClient<T>, opts: &ProbeOption
         "issue": 29,
         "created_unix": now_unix(),
         "harness_version": env!("CARGO_PKG_VERSION"),
-        "redaction": "no token, question, answer, result value, CLI text, host, workspace ID, profile, conversation ID or session ID is in this file; shapes keep key names, types and lengths only",
+        "redaction": "default deny: no token, question, answer, result value, result key, CLI text, server text, host, workspace ID, profile, conversation ID or session ID is in this file; shapes keep types, lengths and counts, and key names only from fixed protocol lists",
         "pass_rule": {
             "token_refresh_mid_session": refresh_verdict,
             "token_changed_after_force_refresh": token_changed,

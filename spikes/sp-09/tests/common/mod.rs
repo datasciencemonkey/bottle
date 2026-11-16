@@ -43,6 +43,19 @@ pub struct State {
     pub paginate: bool,
     /// Extra structuredContent on the busy isError result.
     pub busy_extra: Option<Value>,
+    /// `_meta` on the busy isError result.
+    pub busy_meta: Option<Value>,
+    /// `data` on the busy JSON-RPC error.
+    pub busy_rpc_data: Option<Value>,
+    /// Send the poll as JSON text with no structuredContent.
+    pub poll_as_text: bool,
+    pub server_name: String,
+    /// One more tool in tools/list.
+    pub extra_tool: Option<Value>,
+    /// tools/list answers with this JSON-RPC error code.
+    pub tools_list_error_code: Option<Value>,
+    /// tools/call answers 429 with this Retry-After value.
+    pub rate_limit: Option<String>,
 }
 
 #[derive(Clone)]
@@ -61,6 +74,13 @@ impl FakeGenie {
             server_protocol: "2025-06-18".into(),
             paginate: false,
             busy_extra: None,
+            busy_meta: None,
+            busy_rpc_data: None,
+            poll_as_text: false,
+            server_name: "fake-genie-one".into(),
+            extra_tool: None,
+            tools_list_error_code: None,
+            rate_limit: None,
         })))
     }
     pub fn with<R>(&self, f: impl FnOnce(&mut State) -> R) -> R {
@@ -123,7 +143,7 @@ impl Respond for FakeGenie {
             let msg = rpc_result(
                 &id,
                 json!({"protocolVersion": s.server_protocol, "capabilities": {"tools": {}},
-                       "serverInfo": {"name": "fake-genie-one", "version": "0"}}),
+                       "serverInfo": {"name": s.server_name, "version": "0"}}),
             );
             return reply(&s, msg).insert_header("mcp-session-id", sid.as_str());
         }
@@ -161,7 +181,20 @@ impl Respond for FakeGenie {
                 };
                 reply(&s, rpc_result(&id, page))
             }
-            "tools/list" => reply(&s, rpc_result(&id, fixture_tools())),
+            "tools/list" if s.tools_list_error_code.is_some() => reply(
+                &s,
+                json!({"jsonrpc": "2.0", "id": id,
+                       "error": {"code": s.tools_list_error_code, "message": "no"}}),
+            ),
+            "tools/list" => {
+                let mut t = fixture_tools();
+                if let Some(x) = &s.extra_tool {
+                    t["tools"].as_array_mut().unwrap().push(x.clone());
+                }
+                reply(&s, rpc_result(&id, t))
+            }
+            "tools/call" if s.rate_limit.is_some() => ResponseTemplate::new(429)
+                .insert_header("retry-after", s.rate_limit.clone().unwrap().as_str()),
             "tools/call" => {
                 let name = body["params"]["name"].as_str().unwrap_or("");
                 match name {
@@ -176,14 +209,19 @@ impl Respond for FakeGenie {
                                 if let Some(x) = &s.busy_extra {
                                     r["structuredContent"] = x.clone();
                                 }
+                                if let Some(x) = &s.busy_meta {
+                                    r["_meta"] = x.clone();
+                                }
                                 r
                             }),
                         ),
-                        (Busy::RpcError, true) => reply(
-                            &s,
-                            json!({"jsonrpc": "2.0", "id": id,
-                                   "error": {"code": -32603, "message": BUSY_TEXT}}),
-                        ),
+                        (Busy::RpcError, true) => reply(&s, {
+                            let mut e = json!({"code": -32603, "message": BUSY_TEXT});
+                            if let Some(d) = &s.busy_rpc_data {
+                                e["data"] = d.clone();
+                            }
+                            json!({"jsonrpc": "2.0", "id": id, "error": e})
+                        }),
                         _ => {
                             let sc = json!({"conversation_id": "conv-1", "response_id": "resp-1",
                                             "status": "in_progress"});
@@ -199,14 +237,12 @@ impl Respond for FakeGenie {
                     },
                     "genie_poll_response" => {
                         let sc = s.poll.clone();
-                        reply(
-                            &s,
-                            rpc_result(
-                                &id,
-                                json!({"content": [{"type": "text", "text": "poll"}],
-                                       "structuredContent": sc}),
-                            ),
-                        )
+                        let result = if s.poll_as_text {
+                            json!({"content": [{"type": "text", "text": sc.to_string()}]})
+                        } else {
+                            json!({"content": [{"type": "text", "text": "poll"}], "structuredContent": sc})
+                        };
+                        reply(&s, rpc_result(&id, result))
                     }
                     _ => reply(
                         &s,

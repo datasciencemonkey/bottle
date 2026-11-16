@@ -29,7 +29,7 @@ pub enum McpError {
     #[error("GENIE_ONE_OFF: HTTP {status} without a session")]
     GenieOneOff { status: u16 },
     #[error("RATE_LIMITED: HTTP 429 (Retry-After {retry_after:?})")]
-    RateLimited { retry_after: Option<String> },
+    RateLimited { retry_after: Option<RetryAfter> },
     #[error("HTTP {status}")]
     Http {
         status: u16,
@@ -40,12 +40,68 @@ pub enum McpError {
     BadResponse(String),
     #[error("the SSE stream ended before the JSON-RPC response")]
     StreamEndedWithoutResponse,
-    #[error("the server named protocol {0}, not 2025-06-18")]
-    UnsupportedProtocolVersion(String),
+    /// Only a `YYYY-MM-DD` value is kept; any other server text is reduced to its length.
+    #[error("the server named protocol {date:?} (length {len}), not 2025-06-18")]
+    UnsupportedProtocolVersion { date: Option<String>, len: usize },
     #[error("call initialize first")]
     NotInitialized,
     #[error("G-06a: tool {0} is not on the allow list")]
     ToolNotAllowed(String),
+}
+
+/// A parsed `Retry-After` header (G-10a). The raw text is not kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RetryAfter {
+    Seconds(u64),
+    HttpDate,
+    Invalid,
+}
+
+pub fn parse_retry_after(raw: &str) -> RetryAfter {
+    let t = raw.trim();
+    if !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit()) {
+        return t
+            .parse()
+            .map(RetryAfter::Seconds)
+            .unwrap_or(RetryAfter::Invalid);
+    }
+    // IMF-fixdate, for example "Wed, 21 Oct 2015 07:28:00 GMT".
+    let b = t.as_bytes();
+    let date_like = b.len() == 29
+        && t.ends_with(" GMT")
+        && b[3] == b','
+        && t.bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b' ' | b',' | b':'));
+    if date_like {
+        RetryAfter::HttpDate
+    } else {
+        RetryAfter::Invalid
+    }
+}
+
+/// `YYYY-MM-DD` only.
+fn date_only(v: &str) -> Option<String> {
+    let b = v.as_bytes();
+    let ok = b.len() == 10
+        && b.iter().enumerate().all(|(i, c)| {
+            if i == 4 || i == 7 {
+                *c == b'-'
+            } else {
+                c.is_ascii_digit()
+            }
+        });
+    ok.then(|| v.to_string())
+}
+
+/// The content type as a fixed word: the raw header is not kept.
+pub fn content_kind(ct: &str) -> &'static str {
+    match ct {
+        "application/json" => "application/json",
+        "text/event-stream" => "text/event-stream",
+        "" => "",
+        _ => "<other>",
+    }
 }
 
 /// One HTTP exchange, with no token, no body and no session ID value.
@@ -55,7 +111,7 @@ pub struct Exchange {
     pub attempt: u8,
     pub forced_refresh: bool,
     pub http_status: u16,
-    pub content_type: String,
+    pub content_type: &'static str,
     pub session_id_sent: bool,
     pub protocol_header_sent: bool,
     pub o_param: bool,
@@ -65,8 +121,9 @@ pub struct Exchange {
 pub struct InitializeInfo {
     pub protocol_version: String,
     pub session_id_present: bool,
-    pub server_name: Option<String>,
-    pub content_type: String,
+    /// The length of `serverInfo.name` only (the name can hold a host).
+    pub server_name_len: Option<usize>,
+    pub content_type: &'static str,
     pub initialized_status: u16,
 }
 
@@ -164,7 +221,10 @@ impl<T: TokenSource> McpClient<T> {
             .unwrap_or("")
             .to_string();
         if version != PROTOCOL_VERSION {
-            return Err(McpError::UnsupportedProtocolVersion(version));
+            return Err(McpError::UnsupportedProtocolVersion {
+                date: date_only(&version),
+                len: version.chars().count(),
+            });
         }
         let sid = reply
             .session_header
@@ -172,7 +232,7 @@ impl<T: TokenSource> McpClient<T> {
         let server_name = result
             .pointer("/serverInfo/name")
             .and_then(Value::as_str)
-            .map(str::to_string);
+            .map(|n| n.chars().count());
         {
             let mut s = self.session.lock().expect("lock");
             s.id = sid.clone();
@@ -190,8 +250,8 @@ impl<T: TokenSource> McpClient<T> {
         Ok(InitializeInfo {
             protocol_version: version,
             session_id_present: sid.is_some(),
-            server_name,
-            content_type: reply.content_type,
+            server_name_len: server_name,
+            content_type: content_kind(&reply.content_type),
             initialized_status,
         })
     }
@@ -208,10 +268,12 @@ impl<T: TokenSource> McpClient<T> {
             let msg = self.request("tools/list", params)?;
             let m = self.request_with_reinit(msg).await?;
             if let Some(e) = m.get("error") {
-                return Err(McpError::BadResponse(format!(
-                    "tools/list error code {}",
-                    e["code"]
-                )));
+                // Only an integer code is kept; any other value is server text.
+                let code = e.get("code").and_then(Value::as_i64);
+                return Err(McpError::BadResponse(match code {
+                    Some(c) => format!("tools/list error code {c}"),
+                    None => "tools/list error with a non-integer code".into(),
+                }));
             }
             let result = m
                 .get("result")
@@ -338,13 +400,13 @@ impl<T: TokenSource> McpClient<T> {
                 .headers()
                 .get(reqwest::header::RETRY_AFTER)
                 .and_then(|v| v.to_str().ok())
-                .map(str::to_string);
+                .map(parse_retry_after);
             self.trace.lock().expect("lock").push(Exchange {
                 method: method.clone(),
                 attempt: attempt + 1,
                 forced_refresh: forced,
                 http_status: status,
-                content_type: content_type.clone(),
+                content_type: content_kind(&content_type),
                 session_id_sent: session_id.is_some(),
                 protocol_header_sent: after_init || method != "initialize",
                 o_param: self.endpoint.url().query_pairs().any(|(k, _)| k == "o"),
@@ -418,7 +480,10 @@ fn read_message(content_type: &str, body: &str, id: u64) -> Result<Value, McpErr
             .ok_or(McpError::StreamEndedWithoutResponse),
         _ => {
             let v: Value = serde_json::from_str(body).map_err(|_| {
-                McpError::BadResponse(format!("body is not JSON (content type {content_type:?})"))
+                McpError::BadResponse(format!(
+                    "body is not JSON (content type {})",
+                    content_kind(content_type)
+                ))
             })?;
             if is_response(&v) {
                 Ok(v)

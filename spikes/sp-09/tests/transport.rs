@@ -46,7 +46,9 @@ async fn g_04c_rejects_other_server_protocol_version() {
     let (_server, ep) = start(&fake).await;
     let client = McpClient::new(ep, RotatingTokens::new(&["t1"]));
     let err = client.initialize().await.unwrap_err();
-    assert!(matches!(err, McpError::UnsupportedProtocolVersion(v) if v == "2025-03-26"));
+    assert!(
+        matches!(err, McpError::UnsupportedProtocolVersion { date: Some(v), len: 10 } if v == "2025-03-26")
+    );
 }
 
 #[tokio::test]
@@ -453,4 +455,72 @@ async fn sp_09_redirects_are_not_followed() {
     let reqs = server.received_requests().await.unwrap();
     assert_eq!(reqs.len(), 1);
     assert!(reqs.iter().all(|r| r.url.path() != "/evil"));
+}
+
+const LEAK: [&str; 3] = ["alice@corp.com", "9876543210123456", "azuredatabricks"];
+const LEAKY: &str = "alice@corp.com adb-9876543210123456.7.azuredatabricks.net";
+
+fn no_leak(text: &str) {
+    for l in LEAK {
+        assert!(!text.contains(l), "holds {l:?}: {text}");
+    }
+}
+
+#[tokio::test]
+async fn sp_09_unsupported_protocol_version_keeps_no_server_text() {
+    let fake = FakeGenie::new(&["t1"]);
+    fake.with(|s| s.server_protocol = LEAKY.into());
+    let (_server, ep) = start(&fake).await;
+    let client = McpClient::new(ep, RotatingTokens::new(&["t1"]));
+    let err = client.initialize().await.unwrap_err();
+    assert!(
+        matches!(err, McpError::UnsupportedProtocolVersion { date: None, len } if len == LEAKY.len())
+    );
+    no_leak(&format!("{err} {err:?}"));
+}
+
+#[tokio::test]
+async fn sp_09_server_name_and_content_type_keep_no_server_text() {
+    let fake = FakeGenie::new(&["t1"]);
+    fake.with(|s| s.server_name = LEAKY.into());
+    let (_server, client) = ready(&fake, RotatingTokens::new(&["t1"])).await;
+    let _ = client.list_tools().await.unwrap();
+    let info = client.initialize().await.unwrap();
+    assert_eq!(info.server_name_len, Some(LEAKY.len()));
+    no_leak(&serde_json::to_string(&info).unwrap());
+    no_leak(&serde_json::to_string(&client.exchanges()).unwrap());
+}
+
+#[tokio::test]
+async fn sp_09_tools_list_string_error_code_is_not_echoed() {
+    let fake = FakeGenie::new(&["t1"]);
+    fake.with(|s| s.tools_list_error_code = Some(json!(LEAKY)));
+    let (_server, client) = ready(&fake, RotatingTokens::new(&["t1"])).await;
+    let err = client.list_tools().await.unwrap_err();
+    no_leak(&format!("{err} {err:?}"));
+    fake.with(|s| s.tools_list_error_code = Some(json!(-32000)));
+    let err = client.list_tools().await.unwrap_err();
+    assert!(err.to_string().contains("-32000"), "{err}");
+}
+
+#[tokio::test]
+async fn sp_09_retry_after_on_429_is_parsed_not_echoed() {
+    use sp09::transport::RetryAfter;
+    for (raw, want) in [
+        ("30", RetryAfter::Seconds(30)),
+        ("alice@corp.com", RetryAfter::Invalid),
+    ] {
+        let fake = FakeGenie::new(&["t1"]);
+        let (_server, client) = ready(&fake, RotatingTokens::new(&["t1"])).await;
+        fake.with(|s| s.rate_limit = Some(raw.into()));
+        let err = client
+            .call_tool("genie_poll_response", contract::poll_args("c", "r"), None)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, McpError::RateLimited { retry_after: Some(r) } if r == want),
+            "{err:?}"
+        );
+        no_leak(&format!("{err} {err:?}"));
+    }
 }
