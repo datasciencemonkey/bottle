@@ -345,3 +345,32 @@ fn arc_5_only_the_brain_can_take_the_core_to_brain_channel() {
         ));
     }
 }
+
+#[test]
+fn cap_02a_stop_and_pause_need_the_lease_id() {
+    for cmd in ["capture_stop", "capture_pause"] {
+        // No lease: rejected.
+        let err = ipc::handle("brain", cmd, json!({"mogId": "a1"})).unwrap_err();
+        assert!(matches!(err, IpcError::InvalidArgs { .. }), "{cmd}: {err:?}");
+        // A malformed lease: rejected.
+        for bad in [json!(""), json!(17), json!("a b"), json!("x".repeat(65))] {
+            let err = ipc::handle("brain", cmd, json!({"mogId": "a1", "leaseId": bad})).unwrap_err();
+            assert!(matches!(err, IpcError::InvalidArgs { .. }), "{cmd} {bad}");
+        }
+        // A well-formed lease reaches R2 (still a stub).
+        let err = ipc::handle("brain", cmd, json!({"mogId": "a1", "leaseId": "17"})).unwrap_err();
+        assert!(matches!(err, IpcError::NotImplemented { .. }), "{cmd}: {err:?}");
+    }
+}
+
+#[test]
+fn cap_02a_a_stale_lease_has_a_typed_error() {
+    let err = IpcError::StaleLease {
+        command: "capture_stop".into(),
+    };
+    assert_eq!(
+        serde_json::to_value(&err).unwrap(),
+        json!({"error": "stale_lease", "command": "capture_stop"})
+    );
+    assert!(!err.to_string().is_empty());
+}

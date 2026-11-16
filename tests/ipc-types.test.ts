@@ -138,6 +138,7 @@ const typed: Record<string, unknown> = {
   CaptureState: {
     owner: MOG,
     mode: 'session',
+    leaseId: '17',
     recording: true,
     paused: false,
     sessionId: 'sess-01',
@@ -295,5 +296,15 @@ describe('IPC type fixtures', () => {
       const text = readFileSync(join(dir, file), 'utf8');
       expect(text).not.toMatch(/"(token|accessToken|access_token|authorization|password)"/i);
     }
+  });
+});
+
+describe('capture lease (CAP-02a)', () => {
+  it('[CAP-02a] [AT-17] a live CaptureState carries its lease ID', () => {
+    const live = typed['CaptureState'] as CaptureState;
+    expect(live.recording).toBe(true);
+    expect(live.leaseId).toBe('17');
+    const idle = typed['CaptureState.minimal'] as CaptureState;
+    expect(idle.leaseId).toBeUndefined();
   });
 });
