@@ -6,8 +6,8 @@
 //! platform HotkeyService through a [`TalkKeySink`].
 //!
 //! Seams:
-//! - The IPC route of `hotkeys_set` to [`HotkeySettings::set`] is contract change #331:
-//!   TODO(#331).
+//! - The IPC gateway routes `hotkeys_set` to [`HotkeySettings::set`] through
+//!   [`crate::ipc::HotkeysRoute`] (#331, ADR 0040).
 //! - Main has no settings store yet. The app uses [`MemorySettingsStore`], so a saved key
 //!   lasts until quit: TODO(#77).
 //! - The first-run screen shows [`HotkeySettings::first_run_conflicts`]: TODO(#43).
@@ -196,7 +196,7 @@ impl HotkeySettings {
     /// The `hotkeys_set {bindings}` command: returns `{conflicts}` of
     /// `hotkey_bindings::hotkeys_set` with a fresh [`KeyboardEnv`]. Saves the new keys, but
     /// not a binding that duplicates another action (MB-14). A new talk key goes to the
-    /// [`TalkKeySink`]. TODO(#331): the IPC route.
+    /// [`TalkKeySink`]. The IPC route is [`crate::ipc::HotkeysRoute`] (#331).
     pub fn set(&self, input: &JsonObject) -> CoreResult<Value> {
         let env = self.keyboard_env();
         // The lock spans the restart, so two calls cannot apply their talk keys out of order.
@@ -244,6 +244,12 @@ impl HotkeySettings {
     /// The keyboard environment now (prompt-free reads).
     pub fn keyboard_env(&self) -> KeyboardEnv {
         read_keyboard_env(self.os, self.env.as_ref())
+    }
+}
+
+impl crate::ipc::HotkeysRoute for HotkeySettings {
+    fn set_hotkeys(&self, bindings: &JsonObject) -> CoreResult<Value> {
+        self.set(bindings)
     }
 }
 
@@ -694,8 +700,11 @@ mod tests {
         ] {
             assert!(!code.contains(banned), "hotkey_settings.rs uses {banned}");
         }
-        for seam in ["TODO(#331)", "TODO(#77)", "TODO(#43)"] {
+        for seam in ["TODO(#77)", "TODO(#43)"] {
             assert!(text.contains(seam), "missing {seam}");
         }
+        // #331 is done: the gateway routes `hotkeys_set` here (ADR 0040).
+        assert!(!code.contains(concat!("TODO(#", "331)")));
+        assert!(code.contains("impl crate::ipc::HotkeysRoute for HotkeySettings"));
     }
 }

@@ -208,7 +208,7 @@ fn arc_3_card_opens_only_for_an_open_mog_and_closes_with_it() {
 
 #[test]
 fn arc_3_window_errors_name_no_id() {
-    // Errors cross IPC later (#285); they never echo the caller's argument.
+    // Errors cross IPC as fixed codes (ADR 0040); they never echo the caller's argument.
     let bad = "dapi0123456789abcdef/secret";
     let mut ledger = WindowLedger::new(1);
     let mut errors = vec![

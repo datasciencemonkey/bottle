@@ -1,6 +1,7 @@
 //! Event names of 4.5 (ARC-5). Tauri allows only alphanumerics, `-`, `/`, `:` and `_` in
 //! event names, so each dotted name of the requirements maps `.` to `:` (ADR 0003).
-//! Streams (level, partial text) are Channels, not events: see `CaptureSubscribeArgs`.
+//! Core-to-brain streams (level, partial text) are Channels, not events: see
+//! `CaptureSubscribeArgs`. The brain passes level frames on to one MOG view as `mog:level`.
 //! Core-to-brain items travel as `{ event, payload }` messages on the brain Channel.
 
 use serde::Serialize;
@@ -48,10 +49,13 @@ pub const AGENT_TOOL_CALL: &str = "agent:tool_call";
 pub const AGENT_STATUS: &str = "agent:status";
 pub const MOG_VIEW_STATE: &str = "mog:view_state";
 pub const CARD_UPDATE: &str = "card:update";
+/// Mic frames for the MOG level meter (UX-06a), sent to `mog-<owner>` (#285, ADR 0040).
+/// Not in the 4.5 list of the requirements.
+pub const MOG_LEVEL: &str = "mog:level";
 /// `view_emit` arrives in the brain under this name.
 pub const VIEW_INPUT: &str = "view:input";
 
-/// Every event of 4.5, in the order of the requirements.
+/// Every event of 4.5, in the order of the requirements, plus `mog.level` (ADR 0040).
 pub const ALL: &[EventSpec] = &[
     core(HOTKEY_PTT, "hotkey.ptt"),
     core(HOTKEY_PANIC, "hotkey.panic"),
@@ -71,6 +75,11 @@ pub const ALL: &[EventSpec] = &[
     EventSpec {
         name: CARD_UPDATE,
         spec_name: "card.update",
+        direction: Direction::BrainToView,
+    },
+    EventSpec {
+        name: MOG_LEVEL,
+        spec_name: "mog.level",
         direction: Direction::BrainToView,
     },
     core(VIEW_INPUT, "view.input"),

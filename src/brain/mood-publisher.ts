@@ -11,17 +11,13 @@
  * calls `update` for each request phase, and a recheck runs when an error or success window ends.
  */
 import type { Mood, MogId } from '../shared/interfaces';
-import { epochNow, type ViewTrace } from '../shared/latency';
+import type { MogViewState } from '../shared/ipc';
+import { epochNow } from '../shared/latency';
 import type { MonotonicClock } from './clock';
 import { holdMood, mapMood, type HeldMood, type MoodSources } from './components/mood-mapper';
 
-/** What the brain sends on `mog.view_state`. TODO(#285): the contract `MogViewState`. */
-export interface PublishedViewState {
-  mogId: MogId;
-  mood: Mood;
-  overlays: ReturnType<typeof mapMood>['overlays'];
-  trace?: ViewTrace;
-}
+/** What the brain sends on `mog.view_state`: the contract `MogViewState` (#285). */
+export type PublishedViewState = MogViewState;
 
 /** Runs `fn` at a time on the publisher clock. Returns a cancel function. */
 export interface Scheduler {

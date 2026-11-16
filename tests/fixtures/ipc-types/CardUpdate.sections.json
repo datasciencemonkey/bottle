@@ -1,0 +1,80 @@
+{
+  "mogId": "6f1c2a9e-4b3d-4e8a-9c7f-2d5e8a1b3c4d",
+  "blurbs": [],
+  "chips": [
+    {
+      "id": "c1",
+      "label": "Show the SQL"
+    }
+  ],
+  "overflowChips": [
+    {
+      "id": "c5",
+      "label": "Open in Genie"
+    }
+  ],
+  "sections": [
+    {
+      "id": "answer",
+      "md": "**4.2 M**"
+    },
+    {
+      "id": "keyNumbers",
+      "items": ["4.2 M"]
+    },
+    {
+      "id": "sql",
+      "sql": "SELECT 1",
+      "collapsed": true
+    },
+    {
+      "id": "tablePreview",
+      "columns": ["region", "revenue"],
+      "rows": [["EMEA", "4.2 M"]],
+      "moreRows": 3,
+      "moreColumns": 1
+    },
+    {
+      "id": "sentToGenie",
+      "text": "Revenue by region"
+    },
+    {
+      "id": "resend"
+    },
+    {
+      "id": "copy",
+      "formats": ["markdown", "csv"]
+    },
+    {
+      "id": "footer",
+      "sttBadge": "STT: local",
+      "deepLink": "https://example.cloud.databricks.com/genie"
+    },
+    {
+      "id": "dataFlow",
+      "text": "Sent to Genie in workspace A."
+    }
+  ],
+  "pageDomain": {
+    "scope": "draft",
+    "reviewId": "r1",
+    "current": {
+      "id": "d1",
+      "name": "Sales"
+    },
+    "options": [
+      {
+        "id": "d1",
+        "name": "Sales"
+      },
+      {
+        "id": "d2",
+        "name": "Ops"
+      }
+    ]
+  },
+  "pagesChecklist": {
+    "text": "Pages are not ready in this workspace.",
+    "items": ["Turn on UC Pages."]
+  }
+}

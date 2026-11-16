@@ -50,7 +50,7 @@ describe('capture lease (contract)', () => {
   });
 });
 
-describe('content-free IPC errors (#333, ADR 0032)', () => {
+describe('content-free IPC errors (#333, ADR 0040)', () => {
   it('[SEC-03] the TS error codes equal the Rust ERROR_CODES', () => {
     expect([...IPC_ERROR_CODES]).toEqual(schemaDoc.errors);
   });

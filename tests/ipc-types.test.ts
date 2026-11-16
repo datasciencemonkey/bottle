@@ -111,7 +111,7 @@ const everyUnionValueListed: [
   Equal<(typeof ROUTER_COMMANDS)[number], RouterDecision['command']>,
 ] = [true, true, true, true, true, true, true, true, true, true];
 
-// Brain-to-view payloads (#285, ADR 0032).
+// Brain-to-view payloads (#285, ADR 0040).
 const VIEW_STATE = {
   mogId: MOG,
   mood: 'listening',
@@ -138,6 +138,11 @@ const VIEW_STATE = {
       action: 'open_data_disclosures',
     },
   ],
+  homeDomain: {
+    scope: 'home',
+    paste: 'The domain list cannot be read.',
+    error: 'Paste a domain ID.',
+  },
   trace: {
     seq: 7,
     eventAt: 1763251200000.25,
@@ -172,6 +177,46 @@ const typed: Record<string, unknown> = {
     overlays: { attention: false, recording: false, offline: false, localOnly: true },
   } satisfies MogViewState,
   CardUpdate: CARD_UPDATE,
+  'CardUpdate.sections': {
+    mogId: '6f1c2a9e-4b3d-4e8a-9c7f-2d5e8a1b3c4d',
+    blurbs: [],
+    chips: [{ id: 'c1', label: 'Show the SQL' }],
+    overflowChips: [{ id: 'c5', label: 'Open in Genie' }],
+    sections: [
+      { id: 'answer', md: '**4.2 M**' },
+      { id: 'keyNumbers', items: ['4.2 M'] },
+      { id: 'sql', sql: 'SELECT 1', collapsed: true },
+      {
+        id: 'tablePreview',
+        columns: ['region', 'revenue'],
+        rows: [['EMEA', '4.2 M']],
+        moreRows: 3,
+        moreColumns: 1,
+      },
+      { id: 'sentToGenie', text: 'Revenue by region' },
+      { id: 'resend' },
+      { id: 'copy', formats: ['markdown', 'csv'] },
+      {
+        id: 'footer',
+        sttBadge: 'STT: local',
+        deepLink: 'https://example.cloud.databricks.com/genie',
+      },
+      { id: 'dataFlow', text: 'Sent to Genie in workspace A.' },
+    ],
+    pageDomain: {
+      scope: 'draft',
+      reviewId: 'r1',
+      current: { id: 'd1', name: 'Sales' },
+      options: [
+        { id: 'd1', name: 'Sales' },
+        { id: 'd2', name: 'Ops' },
+      ],
+    },
+    pagesChecklist: {
+      text: 'Pages are not ready in this workspace.',
+      items: ['Turn on UC Pages.'],
+    },
+  } satisfies CardUpdate,
   'CardUpdate.minimal': { mogId: OTHER_MOG, blurbs: [], chips: [] } satisfies CardUpdate,
   MicLevelFrame: { owner: MOG, dbfs: -42.5, t: 1250.5 } satisfies MicLevelFrame,
   'MicLevelFrame.closed': { owner: null, dbfs: -120.5, t: 1300.25 } satisfies MicLevelFrame,

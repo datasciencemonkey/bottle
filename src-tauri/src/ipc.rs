@@ -3,14 +3,34 @@
 //! One invoke handler serves every command of `mog_core::ipc::COMMANDS`. Two checks apply:
 //! 1. Tauri's ACL: `build.rs` puts every command in the app manifest, so a window can call
 //!    a command only if its capability file lists `allow-<command>` (ARC-4).
-//! 2. The R12 gateway (`mog_core::ipc::handle`): window class, `deny_unknown_fields` args.
+//! 2. The hardened R12 gateway (`mog_core::ipc_gateway::hardened_gateway_with`, #333): window
+//!    class, `deny_unknown_fields` args, the rule-7 reply scrub and content-free codes.
+//!
+//! The gateway is the only entry (ADR 0040). It sends each checked call to [`HostComponents`],
+//! which runs the host actions: `view_emit` (relay to the brain), `brain_subscribe`, the four
+//! `window_*` ops (R11) and `hotkeys_set` (R1 settings). Every other command stays
+//! `not_implemented` until its feature issue wires its component. A rejection is only
+//! `{ "error": "<code>" }`, with a code from `ipc_gateway::ERROR_CODES` (SEC-03).
+//!
+//! The `window_*` ops can wait for the main thread, so they run on a worker and resolve later
+//! (ADR 0022 decision 6). Every other command runs inline, so `view_emit` keeps its order.
 //!
 //! The front end calls `invoke(name, { args })`; any other top-level key is rejected.
 //! Core-to-brain traffic (including the `view_emit` relay) goes only to the brain, on the
 //! Channel that the brain registers with `brain_subscribe`. It never uses Tauri events,
-//! because every window that may listen gets every Tauri event (ADR 0003).
+//! because every window that may listen gets every Tauri event (ADR 0003). Each payload on
+//! that Channel gets the rule-7 scrub (SEC-01).
 
-use mog_core::ipc::{self, events, ChannelRef, Handled, IpcError, INVALID_ARGS_REASON};
+use crate::window_host::TauriWindowHost;
+use mog_core::error::{CoreError, CoreResult};
+use mog_core::ipc::{
+    self, events, BrainSubscribeArgs, ChannelRef, HotkeysSetArgs, IpcError, JsonObject, MogArgs,
+    WindowMogOpenArgs, INVALID_ARGS_REASON,
+};
+use mog_core::ipc_gateway::{hardened_gateway_with, GatewayComponents, IpcGateway, NoLog};
+use mog_core::ipc_gateway::{ipc_error_code, ERROR_CODES};
+use mog_core::token_guard::scrub_json;
+use mog_core::window_host::WindowHost;
 use serde_json::{json, Value};
 use std::str::FromStr;
 use std::sync::Mutex;
@@ -24,10 +44,11 @@ pub struct BrainChannel(Mutex<Option<Channel<Value>>>);
 
 impl BrainChannel {
     /// Deliver one core-to-brain item as `{ event, payload }`. `false` if no brain listens.
+    /// The payload gets the rule-7 scrub first (SEC-01, #333).
     pub fn send(&self, event: &str, payload: Value) -> bool {
         let guard = self.0.lock().unwrap_or_else(|p| p.into_inner());
         match guard.as_ref() {
-            Some(ch) => ch.send(brain_message(event, payload)).is_ok(),
+            Some(ch) => ch.send(brain_message(event, scrub_json(&payload))).is_ok(),
             None => false,
         }
     }
@@ -61,6 +82,198 @@ pub fn parse_envelope(command: &str, payload: &InvokeBody) -> Result<Value, IpcE
     }
 }
 
+// ---------- the host components (ADR 0040) ----------
+
+/// The brain side of the host actions. The app uses the brain Channel of the calling webview.
+pub trait BrainLink: Send + Sync {
+    /// Deliver one core-to-brain item. `false` if no brain listens.
+    fn relay(&self, event: &str, payload: Value) -> bool;
+    /// Keep `channel` as the brain's delivery path. `false` if the reference is not usable.
+    fn subscribe(&self, channel: &ChannelRef) -> bool;
+}
+
+/// The R1 settings side of `hotkeys_set` (#331). `HotkeySettings` implements it.
+pub trait HotkeysRoute: Send + Sync {
+    /// Apply `bindings` and return `{ conflicts }`.
+    fn set_hotkeys(&self, bindings: &JsonObject) -> CoreResult<Value>;
+}
+
+/// The components behind the hardened gateway for one call. `from` is the label of the
+/// calling window, which the app set. A missing host part answers `host_failed`.
+pub struct HostComponents<'a> {
+    pub from: &'a str,
+    pub brain: &'a dyn BrainLink,
+    pub windows: Option<&'a dyn WindowHost>,
+    pub hotkeys: Option<&'a dyn HotkeysRoute>,
+}
+
+fn refused(e: IpcError) -> CoreError {
+    CoreError::IpcRefused {
+        code: ipc_error_code(&e),
+    }
+}
+
+fn host_failed(command: &str) -> CoreError {
+    refused(IpcError::HostFailed {
+        command: command.to_owned(),
+    })
+}
+
+fn invalid_args(command: &str) -> CoreError {
+    refused(IpcError::InvalidArgs {
+        command: command.to_owned(),
+        reason: INVALID_ARGS_REASON.to_owned(),
+    })
+}
+
+/// Parse checked arguments again into their type. The gateway checked them already.
+fn args_of<T: serde::de::DeserializeOwned>(command: &str, args: Value) -> CoreResult<T> {
+    serde_json::from_value(args).map_err(|_| invalid_args(command))
+}
+
+/// CAP-43b, MB-14: an unknown action is the caller's error; every other failure (for example
+/// a failed save) is the host's.
+fn hotkeys_error(command: &str, e: CoreError) -> CoreError {
+    match e {
+        CoreError::Unavailable {
+            reason: "unknown_hotkey_action",
+            ..
+        } => invalid_args(command),
+        _ => host_failed(command),
+    }
+}
+
+impl HostComponents<'_> {
+    fn windows(&self, command: &str) -> CoreResult<&dyn WindowHost> {
+        self.windows.ok_or_else(|| host_failed(command))
+    }
+
+    fn window_op(&self, command: &'static str, args: Value) -> CoreResult<Value> {
+        let host = self.windows(command)?;
+        if command == "window_mog_open" {
+            let a: WindowMogOpenArgs = args_of(command, args)?;
+            if let Some(g) = &a.geometry {
+                // JSON has no NaN or infinity; a size must be positive.
+                if !(g.width > 0.0 && g.height > 0.0) {
+                    return Err(invalid_args(command));
+                }
+            }
+            host.open_mog_window(&a.mog_id, a.geometry.as_ref())?;
+        } else {
+            let a: MogArgs = args_of(command, args)?;
+            match command {
+                "window_mog_close" => host.close_mog_window(&a.mog_id)?,
+                "window_card_show" => host.show_card(&a.mog_id)?,
+                _ => host.hide_card(&a.mog_id)?,
+            }
+        }
+        Ok(json!({}))
+    }
+}
+
+impl GatewayComponents for HostComponents<'_> {
+    fn call(&self, command: &'static str, args: Value) -> CoreResult<Value> {
+        match command {
+            "view_emit" => {
+                let item = view_input_payload(self.from, args);
+                if self.brain.relay(events::VIEW_INPUT, item) {
+                    Ok(json!({}))
+                } else {
+                    Err(host_failed(command))
+                }
+            }
+            "brain_subscribe" => {
+                let a: BrainSubscribeArgs = args_of(command, args)?;
+                if self.brain.subscribe(&a.on_event) {
+                    Ok(json!({}))
+                } else {
+                    Err(host_failed(command))
+                }
+            }
+            "window_mog_open" | "window_mog_close" | "window_card_show" | "window_card_hide" => {
+                self.window_op(command, args)
+            }
+            "hotkeys_set" => {
+                let a: HotkeysSetArgs = args_of(command, args)?;
+                let hotkeys = self.hotkeys.ok_or_else(|| host_failed(command))?;
+                hotkeys
+                    .set_hotkeys(&a.bindings)
+                    .map_err(|e| hotkeys_error(command, e))
+            }
+            // Each feature issue wires its R1-R17 component here.
+            _ => Err(refused(IpcError::NotImplemented {
+                command: command.to_owned(),
+            })),
+        }
+    }
+}
+
+/// The rejection that crosses to the window: `{ "error": "<code>" }` and nothing else. A code
+/// outside `ERROR_CODES` (for example a component's own reason) becomes `host_failed`.
+pub fn rejection(e: &CoreError) -> Value {
+    let code = e.code();
+    let code = if ERROR_CODES.contains(&code) {
+        code
+    } else {
+        "host_failed"
+    };
+    json!({ "error": code })
+}
+
+/// Run one command through the hardened gateway (the only entry, #333).
+pub fn route(components: HostComponents<'_>, command: &str, args: Value) -> Result<Value, Value> {
+    let from = components.from;
+    hardened_gateway_with(NoLog, components)
+        .dispatch(from, command, args)
+        .map_err(|e| rejection(&e))
+}
+
+/// True for the R11 commands, which run on a worker (ADR 0022 decision 6).
+pub fn runs_off_main_thread(command: &str) -> bool {
+    matches!(
+        command,
+        "window_mog_open" | "window_mog_close" | "window_card_show" | "window_card_hide"
+    )
+}
+
+/// The brain link of one calling webview: its brain Channel state and its Channel IDs.
+struct WebviewBrain<'a, R: Runtime>(&'a tauri::Webview<R>);
+
+impl<R: Runtime> BrainLink for WebviewBrain<'_, R> {
+    fn relay(&self, event: &str, payload: Value) -> bool {
+        self.0.state::<BrainChannel>().send(event, payload)
+    }
+
+    fn subscribe(&self, channel: &ChannelRef) -> bool {
+        match channel_on(channel, self.0) {
+            Some(ch) => {
+                self.0.state::<BrainChannel>().set(ch);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+/// Route one call from `webview` with the app's managed host parts.
+fn route_from<R: Runtime>(
+    webview: &tauri::Webview<R>,
+    label: &str,
+    command: &str,
+    args: Value,
+) -> Result<Value, Value> {
+    let brain = WebviewBrain(webview);
+    let windows = webview.try_state::<TauriWindowHost<R>>();
+    let hotkeys = webview.try_state::<crate::hotkey_settings::HotkeySettings>();
+    let components = HostComponents {
+        from: label,
+        brain: &brain,
+        windows: windows.as_ref().map(|w| w.inner() as &dyn WindowHost),
+        hotkeys: hotkeys.as_ref().map(|h| h.inner() as &dyn HotkeysRoute),
+    };
+    route(components, command, args)
+}
+
 /// The invoke handler for `tauri::Builder::invoke_handler`.
 pub fn handler<R: Runtime>(invoke: Invoke<R>) -> bool {
     let name = invoke.message.command().to_owned();
@@ -73,32 +286,26 @@ pub fn handler<R: Runtime>(invoke: Invoke<R>) -> bool {
     let args = match parse_envelope(&name, invoke.message.payload()) {
         Ok(a) => a,
         Err(e) => {
-            invoke.resolver.reject(e);
+            invoke
+                .resolver
+                .reject(json!({ "error": ipc_error_code(&e) }));
             return true;
         }
     };
-    let host_failed = || IpcError::HostFailed {
-        command: name.clone(),
-    };
-    match ipc::handle(&label, &name, args.clone()) {
-        Ok(Handled::RelayToBrain { from }) => {
-            let ok = webview
-                .state::<BrainChannel>()
-                .send(events::VIEW_INPUT, view_input_payload(&from, args));
-            if ok {
-                invoke.resolver.resolve(json!({}));
-            } else {
-                invoke.resolver.reject(host_failed());
+    let resolver = invoke.resolver;
+    if runs_off_main_thread(&name) {
+        // ADR 0022 decision 6: an R11 op may wait for the main thread, so never run it here.
+        tauri::async_runtime::spawn_blocking(move || {
+            match route_from(&webview, &label, &name, args) {
+                Ok(v) => resolver.resolve(v),
+                Err(e) => resolver.reject(e),
             }
+        });
+    } else {
+        match route_from(&webview, &label, &name, args) {
+            Ok(v) => resolver.resolve(v),
+            Err(e) => resolver.reject(e),
         }
-        Ok(Handled::SubscribeBrain { channel }) => match channel_on(&channel, &webview) {
-            Some(ch) => {
-                webview.state::<BrainChannel>().set(ch);
-                invoke.resolver.resolve(json!({}));
-            }
-            None => invoke.resolver.reject(host_failed()),
-        },
-        Err(e) => invoke.resolver.reject(e),
     }
     true
 }
@@ -173,8 +380,16 @@ mod tests {
         ));
         let sent = got.lock().unwrap().clone();
         assert_eq!(sent.len(), 1);
-        assert!(!sent[0].contains(secret), "the brain got a secret: {}", sent[0]);
-        assert!(sent[0].contains(mog_core::token_guard::REDACTED), "{}", sent[0]);
+        assert!(
+            !sent[0].contains(secret),
+            "the brain got a secret: {}",
+            sent[0]
+        );
+        assert!(
+            sent[0].contains(mog_core::token_guard::REDACTED),
+            "{}",
+            sent[0]
+        );
         assert!(sent[0].contains("\"event\":\"view:input\""), "{}", sent[0]);
     }
 
@@ -199,7 +414,12 @@ mod tests {
                 continue;
             }
             let code = production_code(&std::fs::read_to_string(&path).unwrap());
-            for banned in ["ipc::handle(", "CheckedGateway", "hardened_gateway(", "StubIpcGateway"] {
+            for banned in [
+                "ipc::handle(",
+                "CheckedGateway",
+                "hardened_gateway(",
+                "StubIpcGateway",
+            ] {
                 assert!(!code.contains(banned), "{} uses {banned}", path.display());
             }
             uses += code.matches("hardened_gateway_with(").count();

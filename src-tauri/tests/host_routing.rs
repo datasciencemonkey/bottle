@@ -1,4 +1,4 @@
-//! #285, #331, #333 (ADR 0032): the Tauri host routes every command through the hardened
+//! #285, #331, #333 (ADR 0040): the Tauri host routes every command through the hardened
 //! gateway. `HostComponents` runs the host actions (`view_emit`, `brain_subscribe`, the four
 //! `window_*` ops, `hotkeys_set`) behind fakes, so no Tauri runtime is needed except for the
 //! cap test, which uses the real R11 host on the Tauri mock runtime.
@@ -151,7 +151,10 @@ fn arc_3_window_mog_open_reaches_r11_with_its_geometry() {
         brain_call(&w, "window_mog_open", json!({"mogId": "a1", "geometry": g})),
         Ok(json!({}))
     );
-    assert_eq!(brain_call(&w, "window_mog_open", json!({"mogId": "b2"})), Ok(json!({})));
+    assert_eq!(
+        brain_call(&w, "window_mog_open", json!({"mogId": "b2"})),
+        Ok(json!({}))
+    );
     let geometry = Geometry {
         x: 10.5,
         y: 20.0,
@@ -183,15 +186,24 @@ fn arc_3_window_mog_open_refuses_a_size_that_is_not_positive() {
 #[test]
 fn arc_3_window_mog_close_reaches_r11() {
     let w = FakeWindows::default();
-    assert_eq!(brain_call(&w, "window_mog_close", json!({"mogId": "a1"})), Ok(json!({})));
+    assert_eq!(
+        brain_call(&w, "window_mog_close", json!({"mogId": "a1"})),
+        Ok(json!({}))
+    );
     assert_eq!(w.ops(), vec![Op::Close("a1".into())]);
 }
 
 #[test]
 fn mog_18a_window_card_show_and_hide_reach_r11() {
     let w = FakeWindows::default();
-    assert_eq!(brain_call(&w, "window_card_show", json!({"mogId": "a1"})), Ok(json!({})));
-    assert_eq!(brain_call(&w, "window_card_hide", json!({"mogId": "a1"})), Ok(json!({})));
+    assert_eq!(
+        brain_call(&w, "window_card_show", json!({"mogId": "a1"})),
+        Ok(json!({}))
+    );
+    assert_eq!(
+        brain_call(&w, "window_card_hide", json!({"mogId": "a1"})),
+        Ok(json!({}))
+    );
     assert_eq!(w.ops(), vec![Op::Show("a1".into()), Op::Hide("a1".into())]);
 }
 
@@ -212,7 +224,12 @@ fn arc_3_a_view_cannot_run_a_window_op() {
 
 #[test]
 fn arc_3_r11_refusal_codes_cross_unchanged() {
-    for code in ["mog_cap_reached", "unknown_mog", "window_closing", "invalid_args"] {
+    for code in [
+        "mog_cap_reached",
+        "unknown_mog",
+        "window_closing",
+        "invalid_args",
+    ] {
         let w = FakeWindows::failing(code);
         assert_eq!(
             brain_call(&w, "window_card_show", json!({"mogId": "a1"})),
@@ -486,7 +503,10 @@ fn cap_43b_hotkeys_set_passes_the_bindings_and_maps_other_errors() {
         vec![serde_json::from_value::<JsonObject>(json!({"ptt": "RightOption"})).unwrap()]
     );
     // A view window may not set keys.
-    assert_eq!(set("mog-a1", Some(&fake), json!({})), err("window_not_allowed"));
+    assert_eq!(
+        set("mog-a1", Some(&fake), json!({})),
+        err("window_not_allowed")
+    );
 }
 
 // ---------- SEC-03: rejections are a code only ----------
@@ -502,12 +522,24 @@ fn sec_03_every_rejection_is_only_an_error_code() {
         // wrong window, with a label that holds a value
         (&label, "cli_status", json!({})),
         // bad arguments that hold a value
-        ("brain", "window_mog_open", json!({"mogId": SECRET, "x": SECRET})),
+        (
+            "brain",
+            "window_mog_open",
+            json!({"mogId": SECRET, "x": SECRET}),
+        ),
         ("brain", "hotkeys_set", json!({"bindings": SECRET})),
         // a checked call with no host action
-        ("brain", "insert_text", json!({"mogId": "a1", "text": SECRET})),
+        (
+            "brain",
+            "insert_text",
+            json!({"mogId": "a1", "text": SECRET}),
+        ),
         // a view that speaks for another MOG
-        ("mog-a1", "view_emit", json!({"mogId": "b2", "kind": SECRET})),
+        (
+            "mog-a1",
+            "view_emit",
+            json!({"mogId": "b2", "kind": SECRET}),
+        ),
     ];
     for (from, command, args) in cases {
         let got = route(comps(from, &brain, Some(&w), None), command, args).unwrap_err();
@@ -517,7 +549,10 @@ fn sec_03_every_rejection_is_only_an_error_code() {
         assert!(ERROR_CODES.contains(&code), "{command}: {code}");
         let text = got.to_string();
         assert!(!text.contains(&SECRET[..12]), "{command} leaked: {text}");
-        assert!(!text.contains(command), "{command} named the command: {text}");
+        assert!(
+            !text.contains(command),
+            "{command} named the command: {text}"
+        );
     }
 }
 

@@ -111,7 +111,7 @@ fn arc_4_wrong_window_label_is_rejected() {
     ));
     assert!(matches!(
         ipc::handle("brain", "shell_exec", json!({})).unwrap_err(),
-        IpcError::UnknownCommand { .. }
+        IpcError::UnknownCommand
     ));
 }
 
@@ -232,7 +232,7 @@ fn arc_5_event_names_are_valid_tauri_names() {
         "agent.status",
         "mog.view_state",
         "card.update",
-        // #285 (ADR 0032): mic frames for the MOG level meter (UX-06a).
+        // #285 (ADR 0040): mic frames for the MOG level meter (UX-06a).
         "mog.level",
         "view.input",
     ];
@@ -414,7 +414,7 @@ fn cap_02a_schema_states_the_lease_rule() {
     assert!(text.contains(ipc::LEASE_PATTERN), "{text}");
 }
 
-// ---------- #285 / #333 (ADR 0032): content-free errors and the R11 codes ----------
+// ---------- #285 / #333 (ADR 0040): content-free errors and the R11 codes ----------
 
 #[test]
 fn sec_03_window_not_allowed_names_no_window_label() {

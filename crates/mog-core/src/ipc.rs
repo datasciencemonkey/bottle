@@ -141,16 +141,17 @@ pub fn command(name: &str) -> Option<&'static CommandSpec> {
 
 // ---------- errors and results ----------
 
-/// Why the gateway refused a call. No variant carries argument values (secret scrubbing, R12).
+/// Why the gateway refused a call. No variant carries argument values, the received command
+/// name or the window label (secret scrubbing, R12, SEC-03). `command` is always a name from
+/// [`COMMANDS`]. Only the serde tag crosses IPC (`{ "error": "<code>" }`, ADR 0040).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "error", rename_all = "snake_case")]
 pub enum IpcError {
-    UnknownCommand {
-        command: String,
-    },
+    /// The name is not in [`COMMANDS`]. The name is not kept: it is caller input (#333).
+    UnknownCommand,
+    /// The window class may not call this command. The window label is not kept (#333).
     WindowNotAllowed {
         command: String,
-        window: String,
     },
     InvalidArgs {
         command: String,
@@ -181,14 +182,26 @@ pub enum IpcError {
     InvalidMode {
         command: String,
     },
+    /// R11 `window_mog_open`: the cap of active MOG windows is reached (ARC-3, MB-03b).
+    MogCapReached {
+        command: String,
+    },
+    /// R11: no MOG window (or no card) with this ID is open.
+    UnknownMog {
+        command: String,
+    },
+    /// R11: the old window with this label is still closing. Retry after it is gone (ADR 0022).
+    WindowClosing {
+        command: String,
+    },
 }
 
 impl std::fmt::Display for IpcError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            IpcError::UnknownCommand { command } => write!(f, "unknown command {command}"),
-            IpcError::WindowNotAllowed { command, window } => {
-                write!(f, "window {window} may not call {command}")
+            IpcError::UnknownCommand => write!(f, "unknown command"),
+            IpcError::WindowNotAllowed { command } => {
+                write!(f, "this window may not call {command}")
             }
             IpcError::InvalidArgs { command, reason } => {
                 write!(f, "invalid arguments for {command}: {reason}")
@@ -202,6 +215,13 @@ impl std::fmt::Display for IpcError {
             IpcError::ConsentRequired { command } => write!(f, "{command}: consent is required"),
             IpcError::InvalidMode { command } => {
                 write!(f, "{command} does not apply to this capture mode")
+            }
+            IpcError::MogCapReached { command } => {
+                write!(f, "{command}: the cap of MOG windows is reached")
+            }
+            IpcError::UnknownMog { command } => write!(f, "{command}: no such MOG window"),
+            IpcError::WindowClosing { command } => {
+                write!(f, "{command}: the old window is still closing")
             }
         }
     }
@@ -639,12 +659,14 @@ pub fn schemas() -> BTreeMap<&'static str, Value> {
         .collect()
 }
 
-/// The committed schema document: the table, the events and the argument schemas.
+/// The committed schema document: the table, the events, the error codes (the only thing a
+/// rejection carries, ADR 0040) and the argument schemas.
 pub fn schema_document() -> Value {
     serde_json::json!({
         "$comment": "Generated from mog_core::ipc (#223). Do not edit; rerun the tests with BOTTLE_UPDATE_SCHEMAS=1.",
         "commands": COMMANDS,
         "events": events::ALL,
+        "errors": crate::ipc_gateway::ERROR_CODES,
         "arguments": schemas(),
     })
 }
@@ -666,12 +688,9 @@ fn check<T: for<'de> Deserialize<'de>>() -> fn(&str, Value) -> Result<(), IpcErr
 
 /// The single entry for every command (R12). Checks the window, then the arguments.
 pub fn handle(window_label: &str, command_name: &str, args: Value) -> Result<Handled, IpcError> {
-    let spec = command(command_name).ok_or_else(|| IpcError::UnknownCommand {
-        command: command_name.to_owned(),
-    })?;
+    let spec = command(command_name).ok_or(IpcError::UnknownCommand)?;
     let not_allowed = || IpcError::WindowNotAllowed {
         command: spec.name.to_owned(),
-        window: window_label.to_owned(),
     };
     let (class, own_id) = WindowClass::of_label(window_label).ok_or_else(not_allowed)?;
     if !spec.windows.contains(&class) {

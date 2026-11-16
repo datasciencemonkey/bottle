@@ -97,10 +97,13 @@ describe('view IPC helpers', () => {
 
 const fixture = (name: string): unknown =>
   JSON.parse(
-    readFileSync(join(import.meta.dirname, '../../tests/fixtures/ipc-types', `${name}.json`), 'utf8'),
+    readFileSync(
+      join(import.meta.dirname, '../../tests/fixtures/ipc-types', `${name}.json`),
+      'utf8',
+    ),
   );
 
-describe('contract view payloads (#285, ADR 0032)', () => {
+describe('contract view payloads (#285, ADR 0040)', () => {
   beforeEach(() => tauri.reset());
 
   it('[ARC-5] the view shape checks accept the contract fixtures', () => {

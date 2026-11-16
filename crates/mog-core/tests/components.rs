@@ -142,7 +142,7 @@ fn r11_window_host_stub_reports_not_implemented() {
     not_implemented(s.open_mog_window("demo", None), "R11");
     not_implemented(s.close_mog_window("demo"), "R11");
     not_implemented(s.show_card("demo"), "R11");
-    // #285: the gateway routes `window_card_hide` to R11 (ADR 0032).
+    // #285: the gateway routes `window_card_hide` to R11 (ADR 0040).
     not_implemented(s.hide_card("demo"), "R11");
 }
 

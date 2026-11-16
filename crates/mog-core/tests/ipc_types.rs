@@ -70,7 +70,7 @@ fn round_trip_by_name(type_name: &str, json: &Value) -> Result<Value, String> {
         "ProfileInfo" => round_trip::<Vec<ProfileInfo>>(json),
         "TokenStatus" => round_trip::<TokenStatus>(json),
         "RouterDecision" => round_trip::<RouterDecision>(json),
-        // Brain-to-view payloads (#285, ADR 0032).
+        // Brain-to-view payloads (#285, ADR 0040).
         "MogViewState" => round_trip::<MogViewState>(json),
         "CardUpdate" => round_trip::<CardUpdate>(json),
         "MicLevelFrame" => round_trip::<MicLevelFrame>(json),
