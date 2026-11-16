@@ -8,11 +8,14 @@ import type { Root } from 'react-dom/client';
 import { CardView } from './card/CardView';
 import { Hub } from './hub/Hub';
 import { HUB_SCOPE } from '../shared/hub-notice';
-import { render, tauri, viewEmits } from './test-tauri';
+import { render, tauri, viewEmits as allViewEmits } from './test-tauri';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('./test-tauri')).coreModule);
 vi.mock('@tauri-apps/api/event', async () => (await import('./test-tauri')).eventModule);
 vi.mock('@tauri-apps/api/window', async () => (await import('./test-tauri')).windowModule);
+
+/** The emits of the pickers: drop the hub-scope `notice.ready` (#27) and `mogs.ready` (#26). */
+const viewEmits = () => allViewEmits().filter((e) => (e as { mogId?: unknown }).mogId !== HUB_SCOPE);
 
 const ID = '00000000-0000-4000-8000-000000000001';
 const D1 = '7d3c1f2a-1b2c-4d5e-8f90-0a1b2c3d4e5f';
@@ -24,8 +27,8 @@ const options = [
   { id: D2, name: 'Sales' },
 ];
 
-/** The MOG emits of the hub: drop its first-run notice request (#27). */
-const mogEmits = () => viewEmits().filter((e) => (e as { mogId?: unknown }).mogId !== HUB_SCOPE);
+/** The MOG emits of the hub (hub-scope emits are already dropped). */
+const mogEmits = viewEmits;
 
 let roots: Root[] = [];
 const mount = async (node: Parameters<typeof render>[0]) => {

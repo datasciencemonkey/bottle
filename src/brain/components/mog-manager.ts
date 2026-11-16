@@ -105,7 +105,7 @@ export interface MogConfigClient {
   remove(id: string): Promise<boolean>;
 }
 
-/** The `window_mog_*` commands (R11). TODO(#285): the host routes them to `WindowHost`. */
+/** The `window_mog_*` commands. The host routes them to R11 `WindowHost` (#285, ADR 0040). */
 export interface MogWindowClient {
   openMog(mogId: MogId): Promise<void>;
   closeMog(mogId: MogId): Promise<void>;
