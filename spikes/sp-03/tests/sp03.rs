@@ -349,3 +349,25 @@ fn sp_03_args() {
         assert!(parse_args(bad.iter().copied()).is_err(), "{bad:?}");
     }
 }
+
+#[test]
+fn sp_03_nfr_08b_event_latency_picks_the_clock_that_fits() {
+    let (numer, denom) = (125, 3);
+    let mach_now = 2_400_000_000u64; // 100 s of 24 MHz ticks
+    let uptime_ns = 100_000_000_000u64;
+    // Timestamp in ticks, 2 ms old.
+    assert_eq!(
+        event_latency_ns(mach_now - 48_000, mach_now, uptime_ns, numer, denom),
+        Some(2_000_000)
+    );
+    // Timestamp in ns, 3 ms old (as ticks it would be in the future).
+    assert_eq!(
+        event_latency_ns(uptime_ns - 3_000_000, mach_now, uptime_ns, numer, denom),
+        Some(3_000_000)
+    );
+    // In the future on both clocks: no latency.
+    assert_eq!(
+        event_latency_ns(u64::MAX / 2, mach_now, uptime_ns, numer, denom),
+        None
+    );
+}
