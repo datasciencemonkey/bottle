@@ -2,8 +2,8 @@
 //! less; polls keep priority; AIMD halves and recovers; Retry-After is honoured.
 //!
 //! The shared per-profile bucket lives in R7 HttpTransport (G-09a..G-09d) and the 429 rules in
-//! R7 and R8 (G-10a, G-10b). Both are stubs today: the bucket is #138, the transport is #30 and
-//! #207. So every test here is `#[ignore = "pending TODO(#n)"]`. Each one runs on the #229 sim
+//! R7 and R8 (G-10a, G-10b). Both are stubs today: the bucket is #138, the R7 client is #364 and
+//! R8 is #30. So every test here is `#[ignore = "pending TODO(#n)"]`. Each one runs on the #229 sim
 //! clock (`mog_core::clock::SimClock`) with a scripted server, never on wall time. The poll
 //! delay floor (G-08) and the in-flight limits (G-11a..c) are TS and stay pending in
 //! `src/acceptance/at-34-poll-budget.test.ts`. The admin QPM limit (ADM-07) and the live 429
@@ -13,6 +13,8 @@ use std::time::Duration;
 
 use mog_core::clock::{MonotonicClock, SimClock};
 use mog_core::http_transport::{HttpTransport, StubHttpTransport};
+use mog_core::ipc::JsonObject;
+use mog_core::types::{TagApp, TagOp, Tags};
 
 /// The default bucket of G-09a.
 const LIMIT_PER_MIN: u32 = 40;
@@ -20,8 +22,14 @@ const LIMIT_PER_MIN: u32 = 40;
 fn bucket_exists() {
     // The stub answers NotImplemented; #138 replaces it with the bucket under test.
     let t = StubHttpTransport;
+    let tags = Tags {
+        app: TagApp::Bottle,
+        mog: "00000000-0000-4000-8000-0000000000e4".into(),
+        op: TagOp::Genie,
+    };
     assert!(
-        t.request("bottle-test", "scim.me", None).is_ok(),
+        t.request("bottle-test", "scim.me", &JsonObject::new(), None, &tags)
+            .is_ok(),
         "R7 is still a stub"
     );
 }
