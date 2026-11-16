@@ -746,7 +746,7 @@ fn arc_3_cap_02a_schedule_runs_window_ops_and_capture_start_on_a_worker_and_othe
         let worker = c.name.starts_with("window_")
             || matches!(
                 c.name,
-                "permission_request" | "capture_start" | "capture_resume"
+                "permission_request" | "capture_start" | "capture_resume" | "insert_text"
             );
         if worker {
             assert_ne!(ran_on, caller, "{} ran on the calling thread", c.name);

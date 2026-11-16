@@ -21,10 +21,10 @@ UC1 must paste the cleaned dictation text into the focused app with no Enter, an
 8. **Concealed write.** The text goes on the clipboard only through `ClipboardWriter` (SEC-30, #213). This PR adds the Windows backend `WindowsClipboard` (#371): all formats are set in one open and close.
 9. **Full snapshot.** macOS saves every pasteboard item with every type. Windows saves every memory format; Windows makes `CF_DIB` from a bitmap, so images come back.
 10. **No log.** The module logs nothing. A host error crosses only as `host_failed`.
-11. **Blocking call.** `insert_text` blocks for about 0.4 s. The host must run it off the main thread.
+11. **Blocking call.** `insert_text` blocks for about 0.4 s. The host runs it off the main thread.
 
 ## Consequences
 
-- The host route (`HostComponents` in `src-tauri/src/ipc.rs`, ADR 0040) must send `insert_text` to `os_component()` on a worker thread. `src-tauri/src/ipc.rs` is a contract file, and ADR 0040 is still open in PR #376, so that one-line route is a follow-up.
+- The host route (`HostComponents` in `src-tauri/src/ipc.rs`, ADR 0040) sends `insert_text` to `os_component()`, and `schedule` runs it on a worker (`runs_off_main_thread`). On an OS with no paste host the reply is `host_failed`.
 - A very slow app that reads the clipboard more than 0.35 s after the chord pastes the earlier content. The device run (#408) measures this.
 - On a non-QWERTY macOS layout where Command+V is not the ANSI V key, the paste can fail. The device run checks Dvorak.
