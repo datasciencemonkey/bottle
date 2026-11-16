@@ -31,6 +31,9 @@ pub enum WindowError {
     HostFailed,
     /// The old window with this label is still closing; try again after it is gone.
     Closing,
+    /// A window operation was called on the main thread after setup. It could wait for the
+    /// main thread (a window build) and deadlock, so it is refused (ADR 0022).
+    MainThread,
 }
 
 impl WindowError {
@@ -42,6 +45,7 @@ impl WindowError {
             WindowError::UnknownMog => "unknown_mog",
             WindowError::HostFailed => "host_failed",
             WindowError::Closing => "window_closing",
+            WindowError::MainThread => "main_thread",
         }
     }
 }
@@ -54,6 +58,7 @@ impl fmt::Display for WindowError {
             WindowError::UnknownMog => write!(f, "no MOG window with this ID is open"),
             WindowError::HostFailed => write!(f, "the window system refused the operation"),
             WindowError::Closing => write!(f, "the old window is still closing"),
+            WindowError::MainThread => write!(f, "window operations do not run on the main thread"),
         }
     }
 }
@@ -80,6 +85,16 @@ pub enum CardState {
     Hidden(Instant),
     /// The reaper destroys the card; a show waits until its `Destroyed` event comes.
     Closing,
+}
+
+/// What `begin_show` decided.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShowPlan {
+    /// No card WebView exists: make it (MOG-18a).
+    Make,
+    /// Show the live card window. The value is the state before the show, to restore it if
+    /// the native show fails.
+    Reuse(CardState),
 }
 
 /// Which MOG and card windows are open, and which windows the host destroyed and still waits for.
@@ -229,6 +244,57 @@ impl WindowLedger {
         self.closing.remove(label);
     }
 
+    /// Start a card show. `window_exists` is whether Tauri has the card window, read under the
+    /// same ledger lock, so the lookup and the state change are one step. The card is `Shown`
+    /// on `Ok`. A card the ledger has but Tauri has not is mid-destroy (`card_window_missing`).
+    pub fn begin_show(
+        &mut self,
+        mog_id: &str,
+        window_exists: bool,
+    ) -> Result<ShowPlan, WindowError> {
+        let kind = WindowKind::card(mog_id).ok_or(WindowError::InvalidId)?;
+        let was = self.card_state(mog_id).ok_or(WindowError::UnknownMog)?;
+        if self.is_closing(&kind) || was == CardState::Closing {
+            return Err(WindowError::Closing);
+        }
+        let plan = match was {
+            CardState::Absent => ShowPlan::Make,
+            _ if !window_exists => {
+                self.card_window_missing(mog_id);
+                return Err(WindowError::Closing);
+            }
+            _ => ShowPlan::Reuse(was),
+        };
+        self.show_card(mog_id)?;
+        Ok(plan)
+    }
+
+    /// Start a card hide, with the window lookup in the same ledger lock. `Ok(true)`: hide the
+    /// window, then call `hide_card`. `Ok(false)`: the card is closing; nothing to hide.
+    pub fn begin_hide(&mut self, mog_id: &str, window_exists: bool) -> Result<bool, WindowError> {
+        WindowKind::card(mog_id).ok_or(WindowError::InvalidId)?;
+        match self.card_state(mog_id) {
+            None | Some(CardState::Absent) => Err(WindowError::UnknownMog),
+            Some(CardState::Closing) => Ok(false),
+            Some(CardState::Shown | CardState::Hidden(_)) if !window_exists => {
+                self.card_window_missing(mog_id);
+                Err(WindowError::UnknownMog)
+            }
+            Some(_) => Ok(true),
+        }
+    }
+
+    /// The MOG window of `mog_id` left Tauri's manager, but its `Destroyed` event is not handled
+    /// yet. The MOG is closed now and its label waits for that event, so a reopen does not make
+    /// a second window whose slot the late event then frees.
+    pub fn mog_window_missing(&mut self, mog_id: &str) {
+        if self.mogs.remove(mog_id).is_some() {
+            if let Some(kind) = WindowKind::mog(mog_id) {
+                self.closing.insert(kind.label());
+            }
+        }
+    }
+
     /// The card window of `mog_id` left Tauri's manager, but its `Destroyed` event is not
     /// handled yet. The card is absent, and its label waits for that event, so a show does
     /// not make a new window that the late event then marks absent.
@@ -319,15 +385,40 @@ impl<R: tauri::Runtime> NativeWindowStyle<R> for PlainStyle {
 /// The time source of the host. Tests move a fake clock; the app uses `Instant::now`.
 pub type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
 
+/// True when the caller runs on the main thread. Tests use a double.
+pub type MainThreadProbe = Arc<dyn Fn() -> bool + Send + Sync>;
+
+/// The platform check for the main thread. Where none exists the probe says `false`.
+/// TODO(#80): a Windows main-thread check.
+fn platform_main_thread() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        objc2::MainThreadMarker::new().is_some()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
 /// The R11 host for the Tauri shell. The app keeps one instance as managed state.
 ///
 /// Two locks: `ops` makes each public operation (open, close, show, hide, reap) one critical
 /// section from its ledger read to its ledger write, so the ledger always matches the window
-/// (UX-19b). `ledger` guards the state and is held only briefly. `window_destroyed` takes
-/// `ledger` only, because it runs on the main thread and must never wait for an operation.
+/// (UX-19b). `ledger` guards the state and is held only briefly; each window lookup and the
+/// state change it decides are made under one `ledger` lock. `window_destroyed` takes `ledger`
+/// only, because it runs on the main thread.
+///
+/// Thread rule (ADR 0022): an operation can wait for the main thread while it holds `ops`
+/// (off the main thread, a window build blocks until the main thread made the window). So
+/// after `seal_main_thread` (end of setup) the operations refuse to run on the main thread
+/// (`WindowError::MainThread`): a main-thread caller could wait for `ops` while the holder
+/// waits for the main thread. Callers use async commands or other threads (TODO(#285)).
 pub struct TauriWindowHost<R: tauri::Runtime> {
     app: tauri::AppHandle<R>,
     ops: Mutex<()>,
+    sealed: std::sync::atomic::AtomicBool,
+    on_main: MainThreadProbe,
     ledger: Mutex<WindowLedger>,
     native: Box<dyn NativeWindowStyle<R>>,
     clock: Clock,
@@ -344,6 +435,8 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
         Self {
             app,
             ops: Mutex::new(()),
+            sealed: std::sync::atomic::AtomicBool::new(false),
+            on_main: Arc::new(platform_main_thread),
             ledger: Mutex::new(WindowLedger::default()),
             native,
             clock: Arc::new(Instant::now),
@@ -356,8 +449,22 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
         self
     }
 
-    fn op(&self) -> std::sync::MutexGuard<'_, ()> {
-        self.ops.lock().unwrap_or_else(|p| p.into_inner())
+    /// Use `probe` to tell the main thread (tests).
+    pub fn with_main_thread_probe(mut self, probe: MainThreadProbe) -> Self {
+        self.on_main = probe;
+        self
+    }
+
+    /// End of setup: from now on the operations refuse to run on the main thread.
+    pub fn seal_main_thread(&self) {
+        self.sealed.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn op(&self) -> Result<std::sync::MutexGuard<'_, ()>, WindowError> {
+        if self.sealed.load(std::sync::atomic::Ordering::SeqCst) && (self.on_main)() {
+            return Err(WindowError::MainThread);
+        }
+        Ok(self.ops.lock().unwrap_or_else(|p| p.into_inner()))
     }
 
     fn ledger(&self) -> std::sync::MutexGuard<'_, WindowLedger> {
@@ -410,18 +517,25 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
     /// Open the MOG window of `mog_id`. A second call shows the window, or makes it again if
     /// it is gone.
     pub fn open_mog_window(&self, mog_id: &str) -> Result<(), WindowError> {
-        let _op = self.op();
-        let outcome = self.ledger().open_mog(mog_id)?;
-        let kind = match outcome {
-            OpenOutcome::Opened(kind) => kind,
-            OpenOutcome::AlreadyOpen => {
-                let kind = WindowKind::Mog(mog_id.to_owned());
-                if let Some(w) = self.window(&kind) {
-                    return self.native.show(&w, &kind);
+        let _op = self.op()?;
+        let (kind, existing) = {
+            let mut ledger = self.ledger();
+            match ledger.open_mog(mog_id)? {
+                OpenOutcome::Opened(kind) => (kind, None),
+                OpenOutcome::AlreadyOpen => {
+                    let kind = WindowKind::Mog(mog_id.to_owned());
+                    let Some(w) = self.window(&kind) else {
+                        // Mid-destroy: wait for its event (#338 review).
+                        ledger.mog_window_missing(mog_id);
+                        return Err(WindowError::Closing);
+                    };
+                    (kind, Some(w))
                 }
-                kind
             }
         };
+        if let Some(w) = existing {
+            return self.native.show(&w, &kind);
+        }
         if let Err(e) = self.make(&kind) {
             self.ledger().close_mog(mog_id);
             return Err(e);
@@ -432,7 +546,7 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
     /// Close the MOG window of `mog_id` and its card window. The slot is freed only after
     /// both windows are destroyed; the label is used again after their `Destroyed` events.
     pub fn close_mog_window(&self, mog_id: &str) -> Result<(), WindowError> {
-        let _op = self.op();
+        let _op = self.op()?;
         let mog = WindowKind::mog(mog_id).ok_or(WindowError::InvalidId)?;
         if !self.ledger().open_ids().contains(mog_id) {
             return Err(WindowError::UnknownMog);
@@ -469,52 +583,29 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
         }
     }
 
-    /// The card window of `mog_id` if the ledger has one. A card the ledger has but Tauri has
-    /// not is mid-destroy: it becomes absent and waits for its event (`card_window_missing`).
-    fn card_window(
-        &self,
-        mog_id: &str,
-        kind: &WindowKind,
-    ) -> Result<Option<tauri::WebviewWindow<R>>, WindowError> {
-        let mut ledger = self.ledger();
-        match ledger.card_state(mog_id) {
-            None => Err(WindowError::UnknownMog),
-            Some(CardState::Absent | CardState::Closing) => Ok(None),
-            Some(CardState::Shown | CardState::Hidden(_)) => {
-                let w = self.window(kind);
-                if w.is_none() {
-                    ledger.card_window_missing(mog_id);
-                }
-                Ok(w)
-            }
-        }
-    }
-
     /// Show the card window of an open MOG; make it on the first show (MOG-18a). The card
     /// shows through the native step only, which never activates Bottle (MOG-03b). If the show
     /// fails, the card keeps its earlier state.
     pub fn show_card(&self, mog_id: &str) -> Result<(), WindowError> {
-        let _op = self.op();
+        let _op = self.op()?;
         let kind = WindowKind::card(mog_id).ok_or(WindowError::InvalidId)?;
-        let existing = self.card_window(mog_id, &kind)?;
-        let was = {
+        let (plan, existing) = {
             let mut ledger = self.ledger();
-            let was = ledger.card_state(mog_id);
-            ledger.show_card(mog_id)?;
-            was
+            let w = self.window(&kind);
+            (ledger.begin_show(mog_id, w.is_some())?, w)
         };
-        let shown = match &existing {
-            Some(w) => self.native.show(w, &kind),
-            None => self.make(&kind).map(|_| ()),
+        let shown = match (plan, &existing) {
+            (ShowPlan::Reuse(_), Some(w)) => self.native.show(w, &kind),
+            _ => self.make(&kind).map(|_| ()),
         };
         if shown.is_err() {
             let mut ledger = self.ledger();
-            match (existing, was) {
+            match plan {
                 // The card is still there, hidden as before.
-                (Some(_), Some(CardState::Hidden(since))) => ledger.restore_hidden(mog_id, since),
+                ShowPlan::Reuse(CardState::Hidden(since)) => ledger.restore_hidden(mog_id, since),
+                ShowPlan::Reuse(_) => {}
                 // The card did not open: the next show makes it again.
-                (None, _) => ledger.card_failed(mog_id),
-                _ => {}
+                ShowPlan::Make => ledger.card_failed(mog_id),
             }
         }
         shown
@@ -523,22 +614,31 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
     /// Hide the card window of `mog_id`. The ledger marks it hidden only after the window
     /// hid, so a failed hide leaves no half state (UX-19b). The reaper destroys it later.
     pub fn hide_card(&self, mog_id: &str) -> Result<(), WindowError> {
-        let _op = self.op();
+        let _op = self.op()?;
         let kind = WindowKind::card(mog_id).ok_or(WindowError::InvalidId)?;
-        if self.card_state(mog_id) == Some(CardState::Closing) {
-            return Ok(());
-        }
-        let w = self
-            .card_window(mog_id, &kind)?
-            .ok_or(WindowError::UnknownMog)?;
+        let w = {
+            let mut ledger = self.ledger();
+            let w = self.window(&kind);
+            if !ledger.begin_hide(mog_id, w.is_some())? {
+                return Ok(());
+            }
+            w
+        };
+        let Some(w) = w else {
+            return Err(WindowError::UnknownMog);
+        };
         self.native.hide(&w, &kind)?;
         let now = (self.clock)();
-        self.ledger().hide_card(mog_id, now).map(|_| ())
+        // If the window closed meanwhile, its event made the card absent: nothing shows.
+        let _ = self.ledger().hide_card(mog_id, now);
+        Ok(())
     }
 
     /// Destroy every card hidden for `CARD_HIDDEN_TTL` (MOG-18b). Returns how many went.
     pub fn reap_hidden_cards(&self) -> usize {
-        let _op = self.op();
+        let Ok(_op) = self.op() else {
+            return 0;
+        };
         let now = (self.clock)();
         let due = self.ledger().take_due_cards(now);
         let mut reaped = 0;

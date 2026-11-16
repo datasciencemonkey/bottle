@@ -106,8 +106,6 @@ pub fn run() {
             if hotkey_host::install(handle).is_err() {
                 // TODO(#297): report the talk key as unavailable once `hotkey.status` exists.
             }
-            // MOG-18b: destroy cards that are hidden for 5 min.
-            window_host::spawn_card_reaper(handle.clone())?;
             let host = app.state::<TauriWindowHost<tauri::Wry>>();
             for kind in startup_windows(demo) {
                 // MOG and card windows go through R11, so the cap and the ledger hold.
@@ -119,6 +117,10 @@ pub fn run() {
                     }
                 }
             }
+            // After setup the host refuses main-thread calls, which could deadlock (ADR 0022).
+            host.seal_main_thread();
+            // MOG-18b: destroy cards that are hidden for 5 min.
+            window_host::spawn_card_reaper(handle.clone())?;
             if demo && std::env::var("BOTTLE_DEMO_CARD_CYCLE").is_ok_and(|v| v == "1") {
                 // The Mac check of #78 (tools/mac/card-check.swift): 20 card opens.
                 demo_card_cycle(handle.clone());
