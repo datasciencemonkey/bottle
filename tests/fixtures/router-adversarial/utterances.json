@@ -269,14 +269,8 @@
         "intent": "question",
         "cleaned_text": "revenue in each workspace",
         "genie_question": "revenue in each workspace",
-        "part_questions": [
-          "revenue",
-          "memory dump"
-        ],
-        "part_profile_hints": [
-          "home",
-          "outside"
-        ]
+        "part_questions": ["revenue", "memory dump"],
+        "part_profile_hints": ["home", "outside"]
       }
     },
     {
