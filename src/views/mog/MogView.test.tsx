@@ -320,4 +320,18 @@ describe('V2 MOG view', () => {
     });
     expect(el.querySelector('[data-overlay="offline"]')).toBeNull();
   });
+
+  it('[MOG-07] moving the pointer from the mascot onto a badge keeps the hover badges', async () => {
+    const { m } = fakeMascot();
+    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    await tauri.emit('mog:view_state', { mogId: ID, mood: 'idle', overlays, badges });
+    const target = el.querySelector('[aria-label="MOG"]') as HTMLElement;
+    await hoverOn(target);
+    const stt = el.querySelector('[data-badge="stt"]') as HTMLElement;
+    await act(async () =>
+      target.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: stt })),
+    );
+    await act(async () => stt.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })));
+    expect(shown(el)).toContain('identity');
+  });
 });

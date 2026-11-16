@@ -73,8 +73,9 @@ export function MogView({
   useViewEvent('mog.view_state', onState);
 
   // TODO(#83): poke, click-to-listen and drag rules; the brain decides what input means.
+  // The hover flag is on the whole view, so moving onto a badge keeps the hover badges open.
   return (
-    <div>
+    <div onMouseOver={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
       <div
         ref={ref}
         className="mascot"
@@ -85,29 +86,50 @@ export function MogView({
         }}
         onMouseOver={() => {
           mascot.current?.setHover(true);
-          setHovered(true);
           void emitView(mogId, 'hover');
         }}
         onMouseLeave={() => {
           mascot.current?.setHover(false);
-          setHovered(false);
         }}
       />
       {/* The visual "?" cue is the renderer's (UX-03); this empty span is the accessible badge. */}
       {state?.overlays.attention && <span data-overlay="attention" aria-label="Needs attention" />}
       {state?.overlays.recording && <span data-overlay="recording">REC</span>}
-      {/* The 4.7 offline overlay, unless the brain sent the offline badge (ADR 0029). */}
-      {state?.overlays.offline && !state.badges?.some((b) => b.kind === 'offline') && (
+      {/* A payload with no badge list shows the 4.7 offline overlay; with one, the list wins. */}
+      {state?.overlays.offline && state.badges === undefined && (
         <span data-overlay="offline">Offline</span>
       )}
       {/* The brain picks the badges and their text (ADR 0029); badges never set the mood. */}
-      {state?.badges
-        ?.filter((b) => hovered || !b.hoverOnly)
-        .map((b) => (
-          <span key={b.kind} data-badge={b.kind} aria-label={b.label}>
-            {b.text}
-          </span>
-        ))}
+      {state?.badges && (
+        <div className="badges">
+          {state.badges
+            .filter((b) => hovered || !b.hoverOnly)
+            .map((b, i) => {
+              const body = (
+                <>
+                  <span data-badge-text>{b.text}</span>
+                  {b.detail !== undefined && <span data-badge-detail>{b.detail}</span>}
+                </>
+              );
+              const key = `${i}-${b.kind}`;
+              return b.action !== undefined ? (
+                <button
+                  key={key}
+                  type="button"
+                  data-badge={b.kind}
+                  aria-label={b.label}
+                  onClick={() => void emitView(mogId, 'click', { target: 'badge', badge: b.kind })}
+                >
+                  {body}
+                </button>
+              ) : (
+                <span key={key} role="note" data-badge={b.kind} aria-label={b.label}>
+                  {body}
+                </span>
+              );
+            })}
+        </div>
+      )}
     </div>
   );
 }

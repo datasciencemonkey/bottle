@@ -173,7 +173,11 @@ function ownsListeningCapture(mogId: MogId, c: CaptureState): boolean {
 function liveAgentMood(src: MoodSources, now: number): Mood | undefined {
   const a = src.agentMood;
   if (!a || a.mood === 'listening') return undefined;
-  if (src.mog.since > a.at || src.requests.some((r) => r.at > a.at)) return undefined;
+  // UX-39b (ADR 0029): offline is a badge, so a move between ready and offline does not end it.
+  const badgeOnly = src.mog.lifecycle === 'ready' || src.mog.lifecycle === 'offline';
+  if ((!badgeOnly && src.mog.since > a.at) || src.requests.some((r) => r.at > a.at)) {
+    return undefined;
+  }
   const lasts = a.mood === 'error' ? ERROR_MS : a.mood === 'success' ? SUCCESS_MS : AGENT_MOOD_MS;
   return a.at + lasts > now ? a.mood : undefined;
 }

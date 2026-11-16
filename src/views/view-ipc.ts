@@ -23,7 +23,10 @@ export interface MogBadgeView {
   kind: string;
   text: string;
   label: string;
+  detail?: string;
   hoverOnly: boolean;
+  /** Set when a click on the badge does something; the brain decides what (ADR 0029). */
+  action?: string;
 }
 
 /** One card slot (ADR 0028): a blurb, or a split answer with its parts in one slot (UX-11b). */
@@ -73,7 +76,12 @@ export function asMogViewState(p: unknown): MogViewState | undefined {
     b !== undefined &&
     !(
       isItems(b, ['kind', 'text', 'label']) &&
-      (b as Record<string, unknown>[]).every((i) => typeof i['hoverOnly'] === 'boolean')
+      (b as Record<string, unknown>[]).every(
+        (i) =>
+          typeof i['hoverOnly'] === 'boolean' &&
+          (i['detail'] === undefined || typeof i['detail'] === 'string') &&
+          (i['action'] === undefined || typeof i['action'] === 'string'),
+      )
     )
   )
     return undefined;

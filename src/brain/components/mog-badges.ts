@@ -10,6 +10,9 @@
  * Badges are orthogonal to the mood (UX-39b): this function takes no mood source and returns
  * no mood, and `mapMood` takes none of these inputs. Each badge has text and an accessible
  * label, so no state is colour only (UX-33). A badge holds names only, never a token.
+ *
+ * TODO(#285): the brain sends this list in `mog:view_state` (with the mood) and routes the
+ * `click` input `{ target: 'badge', badge }` to the badge `action`.
  */
 import type { BackendBinding, ProfileName, Transcript } from '../../shared/interfaces';
 import type { Lifecycle } from './mood-mapper';
@@ -21,9 +24,15 @@ export interface MogBadge {
   kind: BadgeKind;
   text: string;
   label: string;
+  /** A second visible line, for example the host of the identity badge (MOG-07). */
+  detail?: string;
   /** True: shown only while the pointer is on the MOG. False: shown while the state applies. */
   hoverOnly: boolean;
+  /** Appendix E: chip 21 opens "Where your data goes", chip 20 opens setup. */
+  action?: BadgeAction;
 }
+
+export type BadgeAction = 'open_data_disclosures' | 'open_setup';
 
 /** The STT provider and model of a `Transcript`. */
 export type SttUse = Pick<Transcript, 'provider' | 'model'>;
@@ -47,7 +56,14 @@ export interface BadgeSources {
   /** The Genie agent name or the app name (UX-15). Never the space ID or the app URL. */
   backendName?: string;
   stt?: SttUse;
-  hop?: { profile: ProfileName; host: string; scope: HopScope };
+  /** A hop asks Genie One in the target (SC-5) unless it names its own backend. */
+  hop?: {
+    profile: ProfileName;
+    host: string;
+    scope: HopScope;
+    backend?: BackendBinding;
+    backendName?: string;
+  };
   lifecycle: Lifecycle;
   sync?: 'off' | 'on' | 'paused';
 }
@@ -69,37 +85,52 @@ const LOCAL_DEFAULT: SttUse = { provider: 'local_parakeet', model: '' };
 
 /** UX-38: the STT badge text for the provider that STT used. */
 export function sttBadgeText(stt: SttUse): string {
-  return stt.provider === 'local_parakeet' ? 'STT: local' : `STT: Databricks ${stt.model}`;
+  if (stt.provider === 'local_parakeet') return 'STT: local';
+  return stt.model ? `STT: Databricks ${stt.model}` : 'STT: Databricks';
 }
 
 function sttLabel(stt: SttUse): string {
   // CAP-63 calls the local provider "On this device".
   return stt.provider === 'local_parakeet'
     ? 'Speech to text runs on this device'
-    : `Speech to text runs on Databricks, model ${stt.model}`;
+    : stt.model
+      ? `Speech to text runs on Databricks, model ${stt.model}`
+      : 'Speech to text runs on Databricks';
 }
 
 /** The badges of one MOG, in a fixed order: identity, STT, hop, offline, sync. */
 export function mapBadges(src: BadgeSources): MogBadge[] {
-  const profile = src.hop?.profile ?? src.profile;
-  const host = src.hop?.host ?? src.host;
-  const backend = backendLabel(src.backend, src.backendName);
+  const hop = src.hop;
+  const profile = hop?.profile ?? src.profile;
+  const host = hop?.host ?? src.host;
+  const backend = hop
+    ? hop.backend
+      ? backendLabel(hop.backend, hop.backendName)
+      : 'Genie One'
+    : backendLabel(src.backend, src.backendName);
   const stt = src.stt ?? LOCAL_DEFAULT;
   const out: MogBadge[] = [
     {
       kind: 'identity',
       text: `${profile} · ${backend}`,
       label: `Profile ${profile} on ${host}, backend ${backend}`,
+      detail: host,
       hoverOnly: true,
     },
-    { kind: 'stt', text: sttBadgeText(stt), label: sttLabel(stt), hoverOnly: true },
+    {
+      kind: 'stt',
+      text: sttBadgeText(stt),
+      label: sttLabel(stt),
+      hoverOnly: true,
+      action: 'open_data_disclosures',
+    },
   ];
-  if (src.hop) {
-    const scope = `this ${src.hop.scope}`;
+  if (hop) {
+    const scope = `this ${hop.scope}`;
     out.push({
       kind: 'hop',
-      text: `Hop: ${src.hop.profile} (${scope})`,
-      label: `Asking in ${src.hop.profile} for ${scope}`,
+      text: `Hop: ${hop.profile} (${scope})`,
+      label: `Asking in ${hop.profile} for ${scope}`,
       hoverOnly: false,
     });
   }
@@ -117,6 +148,7 @@ export function mapBadges(src: BadgeSources): MogBadge[] {
       text: 'Sync paused',
       label: 'Sync paused: all data stays on this device',
       hoverOnly: false,
+      action: 'open_setup',
     });
   }
   return out;
