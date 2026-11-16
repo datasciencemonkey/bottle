@@ -25,6 +25,7 @@ import { createProfileService } from './profile-service';
 import { createRecoveryManager } from './recovery-manager';
 import { createRouterContextGate } from './router-context-gate';
 import { createSttProvider } from './stt-provider';
+import { createRouterModelDouble } from '../../test-support/model-invoke';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('../test-core')).coreModule);
 vi.mock('@tauri-apps/api/event', async () => (await import('../test-core')).eventModule);
@@ -164,9 +165,21 @@ describe('brain component stubs', () => {
     await expectStub(() => createCleanupProvider().clean('raw', { ...tags, op: 'cleanup' }), 55);
   });
 
-  it('[T6] RouterContextGate stubs route (#57), approve and verify (#152)', async () => {
-    const t = createRouterContextGate();
-    await expectStub(() => t.route('text', MOG), 57);
+  it('[T6] RouterContextGate routes (#57) and stubs approve and verify (#152)', async () => {
+    const double = createRouterModelDouble([{ decision: {} }]);
+    const t = createRouterContextGate({ invoke: double.invoke });
+    const input = {
+      profile: 'p',
+      speakerTrack: 'you',
+      captureMode: 'ptt',
+      pendingClarification: '',
+      recentTopics: [],
+      activeMogs: [],
+      profiles: [],
+      currentTarget: 'p',
+    } as const;
+    await expect(t.route('text', MOG, input)).resolves.toMatchObject({ intent: 'question' });
+    expect(double.calls).toHaveLength(1);
     await expectStub(() => t.approve(ask, 1), 152);
     await expectStub(() => t.verify('a', ask, 1), 152);
   });
