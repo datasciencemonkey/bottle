@@ -12,7 +12,14 @@ import {
 import { runRouterStep, type RouterInput } from './router-step';
 
 const MOG = '00000000-0000-4000-8000-000000000001';
-const INTENTS: Intent[] = ['question', 'memory_question', 'context', 'command', 'dictation', 'noise'];
+const INTENTS: Intent[] = [
+  'question',
+  'memory_question',
+  'context',
+  'command',
+  'dictation',
+  'noise',
+];
 const GOLDEN_PATH = resolve(
   import.meta.dirname,
   '../../../tests/fixtures/router-golden/utterances.json',
@@ -67,7 +74,13 @@ describe('golden utterance set (RTR-01)', () => {
   });
 
   it('[RTR-01] rejects a golden set with an unknown intent or a missing field', () => {
-    const item = { id: 'x', text: 't', captureMode: 'ptt', speakerTrack: 'you', expected: 'question' };
+    const item = {
+      id: 'x',
+      text: 't',
+      captureMode: 'ptt',
+      speakerTrack: 'you',
+      expected: 'question',
+    };
     expect(() => parseGoldenSet({ version: 1, items: [{ ...item, expected: 'chat' }] })).toThrow();
     expect(() => parseGoldenSet({ version: 1, items: [{ ...item, text: undefined }] })).toThrow();
     expect(() => parseGoldenSet({ version: 2, items: [item] })).toThrow();
@@ -95,7 +108,12 @@ describe('intent-accuracy report (RTR-01)', () => {
   });
 
   it('[RTR-01] gives per-intent counts and a confusion table', async () => {
-    const wrong = new Set([golden.find((g) => g.expected === 'context')!.id]);
+    const wrong = new Set(
+      golden
+        .filter((g) => g.expected === 'context')
+        .slice(0, 1)
+        .map((g) => g.id),
+    );
     const r = await measureIntentAccuracy(golden, classifier(wrong));
     expect(r.perIntent.context).toEqual({ total: 10, correct: 9 });
     expect(r.perIntent.question).toEqual({ total: 10, correct: 10 });

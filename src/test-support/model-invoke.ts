@@ -45,9 +45,7 @@ export function chatCompletion(content: string): ModelInvokeResult {
     json: {
       id: 'chatcmpl-double',
       object: 'chat.completion',
-      choices: [
-        { index: 0, finish_reason: 'stop', message: { role: 'assistant', content } },
-      ],
+      choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content } }],
     },
   };
 }
