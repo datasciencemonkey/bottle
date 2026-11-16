@@ -7,14 +7,13 @@
 /** C0 and C1 controls except tab and newline, all Unicode format characters (Cf: zero-width, bidi, tags, soft hyphen). */
 const INVISIBLE = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\p{Cf}\u00AD\u061C\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/gu;
 
+import { stripMarkdownLinks } from './links.ts';
+
 const SCRIPT_OR_STYLE_OPEN = /<(script|style)\b[^<>]*>/gi;
 const CLOSE_TAG = { script: /<\/script\b[^<>]*>/gi, style: /<\/style\b[^<>]*>/gi } as const;
 const HTML_COMMENT = /<!--[\s\S]*?(?:-->|$)/g;
 const HTML_TAG = /<\/?[A-Za-z!?][^<>]*>/g; // also covers autolinks such as <https://...>
 const STRAY_TAG_OPEN = /<(?=[A-Za-z!/?])/g; // an unclosed tag start that is left after the passes
-const MD_INLINE_LINK = /!?\[([^[\]]*)\]\([^()]*\)/g; // [text](url "title") and ![alt](url)
-const MD_REFERENCE_LINK = /!?\[([^[\]]+)\]\[[^[\]]*\]/g; // [text][ref] and [text][]
-const MD_REFERENCE_DEF = /^[ \t]*\[[^[\]]+\]:[ \t]*\S.*$/gm; // [ref]: url "title"
 const FENCE_LINE = /^[ \t]*(?:`{3,}[^`\n]*|~{3,}.*)$/gm; // a fence line with its info string
 const FENCE_RUN = /`{3,}|~{3,}/g; // a fence run inside a line
 
@@ -46,12 +45,7 @@ function removeScriptAndStyle(s: string): string {
 }
 
 function markupPass(s: string): string {
-  return removeScriptAndStyle(s)
-    .replace(HTML_COMMENT, '')
-    .replace(HTML_TAG, '')
-    .replace(MD_REFERENCE_DEF, '')
-    .replace(MD_INLINE_LINK, '$1')
-    .replace(MD_REFERENCE_LINK, '$1')
+  return stripMarkdownLinks(removeScriptAndStyle(s).replace(HTML_COMMENT, '').replace(HTML_TAG, ''))
     .replace(FENCE_LINE, '')
     .replace(FENCE_RUN, '');
 }
