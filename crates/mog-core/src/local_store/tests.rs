@@ -868,3 +868,40 @@ fn u9_schema_has_no_token_or_audio_column() {
     });
     assert!(r.is_err());
 }
+
+#[test]
+fn mem_08f_outbox_request_survives_restart() {
+    let t = TempDir::new("08f-outbox");
+    let vault = Arc::new(MemoryKeyVault::new());
+    let s = open_store(t.path(), vault.clone());
+    seed_mog(&s, MOG_A);
+    s.with_conn(|c| {
+        c.execute(
+            "INSERT INTO outbox (mog_id, kind, op, ref_id, payload_json, created_at, next_attempt_at)
+             VALUES (?1, 'embed', 'memory_item.embed', 'item-1', '{}', 1, 1)",
+            [MOG_A],
+        )
+    })
+    .unwrap();
+    s.close();
+    let s = open_store(t.path(), vault);
+    let (n, kind): (i64, String) = s
+        .with_conn(|c| {
+            c.query_row(
+                "SELECT count(*), max(kind) FROM outbox WHERE mog_id = ?1",
+                [MOG_A],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+        })
+        .unwrap();
+    assert_eq!((n, kind.as_str()), (1, "embed"));
+    // Only the two queue kinds exist.
+    let bad = s.with_conn(|c| {
+        c.execute(
+            "INSERT INTO outbox (mog_id, kind, op, ref_id, payload_json, created_at, next_attempt_at)
+             VALUES (?1, 'upload_audio', 'x', 'y', '{}', 1, 1)",
+            [MOG_A],
+        )
+    });
+    assert!(bad.is_err());
+}
