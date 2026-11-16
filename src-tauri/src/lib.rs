@@ -4,6 +4,7 @@
 //! secrets and I/O stay in `mog-core` (section 4.4). The IPC command surface is in `ipc` (#223).
 
 pub mod hotkey_host;
+pub mod hotkey_settings;
 pub mod ipc;
 #[cfg(target_os = "macos")]
 pub mod macos_panel;
