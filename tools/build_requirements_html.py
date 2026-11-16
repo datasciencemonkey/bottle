@@ -293,13 +293,14 @@ def figure(slug, svgs, desc):
 
 # ---------------- mascot ----------------
 STATES = [
-    ("idle", "Cyan eyes, calm face. Ready, mic closed; also ask uncertain, needs input and session recording (with overlays)."),
-    ("listening", "Green eyes, green listening ring, one arm up. PTT down or held, hands-free capture."),
-    ("processing", "Violet eyes and a dot pattern. Transcribing, cleaning, routing, preview, main agent turn, progress, rate-limited."),
-    ("answering", "Amber eyes, arm out. Partial answer and blurb reveal (1.2 s or less)."),
-    ("success", "Green happy eyes and sparkles. Inserted (1.2 s), completed (2.5 s), memory answer (2.5 s)."),
-    ("error", "Red X eyes, dim star. Failed (3 s), login required (3 s); attention if the user must act."),
-    ("sleeping", "Closed eyes and Z marks. MOG paused or dozing."),
+    ("idle", "A small block figure (stud, head with a screen face, torso, hips, legs). Hides in the lamp, blue eyes peeking over the rim, glancing around. Ready, mic closed. Hover: climbs out, looks around, hops back in."),
+    ("listening", "Green eyes, face up, both hands cupped to its ears; the ring follows the mic level. PTT down or held, hands-free capture."),
+    ("processing", "Sinks back, touches its head with its eyes closed, then a thinking pose with pink eyes, dots and orbiting sparkles. Transcribing, cleaning, routing, preview, main agent turn, progress, rate-limited."),
+    ("answering", "Climbs out on its legs, stands on the rim, amber eyes, talks and presents. Partial answer and blurb reveal (1.2 s or less)."),
+    ("success", "Stands on the rim, happy eyes, arms up, hop and sparkle burst. Inserted (1.2 s), completed (2.5 s), memory answer (2.5 s)."),
+    ("error", "Face up, X eyes, shakes its head and shrugs, the star falls. Failed (3 s), login required (3 s); attention if the user must act."),
+    ("sleeping", "Fully inside the lamp; Z marks float up out of the mouth. MOG paused or dozing."),
+    ("attention + recording", "Overlays over any mood. Attention: pops up with a curious tilt and a \"?\" bubble (UX-03). Recording: wears headphones, with a red ring and a REC dot (UX-04a)."),
 ]
 def mascot_html():
     b64 = base64.b64encode(open(SHEET, "rb").read()).decode()
@@ -311,8 +312,8 @@ def mascot_html():
                      f'style="background-position:{col*100/3:.4f}% {row*100}%"></div>'
                      f'<figcaption><strong>{k+1}. <code>{name}</code></strong><br>{html.escape(d)}</figcaption></figure>')
     return (f"<style>{css}</style>"
-            '<section class="mascot" aria-labelledby="mascot-h"><h4 id="mascot-h">MOG mascot: the 7 Rive moods (sprite sheet)</h4>'
-            '<p class="note">Source: <code>mog-rive/shots/sheet.png</code> (1600 x 800 px, 4 x 2 grid, the 8th cell is empty), embedded in this file. '
+            '<section class="mascot" aria-labelledby="mascot-h"><h4 id="mascot-h">MOG mascot: the 7 Rive moods and 2 overlays (sprite sheet)</h4>'
+            '<p class="note">Source: <code>mog-rive/shots/sheet.png</code> (1600 x 800 px, 4 x 2 grid, the 8th cell shows the two overlays), embedded in this file. The MOG rises out of a Genie lamp (U14); regenerate with <code>tools/render_mog_shots.py</code>. '
             'The mood enum order is idle, listening, processing, answering, success, error, sleeping (Diagram 7).</p>'
             '<div class="mascot-grid">' + "".join(cells) + "</div></section>")
 MASCOT_HTML = ""
