@@ -8,12 +8,14 @@
 //! Privacy: no input here carries a key code of typed text. The OS layer reports only the
 //! talk key and the fallback chord, so key contents never reach this module or any log.
 //!
-//! Requirements: CAP-35b, CAP-36, CAP-37, CAP-38a, CAP-38b, CAP-39a, CAP-39b, CAP-39c, CAP-45.
+//! Requirements: CAP-35b, CAP-36, CAP-37, CAP-38a, CAP-38b, CAP-39a, CAP-39b, CAP-39c, CAP-44a,
+//! CAP-44c, CAP-45.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::clock::{MonotonicClock, SystemClock};
 use crate::error::{CoreError, CoreResult};
 
 const ID: &str = "R1";
@@ -45,6 +47,12 @@ pub const TAP_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 /// While Secure Event Input is on and the chord could not be registered, the watchdog tries
 /// again this often (CAP-39b).
 pub const CHORD_RETRY_INTERVAL: Duration = Duration::from_secs(1);
+
+/// A talk-key hold shorter than this is a tap (CAP-44a).
+pub const TAP_MAX_HOLD: Duration = Duration::from_millis(250);
+
+/// Another key that goes down this soon after the talk key cancels the PTT (CAP-44c).
+pub const OTHER_KEY_CANCEL_WINDOW: Duration = Duration::from_secs(1);
 
 /// A modifier-only talk key (CAP-35b, D66). The default is Right-Option.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -115,6 +123,10 @@ pub enum HotkeyOutput {
     /// Event Input ends. The watchdog keeps trying (CAP-39b). The pill text for this case
     /// waits for contract change #297.
     FallbackChordUnavailable,
+    /// The talk key was held for less than [`TAP_MAX_HOLD`] (CAP-44a). R1 emits it after
+    /// `Ptt(Cancel)`, so the audio of the tap is dropped and no STT call starts (CAP-44b).
+    /// The double-tap rule (CAP-14a) and the hands-free stop (CAP-14b) read it.
+    Tap,
 }
 
 impl HotkeyOutput {
@@ -232,6 +244,11 @@ impl PttMachine {
             HotkeyOutput::TalkKeyRestored
         });
         out
+    }
+
+    /// End an active PTT with `cancel` (CAP-44c). The later key-up gives nothing.
+    pub fn cancel(&mut self) -> Vec<HotkeyOutput> {
+        Vec::new()
     }
 
     /// A gap (wake, unlock, session change, tap restart): read the physical state again.
@@ -463,6 +480,8 @@ pub struct HotkeyEngine {
     chord: ChordState,
     chord_reported: bool,
     last_tap_retry: Option<Duration>,
+    clock: Arc<dyn MonotonicClock>,
+    held_since: Option<Duration>,
 }
 
 impl std::fmt::Debug for HotkeyEngine {
@@ -474,8 +493,14 @@ impl std::fmt::Debug for HotkeyEngine {
 }
 
 impl HotkeyEngine {
-    /// An engine that sends its outputs to `sink`.
+    /// An engine that sends its outputs to `sink`. The tap and cancel rules (CAP-44a,
+    /// CAP-44c) time the holds on the system monotonic clock.
     pub fn new(sink: Arc<dyn HotkeySink>) -> Self {
+        Self::with_clock(sink, Arc::new(SystemClock::new()))
+    }
+
+    /// An engine that times the holds on `clock` (tests use `SimClock`).
+    pub fn with_clock(sink: Arc<dyn HotkeySink>, clock: Arc<dyn MonotonicClock>) -> Self {
         Self {
             machine: PttMachine::new(),
             watchdog: TapWatchdog::new(),
@@ -487,7 +512,18 @@ impl HotkeyEngine {
             chord: ChordState::Off,
             chord_reported: false,
             last_tap_retry: None,
+            clock,
+            held_since: None,
         }
+    }
+
+    /// Another key went down (CAP-44c). The OS layer gives no key identity.
+    pub fn on_other_key_down(&mut self) {}
+
+    /// A PTT is held and it started less than [`OTHER_KEY_CANCEL_WINDOW`] ago. The macOS
+    /// layer listens to other key-downs only while this is true (ADR 0014).
+    pub fn other_key_window_open(&self) -> bool {
+        false
     }
 
     /// The OS layer tried to register the fallback chord. On a failure R1 emits
@@ -920,7 +956,8 @@ mod tests {
         let sink = Arc::new(RecSink::default());
         let probe = FakeProbe::ready();
         let ctl = FakeCtl::default();
-        let mut e = HotkeyEngine::new(sink.clone());
+        let clock = SimClock::new();
+        let mut e = HotkeyEngine::with_clock(sink.clone(), Arc::new(clock.clone()));
         e.on_talk_key(Down);
         // The key-up is lost while the tap is off; the re-read ends the PTT.
         e.on_tap_signal(
@@ -932,6 +969,8 @@ mod tests {
         assert_eq!(ctl.take(), vec![Ctl::ReEnable]);
         assert_eq!(sink.take(), vec![Ptt(PDown), Ptt(PUp)]);
         e.on_talk_key(Down);
+        // Hold longer than a tap (CAP-44a).
+        clock.advance(TAP_MAX_HOLD);
         e.on_talk_key(Up);
         assert_eq!(sink.take(), vec![Ptt(PDown), Ptt(PUp)]);
     }
@@ -1043,7 +1082,7 @@ mod tests {
         let probe = FakeProbe::ready();
         let ctl = FakeCtl::default();
         let clock = SimClock::new();
-        let mut e = HotkeyEngine::new(sink.clone());
+        let mut e = HotkeyEngine::with_clock(sink.clone(), Arc::new(clock.clone()));
         e.tick(clock.now(), &probe, &ctl);
         *probe.secure.lock().unwrap() = true;
         clock.advance(WATCHDOG_TICK);
@@ -1080,6 +1119,7 @@ mod tests {
         e.tick(clock.now(), &probe, &ctl);
         assert_eq!(ctl.take(), vec![], "no retry once the chord is on");
         e.on_chord(Down);
+        clock.advance(TAP_MAX_HOLD);
         e.on_chord(Up);
         assert_eq!(sink.take(), vec![Ptt(PDown), Ptt(PUp)]);
     }
@@ -1171,7 +1211,8 @@ mod tests {
         let sink = Arc::new(RecSink::default());
         let probe = FakeProbe::ready();
         let ctl = FakeCtl::default();
-        let mut e = HotkeyEngine::new(sink.clone());
+        let clock = SimClock::new();
+        let mut e = HotkeyEngine::with_clock(sink.clone(), Arc::new(clock.clone()));
         e.tick(Duration::ZERO, &probe, &ctl);
         assert_eq!(ctl.take(), vec![]);
         *probe.secure.lock().unwrap() = true;
@@ -1179,6 +1220,7 @@ mod tests {
         assert_eq!(ctl.take(), vec![Ctl::Chord(true)]);
         assert!(e.secure_input_active());
         e.on_chord(Down);
+        clock.advance(TAP_MAX_HOLD);
         e.on_chord(Up);
         *probe.secure.lock().unwrap() = false;
         e.tick(WATCHDOG_TICK * 2, &probe, &ctl);
@@ -1301,5 +1343,163 @@ mod tests {
         let out = sink.take();
         assert_eq!(out.last(), Some(&Ptt(PUp)));
         assert!(!e.machine().is_held());
+    }
+
+    // ---- CAP-44a: a hold shorter than 250 ms is a tap; CAP-44c: another key cancels ----
+
+    fn engine_at_zero() -> (Arc<RecSink>, SimClock, HotkeyEngine) {
+        let sink = Arc::new(RecSink::default());
+        let clock = SimClock::new();
+        let e = HotkeyEngine::with_clock(sink.clone(), Arc::new(clock.clone()));
+        (sink, clock, e)
+    }
+
+    #[test]
+    fn cap_44a_at_03_a_200_ms_hold_gives_a_tap_event_and_no_up() {
+        let (sink, clock, mut e) = engine_at_zero();
+        e.on_talk_key(Down);
+        clock.advance(Duration::from_millis(200));
+        e.on_talk_key(Up);
+        let out = sink.take();
+        assert_eq!(out, vec![Ptt(PDown), Ptt(Cancel), HotkeyOutput::Tap]);
+        // No `up`, so no STT call starts for the tap (CAP-44b drops its audio).
+        assert!(!out.contains(&Ptt(PUp)));
+        assert!(!e.machine().is_held());
+    }
+
+    #[test]
+    fn cap_44a_holds_of_250_ms_or_more_are_not_taps() {
+        for ms in [250u64, 300, 2_000] {
+            let (sink, clock, mut e) = engine_at_zero();
+            e.on_talk_key(Down);
+            clock.advance(Duration::from_millis(ms));
+            e.on_talk_key(Up);
+            assert_eq!(sink.take(), vec![Ptt(PDown), Ptt(PUp)], "{ms} ms");
+        }
+    }
+
+    #[test]
+    fn cap_44a_holds_just_under_250_ms_are_taps() {
+        for ms in [0u64, 1, 120, 249] {
+            let (sink, clock, mut e) = engine_at_zero();
+            e.on_talk_key(Down);
+            clock.advance(Duration::from_millis(ms));
+            e.on_talk_key(Up);
+            assert_eq!(
+                sink.take(),
+                vec![Ptt(PDown), Ptt(Cancel), HotkeyOutput::Tap],
+                "{ms} ms"
+            );
+        }
+    }
+
+    #[test]
+    fn cap_44a_a_short_chord_hold_is_a_tap_too() {
+        let (sink, clock, mut e) = engine_at_zero();
+        let probe = FakeProbe::ready();
+        let ctl = FakeCtl::default();
+        *probe.secure.lock().unwrap() = true;
+        e.tick(clock.now(), &probe, &ctl);
+        sink.take();
+        e.on_chord(Down);
+        clock.advance(Duration::from_millis(100));
+        e.on_chord(Up);
+        assert_eq!(
+            sink.take(),
+            vec![Ptt(PDown), Ptt(Cancel), HotkeyOutput::Tap]
+        );
+    }
+
+    #[test]
+    fn cap_44a_a_gap_re_read_is_not_a_tap() {
+        // A lost key-up found by a re-read ends the PTT with `up`; only a real key-up edge
+        // can be a tap.
+        let (sink, clock, mut e) = engine_at_zero();
+        let probe = FakeProbe::ready();
+        let ctl = FakeCtl::default();
+        e.on_talk_key(Down);
+        clock.advance(Duration::from_millis(100));
+        e.on_tap_signal(TapSignal::DisabledByTimeout, clock.now(), &probe, &ctl);
+        assert_eq!(sink.take(), vec![Ptt(PDown), Ptt(PUp)]);
+    }
+
+    #[test]
+    fn cap_44a_tap_has_no_pill_text() {
+        assert_eq!(HotkeyOutput::Tap.pill_text(), None);
+    }
+
+    #[test]
+    fn cap_44c_at_03_another_key_in_the_first_second_cancels_the_ptt() {
+        for ms in [0u64, 300, 999] {
+            let (sink, clock, mut e) = engine_at_zero();
+            e.on_talk_key(Down);
+            clock.advance(Duration::from_millis(ms));
+            e.on_other_key_down();
+            assert_eq!(sink.take(), vec![Ptt(PDown), Ptt(Cancel)], "{ms} ms");
+            assert!(!e.machine().is_held());
+            // The later key-up gives nothing: no `up`, so no STT call.
+            clock.advance(Duration::from_millis(500));
+            e.on_talk_key(Up);
+            assert_eq!(sink.take(), vec![], "{ms} ms");
+        }
+    }
+
+    #[test]
+    fn cap_44c_another_key_after_one_second_does_not_cancel() {
+        for ms in [1_000u64, 1_500, 30_000] {
+            let (sink, clock, mut e) = engine_at_zero();
+            e.on_talk_key(Down);
+            clock.advance(Duration::from_millis(ms));
+            e.on_other_key_down();
+            assert!(e.machine().is_held(), "{ms} ms");
+            e.on_talk_key(Up);
+            assert_eq!(sink.take(), vec![Ptt(PDown), Ptt(PUp)], "{ms} ms");
+        }
+    }
+
+    #[test]
+    fn cap_44c_another_key_with_no_hold_does_nothing() {
+        let (sink, _clock, mut e) = engine_at_zero();
+        e.on_other_key_down();
+        assert_eq!(sink.take(), vec![]);
+        // The next hold is a normal PTT.
+        assert!(!e.other_key_window_open());
+    }
+
+    #[test]
+    fn cap_44c_the_next_hold_after_a_cancel_works() {
+        let (sink, clock, mut e) = engine_at_zero();
+        e.on_talk_key(Down);
+        e.on_other_key_down();
+        e.on_talk_key(Up);
+        sink.take();
+        e.on_talk_key(Down);
+        clock.advance(Duration::from_millis(400));
+        e.on_talk_key(Up);
+        assert_eq!(sink.take(), vec![Ptt(PDown), Ptt(PUp)]);
+    }
+
+    #[test]
+    fn cap_44c_other_key_window_is_open_only_in_the_first_second_of_a_hold() {
+        let (_sink, clock, mut e) = engine_at_zero();
+        assert!(!e.other_key_window_open());
+        e.on_talk_key(Down);
+        assert!(e.other_key_window_open());
+        clock.advance(Duration::from_millis(999));
+        assert!(e.other_key_window_open());
+        clock.advance(Duration::from_millis(1));
+        assert!(!e.other_key_window_open());
+        e.on_talk_key(Up);
+        assert!(!e.other_key_window_open());
+    }
+
+    #[test]
+    fn cap_44c_machine_cancel_ends_only_an_active_ptt() {
+        let mut m = PttMachine::new();
+        assert_eq!(m.cancel(), vec![]);
+        m.on_talk_key(Down);
+        assert_eq!(m.cancel(), vec![Ptt(Cancel)]);
+        assert!(!m.is_held());
+        assert_eq!(m.on_talk_key(Up), vec![]);
     }
 }

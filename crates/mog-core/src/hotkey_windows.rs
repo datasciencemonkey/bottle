@@ -1253,11 +1253,14 @@ mod tests {
     fn cap_41_talk_signals_drive_the_shared_ptt_machine() {
         use crate::hotkey_core::{HotkeyEngine, HotkeyOutput, PttPhase};
         let sink = Arc::new(RecordingSink::default());
-        let mut engine = HotkeyEngine::new(sink.clone());
+        let clock = crate::clock::SimClock::new();
+        let mut engine = HotkeyEngine::with_clock(sink.clone(), Arc::new(clock.clone()));
         assert_eq!(
             forward_to_engine(HookSignal::TalkDown { at: T0 }, &mut engine),
             None
         );
+        // Hold longer than a tap (CAP-44a).
+        clock.advance(crate::hotkey_core::TAP_MAX_HOLD);
         assert_eq!(
             forward_to_engine(HookSignal::TalkUp { at: T0 }, &mut engine),
             None
@@ -1277,6 +1280,31 @@ mod tests {
         assert_eq!(
             forward_to_engine(HookSignal::Escape, &mut engine),
             Some(HookSignal::Escape)
+        );
+    }
+
+    #[test]
+    fn cap_44c_at_03_other_key_down_cancels_the_shared_ptt() {
+        use crate::hotkey_core::{HotkeyEngine, HotkeyOutput, PttPhase};
+        let sink = Arc::new(RecordingSink::default());
+        let clock = crate::clock::SimClock::new();
+        let mut engine = HotkeyEngine::with_clock(sink.clone(), Arc::new(clock.clone()));
+        let mut f = HookFilter::new(TalkKey::RightAlt);
+        let (_, sig) = f.on_key(KeyEvent::down(vk::RMENU), T0);
+        assert_eq!(forward_to_engine(sig.unwrap(), &mut engine), None);
+        clock.advance(Duration::from_millis(400));
+        // The user types a key with Right-Alt held (an AltGr character): the PTT cancels.
+        let (_, sig) = f.on_key(KeyEvent::down(0x45), T0);
+        assert_eq!(sig, Some(HookSignal::OtherKeyDown));
+        assert_eq!(forward_to_engine(sig.unwrap(), &mut engine), None);
+        let (_, sig) = f.on_key(KeyEvent::up(vk::RMENU), T0);
+        assert_eq!(forward_to_engine(sig.unwrap(), &mut engine), None);
+        assert_eq!(
+            *sink.0.lock().unwrap(),
+            vec![
+                HotkeyOutput::Ptt(PttPhase::Down),
+                HotkeyOutput::Ptt(PttPhase::Cancel)
+            ]
         );
     }
 

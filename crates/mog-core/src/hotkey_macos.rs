@@ -63,6 +63,47 @@ pub const TAP_SPEC: TapSpec = TapSpec {
     events_of_interest: 1 << CG_EVENT_FLAGS_CHANGED,
 };
 
+/// The second listen-only tap of CAP-44c (ADR 0014). It asks for `KeyDown` only, never
+/// `KeyUp`. It is created off and the OS layer turns it on only while
+/// [`crate::hotkey_core::HotkeyEngine::other_key_window_open`] is true: the first 1 s of a
+/// talk-key hold. Its callback reads no field of the event.
+pub const OTHER_KEY_TAP_SPEC: TapSpec = TapSpec {
+    location: CG_SESSION_EVENT_TAP,
+    placement: CG_HEAD_INSERT_EVENT_TAP,
+    options: CG_EVENT_TAP_OPTION_LISTEN_ONLY,
+    events_of_interest: 0,
+};
+
+/// "Another key went down". It has no field, so no key identity can cross the callback
+/// boundary (CAP-44c, SEC rules).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OtherKeyDown;
+
+/// Classify an event of the other-key tap by its event type only. The function cannot see
+/// the event, so it cannot read a key code or characters.
+pub fn other_key_from_event_type(_event_type: u32) -> Option<OtherKeyDown> {
+    None
+}
+
+/// What one `FlagsChanged` event means for R1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlagsEvent {
+    /// The talk key went down or up.
+    Talk(KeyEdge),
+    /// Another modifier key went down (CAP-44c). Its identity is dropped here.
+    OtherModifierDown,
+    /// Anything else (another modifier went up, an unknown key).
+    Ignore,
+}
+
+/// Classify one `FlagsChanged` event for the talk key `key` (CAP-35b, CAP-44c).
+pub fn classify_flags_changed(key: TalkKey, keycode: u16, flags: u64) -> FlagsEvent {
+    match decode_flags_changed(key, keycode, flags) {
+        Some(edge) => FlagsEvent::Talk(edge),
+        None => FlagsEvent::Ignore,
+    }
+}
+
 /// The virtual key code and the device-dependent flag bit of a talk key.
 pub fn talk_key_code(key: TalkKey) -> (u16, u64) {
     // kVK_* codes from HIToolbox Events.h; NX_DEVICE*KEYMASK bits from IOLLEvent.h.
@@ -184,6 +225,85 @@ mod tests {
             }
         }
         assert_eq!(ups, 1000);
+    }
+
+    #[test]
+    fn cap_44c_other_key_tap_is_listen_only_and_key_down_only() {
+        assert_eq!(OTHER_KEY_TAP_SPEC.options, CG_EVENT_TAP_OPTION_LISTEN_ONLY);
+        assert_eq!(OTHER_KEY_TAP_SPEC.location, CG_SESSION_EVENT_TAP);
+        assert_eq!(
+            OTHER_KEY_TAP_SPEC.events_of_interest,
+            1u64 << CG_EVENT_KEY_DOWN
+        );
+        assert_eq!(
+            OTHER_KEY_TAP_SPEC.events_of_interest & (1u64 << CG_EVENT_KEY_UP),
+            0
+        );
+        // The talk-key tap keeps the ADR 0011 spec.
+        assert_eq!(TAP_SPEC.events_of_interest, 1u64 << CG_EVENT_FLAGS_CHANGED);
+    }
+
+    #[test]
+    fn cap_44c_other_key_events_carry_no_key_identity() {
+        // Only the event type goes in, and a field-less marker comes out.
+        assert_eq!(std::mem::size_of::<OtherKeyDown>(), 0);
+        assert_eq!(
+            other_key_from_event_type(CG_EVENT_KEY_DOWN),
+            Some(OtherKeyDown)
+        );
+        for t in [
+            CG_EVENT_KEY_UP,
+            CG_EVENT_FLAGS_CHANGED,
+            CG_EVENT_TAP_DISABLED_BY_TIMEOUT,
+            CG_EVENT_TAP_DISABLED_BY_USER_INPUT,
+        ] {
+            assert_eq!(other_key_from_event_type(t), None, "type {t}");
+        }
+    }
+
+    #[test]
+    fn cap_44c_another_modifier_going_down_is_an_other_key() {
+        // Right-Option is held (0x40); Left-Shift (56) goes down (0x02, generic 0x20000).
+        assert_eq!(
+            classify_flags_changed(TalkKey::RightOption, 56, 0x000_0002_0142),
+            FlagsEvent::OtherModifierDown
+        );
+        // Left-Command (55, 0x08) goes down.
+        assert_eq!(
+            classify_flags_changed(TalkKey::RightOption, 55, 0x0010_0148),
+            FlagsEvent::OtherModifierDown
+        );
+        // Fn/Globe (63) goes down: kCGEventFlagMaskSecondaryFn.
+        assert_eq!(
+            classify_flags_changed(TalkKey::RightOption, 63, 0x0080_0140),
+            FlagsEvent::OtherModifierDown
+        );
+    }
+
+    #[test]
+    fn cap_44c_another_modifier_going_up_is_ignored() {
+        // Left-Shift (56) goes up while Right-Option stays down.
+        assert_eq!(
+            classify_flags_changed(TalkKey::RightOption, 56, 0x0008_0140),
+            FlagsEvent::Ignore
+        );
+        // An unknown key code is ignored.
+        assert_eq!(
+            classify_flags_changed(TalkKey::RightOption, 200, 0xFFFF_FFFF),
+            FlagsEvent::Ignore
+        );
+    }
+
+    #[test]
+    fn cap_44c_talk_key_edges_still_classify_as_talk() {
+        assert_eq!(
+            classify_flags_changed(TalkKey::RightOption, 61, 0x0008_0140),
+            FlagsEvent::Talk(KeyEdge::Down)
+        );
+        assert_eq!(
+            classify_flags_changed(TalkKey::RightOption, 61, 0x0000_0100),
+            FlagsEvent::Talk(KeyEdge::Up)
+        );
     }
 
     #[test]
