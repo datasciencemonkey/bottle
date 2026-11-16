@@ -14,6 +14,7 @@ pub mod error;
 pub mod hotkey;
 pub mod hotkey_core;
 pub mod hotkey_macos;
+pub mod hotkey_windows;
 pub mod http_transport;
 pub mod ipc;
 pub mod ipc_gateway;
