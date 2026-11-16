@@ -245,19 +245,20 @@ fn sec_02b_extra_field_in_a_nested_struct_is_rejected() {
         let code = code_of(&gw.dispatch(label, cmd, args));
         assert_eq!(code, "invalid_args", "{cmd}.{field}");
     }
+    // The spec policy values (#259): any other value is now rejected as `invalid_args`.
     let mut policy = Map::new();
-    for f in [
-        "checkInAtMin",
-        "softCapMin",
-        "extendMin",
-        "silenceNudgeMin",
-        "silenceStopMin",
-        "hardCapMin",
-        "lockStopMin",
-        "holdMaxSec",
-        "handsFreeMaxMin",
+    for (f, v) in [
+        ("checkInAtMin", 55),
+        ("softCapMin", 60),
+        ("extendMin", 30),
+        ("silenceNudgeMin", 5),
+        ("silenceStopMin", 15),
+        ("hardCapMin", 240),
+        ("lockStopMin", 10),
+        ("holdMaxSec", 120),
+        ("handsFreeMaxMin", 5),
     ] {
-        policy.insert(f.into(), json!(1));
+        policy.insert(f.into(), json!(v));
     }
     let ok = json!({"mogId": "a1", "mode": "session", "policy": policy.clone()});
     assert_eq!(
