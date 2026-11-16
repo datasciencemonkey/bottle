@@ -39,7 +39,7 @@ fn fixed_error(field: &str, value: u64) -> SessionPolicyError {
         other => panic!("unknown field {other}"),
     }
     let err = p.validate().expect_err("validate must reject the value");
-    assert_eq!(e.to_string().contains(field), true, "message names {field}: {e}");
+    assert!(e.to_string().contains(field), "message names {field}: {e}");
     err
 }
 
@@ -66,7 +66,12 @@ fn cap_78a_hard_cap_outside_60_to_480_is_rejected() {
     p.hard_cap_min = 500;
     assert_eq!(
         p.validate(),
-        Err(SessionPolicyError::OutOfRange { field: "hardCapMin", min: 60, max: 480, actual: 500 })
+        Err(SessionPolicyError::OutOfRange {
+            field: "hardCapMin",
+            min: 60,
+            max: 480,
+            actual: 500
+        })
     );
 }
 
@@ -74,7 +79,11 @@ fn cap_78a_hard_cap_outside_60_to_480_is_rejected() {
 fn cap_76a_check_in_must_be_55() {
     assert_eq!(
         fixed_error("checkInAtMin", 54),
-        SessionPolicyError::NotFixed { field: "checkInAtMin", expected: 55, actual: 54 }
+        SessionPolicyError::NotFixed {
+            field: "checkInAtMin",
+            expected: 55,
+            actual: 54
+        }
     );
 }
 
@@ -82,11 +91,19 @@ fn cap_76a_check_in_must_be_55() {
 fn cap_76b_soft_cap_must_be_60_and_extend_must_be_30() {
     assert_eq!(
         fixed_error("softCapMin", 61),
-        SessionPolicyError::NotFixed { field: "softCapMin", expected: 60, actual: 61 }
+        SessionPolicyError::NotFixed {
+            field: "softCapMin",
+            expected: 60,
+            actual: 61
+        }
     );
     assert_eq!(
         fixed_error("extendMin", 31),
-        SessionPolicyError::NotFixed { field: "extendMin", expected: 30, actual: 31 }
+        SessionPolicyError::NotFixed {
+            field: "extendMin",
+            expected: 30,
+            actual: 31
+        }
     );
 }
 
@@ -94,7 +111,11 @@ fn cap_76b_soft_cap_must_be_60_and_extend_must_be_30() {
 fn cap_77a_silence_nudge_must_be_5() {
     assert_eq!(
         fixed_error("silenceNudgeMin", 6),
-        SessionPolicyError::NotFixed { field: "silenceNudgeMin", expected: 5, actual: 6 }
+        SessionPolicyError::NotFixed {
+            field: "silenceNudgeMin",
+            expected: 5,
+            actual: 6
+        }
     );
 }
 
@@ -102,7 +123,11 @@ fn cap_77a_silence_nudge_must_be_5() {
 fn cap_77b_silence_stop_must_be_15() {
     assert_eq!(
         fixed_error("silenceStopMin", 16),
-        SessionPolicyError::NotFixed { field: "silenceStopMin", expected: 15, actual: 16 }
+        SessionPolicyError::NotFixed {
+            field: "silenceStopMin",
+            expected: 15,
+            actual: 16
+        }
     );
 }
 
@@ -110,7 +135,11 @@ fn cap_77b_silence_stop_must_be_15() {
 fn cap_81c_lock_stop_must_be_10() {
     assert_eq!(
         fixed_error("lockStopMin", 11),
-        SessionPolicyError::NotFixed { field: "lockStopMin", expected: 10, actual: 11 }
+        SessionPolicyError::NotFixed {
+            field: "lockStopMin",
+            expected: 10,
+            actual: 11
+        }
     );
 }
 
@@ -118,7 +147,11 @@ fn cap_81c_lock_stop_must_be_10() {
 fn cap_04a_hold_max_must_be_120_s() {
     assert_eq!(
         fixed_error("holdMaxSec", 121),
-        SessionPolicyError::NotFixed { field: "holdMaxSec", expected: 120, actual: 121 }
+        SessionPolicyError::NotFixed {
+            field: "holdMaxSec",
+            expected: 120,
+            actual: 121
+        }
     );
 }
 
@@ -126,7 +159,11 @@ fn cap_04a_hold_max_must_be_120_s() {
 fn cap_04b_hands_free_max_must_be_5_min() {
     assert_eq!(
         fixed_error("handsFreeMaxMin", 6),
-        SessionPolicyError::NotFixed { field: "handsFreeMaxMin", expected: 5, actual: 6 }
+        SessionPolicyError::NotFixed {
+            field: "handsFreeMaxMin",
+            expected: 5,
+            actual: 6
+        }
     );
 }
 
@@ -140,7 +177,13 @@ fn cap_74b_soft_cap_is_not_above_hard_cap_for_every_accepted_policy() {
 
 #[test]
 fn cap_74b_wrong_types_and_unknown_fields_are_errors_not_panics() {
-    for bad in [json!(-1), json!(1.5), json!("60"), json!(null), json!(u64::MAX)] {
+    for bad in [
+        json!(-1),
+        json!(1.5),
+        json!("60"),
+        json!(null),
+        json!(u64::MAX),
+    ] {
         let mut v = spec();
         v["hardCapMin"] = bad;
         assert!(parse(v).is_err());

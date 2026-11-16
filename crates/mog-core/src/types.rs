@@ -85,8 +85,15 @@ pub enum CaptureMode {
 
 /// Session limits. In TS every field except `hard_cap_min` is a fixed literal
 /// (55, 60, 30, 5, 15, 10, 120, 5); `hard_cap_min` is 60..480, default 240.
+///
+/// Deserializing rejects any other value (#259), so a `SessionPolicy` read from JSON is
+/// always valid. A value built in Rust can be checked with [`SessionPolicy::validate`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(
+    rename_all = "camelCase",
+    deny_unknown_fields,
+    try_from = "SessionPolicyWire"
+)]
 pub struct SessionPolicy {
     pub check_in_at_min: u32,
     pub soft_cap_min: u32,
@@ -97,6 +104,129 @@ pub struct SessionPolicy {
     pub lock_stop_min: u32,
     pub hold_max_sec: u32,
     pub hands_free_max_min: u32,
+}
+
+/// The unvalidated wire form of [`SessionPolicy`]. schemars follows `try_from`, so it
+/// derives `JsonSchema` too.
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SessionPolicyWire {
+    check_in_at_min: u32,
+    soft_cap_min: u32,
+    extend_min: u32,
+    silence_nudge_min: u32,
+    silence_stop_min: u32,
+    hard_cap_min: u32,
+    lock_stop_min: u32,
+    hold_max_sec: u32,
+    hands_free_max_min: u32,
+}
+
+/// The `hardCapMin` range in minutes (section 7.1: ceiling 4 h, admin range 1-8 h).
+const HARD_CAP_MIN_RANGE: (u32, u32) = (60, 480);
+
+/// A `SessionPolicy` value outside the spec. The field name is the TS (camelCase) name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SessionPolicyError {
+    /// A field with a fixed value has another value.
+    NotFixed {
+        /// The field name.
+        field: &'static str,
+        /// The value the spec requires.
+        expected: u32,
+        /// The value found.
+        actual: u32,
+    },
+    /// A field is outside its allowed range (inclusive).
+    OutOfRange {
+        /// The field name.
+        field: &'static str,
+        /// The smallest allowed value.
+        min: u32,
+        /// The largest allowed value.
+        max: u32,
+        /// The value found.
+        actual: u32,
+    },
+}
+
+impl std::fmt::Display for SessionPolicyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SessionPolicyError::NotFixed {
+                field,
+                expected,
+                actual,
+            } => write!(f, "{field} must be {expected}, found {actual}"),
+            SessionPolicyError::OutOfRange {
+                field,
+                min,
+                max,
+                actual,
+            } => write!(f, "{field} must be {min}..={max}, found {actual}"),
+        }
+    }
+}
+
+impl std::error::Error for SessionPolicyError {}
+
+impl SessionPolicy {
+    /// Check every field against the stop policy of section 7.1.
+    ///
+    /// The fixed values (55 < 60) and the `hard_cap_min` range (60..=480) also give the
+    /// ordering check-in < soft cap <= ceiling.
+    pub fn validate(&self) -> Result<(), SessionPolicyError> {
+        let fixed = [
+            ("checkInAtMin", self.check_in_at_min, 55),
+            ("softCapMin", self.soft_cap_min, 60),
+            ("extendMin", self.extend_min, 30),
+            ("silenceNudgeMin", self.silence_nudge_min, 5),
+            ("silenceStopMin", self.silence_stop_min, 15),
+            ("lockStopMin", self.lock_stop_min, 10),
+            ("holdMaxSec", self.hold_max_sec, 120),
+            ("handsFreeMaxMin", self.hands_free_max_min, 5),
+        ];
+        for (field, actual, expected) in fixed {
+            if actual != expected {
+                return Err(SessionPolicyError::NotFixed {
+                    field,
+                    expected,
+                    actual,
+                });
+            }
+        }
+        let (min, max) = HARD_CAP_MIN_RANGE;
+        if !(min..=max).contains(&self.hard_cap_min) {
+            return Err(SessionPolicyError::OutOfRange {
+                field: "hardCapMin",
+                min,
+                max,
+                actual: self.hard_cap_min,
+            });
+        }
+        Ok(())
+    }
+}
+
+impl TryFrom<SessionPolicyWire> for SessionPolicy {
+    type Error = SessionPolicyError;
+
+    fn try_from(w: SessionPolicyWire) -> Result<Self, Self::Error> {
+        let p = SessionPolicy {
+            check_in_at_min: w.check_in_at_min,
+            soft_cap_min: w.soft_cap_min,
+            extend_min: w.extend_min,
+            silence_nudge_min: w.silence_nudge_min,
+            silence_stop_min: w.silence_stop_min,
+            hard_cap_min: w.hard_cap_min,
+            lock_stop_min: w.lock_stop_min,
+            hold_max_sec: w.hold_max_sec,
+            hands_free_max_min: w.hands_free_max_min,
+        };
+        p.validate()?;
+        Ok(p)
+    }
 }
 
 /// `CaptureState.othersTrack`.
