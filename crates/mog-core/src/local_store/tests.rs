@@ -329,12 +329,13 @@ fn mem_08e_knn_is_partitioned_by_mog_and_model() {
 
 #[test]
 fn mem_08e_int8_quantizer_keeps_every_difference_in_range() {
-    // sqlite-vec 0.1.9 NEON int8 L2 returns a NULL distance when a component difference leaves
-    // the i8 range. The quantizer keeps values in [-63, 63], so a difference is at most 126.
+    // sqlite-vec 0.1.9 NEON int8 L2 squares an i16 difference with vmulq_s16, which wraps at
+    // |diff| >= 182 and gives a NULL distance. The quantizer keeps values in [-90, 90], so a
+    // difference is at most 180 (see mem_08e_neon_l2_is_valid_up_to_a_difference_of_180).
+    assert_eq!(INT8_MAX, 90);
     let q = quantize_int8(&[1.0, -1.0, 2.0, -2.0, 0.5, 0.0, f32::NAN]);
     let v: Vec<i8> = q.iter().map(|b| *b as i8).collect();
-    assert_eq!(v, vec![INT8_MAX, -INT8_MAX, INT8_MAX, -INT8_MAX, 32, 0, 0]);
-    assert!(2 * i16::from(INT8_MAX) <= i16::from(i8::MAX));
+    assert_eq!(v, vec![INT8_MAX, -INT8_MAX, INT8_MAX, -INT8_MAX, 45, 0, 0]);
 
     let t = TempDir::new("08e-range");
     let s = open_store(t.path(), Arc::new(MemoryKeyVault::new()));
@@ -352,7 +353,7 @@ fn mem_08e_int8_quantizer_keeps_every_difference_in_range() {
         })
         .unwrap();
     let d = d.expect("distance is not NULL");
-    assert!((d - (256.0f64 * 126.0 * 126.0).sqrt()).abs() < 1e-6, "{d}");
+    assert!((d - (256.0f64 * 180.0 * 180.0).sqrt()).abs() < 1e-6, "{d}");
 }
 
 // ---- MEM-01: every statement filters by mog_id --------------------------------------------
@@ -904,4 +905,430 @@ fn mem_08f_outbox_request_survives_restart() {
         )
     });
     assert!(bad.is_err());
+}
+
+// ---- MEM-33a: an age-based Wipe deletes only the matching rows (review of #365) ----------
+
+fn seed_exchange(
+    s: &SqlCipherLocalStore,
+    mog: &str,
+    id: &str,
+    session: Option<&str>,
+    asked_at: i64,
+) {
+    s.with_conn(|c| {
+        c.execute(
+            "INSERT INTO genie_exchange (exchange_id, request_id, mog_id, session_id, backend_kind,
+               profile_name, workspace_host, is_home_workspace, question_sent_sha256, status,
+               asked_at, row_hlc, origin_device_id)
+             VALUES (?1, ?1, ?2, ?3, 'genie_one_mcp', 'p', 'h', 1, 'x', 'completed', ?4, 1, ?2)",
+            rusqlite::params![id, mog, session, asked_at],
+        )
+    })
+    .unwrap();
+}
+
+fn seed_session(s: &SqlCipherLocalStore, mog: &str, id: &str, started_at: i64) {
+    s.with_conn(|c| {
+        c.execute(
+            "INSERT INTO session (session_id, mog_id, kind, started_at, row_hlc, origin_device_id)
+             VALUES (?1, ?2, 'meeting', ?3, 1, ?2)",
+            rusqlite::params![id, mog, started_at],
+        )
+    })
+    .unwrap();
+}
+
+fn count(s: &SqlCipherLocalStore, sql: &str) -> i64 {
+    s.with_conn(|c| c.query_row(sql, [], |r| r.get(0))).unwrap()
+}
+
+#[test]
+fn mem_33a_wiping_an_old_exchange_keeps_a_recent_item_and_its_index_rows() {
+    let t = TempDir::new("33a-exchange");
+    let s = open_store(t.path(), Arc::new(MemoryKeyVault::new()));
+    seed_mog(&s, MOG_A);
+    seed_exchange(&s, MOG_A, "ex-old", None, 1);
+    let rid = seed_item(&s, MOG_A, "item-new", "gross margin by region");
+    let v: Vec<f32> = (0..256).map(|i| if i == 7 { 1.0 } else { 0.0 }).collect();
+    s.with_conn(|c| {
+        c.execute(
+            "UPDATE memory_item SET source_exchange_id = 'ex-old', last_seen_at = 9999999999999
+             WHERE mog_id = ?1 AND rid = ?2",
+            rusqlite::params![MOG_A, rid],
+        )?;
+        c.execute(
+            "INSERT INTO memory_item_vec_256 (rowid, mog_id, embedding_model, embedding)
+             VALUES (?1, ?2, 'qwen3@256', vec_int8(?3))",
+            rusqlite::params![rid, MOG_A, quantize_int8(&v)],
+        )
+    })
+    .unwrap();
+    // A "Wipe older than 30 d" deletes the old exchange by its own age column only.
+    s.with_conn(|c| {
+        c.execute(
+            "DELETE FROM genie_exchange WHERE mog_id = ?1 AND asked_at < 1000",
+            [MOG_A],
+        )
+    })
+    .unwrap();
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM memory_item WHERE item_id = 'item-new'"
+        ),
+        1
+    );
+    assert_eq!(
+        count(&s, "SELECT count(*) FROM memory_item WHERE item_id = 'item-new' AND source_exchange_id IS NULL"),
+        1,
+        "the pointer is cleared, the item stays"
+    );
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM memory_item_fts WHERE memory_item_fts MATCH 'margin'"
+        ),
+        1
+    );
+    assert_eq!(count(&s, "SELECT count(*) FROM memory_item_vec_256"), 1);
+}
+
+#[test]
+fn mem_33a_wiping_an_old_session_keeps_a_recent_exchange() {
+    let t = TempDir::new("33a-session");
+    let s = open_store(t.path(), Arc::new(MemoryKeyVault::new()));
+    seed_mog(&s, MOG_A);
+    seed_session(&s, MOG_A, "sess-old", 1);
+    seed_exchange(&s, MOG_A, "ex-new", Some("sess-old"), 9_999_999_999_999);
+    s.with_conn(|c| {
+        c.execute(
+            "DELETE FROM session WHERE mog_id = ?1 AND started_at < 1000",
+            [MOG_A],
+        )
+    })
+    .unwrap();
+    assert_eq!(
+        count(&s, "SELECT count(*) FROM genie_exchange WHERE exchange_id = 'ex-new' AND session_id IS NULL"),
+        1
+    );
+}
+
+#[test]
+fn mem_33a_no_delete_cascades_from_a_mog_or_a_session() {
+    let t = TempDir::new("33a-restrict");
+    let s = open_store(t.path(), Arc::new(MemoryKeyVault::new()));
+    seed_mog(&s, MOG_A);
+    seed_item(&s, MOG_A, "item-1", "churn by segment");
+    seed_session(&s, MOG_A, "sess-1", 1);
+    s.with_conn(|c| {
+        c.execute(
+            "INSERT INTO utterance (utterance_id, session_id, mog_id, seq, speaker_track, started_at,
+               duration_ms, text_clean, route, stt_provider, row_hlc, origin_device_id)
+             VALUES ('u-1', 'sess-1', ?1, 1, 'you', 9999999999999, 10, 'hello', 'noise', 'local_parakeet', 1, ?1)",
+            [MOG_A],
+        )
+    })
+    .unwrap();
+    // The WipeService deletes each table by its own rule; the schema never deletes a child for it.
+    let mog = s.with_conn(|c| c.execute("DELETE FROM mog WHERE mog_id = ?1", [MOG_A]));
+    assert!(mog.is_err(), "deleting a MOG with content is refused");
+    let sess = s.with_conn(|c| {
+        c.execute(
+            "DELETE FROM session WHERE mog_id = ?1 AND session_id = 'sess-1'",
+            [MOG_A],
+        )
+    });
+    assert!(
+        sess.is_err(),
+        "deleting a session with a remaining utterance is refused"
+    );
+    assert_eq!(count(&s, "SELECT count(*) FROM memory_item"), 1);
+    assert_eq!(count(&s, "SELECT count(*) FROM utterance"), 1);
+}
+
+// ---- MEM-08e: the NEON int8 L2 boundary in sqlite-vec 0.1.9 ------------------------------
+
+fn l2_int8(s: &SqlCipherLocalStore, a: i8, b: i8) -> Option<f64> {
+    let va: Vec<u8> = vec![a as u8; 256];
+    let vb: Vec<u8> = vec![b as u8; 256];
+    s.with_conn(|c| {
+        c.query_row(
+            "SELECT vec_distance_l2(vec_int8(?1), vec_int8(?2))",
+            rusqlite::params![va, vb],
+            |r| r.get(0),
+        )
+    })
+    .unwrap()
+}
+
+#[test]
+fn mem_08e_neon_l2_is_valid_up_to_a_difference_of_180() {
+    // l2_sqr_int8_neon widens to i16, then vmulq_s16(diff, diff) wraps at |diff| >= 182.
+    let t = TempDir::new("08e-neon");
+    let s = open_store(t.path(), Arc::new(MemoryKeyVault::new()));
+    let d = l2_int8(&s, 90, -90).expect("a difference of 180 has a distance");
+    assert!((d - (256.0f64 * 180.0 * 180.0).sqrt()).abs() < 1e-6, "{d}");
+    // If an upgrade fixes the overflow, this flips. Then revisit INT8_MAX (vec_codec).
+    if cfg!(target_arch = "aarch64") {
+        assert_eq!(
+            l2_int8(&s, 91, -91),
+            None,
+            "NEON overflow at a difference of 182"
+        );
+    }
+    assert!(
+        2 * i16::from(INT8_MAX) <= 180,
+        "the quantizer never makes a difference above 180"
+    );
+}
+
+// ---- MEM-08d: English stemming, as in Appendix A to_tsvector('english', ...) -------------
+
+#[test]
+fn mem_08d_fts5_stems_english_words() {
+    let t = TempDir::new("08d-stem");
+    let s = open_store(t.path(), Arc::new(MemoryKeyVault::new()));
+    seed_mog(&s, MOG_A);
+    seed_item(&s, MOG_A, "item-s", "revenues grew in EMEA");
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM memory_item_fts WHERE memory_item_fts MATCH 'revenue'"
+        ),
+        1
+    );
+}
+
+// ---- MEM-08c: the secure_delete line itself (SQLCipher already defaults it to 1) ---------
+
+#[test]
+fn mem_08c_secure_delete_is_set_explicitly_on_every_connection() {
+    // SQLCipher reports secure_delete = 1 by default, so a PRAGMA read cannot detect a removed
+    // line. This test guards the line in the connection pragmas.
+    let p = super::store::CONNECTION_PRAGMAS.to_ascii_lowercase();
+    assert!(p.contains("pragma secure_delete = on"), "{p}");
+}
+
+// ---- Appendix A: the local mirror keeps every column (B2), less the U9 removals -----------
+
+#[test]
+fn mem_08a_local_mirror_has_every_appendix_a_column() {
+    let t = TempDir::new("appx-a");
+    let s = open_store(t.path(), Arc::new(MemoryKeyVault::new()));
+    let want: [(&str, &[&str]); 8] = [
+        (
+            "mog",
+            &[
+                "mog_id",
+                "owner_principal",
+                "display_name",
+                "backend_kind",
+                "default_profile",
+                "default_host",
+                "genie_target",
+                "memory_enabled",
+                "transcript_sync_optin",
+                "answer_freshness_hours",
+                "created_at",
+                "updated_at",
+                "deleted_at",
+                "row_hlc",
+                "origin_device_id",
+                "server_seq",
+            ],
+        ),
+        (
+            "session",
+            &[
+                "session_id",
+                "mog_id",
+                "owner_principal",
+                "kind",
+                "title",
+                "started_at",
+                "ended_at",
+                "end_reason",
+                "attestation_kind",
+                "others_track",
+                "workspace_host",
+                "workspace_id",
+                "profile_name",
+                "utterance_count",
+                "question_count",
+                "summary",
+                "transcript_synced",
+                "writer_watermark_seq",
+                "expires_at",
+                "created_at",
+                "updated_at",
+                "deleted_at",
+                "row_hlc",
+                "origin_device_id",
+                "server_seq",
+            ],
+        ),
+        (
+            "utterance",
+            &[
+                "rid",
+                "utterance_id",
+                "session_id",
+                "mog_id",
+                "owner_principal",
+                "seq",
+                "speaker_track",
+                "started_at",
+                "duration_ms",
+                "text_clean",
+                "text_raw",
+                "lang",
+                "route",
+                "stt_provider",
+                "stt_model",
+                "stt_runtime",
+                "expires_at",
+                "created_at",
+                "updated_at",
+                "deleted_at",
+                "row_hlc",
+                "origin_device_id",
+                "server_seq",
+            ],
+        ),
+        (
+            "genie_exchange",
+            &[
+                "exchange_id",
+                "request_id",
+                "mog_id",
+                "session_id",
+                "owner_principal",
+                "backend_kind",
+                "profile_name",
+                "workspace_host",
+                "workspace_id",
+                "is_home_workspace",
+                "space_id",
+                "conversation_id",
+                "response_id",
+                "question_user",
+                "question_sent_sha256",
+                "preamble_item_ids",
+                "status",
+                "answer_summary",
+                "key_numbers",
+                "final_answer_md",
+                "topic_label",
+                "deep_link",
+                "query_item_ids",
+                "split_group_id",
+                "feedback",
+                "feedback_at",
+                "error_code",
+                "latency_ms",
+                "asked_at",
+                "completed_at",
+                "expires_at",
+                "created_at",
+                "updated_at",
+                "deleted_at",
+                "row_hlc",
+                "origin_device_id",
+                "server_seq",
+            ],
+        ),
+        (
+            "memory_item",
+            &[
+                "rid",
+                "item_id",
+                "mog_id",
+                "owner_principal",
+                "item_type",
+                "text",
+                "source",
+                "entities",
+                "entity_keys",
+                "attributes",
+                "confidence",
+                "status",
+                "superseded_by",
+                "resolved_by",
+                "pinned",
+                "sensitivity",
+                "source_session_ids",
+                "source_utterance_ids",
+                "source_exchange_id",
+                "workspace_host",
+                "workspace_id",
+                "space_id",
+                "mention_count",
+                "first_seen_at",
+                "last_seen_at",
+                "valid_until",
+                "embedding",
+                "embedding_model",
+                "embedding_dims",
+                "embedded_at",
+                "expires_at",
+                "created_at",
+                "updated_at",
+                "deleted_at",
+                "row_hlc",
+                "origin_device_id",
+                "server_seq",
+            ],
+        ),
+        (
+            "consent_record",
+            &[
+                "consent_id",
+                "mog_id",
+                "owner_principal",
+                "device_id",
+                "notice_version",
+                "kind",
+                "session_id",
+                "attestation_kind",
+                "disclosure_copied",
+                "recorded_at",
+                "expires_at",
+                "server_seq",
+                "updated_at",
+            ],
+        ),
+        (
+            "sync_state",
+            &[
+                "device_id",
+                "mog_id",
+                "owner_principal",
+                "device_name",
+                "app_version",
+                "last_pull_seq",
+                "last_push_at",
+                "local_schema_version",
+                "updated_at",
+            ],
+        ),
+        (
+            "forget_log",
+            &[
+                "forget_id",
+                "mog_id",
+                "owner_principal",
+                "scope",
+                "target_ids",
+                "requested_at",
+                "device_id",
+                "server_seq",
+                "updated_at",
+            ],
+        ),
+    ];
+    for (table, cols) in want {
+        let got: Vec<String> = columns(&s, table).into_iter().map(|(n, _)| n).collect();
+        assert_eq!(got, cols, "columns of {table}");
+    }
 }
