@@ -51,7 +51,14 @@ windows-2025. Both runs failed on main and on every PR. A failed Format step hid
    tauri 2.12.5 `build.rs`, from tauri PR #4383). `src-tauri/windows-app-manifest.xml` is a copy of
    the tauri-build 2.7.4 default manifest (`src/windows-app-manifest.xml`), so the app binary keeps
    the same manifest content as before.
-4. `tests/windows_manifest.rs` checks the manifest file and the build script on every OS. On
+4. **Loopback reads see `close` on Windows too.** With the manifest in place, the Windows run
+   reached the tests and `arc_7_rule_9_close_ends_open_connections` failed: `close` waited 4.8 s.
+   `LoopbackSession::close` shuts each open socket. That wakes a blocked read on macOS and Linux,
+   but not on Windows, so the connection thread waited for its 5 s request deadline.
+   `read_some` in `crates/mog-core/src/loopback.rs` now waits in slices of 50 ms and checks the
+   session `stop` flag between them. The unit test
+   `arc_7_rule_9_a_blocked_read_returns_soon_after_stop_without_a_shutdown` proves this on every OS.
+5. `tests/windows_manifest.rs` checks the manifest file and the build script on every OS. On
    Windows it also reads the manifest resource (ID 1, `RT_MANIFEST`) of the running test executable.
 
 ## Alternatives not chosen
