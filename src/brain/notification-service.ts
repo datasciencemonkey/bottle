@@ -1,5 +1,5 @@
 /**
- * OS notifications (UX-26a, UX-26b, UX-26c, ADR 0032). The brain decides; the host only shows.
+ * OS notifications (UX-26a, UX-26b, UX-26c, ADR 0042). The brain decides; the host only shows.
  *
  * - UX-26a: only an answer that finishes with the card hidden and the OS Focus mode open sends
  *   a notification. A chip never does.
