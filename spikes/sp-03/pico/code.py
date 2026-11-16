@@ -9,6 +9,9 @@
 #   GP14 to GND: abort; the Pico releases every key and stops.
 # The onboard LED is on while the key is down.
 #
+# Warning: a run starts START_DELAY_S after EVERY boot, also after the auto-reload when you copy
+# this file. Ground GP14 before you copy it, or unplug the Pico within 10 s.
+#
 # Serial console (115200, for example `screen /dev/tty.usbmodem* 115200`) prints one line per
 # cycle and a final DONE line. Compare DONE with the probe's `analyze` result.
 

@@ -1,22 +1,20 @@
-// Adapted from cjpais/Handy src-tauri/src/secure_input.rs and src-tauri/src/helpers/clamshell.rs @ aca8985 (MIT, Copyright (c) 2025 CJ Pais). See THIRD_PARTY_NOTICES.
 //! macOS side of the SP-03 probe: raw FFI to CoreGraphics, Carbon, IOKit and CoreFoundation.
 //!
-//! Adapted from Handy: the `IsSecureEventInputEnabled` binding, the ioreg holder lookup
-//! (`secure_input_holder`) and the ioreg clamshell cross-check (`clamshell_ioreg`).
+//! The Handy-adapted parts (SEI binding and holder lookup, ioreg lid check) are in
+//! `secure_input.rs` and `clamshell.rs` of the library.
 //!
 //! Privacy: the probe logs only the talk key (Right Option) and the Carbon chord. Every other
 //! key event is counted by type only. Key identity of other keys is never read or logged.
 
 use sp03::{
-    event_latency_ns, format_ev_line, pair_events, parse_clamshell_ioreg, parse_secure_input_pid,
-    right_option_transition, summarize, timestamp_domain, EndReason, KeyEvent, KeyKind, ListenArgs,
-    PairReport, Ptt, PttOut, SelfTestArgs, Source, TsDomain, CARBON_CHORD_MODIFIERS,
-    CG_FLAG_ALTERNATE, KVK_RIGHT_OPTION, KVK_SPACE, K_EVENT_CLASS_KEYBOARD, K_EVENT_HOTKEY_PRESSED,
-    K_EVENT_HOTKEY_RELEASED, NX_DEVICE_RIGHT_ALT,
+    event_latency_ns, format_ev_line, pair_events, right_option_transition, summarize,
+    timestamp_domain, EndReason, KeyEvent, KeyKind, ListenArgs, PairReport, Ptt, PttOut,
+    SelfTestArgs, Source, TsDomain, CARBON_CHORD_MODIFIERS, CG_FLAG_ALTERNATE, KVK_RIGHT_OPTION,
+    KVK_SPACE, K_EVENT_CLASS_KEYBOARD, K_EVENT_HOTKEY_PRESSED, K_EVENT_HOTKEY_RELEASED,
+    NX_DEVICE_RIGHT_ALT,
 };
 use std::ffi::{c_char, c_void, CString};
 use std::io::Write;
-use std::process::Command as Proc;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
@@ -103,7 +101,8 @@ extern "C" {
 
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
-    fn AXIsProcessTrusted() -> bool;
+    // Boolean is an unsigned char.
+    fn AXIsProcessTrusted() -> u8;
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -144,8 +143,6 @@ extern "C" {
 
 #[link(name = "Carbon", kind = "framework")]
 extern "C" {
-    // Carbon HIToolbox; Boolean is an unsigned char.
-    fn IsSecureEventInputEnabled() -> u8;
     fn GetApplicationEventTarget() -> EventTargetRef;
     fn InstallEventHandler(
         target: EventTargetRef,
@@ -193,7 +190,6 @@ struct Probe {
     other_key_down: AtomicU64,
     other_key_up: AtomicU64,
     other_flags: AtomicU64,
-    sei_on_at: AtomicU64,
     ptt_ends: Mutex<Vec<(EndReason, f64)>>,
     sei_to_end_ms: Mutex<Vec<f64>>,
 }
@@ -218,7 +214,6 @@ fn probe() -> &'static Probe {
             other_key_down: AtomicU64::new(0),
             other_key_up: AtomicU64::new(0),
             other_flags: AtomicU64::new(0),
-            sei_on_at: AtomicU64::new(0),
             ptt_ends: Mutex::new(Vec::new()),
             sei_to_end_ms: Mutex::new(Vec::new()),
         }
@@ -425,27 +420,11 @@ fn start_tap() -> Option<thread::JoinHandle<()>> {
 // ---------------------------------------------------------------- (b) Secure Event Input
 
 fn sei_enabled() -> bool {
-    // SAFETY: no arguments.
-    unsafe { IsSecureEventInputEnabled() != 0 }
+    sp03::secure_input::is_enabled()
 }
 
-/// Best-effort holder of Secure Event Input (Handy pattern): PID from ioreg, name from ps.
 fn secure_input_holder() -> String {
-    let Ok(out) = Proc::new("ioreg").args(["-l", "-w", "0"]).output() else {
-        return "unknown".into();
-    };
-    let Some(pid) = parse_secure_input_pid(&String::from_utf8_lossy(&out.stdout)) else {
-        return "none_visible".into();
-    };
-    let name = Proc::new("ps")
-        .args(["-o", "comm=", "-p", &pid.to_string()])
-        .output()
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.rsplit('/').next().unwrap_or(&s).to_string())
-        .unwrap_or_else(|| "(not running)".into());
-    format!("pid={pid} name={name:?}")
+    sp03::secure_input::holder()
 }
 
 fn right_option_physically_down() -> bool {
@@ -470,7 +449,6 @@ fn start_sei_poller() -> thread::JoinHandle<()> {
             let out = p.ptt.lock().unwrap().on_secure_input(on, t_det);
             let t_end = now_ns();
             if on {
-                p.sei_on_at.store(t_det, Ordering::Relaxed);
                 log("sei", "on", &format!("poll_ms={}", SEI_POLL.as_millis()));
                 if let PttOut::Ended { .. } = out {
                     let ms = (t_end - t_det) as f64 / 1e6;
@@ -485,7 +463,8 @@ fn start_sei_poller() -> thread::JoinHandle<()> {
                     );
                 }
                 ptt_out(out);
-                log("sei", "holder", &secure_input_holder());
+                // The ioreg lookup is slow: run it off the 10 ms poll thread.
+                thread::spawn(|| log("sei", "holder", &secure_input_holder()));
             } else {
                 // CAP-45: read the physical key state again when SEI ends.
                 log(
@@ -605,15 +584,6 @@ fn clamshell_iokit() -> Option<bool> {
     }
 }
 
-/// Cross-check through the `ioreg` tool (Handy's method).
-fn clamshell_ioreg() -> Option<bool> {
-    let out = Proc::new("ioreg")
-        .args(["-r", "-k", "AppleClamshellState", "-d", "4"])
-        .output()
-        .ok()?;
-    parse_clamshell_ioreg(&String::from_utf8_lossy(&out.stdout))
-}
-
 fn fmt_opt(v: Option<bool>) -> &'static str {
     match v {
         Some(true) => "closed",
@@ -654,7 +624,7 @@ fn permissions() -> (bool, bool, bool) {
         (
             CGPreflightListenEventAccess(),
             CGPreflightPostEventAccess(),
-            AXIsProcessTrusted(),
+            AXIsProcessTrusted() != 0,
         )
     }
 }
@@ -681,7 +651,7 @@ pub fn status() {
     println!(
         "STATUS lid_iokit={} lid_ioreg={} right_option_physically_down={}",
         fmt_opt(clamshell_iokit()),
-        fmt_opt(clamshell_ioreg()),
+        fmt_opt(sp03::clamshell::clamshell_ioreg()),
         u8::from(right_option_physically_down())
     );
     println!(

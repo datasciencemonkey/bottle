@@ -1,11 +1,16 @@
-// Adapted from cjpais/Handy src-tauri/src/secure_input.rs and src-tauri/src/helpers/clamshell.rs @ aca8985 (MIT, Copyright (c) 2025 CJ Pais). See THIRD_PARTY_NOTICES.
 //! Spike SP-03 (#5): pure helpers for the talk-key probe.
 //!
 //! The probe binary (`src/main.rs`) talks to CoreGraphics, Carbon and IOKit. This library holds
 //! the parts that run without a device or a permission: key-up pairing over a log, percentiles,
 //! the PTT state machine (talk key, Secure Event Input, Carbon chord), modifier-flag transitions,
 //! the ioreg text parsers, the CGEvent clock domain and the argument parser.
-//! The adapted Handy parts are `parse_secure_input_pid` and `parse_clamshell_ioreg`.
+//! The ioreg parsers adapted from Handy live in `secure_input.rs` and `clamshell.rs`.
+
+pub mod clamshell;
+pub mod secure_input;
+
+pub use clamshell::parse_clamshell_ioreg;
+pub use secure_input::parse_secure_input_pid;
 
 /// macOS virtual key code of Right Option (`kVK_RightOption`). D66 default talk key.
 pub const KVK_RIGHT_OPTION: i64 = 0x3D;
@@ -318,32 +323,6 @@ impl Ptt {
             _ => PttOut::Ignored,
         }
     }
-}
-
-/// The holder PID of Secure Event Input from `ioreg -l -w 0` text (`kCGSSessionSecureInputPID`).
-/// Best effort: Apple documents no reliable API, and the PID can be missing or wrong.
-pub fn parse_secure_input_pid(ioreg: &str) -> Option<i32> {
-    ioreg
-        .lines()
-        .find_map(|l| l.split("\"kCGSSessionSecureInputPID\"=").nth(1))?
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect::<String>()
-        .parse()
-        .ok()
-}
-
-/// `AppleClamshellState` from `ioreg -r -k AppleClamshellState -d 4` text. `None` if absent
-/// (for example a desktop Mac).
-pub fn parse_clamshell_ioreg(ioreg: &str) -> Option<bool> {
-    ioreg.lines().find_map(|l| {
-        let v = l.split("\"AppleClamshellState\" = ").nth(1)?.trim();
-        match v {
-            "Yes" => Some(true),
-            "No" => Some(false),
-            _ => None,
-        }
-    })
 }
 
 /// The clock of `CGEventGetTimestamp`.
