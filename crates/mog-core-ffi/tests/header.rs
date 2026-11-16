@@ -31,8 +31,9 @@ fn nfr_18a_c_header_matches_the_exported_abi() {
 
 #[test]
 fn nfr_18c_c_header_declares_every_abi_function() {
-    let header = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("include/mog_core.h"))
-        .unwrap_or_default();
+    let header =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("include/mog_core.h"))
+            .unwrap_or_default();
     for item in [
         "uint32_t mog_abi_version(void);",
         "int32_t mog_init(const char *config_json);",

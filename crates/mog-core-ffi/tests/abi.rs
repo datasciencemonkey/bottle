@@ -80,7 +80,10 @@ fn nfr_18a_mog_call_returns_not_implemented_through_r12() {
     let reply = call(Some(
         r#"{"command":"profiles_list","args":{"refresh":true}}"#,
     ));
-    assert_eq!(json(&reply), serde_json::json!({"error": "not_implemented"}));
+    assert_eq!(
+        json(&reply),
+        serde_json::json!({"error": "not_implemented"})
+    );
 }
 
 #[test]
@@ -92,13 +95,20 @@ fn nfr_18a_mog_call_with_null_returns_an_error_json() {
 fn nfr_18a_mog_call_with_invalid_utf8_returns_an_error_json() {
     init();
     let reply = call_raw(Some(b"{\"command\":\"\xff\xfe\",\"args\":{}}"));
-    assert_eq!(json(&reply), serde_json::json!({"error": "invalid_argument"}));
+    assert_eq!(
+        json(&reply),
+        serde_json::json!({"error": "invalid_argument"})
+    );
 }
 
 #[test]
 fn nfr_18a_mog_call_with_bad_json_returns_an_error_json() {
     for bad in ["not json", "[1]", "null", "", "{\"command\":1,\"args\":{}}"] {
-        assert_eq!(json(&call(Some(bad)))["error"], "invalid_json", "input {bad:?}");
+        assert_eq!(
+            json(&call(Some(bad)))["error"],
+            "invalid_json",
+            "input {bad:?}"
+        );
     }
 }
 
@@ -110,7 +120,11 @@ fn nfr_18a_mog_call_takes_only_command_and_args() {
         r#"{"args":{}}"#,
         r#"{"command":"cli_status","args":{},"headers":{}}"#,
     ] {
-        assert_eq!(json(&call(Some(bad)))["error"], "invalid_json", "input {bad}");
+        assert_eq!(
+            json(&call(Some(bad)))["error"],
+            "invalid_json",
+            "input {bad}"
+        );
     }
 }
 
@@ -218,7 +232,9 @@ fn sec_01_fuzzed_ffi_calls_return_json_without_secrets() {
         "mcp_call",
         "config_write",
     ];
-    let pieces = ["{", "}", "[", "]", ":", ",", "\"", "\\", "\\u0000", "null", "1e999"];
+    let pieces = [
+        "{", "}", "[", "]", ":", ",", "\"", "\\", "\\u0000", "null", "1e999",
+    ];
     let mut rng = XorShift(0x5EED_0176);
     for i in 0..2_000 {
         let secret = rng.pick(&secrets);
@@ -232,7 +248,10 @@ fn sec_01_fuzzed_ffi_calls_return_json_without_secrets() {
             _ => (0..8).map(|_| rng.pick(&pieces)).collect::<String>() + secret,
         };
         let reply = call(Some(&request));
-        assert!(json(&reply).is_object(), "reply is not a JSON object: {reply}");
+        assert!(
+            json(&reply).is_object(),
+            "reply is not a JSON object: {reply}"
+        );
         assert!(
             !looks_like_a_token(&reply),
             "reply echoes a secret: {reply}"
