@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-window-card-hide"
+description = "Enables the window_card_hide command without any pre-configured scope."
+commands.allow = ["window_card_hide"]
+
+[[permission]]
+identifier = "deny-window-card-hide"
+description = "Denies the window_card_hide command without any pre-configured scope."
+commands.deny = ["window_card_hide"]

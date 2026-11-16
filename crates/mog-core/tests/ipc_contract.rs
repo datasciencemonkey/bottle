@@ -130,7 +130,7 @@ fn arc_4_unknown_fields_are_rejected() {
 fn arc_4_valid_calls_reach_the_stub() {
     let err = ipc::handle("brain", "profile_status", json!({"profile": "bottle-dev"})).unwrap_err();
     assert!(
-        matches!(err, IpcError::NotImplemented { command } if command == "profile_status"),
+        matches!(&err, IpcError::NotImplemented { command } if command == "profile_status"),
         "{err:?}"
     );
     let err = ipc::handle("hub", "config_list", json!({})).unwrap_err();
@@ -153,7 +153,12 @@ fn arc_4_view_emit_mog_id_must_match_the_sending_window() {
         json!({"mogId": "a1", "kind": "poked"}),
     )
     .expect("own MOG id is accepted");
-    assert_eq!(ok, ipc::Handled::RelayToBrain { from: "mog-a1".into() });
+    assert_eq!(
+        ok,
+        ipc::Handled::RelayToBrain {
+            from: "mog-a1".into()
+        }
+    );
     let err = ipc::handle(
         "mog-a1",
         "view_emit",
@@ -161,9 +166,16 @@ fn arc_4_view_emit_mog_id_must_match_the_sending_window() {
     )
     .unwrap_err();
     assert!(matches!(err, IpcError::InvalidArgs { .. }), "{err:?}");
-    let err = ipc::handle("card-a1", "view_emit", json!({"mogId": "a1", "kind": "wave"}))
-        .unwrap_err();
-    assert!(matches!(err, IpcError::InvalidArgs { .. }), "unknown kind: {err:?}");
+    let err = ipc::handle(
+        "card-a1",
+        "view_emit",
+        json!({"mogId": "a1", "kind": "wave"}),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, IpcError::InvalidArgs { .. }),
+        "unknown kind: {err:?}"
+    );
     // The hub may emit for any MOG.
     assert!(ipc::handle("hub", "view_emit", json!({"mogId": "b2", "kind": "click"})).is_ok());
 }
@@ -247,12 +259,18 @@ fn arc_6_no_command_takes_a_url_token_or_header() {
     let schemas = ipc::schemas();
     for (name, schema) in &schemas {
         let text = schema.to_string().to_lowercase();
-        for banned in ["\"token\"", "\"authorization\"", "\"headers\"", "\"url\"", "\"host\""] {
+        for banned in [
+            "\"token\"",
+            "\"authorization\"",
+            "\"headers\"",
+            "\"url\"",
+            "\"host\"",
+        ] {
             assert!(!text.contains(banned), "{name} has a {banned} field");
         }
         // 4.5 profile_login takes the workspace URL that `databricks auth login --host` needs.
         // It is the only URL-like field (4.6 rule 1 covers request targets).
-        if name != "profile_login" {
+        if *name != "profile_login" {
             assert!(!text.contains("workspaceurl"), "{name} takes a URL");
         }
     }

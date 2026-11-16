@@ -18,3 +18,4 @@ AGENTS.md
 .github/workflows/
 scripts/
 src/shared/interfaces.ts
+src-tauri/schemas/

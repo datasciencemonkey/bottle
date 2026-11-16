@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-window-mog-close"
+description = "Enables the window_mog_close command without any pre-configured scope."
+commands.allow = ["window_mog_close"]
+
+[[permission]]
+identifier = "deny-window-mog-close"
+description = "Denies the window_mog_close command without any pre-configured scope."
+commands.deny = ["window_mog_close"]

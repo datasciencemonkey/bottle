@@ -32,7 +32,9 @@ impl IpcGateway for StubIpcGateway {
         _command: &str,
         _args: serde_json::Value,
     ) -> CoreResult<serde_json::Value> {
-        // TODO(#223): command table, schemas and per-window capability checks.
+        // The table, schemas and window checks are `crate::ipc::handle` (#223). The Tauri host
+        // calls it directly. TODO(#176): route the C ABI through it once the ABI decides the
+        // window class of an `ffi` caller (ADR 0003).
         Err(CoreError::NotImplemented { component: ID })
     }
 }

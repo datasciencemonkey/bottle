@@ -4,16 +4,27 @@ import { COMMANDS, EVENTS, type CommandName } from './ipc';
 
 const schemaDoc = JSON.parse(
   readFileSync(resolve(import.meta.dirname, '../../src-tauri/schemas/ipc-commands.json'), 'utf8'),
-) as { commands: { name: string; windows: string[]; phase: string }[]; events: { name: string; specName: string; direction: string }[] };
+) as {
+  commands: { name: string; windows: string[]; phase: string }[];
+  events: { name: string; specName: string; direction: string }[];
+};
 
 describe('IPC contract (TS side)', () => {
   it('[ARC-4] the TS command list equals the Rust table with the same windows', () => {
-    const ts = Object.entries(COMMANDS).map(([name, c]) => ({ name, windows: [...c.windows], phase: c.phase }));
+    const ts = Object.entries(COMMANDS).map(([name, c]) => ({
+      name,
+      windows: [...c.windows],
+      phase: c.phase,
+    }));
     expect(ts).toEqual(schemaDoc.commands);
   });
 
   it('[ARC-5] the TS event names equal the Rust event names', () => {
-    const ts = Object.entries(EVENTS).map(([specName, e]) => ({ name: e.name, specName, direction: e.direction }));
+    const ts = Object.entries(EVENTS).map(([specName, e]) => ({
+      name: e.name,
+      specName,
+      direction: e.direction,
+    }));
     expect(ts).toEqual(schemaDoc.events);
   });
 

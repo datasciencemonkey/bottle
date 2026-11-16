@@ -68,7 +68,10 @@ fn arc_4_build_script_registers_the_table_in_the_app_manifest() {
     let build = std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("build.rs"))
         .expect("build.rs");
     assert!(build.contains("app_manifest"), "commands must be ACL-gated");
-    assert!(build.contains("mog_core::ipc::COMMANDS"), "one source for the command list");
+    assert!(
+        build.contains("mog_core::ipc::COMMANDS"),
+        "one source for the command list"
+    );
 }
 
 #[test]
@@ -81,5 +84,8 @@ fn arc_4_schema_file_is_up_to_date() {
     }
     let committed = std::fs::read_to_string(&path)
         .expect("run with BOTTLE_UPDATE_SCHEMAS=1 to write src-tauri/schemas/ipc-commands.json");
-    assert_eq!(committed, generated, "schemas drifted: rerun with BOTTLE_UPDATE_SCHEMAS=1");
+    assert_eq!(
+        committed, generated,
+        "schemas drifted: rerun with BOTTLE_UPDATE_SCHEMAS=1"
+    );
 }

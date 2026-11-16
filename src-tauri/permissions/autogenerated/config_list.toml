@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-config-list"
+description = "Enables the config_list command without any pre-configured scope."
+commands.allow = ["config_list"]
+
+[[permission]]
+identifier = "deny-config-list"
+description = "Denies the config_list command without any pre-configured scope."
+commands.deny = ["config_list"]

@@ -12,6 +12,7 @@ pub mod cli_runner;
 pub mod error;
 pub mod hotkey;
 pub mod http_transport;
+pub mod ipc;
 pub mod ipc_gateway;
 #[cfg(feature = "lakebase")]
 pub mod lakebase_pool;

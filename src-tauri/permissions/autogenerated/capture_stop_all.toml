@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-capture-stop-all"
+description = "Enables the capture_stop_all command without any pre-configured scope."
+commands.allow = ["capture_stop_all"]
+
+[[permission]]
+identifier = "deny-capture-stop-all"
+description = "Denies the capture_stop_all command without any pre-configured scope."
+commands.deny = ["capture_stop_all"]

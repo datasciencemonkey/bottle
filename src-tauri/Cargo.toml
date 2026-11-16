@@ -13,6 +13,7 @@ name = "bottle_lib"
 crate-type = ["rlib"]
 
 [build-dependencies]
+mog-core.workspace = true
 tauri-build.workspace = true
 
 [dependencies]

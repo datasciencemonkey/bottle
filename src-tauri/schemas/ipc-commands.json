@@ -1,0 +1,1446 @@
+{
+  "$comment": "Generated from mog_core::ipc (#223). Do not edit; rerun the tests with BOTTLE_UPDATE_SCHEMAS=1.",
+  "arguments": {
+    "agent_send": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "mogId": {
+          "type": "string"
+        },
+        "turn": {
+          "additionalProperties": true,
+          "description": "`AgentTurn` of 4.7 (owned by #222 and the agent issues).",
+          "type": "object"
+        }
+      },
+      "required": [
+        "mogId",
+        "turn"
+      ],
+      "title": "AgentSendArgs",
+      "type": "object"
+    },
+    "agent_start": {
+      "$defs": {
+        "Harness": {
+          "enum": [
+            "claude",
+            "codex"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "harness": {
+          "$ref": "#/$defs/Harness"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mogId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "mogId",
+        "harness"
+      ],
+      "title": "AgentStartArgs",
+      "type": "object"
+    },
+    "agent_stop": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "mogId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "mogId"
+      ],
+      "title": "MogArgs",
+      "type": "object"
+    },
+    "agent_tool_result": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "callId": {
+          "type": "string"
+        },
+        "mogId": {
+          "type": "string"
+        },
+        "result": true
+      },
+      "required": [
+        "mogId",
+        "callId",
+        "result"
+      ],
+      "title": "AgentToolResultArgs",
+      "type": "object"
+    },
+    "audit_append": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "mogId": {
+          "type": "string"
+        },
+        "opId": {
+          "type": "string"
+        },
+        "sizes": {
+          "additionalProperties": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "description": "Content-free sizes, for example `{\"chars\": 120}`.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "kind",
+        "mogId",
+        "opId",
+        "sizes"
+      ],
+      "title": "AuditAppendArgs",
+      "type": "object"
+    },
+    "capture_pause": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "mogId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "mogId"
+      ],
+      "title": "MogArgs",
+      "type": "object"
+    },
+    "capture_start": {
+      "$defs": {
+        "CaptureMode": {
+          "enum": [
+            "ptt",
+            "hands_free",
+            "session"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "consentToken": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mode": {
+          "$ref": "#/$defs/CaptureMode"
+        },
+        "mogId": {
+          "type": "string"
+        },
+        "othersTrack": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "policy": {
+          "additionalProperties": true,
+          "description": "`SessionPolicy` of 4.7. TODO(#222): use the shared type.",
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "mogId",
+        "mode"
+      ],
+      "title": "CaptureStartArgs",
+      "type": "object"
+    },
+    "capture_status": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "No arguments.",
+      "title": "NoArgs",
+      "type": "object"
+    },
+    "capture_stop": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "mogId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "mogId"
+      ],
+      "title": "MogArgs",
+      "type": "object"
+    },
+    "capture_stop_all": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "No arguments.",
+      "title": "NoArgs",
+      "type": "object"
+    },
+    "capture_subscribe": {
+      "$defs": {
+        "ChannelRef": {
+          "description": "A Tauri `Channel` argument. On the wire it is the channel reference string.",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "onLevel": {
+          "$ref": "#/$defs/ChannelRef"
+        },
+        "onPartial": {
+          "$ref": "#/$defs/ChannelRef"
+        }
+      },
+      "required": [
+        "onLevel",
+        "onPartial"
+      ],
+      "title": "CaptureSubscribeArgs",
+      "type": "object"
+    },
+    "cli_install": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "consent": {
+          "description": "Must be `true`: the user gave consent (U16).",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "consent"
+      ],
+      "title": "CliInstallArgs",
+      "type": "object"
+    },
+    "cli_status": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "No arguments.",
+      "title": "NoArgs",
+      "type": "object"
+    },
+    "config_delete": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "ConfigIdArgs",
+      "type": "object"
+    },
+    "config_list": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "No arguments.",
+      "title": "NoArgs",
+      "type": "object"
+    },
+    "config_read": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "ConfigIdArgs",
+      "type": "object"
+    },
+    "config_write": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "json": {
+          "additionalProperties": true,
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "json"
+      ],
+      "title": "ConfigWriteArgs",
+      "type": "object"
+    },
+    "dbx_http": {
+      "$defs": {
+        "ChannelRef": {
+          "description": "A Tauri `Channel` argument. On the wire it is the channel reference string.",
+          "type": "string"
+        },
+        "RouteId": {
+          "description": "The fixed REST route IDs of 4.6. `dbx_http` takes only these, never a URL.",
+          "enum": [
+            "scim.me",
+            "genie.start_conversation",
+            "genie.message",
+            "genie.get_message",
+            "genie.query_result",
+            "genie.feedback",
+            "genie.download_viz",
+            "genie.delete_conversation",
+            "genie_one.list_conversations",
+            "genie_one.delete_conversation",
+            "apps.invocations",
+            "apps.events",
+            "apps.responses",
+            "knowledge.create_page",
+            "knowledge.get_page",
+            "knowledge.list_domains",
+            "knowledge.update_page",
+            "knowledge.request_publish",
+            "postgres.credentials"
+          ],
+          "type": "string"
+        },
+        "TagApp": {
+          "enum": [
+            "bottle"
+          ],
+          "type": "string"
+        },
+        "TagOp": {
+          "enum": [
+            "asr",
+            "cleanup",
+            "router",
+            "writer",
+            "judge",
+            "embed",
+            "genie",
+            "merge",
+            "agent",
+            "page"
+          ],
+          "type": "string"
+        },
+        "Tags": {
+          "additionalProperties": false,
+          "description": "Budget tags (4.7 `Tags`). TODO(#222): use the shared `types::Tags` once it lands.",
+          "properties": {
+            "app": {
+              "$ref": "#/$defs/TagApp"
+            },
+            "mog": {
+              "type": "string"
+            },
+            "op": {
+              "$ref": "#/$defs/TagOp"
+            }
+          },
+          "required": [
+            "app",
+            "mog",
+            "op"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "body": true,
+        "params": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "routeId": {
+          "$ref": "#/$defs/RouteId"
+        },
+        "stream": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChannelRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tags": {
+          "$ref": "#/$defs/Tags"
+        }
+      },
+      "required": [
+        "profile",
+        "routeId",
+        "params",
+        "tags"
+      ],
+      "title": "DbxHttpArgs",
+      "type": "object"
+    },
+    "hotkeys_set": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "bindings": {
+          "additionalProperties": true,
+          "type": "object"
+        }
+      },
+      "required": [
+        "bindings"
+      ],
+      "title": "HotkeysSetArgs",
+      "type": "object"
+    },
+    "insert_text": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "mogId": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "mogId",
+        "text"
+      ],
+      "title": "InsertTextArgs",
+      "type": "object"
+    },
+    "mcp_call": {
+      "$defs": {
+        "McpServer": {
+          "enum": [
+            "genie_one"
+          ],
+          "type": "string"
+        },
+        "TagApp": {
+          "enum": [
+            "bottle"
+          ],
+          "type": "string"
+        },
+        "TagOp": {
+          "enum": [
+            "asr",
+            "cleanup",
+            "router",
+            "writer",
+            "judge",
+            "embed",
+            "genie",
+            "merge",
+            "agent",
+            "page"
+          ],
+          "type": "string"
+        },
+        "Tags": {
+          "additionalProperties": false,
+          "description": "Budget tags (4.7 `Tags`). TODO(#222): use the shared `types::Tags` once it lands.",
+          "properties": {
+            "app": {
+              "$ref": "#/$defs/TagApp"
+            },
+            "mog": {
+              "type": "string"
+            },
+            "op": {
+              "$ref": "#/$defs/TagOp"
+            }
+          },
+          "required": [
+            "app",
+            "mog",
+            "op"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "args": {
+          "additionalProperties": true,
+          "description": "Tool arguments. R8 strips any `profile` key before it forwards them (4.6 rule 5).",
+          "type": "object"
+        },
+        "meta": {
+          "additionalProperties": true,
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "opId": {
+          "type": "string"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "server": {
+          "$ref": "#/$defs/McpServer"
+        },
+        "tags": {
+          "$ref": "#/$defs/Tags"
+        },
+        "timeoutMs": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "tool": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile",
+        "server",
+        "tool",
+        "args",
+        "opId",
+        "tags"
+      ],
+      "title": "McpCallArgs",
+      "type": "object"
+    },
+    "mem_local_exec": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "params": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "stmtId": {
+          "description": "A statement ID of the fixed catalog (R9, R10). Never SQL text.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "stmtId",
+        "params"
+      ],
+      "title": "MemExecArgs",
+      "type": "object"
+    },
+    "mem_remote_exec": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "params": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "stmtId": {
+          "description": "A statement ID of the fixed catalog (R9, R10). Never SQL text.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "stmtId",
+        "params"
+      ],
+      "title": "MemExecArgs",
+      "type": "object"
+    },
+    "mem_remote_status": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "No arguments.",
+      "title": "NoArgs",
+      "type": "object"
+    },
+    "model_invoke": {
+      "$defs": {
+        "ModelRole": {
+          "enum": [
+            "cleanup",
+            "router",
+            "writer",
+            "judge",
+            "embed",
+            "merge"
+          ],
+          "type": "string"
+        },
+        "TagApp": {
+          "enum": [
+            "bottle"
+          ],
+          "type": "string"
+        },
+        "TagOp": {
+          "enum": [
+            "asr",
+            "cleanup",
+            "router",
+            "writer",
+            "judge",
+            "embed",
+            "genie",
+            "merge",
+            "agent",
+            "page"
+          ],
+          "type": "string"
+        },
+        "Tags": {
+          "additionalProperties": false,
+          "description": "Budget tags (4.7 `Tags`). TODO(#222): use the shared `types::Tags` once it lands.",
+          "properties": {
+            "app": {
+              "$ref": "#/$defs/TagApp"
+            },
+            "mog": {
+              "type": "string"
+            },
+            "op": {
+              "$ref": "#/$defs/TagOp"
+            }
+          },
+          "required": [
+            "app",
+            "mog",
+            "op"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "deadlineMs": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "profile": {
+          "type": "string"
+        },
+        "request": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "role": {
+          "$ref": "#/$defs/ModelRole"
+        },
+        "tags": {
+          "$ref": "#/$defs/Tags"
+        }
+      },
+      "required": [
+        "role",
+        "profile",
+        "request",
+        "tags"
+      ],
+      "title": "ModelInvokeArgs",
+      "type": "object"
+    },
+    "mog_set_active": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "mogId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "mogId"
+      ],
+      "title": "MogArgs",
+      "type": "object"
+    },
+    "policy_get": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "No arguments.",
+      "title": "NoArgs",
+      "type": "object"
+    },
+    "profile_login": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "clientId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "profile": {
+          "type": "string"
+        },
+        "workspaceUrl": {
+          "description": "The workspace that `databricks auth login --host` opens. Not a request target.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceUrl",
+        "profile"
+      ],
+      "title": "ProfileLoginArgs",
+      "type": "object"
+    },
+    "profile_select": {
+      "$defs": {
+        "SelectScope": {
+          "enum": [
+            "question",
+            "session"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "mogId": {
+          "type": "string"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/SelectScope"
+        }
+      },
+      "required": [
+        "mogId",
+        "profile",
+        "scope"
+      ],
+      "title": "ProfileSelectArgs",
+      "type": "object"
+    },
+    "profile_status": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile"
+      ],
+      "title": "ProfileArgs",
+      "type": "object"
+    },
+    "profiles_list": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "refresh": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "title": "ProfilesListArgs",
+      "type": "object"
+    },
+    "session_attest": {
+      "$defs": {
+        "AttestKind": {
+          "enum": [
+            "only_me",
+            "others_agreed"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/AttestKind"
+        },
+        "mogId": {
+          "type": "string"
+        },
+        "noticeVersion": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "mogId",
+        "kind",
+        "noticeVersion"
+      ],
+      "title": "SessionAttestArgs",
+      "type": "object"
+    },
+    "stt_transcribe": {
+      "$defs": {
+        "SttProviderKind": {
+          "enum": [
+            "local_parakeet",
+            "dbx_gemini",
+            "dbx_whisper"
+          ],
+          "type": "string"
+        },
+        "TagApp": {
+          "enum": [
+            "bottle"
+          ],
+          "type": "string"
+        },
+        "TagOp": {
+          "enum": [
+            "asr",
+            "cleanup",
+            "router",
+            "writer",
+            "judge",
+            "embed",
+            "genie",
+            "merge",
+            "agent",
+            "page"
+          ],
+          "type": "string"
+        },
+        "Tags": {
+          "additionalProperties": false,
+          "description": "Budget tags (4.7 `Tags`). TODO(#222): use the shared `types::Tags` once it lands.",
+          "properties": {
+            "app": {
+              "$ref": "#/$defs/TagApp"
+            },
+            "mog": {
+              "type": "string"
+            },
+            "op": {
+              "$ref": "#/$defs/TagOp"
+            }
+          },
+          "required": [
+            "app",
+            "mog",
+            "op"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "language": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "profile": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider": {
+          "$ref": "#/$defs/SttProviderKind"
+        },
+        "segmentId": {
+          "type": "string"
+        },
+        "tags": {
+          "$ref": "#/$defs/Tags"
+        }
+      },
+      "required": [
+        "segmentId",
+        "provider",
+        "tags"
+      ],
+      "title": "SttTranscribeArgs",
+      "type": "object"
+    },
+    "telemetry_span": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "attrs": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "default": {},
+          "description": "Content-free attributes only.",
+          "type": "object"
+        },
+        "endMs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "startMs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "startMs",
+        "endMs"
+      ],
+      "title": "TelemetrySpanArgs",
+      "type": "object"
+    },
+    "view_emit": {
+      "$defs": {
+        "ViewEmitKind": {
+          "enum": [
+            "poked",
+            "hover",
+            "drag_end",
+            "chip_click",
+            "cancel",
+            "expand",
+            "click"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ViewEmitKind"
+        },
+        "mogId": {
+          "type": "string"
+        },
+        "payload": true
+      },
+      "required": [
+        "mogId",
+        "kind"
+      ],
+      "title": "ViewEmitArgs",
+      "type": "object"
+    },
+    "window_card_hide": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "mogId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "mogId"
+      ],
+      "title": "MogArgs",
+      "type": "object"
+    },
+    "window_card_show": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "mogId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "mogId"
+      ],
+      "title": "MogArgs",
+      "type": "object"
+    },
+    "window_mog_close": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "mogId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "mogId"
+      ],
+      "title": "MogArgs",
+      "type": "object"
+    },
+    "window_mog_open": {
+      "$defs": {
+        "Geometry": {
+          "additionalProperties": false,
+          "properties": {
+            "height": {
+              "format": "double",
+              "type": "number"
+            },
+            "width": {
+              "format": "double",
+              "type": "number"
+            },
+            "x": {
+              "format": "double",
+              "type": "number"
+            },
+            "y": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "x",
+            "y",
+            "width",
+            "height"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "geometry": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Geometry"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mogId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "mogId"
+      ],
+      "title": "WindowMogOpenArgs",
+      "type": "object"
+    }
+  },
+  "commands": [
+    {
+      "name": "cli_status",
+      "phase": "MVP-D",
+      "windows": [
+        "brain",
+        "hub"
+      ]
+    },
+    {
+      "name": "cli_install",
+      "phase": "MVP-D",
+      "windows": [
+        "brain",
+        "hub"
+      ]
+    },
+    {
+      "name": "profiles_list",
+      "phase": "MVP-D",
+      "windows": [
+        "brain",
+        "hub"
+      ]
+    },
+    {
+      "name": "profile_status",
+      "phase": "MVP-D",
+      "windows": [
+        "brain",
+        "hub"
+      ]
+    },
+    {
+      "name": "profile_login",
+      "phase": "MVP-D",
+      "windows": [
+        "brain",
+        "hub"
+      ]
+    },
+    {
+      "name": "profile_select",
+      "phase": "MVP-D",
+      "windows": [
+        "brain",
+        "hub"
+      ]
+    },
+    {
+      "name": "capture_start",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "capture_stop",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "capture_pause",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "capture_status",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "capture_stop_all",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "capture_subscribe",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "session_attest",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "stt_transcribe",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "insert_text",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "agent_start",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "agent_stop",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "agent_send",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "agent_tool_result",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "model_invoke",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "mcp_call",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "dbx_http",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "mem_local_exec",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "mem_remote_exec",
+      "phase": "v1",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "mem_remote_status",
+      "phase": "v1",
+      "windows": [
+        "brain",
+        "hub"
+      ]
+    },
+    {
+      "name": "config_list",
+      "phase": "MVP-D",
+      "windows": [
+        "brain",
+        "hub"
+      ]
+    },
+    {
+      "name": "config_read",
+      "phase": "MVP-D",
+      "windows": [
+        "brain",
+        "hub"
+      ]
+    },
+    {
+      "name": "config_write",
+      "phase": "MVP-D",
+      "windows": [
+        "brain",
+        "hub"
+      ]
+    },
+    {
+      "name": "config_delete",
+      "phase": "MVP-D",
+      "windows": [
+        "brain",
+        "hub"
+      ]
+    },
+    {
+      "name": "policy_get",
+      "phase": "MVP-D",
+      "windows": [
+        "brain",
+        "hub"
+      ]
+    },
+    {
+      "name": "hotkeys_set",
+      "phase": "MVP-D",
+      "windows": [
+        "brain",
+        "hub"
+      ]
+    },
+    {
+      "name": "mog_set_active",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "window_mog_open",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "window_mog_close",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "window_card_show",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "window_card_hide",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "view_emit",
+      "phase": "MVP-D",
+      "windows": [
+        "hub",
+        "mog",
+        "card"
+      ]
+    },
+    {
+      "name": "audit_append",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "telemetry_span",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    }
+  ],
+  "events": [
+    {
+      "direction": "core_to_brain",
+      "name": "hotkey:ptt",
+      "specName": "hotkey.ptt"
+    },
+    {
+      "direction": "core_to_brain",
+      "name": "hotkey:panic",
+      "specName": "hotkey.panic"
+    },
+    {
+      "direction": "core_to_brain",
+      "name": "capture:state",
+      "specName": "capture.state"
+    },
+    {
+      "direction": "core_to_brain",
+      "name": "capture:segment",
+      "specName": "capture.segment"
+    },
+    {
+      "direction": "core_to_brain",
+      "name": "session:stop_signal",
+      "specName": "session.stop_signal"
+    },
+    {
+      "direction": "core_to_brain",
+      "name": "auth:status",
+      "specName": "auth.status"
+    },
+    {
+      "direction": "core_to_brain",
+      "name": "net:status",
+      "specName": "net.status"
+    },
+    {
+      "direction": "core_to_brain",
+      "name": "mem:remote_status",
+      "specName": "mem.remote_status"
+    },
+    {
+      "direction": "core_to_brain",
+      "name": "agent:tool_call",
+      "specName": "agent.tool_call"
+    },
+    {
+      "direction": "core_to_brain",
+      "name": "agent:status",
+      "specName": "agent.status"
+    },
+    {
+      "direction": "brain_to_view",
+      "name": "mog:view_state",
+      "specName": "mog.view_state"
+    },
+    {
+      "direction": "brain_to_view",
+      "name": "card:update",
+      "specName": "card.update"
+    },
+    {
+      "direction": "core_to_brain",
+      "name": "view:input",
+      "specName": "view.input"
+    }
+  ]
+}

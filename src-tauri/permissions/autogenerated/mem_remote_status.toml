@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-mem-remote-status"
+description = "Enables the mem_remote_status command without any pre-configured scope."
+commands.allow = ["mem_remote_status"]
+
+[[permission]]
+identifier = "deny-mem-remote-status"
+description = "Denies the mem_remote_status command without any pre-configured scope."
+commands.deny = ["mem_remote_status"]
