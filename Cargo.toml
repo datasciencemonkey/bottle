@@ -19,6 +19,8 @@ windows-sys = "0.61"
 # NFR-14a / D32 / U1: Tauri 2.12.5 or later. The lockfile check belongs to #169.
 tauri = { version = "2.12.5", features = [] }
 tauri-build = { version = "2.7", features = [] }
+# ARC-7: the OS RNG for the per-session loopback secret (#224).
+getrandom = "0.3"
 # Tests only: the glob matcher that Tauri uses for capability window labels.
 glob = "0.3.3"
 
