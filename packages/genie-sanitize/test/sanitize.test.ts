@@ -106,13 +106,68 @@ describe('sanitizeQuestion', () => {
   });
 });
 
+describe('sanitizeQuestion on CommonMark link edge cases', () => {
+  const EVIL = 'https://evil.invalid';
+
+  it('[G-47] removes an inline link with balanced parentheses in the URL', () => {
+    const out = sanitizeQuestion('see [x](http://evil.invalid/(foo)) now');
+    expect(out).toBe('see x now');
+    expect(out).not.toContain('evil.invalid');
+  });
+
+  it('[G-47] removes an inline link with parentheses in the title', () => {
+    const out = sanitizeQuestion(`see [x](${EVIL}/a "t (b)") now`);
+    expect(out).toBe('see x now');
+    expect(out).not.toContain('evil.invalid');
+  });
+
+  it('[G-47] removes an inline link whose title holds an unbalanced parenthesis', () => {
+    const out = sanitizeQuestion(`see [x](${EVIL}/a "t (") now`);
+    expect(out).not.toContain('evil.invalid');
+    expect(out).not.toContain('](');
+  });
+
+  it('[G-47] removes an inline link with balanced brackets in the link text', () => {
+    const out = sanitizeQuestion(`see [a[b]](${EVIL}) now`);
+    expect(out).toBe('see a[b] now');
+    expect(out).not.toContain('evil.invalid');
+  });
+
+  it('[G-47] removes an image with brackets in the alt text and an angle-bracket destination', () => {
+    const out = sanitizeQuestion(`see ![a [b] c](<${EVIL}/x y.png>) now`);
+    expect(out).toBe('see a [b] c now');
+    expect(out).not.toContain('evil.invalid');
+  });
+
+  it('[G-47] removes nested links', () => {
+    const out = sanitizeQuestion(`[[in](${EVIL}/1)](${EVIL}/2)`);
+    expect(out).toBe('in');
+  });
+
+  it('[G-47] removes reference links and definitions whose labels hold nested brackets', () => {
+    const out = sanitizeQuestion(`read [x][a[b]] now\n[a[b]]: ${EVIL}`);
+    expect(out).toBe('read x now');
+    expect(out).not.toContain('evil.invalid');
+  });
+
+  it('[G-47] removes a reference definition whose URL is on the next line', () => {
+    const out = sanitizeQuestion(`read [x][r] now\n  [r]:\n  ${EVIL}/next "t"`);
+    expect(out).toBe('read x now');
+    expect(out).not.toContain('evil.invalid');
+  });
+
+  it('[G-47] keeps plain brackets and parentheses that do not form a link', () => {
+    expect(sanitizeQuestion('regions [EMEA] and (APAC) in Q3')).toBe('regions [EMEA] and (APAC) in Q3');
+  });
+});
+
 describe('sanitizeQuestion on hostile input', () => {
   it('[G-47] removes an unclosed script element to the end of the text', () => {
     expect(sanitizeQuestion('ask <script>alert(1) and more')).toBe('ask');
   });
 
   it('[G-47] runs in linear time on long runs of unclosed markup', () => {
-    for (const unit of ['<script>', '[a](', '<!--', '<a ', '[x][']) {
+    for (const unit of ['<script>', '[a](', '<!--', '<a ', '[x][', '[', '](', '[a](<', '[a](x "']) {
       const t = Date.now();
       const out = sanitizeQuestion(unit.repeat(20_000));
       expect(Date.now() - t).toBeLessThan(500);
