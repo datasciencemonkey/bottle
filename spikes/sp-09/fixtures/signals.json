@@ -1,0 +1,19 @@
+{
+  "_note": "Data-driven signal rules for SP-09 (#29). Edit after the live run; do not hard-code new texts in Rust. Busy text source: live probe 2026-11-14 (research/message-board.md, D56). The clarify rule is G-22. Unknown: whether Genie One also sends an explicit clarify field; list candidate field names in explicit_fields after the live run.",
+  "busy": [
+    {
+      "id": "busy-stream-closed",
+      "contains": "stream closed before response.created",
+      "sources": ["json_rpc_error", "is_error", "http_body"]
+    }
+  ],
+  "clarify": {
+    "status_field": "status",
+    "completed_value": "completed",
+    "answer_field": "final_answer",
+    "query_items_field": "query_items",
+    "max_chars": 400,
+    "ends_with": "?",
+    "explicit_fields": []
+  }
+}
