@@ -71,6 +71,12 @@ uv run --no-project --with pytest pytest scripts/tests -q   # when scripts/tests
 - An independent reviewer agent posts a PR comment whose first line is `REVIEW: APPROVED` or `REVIEW: CHANGES REQUESTED`.
 - Merge only with all CI checks green and `REVIEW: APPROVED`. Squash merge and delete the branch.
 
+## Third-party code and licences
+
+- When you add, port or adapt third-party code, update `THIRD_PARTY_NOTICES.md` in the same PR.
+- Follow the "How to add an entry" steps at the top of that file.
+- The About screen shows the file text. `pnpm test` checks the notices and the file headers (SEC-21a, SEC-21b).
+
 ## Never commit
 
 Secrets, `.databrickscfg`, `.env*`, `*.pem`, `*.key`, `build/`, `*.riv`. Tokens come only from `databricks auth token --profile <p>` at run time.

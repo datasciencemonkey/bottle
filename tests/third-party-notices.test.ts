@@ -141,12 +141,21 @@ function adaptedFiles(handyBody: string): Map<string, string> {
 
 describe('section 20.1 parse (guards the checks below)', () => {
   it('[SEC-21b] reads the MIT header, the component rows and the Parakeet sentence', () => {
-    expect(MIT_HEADER.startsWith('MIT License\n\nCopyright (c) 2026 Sathish Gangichetty')).toBe(true);
+    expect(MIT_HEADER.startsWith('MIT License\n\nCopyright (c) 2026 Sathish Gangichetty')).toBe(
+      true,
+    );
     expect(MIT_HEADER.endsWith('SOFTWARE.')).toBe(true);
     expect(REQ_ROWS.length).toBeGreaterThanOrEqual(8);
-    expect(PARAKEET).toMatch(/^Speech recognition uses NVIDIA Parakeet TDT 0\.6B v3 .*int8 quantisation\.$/);
+    expect(PARAKEET).toMatch(
+      /^Speech recognition uses NVIDIA Parakeet TDT 0\.6B v3 .*int8 quantisation\.$/,
+    );
     expect(REQ_ROWS.flatMap((r) => componentNames(r.component))).toEqual(
-      expect.arrayContaining(['Tauri', 'tauri-nspanel', 'tauri-plugin-global-shortcut', 'Rive runtimes']),
+      expect.arrayContaining([
+        'Tauri',
+        'tauri-nspanel',
+        'tauri-plugin-global-shortcut',
+        'Rive runtimes',
+      ]),
     );
   });
 });
@@ -185,7 +194,9 @@ describe('THIRD_PARTY_NOTICES.md', () => {
   });
 
   it('[SEC-21a] [SEC-21b] the antigravity-bricks-plugin MIT header matches section 20.1', () => {
-    const body = [...sections(notices())].find(([h]) => h.startsWith('antigravity-bricks-plugin ('));
+    const body = [...sections(notices())].find(([h]) =>
+      h.startsWith('antigravity-bricks-plugin ('),
+    );
     expect(body).toBeDefined();
     expect(textBlocks(body?.[1] ?? '')).toContain(MIT_HEADER);
   });
@@ -231,10 +242,12 @@ describe('ported and adapted file headers', () => {
     const commented = MIT_HEADER.split('\n')
       .map((l) => (l ? `// ${l}` : '//'))
       .join('\n');
-    expect(portedFileProblem(`// ${PORTED_MARKER}\n${commented}\nfn x() {}\n`, MIT_HEADER)).toBeNull();
-    expect(portedFileProblem(`// ${PORTED_MARKER}\n// MIT License\nfn x() {}\n`, MIT_HEADER)).toMatch(
-      /lacks/,
-    );
+    expect(
+      portedFileProblem(`// ${PORTED_MARKER}\n${commented}\nfn x() {}\n`, MIT_HEADER),
+    ).toBeNull();
+    expect(
+      portedFileProblem(`// ${PORTED_MARKER}\n// MIT License\nfn x() {}\n`, MIT_HEADER),
+    ).toMatch(/lacks/);
     expect(portedFileProblem('fn x() {}\n', MIT_HEADER)).toBeNull();
   });
 
