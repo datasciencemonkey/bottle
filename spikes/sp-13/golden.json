@@ -1,0 +1,4002 @@
+[
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g000",
+  "speaker_track": "you",
+  "text": "what was pipeline in North America last week"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g001",
+  "speaker_track": "you",
+  "text": "what was pipeline in North America in March"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g002",
+  "speaker_track": "you",
+  "text": "which product line had the highest pipeline last quarter"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g003",
+  "speaker_track": "you",
+  "text": "which product line had the highest net retention this year"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g004",
+  "speaker_track": "you",
+  "text": "show me pipeline by product line year to date"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g005",
+  "speaker_track": "you",
+  "text": "what was gross margin in the west region year to date"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g006",
+  "speaker_track": "you",
+  "text": "show me bookings by segment last quarter"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g007",
+  "speaker_track": "you",
+  "text": "which product line had the highest gross margin last quarter"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g008",
+  "speaker_track": "you",
+  "text": "how many new customers did we get in EMEA in March"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g009",
+  "speaker_track": "you",
+  "text": "which product line had the highest churn rate in March"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g010",
+  "speaker_track": "you",
+  "text": "what was net retention in LATAM year to date"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g011",
+  "speaker_track": "you",
+  "text": "show me pipeline by sales rep this year"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g012",
+  "speaker_track": "you",
+  "text": "compare bookings for APAC in March with the year before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g013",
+  "speaker_track": "you",
+  "text": "compare revenue for North America year to date with the year before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g014",
+  "speaker_track": "you",
+  "text": "compare gross margin for APAC in March with the year before"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g015",
+  "speaker_track": "you",
+  "text": "compare churn rate for LATAM last quarter with the year before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g016",
+  "speaker_track": "you",
+  "text": "compare churn rate for EMEA last week with the year before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g017",
+  "speaker_track": "you",
+  "text": "compare pipeline for EMEA in March with the year before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g018",
+  "speaker_track": "you",
+  "text": "what was average order value in EMEA last quarter"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g019",
+  "speaker_track": "you",
+  "text": "show me bookings by channel in March"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g020",
+  "speaker_track": "you",
+  "text": "which sales rep had the highest gross margin in March"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g021",
+  "speaker_track": "you",
+  "text": "compare revenue for APAC last quarter with the year before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g022",
+  "speaker_track": "you",
+  "text": "compare churn rate for North America last week with the year before"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g023",
+  "speaker_track": "you",
+  "text": "compare revenue for APAC last week with the year before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g024",
+  "speaker_track": "you",
+  "text": "compare churn rate for North America in March with the year before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g025",
+  "speaker_track": "you",
+  "text": "compare net retention for APAC year to date with the year before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g026",
+  "speaker_track": "you",
+  "text": "which product line had the highest churn rate last week"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g027",
+  "speaker_track": "you",
+  "text": "which product line had the highest bookings last quarter"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g028",
+  "speaker_track": "you",
+  "text": "which segment had the highest bookings this year"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g029",
+  "speaker_track": "you",
+  "text": "compare churn rate for APAC this year with the year before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g030",
+  "speaker_track": "you",
+  "text": "what was average order value in EMEA last week"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g031",
+  "speaker_track": "you",
+  "text": "what was bookings in LATAM this year"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g032",
+  "speaker_track": "you",
+  "text": "what was pipeline in EMEA last quarter"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g033",
+  "speaker_track": "you",
+  "text": "what was pipeline in the west region last week"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g034",
+  "speaker_track": "you",
+  "text": "compare churn rate for EMEA last quarter with the year before"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g035",
+  "speaker_track": "you",
+  "text": "which channel had the highest gross margin last week"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g036",
+  "speaker_track": "you",
+  "text": "what was bookings in APAC this year"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g037",
+  "speaker_track": "you",
+  "text": "show me net retention by product line year to date"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g038",
+  "speaker_track": "you",
+  "text": "what was gross margin in APAC in March"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g039",
+  "speaker_track": "you",
+  "text": "show me revenue by product line last quarter"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g040",
+  "speaker_track": "you",
+  "text": "compare gross margin for the west region last week with the year before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g041",
+  "speaker_track": "you",
+  "text": "what was churn rate in North America last week"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g042",
+  "speaker_track": "you",
+  "text": "what was net retention in North America last week"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g043",
+  "speaker_track": "you",
+  "text": "compare pipeline for EMEA this year with the year before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g044",
+  "speaker_track": "you",
+  "text": "what was churn rate in APAC last week"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g045",
+  "speaker_track": "you",
+  "text": "how many orders did we get in LATAM year to date"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g046",
+  "speaker_track": "you",
+  "text": "compare revenue for EMEA year to date with the year before"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g047",
+  "speaker_track": "you",
+  "text": "compare bookings for the west region last week with the year before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g048",
+  "speaker_track": "you",
+  "text": "compare average order value for EMEA last quarter with the year before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g049",
+  "speaker_track": "you",
+  "text": "compare net retention for APAC in March with the year before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g050",
+  "speaker_track": "you",
+  "text": "what was gross margin in EMEA year to date"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g051",
+  "speaker_track": "you",
+  "text": "which segment had the highest revenue last week"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g052",
+  "speaker_track": "you",
+  "text": "how many support tickets did we get in North America year to date"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g053",
+  "speaker_track": "you",
+  "text": "show me churn rate by channel in March"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g054",
+  "speaker_track": "you",
+  "text": "how many new customers did we get in LATAM year to date"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g055",
+  "speaker_track": "you",
+  "text": "compare average order value for LATAM year to date with the year before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g056",
+  "speaker_track": "you",
+  "text": "what was churn rate in EMEA last quarter"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g057",
+  "speaker_track": "you",
+  "text": "show me gross margin by product line last quarter"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g058",
+  "speaker_track": "you",
+  "text": "what was bookings in North America in March"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g059",
+  "speaker_track": "you",
+  "text": "what was revenue in EMEA in March"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g060",
+  "speaker_track": "you",
+  "text": "which sales rep had the highest average order value year to date"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g061",
+  "speaker_track": "you",
+  "text": "show me net retention by segment last quarter"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g062",
+  "speaker_track": "you",
+  "text": "compare gross margin for LATAM last week with the year before"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g063",
+  "speaker_track": "you",
+  "text": "compare bookings for North America year to date with the year before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g064",
+  "speaker_track": "you",
+  "text": "what was revenue in APAC this year"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g065",
+  "speaker_track": "you",
+  "text": "show me pipeline by channel last quarter"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g066",
+  "speaker_track": "you",
+  "text": "compare churn rate for LATAM last week with the year before"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g067",
+  "speaker_track": "you",
+  "text": "how many support tickets did we get in APAC last week"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g068",
+  "speaker_track": "you",
+  "text": "show me churn rate by segment last quarter"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g069",
+  "speaker_track": "you",
+  "text": "which segment had the highest pipeline this year"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g070",
+  "speaker_track": "you",
+  "text": "which channel had the highest churn rate this year"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g071",
+  "speaker_track": "you",
+  "text": "show me gross margin by channel this year"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g072",
+  "speaker_track": "you",
+  "text": "compare revenue for LATAM year to date with the year before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g073",
+  "speaker_track": "you",
+  "text": "what was bookings in North America year to date"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g074",
+  "speaker_track": "you",
+  "text": "what was net retention in LATAM last quarter"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g075",
+  "speaker_track": "you",
+  "text": "how many orders did we get in EMEA in March"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g076",
+  "speaker_track": "you",
+  "text": "which sales rep had the highest net retention this year"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g077",
+  "speaker_track": "you",
+  "text": "show me churn rate by sales rep year to date"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g078",
+  "speaker_track": "you",
+  "text": "what was net retention in the west region year to date"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g079",
+  "speaker_track": "you",
+  "text": "how many support tickets did we get in EMEA last week"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g080",
+  "speaker_track": "you",
+  "text": "compare average order value for LATAM last week with the year before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g081",
+  "speaker_track": "you",
+  "text": "compare revenue for EMEA this year with the year before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g082",
+  "speaker_track": "you",
+  "text": "compare gross margin for the west region in March with the year before"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g083",
+  "speaker_track": "you",
+  "text": "show me average order value by sales rep this year"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g084",
+  "speaker_track": "you",
+  "text": "how many orders did we get in LATAM this year"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g085",
+  "speaker_track": "you",
+  "text": "compare pipeline for APAC last week with the year before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g086",
+  "speaker_track": "you",
+  "text": "what was revenue in North America year to date"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g087",
+  "speaker_track": "you",
+  "text": "how many trial signups did we get in LATAM in March"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g088",
+  "speaker_track": "you",
+  "text": "what was churn rate in EMEA last week"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g089",
+  "speaker_track": "you",
+  "text": "what was gross margin in North America last quarter"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g090",
+  "speaker_track": "you",
+  "text": "show me bookings by sales rep this year"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g091",
+  "speaker_track": "you",
+  "text": "how many new customers did we get in the west region this year"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g092",
+  "speaker_track": "you",
+  "text": "which product line had the highest average order value in March"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g093",
+  "speaker_track": "you",
+  "text": "which segment had the highest bookings year to date"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g094",
+  "speaker_track": "you",
+  "text": "what was gross margin in APAC last quarter"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g095",
+  "speaker_track": "you",
+  "text": "how many new customers did we get in North America last week"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g096",
+  "speaker_track": "you",
+  "text": "which sales rep had the highest net retention year to date"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g097",
+  "speaker_track": "you",
+  "text": "which sales rep had the highest pipeline last quarter"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g098",
+  "speaker_track": "you",
+  "text": "which channel had the highest revenue in March"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g099",
+  "speaker_track": "you",
+  "text": "show me average order value by sales rep year to date"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g100",
+  "speaker_track": "you",
+  "text": "which product line had the highest bookings this year"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g101",
+  "speaker_track": "you",
+  "text": "which channel had the highest bookings last quarter"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g102",
+  "speaker_track": "you",
+  "text": "compare gross margin for North America year to date with the year before"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g103",
+  "speaker_track": "you",
+  "text": "show me pipeline by sales rep year to date"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g104",
+  "speaker_track": "you",
+  "text": "what was revenue in LATAM last week"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g105",
+  "speaker_track": "you",
+  "text": "which channel had the highest average order value this year"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g106",
+  "speaker_track": "you",
+  "text": "what was gross margin in APAC this year"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g107",
+  "speaker_track": "you",
+  "text": "compare net retention for North America last quarter with the year before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g108",
+  "speaker_track": "you",
+  "text": "how many trial signups did we get in LATAM this year"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g109",
+  "speaker_track": "you",
+  "text": "show me pipeline by channel in March"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g110",
+  "speaker_track": "you",
+  "text": "what was bookings in North America this year"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g111",
+  "speaker_track": "you",
+  "text": "compare average order value for APAC year to date with the year before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g112",
+  "speaker_track": "you",
+  "text": "what was revenue in APAC in March"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g113",
+  "speaker_track": "you",
+  "text": "what was revenue in EMEA this year"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g114",
+  "speaker_track": "you",
+  "text": "which segment had the highest average order value last quarter"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g115",
+  "speaker_track": "you",
+  "text": "show me bookings by channel year to date"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g116",
+  "speaker_track": "you",
+  "text": "what was churn rate in APAC last quarter"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g117",
+  "speaker_track": "you",
+  "text": "which sales rep had the highest pipeline last week"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g118",
+  "speaker_track": "you",
+  "text": "what was net retention in EMEA last quarter"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g119",
+  "speaker_track": "you",
+  "text": "compare bookings for North America this year with the year before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g120",
+  "speaker_track": "you",
+  "text": "what was pipeline in APAC in March"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g121",
+  "speaker_track": "you",
+  "text": "what was gross margin in APAC year to date"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g122",
+  "speaker_track": "you",
+  "text": "which product line had the highest revenue this year"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g123",
+  "speaker_track": "you",
+  "text": "what was revenue in LATAM this year"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g124",
+  "speaker_track": "you",
+  "text": "compare bookings for LATAM last quarter with the year before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g125",
+  "speaker_track": "you",
+  "text": "show me pipeline by channel this year"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g126",
+  "speaker_track": "you",
+  "text": "which sales rep had the highest churn rate last quarter"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g127",
+  "speaker_track": "you",
+  "text": "which sales rep had the highest churn rate year to date"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g128",
+  "speaker_track": "you",
+  "text": "show me bookings by channel last week"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g129",
+  "speaker_track": "you",
+  "text": "compare gross margin for APAC last week with the year before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g130",
+  "speaker_track": "you",
+  "text": "what was bookings in LATAM in March"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g131",
+  "speaker_track": "you",
+  "text": "what was gross margin in LATAM last week"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g132",
+  "speaker_track": "you",
+  "text": "show me gross margin by channel last week"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g133",
+  "speaker_track": "you",
+  "text": "what was average order value in the west region last week"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g134",
+  "speaker_track": "you",
+  "text": "show me gross margin by product line in March"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g135",
+  "speaker_track": "you",
+  "text": "show me average order value by product line last quarter"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g136",
+  "speaker_track": "you",
+  "text": "compare churn rate for APAC in March with the year before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g137",
+  "speaker_track": "you",
+  "text": "how many orders did we get in LATAM last week"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g138",
+  "speaker_track": "you",
+  "text": "show me average order value by channel last quarter"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g139",
+  "speaker_track": "you",
+  "text": "compare average order value for LATAM in March with the year before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g140",
+  "speaker_track": "you",
+  "text": "compare average order value for EMEA year to date with the year before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g141",
+  "speaker_track": "you",
+  "text": "how many new customers did we get in the west region in March"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g142",
+  "speaker_track": "you",
+  "text": "how many support tickets did we get in EMEA in March"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g143",
+  "speaker_track": "you",
+  "text": "which product line had the highest average order value last week"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g144",
+  "speaker_track": "you",
+  "text": "which sales rep had the highest revenue in March"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g145",
+  "speaker_track": "you",
+  "text": "what was gross margin in EMEA this year"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g146",
+  "speaker_track": "you",
+  "text": "compare net retention for North America this year with the year before"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g147",
+  "speaker_track": "you",
+  "text": "show me revenue by sales rep in March"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g148",
+  "speaker_track": "you",
+  "text": "compare churn rate for EMEA this year with the year before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "question",
+  "id": "g149",
+  "speaker_track": "you",
+  "text": "how many new customers did we get in APAC this year"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g150",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on average order value for the west region"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g151",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on average order value for North America"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g152",
+  "speaker_track": "you",
+  "text": "remind me what you told me about net retention before"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g153",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on revenue for APAC"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g154",
+  "speaker_track": "you",
+  "text": "what did Priya say about pricing in the last meeting"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g155",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on churn rate for APAC"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g156",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on bookings for the west region"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g157",
+  "speaker_track": "you",
+  "text": "what did we decide about the partner program earlier"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g158",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on churn rate for EMEA"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g159",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on average order value for LATAM"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g160",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on bookings for North America"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g161",
+  "speaker_track": "you",
+  "text": "what did we decide about the Q3 forecast earlier"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g162",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on net retention for LATAM"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g163",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on net retention for EMEA"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g164",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on churn rate for LATAM"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g165",
+  "speaker_track": "you",
+  "text": "what did Dana say about the partner program in the last meeting"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g166",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on bookings for EMEA"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g167",
+  "speaker_track": "you",
+  "text": "what did we decide about the renewal plan earlier"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g168",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on gross margin for North America"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g169",
+  "speaker_track": "you",
+  "text": "what did Kenji say about the renewal plan in the last meeting"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g170",
+  "speaker_track": "you",
+  "text": "what did we decide about the onboarding flow earlier"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g171",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on revenue for North America"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g172",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on net retention for North America"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g173",
+  "speaker_track": "you",
+  "text": "what did Priya say about the onboarding flow in the last meeting"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g174",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on pipeline for North America"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g175",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on gross margin for APAC"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g176",
+  "speaker_track": "you",
+  "text": "what did Dana say about the Q3 forecast in the last meeting"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g177",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on bookings for APAC"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g178",
+  "speaker_track": "you",
+  "text": "what did Marco say about the onboarding flow in the last meeting"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g179",
+  "speaker_track": "you",
+  "text": "did we already ask about the onboarding flow today"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g180",
+  "speaker_track": "you",
+  "text": "what did Dana say about the onboarding flow in the last meeting"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g181",
+  "speaker_track": "you",
+  "text": "what did Dana say about pricing in the last meeting"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g182",
+  "speaker_track": "you",
+  "text": "what did Priya say about the renewal plan in the last meeting"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g183",
+  "speaker_track": "you",
+  "text": "what did Dana say about the renewal plan in the last meeting"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g184",
+  "speaker_track": "you",
+  "text": "what did Marco say about the Q3 forecast in the last meeting"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g185",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on churn rate for the west region"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g186",
+  "speaker_track": "you",
+  "text": "remind me what you told me about gross margin before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g187",
+  "speaker_track": "you",
+  "text": "what did Kenji say about pricing in the last meeting"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g188",
+  "speaker_track": "you",
+  "text": "what did Priya say about the partner program in the last meeting"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g189",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on revenue for the west region"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g190",
+  "speaker_track": "you",
+  "text": "did we already ask about the renewal plan today"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g191",
+  "speaker_track": "you",
+  "text": "what did Kenji say about the onboarding flow in the last meeting"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g192",
+  "speaker_track": "you",
+  "text": "remind me what you told me about bookings before"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g193",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on gross margin for LATAM"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g194",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on revenue for LATAM"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g195",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on pipeline for LATAM"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g196",
+  "speaker_track": "you",
+  "text": "did we already ask about pricing today"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g197",
+  "speaker_track": "you",
+  "text": "remind me what you told me about pipeline before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g198",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on pipeline for APAC"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g199",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on net retention for the west region"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g200",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on gross margin for the west region"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g201",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on net retention for APAC"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g202",
+  "speaker_track": "you",
+  "text": "what did Marco say about pricing in the last meeting"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g203",
+  "speaker_track": "you",
+  "text": "what did Marco say about the partner program in the last meeting"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g204",
+  "speaker_track": "you",
+  "text": "remind me what you told me about churn rate before"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g205",
+  "speaker_track": "you",
+  "text": "what did Priya say about the Q3 forecast in the last meeting"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g206",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on revenue for EMEA"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g207",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on gross margin for EMEA"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g208",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on average order value for APAC"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g209",
+  "speaker_track": "you",
+  "text": "remind me what you told me about average order value before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g210",
+  "speaker_track": "you",
+  "text": "what did Kenji say about the partner program in the last meeting"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g211",
+  "speaker_track": "you",
+  "text": "what did Marco say about the renewal plan in the last meeting"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g212",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on average order value for EMEA"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g213",
+  "speaker_track": "you",
+  "text": "what did we decide about pricing earlier"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g214",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on pipeline for the west region"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g215",
+  "speaker_track": "you",
+  "text": "remind me what you told me about revenue before"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g216",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on pipeline for EMEA"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g217",
+  "speaker_track": "you",
+  "text": "what was the answer you gave me on churn rate for North America"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g218",
+  "speaker_track": "you",
+  "text": "what did Kenji say about the Q3 forecast in the last meeting"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "memory_question",
+  "id": "g219",
+  "speaker_track": "you",
+  "text": "did we already ask about the Q3 forecast today"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g220",
+  "speaker_track": "you",
+  "text": "keep in mind that net retention excludes refunds for us"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g221",
+  "speaker_track": "you",
+  "text": "fyi Dana owns the partner program on our side"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g222",
+  "speaker_track": "you",
+  "text": "fyi Kenji owns the partner program on our side"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g223",
+  "speaker_track": "you",
+  "text": "background for later the onboarding flow started in July"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g224",
+  "speaker_track": "you",
+  "text": "keep in mind that revenue excludes refunds for us"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g225",
+  "speaker_track": "you",
+  "text": "keep in mind that pipeline excludes refunds for us"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g226",
+  "speaker_track": "you",
+  "text": "background for later pricing started in July"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g227",
+  "speaker_track": "you",
+  "text": "fyi Kenji owns the Q3 forecast on our side"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g228",
+  "speaker_track": "you",
+  "text": "fyi Kenji owns the renewal plan on our side"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g229",
+  "speaker_track": "you",
+  "text": "background for later the partner program started in July"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g230",
+  "speaker_track": "you",
+  "text": "background for later the onboarding flow started in April"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g231",
+  "speaker_track": "you",
+  "text": "assume APAC for the next few questions"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g232",
+  "speaker_track": "you",
+  "text": "fyi Marco owns the renewal plan on our side"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g233",
+  "speaker_track": "you",
+  "text": "just so you know our fiscal year starts in July"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g234",
+  "speaker_track": "you",
+  "text": "background for later the partner program started in April"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g235",
+  "speaker_track": "you",
+  "text": "fyi Dana owns the Q3 forecast on our side"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g236",
+  "speaker_track": "you",
+  "text": "fyi Kenji owns pricing on our side"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g237",
+  "speaker_track": "you",
+  "text": "fyi Priya owns the Q3 forecast on our side"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g238",
+  "speaker_track": "you",
+  "text": "background for later the Q3 forecast started in April"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g239",
+  "speaker_track": "you",
+  "text": "background for later the onboarding flow started in October"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g240",
+  "speaker_track": "you",
+  "text": "keep in mind that gross margin excludes refunds for us"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g241",
+  "speaker_track": "you",
+  "text": "background for later the renewal plan started in July"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g242",
+  "speaker_track": "you",
+  "text": "fyi Marco owns the partner program on our side"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g243",
+  "speaker_track": "you",
+  "text": "assume LATAM for the next few questions"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g244",
+  "speaker_track": "you",
+  "text": "background for later the Q3 forecast started in July"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g245",
+  "speaker_track": "you",
+  "text": "background for later pricing started in February"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g246",
+  "speaker_track": "you",
+  "text": "for context the channel numbers we look at are in US dollars"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g247",
+  "speaker_track": "you",
+  "text": "for context the segment numbers we look at are in US dollars"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g248",
+  "speaker_track": "you",
+  "text": "background for later the Q3 forecast started in February"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g249",
+  "speaker_track": "you",
+  "text": "just so you know our fiscal year starts in October"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g250",
+  "speaker_track": "you",
+  "text": "fyi Priya owns the partner program on our side"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g251",
+  "speaker_track": "you",
+  "text": "for context we only care about APAC in this discussion"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g252",
+  "speaker_track": "you",
+  "text": "keep in mind that churn rate excludes refunds for us"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g253",
+  "speaker_track": "you",
+  "text": "background for later the onboarding flow started in February"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g254",
+  "speaker_track": "you",
+  "text": "background for later the renewal plan started in April"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g255",
+  "speaker_track": "you",
+  "text": "for context the product line numbers we look at are in US dollars"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g256",
+  "speaker_track": "you",
+  "text": "for context we only care about EMEA in this discussion"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g257",
+  "speaker_track": "you",
+  "text": "fyi Priya owns the onboarding flow on our side"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g258",
+  "speaker_track": "you",
+  "text": "fyi Kenji owns the onboarding flow on our side"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g259",
+  "speaker_track": "you",
+  "text": "background for later the partner program started in October"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g260",
+  "speaker_track": "you",
+  "text": "fyi Marco owns pricing on our side"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g261",
+  "speaker_track": "you",
+  "text": "assume North America for the next few questions"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g262",
+  "speaker_track": "you",
+  "text": "for context we only care about the west region in this discussion"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g263",
+  "speaker_track": "you",
+  "text": "just so you know our fiscal year starts in February"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g264",
+  "speaker_track": "you",
+  "text": "for context we only care about North America in this discussion"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g265",
+  "speaker_track": "you",
+  "text": "fyi Priya owns pricing on our side"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g266",
+  "speaker_track": "you",
+  "text": "for context we only care about LATAM in this discussion"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g267",
+  "speaker_track": "you",
+  "text": "keep in mind that average order value excludes refunds for us"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g268",
+  "speaker_track": "you",
+  "text": "background for later pricing started in April"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g269",
+  "speaker_track": "you",
+  "text": "fyi Marco owns the Q3 forecast on our side"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g270",
+  "speaker_track": "you",
+  "text": "assume the west region for the next few questions"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g271",
+  "speaker_track": "you",
+  "text": "fyi Dana owns the onboarding flow on our side"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g272",
+  "speaker_track": "you",
+  "text": "fyi Dana owns pricing on our side"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g273",
+  "speaker_track": "you",
+  "text": "background for later the Q3 forecast started in October"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g274",
+  "speaker_track": "you",
+  "text": "just so you know our fiscal year starts in April"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g275",
+  "speaker_track": "you",
+  "text": "assume EMEA for the next few questions"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g276",
+  "speaker_track": "you",
+  "text": "background for later the partner program started in February"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g277",
+  "speaker_track": "you",
+  "text": "background for later pricing started in October"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g278",
+  "speaker_track": "you",
+  "text": "fyi Dana owns the renewal plan on our side"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "context",
+  "id": "g279",
+  "speaker_track": "you",
+  "text": "for context the sales rep numbers we look at are in US dollars"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "switch_workspace_once",
+  "expected_intent": "command",
+  "id": "g280",
+  "speaker_track": "you",
+  "text": "ask the finance workspace for this one question"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "switch_workspace_once",
+  "expected_intent": "command",
+  "id": "g281",
+  "speaker_track": "you",
+  "text": "please just this once use the marketing workspace"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "switch_workspace_once",
+  "expected_intent": "command",
+  "id": "g282",
+  "speaker_track": "you",
+  "text": "please just this once use the finance workspace"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "switch_workspace_once",
+  "expected_intent": "command",
+  "id": "g283",
+  "speaker_track": "you",
+  "text": "hey mog ask the finance workspace for this one question"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "switch_workspace_once",
+  "expected_intent": "command",
+  "id": "g284",
+  "speaker_track": "you",
+  "text": "hey mog for this question only switch to marketing"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "switch_workspace_once",
+  "expected_intent": "command",
+  "id": "g285",
+  "speaker_track": "you",
+  "text": "just this once use the sales workspace"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "switch_workspace_once",
+  "expected_intent": "command",
+  "id": "g286",
+  "speaker_track": "you",
+  "text": "hey mog for this question only switch to sales"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "switch_workspace_once",
+  "expected_intent": "command",
+  "id": "g287",
+  "speaker_track": "you",
+  "text": "hey mog ask the marketing workspace for this one question"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "switch_workspace_once",
+  "expected_intent": "command",
+  "id": "g288",
+  "speaker_track": "you",
+  "text": "for this question only switch to finance"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "switch_workspace_session",
+  "expected_intent": "command",
+  "id": "g289",
+  "speaker_track": "you",
+  "text": "please move this whole session over to sales"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "switch_workspace_session",
+  "expected_intent": "command",
+  "id": "g290",
+  "speaker_track": "you",
+  "text": "please move this whole session over to finance"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "switch_workspace_session",
+  "expected_intent": "command",
+  "id": "g291",
+  "speaker_track": "you",
+  "text": "please use the marketing workspace for the rest of this session"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "switch_workspace_session",
+  "expected_intent": "command",
+  "id": "g292",
+  "speaker_track": "you",
+  "text": "switch to the marketing workspace"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "switch_workspace_session",
+  "expected_intent": "command",
+  "id": "g293",
+  "speaker_track": "you",
+  "text": "please use the sales workspace for the rest of this session"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "switch_workspace_session",
+  "expected_intent": "command",
+  "id": "g294",
+  "speaker_track": "you",
+  "text": "hey mog use the finance workspace for the rest of this session"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "switch_workspace_session",
+  "expected_intent": "command",
+  "id": "g295",
+  "speaker_track": "you",
+  "text": "please switch to the marketing workspace"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "switch_workspace_session",
+  "expected_intent": "command",
+  "id": "g296",
+  "speaker_track": "you",
+  "text": "please use the finance workspace for the rest of this session"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "switch_workspace_session",
+  "expected_intent": "command",
+  "id": "g297",
+  "speaker_track": "you",
+  "text": "use the finance workspace for the rest of this session"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "reset_workspace",
+  "expected_intent": "command",
+  "id": "g298",
+  "speaker_track": "you",
+  "text": "hey mog switch back to the default workspace"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "reset_workspace",
+  "expected_intent": "command",
+  "id": "g299",
+  "speaker_track": "you",
+  "text": "hey mog reset the workspace"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "reset_workspace",
+  "expected_intent": "command",
+  "id": "g300",
+  "speaker_track": "you",
+  "text": "please reset the workspace"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "reset_workspace",
+  "expected_intent": "command",
+  "id": "g301",
+  "speaker_track": "you",
+  "text": "hey mog go back to my home workspace"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "reset_workspace",
+  "expected_intent": "command",
+  "id": "g302",
+  "speaker_track": "you",
+  "text": "go back to my home workspace"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "reset_workspace",
+  "expected_intent": "command",
+  "id": "g303",
+  "speaker_track": "you",
+  "text": "switch back to the default workspace"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "reset_workspace",
+  "expected_intent": "command",
+  "id": "g304",
+  "speaker_track": "you",
+  "text": "please switch back to the default workspace"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "reset_workspace",
+  "expected_intent": "command",
+  "id": "g305",
+  "speaker_track": "you",
+  "text": "please go back to my home workspace"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "reset_workspace",
+  "expected_intent": "command",
+  "id": "g306",
+  "speaker_track": "you",
+  "text": "reset the workspace"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "new_topic",
+  "expected_intent": "command",
+  "id": "g307",
+  "speaker_track": "you",
+  "text": "hey mog change of subject start fresh"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "new_topic",
+  "expected_intent": "command",
+  "id": "g308",
+  "speaker_track": "you",
+  "text": "change of subject start fresh"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "new_topic",
+  "expected_intent": "command",
+  "id": "g309",
+  "speaker_track": "you",
+  "text": "new topic"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "new_topic",
+  "expected_intent": "command",
+  "id": "g310",
+  "speaker_track": "you",
+  "text": "hey mog let's start a new topic"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "new_topic",
+  "expected_intent": "command",
+  "id": "g311",
+  "speaker_track": "you",
+  "text": "please let's start a new topic"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "new_topic",
+  "expected_intent": "command",
+  "id": "g312",
+  "speaker_track": "you",
+  "text": "please change of subject start fresh"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "new_topic",
+  "expected_intent": "command",
+  "id": "g313",
+  "speaker_track": "you",
+  "text": "hey mog new topic"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "new_topic",
+  "expected_intent": "command",
+  "id": "g314",
+  "speaker_track": "you",
+  "text": "let's start a new topic"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "new_topic",
+  "expected_intent": "command",
+  "id": "g315",
+  "speaker_track": "you",
+  "text": "please new topic"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "cancel",
+  "expected_intent": "command",
+  "id": "g316",
+  "speaker_track": "you",
+  "text": "cancel the last ask"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "cancel",
+  "expected_intent": "command",
+  "id": "g317",
+  "speaker_track": "you",
+  "text": "cancel that"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "cancel",
+  "expected_intent": "command",
+  "id": "g318",
+  "speaker_track": "you",
+  "text": "please never mind cancel the question"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "cancel",
+  "expected_intent": "command",
+  "id": "g319",
+  "speaker_track": "you",
+  "text": "hey mog cancel the last ask"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "cancel",
+  "expected_intent": "command",
+  "id": "g320",
+  "speaker_track": "you",
+  "text": "hey mog never mind cancel the question"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "cancel",
+  "expected_intent": "command",
+  "id": "g321",
+  "speaker_track": "you",
+  "text": "please cancel the last ask"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "cancel",
+  "expected_intent": "command",
+  "id": "g322",
+  "speaker_track": "you",
+  "text": "hey mog cancel that"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "cancel",
+  "expected_intent": "command",
+  "id": "g323",
+  "speaker_track": "you",
+  "text": "never mind cancel the question"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "cancel",
+  "expected_intent": "command",
+  "id": "g324",
+  "speaker_track": "you",
+  "text": "please cancel that"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "stop_recording",
+  "expected_intent": "command",
+  "id": "g325",
+  "speaker_track": "you",
+  "text": "hey mog end the recording"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "stop_recording",
+  "expected_intent": "command",
+  "id": "g326",
+  "speaker_track": "you",
+  "text": "please stop recording"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "stop_recording",
+  "expected_intent": "command",
+  "id": "g327",
+  "speaker_track": "you",
+  "text": "hey mog stop recording"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "stop_recording",
+  "expected_intent": "command",
+  "id": "g328",
+  "speaker_track": "you",
+  "text": "stop the recording now"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "stop_recording",
+  "expected_intent": "command",
+  "id": "g329",
+  "speaker_track": "you",
+  "text": "stop recording"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "stop_recording",
+  "expected_intent": "command",
+  "id": "g330",
+  "speaker_track": "you",
+  "text": "hey mog stop the recording now"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "stop_recording",
+  "expected_intent": "command",
+  "id": "g331",
+  "speaker_track": "you",
+  "text": "end the recording"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "stop_recording",
+  "expected_intent": "command",
+  "id": "g332",
+  "speaker_track": "you",
+  "text": "please end the recording"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "stop_recording",
+  "expected_intent": "command",
+  "id": "g333",
+  "speaker_track": "you",
+  "text": "please stop the recording now"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "pause",
+  "expected_intent": "command",
+  "id": "g334",
+  "speaker_track": "you",
+  "text": "please pause listening for a moment"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "pause",
+  "expected_intent": "command",
+  "id": "g335",
+  "speaker_track": "you",
+  "text": "please pause the recording"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "pause",
+  "expected_intent": "command",
+  "id": "g336",
+  "speaker_track": "you",
+  "text": "hey mog pause the recording"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "pause",
+  "expected_intent": "command",
+  "id": "g337",
+  "speaker_track": "you",
+  "text": "pause"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "pause",
+  "expected_intent": "command",
+  "id": "g338",
+  "speaker_track": "you",
+  "text": "pause the recording"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "pause",
+  "expected_intent": "command",
+  "id": "g339",
+  "speaker_track": "you",
+  "text": "hey mog pause listening for a moment"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "pause",
+  "expected_intent": "command",
+  "id": "g340",
+  "speaker_track": "you",
+  "text": "please pause"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "pause",
+  "expected_intent": "command",
+  "id": "g341",
+  "speaker_track": "you",
+  "text": "pause listening for a moment"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "pause",
+  "expected_intent": "command",
+  "id": "g342",
+  "speaker_track": "you",
+  "text": "hey mog pause"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "resume",
+  "expected_intent": "command",
+  "id": "g343",
+  "speaker_track": "you",
+  "text": "okay resume the recording"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "resume",
+  "expected_intent": "command",
+  "id": "g344",
+  "speaker_track": "you",
+  "text": "resume listening"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "resume",
+  "expected_intent": "command",
+  "id": "g345",
+  "speaker_track": "you",
+  "text": "please resume"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "resume",
+  "expected_intent": "command",
+  "id": "g346",
+  "speaker_track": "you",
+  "text": "hey mog okay resume the recording"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "resume",
+  "expected_intent": "command",
+  "id": "g347",
+  "speaker_track": "you",
+  "text": "resume"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "resume",
+  "expected_intent": "command",
+  "id": "g348",
+  "speaker_track": "you",
+  "text": "hey mog resume listening"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "resume",
+  "expected_intent": "command",
+  "id": "g349",
+  "speaker_track": "you",
+  "text": "hey mog resume"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "resume",
+  "expected_intent": "command",
+  "id": "g350",
+  "speaker_track": "you",
+  "text": "please resume listening"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "resume",
+  "expected_intent": "command",
+  "id": "g351",
+  "speaker_track": "you",
+  "text": "please okay resume the recording"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "forget_session",
+  "expected_intent": "command",
+  "id": "g352",
+  "speaker_track": "you",
+  "text": "hey mog forget everything from this session"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "forget_session",
+  "expected_intent": "command",
+  "id": "g353",
+  "speaker_track": "you",
+  "text": "please forget everything from this session"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "forget_session",
+  "expected_intent": "command",
+  "id": "g354",
+  "speaker_track": "you",
+  "text": "forget this session"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "forget_session",
+  "expected_intent": "command",
+  "id": "g355",
+  "speaker_track": "you",
+  "text": "hey mog forget this session"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "forget_session",
+  "expected_intent": "command",
+  "id": "g356",
+  "speaker_track": "you",
+  "text": "hey mog delete what you remember from this session"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "forget_session",
+  "expected_intent": "command",
+  "id": "g357",
+  "speaker_track": "you",
+  "text": "please forget this session"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "forget_session",
+  "expected_intent": "command",
+  "id": "g358",
+  "speaker_track": "you",
+  "text": "please delete what you remember from this session"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "forget_session",
+  "expected_intent": "command",
+  "id": "g359",
+  "speaker_track": "you",
+  "text": "delete what you remember from this session"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "forget_session",
+  "expected_intent": "command",
+  "id": "g360",
+  "speaker_track": "you",
+  "text": "forget everything from this session"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g361",
+  "speaker_track": "you",
+  "text": "the review of the onboarding flow moves to Monday afternoon"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g362",
+  "speaker_track": "you",
+  "text": "note to self call Dana on Friday about pricing"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g363",
+  "speaker_track": "you",
+  "text": "dear Dana thanks for the update on the renewal plan I will send the numbers by Friday"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g364",
+  "speaker_track": "you",
+  "text": "dear Dana thanks for the update on the Q3 forecast I will send the numbers by Thursday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g365",
+  "speaker_track": "you",
+  "text": "note to self call Kenji on Friday about pricing"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g366",
+  "speaker_track": "you",
+  "text": "dear Kenji thanks for the update on the Q3 forecast I will send the numbers by Friday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g367",
+  "speaker_track": "you",
+  "text": "dear Priya thanks for the update on the Q3 forecast I will send the numbers by Thursday"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g368",
+  "speaker_track": "you",
+  "text": "note to self call Marco on Monday about the renewal plan"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g369",
+  "speaker_track": "you",
+  "text": "note to self call Kenji on Monday about the partner program"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g370",
+  "speaker_track": "you",
+  "text": "note to self call Kenji on Thursday about the Q3 forecast"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g371",
+  "speaker_track": "you",
+  "text": "dear Kenji thanks for the update on pricing I will send the numbers by Friday"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g372",
+  "speaker_track": "you",
+  "text": "hi team quick reminder that the the onboarding flow sync is on Monday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g373",
+  "speaker_track": "you",
+  "text": "note to self call Dana on Thursday about the partner program"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g374",
+  "speaker_track": "you",
+  "text": "dear Marco thanks for the update on the onboarding flow I will send the numbers by Thursday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g375",
+  "speaker_track": "you",
+  "text": "I think we should ship the Q3 forecast next sprint and tell Marco"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g376",
+  "speaker_track": "you",
+  "text": "note to self call Dana on Monday about the renewal plan"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g377",
+  "speaker_track": "you",
+  "text": "note to self call Priya on Friday about pricing"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g378",
+  "speaker_track": "you",
+  "text": "I think we should ship pricing next sprint and tell Kenji"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g379",
+  "speaker_track": "you",
+  "text": "dear Marco thanks for the update on the renewal plan I will send the numbers by Thursday"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g380",
+  "speaker_track": "you",
+  "text": "the review of pricing moves to Monday afternoon"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g381",
+  "speaker_track": "you",
+  "text": "dear Dana thanks for the update on the onboarding flow I will send the numbers by Friday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g382",
+  "speaker_track": "you",
+  "text": "dear Marco thanks for the update on the onboarding flow I will send the numbers by Friday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g383",
+  "speaker_track": "you",
+  "text": "note to self call Kenji on Friday about the Q3 forecast"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g384",
+  "speaker_track": "you",
+  "text": "dear Priya thanks for the update on pricing I will send the numbers by Friday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g385",
+  "speaker_track": "you",
+  "text": "note to self call Marco on Thursday about the partner program"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g386",
+  "speaker_track": "you",
+  "text": "dear Marco thanks for the update on the partner program I will send the numbers by Monday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g387",
+  "speaker_track": "you",
+  "text": "I think we should ship the partner program next sprint and tell Kenji"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g388",
+  "speaker_track": "you",
+  "text": "dear Marco thanks for the update on the onboarding flow I will send the numbers by Monday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g389",
+  "speaker_track": "you",
+  "text": "note to self call Kenji on Thursday about the renewal plan"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g390",
+  "speaker_track": "you",
+  "text": "I think we should ship the partner program next sprint and tell Priya"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g391",
+  "speaker_track": "you",
+  "text": "the review of the partner program moves to Monday afternoon"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g392",
+  "speaker_track": "you",
+  "text": "note to self call Dana on Monday about the onboarding flow"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g393",
+  "speaker_track": "you",
+  "text": "dear Priya thanks for the update on the partner program I will send the numbers by Monday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g394",
+  "speaker_track": "you",
+  "text": "note to self call Dana on Thursday about pricing"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g395",
+  "speaker_track": "you",
+  "text": "note to self call Priya on Friday about the partner program"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g396",
+  "speaker_track": "you",
+  "text": "I think we should ship the partner program next sprint and tell Dana"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g397",
+  "speaker_track": "you",
+  "text": "note to self call Priya on Monday about the Q3 forecast"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g398",
+  "speaker_track": "you",
+  "text": "dear Priya thanks for the update on the partner program I will send the numbers by Friday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g399",
+  "speaker_track": "you",
+  "text": "dear Priya thanks for the update on the Q3 forecast I will send the numbers by Monday"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g400",
+  "speaker_track": "you",
+  "text": "note to self call Dana on Friday about the Q3 forecast"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g401",
+  "speaker_track": "you",
+  "text": "hi team quick reminder that the the Q3 forecast sync is on Monday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g402",
+  "speaker_track": "you",
+  "text": "dear Kenji thanks for the update on the partner program I will send the numbers by Monday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g403",
+  "speaker_track": "you",
+  "text": "note to self call Priya on Thursday about the Q3 forecast"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g404",
+  "speaker_track": "you",
+  "text": "note to self call Priya on Friday about the renewal plan"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g405",
+  "speaker_track": "you",
+  "text": "dear Dana thanks for the update on the renewal plan I will send the numbers by Thursday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g406",
+  "speaker_track": "you",
+  "text": "dear Dana thanks for the update on pricing I will send the numbers by Friday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g407",
+  "speaker_track": "you",
+  "text": "note to self call Marco on Monday about pricing"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g408",
+  "speaker_track": "you",
+  "text": "I think we should ship the onboarding flow next sprint and tell Priya"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g409",
+  "speaker_track": "you",
+  "text": "dear Kenji thanks for the update on the Q3 forecast I will send the numbers by Monday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g410",
+  "speaker_track": "you",
+  "text": "dear Marco thanks for the update on the partner program I will send the numbers by Thursday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g411",
+  "speaker_track": "you",
+  "text": "note to self call Kenji on Monday about pricing"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g412",
+  "speaker_track": "you",
+  "text": "dear Dana thanks for the update on the renewal plan I will send the numbers by Monday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g413",
+  "speaker_track": "you",
+  "text": "dear Priya thanks for the update on the Q3 forecast I will send the numbers by Friday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g414",
+  "speaker_track": "you",
+  "text": "the review of pricing moves to Thursday afternoon"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g415",
+  "speaker_track": "you",
+  "text": "dear Priya thanks for the update on the onboarding flow I will send the numbers by Monday"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g416",
+  "speaker_track": "you",
+  "text": "dear Kenji thanks for the update on the onboarding flow I will send the numbers by Monday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g417",
+  "speaker_track": "you",
+  "text": "dear Priya thanks for the update on the renewal plan I will send the numbers by Monday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g418",
+  "speaker_track": "you",
+  "text": "dear Dana thanks for the update on the onboarding flow I will send the numbers by Monday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g419",
+  "speaker_track": "you",
+  "text": "dear Marco thanks for the update on pricing I will send the numbers by Friday"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g420",
+  "speaker_track": "you",
+  "text": "note to self call Kenji on Friday about the renewal plan"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g421",
+  "speaker_track": "you",
+  "text": "note to self call Kenji on Thursday about pricing"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g422",
+  "speaker_track": "you",
+  "text": "note to self call Marco on Monday about the Q3 forecast"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g423",
+  "speaker_track": "you",
+  "text": "hi team quick reminder that the the onboarding flow sync is on Thursday"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g424",
+  "speaker_track": "you",
+  "text": "the review of the partner program moves to Thursday afternoon"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g425",
+  "speaker_track": "you",
+  "text": "I think we should ship the Q3 forecast next sprint and tell Priya"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g426",
+  "speaker_track": "you",
+  "text": "dear Kenji thanks for the update on the Q3 forecast I will send the numbers by Thursday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g427",
+  "speaker_track": "you",
+  "text": "hi team quick reminder that the the partner program sync is on Friday"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g428",
+  "speaker_track": "you",
+  "text": "note to self call Priya on Friday about the onboarding flow"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g429",
+  "speaker_track": "you",
+  "text": "note to self call Dana on Thursday about the onboarding flow"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g430",
+  "speaker_track": "you",
+  "text": "note to self call Marco on Friday about the renewal plan"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g431",
+  "speaker_track": "you",
+  "text": "the review of the Q3 forecast moves to Monday afternoon"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g432",
+  "speaker_track": "you",
+  "text": "the review of the renewal plan moves to Friday afternoon"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g433",
+  "speaker_track": "you",
+  "text": "dear Marco thanks for the update on the renewal plan I will send the numbers by Monday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g434",
+  "speaker_track": "you",
+  "text": "dear Marco thanks for the update on the Q3 forecast I will send the numbers by Thursday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g435",
+  "speaker_track": "you",
+  "text": "note to self call Dana on Friday about the onboarding flow"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g436",
+  "speaker_track": "you",
+  "text": "I think we should ship the renewal plan next sprint and tell Priya"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g437",
+  "speaker_track": "you",
+  "text": "dear Dana thanks for the update on pricing I will send the numbers by Monday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g438",
+  "speaker_track": "you",
+  "text": "hi team quick reminder that the the renewal plan sync is on Friday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g439",
+  "speaker_track": "you",
+  "text": "note to self call Kenji on Friday about the onboarding flow"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g440",
+  "speaker_track": "you",
+  "text": "hi team quick reminder that the the renewal plan sync is on Monday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g441",
+  "speaker_track": "you",
+  "text": "the review of the Q3 forecast moves to Thursday afternoon"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g442",
+  "speaker_track": "you",
+  "text": "note to self call Dana on Thursday about the renewal plan"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g443",
+  "speaker_track": "you",
+  "text": "note to self call Marco on Thursday about the renewal plan"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g444",
+  "speaker_track": "you",
+  "text": "note to self call Kenji on Thursday about the partner program"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g445",
+  "speaker_track": "you",
+  "text": "note to self call Priya on Thursday about the renewal plan"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g446",
+  "speaker_track": "you",
+  "text": "dear Priya thanks for the update on the renewal plan I will send the numbers by Friday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g447",
+  "speaker_track": "you",
+  "text": "hi team quick reminder that the the partner program sync is on Monday"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g448",
+  "speaker_track": "you",
+  "text": "dear Kenji thanks for the update on the partner program I will send the numbers by Thursday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g449",
+  "speaker_track": "you",
+  "text": "note to self call Marco on Monday about the onboarding flow"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g450",
+  "speaker_track": "you",
+  "text": "dear Priya thanks for the update on pricing I will send the numbers by Thursday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g451",
+  "speaker_track": "you",
+  "text": "note to self call Marco on Friday about the Q3 forecast"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g452",
+  "speaker_track": "you",
+  "text": "note to self call Marco on Thursday about the onboarding flow"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g453",
+  "speaker_track": "you",
+  "text": "hi team quick reminder that the the Q3 forecast sync is on Friday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g454",
+  "speaker_track": "you",
+  "text": "note to self call Dana on Friday about the partner program"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g455",
+  "speaker_track": "you",
+  "text": "I think we should ship the onboarding flow next sprint and tell Kenji"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g456",
+  "speaker_track": "you",
+  "text": "note to self call Priya on Friday about the Q3 forecast"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g457",
+  "speaker_track": "you",
+  "text": "dear Marco thanks for the update on the renewal plan I will send the numbers by Friday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g458",
+  "speaker_track": "you",
+  "text": "dear Dana thanks for the update on the partner program I will send the numbers by Thursday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g459",
+  "speaker_track": "you",
+  "text": "dear Kenji thanks for the update on the onboarding flow I will send the numbers by Friday"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "dictation",
+  "id": "g460",
+  "speaker_track": "you",
+  "text": "dear Dana thanks for the update on the partner program I will send the numbers by Monday"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g461",
+  "speaker_track": "you",
+  "text": "um"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g462",
+  "speaker_track": "you",
+  "text": "um uh"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g463",
+  "speaker_track": "you",
+  "text": "um um"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g464",
+  "speaker_track": "you",
+  "text": "uh huh"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g465",
+  "speaker_track": "you",
+  "text": "uh huh uh"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g466",
+  "speaker_track": "you",
+  "text": "uh huh um"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g467",
+  "speaker_track": "you",
+  "text": "okay okay"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g468",
+  "speaker_track": "you",
+  "text": "okay okay uh"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g469",
+  "speaker_track": "you",
+  "text": "okay okay um"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g470",
+  "speaker_track": "you",
+  "text": "hmm let me think"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g471",
+  "speaker_track": "you",
+  "text": "hmm let me think uh"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g472",
+  "speaker_track": "you",
+  "text": "hmm let me think um"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g473",
+  "speaker_track": "you",
+  "text": "sorry I was talking to someone else"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g474",
+  "speaker_track": "you",
+  "text": "sorry I was talking to someone else uh"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g475",
+  "speaker_track": "you",
+  "text": "sorry I was talking to someone else um"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g476",
+  "speaker_track": "you",
+  "text": "right right"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g477",
+  "speaker_track": "you",
+  "text": "right right uh"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g478",
+  "speaker_track": "you",
+  "text": "right right um"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g479",
+  "speaker_track": "you",
+  "text": "testing one two three"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g480",
+  "speaker_track": "you",
+  "text": "testing one two three uh"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g481",
+  "speaker_track": "you",
+  "text": "testing one two three um"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g482",
+  "speaker_track": "you",
+  "text": "oh wait"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g483",
+  "speaker_track": "you",
+  "text": "oh wait uh"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g484",
+  "speaker_track": "you",
+  "text": "oh wait um"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g485",
+  "speaker_track": "you",
+  "text": "yeah"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g486",
+  "speaker_track": "you",
+  "text": "yeah uh"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g487",
+  "speaker_track": "you",
+  "text": "yeah um"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g488",
+  "speaker_track": "you",
+  "text": "mm hmm"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g489",
+  "speaker_track": "you",
+  "text": "mm hmm uh"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g490",
+  "speaker_track": "you",
+  "text": "mm hmm um"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g491",
+  "speaker_track": "you",
+  "text": "hold on a second"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g492",
+  "speaker_track": "you",
+  "text": "hold on a second uh"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g493",
+  "speaker_track": "you",
+  "text": "hold on a second um"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g494",
+  "speaker_track": "you",
+  "text": "ah never mind me"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g495",
+  "speaker_track": "you",
+  "text": "ah never mind me uh"
+ },
+ {
+  "capture_mode": "hands_free",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g496",
+  "speaker_track": "you",
+  "text": "ah never mind me um"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g497",
+  "speaker_track": "you",
+  "text": "so yeah anyway"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g498",
+  "speaker_track": "you",
+  "text": "so yeah anyway uh"
+ },
+ {
+  "capture_mode": "push_to_talk",
+  "expected_command": "none",
+  "expected_intent": "noise",
+  "id": "g499",
+  "speaker_track": "you",
+  "text": "so yeah anyway um"
+ }
+]
