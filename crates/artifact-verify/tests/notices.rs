@@ -103,7 +103,10 @@ fn ported_file_with_header_passes() {
     );
     assert_eq!(check_ported_text(&py), PortedCheck::HeaderPresent);
 
-    let block = format!("/*\n * {PORTED_MARKER}\n{}\n */\n", commented(" * ", ANTIGRAVITY_MIT_HEADER));
+    let block = format!(
+        "/*\n * {PORTED_MARKER}\n{}\n */\n",
+        commented(" * ", ANTIGRAVITY_MIT_HEADER)
+    );
     assert_eq!(check_ported_text(&block), PortedCheck::HeaderPresent);
 
     let md = format!("<!-- {PORTED_MARKER} -->\n<!--\n{ANTIGRAVITY_MIT_HEADER}-->\n# Skill\n");
@@ -119,9 +122,8 @@ fn ported_file_without_header_fails() {
     let bare = format!("// {PORTED_MARKER}\nfn bridge() {{}}\n");
     assert_eq!(check_ported_text(&bare), PortedCheck::HeaderMissing);
 
-    let changed = ported_rust_file(
-        &ANTIGRAVITY_MIT_HEADER.replace("Sathish Gangichetty", "Somebody Else"),
-    );
+    let changed =
+        ported_rust_file(&ANTIGRAVITY_MIT_HEADER.replace("Sathish Gangichetty", "Somebody Else"));
     assert_eq!(check_ported_text(&changed), PortedCheck::HeaderMissing);
 
     let truncated = ported_rust_file(&ANTIGRAVITY_MIT_HEADER[..400]);
@@ -150,10 +152,21 @@ fn scanner_reports_ported_files_without_header() {
     fs::write(&bad, format!("// {PORTED_MARKER}\nexport {{}};\n")).unwrap();
     fs::write(root.join("src/plain.rs"), "fn x() {}\n").unwrap();
     fs::write(root.join("src/blob.bin"), [0xff, 0xfe, 0x00, 0x81]).unwrap();
-    fs::write(root.join("target/debug/copy.rs"), format!("// {PORTED_MARKER}\n")).unwrap();
-    fs::write(root.join("node_modules/x/i.js"), format!("// {PORTED_MARKER}\n")).unwrap();
+    fs::write(
+        root.join("target/debug/copy.rs"),
+        format!("// {PORTED_MARKER}\n"),
+    )
+    .unwrap();
+    fs::write(
+        root.join("node_modules/x/i.js"),
+        format!("// {PORTED_MARKER}\n"),
+    )
+    .unwrap();
 
-    assert_eq!(check_ported_file(&good).unwrap(), PortedCheck::HeaderPresent);
+    assert_eq!(
+        check_ported_file(&good).unwrap(),
+        PortedCheck::HeaderPresent
+    );
     assert_eq!(check_ported_file(&bad).unwrap(), PortedCheck::HeaderMissing);
     assert_eq!(
         check_ported_file(&root.join("src/blob.bin")).unwrap(),
@@ -166,5 +179,8 @@ fn scanner_reports_ported_files_without_header() {
 #[test]
 fn repository_ported_files_keep_header() {
     let missing = scan_ported_files(&repo_root()).unwrap();
-    assert!(missing.is_empty(), "ported files without the MIT header: {missing:?}");
+    assert!(
+        missing.is_empty(),
+        "ported files without the MIT header: {missing:?}"
+    );
 }
