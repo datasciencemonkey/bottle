@@ -149,4 +149,17 @@ describe('card stack controller', () => {
       vi.useRealTimers();
     }
   });
+
+  it('[UX-12] the production scheduler caps a long delay at the setTimeout limit', () => {
+    vi.useFakeTimers();
+    try {
+      const spy = vi.spyOn(globalThis, 'setTimeout');
+      const clock = createSimClock();
+      timeoutScheduler(clock)(40 * 24 * 3600 * S, () => undefined);
+      expect(spy.mock.calls[0]?.[1]).toBe(2 ** 31 - 1);
+      spy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

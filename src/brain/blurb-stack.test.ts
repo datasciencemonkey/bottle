@@ -54,6 +54,44 @@ describe('BlurbStack', () => {
     expect(s.view().blurbs[1]?.text).toBe('answer 2, final');
   });
 
+  it('[UX-11a] an update of a blurb in History does not bring it back on the card or change the count', () => {
+    const s = new BlurbStack();
+    s.add({ id: 'a', text: 'running' }, 0);
+    for (const id of ['b', 'c', 'd']) s.add({ id, text: id, completed: true }, S);
+    expect(s.history()).toEqual(['a']);
+    s.add({ id: 'a', text: 'final', completed: true }, 2 * S);
+    expect(ids(s.view())).toEqual(['d', 'c', 'b']);
+    expect(s.view().historyCount).toBe(1);
+    expect(s.complete('a', 3 * S)).toBe(false);
+  });
+
+  it('[UX-12] a late update of a collapsed blurb does not bring it back', () => {
+    const s = new BlurbStack();
+    s.add({ id: 'a', text: 'answer', completed: true }, 0);
+    s.tick(60 * S);
+    s.add({ id: 'a', text: 'answer, edited' }, 61 * S);
+    expect(s.view().blurbs).toEqual([]);
+    expect(s.view().historyCount).toBe(1);
+  });
+
+  it('[UX-11b] a split part that comes after its group went to History stays in History', () => {
+    const s = new BlurbStack();
+    s.add({ id: 'p1', text: 'p1', splitGroupId: 'g1' }, 0);
+    for (const id of ['b1', 'b2', 'b3']) s.add({ id, text: id }, S);
+    expect(s.history()).toEqual(['g1']);
+    s.add({ id: 'p2', text: 'p2', splitGroupId: 'g1' }, 2 * S);
+    expect(ids(s.view())).toEqual(['b3', 'b2', 'b1']);
+    expect(s.view().historyCount).toBe(1);
+  });
+
+  it('[UX-11a] a new entry never takes the ID of an entry on the card', () => {
+    const s = new BlurbStack();
+    s.add({ id: 'p1', text: 'p1', splitGroupId: 'x' }, 0);
+    s.add({ id: 'x', text: 'single blurb with the group ID' }, S);
+    expect(ids(s.view())).toEqual(['x']);
+    expect(s.view().blurbs[0]?.parts).toHaveLength(1);
+  });
+
   it('[UX-11b] [AT-09] a 3-part split takes one slot', () => {
     const s = stackWith(2);
     for (const p of ['p1', 'p2', 'p3'])
