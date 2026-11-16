@@ -21,6 +21,3 @@ serde.workspace = true
 serde_json.workspace = true
 # ARC-4: no tauri-plugin-http, -shell, -fs or any network plugin. A test checks this file.
 tauri.workspace = true
-
-[dev-dependencies]
-serde_json.workspace = true

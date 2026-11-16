@@ -53,7 +53,10 @@ fn arc_1_workspace_has_core_ffi_and_app_members() {
         );
     }
     let ffi = read(&repo_root().join("crates/mog-core-ffi/Cargo.toml"));
-    assert!(ffi.contains("cdylib"), "mog-core-ffi must build a C ABI library");
+    assert!(
+        ffi.contains("cdylib"),
+        "mog-core-ffi must build a C ABI library"
+    );
     assert!(ffi.contains("mog-core"), "mog-core-ffi must link mog-core");
 }
 
@@ -66,7 +69,10 @@ fn arc_3_brain_is_hidden_and_single() {
     assert!(!spec.visible, "brain must be hidden");
     assert!(spec.skip_taskbar);
     let starts = bottle_lib::startup_windows(false);
-    assert_eq!(starts.iter().filter(|k| **k == WindowKind::Brain).count(), 1);
+    assert_eq!(
+        starts.iter().filter(|k| **k == WindowKind::Brain).count(),
+        1
+    );
 }
 
 #[test]
@@ -94,7 +100,11 @@ fn arc_3_card_is_floating_and_key_capable() {
     let spec = WindowKind::card("m1").expect("valid").spec();
     assert_eq!(spec.label, "card-m1");
     assert!(spec.always_on_top && spec.focusable && !spec.decorations);
-    assert_eq!(CARD_HIDDEN_TTL.as_secs(), 300, "cards die after 5 min hidden");
+    assert_eq!(
+        CARD_HIDDEN_TTL.as_secs(),
+        300,
+        "cards die after 5 min hidden"
+    );
 }
 
 #[test]
@@ -114,7 +124,9 @@ fn arc_3_labels_round_trip_and_reject_unknown() {
     ] {
         assert_eq!(WindowKind::from_label(&kind.label()), Some(kind));
     }
-    for bad in ["", "main", "mog-", "card-", "mog-a/b", "mog-a b", "Brain", "mog-x:y"] {
+    for bad in [
+        "", "main", "mog-", "card-", "mog-a/b", "mog-a b", "Brain", "mog-x:y",
+    ] {
         assert_eq!(WindowKind::from_label(bad), None, "label {bad:?}");
     }
     assert_eq!(WindowKind::mog(&"x".repeat(65)), None);
@@ -148,14 +160,20 @@ fn arc_4_csp_is_the_strict_policy() {
     assert_eq!(conf["app"]["security"]["csp"].as_str(), Some(CSP));
     let dev = conf["app"]["security"]["devCsp"].as_str().expect("devCsp");
     assert!(dev.starts_with("default-src 'self'; connect-src ipc: http://ipc.localhost"));
-    assert!(!dev.contains("https:"), "dev CSP must not allow external hosts");
+    assert!(
+        !dev.contains("https:"),
+        "dev CSP must not allow external hosts"
+    );
     assert!(!dev.contains('*'), "dev CSP must not use wildcards");
 }
 
 #[test]
 fn arc_4_capabilities_are_scoped_per_window_label() {
     let caps = capabilities();
-    let ids: Vec<&str> = caps.iter().map(|c| c["identifier"].as_str().unwrap()).collect();
+    let ids: Vec<&str> = caps
+        .iter()
+        .map(|c| c["identifier"].as_str().unwrap())
+        .collect();
     assert_eq!(ids, ["brain", "card", "hub", "mog"]);
     let conf = tauri_conf();
     let listed: Vec<&str> = conf["app"]["security"]["capabilities"]
@@ -164,7 +182,11 @@ fn arc_4_capabilities_are_scoped_per_window_label() {
         .iter()
         .map(|v| v.as_str().unwrap())
         .collect();
-    assert_eq!(listed.len(), 4, "only the 4 per-window capabilities are enabled");
+    assert_eq!(
+        listed.len(),
+        4,
+        "only the 4 per-window capabilities are enabled"
+    );
     for cap in &caps {
         let windows: Vec<&str> = cap["windows"]
             .as_array()
@@ -200,7 +222,10 @@ fn arc_4_no_window_gets_plugin_permissions() {
 #[test]
 fn arc_4_no_forbidden_plugin_crates() {
     let manifest = read(&app_dir().join("Cargo.toml"));
-    for line in manifest.lines().filter(|l| !l.trim_start().starts_with('#')) {
+    for line in manifest
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+    {
         assert!(
             !line.contains("tauri-plugin-"),
             "no Tauri plugin crates in the skeleton: {line}"
