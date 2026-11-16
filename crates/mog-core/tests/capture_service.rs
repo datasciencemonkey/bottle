@@ -953,3 +953,72 @@ fn cap_01a_a_device_failure_before_the_grant_gives_no_lease() {
     assert!(fake.log().mic_open);
     assert_eq!(fake.log().mic_opens, 2);
 }
+
+// ---------- round 3: N14 ----------
+
+/// A sink that panics once, on the first stop event after it is armed.
+#[derive(Default)]
+struct PanicsOnStop {
+    armed: std::sync::atomic::AtomicBool,
+}
+
+impl CaptureEvents for PanicsOnStop {
+    fn state(&self, _state: &CaptureState) {}
+    fn stopped(&self, _stopped: &Stopped) {
+        if self.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            panic!("sink panic");
+        }
+    }
+}
+
+fn panicking_sink_rig() -> (CaptureCore, SimClock, FakeAudioDevice, Arc<PanicsOnStop>) {
+    let clock = SimClock::new();
+    let device = FakeAudioDevice::new();
+    let events = Arc::new(PanicsOnStop::default());
+    let svc = CaptureCore::new(
+        Box::new(device.clone()),
+        Arc::new(clock.clone()),
+        events.clone(),
+    );
+    (svc, clock, device, events)
+}
+
+#[test]
+fn cap_01a_a_sink_panic_during_start_leaves_the_core_usable() {
+    let (svc, clock, device, events) = panicking_sink_rig();
+    svc.start(req("a", CaptureMode::HandsFree)).unwrap();
+    clock.advance(Duration::from_millis(HANDS_FREE_MAX_MS + 1));
+    events
+        .armed
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    // The start expires the hands-free lease first; the sink panics on that stop event.
+    let res = catch_unwind(AssertUnwindSafe(|| svc.start(req("b", CaptureMode::Ptt))));
+    assert!(res.is_err(), "the sink panics");
+    let lease = svc.start(req("b", CaptureMode::Ptt)).unwrap();
+    assert_eq!(svc.status().lease_id, Some(lease.lease_id()));
+    svc.stop_all();
+    assert!(!device.log().mic_open);
+    svc.start(req("c", CaptureMode::Ptt)).unwrap();
+    assert!(device.log().mic_open);
+}
+
+#[test]
+fn cap_01a_a_sink_panic_during_resume_leaves_the_core_usable() {
+    let (svc, clock, device, events) = panicking_sink_rig();
+    let session = svc.start(req("a", CaptureMode::Session)).unwrap();
+    svc.pause(session.id).unwrap();
+    svc.start(req("b", CaptureMode::Ptt)).unwrap();
+    clock.advance(Duration::from_millis(HOLD_MAX_MS));
+    events
+        .armed
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    // The resume expires the directed PTT first; the sink panics on that stop event.
+    let res = catch_unwind(AssertUnwindSafe(|| svc.resume(session.id)));
+    assert!(res.is_err(), "the sink panics");
+    assert!(svc.status().paused, "the session stays paused");
+    svc.resume(session.id).unwrap();
+    assert!(svc.status().recording);
+    assert!(device.log().mic_open);
+    svc.stop_all();
+    svc.start(req("c", CaptureMode::Ptt)).unwrap();
+}
