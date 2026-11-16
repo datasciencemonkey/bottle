@@ -166,11 +166,50 @@ describe('sanitizeQuestion on hostile input', () => {
     expect(sanitizeQuestion('ask <script>alert(1) and more')).toBe('ask');
   });
 
+  it('[G-47] fails closed on HTML nested deeper than the pass limit', () => {
+    for (const tag of ['img src=x onerror=alert(1)>', 'b>', '!-- x -->', '/script>']) {
+      let t = 'x';
+      for (let i = 0; i < 100; i++) t = '<' + t + tag;
+      const out = sanitizeQuestion('hi ' + t);
+      expect(out).not.toMatch(/<\/?[a-z!?]/i);
+      const r = prepareAsk({ question: 'hi ' + t });
+      if (r.ok) expect(r.text).not.toMatch(/<\/?[a-z!?]/i);
+    }
+  });
+
+  it('[G-47] fails closed on fences and links nested deeper than the pass limit', () => {
+    let f = 'x';
+    for (let i = 0; i < 100; i++) f = '``' + f + '`';
+    let l = 'x';
+    for (let i = 0; i < 100; i++) l = '[' + l + '](https://evil.invalid/' + i + ')';
+    const out = sanitizeQuestion('hi ' + f + ' ' + l);
+    expect(out).not.toMatch(/`{3,}|~{3,}/);
+    expect(out).not.toContain('evil.invalid');
+    expect(out).not.toContain('](');
+  });
+
+  it('[G-47] removes reference definitions inside quotes and lists', () => {
+    for (const prefix of ['> ', '- ', '* ', '+ ', '1. ', '> > ', '  - ']) {
+      const out = sanitizeQuestion('see [r]\n' + prefix + '[r]: https://evil.invalid/x');
+      expect(out).not.toContain('evil.invalid');
+      expect(out).toContain('see r');
+    }
+  });
+
   it('[G-47] runs in linear time on long runs of unclosed markup', () => {
-    for (const unit of ['<script>', '[a](', '<!--', '<a ', '[x][', '[', '](', '[a](<', '[a](x "']) {
+    for (const unit of ['<script>', '[a](', '<!--', '<a ', '[x][', '[', '](', '[a](<', '[a](x "', '<']) {
       const t = Date.now();
       const out = sanitizeQuestion(unit.repeat(20_000));
       expect(Date.now() - t).toBeLessThan(500);
+      expect(out).not.toMatch(/<\/?[a-z!]/i);
+    }
+    // Nesting deeper than the pass limit, repeated to a long input.
+    let nested = 'x';
+    for (let i = 0; i < 2_000; i++) nested = '<' + nested + 'img onerror=y>';
+    {
+      const t = Date.now();
+      const out = sanitizeQuestion(nested);
+      expect(Date.now() - t).toBeLessThan(2_000);
       expect(out).not.toMatch(/<\/?[a-z!]/i);
     }
   });
