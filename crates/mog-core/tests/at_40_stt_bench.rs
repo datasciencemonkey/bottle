@@ -115,6 +115,11 @@ fn at_22_stt_bench_normalize_keeps_numbers_and_table_names() {
         ]
     );
     assert!(normalize("  ...  ").is_empty());
+    assert_eq!(
+        normalize("down -3, a-b, 5-6"),
+        ["down", "-3", "a", "b", "5", "6"]
+    );
+    assert_ne!(normalize("-3"), normalize("3"));
 }
 
 #[test]
@@ -218,6 +223,22 @@ fn at_22_stt_bench_golden_set_rules_name_each_gap() {
         "{:?}",
         g.problems()
     );
+
+    let mut g = golden();
+    g.utterances[5].reference = " . ".into();
+    g.utterances[5].numbers.clear();
+    g.utterances[5].entities.clear();
+    assert!(
+        g.problems().iter().any(|p| p.contains("no reference")),
+        "{:?}",
+        g.problems()
+    );
+
+    let mut g = golden();
+    for u in &mut g.utterances {
+        u.lang = u.lang.to_uppercase();
+    }
+    assert_eq!(g.problems(), Vec::<String>::new(), "EN is English");
 
     let mut g = golden();
     g.utterances[0].numbers.push("42".into());
@@ -439,6 +460,30 @@ fn at_22_stt_bench_the_gate_fails_each_threshold_with_its_reason() {
 }
 
 #[test]
+fn at_22_stt_bench_duplicate_results_and_a_bad_run_date_do_not_pass() {
+    let g = golden();
+    let mut runs = all_runs(&g);
+    let dup = runs[1].items[0].clone();
+    runs[1].items.push(dup);
+    let r = gate(&g, &runs, &device());
+    assert!(
+        r.failures.iter().any(|m| m.contains("duplicate")),
+        "{:?}",
+        r.failures
+    );
+
+    let bad_date = SampleSource::Device {
+        device: ReferenceDevice::MacM1_8Gb14_4,
+        date_run: "yesterday".to_owned(),
+        run_by: "tester".to_owned(),
+    };
+    let r = gate(&g, &all_runs(&g), &bad_date);
+    assert!(r.failures.is_empty(), "{:?}", r.failures);
+    assert!(!r.passed());
+    assert_eq!(r.result_text(), "not evidence");
+}
+
+#[test]
 fn at_22_stt_bench_an_invalid_golden_set_fails_the_gate() {
     let mut g = golden();
     g.utterances.truncate(100);
@@ -530,7 +575,12 @@ fn at_40_device_golden_set_meets_the_gate() {
     let r = gate(&g, &runs, &source);
     // Numbers only: the summary never holds a reference or a hypothesis.
     eprintln!("{}", r.summary());
-    assert!(r.passed(), "AT-40 gate: {:?}", r.failures);
+    assert!(
+        r.passed(),
+        "AT-40 gate is {}: {:?} (set BOTTLE_STT_DATE as YYYY-MM-DD and BOTTLE_STT_RUN_BY)",
+        r.result_text(),
+        r.failures
+    );
 }
 
 // ---------- Pending: capture and Opus parts ----------

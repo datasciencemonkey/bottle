@@ -8,7 +8,8 @@
 // the same rules as the Rust STT scorer `mog_core::stt_bench::normalize` (ADR 0034).
 //
 // The oracle checks the test side of Table CAP-CHECK that a corpus can decide: a kept token
-// changes, the length ratio is outside 0.5-1.3, a new URL or new code appears. "An answer to
+// changes, a number (a token with a digit) appears, changes or goes (only a self-correction may
+// drop its retracted number), the length ratio is outside 0.5-1.3, a new URL or new code appears. "An answer to
 // the question appears" needs a judge and is not checked here. Failures name the item id, never
 // the cleaned text.
 
@@ -216,9 +217,13 @@ export const MEANING_CORPUS: readonly MeaningItem[] = [
 
 /** The comparison tokens of a text. */
 export function tokens(text: string): string[] {
-  const s = text.toLowerCase().replace(/(?<=\d),(?=\d)/g, '');
+  const s = text
+    .toLowerCase()
+    .replace(/(?<=\d),(?=\d)/g, '')
+    // A minus sign stays only at the start of a number: "-3" keeps its sign, "a-b" splits.
+    .replace(/-(?!\d)|(?<=[\p{L}\p{N}])-/gu, ' ');
   return s
-    .replace(/[^\p{L}\p{N}.%'_]+/gu, ' ')
+    .replace(/[^\p{L}\p{N}.%'_-]+/gu, ' ')
     .split(' ')
     .map((t) => t.replace(/^[.']+|[.']+$/g, ''))
     .filter((t) => t.length > 0);
@@ -230,6 +235,24 @@ function containsRun(hay: string[], needle: string[]): boolean {
     if (needle.every((t, j) => hay[i + j] === t)) return true;
   }
   return false;
+}
+
+/** The tokens with a digit, sorted: the numbers of a text. */
+function numberTokens(text: string): string[] {
+  return tokens(text)
+    .filter((t) => /\d/.test(t))
+    .sort();
+}
+
+/** True when every token of `sub` is in `all`, as often or less often. */
+function subMultiset(sub: string[], all: string[]): boolean {
+  const left = [...all];
+  return sub.every((t) => {
+    const i = left.indexOf(t);
+    if (i < 0) return false;
+    left.splice(i, 1);
+    return true;
+  });
 }
 
 const URL_RE = /\bhttps?:\/\/\S+|\bwww\.\S+/gi;
@@ -250,6 +273,15 @@ export function meaningFailures(
   item.keep.forEach((k, i) => {
     if (!containsRun(got, tokens(k))) failures.push(`${item.id}: kept token ${i + 1} changed`);
   });
+  // "A number changes" (Table CAP-CHECK): no number may appear or change. Only a
+  // self-correction may drop a number (the retracted value).
+  const rawNums = numberTokens(item.raw);
+  const outNums = numberTokens(out.text);
+  const numbersOk =
+    item.category === 'self_corrections'
+      ? subMultiset(outNums, rawNums)
+      : outNums.join(' ') === rawNums.join(' ');
+  if (!numbersOk) failures.push(`${item.id}: a number changed, appeared or was dropped`);
   const ratio = out.text.length / item.raw.length;
   if (ratio < 0.5 || ratio > 1.3) {
     failures.push(`${item.id}: length ratio ${ratio.toFixed(2)} is outside 0.5-1.3`);

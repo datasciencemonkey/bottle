@@ -24,14 +24,15 @@ it depends on #46 and #49. The scorer can be built and tested now on synthetic d
    kind, reference, numbers, entities, audio_ms) and one result file per provider and route
    (id, text, latency_ms). Unknown fields are an error. The audio and the manifest of real
    speakers stay outside the repository.
-3. Text is compared as tokens: lower case, punctuation removed, decimals, percents and dotted table
-   names kept, thousands commas dropped. The TS AT-05 oracle (`src/test-support/meaning.ts`) uses
+3. Text is compared as tokens: lower case, punctuation removed, decimals, percents, dotted table
+   names and a minus sign at the start of a number kept, thousands commas dropped. The TS AT-05 oracle (`src/test-support/meaning.ts`) uses
    the same rules.
 4. WER is corpus level (word edits over reference words) over the speech utterances. Quiet
    English is the condition `quiet` with `lang` `en` or `en-*`.
 5. A number or an entity is listed in the manifest as written in the reference. It counts as kept
    when its tokens appear in order and next to each other in the hypothesis. The manifest must
-   not list a token that its reference does not have.
+   not list a token that its reference does not have, and a speech utterance must have a
+   reference text.
 6. A non-speech clip with any token in its hypothesis is a hallucination.
 7. "p95 on 10 s" is the nearest-rank p95 over the speech clips of 9 to 11 s. The golden set needs
    20 or more of them (the latency harness minimum).
@@ -41,8 +42,9 @@ it depends on #46 and #49. The scorer can be built and tested now on synthetic d
 9. AT-40 needs three runs: `local_parakeet` direct, `dbx_gemini` direct (CAP-47a) and
    `local_parakeet` through the Opus round trip (CAP-33a). The Opus run gates only the delta.
 10. A missing result counts as deleted words, missed numbers and entities, and a time over any
-    limit. A result for an unknown id fails the gate.
-11. The gate is `pass` only for a run on a reference device with a run date and a runner. Doubles
+    limit. A result for an unknown id, or a second result for one id, fails the gate.
+11. The gate is `pass` only for a run on a reference device with a run date (YYYY-MM-DD) and a
+    runner. Doubles
     give `not evidence`. The summary has counts and rates only, never a reference or a hypothesis.
 
 ## Consequences

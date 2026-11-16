@@ -69,7 +69,9 @@ describe('AT-43 UC1 dictation into the active app', () => {
     const log = core.invoke.mock.calls;
     expect(log.map(([cmd]) => cmd)).toEqual(['model_invoke']);
     expect((argsOf(log[0]?.[1]) as { role?: string } | undefined)?.role).toBe('router');
-    expect(callsTo(log, ['agent_start', 'agent_send', 'mcp_call', 'insert_text'])).toEqual([]);
+    expect(
+      callsTo(log, ['agent_start', 'agent_send', 'agent_tool_result', 'mcp_call', 'insert_text']),
+    ).toEqual([]);
   });
 
   it.skip('[AT-43] [RTR-01b] [RTR-01c] a dictation ends at insert_text with no agent turn and no Genie call TODO(#59)', async () => {
@@ -78,7 +80,14 @@ describe('AT-43 UC1 dictation into the active app', () => {
     expect(d.intent).toBe('dictation');
     // TODO(#59): run the UC1 flow from key-up with this decision.
     expect(callsTo(core.invoke.mock.calls, ['insert_text'])).toEqual(['insert_text']);
-    expect(callsTo(core.invoke.mock.calls, ['agent_send', 'agent_start', 'mcp_call'])).toEqual([]);
+    expect(
+      callsTo(core.invoke.mock.calls, [
+        'agent_start',
+        'agent_send',
+        'agent_tool_result',
+        'mcp_call',
+      ]),
+    ).toEqual([]);
   });
 
   it.skip('[AT-43] [RTR-17a] Shift held with the talk key forces the ask route TODO(#59)', () => {

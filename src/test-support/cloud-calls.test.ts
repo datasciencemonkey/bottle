@@ -8,12 +8,17 @@ describe('cloud-call classifier (AT-04, AT-43 harness)', () => {
     expect(Object.keys(CALL_CLASS).sort()).toEqual(Object.keys(COMMANDS).sort());
   });
 
-  it('[AT-22] Genie, model, HTTP, agent and login calls leave the device', () => {
+  it('[AT-22] Genie, model, HTTP, agent, telemetry and login calls leave the device', () => {
     for (const cmd of [
       'mcp_call',
       'model_invoke',
       'dbx_http',
+      'agent_start',
       'agent_send',
+      'agent_tool_result',
+      'telemetry_span',
+      'profile_status',
+      'mem_remote_status',
       'mem_remote_exec',
       'profile_login',
       'cli_install',
@@ -30,6 +35,8 @@ describe('cloud-call classifier (AT-04, AT-43 harness)', () => {
       'config_write',
       'window_card_show',
       'audit_append',
+      'policy_get',
+      'view_emit',
     ]) {
       expect(isCloudCall(cmd, {}), cmd).toBe(false);
     }

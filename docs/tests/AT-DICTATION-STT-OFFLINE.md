@@ -63,18 +63,22 @@ When the feature issue lands, its implementer removes the mark and finishes the 
 ## Device and person steps
 
 A person runs these steps. Each part takes less than 30 minutes once its feature issues have
-landed. Never put a token, a transcript, audio or a profile secret in a log or an evidence file.
+landed (AT-40 part A is one session per speaker). Never put a token, a transcript, audio or a profile secret in a log or an evidence file.
 Use `--profile <your-profile>` where a profile is needed; Bottle never picks one. Write each
 result to `docs/evidence/<AT>-<part>.md` in the format of `docs/tests/EVIDENCE-TEMPLATE.md`, with
 `Scope | part: <IDs> only`. Use the device IDs of `docs/tests/README.md`.
 
-### AT-40 part A: record the golden set (people, about 30 min per speaker; #53)
+### AT-40 part A: record the golden set (one session of about 25 min per speaker; #53)
 
-1. Read the scripts of #53 (240 or more utterances with numbers, names and table names). Record
-   10 or more speakers in 4 conditions: `quiet` (a quiet room, laptop mic) and three more (for
-   example `noise`, `far_field`, `accent`). Record 20 or more clips of 10 s each (9 to 11 s).
-2. Record 20 or more non-speech clips: room noise, music, keyboard, cough, silence.
-3. Keep the audio and the manifest outside the repository, on an encrypted disk. They are voices
+Do one session for each of 10 or more speakers. Each session is one part.
+
+1. Take the share of the #53 scripts for this speaker (24 or more of the 240 or more utterances,
+   with numbers, names and table names; 2 or more of them read to last 9 to 11 s).
+2. Record them in the 4 conditions: `quiet` (a quiet room, laptop mic) and three more that #53
+   names (for example `noise`, `far_field`, `accent`).
+3. In one session only, record 20 or more non-speech clips: room noise, music, keyboard, cough,
+   silence.
+4. Keep the audio and the manifest outside the repository, on an encrypted disk. They are voices
    of real people. Write the manifest in the format of ADR 0034, decision 2. Do not commit it.
 
 ### AT-40 part B: run the benchmark (macOS M1 8 GB, about 20 min; blocked on #46, #49, #53)
@@ -90,7 +94,7 @@ result to `docs/evidence/<AT>-<part>.md` in the format of `docs/tests/EVIDENCE-T
      cargo test -p mog-core --test at_40_stt_bench at_40_device -- --nocapture
    ```
    Expected: `ok`, no `skipped` line, and a summary with `AT-40 STT benchmark: pass`. The summary
-   has rates and counts only. Paste it into `docs/evidence/AT-40.md`.
+   has rates and counts only. Paste it into `docs/evidence/AT-40-B.md`.
 3. Repeat step 1 and 2 on `win11-i5-16gb`.
 
 ### AT-04: dictate offline (macOS, about 15 min; blocked on #41, #52, #102, #143, #175)
@@ -104,7 +108,9 @@ result to `docs/evidence/<AT>-<part>.md` in the format of `docs/tests/EVIDENCE-T
 5. Say "remember the Q3 target is 4 million". Expected: the item is saved; the embedding waits.
 6. Turn the network on. Expected: the workspace line shows, then the ask replays once; the
    embedding runs. Quit Bottle and check the outbox is empty in Settings.
-7. During steps 2 to 5, a packet capture (for example Little Snitch) shows no request from Bottle.
+7. During steps 2 to 5, an outbound connection monitor that logs blocked attempts (for example
+   Little Snitch or LuLu, with Bottle set to "deny and log") shows no connection attempt from
+   Bottle.
 
 ### AT-05: transcript meaning (macOS, about 15 min; blocked on #55, #60, #61)
 
@@ -116,13 +122,16 @@ result to `docs/evidence/<AT>-<part>.md` in the format of `docs/tests/EVIDENCE-T
 ### AT-43: dictation into the active app (macOS and Windows, about 25 min; blocked on #58, #59, #60)
 
 1. Copy the word `earlier` to the clipboard.
-2. Dictate "line one new line line two" into TextEdit (Notepad), a browser text field, Terminal
+2. Dictate "echo the dictation test works" into TextEdit (Notepad), a browser text field, Terminal
    (Windows Terminal) and a password field. Expected: in the first three the text appears with no
-   Enter (Terminal runs nothing); the pill shows "Inserted"; after 1 s the clipboard holds
-   `earlier`. The password field shows the reason and Copy.
+   Enter (in Terminal the text waits at the prompt and does not run); the pill shows "Inserted";
+   after 1 s the clipboard holds `earlier`. The password field shows the reason and Copy. The
+   multi-line case (no Enter between lines) is the automated MOG-06b test and #58.
 3. Remove the Accessibility permission for Bottle and dictate into TextEdit. Expected: the card
    shows the text, the reason and Copy.
 4. Hold Shift with the talk key and dictate a plain sentence. Expected: the preview chip (the ask
    route), not an insertion.
-5. With the app log on, check that no `agent_send` and no `mcp_call` happened in steps 2 and 3.
+5. In steps 2 and 3, the card never shows "Asking Genie in <host>", and the Genie One thread list
+   of the workspace has no new thread. The automated tests check the IPC log for `agent_*` and
+   `mcp_call`.
 6. Do Part B of `docs/tests/LATENCY-BENCH.md` with `--gate AT-43` for NFR-01d.

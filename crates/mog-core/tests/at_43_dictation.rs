@@ -58,11 +58,21 @@ fn at_43_mog_06b_insert_text_takes_no_key_or_submit_field() {
 
 #[test]
 fn at_43_mog_06b_multi_line_text_is_one_argument() {
-    // A multi-line text reaches R10 as one string, not as lines with a key between them.
-    let a: InsertTextArgs =
-        serde_json::from_value(json!({"mogId": MOG, "text": "line one\nline two\n"})).unwrap();
+    // A multi-line text passes the gateway as one string, not as lines with a key between them:
+    // the gateway accepts it (the paste is #58), and the parsed text keeps every newline.
+    let args = json!({"mogId": MOG, "text": "line one\nline two\n"});
+    let err = ipc::handle("brain", "insert_text", args.clone()).unwrap_err();
+    assert!(matches!(err, IpcError::NotImplemented { .. }), "{err:?}");
+    let a: InsertTextArgs = serde_json::from_value(args).unwrap();
     assert_eq!(a.text, "line one\nline two\n");
-    assert_eq!(a.mog_id, MOG);
+    // A list of lines is not a text.
+    let err = ipc::handle(
+        "brain",
+        "insert_text",
+        json!({"mogId": MOG, "text": ["line one", "line two"]}),
+    )
+    .unwrap_err();
+    assert!(matches!(err, IpcError::InvalidArgs { .. }), "{err:?}");
 }
 
 #[test]

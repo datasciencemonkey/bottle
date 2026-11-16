@@ -46,7 +46,8 @@ fn at_04_cap_72_a_transcript_names_its_provider_model_and_runtime() {
 #[ignore = "pending TODO(#46): R4 SttEngine (model residency, transcript identity) is not built"]
 fn at_04_cap_72_local_stt_records_the_model_and_runtime_offline() {
     // TODO(#46): with no network, load the local model and transcribe a fixture segment; the
-    // Transcript of stt_transcribe has provider local_parakeet and a non-empty model and runtime.
+    // Transcript of stt_transcribe has provider local_parakeet, and model and runtime are not
+    // empty strings (the contract test above only checks that the fields exist).
     let r4 = StubSttEngine;
     r4.load_model()
         .expect("TODO(#46): the local model loads with no network");

@@ -9,15 +9,15 @@
 //!
 //! Rules (ADR 0034):
 //! - Text is compared as [`normalize`] tokens: lower case, punctuation removed, decimals,
-//!   percents and dotted table names kept, thousands commas dropped.
+//!   percents, dotted table names and a leading minus sign kept, thousands commas dropped.
 //! - WER is corpus level: word edits over reference words, for the speech utterances.
 //! - A number or an entity of the manifest counts as kept when its tokens appear in order and
 //!   next to each other in the hypothesis.
 //! - A non-speech clip with any token in its hypothesis is a hallucination.
 //! - The p95 is the nearest rank ([`crate::latency_bench::percentile`]) over the speech clips of
 //!   9 to 11 s. A missing result counts as deleted words and as a time over any limit.
-//! - [`gate`] gives `pass` only for a run on a reference device; test doubles are never evidence
-//!   ([`SampleSource`]).
+//! - [`gate`] gives `pass` only for a run on a reference device with a run date (YYYY-MM-DD) and a
+//!   runner; test doubles are never evidence ([`SampleSource`]).
 //!
 //! Privacy (SEC rules): [`GateReport::summary`] and the failure texts hold provider names, counts
 //! and rates only, never a reference or a hypothesis.
@@ -27,6 +27,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
+use crate::latency_bench::report::valid_date;
 use crate::latency_bench::{percentile, SampleSource, MIN_TIME_SAMPLES};
 use crate::types::TranscriptProvider;
 
@@ -209,6 +210,12 @@ impl GoldenSet {
             if u.kind == Kind::NonSpeech && !reference.is_empty() {
                 out.push(format!("{}: a non-speech clip has a reference text", u.id));
             }
+            if u.kind == Kind::Speech && reference.is_empty() {
+                out.push(format!(
+                    "{}: a speech utterance has no reference text",
+                    u.id
+                ));
+            }
         }
         out
     }
@@ -222,7 +229,8 @@ impl RunResults {
 }
 
 fn is_quiet_english(u: &Utterance) -> bool {
-    u.condition == QUIET && (u.lang == "en" || u.lang.starts_with("en-"))
+    let lang = u.lang.to_ascii_lowercase();
+    u.condition == QUIET && (lang == "en" || lang.starts_with("en-"))
 }
 
 fn is_ten_s(u: &Utterance) -> bool {
@@ -240,6 +248,15 @@ pub fn normalize(text: &str) -> Vec<String> {
         };
         if c == ',' && digit_at(i.checked_sub(1)) && digit_at(Some(i + 1)) {
             continue; // 1,000 -> 1000
+        }
+        // A minus sign stays only at the start of a number: "-3" keeps its sign, "a-b" splits.
+        let word_before = i
+            .checked_sub(1)
+            .and_then(|j| chars.get(j))
+            .is_some_and(|c| c.is_alphanumeric());
+        if c == '-' && digit_at(Some(i + 1)) && !word_before {
+            s.push(c);
+            continue;
         }
         if c.is_alphanumeric() || matches!(c, '.' | '%' | '\'' | '_') {
             s.push(c);
@@ -295,6 +312,8 @@ pub struct Score {
     pub missing: usize,
     /// Result items whose id is not in the golden set.
     pub unknown: usize,
+    /// Result items whose id came before in the same file.
+    pub duplicates: usize,
 }
 
 fn pct(num: usize, den: usize) -> Option<f64> {
@@ -362,6 +381,7 @@ pub fn score(golden: &GoldenSet, run: &RunResults) -> Score {
             .iter()
             .filter(|h| !ids.contains(h.id.as_str()))
             .count(),
+        duplicates: run.items.len() - by_id.len(),
     }
 }
 
@@ -476,6 +496,9 @@ pub fn gate(golden: &GoldenSet, runs: &[RunResults], source: &SampleSource) -> G
                 s.unknown
             ));
         }
+        if s.duplicates > 0 {
+            failures.push(format!("{who}: {} duplicate result ids", s.duplicates));
+        }
         if s.route == SttRoute::Opus {
             continue; // The Opus run gates only the delta.
         }
@@ -536,6 +559,6 @@ pub fn gate(golden: &GoldenSet, runs: &[RunResults], source: &SampleSource) -> G
         scores,
         failures,
         evidence: matches!(source, SampleSource::Device { date_run, run_by, .. }
-            if !date_run.trim().is_empty() && !run_by.trim().is_empty()),
+            if valid_date(date_run) && !run_by.trim().is_empty()),
     }
 }

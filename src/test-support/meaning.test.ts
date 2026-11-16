@@ -42,6 +42,33 @@ describe('AT-05 meaning corpus and oracle', () => {
     ]);
   });
 
+  it('[AT-22] tokens keep a minus sign at the start of a number only', () => {
+    expect(tokens('down -3 points, a-b test, 5-6 days')).toEqual([
+      'down',
+      '-3',
+      'points',
+      'a',
+      'b',
+      'test',
+      '5',
+      '6',
+      'days',
+    ]);
+    expect(tokens('-3')).not.toEqual(tokens('3'));
+  });
+
+  it('[AT-22] the oracle flags a number that cleanup adds, changes or drops outside the kept tokens', () => {
+    const x = item('num-2');
+    const added = 'The margin went from 3.5 to 4.25 percent in the last 2 quarters.';
+    expect(meaningFailures(x, { text: added, usedRaw: false }).join(' ')).toContain('number');
+    const y = item('unit-1');
+    const dropped = 'The latency is 850 ms on the laptop.';
+    expect(meaningFailures(y, { text: dropped, usedRaw: false }).join(' ')).toContain('number');
+    const signed = item('num-3');
+    const flipped = 'So we closed -17 deals and lost 4 of them in March.';
+    expect(meaningFailures(signed, { text: flipped, usedRaw: false })).not.toEqual([]);
+  });
+
   it('[AT-22] the oracle names a changed number, unit, negation, name and table', () => {
     const cases: [string, string, string][] = [
       ['num-1', '1,250', '1,205'],

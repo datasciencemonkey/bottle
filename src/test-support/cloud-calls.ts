@@ -25,10 +25,10 @@ export const CALL_CLASS = {
   session_attest: 'local',
   stt_transcribe: 'cloud_unless_local_stt',
   insert_text: 'local',
-  agent_start: 'local',
+  agent_start: 'cloud', // the harness process can reach the network
   agent_stop: 'local',
   agent_send: 'cloud', // the harness model call goes through the AI Gateway
-  agent_tool_result: 'local',
+  agent_tool_result: 'cloud', // resumes the agent turn: a model call through the AI Gateway
   model_invoke: 'cloud',
   mcp_call: 'cloud',
   dbx_http: 'cloud',
@@ -48,7 +48,7 @@ export const CALL_CLASS = {
   window_card_hide: 'local',
   view_emit: 'local',
   audit_append: 'local',
-  telemetry_span: 'local', // local spans; export is off by default
+  telemetry_span: 'cloud', // exported once an admin sets OtlpTable (4.5, SEC-16a)
   brain_subscribe: 'local',
 } as const satisfies Record<keyof typeof COMMANDS, CallClass>;
 
