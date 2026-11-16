@@ -25,6 +25,8 @@ const full: SectionInput = {
   dataFlowText: 'Audio stays on this Mac. The question goes to your workspace.',
 };
 
+const omitSent = ({ sentToGenie: _s, ...rest }: SectionInput): SectionInput => rest;
+
 describe('expanded card sections', () => {
   it('[UX-18] [AT-09] shows the sections of Table UX-EXP in that order', () => {
     expect(SECTION_ORDER).toEqual([
@@ -54,9 +56,7 @@ describe('expanded card sections', () => {
   });
 
   it('[UX-18] shows Sent to Genie and Resend only when context was sent', () => {
-    const ids = buildSections({ ...full, sentToGenie: undefined, canResend: false }).map(
-      (s) => s.id,
-    );
+    const ids = buildSections({ ...omitSent(full), canResend: false }).map((s) => s.id);
     expect(ids).not.toContain('sentToGenie');
     expect(ids).not.toContain('resend');
   });

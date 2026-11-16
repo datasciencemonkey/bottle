@@ -314,7 +314,7 @@ describe('V3 card view: expanded sections and chips', () => {
     });
     await act(async () => chip.focus());
     await act(async () => chip.blur());
-    expect(viewEmits().filter((e) => e.kind === 'chip_click')).toEqual([]);
+    expect((viewEmits() as { kind: string }[]).filter((e) => e.kind === 'chip_click')).toEqual([]);
     await act(async () => chip.click());
     expect(viewEmits()).toEqual([{ mogId: ID, kind: 'chip_click', payload: { chipId: 'c1' } }]);
   });

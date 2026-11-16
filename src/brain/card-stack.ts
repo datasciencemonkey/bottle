@@ -5,7 +5,7 @@
  * TODO(#285): the brain's `view_emit` handler routes the card's `hover` and `click` input to
  * `input()`, and the `card.update` payload type moves to the contract.
  * TODO(#77): the settings come from `mog.card.maxBlurbs` and `mog.card.autoHideSec` in the store.
- * TODO(#86, #89): blurb templates and chips; this controller sends no chips yet.
+ * TODO(#86): blurb templates. Chips and expanded sections: #89, ADR 0032.
  */
 import type { MogId } from '../shared/interfaces';
 import type { ViewEmitKind } from '../shared/ipc';
@@ -17,6 +17,8 @@ import {
   type CardBlurb,
   type StackSettings,
 } from './blurb-stack';
+import { ChipRow, type ChipAction, type ChipInput, type ChipView } from './card-chips';
+import { buildSections, type ExpandedSection, type SectionInput } from './card-sections';
 import type { MonotonicClock } from './clock';
 
 /** The `card.update` payload this controller sends (the view-local `CardUpdate` mirrors it). */
@@ -24,7 +26,12 @@ export interface CardStackUpdate {
   mogId: MogId;
   blurbs: CardBlurb[];
   historyCount: number;
-  chips: { id: string; label: string }[];
+  /** The chip row: 4 chips or less (UX-20a). */
+  chips: ChipView[];
+  /** The chips after the 4th: the view shows them in the expanded card (UX-20a). */
+  overflowChips: ChipView[];
+  /** The expanded card sections in the UX-EXP order (UX-18). Absent while the card is small. */
+  sections?: ExpandedSection[];
   /** The STT badge of the card footer (UX-38), from `sttBadgeText` (ADR 0029). */
   sttBadge?: string;
 }
@@ -38,6 +45,8 @@ export interface CardStackDeps {
   send(update: CardStackUpdate): void | Promise<void>;
   /** The "N more in History" link. TODO(#103): open the hub History for this MOG. */
   openHistory(mogId: MogId): void;
+  /** Runs the action of a chip after a click on it (UX-20c). TODO(#285): route to the agent. */
+  onChip?(action: ChipAction): void;
 }
 
 export interface CardStack {
@@ -47,6 +56,13 @@ export interface CardStack {
   input(kind: ViewEmitKind, payload: unknown): void;
   /** UX-38: set the footer STT badge. TODO(#52): call it with the provider of each Transcript. */
   setSttBadge(text: string | undefined): void;
+  /** Offer a chip (Appendix E). The row keeps 4 or less, the rest go to the expanded card. */
+  offerChip(c: ChipInput): void;
+  /** Remove a chip, or all chips of a blurb or request that ended. */
+  removeChip(id: string): void;
+  removeChipsOf(owner: string): void;
+  /** UX-18: set the content of the expanded card, or `undefined` to show the small card. */
+  setExpanded(input: SectionInput | undefined): void;
   dispose(): void;
 }
 
@@ -74,6 +90,14 @@ export function cardStackDeps(mogId: MogId, clock: MonotonicClock): CardStackDep
   };
 }
 
+const earliest = (a: number | undefined, b: number | undefined) =>
+  a === undefined ? b : b === undefined ? a : Math.min(a, b);
+
+function isChipClick(p: unknown): string | undefined {
+  const id = typeof p === 'object' && p !== null ? (p as { chipId?: unknown }).chipId : undefined;
+  return typeof id === 'string' ? id : undefined;
+}
+
 export function createCardStack(
   mogId: MogId,
   deps: CardStackDeps,
@@ -83,16 +107,27 @@ export function createCardStack(
   let cancel: (() => void) | undefined;
   let armedAt: number | undefined;
   let sttBadge: string | undefined;
+  let expanded: SectionInput | undefined;
+  const row = new ChipRow();
 
   const publish = () => {
     const v = stack.view();
-    const u: CardStackUpdate = { mogId, blurbs: v.blurbs, historyCount: v.historyCount, chips: [] };
+    const c = row.view();
+    const u: CardStackUpdate = {
+      mogId,
+      blurbs: v.blurbs,
+      historyCount: v.historyCount,
+      chips: c.chips,
+      overflowChips: c.overflow,
+    };
     if (sttBadge !== undefined) u.sttBadge = sttBadge;
+    if (expanded)
+      u.sections = buildSections(sttBadge === undefined ? expanded : { sttBadge, ...expanded });
     void deps.send(u);
   };
 
   const arm = () => {
-    const at = stack.nextDeadline();
+    const at = earliest(stack.nextDeadline(), row.nextDeadline());
     if (at === armedAt) return;
     cancel?.();
     cancel = undefined;
@@ -103,7 +138,9 @@ export function createCardStack(
   function onTimer() {
     cancel = undefined;
     armedAt = undefined;
-    if (stack.tick(deps.clock.now()).length) publish();
+    const now = deps.clock.now();
+    const collapsed = stack.tick(now).length;
+    if (row.tick(now).length || collapsed) publish();
     arm();
   }
 
@@ -120,6 +157,16 @@ export function createCardStack(
       if (stack.complete(blurbId, deps.clock.now())) changed();
     },
     input(kind, payload) {
+      if (kind === 'chip_click') {
+        // UX-20c: a chip acts only on a click. An unknown or expired chip does nothing.
+        const id = isChipClick(payload);
+        const action = id === undefined ? undefined : row.click(id);
+        if (action) {
+          deps.onChip?.(action);
+          changed();
+        }
+        return;
+      }
       const i = decodeCardInput(kind, payload);
       if (!i) return;
       const now = deps.clock.now();
@@ -134,6 +181,19 @@ export function createCardStack(
     setSttBadge(text) {
       if (text === sttBadge) return;
       sttBadge = text;
+      publish();
+    },
+    offerChip(c) {
+      if (row.offer(c, deps.clock.now())) changed();
+    },
+    removeChip(id) {
+      if (row.remove(id)) changed();
+    },
+    removeChipsOf(owner) {
+      if (row.removeOwner(owner).length) changed();
+    },
+    setExpanded(input) {
+      expanded = input;
       publish();
     },
     dispose() {
