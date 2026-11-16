@@ -39,6 +39,9 @@ const fn core(name: &'static str, spec_name: &'static str) -> EventSpec {
 
 pub const HOTKEY_PTT: &str = "hotkey:ptt";
 pub const HOTKEY_PANIC: &str = "hotkey:panic";
+/// The talk-key status for the "Talk key paused" pill (CAP-39c) and the elevated-window
+/// tooltip (CAP-42). Payload: `TalkKeyStatus` (#297, #294, ADR 0039). Not in the 4.5 list yet.
+pub const HOTKEY_STATUS: &str = "hotkey:status";
 pub const CAPTURE_STATE: &str = "capture:state";
 pub const CAPTURE_SEGMENT: &str = "capture:segment";
 pub const SESSION_STOP_SIGNAL: &str = "session:stop_signal";
@@ -55,10 +58,12 @@ pub const MOG_LEVEL: &str = "mog:level";
 /// `view_emit` arrives in the brain under this name.
 pub const VIEW_INPUT: &str = "view:input";
 
-/// Every event of 4.5, in the order of the requirements, plus `mog.level` (ADR 0040).
+/// Every event of 4.5, in the order of the requirements, plus `mog.level` (ADR 0040) and
+/// `hotkey.status` (ADR 0039).
 pub const ALL: &[EventSpec] = &[
     core(HOTKEY_PTT, "hotkey.ptt"),
     core(HOTKEY_PANIC, "hotkey.panic"),
+    core(HOTKEY_STATUS, "hotkey.status"),
     core(CAPTURE_STATE, "capture.state"),
     core(CAPTURE_SEGMENT, "capture.segment"),
     core(SESSION_STOP_SIGNAL, "session.stop_signal"),
@@ -84,3 +89,13 @@ pub const ALL: &[EventSpec] = &[
     },
     core(VIEW_INPUT, "view.input"),
 ];
+
+/// The core-to-brain events whose last payload the host keeps and sends again to a brain
+/// Channel that subscribes later (ADR 0039). A state, not a stream: the brain can subscribe
+/// after it changed (for example a talk key that failed at setup).
+pub const STICKY: &[&str] = &[HOTKEY_STATUS];
+
+/// True for an event of [`STICKY`].
+pub fn is_sticky(event: &str) -> bool {
+    STICKY.contains(&event)
+}

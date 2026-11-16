@@ -624,7 +624,48 @@ pub struct MicLevelFrame {
     pub t: f64,
 }
 
+/// The talk key now (`hotkey.status`, CAP-39c, CAP-42, ADR 0039).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TalkKeyState {
+    /// The talk key works.
+    Active,
+    /// The OS hides the talk key for now (the pill or the tooltip shows).
+    Paused,
+    /// The talk key cannot work (the hook or the host failed).
+    Unavailable,
+}
+
+/// Why the talk key is not active. A fixed value: never a window title, a process name or a
+/// key (SEC rules).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TalkKeyReason {
+    /// macOS Secure Event Input is on (CAP-39c).
+    SecureInput,
+    /// Windows: an elevated window has the foreground (CAP-42).
+    ElevatedForeground,
+    /// Secure Event Input is on and the OS refused the fallback chord (CAP-39b).
+    FallbackChordUnavailable,
+    /// The hook or the host could not start the talk key.
+    HookFailed,
+}
+
+/// The `hotkey.status` payload. `reason` is required and `null` when the talk key is active.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TalkKeyStatus {
+    pub talk_key: TalkKeyState,
+    /// Required and nullable, like `MicLevelFrame.owner`.
+    #[serde(deserialize_with = "nullable")]
+    pub reason: Option<TalkKeyReason>,
+}
+
 /// A required field that may be `null`. Plain `Option` would also accept a missing key.
-fn nullable<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
-    Option::<String>::deserialize(d)
+fn nullable<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(d)
 }

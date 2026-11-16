@@ -26,7 +26,7 @@
 //! Requirements: CAP-35a, CAP-36, CAP-37, CAP-39c, CAP-40a, CAP-43a, CAP-43b, MB-06a, AT-30.
 
 use crate::hotkey_settings::{HotkeySettings, MemorySettingsStore, TalkKeySink};
-use crate::ipc::BrainChannel;
+use crate::ipc::{BrainChannel, PermissionRoute};
 use mog_core::clock::{MonotonicClock, SystemClock};
 use mog_core::error::CoreError;
 use mog_core::hotkey::HotkeyService;
@@ -36,8 +36,9 @@ use mog_core::hotkey_core::{
     UserAction,
 };
 use mog_core::hotkey_windows::{forward_to_engine, HookSignal};
-use mog_core::ipc::{events, WindowClass};
+use mog_core::ipc::{events, PermissionKind, WindowClass};
 use mog_core::keyboard_env::{self, CopilotKeyFlag, MemoryCopilotKeyFlag, WithCopilotFlag};
+use mog_core::types::{TalkKeyReason, TalkKeyState, TalkKeyStatus};
 use serde_json::{json, Value};
 use std::sync::{mpsc, Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
@@ -51,6 +52,12 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 pub trait BrainSink: Send + Sync {
     /// Deliver one item. `false` if no brain listens.
     fn deliver(&self, event: &str, payload: Value) -> bool;
+
+    /// Deliver one item of a sticky event (`events::STICKY`): a brain that subscribes later
+    /// still gets the last one (ADR 0039). `false` if no brain listens now.
+    fn deliver_sticky(&self, event: &str, payload: Value) -> bool {
+        self.deliver(event, payload)
+    }
 }
 
 impl<R: Runtime> BrainSink for AppHandle<R> {
@@ -58,33 +65,76 @@ impl<R: Runtime> BrainSink for AppHandle<R> {
         self.try_state::<BrainChannel>()
             .is_some_and(|ch| ch.send(event, payload))
     }
+
+    fn deliver_sticky(&self, event: &str, payload: Value) -> bool {
+        self.try_state::<BrainChannel>()
+            .is_some_and(|ch| ch.send_sticky(event, payload))
+    }
 }
 
-/// A talk-key status change for the "Talk key paused" pill (CAP-39c).
+/// A talk-key status change for the "Talk key paused" pill (CAP-39c) and the elevated-window
+/// tooltip (CAP-42).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HotkeyStatus {
     /// Secure Event Input is on: show the pill.
     Paused,
-    /// The talk key works again: hide the pill.
+    /// The talk key works again (Secure Event Input ended, or the hook is back): hide the pill.
     Restored,
     /// Secure Event Input is on and the OS refused the fallback chord.
     ChordUnavailable,
+    /// Windows: an elevated window blocks the talk key (CAP-42).
+    Blocked,
+    /// The hook or the host could not start the talk key.
+    Unavailable,
 }
 
-/// Receives the talk-key status. The event for it is contract change #297.
+/// The `hotkey.status` payload of a status (ADR 0039). It carries no window title, process
+/// name, key or failure text.
+pub fn talk_key_status(status: HotkeyStatus) -> TalkKeyStatus {
+    let (talk_key, reason) = match status {
+        HotkeyStatus::Paused => (TalkKeyState::Paused, Some(TalkKeyReason::SecureInput)),
+        HotkeyStatus::Restored => (TalkKeyState::Active, None),
+        HotkeyStatus::ChordUnavailable => (
+            TalkKeyState::Paused,
+            Some(TalkKeyReason::FallbackChordUnavailable),
+        ),
+        HotkeyStatus::Blocked => (
+            TalkKeyState::Paused,
+            Some(TalkKeyReason::ElevatedForeground),
+        ),
+        HotkeyStatus::Unavailable => (TalkKeyState::Unavailable, Some(TalkKeyReason::HookFailed)),
+    };
+    TalkKeyStatus { talk_key, reason }
+}
+
+/// [`talk_key_status`] as JSON.
+pub fn status_payload(status: HotkeyStatus) -> Value {
+    serde_json::to_value(talk_key_status(status)).unwrap_or(Value::Null)
+}
+
+/// Receives the talk-key status.
 pub trait StatusSink: Send + Sync {
     /// Take one status change.
     fn status(&self, status: HotkeyStatus);
 }
 
-/// The app's status sink until the `hotkey.status` event exists.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct PendingStatusEvent;
+/// The app's status sink: each change goes to the brain as the sticky `hotkey:status` item
+/// (#297, ADR 0039), so a brain that subscribes later still gets the last status.
+#[derive(Debug, Clone)]
+pub struct BrainStatus<B: BrainSink>(pub B);
 
-impl StatusSink for PendingStatusEvent {
-    fn status(&self, _status: HotkeyStatus) {
-        // TODO(#297): send `hotkey:status` on the brain Channel once the contract has it.
+impl<B: BrainSink> StatusSink for BrainStatus<B> {
+    fn status(&self, status: HotkeyStatus) {
+        // `false` means no brain listens yet; the Channel keeps the item for it.
+        let _ = self
+            .0
+            .deliver_sticky(events::HOTKEY_STATUS, status_payload(status));
     }
+}
+
+/// Tell the brain that the talk key cannot work: `hotkey_host::install` failed (ADR 0039).
+pub fn report_unavailable<R: Runtime>(app: &AppHandle<R>) {
+    BrainStatus(app.clone()).status(HotkeyStatus::Unavailable);
 }
 
 /// A window signal that changes the PTT target.
@@ -241,7 +291,8 @@ where
 pub enum DeferredSignal {
     /// Esc went down during capture. The capture lifecycle (#14) ends hands-free capture.
     Escape,
-    /// An elevated window blocks the talk key. The CAP-42 tooltip (#294) consumes it.
+    /// An elevated window blocks the talk key. It becomes `hotkey.status` for the CAP-42
+    /// tooltip (#294).
     TalkKeyBlocked,
     /// The hook was installed again (CAP-40b).
     HookReinstalled,
@@ -257,16 +308,34 @@ pub trait HookSignalSeam: Send {
     fn deferred(&self, signal: DeferredSignal);
 }
 
-/// The app's seam. The Copilot signal sets the shared flag; each other arm names the issue
-/// that consumes it.
+/// The app's seam. The Copilot signal sets the shared flag; the talk-key signals go to the
+/// status sink as `hotkey.status`; each other arm names the issue that consumes it.
 pub struct HookConsumers {
     copilot: Arc<dyn CopilotKeyFlag>,
+    status: Option<Arc<dyn StatusSink>>,
 }
 
 impl HookConsumers {
     /// A seam that sets `copilot` when the hook sees the Copilot key.
     pub fn new(copilot: Arc<dyn CopilotKeyFlag>) -> Self {
-        Self { copilot }
+        Self {
+            copilot,
+            status: None,
+        }
+    }
+
+    /// The same seam, with `status` for the talk-key signals (CAP-42, CAP-40a).
+    pub fn with_status(self, status: Arc<dyn StatusSink>) -> Self {
+        Self {
+            status: Some(status),
+            ..self
+        }
+    }
+
+    fn status(&self, status: HotkeyStatus) {
+        if let Some(sink) = &self.status {
+            sink.status(status);
+        }
     }
 }
 
@@ -290,12 +359,11 @@ impl HookSignalSeam for HookConsumers {
             DeferredSignal::Escape => {
                 // TODO(#14): the capture lifecycle ends hands-free capture on Esc.
             }
-            DeferredSignal::TalkKeyBlocked => {
-                // TODO(#294): one `hotkey.status` event makes the MOG show the CAP-42 tooltip.
-            }
-            DeferredSignal::HookReinstalled | DeferredSignal::HookFailed(_) => {
-                // TODO(#297): the hook health goes on the `hotkey.status` event.
-            }
+            // CAP-42: the core sends it once per elevated process; the MOG shows the tooltip.
+            DeferredSignal::TalkKeyBlocked => self.status(HotkeyStatus::Blocked),
+            DeferredSignal::HookReinstalled => self.status(HotkeyStatus::Restored),
+            // The fixed reason string stays here: the payload carries only `hook_failed`.
+            DeferredSignal::HookFailed(_) => self.status(HotkeyStatus::Unavailable),
         }
     }
 }
@@ -441,7 +509,7 @@ impl HotkeyHost {
     }
 
     /// Ask for Input Monitoring after a user click, then start again if granted (CAP-36).
-    /// The wizard (#43) and Settings call this through an IPC command: TODO(#312).
+    /// The wizard (#43) and Settings call this with the `permission_request` command (#312).
     pub fn request_ptt_permission(&self, action: UserAction) -> PermissionStatus {
         let status = hotkey_core::request_ptt_permission(self.permissions.as_ref(), action);
         if status == PermissionStatus::Granted {
@@ -451,7 +519,7 @@ impl HotkeyHost {
     }
 
     /// Ask for Accessibility after the user selects text insertion, and only then (CAP-37).
-    /// TODO(#312): the IPC command for the insertion choice.
+    /// The hub calls this with `permission_request` `accessibility` (#312).
     pub fn request_insertion_permission(&self, action: UserAction) -> PermissionStatus {
         hotkey_core::request_insertion_permission(self.permissions.as_ref(), action)
     }
@@ -515,6 +583,20 @@ impl HotkeyRuntime {
     }
 }
 
+/// `permission_request` (#312, ADR 0039): Input Monitoring starts R1 again when granted.
+impl PermissionRoute for HotkeyRuntime {
+    fn request_permission(
+        &self,
+        permission: PermissionKind,
+        action: UserAction,
+    ) -> PermissionStatus {
+        match permission {
+            PermissionKind::InputMonitoring => self.host.request_ptt_permission(action),
+            PermissionKind::Accessibility => self.host.request_insertion_permission(action),
+        }
+    }
+}
+
 /// The app's [`TalkKeySink`]: a new talk key restarts the managed [`HotkeyRuntime`].
 pub struct AppTalkKey<R: Runtime>(pub AppHandle<R>);
 
@@ -527,12 +609,14 @@ impl<R: Runtime> TalkKeySink for AppTalkKey<R> {
 }
 
 /// The platform service and permission API (macOS).
-/// macOS has no Copilot key, so `_copilot` is unused.
+/// macOS has no Copilot key and no hook seam, so `_copilot` and `_status` are unused: the
+/// pill outputs reach the status sink through the forwarder.
 #[cfg(target_os = "macos")]
 pub fn platform_service(
     talk: TalkBinding,
     sink: Arc<dyn HotkeySink>,
     _copilot: Arc<dyn CopilotKeyFlag>,
+    _status: Arc<dyn StatusSink>,
 ) -> (Box<dyn HotkeyService>, Box<dyn PermissionApi>) {
     use mog_core::hotkey_macos::{MacHotkeyService, MacPermissions};
     // Ctrl+Win is a Windows key: macOS settings never hold it, so it gives the D66 default.
@@ -547,16 +631,18 @@ pub fn platform_service(
 ///
 /// The hook sends [`HookSignal`]s on its own channel; the adapter thread feeds them to the
 /// shared engine, which emits into `sink`. The hook needs no OS prompt. A Copilot chord
-/// seen by the hook sets `copilot` (#332).
+/// seen by the hook sets `copilot` (#332). The talk-key signals go to `status` (ADR 0039).
 #[cfg(windows)]
 pub fn platform_service(
     talk: TalkBinding,
     sink: Arc<dyn HotkeySink>,
     copilot: Arc<dyn CopilotKeyFlag>,
+    status: Arc<dyn StatusSink>,
 ) -> (Box<dyn HotkeyService>, Box<dyn PermissionApi>) {
     use mog_core::hotkey_windows::win32::WindowsHotkeyService;
     let (service, rx) = WindowsHotkeyService::new(talk.windows_talk_key());
-    let adapter = spawn_hook_adapter(rx, sink, HookConsumers::new(copilot));
+    let seam = HookConsumers::new(copilot).with_status(status);
+    let adapter = spawn_hook_adapter(rx, sink, seam);
     (
         with_hook_adapter(Box::new(service), adapter),
         Box::new(NoOsPermission),
@@ -569,6 +655,7 @@ pub fn platform_service(
     _talk: TalkBinding,
     _sink: Arc<dyn HotkeySink>,
     _copilot: Arc<dyn CopilotKeyFlag>,
+    _status: Arc<dyn StatusSink>,
 ) -> (Box<dyn HotkeyService>, Box<dyn PermissionApi>) {
     (
         Box::new(mog_core::hotkey::StubHotkeyService),
@@ -593,9 +680,10 @@ impl PermissionApi for NoOsPermission {
 /// Load the key settings, create the host with the platform service and start it (no
 /// prompt). The settings store is in memory until #77 (see `hotkey_settings`). One Copilot
 /// key flag goes to the key check reads and to the hook (#332, ADR 0025); it is in memory
-/// until #341.
+/// until #341. The Windows hook seam sends the talk-key status to the brain (ADR 0039).
 pub fn install<R: Runtime>(app: &AppHandle<R>) -> std::io::Result<()> {
     let copilot: Arc<dyn CopilotKeyFlag> = Arc::new(MemoryCopilotKeyFlag::default());
+    let status: Arc<dyn StatusSink> = Arc::new(BrainStatus(app.clone()));
     let settings = HotkeySettings::load(
         keyboard_env::host_os(),
         Box::new(MemorySettingsStore::default()),
@@ -606,7 +694,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> std::io::Result<()> {
         Box::new(AppTalkKey(app.clone())),
     );
     install_with(app, settings, move |talk, sink| {
-        platform_service(talk, sink, Arc::clone(&copilot))
+        platform_service(talk, sink, Arc::clone(&copilot), Arc::clone(&status))
     })
 }
 
@@ -628,7 +716,7 @@ where
     let (sink, rx) = queue();
     spawn_forwarder(
         rx,
-        PttForwarder::new(Arc::clone(&target), app.clone(), PendingStatusEvent),
+        PttForwarder::new(Arc::clone(&target), app.clone(), BrainStatus(app.clone())),
     )?;
     let sink: Arc<dyn HotkeySink> = Arc::new(sink);
     let (service, permissions) = factory(settings.talk_binding(), Arc::clone(&sink));
@@ -1602,6 +1690,7 @@ mod tests {
         for part in [
             "WindowsHotkeyService::new(talk.windows_talk_key())",
             "HookConsumers::new(copilot).with_status(status)",
+            "spawn_hook_adapter(rx, sink, seam)",
             "with_hook_adapter(Box::new(service), adapter)",
             "Box::new(NoOsPermission)",
         ] {

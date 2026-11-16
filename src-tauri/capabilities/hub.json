@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "hub",
-  "description": "Hub view window (V1): listens to brain-to-view events; calls the brain-and-hub commands of 4.5 and view_emit.",
+  "description": "Hub view window (V1): listens to brain-to-view events; calls the brain-and-hub commands of 4.5, permission_request (ADR 0039) and view_emit.",
   "windows": ["hub"],
   "permissions": [
     "core:event:allow-listen",
@@ -19,6 +19,7 @@
     "allow-config-delete",
     "allow-policy-get",
     "allow-hotkeys-set",
+    "allow-permission-request",
     "allow-view-emit"
   ]
 }

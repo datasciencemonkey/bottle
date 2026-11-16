@@ -8,12 +8,15 @@
 //!
 //! The gateway is the only entry (ADR 0040). It sends each checked call to [`HostComponents`],
 //! which runs the host actions: `view_emit` (relay to the brain), `brain_subscribe`, the four
-//! `window_*` ops (R11) and `hotkeys_set` (R1 settings). Every other command stays
-//! `not_implemented` until its feature issue wires its component. A rejection is only
-//! `{ "error": "<code>" }`, with a code from `ipc_gateway::ERROR_CODES` (SEC-03).
+//! `window_*` ops (R11), `hotkeys_set` (R1 settings) and `permission_request` (R1, ADR 0039).
+//! Every other command stays `not_implemented` until its feature issue wires its component.
+//! A rejection is only `{ "error": "<code>" }`, with a code from `ipc_gateway::ERROR_CODES`
+//! (SEC-03).
 //!
 //! The `window_*` ops can wait for the main thread, so they run on a worker and resolve later
-//! (ADR 0022 decision 6). Every other command runs inline, so `view_emit` keeps its order.
+//! (ADR 0022 decision 6). `permission_request` can wait for the OS prompt, so it also runs on
+//! a worker (ADR 0039). Every other command runs inline, so `view_emit` keeps its order.
+//! The last `hotkey:status` item is sticky: a new brain Channel gets it again (ADR 0039).
 //!
 //! The front end calls `invoke(name, { args })`; any other top-level key is rejected.
 //! Core-to-brain traffic (including the `view_emit` relay) goes only to the brain, on the
@@ -23,38 +26,93 @@
 
 use crate::window_host::TauriWindowHost;
 use mog_core::error::{CoreError, CoreResult};
+use mog_core::hotkey_core::{PermissionStatus, UserAction};
 use mog_core::ipc::{
     self, events, BrainSubscribeArgs, ChannelRef, HotkeysSetArgs, IpcError, JsonObject, MogArgs,
-    WindowMogOpenArgs, INVALID_ARGS_REASON,
+    PermissionKind, PermissionRequestArgs, WindowMogOpenArgs, INVALID_ARGS_REASON,
 };
 use mog_core::ipc_gateway::{hardened_gateway_with, GatewayComponents, IpcGateway, NoLog};
 use mog_core::ipc_gateway::{ipc_error_code, ERROR_CODES};
 use mog_core::token_guard::scrub_json;
 use mog_core::window_host::WindowHost;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::str::FromStr;
 use std::sync::Mutex;
 use tauri::ipc::{Channel, Invoke, InvokeBody, JavaScriptChannelId};
 use tauri::{Manager, Runtime};
 
-/// The brain's private delivery Channel. `brain_subscribe` sets it; a later call (brain reload)
-/// replaces the earlier Channel.
+/// The last payload of each sticky event (`events::STICKY`, ADR 0039). A pure type: no Tauri
+/// runtime. The payload is kept scrubbed, so no secret stays in memory (SEC-01).
+#[derive(Debug, Default)]
+pub struct StickyEvents(BTreeMap<String, Value>);
+
+impl StickyEvents {
+    /// Keep `payload` as the last value of `event` if the event is sticky. `true` if kept.
+    pub fn keep(&mut self, event: &str, payload: &Value) -> bool {
+        if !events::is_sticky(event) {
+            return false;
+        }
+        self.0.insert(event.to_owned(), scrub_json(payload));
+        true
+    }
+
+    /// The brain messages to send to a new brain Channel, scrubbed, in event-name order.
+    pub fn replay(&self) -> Vec<Value> {
+        self.0
+            .iter()
+            .map(|(event, payload)| brain_message(event, scrub_json(payload)))
+            .collect()
+    }
+}
+
 #[derive(Default)]
-pub struct BrainChannel(Mutex<Option<Channel<Value>>>);
+struct BrainState {
+    channel: Option<Channel<Value>>,
+    sticky: StickyEvents,
+}
+
+/// The brain's private delivery Channel. `brain_subscribe` sets it; a later call (brain reload)
+/// replaces the earlier Channel. The last payload of each sticky event goes again to each new
+/// Channel (ADR 0039).
+#[derive(Default)]
+pub struct BrainChannel(Mutex<BrainState>);
 
 impl BrainChannel {
+    fn state(&self) -> std::sync::MutexGuard<'_, BrainState> {
+        self.0.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
     /// Deliver one core-to-brain item as `{ event, payload }`. `false` if no brain listens.
     /// The payload gets the rule-7 scrub first (SEC-01, #333).
     pub fn send(&self, event: &str, payload: Value) -> bool {
-        let guard = self.0.lock().unwrap_or_else(|p| p.into_inner());
-        match guard.as_ref() {
-            Some(ch) => ch.send(brain_message(event, scrub_json(&payload))).is_ok(),
+        Self::send_on(&self.state(), event, &payload)
+    }
+
+    /// Deliver a sticky item and keep it for a brain that subscribes later (ADR 0039).
+    /// `false` if no brain listens now; the item is still kept. One lock covers the keep and
+    /// the send, so a new Channel never misses the item and never gets it out of order.
+    pub fn send_sticky(&self, event: &str, payload: Value) -> bool {
+        let mut state = self.state();
+        state.sticky.keep(event, &payload);
+        Self::send_on(&state, event, &payload)
+    }
+
+    fn send_on(state: &BrainState, event: &str, payload: &Value) -> bool {
+        match state.channel.as_ref() {
+            Some(ch) => ch.send(brain_message(event, scrub_json(payload))).is_ok(),
             None => false,
         }
     }
 
-    fn set(&self, channel: Channel<Value>) {
-        *self.0.lock().unwrap_or_else(|p| p.into_inner()) = Some(channel);
+    /// Use `channel` from now on and send it the kept sticky items.
+    pub(crate) fn set(&self, channel: Channel<Value>) {
+        let mut state = self.state();
+        for message in state.sticky.replay() {
+            // A failed send means the new brain is already gone; nothing to do.
+            let _ = channel.send(message);
+        }
+        state.channel = Some(channel);
     }
 }
 
@@ -98,6 +156,25 @@ pub trait HotkeysRoute: Send + Sync {
     fn set_hotkeys(&self, bindings: &JsonObject) -> CoreResult<Value>;
 }
 
+/// The R1 side of `permission_request` (#312, ADR 0039). `HotkeyRuntime` implements it.
+pub trait PermissionRoute: Send + Sync {
+    /// Ask the OS for `permission`. `action` proves a user click (CAP-36, CAP-37).
+    fn request_permission(
+        &self,
+        permission: PermissionKind,
+        action: UserAction,
+    ) -> PermissionStatus;
+}
+
+/// The wire value of a permission status: `granted`, `denied` or `unknown`.
+pub fn permission_status_name(status: PermissionStatus) -> &'static str {
+    match status {
+        PermissionStatus::Granted => "granted",
+        PermissionStatus::Denied => "denied",
+        PermissionStatus::Unknown => "unknown",
+    }
+}
+
 /// The components behind the hardened gateway for one call. `from` is the label of the
 /// calling window, which the app set. A missing host part answers `host_failed`.
 pub struct HostComponents<'a> {
@@ -105,6 +182,7 @@ pub struct HostComponents<'a> {
     pub brain: &'a dyn BrainLink,
     pub windows: Option<&'a dyn WindowHost>,
     pub hotkeys: Option<&'a dyn HotkeysRoute>,
+    pub permissions: Option<&'a dyn PermissionRoute>,
 }
 
 fn refused(e: IpcError) -> CoreError {
@@ -200,8 +278,17 @@ impl GatewayComponents for HostComponents<'_> {
                     .set_hotkeys(&a.bindings)
                     .map_err(|e| hotkeys_error(command, e))
             }
+            "permission_request" => {
+                let a: PermissionRequestArgs = args_of(command, args)?;
+                let route = self.permissions.ok_or_else(|| host_failed(command))?;
+                // The gateway let only the hub window through: this call is the user's click
+                // in the wizard or Settings (CAP-36, CAP-37).
+                let status = route.request_permission(a.permission, UserAction::from_user_click());
+                Ok(json!({ "status": permission_status_name(status) }))
+            }
             // Each feature issue wires its R1-R17 component here.
             // TODO(#379): `config_*` goes to the config component of #372 (`config_storage_failed`).
+            // TODO(#4): `capture_resume` goes to R2 `resume(lease_id)` (ADR 0039).
             _ => Err(refused(IpcError::NotImplemented {
                 command: command.to_owned(),
             })),
@@ -229,11 +316,17 @@ pub fn route(components: HostComponents<'_>, command: &str, args: Value) -> Resu
         .map_err(|e| rejection(&e))
 }
 
-/// True for the R11 commands, which run on a worker (ADR 0022 decision 6).
+/// True for the commands that run on a worker: the R11 ops, which can wait for the main
+/// thread (ADR 0022 decision 6), and `permission_request`, which can wait while the OS prompt
+/// shows (ADR 0039).
 pub fn runs_off_main_thread(command: &str) -> bool {
     matches!(
         command,
-        "window_mog_open" | "window_mog_close" | "window_card_show" | "window_card_hide"
+        "window_mog_open"
+            | "window_mog_close"
+            | "window_card_show"
+            | "window_card_hide"
+            | "permission_request"
     )
 }
 
@@ -266,11 +359,13 @@ fn route_from<R: Runtime>(
     let brain = WebviewBrain(webview);
     let windows = webview.try_state::<TauriWindowHost<R>>();
     let hotkeys = webview.try_state::<crate::hotkey_settings::HotkeySettings>();
+    let runtime = webview.try_state::<crate::hotkey_host::HotkeyRuntime>();
     let components = HostComponents {
         from: label,
         brain: &brain,
         windows: windows.as_ref().map(|w| w.inner() as &dyn WindowHost),
         hotkeys: hotkeys.as_ref().map(|h| h.inner() as &dyn HotkeysRoute),
+        permissions: runtime.as_ref().map(|r| r.inner() as &dyn PermissionRoute),
     };
     route(components, command, args)
 }
@@ -305,8 +400,9 @@ pub fn handler<R: Runtime>(invoke: Invoke<R>) -> bool {
 }
 
 /// Run the job of one call. An R11 op goes to a worker (`spawn_blocking`) and resolves later,
-/// because it can wait for the main thread (ADR 0022 decision 6). Every other command runs
-/// now, on the calling thread, so `view_emit` keeps its order.
+/// because it can wait for the main thread (ADR 0022 decision 6). `permission_request` also
+/// goes to a worker, because the OS prompt can wait for the user (ADR 0039). Every other
+/// command runs now, on the calling thread, so `view_emit` keeps its order.
 pub fn schedule<F: FnOnce() + Send + 'static>(command: &str, job: F) {
     if runs_off_main_thread(command) {
         tauri::async_runtime::spawn_blocking(job);

@@ -166,7 +166,7 @@ pub enum HookSignal {
     /// Another key went down while the talk key is held (for CAP-44c).
     OtherKeyDown,
     /// An elevated window has the foreground, so the hook cannot see the talk key (CAP-42).
-    /// TODO(#294): the core-to-brain `hotkey.blocked` event that makes the MOG show the tooltip.
+    /// The host sends it as `hotkey.status` with reason `elevated_foreground` (#294, ADR 0039).
     TalkKeyBlocked,
     /// The hook was installed again (CAP-40b).
     HookReinstalled,
