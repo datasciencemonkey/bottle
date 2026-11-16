@@ -6,7 +6,8 @@
 //!
 //! This module builds the header values and holds the [`RequestDecorator`] seam. R7
 //! HttpTransport and R8 McpTransport call the decorator for every request.
-//! TODO(#207): the real R7 transport (PR #256) calls [`RequestDecorator::decorate`].
+//! TODO(#197): no real R7 transport exists yet. #207 (PR #256) owns only the host policy and
+//! lists the reqwest wiring and SEC-06a/b as out of scope, so the wiring stays with #197.
 //! TODO(#136): SP-18 confirms if `MCP_SERVICE` usage rows keep the tags.
 //!
 //! The tag value holds no PII, transcript, token or URL: the MOG ID must be a short slug and
@@ -23,8 +24,9 @@ pub const TAGS_HEADER: &str = "Databricks-Ai-Gateway-Request-Tags";
 pub const USER_AGENT_HEADER: &str = "User-Agent";
 /// The longest MOG ID that may go in the tags header.
 pub const MAX_MOG_ID_LEN: usize = 64;
-/// The longest tags header value.
-pub const MAX_TAGS_HEADER_LEN: usize = 256;
+/// The longest tags header value. The slug rule and the 3 fixed keys bound the value; a
+/// test proves that the longest valid value fits.
+pub const MAX_TAGS_HEADER_LEN: usize = 128;
 
 /// Why a header could not be built. Each variant has a stable, content-free code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,8 +39,6 @@ pub enum IdentityError {
     MogIdChars,
     /// The tags value matches a rule-7 secret pattern.
     SecretInTags,
-    /// The tags value is longer than [`MAX_TAGS_HEADER_LEN`].
-    TagsTooLong,
     /// A Unity Gateway call has no tags (SEC-06a).
     MissingTags,
 }
@@ -51,7 +51,6 @@ impl IdentityError {
             IdentityError::MogIdTooLong => "tags_mog_too_long",
             IdentityError::MogIdChars => "tags_mog_chars",
             IdentityError::SecretInTags => "tags_secret",
-            IdentityError::TagsTooLong => "tags_too_long",
             IdentityError::MissingTags => "tags_missing",
         }
     }
@@ -124,9 +123,6 @@ pub fn tags_header_value(tags: &Tags) -> Result<String, IdentityError> {
     );
     if contains_secret(&value) {
         return Err(IdentityError::SecretInTags);
-    }
-    if value.len() > MAX_TAGS_HEADER_LEN {
-        return Err(IdentityError::TagsTooLong);
     }
     Ok(value)
 }
@@ -348,9 +344,26 @@ mod tests {
             tags_header_value(&tags(&long, TagOp::Asr)),
             Err(IdentityError::MogIdTooLong)
         );
+        // The longest valid value (longest MOG ID, longest op) fits the bound.
         let max = "a".repeat(MAX_MOG_ID_LEN);
         let v = tags_header_value(&tags(&max, TagOp::Cleanup)).unwrap();
-        assert!(v.len() <= MAX_TAGS_HEADER_LEN);
+        assert!(v.len() <= MAX_TAGS_HEADER_LEN, "{}", v.len());
+    }
+
+    #[test]
+    fn sec_06a_real_uuid_v4_mog_id_passes() {
+        // MOG IDs are uuid v4 (src/shared/interfaces.ts). Lowercase hex and dashes hold no
+        // rule-7 prefix, so a real ID passes the slug and secret checks.
+        for id in [
+            "3f2b8c1e-9a4d-4f6b-8e2a-1c5d7e9f0a3b",
+            "00000000-0000-4000-8000-000000000000",
+            "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        ] {
+            assert_eq!(
+                tags_header_value(&tags(id, TagOp::Genie)),
+                Ok(format!(r#"{{"app":"bottle","mog":"{id}","op":"genie"}}"#))
+            );
+        }
     }
 
     #[test]
@@ -380,7 +393,6 @@ mod tests {
             IdentityError::MogIdTooLong,
             IdentityError::MogIdChars,
             IdentityError::SecretInTags,
-            IdentityError::TagsTooLong,
             IdentityError::MissingTags,
         ];
         let codes: Vec<&str> = all.iter().map(IdentityError::code).collect();
@@ -391,7 +403,6 @@ mod tests {
                 "tags_mog_too_long",
                 "tags_mog_chars",
                 "tags_secret",
-                "tags_too_long",
                 "tags_missing",
             ]
         );

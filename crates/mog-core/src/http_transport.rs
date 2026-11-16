@@ -11,7 +11,10 @@ const ID: &str = "R7";
 /// Every implementation must add the request identity headers of
 /// [`crate::request_identity::RequestDecorator`] to each request: the Bottle User-Agent on
 /// every call (SEC-06b) and the tags from the IPC `tags` argument on each Unity Gateway call
-/// (SEC-06a). TODO(#207): the real transport (PR #256) calls the decorator.
+/// (SEC-06a). This trait method takes no `Tags` and no call kind, so the real transport needs
+/// them from the IPC `tags` argument and a route-ID-to-[`crate::request_identity::CallKind`]
+/// map: a trait change through the contract owner. TODO(#197): no issue owns the reqwest
+/// wiring yet (#207 / PR #256 owns only the host policy and lists SEC-06a/b out of scope).
 pub trait HttpTransport: Send + Sync {
     /// Send one request on a fixed route ID for `profile` and return the JSON reply.
     fn request(
