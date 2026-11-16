@@ -1,0 +1,19 @@
+{
+  "name": "@bottle/genie-sanitize",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Question sanitizer, secret guard and message caps for the Bottle brain window (G-47, G-36, G-30a..c).",
+  "type": "module",
+  "license": "SEE LICENSE IN ../../LICENSE",
+  "engines": { "node": ">=22" },
+  "main": "./src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
