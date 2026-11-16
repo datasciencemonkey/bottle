@@ -7,16 +7,15 @@
 
 ## Context
 
-ADR 0041 (#342) gave `HttpTransport::request(profile, route_id, params, body, tags)`, the fixed map `http_transport::ROUTES` and `outbound_headers`. Issue #364 asks for the real client. Three inputs are not on main when this work starts:
+ADR 0041 (#342) gave `HttpTransport::request(profile, route_id, params, body, tags)`, the fixed map `http_transport::ROUTES` and `outbound_headers`. Issue #364 asks for the real client. These inputs are not on main when this work starts:
 
-- PR #370 (#342, the trait change) is approved but not merged.
 - PR #256 (#207, `crates/http-policy`) is open.
 - #138 (the rate bucket) is open.
 - The R5 profile read (#16, #17) is a stub.
 
 ## Decisions
 
-1. **Stacked branch.** The branch `issue/364-r7-client` starts from `issue/342-transport-tags` (PR #370). The trait is a contract change, so this PR does not copy it. The PR merges after #370.
+1. **Base.** The work started on `issue/342-transport-tags` (PR #370), because it needs the #342 trait. PR #370 merged first, so the branch is now on `origin/main`. This PR does not change the trait.
 2. **Crates.** We use `reqwest =0.13.5` with `default-features = false` and the features `blocking` and `rustls-no-provider` only. We use `rustls =0.23.46` with the `ring` provider (`std`, `tls12`). R7 installs the ring provider once per process. We use ring because `aws-lc-rs` needs NASM on Windows, and CI is Windows. The stack has no native-tls, no OpenSSL, no HTTP/2, no cookies and no decompression. Certificates come from the OS trust store (`rustls-platform-verifier`). This supports TLS-inspecting company proxies.
 3. **Proxies.** R7 reads `HTTPS_PROXY` and `NO_PROXY` from the environment (reqwest default). It does not read the OS proxy settings, because the `system-proxy` feature is off. If users need OS proxy settings, a follow-up adds the feature.
 4. **Route table.** `http_transport::routes::ROUTE_TABLE` gives each wired route ID a fixed method and a path template. The paths come from 4.6, NFR-21a, PG-20 and the linked Databricks REST pages. `params` fill only the named `{slot}`s and the listed query keys. A path value must match `[A-Za-z0-9_-]{1,128}`. A query value is a short token or a non-negative integer, and R7 percent-encodes it. Any other value gives `invalid_params`. Missing and unknown params also give `invalid_params`.
