@@ -102,6 +102,7 @@ Add one row for each Bottle file that holds adapted Handy code.
 
 | Bottle file | Handy path |
 |---|---|
+| `crates/mog-core/src/hotkey_macos.rs` | `src-tauri/src/secure_input.rs` |
 
 ## NVIDIA Parakeet TDT 0.6B v3 (weights, CC-BY-4.0)
 
