@@ -1931,6 +1931,9 @@ name = "mog-core"
 version = "0.1.0"
 dependencies = [
  "getrandom 0.3.4",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
  "reqwest",
  "rusqlite",
  "rustls",

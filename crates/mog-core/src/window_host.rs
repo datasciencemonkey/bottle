@@ -46,3 +46,272 @@ impl WindowHost for StubWindowHost {
         Err(CoreError::NotImplemented { component: ID })
     }
 }
+
+/// The OS family whose clipboard conventions apply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardPlatform {
+    /// macOS: `NSPasteboard` with the nspasteboard.org marker types.
+    MacOs,
+    /// Windows: clipboard formats that opt out of history, cloud sync and monitors.
+    Windows,
+}
+
+/// One clipboard format to place on the clipboard: a name and its bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClipboardFormat {
+    /// The pasteboard type (macOS) or registered format name (Windows).
+    pub name: &'static str,
+    /// The format payload. Marker formats are empty on macOS and a `DWORD` on Windows.
+    pub data: Vec<u8>,
+}
+
+/// The formats to write for `text` on `platform` (SEC-30): the text and the privacy flags.
+pub fn clipboard_formats(platform: ClipboardPlatform, text: &str) -> Vec<ClipboardFormat> {
+    let marker = |name| ClipboardFormat {
+        name,
+        data: Vec::new(),
+    };
+    let dword_zero = |name| ClipboardFormat {
+        name,
+        data: 0u32.to_le_bytes().to_vec(),
+    };
+    match platform {
+        ClipboardPlatform::MacOs => vec![
+            ClipboardFormat {
+                name: "public.utf8-plain-text",
+                data: text.as_bytes().to_vec(),
+            },
+            marker("org.nspasteboard.ConcealedType"),
+            marker("org.nspasteboard.TransientType"),
+        ],
+        ClipboardPlatform::Windows => vec![
+            ClipboardFormat {
+                name: "CF_UNICODETEXT",
+                data: text
+                    .encode_utf16()
+                    .chain([0])
+                    .flat_map(u16::to_le_bytes)
+                    .collect(),
+            },
+            marker("ExcludeClipboardContentFromMonitorProcessing"),
+            dword_zero("CanIncludeInClipboardHistory"),
+            dword_zero("CanUploadToCloudClipboard"),
+        ],
+    }
+}
+
+/// The platform of this build, or `None` where no clipboard flags are defined.
+pub fn current_clipboard_platform() -> Option<ClipboardPlatform> {
+    if cfg!(target_os = "macos") {
+        Some(ClipboardPlatform::MacOs)
+    } else if cfg!(windows) {
+        Some(ClipboardPlatform::Windows)
+    } else {
+        None
+    }
+}
+
+/// The OS clipboard. Kept behind a trait so tests run without a real clipboard.
+pub trait ClipboardBackend: Send + Sync {
+    /// Replace the clipboard contents with exactly `formats`.
+    ///
+    /// A backend must publish all formats together, so that a clipboard manager never sees the
+    /// text without its flags. On failure the writer calls [`ClipboardBackend::clear`].
+    fn write(&self, formats: &[ClipboardFormat]) -> CoreResult<()>;
+    /// Remove everything from the clipboard.
+    fn clear(&self) -> CoreResult<()>;
+}
+
+/// Writes text to the clipboard with the concealed and transient flags (SEC-30).
+#[derive(Debug)]
+pub struct ClipboardWriter<B: ClipboardBackend> {
+    backend: B,
+}
+
+impl<B: ClipboardBackend> ClipboardWriter<B> {
+    /// Make a writer over `backend`.
+    pub fn new(backend: B) -> Self {
+        Self { backend }
+    }
+
+    /// Write `text` for `platform` with the privacy flags set.
+    pub fn write_text_for(&self, platform: ClipboardPlatform, text: &str) -> CoreResult<()> {
+        let result = self.backend.write(&clipboard_formats(platform, text));
+        if result.is_err() {
+            // Fail closed: no unflagged text may stay on the clipboard. The write error wins.
+            let _ = self.backend.clear();
+        }
+        result
+    }
+
+    /// Write `text` for the platform of this build.
+    /// On a platform without flags it fails closed and writes nothing.
+    pub fn write_text(&self, text: &str) -> CoreResult<()> {
+        match current_clipboard_platform() {
+            Some(platform) => self.write_text_for(platform, text),
+            None => Err(CoreError::NotImplemented { component: ID }),
+        }
+    }
+}
+
+/// The macOS clipboard: the general `NSPasteboard`.
+///
+/// One `NSPasteboardItem` carries the text and the marker types, and one `writeObjects` call
+/// publishes it, so `changeCount` never exposes the text without its flags. `NSPasteboard`
+/// writes are not bound to the main thread; do not add a main-thread hop.
+#[cfg(target_os = "macos")]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct MacPasteboard;
+
+#[cfg(target_os = "macos")]
+impl ClipboardBackend for MacPasteboard {
+    fn write(&self, formats: &[ClipboardFormat]) -> CoreResult<()> {
+        use objc2::runtime::ProtocolObject;
+        use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSPasteboardWriting};
+        use objc2_foundation::{NSArray, NSData, NSString};
+
+        let item = NSPasteboardItem::new();
+        for format in formats {
+            let ty = NSString::from_str(format.name);
+            if !item.setData_forType(&NSData::with_bytes(&format.data), &ty) {
+                return Err(CoreError::NotImplemented { component: ID });
+            }
+        }
+        let pasteboard = NSPasteboard::generalPasteboard();
+        pasteboard.clearContents();
+        let objects =
+            NSArray::from_slice(&[ProtocolObject::<dyn NSPasteboardWriting>::from_ref(&*item)]);
+        if pasteboard.writeObjects(&objects) {
+            Ok(())
+        } else {
+            self.clear()?;
+            Err(CoreError::NotImplemented { component: ID })
+        }
+    }
+
+    fn clear(&self) -> CoreResult<()> {
+        objc2_app_kit::NSPasteboard::generalPasteboard().clearContents();
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod clipboard_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct Recorder {
+        calls: Mutex<Vec<Vec<ClipboardFormat>>>,
+        clears: Mutex<u32>,
+        fail_write: bool,
+    }
+
+    impl ClipboardBackend for &Recorder {
+        fn write(&self, formats: &[ClipboardFormat]) -> CoreResult<()> {
+            self.calls.lock().unwrap().push(formats.to_vec());
+            if self.fail_write {
+                return Err(CoreError::NotImplemented { component: ID });
+            }
+            Ok(())
+        }
+
+        fn clear(&self) -> CoreResult<()> {
+            *self.clears.lock().unwrap() += 1;
+            Ok(())
+        }
+    }
+
+    fn find<'a>(f: &'a [ClipboardFormat], n: &str) -> Option<&'a ClipboardFormat> {
+        f.iter().find(|x| x.name == n)
+    }
+
+    #[test]
+    fn sec_30_macos_marks_text_concealed_and_transient() {
+        let f = clipboard_formats(ClipboardPlatform::MacOs, "hi");
+        assert_eq!(find(&f, "public.utf8-plain-text").unwrap().data, b"hi");
+        assert!(find(&f, "org.nspasteboard.ConcealedType").is_some());
+        assert!(find(&f, "org.nspasteboard.TransientType").is_some());
+        assert_eq!(f.len(), 3);
+    }
+
+    #[test]
+    fn sec_30_windows_excludes_monitors_history_and_cloud() {
+        let f = clipboard_formats(ClipboardPlatform::Windows, "hi");
+        let text = find(&f, "CF_UNICODETEXT").unwrap();
+        assert_eq!(text.data, vec![b'h', 0, b'i', 0, 0, 0]);
+        assert!(find(&f, "ExcludeClipboardContentFromMonitorProcessing").is_some());
+        let zero = vec![0u8; 4];
+        assert_eq!(find(&f, "CanIncludeInClipboardHistory").unwrap().data, zero);
+        assert_eq!(find(&f, "CanUploadToCloudClipboard").unwrap().data, zero);
+        assert_eq!(f.len(), 4);
+    }
+
+    #[test]
+    fn sec_30_windows_text_is_utf16_with_terminator() {
+        let f = clipboard_formats(ClipboardPlatform::Windows, "é😀");
+        let units: Vec<u8> = "é😀"
+            .encode_utf16()
+            .chain([0])
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        assert_eq!(find(&f, "CF_UNICODETEXT").unwrap().data, units);
+    }
+
+    #[test]
+    fn sec_30_writer_sends_all_formats_in_one_backend_call() {
+        let rec = Recorder::default();
+        let w = ClipboardWriter::new(&rec);
+        w.write_text_for(ClipboardPlatform::MacOs, "secret")
+            .unwrap();
+        let calls = rec.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0],
+            clipboard_formats(ClipboardPlatform::MacOs, "secret")
+        );
+    }
+
+    #[test]
+    fn sec_30_platform_matches_the_build_target() {
+        let want = if cfg!(target_os = "macos") {
+            Some(ClipboardPlatform::MacOs)
+        } else if cfg!(windows) {
+            Some(ClipboardPlatform::Windows)
+        } else {
+            None
+        };
+        assert_eq!(current_clipboard_platform(), want);
+    }
+
+    #[test]
+    fn sec_30_write_text_on_unsupported_platform_fails_closed() {
+        if current_clipboard_platform().is_none() {
+            let rec = Recorder::default();
+            assert!(ClipboardWriter::new(&rec).write_text("x").is_err());
+            assert!(rec.calls.lock().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn sec_30_failed_write_clears_the_clipboard_and_reports_the_error() {
+        let rec = Recorder {
+            fail_write: true,
+            ..Recorder::default()
+        };
+        let w = ClipboardWriter::new(&rec);
+        assert!(w
+            .write_text_for(ClipboardPlatform::MacOs, "secret")
+            .is_err());
+        assert_eq!(*rec.clears.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn sec_30_successful_write_does_not_clear_the_clipboard() {
+        let rec = Recorder::default();
+        let w = ClipboardWriter::new(&rec);
+        w.write_text_for(ClipboardPlatform::MacOs, "secret")
+            .unwrap();
+        assert_eq!(*rec.clears.lock().unwrap(), 0);
+    }
+}
