@@ -1,0 +1,426 @@
+{
+  "version": 1,
+  "note": "Synthetic golden utterances for the router step (#57, RTR-01, AT-06). No user data. The live >= 90 % run needs SP-13 (#56).",
+  "items": [
+    {
+      "id": "g001",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "What was total revenue last quarter?",
+      "expected": "question"
+    },
+    {
+      "id": "g002",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "How many active customers do we have in EMEA?",
+      "expected": "question"
+    },
+    {
+      "id": "g003",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Show me the top five products by margin this year.",
+      "expected": "question"
+    },
+    {
+      "id": "g004",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Which region had the biggest drop in orders in March?",
+      "expected": "question"
+    },
+    {
+      "id": "g005",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "What is the average deal size for enterprise accounts?",
+      "expected": "question"
+    },
+    {
+      "id": "g006",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "How did churn change between Q2 and Q3?",
+      "expected": "question"
+    },
+    {
+      "id": "g007",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "List the open support tickets older than thirty days.",
+      "expected": "question"
+    },
+    {
+      "id": "g008",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "What share of sales came from online channels last month?",
+      "expected": "question"
+    },
+    {
+      "id": "g009",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Who are our ten largest suppliers by spend?",
+      "expected": "question"
+    },
+    {
+      "id": "g010",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Is pipeline coverage above three times for next quarter?",
+      "expected": "question"
+    },
+    {
+      "id": "g011",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "What did we decide about the pricing table yesterday?",
+      "expected": "memory_question"
+    },
+    {
+      "id": "g012",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "What did Genie tell me about churn last week?",
+      "expected": "memory_question"
+    },
+    {
+      "id": "g013",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Remind me what the revenue number was this morning.",
+      "expected": "memory_question"
+    },
+    {
+      "id": "g014",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "What did we say about the EMEA forecast in Monday's meeting?",
+      "expected": "memory_question"
+    },
+    {
+      "id": "g015",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "What was the answer I got earlier about warehouse costs?",
+      "expected": "memory_question"
+    },
+    {
+      "id": "g016",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Did we already look at supplier spend today?",
+      "expected": "memory_question"
+    },
+    {
+      "id": "g017",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "What did the team agree on for the launch date?",
+      "expected": "memory_question"
+    },
+    {
+      "id": "g018",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "What did I ask about margins before lunch?",
+      "expected": "memory_question"
+    },
+    {
+      "id": "g019",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Remind me which accounts we flagged as at risk yesterday.",
+      "expected": "memory_question"
+    },
+    {
+      "id": "g020",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "What was the conclusion of our talk about pipeline coverage?",
+      "expected": "memory_question"
+    },
+    {
+      "id": "g021",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "For context, fiscal year starts in February for us.",
+      "expected": "context"
+    },
+    {
+      "id": "g022",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Note that EMEA here means Europe only, not the Middle East.",
+      "expected": "context"
+    },
+    {
+      "id": "g023",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Keep in mind we only care about enterprise accounts this week.",
+      "expected": "context"
+    },
+    {
+      "id": "g024",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Background: the data before 2024 comes from the old system.",
+      "expected": "context"
+    },
+    {
+      "id": "g025",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Just so you know, revenue means net revenue after refunds.",
+      "expected": "context"
+    },
+    {
+      "id": "g026",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "When I say active customer I mean one order in the last 90 days.",
+      "expected": "context"
+    },
+    {
+      "id": "g027",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "We renamed the gold tier to platinum last month.",
+      "expected": "context"
+    },
+    {
+      "id": "g028",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "For this project the target margin is twenty percent.",
+      "expected": "context"
+    },
+    {
+      "id": "g029",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "The sales team counts a deal as won only after signature.",
+      "expected": "context"
+    },
+    {
+      "id": "g030",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Assume all amounts are in euros unless I say otherwise.",
+      "expected": "context"
+    },
+    {
+      "id": "g031",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Stop recording.",
+      "expected": "command"
+    },
+    {
+      "id": "g032",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Use the sales workspace from now on.",
+      "expected": "command"
+    },
+    {
+      "id": "g033",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Ask the finance workspace just this once.",
+      "expected": "command"
+    },
+    {
+      "id": "g034",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Go back to my home workspace.",
+      "expected": "command"
+    },
+    {
+      "id": "g035",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Start a new topic.",
+      "expected": "command"
+    },
+    {
+      "id": "g036",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Cancel that.",
+      "expected": "command"
+    },
+    {
+      "id": "g037",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Pause.",
+      "expected": "command"
+    },
+    {
+      "id": "g038",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Resume.",
+      "expected": "command"
+    },
+    {
+      "id": "g039",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Forget this session.",
+      "expected": "command"
+    },
+    {
+      "id": "g040",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Switch to the marketing workspace for this question.",
+      "expected": "command"
+    },
+    {
+      "id": "g041",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Hi Maria, thanks for the update, I will review the deck tomorrow morning.",
+      "expected": "dictation"
+    },
+    {
+      "id": "g042",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Please find the signed contract attached to this email.",
+      "expected": "dictation"
+    },
+    {
+      "id": "g043",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Let's move our one on one to Thursday at three.",
+      "expected": "dictation"
+    },
+    {
+      "id": "g044",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "The deployment finished without errors and the dashboards are live.",
+      "expected": "dictation"
+    },
+    {
+      "id": "g045",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Happy birthday, hope you have a great day.",
+      "expected": "dictation"
+    },
+    {
+      "id": "g046",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "I am out of office on Friday, reach out to Sam for anything urgent.",
+      "expected": "dictation"
+    },
+    {
+      "id": "g047",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Thanks everyone for joining today's call.",
+      "expected": "dictation"
+    },
+    {
+      "id": "g048",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Action items: update the forecast and send it to the team by Monday.",
+      "expected": "dictation"
+    },
+    {
+      "id": "g049",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Sounds good, I will take care of it.",
+      "expected": "dictation"
+    },
+    {
+      "id": "g050",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Dear team, the quarterly review is now scheduled for the twelfth.",
+      "expected": "dictation"
+    },
+    {
+      "id": "g051",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Um.",
+      "expected": "noise"
+    },
+    {
+      "id": "g052",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Hmm, let me think.",
+      "expected": "noise"
+    },
+    {
+      "id": "g053",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Okay.",
+      "expected": "noise"
+    },
+    {
+      "id": "g054",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Uh, wait, no.",
+      "expected": "noise"
+    },
+    {
+      "id": "g055",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Testing, one, two.",
+      "expected": "noise"
+    },
+    {
+      "id": "g056",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Mm-hm.",
+      "expected": "noise"
+    },
+    {
+      "id": "g057",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Sorry, never mind.",
+      "expected": "noise"
+    },
+    {
+      "id": "g058",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Ah.",
+      "expected": "noise"
+    },
+    {
+      "id": "g059",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Yeah yeah.",
+      "expected": "noise"
+    },
+    {
+      "id": "g060",
+      "captureMode": "ptt",
+      "speakerTrack": "you",
+      "text": "Hold on a second.",
+      "expected": "noise"
+    }
+  ]
+}
