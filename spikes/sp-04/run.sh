@@ -8,8 +8,12 @@
 # go into $SP04_WORK (default ~/sp04-work): 0.51 GB of downloads. Nothing from $SP04_WORK is committed.
 # Exit code: 0 = every SP-04 criterion passes on this machine (10 s p95, tail p95, peak RSS, the
 # in-process load and every fresh-process load in load.txt, cold load included), 1 = one or more
-# fail, 2 = error (a download, build, test, load run or clip length failed).
+# fail, 2 = error (a download, build, test, load run or clip length failed). Any failed setup step
+# (curl, shasum, tar, cargo, sudo purge) exits 2 through the ERR trap; tool codes are never passed through.
 set -euo pipefail
+trap 'echo "error: a setup step failed (exit $?), overall exit=2"; exit 2' ERR
+# norm: 0 and 1 keep their meaning; any other code (crash, signal, tool error) becomes 2.
+norm() { case "$1" in 0|1) echo "$1" ;; *) echo 2 ;; esac; }
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 WORK="${SP04_WORK:-$HOME/sp04-work}"
@@ -71,29 +75,30 @@ BIN="$HERE/target/release/sp04-bench"
 echo "== 5. model load, fresh process each time"
 cd "$WORK/out"
 if [ "${SP04_PURGE:-0}" = "1" ]; then
-  sudo purge && echo "file cache purged (cold load next)"
+  if ! sudo purge; then echo "sudo purge failed: the cold load was not measured, overall exit=2"; exit 2; fi
+  echo "file cache purged (cold load next)"
 fi
 : > load.txt
 LOAD_RC=0
-set +e
+trap - ERR; set +e
 for i in 1 2 3 4 5; do
   # Each run is a fresh process. Exit 1 = load over 3 s, 2 = load error.
   "$BIN" load --model-dir "$M" --threads "$P" | tee -a load.txt
-  rc=${PIPESTATUS[0]}
+  rc=${PIPESTATUS[0]}; rc=$(norm "$rc")
   if [ "$rc" -ne 0 ]; then echo "load run $i failed the criterion or errored (exit $rc)"; [ "$rc" -gt "$LOAD_RC" ] && LOAD_RC=$rc; fi
 done
 [ "$(grep -c '^load_ms=' load.txt)" -eq 5 ] || { echo "a load run printed no load_ms"; LOAD_RC=2; }
-set -e
+set -e; trap 'echo "error: a setup step failed (exit $?), overall exit=2"; exit 2' ERR
 
 echo "== 6. bench, threads = P-cores ($P)"
-set +e
+trap - ERR; set +e
 /usr/bin/time -l "$BIN" bench --model-dir "$M" --audio-dir "$A" --threads "$P" --runs "$RUNS" 2> time-p.txt | tee bench-p.txt
-RC=${PIPESTATUS[0]}
+RC=${PIPESTATUS[0]}; RC=$(norm "$RC")
 grep -E "maximum resident set size|real" time-p.txt
 echo "== 7. bench, threads = all physical cores ($ALL), for the thread sensitivity"
 /usr/bin/time -l "$BIN" bench --model-dir "$M" --audio-dir "$A" --threads "$ALL" --runs "$RUNS" --long-secs 0 2> time-all.txt | tee bench-all.txt
 grep -E "maximum resident set size|real" time-all.txt
-set -e
+set -e; trap 'echo "error: a setup step failed (exit $?), overall exit=2"; exit 2' ERR
 uptime
 echo "outputs: $WORK/out (paste load.txt, bench-p.txt, bench-all.txt and time-*.txt into the issue)"
 echo "pass rule: the 'SP04_RESULT' line of bench-p.txt is PASS and every load.txt load_ms <= 3000"

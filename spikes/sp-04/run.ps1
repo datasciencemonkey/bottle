@@ -33,6 +33,8 @@ $ModelSha = "1495e91b59d7fc53ddca91f3431758ec99f8fa253fdb0e1e851be0f72b14b0f9"
 foreach ($d in "libs", "model", "audio", "out") { New-Item -ItemType Directory -Force -Path (Join-Path $Work $d) | Out-Null }
 $Log = Join-Path $Work "out\run-ps1.log"
 Start-Transcript -Path $Log -Force | Out-Null
+# Norm: 0 and 1 keep their meaning; any other code (crash such as -1073741819, tool error) becomes 2.
+function Norm($c) { if ($c -eq 0 -or $c -eq 1) { $c } else { 2 } }
 function Finish($code) { Stop-Transcript | Out-Null; Write-Host "log: $Log"; exit $code }
 
 function Fetch($Url, $Dest, $Sha) {
@@ -114,14 +116,14 @@ $loadRc = 0
 $loads = foreach ($i in 1..5) {
     # Each run is a fresh process. Exit 1 = load over 3 s, 2 = load error.
     & $Bin load --model-dir $M --threads $Threads
-    if ($LASTEXITCODE -ne 0) { Write-Host "load run $i failed the criterion or errored (exit $LASTEXITCODE)"; $loadRc = [Math]::Max($loadRc, $LASTEXITCODE) }
+    if ($LASTEXITCODE -ne 0) { Write-Host "load run $i failed the criterion or errored (exit $LASTEXITCODE)"; $loadRc = [Math]::Max($loadRc, (Norm $LASTEXITCODE)) }
 }
 $loads | Tee-Object -FilePath (Join-Path $Out "load.txt")
 if (@($loads | Where-Object { $_ -match '^load_ms=' }).Count -ne 5) { Write-Host "a load run printed no load_ms"; $loadRc = 2 }
 
 Write-Host "== 6. bench, threads = P-cores ($Threads)"
 & $Bin bench --model-dir $M --audio-dir $A --threads $Threads --runs $Runs --platform windows | Tee-Object -FilePath (Join-Path $Out "bench-p.txt")
-$rc = $LASTEXITCODE
+$rc = Norm $LASTEXITCODE
 Write-Host "== 7. bench, threads = all physical cores ($all), for the thread sensitivity"
 & $Bin bench --model-dir $M --audio-dir $A --threads $all --runs $Runs --platform windows --long-secs 0 | Tee-Object -FilePath (Join-Path $Out "bench-all.txt")
 Write-Host "outputs: $Out (paste load.txt, bench-p.txt and bench-all.txt into the issue)"
