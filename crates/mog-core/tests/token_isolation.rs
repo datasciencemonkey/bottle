@@ -162,7 +162,10 @@ fn arc_6_rule_7_core_errors_carry_no_secret() {
     for e in [
         CoreError::NotImplemented { component: "R12" },
         CoreError::TokenCommandRefused { component: "R5" },
-        CoreError::LoopbackUnavailable { component: "R16" },
+        CoreError::Unavailable {
+            component: "R16",
+            reason: mog_core::loopback::UNAVAILABLE,
+        },
     ] {
         let shown = format!("{e} {e:?} {}", e.code());
         assert!(!contains_secret(&shown), "{shown}");
@@ -457,7 +460,16 @@ fn arc_6_rule_4_rive_asset_cdn_is_never_enabled() {
 fn arc_6_rule_8_lakebase_is_off_in_the_default_build() {
     // TODO(#193): test that the Lakebase credential goes only to the endpoint host that the
     // same home profile returns, when R9 LakebasePool lands (v1).
-    assert!(!cfg!(feature = "lakebase"), "R9 is v1 and off by default");
+    let manifest =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml")).unwrap();
+    let default = manifest
+        .lines()
+        .find(|l| l.trim_start().starts_with("default"))
+        .expect("a default feature list");
+    assert!(
+        !default.contains("lakebase"),
+        "R9 is v1 and off by default: {default}"
+    );
 }
 
 // ---------- AT-17: no IPC return carries a token ----------

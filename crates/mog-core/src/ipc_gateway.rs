@@ -7,6 +7,7 @@
 //! through `crate::ipc::handle`. The hardening is #36.
 
 use crate::error::{CoreError, CoreResult};
+use crate::token_guard::scrub_json;
 
 const ID: &str = "R12";
 
@@ -36,5 +37,33 @@ impl IpcGateway for StubIpcGateway {
         // calls it directly. TODO(#176): route the C ABI through it once the ABI decides the
         // window class of an `ffi` caller (ADR 0003).
         Err(CoreError::NotImplemented { component: ID })
+    }
+}
+
+/// Wraps any R12 gateway and scrubs every reply with the rule-7 patterns (4.6, ARC-6).
+/// Errors already cross only as content-free codes ([`CoreError::code`]).
+/// TODO(#36): the hardened gateway and TODO(#176) the C ABI dispatch through this wrapper.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ScrubbingGateway<G> {
+    inner: G,
+}
+
+impl<G: IpcGateway> ScrubbingGateway<G> {
+    /// Wrap `inner`.
+    pub fn new(inner: G) -> Self {
+        Self { inner }
+    }
+}
+
+impl<G: IpcGateway> IpcGateway for ScrubbingGateway<G> {
+    fn dispatch(
+        &self,
+        window_label: &str,
+        command: &str,
+        args: serde_json::Value,
+    ) -> CoreResult<serde_json::Value> {
+        self.inner
+            .dispatch(window_label, command, args)
+            .map(|v| scrub_json(&v))
     }
 }
