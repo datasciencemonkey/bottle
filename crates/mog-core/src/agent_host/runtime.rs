@@ -158,20 +158,25 @@ impl Default for StdRuntimeLauncher {
 }
 
 struct StdRuntimeProcess {
-    child: Arc<Mutex<Child>>,
+    child: Arc<Mutex<Option<Child>>>,
     frames: Mutex<Option<SyncSender<Vec<u8>>>>,
 }
 
 /// Stop the runtime and every process it started. On unix the runtime leads its own process
 /// group, so a wrapper (`npx`, `uv run`, a shell shim) and its children stop too.
 /// TODO(#111): on Windows put the runtime in a job object; today only the direct child stops.
-fn kill(child: &Mutex<Child>) {
-    let mut c = child.lock().unwrap_or_else(|p| p.into_inner());
+fn kill(child: &Mutex<Option<Child>>) {
+    // `take` makes a second call a no-op: once the child is reaped its PID may be reused, so
+    // no signal may go to it again.
+    let Some(mut c) = child.lock().unwrap_or_else(|p| p.into_inner()).take() else {
+        return;
+    };
     #[cfg(unix)]
     {
         if let Ok(pid) = i32::try_from(c.id()) {
-            // SAFETY: `kill` with a negative pid signals the process group that the child leads
-            // (`process_group(0)` at spawn). It touches no memory.
+            // SAFETY: the child is not reaped yet (`wait` comes below and runs once), so `pid`
+            // still names the process group it leads (`process_group(0)` at spawn). `kill`
+            // with a negative pid signals that group. It touches no memory.
             unsafe {
                 libc::kill(-pid, libc::SIGKILL);
             }
@@ -232,7 +237,7 @@ impl RuntimeLauncher for StdRuntimeLauncher {
             .map_err(|_| AgentError::LaunchFailed)?;
         let stdin = child.stdin.take().ok_or(AgentError::LaunchFailed)?;
         let stdout = child.stdout.take().ok_or(AgentError::LaunchFailed)?;
-        let child = Arc::new(Mutex::new(child));
+        let child = Arc::new(Mutex::new(Some(child)));
         let (tx, rx) = sync_channel::<Vec<u8>>(FRAME_QUEUE);
         let busy_since: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
         let done = Arc::new(AtomicBool::new(false));
@@ -275,7 +280,7 @@ impl StdRuntimeLauncher {
         mut stdin: std::process::ChildStdin,
         stdout: std::process::ChildStdout,
         rx: std::sync::mpsc::Receiver<Vec<u8>>,
-        child: &Arc<Mutex<Child>>,
+        child: &Arc<Mutex<Option<Child>>>,
         busy_since: &Arc<Mutex<Option<Instant>>>,
         done: &Arc<AtomicBool>,
         events: RuntimeEvents,
@@ -331,6 +336,24 @@ impl StdRuntimeLauncher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn arc_f14_stop_twice_signals_the_reaped_child_never_again() {
+        let cfg = RuntimeConfig::new("/bin/sleep", vec!["30".into()]);
+        let spec = super::super::adapter::launch_spec(Harness::Claude, &cfg, "http://127.0.0.1:1");
+        let child = harness_command(&spec)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let cell = Mutex::new(Some(child));
+        kill(&cell);
+        assert!(cell.lock().unwrap().is_none(), "the reaped child is gone");
+        // The second call (stop after the watchdog, or Drop after stop) does nothing.
+        kill(&cell);
+        assert!(cell.lock().unwrap().is_none());
+    }
 
     #[test]
     fn arc_f14_parses_session_failed_and_ignores_other_lines() {

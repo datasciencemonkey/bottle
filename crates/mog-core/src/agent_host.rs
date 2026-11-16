@@ -259,8 +259,12 @@ impl SharedAgentHost {
         harness: Harness,
         model: Option<&str>,
     ) -> Result<String, AgentError> {
-        // The target lookup may run the CLI (#16, #18): do it before the lock, so it never
-        // stalls the other MOGs.
+        // A live session needs no lookup.
+        if let Some(r) = self.live_session(mog_id, harness) {
+            return r;
+        }
+        // The target lookup may run the CLI (#16, #18): do it outside the lock, so it never
+        // stalls the other MOGs. Then check again under the lock.
         let target = self.deps.targets.target(mog_id);
         let mut st = self.lock();
         if let Some(s) = st.sessions.get(mog_id) {
@@ -298,6 +302,20 @@ impl SharedAgentHost {
         let id = session.id.clone();
         st.sessions.insert(mog_id.to_owned(), session);
         Ok(id)
+    }
+
+    /// The answer for a MOG that already has a live session, if it has one.
+    fn live_session(&self, mog_id: &str, harness: Harness) -> Option<Result<String, AgentError>> {
+        let st = self.lock();
+        let s = st.sessions.get(mog_id)?;
+        if s.state == SessionState::Failed {
+            return None;
+        }
+        Some(if s.harness == harness {
+            Ok(s.id.clone())
+        } else {
+            Err(AgentError::HarnessMismatch)
+        })
     }
 
     fn register(&self, mog_id: &str, s: &Session) -> Result<(), AgentError> {

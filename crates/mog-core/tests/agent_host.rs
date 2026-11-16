@@ -781,3 +781,46 @@ fn arc_f14_status_reports_are_sent_outside_the_host_lock() {
         vec![Some(SessionState::Restarted), Some(SessionState::Failed)]
     );
 }
+
+struct CountingTargets(AtomicUsize);
+
+impl ModelTargets for CountingTargets {
+    fn target(&self, m: &str) -> Result<ModelTarget, AgentError> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        FakeTargets.target(m)
+    }
+}
+
+#[test]
+fn rtr_21a_start_for_a_live_session_needs_no_target_lookup() {
+    let targets = Arc::new(CountingTargets(AtomicUsize::new(0)));
+    let host = SharedAgentHost::new(AgentHostDeps {
+        launcher: Arc::new(FakeLauncher::default()),
+        proxy: Arc::new(
+            ModelProxy::start(
+                Arc::new(FakeTokens {
+                    calls: AtomicUsize::new(0),
+                }),
+                Arc::new(NoUpstream),
+            )
+            .unwrap(),
+        ),
+        targets: targets.clone(),
+        status: Arc::new(FakeStatus::default()),
+        runtimes: RuntimeConfigs {
+            claude: RuntimeConfig::new("fake", Vec::new()),
+            codex: RuntimeConfig::new("fake", Vec::new()),
+        },
+    });
+    let a = host.start_session("a", Harness::Claude).unwrap();
+    assert_eq!(host.start_session("a", Harness::Claude).unwrap(), a);
+    assert_eq!(
+        host.start_session("a", Harness::Codex).unwrap_err(),
+        AgentError::HarnessMismatch
+    );
+    assert_eq!(
+        targets.0.load(Ordering::SeqCst),
+        1,
+        "one lookup, at the first start"
+    );
+}

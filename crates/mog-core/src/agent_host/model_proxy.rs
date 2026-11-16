@@ -33,6 +33,8 @@ const MAX_HEAD: usize = 64 * 1024;
 /// The read timeout until the secret is checked. It is short, so an unauthenticated client cannot
 /// hold a connection for long.
 const HEAD_TIMEOUT: Duration = Duration::from_secs(10);
+/// The total time that an error reply waits for the rest of the client's request.
+const DRAIN_TIMEOUT: Duration = Duration::from_millis(200);
 /// The read and write timeout of an authenticated model call.
 const IO_TIMEOUT: Duration = Duration::from_secs(120);
 /// The most connections served at the same time; more get 503 at once.
@@ -164,6 +166,7 @@ struct Shared {
     routes: Mutex<Vec<(SessionSecret, ModelRoute)>>,
     active: AtomicUsize,
     port: u16,
+    head_timeout: Duration,
 }
 
 /// The loopback model proxy. It listens on `127.0.0.1` on a free port until it drops.
@@ -222,6 +225,15 @@ impl ModelProxy {
         tokens: Arc<dyn TokenBroker>,
         upstream: Arc<dyn Upstream>,
     ) -> std::io::Result<Self> {
+        Self::start_with_head_timeout(tokens, upstream, HEAD_TIMEOUT)
+    }
+
+    /// [`ModelProxy::start`] with a total deadline `head_timeout` for each request head.
+    pub fn start_with_head_timeout(
+        tokens: Arc<dyn TokenBroker>,
+        upstream: Arc<dyn Upstream>,
+        head_timeout: Duration,
+    ) -> std::io::Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", 0))?;
         let addr = listener.local_addr()?;
         let shared = Arc::new(Shared {
@@ -230,6 +242,7 @@ impl ModelProxy {
             routes: Mutex::new(Vec::new()),
             active: AtomicUsize::new(0),
             port: addr.port(),
+            head_timeout,
         });
         let stop = Arc::new(AtomicBool::new(false));
         let (s, st) = (shared.clone(), stop.clone());
@@ -339,10 +352,10 @@ fn find_end(buf: &[u8]) -> Option<usize> {
     buf.windows(4).position(|w| w == b"\r\n\r\n")
 }
 
-/// Read the request head. [`HEAD_TIMEOUT`] bounds the whole head, not each read, so a slow
+/// Read the request head. `head_timeout` bounds the whole head, not each read, so a slow
 /// client cannot hold a connection slot for long.
-fn read_head(conn: &mut TcpStream) -> Option<Head> {
-    let deadline = std::time::Instant::now() + HEAD_TIMEOUT;
+fn read_head(conn: &mut TcpStream, head_timeout: Duration) -> Option<Head> {
+    let deadline = std::time::Instant::now() + head_timeout;
     let mut buf = Vec::with_capacity(4096);
     let mut chunk = [0u8; 4096];
     let end = loop {
@@ -438,15 +451,19 @@ fn respond(conn: &mut TcpStream, status: u16, content_type: Option<&str>, body: 
     let _ = conn.write_all(body);
     let _ = conn.flush();
     let _ = conn.shutdown(Shutdown::Write);
-    // Drain what the client still sends, so closing does not reset the connection.
-    let _ = conn.set_read_timeout(Some(Duration::from_millis(200)));
+    // Drain what the client still sends, so closing does not reset the connection. One total
+    // deadline bounds the drain, so a client that trickles bytes cannot keep its slot.
+    let until = std::time::Instant::now() + DRAIN_TIMEOUT;
     let mut sink = [0u8; 4096];
     let mut left = MAX_HEAD;
-    while let Ok(n) = conn.read(&mut sink) {
-        if n == 0 || n >= left {
+    while let Some(wait) = until.checked_duration_since(std::time::Instant::now()) {
+        if wait.is_zero() || conn.set_read_timeout(Some(wait)).is_err() {
             break;
         }
-        left -= n;
+        match conn.read(&mut sink) {
+            Ok(n) if n > 0 && n < left => left -= n,
+            _ => break,
+        }
     }
 }
 
@@ -465,9 +482,9 @@ fn secret_of(h: &Head) -> Option<&str> {
 }
 
 fn serve(shared: &Shared, mut conn: TcpStream) {
-    let _ = conn.set_read_timeout(Some(HEAD_TIMEOUT));
-    let _ = conn.set_write_timeout(Some(HEAD_TIMEOUT));
-    let Some(head) = read_head(&mut conn) else {
+    let _ = conn.set_read_timeout(Some(shared.head_timeout));
+    let _ = conn.set_write_timeout(Some(shared.head_timeout));
+    let Some(head) = read_head(&mut conn, shared.head_timeout) else {
         return fail(&mut conn, 400, "bad_request");
     };
     // One value for each credential and length header: no ambiguity between two parsers.

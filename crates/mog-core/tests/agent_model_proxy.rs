@@ -575,3 +575,41 @@ fn arc_7_connection_cap_refuses_extra_connections_at_once() {
     }
     assert!(ok, "slots free up when the idle clients leave");
 }
+
+#[test]
+fn arc_7_whole_head_deadline_stops_a_client_that_trickles_bytes() {
+    let tokens = Arc::new(FakeTokens {
+        profiles: Mutex::new(Vec::new()),
+    });
+    let proxy = ModelProxy::start_with_head_timeout(
+        tokens,
+        Arc::new(FakeUpstream::default()),
+        std::time::Duration::from_millis(300),
+    )
+    .unwrap();
+    let mut c = TcpStream::connect(host_of(&proxy)).unwrap();
+    c.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .unwrap();
+    let t = std::time::Instant::now();
+    // One byte each 50 ms: each read is fast, but the whole head never ends in time.
+    let writer = {
+        let mut w = c.try_clone().unwrap();
+        std::thread::spawn(move || {
+            for b in b"POST /anthropic/v1/messages HTTP/1.1\r\nHost: 127.0.0.1\r\nx-a: ".iter() {
+                if w.write_all(&[*b]).is_err() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        })
+    };
+    let mut out = Vec::new();
+    let _ = c.read_to_end(&mut out);
+    let elapsed = t.elapsed();
+    assert!(String::from_utf8_lossy(&out).starts_with("HTTP/1.1 400"));
+    assert!(
+        elapsed < std::time::Duration::from_secs(2),
+        "closed after the head deadline, not per read ({elapsed:?})"
+    );
+    let _ = writer.join();
+}
