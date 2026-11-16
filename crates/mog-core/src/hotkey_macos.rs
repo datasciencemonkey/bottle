@@ -63,7 +63,7 @@ pub const TAP_SPEC: TapSpec = TapSpec {
     events_of_interest: 1 << CG_EVENT_FLAGS_CHANGED,
 };
 
-/// The second listen-only tap of CAP-44c (ADR 0014). It asks for `KeyDown` only, never
+/// The second listen-only tap of CAP-44c (ADR 0017). It asks for `KeyDown` only, never
 /// `KeyUp`. It is created off and the OS layer turns it on only while
 /// [`crate::hotkey_core::HotkeyEngine::other_key_window_open`] is true: the first 1 s of a
 /// talk-key hold. Its callback reads no field of the event.
@@ -718,7 +718,7 @@ mod sys {
         probe: MacProbe,
         clock: SystemClock,
         tap_port: AtomicPtr<c_void>,
-        /// The other-key tap of CAP-44c (ADR 0014). It is on only while
+        /// The other-key tap of CAP-44c (ADR 0017). It is on only while
         /// `HotkeyEngine::other_key_window_open` is true.
         other_port: AtomicPtr<c_void>,
         other_on: AtomicBool,
@@ -864,7 +864,7 @@ mod sys {
         let _ = catch_unwind(AssertUnwindSafe(|| {
             // SAFETY: `user` is the `Shared` that the tap thread keeps alive.
             let shared = unsafe { &*user.cast::<Shared>() };
-            // Privacy (ADR 0014): only the event type is used. The event itself (key code,
+            // Privacy (ADR 0017): only the event type is used. The event itself (key code,
             // characters) is never read, so no key identity crosses this boundary.
             if matches!(
                 event_type,
@@ -953,7 +953,7 @@ mod sys {
                     let run_loop = CFRunLoopGetCurrent();
                     CFRunLoopAddSource(run_loop, source, kCFRunLoopCommonModes);
                     CGEventTapEnable(port, true);
-                    // The other-key tap (CAP-44c, ADR 0014): created off on the same run
+                    // The other-key tap (CAP-44c, ADR 0017): created off on the same run
                     // loop. If the OS refuses it, PTT still works; only the key-down cancel
                     // of non-modifier keys is lost (modifiers still come by FlagsChanged).
                     let other = CGEventTapCreate(

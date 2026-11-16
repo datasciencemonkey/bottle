@@ -178,6 +178,10 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
             HotkeyOutput::FallbackChordUnavailable => {
                 self.status.status(HotkeyStatus::ChordUnavailable)
             }
+            // A tap (CAP-44a) comes after `Ptt(Cancel)`, which already ended the PTT and
+            // dropped its audio. Section 4.5 has no `tap` phase; the double-tap rule
+            // (CAP-14a) reads it later.
+            HotkeyOutput::Tap => {}
         }
     }
 }

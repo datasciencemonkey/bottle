@@ -4,6 +4,7 @@
 - Date: 2026-11-16
 - Issue: #6 (soft dependency: spike SP-03 #5)
 - Owner: impl-6 (capture-lead)
+- Amended by: ADR 0017 (decision 1: a second, gated KeyDown tap for CAP-44c)
 
 ## Context
 

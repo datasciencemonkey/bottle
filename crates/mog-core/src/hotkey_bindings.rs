@@ -4,7 +4,7 @@
 //! This module has no OS calls. The host reads the keyboard environment ([`KeyboardEnv`]:
 //! the Dictation shortcut, VoiceOver, the layout, the Copilot key, known voice apps) with
 //! prompt-free OS reads and passes it in. Tests use plain values. The host hook-up (the
-//! `hotkeys_set` handler, the OS reads and the first-run screen) is TODO(#322); see ADR 0014.
+//! `hotkeys_set` handler, the OS reads and the first-run screen) is TODO(#322); see ADR 0017.
 //!
 //! Privacy: a binding names only the global keys of Bottle. Nothing here reads, stores or
 //! logs a key that the user types. A voice app is kept only when its process name is on the

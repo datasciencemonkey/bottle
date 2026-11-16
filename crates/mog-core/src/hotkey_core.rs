@@ -532,7 +532,7 @@ impl HotkeyEngine {
     }
 
     /// A PTT is held and it started less than [`OTHER_KEY_CANCEL_WINDOW`] ago. The macOS
-    /// layer listens to other key-downs only while this is true (ADR 0014).
+    /// layer listens to other key-downs only while this is true (ADR 0017).
     pub fn other_key_window_open(&self) -> bool {
         self.machine.is_held()
             && self
