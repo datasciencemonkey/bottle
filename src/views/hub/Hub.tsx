@@ -2,6 +2,7 @@
 import { useCallback, useState } from 'react';
 import type { Mood, MogId } from '../../shared/interfaces';
 import { asMogViewState, emitView, useViewEvent } from '../view-ipc';
+import { About } from './About';
 
 export function Hub() {
   const [moods, setMoods] = useState<ReadonlyMap<MogId, Mood>>(new Map());
@@ -26,6 +27,7 @@ export function Hub() {
           </li>
         ))}
       </ul>
+      <About />
     </main>
   );
 }
