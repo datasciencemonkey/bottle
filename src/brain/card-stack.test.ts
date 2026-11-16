@@ -1,5 +1,10 @@
 import { createSimClock } from './clock';
-import { createCardStack, type CardStackUpdate, type Scheduler } from './card-stack';
+import {
+  createCardStack,
+  timeoutScheduler,
+  type CardStackUpdate,
+  type Scheduler,
+} from './card-stack';
 
 const S = 1000;
 const MOG = '00000000-0000-4000-8000-000000000001';
@@ -122,5 +127,26 @@ describe('card stack controller', () => {
     sim.advance(5 * S);
     expect(last()?.blurbs).toEqual([]);
     expect(last()?.historyCount).toBe(3);
+  });
+
+  it('[UX-12] the production scheduler fires at the deadline and can be cancelled', () => {
+    vi.useFakeTimers();
+    try {
+      const clock = createSimClock(10 * S);
+      const schedule = timeoutScheduler(clock);
+      const fired: string[] = [];
+      schedule(70 * S, () => fired.push('a'));
+      const cancel = schedule(70 * S, () => fired.push('b'));
+      schedule(5 * S, () => fired.push('late')); // a past deadline fires at once
+      cancel();
+      vi.advanceTimersByTime(0);
+      expect(fired).toEqual(['late']);
+      vi.advanceTimersByTime(60 * S - 1);
+      expect(fired).toEqual(['late']);
+      vi.advanceTimersByTime(1);
+      expect(fired).toEqual(['late', 'a']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
