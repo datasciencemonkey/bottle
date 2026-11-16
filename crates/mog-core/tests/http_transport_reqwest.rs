@@ -95,9 +95,7 @@ impl Server {
 }
 
 fn read_request(stream: &mut TcpStream) -> Option<Seen> {
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .ok()?;
+    stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
     let head_end = loop {
@@ -186,7 +184,10 @@ impl ProfileHosts for Hosts {
 }
 
 fn hosts(url: &str) -> Arc<Hosts> {
-    Arc::new(Hosts(BTreeMap::from([(PROFILE.to_owned(), url.to_owned())])))
+    Arc::new(Hosts(BTreeMap::from([(
+        PROFILE.to_owned(),
+        url.to_owned(),
+    )])))
 }
 
 /// Lends `TOKEN`, then `TOKEN_2` after an invalidate.
@@ -354,7 +355,10 @@ fn sec_06a_nfr_21a_tags_header_on_the_wire_for_a_unity_gateway_route() {
     );
     assert_eq!(seen[0].header("user-agent"), Some(user_agent().as_str()));
     assert_eq!(seen[0].header("content-type"), Some("application/json"));
-    assert_eq!(serde_json::from_slice::<Value>(&seen[0].body).unwrap(), body);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&seen[0].body).unwrap(),
+        body
+    );
 }
 
 #[test]
@@ -411,7 +415,10 @@ fn arc_6_rule_1_missing_or_unknown_params_are_invalid_params() {
     let t = tags("m1", "genie");
     let missing = params(json!({"space_id": "s1"}));
     assert_eq!(
-        code(r.transport.request(PROFILE, "genie.message", &missing, None, &t)),
+        code(
+            r.transport
+                .request(PROFILE, "genie.message", &missing, None, &t)
+        ),
         "invalid_params"
     );
     let extra = params(json!({"space_id": "s1", "host": "evil"}));
@@ -424,7 +431,10 @@ fn arc_6_rule_1_missing_or_unknown_params_are_invalid_params() {
     );
     let on_slotless = params(json!({"space_id": "s1"}));
     assert_eq!(
-        code(r.transport.request(PROFILE, "scim.me", &on_slotless, None, &t)),
+        code(
+            r.transport
+                .request(PROFILE, "scim.me", &on_slotless, None, &t)
+        ),
         "invalid_params"
     );
     assert!(s.seen().is_empty());
@@ -515,7 +525,11 @@ fn arc_6_nfr_21a_nfr_21b_every_route_has_a_fixed_method_and_path() {
 #[test]
 fn arc_6_rule_2_production_policy_refuses_loopback_and_accounts() {
     let p = AllowlistEgressPolicy;
-    assert!(contract_violations(&p).is_empty(), "{:?}", contract_violations(&p));
+    assert!(
+        contract_violations(&p).is_empty(),
+        "{:?}",
+        contract_violations(&p)
+    );
     for (host, url) in [
         ("127.0.0.1", "http://127.0.0.1:8080/api/2.0/x"),
         ("127.0.0.1", "https://127.0.0.1/api/2.0/x"),
@@ -595,7 +609,10 @@ fn arc_6_rule_3_cross_host_redirect_is_not_followed() {
     assert_eq!(code(got), "redirect_refused");
     assert_eq!(s.seen().len(), 1);
     thread::sleep(Duration::from_millis(100));
-    assert!(other.seen().is_empty(), "no request may reach the other host");
+    assert!(
+        other.seen().is_empty(),
+        "no request may reach the other host"
+    );
 }
 
 #[test]
@@ -766,7 +783,10 @@ fn g_10a_retry_after_parses_seconds_and_http_dates_and_clamps() {
     let now = UNIX_EPOCH + Duration::from_secs(1_445_412_480); // Wed, 21 Oct 2015 07:28:00 GMT
     assert_eq!(parse_retry_after("7", now), Some(Duration::from_secs(7)));
     assert_eq!(parse_retry_after("0", now), Some(Duration::from_secs(1)));
-    assert_eq!(parse_retry_after("9999", now), Some(Duration::from_secs(300)));
+    assert_eq!(
+        parse_retry_after("9999", now),
+        Some(Duration::from_secs(300))
+    );
     assert_eq!(
         parse_retry_after("Wed, 21 Oct 2015 07:28:30 GMT", now),
         Some(Duration::from_secs(30))
@@ -853,8 +873,14 @@ fn r7_is_online_reports_the_last_transport_outcome() {
     let closed = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = closed.local_addr().unwrap().port();
     drop(closed);
-    let r = rig_with(&format!("http://127.0.0.1:{port}"), Arc::new(LoopbackPolicy));
-    assert!(r.transport.is_online().unwrap(), "online until a call fails");
+    let r = rig_with(
+        &format!("http://127.0.0.1:{port}"),
+        Arc::new(LoopbackPolicy),
+    );
+    assert!(
+        r.transport.is_online().unwrap(),
+        "online until a call fails"
+    );
     let got = r
         .transport
         .request(PROFILE, "scim.me", &none(), None, &tags("m1", "genie"));
