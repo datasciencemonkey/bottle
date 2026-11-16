@@ -106,7 +106,7 @@ MAX_BYTES = 2 * 1024 * 1024
 TOP_LEVEL = {
     # repo and tooling config
     ".github", ".config", ".cargo", ".gitignore", ".gitattributes", ".prettierignore", ".prettierrc.json",
-    ".editorconfig", ".nvmrc", ".node-version", ".npmrc", "rust-toolchain.toml",
+    ".editorconfig", ".nvmrc", ".node-version", ".npmrc", "rust-toolchain.toml", ".env.example",
     "eslint.config.js", "package.json", "pnpm-lock.yaml", "tsconfig.json", "vite.config.ts",
     "Cargo.toml", "Cargo.lock",
     # docs
