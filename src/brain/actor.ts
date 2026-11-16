@@ -3,7 +3,7 @@
  *
  * All shared queues run through one actor in the hidden brain window. Tasks on the same
  * queue key run one at a time, in order; this is how "one poll per conversation" is kept.
- * Tasks on different keys run independently. TODO(#226): T9 ConversationManager uses this.
+ * Tasks on different keys run independently. T9 ConversationManager uses it for its polls.
  */
 export class BrainActor {
   readonly #tails = new Map<string, Promise<unknown>>();

@@ -12,12 +12,16 @@ function files(dir: string): string[] {
 }
 
 /** Non-test view sources: what ships in the hub, MOG and card bundles. */
-const viewSources = files(views).filter((f) => !/\.test\.tsx?$/.test(f) && !f.endsWith('test-tauri.ts'));
+const viewSources = files(views).filter(
+  (f) => !/\.test\.tsx?$/.test(f) && !f.endsWith('test-tauri.ts'),
+);
 
 function imports(text: string): string[] {
-  return [...text.matchAll(/(?:import|export)[^'"]*?from\s*['"]([^'"]+)['"]|import\(\s*['"]([^'"]+)['"]\s*\)/g)].map(
-    (m) => (m[1] ?? m[2])!,
-  );
+  return [
+    ...text.matchAll(
+      /(?:import|export)[^'"]*?from\s*['"]([^'"]+)['"]|import\(\s*['"]([^'"]+)['"]\s*\)/g,
+    ),
+  ].map((m) => m[1] ?? m[2] ?? '');
 }
 
 describe('ARC-2: thin views', () => {
@@ -41,7 +45,7 @@ describe('ARC-2: thin views', () => {
     const called = new Set<string>();
     for (const f of viewSources) {
       const text = readFileSync(f, 'utf8');
-      for (const m of text.matchAll(/\bcall\(\s*['"`]?([A-Za-z_]*)/g)) called.add(m[1]!);
+      for (const m of text.matchAll(/\bcall\(\s*['"`]?([A-Za-z_]*)/g)) called.add(m[1] ?? '');
       expect(text, relative(src, f)).not.toMatch(/\binvoke\b/);
       expect(text, relative(src, f)).not.toMatch(/@tauri-apps\/api\/core/);
     }

@@ -33,7 +33,7 @@ describe('T11 MoodMapper (4.8)', () => {
     expect(mapper({ ...base, ...set }).mood).toBe(mood);
   });
 
-  const pairs = LEVELS.slice(0, -1).map((hi, i) => ({ hi, lo: LEVELS[i + 1]! }));
+  const pairs = LEVELS.slice(0, -1).map((hi, i) => ({ hi, lo: LEVELS[i + 1] ?? hi }));
   it.each(pairs)('[T11] [UX-01a] $hi.name wins over $lo.name', ({ hi, lo }) => {
     expect(mapper({ ...base, ...lo.set, ...hi.set }).mood).toBe(hi.mood);
   });

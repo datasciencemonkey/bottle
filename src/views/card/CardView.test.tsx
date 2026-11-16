@@ -40,9 +40,13 @@ describe('V3 card view', () => {
     const { el } = await render(<CardView mogId={ID} />);
     await tauri.emit('card:update', update);
     await act(async () => (el.querySelector('button[data-chip="c1"]') as HTMLElement).click());
-    await act(async () => (el.querySelector('button[data-action="expand"]') as HTMLElement).click());
     await act(async () =>
-      el.querySelector('section')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })),
+      (el.querySelector('button[data-action="expand"]') as HTMLElement).click(),
+    );
+    await act(async () =>
+      el
+        .querySelector('section')
+        ?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })),
     );
     expect(viewEmits()).toEqual([
       { mogId: ID, kind: 'chip_click', payload: { chipId: 'c1' } },

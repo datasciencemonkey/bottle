@@ -38,7 +38,9 @@ export const eventModule = {
 
 export const coreModule = {
   invoke: (cmd: string, args?: unknown) => tauri.invoke(cmd, args),
-  Channel: class {},
+  Channel: class {
+    readonly id = 0;
+  },
 };
 
 export const windowModule = {

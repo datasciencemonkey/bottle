@@ -1,7 +1,7 @@
 /**
  * Entry point of the hidden brain window (ARC-2). All domain logic lives here.
- * TODO(#226): start the T1-T15 components.
+ * Shared queues run on the one brain actor (`getBrainActor`).
  */
-import { getBrainActor } from './actor';
+import { startBrain } from './components';
 
-getBrainActor();
+startBrain();

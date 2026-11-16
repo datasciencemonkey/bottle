@@ -1,6 +1,12 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import type { AskRequest, PageDraft, RouterDecision, SegmentRef, Tags } from '../../shared/interfaces';
+import type {
+  AskRequest,
+  PageDraft,
+  RouterDecision,
+  SegmentRef,
+  Tags,
+} from '../../shared/interfaces';
 import { BrainActor } from '../actor';
 import { NotImplementedError } from '../errors';
 import { BRAIN_COMPONENTS, startBrain } from './index';
@@ -25,7 +31,14 @@ const tags: Tags = { app: 'bottle', mog: MOG, op: 'genie' };
 const binding = { kind: 'genie_one_mcp', profile: 'p' } as const;
 const ask: AskRequest = { opId: 'op-1', mogId: MOG, binding, question: 'q', tags };
 const ref = { backend: 'genie_one_mcp', profile: 'p', host: 'h', conversationId: 'c' } as const;
-const seg: SegmentRef = { segmentId: 's', mogId: MOG, track: 'you', tStartMs: 0, tEndMs: 1, final: true };
+const seg: SegmentRef = {
+  segmentId: 's',
+  mogId: MOG,
+  track: 'you',
+  tStartMs: 0,
+  tEndMs: 1,
+  final: true,
+};
 const page: PageDraft = {
   domainId: 'd',
   displayName: 'n',
@@ -90,10 +103,13 @@ describe('brain component registry (4.3)', () => {
     for (const id of BRAIN_COMPONENTS.map((c) => c.id)) {
       const row = rows.split('\n').find((l) => l.startsWith(`| ${id} |`));
       expect(row, id).toBeDefined();
-      const responsibilities = row!.split('|')[3]!.trim();
-      const owner = files.filter((f) =>
-        readFileSync(resolve(dir, f), 'utf8').includes(`${id} `) &&
-        readFileSync(resolve(dir, f), 'utf8').replace(/\s*\n\s*\*\s*/g, ' ').includes(responsibilities),
+      const responsibilities = (row ?? '').split('|')[3]?.trim() ?? '<missing>';
+      const owner = files.filter(
+        (f) =>
+          readFileSync(resolve(dir, f), 'utf8').includes(`${id} `) &&
+          readFileSync(resolve(dir, f), 'utf8')
+            .replace(/\s*\n\s*\*\s*/g, ' ')
+            .includes(responsibilities),
       );
       expect(owner, `${id} doc comment copies its 4.3 row`).toHaveLength(1);
     }
@@ -221,7 +237,7 @@ describe('brain component stubs', () => {
   });
 
   it('[T11] the registry factory returns the MoodMapper function', () => {
-    const t11 = BRAIN_COMPONENTS.find((c) => c.id === 'T11')!.factory();
+    const t11 = BRAIN_COMPONENTS[10].factory();
     expect(typeof t11).toBe('function');
   });
 

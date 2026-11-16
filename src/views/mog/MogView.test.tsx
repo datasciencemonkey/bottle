@@ -45,7 +45,11 @@ describe('V2 MOG view', () => {
     expect(calls).toContain('mood:listening');
     expect(calls).toContain('level:0.5');
     expect(el.querySelector('[data-overlay="attention"]')).toBeNull();
-    await tauri.emit('mog:view_state', { mogId: ID, mood: 'error', overlays: { ...overlays, attention: true } });
+    await tauri.emit('mog:view_state', {
+      mogId: ID,
+      mood: 'error',
+      overlays: { ...overlays, attention: true },
+    });
     expect(el.querySelector('[data-overlay="attention"]')).not.toBeNull();
   });
 
