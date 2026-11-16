@@ -1,6 +1,6 @@
 # macOS talk key: device check (#6, AT-30, SP-03 #5)
 
-Unit tests cover the logic of R1 HotkeyService with fakes. These steps check the real OS on a Mac. A person runs them. Time: about 25 minutes. The probe prints only PTT phases, pill changes and counts. It never prints key contents, and it records no audio.
+Unit tests cover the logic of R1 HotkeyService with fakes. These steps check the real OS on a Mac. A person runs them. Time: about 30 minutes. The probe prints only PTT phases, pill changes and counts. It never prints key contents, and it records no audio.
 
 ## Before you start
 
@@ -23,6 +23,9 @@ Unit tests cover the logic of R1 HotkeyService with fakes. These steps check the
 | 9 | Hold Right-Option. Press Ctrl+Cmd+Q to lock. Release the key. Unlock. | `ptt up` after unlock. Right-Option works again. | CAP-45 |
 | 10 | In a second terminal, run `kill -STOP $(pgrep -n hotkey_probe)`. Press Right-Option 5 times. Wait 5 s. Run `kill -CONT $(pgrep -n hotkey_probe)`. Then hold and release Right-Option. | The macOS tap timeout turns the tap off; the watchdog turns it on again. The last hold gives `ptt down` and `ptt up`. No PTT stays active. | CAP-38a |
 | 11 | With the SP-03 HID rig (`BOTTLE_TEST_HID_PORT`), run 1,000 Right-Option hold-and-release cycles. | 1,000 `ptt up` lines. | CAP-35b, AT-30 |
+| 12 | Hold Right-Option for 10 s while you run step 10 (`kill -STOP`, wait, `kill -CONT`) a second time. | One `ptt down` before and one `ptt up` only when you release the key. No early `ptt up`. | CAP-45 |
+| 13 | Turn Secure Keyboard Entry on. Hold Ctrl+Shift+Space for 5 s, then release it. | Exactly one `ptt down` and one `ptt up`. | CAP-39b, CAP-45 |
+| 14 | Optional: start an app that owns Ctrl+Shift+Space as a global key (for example a launcher set to it). Turn Secure Keyboard Entry on and look at the probe. | With such an app: `FallbackChordUnavailable`. Without one: no such line. | CAP-39b |
 
 Step 11 needs the Pi Pico HID rig of SP-03. Without the rig, report steps 1-10 only.
 

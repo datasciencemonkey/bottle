@@ -90,16 +90,10 @@ pub fn decode_flags_changed(key: TalkKey, keycode: u16, flags: u64) -> Option<Ke
 /// The physical state from the HID key state of the talk key, the HID flag state and the
 /// HID key state of Space (CAP-45). The talk key uses its own key state, not the
 /// device-dependent flag bits, which a source-state read may not carry.
-pub fn physical_from_hid(_talk_key_down: bool, _flags: u64, _space_down: bool) -> PhysicalState {
-    todo!()
-}
-
-/// The physical state from the HID flag state and the Space key state (CAP-45).
-pub fn physical_from_flags(key: TalkKey, flags: u64, space_down: bool) -> PhysicalState {
-    let (_, mask) = talk_key_code(key);
+pub fn physical_from_hid(talk_key_down: bool, flags: u64, space_down: bool) -> PhysicalState {
     let chord_mods = CG_FLAG_CONTROL | CG_FLAG_SHIFT;
     PhysicalState {
-        talk_key_down: flags & mask != 0,
+        talk_key_down,
         chord_down: space_down && flags & chord_mods == chord_mods,
     }
 }
@@ -190,19 +184,6 @@ mod tests {
             }
         }
         assert_eq!(ups, 1000);
-    }
-
-    #[test]
-    fn cap_45_physical_state_reads_the_device_flag() {
-        let s = physical_from_flags(TalkKey::RightOption, 0x0008_0140, false);
-        assert!(s.talk_key_down);
-        assert!(!s.chord_down);
-        let s = physical_from_flags(TalkKey::RightOption, 0x0008_0120, false);
-        assert!(!s.talk_key_down);
-        let chord = CG_FLAG_CONTROL | CG_FLAG_SHIFT;
-        assert!(physical_from_flags(TalkKey::RightOption, chord, true).chord_down);
-        assert!(!physical_from_flags(TalkKey::RightOption, chord, false).chord_down);
-        assert!(!physical_from_flags(TalkKey::RightOption, CG_FLAG_SHIFT, true).chord_down);
     }
 
     #[test]
@@ -402,6 +383,7 @@ mod sys {
         ) -> i32;
         fn UnregisterEventHotKey(hot_key: EventHotKeyRef) -> i32;
         fn GetEventKind(event: EventRef) -> u32;
+        fn RunApplicationEventLoop();
     }
 
     extern "C" {
@@ -420,11 +402,12 @@ mod sys {
         m.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Run the main-thread run loop. The Carbon chord handler runs on it. A Tauri app already
-    /// runs it; the device probe example calls this.
+    /// Run the Carbon application event loop on the main thread. Carbon sends the chord
+    /// hot-key events through it, and it also runs the main dispatch queue. A Tauri app runs
+    /// its own NSApplication loop instead; the device probe example calls this.
     pub fn run_main_loop() {
-        // SAFETY: CFRunLoopRun runs the run loop of the calling thread.
-        unsafe { CFRunLoopRun() }
+        // SAFETY: called on the main thread; it returns when the app quits.
+        unsafe { RunApplicationEventLoop() }
     }
 
     /// The prompt-free OS reads of the watchdog (CAP-38b, CAP-39a, CAP-45).
@@ -474,13 +457,16 @@ mod sys {
 
         fn physical_state(&self) -> PhysicalState {
             // SAFETY: read-only queries of the HID system state.
-            let (flags, space) = unsafe {
+            let (code, _) = talk_key_code(self.talk_key);
+            // SAFETY: read-only queries of the HID system state.
+            let (talk, flags, space) = unsafe {
                 (
+                    CGEventSourceKeyState(CG_EVENT_SOURCE_STATE_HID, code),
                     CGEventSourceFlagsState(CG_EVENT_SOURCE_STATE_HID),
                     CGEventSourceKeyState(CG_EVENT_SOURCE_STATE_HID, VK_SPACE),
                 )
             };
-            physical_from_flags(self.talk_key, flags, space)
+            physical_from_hid(talk, flags, space)
         }
 
         fn slept(&self) -> Duration {
@@ -627,9 +613,16 @@ mod sys {
         let (shared, on) = *unsafe { Box::from_raw(ctx.cast::<(Arc<Shared>, bool)>()) };
         let _ = catch_unwind(AssertUnwindSafe(|| {
             let mut chord = lock(&shared.chord);
-            if on && chord.is_none() {
-                *chord = register_chord(&shared);
-            } else if !on {
+            if on {
+                if chord.is_none() {
+                    *chord = register_chord(&shared);
+                }
+                let ok = chord.is_some();
+                drop(chord);
+                // Report the result, so a refused chord is not silent (CAP-39b).
+                let now = shared.clock.now();
+                lock(&shared.engine).on_chord_registered(ok, now);
+            } else {
                 if let Some(c) = chord.take() {
                     // SAFETY: both refs came from the Carbon register calls.
                     unsafe {
@@ -826,14 +819,15 @@ mod sys {
             }
             if shared.recreate_requested.swap(false, Ordering::AcqRel) {
                 stop_tap(&shared);
-                // A failure here is retried on the next permission grant or wake.
+                // On a failure no tap is alive; the engine asks again every
+                // TAP_RETRY_INTERVAL while Input Monitoring is granted (CAP-38b).
                 let _ = spawn_tap(&shared);
             }
             thread::sleep(WATCHDOG_TICK);
         }
     }
 
-    /// R1 HotkeyService on macOS (#6).
+    /// R1 HotkeyService on macOS (#6). No host creates it yet: TODO(#305).
     ///
     /// The sink is called with the engine lock held, from the tap thread, the watchdog thread
     /// or the main thread. It must return fast and must not call back into this service.
@@ -921,6 +915,10 @@ mod sys {
     }
 
     impl Drop for MacHotkeyService {
+        /// Stops the tap and the watchdog. While the chord is registered, `Shared` is also
+        /// owned by `Chord::_owner` (Carbon holds its pointer). The unregister runs on the
+        /// main dispatch queue, so a host that never runs the main queue keeps `Shared` alive
+        /// after drop. A Tauri app always runs it.
         fn drop(&mut self) {
             let _ = HotkeyService::stop(self);
         }

@@ -100,7 +100,8 @@ pub enum TalkKeyMode {
     Chord,
 }
 
-/// What R1 tells the rest of the app. It never carries key contents.
+/// What R1 tells the rest of the app. It never carries key contents. The pill outputs need a
+/// core-to-brain event: TODO(#297).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HotkeyOutput {
     /// A `hotkey.ptt` phase.
@@ -491,8 +492,23 @@ impl HotkeyEngine {
 
     /// The OS layer tried to register the fallback chord. On a failure R1 emits
     /// [`HotkeyOutput::FallbackChordUnavailable`] once and retries (CAP-39b).
-    pub fn on_chord_registered(&mut self, _ok: bool, _now: Duration) {
-        todo!()
+    pub fn on_chord_registered(&mut self, ok: bool, now: Duration) {
+        if self.chord != ChordState::Pending {
+            // A late result after Secure Event Input ended, or a duplicate.
+            return;
+        }
+        if ok {
+            self.chord = ChordState::On;
+            if std::mem::take(&mut self.chord_reported) {
+                // The chord works now: show the "Use ⌃⇧Space" pill again.
+                self.emit(vec![HotkeyOutput::TalkKeyPaused]);
+            }
+        } else {
+            self.chord = ChordState::Failed { at: now };
+            if !std::mem::replace(&mut self.chord_reported, true) {
+                self.emit(vec![HotkeyOutput::FallbackChordUnavailable]);
+            }
+        }
     }
 
     /// The PTT machine (read only).
@@ -540,8 +556,19 @@ impl HotkeyEngine {
         // Secure Event Input first: it has the 250 ms deadline (CAP-39a).
         if let Some(active) = self.secure.poll(probe.secure_input_active()) {
             ctl.set_chord(active);
+            self.chord = if active {
+                ChordState::Pending
+            } else {
+                ChordState::Off
+            };
+            self.chord_reported = false;
             let out = self.machine.on_secure_input(active, probe.physical_state());
             self.emit(out);
+        } else if let ChordState::Failed { at } = self.chord {
+            if now.saturating_sub(at) >= CHORD_RETRY_INTERVAL {
+                self.chord = ChordState::Pending;
+                ctl.set_chord(true);
+            }
         }
 
         let slept = probe.slept();
@@ -570,6 +597,19 @@ impl HotkeyEngine {
         if self.granted.replace(granted) == Some(false) && granted {
             self.on_tap_signal(TapSignal::PermissionGranted, now, probe, ctl);
         }
+
+        // A recreate can fail (for example just after a wake). Retry while no tap is alive.
+        if granted && !ctl.tap_alive() {
+            let due = self
+                .last_tap_retry
+                .is_none_or(|t| now.saturating_sub(t) >= TAP_RETRY_INTERVAL);
+            if due {
+                self.last_tap_retry = Some(now);
+                ctl.recreate();
+            }
+        } else {
+            self.last_tap_retry = None;
+        }
     }
 
     /// Go back to the start state when the service stops. An active PTT ends with `cancel`
@@ -589,6 +629,9 @@ impl HotkeyEngine {
         self.slept = None;
         self.session_active = None;
         self.granted = None;
+        self.chord = ChordState::Off;
+        self.chord_reported = false;
+        self.last_tap_retry = None;
         self.emit(out);
     }
 
