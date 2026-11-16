@@ -148,3 +148,120 @@ pub fn parse_sp03_log(text: &str) -> HotkeySamples {
     }
     out
 }
+
+/// The Secure Input part of an SP-03 probe log (AT-30, CAP-39a, CAP-39b, #230).
+///
+/// The person runs `sp03-probe listen` with Secure Input on (no `--no-sei`), holds the talk key
+/// and turns on Secure Keyboard Entry, then presses and releases the chord Ctrl+Shift+Space.
+/// The log has only event names and times, no key contents.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SecureInputSamples {
+    /// The probe that wrote the log.
+    pub tool: Option<KeySampleTool>,
+    /// `src=sei event=on` lines: Secure Input turned on.
+    pub secure_input_starts: u32,
+    /// For each PTT that Secure Input ended: the upper bound of the time from Secure Input start
+    /// to the PTT end (`upper_bound_sei_to_end_ms`, which adds one poll interval).
+    pub sei_to_end: Vec<Duration>,
+    /// Carbon chord key-downs (`EV src=carbon kind=down`).
+    pub chord_presses: u32,
+    /// Chord key-downs with a key-up before the next key-down.
+    pub chord_releases_seen: u32,
+}
+
+/// What the Secure Input samples show against CAP-39a (250 ms) and CAP-39b (press and release).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecureInputVerdict {
+    /// Every PTT ended in time and every chord press had its release.
+    Within,
+    /// A PTT ended later than [`crate::hotkey_core::SECURE_INPUT_DEADLINE`].
+    Over {
+        /// The slowest end.
+        worst: Duration,
+    },
+    /// A chord press had no release.
+    ChordReleaseMissed {
+        /// Chord presses.
+        presses: u32,
+        /// Releases seen.
+        releases: u32,
+    },
+    /// No PTT ended by Secure Input, or no chord press: the run did not do the steps.
+    NoSamples,
+}
+
+impl SecureInputSamples {
+    /// The verdict. A run with no sample is never within.
+    pub fn verdict(&self) -> SecureInputVerdict {
+        if self.sei_to_end.is_empty() || self.chord_presses == 0 {
+            return SecureInputVerdict::NoSamples;
+        }
+        if let Some(worst) = self.sei_to_end.iter().copied().max() {
+            if worst > crate::hotkey_core::SECURE_INPUT_DEADLINE {
+                return SecureInputVerdict::Over { worst };
+            }
+        }
+        if self.chord_releases_seen < self.chord_presses {
+            return SecureInputVerdict::ChordReleaseMissed {
+                presses: self.chord_presses,
+                releases: self.chord_releases_seen,
+            };
+        }
+        SecureInputVerdict::Within
+    }
+}
+
+fn field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    line.split_whitespace()
+        .filter_map(|f| f.split_once('='))
+        .find_map(|(k, v)| (k == key).then_some(v))
+}
+
+/// Read the Secure Input lines of an SP-03 probe log (`sp03-probe listen`, #5).
+///
+/// It reads `src=sei event=on`, `src=sei event=ptt_end_by_sei upper_bound_sei_to_end_ms=<ms>`
+/// and `EV src=carbon kind=down|up`. Other lines are ignored. An end time that is not a finite,
+/// non-negative number is skipped, so it cannot count as fast.
+pub fn parse_sp03_secure_input(text: &str) -> SecureInputSamples {
+    let mut out = SecureInputSamples {
+        tool: Some(KeySampleTool::Sp03Probe),
+        ..SecureInputSamples::default()
+    };
+    let mut chord_down = false;
+    for line in text.lines() {
+        if let Some(start) = line.find("EV ") {
+            let ev = &line[start + 3..];
+            if field(ev, "src") != Some("carbon") {
+                continue;
+            }
+            match field(ev, "kind") {
+                Some("down") => {
+                    out.chord_presses = out.chord_presses.saturating_add(1);
+                    chord_down = true;
+                }
+                Some("up") if chord_down => {
+                    out.chord_releases_seen = out.chord_releases_seen.saturating_add(1);
+                    chord_down = false;
+                }
+                _ => {}
+            }
+            continue;
+        }
+        if field(line, "src") != Some("sei") {
+            continue;
+        }
+        match field(line, "event") {
+            Some("on") => out.secure_input_starts = out.secure_input_starts.saturating_add(1),
+            Some("ptt_end_by_sei") => {
+                let ms = field(line, "upper_bound_sei_to_end_ms")
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .filter(|v| v.is_finite() && *v >= 0.0);
+                if let Some(ms) = ms {
+                    out.sei_to_end.push(Duration::from_secs_f64(ms / 1e3));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}

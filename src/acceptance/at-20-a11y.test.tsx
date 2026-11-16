@@ -109,9 +109,9 @@ describe('AT-20 without pointer or animation', () => {
       throw new Error('offline');
     });
     const hide2 = vi.fn(async () => {});
-    expect(await handleCardEsc(ID, { inFlight: ref }, { cancel: failing, hideCard: hide2 })).toEqual(
-      { t: 'cancel_request', ok: false },
-    );
+    expect(
+      await handleCardEsc(ID, { inFlight: ref }, { cancel: failing, hideCard: hide2 }),
+    ).toEqual({ t: 'cancel_request', ok: false });
     expect(hide2).not.toHaveBeenCalled();
   });
 
@@ -183,7 +183,7 @@ describe('AT-20 without pointer or animation', () => {
 
   it.skip('[AT-20] [UX-08a] [UX-08b] the MOG view keeps the Rive listeners off TODO(#83)', () => {
     // TODO(#83): the MOG view builds its Rive instance with the listeners off.
-    const params = offlineRiveParams({ src: '/mog.riv' });
+    const params = offlineRiveParams({ src: '/mog.riv', canvas: document.createElement('canvas') });
     expect(params.shouldDisableRiveListeners).toBe(true);
   });
 
@@ -226,7 +226,12 @@ describe('AT-20 without pointer or animation', () => {
 
   it.skip('[AT-20] [UX-28] the last-interacted MOG shows a target marker in its name TODO(#73)', async () => {
     const { el } = await mount(<MogView mogId={ID} />);
-    await tauri.emit('mog:view_state', { mogId: ID, mood: 'idle', overlays: noOverlays, target: true });
+    await tauri.emit('mog:view_state', {
+      mogId: ID,
+      mood: 'idle',
+      overlays: noOverlays,
+      target: true,
+    });
     expect(el.querySelector('[data-overlay="target"]')).not.toBeNull();
     expect(accessibleText(el.querySelector('button') as Element)).toMatch(/, target$/);
   });
@@ -246,7 +251,8 @@ describe('AT-20 without pointer or animation', () => {
     const css = readFileSync('src/views/card/card.css', 'utf8');
     const pairs = [...css.matchAll(/--card-fg:\s*(#[0-9a-f]{6});\s*--card-bg:\s*(#[0-9a-f]{6})/gi)];
     expect(pairs.length).toBeGreaterThanOrEqual(2);
-    for (const [, fg, bg] of pairs) expect(contrastRatio(fg ?? '', bg ?? '')).toBeGreaterThanOrEqual(4.5);
+    for (const [, fg, bg] of pairs)
+      expect(contrastRatio(fg ?? '', bg ?? '')).toBeGreaterThanOrEqual(4.5);
   });
 
   it.skip('[AT-20] [UX-35] with reduced motion the MOG uses static frames and a 5-step meter TODO(#97)', async () => {

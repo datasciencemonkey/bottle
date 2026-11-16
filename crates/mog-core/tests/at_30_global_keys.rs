@@ -39,7 +39,9 @@ use mog_core::hotkey_windows::{
 };
 use mog_core::keyboard_env::{read_keyboard_env, EnvReads};
 use mog_core::latency_bench::import::{parse_sp03_secure_input, SecureInputVerdict};
-use mog_core::testkit::hotkey::{FakePermissions, RecordingSink, RecordingTapControl, ScriptedProbe, TapCall};
+use mog_core::testkit::hotkey::{
+    FakePermissions, RecordingSink, RecordingTapControl, ScriptedProbe, TapCall,
+};
 use mog_core::testkit::{self, Fixture};
 
 const CYCLES: usize = 1_000;
@@ -54,7 +56,13 @@ fn ptt(phase: PttPhase) -> HotkeyOutput {
 
 /// An engine on a simulated clock, its sink, the probe and the tap control. The first tick
 /// records the baseline of the watchdog.
-fn engine() -> (HotkeyEngine, Arc<RecordingSink>, SimClock, ScriptedProbe, RecordingTapControl) {
+fn engine() -> (
+    HotkeyEngine,
+    Arc<RecordingSink>,
+    SimClock,
+    ScriptedProbe,
+    RecordingTapControl,
+) {
     let clock = SimClock::new();
     let sink = RecordingSink::new();
     let mut e = HotkeyEngine::with_clock(sink.clone(), Arc::new(clock.clone()));
@@ -80,7 +88,10 @@ fn at_30_cap_35a_the_build_has_only_listen_only_taps() {
     // The PTT tap asks for FlagsChanged only (the talk key is modifier-only), the
     // other-key tap for KeyDown only. Neither asks for KeyUp, so no typed key is seen.
     assert_eq!(TAP_SPEC.events_of_interest, 1 << CG_EVENT_FLAGS_CHANGED);
-    assert_eq!(OTHER_KEY_TAP_SPEC.events_of_interest, 1 << CG_EVENT_KEY_DOWN);
+    assert_eq!(
+        OTHER_KEY_TAP_SPEC.events_of_interest,
+        1 << CG_EVENT_KEY_DOWN
+    );
 }
 
 #[test]
@@ -110,9 +121,16 @@ fn at_30_cap_35b_windows_1000_simulated_hold_cycles_give_1000_key_ups() {
     let mut e = HotkeyEngine::with_clock(sink.clone(), Arc::new(clock.clone()));
     let mut filter = HookFilter::new(WinTalkKey::RightAlt);
     for _ in 0..CYCLES {
-        for (ev, hold) in [(KeyEvent::down(vk::RMENU), ms(300)), (KeyEvent::up(vk::RMENU), ms(100))] {
+        for (ev, hold) in [
+            (KeyEvent::down(vk::RMENU), ms(300)),
+            (KeyEvent::up(vk::RMENU), ms(100)),
+        ] {
             let (verdict, signal) = filter.on_key(ev, clock.now());
-            assert_eq!(verdict, Verdict::Swallow, "CAP-41: the talk key never reaches the app");
+            assert_eq!(
+                verdict,
+                Verdict::Swallow,
+                "CAP-41: the talk key never reaches the app"
+            );
             let signal = signal.expect("each talk-key edge gives a signal");
             assert_eq!(forward_to_engine(signal, &mut e), None);
             clock.advance(hold);
@@ -134,7 +152,10 @@ fn at_30_cap_39a_secure_input_ends_an_active_ptt_within_250_ms() {
 
     // Worst case: Secure Input starts just after a tick, so R1 sees it on the next tick.
     probe.set_secure_input(true);
-    probe.set_physical(PhysicalState { talk_key_down: true, chord_down: false });
+    probe.set_physical(PhysicalState {
+        talk_key_down: true,
+        chord_down: false,
+    });
     let started = clock.now();
     tick(&mut e, &clock, &probe, &ctl);
     let out = sink.take();
@@ -253,15 +274,25 @@ fn at_30_cap_45_a_lost_key_up_ends_the_ptt_after_wake_and_after_secure_input() {
     sink.take();
     probe.set_secure_input(false);
     tick(&mut e, &clock, &probe, &ctl);
-    assert_eq!(sink.take(), vec![ptt(PttPhase::Up), HotkeyOutput::TalkKeyRestored]);
+    assert_eq!(
+        sink.take(),
+        vec![ptt(PttPhase::Up), HotkeyOutput::TalkKeyRestored]
+    );
 
     // Windows: unlock and resume end a PTT whose key-up the hook did not see.
     for unlock in [true, false] {
         let mut f = HookFilter::new(WinTalkKey::RightAlt);
         let (_, down) = f.on_key(KeyEvent::down(vk::RMENU), ms(0));
         assert!(matches!(down, Some(HookSignal::TalkDown { .. })));
-        let end = if unlock { f.on_unlock(|_| false, ms(5)) } else { f.on_resume(ms(5)) };
-        assert!(matches!(end, Some(HookSignal::TalkUp { .. })), "unlock={unlock}");
+        let end = if unlock {
+            f.on_unlock(|_| false, ms(5))
+        } else {
+            f.on_resume(ms(5))
+        };
+        assert!(
+            matches!(end, Some(HookSignal::TalkUp { .. })),
+            "unlock={unlock}"
+        );
         assert!(!f.talk_active());
     }
 }
@@ -279,7 +310,11 @@ fn at_30_cap_36_ptt_asks_only_for_input_monitoring_and_only_after_a_user_action(
     assert_eq!(granted, PermissionStatus::Granted);
     assert_eq!(api.prompts(), vec![Permission::InputMonitoring]);
     assert!(check_ptt_permission(&api).is_ok());
-    assert_eq!(api.prompts(), vec![Permission::InputMonitoring], "no second prompt");
+    assert_eq!(
+        api.prompts(),
+        vec![Permission::InputMonitoring],
+        "no second prompt"
+    );
 }
 
 #[test]
@@ -289,7 +324,10 @@ fn at_30_cap_37_accessibility_is_asked_only_when_the_user_selects_insertion() {
     assert!(!api.prompts().contains(&Permission::Accessibility));
 
     request_insertion_permission(&api, UserAction::from_user_click());
-    assert_eq!(api.prompts(), vec![Permission::InputMonitoring, Permission::Accessibility]);
+    assert_eq!(
+        api.prompts(),
+        vec![Permission::InputMonitoring, Permission::Accessibility]
+    );
 }
 
 // ---------- Windows hook (CAP-40a, CAP-40b, CAP-41, CAP-42) ----------
@@ -368,14 +406,24 @@ fn at_30_cap_41_the_talk_key_and_esc_are_swallowed_during_capture_in_100_presses
         assert_eq!(f.on_key(KeyEvent::up(vk::RMENU), at).0, Verdict::Swallow);
     }
     // Outside capture, Esc reaches the app.
-    assert_eq!(f.on_key(KeyEvent::down(vk::ESCAPE), ms(5_000)), (Verdict::Pass, None));
+    assert_eq!(
+        f.on_key(KeyEvent::down(vk::ESCAPE), ms(5_000)),
+        (Verdict::Pass, None)
+    );
 }
 
 #[test]
 fn at_30_cap_42_an_elevated_foreground_window_blocks_the_talk_key_once() {
     let mut gate = ElevationGate::new(false);
-    assert_eq!(gate.on_foreground(42, Elevation::Elevated), Some(HookSignal::TalkKeyBlocked));
-    assert_eq!(gate.on_foreground(42, Elevation::Elevated), None, "first failure only");
+    assert_eq!(
+        gate.on_foreground(42, Elevation::Elevated),
+        Some(HookSignal::TalkKeyBlocked)
+    );
+    assert_eq!(
+        gate.on_foreground(42, Elevation::Elevated),
+        None,
+        "first failure only"
+    );
     assert_eq!(gate.on_foreground(43, Elevation::NotElevated), None);
     // An elevated Bottle sees elevated windows, so it shows nothing.
     let mut elevated = ElevationGate::new(true);
@@ -386,32 +434,81 @@ fn at_30_cap_42_an_elevated_foreground_window_blocks_the_talk_key_once() {
 
 #[test]
 fn at_30_cap_43a_no_default_global_key_uses_ctrl_option() {
+    let mac = default_bindings(Os::MacOs);
+    for action in HotkeyAction::ALL {
+        let b = mac
+            .get(action)
+            .unwrap_or_else(|| panic!("macOS has no {action:?}"));
+        // Ctrl+Option is the VoiceOver modifier (COL-57).
+        assert!(
+            !b.has_ctrl_alt(),
+            "macOS {action:?} = {}",
+            b.format(Os::MacOs)
+        );
+    }
+    // D66 gives Windows Ctrl+Win+Alt chords. Ctrl+Alt without Win is AltGr, so no default has it.
+    let win = default_bindings(Os::Windows);
+    for action in HotkeyAction::ALL {
+        let b = win
+            .get(action)
+            .unwrap_or_else(|| panic!("Windows has no {action:?}"));
+        let text = b.format(Os::Windows);
+        assert!(
+            !b.has_ctrl_alt() || text.contains("Win"),
+            "Windows {action:?} = {text}"
+        );
+    }
+    assert_eq!(
+        win.get(HotkeyAction::Panic).map(|b| b.format(Os::Windows)),
+        Some("Ctrl+Win+Alt+K".to_owned())
+    );
     for os in [Os::MacOs, Os::Windows] {
         let d = default_bindings(os);
-        for action in HotkeyAction::ALL {
-            let b = d.get(action).unwrap_or_else(|| panic!("{os:?} has no {action:?}"));
-            assert!(!b.has_ctrl_alt(), "{os:?} {action:?} = {}", b.format(os));
-        }
-        assert_eq!(d.get(HotkeyAction::Ptt), Some(Binding::Talk(TalkBinding::RightOption)));
+        assert_eq!(
+            d.get(HotkeyAction::Ptt),
+            Some(Binding::Talk(TalkBinding::RightOption))
+        );
         // The defaults of one OS never collide with each other or with the OS.
-        assert_eq!(first_run_check(os, &KeyboardEnv::default()).conflicts, vec![]);
+        assert_eq!(
+            first_run_check(os, &KeyboardEnv::default()).conflicts,
+            vec![]
+        );
     }
 }
 
 #[test]
 fn at_30_cap_43b_altgr_and_copilot_layouts_move_the_talk_key_down_the_ladder() {
-    let altgr = KeyboardEnv { alt_gr_layout: true, ..KeyboardEnv::default() };
+    let altgr = KeyboardEnv {
+        alt_gr_layout: true,
+        ..KeyboardEnv::default()
+    };
     let r = first_run_check(Os::Windows, &altgr);
-    assert_eq!(r.conflicts.iter().map(|c| c.kind).collect::<Vec<_>>(), vec![ConflictKind::AltGr]);
-    assert_eq!(r.suggested.get(HotkeyAction::Ptt), Some(Binding::Talk(TalkBinding::RightControl)));
+    assert_eq!(
+        r.conflicts.iter().map(|c| c.kind).collect::<Vec<_>>(),
+        vec![ConflictKind::AltGr]
+    );
+    assert_eq!(
+        r.suggested.get(HotkeyAction::Ptt),
+        Some(Binding::Talk(TalkBinding::RightControl))
+    );
 
-    let both = KeyboardEnv { alt_gr_layout: true, copilot_key: true, ..KeyboardEnv::default() };
+    let both = KeyboardEnv {
+        alt_gr_layout: true,
+        copilot_key: true,
+        ..KeyboardEnv::default()
+    };
     let r = first_run_check(Os::Windows, &both);
-    assert_eq!(r.suggested.get(HotkeyAction::Ptt), Some(Binding::Talk(TalkBinding::CtrlWin)));
+    assert_eq!(
+        r.suggested.get(HotkeyAction::Ptt),
+        Some(Binding::Talk(TalkBinding::CtrlWin))
+    );
     let mut env_with_rctrl = hotkey_bindings::default_bindings(Os::Windows);
     env_with_rctrl.set(HotkeyAction::Ptt, Binding::Talk(TalkBinding::RightControl));
     let c = hotkey_bindings::check_conflicts(Os::Windows, &env_with_rctrl, &both);
-    assert!(c.iter().any(|c| c.kind == ConflictKind::CopilotKey), "{c:?}");
+    assert!(
+        c.iter().any(|c| c.kind == ConflictKind::CopilotKey),
+        "{c:?}"
+    );
 }
 
 #[test]
@@ -428,7 +525,10 @@ fn at_30_cap_43b_every_first_run_conflict_shows_with_a_fix() {
     let kinds: Vec<_> = c.iter().map(|c| c.kind).collect();
     assert!(kinds.contains(&ConflictKind::Dictation), "{kinds:?}");
     assert!(kinds.contains(&ConflictKind::VoiceApp), "{kinds:?}");
-    let vo = KeyboardEnv { voice_over: true, ..KeyboardEnv::default() };
+    let vo = KeyboardEnv {
+        voice_over: true,
+        ..KeyboardEnv::default()
+    };
     let kinds: Vec<_> = hotkey_bindings::check_conflicts(Os::MacOs, &bs, &vo)
         .iter()
         .map(|c| c.kind)
@@ -456,7 +556,12 @@ fn at_30_cap_43b_every_first_run_conflict_shows_with_a_fix() {
         for c in &r.conflicts {
             let text = c.message(os);
             assert!(text.contains("Fix:"), "{os:?} {:?}: {text}", c.kind);
-            assert!(matches!(c.fix, Fix::UseBinding { .. } | Fix::OpenSystemSettings { .. } | Fix::ChangeOtherApp { .. }));
+            assert!(matches!(
+                c.fix,
+                Fix::UseBinding { .. }
+                    | Fix::OpenSystemSettings { .. }
+                    | Fix::ChangeOtherApp { .. }
+            ));
         }
     }
 }
@@ -487,10 +592,24 @@ impl EnvReads for LayoutReads {
 
 #[test]
 fn at_30_cap_43b_the_os_reads_feed_the_check_and_keep_only_known_voice_apps() {
-    let env = read_keyboard_env(Os::Windows, &LayoutReads { alt_gr: true, copilot: true });
+    let env = read_keyboard_env(
+        Os::Windows,
+        &LayoutReads {
+            alt_gr: true,
+            copilot: true,
+        },
+    );
     assert!(env.alt_gr_layout && env.copilot_key);
-    assert_eq!(env.voice_apps, vec![VoiceApp::Dragon], "no other process name is kept");
-    let kinds: Vec<_> = first_run_check(Os::Windows, &env).conflicts.iter().map(|c| c.kind).collect();
+    assert_eq!(
+        env.voice_apps,
+        vec![VoiceApp::Dragon],
+        "no other process name is kept"
+    );
+    let kinds: Vec<_> = first_run_check(Os::Windows, &env)
+        .conflicts
+        .iter()
+        .map(|c| c.kind)
+        .collect();
     assert!(kinds.contains(&ConflictKind::AltGr) && kinds.contains(&ConflictKind::VoiceApp));
 }
 
@@ -515,17 +634,28 @@ fn at_30_cap_39a_cap_39b_the_sp03_secure_input_log_reads_the_end_time_and_chord_
     assert_eq!((s.chord_presses, s.chord_releases_seen), (1, 1));
     assert_eq!(s.verdict(), SecureInputVerdict::Within);
 
-    let slow = SEI_LOG.replace("upper_bound_sei_to_end_ms=10.010", "upper_bound_sei_to_end_ms=251.000");
+    let slow = SEI_LOG.replace(
+        "upper_bound_sei_to_end_ms=10.010",
+        "upper_bound_sei_to_end_ms=251.000",
+    );
     assert_eq!(
         parse_sp03_secure_input(&slow).verdict(),
-        SecureInputVerdict::Over { worst: Duration::from_millis(251) }
+        SecureInputVerdict::Over {
+            worst: Duration::from_millis(251)
+        }
     );
     let lost_release = SEI_LOG.replace("EV src=carbon kind=up t_ns=1700000000 lat_ms=0.3\n", "");
     assert_eq!(
         parse_sp03_secure_input(&lost_release).verdict(),
-        SecureInputVerdict::ChordReleaseMissed { presses: 1, releases: 0 }
+        SecureInputVerdict::ChordReleaseMissed {
+            presses: 1,
+            releases: 0
+        }
     );
-    assert_eq!(parse_sp03_secure_input("").verdict(), SecureInputVerdict::NoSamples);
+    assert_eq!(
+        parse_sp03_secure_input("").verdict(),
+        SecureInputVerdict::NoSamples
+    );
 }
 
 /// The env variable with the path of the SP-03 probe log of the Secure Input run.
@@ -541,7 +671,10 @@ fn at_30_cap_39a_cap_39b_device_secure_keyboard_entry_during_a_hold() {
         }
         Err(e) => panic!("{e}"),
     };
-    let Some(path) = std::env::var(ENV_SEI_LOG).ok().filter(|v| !v.trim().is_empty()) else {
+    let Some(path) = std::env::var(ENV_SEI_LOG)
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+    else {
         eprintln!(
             "skipped: {ENV_SEI_LOG} is not set, so the AT-30 Secure Input run does not run on {} \
              (docs/tests/AT-MOGS-TALKKEY-A11Y.md)",
@@ -554,6 +687,54 @@ fn at_30_cap_39a_cap_39b_device_secure_keyboard_entry_during_a_hold() {
     assert_eq!(s.verdict(), SecureInputVerdict::Within, "{s:?}");
 }
 
+/// The env variable that tells the layout test which keyboard the person set up:
+/// `altgr`, `copilot`, `altgr+copilot` or `plain`.
+const ENV_LAYOUT: &str = "BOTTLE_TEST_LAYOUT";
+
+#[test]
+fn at_30_cap_43b_device_altgr_and_copilot_layouts_are_read_and_flagged() {
+    let device = match testkit::device_from(|k| std::env::var(k).ok()) {
+        Ok(Fixture::Ready(d)) => d,
+        Ok(Fixture::Skip(reason)) => {
+            eprintln!("{reason}");
+            return;
+        }
+        Err(e) => panic!("{e}"),
+    };
+    let Some(layout) = std::env::var(ENV_LAYOUT).ok().map(|v| v.trim().to_owned()) else {
+        eprintln!(
+            "skipped: {ENV_LAYOUT} is not set, so the AT-30 layout run does not run on {} \
+             (docs/tests/AT-MOGS-TALKKEY-A11Y.md)",
+            device.id()
+        );
+        return;
+    };
+    let (alt_gr, copilot) = match layout.as_str() {
+        "altgr" => (true, false),
+        "copilot" => (false, true),
+        "altgr+copilot" => (true, true),
+        "plain" => (false, false),
+        other => panic!("{ENV_LAYOUT} must be altgr, copilot, altgr+copilot or plain, not {other}"),
+    };
+    let os = mog_core::keyboard_env::host_os();
+    assert_eq!(os, Os::Windows, "the layout run is a Windows step");
+    // The real prompt-free OS reads of #322.
+    let env = read_keyboard_env(os, mog_core::keyboard_env::os_env_reads().as_ref());
+    assert_eq!(
+        (env.alt_gr_layout, env.copilot_key),
+        (alt_gr, copilot),
+        "{layout}"
+    );
+    let r = first_run_check(os, &env);
+    let kinds: Vec<_> = r.conflicts.iter().map(|c| c.kind).collect();
+    assert_eq!(kinds.contains(&ConflictKind::AltGr), alt_gr, "{kinds:?}");
+    if alt_gr {
+        // Right-Alt types characters on an AltGr layout, so the suggested talk key moves down.
+        let talk = r.suggested.get(HotkeyAction::Ptt);
+        assert_ne!(talk, Some(Binding::Talk(TalkBinding::RightOption)));
+    }
+}
+
 // ---------- Pending: panic key (MB-05, #66) ----------
 
 #[test]
@@ -564,15 +745,24 @@ fn at_30_mb_05_panic_stops_all_capture_within_200_ms_without_input_monitoring() 
     let api = FakePermissions::new();
     api.set(Permission::InputMonitoring, PermissionStatus::Denied);
     assert_eq!(
-        default_bindings(Os::MacOs).get(HotkeyAction::Panic).map(|b| b.format(Os::MacOs)),
+        default_bindings(Os::MacOs)
+            .get(HotkeyAction::Panic)
+            .map(|b| b.format(Os::MacOs)),
         Some("Cmd+Shift+Esc".to_owned())
     );
     // TODO(#66): replace the stub with R2 and the panic handler, press the panic key on the
     // sim clock and read capture_status 200 ms later: no lease is left on any MOG.
     let capture = StubCaptureService;
-    let a = capture.acquire_lease("mog-a").expect("TODO(#4): lease for MOG A");
-    let b = capture.acquire_lease("mog-b").expect("TODO(#4): lease for MOG B");
+    let a = capture
+        .acquire_lease("mog-a")
+        .expect("TODO(#4): lease for MOG A");
+    let b = capture
+        .acquire_lease("mog-b")
+        .expect("TODO(#4): lease for MOG B");
     assert_ne!(a, b);
-    assert!(check_ptt_permission(&api).is_err(), "PTT stays off without Input Monitoring");
+    assert!(
+        check_ptt_permission(&api).is_err(),
+        "PTT stays off without Input Monitoring"
+    );
     todo!("TODO(#66): press the panic key, advance 200 ms, assert capture_status shows no lease on MOG A or B (p95 over 100 presses)");
 }

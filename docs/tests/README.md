@@ -147,6 +147,21 @@ test doubles, for missing samples or for hardware that is not a reference device
 `docs/tests/RESOURCE-BENCH.md` has the rules, the fixture variables (`BOTTLE_RES_SAMPLES`,
 `BOTTLE_RES_SP04_BENCH`) and the device steps.
 
+### Acceptance tests AT-01, AT-03, AT-20, AT-30 (#230)
+
+`docs/tests/AT-MOGS-TALKKEY-A11Y.md` lists what runs on shipped code, the pending tests with their
+feature issues, and the device steps. The shared parts:
+
+- Rust: `mog_core::testkit::hotkey`: `RecordingSink`, `ScriptedProbe`, `RecordingTapControl` and
+  `FakePermissions`, the doubles of the R1 OS seams. They drive the shipped `HotkeyEngine` on the
+  `SimClock` with no OS call and no prompt.
+- Rust: `latency_bench::import::parse_sp03_secure_input`: the Secure Input end times and the Carbon
+  chord presses of an SP-03 probe log (CAP-39a, CAP-39b). Variable `BOTTLE_BENCH_SP03_SEI_LOG`.
+  The layout run reads `BOTTLE_TEST_LAYOUT` (`altgr`, `copilot`, `altgr+copilot`, `plain`).
+- TS: `src/test-support/a11y.ts`: `accessibleText(el)` and `contrastRatio(fg, bg)`.
+- Pending tests: Rust `#[ignore = "pending TODO(#n) ..."]` with a `todo!` end; TS `it.skip` with
+  `TODO(#n)` in the title. They never count as a pass.
+
 ### Gate evidence (AT-22)
 
 Each gate run is a file in `docs/evidence/` in the format of `docs/tests/EVIDENCE-TEMPLATE.md`.

@@ -60,7 +60,10 @@ fn at_01_mog_01a_mog_01b_mog_02_two_mogs_open_as_two_transparent_never_key_panel
             panic!("{id} was open already");
         };
         let spec = kind.spec();
-        assert!(spec.transparent && !spec.decorations && spec.always_on_top, "{spec:?}");
+        assert!(
+            spec.transparent && !spec.decorations && spec.always_on_top,
+            "{spec:?}"
+        );
         assert!(!spec.focusable, "MOG-01b: a MOG never takes focus");
         let panel = kind.panel().expect("a MOG is an NSPanel on macOS");
         assert_eq!(panel.level, PanelLevel::Status);
@@ -82,8 +85,14 @@ fn at_01_mog_03a_at_20_ux_19a_the_card_is_the_only_key_window() {
     ledger.open_mog(MOG_A).expect("open");
     let card = ledger.show_card(MOG_A).expect("card");
     let panel = card.panel().expect("the card is a panel on macOS");
-    assert!(panel.can_become_key, "MOG-03a: typing and the IME work in the card");
-    assert!(panel.nonactivating, "MOG-03b: the frontmost app does not change");
+    assert!(
+        panel.can_become_key,
+        "MOG-03a: typing and the IME work in the card"
+    );
+    assert!(
+        panel.nonactivating,
+        "MOG-03b: the frontmost app does not change"
+    );
     assert_eq!(panel.level, PanelLevel::Floating);
 
     // UX-19a: of the windows that float over other apps, only the card takes the keyboard.
@@ -107,10 +116,20 @@ fn at_01_mog_03a_at_20_ux_19a_the_card_is_the_only_key_window() {
 fn at_01_mog_01c_ux_27a_ux_27b_dragging_each_mog_starts_a_native_drag_and_no_click() {
     for _mog in [MOG_A, MOG_B] {
         let v = drag(40.0, -25.0);
-        assert_eq!(v[0], Verdict::Pass, "the press reaches the page (hover, poke)");
-        let start = v.iter().position(|x| *x == Verdict::StartDrag).expect("a drag starts");
+        assert_eq!(
+            v[0],
+            Verdict::Pass,
+            "the press reaches the page (hover, poke)"
+        );
+        let start = v
+            .iter()
+            .position(|x| *x == Verdict::StartDrag)
+            .expect("a drag starts");
         // After the drag starts, the page gets nothing: no mouse-up, so no click, no capture.
-        assert!(v[start + 1..].iter().all(|x| *x == Verdict::Swallow), "{v:?}");
+        assert!(
+            v[start + 1..].iter().all(|x| *x == Verdict::Swallow),
+            "{v:?}"
+        );
     }
     // A move below 4 px is a click for the page (MOG-12a rules, #83).
     let small = DRAG_THRESHOLD_PT - 0.5;
@@ -155,7 +174,10 @@ fn at_01_mb_14_the_hub_does_not_save_the_duplicate_binding() {
     let mut input = JsonObject::new();
     input.insert("session".to_owned(), Value::String(panic.format(os)));
     let out = hotkeys_set(os, &current, &input, &KeyboardEnv::default()).expect("hotkeys_set");
-    assert!(out.conflicts.iter().any(|c| c.kind == ConflictKind::Duplicate));
+    assert!(out
+        .conflicts
+        .iter()
+        .any(|c| c.kind == ConflictKind::Duplicate));
     let kept: Option<Binding> = current.get(HotkeyAction::Session);
     todo!(
         "TODO(#77): give this outcome to the hub save; assert app.hotkeys.session stays {:?} \
