@@ -12,13 +12,18 @@ use crate::error::{CoreError, CoreResult};
 
 const ID: &str = "R5";
 
-/// Refuse `databricks auth token` (in any case, with any flags around it).
+/// Refuse `databricks auth token` (in any case, with any flags before, between or after).
 ///
+/// The rule is wide on purpose: it refuses when the word `auth` comes before a later word
+/// `token` anywhere in the arguments (a flag value such as `-p token` is refused too).
 /// Every [`CliRunner`] implementation must call this first in `run_json`, so a token never
 /// comes back to a caller as plain JSON (ARC-6).
 pub fn refuse_token_command(args: &[&str]) -> CoreResult<()> {
     let words: Vec<String> = args.iter().map(|a| a.to_ascii_lowercase()).collect();
-    let refused = words.windows(2).any(|w| w[0] == "auth" && w[1] == "token");
+    let refused = words
+        .iter()
+        .position(|w| w == "auth")
+        .is_some_and(|i| words[i + 1..].iter().any(|w| w == "token"));
     if refused {
         Err(CoreError::TokenCommandRefused { component: ID })
     } else {
