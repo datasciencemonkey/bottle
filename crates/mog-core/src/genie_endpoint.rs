@@ -3,9 +3,10 @@
 //! - [`GenieOneEndpoint::new`] builds the only MVP backend URL,
 //!   `https://<host>/ai-gateway/mcp-services/system.ai.genie_one_mcp?o=<workspace_id>`, so every
 //!   MCP call carries `?o=` (G-02, AT-07). R8 McpTransport takes only this type.
-//! - [`rejected_backend`] finds the Beta `/api/2.0/mcp/genie` (end of life 2026-11-30), the
-//!   per-space Genie MCP `/api/2.0/mcp/genie/<space_id>` and the Genie One API SSE
-//!   `/api/2.0/genie/one/...` in any URL text. The config loader uses it (G-03).
+//! - [`rejected_backend`] checks if the path of one URL is the Beta `/api/2.0/mcp/genie` (end of
+//!   life 2026-11-30), the per-space Genie MCP `/api/2.0/mcp/genie/<space_id>` or the Genie One
+//!   API SSE `/api/2.0/genie/one/...`. It compares the canonical path, and it rejects a path that
+//!   it cannot make canonical (fail closed). The config loader uses it on URL fields (G-03).
 //!
 //! The rules come from the SP-09 spike (`spikes/sp-09/src/endpoint.rs`), without the `url`
 //! crate: R8 builds its own URLs, so the parser only has to refuse what it does not build.
@@ -16,8 +17,10 @@ use std::fmt;
 /// The path of the Genie One MCP server (G-02).
 pub const GENIE_ONE_PATH: &str = "/ai-gateway/mcp-services/system.ai.genie_one_mcp";
 
-const BETA_PATH: &str = "/api/2.0/mcp/genie";
-const GENIE_ONE_API_PATH: &str = "/api/2.0/genie/one";
+/// The canonical segments of the Beta Genie MCP `/api/2.0/mcp/genie` (G-03).
+const BETA_SEGMENTS: [&str; 4] = ["api", "2.0", "mcp", "genie"];
+/// The canonical segments of the Genie One API SSE `/api/2.0/genie/one` (G-03).
+const GENIE_ONE_API_SEGMENTS: [&str; 4] = ["api", "2.0", "genie", "one"];
 
 /// Why an MCP URL is not the Genie One endpoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,14 +119,28 @@ pub struct GenieOneEndpoint {
     workspace_id: String,
 }
 
+/// Digits only, with no leading zero (so one workspace has one canonical URL).
 fn valid_workspace_id(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 32 && id.bytes().all(|b| b.is_ascii_digit())
+    !id.is_empty()
+        && id.len() <= 32
+        && id.bytes().all(|b| b.is_ascii_digit())
+        && (id == "0" || !id.starts_with('0'))
 }
 
-/// A bare DNS host name: labels of ASCII letters, digits and `-`, joined by single dots.
+/// A label that a URL parser reads as a number (decimal or `0x` hex), so the host is an IPv4
+/// address (WHATWG "ends in a number").
+fn numeric_label(label: &str) -> bool {
+    let hex = label.get(..2).is_some_and(|p| p.eq_ignore_ascii_case("0x"))
+        && label[2..].bytes().all(|b| b.is_ascii_hexdigit());
+    hex || label.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// A bare DNS host name: labels of ASCII letters, digits and `-`, joined by single dots. The
+/// last label is not a number, so an IPv4 address or an all-numeric host is refused.
 fn valid_host(host: &str) -> bool {
     !host.is_empty()
         && host.len() <= 253
+        && !host.rsplit('.').next().is_some_and(numeric_label)
         && host.split('.').all(|label| {
             !label.is_empty()
                 && label.len() <= 63
@@ -135,11 +152,19 @@ fn valid_host(host: &str) -> bool {
         })
 }
 
-/// The path of a URL or of path text: after `scheme://authority`, up to `?` or `#`.
+/// The path of a URL or of path text: after `scheme:`, the `/` run and the authority, up to `?`
+/// or `#`. Text with no scheme is a path.
 fn path_of(url: &str) -> &str {
-    let rest = match url.find("://") {
+    let scheme_end = url.find(':').filter(|&i| {
+        let scheme = &url[..i];
+        scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+            && scheme
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.'))
+    });
+    let rest = match scheme_end {
         Some(i) => {
-            let after = &url[i + 3..];
+            let after = url[i + 1..].trim_start_matches('/');
             match after.find(['/', '?', '#']) {
                 Some(j) => &after[j..],
                 None => "",
@@ -153,16 +178,81 @@ fn path_of(url: &str) -> &str {
     }
 }
 
-/// The G-03 rejection for a URL (or path text), if it names a rejected Genie backend.
-/// The match is case-insensitive and ignores a trailing `/`.
+/// The canonical segments of a path, in lower case. Each segment loses its `;params`, and its
+/// percent-encoded unreserved characters are decoded. Empty and `.` segments are removed, and
+/// `..` removes the segment before it (RFC 3986 5.2.4). Other escapes stay encoded.
+/// A `\`, white space, a control character, a bad escape or an encoded `/` or `\` gives
+/// [`EndpointError::NonCanonicalUrl`].
+fn canonical_segments(path: &str) -> Result<Vec<String>, EndpointError> {
+    if path
+        .chars()
+        .any(|c| c == '\\' || c.is_whitespace() || c.is_control())
+    {
+        return Err(EndpointError::NonCanonicalUrl);
+    }
+    let mut out: Vec<String> = Vec::new();
+    for raw in path.split('/') {
+        let raw = raw.split(';').next().unwrap_or("");
+        let mut seg = String::with_capacity(raw.len());
+        let mut bytes = raw.bytes();
+        while let Some(b) = bytes.next() {
+            if b != b'%' {
+                seg.push(char::from(b.to_ascii_lowercase()));
+                continue;
+            }
+            let hex = |b: Option<u8>| b.and_then(|b| char::from(b).to_digit(16));
+            let (Some(hi), Some(lo)) = (hex(bytes.next()), hex(bytes.next())) else {
+                return Err(EndpointError::NonCanonicalUrl);
+            };
+            let v = (hi * 16 + lo) as u8;
+            if v.is_ascii_alphanumeric() || matches!(v, b'-' | b'.' | b'_' | b'~') {
+                seg.push(char::from(v.to_ascii_lowercase()));
+            } else if v == b'/' || v == b'\\' {
+                return Err(EndpointError::NonCanonicalUrl);
+            } else {
+                seg.push_str(&format!("%{v:02x}"));
+            }
+        }
+        match seg.as_str() {
+            "" | "." => {}
+            ".." => {
+                out.pop();
+            }
+            _ => out.push(seg),
+        }
+    }
+    Ok(out)
+}
+
+/// A canonical segment names `target` if it is `target`, or `target` and then escapes (such as
+/// `genie%20`). The second form fails closed.
+fn names(seg: &str, target: &str) -> bool {
+    seg.strip_prefix(target)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('%'))
+}
+
+/// The G-03 rejection for one URL (or path text), if its canonical path is a rejected Genie
+/// backend, or [`EndpointError::NonCanonicalUrl`] if the path cannot be made canonical.
+/// A `\` anywhere in the URL is refused, because URL parsers read it as `/`.
 pub fn rejected_backend(url: &str) -> Option<EndpointError> {
-    let path = path_of(url.trim()).to_ascii_lowercase();
-    let path = path.trim_end_matches('/');
-    if path == BETA_PATH {
-        Some(EndpointError::BetaGenieMcp)
-    } else if path.starts_with(&format!("{BETA_PATH}/")) {
-        Some(EndpointError::PerSpaceGenieMcp)
-    } else if path == GENIE_ONE_API_PATH || path.starts_with(&format!("{GENIE_ONE_API_PATH}/")) {
+    let url = url.trim();
+    if url.contains('\\') {
+        return Some(EndpointError::NonCanonicalUrl);
+    }
+    let segs = match canonical_segments(path_of(url)) {
+        Ok(segs) => segs,
+        Err(e) => return Some(e),
+    };
+    let starts = |prefix: &[&str]| {
+        segs.len() >= prefix.len() && segs.iter().zip(prefix).all(|(s, t)| names(s, t))
+    };
+    if starts(&BETA_SEGMENTS) {
+        if segs.len() == BETA_SEGMENTS.len() {
+            Some(EndpointError::BetaGenieMcp)
+        } else {
+            Some(EndpointError::PerSpaceGenieMcp)
+        }
+    } else if starts(&GENIE_ONE_API_SEGMENTS) {
         Some(EndpointError::GenieOneApiSse)
     } else {
         None
@@ -171,12 +261,15 @@ pub fn rejected_backend(url: &str) -> Option<EndpointError> {
 
 impl GenieOneEndpoint {
     /// Build `https://<host>/ai-gateway/mcp-services/system.ai.genie_one_mcp?o=<workspace_id>`.
-    /// `host` is a bare host or a workspace URL `https://<host>` with an optional trailing `/`.
-    /// The host is kept in lower case.
+    /// `host` is a bare host or a workspace URL `https://<host>` (scheme in any case) with
+    /// optional trailing `/`. The host is kept in lower case.
     pub fn new(host: &str, workspace_id: &str) -> Result<Self, EndpointError> {
         let trimmed = host.trim();
-        let bare = trimmed.strip_prefix("https://").unwrap_or(trimmed);
-        let bare = bare.strip_suffix('/').unwrap_or(bare).to_ascii_lowercase();
+        let bare = match trimmed.get(..8) {
+            Some(scheme) if scheme.eq_ignore_ascii_case("https://") => &trimmed[8..],
+            _ => trimmed,
+        };
+        let bare = bare.trim_end_matches('/').to_ascii_lowercase();
         if !valid_host(&bare) {
             return Err(EndpointError::BadHost);
         }
@@ -200,7 +293,7 @@ impl GenieOneEndpoint {
             .ok_or(EndpointError::NotHttps)?;
         let split = rest.find(['/', '?', '#']).unwrap_or(rest.len());
         let (host, tail) = rest.split_at(split);
-        if !valid_host(host) {
+        if !valid_host(host) || host.bytes().any(|b| b.is_ascii_uppercase()) {
             return Err(EndpointError::BadHost);
         }
         let (path, query) = match tail.split_once('?') {
@@ -210,14 +303,18 @@ impl GenieOneEndpoint {
         if path != GENIE_ONE_PATH {
             return Err(EndpointError::WrongPath);
         }
-        let mut ids = query.split('&').filter_map(|kv| kv.strip_prefix("o="));
+        let keys: Vec<&str> = query.split('&').collect();
+        let mut ids = keys.iter().filter_map(|kv| kv.strip_prefix("o="));
         let id = match (ids.next(), ids.next()) {
             (Some(id), None) if valid_workspace_id(id) && !query.contains('#') => id,
             _ => return Err(EndpointError::MissingWorkspaceId),
         };
+        if keys.len() != 1 {
+            return Err(EndpointError::ExtraQuery);
+        }
         let parsed = Self::new(host, id)?;
         if parsed.url != url {
-            // Only the exact form that `new` builds is accepted (no extra query keys).
+            // Only the exact form that `new` builds is accepted.
             return Err(EndpointError::WrongPath);
         }
         Ok(parsed)

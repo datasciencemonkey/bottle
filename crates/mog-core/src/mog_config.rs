@@ -495,14 +495,20 @@ impl MogConfig {
     }
 }
 
-/// G-03: the first string under `mog.binding` that names a rejected Genie backend (the Beta
-/// Genie MCP, the per-space Genie MCP or the Genie One API SSE), so loading it fails with a
-/// clear code instead of a generic `invalid_config`.
+/// G-03: the first URL field under `mog.binding` (a key that ends in `url`, in any case, such as
+/// `appUrl`) that names a rejected Genie backend (the Beta Genie MCP, the per-space Genie MCP or
+/// the Genie One API SSE) or cannot be made canonical. Loading it fails with a clear code
+/// instead of a generic `invalid_config`. Other strings (`home`, `profile`, `spaceId`) are not
+/// URLs, so they are not checked here.
 fn rejected_backend_in(v: &Value) -> Option<EndpointError> {
     match v {
-        Value::String(s) => genie_endpoint::rejected_backend(s),
         Value::Array(items) => items.iter().find_map(rejected_backend_in),
-        Value::Object(m) => m.values().find_map(rejected_backend_in),
+        Value::Object(m) => m.iter().find_map(|(key, v)| match v {
+            Value::String(s) if key.to_ascii_lowercase().ends_with("url") => {
+                genie_endpoint::rejected_backend(s)
+            }
+            _ => rejected_backend_in(v),
+        }),
         _ => None,
     }
 }
