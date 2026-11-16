@@ -8,7 +8,16 @@
 import { Channel } from '@tauri-apps/api/core';
 import { emitTo } from '@tauri-apps/api/event';
 import type { MogId } from '../shared/interfaces';
-import { call, EVENTS, type BrainMessage, type EventName, type ViewEmitKind } from '../shared/ipc';
+import {
+  call,
+  EVENTS,
+  type BrainMessage,
+  type CardUpdate,
+  type EventName,
+  type MicLevelFrame,
+  type MogViewState,
+  type ViewEmitKind,
+} from '../shared/ipc';
 
 type Handler = (payload: unknown) => void;
 
@@ -51,11 +60,18 @@ export async function subscribeBrain(bus: BrainBus): Promise<boolean> {
   }
 }
 
+/** The contract payload of each brain-to-view event (#285, ADR 0040). */
+export interface ViewPayloads {
+  'mog.view_state': MogViewState;
+  'card.update': CardUpdate;
+  'mog.level': MicLevelFrame;
+}
+
 /** Send a brain-to-view event to one window (`hub`, `mog-<id>` or `card-<id>`). */
-export function emitToView(
+export function emitToView<K extends keyof ViewPayloads>(
   label: string,
-  key: 'mog.view_state' | 'card.update',
-  payload: unknown,
+  key: K,
+  payload: ViewPayloads[K],
 ): Promise<void> {
   return emitTo(label, EVENTS[key].name, payload);
 }
@@ -71,20 +87,24 @@ function viewLabel(kind: 'mog' | 'card', mogId: MogId): string {
 /**
  * Send `mog.view_state` to the MOG window of `mogId` and to the hub, which lists every MOG
  * with its mood (ARC-5, ADR 0008 decision 4).
- * TODO(#285): type `state` with the contract `MogViewState`.
  */
-export async function sendMogViewState(mogId: MogId, state: unknown): Promise<void> {
+export async function sendMogViewState(mogId: MogId, state: MogViewState): Promise<void> {
   const label = viewLabel('mog', mogId);
   await emitToView(label, 'mog.view_state', state);
   await emitToView('hub', 'mog.view_state', state);
 }
 
-/**
- * Send `card.update` to the card window of `mogId` only (ARC-5).
- * TODO(#285): type `update` with the contract `CardUpdate`.
- */
-export async function sendCardUpdate(mogId: MogId, update: unknown): Promise<void> {
+/** Send `card.update` to the card window of `mogId` only (ARC-5). */
+export async function sendCardUpdate(mogId: MogId, update: CardUpdate): Promise<void> {
   return emitToView(viewLabel('card', mogId), 'card.update', update);
+}
+
+/**
+ * Send one `mog.level` frame to the MOG window of `mogId` only (UX-06a, ADR 0040). `mogId` is
+ * the mic owner, or, for the `owner: null` frame on mic close, the MOG that owned it (UX-06b).
+ */
+export async function sendMicLevel(mogId: MogId, frame: MicLevelFrame): Promise<void> {
+  return emitToView(viewLabel('mog', mogId), 'mog.level', frame);
 }
 
 /** One `view_emit` call, as the brain gets it on the Channel (`view:input`). */

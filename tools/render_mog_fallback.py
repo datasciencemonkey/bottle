@@ -13,8 +13,11 @@ The cue is the difference between an attention frame and the same frame with the
 node moved off the artboard, so the cue file holds only the "?" bubble and none of the body.
 
 Run:  uv run --no-project --with pillow python tools/render_mog_fallback.py
+It also writes fallback/SOURCE.sha256, the SHA-256 of scene.rml, so `tools/ci_checks.py fallback`
+can tell when scene.rml changed after the PNGs were rendered (UX-09b). CI has no Rive CLI.
 Needs the Rive CLI (`rive` on PATH, or ~/.rive/bin/rive). No `rive login` is needed.
 """
+import hashlib
 import os
 import shutil
 import subprocess
@@ -132,6 +135,14 @@ def cue_only(on, off):
     return out
 
 
+def write_source_hash(project=PROJECT):
+    """Record the SHA-256 of scene.rml (line endings as LF) next to the PNGs."""
+    with open(os.path.join(project, "scene.rml"), "rb") as f:
+        digest = hashlib.sha256(f.read().replace(b"\r\n", b"\n")).hexdigest()
+    with open(os.path.join(project, "fallback", "SOURCE.sha256"), "w", encoding="utf-8") as f:
+        f.write(digest + "\n")
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="mog-fallback-") as tmp:
@@ -144,6 +155,7 @@ def main():
         white_nocue = render(project_with_backdrop(tmp, "FFFFFFFF", cue=False), tmp, "white-nocue")
         cue = cue_only(matte(black["cue"], white["cue"]), matte(black_nocue["cue"], white_nocue["cue"]))
         cue.save(os.path.join(OUT, "attention.png"), optimize=True)
+    write_source_hash()
     print("wrote", OUT)
 
 

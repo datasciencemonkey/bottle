@@ -178,7 +178,7 @@
         },
         "SessionPolicy": {
           "additionalProperties": false,
-          "description": "Session limits. In TS every field except `hard_cap_min` is a fixed literal\n(55, 60, 30, 5, 15, 10, 120, 5); `hard_cap_min` is 60..480, default 240.",
+          "description": "Session limits. In TS every field except `hard_cap_min` is a fixed literal\n(55, 60, 30, 5, 15, 10, 120, 5); `hard_cap_min` is 60..480, default 240.\n\nDeserializing rejects any other value (#259), so a `SessionPolicy` read from JSON is\nalways valid. A value built in Rust can be checked with [`SessionPolicy::validate`].",
           "properties": {
             "checkInAtMin": {
               "format": "uint32",
@@ -1500,6 +1500,21 @@
       ]
     }
   ],
+  "errors": [
+    "unknown_command",
+    "window_not_allowed",
+    "invalid_args",
+    "not_implemented",
+    "host_failed",
+    "unknown_lease",
+    "mic_busy",
+    "consent_required",
+    "invalid_mode",
+    "mog_cap_reached",
+    "unknown_mog",
+    "window_closing",
+    "config_storage_failed"
+  ],
   "events": [
     {
       "direction": "core_to_brain",
@@ -1560,6 +1575,11 @@
       "direction": "brain_to_view",
       "name": "card:update",
       "specName": "card.update"
+    },
+    {
+      "direction": "brain_to_view",
+      "name": "mog:level",
+      "specName": "mog.level"
     },
     {
       "direction": "core_to_brain",

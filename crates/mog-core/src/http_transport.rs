@@ -7,6 +7,13 @@ use crate::ipc::JsonObject;
 use crate::request_identity::{CallKind, RequestDecorator};
 use crate::types::Tags;
 
+pub mod host_policy;
+pub mod rate_bucket;
+mod reqwest_transport;
+pub mod routes;
+
+pub use reqwest_transport::*;
+
 const ID: &str = "R7";
 
 /// The fixed route map of R7 (#342, ADR 0041): every route ID that R7 sends, with its call
@@ -76,7 +83,7 @@ pub fn outbound_headers(
 ///
 /// Every implementation must send the headers of [`outbound_headers`] on each request: the
 /// Bottle User-Agent on every call (SEC-06b) and the tags on each Unity Gateway call
-/// (SEC-06a). TODO(#364): the real `reqwest` + `rustls` client.
+/// (SEC-06a). The real client is [`ReqwestHttpTransport`] (#364, ADR 0046).
 pub trait HttpTransport: Send + Sync {
     /// Send one request on a fixed route ID for `profile` and return the JSON reply. `params`
     /// are the path and query values of the route (for example a Genie space ID), from the

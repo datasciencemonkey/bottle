@@ -9,6 +9,8 @@ Each check prints PASS or FAIL. The script exits non-zero if any check fails.
   brand       the mascot has no Lava FF3621 fill and no Tail, Wisp or Brick node (UX-10a/b, AT-37)
   artifacts   no build output (build/, *.riv, *.rev) is committed
   gates       no release gate is reported as a pass without evidence (AT-22, scripts/check_gate_evidence.py)
+  brandapproval brand approval record and mascot art checks; pending approval is "not passed" and
+              only blocks --external (SEC-22a/b, COL-104, scripts/check_brand_gate.py)
   names       no former name in UI text or metadata, the Labs label in the hub and About, no MOG in
               package or bundle IDs, and MOG only as a noun in UI text (MB-10a/b/c, AT-37, ADR 0030)
   structure   no junk, secrets, binaries or local tool state is committed; no file over 2 MB;
@@ -21,6 +23,7 @@ The html and mascot checks regenerate the file; if it changes, commit the result
 """
 import fnmatch
 import glob
+import hashlib
 import json
 import os
 import py_compile
@@ -29,6 +32,8 @@ import subprocess
 import sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(ROOT, "scripts"))
+from check_brand_gate import art_problems  # noqa: E402  one art check (UX-10a/b, AT-37)
 HTML = os.path.join(ROOT, "requirements.html")
 SCENE = os.path.join(ROOT, "mog-rive", "scene.rml")
 
@@ -68,14 +73,26 @@ def check_mascot():
     return regenerated(SCENE, "tools/gen_mog_rml.py")
 
 
+def fallback_problems(root):
+    """The PNG fallback must come from the current scene.rml (UX-09b). No Rive CLI is needed:
+    tools/render_mog_fallback.py records the SHA-256 of scene.rml in fallback/SOURCE.sha256."""
+    rerun = "run uv run --no-project --with pillow python tools/render_mog_fallback.py and commit the result"
+    recorded = os.path.join(root, "mog-rive", "fallback", "SOURCE.sha256")
+    if not os.path.exists(recorded):
+        return [f"mog-rive/fallback/SOURCE.sha256 is missing: {rerun}"]
+    current = hashlib.sha256(read(os.path.join(root, "mog-rive", "scene.rml")).replace(b"\r\n", b"\n")).hexdigest()
+    if read(recorded).decode("utf-8").strip() != current:
+        return [f"mog-rive/fallback/*.png were not rendered from the current scene.rml: {rerun}"]
+    return []
+
+
+def check_fallback():
+    problems = fallback_problems(ROOT)
+    return (not problems), ("\n".join(problems) if problems else "the PNG fallback matches scene.rml")
+
+
 def check_brand():
-    text = read(SCENE).decode("utf-8")
-    problems = []
-    if re.search(r"FF3621", text, re.IGNORECASE):
-        problems.append("scene.rml uses Lava FF3621 (UX-10b)")
-    for name in ("Tail", "Wisp", "Brick"):
-        if re.search(rf'name="{name}"', text):
-            problems.append(f'scene.rml has a "{name}" node (UX-10a, AT-37)')
+    problems = art_problems(read(SCENE).decode("utf-8"))
     return (not problems), ("\n".join(problems) if problems else "no FF3621, Tail, Wisp or Brick in scene.rml")
 
 
@@ -208,6 +225,12 @@ def check_gates():
     return proc.returncode == 0, (proc.stdout + proc.stderr).strip()
 
 
+def check_brandapproval():
+    proc = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "check_brand_gate.py")],
+                          cwd=ROOT, capture_output=True, text=True)
+    return proc.returncode == 0, (proc.stdout + proc.stderr).strip()
+
+
 # ---------- names: MB-10a, MB-10b, MB-10c, AT-37 (#71, ADR 0030) ----------
 # This check runs in the repo-checks workflow today. The pnpm test
 # `src/acceptance/at-37-naming.test.tsx` holds the same rules and also renders the views.
@@ -332,7 +355,8 @@ def check_names():
 
 CHECKS = {"compile": check_compile, "html": check_html, "mascot": check_mascot,
           "brand": check_brand, "artifacts": check_artifacts, "gates": check_gates,
-          "names": check_names, "structure": check_structure}
+          "brandapproval": check_brandapproval,
+          "names": check_names, "fallback": check_fallback, "structure": check_structure}
 
 
 def main(names):

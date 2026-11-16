@@ -4,6 +4,7 @@
  * benchmark (ADR 0016): nearest-rank percentiles, 20 samples or more, and a sample with no end
  * mark counts as over the limit. Both the brain and the views use this file.
  */
+import type { ViewTrace } from './ipc';
 
 /** A time row needs this many samples; below it the p95 is the maximum and has no meaning. */
 export const MIN_TIME_SAMPLES = 20;
@@ -60,17 +61,10 @@ export function epochNow(): number {
 
 /**
  * The optional trace of one `mog.view_state` (only with `VITE_BOTTLE_LATENCY_TRACE=1`). It has
- * a sequence number and times only: no text, transcript or token (SEC-16b).
+ * a sequence number and times only: no text, transcript or token (SEC-16b). The type is in the
+ * contract (`src/shared/ipc.ts`, #285).
  */
-export interface ViewTrace {
-  seq: number;
-  /** When the event that caused this state reached the brain. */
-  eventAt: number;
-  /** When the brain sent this state. */
-  sentAt: number;
-  /** For `listening`: when the key-down reached the brain (UX-05b). */
-  keyDownAt?: number;
-}
+export type { ViewTrace };
 
 const TRACE_KEYS: ReadonlySet<string> = new Set(['seq', 'eventAt', 'sentAt', 'keyDownAt']);
 

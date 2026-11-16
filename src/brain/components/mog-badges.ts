@@ -11,7 +11,8 @@
  * no mood, and `mapMood` takes none of these inputs. Each badge has text and an accessible
  * label that starts with the text (WCAG 2.5.3), so no state is colour only (UX-33). A badge holds names only, never a token.
  *
- * TODO(#285): the brain sends this list in `mog:view_state` (with the mood) and routes the
+ * The `mog.view_state` payload has the `badges` field (contract `MogViewState`, #285).
+ * TODO(#374): the brain sends this list in `mog:view_state` (with the mood) and routes the
  * `click` input `{ target: 'badge', badge }` to the badge `action`.
  */
 import type { BackendBinding, ProfileName, Transcript } from '../../shared/interfaces';

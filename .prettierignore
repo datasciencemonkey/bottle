@@ -22,3 +22,5 @@ src-tauri/schemas/
 # Throwaway spike code (docs/spikes/). Each spikes/sp-nn/ folder is standalone with its own tooling,
 # and some files (for example sp-13 golden.json) are byte-exact fixtures. Same scope as eslint.config.js (#300).
 spikes/
+# Verbatim copy of antigravity-bricks-plugin genie_tools.json @ a31fd2c (MIT, THIRD_PARTY_NOTICES.md).
+src/test-support/genie-tools.json

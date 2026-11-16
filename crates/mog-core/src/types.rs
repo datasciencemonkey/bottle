@@ -85,8 +85,15 @@ pub enum CaptureMode {
 
 /// Session limits. In TS every field except `hard_cap_min` is a fixed literal
 /// (55, 60, 30, 5, 15, 10, 120, 5); `hard_cap_min` is 60..480, default 240.
+///
+/// Deserializing rejects any other value (#259), so a `SessionPolicy` read from JSON is
+/// always valid. A value built in Rust can be checked with [`SessionPolicy::validate`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(
+    rename_all = "camelCase",
+    deny_unknown_fields,
+    try_from = "SessionPolicyWire"
+)]
 pub struct SessionPolicy {
     pub check_in_at_min: u32,
     pub soft_cap_min: u32,
@@ -97,6 +104,133 @@ pub struct SessionPolicy {
     pub lock_stop_min: u32,
     pub hold_max_sec: u32,
     pub hands_free_max_min: u32,
+}
+
+/// The unvalidated wire form of [`SessionPolicy`]. schemars follows `try_from`, so it
+/// derives `JsonSchema` too.
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SessionPolicyWire {
+    check_in_at_min: u32,
+    soft_cap_min: u32,
+    extend_min: u32,
+    silence_nudge_min: u32,
+    silence_stop_min: u32,
+    hard_cap_min: u32,
+    lock_stop_min: u32,
+    hold_max_sec: u32,
+    hands_free_max_min: u32,
+}
+
+/// The `hardCapMin` range in minutes (section 7.1: ceiling 4 h, admin range 1-8 h).
+const HARD_CAP_MIN_RANGE: (u32, u32) = (60, 480);
+
+/// A `SessionPolicy` value outside the spec. The field name is the TS (camelCase) name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SessionPolicyError {
+    /// A field with a fixed value has another value.
+    NotFixed {
+        /// The field name.
+        field: &'static str,
+        /// The value the spec requires.
+        expected: u32,
+        /// The value found.
+        actual: u32,
+    },
+    /// A field is outside its allowed range (inclusive).
+    OutOfRange {
+        /// The field name.
+        field: &'static str,
+        /// The smallest allowed value.
+        min: u32,
+        /// The largest allowed value.
+        max: u32,
+        /// The value found.
+        actual: u32,
+    },
+}
+
+impl std::fmt::Display for SessionPolicyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SessionPolicyError::NotFixed {
+                field,
+                expected,
+                actual,
+            } => write!(f, "{field} must be {expected}, found {actual}"),
+            SessionPolicyError::OutOfRange {
+                field,
+                min,
+                max,
+                actual,
+            } => write!(f, "{field} must be {min}..={max}, found {actual}"),
+        }
+    }
+}
+
+impl std::error::Error for SessionPolicyError {}
+
+impl SessionPolicy {
+    /// Check every field against the stop policy of section 7.1.
+    ///
+    /// The fixed values (55 < 60) and the `hard_cap_min` range (60..=480) also give the
+    /// ordering check-in < soft cap <= ceiling.
+    pub fn validate(&self) -> Result<(), SessionPolicyError> {
+        // Fixed to match the literal types in `interfaces.ts` and the D27 defaults. Section 7.1
+        // and Appendix C also list admin keys `SessionSoftCapMinutes`, `SessionExtendMinutes`,
+        // `SilenceNudgeMinutes` and `SilenceStopMinutes` (the check-in follows the soft cap).
+        // Making them configurable must change the TS and Rust mirrors together (#368).
+        let fixed = [
+            ("checkInAtMin", self.check_in_at_min, 55),
+            ("softCapMin", self.soft_cap_min, 60),
+            ("extendMin", self.extend_min, 30),
+            ("silenceNudgeMin", self.silence_nudge_min, 5),
+            ("silenceStopMin", self.silence_stop_min, 15),
+            ("lockStopMin", self.lock_stop_min, 10),
+            ("holdMaxSec", self.hold_max_sec, 120),
+            ("handsFreeMaxMin", self.hands_free_max_min, 5),
+        ];
+        for (field, actual, expected) in fixed {
+            if actual != expected {
+                return Err(SessionPolicyError::NotFixed {
+                    field,
+                    expected,
+                    actual,
+                });
+            }
+        }
+        let (min, max) = HARD_CAP_MIN_RANGE;
+        if !(min..=max).contains(&self.hard_cap_min) {
+            return Err(SessionPolicyError::OutOfRange {
+                field: "hardCapMin",
+                min,
+                max,
+                actual: self.hard_cap_min,
+            });
+        }
+        Ok(())
+    }
+}
+
+impl TryFrom<SessionPolicyWire> for SessionPolicy {
+    type Error = SessionPolicyError;
+
+    fn try_from(w: SessionPolicyWire) -> Result<Self, Self::Error> {
+        let p = SessionPolicy {
+            check_in_at_min: w.check_in_at_min,
+            soft_cap_min: w.soft_cap_min,
+            extend_min: w.extend_min,
+            silence_nudge_min: w.silence_nudge_min,
+            silence_stop_min: w.silence_stop_min,
+            hard_cap_min: w.hard_cap_min,
+            lock_stop_min: w.lock_stop_min,
+            hold_max_sec: w.hold_max_sec,
+            hands_free_max_min: w.hands_free_max_min,
+        };
+        p.validate()?;
+        Ok(p)
+    }
 }
 
 /// `CaptureState.othersTrack`.
@@ -259,4 +393,238 @@ pub struct RouterDecision {
     pub injection_suspected: bool,
     /// `""` = none (D63).
     pub directed_mog_id: String,
+}
+
+// ---------- brain-to-view payloads (#285, ADR 0040) ----------
+// The brain (TS) sends these as Tauri events; Rust never sends them. The mirror keeps the
+// shared fixtures honest on both sides.
+
+/// `MoodMapper` overlays (4.7) as `mog.view_state` carries them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MoodOverlays {
+    pub attention: bool,
+    pub recording: bool,
+    pub offline: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hop: Option<String>,
+    pub local_only: bool,
+}
+
+/// One MOG badge (MOG-07, UX-38, UX-39a, ADR 0029).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MogBadgeView {
+    pub kind: String,
+    pub text: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    pub hover_only: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+}
+
+/// Frame-probe times of one `mog.view_state` (#13, ADR 0031). Numbers only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ViewTrace {
+    pub seq: u64,
+    pub event_at: f64,
+    pub sent_at: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_down_at: Option<f64>,
+}
+
+/// The `mog.view_state` payload: what the brain computed for one MOG.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MogViewState {
+    pub mog_id: MogId,
+    pub mood: Mood,
+    pub overlays: MoodOverlays,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub badges: Option<Vec<MogBadgeView>>,
+    /// The home domain picker of this MOG (PG-18, PG-20).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home_domain: Option<DomainPickerView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace: Option<ViewTrace>,
+}
+
+/// One part of a split answer (UX-11b).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BlurbPart {
+    pub id: String,
+    pub text: String,
+}
+
+/// One card slot (ADR 0028).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CardBlurbView {
+    pub id: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parts: Option<Vec<BlurbPart>>,
+}
+
+/// One card chip.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CardChip {
+    pub id: String,
+    pub label: String,
+}
+
+/// The scope of a domain picker (PG-18 home domain, PG-19 one draft).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum DomainScope {
+    Home,
+    Draft,
+}
+
+/// The current domain of a picker.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DomainRef {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// One domain the picker offers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DomainOption {
+    pub id: String,
+    pub name: String,
+}
+
+/// The domain picker (PG-20): the list, or `paste` (the reason text) when it cannot be read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DomainPickerView {
+    pub scope: DomainScope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current: Option<DomainRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<DomainOption>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paste: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// The admin checklist for a failed Pages preflight (PG-11, PG-12).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PagesChecklistView {
+    pub text: String,
+    pub items: Vec<String>,
+}
+
+/// A copy format of the expanded card (UX-18).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum CopyFormat {
+    Markdown,
+    Csv,
+}
+
+/// One expanded card section in the UX-EXP order (UX-18), tagged by `id` (#89, ADR 0040).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(
+    tag = "id",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum CardSection {
+    Answer {
+        md: String,
+    },
+    KeyNumbers {
+        items: Vec<String>,
+    },
+    /// The SQL section is always collapsed first (`collapsed: true`).
+    Sql {
+        sql: String,
+        collapsed: bool,
+    },
+    TablePreview {
+        columns: Vec<String>,
+        rows: Vec<Vec<String>>,
+        more_rows: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        more_columns: Option<u32>,
+    },
+    SentToGenie {
+        text: String,
+    },
+    Resend,
+    Copy {
+        formats: Vec<CopyFormat>,
+    },
+    Footer {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stt_badge: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        deep_link: Option<String>,
+    },
+    DataFlow {
+        text: String,
+    },
+}
+
+/// The `card.update` payload: what the card of one MOG shows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CardUpdate {
+    pub mog_id: MogId,
+    pub blurbs: Vec<CardBlurbView>,
+    pub chips: Vec<CardChip>,
+    /// Chips after the 4th (UX-20a).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overflow_chips: Option<Vec<CardChip>>,
+    /// The expanded card sections (UX-18).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sections: Option<Vec<CardSection>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer_md: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_count: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stt_badge: Option<String>,
+    /// The domain of the Page draft in review (PG-19).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_domain: Option<DomainPickerView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pages_checklist: Option<PagesChecklistView>,
+}
+
+/// The `mog.level` payload: one mic level sample (UX-06a). `owner` is the MOG that owns the
+/// open mic, or `null` when the mic closed (UX-06b). It is always present.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MicLevelFrame {
+    /// Required and nullable: a frame with no `owner` key fails to parse.
+    #[serde(deserialize_with = "nullable")]
+    pub owner: Option<MogId>,
+    pub dbfs: f64,
+    /// Milliseconds on a monotonic clock.
+    pub t: f64,
+}
+
+/// A required field that may be `null`. Plain `Option` would also accept a missing key.
+fn nullable<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    Option::<String>::deserialize(d)
 }

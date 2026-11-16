@@ -10,10 +10,50 @@
 // - progress_steps is string[] or null; query_items is [{ item_id, sql? }] or null;
 // - deep_link is https://<host>/one/chat/threads/<cid>?o=<wsid>&utm_source=genie_chat_mcp, or null;
 // - a second ask on a busy conversation fails with BUSY_TEXT (not a 409).
-// TODO(#29): SP-09 records genie_tools.json and the busy envelope (isError or JSON-RPC error).
-// Switch the tool list and schemas to genie_tools.json, and set the default busyEnvelope.
+// Adapted from datasciencemonkey/antigravity-bricks-plugin plugins/databricks-genie/scripts/genie_tools.json @ a31fd2c (MIT).
+// The tool contracts (names, descriptions, input schemas) are `genie-tools.json`, a verbatim copy
+// of datasciencemonkey/antigravity-bricks-plugin plugins/databricks-genie/scripts/genie_tools.json
+// @ a31fd2c (MIT, see THIRD_PARTY_NOTICES.md). From it: `genie_cancel_response` takes only
+// `conversation_id`, is best-effort, and its result status is always `cancellation_requested`.
+// TODO(#29): the SP-09 live capture confirms the contracts and records the busy envelope (isError
+// or JSON-RPC error); then set the default busyEnvelope.
 
+import { readFileSync } from 'node:fs';
 import type { CommandReturns } from '../shared/ipc';
+
+export interface ToolContract {
+  name: string;
+  description: string;
+  inputSchema: {
+    type: 'object';
+    properties: Record<string, { type: string; description?: string }>;
+    required?: string[];
+  };
+}
+
+/** The Genie One tool contracts (genie-tools.json). */
+export const GENIE_TOOL_CONTRACTS: readonly ToolContract[] = JSON.parse(
+  readFileSync(new URL('./genie-tools.json', import.meta.url), 'utf8'),
+) as ToolContract[];
+
+/**
+ * The ways `args` breaks the input schema of `tool`: an unknown tool, a missing required
+ * property, a property that the schema does not name, or a value of the wrong JSON type.
+ */
+export function contractProblems(tool: string, args: Record<string, unknown>): string[] {
+  const c = GENIE_TOOL_CONTRACTS.find((t) => t.name === tool);
+  if (!c) return [`${tool}: not a Genie One tool`];
+  const { properties, required = [] } = c.inputSchema;
+  const out: string[] = [];
+  for (const k of required) if (!(k in args)) out.push(`${tool}: ${k} is required`);
+  for (const [k, v] of Object.entries(args)) {
+    const prop = properties[k];
+    if (!prop) out.push(`${tool}: ${k} is not in the schema`);
+    else if (prop.type === 'string' && typeof v !== 'string')
+      out.push(`${tool}: ${k} must be a string`);
+  }
+  return out;
+}
 
 export const GENIE_ONE_TOOLS = [
   'genie_ask',
@@ -44,6 +84,8 @@ export interface PollStep {
 export interface QueryResult {
   columns: { name: string; type_text: string }[];
   rows: unknown[][];
+  /** Set when Genie cut the result (G-24c, TablePreview.truncated). Omitted when not cut. */
+  truncated?: boolean;
 }
 export interface ScriptedResponse {
   /** Poll replies in order. After the last one, the last one repeats. */
@@ -130,6 +172,61 @@ export const scenarios = {
       polls: [{ status: 'completed', final_answer: 'Done.', deep_link: null, query_items: null }],
     };
   },
+  /** Status incomplete with a partial answer (G-23a: "Partial answer"). */
+  incompleteWithAnswer(): ScriptedResponse {
+    return {
+      polls: [
+        { status: 'in_progress', progress_steps: ['Reading the tables'] },
+        {
+          status: 'incomplete',
+          final_answer: 'Revenue in EMEA was **$410,500** in Q3; other regions did not finish.',
+          query_items: null,
+        },
+      ],
+    };
+  },
+  /** Status incomplete with no answer (G-23b: the card shows a failure). */
+  incompleteNoAnswer(): ScriptedResponse {
+    return { polls: [{ status: 'incomplete', final_answer: null, query_items: null }] };
+  },
+  /** Status failed with no answer. */
+  failed(): ScriptedResponse {
+    return { polls: [{ status: 'failed', final_answer: null, query_items: null }] };
+  },
+  /** A completed answer whose query result has `rows` rows and is cut (G-24b, G-24c). */
+  truncated(rows = 60): ScriptedResponse {
+    return {
+      polls: [
+        {
+          status: 'completed',
+          final_answer: `The top ${rows} accounts by spend are in the table.`,
+          query_items: [{ item_id: 'pub_q1_output', sql: 'SELECT account, spend FROM t' }],
+        },
+      ],
+      queryResults: {
+        pub_q1_output: {
+          columns: [
+            { name: 'account', type_text: 'STRING' },
+            { name: 'spend', type_text: 'DECIMAL(12,2)' },
+          ],
+          rows: Array.from({ length: rows }, (_, i) => [`acct-${i + 1}`, `${1000 + i}.50`]),
+          truncated: true,
+        },
+      },
+    };
+  },
+  /** A short completed answer that ends with "?" and has no query items (G-22: clarify). */
+  needsInput(): ScriptedResponse {
+    return {
+      polls: [
+        {
+          status: 'completed',
+          final_answer: 'Do you mean gross revenue or net revenue?',
+          query_items: null,
+        },
+      ],
+    };
+  },
   /** In-progress polls with progress_steps null, then completed (G-17a). */
   nullProgressSteps(): ScriptedResponse {
     return {
@@ -155,6 +252,7 @@ export function createGenieOneMcpDouble(opts: GenieOneMcpDoubleOptions) {
   const active = new Map<string, ResponseState>(); // conversation id -> unfinished response
   const log: RecordedCall[] = [];
   const accepted: RecordedCall[] = [];
+  const violations: string[] = [];
   let seq = 0;
   let asked = 0;
   let pollsInFlight = 0;
@@ -255,12 +353,14 @@ export function createGenieOneMcpDouble(opts: GenieOneMcpDoubleOptions) {
       state.cancelled = true;
       active.delete(cid);
     }
-    return ok({ conversation_id: cid, cancelled: Boolean(state) });
+    // Best-effort and conversation-scoped: the status never says that the turn stopped.
+    return ok({ conversation_id: cid, status: 'cancellation_requested' });
   }
 
   async function call(tool: string, rawArgs: unknown): Promise<McpCallResult> {
     const args = asArgs(rawArgs);
     log.push({ tool, args: { ...args } });
+    violations.push(...contractProblems(tool, args));
     const isPoll = tool === 'genie_poll_response';
     if (isPoll) peakPolls = Math.max(peakPolls, ++pollsInFlight);
     try {
@@ -298,7 +398,11 @@ export function createGenieOneMcpDouble(opts: GenieOneMcpDoubleOptions) {
         });
       case 'tools/list':
         return reply({
-          tools: GENIE_ONE_TOOLS.map((name) => ({ name, inputSchema: { type: 'object' } })),
+          tools: GENIE_TOOL_CONTRACTS.map((t) => ({
+            name: t.name,
+            description: t.description,
+            inputSchema: t.inputSchema,
+          })),
         });
       case 'tools/call': {
         const p = asArgs(req.params);
@@ -329,5 +433,7 @@ export function createGenieOneMcpDouble(opts: GenieOneMcpDoubleOptions) {
     polls: (): RecordedCall[] => log.filter((c) => c.tool === 'genie_poll_response'),
     /** The peak number of genie_poll_response calls open at one time (G-07b wants 1). */
     maxConcurrentPolls: () => peakPolls,
+    /** Every tools/call that broke its genie-tools.json input schema, in order. */
+    contractViolations: (): string[] => [...violations],
   };
 }
