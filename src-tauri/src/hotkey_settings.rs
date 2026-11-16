@@ -96,6 +96,36 @@ fn conflicts_json(os: Os, conflicts: &[hb::Conflict]) -> Value {
     json!({ "conflicts": items })
 }
 
+/// MB-14: a changed action that shares its binding with another action keeps its old
+/// binding. In a pair, the later action in [`HotkeyAction::ALL`] order is "the second
+/// binding" and is not saved. A revert can make a new pair, so this repeats until no changed
+/// action shares a binding. It ends: a reverted action is unchanged from then on. Returns the bindings to
+/// save and, per reverted action, the binding it asked for and the binding it keeps.
+fn drop_duplicates(
+    current: &HotkeyBindings,
+    proposed: &HotkeyBindings,
+) -> (HotkeyBindings, Vec<(HotkeyAction, Binding, Binding)>) {
+    let mut next = proposed.clone();
+    let mut not_saved = Vec::new();
+    loop {
+        let all: Vec<(HotkeyAction, Binding)> = next.iter().collect();
+        let shared = all.iter().rev().copied().find(|&(action, binding)| {
+            current.get(action) != Some(binding)
+                && next
+                    .iter()
+                    .any(|(other, b)| other != action && b == binding)
+        });
+        let Some((action, _)) = shared else { break };
+        let Some(old) = current.get(action) else {
+            break;
+        };
+        let tried = proposed.get(action).unwrap_or(old);
+        next.set(action, old);
+        not_saved.push((action, tried, old));
+    }
+    (next, not_saved)
+}
+
 struct State {
     bindings: HotkeyBindings,
     first_run: Option<FirstRunReport>,
@@ -169,25 +199,31 @@ impl HotkeySettings {
     /// [`TalkKeySink`]. TODO(#331): the IPC route.
     pub fn set(&self, input: &JsonObject) -> CoreResult<Value> {
         let env = self.keyboard_env();
+        // The lock spans the restart, so two calls cannot apply their talk keys out of order.
         let mut state = lock(&self.state);
         let outcome = hb::hotkeys_set(self.os, &state.bindings, input, &env)?;
-        let mut next = outcome.bindings.clone();
-        // MB-14: a changed action that now shares a binding with another action keeps its
-        // old binding. The conflict still goes back to the caller.
-        for dup in outcome
-            .conflicts
-            .iter()
-            .filter(|c| c.kind == ConflictKind::Duplicate)
-        {
-            for (action, binding) in outcome.bindings.iter() {
-                let old = state.bindings.get(action);
-                if binding == dup.binding && old != Some(binding) {
-                    if let Some(old) = old {
-                        next.set(action, old);
-                    }
-                }
-            }
-        }
+        let (next, not_saved) = drop_duplicates(&state.bindings, &outcome.bindings);
+        let reply = if not_saved.is_empty() {
+            outcome.result_json(self.os)
+        } else {
+            // Describe what is saved: the input errors, one `duplicate` item per action that
+            // keeps its old key (the fix is that key), then the conflicts of the saved keys.
+            let tail = hb::check_conflicts(self.os, &outcome.bindings, &env).len();
+            let input_errors = &outcome.conflicts[..outcome.conflicts.len() - tail];
+            let mut items: Vec<hb::Conflict> = input_errors.to_vec();
+            items.extend(not_saved.iter().map(|&(action, tried, kept)| hb::Conflict {
+                kind: ConflictKind::Duplicate,
+                action,
+                binding: tried,
+                fix: hb::Fix::UseBinding {
+                    action,
+                    binding: kept,
+                },
+                app: None,
+            }));
+            items.extend(hb::check_conflicts(self.os, &next, &env));
+            conflicts_json(self.os, &items)
+        };
         if next != state.bindings {
             self.store
                 .save(&settings_from_bindings(self.os, &next))
@@ -202,7 +238,7 @@ impl HotkeySettings {
                 self.talk.apply(new_talk);
             }
         }
-        Ok(outcome.result_json(self.os))
+        Ok(reply)
     }
 
     /// The keyboard environment now (prompt-free reads).
@@ -551,7 +587,8 @@ mod tests {
         let env = FakeEnv::default();
         env.env.lock().unwrap().voice_over = true;
         let s = settings(MAC, &store, &env, &FakeTalk::default());
-        // Both get a VoiceOver conflict, so the pure check reports no duplicate.
+        // Both get a VoiceOver conflict, so the pure check reports no duplicate. The second
+        // one (open card) is not saved.
         let got = s
             .set(&obj(
                 json!({ "session": "Ctrl+Option+S", "openCard": "Ctrl+Option+S" }),
@@ -559,7 +596,7 @@ mod tests {
             .unwrap();
         assert_no_saved_duplicate(&store);
         let saved = store.saved.lock().unwrap().clone().unwrap();
-        assert_eq!(saved["app.hotkeys.session"], json!("Ctrl+Shift+M"));
+        assert_eq!(saved["app.hotkeys.session"], json!("Ctrl+Option+S"));
         assert_eq!(saved["app.hotkeys.openCard"], json!("Ctrl+Shift+O"));
         assert!(kinds(&got).contains(&"duplicate".to_owned()), "{got}");
     }

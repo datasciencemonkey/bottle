@@ -301,6 +301,9 @@ pub fn run_hook_adapter(
             seam.deferred(deferred);
         }
     }
+    // The hook stopped (quit or a talk-key restart) with no key-up: end a held PTT with
+    // `cancel`, so no capture stays open (CAP-45).
+    engine.reset();
 }
 
 /// Start the adapter thread. The engine sends its outputs to `sink` (the host [`QueueSink`]).
@@ -432,12 +435,17 @@ impl HotkeyHost {
     }
 
     /// Use `service` from now on (a new talk key, CAP-43a). The old service stops. The new
-    /// one starts with no prompt (CAP-36), unless the host was stopped on quit.
+    /// one starts with no prompt (CAP-36), unless the host was stopped on quit. If the old
+    /// service does not stop, it stays, the state does not change, and the result is
+    /// [`HostState::Unavailable`] with the stop code.
     pub fn replace_service(&self, service: Box<dyn HotkeyService>) -> HostState {
         let mut state = lock(&self.state);
         let mut current = lock(&self.service);
-        // A stop error leaves nothing to undo: the old service is dropped next.
-        let _ = current.stop();
+        // If the old service does not stop (Windows `stop_post_failed`), its hook may still
+        // run. Keep it, so two hooks never run, and do not start the new one.
+        if let Err(e) = current.stop() {
+            return HostState::Unavailable(e.code());
+        }
         *current = service;
         if *state != HostState::Stopped {
             *state = start_state(current.as_ref());

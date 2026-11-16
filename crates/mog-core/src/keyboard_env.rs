@@ -181,9 +181,9 @@ mod macos {
         fn CFRelease(cf: CFTypeRef);
         fn CFGetTypeID(cf: CFTypeRef) -> usize;
         fn CFNumberGetTypeID() -> usize;
-        fn CFNumberGetValue(number: CFTypeRef, the_type: c_int, value_ptr: *mut c_void) -> bool;
+        fn CFNumberGetValue(number: CFTypeRef, the_type: c_int, value_ptr: *mut c_void) -> u8;
         fn CFBooleanGetTypeID() -> usize;
-        fn CFBooleanGetValue(boolean: CFTypeRef) -> bool;
+        static kCFBooleanTrue: CFTypeRef;
         fn CFDictionaryGetTypeID() -> usize;
         fn CFDictionaryGetValue(dict: CFTypeRef, key: *const c_void) -> *const c_void;
         fn CFArrayGetTypeID() -> usize;
@@ -237,10 +237,11 @@ mod macos {
         unsafe {
             let id = CFGetTypeID(cf);
             if id == CFBooleanGetTypeID() {
-                Some(i64::from(CFBooleanGetValue(cf)))
+                // Compare with the shared true object (no `Boolean` return to declare).
+                Some(i64::from(cf == kCFBooleanTrue))
             } else if id == CFNumberGetTypeID() {
                 let mut v: i64 = 0;
-                CFNumberGetValue(cf, K_CF_NUMBER_SINT64_TYPE, (&mut v as *mut i64).cast())
+                (CFNumberGetValue(cf, K_CF_NUMBER_SINT64_TYPE, (&mut v as *mut i64).cast()) != 0)
                     .then_some(v)
             } else {
                 None
@@ -359,12 +360,16 @@ mod macos {
 mod win32 {
     use super::{alt_gr_from_scans, EnvReads, ALT_GR_PROBE};
     use crate::hotkey_bindings::DictationShortcut;
+    use std::ptr;
     use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
         TH32CS_SNAPPROCESS,
     };
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyboardLayout, VkKeyScanExW};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetWindowThreadProcessId,
+    };
 
     /// The Windows reads.
     #[derive(Debug, Default, Clone, Copy)]
@@ -378,9 +383,11 @@ mod win32 {
             false
         }
         fn alt_gr_layout(&self) -> bool {
-            // SAFETY: plain reads of the input layout of this thread.
+            // SAFETY: plain reads. The layout is the one of the foreground window's thread
+            // (the user's active input layout); with no foreground window, this thread's.
             let scans: Vec<i16> = unsafe {
-                let layout = GetKeyboardLayout(0);
+                let thread = GetWindowThreadProcessId(GetForegroundWindow(), ptr::null_mut());
+                let layout = GetKeyboardLayout(thread);
                 ALT_GR_PROBE
                     .iter()
                     .filter_map(|c| u16::try_from(u32::from(*c)).ok())
