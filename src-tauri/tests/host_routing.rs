@@ -134,6 +134,7 @@ fn comps<'a>(
         permissions: None,
         consent: None,
         config: None,
+        capture: None,
     }
 }
 
@@ -322,13 +323,19 @@ fn mog_18a_r11_makes_the_card_on_the_first_show_through_the_route() {
 }
 
 #[test]
-fn arc_3_window_ops_run_off_the_main_thread_and_other_commands_inline() {
+fn arc_3_cap_02a_window_ops_and_capture_start_run_off_the_main_thread_and_others_inline() {
     // ADR 0022 decision 6: an R11 op may wait for the main thread, so it runs on a worker.
     // ADR 0039: `permission_request` waits for an OS prompt, so it runs on a worker too.
+    // ADR 0055: `capture_start` and `capture_resume` open the device, which can be slow. The
+    // stops stay inline (MB-05).
     for c in COMMANDS {
         assert_eq!(
             runs_off_main_thread(c.name),
-            c.name.starts_with("window_") || c.name == "permission_request",
+            c.name.starts_with("window_")
+                || matches!(
+                    c.name,
+                    "permission_request" | "capture_start" | "capture_resume"
+                ),
             "{}",
             c.name
         );

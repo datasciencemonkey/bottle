@@ -4,6 +4,7 @@ import {
   COMMANDS,
   EVENTS,
   IPC_ERROR_CODES,
+  type CaptureStopped,
   type CommandArgs,
   type CommandName,
   type CommandReturns,
@@ -155,5 +156,13 @@ describe('consent records (SEC-32a, #430, ADR 0060)', () => {
       ],
     };
     expect([reply.records.length, leaky.records.length]).toEqual([1, 1]);
+  });
+});
+
+describe('capture events (#425, ADR 0055)', () => {
+  it('[CAP-02a] [CAP-04a] capture.stopped is a core-to-brain event with a content-free payload', () => {
+    expect(EVENTS['capture.stopped']).toEqual({ name: 'capture:stopped', direction: 'core_to_brain' });
+    const stop: CaptureStopped = { leaseId: '1', mogId: 'a1', mode: 'ptt', reason: 'hold_cap' };
+    expect(Object.keys(stop).sort()).toEqual(['leaseId', 'mode', 'mogId', 'reason']);
   });
 });
