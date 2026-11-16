@@ -19,7 +19,7 @@ use mog_core::ipc::{self, WindowClass, COMMANDS};
 use mog_core::ipc_gateway::{IpcGateway, ScrubbingGateway};
 use mog_core::loopback::{
     LoopbackEndpoint, LoopbackHandler, LoopbackRequest, LoopbackResponse, LoopbackSession,
-    NotImplementedHandler,
+    NotImplementedHandler, MAX_CONNECTIONS,
 };
 use mog_core::mcp_transport::forwardable_tool_args;
 use mog_core::token_guard::{
@@ -111,6 +111,35 @@ fn arc_6_rule_7_scrub_keeps_clean_text() {
         assert!(!contains_secret(clean), "false positive: {clean}");
         assert_eq!(scrub(clean), clean);
     }
+}
+
+#[test]
+fn arc_6_rule_7_scrub_is_linear_on_hostile_input() {
+    // A run of `eyJ` with no dot made the first scrubber quadratic (review of #308).
+    for unit in ["eyJ", "AKIA", "dapi", "-----BEGIN ", "ghp_", "dose"] {
+        let text = unit.repeat(400_000 / unit.len());
+        let t = std::time::Instant::now();
+        let _ = scrub(&text);
+        let _ = contains_secret(&text);
+        assert!(
+            t.elapsed() < Duration::from_secs(2),
+            "{unit}: {:?}",
+            t.elapsed()
+        );
+    }
+}
+
+#[test]
+fn arc_6_rule_7_scrub_json_keeps_values_of_colliding_keys() {
+    let a = pat();
+    let b = fakes()[3].clone();
+    let out = scrub_json(&json!({ a: 1, b: 2 }));
+    let m = out.as_object().unwrap();
+    assert_eq!(m.len(), 2, "{out}");
+    let mut vals: Vec<i64> = m.values().map(|v| v.as_i64().unwrap()).collect();
+    vals.sort_unstable();
+    assert_eq!(vals, [1, 2]);
+    assert!(!json_contains_secret(&out));
 }
 
 #[test]
@@ -230,6 +259,14 @@ fn mb_02_config_rejects_secret_named_keys() {
         "pat",
         "PAT",
         "github_pat",
+        "APIToken",
+        "accesstoken",
+        "clientsecret",
+        "password1",
+        "authToken2",
+        "SECRETKey",
+        "PATValue",
+        "db_passwd",
     ] {
         let cfg = obj(json!({"name": "m", "auth": {key: "x"}}));
         assert_eq!(
@@ -370,6 +407,9 @@ fn arc_6_rule_1_no_command_takes_a_url_argument() {
                 for (k, sub) in props {
                     let lk = k.to_lowercase();
                     let urlish = lk.ends_with("url") || lk.ends_with("uri") || lk == "endpoint";
+                    // 4.5 lists `profile_login {workspaceUrl}` for `databricks auth login
+                    // --host`; it is not a request target. Rule 1 names only the v1
+                    // `custom_agent` URL, so this difference is recorded in ADR 0013 and #224.
                     let allowed = cmd == "profile_login" && k == "workspaceUrl";
                     assert!(!urlish || allowed, "{cmd} takes a URL field {path}{k}");
                     walk(sub, cmd, &format!("{path}{k}."));
@@ -427,6 +467,8 @@ fn arc_6_rule_4_csp_blocks_external_connect_src() {
 
 #[test]
 fn arc_6_rule_4_rive_asset_cdn_is_never_enabled() {
+    // Rive loads assets from its CDN unless `enableRiveAssetCDN` is false, so every file that
+    // uses the Rive runtime must set it to false. No Rive code exists in `src/` yet (#3, #11).
     fn scan(dir: &Path, hits: &mut Vec<PathBuf>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
@@ -441,9 +483,13 @@ fn arc_6_rule_4_rive_asset_cdn_is_never_enabled() {
             ) {
                 let text = std::fs::read_to_string(&p).unwrap_or_default();
                 let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
-                if compact.contains("enableRiveAssetCDN:true")
-                    || compact.contains("enableRiveAssetCDN=true")
-                {
+                let uses_rive = ["@rive-app", "newRive(", "useRive(", "RiveCanvas"]
+                    .iter()
+                    .any(|m| compact.contains(m));
+                let off = compact.contains("enableRiveAssetCDN:false");
+                let on = compact.contains("enableRiveAssetCDN:true")
+                    || compact.contains("enableRiveAssetCDN=true");
+                if on || (uses_rive && !off) {
                     hits.push(p);
                 }
             }
@@ -451,7 +497,10 @@ fn arc_6_rule_4_rive_asset_cdn_is_never_enabled() {
     }
     let mut hits = Vec::new();
     scan(&repo_root().join("src"), &mut hits);
-    assert!(hits.is_empty(), "Rive asset CDN enabled in {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "Rive asset CDN is not set to false in {hits:?}"
+    );
 }
 
 // ---------- rule 8 (v1): Lakebase ----------
@@ -682,4 +731,72 @@ fn arc_7_rule_9_closed_session_stops_listening() {
         let mut buf = [0u8; 16];
         assert!(matches!(c.read(&mut buf), Ok(0) | Err(_)));
     }
+}
+
+#[test]
+fn arc_7_rule_9_open_connections_are_capped() {
+    let s = LoopbackSession::open(Arc::new(NotImplementedHandler)).unwrap();
+    let a = s.addr(LoopbackEndpoint::BottleMcp);
+    let idle: Vec<TcpStream> = (0..MAX_CONNECTIONS + 16)
+        .filter_map(|_| TcpStream::connect(a).ok())
+        .collect();
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        s.open_connections() <= MAX_CONNECTIONS,
+        "{} connections for {} clients",
+        s.open_connections(),
+        idle.len()
+    );
+}
+
+#[test]
+fn arc_7_rule_9_slow_requests_hit_the_deadline() {
+    let s = LoopbackSession::open(Arc::new(NotImplementedHandler)).unwrap();
+    let a = s.addr(LoopbackEndpoint::ModelProxy);
+    let mut c = TcpStream::connect(a).unwrap();
+    let mut writer = c.try_clone().unwrap();
+    // One byte per second never finishes the head; each read alone is well under 5 s.
+    let drip = std::thread::spawn(move || {
+        for b in b"POST /mcp HTTP/1.1\r\nHost: x" {
+            if writer.write_all(&[*b]).is_err() {
+                break;
+            }
+            std::thread::sleep(Duration::from_secs(1));
+        }
+    });
+    c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    let t = std::time::Instant::now();
+    let mut out = String::new();
+    let _ = c.read_to_string(&mut out);
+    assert!(t.elapsed() < Duration::from_secs(8), "{:?}", t.elapsed());
+    assert!(out.starts_with("HTTP/1.1 408"), "{out}");
+    let _ = c.shutdown(std::net::Shutdown::Both);
+    let _ = drip.join();
+}
+
+#[test]
+fn arc_7_rule_9_close_ends_open_connections() {
+    let handler = Arc::new(Counting(AtomicUsize::new(0)));
+    let s = LoopbackSession::open(handler.clone()).unwrap();
+    let a = s.addr(LoopbackEndpoint::GenieOneMcp);
+    let auth = s.harness_config().authorization().to_owned();
+    let mut c = TcpStream::connect(a).unwrap();
+    // Half a request with the right secret: the handler must never run after close.
+    let head = format!(
+        "POST /mcp HTTP/1.1\r\nHost: {}\r\nAuthorization: {auth}\r\nContent-Length: 10\r\n\r\n{{",
+        host_of(a)
+    );
+    c.write_all(head.as_bytes()).unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    let t = std::time::Instant::now();
+    s.close();
+    assert!(
+        t.elapsed() < Duration::from_secs(2),
+        "close waited {:?}",
+        t.elapsed()
+    );
+    c.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let mut buf = [0u8; 64];
+    assert!(matches!(c.read(&mut buf), Ok(0) | Err(_)));
+    assert_eq!(handler.0.load(Ordering::SeqCst), 0);
 }

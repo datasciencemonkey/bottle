@@ -13,13 +13,15 @@
 //! passes the header). TODO(#113): the `bottle-mcp` and model proxy handlers.
 //! TODO(#139): the Genie One MCP proxy handler.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::io::{Read, Write};
+use std::net::Shutdown;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
@@ -31,7 +33,11 @@ const ID: &str = "R16";
 pub const UNAVAILABLE: &str = "loopback_unavailable";
 const MAX_HEAD: usize = 16 * 1024;
 const MAX_BODY: usize = 1024 * 1024;
-const IO_TIMEOUT: Duration = Duration::from_secs(5);
+/// The whole request (head and body) must arrive within this time, or the connection closes.
+const REQUEST_DEADLINE: Duration = Duration::from_secs(5);
+const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+/// The most open connections per session. Further connections close at once.
+pub const MAX_CONNECTIONS: usize = 32;
 
 /// The three loopback endpoints of ARC-7.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -175,10 +181,24 @@ impl fmt::Debug for HarnessConfig {
     }
 }
 
+#[derive(Default)]
+struct Conns {
+    next_id: u64,
+    open: HashMap<u64, TcpStream>,
+    threads: Vec<JoinHandle<()>>,
+}
+
 struct Shared {
     authorization: Arc<Wiped>,
     handler: Arc<dyn LoopbackHandler>,
     stop: AtomicBool,
+    conns: Mutex<Conns>,
+}
+
+impl Shared {
+    fn conns(&self) -> MutexGuard<'_, Conns> {
+        self.conns.lock().unwrap_or_else(|p| p.into_inner())
+    }
 }
 
 /// The three loopback listeners of one agent session.
@@ -203,6 +223,7 @@ impl LoopbackSession {
             authorization: Arc::new(new_authorization()?),
             handler,
             stop: AtomicBool::new(false),
+            conns: Mutex::new(Conns::default()),
         });
         let mut session = LoopbackSession {
             shared,
@@ -248,7 +269,12 @@ impl LoopbackSession {
         }
     }
 
-    /// Stop the listeners and close their ports.
+    /// The number of open connections (at most [`MAX_CONNECTIONS`]).
+    pub fn open_connections(&self) -> usize {
+        self.shared.conns().open.len()
+    }
+
+    /// Stop the listeners, close every open connection and wait for their threads.
     pub fn close(self) {}
 
     fn shutdown(&mut self) {
@@ -258,6 +284,17 @@ impl LoopbackSession {
             let _ = TcpStream::connect_timeout(addr, Duration::from_millis(200));
         }
         for t in self.threads.drain(..) {
+            let _ = t.join();
+        }
+        // No accept runs now, so no connection is added after this point.
+        let (streams, threads) = {
+            let mut c = self.shared.conns();
+            (std::mem::take(&mut c.open), std::mem::take(&mut c.threads))
+        };
+        for s in streams.values() {
+            let _ = s.shutdown(Shutdown::Both);
+        }
+        for t in threads {
             let _ = t.join();
         }
     }
@@ -275,11 +312,33 @@ fn accept_loop(listener: TcpListener, endpoint: LoopbackEndpoint, port: u16, sha
             break;
         }
         let Ok(stream) = stream else { continue };
-        let shared = Arc::clone(&shared);
+        let mut c = shared.conns();
+        c.threads.retain(|t| !t.is_finished());
+        if c.open.len() >= MAX_CONNECTIONS {
+            // Over the cap: close at once (dropping the stream), before any read.
+            continue;
+        }
+        let Ok(handle) = stream.try_clone() else {
+            continue;
+        };
+        let id = c.next_id;
+        c.next_id += 1;
+        c.open.insert(id, handle);
+        let conn_shared = Arc::clone(&shared);
         // One short-lived thread per connection, so a slow client cannot block the endpoint.
-        let _ = std::thread::Builder::new()
+        // The cap and the request deadline bound the threads; `close` joins them.
+        let spawned = std::thread::Builder::new()
             .name("loopback-conn".into())
-            .spawn(move || serve(stream, endpoint, port, &shared));
+            .spawn(move || {
+                serve(stream, endpoint, port, &conn_shared);
+                conn_shared.conns().open.remove(&id);
+            });
+        match spawned {
+            Ok(t) => c.threads.push(t),
+            Err(_) => {
+                c.open.remove(&id);
+            }
+        }
     }
 }
 
@@ -289,6 +348,7 @@ fn reason(status: u16) -> &'static str {
         400 => "Bad Request",
         401 => "Unauthorized",
         403 => "Forbidden",
+        408 => "Request Timeout",
         413 => "Payload Too Large",
         431 => "Request Header Fields Too Large",
         501 => "Not Implemented",
@@ -312,8 +372,30 @@ fn error(stream: &mut TcpStream, status: u16, code: &str) {
     reply(stream, status, &json!({ "error": code }));
 }
 
+/// Read some bytes before `deadline`. `Err(408)` when the time is up, `Err(400)` on EOF.
+fn read_some(stream: &mut TcpStream, buf: &mut [u8], deadline: Instant) -> Result<usize, u16> {
+    let left = deadline.saturating_duration_since(Instant::now());
+    if left.is_zero() {
+        return Err(408);
+    }
+    let _ = stream.set_read_timeout(Some(left));
+    match stream.read(buf) {
+        Ok(0) => Err(400),
+        Ok(n) => Ok(n),
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            ) =>
+        {
+            Err(408)
+        }
+        Err(_) => Err(400),
+    }
+}
+
 /// Read the request head (up to the blank line) and any bytes after it.
-fn read_head(stream: &mut TcpStream) -> Result<(Vec<u8>, Vec<u8>), u16> {
+fn read_head(stream: &mut TcpStream, deadline: Instant) -> Result<(Vec<u8>, Vec<u8>), u16> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 2048];
     loop {
@@ -324,21 +406,20 @@ fn read_head(stream: &mut TcpStream) -> Result<(Vec<u8>, Vec<u8>), u16> {
         if buf.len() > MAX_HEAD {
             return Err(431);
         }
-        match stream.read(&mut chunk) {
-            Ok(0) | Err(_) => return Err(400),
-            Ok(n) => buf.extend_from_slice(&chunk[..n]),
-        }
+        let n = read_some(stream, &mut chunk, deadline)?;
+        buf.extend_from_slice(&chunk[..n]);
     }
 }
 
 fn serve(mut stream: TcpStream, endpoint: LoopbackEndpoint, port: u16, shared: &Shared) {
-    let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
-    let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
+    let deadline = Instant::now() + REQUEST_DEADLINE;
+    let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
     if shared.stop.load(Ordering::SeqCst) {
         return;
     }
-    let (head, mut body) = match read_head(&mut stream) {
+    let (head, mut body) = match read_head(&mut stream, deadline) {
         Ok(x) => x,
+        Err(408) => return error(&mut stream, 408, "timeout"),
         Err(status) => return error(&mut stream, status, "bad_request"),
     };
     let Ok(head) = std::str::from_utf8(&head) else {
@@ -394,14 +475,20 @@ fn serve(mut stream: TcpStream, endpoint: LoopbackEndpoint, port: u16, shared: &
     if length > MAX_BODY {
         return error(&mut stream, 413, "too_large");
     }
-    if body.len() < length {
-        let mut more = vec![0u8; length - body.len()];
-        if stream.read_exact(&mut more).is_err() {
-            return error(&mut stream, 400, "bad_request");
+    let mut chunk = [0u8; 8192];
+    while body.len() < length {
+        let want = (length - body.len()).min(chunk.len());
+        match read_some(&mut stream, &mut chunk[..want], deadline) {
+            Ok(n) => body.extend_from_slice(&chunk[..n]),
+            Err(408) => return error(&mut stream, 408, "timeout"),
+            Err(status) => return error(&mut stream, status, "bad_request"),
         }
-        body.extend_from_slice(&more);
     }
     body.truncate(length);
+    if shared.stop.load(Ordering::SeqCst) {
+        // The session closed while the request was arriving: the handler must not run.
+        return;
+    }
     let req = LoopbackRequest {
         endpoint,
         method: method.to_owned(),
