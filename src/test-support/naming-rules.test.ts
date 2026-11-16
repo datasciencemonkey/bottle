@@ -1,9 +1,11 @@
+// @vitest-environment jsdom
 import {
   bannedNameHits,
   htmlTitle,
   markdownProse,
   mogNounHits,
   rustWindowTitles,
+  visibleTexts,
 } from './naming-rules';
 
 // Built from parts, so a repository scan never finds the banned names in this file.
@@ -22,6 +24,18 @@ describe('naming-rules helpers (#71)', () => {
     expect(mogNounHits('Bottle mog')).toEqual(['mog']);
     expect(mogNounHits('Add a Mog. Two mogs.')).toEqual(['Mog', 'mogs']);
     expect(mogNounHits('Bottle MOG card; MOGs; MOG.')).toEqual([]);
+  });
+
+  it('[MB-10c] reads each text node and attribute of a view on its own', () => {
+    const el = document.createElement('div');
+    el.innerHTML =
+      '<p>Add a mog</p><ul><li>MOG 1</li></ul><button aria-label="New Mog"></button>' +
+      '<pre data-notices>crates/mog-core mog</pre>';
+    expect(visibleTexts(el).flatMap(mogNounHits)).toEqual(['mog', 'Mog']);
+  });
+
+  it('[MB-10a] reads a former name split by an HTML space entity', () => {
+    expect(bannedNameHits(OLD.join('&nbsp;'))).toEqual([OLD.join('&nbsp;')]);
   });
 
   it('[MB-10c] does not flag identifiers, labels and paths', () => {
