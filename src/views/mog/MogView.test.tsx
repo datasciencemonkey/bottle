@@ -1,5 +1,8 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { act } from 'react';
+import { FrameProbe } from './frame-probe';
 import type { MascotRenderer } from './mascot';
 import type { MicLevelFrame, MicLevelSource } from './level-meter';
 import { RiveMascot } from './rive-mascot';
@@ -334,5 +337,52 @@ describe('V2 MOG view', () => {
     );
     await act(async () => stt.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })));
     expect(shown(el)).toContain('identity');
+  });
+});
+
+describe('V2 MOG view frame budget (#13, ADR 0031)', () => {
+  beforeEach(() => tauri.reset());
+
+  it('[UX-36] [UX-05b] applies the mood in the event task and needs one frame per update', async () => {
+    const { m, calls } = fakeMascot();
+    const frames: (() => void)[] = [];
+    let t = 100;
+    const probe = new FrameProbe({ now: () => t, requestFrame: (cb) => void frames.push(cb) });
+    await render(<MogView mogId={ID} createMascot={() => m} probe={probe} />);
+    const trace = { seq: 1, eventAt: 90, sentAt: 95, keyDownAt: 60 };
+    await tauri.emit('mog:view_state', { mogId: ID, mood: 'listening', overlays, trace });
+    // The mascot has the mood before any frame runs: the next frame draws it.
+    expect(calls).toContain('mood:listening');
+    expect(frames).toHaveLength(1);
+    t = 112;
+    frames[0]?.();
+    expect(probe.samples()).toEqual([
+      {
+        seq: 1,
+        mood: 'listening',
+        eventAt: 90,
+        sentAt: 95,
+        keyDownAt: 60,
+        receivedAt: 100,
+        frameAt: 112,
+      },
+    ]);
+  });
+
+  it('[UX-36] a state for another MOG or with no trace asks for no frame', async () => {
+    const { m } = fakeMascot();
+    const frames: (() => void)[] = [];
+    const probe = new FrameProbe({ now: () => 0, requestFrame: (cb) => void frames.push(cb) });
+    await render(<MogView mogId={ID} createMascot={() => m} probe={probe} />);
+    const trace = { seq: 1, eventAt: 0, sentAt: 0 };
+    await tauri.emit('mog:view_state', { mogId: OTHER, mood: 'error', overlays, trace });
+    await tauri.emit('mog:view_state', { mogId: ID, mood: 'error', overlays });
+    expect(frames).toHaveLength(0);
+  });
+
+  it('[UX-36] the MOG entry attaches the probe only with the trace flag', () => {
+    const main = readFileSync(resolve(import.meta.dirname, 'main.tsx'), 'utf8');
+    expect(main).toMatch(/import\.meta\.env\.VITE_BOTTLE_LATENCY_TRACE === '1'/);
+    expect(main).toMatch(/probe=\{probe\}/);
   });
 });

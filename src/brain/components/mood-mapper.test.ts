@@ -534,11 +534,26 @@ describe('T11 holdMood (#9, UX-05a)', () => {
     });
   });
 
-  it('[UX-05a] listening is held for 400 ms like any mood', () => {
+  it.each(['idle', 'error', 'answering', 'success', 'sleeping'] as Mood[])(
+    '[UX-05a] listening is held for 400 ms before a change to %s',
+    (next) => {
+      const prev = { mood: 'listening' as Mood, since: T };
+      expect(holdMood(prev, next, T + 100)).toEqual({
+        shown: prev,
+        recheckAt: T + MOOD_HOLD_MS,
+      });
+    },
+  );
+
+  it('[UX-36] [NFR-01c] the user ending the capture shows processing at once (ADR 0031)', () => {
+    // A 300 ms press is not a tap (CAP-44a, 250 ms). Its key-up must show processing within
+    // 100 ms, so listening -> processing skips the hold like key-down does.
     const prev = { mood: 'listening' as Mood, since: T };
-    expect(holdMood(prev, 'processing', T + 100)).toEqual({
-      shown: prev,
-      recheckAt: T + MOOD_HOLD_MS,
+    expect(holdMood(prev, 'processing', T + 300)).toEqual({
+      shown: { mood: 'processing', since: T + 300 },
     });
+    // Processing itself holds 400 ms like any other mood.
+    const next = holdMood({ mood: 'processing', since: T + 300 }, 'success', T + 400);
+    expect(next).toEqual({ shown: { mood: 'processing', since: T + 300 }, recheckAt: T + 700 });
   });
 });
