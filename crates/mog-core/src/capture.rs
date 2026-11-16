@@ -63,11 +63,20 @@
 //! Segments (`SegmentRef`, with its required `leaseId`) are not made here yet: the VAD and
 //! segment pipeline (#116) builds them from [`Lease::lease_id`].
 //!
+//! The PTT and hands-free lifecycle rules (#14, ADR 0057) are here too: the 120 ms post-roll
+//! after a key-up ([`CaptureCore::release`], CAP-12b), the drop of a tap's audio
+//! ([`CaptureCore::discard`], CAP-44b), the hands-free stop on a tap or Esc
+//! ([`CaptureCore::stop_hands_free`], CAP-14b) and the VAD end ([`CaptureCore::voice_activity`],
+//! CAP-14c). The post-roll and the VAD end are deadlines of [`CaptureService::tick`], like the
+//! caps. TODO(#425): the host timer calls `tick()` at each deadline. The VAD that calls
+//! `voice_activity` is the Silero VAD of the segment pipeline (TODO(#116)).
+//!
 //! Follow-up: this crate has no real [`AudioDevice`] yet. The cpal mic backend and the
 //! system-audio backends (#15, #107, #108, #109) implement the trait. Until one lands, a host
 //! cannot build a [`CaptureCore`] that opens a real mic.
 
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
@@ -81,6 +90,10 @@ use crate::types::{self, CaptureMode, CaptureState, MogId, OthersTrack};
 pub const HOLD_MAX_MS: u64 = 120_000;
 /// The locked hands-free cap: 5 min (section 7.1, D54, CAP-04b).
 pub const HANDS_FREE_MAX_MS: u64 = 300_000;
+/// The PTT post-roll after the key-up: 120 ms (CAP-12b, section 8.1).
+pub const POST_ROLL_MS: u64 = 120;
+/// The default hands-free VAD end, `mog.capture.vadEndMs` (CAP-14c, Appendix F). 0 is off.
+pub const DEFAULT_VAD_END_MS: u64 = 1_500;
 
 /// The number of a capture lease inside R2. Numbers start at 1 and are never reused in one
 /// process. On the wire it is [`types::LeaseId`], the decimal text of this number (ADR 0007).
@@ -145,6 +158,16 @@ pub enum StopReason {
     Panic,
     /// The device reported a failed stream, for example an unplugged mic.
     DeviceLost,
+    /// The talk key came up and the post-roll ended (CAP-12b).
+    Released,
+    /// A tap or a cancelled PTT: its audio is dropped (CAP-44b).
+    Discarded,
+    /// A tap stopped hands-free (CAP-14b).
+    Tap,
+    /// Esc stopped hands-free; its audio is dropped (CAP-14b).
+    Escape,
+    /// The hands-free VAD end: `mog.capture.vadEndMs` of silence (CAP-14c).
+    VadEnd,
 }
 
 impl StopReason {
@@ -157,8 +180,28 @@ impl StopReason {
             StopReason::Preempted => "preempted",
             StopReason::Panic => "panic",
             StopReason::DeviceLost => "device_lost",
+            StopReason::Released => "released",
+            StopReason::Discarded => "discarded",
+            StopReason::Tap => "tap",
+            StopReason::Escape => "escape",
+            StopReason::VadEnd => "vad_end",
         }
     }
+
+    /// The segment pipeline (#116) must drop the audio of a lease that stopped for this
+    /// reason: it never goes to the journal or to STT (CAP-44b, CAP-14b).
+    pub fn discards_audio(&self) -> bool {
+        matches!(self, StopReason::Discarded | StopReason::Escape)
+    }
+}
+
+/// What stops hands-free capture besides the cap and the VAD end (CAP-14b).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandsFreeStop {
+    /// A talk-key tap. The audio is kept.
+    Tap,
+    /// Esc. The audio is dropped.
+    Escape,
 }
 
 /// A lease that stopped.
@@ -290,16 +333,38 @@ struct LeaseRec {
     started_epoch: u64,
     others_track: bool,
     paused: bool,
+    /// A PTT whose key came up: it stops at this time, after the post-roll (CAP-12b).
+    release_at: Option<u64>,
+    /// The hands-free VAD end of the MOG at the start, in ms; 0 is off (CAP-14c).
+    vad_end_ms: u64,
+    /// Hands-free silence since this time, after speech (CAP-14c). `None`: speech now, or no
+    /// speech yet.
+    quiet_since: Option<u64>,
+    /// The VAD reported speech in this hands-free lease.
+    heard: bool,
 }
 
 impl LeaseRec {
-    fn deadline(&self) -> Option<(u64, StopReason)> {
+    /// The next stop of this lease. `suspended`: a PTT holds the mic over this hands-free
+    /// lease, so its VAD end waits.
+    fn deadline(&self, suspended: bool) -> Option<(u64, StopReason)> {
         match self.mode {
-            CaptureMode::Ptt => Some((self.started_mono + HOLD_MAX_MS, StopReason::HoldCap)),
-            CaptureMode::HandsFree => Some((
-                self.started_mono + HANDS_FREE_MAX_MS,
-                StopReason::HandsFreeCap,
-            )),
+            CaptureMode::Ptt => {
+                let cap = (self.started_mono + HOLD_MAX_MS, StopReason::HoldCap);
+                let release = self.release_at.map(|at| (at, StopReason::Released));
+                Some(release.filter(|r| r.0 < cap.0).unwrap_or(cap))
+            }
+            CaptureMode::HandsFree => {
+                let cap = (
+                    self.started_mono + HANDS_FREE_MAX_MS,
+                    StopReason::HandsFreeCap,
+                );
+                let vad = self
+                    .quiet_since
+                    .filter(|_| self.vad_end_ms > 0 && !suspended)
+                    .map(|q| (q.saturating_add(self.vad_end_ms), StopReason::VadEnd));
+                Some(vad.filter(|v| v.0 < cap.0).unwrap_or(cap))
+            }
             // The session stop policy belongs to R3 SessionGuard (#67, #127).
             CaptureMode::Session => None,
         }
@@ -361,6 +426,8 @@ struct Inner {
     pending_lost: bool,
     next_no: LeaseNo,
     last_state: Option<CaptureState>,
+    /// `mog.capture.vadEndMs` per MOG (CAP-14c). A MOG not here has [`DEFAULT_VAD_END_MS`].
+    vad_end_ms: HashMap<MogId, u64>,
 }
 
 impl Inner {
@@ -387,9 +454,14 @@ impl Inner {
         (mic, system)
     }
 
-    /// Take a lease out. When the primary goes, the overlay PTT (if any) becomes primary.
-    fn remove(&mut self, lease_id: LeaseNo) -> Option<LeaseRec> {
+    /// Take a lease out. When the primary goes, the overlay PTT (if any) becomes primary. When
+    /// an overlay PTT goes, the silence of the hands-free lease under it counts again from
+    /// `now` (CAP-14c).
+    fn remove(&mut self, lease_id: LeaseNo, now: u64) -> Option<LeaseRec> {
         if self.overlay.as_ref().is_some_and(|o| o.id == lease_id) {
+            if let Some(q) = self.primary.as_mut().and_then(|p| p.quiet_since.as_mut()) {
+                *q = now;
+            }
             return self.overlay.take();
         }
         if self.primary.as_ref().is_some_and(|p| p.id == lease_id) {
@@ -451,19 +523,40 @@ impl Inner {
         }
     }
 
-    /// Stop every lease whose cap has passed.
-    fn expire(&mut self, now: u64, evs: &mut Vec<Ev>) {
-        let due: Vec<(LeaseNo, StopReason)> = [&self.overlay, &self.primary]
+    /// The next stop of each lease: (lease, time, reason).
+    fn deadlines(&self) -> Vec<(LeaseNo, u64, StopReason)> {
+        let suspended = self.overlay.is_some();
+        let overlay = self.overlay.as_ref().map(|o| (o, false));
+        let primary = self.primary.as_ref().map(|p| (p, suspended));
+        [overlay, primary]
             .into_iter()
             .flatten()
-            .filter_map(|rec| match rec.deadline() {
-                Some((at, reason)) if now >= at => Some((rec.id, reason)),
-                _ => None,
-            })
-            .collect();
-        for (id, reason) in due {
-            if let Some(rec) = self.remove(id) {
-                evs.push(rec.stopped(reason));
+            .filter_map(|(rec, s)| rec.deadline(s).map(|(at, why)| (rec.id, at, why)))
+            .collect()
+    }
+
+    /// The earliest deadline, for the host timer.
+    fn next_deadline(&self) -> Option<u64> {
+        self.deadlines().into_iter().map(|(_, at, _)| at).min()
+    }
+
+    /// Stop every lease whose cap, post-roll or VAD end has passed. An overlay that stops
+    /// restarts the silence of the lease under it, so check again until nothing is due.
+    fn expire(&mut self, now: u64, evs: &mut Vec<Ev>) {
+        loop {
+            let due: Vec<(LeaseNo, StopReason)> = self
+                .deadlines()
+                .into_iter()
+                .filter(|(_, at, _)| now >= *at)
+                .map(|(id, _, why)| (id, why))
+                .collect();
+            if due.is_empty() {
+                return;
+            }
+            for (id, reason) in due {
+                if let Some(rec) = self.remove(id, now) {
+                    evs.push(rec.stopped(reason));
+                }
             }
         }
     }
@@ -545,7 +638,7 @@ impl CaptureCore {
     pub fn device_failed(&self, source: AudioSource) {
         // Mark the stream lost before any lease changes, so no start can reuse it (round 5).
         self.lost(source).store(true, Ordering::SeqCst);
-        self.commit(|inner, _, evs| {
+        self.commit(|inner, now, evs| {
             let ids: Vec<LeaseNo> = match source {
                 AudioSource::Mic => [&inner.overlay, &inner.primary]
                     .into_iter()
@@ -561,7 +654,7 @@ impl CaptureCore {
                     .collect(),
             };
             for id in ids {
-                if let Some(rec) = inner.remove(id) {
+                if let Some(rec) = inner.remove(id, now) {
                     evs.push(rec.stopped(StopReason::DeviceLost));
                 }
             }
@@ -576,6 +669,98 @@ impl CaptureCore {
                 inner.pending_lost = true;
             }
         });
+    }
+
+    /// Set `mog.capture.vadEndMs` of a MOG (CAP-14c). 0 turns the VAD end off. It applies from
+    /// the next hands-free start of that MOG. TODO(#425): the host calls it on each config
+    /// change.
+    pub fn set_vad_end_ms(&self, mog_id: &str, ms: u64) {
+        self.lock_state().vad_end_ms.insert(mog_id.to_string(), ms);
+    }
+
+    /// The VAD reports speech (`true`) or silence (`false`) on the mic (CAP-14c). Only a live
+    /// hands-free lease uses it: after speech, `vadEndMs` of silence stops it with
+    /// [`StopReason::VadEnd`]. No silence counts before the first speech (ADR 0057). Returns the
+    /// next deadline for the host timer, like [`CaptureService::tick`].
+    pub fn voice_activity(&self, speech: bool) -> Option<u64> {
+        let next = self.commit(|inner, now, evs| {
+            inner.expire(now, evs);
+            if let Some(hf) = inner
+                .primary
+                .as_mut()
+                .filter(|p| p.mode == CaptureMode::HandsFree && p.live())
+            {
+                if speech {
+                    hf.heard = true;
+                    hf.quiet_since = None;
+                } else if hf.heard && hf.quiet_since.is_none() {
+                    hf.quiet_since = Some(now);
+                }
+            }
+            inner.next_deadline()
+        });
+        self.request_sync();
+        next
+    }
+
+    /// The talk key came up (CAP-12b). The PTT lease stays live for [`POST_ROLL_MS`], so the
+    /// last word is recorded, then stops with [`StopReason::Released`]. Returns the stop time
+    /// (monotonic ms); the host timer calls `tick()` then. A second release keeps the first
+    /// time. Only a PTT lease can be released.
+    pub fn release(&self, lease_id: LeaseNo) -> Result<u64, CaptureError> {
+        let result = self.commit(|inner, now, evs| {
+            inner.expire(now, evs);
+            let rec = inner.find(lease_id).ok_or(CaptureError::UnknownLease)?;
+            if rec.mode != CaptureMode::Ptt {
+                return Err(CaptureError::InvalidMode);
+            }
+            Ok(*rec.release_at.get_or_insert(now + POST_ROLL_MS))
+        });
+        self.request_sync();
+        result
+    }
+
+    /// A tap or a cancelled PTT (CAP-44b): stop the PTT lease now with
+    /// [`StopReason::Discarded`], so its audio never goes to the journal or to STT. Also in the
+    /// post-roll. Only a PTT lease can be discarded.
+    pub fn discard(&self, lease_id: LeaseNo) -> Result<CaptureState, CaptureError> {
+        let result = self.commit(|inner, now, evs| {
+            inner.expire(now, evs);
+            let rec = inner.find(lease_id).ok_or(CaptureError::UnknownLease)?;
+            if rec.mode != CaptureMode::Ptt {
+                return Err(CaptureError::InvalidMode);
+            }
+            if let Some(rec) = inner.remove(lease_id, now) {
+                evs.push(rec.stopped(StopReason::Discarded));
+            }
+            Ok(inner.state())
+        });
+        self.request_sync();
+        result
+    }
+
+    /// Stop the hands-free lease on a tap or Esc (CAP-14b). The mic closes before this returns
+    /// when no other lease needs it. With no hands-free lease, nothing changes. A PTT over the
+    /// hands-free lease keeps the mic.
+    pub fn stop_hands_free(&self, by: HandsFreeStop) -> CaptureState {
+        let reason = match by {
+            HandsFreeStop::Tap => StopReason::Tap,
+            HandsFreeStop::Escape => StopReason::Escape,
+        };
+        let state = self.commit(|inner, now, evs| {
+            inner.expire(now, evs);
+            let hf = inner
+                .primary
+                .as_ref()
+                .filter(|p| p.mode == CaptureMode::HandsFree)
+                .map(|p| p.id);
+            if let Some(rec) = hf.and_then(|id| inner.remove(id, now)) {
+                evs.push(rec.stopped(reason));
+            }
+            inner.state()
+        });
+        self.request_sync();
+        state
     }
 
     fn now_ms(&self) -> u64 {
@@ -886,6 +1071,11 @@ impl CaptureService for CaptureCore {
                 _ => return Err(CaptureError::MicBusy),
             };
             inner.next_no += 1;
+            let vad_end_ms = inner
+                .vad_end_ms
+                .get(&request.mog_id)
+                .copied()
+                .unwrap_or(DEFAULT_VAD_END_MS);
             let rec = LeaseRec {
                 id: inner.next_no,
                 mog_id: request.mog_id,
@@ -894,6 +1084,10 @@ impl CaptureService for CaptureCore {
                 started_epoch: self.epoch_origin_ms.saturating_add(now),
                 others_track: request.others_track,
                 paused: false,
+                release_at: None,
+                vad_end_ms,
+                quiet_since: None,
+                heard: false,
             };
             let lease = Lease {
                 id: rec.id,
@@ -950,7 +1144,7 @@ impl CaptureService for CaptureCore {
                 return Err(CaptureError::Device(DEVICE_LOST));
             }
             if let Some(id) = preempt {
-                if let Some(hf) = inner.remove(id) {
+                if let Some(hf) = inner.remove(id, self.now_ms()) {
                     evs.push(hf.stopped(StopReason::Preempted));
                 }
             }
@@ -967,7 +1161,9 @@ impl CaptureService for CaptureCore {
     fn stop(&self, lease_id: LeaseNo) -> Result<CaptureState, CaptureError> {
         let result = self.commit(|inner, now, evs| {
             inner.expire(now, evs);
-            let rec = inner.remove(lease_id).ok_or(CaptureError::UnknownLease)?;
+            let rec = inner
+                .remove(lease_id, now)
+                .ok_or(CaptureError::UnknownLease)?;
             evs.push(rec.stopped(StopReason::Manual));
             Ok(inner.state())
         });
@@ -1016,11 +1212,7 @@ impl CaptureService for CaptureCore {
     fn tick(&self) -> Option<u64> {
         let next = self.commit(|inner, now, evs| {
             inner.expire(now, evs);
-            [&inner.overlay, &inner.primary]
-                .into_iter()
-                .flatten()
-                .filter_map(|rec| rec.deadline().map(|(at, _)| at))
-                .min()
+            inner.next_deadline()
         });
         self.request_sync();
         next

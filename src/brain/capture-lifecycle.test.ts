@@ -280,7 +280,9 @@ describe('capture lifecycle: hands-free (#14)', () => {
     await handsFree(r);
     r.lc.click(A);
     expect(r.calls.at(-1)).toEqual(['stopHandsFree', { mogId: A, leaseId: '1', by: 'click' }]);
-    const off = rig({ config: () => ({ modes: ['ptt', 'hands_free'], clickTogglesListening: false }) });
+    const off = rig({
+      config: () => ({ modes: ['ptt', 'hands_free'], clickTogglesListening: false }),
+    });
     await handsFree(off);
     off.lc.click(A);
     expect(names(off.calls)).toEqual(['start']);
@@ -318,7 +320,10 @@ describe('capture lifecycle wiring (#14)', () => {
     // A badge click is not a mascot click.
     await bus.dispatch({
       event: 'view:input',
-      payload: { from: `mog-${B}`, input: { mogId: B, kind: 'click', payload: { target: 'badge' } } },
+      payload: {
+        from: `mog-${B}`,
+        input: { mogId: B, kind: 'click', payload: { target: 'badge' } },
+      },
     });
     await bus.dispatch({ event: 'hotkey:ptt', payload: { mogId: A, phase: 'down' } });
     await r.flush();

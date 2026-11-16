@@ -22,6 +22,7 @@ fn main() {
         downs: AtomicU64,
         ups: AtomicU64,
         cancels: AtomicU64,
+        double_taps: AtomicU64,
     }
     impl HotkeySink for Print {
         fn emit(&self, output: HotkeyOutput) {
@@ -32,6 +33,7 @@ fn main() {
                         PttPhase::Down => &self.downs,
                         PttPhase::Up => &self.ups,
                         PttPhase::Cancel => &self.cancels,
+                        PttPhase::DoubleTap => &self.double_taps,
                     };
                     let count = n.fetch_add(1, Ordering::Relaxed) + 1;
                     println!("{ms:>9} ms  ptt {:<6} #{count}", phase.as_str());
@@ -50,6 +52,7 @@ fn main() {
         downs: AtomicU64::new(0),
         ups: AtomicU64::new(0),
         cancels: AtomicU64::new(0),
+        double_taps: AtomicU64::new(0),
     });
     let service = MacHotkeyService::new(TalkKey::RightOption, sink);
     if let Err(e) = service.start() {

@@ -1483,7 +1483,10 @@ fn cap_12b_release_keeps_the_mic_open_for_the_120_ms_post_roll() {
     assert_eq!(r.svc.tick(), None);
     assert!(!r.device.log().mic_open);
     let stop = last_stop(&r);
-    assert_eq!((stop.lease_id, stop.reason), (lease.id, StopReason::Released));
+    assert_eq!(
+        (stop.lease_id, stop.reason),
+        (lease.id, StopReason::Released)
+    );
     assert!(!stop.reason.discards_audio());
     assert_eq!(StopReason::Released.code(), "released");
 }
@@ -1528,7 +1531,10 @@ fn cap_44b_discard_stops_the_tap_at_once_and_drops_its_audio() {
     assert!(!state.recording);
     assert!(!r.device.log().mic_open);
     let stop = last_stop(&r);
-    assert_eq!((stop.lease_id, stop.reason), (lease.id, StopReason::Discarded));
+    assert_eq!(
+        (stop.lease_id, stop.reason),
+        (lease.id, StopReason::Discarded)
+    );
     // The segment pipeline (#116) drops the audio of a lease that stops with this reason.
     assert!(stop.reason.discards_audio());
     assert_eq!(StopReason::Discarded.code(), "discarded");
@@ -1542,7 +1548,10 @@ fn cap_44b_discard_during_the_post_roll_still_drops_the_audio() {
     r.svc.release(lease.id).unwrap();
     r.svc.discard(lease.id).unwrap();
     assert_eq!(last_stop(&r).reason, StopReason::Discarded);
-    assert_eq!(r.svc.discard(lease.id).unwrap_err(), CaptureError::UnknownLease);
+    assert_eq!(
+        r.svc.discard(lease.id).unwrap_err(),
+        CaptureError::UnknownLease
+    );
 }
 
 #[test]
@@ -1552,7 +1561,10 @@ fn cap_14b_a_tap_stops_hands_free_and_keeps_its_audio() {
     r.advance(30_000);
     let state = r.svc.stop_hands_free(HandsFreeStop::Tap);
     assert!(!state.recording);
-    assert!(!r.device.log().mic_open, "closed 0 ms after the tap (<= 200 ms)");
+    assert!(
+        !r.device.log().mic_open,
+        "closed 0 ms after the tap (<= 200 ms)"
+    );
     let stop = last_stop(&r);
     assert_eq!((stop.lease_id, stop.reason), (hf.id, StopReason::Tap));
     assert!(!stop.reason.discards_audio());
@@ -1564,7 +1576,10 @@ fn cap_14b_esc_stops_hands_free_and_drops_its_audio() {
     let hf = r.svc.start(req("a", CaptureMode::HandsFree)).unwrap();
     r.advance(30_000);
     r.svc.stop_hands_free(HandsFreeStop::Escape);
-    assert!(!r.device.log().mic_open, "closed 0 ms after Esc (<= 200 ms)");
+    assert!(
+        !r.device.log().mic_open,
+        "closed 0 ms after Esc (<= 200 ms)"
+    );
     let stop = last_stop(&r);
     assert_eq!((stop.lease_id, stop.reason), (hf.id, StopReason::Escape));
     assert!(stop.reason.discards_audio());
@@ -1588,7 +1603,10 @@ fn cap_14b_the_5_min_cap_closes_the_mic_at_its_deadline() {
     assert_eq!(r.svc.tick(), Some(HANDS_FREE_MAX_MS));
     r.advance(HANDS_FREE_MAX_MS);
     r.svc.tick();
-    assert!(!r.device.log().mic_open, "closed 0 ms after the cap (<= 200 ms)");
+    assert!(
+        !r.device.log().mic_open,
+        "closed 0 ms after the cap (<= 200 ms)"
+    );
     assert_eq!(
         (last_stop(&r).lease_id, last_stop(&r).reason),
         (hf.id, StopReason::HandsFreeCap)

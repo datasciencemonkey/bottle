@@ -207,11 +207,14 @@ pub fn ptt_payload(mog_id: &str, phase: PttPhase) -> Value {
 ///
 /// The target is read at `down` and kept until `up` or `cancel`, so one press goes to one
 /// MOG even if the target moves during the hold. With no target, the press sends nothing.
+/// A `double_tap` goes to the MOG of the press it follows (CAP-14a).
 pub struct PttForwarder<B: BrainSink, S: StatusSink> {
     target: Arc<PttTarget>,
     brain: B,
     status: S,
     held: Option<String>,
+    /// The MOG of the last press that ended, for the `double_tap` that follows it.
+    last: Option<String>,
 }
 
 impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
@@ -222,6 +225,7 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
             brain,
             status,
             held: None,
+            last: None,
         }
     }
 
@@ -234,7 +238,11 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
                         self.held = self.target.current();
                         self.held.clone()
                     }
-                    PttPhase::Up | PttPhase::Cancel => self.held.take(),
+                    PttPhase::Up | PttPhase::Cancel => {
+                        self.last = self.held.take();
+                        self.last.clone()
+                    }
+                    PttPhase::DoubleTap => self.last.take(),
                 };
                 if let Some(mog) = mog {
                     // `false` means no brain listens yet; the press is dropped.
@@ -249,8 +257,8 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
                 self.status.status(HotkeyStatus::ChordUnavailable)
             }
             // A tap (CAP-44a) comes after `Ptt(Cancel)`, which already ended the PTT and
-            // dropped its audio. Section 4.5 has no `tap` phase; the double-tap rule
-            // (CAP-14a) reads it later.
+            // dropped its audio. Section 4.5 has no `tap` phase: the brain reads a short
+            // `cancel` as a tap (CAP-14b), and R1 sends `Ptt(DoubleTap)` for two (CAP-14a).
             HotkeyOutput::Tap => {}
         }
     }
@@ -297,7 +305,7 @@ where
 /// No kind carries the identity of a key (SEC rules).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeferredSignal {
-    /// Esc went down during capture. The capture lifecycle (#14) ends hands-free capture.
+    /// Esc went down during capture. It ends hands-free capture (CAP-14b, #434).
     Escape,
     /// An elevated window blocks the talk key. It becomes `hotkey.status` for the CAP-42
     /// tooltip (#294).
@@ -365,7 +373,7 @@ impl HookSignalSeam for HookConsumers {
                 }
             }
             DeferredSignal::Escape => {
-                // TODO(#14): the capture lifecycle ends hands-free capture on Esc.
+                // TODO(#434): the host calls `CaptureCore::stop_hands_free(Escape)` (with #425).
             }
             // CAP-42: the core sends it once per elevated process; the MOG shows the tooltip.
             DeferredSignal::TalkKeyBlocked => self.status(HotkeyStatus::Blocked),
@@ -1739,7 +1747,7 @@ mod tests {
             .split("\n}\n")
             .next()
             .unwrap();
-        for todo in ["TODO(#14)", "TODO(#346)"] {
+        for todo in ["TODO(#434)", "TODO(#346)"] {
             assert!(seam.contains(todo), "the seam misses {todo}");
         }
         // #294 and #297 are done: those arms send `hotkey.status` (ADR 0039).

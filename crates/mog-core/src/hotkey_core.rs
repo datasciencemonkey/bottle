@@ -51,6 +51,9 @@ pub const CHORD_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 /// A talk-key hold shorter than this is a tap (CAP-44a).
 pub const TAP_MAX_HOLD: Duration = Duration::from_millis(250);
 
+/// Two taps whose key-downs are this close or closer make a double-tap (CAP-14a, ADR 0057).
+pub const DOUBLE_TAP_MAX_GAP: Duration = Duration::from_millis(400);
+
 /// Another key that goes down this soon after the talk key cancels the PTT (CAP-44c).
 pub const OTHER_KEY_CANCEL_WINDOW: Duration = Duration::from_secs(1);
 
@@ -77,7 +80,7 @@ pub enum KeyEdge {
     Up,
 }
 
-/// The phase of the `hotkey.ptt` event (section 4.5). `double_tap` belongs to a later issue.
+/// The phase of the `hotkey.ptt` event (section 4.5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PttPhase {
     /// The talk key went down: start PTT.
@@ -86,6 +89,9 @@ pub enum PttPhase {
     Up,
     /// PTT ends and the audio is dropped (for example when Secure Event Input starts).
     Cancel,
+    /// A second tap came [`DOUBLE_TAP_MAX_GAP`] or less after the first (key-down to key-down):
+    /// start hands-free (CAP-14a). It follows the second `Tap`.
+    DoubleTap,
 }
 
 impl PttPhase {
@@ -95,6 +101,7 @@ impl PttPhase {
             PttPhase::Down => "down",
             PttPhase::Up => "up",
             PttPhase::Cancel => "cancel",
+            PttPhase::DoubleTap => "double_tap",
         }
     }
 }
@@ -125,7 +132,8 @@ pub enum HotkeyOutput {
     FallbackChordUnavailable,
     /// The talk key was held for less than [`TAP_MAX_HOLD`] (CAP-44a). R1 emits it after
     /// `Ptt(Cancel)`, so the audio of the tap is dropped and no STT call starts (CAP-44b).
-    /// The double-tap rule (CAP-14a) and the hands-free stop (CAP-14b) read it.
+    /// The hands-free stop (CAP-14b) reads it. Two taps close together also give
+    /// `Ptt(DoubleTap)` (CAP-14a).
     Tap,
 }
 
@@ -485,6 +493,8 @@ pub struct HotkeyEngine {
     last_tap_retry: Option<Duration>,
     clock: Arc<dyn MonotonicClock>,
     held_since: Option<Duration>,
+    /// The key-down time of the last tap, while it can still be the first of a double-tap.
+    last_tap_down: Option<Duration>,
 }
 
 impl std::fmt::Debug for HotkeyEngine {
@@ -517,6 +527,7 @@ impl HotkeyEngine {
             last_tap_retry: None,
             clock,
             held_since: None,
+            last_tap_down: None,
         }
     }
 
@@ -526,6 +537,7 @@ impl HotkeyEngine {
     pub fn on_other_key_down(&mut self) {
         if self.other_key_window_open() {
             self.held_since = None;
+            self.last_tap_down = None;
             let out = self.machine.cancel();
             self.emit(out);
         }
@@ -553,16 +565,31 @@ impl HotkeyEngine {
                     timed.push(o);
                 }
                 HotkeyOutput::Ptt(PttPhase::Up) => {
-                    let short = self
-                        .held_since
-                        .take()
-                        .is_some_and(|t| now.saturating_sub(t) < TAP_MAX_HOLD);
-                    if short {
-                        timed.push(HotkeyOutput::Ptt(PttPhase::Cancel));
-                        timed.push(HotkeyOutput::Tap);
-                    } else {
-                        timed.push(o);
+                    let down = self.held_since.take();
+                    match down.filter(|t| now.saturating_sub(*t) < TAP_MAX_HOLD) {
+                        Some(down) => {
+                            timed.push(HotkeyOutput::Ptt(PttPhase::Cancel));
+                            timed.push(HotkeyOutput::Tap);
+                            // CAP-14a: the second of two close taps is a double-tap. A third
+                            // tap starts a new pair.
+                            match self.last_tap_down.take() {
+                                Some(first) if down.saturating_sub(first) <= DOUBLE_TAP_MAX_GAP => {
+                                    timed.push(HotkeyOutput::Ptt(PttPhase::DoubleTap));
+                                }
+                                _ => self.last_tap_down = Some(down),
+                            }
+                        }
+                        None => {
+                            self.last_tap_down = None;
+                            timed.push(o);
+                        }
                     }
+                }
+                HotkeyOutput::Ptt(PttPhase::Cancel) => {
+                    // A cancelled press (CAP-44c, Secure Event Input, a reset) is no tap.
+                    self.held_since = None;
+                    self.last_tap_down = None;
+                    timed.push(o);
                 }
                 other => timed.push(other),
             }
@@ -715,6 +742,7 @@ impl HotkeyEngine {
         self.chord_reported = false;
         self.last_tap_retry = None;
         self.held_since = None;
+        self.last_tap_down = None;
         self.emit(out);
     }
 

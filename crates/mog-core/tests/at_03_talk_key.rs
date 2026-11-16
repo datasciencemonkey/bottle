@@ -239,7 +239,8 @@ fn at_03_cap_14a_cap_14b_cap_14c_cap_44b_hands_free_starts_and_stops_and_tap_aud
 
     // The double-tap starts hands-free; each of the three stops closes the mic at once
     // (CAP-14b, 200 ms or less).
-    r2.start(capture(CaptureMode::HandsFree)).expect("a hands-free lease");
+    r2.start(capture(CaptureMode::HandsFree))
+        .expect("a hands-free lease");
     r2.stop_hands_free(HandsFreeStop::Tap);
     assert!(!device.log().mic_open);
     assert_eq!(events.last_stop().unwrap().reason, StopReason::Tap);
@@ -260,7 +261,10 @@ fn at_03_cap_14a_cap_14b_cap_14c_cap_44b_hands_free_starts_and_stops_and_tap_aud
     r2.start(capture(CaptureMode::HandsFree)).unwrap();
     r2.voice_activity(true);
     let end = r2.voice_activity(false).expect("the VAD end deadline");
-    assert_eq!(end, u64::try_from(clock.now().as_millis()).unwrap() + DEFAULT_VAD_END_MS);
+    assert_eq!(
+        end,
+        u64::try_from(clock.now().as_millis()).unwrap() + DEFAULT_VAD_END_MS
+    );
     clock.advance(ms(DEFAULT_VAD_END_MS));
     r2.tick();
     assert_eq!(events.last_stop().unwrap().reason, StopReason::VadEnd);
