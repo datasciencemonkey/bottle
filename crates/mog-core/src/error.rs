@@ -50,6 +50,12 @@ pub enum CoreError {
         /// The component ID, for example `"R10"`.
         component: &'static str,
     },
+    /// The local store has a newer schema than this binary knows. R10 does not downgrade it
+    /// (MEM-35a) and does not delete it (U9).
+    StoreSchemaNewer {
+        /// The component ID, for example `"R10"`.
+        component: &'static str,
+    },
     /// A local store statement or its parameters have no `mog_id` filter (MEM-01).
     MogIdRequired {
         /// The component ID, for example `"R10"`.
@@ -68,6 +74,7 @@ impl CoreError {
             CoreError::StoreUnavailable { .. } => "store_unavailable",
             CoreError::StoreKeyLost { .. } => "store_key_lost",
             CoreError::KeychainUnavailable { .. } => "keychain_unavailable",
+            CoreError::StoreSchemaNewer { .. } => "store_schema_newer",
             CoreError::MogIdRequired { .. } => "mog_id_required",
         }
     }
@@ -94,6 +101,12 @@ impl fmt::Display for CoreError {
             }
             CoreError::KeychainUnavailable { component } => {
                 write!(f, "{component} could not use the OS key store")
+            }
+            CoreError::StoreSchemaNewer { component } => {
+                write!(
+                    f,
+                    "{component} has a newer local store schema than this build"
+                )
             }
             CoreError::MogIdRequired { component } => {
                 write!(f, "{component} needs a mog_id filter")

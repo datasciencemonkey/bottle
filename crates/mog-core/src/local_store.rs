@@ -5,6 +5,7 @@
 use crate::error::{CoreError, CoreResult};
 
 pub mod key_vault;
+mod migrate;
 pub mod mog_guard;
 mod store;
 #[cfg(test)]
