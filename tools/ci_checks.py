@@ -23,6 +23,7 @@ The html and mascot checks regenerate the file; if it changes, commit the result
 """
 import fnmatch
 import glob
+import hashlib
 import json
 import os
 import py_compile
@@ -70,6 +71,24 @@ def check_html():
 
 def check_mascot():
     return regenerated(SCENE, "tools/gen_mog_rml.py")
+
+
+def fallback_problems(root):
+    """The PNG fallback must come from the current scene.rml (UX-09b). No Rive CLI is needed:
+    tools/render_mog_fallback.py records the SHA-256 of scene.rml in fallback/SOURCE.sha256."""
+    rerun = "run uv run --no-project --with pillow python tools/render_mog_fallback.py and commit the result"
+    recorded = os.path.join(root, "mog-rive", "fallback", "SOURCE.sha256")
+    if not os.path.exists(recorded):
+        return [f"mog-rive/fallback/SOURCE.sha256 is missing: {rerun}"]
+    current = hashlib.sha256(read(os.path.join(root, "mog-rive", "scene.rml")).replace(b"\r\n", b"\n")).hexdigest()
+    if read(recorded).decode("utf-8").strip() != current:
+        return [f"mog-rive/fallback/*.png were not rendered from the current scene.rml: {rerun}"]
+    return []
+
+
+def check_fallback():
+    problems = fallback_problems(ROOT)
+    return (not problems), ("\n".join(problems) if problems else "the PNG fallback matches scene.rml")
 
 
 def check_brand():
@@ -337,7 +356,7 @@ def check_names():
 CHECKS = {"compile": check_compile, "html": check_html, "mascot": check_mascot,
           "brand": check_brand, "artifacts": check_artifacts, "gates": check_gates,
           "brandapproval": check_brandapproval,
-          "names": check_names, "structure": check_structure}
+          "names": check_names, "fallback": check_fallback, "structure": check_structure}
 
 
 def main(names):
