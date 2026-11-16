@@ -1,5 +1,5 @@
 /**
- * The mascot renderer seam (ADR 0001). SP-01 (#10) and #169 pick the Rive runtime;
+ * The mascot renderer seam (ADR 0002). SP-01 (#10) and #169 pick the Rive runtime;
  * until then a DOM placeholder renders. The MOG view only talks to this interface.
  */
 export interface MascotRenderer {

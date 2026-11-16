@@ -254,7 +254,7 @@ fn arc_4_views_get_no_brain_permissions() {
 
 // ---------- MB-10a / MB-10c: product name Bottle, no MOG in package or bundle IDs ----------
 //
-// MB-10c scope (ADR 0001): the bundle ID, the product name, the npm package and the app crate.
+// MB-10c scope (ADR 0002): the bundle ID, the product name, the npm package and the app crate.
 // The internal crates `mog-core` and `mog-core-ffi` are named by ARC-1, are `publish = false`
 // and never ship as a package or bundle ID, so they are out of scope.
 

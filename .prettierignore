@@ -16,3 +16,4 @@ AGENTS.md
 *.md
 .omc/
 .github/workflows/
+scripts/

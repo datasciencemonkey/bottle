@@ -1,4 +1,4 @@
-# ADR 0001: The foundation skeleton proceeds before spike SP-01
+# ADR 0002: The foundation skeleton proceeds before spike SP-01
 
 - Status: Accepted
 - Date: 2026-11-16

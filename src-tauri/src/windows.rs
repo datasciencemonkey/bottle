@@ -4,7 +4,7 @@
 //! ARC-3 without a GUI. `build` turns a spec into a real window.
 //!
 //! SP-01 (#10) can change how a transparent MOG window is made on macOS. That choice
-//! stays inside `transparency::apply` (see `docs/adr/0001-foundation-proceeds-before-sp01.md`).
+//! stays inside `transparency::apply` (see `docs/adr/0002-foundation-proceeds-before-sp01.md`).
 
 use std::time::Duration;
 
