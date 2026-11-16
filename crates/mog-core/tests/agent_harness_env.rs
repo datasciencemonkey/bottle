@@ -94,5 +94,21 @@ fn rtr_28_arc_7_spawned_harness_env_has_no_token_and_no_inherited_secrets() {
             .find(|(k, _)| k == base_env)
             .map(|(_, v)| v.as_str());
         assert_eq!(got, Some(base), "{h:?} gets only the loopback base URL");
+        // The user's home is not passed: no ~/.databrickscfg and no CLI token cache through it.
+        let home = std::env::var("HOME").unwrap_or_default();
+        assert!(
+            env.iter()
+                .all(|(k, v)| !(k == "HOME" || k == "USERPROFILE") || v != &home),
+            "{h:?} must not get the user's home"
+        );
     }
+
+    // A configured scratch home is the only home the runtime sees.
+    let scratch = std::env::temp_dir().join("bottle-agent-home-test");
+    let spec = launch_spec(
+        Harness::Claude,
+        &env_printer().with_home(&scratch),
+        "http://127.0.0.1:45678",
+    );
+    assert_eq!(spec.env_value("HOME"), scratch.to_str());
 }

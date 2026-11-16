@@ -27,7 +27,9 @@ fn rtr_21a_arc_f14_std_launcher_delivers_frames_and_reports_session_failure_and_
     let events = Arc::new(move |e: RuntimeEvent| {
         let _ = tx.lock().unwrap().send(e);
     });
-    let proc = StdRuntimeLauncher.launch(&spec, events).expect("spawns");
+    let proc = StdRuntimeLauncher::default()
+        .launch(&spec, events)
+        .expect("spawns");
     proc.send_frame(&json!({"type": "open_session", "sessionId": "as-1"}))
         .unwrap();
     let first = rx.recv_timeout(Duration::from_secs(10)).expect("event");
@@ -48,7 +50,7 @@ fn arc_f14_std_launcher_reports_exit_when_the_runtime_dies() {
     let spec = launch_spec(Harness::Codex, &cfg, "http://127.0.0.1:1");
     let (tx, rx) = mpsc::channel();
     let tx = std::sync::Mutex::new(tx);
-    let proc = StdRuntimeLauncher
+    let proc = StdRuntimeLauncher::default()
         .launch(
             &spec,
             Arc::new(move |e| {
@@ -67,6 +69,42 @@ fn arc_f14_std_launcher_reports_exit_when_the_runtime_dies() {
 fn arc_f14_std_launcher_fails_cleanly_for_a_missing_program() {
     let cfg = RuntimeConfig::new("/nonexistent/bottle-harness-runtime", Vec::new());
     let spec = launch_spec(Harness::Claude, &cfg, "http://127.0.0.1:1");
-    let r = StdRuntimeLauncher.launch(&spec, Arc::new(|_| {}));
+    let r = StdRuntimeLauncher::default().launch(&spec, Arc::new(|_| {}));
     assert_eq!(r.err().map(|e| e.code()), Some("agent_launch_failed"));
+}
+
+#[test]
+fn arc_f14_std_launcher_stops_a_runtime_that_does_not_take_its_frames() {
+    // The runtime stays alive and never reads stdin: "does not answer" (ARC-F14).
+    let cfg = RuntimeConfig::new("/bin/sleep", vec!["30".into()]);
+    let spec = launch_spec(Harness::Claude, &cfg, "http://127.0.0.1:1");
+    let (tx, rx) = mpsc::channel();
+    let tx = std::sync::Mutex::new(tx);
+    let launcher = StdRuntimeLauncher {
+        write_deadline: Duration::from_millis(300),
+    };
+    let proc = launcher
+        .launch(
+            &spec,
+            Arc::new(move |e| {
+                let _ = tx.lock().unwrap().send(e);
+            }),
+        )
+        .expect("spawns");
+    let big = json!({ "type": "turn", "sessionId": "as-1", "turn": "x".repeat(256 * 1024) });
+    let started = std::time::Instant::now();
+    for _ in 0..8 {
+        let t = std::time::Instant::now();
+        let _ = proc.send_frame(&big);
+        assert!(
+            t.elapsed() < Duration::from_millis(200),
+            "send_frame never blocks"
+        );
+    }
+    assert_eq!(
+        rx.recv_timeout(Duration::from_secs(10)).expect("killed"),
+        RuntimeEvent::Exited
+    );
+    assert!(started.elapsed() < Duration::from_secs(10));
+    proc.stop();
 }

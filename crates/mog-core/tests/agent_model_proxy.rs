@@ -124,8 +124,13 @@ fn raw(proxy: &ModelProxy, request: &[u8]) -> (u16, String) {
     (status, body)
 }
 
+/// The Host header value of the proxy listener.
+fn host_of(proxy: &ModelProxy) -> String {
+    proxy.base_url().trim_start_matches("http://").to_owned()
+}
+
 fn post(proxy: &ModelProxy, path: &str, headers: &[(&str, &str)], body: &str) -> (u16, String) {
-    let mut req = format!("POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n");
+    let mut req = format!("POST {path} HTTP/1.1\r\nHost: {}\r\n", host_of(proxy));
     for (k, v) in headers {
         req.push_str(&format!("{k}: {v}\r\n"));
     }
@@ -264,7 +269,18 @@ fn rtr_23_local_model_must_be_on_loopback() {
 #[test]
 fn rtr_23_gateway_host_must_be_a_bare_host_name() {
     let r = rig();
-    for bad in ["evil.com/x", "a@b.com", "h:443", "", "h h", "evil.com?x=1"] {
+    for bad in [
+        "evil.com/x",
+        "a@b.com",
+        "h:443",
+        "",
+        "h h",
+        "evil.com?x=1",
+        "169.254.169.254",
+        "10.0.0.1",
+        "localhost",
+        "[::1]",
+    ] {
         let s = SessionSecret::generate();
         let route = ModelRoute {
             mog_id: "m".into(),
@@ -350,7 +366,8 @@ fn arc_7_rtr_29c_only_model_paths_are_forwarded() {
         assert_eq!(status, 404, "{path}");
     }
     let get = format!(
-        "GET /anthropic/v1/messages HTTP/1.1\r\nx-api-key: {}\r\n\r\n",
+        "GET /anthropic/v1/messages HTTP/1.1\r\nHost: {}\r\nx-api-key: {}\r\n\r\n",
+        host_of(&r.proxy),
         s.as_str()
     );
     assert_eq!(raw(&r.proxy, get.as_bytes()).0, 405);
@@ -365,12 +382,14 @@ fn arc_7_chunked_and_oversize_bodies_are_refused() {
         .register(&s, gateway("mog-a", Harness::Claude))
         .unwrap();
     let chunked = format!(
-        "POST /anthropic/v1/messages HTTP/1.1\r\nx-api-key: {}\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
+        "POST /anthropic/v1/messages HTTP/1.1\r\nHost: {}\r\nx-api-key: {}\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
+        host_of(&r.proxy),
         s.as_str()
     );
     assert_eq!(raw(&r.proxy, chunked.as_bytes()).0, 411);
     let huge = format!(
-        "POST /anthropic/v1/messages HTTP/1.1\r\nx-api-key: {}\r\nContent-Length: 999999999\r\n\r\n",
+        "POST /anthropic/v1/messages HTTP/1.1\r\nHost: {}\r\nx-api-key: {}\r\nContent-Length: 999999999\r\n\r\n",
+        host_of(&r.proxy),
         s.as_str()
     );
     assert_eq!(raw(&r.proxy, huge.as_bytes()).0, 413);
@@ -410,4 +429,112 @@ fn arc_7_session_secret_debug_is_redacted_and_secrets_differ() {
     assert_ne!(a.as_str(), b.as_str());
     assert!(a.as_str().len() >= 43, "at least 256 bits");
     assert!(!format!("{a:?}").contains(a.as_str()));
+}
+
+// ---------- ARC-7: strict request parsing (review of #309) ----------
+
+/// A registered Claude session and a raw request builder with the right Host header.
+fn claude_session(r: &Rig) -> SessionSecret {
+    let s = SessionSecret::generate();
+    r.proxy
+        .register(&s, gateway("mog-a", Harness::Claude))
+        .unwrap();
+    s
+}
+
+#[test]
+fn arc_7_bare_line_feed_or_control_char_in_a_header_is_refused() {
+    let r = rig();
+    let s = claude_session(&r);
+    for evil in [
+        "content-type: application/json\nx-injected: 1",
+        "content-type: application/json\rx-injected: 1",
+        "anthropic-beta: a\u{0}b",
+    ] {
+        let req = format!(
+            "POST /anthropic/v1/messages HTTP/1.1\r\nHost: {}\r\nx-api-key: {}\r\n{evil}\r\nContent-Length: 2\r\n\r\n{{}}",
+            host_of(&r.proxy),
+            s.as_str()
+        );
+        assert_eq!(raw(&r.proxy, req.as_bytes()).0, 400, "{evil:?}");
+    }
+    assert_eq!(r.upstream.calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn arc_7_folded_header_is_refused() {
+    let r = rig();
+    let s = claude_session(&r);
+    let req = format!(
+        "POST /anthropic/v1/messages HTTP/1.1\r\nHost: {}\r\nx-api-key: {}\r\nanthropic-beta: a\r\n x-injected: 1\r\nContent-Length: 2\r\n\r\n{{}}",
+        host_of(&r.proxy),
+        s.as_str()
+    );
+    assert_eq!(raw(&r.proxy, req.as_bytes()).0, 400);
+    assert_eq!(r.upstream.calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn arc_7_duplicate_length_or_credential_headers_are_refused() {
+    let r = rig();
+    let s = claude_session(&r);
+    let (status, _) = post(
+        &r.proxy,
+        "/anthropic/v1/messages",
+        &[("x-api-key", s.as_str()), ("Content-Length", "2")],
+        "{}",
+    );
+    assert_eq!(status, 400, "two Content-Length headers");
+    let (status, _) = post(
+        &r.proxy,
+        "/anthropic/v1/messages",
+        &[("x-api-key", s.as_str()), ("x-api-key", "other")],
+        "{}",
+    );
+    assert_eq!(status, 400, "two x-api-key headers");
+    assert_eq!(r.upstream.calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn arc_7_transfer_encoding_with_content_length_is_refused() {
+    let r = rig();
+    let s = claude_session(&r);
+    let (status, _) = post(
+        &r.proxy,
+        "/anthropic/v1/messages",
+        &[("x-api-key", s.as_str()), ("Transfer-Encoding", "chunked")],
+        "{}",
+    );
+    assert_eq!(status, 411);
+    assert_eq!(r.upstream.calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn arc_7_host_header_must_name_the_loopback_listener() {
+    let r = rig();
+    let s = claude_session(&r);
+    let port = host_of(&r.proxy).rsplit(':').next().unwrap().to_owned();
+    for host in [
+        Some("evil.example".to_owned()),
+        Some(format!("evil.example:{port}")),
+        Some("127.0.0.1:1".to_owned()),
+        None,
+    ] {
+        let mut req = String::from("POST /anthropic/v1/messages HTTP/1.1\r\n");
+        if let Some(h) = &host {
+            req.push_str(&format!("Host: {h}\r\n"));
+        }
+        req.push_str(&format!(
+            "x-api-key: {}\r\nContent-Length: 2\r\n\r\n{{}}",
+            s.as_str()
+        ));
+        assert_eq!(raw(&r.proxy, req.as_bytes()).0, 403, "{host:?}");
+    }
+    let localhost = format!("localhost:{port}");
+    let req = format!(
+        "POST /anthropic/v1/messages HTTP/1.1\r\nHost: {localhost}\r\nx-api-key: {}\r\nContent-Length: 2\r\n\r\n{{}}",
+        s.as_str()
+    );
+    assert_eq!(raw(&r.proxy, req.as_bytes()).0, 200);
+    assert_eq!(r.upstream.calls.load(Ordering::SeqCst), 1);
 }

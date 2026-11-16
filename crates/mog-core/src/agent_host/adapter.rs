@@ -105,10 +105,15 @@ pub fn adapter(h: Harness) -> &'static dyn HarnessAdapter {
 }
 
 /// The launch spec of the shared runtime of `h`: the configured program and arguments, and a
-/// clean environment with only the loopback base URL added (ARC-7, RTR-28).
+/// clean environment with only the loopback base URL and the scratch home added (ARC-7, RTR-28).
 pub fn launch_spec(h: Harness, config: &RuntimeConfig, proxy_base: &str) -> LaunchSpec {
     let a = adapter(h);
-    let env = harness_env_from_process(&[(a.base_url_env(), a.harness_base_url(proxy_base))]);
+    let mut extra = vec![(a.base_url_env(), a.harness_base_url(proxy_base))];
+    if let Some(home) = config.home.as_ref().and_then(|p| p.to_str()) {
+        extra.push(("HOME", home.to_owned()));
+        extra.push(("USERPROFILE", home.to_owned()));
+    }
+    let env = harness_env_from_process(&extra);
     LaunchSpec {
         harness: h,
         program: config.program.clone(),

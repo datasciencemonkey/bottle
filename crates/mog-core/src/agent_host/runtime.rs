@@ -8,8 +8,11 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -23,15 +26,26 @@ pub struct RuntimeConfig {
     pub program: PathBuf,
     /// The fixed arguments.
     pub args: Vec<String>,
+    /// A Bottle-owned scratch home folder for the runtime (`HOME`, `USERPROFILE`). The user's
+    /// home is never passed, so the harness cannot find `~/.databrickscfg` or the CLI token cache
+    /// through it (ARC-7). `None` gives the runtime no home variable at all.
+    pub home: Option<PathBuf>,
 }
 
 impl RuntimeConfig {
-    /// A config for `program` with `args`.
+    /// A config for `program` with `args` and no home folder.
     pub fn new(program: impl Into<PathBuf>, args: Vec<String>) -> Self {
         Self {
             program: program.into(),
             args,
+            home: None,
         }
+    }
+
+    /// The same config with the scratch home folder `home`.
+    pub fn with_home(mut self, home: impl Into<PathBuf>) -> Self {
+        self.home = Some(home.into());
+        self
     }
 }
 
@@ -75,7 +89,9 @@ pub type RuntimeEvents = Arc<dyn Fn(RuntimeEvent) + Send + Sync>;
 
 /// A running runtime process.
 pub trait RuntimeProcess: Send + Sync {
-    /// Write one frame to the runtime.
+    /// Queue one frame for the runtime. It must not block: the host may call it while it holds
+    /// its state lock. A runtime that does not take its frames fails with
+    /// [`AgentError::Unavailable`] and must end in [`RuntimeEvent::Exited`].
     fn send_frame(&self, frame: &Value) -> Result<(), AgentError>;
     /// Stop the process.
     fn stop(&self);
@@ -83,7 +99,8 @@ pub trait RuntimeProcess: Send + Sync {
 
 /// Starts runtime processes.
 pub trait RuntimeLauncher: Send + Sync {
-    /// Start the runtime of `spec`. `events` gets its events until it exits.
+    /// Start the runtime of `spec`. `events` gets its events until it exits. `launch` must not
+    /// call `events` before it returns.
     fn launch(
         &self,
         spec: &LaunchSpec,
@@ -112,33 +129,56 @@ fn parse_event(line: &str) -> Option<RuntimeEvent> {
     }
 }
 
+/// The default write deadline of [`StdRuntimeLauncher`].
+pub const WRITE_DEADLINE: Duration = Duration::from_secs(10);
+/// The number of frames that can wait for the runtime.
+pub const FRAME_QUEUE: usize = 64;
+
 /// Starts the runtime as a real child process with piped stdin and stdout. Its stderr goes to
 /// the null device: harness output can hold user content and is never logged (SEC rules).
-#[derive(Debug, Default, Clone, Copy)]
-pub struct StdRuntimeLauncher;
+///
+/// Frames go through a bounded queue to a writer thread, so [`RuntimeProcess::send_frame`] never
+/// blocks. If one write takes longer than `write_deadline`, the runtime does not answer
+/// (ARC-F14): a watchdog kills it, its stdout ends and the host gets [`RuntimeEvent::Exited`].
+#[derive(Debug, Clone, Copy)]
+pub struct StdRuntimeLauncher {
+    /// The longest time one frame write may take.
+    pub write_deadline: Duration,
+}
+
+impl Default for StdRuntimeLauncher {
+    fn default() -> Self {
+        Self {
+            write_deadline: WRITE_DEADLINE,
+        }
+    }
+}
 
 struct StdRuntimeProcess {
-    child: Mutex<Child>,
-    stdin: Mutex<Option<ChildStdin>>,
+    child: Arc<Mutex<Child>>,
+    frames: Mutex<Option<SyncSender<Vec<u8>>>>,
+}
+
+fn kill(child: &Mutex<Child>) {
+    let mut c = child.lock().unwrap_or_else(|p| p.into_inner());
+    let _ = c.kill();
+    let _ = c.wait();
 }
 
 impl RuntimeProcess for StdRuntimeProcess {
     fn send_frame(&self, frame: &Value) -> Result<(), AgentError> {
-        let mut guard = self.stdin.lock().unwrap_or_else(|p| p.into_inner());
-        let stdin = guard.as_mut().ok_or(AgentError::Unavailable)?;
-        let mut line = frame.to_string();
-        line.push('\n');
-        stdin
-            .write_all(line.as_bytes())
-            .and_then(|_| stdin.flush())
-            .map_err(|_| AgentError::Unavailable)
+        let guard = self.frames.lock().unwrap_or_else(|p| p.into_inner());
+        let tx = guard.as_ref().ok_or(AgentError::Unavailable)?;
+        let mut line = frame.to_string().into_bytes();
+        line.push(b'\n');
+        tx.try_send(line).map_err(|e| match e {
+            TrySendError::Full(_) | TrySendError::Disconnected(_) => AgentError::Unavailable,
+        })
     }
 
     fn stop(&self) {
-        self.stdin.lock().unwrap_or_else(|p| p.into_inner()).take();
-        let mut child = self.child.lock().unwrap_or_else(|p| p.into_inner());
-        let _ = child.kill();
-        let _ = child.wait();
+        self.frames.lock().unwrap_or_else(|p| p.into_inner()).take();
+        kill(&self.child);
     }
 }
 
@@ -146,6 +186,14 @@ impl Drop for StdRuntimeProcess {
     fn drop(&mut self) {
         self.stop();
     }
+}
+
+fn spawn_thread(name: &str, f: impl FnOnce() + Send + 'static) -> Result<(), AgentError> {
+    std::thread::Builder::new()
+        .name(name.into())
+        .spawn(f)
+        .map(|_| ())
+        .map_err(|_| AgentError::LaunchFailed)
 }
 
 impl RuntimeLauncher for StdRuntimeLauncher {
@@ -160,23 +208,58 @@ impl RuntimeLauncher for StdRuntimeLauncher {
             .stderr(Stdio::null())
             .spawn()
             .map_err(|_| AgentError::LaunchFailed)?;
-        let stdin = child.stdin.take();
+        let mut stdin = child.stdin.take().ok_or(AgentError::LaunchFailed)?;
         let stdout = child.stdout.take().ok_or(AgentError::LaunchFailed)?;
-        std::thread::Builder::new()
-            .name("bottle-agent-runtime".into())
-            .spawn(move || {
-                for line in BufReader::new(stdout).lines() {
-                    let Ok(line) = line else { break };
-                    if let Some(e) = parse_event(&line) {
-                        events(e);
-                    }
+        let child = Arc::new(Mutex::new(child));
+        let (tx, rx) = sync_channel::<Vec<u8>>(FRAME_QUEUE);
+        let busy_since: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
+        let done = Arc::new(AtomicBool::new(false));
+
+        let (busy, d) = (busy_since.clone(), done.clone());
+        spawn_thread("bottle-agent-runtime-writer", move || {
+            for line in rx {
+                *busy.lock().unwrap_or_else(|p| p.into_inner()) = Some(Instant::now());
+                let ok = stdin.write_all(&line).and_then(|_| stdin.flush()).is_ok();
+                *busy.lock().unwrap_or_else(|p| p.into_inner()) = None;
+                if !ok {
+                    break;
                 }
-                events(RuntimeEvent::Exited);
-            })
-            .map_err(|_| AgentError::LaunchFailed)?;
+            }
+            d.store(true, Ordering::SeqCst);
+        })?;
+
+        let (c, d, deadline) = (child.clone(), done.clone(), self.write_deadline);
+        let tick = (deadline / 4).clamp(Duration::from_millis(10), Duration::from_millis(500));
+        spawn_thread("bottle-agent-runtime-watchdog", move || {
+            while !d.load(Ordering::SeqCst) {
+                std::thread::sleep(tick);
+                let stuck = busy_since
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .is_some_and(|t| t.elapsed() > deadline);
+                if stuck {
+                    // The runtime does not take its frames: stop it, so its stdout ends.
+                    kill(&c);
+                    break;
+                }
+            }
+        })?;
+
+        let d = done;
+        spawn_thread("bottle-agent-runtime-reader", move || {
+            for line in BufReader::new(stdout).lines() {
+                let Ok(line) = line else { break };
+                if let Some(e) = parse_event(&line) {
+                    events(e);
+                }
+            }
+            d.store(true, Ordering::SeqCst);
+            events(RuntimeEvent::Exited);
+        })?;
+
         Ok(Box::new(StdRuntimeProcess {
-            child: Mutex::new(child),
-            stdin: Mutex::new(stdin),
+            child,
+            frames: Mutex::new(Some(tx)),
         }))
     }
 }

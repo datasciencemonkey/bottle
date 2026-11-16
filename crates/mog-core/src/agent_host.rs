@@ -4,7 +4,7 @@
 //!
 //! Binding override (U11, ARC-7, RTR-21a, `AGENTS.md`): there is one shared harness runtime with
 //! one session per active MOG, not one child process per MOG. [`SharedAgentHost`] starts one
-//! runtime process for each harness kind in use (ADR 0012) and opens one session in it for each
+//! runtime process for each harness kind in use (ADR 0014) and opens one session in it for each
 //! MOG. Sessions share no conversation state: each has its own ID, its own secret on the model
 //! proxy and its own turns. A failed session restarts once (ARC-F14) without touching the others;
 //! after the second failure it reports `Failed`, and the brain routes with the fallback classifier
@@ -18,7 +18,14 @@
 //! it has no handle to any of those components. It writes no log line; its status reports carry
 //! the MOG ID, the session ID and the state only.
 //!
+//! Locking: turns, close frames, process stops and status reports run after the state lock is
+//! released, so a slow runtime or a slow sink never stops the other MOGs. Open frames are queued
+//! under the lock; [`runtime::RuntimeProcess::send_frame`] must not block.
+//!
 //! TODO(#111): SP-19 picks the runtime program, the sidecar protocol and the real outbound hop.
+//! TODO(#111): the AT-42 tool-contract run with each live harness, the first-tool-call latency
+//! (NFR-03d, 2.0 s or less at p95) and "usage rows show the user" (RTR-23) need SP-19 and a live
+//! workspace; the test doubles here do not measure them.
 //! TODO(#307): `mog_core::ipc::handle` routes `agent_start`/`agent_stop`/`agent_send` here.
 
 pub mod adapter;
@@ -77,6 +84,8 @@ pub enum AgentError {
     TargetUnavailable,
     /// The model target is not allowed (not a bare host, or a local model off loopback).
     InvalidTarget,
+    /// The MOG has a live session of the other harness kind. Stop it first.
+    HarnessMismatch,
 }
 
 impl AgentError {
@@ -88,6 +97,7 @@ impl AgentError {
             AgentError::LaunchFailed => "agent_launch_failed",
             AgentError::TargetUnavailable => "agent_target_unavailable",
             AgentError::InvalidTarget => "agent_invalid_target",
+            AgentError::HarnessMismatch => "agent_harness_mismatch",
         }
     }
 }
@@ -103,7 +113,8 @@ impl std::error::Error for AgentError {}
 /// Starts one agent session per active MOG. The harness gets loopback endpoints, never a token.
 pub trait AgentHost: Send + Sync {
     /// Start the agent session of `mog_id`. Returns the agent session ID. A second call for a
-    /// MOG with a live session returns the same ID.
+    /// MOG with a live session of the same kind returns the same ID; a call with the other kind
+    /// fails with [`AgentError::HarnessMismatch`].
     fn start_session(&self, mog_id: &str, harness: Harness) -> Result<String, AgentError>;
     /// Stop the agent session of `mog_id`.
     fn stop_session(&self, mog_id: &str) -> Result<(), AgentError>;
@@ -135,7 +146,7 @@ pub struct AgentStatus {
 
 /// Gets the session state changes (for the `agent.status` event).
 pub trait AgentStatusSink: Send + Sync {
-    /// One state change.
+    /// One state change. The host calls it without holding its state lock.
     fn status(&self, s: &AgentStatus);
 }
 
@@ -189,7 +200,7 @@ struct Session {
 
 struct Runtime {
     generation: u64,
-    process: Box<dyn RuntimeProcess>,
+    process: Arc<dyn RuntimeProcess>,
     restarted: bool,
 }
 
@@ -250,6 +261,9 @@ impl SharedAgentHost {
     ) -> Result<String, AgentError> {
         let mut st = self.lock();
         if let Some(s) = st.sessions.get(mog_id) {
+            if s.state != SessionState::Failed && s.harness != harness {
+                return Err(AgentError::HarnessMismatch);
+            }
             if s.state != SessionState::Failed {
                 return Ok(s.id.clone());
             }
@@ -271,7 +285,11 @@ impl SharedAgentHost {
             .and_then(|()| self.open(&st, &session));
         if let Err(e) = opened {
             self.deps.proxy.unregister(&session.secret);
-            self.stop_runtime_if_idle(&mut st, harness);
+            let idle = Self::take_idle_runtime(&mut st, harness);
+            drop(st);
+            if let Some(p) = idle {
+                p.stop();
+            }
             return Err(e);
         }
         let id = session.id.clone();
@@ -309,7 +327,7 @@ impl SharedAgentHost {
                 host.on_runtime_event(h, generation, e);
             }
         });
-        let process = self.deps.launcher.launch(&spec, events)?;
+        let process: Arc<dyn RuntimeProcess> = Arc::from(self.deps.launcher.launch(&spec, events)?);
         Ok(Runtime {
             generation,
             process,
@@ -325,17 +343,16 @@ impl SharedAgentHost {
         rt.process.send_frame(&frame)
     }
 
-    fn report(&self, mog_id: &str, s: &Session) {
-        self.deps.status.status(&AgentStatus {
-            mog_id: mog_id.to_owned(),
-            agent_session_id: s.id.clone(),
-            state: s.state,
-        });
-    }
-
     /// Restart one session once (ARC-F14), with a new secret, or mark it failed. A session
-    /// whose runtime is gone for good fails at once.
-    fn restart_or_fail(&self, st: &State, mog_id: &str, s: &mut Session) {
+    /// whose runtime is gone for good fails at once. The status report goes to `out`; the caller
+    /// sends it after it releases the lock.
+    fn restart_or_fail(
+        &self,
+        st: &State,
+        mog_id: &str,
+        s: &mut Session,
+        out: &mut Vec<AgentStatus>,
+    ) {
         self.deps.proxy.unregister(&s.secret);
         let runtime_up = st.runtimes.contains_key(&s.harness);
         if s.state == SessionState::Running && runtime_up {
@@ -348,12 +365,35 @@ impl SharedAgentHost {
         } else {
             s.state = SessionState::Failed;
         }
-        self.report(mog_id, s);
+        out.push(AgentStatus {
+            mog_id: mog_id.to_owned(),
+            agent_session_id: s.id.clone(),
+            state: s.state,
+        });
     }
 
     /// Handle one event of the runtime of kind `h`, generation `generation`. Events of an older
     /// process of the same kind are ignored.
     fn on_runtime_event(&self, h: Harness, generation: u64, e: RuntimeEvent) {
+        let mut out = Vec::new();
+        let old = self.handle_event(h, generation, e, &mut out);
+        // Outside the lock: stop the dead process and report the state changes.
+        if let Some(p) = old {
+            p.stop();
+        }
+        for s in &out {
+            self.deps.status.status(s);
+        }
+    }
+
+    /// The locked part of [`Self::on_runtime_event`]. Returns the exited process, if any.
+    fn handle_event(
+        &self,
+        h: Harness,
+        generation: u64,
+        e: RuntimeEvent,
+        out: &mut Vec<AgentStatus>,
+    ) -> Option<Arc<dyn RuntimeProcess>> {
         let mut guard = self.lock();
         let st = &mut *guard;
         let current = st
@@ -361,24 +401,22 @@ impl SharedAgentHost {
             .get(&h)
             .is_some_and(|rt| rt.generation == generation);
         if !current {
-            return;
+            return None;
         }
         match e {
             RuntimeEvent::SessionFailed { session_id } => {
-                let Some(mog_id) = st
+                let mog_id = st
                     .sessions
                     .iter()
                     .find(|(_, s)| s.id == session_id && s.harness == h)
-                    .map(|(m, _)| m.clone())
-                else {
-                    return;
-                };
+                    .map(|(m, _)| m.clone())?;
                 if st.sessions[&mog_id].state == SessionState::Failed {
-                    return;
+                    return None;
                 }
                 let mut s = st.sessions.remove(&mog_id).expect("found above");
-                self.restart_or_fail(st, &mog_id, &mut s);
+                self.restart_or_fail(st, &mog_id, &mut s, out);
                 st.sessions.insert(mog_id, s);
+                None
             }
             RuntimeEvent::Exited => {
                 let old = st.runtimes.remove(&h).expect("current above");
@@ -402,23 +440,25 @@ impl SharedAgentHost {
                 for mog_id in mogs {
                     // Without a relaunched runtime (no second restart) every session fails.
                     let mut s = st.sessions.remove(&mog_id).expect("listed above");
-                    self.restart_or_fail(st, &mog_id, &mut s);
+                    self.restart_or_fail(st, &mog_id, &mut s, out);
                     st.sessions.insert(mog_id, s);
                 }
+                Some(old.process)
             }
         }
     }
 
-    fn stop_runtime_if_idle(&self, st: &mut State, h: Harness) {
+    /// Remove the runtime of `h` if no live session uses it. The caller stops it after it
+    /// releases the lock.
+    fn take_idle_runtime(st: &mut State, h: Harness) -> Option<Arc<dyn RuntimeProcess>> {
         let in_use = st
             .sessions
             .values()
             .any(|s| s.harness == h && s.state != SessionState::Failed);
-        if !in_use {
-            if let Some(rt) = st.runtimes.remove(&h) {
-                rt.process.stop();
-            }
+        if in_use {
+            return None;
         }
+        st.runtimes.remove(&h).map(|rt| rt.process)
     }
 }
 
@@ -428,28 +468,36 @@ impl AgentHost for SharedAgentHost {
     }
 
     fn stop_session(&self, mog_id: &str) -> Result<(), AgentError> {
-        let mut st = self.lock();
-        let s = st.sessions.remove(mog_id).ok_or(AgentError::UnknownMog)?;
-        self.deps.proxy.unregister(&s.secret);
-        if s.state != SessionState::Failed {
-            if let Some(rt) = st.runtimes.get(&s.harness) {
-                let _ = rt
-                    .process
-                    .send_frame(&json!({ "type": "close_session", "sessionId": s.id }));
-            }
+        let (close, idle) = {
+            let mut st = self.lock();
+            let s = st.sessions.remove(mog_id).ok_or(AgentError::UnknownMog)?;
+            self.deps.proxy.unregister(&s.secret);
+            let close = (s.state != SessionState::Failed)
+                .then(|| st.runtimes.get(&s.harness).map(|rt| rt.process.clone()))
+                .flatten()
+                .map(|p| (p, s.id.clone()));
+            (close, Self::take_idle_runtime(&mut st, s.harness))
+        };
+        if let Some((p, id)) = close {
+            let _ = p.send_frame(&json!({ "type": "close_session", "sessionId": id }));
         }
-        self.stop_runtime_if_idle(&mut st, s.harness);
+        if let Some(p) = idle {
+            p.stop();
+        }
         Ok(())
     }
 
     fn send(&self, mog_id: &str, turn: &Value) -> Result<(), AgentError> {
-        let st = self.lock();
-        let s = st.sessions.get(mog_id).ok_or(AgentError::UnknownMog)?;
-        if s.state == SessionState::Failed {
-            return Err(AgentError::Unavailable);
-        }
-        let rt = st.runtimes.get(&s.harness).ok_or(AgentError::Unavailable)?;
-        rt.process
-            .send_frame(&json!({ "type": "turn", "sessionId": s.id, "turn": turn }))
+        let (process, id) = {
+            let st = self.lock();
+            let s = st.sessions.get(mog_id).ok_or(AgentError::UnknownMog)?;
+            if s.state == SessionState::Failed {
+                return Err(AgentError::Unavailable);
+            }
+            let rt = st.runtimes.get(&s.harness).ok_or(AgentError::Unavailable)?;
+            (rt.process.clone(), s.id.clone())
+        };
+        // Outside the lock: a large or slow turn never stops the other MOGs.
+        process.send_frame(&json!({ "type": "turn", "sessionId": id, "turn": turn }))
     }
 }

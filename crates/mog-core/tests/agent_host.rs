@@ -58,12 +58,23 @@ impl Upstream for NoUpstream {
 struct FakeProc {
     frames: Mutex<Vec<Value>>,
     stopped: Mutex<bool>,
+    /// While set, a turn for this session ID blocks until the gate opens.
+    block_turns_of: Mutex<Option<String>>,
+    gate: (Mutex<bool>, std::sync::Condvar),
 }
 
 struct FakeProcHandle(Arc<FakeProc>);
 
 impl RuntimeProcess for FakeProcHandle {
     fn send_frame(&self, frame: &Value) -> Result<(), AgentError> {
+        let blocked = self.0.block_turns_of.lock().unwrap().clone();
+        if frame["type"] == "turn" && blocked.is_some_and(|b| frame["sessionId"] == b.as_str()) {
+            let (m, cv) = &self.0.gate;
+            let mut open = m.lock().unwrap();
+            while !*open {
+                open = cv.wait(open).unwrap();
+            }
+        }
         self.0.frames.lock().unwrap().push(frame.clone());
         Ok(())
     }
@@ -345,7 +356,8 @@ fn rtr_23_start_fails_without_a_model_target() {
 
 // ---------- RTR-22: two harness kinds behind one host ----------
 
-/// The same contract for each harness kind: start, turn, crash restart, stop.
+/// The same host contract for each harness kind: start, turn, crash restart, stop. The AT-42
+/// tool-contract run with each live harness is TODO(#111).
 fn harness_contract(h: Harness) {
     let r = rig();
     let id = r.host.start_session("m1", h).unwrap();
@@ -370,12 +382,12 @@ fn harness_contract(h: Harness) {
 }
 
 #[test]
-fn rtr_22_at_42_claude_harness_passes_the_host_contract() {
+fn rtr_22_claude_harness_passes_the_host_contract() {
     harness_contract(Harness::Claude);
 }
 
 #[test]
-fn rtr_22_at_42_codex_harness_passes_the_host_contract() {
+fn rtr_22_codex_harness_passes_the_host_contract() {
     harness_contract(Harness::Codex);
 }
 
@@ -650,4 +662,122 @@ fn arc_f14_unknown_session_failure_is_ignored() {
         },
     );
     assert_eq!(r.host.session_state("a"), Some(SessionState::Running));
+}
+
+// ---------- review of #309: no blocking I/O under the host lock ----------
+
+/// Run `f` on a thread and fail the test (instead of hanging) if it does not finish in 5 s.
+fn within_5s<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the host is blocked")
+}
+
+#[test]
+fn rtr_21a_arc_f14_a_blocked_turn_does_not_stop_the_other_mogs() {
+    let r = rig();
+    let a = r.host.start_session("a", Harness::Claude).unwrap();
+    let b = r.host.start_session("b", Harness::Claude).unwrap();
+    let p = r.launcher.proc(0);
+    *p.block_turns_of.lock().unwrap() = Some(a.clone());
+
+    let host = r.host.clone();
+    let stuck = std::thread::spawn(move || host.send("a", &turn()));
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    let host = r.host.clone();
+    let state_b = within_5s(move || host.session_state("b"));
+    assert_eq!(state_b, Some(SessionState::Running));
+    let host = r.host.clone();
+    within_5s(move || host.send("b", &turn())).unwrap();
+    // A failure event of another session is still handled while MOG a's turn is stuck.
+    let (launcher, host) = (r.launcher.clone(), r.host.clone());
+    let b2 = b.clone();
+    within_5s(move || {
+        launcher.fire(0, RuntimeEvent::SessionFailed { session_id: b2 });
+        host.session_state("b")
+    });
+    assert_eq!(r.host.session_state("b"), Some(SessionState::Restarted));
+
+    let (m, cv) = &p.gate;
+    *m.lock().unwrap() = true;
+    cv.notify_all();
+    stuck.join().unwrap().unwrap();
+}
+
+#[test]
+fn rtr_22_start_with_the_other_harness_kind_is_refused() {
+    let r = rig();
+    let a = r.host.start_session("a", Harness::Claude).unwrap();
+    let e = r.host.start_session("a", Harness::Codex).unwrap_err();
+    assert_eq!(e, AgentError::HarnessMismatch);
+    assert_eq!(e.code(), "agent_harness_mismatch");
+    assert_eq!(r.launcher.launches(), 1, "no Codex runtime starts");
+    r.host.stop_session("a").unwrap();
+    let a2 = r.host.start_session("a", Harness::Codex).unwrap();
+    assert_ne!(a, a2);
+}
+
+/// A sink that calls back into the host. It deadlocks if the host reports under its lock.
+struct ReentrantStatus {
+    host: std::sync::OnceLock<std::sync::Weak<SharedAgentHost>>,
+    seen: Mutex<Vec<Option<SessionState>>>,
+}
+
+impl AgentStatusSink for ReentrantStatus {
+    fn status(&self, s: &AgentStatus) {
+        let host = self.host.get().and_then(|w| w.upgrade()).unwrap();
+        self.seen
+            .lock()
+            .unwrap()
+            .push(host.session_state(&s.mog_id));
+    }
+}
+
+#[test]
+fn arc_f14_status_reports_are_sent_outside_the_host_lock() {
+    let launcher = Arc::new(FakeLauncher::default());
+    let status = Arc::new(ReentrantStatus {
+        host: std::sync::OnceLock::new(),
+        seen: Mutex::new(Vec::new()),
+    });
+    let proxy = Arc::new(
+        ModelProxy::start(
+            Arc::new(FakeTokens {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(NoUpstream),
+        )
+        .unwrap(),
+    );
+    let host = SharedAgentHost::new(AgentHostDeps {
+        launcher: launcher.clone(),
+        proxy,
+        targets: Arc::new(FakeTargets),
+        status: status.clone(),
+        runtimes: RuntimeConfigs {
+            claude: RuntimeConfig::new("fake", Vec::new()),
+            codex: RuntimeConfig::new("fake", Vec::new()),
+        },
+    });
+    status.host.set(Arc::downgrade(&host)).ok().unwrap();
+    let a = host.start_session("a", Harness::Claude).unwrap();
+    let l = launcher.clone();
+    within_5s(move || {
+        l.fire(
+            0,
+            RuntimeEvent::SessionFailed {
+                session_id: a.clone(),
+            },
+        );
+        l.fire(0, RuntimeEvent::Exited);
+    });
+    let seen = status.seen.lock().unwrap().clone();
+    assert_eq!(
+        seen,
+        vec![Some(SessionState::Restarted), Some(SessionState::Failed)]
+    );
 }

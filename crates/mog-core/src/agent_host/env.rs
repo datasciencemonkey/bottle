@@ -4,12 +4,16 @@
 //! from the Bottle process, plus the loopback base URL of its adapter. It never gets a token, a
 //! credential, a `DATABRICKS_*` variable or a model API key. The per-session secret goes to the
 //! runtime on stdin in the session frame, not in the environment.
+//!
+//! TODO(#111): a harness with a shell or file tool can still run the CLI from `PATH` or read a
+//! file by absolute path. SP-19 and #141 must limit those tools (ADR 0014, residual risk).
 
 /// The variables that the harness may inherit. They locate the user's tools and temp folders;
 /// none of them holds a credential.
-pub const INHERIT: [&str; 14] = [
+/// `HOME` and `USERPROFILE` are not inherited: the runtime gets a Bottle-owned scratch home
+/// (see `RuntimeConfig::home`), so it cannot read `~/.databrickscfg` or the CLI token cache.
+pub const INHERIT: [&str; 12] = [
     "PATH",
-    "HOME",
     "USER",
     "LOGNAME",
     "SHELL",
@@ -19,7 +23,6 @@ pub const INHERIT: [&str; 14] = [
     "TEMP",
     "TMP",
     // Windows needs these to start a process at all.
-    "USERPROFILE",
     "SYSTEMROOT",
     "COMSPEC",
     "PATHEXT",
@@ -86,7 +89,6 @@ mod tests {
             env,
             vec![
                 kv("PATH", "/usr/bin"),
-                kv("HOME", "/Users/u"),
                 kv("ANTHROPIC_BASE_URL", "http://127.0.0.1:9/anthropic"),
             ]
         );

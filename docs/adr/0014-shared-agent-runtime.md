@@ -1,4 +1,4 @@
-# ADR 0012: One shared agent runtime per harness kind, a session per MOG, and a loopback model proxy
+# ADR 0014: One shared agent runtime per harness kind, a session per MOG, and a loopback model proxy
 
 - Status: Accepted (impl-112, 2026-11-16). Live parts pending SP-19 (#111).
 - Issue: #112. Requirements: RTR-21a, RTR-22, RTR-23, ARC-7, RTR-28, ARC-F14, U11. Acceptance: AT-42.
@@ -13,16 +13,23 @@ U11 and RTR-21a require one shared agent runtime (one sidecar process) with one 
 2. Each MOG gets its own session: its own `agentSessionId`, its own per-session secret and its own turns. Sessions share no conversation state.
 3. The host talks to the runtime with JSON lines: `open_session`, `turn` and `close_session` on stdin; `session_failed` on stdout. End of stdout means the process exited. SP-19 fixes the real protocol (`TODO(#111)`).
 4. ARC-F14: a failed session restarts once with a new secret and the same `agentSessionId`. The other sessions get no frame. A second failure marks the session `Failed`, revokes its secret and makes `send` return `agent_unavailable`, so the brain routes with the fallback classifier (RTR-15b). If the runtime process exits, the host starts it again once and reopens its sessions. A second exit fails all sessions of that kind. Events from an older process are ignored.
-5. The runtime gets a clean environment: `env_clear`, then an allowlist of non-secret names (`PATH`, `HOME`, temp and locale names, the Windows start names), then the loopback base URL. A value that looks like a token is dropped. The session secret goes on stdin, not in the environment or the arguments (ARC-7, RTR-28).
-6. The loopback model proxy binds `127.0.0.1:0`:
+5. The runtime gets a clean environment: `env_clear`, then an allowlist of non-secret names (`PATH`, temp and locale names, the Windows start names), then the loopback base URL. A value that looks like a token is dropped. The user's `HOME` and `USERPROFILE` are not passed. The runtime gets a Bottle-owned scratch home (`RuntimeConfig::home`), so it cannot find `~/.databrickscfg` or the CLI token cache through its home. The session secret goes on stdin, not in the environment or the arguments (ARC-7, RTR-28).
+6. Locking: the host sends turns and close frames, stops processes and sends status reports after it releases its state lock. Open frames are queued under the lock. `RuntimeProcess::send_frame` must not block. `StdRuntimeLauncher` writes frames from a writer thread through a queue of 64 frames. If one write takes longer than the write deadline (10 s by default), the runtime does not answer (ARC-F14). A watchdog then stops it, and the host gets `Exited` and applies item 4.
+7. The loopback model proxy binds `127.0.0.1:0`:
    - Claude: `ANTHROPIC_BASE_URL=http://127.0.0.1:<port>/anthropic`. The proxy forwards `POST /v1/messages` and `/v1/messages/count_tokens` to `https://<host>/ai-gateway/anthropic/...`.
    - Codex: `OPENAI_BASE_URL=http://127.0.0.1:<port>/openai/v1`. The proxy forwards `POST /chat/completions` and `/responses` to `https://<host>/ai-gateway/mlflow/v1/...` (the Unity Gateway route of NFR-21a and D57).
    - A local model target must be on loopback and gets no token.
    - The proxy refuses an unknown secret (401) before it reads a token. It forwards no other path (404), so no Page, workspace or other Databricks endpoint is reachable through it. It drops the inbound credential and all headers except `content-type`, `accept`, `anthropic-version` and `anthropic-beta`. It adds the token, lent by R6 `TokenBroker::with_token`, on the outbound hop only.
+   - The proxy refuses a request with a `Host` header that does not name its own listener (403, DNS rebinding). It refuses control characters in the request line and headers, folded headers, and a repeated `Host`, `Content-Length`, `Transfer-Encoding`, `x-api-key` or `Authorization` header (400). It refuses `Transfer-Encoding` (411) and bodies over 8 MiB (413).
+   - It serves 32 connections or fewer at the same time (503 for more). The read timeout is 10 s until the secret is checked, then 120 s.
+   - A gateway host must be a DNS name with two or more labels. IP literals and single-label names such as `localhost` are refused. The R4 host allowlist (`TODO(#207)`) also checks that the host is a Databricks workspace host.
    - The proxy writes no log. Its error bodies are fixed strings.
-7. Per-session secrets and session IDs come from the OS random source (`getrandom` 0.3, already in `Cargo.lock` through Tauri).
+8. Per-session secrets and session IDs come from the OS random source (`getrandom` 0.3, already in `Cargo.lock` through Tauri).
 
 ## Consequences
+
+- Overlap with #224 (PR #308): #308 adds a shared `loopback` listener with a per-session secret and a Host check for `bottle-mcp`, the Genie One MCP proxy and the model proxy. This PR keeps its own `ModelProxy` and `SessionSecret` so that #112 does not depend on an open PR. After #308 merges, a follow-up must move `ModelProxy` onto the `loopback` listener and its secret, with the same tests. The agent lead and the security lead must agree on this.
+- Residual risk (`TODO(#111)`): the scratch home stops the harness from reading the user's CLI config through `HOME`. A harness with a shell or file tool can still run the `databricks` CLI from `PATH` with an absolute config path, or read files by absolute path. SP-19 and #141 must turn off or limit the shell and file tools of the harness, and the AT-42 process scan must check for this.
 
 - If SP-19 picks one SDK sidecar that hosts both kinds, `RuntimeConfigs` can point both kinds at the same program. The host then needs one map key instead of two. No caller changes.
 - The real outbound hop (`Upstream`) with the R4 host policy, and streamed (SSE) answers, are `TODO(#111)`. Until then `UnavailableUpstream` answers 502.

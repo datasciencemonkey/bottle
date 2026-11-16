@@ -19,7 +19,7 @@
 use std::fmt;
 use std::io::{Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -30,7 +30,13 @@ use crate::token_broker::TokenBroker;
 /// The largest request body the proxy forwards.
 pub const MAX_BODY: usize = 8 * 1024 * 1024;
 const MAX_HEAD: usize = 64 * 1024;
+/// The read timeout until the secret is checked. It is short, so an unauthenticated client cannot
+/// hold a connection for long.
+const HEAD_TIMEOUT: Duration = Duration::from_secs(10);
+/// The read and write timeout of an authenticated model call.
 const IO_TIMEOUT: Duration = Duration::from_secs(120);
+/// The most connections served at the same time; more get 503 at once.
+pub const MAX_CONNECTIONS: usize = 32;
 /// The request headers that pass to the outbound hop. All others are dropped, including the
 /// inbound `authorization` and `x-api-key` (the session secret).
 const FORWARD_HEADERS: [&str; 4] = [
@@ -156,6 +162,8 @@ struct Shared {
     tokens: Arc<dyn TokenBroker>,
     upstream: Arc<dyn Upstream>,
     routes: Mutex<Vec<(SessionSecret, ModelRoute)>>,
+    active: AtomicUsize,
+    port: u16,
 }
 
 /// The loopback model proxy. It listens on `127.0.0.1` on a free port until it drops.
@@ -173,6 +181,9 @@ impl fmt::Debug for ModelProxy {
     }
 }
 
+/// A gateway host must be a bare DNS name with two or more labels: no IP literal, no port, no
+/// path and no single-label name such as `localhost`. TODO(#207): the R4 host allowlist also
+/// checks that the host is a Databricks workspace host.
 fn valid_host(h: &str) -> bool {
     !h.is_empty()
         && h.len() <= 253
@@ -180,21 +191,24 @@ fn valid_host(h: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
         && !h.starts_with(['.', '-'])
         && !h.ends_with(['.', '-'])
+        && h.contains('.')
+        && !h.bytes().all(|b| b.is_ascii_digit() || b == b'.')
 }
 
 fn valid_local(url: &str) -> bool {
     let Some(rest) = url.strip_prefix("http://") else {
         return false;
     };
+    if rest.contains(['?', '#', '@']) {
+        return false;
+    }
     let authority = rest.split('/').next().unwrap_or("");
     let host = match authority.strip_prefix("[::1]") {
         Some(port) => return port.is_empty() || valid_port(port),
         None => authority.split(':').next().unwrap_or(""),
     };
     let port = &authority[host.len()..];
-    matches!(host, "127.0.0.1" | "localhost")
-        && (port.is_empty() || valid_port(port))
-        && !rest.contains(['?', '#', '@'])
+    matches!(host, "127.0.0.1" | "localhost") && (port.is_empty() || valid_port(port))
 }
 
 fn valid_port(p: &str) -> bool {
@@ -214,6 +228,8 @@ impl ModelProxy {
             tokens,
             upstream,
             routes: Mutex::new(Vec::new()),
+            active: AtomicUsize::new(0),
+            port: addr.port(),
         });
         let stop = Arc::new(AtomicBool::new(false));
         let (s, st) = (shared.clone(), stop.clone());
@@ -224,11 +240,22 @@ impl ModelProxy {
                     if st.load(Ordering::SeqCst) {
                         break;
                     }
-                    let Ok(conn) = conn else { continue };
-                    let s = s.clone();
-                    let _ = std::thread::Builder::new()
+                    let Ok(mut conn) = conn else { continue };
+                    if s.active.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
+                        s.active.fetch_sub(1, Ordering::SeqCst);
+                        fail(&mut conn, 503, "busy");
+                        continue;
+                    }
+                    let worker = s.clone();
+                    let spawned = std::thread::Builder::new()
                         .name("bottle-model-proxy-conn".into())
-                        .spawn(move || serve(&s, conn));
+                        .spawn(move || {
+                            serve(&worker, conn);
+                            worker.active.fetch_sub(1, Ordering::SeqCst);
+                        });
+                    if spawned.is_err() {
+                        s.active.fetch_sub(1, Ordering::SeqCst);
+                    }
                 }
             })?;
         Ok(Self { addr, shared, stop })
@@ -319,19 +346,41 @@ fn read_head(conn: &mut TcpStream) -> Option<Head> {
     };
     let text = std::str::from_utf8(&buf[..end]).ok()?;
     let mut lines = text.split("\r\n");
-    let mut first = lines.next()?.split(' ');
+    // No control character (a bare CR or LF included) may hide in a line; tab only in values.
+    let bad = |l: &str| l.chars().any(|c| c.is_control() && c != '\t');
+    let first_line = lines.next()?;
+    if bad(first_line) || first_line.contains('\t') {
+        return None;
+    }
+    let mut first = first_line.split(' ');
     let method = first.next()?.to_owned();
     let path = first.next()?.to_owned();
-    let headers = lines
-        .filter_map(|l| l.split_once(':'))
-        .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_owned()))
-        .collect();
+    first.next()?;
+    if first.next().is_some() {
+        return None;
+    }
+    let mut headers = Vec::new();
+    for l in lines {
+        // Folded (obsolete line-continuation) headers are refused.
+        if bad(l) || l.starts_with([' ', '\t']) {
+            return None;
+        }
+        let (k, v) = l.split_once(':')?;
+        if k.is_empty() || k.contains([' ', '\t']) {
+            return None;
+        }
+        headers.push((k.to_ascii_lowercase(), v.trim().to_owned()));
+    }
     Some(Head {
         method,
         path,
         headers,
         rest: buf[end + 4..].to_vec(),
     })
+}
+
+fn count(h: &Head, name: &str) -> usize {
+    h.headers.iter().filter(|(k, _)| k == name).count()
 }
 
 fn header<'a>(h: &'a Head, name: &str) -> Option<&'a str> {
@@ -348,9 +397,11 @@ fn reason(status: u16) -> &'static str {
         401 => "Unauthorized",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        403 => "Forbidden",
         411 => "Length Required",
         413 => "Payload Too Large",
         502 => "Bad Gateway",
+        503 => "Service Unavailable",
         _ => "Status",
     }
 }
@@ -395,11 +446,35 @@ fn secret_of(h: &Head) -> Option<&str> {
 }
 
 fn serve(shared: &Shared, mut conn: TcpStream) {
-    let _ = conn.set_read_timeout(Some(IO_TIMEOUT));
-    let _ = conn.set_write_timeout(Some(IO_TIMEOUT));
+    let _ = conn.set_read_timeout(Some(HEAD_TIMEOUT));
+    let _ = conn.set_write_timeout(Some(HEAD_TIMEOUT));
     let Some(head) = read_head(&mut conn) else {
         return fail(&mut conn, 400, "bad_request");
     };
+    // One value for each credential and length header: no ambiguity between two parsers.
+    if [
+        "x-api-key",
+        "authorization",
+        "content-length",
+        "transfer-encoding",
+        "host",
+    ]
+    .iter()
+    .any(|n| count(&head, n) > 1)
+    {
+        return fail(&mut conn, 400, "bad_request");
+    }
+
+    // 0. The Host header must name this loopback listener (DNS rebinding).
+    let host_ok = header(&head, "host").is_some_and(|h| {
+        let port = shared.port.to_string();
+        h.strip_prefix("127.0.0.1:")
+            .or_else(|| h.strip_prefix("localhost:"))
+            .is_some_and(|p| p == port)
+    });
+    if !host_ok {
+        return fail(&mut conn, 403, "host_not_allowed");
+    }
 
     // 1. The session secret.
     let route = secret_of(&head).and_then(|presented| {
@@ -415,6 +490,8 @@ fn serve(shared: &Shared, mut conn: TcpStream) {
     let Some(route) = route else {
         return fail(&mut conn, 401, "unauthorized");
     };
+    let _ = conn.set_read_timeout(Some(IO_TIMEOUT));
+    let _ = conn.set_write_timeout(Some(IO_TIMEOUT));
 
     // 2. Method and path allowlist of the session's harness.
     if head.method != "POST" {
@@ -523,6 +600,8 @@ mod tests {
             "http://evil.com",
             "http://127.0.0.1:99999999",
             "http://127.0.0.1:1/?x",
+            "http://[::1]:9/x?y@evil",
+            "http://[::1]:9/x#y",
         ] {
             assert!(!valid_local(bad), "{bad}");
         }
