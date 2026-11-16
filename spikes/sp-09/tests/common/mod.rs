@@ -1,0 +1,236 @@
+//! A fake Genie One MCP server on loopback (wiremock) for SP-09 (#29).
+//! It speaks MCP Streamable HTTP: JSON or SSE replies, a session ID, token checks,
+//! the busy error in both envelope forms, and a clarify poll.
+#![allow(dead_code)]
+
+use serde_json::{Value, json};
+use sp09::endpoint::{GENIE_ONE_PATH, GenieOneEndpoint};
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
+use wiremock::matchers::{method, path, query_param};
+use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+pub const WORKSPACE_ID: &str = "1234567890";
+pub const BUSY_TEXT: &str =
+    "asking Genie failed: OneChat stream closed before response.created event. Retry may succeed.";
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Reply {
+    Json,
+    Sse,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Busy {
+    None,
+    IsError,
+    RpcError,
+}
+
+pub struct State {
+    pub accepted_tokens: HashSet<String>,
+    pub session: Option<String>,
+    pub sessions_issued: u32,
+    pub expire_next_call: bool,
+    pub reply: Reply,
+    pub busy: Busy,
+    pub poll: Value,
+    pub server_protocol: String,
+}
+
+#[derive(Clone)]
+pub struct FakeGenie(pub Arc<Mutex<State>>);
+
+impl FakeGenie {
+    pub fn new(tokens: &[&str]) -> Self {
+        FakeGenie(Arc::new(Mutex::new(State {
+            accepted_tokens: tokens.iter().map(|t| t.to_string()).collect(),
+            session: None,
+            sessions_issued: 0,
+            expire_next_call: false,
+            reply: Reply::Json,
+            busy: Busy::None,
+            poll: json!({"status": "in_progress", "progress_steps": null}),
+            server_protocol: "2025-06-18".into(),
+        })))
+    }
+    pub fn with<R>(&self, f: impl FnOnce(&mut State) -> R) -> R {
+        f(&mut self.0.lock().unwrap())
+    }
+}
+
+pub fn fixture_tools() -> Value {
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/fixtures/genie_tools.json"
+    ))
+    .unwrap();
+    let v: Value = serde_json::from_str(&text).unwrap();
+    json!({ "tools": v["tools"] })
+}
+
+fn rpc_result(id: &Value, result: Value) -> Value {
+    json!({"jsonrpc": "2.0", "id": id, "result": result})
+}
+
+fn reply(state: &State, msg: Value) -> ResponseTemplate {
+    match state.reply {
+        Reply::Json => ResponseTemplate::new(200)
+            .insert_header("content-type", "application/json")
+            .set_body_string(msg.to_string()),
+        Reply::Sse => {
+            // A progress notification first, then the response, as the spec allows.
+            let note = json!({"jsonrpc": "2.0", "method": "notifications/progress",
+                "params": {"progressToken": "p", "progress": 1}});
+            let body = format!(
+                ": keep-alive\r\nevent: message\r\nid: 1\r\ndata: {note}\r\n\r\nevent: message\nid: 2\ndata: {msg}\n\n"
+            );
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body)
+        }
+    }
+}
+
+impl Respond for FakeGenie {
+    fn respond(&self, req: &Request) -> ResponseTemplate {
+        let mut s = self.0.lock().unwrap();
+        let auth = req
+            .headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        let token = auth.strip_prefix("Bearer ").unwrap_or("");
+        if !s.accepted_tokens.contains(token) {
+            return ResponseTemplate::new(401)
+                .set_body_string("{\"error_code\":\"UNAUTHENTICATED\"}");
+        }
+        let body: Value = match serde_json::from_slice(&req.body) {
+            Ok(v) => v,
+            Err(_) => return ResponseTemplate::new(400),
+        };
+        let method = body["method"].as_str().unwrap_or("").to_string();
+        let id = body["id"].clone();
+        if method == "initialize" {
+            s.sessions_issued += 1;
+            let sid = format!("sess-{}", s.sessions_issued);
+            s.session = Some(sid.clone());
+            let msg = rpc_result(
+                &id,
+                json!({"protocolVersion": s.server_protocol, "capabilities": {"tools": {}},
+                       "serverInfo": {"name": "fake-genie-one", "version": "0"}}),
+            );
+            return reply(&s, msg).insert_header("mcp-session-id", sid.as_str());
+        }
+        let sent = req
+            .headers
+            .get("mcp-session-id")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        match (&sent, &s.session) {
+            (None, _) => return ResponseTemplate::new(400),
+            (Some(a), Some(b)) if a == b => {}
+            _ => return ResponseTemplate::new(404),
+        }
+        if s.expire_next_call {
+            s.expire_next_call = false;
+            s.session = None;
+            return ResponseTemplate::new(404);
+        }
+        if req
+            .headers
+            .get("mcp-protocol-version")
+            .and_then(|v| v.to_str().ok())
+            != Some("2025-06-18")
+        {
+            return ResponseTemplate::new(400);
+        }
+        match method.as_str() {
+            "notifications/initialized" => ResponseTemplate::new(202),
+            "tools/list" => reply(&s, rpc_result(&id, fixture_tools())),
+            "tools/call" => {
+                let name = body["params"]["name"].as_str().unwrap_or("");
+                match name {
+                    "genie_ask" => match s.busy {
+                        Busy::IsError => reply(
+                            &s,
+                            rpc_result(
+                                &id,
+                                json!({"content": [{"type": "text", "text": BUSY_TEXT}], "isError": true}),
+                            ),
+                        ),
+                        Busy::RpcError => reply(
+                            &s,
+                            json!({"jsonrpc": "2.0", "id": id,
+                                   "error": {"code": -32603, "message": BUSY_TEXT}}),
+                        ),
+                        Busy::None => {
+                            let sc = json!({"conversation_id": "conv-1", "response_id": "resp-1",
+                                            "status": "in_progress"});
+                            reply(
+                                &s,
+                                rpc_result(
+                                    &id,
+                                    json!({"content": [{"type": "text", "text": sc.to_string()}],
+                                           "structuredContent": sc, "isError": false}),
+                                ),
+                            )
+                        }
+                    },
+                    "genie_poll_response" => {
+                        let sc = s.poll.clone();
+                        reply(
+                            &s,
+                            rpc_result(
+                                &id,
+                                json!({"content": [{"type": "text", "text": "poll"}],
+                                       "structuredContent": sc}),
+                            ),
+                        )
+                    }
+                    _ => reply(
+                        &s,
+                        json!({"jsonrpc": "2.0", "id": id,
+                               "error": {"code": -32602, "message": "unknown tool"}}),
+                    ),
+                }
+            }
+            _ => reply(
+                &s,
+                json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": "no method"}}),
+            ),
+        }
+    }
+}
+
+pub async fn start(fake: &FakeGenie) -> (MockServer, GenieOneEndpoint) {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(GENIE_ONE_PATH))
+        .and(query_param("o", WORKSPACE_ID))
+        .respond_with(fake.clone())
+        .mount(&server)
+        .await;
+    let url = format!("{}{}?o={}", server.uri(), GENIE_ONE_PATH, WORKSPACE_ID);
+    let ep = GenieOneEndpoint::parse_loopback_for_tests(&url).unwrap();
+    (server, ep)
+}
+
+/// JSON-RPC method of each request the server got.
+pub async fn methods(server: &MockServer) -> Vec<String> {
+    server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .iter()
+        .map(|r| {
+            let v: Value = serde_json::from_slice(&r.body).unwrap_or(Value::Null);
+            let m = v["method"].as_str().unwrap_or("").to_string();
+            if m == "tools/call" {
+                format!("tools/call:{}", v["params"]["name"].as_str().unwrap_or(""))
+            } else {
+                m
+            }
+        })
+        .collect()
+}
