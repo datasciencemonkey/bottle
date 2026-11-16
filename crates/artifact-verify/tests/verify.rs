@@ -224,18 +224,21 @@ fn make_undeletable(p: &Path) -> impl FnOnce() {
 }
 
 /// Makes the file at `p` impossible to delete; returns a guard closure to undo it.
+///
+/// A read-only attribute is not enough: since Rust 1.86, `remove_file` on Windows deletes
+/// read-only files too. An open handle whose share mode allows reads but not
+/// `FILE_SHARE_DELETE` lets the hash read the file and makes the delete fail with a
+/// sharing violation.
 #[cfg(windows)]
 fn make_undeletable(p: &Path) -> impl FnOnce() {
-    let mut perm = fs::metadata(p).unwrap().permissions();
-    perm.set_readonly(true);
-    fs::set_permissions(p, perm).unwrap();
-    let p = p.to_path_buf();
-    move || {
-        let mut perm = fs::metadata(&p).unwrap().permissions();
-        #[allow(clippy::permissions_set_readonly_false)]
-        perm.set_readonly(false);
-        fs::set_permissions(&p, perm).unwrap();
-    }
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_SHARE_READ: u32 = 0x1;
+    let holder = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(p)
+        .unwrap();
+    move || drop(holder)
 }
 
 /// [SEC-20b] if the bad download cannot be deleted, the error still stops the install and says so
