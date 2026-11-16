@@ -27,7 +27,9 @@ fn mb_02_host_manages_one_store_in_the_app_config_dir() {
 
 #[test]
 fn mb_02_config_ids_are_mog_window_ids() {
-    // A config ID must also name its `mog-<id>` window, and the reverse.
+    // Every config ID also names its `mog-<id>` window. Config IDs are a stricter subset:
+    // lower case only and no Windows device name, so two IDs never share one file.
+    let long = "a".repeat(65);
     for id in [
         "a",
         "8f14e45f-ceea-467f-a0e6-2b4c1d0a9e11",
@@ -35,14 +37,16 @@ fn mb_02_config_ids_are_mog_window_ids() {
         "a.b",
         "a/b",
         "a_b",
-        "ü",
+        "\u{fc}",
+        "Upper",
+        "con",
+        long.as_str(),
+        &long[..64],
     ] {
-        assert_eq!(valid_id(id), WindowKind::mog(id).is_some(), "{id:?}");
+        if valid_id(id) {
+            assert!(WindowKind::mog(id).is_some(), "{id:?}");
+        }
     }
-    let long = "a".repeat(65);
-    assert_eq!(valid_id(&long), WindowKind::mog(&long).is_some());
-    assert_eq!(
-        valid_id(&long[..64]),
-        WindowKind::mog(&long[..64]).is_some()
-    );
+    assert!(valid_id("8f14e45f-ceea-467f-a0e6-2b4c1d0a9e11") && valid_id(&long[..64]));
+    assert!(WindowKind::mog("Upper").is_some() && !valid_id("Upper"));
 }

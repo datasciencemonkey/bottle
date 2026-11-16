@@ -360,6 +360,12 @@ fn mb_02_ids_must_be_safe_file_names() {
         "a.json",
         "a b",
         "ü",
+        "Upper",
+        "con",
+        "NUL",
+        "aux",
+        "com1",
+        "lpt9",
         &"a".repeat(MAX_ID_LEN + 1),
     ] {
         assert!(!valid_id(id), "{id:?}");
@@ -374,6 +380,40 @@ fn mb_02_ids_must_be_safe_file_names() {
     assert!(valid_id(&"a".repeat(MAX_ID_LEN)));
     assert!(s.files().is_empty());
     assert!(!s.0.join("x.json").exists());
+}
+
+#[test]
+fn mb_02_a_saved_config_is_always_readable_near_the_size_cap() {
+    // Review of #372: the cap held for the request, but the saved file (with defaults) was larger.
+    let s = Scratch::new();
+    let store = s.store();
+    let aliases: Value = Value::Object(
+        // 4-byte characters, so the bytes reach the cap within the character bounds.
+        (0..24)
+            .map(|i| {
+                (
+                    format!("{i:02}{}", "w".repeat(62)),
+                    json!("\u{1F600}".repeat(256)),
+                )
+            })
+            .collect(),
+    );
+    let mut accepted = 0;
+    for persona in (1_000..=MAX_PERSONA_CHARS).step_by(4) {
+        let mut cfg = with(&["binding", "profileAliases"], aliases.clone());
+        cfg.insert("persona".into(), json!("\u{1F600}".repeat(persona)));
+        match store.write("m1", &cfg) {
+            Ok(saved) => {
+                accepted += 1;
+                assert_eq!(store.read("m1").unwrap(), saved, "persona {persona}");
+                let len = std::fs::metadata(s.0.join("mogs/m1.json")).unwrap().len();
+                assert!(len as usize <= MAX_CONFIG_BYTES);
+            }
+            Err(e) => assert_eq!(e, ConfigError::TooLarge, "persona {persona}"),
+        }
+    }
+    assert!(accepted > 0);
+    assert!(store.list().unwrap().unreadable.is_empty());
 }
 
 // ---------- MB-02: storage ----------
