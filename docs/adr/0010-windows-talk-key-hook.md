@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-11-16
 - Issue: #7 (CAP-40a, CAP-40b, CAP-41, CAP-42)
+- Amended: 2026-11-16 by #313 (CAP-40b, CAP-42, CAP-43a, CAP-43b, CAP-45): decisions 10, 11, 13 and 14
 
 ## Context
 
@@ -38,12 +39,26 @@ tooltip shows. Spike SP-03 (#5) is still open.
    of a key swallowed before the sleep then reaches the app without its key-down; that is harmless.
 10. A failure at start (hook, thread, or the 1 min timer) gives `CoreError::Unavailable { component: "R1",
     reason }`. A later failure (reinstall, resume notification, foreground hook) sends
-    `HookSignal::HookFailed { reason }`. The next tick tries a failed reinstall again.
+    `HookSignal::HookFailed { reason }`. The next tick tries a failed reinstall again. If `GetMessageW`
+    returns -1, the thread sends `HookFailed { reason: "message_loop_failed" }`, removes the hook and ends.
+    A finished thread counts as stopped: `stop()` only joins it, and a later `start()` installs a new hook.
 11. Elevated window: a foreground WinEvent hook sends the process ID to a second thread. That thread reads
     the token elevation. If Bottle is not elevated and the foreground process is, the core sends
     `TalkKeyBlocked` once per process ID per run. A process that opens but refuses the token query counts
-    as elevated. A process that does not open counts as unknown and sends nothing.
+    as elevated. A process that does not open counts as unknown and sends nothing. At start, the hook
+    thread reads `GetForegroundWindow()` once and sends that process ID first, so an elevated window that
+    already has the foreground gives `TalkKeyBlocked` at once (#313).
 12. Signals name only the talk key, Esc or "another key". No signal, error or log names another key.
+13. Talk keys on Windows (#313): D66 gives Windows only Right-Alt, Right-Ctrl and Ctrl+Win, so the Windows
+    `TalkKey` has only these three. A swallowed Right-Shift blocks capitals, and a swallowed Right-Win
+    breaks the Win shortcuts. `hotkeys_set` on Windows refuses `RightWin` and `RightShift` as `invalid` and
+    keeps the old talk key. The conflict check flags a stored one as `invalid`, with the next free step of
+    the ladder as the fix. A shared setting of Right-Command or Right-Shift maps to Right-Alt on Windows.
+14. Session unlock (CAP-45, #313): a message-only window on the hook thread registers with
+    `WTSRegisterSessionNotification`. On `WTS_SESSION_UNLOCK`, the state of every swallowed key clears,
+    because its async state is not real. The passed keys get their `GetAsyncKeyState` value again. An
+    active PTT ends. A failed registration sends `HookFailed { reason: "session_notification_failed" }`
+    and the hook keeps running.
 
 ## Consequences
 

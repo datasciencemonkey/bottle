@@ -1,4 +1,4 @@
-//! R1 HotkeyService on Windows (#7): CAP-40a, CAP-40b, CAP-41, CAP-42.
+//! R1 HotkeyService on Windows (#7, #313): CAP-40a, CAP-40b, CAP-41, CAP-42, CAP-45.
 //!
 //! The decision logic is here, in platform-neutral code that the tests run on every OS:
 //! which key events the `WH_KEYBOARD_LL` hook swallows ([`HookFilter`]), when the hook is
@@ -54,6 +54,10 @@ pub mod vk {
 }
 
 /// The Windows talk key (D66: Right-Alt, else Right-Ctrl, else Ctrl+Win).
+///
+/// D66 gives Windows only these three keys (#313, ADR 0010). Right-Win and Right-Shift are
+/// not talk keys on Windows: a swallowed Right-Shift blocks the capitals typed with it, and a
+/// swallowed Right-Win breaks the Win shortcuts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TalkKey {
     /// Right-Alt, the D66 default.
@@ -61,36 +65,33 @@ pub enum TalkKey {
     RightAlt,
     /// Right-Ctrl.
     RightCtrl,
-    /// Right-Win (the Windows key of the shared `RightCommand`).
-    RightWin,
-    /// Right-Shift.
-    RightShift,
     /// Ctrl (either side) and Win (either side) held together.
     CtrlWin,
 }
 
 impl TalkKey {
+    /// Every Windows talk key, in the order of the D66 ladder.
+    pub const ALL: [TalkKey; 3] = [TalkKey::RightAlt, TalkKey::RightCtrl, TalkKey::CtrlWin];
+
     /// The one virtual key of a single-key talk key; `None` for the Ctrl+Win chord.
     pub fn single_vk(self) -> Option<u32> {
         match self {
             TalkKey::RightAlt => Some(vk::RMENU),
             TalkKey::RightCtrl => Some(vk::RCONTROL),
-            TalkKey::RightWin => Some(vk::RWIN),
-            TalkKey::RightShift => Some(vk::RSHIFT),
             TalkKey::CtrlWin => None,
         }
     }
 }
 
 impl From<crate::hotkey_core::TalkKey> for TalkKey {
-    /// The Windows key for the shared talk key setting of #6.
+    /// The Windows key for the shared talk key setting of #6. A shared key that D66 does not
+    /// give Windows (Right-Command, Right-Shift) falls back to the D66 default, Right-Alt.
+    /// The conflict check of `hotkey_bindings` flags such a setting as invalid (CAP-43b).
     fn from(key: crate::hotkey_core::TalkKey) -> Self {
         use crate::hotkey_core::TalkKey as Core;
         match key {
-            Core::RightOption => TalkKey::RightAlt,
             Core::RightControl => TalkKey::RightCtrl,
-            Core::RightCommand => TalkKey::RightWin,
-            Core::RightShift => TalkKey::RightShift,
+            Core::RightOption | Core::RightCommand | Core::RightShift => TalkKey::RightAlt,
         }
     }
 }
@@ -217,11 +218,10 @@ impl HookFilter {
     /// Whether the talk key is complete with the keys held now.
     fn talk_complete(&self) -> bool {
         match self.talk {
-            TalkKey::RightAlt | TalkKey::RightCtrl | TalkKey::RightWin | TalkKey::RightShift => {
-                self.talk
-                    .single_vk()
-                    .is_some_and(|k| self.pressed[k as usize])
-            }
+            TalkKey::RightAlt | TalkKey::RightCtrl => self
+                .talk
+                .single_vk()
+                .is_some_and(|k| self.pressed[k as usize]),
             TalkKey::CtrlWin => {
                 let held = |a: u32, b: u32| self.pressed[a as usize] || self.pressed[b as usize];
                 held(vk::LCONTROL, vk::RCONTROL) && held(vk::LWIN, vk::RWIN)
@@ -334,6 +334,25 @@ impl HookFilter {
 }
 
 impl HookFilter {
+    /// The session was unlocked (CAP-45). While the session is locked, the secure desktop
+    /// gets the keys, so the hook can miss a key-up. The swallowed keys have no real async
+    /// state, so their state clears. The passed keys get their physical state again. An
+    /// active PTT then ends, because the key that completed it was swallowed.
+    pub fn on_unlock(
+        &mut self,
+        physically_down: impl Fn(u32) -> bool,
+        at: Duration,
+    ) -> Option<HookSignal> {
+        for i in 0..256usize {
+            if self.swallowed[i] {
+                self.pressed[i] = false;
+                self.swallowed[i] = false;
+                self.mask_on_up[i] = false;
+            }
+        }
+        self.reconcile(physically_down, at)
+    }
+
     /// The device resumed from sleep. A hold cannot last through sleep, so an active PTT
     /// ends and all key state is cleared.
     pub fn on_resume(&mut self, at: Duration) -> Option<HookSignal> {
@@ -344,6 +363,93 @@ impl HookFilter {
             return Some(HookSignal::TalkUp { at });
         }
         None
+    }
+}
+
+/// What the hook thread does with the return value of `GetMessageW`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoopStep {
+    /// A message came: handle it.
+    Dispatch,
+    /// `WM_QUIT` came: stop the loop.
+    Quit,
+    /// `GetMessageW` failed (it returned -1): stop the loop and report it.
+    Failed,
+}
+
+impl LoopStep {
+    /// Classify the return value of `GetMessageW`.
+    pub fn from_get_message(got: i32) -> Self {
+        match got {
+            0 => LoopStep::Quit,
+            -1 => LoopStep::Failed,
+            _ => LoopStep::Dispatch,
+        }
+    }
+
+    /// The signal the hook thread sends when the loop stops this way.
+    pub fn exit_signal(self) -> Option<HookSignal> {
+        match self {
+            LoopStep::Failed => Some(HookSignal::HookFailed {
+                reason: "message_loop_failed",
+            }),
+            LoopStep::Quit | LoopStep::Dispatch => None,
+        }
+    }
+}
+
+/// The state of the hook thread, as `start()` and `stop()` see it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookThread {
+    /// No thread.
+    Stopped,
+    /// The thread runs its message loop.
+    Running,
+    /// The thread ended by itself (for example after a loop failure). It counts as stopped.
+    Finished,
+}
+
+impl HookThread {
+    /// The state of a thread slot: `present` when a thread was started and not joined,
+    /// `finished` when that thread has ended.
+    pub fn of(present: bool, finished: bool) -> Self {
+        match (present, finished) {
+            (false, _) => HookThread::Stopped,
+            (true, false) => HookThread::Running,
+            (true, true) => HookThread::Finished,
+        }
+    }
+
+    /// Whether `start()` starts a new hook thread (after it joins a finished one).
+    pub fn start_spawns(self) -> bool {
+        self != HookThread::Running
+    }
+
+    /// Whether `stop()` posts `WM_QUIT`. A finished thread is only joined.
+    pub fn stop_posts_quit(self) -> bool {
+        self == HookThread::Running
+    }
+}
+
+/// The process id of the foreground window at start, read once (CAP-42). `0` means no
+/// foreground window, so there is nothing to probe.
+pub fn foreground_at_start(pid: u32) -> Option<u32> {
+    (pid != 0).then_some(pid)
+}
+
+/// The body of the elevation worker (CAP-42): probe each foreground process id and send the
+/// signal of the gate. The first id is the foreground at start ([`foreground_at_start`]), so
+/// an elevated window that has the foreground before the hook starts is found at once.
+pub fn run_elevation_gate(
+    gate: &mut ElevationGate,
+    pids: impl IntoIterator<Item = u32>,
+    mut probe: impl FnMut(u32) -> Elevation,
+    signals: &Sender<HookSignal>,
+) {
+    for pid in pids {
+        if let Some(signal) = gate.on_foreground(pid, probe(pid)) {
+            let _ = signals.send(signal);
+        }
     }
 }
 
@@ -639,6 +745,13 @@ impl HookCore {
     /// See [`HookFilter::reconcile`]; the signal goes on the channel.
     pub fn reconcile(&mut self, physically_down: impl Fn(u32) -> bool) {
         if let Some(signal) = self.filter.reconcile(physically_down, self.clock.now()) {
+            self.send(signal);
+        }
+    }
+
+    /// The session was unlocked: see [`HookFilter::on_unlock`]; the signal goes on the channel.
+    pub fn on_unlock(&mut self, physically_down: impl Fn(u32) -> bool) {
+        if let Some(signal) = self.filter.on_unlock(physically_down, self.clock.now()) {
             self.send(signal);
         }
     }
@@ -1227,19 +1340,48 @@ mod tests {
         use crate::hotkey_core::TalkKey as Core;
         assert_eq!(TalkKey::from(Core::RightOption), TalkKey::RightAlt);
         assert_eq!(TalkKey::from(Core::RightControl), TalkKey::RightCtrl);
-        assert_eq!(TalkKey::from(Core::RightCommand), TalkKey::RightWin);
-        assert_eq!(TalkKey::from(Core::RightShift), TalkKey::RightShift);
-        for (key, code) in [
-            (TalkKey::RightWin, vk::RWIN),
-            (TalkKey::RightShift, vk::RSHIFT),
+        // D66 gives Windows only Right-Alt, Right-Ctrl and Ctrl+Win (#313). A shared key
+        // outside that set falls back to the D66 default.
+        assert_eq!(TalkKey::from(Core::RightCommand), TalkKey::RightAlt);
+        assert_eq!(TalkKey::from(Core::RightShift), TalkKey::RightAlt);
+    }
+
+    #[test]
+    fn cap_41_cap_43a_windows_never_swallows_right_shift_or_right_win() {
+        // A swallowed Right-Shift blocks capitals; a swallowed Right-Win breaks Win shortcuts.
+        use crate::hotkey_core::TalkKey as Core;
+        for core in [
+            Core::RightOption,
+            Core::RightControl,
+            Core::RightCommand,
+            Core::RightShift,
         ] {
-            let mut f = HookFilter::new(key);
-            assert_eq!(
-                f.on_key(KeyEvent::down(code), T0),
-                (Verdict::Swallow, Some(HookSignal::TalkDown { at: T0 }))
-            );
-            assert_eq!(f.on_key(KeyEvent::up(code), T0).0, Verdict::Swallow);
+            for talk in [TalkKey::from(core), TalkKey::CtrlWin] {
+                for code in [vk::RSHIFT, vk::RWIN] {
+                    if talk == TalkKey::CtrlWin && code == vk::RWIN {
+                        continue; // Win is one key of the Ctrl+Win chord.
+                    }
+                    let mut f = HookFilter::new(talk);
+                    assert_eq!(
+                        f.on_key(KeyEvent::down(code), T0),
+                        (Verdict::Pass, None),
+                        "{talk:?} {code:#x}"
+                    );
+                    assert_eq!(f.on_key(KeyEvent::up(code), T0).0, Verdict::Pass);
+                }
+            }
         }
+    }
+
+    #[test]
+    fn cap_43a_windows_talk_keys_are_only_the_d66_keys() {
+        assert_eq!(
+            TalkKey::ALL,
+            [TalkKey::RightAlt, TalkKey::RightCtrl, TalkKey::CtrlWin]
+        );
+        assert_eq!(TalkKey::RightAlt.single_vk(), Some(vk::RMENU));
+        assert_eq!(TalkKey::RightCtrl.single_vk(), Some(vk::RCONTROL));
+        assert_eq!(TalkKey::CtrlWin.single_vk(), None);
     }
 
     #[derive(Default)]
@@ -1354,5 +1496,149 @@ mod tests {
     fn cap_42_no_tooltip_when_elevation_is_unknown() {
         let mut g = ElevationGate::new(false);
         assert_eq!(g.on_foreground(4, Elevation::Unknown), None);
+    }
+
+    // ---- #313: message loop failure (CAP-40a, CAP-40b) ----
+
+    #[test]
+    fn cap_40b_get_message_minus_one_is_a_loop_failure() {
+        assert_eq!(LoopStep::from_get_message(1), LoopStep::Dispatch);
+        assert_eq!(LoopStep::from_get_message(0), LoopStep::Quit);
+        assert_eq!(LoopStep::from_get_message(-1), LoopStep::Failed);
+    }
+
+    #[test]
+    fn cap_40b_loop_failure_sends_hook_failed() {
+        assert_eq!(
+            LoopStep::Failed.exit_signal(),
+            Some(HookSignal::HookFailed {
+                reason: "message_loop_failed"
+            })
+        );
+        assert_eq!(LoopStep::Quit.exit_signal(), None);
+        assert_eq!(LoopStep::Dispatch.exit_signal(), None);
+    }
+
+    #[test]
+    fn cap_40b_finished_hook_thread_counts_as_stopped() {
+        assert_eq!(HookThread::of(false, false), HookThread::Stopped);
+        assert_eq!(HookThread::of(true, false), HookThread::Running);
+        assert_eq!(HookThread::of(true, true), HookThread::Finished);
+        // start() starts a new hook when the old thread has ended.
+        assert!(HookThread::Stopped.start_spawns());
+        assert!(HookThread::Finished.start_spawns());
+        assert!(!HookThread::Running.start_spawns());
+        // stop() posts WM_QUIT only to a live thread, so it never fails with stop_post_failed
+        // after the loop ended by itself.
+        assert!(HookThread::Running.stop_posts_quit());
+        assert!(!HookThread::Finished.stop_posts_quit());
+        assert!(!HookThread::Stopped.stop_posts_quit());
+    }
+
+    // ---- #313: elevated foreground at start (CAP-42) ----
+
+    #[test]
+    fn cap_42_elevated_foreground_at_start_shows_the_tooltip_without_a_change() {
+        let (tx, rx) = mpsc::channel();
+        let mut gate = ElevationGate::new(false);
+        // No foreground change event follows: only the start-time read.
+        let pids = foreground_at_start(42).into_iter();
+        run_elevation_gate(&mut gate, pids, |_| Elevation::Elevated, &tx);
+        assert_eq!(rx.try_recv(), Ok(HookSignal::TalkKeyBlocked));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn cap_42_start_read_and_a_later_change_to_the_same_process_show_one_tooltip() {
+        let (tx, rx) = mpsc::channel();
+        let mut gate = ElevationGate::new(false);
+        let pids = foreground_at_start(42).into_iter().chain([42, 7]);
+        let probe = |pid| {
+            if pid == 42 {
+                Elevation::Elevated
+            } else {
+                Elevation::NotElevated
+            }
+        };
+        run_elevation_gate(&mut gate, pids, probe, &tx);
+        assert_eq!(
+            rx.try_iter().collect::<Vec<_>>(),
+            vec![HookSignal::TalkKeyBlocked]
+        );
+    }
+
+    #[test]
+    fn cap_42_no_foreground_window_at_start_sends_nothing() {
+        assert_eq!(foreground_at_start(0), None);
+        assert_eq!(foreground_at_start(9), Some(9));
+    }
+
+    // ---- #313: CAP-45 on Windows: read the key state again on session unlock ----
+
+    #[test]
+    fn cap_45_unlock_ends_an_active_ptt() {
+        let mut f = HookFilter::new(TalkKey::RightAlt);
+        f.on_key(KeyEvent::down(vk::RMENU), T0);
+        let later = T0 + Duration::from_secs(30);
+        // The swallowed key has no real async state: the PTT ends whatever it says.
+        assert_eq!(
+            f.on_unlock(|_| true, later),
+            Some(HookSignal::TalkUp { at: later })
+        );
+        assert!(!f.talk_active());
+        assert_eq!(
+            f.on_unlock(|_| true, later),
+            None,
+            "a second unlock is a no-op"
+        );
+        // The next press starts a new PTT.
+        assert_eq!(
+            f.on_key(KeyEvent::down(vk::RMENU), later),
+            (Verdict::Swallow, Some(HookSignal::TalkDown { at: later }))
+        );
+    }
+
+    #[test]
+    fn cap_45_unlock_keeps_a_passed_key_that_is_still_down() {
+        // Ctrl reached Windows before the lock and is still held: Win then completes the chord.
+        let mut f = HookFilter::new(TalkKey::CtrlWin);
+        f.on_key(KeyEvent::down(vk::LCONTROL), T0);
+        assert_eq!(f.on_unlock(|k| k == vk::LCONTROL, T0), None);
+        assert_eq!(
+            f.on_key(KeyEvent::down(vk::LWIN), T0),
+            (Verdict::Swallow, Some(HookSignal::TalkDown { at: T0 }))
+        );
+    }
+
+    #[test]
+    fn cap_45_unlock_clears_a_passed_key_that_went_up() {
+        // Ctrl went up on the secure desktop, so the hook never saw the key-up.
+        let mut f = HookFilter::new(TalkKey::CtrlWin);
+        f.on_key(KeyEvent::down(vk::LCONTROL), T0);
+        assert_eq!(f.on_unlock(|_| false, T0), None);
+        assert_eq!(
+            f.on_key(KeyEvent::down(vk::LWIN), T0),
+            (Verdict::Pass, None),
+            "Win alone is not the chord"
+        );
+    }
+
+    #[test]
+    fn cap_45_unlock_lets_a_swallowed_key_up_pass() {
+        // After unlock the hook forgets the swallowed key-down, so a late key-up passes and
+        // no key sticks in the focused app.
+        let mut f = HookFilter::new(TalkKey::RightAlt);
+        f.on_key(KeyEvent::down(vk::RMENU), T0);
+        f.on_unlock(|_| false, T0);
+        assert_eq!(f.on_key(KeyEvent::up(vk::RMENU), T0), (Verdict::Pass, None));
+    }
+
+    #[test]
+    fn cap_45_core_unlock_sends_the_key_up() {
+        let (mut c, rx, _) = core(TalkKey::RightAlt);
+        c.handle(KeyEvent::down(vk::RMENU));
+        c.on_unlock(|_| false);
+        assert_eq!(rx.try_recv(), Ok(HookSignal::TalkDown { at: T0 }));
+        assert_eq!(rx.try_recv(), Ok(HookSignal::TalkUp { at: T0 }));
     }
 }
