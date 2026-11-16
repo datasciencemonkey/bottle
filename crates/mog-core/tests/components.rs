@@ -266,3 +266,22 @@ fn arc_6_only_token_broker_names_the_token_type() {
         "only token_broker.rs may name {name}: {offenders:?}"
     );
 }
+
+#[test]
+fn arc_6_cli_runner_run_json_refuses_auth_token() {
+    use mog_core::cli_runner::{CliRunner, StubCliRunner};
+    let s = StubCliRunner;
+    // Only R6 TokenBroker may run `databricks auth token`; R5 must refuse it for every caller.
+    for args in [
+        &["auth", "token", "--profile", "p"][..],
+        &["--debug", "auth", "token"][..],
+        &["AUTH", "Token"][..],
+    ] {
+        match s.run_json(args) {
+            Err(e) => assert_eq!(e.code(), "token_command_refused", "args {args:?}"),
+            Ok(v) => panic!("run_json returned {v:?} for {args:?}"),
+        }
+    }
+    // Other commands still reach the stub.
+    not_implemented(s.run_json(&["auth", "profiles"]), "R5");
+}
