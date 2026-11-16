@@ -45,7 +45,13 @@ export type CardSection =
   | { id: 'answer'; md: string }
   | { id: 'keyNumbers'; items: string[] }
   | { id: 'sql'; sql: string; collapsed: true }
-  | { id: 'tablePreview'; columns: string[]; rows: string[][]; moreRows: number }
+  | {
+      id: 'tablePreview';
+      columns: string[];
+      rows: string[][];
+      moreRows: number;
+      moreColumns?: number;
+    }
   | { id: 'sentToGenie'; text: string }
   | { id: 'resend' }
   | { id: 'copy'; formats: ('markdown' | 'csv')[] }

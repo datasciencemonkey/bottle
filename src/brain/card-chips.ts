@@ -106,12 +106,13 @@ export class ChipRow {
   offer(c: ChipInput, now: number): boolean {
     const def = CHIP_CATALOGUE[c.kind];
     if (def.badge || (def.v1 && !this.v1) || !hasText(c.label)) return false;
+    const at = this.entries.findIndex((e) => e.id === c.id);
+    // The same ID again keeps its sequence number: it is not a newer chip (Ask Genie rule).
     const entry: Entry = {
       ...c,
-      seq: ++this.seq,
+      seq: this.entries[at]?.seq ?? ++this.seq,
       ...(def.ttlMs !== undefined ? { expiresAt: now + def.ttlMs } : {}),
     };
-    const at = this.entries.findIndex((e) => e.id === c.id);
     if (at >= 0) this.entries[at] = entry;
     else {
       this.entries.push(entry);

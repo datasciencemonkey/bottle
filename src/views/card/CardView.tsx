@@ -95,6 +95,7 @@ function Section({
             </tbody>
           </table>
           {s.moreRows > 0 && <p>{`${s.moreRows} more rows`}</p>}
+          {(s.moreColumns ?? 0) > 0 && <p>{`${s.moreColumns} more columns`}</p>}
         </section>
       );
     case 'sentToGenie':

@@ -20,8 +20,14 @@ export const SECTION_ORDER = [
 
 export type SectionId = (typeof SECTION_ORDER)[number];
 
-/** Rows in the table preview. The copy keeps every row. */
-export const PREVIEW_ROWS = 10;
+/**
+ * Table preview caps. 50 rows is the `maxRows` of `getQueryResult` (Section 4.7), so the preview
+ * shows the whole result the bridge fetches. 20 columns and 200 characters a cell are our limits
+ * for a card that is a few hundred pixels wide (ADR 0043). The copy keeps every row and cell.
+ */
+export const PREVIEW_ROWS = 50;
+export const PREVIEW_COLUMNS = 20;
+export const PREVIEW_CELL_CHARS = 200;
 
 export interface Table {
   columns: string[];
@@ -48,7 +54,13 @@ export type ExpandedSection =
   | { id: 'answer'; md: string }
   | { id: 'keyNumbers'; items: string[] }
   | { id: 'sql'; sql: string; collapsed: true }
-  | { id: 'tablePreview'; columns: string[]; rows: string[][]; moreRows: number }
+  | {
+      id: 'tablePreview';
+      columns: string[];
+      rows: string[][];
+      moreRows: number;
+      moreColumns: number;
+    }
   | { id: 'sentToGenie'; text: string }
   | { id: 'resend' }
   | { id: 'copy'; formats: ('markdown' | 'csv')[] }
@@ -62,11 +74,15 @@ export function buildSections(i: SectionInput): ExpandedSection[] {
   if (i.sql) out.push({ id: 'sql', sql: i.sql, collapsed: true });
   if (i.table) {
     const rows = i.table.rows.slice(0, PREVIEW_ROWS);
+    const cell = (c: string) =>
+      c.length > PREVIEW_CELL_CHARS ? `${c.slice(0, PREVIEW_CELL_CHARS - 1)}\u2026` : c;
+    const cut = (r: string[]) => r.slice(0, PREVIEW_COLUMNS).map(cell);
     out.push({
       id: 'tablePreview',
-      columns: i.table.columns,
-      rows,
+      columns: cut(i.table.columns),
+      rows: rows.map(cut),
       moreRows: i.table.rows.length - rows.length,
+      moreColumns: Math.max(0, i.table.columns.length - PREVIEW_COLUMNS),
     });
   }
   if (i.sentToGenie) out.push({ id: 'sentToGenie', text: i.sentToGenie });
@@ -81,16 +97,19 @@ export function buildSections(i: SectionInput): ExpandedSection[] {
   return out;
 }
 
-const mdCell = (s: string) => s.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+const mdCell = (s: string) => s.replace(/[\\`|]/g, '\\$&').replace(/\r?\n/g, ' ');
 
 export function tableToMarkdown(t: Table): string {
   const row = (cells: string[]) => `| ${cells.map(mdCell).join(' | ')} |`;
   return [row(t.columns), row(t.columns.map(() => '---')), ...t.rows.map(row)].join('\n');
 }
 
-/** A cell that starts with a formula character gets a `'` first, so a sheet never runs it. */
+/** A whole cell that is a plain number: the only cell that may start with `-` or `+` unguarded. */
+const PURE_NUMBER = /^[-+]?(\d+(\.\d*)?|\.\d+)([eE][-+]?\d+)?$/;
+
+/** A cell that starts with `=`, `+`, `-`, `@`, tab or CR gets a `'` first, so a sheet never runs it. */
 const csvCell = (s: string) => {
-  const safe = /^([=+@\t\r]|-(?![\d.]))/.test(s) ? `'${s}` : s;
+  const safe = /^[=+\-@\t\r]/.test(s) && !PURE_NUMBER.test(s) ? `'${s}` : s;
   return /[",\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 };
 
