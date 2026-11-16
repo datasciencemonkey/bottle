@@ -41,6 +41,17 @@ describe('home domain input (PG-20)', () => {
   it('[PG-18] keys a workspace by its host, in one form', () => {
     expect(workspaceKey('https://ACME.cloud.databricks.com/')).toBe('acme.cloud.databricks.com');
     expect(workspaceKey('acme.cloud.databricks.com')).toBe('acme.cloud.databricks.com');
+    // The same workspace identity as the CLI profile host match of select-databricks-profile
+    // (antigravity-bricks-plugin genie_bridge.py: urlsplit(base_url(host)).hostname).
+    expect(workspaceKey('https://acme.cloud.databricks.com:443/')).toBe(
+      'acme.cloud.databricks.com',
+    );
+    expect(workspaceKey('https://acme.cloud.databricks.com/?o=1234')).toBe(
+      'acme.cloud.databricks.com',
+    );
+    expect(workspaceKey('https://Adb-1.2.azuredatabricks.net/browse#x')).toBe(
+      'adb-1.2.azuredatabricks.net',
+    );
   });
 });
 
