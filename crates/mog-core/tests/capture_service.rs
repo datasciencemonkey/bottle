@@ -424,13 +424,13 @@ fn cap_13b_pause_closes_the_mic_stream() {
 // ---------- CAP-04a / CAP-04b: locked caps (AT-03) ----------
 
 #[test]
-fn cap_04a_caps_are_locked_at_120_s_and_5_min() {
+fn cap_04a_caps_are_locked_after_120_s_and_5_min() {
     assert_eq!(HOLD_MAX_MS, 120_000);
     assert_eq!(HANDS_FREE_MAX_MS, 300_000);
 }
 
 #[test]
-fn cap_04a_missing_key_up_stops_ptt_at_120_s() {
+fn cap_04a_missing_key_up_stops_ptt_after_120_s() {
     let r = rig();
     let lease = r.svc.start(req("a", CaptureMode::Ptt)).unwrap();
     r.advance(HOLD_MAX_MS - 1);
@@ -470,7 +470,7 @@ fn cap_04a_tick_returns_the_next_deadline() {
 }
 
 #[test]
-fn cap_04a_directed_ptt_in_a_session_stops_at_120_s_and_the_session_goes_on() {
+fn cap_04a_directed_ptt_in_a_session_stops_after_120_s_and_the_session_goes_on() {
     let r = rig();
     let session = r.svc.start(req("a", CaptureMode::Session)).unwrap();
     let ptt = r.svc.start(req("b", CaptureMode::Ptt)).unwrap();
@@ -487,7 +487,7 @@ fn cap_04a_directed_ptt_in_a_session_stops_at_120_s_and_the_session_goes_on() {
 }
 
 #[test]
-fn cap_04b_hands_free_stops_at_5_min() {
+fn cap_04b_hands_free_stops_after_5_min() {
     let r = rig();
     let lease = r.svc.start(req("a", CaptureMode::HandsFree)).unwrap();
     r.advance(HANDS_FREE_MAX_MS - 1);
@@ -505,7 +505,7 @@ fn cap_04b_hands_free_stops_at_5_min() {
 }
 
 #[test]
-fn cap_04b_suspended_hands_free_still_stops_at_5_min() {
+fn cap_04b_suspended_hands_free_still_stops_after_5_min() {
     let r = rig();
     let hf = r.svc.start(req("a", CaptureMode::HandsFree)).unwrap();
     r.advance(HANDS_FREE_MAX_MS - 10_000);
