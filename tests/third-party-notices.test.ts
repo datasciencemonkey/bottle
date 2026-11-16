@@ -62,6 +62,18 @@ const HANDY_HEADER =
   'Adapted from cjpais/Handy <path> @ aca8985 (MIT, Copyright (c) 2025 CJ Pais). See THIRD_PARTY_NOTICES.';
 const PORTED_MARKER = 'Ported from antigravity-bricks-plugin (commit a31fd2c).';
 
+/** The upstream copyright line of each MIT component (checked against the upstream LICENSE files). */
+const MIT_COPYRIGHTS: ReadonlyArray<readonly [string, string]> = [
+  ['antigravity-bricks-plugin', 'Copyright (c) 2026 Sathish Gangichetty'],
+  ['Handy', 'Copyright (c) 2025 CJ Pais'],
+  ['onnxruntime', 'Copyright (c) Microsoft Corporation'],
+  ['Silero VAD v6', 'Copyright (c) 2020-present Silero Team'],
+  ['Rive runtimes', 'Copyright (c) 2020-2021 Rive'],
+  ['Tauri', 'Copyright (c) 2017 - Present Tauri Apps Contributors'],
+  ['tauri-plugin-global-shortcut', 'Copyright (c) 2017 - Present Tauri Apps Contributors'],
+  ['tauri-nspanel', 'Copyright (c) 2023 - Present Victor Aremu'],
+];
+
 function notices(): string {
   return readFileSync(NOTICES_PATH, 'utf8');
 }
@@ -102,7 +114,7 @@ const HANDY_LINE =
 /** [SEC-21a] The Handy path named in a well-formed header, null if none, or an error string. */
 function handyHeader(text: string): { path: string } | { error: string } | null {
   for (const line of text.split('\n')) {
-    if (!/^(?:\/\/|#) Adapted from cjpais\/Handy\b/.test(line)) continue;
+    if (!/^\s*(?:\/\/[!/]?|#|\/?\*+)\s*Adapted from cjpais\/Handy\b/.test(line)) continue;
     const m = line.match(HANDY_LINE);
     return m?.[1] ? { path: m[1] } : { error: `malformed Handy header: ${line}` };
   }
@@ -116,12 +128,20 @@ function sourceFiles(dir: string): string[] {
     if (name === 'node_modules' || name === 'target' || name.startsWith('.')) continue;
     const p = join(dir, name);
     if (statSync(p).isDirectory()) out.push(...sourceFiles(p));
-    else if (/\.(ts|tsx|rs|py)$/.test(name)) out.push(p);
+    else if (/\.(ts|tsx|js|mjs|rs|py)$/.test(name)) out.push(p);
   }
   return out;
 }
 
-const SCANNED = ['src', 'src-tauri/src', 'src-tauri/build.rs', 'crates', 'scripts'];
+const SCANNED = [
+  'src',
+  'src-tauri/src',
+  'src-tauri/tests',
+  'src-tauri/build.rs',
+  'crates',
+  'scripts',
+  'tools',
+];
 
 function scannedFiles(): string[] {
   return SCANNED.flatMap((d) => {
@@ -210,6 +230,13 @@ describe('THIRD_PARTY_NOTICES.md', () => {
       expect(mit, `${heading} has no MIT text block`).toBeDefined();
       expect(mit?.endsWith(permission), `${heading} MIT text is not verbatim`).toBe(true);
     }
+    for (const [component, copyright] of MIT_COPYRIGHTS) {
+      const body = [...sections(md)].find(([h]) => h.startsWith(`${component} (`))?.[1] ?? '';
+      expect(
+        textBlocks(body).some((b) => b.startsWith(`MIT License\n\n${copyright}\n\n`)),
+        `${component} lacks "${copyright}"`,
+      ).toBe(true);
+    }
     expect(md).toMatch(/Apache License\n\s+Version 2\.0, January 2004/);
     expect(md).toContain('END OF TERMS AND CONDITIONS');
   });
@@ -256,6 +283,9 @@ describe('ported and adapted file headers', () => {
       path: 'src-tauri/src/shortcut/mod.rs',
     });
     expect(handyHeader('// Adapted from cjpais/Handy foo.rs\n')).toHaveProperty('error');
+    expect(handyHeader(`//! ${HANDY_HEADER.replace('<path>', 'x.rs')}\n`)).toHaveProperty('error');
+    expect(handyHeader(`  ${header(HANDY_HEADER)}\n`)).toHaveProperty('error');
+    expect(handyHeader(` * ${HANDY_HEADER.replace('<path>', 'x.rs')}\n`)).toHaveProperty('error');
     expect(handyHeader('fn x() {}\n')).toBeNull();
   });
 
