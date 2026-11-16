@@ -1,0 +1,7 @@
+{
+  "name": "DEFAULT",
+  "host": "https://example.cloud.databricks.com",
+  "authType": "databricks-cli",
+  "supported": true,
+  "workspaceId": "1234567890123456"
+}

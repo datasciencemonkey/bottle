@@ -1,0 +1,16 @@
+{
+  "intent": "command",
+  "cleaned_text": "Switch to the staging workspace for this session.",
+  "genie_question": "",
+  "target_profile_hint": "staging",
+  "confidence": 0.81,
+  "follow_up": false,
+  "topic_label": "workspace",
+  "part_questions": [],
+  "part_profile_hints": [],
+  "command": "switch_workspace_session",
+  "command_arg": "staging",
+  "context_note": "",
+  "injection_suspected": false,
+  "directed_mog_id": "0a9b8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d"
+}

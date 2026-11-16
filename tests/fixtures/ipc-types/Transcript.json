@@ -1,0 +1,10 @@
+{
+  "segmentId": "seg-0001",
+  "text": "What was revenue last quarter?",
+  "raw": "uh what was revenue last quarter",
+  "lang": "en",
+  "provider": "local_parakeet",
+  "model": "parakeet-tdt-0.6b-v3",
+  "runtime": "onnx",
+  "latencyMs": 420
+}
