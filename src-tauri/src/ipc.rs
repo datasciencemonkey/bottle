@@ -17,7 +17,8 @@ use std::sync::Mutex;
 use tauri::ipc::{Channel, Invoke, InvokeBody, JavaScriptChannelId};
 use tauri::{Manager, Runtime};
 
-/// The brain's private delivery Channel (set by `brain_subscribe`).
+/// The brain's private delivery Channel. `brain_subscribe` sets it; a later call (brain reload)
+/// replaces the earlier Channel.
 #[derive(Default)]
 pub struct BrainChannel(Mutex<Option<Channel<Value>>>);
 
@@ -154,9 +155,23 @@ mod tests {
     #[test]
     fn arc_5_core_to_brain_items_are_never_tauri_events() {
         // Any `emit`/`emit_to` in the app crate would broadcast to every listening window.
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        for entry in std::fs::read_dir(dir).unwrap() {
-            let path = entry.unwrap().path();
+        fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    rust_files(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        rust_files(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut files,
+        );
+        assert!(!files.is_empty());
+        for path in files {
             let text = std::fs::read_to_string(&path).unwrap();
             // Production code only: stop at the test module.
             let code: String = text
