@@ -22,7 +22,7 @@ const ID: &str = "R1";
 pub const TALK_KEY_PAUSED_PILL: &str = "Talk key paused: another app protects typing. Use ⌃⇧Space.";
 
 /// How often the watchdog polls Secure Event Input, the session and the permission.
-/// The OS has no Secure Event Input notification, so a poll is the only way (ADR 0008).
+/// The OS has no Secure Event Input notification, so a poll is the only way (ADR 0011).
 pub const WATCHDOG_TICK: Duration = Duration::from_millis(100);
 
 /// The longest time from Secure Event Input start to the end of an active PTT (CAP-39a).
@@ -190,7 +190,7 @@ impl PttMachine {
     /// Secure Event Input started or ended. `physical` is read after the change.
     ///
     /// Start: an active PTT ends with `cancel` (the focused field is protected, so nothing
-    /// may go into it; ADR 0008), the chord takes over and the pill shows.
+    /// may go into it; ADR 0011), the chord takes over and the pill shows.
     /// End: a chord PTT ends with `up` (the chord is unregistered, so its release would be
     /// lost), the talk key takes over and the pill hides. A re-read never starts a PTT.
     pub fn on_secure_input(&mut self, active: bool, physical: PhysicalState) -> Vec<HotkeyOutput> {

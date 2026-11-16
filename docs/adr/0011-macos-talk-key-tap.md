@@ -1,4 +1,4 @@
-# ADR 0008: The macOS talk key: listen-only FlagsChanged tap, polled Secure Input, cancel on SEI
+# ADR 0011: The macOS talk key: listen-only FlagsChanged tap, polled Secure Input, cancel on SEI
 
 - Status: Accepted
 - Date: 2026-11-16

@@ -5,7 +5,7 @@
 //! tests run everywhere. The OS calls are in [`sys`], built only on macOS.
 //!
 //! Privacy: the tap listens to `FlagsChanged` only. It never sees `KeyDown` or `KeyUp` of
-//! typed text, so no key contents reach Bottle, a log or telemetry (ADR 0008).
+//! typed text, so no key contents reach Bottle, a log or telemetry (ADR 0011).
 //!
 //! Requirements: CAP-35a, CAP-35b, CAP-36, CAP-37, CAP-38a, CAP-38b, CAP-39a, CAP-39b,
 //! CAP-45. Real-device proof (AT-30) waits for SP-03: TODO(#5).
@@ -202,7 +202,7 @@ mod tests {
 #[cfg(target_os = "macos")]
 pub use sys::{run_main_loop, MacHotkeyService, MacPermissions, MacProbe};
 
-/// The macOS OS calls. Raw FFI to system frameworks only, no new crates (ADR 0008).
+/// The macOS OS calls. Raw FFI to system frameworks only, no new crates (ADR 0011).
 #[cfg(target_os = "macos")]
 mod sys {
     use std::ffi::{c_char, c_void, CStr};
