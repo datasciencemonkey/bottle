@@ -112,6 +112,9 @@ pub struct WindowsHotkeyService {
 struct Running {
     thread_id: u32,
     join: JoinHandle<()>,
+    /// Set to `false` by the hook thread when its loop ends, before it reports a failure and
+    /// cleans up. So `start()` and `stop()` never treat an ending thread as live.
+    alive: Arc<AtomicBool>,
 }
 
 impl WindowsHotkeyService {
@@ -155,7 +158,9 @@ impl HotkeyService for WindowsHotkeyService {
             signals: self.signals.clone(),
             hands_free: self.hands_free.clone(),
             recorder: self.recorder.clone(),
+            alive: Arc::new(AtomicBool::new(true)),
         };
+        let alive = ctx.alive.clone();
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let join = std::thread::Builder::new()
             .name("bottle-hotkey".into())
@@ -163,7 +168,11 @@ impl HotkeyService for WindowsHotkeyService {
             .map_err(|_| unavailable("hook_thread_spawn_failed"))?;
         match ready_rx.recv() {
             Ok(Ok(thread_id)) => {
-                *running = Some(Running { thread_id, join });
+                *running = Some(Running {
+                    thread_id,
+                    join,
+                    alive,
+                });
                 Ok(())
             }
             Ok(Err(e)) => {
@@ -215,11 +224,12 @@ impl Drop for WindowsHotkeyService {
 fn thread_state(running: Option<&Running>) -> HookThread {
     HookThread::of(
         running.is_some(),
-        running.is_some_and(|r| r.join.is_finished()),
+        running.is_some_and(|r| r.join.is_finished() || !r.alive.load(Ordering::Acquire)),
     )
 }
 
 struct ThreadCtx {
+    alive: Arc<AtomicBool>,
     talk: TalkKey,
     signals: Sender<HookSignal>,
     hands_free: Arc<AtomicBool>,
@@ -370,6 +380,9 @@ fn hook_thread(ctx: ThreadCtx, ready: SyncSender<CoreResult<u32>>) {
         let got = unsafe { GetMessageW(&mut msg, null_mut(), 0, 0) };
         let step = LoopStep::from_get_message(got);
         if step != LoopStep::Dispatch || msg.message == WM_QUIT {
+            // Mark the thread as ending first, so a `start()` that the signal below triggers
+            // joins this thread and installs a new hook instead of seeing a live one.
+            ctx.alive.store(false, Ordering::Release);
             // A failed loop must not leave a dead hook that looks alive: report it, then
             // clean up. `start()` then sees a finished thread and starts a new one.
             if let Some(signal) = step.exit_signal() {
@@ -426,7 +439,7 @@ fn hook_thread(ctx: ThreadCtx, ready: SyncSender<CoreResult<u32>>) {
 }
 
 /// Make a message-only window on this thread and register it for the session notifications
-/// (CAP-45). Returns null if a step fails; nothing is left registered then.
+/// (CAP-45). Returns null if a step fails; the window and the class are then removed.
 fn register_session_window() -> HWND {
     // SAFETY: valid class data with a static NUL-terminated name; each handle is checked
     // and released once on failure.
@@ -456,10 +469,12 @@ fn register_session_window() -> HWND {
             null(),
         );
         if hwnd.is_null() {
+            UnregisterClassW(SESSION_CLASS.as_ptr(), module);
             return null_mut();
         }
         if WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION) == 0 {
             DestroyWindow(hwnd);
+            UnregisterClassW(SESSION_CLASS.as_ptr(), module);
             return null_mut();
         }
         hwnd
