@@ -81,6 +81,94 @@ describe('OS notifications', () => {
     expect(t.sent).toEqual([]);
   });
 
+  it('[UX-26a] a card that was visible when the answer finished gets no notification, even if it hides inside the window', async () => {
+    const vis = new Set<string>([A]);
+    const t = setup({ visible: vis });
+    t.svc.report(answer(A));
+    await new Promise((r) => setTimeout(r, 0));
+    vis.delete(A);
+    await t.advance(5 * S);
+    expect(t.sent).toEqual([]);
+  });
+
+  it('[UX-26c] three MOGs in one window give one merged notification', async () => {
+    const C = '00000000-0000-4000-8000-00000000000c' as MogId;
+    const t = setup();
+    t.svc.report(answer(A));
+    t.svc.report(answer(B));
+    t.svc.report(answer(C));
+    await t.advance(5 * S);
+    expect(t.sent).toHaveLength(1);
+    expect(t.sent[0]?.body).toBe('3 MOGs have new answers');
+  });
+
+  it('[UX-26b][UX-26c] after a merge both MOGs are limited for 10 s', async () => {
+    const t = setup();
+    t.svc.report(answer(A));
+    t.svc.report(answer(B));
+    await t.advance(5 * S);
+    await t.advance(2 * S);
+    t.svc.report(answer(A));
+    t.svc.report(answer(B));
+    await t.advance(10 * S);
+    expect(t.sent).toHaveLength(1);
+  });
+
+  it('[UX-26b] a report during an in-flight notify sees the limit', async () => {
+    const clock = createSimClock();
+    const timers: (() => void)[] = [];
+    let release: () => void = () => {};
+    const sent: OsNotification[] = [];
+    const svc = createNotificationService({
+      clock,
+      schedule: (_at, fn) => {
+        timers.push(fn);
+        return () => {};
+      },
+      host: {
+        cardVisible: async () => false,
+        focusAllows: async () => true,
+        notify: (n) =>
+          new Promise<void>((r) => {
+            sent.push(n);
+            release = r;
+          }),
+      },
+    });
+    svc.report(answer(A));
+    clock.advance(5 * S);
+    timers.shift()?.();
+    await new Promise((r) => setTimeout(r, 0));
+    svc.report(answer(A)); // notify is still in flight
+    clock.advance(5 * S);
+    timers.shift()?.();
+    await new Promise((r) => setTimeout(r, 0));
+    release();
+    expect(sent).toHaveLength(1);
+  });
+
+  it('[UX-26a] a rejected notify does not throw out of the service', async () => {
+    const clock = createSimClock();
+    let fire: () => void = () => {};
+    const svc = createNotificationService({
+      clock,
+      schedule: (_at, fn) => {
+        fire = fn;
+        return () => {};
+      },
+      host: {
+        cardVisible: async () => false,
+        focusAllows: async () => true,
+        notify: async () => {
+          throw new Error('x');
+        },
+      },
+    });
+    svc.report(answer(A));
+    expect(() => fire()).not.toThrow();
+    await new Promise((r) => setTimeout(r, 0));
+  });
+
   it('[UX-26a] no notification when the OS Focus mode blocks it', async () => {
     const t = setup({ focusAllows: false });
     t.svc.report(answer(A));
