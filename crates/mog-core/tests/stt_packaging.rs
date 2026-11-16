@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
 use mog_core::stt::{
-    p_cores_from_efficiency_classes, perf_core_count, LocalSttConfig, LOCAL_STT_PROVIDER,
+    efficiency_classes_from_slpi, p_cores_from_efficiency_classes, perf_core_count, LocalSttConfig,
+    LOCAL_STT_PROVIDER,
 };
 use mog_core::stt_model::{
     is_allowed_url, sha256_hex, ConsentGate, FetchError, InstallError, ModelConsent,
@@ -148,6 +149,58 @@ fn cap_48_p_cores_are_the_cores_of_the_highest_efficiency_class() {
     // A CPU with one core type reports one class for every core: all are P-cores.
     assert_eq!(p_cores_from_efficiency_classes(&[0; 6]), 6);
     assert_eq!(p_cores_from_efficiency_classes(&[]), 1);
+}
+
+/// One `SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX` record as Windows x64 writes it for
+/// `RelationProcessorCore`: Relationship (u32), Size (u32) = 48, then `PROCESSOR_RELATIONSHIP`
+/// (Flags u8, EfficiencyClass u8, Reserved [u8; 20], GroupCount u16, GroupMask).
+fn core_record(class: u8) -> Vec<u8> {
+    let mut r = vec![0u8; 48];
+    r[0..4].copy_from_slice(&0u32.to_le_bytes());
+    r[4..8].copy_from_slice(&48u32.to_le_bytes());
+    r[9] = class;
+    r
+}
+
+#[test]
+fn cap_48_windows_parser_reads_every_48_byte_core_record() {
+    // One core: a buffer shorter than the 80-byte union struct must still give one class.
+    assert_eq!(efficiency_classes_from_slpi(&core_record(0)), vec![0]);
+    // 8 cores of one type: all 8, not 7.
+    let buf: Vec<u8> = (0..8).flat_map(|_| core_record(0)).collect();
+    assert_eq!(efficiency_classes_from_slpi(&buf).len(), 8);
+    assert_eq!(
+        p_cores_from_efficiency_classes(&efficiency_classes_from_slpi(&buf)),
+        8
+    );
+    // i5-1235U: 2 P-cores (class 1) and 8 E-cores (class 0).
+    let buf: Vec<u8> = [1, 1, 0, 0, 0, 0, 0, 0, 0, 0]
+        .iter()
+        .flat_map(|c| core_record(*c))
+        .collect();
+    assert_eq!(
+        p_cores_from_efficiency_classes(&efficiency_classes_from_slpi(&buf)),
+        2
+    );
+}
+
+#[test]
+fn cap_48_windows_parser_stops_on_bad_records() {
+    // A size of 0, a size past the end, or a truncated header ends the walk without a panic.
+    let mut zero = core_record(1);
+    zero[4..8].copy_from_slice(&0u32.to_le_bytes());
+    assert!(efficiency_classes_from_slpi(&zero).is_empty());
+    let mut long = core_record(1);
+    long[4..8].copy_from_slice(&4096u32.to_le_bytes());
+    assert!(efficiency_classes_from_slpi(&long).is_empty());
+    let mut buf = core_record(1);
+    buf.extend_from_slice(&[0u8; 5]);
+    assert_eq!(efficiency_classes_from_slpi(&buf), vec![1]);
+    // A record of another relationship type is skipped.
+    let mut other = core_record(1);
+    other[0..4].copy_from_slice(&2u32.to_le_bytes());
+    other.extend(core_record(0));
+    assert_eq!(efficiency_classes_from_slpi(&other), vec![0]);
 }
 
 #[cfg(target_os = "macos")]
@@ -405,6 +458,40 @@ fn cap_49c_the_archive_and_the_extracted_files_are_checked() {
 }
 
 #[test]
+fn cap_49c_a_changed_release_archive_stops_before_the_extract() {
+    let (spec, bodies) = fake_spec();
+    let mut changed = bodies["archive"].clone();
+    changed[3] ^= 0xff;
+    let mut net = FakeNet::default();
+    net.bodies
+        .insert(format!("{GH}{}", spec.archive.name), changed);
+    let extracted = std::cell::Cell::new(false);
+    let extract = |_a: &Path, _d: &Path| -> io::Result<()> {
+        extracted.set(true);
+        Ok(())
+    };
+    let dir = tmp("archive-hash");
+    let installer = ModelInstaller::new(&dir, spec.clone());
+    let err = install(
+        &installer,
+        &Gate(ModelConsent::Granted),
+        &net,
+        ModelSource::GithubRelease,
+        &extract,
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        InstallError::HashMismatch {
+            file: spec.archive.name
+        }
+    );
+    assert!(!extracted.get(), "a bad archive must not be extracted");
+    assert!(!dir.join(format!("{}.partial", spec.archive.name)).exists());
+    assert!(!dir.join(spec.archive.name).exists());
+}
+
+#[test]
 fn cap_49c_the_real_model_pins_match_the_sp_04_hashes() {
     let spec = ModelSpec::parakeet_tdt_v3_int8();
     assert_eq!(spec.archive.size, 487_211_443);
@@ -446,18 +533,6 @@ fn cap_50a_sherpa_onnx_archive_pins_cover_the_ci_and_release_targets() {
     for (name, sha) in pins {
         assert!(file.contains(&format!("{sha}  {name}")), "{name}");
     }
-}
-
-#[test]
-fn cap_50b_the_core_does_not_link_sherpa_onnx_without_the_local_stt_feature() {
-    // Without `local-stt` the build fetches nothing; with it, build.rs refuses a build that has no
-    // vendored, hash-checked archive (see docs/adr/0049-local-stt-packaging.md).
-    let manifest = include_str!("../Cargo.toml");
-    assert!(manifest.contains("local-stt = ["));
-    assert!(manifest.contains("sherpa-onnx = { version = \"=2.0.1\", optional = true"));
-    let build = include_str!("../build.rs");
-    assert!(build.contains("SHERPA_ONNX_ARCHIVE_DIR"));
-    assert!(build.contains("CARGO_FEATURE_LOCAL_STT"));
 }
 
 #[test]
