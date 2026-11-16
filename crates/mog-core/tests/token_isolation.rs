@@ -787,7 +787,17 @@ fn arc_7_rule_9_close_ends_open_connections() {
         host_of(a)
     );
     c.write_all(head.as_bytes()).unwrap();
-    std::thread::sleep(Duration::from_millis(200));
+    // #400: wait for the event "the session holds this connection open", not for a fixed
+    // time. Under load the accept can take longer than any short sleep. The 10 s bound only
+    // stops a hang; the test does not depend on it.
+    let held = std::time::Instant::now();
+    while s.open_connections() != 1 {
+        assert!(
+            held.elapsed() < Duration::from_secs(10),
+            "the session never took the connection"
+        );
+        std::thread::yield_now();
+    }
     let t = std::time::Instant::now();
     s.close();
     assert!(

@@ -14,14 +14,32 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use mog_core::capture::{CaptureService, StubCaptureService};
+use mog_core::capture::{CaptureCore, CaptureRequest, CaptureService};
 use mog_core::clock::{MonotonicClock, SimClock};
 use mog_core::hotkey_core::{
     HotkeyEngine, HotkeyOutput, KeyEdge, PttPhase, OTHER_KEY_CANCEL_WINDOW, TAP_MAX_HOLD,
 };
 use mog_core::hotkey_windows::{vk, HookFilter, HookSignal, KeyEvent, TalkKey, Verdict};
+use mog_core::testkit::capture::{FakeAudioDevice, RecordingCaptureEvents};
 use mog_core::testkit::hotkey::RecordingSink;
-use mog_core::types::SessionPolicy;
+use mog_core::types::{CaptureMode, SessionPolicy};
+
+/// R2 on the shared sim clock with the testkit fake device (#4).
+fn r2(clock: &SimClock) -> CaptureCore {
+    CaptureCore::new(
+        Box::new(FakeAudioDevice::new()),
+        Arc::new(clock.clone()),
+        Arc::new(RecordingCaptureEvents::default()),
+    )
+}
+
+fn capture(mode: CaptureMode) -> CaptureRequest {
+    CaptureRequest {
+        mog_id: MOG_A.to_string(),
+        mode,
+        others_track: false,
+    }
+}
 
 fn ms(v: u64) -> Duration {
     Duration::from_millis(v)
@@ -169,11 +187,13 @@ fn at_03_cap_04a_cap_04b_a_missing_key_up_stops_after_two_minutes_and_hands_free
     assert_eq!(p.hands_free_max_min, 5);
     // TODO(#4): R2 with `clock`: capture_start {mode: ptt}, no key-up, advance 120 s ± 1 s and
     // read capture_status; then the same with hands_free and 5 min.
-    let r2 = StubCaptureService;
-    let lease = r2.acquire_lease(MOG_A).expect("TODO(#4): a PTT lease");
+    let r2 = r2(&clock);
+    let lease = r2
+        .start(capture(CaptureMode::Ptt))
+        .expect("TODO(#4): a PTT lease");
     clock.advance(Duration::from_secs(121));
     assert!(
-        r2.release_lease(lease).is_err(),
+        r2.stop(lease.id).is_err(),
         "R2 ended the lease at the 120 s cap, so a late release is refused"
     );
     todo!("TODO(#4): read capture_status at 119 s (recording) and 121 s (idle); repeat for hands-free at 5 min ± 1 s");
@@ -182,10 +202,12 @@ fn at_03_cap_04a_cap_04b_a_missing_key_up_stops_after_two_minutes_and_hands_free
 #[test]
 #[ignore = "pending TODO(#21): no pre-roll and the mic close on pause are not built"]
 fn at_03_cap_13a_cap_13b_no_audio_before_key_down_and_the_mic_closes_on_pause() {
-    // TODO(#21): R2 has no frame before acquire_lease, and capture_pause closes the stream.
-    let r2 = StubCaptureService;
-    let lease = r2.acquire_lease(MOG_A).expect("TODO(#21): a lease");
-    r2.release_lease(lease)
+    // TODO(#21): R2 has no frame before capture start, and capture_pause closes the stream.
+    let r2 = r2(&SimClock::new());
+    let lease = r2
+        .start(capture(CaptureMode::Ptt))
+        .expect("TODO(#21): a lease");
+    r2.stop(lease.id)
         .expect("TODO(#21): the mic closes when no lease is left");
     todo!("TODO(#21): assert no frame exists before the lease and the OS mic is closed after capture_pause");
 }
@@ -207,11 +229,11 @@ fn at_03_cap_14a_cap_14b_cap_14c_cap_44b_hands_free_starts_and_stops_and_tap_aud
     // TODO(#14): the double_tap phase starts R2 in hands_free; a tap, Esc or 5 min stops it in
     // 200 ms or less; `mog.capture.vadEndMs` (default 1,500 ms) ends it after silence; the tap
     // audio never goes to the journal or STT.
-    let r2 = StubCaptureService;
+    let r2 = r2(&clock);
     let lease = r2
-        .acquire_lease(MOG_A)
+        .start(capture(CaptureMode::HandsFree))
         .expect("TODO(#14): a hands-free lease");
-    r2.release_lease(lease)
+    r2.stop(lease.id)
         .expect("TODO(#14): the stop releases the lease");
     todo!("TODO(#14): assert the double-tap starts hands-free, a tap / Esc / 5 min stop it in 200 ms or less, the VAD end and no tap audio in the journal or STT");
 }
@@ -221,11 +243,11 @@ fn at_03_cap_14a_cap_14b_cap_14c_cap_44b_hands_free_starts_and_stops_and_tap_aud
 fn at_03_cap_17a_cap_17b_cap_22_denied_mic_makes_no_transcript() {
     // TODO(#22): no prompt at launch; 2 s of zero buffers shows the fix-it card and no
     // capture.segment is sent; the hub shows "Prefer the built-in mic ...".
-    let r2 = StubCaptureService;
+    let r2 = r2(&SimClock::new());
     let lease = r2
-        .acquire_lease(MOG_A)
+        .start(capture(CaptureMode::Ptt))
         .expect("TODO(#22): a lease with the mic denied");
-    r2.release_lease(lease).expect("release");
+    r2.stop(lease.id).expect("release");
     todo!("TODO(#22): assert no prompt at launch, the fix-it card after 2 s of zero buffers and no capture.segment");
 }
 
@@ -234,12 +256,12 @@ fn at_03_cap_17a_cap_17b_cap_22_denied_mic_makes_no_transcript() {
 fn at_03_mog_09_mog_12a_mog_12b_click_to_listen_never_starts_a_meeting_and_idle_has_no_mic() {
     // TODO(#83): a click (< 4 px, < 300 ms) toggles hands-free; 100 clicks start no session.
     // TODO(#98): 8 idle MOGs for 1 h hold no lease.
-    let r2 = StubCaptureService;
+    let r2 = r2(&SimClock::new());
     for _ in 0..100 {
         let lease = r2
-            .acquire_lease(MOG_A)
+            .start(capture(CaptureMode::HandsFree))
             .expect("TODO(#83): a hands-free lease");
-        r2.release_lease(lease).expect("release");
+        r2.stop(lease.id).expect("release");
     }
     todo!("TODO(#83): assert 100 mascot clicks toggle hands-free and start no session; TODO(#98): 8 idle MOGs hold no lease for 1 h");
 }
