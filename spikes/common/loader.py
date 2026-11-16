@@ -1,10 +1,43 @@
 """Test helper: import a spike's run.py under a unique module name (the dirs share the name run.py)."""
 import importlib.util
 import os
+import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+
+
+class RealCliBlocked(RuntimeError):
+    pass
+
+
+def _is_databricks(argv):
+    first = argv[0] if isinstance(argv, (list, tuple)) and argv else argv
+    return isinstance(first, str) and os.path.basename(first.split()[0] if first else "") == "databricks"
+
+
+def _guard(real):
+    def wrapped(argv, *a, **kw):
+        if _is_databricks(argv):
+            raise RealCliBlocked("a test tried to run the real databricks CLI; inject a fake runner")
+        return real(argv, *a, **kw)
+    wrapped.sp_guard = True
+    return wrapped
+
+
+# Every spike test imports this module, so no test can start the real CLI (review of PR #321).
+if not getattr(subprocess.run, "sp_guard", False):
+    subprocess.run = _guard(subprocess.run)
+    _RealPopen = subprocess.Popen
+
+    class GuardedPopen(_RealPopen):
+        def __init__(self, argv, *a, **kw):
+            if _is_databricks(argv):
+                raise RealCliBlocked("a test tried to run the real databricks CLI; inject a fake runner")
+            super().__init__(argv, *a, **kw)
+
+    subprocess.Popen = GuardedPopen
 
 
 def load_run(spike_dir_name, module_name):

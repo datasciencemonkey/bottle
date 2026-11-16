@@ -48,7 +48,7 @@ def test_sp_14_w19_scopes_pass_all_mvp_calls():
     """[SP-14] [W-19] With ai-gateway, genie, knowledge, offline_access all MVP calls succeed."""
     steps, t = run_with(r14.W19_SCOPES)
     ev = r14.evaluate(steps, sorted(r14.W19_SCOPES))
-    assert ev["passed"] and ev["scope_list_matches"] == "W-19"
+    assert ev["passed"] and ev["word"] == "PASS" and ev["scope_list_matches"] == "W-19"
     assert ev["info_calls"] == {"genie_one_api_list": True, "postgres_projects_list": False}
     assert steps["knowledge_pages"]["cleanup_status"] == 200
     assert any("request_id=" in rq["url"] for rq in t.requests)
@@ -58,7 +58,7 @@ def test_sp_14_issue_scopes_fail_on_pages():
     """[SP-14] The issue list (postgres, no knowledge) fails the pages call: fallback all-apis."""
     steps, _ = run_with(r14.ISSUE_SCOPES)
     ev = r14.evaluate(steps, sorted(r14.ISSUE_SCOPES))
-    assert not ev["passed"] and ev["failing_mvp_calls"] == ["knowledge_pages"]
+    assert not ev["passed"] and ev["word"] == "FAIL" and ev["failing_mvp_calls"] == ["knowledge_pages"]
     assert ev["scope_list_matches"] == "issue #167" and ev["fallback"] == "Stay on all-apis."
 
 
@@ -84,3 +84,21 @@ def test_sp_14_report_has_no_token():
     steps = r14.run_calls(api, "123", "d1")
     text = json.dumps({"steps": steps, "token": sl.token_kind(tok)})
     assert tok not in text and "user-123" not in text
+
+
+def test_sp_14_wide_or_unreadable_token_is_not_proven():
+    """[SP-14] All calls OK with all-apis, an empty scope list or an opaque token is NOT PROVEN, not PASS."""
+    steps, _ = run_with(r14.W19_SCOPES)
+    for scopes, fmt in ((["all-apis", "offline_access"], "jwt"), ([], "jwt"), (sorted(r14.W19_SCOPES), "opaque")):
+        ev = r14.evaluate(steps, scopes, fmt)
+        assert ev["word"] == "NOT PROVEN" and not ev["passed"] and ev["fallback"] is None
+    ev = r14.evaluate(steps, ["ai-gateway", "genie", "knowledge", "offline_access", "sql"])
+    assert ev["word"] == "NOT PROVEN" and "match no list" in ev["scope_reason"]
+
+
+def test_sp_14_expect_scopes_list():
+    """[SP-14] --expect-scopes lets a person test another narrow list."""
+    steps, _ = run_with(["ai-gateway", "genie", "knowledge", "postgres", "offline_access"])
+    ev = r14.evaluate(steps, sorted(["ai-gateway", "genie", "knowledge", "postgres", "offline_access"]), "jwt",
+                      ["ai-gateway", "genie", "knowledge", "postgres", "offline_access"])
+    assert ev["passed"] and ev["scope_list_matches"] == "--expect-scopes"

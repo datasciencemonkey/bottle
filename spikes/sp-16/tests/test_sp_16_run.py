@@ -91,3 +91,33 @@ def test_sp_16_fail_cases():
         assert not r16.evaluate([on, off])["passed"]
     assert not r16.evaluate([off])["passed"]
     assert "lease" in r16.evaluate([off])["fallback"]
+
+
+def _apps_runner(url, rc=0):
+    from types import SimpleNamespace
+    calls = []
+
+    def run(argv, **kw):
+        calls.append(argv)
+        return SimpleNamespace(returncode=rc, stdout=json.dumps({"name": "bottle-sp16", "url": url}),
+                               stderr="Error: app not found" if rc else "")
+    run.calls = calls
+    return run
+
+
+def test_sp_16_app_url_comes_from_the_profile_workspace():
+    """[SP-16] The URL comes from `databricks apps get --profile`; a different --app-url is refused."""
+    run = _apps_runner(APP_URL + "/")
+    assert r16.app_url_for_profile("bottle-sp16", "p1", run) == APP_URL
+    assert run.calls[0] == ["databricks", "apps", "get", "bottle-sp16", "--profile", "p1", "-o", "json"]
+    assert r16.app_url_for_profile("bottle-sp16", "p1", run, APP_URL) == APP_URL
+    with pytest.raises(sl.SpikeError):
+        r16.app_url_for_profile("bottle-sp16", "p1", run, "https://other-999.aws.databricksapps.com")
+
+
+def test_sp_16_app_not_in_workspace_or_bad_url_is_refused():
+    """[SP-16] An app the profile cannot see, or a URL that is not *.databricksapps.com, stops the run."""
+    with pytest.raises(sl.SpikeError):
+        r16.app_url_for_profile("bottle-sp16", "p1", _apps_runner(APP_URL, rc=1))
+    with pytest.raises(sl.SpikeError):
+        r16.app_url_for_profile("bottle-sp16", "p1", _apps_runner("https://evil.example.com"))

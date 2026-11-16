@@ -161,3 +161,99 @@ def test_sp_12_fail_rules_name_their_fallbacks():
     assert "HNSW stays" in r12.evaluate(_report(ann_half=(False, None)))["fallback"]
     assert "HNSW stays" in r12.evaluate(_report(ann_vec=(True, 301)))["fallback"]
     assert not r12.evaluate(_report(colds=()))["passed"]
+
+
+def _args(**kw):
+    a = dict(project_from=None, project_id=None, allow_existing_project=False)
+    a.update(kw)
+    return SimpleNamespace(**a)
+
+
+def test_sp_12_existing_project_needs_explicit_flag():
+    """[SP-12] --project-id is refused without --allow-existing-project (review finding 4)."""
+    with pytest.raises(sl.SpikeError):
+        r12.resolve_project(_args(project_id="prod-db"), None)
+    assert r12.resolve_project(_args(project_id="prod-db", allow_existing_project=True), None) == ("prod-db", False)
+    assert r12.resolve_project(_args(), None) == (None, True)
+
+
+def test_sp_12_project_from_needs_a_script_made_project():
+    """[SP-12] --project-from accepts only a report of a bottle-sp12-* project that this script made."""
+    ok = {"project_id": "bottle-sp12-abc123", "created_by_script": True}
+    assert r12.resolve_project(_args(project_from="r.json"), lambda p: ok) == ("bottle-sp12-abc123", True)
+    for bad in ({"project_id": "bottle-sp12-x", "created_by_script": False},
+                {"project_id": "prod", "created_by_script": True}):
+        with pytest.raises(sl.SpikeError):
+            r12.resolve_project(_args(project_from="r.json"), lambda p, b=bad: b)
+
+
+def test_sp_12_confirm_needs_yes():
+    """[SP-12] A warning step continues only on --yes or a typed yes."""
+    assert sl.confirm("x", yes=True)
+    assert sl.confirm("x", ask=lambda prompt: "yes")
+    with pytest.raises(sl.SpikeError):
+        sl.confirm("x", ask=lambda prompt: "no")
+
+
+class FakeConn:
+    """Records SQL; fails CREATE EXTENSION lakebase_vector when search_on is False."""
+
+    def __init__(self, search_on=True):
+        self.sql = []
+        self.search_on = search_on
+
+    def cursor(self):
+        conn = self
+
+        class Cur:
+            description = None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def execute(self, sql, params=None):
+                conn.sql.append(sql)
+                if "lakebase_vector" in sql and not conn.search_on:
+                    raise RuntimeError("extension \"lakebase_vector\" is not available")
+
+            def fetchall(self):
+                return []
+
+        return Cur()
+
+
+def test_sp_12_vectors_build_gin_and_ask_before_extension():
+    """[SP-12] The run builds the GIN index on text_tsv and asks before CREATE EXTENSION lakebase_vector."""
+    conn, asked = FakeConn(), []
+    out = r12.run_vectors(conn, 10, 3, 1, random.Random(1), lambda: asked.append(1) or True)
+    assert asked == [1]
+    assert any("USING gin (text_tsv)" in q for q in conn.sql)
+    assert out["variants"]["lakebase_ann:vector"]["built"] is True
+    assert len([q for q in conn.sql if q.startswith("WITH v AS")]) == 4 * 4  # 4 variants x (1 warm-up + 3)
+
+
+def test_sp_12_search_off_or_declined_gives_not_run():
+    """[SP-12] Lakebase Search off, or a declined extension, marks lakebase_ann NOT RUN (review finding 5)."""
+    for conn, gate in ((FakeConn(search_on=False), lambda: True), (FakeConn(), lambda: False)):
+        out = r12.run_vectors(conn, 10, 2, 0, random.Random(1), gate)
+        assert out["variants"]["lakebase_ann:halfvec"]["built"] is None
+        assert not any("USING lakebase_ann" in q for q in conn.sql)
+    rep = _report()
+    rep["variants"]["lakebase_ann:vector"] = {"built": None, "not_run": "off"}
+    ev = r12.evaluate(rep)
+    assert ev["word"] == "NOT RUN" and not ev["passed"] and ev["fallback"] is None
+    ev = r12.evaluate(dict(rep, tls={"chain_ok": False}))
+    assert ev["word"] is None and "sslmode=require" in ev["fallback"]
+
+
+def test_sp_12_delete_project_records_the_real_result():
+    """[SP-12] A failed delete-project is reported as not deleted (review finding 7)."""
+    def runner(rc):
+        return lambda argv, **kw: SimpleNamespace(returncode=rc, stdout="", stderr="Error: PERMISSION_DENIED" if rc else "")
+    assert r12.delete_project("bottle-sp12-abc", "p", runner(0)) == {"deleted": True, "returncode": 0}
+    bad = r12.delete_project("bottle-sp12-abc", "p", runner(1))
+    assert bad["deleted"] is False and "PERMISSION_DENIED" in bad["error"]
+    assert r12.delete_project("prod-db", "p", runner(0))["deleted"] is False

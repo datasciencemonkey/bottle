@@ -196,3 +196,36 @@ def test_sp_14_write_report_scrubs_secrets(tmp_path):
     text = sl.write_report(str(tmp_path / "r.json"), {"oops": tok, "ok": 1}, secrets=[tok])
     assert tok not in text and tok not in (tmp_path / "r.json").read_text()
     assert sl.verdict("SP-14", True, "x").startswith("SP-14 PASS")
+
+
+def test_sp_14_no_cli_helper_has_a_default_runner():
+    """[SP-14] run_cli, cli_api, get_token, get_host and the SP-12 Cli need an explicit runner,
+    so no test can start the real databricks CLI by default (review of PR #321)."""
+    import inspect
+
+    from loader import load_run
+
+    for fn in (sl.run_cli, sl.cli_api, sl.get_token, sl.get_host):
+        p = inspect.signature(fn).parameters["runner"]
+        assert p.default is inspect.Parameter.empty, fn.__name__
+    cli = load_run("sp-12", "sp12_guard").Cli
+    assert inspect.signature(cli.__init__).parameters["runner"].default is inspect.Parameter.empty
+    with pytest.raises(TypeError):
+        sl.get_token("p1")  # noqa: the missing runner is the point
+
+
+def test_sp_14_tests_cannot_run_the_real_cli():
+    """[SP-14] Under the test loader, subprocess.run and Popen refuse the databricks binary."""
+    import subprocess
+
+    from loader import RealCliBlocked
+
+    with pytest.raises(RealCliBlocked):
+        subprocess.run(["databricks", "--version"], capture_output=True)
+    with pytest.raises(RealCliBlocked):
+        subprocess.run(["/opt/homebrew/bin/databricks", "auth", "token"], capture_output=True)
+    with pytest.raises(RealCliBlocked):
+        subprocess.Popen(["databricks", "auth", "token"])
+    with pytest.raises(RealCliBlocked):
+        sl.run_cli(["auth", "token", "--profile", "p"], runner=subprocess.run)
+    assert subprocess.run(["true"]).returncode == 0  # other binaries still run

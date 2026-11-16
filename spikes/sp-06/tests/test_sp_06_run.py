@@ -55,33 +55,76 @@ def test_sp_06_classify_outcomes():
     assert r6.classify(resp(0, {"transport_error": "RemoteProtocolError"})) == "transport_error"
 
 
-def _rows(**outcomes):
+def _rows(size_fmt="wav", **outcomes):
     rows = []
     for fmt in ("ogg", "opus", "flac", "wav"):
         rows.append({"case": f"30s-{fmt}", "format": fmt, "outcome": outcomes.get(fmt, "accepted")})
-    for name in ("3.5MB", "4.1MB", "4.1MiB"):
-        rows.append({"case": f"size-{name}", "format": "wav", "outcome": outcomes.get(name, "accepted")})
+    if size_fmt:
+        for name in ("3.5MB", "4.1MB", "4.1MiB"):
+            rows.append({"case": f"size-{name}", "format": size_fmt, "outcome": outcomes.get(name, "accepted")})
     return rows
 
 
 def test_sp_06_pass_rule():
-    """[SP-06] Pass: formats known, 3.5 MB accepted, 4.1 MB rejected cleanly."""
+    """[SP-06] Pass: formats known, 30 s base accepted, 3.5 MB accepted, 4.1 MB rejected cleanly."""
     ev = r6.evaluate(_rows(**{"4.1MB": "rejected_clean", "4.1MiB": "rejected_clean", "opus": "rejected_clean"}))
     assert ev["passed"] and ev["accepted_formats"] == ["flac", "ogg", "wav"]
-    assert ev["fallback"] is None
+    assert ev["fallback"] is None and ev["word"] is None and ev["size_format"] == "wav"
 
 
 def test_sp_06_fail_when_4_1mb_accepted_or_unclean():
     """[SP-06] A 4.1 MB body that is accepted, or rejected with a 5xx, fails and names the fallback."""
     for outcome in ("accepted", "rejected_unclean"):
         ev = r6.evaluate(_rows(**{"4.1MB": outcome}))
-        assert not ev["passed"] and "20 s" in ev["fallback"]
+        assert not ev["passed"] and "20 s" in ev["fallback"] and ev["word"] is None
 
 
 def test_sp_06_fail_when_a_format_has_no_answer():
     """[SP-06] A transport error on one format means formats are not known."""
     ev = r6.evaluate(_rows(**{"ogg": "transport_error", "4.1MB": "rejected_clean"}))
     assert not ev["passed"] and not ev["formats_known"]
+
+
+def test_sp_06_size_cases_need_an_accepted_base_format():
+    """[SP-06] Size results in a format whose 30 s case was rejected do not count (review finding 8)."""
+    ev = r6.evaluate(_rows(wav="rejected_clean", **{"4.1MB": "rejected_clean"}))
+    assert not ev["passed"] and not ev["size_base_accepted"]
+    ev = r6.evaluate(_rows(size_fmt=None, wav="rejected_clean", flac="rejected_clean"))
+    assert ev["word"] == "NOT PROVEN" and not ev["passed"]
+
+
+def test_sp_06_pick_size_format_prefers_wav_then_flac():
+    """[SP-06] WAV is the size format when accepted, else FLAC, else none."""
+    assert r6.pick_size_format(_rows(size_fmt=None)) == "wav"
+    assert r6.pick_size_format(_rows(size_fmt=None, wav="rejected_clean")) == "flac"
+    assert r6.pick_size_format(_rows(size_fmt=None, wav="rejected_clean", flac="rejected_clean")) is None
+
+
+def test_sp_06_flac_sizing_stays_under_target():
+    """[SP-06] The FLAC size search gives a body at or under the target and within 0.2 %."""
+    def enc(fmt, samples, rate):
+        return r6.wav_bytes(samples, rate), "fake-flac"
+    body, secs, _, tool = r6.sized_body("flac", 500_000, r6.DEFAULT_MODEL, enc)
+    assert 500_000 * 0.998 <= len(body) <= 500_000 and tool == "fake-flac"
+
+
+def test_sp_06_wav_rejected_runs_size_cases_in_flac():
+    """[SP-06] With audio/wav rejected, the size cases run as audio/flac."""
+    def answer(method, url, headers, body):
+        if b"data:audio/wav" in body:
+            return resp(400, {"error_code": "INVALID_PARAMETER_VALUE", "message": "unsupported mime"})
+        if len(body) > r6.SIZE_CASES["3.5MB"]:
+            return resp(400, {"error_code": "INVALID_PARAMETER_VALUE", "message": "too large"})
+        return resp(200, {"choices": [{"message": {"content": "x"}}]})
+
+    def enc(fmt, samples, rate):
+        return r6.wav_bytes(samples, rate), "fake"
+
+    api = sl.Api(FAKE_HOST, sl.Token(fake_token()), FakeTransport(answer))
+    rows = r6.run(SimpleNamespace(model=r6.DEFAULT_MODEL), api, encoder=enc)
+    sizes = [r for r in rows if r["case"].startswith("size-")]
+    assert {r["mime"] for r in sizes} == {"audio/flac"}
+    assert r6.evaluate(rows)["passed"]
 
 
 def test_sp_06_run_records_rows_without_content(tmp_path):

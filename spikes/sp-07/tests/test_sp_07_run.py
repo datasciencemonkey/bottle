@@ -11,6 +11,13 @@ import spikelib as sl  # noqa: E402
 r7 = load_run("sp-07", "sp07_run")
 
 
+def _h2(lat, errors, n):
+    """Evaluate with every call on HTTP/2."""
+    return r7.evaluate_one(lat, errors, n, {"HTTP/2"})
+
+
+
+
 def test_sp_07_models_are_system_ai_names():
     """[SP-07] [NFR-21a] The three models use system.ai.* names."""
     assert r7.MODELS == ["system.ai.meta-llama-3-1-8b-instruct", "system.ai.gpt-oss-20b",
@@ -38,24 +45,32 @@ def test_sp_07_measure_drops_warmup_and_errors():
     assert ver == {"HTTP/2"}
 
 
+def test_sp_07_http1_fails_even_when_fast():
+    """[SP-07] A run that did not negotiate HTTP/2 fails the criterion "on warm HTTP/2"."""
+    ev = r7.evaluate_one([100] * 200, [], 200, {"HTTP/1.1"})
+    assert not ev["passed"] and ev["http2"] is False and ev["http_versions"] == ["HTTP/1.1"]
+    assert not r7.evaluate_one([100] * 200, [], 200, {"HTTP/1.1", "HTTP/2"})["passed"]
+    assert r7.evaluate_one([100] * 200, [], 200, {"HTTP/2"})["passed"]
+
+
 def test_sp_07_pass_rule_p95_at_most_800():
     """[SP-07] p95 <= 800 ms passes; 801 fails."""
-    ok = r7.evaluate_one([500] * 180 + [800] * 20, [], 200)
-    bad = r7.evaluate_one([500] * 180 + [801] * 20, [], 200)
+    ok = _h2([500] * 180 + [800] * 20, [], 200)
+    bad = _h2([500] * 180 + [801] * 20, [], 200)
     assert ok["passed"] and ok["p95_ms"] == 800
     assert not bad["passed"]
 
 
 def test_sp_07_too_many_errors_fails():
     """[SP-07] Fewer than 95 % good calls is not enough evidence and fails."""
-    ev = r7.evaluate_one([100] * 180, [{}] * 20, 200)
+    ev = _h2([100] * 180, [{}] * 20, 200)
     assert not ev["enough_samples"] and not ev["passed"]
 
 
 def test_sp_07_overall_names_fallback_and_fastest():
     """[SP-07] One slow model fails the spike; the report names the faster router model."""
-    res = {"router": {"a": r7.evaluate_one([300] * 200, [], 200), "b": r7.evaluate_one([900] * 200, [], 200)},
-           "cleanup": {"a": r7.evaluate_one([200] * 200, [], 200)}}
+    res = {"router": {"a": _h2([300] * 200, [], 200), "b": _h2([900] * 200, [], 200)},
+           "cleanup": {"a": _h2([200] * 200, [], 200)}}
     ev = r7.evaluate(res)
     assert not ev["passed"] and ev["failing"] == ["router:b"]
     assert ev["fastest_by_kind"]["router"] == "a" and "(a)" in ev["fallback"]

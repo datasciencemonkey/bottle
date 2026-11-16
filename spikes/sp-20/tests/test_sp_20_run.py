@@ -73,20 +73,49 @@ def test_sp_20_body_is_draft_with_domain_name_and_few_synonyms():
     assert "request_id" not in b and r20.page_body("d1", "t", "r")["request_id"] == "r"
 
 
-def test_sp_20_query_form_is_idempotent_and_page_is_kept():
-    """[SP-20] [PG-07] The same query request_id returns the same Page; it is kept for grounding."""
+class BodyIdem(FakePages):
+    """Idempotent on the body request_id (B3); the query parameter is ignored."""
+
+    def __call__(self, method, url, headers, body):
+        if method == "POST" and urlsplit(url).path == r20.PAGES:
+            b = json.loads(body)
+            rid = b.pop("request_id", None)
+            if rid and rid in self.by_rid:
+                return resp(200, self.pages[self.by_rid[rid]])
+            self.n += 1
+            name = f"pages/p{self.n}"
+            page = dict(b, name=name, owner_ids=["u1"])
+            self.pages[name] = page
+            if rid:
+                self.by_rid[rid] = name
+            return resp(200, page)
+        return super().__call__(method, url, headers, body)
+
+
+def test_sp_20_pass_on_b3_body_form_and_keep_its_page():
+    """[SP-20] [PG-07] Body-form request_id idempotent: PASS, and its Page is kept for grounding."""
+    fake = BodyIdem()
+    rep = r20.run(make(fake), args())
+    ev = rep["evaluation"]
+    assert ev["passed"] and ev["idempotent_body_form"] and ev["idempotent_query_form"] is False
+    assert ev["working_forms"] == ["body"] and ev["note"] is None
+    assert rep["kept_for_grounding"] == rep["body_form"]["created_names"] == ["pages/p1"]
+    assert sorted(fake.deleted) == ["pages/p2", "pages/p3"]  # the two query-form duplicates
+
+
+def test_sp_20_query_only_fails_but_records_and_keeps_a_page():
+    """[SP-20] Only the query form idempotent: FAIL (B3 wins), the note says so, and a Page is kept."""
     fake = FakePages()
     rep = r20.run(make(fake), args())
     ev = rep["evaluation"]
-    assert ev["passed"] and ev["created_draft"] and ev["idempotent_query_form"]
-    assert ev["idempotent_body_form"] is False  # the fake ignores the body field
-    assert rep["kept_for_grounding"] == rep["query_form"]["created_names"] == ["pages/p1"]
-    assert sorted(fake.deleted) == ["pages/p2", "pages/p3"]  # the two body-form duplicates
+    assert not ev["passed"] and ev["working_forms"] == ["query"] and "#187" in ev["note"]
+    assert rep["kept_for_grounding"] == rep["query_form"]["created_names"] and len(rep["kept_for_grounding"]) == 1
+    assert len(fake.deleted) == 2
 
 
 def test_sp_20_no_keep_deletes_everything_it_made():
-    """[SP-20] --no-keep also deletes the query-form Page."""
-    fake = FakePages()
+    """[SP-20] --no-keep deletes every Page the run made."""
+    fake = BodyIdem()
     rep = r20.run(make(fake), args(no_keep=True))
     assert rep["kept_for_grounding"] == [] and sorted(fake.deleted) == ["pages/p1", "pages/p2", "pages/p3"]
 
@@ -105,14 +134,15 @@ def test_sp_20_domains_denied_gives_paste_fallback():
     assert "PG-20" in rep["evaluation"]["domains_fallback"]
 
 
-def test_sp_20_body_form_rejected_is_recorded_not_fatal():
-    """[SP-20] A 400 for request_id in the body is recorded; the query form still decides the pass."""
+def test_sp_20_body_form_rejected_fails_and_is_recorded():
+    """[SP-20] A 400 for request_id in the body fails the spike; the working query form is recorded."""
     rep = r20.run(make(FakePages(body_field_rejected=True)), args())
-    assert rep["evaluation"]["body_form_status"] == 400 and rep["evaluation"]["passed"]
+    ev = rep["evaluation"]
+    assert ev["body_form_status"] == 400 and not ev["passed"] and ev["working_forms"] == ["query"]
 
 
-def test_sp_20_fail_when_retry_duplicates():
-    """[SP-20] Two Pages for one request_id fails; both are deleted and none is kept."""
+def test_sp_20_fail_when_no_form_is_idempotent():
+    """[SP-20] Duplicates on both forms: FAIL; all four Pages are deleted and none is kept."""
     class NoIdem(FakePages):
         def __call__(self, method, url, headers, body):
             self.by_rid.clear()
