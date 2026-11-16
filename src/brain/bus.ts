@@ -69,11 +69,14 @@ function viewLabel(kind: 'mog' | 'card', mogId: MogId): string {
 }
 
 /**
- * Send `mog.view_state` to the MOG window of `mogId` only (ARC-5).
+ * Send `mog.view_state` to the MOG window of `mogId` and to the hub, which lists every MOG
+ * with its mood (ARC-5, ADR 0008 decision 4).
  * TODO(#285): type `state` with the contract `MogViewState`.
  */
 export async function sendMogViewState(mogId: MogId, state: unknown): Promise<void> {
-  return emitToView(viewLabel('mog', mogId), 'mog.view_state', state);
+  const label = viewLabel('mog', mogId);
+  await emitToView(label, 'mog.view_state', state);
+  await emitToView('hub', 'mog.view_state', state);
 }
 
 /**

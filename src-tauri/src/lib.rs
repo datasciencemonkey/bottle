@@ -37,6 +37,14 @@ pub fn run() {
     tauri::Builder::default()
         .manage(ipc::BrainChannel::default())
         .invoke_handler(ipc::handler)
+        .on_window_event(|window, event| {
+            // R11: a window that closes outside the host frees its ledger slot.
+            if let tauri::WindowEvent::Destroyed = event {
+                if let Some(host) = window.try_state::<TauriWindowHost<tauri::Wry>>() {
+                    host.window_destroyed(window.label());
+                }
+            }
+        })
         .setup(move |app| {
             let handle = app.handle();
             app.manage(TauriWindowHost::new(handle.clone()));

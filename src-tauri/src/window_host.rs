@@ -113,6 +113,22 @@ impl WindowLedger {
         self.mogs.get(mog_id).copied().unwrap_or(false)
     }
 
+    /// Follow a window that closed outside the host (crash, OS close). A `mog-<id>` frees its
+    /// slot; a `card-<id>` is no longer open. Other labels change nothing.
+    pub fn window_destroyed(&mut self, label: &str) {
+        match WindowKind::from_label(label) {
+            Some(WindowKind::Mog(id)) => {
+                self.mogs.remove(&id);
+            }
+            Some(WindowKind::Card(id)) => {
+                if let Some(card) = self.mogs.get_mut(&id) {
+                    *card = false;
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// The number of open MOG windows.
     pub fn active_mogs(&self) -> usize {
         self.mogs.len()
@@ -147,39 +163,57 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
         self.app.get_webview_window(&kind.label())
     }
 
-    /// Open the MOG window of `mog_id`. A second call shows the open window.
+    /// Open the MOG window of `mog_id`. A second call shows the window, or makes it again if
+    /// it is gone. The ledger lock is not held while the window is built.
     pub fn open_mog_window(&self, mog_id: &str) -> Result<(), WindowError> {
-        let mut ledger = self.ledger();
-        match ledger.open_mog(mog_id)? {
-            OpenOutcome::AlreadyOpen => Ok(()),
-            OpenOutcome::Opened(kind) => match windows::build(&self.app, &kind.spec()) {
-                Ok(_) => Ok(()),
-                Err(_) => {
-                    ledger.close_mog(mog_id);
-                    Err(WindowError::HostFailed)
+        let outcome = self.ledger().open_mog(mog_id)?;
+        let kind = match outcome {
+            OpenOutcome::Opened(kind) => kind,
+            OpenOutcome::AlreadyOpen => {
+                let kind = WindowKind::Mog(mog_id.to_owned());
+                if let Some(w) = self.window(&kind) {
+                    return w.show().map_err(|_| WindowError::HostFailed);
                 }
-            },
+                kind
+            }
+        };
+        if windows::build(&self.app, &kind.spec()).is_err() {
+            self.ledger().close_mog(mog_id);
+            return Err(WindowError::HostFailed);
         }
+        Ok(())
     }
 
-    /// Close the MOG window of `mog_id` and its card window.
+    /// Close the MOG window of `mog_id` and its card window. The slot is freed only after
+    /// both windows are gone.
     pub fn close_mog_window(&self, mog_id: &str) -> Result<(), WindowError> {
         let mog = WindowKind::mog(mog_id).ok_or(WindowError::InvalidId)?;
-        let card = WindowKind::Card(mog_id.to_owned());
-        if !self.ledger().close_mog(mog_id) {
+        if !self.ledger().open_ids().contains(mog_id) {
             return Err(WindowError::UnknownMog);
         }
-        for kind in [card, mog] {
+        for kind in [WindowKind::Card(mog_id.to_owned()), mog] {
             if let Some(w) = self.window(&kind) {
                 w.destroy().map_err(|_| WindowError::HostFailed)?;
             }
         }
+        self.ledger().close_mog(mog_id);
         Ok(())
+    }
+
+    /// The number of open MOG windows in the ledger.
+    pub fn active_mogs(&self) -> usize {
+        self.ledger().active_mogs()
+    }
+
+    /// Call from the app's `WindowEvent::Destroyed` handler, so the ledger follows the windows.
+    pub fn window_destroyed(&self, label: &str) {
+        self.ledger().window_destroyed(label);
     }
 
     /// Show the card window of an open MOG; make it on the first show.
     pub fn show_card(&self, mog_id: &str) -> Result<(), WindowError> {
         let kind = self.ledger().show_card(mog_id)?;
+        // The ledger lock is released before the window is built.
         let w = windows::build(&self.app, &kind.spec()).map_err(|_| WindowError::HostFailed)?;
         w.show().map_err(|_| WindowError::HostFailed)
     }

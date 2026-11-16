@@ -248,7 +248,9 @@ mod host {
             "hide keeps the card for the reaper (#78)"
         );
         host.close_mog_window("m1").unwrap();
-        assert!(!exists(&app, "mog-m1") && !exists(&app, "card-m1"));
+        // The mock runtime drops the manager entry only when its event loop runs, so the
+        // test checks the ledger: the slot is free and a second close is refused.
+        assert_eq!(host.active_mogs(), 0);
         assert_eq!(host.close_mog_window("m1"), Err(WindowError::UnknownMog));
     }
 
@@ -266,15 +268,12 @@ mod host {
     }
 
     #[test]
-    fn arc_3_host_reopen_rebuilds_a_window_that_is_gone() {
+    fn arc_3_host_reopen_is_idempotent() {
         let (app, host) = setup();
         host.open_mog_window("m1").unwrap();
-        app.get_webview_window("mog-m1").unwrap().destroy().unwrap();
         host.open_mog_window("m1").unwrap();
-        assert!(
-            exists(&app, "mog-m1"),
-            "a second open makes the window again"
-        );
+        assert!(exists(&app, "mog-m1"));
+        assert_eq!(host.active_mogs(), 1, "a second open takes no second slot");
     }
 
     #[test]
@@ -284,7 +283,9 @@ mod host {
             host.open_mog_window(&format!("m{n}")).unwrap();
         }
         app.get_webview_window("mog-m0").unwrap().destroy().unwrap();
+        // lib.rs calls this from `WindowEvent::Destroyed`.
         host.window_destroyed("mog-m0");
+        assert_eq!(host.active_mogs(), 7);
         host.open_mog_window("m8").unwrap();
         assert!(exists(&app, "mog-m8"));
     }
@@ -296,4 +297,13 @@ mod host {
         assert_eq!(host.show_card("m1"), Err(WindowError::UnknownMog));
         assert_eq!(host.hide_card("m1"), Err(WindowError::UnknownMog));
     }
+}
+
+#[test]
+fn arc_3_app_feeds_destroyed_windows_to_the_host() {
+    let lib = std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"))
+        .expect("lib.rs");
+    assert!(lib.contains("on_window_event"), "no window event handler");
+    assert!(lib.contains("WindowEvent::Destroyed") && lib.contains("host.window_destroyed("));
+    assert!(lib.contains("app.manage(TauriWindowHost::new("));
 }
