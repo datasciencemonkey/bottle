@@ -105,7 +105,10 @@ pub fn current_clipboard_platform() -> Option<ClipboardPlatform> {
 
 /// The OS clipboard. Kept behind a trait so tests run without a real clipboard.
 pub trait ClipboardBackend: Send + Sync {
-    /// Replace the clipboard contents with exactly `formats`, in one operation.
+    /// Replace the clipboard contents with exactly `formats`.
+    ///
+    /// A backend must publish all formats together, so that a clipboard manager never sees the
+    /// text without its flags. On failure the writer calls [`ClipboardBackend::clear`].
     fn write(&self, formats: &[ClipboardFormat]) -> CoreResult<()>;
     /// Remove everything from the clipboard.
     fn clear(&self) -> CoreResult<()>;
@@ -125,7 +128,12 @@ impl<B: ClipboardBackend> ClipboardWriter<B> {
 
     /// Write `text` for `platform` with the privacy flags set.
     pub fn write_text_for(&self, platform: ClipboardPlatform, text: &str) -> CoreResult<()> {
-        self.backend.write(&clipboard_formats(platform, text))
+        let result = self.backend.write(&clipboard_formats(platform, text));
+        if result.is_err() {
+            // Fail closed: no unflagged text may stay on the clipboard. The write error wins.
+            let _ = self.backend.clear();
+        }
+        result
     }
 
     /// Write `text` for the platform of this build.
@@ -139,6 +147,10 @@ impl<B: ClipboardBackend> ClipboardWriter<B> {
 }
 
 /// The macOS clipboard: the general `NSPasteboard`.
+///
+/// One `NSPasteboardItem` carries the text and the marker types, and one `writeObjects` call
+/// publishes it, so `changeCount` never exposes the text without its flags. `NSPasteboard`
+/// writes are not bound to the main thread; do not add a main-thread hop.
 #[cfg(target_os = "macos")]
 #[derive(Debug, Default, Clone, Copy)]
 pub struct MacPasteboard;
@@ -146,18 +158,27 @@ pub struct MacPasteboard;
 #[cfg(target_os = "macos")]
 impl ClipboardBackend for MacPasteboard {
     fn write(&self, formats: &[ClipboardFormat]) -> CoreResult<()> {
-        use objc2_app_kit::NSPasteboard;
-        use objc2_foundation::{NSData, NSString};
+        use objc2::runtime::ProtocolObject;
+        use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSPasteboardWriting};
+        use objc2_foundation::{NSArray, NSData, NSString};
 
-        let pasteboard = NSPasteboard::generalPasteboard();
-        pasteboard.clearContents();
+        let item = NSPasteboardItem::new();
         for format in formats {
             let ty = NSString::from_str(format.name);
-            if !pasteboard.setData_forType(Some(&NSData::with_bytes(&format.data)), &ty) {
+            if !item.setData_forType(&NSData::with_bytes(&format.data), &ty) {
                 return Err(CoreError::NotImplemented { component: ID });
             }
         }
-        Ok(())
+        let pasteboard = NSPasteboard::generalPasteboard();
+        pasteboard.clearContents();
+        let objects =
+            NSArray::from_slice(&[ProtocolObject::<dyn NSPasteboardWriting>::from_ref(&*item)]);
+        if pasteboard.writeObjects(&objects) {
+            Ok(())
+        } else {
+            self.clear()?;
+            Err(CoreError::NotImplemented { component: ID })
+        }
     }
 
     fn clear(&self) -> CoreResult<()> {
