@@ -54,6 +54,12 @@ pub struct RequiredNotice {
     pub needles: &'static [&'static str],
 }
 
+/// The opening of the permission paragraph shared by every MIT licence text.
+pub const MIT_PERMISSION: &str = "\
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the \"Software\"), to deal
+in the Software without restriction";
+
 /// Every notice of requirements section 20.1.
 pub const REQUIRED_NOTICES: &[RequiredNotice] = &[
     RequiredNotice {
@@ -122,12 +128,6 @@ pub const REQUIRED_NOTICES: &[RequiredNotice] = &[
         needles: &["Databricks CLI", "Databricks License", "not bundled"],
     },
 ];
-
-/// The permission and warranty paragraphs shared by every MIT licence text.
-pub const MIT_PERMISSION: &str = "\
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the \"Software\"), to deal
-in the Software without restriction";
 
 /// Comment markers removed from the start (and end) of each line before comparing.
 const COMMENT_MARKERS: &[&str] = &["<!--", "-->", "///", "//!", "//", "/*", "*/", "#", "*", ";"];
