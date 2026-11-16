@@ -132,6 +132,11 @@ pub enum HookSignal {
     TalkKeyBlocked,
     /// The hook was installed again (CAP-40b).
     HookReinstalled,
+    /// A hook install or a Win32 registration failed. `reason` is a fixed string.
+    HookFailed {
+        /// A fixed, content-free reason, for example `"set_windows_hook_failed"`.
+        reason: &'static str,
+    },
 }
 
 /// The CAP-41 key filter. It runs inside the hook callback, so every call is O(1) with no
@@ -292,6 +297,34 @@ impl HookFilter {
     }
 }
 
+impl HookFilter {
+    /// The device resumed from sleep. A hold cannot last through sleep, so an active PTT
+    /// ends and all key state is cleared.
+    pub fn on_resume(&mut self, _at: Duration) -> Option<HookSignal> {
+        None
+    }
+}
+
+/// The signal the hook thread sends for the result of a timer tick or a resume reinstall.
+pub fn reinstall_signal(result: &CoreResult<bool>) -> Option<HookSignal> {
+    match result {
+        Ok(true) => Some(HookSignal::HookReinstalled),
+        _ => None,
+    }
+}
+
+impl Elevation {
+    /// Classify a probe. `opened`: the process opened for limited query. `token_elevated`:
+    /// the token elevation, or `None` when the token query was refused.
+    pub fn from_probe(opened: bool, token_elevated: Option<bool>) -> Self {
+        match (opened, token_elevated) {
+            (true, Some(true)) => Elevation::Elevated,
+            (true, Some(false)) => Elevation::NotElevated,
+            _ => Elevation::Unknown,
+        }
+    }
+}
+
 /// When the hook must be installed again (CAP-40b).
 #[derive(Debug, Clone)]
 pub struct ReinstallPolicy {
@@ -330,18 +363,19 @@ impl ReinstallPolicy {
 
 /// Installs and removes the OS hook. The Win32 hook is one implementation; tests use a fake.
 pub trait HookInstaller {
-    /// Install the hook. The error reason is a fixed string, never key content.
-    fn install(&mut self) -> Result<(), &'static str>;
-    /// Remove the hook if it is installed.
-    fn uninstall(&mut self);
+    /// The handle of one installed hook.
+    type Handle;
+    /// Install a hook. The error reason is a fixed string, never key content.
+    fn install(&mut self) -> Result<Self::Handle, &'static str>;
+    /// Remove the hook `handle`.
+    fn uninstall(&mut self, handle: Self::Handle);
 }
 
 /// Drives a [`HookInstaller`] by the [`ReinstallPolicy`].
-#[derive(Debug)]
 pub struct HookSupervisor<I: HookInstaller> {
     installer: I,
     policy: ReinstallPolicy,
-    installed: bool,
+    current: Option<I::Handle>,
     running: bool,
 }
 
@@ -356,7 +390,7 @@ impl<I: HookInstaller> HookSupervisor<I> {
         Self {
             installer,
             policy,
-            installed: false,
+            current: None,
             running: false,
         }
     }
@@ -368,7 +402,7 @@ impl<I: HookInstaller> HookSupervisor<I> {
 
     /// Whether the hook is installed now.
     pub fn is_installed(&self) -> bool {
-        self.installed
+        self.current.is_some()
     }
 
     /// Install the hook for the first time.
@@ -379,7 +413,7 @@ impl<I: HookInstaller> HookSupervisor<I> {
 
     /// The periodic timer fired. Returns `true` when the hook was installed again.
     pub fn on_timer(&mut self, now: Duration) -> CoreResult<bool> {
-        if !self.running || (self.installed && !self.policy.due(now)) {
+        if !self.running || (self.is_installed() && !self.policy.due(now)) {
             return Ok(false);
         }
         self.reinstall(now).map(|()| true)
@@ -396,17 +430,18 @@ impl<I: HookInstaller> HookSupervisor<I> {
     /// Remove the hook. Later timers and resumes do nothing.
     pub fn stop(&mut self) {
         self.running = false;
-        self.installer.uninstall();
-        self.installed = false;
+        if let Some(h) = self.current.take() {
+            self.installer.uninstall(h);
+        }
     }
 
     /// Remove the old hook, then install a new one. Windows calls a low-level hook on the
     /// installing thread only, so no callback runs between the two calls.
     fn reinstall(&mut self, now: Duration) -> CoreResult<()> {
-        self.installer.uninstall();
-        self.installed = false;
-        self.installer.install().map_err(unavailable)?;
-        self.installed = true;
+        if let Some(h) = self.current.take() {
+            self.installer.uninstall(h);
+        }
+        self.current = Some(self.installer.install().map_err(unavailable)?);
         self.policy.installed(now);
         Ok(())
     }
@@ -538,6 +573,13 @@ impl HookCore {
     /// See [`HookFilter::reconcile`]; the signal goes on the channel.
     pub fn reconcile(&mut self, physically_down: impl Fn(u32) -> bool) {
         if let Some(signal) = self.filter.reconcile(physically_down, self.clock.now()) {
+            self.send(signal);
+        }
+    }
+
+    /// The device resumed: see [`HookFilter::on_resume`]; the signal goes on the channel.
+    pub fn on_resume(&mut self) {
+        if let Some(signal) = self.filter.on_resume(self.clock.now()) {
             self.send(signal);
         }
     }
@@ -809,24 +851,26 @@ mod tests {
         installs: u32,
         uninstalls: u32,
         fail_next: bool,
-        hooked: bool,
+        /// Hook ids installed now, in install order.
+        live: Vec<u32>,
+        /// The most hooks installed at one time.
+        max_live: usize,
     }
 
     impl HookInstaller for FakeInstaller {
-        fn install(&mut self) -> Result<(), &'static str> {
+        type Handle = u32;
+        fn install(&mut self) -> Result<u32, &'static str> {
             if std::mem::take(&mut self.fail_next) {
                 return Err("set_windows_hook_failed");
             }
-            assert!(!self.hooked, "install while a hook is still installed");
             self.installs += 1;
-            self.hooked = true;
-            Ok(())
+            self.live.push(self.installs);
+            self.max_live = self.max_live.max(self.live.len());
+            Ok(self.installs)
         }
-        fn uninstall(&mut self) {
-            if self.hooked {
-                self.uninstalls += 1;
-                self.hooked = false;
-            }
+        fn uninstall(&mut self, handle: u32) {
+            self.uninstalls += 1;
+            self.live.retain(|h| *h != handle);
         }
     }
 
@@ -874,7 +918,7 @@ mod tests {
     }
 
     #[test]
-    fn cap_40b_failed_install_reports_unavailable_and_retries_on_the_next_timer() {
+    fn cap_40b_failed_reinstall_keeps_the_old_hook_and_retries_on_the_next_timer() {
         let clock = SimClock::new();
         let mut s = HookSupervisor::new(FakeInstaller::default());
         s.start(clock.now()).unwrap();
@@ -882,10 +926,42 @@ mod tests {
         s.installer.fail_next = true;
         let err = s.on_timer(clock.now()).unwrap_err();
         assert_eq!(err.code(), "unavailable");
-        assert!(!s.is_installed());
+        assert!(
+            s.is_installed(),
+            "the old hook stays when the new one fails"
+        );
+        assert_eq!(s.installer().live, vec![1]);
         clock.advance(Duration::from_secs(1));
         assert!(s.on_timer(clock.now()).unwrap(), "retry at the next tick");
-        assert!(s.is_installed());
+        assert_eq!(s.installer().live, vec![2]);
+    }
+
+    #[test]
+    fn cap_40b_reinstall_installs_the_new_hook_before_it_removes_the_old_one() {
+        let mut s = HookSupervisor::new(FakeInstaller::default());
+        s.start(T0).unwrap();
+        assert!(s.on_timer(T0 + REINSTALL_INTERVAL).unwrap());
+        assert_eq!(s.installer().max_live, 2, "no gap without a hook");
+        assert_eq!(s.installer().live, vec![2]);
+    }
+
+    #[test]
+    fn cap_40b_reinstall_failure_becomes_a_hook_failed_signal() {
+        let mut s = HookSupervisor::new(FakeInstaller::default());
+        s.start(T0).unwrap();
+        s.installer.fail_next = true;
+        let result = s.on_timer(T0 + REINSTALL_INTERVAL);
+        assert_eq!(
+            reinstall_signal(&result),
+            Some(HookSignal::HookFailed {
+                reason: "set_windows_hook_failed"
+            })
+        );
+        assert_eq!(
+            reinstall_signal(&Ok(true)),
+            Some(HookSignal::HookReinstalled)
+        );
+        assert_eq!(reinstall_signal(&Ok(false)), None);
     }
 
     #[test]
@@ -909,19 +985,49 @@ mod tests {
     }
 
     #[test]
-    fn cap_40b_reconcile_ends_a_ptt_whose_key_up_was_lost() {
+    fn cap_40b_reconcile_keeps_a_swallowed_talk_key_whatever_the_async_state() {
+        // Windows does not update the async key state for a key the hook swallowed, so
+        // "up" from GetAsyncKeyState is not proof. The PTT must not split in two.
         let mut f = HookFilter::new(TalkKey::RightAlt);
         f.on_key(KeyEvent::down(vk::RMENU), T0);
+        assert_eq!(f.reconcile(|_| false, T0), None);
+        assert!(f.talk_active());
+        assert_eq!(
+            f.on_key(KeyEvent::down(vk::RMENU), T0),
+            (Verdict::Swallow, None)
+        );
+        assert_eq!(
+            f.on_key(KeyEvent::up(vk::RMENU), T0),
+            (Verdict::Swallow, Some(HookSignal::TalkUp { at: T0 }))
+        );
+    }
+
+    #[test]
+    fn cap_40b_reconcile_ends_a_chord_whose_passed_key_was_released() {
+        // Ctrl reached Windows, so its async state is real: Ctrl up means the chord ended.
+        let mut f = HookFilter::new(TalkKey::CtrlWin);
+        f.on_key(KeyEvent::down(vk::LCONTROL), T0);
+        f.on_key(KeyEvent::down(vk::LWIN), T0);
         let later = T0 + Duration::from_secs(2);
         assert_eq!(
             f.reconcile(|_| false, later),
             Some(HookSignal::TalkUp { at: later })
         );
         assert!(!f.talk_active());
-        // The next Right-Alt press starts a new PTT.
+    }
+
+    #[test]
+    fn cap_40b_resume_ends_an_active_ptt() {
+        let mut f = HookFilter::new(TalkKey::RightAlt);
+        f.on_key(KeyEvent::down(vk::RMENU), T0);
+        let later = T0 + Duration::from_secs(60);
+        assert_eq!(f.on_resume(later), Some(HookSignal::TalkUp { at: later }));
+        assert!(!f.talk_active());
+        assert_eq!(f.on_resume(later), None, "a second resume event is a no-op");
+        // The next press starts a new PTT.
         assert_eq!(
-            f.on_key(KeyEvent::down(vk::RMENU), later).1,
-            Some(HookSignal::TalkDown { at: later })
+            f.on_key(KeyEvent::down(vk::RMENU), later),
+            (Verdict::Swallow, Some(HookSignal::TalkDown { at: later }))
         );
     }
 
@@ -1008,19 +1114,28 @@ mod tests {
     }
 
     #[test]
-    fn cap_40a_core_reconcile_sends_the_lost_key_up() {
+    fn cap_40a_core_resume_sends_the_key_up() {
         let (mut c, rx, _) = core(TalkKey::RightAlt);
         c.handle(KeyEvent::down(vk::RMENU));
-        c.reconcile(|_| false);
+        c.on_resume();
         assert_eq!(rx.try_recv(), Ok(HookSignal::TalkDown { at: T0 }));
         assert_eq!(rx.try_recv(), Ok(HookSignal::TalkUp { at: T0 }));
     }
 
     #[test]
     fn cap_40a_callback_work_p99_is_under_1_ms() {
-        // The platform-neutral part of the callback. The real hook p99 on a Windows device is
-        // AT-30 (needs:windows, TODO(#5)).
-        let (mut c, _rx, rec) = core(TalkKey::RightAlt);
+        // The platform-neutral part of the callback, timed on the real monotonic clock. The
+        // real hook p99 on a Windows device is AT-30 (needs:windows, TODO(#5)).
+        let (tx, _rx) = mpsc::channel();
+        let rec = Arc::new(LatencyRecorder::with_capacity(20_000));
+        let clock = Arc::new(crate::clock::SystemClock::new());
+        let mut c = HookCore::new(
+            TalkKey::RightAlt,
+            Arc::new(AtomicBool::new(false)),
+            rec.clone(),
+            clock,
+            tx,
+        );
         for i in 0..10_000u32 {
             let k = if i % 3 == 0 {
                 vk::RMENU
@@ -1061,6 +1176,18 @@ mod tests {
     fn cap_42_no_tooltip_when_bottle_is_elevated() {
         let mut g = ElevationGate::new(true);
         assert_eq!(g.on_foreground(42, Elevation::Elevated), None);
+    }
+
+    #[test]
+    fn cap_42_token_query_refused_counts_as_elevated() {
+        // A non-elevated process may not query the token of an elevated one.
+        assert_eq!(Elevation::from_probe(true, None), Elevation::Elevated);
+        assert_eq!(Elevation::from_probe(true, Some(true)), Elevation::Elevated);
+        assert_eq!(
+            Elevation::from_probe(true, Some(false)),
+            Elevation::NotElevated
+        );
+        assert_eq!(Elevation::from_probe(false, None), Elevation::Unknown);
     }
 
     #[test]
