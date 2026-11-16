@@ -225,6 +225,9 @@ describe('AT-12 hop targets (ProfileService.resolveTarget)', () => {
       kind: 'one',
       profile: SALES,
     });
+    throw new Error(
+      'TODO(#164): assert an alias beats a profile name with the same text, and the first level with exactly one match wins',
+    );
   });
 
   it.skip('[AT-12] [W-11b] two matches need a user choice; the MOG never picks TODO(#164)', async () => {
@@ -237,6 +240,9 @@ describe('AT-12 hop targets (ProfileService.resolveTarget)', () => {
       kind: 'none',
       suggestConnect: true,
     });
+    throw new Error(
+      'TODO(#164): assert the MOG shows the "Which workspace?" chip and sends no ask',
+    );
   });
 
   it.skip('[AT-12] [W-11a] a hop applies to one question or to one session TODO(#164)', async () => {
@@ -245,6 +251,9 @@ describe('AT-12 hop targets (ProfileService.resolveTarget)', () => {
     const once = await t7.resolveTarget(['sales'], MOG);
     expect(once).toMatchObject({ kind: 'one', scope: 'question' });
     expect(t7.home(MOG)).toBe(HOME);
+    throw new Error(
+      'TODO(#164): assert "use sales from now on" gives scope session and the next question after a question hop goes home',
+    );
   });
 });
 
@@ -254,24 +263,45 @@ describe('AT-12 pinned and parked conversations', () => {
   it.skip('[AT-12] [G-26c] [G-26d] a parked conversation takes a follow-up at 29 min and not at 31 min TODO(#145)', () => {
     const clock = createSimClock();
     const bridge = createGenieBridge();
-    // TODO(#145): ask in HOME (conversation c1), hop to SALES; c1 is parked with its profile and IDs.
+    const ask = (question: string, conversationId?: string) =>
+      bridge.submit({
+        opId: `op-${clock.now()}`,
+        mogId: MOG,
+        binding: { kind: 'genie_one_mcp', profile: HOME },
+        question,
+        ...(conversationId ? { conversationId } : {}),
+        tags: { app: 'bottle', mog: MOG, op: 'genie' },
+      });
+    // TODO(#145): the bridge takes `clock`; ask in HOME (c1), then hop to SALES, so c1 is parked.
+    ask('What was revenue last quarter?');
     expect(bridge.pinnedProfile('c1')).toBe(HOME);
     clock.advance(29 * MIN);
-    // TODO(#145): an explicit follow-up now goes to c1 in HOME.
+    ask('And the quarter before?', 'c1');
     clock.advance(2 * MIN);
-    // TODO(#145): at 31 min the follow-up starts a new conversation.
-    expect(clock.now()).toBe(31 * MIN);
+    ask('And the year before?', 'c1');
+    throw new Error(
+      'TODO(#145): assert the 29 min follow-up is accepted in c1 and the 31 min follow-up gets a new conversation ID',
+    );
   });
 
   it.skip('[AT-12] [G-26a] [G-26b] reuse rules R0-R5 and one conversation per meeting session TODO(#145)', () => {
     const clock = createSimClock();
     // TODO(#145): a gap over 10 min, a topic change, a workspace change, a new session, 20 turns or
     // a user reset each start a new conversation; two meeting sessions have two conversation IDs.
+    createGenieBridge().submit({
+      opId: 'op-1',
+      mogId: MOG,
+      binding: { kind: 'genie_one_mcp', profile: HOME },
+      question: 'What was revenue?',
+      tags: { app: 'bottle', mog: MOG, op: 'genie' },
+    });
     clock.advance(10 * MIN + 1);
-    expect(createGenieBridge().operations(MOG)).toEqual([]);
+    throw new Error(
+      'TODO(#145): assert each of R0-R5 starts a new conversation, and two meeting sessions get two conversation IDs',
+    );
   });
 
-  it.skip('[AT-12] [G-27a] [G-27b] [W-12b] a follow-up to an old card goes to its pinned workspace, after a restart too TODO(#145)', () => {
+  it.skip('[AT-12] [G-27a] [G-27b] a follow-up to an old card goes to its pinned workspace, after a restart too TODO(#145)', () => {
     const home = createGenieOneMcpDouble({ host: HOME_HOST, workspaceId: '1001' });
     const sales = createGenieOneMcpDouble({ host: SALES_HOST, workspaceId: '2002' });
     const bridge = createGenieBridge();
@@ -279,18 +309,24 @@ describe('AT-12 pinned and parked conversations', () => {
     expect(bridge.pinnedProfile('c-home')).toBe(HOME);
     expect(home.asks()).toHaveLength(2);
     expect(sales.asks()).toHaveLength(0);
+    throw new Error(
+      'TODO(#145): assert the pin is read back from the local store after the restart',
+    );
   });
 });
 
 // ---------- Pending: hop execution (W-12a, W-20, W-21a, W-21b) ----------
 
 describe('AT-12 hop execution', () => {
-  it.skip('[AT-12] [W-12a] after a hop each new question starts a new conversation in the target TODO(#165)', () => {
+  it.skip('[AT-12] [W-12a] [W-12b] after a hop new questions start new conversations in the target and open ones stay put TODO(#165)', () => {
     const sales = createGenieOneMcpDouble({ host: SALES_HOST, workspaceId: '2002' });
     // TODO(#165): hop to SALES, ask two new questions; both conversation IDs belong to SALES.
     expect(sales.asks()).toHaveLength(2);
     expect(createGenieBridge().workspaceLine(SALES)).toBe(
       `Asking Genie in ${SALES_HOST} (profile ${SALES})`,
+    );
+    throw new Error(
+      'TODO(#165): assert both new conversation IDs belong to SALES and the open HOME conversation keeps its workspace (W-12b)',
     );
   });
 
@@ -331,13 +367,13 @@ describe('AT-12 hop execution', () => {
 // ---------- Pending, v1: split and cross-workspace privacy ----------
 
 describe('AT-12 (v1) split and cross-workspace processing', () => {
-  it.skip('[AT-12] [W-13a] [W-13b] [W-13c] [G-50] a split asks 3 parts at most, labels each part and never adds numbers TODO(#146)', async () => {
+  it.skip('[AT-12] [W-13a] [W-13b] [W-13c] [G-50] a split asks 3 parts at most, labels each part and never adds numbers TODO(#166) TODO(#146)', async () => {
     const t7 = createProfileService();
     const r = await t7.resolveTarget(['main', 'crm'], MOG);
     expect(r.kind).toBe('split');
     if (r.kind === 'split') expect(r.parts.map((p) => p.profile)).toEqual([HOME, SALES]);
     throw new Error(
-      'TODO(#146): assert a 4th part is a chip, "Part 2 (sales): <reason>" on failure, numbers verbatim, one genie_exchange row per part with one split_group_id',
+      'TODO(#166) TODO(#146): assert a 4th part is a chip, "Part 2 (sales): <reason>" on failure, numbers verbatim, one genie_exchange row per part with one split_group_id',
     );
   });
 

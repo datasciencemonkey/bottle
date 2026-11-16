@@ -80,12 +80,14 @@ describe('AT-02 sign-in from the chip (Connect a workspace)', () => {
     );
   });
 
-  it.skip('[AT-02] [W-08] sign-in and setup never change an existing profile or its host TODO(#162)', async () => {
+  it.skip('[AT-02] [W-08] sign-in and setup never change an existing profile or its host TODO(#17) TODO(#163)', async () => {
     const t7 = createProfileService();
     const before = await t7.list();
     await t7.login(HOST, 'bottle-home');
     expect(await t7.list()).toEqual(before);
-    throw new Error('TODO(#162): assert a `~/.databrickscfg` double is byte-for-byte unchanged');
+    throw new Error(
+      'TODO(#17) TODO(#163): assert a `~/.databrickscfg` double is byte-for-byte unchanged',
+    );
   });
 });
 

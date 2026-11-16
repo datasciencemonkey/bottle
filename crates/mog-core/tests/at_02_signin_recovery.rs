@@ -29,12 +29,12 @@ fn fake_token() -> SecretToken {
 // ---------- Runs today: the R6 token buffer (W-18c) ----------
 
 #[test]
-fn at_02_w_18c_sign_out_overwrites_the_token_buffer_with_zeros() {
+fn at_02_w_18c_a_token_buffer_wipe_writes_zeros_buffer_part_only() {
     let mut t = fake_token();
     let len = t.len();
     assert!(len > 0 && !t.is_zeroed());
-    // Sign-out calls wipe (Drop calls it too). Every byte is zero, and the length stays, so no
-    // reallocation left a copy behind.
+    // This is the buffer part of W-18c only: the sign-out that calls wipe is TODO(#163) / TODO(#18)
+    // in the pending test below. Drop calls wipe too. Every byte is zero and the length stays.
     t.wipe();
     assert!(t.is_zeroed());
     assert_eq!(t.len(), len);
@@ -76,11 +76,12 @@ fn at_02_w_02b_a_cli_in_a_temporary_or_world_writable_folder_is_refused() {
 fn at_02_w_02d_a_changed_cli_shows_a_warning_at_the_next_launch() {
     let r5 = StubCliRunner;
     let first = r5.resolve().expect("TODO(#16): resolve at launch 1");
-    // TODO(#16): replace the CLI with a different version, then start a new CliRunner (launch 2).
-    let second = StubCliRunner
+    // TODO(#16): replace the CLI with a different version, then start a new CliRunner (launch 2)
+    // and read its launch report.
+    assert!(first.is_absolute());
+    StubCliRunner
         .resolve()
         .expect("TODO(#16): resolve at launch 2");
-    assert_eq!(first, second);
     todo!("TODO(#16): assert launch 2 reports the changed path or version as a warning");
 }
 
