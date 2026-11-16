@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
+import { act } from 'react';
+import { createRoot } from 'react-dom/client';
 import { tauri } from './test-tauri';
-import { emitView, mogIdFromLabel, ownMogId } from './view-ipc';
+import { emitView, mogIdFromLabel, ownMogId, useViewEvent } from './view-ipc';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('./test-tauri')).coreModule);
 vi.mock('@tauri-apps/api/event', async () => (await import('./test-tauri')).eventModule);
@@ -35,5 +37,18 @@ describe('view IPC helpers', () => {
       ['view_emit', { args: { mogId: ID, kind: 'click' } }],
       ['view_emit', { args: { mogId: ID, kind: 'chip_click', payload: { chipId: 'c1' } } }],
     ]);
+  });
+
+  it('[MOG-08a] [ARC-5] a view listens only to events sent to its own window label', async () => {
+    tauri.label = `mog-${ID}`;
+    const onPayload = () => undefined;
+    function Probe() {
+      useViewEvent('mog.view_state', onPayload);
+      return null;
+    }
+    const root = createRoot(document.createElement('div'));
+    await act(async () => root.render(<Probe />));
+    expect(tauri.listenOptions.get('mog:view_state')).toEqual([{ target: `mog-${ID}` }]);
+    await act(async () => root.unmount());
   });
 });

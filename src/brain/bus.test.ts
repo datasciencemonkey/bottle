@@ -1,7 +1,14 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { core } from './test-core';
-import { BrainBus, emitToView, subscribeBrain } from './bus';
+import {
+  BrainBus,
+  emitToView,
+  onViewInput,
+  sendCardUpdate,
+  sendMogViewState,
+  subscribeBrain,
+} from './bus';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('./test-core')).coreModule);
 vi.mock('@tauri-apps/api/event', async () => (await import('./test-core')).eventModule);
@@ -87,5 +94,69 @@ describe('brain Channel (ADR 0003, decision 3)', () => {
         /import\s*\{[^}]*\b(emit|listen)\b[^}]*\}\s*from\s*'@tauri-apps\/api\/event'/,
       );
     }
+  });
+});
+
+describe('brain-to-view routing (#8)', () => {
+  beforeEach(() => core.reset());
+
+  it('[MOG-08b] [ARC-5] sendMogViewState emits mog:view_state to the mog-<id> window only', async () => {
+    const state = { mogId: MOG, mood: 'idle', overlays: {} };
+    await sendMogViewState(MOG, state);
+    expect(core.emitTo.mock.calls).toEqual([[`mog-${MOG}`, 'mog:view_state', state]]);
+    expect(core.emit).not.toHaveBeenCalled();
+  });
+
+  it('[MOG-08b] [ARC-5] sendCardUpdate emits card:update to the card-<id> window only', async () => {
+    const update = { mogId: MOG, blurbs: [], chips: [] };
+    await sendCardUpdate(MOG, update);
+    expect(core.emitTo.mock.calls).toEqual([[`card-${MOG}`, 'card:update', update]]);
+  });
+
+  it('[MOG-08b] [ARC-3] refuses a MOG ID that is not label-safe and sends nothing', async () => {
+    for (const bad of ['', 'a/b', 'a b', '*', 'x'.repeat(65)]) {
+      await expect(sendMogViewState(bad, {})).rejects.toThrow(/window label/);
+      await expect(sendCardUpdate(bad, {})).rejects.toThrow(/window label/);
+    }
+    expect(core.emitTo).not.toHaveBeenCalled();
+  });
+
+  it('[MOG-08b] [ARC-5] onViewInput gives typed view:input from the brain Channel', () => {
+    const bus = new BrainBus();
+    const got: unknown[] = [];
+    onViewInput(bus, (i) => got.push(i));
+    bus.dispatch({
+      event: 'view:input',
+      payload: { from: `mog-${MOG}`, input: { mogId: MOG, kind: 'poked' } },
+    });
+    bus.dispatch({
+      event: 'view:input',
+      payload: { from: 'hub', input: { mogId: MOG, kind: 'click' } },
+    });
+    expect(got).toEqual([
+      { from: `mog-${MOG}`, mogId: MOG, kind: 'poked', payload: undefined },
+      { from: 'hub', mogId: MOG, kind: 'click', payload: undefined },
+    ]);
+  });
+
+  it('[MOG-08b] [ARC-5] onViewInput drops malformed input and input for another MOG', () => {
+    const bus = new BrainBus();
+    const got: unknown[] = [];
+    const off = onViewInput(bus, (i) => got.push(i));
+    for (const payload of [
+      null,
+      { from: `mog-${MOG}` },
+      { from: `mog-${MOG}`, input: { mogId: 'other', kind: 'poked' } },
+      { from: `card-${MOG}`, input: { mogId: MOG, kind: 'nope' } },
+      { from: 'brain', input: { mogId: MOG, kind: 'click' } },
+    ])
+      bus.dispatch({ event: 'view:input', payload });
+    expect(got).toEqual([]);
+    off();
+    bus.dispatch({
+      event: 'view:input',
+      payload: { from: 'hub', input: { mogId: MOG, kind: 'click' } },
+    });
+    expect(got).toEqual([]);
   });
 });

@@ -10,10 +10,13 @@ type Handler = (e: { payload: unknown }) => void;
 
 export const tauri = {
   handlers: new Map<string, Set<Handler>>(),
+  /** The `options` of each `listen` call, by event name. */
+  listenOptions: new Map<string, unknown[]>(),
   invoke: vi.fn(async (_cmd: string, _args?: unknown) => ({})),
   label: 'hub',
   reset(): void {
     this.handlers.clear();
+    this.listenOptions.clear();
     this.invoke.mockClear();
   },
   /** Deliver a brain-to-view event to every listener of `name`. */
@@ -28,7 +31,8 @@ export const tauri = {
 };
 
 export const eventModule = {
-  listen: async (name: string, h: Handler) => {
+  listen: async (name: string, h: Handler, options?: unknown) => {
+    tauri.listenOptions.set(name, [...(tauri.listenOptions.get(name) ?? []), options]);
     const set = tauri.handlers.get(name) ?? new Set<Handler>();
     set.add(h);
     tauri.handlers.set(name, set);

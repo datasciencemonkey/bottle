@@ -161,6 +161,7 @@ dependencies = [
 name = "bottle"
 version = "0.1.0"
 dependencies = [
+ "glob",
  "mog-core",
  "serde",
  "serde_json",
