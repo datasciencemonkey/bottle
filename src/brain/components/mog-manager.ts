@@ -40,6 +40,12 @@ export class MogManagerStub implements MogManager {
   }
 }
 
-export function createMogManager(): MogManager {
+export const MAX_RUNNING_MOGS_DEFAULT = 0;
+export class MogManagerError extends Error { code = ''; }
+export type MogConfigClient = any;
+export type MogWindowClient = any;
+export function ipcMogConfigClient(): any { throw new Error('todo #26'); }
+export function ipcMogWindowClient(): any { throw new Error('todo #26'); }
+export function createMogManager(_o?: unknown): any {
   return new MogManagerStub();
 }
