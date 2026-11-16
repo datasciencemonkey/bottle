@@ -128,6 +128,7 @@ pub enum HookSignal {
     /// Another key went down while the talk key is held (for CAP-44c).
     OtherKeyDown,
     /// An elevated window has the foreground, so the hook cannot see the talk key (CAP-42).
+    /// TODO(#294): the core-to-brain `hotkey.blocked` event that makes the MOG show the tooltip.
     TalkKeyBlocked,
     /// The hook was installed again (CAP-40b).
     HookReinstalled,
@@ -168,18 +169,125 @@ impl HookFilter {
         self.talk_active
     }
 
+    /// Whether `vk` is one key of the talk key.
+    fn is_talk_part(&self, vk: u32) -> bool {
+        match self.talk {
+            TalkKey::RightAlt => vk == vk::RMENU,
+            TalkKey::RightCtrl => vk == vk::RCONTROL,
+            TalkKey::CtrlWin => is_ctrl(vk) || is_win(vk),
+        }
+    }
+
+    /// Whether the talk key is complete with the keys held now.
+    fn talk_complete(&self) -> bool {
+        match self.talk {
+            TalkKey::RightAlt => self.pressed[vk::RMENU as usize],
+            TalkKey::RightCtrl => self.pressed[vk::RCONTROL as usize],
+            TalkKey::CtrlWin => {
+                let held = |a: u32, b: u32| self.pressed[a as usize] || self.pressed[b as usize];
+                held(vk::LCONTROL, vk::RCONTROL) && held(vk::LWIN, vk::RWIN)
+            }
+        }
+    }
+
     /// Decide one event at monotonic time `at`.
-    pub fn on_key(&mut self, _ev: KeyEvent, _at: Duration) -> (Verdict, Option<HookSignal>) {
+    ///
+    /// Rules: injected events pass and change nothing. The key-down that completes the talk
+    /// key, and every later talk-key event, is swallowed. Esc is swallowed while the talk key
+    /// is held or hands-free is on. A key-up is swallowed only when its key-down was, so no
+    /// key sticks in the focused app.
+    pub fn on_key(&mut self, ev: KeyEvent, at: Duration) -> (Verdict, Option<HookSignal>) {
+        if ev.injected || ev.vk >= 256 {
+            return (Verdict::Pass, None);
+        }
+        let i = ev.vk as usize;
+        if ev.down {
+            self.on_down(ev.vk, i, at)
+        } else {
+            self.on_up(ev.vk, i, at)
+        }
+    }
+
+    fn on_down(&mut self, vk: u32, i: usize, at: Duration) -> (Verdict, Option<HookSignal>) {
+        let repeat = self.pressed[i];
+        self.pressed[i] = true;
+        if self.swallowed[i] {
+            // Auto-repeat of a key whose key-down was swallowed.
+            return (Verdict::Swallow, None);
+        }
+        if self.is_talk_part(vk) {
+            if self.talk_active {
+                // A repeat of a key whose key-down passed stays unmarked, so its key-up
+                // passes too and the key does not stick.
+                if !repeat {
+                    self.swallowed[i] = true;
+                }
+                return (Verdict::Swallow, None);
+            }
+            if self.talk_complete() {
+                self.talk_active = true;
+                self.swallowed[i] = true;
+                // A Win key that went down before the chord reached Windows: mask its key-up.
+                for w in [vk::LWIN, vk::RWIN] {
+                    let w = w as usize;
+                    if self.pressed[w] && !self.swallowed[w] {
+                        self.mask_on_up[w] = true;
+                    }
+                }
+                return (Verdict::Swallow, Some(HookSignal::TalkDown { at }));
+            }
+            // The first key of the chord: Windows sees it.
+            return (Verdict::Pass, None);
+        }
+        if vk == vk::ESCAPE && (self.talk_active || self.hands_free) {
+            self.swallowed[i] = true;
+            return (Verdict::Swallow, Some(HookSignal::Escape));
+        }
+        if self.talk_active && !repeat {
+            return (Verdict::Pass, Some(HookSignal::OtherKeyDown));
+        }
         (Verdict::Pass, None)
+    }
+
+    fn on_up(&mut self, vk: u32, i: usize, at: Duration) -> (Verdict, Option<HookSignal>) {
+        self.pressed[i] = false;
+        let was_swallowed = std::mem::take(&mut self.swallowed[i]);
+        let mask = std::mem::take(&mut self.mask_on_up[i]);
+        let signal = if self.talk_active && self.is_talk_part(vk) {
+            self.talk_active = false;
+            Some(HookSignal::TalkUp { at })
+        } else {
+            None
+        };
+        let verdict = if was_swallowed {
+            Verdict::Swallow
+        } else if mask {
+            Verdict::SwallowAndReplay { vk }
+        } else {
+            Verdict::Pass
+        };
+        (verdict, signal)
     }
 
     /// After a reinstall or a resume, read the physical key state again. If the talk key is
     /// active but no talk key is down, the key-up was lost: end the PTT.
     pub fn reconcile(
         &mut self,
-        _physically_down: impl Fn(u32) -> bool,
-        _at: Duration,
+        physically_down: impl Fn(u32) -> bool,
+        at: Duration,
     ) -> Option<HookSignal> {
+        for k in 0..256u32 {
+            let i = k as usize;
+            if self.pressed[i] && !physically_down(k) {
+                self.pressed[i] = false;
+                self.swallowed[i] = false;
+                self.mask_on_up[i] = false;
+            }
+        }
+        if self.talk_active && !self.talk_complete() {
+            self.talk_active = false;
+            return Some(HookSignal::TalkUp { at });
+        }
         None
     }
 }
@@ -212,8 +320,11 @@ impl ReinstallPolicy {
     }
 
     /// Whether the hook is due at `now`.
-    pub fn due(&self, _now: Duration) -> bool {
-        false
+    pub fn due(&self, now: Duration) -> bool {
+        match self.last_install {
+            None => true,
+            Some(last) => now.saturating_sub(last) >= self.interval,
+        }
     }
 }
 
@@ -231,6 +342,7 @@ pub struct HookSupervisor<I: HookInstaller> {
     installer: I,
     policy: ReinstallPolicy,
     installed: bool,
+    running: bool,
 }
 
 impl<I: HookInstaller> HookSupervisor<I> {
@@ -245,6 +357,7 @@ impl<I: HookInstaller> HookSupervisor<I> {
             installer,
             policy,
             installed: false,
+            running: false,
         }
     }
 
@@ -259,22 +372,44 @@ impl<I: HookInstaller> HookSupervisor<I> {
     }
 
     /// Install the hook for the first time.
-    pub fn start(&mut self, _now: Duration) -> CoreResult<()> {
-        Ok(())
+    pub fn start(&mut self, now: Duration) -> CoreResult<()> {
+        self.running = true;
+        self.reinstall(now)
     }
 
     /// The periodic timer fired. Returns `true` when the hook was installed again.
-    pub fn on_timer(&mut self, _now: Duration) -> CoreResult<bool> {
-        Ok(false)
+    pub fn on_timer(&mut self, now: Duration) -> CoreResult<bool> {
+        if !self.running || (self.installed && !self.policy.due(now)) {
+            return Ok(false);
+        }
+        self.reinstall(now).map(|()| true)
     }
 
     /// The device resumed from sleep: install the hook again now.
-    pub fn on_resume(&mut self, _now: Duration) -> CoreResult<()> {
-        Ok(())
+    pub fn on_resume(&mut self, now: Duration) -> CoreResult<()> {
+        if !self.running {
+            return Ok(());
+        }
+        self.reinstall(now)
     }
 
-    /// Remove the hook.
-    pub fn stop(&mut self) {}
+    /// Remove the hook. Later timers and resumes do nothing.
+    pub fn stop(&mut self) {
+        self.running = false;
+        self.installer.uninstall();
+        self.installed = false;
+    }
+
+    /// Remove the old hook, then install a new one. Windows calls a low-level hook on the
+    /// installing thread only, so no callback runs between the two calls.
+    fn reinstall(&mut self, now: Duration) -> CoreResult<()> {
+        self.installer.uninstall();
+        self.installed = false;
+        self.installer.install().map_err(unavailable)?;
+        self.installed = true;
+        self.policy.installed(now);
+        Ok(())
+    }
 }
 
 /// A lock-free ring of hook-callback durations, for the CAP-40a p99 (AT-30).
@@ -295,16 +430,30 @@ impl LatencyRecorder {
     }
 
     /// Record one callback duration.
-    pub fn record(&self, _d: Duration) {}
+    pub fn record(&self, d: Duration) {
+        let nanos = u32::try_from(d.as_nanos()).unwrap_or(u32::MAX);
+        let n = self.next.fetch_add(1, Ordering::Relaxed);
+        self.samples[n % self.samples.len()].store(nanos, Ordering::Relaxed);
+    }
 
     /// The number of samples recorded so far (not capped by the ring size).
     pub fn count(&self) -> usize {
-        0
+        self.next.load(Ordering::Relaxed)
     }
 
-    /// The p99 of the kept samples, or `None` before the first sample.
+    /// The p99 (nearest rank) of the kept samples, or `None` before the first sample.
     pub fn p99(&self) -> Option<Duration> {
-        None
+        let kept = self.count().min(self.samples.len());
+        if kept == 0 {
+            return None;
+        }
+        let mut v: Vec<u32> = self.samples[..kept]
+            .iter()
+            .map(|s| s.load(Ordering::Relaxed))
+            .collect();
+        v.sort_unstable();
+        let rank = (kept * 99).div_ceil(100).max(1);
+        Some(Duration::from_nanos(u64::from(v[rank - 1])))
     }
 }
 
@@ -336,8 +485,11 @@ impl ElevationGate {
     }
 
     /// A window of process `pid` took the foreground.
-    pub fn on_foreground(&mut self, _pid: u32, _elevation: Elevation) -> Option<HookSignal> {
-        None
+    pub fn on_foreground(&mut self, pid: u32, elevation: Elevation) -> Option<HookSignal> {
+        if self.self_elevated || elevation != Elevation::Elevated {
+            return None;
+        }
+        self.shown.insert(pid).then_some(HookSignal::TalkKeyBlocked)
     }
 }
 
@@ -370,17 +522,38 @@ impl HookCore {
 
     /// Handle one hook event and return the verdict. It never blocks: a closed channel drops
     /// the signal.
-    pub fn handle(&mut self, _ev: KeyEvent) -> Verdict {
-        Verdict::Pass
+    pub fn handle(&mut self, ev: KeyEvent) -> Verdict {
+        let started = self.clock.now();
+        self.filter
+            .set_hands_free(self.hands_free.load(Ordering::Relaxed));
+        let (verdict, signal) = self.filter.on_key(ev, started);
+        if let Some(signal) = signal {
+            self.send(signal);
+        }
+        self.recorder
+            .record(self.clock.now().saturating_sub(started));
+        verdict
     }
 
     /// See [`HookFilter::reconcile`]; the signal goes on the channel.
-    pub fn reconcile(&mut self, _physically_down: impl Fn(u32) -> bool) {}
+    pub fn reconcile(&mut self, physically_down: impl Fn(u32) -> bool) {
+        if let Some(signal) = self.filter.reconcile(physically_down, self.clock.now()) {
+            self.send(signal);
+        }
+    }
 
     /// Send a signal that does not come from a key event (reinstall, elevated foreground).
     pub fn send(&self, signal: HookSignal) {
         let _ = self.signals.send(signal);
     }
+}
+
+fn is_ctrl(vk: u32) -> bool {
+    vk == vk::LCONTROL || vk == vk::RCONTROL
+}
+
+fn is_win(vk: u32) -> bool {
+    vk == vk::LWIN || vk == vk::RWIN
 }
 
 fn unavailable(reason: &'static str) -> CoreError {
@@ -415,9 +588,19 @@ mod tests {
                 KeyEvent::up(vk::RMENU),
             ],
         );
-        assert_eq!(out[0], (Verdict::Swallow, Some(HookSignal::TalkDown { at: T0 })));
-        assert_eq!(out[1], (Verdict::Swallow, None), "auto-repeat is swallowed, no new signal");
-        assert_eq!(out[2], (Verdict::Swallow, Some(HookSignal::TalkUp { at: T0 })));
+        assert_eq!(
+            out[0],
+            (Verdict::Swallow, Some(HookSignal::TalkDown { at: T0 }))
+        );
+        assert_eq!(
+            out[1],
+            (Verdict::Swallow, None),
+            "auto-repeat is swallowed, no new signal"
+        );
+        assert_eq!(
+            out[2],
+            (Verdict::Swallow, Some(HookSignal::TalkUp { at: T0 }))
+        );
         assert!(!f.talk_active());
     }
 
@@ -429,24 +612,40 @@ mod tests {
         for i in 0..100 {
             let down = f.on_key(KeyEvent::down(vk::RMENU), T0).0;
             let up = f.on_key(KeyEvent::up(vk::RMENU), T0).0;
-            assert_eq!((down, up), (Verdict::Swallow, Verdict::Swallow), "press {i}");
+            assert_eq!(
+                (down, up),
+                (Verdict::Swallow, Verdict::Swallow),
+                "press {i}"
+            );
         }
     }
 
     #[test]
     fn cap_41_swallows_right_ctrl_when_it_is_the_talk_key() {
         let mut f = HookFilter::new(TalkKey::RightCtrl);
-        assert_eq!(f.on_key(KeyEvent::down(vk::RCONTROL), T0).0, Verdict::Swallow);
+        assert_eq!(
+            f.on_key(KeyEvent::down(vk::RCONTROL), T0).0,
+            Verdict::Swallow
+        );
         assert_eq!(f.on_key(KeyEvent::up(vk::RCONTROL), T0).0, Verdict::Swallow);
         // Right-Alt is a normal key now.
-        assert_eq!(f.on_key(KeyEvent::down(vk::RMENU), T0), (Verdict::Pass, None));
+        assert_eq!(
+            f.on_key(KeyEvent::down(vk::RMENU), T0),
+            (Verdict::Pass, None)
+        );
     }
 
     #[test]
     fn cap_41_passes_esc_when_not_capturing() {
         let mut f = HookFilter::new(TalkKey::RightAlt);
-        assert_eq!(f.on_key(KeyEvent::down(vk::ESCAPE), T0), (Verdict::Pass, None));
-        assert_eq!(f.on_key(KeyEvent::up(vk::ESCAPE), T0), (Verdict::Pass, None));
+        assert_eq!(
+            f.on_key(KeyEvent::down(vk::ESCAPE), T0),
+            (Verdict::Pass, None)
+        );
+        assert_eq!(
+            f.on_key(KeyEvent::up(vk::ESCAPE), T0),
+            (Verdict::Pass, None)
+        );
     }
 
     #[test]
@@ -457,7 +656,10 @@ mod tests {
             f.on_key(KeyEvent::down(vk::ESCAPE), T0),
             (Verdict::Swallow, Some(HookSignal::Escape))
         );
-        assert_eq!(f.on_key(KeyEvent::up(vk::ESCAPE), T0), (Verdict::Swallow, None));
+        assert_eq!(
+            f.on_key(KeyEvent::up(vk::ESCAPE), T0),
+            (Verdict::Swallow, None)
+        );
     }
 
     #[test]
@@ -470,7 +672,10 @@ mod tests {
         );
         // Hands-free ends on that Esc; the key-up still matches the swallowed key-down.
         f.set_hands_free(false);
-        assert_eq!(f.on_key(KeyEvent::up(vk::ESCAPE), T0), (Verdict::Swallow, None));
+        assert_eq!(
+            f.on_key(KeyEvent::up(vk::ESCAPE), T0),
+            (Verdict::Swallow, None)
+        );
     }
 
     #[test]
@@ -512,13 +717,19 @@ mod tests {
     #[test]
     fn cap_41_ignores_codes_outside_the_vk_range() {
         let mut f = HookFilter::new(TalkKey::RightAlt);
-        assert_eq!(f.on_key(KeyEvent::down(0x1_0000), T0), (Verdict::Pass, None));
+        assert_eq!(
+            f.on_key(KeyEvent::down(0x1_0000), T0),
+            (Verdict::Pass, None)
+        );
     }
 
     #[test]
     fn cap_41_ctrl_win_chord_ctrl_first() {
         let mut f = HookFilter::new(TalkKey::CtrlWin);
-        assert_eq!(f.on_key(KeyEvent::down(vk::LCONTROL), T0), (Verdict::Pass, None));
+        assert_eq!(
+            f.on_key(KeyEvent::down(vk::LCONTROL), T0),
+            (Verdict::Pass, None)
+        );
         assert_eq!(
             f.on_key(KeyEvent::down(vk::LWIN), T0),
             (Verdict::Swallow, Some(HookSignal::TalkDown { at: T0 }))
@@ -529,13 +740,19 @@ mod tests {
             (Verdict::Swallow, Some(HookSignal::TalkUp { at: T0 }))
         );
         // The Ctrl key-down reached the app, so its key-up does too.
-        assert_eq!(f.on_key(KeyEvent::up(vk::LCONTROL), T0), (Verdict::Pass, None));
+        assert_eq!(
+            f.on_key(KeyEvent::up(vk::LCONTROL), T0),
+            (Verdict::Pass, None)
+        );
     }
 
     #[test]
     fn cap_41_ctrl_win_chord_win_first_masks_the_start_menu() {
         let mut f = HookFilter::new(TalkKey::CtrlWin);
-        assert_eq!(f.on_key(KeyEvent::down(vk::RWIN), T0), (Verdict::Pass, None));
+        assert_eq!(
+            f.on_key(KeyEvent::down(vk::RWIN), T0),
+            (Verdict::Pass, None)
+        );
         assert_eq!(
             f.on_key(KeyEvent::down(vk::RCONTROL), T0),
             (Verdict::Swallow, Some(HookSignal::TalkDown { at: T0 }))
@@ -548,6 +765,23 @@ mod tests {
         assert_eq!(
             f.on_key(KeyEvent::up(vk::RWIN), T0),
             (Verdict::SwallowAndReplay { vk: vk::RWIN }, None)
+        );
+    }
+
+    #[test]
+    fn cap_41_ctrl_win_chord_repeat_of_the_first_key_does_not_stick() {
+        // Ctrl reached the app and auto-repeats during the chord: its key-up must pass.
+        let mut f = HookFilter::new(TalkKey::CtrlWin);
+        f.on_key(KeyEvent::down(vk::LCONTROL), T0);
+        f.on_key(KeyEvent::down(vk::LWIN), T0);
+        assert_eq!(
+            f.on_key(KeyEvent::down(vk::LCONTROL), T0).0,
+            Verdict::Swallow
+        );
+        f.on_key(KeyEvent::up(vk::LWIN), T0);
+        assert_eq!(
+            f.on_key(KeyEvent::up(vk::LCONTROL), T0),
+            (Verdict::Pass, None)
         );
     }
 
@@ -679,7 +913,10 @@ mod tests {
         let mut f = HookFilter::new(TalkKey::RightAlt);
         f.on_key(KeyEvent::down(vk::RMENU), T0);
         let later = T0 + Duration::from_secs(2);
-        assert_eq!(f.reconcile(|_| false, later), Some(HookSignal::TalkUp { at: later }));
+        assert_eq!(
+            f.reconcile(|_| false, later),
+            Some(HookSignal::TalkUp { at: later })
+        );
         assert!(!f.talk_active());
         // The next Right-Alt press starts a new PTT.
         assert_eq!(
@@ -785,7 +1022,11 @@ mod tests {
         // AT-30 (needs:windows, TODO(#5)).
         let (mut c, _rx, rec) = core(TalkKey::RightAlt);
         for i in 0..10_000u32 {
-            let k = if i % 3 == 0 { vk::RMENU } else { 0x41 + (i % 20) };
+            let k = if i % 3 == 0 {
+                vk::RMENU
+            } else {
+                0x41 + (i % 20)
+            };
             c.handle(KeyEvent::down(k));
             c.handle(KeyEvent::up(k));
         }
@@ -805,7 +1046,11 @@ mod tests {
             Some(HookSignal::TalkKeyBlocked)
         );
         assert_eq!(g.on_foreground(10, Elevation::NotElevated), None);
-        assert_eq!(g.on_foreground(42, Elevation::Elevated), None, "once per process");
+        assert_eq!(
+            g.on_foreground(42, Elevation::Elevated),
+            None,
+            "once per process"
+        );
         assert_eq!(
             g.on_foreground(43, Elevation::Elevated),
             Some(HookSignal::TalkKeyBlocked)
