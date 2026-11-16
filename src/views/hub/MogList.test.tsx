@@ -165,4 +165,53 @@ describe('hub MOG list (MB-01, MB-03b)', () => {
     await tauri.emitTo('hub', 'hub:mogs', { mogs: 'no' });
     expect(el.querySelectorAll('li[data-mog-row]')).toHaveLength(2);
   });
+
+  it('[MB-01] focus goes back to the Edit button after Esc or Save (WCAG 2.4.3)', async () => {
+    const el = await shown();
+    await click(byLabel(el, 'Edit Ops'));
+    await key(byLabel(el, 'Name of Ops'), 'Escape');
+    expect(document.activeElement).toBe(byLabel(el, 'Edit Ops'));
+    await click(byLabel(el, 'Edit Ops'));
+    await click(byLabel(el, 'Save'));
+    expect(document.activeElement).toBe(byLabel(el, 'Edit Ops'));
+  });
+
+  it('[MB-01] focus goes back to the Delete button after Esc or Cancel, and to the heading after a delete', async () => {
+    const el = await shown();
+    await click(byLabel(el, 'Delete Sales'));
+    await key(el.querySelector('[role="alertdialog"]') as HTMLElement, 'Escape');
+    expect(document.activeElement).toBe(byLabel(el, 'Delete Sales'));
+    await click(byLabel(el, 'Delete Sales'));
+    await click(byLabel(el, 'Cancel'));
+    expect(document.activeElement).toBe(byLabel(el, 'Delete Sales'));
+    await click(byLabel(el, 'Delete Sales'));
+    await click(byLabel(el, 'Delete'));
+    expect(document.activeElement).toBe(el.querySelector('h2'));
+  });
+
+  it('[MB-01] Tab and Shift+Tab stay inside the delete dialog', async () => {
+    const el = await shown();
+    await click(byLabel(el, 'Delete Sales'));
+    const cancel = document.activeElement as HTMLElement;
+    expect(cancel.textContent).toBe('Cancel');
+    await key(cancel, 'Tab');
+    expect(document.activeElement?.textContent).toBe('Delete');
+    await act(async () => {
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }),
+      );
+    });
+    expect(document.activeElement).toBe(cancel);
+  });
+
+  it('[MB-03b] the same error twice gives a new alert, so a screen reader reads it again', async () => {
+    const el = await shown();
+    const text = '8 MOGs are running. Stop one to start Sales.';
+    await tauri.emitTo('hub', 'hub:mogs', { ...list, notice: { kind: 'error', text } });
+    const first = el.querySelector('[role="alert"]');
+    await tauri.emitTo('hub', 'hub:mogs', { ...list, notice: { kind: 'error', text } });
+    const second = el.querySelector('[role="alert"]');
+    expect(second?.textContent).toBe(text);
+    expect(second).not.toBe(first);
+  });
 });
