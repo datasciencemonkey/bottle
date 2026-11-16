@@ -261,7 +261,10 @@ fn mb_02_write_rejects_unknown_fields_and_bad_enums() {
         with(&["colour"], json!("red")),
         with(&["ui", "theme"], json!("dark")),
         with(&["binding", "apiKey"], json!("abc")),
-        with(&["binding", "backend"], json!({"kind": "genie_mcp", "profile": "dev"})),
+        with(
+            &["binding", "backend"],
+            json!({"kind": "genie_mcp", "profile": "dev"}),
+        ),
         with(
             &["binding", "backend"],
             json!({"kind": "genie_one_mcp", "profile": "dev", "url": "https://x"}),
@@ -289,10 +292,7 @@ fn mb_02_write_rejects_unknown_fields_and_bad_enums() {
     );
     assert_eq!(
         store
-            .write(
-                "m1",
-                &obj(json!({"name": "n", "binding": {"home": "dev"}}))
-            )
+            .write("m1", &obj(json!({"name": "n", "binding": {"home": "dev"}})))
             .unwrap_err(),
         ConfigError::InvalidConfig
     );
@@ -414,12 +414,8 @@ fn mb_02_list_read_and_delete() {
     let store = s.store();
     assert_eq!(store.list().unwrap(), ConfigList::default());
     assert_eq!(store.read("m1").unwrap_err(), ConfigError::NotFound);
-    store
-        .write("b", &with(&["name"], json!("Bee")))
-        .unwrap();
-    store
-        .write("a", &with(&["name"], json!("Ay")))
-        .unwrap();
+    store.write("b", &with(&["name"], json!("Bee"))).unwrap();
+    store.write("a", &with(&["name"], json!("Ay"))).unwrap();
     // Files that are not configs are ignored.
     std::fs::write(s.0.join("mogs/notes.txt"), "x").unwrap();
     std::fs::write(s.0.join("mogs/.a.json.tmp-1"), "x").unwrap();
@@ -465,10 +461,7 @@ fn mb_02_at_17_read_refuses_a_tampered_file_and_keeps_it() {
     assert_eq!(list.items.len(), 1);
     assert_eq!(list.unreadable, ["big", "junk", "leak"]);
     // No automatic deletion of user content.
-    assert_eq!(
-        s.files(),
-        ["big.json", "junk.json", "leak.json", "ok.json"]
-    );
+    assert_eq!(s.files(), ["big.json", "junk.json", "leak.json", "ok.json"]);
 }
 
 #[test]
@@ -493,7 +486,11 @@ fn mb_02_gateway_serves_config_commands() {
     let s = Scratch::new();
     let gw = hardened_gateway_with(NoLog, MogConfigComponent::new(Arc::new(s.store())));
     let reply = gw
-        .dispatch("hub", "config_write", json!({"id": "m1", "json": minimal()}))
+        .dispatch(
+            "hub",
+            "config_write",
+            json!({"id": "m1", "json": minimal()}),
+        )
         .unwrap();
     assert_eq!(reply["id"], "m1");
     assert_eq!(reply["json"]["capture"]["vadEndMs"], 1_500);

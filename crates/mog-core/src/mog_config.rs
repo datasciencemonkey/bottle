@@ -13,15 +13,17 @@
 //! file is reported, never deleted (no automatic deletion of user content).
 
 use crate::error::{CoreError, CoreResult};
-use crate::ipc::JsonObject;
+use crate::ipc::{ConfigIdArgs, ConfigWriteArgs, JsonObject};
 use crate::ipc_gateway::GatewayComponents;
 use crate::token_guard::{self, ConfigSecret};
 use crate::types::{CaptureMode, TranscriptProvider};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 /// The component name in [`CoreError::Unavailable`].
 pub const COMPONENT: &str = "MogConfigStore";
@@ -179,7 +181,7 @@ pub enum CustomAgentProtocol {
 
 /// `mog.binding.backend`: the 4.7 `BackendBinding` union (G-01 kinds only).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BackendConfig {
     #[serde(rename_all = "camelCase")]
     GenieOneMcp {
@@ -346,16 +348,125 @@ impl Default for CardConfig {
     }
 }
 
-/// True if `id` can name a config file (and a `mog-<id>` window label).
+/// True if `id` can name a config file (and a `mog-<id>` window label): 1 to
+/// [`MAX_ID_LEN`] ASCII letters, digits and `-`. So an ID never holds a path separator or a dot.
 pub fn valid_id(id: &str) -> bool {
-    let _ = id;
-    todo!("#25")
+    !id.is_empty()
+        && id.len() <= MAX_ID_LEN
+        && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
+const MAX_NAME_CHARS: usize = 64;
+const MAX_SHORT_CHARS: usize = 256;
+const MAX_VARIANT_CHARS: usize = 32;
+const MAX_URL_CHARS: usize = 2_048;
+const MAX_ALIASES: usize = 32;
+const MAX_ALIAS_WORD_CHARS: usize = 64;
+const MAX_DOZE_MIN: u32 = 24 * 60;
+const MAX_VAD_END_MS: u32 = 60_000;
+const MAX_PREVIEW_MS: u32 = 60_000;
+const MAX_AUTO_HIDE_SEC: u32 = 3_600;
+const MAX_BLURBS: u32 = 10;
+
+fn chars_in(s: &str, min: usize, max: usize) -> bool {
+    let n = s.chars().count();
+    (min..=max).contains(&n)
+}
+
+/// A short single-line value: a profile name, an ID or a model name.
+fn short(s: &str) -> bool {
+    chars_in(s, 1, MAX_SHORT_CHARS) && !s.chars().any(char::is_control)
+}
+
+fn opt_short(s: &Option<String>) -> bool {
+    s.as_deref().is_none_or(short)
+}
+
+fn backend_ok(b: &BackendConfig) -> bool {
+    match b {
+        BackendConfig::GenieOneMcp {
+            profile,
+            warehouse_id,
+        } => short(profile) && opt_short(warehouse_id),
+        BackendConfig::GenieAgent {
+            profile, space_id, ..
+        } => short(profile) && short(space_id),
+        // The host and workspace checks of 4.6 rule 1 run when the app is called (v1).
+        BackendConfig::CustomAgent {
+            profile, app_url, ..
+        } => {
+            short(profile)
+                && chars_in(app_url, 1, MAX_URL_CHARS)
+                && app_url.starts_with("https://")
+                && !app_url.chars().any(|c| c.is_control() || c.is_whitespace())
+        }
+    }
+}
+
+impl MogConfig {
+    /// The bounds that serde does not check.
+    fn in_bounds(&self) -> bool {
+        let b = &self.binding;
+        let modes = &self.capture.modes;
+        let unique_modes = modes
+            .iter()
+            .enumerate()
+            .all(|(i, m)| !modes[..i].contains(m));
+        chars_in(&self.name, 1, MAX_NAME_CHARS)
+            && !self.name.chars().any(char::is_control)
+            && chars_in(&self.ui.variant, 1, MAX_VARIANT_CHARS)
+            && !self.ui.variant.chars().any(char::is_control)
+            && self.ui.doze_after_min <= MAX_DOZE_MIN
+            && short(&b.home)
+            && b.backend.as_ref().is_none_or(backend_ok)
+            && b.profile_aliases.len() <= MAX_ALIASES
+            && b.profile_aliases.iter().all(|(word, profile)| {
+                chars_in(word, 1, MAX_ALIAS_WORD_CHARS)
+                    && !word.chars().any(char::is_control)
+                    && short(profile)
+            })
+            && unique_modes
+            && self.capture.vad_end_ms <= MAX_VAD_END_MS
+            && self.hotkeys.chord.is_none_or(|d| d <= 9)
+            && self.genie.preview_ms <= MAX_PREVIEW_MS
+            && opt_short(&self.agent.model)
+            && opt_short(&self.pages.domain_id)
+            && self.persona.chars().count() <= MAX_PERSONA_CHARS
+            && self.card.auto_hide_sec <= MAX_AUTO_HIDE_SEC
+            && (1..=MAX_BLURBS).contains(&self.card.max_blurbs)
+    }
 }
 
 /// Check and normalize a config for `config_write` (MB-02).
+///
+/// The order is fixed: size, then the MB-02 secret check (so a secret under an unknown key is
+/// reported as a secret), then `schemaVersion`, the schema and the bounds. The result has every
+/// Appendix F default filled in, and a backend.
 pub fn parse_config(json: &JsonObject) -> Result<MogConfig, ConfigError> {
-    let _ = (json, token_guard::check_config_json);
-    todo!("#25")
+    let size = serde_json::to_vec(json).map_err(|_| ConfigError::InvalidConfig)?;
+    if size.len() > MAX_CONFIG_BYTES {
+        return Err(ConfigError::TooLarge);
+    }
+    token_guard::check_config_json(json).map_err(ConfigError::Secret)?;
+    match json.get("schemaVersion") {
+        Some(v) if v.as_u64() == Some(u64::from(SCHEMA_VERSION)) => {}
+        Some(Value::Number(_)) => return Err(ConfigError::UnsupportedSchemaVersion),
+        _ => return Err(ConfigError::InvalidConfig),
+    }
+    // serde messages quote keys and values, so they are dropped (4.6 rule 7).
+    let value = serde_json::to_value(json).map_err(|_| ConfigError::InvalidConfig)?;
+    let mut cfg: MogConfig =
+        serde_json::from_value(value).map_err(|_| ConfigError::InvalidConfig)?;
+    if !cfg.in_bounds() {
+        return Err(ConfigError::InvalidConfig);
+    }
+    if cfg.binding.backend.is_none() {
+        cfg.binding.backend = Some(BackendConfig::GenieOneMcp {
+            profile: cfg.binding.home.clone(),
+            warehouse_id: None,
+        });
+    }
+    Ok(cfg)
 }
 
 // ---------- store ----------
@@ -378,47 +489,177 @@ pub struct ConfigList {
     pub unreadable: Vec<String>,
 }
 
+const EXT: &str = ".json";
+
 /// The MOG configs in one directory.
 #[derive(Debug)]
 pub struct MogConfigStore {
     dir: PathBuf,
+    /// One write or delete at a time, so the config cap and the rename hold.
+    lock: Mutex<()>,
+}
+
+fn storage<T>(_: T) -> ConfigError {
+    ConfigError::StorageFailed
 }
 
 impl MogConfigStore {
     /// A store in `dir`. The directory is made on the first write.
     pub fn new(dir: impl Into<PathBuf>) -> Self {
-        Self { dir: dir.into() }
+        Self {
+            dir: dir.into(),
+            lock: Mutex::new(()),
+        }
     }
 
-    /// Every config, sorted by ID.
+    /// The directory of the config files.
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    fn path(&self, id: &str) -> Result<PathBuf, ConfigError> {
+        if valid_id(id) {
+            Ok(self.dir.join(format!("{id}{EXT}")))
+        } else {
+            Err(ConfigError::InvalidId)
+        }
+    }
+
+    /// The IDs of the config files, sorted. A missing directory has none.
+    fn ids(&self) -> Result<Vec<String>, ConfigError> {
+        let entries = match fs::read_dir(&self.dir) {
+            Ok(e) => e,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(storage(e)),
+        };
+        let mut ids = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(storage)?;
+            let name = entry.file_name();
+            let Some(id) = name.to_str().and_then(|n| n.strip_suffix(EXT)) else {
+                continue;
+            };
+            if valid_id(id) && entry.file_type().map_err(storage)?.is_file() {
+                ids.push(id.to_owned());
+            }
+        }
+        ids.sort();
+        Ok(ids)
+    }
+
+    /// Every config, sorted by ID. A file that fails the checks is listed in `unreadable`.
     pub fn list(&self) -> Result<ConfigList, ConfigError> {
-        let _ = &self.dir;
-        todo!("#25")
+        let mut out = ConfigList::default();
+        for id in self.ids()? {
+            match self.read(&id) {
+                Ok(cfg) => out.items.push(ConfigSummary { id, name: cfg.name }),
+                Err(ConfigError::StorageFailed) => return Err(ConfigError::StorageFailed),
+                // Removed between the directory read and the file read.
+                Err(ConfigError::NotFound) => {}
+                Err(_) => out.unreadable.push(id),
+            }
+        }
+        Ok(out)
     }
 
-    /// One config.
+    /// One config. The file gets the same checks as a write; a bad file stays on disk.
     pub fn read(&self, id: &str) -> Result<MogConfig, ConfigError> {
-        let _ = id;
-        todo!("#25")
+        let path = self.path(id)?;
+        let file = match fs::File::open(&path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Err(ConfigError::NotFound),
+            Err(e) => return Err(storage(e)),
+        };
+        let mut bytes = Vec::new();
+        file.take(MAX_CONFIG_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(storage)?;
+        if bytes.len() > MAX_CONFIG_BYTES {
+            return Err(ConfigError::TooLarge);
+        }
+        let json: JsonObject =
+            serde_json::from_slice(&bytes).map_err(|_| ConfigError::InvalidConfig)?;
+        parse_config(&json)
     }
 
-    /// Check, normalize and save a config. Returns the saved config.
+    /// Check, normalize and save a config. Returns the saved config. A rejected config
+    /// changes nothing on disk.
     pub fn write(&self, id: &str, json: &JsonObject) -> Result<MogConfig, ConfigError> {
-        let _ = (id, json);
-        todo!("#25")
+        let path = self.path(id)?;
+        let cfg = parse_config(json)?;
+        let bytes = serde_json::to_vec_pretty(&cfg).map_err(|_| ConfigError::InvalidConfig)?;
+        let _guard = self.lock.lock().unwrap_or_else(|p| p.into_inner());
+        if !path.exists() && self.ids()?.len() >= MAX_CONFIGS {
+            return Err(ConfigError::LimitReached);
+        }
+        make_private_dir(&self.dir)?;
+        atomic_write(&self.dir, id, &path, &bytes)?;
+        Ok(cfg)
     }
 
-    /// Delete a config on a user action. `false` if there was none.
+    /// Delete a config on a user action (the hub). `false` if there was none.
     pub fn delete(&self, id: &str) -> Result<bool, ConfigError> {
-        let _ = id;
-        todo!("#25")
+        let path = self.path(id)?;
+        let _guard = self.lock.lock().unwrap_or_else(|p| p.into_inner());
+        match fs::remove_file(&path) {
+            Ok(()) => Ok(true),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(storage(e)),
+        }
     }
+}
+
+fn make_private_dir(dir: &Path) -> Result<(), ConfigError> {
+    let mut b = fs::DirBuilder::new();
+    b.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        b.mode(0o700);
+    }
+    b.create(dir).map_err(storage)
+}
+
+/// Write `bytes` to a new temp file in `dir`, flush it to disk, then rename it over `path`.
+/// A reader sees the old file or the new file, never a part of one.
+fn atomic_write(dir: &Path, id: &str, path: &Path, bytes: &[u8]) -> Result<(), ConfigError> {
+    let mut nonce = [0u8; 8];
+    getrandom::fill(&mut nonce).map_err(storage)?;
+    let suffix: String = nonce.iter().map(|b| format!("{b:02x}")).collect();
+    // A leading dot and the `.tmp-` suffix keep the temp file out of `ids`.
+    let tmp = dir.join(format!(".{id}{EXT}.tmp-{suffix}"));
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let result = opts
+        .open(&tmp)
+        .and_then(|mut f| {
+            f.write_all(bytes)?;
+            f.sync_all()
+        })
+        .and_then(|()| fs::rename(&tmp, path));
+    if let Err(e) = result {
+        // Only the temp file that this call made; never a user file.
+        let _ = fs::remove_file(&tmp);
+        return Err(storage(e));
+    }
+    // Make the rename durable. Not every platform can open a directory, so this is best effort.
+    #[cfg(unix)]
+    if let Ok(d) = fs::File::open(dir) {
+        let _ = d.sync_all();
+    }
+    Ok(())
 }
 
 // ---------- gateway seam ----------
 
 /// Serves the `config_*` commands on the R12 gateway (`ipc_gateway::hardened_gateway_with`).
-/// Every other command gets `not_implemented`.
+/// The gateway has checked the window and the argument schema already. Every other command
+/// gets `not_implemented`.
 #[derive(Debug, Clone)]
 pub struct MogConfigComponent {
     store: Arc<MogConfigStore>,
@@ -430,10 +671,37 @@ impl MogConfigComponent {
     }
 }
 
+fn args<T: for<'de> Deserialize<'de>>(args: Value) -> CoreResult<T> {
+    serde_json::from_value(args).map_err(|_| CoreError::IpcRefused {
+        code: "invalid_args",
+    })
+}
+
 impl GatewayComponents for MogConfigComponent {
-    fn call(&self, command: &'static str, args: Value) -> CoreResult<Value> {
-        let _ = (command, args, &self.store);
-        todo!("#25")
+    fn call(&self, command: &'static str, a: Value) -> CoreResult<Value> {
+        let reply = match command {
+            "config_list" => serde_json::to_value(self.store.list()?),
+            "config_read" => {
+                let a: ConfigIdArgs = args(a)?;
+                let cfg = self.store.read(&a.id)?;
+                serde_json::to_value(cfg).map(|json| json!({ "id": a.id, "json": json }))
+            }
+            "config_write" => {
+                let a: ConfigWriteArgs = args(a)?;
+                let cfg = self.store.write(&a.id, &a.json)?;
+                serde_json::to_value(cfg).map(|json| json!({ "id": a.id, "json": json }))
+            }
+            "config_delete" => {
+                let a: ConfigIdArgs = args(a)?;
+                Ok(json!({ "deleted": self.store.delete(&a.id)? }))
+            }
+            _ => {
+                return Err(CoreError::IpcRefused {
+                    code: "not_implemented",
+                })
+            }
+        };
+        reply.map_err(|_| ConfigError::InvalidConfig.into())
     }
 }
 
