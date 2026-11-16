@@ -82,7 +82,60 @@ fn nfr_18a_mog_call_returns_not_implemented_through_r12() {
     ));
     assert_eq!(
         json(&reply),
-        serde_json::json!({"error": "not_implemented"})
+        serde_json::json!({"error": "not_implemented", "command": "profiles_list"})
+    );
+}
+
+#[test]
+fn sec_02a_ffi_caller_has_the_brain_window_class() {
+    // A brain command passes the window check; a view-only command does not.
+    let reply = call(Some(r#"{"command":"capture_status","args":{}}"#));
+    assert_eq!(
+        json(&reply),
+        serde_json::json!({"error": "not_implemented", "command": "capture_status"})
+    );
+    let reply = call(Some(
+        r#"{"command":"view_emit","args":{"mogId":"m1","kind":"poked"}}"#,
+    ));
+    assert_eq!(
+        json(&reply),
+        serde_json::json!({"error": "window_not_allowed", "command": "view_emit", "window": "brain"})
+    );
+}
+
+#[test]
+fn sec_02b_ffi_args_with_an_extra_field_are_rejected() {
+    let reply = call(Some(
+        r#"{"command":"profiles_list","args":{"refresh":true,"extra":1}}"#,
+    ));
+    assert_eq!(
+        json(&reply),
+        serde_json::json!({
+            "error": "invalid_args",
+            "command": "profiles_list",
+            "reason": mog_core::ipc::INVALID_ARGS_REASON,
+        })
+    );
+}
+
+#[test]
+fn nfr_18a_unknown_command_is_not_echoed() {
+    let reply = call(Some(r#"{"command":"no_such_command","args":{}}"#));
+    assert_eq!(
+        json(&reply),
+        serde_json::json!({"error": "unknown_command"})
+    );
+}
+
+#[test]
+fn nfr_18a_brain_subscribe_is_not_supported_over_the_abi() {
+    // The event callback replaces the brain Channel of the Tauri host.
+    let reply = call(Some(
+        r#"{"command":"brain_subscribe","args":{"onEvent":"__CHANNEL__:1"}}"#,
+    ));
+    assert_eq!(
+        json(&reply),
+        serde_json::json!({"error": "not_supported", "command": "brain_subscribe"})
     );
 }
 
