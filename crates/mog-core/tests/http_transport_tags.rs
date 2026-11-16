@@ -1,4 +1,4 @@
-//! R7 HttpTransport request identity (#342, ADR 0033): the trait takes the IPC tags, a fixed
+//! R7 HttpTransport request identity (#342, ADR 0041): the trait takes the IPC tags, a fixed
 //! map gives each route ID its call kind, and `outbound_headers` builds the headers that every
 //! R7 implementation sends (SEC-06a, SEC-06b). An unknown route fails closed (ARC-6, 4.6 rule 1).
 
@@ -116,7 +116,7 @@ fn sec_06a_bad_tags_fail_closed_with_a_content_free_code() {
 #[test]
 fn sec_06a_the_stub_transport_takes_the_tags_argument() {
     let s = StubHttpTransport;
-    let r = s.request("p", "scim.me", None, &tags("a1"));
+    let r = s.request("p", "scim.me", &Default::default(), None, &tags("a1"));
     assert!(matches!(
         r,
         Err(CoreError::NotImplemented { component: "R7" })

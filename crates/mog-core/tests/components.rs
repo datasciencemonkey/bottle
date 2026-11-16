@@ -110,7 +110,10 @@ fn r7_http_transport_stub_reports_not_implemented() {
     let tags: mog_core::types::Tags =
         serde_json::from_value(serde_json::json!({"app": "bottle", "mog": "a1", "op": "genie"}))
             .unwrap();
-    not_implemented(s.request("p", "scim.me", None, &tags), "R7");
+    not_implemented(
+        s.request("p", "scim.me", &Default::default(), None, &tags),
+        "R7",
+    );
     not_implemented(s.is_online(), "R7");
 }
 

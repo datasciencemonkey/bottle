@@ -3,15 +3,17 @@
 //! Responsibilities: `reqwest` + `rustls`. Host allowlist, no credentialed cross-host redirect, request tags and User-Agent, shared per-profile bucket (40 calls/min, AIMD), 429/Retry-After, online/offline detection.
 
 use crate::error::{CoreError, CoreResult};
+use crate::ipc::JsonObject;
 use crate::request_identity::{CallKind, RequestDecorator};
 use crate::types::Tags;
 
 const ID: &str = "R7";
 
-/// The fixed route map of R7 (#342, ADR 0033): every route ID that R7 sends, with its call
+/// The fixed route map of R7 (#342, ADR 0041): every route ID that R7 sends, with its call
 /// kind. The `ipc::RouteId` wire names (4.6) are workspace REST calls. The two Unity Gateway
 /// model routes are `POST /ai-gateway/mlflow/v1/chat/completions` and `/embeddings`
-/// (NFR-21a, D57); `model_invoke` and the cloud ASR path use them. Any other ID is refused.
+/// (NFR-21a, D57); `model_invoke` uses them. Any other ID is refused.
+/// TODO(#49): the cloud ASR route joins this map when the ASR client picks its endpoint.
 pub const ROUTES: &[(&str, CallKind)] = &[
     ("scim.me", CallKind::Workspace),
     ("genie.start_conversation", CallKind::Workspace),
@@ -76,11 +78,14 @@ pub fn outbound_headers(
 /// Bottle User-Agent on every call (SEC-06b) and the tags on each Unity Gateway call
 /// (SEC-06a). TODO(#364): the real `reqwest` + `rustls` client.
 pub trait HttpTransport: Send + Sync {
-    /// Send one request on a fixed route ID for `profile` and return the JSON reply.
+    /// Send one request on a fixed route ID for `profile` and return the JSON reply. `params`
+    /// are the path and query values of the route (for example a Genie space ID), from the
+    /// IPC `params` argument; the transport places them, so no caller builds a URL.
     fn request(
         &self,
         profile: &str,
         route_id: &str,
+        params: &JsonObject,
         body: Option<&serde_json::Value>,
         tags: &Tags,
     ) -> CoreResult<serde_json::Value>;
@@ -97,6 +102,7 @@ impl HttpTransport for StubHttpTransport {
         &self,
         _profile: &str,
         _route_id: &str,
+        _params: &JsonObject,
         _body: Option<&serde_json::Value>,
         _tags: &Tags,
     ) -> CoreResult<serde_json::Value> {

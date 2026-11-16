@@ -7,7 +7,7 @@
 //! This module builds the header values and holds the [`RequestDecorator`] seam. R7
 //! HttpTransport and R8 McpTransport call the decorator for every request.
 //! R7 gets the call kind from the fixed route map `http_transport::ROUTES` and the tags from
-//! the IPC `tags` argument (`http_transport::outbound_headers`, #342, ADR 0033).
+//! the IPC `tags` argument (`http_transport::outbound_headers`, #342, ADR 0041).
 //! TODO(#364): the real reqwest R7 transport that sends these headers.
 //! TODO(#136): SP-18 confirms if `MCP_SERVICE` usage rows keep the tags.
 //!
