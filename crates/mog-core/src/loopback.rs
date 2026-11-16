@@ -26,6 +26,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use crate::error::{CoreError, CoreResult};
+use crate::request_identity::CallKind;
 use crate::token_guard::scrub_json;
 
 const ID: &str = "R16";
@@ -67,6 +68,16 @@ impl LoopbackEndpoint {
             LoopbackEndpoint::GenieOneMcp => "genie-one-mcp",
             LoopbackEndpoint::ModelProxy => "model-proxy",
         }
+    }
+
+    /// The kind of the upstream call that the handler of this endpoint makes, for the
+    /// request identity headers (#197, SEC-06a, SEC-06b). `None` for `bottle-mcp`, which
+    /// serves in the core and makes no upstream call itself. The handler builds the upstream
+    /// request from [`LoopbackRequest`], which holds no harness header, and calls
+    /// [`crate::request_identity::RequestDecorator`] with the session's MOG tags.
+    /// TODO(#113): the model proxy handler. TODO(#139): the Genie One MCP proxy handler.
+    pub fn call_kind(&self) -> Option<CallKind> {
+        todo!("#197 green")
     }
 }
 
@@ -531,6 +542,19 @@ fn serve(mut stream: TcpStream, endpoint: LoopbackEndpoint, port: u16, shared: &
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn at_36_sec_06a_loopback_upstream_call_kinds() {
+        assert_eq!(
+            LoopbackEndpoint::ModelProxy.call_kind(),
+            Some(CallKind::UnityGateway)
+        );
+        assert_eq!(
+            LoopbackEndpoint::GenieOneMcp.call_kind(),
+            Some(CallKind::Mcp)
+        );
+        assert_eq!(LoopbackEndpoint::BottleMcp.call_kind(), None);
+    }
 
     #[test]
     fn arc_7_ct_eq_compares_whole_values() {

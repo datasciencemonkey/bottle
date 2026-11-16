@@ -7,6 +7,11 @@ use crate::error::{CoreError, CoreResult};
 const ID: &str = "R7";
 
 /// HTTPS to the workspace of a profile. Callers give a fixed route ID, never a URL (4.6 rule 1).
+///
+/// Every implementation must add the request identity headers of
+/// [`crate::request_identity::RequestDecorator`] to each request: the Bottle User-Agent on
+/// every call (SEC-06b) and the tags from the IPC `tags` argument on each Unity Gateway call
+/// (SEC-06a). TODO(#207): the real transport (PR #256) calls the decorator.
 pub trait HttpTransport: Send + Sync {
     /// Send one request on a fixed route ID for `profile` and return the JSON reply.
     fn request(
