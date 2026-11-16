@@ -3,7 +3,7 @@
  * the runtime wasm from the bundle, and the `.riv` file from a bundled URL only (ADR 0021).
  */
 import { readdirSync, readFileSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { join, relative, resolve, sep } from 'node:path';
 import {
   RIVE_WASM_URL,
   configureOfflineRuntime,
@@ -127,7 +127,8 @@ describe('[SEC-20a] [AT-37] offline Rive loader', () => {
         if (e.isDirectory()) walk(p);
         else if (/\.(ts|tsx|js|jsx)$/.test(e.name) && !/\.test\.tsx?$/.test(e.name)) {
           if (/from\s+['"]@rive-app\/|import\(\s*['"]@rive-app\//.test(readFileSync(p, 'utf8'))) {
-            hits.push(relative(root, p));
+            // POSIX separators, so the path matches on Windows too (#366).
+            hits.push(relative(root, p).split(sep).join('/'));
           }
         }
       }
