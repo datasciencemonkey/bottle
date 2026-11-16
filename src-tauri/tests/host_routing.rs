@@ -138,6 +138,7 @@ fn comps<'a>(
         capture: None,
         capture_ticket: None,
         app_settings: None,
+        insert: None,
     }
 }
 
@@ -334,15 +335,72 @@ fn arc_3_cap_02a_window_ops_and_capture_start_run_off_the_main_thread_and_others
     for c in COMMANDS {
         assert_eq!(
             runs_off_main_thread(c.name),
+            // `insert_text` waits about 0.4 s for the paste and the restore (#58, ADR 0048).
             c.name.starts_with("window_")
                 || matches!(
                     c.name,
-                    "permission_request" | "capture_start" | "capture_resume"
+                    "permission_request" | "capture_start" | "capture_resume" | "insert_text"
                 ),
             "{}",
             c.name
         );
     }
+}
+
+// ---------- insert_text (#58) ----------
+
+/// The R11 paste component double: it records the checked calls and answers `inserted`.
+#[derive(Default)]
+struct FakeInsert(Mutex<Vec<(String, Value)>>);
+
+impl GatewayComponents for FakeInsert {
+    fn call(&self, command: &'static str, args: Value) -> CoreResult<Value> {
+        self.0.lock().unwrap().push((command.to_owned(), args));
+        Ok(json!({"result": "inserted"}))
+    }
+}
+
+#[test]
+fn mog_06a_insert_text_goes_to_the_paste_component() {
+    let brain = FakeBrain::default();
+    let insert = FakeInsert::default();
+    let mut c = comps("brain", &brain, None, None);
+    c.insert = Some(&insert);
+    let args = json!({"mogId": "00000000-0000-4000-8000-0000000000a1", "text": "a\nb"});
+    assert_eq!(
+        route(c, "insert_text", args.clone()),
+        Ok(json!({"result": "inserted"}))
+    );
+    assert_eq!(
+        *insert.0.lock().unwrap(),
+        vec![("insert_text".to_owned(), args)]
+    );
+}
+
+#[test]
+fn mog_06a_insert_text_without_a_paste_host_is_host_failed() {
+    let brain = FakeBrain::default();
+    let got = route(
+        comps("brain", &brain, None, None),
+        "insert_text",
+        json!({"mogId": "00000000-0000-4000-8000-0000000000a1", "text": "x"}),
+    );
+    assert_eq!(got, err("host_failed"));
+}
+
+#[test]
+fn mog_06b_a_view_cannot_reach_the_paste_component() {
+    let brain = FakeBrain::default();
+    let insert = FakeInsert::default();
+    let mut c = comps("mog-a1", &brain, None, None);
+    c.insert = Some(&insert);
+    let got = route(
+        c,
+        "insert_text",
+        json!({"mogId": "00000000-0000-4000-8000-0000000000a1", "text": "x"}),
+    );
+    assert_eq!(got, err("window_not_allowed"));
+    assert!(insert.0.lock().unwrap().is_empty());
 }
 
 // ---------- view_emit and brain_subscribe ----------
