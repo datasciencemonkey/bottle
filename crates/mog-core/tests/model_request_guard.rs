@@ -56,7 +56,13 @@ fn rtr_20a_tool_fields_names_every_chat_completions_tool_field() {
     names.sort_unstable();
     assert_eq!(
         names,
-        ["function_call", "functions", "parallel_tool_calls", "tool_choice", "tools"]
+        [
+            "function_call",
+            "functions",
+            "parallel_tool_calls",
+            "tool_choice",
+            "tools"
+        ]
     );
     let all = json!({
         "messages": [], "tools": [], "tool_choice": "auto", "functions": [],
@@ -88,7 +94,11 @@ fn rtr_20a_at_17_gateway_refuses_model_invoke_with_a_tool_field_for_every_role()
             request[*field] = json!([{"type": "function"}]);
             let r = gw.dispatch("brain", "model_invoke", invoke_args(role, request));
             assert_eq!(refused_code(r), Some("invalid_args"), "{role} {field}");
-            assert_eq!(*counting.0.lock().unwrap(), 0, "{role} {field} reached a component");
+            assert_eq!(
+                *counting.0.lock().unwrap(),
+                0,
+                "{role} {field} reached a component"
+            );
         }
     }
 }
