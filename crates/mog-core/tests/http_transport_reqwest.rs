@@ -556,6 +556,17 @@ fn arc_6_rule_2_production_policy_refuses_loopback_and_accounts() {
 }
 
 #[test]
+fn arc_6_rule_2_rule_3_production_policy_refuses_another_databricks_host() {
+    let p = AllowlistEgressPolicy;
+    let a = "dbc-a.cloud.databricks.com";
+    let b = "dbc-b.cloud.databricks.com";
+    let from = format!("https://{a}/api/2.0/x");
+    assert!(!p.may_send_token(a, &format!("https://{b}/api/2.0/x")));
+    assert!(!p.may_follow_redirect_with_authorization(a, &from, &format!("https://{b}/x")));
+    assert!(p.may_follow_redirect_with_authorization(a, &from, &format!("https://{a}/y")));
+}
+
+#[test]
 fn arc_6_rule_2_production_transport_refuses_a_loopback_profile_host() {
     let s = serve(vec![json_reply(200, json!({}))]);
     let broker = Arc::new(FakeBroker::default());

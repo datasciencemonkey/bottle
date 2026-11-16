@@ -175,6 +175,8 @@ impl ReqwestHttpTransport {
 
     /// A transport on the given seams.
     pub fn with_seams(seams: TransportSeams) -> CoreResult<Self> {
+        // Proxies come from `HTTPS_PROXY` / `NO_PROXY` only.
+        // TODO(#412): read the OS proxy settings (reqwest `system-proxy`).
         // rustls needs one process-wide crypto provider. An `Err` means one is set already.
         let _ = rustls::crypto::ring::default_provider().install_default();
         let client = Client::builder()
@@ -236,14 +238,16 @@ impl ReqwestHttpTransport {
         out.unwrap_or(Err(err(TOKEN_UNUSABLE)))
     }
 
-    fn send_with(
+    /// Build one request. The `Authorization` value is marked sensitive, so the `Debug` output
+    /// of the request (and of any header map that holds it) never shows the token.
+    fn build_request(
         &self,
         token: &[u8],
         method: Method,
         url: &str,
         headers: &[(&'static str, String)],
         body: Option<&[u8]>,
-    ) -> CoreResult<Raw> {
+    ) -> CoreResult<reqwest::blocking::Request> {
         let mut bearer = Vec::with_capacity(7 + token.len());
         bearer.extend_from_slice(b"Bearer ");
         bearer.extend_from_slice(token);
@@ -272,7 +276,19 @@ impl ReqwestHttpTransport {
                 .header(CONTENT_TYPE, "application/json")
                 .body(b.to_vec());
         }
-        let resp = req.send().map_err(|e| {
+        req.build().map_err(|_| err(TRANSPORT_FAILED))
+    }
+
+    fn send_with(
+        &self,
+        token: &[u8],
+        method: Method,
+        url: &str,
+        headers: &[(&'static str, String)],
+        body: Option<&[u8]>,
+    ) -> CoreResult<Raw> {
+        let req = self.build_request(token, method, url, headers, body)?;
+        let resp = self.client.execute(req).map_err(|e| {
             if e.is_connect() {
                 self.online.store(false, Ordering::SeqCst);
                 err(OFFLINE)
@@ -302,6 +318,15 @@ impl ReqwestHttpTransport {
             retry_after,
             body: bytes,
         })
+    }
+}
+
+impl std::fmt::Debug for ReqwestHttpTransport {
+    /// Shows only the online state: no seam, header or token.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReqwestHttpTransport")
+            .field("online", &self.online.load(Ordering::SeqCst))
+            .finish_non_exhaustive()
     }
 }
 
@@ -385,5 +410,53 @@ impl HttpTransport for ReqwestHttpTransport {
 
     fn is_online(&self) -> CoreResult<bool> {
         Ok(self.online.load(Ordering::SeqCst))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::clock::SystemClock;
+    use crate::http_transport::rate_bucket::AimdBucket;
+    use crate::token_broker::StubTokenBroker;
+
+    const FAKE: &str = "test-token-not-real";
+
+    fn transport() -> ReqwestHttpTransport {
+        ReqwestHttpTransport::new(
+            Arc::new(StubProfileHosts),
+            Arc::new(StubTokenBroker),
+            Arc::new(AimdBucket::new(Arc::new(SystemClock::new()))),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn arc_6_token_never_shows_in_request_debug_output() {
+        let t = transport();
+        let req = t
+            .build_request(
+                FAKE.as_bytes(),
+                Method::Post,
+                "https://dbc-fake.cloud.databricks.com/api/2.0/x",
+                &[("User-Agent", "bottle/0 (macos; mog)".into())],
+                Some(b"{}"),
+            )
+            .unwrap();
+        assert!(req.headers().contains_key(AUTHORIZATION));
+        assert!(req.headers()[AUTHORIZATION].is_sensitive());
+        let text = format!(
+            "{req:?} {:?} {:?}",
+            req.headers(),
+            req.headers()[AUTHORIZATION]
+        );
+        assert!(!text.contains(FAKE), "{text}");
+        assert!(!text.contains("Bearer"), "{text}");
+    }
+
+    #[test]
+    fn arc_6_transport_debug_output_holds_no_seam_or_token() {
+        let text = format!("{:?}", transport());
+        assert_eq!(text, "ReqwestHttpTransport { online: true, .. }");
     }
 }

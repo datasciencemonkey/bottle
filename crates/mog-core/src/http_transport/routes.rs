@@ -85,7 +85,8 @@ pub const ROUTE_TABLE: &[Route] = &[
         Method::Post,
         "/api/2.0/genie/spaces/{space_id}/conversations/{conversation_id}/messages/{message_id}/feedback",
     ),
-    // The reply is a PNG, so rule 6 refuses it until a binary reply exists (ADR 0046).
+    // The reply is a PNG, so rule 6 refuses it with `non_json_reply` (ADR 0046).
+    // TODO(#411): a binary reply for this route (G-42), through the contract owner.
     r(
         "genie.download_viz",
         Method::Get,
