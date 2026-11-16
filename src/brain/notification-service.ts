@@ -6,8 +6,8 @@
  * - UX-26b: 1 notification or less for each MOG in each 10 s.
  * - UX-26c: reports of different MOGs inside one 5 s window leave as one merged notification.
  *
- * The first report opens the 5 s window. The window closes with one check of the card state of
- * each MOG and of the Focus mode, so a card that opens meanwhile cancels its notification.
+ * The first report opens the 5 s window. Each report checks its card at once. The window closes with a second check of the card
+ * state of each MOG and of the Focus mode, so a card that opens meanwhile cancels its notification.
  *
  * TODO(#95): the host calls (`cardVisible`, `focusAllows`, `notify`) have no IPC command yet.
  * The wiring in `main.ts` waits for a contract change (see the PR).
@@ -72,13 +72,14 @@ export function createNotificationService(deps: NotificationServiceDeps): Notifi
         if (!(await host.cardVisible(id)) && !limited(id)) hidden.push(id);
       if (hidden.length === 0) return;
       const first = hidden[0] as MogId;
+      // Set before the await, so a report during an in-flight call sees the limit.
+      const now = clock.now();
+      for (const id of hidden) lastSentAt.set(id, now);
       await host.notify(
         hidden.length === 1
           ? { title: 'MOG', body: batch.get(first) ?? '', mogIds: hidden }
           : { title: 'MOG', body: `${hidden.length} MOGs have new answers`, mogIds: hidden },
       );
-      const now = clock.now();
-      for (const id of hidden) lastSentAt.set(id, now);
     } catch {
       // The host state is unknown or the call failed: send nothing.
     }
@@ -87,7 +88,14 @@ export function createNotificationService(deps: NotificationServiceDeps): Notifi
   return {
     report(r) {
       if (r.kind !== 'answer' || pending.has(r.mogId) || limited(r.mogId)) return;
-      pending.set(r.mogId, r.text);
+      const batch = pending;
+      batch.set(r.mogId, r.text);
+      // A card that is visible when the answer finishes never gets a notification, even if it
+      // hides inside the window. An unreadable state drops the report.
+      host.cardVisible(r.mogId).then(
+        (visible) => visible && batch.delete(r.mogId),
+        () => batch.delete(r.mogId),
+      );
       if (cancelTimer) return;
       cancelTimer = schedule(clock.now() + MERGE_WINDOW_MS, () => {
         const batch = pending;
