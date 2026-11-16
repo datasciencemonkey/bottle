@@ -8,6 +8,7 @@ import type {
   Tags,
 } from '../../shared/interfaces';
 import { BrainActor } from '../actor';
+import { core } from '../test-core';
 import { NotImplementedError } from '../errors';
 import { BRAIN_COMPONENTS, startBrain } from './index';
 import { createAgentBridge } from './agent-bridge';
@@ -24,6 +25,9 @@ import { createProfileService } from './profile-service';
 import { createRecoveryManager } from './recovery-manager';
 import { createRouterContextGate } from './router-context-gate';
 import { createSttProvider } from './stt-provider';
+
+vi.mock('@tauri-apps/api/core', async () => (await import('../test-core')).coreModule);
+vi.mock('@tauri-apps/api/event', async () => (await import('../test-core')).eventModule);
 
 const dir = import.meta.dirname;
 const MOG = '00000000-0000-4000-8000-000000000001';
@@ -83,12 +87,20 @@ describe('brain component registry (4.3)', () => {
     ]);
   });
 
-  it('[MOG-08b] [ARC-2] startBrain constructs every component once', () => {
+  it('[MOG-08b] [ARC-2] startBrain constructs every component once', async () => {
     const a = startBrain();
     const b = startBrain();
     expect(b).toBe(a);
-    expect(Object.keys(a)).toEqual(BRAIN_COMPONENTS.map((c) => c.id));
-    for (const c of BRAIN_COMPONENTS) expect(a[c.id]).toBeDefined();
+    expect(Object.keys(a.components)).toEqual(BRAIN_COMPONENTS.map((c) => c.id));
+    for (const c of BRAIN_COMPONENTS) expect(a.components[c.id]).toBeDefined();
+    await a.ready;
+  });
+
+  it('[ARC-2] startBrain subscribes the brain Channel once', async () => {
+    const a = startBrain();
+    await a.ready;
+    expect(core.invoke.mock.calls.filter(([c]) => c === 'brain_subscribe')).toHaveLength(1);
+    expect(core.channels).toHaveLength(1);
   });
 
   it('[MOG-08b] [ARC-2] the brain entry point starts the components', () => {
