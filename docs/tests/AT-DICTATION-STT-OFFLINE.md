@@ -27,6 +27,7 @@ pnpm vitest run src/acceptance/at-04-offline.test.ts src/acceptance/at-05-meanin
 | AT-40 | `crates/mog-core/tests/at_40_stt_bench.rs` | The scorer `mog_core::stt_bench` (ADR 0034): golden-set rules, WER, numbers, entities, hallucinations, p95 on 10 s, Opus delta, the gate. Self-tests `at_22_*`. The device run skips. |
 | AT-40 | `src/acceptance/at-40-stt-provider.test.ts` | Nothing yet: the SttProvider rules are pending. |
 | AT-43 | `crates/mog-core/tests/at_43_dictation.rs` | Only the brain may call `insert_text`; its arguments have no key, submit or Enter field; a multi-line text is one argument (MOG-06b, contract part). |
+| AT-43 | `src/acceptance/at-43-dictation.test.ts`, `src/brain/utterance-route.test.ts` (#59, ADR 0053) | A dictation decision ends at `insert_text` with only `model_invoke` before it, no agent turn and no Genie call (RTR-01b, RTR-01c); Shift held forces the ask route, skips only the intent gate and keeps the 1.5 s preview (RTR-17a, RTR-17b). `hotkey_host` puts `shift: true` on the `down` item. |
 | AT-43 | `src/acceptance/at-43-dictation.test.ts` | The router step part (#57), with a model reply from the IPC double: a `dictation` decision stays `dictation` for PTT and hands-free and not for a session (RTR-01b), and the step calls only `model_invoke` role `router`, never the agent, Genie or `insert_text` (RTR-01c). Whether a real model gives `dictation` for plain sentences is the router golden set (#56, AT-06). |
 | AT-43 | `crates/mog-core/tests/latency_bench.rs` (#171) | NFR-01d: `nfr_01d_dictation_insert_p95_within_1_5_s_with_local_stt` and the device run `at_21_at_43_device_samples_meet_the_latency_budgets`. This PR does not copy them. |
 
@@ -57,7 +58,6 @@ When the feature issue lands, its implementer removes the mark and finishes the 
 | AT-40 | CAP-54a, CAP-54b, CAP-56a, CAP-56b | #49 |
 | AT-40 | CAP-65a, CAP-65b (the runner and the release record) | #53 |
 | AT-43 | MOG-06a, MOG-06c (the paste and the clipboard restore) | #58 |
-| AT-43 | RTR-01b, RTR-01c (the route from the decision to `insert_text`), RTR-17a (Shift) | #59 |
 | AT-43 | MOG-06d, UX-42 | #60 |
 
 ## Device and person steps
@@ -119,7 +119,7 @@ Do one session for each of 10 or more speakers. Each session is one part.
 2. For one long sentence, edit the card text before cleanup returns (slow network). Expected: the
    late cleanup result does not change the edit. "Use raw text" puts the raw text back.
 
-### AT-43: dictation into the active app (macOS and Windows, about 25 min; blocked on #58, #59, #60)
+### AT-43: dictation into the active app (macOS and Windows, about 25 min; blocked on #58, #60)
 
 1. Copy the word `earlier` to the clipboard.
 2. Dictate "echo the dictation test works" into TextEdit (Notepad), a browser text field, Terminal

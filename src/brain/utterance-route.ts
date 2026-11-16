@@ -1,5 +1,5 @@
 /**
- * The route of one PTT or hands-free utterance after the router step (#59, ADR 0049).
+ * The route of one PTT or hands-free utterance after the router step (#59, ADR 0053).
  *
  * - RTR-01b, RTR-01c: an utterance with the intent `dictation` ends at `insert_text`. The main
  *   agent and Genie take no part: this module never calls `agent_*` or `mcp_call`.
@@ -12,7 +12,8 @@
  * The capture lifecycle calls `routeUtterance` at key-up with the STT text: TODO(#14).
  */
 import type { MogId, RouterDecision } from '../shared/interfaces';
-import type { CommandReturns } from '../shared/ipc';
+import { call, type CommandReturns } from '../shared/ipc';
+import { createRouterContextGate } from './components/router-context-gate';
 import type { RouterInput } from './components/router-step';
 
 /** The preview of RTR-04a, "Sending in 1.5 s". */
@@ -35,7 +36,11 @@ export interface Utterance {
 
 export type UtteranceRoute =
   | { route: 'inserted'; decision: RouterDecision }
-  | { route: 'insert_failed'; reason: Exclude<InsertResult, 'inserted'> | 'host_failed'; text: string }
+  | {
+      route: 'insert_failed';
+      reason: Exclude<InsertResult, 'inserted'> | 'host_failed';
+      text: string;
+    }
   | { route: 'copy'; text: string }
   | {
       route: 'preview';
@@ -54,9 +59,54 @@ export interface UtteranceRouteDeps {
   insertText(args: { mogId: MogId; text: string }): Promise<CommandReturns['insert_text']>;
 }
 
+/** The production deps: the router step over `model_invoke` and the `insert_text` command. */
+export function ipcUtteranceDeps(): UtteranceRouteDeps {
+  const gate = createRouterContextGate();
+  return {
+    route: (text, mogId, input) => gate.route(text, mogId, input),
+    insertText: (args) => call('insert_text', args),
+  };
+}
+
+const firstNonEmpty = (...xs: string[]): string => xs.find((x) => x.trim() !== '') ?? '';
+
+/** Route one utterance. It calls only the router step and, for a dictation, `insert_text`. */
 export async function routeUtterance(
-  _u: Utterance,
-  _deps: UtteranceRouteDeps,
+  u: Utterance,
+  deps: UtteranceRouteDeps,
 ): Promise<UtteranceRoute> {
-  throw new Error('not built');
+  const decision = await deps.route(u.text, u.mogId, u.input);
+  const preview = (question: string, forced: boolean): UtteranceRoute => ({
+    route: 'preview',
+    question,
+    forced,
+    previewMs: PREVIEW_MS,
+    decision,
+  });
+  // RTR-17a: Shift skips the intent gate only. The preview still guards the send (RTR-17b, B1).
+  if (u.forceAsk) {
+    return preview(firstNonEmpty(decision.genie_question, decision.cleaned_text, u.text), true);
+  }
+  switch (decision.intent) {
+    case 'dictation': {
+      // RTR-01c: the flow ends here. No main agent and no Genie take part.
+      const text = firstNonEmpty(decision.cleaned_text, u.text);
+      if (!u.insertionOn) return { route: 'copy', text };
+      let result: InsertResult | 'host_failed';
+      try {
+        result = (await deps.insertText({ mogId: u.mogId, text })).result;
+      } catch {
+        result = 'host_failed';
+      }
+      return result === 'inserted'
+        ? { route: 'inserted', decision }
+        : { route: 'insert_failed', reason: result, text };
+    }
+    case 'question':
+      return decision.confidence >= ASK_CONFIDENCE
+        ? preview(firstNonEmpty(decision.genie_question, decision.cleaned_text, u.text), false)
+        : { route: 'chip', decision };
+    default:
+      return { route: 'other', decision };
+  }
 }

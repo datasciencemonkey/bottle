@@ -92,9 +92,9 @@ describe('AT-43 UC1 dictation into the active app', () => {
     const log = core.invoke.mock.calls;
     expect(log.map(([cmd]) => cmd)).toEqual(['model_invoke', 'insert_text']);
     expect(argsOf(log[1]?.[1])).toEqual({ mogId: MOG, text: SENTENCE });
-    expect(
-      callsTo(log, ['agent_start', 'agent_send', 'agent_tool_result', 'mcp_call']),
-    ).toEqual([]);
+    expect(callsTo(log, ['agent_start', 'agent_send', 'agent_tool_result', 'mcp_call'])).toEqual(
+      [],
+    );
   });
 
   it('[AT-43] [RTR-17a] Shift held with the talk key forces the ask route', async () => {
@@ -104,9 +104,7 @@ describe('AT-43 UC1 dictation into the active app', () => {
     expect(r).toMatchObject({ route: 'preview', forced: true, previewMs: 1500 });
     expect(callsTo(core.invoke.mock.calls, ['insert_text'])).toEqual([]);
     // The preview sends nothing by itself (B1): no agent turn, no Genie call yet.
-    expect(
-      callsTo(core.invoke.mock.calls, ['agent_start', 'agent_send', 'mcp_call']),
-    ).toEqual([]);
+    expect(callsTo(core.invoke.mock.calls, ['agent_start', 'agent_send', 'mcp_call'])).toEqual([]);
   });
 
   it.skip('[AT-43] [MOG-06d] a failed insertion shows the cleaned text, Copy and the reason TODO(#60)', () => {

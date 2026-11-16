@@ -59,7 +59,9 @@ function deps(decision: RouterDecision, result: InsertResult | Error = 'inserted
 
 describe('utterance route (#59)', () => {
   it('[RTR-01b] [RTR-01c] [MOG-06a] a dictation ends at insert_text with the cleaned text', async () => {
-    const { d, calls, inserted } = deps(dictation({ cleaned_text: 'Hi Sam, the deck is attached.' }));
+    const { d, calls, inserted } = deps(
+      dictation({ cleaned_text: 'Hi Sam, the deck is attached.' }),
+    );
     const r = await routeUtterance(utterance(), d);
     expect(r.route).toBe('inserted');
     expect(calls).toEqual(['route', 'insert_text']);
@@ -125,9 +127,9 @@ describe('utterance route (#59)', () => {
     expect(r).toMatchObject({ route: 'preview', forced: true, question: 'Revenue by region?' });
     for (const intent of ['noise', 'context', 'memory_question'] as const) {
       const other = routerDecision({ intent, genie_question: '', cleaned_text: 'x y' });
-      expect(
-        (await routeUtterance(utterance({ forceAsk: true }), deps(other).d)).route,
-      ).toBe('preview');
+      expect((await routeUtterance(utterance({ forceAsk: true }), deps(other).d)).route).toBe(
+        'preview',
+      );
     }
   });
 

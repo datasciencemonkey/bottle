@@ -169,8 +169,9 @@ pub fn physical_from_hid(talk_key_down: bool, flags: u64, space_down: bool) -> P
 
 /// RTR-17a: whether a Shift key other than the talk key is down in `flags` (device bits).
 pub fn shift_held_from_flags(flags: u64, talk: TalkKey) -> bool {
-    let _ = (flags, talk);
-    false
+    let left = flags & 0x02 != 0;
+    let right = flags & 0x04 != 0 && talk != TalkKey::RightShift;
+    left || right
 }
 
 #[cfg(test)]
@@ -371,7 +372,7 @@ mod tests {
 }
 
 #[cfg(target_os = "macos")]
-pub use sys::{run_main_loop, MacHotkeyService, MacPermissions, MacProbe};
+pub use sys::{run_main_loop, shift_held, MacHotkeyService, MacPermissions, MacProbe};
 
 /// The macOS OS calls. Raw FFI to system frameworks only, no new crates (ADR 0011).
 #[cfg(target_os = "macos")]
@@ -577,6 +578,15 @@ mod sys {
     /// Run the Carbon application event loop on the main thread. Carbon sends the chord
     /// hot-key events through it, and it also runs the main dispatch queue. A Tauri app runs
     /// its own NSApplication loop instead; the device probe example calls this.
+    /// RTR-17a: whether a Shift key other than `talk` is down now (HID state, any thread).
+    pub fn shift_held(talk: TalkKey) -> bool {
+        // SAFETY: a read of the HID system modifier state; no arguments to keep alive.
+        super::shift_held_from_flags(
+            unsafe { CGEventSourceFlagsState(CG_EVENT_SOURCE_STATE_HID) },
+            talk,
+        )
+    }
+
     pub fn run_main_loop() {
         // SAFETY: called on the main thread; it returns when the app quits.
         unsafe { RunApplicationEventLoop() }

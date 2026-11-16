@@ -101,6 +101,14 @@ thread_local! {
 /// The Tauri host creates and starts it (#314, `src-tauri/src/hotkey_host.rs`) and adapts its
 /// signals. TODO(#434): the host calls `set_hands_free` when hands-free starts and stops; until then no caller turns
 /// hands-free on.
+/// RTR-17a: whether a Shift key is down now. No Windows talk key is a Shift key.
+pub fn shift_held() -> bool {
+    [super::vk::LSHIFT, super::vk::RSHIFT]
+        .iter()
+        // SAFETY: GetAsyncKeyState takes any virtual-key code.
+        .any(|&vk| unsafe { GetAsyncKeyState(vk as i32) } as u16 & 0x8000 != 0)
+}
+
 pub struct WindowsHotkeyService {
     talk: TalkKey,
     signals: Sender<HookSignal>,

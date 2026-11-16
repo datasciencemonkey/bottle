@@ -243,7 +243,8 @@ impl TalkTargetRoute for PttTarget {
     }
 }
 
-/// The `hotkey:ptt` payload of section 4.5: `{ mogId, phase }`.
+/// The `hotkey:ptt` payload of section 4.5: `{ mogId, phase }`. A key-down with Shift held
+/// also gets `shift: true` (RTR-17a, ADR 0053).
 pub fn ptt_payload(mog_id: &str, phase: PttPhase) -> Value {
     json!({ "mogId": mog_id, "phase": phase.as_str() })
 }
@@ -263,6 +264,7 @@ pub struct PttForwarder<B: BrainSink, S: StatusSink> {
     held: Option<String>,
     /// The MOG of the last press that ended, for the `double_tap` that follows it.
     last: Option<String>,
+    shift: Option<ShiftProbe>,
 }
 
 impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
@@ -274,12 +276,13 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
             status,
             held: None,
             last: None,
+            shift: None,
         }
     }
 
     /// Read the Shift state at each key-down with `probe` (RTR-17a).
-    pub fn with_shift_probe(self, probe: ShiftProbe) -> Self {
-        let _ = probe;
+    pub fn with_shift_probe(mut self, probe: ShiftProbe) -> Self {
+        self.shift = Some(probe);
         self
     }
 
@@ -299,10 +302,13 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
                     PttPhase::DoubleTap => self.last.take(),
                 };
                 if let Some(mog) = mog {
+                    let mut payload = ptt_payload(&mog, phase);
+                    // RTR-17a: Shift with the talk key forces the ask route (ADR 0053).
+                    if phase == PttPhase::Down && self.shift.as_ref().is_some_and(|probe| probe()) {
+                        payload["shift"] = json!(true);
+                    }
                     // `false` means no brain listens yet; the press is dropped.
-                    let _ = self
-                        .brain
-                        .deliver(events::HOTKEY_PTT, ptt_payload(&mog, phase));
+                    let _ = self.brain.deliver(events::HOTKEY_PTT, payload);
                 }
             }
             HotkeyOutput::TalkKeyPaused => self.status.status(HotkeyStatus::Paused),
@@ -785,16 +791,22 @@ where
 {
     let target = Arc::new(PttTarget::default());
     let (sink, rx) = queue();
+    // The Shift probe must know the talk key: a Right-Shift talk key is not "Shift held".
+    let talk_now = Arc::new(Mutex::new(settings.talk_binding()));
     spawn_forwarder(
         rx,
-        PttForwarder::new(Arc::clone(&target), app.clone(), BrainStatus(app.clone())),
+        PttForwarder::new(Arc::clone(&target), app.clone(), BrainStatus(app.clone()))
+            .with_shift_probe(platform_shift_probe(Arc::clone(&talk_now))),
     )?;
     let sink: Arc<dyn HotkeySink> = Arc::new(sink);
     let (service, permissions) = factory(settings.talk_binding(), Arc::clone(&sink));
     let host = HotkeyHost::new(service, permissions);
     host.start();
     // A later talk key keeps the permission API and makes only a new service.
-    let make_service: MakeService = Box::new(move |talk| factory(talk, Arc::clone(&sink)).0);
+    let make_service: MakeService = Box::new(move |talk| {
+        *lock(&talk_now) = talk;
+        factory(talk, Arc::clone(&sink)).0
+    });
     app.manage(HotkeyRuntime {
         host,
         target,
@@ -802,6 +814,27 @@ where
     });
     app.manage(settings);
     Ok(())
+}
+
+/// The OS Shift probe for the talk key in `talk` (RTR-17a, ADR 0053).
+#[cfg(target_os = "macos")]
+fn platform_shift_probe(talk: Arc<Mutex<TalkBinding>>) -> ShiftProbe {
+    Box::new(move || {
+        let key = lock(&talk).core_talk_key().unwrap_or_default();
+        mog_core::hotkey_macos::shift_held(key)
+    })
+}
+
+/// The OS Shift probe (RTR-17a, ADR 0053). No Windows talk key is a Shift key.
+#[cfg(windows)]
+fn platform_shift_probe(_talk: Arc<Mutex<TalkBinding>>) -> ShiftProbe {
+    Box::new(mog_core::hotkey_windows::win32::shift_held)
+}
+
+/// No hotkey service on this OS, so no Shift.
+#[cfg(not(any(target_os = "macos", windows)))]
+fn platform_shift_probe(_talk: Arc<Mutex<TalkBinding>>) -> ShiftProbe {
+    Box::new(|| false)
 }
 
 /// The target signal of a window event, if any.
