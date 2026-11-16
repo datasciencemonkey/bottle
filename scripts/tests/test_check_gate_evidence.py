@@ -168,3 +168,30 @@ def test_at_22_template_documents_every_gate_type():
     text = (ROOT / "docs" / "tests" / "EVIDENCE-TEMPLATE.md").read_text()
     for kind in cge.GATE_TYPES:
         assert re.search(rf"^## .*\b{re.escape(kind)}\b", text, re.IGNORECASE | re.MULTILINE), kind
+
+
+def test_at_22_gate_type_must_match_the_gate_id(tmp_path):
+    """[AT-22] A spike file must be type spike, and a review gate must be AT-22 or AT-37."""
+    d = evidence(tmp_path, "SP-03.md", "SP-03", kind="legal review")
+    errors = run(checklist(tmp_path, {}), d)
+    assert any("SP-03" in e and "legal review" in e for e in errors), errors
+    d2 = tmp_path / "b"
+    d2.mkdir()
+    (d2 / "AT-07.md").write_text(PASS_BODY.format(gate="AT-07", kind="spike", result="pass",
+                                                  date="2026-11-20", raw="log"))
+    errors = run(checklist(tmp_path, {}), d2)
+    assert any("AT-07" in e and "spike" in e for e in errors), errors
+
+
+def test_at_22_one_file_cannot_count_as_spike_and_review(tmp_path):
+    """[AT-22] A legal-review file on an SP gate does not satisfy the AT-22 review rule."""
+    d = evidence(tmp_path, "SP-03.md", "SP-03", kind="legal review")
+    errors = run(checklist(tmp_path, {"AT-22": "docs/evidence/AT-22.md"}), d)
+    assert any("legal review evidence" in e for e in errors), errors
+
+
+def test_at_22_empty_code_fence_is_not_raw_evidence(tmp_path):
+    """[AT-22] A Raw evidence section with only an empty code fence is empty."""
+    d = evidence(tmp_path, "SP-03.md", "SP-03", kind="spike", raw="```text\n```")
+    errors = run(checklist(tmp_path, {}), d)
+    assert any("SP-03" in e and "Raw evidence" in e for e in errors), errors

@@ -34,6 +34,22 @@ describe('Genie One MCP double', () => {
     expect(names).toContain('genie_poll_response');
   });
 
+  it('[AT-22] every listed tool is callable, so view_ask (MCP Apps only) is not listed', async () => {
+    const d = createGenieOneMcpDouble({ host: HOST, workspaceId: WSID });
+    const list = await d.handle({ jsonrpc: '2.0', id: 9, method: 'tools/list' });
+    const names = (list.result as { tools: { name: string }[] }).tools.map((t) => t.name);
+    expect(names).not.toContain('view_ask');
+    for (const name of names) {
+      const r = await d.handle({
+        jsonrpc: '2.0',
+        id: 10,
+        method: 'tools/call',
+        params: { name, arguments: {} },
+      });
+      expect(r.error).toBeUndefined();
+    }
+  });
+
   it('[AT-22] rejects an unknown method and an unknown tool with JSON-RPC errors', async () => {
     const d = createGenieOneMcpDouble({ host: HOST, workspaceId: WSID });
     const bad = await d.handle({ jsonrpc: '2.0', id: 3, method: 'nope' });
