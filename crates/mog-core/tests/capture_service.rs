@@ -232,6 +232,20 @@ fn cap_01a_mic_is_released_after_a_panic_inside_the_service() {
 }
 
 #[test]
+fn cap_01a_service_recovers_from_a_panic_without_stop_all() {
+    let r = rig();
+    r.device.log().panic_next_open = true;
+    let res = catch_unwind(AssertUnwindSafe(|| r.svc.start(req("a", CaptureMode::Ptt))));
+    assert!(res.is_err(), "the fake device panics");
+    // The half-made lease is gone: the next caller gets the mic, not mic_busy.
+    assert!(!r.svc.status().recording);
+    assert!(r.svc.status().owner.is_none());
+    assert_eq!(last_stop(&r).reason, StopReason::Panic);
+    r.svc.start(req("b", CaptureMode::Ptt)).unwrap();
+    assert!(r.device.log().mic_open);
+}
+
+#[test]
 fn cap_01a_dropping_the_service_closes_every_stream() {
     let r = rig();
     r.svc
