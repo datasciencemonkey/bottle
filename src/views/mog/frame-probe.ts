@@ -5,6 +5,8 @@
  * in the brain to frame) and, for `listening`, the UX-05b span (key-down in the brain to frame).
  * Times use the shared time base (`epochNow`). Samples hold numbers and mood names only.
  * The MOG entry attaches it only with `VITE_BOTTLE_LATENCY_TRACE=1`; the device run is #355.
+ * `frameAt` is the rAF callback, before paint (the #355 film covers the rest). TODO(#358): the
+ * card and pill frames.
  */
 import type { Mood } from '../../shared/interfaces';
 import { asViewTrace, checkRow, epochNow, type RowResult } from '../../shared/latency';

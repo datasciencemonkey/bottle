@@ -59,5 +59,9 @@ issue left open how to test the path without a device, and how the two windows s
 - AT-21 for UX-05b and UX-36 needs the device run #355, after #14 wires the publisher.
 - The trace starts when key-down reaches the brain. The key-down to brain part is NFR-08b
   (`mog_core::latency_bench`). #355 also films key to pixels at 240 fps.
-- The card view (chip, blurb) and the pill frames are not traced yet. They follow the same
-  pattern when the pill (#297) and the card pipeline land.
+- The card view (chip, blurb) and the pill frames are not traced yet (UX-36, and the pill part of
+  NFR-01c): #358. They follow the same pattern when the pill (#297) and the card pipeline land.
+- `frameAt` is the next `requestAnimationFrame` callback. It runs before paint and composite, so the
+  probe reads a little early; the 240 fps film in #355 covers key to pixels. WebKit pauses rAF in
+  a hidden or covered window, and then a pending sample counts as over the limit: the MOG must stay
+  on screen and uncovered while a person measures.

@@ -52,8 +52,8 @@ interface MogSlot {
   held?: HeldMood;
   lastKey?: string;
   cancel?: (() => void) | undefined;
-  /** The cause of a mood change the hold defers. */
-  pending?: UpdateCause | undefined;
+  /** The mood change the hold defers, and its cause. */
+  pending?: { mood: Mood; cause: UpdateCause | undefined } | undefined;
 }
 
 /** The trace clock for the build flag: `epochNow` when it is `1`, else no trace. */
@@ -73,11 +73,15 @@ export function createMoodPublisher(opts: MoodPublisherOptions): MoodPublisher {
     const target = mapMood(mogId, slot.sources, now);
     const { shown, recheckAt } = holdMood(slot.held, target.mood, now);
     slot.held = shown;
-    const deferred = shown.mood !== target.mood;
-    // The deferred change keeps the time its first event reached the brain.
-    const why = deferred ? cause : (slot.pending ?? cause);
-    if (deferred) slot.pending ??= cause;
-    else slot.pending = undefined;
+    // A change the hold defers keeps the time its first event reached the brain, and only
+    // that change: a later change to another mood has its own cause.
+    let why = cause;
+    if (shown.mood !== target.mood) {
+      if (slot.pending?.mood !== target.mood) slot.pending = { mood: target.mood, cause };
+    } else {
+      if (slot.pending?.mood === shown.mood) why = slot.pending.cause ?? cause;
+      slot.pending = undefined;
+    }
     if (recheckAt !== undefined) {
       slot.cancel = scheduler.at(recheckAt, () => run(mogId, slot, undefined));
     }
@@ -98,7 +102,7 @@ export function createMoodPublisher(opts: MoodPublisherOptions): MoodPublisher {
       const slot = slots.get(mogId) ?? { sources };
       slot.sources = sources;
       slots.set(mogId, slot);
-      run(mogId, slot, cause);
+      run(mogId, slot, cause ?? (traceNow ? { eventAt: traceNow() } : undefined));
     },
   };
 }

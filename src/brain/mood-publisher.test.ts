@@ -70,6 +70,27 @@ describe('mood publisher: mood to mog:view_state (#13, ADR 0031)', () => {
     expect(sent[1]?.trace).toMatchObject({ eventAt: 1100, sentAt: 1000 + MOOD_HOLD_MS });
   });
 
+  it('[UX-36] an update with no cause still keeps its own time through a hold', async () => {
+    const { s, sent, pub } = setup(true);
+    pub.update(MOG, src(closed, [{ phase: 'inserted', at: 1000 }]));
+    s.clock.advance(100);
+    pub.update(MOG, src(closed, [{ phase: 'failed', at: 1100 }]));
+    await s.runUntil(2000);
+    expect(sent[1]?.mood).toBe('error');
+    expect(sent[1]?.trace).toMatchObject({ eventAt: 1100, sentAt: 1000 + MOOD_HOLD_MS });
+  });
+
+  it('[UX-36] a deferred cause does not attach to a later, different change', () => {
+    const { s, sent, pub } = setup(true);
+    pub.update(MOG, src(ptt)); // listening at 1000
+    s.clock.advance(50);
+    pub.update(MOG, src(closed)); // idle is held until 1400 (a tap)
+    s.clock.advance(100);
+    pub.update(MOG, src(closed, [{ phase: 'transcribing', at: 1150 }])); // key-up skips the hold
+    expect(sent.map((v) => v.mood)).toEqual(['listening', 'processing']);
+    expect(sent[1]?.trace).toMatchObject({ eventAt: 1150, sentAt: 1150 });
+  });
+
   it('[UX-36] a newer update replaces the pending recheck', async () => {
     const { s, sent, pub } = setup();
     pub.update(MOG, src(closed, [{ phase: 'inserted', at: 1000 }]));
