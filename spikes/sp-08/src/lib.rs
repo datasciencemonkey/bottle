@@ -30,7 +30,12 @@ impl Mode {
 
     /// The command-line name of the mode.
     pub fn name(self) -> &'static str {
-        todo!("TODO(#15) green")
+        match self {
+            Mode::BuildOnly => "build-only",
+            Mode::BuildThenPlay => "build-then-play",
+            Mode::BuildPauseThenPlay => "build-pause-then-play",
+            Mode::Cold => "cold",
+        }
     }
 }
 
@@ -48,8 +53,24 @@ pub enum ModeArg {
 }
 
 /// Parse a `--mode` value.
-pub fn parse_mode(_s: &str) -> Result<ModeArg, String> {
-    todo!("TODO(#15) green")
+pub fn parse_mode(s: &str) -> Result<ModeArg, String> {
+    if s == "all" {
+        return Ok(ModeArg::All);
+    }
+    Mode::ALL
+        .into_iter()
+        .find(|m| m.name() == s)
+        .map(ModeArg::One)
+        .ok_or_else(|| {
+            format!("unknown mode {s:?}: use build-only, build-then-play, build-pause-then-play, cold or all")
+        })
+}
+
+fn parse_secs(flag: &str, v: &str) -> Result<f64, String> {
+    match v.parse::<f64>() {
+        Ok(x) if x.is_finite() && x >= 0.0 => Ok(x),
+        _ => Err(format!("{flag} needs a number of seconds >= 0, got {v:?}")),
+    }
 }
 
 /// The probe command.
@@ -107,18 +128,61 @@ USAGE:
 ";
 
 /// Parse the arguments after the program name.
-pub fn parse_args<I, S>(_args: I) -> Result<Command, String>
+pub fn parse_args<I, S>(args: I) -> Result<Command, String>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
-    todo!("TODO(#15) green")
+    let args: Vec<String> = args.into_iter().map(|a| a.as_ref().to_string()).collect();
+    match args.first().map(String::as_str) {
+        Some("device-state") if args.len() == 1 => return Ok(Command::DeviceState),
+        Some("--help" | "-h" | "help") => return Ok(Command::Help),
+        _ => {}
+    }
+    let mut p = ProbeArgs::default();
+    let mut it = args.into_iter();
+    while let Some(arg) = it.next() {
+        let (flag, inline) = match arg.split_once('=') {
+            Some((f, v)) => (f.to_string(), Some(v.to_string())),
+            None => (arg, None),
+        };
+        if !matches!(
+            flag.as_str(),
+            "--mode" | "--runs" | "--hold" | "--wait" | "--gap"
+        ) {
+            return Err(format!("unknown argument {flag:?}\n\n{USAGE}"));
+        }
+        let value = match inline {
+            Some(v) => v,
+            None => it.next().ok_or_else(|| format!("{flag} needs a value"))?,
+        };
+        match flag.as_str() {
+            "--mode" => p.mode = parse_mode(&value)?,
+            "--runs" => {
+                p.runs = match value.parse::<u32>() {
+                    Ok(k) if k > 0 => k,
+                    _ => return Err(format!("--runs needs a whole number > 0, got {value:?}")),
+                }
+            }
+            "--hold" => p.hold_s = parse_secs("--hold", &value)?,
+            "--wait" => p.wait_s = parse_secs("--wait", &value)?,
+            _ => p.gap_s = parse_secs("--gap", &value)?,
+        }
+    }
+    Ok(Command::Probe(p))
 }
 
 /// Nearest-rank percentile (`p` in 0..=100) of `samples`. `None` if `samples` is empty.
 /// The input does not have to be sorted.
-pub fn percentile(_samples: &[f64], _p: f64) -> Option<f64> {
-    todo!("TODO(#15) green")
+pub fn percentile(samples: &[f64], p: f64) -> Option<f64> {
+    if samples.is_empty() {
+        return None;
+    }
+    let mut v = samples.to_vec();
+    v.sort_by(f64::total_cmp);
+    let n = v.len();
+    let rank = ((p.clamp(0.0, 100.0) / 100.0) * n as f64).ceil() as usize;
+    Some(v[rank.clamp(1, n) - 1])
 }
 
 /// Summary of a latency sample set, in milliseconds.
@@ -132,20 +196,28 @@ pub struct Summary {
 }
 
 /// Summarise `samples`. `None` if `samples` is empty.
-pub fn summarize(_samples: &[f64]) -> Option<Summary> {
-    todo!("TODO(#15) green")
+pub fn summarize(samples: &[f64]) -> Option<Summary> {
+    Some(Summary {
+        n: samples.len(),
+        min: percentile(samples, 0.0)?,
+        p50: percentile(samples, 50.0)?,
+        p95: percentile(samples, 95.0)?,
+        max: percentile(samples, 100.0)?,
+    })
 }
 
 /// Key-down to first audio callback, in ms, from nanosecond marks on one clock.
 /// `first_cb_ns` 0 means no callback came. A callback before key-down is not a "live" mark.
-pub fn latency_ms(_keydown_ns: u64, _first_cb_ns: u64) -> Option<f64> {
-    todo!("TODO(#15) green")
+pub fn latency_ms(keydown_ns: u64, first_cb_ns: u64) -> Option<f64> {
+    if first_cb_ns == 0 || first_cb_ns < keydown_ns {
+        return None;
+    }
+    Some((first_cb_ns - keydown_ns) as f64 / 1e6)
 }
 
 /// A CoreAudio four-char code, for example `fourcc(b"gone")`.
-pub const fn fourcc(_code: &[u8; 4]) -> u32 {
-    // TODO(#15) green: a const fn cannot panic at compile time, so the red stub returns 0.
-    0
+pub const fn fourcc(code: &[u8; 4]) -> u32 {
+    u32::from_be_bytes(*code)
 }
 
 /// `kAudioDevicePropertyDeviceIsRunningSomewhere`: some process runs IO on the device.
@@ -182,6 +254,16 @@ pub struct RunFlags {
 }
 
 /// Classify one run. Callbacks before `play()` always mean [`Evidence::LiveBeforePlay`].
-pub fn evidence(_f: RunFlags) -> Evidence {
-    todo!("TODO(#15) green")
+pub fn evidence(f: RunFlags) -> Evidence {
+    if f.callbacks_before_play > 0 {
+        return Evidence::LiveBeforePlay;
+    }
+    if f.baseline == Some(true) {
+        return Evidence::Inconclusive;
+    }
+    match (f.before_play, f.after_play) {
+        (Some(true), _) => Evidence::LiveBeforePlay,
+        (Some(false), None | Some(true)) => Evidence::IdleUntilPlay,
+        _ => Evidence::Inconclusive,
+    }
 }
