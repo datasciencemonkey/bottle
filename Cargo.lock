@@ -161,7 +161,13 @@ dependencies = [
 name = "bottle"
 version = "0.1.0"
 dependencies = [
+ "block2",
+ "glob",
  "mog-core",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "objc2-web-kit",
  "serde",
  "serde_json",
  "tauri",
@@ -1829,9 +1835,11 @@ dependencies = [
 name = "mog-core"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.3.4",
  "schemars 1.2.3",
  "serde",
  "serde_json",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

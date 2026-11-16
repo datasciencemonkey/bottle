@@ -11,9 +11,12 @@ use std::time::Duration;
 /// ARC-3 / MB-03b: at most 8 MOG windows are active by default.
 pub const MAX_ACTIVE_MOGS: usize = 8;
 
-/// ARC-3: a hidden card window is destroyed after 5 min.
-/// TODO(#78): the reaper timer that uses this value.
+/// ARC-3 / MOG-18b: a hidden card window is destroyed after 5 min.
 pub const CARD_HIDDEN_TTL: Duration = Duration::from_secs(5 * 60);
+
+/// How often the R11 reaper looks for cards hidden for `CARD_HIDDEN_TTL`. A hidden card goes
+/// between 5:00 and 5:15 after its hide (ADR 0022).
+pub const CARD_REAP_TICK: Duration = Duration::from_secs(15);
 
 /// The longest MOG or card id we accept in a window label (a uuid v4 is 36).
 const MAX_ID_LEN: usize = 64;
@@ -47,6 +50,8 @@ pub struct WindowSpec {
     pub skip_taskbar: bool,
     pub resizable: bool,
     pub shadow: bool,
+    /// macOS: a click on the window while Bottle is not active reaches the page (MOG-01b).
+    pub accept_first_mouse: bool,
     pub width: u32,
     pub height: u32,
 }
@@ -111,13 +116,15 @@ impl WindowKind {
                 skip_taskbar: true,
                 resizable: false,
                 shadow: false,
+                accept_first_mouse: false,
                 width: 1,
                 height: 1,
             },
             WindowKind::Hub => WindowSpec {
                 label,
                 url: "hub.html",
-                title: "Bottle",
+                // MB-10b: the hub title bar shows the Labs label.
+                title: "Bottle (Databricks Labs / experimental)",
                 visible: true,
                 transparent: false,
                 decorations: true,
@@ -126,11 +133,12 @@ impl WindowKind {
                 skip_taskbar: false,
                 resizable: true,
                 shadow: true,
+                accept_first_mouse: false,
                 width: 960,
                 height: 640,
             },
-            // TODO(#11): macOS non-activating NSPanel. TODO(#80): Windows WS_EX_NOACTIVATE.
-            // TODO(#81): click-through outside the sprite hit shape.
+            // macOS: `panel()` makes it a non-activating NSPanel (#11, ADR 0009).
+            // TODO(#80): Windows WS_EX_NOACTIVATE. TODO(#81): click-through outside the sprite.
             WindowKind::Mog(_) => WindowSpec {
                 label,
                 url: "mog.html",
@@ -143,10 +151,13 @@ impl WindowKind {
                 skip_taskbar: true,
                 resizable: false,
                 shadow: false,
+                accept_first_mouse: true,
                 width: 160,
                 height: 160,
             },
-            // TODO(#78): key-capable non-activating panel at Floating level, lazy create, reaper.
+            // macOS: `panel()` makes it a key-capable non-activating NSPanel (#78, ADR 0022).
+            // R11 makes it on the first show and the reaper destroys it after 5 min hidden.
+            // TODO(#80): the Windows card that keeps the foreground app.
             WindowKind::Card(_) => WindowSpec {
                 label,
                 url: "card.html",
@@ -159,11 +170,89 @@ impl WindowKind {
                 skip_taskbar: true,
                 resizable: false,
                 shadow: true,
+                accept_first_mouse: false,
                 width: 360,
                 height: 240,
             },
         }
     }
+
+    /// The spec the window is built with. A panel kind is built hidden: the native style turns
+    /// it into a non-activating panel first and then shows it, so it never shows as a plain
+    /// window that can take focus (MOG-01b).
+    pub fn build_spec(&self) -> WindowSpec {
+        let mut spec = self.spec();
+        if self.panel().is_some() {
+            spec.visible = false;
+        }
+        spec
+    }
+
+    /// The macOS panel attributes of this kind, or `None` for a plain window (MOG-02).
+    /// The card is the only panel that can become key (MOG-03a, UX-19a).
+    pub fn panel(&self) -> Option<PanelSpec> {
+        match self {
+            WindowKind::Mog(_) => Some(PanelSpec {
+                level: PanelLevel::Status,
+                can_become_key: false,
+                can_become_main: false,
+                nonactivating: true,
+                hides_on_deactivate: false,
+                join_all_spaces: true,
+                stationary: true,
+                full_screen_auxiliary: true,
+                ignores_cycle: true,
+                transparent: true,
+            }),
+            // Typing and the IME need a key window; `nonactivating` keeps the frontmost app
+            // (MOG-03b). It shows on every Space and over fullscreen apps, like its MOG.
+            WindowKind::Card(_) => Some(PanelSpec {
+                level: PanelLevel::Floating,
+                can_become_key: true,
+                can_become_main: false,
+                nonactivating: true,
+                hides_on_deactivate: false,
+                join_all_spaces: true,
+                stationary: true,
+                full_screen_auxiliary: true,
+                ignores_cycle: true,
+                transparent: false,
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// The macOS window level of a panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanelLevel {
+    /// `NSFloatingWindowLevel`.
+    Floating,
+    /// `NSStatusWindowLevel`: above normal and floating windows (MOG-02).
+    Status,
+}
+
+/// What the macOS panel of a window kind must be (MOG-02), independent of AppKit.
+/// `src/macos_panel.rs` applies it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PanelSpec {
+    pub level: PanelLevel,
+    /// `canBecomeKeyWindow`: `false` means the panel never takes the keyboard.
+    pub can_become_key: bool,
+    pub can_become_main: bool,
+    /// `NSWindowStyleMaskNonactivatingPanel`: a click does not activate Bottle.
+    pub nonactivating: bool,
+    pub hides_on_deactivate: bool,
+    /// Collection behavior `canJoinAllSpaces`.
+    pub join_all_spaces: bool,
+    /// Collection behavior `stationary` (stays put in Mission Control and Space changes).
+    pub stationary: bool,
+    /// Collection behavior `fullScreenAuxiliary` (shows over a fullscreen Space).
+    pub full_screen_auxiliary: bool,
+    /// Collection behavior `ignoresCycle` (Cmd-` skips it).
+    pub ignores_cycle: bool,
+    /// The panel paints nothing itself: no background, no shadow (MOG-01a). The card is not.
+    pub transparent: bool,
 }
 
 /// Platform seam for window transparency (SP-01, #10).
@@ -204,6 +293,7 @@ pub fn build<R: tauri::Runtime>(
     .skip_taskbar(spec.skip_taskbar)
     .resizable(spec.resizable)
     .shadow(spec.shadow)
+    .accept_first_mouse(spec.accept_first_mouse)
     .inner_size(f64::from(spec.width), f64::from(spec.height));
     transparency::apply(builder, spec.transparent).build()
 }

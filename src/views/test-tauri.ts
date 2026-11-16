@@ -8,15 +8,33 @@ import type { ReactNode } from 'react';
 
 type Handler = (e: { payload: unknown }) => void;
 
+/** The `target` a listener asked for; `undefined` is Tauri's default `Any`. */
+const targets = new WeakMap<Handler, string | undefined>();
+
 export const tauri = {
   handlers: new Map<string, Set<Handler>>(),
+  /** The `options` of each `listen` call, by event name. */
+  listenOptions: new Map<string, unknown[]>(),
   invoke: vi.fn(async (_cmd: string, _args?: unknown) => ({})),
   label: 'hub',
   reset(): void {
     this.handlers.clear();
+    this.listenOptions.clear();
     this.invoke.mockClear();
   },
-  /** Deliver a brain-to-view event to every listener of `name`. */
+  /**
+   * Deliver `emitTo(label, name, payload)` the way Tauri 2.12.5 does: to listeners with no
+   * target (`Any`) and to listeners whose target is `label`.
+   */
+  async emitTo(label: string, name: string, payload: unknown): Promise<void> {
+    await act(async () => {
+      for (const h of this.handlers.get(name) ?? []) {
+        const t = targets.get(h);
+        if (t === undefined || t === label) h({ payload });
+      }
+    });
+  },
+  /** Deliver a global `emit`: every listener of `name` gets it, whatever its target. */
   async emit(name: string, payload: unknown): Promise<void> {
     await act(async () => {
       for (const h of this.handlers.get(name) ?? []) h({ payload });
@@ -28,7 +46,10 @@ export const tauri = {
 };
 
 export const eventModule = {
-  listen: async (name: string, h: Handler) => {
+  listen: async (name: string, h: Handler, options?: unknown) => {
+    tauri.listenOptions.set(name, [...(tauri.listenOptions.get(name) ?? []), options]);
+    const t = (options as { target?: unknown } | undefined)?.target;
+    targets.set(h, typeof t === 'string' ? t : undefined);
     const set = tauri.handlers.get(name) ?? new Set<Handler>();
     set.add(h);
     tauri.handlers.set(name, set);

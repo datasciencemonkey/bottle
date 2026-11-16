@@ -1,0 +1,5 @@
+    1 12000 /sbin/launchd
+  4321 120000 /Applications/Bottle.app/Contents/MacOS/Bottle
+  4400  40000 /System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent
+  4401  20000 /System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.GPU.xpc/Contents/MacOS/com.apple.WebKit.GPU
+  5000 900000 /Applications/Safari.app/Contents/MacOS/Safari

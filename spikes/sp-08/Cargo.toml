@@ -1,0 +1,21 @@
+[package]
+name = "sp-08-mic-indicator"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "Spike SP-08 (#15): does a pre-built cpal input stream keep the OS mic indicator off until play()?"
+
+# Standalone: not a member of the root workspace.
+[workspace]
+
+[lib]
+name = "sp08"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sp08-probe"
+path = "src/main.rs"
+
+[dependencies]
+cpal = "0.18"

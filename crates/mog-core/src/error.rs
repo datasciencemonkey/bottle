@@ -19,6 +19,20 @@ pub enum CoreError {
         /// The component ID that refused, for example `"R5"`.
         component: &'static str,
     },
+    /// A component cannot run on this device now. `reason` is a stable, content-free code
+    /// (for example `"input_monitoring_required"` from R1). It crosses IPC as the code.
+    Unavailable {
+        /// The component ID, for example `"R1"`.
+        component: &'static str,
+        /// The stable reason code.
+        reason: &'static str,
+    },
+    /// R12 IpcGateway refused an IPC call (#36). `code` is the fixed tag of the `IpcError`
+    /// variant (for example `"window_not_allowed"`), never a command name, label or value.
+    IpcRefused {
+        /// The stable, content-free code from `ipc_gateway::ERROR_CODES`.
+        code: &'static str,
+    },
 }
 
 impl CoreError {
@@ -27,6 +41,8 @@ impl CoreError {
         match self {
             CoreError::NotImplemented { .. } => "not_implemented",
             CoreError::TokenCommandRefused { .. } => "token_command_refused",
+            CoreError::Unavailable { reason, .. } => reason,
+            CoreError::IpcRefused { code } => code,
         }
     }
 }
@@ -40,6 +56,10 @@ impl fmt::Display for CoreError {
             CoreError::TokenCommandRefused { component } => {
                 write!(f, "{component} refused a command that returns a token")
             }
+            CoreError::Unavailable { component, reason } => {
+                write!(f, "{component} is not available: {reason}")
+            }
+            CoreError::IpcRefused { code } => write!(f, "R12 refused the call: {code}"),
         }
     }
 }

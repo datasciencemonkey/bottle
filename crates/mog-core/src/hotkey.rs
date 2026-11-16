@@ -16,23 +16,23 @@ pub trait HotkeyService: Send + Sync {
     fn secure_input_active(&self) -> CoreResult<bool>;
 }
 
-/// The R1 stub. Every method returns [`CoreError::NotImplemented`].
+/// The R1 stub for a platform with no hook (Linux and other hosts). Every method returns
+/// [`CoreError::NotImplemented`]. macOS uses `hotkey_macos::MacHotkeyService` (#6), Windows
+/// uses `hotkey_windows::win32::WindowsHotkeyService` (#7); the platform-neutral logic is in
+/// [`crate::hotkey_core`].
 #[derive(Debug, Default, Clone, Copy)]
 pub struct StubHotkeyService;
 
 impl HotkeyService for StubHotkeyService {
     fn start(&self) -> CoreResult<()> {
-        // TODO(#6): macOS listen-only CGEventTap and watchdog (Windows hook is #7).
         Err(CoreError::NotImplemented { component: ID })
     }
 
     fn stop(&self) -> CoreResult<()> {
-        // TODO(#6): remove the tap and stop the watchdog.
         Err(CoreError::NotImplemented { component: ID })
     }
 
     fn secure_input_active(&self) -> CoreResult<bool> {
-        // TODO(#6): Secure Event Input detection.
         Err(CoreError::NotImplemented { component: ID })
     }
 }

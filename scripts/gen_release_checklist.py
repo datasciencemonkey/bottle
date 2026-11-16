@@ -54,7 +54,8 @@ def main(argv=None):
     args = ap.parse_args(argv)
     with open(args.requirements, encoding="utf-8") as f:
         doc = req_parse.parse(f.read())
-    source = os.path.relpath(os.path.abspath(args.requirements), os.getcwd())
+    # Forward slashes on every OS, so the committed checklist is the same on Windows.
+    source = os.path.relpath(os.path.abspath(args.requirements), os.getcwd()).replace(os.sep, "/")
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as f:
         f.write(build(doc, source))

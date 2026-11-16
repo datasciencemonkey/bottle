@@ -11,6 +11,8 @@
 
 use std::fmt;
 
+pub mod hotkey;
+
 /// The Databricks CLI profile for live tests (U2M, no Lakebase).
 pub const ENV_PROFILE: &str = "BOTTLE_TEST_PROFILE";
 /// An optional SQL warehouse ID for live tests.

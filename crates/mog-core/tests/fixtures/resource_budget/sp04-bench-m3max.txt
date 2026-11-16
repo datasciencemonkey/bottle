@@ -1,0 +1,33 @@
+## SP-04 run
+
+threads=12 runs=20 warmup=3 platform=mac os=macos arch=aarch64
+load_ms=836.3 peak_rss_after_load_mb=1178.0
+
+### Warm latency, full clip (create stream + decode + result)
+
+| clip | audio s | n | p50 ms | p95 ms | max ms | mean ms | RTF (p50) |
+|---|---|---|---|---|---|---|---|
+| 2 s | 2.00 | 20 | 96.0 | 122.9 | 134.7 | 101.1 | 0.0480 |
+| 10 s | 10.02 | 20 | 410.1 | 593.1 | 659.2 | 439.4 | 0.0409 |
+
+peak_rss_after_clips_mb=1909.3
+
+### Transcripts (rough WER against the say(1) script)
+
+| clip | WER | text |
+|---|---|---|
+| 2 s | 0.000 | Open the sales dashboard for me now. |
+
+### Long stream
+
+long_secs=240 segment_secs=20 decode_ms=12958.0 rtf=0.0540
+
+peak_rss_mb=1910.5 (in-process, getrusage / GetProcessMemoryInfo)
+
+### Criteria (SP-04)
+
+| criterion | value | limit | result |
+|---|---|---|---|
+| peak RSS | 1910.5 MB | <= 1000 MB | FAIL |
+
+SP04_RESULT FAIL

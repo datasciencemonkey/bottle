@@ -152,14 +152,14 @@ fn arc_3_each_kind_has_its_own_html_entry() {
 // ---------- ARC-4: CSP and per-window capabilities, no forbidden plugins ----------
 
 const CSP: &str =
-    "default-src 'self'; connect-src ipc: http://ipc.localhost; script-src 'self' 'wasm-unsafe-eval'";
+    "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; script-src 'self' 'wasm-unsafe-eval'";
 
 #[test]
 fn arc_4_csp_is_the_strict_policy() {
     let conf = tauri_conf();
     assert_eq!(conf["app"]["security"]["csp"].as_str(), Some(CSP));
     let dev = conf["app"]["security"]["devCsp"].as_str().expect("devCsp");
-    assert!(dev.starts_with("default-src 'self'; connect-src ipc: http://ipc.localhost"));
+    assert!(dev.starts_with("default-src 'self'; connect-src 'self' ipc: http://ipc.localhost"));
     assert!(
         !dev.contains("https:"),
         "dev CSP must not allow external hosts"

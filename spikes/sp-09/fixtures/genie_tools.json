@@ -1,0 +1,58 @@
+{
+  "_placeholder": true,
+  "_note": "PLACEHOLDER for SP-09 (#29). Built by hand from public docs, NOT from a live tools/list. Replace this file with the output of `cargo run --bin live -- capture --profile <your-profile> --workspace-id <id> --host <host> --out fixtures/genie_tools.json`, then rerun `cargo test`. Descriptions here are stand-ins. The genie_cancel_response input is an assumption (the public page does not list it).",
+  "_sources": [
+    "https://docs.databricks.com/aws/en/agents/mcp-tools/genie-mcp (read 2026-11-15)",
+    "research/connector-spec-2026-11-14.md (Genie One MCP section)"
+  ],
+  "tools": [
+    {
+      "name": "genie_ask",
+      "description": "PLACEHOLDER. Start a Genie One turn. Returns conversation_id, response_id and status in_progress.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "question": { "type": "string" },
+          "conversation_id": { "type": "string" }
+        },
+        "required": ["question"]
+      }
+    },
+    {
+      "name": "genie_poll_response",
+      "description": "PLACEHOLDER. Get the latest state of a turn: status, progress_steps, final_answer, query_items, deep_link.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "conversation_id": { "type": "string" },
+          "response_id": { "type": "string" }
+        },
+        "required": ["conversation_id", "response_id"]
+      }
+    },
+    {
+      "name": "genie_get_query_result",
+      "description": "PLACEHOLDER. Get the full SQL result of one query item (item_id of the form pub_..._output).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "conversation_id": { "type": "string" },
+          "response_id": { "type": "string" },
+          "item_id": { "type": "string" }
+        },
+        "required": ["conversation_id", "response_id", "item_id"]
+      }
+    },
+    {
+      "name": "genie_cancel_response",
+      "description": "PLACEHOLDER. Ask Genie to cancel the in-flight turn of a conversation. ASSUMPTION: input is conversation_id only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "conversation_id": { "type": "string" }
+        },
+        "required": ["conversation_id"]
+      }
+    }
+  ]
+}

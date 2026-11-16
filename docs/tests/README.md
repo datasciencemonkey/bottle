@@ -129,6 +129,40 @@ prints `skipped: <VAR> is not set, so <kind> tests do not run`. A malformed valu
 
 The devices, the profile and the rig need a person: TODO(#270) has the steps.
 
+### Latency benchmark (#171)
+
+`mog_core::latency_bench`: the mark API (`LatencyRecorder` on the simulated clock), the budgets of
+NFR-01a..d, NFR-02, NFR-08a and NFR-08b, and the AT-21 / AT-30 / AT-43 evidence report. The runner is
+`cargo run -p mog-core --example latency_bench`. The report never writes `pass` for samples from
+test doubles or for missing samples. `docs/tests/LATENCY-BENCH.md` has the rules, the fixture
+variables (`BOTTLE_BENCH_SP03_LOG`, `BOTTLE_BENCH_SAMPLES`) and the device steps.
+
+### Memory and idle CPU budgets (#173)
+
+`mog_core::resource_budget`: the sample model (RSS of shell + brain + N MOGs, the Parakeet peak,
+idle CPU runs), the budgets of NFR-04a, NFR-04b, NFR-05, NFR-06a, NFR-06b and NFR-09, the SP-02 /
+D73 window plan, and the AT-21 resource report. The runner is
+`cargo run -p mog-core --example resource_bench`. The report never writes `pass` for samples from
+test doubles, for missing samples or for hardware that is not a reference device.
+`docs/tests/RESOURCE-BENCH.md` has the rules, the fixture variables (`BOTTLE_RES_SAMPLES`,
+`BOTTLE_RES_SP04_BENCH`) and the device steps.
+
+### Acceptance tests AT-01, AT-03, AT-20, AT-30 (#230)
+
+`docs/tests/AT-MOGS-TALKKEY-A11Y.md` lists what runs on shipped code, the pending tests with their
+feature issues, and the device steps. The shared parts:
+
+- Rust: `mog_core::testkit::hotkey`: `RecordingSink`, `ScriptedProbe`, `RecordingTapControl` and
+  `FakePermissions`, the doubles of the R1 OS seams. They drive the shipped `HotkeyEngine` on the
+  `SimClock` with no OS call and no prompt.
+- Rust: `latency_bench::import::parse_sp03_secure_input`: the Secure Input end times and the Carbon
+  chord presses of an SP-03 probe log (CAP-39a, CAP-39b). Variable `BOTTLE_BENCH_SP03_SEI_LOG`.
+  A probe log gives at most `WithinProbeOnly` (partial, TODO(#323)). The layout run reads
+  `BOTTLE_TEST_LAYOUT` (`altgr` or `plain`).
+- TS: `src/test-support/a11y.ts`: `accessibleText(el)` and `contrastRatio(fg, bg)`.
+- Pending tests: Rust `#[ignore = "pending TODO(#n) ..."]` with a `todo!` end; TS `it.skip` with
+  `TODO(#n)` in the title. They never count as a pass.
+
 ### Gate evidence (AT-22)
 
 Each gate run is a file in `docs/evidence/` in the format of `docs/tests/EVIDENCE-TEMPLATE.md`.
