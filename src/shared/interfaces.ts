@@ -137,7 +137,12 @@ export interface MoodMapper { (s: { paused: boolean; ownsCapture: boolean; error
  * Declaration merging adds the field to the 4.7 `CaptureState`. Set while capture is live.
  */
 export interface CaptureState {
+  /** The lease that owns the mic now. A suspended lease (ARC-F9) shows again when it resumes. */
   leaseId?: LeaseId;
+}
+/** CAP-02a / AT-17: every segment names the lease of the capture that made it. */
+export interface SegmentRef {
+  leaseId: LeaseId;
 }
 /** A capture lease ID issued by R2 CaptureService. Opaque; never reused. */
 export type LeaseId = string;

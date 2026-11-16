@@ -154,6 +154,7 @@ const typed: Record<string, unknown> = {
   SegmentRef: {
     segmentId: 'seg-0001',
     mogId: MOG,
+    leaseId: '17',
     sessionId: 'sess-01',
     track: 'others',
     tStartMs: 12000,
@@ -164,6 +165,7 @@ const typed: Record<string, unknown> = {
   'SegmentRef.minimal': {
     segmentId: 'seg-0002',
     mogId: MOG,
+    leaseId: '18',
     track: 'you',
     tStartMs: 0,
     tEndMs: 900,
@@ -306,5 +308,22 @@ describe('capture lease (CAP-02a)', () => {
     expect(live.leaseId).toBe('17');
     const idle = typed['CaptureState.minimal'] as CaptureState;
     expect(idle.leaseId).toBeUndefined();
+  });
+
+  it('[CAP-02a] [AT-17] every segment names the lease it came from', () => {
+    // Type level: a SegmentRef without leaseId does not compile.
+    // @ts-expect-error leaseId is required
+    const noLease: SegmentRef = {
+      segmentId: 's',
+      mogId: MOG,
+      track: 'you',
+      tStartMs: 0,
+      tEndMs: 1,
+      final: true,
+    };
+    expect(noLease.segmentId).toBe('s');
+    for (const key of ['SegmentRef', 'SegmentRef.minimal']) {
+      expect((typed[key] as SegmentRef).leaseId).toMatch(/^[A-Za-z0-9-]{1,64}$/);
+    }
   });
 });

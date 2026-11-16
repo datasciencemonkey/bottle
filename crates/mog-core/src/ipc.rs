@@ -163,8 +163,22 @@ pub enum IpcError {
     HostFailed {
         command: String,
     },
-    /// CAP-02a: the lease is unknown, released or not the owner's (R2 returns this).
-    StaleLease {
+    /// CAP-02a: no live lease with this ID belongs to `mogId`. R2 `CaptureError::UnknownLease`
+    /// maps here; the host that wires R2 (#4) also returns it when the lease owner is another
+    /// MOG, so a caller cannot probe the leases of other MOGs (ADR 0005).
+    UnknownLease {
+        command: String,
+    },
+    /// 4.5 `capture_start`: another capture holds the mic (R2 `MicBusy`, CAP-01a).
+    MicBusy {
+        command: String,
+    },
+    /// 4.5 `capture_start`: a session needs a valid consent token first.
+    ConsentRequired {
+        command: String,
+    },
+    /// The command does not apply to the mode of this lease (R2 `InvalidMode`).
+    InvalidMode {
         command: String,
     },
 }
@@ -181,8 +195,13 @@ impl std::fmt::Display for IpcError {
             }
             IpcError::NotImplemented { command } => write!(f, "{command} is not implemented"),
             IpcError::HostFailed { command } => write!(f, "the host could not complete {command}"),
-            IpcError::StaleLease { command } => {
-                write!(f, "{command}: the capture lease is not live")
+            IpcError::UnknownLease { command } => {
+                write!(f, "{command}: no live capture lease with this ID")
+            }
+            IpcError::MicBusy { command } => write!(f, "{command}: the mic is busy"),
+            IpcError::ConsentRequired { command } => write!(f, "{command}: consent is required"),
+            IpcError::InvalidMode { command } => {
+                write!(f, "{command} does not apply to this capture mode")
             }
         }
     }
@@ -204,10 +223,21 @@ pub enum Handled {
 pub use crate::types::{CaptureMode, MogId, ProfileName, SessionPolicy, Tags, TranscriptProvider};
 
 /// A lease ID argument (CAP-02a): 1-64 characters of `[A-Za-z0-9-]`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
-#[schemars(with = "String")]
 pub struct LeaseRef(String);
+
+/// The wire rule of a lease ID, also stated in the JSON Schema.
+pub const LEASE_PATTERN: &str = "^[A-Za-z0-9-]{1,64}$";
+
+impl JsonSchema for LeaseRef {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "LeaseRef".into()
+    }
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> Schema {
+        schemars::json_schema!({ "type": "string", "pattern": LEASE_PATTERN })
+    }
+}
 
 impl LeaseRef {
     pub fn as_str(&self) -> &str {
@@ -239,10 +269,18 @@ impl From<LeaseRef> for String {
 pub const CHANNEL_PREFIX: &str = "__CHANNEL__:";
 
 /// A Tauri `Channel` argument. On the wire it is `__CHANNEL__:<numeric id>`; other strings fail.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
-#[schemars(with = "String")]
 pub struct ChannelRef(String);
+
+impl JsonSchema for ChannelRef {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ChannelRef".into()
+    }
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> Schema {
+        schemars::json_schema!({ "type": "string", "pattern": "^__CHANNEL__:[0-9]+$" })
+    }
+}
 
 impl ChannelRef {
     pub fn as_str(&self) -> &str {

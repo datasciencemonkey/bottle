@@ -371,13 +371,43 @@ fn cap_02a_stop_and_pause_need_the_lease_id() {
 }
 
 #[test]
-fn cap_02a_a_stale_lease_has_a_typed_error() {
-    let err = IpcError::StaleLease {
+fn cap_02a_an_unknown_lease_has_a_typed_error() {
+    // The same wire code as R2 CaptureError::UnknownLease (PR #273).
+    let err = IpcError::UnknownLease {
         command: "capture_stop".into(),
     };
     assert_eq!(
         serde_json::to_value(&err).unwrap(),
-        json!({"error": "stale_lease", "command": "capture_stop"})
+        json!({"error": "unknown_lease", "command": "capture_stop"})
     );
     assert!(!err.to_string().is_empty());
+    for (e, code) in [
+        (
+            IpcError::MicBusy {
+                command: "capture_start".into(),
+            },
+            "mic_busy",
+        ),
+        (
+            IpcError::ConsentRequired {
+                command: "capture_start".into(),
+            },
+            "consent_required",
+        ),
+        (
+            IpcError::InvalidMode {
+                command: "capture_pause".into(),
+            },
+            "invalid_mode",
+        ),
+    ] {
+        assert_eq!(serde_json::to_value(&e).unwrap()["error"], code);
+    }
+}
+
+#[test]
+fn cap_02a_schema_states_the_lease_rule() {
+    let schemas = ipc::schemas();
+    let text = schemas["capture_stop"].to_string();
+    assert!(text.contains(ipc::LEASE_PATTERN), "{text}");
 }

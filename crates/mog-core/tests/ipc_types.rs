@@ -206,3 +206,16 @@ fn cap_02a_live_capture_state_carries_its_lease_id() {
     let back = serde_json::to_value(&live).unwrap();
     assert_eq!(back["leaseId"], "17");
 }
+
+#[test]
+fn cap_02a_every_segment_names_its_lease() {
+    use mog_core::types::SegmentRef;
+    for f in ["SegmentRef.json", "SegmentRef.minimal.json"] {
+        let seg: SegmentRef =
+            serde_json::from_str(&std::fs::read_to_string(fixture_dir().join(f)).unwrap()).unwrap();
+        assert!(!seg.lease_id.is_empty(), "{f}");
+    }
+    // A segment without a lease does not parse.
+    let no_lease = serde_json::json!({"segmentId": "s", "mogId": "m", "track": "you", "tStartMs": 0, "tEndMs": 1, "final": true});
+    assert!(serde_json::from_value::<SegmentRef>(no_lease).is_err());
+}

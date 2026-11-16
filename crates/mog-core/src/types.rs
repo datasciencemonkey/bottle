@@ -116,7 +116,8 @@ pub struct CaptureState {
     pub owner: Option<MogId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<CaptureMode>,
-    /// CAP-02a: the lease of the live capture (ADR 0005). Absent when no capture is live.
+    /// CAP-02a: the lease that owns the mic now (ADR 0005). A suspended lease (ARC-F9) is not
+    /// shown here until it resumes. Absent when no capture is live.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lease_id: Option<LeaseId>,
     pub recording: bool,
@@ -137,6 +138,8 @@ pub struct CaptureState {
 pub struct SegmentRef {
     pub segment_id: String,
     pub mog_id: MogId,
+    /// CAP-02a / AT-17: the lease of the capture that made this segment (ADR 0005).
+    pub lease_id: LeaseId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     pub track: Track,

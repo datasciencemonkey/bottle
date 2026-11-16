@@ -231,7 +231,10 @@ export type IpcError =
   | { error: 'invalid_args'; command: string; reason: string }
   | { error: 'not_implemented'; command: string }
   | { error: 'host_failed'; command: string }
-  | { error: 'stale_lease'; command: string };
+  | { error: 'unknown_lease'; command: string }
+  | { error: 'mic_busy'; command: string }
+  | { error: 'consent_required'; command: string }
+  | { error: 'invalid_mode'; command: string };
 
 type Empty = Record<string, never>;
 
