@@ -13,7 +13,12 @@
  */
 import { BrainActor } from '../brain/actor';
 import { createConversationManager } from '../brain/components/conversation-manager';
-import { createGenieOneMcpDouble, scenarios } from '../test-support/genie-one-mcp';
+import {
+  GENIE_ONE_TOOLS,
+  GENIE_TOOL_CONTRACTS,
+  createGenieOneMcpDouble,
+  scenarios,
+} from '../test-support/genie-one-mcp';
 import { liveFixture } from '../test-support/fixtures';
 
 const HOST = 'example.cloud.databricks.com';
@@ -58,6 +63,8 @@ describe('AT-07 connect and poll Genie One', () => {
     // IDs persist: every poll carries the same conversation and response IDs.
     for (const p of d.polls()) expect(p.args).toEqual(ref);
     expect(replies.every((r) => !r.isError)).toBe(true);
+    // Every call fits its genie-tools.json input schema.
+    expect(d.contractViolations()).toEqual([]);
   });
 
   it('[AT-07] [G-07b] a failed poll does not stop the next poll on the conversation', async () => {
@@ -72,6 +79,26 @@ describe('AT-07 connect and poll Genie One', () => {
     await expect(first).rejects.toThrow('transport lost');
     expect((await second).isError).toBe(false);
     expect(d.maxConcurrentPolls()).toBe(1);
+  });
+
+  it('[AT-07] tools/list gives the four G-06a tools of the contract file and no other', async () => {
+    const d = slowPollDouble();
+    const list = await d.handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
+    const tools = (list.result as { tools: { name: string; inputSchema: unknown }[] }).tools;
+    expect(tools.map((t) => t.name)).toEqual([...GENIE_ONE_TOOLS]);
+    expect(GENIE_TOOL_CONTRACTS.map((t) => t.name)).toEqual([...GENIE_ONE_TOOLS]);
+    for (const t of tools)
+      expect(t.inputSchema).toEqual(
+        GENIE_TOOL_CONTRACTS.find((c) => c.name === t.name)?.inputSchema,
+      );
+    // A tool outside the four is refused before it reaches a tool.
+    const bad = await d.handle({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/call',
+      params: { name: 'execute_sql', arguments: {} },
+    });
+    expect(bad.error?.code).toBe(-32602);
   });
 
   it.skip('[AT-07] [G-07a] [G-07c] polls follow Table G-POLL with no progressToken TODO(#31)', () => {

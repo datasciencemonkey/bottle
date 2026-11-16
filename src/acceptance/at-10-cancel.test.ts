@@ -48,10 +48,9 @@ describe('AT-10 cancel with uncertain result', () => {
       {
         cancel: async (x) => {
           cancelled.push(x);
-          await d.call('genie_cancel_response', {
-            conversation_id: x.conversationId,
-            response_id: x.responseId,
-          });
+          // genie-tools.json: the cancel is conversation-scoped and takes no response ID.
+          const c = await d.call('genie_cancel_response', { conversation_id: x.conversationId });
+          expect(c.structuredContent).toMatchObject({ status: 'cancellation_requested' });
         },
         hideCard: async (m) => void hidden.push(m),
       },
@@ -60,6 +59,7 @@ describe('AT-10 cancel with uncertain result', () => {
     expect(cancelled).toEqual([ref]);
     expect(hidden).toEqual([]);
     expect(d.calls().filter((c) => c.tool === 'genie_cancel_response')).toHaveLength(1);
+    expect(d.contractViolations()).toEqual([]);
   });
 
   it('[AT-10] [G-25a] a cancel whose transport fails does not hide the card either', async () => {

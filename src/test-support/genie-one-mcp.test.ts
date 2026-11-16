@@ -1,6 +1,13 @@
 // Self-tests of the Genie One MCP test double (#229, AT-22). They check the double, not the bridge,
 // so they carry only the harness ID AT-22.
-import { BUSY_TEXT, GENIE_ONE_TOOLS, createGenieOneMcpDouble, scenarios } from './genie-one-mcp';
+import {
+  BUSY_TEXT,
+  GENIE_ONE_TOOLS,
+  GENIE_TOOL_CONTRACTS,
+  contractProblems,
+  createGenieOneMcpDouble,
+  scenarios,
+} from './genie-one-mcp';
 
 const HOST = 'example.cloud.databricks.com';
 const WSID = '1234567890';
@@ -313,5 +320,51 @@ describe('Genie One MCP double', () => {
     const res = r.structuredContent as { rows: unknown[][]; truncated?: boolean };
     expect(res.rows).toHaveLength(60);
     expect(res.truncated).toBe(true);
+  });
+
+  it('[AT-22] tools/list serves the genie-tools.json contracts', async () => {
+    const d = createGenieOneMcpDouble({ host: HOST, workspaceId: WSID });
+    const list = await d.handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
+    expect((list.result as { tools: unknown[] }).tools).toEqual(
+      GENIE_TOOL_CONTRACTS.map((t) => ({
+        name: t.name,
+        description: t.description,
+        inputSchema: t.inputSchema,
+      })),
+    );
+    const ask = GENIE_TOOL_CONTRACTS.find((t) => t.name === 'genie_ask');
+    expect(ask?.inputSchema.required).toEqual(['question']);
+    const cancel = GENIE_TOOL_CONTRACTS.find((t) => t.name === 'genie_cancel_response');
+    expect(Object.keys(cancel?.inputSchema.properties ?? {})).toEqual(['conversation_id']);
+  });
+
+  it('[AT-22] contractProblems finds missing, unknown and mistyped arguments', () => {
+    expect(contractProblems('genie_ask', { question: 'q' })).toEqual([]);
+    expect(contractProblems('genie_ask', {})).toEqual(['genie_ask: question is required']);
+    expect(contractProblems('genie_ask', { question: 'q', progressToken: 1 })).toEqual([
+      'genie_ask: progressToken is not in the schema',
+    ]);
+    expect(
+      contractProblems('genie_poll_response', { conversation_id: 1, response_id: 'r' }),
+    ).toEqual(['genie_poll_response: conversation_id must be a string']);
+    expect(contractProblems('view_ask', {})).toEqual(['view_ask: not a Genie One tool']);
+  });
+
+  it('[AT-22] the double records calls that break the contract and the cancel never claims a stop', async () => {
+    const d = createGenieOneMcpDouble({
+      host: HOST,
+      workspaceId: WSID,
+      responses: [scenarios.unknownStatus(3)],
+    });
+    const ref = ids(await ask(d, 'q'));
+    expect(d.contractViolations()).toEqual([]);
+    const c = await d.call('genie_cancel_response', { ...ref });
+    expect(c.structuredContent).toEqual({
+      conversation_id: ref.conversation_id,
+      status: 'cancellation_requested',
+    });
+    expect(d.contractViolations()).toEqual([
+      'genie_cancel_response: response_id is not in the schema',
+    ]);
   });
 });

@@ -56,8 +56,12 @@ async function finalPoll(script: ScriptedResponse): Promise<Final> {
     const p = (await d.call('genie_poll_response', ref)).structuredContent as Final;
     if (p.status === 'completed' || p.status === 'incomplete' || p.status === 'failed') {
       const item = p.query_items?.[0];
-      if (!item) return p;
+      if (!item) {
+        expect(d.contractViolations()).toEqual([]);
+        return p;
+      }
       const r = await d.call('genie_get_query_result', { ...ref, item_id: item.item_id });
+      expect(d.contractViolations()).toEqual([]);
       return { ...p, result: r.structuredContent as QueryResult };
     }
   }
