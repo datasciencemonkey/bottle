@@ -34,6 +34,7 @@
 //! system-audio backends (#15, #107, #108, #109) implement the trait. Until one lands, a host
 //! cannot build a [`CaptureCore`] that opens a real mic.
 
+use std::cell::Cell;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -582,39 +583,8 @@ impl CaptureCore {
         Ok(())
     }
 
-    /// Open the streams for the pending start or resume. If the device call panics, the
-    /// pending entry goes and every stream that no lease needs closes, also one that the
-    /// panicking open may have opened.
-    fn open_pending(&self) -> Result<(), DeviceError> {
-        struct Unwind<'a>(&'a CaptureCore);
-        impl Drop for Unwind<'_> {
-            fn drop(&mut self) {
-                if std::thread::panicking() {
-                    let core = self.0;
-                    core.locked(|inner, _, _| {
-                        if let Some(Pending::Resume(id)) = inner.pending.take() {
-                            if let Some(rec) = inner.find(id) {
-                                rec.paused = true;
-                            }
-                        }
-                    });
-                    let (mic, system) = core.wanted();
-                    for (source, want) in
-                        [(AudioSource::SystemAudio, system), (AudioSource::Mic, mic)]
-                    {
-                        if !want {
-                            core.flag(source).store(false, Ordering::SeqCst);
-                            core.device.close(source);
-                        }
-                    }
-                }
-            }
-        }
-        let _unwind = Unwind(self);
-        self.open_wanted()
-    }
-
     fn set_paused(&self, lease_id: LeaseNo, paused: bool) -> Result<CaptureState, CaptureError> {
+        let guard = PendingGuard::new(self);
         let result = self.locked(|inner, now, evs| {
             inner.expire(now, evs);
             if !paused && inner.pending.is_some() {
@@ -629,6 +599,7 @@ impl CaptureCore {
             if resumes {
                 inner.pending = Some(Pending::Resume(lease_id));
                 inner.pending_lost = false;
+                guard.mine.set(Some(lease_id));
             }
             Ok(resumes)
         });
@@ -639,9 +610,10 @@ impl CaptureCore {
                 return Err(e);
             }
         };
-        let opened = if resumes { self.open_pending() } else { Ok(()) };
+        let opened = if resumes { self.open_wanted() } else { Ok(()) };
         let result = self.locked(|inner, _, _| {
             if resumes {
+                guard.mine.set(None);
                 match inner.pending.take() {
                     Some(Pending::Resume(id)) if id == lease_id => {}
                     // A stop_all ran while the device opened; the open slot is free again.
@@ -670,11 +642,66 @@ impl CaptureCore {
     }
 }
 
+/// Clears this thread's pending start or resume if the thread unwinds while it is set: a
+/// panic in the device open or in an event sink. Without it the open slot stays taken and
+/// every later start gets `mic_busy` (review N14). It is armed from the moment the pending
+/// entry exists, before any event goes out, and disarmed when the thread takes the entry back.
+struct PendingGuard<'a> {
+    core: &'a CaptureCore,
+    mine: Cell<Option<LeaseNo>>,
+}
+
+impl<'a> PendingGuard<'a> {
+    fn new(core: &'a CaptureCore) -> Self {
+        Self {
+            core,
+            mine: Cell::new(None),
+        }
+    }
+}
+
+impl Drop for PendingGuard<'_> {
+    fn drop(&mut self) {
+        let Some(id) = self.mine.get() else {
+            return;
+        };
+        if !std::thread::panicking() {
+            return;
+        }
+        let core = self.core;
+        {
+            // No events here: a second panic in a sink would abort the process. The next
+            // call publishes the changed state.
+            let mut inner = core.inner.lock().unwrap_or_else(PoisonError::into_inner);
+            // While `mine` is set, the pending entry (if any) is this thread's: there is at
+            // most one, and only this thread takes it back.
+            match inner.pending.take() {
+                Some(Pending::Resume(resumed)) if resumed == id => {
+                    if let Some(rec) = inner.find(id) {
+                        rec.paused = true;
+                    }
+                }
+                // This thread's start, or its start or resume that stop_all cancelled.
+                _ => {}
+            }
+        }
+        // Close every stream that no lease needs, also one that a panicking open opened.
+        let (mic, system) = core.wanted();
+        for (source, want) in [(AudioSource::SystemAudio, system), (AudioSource::Mic, mic)] {
+            if !want {
+                core.flag(source).store(false, Ordering::SeqCst);
+                core.device.close(source);
+            }
+        }
+    }
+}
+
 impl CaptureService for CaptureCore {
     fn start(&self, request: CaptureRequest) -> Result<Lease, CaptureError> {
         if request.others_track && request.mode != CaptureMode::Session {
             return Err(CaptureError::InvalidMode);
         }
+        let guard = PendingGuard::new(self);
         let lease = self.locked(|inner, now, evs| {
             inner.expire(now, evs);
             if inner.pending.is_some() {
@@ -717,13 +744,16 @@ impl CaptureService for CaptureCore {
                 preempt,
             });
             inner.pending_lost = false;
+            // Armed before the events of this section go out (N14).
+            guard.mine.set(Some(lease.id));
             Ok(lease)
         })?;
 
         // The device opens with no lock held (Handy `managers/audio.rs:495-500`).
-        let opened = self.open_pending();
+        let opened = self.open_wanted();
 
         let result = self.locked(|inner, _, evs| {
+            guard.mine.set(None);
             let (rec, overlay, preempt) = match inner.pending.take() {
                 Some(Pending::Start {
                     rec,
