@@ -33,7 +33,7 @@ U11 and RTR-21a require one shared agent runtime (one sidecar process) with one 
 
 ## Consequences
 
-- Overlap with #224 (PR #308): #308 adds a shared `loopback` listener with a per-session secret and a Host check for `bottle-mcp`, the Genie One MCP proxy and the model proxy. This PR keeps its own `ModelProxy` and `SessionSecret` so that #112 does not depend on an open PR. After #308 merges, a follow-up must move `ModelProxy` onto the `loopback` listener and its secret, with the same tests. The agent lead and the security lead must agree on this.
+- Overlap with #224 (PR #308): #308 adds a shared `loopback` listener with a per-session secret and a Host check for `bottle-mcp`, the Genie One MCP proxy and the model proxy. This PR keeps its own `ModelProxy` and `SessionSecret`. #308 merged while this PR was in review. Follow-up #325 moves `ModelProxy` onto the `loopback` listener and its secret, with the same tests. The agent lead and the security lead must agree on this.
 - Residual risk (`TODO(#111)`): the scratch home stops the harness from reading the user's CLI config through `HOME`. A harness with a shell or file tool can still run the `databricks` CLI from `PATH` with an absolute config path, or read files by absolute path. SP-19 and #141 must turn off or limit the shell and file tools of the harness, and the AT-42 process scan must check for this.
 
 - If SP-19 picks one SDK sidecar that hosts both kinds, `RuntimeConfigs` can point both kinds at the same program. The host then needs one map key instead of two. No caller changes.
