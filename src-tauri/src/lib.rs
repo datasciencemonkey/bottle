@@ -34,6 +34,30 @@ pub fn startup_windows(demo: bool) -> Vec<WindowKind> {
     kinds
 }
 
+/// Debug demo only: hide and show the demo card `DEMO_CARD_OPENS` times, 1 s apart, then leave
+/// it hidden, so the Mac check can count opens and watch the reaper (MOG-03b, MOG-18b).
+pub const DEMO_CARD_OPENS: usize = 20;
+
+fn demo_card_cycle(app: tauri::AppHandle<tauri::Wry>) {
+    let _ = std::thread::Builder::new()
+        .name("bottle-demo-card-cycle".into())
+        .spawn(move || {
+            let step = std::time::Duration::from_secs(1);
+            let Some(host) = app.try_state::<TauriWindowHost<tauri::Wry>>() else {
+                return;
+            };
+            // Time to start `swift tools/mac/card-check.swift` in a terminal.
+            std::thread::sleep(step * 20);
+            for _ in 0..DEMO_CARD_OPENS {
+                let _ = host.hide_card(DEMO_ID);
+                std::thread::sleep(step);
+                let _ = host.show_card(DEMO_ID);
+                std::thread::sleep(step);
+            }
+            let _ = host.hide_card(DEMO_ID);
+        });
+}
+
 /// The core version that this app links (ARC-1).
 pub fn linked_core_version() -> &'static str {
     mog_core::core_version()
@@ -92,6 +116,14 @@ pub fn run() {
                         windows::build(handle, &kind.spec())?;
                     }
                 }
+            }
+            // After setup the host refuses main-thread calls, which could deadlock (ADR 0022).
+            host.seal_main_thread();
+            // MOG-18b: destroy cards that are hidden for 5 min.
+            window_host::spawn_card_reaper(handle.clone())?;
+            if demo && std::env::var("BOTTLE_DEMO_CARD_CYCLE").is_ok_and(|v| v == "1") {
+                // The Mac check of #78 (tools/mac/card-check.swift): 20 card opens.
+                demo_card_cycle(handle.clone());
             }
             Ok(())
         })

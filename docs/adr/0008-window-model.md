@@ -21,5 +21,5 @@ The skeleton (#221, #223, #226) has the four window kinds of ARC-3, the per-labe
 ## Notes
 
 - The payload types `MogViewState` and `CardUpdate` stay in `src/views/view-ipc.ts` until #285 moves them to `src/shared/ipc.ts`. The brain helpers take `unknown` until then.
-- The hidden-card reaper and the key-capable card panel stay with #78. The non-activating MOG panel stays with #11 and #80.
+- The hidden-card reaper and the key-capable card panel stay with #78 (done: ADR 0022). The non-activating MOG panel stays with #11 and #80.
 - A person must still check on a Mac that the brain window stays hidden and that the demo windows open (`needs:human` on #8).

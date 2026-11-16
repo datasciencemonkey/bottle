@@ -9,6 +9,11 @@
 //! TODO(#10): the signed-DMG checks of SP-01 (alpha over the desktop, white flash, halo).
 //! TODO(#316): the on-screen checks on a Mac (0 focus steals in 100 clicks, the drag moves the
 //! panel, a fullscreen Space). The unit and AppKit tests cannot show a window.
+//!
+//! Each `card-<id>` window becomes a `BottleCardPanel` (#78, MOG-03a, ADR 0022): the same
+//! non-activating NSPanel, but it can become key, so typing and the IME work while the
+//! frontmost app stays (MOG-03b). It shows at Floating level and is never dragged.
+//! TODO(#336): the on-screen card checks on a Mac (20 opens, typing and IME, memory after 5 min).
 
 use crate::mog_drag::{DragGesture, MouseInput, Verdict};
 use crate::window_host::{NativeWindowStyle, WindowError};
@@ -16,6 +21,7 @@ use crate::windows::{PanelLevel, PanelSpec, WindowKind};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, NSObjectProtocol};
 use objc2::{define_class, ClassType, MainThreadMarker, MainThreadOnly, Message};
+use objc2_app_kit::NSView;
 use objc2_app_kit::{
     NSColor, NSEvent, NSEventMask, NSEventType, NSFloatingWindowLevel, NSPanel,
     NSStatusWindowLevel, NSWindow, NSWindowCollectionBehavior, NSWindowLevel, NSWindowStyleMask,
@@ -42,6 +48,37 @@ define_class!(
         }
     }
 );
+
+define_class!(
+    /// The class of a card panel: an NSPanel that can become key but never main (MOG-03a).
+    /// With `NSWindowStyleMaskNonactivatingPanel` it takes the keyboard without activating
+    /// Bottle, so the frontmost app stays (MOG-03b).
+    #[unsafe(super(NSPanel))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "BottleCardPanel"]
+    struct CardPanel;
+
+    impl CardPanel {
+        #[unsafe(method(canBecomeKeyWindow))]
+        fn can_become_key_window(&self) -> bool {
+            true
+        }
+
+        #[unsafe(method(canBecomeMainWindow))]
+        fn can_become_main_window(&self) -> bool {
+            false
+        }
+    }
+);
+
+/// The panel class of a spec: the card class if it can become key, else the MOG class.
+fn panel_class(spec: &PanelSpec) -> &'static AnyClass {
+    if spec.can_become_key {
+        CardPanel::class()
+    } else {
+        MogPanel::class()
+    }
+}
 
 /// The AppKit window level of a panel level.
 pub fn appkit_level(level: PanelLevel) -> NSWindowLevel {
@@ -110,10 +147,9 @@ fn is_kvo_subclass(cls: &AnyClass) -> bool {
     class_name(cls).starts_with("NSKVONotifying_")
 }
 
-/// Swap the class of `window` to `MogPanel`. Refuses a class that is larger than the object, so
+/// Swap the class of `window` to `target`. Refuses a class that is larger than the object, so
 /// the swap never reads past it.
-fn swap_class(window: &NSWindow) -> Result<(), WindowError> {
-    let target: &AnyClass = MogPanel::class();
+fn swap_class(window: &NSWindow, target: &AnyClass) -> Result<(), WindowError> {
     let current = window.class();
     if std::ptr::eq(current, target) {
         return Ok(());
@@ -122,15 +158,16 @@ fn swap_class(window: &NSWindow) -> Result<(), WindowError> {
         return Err(WindowError::HostFailed);
     }
     let obj = window as *const NSWindow as *mut AnyObject;
-    // SAFETY: main thread (caller). `MogPanel` adds no instance variables, NSPanel adds none to
+    // SAFETY: main thread (caller). `MogPanel` and `CardPanel` add no instance variables, NSPanel adds none to
     // NSWindow, and the size check above holds, so every instance variable of the new class lies
     // inside the object. The old class's instance variables stay in place for tao.
     unsafe { objc2::ffi::object_setClass(obj, target) };
     Ok(())
 }
 
-/// Turn a window into a MOG panel: swap its class to `MogPanel` (an NSPanel subclass), then set
-/// the style mask, level, collection behavior and transparency of `spec`.
+/// Turn a window into a panel: swap its class to `MogPanel` or, for a key-capable spec,
+/// `CardPanel` (both NSPanel subclasses), then set the style mask, level, collection behavior
+/// and, for a transparent spec, the transparency of `spec`.
 ///
 /// WebKit observes the window of each WKWebView (key-value observing), so a wry window has an
 /// `NSKVONotifying_*` class. A bare class swap (what `tauri-nspanel` does) drops the class that
@@ -141,22 +178,32 @@ fn swap_class(window: &NSWindow) -> Result<(), WindowError> {
 /// `observationInfo` is not nil even on a plain window. An observer that is not in the content
 /// view would stop getting notifications; none is known for a tao window (ADR 0009).
 ///
-/// Refuses a key-capable spec (TODO(#78): the card panel needs its own class).
+/// Refuses a main-capable spec, and refuses to turn one panel kind into the other, so a MOG
+/// panel never becomes key (UX-19a).
 ///
 /// # Safety
 /// Call on the main thread with a live window that no other code swaps. tao reads its own
 /// instance variables only through its typed pointer (the same swap that `tauri-nspanel` does).
 pub unsafe fn apply_panel(window: &NSWindow, spec: &PanelSpec) -> Result<(), WindowError> {
-    if spec.can_become_key || spec.can_become_main {
+    if spec.can_become_main {
         return Err(WindowError::HostFailed);
     }
-    if !std::ptr::eq(window.class(), MogPanel::class()) {
+    let target = panel_class(spec);
+    let other = if std::ptr::eq(target, CardPanel::class()) {
+        MogPanel::class()
+    } else {
+        CardPanel::class()
+    };
+    if window.isKindOfClass(other) {
+        return Err(WindowError::HostFailed);
+    }
+    if !window.isKindOfClass(target) {
         let content = window.contentView();
         let detach = content.is_some() && is_kvo_subclass(window.class());
         if detach {
             window.setContentView(None);
         }
-        let swapped = swap_class(window);
+        let swapped = swap_class(window, target);
         if detach {
             window.setContentView(content.as_deref());
         }
@@ -170,11 +217,35 @@ pub unsafe fn apply_panel(window: &NSWindow, spec: &PanelSpec) -> Result<(), Win
     window.setLevel(appkit_level(spec.level));
     window.setCollectionBehavior(NSWindowCollectionBehavior(appkit_collection_behavior(spec)));
     window.setHidesOnDeactivate(spec.hides_on_deactivate);
-    // MOG-01a: the window itself paints nothing; the page has a transparent background.
-    window.setOpaque(false);
-    window.setBackgroundColor(Some(&NSColor::clearColor()));
-    window.setHasShadow(false);
+    if spec.transparent {
+        // MOG-01a: the window itself paints nothing; the page has a transparent background.
+        window.setOpaque(false);
+        window.setBackgroundColor(Some(&NSColor::clearColor()));
+        window.setHasShadow(false);
+    }
     Ok(())
+}
+
+/// The first WKWebView (or subclass, such as wry's) in `view` or below it, depth first.
+fn find_web_view(view: &NSView, web: &AnyClass) -> Option<Retained<NSView>> {
+    if view.isKindOfClass(web) {
+        return Some(view.retain());
+    }
+    view.subviews()
+        .iter()
+        .find_map(|sub| find_web_view(&sub, web))
+}
+
+/// Make the WKWebView of `window` its first responder, so the card page gets the keys (MOG-03a).
+/// `false` if the window has no web view or AppKit refuses.
+pub fn focus_web_view(window: &NSWindow) -> bool {
+    let Some(cls) = AnyClass::get(c"WKWebView") else {
+        return false;
+    };
+    let Some(web) = window.contentView().and_then(|c| find_web_view(&c, cls)) else {
+        return false;
+    };
+    window.makeFirstResponder(Some(&web))
 }
 
 /// Run `f` with the NSWindow of `window` on the main thread. If this is the main thread, it runs
@@ -228,12 +299,18 @@ impl<R: tauri::Runtime> NativeWindowStyle<R> for MacPanelStyle {
     }
 
     fn show(&self, window: &tauri::WebviewWindow<R>, kind: &WindowKind) -> Result<(), WindowError> {
-        if kind.panel().is_none() {
+        let Some(spec) = kind.panel() else {
             return window.show().map_err(|_| WindowError::HostFailed);
-        }
-        // `orderFrontRegardless` shows the panel without activating Bottle or making it key.
-        on_main(window, |ns| {
+        };
+        // `orderFrontRegardless` shows the panel without activating Bottle. A card panel then
+        // becomes key (it is non-activating, so the frontmost app stays) and its page gets the
+        // keys (MOG-03a, MOG-03b). A MOG panel never becomes key (UX-19a).
+        on_main(window, move |ns| {
             ns.orderFrontRegardless();
+            if spec.can_become_key {
+                ns.makeKeyWindow();
+                focus_web_view(ns);
+            }
             Ok(())
         })
     }
