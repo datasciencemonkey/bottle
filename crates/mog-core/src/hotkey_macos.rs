@@ -71,7 +71,7 @@ pub const OTHER_KEY_TAP_SPEC: TapSpec = TapSpec {
     location: CG_SESSION_EVENT_TAP,
     placement: CG_HEAD_INSERT_EVENT_TAP,
     options: CG_EVENT_TAP_OPTION_LISTEN_ONLY,
-    events_of_interest: 0,
+    events_of_interest: 1 << CG_EVENT_KEY_DOWN,
 };
 
 /// "Another key went down". It has no field, so no key identity can cross the callback
@@ -81,8 +81,27 @@ pub struct OtherKeyDown;
 
 /// Classify an event of the other-key tap by its event type only. The function cannot see
 /// the event, so it cannot read a key code or characters.
-pub fn other_key_from_event_type(_event_type: u32) -> Option<OtherKeyDown> {
-    None
+pub fn other_key_from_event_type(event_type: u32) -> Option<OtherKeyDown> {
+    (event_type == CG_EVENT_KEY_DOWN).then_some(OtherKeyDown)
+}
+
+/// The flag bit that is set while the modifier key `keycode` is down, or `None` for a key
+/// that is not a known modifier. Device-dependent bits from IOLLEvent.h tell the left and
+/// right keys apart; Fn and Caps Lock use their generic bits.
+fn modifier_down_bit(keycode: u16) -> Option<u64> {
+    Some(match keycode {
+        56 => 0x02,        // Left-Shift
+        60 => 0x04,        // Right-Shift
+        59 => 0x01,        // Left-Control
+        62 => 0x2000,      // Right-Control
+        58 => 0x20,        // Left-Option
+        61 => 0x40,        // Right-Option
+        55 => 0x08,        // Left-Command
+        54 => 0x10,        // Right-Command
+        63 => 0x0080_0000, // Fn / Globe (kCGEventFlagMaskSecondaryFn)
+        57 => 0x0001_0000, // Caps Lock (kCGEventFlagMaskAlphaShift)
+        _ => return None,
+    })
 }
 
 /// What one `FlagsChanged` event means for R1.
@@ -98,9 +117,12 @@ pub enum FlagsEvent {
 
 /// Classify one `FlagsChanged` event for the talk key `key` (CAP-35b, CAP-44c).
 pub fn classify_flags_changed(key: TalkKey, keycode: u16, flags: u64) -> FlagsEvent {
-    match decode_flags_changed(key, keycode, flags) {
-        Some(edge) => FlagsEvent::Talk(edge),
-        None => FlagsEvent::Ignore,
+    if let Some(edge) = decode_flags_changed(key, keycode, flags) {
+        return FlagsEvent::Talk(edge);
+    }
+    match modifier_down_bit(keycode) {
+        Some(bit) if flags & bit != 0 => FlagsEvent::OtherModifierDown,
+        _ => FlagsEvent::Ignore,
     }
 }
 
@@ -696,6 +718,10 @@ mod sys {
         probe: MacProbe,
         clock: SystemClock,
         tap_port: AtomicPtr<c_void>,
+        /// The other-key tap of CAP-44c (ADR 0014). It is on only while
+        /// `HotkeyEngine::other_key_window_open` is true.
+        other_port: AtomicPtr<c_void>,
+        other_on: AtomicBool,
         tap: Mutex<Option<TapThread>>,
         recreate_requested: AtomicBool,
         chord: Mutex<Option<Chord>>,
@@ -807,10 +833,54 @@ mod sys {
                 EVENT_HOT_KEY_RELEASED => KeyEdge::Up,
                 _ => return EVENT_NOT_HANDLED_ERR,
             };
-            lock(&shared.engine).on_chord(edge);
+            let mut engine = lock(&shared.engine);
+            engine.on_chord(edge);
+            sync_other_key_tap(shared, &engine);
             0
         }))
         .unwrap_or(EVENT_NOT_HANDLED_ERR)
+    }
+
+    /// Turn the other-key tap on or off to match the engine (CAP-44c). It listens only in the
+    /// first 1 s of a talk-key hold, so Bottle gets no key-down at any other time.
+    fn sync_other_key_tap(shared: &Shared, engine: &HotkeyEngine) {
+        let want = engine.other_key_window_open();
+        if shared.other_on.swap(want, Ordering::AcqRel) == want {
+            return;
+        }
+        let port = shared.other_port.load(Ordering::Acquire);
+        if !port.is_null() {
+            // SAFETY: `port` is the live other-key tap; the tap thread clears it before release.
+            unsafe { CGEventTapEnable(port, want) };
+        }
+    }
+
+    extern "C" fn other_key_callback(
+        _proxy: CGEventTapProxy,
+        event_type: u32,
+        event: CGEventRef,
+        user: *mut c_void,
+    ) -> CGEventRef {
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            // SAFETY: `user` is the `Shared` that the tap thread keeps alive.
+            let shared = unsafe { &*user.cast::<Shared>() };
+            // Privacy (ADR 0014): only the event type is used. The event itself (key code,
+            // characters) is never read, so no key identity crosses this boundary.
+            if matches!(
+                event_type,
+                CG_EVENT_TAP_DISABLED_BY_TIMEOUT | CG_EVENT_TAP_DISABLED_BY_USER_INPUT
+            ) {
+                // The OS turned the tap off; the next sync turns it on again if needed.
+                shared.other_on.store(false, Ordering::Release);
+            }
+            let mut engine = lock(&shared.engine);
+            if other_key_from_event_type(event_type).is_some() {
+                engine.on_other_key_down();
+            }
+            sync_other_key_tap(shared, &engine);
+        }));
+        // A listen-only tap cannot change the event; it passes on unchanged.
+        event
     }
 
     extern "C" fn tap_callback(
@@ -836,8 +906,15 @@ mod sys {
                         )
                     };
                     let code = u16::try_from(code).unwrap_or(u16::MAX);
-                    if let Some(edge) = decode_flags_changed(shared.talk_key, code, flags) {
-                        lock(&shared.engine).on_talk_key(edge);
+                    let class = classify_flags_changed(shared.talk_key, code, flags);
+                    if class != FlagsEvent::Ignore {
+                        let mut engine = lock(&shared.engine);
+                        match class {
+                            FlagsEvent::Talk(edge) => engine.on_talk_key(edge),
+                            FlagsEvent::OtherModifierDown => engine.on_other_key_down(),
+                            FlagsEvent::Ignore => {}
+                        }
+                        sync_other_key_tap(shared, &engine);
                     }
                     return;
                 }
@@ -876,6 +953,29 @@ mod sys {
                     let run_loop = CFRunLoopGetCurrent();
                     CFRunLoopAddSource(run_loop, source, kCFRunLoopCommonModes);
                     CGEventTapEnable(port, true);
+                    // The other-key tap (CAP-44c, ADR 0014): created off on the same run
+                    // loop. If the OS refuses it, PTT still works; only the key-down cancel
+                    // of non-modifier keys is lost (modifiers still come by FlagsChanged).
+                    let other = CGEventTapCreate(
+                        OTHER_KEY_TAP_SPEC.location,
+                        OTHER_KEY_TAP_SPEC.placement,
+                        OTHER_KEY_TAP_SPEC.options,
+                        OTHER_KEY_TAP_SPEC.events_of_interest,
+                        other_key_callback,
+                        user,
+                    );
+                    let other_source = if other.is_null() {
+                        ptr::null_mut()
+                    } else {
+                        CGEventTapEnable(other, false);
+                        let src = CFMachPortCreateRunLoopSource(ptr::null(), other, 0);
+                        if !src.is_null() {
+                            CFRunLoopAddSource(run_loop, src, kCFRunLoopCommonModes);
+                        }
+                        src
+                    };
+                    owner.other_on.store(false, Ordering::Release);
+                    owner.other_port.store(other, Ordering::Release);
                     owner.tap_port.store(port, Ordering::Release);
                     let _ = tx.send(Some(run_loop as usize));
                     CFRunLoopRun();
@@ -885,6 +985,19 @@ mod sys {
                         Ordering::AcqRel,
                         Ordering::Acquire,
                     );
+                    if !other.is_null() {
+                        let _ = owner.other_port.compare_exchange(
+                            other,
+                            ptr::null_mut(),
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        );
+                        CFMachPortInvalidate(other);
+                        if !other_source.is_null() {
+                            CFRelease(other_source);
+                        }
+                        CFRelease(other);
+                    }
                     CFMachPortInvalidate(port);
                     CFRelease(source);
                     CFRelease(port);
@@ -936,6 +1049,8 @@ mod sys {
                     );
                 }
                 engine.tick(now, &shared.probe, &*shared);
+                // Close the other-key window 1 s into a hold (CAP-44c).
+                sync_other_key_tap(&shared, &engine);
             }
             if shared.recreate_requested.swap(false, Ordering::AcqRel) {
                 stop_tap(&shared);
@@ -976,6 +1091,8 @@ mod sys {
                 probe: MacProbe::new(talk_key),
                 clock: SystemClock::new(),
                 tap_port: AtomicPtr::new(ptr::null_mut()),
+                other_port: AtomicPtr::new(ptr::null_mut()),
+                other_on: AtomicBool::new(false),
                 tap: Mutex::new(None),
                 recreate_requested: AtomicBool::new(false),
                 chord: Mutex::new(None),

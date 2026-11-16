@@ -248,7 +248,10 @@ impl PttMachine {
 
     /// End an active PTT with `cancel` (CAP-44c). The later key-up gives nothing.
     pub fn cancel(&mut self) -> Vec<HotkeyOutput> {
-        Vec::new()
+        match self.held_by.take() {
+            Some(_) => vec![HotkeyOutput::Ptt(PttPhase::Cancel)],
+            None => Vec::new(),
+        }
     }
 
     /// A gap (wake, unlock, session change, tap restart): read the physical state again.
@@ -517,13 +520,53 @@ impl HotkeyEngine {
         }
     }
 
-    /// Another key went down (CAP-44c). The OS layer gives no key identity.
-    pub fn on_other_key_down(&mut self) {}
+    /// Another key went down (CAP-44c). The OS layer gives no key identity. In the first
+    /// [`OTHER_KEY_CANCEL_WINDOW`] of a hold the PTT ends with `cancel`, so no STT call
+    /// starts; later the key is ignored.
+    pub fn on_other_key_down(&mut self) {
+        if self.other_key_window_open() {
+            self.held_since = None;
+            let out = self.machine.cancel();
+            self.emit(out);
+        }
+    }
 
     /// A PTT is held and it started less than [`OTHER_KEY_CANCEL_WINDOW`] ago. The macOS
     /// layer listens to other key-downs only while this is true (ADR 0014).
     pub fn other_key_window_open(&self) -> bool {
-        false
+        self.machine.is_held()
+            && self
+                .held_since
+                .is_some_and(|t| self.clock.now().saturating_sub(t) < OTHER_KEY_CANCEL_WINDOW)
+    }
+
+    /// Apply the tap rule (CAP-44a) to the outputs of a key edge: a key-up less than
+    /// [`TAP_MAX_HOLD`] after its key-down becomes `cancel` and `Tap`.
+    fn timed(&mut self, out: Vec<HotkeyOutput>) -> Vec<HotkeyOutput> {
+        let now = self.clock.now();
+        let mut timed = Vec::with_capacity(out.len() + 1);
+        for o in out {
+            match o {
+                HotkeyOutput::Ptt(PttPhase::Down) => {
+                    self.held_since = Some(now);
+                    timed.push(o);
+                }
+                HotkeyOutput::Ptt(PttPhase::Up) => {
+                    let short = self
+                        .held_since
+                        .take()
+                        .is_some_and(|t| now.saturating_sub(t) < TAP_MAX_HOLD);
+                    if short {
+                        timed.push(HotkeyOutput::Ptt(PttPhase::Cancel));
+                        timed.push(HotkeyOutput::Tap);
+                    } else {
+                        timed.push(o);
+                    }
+                }
+                other => timed.push(other),
+            }
+        }
+        timed
     }
 
     /// The OS layer tried to register the fallback chord. On a failure R1 emits
@@ -560,12 +603,14 @@ impl HotkeyEngine {
     /// The tap saw the talk key.
     pub fn on_talk_key(&mut self, edge: KeyEdge) {
         let out = self.machine.on_talk_key(edge);
+        let out = self.timed(out);
         self.emit(out);
     }
 
     /// The Carbon chord fired.
     pub fn on_chord(&mut self, edge: KeyEdge) {
         let out = self.machine.on_chord(edge);
+        let out = self.timed(out);
         self.emit(out);
     }
 
@@ -668,6 +713,7 @@ impl HotkeyEngine {
         self.chord = ChordState::Off;
         self.chord_reported = false;
         self.last_tap_retry = None;
+        self.held_since = None;
         self.emit(out);
     }
 
@@ -839,9 +885,12 @@ mod tests {
     #[test]
     fn cap_35b_at_30_every_key_up_of_1000_cycles_is_reported() {
         let sink = Arc::new(RecSink::default());
-        let mut e = HotkeyEngine::new(sink.clone());
+        let clock = SimClock::new();
+        let mut e = HotkeyEngine::with_clock(sink.clone(), Arc::new(clock.clone()));
         for _ in 0..1000 {
             e.on_talk_key(Down);
+            // Hold longer than a tap (CAP-44a); a shorter hold ends with `cancel` + `Tap`.
+            clock.advance(TAP_MAX_HOLD);
             e.on_talk_key(Up);
         }
         let out = sink.take();

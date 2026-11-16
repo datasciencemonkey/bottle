@@ -373,8 +373,9 @@ impl Elevation {
 }
 
 /// Feed a talk-key signal to the shared PTT machine of #6 (`hotkey_core`), so Windows and
-/// macOS give the same `hotkey.ptt` phases. Signals with no shared equivalent (Esc, another
-/// key, the elevated window, hook health) return to the host.
+/// macOS give the same `hotkey.ptt` phases. Another key during a hold goes to the CAP-44c
+/// cancel rule. Signals with no shared equivalent (Esc, the elevated window, hook health)
+/// return to the host.
 pub fn forward_to_engine(
     signal: HookSignal,
     engine: &mut crate::hotkey_core::HotkeyEngine,
@@ -383,6 +384,7 @@ pub fn forward_to_engine(
     match signal {
         HookSignal::TalkDown { .. } => engine.on_talk_key(KeyEdge::Down),
         HookSignal::TalkUp { .. } => engine.on_talk_key(KeyEdge::Up),
+        HookSignal::OtherKeyDown => engine.on_other_key_down(),
         other => return Some(other),
     }
     None

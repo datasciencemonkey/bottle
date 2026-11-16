@@ -2,11 +2,13 @@
 //! `hotkeys_set` command (#24).
 //!
 //! This module has no OS calls. The host reads the keyboard environment ([`KeyboardEnv`]:
-//! the Dictation shortcut, VoiceOver, the layout, the Copilot key, known voice apps) and
-//! passes it in. Tests use plain values. The host hook-up is TODO(#24-host) (see ADR 0014).
+//! the Dictation shortcut, VoiceOver, the layout, the Copilot key, known voice apps) with
+//! prompt-free OS reads and passes it in. Tests use plain values. The host hook-up (the
+//! `hotkeys_set` handler, the OS reads and the first-run screen) is TODO(#322); see ADR 0014.
 //!
 //! Privacy: a binding names only the global keys of Bottle. Nothing here reads, stores or
-//! logs a key that the user types.
+//! logs a key that the user types. A voice app is kept only when its process name is on the
+//! fixed list of [`VoiceApp`].
 //!
 //! Requirements: CAP-43a, CAP-43b (AT-30).
 
@@ -26,6 +28,15 @@ pub enum Os {
     MacOs,
     /// Windows.
     Windows,
+}
+
+impl Os {
+    fn name(self) -> &'static str {
+        match self {
+            Os::MacOs => "macOS",
+            Os::Windows => "Windows",
+        }
+    }
 }
 
 /// A global key of Bottle. Each one has an Appendix F setting `app.hotkeys.<key>`.
@@ -76,8 +87,20 @@ impl HotkeyAction {
     }
 
     /// The action for a short key or a setting key.
-    pub fn from_key(_key: &str) -> Option<Self> {
-        None
+    pub fn from_key(key: &str) -> Option<Self> {
+        HotkeyAction::ALL
+            .into_iter()
+            .find(|a| a.key() == key || a.setting_key() == key)
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            HotkeyAction::Ptt => "talk key",
+            HotkeyAction::Panic => "panic key",
+            HotkeyAction::Session => "session key",
+            HotkeyAction::OpenCard => "open-card key",
+            HotkeyAction::Fallback => "Secure-Input fallback key",
+        }
     }
 }
 
@@ -100,12 +123,62 @@ pub enum TalkBinding {
 impl TalkBinding {
     /// The shared talk key of `hotkey_core` (macOS). `None` for Ctrl+Win.
     pub fn core_talk_key(self) -> Option<crate::hotkey_core::TalkKey> {
-        None
+        use crate::hotkey_core::TalkKey as Core;
+        match self {
+            TalkBinding::RightOption => Some(Core::RightOption),
+            TalkBinding::RightControl => Some(Core::RightControl),
+            TalkBinding::RightCommand => Some(Core::RightCommand),
+            TalkBinding::RightShift => Some(Core::RightShift),
+            TalkBinding::CtrlWin => None,
+        }
     }
 
     /// The Windows talk key of `hotkey_windows`.
     pub fn windows_talk_key(self) -> crate::hotkey_windows::TalkKey {
-        crate::hotkey_windows::TalkKey::default()
+        use crate::hotkey_windows::TalkKey as Win;
+        match self {
+            TalkBinding::RightOption => Win::RightAlt,
+            TalkBinding::RightControl => Win::RightCtrl,
+            TalkBinding::RightCommand => Win::RightWin,
+            TalkBinding::RightShift => Win::RightShift,
+            TalkBinding::CtrlWin => Win::CtrlWin,
+        }
+    }
+
+    fn token(self, os: Os) -> &'static str {
+        match (self, os) {
+            (TalkBinding::RightOption, Os::MacOs) => "RightOption",
+            (TalkBinding::RightOption, Os::Windows) => "RightAlt",
+            (TalkBinding::RightControl, Os::MacOs) => "RightControl",
+            (TalkBinding::RightControl, Os::Windows) => "RightCtrl",
+            (TalkBinding::RightCommand, Os::MacOs) => "RightCommand",
+            (TalkBinding::RightCommand, Os::Windows) => "RightWin",
+            (TalkBinding::RightShift, _) => "RightShift",
+            (TalkBinding::CtrlWin, _) => "Ctrl+Win",
+        }
+    }
+
+    fn display(self, os: Os) -> &'static str {
+        match (self, os) {
+            (TalkBinding::RightOption, Os::MacOs) => "Right-Option",
+            (TalkBinding::RightOption, Os::Windows) => "Right-Alt",
+            (TalkBinding::RightControl, Os::MacOs) => "Right-Control",
+            (TalkBinding::RightControl, Os::Windows) => "Right-Ctrl",
+            (TalkBinding::RightCommand, Os::MacOs) => "Right-Command",
+            (TalkBinding::RightCommand, Os::Windows) => "Right-Win",
+            (TalkBinding::RightShift, _) => "Right-Shift",
+            (TalkBinding::CtrlWin, _) => "Ctrl+Win",
+        }
+    }
+
+    fn from_token(token: &str) -> Option<TalkBinding> {
+        Some(match token {
+            "rightoption" | "rightalt" => TalkBinding::RightOption,
+            "rightcontrol" | "rightctrl" => TalkBinding::RightControl,
+            "rightcommand" | "rightcmd" | "rightwin" => TalkBinding::RightCommand,
+            "rightshift" => TalkBinding::RightShift,
+            _ => return None,
+        })
     }
 }
 
@@ -122,6 +195,8 @@ impl Mods {
     pub const ALT: Mods = Mods(4);
     /// Command on macOS, Win on Windows.
     pub const META: Mods = Mods(8);
+    /// The Fn / Globe key held with another key.
+    pub const FN: Mods = Mods(16);
 
     /// The union of two sets.
     pub const fn with(self, other: Mods) -> Mods {
@@ -131,6 +206,21 @@ impl Mods {
     /// Every modifier of `other` is in this set.
     pub const fn contains(self, other: Mods) -> bool {
         self.0 & other.0 == other.0
+    }
+
+    const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    fn from_token(os: Os, token: &str) -> Option<Mods> {
+        Some(match (token, os) {
+            ("ctrl" | "control", _) => Mods::CTRL,
+            ("shift", _) => Mods::SHIFT,
+            ("alt", _) | ("option" | "opt", Os::MacOs) => Mods::ALT,
+            ("cmd" | "command", Os::MacOs) | ("win", Os::Windows) | ("meta", _) => Mods::META,
+            ("fn" | "globe", _) => Mods::FN,
+            _ => return None,
+        })
     }
 }
 
@@ -151,6 +241,54 @@ pub enum Key {
     F(u8),
     /// The Fn / Globe key.
     FnGlobe,
+}
+
+impl Key {
+    fn from_token(token: &str) -> Option<Key> {
+        Some(match token {
+            "esc" | "escape" => Key::Escape,
+            "space" => Key::Space,
+            "tab" => Key::Tab,
+            _ => {
+                let mut chars = token.chars();
+                let first = chars.next()?;
+                let rest = chars.as_str();
+                if rest.is_empty() && first.is_ascii_lowercase() {
+                    Key::Letter(first.to_ascii_uppercase())
+                } else if rest.is_empty() && first.is_ascii_digit() {
+                    Key::Digit(first as u8 - b'0')
+                } else if first == 'f' && !rest.is_empty() && rest.len() <= 2 {
+                    let n: u8 = rest.parse().ok()?;
+                    if !(1..=24).contains(&n) || rest.starts_with('0') {
+                        return None;
+                    }
+                    Key::F(n)
+                } else {
+                    return None;
+                }
+            }
+        })
+    }
+
+    fn token(self) -> String {
+        match self {
+            Key::Escape => "Esc".to_owned(),
+            Key::Space => "Space".to_owned(),
+            Key::Tab => "Tab".to_owned(),
+            Key::Letter(c) => c.to_string(),
+            Key::Digit(d) => d.to_string(),
+            Key::F(n) => format!("F{n}"),
+            Key::FnGlobe => "Fn".to_owned(),
+        }
+    }
+
+    /// A key that types or moves focus. A global binding needs a modifier with it.
+    fn needs_modifier(self) -> bool {
+        matches!(
+            self,
+            Key::Escape | Key::Space | Key::Tab | Key::Letter(_) | Key::Digit(_)
+        )
+    }
 }
 
 /// One global key binding.
@@ -178,18 +316,84 @@ impl Binding {
     }
 
     /// Read a binding string such as `RightOption`, `Cmd+Shift+Esc` or `Ctrl+Win+Alt+K`.
-    pub fn parse(_os: Os, _text: &str) -> Result<Binding, ParseError> {
-        Err(ParseError)
+    /// Case, order and the usual synonyms (`Command`, `Option`, `Escape`) do not matter.
+    pub fn parse(os: Os, text: &str) -> Result<Binding, ParseError> {
+        let lower = text.trim().to_ascii_lowercase();
+        if let Some(talk) = TalkBinding::from_token(&lower) {
+            return Ok(Binding::Talk(talk));
+        }
+        let mut mods = Mods::default();
+        let mut key = None;
+        for token in lower.split('+').map(str::trim) {
+            if let Some(m) = Mods::from_token(os, token) {
+                if mods.contains(m) {
+                    return Err(ParseError);
+                }
+                mods = mods.with(m);
+            } else if let Some(k) = Key::from_token(token) {
+                if key.replace(k).is_some() {
+                    return Err(ParseError);
+                }
+            } else {
+                return Err(ParseError);
+            }
+        }
+        match key {
+            Some(k) if k.needs_modifier() && mods.is_empty() => Err(ParseError),
+            Some(k) => Ok(Binding::chord(mods, k)),
+            None if os == Os::Windows && mods == Mods::CTRL.with(Mods::META) => {
+                Ok(Binding::Talk(TalkBinding::CtrlWin))
+            }
+            None if mods == Mods::FN => Ok(Binding::chord(Mods::default(), Key::FnGlobe)),
+            None => Err(ParseError),
+        }
     }
 
     /// The binding string for `os`, for example `Ctrl+Win+Alt+K`.
-    pub fn format(&self, _os: Os) -> String {
-        String::new()
+    pub fn format(&self, os: Os) -> String {
+        match *self {
+            Binding::Talk(t) => t.token(os).to_owned(),
+            Binding::Chord { mods, key } => {
+                let meta = match os {
+                    Os::MacOs => "Cmd",
+                    Os::Windows => "Win",
+                };
+                let alt = match os {
+                    Os::MacOs => "Option",
+                    Os::Windows => "Alt",
+                };
+                let mut parts: Vec<String> = [
+                    (Mods::FN, "Fn"),
+                    (Mods::CTRL, "Ctrl"),
+                    (Mods::META, meta),
+                    (Mods::ALT, alt),
+                    (Mods::SHIFT, "Shift"),
+                ]
+                .into_iter()
+                .filter(|(m, _)| mods.contains(*m))
+                .map(|(_, n)| n.to_owned())
+                .collect();
+                parts.push(key.token());
+                parts.join("+")
+            }
+        }
+    }
+
+    /// The name that a message shows, for example `Right-Option` or `Cmd+Shift+Esc`.
+    fn display(&self, os: Os) -> String {
+        match self {
+            Binding::Talk(t) => t.display(os).to_owned(),
+            Binding::Chord { .. } => self.format(os),
+        }
     }
 
     /// A chord that holds Ctrl and Option (Alt).
     pub fn has_ctrl_alt(&self) -> bool {
-        false
+        matches!(self, Binding::Chord { mods, .. } if mods.contains(Mods::CTRL.with(Mods::ALT)))
+    }
+
+    fn uses_fn_globe(&self) -> bool {
+        matches!(self, Binding::Chord { mods, key } if *key == Key::FnGlobe || mods.contains(Mods::FN))
     }
 }
 
@@ -214,20 +418,91 @@ impl HotkeyBindings {
     }
 
     /// The bindings as a JSON object of binding strings, keyed by [`HotkeyAction::key`].
-    pub fn to_json(&self, _os: Os) -> JsonObject {
-        JsonObject::new()
+    pub fn to_json(&self, os: Os) -> JsonObject {
+        self.iter()
+            .map(|(a, b)| (a.key().to_owned(), Value::String(b.format(os))))
+            .collect()
     }
 }
 
+const MAC_LADDER: [TalkBinding; 2] = [TalkBinding::RightOption, TalkBinding::RightControl];
+const WIN_LADDER: [TalkBinding; 3] = [
+    TalkBinding::RightOption,
+    TalkBinding::RightControl,
+    TalkBinding::CtrlWin,
+];
+
 /// The D66 talk-key ladder for `os`.
-pub fn talk_key_ladder(_os: Os) -> &'static [TalkBinding] {
-    &[]
+pub fn talk_key_ladder(os: Os) -> &'static [TalkBinding] {
+    match os {
+        Os::MacOs => &MAC_LADDER,
+        Os::Windows => &WIN_LADDER,
+    }
 }
 
-/// The D66 default bindings for `os`, with the top of the talk-key ladder (CAP-43a).
-pub fn default_bindings(_os: Os) -> HotkeyBindings {
-    HotkeyBindings::default()
+const fn chord(mods: Mods, key: Key) -> Binding {
+    Binding::chord(mods, key)
 }
+
+const CTRL_SHIFT: Mods = Mods::CTRL.with(Mods::SHIFT);
+const CTRL_WIN_ALT: Mods = Mods::CTRL.with(Mods::META).with(Mods::ALT);
+
+/// The D66 default bindings for `os`, with the top of the talk-key ladder (CAP-43a).
+pub fn default_bindings(os: Os) -> HotkeyBindings {
+    let mut bs = HotkeyBindings::default();
+    bs.set(HotkeyAction::Ptt, Binding::Talk(talk_key_ladder(os)[0]));
+    bs.set(HotkeyAction::Fallback, chord(CTRL_SHIFT, Key::Space));
+    match os {
+        Os::MacOs => {
+            let cmd_shift = Mods::META.with(Mods::SHIFT);
+            bs.set(HotkeyAction::Panic, chord(cmd_shift, Key::Escape));
+            bs.set(HotkeyAction::Session, chord(CTRL_SHIFT, Key::Letter('M')));
+            bs.set(HotkeyAction::OpenCard, chord(CTRL_SHIFT, Key::Letter('O')));
+        }
+        Os::Windows => {
+            bs.set(HotkeyAction::Panic, chord(CTRL_WIN_ALT, Key::Letter('K')));
+            bs.set(HotkeyAction::Session, chord(CTRL_WIN_ALT, Key::Letter('R')));
+            bs.set(
+                HotkeyAction::OpenCard,
+                chord(CTRL_WIN_ALT, Key::Letter('O')),
+            );
+        }
+    }
+    bs
+}
+
+/// The chords that the OS keeps for itself (a short list of the well-known ones).
+fn reserved(os: Os) -> &'static [Binding] {
+    const MAC: [Binding; 8] = [
+        chord(Mods::META, Key::Space),
+        chord(Mods::CTRL, Key::Space),
+        chord(Mods::META, Key::Tab),
+        chord(Mods::META, Key::Letter('Q')),
+        chord(Mods::META.with(Mods::ALT), Key::Escape),
+        chord(Mods::META.with(Mods::SHIFT), Key::Digit(3)),
+        chord(Mods::META.with(Mods::SHIFT), Key::Digit(4)),
+        chord(Mods::CTRL.with(Mods::META), Key::Letter('Q')),
+    ];
+    const WIN: [Binding; 8] = [
+        chord(Mods::ALT, Key::Tab),
+        chord(Mods::ALT, Key::F(4)),
+        chord(CTRL_SHIFT, Key::Escape),
+        chord(Mods::CTRL, Key::Escape),
+        chord(Mods::META, Key::Letter('L')),
+        chord(Mods::META, Key::Letter('D')),
+        chord(Mods::META, Key::Tab),
+        chord(Mods::META, Key::Space),
+    ];
+    match os {
+        Os::MacOs => &MAC,
+        Os::Windows => &WIN,
+    }
+}
+
+/// Windows voice typing.
+const WIN_H: Binding = chord(Mods::META, Key::Letter('H'));
+/// The chord that the Copilot key sends.
+const COPILOT_CHORD: Binding = chord(Mods::META.with(Mods::SHIFT), Key::F(23));
 
 /// The macOS Dictation shortcut (System Settings > Keyboard > Dictation).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -277,18 +552,49 @@ impl VoiceApp {
 
     /// The stable id in the conflict JSON.
     pub fn id(self) -> &'static str {
-        ""
+        match self {
+            VoiceApp::Superwhisper => "superwhisper",
+            VoiceApp::WisprFlow => "wispr_flow",
+            VoiceApp::MacWhisper => "macwhisper",
+            VoiceApp::Handy => "handy",
+            VoiceApp::Talon => "talon",
+            VoiceApp::Dragon => "dragon",
+            VoiceApp::VoiceAccess => "voice_access",
+        }
     }
 
     /// The name that the fix text shows.
     pub fn name(self) -> &'static str {
-        ""
+        match self {
+            VoiceApp::Superwhisper => "Superwhisper",
+            VoiceApp::WisprFlow => "Wispr Flow",
+            VoiceApp::MacWhisper => "MacWhisper",
+            VoiceApp::Handy => "Handy",
+            VoiceApp::Talon => "Talon",
+            VoiceApp::Dragon => "Dragon",
+            VoiceApp::VoiceAccess => "Voice Access",
+        }
     }
 
     /// Match a process name against the fixed list. Any other name gives `None`, so the
     /// host keeps no name of an unknown app.
-    pub fn from_process_name(_name: &str) -> Option<VoiceApp> {
-        None
+    pub fn from_process_name(name: &str) -> Option<VoiceApp> {
+        let lower = name.trim().to_ascii_lowercase();
+        let stem = lower
+            .strip_suffix(".exe")
+            .or_else(|| lower.strip_suffix(".app"))
+            .unwrap_or(&lower);
+        let norm: String = stem.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+        Some(match norm.as_str() {
+            "superwhisper" => VoiceApp::Superwhisper,
+            "wisprflow" => VoiceApp::WisprFlow,
+            "macwhisper" => VoiceApp::MacWhisper,
+            "handy" => VoiceApp::Handy,
+            "talon" => VoiceApp::Talon,
+            "dragon" | "natspeak" => VoiceApp::Dragon,
+            "voiceaccess" => VoiceApp::VoiceAccess,
+            _ => return None,
+        })
     }
 }
 
@@ -326,14 +632,24 @@ pub enum ConflictKind {
     Duplicate,
     /// The OS keeps this chord for itself.
     Reserved,
-    /// Bottle cannot read the binding string.
+    /// Bottle cannot read the binding string, or the binding does not fit the action.
     Invalid,
 }
 
 impl ConflictKind {
     /// The stable id in the conflict JSON.
     pub fn id(self) -> &'static str {
-        ""
+        match self {
+            ConflictKind::Dictation => "dictation",
+            ConflictKind::FnGlobe => "fn_globe",
+            ConflictKind::VoiceOver => "voice_over",
+            ConflictKind::AltGr => "alt_gr",
+            ConflictKind::CopilotKey => "copilot_key",
+            ConflictKind::VoiceApp => "voice_app",
+            ConflictKind::Duplicate => "duplicate",
+            ConflictKind::Reserved => "reserved",
+            ConflictKind::Invalid => "invalid",
+        }
     }
 }
 
@@ -342,6 +658,29 @@ impl ConflictKind {
 pub enum SettingsPane {
     /// macOS Keyboard > Dictation.
     Dictation,
+    /// macOS Accessibility > VoiceOver.
+    VoiceOver,
+    /// The keyboard layout settings of the OS.
+    KeyboardLayout,
+}
+
+impl SettingsPane {
+    fn id(self) -> &'static str {
+        match self {
+            SettingsPane::Dictation => "dictation",
+            SettingsPane::VoiceOver => "voice_over",
+            SettingsPane::KeyboardLayout => "keyboard_layout",
+        }
+    }
+
+    fn path(self, os: Os) -> &'static str {
+        match (self, os) {
+            (SettingsPane::Dictation, _) => "System Settings > Keyboard > Dictation",
+            (SettingsPane::VoiceOver, _) => "System Settings > Accessibility > VoiceOver",
+            (SettingsPane::KeyboardLayout, Os::MacOs) => "System Settings > Keyboard",
+            (SettingsPane::KeyboardLayout, Os::Windows) => "Settings > Time & language",
+        }
+    }
 }
 
 /// How the user removes a conflict.
@@ -366,6 +705,44 @@ pub enum Fix {
     },
 }
 
+impl Fix {
+    fn to_json(self, os: Os) -> Value {
+        match self {
+            Fix::UseBinding { action, binding } => json!({
+                "kind": "use_binding",
+                "action": action.key(),
+                "binding": binding.format(os),
+            }),
+            Fix::OpenSystemSettings { pane } => json!({
+                "kind": "open_system_settings",
+                "pane": pane.id(),
+            }),
+            Fix::ChangeOtherApp { app } => json!({
+                "kind": "change_other_app",
+                "app": app.id(),
+            }),
+        }
+    }
+
+    fn text(self, os: Os) -> String {
+        match self {
+            Fix::UseBinding { action, binding } => {
+                format!(
+                    "Fix: use {} as the {}.",
+                    binding.display(os),
+                    action.label()
+                )
+            }
+            Fix::OpenSystemSettings { pane } => {
+                format!("Fix: change the setting in {}.", pane.path(os))
+            }
+            Fix::ChangeOtherApp { app } => {
+                format!("Fix: give {} a different key, or quit it.", app.name())
+            }
+        }
+    }
+}
+
 /// One conflict and its fix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Conflict {
@@ -382,20 +759,198 @@ pub struct Conflict {
 }
 
 impl Conflict {
+    fn new(kind: ConflictKind, action: HotkeyAction, binding: Binding, fix: Fix) -> Self {
+        Self {
+            kind,
+            action,
+            binding,
+            fix,
+            app: None,
+        }
+    }
+
     /// The text that the UI shows for this conflict and its fix.
-    pub fn message(&self, _os: Os) -> String {
-        String::new()
+    pub fn message(&self, os: Os) -> String {
+        let key = self.binding.display(os);
+        let problem = match self.kind {
+            ConflictKind::Dictation => match os {
+                Os::MacOs => format!("macOS Dictation starts when you press {key} twice."),
+                Os::Windows => "Windows voice typing uses Win+H.".to_owned(),
+            },
+            ConflictKind::FnGlobe => {
+                "The keyboard and the OS use the Fn / Globe key. Bottle cannot use it.".to_owned()
+            }
+            ConflictKind::VoiceOver => match self.binding {
+                Binding::Talk(_) => {
+                    format!("VoiceOver is on. A press of {key} stops the VoiceOver speech.")
+                }
+                Binding::Chord { .. } => "VoiceOver uses Ctrl+Option for its commands.".to_owned(),
+            },
+            ConflictKind::AltGr => {
+                format!("Your keyboard layout uses {key} (AltGr) to type characters.")
+            }
+            ConflictKind::CopilotKey => {
+                "The Copilot key is in place of Right-Ctrl and sends Win+Shift+F23.".to_owned()
+            }
+            ConflictKind::VoiceApp => {
+                let name = self.app.map_or("A voice app", VoiceApp::name);
+                format!("{name} is open. It can use the same talk key ({key}).")
+            }
+            ConflictKind::Duplicate => format!("Another Bottle key also uses {key}."),
+            ConflictKind::Reserved => format!("{} keeps {key} for itself.", os.name()),
+            ConflictKind::Invalid => format!("Bottle cannot use this {}.", self.action.label()),
+        };
+        format!("{problem} {}", self.fix.text(os))
     }
 
     /// The conflict as one item of the `conflicts` array of `hotkeys_set`.
-    pub fn to_json(&self, _os: Os) -> Value {
-        json!({})
+    pub fn to_json(&self, os: Os) -> Value {
+        let mut v = json!({
+            "kind": self.kind.id(),
+            "action": self.action.key(),
+            "binding": self.binding.format(os),
+            "fix": self.fix.to_json(os),
+            "message": self.message(os),
+        });
+        if let (Some(app), Some(obj)) = (self.app, v.as_object_mut()) {
+            obj.insert("app".to_owned(), json!(app.id()));
+        }
+        v
+    }
+}
+
+/// The environment conflict of one talk key, if any.
+fn talk_conflict(os: Os, talk: TalkBinding, env: &KeyboardEnv) -> Option<ConflictKind> {
+    match os {
+        Os::MacOs => {
+            let dictation = matches!(
+                (env.dictation, talk),
+                (
+                    Some(DictationShortcut::ControlTwice),
+                    TalkBinding::RightControl
+                ) | (
+                    Some(
+                        DictationShortcut::RightCommandTwice
+                            | DictationShortcut::EitherCommandTwice
+                    ),
+                    TalkBinding::RightCommand
+                )
+            );
+            if dictation {
+                Some(ConflictKind::Dictation)
+            } else if env.voice_over && talk == TalkBinding::RightControl {
+                Some(ConflictKind::VoiceOver)
+            } else {
+                None
+            }
+        }
+        Os::Windows => match talk {
+            TalkBinding::RightOption if env.alt_gr_layout => Some(ConflictKind::AltGr),
+            TalkBinding::RightControl if env.copilot_key => Some(ConflictKind::CopilotKey),
+            _ => None,
+        },
+    }
+}
+
+/// The first talk key of the ladder with no environment conflict.
+fn ladder_pick(os: Os, env: &KeyboardEnv) -> Option<TalkBinding> {
+    talk_key_ladder(os)
+        .iter()
+        .copied()
+        .find(|t| talk_conflict(os, *t, env).is_none())
+}
+
+/// The fix of a talk-key conflict: the next free step of the ladder, else the OS setting.
+fn talk_fix(os: Os, kind: ConflictKind, env: &KeyboardEnv) -> Fix {
+    match ladder_pick(os, env) {
+        Some(t) => Fix::UseBinding {
+            action: HotkeyAction::Ptt,
+            binding: Binding::Talk(t),
+        },
+        None => Fix::OpenSystemSettings {
+            pane: match kind {
+                ConflictKind::Dictation => SettingsPane::Dictation,
+                ConflictKind::VoiceOver => SettingsPane::VoiceOver,
+                _ => SettingsPane::KeyboardLayout,
+            },
+        },
+    }
+}
+
+/// The fix of a chord conflict: the D66 default of the action.
+fn default_fix(os: Os, action: HotkeyAction) -> Fix {
+    let binding = default_bindings(os)
+        .get(action)
+        .unwrap_or(Binding::Talk(TalkBinding::RightOption));
+    Fix::UseBinding { action, binding }
+}
+
+/// The key conflict of one chord, if any.
+fn chord_conflict(os: Os, binding: Binding, env: &KeyboardEnv) -> Option<ConflictKind> {
+    let Binding::Chord { mods, .. } = binding else {
+        return None;
+    };
+    if binding.uses_fn_globe() {
+        return Some(ConflictKind::FnGlobe);
+    }
+    if reserved(os).contains(&binding) {
+        return Some(ConflictKind::Reserved);
+    }
+    match os {
+        Os::MacOs if binding.has_ctrl_alt() => Some(ConflictKind::VoiceOver),
+        Os::Windows if binding == WIN_H => Some(ConflictKind::Dictation),
+        Os::Windows if env.copilot_key && binding == COPILOT_CHORD => {
+            Some(ConflictKind::CopilotKey)
+        }
+        Os::Windows
+            if env.alt_gr_layout && binding.has_ctrl_alt() && !mods.contains(Mods::META) =>
+        {
+            Some(ConflictKind::AltGr)
+        }
+        _ => None,
     }
 }
 
 /// Check `bindings` for conflicts in `env` (CAP-43b). Every conflict has a fix.
-pub fn check_conflicts(_os: Os, _bindings: &HotkeyBindings, _env: &KeyboardEnv) -> Vec<Conflict> {
-    Vec::new()
+///
+/// Order: per action in [`HotkeyAction::ALL`] order, the key conflict, then a duplicate of
+/// an earlier action; then one notice per running voice app.
+pub fn check_conflicts(os: Os, bindings: &HotkeyBindings, env: &KeyboardEnv) -> Vec<Conflict> {
+    let mut out = Vec::new();
+    let mut seen: Vec<(HotkeyAction, Binding)> = Vec::new();
+    for (action, binding) in bindings.iter() {
+        let own = match binding {
+            Binding::Talk(t) => talk_conflict(os, t, env).map(|k| (k, talk_fix(os, k, env))),
+            Binding::Chord { .. } => {
+                chord_conflict(os, binding, env).map(|k| (k, default_fix(os, action)))
+            }
+        };
+        if let Some((kind, fix)) = own {
+            out.push(Conflict::new(kind, action, binding, fix));
+        } else if seen.iter().any(|(_, b)| *b == binding) {
+            out.push(Conflict::new(
+                ConflictKind::Duplicate,
+                action,
+                binding,
+                default_fix(os, action),
+            ));
+        }
+        seen.push((action, binding));
+    }
+    if let Some(Binding::Talk(talk)) = bindings.get(HotkeyAction::Ptt) {
+        for app in &env.voice_apps {
+            out.push(Conflict {
+                app: Some(*app),
+                ..Conflict::new(
+                    ConflictKind::VoiceApp,
+                    HotkeyAction::Ptt,
+                    Binding::Talk(talk),
+                    Fix::ChangeOtherApp { app: *app },
+                )
+            });
+        }
+    }
+    out
 }
 
 /// The result of the first-run check.
@@ -409,10 +964,16 @@ pub struct FirstRunReport {
 
 /// The first-run conflict check (CAP-43b): check the D66 defaults in `env`, and pick the
 /// first talk key of the ladder with no conflict.
-pub fn first_run_check(os: Os, _env: &KeyboardEnv) -> FirstRunReport {
+pub fn first_run_check(os: Os, env: &KeyboardEnv) -> FirstRunReport {
+    let defaults = default_bindings(os);
+    let conflicts = check_conflicts(os, &defaults, env);
+    let mut suggested = defaults;
+    if let Some(t) = ladder_pick(os, env) {
+        suggested.set(HotkeyAction::Ptt, Binding::Talk(t));
+    }
     FirstRunReport {
-        conflicts: Vec::new(),
-        suggested: default_bindings(os),
+        conflicts,
+        suggested,
     }
 }
 
@@ -427,27 +988,65 @@ pub struct HotkeysSetOutcome {
 
 impl HotkeysSetOutcome {
     /// The `{conflicts}` result of the `hotkeys_set` command (section 4.5).
-    pub fn result_json(&self, _os: Os) -> Value {
-        json!({})
+    pub fn result_json(&self, os: Os) -> Value {
+        let conflicts: Vec<Value> = self.conflicts.iter().map(|c| c.to_json(os)).collect();
+        json!({ "conflicts": conflicts })
+    }
+}
+
+/// The binding fits the action: the talk key is modifier-only, every other key is a chord.
+fn fits(action: HotkeyAction, binding: Binding) -> bool {
+    match binding {
+        Binding::Talk(_) => action == HotkeyAction::Ptt,
+        Binding::Chord { .. } => action != HotkeyAction::Ptt,
     }
 }
 
 /// The pure logic of `hotkeys_set {bindings}`: apply the binding strings in `input` to
 /// `current` and return the conflicts. A key that is not an action is an error
-/// (`unknown_hotkey_action`).
+/// (`unknown_hotkey_action`). A string that Bottle cannot read, or that does not fit the
+/// action, keeps the old binding and gives an [`ConflictKind::Invalid`] conflict.
 pub fn hotkeys_set(
-    _os: Os,
+    os: Os,
     current: &HotkeyBindings,
-    _input: &JsonObject,
-    _env: &KeyboardEnv,
+    input: &JsonObject,
+    env: &KeyboardEnv,
 ) -> CoreResult<HotkeysSetOutcome> {
-    let _ = CoreError::Unavailable {
-        component: ID,
-        reason: "unknown_hotkey_action",
-    };
+    let mut bindings = current.clone();
+    let mut invalid = Vec::new();
+    for (key, value) in input {
+        let action = HotkeyAction::from_key(key).ok_or(CoreError::Unavailable {
+            component: ID,
+            reason: "unknown_hotkey_action",
+        })?;
+        let parsed = value
+            .as_str()
+            .and_then(|s| Binding::parse(os, s).ok())
+            .filter(|b| fits(action, *b));
+        match parsed {
+            Some(b) => bindings.set(action, b),
+            None => {
+                let old = current
+                    .get(action)
+                    .or_else(|| default_bindings(os).get(action))
+                    .unwrap_or(Binding::Talk(TalkBinding::RightOption));
+                invalid.push(Conflict::new(
+                    ConflictKind::Invalid,
+                    action,
+                    old,
+                    Fix::UseBinding {
+                        action,
+                        binding: old,
+                    },
+                ));
+            }
+        }
+    }
+    let mut conflicts = invalid;
+    conflicts.extend(check_conflicts(os, &bindings, env));
     Ok(HotkeysSetOutcome {
-        bindings: current.clone(),
-        conflicts: Vec::new(),
+        bindings,
+        conflicts,
     })
 }
 
@@ -1053,6 +1652,22 @@ mod tests {
                     binding: b(MAC, "Ctrl+Shift+M")
                 }
             );
+        }
+    }
+
+    #[test]
+    fn cap_43b_hotkeys_set_refuses_a_binding_that_does_not_fit_the_action() {
+        // The talk key is modifier-only; the other keys are chords.
+        for (key, s) in [("ptt", "Ctrl+Shift+K"), ("panic", "RightOption")] {
+            let out = hotkeys_set(
+                MAC,
+                &default_bindings(MAC),
+                &input(&[(key, json!(s))]),
+                &KeyboardEnv::default(),
+            )
+            .unwrap();
+            assert_eq!(out.bindings, default_bindings(MAC), "{key}");
+            assert_eq!(kinds(&out.conflicts), vec![ConflictKind::Invalid], "{key}");
         }
     }
 
