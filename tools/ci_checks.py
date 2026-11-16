@@ -9,6 +9,7 @@ Each check prints PASS or FAIL. The script exits non-zero if any check fails.
   brand       the mascot has no Lava FF3621 fill and no Tail, Wisp or Brick node (UX-10a/b, AT-37)
   artifacts   no build output (build/, *.riv, *.rev) is committed
   gates       no release gate is reported as a pass without evidence (AT-22, scripts/check_gate_evidence.py)
+  names       UI text and package metadata use "Bottle", the Labs label and the MOG noun (MB-10a/b/c, AT-37)
 
 Run:  uv run python tools/ci_checks.py [check ...]
 The html and mascot checks regenerate the file; if it changes, commit the result.
@@ -83,8 +84,82 @@ def check_gates():
     return proc.returncode == 0, (proc.stdout + proc.stderr).strip()
 
 
+# ---------- names: MB-10a, MB-10b, MB-10c, AT-37 (#71, ADR 0030) ----------
+# The pnpm test `src/acceptance/at-37-naming.test.tsx` also renders the views; this check runs in
+# the repo-checks workflow today. Patterns are built from parts so this file holds no banned name.
+LABS_TITLE = "Bottle (Databricks Labs / experimental)"
+BANNED_NAME = re.compile("mo" + "ther" + r"[\s_-]*" + "bri" + "cks", re.IGNORECASE)
+MOG_NOUN = re.compile(r"(?<![\w./:<>-])mogs?(?![\w/:<>-]|\.\w)", re.IGNORECASE)
+VIEW_PAGES = ("hub.html", "mog.html", "card.html", "brain.html")
+NAME_FILES = VIEW_PAGES + ("package.json", "Cargo.toml", "THIRD_PARTY_NOTICES.md",
+                           "src-tauri/tauri.conf.json", "src-tauri/Cargo.toml")
+NAME_DIRS = ("src", "src-tauri/src", "src-tauri/capabilities", "src-tauri/permissions", "docs/user")
+SKIP_DIRS = {"node_modules", "target", "dist", "icons", "gen"}
+
+
+def naming_files(root):
+    """Repository-relative paths of UI text and package metadata (ADR 0030)."""
+    found = [f for f in NAME_FILES if os.path.isfile(os.path.join(root, f))]
+    crates = os.path.join(root, "crates")
+    dirs = list(NAME_DIRS)
+    if os.path.isdir(crates):
+        for c in sorted(os.listdir(crates)):
+            found += [f"crates/{c}/Cargo.toml"] if os.path.isfile(os.path.join(crates, c, "Cargo.toml")) else []
+            dirs.append(f"crates/{c}/src")
+    for d in dirs:
+        for dirpath, dirnames, filenames in os.walk(os.path.join(root, d)):
+            dirnames[:] = sorted(n for n in dirnames if n not in SKIP_DIRS)
+            for name in sorted(filenames):
+                if re.search(r"\.test\.tsx?$|\.(png|icns|ico|riv|wasm)$", name):
+                    continue
+                found.append(os.path.relpath(os.path.join(dirpath, name), root).replace(os.sep, "/"))
+    return found
+
+
+def mog_noun_hits(text):
+    return [w for w in MOG_NOUN.findall(text) if w not in ("MOG", "MOGs")]
+
+
+def naming_problems(root):
+    problems = []
+    texts = {}
+    for rel in naming_files(root):
+        with open(os.path.join(root, rel), encoding="utf-8", errors="replace") as f:
+            texts[rel] = f.read()
+        for hit in BANNED_NAME.findall(texts[rel]):
+            problems.append(f"{rel}: former product name {hit!r} (MB-10a)")
+    titles = {}
+    for rel in VIEW_PAGES:
+        m = re.search(r"<title>(.*?)</title>", texts.get(rel, ""), re.IGNORECASE | re.DOTALL)
+        if m:
+            titles[rel] = m.group(1).strip()
+    if titles.get("hub.html") != LABS_TITLE:
+        problems.append(f"hub.html: the page title must be {LABS_TITLE!r} (Labs label, MB-10b)")
+    windows = texts.get("src-tauri/src/windows.rs", "")
+    window_titles = re.findall(r'\btitle:\s*"([^"]*)"', windows)
+    if LABS_TITLE not in window_titles:
+        problems.append(f"src-tauri/src/windows.rs: the hub title must be {LABS_TITLE!r} (Labs label, MB-10b)")
+    nouns = [(f"{rel} <title>", t) for rel, t in titles.items()]
+    nouns += [("src-tauri/src/windows.rs title", t) for t in window_titles]
+    for rel, text in texts.items():
+        if rel.startswith("docs/user/") and rel.endswith(".md"):
+            prose = re.sub(r"^(```|~~~).*?^\1", "", text, flags=re.MULTILINE | re.DOTALL)
+            nouns.append((rel, re.sub(r"`[^`\n]*`", "", prose)))
+    for where, text in nouns:
+        for hit in mog_noun_hits(text):
+            problems.append(f"{where}: write MOG, not {hit!r} (MB-10c)")
+    return problems
+
+
+def check_names():
+    problems = naming_problems(ROOT)
+    return (not problems), ("\n".join(problems) if problems
+                            else "Bottle, the Labs label and the MOG noun hold in UI text and metadata")
+
+
 CHECKS = {"compile": check_compile, "html": check_html, "mascot": check_mascot,
-          "brand": check_brand, "artifacts": check_artifacts, "gates": check_gates}
+          "brand": check_brand, "artifacts": check_artifacts, "gates": check_gates,
+          "names": check_names}
 
 
 def main(names):
