@@ -71,7 +71,6 @@ describe('Pages preflight (PG-11, PG-12, ARC-F15)', () => {
 
   it('[ARC-F15] [PG-12] [ADM-21] maps a Pages API status to a checklist item', () => {
     expect(classifyPagesResponse({ status: 200 })).toBe('ok');
-    expect(classifyPagesResponse({ status: 409 })).toBe('ok');
     expect(classifyPagesResponse({ status: 403 })).toBe('NO_SCOPE');
     expect(classifyPagesResponse({ status: 401, json: { message: 'invalid scope' } })).toBe(
       'NO_SCOPE',
@@ -82,10 +81,54 @@ describe('Pages preflight (PG-11, PG-12, ARC-F15)', () => {
     expect(classifyPagesResponse({ status: 404, json: { error_code: 'ENDPOINT_NOT_FOUND' } })).toBe(
       'PAGES_BETA_OFF',
     );
+    expect(classifyPagesResponse({ status: 500 })).toBe('other');
+  });
+
+  it('[ARC-F15] [PG-07] a 409 counts as created only with the same request_id', () => {
+    const same = { status: 409, json: { error_code: 'ALREADY_EXISTS', request_id: 'rq-1' } };
+    expect(classifyPagesResponse(same, { requestId: 'rq-1' })).toBe('ok');
+    expect(classifyPagesResponse(same, { requestId: 'rq-2' })).toBe('other');
+    expect(classifyPagesResponse(same)).toBe('other');
+    const other = { status: 409, json: { error_code: 'ALREADY_EXISTS', message: 'name taken' } };
+    expect(classifyPagesResponse(other, { requestId: 'rq-1' })).toBe('other');
+    expect(classifyPagesResponse({ status: 409 }, { requestId: 'rq-1' })).toBe('other');
+  });
+
+  it('[PG-11] [ADM-20] a reply that the domain does not exist maps to checklist item 10', () => {
     expect(
       classifyPagesResponse({ status: 404, json: { error_code: 'RESOURCE_DOES_NOT_EXIST' } }),
+    ).toBe('DOMAIN_NOT_FOUND');
+    expect(
+      classifyPagesResponse({
+        status: 400,
+        json: { error_code: 'INVALID_PARAMETER_VALUE', message: 'Domain domains/x not found' },
+      }),
+    ).toBe('DOMAIN_NOT_FOUND');
+    expect(
+      classifyPagesResponse({
+        status: 400,
+        json: { error_code: 'INVALID_PARAMETER_VALUE', message: 'synonyms too long' },
+      }),
     ).toBe('other');
-    expect(classifyPagesResponse({ status: 500 })).toBe('other');
+  });
+
+  it('[ADM-20] a cut domain list (truncated) skips the membership check', () => {
+    const domains = {
+      kind: 'list',
+      domains: [{ id: D2, name: 'Sales' }],
+      truncated: true,
+    } as const;
+    expect(pagesPreflight({ ...base, domainId: D1, scopes: ['knowledge'], domains })).toEqual({
+      ok: true,
+      domainId: D1,
+    });
+  });
+
+  it('[ADM-15] item 18 names every Bottle scope of Table ADM-SCOPE', () => {
+    const r = pagesPreflight({ ...base, domainId: D1, scopes: ['ai-gateway'] });
+    const item = r.ok ? '' : (r.failure.items[0] ?? '');
+    for (const s of ['ai-gateway', 'offline_access', 'knowledge', 'genie', 'postgres', 'all-apis'])
+      expect(item).toContain(s);
   });
 
   it('[PG-11] [AT-41] no create call occurs without a domain ID', async () => {
@@ -105,6 +148,7 @@ describe('Pages preflight (PG-11, PG-12, ARC-F15)', () => {
     const r = await withPagesPreflight({ ...base, domainId: D1, scopes: ['knowledge'] }, create);
     expect(r).toEqual({
       ok: true,
+      created: true,
       res: { status: 200, json: { name: 'pages/1', state: 'DRAFT' } },
     });
     expect(createCalls()).toHaveLength(1);
@@ -123,10 +167,35 @@ describe('Pages preflight (PG-11, PG-12, ARC-F15)', () => {
     expect(off.ok ? '' : off.failure.text).toMatch(/Unity Catalog Pages \(Beta\) is off/);
   });
 
+  it('[ARC-F15] [PG-07] a 409 with the sent request_id is created; another 409 keeps the draft', async () => {
+    const conflict = { status: 409, json: { error_code: 'ALREADY_EXISTS', request_id: 'rq-1' } };
+    core.invoke.mockResolvedValueOnce(conflict);
+    const same = await withPagesPreflight({ ...base, domainId: D1, requestId: 'rq-1' }, create);
+    expect(same).toEqual({ ok: true, created: true, res: conflict });
+    core.invoke.mockResolvedValueOnce({ status: 409, json: { error_code: 'ALREADY_EXISTS' } });
+    const other = await withPagesPreflight({ ...base, domainId: D1, requestId: 'rq-1' }, create);
+    expect(other).toEqual({
+      ok: true,
+      created: false,
+      res: { status: 409, json: { error_code: 'ALREADY_EXISTS' } },
+    });
+  });
+
+  it('[PG-11] [ADM-20] a create reply that the domain does not exist shows checklist item 10', async () => {
+    core.invoke.mockResolvedValueOnce({
+      status: 404,
+      json: { error_code: 'RESOURCE_DOES_NOT_EXIST' },
+    });
+    const r = await withPagesPreflight({ ...base, domainId: D1 }, create);
+    expect(r.ok ? '' : r.failure.code).toBe('DOMAIN_NOT_FOUND');
+    expect(r.ok ? [] : r.failure.checklist).toEqual([10]);
+  });
+
   it('[ARC-F15] other replies go back to the caller, which keeps the draft for Retry', async () => {
     core.invoke.mockResolvedValueOnce({ status: 500 });
     expect(await withPagesPreflight({ ...base, domainId: D1 }, create)).toEqual({
       ok: true,
+      created: false,
       res: { status: 500 },
     });
   });

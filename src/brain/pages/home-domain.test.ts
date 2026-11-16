@@ -33,6 +33,9 @@ describe('home domain input (PG-20)', () => {
     expect(parseDomainInput('Finance team')).toBeUndefined();
     expect(parseDomainInput(`${HOST}/explore/data`)).toBeUndefined();
     expect(parseDomainInput('domains/')).toBeUndefined();
+    expect(parseDomainInput('domains/%E0%A4%A')).toBeUndefined();
+    expect(parseDomainInput('domains/%E0')).toBeUndefined();
+    expect(parseDomainInput(`${HOST}/explore/domains/%ZZ`)).toBeUndefined();
   });
 
   it('[PG-18] keys a workspace by its host, in one form', () => {
@@ -105,6 +108,11 @@ describe('PageDomains: one home domain per MOG per workspace (PG-18, PG-19)', ()
     ).toEqual({ ok: true, domainId: D2 });
     expect(d.homeDomain(MOG, HOST)).toBe(D1);
     expect(d.draftDomain('r1', MOG, HOST)).toBe(D2);
+    for (const text of ['domains/%E0%A4%A', 'domains/%E0']) {
+      const bad = d.onViewInput(MOG, HOST, { target: 'domain_paste', scope: 'home', text });
+      expect(bad?.ok).toBe(false);
+    }
+    expect(d.homeDomain(MOG, HOST)).toBe(D1);
     expect(d.onViewInput(MOG, HOST, { target: 'pin', blurbId: 'b' })).toBeUndefined();
     expect(d.onViewInput(MOG, HOST, { target: 'domain', scope: 'draft' })).toBeUndefined();
   });
@@ -118,6 +126,7 @@ describe('domain picker list (PG-20)', () => {
     const r = await listDomains('p', MOG);
     expect(r).toEqual({
       kind: 'list',
+      truncated: false,
       domains: [
         { id: D1, name: `D ${D1}` },
         { id: D2, name: `D ${D2}` },
@@ -160,6 +169,25 @@ describe('domain picker list (PG-20)', () => {
     expect(r.kind === 'paste' ? r.text : '').toMatch(
       /Paste the domain ID or its Catalog Explorer URL/,
     );
+  });
+
+  it('[PG-20] a 401 on the list asks the user to sign in again, not for MANAGE DISCOVER', async () => {
+    core.invoke.mockResolvedValueOnce({ status: 401, json: { error_code: 'UNAUTHENTICATED' } });
+    const r = await listDomains('p', MOG);
+    expect(r.kind === 'paste' ? r.reason : '').toBe('auth');
+    expect(r.kind === 'paste' ? r.text : '').toMatch(/sign-in .*expired/i);
+    expect(r.kind === 'paste' ? r.text : '').not.toMatch(/MANAGE DISCOVER/);
+  });
+
+  it('[PG-20] a list longer than 20 pages comes back marked truncated', async () => {
+    core.invoke.mockImplementation(async () => listed([D1], 'more'));
+    const r = await listDomains('p', MOG);
+    expect(core.invoke).toHaveBeenCalledTimes(20);
+    expect(r.kind === 'list' ? r.truncated : undefined).toBe(true);
+    core.reset();
+    core.invoke.mockResolvedValueOnce(listed([D1]));
+    const one = await listDomains('p', MOG);
+    expect(one.kind === 'list' ? one.truncated : undefined).toBe(false);
   });
 
   it('[PG-20] a failed call or an odd body also falls back to paste', async () => {

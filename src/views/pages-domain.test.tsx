@@ -75,6 +75,23 @@ describe('domain picker views', () => {
     ]);
   });
 
+  it('[PG-18] [PG-20] a current domain that is not in the list shows a placeholder, so every option can be picked', async () => {
+    const { el } = await mount(<Hub />);
+    await tauri.emit('mog:view_state', {
+      mogId: ID,
+      mood: 'idle',
+      overlays,
+      homeDomain: { scope: 'home', current: { id: 'gone-domain' }, options },
+    });
+    const select = el.querySelector('[data-domain-picker="home"] select') as HTMLSelectElement;
+    expect(select.value).toBe('');
+    expect([...select.options].map((o) => o.value)).toEqual(['', D1, D2]);
+    await choose(select, D1);
+    expect(viewEmits()).toEqual([
+      { mogId: ID, kind: 'click', payload: { target: 'domain', scope: 'home', domainId: D1 } },
+    ]);
+  });
+
   it('[PG-20] without the domain list the hub offers a paste field and sends the raw text', async () => {
     const { el } = await mount(<Hub />);
     await tauri.emit('mog:view_state', {
