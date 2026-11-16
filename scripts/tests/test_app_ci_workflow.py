@@ -1,7 +1,11 @@
 """Tests for the app CI workflow and the pinned lockfiles (NFR-13a, NFR-15a/b, SEC-26, AT-37, #227).
 
+On pull_request App CI runs on Windows only; push to main, the nightly schedule and dispatch run
+macOS and Windows. Developers run scripts/pre-push.sh on macOS before each push.
+
 Run:  uv run --no-project --with pytest --with pyyaml pytest scripts/tests -q
 """
+import json
 import re
 
 import pytest
@@ -31,17 +35,65 @@ def all_runs(wf):
     return "\n".join(runs(j) for j in wf["jobs"].values())
 
 
-def matrix_oses(job):
-    include = job.get("strategy", {}).get("matrix", {}).get("include", [])
-    return {item.get("os") for item in include} | set(job.get("strategy", {}).get("matrix", {}).get("os", []))
+# The matrix is chosen per event: `github.event_name == 'pull_request' && '<PR JSON>' || '<other JSON>'`.
+EVENT_MATRIX = re.compile(r"github\.event_name == 'pull_request' && '(\[.*?\])' \|\| '(\[.*?\])'")
+EVENTS = ("pull_request", "push", "schedule", "workflow_dispatch")
+MATRIX_JOBS = ("checks", "offline-build", "golden-set", "package")
+
+
+def matrix_entries(job, event):
+    """The matrix entries (dicts with at least `os`) that the job runs for one event."""
+    matrix = job.get("strategy", {}).get("matrix", {})
+    for key in ("os", "include"):
+        value = matrix.get(key)
+        if isinstance(value, str):
+            m = EVENT_MATRIX.search(value)
+            assert m, f"matrix.{key} is not an event-chosen fromJSON expression: {value}"
+            value = json.loads(m.group(1) if event == "pull_request" else m.group(2))
+        if value:
+            return [{"os": i} if key == "os" else i for i in value]
+    return []
+
+
+def matrix_oses(job, event=None):
+    """The runner OSes of the job for one event, or for all events when event is None."""
+    return {e.get("os") for ev in ([event] if event else EVENTS) for e in matrix_entries(job, ev)}
 
 
 def test_nfr_13a_app_ci_runs_on_macos_arm64_and_windows(app_ci):
-    """[NFR-13a] The check, build and package jobs run on macOS (arm64) and on Windows."""
-    for name in ("checks", "offline-build", "package"):
-        oses = matrix_oses(app_ci["jobs"][name])
-        assert "macos-15" in oses or "macos-14" in oses, f"{name}: no arm64 macOS runner in {oses}"
-        assert any(o and o.startswith("windows") for o in oses), f"{name}: no Windows runner in {oses}"
+    """[NFR-13a] On push to main, the nightly schedule and dispatch, the jobs run on macOS (arm64) and Windows."""
+    for event in ("push", "schedule", "workflow_dispatch"):
+        for name in MATRIX_JOBS:
+            oses = matrix_oses(app_ci["jobs"][name], event)
+            assert "macos-15" in oses, f"{name} on {event}: no arm64 macOS runner in {oses}"
+            assert "windows-2025" in oses, f"{name} on {event}: no Windows runner in {oses}"
+
+
+def test_nfr_13a_app_ci_pull_requests_run_on_windows_only(app_ci):
+    """[NFR-13a] On pull_request the jobs run on Windows only; macOS is checked locally with scripts/pre-push.sh."""
+    for name in MATRIX_JOBS:
+        oses = matrix_oses(app_ci["jobs"][name], "pull_request")
+        assert oses == {"windows-2025"}, f"{name} on pull_request runs on {oses}"
+    assert (ROOT / "scripts" / "pre-push.sh").exists(), "scripts/pre-push.sh does not exist"
+
+
+def test_nfr_13a_app_ci_has_a_nightly_schedule_and_all_triggers(app_ci):
+    """[NFR-13a] App CI runs on pull_request, push to main, a nightly schedule off the hour, and dispatch."""
+    on = app_ci.get("on", app_ci.get(True))
+    assert "pull_request" in on and "workflow_dispatch" in on
+    assert on["push"]["branches"] == ["main"]
+    crons = [c["cron"] for c in on.get("schedule") or []]
+    assert crons, "no schedule trigger"
+    for cron in crons:
+        minute, hour, dom, month, dow = cron.split()
+        assert minute.isdigit() and int(minute) != 0, f"cron {cron!r} runs on the hour"
+        assert hour.isdigit() and (dom, month, dow) == ("*", "*", "*"), f"cron {cron!r} is not nightly"
+
+
+def test_nfr_13a_app_ci_cancels_superseded_pr_runs(app_ci):
+    """[NFR-13a] A new push to the same PR ref cancels the run in progress."""
+    assert app_ci["concurrency"]["cancel-in-progress"] is True
+    assert "github.ref" in app_ci["concurrency"]["group"]
 
 
 def test_nfr_13a_app_ci_has_read_only_permissions_and_timeouts(app_ci):
@@ -137,8 +189,9 @@ def test_nfr_15d_package_publishes_a_sha256_file_for_each_artifact(app_ci):
     job = app_ci["jobs"]["package"]
     text = runs(job)
     assert "pnpm tauri build --debug" in text
-    bundles = {item.get("bundles") for item in job["strategy"]["matrix"]["include"]}
-    assert {"dmg", "nsis"} <= bundles
+    bundles = {e.get("os"): e.get("bundles") for e in matrix_entries(job, "push")}
+    assert bundles == {"macos-15": "dmg", "windows-2025": "nsis"}
+    assert [e.get("bundles") for e in matrix_entries(job, "pull_request")] == ["nsis"]
     assert "sha256" in text.lower()
     uploads = [s for s in steps(job) if "actions/upload-artifact" in s.get("uses", "")]
     assert uploads and all(".sha256" in str(s.get("with", {}).get("path", "")) for s in uploads)
@@ -150,9 +203,9 @@ def test_nfr_15c_app_ci_makes_no_mac_app_store_build(app_ci):
 
 
 def test_sec_26_app_ci_has_an_adversarial_golden_set_hook(app_ci):
-    """[SEC-26] A CI job runs the adversarial golden set tests (tagged SEC-26) on both OSes."""
+    """[SEC-26] A CI job runs the adversarial golden set tests (tagged SEC-26) on both OSes on push to main."""
     job = app_ci["jobs"]["golden-set"]
-    assert len(matrix_oses(job)) >= 2
+    assert matrix_oses(job, "push") == {"macos-15", "windows-2025"}
     text = runs(job)
     assert "SEC-26" in text and "sec_26" in text
 

@@ -3,12 +3,24 @@
 # Signing and notarization read secrets and are skipped when the secrets are absent; the release
 # gate rel-03 (#170) supplies the secrets (NFR-15a, NFR-15b). Every action is pinned to a commit
 # SHA (AT-37). Repo checks for the requirements and the mascot stay in repo-checks.yml.
+#
+# Runner policy (#227 follow-up): GitHub's macOS queue held PRs for hours, so the matrix depends on
+# the event.
+# - pull_request: Windows (windows-2025) only. Every PR is built and tested on the author's macOS
+#   (Apple Silicon) machine with scripts/pre-push.sh, and reviewers re-run the checks in fresh
+#   worktrees. Repo checks (repo-checks.yml, Linux) are unchanged.
+# - push to main, the nightly schedule and workflow_dispatch: the full matrix (macos-15 and
+#   windows-2025). A macOS-only break is caught on main or overnight, not on the PR.
+# To run macOS on PRs again, replace each `github.event_name == 'pull_request' && '<windows>' ||`
+# expression below with its second JSON list.
 name: App CI
 
 on:
   pull_request:
   push:
     branches: [main]
+  schedule:
+    - cron: "37 7 * * *" # nightly, off the hour (07:37 UTC)
   workflow_dispatch:
 
 permissions:
@@ -34,9 +46,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: macos-15
-          - os: windows-2025
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["windows-2025"]' || '["macos-15","windows-2025"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
@@ -119,9 +129,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: macos-15
-          - os: windows-2025
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["windows-2025"]' || '["macos-15","windows-2025"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
@@ -170,9 +178,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: macos-15
-          - os: windows-2025
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["windows-2025"]' || '["macos-15","windows-2025"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -207,11 +213,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: macos-15
-            bundles: dmg
-          - os: windows-2025
-            bundles: nsis
+        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"windows-2025","bundles":"nsis"}]' || '[{"os":"macos-15","bundles":"dmg"},{"os":"windows-2025","bundles":"nsis"}]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
