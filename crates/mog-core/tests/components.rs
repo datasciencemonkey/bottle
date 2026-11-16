@@ -107,7 +107,13 @@ fn r6_secret_token_wipe_overwrites_with_zeros() {
 fn r7_http_transport_stub_reports_not_implemented() {
     use mog_core::http_transport::{HttpTransport, StubHttpTransport};
     let s = StubHttpTransport;
-    not_implemented(s.request("p", "scim.me", None), "R7");
+    let tags: mog_core::types::Tags =
+        serde_json::from_value(serde_json::json!({"app": "bottle", "mog": "a1", "op": "genie"}))
+            .unwrap();
+    not_implemented(
+        s.request("p", "scim.me", &Default::default(), None, &tags),
+        "R7",
+    );
     not_implemented(s.is_online(), "R7");
 }
 
