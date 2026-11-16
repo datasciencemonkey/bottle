@@ -110,7 +110,7 @@ describe('contract view payloads (#285, ADR 0040)', () => {
     for (const name of ['MogViewState', 'MogViewState.minimal']) {
       expect(asMogViewState(fixture(name))).toEqual(fixture(name));
     }
-    for (const name of ['CardUpdate', 'CardUpdate.minimal']) {
+    for (const name of ['CardUpdate', 'CardUpdate.sections', 'CardUpdate.minimal']) {
       expect(asCardUpdate(fixture(name))).toEqual(fixture(name));
     }
     for (const name of ['MicLevelFrame', 'MicLevelFrame.closed']) {
