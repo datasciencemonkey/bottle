@@ -12,8 +12,8 @@ says ConsentService stores the record (version, time, user, device). Section 4.3
 ConsentService (T12) in the brain.
 
 The issue did not say where the record lives, how the hub and the brain exchange the notice, or
-where the gate sits. On main, R2 CaptureService (#4) is not built, `capture_start` returns
-`not_implemented`, and no command reaches the local store. The contract has no brain-to-hub event
+where the gate sits. On main, the R2 CaptureService core (#4) is in `mog-core`, but
+`capture_start` is not routed to it and returns `not_implemented`, and no command reaches the local store. The contract has no brain-to-hub event
 and no hub-level view input. The final legal text is not in the requirements.
 
 ## Decisions
