@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "hub",
+  "description": "Hub view window (V1). Thin view: listens to events only.",
+  "windows": ["hub"],
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
+}
