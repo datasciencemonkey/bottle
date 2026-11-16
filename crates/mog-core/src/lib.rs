@@ -5,7 +5,25 @@
 //! links this crate; `mog-core-ffi` exposes the same command and event envelope through
 //! a C ABI. The 17 component modules (R1-R17) land in #225.
 
+pub mod agent_host;
+pub mod bottle_mcp;
+pub mod capture;
+pub mod cli_runner;
+pub mod error;
+pub mod hotkey;
+pub mod http_transport;
+pub mod ipc_gateway;
+#[cfg(feature = "lakebase")]
+pub mod lakebase_pool;
+pub mod local_store;
+pub mod mcp_transport;
+pub mod policy_store;
+pub mod session_guard;
+pub mod stt;
+pub mod token_broker;
 pub mod types;
+pub mod window_host;
+pub mod wipe;
 
 /// The crate version, so hosts can check which core they link.
 pub fn core_version() -> &'static str {
