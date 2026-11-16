@@ -1,4 +1,228 @@
-/** Red stub (#26). */
+/**
+ * The hub MOG list (#26, MB-01, MB-03a, MB-03b). Thin view (ARC-2): it renders the list the brain
+ * sends on `hub:mogs` and sends one hub action per user action with `view_emit`. The brain checks
+ * every value and writes every result text. The view keeps only form and dialog state.
+ * TODO(#407): the event name and the actions move into the contract.
+ */
+import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
+import {
+  asHubMogList,
+  HUB_MOGS_EVENT,
+  HUB_SCOPE,
+  type HubMogList,
+  type HubMogRow,
+  type MogAction,
+} from '../../shared/hub-mogs';
+import { emitView } from '../view-ipc';
+
+function send(action: MogAction): void {
+  void emitView(HUB_SCOPE, 'click', action).catch(() => undefined);
+}
+
+/** The list the brain sends to this window, or null before the brain answers. */
+function useHubMogs(): HubMogList | null {
+  const [list, setList] = useState<HubMogList | null>(null);
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    let gone = false;
+    // ARC-5: only events sent to this window.
+    const target = getCurrentWindow().label;
+    void listen<unknown>(
+      HUB_MOGS_EVENT,
+      (e) => {
+        const l = asHubMogList(e.payload);
+        if (l) setList(l);
+      },
+      { target },
+    ).then((u) => {
+      if (gone) u();
+      else {
+        off = u;
+        send({ action: 'mogs.ready' });
+      }
+    });
+    return () => {
+      gone = true;
+      off?.();
+    };
+  }, []);
+  return list;
+}
+
+function CreateForm() {
+  const [name, setName] = useState('');
+  const [home, setHome] = useState('');
+  const id = useId();
+  return (
+    <form
+      aria-label="Create a MOG"
+      onSubmit={(e) => {
+        e.preventDefault();
+        send({ action: 'mog.create', name, home });
+        setName('');
+      }}
+    >
+      <label htmlFor={`${id}-name`}>Name</label>
+      <input
+        id={`${id}-name`}
+        value={name}
+        maxLength={64}
+        placeholder="MOG 1"
+        onChange={(e) => setName(e.target.value)}
+      />
+      {/* TODO(#17, #163): pick the home profile from the ProfileService list. */}
+      <label htmlFor={`${id}-home`}>Home profile</label>
+      <input id={`${id}-home`} value={home} required onChange={(e) => setHome(e.target.value)} />
+      <button type="submit">Create MOG</button>
+    </form>
+  );
+}
+
+function EditForm({ row, onDone }: { row: HubMogRow; onDone: () => void }) {
+  const [name, setName] = useState(row.name);
+  const [home, setHome] = useState(row.home);
+  const [persona, setPersona] = useState(row.persona);
+  const id = useId();
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') onDone();
+  };
+  return (
+    <form
+      data-edit={row.mogId}
+      aria-label={`Edit ${row.name}`}
+      onKeyDown={onKey}
+      onSubmit={(e) => {
+        e.preventDefault();
+        send({ action: 'mog.edit', mogId: row.mogId, name, home, persona });
+        onDone();
+      }}
+    >
+      <label htmlFor={`${id}-name`}>Name of {row.name}</label>
+      <input
+        id={`${id}-name`}
+        value={name}
+        maxLength={64}
+        autoFocus
+        onChange={(e) => setName(e.target.value)}
+      />
+      <label htmlFor={`${id}-home`}>Home profile of {row.name}</label>
+      <input id={`${id}-home`} value={home} onChange={(e) => setHome(e.target.value)} />
+      <label htmlFor={`${id}-persona`}>Persona instructions</label>
+      <textarea
+        id={`${id}-persona`}
+        value={persona}
+        maxLength={2000}
+        onChange={(e) => setPersona(e.target.value)}
+      />
+      <button type="submit">Save</button>
+      <button type="button" onClick={onDone}>
+        Cancel
+      </button>
+    </form>
+  );
+}
+
+function DeleteDialog({ row, onDone }: { row: HubMogRow; onDone: () => void }) {
+  const cancel = useRef<HTMLButtonElement>(null);
+  const id = useId();
+  useEffect(() => cancel.current?.focus(), []);
+  return (
+    <div
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby={`${id}-title`}
+      aria-describedby={`${id}-text`}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') onDone();
+      }}
+    >
+      <p id={`${id}-title`}>Delete {row.name}?</p>
+      <p id={`${id}-text`}>
+        Bottle removes the settings of this MOG. Its memory and history stay until you use Wipe in
+        Settings.
+      </p>
+      <button
+        type="button"
+        onClick={() => {
+          send({ action: 'mog.delete', mogId: row.mogId, confirmed: true });
+          onDone();
+        }}
+      >
+        Delete
+      </button>
+      <button type="button" ref={cancel} onClick={onDone}>
+        Cancel
+      </button>
+    </div>
+  );
+}
+
+function Row({ row }: { row: HubMogRow }) {
+  const [mode, setMode] = useState<'view' | 'edit' | 'delete'>('view');
+  const done = () => setMode('view');
+  return (
+    <li data-mog-row={row.mogId} data-running={String(row.running)}>
+      <span>{row.name}</span> <span>{row.running ? '(running)' : '(stopped)'}</span>
+      {row.running ? (
+        <button
+          type="button"
+          aria-label={`Stop ${row.name}`}
+          onClick={() => send({ action: 'mog.stop', mogId: row.mogId })}
+        >
+          Stop
+        </button>
+      ) : (
+        <button
+          type="button"
+          aria-label={`Start ${row.name}`}
+          onClick={() => send({ action: 'mog.start', mogId: row.mogId })}
+        >
+          Start
+        </button>
+      )}
+      <button type="button" aria-label={`Edit ${row.name}`} onClick={() => setMode('edit')}>
+        Edit
+      </button>
+      <button
+        type="button"
+        aria-label={`Duplicate ${row.name}`}
+        onClick={() => send({ action: 'mog.duplicate', mogId: row.mogId })}
+      >
+        Duplicate
+      </button>
+      <button type="button" aria-label={`Delete ${row.name}`} onClick={() => setMode('delete')}>
+        Delete
+      </button>
+      {mode === 'edit' && <EditForm row={row} onDone={done} />}
+      {mode === 'delete' && <DeleteDialog row={row} onDone={done} />}
+    </li>
+  );
+}
+
+/** The hub section that lists, creates, edits, duplicates, starts, stops and deletes MOGs. */
 export function MogList() {
-  return null;
+  const list = useHubMogs();
+  const id = useId();
+  const notice = list?.notice;
+  return (
+    <section aria-labelledby={`${id}-h`}>
+      <h2 id={`${id}-h`}>MOGs</h2>
+      <p role="status">
+        {list ? `${list.runningCount} of ${list.maxRunning} MOGs are running.` : ''}
+      </p>
+      <p role="alert">{notice?.kind === 'error' ? notice.text : ''}</p>
+      <p aria-live="polite">{notice?.kind === 'info' ? notice.text : ''}</p>
+      {list && list.unreadable.length > 0 && (
+        <p>{`${list.unreadable.length} MOG configs cannot be read. Bottle keeps the files.`}</p>
+      )}
+      <ul aria-label="Defined MOGs">
+        {(list?.mogs ?? []).map((r) => (
+          <Row key={r.mogId} row={r} />
+        ))}
+      </ul>
+      <CreateForm />
+    </section>
+  );
 }

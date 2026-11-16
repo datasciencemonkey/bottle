@@ -98,7 +98,11 @@ describe('T1 MogManager: the six hub actions (MB-01)', () => {
       ...before,
       name: 'Sales EU',
       persona: 'Be brief.',
-      binding: { ...before?.binding, home: 'new', backend: { kind: 'genie_one_mcp', profile: 'new' } },
+      binding: {
+        ...before?.binding,
+        home: 'new',
+        backend: { kind: 'genie_one_mcp', profile: 'new' },
+      },
     });
   });
 

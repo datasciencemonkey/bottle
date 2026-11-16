@@ -66,7 +66,9 @@ describe('hub MOG list (MB-01, MB-03b)', () => {
     await render(<MogList />);
     expect(tauri.listeners('hub:mogs')).toBe(1);
     expect(tauri.listenOptions.get('hub:mogs')).toEqual([{ target: 'hub' }]);
-    expect(viewEmits()).toEqual([{ mogId: 'hub', kind: 'click', payload: { action: 'mogs.ready' } }]);
+    expect(viewEmits()).toEqual([
+      { mogId: 'hub', kind: 'click', payload: { action: 'mogs.ready' } },
+    ]);
   });
 
   it('[MB-01] lists each MOG with its state and the running count', async () => {
@@ -140,9 +142,7 @@ describe('hub MOG list (MB-01, MB-03b)', () => {
     expect(el.querySelector('[role="alertdialog"]')).toBeNull();
     await click(byLabel(el, 'Delete Sales'));
     await click(byLabel(el, 'Cancel'));
-    expect(actions().filter((a) => (a as { action: string }).action === 'mog.delete')).toEqual(
-      [],
-    );
+    expect(actions().filter((a) => (a as { action: string }).action === 'mog.delete')).toEqual([]);
     await click(byLabel(el, 'Delete Sales'));
     await click(byLabel(el, 'Delete'));
     expect(actions().at(-1)).toEqual({ action: 'mog.delete', mogId: A, confirmed: true });

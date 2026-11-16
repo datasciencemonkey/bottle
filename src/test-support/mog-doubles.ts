@@ -39,9 +39,9 @@ export function memoryConfigs(limit = 256): MemoryConfigs {
     calls,
     async list() {
       calls.push(['list', '']);
-      const items = [...files].map(([id, c]) => ({ id, name: c.name })).sort((a, b) =>
-        a.id < b.id ? -1 : 1,
-      );
+      const items = [...files]
+        .map(([id, c]) => ({ id, name: c.name }))
+        .sort((a, b) => (a.id < b.id ? -1 : 1));
       return { items, unreadable: [...unreadable] };
     },
     async read(id) {
