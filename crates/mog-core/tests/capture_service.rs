@@ -7,9 +7,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use mog_core::capture::{
-    AudioDevice, AudioSource, CaptureCore, CaptureError, CaptureEvents, CaptureRequest,
-    CaptureService, Clock, DeviceError, StopReason, Stopped, HANDS_FREE_MAX_MS, HOLD_MAX_MS,
+    parse_lease, AudioDevice, AudioSource, CaptureCore, CaptureError, CaptureEvents,
+    CaptureRequest, CaptureService, Clock, DeviceError, StopReason, Stopped, HANDS_FREE_MAX_MS,
+    HOLD_MAX_MS,
 };
+use mog_core::ipc::IpcError;
 use mog_core::types::{CaptureMode, CaptureState, OthersTrack};
 
 // ---------- fakes ----------
@@ -318,6 +320,78 @@ fn cap_02a_stop_needs_a_live_lease() {
     let err = r.svc.stop(a.id).unwrap_err();
     assert_eq!(err, CaptureError::UnknownLease);
     assert_eq!(err.code(), "unknown_lease");
+}
+
+#[test]
+fn cap_02a_capture_state_carries_the_lease_that_owns_the_mic() {
+    let r = rig();
+    assert_eq!(r.svc.status().lease_id, None, "no lease when idle");
+    let hf = r.svc.start(req("a", CaptureMode::HandsFree)).unwrap();
+    assert_eq!(r.svc.status().lease_id, Some(hf.lease_id()));
+    // ADR 0007: a PTT over a suspended hands-free shows the PTT lease.
+    let ptt = r.svc.start(req("b", CaptureMode::Ptt)).unwrap();
+    assert_eq!(r.svc.status().lease_id, Some(ptt.lease_id()));
+    r.svc.stop(ptt.id).unwrap();
+    assert_eq!(r.svc.status().lease_id, Some(hf.lease_id()));
+    r.svc.stop(hf.id).unwrap();
+    assert_eq!(r.svc.status().lease_id, None);
+    // Every state event with an owner names a lease.
+    for s in r.events.states.lock().unwrap().iter() {
+        assert_eq!(s.owner.is_some(), s.lease_id.is_some());
+    }
+}
+
+#[test]
+fn cap_02a_directed_ptt_keeps_the_session_lease_in_the_state() {
+    let r = rig();
+    let session = r.svc.start(req("a", CaptureMode::Session)).unwrap();
+    r.svc.start(req("b", CaptureMode::Ptt)).unwrap();
+    let s = r.svc.status();
+    assert_eq!(s.owner.as_deref(), Some("a"));
+    assert_eq!(s.lease_id, Some(session.lease_id()));
+}
+
+#[test]
+fn cap_02a_wire_lease_ids_match_the_contract_and_parse_back() {
+    let r = rig();
+    let lease = r.svc.start(req("a", CaptureMode::Ptt)).unwrap();
+    let wire = lease.lease_id();
+    assert!(!wire.is_empty() && wire.len() <= 64);
+    assert!(wire.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
+    assert_eq!(parse_lease(&wire), Ok(lease.id));
+    for bad in ["", "abc", "-1", "0", "99999999999999999999999"] {
+        assert_eq!(parse_lease(bad), Err(CaptureError::UnknownLease), "{bad:?}");
+    }
+}
+
+#[test]
+fn cap_02a_stale_lease_maps_to_the_typed_ipc_error() {
+    let r = rig();
+    let lease = r.svc.start(req("a", CaptureMode::Ptt)).unwrap();
+    r.svc.stop(lease.id).unwrap();
+    let err = r.svc.stop(lease.id).unwrap_err();
+    let ipc = err.to_ipc("capture_stop");
+    assert_eq!(
+        ipc,
+        IpcError::UnknownLease {
+            command: "capture_stop".into()
+        }
+    );
+    let json = serde_json::to_value(&ipc).unwrap();
+    assert_eq!(json["error"], err.code());
+    let cmd = || "capture_pause".to_string();
+    assert_eq!(
+        CaptureError::MicBusy.to_ipc("capture_pause"),
+        IpcError::MicBusy { command: cmd() }
+    );
+    assert_eq!(
+        CaptureError::InvalidMode.to_ipc("capture_pause"),
+        IpcError::InvalidMode { command: cmd() }
+    );
+    assert_eq!(
+        CaptureError::Device(DeviceError { code: "no_device" }).to_ipc("capture_pause"),
+        IpcError::HostFailed { command: cmd() }
+    );
 }
 
 // ---------- CAP-03: three modes ----------
