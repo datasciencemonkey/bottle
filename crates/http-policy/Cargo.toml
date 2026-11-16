@@ -1,0 +1,12 @@
+[package]
+name = "http-policy"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "Pure token-isolation and response policy for Bottle's HttpTransport (R7)."
+
+[workspace]
+
+[dependencies]
+url = "2.5"
