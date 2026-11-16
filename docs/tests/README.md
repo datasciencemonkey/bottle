@@ -15,6 +15,14 @@ Put the requirement or acceptance-test ID in the test name:
 
 An ID that is not in the requirements makes `req_coverage.py` exit 1.
 
+Rules that stop false positives:
+
+- A bracket token counts only when its prefix is upper case and is a real ID prefix (MB, CAP, AT, ...).
+  So pytest parameter IDs such as `test_x[case-1]` or `[mb-01]` are not tags. `[CAP-999]` is an unknown ID.
+- A snake word counts only when its prefix is a real ID prefix. If it matches no known ID, it is
+  reported as unknown only when its number has 2 or more digits. So `test_w_2` is ignored and
+  `mb_77_x` is the unknown ID MB-77.
+
 ## scripts/req_coverage.py
 
 Writes a coverage report: totals, rows with a passing test per milestone, unknown IDs, MUST rows

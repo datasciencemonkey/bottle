@@ -157,3 +157,50 @@ def test_nfr_23a_real_requirements_must_rows_without_at_are_must_rows(coverage):
     proc, md, data = coverage(REAL_REQUIREMENTS)
     assert set(data["must_without_at"]) <= set(data["must_ids"])
     assert "MUST rows without an AT link" in md
+
+
+def test_nfr_23a_pytest_param_brackets_are_not_ids():
+    """[NFR-23a] pytest parameter IDs like `[case-1]`, `[a-2]` and `[H-264]` are not requirement tags."""
+    import req_parse
+    doc = req_parse.parse(SMALL.read_text())
+    for name in ("test_x[case-1]", "test_y[a-2]", "test_array_1_index[param-1]", "renders [ok] and [H-264]",
+                 "test_z[mb-01]"):
+        assert req_parse.extract_ids(name, doc.known_ids) == (set(), set()), name
+
+
+def test_nfr_23a_bracket_with_known_prefix_and_unknown_id_is_unknown():
+    """[NFR-23a] `[CAP-999]` and `[MB-2]` use a real prefix with a missing ID, so they stay unknown."""
+    import req_parse
+    doc = req_parse.parse(SMALL.read_text())
+    assert req_parse.extract_ids("[CAP-999] x", doc.known_ids) == (set(), {"CAP-999"})
+    assert req_parse.extract_ids("[MB-2] x", doc.known_ids) == (set(), {"MB-2"})
+
+
+def test_nfr_23a_short_snake_numbers_without_match_are_ignored():
+    """[NFR-23a] `test_w_2` and `test_g_1_case` are not IDs: real IDs have 2 digits, except ARC rows."""
+    import req_parse
+    doc = req_parse.parse(SMALL.read_text())
+    assert req_parse.extract_ids("test_w_2", doc.known_ids) == (set(), set())
+    assert req_parse.extract_ids("test_mb_1_case", doc.known_ids) == (set(), set())
+    assert req_parse.extract_ids("arc_1_one_process", doc.known_ids) == ({"ARC-1"}, set())
+
+
+def test_nfr_23a_unknown_snake_id_drops_the_next_word():
+    """[NFR-23a] `mb_77_x` is reported as MB-77, not MB-77x."""
+    import req_parse
+    doc = req_parse.parse(SMALL.read_text())
+    assert req_parse.extract_ids("mb_77_x", doc.known_ids) == (set(), {"MB-77"})
+
+
+def test_nfr_23a_real_file_must_rows_without_at_match_independent_count(coverage):
+    """[NFR-23a] The MUST rows without a 14.3 link equal a separate count from the raw tables."""
+    import re
+    src = REAL_REQUIREMENTS.read_text()
+    s143 = src[src.index("### 14.3"):src.index("## 15. Acceptance tests")]
+    linked = {i.strip() for line in s143.splitlines() if line.startswith("| AT-")
+              for i in line.split("|")[2].split(",")}
+    sec5 = src[src.index("## 5. Requirements tables"):src.index("## 6. ")]
+    must = [m.group(1) for m in re.finditer(r"^\| ([A-Z]+-\d+[a-z]?) \| M \|", sec5, re.M)]
+    proc, md, data = coverage(REAL_REQUIREMENTS)
+    assert data["must_without_at"] == [r for r in must if r not in linked]
+    assert len(data["must_ids"]) == len(must)

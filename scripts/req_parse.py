@@ -159,7 +159,7 @@ def _check_links(doc):
 # ---------------------------------------------------------------- tag extraction
 
 BRACKET_RE = re.compile(r"\[([^\[\]]+)\]")
-TAG_SHAPE = re.compile(r"^[A-Za-z]+-[A-Za-z]?\d+[a-zA-Z]?$")
+TAG_SHAPE = re.compile(r"^([A-Z]+)-[A-Z]?\d+[a-z]?$")
 SNAKE_RE = re.compile(r"(?<![a-z0-9])([a-z]+)_([a-z]?\d+)([a-z]?)(?:_([a-z]))?(?![a-z0-9])")
 
 
@@ -168,14 +168,21 @@ def extract_ids(text, known_ids):
 
     Bracket tags: `[CAP-14b]`, `[MB-02, AT-02]`. Snake names: `cap_14b_stops` -> CAP-14b, matched
     case-insensitively against `known_ids`; the longest known match wins (`mem_01_b` -> MEM-01b
-    when MEM-01b exists). A snake word counts only when its prefix is a known ID prefix.
+    when MEM-01b exists).
+
+    To avoid false positives (pytest parameter IDs such as `test_x[case-1]`, words such as `test_w_2`):
+    - a bracket token counts only when it has an upper-case prefix that is a known ID prefix;
+    - a snake word counts only when its prefix is a known ID prefix, and a snake word that matches no
+      known ID is reported as unknown only when its number has 2 or more digits (as real IDs do).
     """
     lower = {k.lower(): k for k in known_ids}
-    prefixes = {k.split("-")[0].lower() for k in known_ids}
+    upper_prefixes = {k.split("-")[0] for k in known_ids}
+    prefixes = {p.lower() for p in upper_prefixes}
     found, unknown = set(), set()
     for group in BRACKET_RE.findall(text):
         for tok in re.split(r"[,\s]+", group.strip()):
-            if TAG_SHAPE.match(tok):
+            shape = TAG_SHAPE.match(tok)
+            if shape and shape.group(1) in upper_prefixes:
                 hit = lower.get(tok.lower())
                 if hit:
                     found.add(hit)
@@ -200,8 +207,8 @@ def extract_ids(text, known_ids):
         hit = next((lower[c] for c in cands if c in lower), None)
         if hit:
             found.add(hit)
-        else:
-            unknown.add(_canonical(cands[0]))
+        elif len(re.sub(r"\D", "", num)) >= 2:
+            unknown.add(_canonical(f"{prefix}-{num}{letter}"))
         used_next_letter = bool(hit) and not letter and next_letter and hit.lower() == cands[0]
         pos = m.end() if used_next_letter else m.end(3)
     return found, unknown
