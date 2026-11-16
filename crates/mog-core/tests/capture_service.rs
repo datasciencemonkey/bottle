@@ -7,8 +7,9 @@ use std::sync::{Arc, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use mog_core::capture::{
-    parse_lease, AudioSource, CaptureCore, CaptureError, CaptureEvents, CaptureRequest,
-    CaptureService, DeviceError, StopReason, Stopped, HANDS_FREE_MAX_MS, HOLD_MAX_MS,
+    parse_lease, AudioDevice, AudioSource, CaptureCore, CaptureError, CaptureEvents,
+    CaptureRequest, CaptureService, DeviceError, StopReason, Stopped, HANDS_FREE_MAX_MS,
+    HOLD_MAX_MS,
 };
 use mog_core::clock::SimClock;
 use mog_core::ipc::IpcError;
@@ -852,4 +853,103 @@ fn arc_f9_stopping_a_session_turns_its_directed_ptt_into_a_plain_ptt() {
     r.advance(HOLD_MAX_MS);
     r.svc.tick();
     assert_eq!(last_stop(&r).reason, StopReason::HoldCap);
+}
+
+// ---------- re-review fixes: R1, N11 ----------
+
+#[test]
+fn cap_01a_a_start_after_stop_all_waits_for_the_cancelled_open() {
+    let r = Arc::new(rig());
+    r.device.log().open_delay = Duration::from_millis(400);
+    let starter = {
+        let r = Arc::clone(&r);
+        std::thread::spawn(move || r.svc.start(req("a", CaptureMode::Ptt)))
+    };
+    let waited = Instant::now();
+    while !r.device.log().opening {
+        assert!(waited.elapsed() < Duration::from_secs(5), "the open began");
+        std::thread::yield_now();
+    }
+    r.svc.stop_all();
+    // A's open still runs: B must not open the mic beside it.
+    assert_eq!(
+        r.svc.start(req("b", CaptureMode::Ptt)).unwrap_err(),
+        CaptureError::MicBusy
+    );
+    assert_eq!(starter.join().unwrap(), Err(CaptureError::UnknownLease));
+    {
+        let log = r.device.log();
+        assert_eq!(log.max_in_flight, 1, "one open at a time");
+        assert!(!log.mic_open, "the late stream of A is closed");
+    }
+    // After A's open returned, B gets the mic, and a final stop_all leaves nothing open.
+    r.device.log().open_delay = Duration::ZERO;
+    let b = r.svc.start(req("b", CaptureMode::Ptt)).unwrap();
+    assert_eq!(r.svc.status().lease_id, Some(b.lease_id()));
+    r.svc.stop_all();
+    let log = r.device.log();
+    assert!(!log.mic_open && !log.system_open);
+    assert_eq!(log.max_in_flight, 1);
+}
+
+/// A device whose mic fails while (or right after) it opens, before the lease is granted.
+struct FailsDuringOpen {
+    inner: FakeAudioDevice,
+    svc: OnceLock<Weak<CaptureCore>>,
+    armed: std::sync::atomic::AtomicBool,
+}
+
+impl AudioDevice for FailsDuringOpen {
+    fn open(&self, source: AudioSource) -> Result<(), DeviceError> {
+        self.inner.open(source)?;
+        if self.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            if let Some(svc) = self.svc.get().and_then(Weak::upgrade) {
+                svc.device_failed(source);
+            }
+        }
+        Ok(())
+    }
+    fn close(&self, source: AudioSource) {
+        self.inner.close(source);
+    }
+}
+
+#[test]
+fn cap_01a_a_device_failure_before_the_grant_gives_no_lease() {
+    let fake = FakeAudioDevice::new();
+    let device = Arc::new(FailsDuringOpen {
+        inner: fake.clone(),
+        svc: OnceLock::new(),
+        armed: std::sync::atomic::AtomicBool::new(true),
+    });
+    struct Shared(Arc<FailsDuringOpen>);
+    impl AudioDevice for Shared {
+        fn open(&self, source: AudioSource) -> Result<(), DeviceError> {
+            self.0.open(source)
+        }
+        fn close(&self, source: AudioSource) {
+            self.0.close(source);
+        }
+    }
+    let events = Arc::new(RecordingCaptureEvents::default());
+    let svc = Arc::new(CaptureCore::new(
+        Box::new(Shared(Arc::clone(&device))),
+        Arc::new(SimClock::new()),
+        events.clone(),
+    ));
+    device.svc.set(Arc::downgrade(&svc)).ok();
+    let err = svc.start(req("a", CaptureMode::Ptt)).unwrap_err();
+    assert_eq!(
+        err,
+        CaptureError::Device(DeviceError {
+            code: "device_lost"
+        })
+    );
+    assert!(!svc.status().recording, "no lease on a closed stream");
+    assert!(!fake.log().mic_open);
+    assert!(events.stops().is_empty(), "no lease was granted");
+    // The next start opens the mic again.
+    svc.start(req("a", CaptureMode::Ptt)).unwrap();
+    assert!(fake.log().mic_open);
+    assert_eq!(fake.log().mic_opens, 2);
 }

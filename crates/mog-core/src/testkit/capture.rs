@@ -26,6 +26,10 @@ pub struct FakeDeviceLog {
     pub open_delay: Duration,
     /// An open is in progress now.
     pub opening: bool,
+    /// Opens in progress now, over all sources.
+    pub in_flight: u32,
+    /// The most opens that were in progress at the same time.
+    pub max_in_flight: u32,
 }
 
 /// A fake audio device. Clones share one [`FakeDeviceLog`]. It panics if a source opens twice.
@@ -60,13 +64,16 @@ impl AudioDevice for FakeAudioDevice {
                 }
             }
             log.opening = true;
+            log.in_flight += 1;
+            log.max_in_flight = log.max_in_flight.max(log.in_flight);
             log.open_delay
         };
         if !delay.is_zero() {
             std::thread::sleep(delay);
         }
         let mut log = self.log();
-        log.opening = false;
+        log.in_flight -= 1;
+        log.opening = log.in_flight > 0;
         match source {
             AudioSource::Mic => {
                 assert!(!log.mic_open, "the mic must not open twice");
