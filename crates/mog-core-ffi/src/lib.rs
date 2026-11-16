@@ -5,10 +5,13 @@
 //!
 //! Rules:
 //! - `mog_call` takes the IPC call envelope `{"command": "...", "args": {...}}` as a C string,
-//!   with no other key. It always returns a JSON C string: `{"ok": <result>}` on success or
-//!   `{"error": "<code>"}` on failure. The caller frees it with `mog_free_string`.
-//! - Every command goes through R12 `IpcGateway::dispatch`. Errors cross the ABI only as a
-//!   content-free code, for example `{"error":"not_implemented"}`.
+//!   with no other key. It always returns a JSON C string: `{"ok": <result>}` on success (no
+//!   command has a result yet) or `{"error": "<code>", ...}` on failure. The caller frees it
+//!   with `mog_free_string`.
+//! - Every command goes through R12 `mog_core::ipc::handle`, the same gateway as the Tauri host
+//!   (ADR 0003, ADR 0004). The FFI caller has the brain window class. Errors are the serialized
+//!   `IpcError` (for example `{"error":"not_implemented","command":"cli_status"}`), except that
+//!   an unknown command name is never echoed.
 //! - Events reach the host as `{"event": "<name>", "payload": {...}}`, the message shape of the
 //!   brain Channel of the IPC surface (#223). One delivery thread calls the one callback, so the
 //!   core side never waits for the host (NFR-18b).
@@ -26,7 +29,7 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 use std::thread;
 
-use mog_core::ipc_gateway::{IpcGateway, StubIpcGateway};
+use mog_core::ipc::{self, Handled, IpcError};
 use serde_json::{json, Value};
 
 /// The ABI version that `mog_abi_version` returns (NFR-18c).
@@ -41,9 +44,9 @@ pub const MOG_STATUS_INVALID_ARGUMENT: i32 = 1;
 /// Code 2 stays unused: the stubs returned it as "not implemented".
 pub const MOG_STATUS_INTERNAL: i32 = 3;
 
-/// The window label that R12 sees for calls through the C ABI.
-/// TODO(#223): map it to a window class of `mog_core::ipc` when PR #260 lands.
-pub const FFI_WINDOW_LABEL: &str = "ffi";
+/// The window label that R12 sees for calls through the C ABI. The ABI host takes the place of
+/// the brain window, so it gets the brain window class (ADR 0004).
+pub const FFI_WINDOW_LABEL: &str = "brain";
 
 /// The event callback: a JSON event as a C string, plus the host's `user_data`. Null clears it.
 ///
@@ -57,12 +60,8 @@ pub fn linked_core_version() -> &'static str {
     mog_core::core_version()
 }
 
-/// The core instance that `mog_init` starts.
-struct Core {
-    gateway: Box<dyn IpcGateway>,
-}
-
-static CORE: OnceLock<Core> = OnceLock::new();
+/// Set by `mog_init`. The components behind `ipc::handle` start with their feature issues.
+static STARTED: OnceLock<()> = OnceLock::new();
 
 /// Return the ABI version (NFR-18c).
 #[no_mangle]
@@ -90,9 +89,7 @@ pub unsafe extern "C" fn mog_init(config_json: *const c_char) -> i32 {
                 _ => return MOG_STATUS_INVALID_ARGUMENT,
             }
         }
-        CORE.get_or_init(|| Core {
-            gateway: Box::new(StubIpcGateway),
-        });
+        STARTED.get_or_init(|| ());
         MOG_STATUS_OK
     }))
     .unwrap_or(MOG_STATUS_INTERNAL)
@@ -216,11 +213,20 @@ fn events() -> &'static Sender<CString> {
     })
 }
 
-/// Parse the envelope and send it through R12. Only content-free codes come back on error.
+/// Parse the envelope and send it through R12. The reply passes the secret guard (ARC-6).
 fn call_json(text: &str) -> String {
-    let Some(core) = CORE.get() else {
+    let reply = route(text);
+    if contains_secret(&reply) {
+        error_json("secret_blocked")
+    } else {
+        reply
+    }
+}
+
+fn route(text: &str) -> String {
+    if STARTED.get().is_none() {
         return error_json("not_initialized");
-    };
+    }
     let Ok(Value::Object(mut envelope)) = serde_json::from_str(text) else {
         return error_json("invalid_json");
     };
@@ -232,16 +238,14 @@ fn call_json(text: &str) -> String {
     if !envelope.is_empty() {
         return error_json("invalid_json");
     }
-    match core.gateway.dispatch(FFI_WINDOW_LABEL, &command, args) {
-        Ok(value) => {
-            let reply = json!({ "ok": value }).to_string();
-            if contains_secret(&reply) {
-                error_json("secret_blocked")
-            } else {
-                reply
-            }
+    match ipc::handle(FFI_WINDOW_LABEL, &command, args) {
+        // The event callback replaces the brain Channel; no view sends through the ABI.
+        Ok(Handled::SubscribeBrain { .. } | Handled::RelayToBrain { .. }) => {
+            json!({ "error": "not_supported", "command": command }).to_string()
         }
-        Err(e) => error_json(e.code()),
+        // The name came from the caller and is not in the table, so it is not echoed.
+        Err(IpcError::UnknownCommand { .. }) => error_json("unknown_command"),
+        Err(e) => serde_json::to_string(&e).unwrap_or_else(|_| error_json("internal")),
     }
 }
 
