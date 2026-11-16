@@ -9,6 +9,8 @@ Each check prints PASS or FAIL. The script exits non-zero if any check fails.
   brand       the mascot has no Lava FF3621 fill and no Tail, Wisp or Brick node (UX-10a/b, AT-37)
   artifacts   no build output (build/, *.riv, *.rev) is committed
   gates       no release gate is reported as a pass without evidence (AT-22, scripts/check_gate_evidence.py)
+  brandapproval brand approval record and mascot art checks; pending approval is "not passed" and
+              only blocks --external (SEC-22a/b, COL-104, scripts/check_brand_gate.py)
   names       no former name in UI text or metadata, the Labs label in the hub and About, no MOG in
               package or bundle IDs, and MOG only as a noun in UI text (MB-10a/b/c, AT-37, ADR 0030)
   structure   no junk, secrets, binaries or local tool state is committed; no file over 2 MB;
@@ -29,6 +31,8 @@ import subprocess
 import sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(ROOT, "scripts"))
+from check_brand_gate import art_problems  # noqa: E402  one art check (UX-10a/b, AT-37)
 HTML = os.path.join(ROOT, "requirements.html")
 SCENE = os.path.join(ROOT, "mog-rive", "scene.rml")
 
@@ -69,13 +73,7 @@ def check_mascot():
 
 
 def check_brand():
-    text = read(SCENE).decode("utf-8")
-    problems = []
-    if re.search(r"FF3621", text, re.IGNORECASE):
-        problems.append("scene.rml uses Lava FF3621 (UX-10b)")
-    for name in ("Tail", "Wisp", "Brick"):
-        if re.search(rf'name="{name}"', text):
-            problems.append(f'scene.rml has a "{name}" node (UX-10a, AT-37)')
+    problems = art_problems(read(SCENE).decode("utf-8"))
     return (not problems), ("\n".join(problems) if problems else "no FF3621, Tail, Wisp or Brick in scene.rml")
 
 
@@ -208,6 +206,12 @@ def check_gates():
     return proc.returncode == 0, (proc.stdout + proc.stderr).strip()
 
 
+def check_brandapproval():
+    proc = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "check_brand_gate.py")],
+                          cwd=ROOT, capture_output=True, text=True)
+    return proc.returncode == 0, (proc.stdout + proc.stderr).strip()
+
+
 # ---------- names: MB-10a, MB-10b, MB-10c, AT-37 (#71, ADR 0030) ----------
 # This check runs in the repo-checks workflow today. The pnpm test
 # `src/acceptance/at-37-naming.test.tsx` holds the same rules and also renders the views.
@@ -332,6 +336,7 @@ def check_names():
 
 CHECKS = {"compile": check_compile, "html": check_html, "mascot": check_mascot,
           "brand": check_brand, "artifacts": check_artifacts, "gates": check_gates,
+          "brandapproval": check_brandapproval,
           "names": check_names, "structure": check_structure}
 
 
