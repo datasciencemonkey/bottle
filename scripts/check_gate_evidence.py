@@ -14,6 +14,8 @@ Rules (docs/tests/EVIDENCE-TEMPLATE.md has the file format):
    section. So an unrun spike cannot be a pass.
 3. A ticked ([x]) row of the release checklist names one or more docs/evidence/*.md files in its
    Evidence cell. Each file exists, is for the same AT and has Result pass.
+   If every linked file has a Scope that starts with "part" (it covers only some rows of the AT,
+   for example the #171 latency file), the row also needs a file that covers the rest.
 4. A ticked AT-22 row also needs: every other checklist row ticked, an evidence file for every
    spike with a Result other than "not run", and a pass file for each review gate type.
 Exit 1 and print FAIL with one line per problem; else print PASS and exit 0.
@@ -59,6 +61,11 @@ def is_placeholder(text):
     """True when the text has no content: only placeholders, blanks or code-fence lines."""
     lines = [line for line in text.splitlines() if not line.strip().startswith("```")]
     return all(PLACEHOLDER.match(line) for line in lines)
+
+
+def is_part(fields):
+    """True when an evidence file covers only part of its gate (Scope "part ...")."""
+    return fields.get("Scope", "").strip().lower().startswith("part")
 
 
 def valid_date(text):
@@ -124,6 +131,9 @@ def check_checklist(checklist_text, files, errors):
         links = EVIDENCE_LINK.findall(cell)
         if not links:
             errors.append(f"{at}: the row is ticked but has no evidence (link a docs/evidence/*.md file)")
+        linked = [files.get(link.rsplit("/", 1)[1]) for link in links]
+        if links and all(f is not None and is_part(f) for f in linked):
+            errors.append(f"{at}: every linked evidence file has Scope part; link the evidence for the other parts too")
         for link in links:
             name = link.rsplit("/", 1)[1]
             fields = files.get(name)
