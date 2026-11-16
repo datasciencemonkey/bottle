@@ -197,9 +197,10 @@ fn enums_reject_an_unknown_value() {
 
 #[test]
 fn cap_02a_live_capture_state_carries_its_lease_id() {
-    let live: CaptureState =
-        serde_json::from_str(&std::fs::read_to_string(fixture_dir().join("CaptureState.json")).unwrap())
-            .unwrap();
+    let live: CaptureState = serde_json::from_str(
+        &std::fs::read_to_string(fixture_dir().join("CaptureState.json")).unwrap(),
+    )
+    .unwrap();
     assert!(live.recording);
     assert_eq!(live.lease_id.as_deref(), Some("17"));
     let back = serde_json::to_value(&live).unwrap();

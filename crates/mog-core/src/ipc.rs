@@ -163,6 +163,10 @@ pub enum IpcError {
     HostFailed {
         command: String,
     },
+    /// CAP-02a: the lease is unknown, released or not the owner's (R2 returns this).
+    StaleLease {
+        command: String,
+    },
 }
 
 impl std::fmt::Display for IpcError {
@@ -177,6 +181,9 @@ impl std::fmt::Display for IpcError {
             }
             IpcError::NotImplemented { command } => write!(f, "{command} is not implemented"),
             IpcError::HostFailed { command } => write!(f, "the host could not complete {command}"),
+            IpcError::StaleLease { command } => {
+                write!(f, "{command}: the capture lease is not live")
+            }
         }
     }
 }
@@ -195,6 +202,38 @@ pub enum Handled {
 // ---------- shared argument types ----------
 
 pub use crate::types::{CaptureMode, MogId, ProfileName, SessionPolicy, Tags, TranscriptProvider};
+
+/// A lease ID argument (CAP-02a): 1-64 characters of `[A-Za-z0-9-]`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(try_from = "String", into = "String")]
+#[schemars(with = "String")]
+pub struct LeaseRef(String);
+
+impl LeaseRef {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for LeaseRef {
+    type Error = &'static str;
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        let ok = !s.is_empty()
+            && s.len() <= 64
+            && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+        if ok {
+            Ok(LeaseRef(s))
+        } else {
+            Err("not a lease ID")
+        }
+    }
+}
+
+impl From<LeaseRef> for String {
+    fn from(l: LeaseRef) -> String {
+        l.0
+    }
+}
 
 /// The wire prefix of a Tauri `Channel` argument (`__CHANNEL__:<id>`).
 pub const CHANNEL_PREFIX: &str = "__CHANNEL__:";
@@ -287,6 +326,13 @@ args!(CaptureStartArgs {
     others_track: Option<bool>,
 });
 args!(MogArgs { mog_id: MogId });
+args!(
+    /// CAP-02a: stop and pause name the lease they act on. R2 rejects a stale one.
+    CaptureLeaseArgs {
+        mog_id: MogId,
+        lease_id: LeaseRef,
+    }
+);
 args!(CaptureSubscribeArgs {
     on_level: ChannelRef,
     on_partial: ChannelRef,
@@ -511,8 +557,9 @@ macro_rules! for_command {
             "profile_login" => Some($f::<ProfileLoginArgs>()),
             "profile_select" => Some($f::<ProfileSelectArgs>()),
             "capture_start" => Some($f::<CaptureStartArgs>()),
-            "capture_stop" | "capture_pause" | "agent_stop" | "mog_set_active"
-            | "window_mog_close" | "window_card_show" | "window_card_hide" => Some($f::<MogArgs>()),
+            "capture_stop" | "capture_pause" => Some($f::<CaptureLeaseArgs>()),
+            "agent_stop" | "mog_set_active" | "window_mog_close" | "window_card_show"
+            | "window_card_hide" => Some($f::<MogArgs>()),
             "capture_subscribe" => Some($f::<CaptureSubscribeArgs>()),
             "session_attest" => Some($f::<SessionAttestArgs>()),
             "stt_transcribe" => Some($f::<SttTranscribeArgs>()),

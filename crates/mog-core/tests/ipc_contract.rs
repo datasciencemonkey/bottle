@@ -351,15 +351,22 @@ fn cap_02a_stop_and_pause_need_the_lease_id() {
     for cmd in ["capture_stop", "capture_pause"] {
         // No lease: rejected.
         let err = ipc::handle("brain", cmd, json!({"mogId": "a1"})).unwrap_err();
-        assert!(matches!(err, IpcError::InvalidArgs { .. }), "{cmd}: {err:?}");
+        assert!(
+            matches!(err, IpcError::InvalidArgs { .. }),
+            "{cmd}: {err:?}"
+        );
         // A malformed lease: rejected.
         for bad in [json!(""), json!(17), json!("a b"), json!("x".repeat(65))] {
-            let err = ipc::handle("brain", cmd, json!({"mogId": "a1", "leaseId": bad})).unwrap_err();
+            let err =
+                ipc::handle("brain", cmd, json!({"mogId": "a1", "leaseId": bad})).unwrap_err();
             assert!(matches!(err, IpcError::InvalidArgs { .. }), "{cmd} {bad}");
         }
         // A well-formed lease reaches R2 (still a stub).
         let err = ipc::handle("brain", cmd, json!({"mogId": "a1", "leaseId": "17"})).unwrap_err();
-        assert!(matches!(err, IpcError::NotImplemented { .. }), "{cmd}: {err:?}");
+        assert!(
+            matches!(err, IpcError::NotImplemented { .. }),
+            "{cmd}: {err:?}"
+        );
     }
 }
 

@@ -12,6 +12,7 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 import type {
   CaptureMode,
   CaptureState,
+  LeaseId,
   MogId,
   ProfileInfo,
   ProfileName,
@@ -155,8 +156,9 @@ export interface CommandArgs {
     consentToken?: string;
     othersTrack?: boolean;
   };
-  capture_stop: MogArgs;
-  capture_pause: MogArgs;
+  /** CAP-02a: name the lease (ADR 0005). */
+  capture_stop: { mogId: MogId; leaseId: LeaseId };
+  capture_pause: { mogId: MogId; leaseId: LeaseId };
   capture_status: NoArgs;
   capture_stop_all: NoArgs;
   capture_subscribe: { onLevel: Channel<number>; onPartial: Channel<string> };
@@ -228,7 +230,8 @@ export type IpcError =
   | { error: 'window_not_allowed'; command: string; window: string }
   | { error: 'invalid_args'; command: string; reason: string }
   | { error: 'not_implemented'; command: string }
-  | { error: 'host_failed'; command: string };
+  | { error: 'host_failed'; command: string }
+  | { error: 'stale_lease'; command: string };
 
 type Empty = Record<string, never>;
 
