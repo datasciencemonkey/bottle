@@ -5,7 +5,8 @@
 //! label (ARC-4), parses the arguments with `deny_unknown_fields`, and then reaches the
 //! component stub. Arguments never carry a token, a header or a request URL (ARC-6, 4.6).
 //!
-//! Only the foundation lead changes this file (brief, "Contracts").
+//! `COMMANDS` is 4.5 plus `brain_subscribe` (ADR 0003). Only the foundation lead changes this
+//! file (brief, "Contracts").
 
 use schemars::{JsonSchema, Schema};
 use serde::{Deserialize, Serialize};
@@ -129,6 +130,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     row("view_emit", VIEWS),
     row("audit_append", B),
     row("telemetry_span", B),
+    // Not in 4.5 (ADR 0003): the brain's private Channel for core-to-brain traffic.
+    row("brain_subscribe", B),
 ];
 
 /// The row of a command, if it exists.
@@ -142,10 +145,24 @@ pub fn command(name: &str) -> Option<&'static CommandSpec> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "error", rename_all = "snake_case")]
 pub enum IpcError {
-    UnknownCommand { command: String },
-    WindowNotAllowed { command: String, window: String },
-    InvalidArgs { command: String, reason: String },
-    NotImplemented { command: String },
+    UnknownCommand {
+        command: String,
+    },
+    WindowNotAllowed {
+        command: String,
+        window: String,
+    },
+    InvalidArgs {
+        command: String,
+        reason: String,
+    },
+    NotImplemented {
+        command: String,
+    },
+    /// The host could not deliver the result (for example no brain channel yet).
+    HostFailed {
+        command: String,
+    },
 }
 
 impl std::fmt::Display for IpcError {
@@ -159,6 +176,7 @@ impl std::fmt::Display for IpcError {
                 write!(f, "invalid arguments for {command}: {reason}")
             }
             IpcError::NotImplemented { command } => write!(f, "{command} is not implemented"),
+            IpcError::HostFailed { command } => write!(f, "the host could not complete {command}"),
         }
     }
 }
@@ -170,16 +188,46 @@ impl std::error::Error for IpcError {}
 pub enum Handled {
     /// `view_emit`: relay the arguments to the brain as `view:input` (never to a view).
     RelayToBrain { from: String },
+    /// `brain_subscribe`: keep this Channel as the brain's private delivery path.
+    SubscribeBrain { channel: ChannelRef },
 }
 
 // ---------- shared argument types ----------
 
 pub use crate::types::{CaptureMode, MogId, ProfileName, SessionPolicy, Tags, TranscriptProvider};
 
-/// A Tauri `Channel` argument. On the wire it is the channel reference string.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(transparent)]
-pub struct ChannelRef(pub String);
+/// The wire prefix of a Tauri `Channel` argument (`__CHANNEL__:<id>`).
+pub const CHANNEL_PREFIX: &str = "__CHANNEL__:";
+
+/// A Tauri `Channel` argument. On the wire it is `__CHANNEL__:<numeric id>`; other strings fail.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(try_from = "String", into = "String")]
+#[schemars(with = "String")]
+pub struct ChannelRef(String);
+
+impl ChannelRef {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for ChannelRef {
+    type Error = &'static str;
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        match s.strip_prefix(CHANNEL_PREFIX) {
+            Some(id) if !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()) => {
+                Ok(ChannelRef(s))
+            }
+            _ => Err("not a channel reference"),
+        }
+    }
+}
+
+impl From<ChannelRef> for String {
+    fn from(c: ChannelRef) -> String {
+        c.0
+    }
+}
 
 /// A JSON object whose shape another contract owns (for example `AgentTurn` in 4.7).
 pub type JsonObject = BTreeMap<String, Value>;
@@ -437,6 +485,9 @@ args!(AuditAppendArgs {
     /// Content-free sizes, for example `{"chars": 120}`.
     sizes: BTreeMap<String, u64>,
 });
+args!(BrainSubscribeArgs {
+    on_event: ChannelRef
+});
 args!(TelemetrySpanArgs {
     name: String,
     start_ms: u64,
@@ -480,6 +531,7 @@ macro_rules! for_command {
             "view_emit" => Some($f::<ViewEmitArgs>()),
             "audit_append" => Some($f::<AuditAppendArgs>()),
             "telemetry_span" => Some($f::<TelemetrySpanArgs>()),
+            "brain_subscribe" => Some($f::<BrainSubscribeArgs>()),
             _ => None,
         }
     };
@@ -512,11 +564,14 @@ pub fn schema_document() -> Value {
     })
 }
 
+/// The fixed reason for arguments that do not parse. serde messages quote the bad value or
+/// key (for example "unknown variant `dapi...`"), so they never leave the gateway (4.6 rule 7).
+pub const INVALID_ARGS_REASON: &str = "the arguments do not match the command schema";
+
 fn parse<T: for<'de> Deserialize<'de>>(command: &str, args: Value) -> Result<T, IpcError> {
-    serde_json::from_value(args).map_err(|e| IpcError::InvalidArgs {
+    serde_json::from_value(args).map_err(|_| IpcError::InvalidArgs {
         command: command.to_owned(),
-        // serde names the field, not the value, so no argument content leaks into errors.
-        reason: e.to_string(),
+        reason: INVALID_ARGS_REASON.to_owned(),
     })
 }
 
@@ -563,6 +618,15 @@ pub fn handle(window_label: &str, command_name: &str, args: Value) -> Result<Han
             return Ok(Handled::RelayToBrain {
                 from: window_label.to_owned(),
             });
+        }
+        "brain_subscribe" => {
+            let a: BrainSubscribeArgs = parse(spec.name, args)?;
+            return Ok(Handled::SubscribeBrain {
+                channel: a.on_event,
+            });
+        }
+        "config_write" => {
+            // TODO(#25): reject token-like values and secret-named keys (MB-02, 4.5).
         }
         _ => {}
     }

@@ -5,13 +5,60 @@
 //!    a command only if its capability file lists `allow-<command>` (ARC-4).
 //! 2. The R12 gateway (`mog_core::ipc::handle`): window class, `deny_unknown_fields` args.
 //!
-//! The front end calls `invoke(name, { args })`. `view_emit` is relayed to the brain only,
-//! as the `view:input` event (ARC-5).
+//! The front end calls `invoke(name, { args })`; any other top-level key is rejected.
+//! Core-to-brain traffic (including the `view_emit` relay) goes only to the brain, on the
+//! Channel that the brain registers with `brain_subscribe`. It never uses Tauri events,
+//! because every window that may listen gets every Tauri event (ADR 0003).
 
-use mog_core::ipc::{self, events, Handled, IpcError};
+use mog_core::ipc::{self, events, ChannelRef, Handled, IpcError, INVALID_ARGS_REASON};
 use serde_json::{json, Value};
-use tauri::ipc::{Invoke, InvokeBody};
-use tauri::{Emitter, Runtime};
+use std::str::FromStr;
+use std::sync::Mutex;
+use tauri::ipc::{Channel, Invoke, InvokeBody, JavaScriptChannelId};
+use tauri::{Manager, Runtime};
+
+/// The brain's private delivery Channel (set by `brain_subscribe`).
+#[derive(Default)]
+pub struct BrainChannel(Mutex<Option<Channel<Value>>>);
+
+impl BrainChannel {
+    /// Deliver one core-to-brain item as `{ event, payload }`. `false` if no brain listens.
+    pub fn send(&self, event: &str, payload: Value) -> bool {
+        let guard = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        match guard.as_ref() {
+            Some(ch) => ch.send(brain_message(event, payload)).is_ok(),
+            None => false,
+        }
+    }
+
+    fn set(&self, channel: Channel<Value>) {
+        *self.0.lock().unwrap_or_else(|p| p.into_inner()) = Some(channel);
+    }
+}
+
+/// The message shape on the brain Channel.
+pub fn brain_message(event: &str, payload: Value) -> Value {
+    json!({ "event": event, "payload": payload })
+}
+
+/// The `view:input` payload for a `view_emit` call from window `from`.
+pub fn view_input_payload(from: &str, args: Value) -> Value {
+    json!({ "from": from, "input": args })
+}
+
+/// Check the invoke envelope `{ args }` and return the arguments.
+pub fn parse_envelope(command: &str, payload: &InvokeBody) -> Result<Value, IpcError> {
+    let invalid = || IpcError::InvalidArgs {
+        command: command.to_owned(),
+        reason: INVALID_ARGS_REASON.to_owned(),
+    };
+    match payload {
+        InvokeBody::Json(Value::Object(map)) if map.len() == 1 => {
+            map.get("args").cloned().ok_or_else(invalid)
+        }
+        _ => Err(invalid()),
+    }
+}
 
 /// The invoke handler for `tauri::Builder::invoke_handler`.
 pub fn handler<R: Runtime>(invoke: Invoke<R>) -> bool {
@@ -22,31 +69,107 @@ pub fn handler<R: Runtime>(invoke: Invoke<R>) -> bool {
     }
     let webview = invoke.message.webview();
     let label = webview.window().label().to_owned();
-    let args = match invoke.message.payload() {
-        InvokeBody::Json(Value::Object(map)) => map.get("args").cloned().unwrap_or(json!({})),
-        InvokeBody::Json(_) | InvokeBody::Raw(_) => {
-            invoke.resolver.reject(IpcError::InvalidArgs {
-                command: name,
-                reason: "the payload must be a JSON object { args }".to_owned(),
-            });
+    let args = match parse_envelope(&name, invoke.message.payload()) {
+        Ok(a) => a,
+        Err(e) => {
+            invoke.resolver.reject(e);
             return true;
         }
     };
+    let host_failed = || IpcError::HostFailed {
+        command: name.clone(),
+    };
     match ipc::handle(&label, &name, args.clone()) {
         Ok(Handled::RelayToBrain { from }) => {
-            let relayed = webview.emit_to(
-                "brain",
-                events::VIEW_INPUT,
-                json!({ "from": from, "input": args }),
-            );
-            match relayed {
-                Ok(()) => invoke.resolver.resolve(json!({})),
-                Err(_) => invoke
-                    .resolver
-                    .reject(IpcError::NotImplemented { command: name }),
+            let ok = webview
+                .state::<BrainChannel>()
+                .send(events::VIEW_INPUT, view_input_payload(&from, args));
+            if ok {
+                invoke.resolver.resolve(json!({}));
+            } else {
+                invoke.resolver.reject(host_failed());
             }
         }
+        Ok(Handled::SubscribeBrain { channel }) => match channel_on(&channel, &webview) {
+            Some(ch) => {
+                webview.state::<BrainChannel>().set(ch);
+                invoke.resolver.resolve(json!({}));
+            }
+            None => invoke.resolver.reject(host_failed()),
+        },
         Err(e) => invoke.resolver.reject(e),
     }
     true
+}
+
+fn channel_on<R: Runtime>(c: &ChannelRef, webview: &tauri::Webview<R>) -> Option<Channel<Value>> {
+    JavaScriptChannelId::from_str(c.as_str())
+        .ok()
+        .map(|id| id.channel_on(webview.clone()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn body(v: Value) -> InvokeBody {
+        InvokeBody::Json(v)
+    }
+
+    #[test]
+    fn arc_4_envelope_accepts_only_args() {
+        let ok = parse_envelope("profile_status", &body(json!({"args": {"profile": "p"}})));
+        assert_eq!(ok.unwrap(), json!({"profile": "p"}));
+        for bad in [
+            json!({}),
+            json!({"token": "x"}),
+            json!({"args": {}, "headers": {"a": "b"}}),
+            json!([1]),
+            json!("args"),
+        ] {
+            let err = parse_envelope("cli_status", &body(bad.clone())).unwrap_err();
+            assert!(matches!(err, IpcError::InvalidArgs { .. }), "{bad}");
+            assert!(!err.to_string().contains("token") && !err.to_string().contains("headers"));
+        }
+        assert!(parse_envelope("cli_status", &InvokeBody::Raw(vec![1, 2])).is_err());
+    }
+
+    #[test]
+    fn arc_5_view_input_goes_to_the_brain_channel_as_view_input() {
+        let msg = brain_message(
+            events::VIEW_INPUT,
+            view_input_payload("mog-a1", json!({"mogId": "a1", "kind": "poked"})),
+        );
+        assert_eq!(
+            msg,
+            json!({"event": "view:input", "payload": {"from": "mog-a1", "input": {"mogId": "a1", "kind": "poked"}}})
+        );
+    }
+
+    #[test]
+    fn arc_5_no_brain_channel_means_no_delivery() {
+        assert!(!BrainChannel::default().send(events::AGENT_TOOL_CALL, json!({})));
+    }
+
+    #[test]
+    fn arc_5_core_to_brain_items_are_never_tauri_events() {
+        // Any `emit`/`emit_to` in the app crate would broadcast to every listening window.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let text = std::fs::read_to_string(&path).unwrap();
+            // Production code only: stop at the test module.
+            let code: String = text
+                .split("#[cfg(test)]")
+                .next()
+                .unwrap_or_default()
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            for banned in [".emit(", ".emit_to(", ".emit_filter(", "Emitter"] {
+                assert!(!code.contains(banned), "{} uses {banned}", path.display());
+            }
+        }
+    }
 }

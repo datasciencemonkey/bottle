@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-brain-subscribe"
+description = "Enables the brain_subscribe command without any pre-configured scope."
+commands.allow = ["brain_subscribe"]
+
+[[permission]]
+identifier = "deny-brain-subscribe"
+description = "Denies the brain_subscribe command without any pre-configured scope."
+commands.deny = ["brain_subscribe"]

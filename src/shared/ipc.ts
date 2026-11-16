@@ -69,6 +69,8 @@ export const COMMANDS = {
   view_emit: { windows: ['hub', 'mog', 'card'], phase: 'MVP-D' },
   audit_append: B,
   telemetry_span: B,
+  /** Not in 4.5 (ADR 0003): the brain's private Channel for core-to-brain traffic. */
+  brain_subscribe: B,
 } as const satisfies Record<string, Spec>;
 
 export type CommandName = keyof typeof COMMANDS;
@@ -94,6 +96,16 @@ export const EVENTS = {
 } as const;
 
 export type EventName = (typeof EVENTS)[keyof typeof EVENTS]['name'];
+
+/**
+ * A core-to-brain item on the brain Channel (`brain_subscribe`). `core_to_brain` items never
+ * travel as Tauri events, because every window that may listen gets every Tauri event.
+ * Only `brain_to_view` items are Tauri events.
+ */
+export interface BrainMessage {
+  event: EventName;
+  payload: unknown;
+}
 
 // ---------- argument types (camelCase, as Rust serializes them) ----------
 
@@ -207,14 +219,16 @@ export interface CommandArgs {
   view_emit: { mogId: MogId; kind: ViewEmitKind; payload?: unknown };
   audit_append: { kind: string; mogId: MogId; opId: string; sizes: Record<string, number> };
   telemetry_span: { name: string; startMs: number; endMs: number; attrs?: Record<string, number> };
+  brain_subscribe: { onEvent: Channel<BrainMessage> };
 }
 
-/** The gateway's refusal reasons (`mog_core::ipc::IpcError`). They never carry argument values. */
+/** The gateway's refusal reasons (`mog_core::ipc::IpcError`). They never carry argument values (4.6 rule 7). */
 export type IpcError =
   | { error: 'unknown_command'; command: string }
   | { error: 'window_not_allowed'; command: string; window: string }
   | { error: 'invalid_args'; command: string; reason: string }
-  | { error: 'not_implemented'; command: string };
+  | { error: 'not_implemented'; command: string }
+  | { error: 'host_failed'; command: string };
 
 type Empty = Record<string, never>;
 
@@ -269,6 +283,7 @@ export interface CommandReturns {
   view_emit: Empty;
   audit_append: Empty;
   telemetry_span: Empty;
+  brain_subscribe: Empty;
 }
 
 /** Call a command. The gateway rejects it with an `IpcError` until its feature issue lands. */

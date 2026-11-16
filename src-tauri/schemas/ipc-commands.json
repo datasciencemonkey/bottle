@@ -120,6 +120,26 @@
       "title": "AuditAppendArgs",
       "type": "object"
     },
+    "brain_subscribe": {
+      "$defs": {
+        "ChannelRef": {
+          "description": "A Tauri `Channel` argument. On the wire it is `__CHANNEL__:<numeric id>`; other strings fail.",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "onEvent": {
+          "$ref": "#/$defs/ChannelRef"
+        }
+      },
+      "required": [
+        "onEvent"
+      ],
+      "title": "BrainSubscribeArgs",
+      "type": "object"
+    },
     "capture_pause": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
@@ -279,7 +299,7 @@
     "capture_subscribe": {
       "$defs": {
         "ChannelRef": {
-          "description": "A Tauri `Channel` argument. On the wire it is the channel reference string.",
+          "description": "A Tauri `Channel` argument. On the wire it is `__CHANNEL__:<numeric id>`; other strings fail.",
           "type": "string"
         }
       },
@@ -379,7 +399,7 @@
     "dbx_http": {
       "$defs": {
         "ChannelRef": {
-          "description": "A Tauri `Channel` argument. On the wire it is the channel reference string.",
+          "description": "A Tauri `Channel` argument. On the wire it is `__CHANNEL__:<numeric id>`; other strings fail.",
           "type": "string"
         },
         "RouteId": {
@@ -1445,6 +1465,13 @@
     },
     {
       "name": "telemetry_span",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "brain_subscribe",
       "phase": "MVP-D",
       "windows": [
         "brain"

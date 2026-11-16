@@ -1,6 +1,7 @@
 //! Event names of 4.5 (ARC-5). Tauri allows only alphanumerics, `-`, `/`, `:` and `_` in
 //! event names, so each dotted name of the requirements maps `.` to `:` (ADR 0003).
 //! Streams (level, partial text) are Channels, not events: see `CaptureSubscribeArgs`.
+//! Core-to-brain items travel as `{ event, payload }` messages on the brain Channel.
 
 use serde::Serialize;
 
@@ -8,9 +9,11 @@ use serde::Serialize;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Direction {
-    /// Rust core to the brain window only (`emit_to("brain", ..)`).
+    /// Rust core to the brain only, on the brain's private Channel (`brain_subscribe`).
+    /// Never a Tauri event: any window that may listen gets every Tauri event (ADR 0003).
     CoreToBrain,
-    /// Brain to one view window (`emitTo("mog-<id>" | "card-<id>" | "hub", ..)`).
+    /// Brain to a view window as a Tauri event (`emitTo("mog-<id>" | "card-<id>" | "hub", ..)`).
+    /// Every view can listen to these; they carry only what views render.
     BrainToView,
 }
 

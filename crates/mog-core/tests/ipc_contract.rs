@@ -3,7 +3,7 @@
 use mog_core::ipc::{self, events, IpcError, Phase, WindowClass, COMMANDS};
 use serde_json::json;
 
-/// Every command of the 4.5 table, with the slash pairs split.
+/// Every command of the 4.5 table, with the slash pairs split, plus `brain_subscribe`.
 const SPEC_COMMANDS: &[(&str, &[WindowClass])] = {
     use WindowClass::{Brain as B, Card as C, Hub as H, Mog as M};
     &[
@@ -46,6 +46,8 @@ const SPEC_COMMANDS: &[(&str, &[WindowClass])] = {
         ("view_emit", &[H, M, C]),
         ("audit_append", &[B]),
         ("telemetry_span", &[B]),
+        // Not in 4.5: the brain's private Channel (ADR 0003).
+        ("brain_subscribe", &[B]),
     ]
 };
 
@@ -273,5 +275,73 @@ fn arc_6_no_command_takes_a_url_token_or_header() {
         if *name != "profile_login" {
             assert!(!text.contains("workspaceurl"), "{name} takes a URL");
         }
+    }
+}
+
+const SECRET: &str = concat!("dap", "i0123456789abcdef0123456789abcdef");
+
+#[test]
+fn arc_6_errors_never_echo_argument_values() {
+    let tags = json!({"app": "bottle", "mog": "a1", "op": "genie"});
+    let cases = [
+        (
+            "dbx_http",
+            json!({"profile": "p", "routeId": format!("https://h/x?t={SECRET}"), "params": {}, "tags": tags}),
+        ),
+        (
+            "session_attest",
+            json!({"mogId": "a1", "kind": "only_me", "noticeVersion": SECRET}),
+        ),
+        ("profile_status", json!({"profile": "p", SECRET: 1})),
+        ("capture_start", json!({"mogId": "a1", "mode": SECRET})),
+        (
+            "capture_subscribe",
+            json!({"onLevel": SECRET, "onPartial": "__CHANNEL__:2"}),
+        ),
+    ];
+    for (cmd, args) in cases {
+        let err = ipc::handle("brain", cmd, args).unwrap_err();
+        assert!(
+            matches!(err, IpcError::InvalidArgs { .. }),
+            "{cmd}: {err:?}"
+        );
+        let shown = format!("{err} {err:?} {}", serde_json::to_string(&err).unwrap());
+        assert!(!shown.contains(SECRET), "{cmd} echoed the value: {shown}");
+        assert!(!shown.contains("https://"), "{cmd} echoed the URL: {shown}");
+    }
+}
+
+#[test]
+fn arc_5_channel_arguments_must_be_channel_references() {
+    let ok = ipc::handle(
+        "brain",
+        "capture_subscribe",
+        json!({"onLevel": "__CHANNEL__:1", "onPartial": "__CHANNEL__:2"}),
+    )
+    .unwrap_err();
+    assert!(matches!(ok, IpcError::NotImplemented { .. }), "{ok:?}");
+    for bad in ["1", "__CHANNEL__:", "__CHANNEL__:x", "channel"] {
+        let err = ipc::handle(
+            "brain",
+            "capture_subscribe",
+            json!({"onLevel": bad, "onPartial": "__CHANNEL__:2"}),
+        )
+        .unwrap_err();
+        assert!(matches!(err, IpcError::InvalidArgs { .. }), "{bad}");
+    }
+}
+
+#[test]
+fn arc_5_only_the_brain_can_take_the_core_to_brain_channel() {
+    let args = json!({"onEvent": "__CHANNEL__:7"});
+    assert!(matches!(
+        ipc::handle("brain", "brain_subscribe", args.clone()).unwrap(),
+        ipc::Handled::SubscribeBrain { .. }
+    ));
+    for label in ["hub", "mog-a1", "card-a1"] {
+        assert!(matches!(
+            ipc::handle(label, "brain_subscribe", args.clone()).unwrap_err(),
+            IpcError::WindowNotAllowed { .. }
+        ));
     }
 }

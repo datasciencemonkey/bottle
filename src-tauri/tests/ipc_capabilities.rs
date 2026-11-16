@@ -59,8 +59,19 @@ fn arc_4_views_only_listen_to_events() {
             .into();
         assert_eq!(core, want, "view {id} core permissions");
     }
-    let brain = permissions(&capability("brain"));
-    assert!(brain.contains("core:event:default"));
+    // ARC-5: the brain sends to one view with emit_to; no global emit.
+    let brain_core: BTreeSet<String> = permissions(&capability("brain"))
+        .into_iter()
+        .filter(|p| p.starts_with("core:"))
+        .collect();
+    let want: BTreeSet<String> = [
+        "core:event:allow-listen",
+        "core:event:allow-unlisten",
+        "core:event:allow-emit-to",
+    ]
+    .map(String::from)
+    .into();
+    assert_eq!(brain_core, want);
 }
 
 #[test]

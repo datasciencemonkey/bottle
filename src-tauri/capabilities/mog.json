@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "mog",
-  "description": "MOG view windows (V2). Thin view: listens to events and may only call view_emit.",
+  "description": "MOG view windows (V2): listen to brain-to-view events; may only call view_emit.",
   "windows": ["mog-*"],
   "permissions": ["core:event:allow-listen", "core:event:allow-unlisten", "allow-view-emit"]
 }

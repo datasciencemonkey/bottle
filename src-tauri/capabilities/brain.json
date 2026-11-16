@@ -1,10 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "brain",
-  "description": "Hidden brain window (ARC-2). Core events only;",
+  "description": "Hidden brain window (ARC-2): every brain command; events: listen and emit_to only.",
   "windows": ["brain"],
   "permissions": [
-    "core:event:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:event:allow-emit-to",
     "allow-cli-status",
     "allow-cli-install",
     "allow-profiles-list",
@@ -42,6 +44,7 @@
     "allow-window-card-show",
     "allow-window-card-hide",
     "allow-audit-append",
-    "allow-telemetry-span"
+    "allow-telemetry-span",
+    "allow-brain-subscribe"
   ]
 }

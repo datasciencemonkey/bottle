@@ -32,7 +32,7 @@ describe('IPC contract (TS side)', () => {
     for (const e of Object.values(EVENTS)) expect(e.name).toMatch(/^[A-Za-z0-9\-/:_]+$/);
   });
 
-  it('[ARC-4] views may only call view_emit', () => {
+  it('[ARC-4] MOG and card views may only call view_emit (the hub also has the brain-and-hub rows)', () => {
     const viewCommands = (Object.keys(COMMANDS) as CommandName[]).filter((n) =>
       COMMANDS[n].windows.some((w) => w !== 'brain' && w !== 'hub'),
     );

@@ -32,6 +32,7 @@ pub fn run() {
     let demo =
         cfg!(debug_assertions) && std::env::var("BOTTLE_DEMO_WINDOWS").is_ok_and(|v| v == "1");
     tauri::Builder::default()
+        .manage(ipc::BrainChannel::default())
         .invoke_handler(ipc::handler)
         .setup(move |app| {
             let handle = app.handle();
