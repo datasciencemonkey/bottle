@@ -137,6 +137,16 @@ NFR-01a..d, NFR-02, NFR-08a and NFR-08b, and the AT-21 / AT-30 / AT-43 evidence 
 test doubles or for missing samples. `docs/tests/LATENCY-BENCH.md` has the rules, the fixture
 variables (`BOTTLE_BENCH_SP03_LOG`, `BOTTLE_BENCH_SAMPLES`) and the device steps.
 
+### Memory and idle CPU budgets (#173)
+
+`mog_core::resource_budget`: the sample model (RSS of shell + brain + N MOGs, the Parakeet peak,
+idle CPU runs), the budgets of NFR-04a, NFR-04b, NFR-05, NFR-06a, NFR-06b and NFR-09, the SP-02 /
+D73 window plan, and the AT-21 resource report. The runner is
+`cargo run -p mog-core --example resource_bench`. The report never writes `pass` for samples from
+test doubles, for missing samples or for hardware that is not a reference device.
+`docs/tests/RESOURCE-BENCH.md` has the rules, the fixture variables (`BOTTLE_RES_SAMPLES`,
+`BOTTLE_RES_SP04_BENCH`) and the device steps.
+
 ### Gate evidence (AT-22)
 
 Each gate run is a file in `docs/evidence/` in the format of `docs/tests/EVIDENCE-TEMPLATE.md`.
