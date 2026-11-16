@@ -1,0 +1,24 @@
+[package]
+name = "sp21"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "SP-21 (#34): sqlite-vec inside the rusqlite bundled SQLCipher build"
+
+# Standalone spike crate: not part of any workspace.
+[workspace]
+
+[dependencies]
+half = "2.7.1"
+# `bundled-sqlcipher-vendored-openssl`: SQLCipher 4.20.0 with a static OpenSSL.
+# Plain `bundled-sqlcipher` links a system libcrypto dylib if it finds one
+# (for example Homebrew OpenSSL) and uses CommonCrypto only if it finds none.
+rusqlite = { version = "0.42.0", features = ["bundled-sqlcipher-vendored-openssl"] }
+sqlite-vec = "0.1.9"
+
+[[bin]]
+name = "bench"
+path = "src/bin/bench.rs"
+
+[profile.release]
+debug = false
