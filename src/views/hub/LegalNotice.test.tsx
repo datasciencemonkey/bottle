@@ -17,9 +17,13 @@ async function hubWithNotice(version: number, accepted = false) {
 }
 
 const dialog = (el: HTMLElement) => el.querySelector<HTMLElement>('[role="dialog"]');
-const box = (el: HTMLElement) => el.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+function must<T>(v: T | null | undefined): T {
+  if (v === null || v === undefined) throw new Error('element not found');
+  return v;
+}
+const box = (el: HTMLElement) => must(el.querySelector<HTMLInputElement>('input[type="checkbox"]'));
 const cont = (el: HTMLElement) =>
-  [...el.querySelectorAll('button')].find((b) => b.textContent === 'Continue')!;
+  must([...el.querySelectorAll('button')].find((b) => b.textContent === 'Continue'));
 
 describe('V1 hub: first-run legal notice (#27)', () => {
   beforeEach(() => {
@@ -38,7 +42,7 @@ describe('V1 hub: first-run legal notice (#27)', () => {
 
   it('[MB-08a] [AT-24] shows "Before you start" with the notice version and the 9.3 content', async () => {
     const { el } = await hubWithNotice(3);
-    const d = dialog(el)!;
+    const d = must(dialog(el));
     expect(d).not.toBeNull();
     expect(d.querySelector('h2')?.textContent).toBe('Before you start');
     expect(d.textContent).toContain('Notice version 3');
@@ -102,13 +106,13 @@ describe('V1 hub: first-run legal notice (#27)', () => {
 
   it('[MB-08a] [UX-30] the notice takes focus and is labelled for a screen reader', async () => {
     const { el } = await hubWithNotice(1);
-    const d = dialog(el)!;
+    const d = must(dialog(el));
     expect(document.activeElement).toBe(d);
     expect(d.getAttribute('aria-modal')).toBe('true');
     const title = document.getElementById(d.getAttribute('aria-labelledby') ?? '');
     expect(title?.textContent).toBe('Before you start');
     const body = document.getElementById(d.getAttribute('aria-describedby') ?? '');
-    expect(body?.textContent).toContain(LEGAL_NOTICE.paragraphs[0]!.text);
+    expect(body?.textContent).toContain(must(LEGAL_NOTICE.paragraphs[0]).text);
     // Native controls: the checkbox and the button are in the Tab order and work by keyboard.
     expect(box(el).tabIndex).toBe(0);
     expect(cont(el).getAttribute('type')).toBe('button');

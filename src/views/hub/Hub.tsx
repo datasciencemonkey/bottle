@@ -2,9 +2,17 @@
 import { useCallback, useState } from 'react';
 import type { MogId } from '../../shared/interfaces';
 import { DomainPicker } from '../DomainPicker';
-import { asMogViewState, emitView, useViewEvent, type MogViewState } from '../view-ipc';
+import {
+  acceptNotice,
+  asMogViewState,
+  emitView,
+  useHubNotice,
+  useViewEvent,
+  type MogViewState,
+} from '../view-ipc';
 import { About } from './About';
 import { DataPanel } from './DataDisclosures';
+import { LegalNotice } from './LegalNotice';
 
 export function Hub() {
   const [mogs, setMogs] = useState<ReadonlyMap<MogId, MogViewState>>(new Map());
@@ -14,6 +22,23 @@ export function Hub() {
     if (s) setMogs((m) => new Map(m).set(s.mogId, s));
   }, []);
   useViewEvent('mog.view_state', onState);
+  const notice = useHubNotice();
+
+  // MB-08a, MB-08b: until the brain reports the current notice as accepted, the hub shows only
+  // the notice. A new version gets a fresh, unchecked notice (`key`).
+  if (notice && !notice.accepted) {
+    return (
+      <main>
+        <h1>Bottle</h1>
+        <p>Databricks Labs / experimental</p>
+        <LegalNotice
+          key={notice.version}
+          version={notice.version}
+          onContinue={(v) => void acceptNotice(v).catch(() => undefined)}
+        />
+      </main>
+    );
+  }
 
   // TODO(#43, #77, #103): the wizard, settings and history.
   return (

@@ -26,24 +26,33 @@ const flush = () => act(async () => new Promise((r) => setTimeout(r, 0)));
 /** One brain (bus + T12 + wiring) that talks to the rendered hub through the Tauri double. */
 async function app(store = memoryConsentStore(), version = NOTICE_VERSION) {
   const bus = new BrainBus();
-  const consent = createConsentService({ store, version, now: () => new Date(0), newId: () => 'd' });
+  const consent = createConsentService({
+    store,
+    version,
+    now: () => new Date(0),
+    newId: () => 'd',
+  });
   const send = (s: unknown) => tauri.emitTo('hub', HUB_NOTICE_EVENT, s);
   const { el } = await render(<Hub />);
   wireNotice(bus, consent, send);
   await flush();
   /** Relay each hub view_emit to the brain as `view:input`, as the core does. */
   const relay = async () => {
-    for (const input of viewEmits()) bus.dispatch({ event: 'view:input', payload: { from: 'hub', input } });
+    for (const input of viewEmits())
+      bus.dispatch({ event: 'view:input', payload: { from: 'hub', input } });
     tauri.invoke.mockClear();
     await flush();
   };
-  const capture = () => startCapture({ consent, invoke: async () => ({ ok: true }) as never }, args);
+  const capture = () =>
+    startCapture({ consent, invoke: async () => ({ ok: true }) as never }, args);
   return { el, relay, capture };
 }
 
 async function accept(el: HTMLElement) {
-  await act(async () => el.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click());
-  const btn = [...el.querySelectorAll('button')].find((b) => b.textContent === 'Continue')!;
+  const box = el.querySelector<HTMLInputElement>('input[type="checkbox"]');
+  const btn = [...el.querySelectorAll('button')].find((b) => b.textContent === 'Continue');
+  if (!box || !btn) throw new Error('the notice is not shown');
+  await act(async () => box.click());
   await act(async () => btn.click());
 }
 
@@ -57,7 +66,9 @@ describe('AT-24 notice part (#27)', () => {
     const { el, relay, capture } = await app();
     await relay();
     expect(el.querySelector('[role="dialog"]')).not.toBeNull();
-    await expect(capture()).rejects.toEqual({ error: 'consent_required', command: 'capture_start' });
+    await expect(capture()).rejects.toEqual({
+      error: 'consent_required',
+    });
     await accept(el);
     await relay();
     expect(el.querySelector('[role="dialog"]')).toBeNull();
@@ -77,7 +88,9 @@ describe('AT-24 notice part (#27)', () => {
     const next = await app(store, 2);
     await next.relay();
     expect(next.el.querySelector('[role="dialog"]')?.textContent).toContain('Notice version 2');
-    await expect(next.capture()).rejects.toEqual({ error: 'consent_required', command: 'capture_start' });
+    await expect(next.capture()).rejects.toEqual({
+      error: 'consent_required',
+    });
     await accept(next.el);
     await next.relay();
     await expect(next.capture()).resolves.toEqual({ ok: true });

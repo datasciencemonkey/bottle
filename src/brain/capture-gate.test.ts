@@ -22,7 +22,6 @@ describe('capture_start gate on the first-run notice (#27)', () => {
     const onBlocked = vi.fn();
     await expect(startCapture({ consent: consent(), onBlocked }, args)).rejects.toEqual({
       error: 'consent_required',
-      command: 'capture_start',
     });
     expect(core.invoke).not.toHaveBeenCalled();
     expect(onBlocked).toHaveBeenCalledWith({ version: NOTICE_VERSION, accepted: false });
@@ -45,7 +44,6 @@ describe('capture_start gate on the first-run notice (#27)', () => {
     const v2 = consent(store, 2);
     await expect(startCapture({ consent: v2 }, args)).rejects.toEqual({
       error: 'consent_required',
-      command: 'capture_start',
     });
     expect(core.invoke).not.toHaveBeenCalled();
     await v2.acceptNotice(2);
@@ -62,7 +60,13 @@ describe('capture_start gate on the first-run notice (#27)', () => {
       });
     const callers = files(dir)
       .filter((f) => !/\.test\.tsx?$/.test(f))
-      .filter((f) => /['"`]capture_start['"`]/.test(readFileSync(f, 'utf8')))
+      .filter((f) => {
+        // Code only: a comment may name the command.
+        const code = readFileSync(f, 'utf8')
+          .replace(/\/\*[\s\S]*?\*\//g, '')
+          .replace(/^\s*\/\/.*$/gm, '');
+        return /['"`]capture_start['"`]/.test(code);
+      })
       .map((f) => relative(dir, f).replaceAll('\\', '/'));
     expect(callers).toEqual(['capture-gate.ts']);
   });
