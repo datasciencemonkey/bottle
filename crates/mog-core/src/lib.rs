@@ -32,6 +32,7 @@ pub mod request_identity;
 pub mod resource_budget;
 pub mod session_guard;
 pub mod stt;
+pub mod stt_bench;
 pub mod testkit;
 pub mod token_broker;
 pub mod token_guard;
