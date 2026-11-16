@@ -1,0 +1,317 @@
+// @vitest-environment jsdom
+/**
+ * The Rive mascot view (UX-02a, UX-02b, UX-03, UX-08b, UX-09a, UX-09b) with a fake Rive runtime.
+ * The real rendering in the transparent panel is a device check (needs:mac, see ADR 0027).
+ */
+import type { Mood } from '../../shared/interfaces';
+import { FIRST_FRAME, MOODS, PngMascot, type MascotRenderer } from './mascot';
+import { MOG_RIV_URL, RiveMascot, type RiveFactory, type RiveLike } from './rive-mascot';
+import type { OfflineRiveOptions } from './rive-loader';
+
+/** One fake view-model property that records every write. */
+class Prop<T> {
+  writes: T[] = [];
+  #v: T;
+  constructor(v: T) {
+    this.#v = v;
+  }
+  get value(): T {
+    return this.#v;
+  }
+  set value(v: T) {
+    this.writes.push(v);
+    this.#v = v;
+  }
+}
+
+function fakeRive(
+  enumValues: string[] = [
+    'Idle',
+    'Listening',
+    'Processing',
+    'Answering',
+    'Success',
+    'Error',
+    'Sleeping',
+  ],
+) {
+  const mood = Object.assign(new Prop<string>('Idle'), { values: enumValues });
+  const props = {
+    mood,
+    level: new Prop<number>(0.3),
+    hover: new Prop<boolean>(true),
+    demo: new Prop<boolean>(true),
+    attention: new Prop<boolean>(false),
+  };
+  const pokes: number[] = [];
+  const vm = {
+    enum: (p: string) => (p === 'mood' ? props.mood : null),
+    number: (p: string) => (p === 'level' ? props.level : null),
+    boolean: (p: string) =>
+      p === 'hover'
+        ? props.hover
+        : p === 'demo'
+          ? props.demo
+          : p === 'attention'
+            ? props.attention
+            : null,
+    trigger: (p: string) => (p === 'poke' ? { trigger: () => pokes.push(1) } : null),
+  };
+  let cleaned = 0;
+  let opts: OfflineRiveOptions | undefined;
+  const rive: RiveLike = {
+    get viewModelInstance() {
+      return vm;
+    },
+    resizeDrawingSurfaceToCanvas: () => undefined,
+    cleanup: () => {
+      cleaned++;
+    },
+  };
+  const create: RiveFactory = (o) => {
+    opts = o;
+    return rive;
+  };
+  return {
+    props,
+    pokes,
+    create,
+    opts: () => opts!,
+    load: () => opts!.onLoad?.(new Event('load') as never),
+    fail: () => opts!.onLoadError?.(new Event('error') as never),
+    cleaned: () => cleaned,
+  };
+}
+
+function mountWith(create: RiveFactory, fallback?: () => MascotRenderer) {
+  const el = document.createElement('div');
+  document.body.append(el);
+  const m = new RiveMascot(create, fallback);
+  m.mount(el);
+  return { el, m };
+}
+
+const pngMood = (el: HTMLElement) => el.querySelector<HTMLImageElement>('img[data-mascot="png"]');
+
+describe('RiveMascot', () => {
+  it('[UX-09a] [UX-08b] [SEC-20a] builds one offline instance in DrawOnChanged mode with the Rive listeners off', () => {
+    const r = fakeRive();
+    const { el } = mountWith(r.create);
+    const o = r.opts();
+    expect(o.src).toBe(MOG_RIV_URL);
+    expect(o.drawingOptions).toBe('drawOnChanged');
+    expect(o.shouldDisableRiveListeners).toBe(true);
+    expect(o.autoBind).toBe(true);
+    expect(o.canvas).toBeInstanceOf(HTMLCanvasElement);
+    expect(el.querySelectorAll('canvas')).toHaveLength(1);
+  });
+
+  it('[UX-09a] the bundled .riv URL is a path on the app origin', () => {
+    expect(MOG_RIV_URL).toBe('/mascot/mog.riv');
+  });
+
+  it('[UX-02b] [AT-20] on load sets demo=false, level=0, hover=false and mood=idle', () => {
+    expect(FIRST_FRAME).toEqual({ demo: false, level: 0, hover: false, mood: 'idle' });
+    const r = fakeRive();
+    mountWith(r.create);
+    r.load();
+    expect(r.props.demo.value).toBe(false);
+    expect(r.props.level.value).toBe(0);
+    expect(r.props.hover.value).toBe(false);
+    expect(r.props.mood.value).toBe('Idle');
+    expect(r.props.attention.value).toBe(false);
+  });
+
+  it('[UX-02b] [AT-20] state that arrives before the load is applied after the first frame', () => {
+    const r = fakeRive();
+    const { m } = mountWith(r.create);
+    m.setMood('processing');
+    m.setAttention(true);
+    expect(r.props.mood.writes).toEqual([]);
+    r.load();
+    expect(r.props.mood.value).toBe('Processing');
+    expect(r.props.attention.value).toBe(true);
+  });
+
+  it('[UX-02a] [AT-20] a poke fires the poke trigger and never turns on demo or changes the mood', () => {
+    const r = fakeRive();
+    const { m } = mountWith(r.create);
+    r.load();
+    m.setMood('success');
+    const moodWrites = r.props.mood.writes.length;
+    for (let i = 0; i < 10; i++) m.poke();
+    expect(r.pokes).toHaveLength(10);
+    expect(r.props.mood.writes).toHaveLength(moodWrites);
+    expect(r.props.mood.value).toBe('Success');
+    expect(r.props.demo.writes.every((d) => d === false)).toBe(true);
+  });
+
+  it('[UX-02a] [AT-20] sets each of the 7 moods by its Rive enum entry', () => {
+    const r = fakeRive();
+    const { m } = mountWith(r.create);
+    r.load();
+    for (const mood of MOODS) {
+      m.setMood(mood);
+      expect(r.props.mood.value.toLowerCase()).toBe(mood);
+    }
+  });
+
+  it('[UX-02a] a Rive file whose mood enum is not exactly the 7 moods falls back to PNG', () => {
+    for (const values of [
+      ['idle', 'listening', 'processing', 'answering', 'success', 'error'],
+      ['idle', 'listening', 'processing', 'answering', 'success', 'error', 'sleeping', 'dancing'],
+    ]) {
+      const r = fakeRive(values);
+      const { el } = mountWith(r.create);
+      r.load();
+      expect(pngMood(el), values.join()).not.toBeNull();
+      expect(el.querySelector('canvas')).toBeNull();
+      expect(r.cleaned()).toBe(1);
+    }
+  });
+
+  it('[UX-03] [AT-37] the attention cue shows over any mood', () => {
+    const r = fakeRive();
+    const { m } = mountWith(r.create);
+    r.load();
+    m.setAttention(true);
+    for (const mood of MOODS) {
+      m.setMood(mood);
+      expect(r.props.attention.value).toBe(true);
+    }
+    m.setAttention(false);
+    expect(r.props.attention.value).toBe(false);
+  });
+
+  it('[UX-08a] DOM hover drives the Rive hover input', () => {
+    const r = fakeRive();
+    const { m } = mountWith(r.create);
+    r.load();
+    m.setHover(true);
+    expect(r.props.hover.value).toBe(true);
+    m.setHover(false);
+    expect(r.props.hover.value).toBe(false);
+  });
+
+  it('[UX-09a] [AT-21] writes a view-model value only when it changes, so an idle MOG draws no frames', () => {
+    const r = fakeRive();
+    const { m } = mountWith(r.create);
+    r.load();
+    const before = Object.fromEntries(
+      Object.entries(r.props).map(([k, p]) => [k, p.writes.length]),
+    );
+    for (let i = 0; i < 50; i++) {
+      m.setMood('idle');
+      m.setLevel(0);
+      m.setHover(false);
+      m.setAttention(false);
+    }
+    const after = Object.fromEntries(Object.entries(r.props).map(([k, p]) => [k, p.writes.length]));
+    expect(after).toEqual(before);
+  });
+
+  it('[UX-06a] clamps the level it sends to Rive into 0..1', () => {
+    const r = fakeRive();
+    const { m } = mountWith(r.create);
+    r.load();
+    m.setLevel(2);
+    expect(r.props.level.value).toBe(1);
+    m.setLevel(-1);
+    expect(r.props.level.value).toBe(0);
+    m.setLevel(Number.NaN);
+    expect(r.props.level.value).toBe(0);
+  });
+
+  it('[UX-09b] [AT-21] a Rive load error swaps in the PNG fallback with the current mood and cue', () => {
+    const r = fakeRive();
+    const { el, m } = mountWith(r.create);
+    m.setMood('error');
+    m.setAttention(true);
+    r.fail();
+    expect(el.querySelector('canvas')).toBeNull();
+    expect(pngMood(el)?.getAttribute('src')).toMatch(/mood-error\.png/);
+    expect(el.querySelector('[data-mascot="attention"]')).not.toBeNull();
+    expect(r.cleaned()).toBe(1);
+    m.setMood('success');
+    expect(pngMood(el)?.getAttribute('src')).toMatch(/mood-success\.png/);
+  });
+
+  it('[UX-09b] [AT-21] a runtime that throws or has no view model also falls back to PNG', () => {
+    const throwing: RiveFactory = () => {
+      throw new Error('no wasm');
+    };
+    expect(pngMood(mountWith(throwing).el)).not.toBeNull();
+    const r = fakeRive();
+    const noVm: RiveFactory = (o) => {
+      const x = r.create(o);
+      return { ...x, viewModelInstance: null, cleanup: x.cleanup };
+    };
+    const { el } = mountWith(noVm);
+    r.load();
+    expect(pngMood(el)).not.toBeNull();
+  });
+
+  it('[UX-09b] destroy cleans up the Rive instance and the DOM', () => {
+    const r = fakeRive();
+    const { el, m } = mountWith(r.create);
+    r.load();
+    m.destroy();
+    expect(r.cleaned()).toBe(1);
+    expect(el.childElementCount).toBe(0);
+    r.fail();
+    expect(el.childElementCount).toBe(0);
+  });
+});
+
+describe('PngMascot (UX-09b fallback)', () => {
+  it('[UX-09b] [AT-21] shows a static PNG for each of the 7 moods', () => {
+    const el = document.createElement('div');
+    const m = new PngMascot();
+    m.mount(el);
+    expect(pngMood(el)?.getAttribute('src')).toMatch(/mood-idle\.png/);
+    const seen = new Set<string>();
+    for (const mood of MOODS) {
+      m.setMood(mood);
+      const src = pngMood(el)?.getAttribute('src') ?? '';
+      expect(src).toMatch(new RegExp(`mood-${mood}\\.png`));
+      seen.add(src);
+    }
+    expect(seen.size).toBe(7);
+    expect(MOODS).toEqual([
+      'idle',
+      'listening',
+      'processing',
+      'answering',
+      'success',
+      'error',
+      'sleeping',
+    ] satisfies Mood[]);
+  });
+
+  it('[UX-03] [UX-09b] shows the "?" attention art over any mood', () => {
+    const el = document.createElement('div');
+    const m = new PngMascot();
+    m.mount(el);
+    const cue = () => el.querySelector<HTMLImageElement>('img[data-mascot="attention"]');
+    expect(cue()).toBeNull();
+    m.setAttention(true);
+    for (const mood of MOODS) {
+      m.setMood(mood);
+      expect(cue()?.getAttribute('src')).toMatch(/overlay-attention\.png/);
+    }
+    m.setAttention(false);
+    expect(cue()).toBeNull();
+  });
+
+  it('[UX-09b] level, hover and poke are no-ops and destroy empties the element', () => {
+    const el = document.createElement('div');
+    const m = new PngMascot();
+    m.mount(el);
+    m.setLevel(1);
+    m.setHover(true);
+    m.poke();
+    expect(pngMood(el)?.getAttribute('src')).toMatch(/mood-idle\.png/);
+    m.destroy();
+    expect(el.childElementCount).toBe(0);
+  });
+});

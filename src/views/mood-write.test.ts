@@ -38,7 +38,7 @@ export function moodWrites(text: string): string[] {
 }
 
 /** UX-02b: the MOG view shows `idle` on the first frame, before the brain's first state. */
-const FIRST_FRAME = { file: 'mog/mascot.ts', write: "mood'] = 'idle'" };
+const FIRST_FRAME = { file: 'mog/mascot.ts', write: "mood: 'idle'" };
 
 describe('UX-01b: views never set the mood', () => {
   it('[UX-01b] [AT-09] the scan flags each kind of mood write', () => {
@@ -75,6 +75,6 @@ describe('UX-01b: views never set the mood', () => {
 
   it('[UX-01b] the only literal mood in a view is the first-frame idle (UX-02b)', () => {
     const text = readFileSync(join(views, FIRST_FRAME.file), 'utf8');
-    expect(moodWrites(text)).toEqual([`mood${FIRST_FRAME.write.slice(4)}`]);
+    expect(moodWrites(text)).toEqual([FIRST_FRAME.write]);
   });
 });
