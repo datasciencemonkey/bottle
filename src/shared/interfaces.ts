@@ -131,6 +131,22 @@ export interface PageService { propose(d: PageDraft): Promise<{ reviewId: string
 export interface MoodMapper { (s: { paused: boolean; ownsCapture: boolean; errorUntil?: number; successUntil?: number; answering: boolean; processing: boolean; dozing: boolean }): { mood: Mood; overlays: { attention: boolean; recording: boolean; offline: boolean; hop?: string; localOnly: boolean } } }
 // END 4.7
 
+// ---------- amendments to 4.7 (the 4.7 block above stays verbatim) ----------
+/**
+ * CAP-02a (MUST) wins over the 4.7 sketch: every capture has a lease (ADR 0007).
+ * Declaration merging adds the field to the 4.7 `CaptureState`. Set while capture is live.
+ */
+export interface CaptureState {
+  /** The lease that owns the mic now. A suspended lease (ARC-F9) shows again when it resumes. */
+  leaseId?: LeaseId;
+}
+/** CAP-02a / AT-17: every segment names the lease of the capture that made it. */
+export interface SegmentRef {
+  leaseId: LeaseId;
+}
+/** A capture lease ID issued by R2 CaptureService. Opaque; never reused. */
+export type LeaseId = string;
+
 // ---------- IPC names used by 4.5 but not defined in 4.7 ----------
 /** One entry of `profiles_list` (4.5). The same shape as `Profile`. */
 export type ProfileInfo = Profile;

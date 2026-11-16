@@ -8,6 +8,7 @@ Each check prints PASS or FAIL. The script exits non-zero if any check fails.
   mascot      mog-rive/scene.rml is up to date with tools/gen_mog_rml.py
   brand       the mascot has no Lava FF3621 fill and no Tail, Wisp or Brick node (UX-10a/b, AT-37)
   artifacts   no build output (build/, *.riv, *.rev) is committed
+  gates       no release gate is reported as a pass without evidence (AT-22, scripts/check_gate_evidence.py)
   structure   no junk, secrets, binaries or local tool state is committed; no file over 2 MB;
               every top-level entry is on the layout list; ADR numbers are unique; every
               crate is a Cargo workspace member. It also prints WARN lines: restructuring
@@ -178,8 +179,14 @@ def check_structure():
                             f"{len(files)} tracked files: no junk, secrets or large files; layout and ADR numbers OK")
 
 
+def check_gates():
+    proc = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "check_gate_evidence.py")],
+                          cwd=ROOT, capture_output=True, text=True)
+    return proc.returncode == 0, (proc.stdout + proc.stderr).strip()
+
+
 CHECKS = {"compile": check_compile, "html": check_html, "mascot": check_mascot,
-          "brand": check_brand, "artifacts": check_artifacts,
+          "brand": check_brand, "artifacts": check_artifacts, "gates": check_gates,
           "structure": check_structure}
 
 

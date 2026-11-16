@@ -33,7 +33,7 @@ fn r2_capture_service_stub_reports_not_implemented() {
 #[test]
 fn r3_session_guard_stub_reports_not_implemented() {
     use mog_core::session_guard::{SessionGuard, StubSessionGuard};
-    let s = StubSessionGuard;
+    let s = StubSessionGuard::default();
     not_implemented(s.arm("session"), "R3");
     not_implemented(s.mic_release_state(), "R3");
 }
