@@ -267,13 +267,8 @@ describe('brain component stubs', () => {
     await expectStub(() => t.createDraft('r'), 203);
   });
 
-  it('[T15] AgentBridge implements the 4.7 interface as stubs', async () => {
+  it('[T15] AgentBridge keeps the onTool stub for #141', async () => {
     const t = createAgentBridge();
-    await expectStub(() => t.start(MOG, 'claude'), 112);
-    await expectStub(
-      () => t.send({ mogId: MOG, question: 'q', decision, recall: [], target: 'p' }),
-      112,
-    );
     await expectStub(() => t.onTool({ callId: 'c', tool: 'set_mood', args: {} }), 141);
   });
 
