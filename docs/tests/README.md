@@ -69,6 +69,19 @@ uv run --no-project scripts/gen_release_checklist.py \
 
 When section 15 changes, run the script and commit the result. A test checks that the file is up to date.
 
+## scripts/check_brand_gate.py
+
+Checks the mascot brand review gate (#84, SEC-22a, SEC-22b, COL-104). The gate passes only with a
+complete `docs/release/BRAND-APPROVAL.md` (Status approved, approver, date, reference, issue #129).
+It also checks the art: no FF3621, no Tail, Wisp or Brick node, no `@rive-app/webgl`.
+A gate that is not passed prints `NOT PASSED` with the reason and exits 0, so internal builds stay
+unblocked. The release pipeline for the first public download runs it with `--external`, which exits 1.
+`tools/ci_checks.py brandgate` runs it without `--external`.
+
+```
+uv run --no-project scripts/check_brand_gate.py [--external]
+```
+
 ## Tests
 
 ```

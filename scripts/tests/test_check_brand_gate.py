@@ -26,6 +26,7 @@ def record(status="approved", approver="A. Brand", date="2026-12-01", ref="go/br
 
 def tree(tmp_path, rec=None, ticked=False, scene=SCENE_OK, pkg=PKG_OK, lock="lockfileVersion: '9'\n"):
     """Build a small repository tree and return its root."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
     (tmp_path / "mog-rive").mkdir()
     (tmp_path / "mog-rive" / "scene.rml").write_text(scene)
     (tmp_path / "package.json").write_text(pkg)
@@ -87,10 +88,9 @@ def test_at_37_rive_webgl_package_fails_but_canvas_and_webgl2_pass():
 
 def test_at_37_ticked_checklist_row_without_approval_fails(tmp_path):
     """[AT-37, SEC-22b] AT-37 cannot be ticked while the brand gate is not passed."""
-    root = tree(tmp_path, rec=record(status="pending", approver="", date="", ref=""), ticked=True)
-    assert any("AT-37" in p for p in cbg.check(root)[0])
-    root2 = tree(tmp_path / "ok", rec=record(), ticked=True) if (tmp_path / "ok").mkdir() is None else None
-    assert cbg.check(root2)[0] == []
+    pending = record(status="pending", approver="", date="", ref="")
+    assert any("AT-37" in p for p in cbg.check(tree(tmp_path / "a", rec=pending, ticked=True))[0])
+    assert cbg.check(tree(tmp_path / "b", rec=record(), ticked=True))[0] == []
 
 
 def test_col_104_internal_build_not_blocked_by_pending_gate(tmp_path):

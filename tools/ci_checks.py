@@ -9,6 +9,8 @@ Each check prints PASS or FAIL. The script exits non-zero if any check fails.
   brand       the mascot has no Lava FF3621 fill and no Tail, Wisp or Brick node (UX-10a/b, AT-37)
   artifacts   no build output (build/, *.riv, *.rev) is committed
   gates       no release gate is reported as a pass without evidence (AT-22, scripts/check_gate_evidence.py)
+  brandgate   brand approval record and mascot art checks; pending approval is "not passed" and
+              only blocks --external (SEC-22a/b, COL-104, scripts/check_brand_gate.py)
   names       no former name in UI text or metadata, the Labs label in the hub and About, no MOG in
               package or bundle IDs, and MOG only as a noun in UI text (MB-10a/b/c, AT-37, ADR 0030)
 
@@ -82,6 +84,12 @@ def check_artifacts():
 
 def check_gates():
     proc = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "check_gate_evidence.py")],
+                          cwd=ROOT, capture_output=True, text=True)
+    return proc.returncode == 0, (proc.stdout + proc.stderr).strip()
+
+
+def check_brandgate():
+    proc = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "check_brand_gate.py")],
                           cwd=ROOT, capture_output=True, text=True)
     return proc.returncode == 0, (proc.stdout + proc.stderr).strip()
 
@@ -210,6 +218,7 @@ def check_names():
 
 CHECKS = {"compile": check_compile, "html": check_html, "mascot": check_mascot,
           "brand": check_brand, "artifacts": check_artifacts, "gates": check_gates,
+          "brandgate": check_brandgate,
           "names": check_names}
 
 
