@@ -36,7 +36,9 @@ const MAX_BODY: usize = 1024 * 1024;
 /// The whole request (head and body) must arrive within this time, or the connection closes.
 const REQUEST_DEADLINE: Duration = Duration::from_secs(5);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
-/// The most open connections per session. Further connections close at once.
+/// The most open connections per endpoint. Further connections to that endpoint close at once.
+/// A local process can still fill one endpoint before auth for up to [`REQUEST_DEADLINE`] at a
+/// time; TODO(#111): revisit the limits with the SP-19 traffic numbers.
 pub const MAX_CONNECTIONS: usize = 32;
 
 /// The three loopback endpoints of ARC-7.
@@ -184,7 +186,7 @@ impl fmt::Debug for HarnessConfig {
 #[derive(Default)]
 struct Conns {
     next_id: u64,
-    open: HashMap<u64, TcpStream>,
+    open: HashMap<u64, (LoopbackEndpoint, TcpStream)>,
     threads: Vec<JoinHandle<()>>,
 }
 
@@ -269,7 +271,7 @@ impl LoopbackSession {
         }
     }
 
-    /// The number of open connections (at most [`MAX_CONNECTIONS`]).
+    /// The number of open connections (at most [`MAX_CONNECTIONS`] per endpoint).
     pub fn open_connections(&self) -> usize {
         self.shared.conns().open.len()
     }
@@ -291,7 +293,7 @@ impl LoopbackSession {
             let mut c = self.shared.conns();
             (std::mem::take(&mut c.open), std::mem::take(&mut c.threads))
         };
-        for s in streams.values() {
+        for (_, s) in streams.values() {
             let _ = s.shutdown(Shutdown::Both);
         }
         for t in threads {
@@ -314,7 +316,7 @@ fn accept_loop(listener: TcpListener, endpoint: LoopbackEndpoint, port: u16, sha
         let Ok(stream) = stream else { continue };
         let mut c = shared.conns();
         c.threads.retain(|t| !t.is_finished());
-        if c.open.len() >= MAX_CONNECTIONS {
+        if c.open.values().filter(|(e, _)| *e == endpoint).count() >= MAX_CONNECTIONS {
             // Over the cap: close at once (dropping the stream), before any read.
             continue;
         }
@@ -323,21 +325,39 @@ fn accept_loop(listener: TcpListener, endpoint: LoopbackEndpoint, port: u16, sha
         };
         let id = c.next_id;
         c.next_id += 1;
-        c.open.insert(id, handle);
+        c.open.insert(id, (endpoint, handle));
         let conn_shared = Arc::clone(&shared);
         // One short-lived thread per connection, so a slow client cannot block the endpoint.
         // The cap and the request deadline bound the threads; `close` joins them.
         let spawned = std::thread::Builder::new()
             .name("loopback-conn".into())
             .spawn(move || {
+                // The guard frees the slot even if `serve` panics.
+                let _guard = ConnGuard {
+                    shared: Arc::clone(&conn_shared),
+                    id,
+                };
                 serve(stream, endpoint, port, &conn_shared);
-                conn_shared.conns().open.remove(&id);
             });
         match spawned {
             Ok(t) => c.threads.push(t),
             Err(_) => {
                 c.open.remove(&id);
             }
+        }
+    }
+}
+
+/// Removes a connection from the open list and shuts its socket when the thread ends.
+struct ConnGuard {
+    shared: Arc<Shared>,
+    id: u64,
+}
+
+impl Drop for ConnGuard {
+    fn drop(&mut self) {
+        if let Some((_, s)) = self.shared.conns().open.remove(&self.id) {
+            let _ = s.shutdown(Shutdown::Both);
         }
     }
 }
@@ -351,6 +371,7 @@ fn reason(status: u16) -> &'static str {
         408 => "Request Timeout",
         413 => "Payload Too Large",
         431 => "Request Header Fields Too Large",
+        500 => "Internal Server Error",
         501 => "Not Implemented",
         _ => "Status",
     }
@@ -495,8 +516,11 @@ fn serve(mut stream: TcpStream, endpoint: LoopbackEndpoint, port: u16, shared: &
         path: path.to_owned(),
         body,
     };
-    let resp = shared.handler.handle(&req);
-    reply(&mut stream, resp.status, &resp.body);
+    let handler = &shared.handler;
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handler.handle(&req))) {
+        Ok(resp) => reply(&mut stream, resp.status, &resp.body),
+        Err(_) => error(&mut stream, 500, "internal"),
+    }
 }
 
 #[cfg(test)]

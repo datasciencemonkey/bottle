@@ -742,7 +742,7 @@ fn arc_7_rule_9_open_connections_are_capped() {
         .collect();
     std::thread::sleep(Duration::from_millis(300));
     assert!(
-        s.open_connections() <= MAX_CONNECTIONS,
+        s.open_connections() <= MAX_CONNECTIONS * LoopbackEndpoint::ALL.len(),
         "{} connections for {} clients",
         s.open_connections(),
         idle.len()
@@ -799,4 +799,45 @@ fn arc_7_rule_9_close_ends_open_connections() {
     let mut buf = [0u8; 64];
     assert!(matches!(c.read(&mut buf), Ok(0) | Err(_)));
     assert_eq!(handler.0.load(Ordering::SeqCst), 0);
+}
+
+struct Panicking;
+impl LoopbackHandler for Panicking {
+    fn handle(&self, _req: &LoopbackRequest) -> LoopbackResponse {
+        panic!("handler bug");
+    }
+}
+
+#[test]
+fn arc_7_rule_9_a_panicking_handler_frees_its_connection() {
+    let s = LoopbackSession::open(Arc::new(Panicking)).unwrap();
+    let a = s.addr(LoopbackEndpoint::BottleMcp);
+    let auth = s.harness_config().authorization().to_owned();
+    for _ in 0..MAX_CONNECTIONS + 4 {
+        let (status, _) = http(a, &host_of(a), Some(&auth), "{}");
+        assert_eq!(status, 500);
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(s.open_connections(), 0);
+}
+
+#[test]
+fn arc_7_rule_9_the_connection_cap_is_per_endpoint() {
+    let s = LoopbackSession::open(Arc::new(NotImplementedHandler)).unwrap();
+    let a = s.addr(LoopbackEndpoint::BottleMcp);
+    let _idle: Vec<TcpStream> = (0..MAX_CONNECTIONS + 4)
+        .filter_map(|_| TcpStream::connect(a).ok())
+        .collect();
+    std::thread::sleep(Duration::from_millis(300));
+    let b = s.addr(LoopbackEndpoint::ModelProxy);
+    let (status, _) = http(
+        b,
+        &host_of(b),
+        Some(s.harness_config().authorization()),
+        "{}",
+    );
+    assert_eq!(
+        status, 501,
+        "a full bottle-mcp endpoint must not lock out the model proxy"
+    );
 }
