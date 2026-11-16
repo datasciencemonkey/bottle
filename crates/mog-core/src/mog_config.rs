@@ -13,6 +13,7 @@
 //! file is reported, never deleted (no automatic deletion of user content).
 
 use crate::error::{CoreError, CoreResult};
+use crate::genie_endpoint::{self, EndpointError};
 use crate::ipc::{ConfigIdArgs, ConfigWriteArgs, JsonObject};
 use crate::ipc_gateway::GatewayComponents;
 use crate::token_guard::{self, ConfigSecret};
@@ -62,6 +63,8 @@ pub enum ConfigError {
     LimitReached,
     /// The file system call failed.
     StorageFailed,
+    /// G-03: the backend names a rejected Genie endpoint.
+    RejectedBackend(EndpointError),
 }
 
 impl ConfigError {
@@ -76,6 +79,7 @@ impl ConfigError {
             ConfigError::NotFound => "config_not_found",
             ConfigError::LimitReached => "config_limit_reached",
             ConfigError::StorageFailed => "config_storage_failed",
+            ConfigError::RejectedBackend(e) => e.code(),
         }
     }
 }
@@ -179,6 +183,38 @@ pub enum CustomAgentProtocol {
     Responses,
 }
 
+/// The 4.7 `BackendKind` enum (G-01, D28).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackendKind {
+    GenieOneMcp,
+    GenieAgent,
+    CustomAgent,
+}
+
+/// Every backend kind, in the 4.7 order.
+pub const BACKEND_KINDS: [BackendKind; 3] = [
+    BackendKind::GenieOneMcp,
+    BackendKind::GenieAgent,
+    BackendKind::CustomAgent,
+];
+
+impl BackendKind {
+    /// The wire name (`genie_one_mcp`, `genie_agent`, `custom_agent`).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            BackendKind::GenieOneMcp => "genie_one_mcp",
+            BackendKind::GenieAgent => "genie_agent",
+            BackendKind::CustomAgent => "custom_agent",
+        }
+    }
+
+    /// The kind for an exact wire name; any other value is `None` (G-01).
+    pub fn parse(s: &str) -> Option<Self> {
+        BACKEND_KINDS.into_iter().find(|k| k.as_str() == s)
+    }
+}
+
 /// `mog.binding.backend`: the 4.7 `BackendBinding` union (G-01 kinds only).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -201,6 +237,17 @@ pub enum BackendConfig {
         app_url: String,
         protocol: CustomAgentProtocol,
     },
+}
+
+impl BackendConfig {
+    /// The G-01 kind of this backend.
+    pub fn kind(&self) -> BackendKind {
+        match self {
+            BackendConfig::GenieOneMcp { .. } => BackendKind::GenieOneMcp,
+            BackendConfig::GenieAgent { .. } => BackendKind::GenieAgent,
+            BackendConfig::CustomAgent { .. } => BackendKind::CustomAgent,
+        }
+    }
 }
 
 /// `mog.binding.*` (D62).
@@ -448,10 +495,28 @@ impl MogConfig {
     }
 }
 
+/// G-03: the first URL field under `mog.binding` (a key that ends in `url`, in any case, such as
+/// `appUrl`) that names a rejected Genie backend (the Beta Genie MCP, the per-space Genie MCP or
+/// the Genie One API SSE) or cannot be made canonical. Loading it fails with a clear code
+/// instead of a generic `invalid_config`. Other strings (`home`, `profile`, `spaceId`) are not
+/// URLs, so they are not checked here.
+fn rejected_backend_in(v: &Value) -> Option<EndpointError> {
+    match v {
+        Value::Array(items) => items.iter().find_map(rejected_backend_in),
+        Value::Object(m) => m.iter().find_map(|(key, v)| match v {
+            Value::String(s) if key.to_ascii_lowercase().ends_with("url") => {
+                genie_endpoint::rejected_backend(s)
+            }
+            _ => rejected_backend_in(v),
+        }),
+        _ => None,
+    }
+}
+
 /// Check and normalize a config for `config_write` (MB-02).
 ///
 /// The order is fixed: size, then the MB-02 secret check (so a secret under an unknown key is
-/// reported as a secret), then `schemaVersion`, the schema and the bounds. The result has every
+/// reported as a secret), then `schemaVersion`, the G-03 backend check, the schema and the bounds. The result has every
 /// Appendix F default filled in, and a backend.
 pub fn parse_config(json: &JsonObject) -> Result<MogConfig, ConfigError> {
     let size = serde_json::to_vec(json).map_err(|_| ConfigError::InvalidConfig)?;
@@ -463,6 +528,9 @@ pub fn parse_config(json: &JsonObject) -> Result<MogConfig, ConfigError> {
         Some(v) if v.as_u64() == Some(u64::from(SCHEMA_VERSION)) => {}
         Some(Value::Number(_)) => return Err(ConfigError::UnsupportedSchemaVersion),
         _ => return Err(ConfigError::InvalidConfig),
+    }
+    if let Some(e) = json.get("binding").and_then(rejected_backend_in) {
+        return Err(ConfigError::RejectedBackend(e));
     }
     // serde messages quote keys and values, so they are dropped (4.6 rule 7).
     let value = serde_json::to_value(json).map_err(|_| ConfigError::InvalidConfig)?;

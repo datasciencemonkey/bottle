@@ -12,6 +12,7 @@ pub mod cli_runner;
 pub mod clock;
 pub mod egress_policy;
 pub mod error;
+pub mod genie_endpoint;
 pub mod hotkey;
 pub mod hotkey_bindings;
 pub mod hotkey_core;
