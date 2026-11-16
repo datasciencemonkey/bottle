@@ -3,6 +3,7 @@
 //! The app only hosts windows. Domain logic runs in the hidden `brain` window (ARC-2);
 //! secrets and I/O stay in `mog-core` (section 4.4). The IPC command surface is in `ipc` (#223).
 
+pub mod hotkey_host;
 pub mod ipc;
 pub mod window_host;
 pub mod windows;
