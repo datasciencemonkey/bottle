@@ -22,6 +22,7 @@ import {
   markdownProse,
   mogNounHits,
   rustWindowTitles,
+  visibleTexts,
 } from '../test-support/naming-rules';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('../views/test-tauri')).coreModule);
@@ -73,17 +74,6 @@ const mascot: MascotRenderer = {
   destroy: () => undefined,
 };
 
-/** The text a user sees or hears in a view: text nodes plus a11y and tooltip attributes. */
-function visibleText(el: HTMLElement): string[] {
-  const copy = el.cloneNode(true) as HTMLElement;
-  // Third-party licence text is verbatim (component names, file paths); MB-10a still scans it.
-  copy.querySelectorAll('[data-notices]').forEach((n) => n.remove());
-  const attrs = [...copy.querySelectorAll('*')].flatMap((n) =>
-    ['aria-label', 'title', 'alt', 'placeholder'].map((a) => n.getAttribute(a) ?? ''),
-  );
-  return [copy.textContent ?? '', ...attrs];
-}
-
 async function renderedViewText(): Promise<string[]> {
   const hub = await render(<Hub />);
   await tauri.emit('mog:view_state', { mogId: ID, mood: 'idle', overlays });
@@ -95,7 +85,7 @@ async function renderedViewText(): Promise<string[]> {
     chips: [{ id: 'c1', label: 'Ask Genie' }],
     answerMd: 'ok',
   });
-  const text = [hub.el, mog.el, card.el].flatMap(visibleText);
+  const text = [hub.el, mog.el, card.el].flatMap(visibleTexts);
   await act(async () => [hub, mog, card].forEach((r) => r.root.unmount()));
   return text;
 }

@@ -7,11 +7,15 @@
 //   markdownProse(md): the prose of a Markdown file without code fences and code spans.
 //   htmlTitle(html): the `<title>` text of an HTML page.
 //   rustWindowTitles(src): the `title: "..."` strings of the Rust window specs.
+//   visibleTexts(el): each text node and each a11y or tooltip attribute of a rendered view, one
+//     string each, so text in neighbouring elements never runs together.
 
 export const PRODUCT_NAME = 'Bottle';
 export const LABS_LABEL = 'Databricks Labs / experimental';
 
-const BANNED = new RegExp(['mo', 'ther', '[\\s_-]*', 'bri', 'cks'].join(''), 'gi');
+// A separator is a space, `_`, `-` or an HTML space entity such as `&nbsp;` or `&#160;`.
+const SEP = '(?:[\\s_-]|&nbsp;|&#160;|&#x0*a0;|&#32;)*';
+const BANNED = new RegExp(['mo', 'ther', SEP, 'bri', 'cks'].join(''), 'gi');
 const NOUN = /(?<![\w./:<>-])mogs?(?![\w/:<>-]|\.\w)/gi;
 
 export function bannedNameHits(text: string): string[] {
@@ -32,4 +36,20 @@ export function htmlTitle(html: string): string | undefined {
 
 export function rustWindowTitles(src: string): string[] {
   return [...src.matchAll(/\btitle:\s*"([^"]*)"/g)].map((m) => m[1] ?? '');
+}
+
+const ATTRS = ['aria-label', 'title', 'alt', 'placeholder'];
+
+export function visibleTexts(el: Element): string[] {
+  const copy = el.cloneNode(true) as Element;
+  // Third-party licence text is verbatim (component names, file paths); MB-10a still scans it.
+  copy.querySelectorAll('[data-notices]').forEach((n) => n.remove());
+  const doc = copy.ownerDocument;
+  const walker = doc.createTreeWalker(copy, 4 /* NodeFilter.SHOW_TEXT */);
+  const out: string[] = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) out.push(n.textContent ?? '');
+  for (const n of [copy, ...copy.querySelectorAll('*')]) {
+    for (const a of ATTRS) out.push(n.getAttribute(a) ?? '');
+  }
+  return out.filter((t) => t.trim() !== '');
 }

@@ -103,8 +103,8 @@ def test_mb_10c_names_check_bans_mog_in_package_and_bundle_ids(tmp_path):
                                        "mainBinaryName": "mog"}),
         ("package.json", {"name": "mog-app"}),
     ]
-    for rel, value in cases:
-        root = good_tree(tmp_path / str(len(rel)) / str(len(json.dumps(value))))
+    for i, (rel, value) in enumerate(cases):
+        root = good_tree(tmp_path / f"case{i}")
         (root / rel).write_text(json.dumps(value))
         assert any("MB-10c" in p for p in ci_checks.naming_problems(root)), value
     root = good_tree(tmp_path / "crate")
