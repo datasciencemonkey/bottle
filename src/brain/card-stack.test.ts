@@ -162,4 +162,17 @@ describe('card stack controller', () => {
       vi.useRealTimers();
     }
   });
+
+  it('[UX-38] [AT-36] the STT badge goes in the card footer of every update', () => {
+    const { card, last, sent } = setup();
+    card.setSttBadge('STT: local');
+    expect(last()?.sttBadge).toBe('STT: local');
+    card.add({ id: 'b1', text: 'a1' });
+    expect(last()?.sttBadge).toBe('STT: local');
+    const n = sent.length;
+    card.setSttBadge('STT: local');
+    expect(sent).toHaveLength(n); // no change, no update
+    card.setSttBadge('STT: Databricks m1');
+    expect(last()?.sttBadge).toBe('STT: Databricks m1');
+  });
 });

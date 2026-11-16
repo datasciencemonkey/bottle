@@ -163,4 +163,112 @@ describe('V2 MOG view', () => {
     expect(a.calls.at(-1)).toBe('destroy');
     expect(b.calls).toEqual(['mount', 'mood:error', 'attention:true']);
   });
+
+  /** What the brain's `mapBadges` sends (src/brain/components/mog-badges.ts). */
+  const badges = [
+    {
+      kind: 'identity',
+      text: 'prod-finance · Genie One',
+      label: 'Profile prod-finance on adb-111.azuredatabricks.net, backend Genie One',
+      hoverOnly: true,
+    },
+    {
+      kind: 'stt',
+      text: 'STT: local',
+      label: 'Speech to text runs on this device',
+      hoverOnly: true,
+    },
+    {
+      kind: 'hop',
+      text: 'Hop: sales-ws (this session)',
+      label: 'Asking in sales-ws for this session',
+      hoverOnly: false,
+    },
+    {
+      kind: 'offline',
+      text: 'Offline',
+      label: 'Offline: Databricks is not reachable',
+      hoverOnly: false,
+    },
+    {
+      kind: 'sync',
+      text: 'Sync paused',
+      label: 'Sync paused: all data stays on this device',
+      hoverOnly: false,
+    },
+  ];
+  const shown = (el: HTMLElement) =>
+    [...el.querySelectorAll('[data-badge]')].map((b) => b.getAttribute('data-badge'));
+  const hoverOn = (t: HTMLElement) =>
+    act(async () => t.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })));
+  const hoverOff = (t: HTMLElement) =>
+    act(async () =>
+      t.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body })),
+    );
+
+  it('[MOG-07] [UX-38] [AT-12] the profile/backend and STT badges show only while the pointer is on the MOG', async () => {
+    const { m } = fakeMascot();
+    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    await tauri.emit('mog:view_state', {
+      mogId: ID,
+      mood: 'idle',
+      overlays,
+      badges: badges.slice(0, 2),
+    });
+    expect(shown(el)).toEqual([]);
+    const target = el.querySelector('[aria-label="MOG"]') as HTMLElement;
+    await hoverOn(target);
+    expect(shown(el)).toEqual(['identity', 'stt']);
+    const identity = el.querySelector('[data-badge="identity"]') as HTMLElement;
+    expect(identity.textContent).toBe('prod-finance · Genie One');
+    expect(identity.getAttribute('aria-label')).toContain('adb-111.azuredatabricks.net');
+    expect(el.querySelector('[data-badge="stt"]')?.textContent).toBe('STT: local');
+    await hoverOff(target);
+    expect(shown(el)).toEqual([]);
+  });
+
+  it('[UX-39a] [UX-33] [AT-12] hop, offline and sync badges show with text and a label while they apply', async () => {
+    const { m } = fakeMascot();
+    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    await tauri.emit('mog:view_state', { mogId: ID, mood: 'idle', overlays, badges });
+    expect(shown(el)).toEqual(['hop', 'offline', 'sync']);
+    for (const b of badges.slice(2)) {
+      const node = el.querySelector(`[data-badge="${b.kind}"]`) as HTMLElement;
+      expect(node.textContent).toBe(b.text);
+      expect(node.getAttribute('aria-label')).toBe(b.label);
+    }
+    // The state no longer applies: the brain sends no badge, and the view shows none.
+    await tauri.emit('mog:view_state', { mogId: ID, mood: 'idle', overlays, badges: [] });
+    expect(shown(el)).toEqual([]);
+  });
+
+  it('[UX-39b] [AT-12] badges never change the mood the view renders', async () => {
+    const { m, calls } = fakeMascot();
+    await render(<MogView mogId={ID} createMascot={() => m} />);
+    await tauri.emit('mog:view_state', { mogId: ID, mood: 'processing', overlays });
+    await tauri.emit('mog:view_state', { mogId: ID, mood: 'processing', overlays, badges });
+    expect(calls.filter((c) => c.startsWith('mood:'))).toEqual([
+      'mood:processing',
+      'mood:processing',
+    ]);
+  });
+
+  it('[UX-39a] drops a view state with malformed badges', async () => {
+    const { m, calls } = fakeMascot();
+    await render(<MogView mogId={ID} createMascot={() => m} />);
+    await tauri.emit('mog:view_state', { mogId: ID, mood: 'idle', overlays, badges: 'x' });
+    await tauri.emit('mog:view_state', {
+      mogId: ID,
+      mood: 'idle',
+      overlays,
+      badges: [{ kind: 'hop', text: 1, label: 'l', hoverOnly: false }],
+    });
+    await tauri.emit('mog:view_state', {
+      mogId: ID,
+      mood: 'idle',
+      overlays,
+      badges: [{ kind: 'hop', text: 't', label: 'l', hoverOnly: 'no' }],
+    });
+    expect(calls).toEqual(['mount']);
+  });
 });
