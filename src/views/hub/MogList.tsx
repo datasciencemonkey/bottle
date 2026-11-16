@@ -183,9 +183,13 @@ function Row({ row, onDeleted }: { row: HubMogRow; onDeleted: () => void }) {
   const editBtn = useRef<HTMLButtonElement>(null);
   const deleteBtn = useRef<HTMLButtonElement>(null);
   // WCAG 2.4.3: when the form or the dialog closes, focus goes back to the button that opened it.
-  const done = (back: { current: HTMLButtonElement | null }) => () => {
+  const closeEdit = () => {
     setMode('view');
-    back.current?.focus();
+    editBtn.current?.focus();
+  };
+  const closeDelete = () => {
+    setMode('view');
+    deleteBtn.current?.focus();
   };
   return (
     <li data-mog-row={row.mogId} data-running={String(row.running)}>
@@ -230,11 +234,11 @@ function Row({ row, onDeleted }: { row: HubMogRow; onDeleted: () => void }) {
       >
         Delete
       </button>
-      {mode === 'edit' && <EditForm row={row} onDone={done(editBtn)} />}
+      {mode === 'edit' && <EditForm row={row} onDone={closeEdit} />}
       {mode === 'delete' && (
         <DeleteDialog
           row={row}
-          onDone={done(deleteBtn)}
+          onDone={closeDelete}
           onDeleted={() => {
             setMode('view');
             onDeleted();
