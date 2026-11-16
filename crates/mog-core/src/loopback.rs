@@ -607,6 +607,61 @@ mod tests {
         assert!(waited < Duration::from_secs(1), "read waited {waited:?}");
     }
 
+    struct CountingHandler(std::sync::atomic::AtomicUsize);
+    impl LoopbackHandler for CountingHandler {
+        fn handle(&self, _req: &LoopbackRequest) -> LoopbackResponse {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            LoopbackResponse {
+                status: 200,
+                body: json!({}),
+            }
+        }
+    }
+
+    /// #400: `close` sets `stop` before it shuts the open sockets. A read that wakes in that gap
+    /// must end the connection with no reply, so the client sees only EOF (ARC-7 rule 9).
+    /// The socket is never shut here, so only the stop path of `serve` can end it.
+    #[test]
+    fn arc_7_rule_9_a_read_cut_by_close_sends_no_reply() {
+        let handler = Arc::new(CountingHandler(std::sync::atomic::AtomicUsize::new(0)));
+        let shared = Arc::new(Shared {
+            authorization: Arc::new(new_authorization().unwrap()),
+            handler: handler.clone(),
+            stop: AtomicBool::new(false),
+            conns: Mutex::new(Conns::default()),
+        });
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        // Half a request with the right secret: the body never completes.
+        let head = format!(
+            "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: {}\r\nContent-Length: 10\r\n\r\n{{",
+            shared.authorization.as_str()
+        );
+        client.write_all(head.as_bytes()).unwrap();
+        let serve_shared = Arc::clone(&shared);
+        let server_thread = std::thread::spawn(move || {
+            serve(server, LoopbackEndpoint::GenieOneMcp, port, &serve_shared);
+        });
+        // Give `serve` time to block in the body read, so the stop path below is the one under
+        // test. The assertions hold for any timing: an earlier stop also ends with no reply.
+        std::thread::sleep(Duration::from_millis(200));
+        shared.stop.store(true, Ordering::SeqCst);
+        server_thread.join().unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut buf = [0u8; 64];
+        let got = client.read(&mut buf);
+        assert!(
+            matches!(got, Ok(0) | Err(_)),
+            "a closed session answered: {:?}",
+            got.map(|n| String::from_utf8_lossy(&buf[..n]).into_owned())
+        );
+        assert_eq!(handler.0.load(Ordering::SeqCst), 0);
+    }
+
     #[test]
     fn arc_7_secret_is_bearer_and_64_hex() {
         let a = new_authorization().unwrap();
