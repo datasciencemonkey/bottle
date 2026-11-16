@@ -281,9 +281,11 @@ impl HookSignalSeam for HookConsumers {
     fn deferred(&self, signal: DeferredSignal) {
         match signal {
             DeferredSignal::CopilotKeySeen => {
-                // The next key check flags the Copilot key. Settings (#77) and the wizard
-                // (#43) show it through `hotkeys_set`.
-                self.copilot.set(true);
+                // The next key check flags the Copilot key: `hotkeys_set` returns the
+                // conflict for Settings (#77) and the wizard (#43).
+                if self.copilot.set(true) {
+                    // TODO(#346): on this change, show the conflict of the current keys.
+                }
             }
             DeferredSignal::Escape => {
                 // TODO(#14): the capture lifecycle ends hands-free capture on Esc.
@@ -1621,7 +1623,7 @@ mod tests {
             .split("\n}\n")
             .next()
             .unwrap();
-        for todo in ["TODO(#14)", "TODO(#294)", "TODO(#297)"] {
+        for todo in ["TODO(#14)", "TODO(#294)", "TODO(#297)", "TODO(#346)"] {
             assert!(seam.contains(todo), "the seam misses {todo}");
         }
     }

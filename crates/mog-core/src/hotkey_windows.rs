@@ -1785,11 +1785,44 @@ mod tests {
     fn cap_43b_a_watch_that_saw_the_key_stops_looking() {
         let mut f = HookFilter::new(TalkKey::RightAlt);
         let mut w = CopilotWatch::default();
-        for e in copilot_press(vk::LWIN, vk::LSHIFT) {
-            f.on_key(e, T0);
-            w.on_key(e, &f);
-        }
+        assert!(!w.seen());
+        let fired: Vec<bool> = copilot_press(vk::LWIN, vk::LSHIFT)
+            .iter()
+            .chain(copilot_press(vk::RWIN, vk::RSHIFT).iter())
+            .map(|e| {
+                f.on_key(*e, T0);
+                w.on_key(*e, &f)
+            })
+            .collect();
+        // Only the first F23 key-down fires; the second chord does not.
+        assert_eq!(fired.iter().filter(|x| **x).count(), 1);
+        assert!(fired[2], "the first F23 key-down fires");
         assert!(w.seen());
+    }
+
+    #[test]
+    fn cap_43b_an_injected_f23_with_physical_win_and_shift_is_ignored() {
+        let events = [
+            KeyEvent::down(vk::LWIN),
+            KeyEvent::down(vk::LSHIFT),
+            KeyEvent {
+                injected: true,
+                ..KeyEvent::down(vk::F23)
+            },
+        ];
+        assert_eq!(watch(&events).0, 0);
+    }
+
+    #[test]
+    fn cap_43b_an_f23_key_up_with_win_and_shift_is_ignored() {
+        // Only a key-down counts: a key-up alone (its key-down was before the hook) is not
+        // a press of the Copilot key.
+        let events = [
+            KeyEvent::down(vk::LWIN),
+            KeyEvent::down(vk::LSHIFT),
+            KeyEvent::up(vk::F23),
+        ];
+        assert_eq!(watch(&events).0, 0);
     }
 
     #[test]
