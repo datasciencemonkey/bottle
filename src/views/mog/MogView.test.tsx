@@ -168,7 +168,9 @@ describe('V2 MOG view', () => {
       for (let t = 0; t <= 300; t += 10) push({ owner: ID, dbfs: -10, t });
     });
     expect(a.calls.some((c) => c.startsWith('level:'))).toBe(true);
-    await act(async () => root.render(<MogView mogId={ID} createMascot={second} levels={levels} />));
+    await act(async () =>
+      root.render(<MogView mogId={ID} createMascot={second} levels={levels} />),
+    );
     expect(b.calls.some((c) => c.startsWith('level:'))).toBe(false);
     // The stream goes on with the same owner. The new meter starts from 0, so it writes at once.
     act(() => push({ owner: ID, dbfs: -10, t: 310 }));
