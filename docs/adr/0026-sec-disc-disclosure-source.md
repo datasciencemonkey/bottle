@@ -1,4 +1,4 @@
-# ADR 0025: One source for the Table SEC-DISC disclosures
+# ADR 0026: One source for the Table SEC-DISC disclosures
 
 - Status: accepted
 - Issue: #93 (SEC-17, AT-24)
