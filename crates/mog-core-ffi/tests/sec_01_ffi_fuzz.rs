@@ -52,7 +52,11 @@ impl Rng {
         match self.below(if depth == 0 { 3 } else { 5 }) {
             0 => json!(self.below(100)),
             1 | 2 => json!(self.text(secrets)),
-            3 => Value::Array((0..self.below(3)).map(|_| self.json(secrets, depth - 1)).collect()),
+            3 => Value::Array(
+                (0..self.below(3))
+                    .map(|_| self.json(secrets, depth - 1))
+                    .collect(),
+            ),
             _ => {
                 let mut m = Map::new();
                 for _ in 0..self.below(4) {

@@ -27,6 +27,12 @@ pub enum CoreError {
         /// The stable reason code.
         reason: &'static str,
     },
+    /// R12 IpcGateway refused an IPC call (#36). `code` is the fixed tag of the `IpcError`
+    /// variant (for example `"window_not_allowed"`), never a command name, label or value.
+    IpcRefused {
+        /// The stable, content-free code from `ipc_gateway::ERROR_CODES`.
+        code: &'static str,
+    },
 }
 
 impl CoreError {
@@ -36,6 +42,7 @@ impl CoreError {
             CoreError::NotImplemented { .. } => "not_implemented",
             CoreError::TokenCommandRefused { .. } => "token_command_refused",
             CoreError::Unavailable { reason, .. } => reason,
+            CoreError::IpcRefused { code } => code,
         }
     }
 }
@@ -52,6 +59,7 @@ impl fmt::Display for CoreError {
             CoreError::Unavailable { component, reason } => {
                 write!(f, "{component} is not available: {reason}")
             }
+            CoreError::IpcRefused { code } => write!(f, "R12 refused the call: {code}"),
         }
     }
 }
