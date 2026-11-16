@@ -107,6 +107,8 @@ pub fn current_clipboard_platform() -> Option<ClipboardPlatform> {
 pub trait ClipboardBackend: Send + Sync {
     /// Replace the clipboard contents with exactly `formats`, in one operation.
     fn write(&self, formats: &[ClipboardFormat]) -> CoreResult<()>;
+    /// Remove everything from the clipboard.
+    fn clear(&self) -> CoreResult<()>;
 }
 
 /// Writes text to the clipboard with the concealed and transient flags (SEC-30).
@@ -157,6 +159,11 @@ impl ClipboardBackend for MacPasteboard {
         }
         Ok(())
     }
+
+    fn clear(&self) -> CoreResult<()> {
+        objc2_app_kit::NSPasteboard::generalPasteboard().clearContents();
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -165,11 +172,23 @@ mod clipboard_tests {
     use std::sync::Mutex;
 
     #[derive(Default)]
-    struct Recorder(Mutex<Vec<Vec<ClipboardFormat>>>);
+    struct Recorder {
+        calls: Mutex<Vec<Vec<ClipboardFormat>>>,
+        clears: Mutex<u32>,
+        fail_write: bool,
+    }
 
     impl ClipboardBackend for &Recorder {
         fn write(&self, formats: &[ClipboardFormat]) -> CoreResult<()> {
-            self.0.lock().unwrap().push(formats.to_vec());
+            self.calls.lock().unwrap().push(formats.to_vec());
+            if self.fail_write {
+                return Err(CoreError::NotImplemented { component: ID });
+            }
+            Ok(())
+        }
+
+        fn clear(&self) -> CoreResult<()> {
+            *self.clears.lock().unwrap() += 1;
             Ok(())
         }
     }
@@ -211,12 +230,12 @@ mod clipboard_tests {
     }
 
     #[test]
-    fn sec_30_writer_sends_all_formats_in_one_write() {
+    fn sec_30_writer_sends_all_formats_in_one_backend_call() {
         let rec = Recorder::default();
         let w = ClipboardWriter::new(&rec);
         w.write_text_for(ClipboardPlatform::MacOs, "secret")
             .unwrap();
-        let calls = rec.0.lock().unwrap();
+        let calls = rec.calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
         assert_eq!(
             calls[0],
@@ -241,7 +260,29 @@ mod clipboard_tests {
         if current_clipboard_platform().is_none() {
             let rec = Recorder::default();
             assert!(ClipboardWriter::new(&rec).write_text("x").is_err());
-            assert!(rec.0.lock().unwrap().is_empty());
+            assert!(rec.calls.lock().unwrap().is_empty());
         }
+    }
+
+    #[test]
+    fn sec_30_failed_write_clears_the_clipboard_and_reports_the_error() {
+        let rec = Recorder {
+            fail_write: true,
+            ..Recorder::default()
+        };
+        let w = ClipboardWriter::new(&rec);
+        assert!(w
+            .write_text_for(ClipboardPlatform::MacOs, "secret")
+            .is_err());
+        assert_eq!(*rec.clears.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn sec_30_successful_write_does_not_clear_the_clipboard() {
+        let rec = Recorder::default();
+        let w = ClipboardWriter::new(&rec);
+        w.write_text_for(ClipboardPlatform::MacOs, "secret")
+            .unwrap();
+        assert_eq!(*rec.clears.lock().unwrap(), 0);
     }
 }
