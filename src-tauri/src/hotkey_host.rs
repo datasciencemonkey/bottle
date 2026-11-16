@@ -1087,8 +1087,6 @@ mod tests {
         }
     }
 
-    /// Run `signals` through a fake hook receiver, the adapter thread, the host queue and the
-    /// forwarder thread, as `platform_service` wires them on Windows.
     /// A clock that moves `step` forward on each read, so each hook signal that the engine
     /// times lands `step` after the one before, whatever the thread timing (CAP-44a).
     #[derive(Debug)]
@@ -1105,7 +1103,9 @@ mod tests {
         }
     }
 
-    /// Run `signals` through the adapter; signals land 300 ms apart, so a press is no tap.
+    /// Run `signals` through a fake hook receiver, the adapter thread, the host queue and the
+    /// forwarder thread, as `platform_service` wires them on Windows. The signals land 300 ms
+    /// apart, so a press is not a tap (CAP-44a).
     fn run_windows_path(
         target: &Arc<PttTarget>,
         signals: &[HookSignal],
