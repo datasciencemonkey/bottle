@@ -8,6 +8,7 @@ pub mod hotkey_settings;
 pub mod ipc;
 #[cfg(target_os = "macos")]
 pub mod macos_panel;
+pub mod mog_config_host;
 pub mod mog_drag;
 pub mod webview_media;
 pub mod window_host;
@@ -109,6 +110,9 @@ pub fn run() {
             if hotkey_host::install(handle).is_err() {
                 // TODO(#297): report the talk key as unavailable once `hotkey.status` exists.
             }
+            // MB-02: the MOG config store in the app config dir (#25). If the OS gives no app
+            // config dir, the app still runs; `config_*` then fail with a code (#333).
+            let _ = mog_config_host::install(handle);
             let host = app.state::<TauriWindowHost<tauri::Wry>>();
             for kind in startup_windows(demo) {
                 // MOG and card windows go through R11, so the cap and the ledger hold.
