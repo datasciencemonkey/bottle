@@ -176,6 +176,27 @@ feature issues, and the device steps. The shared parts:
 - Pending tests: Rust `#[ignore = "pending TODO(#n) ..."]` with a `todo!` end; TS `it.skip` with
   `TODO(#n)` in the title. They never count as a pass.
 
+### Acceptance tests AT-04, AT-05, AT-40, AT-43 (#231)
+
+`docs/tests/AT-DICTATION-STT-OFFLINE.md` lists what runs, the pending tests with their feature
+issues, and the device steps. The shared parts:
+
+- Rust: `mog_core::stt_bench`: the AT-40 STT benchmark scorer (golden-set rules, WER, numbers,
+  entities, hallucinations, p95 on 10 s clips, Opus delta, the gate). ADR 0034 has the rules. The
+  device run reads `BOTTLE_STT_GOLDEN` and `BOTTLE_STT_RESULTS`. Doubles never pass.
+- TS: `src/test-support/cloud-calls.ts`: `cloudCalls(log)` and `callsTo(log, commands)` over the
+  `core.invoke` log of brain tests ("no cloud request", "no agent turn and no Genie call").
+- TS: `src/test-support/meaning.ts`: the AT-05 corpus `MEANING_CORPUS` and `meaningFailures`.
+
+### Acceptance tests AT-02, AT-12 (#233)
+
+`docs/tests/AT-SIGNIN-WORKSPACE-HOP.md` lists what runs on shipped code (the router step hop
+commands, the hop badges, the MoodMapper and the R6 token buffer), the pending tests with their
+feature issues (#16, #17, #18, #42, #145, #162, #163, #164, #165; v1 #146, #166, #218), and the person
+steps on live workspaces (needs:u2m). The tests reuse the router model double
+(`src/test-support/model-invoke.ts`), the Genie One MCP double and the simulated clock. They add no
+new helper.
+
 ### Gate evidence (AT-22)
 
 Each gate run is a file in `docs/evidence/` in the format of `docs/tests/EVIDENCE-TEMPLATE.md`.

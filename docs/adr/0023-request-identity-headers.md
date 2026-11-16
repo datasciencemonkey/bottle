@@ -1,6 +1,6 @@
 # ADR 0023: Request identity headers (User-Agent and AI Gateway request tags)
 
-- Status: Accepted
+- Status: Accepted (decision 1 amended by ADR 0041)
 - Date: 2026-11-16
 - Issue: #197
 - Owner: security-lead (implemented by impl-197)

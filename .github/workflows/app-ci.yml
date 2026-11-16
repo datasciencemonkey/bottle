@@ -3,12 +3,24 @@
 # Signing and notarization read secrets and are skipped when the secrets are absent; the release
 # gate rel-03 (#170) supplies the secrets (NFR-15a, NFR-15b). Every action is pinned to a commit
 # SHA (AT-37). Repo checks for the requirements and the mascot stay in repo-checks.yml.
+#
+# Runner policy (#227 follow-up): GitHub's macOS queue held PRs for hours, so the matrix depends on
+# the event.
+# - pull_request: Windows (windows-2025) only. Every PR is built and tested on the author's macOS
+#   (Apple Silicon) machine with scripts/pre-push.sh, and reviewers re-run the checks in fresh
+#   worktrees. Repo checks (repo-checks.yml, Linux) are unchanged.
+# - push to main, the nightly schedule and workflow_dispatch: the full matrix (macos-15 and
+#   windows-2025). A macOS-only break is caught on main or overnight, not on the PR.
+# To run macOS on PRs again, replace each `github.event_name == 'pull_request' && '<windows>' ||`
+# expression below with its second JSON list.
 name: App CI
 
 on:
   pull_request:
   push:
     branches: [main]
+  schedule:
+    - cron: "37 7 * * *" # nightly, off the hour (07:37 UTC)
   workflow_dispatch:
 
 permissions:
@@ -34,9 +46,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: macos-15
-          - os: windows-2025
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["windows-2025"]' || '["macos-15","windows-2025"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
@@ -44,6 +54,13 @@ jobs:
       - name: Keep LF line endings
         run: git config --global core.autocrlf false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The vendored OpenSSL in the SQLCipher build (#35) runs Configure with perl. Git Bash's
+      # MSYS perl lacks Locale::Maketext::Simple, so point openssl-src at Strawberry Perl (#375).
+      - name: Use Strawberry Perl for vendored OpenSSL (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          test -x /c/Strawberry/perl/bin/perl.exe
+          echo 'OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl.exe' >> "$GITHUB_ENV"
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -112,15 +129,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: macos-15
-          - os: windows-2025
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["windows-2025"]' || '["macos-15","windows-2025"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
       - name: Keep LF line endings
         run: git config --global core.autocrlf false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The vendored OpenSSL in the SQLCipher build (#35) runs Configure with perl. Git Bash's
+      # MSYS perl lacks Locale::Maketext::Simple, so point openssl-src at Strawberry Perl (#375).
+      - name: Use Strawberry Perl for vendored OpenSSL (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          test -x /c/Strawberry/perl/bin/perl.exe
+          echo 'OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl.exe' >> "$GITHUB_ENV"
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -156,15 +178,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: macos-15
-          - os: windows-2025
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["windows-2025"]' || '["macos-15","windows-2025"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
       - name: Keep LF line endings
         run: git config --global core.autocrlf false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The vendored OpenSSL in the SQLCipher build (#35) runs Configure with perl. Git Bash's
+      # MSYS perl lacks Locale::Maketext::Simple, so point openssl-src at Strawberry Perl (#375).
+      - name: Use Strawberry Perl for vendored OpenSSL (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          test -x /c/Strawberry/perl/bin/perl.exe
+          echo 'OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl.exe' >> "$GITHUB_ENV"
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -186,11 +213,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: macos-15
-            bundles: dmg
-          - os: windows-2025
-            bundles: nsis
+        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"windows-2025","bundles":"nsis"}]' || '[{"os":"macos-15","bundles":"dmg"},{"os":"windows-2025","bundles":"nsis"}]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
@@ -202,6 +225,13 @@ jobs:
       - name: Keep LF line endings
         run: git config --global core.autocrlf false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The vendored OpenSSL in the SQLCipher build (#35) runs Configure with perl. Git Bash's
+      # MSYS perl lacks Locale::Maketext::Simple, so point openssl-src at Strawberry Perl (#375).
+      - name: Use Strawberry Perl for vendored OpenSSL (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          test -x /c/Strawberry/perl/bin/perl.exe
+          echo 'OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl.exe' >> "$GITHUB_ENV"
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
