@@ -26,6 +26,9 @@ export function MogView({
   const mascot = useRef<MascotRenderer | undefined>(undefined);
   const last = useRef<MogViewState | undefined>(undefined);
   const [state, setState] = useState<MogViewState | undefined>(undefined);
+  // The pointer is on the MOG: the view shows the hover badges (MOG-07, UX-38).
+  // TODO(#10): hover delivery on the non-activating panel (SP-01, ADR 0009).
+  const [hovered, setHovered] = useState(false);
 
   useEffect(() => {
     const el = ref.current;
@@ -82,14 +85,29 @@ export function MogView({
         }}
         onMouseOver={() => {
           mascot.current?.setHover(true);
+          setHovered(true);
           void emitView(mogId, 'hover');
         }}
-        onMouseLeave={() => mascot.current?.setHover(false)}
+        onMouseLeave={() => {
+          mascot.current?.setHover(false);
+          setHovered(false);
+        }}
       />
       {/* The visual "?" cue is the renderer's (UX-03); this empty span is the accessible badge. */}
       {state?.overlays.attention && <span data-overlay="attention" aria-label="Needs attention" />}
       {state?.overlays.recording && <span data-overlay="recording">REC</span>}
-      {state?.overlays.offline && <span data-overlay="offline">Offline</span>}
+      {/* The 4.7 offline overlay, unless the brain sent the offline badge (ADR 0029). */}
+      {state?.overlays.offline && !state.badges?.some((b) => b.kind === 'offline') && (
+        <span data-overlay="offline">Offline</span>
+      )}
+      {/* The brain picks the badges and their text (ADR 0029); badges never set the mood. */}
+      {state?.badges
+        ?.filter((b) => hovered || !b.hoverOnly)
+        .map((b) => (
+          <span key={b.kind} data-badge={b.kind} aria-label={b.label}>
+            {b.text}
+          </span>
+        ))}
     </div>
   );
 }

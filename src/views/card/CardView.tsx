@@ -105,6 +105,11 @@ export function CardView({ mogId }: { mogId: MogId }) {
         </button>
       )}
       {card?.answerMd !== undefined && <div data-answer>{card.answerMd}</div>}
+      {card?.sttBadge !== undefined && (
+        <footer>
+          <span data-badge="stt">{card.sttBadge}</span>
+        </footer>
+      )}
       {/* Dev builds only: a field for the typing and IME check of #78 (tools/mac/card-check.swift). */}
       {import.meta.env.DEV && mogId === DEMO_ID && (
         <textarea data-probe aria-label="Typing probe (dev demo card)" />

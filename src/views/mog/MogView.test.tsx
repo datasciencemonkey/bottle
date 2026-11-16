@@ -232,6 +232,15 @@ describe('V2 MOG view', () => {
     const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
     await tauri.emit('mog:view_state', { mogId: ID, mood: 'idle', overlays, badges });
     expect(shown(el)).toEqual(['hop', 'offline', 'sync']);
+    // With the offline badge, the 4.7 offline overlay text does not show twice.
+    await tauri.emit('mog:view_state', {
+      mogId: ID,
+      mood: 'idle',
+      overlays: { ...overlays, offline: true },
+      badges,
+    });
+    expect(el.querySelectorAll('[data-overlay="offline"]')).toHaveLength(0);
+    expect(el.textContent?.match(/Offline/g)).toHaveLength(1);
     for (const b of badges.slice(2)) {
       const node = el.querySelector(`[data-badge="${b.kind}"]`) as HTMLElement;
       expect(node.textContent).toBe(b.text);

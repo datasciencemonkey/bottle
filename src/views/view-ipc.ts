@@ -14,6 +14,16 @@ export interface MogViewState {
   mood: Mood;
   overlays: ReturnType<MoodMapper>['overlays'];
   level?: number;
+  /** The badges the brain computed (`mapBadges`, ADR 0029). Each has text and a label. */
+  badges?: MogBadgeView[];
+}
+
+/** One MOG badge (MOG-07, UX-38, UX-39a). `hoverOnly` badges show while the pointer is on the MOG. */
+export interface MogBadgeView {
+  kind: string;
+  text: string;
+  label: string;
+  hoverOnly: boolean;
 }
 
 /** One card slot (ADR 0028): a blurb, or a split answer with its parts in one slot (UX-11b). */
@@ -36,6 +46,8 @@ export interface CardUpdate {
   chips: { id: string; label: string }[];
   answerMd?: string;
   historyCount?: number;
+  /** The STT badge for the card footer (UX-38), for example "STT: local". */
+  sttBadge?: string;
 }
 
 const MOODS: readonly Mood[] = [
@@ -56,6 +68,15 @@ const isItems = (v: unknown, keys: string[]): boolean =>
 export function asMogViewState(p: unknown): MogViewState | undefined {
   if (!isObj(p) || typeof p['mogId'] !== 'string' || !isObj(p['overlays'])) return undefined;
   if (!MOODS.includes(p['mood'] as Mood)) return undefined;
+  const b = p['badges'];
+  if (
+    b !== undefined &&
+    !(
+      isItems(b, ['kind', 'text', 'label']) &&
+      (b as Record<string, unknown>[]).every((i) => typeof i['hoverOnly'] === 'boolean')
+    )
+  )
+    return undefined;
   return p as unknown as MogViewState;
 }
 
@@ -68,6 +89,8 @@ export function asCardUpdate(p: unknown): CardUpdate | undefined {
   const n = p['historyCount'];
   if (n !== undefined && !(typeof n === 'number' && Number.isInteger(n) && n >= 0))
     return undefined;
+  const stt = p['sttBadge'];
+  if (stt !== undefined && typeof stt !== 'string') return undefined;
   return p as unknown as CardUpdate;
 }
 

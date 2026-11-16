@@ -98,7 +98,8 @@ describe('MOG status badges (#50)', () => {
   });
 
   it('[UX-38] [CAP-57c] with no STT provider known yet, the badge shows the local default', () => {
-    const { stt: _unused, ...noStt } = home;
+    const noStt: BadgeSources = { ...home };
+    delete noStt.stt;
     expect(byKind(mapBadges(noStt), 'stt')?.text).toBe('STT: local');
   });
 
@@ -243,11 +244,16 @@ describe('UX-39b: badges are orthogonal to the mood', () => {
 
   it('[UX-39b] [AT-12] the mood sources have no field for the STT, identity or sync badge', () => {
     // A compile-time check: these badge inputs are not part of MoodSources.
-    const src: MoodSources = SCENARIOS[0]!.src;
+    const src: MoodSources = {
+      mog: { lifecycle: 'ready', since: 0 },
+      capture: noCapture,
+      requests: [],
+    };
+    const typed = (s: MoodSources) => s;
     // @ts-expect-error sync is a badge input only
-    const _sync: MoodSources = { ...src, sync: 'paused' };
+    typed({ ...src, sync: 'paused' });
     // @ts-expect-error stt is a badge input only
-    const _stt: MoodSources = { ...src, stt: home.stt };
+    typed({ ...src, stt: home.stt });
     expect(mapMood(A, src, T).mood).toBe('idle');
   });
 });

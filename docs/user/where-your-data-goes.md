@@ -25,7 +25,8 @@ The copy comes from one file: `src/views/hub/disclosures.ts`. If you change the 
 - Meeting audio is kept encrypted on disk and deleted within 5 minutes after transcription, unless your admin keeps it longer.
 - Bottle uses Databricks speech-to-text only if you or your admin turn it on, after a check passes.
 - Then audio goes to your home workspace in short chunks, and Bottle does not store it there.
-- The STT badge on each MOG shows which one is on.
+- The STT badge on each MOG shows which one is on: "STT: local" or "STT: Databricks <model>".
+- Point at a MOG to see this badge. The card footer shows it too.
 
 ## Your home workspace does the processing
 
