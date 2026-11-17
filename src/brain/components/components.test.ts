@@ -1,12 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import type {
-  AskRequest,
-  PageDraft,
-  RouterDecision,
-  SegmentRef,
-  Tags,
-} from '../../shared/interfaces';
+import type { AskRequest, PageDraft, SegmentRef, Tags } from '../../shared/interfaces';
 import { BrainActor } from '../actor';
 import { core } from '../test-core';
 import { NotImplementedError } from '../errors';
@@ -54,7 +48,6 @@ const page: PageDraft = {
   requestId: 'r',
   source: 'you',
 };
-const decision = {} as RouterDecision;
 
 /** Calls `fn` and checks that it throws (or rejects with) a NotImplementedError for `issue`. */
 async function expectStub(fn: () => unknown, issue: number): Promise<void> {
@@ -267,13 +260,8 @@ describe('brain component stubs', () => {
     await expectStub(() => t.createDraft('r'), 203);
   });
 
-  it('[T15] AgentBridge implements the 4.7 interface as stubs', async () => {
+  it('[T15] AgentBridge keeps the onTool stub for #141', async () => {
     const t = createAgentBridge();
-    await expectStub(() => t.start(MOG, 'claude'), 112);
-    await expectStub(
-      () => t.send({ mogId: MOG, question: 'q', decision, recall: [], target: 'p' }),
-      112,
-    );
     await expectStub(() => t.onTool({ callId: 'c', tool: 'set_mood', args: {} }), 141);
   });
 

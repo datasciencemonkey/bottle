@@ -3,6 +3,11 @@
  *
  * Responsibilities: Main agent turn input (cleaned question, router decision, recall hits), the
  * UI tool handlers, the guardrail checks of RTR-29a..e and the fallback classifier route (B4).
+ *
+ * `start` and `send` (#112) go to the Rust R16 AgentHost through `agent_start` and `agent_send`.
+ * The core runs one shared harness runtime with one session per MOG (U11, RTR-21a) and keeps
+ * every token on its side of the secret boundary (ARC-7). A rejected `send` means the session is
+ * unavailable (ARC-F14); the caller routes with the fallback classifier (RTR-15b).
  */
 import type {
   AgentBridge,
@@ -11,16 +16,17 @@ import type {
   HarnessKind,
   MogId,
 } from '../../shared/interfaces';
+import { call, type JsonObject } from '../../shared/ipc';
 import { NotImplementedError } from '../errors';
 
 const C = 'AgentBridge';
 
-export class AgentBridgeStub implements AgentBridge {
-  async start(_mogId: MogId, _h: HarnessKind): Promise<void> {
-    throw new NotImplementedError(C, 'start', 112); // TODO(#112)
+export class CoreAgentBridge implements AgentBridge {
+  async start(mogId: MogId, h: HarnessKind): Promise<void> {
+    await call('agent_start', { mogId, harness: h });
   }
-  async send(_t: AgentTurn): Promise<void> {
-    throw new NotImplementedError(C, 'send', 112); // TODO(#112)
+  async send(t: AgentTurn): Promise<void> {
+    await call('agent_send', { mogId: t.mogId, turn: t as unknown as JsonObject });
   }
   async onTool(_call: { callId: string; tool: BottleTool; args: unknown }): Promise<unknown> {
     throw new NotImplementedError(C, 'onTool', 141); // TODO(#141)
@@ -28,5 +34,5 @@ export class AgentBridgeStub implements AgentBridge {
 }
 
 export function createAgentBridge(): AgentBridge {
-  return new AgentBridgeStub();
+  return new CoreAgentBridge();
 }
