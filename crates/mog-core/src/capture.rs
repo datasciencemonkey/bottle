@@ -168,6 +168,10 @@ pub enum StopReason {
     Escape,
     /// The hands-free VAD end: `mog.capture.vadEndMs` of silence (CAP-14c).
     VadEnd,
+    /// The mic gave only zero buffers for 2 s, for example a denied mic permission (CAP-17b).
+    /// The capture makes no transcript, and the MOG shows the fix-it card. TODO(#453): the
+    /// fix-it card reads the mic fault from `capture.state`.
+    ZeroBuffers,
 }
 
 impl StopReason {
@@ -185,13 +189,17 @@ impl StopReason {
             StopReason::Tap => "tap",
             StopReason::Escape => "escape",
             StopReason::VadEnd => "vad_end",
+            StopReason::ZeroBuffers => "zero_buffers",
         }
     }
 
     /// The segment pipeline (#116) must drop the audio of a lease that stopped for this
-    /// reason: it never goes to the journal or to STT (CAP-44b, CAP-14b).
+    /// reason: it never goes to the journal or to STT (CAP-44b, CAP-14b, CAP-17b).
     pub fn discards_audio(&self) -> bool {
-        matches!(self, StopReason::Discarded | StopReason::Escape)
+        matches!(
+            self,
+            StopReason::Discarded | StopReason::Escape | StopReason::ZeroBuffers
+        )
     }
 }
 
@@ -636,6 +644,16 @@ impl CaptureCore {
     /// opens the stream again (Handy's `needs_reopen`, `managers/audio.rs:294-307` @ aca8985).
     /// It never waits for the device mutex, so a backend may call it from inside `open`.
     pub fn device_failed(&self, source: AudioSource) {
+        self.source_stopped(source, StopReason::DeviceLost);
+    }
+
+    /// The mic backend stopped the mic after 2 s of zero buffers (CAP-17b). Like
+    /// [`CaptureCore::device_failed`], with [`StopReason::ZeroBuffers`].
+    pub fn mic_silent(&self) {
+        self.source_stopped(AudioSource::Mic, StopReason::ZeroBuffers);
+    }
+
+    fn source_stopped(&self, source: AudioSource, reason: StopReason) {
         // Mark the stream lost before any lease changes, so no start can reuse it (round 5).
         self.lost(source).store(true, Ordering::SeqCst);
         self.commit(|inner, now, evs| {
@@ -655,7 +673,7 @@ impl CaptureCore {
             };
             for id in ids {
                 if let Some(rec) = inner.remove(id, now) {
-                    evs.push(rec.stopped(StopReason::DeviceLost));
+                    evs.push(rec.stopped(reason));
                 }
             }
             // A pending start or resume that needs this source must not get a lease on a
