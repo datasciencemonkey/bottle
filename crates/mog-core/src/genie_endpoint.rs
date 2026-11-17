@@ -120,7 +120,7 @@ pub struct GenieOneEndpoint {
 }
 
 /// Digits only, with no leading zero (so one workspace has one canonical URL).
-fn valid_workspace_id(id: &str) -> bool {
+pub(crate) fn valid_workspace_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 32
         && id.bytes().all(|b| b.is_ascii_digit())

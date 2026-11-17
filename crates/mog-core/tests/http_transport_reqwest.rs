@@ -25,7 +25,7 @@ use mog_core::http_transport::{
 };
 use mog_core::ipc::JsonObject;
 use mog_core::request_identity::{user_agent, BottleIdentity};
-use mog_core::token_broker::TokenBroker;
+use mog_core::token_broker::{TokenBroker, TokenLease};
 use mog_core::types::Tags;
 use serde_json::{json, Value};
 
@@ -198,16 +198,21 @@ struct FakeBroker {
 }
 
 impl TokenBroker for FakeBroker {
-    fn with_token(&self, _profile: &str, f: &mut dyn FnMut(&[u8])) -> CoreResult<()> {
+    fn with_token(
+        &self,
+        _profile: &str,
+        _host: &str,
+        f: &mut dyn FnMut(&[u8]),
+    ) -> CoreResult<TokenLease> {
         self.lends.fetch_add(1, Ordering::SeqCst);
         if self.invalidations.load(Ordering::SeqCst) == 0 {
             f(TOKEN.as_bytes());
         } else {
             f(TOKEN_2.as_bytes());
         }
-        Ok(())
+        Ok(TokenLease::default())
     }
-    fn invalidate(&self, _profile: &str) -> CoreResult<()> {
+    fn invalidate(&self, _profile: &str, _lease: TokenLease) -> CoreResult<()> {
         self.invalidations.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -923,5 +928,152 @@ fn arc_6_errors_carry_no_host_token_or_body() {
     let text = format!("{err} {err:?}");
     for bad in ["127.0.0.1", TOKEN, "denied", "/api/"] {
         assert!(!text.contains(bad), "{text}");
+    }
+}
+
+// ---------- #18: the real R6 TokenBroker behind the real R7 ----------
+
+mod real_r6 {
+    use super::*;
+    use mog_core::cli_runner::{refuse_token_command, CliRunner, SecretStdout};
+    use mog_core::clock::{SimWallClock, WallClock};
+    use mog_core::token_broker::{CliTokenBroker, ScimMe};
+    use std::path::PathBuf;
+    use std::sync::Weak;
+
+    /// 2026-11-17T12:00:00Z in Unix milliseconds.
+    const T0_MS: i64 = 1_794_916_800_000;
+
+    /// A fake R5 that hands out TOKEN, then TOKEN_2, ... and counts the `auth token` runs.
+    #[derive(Default)]
+    struct CountingCli {
+        runs: AtomicUsize,
+    }
+
+    impl CliRunner for CountingCli {
+        fn resolve(&self) -> CoreResult<PathBuf> {
+            Ok(PathBuf::from("/usr/local/bin/databricks"))
+        }
+        fn run_json(&self, args: &[&str]) -> CoreResult<Value> {
+            refuse_token_command(args)?;
+            panic!("R6 must not call run_json");
+        }
+        fn run_auth_token(&self, _profile: &str) -> CoreResult<SecretStdout> {
+            let n = self.runs.fetch_add(1, Ordering::SeqCst);
+            let token = if n == 0 { TOKEN } else { TOKEN_2 };
+            Ok(SecretStdout::new(
+                format!(
+                    r#"{{"access_token":"{token}","token_type":"Bearer","expiry":"2026-11-17T13:00:00Z"}}"#
+                )
+                .into_bytes(),
+            ))
+        }
+    }
+
+    struct RealRig {
+        transport: Arc<ReqwestHttpTransport>,
+        r6: Arc<CliTokenBroker>,
+        cli: Arc<CountingCli>,
+    }
+
+    fn real_rig(server: &Server) -> RealRig {
+        let cli = Arc::new(CountingCli::default());
+        let pause = Arc::new(SimPause::default());
+        let clock: Arc<dyn MonotonicClock> = Arc::new(pause.clock.clone());
+        let wall: Arc<dyn WallClock> = Arc::new(SimWallClock::at(T0_MS));
+        let h = hosts(&server.origin());
+        let r6 = Arc::new(CliTokenBroker::new(
+            cli.clone(),
+            h.clone(),
+            clock.clone(),
+            wall,
+        ));
+        let transport = Arc::new(
+            ReqwestHttpTransport::with_seams(TransportSeams {
+                hosts: h,
+                tokens: r6.clone(),
+                policy: Arc::new(LoopbackPolicy),
+                bucket: Arc::new(AimdBucket::new(clock)),
+                decorator: Arc::new(BottleIdentity::new()),
+                pause,
+            })
+            .unwrap(),
+        );
+        let weak: Weak<ReqwestHttpTransport> = Arc::downgrade(&transport);
+        r6.bind_scim(weak);
+        RealRig { transport, r6, cli }
+    }
+
+    #[test]
+    fn w_05b_w_05c_w_05d_a_401_drops_the_token_runs_the_cli_once_and_retries_once() {
+        let s = serve(vec![
+            json_reply(401, json!({"error_code": "UNAUTHENTICATED"})),
+            json_reply(200, json!({"userName": "a"})),
+        ]);
+        let r = real_rig(&s);
+        let got = r
+            .transport
+            .request(PROFILE, "scim.me", &none(), None, &tags("m1", "genie"))
+            .unwrap();
+        assert_eq!(got, json!({"userName": "a"}));
+        assert_eq!(
+            r.cli.runs.load(Ordering::SeqCst),
+            2,
+            "one CLI run after the 401"
+        );
+        let seen = s.seen();
+        assert_eq!(seen.len(), 2, "one retry");
+        assert_eq!(
+            seen[0].header("authorization"),
+            Some(format!("Bearer {TOKEN}").as_str())
+        );
+        assert_eq!(
+            seen[1].header("authorization"),
+            Some(format!("Bearer {TOKEN_2}").as_str())
+        );
+    }
+
+    #[test]
+    fn w_05d_a_second_401_gives_auth_expired_after_one_retry_only() {
+        let s = serve(vec![
+            json_reply(401, json!({})),
+            json_reply(401, json!({})),
+            json_reply(200, json!({})),
+        ]);
+        let r = real_rig(&s);
+        let e = r
+            .transport
+            .request(PROFILE, "scim.me", &none(), None, &tags("m1", "genie"));
+        assert_eq!(code(e), "auth_expired");
+        assert_eq!(s.seen().len(), 2, "exactly one retry");
+        assert_eq!(r.cli.runs.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn w_06a_w_06b_r7_reads_x_databricks_org_id_for_r6_once_per_profile() {
+        let s = serve(vec![
+            with_header(
+                json_reply(200, json!({"userName": "a"})),
+                "x-databricks-org-id",
+                "1234",
+            ),
+            json_reply(200, json!({})),
+        ]);
+        let r = real_rig(&s);
+        assert_eq!(r.r6.workspace_id(PROFILE).unwrap(), "1234");
+        assert_eq!(r.r6.workspace_id(PROFILE).unwrap(), "1234");
+        let seen = s.seen();
+        assert_eq!(seen.len(), 1, "one SCIM call per profile per launch");
+        assert_eq!(seen[0].method, "GET");
+        assert_eq!(seen[0].target, "/api/2.0/preview/scim/v2/Me");
+        assert_eq!(
+            seen[0].header("authorization"),
+            Some(format!("Bearer {TOKEN}").as_str())
+        );
+        assert_eq!(
+            r.transport.org_id_header(PROFILE).ok().flatten(),
+            None,
+            "the second reply has no header"
+        );
     }
 }

@@ -64,9 +64,15 @@ fn r6_token_broker_stub_reports_not_implemented() {
     use mog_core::token_broker::{StubTokenBroker, TokenBroker};
     let s = StubTokenBroker;
     let mut called = false;
-    not_implemented(s.with_token("p", &mut |_bytes: &[u8]| called = true), "R6");
+    not_implemented(
+        s.with_token("p", "h", &mut |_bytes: &[u8]| called = true),
+        "R6",
+    );
     assert!(!called, "the stub must not call the closure");
-    not_implemented(s.invalidate("p"), "R6");
+    not_implemented(
+        s.invalidate("p", mog_core::token_broker::TokenLease::default()),
+        "R6",
+    );
     not_implemented(s.workspace_id("p"), "R6");
 }
 

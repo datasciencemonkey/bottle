@@ -585,7 +585,7 @@ fn serve(shared: &Shared, mut conn: TcpStream) {
         ModelTarget::Gateway { profile, host } => {
             let url = format!("https://{host}{}{rest}", a.gateway_route());
             let mut out = None;
-            let lent = shared.tokens.with_token(profile, &mut |token| {
+            let lent = shared.tokens.with_token(profile, host, &mut |token| {
                 let req = UpstreamRequest {
                     method: "POST",
                     url: url.clone(),

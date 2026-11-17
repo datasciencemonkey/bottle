@@ -21,7 +21,7 @@ use mog_core::agent_host::{
 };
 use mog_core::bottle_mcp::{BottleMcpDeps, UnavailableLocalTools, UnavailableRelay, MCP_PATH};
 use mog_core::error::CoreResult;
-use mog_core::token_broker::TokenBroker;
+use mog_core::token_broker::{TokenBroker, TokenLease};
 use serde_json::{json, Value};
 
 const FAKE_TOKEN: &[u8] = b"dapi-FAKE-TOKEN-0123456789abcdef";
@@ -33,12 +33,17 @@ struct FakeTokens {
 }
 
 impl TokenBroker for FakeTokens {
-    fn with_token(&self, _profile: &str, f: &mut dyn FnMut(&[u8])) -> CoreResult<()> {
+    fn with_token(
+        &self,
+        _profile: &str,
+        _host: &str,
+        f: &mut dyn FnMut(&[u8]),
+    ) -> CoreResult<TokenLease> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         f(FAKE_TOKEN);
-        Ok(())
+        Ok(TokenLease::default())
     }
-    fn invalidate(&self, _profile: &str) -> CoreResult<()> {
+    fn invalidate(&self, _profile: &str, _lease: TokenLease) -> CoreResult<()> {
         Ok(())
     }
     fn workspace_id(&self, _profile: &str) -> CoreResult<String> {
