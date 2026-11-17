@@ -3,9 +3,17 @@
  * Rust store, no Lakebase.
  * - `RecordingLocalStore` replaces the R10 store behind `LocalMemoryService`.
  * - `InMemoryMemoryService` replaces the whole 4.7 MemoryService in tests of its callers.
+ * - `OutboxStoreDouble`, `NetworkStatusDouble` and `ItemEmbedderDouble` are the R10 outbox, the
+ *   network status and the embedder behind the #102 embedding queue.
  * - `genieExchangeDouble` is a terminal Genie exchange with plainly fake values (#38). It has the
  *   shape a bridge gives `recordExchange`; it is never a live Genie result.
  */
+import type {
+  EmbedJob,
+  EmbedOutcome,
+  ItemEmbedder,
+  NetworkStatus,
+} from '../brain/components/embedding-queue';
 import type { LocalMemoryStore, LocalStmtId } from '../brain/components/memory-store';
 import type { JsonObject } from '../shared/ipc';
 import type {
@@ -126,5 +134,197 @@ export class InMemoryMemoryService implements MemoryService {
 
   syncStatus(): { pending: number; lastOk?: string } {
     return { pending: 0 };
+  }
+}
+
+// ---- Outbox and embedding queue doubles (#102, MEM-08f, MEM-10a, MEM-19d) ----------------------
+
+/** One outbox row of `OutboxStoreDouble`, with the columns of migration 0001. */
+export interface OutboxRowDouble {
+  oid: number;
+  mogId: string;
+  kind: 'embed' | 'sync';
+  op: string;
+  refId: string;
+  payload: string;
+  attempts: number;
+  nextAttemptAt: number;
+  lastErrorCode?: string;
+}
+
+/** One memory item row of `OutboxStoreDouble`. */
+export interface ItemRowDouble {
+  itemId: string;
+  mogId: string;
+  text: string;
+  embedded: boolean;
+  mentions: number;
+}
+
+/**
+ * The data of `OutboxStoreDouble`. It outlives a store, so a new store on the same data is a
+ * restart of the app on the same database file.
+ */
+export class OutboxDataDouble {
+  readonly items: ItemRowDouble[] = [];
+  readonly outbox: OutboxRowDouble[] = [];
+  nextOid = 1;
+}
+
+const str = (v: unknown): string => (typeof v === 'string' ? v : '');
+const num = (v: unknown): number => (typeof v === 'number' ? v : 0);
+
+/**
+ * A stateful R10 double for the item write and the outbox statements. It follows the SQL of the
+ * Rust catalog: `mem.item.write` writes the item and its embed job together (MEM-10a); an item id
+ * of another MOG changes nothing (MEM-01); a waiting job is not added again (SP-21). Every call
+ * is also recorded. No SQL, no IPC.
+ */
+export class OutboxStoreDouble implements LocalMemoryStore {
+  readonly calls: { stmtId: LocalStmtId; params: JsonObject }[] = [];
+
+  constructor(readonly data: OutboxDataDouble = new OutboxDataDouble()) {}
+
+  /** The rows of one MOG, oldest first. */
+  jobs(mogId: string, kind: 'embed' | 'sync' = 'embed'): OutboxRowDouble[] {
+    return this.data.outbox.filter((r) => r.mogId === mogId && r.kind === kind);
+  }
+
+  async exec(stmtId: LocalStmtId, params: JsonObject): Promise<{ rows: unknown[] }> {
+    this.calls.push({ stmtId, params });
+    const d = this.data;
+    const mogId = str(params.mogId);
+    const changes = (n: number) => ({ changes: n });
+    switch (stmtId) {
+      case 'mem.item.write': {
+        const itemId = str(params.itemId);
+        let it = d.items.find((i) => i.itemId === itemId);
+        if (it && it.mogId !== mogId) return { rows: [changes(0), changes(0)] };
+        if (it) {
+          it.text = str(params.text);
+          it.mentions += 1;
+        } else {
+          it = { itemId, mogId, text: str(params.text), embedded: false, mentions: 1 };
+          d.items.push(it);
+        }
+        const waiting = this.jobs(mogId).some((r) => r.refId === itemId);
+        if (it.embedded || waiting) return { rows: [changes(1), changes(0)] };
+        const now = num(params.now);
+        d.outbox.push({
+          oid: d.nextOid++,
+          mogId,
+          kind: 'embed',
+          op: 'item.embed',
+          refId: itemId,
+          payload: '{}',
+          attempts: 0,
+          nextAttemptAt: now,
+        });
+        return { rows: [changes(1), changes(1)] };
+      }
+      case 'mem.item.get': {
+        const it = d.items.find((i) => i.mogId === mogId && i.itemId === str(params.itemId));
+        return { rows: it ? [{ itemId: it.itemId, text: it.text }] : [] };
+      }
+      case 'mem.outbox.enqueue': {
+        const now = num(params.now);
+        d.outbox.push({
+          oid: d.nextOid++,
+          mogId,
+          kind: str(params.kind) === 'sync' ? 'sync' : 'embed',
+          op: str(params.op),
+          refId: str(params.refId),
+          payload: JSON.stringify(params.payload ?? {}),
+          attempts: 0,
+          nextAttemptAt: now,
+        });
+        return { rows: [changes(1)] };
+      }
+      case 'mem.outbox.due': {
+        const kind = str(params.kind);
+        if (kind === '') throw new Error('invalid_args');
+        const rows = this.data.outbox
+          .filter((r) => r.mogId === mogId && r.kind === kind && r.nextAttemptAt <= num(params.now))
+          .sort((a, b) => a.oid - b.oid)
+          .slice(0, num(params.limit))
+          .map((r) => ({
+            oid: r.oid,
+            kind: r.kind,
+            op: r.op,
+            refId: r.refId,
+            payload: r.payload,
+            attempts: r.attempts,
+            nextAttemptAt: r.nextAttemptAt,
+          }));
+        return { rows };
+      }
+      case 'mem.outbox.retry': {
+        const r = d.outbox.find((x) => x.mogId === mogId && x.oid === num(params.oid));
+        if (!r) return { rows: [changes(0)] };
+        r.attempts += 1;
+        r.nextAttemptAt = num(params.nextAttemptAt);
+        r.lastErrorCode = typeof params.errorCode === 'string' ? params.errorCode : undefined;
+        return { rows: [changes(1)] };
+      }
+      case 'mem.outbox.done': {
+        const i = d.outbox.findIndex((x) => x.mogId === mogId && x.oid === num(params.oid));
+        if (i < 0) return { rows: [changes(0)] };
+        d.outbox.splice(i, 1);
+        return { rows: [changes(1)] };
+      }
+      default:
+        return { rows: [] };
+    }
+  }
+}
+
+/** A network status the test sets by hand (ARC-F7). It starts offline. */
+export class NetworkStatusDouble implements NetworkStatus {
+  #online: boolean;
+  readonly #subs = new Set<(online: boolean) => void>();
+
+  constructor(online = false) {
+    this.#online = online;
+  }
+
+  online(): boolean {
+    return this.#online;
+  }
+
+  onChange(cb: (online: boolean) => void): () => void {
+    this.#subs.add(cb);
+    return () => this.#subs.delete(cb);
+  }
+
+  set(online: boolean): void {
+    if (online === this.#online) return;
+    this.#online = online;
+    for (const cb of this.#subs) cb(online);
+  }
+}
+
+/**
+ * An embedder double. It never calls an endpoint and never makes a vector. By default each job is
+ * `done` and marks its item embedded in `data`. `script` can answer a job another way, and
+ * `offlineAfter` makes the embedder go offline after that many `done` jobs (the SP-21 mid-batch
+ * case).
+ */
+export class ItemEmbedderDouble implements ItemEmbedder {
+  readonly seen: EmbedJob[] = [];
+  offlineAfter = Number.POSITIVE_INFINITY;
+  script: (job: EmbedJob) => EmbedOutcome | undefined = () => undefined;
+  #done = 0;
+
+  constructor(private readonly data?: OutboxDataDouble) {}
+
+  async embed(job: EmbedJob): Promise<EmbedOutcome> {
+    this.seen.push(job);
+    const scripted = this.script(job);
+    if (scripted) return scripted;
+    if (this.#done >= this.offlineAfter) return { status: 'offline' };
+    this.#done += 1;
+    const it = this.data?.items.find((i) => i.mogId === job.mogId && i.itemId === job.itemId);
+    if (it) it.embedded = true;
+    return { status: 'done' };
   }
 }

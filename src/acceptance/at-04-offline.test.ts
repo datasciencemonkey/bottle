@@ -5,20 +5,29 @@
  *
  * "No cloud request" is checked with `src/test-support/cloud-calls.ts` on the IPC log of the
  * brain. The fallback chain (#52), the command grammar and the offline classifier (#143), the
- * ask outbox (#41), the embedding outbox (#102) and offline recall (#199) are not built, so these
- * tests stay `it.skip` with the feature issue. The network-off device run is #175 and a person's
+ * ask outbox (#41) and offline recall (#199) are not built, so these tests stay `it.skip` with the
+ * feature issue. The embedding outbox (#102) runs on doubles of R10, the network and the embedder. The network-off device run is #175 and a person's
  * step (docs/tests/AT-DICTATION-STT-OFFLINE.md). The transcript identity contract (CAP-72) runs in
  * `crates/mog-core/tests/at_04_offline.rs`.
  */
 import type { SegmentRef, Tags } from '../shared/interfaces';
 import { createGenieBridge } from '../brain/components/genie-bridge';
-import { createMemoryService } from '../brain/components/memory-service';
+import { EmbeddingQueue } from '../brain/components/embedding-queue';
+import { LocalMemoryService, createMemoryService } from '../brain/components/memory-service';
+import type { LocalStmtId } from '../brain/components/memory-store';
 import { createRouterContextGate } from '../brain/components/router-context-gate';
 import type { RouterInput } from '../brain/components/router-step';
 import { createSttProvider } from '../brain/components/stt-provider';
 import { core } from '../brain/test-core';
 import { argsOf, callsTo, cloudCalls } from '../test-support/cloud-calls';
 import { createGenieOneMcpDouble } from '../test-support/genie-one-mcp';
+import {
+  ItemEmbedderDouble,
+  NetworkStatusDouble,
+  OutboxDataDouble,
+  OutboxStoreDouble,
+} from '../test-support/memory-double';
+import type { JsonObject } from '../shared/ipc';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('../brain/test-core')).coreModule);
 
@@ -110,13 +119,45 @@ describe('AT-04 dictate offline', () => {
     expect(genie.maxConcurrentPolls()).toBe(1);
   });
 
-  it.skip('[AT-04] [MEM-08f] [MEM-19d] an offline embedding request waits in the outbox and survives a restart TODO(#102)', async () => {
-    const mem = createMemoryService();
-    await mem.write([{ mogId: MOG, type: 'fact', text: 'Q3 target is 4.2M', source: 'you' }]);
+  it('[AT-04] [MEM-08f] [MEM-19d] an offline embedding request waits in the outbox and survives a restart', async () => {
+    // The brain reaches R10 over mem_local_exec; the core answers from a stateful outbox double
+    // (the database file). The network and the embedder are doubles: no endpoint is called.
+    const data = new OutboxDataDouble();
+    const r10 = new OutboxStoreDouble(data);
+    core.invoke.mockImplementation(async (cmd: string, args?: unknown) => {
+      if (cmd !== 'mem_local_exec') return {};
+      const a = argsOf(args) as { stmtId: LocalStmtId; params: JsonObject };
+      return r10.exec(a.stmtId, a.params);
+    });
+    const net = new NetworkStatusDouble(false);
+    const offlineEmbedder = new ItemEmbedderDouble(data);
+    const q1 = new EmbeddingQueue({ net, embedder: offlineEmbedder, mogIds: () => [MOG] });
+    q1.start();
+    const mem = new LocalMemoryService(undefined, { embeddingQueue: q1 });
+    await mem.storeItem({
+      mogId: MOG,
+      type: 'fact',
+      text: 'Q3 target is 4.2M',
+      source: 'you',
+      confidence: 0.9,
+    });
+    await q1.idle();
     expect(cloudCalls(core.invoke.mock.calls)).toEqual([]);
-    // TODO(#102): a new MemoryService on the same store still has one queued embedding request,
-    // and it runs (model_invoke role embed) when the device is online again.
-    expect(createMemoryService().syncStatus().pending).toBe(1);
+    expect(offlineEmbedder.seen).toEqual([]);
+    expect(r10.jobs(MOG)).toHaveLength(1);
+    q1.stop();
+
+    // Restart: a new queue on the same store still has the request, and it runs online.
+    const embedder = new ItemEmbedderDouble(data);
+    const q2 = new EmbeddingQueue({ net, embedder, mogIds: () => [MOG] });
+    q2.start();
+    net.set(true);
+    await q2.idle();
+    expect(embedder.seen).toHaveLength(1);
+    expect(r10.jobs(MOG)).toEqual([]);
+    expect(cloudCalls(core.invoke.mock.calls)).toEqual([]);
+    // TODO(#198): the real embedder sends model_invoke (role embed); TODO(#466): the real
+    // net.status payload drives NetworkStatus. The network-off device run is #175.
   });
 
   it.skip('[AT-04] [MEM-22a] [MEM-22b] offline recall uses FTS5 and recency only and is flagged offline_fts_only TODO(#199)', async () => {
