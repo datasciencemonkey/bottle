@@ -52,7 +52,7 @@ This PR does not edit the 4.5 table. Add these rows to 4.5:
 
 ## Open work
 
-- `TODO(#425)`: wire `capture_resume` to R2 `resume(lease_id)` with the other `capture_*` routes.
+- Done in #425 (ADR 0055): `capture_resume` goes to R2 `resume(lease_id)` with the other `capture_*` routes.
 - An `elevated_foreground` notice that comes before the brain subscribes is lost for that elevated process. This fits CAP-42 ("first failure"), because the brain has no window to show it in yet.
 - The pill text for `fallback_chord_unavailable` and the CAP-42 tooltip text are UX decisions for the brain issues.
 - The host does not send a status for `HostState::NeedsPermission` or for a start that returns `Unavailable` after install. A later issue can add that.

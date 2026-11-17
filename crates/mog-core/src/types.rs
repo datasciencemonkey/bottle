@@ -266,6 +266,47 @@ pub struct CaptureState {
     pub others_track: OthersTrack,
 }
 
+/// Why a capture lease stopped (`CaptureStopped.reason`, #425, ADR 0055).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureStopReason {
+    /// `capture_stop` with the lease ID.
+    Manual,
+    /// The 120 s hold safety stop (CAP-04a).
+    HoldCap,
+    /// The 5 min hands-free cap (CAP-04b).
+    HandsFreeCap,
+    /// A higher-priority capture took the mic (ARC-F9).
+    Preempted,
+    /// `capture_stop_all`, for example from the panic key (MB-05).
+    Panic,
+    /// The device reported a failed stream.
+    DeviceLost,
+    /// The talk key came up and the post-roll ended (CAP-12b).
+    Released,
+    /// A tap or a cancelled PTT: its audio is dropped (CAP-44b).
+    Discarded,
+    /// A tap stopped hands-free (CAP-14b).
+    Tap,
+    /// Esc stopped hands-free; its audio is dropped (CAP-14b).
+    Escape,
+    /// The hands-free VAD end (CAP-14c).
+    VadEnd,
+    /// The mic gave only digital silence (CAP-17b, #22); its audio is dropped.
+    ZeroBuffers,
+}
+
+/// The `capture.stopped` event payload (#425, ADR 0055): one lease stopped. Content-free
+/// (CAP-01b).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CaptureStopped {
+    pub lease_id: LeaseId,
+    pub mog_id: MogId,
+    pub mode: CaptureMode,
+    pub reason: CaptureStopReason,
+}
+
 /// The `capture.segment` event payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

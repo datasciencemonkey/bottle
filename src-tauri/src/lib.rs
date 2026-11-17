@@ -3,6 +3,7 @@
 //! The app only hosts windows. Domain logic runs in the hidden `brain` window (ARC-2);
 //! secrets and I/O stay in `mog-core` (section 4.4). The IPC command surface is in `ipc` (#223).
 
+pub mod capture_host;
 pub mod hotkey_host;
 pub mod hotkey_settings;
 pub mod ipc;
@@ -60,6 +61,51 @@ fn demo_card_cycle(app: tauri::AppHandle<tauri::Wry>) {
         });
 }
 
+/// R2: build the one [`capture_host::CaptureHost`] of the process and manage it, so the
+/// `capture_*` commands reach it (#425, ADR 0055). Its events go to the brain through
+/// [`ipc::BrainChannel::send`], which scrubs each payload.
+fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()> {
+    let app = handle.clone();
+    let relay: capture_host::BrainRelay = std::sync::Arc::new(move |event, payload| {
+        app.state::<ipc::BrainChannel>().send(event, payload)
+    });
+    // #388 (ADR 0038): the cpal mic on its own audio thread. The frames go nowhere yet.
+    // TODO(#21): the RAM-only PTT buffer is the frame sink.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    let (device, link) = {
+        use mog_core::audio_device::{cpal_backend::CpalMicHost, DiscardSink, MicDevice};
+        match MicDevice::spawn(CpalMicHost::new, Box::new(DiscardSink)) {
+            Ok((mic, link)) => (
+                Box::new(mic) as Box<dyn mog_core::capture::AudioDevice>,
+                Some(link),
+            ),
+            // No mic thread: the app still runs, and every start answers `host_failed`.
+            Err(_) => (
+                Box::new(capture_host::UnwiredMic) as Box<dyn mog_core::capture::AudioDevice>,
+                None,
+            ),
+        }
+    };
+    // No mic backend on other platforms (the Linux CI build).
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let (device, link): (Box<dyn mog_core::capture::AudioDevice>, Option<()>) =
+        (Box::new(capture_host::UnwiredMic), None);
+    let host = capture_host::CaptureHost::new(
+        device,
+        std::sync::Arc::new(mog_core::clock::SystemClock::new()),
+        relay,
+    )?;
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    if let Some(link) = link {
+        // A stream that fails after it opened stops its leases (`device_failed`).
+        host.connect_failures(&link);
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let _ = link;
+    handle.manage(host);
+    Ok(())
+}
+
 /// The core version that this app links (ARC-1).
 pub fn linked_core_version() -> &'static str {
     mog_core::core_version()
@@ -111,6 +157,8 @@ pub fn run() {
                 // The brain subscribes later; `hotkey:status` is sticky, so it still gets this.
                 hotkey_host::report_unavailable(handle);
             }
+            // R2: one CaptureService per process; its events go to the brain Channel (#425).
+            install_capture(handle)?;
             // MB-02: the MOG config store in the app config dir (#25). If the OS gives no app
             // config dir, the app still runs; `config_*` then fail with a code (#333).
             let _ = mog_config_host::install(handle);
@@ -141,6 +189,10 @@ pub fn run() {
             if let tauri::RunEvent::Exit = event {
                 // R1: remove the key tap on quit (#305).
                 hotkey_host::shutdown(app);
+                // R2: stop every capture, so the mic closes, and end the cap timer (#425).
+                if let Some(capture) = app.try_state::<capture_host::CaptureHost>() {
+                    capture.shutdown();
+                }
             }
         });
 }

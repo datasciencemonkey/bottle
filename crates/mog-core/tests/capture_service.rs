@@ -1451,7 +1451,7 @@ fn cap_13b_a_pause_during_a_resume_keeps_the_session_paused() {
 // "200 ms or less" (CAP-14b): every stop below runs on the sim clock with no advance between
 // the trigger and the check, so the mic is closed 0 ms after the trigger. A cap or VAD end
 // fires at the exact deadline that `tick()` returns; the host timer calls `tick()` then
-// (TODO(#425)).
+// (#425, ADR 0055).
 
 use mog_core::capture::{HandsFreeStop, DEFAULT_VAD_END_MS, POST_ROLL_MS};
 

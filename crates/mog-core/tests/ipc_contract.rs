@@ -233,6 +233,8 @@ fn arc_5_event_names_are_valid_tauri_names() {
         "hotkey.status",
         "capture.state",
         "capture.segment",
+        // #425 (ADR 0055): why a lease stopped (hold cap, hands-free cap, panic).
+        "capture.stopped",
         "session.stop_signal",
         "auth.status",
         "net.status",

@@ -4,7 +4,8 @@
  * key-down reaches the brain -> capture opens -> mood `listening` -> `mog:view_state` -> MOG view
  * -> next frame, and each later step event -> its frame. Everything runs on the #229 sim clock.
  * The hops between processes take their ADR 0031 p95 allocation; the device run (#355) measures
- * the real ones. R2 behind the capture lifecycle (#14) is a typed double: TODO(#425).
+ * the real ones. R2 behind the capture lifecycle (#14) is a typed double here; the host route is
+ * #425 (ADR 0055).
  */
 import type { CaptureState } from '../shared/interfaces';
 import { checkRow } from '../shared/latency';
@@ -75,7 +76,8 @@ async function rig(
   let requests: RequestView[] = [];
   let keyDownAt: number | undefined;
   const sources = (): MoodSources => ({ mog: { lifecycle: 'ready', since: 0 }, capture, requests });
-  // TODO(#425): R2 opens the lease of the #14 lifecycle on key-down and sends capture:state.
+  // TODO(#355): on the device, R2 opens the lease of the #14 lifecycle on key-down and sends
+  // capture:state.
   onPtt(bus, s.clock.now, (e) => {
     if (e.phase === 'down') keyDownAt = e.at;
     const next = e.phase === 'down' ? open : closed;

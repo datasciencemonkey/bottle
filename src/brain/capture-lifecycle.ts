@@ -23,8 +23,7 @@
  * Each kept segment goes to STT, then to `onUtterance` (the #424 `routeUtterance` hook). A
  * discarded lease never reaches STT, and an empty STT text fires nothing.
  *
- * TODO(#425): the host does not route `capture_*` to `CaptureCore` yet, so `ipcCaptureControl`
- * fails until it does; the tests use a double of R2.
+ * The host routes `capture_*` to `CaptureCore` (#425, ADR 0055); the tests use a double of R2.
  */
 import type { CaptureMode, CaptureState, LeaseId, MogId, SegmentRef } from '../shared/interfaces';
 import { EVENTS, call } from '../shared/ipc';
@@ -340,7 +339,7 @@ export function createCaptureLifecycle(deps: CaptureLifecycleDeps): CaptureLifec
 
 /**
  * The production R2 calls. Every start goes through the consent gate (MB-08a).
- * TODO(#425): `capture_stop` is not routed to `CaptureCore` yet. TODO(#433): `capture_stop`
+ * TODO(#433): `capture_stop`
  * needs an `end` argument so the host calls `CaptureCore::release`, `discard` or
  * `stop_hands_free`; until then each one is a plain stop.
  */

@@ -55,6 +55,8 @@ fn call(
         permissions: None,
         consent: None,
         config,
+        capture: None,
+        capture_ticket: None,
     };
     route(components, command, args)
 }

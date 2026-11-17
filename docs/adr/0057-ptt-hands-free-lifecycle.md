@@ -25,7 +25,7 @@ Issue #14 connects the talk key to R2 CaptureService. R2 `CaptureCore` (#4) has 
 ## Consequences
 
 - `TODO(#444)`: the `hotkey.ptt` `cancel` carries R1's tap decision.
-- `TODO(#425)`: the host routes `capture_*` to `CaptureCore` and calls `tick()` at each deadline.
+- Done in #425 (ADR 0055): the host routes `capture_*` to `CaptureCore` and calls `tick()` at each deadline. The post-roll arm after `release` waits for #433.
 - `TODO(#433)`: `capture_stop` needs an `end` argument for `release`, `discard`, `tap` and `escape`, and `MogViewState` needs a timer field. Until then the IPC adapter sends a plain stop.
 - `TODO(#434)`: the macOS tap does not report Esc, and the host does not stop hands-free on the Windows Esc yet.
 - `TODO(#116)`: the Silero VAD calls `voice_activity`. `TODO(#46)`: the STT step.

@@ -1665,6 +1665,11 @@
     },
     {
       "direction": "core_to_brain",
+      "name": "capture:stopped",
+      "specName": "capture.stopped"
+    },
+    {
+      "direction": "core_to_brain",
       "name": "session:stop_signal",
       "specName": "session.stop_signal"
     },

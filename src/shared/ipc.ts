@@ -101,6 +101,8 @@ export const EVENTS = {
   'hotkey.status': { name: 'hotkey:status', direction: 'core_to_brain' },
   'capture.state': { name: 'capture:state', direction: 'core_to_brain' },
   'capture.segment': { name: 'capture:segment', direction: 'core_to_brain' },
+  /** Not in 4.5 (ADR 0055): one lease stopped, with its reason. Payload: `CaptureStopped`. */
+  'capture.stopped': { name: 'capture:stopped', direction: 'core_to_brain' },
   'session.stop_signal': { name: 'session:stop_signal', direction: 'core_to_brain' },
   'auth.status': { name: 'auth:status', direction: 'core_to_brain' },
   'net.status': { name: 'net:status', direction: 'core_to_brain' },
@@ -401,6 +403,32 @@ export interface CardUpdate {
   /** The domain of the Page draft in review (PG-19). */
   pageDomain?: DomainPickerView;
   pagesChecklist?: PagesChecklistView;
+}
+
+/** Why a capture lease stopped (ADR 0055). Mirrors `mog_core::types::CaptureStopReason`. */
+export type CaptureStopReason =
+  | 'manual'
+  | 'hold_cap'
+  | 'hands_free_cap'
+  | 'preempted'
+  | 'panic'
+  | 'device_lost'
+  | 'released'
+  | 'discarded'
+  | 'tap'
+  | 'escape'
+  | 'vad_end'
+  | 'zero_buffers';
+
+/**
+ * The `capture.stopped` payload (#425, ADR 0055): one lease stopped. Content-free (CAP-01b).
+ * Mirrors `mog_core::types::CaptureStopped`.
+ */
+export interface CaptureStopped {
+  leaseId: LeaseId;
+  mogId: MogId;
+  mode: CaptureMode;
+  reason: CaptureStopReason;
 }
 
 /**
