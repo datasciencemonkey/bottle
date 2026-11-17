@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use mog_core::types::{
-    CaptureMode, CaptureState, CardUpdate, Intent, MicLevelFrame, MogId, MogViewState, Mood,
+    CaptureMode, ConsentRecordKind, ConsentRecordView, CaptureState, CardUpdate, Intent, MicLevelFrame, MogId, MogViewState, Mood,
     OthersTrack, Profile, ProfileInfo, ProfileName, RouterCommand, RouterDecision, SegmentRef,
     SessionPolicy, TagApp, TagOp, Tags, TalkKeyReason, TalkKeyState, TalkKeyStatus, TokenState,
     TokenStatus, Track, Transcript, TranscriptProvider,
@@ -78,6 +78,9 @@ fn round_trip_by_name(type_name: &str, json: &Value) -> Result<Value, String> {
         "TalkKeyStatus" => round_trip::<TalkKeyStatus>(json),
         "TalkKeyState" => round_trip::<Vec<TalkKeyState>>(json),
         "TalkKeyReason" => round_trip::<Vec<TalkKeyReason>>(json),
+        // The `consent_records_list` reply (#430, ADR 0060).
+        "ConsentRecordView" => round_trip::<ConsentRecordView>(json),
+        "ConsentRecordKind" => round_trip::<Vec<ConsentRecordKind>>(json),
         other => panic!("fixture for unknown type {other}: add it to round_trip_by_name"),
     }
 }
@@ -97,6 +100,7 @@ const STRUCTS: &[&str] = &[
     "CardUpdate",
     "MicLevelFrame",
     "TalkKeyStatus",
+    "ConsentRecordView",
 ];
 
 #[test]
@@ -133,6 +137,8 @@ fn every_ipc_type_has_a_fixture() {
         "TalkKeyStatus",
         "TalkKeyState",
         "TalkKeyReason",
+        "ConsentRecordView",
+        "ConsentRecordKind",
     ] {
         assert!(names.iter().any(|n| n == t), "no fixture for {t}");
     }
@@ -272,5 +278,21 @@ fn cap_39c_cap_42_talk_key_status_reason_is_required_and_nullable() {
     for key in ["windowTitle", "processName", "key"] {
         let v = serde_json::json!({"talkKey": "paused", "reason": "secure_input", key: "x"});
         assert!(serde_json::from_value::<TalkKeyStatus>(v).is_err(), "{key}");
+    }
+}
+
+#[test]
+fn sec_32a_consent_record_view_session_id_is_required_and_nullable_and_holds_no_user() {
+    let notice = r#"{"recordId":"r1","kind":"notice","noticeVersion":1,"sessionId":null,"acceptedAt":1}"#;
+    let v: ConsentRecordView = serde_json::from_str(notice).unwrap();
+    assert_eq!(v.session_id, None);
+    assert!(serde_json::from_str::<ConsentRecordView>(
+        r#"{"recordId":"r1","kind":"notice","noticeVersion":1,"acceptedAt":1}"#
+    )
+    .is_err());
+    for key in ["user", "device", "mogId"] {
+        let mut v: serde_json::Value = serde_json::from_str(notice).unwrap();
+        v[key] = serde_json::json!("x");
+        assert!(serde_json::from_value::<ConsentRecordView>(v).is_err(), "{key}");
     }
 }

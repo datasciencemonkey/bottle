@@ -22,6 +22,9 @@ const SPEC_COMMANDS: &[(&str, &[WindowClass])] = {
         ("capture_stop_all", &[B]),
         ("capture_subscribe", &[B]),
         ("session_attest", &[B]),
+        // #430 (ADR 0060): T12 in the brain writes and reads the consent records.
+        ("consent_notice_record", &[B]),
+        ("consent_records_list", &[B]),
         ("stt_transcribe", &[B]),
         ("insert_text", &[B]),
         ("agent_start", &[B]),
@@ -577,4 +580,80 @@ fn cap_36_cap_37_permission_request_is_hub_only_and_takes_one_known_permission()
             "{bad}"
         );
     }
+}
+
+// ---------- #430 (ADR 0060) ----------
+
+#[test]
+fn sec_32a_at_24_consent_notice_record_is_brain_only_and_takes_only_the_notice_version() {
+    let row = ipc::command("consent_notice_record").expect("a consent_notice_record row");
+    assert_eq!(row.windows, [WindowClass::Brain]);
+    assert_eq!(row.phase, Phase::MvpD);
+    let good = json!({"noticeVersion": 3});
+    for label in ["hub", "mog-a1", "card-a1"] {
+        assert!(
+            matches!(
+                ipc::handle(label, "consent_notice_record", good.clone()).unwrap_err(),
+                IpcError::WindowNotAllowed { .. }
+            ),
+            "{label}"
+        );
+    }
+    // SEC-32a: the Rust side fills the user, the device and the time. A caller cannot.
+    for bad in [
+        json!({}),
+        json!({"noticeVersion": -1}),
+        json!({"noticeVersion": "3"}),
+        json!({"noticeVersion": 3, "user": "fake.user@example.invalid"}),
+        json!({"noticeVersion": 3, "device": "d0d0d0d0-0000-4000-8000-00000000fa4e"}),
+        json!({"noticeVersion": 3, "acceptedAt": 1}),
+        json!({"noticeVersion": 3, "mogId": "a1"}),
+    ] {
+        assert!(
+            matches!(
+                ipc::handle("brain", "consent_notice_record", bad.clone()).unwrap_err(),
+                IpcError::InvalidArgs { .. }
+            ),
+            "{bad}"
+        );
+    }
+    // The gateway checks pass; the host routes it to the consent component.
+    assert!(matches!(
+        ipc::handle("brain", "consent_notice_record", good).unwrap_err(),
+        IpcError::NotImplemented { .. }
+    ));
+    let schema = &ipc::schemas()["consent_notice_record"];
+    assert_eq!(schema["required"], json!(["noticeVersion"]));
+    assert_eq!(schema["additionalProperties"], json!(false));
+}
+
+#[test]
+fn sec_32a_consent_records_list_is_brain_only_and_takes_no_args() {
+    let row = ipc::command("consent_records_list").expect("a consent_records_list row");
+    assert_eq!(row.windows, [WindowClass::Brain]);
+    assert_eq!(row.phase, Phase::MvpD);
+    for label in ["hub", "mog-a1", "card-a1"] {
+        assert!(
+            matches!(
+                ipc::handle(label, "consent_records_list", json!({})).unwrap_err(),
+                IpcError::WindowNotAllowed { .. }
+            ),
+            "{label}"
+        );
+    }
+    assert!(matches!(
+        ipc::handle("brain", "consent_records_list", json!({"mogId": "a1"})).unwrap_err(),
+        IpcError::InvalidArgs { .. }
+    ));
+    assert!(matches!(
+        ipc::handle("brain", "consent_records_list", json!({})).unwrap_err(),
+        IpcError::NotImplemented { .. }
+    ));
+    let schemas = ipc::schemas();
+    assert_eq!(schemas["consent_records_list"], schemas["cli_status"]);
+}
+
+#[test]
+fn sec_03_consent_storage_failed_is_a_fixed_code() {
+    assert!(mog_core::ipc_gateway::ERROR_CODES.contains(&"consent_storage_failed"));
 }

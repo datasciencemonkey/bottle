@@ -183,6 +183,9 @@ pub struct HostComponents<'a> {
     pub windows: Option<&'a dyn WindowHost>,
     pub hotkeys: Option<&'a dyn HotkeysRoute>,
     pub permissions: Option<&'a dyn PermissionRoute>,
+    /// The `consent_*` component (#430): `consent_ipc::ConsentComponent` over the managed
+    /// consent records. `None` when no records are managed: `consent_storage_failed`.
+    pub consent: Option<&'a dyn GatewayComponents>,
 }
 
 fn refused(e: IpcError) -> CoreError {
@@ -366,6 +369,7 @@ fn route_from<R: Runtime>(
         windows: windows.as_ref().map(|w| w.inner() as &dyn WindowHost),
         hotkeys: hotkeys.as_ref().map(|h| h.inner() as &dyn HotkeysRoute),
         permissions: runtime.as_ref().map(|r| r.inner() as &dyn PermissionRoute),
+        consent: None,
     };
     route(components, command, args)
 }
