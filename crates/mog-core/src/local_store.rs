@@ -74,3 +74,5 @@ pub fn mem_local_exec(
 }
 #[cfg(test)]
 mod catalog_tests;
+#[cfg(test)]
+mod exchange_tests;
