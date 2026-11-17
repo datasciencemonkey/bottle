@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from 'react-dom/server';
-import { MAX_ANSWER_CHARS, SafeMarkdown } from './safe-markdown';
+import { SafeMarkdown } from './safe-markdown';
 
 const trust = {
   profileHost: 'adb-1.azuredatabricks.net',
@@ -8,52 +8,49 @@ const trust = {
 const html = (md: string) => renderToStaticMarkup(<SafeMarkdown text={md} trust={trust} />);
 
 // SEC-25a/AT-17 growth check (#443). A wall-clock bound on a shared Mac is flaky, so compare the
-// cost of each hostile input at three sizes instead. Each size gets a warm-up run, then the
-// minimum of SAMPLES runs (load only ever adds time). The divisor has a floor, so sub-millisecond
+// cost of each hostile input at 20 KB and at 200 KB instead. Round 0 is a warm-up; then each size
+// keeps the minimum of SAMPLES rounds (load only ever adds time). The two sizes are timed in turn
+// in each round, so they see the same machine load. The divisor has a floor, so sub-millisecond
 // renders do not turn timer noise into a large ratio.
-const SIZES = [2_000, 20_000, 200_000] as const;
+// A 2 KB -> 20 KB step was tried too (#443): under heavy load it measured 50-66x on the real
+// renderer, which overlaps the 70-170x of an unbounded INLINE regex, so it cannot be a stable test.
 const SAMPLES = 5;
 const FLOOR_MS = 0.5;
-// 20 KB -> 200 KB crosses MAX_ANSWER_CHARS: linear is about 10x (about 1x with the cap); n^2 is 100x.
-const LARGE_STEP_MAX = 20;
-// 2 KB -> 20 KB stays under the cap. The real renderer measures 10-19x here, because at 2 KB its
-// `{0,2048}` link bound is not reached yet. An unbounded INLINE regex measures 70-170x; n^2 is 100x.
-const SMALL_STEP_MAX = 40;
+// The step crosses MAX_ANSWER_CHARS: linear is about 10x (about 1x with the cap); n^2 is 100x.
+const STEP_MAX = 20;
 // Backstop only: the real renderer takes about 40 ms at 200 KB.
 const BACKSTOP_MS = 1_000;
 
+// Keeps each render result live, so the engine cannot drop the timed work.
 let sink: unknown;
-function minMs(render: (s: string) => unknown, input: string): number {
-  sink = render(input);
-  let best = Infinity;
-  for (let i = 0; i < SAMPLES; i++) {
+function growth(render: (s: string) => unknown, unit: string) {
+  const sized = (n: number) => unit.repeat(Math.ceil(n / unit.length));
+  const [s20, s200] = [sized(20_000), sized(200_000)];
+  const time = (input: string) => {
     const t = performance.now();
     sink = render(input);
-    best = Math.min(best, performance.now() - t);
-  }
-  return best;
-}
-
-function growth(render: (s: string) => unknown, unit: string) {
-  const [t2, t20, t200] = SIZES.map((n) => minMs(render, unit.repeat(Math.ceil(n / unit.length))));
-  return {
-    small: t20 / Math.max(t2, FLOOR_MS),
-    large: t200 / Math.max(t20, FLOOR_MS),
-    t200,
+    return performance.now() - t;
   };
+  let [t20, t200] = [Infinity, Infinity];
+  for (let round = 0; round <= SAMPLES; round++) {
+    const [a, b] = [time(s20), time(s200)];
+    if (round === 0) continue;
+    [t20, t200] = [Math.min(t20, a), Math.min(t200, b)];
+  }
+  expect(sink).toBeDefined();
+  return { ratio: t200 / Math.max(t20, FLOOR_MS), t200 };
 }
 
 function expectNearLinear(render: (s: string) => unknown, unit: string) {
   const g = growth(render, unit);
-  expect(g.small, `${JSON.stringify(unit)} 2 KB -> 20 KB`).toBeLessThan(SMALL_STEP_MAX);
-  expect(g.large, `${JSON.stringify(unit)} 20 KB -> 200 KB`).toBeLessThan(LARGE_STEP_MAX);
+  expect(g.ratio, `${JSON.stringify(unit)} 20 KB -> 200 KB`).toBeLessThan(STEP_MAX);
   expect(g.t200, `${JSON.stringify(unit)} 200 KB backstop`).toBeLessThan(BACKSTOP_MS);
 }
 
 /** Test stand-in for a catastrophic parser: work grows as (length / scale)^2. */
-function quadratic(scale: number, cap = Infinity) {
+function quadratic(scale: number) {
   return (s: string) => {
-    const n = Math.ceil(Math.min(s.length, cap) / scale);
+    const n = Math.ceil(s.length / scale);
     let acc = 0;
     for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) acc += (i ^ j) & 1;
     return acc;
@@ -151,13 +148,7 @@ describe('safe markdown', () => {
     for (const bad of ['[', '![a](', '**', '*', '`', '[a](']) expectNearLinear(html, bad);
   }, 30_000);
 
-  it('[SEC-25a] [AT-17] the growth check rejects an uncapped quadratic renderer', () => {
-    expect(growth(quadratic(20), '[').large).toBeGreaterThanOrEqual(LARGE_STEP_MAX);
-  }, 30_000);
-
-  it('[SEC-25a] [AT-17] the growth check rejects a quadratic renderer below the cap', () => {
-    expect(growth(quadratic(2, MAX_ANSWER_CHARS), '[').small).toBeGreaterThanOrEqual(
-      SMALL_STEP_MAX,
-    );
+  it('[SEC-25a] [AT-17] the growth check rejects a quadratic renderer', () => {
+    expect(growth(quadratic(20), '[').ratio).toBeGreaterThanOrEqual(STEP_MAX);
   }, 30_000);
 });
