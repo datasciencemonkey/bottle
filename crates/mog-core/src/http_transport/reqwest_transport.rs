@@ -37,7 +37,7 @@ use crate::egress_policy::TokenEgressPolicy;
 use crate::error::{CoreError, CoreResult};
 use crate::ipc::JsonObject;
 use crate::request_identity::{BottleIdentity, RequestDecorator};
-use crate::token_broker::{ScimMe, TokenBroker};
+use crate::token_broker::{ScimMe, TokenBroker, TokenLease};
 use crate::token_guard::scrub_json;
 use crate::types::Tags;
 
@@ -238,12 +238,13 @@ impl ReqwestHttpTransport {
         url: &str,
         headers: &[(&'static str, String)],
         body: Option<&[u8]>,
-    ) -> CoreResult<Raw> {
+    ) -> CoreResult<(Raw, TokenLease)> {
         let mut out: Option<CoreResult<Raw>> = None;
-        self.seams.tokens.with_token(profile, host, &mut |token| {
+        let lease = self.seams.tokens.with_token(profile, host, &mut |token| {
             out = Some(self.send_with(token, method, url, headers, body));
         })?;
         out.unwrap_or(Err(err(TOKEN_UNUSABLE)))
+            .map(|raw| (raw, lease))
     }
 
     /// Build one request. The `Authorization` value is marked sensitive, so the `Debug` output
@@ -370,7 +371,8 @@ impl ReqwestHttpTransport {
         let mut hops = 0u8;
         loop {
             self.wait_for_bucket(profile);
-            let raw = self.send_once(profile, &host, method, &url, &headers, body.as_deref())?;
+            let (raw, lease) =
+                self.send_once(profile, &host, method, &url, &headers, body.as_deref())?;
             if (300..400).contains(&raw.status) {
                 // Rule 3: same host only; anything else is dropped, never followed.
                 let to = raw
@@ -410,7 +412,8 @@ impl ReqwestHttpTransport {
             return match raw.status {
                 200..=299 => Ok((scrub_json(&json), raw.org_id)),
                 401 if !retried_401 => {
-                    self.seams.tokens.invalidate(profile)?;
+                    // Drop only the token that got the 401, not a newer one (W-05c).
+                    self.seams.tokens.invalidate(profile, lease)?;
                     retried_401 = true;
                     continue;
                 }

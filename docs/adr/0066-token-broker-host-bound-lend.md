@@ -21,8 +21,9 @@ header of `GET /api/2.0/preview/scim/v2/Me` (W-06a). The issue left these points
 ## Decisions
 
 1. `CliRunner::run_auth_token(profile)` is the only path for `auth token --profile <p> --output
-   json` (`cli_runner::auth_token_args`). It returns the raw stdout to R6. R6 parses it with one
-   copy of the token into a `SecretToken` and overwrites the stdout buffer with zeros. A source
+   json` (`cli_runner::auth_token_args`). It returns the raw stdout to R6 as a `SecretStdout`
+   (not `Clone`, redacted `Debug`, zeroed on wipe and on drop). R6 parses it with one copy of the
+   token into a `SecretToken` and wipes the stdout on success and on failure. A source
    scan test allows only `token_broker.rs` and `cli_runner.rs` to name `run_auth_token`. The real
    child process is TODO(#16); the trait default is `NotImplemented`.
 2. `TokenBroker::with_token(profile, host, f)` takes the exact host of the request. R6 binds each
@@ -37,13 +38,18 @@ header of `GET /api/2.0/preview/scim/v2/Me` (W-06a). The issue left these points
 4. If the CLI reply has neither `expires_in` nor `expiry`, R6 uses the token and refreshes after
    300 s (`DEFAULT_LIFETIME`), as the reference plugin does. A past or unreadable expiry is
    `token_reply_invalid`.
-5. Single-flight: one CLI run per profile at a time. Callers that arrive during the run wait on a
+5. Leases: `with_token` returns a `TokenLease` that names the token it lent, and
+   `invalidate(profile, lease)` drops the token only if it is still that token. So when N MOGs get
+   a 401 for one token, the late 401s do not drop the new token, and the CLI runs once (W-05a,
+   W-05c). Sign-out, sleep and lock use `drop_all`.
+6. Single-flight: one CLI run per profile at a time. Callers that arrive during the run wait on a
    condition variable and share its result, including a failure (`login_required`), so N MOGs
    cause one CLI call. Other profiles are not blocked.
 
 ## Consequences
 
-- Every `TokenBroker` implementation and caller passes the host. Test doubles ignore it.
+- Every `TokenBroker` implementation and caller passes the host and keeps the lease for a 401.
+  Test doubles ignore both.
 - `profile_status` IPC wiring to `CliTokenBroker::token_state` is a follow-up (the handler is in a
   contract file). The OS sleep, lock and sign-out events must call `drop_all` (TODO(#163)).
 - The R7 401 rule did not change: invalidate once, retry once, then `auth_expired`. The UI

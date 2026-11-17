@@ -25,14 +25,14 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::atomic::{compiler_fence, Ordering};
+use std::sync::atomic::{compiler_fence, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, Weak};
 use std::time::Duration;
 
 use reqwest::Url;
 use serde::Deserialize;
 
-use crate::cli_runner::CliRunner;
+use crate::cli_runner::{CliRunner, SecretStdout};
 use crate::clock::{MonotonicClock, WallClock};
 use crate::error::{CoreError, CoreResult};
 use crate::genie_endpoint::{valid_workspace_id, GenieOneEndpoint};
@@ -134,14 +134,33 @@ impl fmt::Debug for SecretToken {
     }
 }
 
+/// Names the token that one [`TokenBroker::with_token`] call lent, so that a late 401 for an
+/// old token does not drop a newer one (W-05a, W-05c). It holds no token bytes.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct TokenLease(u64);
+
+impl TokenLease {
+    /// A lease with this ID (test doubles use any value).
+    pub fn new(id: u64) -> Self {
+        Self(id)
+    }
+}
+
 /// Holds the tokens per profile and lends them for one call at a time.
 pub trait TokenBroker: Send + Sync {
     /// Lend the current token of `profile` to `f` for one request to `host`. The bytes must not
     /// be kept. `host` is the exact host the request goes to (no scheme, port or path); R6
-    /// refuses any host other than the one the token is bound to (4.6 rule 2).
-    fn with_token(&self, profile: &str, host: &str, f: &mut dyn FnMut(&[u8])) -> CoreResult<()>;
-    /// Drop the token of `profile` (for example after a 401).
-    fn invalidate(&self, profile: &str) -> CoreResult<()>;
+    /// refuses any host other than the one the token is bound to (4.6 rule 2). The lease names
+    /// the token that was lent.
+    fn with_token(
+        &self,
+        profile: &str,
+        host: &str,
+        f: &mut dyn FnMut(&[u8]),
+    ) -> CoreResult<TokenLease>;
+    /// Drop the token of `profile` if it is still the token of `lease` (for example after a 401
+    /// for that token). A 401 for an older token leaves the newer one in place.
+    fn invalidate(&self, profile: &str, lease: TokenLease) -> CoreResult<()>;
     /// The `workspace_id` of `profile`, from `x-databricks-org-id`.
     fn workspace_id(&self, profile: &str) -> CoreResult<String>;
 }
@@ -152,11 +171,16 @@ pub trait TokenBroker: Send + Sync {
 pub struct StubTokenBroker;
 
 impl TokenBroker for StubTokenBroker {
-    fn with_token(&self, _profile: &str, _host: &str, _f: &mut dyn FnMut(&[u8])) -> CoreResult<()> {
+    fn with_token(
+        &self,
+        _profile: &str,
+        _host: &str,
+        _f: &mut dyn FnMut(&[u8]),
+    ) -> CoreResult<TokenLease> {
         Err(CoreError::NotImplemented { component: ID })
     }
 
-    fn invalidate(&self, _profile: &str) -> CoreResult<()> {
+    fn invalidate(&self, _profile: &str, _lease: TokenLease) -> CoreResult<()> {
         Err(CoreError::NotImplemented { component: ID })
     }
 
@@ -176,6 +200,8 @@ pub trait ScimMe: Send + Sync {
 /// One token in memory, bound to its host.
 struct Held {
     token: SecretToken,
+    /// The lease ID of this token (unique in this broker).
+    id: u64,
     /// The lowercase host of the profile when R6 got the token.
     host: String,
     /// Monotonic time of the refresh (expiry - 60 s).
@@ -209,6 +235,7 @@ pub struct CliTokenBroker {
     slots: Mutex<HashMap<String, Slot>>,
     done: Condvar,
     ids: Mutex<HashMap<String, Arc<Mutex<Option<String>>>>>,
+    next_id: AtomicU64,
 }
 
 impl fmt::Debug for CliTokenBroker {
@@ -260,6 +287,7 @@ impl CliTokenBroker {
             slots: Mutex::new(HashMap::new()),
             done: Condvar::new(),
             ids: Mutex::new(HashMap::new()),
+            next_id: AtomicU64::new(1),
         }
     }
 
@@ -387,12 +415,7 @@ impl CliTokenBroker {
             Err(e @ CoreError::NotImplemented { .. }) => return Err(e),
             Err(_) => return Err(unavailable(LOGIN_REQUIRED)),
         };
-        let parsed = self.parse(&stdout);
-        // The stdout buffer held the token: overwrite it before it drops.
-        stdout.fill(0);
-        compiler_fence(Ordering::SeqCst);
-        std::hint::black_box(&mut stdout);
-        let (token, lifetime) = parsed?;
+        let (token, lifetime) = self.read_stdout(&mut stdout)?;
         let now = self.mono.now();
         let refresh_in = match lifetime {
             Some(l) => l.saturating_sub(REFRESH_MARGIN),
@@ -400,10 +423,22 @@ impl CliTokenBroker {
         };
         Ok(Held {
             token,
+            id: self.next_id.fetch_add(1, Ordering::Relaxed),
             host,
             refresh_at: now + refresh_in,
             expires_at: now + lifetime.unwrap_or(DEFAULT_LIFETIME),
         })
+    }
+
+    /// Parse the CLI stdout, then wipe it (it held the token in plain text, W-04b), on success
+    /// and on failure.
+    fn read_stdout(
+        &self,
+        stdout: &mut SecretStdout,
+    ) -> CoreResult<(SecretToken, Option<Duration>)> {
+        let parsed = self.parse(stdout.as_bytes());
+        stdout.wipe();
+        parsed
     }
 
     /// The token and its remaining lifetime (`None`: the reply has no expiry).
@@ -432,18 +467,25 @@ impl CliTokenBroker {
 }
 
 impl TokenBroker for CliTokenBroker {
-    fn with_token(&self, profile: &str, host: &str, f: &mut dyn FnMut(&[u8])) -> CoreResult<()> {
+    fn with_token(
+        &self,
+        profile: &str,
+        host: &str,
+        f: &mut dyn FnMut(&[u8]),
+    ) -> CoreResult<TokenLease> {
         let held = self.current(profile)?;
         if !held.host.eq_ignore_ascii_case(host) {
             return Err(unavailable(TOKEN_HOST_MISMATCH));
         }
         f(held.token.bytes());
-        Ok(())
+        Ok(TokenLease(held.id))
     }
 
-    fn invalidate(&self, profile: &str) -> CoreResult<()> {
+    fn invalidate(&self, profile: &str, lease: TokenLease) -> CoreResult<()> {
         if let Some(slot) = self.lock().get_mut(profile) {
-            slot.token = None;
+            if slot.token.as_ref().is_some_and(|h| h.id == lease.0) {
+                slot.token = None;
+            }
         }
         Ok(())
     }
@@ -569,6 +611,46 @@ mod tests {
         ] {
             assert_eq!(rfc3339_ms(bad), None, "{bad}");
         }
+    }
+
+    struct NoHosts;
+
+    impl ProfileHosts for NoHosts {
+        fn workspace_url(&self, _profile: &str) -> CoreResult<String> {
+            Err(unavailable(PROFILE_HOST_INVALID))
+        }
+    }
+
+    #[test]
+    fn w_04b_the_cli_stdout_is_wiped_after_parse_on_success_and_on_failure() {
+        let b = CliTokenBroker::new(
+            Arc::new(crate::cli_runner::StubCliRunner),
+            Arc::new(NoHosts),
+            Arc::new(crate::clock::SimClock::new()),
+            Arc::new(crate::clock::SimWallClock::at(0)),
+        );
+        for (raw, ok) in [
+            (
+                r#"{"access_token":"test-token-not-real","expires_in":3600}"#,
+                true,
+            ),
+            (
+                r#"{"access_token":"test-token-not-real","expiry":"bad"}"#,
+                false,
+            ),
+            ("test-token-not-real", false),
+        ] {
+            let mut out = SecretStdout::new(raw.as_bytes().to_vec());
+            assert_eq!(b.read_stdout(&mut out).is_ok(), ok, "{raw}");
+            assert!(
+                out.is_zeroed(),
+                "{raw}: the stdout buffer still holds the token"
+            );
+        }
+        assert_eq!(
+            format!("{:?}", SecretStdout::new(b"test-token-not-real".to_vec())),
+            "SecretStdout(<redacted>)"
+        );
     }
 
     #[test]

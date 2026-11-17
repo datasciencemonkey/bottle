@@ -25,7 +25,7 @@ use mog_core::http_transport::{
 };
 use mog_core::ipc::JsonObject;
 use mog_core::request_identity::{user_agent, BottleIdentity};
-use mog_core::token_broker::TokenBroker;
+use mog_core::token_broker::{TokenBroker, TokenLease};
 use mog_core::types::Tags;
 use serde_json::{json, Value};
 
@@ -198,16 +198,21 @@ struct FakeBroker {
 }
 
 impl TokenBroker for FakeBroker {
-    fn with_token(&self, _profile: &str, _host: &str, f: &mut dyn FnMut(&[u8])) -> CoreResult<()> {
+    fn with_token(
+        &self,
+        _profile: &str,
+        _host: &str,
+        f: &mut dyn FnMut(&[u8]),
+    ) -> CoreResult<TokenLease> {
         self.lends.fetch_add(1, Ordering::SeqCst);
         if self.invalidations.load(Ordering::SeqCst) == 0 {
             f(TOKEN.as_bytes());
         } else {
             f(TOKEN_2.as_bytes());
         }
-        Ok(())
+        Ok(TokenLease::default())
     }
-    fn invalidate(&self, _profile: &str) -> CoreResult<()> {
+    fn invalidate(&self, _profile: &str, _lease: TokenLease) -> CoreResult<()> {
         self.invalidations.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -930,7 +935,7 @@ fn arc_6_errors_carry_no_host_token_or_body() {
 
 mod real_r6 {
     use super::*;
-    use mog_core::cli_runner::{refuse_token_command, CliRunner};
+    use mog_core::cli_runner::{refuse_token_command, CliRunner, SecretStdout};
     use mog_core::clock::{SimWallClock, WallClock};
     use mog_core::token_broker::{CliTokenBroker, ScimMe};
     use std::path::PathBuf;
@@ -953,13 +958,15 @@ mod real_r6 {
             refuse_token_command(args)?;
             panic!("R6 must not call run_json");
         }
-        fn run_auth_token(&self, _profile: &str) -> CoreResult<Vec<u8>> {
+        fn run_auth_token(&self, _profile: &str) -> CoreResult<SecretStdout> {
             let n = self.runs.fetch_add(1, Ordering::SeqCst);
             let token = if n == 0 { TOKEN } else { TOKEN_2 };
-            Ok(format!(
-                r#"{{"access_token":"{token}","token_type":"Bearer","expiry":"2026-11-17T13:00:00Z"}}"#
-            )
-            .into_bytes())
+            Ok(SecretStdout::new(
+                format!(
+                    r#"{{"access_token":"{token}","token_type":"Bearer","expiry":"2026-11-17T13:00:00Z"}}"#
+                )
+                .into_bytes(),
+            ))
         }
     }
 

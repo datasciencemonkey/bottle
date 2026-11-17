@@ -20,11 +20,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use mog_core::cli_runner::{CliRunner, StubCliRunner};
+use mog_core::cli_runner::{CliRunner, SecretStdout, StubCliRunner};
 use mog_core::clock::{MonotonicClock, SimClock, SimWallClock};
 use mog_core::error::CoreResult;
 use mog_core::http_transport::ProfileHosts;
-use mog_core::token_broker::{CliTokenBroker, SecretToken, StubTokenBroker, TokenBroker};
+use mog_core::token_broker::{
+    CliTokenBroker, SecretToken, StubTokenBroker, TokenBroker, TokenLease,
+};
 
 /// A made-up token shape. It is not a real token and it never leaves the test.
 fn fake_token() -> SecretToken {
@@ -38,7 +40,7 @@ fn at_02_w_18c_a_token_buffer_wipe_writes_zeros_buffer_part_only() {
     let mut t = fake_token();
     let len = t.len();
     assert!(len > 0 && !t.is_zeroed());
-    // This is the buffer part of W-18c only: the sign-out that calls wipe is TODO(#163) / TODO(#18)
+    // This is the buffer part of W-18c only: the sign-out that calls wipe is TODO(#163)
     // in the pending test below. Drop calls wipe too. Every byte is zero and the length stays.
     t.wipe();
     assert!(t.is_zeroed());
@@ -109,12 +111,14 @@ impl CliRunner for CountingCli {
         mog_core::cli_runner::refuse_token_command(args)?;
         Ok(serde_json::json!({}))
     }
-    fn run_auth_token(&self, _profile: &str) -> CoreResult<Vec<u8>> {
+    fn run_auth_token(&self, _profile: &str) -> CoreResult<SecretStdout> {
         let n = self.runs.fetch_add(1, Ordering::SeqCst);
-        Ok(format!(
-            r#"{{"access_token":"test-token-not-real-{n}","expiry":"2026-11-17T13:00:00Z"}}"#
-        )
-        .into_bytes())
+        Ok(SecretStdout::new(
+            format!(
+                r#"{{"access_token":"test-token-not-real-{n}","expiry":"2026-11-17T13:00:00Z"}}"#
+            )
+            .into_bytes(),
+        ))
     }
 }
 
@@ -168,10 +172,11 @@ fn at_02_w_05b_w_05c_a_401_drops_the_token_and_the_next_call_gets_a_new_one() {
     let clock = SimClock::new();
     let (r6, cli) = r6(&clock);
     let mut first = Vec::new();
-    r6.with_token("bottle-test", HOST, &mut |b| first = b.to_vec())
+    let lease = r6
+        .with_token("bottle-test", HOST, &mut |b| first = b.to_vec())
         .unwrap();
     // The bridge sees HTTP 401 and tells R6 (R7 does this, W-05d is in http_transport_reqwest.rs).
-    r6.invalidate("bottle-test").unwrap();
+    r6.invalidate("bottle-test", lease).unwrap();
     let mut second = Vec::new();
     r6.with_token("bottle-test", HOST, &mut |b| second = b.to_vec())
         .unwrap();
@@ -182,14 +187,15 @@ fn at_02_w_05b_w_05c_a_401_drops_the_token_and_the_next_call_gets_a_new_one() {
 // ---------- Pending: sign-out (W-18a..c) ----------
 
 #[test]
-#[ignore = "pending TODO(#163): sign-out of bottle-* profiles is not built (the token wipe is TODO(#18))"]
+#[ignore = "pending TODO(#163): sign-out of bottle-* profiles is not built (R6 drop_all is built in #18)"]
 fn at_02_w_18a_w_18c_after_sign_out_no_call_succeeds_and_no_token_is_left() {
     let r6 = StubTokenBroker;
     r6.with_token("bottle-test", HOST, &mut |_| ())
-        .expect("TODO(#18): a token before sign-out");
+        .expect("TODO(#163): a token before sign-out");
     // TODO(#163): "Sign out of bottle-test" runs `databricks auth logout --profile bottle-test`
     // through CliRunner, and R6 wipes the profile's buffers (W-18c).
-    r6.invalidate("bottle-test").expect("TODO(#18): wipe");
+    r6.invalidate("bottle-test", TokenLease::default())
+        .expect("TODO(#163): sign-out calls CliTokenBroker::drop_all");
     assert!(
         r6.with_token("bottle-test", HOST, &mut |_| ()).is_err(),
         "W-18a: a call after sign-out must fail"
@@ -200,17 +206,18 @@ fn at_02_w_18a_w_18c_after_sign_out_no_call_succeeds_and_no_token_is_left() {
 // ---------- Pending, live: the AT-02 run on a real workspace (needs:human, needs:u2m) ----------
 
 #[test]
-#[ignore = "pending TODO(#18): live run needs TokenBroker and a person with a U2M profile (needs:u2m)"]
+#[ignore = "pending TODO(#16): live run needs the real CliRunner auth token run and a person with a U2M profile (needs:u2m)"]
 fn at_02_w_05c_w_16b_live_an_expired_u2m_profile_recovers_after_sign_in() {
-    // TODO(#18): read workspace_id through R6 for the fixture profile (never a token). The stub
-    // check comes first, so a forced run of this pending test fails and never reads as a skip.
+    // TODO(#16): read workspace_id through R6 on the real CliRunner for the fixture profile
+    // (never a token). The stub check comes first, so a forced run of this pending test fails
+    // and never reads as a skip.
     let r6 = StubTokenBroker;
-    r6.invalidate("bottle-test")
-        .expect("TODO(#18): TokenBroker is built");
+    r6.invalidate("bottle-test", TokenLease::default())
+        .expect("TODO(#16): R6 runs on the real CliRunner");
     let w = mog_core::live_or_skip!();
     let wsid = r6
         .workspace_id(&w.profile)
-        .expect("TODO(#18): workspace_id from x-databricks-org-id");
+        .expect("TODO(#16): workspace_id from x-databricks-org-id");
     assert!(!wsid.is_empty());
     todo!("TODO(#42): the person runs `databricks auth logout --profile <your-profile>`, asks, signs in from the chip; assert the paused poll resumes with the same conversation and response IDs");
 }

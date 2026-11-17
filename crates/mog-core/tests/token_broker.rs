@@ -12,13 +12,13 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use mog_core::cli_runner::{auth_token_args, refuse_token_command, CliRunner};
+use mog_core::cli_runner::{auth_token_args, refuse_token_command, CliRunner, SecretStdout};
 use mog_core::clock::{MonotonicClock, SimClock, SimWallClock, WallClock};
 use mog_core::error::{CoreError, CoreResult};
 use mog_core::http_transport::ProfileHosts;
 use mog_core::token_broker::{
-    CliTokenBroker, ScimMe, TokenBroker, DEFAULT_LIFETIME, LOGIN_REQUIRED, ORG_ID_MISSING,
-    PROFILE_INVALID, REFRESH_MARGIN, TOKEN_HOST_MISMATCH, TOKEN_REPLY_INVALID,
+    CliTokenBroker, ScimMe, TokenBroker, TokenLease, DEFAULT_LIFETIME, LOGIN_REQUIRED,
+    ORG_ID_MISSING, PROFILE_INVALID, REFRESH_MARGIN, TOKEN_HOST_MISMATCH, TOKEN_REPLY_INVALID,
     WORKSPACE_ID_INVALID,
 };
 use mog_core::types::TokenState;
@@ -109,7 +109,7 @@ impl CliRunner for FakeCli {
         Ok(serde_json::json!({}))
     }
 
-    fn run_auth_token(&self, profile: &str) -> CoreResult<Vec<u8>> {
+    fn run_auth_token(&self, profile: &str) -> CoreResult<SecretStdout> {
         self.token_runs.lock().unwrap().push(profile.to_owned());
         self.entered.fetch_add(1, Ordering::SeqCst);
         let mut g = self.gate.lock().unwrap();
@@ -140,7 +140,7 @@ impl CliRunner for FakeCli {
                 })
             }
         };
-        Ok(text.into_bytes())
+        Ok(SecretStdout::new(text.into_bytes()))
     }
 }
 
@@ -236,15 +236,25 @@ fn lend(b: &dyn TokenBroker, profile: &str, host: &str) -> CoreResult<String> {
     Ok(seen.expect("the broker lent the token"))
 }
 
+/// Lend the token once and return its lease (what R7 keeps for a 401).
+fn lease(b: &dyn TokenBroker, profile: &str, host: &str) -> TokenLease {
+    b.with_token(profile, host, &mut |_| ()).unwrap()
+}
+
 fn code(r: CoreResult<String>) -> &'static str {
     r.expect_err("an error").code()
 }
 
-/// Wait (without a time window) until `cond` holds.
-fn wait_until(cond: impl Fn() -> bool) {
-    while !cond() {
+/// Wait (without a time window) until `cond` holds. The spin count is bounded, so a
+/// single-flight regression fails with a message instead of hanging.
+fn wait_until(what: &str, cond: impl Fn() -> bool) {
+    for _ in 0..50_000_000u64 {
+        if cond() {
+            return;
+        }
         thread::yield_now();
     }
+    panic!("never reached: {what}");
 }
 
 // ---------- W-04a: only `databricks auth token --profile <p> --output json` ----------
@@ -456,7 +466,9 @@ fn w_05a_concurrent_callers_on_one_profile_share_one_cli_run() {
         joins.push(thread::spawn(move || lend(&*b, PROFILE, HOST)));
     }
     // One caller is inside the CLI and the other 7 wait for it.
-    wait_until(|| r.cli.entered.load(Ordering::SeqCst) == 1 && r.broker.waiting(PROFILE) == 7);
+    wait_until("1 caller in the CLI and 7 waiting", || {
+        r.cli.entered.load(Ordering::SeqCst) == 1 && r.broker.waiting(PROFILE) == 7
+    });
     r.cli.open();
     for j in joins {
         assert_eq!(j.join().unwrap().unwrap(), TOKEN);
@@ -475,7 +487,9 @@ fn w_05a_a_failed_refresh_is_shared_and_other_profiles_keep_working() {
         let b = Arc::clone(&r.broker);
         joins.push(thread::spawn(move || lend(&*b, PROFILE, HOST)));
     }
-    wait_until(|| r.cli.entered.load(Ordering::SeqCst) == 1 && r.broker.waiting(PROFILE) == 3);
+    wait_until("1 caller in the CLI and 3 waiting", || {
+        r.cli.entered.load(Ordering::SeqCst) == 1 && r.broker.waiting(PROFILE) == 3
+    });
     r.cli.open();
     for j in joins {
         assert_eq!(code(j.join().unwrap()), LOGIN_REQUIRED);
@@ -501,7 +515,8 @@ fn w_05b_w_05c_invalidate_drops_the_token_and_the_next_call_runs_the_cli_once() 
         ],
     ));
     assert_eq!(lend(&*r.broker, PROFILE, HOST).unwrap(), TOKEN);
-    r.broker.invalidate(PROFILE).unwrap();
+    let l = lease(&*r.broker, PROFILE, HOST);
+    r.broker.invalidate(PROFILE, l).unwrap();
     assert_eq!(r.broker.token_state(PROFILE), TokenState::Unknown);
     for _mog in 0..4 {
         assert_eq!(lend(&*r.broker, PROFILE, HOST).unwrap(), TOKEN_2);
@@ -516,10 +531,41 @@ fn w_05b_invalidate_touches_only_its_profile() {
     let r = rig(cli);
     lend(&*r.broker, PROFILE, HOST).unwrap();
     lend(&*r.broker, OTHER, OTHER_HOST).unwrap();
-    r.broker.invalidate(PROFILE).unwrap();
+    let l = lease(&*r.broker, PROFILE, HOST);
+    r.broker.invalidate(PROFILE, l).unwrap();
     lend(&*r.broker, OTHER, OTHER_HOST).unwrap();
     assert_eq!(r.cli.runs_for(OTHER), 1);
     assert_eq!(r.broker.token_state(OTHER), TokenState::Valid);
+}
+
+#[test]
+fn w_05a_w_05c_a_late_401_for_an_old_token_does_not_drop_the_new_one() {
+    let r = rig(FakeCli::answering(
+        PROFILE,
+        vec![
+            Answer::Expiry(TOKEN, IN_ONE_HOUR),
+            Answer::Expiry(TOKEN_2, IN_ONE_HOUR),
+            Answer::Expiry("test-token-not-real-3", IN_ONE_HOUR),
+        ],
+    ));
+    // MOGs A and B both send with the first token, and both get a 401.
+    let a = lease(&*r.broker, PROFILE, HOST);
+    let b = lease(&*r.broker, PROFILE, HOST);
+    assert_eq!(a, b, "one token, one lease");
+    r.broker.invalidate(PROFILE, a).unwrap();
+    let a2 = lease(&*r.broker, PROFILE, HOST);
+    assert_ne!(a2, a);
+    // B's 401 arrives late: it names the old token, so the new one stays.
+    r.broker.invalidate(PROFILE, b).unwrap();
+    assert_eq!(lend(&*r.broker, PROFILE, HOST).unwrap(), TOKEN_2);
+    assert_eq!(r.cli.runs(), 2, "N 401s on one token cause one CLI run");
+    // A 401 for the current token drops it.
+    r.broker.invalidate(PROFILE, a2).unwrap();
+    assert_eq!(
+        lend(&*r.broker, PROFILE, HOST).unwrap(),
+        "test-token-not-real-3"
+    );
+    assert_eq!(r.cli.runs(), 3);
 }
 
 // ---------- 4.6 rule 2: a token goes only to the host of its profile ----------
@@ -578,7 +624,7 @@ fn w_06a_w_06b_workspace_id_comes_from_the_org_id_header_once_per_profile() {
     assert_eq!(r.broker.workspace_id(OTHER).unwrap(), "5678");
     assert_eq!(scim.calls_for(OTHER), 1);
     // A dropped token does not drop the workspace ID.
-    r.broker.invalidate(PROFILE).unwrap();
+    r.broker.invalidate(PROFILE, TokenLease::default()).unwrap();
     r.broker.workspace_id(PROFILE).unwrap();
     assert_eq!(scim.calls_for(PROFILE), 1);
 }

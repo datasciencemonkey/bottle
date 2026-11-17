@@ -16,7 +16,7 @@ use mog_core::agent_host::model_proxy::{
 };
 use mog_core::agent_host::{AgentError, Harness};
 use mog_core::error::CoreResult;
-use mog_core::token_broker::TokenBroker;
+use mog_core::token_broker::{TokenBroker, TokenLease};
 
 const FAKE_TOKEN: &str = "dapi-FAKE-TOKEN-0123456789abcdef";
 const HOST: &str = "example.cloud.databricks.com";
@@ -26,12 +26,17 @@ struct FakeTokens {
 }
 
 impl TokenBroker for FakeTokens {
-    fn with_token(&self, profile: &str, _host: &str, f: &mut dyn FnMut(&[u8])) -> CoreResult<()> {
+    fn with_token(
+        &self,
+        profile: &str,
+        _host: &str,
+        f: &mut dyn FnMut(&[u8]),
+    ) -> CoreResult<TokenLease> {
         self.profiles.lock().unwrap().push(profile.to_owned());
         f(FAKE_TOKEN.as_bytes());
-        Ok(())
+        Ok(TokenLease::default())
     }
-    fn invalidate(&self, _profile: &str) -> CoreResult<()> {
+    fn invalidate(&self, _profile: &str, _lease: TokenLease) -> CoreResult<()> {
         Ok(())
     }
     fn workspace_id(&self, _profile: &str) -> CoreResult<String> {
