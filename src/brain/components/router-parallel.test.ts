@@ -206,14 +206,20 @@ describe('resolveGenieQuestion', () => {
   const cleaned = 'And for March 2026?';
 
   it('[RTR-09b] uses the router genie_question only to resolve a follow-up', () => {
-    const d = routerDecision({ follow_up: true, genie_question: 'What was revenue for March 2026?' });
+    const d = routerDecision({
+      follow_up: true,
+      genie_question: 'What was revenue for March 2026?',
+    });
     expect(resolveGenieQuestion(cleaned, d)).toBe('What was revenue for March 2026?');
     const notFollowUp = { ...d, follow_up: false };
     expect(resolveGenieQuestion(cleaned, notFollowUp)).toBe(cleaned);
   });
 
   it('[RTR-09b] falls back to the cleaned text when the rewrite adds a number', () => {
-    const d = routerDecision({ follow_up: true, genie_question: 'What was revenue for March 2025?' });
+    const d = routerDecision({
+      follow_up: true,
+      genie_question: 'What was revenue for March 2025?',
+    });
     expect(resolveGenieQuestion(cleaned, d)).toBe(cleaned);
   });
 
