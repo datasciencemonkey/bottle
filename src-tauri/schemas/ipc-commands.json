@@ -88,6 +88,64 @@
       "title": "AgentToolResultArgs",
       "type": "object"
     },
+    "app_setting_read": {
+      "$defs": {
+        "AppSettingKey": {
+          "description": "The key of an app-wide setting (Appendix F, scope App; #453).",
+          "oneOf": [
+            {
+              "const": "app.capture.preferBuiltInMic",
+              "description": "CAP-22: \"Prefer the built-in mic when a Bluetooth headset connects\". Default off.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "`app_setting_read` (#453): the key of one app-wide setting.",
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/AppSettingKey"
+        }
+      },
+      "required": [
+        "key"
+      ],
+      "title": "AppSettingReadArgs",
+      "type": "object"
+    },
+    "app_setting_write": {
+      "$defs": {
+        "AppSettingKey": {
+          "description": "The key of an app-wide setting (Appendix F, scope App; #453).",
+          "oneOf": [
+            {
+              "const": "app.capture.preferBuiltInMic",
+              "description": "CAP-22: \"Prefer the built-in mic when a Bluetooth headset connects\". Default off.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "One app-wide setting and its value: the `app_setting_write` args and the reply of\n`app_setting_read` and `app_setting_write` (#453). Every app setting is a boolean now\n(CAP-22). A later setting with another type makes `value` a typed union.",
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/AppSettingKey"
+        },
+        "value": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "key",
+        "value"
+      ],
+      "title": "AppSetting",
+      "type": "object"
+    },
     "audit_append": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
@@ -1538,6 +1596,20 @@
     },
     {
       "name": "permission_request",
+      "phase": "MVP-D",
+      "windows": [
+        "hub"
+      ]
+    },
+    {
+      "name": "app_setting_read",
+      "phase": "MVP-D",
+      "windows": [
+        "hub"
+      ]
+    },
+    {
+      "name": "app_setting_write",
       "phase": "MVP-D",
       "windows": [
         "hub"

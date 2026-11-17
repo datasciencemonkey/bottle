@@ -168,6 +168,9 @@ const everyUnionValueListed: [
   true,
   true,
   true,
+  true,
+  true,
+  true,
 ];
 
 // Brain-to-view payloads (#285, ADR 0040).

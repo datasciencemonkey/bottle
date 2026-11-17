@@ -9,7 +9,8 @@
 //! The gateway is the only entry (ADR 0040). It sends each checked call to [`HostComponents`],
 //! which runs the host actions: `view_emit` (relay to the brain), `brain_subscribe`, the four
 //! `window_*` ops (R11), `hotkeys_set` (R1 settings), `permission_request` (R1, ADR 0039),
-//! `consent_*` (T12 records, ADR 0060) and the `capture_*` commands (R2, #425, ADR 0055).
+//! `consent_*` (T12 records, ADR 0060), the `capture_*` commands (R2, #425, ADR 0055) and
+//! `app_setting_*` (the app-wide settings, #453).
 //! Every other command stays `not_implemented` until its feature issue wires its component.
 //! A rejection is only `{ "error": "<code>" }`, with a code from `ipc_gateway::ERROR_CODES`
 //! (SEC-03).
@@ -198,6 +199,9 @@ pub struct HostComponents<'a> {
     /// The admission of this call, taken on the IPC thread before `schedule` (ADR 0055).
     /// `None`: the admission is when the call reaches the host.
     pub capture_ticket: Option<CaptureTicket>,
+    /// The `app_setting_*` component (#453): `mog_core::app_settings::AppSettings`. `None`
+    /// when no settings are managed: `host_failed`.
+    pub app_settings: Option<&'a dyn GatewayComponents>,
 }
 
 fn refused(e: IpcError) -> CoreError {
@@ -315,6 +319,11 @@ impl GatewayComponents for HostComponents<'_> {
                     command: command.to_owned(),
                 })),
             },
+            // #453 (CAP-22): the app-wide settings. The gateway let only the hub through.
+            "app_setting_read" | "app_setting_write" => self
+                .app_settings
+                .ok_or_else(|| host_failed(command))?
+                .call(command, args),
             // Each feature issue wires its R1-R17 component here.
             "capture_start" | "capture_stop" | "capture_pause" | "capture_resume"
             | "capture_status" | "capture_stop_all" | "capture_subscribe" => {
@@ -413,6 +422,7 @@ fn route_from<R: Runtime>(
         .try_state::<std::sync::Arc<mog_core::mog_config::MogConfigStore>>()
         .map(|store| mog_core::mog_config::MogConfigComponent::new(store.inner().clone()));
     let capture = webview.try_state::<CaptureHost>();
+    let app_settings = webview.try_state::<std::sync::Arc<mog_core::app_settings::AppSettings>>();
     let components = HostComponents {
         from: label,
         brain: &brain,
@@ -423,6 +433,9 @@ fn route_from<R: Runtime>(
         config: config.as_ref().map(|c| c as &dyn GatewayComponents),
         capture: capture.as_ref().map(|c| c.inner()),
         capture_ticket,
+        app_settings: app_settings
+            .as_ref()
+            .map(|s| s.inner().as_ref() as &dyn GatewayComponents),
     };
     route(components, command, args)
 }

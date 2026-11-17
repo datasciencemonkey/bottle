@@ -120,6 +120,11 @@ pub fn run() {
     let builder = builder.activate_ignoring_other_apps(ACTIVATE_IGNORING_OTHER_APPS);
     builder
         .manage(ipc::BrainChannel::default())
+        // #453 (CAP-22): the app-wide settings for `app_setting_*`, in memory until #77.
+        // TODO(#22): connect `MicDevice::set_prefer_built_in` with `set_mic_preference`.
+        .manage(std::sync::Arc::new(
+            mog_core::app_settings::AppSettings::default(),
+        ))
         .invoke_handler(ipc::handler)
         // CAP-02b: every WebView denies mic, camera and other permission requests (#387).
         .on_permission_request(webview_media::on_permission_request)

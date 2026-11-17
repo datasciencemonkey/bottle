@@ -297,8 +297,13 @@ fn cap_22_app_setting_prefer_built_in_mic_is_a_boolean() {
         &std::fs::read_to_string(fixture_dir().join("AppSetting.json")).unwrap(),
     )
     .unwrap();
-    assert_eq!(s, AppSetting::CapturePreferBuiltInMic(true));
-    assert_eq!(s.key(), AppSettingKey::CapturePreferBuiltInMic);
+    assert_eq!(
+        s,
+        AppSetting {
+            key: AppSettingKey::CapturePreferBuiltInMic,
+            value: true
+        }
+    );
     assert_eq!(
         serde_json::to_value(AppSettingKey::CapturePreferBuiltInMic).unwrap(),
         "app.capture.preferBuiltInMic"

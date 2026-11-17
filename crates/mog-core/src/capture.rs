@@ -531,6 +531,8 @@ impl Inner {
             started_at: None,
             directed_to: None,
             others_track: OthersTrack::Off,
+            // CAP-17b (#453): TODO(#22) reports the mic health from the device faults.
+            mic: None,
         };
         let Some(primary) = &self.primary else {
             return idle;
@@ -560,6 +562,7 @@ impl Inner {
                 } else {
                     OthersTrack::Off
                 },
+                ..idle
             },
         }
     }

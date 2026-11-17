@@ -71,6 +71,9 @@ export const COMMANDS = {
   hotkeys_set: BH,
   /** #312 (ADR 0039): the wizard and Settings ask for an OS permission after a click. */
   permission_request: { windows: ['hub'], phase: 'MVP-D' },
+  /** #453 (CAP-22): the hub reads and writes the app-wide settings (Appendix F, scope App). */
+  app_setting_read: { windows: ['hub'], phase: 'MVP-D' },
+  app_setting_write: { windows: ['hub'], phase: 'MVP-D' },
   mog_set_active: B,
   window_mog_open: B,
   window_mog_close: B,
@@ -239,6 +242,8 @@ export interface CommandArgs {
   hotkeys_set: { bindings: JsonObject };
   /** The hub call is the user action (CAP-36, CAP-37). */
   permission_request: { permission: PermissionKind };
+  app_setting_read: { key: AppSettingKey };
+  app_setting_write: AppSetting;
   mog_set_active: MogArgs;
   window_mog_open: {
     mogId: MogId;
@@ -466,6 +471,17 @@ export interface TalkKeyStatus {
 export type ConsentRecordKind = 'notice' | 'only_me' | 'others_agreed';
 
 /** One record of `consent_records_list`. Content-free: no user, no device and no MOG ID. */
+/** The key of an app-wide setting (Appendix F, scope App; #453). Mirrors `AppSettingKey`. */
+export type AppSettingKey = 'app.capture.preferBuiltInMic';
+
+/**
+ * One app-wide setting with its typed value (#453): the `app_setting_write` args and the
+ * `app_setting_*` reply. Mirrors `mog_core::types::AppSetting`.
+ * CAP-22 `app.capture.preferBuiltInMic`: "Prefer the built-in mic when a Bluetooth headset
+ * connects". Default off.
+ */
+export type AppSetting = { key: 'app.capture.preferBuiltInMic'; value: boolean };
+
 export interface ConsentRecordView {
   recordId: string;
   kind: ConsentRecordKind;
@@ -526,6 +542,8 @@ export interface CommandReturns {
   policy_get: unknown;
   hotkeys_set: { conflicts: unknown[] };
   permission_request: { status: 'granted' | 'denied' | 'unknown' };
+  app_setting_read: AppSetting;
+  app_setting_write: AppSetting;
   mog_set_active: Empty;
   window_mog_open: Empty;
   window_mog_close: Empty;

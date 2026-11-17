@@ -131,6 +131,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     row("hotkeys_set", BH),
     // #312 (ADR 0039): the wizard and Settings ask for an OS permission after a click.
     row("permission_request", H),
+    // #453 (CAP-22): the hub reads and writes the app-wide settings (Appendix F, scope App).
+    row("app_setting_read", H),
+    row("app_setting_write", H),
     row("mog_set_active", B),
     row("window_mog_open", B),
     row("window_mog_close", B),
@@ -682,6 +685,12 @@ args!(
     }
 );
 
+args!(
+    /// `app_setting_read` (#453): the key of one app-wide setting.
+    AppSettingReadArgs {
+        key: crate::types::AppSettingKey,
+    }
+);
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Geometry {
@@ -766,6 +775,8 @@ macro_rules! for_command {
             "config_write" => Some($f::<ConfigWriteArgs>()),
             "hotkeys_set" => Some($f::<HotkeysSetArgs>()),
             "permission_request" => Some($f::<PermissionRequestArgs>()),
+            "app_setting_read" => Some($f::<AppSettingReadArgs>()),
+            "app_setting_write" => Some($f::<crate::types::AppSetting>()),
             "window_mog_open" => Some($f::<WindowMogOpenArgs>()),
             "view_emit" => Some($f::<ViewEmitArgs>()),
             "audit_append" => Some($f::<AuditAppendArgs>()),

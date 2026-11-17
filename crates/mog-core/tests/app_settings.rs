@@ -21,7 +21,10 @@ fn cap_22_prefer_built_in_mic_is_off_by_default() {
     let s = AppSettings::default();
     assert_eq!(
         s.read(AppSettingKey::CapturePreferBuiltInMic),
-        AppSetting::CapturePreferBuiltInMic(false)
+        AppSetting {
+            key: AppSettingKey::CapturePreferBuiltInMic,
+            value: false
+        }
     );
 }
 
@@ -31,14 +34,26 @@ fn cap_22_a_write_is_read_back_and_reaches_the_mic() {
     let mic = Arc::new(FakeMic::default());
     s.set_mic_preference(mic.clone());
     assert_eq!(
-        s.write(AppSetting::CapturePreferBuiltInMic(true)),
-        AppSetting::CapturePreferBuiltInMic(true)
+        s.write(AppSetting {
+            key: AppSettingKey::CapturePreferBuiltInMic,
+            value: true
+        }),
+        AppSetting {
+            key: AppSettingKey::CapturePreferBuiltInMic,
+            value: true
+        }
     );
     assert_eq!(
         s.read(AppSettingKey::CapturePreferBuiltInMic),
-        AppSetting::CapturePreferBuiltInMic(true)
+        AppSetting {
+            key: AppSettingKey::CapturePreferBuiltInMic,
+            value: true
+        }
     );
-    s.write(AppSetting::CapturePreferBuiltInMic(false));
+    s.write(AppSetting {
+        key: AppSettingKey::CapturePreferBuiltInMic,
+        value: false,
+    });
     // The hook gets the current value when it is set, then each write.
     assert_eq!(*mic.0.lock().unwrap(), vec![false, true, false]);
 }
@@ -46,7 +61,10 @@ fn cap_22_a_write_is_read_back_and_reaches_the_mic() {
 #[test]
 fn cap_22_a_mic_set_after_a_write_gets_the_current_value() {
     let s = AppSettings::default();
-    s.write(AppSetting::CapturePreferBuiltInMic(true));
+    s.write(AppSetting {
+        key: AppSettingKey::CapturePreferBuiltInMic,
+        value: true,
+    });
     let mic = Arc::new(FakeMic::default());
     s.set_mic_preference(mic.clone());
     assert_eq!(*mic.0.lock().unwrap(), vec![true]);
