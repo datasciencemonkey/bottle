@@ -21,7 +21,7 @@ pnpm vitest run src/acceptance src/test-support/a11y.test.ts
 | AT-01 | `src-tauri/tests/at_01_mogs.rs` | Two MOG windows with their own labels, each a transparent never-key Status panel (MOG-01a, MOG-01b, MOG-02). The card is the only key window (MOG-03a, UX-19a). A drag of each MOG never reaches the page as a click (MOG-01c, UX-27a, UX-27b). The 9th MOG window is refused. A duplicate binding is a conflict (MB-14, core part). |
 | AT-01 | `src/acceptance/at-01-mogs.test.tsx` | Nothing yet: the config tests are pending. A self-test checks the secret pattern that they use. |
 | AT-03 | `crates/mog-core/tests/at_03_talk_key.rs` | Hold and release; a hold under 250 ms is a tap and its PTT is cancelled (CAP-44a); another key in the first 1 s cancels the PTT (CAP-44c); the Windows hook swallows Esc during a hold and hands-free. |
-| AT-20 | `src/acceptance/at-20-a11y.test.tsx` | The mood mapper gives only the 7 moods. One Esc in the card does one thing, by keyboard (UX-19b). Every chip has a text label, and hover sends nothing (UX-20b, UX-20c). The REC, offline and attention overlays show text. DOM events drive hover and click. |
+| AT-20 | `src/acceptance/at-20-a11y.test.tsx` | The mood mapper gives only the 7 moods. One Esc in the card does one thing, by keyboard (UX-19b). Every chip has a text label, and hover sends nothing (UX-20b, UX-20c). The REC, offline and attention overlays show text. DOM events drive hover and click. The target marker and ", target" in the accessible name move with the target (UX-28, #73). |
 | AT-30 | `crates/mog-core/tests/at_30_global_keys.rs` | Listen-only taps (CAP-35a). 1,000 simulated hold cycles give 1,000 key-ups on macOS and Windows (CAP-35b). Secure Input ends a PTT in one watchdog tick, 100 ms (CAP-39a), the Carbon chord drives PTT (CAP-39b), the pill text (CAP-39c). Tap watchdog (CAP-38a, CAP-38b). Key-state re-read (CAP-45). Input Monitoring only, after a user action (CAP-36); Accessibility only for insertion (CAP-37). Hook callback body p99 under 1 ms (CAP-40a); reinstall every 10 min and on resume in an 8 h soak (CAP-40b); swallow (CAP-41); elevated window (CAP-42). D66 defaults with no Ctrl+Option (CAP-43a). AltGr, Copilot (seen by the hook, #332), Dictation, VoiceOver, Fn and voice-app conflicts, each with a fix (CAP-43b). |
 | AT-20 | `src/views/mog/rive-mascot.test.ts` (#12) | A poke never changes the mood (UX-02a). The first frame is idle (UX-02b). The Rive listeners are off (UX-08b). This PR does not copy these tests. |
 | AT-30 | `src/acceptance/at-30-wizard.test.tsx` | Nothing yet: wizard step 7 is pending. |
@@ -53,7 +53,6 @@ When the feature issue lands, its implementer removes the mark and finishes the 
 | AT-20 | UX-30, UX-31a, UX-31b, UX-32a, UX-32b | #96 |
 | AT-20 | UX-20a | #89 |
 | AT-20 | UX-23a, UX-23b (MVP-M) | #101 |
-| AT-20 | UX-28 | #73 |
 | AT-20 | UX-33, UX-34a, UX-34b, UX-34c, UX-35 | #97 |
 | AT-30 | MB-05 | #66 |
 | AT-30 | UX-37a, UX-37b | #43 |
