@@ -41,3 +41,12 @@ U11 and RTR-21a require one shared agent runtime (one sidecar process) with one 
 - The model target resolver (`ModelTargets`: home profile and host of a MOG) is a narrow interface with a test double. The real one needs R5 CliRunner (#16) and R6 TokenBroker (#18).
 - IPC wiring of `agent_start`, `agent_stop` and `agent_send` in `mog_core::ipc::handle` is a contract change: #307.
 - The live first-tool-call latency (NFR-03d, 2.0 s or less at p95) and "usage rows show the user" (RTR-23) need SP-19 and a live workspace. They are pending on #111. The doubles do not measure them.
+
+## Amendment (#113): the `bottle-mcp` server of each session
+
+- Each session gets its own R17 `bottle-mcp` server (`mog_core::bottle_mcp::BottleMcpServer`). It is the `bottle-mcp` handler on a `loopback::LoopbackSession` (#224), so it reuses that listener: `127.0.0.1:0` only, the Host check, a constant-time check of `Authorization: Bearer <secret>`, 32 connections or fewer, a body of 1 MiB or less, and the rule-7 scrubber on every reply.
+- The URL (`http://127.0.0.1:<port>/mcp`) and the `Authorization` value go to the runtime child only, in the `open_session` frame on stdin (`bottleMcp: {url, authorization}`). They do not go into the environment: the environment is shared by all the sessions of a runtime, and the secret is per session. No status report, Debug print or log holds them (RTR-25).
+- The server speaks minimal MCP JSON-RPC 2.0 on `POST /mcp`: `initialize`, `notifications/initialized` (202), `ping`, `tools/list` and `tools/call`. `tools/list` returns exactly the 7 tools of RTR-26. A call of any other name is error `-32602`, and nothing runs (RTR-29e). Bad arguments are `-32602` too.
+- `transcript.search`, `memory.recall` and `memory.write` go through the `LocalTools` seam. `StoreLocalTools` runs the fixed R10 statements `mem.recall.fts` and `mem.item.upsert` (source `agent`) for the session's MOG only. The local catalog has no transcript statement yet: `TODO(#61)`.
+- `show_blurb`, `set_mood`, `propose_page` and `ask_user` go through the `ToolRelay` seam. `BrainRelay` emits `agent.tool_call {mogId, callId, tool, args}` and waits for `agent_tool_result {mogId, callId, result}` for 300 s or less. `propose_page` only proposes; the user decides. `set_mood` refuses `listening`, because the agent cannot open the mic. The app host wiring of the relay and the store is `TODO(#307)`.
+- A restart (ARC-F14) closes the old server and starts a new one with a new secret. A stop or a failure closes the server. A waiting UI call sees the stop within 50 ms.

@@ -10,7 +10,8 @@
 //! This is a skeleton. It speaks plain HTTP/1.1 with a `Content-Length` body, one request per
 //! connection.
 //! TODO(#111): the SP-19 wire details (MCP streamable HTTP and SSE, paths, how the harness
-//! passes the header). TODO(#113): the `bottle-mcp` and model proxy handlers.
+//! passes the header). The `bottle-mcp` handler is `crate::bottle_mcp` (#113); the model proxy
+//! is `crate::agent_host::model_proxy` (#112).
 //! TODO(#139): the Genie One MCP proxy handler.
 
 use std::collections::HashMap;
@@ -77,7 +78,7 @@ impl LoopbackEndpoint {
     /// serves in the core and makes no upstream call itself. The handler builds the upstream
     /// request from [`LoopbackRequest`], which holds no harness header, and calls
     /// [`crate::request_identity::RequestDecorator`] with the session's MOG tags.
-    /// TODO(#113): the model proxy handler. TODO(#139): the Genie One MCP proxy handler.
+    /// The model proxy is `crate::agent_host::model_proxy`. TODO(#139): the Genie One MCP proxy handler.
     pub fn call_kind(&self) -> Option<CallKind> {
         match self {
             LoopbackEndpoint::BottleMcp => None,
@@ -115,7 +116,7 @@ pub trait LoopbackHandler: Send + Sync {
     fn handle(&self, req: &LoopbackRequest) -> LoopbackResponse;
 }
 
-/// The default handler: 501 for every endpoint (TODO(#113), TODO(#139)).
+/// The default handler: 501 for every endpoint. `crate::bottle_mcp` serves `bottle-mcp` (#113); TODO(#139).
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NotImplementedHandler;
 
@@ -382,9 +383,12 @@ impl Drop for ConnGuard {
 fn reason(status: u16) -> &'static str {
     match status {
         200 => "OK",
+        202 => "Accepted",
         400 => "Bad Request",
         401 => "Unauthorized",
         403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
         408 => "Request Timeout",
         413 => "Payload Too Large",
         431 => "Request Header Fields Too Large",
@@ -395,7 +399,12 @@ fn reason(status: u16) -> &'static str {
 }
 
 fn reply(stream: &mut TcpStream, status: u16, body: &Value) {
-    let body = scrub_json(body).to_string();
+    // 202 (an accepted JSON-RPC notification) has no body.
+    let body = if status == 202 {
+        String::new()
+    } else {
+        scrub_json(body).to_string()
+    };
     let head = format!(
         "HTTP/1.1 {status} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         reason(status),
@@ -568,8 +577,9 @@ fn serve(mut stream: TcpStream, endpoint: LoopbackEndpoint, port: u16, shared: &
         body,
     };
     let handler = &shared.handler;
-    // TODO(#113): the default panic hook prints a handler's panic message to stderr. The real
-    // handlers must never put a token in a panic message, or the app sets a scrubbing hook.
+    // The default panic hook prints a handler's panic message to stderr. A handler must never
+    // put a token in a panic message (`bottle_mcp` formats no value into one), or the app sets
+    // a scrubbing hook.
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handler.handle(&req))) {
         Ok(resp) => reply(&mut stream, resp.status, &resp.body),
         Err(_) => error(&mut stream, 500, "internal"),
