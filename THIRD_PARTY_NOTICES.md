@@ -120,6 +120,7 @@ Add one row for each Bottle file that holds adapted Handy code.
 | `spikes/sp-03/src/clamshell.rs` | `src-tauri/src/helpers/clamshell.rs` |
 | `spikes/sp-03/src/secure_input.rs` | `src-tauri/src/secure_input.rs` |
 | `src-tauri/src/macos_panel.rs` | `src-tauri/src/overlay.rs` |
+| `src/brain/components/cleanup-prepass.ts` | `src-tauri/src/audio_toolkit/text.rs` |
 
 ## NVIDIA Parakeet TDT 0.6B v3 (weights, CC-BY-4.0)
 

@@ -273,8 +273,11 @@ export function validateRouterDecision(value: unknown): Validation {
 
 type Parsed = { ok: true; decision: RouterDecision } | { ok: false; outcome: AttemptFailure };
 
-/** The message text of a chat-completions body. Content parts keep only `text` parts. */
-function messageContent(json: unknown): string | undefined {
+/**
+ * The message text of a chat-completions body. Content parts keep only `text` parts (D58:
+ * gpt-oss returns a list of blocks). CleanupProvider (#55) reads replies with it too.
+ */
+export function messageContent(json: unknown): string | undefined {
   const choices = (json as { choices?: unknown } | null)?.choices;
   if (!Array.isArray(choices)) return undefined;
   const content = (choices[0] as { message?: { content?: unknown } } | undefined)?.message?.content;
