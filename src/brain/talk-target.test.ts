@@ -85,6 +85,7 @@ describe('T1 talk-key target in the brain (#73)', () => {
     await openAll(target, A, B);
     expect(target.current()).toBe(B);
     target.interacted(A);
+    await flush();
     // #305 review note A: a reload of the MOG B view is not an interaction.
     target.viewReady(B);
     expect(target.current()).toBe(A);
@@ -96,8 +97,9 @@ describe('T1 talk-key target in the brain (#73)', () => {
     await openAll(target, A, B, C);
     active.length = 0;
     target.interacted(A);
+    await flush();
     expect(target.current()).toBe(A);
-    target.interacted(C);
+    target.interacted(C, 'card');
     expect(target.current()).toBe(C);
     expect(active).toEqual([A, C]);
   });
@@ -107,6 +109,7 @@ describe('T1 talk-key target in the brain (#73)', () => {
     await openAll(target, A, B, C);
     target.interacted(A);
     target.interacted(C);
+    await flush();
     target.closed(C);
     expect(target.current()).toBe(A);
     expect(marked(sent)).toEqual([A]);
@@ -172,6 +175,7 @@ describe('T1 talk-key target in the brain (#73)', () => {
     await openAll(target, A, B, C);
     expect(marked(sent)).toEqual([C]);
     target.interacted(A);
+    await flush();
     expect(marked(sent)).toEqual([A]);
     expect(lastViews(sent)[C]).toEqual({ mogId: C, name: 'Finance', target: false, toast: false });
     target.pttDown(B);
@@ -206,19 +210,60 @@ describe('T1 talk-key target in the brain (#73)', () => {
     expect(lastViews(sent)[A]).toEqual({ mogId: A, name: 'MOG', target: true, toast: true });
   });
 
-  it('[MB-06a] a refused mog_set_active (no route yet, #439) does not break the brain target', async () => {
+  /** A tracker whose `mog_set_active` is refused, as before #439 routes it. */
+  function refused() {
+    const sent: MogTargetView[] = [];
     const t = createTalkTarget({
-      send: () => undefined,
+      send: (v) => void sent.push(v),
       setActive: async () => {
         throw { error: 'not_implemented' };
       },
       after: () => () => undefined,
     });
+    return { t, sent };
+  }
+
+  it('[MB-06a] [UX-28] a refused mog_set_active (#439) does not move the marker on a MOG click', async () => {
+    // Rust did not move its target, so the marker must not move: it never shows a wrong target.
+    const { t, sent } = refused();
     t.viewReady(A);
     t.viewReady(B);
+    await flush();
+    expect(t.interacted(A)).toBe(true);
+    await flush();
+    expect(t.current()).toBe(B);
+    expect(marked(sent)).toEqual([B]);
+    expect(sent.some((v) => v.mogId === A && v.target)).toBe(false);
+  });
+
+  it('[MB-06a] [UX-28] a MOG click moves the marker only when mog_set_active answers ok', async () => {
+    const sent: MogTargetView[] = [];
+    let answer: () => void = () => undefined;
+    const t = createTalkTarget({
+      send: (v) => void sent.push(v),
+      setActive: () => new Promise<void>((ok) => (answer = ok)),
+      after: () => () => undefined,
+    });
+    t.viewReady(A);
+    t.viewReady(B);
+    await flush();
     t.interacted(A);
     await flush();
+    expect(t.current()).toBe(B);
+    expect(marked(sent)).toEqual([B]);
+    answer();
+    await flush();
     expect(t.current()).toBe(A);
+    expect(marked(sent)).toEqual([A]);
+  });
+
+  it('[MB-06a] [UX-28] card input moves the marker at once: Rust sees the card focus', async () => {
+    const { t, sent } = refused();
+    t.viewReady(A);
+    t.viewReady(B);
+    expect(t.interacted(A, 'card')).toBe(true);
+    expect(t.current()).toBe(A);
+    expect(marked(sent)).toEqual([A]);
   });
 });
 
@@ -248,8 +293,10 @@ describe('wiring of the talk-key target (#73)', () => {
     expect(target.current()).toBe(B);
     for (const kind of ['click', 'poked', 'drag_end']) {
       bus.dispatch(input(`mog-${A}`, A, kind));
+      await flush();
       expect(target.current()).toBe(A);
       bus.dispatch(input(`mog-${B}`, B, kind));
+      await flush();
       expect(target.current()).toBe(B);
     }
   });
@@ -272,23 +319,36 @@ describe('wiring of the talk-key target (#73)', () => {
   it('[MB-06a] input from a MOG view the brain missed (brain restart) opens and targets it', async () => {
     const { bus, target } = await wired();
     bus.dispatch(input(`mog-${C}`, C, 'poked'));
+    await flush();
     expect(target.current()).toBe(C);
     // A card alone never proves that its MOG window is open (#305 review note B).
     bus.dispatch(input(`card-${A}`, A, 'click'));
     expect(target.current()).toBe(C);
   });
 
-  it('[MB-06a] [MB-06b] hotkey:ptt down shows the toast; up, cancel and unknown MOGs do not', async () => {
+  it('[MB-06a] [MB-06b] hotkey:ptt down shows the toast; up and cancel do not', async () => {
     const { bus, sent } = await wired();
     bus.dispatch(input(`mog-${A}`, A, 'click', { action: VIEW_READY }));
     await flush();
     sent.length = 0;
-    bus.dispatch(ptt(C, 'down'));
     bus.dispatch(ptt(A, 'up'));
     bus.dispatch(ptt(A, 'cancel'));
     expect(sent).toEqual([]);
     bus.dispatch(ptt(A, 'down'));
     expect(sent).toEqual([{ mogId: A, name: 'Sales', target: true, toast: true }]);
+  });
+
+  it('[MB-06a] [MB-06b] hotkey:ptt down for a MOG the brain missed (brain restart) opens and targets it', async () => {
+    // Rust latches only a MOG whose `mog-<id>` window is open, so the press proves it is open.
+    const { bus, target, sent } = await wired();
+    bus.dispatch(input(`mog-${A}`, A, 'click', { action: VIEW_READY }));
+    await flush();
+    bus.dispatch(ptt(C, 'down'));
+    await flush();
+    expect(target.current()).toBe(C);
+    expect(target.isOpen(C)).toBe(true);
+    expect(lastViews(sent)[C]).toMatchObject({ mogId: C, target: true, toast: true });
+    expect(marked(sent)).toEqual([C]);
   });
 
   it('[UX-28] [ARC-5] sends the target view only to its own MOG window', async () => {
