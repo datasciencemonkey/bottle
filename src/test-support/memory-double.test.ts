@@ -56,3 +56,28 @@ describe('memory test doubles (MEM-39a)', () => {
     });
   });
 });
+
+describe('GenieExchange session and target ids (#449)', () => {
+  it('[MEM-32a][SEC-14a] a GenieExchange carries sessionId, workspaceId and spaceId, and the double keeps them', async () => {
+    const x: GenieExchange = {
+      ...exchange(A),
+      sessionId: '00000000-0000-4000-8000-0000000000e1',
+      workspaceId: '1234567890',
+      spaceId: 'space-test-not-real',
+    };
+    const svc = new InMemoryMemoryService();
+    await svc.recordExchange(x);
+    const [kept] = svc.exchanges;
+    // Forget by session (MEM-32a) and "Stop and delete this session" (SEC-14a) find the exchange.
+    expect(svc.exchanges.filter((e) => e.sessionId === x.sessionId)).toHaveLength(1);
+    expect(kept?.workspaceId).toBe('1234567890');
+    expect(kept?.spaceId).toBe('space-test-not-real');
+  });
+
+  it('[MEM-25a] the 3 fields are optional: an exchange without them still type-checks', () => {
+    const x: GenieExchange = exchange(A);
+    expect(x.sessionId).toBeUndefined();
+    expect(x.workspaceId).toBeUndefined();
+    expect(x.spaceId).toBeUndefined();
+  });
+});
