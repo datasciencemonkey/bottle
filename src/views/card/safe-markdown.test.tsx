@@ -147,11 +147,17 @@ describe('safe markdown', () => {
     expect(out).not.toContain('<a');
   });
 
+  it('[SEC-25a] [AT-17] hostile inputs up to 200 KB render in near-linear time', () => {
+    for (const bad of ['[', '![a](', '**', '*', '`', '[a](']) expectNearLinear(html, bad);
+  }, 30_000);
+
   it('[SEC-25a] [AT-17] the growth check rejects an uncapped quadratic renderer', () => {
-    expectNearLinear(quadratic(20), '[');
+    expect(growth(quadratic(20), '[').large).toBeGreaterThanOrEqual(LARGE_STEP_MAX);
   }, 30_000);
 
   it('[SEC-25a] [AT-17] the growth check rejects a quadratic renderer below the cap', () => {
-    expectNearLinear(quadratic(2, MAX_ANSWER_CHARS), '[');
+    expect(growth(quadratic(2, MAX_ANSWER_CHARS), '[').small).toBeGreaterThanOrEqual(
+      SMALL_STEP_MAX,
+    );
   }, 30_000);
 });
