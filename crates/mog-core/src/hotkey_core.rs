@@ -51,6 +51,9 @@ pub const CHORD_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 /// A talk-key hold shorter than this is a tap (CAP-44a).
 pub const TAP_MAX_HOLD: Duration = Duration::from_millis(250);
 
+/// Two taps whose key-downs are this close or closer make a double-tap (CAP-14a, ADR 0057).
+pub const DOUBLE_TAP_MAX_GAP: Duration = Duration::from_millis(400);
+
 /// Another key that goes down this soon after the talk key cancels the PTT (CAP-44c).
 pub const OTHER_KEY_CANCEL_WINDOW: Duration = Duration::from_secs(1);
 
@@ -77,7 +80,7 @@ pub enum KeyEdge {
     Up,
 }
 
-/// The phase of the `hotkey.ptt` event (section 4.5). `double_tap` belongs to a later issue.
+/// The phase of the `hotkey.ptt` event (section 4.5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PttPhase {
     /// The talk key went down: start PTT.
@@ -86,6 +89,9 @@ pub enum PttPhase {
     Up,
     /// PTT ends and the audio is dropped (for example when Secure Event Input starts).
     Cancel,
+    /// A second tap came [`DOUBLE_TAP_MAX_GAP`] or less after the first (key-down to key-down):
+    /// start hands-free (CAP-14a). It follows the second `Tap`.
+    DoubleTap,
 }
 
 impl PttPhase {
@@ -95,6 +101,7 @@ impl PttPhase {
             PttPhase::Down => "down",
             PttPhase::Up => "up",
             PttPhase::Cancel => "cancel",
+            PttPhase::DoubleTap => "double_tap",
         }
     }
 }
@@ -125,7 +132,8 @@ pub enum HotkeyOutput {
     FallbackChordUnavailable,
     /// The talk key was held for less than [`TAP_MAX_HOLD`] (CAP-44a). R1 emits it after
     /// `Ptt(Cancel)`, so the audio of the tap is dropped and no STT call starts (CAP-44b).
-    /// The double-tap rule (CAP-14a) and the hands-free stop (CAP-14b) read it.
+    /// The hands-free stop (CAP-14b) reads it. Two taps close together also give
+    /// `Ptt(DoubleTap)` (CAP-14a).
     Tap,
 }
 
@@ -485,6 +493,8 @@ pub struct HotkeyEngine {
     last_tap_retry: Option<Duration>,
     clock: Arc<dyn MonotonicClock>,
     held_since: Option<Duration>,
+    /// The key-down time of the last tap, while it can still be the first of a double-tap.
+    last_tap_down: Option<Duration>,
 }
 
 impl std::fmt::Debug for HotkeyEngine {
@@ -517,6 +527,7 @@ impl HotkeyEngine {
             last_tap_retry: None,
             clock,
             held_since: None,
+            last_tap_down: None,
         }
     }
 
@@ -526,6 +537,7 @@ impl HotkeyEngine {
     pub fn on_other_key_down(&mut self) {
         if self.other_key_window_open() {
             self.held_since = None;
+            self.last_tap_down = None;
             let out = self.machine.cancel();
             self.emit(out);
         }
@@ -553,21 +565,52 @@ impl HotkeyEngine {
                     timed.push(o);
                 }
                 HotkeyOutput::Ptt(PttPhase::Up) => {
-                    let short = self
-                        .held_since
-                        .take()
-                        .is_some_and(|t| now.saturating_sub(t) < TAP_MAX_HOLD);
-                    if short {
-                        timed.push(HotkeyOutput::Ptt(PttPhase::Cancel));
-                        timed.push(HotkeyOutput::Tap);
-                    } else {
-                        timed.push(o);
+                    let down = self.held_since.take();
+                    match down.filter(|t| now.saturating_sub(*t) < TAP_MAX_HOLD) {
+                        Some(down) => {
+                            timed.push(HotkeyOutput::Ptt(PttPhase::Cancel));
+                            timed.push(HotkeyOutput::Tap);
+                            // CAP-14a: the second of two close taps is a double-tap. A third
+                            // tap starts a new pair.
+                            match self.last_tap_down.take() {
+                                Some(first) if down.saturating_sub(first) <= DOUBLE_TAP_MAX_GAP => {
+                                    timed.push(HotkeyOutput::Ptt(PttPhase::DoubleTap));
+                                }
+                                _ => self.last_tap_down = Some(down),
+                            }
+                        }
+                        None => {
+                            self.last_tap_down = None;
+                            timed.push(o);
+                        }
                     }
+                }
+                HotkeyOutput::Ptt(PttPhase::Cancel) => {
+                    // A cancelled press (CAP-44c, Secure Event Input, a reset) is no tap.
+                    self.held_since = None;
+                    self.last_tap_down = None;
+                    timed.push(o);
                 }
                 other => timed.push(other),
             }
         }
         timed
+    }
+
+    /// The tap rule for a PTT that the system ended (Secure Event Input): `cancel` goes through
+    /// [`Self::timed`]; `up` ends the hold and any tap pair, but is never a tap.
+    fn system_end(&mut self, out: Vec<HotkeyOutput>) -> Vec<HotkeyOutput> {
+        let mut ended = Vec::with_capacity(out.len());
+        for o in out {
+            if o == HotkeyOutput::Ptt(PttPhase::Up) {
+                self.held_since = None;
+                self.last_tap_down = None;
+                ended.push(o);
+            } else {
+                ended.extend(self.timed(vec![o]));
+            }
+        }
+        ended
     }
 
     /// The OS layer tried to register the fallback chord. On a failure R1 emits
@@ -645,6 +688,9 @@ impl HotkeyEngine {
             };
             self.chord_reported = false;
             let out = self.machine.on_secure_input(active, probe.physical_state());
+            // A Secure Event Input `cancel` goes through the tap rule: it is no tap and ends any
+            // pair (CAP-14a). The `up` at its end is a lost key-up (CAP-45), never a tap.
+            let out = self.system_end(out);
             self.emit(out);
         } else if let ChordState::Failed { at } = self.chord {
             if now.saturating_sub(at) >= CHORD_RETRY_INTERVAL {
@@ -715,6 +761,7 @@ impl HotkeyEngine {
         self.chord_reported = false;
         self.last_tap_retry = None;
         self.held_since = None;
+        self.last_tap_down = None;
         self.emit(out);
     }
 
@@ -1476,6 +1523,142 @@ mod tests {
     #[test]
     fn cap_44a_tap_has_no_pill_text() {
         assert_eq!(HotkeyOutput::Tap.pill_text(), None);
+    }
+
+    // ---- CAP-14a: a double-tap (key-downs 400 ms or less apart) starts hands-free ----
+
+    fn tap_at(e: &mut HotkeyEngine, clock: &SimClock, hold_ms: u64) {
+        e.on_talk_key(Down);
+        clock.advance(Duration::from_millis(hold_ms));
+        e.on_talk_key(Up);
+    }
+
+    #[test]
+    fn cap_14a_two_taps_with_key_downs_400_ms_apart_give_double_tap() {
+        for gap in [0u64, 150, 300] {
+            let (sink, clock, mut e) = engine_at_zero();
+            tap_at(&mut e, &clock, 100);
+            clock.advance(Duration::from_millis(gap));
+            tap_at(&mut e, &clock, 100);
+            assert_eq!(
+                sink.take(),
+                vec![
+                    Ptt(PDown),
+                    Ptt(Cancel),
+                    HotkeyOutput::Tap,
+                    Ptt(PDown),
+                    Ptt(Cancel),
+                    HotkeyOutput::Tap,
+                    Ptt(PttPhase::DoubleTap),
+                ],
+                "key-downs {} ms apart",
+                100 + gap
+            );
+        }
+        assert_eq!(PttPhase::DoubleTap.as_str(), "double_tap");
+        assert_eq!(DOUBLE_TAP_MAX_GAP, Duration::from_millis(400));
+    }
+
+    #[test]
+    fn cap_14a_key_downs_more_than_400_ms_apart_are_two_single_taps() {
+        let (sink, clock, mut e) = engine_at_zero();
+        tap_at(&mut e, &clock, 100);
+        clock.advance(Duration::from_millis(301));
+        tap_at(&mut e, &clock, 100);
+        assert!(!sink.take().contains(&Ptt(PttPhase::DoubleTap)));
+    }
+
+    #[test]
+    fn cap_14a_a_hold_between_taps_and_a_third_tap_give_no_double_tap() {
+        let (sink, clock, mut e) = engine_at_zero();
+        // A tap, then a PTT hold: the hold resets the double-tap rule.
+        tap_at(&mut e, &clock, 50);
+        tap_at(&mut e, &clock, 300);
+        tap_at(&mut e, &clock, 50);
+        assert!(!sink.take().contains(&Ptt(PttPhase::DoubleTap)));
+        // A double-tap, then a third tap: the third tap is a new single tap.
+        let (sink, clock, mut e) = engine_at_zero();
+        tap_at(&mut e, &clock, 50);
+        tap_at(&mut e, &clock, 50);
+        tap_at(&mut e, &clock, 50);
+        let doubles = sink
+            .take()
+            .into_iter()
+            .filter(|o| *o == Ptt(PttPhase::DoubleTap))
+            .count();
+        assert_eq!(doubles, 1);
+    }
+
+    #[test]
+    fn cap_14a_a_cancelled_press_is_not_the_first_tap() {
+        // CAP-44c: another key cancels the press. It is no tap, so no double-tap follows.
+        let (sink, clock, mut e) = engine_at_zero();
+        e.on_talk_key(Down);
+        e.on_other_key_down();
+        e.on_talk_key(Up);
+        clock.advance(Duration::from_millis(50));
+        tap_at(&mut e, &clock, 50);
+        assert!(!sink.take().contains(&Ptt(PttPhase::DoubleTap)));
+    }
+
+    #[test]
+    fn cap_45_cap_14a_a_short_chord_hold_ended_by_secure_input_is_an_up_and_no_tap() {
+        // Secure Event Input ends during a chord hold: the key-up is lost, so R1 sends `up`
+        // (CAP-45) even for a short hold. It is never a tap, and it ends any tap pair.
+        for hold_ms in [10u64, 100, 1_000] {
+            let (sink, clock, mut e) = engine_at_zero();
+            let probe = FakeProbe::ready();
+            let ctl = FakeCtl::default();
+            e.tick(clock.now(), &probe, &ctl);
+            *probe.secure.lock().unwrap() = true;
+            e.tick(clock.now(), &probe, &ctl);
+            e.on_chord(Down);
+            clock.advance(Duration::from_millis(5));
+            e.on_chord(Up);
+            clock.advance(Duration::from_millis(5));
+            e.on_chord(Down);
+            clock.advance(Duration::from_millis(hold_ms));
+            *probe.secure.lock().unwrap() = false;
+            e.tick(clock.now(), &probe, &ctl);
+            let out = sink.take();
+            assert!(
+                out.ends_with(&[Ptt(PUp), HotkeyOutput::TalkKeyRestored]),
+                "{hold_ms} ms: {out:?}"
+            );
+            assert!(
+                !out.contains(&Ptt(PttPhase::DoubleTap)),
+                "{hold_ms} ms: {out:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn cap_14a_cap_39a_a_secure_input_cancel_between_two_taps_gives_no_double_tap() {
+        // A machine cancel (Secure Event Input starts during the second press) is no tap. The
+        // chord tap after it is a new first tap, not the second tap of the earlier pair.
+        let (sink, clock, mut e) = engine_at_zero();
+        let probe = FakeProbe::ready();
+        let ctl = FakeCtl::default();
+        e.tick(clock.now(), &probe, &ctl);
+        tap_at(&mut e, &clock, 50);
+        clock.advance(Duration::from_millis(50));
+        e.on_talk_key(Down);
+        *probe.physical.lock().unwrap() = down();
+        *probe.secure.lock().unwrap() = true;
+        e.tick(clock.now(), &probe, &ctl);
+        assert!(sink
+            .take()
+            .ends_with(&[Ptt(PDown), Ptt(Cancel), HotkeyOutput::TalkKeyPaused]));
+        clock.advance(Duration::from_millis(50));
+        e.on_chord(Down);
+        clock.advance(Duration::from_millis(50));
+        e.on_chord(Up);
+        let out = sink.take();
+        assert!(
+            out.contains(&HotkeyOutput::Tap),
+            "the chord press is a tap: {out:?}"
+        );
+        assert!(!out.contains(&Ptt(PttPhase::DoubleTap)), "{out:?}");
     }
 
     #[test]

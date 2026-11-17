@@ -5,7 +5,7 @@
  * defers is sent when the hold ends, on the injected scheduler.
  *
  * With `traceNow` (only when `VITE_BOTTLE_LATENCY_TRACE=1`), each state carries a `ViewTrace`
- * for the view frame probe. TODO(#14): `startBrain` builds one publisher with
+ * for the view frame probe. TODO(#425): once capture:state is routed, `startBrain` builds one publisher with
  * `sendMogViewState` and `traceNow: latencyTraceClock(import.meta.env.VITE_BOTTLE_LATENCY_TRACE)`,
  * and the capture lifecycle calls `update`. The device run is #355. TODO(#39): the OperationTracker
  * calls `update` for each request phase, and a recheck runs when an error or success window ends.

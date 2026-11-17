@@ -1,13 +1,14 @@
 /**
  * The `hotkey:ptt` item on the brain Channel (#6, `hotkey_host::ptt_payload`): `{ mogId, phase }`.
  * The brain stamps the time the item reached it; UX-05b and UX-36 start there (ADR 0031).
- * The capture lifecycle consumes it: TODO(#14).
+ * The capture lifecycle (`capture-lifecycle.ts`, #14) consumes it. `double_tap` (section 4.5) comes
+ * after the second of two taps whose key-downs are 400 ms or less apart (CAP-14a, ADR 0057).
  */
 import type { MogId } from '../shared/interfaces';
 import { EVENTS } from '../shared/ipc';
 import type { BrainBus } from './bus';
 
-export type PttPhase = 'down' | 'up' | 'cancel';
+export type PttPhase = 'down' | 'up' | 'cancel' | 'double_tap';
 
 export interface PttEvent {
   mogId: MogId;
@@ -16,7 +17,7 @@ export interface PttEvent {
   at: number;
 }
 
-const PHASES: ReadonlySet<string> = new Set<PttPhase>(['down', 'up', 'cancel']);
+const PHASES: ReadonlySet<string> = new Set<PttPhase>(['down', 'up', 'cancel', 'double_tap']);
 
 export function asPttEvent(p: unknown, at: number): PttEvent | undefined {
   if (typeof p !== 'object' || p === null) return undefined;

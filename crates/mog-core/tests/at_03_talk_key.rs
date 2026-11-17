@@ -14,7 +14,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use mog_core::capture::{CaptureCore, CaptureRequest, CaptureService};
+use mog_core::capture::{
+    CaptureCore, CaptureRequest, CaptureService, HandsFreeStop, StopReason, DEFAULT_VAD_END_MS,
+};
 use mog_core::clock::{MonotonicClock, SimClock};
 use mog_core::hotkey_core::{
     HotkeyEngine, HotkeyOutput, KeyEdge, PttPhase, OTHER_KEY_CANCEL_WINDOW, TAP_MAX_HOLD,
@@ -213,29 +215,59 @@ fn at_03_cap_13a_cap_13b_no_audio_before_key_down_and_the_mic_closes_on_pause() 
 }
 
 #[test]
-#[ignore = "pending TODO(#14): hands-free start, stop and VAD end are not built"]
 fn at_03_cap_14a_cap_14b_cap_14c_cap_44b_hands_free_starts_and_stops_and_tap_audio_is_dropped() {
     let (mut e, sink, clock) = engine();
-    // A double-tap of 400 ms or less starts hands-free (CAP-14a).
+    // A double-tap of 400 ms or less gives the `double_tap` phase (CAP-14a).
     hold(&mut e, &clock, ms(100));
     clock.advance(ms(200));
     hold(&mut e, &clock, ms(100));
-    let taps = sink
-        .take()
-        .iter()
-        .filter(|o| **o == HotkeyOutput::Tap)
-        .count();
-    assert_eq!(taps, 2);
-    // TODO(#14): the double_tap phase starts R2 in hands_free; a tap, Esc or 5 min stops it in
-    // 200 ms or less; `mog.capture.vadEndMs` (default 1,500 ms) ends it after silence; the tap
-    // audio never goes to the journal or STT.
-    let r2 = r2(&clock);
-    let lease = r2
-        .start(capture(CaptureMode::HandsFree))
-        .expect("TODO(#14): a hands-free lease");
-    r2.stop(lease.id)
-        .expect("TODO(#14): the stop releases the lease");
-    todo!("TODO(#14): assert the double-tap starts hands-free, a tap / Esc / 5 min stop it in 200 ms or less, the VAD end and no tap audio in the journal or STT");
+    let out = sink.take();
+    assert_eq!(out.iter().filter(|o| **o == HotkeyOutput::Tap).count(), 2);
+    assert_eq!(out.last(), Some(&ptt(PttPhase::DoubleTap)));
+
+    // R2: the tap leases are discarded, so no tap audio reaches the pipeline (CAP-44b).
+    let events = Arc::new(RecordingCaptureEvents::default());
+    let device = FakeAudioDevice::new();
+    let r2 = CaptureCore::new(
+        Box::new(device.clone()),
+        Arc::new(clock.clone()),
+        events.clone(),
+    );
+    let tap = r2.start(capture(CaptureMode::Ptt)).expect("a tap lease");
+    r2.discard(tap.id).expect("the tap lease stops");
+    assert!(events.last_stop().expect("a stop").reason.discards_audio());
+
+    // The double-tap starts hands-free; each of the three stops closes the mic at once
+    // (CAP-14b, 200 ms or less).
+    r2.start(capture(CaptureMode::HandsFree))
+        .expect("a hands-free lease");
+    r2.stop_hands_free(HandsFreeStop::Tap);
+    assert!(!device.log().mic_open);
+    assert_eq!(events.last_stop().unwrap().reason, StopReason::Tap);
+
+    r2.start(capture(CaptureMode::HandsFree)).unwrap();
+    r2.stop_hands_free(HandsFreeStop::Escape);
+    assert!(!device.log().mic_open);
+    assert_eq!(events.last_stop().unwrap().reason, StopReason::Escape);
+
+    r2.start(capture(CaptureMode::HandsFree)).unwrap();
+    let cap = r2.tick().expect("the 5 min cap deadline");
+    clock.advance(Duration::from_millis(cap) - clock.now());
+    r2.tick();
+    assert!(!device.log().mic_open);
+    assert_eq!(events.last_stop().unwrap().reason, StopReason::HandsFreeCap);
+
+    // The VAD end: 1,500 ms of silence by default (CAP-14c).
+    r2.start(capture(CaptureMode::HandsFree)).unwrap();
+    r2.voice_activity(true);
+    let end = r2.voice_activity(false).expect("the VAD end deadline");
+    assert_eq!(
+        end,
+        u64::try_from(clock.now().as_millis()).unwrap() + DEFAULT_VAD_END_MS
+    );
+    clock.advance(ms(DEFAULT_VAD_END_MS));
+    r2.tick();
+    assert_eq!(events.last_stop().unwrap().reason, StopReason::VadEnd);
 }
 
 #[test]

@@ -4,6 +4,12 @@
  */
 import { BrainBus, subscribeBrain } from '../bus';
 import { wireHubMogs } from '../hub-mogs-wiring';
+import {
+  createCaptureLifecycle,
+  ipcCaptureControl,
+  wireCaptureLifecycle,
+} from '../capture-lifecycle';
+import { createSystemClock } from '../clock';
 import { wireNotice } from '../notice-wiring';
 import { createAgentBridge } from './agent-bridge';
 import { createCapturePolicy } from './capture-policy';
@@ -68,11 +74,21 @@ export function startBrain(): Brain {
       BRAIN_COMPONENTS.map((c) => [c.id, c.factory()]),
     ) as BrainComponents;
     const bus = new BrainBus();
-    // TODO(#8, #14, #141): components register their handlers (view:input, hotkey:ptt, ...) on `bus`.
+    // TODO(#8, #141): the other components register their handlers on `bus`.
     // MB-08a, MB-08b: the hub notice talks to T12 (#27).
     wireNotice(bus, components.T12);
     // #26: the hub MOG list and actions (MB-01).
     wireHubMogs(bus, components.T1);
+    // #14: the PTT and hands-free lifecycle. Every start goes through the T12 consent gate.
+    const lifecycle = createCaptureLifecycle({
+      control: ipcCaptureControl({ consent: components.T12 }),
+      // TODO(#46): T4 transcribes with local Parakeet; the stub rejects, so nothing is routed yet.
+      transcribe: async (seg) =>
+        (await components.T4.transcribe(seg, { app: 'bottle', mog: seg.mogId, op: 'asr' })).text,
+      // TODO(#424): `routeUtterance(u, ipcUtteranceDeps())` plugs in here.
+      onUtterance: () => undefined,
+    });
+    wireCaptureLifecycle(bus, lifecycle, createSystemClock().now);
     brain = { components, bus, ready: subscribeBrain(bus) };
   }
   return brain;
