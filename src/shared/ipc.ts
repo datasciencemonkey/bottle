@@ -48,6 +48,9 @@ export const COMMANDS = {
   capture_stop_all: B,
   capture_subscribe: B,
   session_attest: B,
+  /** #430 (ADR 0060): T12 in the brain writes and reads the consent records (SEC-32a). */
+  consent_notice_record: B,
+  consent_records_list: B,
   stt_transcribe: B,
   insert_text: B,
   agent_start: B,
@@ -182,6 +185,9 @@ export interface CommandArgs {
   capture_stop_all: NoArgs;
   capture_subscribe: { onLevel: Channel<number>; onPartial: Channel<string> };
   session_attest: { mogId: MogId; kind: 'only_me' | 'others_agreed'; noticeVersion: number };
+  /** SEC-32a: only the notice version. The Rust side fills the user, the device and the time. */
+  consent_notice_record: { noticeVersion: number };
+  consent_records_list: NoArgs;
   stt_transcribe: {
     segmentId: string;
     provider: Transcript['provider'];
@@ -264,6 +270,8 @@ export const IPC_ERROR_CODES = [
   'window_closing',
   /** `config_*`: the config store is missing or failed (routed in #379). */
   'config_storage_failed',
+  /** `consent_*`: no consent records are managed, or the store failed (#430, ADR 0060). */
+  'consent_storage_failed',
 ] as const;
 
 export type IpcErrorCode = (typeof IPC_ERROR_CODES)[number];
@@ -410,6 +418,22 @@ export interface TalkKeyStatus {
   reason: TalkKeyReason | null;
 }
 
+// ---------- consent records (#430, ADR 0060; Rust mirror in `mog_core::types`) ----------
+
+/** What a consent record is for: the notice, or the attestation choice of a session. */
+export type ConsentRecordKind = 'notice' | 'only_me' | 'others_agreed';
+
+/** One record of `consent_records_list`. Content-free: no user, no device and no MOG ID. */
+export interface ConsentRecordView {
+  recordId: string;
+  kind: ConsentRecordKind;
+  noticeVersion: number;
+  /** `null` for a notice record. */
+  sessionId: string | null;
+  /** SEC-32a `accepted_at`, Unix ms. */
+  acceptedAt: number;
+}
+
 type Empty = Record<string, never>;
 
 /** Return types of 4.5. `unknown` where a feature issue still defines the shape. */
@@ -428,6 +452,9 @@ export interface CommandReturns {
   capture_stop_all: CaptureState;
   capture_subscribe: Empty;
   session_attest: { consentToken: string };
+  consent_notice_record: { recordId: string };
+  /** Oldest first. */
+  consent_records_list: { records: ConsentRecordView[] };
   stt_transcribe: Transcript;
   insert_text: { result: 'inserted' | 'no_permission' | 'no_focus' | 'secure_field' };
   agent_start: { agentSessionId: string };

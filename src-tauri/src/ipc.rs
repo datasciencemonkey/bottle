@@ -8,7 +8,8 @@
 //!
 //! The gateway is the only entry (ADR 0040). It sends each checked call to [`HostComponents`],
 //! which runs the host actions: `view_emit` (relay to the brain), `brain_subscribe`, the four
-//! `window_*` ops (R11), `hotkeys_set` (R1 settings) and `permission_request` (R1, ADR 0039).
+//! `window_*` ops (R11), `hotkeys_set` (R1 settings), `permission_request` (R1, ADR 0039) and
+//! `consent_*` (T12 records, ADR 0060).
 //! Every other command stays `not_implemented` until its feature issue wires its component.
 //! A rejection is only `{ "error": "<code>" }`, with a code from `ipc_gateway::ERROR_CODES`
 //! (SEC-03).
@@ -289,6 +290,13 @@ impl GatewayComponents for HostComponents<'_> {
                 let status = route.request_permission(a.permission, UserAction::from_user_click());
                 Ok(json!({ "status": permission_status_name(status) }))
             }
+            // #430 (ADR 0060): T12 consent records. Its codes cross as themselves (ERROR_CODES).
+            "consent_notice_record" | "consent_records_list" => match self.consent {
+                Some(consent) => consent.call(command, args),
+                None => Err(refused(IpcError::ConsentStorageFailed {
+                    command: command.to_owned(),
+                })),
+            },
             // Each feature issue wires its R1-R17 component here.
             // TODO(#379): `config_*` goes to the config component of #372 (`config_storage_failed`).
             // TODO(#425): `capture_resume` goes to R2 `resume(lease_id)` (ADR 0039).
@@ -363,13 +371,23 @@ fn route_from<R: Runtime>(
     let windows = webview.try_state::<TauriWindowHost<R>>();
     let hotkeys = webview.try_state::<crate::hotkey_settings::HotkeySettings>();
     let runtime = webview.try_state::<crate::hotkey_host::HotkeyRuntime>();
+    // `try_state`: no records are managed yet, so `consent_*` answers `consent_storage_failed`.
+    // TODO(#431): manage `Arc<ConsentRecords>` (local store, device ID) and the signed-in user.
+    let consent = webview
+        .try_state::<std::sync::Arc<mog_core::consent::ConsentRecords>>()
+        .map(|records| {
+            mog_core::consent_ipc::ConsentComponent::new(
+                records.inner().clone(),
+                std::sync::Arc::new(mog_core::consent_ipc::NoSignedInUser),
+            )
+        });
     let components = HostComponents {
         from: label,
         brain: &brain,
         windows: windows.as_ref().map(|w| w.inner() as &dyn WindowHost),
         hotkeys: hotkeys.as_ref().map(|h| h.inner() as &dyn HotkeysRoute),
         permissions: runtime.as_ref().map(|r| r.inner() as &dyn PermissionRoute),
-        consent: None,
+        consent: consent.as_ref().map(|c| c as &dyn GatewayComponents),
     };
     route(components, command, args)
 }

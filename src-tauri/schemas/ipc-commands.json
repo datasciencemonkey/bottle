@@ -443,6 +443,30 @@
       "title": "ConfigWriteArgs",
       "type": "object"
     },
+    "consent_notice_record": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "SEC-32a: the brain names only the notice version. The Rust side fills the user, the\ndevice and the time (ADR 0060).",
+      "properties": {
+        "noticeVersion": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "noticeVersion"
+      ],
+      "title": "ConsentNoticeRecordArgs",
+      "type": "object"
+    },
+    "consent_records_list": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "No arguments.",
+      "title": "NoArgs",
+      "type": "object"
+    },
     "dbx_http": {
       "$defs": {
         "ChannelRef": {
@@ -1366,6 +1390,20 @@
       ]
     },
     {
+      "name": "consent_notice_record",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "consent_records_list",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
       "name": "stt_transcribe",
       "phase": "MVP-D",
       "windows": [
@@ -1584,7 +1622,8 @@
     "mog_cap_reached",
     "unknown_mog",
     "window_closing",
-    "config_storage_failed"
+    "config_storage_failed",
+    "consent_storage_failed"
   ],
   "events": [
     {

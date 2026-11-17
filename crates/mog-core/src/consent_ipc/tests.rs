@@ -237,3 +237,30 @@ fn sec_03_other_commands_are_not_this_component() {
         "not_implemented"
     );
 }
+
+fn session_record(kind: Option<AttestKind>) -> crate::consent::ConsentRecord {
+    crate::consent::ConsentRecord {
+        consent_id: "c0c0c0c0-0000-4000-8000-000000000009".into(),
+        mog_id: Some(MOG_A.into()),
+        user: Some(USER.into()),
+        device: DEVICE.into(),
+        notice_version: 2,
+        kind: crate::consent::ConsentKind::Session,
+        session_id: Some(SESSION_1.into()),
+        attestation_kind: kind,
+        disclosure_copied: Some(false),
+        accepted_at: T0,
+        expires_at: T0,
+    }
+}
+
+#[test]
+fn sec_32a_session_kinds_map_to_the_attestation_choice_and_none_is_not_guessed() {
+    use crate::types::ConsentRecordKind;
+    let only_me = view_of(&session_record(Some(AttestKind::OnlyMe))).unwrap();
+    assert_eq!(only_me.kind, ConsentRecordKind::OnlyMe);
+    assert_eq!(only_me.session_id.as_deref(), Some(SESSION_1));
+    let agreed = view_of(&session_record(Some(AttestKind::OthersAgreed))).unwrap();
+    assert_eq!(agreed.kind, ConsentRecordKind::OthersAgreed);
+    assert_eq!(view_of(&session_record(None)), None);
+}

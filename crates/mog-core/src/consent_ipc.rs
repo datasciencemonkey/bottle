@@ -7,11 +7,13 @@
 
 use std::sync::Arc;
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
-use crate::consent::ConsentRecords;
+use crate::consent::{ConsentKind, ConsentRecord, ConsentRecords};
 use crate::error::{CoreError, CoreResult};
+use crate::ipc::{AttestKind, ConsentNoticeRecordArgs};
 use crate::ipc_gateway::GatewayComponents;
+use crate::types::{ConsentRecordKind, ConsentRecordView};
 
 /// Where the Rust side gets the signed-in user for a notice record (SEC-32a `user`).
 pub trait SignedInUser: Send + Sync {
@@ -41,12 +43,60 @@ impl ConsentComponent {
     }
 }
 
+fn refused(code: &'static str) -> CoreError {
+    CoreError::IpcRefused { code }
+}
+
+/// A store read or write failed: one fixed code, never the store's reason (SEC-03).
+fn storage_failed(_: CoreError) -> CoreError {
+    refused("consent_storage_failed")
+}
+
+/// The content-free IPC view of one record: no user, no device and no MOG ID. `None` for a
+/// session record with no attestation kind: the row is damaged, and no kind is guessed.
+pub fn view_of(r: &ConsentRecord) -> Option<ConsentRecordView> {
+    let kind = match (r.kind, &r.attestation_kind) {
+        (ConsentKind::Notice, _) => ConsentRecordKind::Notice,
+        (ConsentKind::Session, Some(AttestKind::OthersAgreed)) => ConsentRecordKind::OthersAgreed,
+        (ConsentKind::Session, Some(AttestKind::OnlyMe)) => ConsentRecordKind::OnlyMe,
+        (ConsentKind::Session, None) => return None,
+    };
+    Some(ConsentRecordView {
+        record_id: r.consent_id.clone(),
+        kind,
+        notice_version: r.notice_version,
+        session_id: r.session_id.clone(),
+        accepted_at: r.accepted_at,
+    })
+}
+
 impl GatewayComponents for ConsentComponent {
-    fn call(&self, _command: &'static str, _args: Value) -> CoreResult<Value> {
-        let _ = (&self.records, &self.user);
-        Err(CoreError::IpcRefused {
-            code: "not_implemented",
-        })
+    fn call(&self, command: &'static str, args: Value) -> CoreResult<Value> {
+        match command {
+            "consent_notice_record" => {
+                let a: ConsentNoticeRecordArgs =
+                    serde_json::from_value(args).map_err(|_| refused("invalid_args"))?;
+                if a.notice_version == 0 {
+                    return Err(refused("invalid_args"));
+                }
+                let user = self.user.principal();
+                let record = self
+                    .records
+                    .record_notice(user.as_deref(), a.notice_version)
+                    .map_err(storage_failed)?;
+                Ok(json!({ "recordId": record.consent_id }))
+            }
+            "consent_records_list" => {
+                let records = self.records.records().map_err(storage_failed)?;
+                let views: Vec<ConsentRecordView> = records
+                    .iter()
+                    .map(view_of)
+                    .collect::<Option<_>>()
+                    .ok_or_else(|| refused("consent_storage_failed"))?;
+                Ok(json!({ "records": views }))
+            }
+            _ => Err(refused("not_implemented")),
+        }
     }
 }
 
