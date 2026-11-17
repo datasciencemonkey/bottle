@@ -828,6 +828,7 @@ fn consent_call(
         hotkeys: None,
         permissions: None,
         consent,
+        config: None,
     };
     route(components, command, args)
 }
