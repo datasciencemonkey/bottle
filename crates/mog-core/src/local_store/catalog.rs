@@ -165,7 +165,8 @@ const MOG_UPSERT: Stmt = Stmt {
 //
 // The upsert keeps the answer parts once they are written: a later write for the same request
 // with no answer (a late `pending` event, a resume) never clears `final_answer_md`, the summary,
-// the key numbers or the deep link (MEM-26, U9). No statement sets `expires_at`: an exchange has
+// the key numbers or the deep link (MEM-26, U9), and never moves a finished status back to
+// `pending` or `uncertain`. No statement sets `expires_at`: an exchange has
 // no TTL. Only Forget (one exchange, a user action) and Wipe (R14, Core) delete one.
 
 const EXCHANGE_UPSERT: Stmt = Stmt {
@@ -180,7 +181,10 @@ const EXCHANGE_UPSERT: Stmt = Stmt {
           :questionUser, :questionSentSha256, :status, :answerSummary, \
           coalesce(:keyNumbers, '[]'), :finalAnswerMd, :deepLink, :splitGroupId, :askedAt, \
           :completedAt, :rowHlc, :deviceId) \
-          ON CONFLICT (request_id) DO UPDATE SET status = excluded.status, \
+          ON CONFLICT (request_id) DO UPDATE SET status = CASE \
+          WHEN excluded.status IN ('pending','uncertain') \
+          AND genie_exchange.status NOT IN ('pending','uncertain') \
+          THEN genie_exchange.status ELSE excluded.status END, \
           conversation_id = coalesce(excluded.conversation_id, genie_exchange.conversation_id), \
           response_id = coalesce(excluded.response_id, genie_exchange.response_id), \
           answer_summary = coalesce(excluded.answer_summary, genie_exchange.answer_summary), \

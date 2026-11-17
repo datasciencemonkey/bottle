@@ -55,13 +55,44 @@ const STATUS: Record<OperationState, [string, boolean]> = {
   UNCERTAIN: ['uncertain', false],
   COMPLETED: ['completed', true],
   FAILED: ['failed', true],
-  CANCEL_REQUESTED: ['cancelled', true],
+  // A cancel request can still end in an answer, so it is not terminal.
+  CANCEL_REQUESTED: ['cancelled', false],
   ABANDONED: ['abandoned', true],
 };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-/** The most key numbers kept for one exchange (the catalog caps the JSON at 16 KiB). */
+/** The most key numbers kept for one exchange. */
 const KEY_NUMBERS_MAX = 32;
+/** The catalog limits of `mem.exchange.upsert` (`catalog.rs`). */
+const KEY_NUMBERS_JSON_MAX = 16_384;
+const ANSWER_MAX = 200_000;
+const QUESTION_USER_MAX = 1000;
+/** The end of a full answer that is longer than the catalog limit. */
+export const ANSWER_CUT_MARK = '\n\n… (answer cut at 200,000 characters)';
+
+/** The first `max` code points of `s`, so no surrogate pair is split. */
+function codePoints(s: string, max: number): string {
+  const cps = Array.from(s);
+  return cps.length <= max ? s : cps.slice(0, max).join('');
+}
+
+/** The full answer, cut with a mark only if it is over the catalog limit, so the row still saves. */
+function fitAnswer(md: string | undefined): string | undefined {
+  if (md === undefined || Array.from(md).length <= ANSWER_MAX) return md;
+  return codePoints(md, ANSWER_MAX - Array.from(ANSWER_CUT_MARK).length) + ANSWER_CUT_MARK;
+}
+
+/** The key numbers that fit the catalog limit, in order (at most 32). */
+function fitKeyNumbers(k: unknown[]): unknown[] | undefined {
+  const out = k.slice(0, KEY_NUMBERS_MAX);
+  while (
+    out.length &&
+    new TextEncoder().encode(JSON.stringify(out)).length > KEY_NUMBERS_JSON_MAX
+  ) {
+    out.pop();
+  }
+  return out.length ? out : undefined;
+}
 
 async function sha256Hex(text: string): Promise<string> {
   const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
@@ -123,6 +154,10 @@ export class LocalMemoryService implements MemoryService {
    * - The sent question is stored only as its SHA-256; it can hold a context preamble.
    * - Nothing sets an expiry, and T10 deletes no exchange: the answer stays until Forget or
    *   Settings → Wipe (U9). The upsert keeps a stored answer when a later event has none.
+   * - `asked_at` is the clock at the first call for a request; Wipe ages the row by it. So the
+   *   caller records the exchange when the question is sent, then again at the terminal event.
+   * - A value over a catalog limit is fitted, so the row and its pointer always save: an answer
+   *   over 200,000 characters ends with `ANSWER_CUT_MARK`, and key numbers stop at 16 KiB.
    * The caller registers the MOG row first (`mem.mog.upsert`); the table links to it.
    */
   async recordExchange(x: ExchangeRecord): Promise<void> {
@@ -151,13 +186,12 @@ export class LocalMemoryService implements MemoryService {
         spaceId: x.spaceId,
         conversationId: x.ref.conversationId || undefined,
         responseId: x.ref.responseId,
-        questionUser: home ? x.questionUser.slice(0, 1000) : undefined,
+        questionUser: home ? codePoints(x.questionUser, QUESTION_USER_MAX) : undefined,
         questionSentSha256: await sha256Hex(x.questionSent),
         status,
         answerSummary: home ? (distilSummary(x.answerMd) ?? undefined) : undefined,
-        keyNumbers:
-          home && x.keyNumbers.length ? x.keyNumbers.slice(0, KEY_NUMBERS_MAX) : undefined,
-        finalAnswerMd: x.answerMd,
+        keyNumbers: home ? fitKeyNumbers(x.keyNumbers) : undefined,
+        finalAnswerMd: fitAnswer(x.answerMd),
         deepLink: x.deepLink || undefined,
         splitGroupId: x.splitGroupId,
         askedAt: now,

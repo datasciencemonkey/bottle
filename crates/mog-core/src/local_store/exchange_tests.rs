@@ -180,6 +180,10 @@ fn mem_26_a_later_upsert_never_erases_the_answer() {
 
     let r = &get(&s, MOG_A, REQ_1)[0];
     assert_eq!(r["exchangeId"], EXCH_1, "the first exchange id stays");
+    assert_eq!(
+        r["status"], "completed",
+        "a late event never reopens a finished exchange"
+    );
     assert_eq!(r["finalAnswerMd"], ANSWER_MD);
     assert_eq!(r["answerSummary"], "Revenue rose 4.2 % to $1.3M in Q3.");
     assert_ne!(r["keyNumbers"], "[]");

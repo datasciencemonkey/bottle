@@ -3,7 +3,7 @@ import type { OperationState } from '../../shared/interfaces';
 import type { JsonObject } from '../../shared/ipc';
 import { RecordingLocalStore, genieExchangeDouble } from '../../test-support/memory-double';
 import { distilSummary } from './exchange-summary';
-import { LocalMemoryService } from './memory-service';
+import { ANSWER_CUT_MARK, LocalMemoryService } from './memory-service';
 
 /** The simulated clock: 2026-01-01T00:00:00Z in epoch ms, and one day. */
 const T0 = 1_767_225_600_000;
@@ -110,7 +110,7 @@ describe('T10 recordExchange (#38, MEM-25a, MEM-26)', () => {
       ['UNCERTAIN', 'uncertain', false],
       ['COMPLETED', 'completed', true],
       ['FAILED', 'failed', true],
-      ['CANCEL_REQUESTED', 'cancelled', true],
+      ['CANCEL_REQUESTED', 'cancelled', false],
       ['ABANDONED', 'abandoned', true],
     ];
     for (const [state, status, terminal] of table) {
@@ -157,6 +157,36 @@ describe('T10 recordExchange (#38, MEM-25a, MEM-26)', () => {
     // The row HLC never goes back.
     const first = at(upserts(store), 0);
     expect(later.rowHlc as number).toBeGreaterThan(first.rowHlc as number);
+  });
+
+  it('[MEM-26] an answer or key numbers over the catalog limits still save the row and pointer', async () => {
+    const { store, svc } = setup();
+    const big = 'x'.repeat(250_000);
+    const many = Array.from({ length: 32 }, (_, i) => ({ text: `${i}`, label: 'l'.repeat(900) }));
+    await svc.recordExchange(genieExchangeDouble({ answerMd: big, keyNumbers: many }));
+    const p = at(upserts(store), 0);
+    const md = p.finalAnswerMd as string;
+    expect(Array.from(md).length).toBeLessThanOrEqual(200_000);
+    expect(md.endsWith(ANSWER_CUT_MARK)).toBe(true);
+    expect(md.startsWith('x'.repeat(1000))).toBe(true);
+    const kn = p.keyNumbers as unknown[];
+    expect(kn.length).toBeGreaterThan(0);
+    expect(kn.length).toBeLessThan(32);
+    expect(new TextEncoder().encode(JSON.stringify(kn)).length).toBeLessThanOrEqual(16_384);
+    expect(kn).toEqual(many.slice(0, kn.length));
+    expect(p.deepLink).toBe(genieExchangeDouble().deepLink);
+    // An answer under the limit is stored as it is.
+    const small = setup();
+    await small.svc.recordExchange(genieExchangeDouble());
+    expect(at(upserts(small.store), 0).finalAnswerMd).toBe(genieExchangeDouble().answerMd);
+  });
+
+  it('[MEM-25a] cuts questionUser at 1000 code points without splitting a pair', async () => {
+    const { store, svc } = setup();
+    await svc.recordExchange(genieExchangeDouble({ questionUser: '😀'.repeat(1200) }));
+    const q = at(upserts(store), 0).questionUser as string;
+    expect(Array.from(q)).toHaveLength(1000);
+    expect(q).toBe('😀'.repeat(1000));
   });
 
   it('[MEM-01] every exchange statement carries the mogId of the exchange', async () => {
