@@ -51,6 +51,6 @@ header of `GET /api/2.0/preview/scim/v2/Me` (W-06a). The issue left these points
 - Every `TokenBroker` implementation and caller passes the host and keeps the lease for a 401.
   Test doubles ignore both.
 - `profile_status` IPC wiring to `CliTokenBroker::token_state` is a follow-up (the handler is in a
-  contract file). The OS sleep, lock and sign-out events must call `drop_all` (TODO(#163)).
+  contract file). The OS sleep, lock and sign-out events must call `drop_all` (TODO(#465), with sign-out in #163).
 - The R7 401 rule did not change: invalidate once, retry once, then `auth_expired`. The UI
   shows the Table W-ERR "Login required" text for it.

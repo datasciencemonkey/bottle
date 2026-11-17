@@ -301,7 +301,7 @@ impl CliTokenBroker {
     }
 
     /// Drop every token of every profile now (W-04b: sleep, lock, sign-out).
-    /// TODO(#163): the sign-out flow and the OS sleep and lock events call this.
+    /// TODO(#465): the sign-out flow (#163) and the OS sleep and lock events call this.
     pub fn drop_all(&self) {
         let mut slots = self.lock();
         for slot in slots.values_mut() {
