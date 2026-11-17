@@ -7,6 +7,7 @@
 
 pub mod agent_host;
 pub mod audio_device;
+pub mod audit;
 pub mod bottle_mcp;
 pub mod capture;
 pub mod cli_runner;

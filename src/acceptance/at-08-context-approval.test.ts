@@ -7,10 +7,12 @@
  * Genie" text exactly as the brain gives it, and offers "Resend without context" when a preamble
  * went. That runs here. The ContextGate approval binding and the POLICY_DENIED retry are #152,
  * the preamble format and once-per-item rules #92, the size caps #90, the item filter and PII
- * scrub #91, and the content-free audit entry #140. Those tests are pending with the contract
- * shapes of `src/shared/interfaces.ts`. The live run is a person step (docs/tests/AT-GENIE-MCP.md).
+ * scrub #91. Those tests are pending with the contract shapes of `src/shared/interfaces.ts`.
+ * The content-free audit entry (#140) runs here against the brain audit client. The live run is
+ * a person step (docs/tests/AT-GENIE-MCP.md).
  */
 import type { AskRequest, ContextPreamble } from '../shared/interfaces';
+import { buildAuditRecord, sha256Hex, textSizes } from '../brain/audit-log';
 import { buildSections } from '../brain/card-sections';
 import { createRouterContextGate } from '../brain/components/router-context-gate';
 import { liveFixture } from '../test-support/fixtures';
@@ -86,10 +88,28 @@ describe('AT-08 approve exact context', () => {
     expect.unreachable('#91: the preamble filter and PII scrub are not built');
   });
 
-  it.skip('[AT-08] [SEC-23] the audit entry holds IDs, sizes and the hash of the sent text only TODO(#140)', () => {
-    // When #140 lands: the hash in the audit entry equals the hash of the "Sent to Genie" text
-    // (G-35a), and the entry has no question, preamble or answer text.
-    expect.unreachable('#140: the audit log is not built');
+  it('[AT-08] [SEC-23] the audit entry holds IDs, sizes and the hash of the sent text only', async () => {
+    // The hash in the entry equals the hash of the "Sent to Genie" text (G-35a). The entry has no
+    // question, preamble or answer text. TODO(#442): the IPC call carries the hash too.
+    const s = buildSections({ sentToGenie: sent, canResend: true, dataFlowText: 'x' });
+    const shown = s.find((x) => x.id === 'sentToGenie');
+    const entry = buildAuditRecord({
+      kind: 'context_send',
+      mogId: MOG,
+      opId: '00000000-0000-4000-9000-000000000001',
+      sizes: {
+        ...textSizes(sent),
+        question_chars: textSizes(req().question).chars,
+        preamble_chars: preamble.chars,
+        preamble_items: preamble.items.length,
+      },
+      hashes: { sent: await sha256Hex(sent) },
+    });
+    expect(shown && 'text' in shown && (await sha256Hex(shown.text))).toBe(entry.hashes.sent);
+    const json = JSON.stringify(entry);
+    for (const text of [req().question, preamble.items[0]?.text ?? '?', HEADER, sent]) {
+      expect(json).not.toContain(text);
+    }
   });
 
   it.skip('[AT-08] live: approve a bounded payload and force POLICY_DENIED TODO(#152)', (ctx) => {
