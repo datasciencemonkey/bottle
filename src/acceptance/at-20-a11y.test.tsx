@@ -167,6 +167,8 @@ describe('AT-20 without pointer or animation', () => {
       target.click();
     });
     expect(viewEmits()).toEqual([
+      // MB-06a (#73): the MOG view tells the brain on mount that it is open.
+      { mogId: ID, kind: 'click', payload: { action: 'view.ready' } },
       { mogId: ID, kind: 'hover' },
       { mogId: ID, kind: 'click' },
     ]);
@@ -211,16 +213,16 @@ describe('AT-20 without pointer or animation', () => {
     expect(el.querySelector('[aria-live="assertive"]')?.textContent).toBe('Recording started');
   });
 
-  it.skip('[AT-20] [UX-28] the last-interacted MOG shows a target marker in its name TODO(#73)', async () => {
+  it('[AT-20] [UX-28] the last-interacted MOG shows a target marker in its name', async () => {
+    // #73, ADR 0058: the brain sends the target state on `mog:target` (TODO(#439): EVENTS).
     const { el } = await mount(<MogView mogId={ID} />);
-    await tauri.emit('mog:view_state', {
-      mogId: ID,
-      mood: 'idle',
-      overlays: noOverlays,
-      target: true,
-    });
-    expect(el.querySelector('[data-overlay="target"]')).not.toBeNull();
-    expect(accessibleText(el.querySelector('button') as Element)).toMatch(/, target$/);
+    const view = { mogId: ID, name: 'Sales', target: true, toast: false };
+    await tauri.emit('mog:target', view);
+    expect(el.querySelector('[data-marker="target"]')).not.toBeNull();
+    expect(accessibleText(el.querySelector('.mascot') as Element)).toMatch(/, target$/);
+    await tauri.emit('mog:target', { ...view, target: false });
+    expect(el.querySelector('[data-marker="target"]')).toBeNull();
+    expect(accessibleText(el.querySelector('.mascot') as Element)).toBe('Sales');
   });
 
   it.skip('[AT-20] [UX-33] each mood has a face glyph and pill text, distinct in greyscale TODO(#97)', async () => {

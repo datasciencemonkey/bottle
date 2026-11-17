@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { tauri } from './test-tauri';
+import { tauri, viewEmits } from './test-tauri';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -11,6 +11,7 @@ import {
   emitView,
   mogIdFromLabel,
   ownMogId,
+  startCardFocusSignal,
   useViewEvent,
   viewMicLevels,
 } from './view-ipc';
@@ -23,6 +24,17 @@ const ID = '00000000-0000-4000-8000-000000000001';
 
 describe('view IPC helpers', () => {
   beforeEach(() => tauri.reset());
+
+  it('[MB-06a] the card sends the focus signal when it loads and each time its window gets focus', async () => {
+    const stop = startCardFocusSignal(ID);
+    const focus = { mogId: ID, kind: 'click', payload: { action: 'view.focus' } };
+    expect(viewEmits()).toEqual([focus]);
+    window.dispatchEvent(new Event('focus'));
+    expect(viewEmits()).toEqual([focus, focus]);
+    stop();
+    window.dispatchEvent(new Event('focus'));
+    expect(viewEmits()).toHaveLength(2);
+  });
 
   it('[V2] reads the MOG ID from a mog-<id> window label', () => {
     expect(mogIdFromLabel(`mog-${ID}`, 'mog')).toBe(ID);

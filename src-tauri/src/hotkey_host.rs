@@ -156,27 +156,56 @@ pub enum WindowSignal {
     Destroyed,
 }
 
-/// The last-interacted MOG: the target of the talk key (MB-06a).
+/// The last-interacted MOG: the target of the talk key (MB-06a, ADR 0058).
 ///
-/// Interim inputs, until the brain's `mog_set_active` (click, drag, card open, chord use)
-/// replaces them: TODO(#73).
-/// - A `mog-<id>` window opens: the last-opened MOG is the target. MOG windows cannot take
-///   focus (MOG-01b), so their focus never counts.
-/// - A `card-<id>` window opens or gets focus: its MOG is the target (a card open is an
-///   interaction with that MOG).
-/// - A `mog-<id>` window that is the target closes: no target.
+/// `PttTarget` keeps the open MOGs in the order of their last interaction. The target is the
+/// first one. The brain applies the same rules (`src/brain/talk-target.ts`).
+/// - The first open of a `mog-<id>` window makes it the target. A reload of an open MOG view
+///   is not an interaction, so it does not move the target (#305 review note A).
+/// - A `mog-<id>` focus counts as an interaction. MOG windows cannot take focus (MOG-01b), so
+///   this is rare.
+/// - A `card-<id>` window that opens or gets focus makes its MOG the target, but only while
+///   that MOG window is open (#305 review note B).
+/// - [`PttTarget::set_active`] (the `mog_set_active` route) makes an open MOG the target: a
+///   click, poke or drag end on the MOG, or input from its card.
+/// - When the target MOG window closes, the target moves to the most recently interacted MOG
+///   that is still open. With none open, there is no target.
 #[derive(Debug, Default)]
-pub struct PttTarget(Mutex<Option<String>>);
+pub struct PttTarget(Mutex<Vec<String>>);
+
+/// `set_active` refused a MOG whose `mog-<id>` window is not open (R11 `unknown_mog`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnknownMog;
+
+/// The host side of `mog_set_active`.
+///
+/// TODO(#439): the `mog_set_active` arm in `src-tauri/src/ipc.rs` calls this. Until then the
+/// command answers `not_implemented` and the window signals alone move the target.
+pub trait TalkTargetRoute: Send + Sync {
+    /// Make the open MOG `mog_id` the talk-key target.
+    fn set_active(&self, mog_id: &str) -> Result<(), UnknownMog>;
+}
 
 impl PttTarget {
-    /// Make `mog_id` the target.
+    /// Make `mog_id` the target, and count its window as open.
     pub fn set(&self, mog_id: &str) {
-        *lock(&self.0) = Some(mog_id.to_owned());
+        let mut mru = lock(&self.0);
+        mru.retain(|m| m != mog_id);
+        mru.insert(0, mog_id.to_owned());
     }
 
     /// The target now.
     pub fn current(&self) -> Option<String> {
-        lock(&self.0).clone()
+        lock(&self.0).first().cloned()
+    }
+
+    /// Make the open MOG `mog_id` the target. An ID whose window is not open is refused.
+    pub fn set_active(&self, mog_id: &str) -> Result<(), UnknownMog> {
+        let mut mru = lock(&self.0);
+        let at = mru.iter().position(|m| m == mog_id).ok_or(UnknownMog)?;
+        let id = mru.remove(at);
+        mru.insert(0, id);
+        Ok(())
     }
 
     /// Apply a window signal for the window `label`. Only `mog-<id>` and `card-<id>` count.
@@ -184,17 +213,33 @@ impl PttTarget {
         let Some((class, Some(id))) = WindowClass::of_label(label) else {
             return;
         };
-        let mut target = lock(&self.0);
-        match (class, signal) {
-            (
-                WindowClass::Mog | WindowClass::Card,
-                WindowSignal::Opened | WindowSignal::Focused,
-            ) => *target = Some(id.to_owned()),
-            (WindowClass::Mog, WindowSignal::Destroyed) if target.as_deref() == Some(id) => {
-                *target = None
+        let mut mru = lock(&self.0);
+        let open = mru.iter().position(|m| m == id);
+        match (class, signal, open) {
+            // A first open, or a focus: the MOG is the target.
+            (WindowClass::Mog, WindowSignal::Opened, None)
+            | (WindowClass::Mog, WindowSignal::Focused, _) => {
+                if let Some(at) = open {
+                    mru.remove(at);
+                }
+                mru.insert(0, id.to_owned());
+            }
+            // A card of an open MOG.
+            (WindowClass::Card, WindowSignal::Opened | WindowSignal::Focused, Some(at)) => {
+                let id = mru.remove(at);
+                mru.insert(0, id);
+            }
+            (WindowClass::Mog, WindowSignal::Destroyed, Some(at)) => {
+                mru.remove(at);
             }
             _ => {}
         }
+    }
+}
+
+impl TalkTargetRoute for PttTarget {
+    fn set_active(&self, mog_id: &str) -> Result<(), UnknownMog> {
+        PttTarget::set_active(self, mog_id)
     }
 }
 
@@ -1221,6 +1266,104 @@ mod tests {
         assert_eq!(rt.target.current().as_deref(), Some("a1"));
         on_window_event(&win.as_ref().window(), &tauri::WindowEvent::Destroyed);
         assert_eq!(rt.target.current(), None);
+    }
+
+    // ---------- #73: the last-interacted MOG (MB-06a, ADR 0058) ----------
+
+    #[test]
+    fn mb_06a_a_reloaded_mog_view_keeps_the_target() {
+        // #305 review note A: a reload is not an interaction with that MOG.
+        let target = PttTarget::default();
+        target.on_window("mog-a1", WindowSignal::Opened);
+        target.on_window("mog-b2", WindowSignal::Opened);
+        target.on_window("card-a1", WindowSignal::Focused);
+        assert_eq!(target.current().as_deref(), Some("a1"));
+        target.on_window("mog-b2", WindowSignal::Opened);
+        assert_eq!(target.current().as_deref(), Some("a1"));
+    }
+
+    #[test]
+    fn mb_06a_a_closed_target_falls_back_to_the_last_interacted_open_mog() {
+        // #305 review note A: other MOGs are open, so the talk key still has a target.
+        let target = PttTarget::default();
+        for id in ["mog-a1", "mog-b2", "mog-c3"] {
+            target.on_window(id, WindowSignal::Opened);
+        }
+        target.on_window("card-a1", WindowSignal::Focused);
+        target.on_window("card-c3", WindowSignal::Focused);
+        target.on_window("mog-c3", WindowSignal::Destroyed);
+        assert_eq!(target.current().as_deref(), Some("a1"));
+        target.on_window("mog-a1", WindowSignal::Destroyed);
+        assert_eq!(target.current().as_deref(), Some("b2"));
+        target.on_window("mog-b2", WindowSignal::Destroyed);
+        assert_eq!(target.current(), None);
+        // A MOG that opens again is a first open.
+        target.on_window("mog-a1", WindowSignal::Opened);
+        assert_eq!(target.current().as_deref(), Some("a1"));
+    }
+
+    #[test]
+    fn mb_06a_a_card_of_a_closed_mog_never_becomes_the_target() {
+        // #305 review note B: the card of a MOG whose window is closed.
+        let target = PttTarget::default();
+        target.on_window("mog-a1", WindowSignal::Opened);
+        target.on_window("card-z9", WindowSignal::Opened);
+        target.on_window("card-z9", WindowSignal::Focused);
+        assert_eq!(target.current().as_deref(), Some("a1"));
+        target.on_window("mog-a1", WindowSignal::Destroyed);
+        target.on_window("card-a1", WindowSignal::Focused);
+        assert_eq!(target.current(), None);
+    }
+
+    #[test]
+    fn mb_06a_set_active_targets_an_open_mog_and_refuses_an_unknown_one() {
+        // The `mog_set_active` route of #439 calls this (click, drag, card open, chord use).
+        let target = PttTarget::default();
+        let route: &dyn TalkTargetRoute = &target;
+        assert_eq!(route.set_active("a1"), Err(UnknownMog));
+        assert_eq!(target.current(), None);
+        target.on_window("mog-a1", WindowSignal::Opened);
+        target.on_window("mog-b2", WindowSignal::Opened);
+        assert_eq!(route.set_active("a1"), Ok(()));
+        assert_eq!(target.current().as_deref(), Some("a1"));
+        assert_eq!(route.set_active("z9"), Err(UnknownMog));
+        assert_eq!(route.set_active(""), Err(UnknownMog));
+        assert_eq!(target.current().as_deref(), Some("a1"));
+    }
+
+    #[test]
+    fn mb_06a_set_active_moves_the_mog_to_the_front_of_the_fallback_order() {
+        let target = PttTarget::default();
+        for id in ["mog-a1", "mog-b2", "mog-c3"] {
+            target.on_window(id, WindowSignal::Opened);
+        }
+        target.set_active("a1").unwrap();
+        target.set_active("c3").unwrap();
+        target.on_window("mog-c3", WindowSignal::Destroyed);
+        assert_eq!(target.current().as_deref(), Some("a1"));
+    }
+
+    #[test]
+    fn mb_06a_a_press_after_set_active_goes_to_the_new_target() {
+        let target = Arc::new(PttTarget::default());
+        target.on_window("mog-a1", WindowSignal::Opened);
+        target.on_window("mog-b2", WindowSignal::Opened);
+        let (mut f, brain, _) = forwarder(&target);
+        target.set_active("a1").unwrap();
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Down));
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Up));
+        target.set_active("b2").unwrap();
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Down));
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Up));
+        assert_eq!(
+            brain.items(),
+            vec![
+                ptt("a1", "down"),
+                ptt("a1", "up"),
+                ptt("b2", "down"),
+                ptt("b2", "up")
+            ]
+        );
     }
 
     #[test]

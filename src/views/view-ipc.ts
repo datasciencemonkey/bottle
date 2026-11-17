@@ -6,6 +6,13 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useEffect, useState } from 'react';
 import { asHubNotice, HUB_NOTICE_EVENT, HUB_SCOPE, type HubNotice } from '../shared/hub-notice';
+import {
+  asMogTargetView,
+  MOG_TARGET_EVENT,
+  VIEW_FOCUS,
+  VIEW_READY,
+  type MogTargetView,
+} from '../shared/mog-target';
 import type { Mood, MogId } from '../shared/interfaces';
 import {
   call,
@@ -260,4 +267,61 @@ export function useHubNotice(): HubNotice | null {
 /** Send the hub's Continue click for notice `version` to the brain. */
 export function acceptNotice(version: number): Promise<unknown> {
   return emitView(HUB_SCOPE, 'click', { action: 'notice.accept', noticeVersion: version });
+}
+
+/** How long a MOG view waits before it sends `view.ready` again while no brain listens. */
+export const VIEW_READY_RETRY_MS = 1000;
+
+/**
+ * The card focus signal (#73, MB-06a, ADR 0058): the card view tells the brain when it loads and
+ * each time its window gets focus. These are the card signals that move the Rust talk-key target,
+ * so the brain can move the marker on them and still show the MOG that the talk key talks to.
+ * The result stops the focus listener. TODO(#439): a `ready` or `focus` view_emit kind.
+ */
+export function startCardFocusSignal(mogId: MogId): () => void {
+  const focus = () => void emitView(mogId, 'click', { action: VIEW_FOCUS }).catch(() => undefined);
+  focus();
+  window.addEventListener('focus', focus);
+  return () => window.removeEventListener('focus', focus);
+}
+
+/**
+ * The talk-key target state the brain sends to this MOG window (#73, MB-06b, UX-28, ADR 0058),
+ * or undefined before the brain answers. When it listens, the view sends `view.ready` so the
+ * brain knows the MOG window is open, and tries again each second until the brain takes it.
+ * TODO(#439): the event moves into `EVENTS` and `view.ready` becomes a `ready` view_emit kind.
+ */
+export function useMogTarget(mogId: MogId): MogTargetView | undefined {
+  const [view, setView] = useState<MogTargetView | undefined>(undefined);
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let gone = false;
+    const ready = () => {
+      emitView(mogId, 'click', { action: VIEW_READY }).catch(() => {
+        if (!gone) retry = setTimeout(ready, VIEW_READY_RETRY_MS);
+      });
+    };
+    const target = getCurrentWindow().label;
+    void listen<unknown>(
+      MOG_TARGET_EVENT,
+      (e) => {
+        const v = asMogTargetView(e.payload);
+        if (v && v.mogId === mogId) setView(v);
+      },
+      { target },
+    ).then((u) => {
+      if (gone) u();
+      else {
+        off = u;
+        ready();
+      }
+    });
+    return () => {
+      gone = true;
+      if (retry !== undefined) clearTimeout(retry);
+      off?.();
+    };
+  }, [mogId]);
+  return view;
 }
