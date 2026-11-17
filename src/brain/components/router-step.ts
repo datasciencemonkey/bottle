@@ -61,6 +61,7 @@ export interface RouterInput {
   /**
    * The `AllowedWorkspaceHosts` policy (5.13). The router never sees or proposes a profile on
    * another host (RTR-20b). Empty or missing means the admin set no limit (the default `[]`).
+   * TODO(#112): the caller fills this from `policy_get`.
    */
   allowedWorkspaceHosts?: string[];
 }
@@ -367,13 +368,20 @@ export function applyFieldRules(
     }
   }
 
+  // RTR-20b: one key (a name or an alias) can match more than one profile. If any match is on a
+  // disallowed host, the key resolves to that profile, whatever the profile order, so it is cleared.
+  const allowed = (p: RouterProfile) => hostAllowed(p.host, input.allowedWorkspaceHosts);
   const byKey = new Map<string, RouterProfile>();
+  const add = (key: string, p: RouterProfile) => {
+    const k = key.trim().toLowerCase();
+    const had = byKey.get(k);
+    if (had === undefined || (allowed(had) && !allowed(p))) byKey.set(k, p);
+  };
   for (const p of input.profiles) {
-    byKey.set(p.name.trim().toLowerCase(), p);
-    for (const a of p.aliases) byKey.set(a.trim().toLowerCase(), p);
+    add(p.name, p);
+    for (const a of p.aliases) add(a, p);
   }
   const lookup = (hint: string) => byKey.get(hint.trim().toLowerCase());
-  const allowed = (p: RouterProfile) => hostAllowed(p.host, input.allowedWorkspaceHosts);
   const resolve = (hint: string) => {
     const p = lookup(hint);
     return p && allowed(p) ? p.name : undefined;

@@ -54,7 +54,9 @@ points open:
    argument, becomes command `none` and intent `context` (`command_host`). A switch command to a
    name that is not a listed profile or alias also becomes command `none` and intent `context`
    (`command_profile_unknown`), because its host is unknown. A listed alias stays as spoken, so
-   the hop resolver (#164) and AT-12 see the alias.
+   the hop resolver (#164) and AT-12 see the alias. A name or alias can match more than one
+   profile. If any match is on a disallowed host, the key counts as that profile, whatever the
+   profile order, so the hint, the split parts or the switch command is cleared.
 7. **Context cannot be turned on.** The decision has no context field. The strict schema refuses
    an extra field such as `include_context`, so such a reply falls back to no action. The router
    step calls only `model_invoke`. Only a user action through `ContextGate.approve` (#152) turns
