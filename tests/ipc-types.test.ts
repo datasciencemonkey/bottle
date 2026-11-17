@@ -4,6 +4,7 @@ import type {
   CaptureMode,
   CaptureState,
   Intent,
+  MicHealth,
   MogId,
   Mood,
   Profile,
@@ -18,6 +19,8 @@ import type {
   Transcript,
 } from '../src/shared/interfaces';
 import type {
+  AppSetting,
+  AppSettingKey,
   CardUpdate,
   ConsentRecordKind,
   ConsentRecordView,
@@ -120,6 +123,14 @@ const CONSENT_RECORD_KINDS = [
   'only_me',
   'others_agreed',
 ] as const satisfies ConsentRecordKind[];
+// The mic fault in `capture.state` and the app setting (#453, CAP-17b, CAP-22).
+const MIC_HEALTHS = [
+  'ok',
+  'zero_buffers',
+  'permission_denied',
+  'no_device',
+] as const satisfies MicHealth[];
+const APP_SETTING_KEYS = ['app.capture.preferBuiltInMic'] as const satisfies AppSettingKey[];
 const everyUnionValueListed: [
   Equal<(typeof MOODS)[number], Mood>,
   Equal<(typeof TRACKS)[number], Track>,
@@ -133,6 +144,9 @@ const everyUnionValueListed: [
   Equal<(typeof ROUTER_COMMANDS)[number], RouterDecision['command']>,
   Equal<(typeof TALK_KEY_STATES)[number], TalkKeyState>,
   Equal<(typeof TALK_KEY_REASONS)[number], TalkKeyReason>,
+  Equal<(typeof MIC_HEALTHS)[number], MicHealth>,
+  Equal<(typeof MIC_HEALTHS)[number], NonNullable<CaptureState['mic']>>,
+  Equal<(typeof APP_SETTING_KEYS)[number], AppSettingKey>,
   Equal<TalkKeyStatus['talkKey'], TalkKeyState>,
   Equal<TalkKeyStatus['reason'], TalkKeyReason | null>,
   Equal<(typeof CONSENT_RECORD_KINDS)[number], ConsentRecordKind>,
@@ -285,6 +299,9 @@ const typed: Record<string, unknown> = {
     acceptedAt: 1736942400000,
   } satisfies ConsentRecordView,
   ConsentRecordKind: CONSENT_RECORD_KINDS,
+  MicHealth: MIC_HEALTHS,
+  AppSettingKey: APP_SETTING_KEYS,
+  AppSetting: { key: 'app.capture.preferBuiltInMic', value: true } satisfies AppSetting,
   MogId: MOG satisfies MogId,
   ProfileName: 'DEFAULT' satisfies ProfileName,
   Mood: MOODS,
@@ -319,6 +336,15 @@ const typed: Record<string, unknown> = {
     startedAt: 1763251200000,
     directedTo: OTHER_MOG,
     othersTrack: 'ok',
+    mic: 'ok',
+  } satisfies CaptureState,
+  'CaptureState.micFault': {
+    owner: MOG,
+    mode: 'ptt',
+    recording: false,
+    paused: false,
+    othersTrack: 'off',
+    mic: 'zero_buffers',
   } satisfies CaptureState,
   'CaptureState.minimal': {
     recording: false,
@@ -455,7 +481,8 @@ const noCredentialField: [
   NoCredential<MicLevelFrame>,
   NoCredential<TalkKeyStatus>,
   NoCredential<ConsentRecordView>,
-] = [true, true, true, true, true, true, true, true, true, true, true];
+  NoCredential<AppSetting>,
+] = [true, true, true, true, true, true, true, true, true, true, true, true];
 
 describe('IPC type fixtures', () => {
   it('every fixture file has a typed twin, and every twin has a file', () => {
@@ -477,6 +504,33 @@ describe('IPC type fixtures', () => {
       const text = readFileSync(join(dir, file), 'utf8');
       expect(text).not.toMatch(/"(token|accessToken|access_token|authorization|password)"/i);
     }
+  });
+});
+
+describe('mic fault and app setting (#453)', () => {
+  it('[CAP-17b] a CaptureState carries the mic fault code for the fix-it card', () => {
+    const fault = typed['CaptureState.micFault'] as CaptureState;
+    expect(fault.mic).toBe('zero_buffers');
+    // Older payloads have no mic field and still type-check.
+    const idle = typed['CaptureState.minimal'] as CaptureState;
+    expect(idle.mic).toBeUndefined();
+  });
+
+  it('[CAP-17b] [CAP-01b] the mic fault is a fixed code with no device identity', () => {
+    // @ts-expect-error a device name is not a MicHealth
+    const named: MicHealth = 'AirPods Pro';
+    // @ts-expect-error the fault is a code, not an object with a device
+    const withDevice: CaptureState['mic'] = { code: 'zero_buffers', device: 'AirPods Pro' };
+    expect([named, withDevice]).toHaveLength(2);
+    for (const code of MIC_HEALTHS) expect(code).toMatch(/^[a-z_]+$/);
+  });
+
+  it('[CAP-22] the app setting app.capture.preferBuiltInMic has a boolean value', () => {
+    const s = typed['AppSetting'] as AppSetting;
+    expect(s).toEqual({ key: 'app.capture.preferBuiltInMic', value: true });
+    // @ts-expect-error the value is a boolean
+    const text: AppSetting = { key: 'app.capture.preferBuiltInMic', value: 'yes' };
+    expect(text.key).toBe('app.capture.preferBuiltInMic');
   });
 });
 

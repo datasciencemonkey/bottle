@@ -11,6 +11,7 @@ use bottle_lib::ipc::{
     PermissionRoute,
 };
 use bottle_lib::window_host::{TauriWindowHost, WindowError};
+use mog_core::app_settings::{AppSettings, MicPreference};
 use mog_core::error::{CoreError, CoreResult};
 use mog_core::hotkey_bindings::{DictationShortcut, Os, TalkBinding};
 use mog_core::hotkey_core::{PermissionStatus, UserAction};
@@ -136,6 +137,7 @@ fn comps<'a>(
         config: None,
         capture: None,
         capture_ticket: None,
+        app_settings: None,
     }
 }
 
@@ -711,6 +713,7 @@ fn ask(from: &str, route_to: Option<&dyn PermissionRoute>, args: Value) -> Resul
         config: None,
         capture: None,
         capture_ticket: None,
+        app_settings: None,
     };
     route(components, "permission_request", args)
 }
@@ -847,6 +850,7 @@ fn consent_call(
         config: None,
         capture: None,
         capture_ticket: None,
+        app_settings: None,
     };
     route(components, command, args)
 }
@@ -909,4 +913,116 @@ fn sec_02a_views_cannot_call_the_consent_commands() {
         }
     }
     assert!(c.0.lock().unwrap().is_empty(), "no view call reached T12");
+}
+
+// ---------- app settings (CAP-22, #453) ----------
+
+/// A fake mic: it keeps each preference the settings give it.
+#[derive(Default)]
+struct FakeMic(Mutex<Vec<bool>>);
+
+impl MicPreference for FakeMic {
+    fn set_prefer_built_in(&self, on: bool) {
+        self.0.lock().unwrap().push(on);
+    }
+}
+
+fn settings_call(
+    from: &str,
+    settings: Option<&dyn GatewayComponents>,
+    command: &str,
+    args: Value,
+) -> Result<Value, Value> {
+    let brain = FakeBrain::default();
+    let components = HostComponents {
+        from,
+        brain: &brain,
+        windows: None,
+        hotkeys: None,
+        permissions: None,
+        consent: None,
+        config: None,
+        app_settings: settings,
+    };
+    route(components, command, args)
+}
+
+const PREFER: &str = "app.capture.preferBuiltInMic";
+
+#[test]
+fn cap_22_app_setting_read_answers_the_default_off() {
+    let settings = AppSettings::default();
+    assert_eq!(
+        settings_call(
+            "hub",
+            Some(&settings),
+            "app_setting_read",
+            json!({"key": PREFER})
+        ),
+        Ok(json!({"key": PREFER, "value": false}))
+    );
+}
+
+#[test]
+fn cap_22_app_setting_write_reaches_the_mic_and_read_returns_it() {
+    let mic = std::sync::Arc::new(FakeMic::default());
+    let settings = AppSettings::default();
+    settings.set_mic_preference(mic.clone());
+    assert_eq!(
+        settings_call(
+            "hub",
+            Some(&settings),
+            "app_setting_write",
+            json!({"key": PREFER, "value": true})
+        ),
+        Ok(json!({"key": PREFER, "value": true}))
+    );
+    assert_eq!(
+        settings_call(
+            "hub",
+            Some(&settings),
+            "app_setting_read",
+            json!({"key": PREFER})
+        ),
+        Ok(json!({"key": PREFER, "value": true}))
+    );
+    // The hook got the current value when it was set, then the write.
+    assert_eq!(*mic.0.lock().unwrap(), vec![false, true]);
+}
+
+#[test]
+fn cap_22_only_the_hub_can_call_the_app_setting_commands() {
+    let mic = std::sync::Arc::new(FakeMic::default());
+    let settings = AppSettings::default();
+    settings.set_mic_preference(mic.clone());
+    for from in ["brain", "mog-a1", "card-a1"] {
+        for (command, args) in [
+            ("app_setting_read", json!({"key": PREFER})),
+            ("app_setting_write", json!({"key": PREFER, "value": true})),
+        ] {
+            assert_eq!(
+                settings_call(from, Some(&settings), command, args),
+                err("window_not_allowed"),
+                "{from} {command}"
+            );
+        }
+    }
+    assert_eq!(
+        *mic.0.lock().unwrap(),
+        vec![false],
+        "no refused write reached the mic"
+    );
+}
+
+#[test]
+fn cap_22_no_managed_settings_is_host_failed() {
+    for (command, args) in [
+        ("app_setting_read", json!({"key": PREFER})),
+        ("app_setting_write", json!({"key": PREFER, "value": true})),
+    ] {
+        assert_eq!(
+            settings_call("hub", None, command, args),
+            err("host_failed")
+        );
+    }
 }

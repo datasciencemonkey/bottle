@@ -188,3 +188,32 @@ describe('capture events (#425, ADR 0055)', () => {
     expect(new Set(reasons).size).toBe(12);
   });
 });
+
+describe('app settings (CAP-22, #453)', () => {
+  it('[CAP-22] app_setting_read and app_setting_write are hub-only MVP-D rows', () => {
+    expect(COMMANDS.app_setting_read).toEqual({ windows: ['hub'], phase: 'MVP-D' });
+    expect(COMMANDS.app_setting_write).toEqual({ windows: ['hub'], phase: 'MVP-D' });
+    const names = schemaDoc.commands.map((c) => c.name);
+    expect(names).toContain('app_setting_read');
+    expect(names).toContain('app_setting_write');
+  });
+
+  it('[CAP-22] app_setting_read takes a key; app_setting_write takes a key and a typed value', () => {
+    const doc = schemaDoc as unknown as {
+      arguments: Record<string, { required?: string[]; additionalProperties?: boolean }>;
+    };
+    expect(doc.arguments['app_setting_read']?.required).toEqual(['key']);
+    expect(doc.arguments['app_setting_read']?.additionalProperties).toBe(false);
+    const read: CommandArgs['app_setting_read'] = { key: 'app.capture.preferBuiltInMic' };
+    const write: CommandArgs['app_setting_write'] = {
+      key: 'app.capture.preferBuiltInMic',
+      value: true,
+    };
+    // @ts-expect-error the value of app.capture.preferBuiltInMic is a boolean
+    const bad: CommandArgs['app_setting_write'] = { key: 'app.capture.preferBuiltInMic', value: 1 };
+    // @ts-expect-error only known keys
+    const unknown: CommandArgs['app_setting_read'] = { key: 'app.capture.other' };
+    const reply: CommandReturns['app_setting_write'] = write;
+    expect([read.key, bad.key, unknown.key, reply.value]).toHaveLength(4);
+  });
+});

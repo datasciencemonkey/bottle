@@ -8,10 +8,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use mog_core::types::{
-    CaptureMode, CaptureState, CardUpdate, ConsentRecordKind, ConsentRecordView, Intent,
-    MicLevelFrame, MogId, MogViewState, Mood, OthersTrack, Profile, ProfileInfo, ProfileName,
-    RouterCommand, RouterDecision, SegmentRef, SessionPolicy, TagApp, TagOp, Tags, TalkKeyReason,
-    TalkKeyState, TalkKeyStatus, TokenState, TokenStatus, Track, Transcript, TranscriptProvider,
+    AppSetting, AppSettingKey, CaptureMode, CaptureState, CardUpdate, ConsentRecordKind,
+    ConsentRecordView, Intent, MicHealth, MicLevelFrame, MogId, MogViewState, Mood, OthersTrack,
+    Profile, ProfileInfo, ProfileName, RouterCommand, RouterDecision, SegmentRef, SessionPolicy,
+    TagApp, TagOp, Tags, TalkKeyReason, TalkKeyState, TalkKeyStatus, TokenState, TokenStatus,
+    Track, Transcript, TranscriptProvider,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -81,6 +82,10 @@ fn round_trip_by_name(type_name: &str, json: &Value) -> Result<Value, String> {
         // The `consent_records_list` reply (#430, ADR 0060).
         "ConsentRecordView" => round_trip::<ConsentRecordView>(json),
         "ConsentRecordKind" => round_trip::<Vec<ConsentRecordKind>>(json),
+        // The mic fault in `capture.state` and the app setting (#453, CAP-17b, CAP-22).
+        "MicHealth" => round_trip::<Vec<MicHealth>>(json),
+        "AppSettingKey" => round_trip::<Vec<AppSettingKey>>(json),
+        "AppSetting" => round_trip::<AppSetting>(json),
         other => panic!("fixture for unknown type {other}: add it to round_trip_by_name"),
     }
 }
@@ -101,6 +106,7 @@ const STRUCTS: &[&str] = &[
     "MicLevelFrame",
     "TalkKeyStatus",
     "ConsentRecordView",
+    "AppSetting",
 ];
 
 #[test]
@@ -139,6 +145,9 @@ fn every_ipc_type_has_a_fixture() {
         "TalkKeyReason",
         "ConsentRecordView",
         "ConsentRecordKind",
+        "MicHealth",
+        "AppSettingKey",
+        "AppSetting",
     ] {
         assert!(names.iter().any(|n| n == t), "no fixture for {t}");
     }
@@ -230,6 +239,80 @@ fn cap_02a_live_capture_state_carries_its_lease_id() {
     assert_eq!(live.lease_id.as_deref(), Some("17"));
     let back = serde_json::to_value(&live).unwrap();
     assert_eq!(back["leaseId"], "17");
+}
+
+/// CAP-17b (#453): a live capture state carries the mic health for the fix-it card.
+#[test]
+fn cap_17b_capture_state_carries_the_mic_fault_code() {
+    let fault: CaptureState = serde_json::from_str(
+        &std::fs::read_to_string(fixture_dir().join("CaptureState.micFault.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(fault.mic, Some(MicHealth::ZeroBuffers));
+    let back = serde_json::to_value(&fault).unwrap();
+    assert_eq!(back["mic"], "zero_buffers");
+    for (health, code) in [
+        (MicHealth::Ok, "ok"),
+        (MicHealth::ZeroBuffers, "zero_buffers"),
+        (MicHealth::PermissionDenied, "permission_denied"),
+        (MicHealth::NoDevice, "no_device"),
+    ] {
+        assert_eq!(serde_json::to_value(health).unwrap(), code);
+    }
+}
+
+/// CAP-17b (#453): `mic` is optional. A payload from before #453 still parses, and an
+/// unset field is not written.
+#[test]
+fn cap_17b_a_capture_state_without_mic_still_parses() {
+    let old: CaptureState =
+        serde_json::from_str(r#"{"recording":false,"paused":false,"othersTrack":"off"}"#).unwrap();
+    assert_eq!(old.mic, None);
+    let back = serde_json::to_value(&old).unwrap();
+    assert!(back.get("mic").is_none(), "an unset mic was serialized");
+}
+
+/// CAP-17b, CAP-01b (#453): the fault is a fixed code. It holds no device name or ID, so an
+/// object or a free string is refused.
+#[test]
+fn cap_17b_cap_01b_the_mic_fault_is_a_fixed_code_without_device_identity() {
+    for bad in [
+        r#""AirPods Pro""#,
+        r#""zero_buffers:MacBook Pro Microphone""#,
+        r#"{"code":"zero_buffers","device":"AirPods Pro"}"#,
+    ] {
+        let json =
+            format!(r#"{{"recording":false,"paused":false,"othersTrack":"off","mic":{bad}}}"#);
+        assert!(
+            serde_json::from_str::<CaptureState>(&json).is_err(),
+            "accepted mic = {bad}"
+        );
+    }
+}
+
+/// CAP-22 (#453): the app setting has one key with a boolean value.
+#[test]
+fn cap_22_app_setting_prefer_built_in_mic_is_a_boolean() {
+    let s: AppSetting = serde_json::from_str(
+        &std::fs::read_to_string(fixture_dir().join("AppSetting.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(s, AppSetting::CapturePreferBuiltInMic(true));
+    assert_eq!(s.key(), AppSettingKey::CapturePreferBuiltInMic);
+    assert_eq!(
+        serde_json::to_value(AppSettingKey::CapturePreferBuiltInMic).unwrap(),
+        "app.capture.preferBuiltInMic"
+    );
+    for bad in [
+        r#"{"key":"app.capture.preferBuiltInMic","value":"yes"}"#,
+        r#"{"key":"app.capture.preferBuiltInMic"}"#,
+        r#"{"key":"app.capture.other","value":true}"#,
+    ] {
+        assert!(
+            serde_json::from_str::<AppSetting>(bad).is_err(),
+            "accepted {bad}"
+        );
+    }
 }
 
 #[test]
