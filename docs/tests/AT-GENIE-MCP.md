@@ -24,7 +24,8 @@ pnpm vitest run src/acceptance/at-07-genie-connect.test.ts src/acceptance/at-08-
 
 | AT | File | Runs now on shipped code |
 |---|---|---|
-| AT-07 | `crates/mog-core/tests/at_07_genie_connect.rs` | The `mcp_call` contract part: only the brain may call it (SEC-02a); the server is only `genie_one`, and no argument can carry a URL, so the Beta or per-space MCP cannot be reached through IPC. These IPC checks do not count as G-03 or G-06a: those are #28 and #30. |
+| AT-07 | `crates/mog-core/tests/at_07_genie_connect.rs` | The `mcp_call` contract part: only the brain may call it (SEC-02a); the server is only `genie_one`, and no argument can carry a URL, so the Beta or per-space MCP cannot be reached through IPC. These IPC checks do not count as G-03 or G-06a. R8 (#30) runs through `McpCallComponent` on the fake Genie One server of `crates/mog-core/tests/support/fake_mcp.rs`: G-04a..d, G-05a, G-06a (the allowlist), G-06b and G-07a. The Tauri host routing of `mcp_call` is TODO(#467). |
+| AT-07 | `crates/mog-core/tests/mcp_transport.rs` | R8 (#30) in full against the fake server and a fake R6: G-04a..d, G-05a, G-05b, G-06a (allowlist, `tools/list` filter, the `genie-tools.json` contract), G-06b, G-07a, the 401 retry (W-05d), 4.6 rules 2, 3, 5, 6, 7, the size and time caps, and no token or content in logs, `Debug` or errors. |
 | AT-07 | `src/acceptance/at-07-genie-connect.test.ts` | G-07b: concurrent poll callers on one conversation go through the shipped `ConversationManager.enqueuePoll` (brain actor). The double sees 1 open poll at most, and every poll keeps the same IDs. A control case without the queue (`[AT-22]`) sees an overlap, so the check can fail. A failed poll does not block the next one. The double lists the four tools of the contract file (`[AT-22]`). |
 | AT-08 | `src/acceptance/at-08-context-approval.test.ts` | The display part of G-35a and G-35b (#89): the expanded card shows the exact "Sent to Genie" text and offers "Resend without context" only when a preamble went. |
 | AT-09 | `src/acceptance/at-09-outcomes.test.ts` | Six double outcomes (completed, incomplete with and without an answer, failed, truncated, needs-input) on the shipped card parts: 3 blurbs newest on top and History (UX-11a, UX-12), a split takes one slot and a pin stays (UX-11b, UX-11c), every expanded section in order (UX-18), a 60-row truncated result shows 50 rows (G-24b display part), a chip that sends gives an action only on a click (UX-20c), success and error moods (UX-01a), one merged notification for a burst from 2 MOGs (UX-26b, UX-26c), and no notification for a chip, a visible card or a blocking Focus mode (UX-26a). |
@@ -48,7 +49,7 @@ implementer removes the mark and finishes the test.
 | AT | Requirement IDs | Feature issue |
 |---|---|---|
 | AT-07 | G-02, G-03 (the endpoint config) | #28 |
-| AT-07 | G-04a, G-04b, G-04c, G-04d, G-05a, G-05b, G-06a (the allowlist), G-06b | #30 |
+| AT-07 | Live run of G-04a..G-06b on a real workspace (SP-09 live part) | #29 |
 | AT-07 | G-07a, G-07c | #31 |
 | AT-07 | W-06a, W-06b | #18 |
 | AT-08 | G-28, G-29a, G-29b, G-29c, G-29d, G-32a, G-32b | #92 |

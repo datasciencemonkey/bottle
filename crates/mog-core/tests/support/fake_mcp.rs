@@ -152,7 +152,9 @@ impl FakeMcp {
 }
 
 fn read_request(stream: &mut TcpStream) -> Option<Seen> {
-    stream.set_read_timeout(Some(Duration::from_secs(30))).ok()?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(30)))
+        .ok()?;
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
     let head_end = loop {
@@ -292,7 +294,9 @@ pub fn standard(n_init: &AtomicUsize, seen: &Seen) -> Reply {
 /// A server that answers with [`standard`] unless `custom` returns a reply first.
 pub fn genie_one(mut custom: impl FnMut(&Seen) -> Option<Reply> + Send + 'static) -> FakeMcp {
     let n = AtomicUsize::new(0);
-    serve(Box::new(move |s| custom(s).unwrap_or_else(|| standard(&n, s))))
+    serve(Box::new(move |s| {
+        custom(s).unwrap_or_else(|| standard(&n, s))
+    }))
 }
 
 // ---------- doubles ----------
@@ -315,10 +319,13 @@ impl Hosts {
 impl ProfileHosts for Hosts {
     fn workspace_url(&self, profile: &str) -> CoreResult<String> {
         self.asked.lock().unwrap().push(profile.to_owned());
-        self.map.get(profile).cloned().ok_or(CoreError::Unavailable {
-            component: "test",
-            reason: "no_profile",
-        })
+        self.map
+            .get(profile)
+            .cloned()
+            .ok_or(CoreError::Unavailable {
+                component: "test",
+                reason: "no_profile",
+            })
     }
 }
 

@@ -18,8 +18,8 @@ use mog_core::error::CoreResult;
 use mog_core::http_transport::host_policy::AllowlistEgressPolicy;
 use mog_core::ipc_gateway::{hardened_gateway_with, IpcGateway, NoLog};
 use mog_core::mcp_transport::{
-    genie_one_off_message, McpCall, McpCallComponent, McpLimits, McpReply, McpSeams,
-    McpTransport, ReqwestMcpTransport, ALLOWED_TOOLS, PROTOCOL_VERSION,
+    genie_one_off_message, McpCall, McpCallComponent, McpLimits, McpReply, McpSeams, McpTransport,
+    ReqwestMcpTransport, ALLOWED_TOOLS, PROTOCOL_VERSION,
 };
 use mog_core::request_identity::{user_agent, BottleIdentity, TAGS_HEADER};
 use mog_core::token_broker::TokenLease;
@@ -83,7 +83,12 @@ fn ask(r: &Rig) -> CoreResult<McpReply> {
 
 fn poll(r: &Rig, mog: &str) -> CoreResult<McpReply> {
     let t = tags(mog);
-    r.t.call_tool(McpCall::new(PROFILE, "genie_poll_response", poll_args(), &t))
+    r.t.call_tool(McpCall::new(
+        PROFILE,
+        "genie_poll_response",
+        poll_args(),
+        &t,
+    ))
 }
 
 fn code<T: std::fmt::Debug>(r: CoreResult<T>) -> &'static str {
@@ -107,8 +112,8 @@ fn g_04a_build_has_no_rmcp_transport() {
         !lock.lines().any(|l| l.trim() == "name = \"rmcp\""),
         "rmcp must not be in the build"
     );
-    let manifest = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
-        .unwrap();
+    let manifest =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml")).unwrap();
     assert!(!manifest.contains("rmcp"));
 }
 
@@ -170,7 +175,12 @@ fn g_04b_session_id_on_every_call_after_initialize() {
         ]
     );
     for x in &s.seen()[1..] {
-        assert_eq!(x.header("mcp-session-id"), Some("sess-1"), "{}", x.rpc_method());
+        assert_eq!(
+            x.header("mcp-session-id"),
+            Some("sess-1"),
+            "{}",
+            x.rpc_method()
+        );
     }
     // The notification has no id; each request has its own id.
     assert!(s.seen()[1].json().get("id").is_none());
@@ -205,8 +215,13 @@ fn g_04b_concurrent_first_calls_share_one_initialize() {
             let t = Arc::clone(&r.t);
             std::thread::spawn(move || {
                 let tg = tags(MOG);
-                t.call_tool(McpCall::new(PROFILE, "genie_poll_response", poll_args(), &tg))
-                    .map(|_| ())
+                t.call_tool(McpCall::new(
+                    PROFILE,
+                    "genie_poll_response",
+                    poll_args(),
+                    &tg,
+                ))
+                .map(|_| ())
             })
         })
         .collect();
@@ -444,10 +459,8 @@ fn g_06a_tools_list_follows_next_cursor() {
 
 #[test]
 fn g_06a_contract_matches_genie_tools_json() {
-    let fixture: Value = serde_json::from_str(include_str!(
-        "../../../src/test-support/genie-tools.json"
-    ))
-    .unwrap();
+    let fixture: Value =
+        serde_json::from_str(include_str!("../../../src/test-support/genie-tools.json")).unwrap();
     let listed = fixture.as_array().unwrap();
     assert_eq!(listed.len(), ALLOWED_TOOLS.len());
     for contract in ALLOWED_TOOLS {
@@ -499,7 +512,8 @@ fn g_06a_args_outside_the_contract_are_refused_before_send() {
         ),
         ("genie_cancel_response", json!({"conversation_id": null})),
     ] {
-        let got = r.t.call_tool(McpCall::new(PROFILE, tool, obj(args.clone()), &t));
+        let got =
+            r.t.call_tool(McpCall::new(PROFILE, tool, obj(args.clone()), &t));
         assert_eq!(code(got), "invalid_tool_args", "{tool} {args}");
     }
     assert!(s.seen().is_empty());
@@ -552,11 +566,16 @@ fn g_06b_bad_warehouse_id_is_refused_before_send() {
     let s = genie_one(|_| None);
     let r = rig(&s);
     let t = tags(MOG);
-    for w in [json!(""), json!(5), json!("a b"), json!("../x"), json!("x".repeat(65))] {
+    for w in [
+        json!(""),
+        json!(5),
+        json!("a b"),
+        json!("../x"),
+        json!("x".repeat(65)),
+    ] {
         let meta = obj(json!({ "warehouse_id": w }));
-        let got = r
-            .t
-            .call_tool(McpCall::new(PROFILE, "genie_ask", ask_args(), &t).meta(&meta));
+        let got =
+            r.t.call_tool(McpCall::new(PROFILE, "genie_ask", ask_args(), &t).meta(&meta));
         assert_eq!(code(got), "invalid_meta", "{w}");
     }
     assert!(s.seen().is_empty());
@@ -600,7 +619,8 @@ fn sec_06a_bad_tags_send_nothing() {
     let s = genie_one(|_| None);
     let r = rig(&s);
     let t = tags("https://x");
-    let got = r.t.call_tool(McpCall::new(PROFILE, "genie_ask", ask_args(), &t));
+    let got =
+        r.t.call_tool(McpCall::new(PROFILE, "genie_ask", ask_args(), &t));
     assert_eq!(code(got), "tags_mog_chars");
     assert!(s.seen().is_empty());
     assert_eq!(r.broker.lend_count(), 0);
@@ -641,9 +661,8 @@ fn arc_6_rule_2_production_policy_refuses_a_loopback_endpoint() {
 #[test]
 fn arc_6_rule_3_redirect_is_not_followed() {
     let s = genie_one(|x| {
-        (x.rpc_method() == "tools/call").then(|| {
-            empty_reply(307).with_header("Location", "http://127.0.0.1:1/elsewhere")
-        })
+        (x.rpc_method() == "tools/call")
+            .then(|| empty_reply(307).with_header("Location", "http://127.0.0.1:1/elsewhere"))
     });
     let r = rig(&s);
     assert_eq!(code(poll(&r, MOG)), "redirect_refused");
@@ -723,9 +742,8 @@ fn sp_09_sse_reply_with_a_notification_before_the_response() {
 #[test]
 fn sp_09_sse_stream_with_no_response_is_a_bad_reply() {
     let s = genie_one(|x| {
-        (x.rpc_method() == "tools/call").then(|| {
-            sse_reply(&[json!({"jsonrpc": "2.0", "method": "notifications/progress"})])
-        })
+        (x.rpc_method() == "tools/call")
+            .then(|| sse_reply(&[json!({"jsonrpc": "2.0", "method": "notifications/progress"})]))
     });
     let r = rig(&s);
     assert_eq!(code(poll(&r, MOG)), "bad_reply");
@@ -768,14 +786,20 @@ fn g_15b_sp_09_busy_envelopes_reach_the_caller_and_are_not_retried() {
 fn g_14_http_error_with_json_body_reaches_the_caller_with_its_status() {
     let s = genie_one(|x| {
         (x.rpc_method() == "tools/call").then(|| {
-            json_reply(503, json!({"error_code": "TEMPORARILY_UNAVAILABLE", "message": "busy"}))
+            json_reply(
+                503,
+                json!({"error_code": "TEMPORARILY_UNAVAILABLE", "message": "busy"}),
+            )
         })
     });
     let r = rig(&s);
     let reply = poll(&r, MOG).unwrap();
     assert_eq!(reply.http_status, 503);
     assert!(reply.is_error);
-    assert_eq!(reply.rpc_error.unwrap()["error_code"], "TEMPORARILY_UNAVAILABLE");
+    assert_eq!(
+        reply.rpc_error.unwrap()["error_code"],
+        "TEMPORARILY_UNAVAILABLE"
+    );
     assert_eq!(s.count("tools/call"), 1);
 }
 
@@ -813,7 +837,12 @@ fn nfr_mcp_reply_larger_than_the_cap_is_refused() {
                 }
             })
         });
-        let r = rig_full(&s.origin(), &s.url(), Arc::new(LoopbackPolicy), small_limits());
+        let r = rig_full(
+            &s.origin(),
+            &s.url(),
+            Arc::new(LoopbackPolicy),
+            small_limits(),
+        );
         assert_eq!(code(poll(&r, MOG)), "reply_too_large", "sse={sse}");
         assert_eq!(s.count("tools/call"), 1);
     }
@@ -875,16 +904,16 @@ fn nfr_mcp_per_call_timeout_is_used_and_capped() {
 #[test]
 fn arc_6_sec_03_no_token_question_or_session_in_logs_debug_or_errors() {
     let calls = AtomicUsize::new(0);
-    let s = genie_one(move |x| match (x.rpc_method().as_str(), x.tool().as_str()) {
-        ("tools/call", "genie_poll_response") => {
-            match calls.fetch_add(1, Ordering::SeqCst) {
+    let s = genie_one(
+        move |x| match (x.rpc_method().as_str(), x.tool().as_str()) {
+            ("tools/call", "genie_poll_response") => match calls.fetch_add(1, Ordering::SeqCst) {
                 0 => Some(empty_reply(401)),
                 1 => Some(empty_reply(404)),
                 _ => Some(empty_reply(401)),
-            }
-        }
-        _ => None,
-    });
+            },
+            _ => None,
+        },
+    );
     let r = rig(&s);
     let mut texts = Vec::new();
     let t = tags(MOG);
@@ -897,7 +926,8 @@ fn arc_6_sec_03_no_token_question_or_session_in_logs_debug_or_errors() {
             texts.push(format!("{e} {e:?} {}", e.code()));
         }
     }
-    let bad = r.t.call_tool(McpCall::new(PROFILE, "secret_tool_name", ask_args(), &t));
+    let bad =
+        r.t.call_tool(McpCall::new(PROFILE, "secret_tool_name", ask_args(), &t));
     let e = bad.unwrap_err();
     texts.push(format!("{e} {e:?}"));
     texts.push(format!("{:?}", r.t));
@@ -962,6 +992,9 @@ fn at_07_g_06a_mcp_call_reaches_r8_through_the_gateway() {
     list["tool"] = json!("tools/list");
     list["args"] = json!({});
     let out = gw.dispatch("brain", "mcp_call", list).unwrap();
-    assert_eq!(out["structuredContent"]["tools"].as_array().unwrap().len(), 4);
+    assert_eq!(
+        out["structuredContent"]["tools"].as_array().unwrap().len(),
+        4
+    );
     assert_eq!(s.count("tools/call"), 1);
 }

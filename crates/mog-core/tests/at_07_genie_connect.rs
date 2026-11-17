@@ -159,7 +159,10 @@ fn at_07_g_04a_g_04b_g_04c_g_04d_g_05a_g_06b_g_07a_thin_client_rules() {
         assert!(x.target.ends_with("?o=1234"));
         assert!(!String::from_utf8_lossy(&x.body).contains("progressToken"));
     }
-    assert_eq!(seen[5].json()["params"]["_meta"], json!({"warehouse_id": "w1"}));
+    assert_eq!(
+        seen[5].json()["params"]["_meta"],
+        json!({"warehouse_id": "w1"})
+    );
 }
 
 #[test]
