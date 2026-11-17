@@ -108,7 +108,8 @@ pub fn run() {
             // R1: start the talk key. This never prompts (CAP-36, #305). If the forwarder
             // thread cannot start, the app still runs without the talk key.
             if hotkey_host::install(handle).is_err() {
-                // TODO(#297): report the talk key as unavailable once `hotkey.status` exists.
+                // The brain subscribes later; `hotkey:status` is sticky, so it still gets this.
+                hotkey_host::report_unavailable(handle);
             }
             // MB-02: the MOG config store in the app config dir (#25). If the OS gives no app
             // config dir, the app still runs; `config_*` then fail with a code (#333).

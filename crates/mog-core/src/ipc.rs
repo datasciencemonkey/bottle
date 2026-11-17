@@ -69,6 +69,7 @@ pub struct CommandSpec {
 }
 
 const B: &[WindowClass] = &[WindowClass::Brain];
+const H: &[WindowClass] = &[WindowClass::Hub];
 const BH: &[WindowClass] = &[WindowClass::Brain, WindowClass::Hub];
 const VIEWS: &[WindowClass] = &[WindowClass::Hub, WindowClass::Mog, WindowClass::Card];
 
@@ -88,7 +89,8 @@ const fn v1(name: &'static str, windows: &'static [WindowClass]) -> CommandSpec 
     }
 }
 
-/// Every command of 4.5, in table order. Slash pairs are separate rows.
+/// Every command of 4.5, in table order. Slash pairs are separate rows. `capture_resume` and
+/// `permission_request` are new rows for the requirements owner (ADR 0039).
 /// `capture_stop_all` is also reachable from the tray inside Rust; that path is not IPC.
 pub const COMMANDS: &[CommandSpec] = &[
     row("cli_status", BH),
@@ -100,6 +102,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     row("capture_start", B),
     row("capture_stop", B),
     row("capture_pause", B),
+    // #279 (ADR 0039): its own row, so a lost reply cannot flip the pause state.
+    row("capture_resume", B),
     row("capture_status", B),
     row("capture_stop_all", B),
     row("capture_subscribe", B),
@@ -122,6 +126,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     row("config_delete", BH),
     row("policy_get", BH),
     row("hotkeys_set", BH),
+    // #312 (ADR 0039): the wizard and Settings ask for an OS permission after a click.
+    row("permission_request", H),
     row("mog_set_active", B),
     row("window_mog_open", B),
     row("window_mog_close", B),
@@ -393,7 +399,7 @@ args!(CaptureStartArgs {
 });
 args!(MogArgs { mog_id: MogId });
 args!(
-    /// CAP-02a: stop and pause name the lease they act on. R2 rejects a stale one.
+    /// CAP-02a: stop, pause and resume name the lease they act on. R2 rejects a stale one.
     CaptureLeaseArgs {
         mog_id: MogId,
         lease_id: LeaseRef,
@@ -559,6 +565,22 @@ args!(HotkeysSetArgs {
     bindings: JsonObject
 });
 
+/// The OS permission that `permission_request` asks for (CAP-36, CAP-37).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionKind {
+    /// Input Monitoring for the talk key (CAP-36).
+    InputMonitoring,
+    /// Accessibility for text insertion (CAP-37).
+    Accessibility,
+}
+args!(
+    /// `permission_request`: the hub window call is the user action (CAP-36, CAP-37).
+    PermissionRequestArgs {
+        permission: PermissionKind,
+    }
+);
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Geometry {
@@ -623,7 +645,7 @@ macro_rules! for_command {
             "profile_login" => Some($f::<ProfileLoginArgs>()),
             "profile_select" => Some($f::<ProfileSelectArgs>()),
             "capture_start" => Some($f::<CaptureStartArgs>()),
-            "capture_stop" | "capture_pause" => Some($f::<CaptureLeaseArgs>()),
+            "capture_stop" | "capture_pause" | "capture_resume" => Some($f::<CaptureLeaseArgs>()),
             "agent_stop" | "mog_set_active" | "window_mog_close" | "window_card_show"
             | "window_card_hide" => Some($f::<MogArgs>()),
             "capture_subscribe" => Some($f::<CaptureSubscribeArgs>()),
@@ -640,6 +662,7 @@ macro_rules! for_command {
             "config_read" | "config_delete" => Some($f::<ConfigIdArgs>()),
             "config_write" => Some($f::<ConfigWriteArgs>()),
             "hotkeys_set" => Some($f::<HotkeysSetArgs>()),
+            "permission_request" => Some($f::<PermissionRequestArgs>()),
             "window_mog_open" => Some($f::<WindowMogOpenArgs>()),
             "view_emit" => Some($f::<ViewEmitArgs>()),
             "audit_append" => Some($f::<AuditAppendArgs>()),

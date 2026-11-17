@@ -16,6 +16,7 @@
     "allow-capture-start",
     "allow-capture-stop",
     "allow-capture-pause",
+    "allow-capture-resume",
     "allow-capture-status",
     "allow-capture-stop-all",
     "allow-capture-subscribe",

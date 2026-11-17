@@ -149,7 +149,32 @@
       },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
-      "description": "CAP-02a: stop and pause name the lease they act on. R2 rejects a stale one.",
+      "description": "CAP-02a: stop, pause and resume name the lease they act on. R2 rejects a stale one.",
+      "properties": {
+        "leaseId": {
+          "$ref": "#/$defs/LeaseRef"
+        },
+        "mogId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "mogId",
+        "leaseId"
+      ],
+      "title": "CaptureLeaseArgs",
+      "type": "object"
+    },
+    "capture_resume": {
+      "$defs": {
+        "LeaseRef": {
+          "pattern": "^[A-Za-z0-9-]{1,64}$",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "CAP-02a: stop, pause and resume name the lease they act on. R2 rejects a stale one.",
       "properties": {
         "leaseId": {
           "$ref": "#/$defs/LeaseRef"
@@ -295,7 +320,7 @@
       },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
-      "description": "CAP-02a: stop and pause name the lease they act on. R2 rejects a stale one.",
+      "description": "CAP-02a: stop, pause and resume name the lease they act on. R2 rejects a stale one.",
       "properties": {
         "leaseId": {
           "$ref": "#/$defs/LeaseRef"
@@ -820,6 +845,38 @@
       "title": "MogArgs",
       "type": "object"
     },
+    "permission_request": {
+      "$defs": {
+        "PermissionKind": {
+          "description": "The OS permission that `permission_request` asks for (CAP-36, CAP-37).",
+          "oneOf": [
+            {
+              "const": "input_monitoring",
+              "description": "Input Monitoring for the talk key (CAP-36).",
+              "type": "string"
+            },
+            {
+              "const": "accessibility",
+              "description": "Accessibility for text insertion (CAP-37).",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "`permission_request`: the hub window call is the user action (CAP-36, CAP-37).",
+      "properties": {
+        "permission": {
+          "$ref": "#/$defs/PermissionKind"
+        }
+      },
+      "required": [
+        "permission"
+      ],
+      "title": "PermissionRequestArgs",
+      "type": "object"
+    },
     "policy_get": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
@@ -1274,6 +1331,13 @@
       ]
     },
     {
+      "name": "capture_resume",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
       "name": "capture_status",
       "phase": "MVP-D",
       "windows": [
@@ -1435,6 +1499,13 @@
       ]
     },
     {
+      "name": "permission_request",
+      "phase": "MVP-D",
+      "windows": [
+        "hub"
+      ]
+    },
+    {
       "name": "mog_set_active",
       "phase": "MVP-D",
       "windows": [
@@ -1525,6 +1596,11 @@
       "direction": "core_to_brain",
       "name": "hotkey:panic",
       "specName": "hotkey.panic"
+    },
+    {
+      "direction": "core_to_brain",
+      "name": "hotkey:status",
+      "specName": "hotkey.status"
     },
     {
       "direction": "core_to_brain",

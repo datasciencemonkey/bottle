@@ -42,6 +42,8 @@ export const COMMANDS = {
   capture_start: B,
   capture_stop: B,
   capture_pause: B,
+  /** #279 (ADR 0039): its own row, so a lost reply cannot flip the pause state. */
+  capture_resume: B,
   capture_status: B,
   capture_stop_all: B,
   capture_subscribe: B,
@@ -64,6 +66,8 @@ export const COMMANDS = {
   config_delete: BH,
   policy_get: BH,
   hotkeys_set: BH,
+  /** #312 (ADR 0039): the wizard and Settings ask for an OS permission after a click. */
+  permission_request: { windows: ['hub'], phase: 'MVP-D' },
   mog_set_active: B,
   window_mog_open: B,
   window_mog_close: B,
@@ -85,6 +89,13 @@ export type CommandName = keyof typeof COMMANDS;
 export const EVENTS = {
   'hotkey.ptt': { name: 'hotkey:ptt', direction: 'core_to_brain' },
   'hotkey.panic': { name: 'hotkey:panic', direction: 'core_to_brain' },
+  /**
+   * Not in 4.5 yet (ADR 0039): the talk-key status (`TalkKeyStatus`). Sticky: the host sends
+   * the last one again when the brain subscribes. One exception: `reason: 'elevated_foreground'`
+   * is a one-shot CAP-42 tooltip notice. It is not sticky, and the brain must not change its
+   * talk-key state for it: the brain shows the tooltip and keeps the last other status.
+   */
+  'hotkey.status': { name: 'hotkey:status', direction: 'core_to_brain' },
   'capture.state': { name: 'capture:state', direction: 'core_to_brain' },
   'capture.segment': { name: 'capture:segment', direction: 'core_to_brain' },
   'session.stop_signal': { name: 'session:stop_signal', direction: 'core_to_brain' },
@@ -139,6 +150,9 @@ export type RouteId =
   | 'knowledge.request_publish'
   | 'postgres.credentials';
 
+/** The OS permission that `permission_request` asks for (CAP-36, CAP-37). */
+export type PermissionKind = 'input_monitoring' | 'accessibility';
+
 export type ViewEmitKind =
   'poked' | 'hover' | 'drag_end' | 'chip_click' | 'cancel' | 'expand' | 'click';
 
@@ -163,6 +177,7 @@ export interface CommandArgs {
   /** CAP-02a: name the lease (ADR 0007). */
   capture_stop: { mogId: MogId; leaseId: LeaseId };
   capture_pause: { mogId: MogId; leaseId: LeaseId };
+  capture_resume: { mogId: MogId; leaseId: LeaseId };
   capture_status: NoArgs;
   capture_stop_all: NoArgs;
   capture_subscribe: { onLevel: Channel<number>; onPartial: Channel<string> };
@@ -214,6 +229,8 @@ export interface CommandArgs {
   config_delete: { id: string };
   policy_get: NoArgs;
   hotkeys_set: { bindings: JsonObject };
+  /** The hub call is the user action (CAP-36, CAP-37). */
+  permission_request: { permission: PermissionKind };
   mog_set_active: MogArgs;
   window_mog_open: {
     mogId: MogId;
@@ -375,6 +392,24 @@ export interface MicLevelFrame {
   t: number;
 }
 
+// ---------- core-to-brain payloads (#297, #294, ADR 0039; Rust mirror in `mog_core::types`) ----------
+
+/** The talk key now. */
+export type TalkKeyState = 'active' | 'paused' | 'unavailable';
+
+/** Why the talk key is not active. A fixed value: never a window title, process or key. */
+export type TalkKeyReason =
+  'secure_input' | 'elevated_foreground' | 'fallback_chord_unavailable' | 'hook_failed';
+
+/**
+ * `hotkey.status` payload. `reason` is required and `null` when the talk key is active. The
+ * brain picks the pill (CAP-39c) or the tooltip (CAP-42) by `reason`.
+ */
+export interface TalkKeyStatus {
+  talkKey: TalkKeyState;
+  reason: TalkKeyReason | null;
+}
+
 type Empty = Record<string, never>;
 
 /** Return types of 4.5. `unknown` where a feature issue still defines the shape. */
@@ -388,6 +423,7 @@ export interface CommandReturns {
   capture_start: CaptureState;
   capture_stop: CaptureState;
   capture_pause: CaptureState;
+  capture_resume: CaptureState;
   capture_status: CaptureState;
   capture_stop_all: CaptureState;
   capture_subscribe: Empty;
@@ -420,6 +456,7 @@ export interface CommandReturns {
   config_delete: unknown;
   policy_get: unknown;
   hotkeys_set: { conflicts: unknown[] };
+  permission_request: { status: 'granted' | 'denied' | 'unknown' };
   mog_set_active: Empty;
   window_mog_open: Empty;
   window_mog_close: Empty;

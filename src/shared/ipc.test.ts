@@ -1,6 +1,14 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { COMMANDS, EVENTS, IPC_ERROR_CODES, type CommandName, type IpcError } from './ipc';
+import {
+  COMMANDS,
+  EVENTS,
+  IPC_ERROR_CODES,
+  type CommandArgs,
+  type CommandName,
+  type CommandReturns,
+  type IpcError,
+} from './ipc';
 
 const schemaDoc = JSON.parse(
   readFileSync(resolve(import.meta.dirname, '../../src-tauri/schemas/ipc-commands.json'), 'utf8'),
@@ -42,11 +50,26 @@ describe('IPC contract (TS side)', () => {
 });
 
 describe('capture lease (contract)', () => {
-  it('[CAP-02a] capture_stop and capture_pause take mogId and leaseId', () => {
+  it('[CAP-02a] capture_stop, capture_pause and capture_resume take mogId and leaseId', () => {
     const doc = schemaDoc as unknown as { arguments: Record<string, { required?: string[] }> };
-    for (const cmd of ['capture_stop', 'capture_pause']) {
+    for (const cmd of ['capture_stop', 'capture_pause', 'capture_resume']) {
       expect(doc.arguments[cmd]?.required).toEqual(['mogId', 'leaseId']);
     }
+  });
+});
+
+describe('capture_resume (CAP-02a, #279)', () => {
+  it('[CAP-02a] capture_resume is a brain-only row that returns the capture state', () => {
+    expect(COMMANDS.capture_resume).toEqual({ windows: ['brain'], phase: 'MVP-D' });
+    const names = Object.keys(COMMANDS);
+    expect(names.indexOf('capture_resume')).toBe(names.indexOf('capture_pause') + 1);
+    const args: CommandArgs['capture_resume'] = { mogId: 'a1', leaseId: '17' };
+    const state: CommandReturns['capture_resume'] = {
+      recording: true,
+      paused: false,
+      othersTrack: 'off',
+    };
+    expect([args.leaseId, state.paused]).toEqual(['17', false]);
   });
 });
 
@@ -61,6 +84,24 @@ describe('content-free IPC errors (#333, ADR 0040)', () => {
     const leaky: IpcError = { error: 'window_not_allowed', window: 'mog-a1' };
     expect(Object.keys(cap)).toEqual(['error']);
     expect(leaky.error).toBe('window_not_allowed');
+  });
+
+  it('[ARC-5] [CAP-39c] [CAP-42] hotkey.status is a core-to-brain event on the brain Channel', () => {
+    expect(EVENTS['hotkey.status']).toEqual({ name: 'hotkey:status', direction: 'core_to_brain' });
+  });
+
+  it('[CAP-36] [CAP-37] permission_request is a hub-only MVP-D command', () => {
+    expect(COMMANDS.permission_request).toEqual({ windows: ['hub'], phase: 'MVP-D' });
+    const doc = schemaDoc as unknown as {
+      arguments: Record<string, { required?: string[]; additionalProperties?: boolean }>;
+    };
+    expect(doc.arguments['permission_request']?.required).toEqual(['permission']);
+    expect(doc.arguments['permission_request']?.additionalProperties).toBe(false);
+    const ask: CommandArgs['permission_request'] = { permission: 'input_monitoring' };
+    // @ts-expect-error only the two permissions of CAP-36 and CAP-37
+    const camera: CommandArgs['permission_request'] = { permission: 'camera' };
+    const reply: CommandReturns['permission_request'] = { status: 'unknown' };
+    expect([ask.permission, camera.permission, reply.status]).toHaveLength(3);
   });
 
   it('[ARC-5] [UX-06a] mog.level is a brain-to-view event', () => {

@@ -108,8 +108,8 @@ pub enum TalkKeyMode {
     Chord,
 }
 
-/// What R1 tells the rest of the app. It never carries key contents. The pill outputs need a
-/// core-to-brain event: TODO(#297).
+/// What R1 tells the rest of the app. It never carries key contents. The host sends the pill
+/// outputs to the brain as the `hotkey.status` event (#297, ADR 0039).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HotkeyOutput {
     /// A `hotkey.ptt` phase.
@@ -120,8 +120,8 @@ pub enum HotkeyOutput {
     TalkKeyRestored,
     /// Secure Event Input is on, but the OS refused the fallback chord (for example another
     /// app owns Ctrl+Shift+Space). PTT does not work until the chord registers or Secure
-    /// Event Input ends. The watchdog keeps trying (CAP-39b). The pill text for this case
-    /// waits for contract change #297.
+    /// Event Input ends. The watchdog keeps trying (CAP-39b). The host sends it as
+    /// `hotkey.status` with reason `fallback_chord_unavailable`; the brain picks the text.
     FallbackChordUnavailable,
     /// The talk key was held for less than [`TAP_MAX_HOLD`] (CAP-44a). R1 emits it after
     /// `Ptt(Cancel)`, so the audio of the tap is dropped and no STT call starts (CAP-44b).
