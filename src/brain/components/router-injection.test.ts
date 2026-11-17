@@ -422,14 +422,18 @@ describe('the router step only proposes (RTR-20b)', () => {
     },
   );
 
-  it('[RTR-20b] a switch command to an allowed profile stays a proposal', () => {
+  it('[RTR-20b, AT-12] a switch command to an allowed alias stays a proposal with the spoken alias', () => {
     const d = routerDecision({
       intent: 'command',
       command: 'switch_workspace_once',
       command_arg: 'crm',
       genie_question: '',
     });
-    expect(applyFieldRules(d, input).decision.command).toBe('switch_workspace_once');
+    const r = applyFieldRules(d, input);
+    expect(r.decision.command).toBe('switch_workspace_once');
+    // ADR 0056 point 6: the alias is not canonicalized; the hop resolver (#164) resolves it.
+    expect(r.decision.command_arg).toBe('crm');
+    expect(r.fixes).toEqual([]);
   });
 
   it('[RTR-20b] an empty AllowedWorkspaceHosts (the default) puts no host limit on listed profiles', () => {
