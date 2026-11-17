@@ -87,3 +87,17 @@ details conflict with binding decision U9 (no automatic deletion of user content
   warning (ADR 0036 amendment).
 - The requirements text should say that U9 removes the local retention columns and purge indexes
   (comment on #35).
+
+## Amendment (2026-11-17, #449): ids for the exchange columns
+
+The 4.7 `GenieExchange` gave no value for the `genie_exchange.session_id`, `workspace_id` and `space_id`
+columns. Then Forget by session (MEM-32a) and "Stop and delete this session" (SEC-14a) cannot find the
+exchanges of a session, and D37 recall cannot check the workspace and space of an answer.
+
+- `GenieExchange` gets 3 optional fields: `sessionId` (the R10 session UUID), `workspaceId` (the numeric
+  workspace id as a decimal string, the `?o=` value) and `spaceId` (the Genie space id).
+- They are added by declaration merging after the 4.7 block in `src/shared/interfaces.ts`, as in ADR 0007,
+  so the 4.7 block stays a verbatim copy.
+- `workspaceId` is a string on the TS side, the same as `MemoryDraft.workspaceId`. The writer (#38) converts
+  it to the `INTEGER` column. No schema change. No Rust type has `GenieExchange`, so no Rust mirror changes.
+- The requirements should add the 3 fields to 4.7 `GenieExchange` (comment on #449).
