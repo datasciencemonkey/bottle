@@ -942,6 +942,8 @@ fn settings_call(
         permissions: None,
         consent: None,
         config: None,
+        capture: None,
+        capture_ticket: None,
         app_settings: settings,
     };
     route(components, command, args)
