@@ -32,8 +32,9 @@ const EPSILON = 1e-4;
  * must send one frame with the new owner (`null` when closed): the meter sets 0 only on such a
  * frame (UX-06b), so a source that just stops would leave the last level on screen.
  * The MOG window uses `viewMicLevels()` (`view-ipc.ts`), which reads the `mog.level` event.
- * TODO(#4): the brain feeds `sendMicLevel` from the CaptureService level stream
- * (`capture_subscribe` `onLevel`) and sends the `owner: null` frame when the mic closes.
+ * The brain feeds `sendMicLevel` from the CaptureService level stream (`capture_subscribe`
+ * `onLevel`) and sends the `owner: null` frame when the mic closes (`src/brain/level-stream.ts`,
+ * #23). TODO(#425): the host routes `capture_subscribe`.
  */
 export interface MicLevelSource {
   subscribe(onFrame: (frame: MicLevelFrame) => void): () => void;

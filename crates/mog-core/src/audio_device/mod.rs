@@ -44,13 +44,19 @@
 //!   the host through [`MicHost::set_preference`] before each build; [`choose_input`] is the
 //!   rule.
 //!
+//! - **Level stream and peak (CAP-16a, CAP-16b, CAP-20, #23).** [`level::LevelSink`] reads the
+//!   frames and sends the RMS level at 30 Hz or less while a capture records;
+//!   [`normalize::normalize_peak`] sets each segment's peak to -3 dBFS before STT (ADR 0067).
+//!
 //! Device errors are the content-free codes in [`codes`]. ADR 0038 records the design, and
 //! the #22 ADR the zero watch, the reopen and the preference.
 
 pub mod codes;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub mod cpal_backend;
+pub mod level;
 mod mic;
+pub mod normalize;
 pub mod sink;
 
 pub use mic::{FailureLink, MicConfig, MicDevice, MicFault};

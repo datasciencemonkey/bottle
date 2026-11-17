@@ -51,7 +51,7 @@ When the feature issue lands, its implementer removes the mark and finishes the 
 | AT-05 | CAP-66a, CAP-66b, CAP-68 | #55 |
 | AT-05 | CAP-70a, CAP-70b | #61 |
 | AT-05 | MOG-05a, MOG-05b (and the late cleanup result) | #60 |
-| AT-40 | CAP-20 | #23 |
+| AT-40 | CAP-20 (the hand-off of the normalised segment from R2 to R4; the normaliser is built, #23) | #46 |
 | AT-40 | CAP-33a, CAP-33b | #126 |
 | AT-40 | CAP-47a, CAP-47b, CAP-64a, CAP-64b | #52 |
 | AT-40 | CAP-54a, CAP-54b, CAP-56a, CAP-56b | #49 |
