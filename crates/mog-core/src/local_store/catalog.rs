@@ -161,7 +161,12 @@ const MOG_UPSERT: Stmt = Stmt {
     access: Access::Brain,
 };
 
-// ---- genie_exchange (#38) ----------------------------------------------------------------
+// ---- genie_exchange (#38, MEM-25a, MEM-26; ADR 0061) --------------------------------------
+//
+// The upsert keeps the answer parts once they are written: a later write for the same request
+// with no answer (a late `pending` event, a resume) never clears `final_answer_md`, the summary,
+// the key numbers or the deep link (MEM-26, U9). No statement sets `expires_at`: an exchange has
+// no TTL. Only Forget (one exchange, a user action) and Wipe (R14, Core) delete one.
 
 const EXCHANGE_UPSERT: Stmt = Stmt {
     id: "mem.exchange.upsert",
@@ -178,9 +183,14 @@ const EXCHANGE_UPSERT: Stmt = Stmt {
           ON CONFLICT (request_id) DO UPDATE SET status = excluded.status, \
           conversation_id = coalesce(excluded.conversation_id, genie_exchange.conversation_id), \
           response_id = coalesce(excluded.response_id, genie_exchange.response_id), \
-          answer_summary = excluded.answer_summary, key_numbers = excluded.key_numbers, \
-          final_answer_md = excluded.final_answer_md, deep_link = excluded.deep_link, \
-          completed_at = excluded.completed_at, row_hlc = excluded.row_hlc, \
+          answer_summary = coalesce(excluded.answer_summary, genie_exchange.answer_summary), \
+          key_numbers = CASE excluded.key_numbers WHEN '[]' THEN genie_exchange.key_numbers \
+          ELSE excluded.key_numbers END, \
+          final_answer_md = coalesce(excluded.final_answer_md, genie_exchange.final_answer_md), \
+          deep_link = coalesce(excluded.deep_link, genie_exchange.deep_link), \
+          session_id = coalesce(genie_exchange.session_id, excluded.session_id), \
+          completed_at = coalesce(excluded.completed_at, genie_exchange.completed_at), \
+          row_hlc = max(genie_exchange.row_hlc, excluded.row_hlc), \
           updated_at = CAST(strftime('%s','now') AS INTEGER) * 1000 \
           WHERE genie_exchange.mog_id = excluded.mog_id",
     params: &[
@@ -219,10 +229,34 @@ const EXCHANGE_GET: Stmt = Stmt {
           workspace_host AS workspaceHost, workspace_id AS workspaceId, space_id AS spaceId, \
           conversation_id AS conversationId, answer_summary AS answerSummary, \
           key_numbers AS keyNumbers, final_answer_md AS finalAnswerMd, deep_link AS deepLink, \
-          is_home_workspace AS homeWorkspace, asked_at AS askedAt, completed_at AS completedAt \
+          is_home_workspace AS homeWorkspace, asked_at AS askedAt, completed_at AS completedAt, \
+          session_id AS sessionId, split_group_id AS splitGroupId, \
+          question_user AS questionUser \
           FROM genie_exchange \
           WHERE mog_id = :mogId AND request_id = :requestId AND deleted_at IS NULL",
     params: &[MOG_ID, req("requestId", UUID)],
+    kind: Kind::Query,
+    access: Access::Brain,
+};
+
+/// The memory items that cite one exchange. `memory_item.source_exchange_id` is `SET NULL`, so
+/// Forget (#123) reads these before it deletes the exchange (MEM-32a).
+const EXCHANGE_DEPENDENTS: Stmt = Stmt {
+    id: "mem.exchange.dependents",
+    sql: "SELECT item_id AS itemId FROM memory_item \
+          WHERE mog_id = :mogId AND source_exchange_id = :exchangeId ORDER BY rid",
+    params: &[MOG_ID, req("exchangeId", UUID)],
+    kind: Kind::Query,
+    access: Access::Brain,
+};
+
+/// The exchanges of one session, for Forget by session (MEM-32a) and "Delete session" (SEC-14a).
+/// `genie_exchange.session_id` is `SET NULL`, so the caller reads these first.
+const EXCHANGE_BY_SESSION: Stmt = Stmt {
+    id: "mem.exchange.by_session",
+    sql: "SELECT exchange_id AS exchangeId, request_id AS requestId FROM genie_exchange \
+          WHERE mog_id = :mogId AND session_id = :sessionId ORDER BY asked_at, exchange_id",
+    params: &[MOG_ID, req("sessionId", UUID)],
     kind: Kind::Query,
     access: Access::Brain,
 };
@@ -340,7 +374,9 @@ const WIPE_ITEMS: Stmt = Stmt {
 
 const WIPE_EXCHANGES: Stmt = Stmt {
     id: "mem.wipe.exchanges_before",
-    sql: "DELETE FROM genie_exchange WHERE mog_id = :mogId AND created_at < :before",
+    // The age of an exchange is the time the user asked (`asked_at`, the T10 clock, indexed by
+    // `ge_mog_time`), not the local insert time (ADR 0061).
+    sql: "DELETE FROM genie_exchange WHERE mog_id = :mogId AND asked_at < :before",
     params: &[MOG_ID, req("before", MS)],
     kind: Kind::Write,
     access: Access::Core,
@@ -403,6 +439,8 @@ pub const STATEMENTS: &[Stmt] = &[
     MOG_UPSERT,
     EXCHANGE_UPSERT,
     EXCHANGE_GET,
+    EXCHANGE_DEPENDENTS,
+    EXCHANGE_BY_SESSION,
     ITEM_UPSERT,
     ITEM_GET,
     RECALL_FTS,

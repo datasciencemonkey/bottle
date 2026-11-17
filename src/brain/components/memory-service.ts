@@ -15,9 +15,63 @@ import type {
   MemoryDraft,
   MemoryService,
   MogId,
+  OperationState,
 } from '../../shared/interfaces';
+import type { JsonObject } from '../../shared/ipc';
 import { NotImplementedError } from '../errors';
+import { distilSummary } from './exchange-summary';
 import { IpcLocalMemoryStore, type LocalMemoryStore } from './memory-store';
+
+/**
+ * A `GenieExchange` with the optional fields that the local table has and the contract type
+ * does not have yet. TODO(#449): these fields move into `GenieExchange` (contract-change).
+ */
+export type ExchangeRecord = GenieExchange & {
+  /** The R10 session that asked (UUID). Forget by session and SEC-14a find the exchange by it. */
+  sessionId?: string;
+  /** The numeric workspace id as a decimal string (the `?o=` value). */
+  workspaceId?: string;
+  /** The Genie space id, when the backend has one. */
+  spaceId?: string;
+};
+
+export interface MemoryServiceOptions {
+  /** The clock in epoch ms. Tests pass a simulated clock. */
+  now?: () => number;
+  /** A new UUID. */
+  newId?: () => string;
+  /**
+   * The device id for `origin_device_id`. The default is one random id for each service.
+   * TODO(#102): the v1 SyncWorker needs an id that stays the same across starts.
+   */
+  deviceId?: () => string;
+}
+
+/** `OperationState` to the `genie_exchange.status` value, and whether it is terminal. */
+const STATUS: Record<OperationState, [string, boolean]> = {
+  NOT_SENT: ['pending', false],
+  SENDING: ['pending', false],
+  ACKNOWLEDGED: ['pending', false],
+  UNCERTAIN: ['uncertain', false],
+  COMPLETED: ['completed', true],
+  FAILED: ['failed', true],
+  CANCEL_REQUESTED: ['cancelled', true],
+  ABANDONED: ['abandoned', true],
+};
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** The most key numbers kept for one exchange (the catalog caps the JSON at 16 KiB). */
+const KEY_NUMBERS_MAX = 32;
+
+async function sha256Hex(text: string): Promise<string> {
+  const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(d), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** Drop `undefined` values, so the store gets only the params that have a value. */
+function defined(o: Record<string, unknown>): JsonObject {
+  return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as JsonObject;
+}
 
 type GateQuery = Parameters<MemoryService['gate']>[0];
 type GateResult = Awaited<ReturnType<MemoryService['gate']>>;
@@ -26,8 +80,27 @@ type ForgetResult = Awaited<ReturnType<MemoryService['forget']>>;
 const C = 'MemoryService';
 
 export class LocalMemoryService implements MemoryService {
+  readonly #now: () => number;
+  readonly #newId: () => string;
+  readonly #deviceId: () => string;
+  #lastHlc = 0;
+
   /** The local store; tests pass a double (MEM-39a). */
-  constructor(readonly store: LocalMemoryStore = new IpcLocalMemoryStore()) {}
+  constructor(
+    readonly store: LocalMemoryStore = new IpcLocalMemoryStore(),
+    o: MemoryServiceOptions = {},
+  ) {
+    this.#now = o.now ?? (() => Date.now());
+    this.#newId = o.newId ?? (() => crypto.randomUUID());
+    const device = crypto.randomUUID();
+    this.#deviceId = o.deviceId ?? (() => device);
+  }
+
+  /** A row HLC that never goes back: the clock, or one more than the last value. */
+  #hlc(now: number): number {
+    this.#lastHlc = Math.max(now, this.#lastHlc + 1);
+    return this.#lastHlc;
+  }
 
   async gate(_q: GateQuery, _budgetMs?: 300): Promise<GateResult> {
     throw new NotImplementedError(C, 'gate', 200); // TODO(#200)
@@ -42,8 +115,57 @@ export class LocalMemoryService implements MemoryService {
   async write(_drafts: MemoryDraft[]): Promise<void> {
     throw new NotImplementedError(C, 'write', 114); // TODO(#114)
   }
-  async recordExchange(_x: GenieExchange): Promise<void> {
-    throw new NotImplementedError(C, 'recordExchange', 38); // TODO(#38)
+  /**
+   * Store one Genie exchange in R10 with `mem.exchange.upsert` (#38, MEM-25a, MEM-26, D60, U8).
+   * - Home workspace: the distilled summary, the key numbers verbatim, the pointer (deep link and
+   *   conversation ids) and the full `final_answer_md`.
+   * - Other workspaces: the pointer and the full answer only (D60 and the table CHECK).
+   * - The sent question is stored only as its SHA-256; it can hold a context preamble.
+   * - Nothing sets an expiry, and T10 deletes no exchange: the answer stays until Forget or
+   *   Settings → Wipe (U9). The upsert keeps a stored answer when a later event has none.
+   * The caller registers the MOG row first (`mem.mog.upsert`); the table links to it.
+   */
+  async recordExchange(x: ExchangeRecord): Promise<void> {
+    if (!UUID_RE.test(x.mogId) || !UUID_RE.test(x.requestId)) {
+      throw new Error('recordExchange needs a UUID mogId and requestId');
+    }
+    const now = this.#now();
+    const [status, terminal] = STATUS[x.status];
+    const home = x.homeWorkspace;
+    const workspaceId =
+      x.workspaceId !== undefined && /^\d{1,18}$/.test(x.workspaceId)
+        ? Number(x.workspaceId)
+        : undefined;
+    await this.store.exec(
+      'mem.exchange.upsert',
+      defined({
+        exchangeId: this.#newId(),
+        requestId: x.requestId,
+        mogId: x.mogId,
+        sessionId: x.sessionId,
+        backendKind: x.ref.backend,
+        profileName: x.ref.profile,
+        workspaceHost: x.ref.host,
+        workspaceId,
+        homeWorkspace: home,
+        spaceId: x.spaceId,
+        conversationId: x.ref.conversationId || undefined,
+        responseId: x.ref.responseId,
+        questionUser: home ? x.questionUser.slice(0, 1000) : undefined,
+        questionSentSha256: await sha256Hex(x.questionSent),
+        status,
+        answerSummary: home ? (distilSummary(x.answerMd) ?? undefined) : undefined,
+        keyNumbers:
+          home && x.keyNumbers.length ? x.keyNumbers.slice(0, KEY_NUMBERS_MAX) : undefined,
+        finalAnswerMd: x.answerMd,
+        deepLink: x.deepLink || undefined,
+        splitGroupId: x.splitGroupId,
+        askedAt: now,
+        completedAt: terminal ? now : undefined,
+        rowHlc: this.#hlc(now),
+        deviceId: this.#deviceId(),
+      }),
+    );
   }
   async forget(_scope: {
     sessionId?: string;
@@ -62,6 +184,9 @@ export class LocalMemoryService implements MemoryService {
   }
 }
 
-export function createMemoryService(store?: LocalMemoryStore): MemoryService {
-  return new LocalMemoryService(store);
+export function createMemoryService(
+  store?: LocalMemoryStore,
+  o?: MemoryServiceOptions,
+): MemoryService {
+  return new LocalMemoryService(store, o);
 }

@@ -36,7 +36,6 @@ const MOG = '00000000-0000-4000-8000-000000000001';
 const tags: Tags = { app: 'bottle', mog: MOG, op: 'genie' };
 const binding = { kind: 'genie_one_mcp', profile: 'p' } as const;
 const ask: AskRequest = { opId: 'op-1', mogId: MOG, binding, question: 'q', tags };
-const ref = { backend: 'genie_one_mcp', profile: 'p', host: 'h', conversationId: 'c' } as const;
 const seg: SegmentRef = {
   segmentId: 's',
   mogId: MOG,
@@ -238,21 +237,7 @@ describe('brain component stubs', () => {
     await expectStub(() => t.gate(q), 200);
     await expectStub(() => t.assembleContext(MOG, { workspaceId: 'w' }, 'q'), 92);
     await expectStub(() => t.write([]), 114);
-    await expectStub(
-      () =>
-        t.recordExchange({
-          requestId: 'r',
-          mogId: MOG,
-          ref,
-          questionUser: 'q',
-          questionSent: 'q',
-          status: 'COMPLETED',
-          keyNumbers: [],
-          deepLink: '',
-          homeWorkspace: true,
-        }),
-      38,
-    );
+    // recordExchange is implemented by #38 (memory-exchange.test.ts).
     await expectStub(() => t.forget({ mogId: MOG }), 123);
     expect(t.mode()).toBe('local');
     expect(t.syncStatus()).toEqual({ pending: 0 });

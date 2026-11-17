@@ -11,6 +11,9 @@ The copy comes from one file: `src/views/hub/disclosures.ts`. If you change the 
 - Nothing goes to Genie until you send it: a question after its preview, or a chip you click.
 - Your sign-in tokens stay in the Bottle core. They are never written to disk or logs, and the agent never sees them.
 - Bottle stores your transcripts, answers and memory in an encrypted file on this computer.
+- For each Genie answer, Bottle keeps a short summary, the key numbers, a link to the answer and the full answer in that file.
+- For an answer from a workspace that is not your home workspace, Bottle keeps only the link and the full answer.
+- Bottle does not delete answers by age. They stay until you use Forget or Settings → Wipe (older than 30 days, older than 90 days, or everything).
 - Text for cleanup, routing, the memory writer and embeddings goes to your home workspace, as the next sections say.
 - Telemetry is off unless your admin turns it on.
 - Databricks logs each model call in system.ai_gateway.usage: who called, from where and how many tokens, but no content.
