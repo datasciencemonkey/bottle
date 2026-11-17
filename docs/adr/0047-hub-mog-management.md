@@ -11,7 +11,7 @@ MB-01 requires the hub to create, edit, duplicate, start, stop and delete MOGs w
 
 ## Decisions
 
-1. **The brain owns the logic (ARC-2).** T1 MogManager (`src/brain/components/mog-manager.ts`) runs every action. It uses two seams over `call`: `MogConfigClient` (`config_list`, `config_read`, `config_write`, `config_delete`) and `MogWindowClient` (`window_mog_open`, `window_mog_close`). The host does not route `config_*` yet (`TODO(#379)`). PR #376 (#285, ADR 0040) routes `window_*` to R11, and R11 refusals cross as `{ "error": "<code>" }`, for example `mog_cap_reached`. Tests use the doubles in `src/test-support/mog-doubles.ts`.
+1. **The brain owns the logic (ARC-2).** T1 MogManager (`src/brain/components/mog-manager.ts`) runs every action. It uses two seams over `call`: `MogConfigClient` (`config_list`, `config_read`, `config_write`, `config_delete`) and `MogWindowClient` (`window_mog_open`, `window_mog_close`). The host routes `config_*` to `MogConfigComponent` since #379 (ADR 0040), and each config code crosses as `{ "error": "<code>" }`. PR #376 (#285, ADR 0040) routes `window_*` to R11, and R11 refusals cross as `{ "error": "<code>" }`, for example `mog_cap_reached`. Tests use the doubles in `src/test-support/mog-doubles.ts`.
 2. **One action at a time.** MogManager runs its actions on one `BrainActor` queue. So two starts at the same time cannot pass the cap.
 3. **Running cap.** The brain refuses a start before it calls the host when the running count is at the cap. The text is "<cap> MOGs are running. Stop one to start <name>." For a cap of 1 the text is "1 MOG is running. Stop it to start <name>." The cap is `app.maxRunningMogs`, 1 to 8. Any other value gives the default 8. The Rust host cap stays 8 (`windows::MAX_ACTIVE_MOGS`), so the brain cap cannot pass it. A cap above 8 needs a host change first. A `mog_cap_reached` refusal from the host gives the same text with 8. No settings store holds `app.maxRunningMogs` yet: `TODO(#77)`.
 4. **Run state.** `MogRunState` is `stopped` or `running`. A MOG is `running` while its `mog-<id>` window is open. The state is in brain memory only, so after a restart no MOG runs. A window that closes outside the brain, or a brain reload, can make the state drift from the R11 ledger; the host cap still holds (`TODO(#419)`). `mog.autoStart` is not applied yet. #98 (MoodMapper lifecycle) and #50 (badges, ADR 0029) read `runState` and `onChange`.
@@ -25,6 +25,6 @@ MB-01 requires the hub to create, edit, duplicate, start, stop and delete MOGs w
 
 ## Consequences
 
-- When #379 and #285 land, the actions work in the app with no change to MogManager.
+- With #379 and #285 on main, the actions work in the app with no change to MogManager.
 - MB-13 (v1 import and export) can add `import` and `export` to MogManager.
 - #43 (wizard) can call `create` for the first MOG.

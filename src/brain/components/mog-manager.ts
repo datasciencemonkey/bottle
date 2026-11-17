@@ -95,7 +95,7 @@ export function capText(cap: number, name: string): string {
     : `${cap} MOGs are running. Stop one to start ${name}.`;
 }
 
-/** The `config_*` commands (#25). TODO(#379): the host routes them to `MogConfigComponent`. */
+/** The `config_*` commands (#25). The host routes them to `MogConfigComponent` (#379). */
 export interface MogConfigClient {
   list(): Promise<{ items: { id: string; name: string }[]; unreadable: string[] }>;
   read(id: string): Promise<MogConfig>;
@@ -163,9 +163,8 @@ export function ipcMogWindowClient(): MogWindowClient {
 
 /**
  * The code of a gateway or component refusal (`{ error }` or `{ reason }`), else ''.
- * TODO(#379): `config_not_found`, `secret_named_key`, `token_like_value` and
- * `config_limit_reached` must cross the gateway as `{ error: <code> }`. If #379 maps them to one
- * code, these refusals show the generic save text.
+ * Since #379 every config code (`config_not_found`, `secret_named_key`, `token_like_value`,
+ * `config_limit_reached` and the G-03 backend codes) crosses the gateway as `{ error: <code> }`.
  */
 function codeOf(e: unknown): string {
   if (!isObj(e)) return '';

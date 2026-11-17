@@ -77,8 +77,10 @@ impl<G: IpcGateway> IpcGateway for ScrubbingGateway<G> {
 
 // ---------- the hardened gateway (#36) ----------
 
-/// Every code that [`CheckedGateway`] returns in [`CoreError::IpcRefused`]: the serde tags of
-/// the [`IpcError`] variants.
+/// Every code that [`CheckedGateway`] can send to a window: the serde tags of the [`IpcError`]
+/// variants. The gateway itself returns some of them in [`CoreError::IpcRefused`]. The config
+/// codes come from `MogConfigComponent` as `CoreError::Unavailable { reason }`; their variants
+/// exist so that this list equals the serde tags.
 pub const ERROR_CODES: &[&str] = &[
     "unknown_command",
     "window_not_allowed",
@@ -94,6 +96,18 @@ pub const ERROR_CODES: &[&str] = &[
     "window_closing",
     "config_storage_failed",
     "consent_storage_failed",
+    "invalid_config_id",
+    "config_too_large",
+    "unsupported_schema_version",
+    "invalid_config",
+    "config_not_found",
+    "config_limit_reached",
+    "secret_named_key",
+    "token_like_value",
+    "genie_beta_mcp_rejected",
+    "genie_space_mcp_rejected",
+    "genie_one_sse_rejected",
+    "mcp_url_not_canonical",
 ];
 
 /// The fixed, content-free code of an [`IpcError`] (its serde tag). It never holds the
@@ -115,6 +129,18 @@ pub fn ipc_error_code(e: &IpcError) -> &'static str {
         IpcError::WindowClosing { .. } => "window_closing",
         IpcError::ConfigStorageFailed { .. } => "config_storage_failed",
         IpcError::ConsentStorageFailed { .. } => "consent_storage_failed",
+        IpcError::InvalidConfigId { .. } => "invalid_config_id",
+        IpcError::ConfigTooLarge { .. } => "config_too_large",
+        IpcError::UnsupportedSchemaVersion { .. } => "unsupported_schema_version",
+        IpcError::InvalidConfig { .. } => "invalid_config",
+        IpcError::ConfigNotFound { .. } => "config_not_found",
+        IpcError::ConfigLimitReached { .. } => "config_limit_reached",
+        IpcError::SecretNamedKey { .. } => "secret_named_key",
+        IpcError::TokenLikeValue { .. } => "token_like_value",
+        IpcError::GenieBetaMcpRejected { .. } => "genie_beta_mcp_rejected",
+        IpcError::GenieSpaceMcpRejected { .. } => "genie_space_mcp_rejected",
+        IpcError::GenieOneSseRejected { .. } => "genie_one_sse_rejected",
+        IpcError::McpUrlNotCanonical { .. } => "mcp_url_not_canonical",
     }
 }
 

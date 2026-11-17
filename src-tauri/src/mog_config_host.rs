@@ -4,10 +4,9 @@
 //! path API in Rust, so no window gets the `fs` plugin (ARC-4). `mog_core::mog_config` does the
 //! checks and the atomic writes.
 //!
-//! The Tauri invoke handler (`ipc.rs`, contract) still calls `mog_core::ipc::handle`, which ends
-//! `config_*` in `not_implemented`. Contract change #333 routes the host through
-//! `mog_core::ipc_gateway::hardened_gateway_with`; then `config_*` go to
-//! `mog_core::mog_config::MogConfigComponent` over this store: TODO(#333).
+//! The Tauri host routes `config_*` through `mog_core::ipc_gateway::hardened_gateway_with`
+//! (#333) to `mog_core::mog_config::MogConfigComponent` over this store (`ipc::route_from`,
+//! #379). A missing store answers `config_storage_failed`.
 
 use mog_core::mog_config::MogConfigStore;
 use std::path::{Path, PathBuf};

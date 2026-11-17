@@ -187,6 +187,9 @@ pub struct HostComponents<'a> {
     /// The `consent_*` component (#430): `consent_ipc::ConsentComponent` over the managed
     /// consent records. `None` when no records are managed: `consent_storage_failed`.
     pub consent: Option<&'a dyn GatewayComponents>,
+    /// The `config_*` component (#379): `mog_config::MogConfigComponent` over the managed
+    /// store. `None` when the store is missing: `config_storage_failed`.
+    pub config: Option<&'a dyn GatewayComponents>,
 }
 
 fn refused(e: IpcError) -> CoreError {
@@ -297,8 +300,14 @@ impl GatewayComponents for HostComponents<'_> {
                     command: command.to_owned(),
                 })),
             },
+            // #379: the MOG config store (#25). Its codes cross as themselves (ERROR_CODES).
+            "config_list" | "config_read" | "config_write" | "config_delete" => match self.config {
+                Some(config) => config.call(command, args),
+                None => Err(refused(IpcError::ConfigStorageFailed {
+                    command: command.to_owned(),
+                })),
+            },
             // Each feature issue wires its R1-R17 component here.
-            // TODO(#379): `config_*` goes to the config component of #372 (`config_storage_failed`).
             // TODO(#425): `capture_resume` goes to R2 `resume(lease_id)` (ADR 0039).
             _ => Err(refused(IpcError::NotImplemented {
                 command: command.to_owned(),
@@ -381,6 +390,10 @@ fn route_from<R: Runtime>(
                 std::sync::Arc::new(mog_core::consent_ipc::NoSignedInUser),
             )
         });
+    // `try_state`: the app still starts when the OS gives no config dir (#372 review).
+    let config = webview
+        .try_state::<std::sync::Arc<mog_core::mog_config::MogConfigStore>>()
+        .map(|store| mog_core::mog_config::MogConfigComponent::new(store.inner().clone()));
     let components = HostComponents {
         from: label,
         brain: &brain,
@@ -388,6 +401,7 @@ fn route_from<R: Runtime>(
         hotkeys: hotkeys.as_ref().map(|h| h.inner() as &dyn HotkeysRoute),
         permissions: runtime.as_ref().map(|r| r.inner() as &dyn PermissionRoute),
         consent: consent.as_ref().map(|c| c as &dyn GatewayComponents),
+        config: config.as_ref().map(|c| c as &dyn GatewayComponents),
     };
     route(components, command, args)
 }
