@@ -158,7 +158,10 @@ describe('safe markdown', () => {
     // Drop escapes, then character classes, so only real quantifiers are left.
     const bare = INLINE.source.replace(/\\./g, '').replace(/\[[^\]]*\]/g, '');
     expect(bare).not.toMatch(/[*+]|\{\d*,\}/);
-    expect(bare.match(/\{\d+,\d+\}/g)?.length).toBeGreaterThanOrEqual(5);
+    const bounds = [...bare.matchAll(/\{\d+,(\d+)\}/g)].map((m) => Number(m[1]));
+    expect(bounds.length).toBeGreaterThanOrEqual(5);
+    // A bound above the input cap never takes effect, so keep each one small (2048 today).
+    for (const max of bounds) expect(max).toBeLessThanOrEqual(2048);
   });
 
   it('[SEC-25a] [AT-17] hostile inputs up to 200 KB render in near-linear time', () => {
