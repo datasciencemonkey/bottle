@@ -30,6 +30,19 @@ describe('Table CAP-CHECK cleanup checks', () => {
     expect(failedChecks('revenue grew 7%', 'Revenue grew 7.0%.')).toContain('number');
   });
 
+  it('[CAP-68] a spoken number word that changes or becomes digits fails the number check', () => {
+    const input = 'revenue was two point five million dollars';
+    expect(failedChecks(input, 'Revenue was two point six million dollars.')).toContain('number');
+    expect(failedChecks(input, 'Revenue was 2.5 million dollars.')).toContain('number');
+    expect(failedChecks(input, 'Revenue was two point five million dollars.')).toEqual([]);
+    expect(
+      failedChecks(
+        'call me at five five five one two one two',
+        'Call me at five five one two one two.',
+      ),
+    ).toContain('number');
+  });
+
   it('[CAP-68] an entity that changes, appears or goes fails the entity check', () => {
     expect(
       failedChecks('ask Priya to review the forecast', 'Ask Maria to review the forecast.'),
@@ -129,6 +142,19 @@ describe('Table CAP-CHECK cleanup checks', () => {
       failedChecks('the pipeline finished last night', 'The pipeline never finished last night.'),
     ).toContain('negation');
     expect(failedChecks("we don't have the numbers", "We don't have the numbers.")).toEqual([]);
+  });
+
+  it('[CAP-68] a contraction that expands or contracts keeps the same negation', () => {
+    expect(
+      failedChecks("don't drop the table orders please", 'Do not drop the table orders, please.'),
+    ).toEqual([]);
+    expect(failedChecks('we can not ship it today', "We can't ship it today.")).toEqual([]);
+    expect(failedChecks("we won't ship it today", 'We will not ship it today.')).toEqual([]);
+    expect(failedChecks('we cannot ship it today', 'We can not ship it today.')).toEqual([]);
+    // A real loss still fails.
+    expect(
+      failedChecks("don't drop the table orders please", 'Do drop the table orders, please.'),
+    ).toContain('negation');
   });
 
   it('[CAP-68] an empty reply fails', () => {

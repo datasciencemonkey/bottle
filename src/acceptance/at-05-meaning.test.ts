@@ -32,6 +32,10 @@ function transcriptOf(payload: { args: ModelInvokeArgs }): string {
   return inner.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 }
 
+/** A spoken number word: the corpus items with one are number cases too. */
+const NUMBER_WORD =
+  /\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|billion)\b/i;
+
 const cap = (t: string) => `${t.charAt(0).toUpperCase()}${t.slice(1)}`;
 
 /**
@@ -41,6 +45,12 @@ const cap = (t: string) => `${t.charAt(0).toUpperCase()}${t.slice(1)}`;
 const MUTATIONS: ((t: string) => string)[] = [
   function polish(t) {
     return `${cap(t)}.`;
+  },
+  function changeNumberWord(t) {
+    return `${cap(t.replace(/\b(two|five|three|nine)\b/, (w) => ({ two: 'three', five: 'six', three: 'four', nine: 'eight' })[w] ?? w))}.`;
+  },
+  function digitizeSpokenNumber(t) {
+    return `${cap(t.replace(/\b(\w+) point (\w+)\b/, '2.5'))}.`;
   },
   function bumpNumber(t) {
     return `${cap(t.replace(/\d/, (d) => String((Number(d) + 1) % 10)))}.`;
@@ -75,10 +85,12 @@ describe('AT-05 preserve transcript meaning', () => {
   beforeEach(() => core.reset());
 
   it('[AT-05] [CAP-66a] [CAP-68] cleanup keeps numbers and entities exact or keeps the raw text', async () => {
-    // Every corpus item meets every model reply of MUTATIONS through the real IPC path.
+    // Every corpus item meets every model reply of MUTATIONS through the real IPC path. The
+    // failures are collected first, so each line below can fail on its own.
     const cleanup = createCleanupProvider();
-    let numberCases = 0;
-    let numberKept = 0;
+    const numberCases: string[] = [];
+    const numberLost: string[] = [];
+    const otherLost: string[] = [];
     let cleanedCount = 0;
     for (const mutate of MUTATIONS) {
       core.invoke.mockImplementation(async (cmd: string, payload?: unknown) =>
@@ -88,18 +100,24 @@ describe('AT-05 preserve transcript meaning', () => {
       );
       for (const x of MEANING_CORPUS) {
         const out = await cleanup.clean(x.raw, tags, { profile: 'caller-profile' });
-        const failures = meaningFailures(x, out);
-        expect(failures, `${x.id} / ${mutate.name}`).toEqual([]);
+        const failures = meaningFailures(x, out).map((f) => `${f} (${mutate.name})`);
         if (!out.usedRaw) cleanedCount++;
-        if (/\d/.test(x.raw)) {
-          numberCases++;
-          if (failures.length === 0) numberKept++;
+        // A number case: the raw text holds a digit or a spoken number word.
+        if (/\d/.test(x.raw) || NUMBER_WORD.test(x.raw)) {
+          numberCases.push(x.id);
+          numberLost.push(...failures);
+        } else {
+          otherLost.push(...failures);
         }
       }
     }
     // The corpus test keeps the meaning in 100 % of number cases (CAP-68).
-    expect(numberCases).toBeGreaterThan(0);
-    expect(numberKept / numberCases).toBe(1);
+    expect(numberCases.length).toBeGreaterThanOrEqual(MUTATIONS.length * 20);
+    expect(numberLost).toEqual([]);
+    const kept = numberCases.length - new Set(numberLost.map((f) => f.split(':')[0])).size;
+    expect(kept / numberCases.length).toBe(1);
+    // Names, table names and negations stay exact too (AT-05).
+    expect(otherLost).toEqual([]);
     // The checks are not so strict that a good reply is never used.
     expect(cleanedCount).toBeGreaterThanOrEqual(MEANING_CORPUS.length);
   });

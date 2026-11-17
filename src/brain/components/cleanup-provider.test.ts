@@ -239,6 +239,22 @@ describe('T5 CleanupProvider', () => {
     }
   });
 
+  it('[ARC-F3] [CAP-67b] a 429 that comes as a rejected call gives the pre-pass text marked "not cleaned"', async () => {
+    for (const rejection of [
+      { error: 'rate_limited' },
+      { status: 429 },
+      { error: { code: 429 } },
+    ]) {
+      const m = modelDouble(() => Promise.reject(rejection));
+      expect(
+        await createCleanupProvider({ invoke: m.invoke }).clean(LONG_RAW, tags, {
+          profile: PROFILE,
+        }),
+        JSON.stringify(rejection),
+      ).toEqual({ text: LONG_PREPASS, usedRaw: false, notCleaned: true, outcome: 'rate_limited' });
+    }
+  });
+
   it('[CAP-67b] a failed or empty model call gives the pre-pass text marked "not cleaned"', async () => {
     const failing = [
       () => Promise.reject({ error: 'host_failed' }),

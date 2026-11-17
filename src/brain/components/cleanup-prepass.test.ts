@@ -72,6 +72,52 @@ describe('cleanup pre-pass (glossary "pre-pass": fillers, dictionary, numerals)'
     expect(spokenNumeralsToDigits('a hundred reasons')).toBe('a hundred reasons');
   });
 
+  it('[CAP-66a] [CAP-68] never converts a number next to "point", on either side', () => {
+    for (const t of [
+      'revenue was two point five million dollars',
+      'one point two thousand rows',
+      'we hit nine point five thousand users',
+      'version two point eleven',
+      'twenty point five percent',
+    ]) {
+      expect(spokenNumeralsToDigits(t), t).toBe(t);
+    }
+  });
+
+  it('[CAP-66a] [CAP-68] never converts a number in a range or a list', () => {
+    for (const t of [
+      'we need three to four hundred servers',
+      'three hundred to four hundred servers',
+      'between twenty and thirty rows',
+      'twenty or thirty more',
+      'from 5 to twenty users',
+      'twenty through forty',
+    ]) {
+      expect(spokenNumeralsToDigits(t), t).toBe(t);
+    }
+  });
+
+  it('[CAP-66a] [CAP-68] never collapses repeated number words', () => {
+    expect(collapseStutters('call me at five five five one two one two')).toBe(
+      'call me at five five five one two one two',
+    );
+    expect(prepass('call me at five five five one two one two')).toBe(
+      'call me at five five five one two one two',
+    );
+  });
+
+  it('[CAP-66a] [CAP-68] a pre-pass that would change a number keeps the raw text', () => {
+    // A dictionary entry that writes a number is a number change: the raw text stays.
+    const dict = [{ from: 'q three', to: 'Q3' }];
+    expect(prepass('um we beat the q three targets', { dictionary: dict })).toBe(
+      'um we beat the q three targets',
+    );
+    // A dictionary entry with no number still applies.
+    expect(
+      prepass('um open data bricks', { dictionary: [{ from: 'data bricks', to: 'Databricks' }] }),
+    ).toBe('open Databricks');
+  });
+
   it('[CAP-66a] runs fillers, dictionary and numerals, and is deterministic and idempotent', () => {
     const dict = [{ from: 'data bricks', to: 'Databricks' }];
     const raw = 'um so so so we moved twenty five tables to uh data bricks';
