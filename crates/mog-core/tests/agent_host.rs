@@ -919,7 +919,12 @@ fn rtr_25_at_42_only_the_agent_host_child_gets_the_bottle_mcp_secret() {
 
     // Stop closes the session's bottle-mcp; the other session keeps its own.
     r.host.stop_session("a").unwrap();
-    assert_eq!(mcp_tools_list(&url_a, &auth_a).0, 0, "stopped: no answer");
+    // Nothing answers (or, if another process took the free port, not with a 200).
+    assert_ne!(
+        mcp_tools_list(&url_a, &auth_a).0,
+        200,
+        "stopped: the secret opens nothing"
+    );
     assert_eq!(mcp_tools_list(&url_b, &auth_b).0, 200);
     let _ = (a, b);
 }

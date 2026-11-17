@@ -447,17 +447,13 @@ fn rtr_25_stop_closes_the_listener() {
         addr.port(),
         body.len()
     );
-    let answered = TcpStream::connect(addr)
-        .ok()
-        .map(|mut s| {
-            s.set_read_timeout(Some(BOUND)).unwrap();
-            let _ = s.write_all(req.as_bytes());
-            let mut out = Vec::new();
-            let _ = s.read_to_end(&mut out);
-            !out.is_empty()
-        })
-        .unwrap_or(false);
-    assert!(!answered, "a stopped server answers nothing");
+    // Nothing answers, or (if another process took the free port) not with a tool list.
+    let (status, v) = match TcpStream::connect(addr) {
+        Err(_) => (0, Value::Null),
+        Ok(_) => raw(addr, req.as_bytes()),
+    };
+    assert_ne!(status, 200, "a stopped server serves nothing: {v}");
+    assert!(v["result"]["tools"].is_null(), "{v}");
 }
 
 // ---------- RTR-25: the local tools through the R10 seam ----------
