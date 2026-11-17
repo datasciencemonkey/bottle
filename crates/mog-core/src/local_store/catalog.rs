@@ -451,6 +451,8 @@ const OUTBOX_DONE: Stmt = Stmt {
 /// if the item is in this MOG (MEM-01), has no embedding yet, and has no embed job waiting: so a
 /// second mention adds no duplicate (SP-21). The job is a pointer (`ref_id` = the item id) and
 /// holds no text. Rust only: the brain adds an embed job only with its item write.
+/// TODO(#198): when the text of an embedded item changes, #198 clears its embedding and its
+/// `vec0` row, so this step queues a new job. Until then the old vector stays.
 const OUTBOX_ENQUEUE_ITEM_EMBED: Stmt = Stmt {
     id: "mem.outbox.enqueue_item_embed",
     sql: "INSERT INTO outbox (mog_id, kind, op, ref_id, created_at, next_attempt_at) \

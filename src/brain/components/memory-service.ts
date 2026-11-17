@@ -270,6 +270,13 @@ export class LocalMemoryService implements MemoryService {
   }
 }
 
+/**
+ * T10 for `startBrain`. It has no embedding queue yet, so item writes queue their jobs in R10 and
+ * nothing drains them.
+ * TODO(#198): `startBrain` builds one `EmbeddingQueue` with the real embedder, a `NetworkStatus`
+ * on the typed `net.status` payload (#466) and the MOG ids of T1, passes it here as
+ * `embeddingQueue`, and calls `start()`.
+ */
 export function createMemoryService(
   store?: LocalMemoryStore,
   o?: MemoryServiceOptions,

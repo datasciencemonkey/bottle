@@ -59,7 +59,13 @@ type yet.
   caller got no answer, so it writes again (AT-18 test, with a child process that exits inside
   the transaction).
 - If an item's text changes after it has an embedding, `mem.item.write` adds no new job. #198
-  owns the embedding columns and must clear the embedding when the text changes.
+  owns the embedding columns and must clear the embedding when the text changes. The code marks this
+  `TODO(#198)` at `mem.outbox.enqueue_item_embed`.
+- `startBrain` does not create the queue yet, so queued jobs wait in R10 and nothing drains
+  them in the app. #198 wires it: one `EmbeddingQueue` with the real embedder, a
+  `NetworkStatus` on the #466 payload and the MOG ids of T1, given to T10 and started
+  (`TODO(#198)` at `createMemoryService`).
+- `syncStatus().pending` counts only the v1 sync. It stays 0 while embed jobs wait.
 - The `net.status` payload type is contract change #466. When it lands, the brain wires
   `bus.on('net:status', ...)` to a `NetworkStatus`.
 - `mem_local_exec` still has `TODO(#426)`: the app host does not route it yet.
