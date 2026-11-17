@@ -798,6 +798,9 @@ fn arc_7_rule_9_close_ends_open_connections() {
         );
         std::thread::yield_now();
     }
+    // #405: set the timeout BEFORE close. After close the session may reset the
+    // connection, and then macOS setsockopt returns EINVAL (os error 22) on this socket.
+    c.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
     let t = std::time::Instant::now();
     s.close();
     assert!(
@@ -805,7 +808,6 @@ fn arc_7_rule_9_close_ends_open_connections() {
         "close waited {:?}",
         t.elapsed()
     );
-    c.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
     let mut buf = [0u8; 64];
     assert!(matches!(c.read(&mut buf), Ok(0) | Err(_)));
     assert_eq!(handler.0.load(Ordering::SeqCst), 0);
