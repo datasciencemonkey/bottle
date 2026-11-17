@@ -201,6 +201,8 @@ fn cap_01b_state_events_carry_only_capture_state_fields() {
         "startedAt",
         "directedTo",
         "othersTrack",
+        // #453 (CAP-17b): a fixed code, checked below.
+        "mic",
     ];
     let states = r.events.states();
     assert!(!states.is_empty());
@@ -209,6 +211,13 @@ fn cap_01b_state_events_carry_only_capture_state_fields() {
         for (key, value) in json.as_object().unwrap() {
             assert!(allowed.contains(&key.as_str()), "unexpected field {key}");
             assert!(!value.is_array(), "no sample arrays in {key}");
+            if key == "mic" {
+                let code = value.as_str().expect("mic is a code");
+                assert!(
+                    ["ok", "zero_buffers", "permission_denied", "no_device"].contains(&code),
+                    "mic code {code}"
+                );
+            }
         }
     }
 }

@@ -16,8 +16,7 @@ use crate::ipc::AppSettingReadArgs;
 use crate::ipc_gateway::GatewayComponents;
 use crate::types::{AppSetting, AppSettingKey};
 
-/// Where CAP-22 goes: the mic device that picks the input (`MicDevice::set_prefer_built_in`,
-/// #22).
+/// Where CAP-22 goes: the mic device that picks the input. `MicDevice::preference` gives one.
 pub trait MicPreference: Send + Sync {
     /// `true`: when a Bluetooth headset connects, record from the built-in mic.
     fn set_prefer_built_in(&self, on: bool);

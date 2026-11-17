@@ -165,8 +165,9 @@ export interface GenieExchange {
  */
 export type MicHealth = 'ok' | 'zero_buffers' | 'permission_denied' | 'no_device';
 /**
- * CAP-17b (#453): declaration merging adds the mic health to the 4.7 `CaptureState`. It resets
- * to `ok` at the next granted lease. Absent in payloads from before #453.
+ * CAP-17b (#453): declaration merging adds the mic health to the 4.7 `CaptureState`. The core
+ * sets `ok` at each granted lease and a fault code on a mic fault or a refused open. Absent
+ * before the first reading and in payloads from before #453.
  */
 export interface CaptureState {
   mic?: MicHealth;

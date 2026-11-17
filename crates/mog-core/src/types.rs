@@ -278,8 +278,9 @@ pub struct CaptureState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub directed_to: Option<MogId>,
     pub others_track: OthersTrack,
-    /// CAP-17b (#453): the mic health for the fix-it card. It resets to `ok` at the next
-    /// granted lease. Absent in payloads from before #453 and when the core has no reading.
+    /// CAP-17b (#453): the mic health for the fix-it card. The core sets `ok` at each granted
+    /// lease, `zero_buffers` or `no_device` on a mic fault, and the code of a refused mic
+    /// open. Absent before the first reading and in payloads from before #453.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mic: Option<MicHealth>,
 }

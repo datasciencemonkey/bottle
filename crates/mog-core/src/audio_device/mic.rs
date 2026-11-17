@@ -78,7 +78,7 @@ impl FailureLink {
             if let Some(core) = weak.upgrade() {
                 match fault {
                     MicFault::Lost => core.device_failed(source),
-                    // TODO(#453): `capture.state` carries the mic fault to the fix-it card.
+                    // The core puts `zero_buffers` in `capture.state` for the fix-it card (#453).
                     MicFault::ZeroBuffers => core.mic_silent(),
                 }
             }
@@ -156,6 +156,16 @@ fn lock<T: ?Sized>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 /// The mic backend. See the [module docs](super).
+/// The CAP-22 preference of one [`MicDevice`] (see [`MicDevice::preference`]).
+#[derive(Debug, Clone)]
+pub struct MicPreferenceHandle(Arc<AtomicBool>);
+
+impl crate::app_settings::MicPreference for MicPreferenceHandle {
+    fn set_prefer_built_in(&self, on: bool) {
+        self.0.store(on, Ordering::SeqCst);
+    }
+}
+
 pub struct MicDevice {
     tx: Sender<Msg>,
     control: Arc<Mutex<Control>>,
@@ -244,10 +254,17 @@ impl MicDevice {
     }
 
     /// "Prefer the built-in mic when a Bluetooth headset connects" (CAP-22). It applies at the
-    /// next stream build; it asks the OS for nothing (CAP-17a). TODO(#453): the host reads
-    /// the app setting and calls this.
+    /// next stream build; it asks the OS for nothing (CAP-17a). The app setting
+    /// `app.capture.preferBuiltInMic` sets it through [`MicDevice::preference`] (#453).
     pub fn set_prefer_built_in(&self, prefer: bool) {
         self.prefer_built_in.store(prefer, Ordering::SeqCst);
+    }
+
+    /// A handle that sets the CAP-22 preference of this device. It stays valid after the
+    /// device moves into the capture core, so the host gives it to
+    /// [`crate::app_settings::AppSettings::set_mic_preference`] (#453).
+    pub fn preference(&self) -> MicPreferenceHandle {
+        MicPreferenceHandle(Arc::clone(&self.prefer_built_in))
     }
 
     /// Set the slot to closed if it still holds `generation` (the audio thread is gone).

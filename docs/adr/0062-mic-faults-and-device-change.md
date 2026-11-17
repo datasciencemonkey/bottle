@@ -39,6 +39,7 @@ There is no wire field for a mic fault, and there is no app-wide setting IPC. #4
    - `StopReason::ZeroBuffers` stays inside the core.
    - The hub `MicPreference` uses an in-memory store.
    The code marks both points `TODO(#453)`.
+   - Amendment (#453, ADR 0063): both gaps are closed. `CaptureState.mic` carries the fault, and the hub uses `app_setting_read` and `app_setting_write`.
 
 ## Consequences
 

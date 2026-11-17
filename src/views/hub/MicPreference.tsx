@@ -4,10 +4,11 @@
  * Bluetooth headset, so the headset stays in A2DP. The setting asks the OS for nothing
  * (CAP-17a). Default off.
  *
- * TODO(#453): there is no app-wide setting IPC yet. Until it lands, the hub keeps the value in
- * memory and the core does not see it.
+ * The value is the app setting `app.capture.preferBuiltInMic` (Appendix F, #453). The hub reads
+ * and writes it with `app_setting_read` and `app_setting_write`; the host passes it to the mic.
  */
 import { useEffect, useState } from 'react';
+import { call } from '../../shared/ipc';
 
 export const MIC_PREFERENCE_LABEL = 'Prefer the built-in mic when a Bluetooth headset connects';
 
@@ -17,7 +18,26 @@ export interface MicSettings {
   write(preferBuiltIn: boolean): Promise<void>;
 }
 
-/** An in-memory store, default off. TODO(#453): replace with the app setting IPC. */
+const KEY = 'app.capture.preferBuiltInMic';
+
+/** The app setting over IPC (#453). A refused or malformed read shows the setting off. */
+export function ipcMicSettings(): MicSettings {
+  return {
+    read: async () => {
+      try {
+        const s: unknown = await call('app_setting_read', { key: KEY });
+        return typeof s === 'object' && s !== null && (s as { value?: unknown }).value === true;
+      } catch {
+        return false;
+      }
+    },
+    write: async (v) => {
+      await call('app_setting_write', { key: KEY, value: v });
+    },
+  };
+}
+
+/** An in-memory store, default off (tests and previews). */
 export function memoryMicSettings(initial = false): MicSettings {
   let value = initial;
   return {
@@ -28,7 +48,7 @@ export function memoryMicSettings(initial = false): MicSettings {
   };
 }
 
-const appMicSettings = memoryMicSettings();
+const appMicSettings = ipcMicSettings();
 
 export function MicPreference({ settings = appMicSettings }: { settings?: MicSettings }) {
   const [on, setOn] = useState(false);
@@ -41,7 +61,11 @@ export function MicPreference({ settings = appMicSettings }: { settings?: MicSet
   }, [settings]);
 
   const toggle = async (next: boolean) => {
-    await settings.write(next);
+    try {
+      await settings.write(next);
+    } catch {
+      // A refused write changes nothing: the box shows the stored value again.
+    }
     setOn(await settings.read());
   };
 

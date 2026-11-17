@@ -121,7 +121,8 @@ pub fn run() {
     builder
         .manage(ipc::BrainChannel::default())
         // #453 (CAP-22): the app-wide settings for `app_setting_*`, in memory until #77.
-        // TODO(#22): connect `MicDevice::set_prefer_built_in` with `set_mic_preference`.
+        // TODO(#425): when the host builds the `MicDevice`, it calls
+        // `AppSettings::set_mic_preference(Arc::new(mic.preference()))`.
         .manage(std::sync::Arc::new(
             mog_core::app_settings::AppSettings::default(),
         ))

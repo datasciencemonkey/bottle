@@ -470,7 +470,8 @@ export interface TalkKeyStatus {
 /** What a consent record is for: the notice, or the attestation choice of a session. */
 export type ConsentRecordKind = 'notice' | 'only_me' | 'others_agreed';
 
-/** One record of `consent_records_list`. Content-free: no user, no device and no MOG ID. */
+// ---------- app settings (#453, ADR 0063; Rust mirror in `mog_core::types`) ----------
+
 /** The key of an app-wide setting (Appendix F, scope App; #453). Mirrors `AppSettingKey`. */
 export type AppSettingKey = 'app.capture.preferBuiltInMic';
 
@@ -482,6 +483,7 @@ export type AppSettingKey = 'app.capture.preferBuiltInMic';
  */
 export type AppSetting = { key: 'app.capture.preferBuiltInMic'; value: boolean };
 
+/** One record of `consent_records_list`. Content-free: no user, no device and no MOG ID. */
 export interface ConsentRecordView {
   recordId: string;
   kind: ConsentRecordKind;
