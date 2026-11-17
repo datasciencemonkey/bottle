@@ -100,8 +100,16 @@ export function createTalkTarget(deps: TalkTargetDeps): TalkTarget {
       () => true,
       () => false,
     );
-  /** Move `id` to the front, and send the marker to the old and the new target. */
-  const front = (id: MogId) => {
+  /** Counts target moves and `mog_set_active` requests, in the order Rust applies them. */
+  let version = 0;
+  /** The `version` of the last move of each MOG to the front. */
+  const movedAt = new Map<MogId, number>();
+  /**
+   * Move `id` to the front, and send the marker to the old and the new target. `stamp` is the
+   * `version` at which Rust applied the move (now, by default).
+   */
+  const front = (id: MogId, stamp = ++version) => {
+    movedAt.set(id, stamp);
     const old = current();
     const at = mru.indexOf(id);
     if (at >= 0) mru.splice(at, 1);
@@ -131,18 +139,25 @@ export function createTalkTarget(deps: TalkTargetDeps): TalkTarget {
     },
     interacted(id, via = 'input') {
       if (!isOpen(id)) return false;
-      const target = () => {
+      const target = (at?: number) => {
         const moved = current() !== id;
-        front(id);
+        front(id, at);
         if (moved) send(id);
       };
       // Rust sees the card load or focus too, so the target moves at once.
       if (via === 'focus') target();
       const asked = setActive(id);
-      // Rust sees nothing else: move only when Rust took the new target.
+      // Rust sees nothing else: move only when Rust took the new target. Rust applied the
+      // request at `mine`, so a MOG that moved to the front later stays ahead of this one.
       if (via === 'input') {
+        const mine = ++version;
         void asked.then((ok) => {
-          if (ok && isOpen(id)) target();
+          if (!ok || !isOpen(id)) return;
+          const ahead = mru.filter((m) => m !== id && (movedAt.get(m) ?? 0) > mine).length;
+          if (ahead === 0) return target(mine);
+          mru.splice(mru.indexOf(id), 1);
+          mru.splice(ahead, 0, id);
+          movedAt.set(id, mine);
         });
       }
       return true;

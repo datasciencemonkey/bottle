@@ -111,6 +111,8 @@ describe('T1 talk-key target in the brain (#73)', () => {
     target.interacted(A);
     target.interacted(C);
     await flush();
+    // Rust applied A and then C, so C is the target and A is next.
+    expect(target.current()).toBe(C);
     target.closed(C);
     expect(target.current()).toBe(A);
     expect(marked(sent)).toEqual([A]);
@@ -279,6 +281,9 @@ describe('T1 talk-key target in the brain (#73)', () => {
     await flush();
     expect(t.current()).toBe(B);
     expect(marked(sent)).toEqual([B]);
+    // Rust has A next: when B closes, the target falls back to A, not to C.
+    t.closed(B);
+    expect(t.current()).toBe(A);
   });
 
   it('[MB-06a] [UX-28] a card load or focus moves the marker at once: Rust sees it too', async () => {
