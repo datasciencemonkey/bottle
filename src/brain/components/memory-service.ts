@@ -22,19 +22,6 @@ import { NotImplementedError } from '../errors';
 import { distilSummary } from './exchange-summary';
 import { IpcLocalMemoryStore, type LocalMemoryStore } from './memory-store';
 
-/**
- * A `GenieExchange` with the optional fields that the local table has and the contract type
- * does not have yet. TODO(#449): these fields move into `GenieExchange` (contract-change).
- */
-export type ExchangeRecord = GenieExchange & {
-  /** The R10 session that asked (UUID). Forget by session and SEC-14a find the exchange by it. */
-  sessionId?: string;
-  /** The numeric workspace id as a decimal string (the `?o=` value). */
-  workspaceId?: string;
-  /** The Genie space id, when the backend has one. */
-  spaceId?: string;
-};
-
 export interface MemoryServiceOptions {
   /** The clock in epoch ms. Tests pass a simulated clock. */
   now?: () => number;
@@ -160,7 +147,7 @@ export class LocalMemoryService implements MemoryService {
    *   over 200,000 characters ends with `ANSWER_CUT_MARK`, and key numbers stop at 16 KiB.
    * The caller registers the MOG row first (`mem.mog.upsert`); the table links to it.
    */
-  async recordExchange(x: ExchangeRecord): Promise<void> {
+  async recordExchange(x: GenieExchange): Promise<void> {
     if (!UUID_RE.test(x.mogId) || !UUID_RE.test(x.requestId)) {
       throw new Error('recordExchange needs a UUID mogId and requestId');
     }

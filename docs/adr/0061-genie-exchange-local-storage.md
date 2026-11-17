@@ -39,17 +39,16 @@ contract type `GenieExchange` has no summary, session, workspace id or space id.
    serves the delete. `asked_at` is the clock at the first `recordExchange` call for a request,
    so the caller records the exchange when the question is sent. R14 WipeService (#124) owns the
    rest of Wipe.
-10. A value over a catalog limit is fitted, so the row and its pointer always save. An answer
-    over 200,000 characters is cut and ends with a visible mark. Key numbers stop at 32 entries
-    and 16 KiB of JSON. `question_user` is cut at 1,000 code points.
 8. Two brain reads help Forget (#123) collect dependents before a delete, because the links are
    `SET NULL`: `mem.exchange.dependents` (memory items that cite an exchange) and
    `mem.exchange.by_session` (the exchanges of a session, also for SEC-14a). Both filter by
    `mog_id` (MEM-01). `mem.exchange.get` also returns `sessionId`, `splitGroupId` and
    `questionUser`.
-9. `GenieExchange` gets optional `sessionId`, `workspaceId` and `spaceId` through
-   contract-change #449. Until then T10 accepts an internal `ExchangeRecord` type
-   (`TODO(#449)`).
+9. `GenieExchange` has optional `sessionId`, `workspaceId` and `spaceId` (contract-change #449).
+   `recordExchange` writes them to `session_id`, `workspace_id` and `space_id`.
+10. A value over a catalog limit is fitted, so the row and its pointer always save. An answer
+    over 200,000 characters is cut and ends with a visible mark. Key numbers stop at 32 entries
+    and 16 KiB of JSON. `question_user` is cut at 1,000 code points.
 
 ## Consequences
 

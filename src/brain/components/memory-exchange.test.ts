@@ -122,7 +122,7 @@ describe('T10 recordExchange (#38, MEM-25a, MEM-26)', () => {
     }
   });
 
-  it('[MEM-25a] passes the session, workspace and space when the caller has them (TODO #449)', async () => {
+  it('[MEM-25a] passes the session, workspace and space when the caller has them (#449)', async () => {
     const { store, svc } = setup();
     await svc.recordExchange({
       ...genieExchangeDouble(),
