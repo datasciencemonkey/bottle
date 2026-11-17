@@ -108,14 +108,17 @@ export function removeFillers(text: string, language = 'en'): string {
   return tidy(out);
 }
 
-/** Collapses a word said 3 or more times in a row to one (Handy `collapse_stutters`). */
+/**
+ * Collapses a word said 3 or more times in a row to one (Handy `collapse_stutters`). A number
+ * word never collapses: "five five five" is a digit read-out, not a stutter.
+ */
 export function collapseStutters(text: string): string {
   const words = text.split(/\s+/).filter((w) => w !== '');
   const out: string[] = [];
   for (let i = 0; i < words.length;) {
     const w = words[i] as string;
     let n = 1;
-    if (/^\p{L}+$/u.test(w)) {
+    if (/^\p{L}+$/u.test(w) && !isNumberWord(w.toLowerCase())) {
       while (i + n < words.length && (words[i + n] as string).toLowerCase() === w.toLowerCase())
         n++;
     }
@@ -240,6 +243,26 @@ function parseCardinal(ws: string[]): number | undefined {
   return i === ws.length && ws.length > 0 ? total : undefined;
 }
 
+/** Words that join two numbers into a range or a list ("three to four hundred"). */
+const CONNECTORS: ReadonlySet<string> = new Set(['to', 'or', 'and', 'through', 'thru', 'by', 'x']);
+
+/** A digit token or a number word. */
+const isNumberish = (w: string) =>
+  /\d/.test(w) || (w !== 'and' && w.split('-').every(isNumberWord));
+
+/**
+ * Whether a run stands next to another number: a digit ("40 thousand"), the word "point" on
+ * either side ("two point five million"), or a connector and a number ("three to four
+ * hundred"). Such a run stays in words, because its value depends on its neighbours.
+ */
+function inNumberContext(prev: string, prev2: string, next: string, next2: string): boolean {
+  if (/\d/.test(prev) || /\d/.test(next)) return true;
+  if (prev === 'point' || next === 'point') return true;
+  if (CONNECTORS.has(prev) && isNumberish(prev2)) return true;
+  if (CONNECTORS.has(next) && isNumberish(next2)) return true;
+  return false;
+}
+
 /** A word token split into its number words and its trailing punctuation, or undefined. */
 function numberToken(tok: string): { words: string[]; punct: string } | undefined {
   const m = /^([\p{L}]+(?:-[\p{L}]+)*)([,.!?;:]*)$/u.exec(tok);
@@ -251,9 +274,9 @@ function numberToken(tok: string): { words: string[]; punct: string } | undefine
 /**
  * Writes spoken cardinals as digits: "twenty five" → "25", "one hundred and twenty" → "120".
  * A run converts only when it is one whole cardinal of 2 or more words, or one word of 10 or
- * more. A lone "one" to "nine", a digit read-out ("one two three"), a run next to a digit
- * ("40 thousand") and a run before "point" stay as they are, so a meaning never changes
- * (ADR 0070).
+ * more. A lone "one" to "nine", a digit read-out ("one two three"), and a run next to another
+ * number stay in words (`inNumberContext`: a digit, "point" on either side, or a range or list
+ * such as "three to four hundred"). The rule leans to keep words (ADR 0070).
  */
 export function spokenNumeralsToDigits(text: string): string {
   // Even indexes are words, odd indexes the whitespace between them.
@@ -284,11 +307,18 @@ export function spokenNumeralsToDigits(text: string): string {
       words.pop();
       end -= 2;
     }
-    const prev = out.length >= 2 ? (out[out.length - 2] as string) : '';
-    const next = punct === '' ? ((tokens[end + 2] as string | undefined) ?? '') : '';
-    const nearDigit = /\d[,.!?;:]*$/.test(prev) || /^\d/.test(next) || /^point\b/i.test(next);
+    const word = (t: string | undefined) => (t ?? '').toLowerCase().replace(/[,.!?;:]+$/, '');
+    // The two words before the run (`out` holds words and spaces), and the two after it.
+    const prev = word(out[out.length - 2]);
+    const prev2 = word(out[out.length - 4]);
+    const next = punct === '' ? word(tokens[end + 2]) : '';
+    const next2 = punct === '' ? word(tokens[end + 4]) : '';
     const value = parseCardinal(words);
-    if (value !== undefined && !nearDigit && (words.length >= 2 || value >= 10)) {
+    if (
+      value !== undefined &&
+      !inNumberContext(prev, prev2, next, next2) &&
+      (words.length >= 2 || value >= 10)
+    ) {
       out.push(`${value}${punct}`);
     } else {
       // Not one whole cardinal: keep the whole run as it is.
@@ -304,10 +334,64 @@ export function wordCount(text: string): number {
   return text.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length;
 }
 
-/** The pre-pass: fillers, stutters, the user dictionary, then numerals (CAP-66a). */
+const UNIT_NAMES = Object.keys(UNITS);
+const TENS_NAMES = Object.keys(TENS);
+
+/** The words of 1-999 in the form that `parseCardinal` reads. */
+function below1000Words(n: number): string[] {
+  const words: string[] = [];
+  const h = Math.floor(n / 100);
+  const r = n % 100;
+  if (h > 0) words.push(UNIT_NAMES[h] as string, 'hundred');
+  if (r >= 20) {
+    words.push(TENS_NAMES[Math.floor(r / 10) - 2] as string);
+    if (r % 10 > 0) words.push(UNIT_NAMES[r % 10] as string);
+  } else if (r > 0 || words.length === 0) {
+    words.push(UNIT_NAMES[r] as string);
+  }
+  return words;
+}
+
+/** The spoken form of `n`, for the pre-pass self-check: 3400 → "three thousand four hundred". */
+function spokenFormOf(n: number): string {
+  const words: string[] = [];
+  let rest = n;
+  for (const [name, scale] of Object.entries(SCALES).sort((a, b) => b[1] - a[1])) {
+    const k = Math.floor(rest / scale);
+    if (k > 0) {
+      words.push(...below1000Words(k), name);
+      rest %= scale;
+    }
+  }
+  if (rest > 0 || words.length === 0) words.push(...below1000Words(rest));
+  return words.join(' ');
+}
+
+/** The numbers of `text` as a sorted list: digit tokens (no thousands commas) and number words. */
+function numberSignature(text: string): string {
+  const tokens = text.toLowerCase().match(/[\p{L}\p{N}]+(?:[.,][\p{N}]+)*/gu) ?? [];
+  return tokens
+    .flatMap((t) => (/\d/.test(t) ? [t.replace(/,(?=\d{3}(?:\D|$))/g, '')] : t.split('-')))
+    .filter((t) => /\d/.test(t) || (t !== 'and' && isNumberWord(t)))
+    .sort()
+    .join(' ');
+}
+
+/**
+ * The pre-pass: fillers, stutters, the user dictionary, then numerals (CAP-66a). It checks its
+ * own work (CAP-68): fillers, stutters and the dictionary must not change a number, and the
+ * numerals step must only swap each run for its value. When a check fails, the pre-pass gives
+ * the raw text, so a pre-pass error never reaches the card, the router step or the model.
+ */
 export function prepass(raw: string, opts: PrepassOptions = {}): string {
   const noFillers = removeFillers(raw, opts.language ?? 'en');
   const noStutters = collapseStutters(noFillers);
   const dictionary = applyDictionary(noStutters, opts.dictionary ?? []);
-  return tidy(spokenNumeralsToDigits(dictionary));
+  if (numberSignature(dictionary) !== numberSignature(raw)) return raw.trim();
+  const out = tidy(spokenNumeralsToDigits(dictionary));
+  // Write each new digit token back in words: the words must be the ones it replaced.
+  const before = new Set(dictionary.match(/\d+/g) ?? []);
+  const restored = out.replace(/\b\d+\b/g, (d) => (before.has(d) ? d : spokenFormOf(Number(d))));
+  if (numberSignature(restored) !== numberSignature(dictionary)) return raw.trim();
+  return out;
 }

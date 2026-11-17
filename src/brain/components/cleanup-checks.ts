@@ -19,9 +19,25 @@ export const LENGTH_RATIO_MAX = 1.3;
 
 const sortedJoin = (xs: string[]) => [...xs].sort().join(' ');
 
-/** The numbers of `s`, thousands commas dropped: "1,250" and "1250" are the same number. */
+/** Spoken number words. A reply that changes one, or writes it as digits, fails. */
+const NUMBER_WORDS: ReadonlySet<string> = new Set(
+  (
+    'zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen ' +
+    'fifteen sixteen seventeen eighteen nineteen twenty thirty forty fifty sixty seventy ' +
+    'eighty ninety hundred thousand million billion'
+  ).split(' '),
+);
+
+/**
+ * The numbers of `s`: digit tokens with thousands commas dropped ("1,250" and "1250" are the
+ * same number), and spoken number words.
+ */
 function numbers(s: string): string[] {
-  return (s.match(/\d+(?:[.,]\d+)*/g) ?? []).map((n) => n.replace(/,(?=\d{3}(?:\D|$))/g, ''));
+  const digits = (s.match(/\d+(?:[.,]\d+)*/g) ?? []).map((n) =>
+    n.replace(/,(?=\d{3}(?:\D|$))/g, ''),
+  );
+  const spoken = (s.toLowerCase().match(/\p{L}+/gu) ?? []).filter((w) => NUMBER_WORDS.has(w));
+  return [...digits, ...spoken];
 }
 
 /** Dotted or snake-case names, lowercase: table names such as `main.finance.invoices`. */
@@ -65,13 +81,21 @@ const NEGATIONS: ReadonlySet<string> = new Set([
   'neither',
   'nor',
   'nowhere',
-  'cannot',
   'without',
 ]);
 
-/** The negations of `s`: negation words and words that end in "n't". */
+/**
+ * The negations of `s`. A contraction counts as its long form, so "don't" and "do not" are the
+ * same negation: "won't" → "will not", "cannot" and "can't" → "can not", "-n't" → " not".
+ */
 function negations(s: string): string[] {
-  return words(s.replace(/’/g, "'")).filter((w) => NEGATIONS.has(w) || /n't$/.test(w));
+  const long = s
+    .replace(/’/g, "'")
+    .replace(/\bwon't\b/gi, 'will not')
+    .replace(/\bshan't\b/gi, 'shall not')
+    .replace(/\bcan(?:'t|not)\b/gi, 'can not')
+    .replace(/n't\b/gi, ' not');
+  return words(long).filter((w) => NEGATIONS.has(w));
 }
 
 const QUESTION_START =
