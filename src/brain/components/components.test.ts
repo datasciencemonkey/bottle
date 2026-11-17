@@ -156,8 +156,9 @@ describe('brain component stubs', () => {
     await expectStub(() => t.activeProvider(), 52);
   });
 
-  it('[T5] CleanupProvider stubs clean (#55)', async () => {
-    await expectStub(() => createCleanupProvider().clean('raw', { ...tags, op: 'cleanup' }), 55);
+  it('[T5] CleanupProvider cleans (#55): a short utterance keeps its pre-pass text', async () => {
+    const out = await createCleanupProvider().clean('um send it', { ...tags, op: 'cleanup' });
+    expect(out).toEqual({ text: 'send it', usedRaw: false, notCleaned: false, outcome: 'short' });
   });
 
   it('[T6] RouterContextGate routes (#57) and stubs approve and verify (#152)', async () => {
