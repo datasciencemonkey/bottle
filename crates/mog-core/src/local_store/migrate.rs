@@ -27,11 +27,18 @@ pub(crate) struct Migration {
 }
 
 /// Every migration, in order.
-pub(crate) const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "0001_local_mirror",
-    sql: include_str!("migrations/0001_local_mirror.sql"),
-}];
+pub(crate) const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "0001_local_mirror",
+        sql: include_str!("migrations/0001_local_mirror.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "0002_utterance_session_tie",
+        sql: include_str!("migrations/0002_utterance_session_tie.sql"),
+    },
+];
 
 /// The newest version this binary knows.
 pub(crate) fn latest_version() -> i64 {

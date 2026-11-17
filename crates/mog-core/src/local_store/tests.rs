@@ -1333,3 +1333,217 @@ fn mem_08a_local_mirror_has_every_appendix_a_column() {
         assert_eq!(got, cols, "columns of {table}");
     }
 }
+
+// ---- MEM-01: an utterance belongs to the MOG of its session (#410, migration 0002) --------
+
+fn insert_utterance(
+    s: &SqlCipherLocalStore,
+    id: &str,
+    session: &str,
+    mog: &str,
+    seq: i64,
+) -> Result<usize, CoreError> {
+    s.with_conn(|c| {
+        c.execute(
+            "INSERT INTO utterance (utterance_id, session_id, mog_id, seq, speaker_track, started_at,
+               duration_ms, text_clean, route, stt_provider, row_hlc, origin_device_id)
+             VALUES (?1, ?2, ?3, ?4, 'you', 1, 10, 'hello', 'noise', 'local_parakeet', 1, ?3)",
+            rusqlite::params![id, session, mog, seq],
+        )
+    })
+}
+
+#[test]
+fn mem_01_an_utterance_cannot_point_at_a_session_of_another_mog() {
+    let t = TempDir::new("01-utt-tie");
+    let s = open_store(t.path(), Arc::new(MemoryKeyVault::new()));
+    seed_mog(&s, MOG_A);
+    seed_mog(&s, MOG_B);
+    seed_session(&s, MOG_A, "sess-a", 1);
+    assert!(insert_utterance(&s, "u-ok", "sess-a", MOG_A, 1).is_ok());
+    assert!(
+        insert_utterance(&s, "u-bad", "sess-a", MOG_B, 2).is_err(),
+        "MOG B may not write into a session of MOG A"
+    );
+    // An update cannot move an utterance to another MOG, or to a session of another MOG.
+    seed_session(&s, MOG_B, "sess-b", 1);
+    let moved = s.with_conn(|c| {
+        c.execute(
+            "UPDATE utterance SET mog_id = ?1 WHERE utterance_id = 'u-ok'",
+            [MOG_B],
+        )
+    });
+    assert!(moved.is_err());
+    let moved = s.with_conn(|c| {
+        c.execute(
+            "UPDATE utterance SET session_id = 'sess-b' WHERE utterance_id = 'u-ok'",
+            [],
+        )
+    });
+    assert!(moved.is_err());
+    // A session with utterances cannot change its MOG.
+    let moved = s.with_conn(|c| {
+        c.execute(
+            "UPDATE session SET mog_id = ?1 WHERE session_id = 'sess-a'",
+            [MOG_B],
+        )
+    });
+    assert!(moved.is_err());
+    assert_eq!(
+        count(&s, "SELECT count(*) FROM utterance WHERE mog_id = '0f8b1a52-6c1e-4d0a-9a51-3a3d2f6f0a01' AND session_id = 'sess-a'"),
+        1,
+        "nothing was deleted or moved (U9)"
+    );
+}
+
+#[test]
+fn mem_01_session_id_and_seq_are_unique_across_mogs() {
+    let t = TempDir::new("01-utt-seq");
+    let s = open_store(t.path(), Arc::new(MemoryKeyVault::new()));
+    seed_mog(&s, MOG_A);
+    seed_mog(&s, MOG_B);
+    seed_session(&s, MOG_A, "sess-a", 1);
+    assert!(insert_utterance(&s, "u-1", "sess-a", MOG_A, 1).is_ok());
+    // Appendix A: UNIQUE (session_id, seq). The same MOG hits the unique index; another MOG
+    // hits the session tie, so no (session_id, seq) pair can repeat.
+    assert!(insert_utterance(&s, "u-2", "sess-a", MOG_A, 1).is_err());
+    assert!(insert_utterance(&s, "u-3", "sess-a", MOG_B, 1).is_err());
+    assert!(insert_utterance(&s, "u-4", "sess-a", MOG_A, 2).is_ok());
+}
+
+#[test]
+fn mem_35a_migration_0002_is_forward_only_and_deletes_nothing() {
+    let sql = super::migrate::MIGRATIONS
+        .iter()
+        .find(|m| m.version == 2)
+        .expect("migration 0002 exists")
+        .sql
+        .to_ascii_lowercase();
+    for bad in ["drop table", "delete from", "drop index", "alter table"] {
+        assert!(!sql.contains(bad), "0002 has `{bad}`");
+    }
+    assert!(sql.contains("raise(abort"));
+}
+
+#[test]
+fn mem_01_a_session_replace_cannot_move_its_utterances_to_another_mog() {
+    let t = TempDir::new("01-sess-replace");
+    let s = open_store(t.path(), Arc::new(MemoryKeyVault::new()));
+    seed_mog(&s, MOG_A);
+    seed_mog(&s, MOG_B);
+    seed_session(&s, MOG_A, "sess-a", 1);
+    assert!(insert_utterance(&s, "u-1", "sess-a", MOG_A, 1).is_ok());
+    // A REPLACE deletes and inserts the session row, so no UPDATE trigger runs. Deferred
+    // foreign keys would let the delete through; the INSERT trigger still refuses.
+    let moved = s.with_conn(|c| {
+        c.execute_batch("PRAGMA defer_foreign_keys = ON")?;
+        c.execute(
+            "INSERT OR REPLACE INTO session (session_id, mog_id, kind, started_at, row_hlc, origin_device_id)
+             VALUES ('sess-a', ?1, 'meeting', 1, 1, ?1)",
+            [MOG_B],
+        )
+    });
+    assert!(moved.is_err());
+    assert_eq!(
+        count(&s, "SELECT count(*) FROM session WHERE session_id = 'sess-a' AND mog_id = '0f8b1a52-6c1e-4d0a-9a51-3a3d2f6f0a01'"),
+        1
+    );
+    assert!(insert_utterance(&s, "u-2", "sess-a", MOG_B, 1).is_err());
+}
+
+#[test]
+fn mem_35a_migration_0002_applies_to_a_store_that_has_0001_and_data() {
+    let t = TempDir::new("35a-upgrade");
+    let vault = Arc::new(MemoryKeyVault::new());
+    let s = open_store(t.path(), vault.clone());
+    seed_mog(&s, MOG_A);
+    seed_session(&s, MOG_A, "sess-a", 1);
+    assert!(insert_utterance(&s, "u-1", "sess-a", MOG_A, 1).is_ok());
+    // Make the file look like a 0001-only store with data (test setup only).
+    s.with_conn(|c| {
+        c.execute_batch(
+            "DROP TRIGGER utterance_session_mog_bi;
+             DROP TRIGGER utterance_session_mog_bu;
+             DROP TRIGGER session_mog_with_utterances_bu;
+             DROP TRIGGER session_mog_with_utterances_bi;
+             DELETE FROM schema_migrations WHERE version = 2;",
+        )
+    })
+    .unwrap();
+    s.close();
+    let s = open_store(t.path(), vault.clone());
+    assert_eq!(
+        count(&s, "SELECT max(version) FROM schema_migrations"),
+        super::migrate::latest_version()
+    );
+    assert_eq!(
+        count(&s, "SELECT count(*) FROM utterance"),
+        1,
+        "the data stays"
+    );
+    let triggers = "SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND name IN \
+         ('utterance_session_mog_bi', 'utterance_session_mog_bu', \
+          'session_mog_with_utterances_bu', 'session_mog_with_utterances_bi')";
+    assert_eq!(count(&s, triggers), 4, "all four 0002 triggers exist");
+    seed_mog(&s, MOG_B);
+    assert!(insert_utterance(&s, "u-2", "sess-a", MOG_B, 2).is_err());
+    // A second open changes nothing: 0002 runs once.
+    s.close();
+    let s = open_store(t.path(), vault);
+    assert_eq!(count(&s, triggers), 4);
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM schema_migrations WHERE version = 2"
+        ),
+        1
+    );
+    assert_eq!(count(&s, "SELECT count(*) FROM utterance"), 1);
+}
+
+#[test]
+fn mem_01_a_session_with_utterances_cannot_be_renamed() {
+    let t = TempDir::new("01-sess-rename");
+    let s = open_store(t.path(), Arc::new(MemoryKeyVault::new()));
+    seed_mog(&s, MOG_A);
+    seed_session(&s, MOG_A, "sess-a", 1);
+    assert!(insert_utterance(&s, "u-1", "sess-a", MOG_A, 1).is_ok());
+    let renamed = s.with_conn(|c| {
+        c.execute_batch("PRAGMA foreign_keys = OFF")?;
+        c.execute(
+            "UPDATE session SET session_id = 'sess-z' WHERE session_id = 'sess-a'",
+            [],
+        )
+    });
+    assert!(renamed.is_err());
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM session WHERE session_id = 'sess-a'"
+        ),
+        1
+    );
+}
+
+#[test]
+fn mem_01_an_update_or_replace_cannot_take_the_id_of_another_mogs_session() {
+    let t = TempDir::new("01-sess-update-replace");
+    let s = open_store(t.path(), Arc::new(MemoryKeyVault::new()));
+    seed_mog(&s, MOG_A);
+    seed_mog(&s, MOG_B);
+    seed_session(&s, MOG_A, "sess-a", 1);
+    seed_session(&s, MOG_B, "sess-b", 2);
+    assert!(insert_utterance(&s, "u-1", "sess-a", MOG_A, 1).is_ok());
+    // sess-b (MOG B, no utterances) takes the ID sess-a. REPLACE would delete the MOG A row,
+    // and deferred foreign keys would let it through; the UPDATE trigger refuses.
+    let taken = s.with_conn(|c| {
+        c.execute_batch("PRAGMA defer_foreign_keys = ON")?;
+        c.execute(
+            "UPDATE OR REPLACE session SET session_id = 'sess-a' WHERE session_id = 'sess-b'",
+            [],
+        )
+    });
+    assert!(taken.is_err());
+    assert_eq!(count(&s, "SELECT count(*) FROM session"), 2);
+    assert!(insert_utterance(&s, "u-2", "sess-a", MOG_B, 1).is_err());
+}
