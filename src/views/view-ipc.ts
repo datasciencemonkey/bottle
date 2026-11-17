@@ -9,6 +9,7 @@ import { asHubNotice, HUB_NOTICE_EVENT, HUB_SCOPE, type HubNotice } from '../sha
 import {
   asMogTargetView,
   MOG_TARGET_EVENT,
+  VIEW_FOCUS,
   VIEW_READY,
   type MogTargetView,
 } from '../shared/mog-target';
@@ -270,6 +271,19 @@ export function acceptNotice(version: number): Promise<unknown> {
 
 /** How long a MOG view waits before it sends `view.ready` again while no brain listens. */
 export const VIEW_READY_RETRY_MS = 1000;
+
+/**
+ * The card focus signal (#73, MB-06a, ADR 0058): the card view tells the brain when it loads and
+ * each time its window gets focus. These are the card signals that move the Rust talk-key target,
+ * so the brain can move the marker on them and still show the MOG that the talk key talks to.
+ * The result stops the focus listener. TODO(#439): a `ready` or `focus` view_emit kind.
+ */
+export function startCardFocusSignal(mogId: MogId): () => void {
+  const focus = () => void emitView(mogId, 'click', { action: VIEW_FOCUS }).catch(() => undefined);
+  focus();
+  window.addEventListener('focus', focus);
+  return () => window.removeEventListener('focus', focus);
+}
 
 /**
  * The talk-key target state the brain sends to this MOG window (#73, MB-06b, UX-28, ADR 0058),

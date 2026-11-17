@@ -3,20 +3,25 @@
  *
  * The brain keeps the open MOGs in the order of their last interaction. The target is the
  * first one. Rust keeps the same list (`PttTarget` in `src-tauri/src/hotkey_host.rs`) and
- * latches the target at key-down. The brain calls `mog_set_active` on each interaction, so the
- * Rust list follows the brain.
+ * latches the target at key-down. The marker must never show a MOG that the talk key does not
+ * talk to (UX-28), so the brain moves its target only on signals that Rust also sees, or after
+ * Rust accepts `mog_set_active`.
  *
  * Rules:
- * - The first `view.ready` of a MOG view makes that MOG open and the target. A reload sends
- *   `view.ready` again; it is not an interaction (#305 review note A).
- * - A click, poke or drag end on a MOG, and any input from its card except hover, make that
- *   MOG the target. A card never proves that its MOG window is open (#305 review note B).
+ * - The first `view.ready` of a MOG view makes that MOG open and the target (Rust sees the
+ *   window open). A reload sends `view.ready` again; it is not an interaction (#305 note A).
+ * - A click, poke or drag end on a MOG makes it the target only when `mog_set_active` answers
+ *   ok. MOG windows never take focus (MOG-01b), so Rust sees nothing else of these.
+ * - A card load or focus (`view.focus`) makes its MOG the target at once: Rust moves on the
+ *   same two signals. Other card input, except hover, waits for `mog_set_active` as a MOG click
+ *   does. A card never proves that its MOG window is open (#305 note B).
  * - When the target MOG closes, the target moves to the most recently interacted open MOG.
  * - A `hotkey:ptt` down for an open MOG makes it the target (Rust latched it) and shows the
- *   toast with its name for 1.2 s (MB-06b). The brain ignores a MOG it does not know as open.
+ *   toast with its name for 1.2 s (MB-06b).
  *
- * TODO(#439): `mog_set_active` answers `not_implemented` until the contract routes it; the
- * brain ignores the refusal. The event name and the ready signal move into the contract.
+ * TODO(#439): `mog_set_active` answers `not_implemented` until the contract routes it, so a
+ * MOG click does not move the target yet. The event name and the ready signal move into the
+ * contract.
  * TODO(#83): a drag on the macOS native panel reaches the brain only when #83 relays drag_end.
  * TODO(#62): a chord use (CAP-46a, v1) calls `interacted` for the chord MOG.
  */
@@ -24,6 +29,7 @@ import { emitTo } from '@tauri-apps/api/event';
 import type { MogId } from '../shared/interfaces';
 import { call, EVENTS } from '../shared/ipc';
 import {
+  isViewFocus,
   isViewReady,
   MOG_TARGET_EVENT,
   TARGET_TOAST_MS,
@@ -37,7 +43,7 @@ const DEFAULT_NAME = 'MOG';
 export interface TalkTargetDeps {
   /** Send one target view to `mog-<id>`. */
   send: (view: MogTargetView) => unknown;
-  /** Tell Rust the new target (`mog_set_active`). A refusal is ignored. */
+  /** Tell Rust the new target (`mog_set_active`). A refusal leaves the target as it is. */
   setActive: (mogId: MogId) => Promise<unknown>;
   /** Run `fn` after `ms`; the result cancels it. */
   after: (ms: number, fn: () => void) => () => void;
@@ -45,11 +51,18 @@ export interface TalkTargetDeps {
   nameOf?: (mogId: MogId) => Promise<string | undefined>;
 }
 
+/** How an interaction reaches Rust: by a window signal it sees, or only by `mog_set_active`. */
+export type InteractionVia = 'focus' | 'input';
+
 export interface TalkTarget {
   /** A MOG view mounted (first open or reload). */
   viewReady(mogId: MogId): void;
-  /** The user interacted with an open MOG. False if the MOG is not open. */
-  interacted(mogId: MogId): boolean;
+  /**
+   * The user interacted with an open MOG. `'focus'` is a signal that Rust sees too (a card load
+   * or focus): it moves the target at once. `'input'` (the default) moves it only when
+   * `mog_set_active` answers ok. False if the MOG is not open.
+   */
+  interacted(mogId: MogId, via?: InteractionVia): boolean;
   /** `hotkey:ptt` down for `mogId`. False if the MOG is not open. */
   pttDown(mogId: MogId): boolean;
   /** The MOG window closed. */
@@ -82,9 +95,11 @@ export function createTalkTarget(deps: TalkTargetDeps): TalkTarget {
       // A bad label or a closed window: nothing to show.
     }
   };
-  const setActive = (id: MogId) => {
-    void deps.setActive(id).catch(() => undefined);
-  };
+  const setActive = (id: MogId) =>
+    deps.setActive(id).then(
+      () => true,
+      () => false,
+    );
   /** Move `id` to the front, and send the marker to the old and the new target. */
   const front = (id: MogId) => {
     const old = current();
@@ -109,17 +124,27 @@ export function createTalkTarget(deps: TalkTargetDeps): TalkTarget {
     viewReady(id) {
       if (!isOpen(id)) {
         front(id);
-        setActive(id);
+        void setActive(id);
         lookUpName(id);
       }
       send(id);
     },
-    interacted(id) {
+    interacted(id, via = 'input') {
       if (!isOpen(id)) return false;
-      const moved = current() !== id;
-      front(id);
-      if (moved) send(id);
-      setActive(id);
+      const target = () => {
+        const moved = current() !== id;
+        front(id);
+        if (moved) send(id);
+      };
+      // Rust sees the card load or focus too, so the target moves at once.
+      if (via === 'focus') target();
+      const asked = setActive(id);
+      // Rust sees nothing else: move only when Rust took the new target.
+      if (via === 'input') {
+        void asked.then((ok) => {
+          if (ok && isOpen(id)) target();
+        });
+      }
       return true;
     },
     pttDown(id) {
@@ -167,9 +192,9 @@ const MOG_INTERACTIONS: ReadonlySet<string> = new Set(['click', 'poked', 'drag_e
 
 /**
  * Wire the tracker to view input and `hotkey:ptt`. TODO(#439): the ready signal becomes a
- * `ready` view_emit kind. TODO(#26): MogManager closes a MOG with `window_mog_close` and then
- * calls `closed`. A close that the brain did not start reaches only Rust today; the next
- * `hotkey:ptt` down moves the brain to the MOG that Rust latched.
+ * `ready` view_emit kind. TODO(#419): the brain learns MOG window closes from the host and calls
+ * `closed`. Until then a close reaches only Rust; the next `hotkey:ptt` down moves the brain to
+ * the MOG that Rust latched.
  */
 export function wireTalkTarget(bus: BrainBus, target: TalkTarget): () => void {
   const offInput = onViewInput(bus, (input) => {
@@ -185,11 +210,15 @@ export function wireTalkTarget(bus: BrainBus, target: TalkTarget): () => void {
       return;
     }
     if (input.from === `card-${input.mogId}` && input.kind !== 'hover') {
-      target.interacted(input.mogId);
+      const focus = input.kind === 'click' && isViewFocus(input.payload);
+      target.interacted(input.mogId, focus ? 'focus' : 'input');
     }
   });
   const offPtt = bus.on(EVENTS['hotkey.ptt'].name, (p) => {
     if (!isObj(p) || typeof p['mogId'] !== 'string' || p['phase'] !== 'down') return;
+    // Rust latches only a MOG whose window is open, so a press for a MOG that the brain
+    // missed (for example after a brain restart) is a first open.
+    if (!target.isOpen(p['mogId'])) target.viewReady(p['mogId']);
     target.pttDown(p['mogId']);
   });
   return () => {
