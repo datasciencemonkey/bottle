@@ -26,6 +26,7 @@ import type {
 import { routerJsonSchema } from '../../shared/router-schema';
 import { toolFreeInvoker, type ModelInvoker } from './model-guard';
 import { applyInjectionGuard } from './router-injection';
+import { groundedIn, numbersOf } from './router-grounding';
 
 export type { ModelInvoker } from './model-guard';
 
@@ -76,6 +77,7 @@ export type FieldRule =
   | 'command_arg_without_command'
   | 'genie_question_off_intent'
   | 'genie_question_numbers'
+  | 'genie_question_entities'
   | 'profile_hint_alias'
   | 'profile_hint_unknown'
   | 'parts_shape'
@@ -98,7 +100,7 @@ export type RouterTraceEvent =
 export interface RouterStepDeps {
   invoke: ModelInvoker;
   trace?: (e: RouterTraceEvent) => void;
-  /** TODO(#56, #135): the router model per region (RTR-10a/b) comes from SP-13. */
+  /** The router model for the region: `routerModelFor` in `router-model.ts` (RTR-10a/b, #135). */
   model?: string;
   deadlineMs?: number;
 }
@@ -311,10 +313,6 @@ const NEEDS_TEXT: ReadonlySet<Intent> = new Set(['question', 'memory_question', 
 const DICTATION_MODES: ReadonlySet<CaptureMode> = new Set(['ptt', 'hands_free']);
 const MAX_PARTS = 3;
 
-function numbers(s: string): string[] {
-  return s.match(/\d+(?:[.,]\d+)*/g) ?? [];
-}
-
 /** Applies the GL-7.2 rules of ADR 0032. Returns the fixed decision and the rules that fired. */
 export function applyFieldRules(
   d: RouterDecision,
@@ -358,13 +356,16 @@ export function applyFieldRules(
     out.genie_question = '';
     fix('genie_question_off_intent');
   }
-  // RTR-09b: genie_question only resolves follow-ups; its numbers must come from the cleaned text.
-  // TODO(#135): the entity check of RTR-09b.
+  // RTR-09b: genie_question only resolves follow-ups; its numbers and entities must come from
+  // the cleaned text. `router-parallel.ts` checks it again against the cleanup output (#135).
   if (out.genie_question !== '') {
-    const have = new Set(numbers(out.cleaned_text));
-    if (numbers(out.genie_question).some((n) => !have.has(n))) {
+    const have = new Set(numbersOf(out.cleaned_text));
+    if (numbersOf(out.genie_question).some((n) => !have.has(n))) {
       out.genie_question = out.cleaned_text;
       fix('genie_question_numbers');
+    } else if (!groundedIn(out.genie_question, out.cleaned_text)) {
+      out.genie_question = out.cleaned_text;
+      fix('genie_question_entities');
     }
   }
 
