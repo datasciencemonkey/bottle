@@ -10,7 +10,8 @@
 //! - TODO(#21): the RAM-only PTT buffer (no pre-roll, nothing to disk) implements [`FrameSink`].
 //! - TODO(#23): the level meter reads the frames.
 //! - TODO(#46): speech recognition, with the 16 kHz resample, reads the frames.
-//! - TODO(#22): the 2 s zero-buffer detector uses [`MicFrame::is_digital_silence`].
+//! - The 2 s zero-buffer watch (CAP-17b, #22) is [`ZeroWatch`]; it uses
+//!   [`MicFrame::is_digital_silence`].
 
 /// One block of mono mic audio at the device's native rate. It borrows the backend's buffer:
 /// a sink that keeps audio copies it into its own RAM buffer.
@@ -37,6 +38,63 @@ impl MicFrame<'_> {
 pub trait FrameSink: Send + 'static {
     /// One block of mono audio, in order.
     fn frame(&mut self, frame: MicFrame<'_>);
+
+    /// A stream event between frames, in order with them (#22). The default ignores it.
+    fn event(&mut self, _event: SinkEvent) {}
+}
+
+/// A stream event that the sink gets between frames (#22).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SinkEvent {
+    /// The default device changed (CAP-18). Frames before the marker came from the old
+    /// device, frames after it from the new one. Nothing that the sink holds is dropped. The
+    /// transcript shows a gap marker here. `gap_ms` is the time from the change to the new
+    /// stream, 0 when the OS rerouted the stream by itself. TODO(#116): the segment pipeline
+    /// carries the marker into the transcript.
+    Gap {
+        /// Milliseconds without audio.
+        gap_ms: u64,
+    },
+    /// The mic gave only zero buffers for the zero window (CAP-17b), for example because the
+    /// mic permission is denied. The sink drops the audio of this capture, so no transcript
+    /// is made. TODO(#21): the PTT buffer drops its audio here.
+    Discard,
+}
+
+/// The zero-buffer watch (CAP-17b): it expires when no block with sound came for `window_ms`.
+/// A block of digital silence counts as no sound, and so does no block at all. Times are
+/// milliseconds on one monotonic clock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ZeroWatch {
+    window_ms: u64,
+    last_sound_ms: u64,
+}
+
+impl ZeroWatch {
+    /// A watch for a stream that opened at `opened_ms`.
+    pub fn new(window_ms: u64, opened_ms: u64) -> Self {
+        Self {
+            window_ms,
+            last_sound_ms: opened_ms,
+        }
+    }
+
+    /// One block came at `now_ms`. `silent` is [`MicFrame::is_digital_silence`].
+    pub fn block(&mut self, silent: bool, now_ms: u64) {
+        if !silent {
+            self.last_sound_ms = self.last_sound_ms.max(now_ms);
+        }
+    }
+
+    /// The window passed without sound.
+    pub fn expired(&self, now_ms: u64) -> bool {
+        now_ms.saturating_sub(self.last_sound_ms) >= self.window_ms
+    }
+
+    /// The time at which the watch expires if no sound comes.
+    pub fn deadline_ms(&self) -> u64 {
+        self.last_sound_ms.saturating_add(self.window_ms)
+    }
 }
 
 /// A sink that drops every frame. For a host that has no consumer yet. TODO(#21).

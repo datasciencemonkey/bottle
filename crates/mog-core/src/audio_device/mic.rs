@@ -5,15 +5,45 @@
 //! while it holds `control`, never the other way, and never drops a stream while it holds
 //! `sink`: a host may wait for a data callback in progress when a stream drops.
 
-use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use crate::capture::{AudioDevice, AudioSource, CaptureCore, DeviceError};
 
-use super::{codes, mix_to_mono, DataFn, FaultFn, FrameSink, MicFrame, MicHost, StreamFault};
+use super::{
+    codes, mix_to_mono, DataFn, DevicePreference, FaultFn, FrameSink, MicFrame, MicHost, SinkEvent,
+    StreamFault, ZeroWatch,
+};
 
-type Hook = Arc<dyn Fn(AudioSource) + Send + Sync>;
+type Hook = Arc<dyn Fn(AudioSource, MicFault) + Send + Sync>;
+
+/// Why the backend stopped a stream on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MicFault {
+    /// The stream failed or the device went away, and no new default could open.
+    Lost,
+    /// The mic gave only zero buffers for the zero window (CAP-17b), for example because the
+    /// mic permission is denied. The MOG shows the fix-it card.
+    ZeroBuffers,
+}
+
+/// The settings of a [`MicDevice`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MicConfig {
+    /// The zero-buffer window (CAP-17b): 2 s.
+    pub zero_window: Duration,
+}
+
+impl Default for MicConfig {
+    fn default() -> Self {
+        Self {
+            zero_window: Duration::from_secs(2),
+        }
+    }
+}
 
 /// The link from the backend to [`CaptureCore::device_failed`]. The core owns the device, so
 /// the link connects after the core is built:
@@ -33,9 +63,13 @@ impl FailureLink {
     /// core alive.
     pub fn connect(&self, core: &Arc<CaptureCore>) {
         let weak: Weak<CaptureCore> = Arc::downgrade(core);
-        self.connect_fn(move |source| {
+        self.connect_fault_fn(move |source, fault| {
             if let Some(core) = weak.upgrade() {
-                core.device_failed(source);
+                match fault {
+                    MicFault::Lost => core.device_failed(source),
+                    // TODO(#453): `capture.state` carries the mic fault to the fix-it card.
+                    MicFault::ZeroBuffers => core.mic_silent(),
+                }
             }
         });
     }
@@ -43,13 +77,18 @@ impl FailureLink {
     /// Report failed streams to `f`, in place of an earlier target. `f` runs on the notifier
     /// thread, never on the audio thread, so it may call [`AudioDevice::close`].
     pub fn connect_fn(&self, f: impl Fn(AudioSource) + Send + Sync + 'static) {
+        self.connect_fault_fn(move |source, _| f(source));
+    }
+
+    /// Like [`FailureLink::connect_fn`], with the reason of the stop.
+    pub fn connect_fault_fn(&self, f: impl Fn(AudioSource, MicFault) + Send + Sync + 'static) {
         *lock(&self.hook) = Some(Arc::new(f));
     }
 
-    fn report(&self, source: AudioSource) {
+    fn report(&self, source: AudioSource, fault: MicFault) {
         let hook = lock(&self.hook).clone();
         if let Some(hook) = hook {
-            hook(source);
+            hook(source, fault);
         }
     }
 }
@@ -75,10 +114,13 @@ struct Control {
     last_generation: u64,
 }
 
-/// The sink and the generation whose frames it takes now (`None`: no stream is open).
+/// The sink, the stream whose frames it takes now (`None`: no stream is open) and the zero
+/// watch of that stream.
 struct SinkSlot {
     sink: Box<dyn FrameSink>,
-    live: Option<u64>,
+    /// The generation (one per `open`) and the epoch (one per built stream) of the live stream.
+    live: Option<(u64, u64)>,
+    watch: Option<ZeroWatch>,
 }
 
 enum Msg {
@@ -92,6 +134,8 @@ enum Msg {
     },
     Fault {
         generation: u64,
+        epoch: u64,
+        fault: StreamFault,
     },
     Shutdown,
 }
@@ -106,6 +150,7 @@ pub struct MicDevice {
     control: Arc<Mutex<Control>>,
     audio: Option<JoinHandle<()>>,
     notifier: Option<JoinHandle<()>>,
+    prefer_built_in: Arc<AtomicBool>,
 }
 
 impl MicDevice {
@@ -119,16 +164,29 @@ impl MicDevice {
         H: MicHost,
         F: FnOnce() -> H + Send + 'static,
     {
+        Self::spawn_with(make_host, sink, MicConfig::default())
+    }
+
+    /// [`MicDevice::spawn`] with explicit settings (tests use a short zero window).
+    pub fn spawn_with<H, F>(
+        make_host: F,
+        sink: Box<dyn FrameSink>,
+        config: MicConfig,
+    ) -> std::io::Result<(Self, FailureLink)>
+    where
+        H: MicHost,
+        F: FnOnce() -> H + Send + 'static,
+    {
         let link = FailureLink::default();
-        let (notify_tx, notify_rx) = mpsc::channel::<AudioSource>();
+        let (notify_tx, notify_rx) = mpsc::channel::<(AudioSource, MicFault)>();
         let notifier = {
             let link = link.clone();
             thread::Builder::new()
                 .name("bottle-mic-notify".into())
                 .spawn(move || {
                     // Ends when the audio thread ends and drops `notify_tx`.
-                    for source in notify_rx {
-                        link.report(source);
+                    for (source, fault) in notify_rx {
+                        link.report(source, fault);
                     }
                 })?
         };
@@ -136,13 +194,22 @@ impl MicDevice {
             slot: Slot::Closed,
             last_generation: 0,
         }));
+        let prefer_built_in = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::channel::<Msg>();
         let audio = {
             let thread = AudioThread {
                 control: Arc::clone(&control),
-                sink: Arc::new(Mutex::new(SinkSlot { sink, live: None })),
+                sink: Arc::new(Mutex::new(SinkSlot {
+                    sink,
+                    live: None,
+                    watch: None,
+                })),
                 tx: tx.clone(),
                 notify: notify_tx,
+                prefer_built_in: Arc::clone(&prefer_built_in),
+                base: Instant::now(),
+                zero_window_ms: u64::try_from(config.zero_window.as_millis()).unwrap_or(u64::MAX),
+                epoch: 0,
             };
             thread::Builder::new()
                 .name("bottle-mic-audio".into())
@@ -154,9 +221,17 @@ impl MicDevice {
                 control,
                 audio: Some(audio),
                 notifier: Some(notifier),
+                prefer_built_in,
             },
             link,
         ))
+    }
+
+    /// "Prefer the built-in mic when a Bluetooth headset connects" (CAP-22). It applies at the
+    /// next stream build; it asks the OS for nothing (CAP-17a). TODO(#453): the host reads
+    /// the app setting and calls this.
+    pub fn set_prefer_built_in(&self, prefer: bool) {
+        self.prefer_built_in.store(prefer, Ordering::SeqCst);
     }
 
     /// Set the slot to closed if it still holds `generation` (the audio thread is gone).
@@ -257,28 +332,65 @@ struct AudioThread {
     sink: Arc<Mutex<SinkSlot>>,
     /// For the fault callbacks of the streams.
     tx: Sender<Msg>,
-    notify: Sender<AudioSource>,
+    notify: Sender<(AudioSource, MicFault)>,
+    prefer_built_in: Arc<AtomicBool>,
+    /// The origin of the zero-watch clock.
+    base: Instant,
+    zero_window_ms: u64,
+    /// The epoch of the last built stream. A reopen (CAP-18) keeps the generation and takes a
+    /// new epoch, so a late fault or frame of the old stream never touches the new one.
+    epoch: u64,
+}
+
+/// The live stream: its generation, its epoch and the stream.
+type Current<S> = Option<(u64, u64, S)>;
+
+fn ms_since(base: Instant) -> u64 {
+    u64::try_from(base.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 impl AudioThread {
-    fn run<H: MicHost>(self, mut host: H, rx: Receiver<Msg>) {
-        let mut current: Option<(u64, H::Stream)> = None;
-        for msg in rx.iter() {
+    fn run<H: MicHost>(mut self, mut host: H, rx: Receiver<Msg>) {
+        let mut current: Current<H::Stream> = None;
+        loop {
+            let msg = if current.is_some() {
+                // While a stream is open, wake at the zero-watch deadline (CAP-17b).
+                let wait = self.watch_deadline().saturating_sub(self.now_ms()).max(1);
+                match rx.recv_timeout(Duration::from_millis(wait)) {
+                    Ok(msg) => msg,
+                    Err(RecvTimeoutError::Timeout) => {
+                        self.check_zero(&mut current);
+                        continue;
+                    }
+                    Err(RecvTimeoutError::Disconnected) => break,
+                }
+            } else {
+                match rx.recv() {
+                    Ok(msg) => msg,
+                    Err(_) => break,
+                }
+            };
             match msg {
                 Msg::Open { generation, reply } => {
                     let result = self.open(&mut host, generation, &mut current);
                     let _ = reply.send(result);
                 }
                 Msg::Close { generation, reply } => {
-                    if current.as_ref().is_some_and(|(g, _)| *g == generation) {
+                    if current.as_ref().is_some_and(|(g, _, _)| *g == generation) {
                         self.stop(&mut current);
                     }
                     let _ = reply.send(());
                 }
-                Msg::Fault { generation } => {
-                    if current.as_ref().is_some_and(|(g, _)| *g == generation) {
-                        self.stop(&mut current);
-                        let _ = self.notify.send(AudioSource::Mic);
+                Msg::Fault {
+                    generation,
+                    epoch,
+                    fault,
+                } => {
+                    if current
+                        .as_ref()
+                        .is_some_and(|(g, e, _)| *g == generation && *e == epoch)
+                    {
+                        self.on_stream_fault(&mut host, fault, &mut current);
                     }
                 }
                 Msg::Shutdown => break,
@@ -287,16 +399,121 @@ impl AudioThread {
         self.stop(&mut current);
     }
 
-    /// Build and start a stream. On success it becomes `current`.
-    fn open<H: MicHost>(
-        &self,
+    fn now_ms(&self) -> u64 {
+        ms_since(self.base)
+    }
+
+    fn watch_deadline(&self) -> u64 {
+        lock(&self.sink).watch.map_or(u64::MAX, |w| w.deadline_ms())
+    }
+
+    /// CAP-17b: stop a stream that gave no sound for the zero window, tell the sink to drop
+    /// its audio (no transcript) and report the fault for the fix-it card.
+    fn check_zero<S>(&self, current: &mut Current<S>) {
+        let now = self.now_ms();
+        let expired = lock(&self.sink).watch.is_some_and(|w| w.expired(now));
+        if !expired {
+            return;
+        }
+        self.stop(current);
+        lock(&self.sink).sink.event(SinkEvent::Discard);
+        let _ = self.notify.send((AudioSource::Mic, MicFault::ZeroBuffers));
+    }
+
+    fn on_stream_fault<H: MicHost>(
+        &mut self,
+        host: &mut H,
+        fault: StreamFault,
+        current: &mut Current<H::Stream>,
+    ) {
+        match fault {
+            StreamFault::Transient => {}
+            StreamFault::Fatal => {
+                self.stop(current);
+                let _ = self.notify.send((AudioSource::Mic, MicFault::Lost));
+            }
+            // CAP-18: the OS moved the stream; mark the gap in the audio.
+            StreamFault::Rerouted => lock(&self.sink).sink.event(SinkEvent::Gap { gap_ms: 0 }),
+            StreamFault::Invalidated => self.reopen(host, current),
+        }
+    }
+
+    /// CAP-18: drop the old stream and build and play a new one on the new default, under the
+    /// same generation (the same lease). The slot stays open, so a `close` meanwhile queues a
+    /// Close message that stops the new stream. The sink keeps what it holds.
+    fn reopen<H: MicHost>(&mut self, host: &mut H, current: &mut Current<H::Stream>) {
+        let Some((generation, _, old)) = current.take() else {
+            return;
+        };
+        let started = Instant::now();
+        {
+            let _c = lock(&self.control);
+            lock(&self.sink).live = None;
+            drop(old);
+        }
+        match self.build_and_play(host, generation) {
+            Ok((epoch, stream)) => {
+                let _c = lock(&self.control);
+                let gap_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                let now = self.now_ms();
+                let mut slot = lock(&self.sink);
+                slot.sink.event(SinkEvent::Gap { gap_ms });
+                slot.live = Some((generation, epoch));
+                slot.watch = Some(ZeroWatch::new(self.zero_window_ms, now));
+                drop(slot);
+                *current = Some((generation, epoch, stream));
+            }
+            Err(_) => {
+                {
+                    let mut c = lock(&self.control);
+                    lock(&self.sink).watch = None;
+                    if matches!(c.slot, Slot::Open { generation: g } if g == generation) {
+                        c.slot = Slot::Closed;
+                    }
+                }
+                let _ = self.notify.send((AudioSource::Mic, MicFault::Lost));
+            }
+        }
+    }
+
+    /// Set the preference, then build and start a stream with a new epoch. A failed play
+    /// drops its stream before this returns.
+    fn build_and_play<H: MicHost>(
+        &mut self,
         host: &mut H,
         generation: u64,
-        current: &mut Option<(u64, H::Stream)>,
+    ) -> Result<(u64, H::Stream), DeviceError> {
+        self.epoch += 1;
+        let epoch = self.epoch;
+        host.set_preference(DevicePreference {
+            prefer_built_in: self.prefer_built_in.load(Ordering::SeqCst),
+        });
+        let stream = host.build(
+            self.on_data(generation, epoch),
+            self.on_fault(generation, epoch),
+        )?;
+        host.play(&stream)?;
+        Ok((epoch, stream))
+    }
+
+    /// Build and start a stream. On success it becomes `current`.
+    fn open<H: MicHost>(
+        &mut self,
+        host: &mut H,
+        generation: u64,
+        current: &mut Current<H::Stream>,
     ) -> Result<(), DeviceError> {
         // `close` turns an open slot into a Close message, so no stream is current here.
         debug_assert!(current.is_none());
-        let stream = match host.build(self.on_data(generation), self.on_fault(generation)) {
+        self.epoch += 1;
+        let epoch = self.epoch;
+        host.set_preference(DevicePreference {
+            prefer_built_in: self.prefer_built_in.load(Ordering::SeqCst),
+        });
+        let stream = match host.build(
+            self.on_data(generation, epoch),
+            self.on_fault(generation, epoch),
+        ) {
             Ok(stream) => stream,
             Err(e) => {
                 self.set_closed(generation);
@@ -321,9 +538,13 @@ impl AudioThread {
         }
         c.slot = Slot::Open { generation };
         // Frames flow from here on. The few ms between play() and this point are dropped, so
-        // a cancelled open never hands audio to the sink.
-        lock(&self.sink).live = Some(generation);
-        *current = Some((generation, stream));
+        // a cancelled open never hands audio to the sink. The zero watch starts here.
+        let now = self.now_ms();
+        let mut slot = lock(&self.sink);
+        slot.live = Some((generation, epoch));
+        slot.watch = Some(ZeroWatch::new(self.zero_window_ms, now));
+        drop(slot);
+        *current = Some((generation, epoch, stream));
         Ok(())
     }
 
@@ -351,40 +572,56 @@ impl AudioThread {
     /// Stop the current stream: no more frames, then drop it (the OS indicator goes off),
     /// then mark the slot closed. A `close` that waits on the control lock returns only
     /// after the drop.
-    fn stop<S>(&self, current: &mut Option<(u64, S)>) {
-        let Some((_, stream)) = current.take() else {
+    fn stop<S>(&self, current: &mut Current<S>) {
+        let Some((_, _, stream)) = current.take() else {
             return;
         };
         let mut c = lock(&self.control);
-        lock(&self.sink).live = None;
+        {
+            let mut slot = lock(&self.sink);
+            slot.live = None;
+            slot.watch = None;
+        }
         drop(stream);
         c.slot = Slot::Closed;
     }
 
-    fn on_data(&self, generation: u64) -> DataFn {
+    fn on_data(&self, generation: u64, epoch: u64) -> DataFn {
         let sink = Arc::clone(&self.sink);
+        let base = self.base;
         let mut mono: Vec<f32> = Vec::new();
         Box::new(move |block| {
             let mut slot = lock(&sink);
-            if slot.live != Some(generation) {
+            if slot.live != Some((generation, epoch)) {
                 return;
             }
             mix_to_mono(block.samples, block.channels, &mut mono);
-            slot.sink.frame(MicFrame {
+            let frame = MicFrame {
                 samples: &mono,
                 sample_rate: block.sample_rate,
-            });
+            };
+            let silent = frame.is_digital_silence();
+            if let Some(watch) = slot.watch.as_mut() {
+                watch.block(silent, ms_since(base));
+            }
+            slot.sink.frame(frame);
         })
     }
 
-    fn on_fault(&self, generation: u64) -> FaultFn {
+    fn on_fault(&self, generation: u64, epoch: u64) -> FaultFn {
         let tx = self.tx.clone();
-        let mut sent = false;
+        let mut ended = false;
         Box::new(move |fault| {
-            if fault == StreamFault::Fatal && !sent {
-                sent = true;
-                let _ = tx.send(Msg::Fault { generation });
+            // A fatal or invalidated stream reports once; a reroute reports each time.
+            if ended || fault == StreamFault::Transient {
+                return;
             }
+            ended = matches!(fault, StreamFault::Fatal | StreamFault::Invalidated);
+            let _ = tx.send(Msg::Fault {
+                generation,
+                epoch,
+                fault,
+            });
         })
     }
 }

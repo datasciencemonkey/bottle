@@ -9,22 +9,29 @@
 //!
 //! The stream is built on the default input device at each open, with its default input
 //! config, and converted to `f32`. A device change therefore takes effect at the next open
-//! (SP-08 follow-up 3). TODO(#22): the device picker and the permission check.
+//! (SP-08 follow-up 3). With the CAP-22 preference on, a Bluetooth default gives way to the
+//! built-in mic (#22). There is no separate permission check: the first build, after a user
+//! action, shows the OS prompt (CAP-17a), and a denied mic is caught by the zero watch
+//! (CAP-17b) or by the `permission_denied` build error.
 //!
 //! No test builds a [`CpalMicHost`] stream: tests never open the user's mic. The device
 //! checks are in the `needs:human` issue of #388.
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{ErrorKind, FromSample, SampleFormat, SizedSample, StreamConfig};
+use cpal::{ErrorKind, FromSample, InterfaceType, SampleFormat, SizedSample, StreamConfig};
 
 use crate::capture::DeviceError;
 
-use super::{codes, DataFn, FaultFn, Interleaved, MicHost, StreamFault};
+use super::{
+    choose_input, codes, DataFn, DevicePreference, FaultFn, InputChoice, InputKind, Interleaved,
+    MicHost, StreamFault,
+};
 
 /// The cpal host of this OS: CoreAudio on macOS, WASAPI on Windows. Make it on the audio
 /// thread (see [`MicDevice::spawn`](super::MicDevice::spawn)).
 pub struct CpalMicHost {
     host: cpal::Host,
+    preference: DevicePreference,
 }
 
 impl CpalMicHost {
@@ -32,6 +39,7 @@ impl CpalMicHost {
     pub fn new() -> Self {
         Self {
             host: cpal::default_host(),
+            preference: DevicePreference::default(),
         }
     }
 }
@@ -50,7 +58,7 @@ impl MicHost for CpalMicHost {
         on_data: DataFn,
         mut on_fault: FaultFn,
     ) -> Result<cpal::Stream, DeviceError> {
-        let device = self.host.default_input_device().ok_or(codes::NO_DEVICE)?;
+        let device = self.input_device().ok_or(codes::NO_DEVICE)?;
         let supported = device
             .default_input_config()
             .map_err(|e| code_for(e.kind()))?;
@@ -72,6 +80,47 @@ impl MicHost for CpalMicHost {
 
     fn play(&mut self, stream: &cpal::Stream) -> Result<(), DeviceError> {
         stream.play().map_err(|e| code_for(e.kind()))
+    }
+
+    fn set_preference(&mut self, preference: DevicePreference) {
+        self.preference = preference;
+    }
+}
+
+impl CpalMicHost {
+    /// The input device for the next build (CAP-22). Device names are not logged or kept.
+    fn input_device(&self) -> Option<cpal::Device> {
+        let default = self.host.default_input_device();
+        if !self.preference.prefer_built_in {
+            return default;
+        }
+        let built_in = self
+            .host
+            .input_devices()
+            .ok()
+            .and_then(|mut all| all.find(|d| kind_of(d) == Some(InputKind::BuiltIn)));
+        let default_kind = default
+            .as_ref()
+            .map(|d| kind_of(d).unwrap_or(InputKind::Other));
+        match choose_input(true, default_kind, built_in.is_some()) {
+            InputChoice::BuiltIn => built_in,
+            InputChoice::Default => default,
+        }
+    }
+}
+
+/// The CAP-22 kind of a cpal device, from its interface type.
+fn kind_of(device: &cpal::Device) -> Option<InputKind> {
+    let interface = device.description().ok()?.interface_type();
+    Some(kind_for(interface))
+}
+
+/// The CAP-22 kind of a cpal interface type.
+pub fn kind_for(interface: InterfaceType) -> InputKind {
+    match interface {
+        InterfaceType::BuiltIn => InputKind::BuiltIn,
+        InterfaceType::Bluetooth => InputKind::Bluetooth,
+        _ => InputKind::Other,
     }
 }
 
@@ -124,8 +173,10 @@ pub fn code_for(kind: ErrorKind) -> DeviceError {
 /// Whether a cpal stream error after open ends the stream.
 pub fn fault_for(kind: ErrorKind) -> StreamFault {
     match kind {
-        // cpal rerouted the stream to the new default device; it still runs.
-        ErrorKind::DeviceChanged => StreamFault::Transient,
+        // CAP-18: CoreAudio rerouted the stream to the new default device; it still runs.
+        ErrorKind::DeviceChanged => StreamFault::Rerouted,
+        // CAP-18: WASAPI does not rebind; a new default exists, so open a new stream on it.
+        ErrorKind::StreamInvalidated => StreamFault::Invalidated,
         // A glitch or a refused real-time priority: audio still flows.
         ErrorKind::Xrun | ErrorKind::RealtimeDenied => StreamFault::Transient,
         _ => StreamFault::Fatal,
@@ -169,23 +220,40 @@ mod tests {
 
     #[test]
     fn cap_01a_only_transient_cpal_errors_keep_the_stream() {
-        for kind in [
-            ErrorKind::DeviceChanged,
-            ErrorKind::Xrun,
-            ErrorKind::RealtimeDenied,
-        ] {
+        for kind in [ErrorKind::Xrun, ErrorKind::RealtimeDenied] {
             assert_eq!(fault_for(kind), StreamFault::Transient, "{kind:?}");
         }
         for kind in [
             ErrorKind::DeviceNotAvailable,
             ErrorKind::PermissionDenied,
-            ErrorKind::StreamInvalidated,
             ErrorKind::BackendError,
             ErrorKind::Other,
             ErrorKind::DeviceBusy,
             ErrorKind::HostUnavailable,
         ] {
             assert_eq!(fault_for(kind), StreamFault::Fatal, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn cap_18_a_default_device_change_reroutes_or_reopens() {
+        assert_eq!(fault_for(ErrorKind::DeviceChanged), StreamFault::Rerouted);
+        assert_eq!(
+            fault_for(ErrorKind::StreamInvalidated),
+            StreamFault::Invalidated
+        );
+    }
+
+    #[test]
+    fn cap_22_interface_types_map_to_input_kinds() {
+        assert_eq!(kind_for(InterfaceType::BuiltIn), InputKind::BuiltIn);
+        assert_eq!(kind_for(InterfaceType::Bluetooth), InputKind::Bluetooth);
+        for t in [
+            InterfaceType::Usb,
+            InterfaceType::Virtual,
+            InterfaceType::Unknown,
+        ] {
+            assert_eq!(kind_for(t), InputKind::Other, "{t:?}");
         }
     }
 

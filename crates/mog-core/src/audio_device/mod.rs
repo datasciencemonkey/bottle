@@ -25,7 +25,25 @@
 //! - **System audio** (the Others track) is not in this backend: `open(SystemAudio)` returns
 //!   [`codes::SYSTEM_AUDIO_UNSUPPORTED`]. TODO(#108) TODO(#109).
 //!
-//! Device errors are the content-free codes in [`codes`]. ADR 0038 records the design.
+//! - **Permission (CAP-17a, #22).** Nothing asks the OS for the mic before the first `open`,
+//!   and only a user action (`capture_start`) opens. On macOS the first stream build shows the
+//!   Microphone prompt. A denied mic gives digital silence there, which the zero watch
+//!   catches. Windows refuses the build (`permission_denied`).
+//! - **Zero buffers (CAP-17b, #22).** While a stream is open, the audio thread runs a
+//!   [`ZeroWatch`] with a 2 s window ([`MicConfig`]). If no block with sound comes in the
+//!   window, the stream stops, the sink gets [`SinkEvent::Discard`] (no transcript), and the
+//!   [`FailureLink`] reports [`MicFault::ZeroBuffers`] so the MOG shows the fix-it card.
+//! - **Default device change (CAP-18, #22).** [`StreamFault::Rerouted`]: the OS moved the
+//!   stream to the new default (CoreAudio); the sink gets a [`SinkEvent::Gap`].
+//!   [`StreamFault::Invalidated`]: the stream cannot go on (WASAPI does not rebind). The audio
+//!   thread drops it and builds and plays a new stream on the new default at once, under the
+//!   same lease, then sends the gap marker. A failed reopen is [`MicFault::Lost`].
+//! - **Built-in mic preference (CAP-22, #22).** [`MicDevice::set_prefer_built_in`] reaches
+//!   the host through [`MicHost::set_preference`] before each build; [`choose_input`] is the
+//!   rule.
+//!
+//! Device errors are the content-free codes in [`codes`]. ADR 0038 records the design, and
+//! the #22 ADR the zero watch, the reopen and the preference.
 
 pub mod codes;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -33,8 +51,8 @@ pub mod cpal_backend;
 mod mic;
 pub mod sink;
 
-pub use mic::{FailureLink, MicDevice};
-pub use sink::{mix_to_mono, DiscardSink, FrameSink, MicFrame};
+pub use mic::{FailureLink, MicConfig, MicDevice, MicFault};
+pub use sink::{mix_to_mono, DiscardSink, FrameSink, MicFrame, SinkEvent, ZeroWatch};
 
 use crate::capture::DeviceError;
 
@@ -52,8 +70,14 @@ pub struct Interleaved<'a> {
 /// How bad a stream error after open is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamFault {
-    /// The stream still runs (for example a route change or an overrun). Capture goes on.
+    /// The stream still runs (for example an overrun). Capture goes on.
     Transient,
+    /// The OS moved the stream to the new default device and it still runs (CAP-18).
+    /// The sink gets a gap marker.
+    Rerouted,
+    /// The default device changed and this stream cannot go on (CAP-18). The backend opens a
+    /// new stream on the new default under the same lease.
+    Invalidated,
     /// The stream is gone (for example an unplugged mic). R2 stops the leases that use it.
     Fatal,
 }
@@ -75,4 +99,51 @@ pub trait MicHost: 'static {
 
     /// Start a built stream. The OS mic indicator comes on here.
     fn play(&mut self, stream: &Self::Stream) -> Result<(), DeviceError>;
+
+    /// The device preference for the next [`MicHost::build`] (CAP-22). The audio thread calls
+    /// it just before each build, never at launch. The default ignores it.
+    fn set_preference(&mut self, _preference: DevicePreference) {}
+}
+
+/// The user's input device preference (CAP-22).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DevicePreference {
+    /// "Prefer the built-in mic when a Bluetooth headset connects". Default off.
+    pub prefer_built_in: bool,
+}
+
+/// The kind of an input device, for [`choose_input`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputKind {
+    /// The mic in the computer.
+    BuiltIn,
+    /// A Bluetooth headset (for example AirPods).
+    Bluetooth,
+    /// Any other device (USB, line in, virtual).
+    Other,
+}
+
+/// Which input device to build on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputChoice {
+    /// The system default input device.
+    Default,
+    /// The built-in mic.
+    BuiltIn,
+}
+
+/// The CAP-22 rule. With the preference on, a Bluetooth default (or no default) gives way to
+/// the built-in mic, if there is one. So the headset stays in its A2DP (music) profile and
+/// does not drop to the hands-free profile. Any other default is kept.
+pub fn choose_input(
+    prefer_built_in: bool,
+    default: Option<InputKind>,
+    built_in_present: bool,
+) -> InputChoice {
+    match default {
+        Some(InputKind::Bluetooth) | None if prefer_built_in && built_in_present => {
+            InputChoice::BuiltIn
+        }
+        _ => InputChoice::Default,
+    }
 }

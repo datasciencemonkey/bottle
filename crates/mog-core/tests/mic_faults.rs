@@ -71,7 +71,11 @@ impl MicHost for FakeHost {
     }
 
     fn play(&mut self, stream: &FakeStream) -> Result<(), DeviceError> {
-        self.0.lock().unwrap().log.push(format!("play {}", stream.idx));
+        self.0
+            .lock()
+            .unwrap()
+            .log
+            .push(format!("play {}", stream.idx));
         Ok(())
     }
 
@@ -86,7 +90,10 @@ impl MicHost for FakeHost {
 
 /// Run the data callback of stream `idx` once with `samples` (mono, 16 kHz).
 fn feed(shared: &Shared, idx: usize, samples: &[f32]) {
-    let mut cb = shared.lock().unwrap().callbacks[idx].0.take().expect("data fn");
+    let mut cb = shared.lock().unwrap().callbacks[idx]
+        .0
+        .take()
+        .expect("data fn");
     cb(Interleaved {
         samples,
         channels: 1,
@@ -97,7 +104,10 @@ fn feed(shared: &Shared, idx: usize, samples: &[f32]) {
 
 /// Run the fault callback of stream `idx` once.
 fn fault(shared: &Shared, idx: usize, f: StreamFault) {
-    let mut cb = shared.lock().unwrap().callbacks[idx].1.take().expect("fault fn");
+    let mut cb = shared.lock().unwrap().callbacks[idx]
+        .1
+        .take()
+        .expect("fault fn");
     cb(f);
     shared.lock().unwrap().callbacks[idx].1 = Some(cb);
 }
@@ -113,7 +123,10 @@ struct Sink(Arc<Mutex<Vec<Got>>>);
 
 impl FrameSink for Sink {
     fn frame(&mut self, frame: MicFrame<'_>) {
-        self.0.lock().unwrap().push(Got::Frame(frame.samples.to_vec()));
+        self.0
+            .lock()
+            .unwrap()
+            .push(Got::Frame(frame.samples.to_vec()));
     }
     fn event(&mut self, event: SinkEvent) {
         self.0.lock().unwrap().push(Got::Event(event));
@@ -169,7 +182,13 @@ fn log(r: &Rig) -> Vec<String> {
 }
 
 fn alive(r: &Rig, idx: usize) -> bool {
-    r.host.lock().unwrap().alive.get(idx).copied().unwrap_or(false)
+    r.host
+        .lock()
+        .unwrap()
+        .alive
+        .get(idx)
+        .copied()
+        .unwrap_or(false)
 }
 
 fn got(r: &Rig) -> Vec<Got> {
@@ -311,6 +330,8 @@ fn cap_17b_capture_core_stops_every_mic_lease_with_zero_buffers() {
     let stop = events.last_stop().expect("a stop");
     assert_eq!(stop.reason, StopReason::ZeroBuffers);
     assert_eq!(stop.reason.code(), "zero_buffers");
+    // No transcript: the segment pipeline drops the audio of this lease.
+    assert!(stop.reason.discards_audio());
     assert!(!core.status().recording);
 }
 
@@ -339,7 +360,10 @@ fn cap_18_an_invalidated_stream_reopens_on_the_new_default_with_a_gap_marker() {
         other => panic!("expected a gap marker, got {other:?}"),
     }
     assert_eq!(g[2], Got::Frame(vec![0.5; 4]));
-    assert!(r.faults.lock().unwrap().is_empty(), "a reopen is not a fault");
+    assert!(
+        r.faults.lock().unwrap().is_empty(),
+        "a reopen is not a fault"
+    );
 }
 
 #[test]
@@ -370,7 +394,10 @@ fn cap_18_a_late_fault_of_the_old_stream_does_not_touch_the_new_one() {
     thread::sleep(Duration::from_millis(50));
     assert!(alive(&r, 1));
     assert!(r.faults.lock().unwrap().is_empty());
-    assert!(!got(&r).contains(&Got::Frame(vec![0.9; 2])), "old stream frames are dropped");
+    assert!(
+        !got(&r).contains(&Got::Frame(vec![0.9; 2])),
+        "old stream frames are dropped"
+    );
 }
 
 #[test]
@@ -405,9 +432,18 @@ fn cap_18_close_after_a_reopen_drops_the_new_stream() {
 #[test]
 fn cap_22_a_bluetooth_default_gives_way_to_the_built_in_mic_when_preferred() {
     use InputChoice::{BuiltIn, Default};
-    assert_eq!(choose_input(true, Some(InputKind::Bluetooth), true), BuiltIn);
-    assert_eq!(choose_input(false, Some(InputKind::Bluetooth), true), Default);
-    assert_eq!(choose_input(true, Some(InputKind::Bluetooth), false), Default);
+    assert_eq!(
+        choose_input(true, Some(InputKind::Bluetooth), true),
+        BuiltIn
+    );
+    assert_eq!(
+        choose_input(false, Some(InputKind::Bluetooth), true),
+        Default
+    );
+    assert_eq!(
+        choose_input(true, Some(InputKind::Bluetooth), false),
+        Default
+    );
     assert_eq!(choose_input(true, Some(InputKind::BuiltIn), true), Default);
     assert_eq!(choose_input(true, Some(InputKind::Other), true), Default);
     assert_eq!(choose_input(true, None, true), BuiltIn);
