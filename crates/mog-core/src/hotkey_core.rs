@@ -597,6 +597,22 @@ impl HotkeyEngine {
         timed
     }
 
+    /// The tap rule for a PTT that the system ended (Secure Event Input): `cancel` goes through
+    /// [`Self::timed`]; `up` ends the hold and any tap pair, but is never a tap.
+    fn system_end(&mut self, out: Vec<HotkeyOutput>) -> Vec<HotkeyOutput> {
+        let mut ended = Vec::with_capacity(out.len());
+        for o in out {
+            if o == HotkeyOutput::Ptt(PttPhase::Up) {
+                self.held_since = None;
+                self.last_tap_down = None;
+                ended.push(o);
+            } else {
+                ended.extend(self.timed(vec![o]));
+            }
+        }
+        ended
+    }
+
     /// The OS layer tried to register the fallback chord. On a failure R1 emits
     /// [`HotkeyOutput::FallbackChordUnavailable`] once and retries (CAP-39b).
     pub fn on_chord_registered(&mut self, ok: bool, now: Duration) {
@@ -672,9 +688,9 @@ impl HotkeyEngine {
             };
             self.chord_reported = false;
             let out = self.machine.on_secure_input(active, probe.physical_state());
-            // Through the tap rule: a Secure Event Input `cancel` is no tap and ends any pair
-            // (CAP-14a), and a short chord hold that ends with Secure Event Input is a tap.
-            let out = self.timed(out);
+            // A Secure Event Input `cancel` goes through the tap rule: it is no tap and ends any
+            // pair (CAP-14a). The `up` at its end is a lost key-up (CAP-45), never a tap.
+            let out = self.system_end(out);
             self.emit(out);
         } else if let ChordState::Failed { at } = self.chord {
             if now.saturating_sub(at) >= CHORD_RETRY_INTERVAL {
@@ -1586,10 +1602,10 @@ mod tests {
     }
 
     #[test]
-    fn cap_44a_cap_39a_a_chord_hold_under_250_ms_ended_by_secure_input_is_a_tap() {
-        // Secure Event Input ends during a short chord hold: R1 ends the PTT through the tap
-        // rule, so its audio is dropped (CAP-44b). A long chord hold still ends with `up`.
-        for (hold_ms, tap) in [(100u64, true), (TAP_MAX_HOLD.as_millis() as u64, false)] {
+    fn cap_45_cap_14a_a_short_chord_hold_ended_by_secure_input_is_an_up_and_no_tap() {
+        // Secure Event Input ends during a chord hold: the key-up is lost, so R1 sends `up`
+        // (CAP-45) even for a short hold. It is never a tap, and it ends any tap pair.
+        for hold_ms in [10u64, 100, 1_000] {
             let (sink, clock, mut e) = engine_at_zero();
             let probe = FakeProbe::ready();
             let ctl = FakeCtl::default();
@@ -1597,16 +1613,22 @@ mod tests {
             *probe.secure.lock().unwrap() = true;
             e.tick(clock.now(), &probe, &ctl);
             e.on_chord(Down);
+            clock.advance(Duration::from_millis(5));
+            e.on_chord(Up);
+            clock.advance(Duration::from_millis(5));
+            e.on_chord(Down);
             clock.advance(Duration::from_millis(hold_ms));
             *probe.secure.lock().unwrap() = false;
             e.tick(clock.now(), &probe, &ctl);
             let out = sink.take();
-            assert_eq!(
-                out.contains(&HotkeyOutput::Tap),
-                tap,
+            assert!(
+                out.ends_with(&[Ptt(PUp), HotkeyOutput::TalkKeyRestored]),
                 "{hold_ms} ms: {out:?}"
             );
-            assert_eq!(out.contains(&Ptt(PUp)), !tap, "{hold_ms} ms: {out:?}");
+            assert!(
+                !out.contains(&Ptt(PttPhase::DoubleTap)),
+                "{hold_ms} ms: {out:?}"
+            );
         }
     }
 
