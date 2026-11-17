@@ -90,7 +90,9 @@ describe('brain component registry (4.3)', () => {
     for (const c of BRAIN_COMPONENTS) expect(a.components[c.id]).toBeDefined();
     await expect(a.ready).resolves.toBe(true);
     expect(core.invoke.mock.calls.filter(([c]) => c === 'brain_subscribe')).toHaveLength(1);
-    expect(core.channels).toHaveLength(1);
+    expect(core.invoke.mock.calls.filter(([c]) => c === 'capture_subscribe')).toHaveLength(1);
+    // The brain Channel, plus the `onLevel` and `onPartial` Channels of `capture_subscribe` (#23).
+    expect(core.channels).toHaveLength(3);
   });
 
   it('[MOG-08b] [ARC-2] the brain entry point starts the components', () => {

@@ -586,28 +586,26 @@ fn at_40_device_golden_set_meets_the_gate() {
 // ---------- Pending: capture and Opus parts ----------
 
 #[test]
-#[ignore = "pending TODO(#23): the input peak normalisation to -3 dBFS is not built"]
 fn at_40_cap_20_quiet_input_reaches_minus_3_dbfs_before_stt() {
-    use mog_core::capture::{CaptureCore, CaptureRequest, CaptureService};
-    use mog_core::clock::SimClock;
-    use mog_core::testkit::capture::{FakeAudioDevice, RecordingCaptureEvents};
-    use mog_core::types::CaptureMode;
-    // TODO(#23): R2 with a quiet synthetic tone at -30 dBFS: the segment handed to R4 peaks at
-    // -3 dBFS +- 0.5 dB.
-    let r2 = CaptureCore::new(
-        Box::new(FakeAudioDevice::new()),
-        std::sync::Arc::new(SimClock::new()),
-        std::sync::Arc::new(RecordingCaptureEvents::default()),
-    );
-    let lease = r2
-        .start(CaptureRequest {
-            mog_id: "00000000-0000-4000-8000-0000000000a1".to_string(),
-            mode: CaptureMode::Ptt,
-            others_track: false,
-        })
-        .expect("TODO(#23): a lease");
-    r2.stop(lease.id).expect("TODO(#23): release");
-    todo!("TODO(#23): read the peak of the segment that R2 hands to R4 and assert -3 dBFS");
+    use mog_core::audio_device::normalize::{normalize_peak, peak_dbfs, TARGET_PEAK_DBFS};
+    // A quiet synthetic tone at -30 dBFS: after the pre-STT normalisation it peaks at
+    // -3 dBFS +- 0.5 dB (CAP-20, ADR 0067).
+    let amp = 10f32.powf(-30.0 / 20.0);
+    let mut segment: Vec<f32> = (0..16_000)
+        .map(|i| amp * (2.0 * std::f32::consts::PI * 220.0 * i as f32 / 16_000.0).sin())
+        .collect();
+    assert!((peak_dbfs(&segment) - -30.0).abs() < 0.5);
+    normalize_peak(&mut segment);
+    assert!((peak_dbfs(&segment) - TARGET_PEAK_DBFS).abs() < 0.5);
+}
+
+#[test]
+#[ignore = "pending TODO(#46): R2 does not hand a segment to R4 yet"]
+fn at_40_cap_20_segment_handed_to_r4_peaks_at_minus_3_dbfs() {
+    // TODO(#46): R2 with a quiet synthetic tone at -30 dBFS through the mic sink and the PTT
+    // buffer (#21): the segment that R4 reads peaks at -3 dBFS +- 0.5 dB. The buffer calls
+    // `audio_device::normalize::normalize_peak` on the segment before R4 (ADR 0067).
+    todo!("TODO(#46): read the peak of the segment that R2 hands to R4 and assert -3 dBFS");
 }
 
 #[test]

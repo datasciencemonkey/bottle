@@ -2,7 +2,7 @@
  * The registry of the hidden TS brain components T1-T15 of 4.3 (ARC-2, MOG-08b).
  * `startBrain()` constructs each component once; all domain state lives in these objects.
  */
-import { BrainBus, subscribeBrain } from '../bus';
+import { BrainBus, sendMicLevel, subscribeBrain } from '../bus';
 import { wireHubMogs } from '../hub-mogs-wiring';
 import {
   createCaptureLifecycle,
@@ -10,6 +10,7 @@ import {
   wireCaptureLifecycle,
 } from '../capture-lifecycle';
 import { createSystemClock } from '../clock';
+import { LevelRouter, subscribeLevels, wireLevelStream } from '../level-stream';
 import { wireNotice } from '../notice-wiring';
 import { configName, createAppTalkTarget, wireTalkTarget, type TalkTarget } from '../talk-target';
 import { createAgentBridge } from './agent-bridge';
@@ -96,6 +97,11 @@ export function startBrain(): Brain {
       onUtterance: () => undefined,
     });
     wireCaptureLifecycle(bus, lifecycle, createSystemClock().now);
+    // CAP-16a, CAP-16b (#23): the mic level goes only to the target MOG, and stops on stop.
+    // TODO(#425): `capture_subscribe` fails until the host routes it to `CaptureCore`.
+    const levels = new LevelRouter(sendMicLevel, createSystemClock().now);
+    wireLevelStream(bus, levels);
+    void subscribeLevels(levels);
     brain = { components, bus, talkTarget, ready: subscribeBrain(bus) };
   }
   return brain;
