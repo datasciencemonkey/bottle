@@ -436,6 +436,61 @@ describe('the router step only proposes (RTR-20b)', () => {
     expect(r.fixes).toEqual([]);
   });
 
+  // A key that is an allowed profile's alias AND a disallowed profile's name (or alias) must be
+  // cleared whatever the profile order: the hop resolver (#164) also matches names.
+  const clash = (order: 'outside first' | 'home first'): RouterInput => {
+    const outside = { name: 'outside', host: OUTSIDE, aliases: ['partner'] };
+    const home = { name: 'home', host: HOME, aliases: ['outside', 'main'] };
+    return {
+      ...input,
+      profiles: order === 'outside first' ? [outside, home] : [home, outside],
+      allowedWorkspaceHosts: ['home.example.test'],
+    };
+  };
+  const orders = ['outside first', 'home first'] as const;
+
+  it.each(orders)(
+    '[RTR-20b, AT-17] a switch argument that also names a disallowed profile becomes no command (%s)',
+    (order) => {
+      for (const command of ['switch_workspace_once', 'switch_workspace_session'] as const) {
+        const d = routerDecision({
+          intent: 'command',
+          command,
+          command_arg: 'Outside',
+          genie_question: '',
+        });
+        const r = applyFieldRules(d, clash(order));
+        expect(r.decision.command).toBe('none');
+        expect(r.decision.command_arg).toBe('');
+        expect(r.decision.intent).toBe('context');
+        expect(r.fixes).toContain('command_host');
+      }
+    },
+  );
+
+  it.each(orders)(
+    '[RTR-20b, AT-17] a hint that also names a disallowed profile is cleared (%s)',
+    (order) => {
+      const r = applyFieldRules(routerDecision({ target_profile_hint: 'outside' }), clash(order));
+      expect(r.decision.target_profile_hint).toBe('');
+      expect(r.fixes).toContain('profile_hint_host');
+    },
+  );
+
+  it.each(orders)(
+    '[RTR-20b, AT-17] split parts that also name a disallowed profile are cleared (%s)',
+    (order) => {
+      const d = routerDecision({
+        part_questions: ['revenue', 'margin'],
+        part_profile_hints: ['main', 'outside'],
+      });
+      const r = applyFieldRules(d, clash(order));
+      expect(r.decision.part_questions).toEqual([]);
+      expect(r.decision.part_profile_hints).toEqual([]);
+      expect(r.fixes).toContain('parts_host');
+    },
+  );
+
   it('[RTR-20b] an empty AllowedWorkspaceHosts (the default) puts no host limit on listed profiles', () => {
     const open = { ...input, allowedWorkspaceHosts: [] };
     const d = routerDecision({ target_profile_hint: 'outside' });
