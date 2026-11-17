@@ -394,6 +394,18 @@ fn sec_03_each_ipc_error_maps_to_a_fixed_code() {
         IpcError::WindowClosing { command: s() },
         IpcError::ConfigStorageFailed { command: s() },
         IpcError::ConsentStorageFailed { command: s() },
+        IpcError::InvalidConfigId { command: s() },
+        IpcError::ConfigTooLarge { command: s() },
+        IpcError::UnsupportedSchemaVersion { command: s() },
+        IpcError::InvalidConfig { command: s() },
+        IpcError::ConfigNotFound { command: s() },
+        IpcError::ConfigLimitReached { command: s() },
+        IpcError::SecretNamedKey { command: s() },
+        IpcError::TokenLikeValue { command: s() },
+        IpcError::GenieBetaMcpRejected { command: s() },
+        IpcError::GenieSpaceMcpRejected { command: s() },
+        IpcError::GenieOneSseRejected { command: s() },
+        IpcError::McpUrlNotCanonical { command: s() },
     ];
     assert_eq!(all.len(), ERROR_CODES.len(), "one code per variant");
     for e in &all {

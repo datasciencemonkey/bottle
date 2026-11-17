@@ -349,7 +349,7 @@ fn check_value(v: &Value) -> Result<(), ConfigSecret> {
     }
 }
 
-/// Check a MOG config for `config_write` (MB-02, 4.5). The wiring into `ipc::handle` is #25.
+/// Check a MOG config for `config_write` (MB-02, 4.5). `MogConfigComponent` calls it (#379).
 pub fn check_config_json(json: &JsonObject) -> Result<(), ConfigSecret> {
     json.iter().try_for_each(|(k, v)| {
         check_key(k)?;

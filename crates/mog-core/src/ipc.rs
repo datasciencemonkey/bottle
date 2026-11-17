@@ -203,13 +203,60 @@ pub enum IpcError {
     WindowClosing {
         command: String,
     },
-    /// `config_*`: the config store is missing or could not read or write. The routing of
-    /// `config_*` is #379 (ADR 0040); the code exists now so that change adds no code.
+    /// `config_*` (#379): the config store is missing or could not read or write.
     ConfigStorageFailed {
         command: String,
     },
     /// `consent_*` (#430, ADR 0060): no consent records are managed, or the store failed.
     ConsentStorageFailed {
+        command: String,
+    },
+    /// `config_*` (#379): the config ID is not valid. The `mog_config` code `invalid_config_id`.
+    InvalidConfigId {
+        command: String,
+    },
+    /// `config_*` (#379): the config is too large. The `mog_config` code `config_too_large`.
+    ConfigTooLarge {
+        command: String,
+    },
+    /// `config_*` (#379): the config schema version is not supported. The `mog_config` code `unsupported_schema_version`.
+    UnsupportedSchemaVersion {
+        command: String,
+    },
+    /// `config_*` (#379): the config does not match the schema. The `mog_config` code `invalid_config`.
+    InvalidConfig {
+        command: String,
+    },
+    /// `config_*` (#379): no config has this ID. The `mog_config` code `config_not_found`.
+    ConfigNotFound {
+        command: String,
+    },
+    /// `config_*` (#379): the config store is full. The `mog_config` code `config_limit_reached`.
+    ConfigLimitReached {
+        command: String,
+    },
+    /// `config_*` (#379): a config key names a secret (MB-02). The `mog_config` code `secret_named_key`.
+    SecretNamedKey {
+        command: String,
+    },
+    /// `config_*` (#379): a config key or value looks like a token (MB-02). The `mog_config` code `token_like_value`.
+    TokenLikeValue {
+        command: String,
+    },
+    /// `config_*` (#379): a config URL names the beta Genie MCP (G-03). The `mog_config` code `genie_beta_mcp_rejected`.
+    GenieBetaMcpRejected {
+        command: String,
+    },
+    /// `config_*` (#379): a config URL names a per-space Genie MCP (G-03). The `mog_config` code `genie_space_mcp_rejected`.
+    GenieSpaceMcpRejected {
+        command: String,
+    },
+    /// `config_*` (#379): a config URL names the Genie One API SSE (G-03). The `mog_config` code `genie_one_sse_rejected`.
+    GenieOneSseRejected {
+        command: String,
+    },
+    /// `config_*` (#379): a config URL path cannot be made canonical (G-03). The `mog_config` code `mcp_url_not_canonical`.
+    McpUrlNotCanonical {
         command: String,
     },
 }
@@ -247,6 +294,42 @@ impl std::fmt::Display for IpcError {
             IpcError::ConsentStorageFailed { command } => {
                 write!(f, "{command}: the consent record store failed")
             }
+            IpcError::InvalidConfigId { command } => {
+                write!(f, "{command}: the config ID is not valid")
+            }
+            IpcError::ConfigTooLarge { command } => write!(f, "{command}: the config is too large"),
+            IpcError::UnsupportedSchemaVersion { command } => {
+                write!(f, "{command}: the config schema version is not supported")
+            }
+            IpcError::InvalidConfig { command } => {
+                write!(f, "{command}: the config does not match the schema")
+            }
+            IpcError::ConfigNotFound { command } => write!(f, "{command}: no config has this ID"),
+            IpcError::ConfigLimitReached { command } => {
+                write!(f, "{command}: the config store is full")
+            }
+            IpcError::SecretNamedKey { command } => {
+                write!(f, "{command}: a config key names a secret (MB-02)")
+            }
+            IpcError::TokenLikeValue { command } => write!(
+                f,
+                "{command}: a config key or value looks like a token (MB-02)"
+            ),
+            IpcError::GenieBetaMcpRejected { command } => {
+                write!(f, "{command}: a config URL names the beta Genie MCP (G-03)")
+            }
+            IpcError::GenieSpaceMcpRejected { command } => write!(
+                f,
+                "{command}: a config URL names a per-space Genie MCP (G-03)"
+            ),
+            IpcError::GenieOneSseRejected { command } => write!(
+                f,
+                "{command}: a config URL names the Genie One API SSE (G-03)"
+            ),
+            IpcError::McpUrlNotCanonical { command } => write!(
+                f,
+                "{command}: a config URL path cannot be made canonical (G-03)"
+            ),
         }
     }
 }
@@ -780,9 +863,8 @@ pub fn handle(window_label: &str, command_name: &str, args: Value) -> Result<Han
                 channel: a.on_event,
             });
         }
-        "config_write" => {
-            // TODO(#25): reject token-like values and secret-named keys (MB-02, 4.5).
-        }
+        // `config_write`: `mog_config::MogConfigComponent` runs `token_guard::check_config_json`
+        // (MB-02, #25, #379).
         _ => {}
     }
     // Each feature issue replaces this with a call into its R1-R17 component (stubs from #225).

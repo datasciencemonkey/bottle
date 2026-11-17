@@ -1623,7 +1623,19 @@
     "unknown_mog",
     "window_closing",
     "config_storage_failed",
-    "consent_storage_failed"
+    "consent_storage_failed",
+    "invalid_config_id",
+    "config_too_large",
+    "unsupported_schema_version",
+    "invalid_config",
+    "config_not_found",
+    "config_limit_reached",
+    "secret_named_key",
+    "token_like_value",
+    "genie_beta_mcp_rejected",
+    "genie_space_mcp_rejected",
+    "genie_one_sse_rejected",
+    "mcp_url_not_canonical"
   ],
   "events": [
     {

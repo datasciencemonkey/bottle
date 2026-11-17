@@ -272,6 +272,20 @@ export const IPC_ERROR_CODES = [
   'config_storage_failed',
   /** `consent_*`: no consent records are managed, or the store failed (#430, ADR 0060). */
   'consent_storage_failed',
+  /** `config_*` refusals of the MOG config store (#379, MB-02). */
+  'invalid_config_id',
+  'config_too_large',
+  'unsupported_schema_version',
+  'invalid_config',
+  'config_not_found',
+  'config_limit_reached',
+  'secret_named_key',
+  'token_like_value',
+  /** `config_write` G-03 refusals of a rejected Genie backend URL (#28, #379). */
+  'genie_beta_mcp_rejected',
+  'genie_space_mcp_rejected',
+  'genie_one_sse_rejected',
+  'mcp_url_not_canonical',
 ] as const;
 
 export type IpcErrorCode = (typeof IPC_ERROR_CODES)[number];

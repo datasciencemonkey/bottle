@@ -24,7 +24,7 @@ Issue #36 asks R12 IpcGateway to permit each command only for its window labels 
 
 - **Update (ADR 0040, #333):** the Tauri host now dispatches every command through `hardened_gateway_with`, rejects with the code only, and scrubs every brain Channel payload. `IpcError::UnknownCommand` and `WindowNotAllowed` no longer hold the name or the label. The gaps below on the Tauri host are closed.
 - **The C ABI is a production caller too (#176, done).** `mog_call` dispatches through `hardened_gateway_with(NoLog, FfiComponents)` with the label `brain` (ADR 0006). Both hosts now call `hardened_gateway_with`, so SEC-03 holds for this gateway outside tests.
-- The Tauri host calls `ipc::handle` directly. Its errors hold only a command name from `COMMANDS` and a label that the app set, and its replies are `{}` today. A later contract change can route its replies, errors and brain Channel items through the scrub. This is reported to security-lead.
+- Superseded by ADR 0040 (#333): the Tauri host no longer calls `ipc::handle` directly. It dispatches through `hardened_gateway_with`, and its replies, errors and brain Channel items go through the scrub.
 - `ipc::IpcError::UnknownCommand` and `WindowNotAllowed` still hold the raw name and label (contract file). The gateway does not send them, and the Tauri host cannot reach them with a name that is not in `COMMANDS`.
 - Done in #176: `mog_call` dispatches through `hardened_gateway_with`. The FFI fuzz test starts the core with `mog_init`, so it covers this gateway (SEC-01 evidence for the C ABI path).
-- `TODO(#25)`: `config_write` calls `token_guard::check_config_json` (MB-02).
+- **Update (#379):** `config_write` calls `token_guard::check_config_json` (MB-02) in `MogConfigComponent`, and the host routes `config_*` to it.

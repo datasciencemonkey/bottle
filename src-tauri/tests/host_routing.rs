@@ -133,6 +133,7 @@ fn comps<'a>(
         hotkeys,
         permissions: None,
         consent: None,
+        config: None,
     }
 }
 
@@ -694,6 +695,7 @@ fn ask(from: &str, route_to: Option<&dyn PermissionRoute>, args: Value) -> Resul
         hotkeys: None,
         permissions: route_to,
         consent: None,
+        config: None,
     };
     route(components, "permission_request", args)
 }
