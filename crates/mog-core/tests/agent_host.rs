@@ -19,6 +19,7 @@ use mog_core::agent_host::{
     AgentError, AgentHost, AgentHostDeps, AgentStatus, AgentStatusSink, Harness, ModelTargets,
     RuntimeConfigs, SessionState, SharedAgentHost,
 };
+use mog_core::bottle_mcp::{BottleMcpDeps, UnavailableLocalTools, UnavailableRelay, MCP_PATH};
 use mog_core::error::CoreResult;
 use mog_core::token_broker::TokenBroker;
 use serde_json::{json, Value};
@@ -161,6 +162,7 @@ fn rig() -> Rig {
         .expect("proxy binds loopback"),
     );
     let host = SharedAgentHost::new(AgentHostDeps {
+        bottle_mcp: mcp_deps(),
         launcher: launcher.clone(),
         proxy: proxy.clone(),
         targets: Arc::new(FakeTargets),
@@ -754,6 +756,7 @@ fn arc_f14_status_reports_are_sent_outside_the_host_lock() {
         .unwrap(),
     );
     let host = SharedAgentHost::new(AgentHostDeps {
+        bottle_mcp: mcp_deps(),
         launcher: launcher.clone(),
         proxy,
         targets: Arc::new(FakeTargets),
@@ -795,6 +798,7 @@ impl ModelTargets for CountingTargets {
 fn rtr_21a_start_for_a_live_session_needs_no_target_lookup() {
     let targets = Arc::new(CountingTargets(AtomicUsize::new(0)));
     let host = SharedAgentHost::new(AgentHostDeps {
+        bottle_mcp: mcp_deps(),
         launcher: Arc::new(FakeLauncher::default()),
         proxy: Arc::new(
             ModelProxy::start(
@@ -823,4 +827,128 @@ fn rtr_21a_start_for_a_live_session_needs_no_target_lookup() {
         1,
         "one lookup, at the first start"
     );
+}
+
+// ---------- RTR-25 / AT-42: only the AgentHost child gets the bottle-mcp secret ----------
+
+fn mcp_deps() -> BottleMcpDeps {
+    BottleMcpDeps::new(Arc::new(UnavailableLocalTools), Arc::new(UnavailableRelay))
+}
+
+/// The `bottleMcp` part of an open frame: the URL and the `Authorization` value.
+fn mcp_of(frame: &Value) -> (String, String) {
+    let m = &frame["bottleMcp"];
+    (
+        m["url"]
+            .as_str()
+            .expect("open frame has a bottle-mcp url")
+            .to_owned(),
+        m["authorization"]
+            .as_str()
+            .expect("open frame has a bottle-mcp authorization")
+            .to_owned(),
+    )
+}
+
+/// POST `tools/list` to `url` with `auth`; the HTTP status, or 0 if nothing answers.
+fn mcp_tools_list(url: &str, auth: &str) -> (u16, Value) {
+    use std::io::{Read, Write};
+    let authority = url
+        .strip_prefix("http://")
+        .and_then(|r| r.split('/').next())
+        .expect("http url");
+    let body = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }).to_string();
+    let req = format!(
+        "POST {MCP_PATH} HTTP/1.1\r\nHost: {authority}\r\nAuthorization: {auth}\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    let Ok(mut s) = std::net::TcpStream::connect(authority) else {
+        return (0, Value::Null);
+    };
+    s.set_read_timeout(Some(std::time::Duration::from_secs(120)))
+        .unwrap();
+    let _ = s.write_all(req.as_bytes());
+    let mut out = Vec::new();
+    let _ = s.read_to_end(&mut out);
+    let text = String::from_utf8_lossy(&out).into_owned();
+    let status = text
+        .split(' ')
+        .nth(1)
+        .and_then(|c| c.parse().ok())
+        .unwrap_or(0);
+    let body = text.split_once("\r\n\r\n").map(|(_, b)| b).unwrap_or("");
+    (status, serde_json::from_str(body).unwrap_or(Value::Null))
+}
+
+#[test]
+fn rtr_25_at_42_only_the_agent_host_child_gets_the_bottle_mcp_secret() {
+    let r = rig();
+    let a = r.host.start_session("a", Harness::Claude).unwrap();
+    let b = r.host.start_session("b", Harness::Claude).unwrap();
+    let opens = frames_of(&r.launcher.proc(0), "open_session");
+    assert_eq!(opens.len(), 2);
+    let (url_a, auth_a) = mcp_of(&opens[0]);
+    let (url_b, auth_b) = mcp_of(&opens[1]);
+    for (url, auth) in [(&url_a, &auth_a), (&url_b, &auth_b)] {
+        assert!(url.starts_with("http://127.0.0.1:"), "{url}");
+        assert!(url.ends_with(MCP_PATH), "{url}");
+        assert!(auth.starts_with("Bearer ") && auth.len() > 40);
+    }
+    assert_ne!(auth_a, auth_b, "one secret per session");
+    assert_ne!(url_a, url_b, "one bottle-mcp per session");
+    assert_ne!(&auth_a[7..], secret_of(&opens[0]), "not the model secret");
+
+    // The secret reaches the child on stdin only: not in the runtime environment, not in a
+    // status report, not in a Debug print of the host or the proxy.
+    for spec in r.launcher.specs.lock().unwrap().iter() {
+        for (k, v) in &spec.env {
+            assert!(
+                !v.contains(&auth_a[7..]) && !v.contains(&auth_b[7..]),
+                "{k}"
+            );
+        }
+    }
+    let seen = format!("{:?} {:?}", r.status.0.lock().unwrap(), r.proxy);
+    assert!(!seen.contains(&auth_a[7..]) && !seen.contains(&auth_b[7..]));
+
+    // The secret opens the session's own bottle-mcp, and only that one.
+    let (status, v) = mcp_tools_list(&url_a, &auth_a);
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(v["result"]["tools"].as_array().unwrap().len(), 7);
+    assert_eq!(mcp_tools_list(&url_a, &auth_b).0, 401);
+
+    // Stop closes the session's bottle-mcp; the other session keeps its own.
+    r.host.stop_session("a").unwrap();
+    // Nothing answers (or, if another process took the free port, not with a 200).
+    assert_ne!(
+        mcp_tools_list(&url_a, &auth_a).0,
+        200,
+        "stopped: the secret opens nothing"
+    );
+    assert_eq!(mcp_tools_list(&url_b, &auth_b).0, 200);
+    let _ = (a, b);
+}
+
+#[test]
+fn rtr_25_arc_f14_a_restart_gives_bottle_mcp_a_new_secret() {
+    let r = rig();
+    let a = r.host.start_session("a", Harness::Claude).unwrap();
+    let p = r.launcher.proc(0);
+    let (old_url, old_auth) = mcp_of(&frames_of(&p, "open_session")[0]);
+    r.launcher.fire(
+        0,
+        RuntimeEvent::SessionFailed {
+            session_id: a.clone(),
+        },
+    );
+    let opens = frames_of(&p, "open_session");
+    assert_eq!(opens.len(), 2, "restarted once");
+    let (new_url, new_auth) = mcp_of(&opens[1]);
+    assert_ne!(old_auth, new_auth);
+    assert_ne!(
+        mcp_tools_list(&old_url, &old_auth).0,
+        200,
+        "old secret revoked"
+    );
+    assert_eq!(mcp_tools_list(&new_url, &new_auth).0, 200);
 }

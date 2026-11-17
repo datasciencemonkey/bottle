@@ -183,11 +183,17 @@ fn r14_wipe_service_stub_reports_not_implemented() {
 }
 
 #[test]
-fn r17_bottle_mcp_server_stub_reports_not_implemented() {
-    use mog_core::bottle_mcp::{BottleMcpServer, StubBottleMcpServer};
-    let s = StubBottleMcpServer;
-    not_implemented(s.start(), "R17");
-    not_implemented(s.stop(), "R17");
+fn r17_bottle_mcp_server_serves_on_loopback_and_stops() {
+    // #113 replaced the R17 stub: the server starts on 127.0.0.1 for one MOG session and stops.
+    use mog_core::bottle_mcp::{
+        BottleMcpDeps, BottleMcpServer, UnavailableLocalTools, UnavailableRelay,
+    };
+    use std::sync::Arc;
+    let deps = BottleMcpDeps::new(Arc::new(UnavailableLocalTools), Arc::new(UnavailableRelay));
+    let s = BottleMcpServer::start("mog-1", &deps).expect("starts on loopback");
+    assert!(s.url().starts_with("http://127.0.0.1:"), "{}", s.url());
+    assert!(s.authorization().starts_with("Bearer "));
+    s.stop();
 }
 
 #[test]

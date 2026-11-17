@@ -12,7 +12,10 @@
 //!
 //! Tokens never reach the harness (ARC-7, RTR-28): the runtime gets a clean environment with the
 //! loopback base URL only ([`env`]), the session secret goes on stdin, and only the
-//! [`model_proxy`] adds the token on the outbound hop.
+//! [`model_proxy`] adds the token on the outbound hop. Each session also gets its own R17
+//! `bottle-mcp` server ([`crate::bottle_mcp`]) with its own secret; its URL and `Authorization`
+//! value go to the runtime child only, in the `open_session` frame (`bottleMcp`), never into
+//! the environment, a status report or a log (RTR-25).
 //!
 //! The host never starts capture, approves context, publishes a Page or switches the workspace:
 //! it has no handle to any of those components. It writes no log line; its status reports carry
@@ -42,6 +45,7 @@ use serde_json::{json, Value};
 use self::adapter::{adapter, launch_spec};
 use self::model_proxy::{ModelProxy, ModelRoute, ModelTarget, SessionSecret};
 use self::runtime::{RuntimeConfig, RuntimeEvent, RuntimeEvents, RuntimeLauncher, RuntimeProcess};
+use crate::bottle_mcp::{BottleMcpDeps, BottleMcpServer};
 
 /// The agent harness kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -187,6 +191,8 @@ pub struct AgentHostDeps {
     pub status: Arc<dyn AgentStatusSink>,
     /// The runtime programs.
     pub runtimes: RuntimeConfigs,
+    /// The tools of the `bottle-mcp` server that each session gets (R17, RTR-25).
+    pub bottle_mcp: BottleMcpDeps,
 }
 
 struct Session {
@@ -196,6 +202,8 @@ struct Session {
     secret: SessionSecret,
     target: ModelTarget,
     state: SessionState,
+    /// The session's own `bottle-mcp` server; `None` once the session failed.
+    mcp: Option<BottleMcpServer>,
 }
 
 struct Runtime {
@@ -285,6 +293,7 @@ impl SharedAgentHost {
             secret: SessionSecret::generate(),
             target,
             state: SessionState::Running,
+            mcp: Some(self.start_mcp(mog_id)?),
         };
         self.register(mog_id, &session)?;
         let opened = self
@@ -316,6 +325,11 @@ impl SharedAgentHost {
         } else {
             Err(AgentError::HarnessMismatch)
         })
+    }
+
+    /// A new `bottle-mcp` server with a new secret for the session of `mog_id`.
+    fn start_mcp(&self, mog_id: &str) -> Result<BottleMcpServer, AgentError> {
+        BottleMcpServer::start(mog_id, &self.deps.bottle_mcp).map_err(|_| AgentError::Unavailable)
     }
 
     fn register(&self, mog_id: &str, s: &Session) -> Result<(), AgentError> {
@@ -360,7 +374,10 @@ impl SharedAgentHost {
         let rt = st.runtimes.get(&s.harness).ok_or(AgentError::Unavailable)?;
         let a = adapter(s.harness);
         let base = a.harness_base_url(&self.deps.proxy.base_url());
-        let frame = a.open_frame(&s.id, &base, s.secret.as_str(), s.model.as_deref());
+        let mut frame = a.open_frame(&s.id, &base, s.secret.as_str(), s.model.as_deref());
+        // RTR-25: the bottle-mcp URL and secret go to the runtime child only, on stdin.
+        let mcp = s.mcp.as_ref().ok_or(AgentError::Unavailable)?;
+        frame["bottleMcp"] = json!({ "url": mcp.url(), "authorization": mcp.authorization() });
         rt.process.send_frame(&frame)
     }
 
@@ -375,12 +392,17 @@ impl SharedAgentHost {
         out: &mut Vec<AgentStatus>,
     ) {
         self.deps.proxy.unregister(&s.secret);
+        // The old bottle-mcp closes with its secret. Its waiting calls see the stop within
+        // 50 ms, so the close under the lock is short.
+        s.mcp = None;
         let runtime_up = st.runtimes.contains_key(&s.harness);
         if s.state == SessionState::Running && runtime_up {
             s.secret = SessionSecret::generate();
             s.state = SessionState::Restarted;
-            if self.register(mog_id, s).is_err() || self.open(st, s).is_err() {
+            s.mcp = self.start_mcp(mog_id).ok();
+            if s.mcp.is_none() || self.register(mog_id, s).is_err() || self.open(st, s).is_err() {
                 self.deps.proxy.unregister(&s.secret);
+                s.mcp = None;
                 s.state = SessionState::Failed;
             }
         } else {
@@ -489,16 +511,22 @@ impl AgentHost for SharedAgentHost {
     }
 
     fn stop_session(&self, mog_id: &str) -> Result<(), AgentError> {
-        let (close, idle) = {
+        let (close, idle, mcp) = {
             let mut st = self.lock();
-            let s = st.sessions.remove(mog_id).ok_or(AgentError::UnknownMog)?;
+            let mut s = st.sessions.remove(mog_id).ok_or(AgentError::UnknownMog)?;
             self.deps.proxy.unregister(&s.secret);
             let close = (s.state != SessionState::Failed)
                 .then(|| st.runtimes.get(&s.harness).map(|rt| rt.process.clone()))
                 .flatten()
                 .map(|p| (p, s.id.clone()));
-            (close, Self::take_idle_runtime(&mut st, s.harness))
+            (
+                close,
+                Self::take_idle_runtime(&mut st, s.harness),
+                s.mcp.take(),
+            )
         };
+        // Outside the lock: close the session's bottle-mcp, so its secret opens nothing.
+        drop(mcp);
         if let Some((p, id)) = close {
             let _ = p.send_frame(&json!({ "type": "close_session", "sessionId": id }));
         }
