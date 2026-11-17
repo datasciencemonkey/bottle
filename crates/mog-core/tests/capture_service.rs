@@ -1501,6 +1501,25 @@ fn cap_12b_a_second_release_does_not_move_the_post_roll() {
 }
 
 #[test]
+fn cap_12b_a_key_down_in_the_post_roll_gets_mic_busy() {
+    // ADR 0057 decision 3: the post-roll lease still owns the mic. A new PTT or hands-free
+    // start in those 120 ms gets `mic_busy`; the brain surfaces it (`onPressRefused`).
+    let r = rig();
+    let lease = r.svc.start(req("a", CaptureMode::Ptt)).unwrap();
+    r.svc.release(lease.id).unwrap();
+    r.advance(POST_ROLL_MS - 1);
+    for mode in [CaptureMode::Ptt, CaptureMode::HandsFree] {
+        assert_eq!(
+            r.svc.start(req("a", mode)).unwrap_err(),
+            CaptureError::MicBusy
+        );
+    }
+    r.advance(1);
+    r.svc.tick();
+    assert!(r.svc.start(req("a", CaptureMode::Ptt)).is_ok());
+}
+
+#[test]
 fn cap_12b_release_is_only_for_ptt() {
     let r = rig();
     let hf = r.svc.start(req("a", CaptureMode::HandsFree)).unwrap();

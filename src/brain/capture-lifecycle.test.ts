@@ -16,29 +16,72 @@ const B = '00000000-0000-4000-8000-00000000000b';
 
 type Call = [string, Record<string, unknown>];
 
-/** A typed double of R2 behind the IPC (TODO(#425): the host routes capture_* to CaptureCore). */
+/**
+ * A typed double of R2 behind the IPC (TODO(#425): the host routes capture_* to CaptureCore).
+ * It keeps R2's one-lease rule (`CaptureCore::start`, ARC-F9): a start while another start is
+ * pending gets `mic_busy`, and so does any start while a lease is live, except a PTT over a
+ * hands-free lease. A released PTT stays live in the 120 ms post-roll until `endPostRoll()`.
+ */
 function rig(opts: { holdStart?: boolean; config?: CaptureLifecycleDeps['config'] } = {}) {
   const calls: Call[] = [];
+  const refused: Call[] = [];
   let next = 0;
   const pending: (() => void)[] = [];
+  let starting = 0;
+  const live = new Map<string, CaptureState['mode']>();
+  const postRoll = new Set<string>();
   const control: CaptureControl = {
     start: (args) => {
       calls.push(['start', args]);
+      const modes = [...live.values()];
+      const free =
+        starting === 0 &&
+        (modes.length === 0 ||
+          (modes.length === 1 && modes[0] === 'hands_free' && args.mode === 'ptt'));
+      if (!free) {
+        refused.push(['start', args]);
+        return Promise.reject(new Error('mic_busy'));
+      }
+      const leaseId = String(++next);
       const state: CaptureState = {
         owner: args.mogId,
         mode: args.mode,
-        leaseId: String(++next),
+        leaseId,
         recording: true,
         paused: false,
         othersTrack: 'off',
       };
-      if (!opts.holdStart) return Promise.resolve(state);
-      return new Promise((resolve) => pending.push(() => resolve(state)));
+      if (!opts.holdStart) {
+        live.set(leaseId, args.mode);
+        return Promise.resolve(state);
+      }
+      starting++;
+      return new Promise((resolve) =>
+        pending.push(() => {
+          starting--;
+          live.set(leaseId, args.mode);
+          resolve(state);
+        }),
+      );
     },
-    release: async (args) => void calls.push(['release', args]),
-    discard: async (args) => void calls.push(['discard', args]),
-    stopHandsFree: async (args) => void calls.push(['stopHandsFree', args]),
+    release: async (args) => {
+      calls.push(['release', args]);
+      if (live.has(args.leaseId)) postRoll.add(args.leaseId);
+    },
+    discard: async (args) => {
+      calls.push(['discard', args]);
+      live.delete(args.leaseId);
+    },
+    stopHandsFree: async (args) => {
+      calls.push(['stopHandsFree', args]);
+      live.delete(args.leaseId);
+    },
   };
+  const endPostRoll = () => {
+    for (const id of postRoll) live.delete(id);
+    postRoll.clear();
+  };
+  const refusals: { mogId: string; mode: string }[] = [];
   const utterances: Utterance[] = [];
   const transcribed: SegmentRef[] = [];
   const texts = new Map<string, string>();
@@ -49,6 +92,7 @@ function rig(opts: { holdStart?: boolean; config?: CaptureLifecycleDeps['config'
       return texts.get(seg.segmentId) ?? 'hello world';
     },
     onUtterance: (u) => void utterances.push(u),
+    onRefused: (e) => void refusals.push(e),
     ...(opts.config ? { config: opts.config } : {}),
   };
   const lc = createCaptureLifecycle(deps);
@@ -72,7 +116,21 @@ function rig(opts: { holdStart?: boolean; config?: CaptureLifecycleDeps['config'
     while (pending.length) pending.shift()?.();
     await flush();
   };
-  return { lc, calls, utterances, transcribed, texts, ptt, seg, flush, resolveStarts };
+  return {
+    lc,
+    calls,
+    refused,
+    refusals,
+    live,
+    endPostRoll,
+    utterances,
+    transcribed,
+    texts,
+    ptt,
+    seg,
+    flush,
+    resolveStarts,
+  };
 }
 
 const names = (calls: Call[]) => calls.map((c) => c[0]);
@@ -308,6 +366,100 @@ describe('capture lifecycle: hands-free (#14)', () => {
   });
 });
 
+describe('capture lifecycle: R2 one-lease rule (#14)', () => {
+  it('[CAP-14a] [AT-03] a double-tap whose second tap ends before its grant starts hands-free after that discard', async () => {
+    // The mic opens more slowly than a tap (NFR-02 allows 150 ms): R2 must get the discard of
+    // the second tap before the hands-free start, or it answers mic_busy.
+    const r = rig({ holdStart: true });
+    r.ptt('down', 0);
+    await r.resolveStarts();
+    r.ptt('cancel', 100);
+    r.ptt('down', 200);
+    r.ptt('cancel', 300);
+    r.ptt('double_tap', 300);
+    await r.flush();
+    await r.resolveStarts();
+    await r.resolveStarts();
+    expect(r.refused).toEqual([]);
+    expect(names(r.calls)).toEqual(['start', 'discard', 'start', 'discard', 'start']);
+    expect(r.calls.at(-1)).toEqual(['start', { mogId: A, mode: 'hands_free' }]);
+    expect([...r.live.values()]).toEqual(['hands_free']);
+  });
+
+  it('[CAP-14a] a key-down while the double-tap waits for the discard cancels the hands-free start', async () => {
+    const r = rig({ holdStart: true });
+    r.ptt('down', 0);
+    await r.resolveStarts();
+    r.ptt('cancel', 100);
+    r.ptt('down', 200);
+    r.ptt('cancel', 300);
+    r.ptt('double_tap', 300);
+    // A third press: R1 starts a new pair (CAP-14a), so hands-free does not start.
+    r.ptt('down', 350);
+    await r.resolveStarts();
+    await r.resolveStarts();
+    expect(r.calls.filter((c) => c[1].mode === 'hands_free')).toEqual([]);
+  });
+
+  it('[CAP-12b] a key-down in the post-roll gets mic_busy; the brain surfaces it and its key-up sends nothing', async () => {
+    const r = rig();
+    r.ptt('down', 0);
+    await r.flush();
+    r.ptt('up', 1000);
+    r.ptt('down', 1050);
+    await r.flush();
+    expect(r.refused).toEqual([['start', { mogId: A, mode: 'ptt' }]]);
+    expect(r.refusals).toEqual([{ mogId: A, mode: 'ptt' }]);
+    r.ptt('up', 2000);
+    await r.flush();
+    expect(names(r.calls)).toEqual(['start', 'release', 'start']);
+  });
+
+  it('[CAP-14b] a tap in the post-roll of a PTT over hands-free still stops hands-free', async () => {
+    const r = rig();
+    r.lc.click(A);
+    await r.flush();
+    r.ptt('down', 10_000);
+    await r.flush();
+    r.ptt('up', 12_000);
+    r.ptt('down', 12_050);
+    await r.flush();
+    r.ptt('cancel', 12_150);
+    expect(r.calls.at(-1)).toEqual(['stopHandsFree', { mogId: A, leaseId: '1', by: 'tap' }]);
+  });
+
+  it('[CAP-14b] [CAP-44c] TODO(#444) pins the gap: the brain times the tap, so a cancel under 250 ms stops hands-free', async () => {
+    // R1's `HotkeyOutput::Tap` does not reach the brain (#444). A CAP-44c cancel under 250 ms
+    // looks like a tap and stops hands-free; a cancel 250 ms or more after its key-down does not.
+    const r = rig();
+    r.lc.click(A);
+    await r.flush();
+    r.ptt('down', 10_000);
+    await r.flush();
+    r.ptt('cancel', 10_000 + TAP_MAX_HOLD_MS);
+    expect(names(r.calls)).toEqual(['start', 'start', 'discard']);
+    r.ptt('down', 20_000);
+    await r.flush();
+    r.ptt('cancel', 20_000 + TAP_MAX_HOLD_MS - 1);
+    expect(r.calls.at(-1)).toEqual(['stopHandsFree', { mogId: A, leaseId: '1', by: 'tap' }]);
+  });
+});
+
+describe('capture lifecycle: segments (#14)', () => {
+  it('[CAP-12b] [CAP-14c] only a final segment goes to STT, and onUtterance fires once for it', async () => {
+    const r = rig();
+    r.lc.click(A);
+    await r.flush();
+    const partial = { ...r.seg('1', 's1'), final: false };
+    await r.lc.onSegment(partial);
+    expect(r.transcribed).toEqual([]);
+    await r.lc.onSegment(r.seg('1', 's1'));
+    await r.lc.onSegment(r.seg('1', 's1'));
+    await r.lc.onSegment(r.seg('1', 's2'));
+    expect(r.utterances.map((u) => u.segment.segmentId)).toEqual(['s1', 's2']);
+  });
+});
+
 describe('capture lifecycle wiring (#14)', () => {
   it('[CAP-12a] [CAP-14a] hotkey:ptt, view clicks and capture:segment reach the lifecycle on the bus', async () => {
     const bus = new BrainBus();
@@ -337,5 +489,26 @@ describe('capture lifecycle wiring (#14)', () => {
     off();
     await bus.dispatch({ event: 'hotkey:ptt', payload: { mogId: A, phase: 'up' } });
     expect(names(r.calls)).toEqual(['start', 'start']);
+  });
+
+  it('[CAP-14b] Esc in the card of the hands-free MOG (view:input cancel) stops it and drops its audio', async () => {
+    const bus = new BrainBus();
+    const r = rig();
+    wireCaptureLifecycle(bus, r.lc, () => 5);
+    r.lc.click(A);
+    await r.flush();
+    // Esc in the card of another MOG does not stop A.
+    await bus.dispatch({
+      event: 'view:input',
+      payload: { from: `card-${B}`, input: { mogId: B, kind: 'cancel' } },
+    });
+    expect(names(r.calls)).toEqual(['start']);
+    await bus.dispatch({
+      event: 'view:input',
+      payload: { from: `card-${A}`, input: { mogId: A, kind: 'cancel' } },
+    });
+    expect(r.calls.at(-1)).toEqual(['stopHandsFree', { mogId: A, leaseId: '1', by: 'escape' }]);
+    await r.lc.onSegment(r.seg('1'));
+    expect(r.transcribed).toEqual([]);
   });
 });

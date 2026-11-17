@@ -1583,6 +1583,35 @@ mod tests {
     }
 
     #[test]
+    fn cap_14a_cap_39a_a_secure_input_cancel_between_two_taps_gives_no_double_tap() {
+        // A machine cancel (Secure Event Input starts during the second press) is no tap. The
+        // chord tap after it is a new first tap, not the second tap of the earlier pair.
+        let (sink, clock, mut e) = engine_at_zero();
+        let probe = FakeProbe::ready();
+        let ctl = FakeCtl::default();
+        e.tick(clock.now(), &probe, &ctl);
+        tap_at(&mut e, &clock, 50);
+        clock.advance(Duration::from_millis(50));
+        e.on_talk_key(Down);
+        *probe.physical.lock().unwrap() = down();
+        *probe.secure.lock().unwrap() = true;
+        e.tick(clock.now(), &probe, &ctl);
+        assert!(sink
+            .take()
+            .ends_with(&[Ptt(PDown), Ptt(Cancel), HotkeyOutput::TalkKeyPaused]));
+        clock.advance(Duration::from_millis(50));
+        e.on_chord(Down);
+        clock.advance(Duration::from_millis(50));
+        e.on_chord(Up);
+        let out = sink.take();
+        assert!(
+            out.contains(&HotkeyOutput::Tap),
+            "the chord press is a tap: {out:?}"
+        );
+        assert!(!out.contains(&Ptt(PttPhase::DoubleTap)), "{out:?}");
+    }
+
+    #[test]
     fn cap_44c_at_03_another_key_in_the_first_second_cancels_the_ptt() {
         for ms in [0u64, 300, 999] {
             let (sink, clock, mut e) = engine_at_zero();
