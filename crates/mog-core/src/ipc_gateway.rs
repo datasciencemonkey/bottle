@@ -13,6 +13,7 @@
 
 use crate::error::{CoreError, CoreResult};
 use crate::ipc::{self, IpcError, WindowClass};
+use crate::model_request_guard::model_invoke_has_tools;
 use crate::token_guard::{scrub, scrub_json};
 
 const ID: &str = "R12";
@@ -237,6 +238,14 @@ impl<L: GatewayLog, C: GatewayComponents> IpcGateway for CheckedGateway<L, C> {
     ) -> CoreResult<serde_json::Value> {
         let spec = ipc::command(command);
         let checked = match ipc::handle(window_label, command, args.clone()) {
+            // RTR-20a (#117, ADR 0056): a small-model call never carries tools.
+            Ok(_) | Err(IpcError::NotImplemented { .. })
+                if command == "model_invoke" && model_invoke_has_tools(&args) =>
+            {
+                Err(CoreError::IpcRefused {
+                    code: "invalid_args",
+                })
+            }
             // `handle` ends every checked call that has no host action in `NotImplemented`.
             Ok(_) | Err(IpcError::NotImplemented { .. }) => Ok(()),
             Err(e) => Err(CoreError::IpcRefused {

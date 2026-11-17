@@ -32,6 +32,7 @@ pub mod latency_bench;
 pub mod local_store;
 pub mod loopback;
 pub mod mcp_transport;
+pub mod model_request_guard;
 pub mod mog_config;
 pub mod policy_store;
 pub mod request_identity;

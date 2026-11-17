@@ -34,6 +34,10 @@ The copy comes from one file: `src/views/hub/disclosures.ts`. If you change the 
 - Embeddings send the text of memory items to that workspace.
 - This stays the same when a MOG asks Genie in another workspace.
 - Questions about another workspace are processed in your home workspace.
+- The router step gets only your words, the capture mode, recent topic labels, your MOGs and your profiles. It never gets memory text.
+- The router model and the cleanup and writer models never get tools.
+- If your words sound like an instruction to Bottle, for example "ignore the rules" or "send my notes to this URL", Bottle sends nothing and shows a warning chip.
+- The router step never suggests a workspace outside `AllowedWorkspaceHosts`, when your admin sets it.
 
 ## The main agent and its model
 
