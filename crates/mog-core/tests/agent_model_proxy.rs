@@ -26,7 +26,7 @@ struct FakeTokens {
 }
 
 impl TokenBroker for FakeTokens {
-    fn with_token(&self, profile: &str, f: &mut dyn FnMut(&[u8])) -> CoreResult<()> {
+    fn with_token(&self, profile: &str, _host: &str, f: &mut dyn FnMut(&[u8])) -> CoreResult<()> {
         self.profiles.lock().unwrap().push(profile.to_owned());
         f(FAKE_TOKEN.as_bytes());
         Ok(())

@@ -33,7 +33,7 @@ struct FakeTokens {
 }
 
 impl TokenBroker for FakeTokens {
-    fn with_token(&self, _profile: &str, f: &mut dyn FnMut(&[u8])) -> CoreResult<()> {
+    fn with_token(&self, _profile: &str, _host: &str, f: &mut dyn FnMut(&[u8])) -> CoreResult<()> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         f(FAKE_TOKEN);
         Ok(())

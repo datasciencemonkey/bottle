@@ -198,7 +198,7 @@ struct FakeBroker {
 }
 
 impl TokenBroker for FakeBroker {
-    fn with_token(&self, _profile: &str, f: &mut dyn FnMut(&[u8])) -> CoreResult<()> {
+    fn with_token(&self, _profile: &str, _host: &str, f: &mut dyn FnMut(&[u8])) -> CoreResult<()> {
         self.lends.fetch_add(1, Ordering::SeqCst);
         if self.invalidations.load(Ordering::SeqCst) == 0 {
             f(TOKEN.as_bytes());
@@ -1009,7 +1009,11 @@ mod real_r6 {
             .request(PROFILE, "scim.me", &none(), None, &tags("m1", "genie"))
             .unwrap();
         assert_eq!(got, json!({"userName": "a"}));
-        assert_eq!(r.cli.runs.load(Ordering::SeqCst), 2, "one CLI run after the 401");
+        assert_eq!(
+            r.cli.runs.load(Ordering::SeqCst),
+            2,
+            "one CLI run after the 401"
+        );
         let seen = s.seen();
         assert_eq!(seen.len(), 2, "one retry");
         assert_eq!(

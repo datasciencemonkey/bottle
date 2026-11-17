@@ -6,7 +6,7 @@
 //! brain cannot point R8 at the Beta `/api/2.0/mcp/genie` endpoint or a per-space MCP. These two
 //! IPC checks carry no G-03 tag: G-03 itself (the config loader refuses the Beta URL) is #28. The behaviour is not built: the endpoint config is #28, the thin JSON-RPC client R8 is
 //! #30 (the SP-09 spike client in `spikes/sp-09` proves the design offline, #29), and the
-//! workspace ID of R6 is #18. Those tests are `#[ignore = "pending TODO(#n)"]`. The serial poll
+//! workspace ID of R6 (#18) runs here on a scripted SCIM seam. The other tests are `#[ignore = "pending TODO(#n)"]`. The serial poll
 //! queue (G-07b) is TS and runs in `src/acceptance/at-07-genie-connect.test.ts`. The live run
 //! skips without `BOTTLE_TEST_PROFILE` (docs/tests/AT-GENIE-MCP.md).
 
@@ -115,13 +115,53 @@ fn at_07_g_06a_mcp_call_refuses_tools_outside_the_allowlist() {
     }
 }
 
+/// A scripted SCIM seam (never a live workspace): counts calls, answers org ID 1234.
+#[derive(Default)]
+struct ScriptedScim {
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+impl mog_core::token_broker::ScimMe for ScriptedScim {
+    fn org_id_header(&self, _profile: &str) -> mog_core::error::CoreResult<Option<String>> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(Some("1234".to_owned()))
+    }
+}
+
+struct OneHost;
+
+impl mog_core::http_transport::ProfileHosts for OneHost {
+    fn workspace_url(&self, _profile: &str) -> mog_core::error::CoreResult<String> {
+        Ok("https://h.cloud.databricks.com".to_owned())
+    }
+}
+
 #[test]
-#[ignore = "pending TODO(#18): R6 TokenBroker is a stub"]
 fn at_07_w_06a_w_06b_workspace_id_from_the_org_id_header_once_per_profile() {
-    // When #18 lands: R6 reads workspace_id from the x-databricks-org-id header of
+    use mog_core::token_broker::{CliTokenBroker, TokenBroker};
+    use std::sync::Arc;
+    // R6 reads workspace_id from the x-databricks-org-id header of
     // GET /api/2.0/preview/scim/v2/Me (W-06a) and caches it, so two lookups for one profile make
-    // one SCIM call (W-06b). Use a scripted SCIM reply; never a live workspace here.
-    todo!("#18: count SCIM calls for two workspace_id lookups")
+    // one SCIM call (W-06b). R7 reads the header on the wire in http_transport_reqwest.rs.
+    let r6 = CliTokenBroker::new(
+        Arc::new(mog_core::cli_runner::StubCliRunner),
+        Arc::new(OneHost),
+        Arc::new(mog_core::clock::SimClock::new()),
+        Arc::new(mog_core::clock::SimWallClock::at(0)),
+    );
+    let scim = Arc::new(ScriptedScim::default());
+    let weak = Arc::downgrade(&scim);
+    r6.bind_scim(weak);
+    assert_eq!(r6.workspace_id("bottle-test").unwrap(), "1234");
+    assert_eq!(r6.workspace_id("bottle-test").unwrap(), "1234");
+    assert_eq!(scim.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    // AT-07 pass: the URL has ?o=.
+    let url = r6
+        .genie_one_endpoint("bottle-test")
+        .unwrap()
+        .url()
+        .to_owned();
+    assert!(url.ends_with("/system.ai.genie_one_mcp?o=1234"), "{url}");
 }
 
 #[test]

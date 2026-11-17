@@ -11,7 +11,10 @@
 //! 5. The token from [`TokenBroker::with_token`] for this one send only. It is never logged.
 //! 6. Redirects are off in reqwest. R7 follows a 3xx only to the same host (rule 3).
 //! 7. Only a JSON reply reaches the caller (rule 6), scrubbed (rule 7). A page is never retried.
-//! 8. A 401 invalidates the token once and retries once.
+//! 8. A 401 invalidates the token once and retries once (W-05b..d).
+//!
+//! R7 is also the [`ScimMe`] seam of R6: `GET /api/2.0/preview/scim/v2/Me` through this same
+//! pipeline, returning only the `x-databricks-org-id` header (W-06a).
 //!
 //! Errors are [`CoreError::Unavailable`] with a content-free code: never a URL, host, token
 //! or body text.
@@ -29,12 +32,12 @@ use serde_json::Value;
 use super::host_policy::AllowlistEgressPolicy;
 use super::rate_bucket::{parse_retry_after, retry_after_from_body, RateBucket};
 use super::routes::{self, Method};
-use super::{outbound_headers, HttpTransport, ID};
+use super::{outbound_headers, route_call_kind, HttpTransport, ID};
 use crate::egress_policy::TokenEgressPolicy;
 use crate::error::{CoreError, CoreResult};
 use crate::ipc::JsonObject;
 use crate::request_identity::{BottleIdentity, RequestDecorator};
-use crate::token_broker::TokenBroker;
+use crate::token_broker::{ScimMe, TokenBroker};
 use crate::token_guard::scrub_json;
 use crate::types::Tags;
 
@@ -139,8 +142,12 @@ struct Raw {
     content_type: Option<String>,
     location: Option<String>,
     retry_after: Option<String>,
+    org_id: Option<String>,
     body: Vec<u8>,
 }
+
+/// The `x-databricks-org-id` reply header (W-06a).
+const ORG_ID_HEADER: &str = "x-databricks-org-id";
 
 fn err(reason: &'static str) -> CoreError {
     CoreError::Unavailable {
@@ -226,13 +233,14 @@ impl ReqwestHttpTransport {
     fn send_once(
         &self,
         profile: &str,
+        host: &str,
         method: Method,
         url: &str,
         headers: &[(&'static str, String)],
         body: Option<&[u8]>,
     ) -> CoreResult<Raw> {
         let mut out: Option<CoreResult<Raw>> = None;
-        self.seams.tokens.with_token(profile, &mut |token| {
+        self.seams.tokens.with_token(profile, host, &mut |token| {
             out = Some(self.send_with(token, method, url, headers, body));
         })?;
         out.unwrap_or(Err(err(TOKEN_UNUSABLE)))
@@ -304,6 +312,10 @@ impl ReqwestHttpTransport {
         let content_type = header_text(h, CONTENT_TYPE);
         let location = header_text(h, LOCATION);
         let retry_after = header_text(h, RETRY_AFTER);
+        let org_id = h
+            .get(ORG_ID_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
         let mut bytes = Vec::new();
         resp.take(MAX_REPLY_BYTES + 1)
             .read_to_end(&mut bytes)
@@ -316,6 +328,7 @@ impl ReqwestHttpTransport {
             content_type,
             location,
             retry_after,
+            org_id,
             body: bytes,
         })
     }
@@ -330,18 +343,18 @@ impl std::fmt::Debug for ReqwestHttpTransport {
     }
 }
 
-impl HttpTransport for ReqwestHttpTransport {
-    fn request(
+impl ReqwestHttpTransport {
+    /// Rules 1-8 for one route: the scrubbed JSON reply and its `x-databricks-org-id` header.
+    fn request_raw(
         &self,
         profile: &str,
         route_id: &str,
         params: &JsonObject,
         body: Option<&Value>,
-        tags: &Tags,
-    ) -> CoreResult<Value> {
+        headers: Vec<(&'static str, String)>,
+    ) -> CoreResult<(Value, Option<String>)> {
         let route = routes::route(route_id)?;
         let path = routes::build_path(route, params)?;
-        let headers = outbound_headers(&*self.seams.decorator, route_id, tags)?;
         let (origin, host) = self.origin(profile)?;
         let mut url = format!("{origin}{path}");
         let policy = &self.seams.policy;
@@ -357,7 +370,7 @@ impl HttpTransport for ReqwestHttpTransport {
         let mut hops = 0u8;
         loop {
             self.wait_for_bucket(profile);
-            let raw = self.send_once(profile, method, &url, &headers, body.as_deref())?;
+            let raw = self.send_once(profile, &host, method, &url, &headers, body.as_deref())?;
             if (300..400).contains(&raw.status) {
                 // Rule 3: same host only; anything else is dropped, never followed.
                 let to = raw
@@ -395,7 +408,7 @@ impl HttpTransport for ReqwestHttpTransport {
                 return Err(err(NON_JSON_REPLY));
             };
             return match raw.status {
-                200..=299 => Ok(scrub_json(&json)),
+                200..=299 => Ok((scrub_json(&json), raw.org_id)),
                 401 if !retried_401 => {
                     self.seams.tokens.invalidate(profile)?;
                     retried_401 = true;
@@ -406,6 +419,35 @@ impl HttpTransport for ReqwestHttpTransport {
                 _ => Err(err(UPSTREAM_FAILED)),
             };
         }
+    }
+}
+
+impl ScimMe for ReqwestHttpTransport {
+    fn org_id_header(&self, profile: &str) -> CoreResult<Option<String>> {
+        let kind = route_call_kind("scim.me").ok_or(err(super::UNKNOWN_ROUTE))?;
+        let headers = self
+            .seams
+            .decorator
+            .headers(kind, None)
+            .map_err(|e| err(e.code()))?;
+        let (_, org_id) =
+            self.request_raw(profile, "scim.me", &JsonObject::new(), None, headers)?;
+        Ok(org_id)
+    }
+}
+
+impl HttpTransport for ReqwestHttpTransport {
+    fn request(
+        &self,
+        profile: &str,
+        route_id: &str,
+        params: &JsonObject,
+        body: Option<&Value>,
+        tags: &Tags,
+    ) -> CoreResult<Value> {
+        let headers = outbound_headers(&*self.seams.decorator, route_id, tags)?;
+        self.request_raw(profile, route_id, params, body, headers)
+            .map(|(v, _)| v)
     }
 
     fn is_online(&self) -> CoreResult<bool> {

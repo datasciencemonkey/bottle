@@ -6,7 +6,8 @@
 //! rejected, and the old CLI and plaintext storage show blocking messages.
 //!
 //! The Rust side of AT-02 is R5 CliRunner (#16, PR #255 is open) and R6 TokenBroker (#18). Only
-//! the token buffer of R6 ships, so W-18c's zero overwrite runs here. The other tests are written
+//! the token buffer of R6 ships, so W-18c's zero overwrite runs here. R6 refresh and 401 (W-05a..c)
+//! run here against the real `CliTokenBroker` with a fake CLI (#18). The other tests are written
 //! against `mog_core::cli_runner::CliRunner` and `mog_core::token_broker::TokenBroker` and stay
 //! `#[ignore]` with the feature issue, so they never count as a pass. The live parts read the
 //! #229 fixture (`BOTTLE_TEST_PROFILE`) and need a person: docs/tests/AT-SIGNIN-WORKSPACE-HOP.md.
@@ -14,12 +15,16 @@
 //!
 //! No test here reads, prints or stores a token. Test tokens are made-up bytes.
 
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use mog_core::cli_runner::{CliRunner, StubCliRunner};
-use mog_core::clock::{MonotonicClock, SimClock};
-use mog_core::token_broker::{SecretToken, StubTokenBroker, TokenBroker};
+use mog_core::clock::{MonotonicClock, SimClock, SimWallClock};
+use mog_core::error::CoreResult;
+use mog_core::http_transport::ProfileHosts;
+use mog_core::token_broker::{CliTokenBroker, SecretToken, StubTokenBroker, TokenBroker};
 
 /// A made-up token shape. It is not a real token and it never leaves the test.
 fn fake_token() -> SecretToken {
@@ -85,35 +90,93 @@ fn at_02_w_02d_a_changed_cli_shows_a_warning_at_the_next_launch() {
     todo!("TODO(#16): assert launch 2 reports the changed path or version as a warning");
 }
 
-// ---------- Pending: R6 TokenBroker refresh and 401 (W-05a..d) ----------
+// ---------- R6 TokenBroker refresh and 401 (W-05a..d, #18) ----------
 
-#[test]
-#[ignore = "pending TODO(#18): TokenBroker refresh at expiry - 60 s and single-flight are not built"]
-fn at_02_w_05a_n_mogs_on_one_profile_cause_one_cli_call_60_s_before_expiry() {
-    let clock = SimClock::new();
-    let r6: Arc<dyn TokenBroker> = Arc::new(StubTokenBroker);
-    // TODO(#18): a TokenBroker with `clock` and a counting CLI double; the token expires at 3,600 s.
-    for _mog in 0..8 {
-        r6.with_token("bottle-test", &mut |b| assert!(!b.is_empty()))
-            .expect("TODO(#18): a token for each MOG");
+/// 2026-11-17T12:00:00Z in Unix milliseconds.
+const T0_MS: i64 = 1_794_916_800_000;
+
+/// A fake R5: counts `auth token` runs and answers a made-up token that expires at 13:00Z.
+#[derive(Default)]
+struct CountingCli {
+    runs: AtomicUsize,
+}
+
+impl CliRunner for CountingCli {
+    fn resolve(&self) -> CoreResult<PathBuf> {
+        Ok(PathBuf::from("/usr/local/bin/databricks"))
     }
-    clock.advance(Duration::from_secs(3_600 - 60));
-    assert_eq!(clock.now(), Duration::from_secs(3_540));
-    todo!("TODO(#18): assert exactly one CLI call for 8 MOGs at 3,540 s and none before it");
+    fn run_json(&self, args: &[&str]) -> CoreResult<serde_json::Value> {
+        mog_core::cli_runner::refuse_token_command(args)?;
+        Ok(serde_json::json!({}))
+    }
+    fn run_auth_token(&self, _profile: &str) -> CoreResult<Vec<u8>> {
+        let n = self.runs.fetch_add(1, Ordering::SeqCst);
+        Ok(format!(
+            r#"{{"access_token":"test-token-not-real-{n}","expiry":"2026-11-17T13:00:00Z"}}"#
+        )
+        .into_bytes())
+    }
+}
+
+struct OneHost;
+
+impl ProfileHosts for OneHost {
+    fn workspace_url(&self, _profile: &str) -> CoreResult<String> {
+        Ok("https://h.cloud.databricks.com".to_owned())
+    }
+}
+
+const HOST: &str = "h.cloud.databricks.com";
+
+fn r6(clock: &SimClock) -> (CliTokenBroker, Arc<CountingCli>) {
+    let cli = Arc::new(CountingCli::default());
+    let b = CliTokenBroker::new(
+        cli.clone(),
+        Arc::new(OneHost),
+        Arc::new(clock.clone()),
+        Arc::new(SimWallClock::at(T0_MS)),
+    );
+    (b, cli)
 }
 
 #[test]
-#[ignore = "pending TODO(#18): drop on 401 and the one retry are not built"]
-fn at_02_w_05b_w_05c_w_05d_a_401_drops_the_token_and_one_retry_runs_with_a_new_one() {
-    let r6 = StubTokenBroker;
-    r6.with_token("bottle-test", &mut |_| ())
-        .expect("TODO(#18): first token");
-    // The bridge sees HTTP 401 and tells R6.
-    r6.invalidate("bottle-test")
-        .expect("TODO(#18): drop the token on 401");
-    r6.with_token("bottle-test", &mut |_| ())
-        .expect("TODO(#18): a new token from one CLI run");
-    todo!("TODO(#18): assert the trace shows one CLI run, one retry, and that a second 401 gives 'Sign in to <host>' (W-05d)");
+fn at_02_w_05a_n_mogs_on_one_profile_cause_one_cli_call_60_s_before_expiry() {
+    let clock = SimClock::new();
+    let (r6, cli) = r6(&clock);
+    for _mog in 0..8 {
+        r6.with_token("bottle-test", HOST, &mut |b| assert!(!b.is_empty()))
+            .unwrap();
+    }
+    assert_eq!(cli.runs.load(Ordering::SeqCst), 1);
+    clock.advance(Duration::from_secs(3_539));
+    r6.with_token("bottle-test", HOST, &mut |_| ()).unwrap();
+    assert_eq!(cli.runs.load(Ordering::SeqCst), 1, "none before 3,540 s");
+    clock.advance(Duration::from_secs(1));
+    assert_eq!(clock.now(), Duration::from_secs(3_540));
+    for _mog in 0..8 {
+        r6.with_token("bottle-test", HOST, &mut |_| ()).unwrap();
+    }
+    assert_eq!(
+        cli.runs.load(Ordering::SeqCst),
+        2,
+        "one CLI call for 8 MOGs at 3,540 s"
+    );
+}
+
+#[test]
+fn at_02_w_05b_w_05c_a_401_drops_the_token_and_the_next_call_gets_a_new_one() {
+    let clock = SimClock::new();
+    let (r6, cli) = r6(&clock);
+    let mut first = Vec::new();
+    r6.with_token("bottle-test", HOST, &mut |b| first = b.to_vec())
+        .unwrap();
+    // The bridge sees HTTP 401 and tells R6 (R7 does this, W-05d is in http_transport_reqwest.rs).
+    r6.invalidate("bottle-test").unwrap();
+    let mut second = Vec::new();
+    r6.with_token("bottle-test", HOST, &mut |b| second = b.to_vec())
+        .unwrap();
+    assert_ne!(first, second, "W-05b: a new token");
+    assert_eq!(cli.runs.load(Ordering::SeqCst), 2, "W-05c: one CLI run");
 }
 
 // ---------- Pending: sign-out (W-18a..c) ----------
@@ -122,13 +185,13 @@ fn at_02_w_05b_w_05c_w_05d_a_401_drops_the_token_and_one_retry_runs_with_a_new_o
 #[ignore = "pending TODO(#163): sign-out of bottle-* profiles is not built (the token wipe is TODO(#18))"]
 fn at_02_w_18a_w_18c_after_sign_out_no_call_succeeds_and_no_token_is_left() {
     let r6 = StubTokenBroker;
-    r6.with_token("bottle-test", &mut |_| ())
+    r6.with_token("bottle-test", HOST, &mut |_| ())
         .expect("TODO(#18): a token before sign-out");
     // TODO(#163): "Sign out of bottle-test" runs `databricks auth logout --profile bottle-test`
     // through CliRunner, and R6 wipes the profile's buffers (W-18c).
     r6.invalidate("bottle-test").expect("TODO(#18): wipe");
     assert!(
-        r6.with_token("bottle-test", &mut |_| ()).is_err(),
+        r6.with_token("bottle-test", HOST, &mut |_| ()).is_err(),
         "W-18a: a call after sign-out must fail"
     );
     todo!("TODO(#163): assert `auth logout` ran once for a bottle-* profile only, and a memory scan finds no token bytes");

@@ -64,7 +64,10 @@ struct FakeCli {
 impl FakeCli {
     fn answering(profile: &str, answers: Vec<Answer>) -> Arc<Self> {
         let cli = Self::default();
-        cli.script.lock().unwrap().insert(profile.to_owned(), answers);
+        cli.script
+            .lock()
+            .unwrap()
+            .insert(profile.to_owned(), answers);
         Arc::new(cli)
     }
     fn also(self: &Arc<Self>, profile: &str, answers: Vec<Answer>) -> Arc<Self> {
@@ -190,13 +193,7 @@ impl FakeScim {
 impl ScimMe for FakeScim {
     fn org_id_header(&self, profile: &str) -> CoreResult<Option<String>> {
         self.calls.lock().unwrap().push(profile.to_owned());
-        Ok(self
-            .header
-            .lock()
-            .unwrap()
-            .get(profile)
-            .cloned()
-            .flatten())
+        Ok(self.header.lock().unwrap().get(profile).cloned().flatten())
     }
 }
 
@@ -256,11 +253,20 @@ fn wait_until(cond: impl Fn() -> bool) {
 fn w_04a_the_token_command_is_exactly_auth_token_profile_output_json() {
     assert_eq!(
         auth_token_args("bottle-test"),
-        ["auth", "token", "--profile", "bottle-test", "--output", "json"]
+        [
+            "auth",
+            "token",
+            "--profile",
+            "bottle-test",
+            "--output",
+            "json"
+        ]
     );
     // R5 still refuses the same command on the general path (ARC-6).
     assert_eq!(
-        refuse_token_command(&auth_token_args("p")).unwrap_err().code(),
+        refuse_token_command(&auth_token_args("p"))
+            .unwrap_err()
+            .code(),
         "token_command_refused"
     );
 }
@@ -287,7 +293,11 @@ fn w_04a_a_profile_name_that_could_be_a_flag_is_refused_before_any_cli_run() {
         vec![Answer::Expiry(TOKEN, IN_ONE_HOUR)],
     ));
     for bad in ["", "-x", "--output", "a b", "p;rm", "p\n", &"p".repeat(65)] {
-        assert_eq!(code(lend(&*r.broker, bad, HOST)), PROFILE_INVALID, "{bad:?}");
+        assert_eq!(
+            code(lend(&*r.broker, bad, HOST)),
+            PROFILE_INVALID,
+            "{bad:?}"
+        );
     }
     assert_eq!(r.cli.runs(), 0);
 }
@@ -338,10 +348,9 @@ fn w_01b_w_04b_debug_and_errors_never_show_the_token() {
 
 #[test]
 fn w_01b_token_broker_source_never_touches_the_file_system() {
-    let src = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/token_broker.rs"),
-    )
-    .unwrap();
+    let src =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/token_broker.rs"))
+            .unwrap();
     for banned in [
         "std::fs",
         "File::",
@@ -409,7 +418,7 @@ fn w_05a_n_mogs_on_one_profile_cause_one_cli_call_until_expiry_minus_60_s() {
 fn w_05a_expires_in_and_an_rfc3339_offset_give_the_same_refresh_time() {
     for answer in [
         Answer::ExpiresIn(TOKEN, 3_600),
-        Answer::Expiry(TOKEN, "2026-11-17T14:00:00.123456+01:00"),
+        Answer::Expiry(TOKEN, "2026-11-17T14:00:00.000000+01:00"),
     ] {
         let r = rig(FakeCli::answering(PROFILE, vec![answer]));
         lend(&*r.broker, PROFILE, HOST).unwrap();
@@ -471,7 +480,11 @@ fn w_05a_a_failed_refresh_is_shared_and_other_profiles_keep_working() {
     for j in joins {
         assert_eq!(code(j.join().unwrap()), LOGIN_REQUIRED);
     }
-    assert_eq!(r.cli.runs_for(PROFILE), 1, "the waiters share the one failure");
+    assert_eq!(
+        r.cli.runs_for(PROFILE),
+        1,
+        "the waiters share the one failure"
+    );
     // ARC-F5: other profiles are not affected.
     assert_eq!(lend(&*r.broker, OTHER, OTHER_HOST).unwrap(), TOKEN);
 }
@@ -557,7 +570,11 @@ fn w_06a_w_06b_workspace_id_comes_from_the_org_id_header_once_per_profile() {
     for _ in 0..5 {
         assert_eq!(r.broker.workspace_id(PROFILE).unwrap(), "1234");
     }
-    assert_eq!(scim.calls_for(PROFILE), 1, "one SCIM call per profile per launch");
+    assert_eq!(
+        scim.calls_for(PROFILE),
+        1,
+        "one SCIM call per profile per launch"
+    );
     assert_eq!(r.broker.workspace_id(OTHER).unwrap(), "5678");
     assert_eq!(scim.calls_for(OTHER), 1);
     // A dropped token does not drop the workspace ID.
