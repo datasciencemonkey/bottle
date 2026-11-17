@@ -47,3 +47,12 @@ Consequence: the full `src-tauri` crate does not build for `x86_64-pc-windows-ms
 - Date: 2026-11-16. Owner: impl-322 (capture-lead).
 
 The talk key now comes from the saved `app.hotkeys.ptt` setting, not the fixed D66 default. A change restarts the service with no prompt. See ADR 0020, decision 8.
+
+## Amendment 3: the target rules of #73 (ADR 0058)
+
+- Date: 2026-11-17. Owner: impl-73 (shell-lead).
+
+Decision 4 changes. `PttTarget` keeps the open MOGs in the order of the last interaction. A
+reload of an open MOG view does not move the target. A card moves the target only while its MOG
+window is open. When the target MOG closes, the target moves to the most recently interacted
+open MOG. `PttTarget::set_active` is the host side of `mog_set_active` (#439). See ADR 0058.

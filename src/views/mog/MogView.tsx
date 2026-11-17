@@ -1,7 +1,13 @@
 /** V2 MOG view (thin): one mascot instance, badges and DOM overlays from `mog.view_state`. */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MogId } from '../../shared/interfaces';
-import { asMogViewState, emitView, useViewEvent, type MogViewState } from '../view-ipc';
+import {
+  asMogViewState,
+  emitView,
+  useMogTarget,
+  useViewEvent,
+  type MogViewState,
+} from '../view-ipc';
 import { LevelMeter, NO_MIC_LEVELS, type MicLevelSource } from './level-meter';
 import type { FrameProbe } from './frame-probe';
 import type { MascotRenderer } from './mascot';
@@ -77,6 +83,9 @@ export function MogView({
     [mogId, probe],
   );
   useViewEvent('mog.view_state', onState);
+  // MB-06b, UX-28 (#73): the brain says which MOG the talk key targets and when to show the toast.
+  const target = useMogTarget(mogId);
+  const name = target?.name ?? 'MOG';
 
   // TODO(#83): poke, click-to-listen and drag rules; the brain decides what input means.
   // The hover flag is on the whole view, so moving onto a badge keeps the hover badges open.
@@ -85,7 +94,7 @@ export function MogView({
       <div
         ref={ref}
         className="mascot"
-        aria-label="MOG"
+        aria-label={target?.target ? `${name}, target` : name}
         onClick={() => {
           mascot.current?.poke();
           void emitView(mogId, 'click');
@@ -98,6 +107,14 @@ export function MogView({
           mascot.current?.setHover(false);
         }}
       />
+      {/* UX-28: a triangle under the target mascot; the accessible name says "target". */}
+      {target?.target && <span className="target-marker" data-marker="target" aria-hidden="true" />}
+      {/* MB-06b: the brain shows the toast for 1.2 s after the talk key goes down. */}
+      {target?.target && target.toast && (
+        <span className="target-toast" data-toast="target" role="status">
+          {`Talking to ${target.name}`}
+        </span>
+      )}
       {/* The visual "?" cue is the renderer's (UX-03); this empty span is the accessible badge. */}
       {state?.overlays.attention && <span data-overlay="attention" aria-label="Needs attention" />}
       {state?.overlays.recording && <span data-overlay="recording">REC</span>}

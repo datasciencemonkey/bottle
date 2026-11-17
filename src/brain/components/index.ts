@@ -11,6 +11,7 @@ import {
 } from '../capture-lifecycle';
 import { createSystemClock } from '../clock';
 import { wireNotice } from '../notice-wiring';
+import { configName, createAppTalkTarget, wireTalkTarget, type TalkTarget } from '../talk-target';
 import { createAgentBridge } from './agent-bridge';
 import { createCapturePolicy } from './capture-policy';
 import { createCleanupProvider } from './cleanup-provider';
@@ -61,6 +62,8 @@ export type BrainComponents = { readonly [E in Entry as E['id']]: ReturnType<E['
 export interface Brain {
   readonly components: BrainComponents;
   readonly bus: BrainBus;
+  /** T1 talk-key target (#73, MB-06a, MB-06b, UX-28). */
+  readonly talkTarget: TalkTarget;
   /** True once `brain_subscribe` succeeds. TODO(#8): retry and surface a refusal. */
   readonly ready: Promise<boolean>;
 }
@@ -79,6 +82,10 @@ export function startBrain(): Brain {
     wireNotice(bus, components.T12);
     // #26: the hub MOG list and actions (MB-01).
     wireHubMogs(bus, components.T1);
+    // MB-06a, MB-06b, UX-28: the talk-key target, its marker and its toast (#73). It is wired
+    // before the capture lifecycle, so a `hotkey:ptt` down updates the target first.
+    const talkTarget = createAppTalkTarget(configName);
+    wireTalkTarget(bus, talkTarget);
     // #14: the PTT and hands-free lifecycle. Every start goes through the T12 consent gate.
     const lifecycle = createCaptureLifecycle({
       control: ipcCaptureControl({ consent: components.T12 }),
@@ -89,7 +96,7 @@ export function startBrain(): Brain {
       onUtterance: () => undefined,
     });
     wireCaptureLifecycle(bus, lifecycle, createSystemClock().now);
-    brain = { components, bus, ready: subscribeBrain(bus) };
+    brain = { components, bus, talkTarget, ready: subscribeBrain(bus) };
   }
   return brain;
 }

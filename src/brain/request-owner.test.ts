@@ -10,6 +10,12 @@ const A = '00000000-0000-4000-8000-00000000000a';
 const B = '00000000-0000-4000-8000-00000000000b';
 const binding: BackendBinding = { kind: 'genie_one_mcp', profile: 'test-profile' };
 
+/** The utterance `begin` gave, or a test failure. */
+function must<T>(v: T | undefined): T {
+  if (v === undefined) throw new Error('expected a value');
+  return v;
+}
+
 function setup() {
   const target = createTalkTarget({
     send: () => undefined,
@@ -48,10 +54,10 @@ describe('the MOG that captures an utterance owns the request (#73)', () => {
     expect(owner.begin('00000000-0000-4000-8000-00000000000f')).toBeUndefined();
     target.closed(B);
     expect(owner.begin(B)).toBeUndefined();
-    const u = owner.begin(A);
-    owner.cancel(u!.utteranceId);
-    expect(owner.ownerOf(u!.utteranceId)).toBeUndefined();
-    expect(owner.stampRequest(u!.utteranceId, { opId: 'op', binding, question: 'q' })).toBe(
+    const u = must(owner.begin(A));
+    owner.cancel(u.utteranceId);
+    expect(owner.ownerOf(u.utteranceId)).toBeUndefined();
+    expect(owner.stampRequest(u.utteranceId, { opId: 'op', binding, question: 'q' })).toBe(
       undefined,
     );
   });
@@ -61,7 +67,7 @@ describe('the MOG that captures an utterance owns the request (#73)', () => {
     for (let i = 0; i < 20; i++) {
       const [from, to] = i % 2 === 0 ? [A, B] : [B, A];
       target.interacted(from);
-      const u = owner.begin(from)!;
+      const u = must(owner.begin(from));
       target.interacted(to);
       expect(target.current()).toBe(to);
       expect(await owner.deliverAnswer(u.utteranceId, { blurbs: [], chips: [] })).toBe(true);
@@ -77,7 +83,7 @@ describe('the MOG that captures an utterance owns the request (#73)', () => {
   it('[MOG-13b] an answer for an unknown or released utterance goes nowhere', async () => {
     const { owner, cards } = setup();
     expect(await owner.deliverAnswer('nope', { blurbs: [], chips: [] })).toBe(false);
-    const u = owner.begin(A)!;
+    const u = must(owner.begin(A));
     owner.release(u.utteranceId);
     expect(await owner.deliverAnswer(u.utteranceId, { blurbs: [], chips: [] })).toBe(false);
     expect(cards).toEqual([]);

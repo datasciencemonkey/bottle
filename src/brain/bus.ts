@@ -79,7 +79,7 @@ export function emitToView<K extends keyof ViewPayloads>(
 /** A MOG ID that is safe in a `mog-<id>` / `card-<id>` label (same rule as `WindowKind` in Rust). */
 const LABEL_ID = /^[A-Za-z0-9-]{1,64}$/;
 
-function viewLabel(kind: 'mog' | 'card', mogId: MogId): string {
+export function viewLabel(kind: 'mog' | 'card', mogId: MogId): string {
   if (!LABEL_ID.test(mogId)) throw new TypeError(`MOG ID is not a valid window label`);
   return `${kind}-${mogId}`;
 }

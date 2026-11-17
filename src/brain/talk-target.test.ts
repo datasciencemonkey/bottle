@@ -6,7 +6,13 @@ import {
 } from '../shared/mog-target';
 import { BrainBus } from './bus';
 import { core } from './test-core';
-import { createTalkTarget, sendMogTarget, wireTalkTarget, type TalkTarget } from './talk-target';
+import {
+  configName,
+  createTalkTarget,
+  sendMogTarget,
+  wireTalkTarget,
+  type TalkTarget,
+} from './talk-target';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('./test-core')).coreModule);
 vi.mock('@tauri-apps/api/event', async () => (await import('./test-core')).eventModule);
@@ -297,5 +303,15 @@ describe('wiring of the talk-key target (#73)', () => {
     await expect(
       sendMogTarget({ mogId: 'a b', name: 'x', target: true, toast: false }),
     ).rejects.toThrow();
+  });
+
+  it('[MB-06b] the toast name comes from the MOG config (config_read)', async () => {
+    core.invoke.mockImplementation(async (cmd: string) =>
+      cmd === 'config_read' ? { id: A, json: { name: 'Sales' } } : {},
+    );
+    await expect(configName(A)).resolves.toBe('Sales');
+    expect(core.invoke).toHaveBeenCalledWith('config_read', { args: { id: A } });
+    core.invoke.mockImplementation(async () => ({ id: A, json: { name: 7 } }));
+    await expect(configName(A)).resolves.toBeUndefined();
   });
 });
