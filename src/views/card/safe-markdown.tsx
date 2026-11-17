@@ -41,7 +41,7 @@ export function trustedUrl(raw: string, trust: LinkTrust): string | undefined {
 }
 
 // Every group is length-bounded so unmatched openers cost O(n), not O(n^2).
-const INLINE =
+export const INLINE =
   /(!?)\[([^\]]{0,500})\]\(([^)\s]{0,2048})\)|`([^`]{1,500})`|\*\*([^*]{1,500})\*\*|\*([^*]{1,500})\*/g;
 
 function inline(text: string, trust: LinkTrust, key: string): ReactNode[] {

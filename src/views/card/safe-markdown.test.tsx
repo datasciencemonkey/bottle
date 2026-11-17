@@ -1,11 +1,61 @@
 import { renderToStaticMarkup } from 'react-dom/server';
-import { SafeMarkdown } from './safe-markdown';
+import { INLINE, MAX_ANSWER_CHARS, SafeMarkdown } from './safe-markdown';
 
 const trust = {
   profileHost: 'adb-1.azuredatabricks.net',
   allowedAppUrls: ['https://app.example.com/base'],
 };
 const html = (md: string) => renderToStaticMarkup(<SafeMarkdown text={md} trust={trust} />);
+
+// SEC-25a/AT-17 growth check (#443). A wall-clock bound on a shared Mac is flaky, so compare the
+// cost of each hostile input at 20 KB and at 200 KB instead. Round 0 is a warm-up; then each size
+// keeps the minimum of SAMPLES rounds (load only ever adds time). The two sizes are timed in turn
+// in each round, so they see the same machine load. The divisor has a floor, so sub-millisecond
+// renders do not turn timer noise into a large ratio.
+// A 2 KB -> 20 KB step was tried too (#443): under heavy load it measured 50-66x on the real
+// renderer, which overlaps the 70-170x of an unbounded INLINE regex, so it cannot be a stable test.
+const SAMPLES = 5;
+const FLOOR_MS = 0.5;
+// The step crosses MAX_ANSWER_CHARS: linear is about 10x (about 1x with the cap); n^2 is 100x.
+const STEP_MAX = 20;
+// Backstop only: the real renderer takes about 40 ms at 200 KB.
+const BACKSTOP_MS = 1_000;
+
+// Keeps each render result live, so the engine cannot drop the timed work.
+let sink: unknown;
+function growth(render: (s: string) => unknown, unit: string) {
+  const sized = (n: number) => unit.repeat(Math.ceil(n / unit.length));
+  const [s20, s200] = [sized(20_000), sized(200_000)];
+  const time = (input: string) => {
+    const t = performance.now();
+    sink = render(input);
+    return performance.now() - t;
+  };
+  let [t20, t200] = [Infinity, Infinity];
+  for (let round = 0; round <= SAMPLES; round++) {
+    const [a, b] = [time(s20), time(s200)];
+    if (round === 0) continue;
+    [t20, t200] = [Math.min(t20, a), Math.min(t200, b)];
+  }
+  expect(sink).toBeDefined();
+  return { ratio: t200 / Math.max(t20, FLOOR_MS), t200 };
+}
+
+function expectNearLinear(render: (s: string) => unknown, unit: string) {
+  const g = growth(render, unit);
+  expect(g.ratio, `${JSON.stringify(unit)} 20 KB -> 200 KB`).toBeLessThan(STEP_MAX);
+  expect(g.t200, `${JSON.stringify(unit)} 200 KB backstop`).toBeLessThan(BACKSTOP_MS);
+}
+
+/** Test stand-in for a catastrophic parser: work grows as (length / scale)^2. */
+function quadratic(scale: number) {
+  return (s: string) => {
+    const n = Math.ceil(s.length / scale);
+    let acc = 0;
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) acc += (i ^ j) & 1;
+    return acc;
+  };
+}
 
 describe('safe markdown', () => {
   it('[SEC-25a] [AT-17] shows raw HTML in an answer as text', () => {
@@ -94,11 +144,31 @@ describe('safe markdown', () => {
     expect(out).not.toContain('<a');
   });
 
-  it('[SEC-25a] [AT-17] hostile inputs of 200 KB render in under 200 ms', () => {
-    for (const bad of ['[', '![a](', '**', '*', '`', '[a](']) {
-      const t = performance.now();
-      html(bad.repeat(Math.ceil(200_000 / bad.length)));
-      expect(performance.now() - t).toBeLessThan(200);
+  // Deterministic guards (#443 review): the timing check alone cannot see a raised cap or an
+  // unbounded quantifier below the cap, so check both directly.
+  it('[SEC-25a] [AT-17] a 200 KB hostile input is cut to MAX_ANSWER_CHARS of at most 20 000', () => {
+    expect(MAX_ANSWER_CHARS).toBeLessThanOrEqual(20_000);
+    for (const bad of ['[', '![a](', '**', '*', '`', '[a](', 'a ']) {
+      const big = bad.repeat(Math.ceil(200_000 / bad.length));
+      expect(html(big)).toBe(html(big.slice(0, MAX_ANSWER_CHARS)));
     }
   });
+
+  it('[SEC-25a] [AT-17] every quantifier in the inline pattern has an upper bound', () => {
+    // Drop escapes, then character classes, so only real quantifiers are left.
+    const bare = INLINE.source.replace(/\\./g, '').replace(/\[[^\]]*\]/g, '');
+    expect(bare).not.toMatch(/[*+]|\{\d*,\}/);
+    const bounds = [...bare.matchAll(/\{\d+,(\d+)\}/g)].map((m) => Number(m[1]));
+    expect(bounds.length).toBeGreaterThanOrEqual(5);
+    // A bound above the input cap never takes effect, so keep each one small (2048 today).
+    for (const max of bounds) expect(max).toBeLessThanOrEqual(2048);
+  });
+
+  it('[SEC-25a] [AT-17] hostile inputs up to 200 KB render in near-linear time', () => {
+    for (const bad of ['[', '![a](', '**', '*', '`', '[a](']) expectNearLinear(html, bad);
+  }, 30_000);
+
+  it('[SEC-25a] [AT-17] the growth check rejects a quadratic renderer', () => {
+    expect(growth(quadratic(20), '[').ratio).toBeGreaterThanOrEqual(STEP_MAX);
+  }, 30_000);
 });
