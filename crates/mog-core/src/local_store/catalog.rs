@@ -1,0 +1,516 @@
+//! The fixed local statement catalog of R10 (#37, MEM-34a, MEM-34b, MEM-01; ADR 0054).
+//!
+//! The brain never sends SQL. It sends `mem_local_exec { stmtId, params }`, and the Rust core runs
+//! only the statement with that ID from [`STATEMENTS`]:
+//! - Each entry is one SQL statement with named parameters (`:mogId`). The parameter names are
+//!   the JSON keys of `params`, and each has a type. [`validate`] refuses an unknown key, a
+//!   missing required key and a value of the wrong type or size.
+//! - Every entry filters by `mog_id` and passes `mog_guard::require_mog_id_filter` (MEM-01). An
+//!   upsert's conflict path updates a row only if it belongs to the same MOG.
+//! - [`Access::Brain`] entries are callable through `mem_local_exec`. [`Access::Core`] entries
+//!   (Wipe) run only from Rust callers, for example R14 WipeService (U9: only Settings → Wipe
+//!   deletes by age).
+//! - A query answers `{ rows: [ {column: value} ] }`. A write answers `{ rows: [ {changes: n} ] }`.
+//!
+//! The IDs follow the remote catalog of section 4.5 where the local schema supports them. The
+//! feature issues own the logic that uses them: `mem.exchange.*` (#38), `mem.item.*` (#114),
+//! `mem.recall.fts` (#199), `mem.forget.*` (#123), `mem.wipe.*` (#124), `mem.outbox.*` (#102).
+//! The consent statements of #63 are a later entry set with a device-wide scope (ADR 0054).
+
+use rusqlite::types::Value as SqlValue;
+use serde_json::{Map, Value};
+
+use super::mog_guard::require_mog_id_param;
+use crate::error::{CoreError, CoreResult};
+
+const ID: &str = "R10";
+
+/// Is the statement a read or a write?
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// A `SELECT`: the reply holds the rows.
+    Query,
+    /// An `INSERT`, `UPDATE` or `DELETE`: the reply holds the number of changed rows.
+    Write,
+}
+
+/// Who may run the statement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Access {
+    /// The brain, through `mem_local_exec`, and Rust callers.
+    Brain,
+    /// Rust callers only (for example R14 WipeService). `mem_local_exec` refuses it.
+    Core,
+}
+
+/// The type of one parameter. Every value binds as a SQLite parameter, never as SQL text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParamType {
+    /// A UUID string (`8-4-4-4-12` hex).
+    Uuid,
+    /// A string of at most `max` characters.
+    Text {
+        /// The most characters.
+        max: usize,
+    },
+    /// A fixed code: 1-64 characters of `a-z`, `0-9`, `_` and `.` (an enum value, an op name, an
+    /// error code). It can hold no content.
+    Code,
+    /// A whole number in `min..=max`.
+    Int {
+        /// The smallest value.
+        min: i64,
+        /// The largest value.
+        max: i64,
+    },
+    /// A number.
+    Real,
+    /// `true` or `false`, stored as 1 or 0.
+    Bool,
+    /// Any JSON value, stored as JSON text of at most `max` bytes.
+    Json {
+        /// The most bytes of the JSON text.
+        max: usize,
+    },
+    /// Free text for an FTS5 `MATCH`. The core keeps only its words and quotes each one, so the
+    /// text can never be FTS5 syntax (MEM-34b). At least one word is required.
+    FtsTerms,
+}
+
+/// One named parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Param {
+    /// The JSON key and the SQL name (`:<name>`).
+    pub name: &'static str,
+    /// The type.
+    pub ty: ParamType,
+    /// A required parameter must be present and not `null`. An optional one binds `NULL`.
+    pub required: bool,
+}
+
+/// One fixed statement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stmt {
+    /// The catalog ID, for example `mem.item.upsert`.
+    pub id: &'static str,
+    /// One SQL statement with `:name` parameters only.
+    pub sql: &'static str,
+    /// The parameters, one for each `:name` in `sql`.
+    pub params: &'static [Param],
+    /// Read or write.
+    pub kind: Kind,
+    /// Who may run it.
+    pub access: Access,
+}
+
+const fn req(name: &'static str, ty: ParamType) -> Param {
+    Param {
+        name,
+        ty,
+        required: true,
+    }
+}
+
+const fn opt(name: &'static str, ty: ParamType) -> Param {
+    Param {
+        name,
+        ty,
+        required: false,
+    }
+}
+
+const UUID: ParamType = ParamType::Uuid;
+const CODE: ParamType = ParamType::Code;
+const REAL: ParamType = ParamType::Real;
+const BOOL: ParamType = ParamType::Bool;
+/// A time in epoch milliseconds, or an HLC value.
+const MS: ParamType = ParamType::Int {
+    min: 0,
+    max: i64::MAX,
+};
+/// A row count for `LIMIT`.
+const LIMIT: ParamType = ParamType::Int { min: 1, max: 500 };
+const fn text(max: usize) -> ParamType {
+    ParamType::Text { max }
+}
+const fn json(max: usize) -> ParamType {
+    ParamType::Json { max }
+}
+
+const MOG_ID: Param = req("mogId", UUID);
+const DEVICE_ID: Param = req("deviceId", text(64));
+const ROW_HLC: Param = req("rowHlc", MS);
+
+// ---- mog (the parent row every other table references) -----------------------------------
+
+const MOG_UPSERT: Stmt = Stmt {
+    id: "mem.mog.upsert",
+    sql: "INSERT INTO mog (mog_id, display_name, backend_kind, row_hlc, origin_device_id) \
+          VALUES (:mogId, :displayName, :backendKind, :rowHlc, :deviceId) \
+          ON CONFLICT (mog_id) DO UPDATE SET display_name = excluded.display_name, \
+          backend_kind = excluded.backend_kind, row_hlc = excluded.row_hlc, \
+          updated_at = CAST(strftime('%s','now') AS INTEGER) * 1000",
+    params: &[
+        MOG_ID,
+        req("displayName", text(80)),
+        req("backendKind", CODE),
+        ROW_HLC,
+        DEVICE_ID,
+    ],
+    kind: Kind::Write,
+    access: Access::Brain,
+};
+
+// ---- genie_exchange (#38) ----------------------------------------------------------------
+
+const EXCHANGE_UPSERT: Stmt = Stmt {
+    id: "mem.exchange.upsert",
+    sql: "INSERT INTO genie_exchange (exchange_id, request_id, mog_id, session_id, backend_kind, \
+          profile_name, workspace_host, workspace_id, is_home_workspace, space_id, \
+          conversation_id, response_id, question_user, question_sent_sha256, status, \
+          answer_summary, key_numbers, final_answer_md, deep_link, split_group_id, asked_at, \
+          completed_at, row_hlc, origin_device_id) \
+          VALUES (:exchangeId, :requestId, :mogId, :sessionId, :backendKind, :profileName, \
+          :workspaceHost, :workspaceId, :homeWorkspace, :spaceId, :conversationId, :responseId, \
+          :questionUser, :questionSentSha256, :status, :answerSummary, \
+          coalesce(:keyNumbers, '[]'), :finalAnswerMd, :deepLink, :splitGroupId, :askedAt, \
+          :completedAt, :rowHlc, :deviceId) \
+          ON CONFLICT (request_id) DO UPDATE SET status = excluded.status, \
+          conversation_id = coalesce(excluded.conversation_id, genie_exchange.conversation_id), \
+          response_id = coalesce(excluded.response_id, genie_exchange.response_id), \
+          answer_summary = excluded.answer_summary, key_numbers = excluded.key_numbers, \
+          final_answer_md = excluded.final_answer_md, deep_link = excluded.deep_link, \
+          completed_at = excluded.completed_at, row_hlc = excluded.row_hlc, \
+          updated_at = CAST(strftime('%s','now') AS INTEGER) * 1000 \
+          WHERE genie_exchange.mog_id = excluded.mog_id",
+    params: &[
+        req("exchangeId", UUID),
+        req("requestId", UUID),
+        MOG_ID,
+        opt("sessionId", UUID),
+        req("backendKind", CODE),
+        req("profileName", text(128)),
+        req("workspaceHost", text(255)),
+        opt("workspaceId", MS),
+        req("homeWorkspace", BOOL),
+        opt("spaceId", text(128)),
+        opt("conversationId", text(128)),
+        opt("responseId", text(128)),
+        opt("questionUser", text(1000)),
+        req("questionSentSha256", text(64)),
+        req("status", CODE),
+        opt("answerSummary", text(600)),
+        opt("keyNumbers", json(16_384)),
+        opt("finalAnswerMd", text(200_000)),
+        opt("deepLink", text(2048)),
+        opt("splitGroupId", UUID),
+        req("askedAt", MS),
+        opt("completedAt", MS),
+        ROW_HLC,
+        DEVICE_ID,
+    ],
+    kind: Kind::Write,
+    access: Access::Brain,
+};
+
+const EXCHANGE_GET: Stmt = Stmt {
+    id: "mem.exchange.get",
+    sql: "SELECT exchange_id AS exchangeId, request_id AS requestId, status, \
+          workspace_host AS workspaceHost, workspace_id AS workspaceId, space_id AS spaceId, \
+          conversation_id AS conversationId, answer_summary AS answerSummary, \
+          key_numbers AS keyNumbers, final_answer_md AS finalAnswerMd, deep_link AS deepLink, \
+          is_home_workspace AS homeWorkspace, asked_at AS askedAt, completed_at AS completedAt \
+          FROM genie_exchange \
+          WHERE mog_id = :mogId AND request_id = :requestId AND deleted_at IS NULL",
+    params: &[MOG_ID, req("requestId", UUID)],
+    kind: Kind::Query,
+    access: Access::Brain,
+};
+
+// ---- memory_item (#114) and recall (#199) --------------------------------------------------
+
+const ITEM_UPSERT: Stmt = Stmt {
+    id: "mem.item.upsert",
+    sql: "INSERT INTO memory_item (item_id, mog_id, item_type, text, source, confidence, pinned, \
+          sensitivity, workspace_host, workspace_id, space_id, source_exchange_id, \
+          first_seen_at, last_seen_at, row_hlc, origin_device_id) \
+          VALUES (:itemId, :mogId, :itemType, :text, :source, :confidence, \
+          coalesce(:pinned, 0), coalesce(:sensitivity, 'normal'), :workspaceHost, :workspaceId, \
+          :spaceId, :sourceExchangeId, :seenAt, :seenAt, :rowHlc, :deviceId) \
+          ON CONFLICT (item_id) DO UPDATE SET text = excluded.text, \
+          confidence = excluded.confidence, pinned = max(memory_item.pinned, excluded.pinned), \
+          last_seen_at = max(memory_item.last_seen_at, excluded.last_seen_at), \
+          mention_count = memory_item.mention_count + 1, row_hlc = excluded.row_hlc, \
+          updated_at = CAST(strftime('%s','now') AS INTEGER) * 1000 \
+          WHERE memory_item.mog_id = excluded.mog_id",
+    params: &[
+        req("itemId", UUID),
+        MOG_ID,
+        req("itemType", CODE),
+        req("text", text(600)),
+        req("source", CODE),
+        req("confidence", REAL),
+        opt("pinned", BOOL),
+        opt("sensitivity", CODE),
+        opt("workspaceHost", text(255)),
+        opt("workspaceId", MS),
+        opt("spaceId", text(128)),
+        opt("sourceExchangeId", UUID),
+        req("seenAt", MS),
+        ROW_HLC,
+        DEVICE_ID,
+    ],
+    kind: Kind::Write,
+    access: Access::Brain,
+};
+
+const ITEM_GET: Stmt = Stmt {
+    id: "mem.item.get",
+    sql: "SELECT item_id AS itemId, item_type AS type, text, source, confidence, status, pinned, \
+          sensitivity, workspace_host AS workspaceHost, workspace_id AS workspaceId, \
+          space_id AS spaceId, mention_count AS mentionCount, first_seen_at AS firstSeenAt, \
+          last_seen_at AS lastSeenAt \
+          FROM memory_item WHERE mog_id = :mogId AND item_id = :itemId AND deleted_at IS NULL",
+    params: &[MOG_ID, req("itemId", UUID)],
+    kind: Kind::Query,
+    access: Access::Brain,
+};
+
+const RECALL_FTS: Stmt = Stmt {
+    id: "mem.recall.fts",
+    sql: "SELECT m.item_id AS itemId, m.item_type AS type, m.text AS text, \
+          m.workspace_id AS workspaceId, m.space_id AS spaceId, m.pinned AS pinned, \
+          m.last_seen_at AS lastSeenAt, bm25(memory_item_fts) AS score \
+          FROM memory_item_fts JOIN memory_item m ON m.rid = memory_item_fts.rowid \
+          WHERE m.mog_id = :mogId AND memory_item_fts MATCH :query \
+          AND m.deleted_at IS NULL AND m.status = 'active' \
+          ORDER BY score LIMIT :limit",
+    params: &[
+        MOG_ID,
+        req("query", ParamType::FtsTerms),
+        req("limit", LIMIT),
+    ],
+    kind: Kind::Query,
+    access: Access::Brain,
+};
+
+// ---- Forget (#123): a user action through T10 ----------------------------------------------
+
+const FORGET_ITEM: Stmt = Stmt {
+    id: "mem.forget.item",
+    sql: "DELETE FROM memory_item WHERE mog_id = :mogId AND item_id = :itemId",
+    params: &[MOG_ID, req("itemId", UUID)],
+    kind: Kind::Write,
+    access: Access::Brain,
+};
+
+const FORGET_EXCHANGE: Stmt = Stmt {
+    id: "mem.forget.exchange",
+    sql: "DELETE FROM genie_exchange WHERE mog_id = :mogId AND exchange_id = :exchangeId",
+    params: &[MOG_ID, req("exchangeId", UUID)],
+    kind: Kind::Write,
+    access: Access::Brain,
+};
+
+const FORGET_LOG: Stmt = Stmt {
+    id: "mem.forget.log",
+    sql: "INSERT INTO forget_log (forget_id, mog_id, scope, target_ids, requested_at, device_id) \
+          VALUES (:forgetId, :mogId, :scope, :targetIds, :requestedAt, :deviceId)",
+    params: &[
+        req("forgetId", UUID),
+        MOG_ID,
+        req("scope", CODE),
+        req("targetIds", json(65_536)),
+        req("requestedAt", MS),
+        DEVICE_ID,
+    ],
+    kind: Kind::Write,
+    access: Access::Brain,
+};
+
+// ---- Wipe (#124): Rust only ----------------------------------------------------------------
+
+const WIPE_ITEMS: Stmt = Stmt {
+    id: "mem.wipe.items_before",
+    sql: "DELETE FROM memory_item WHERE mog_id = :mogId AND created_at < :before",
+    params: &[MOG_ID, req("before", MS)],
+    kind: Kind::Write,
+    access: Access::Core,
+};
+
+const WIPE_EXCHANGES: Stmt = Stmt {
+    id: "mem.wipe.exchanges_before",
+    sql: "DELETE FROM genie_exchange WHERE mog_id = :mogId AND created_at < :before",
+    params: &[MOG_ID, req("before", MS)],
+    kind: Kind::Write,
+    access: Access::Core,
+};
+
+// ---- Outbox: embedding requests and v1 sync operations (MEM-08f, #102) ----------------------
+
+const OUTBOX_ENQUEUE: Stmt = Stmt {
+    id: "mem.outbox.enqueue",
+    sql: "INSERT INTO outbox (mog_id, kind, op, ref_id, payload_json, created_at, \
+          next_attempt_at) \
+          VALUES (:mogId, :kind, :op, :refId, coalesce(:payload, '{}'), :now, :now)",
+    params: &[
+        MOG_ID,
+        req("kind", CODE),
+        req("op", CODE),
+        req("refId", text(128)),
+        opt("payload", json(65_536)),
+        req("now", MS),
+    ],
+    kind: Kind::Write,
+    access: Access::Brain,
+};
+
+const OUTBOX_DUE: Stmt = Stmt {
+    id: "mem.outbox.due",
+    sql: "SELECT oid, kind, op, ref_id AS refId, payload_json AS payload, attempts, \
+          next_attempt_at AS nextAttemptAt \
+          FROM outbox WHERE mog_id = :mogId AND next_attempt_at <= :now \
+          ORDER BY oid LIMIT :limit",
+    params: &[MOG_ID, req("now", MS), req("limit", LIMIT)],
+    kind: Kind::Query,
+    access: Access::Brain,
+};
+
+const OUTBOX_RETRY: Stmt = Stmt {
+    id: "mem.outbox.retry",
+    sql: "UPDATE outbox SET attempts = attempts + 1, next_attempt_at = :nextAttemptAt, \
+          last_error_code = :errorCode WHERE mog_id = :mogId AND oid = :oid",
+    params: &[
+        MOG_ID,
+        req("oid", MS),
+        req("nextAttemptAt", MS),
+        opt("errorCode", CODE),
+    ],
+    kind: Kind::Write,
+    access: Access::Brain,
+};
+
+const OUTBOX_DONE: Stmt = Stmt {
+    id: "mem.outbox.done",
+    sql: "DELETE FROM outbox WHERE mog_id = :mogId AND oid = :oid",
+    params: &[MOG_ID, req("oid", MS)],
+    kind: Kind::Write,
+    access: Access::Brain,
+};
+
+/// The whole local catalog. `mem_local_exec` and `LocalStore::exec` run nothing else.
+pub const STATEMENTS: &[Stmt] = &[
+    MOG_UPSERT,
+    EXCHANGE_UPSERT,
+    EXCHANGE_GET,
+    ITEM_UPSERT,
+    ITEM_GET,
+    RECALL_FTS,
+    FORGET_ITEM,
+    FORGET_EXCHANGE,
+    FORGET_LOG,
+    WIPE_ITEMS,
+    WIPE_EXCHANGES,
+    OUTBOX_ENQUEUE,
+    OUTBOX_DUE,
+    OUTBOX_RETRY,
+    OUTBOX_DONE,
+];
+
+/// The statement with this exact ID.
+pub fn find(id: &str) -> Option<&'static Stmt> {
+    STATEMENTS.iter().find(|s| s.id == id)
+}
+
+fn bad() -> CoreError {
+    CoreError::InvalidStatementParams { component: ID }
+}
+
+fn is_uuid(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 36
+        && b.iter().enumerate().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => *c == b'-',
+            _ => c.is_ascii_hexdigit(),
+        })
+}
+
+fn is_code(s: &str) -> bool {
+    (1..=64).contains(&s.len())
+        && s.bytes()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_' || c == b'.')
+}
+
+/// The FTS5 query for free text: each word in double quotes, joined by `OR`. A word is a run of
+/// letters and digits, so no quote, operator, column filter or `*` survives. At most 32 words.
+fn fts_terms(s: &str) -> Option<String> {
+    let words: Vec<String> = s
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .take(32)
+        .map(|w| format!("\"{w}\""))
+        .collect();
+    (!words.is_empty()).then(|| words.join(" OR "))
+}
+
+fn bind_value(ty: ParamType, v: &Value) -> CoreResult<SqlValue> {
+    let text = |v: &Value| v.as_str().map(str::to_owned).ok_or_else(bad);
+    Ok(match ty {
+        ParamType::Uuid => {
+            let s = text(v)?;
+            if !is_uuid(&s) {
+                return Err(bad());
+            }
+            SqlValue::Text(s)
+        }
+        ParamType::Text { max } => {
+            let s = text(v)?;
+            if s.chars().count() > max {
+                return Err(bad());
+            }
+            SqlValue::Text(s)
+        }
+        ParamType::Code => {
+            let s = text(v)?;
+            if !is_code(&s) {
+                return Err(bad());
+            }
+            SqlValue::Text(s)
+        }
+        ParamType::Int { min, max } => {
+            let n = v.as_i64().ok_or_else(bad)?;
+            if n < min || n > max {
+                return Err(bad());
+            }
+            SqlValue::Integer(n)
+        }
+        ParamType::Real => SqlValue::Real(v.as_f64().ok_or_else(bad)?),
+        ParamType::Bool => SqlValue::Integer(i64::from(v.as_bool().ok_or_else(bad)?)),
+        ParamType::Json { max } => {
+            let s = serde_json::to_string(v).map_err(|_| bad())?;
+            if s.len() > max {
+                return Err(bad());
+            }
+            SqlValue::Text(s)
+        }
+        ParamType::FtsTerms => SqlValue::Text(fts_terms(&text(v)?).ok_or_else(bad)?),
+    })
+}
+
+/// Check `params` against `stmt` and return the value for each parameter, in the order of
+/// `stmt.params`. `mogId` is checked first (MEM-01).
+pub fn validate(stmt: &Stmt, params: &Value) -> CoreResult<Vec<(&'static str, SqlValue)>> {
+    require_mog_id_param(params)?;
+    let obj: &Map<String, Value> = params.as_object().ok_or_else(bad)?;
+    if obj.keys().any(|k| !stmt.params.iter().any(|p| p.name == k)) {
+        return Err(bad());
+    }
+    stmt.params
+        .iter()
+        .map(|p| match obj.get(p.name) {
+            None | Some(Value::Null) if p.required => Err(bad()),
+            None | Some(Value::Null) => Ok((p.name, SqlValue::Null)),
+            Some(v) => Ok((p.name, bind_value(p.ty, v)?)),
+        })
+        .collect()
+}

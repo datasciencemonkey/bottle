@@ -232,7 +232,7 @@ describe('brain component stubs', () => {
     await expectStub(() => t.replayOutbox(), 41);
   });
 
-  it('[T10] MemoryService implements the 4.7 interface as stubs', async () => {
+  it('[T10] MemoryService implements the 4.7 interface; mode is local (MEM-41)', async () => {
     const t = createMemoryService();
     const q = { mogId: MOG, text: 't', intent: 'question', target: { workspaceId: 'w' } } as const;
     await expectStub(() => t.gate(q), 200);
@@ -254,8 +254,8 @@ describe('brain component stubs', () => {
       38,
     );
     await expectStub(() => t.forget({ mogId: MOG }), 123);
-    await expectStub(() => t.mode(), 102);
-    await expectStub(() => t.syncStatus(), 102);
+    expect(t.mode()).toBe('local');
+    expect(t.syncStatus()).toEqual({ pending: 0 });
   });
 
   it('[T11] the registry factory returns the MoodMapper function', () => {
