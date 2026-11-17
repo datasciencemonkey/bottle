@@ -67,7 +67,7 @@ describe('T10 embedding queue (#102)', () => {
     expect(out).toEqual({ itemId: itemId(1), queued: true });
     const writes = r.store.calls.filter((c) => c.stmtId.startsWith('mem.item'));
     expect(writes.map((c) => c.stmtId)).toEqual(['mem.item.write']);
-    expect(writes[0].params).toMatchObject({
+    expect(writes[0]?.params).toMatchObject({
       mogId: A,
       itemId: itemId(1),
       itemType: 'fact',
@@ -188,7 +188,8 @@ describe('T10 embedding queue (#102)', () => {
     r.embedder.script = (job) =>
       job.itemId === itemId(1) ? { status: 'failed', code: 'endpoint_429' } : undefined;
     expect(await r.queue.drain()).toEqual({ done: 2, failed: 1, stopped: 'idle' });
-    const [job] = r.store.jobs(A);
+    const job = r.store.jobs(A)[0];
+    if (!job) throw new Error('the failed job must stay queued');
     expect(job).toMatchObject({ refId: itemId(1), attempts: 1, lastErrorCode: 'endpoint_429' });
     expect(job.nextAttemptAt).toBe(10_000 + retryDelayMs(0));
     // Not due yet: the next drain does not run it.

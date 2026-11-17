@@ -263,7 +263,8 @@ export class OutboxStoreDouble implements LocalMemoryStore {
         if (!r) return { rows: [changes(0)] };
         r.attempts += 1;
         r.nextAttemptAt = num(params.nextAttemptAt);
-        r.lastErrorCode = typeof params.errorCode === 'string' ? params.errorCode : undefined;
+        if (typeof params.errorCode === 'string') r.lastErrorCode = params.errorCode;
+        else delete r.lastErrorCode;
         return { rows: [changes(1)] };
       }
       case 'mem.outbox.done': {

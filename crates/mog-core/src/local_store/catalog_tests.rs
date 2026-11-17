@@ -327,6 +327,12 @@ fn mem_34a_ts_statement_ids_match_the_brain_catalog() {
         .iter()
         .filter(|st| st.access == Access::Brain)
         .map(|st| st.id)
+        .chain(
+            catalog::GROUPS
+                .iter()
+                .filter(|g| g.access == Access::Brain)
+                .map(|g| g.id),
+        )
         .collect();
     assert_eq!(ts_ids, brain);
 }

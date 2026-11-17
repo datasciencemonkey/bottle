@@ -189,7 +189,10 @@ impl LocalStore for SqlCipherLocalStore {
     }
 
     fn exec(&self, stmt_id: &str, params: serde_json::Value) -> CoreResult<serde_json::Value> {
-        // MEM-34a: only fixed catalog statements run.
+        // MEM-34a: only fixed catalog statements and groups run.
+        if let Some(group) = catalog::find_group(stmt_id) {
+            return self.exec_group(group, &params);
+        }
         let stmt = catalog::find(stmt_id).ok_or(CoreError::UnknownStatement { component: ID })?;
         require_mog_id_param(&params)?;
         let g = self.conn.lock().unwrap_or_else(|e| e.into_inner());
@@ -198,6 +201,43 @@ impl LocalStore for SqlCipherLocalStore {
             .ok_or(CoreError::StoreUnavailable { component: ID })?;
         let values = catalog::validate(stmt, &params)?;
         run_statement(conn, stmt, &values).map_err(unavailable)
+    }
+}
+
+impl SqlCipherLocalStore {
+    /// Run the steps of an atomic group in one transaction (MEM-10a, ADR 0068). The params are
+    /// checked against the group before the transaction starts. A failed step rolls back every
+    /// step; a process that dies before the commit leaves only an uncommitted WAL tail, which
+    /// SQLite drops on the next open.
+    fn exec_group(
+        &self,
+        group: &catalog::Group,
+        params: &serde_json::Value,
+    ) -> CoreResult<serde_json::Value> {
+        require_mog_id_param(params)?;
+        let values = catalog::validate_params(group.params, params)?;
+        let g = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = g
+            .as_ref()
+            .ok_or(CoreError::StoreUnavailable { component: ID })?;
+        let run = || -> rusqlite::Result<serde_json::Value> {
+            let tx = rusqlite::Transaction::new_unchecked(
+                conn,
+                rusqlite::TransactionBehavior::Immediate,
+            )?;
+            let mut rows = Vec::with_capacity(group.steps.len());
+            for (i, step) in group.steps.iter().enumerate() {
+                let out = run_statement(&tx, step, &values)?;
+                rows.extend(out["rows"].as_array().cloned().unwrap_or_default());
+                #[cfg(test)]
+                test_fault::after_step(i + 1);
+                #[cfg(not(test))]
+                let _ = i;
+            }
+            tx.commit()?;
+            Ok(serde_json::json!({ "rows": rows }))
+        };
+        run().map_err(unavailable)
     }
 }
 
@@ -247,4 +287,17 @@ fn run_statement(
         }
     };
     Ok(serde_json::json!({ "rows": rows }))
+}
+
+/// The fault hook of the AT-18 kill test (`outbox_tests.rs`). It exists only in test builds. A
+/// test runs this binary again as a child with `BOTTLE_R10_EXIT_AFTER_STEP=<n>`; the child then
+/// ends the process right after step `n` of a group, inside the open transaction, with no
+/// rollback and no close. With the variable unset it does nothing.
+#[cfg(test)]
+mod test_fault {
+    pub(super) fn after_step(step: usize) {
+        if std::env::var("BOTTLE_R10_EXIT_AFTER_STEP").ok() == Some(step.to_string()) {
+            std::process::exit(3);
+        }
+    }
 }

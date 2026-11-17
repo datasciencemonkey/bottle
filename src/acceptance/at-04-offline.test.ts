@@ -6,8 +6,8 @@
  * "No cloud request" is checked with `src/test-support/cloud-calls.ts` on the IPC log of the
  * brain. The fallback chain (#52), the command grammar and the offline classifier (#143), the
  * ask outbox (#41) and offline recall (#199) are not built, so these tests stay `it.skip` with the
- * feature issue. The embedding outbox (#102) runs on doubles of R10, the network and the embedder. The network-off device run is #175 and a person's
- * step (docs/tests/AT-DICTATION-STT-OFFLINE.md). The transcript identity contract (CAP-72) runs in
+ * feature issue. The embedding outbox (#102) runs on doubles of R10, the network and the
+ * embedder. The network-off device run is #175 and a person's step (docs/tests/AT-DICTATION-STT-OFFLINE.md). The transcript identity contract (CAP-72) runs in
  * `crates/mog-core/tests/at_04_offline.rs`.
  */
 import type { SegmentRef, Tags } from '../shared/interfaces';

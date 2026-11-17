@@ -198,9 +198,9 @@ fn at_18_child_writes_an_item_and_dies_between_steps() {
         "mem.item.write",
         write_params(MOG_A, ITEM_1, "Q3 target is 4.2M"),
     );
-    // The hook did not stop the process: tell the parent with a different code.
-    eprintln!("child: no fault point, result ok = {}", r.is_ok());
-    std::process::exit(4);
+    // The hook did not stop the process: tell the parent with another code (4: the write
+    // answered ok, 5: it failed). Nothing is printed (SEC-03).
+    std::process::exit(if r.is_ok() { 4 } else { 5 });
 }
 
 fn run_child(dir: &Path, step: u32) -> Option<i32> {
@@ -468,4 +468,38 @@ fn mem_34a_ts_statement_ids_name_the_item_write_group() {
     let ts = std::fs::read_to_string(path).expect("memory-store.ts");
     assert!(ts.contains("'mem.item.write'"));
     assert!(!ts.contains("'mem.outbox.enqueue_item_embed'"));
+}
+
+#[test]
+fn mem_34a_groups_are_fixed_write_steps_with_declared_params() {
+    use super::catalog::{self, Kind, GROUPS};
+    use super::mog_guard::require_mog_id_filter;
+    use std::collections::BTreeSet;
+    assert!(!GROUPS.is_empty());
+    for g in GROUPS {
+        // A group ID never shadows a statement ID.
+        assert!(catalog::find(g.id).is_none(), "{}", g.id);
+        assert_eq!(catalog::find_group(g.id).map(|f| f.id), Some(g.id));
+        let mut step_params = BTreeSet::new();
+        for st in g.steps {
+            // Each step is a write of the catalog and passes the MEM-01 guard.
+            assert_eq!(st.kind, Kind::Write, "{}", st.id);
+            assert_eq!(catalog::find(st.id), Some(*st), "{}", st.id);
+            assert_eq!(require_mog_id_filter(st.sql), Ok(()), "{}", st.id);
+            step_params.extend(st.params.iter().map(|p| p.name));
+        }
+        // The group declares each step param once, and nothing else.
+        let declared: Vec<&str> = g.params.iter().map(|p| p.name).collect();
+        let unique: BTreeSet<&str> = declared.iter().copied().collect();
+        assert_eq!(unique.len(), declared.len(), "{}", g.id);
+        assert_eq!(unique, step_params, "{}", g.id);
+        // A param shared by two steps has one type.
+        for p in g.params {
+            for st in g.steps {
+                if let Some(q) = st.params.iter().find(|q| q.name == p.name) {
+                    assert_eq!(q.ty, p.ty, "{} {}", g.id, p.name);
+                }
+            }
+        }
+    }
 }
