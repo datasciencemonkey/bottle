@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from 'react-dom/server';
-import { SafeMarkdown } from './safe-markdown';
+import { INLINE, MAX_ANSWER_CHARS, SafeMarkdown } from './safe-markdown';
 
 const trust = {
   profileHost: 'adb-1.azuredatabricks.net',
@@ -142,6 +142,23 @@ describe('safe markdown', () => {
       <SafeMarkdown text="[a](https://evil.example/x)" trust={bare} />,
     );
     expect(out).not.toContain('<a');
+  });
+
+  // Deterministic guards (#443 review): the timing check alone cannot see a raised cap or an
+  // unbounded quantifier below the cap, so check both directly.
+  it('[SEC-25a] [AT-17] a 200 KB hostile input is cut to MAX_ANSWER_CHARS of at most 20 000', () => {
+    expect(MAX_ANSWER_CHARS).toBeLessThanOrEqual(20_000);
+    for (const bad of ['[', '![a](', '**', '*', '`', '[a](', 'a ']) {
+      const big = bad.repeat(Math.ceil(200_000 / bad.length));
+      expect(html(big)).toBe(html(big.slice(0, MAX_ANSWER_CHARS)));
+    }
+  });
+
+  it('[SEC-25a] [AT-17] every quantifier in the inline pattern has an upper bound', () => {
+    // Drop escapes, then character classes, so only real quantifiers are left.
+    const bare = INLINE.source.replace(/\\./g, '').replace(/\[[^\]]*\]/g, '');
+    expect(bare).not.toMatch(/[*+]|\{\d*,\}/);
+    expect(bare.match(/\{\d+,\d+\}/g)?.length).toBeGreaterThanOrEqual(5);
   });
 
   it('[SEC-25a] [AT-17] hostile inputs up to 200 KB render in near-linear time', () => {
