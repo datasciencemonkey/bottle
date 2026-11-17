@@ -259,6 +259,7 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
             // A tap (CAP-44a) comes after `Ptt(Cancel)`, which already ended the PTT and
             // dropped its audio. Section 4.5 has no `tap` phase: the brain reads a short
             // `cancel` as a tap (CAP-14b), and R1 sends `Ptt(DoubleTap)` for two (CAP-14a).
+            // TODO(#444): mark that `cancel` with `tap: true` so the brain uses R1's decision.
             HotkeyOutput::Tap => {}
         }
     }

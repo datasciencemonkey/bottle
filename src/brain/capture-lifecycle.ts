@@ -12,7 +12,13 @@
  * - `cancel` (a tap, or another key, CAP-44c): discard the lease (CAP-44b).
  * - `double_tap`, a mascot click or "Talk": start hands-free (CAP-14a), if `mog.capture.modes`
  *   has it. A click on the listening MOG stops it when `clickTogglesListening` is on.
- * - A tap or Esc during hands-free: stop hands-free (CAP-14b). Esc also drops its audio.
+ * - A tap or Esc during hands-free: stop hands-free (CAP-14b). Esc also drops its audio. Esc
+ *   comes from the card of the hands-free MOG (`view:input` `cancel`); the card is the only key
+ *   window (UX-19a).
+ *
+ * R2 keeps one lease (ARC-F9): a start while another start is pending, or while a lease other
+ * than hands-free is live, gets `mic_busy`. So a hands-free start waits until the end call of
+ * the last press (its discard) has settled, and a start that R2 refuses goes to `onRefused`.
  *
  * Each kept segment goes to STT, then to `onUtterance` (the #424 `routeUtterance` hook). A
  * discarded lease never reaches STT, and an empty STT text fires nothing.
@@ -67,8 +73,13 @@ export interface CaptureLifecycleDeps {
   control: CaptureControl;
   /** The STT step of one segment. TODO(#46): local Parakeet through `stt_transcribe`. */
   transcribe(segment: SegmentRef): Promise<string>;
-  /** Fired once for each kept segment with a non-empty text. */
+  /** Fired once for each kept final segment with a non-empty text. */
   onUtterance(u: Utterance): void | Promise<void>;
+  /**
+   * R2 refused a start (`mic_busy`, `consent_required`, `host_failed`), for example a key-down
+   * in the 120 ms post-roll of the last PTT (ADR 0057 decision 3). The press records nothing.
+   */
+  onRefused?(e: { mogId: MogId; mode: LifecycleMode }): void;
   /** The capture settings of a MOG. Default: the Appendix F defaults. */
   config?: (mogId: MogId) => LifecycleConfig;
 }
@@ -81,11 +92,14 @@ export interface CaptureLifecycle {
   onPtt(e: LifecyclePttEvent): void;
   /** A mascot click or "Talk" for `mogId` (CAP-14a). */
   click(mogId: MogId): void;
-  /** Esc in a Bottle view (CAP-14b). TODO(#434): the host stops hands-free in R2 on the global Esc. */
-  escape(): void;
+  /**
+   * Esc in a Bottle view (CAP-14b). With `mogId`, only the hands-free capture of that MOG stops.
+   * TODO(#434): the host stops hands-free in R2 on the global Esc.
+   */
+  escape(mogId?: MogId): void;
   /** One `capture:state` item: R2 ends hands-free on the cap or the VAD end. */
   onState(s: CaptureState): void;
-  /** One `capture:segment` item. */
+  /** One `capture:segment` item. Only a final segment goes to STT, once. */
   onSegment(seg: SegmentRef): Promise<void>;
 }
 
@@ -102,6 +116,8 @@ interface LeaseInfo {
   mode: LifecycleMode;
   forceAsk: boolean;
   discarded: boolean;
+  /** The final segments that went to STT. */
+  sent: Set<string>;
 }
 
 /** A lease that is starting or live. `end` is the call that waits for the grant. */
@@ -111,6 +127,10 @@ interface Live {
   forceAsk: boolean;
   leaseId?: LeaseId;
   end?: ((leaseId: LeaseId) => void) | undefined;
+  /** R2 refused the start: no lease comes. */
+  failed?: boolean;
+  /** The call that waits for the grant, when no grant comes. */
+  fail?: (() => void) | undefined;
   /** `capture:state` showed this lease live, so a later idle state is its stop. */
   seen?: boolean;
 }
@@ -129,9 +149,17 @@ export function createCaptureLifecycle(deps: CaptureLifecycleDeps): CaptureLifec
   /** The last two presses stopped hands-free with a tap: a `double_tap` they are part of must not
    * start it again. */
   let stoppedBy: [boolean, boolean] = [false, false];
+  /** The end call (discard or release) of the last press, until R2 has it. */
+  let ending: Promise<void> | undefined;
 
   const remember = (leaseId: LeaseId, l: Live) => {
-    leases.set(leaseId, { mogId: l.mogId, mode: l.mode, forceAsk: l.forceAsk, discarded: false });
+    leases.set(leaseId, {
+      mogId: l.mogId,
+      mode: l.mode,
+      forceAsk: l.forceAsk,
+      discarded: false,
+      sent: new Set(),
+    });
     while (leases.size > MAX_LEASES) {
       const first = leases.keys().next().value;
       if (first === undefined) break;
@@ -143,26 +171,37 @@ export function createCaptureLifecycle(deps: CaptureLifecycleDeps): CaptureLifec
     if (info) info.discarded = true;
   };
 
-  /** Run `fn` with the lease ID now, or when the grant comes. */
-  const whenGranted = (l: Live, fn: (leaseId: LeaseId) => void) => {
+  /** Run `fn` with the lease ID now, or when the grant comes; `onFail` if no grant comes. */
+  const whenGranted = (l: Live, fn: (leaseId: LeaseId) => void, onFail?: () => void) => {
     if (l.leaseId !== undefined) fn(l.leaseId);
-    else l.end = fn;
+    else if (l.failed) onFail?.();
+    else {
+      l.end = fn;
+      l.fail = onFail;
+    }
   };
 
   const start = (l: Live, onFail: () => void) => {
-    deps.control.start({ mogId: l.mogId, mode: l.mode }).then(
-      (state) => {
-        const leaseId = state.leaseId;
-        if (leaseId === undefined) return onFail();
-        l.leaseId = leaseId;
-        remember(leaseId, l);
-        const end = l.end;
-        l.end = undefined;
-        end?.(leaseId);
-      },
+    const failed = () => {
       // consent_required, mic_busy or host_failed: no lease, nothing to stop.
-      onFail,
-    );
+      l.failed = true;
+      const fail = l.fail;
+      l.end = undefined;
+      l.fail = undefined;
+      onFail();
+      deps.onRefused?.({ mogId: l.mogId, mode: l.mode });
+      fail?.();
+    };
+    deps.control.start({ mogId: l.mogId, mode: l.mode }).then((state) => {
+      const leaseId = state.leaseId;
+      if (leaseId === undefined) return failed();
+      l.leaseId = leaseId;
+      remember(leaseId, l);
+      const end = l.end;
+      l.end = undefined;
+      l.fail = undefined;
+      end?.(leaseId);
+    }, failed);
   };
 
   const settle = (p: Promise<unknown>) => void p.catch(() => undefined);
@@ -171,9 +210,21 @@ export function createCaptureLifecycle(deps: CaptureLifecycleDeps): CaptureLifec
     if (handsFree || press || !config(mogId).modes.includes('hands_free')) return;
     const hf: Live = { mogId, mode: 'hands_free', forceAsk: false };
     handsFree = hf;
-    start(hf, () => {
-      if (handsFree === hf) handsFree = undefined;
-    });
+    const go = () => {
+      // Stopped while it waited, or a new press came: R1 starts a new pair (CAP-14a).
+      if (handsFree !== hf) return;
+      if (press) {
+        handsFree = undefined;
+        return;
+      }
+      start(hf, () => {
+        if (handsFree === hf) handsFree = undefined;
+      });
+    };
+    // CAP-14a: R2 must get the discard of the second tap before this start, or it answers
+    // mic_busy (one lease, ARC-F9). The discard waits for that tap's grant.
+    if (ending) void ending.then(go);
+    else go();
   };
 
   const stopHandsFree = (by: HandsFreeStopBy) => {
@@ -196,20 +247,36 @@ export function createCaptureLifecycle(deps: CaptureLifecycleDeps): CaptureLifec
       overHandsFree: handsFree !== undefined,
     };
     press = p;
-    start(p, () => {
-      if (press === p) press = undefined;
-    });
+    // A refused press stays until its key-up or cancel, so a tap still stops hands-free
+    // (CAP-14b) and the key-up sends nothing.
+    start(p, () => undefined);
   };
 
   const onEnd = (e: PttEvent, keep: boolean) => {
     const p = press;
     if (!p || p.mogId !== e.mogId) return;
     press = undefined;
+    // TODO(#444): R1's tap decision (`HotkeyOutput::Tap`) does not reach the brain, so the
+    // brain times the tap itself: a CAP-44c cancel under 250 ms counts as a tap here.
     const tap = !keep && e.at - p.downAt < TAP_MAX_HOLD_MS;
-    whenGranted(p, (leaseId) => {
-      if (!keep) discardAudio(leaseId);
-      const args = { mogId: p.mogId, leaseId };
-      settle(keep ? deps.control.release(args) : deps.control.discard(args));
+    const ended = new Promise<void>((done) => {
+      whenGranted(
+        p,
+        (leaseId) => {
+          if (!keep) discardAudio(leaseId);
+          const args = { mogId: p.mogId, leaseId };
+          const call = keep ? deps.control.release(args) : deps.control.discard(args);
+          call.then(
+            () => done(),
+            () => done(),
+          );
+        },
+        done,
+      );
+    });
+    ending = ended;
+    void ended.then(() => {
+      if (ending === ended) ending = undefined;
     });
     // CAP-14b: a tap during hands-free stops it, after its own lease is discarded.
     const stops = tap && p.overHandsFree && handsFree !== undefined;
@@ -238,7 +305,8 @@ export function createCaptureLifecycle(deps: CaptureLifecycleDeps): CaptureLifec
       }
       startHandsFree(mogId);
     },
-    escape() {
+    escape(mogId) {
+      if (mogId !== undefined && handsFree?.mogId !== mogId) return;
       stopHandsFree('escape');
     },
     onState(s) {
@@ -254,6 +322,9 @@ export function createCaptureLifecycle(deps: CaptureLifecycleDeps): CaptureLifec
       const info = leases.get(seg.leaseId);
       // CAP-44b: a discarded lease never reaches STT. Leases of other flows are not ours.
       if (!info || info.discarded) return;
+      // One utterance per final segment: a non-final ref, or a repeat, goes nowhere.
+      if (!seg.final || info.sent.has(seg.segmentId)) return;
+      info.sent.add(seg.segmentId);
       const text = await deps.transcribe(seg);
       if (text.trim() === '') return;
       await deps.onUtterance({
@@ -286,8 +357,9 @@ export function ipcCaptureControl(gate: CaptureGateDeps): CaptureControl {
 const isMascotClick = (payload: unknown) => payload === undefined || payload === null;
 
 /**
- * Feed the lifecycle from the brain Channel: `hotkey:ptt`, `capture:state`, `capture:segment`
- * and the mascot click of a MOG view (`view:input` `click` with no payload). Returns `off`.
+ * Feed the lifecycle from the brain Channel: `hotkey:ptt`, `capture:state`, `capture:segment`,
+ * the mascot click of a MOG view (`view:input` `click` with no payload) and Esc in a card
+ * (`view:input` `cancel`). Returns `off`.
  */
 export function wireCaptureLifecycle(
   bus: BrainBus,
@@ -317,6 +389,8 @@ export function wireCaptureLifecycle(
       if (input.kind === 'click' && input.from === `mog-${input.mogId}`) {
         if (isMascotClick(input.payload)) lc.click(input.mogId);
       }
+      // CAP-14b: Esc in the card of the MOG (the only key window, UX-19a).
+      if (input.kind === 'cancel' && input.from === `card-${input.mogId}`) lc.escape(input.mogId);
     }),
   ];
   return () => offs.forEach((off) => off());
