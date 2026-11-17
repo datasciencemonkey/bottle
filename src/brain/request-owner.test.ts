@@ -66,9 +66,10 @@ describe('the MOG that captures an utterance owns the request (#73)', () => {
     const { target, owner, cards } = setup();
     for (let i = 0; i < 20; i++) {
       const [from, to] = i % 2 === 0 ? [A, B] : [B, A];
-      target.interacted(from);
+      // A focus change: the card of the other MOG gets focus (Rust sees it too).
+      target.interacted(from, 'focus');
       const u = must(owner.begin(from));
-      target.interacted(to);
+      target.interacted(to, 'focus');
       expect(target.current()).toBe(to);
       expect(await owner.deliverAnswer(u.utteranceId, { blurbs: [], chips: [] })).toBe(true);
       expect(cards.at(-1)).toEqual({

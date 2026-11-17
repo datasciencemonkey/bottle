@@ -1,6 +1,7 @@
 import {
   MOG_TARGET_EVENT,
   TARGET_TOAST_MS,
+  VIEW_FOCUS,
   VIEW_READY,
   type MogTargetView,
 } from '../shared/mog-target';
@@ -99,7 +100,7 @@ describe('T1 talk-key target in the brain (#73)', () => {
     target.interacted(A);
     await flush();
     expect(target.current()).toBe(A);
-    target.interacted(C, 'card');
+    target.interacted(C, 'focus');
     expect(target.current()).toBe(C);
     expect(active).toEqual([A, C]);
   });
@@ -229,11 +230,12 @@ describe('T1 talk-key target in the brain (#73)', () => {
     t.viewReady(A);
     t.viewReady(B);
     await flush();
+    const before = sent.length;
     expect(t.interacted(A)).toBe(true);
     await flush();
     expect(t.current()).toBe(B);
     expect(marked(sent)).toEqual([B]);
-    expect(sent.some((v) => v.mogId === A && v.target)).toBe(false);
+    expect(sent.slice(before).some((v) => v.mogId === A && v.target)).toBe(false);
   });
 
   it('[MB-06a] [UX-28] a MOG click moves the marker only when mog_set_active answers ok', async () => {
@@ -257,11 +259,11 @@ describe('T1 talk-key target in the brain (#73)', () => {
     expect(marked(sent)).toEqual([A]);
   });
 
-  it('[MB-06a] [UX-28] card input moves the marker at once: Rust sees the card focus', async () => {
+  it('[MB-06a] [UX-28] a card load or focus moves the marker at once: Rust sees it too', async () => {
     const { t, sent } = refused();
     t.viewReady(A);
     t.viewReady(B);
-    expect(t.interacted(A, 'card')).toBe(true);
+    expect(t.interacted(A, 'focus')).toBe(true);
     expect(t.current()).toBe(A);
     expect(marked(sent)).toEqual([A]);
   });
@@ -313,7 +315,35 @@ describe('wiring of the talk-key target (#73)', () => {
     bus.dispatch(input(`mog-${B}`, A, 'click'));
     expect(target.current()).toBe(B);
     bus.dispatch(input(`card-${A}`, A, 'chip_click', { chipId: 'x' }));
+    await flush();
     expect(target.current()).toBe(A);
+    // The card focus signal moves the target at once (Rust sees the card focus).
+    bus.dispatch(input(`card-${B}`, B, 'click', { action: VIEW_FOCUS }));
+    expect(target.current()).toBe(B);
+  });
+
+  it('[MB-06a] [UX-28] with mog_set_active refused, only the card focus moves the marker', async () => {
+    const sent: MogTargetView[] = [];
+    const t = createTalkTarget({
+      send: (v) => void sent.push(v),
+      setActive: async () => {
+        throw { error: 'not_implemented' };
+      },
+      after: () => () => undefined,
+    });
+    const bus = new BrainBus();
+    wireTalkTarget(bus, t);
+    bus.dispatch(input(`mog-${A}`, A, 'click', { action: VIEW_READY }));
+    bus.dispatch(input(`mog-${B}`, B, 'click', { action: VIEW_READY }));
+    await flush();
+    for (const kind of ['click', 'poked', 'drag_end']) bus.dispatch(input(`mog-${A}`, A, kind));
+    bus.dispatch(input(`card-${A}`, A, 'chip_click', { chipId: 'x' }));
+    await flush();
+    expect(t.current()).toBe(B);
+    expect(marked(sent)).toEqual([B]);
+    bus.dispatch(input(`card-${A}`, A, 'click', { action: VIEW_FOCUS }));
+    expect(t.current()).toBe(A);
+    expect(marked(sent)).toEqual([A]);
   });
 
   it('[MB-06a] input from a MOG view the brain missed (brain restart) opens and targets it', async () => {
