@@ -3,6 +3,8 @@
  * Rust store, no Lakebase.
  * - `RecordingLocalStore` replaces the R10 store behind `LocalMemoryService`.
  * - `InMemoryMemoryService` replaces the whole 4.7 MemoryService in tests of its callers.
+ * - `genieExchangeDouble` is a terminal Genie exchange with plainly fake values (#38). It has the
+ *   shape a bridge gives `recordExchange`; it is never a live Genie result.
  */
 import type { LocalMemoryStore, LocalStmtId } from '../brain/components/memory-store';
 import type { JsonObject } from '../shared/ipc';
@@ -14,6 +16,32 @@ import type {
   MemoryService,
   MogId,
 } from '../shared/interfaces';
+
+/** A completed home-workspace exchange with fake ids, host, link and answer (#38). */
+export function genieExchangeDouble(over: Partial<GenieExchange> = {}): GenieExchange {
+  return {
+    requestId: '41111111-2222-4333-8444-555555555501',
+    mogId: '0f8b1a52-6c1e-4d0a-9a51-3a3d2f6f0a01',
+    ref: {
+      backend: 'genie_one_mcp',
+      profile: 'test-profile',
+      host: 'example.cloud.databricks.com',
+      conversationId: 'test-conv',
+      responseId: 'test-response',
+    },
+    questionUser: 'What was Q3 revenue in the EU?',
+    questionSent: 'Context: test preamble. Question: What was Q3 revenue in the EU?',
+    status: 'COMPLETED',
+    answerMd:
+      '## Q3 revenue\n\n**Revenue** in the EU rose **4.2 %** to **$1.3M** in Q3. ' +
+      'See [the dashboard](https://example.cloud.databricks.com/dash/test).\n\n' +
+      '| region | rev |\n|---|---|\n| EU | 1.3M |',
+    keyNumbers: [{ text: '4.2 %', label: 'growth' }, { text: '$1.3M' }],
+    deepLink: 'https://example.cloud.databricks.com/genie/rooms/test-space/chats/test-conv?o=1234',
+    homeWorkspace: true,
+    ...over,
+  };
+}
 
 type GateQuery = Parameters<MemoryService['gate']>[0];
 type GateResult = Awaited<ReturnType<MemoryService['gate']>>;
