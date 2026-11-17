@@ -10,6 +10,7 @@ pub mod bottle_mcp;
 pub mod capture;
 pub mod cli_runner;
 pub mod clock;
+pub mod consent;
 pub mod egress_policy;
 pub mod error;
 pub mod genie_endpoint;

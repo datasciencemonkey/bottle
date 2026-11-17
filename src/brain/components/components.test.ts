@@ -263,10 +263,10 @@ describe('brain component stubs', () => {
     expect(typeof t11).toBe('function');
   });
 
-  it('[T12] ConsentService stubs attest (#64) and records (#63)', async () => {
+  it('[T12] ConsentService stubs attest (#64) and records (#431)', async () => {
     const t = createConsentService();
     await expectStub(() => t.attest(MOG, 'only_me'), 64);
-    await expectStub(() => t.records(), 63);
+    await expectStub(() => t.records(), 431);
   });
 
   it('[T13] RecoveryManager stubs reconcile, isStale (#39) and offerJournalRecovery (#125)', async () => {
