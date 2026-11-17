@@ -368,6 +368,51 @@ describe('router dispatch: memory questions', () => {
     expect(out).toMatchObject({ kind: 'preview', gate: 'timeout', recall: [] });
   });
 
+  it('[RTR-18b] [AT-35] the default timer ends the gate wait at 300 ms', async () => {
+    vi.useFakeTimers();
+    try {
+      const d = doubles({ gate: never });
+      const pending = dispatchDecision(memoryQuestion(), ctx(), d.deps);
+      await vi.advanceTimersByTimeAsync(299);
+      let done = false;
+      void pending.then(() => (done = true));
+      await Promise.resolve();
+      expect(done).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await pending).toMatchObject({ kind: 'preview', gate: 'timeout' });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('[RTR-18b] [AT-35] a gate that answers in time leaves no timer behind', async () => {
+    vi.useFakeTimers();
+    try {
+      const d = doubles();
+      expect(await dispatchDecision(memoryQuestion(), ctx(), d.deps)).toMatchObject({
+        gate: 'pass',
+      });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('[RTR-18b] a workspace lookup error counts as a gate error and continues at the preview', async () => {
+    const d = doubles();
+    const out = await dispatchDecision(
+      memoryQuestion(),
+      ctx({
+        workspaceOf: () => {
+          throw new Error('no workspace');
+        },
+      }),
+      d.deps,
+    );
+    expect(out).toMatchObject({ kind: 'preview', gate: 'error' });
+  });
+
   it('[RTR-18b] answer_from_memory with no hits does not answer, so the flow continues at the preview', async () => {
     const d = doubles({
       gate: async () => ({ verdict: 'answer_from_memory', hits: [], tier: 'local' }),
