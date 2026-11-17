@@ -33,11 +33,13 @@
 //!   [`ZeroWatch`] with a 2 s window ([`MicConfig`]). If no block with sound comes in the
 //!   window, the stream stops, the sink gets [`SinkEvent::Discard`] (no transcript), and the
 //!   [`FailureLink`] reports [`MicFault::ZeroBuffers`] so the MOG shows the fix-it card.
-//! - **Default device change (CAP-18, #22).** [`StreamFault::Rerouted`]: the OS moved the
-//!   stream to the new default (CoreAudio); the sink gets a [`SinkEvent::Gap`].
-//!   [`StreamFault::Invalidated`]: the stream cannot go on (WASAPI does not rebind). The audio
-//!   thread drops it and builds and plays a new stream on the new default at once, under the
-//!   same lease, then sends the gap marker. A failed reopen is [`MicFault::Lost`].
+//! - **Default device change (CAP-18, #22).** A cpal input stream stays on the device it was
+//!   built on (CoreAudio and WASAPI). So while a stream is open the audio thread reads
+//!   [`MicHost::default_input_id`] every 200 ms ([`MicConfig::device_poll`]). On a change, or
+//!   on a lost stream ([`StreamFault::Invalidated`] or [`StreamFault::Fatal`]), it drops the
+//!   stream and builds and plays a new one on the default device at once, under the same
+//!   lease, then sends a [`SinkEvent::Gap`]. If no stream opens, it tries again every 250 ms
+//!   for 10 s ([`MicConfig::lost_grace`], section 7.2), then reports [`MicFault::Lost`].
 //! - **Built-in mic preference (CAP-22, #22).** [`MicDevice::set_prefer_built_in`] reaches
 //!   the host through [`MicHost::set_preference`] before each build; [`choose_input`] is the
 //!   rule.
@@ -103,6 +105,14 @@ pub trait MicHost: 'static {
     /// The device preference for the next [`MicHost::build`] (CAP-22). The audio thread calls
     /// it just before each build, never at launch. The default ignores it.
     fn set_preference(&mut self, _preference: DevicePreference) {}
+
+    /// An opaque ID of the current default input device, or `None` if the host cannot tell
+    /// (CAP-18). While a stream is open the audio thread reads it every
+    /// [`MicConfig::device_poll`]; a change opens the stream again on the new default. The
+    /// ID is compared only: never logged, stored or sent. The default is `None` (no poll).
+    fn default_input_id(&mut self) -> Option<String> {
+        None
+    }
 }
 
 /// The user's input device preference (CAP-22).

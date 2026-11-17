@@ -35,14 +35,25 @@ pub enum MicFault {
 pub struct MicConfig {
     /// The zero-buffer window (CAP-17b): 2 s.
     pub zero_window: Duration,
+    /// How often an open stream reads the default input (CAP-18): 200 ms, so a reopen
+    /// starts in 200 ms or less after the change.
+    pub device_poll: Duration,
+    /// How long a lost stream waits for a new device before it stops (section 7.2): 10 s.
+    pub lost_grace: Duration,
 }
 
 impl Default for MicConfig {
     fn default() -> Self {
         Self {
             zero_window: Duration::from_secs(2),
+            device_poll: Duration::from_millis(200),
+            lost_grace: Duration::from_secs(10),
         }
     }
+}
+
+fn ms(d: Duration) -> u64 {
+    u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
 }
 
 /// The link from the backend to [`CaptureCore::device_failed`]. The core owns the device, so
@@ -208,8 +219,13 @@ impl MicDevice {
                 notify: notify_tx,
                 prefer_built_in: Arc::clone(&prefer_built_in),
                 base: Instant::now(),
-                zero_window_ms: u64::try_from(config.zero_window.as_millis()).unwrap_or(u64::MAX),
+                zero_window_ms: ms(config.zero_window),
+                device_poll_ms: ms(config.device_poll),
+                lost_grace_ms: ms(config.lost_grace),
                 epoch: 0,
+                default_id: None,
+                next_poll_ms: 0,
+                retry: None,
             };
             thread::Builder::new()
                 .name("bottle-mic-audio".into())
@@ -337,10 +353,29 @@ struct AudioThread {
     /// The origin of the zero-watch clock.
     base: Instant,
     zero_window_ms: u64,
+    device_poll_ms: u64,
+    lost_grace_ms: u64,
     /// The epoch of the last built stream. A reopen (CAP-18) keeps the generation and takes a
     /// new epoch, so a late fault or frame of the old stream never touches the new one.
     epoch: u64,
+    /// The opaque ID of the default input at the last build. It is compared, never logged.
+    default_id: Option<String>,
+    /// When to read the default input again (CAP-18).
+    next_poll_ms: u64,
+    /// A reopen that waits for a new device: the generation, when the device went, and
+    /// when to try again. The slot stays open meanwhile.
+    retry: Option<Retry>,
 }
+
+#[derive(Debug, Clone, Copy)]
+struct Retry {
+    generation: u64,
+    since_ms: u64,
+    next_ms: u64,
+}
+
+/// How often a reopen that waits for a device tries again.
+const RETRY_EVERY_MS: u64 = 250;
 
 /// The live stream: its generation, its epoch and the stream.
 type Current<S> = Option<(u64, u64, S)>;
@@ -353,22 +388,22 @@ impl AudioThread {
     fn run<H: MicHost>(mut self, mut host: H, rx: Receiver<Msg>) {
         let mut current: Current<H::Stream> = None;
         loop {
-            let msg = if current.is_some() {
-                // While a stream is open, wake at the zero-watch deadline (CAP-17b).
-                let wait = self.watch_deadline().saturating_sub(self.now_ms()).max(1);
-                match rx.recv_timeout(Duration::from_millis(wait)) {
-                    Ok(msg) => msg,
-                    Err(RecvTimeoutError::Timeout) => {
-                        self.check_zero(&mut current);
-                        continue;
+            let msg = match self.next_wake(current.is_some()) {
+                Some(at) => {
+                    let wait = at.saturating_sub(self.now_ms()).max(1);
+                    match rx.recv_timeout(Duration::from_millis(wait)) {
+                        Ok(msg) => msg,
+                        Err(RecvTimeoutError::Timeout) => {
+                            self.on_timer(&mut host, &mut current);
+                            continue;
+                        }
+                        Err(RecvTimeoutError::Disconnected) => break,
                     }
-                    Err(RecvTimeoutError::Disconnected) => break,
                 }
-            } else {
-                match rx.recv() {
+                None => match rx.recv() {
                     Ok(msg) => msg,
                     Err(_) => break,
-                }
+                },
             };
             match msg {
                 Msg::Open { generation, reply } => {
@@ -378,6 +413,9 @@ impl AudioThread {
                 Msg::Close { generation, reply } => {
                     if current.as_ref().is_some_and(|(g, _, _)| *g == generation) {
                         self.stop(&mut current);
+                    }
+                    if self.retry.is_some_and(|r| r.generation == generation) {
+                        self.give_up(false);
                     }
                     let _ = reply.send(());
                 }
@@ -397,27 +435,72 @@ impl AudioThread {
             }
         }
         self.stop(&mut current);
+        self.retry = None;
     }
 
     fn now_ms(&self) -> u64 {
         ms_since(self.base)
     }
 
-    fn watch_deadline(&self) -> u64 {
-        lock(&self.sink).watch.map_or(u64::MAX, |w| w.deadline_ms())
+    /// The next timer: the zero-watch deadline and the default-device poll while a stream is
+    /// open, or the next retry while a reopen waits. `None`: wait for a message only.
+    fn next_wake(&self, open: bool) -> Option<u64> {
+        if let Some(r) = self.retry {
+            return Some(r.next_ms);
+        }
+        if !open {
+            return None;
+        }
+        let watch = lock(&self.sink).watch.map_or(u64::MAX, |w| w.deadline_ms());
+        let poll = if self.default_id.is_some() {
+            self.next_poll_ms
+        } else {
+            u64::MAX
+        };
+        Some(watch.min(poll))
+    }
+
+    fn on_timer<H: MicHost>(&mut self, host: &mut H, current: &mut Current<H::Stream>) {
+        if self.retry.is_some() {
+            self.try_again(host, current);
+            return;
+        }
+        if self.check_zero(current) {
+            return;
+        }
+        let now = self.now_ms();
+        if self.default_id.is_some() && now >= self.next_poll_ms {
+            self.next_poll_ms = now.saturating_add(self.device_poll_ms);
+            // CAP-18: an input stream stays on its device (CoreAudio and WASAPI), so a new
+            // default input is found here and the stream opens again on it.
+            if host.default_input_id() != self.default_id {
+                self.reopen(host, current);
+            }
+        }
     }
 
     /// CAP-17b: stop a stream that gave no sound for the zero window, tell the sink to drop
-    /// its audio (no transcript) and report the fault for the fix-it card.
-    fn check_zero<S>(&self, current: &mut Current<S>) {
+    /// its audio (no transcript) and report the fault for the fix-it card. The check and the
+    /// stop run under one hold of the control lock.
+    fn check_zero<S>(&self, current: &mut Current<S>) -> bool {
         let now = self.now_ms();
-        let expired = lock(&self.sink).watch.is_some_and(|w| w.expired(now));
-        if !expired {
-            return;
+        let mut c = lock(&self.control);
+        {
+            let mut slot = lock(&self.sink);
+            if !slot.watch.is_some_and(|w| w.expired(now)) {
+                return false;
+            }
+            slot.live = None;
+            slot.watch = None;
         }
-        self.stop(current);
+        if let Some((_, _, stream)) = current.take() {
+            drop(stream);
+        }
+        c.slot = Slot::Closed;
+        drop(c);
         lock(&self.sink).sink.event(SinkEvent::Discard);
         let _ = self.notify.send((AudioSource::Mic, MicFault::ZeroBuffers));
+        true
     }
 
     fn on_stream_fault<H: MicHost>(
@@ -428,61 +511,100 @@ impl AudioThread {
     ) {
         match fault {
             StreamFault::Transient => {}
+            StreamFault::Rerouted => lock(&self.sink).sink.event(SinkEvent::Gap { gap_ms: 0 }),
+            // CAP-18 and section 7.2: the stream is gone. Open again on the default device,
+            // and wait up to the lost grace (10 s) for one to come. A host that cannot name
+            // its default device (no poll) reports the loss at once, as in ADR 0038.
+            StreamFault::Invalidated => self.reopen(host, current),
+            StreamFault::Fatal if self.default_id.is_some() => self.reopen(host, current),
             StreamFault::Fatal => {
                 self.stop(current);
                 let _ = self.notify.send((AudioSource::Mic, MicFault::Lost));
             }
-            // CAP-18: the OS moved the stream; mark the gap in the audio.
-            StreamFault::Rerouted => lock(&self.sink).sink.event(SinkEvent::Gap { gap_ms: 0 }),
-            StreamFault::Invalidated => self.reopen(host, current),
         }
     }
 
-    /// CAP-18: drop the old stream and build and play a new one on the new default, under the
-    /// same generation (the same lease). The slot stays open, so a `close` meanwhile queues a
-    /// Close message that stops the new stream. The sink keeps what it holds.
+    /// CAP-18: drop the old stream and build and play a new one on the default device,
+    /// under the same generation (the same lease). The slot stays open, so a `close`
+    /// meanwhile queues a Close message that stops the new stream. The sink keeps what it
+    /// holds. If no stream opens, retry until the lost grace ends.
     fn reopen<H: MicHost>(&mut self, host: &mut H, current: &mut Current<H::Stream>) {
         let Some((generation, _, old)) = current.take() else {
             return;
         };
-        let started = Instant::now();
         {
             let _c = lock(&self.control);
-            lock(&self.sink).live = None;
+            let mut slot = lock(&self.sink);
+            slot.live = None;
+            slot.watch = None;
+            drop(slot);
             drop(old);
         }
-        match self.build_and_play(host, generation) {
+        let now = self.now_ms();
+        self.retry = Some(Retry {
+            generation,
+            since_ms: now,
+            next_ms: now,
+        });
+        self.try_again(host, current);
+    }
+
+    fn try_again<H: MicHost>(&mut self, host: &mut H, current: &mut Current<H::Stream>) {
+        let Some(retry) = self.retry else {
+            return;
+        };
+        match self.build_and_play(host, retry.generation) {
             Ok((epoch, stream)) => {
+                self.retry = None;
                 let _c = lock(&self.control);
-                let gap_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
                 let now = self.now_ms();
                 let mut slot = lock(&self.sink);
-                slot.sink.event(SinkEvent::Gap { gap_ms });
-                slot.live = Some((generation, epoch));
+                slot.sink.event(SinkEvent::Gap {
+                    gap_ms: now.saturating_sub(retry.since_ms),
+                });
+                slot.live = Some((retry.generation, epoch));
                 slot.watch = Some(ZeroWatch::new(self.zero_window_ms, now));
                 drop(slot);
-                *current = Some((generation, epoch, stream));
+                *current = Some((retry.generation, epoch, stream));
             }
             Err(_) => {
-                {
-                    let mut c = lock(&self.control);
-                    lock(&self.sink).watch = None;
-                    if matches!(c.slot, Slot::Open { generation: g } if g == generation) {
-                        c.slot = Slot::Closed;
-                    }
+                let now = self.now_ms();
+                if now.saturating_sub(retry.since_ms) >= self.lost_grace_ms {
+                    self.give_up(true);
+                } else {
+                    self.retry = Some(Retry {
+                        next_ms: now.saturating_add(RETRY_EVERY_MS),
+                        ..retry
+                    });
                 }
-                let _ = self.notify.send((AudioSource::Mic, MicFault::Lost));
             }
         }
     }
 
-    /// Set the preference, then build and start a stream with a new epoch. A failed play
-    /// drops its stream before this returns.
+    /// End a waiting reopen: close the slot, and report the device lost unless a close asked.
+    fn give_up(&mut self, report: bool) {
+        let Some(retry) = self.retry.take() else {
+            return;
+        };
+        {
+            let mut c = lock(&self.control);
+            if matches!(c.slot, Slot::Open { generation: g } if g == retry.generation) {
+                c.slot = Slot::Closed;
+            }
+        }
+        if report {
+            let _ = self.notify.send((AudioSource::Mic, MicFault::Lost));
+        }
+    }
+
+    /// Note the default input, set the preference, then build and start a stream with a new
+    /// epoch. A failed play drops its stream before this returns.
     fn build_and_play<H: MicHost>(
         &mut self,
         host: &mut H,
         generation: u64,
     ) -> Result<(u64, H::Stream), DeviceError> {
+        self.note_default(host);
         self.epoch += 1;
         let epoch = self.epoch;
         host.set_preference(DevicePreference {
@@ -496,7 +618,11 @@ impl AudioThread {
         Ok((epoch, stream))
     }
 
-    /// Build and start a stream. On success it becomes `current`.
+    fn note_default<H: MicHost>(&mut self, host: &mut H) {
+        self.default_id = host.default_input_id();
+        self.next_poll_ms = self.now_ms().saturating_add(self.device_poll_ms);
+    }
+
     fn open<H: MicHost>(
         &mut self,
         host: &mut H,
@@ -505,6 +631,7 @@ impl AudioThread {
     ) -> Result<(), DeviceError> {
         // `close` turns an open slot into a Close message, so no stream is current here.
         debug_assert!(current.is_none());
+        self.note_default(host);
         self.epoch += 1;
         let epoch = self.epoch;
         host.set_preference(DevicePreference {

@@ -33,6 +33,8 @@ struct HostState {
     alive: Vec<bool>,
     /// The build indexes that must fail.
     fail_builds: Vec<usize>,
+    /// The opaque ID of the default input; `None`: the host cannot tell.
+    default_id: Option<String>,
 }
 
 type Shared = Arc<Mutex<HostState>>;
@@ -77,6 +79,10 @@ impl MicHost for FakeHost {
             .log
             .push(format!("play {}", stream.idx));
         Ok(())
+    }
+
+    fn default_input_id(&mut self) -> Option<String> {
+        self.0.lock().unwrap().default_id.clone()
     }
 
     fn set_preference(&mut self, preference: DevicePreference) {
@@ -141,18 +147,26 @@ struct Rig {
 }
 
 fn rig_with(zero_window: Duration, fail_builds: Vec<usize>) -> Rig {
+    rig_full(
+        MicConfig {
+            zero_window,
+            ..MicConfig::default()
+        },
+        fail_builds,
+        None,
+    )
+}
+
+fn rig_full(config: MicConfig, fail_builds: Vec<usize>, default_id: Option<&str>) -> Rig {
     let host: Shared = Arc::new(Mutex::new(HostState {
         fail_builds,
+        default_id: default_id.map(str::to_string),
         ..HostState::default()
     }));
     let sink = Sink::default();
     let h = Arc::clone(&host);
-    let (device, link) = MicDevice::spawn_with(
-        move || FakeHost(h),
-        Box::new(sink.clone()),
-        MicConfig { zero_window },
-    )
-    .expect("spawn");
+    let (device, link) =
+        MicDevice::spawn_with(move || FakeHost(h), Box::new(sink.clone()), config).expect("spawn");
     let faults = Arc::new(Mutex::new(Vec::new()));
     let f = Arc::clone(&faults);
     link.connect_fault_fn(move |source, fault| f.lock().unwrap().push((source, fault)));
@@ -261,6 +275,116 @@ fn cap_17b_no_blocks_at_all_count_as_zero_buffers() {
 #[test]
 fn cap_17b_the_default_zero_window_is_2_s() {
     assert_eq!(MicConfig::default().zero_window, Duration::from_secs(2));
+}
+
+#[test]
+fn cap_18_the_default_poll_is_200_ms_and_the_lost_grace_10_s() {
+    assert_eq!(MicConfig::default().device_poll, Duration::from_millis(200));
+    assert_eq!(MicConfig::default().lost_grace, Duration::from_secs(10));
+}
+
+fn polled(fail_builds: Vec<usize>, lost_grace: Duration) -> Rig {
+    rig_full(
+        MicConfig {
+            zero_window: Duration::from_secs(60),
+            device_poll: Duration::from_millis(200),
+            lost_grace,
+        },
+        fail_builds,
+        Some("device-a"),
+    )
+}
+
+fn set_default(r: &Rig, id: Option<&str>) {
+    r.host.lock().unwrap().default_id = id.map(str::to_string);
+}
+
+#[test]
+fn cap_18_a_new_default_input_reopens_the_stream_within_500_ms_with_a_gap_marker() {
+    let r = polled(Vec::new(), Duration::from_secs(10));
+    r.device.open(AudioSource::Mic).unwrap();
+    feed(&r.host, 0, &[0.25; 4]);
+    let t0 = Instant::now();
+    // The OS gives no stream error for a new default input: the poll finds it.
+    set_default(&r, Some("device-b"));
+    wait_until("the reopen", || alive(&r, 1));
+    let took = t0.elapsed();
+    assert!(took <= Duration::from_millis(500), "reopen took {took:?}");
+    assert!(!alive(&r, 0));
+    feed(&r.host, 1, &[0.5; 4]);
+    wait_until("the new frame", || got(&r).len() == 3);
+    let g = got(&r);
+    assert_eq!(g[0], Got::Frame(vec![0.25; 4]));
+    assert!(matches!(g[1], Got::Event(SinkEvent::Gap { .. })), "{g:?}");
+    assert_eq!(g[2], Got::Frame(vec![0.5; 4]));
+    assert!(r.faults.lock().unwrap().is_empty());
+}
+
+#[test]
+fn cap_18_an_unchanged_default_keeps_the_stream() {
+    let r = polled(Vec::new(), Duration::from_secs(10));
+    r.device.open(AudioSource::Mic).unwrap();
+    feed(&r.host, 0, &[0.1; 4]);
+    thread::sleep(Duration::from_millis(500));
+    assert!(alive(&r, 0));
+    assert_eq!(log(&r), ["prefer_built_in false", "build 0", "play 0"]);
+}
+
+#[test]
+fn cap_18_a_lost_device_waits_for_a_replacement_and_reopens_under_the_same_lease() {
+    // Build 1 fails (no device yet); build 2, 250 ms later, finds the replacement.
+    let r = polled(vec![1], Duration::from_secs(10));
+    r.device.open(AudioSource::Mic).unwrap();
+    fault(&r.host, 0, StreamFault::Fatal);
+    wait_until("the replacement", || alive(&r, 2));
+    assert!(
+        r.faults.lock().unwrap().is_empty(),
+        "no loss inside the grace"
+    );
+    assert!(got(&r)
+        .iter()
+        .any(|g| matches!(g, Got::Event(SinkEvent::Gap { .. }))));
+    r.device.close(AudioSource::Mic);
+    assert!(!alive(&r, 2));
+}
+
+#[test]
+fn cap_18_no_replacement_within_the_grace_reports_the_device_lost() {
+    let r = polled((1..200).collect(), Duration::from_millis(300));
+    r.device.open(AudioSource::Mic).unwrap();
+    fault(&r.host, 0, StreamFault::Fatal);
+    wait_until("the lost fault", || !r.faults.lock().unwrap().is_empty());
+    assert_eq!(
+        *r.faults.lock().unwrap(),
+        [(AudioSource::Mic, MicFault::Lost)]
+    );
+}
+
+#[test]
+fn cap_18_a_close_during_the_wait_ends_it_without_a_fault() {
+    let r = polled((1..200).collect(), Duration::from_secs(10));
+    r.device.open(AudioSource::Mic).unwrap();
+    fault(&r.host, 0, StreamFault::Fatal);
+    wait_until("a failed retry", || log(&r).iter().any(|l| l == "build 1"));
+    r.device.close(AudioSource::Mic);
+    thread::sleep(Duration::from_millis(400));
+    assert!(r.faults.lock().unwrap().is_empty());
+    let builds = log(&r).iter().filter(|l| l.starts_with("build")).count();
+    thread::sleep(Duration::from_millis(400));
+    let later = log(&r).iter().filter(|l| l.starts_with("build")).count();
+    assert_eq!(builds, later, "no retry after the close");
+}
+
+#[test]
+fn cap_22_a_headset_that_becomes_the_default_is_checked_against_the_preference() {
+    let r = polled(Vec::new(), Duration::from_secs(10));
+    r.device.set_prefer_built_in(true);
+    r.device.open(AudioSource::Mic).unwrap();
+    // AirPods connect and become the default input: the stream builds again with the
+    // preference, so the host picks the built-in mic.
+    set_default(&r, Some("headset"));
+    wait_until("the reopen", || alive(&r, 1));
+    assert_eq!(log(&r)[3..], ["prefer_built_in true", "build 1", "play 1"]);
 }
 
 #[test]
@@ -401,8 +525,16 @@ fn cap_18_a_late_fault_of_the_old_stream_does_not_touch_the_new_one() {
 }
 
 #[test]
-fn cap_18_a_failed_reopen_reports_the_device_lost() {
-    let r = rig_with(Duration::from_secs(60), vec![1]);
+fn cap_18_a_failed_reopen_reports_the_device_lost_after_the_grace() {
+    let r = rig_full(
+        MicConfig {
+            zero_window: Duration::from_secs(60),
+            lost_grace: Duration::from_millis(100),
+            ..MicConfig::default()
+        },
+        vec![1, 2],
+        None,
+    );
     r.device.open(AudioSource::Mic).unwrap();
     fault(&r.host, 0, StreamFault::Invalidated);
     wait_until("the lost fault", || !r.faults.lock().unwrap().is_empty());
@@ -411,9 +543,10 @@ fn cap_18_a_failed_reopen_reports_the_device_lost() {
         [(AudioSource::Mic, MicFault::Lost)]
     );
     assert!(!alive(&r, 0));
-    // The slot is closed: the next open builds again.
+    // Two tries (at once and 250 ms later) failed; the slot is closed, so the next open
+    // builds again.
     r.device.open(AudioSource::Mic).unwrap();
-    assert!(alive(&r, 2));
+    assert!(alive(&r, 3));
 }
 
 #[test]
@@ -468,4 +601,11 @@ fn cap_22_the_preference_reaches_the_host_before_each_build() {
             "play 1"
         ]
     );
+}
+
+#[test]
+fn cap_17a_the_macos_bundle_has_the_mic_usage_text_for_the_prompt() {
+    let plist = include_str!("../../../src-tauri/Info.plist");
+    assert!(plist.contains("<key>NSMicrophoneUsageDescription</key>"));
+    assert!(plist.contains("only while you hold the talk key"));
 }

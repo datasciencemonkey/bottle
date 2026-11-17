@@ -85,6 +85,13 @@ impl MicHost for CpalMicHost {
     fn set_preference(&mut self, preference: DevicePreference) {
         self.preference = preference;
     }
+
+    fn default_input_id(&mut self) -> Option<String> {
+        // CAP-18: cpal input streams do not follow the default device, so the backend polls
+        // it. The ID is compared only, never logged.
+        let id = self.host.default_input_device()?.id().ok()?;
+        Some(id.to_string())
+    }
 }
 
 impl CpalMicHost {
@@ -173,9 +180,11 @@ pub fn code_for(kind: ErrorKind) -> DeviceError {
 /// Whether a cpal stream error after open ends the stream.
 pub fn fault_for(kind: ErrorKind) -> StreamFault {
     match kind {
-        // CAP-18: CoreAudio rerouted the stream to the new default device; it still runs.
+        // CAP-18: the backend moved the stream to a new device by itself; it still runs.
+        // (cpal 0.18 does this for output streams; an input stream that does it gets a gap.)
         ErrorKind::DeviceChanged => StreamFault::Rerouted,
-        // CAP-18: WASAPI does not rebind; a new default exists, so open a new stream on it.
+        // CAP-18: the stream cannot go on (WASAPI after a default change, CoreAudio after a
+        // rate change); open a new stream on the default device.
         ErrorKind::StreamInvalidated => StreamFault::Invalidated,
         // A glitch or a refused real-time priority: audio still flows.
         ErrorKind::Xrun | ErrorKind::RealtimeDenied => StreamFault::Transient,
