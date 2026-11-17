@@ -14,7 +14,9 @@ describe('Mic preference setting (hub)', () => {
   it('[CAP-22] shows the setting with the exact text, off by default', async () => {
     const { el } = await render(<MicPreference settings={memoryMicSettings()} />);
     expect(MIC_PREFERENCE_LABEL).toBe('Prefer the built-in mic when a Bluetooth headset connects');
-    const box = el.querySelector<HTMLInputElement>('input[type="checkbox"][name="preferBuiltInMic"]');
+    const box = el.querySelector<HTMLInputElement>(
+      'input[type="checkbox"][name="preferBuiltInMic"]',
+    );
     expect(box).not.toBeNull();
     expect(box?.checked).toBe(false);
     expect(el.querySelector('label')?.textContent).toBe(MIC_PREFERENCE_LABEL);
