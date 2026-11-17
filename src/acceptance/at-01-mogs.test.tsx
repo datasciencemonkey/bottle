@@ -3,14 +3,15 @@
  * AT-01 "Create two MOGs" (#230), section 15: the TS part. Pass: both configs survive a restart,
  * chords stay distinct, no secret is in either config.
  *
- * The MOG definitions (T1 MogManager, #26) and the wizard (#43) are not built, so these tests are
- * written against `MogManager` and the hub view and stay `it.skip` with the feature issue. The
+ * The MOG tests run T1 MogManager (#26) on the store and window doubles of
+ * `src/test-support/mog-doubles.ts`. The wizard (#43) is not built, so its test stays `it.skip`. The
  * window part (two panels, no focus steal, drag, the 8-MOG cap) and the chord check (MB-14 core)
  * run in `src-tauri/tests/at_01_mogs.rs`.
  */
 import { act } from 'react';
 import type { MogBinding, MogId } from '../shared/interfaces';
 import { createMogManager, type MogDefinition } from '../brain/components/mog-manager';
+import { fakeWindows, memoryConfigs, sequentialIds } from '../test-support/mog-doubles';
 import { render, tauri } from '../views/test-tauri';
 import { Hub } from '../views/hub/Hub';
 
@@ -18,8 +19,9 @@ vi.mock('@tauri-apps/api/core', async () => (await import('../views/test-tauri')
 vi.mock('@tauri-apps/api/event', async () => (await import('../views/test-tauri')).eventModule);
 vi.mock('@tauri-apps/api/window', async () => (await import('../views/test-tauri')).windowModule);
 
-const A: MogId = '00000000-0000-4000-8000-0000000000a1';
-const B: MogId = '00000000-0000-4000-8000-0000000000b1';
+// `sequentialIds` gives ...0001 to Sales and ...0002 to Ops; the list sorts by name.
+const B: MogId = '00000000-0000-4000-8000-000000000001';
+const A: MogId = '00000000-0000-4000-8000-000000000002';
 const binding = (home: string): MogBinding => ({
   home,
   backend: { kind: 'genie_one_mcp', profile: home },
@@ -41,31 +43,40 @@ describe('AT-01 create two MOGs (TS part)', () => {
     expect(SECRET.test(`dapi${'a'.repeat(32)}`)).toBe(true);
   });
 
-  it.skip('[AT-01] [MB-01] [MB-03a] two MOG configs survive a restart and hold no secret TODO(#26)', async () => {
-    const before = createMogManager();
-    // MogManager has no create yet; #26 adds it with the config shape of #25.
-    expect(typeof (before as { create?: unknown }).create).toBe('function');
-    const defs: MogDefinition[] = [
-      { mogId: A, name: 'Sales', binding: binding('sales-ws') },
-      { mogId: B, name: 'Ops', binding: binding('ops-ws') },
+  it('[AT-01] [MB-01] [MB-03a] two MOG configs survive a restart and hold no secret', async () => {
+    const configs = memoryConfigs();
+    const windows = fakeWindows();
+    const before = createMogManager({ configs, windows, newId: sequentialIds() });
+    const defs: { name: string; home: string }[] = [
+      { name: 'Sales', home: 'sales-ws' },
+      { name: 'Ops', home: 'ops-ws' },
     ];
-    // TODO(#26): create each definition, then start it; the restart is a new MogManager on the
-    // same store.
-    for (const d of defs) await before.start(d.mogId);
-    const after = await createMogManager().list();
+    for (const d of defs) {
+      const s = await before.create(d);
+      await before.start(s.mogId);
+    }
+    expect(before.runningCount()).toBe(2);
+    // The restart is a new MogManager on the same store; no MOG runs after it.
+    const after: MogDefinition[] = (await createMogManager({ configs, windows }).list()).mogs;
     expect(after.map((d) => [d.mogId, d.binding.home])).toEqual([
-      [A, 'sales-ws'],
-      [B, 'ops-ws'],
+      [A, 'ops-ws'],
+      [B, 'sales-ws'],
     ]);
     for (const d of after) expect(SECRET.test(JSON.stringify(d))).toBe(false);
+    for (const c of configs.files.values()) expect(SECRET.test(JSON.stringify(c))).toBe(false);
   });
 
-  it.skip('[AT-01] [MB-03b] the 9th start shows "8 MOGs are running. Stop one to start <name>." TODO(#26)', async () => {
-    const m = createMogManager();
-    const ids = Array.from({ length: 9 }, (_, i) => `00000000-0000-4000-8000-00000000010${i}`);
+  it('[AT-01] [MB-03b] the 9th start shows "8 MOGs are running. Stop one to start <name>."', async () => {
+    const m = createMogManager({
+      configs: memoryConfigs(),
+      windows: fakeWindows(),
+      newId: sequentialIds(),
+    });
+    const ids: MogId[] = [];
+    for (let i = 1; i <= 9; i++) ids.push((await m.create({ name: `MOG ${i}`, home: 'p' })).mogId);
     for (const id of ids.slice(0, 8)) await m.start(id);
     await expect(m.start(ids[8] ?? '')).rejects.toThrow(
-      /^8 MOGs are running\. Stop one to start .+\.$/,
+      /^8 MOGs are running\. Stop one to start MOG 9\.$/,
     );
   });
 

@@ -136,11 +136,11 @@ describe('brain component registry (4.3)', () => {
 });
 
 describe('brain component stubs', () => {
-  it('[T1] MogManager stubs list, start and stop (#26)', async () => {
+  it('[T1] [MB-01] MogManager is built (#26): no stub is left', () => {
     const t = createMogManager();
-    await expectStub(() => t.list(), 26);
-    await expectStub(() => t.start(MOG), 26);
-    await expectStub(() => t.stop(MOG), 26);
+    for (const k of ['list', 'create', 'edit', 'duplicate', 'start', 'stop', 'remove'] as const)
+      expect(typeof t[k]).toBe('function');
+    expect(t.runState(MOG)).toBe('stopped');
   });
 
   it('[T2] OperationTracker stubs state, transition and mayAutoResend (#39)', async () => {

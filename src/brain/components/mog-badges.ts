@@ -44,8 +44,9 @@ export type HopScope = 'question' | 'session';
 /**
  * Everything the badges depend on.
  * TODO(#17): `profile` and `host` come from ProfileService (`home(mogId)` and `list()`).
- * TODO(#26): `backend` and `backendName` come from `MogConfig.binding.backend` (#25), when
- *   MogManager loads the config.
+ * TODO(#374): `backend` comes from `MogManager.list()` (`MogSummary.binding.backend`, #26);
+ *   the brain fills these sources and sends the badges in `mog.view_state`.
+ * TODO(#156, #158): `backendName` comes from the genie_agent and custom_agent backends (v1).
  * TODO(#52): `stt` is the provider of the last Transcript, or the selected provider before one.
  * TODO(#164): `hop` comes from the ProfileService hop target and scope.
  * TODO(#98): `lifecycle` comes from the MogManager lifecycle.

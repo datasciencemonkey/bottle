@@ -41,9 +41,14 @@ describe('V1 hub view', () => {
     const { el } = await render(<Hub />);
     await tauri.emit('mog:view_state', { mogId: A, mood: 'idle', overlays });
     await act(async () => (el.querySelector(`li[data-mog="${A}"] button`) as HTMLElement).click());
-    // The first emit is the hub notice request (#27, MB-08a); the MOG click follows.
-    expect(viewEmits()).toEqual([
-      { mogId: 'hub', kind: 'click', payload: { action: 'notice.ready' } },
+    // The hub notice (#27, MB-08a) and the MOG list (#26) ask the brain with hub-scope emits
+    // (notice.ready, mogs.ready); the MOG selection is the rest.
+    expect(viewEmits()).toContainEqual({
+      mogId: 'hub',
+      kind: 'click',
+      payload: { action: 'notice.ready' },
+    });
+    expect(viewEmits().filter((e) => (e as { mogId: string }).mogId !== 'hub')).toEqual([
       { mogId: A, kind: 'click' },
     ]);
   });

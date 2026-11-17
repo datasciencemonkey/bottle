@@ -13,6 +13,7 @@ import {
 import { About } from './About';
 import { DataPanel } from './DataDisclosures';
 import { LegalNotice } from './LegalNotice';
+import { MogList } from './MogList';
 
 export function Hub() {
   const [mogs, setMogs] = useState<ReadonlyMap<MogId, MogViewState>>(new Map());
@@ -55,6 +56,7 @@ export function Hub() {
           </li>
         ))}
       </ul>
+      <MogList />
       <DataPanel />
       <About />
     </main>
