@@ -952,15 +952,18 @@ const PREFER: &str = "app.capture.preferBuiltInMic";
 #[test]
 fn cap_22_app_setting_read_answers_the_default_off() {
     let settings = AppSettings::default();
-    assert_eq!(
-        settings_call(
-            "hub",
-            Some(&settings),
-            "app_setting_read",
-            json!({"key": PREFER})
-        ),
-        Ok(json!({"key": PREFER, "value": false}))
-    );
+    for from in ["brain", "hub"] {
+        assert_eq!(
+            settings_call(
+                from,
+                Some(&settings),
+                "app_setting_read",
+                json!({"key": PREFER})
+            ),
+            Ok(json!({"key": PREFER, "value": false})),
+            "{from}"
+        );
+    }
 }
 
 #[test]
@@ -991,11 +994,11 @@ fn cap_22_app_setting_write_reaches_the_mic_and_read_returns_it() {
 }
 
 #[test]
-fn cap_22_only_the_hub_can_call_the_app_setting_commands() {
+fn cap_22_mog_and_card_views_cannot_call_the_app_setting_commands() {
     let mic = std::sync::Arc::new(FakeMic::default());
     let settings = AppSettings::default();
     settings.set_mic_preference(mic.clone());
-    for from in ["brain", "mog-a1", "card-a1"] {
+    for from in ["mog-a1", "card-a1"] {
         for (command, args) in [
             ("app_setting_read", json!({"key": PREFER})),
             ("app_setting_write", json!({"key": PREFER, "value": true})),

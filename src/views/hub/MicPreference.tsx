@@ -4,11 +4,11 @@
  * Bluetooth headset, so the headset stays in A2DP. The setting asks the OS for nothing
  * (CAP-17a). Default off.
  *
- * The value is the app setting `app.capture.preferBuiltInMic` (Appendix F, #453). The hub reads
- * and writes it with `app_setting_read` and `app_setting_write`; the host passes it to the mic.
+ * The value is the app setting `app.capture.preferBuiltInMic` (ADR 0063). A view calls only
+ * `view_emit` (ARC-2, MOG-08a), so the brain reads and writes it with `app_setting_*`.
+ * TODO(#77): the Settings relay through the brain. Until then the hub keeps the value in memory.
  */
 import { useEffect, useState } from 'react';
-import { call } from '../../shared/ipc';
 
 export const MIC_PREFERENCE_LABEL = 'Prefer the built-in mic when a Bluetooth headset connects';
 
@@ -18,26 +18,7 @@ export interface MicSettings {
   write(preferBuiltIn: boolean): Promise<void>;
 }
 
-const KEY = 'app.capture.preferBuiltInMic';
-
-/** The app setting over IPC (#453). A refused or malformed read shows the setting off. */
-export function ipcMicSettings(): MicSettings {
-  return {
-    read: async () => {
-      try {
-        const s: unknown = await call('app_setting_read', { key: KEY });
-        return typeof s === 'object' && s !== null && (s as { value?: unknown }).value === true;
-      } catch {
-        return false;
-      }
-    },
-    write: async (v) => {
-      await call('app_setting_write', { key: KEY, value: v });
-    },
-  };
-}
-
-/** An in-memory store, default off (tests and previews). */
+/** An in-memory store, default off. TODO(#77): the brain relay of the app setting. */
 export function memoryMicSettings(initial = false): MicSettings {
   let value = initial;
   return {
@@ -48,7 +29,7 @@ export function memoryMicSettings(initial = false): MicSettings {
   };
 }
 
-const appMicSettings = ipcMicSettings();
+const appMicSettings = memoryMicSettings();
 
 export function MicPreference({ settings = appMicSettings }: { settings?: MicSettings }) {
   const [on, setOn] = useState(false);
@@ -61,11 +42,7 @@ export function MicPreference({ settings = appMicSettings }: { settings?: MicSet
   }, [settings]);
 
   const toggle = async (next: boolean) => {
-    try {
-      await settings.write(next);
-    } catch {
-      // A refused write changes nothing: the box shows the stored value again.
-    }
+    await settings.write(next);
     setOn(await settings.read());
   };
 

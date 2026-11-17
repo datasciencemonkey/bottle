@@ -1605,6 +1605,7 @@
       "name": "app_setting_read",
       "phase": "MVP-D",
       "windows": [
+        "brain",
         "hub"
       ]
     },
@@ -1612,6 +1613,7 @@
       "name": "app_setting_write",
       "phase": "MVP-D",
       "windows": [
+        "brain",
         "hub"
       ]
     },

@@ -45,9 +45,9 @@ const SPEC_COMMANDS: &[(&str, &[WindowClass])] = {
         ("hotkeys_set", &[B, H]),
         // #312 (ADR 0039): the wizard and Settings ask for an OS permission.
         ("permission_request", &[H]),
-        // #453 (CAP-22): the hub reads and writes the app-wide settings.
-        ("app_setting_read", &[H]),
-        ("app_setting_write", &[H]),
+        // #453 (CAP-22): the app-wide settings, like the `config_*` rows.
+        ("app_setting_read", &[B, H]),
+        ("app_setting_write", &[B, H]),
         ("mog_set_active", &[B]),
         ("window_mog_open", &[B]),
         ("window_mog_close", &[B]),
@@ -666,20 +666,26 @@ fn sec_03_consent_storage_failed_is_a_fixed_code() {
 // ---------- #453 (CAP-22) ----------
 
 #[test]
-fn cap_22_app_setting_rows_are_hub_only_and_take_a_known_key() {
+fn cap_22_app_setting_rows_are_brain_and_hub_rows_and_take_a_known_key() {
     for name in ["app_setting_read", "app_setting_write"] {
         let row = ipc::command(name).expect("an app_setting row");
-        assert_eq!(row.windows, [WindowClass::Hub], "{name}");
+        assert_eq!(
+            row.windows,
+            [WindowClass::Brain, WindowClass::Hub],
+            "{name}"
+        );
         assert_eq!(row.phase, Phase::MvpD, "{name}");
     }
     let read = json!({ "key": "app.capture.preferBuiltInMic" });
     let write = json!({ "key": "app.capture.preferBuiltInMic", "value": true });
     for (name, args) in [("app_setting_read", &read), ("app_setting_write", &write)] {
-        assert!(matches!(
-            ipc::handle("hub", name, args.clone()).unwrap_err(),
-            IpcError::NotImplemented { .. }
-        ));
-        for label in ["brain", "mog-a1", "card-a1"] {
+        for label in ["brain", "hub"] {
+            assert!(matches!(
+                ipc::handle(label, name, args.clone()).unwrap_err(),
+                IpcError::NotImplemented { .. }
+            ));
+        }
+        for label in ["mog-a1", "card-a1"] {
             assert!(
                 matches!(
                     ipc::handle(label, name, args.clone()).unwrap_err(),

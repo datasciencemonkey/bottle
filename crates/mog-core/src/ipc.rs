@@ -131,9 +131,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     row("hotkeys_set", BH),
     // #312 (ADR 0039): the wizard and Settings ask for an OS permission after a click.
     row("permission_request", H),
-    // #453 (CAP-22): the hub reads and writes the app-wide settings (Appendix F, scope App).
-    row("app_setting_read", H),
-    row("app_setting_write", H),
+    // #453 (CAP-22): the app-wide settings (Appendix F, scope App), like the `config_*` rows.
+    row("app_setting_read", BH),
+    row("app_setting_write", BH),
     row("mog_set_active", B),
     row("window_mog_open", B),
     row("window_mog_close", B),

@@ -71,9 +71,9 @@ export const COMMANDS = {
   hotkeys_set: BH,
   /** #312 (ADR 0039): the wizard and Settings ask for an OS permission after a click. */
   permission_request: { windows: ['hub'], phase: 'MVP-D' },
-  /** #453 (CAP-22): the hub reads and writes the app-wide settings (Appendix F, scope App). */
-  app_setting_read: { windows: ['hub'], phase: 'MVP-D' },
-  app_setting_write: { windows: ['hub'], phase: 'MVP-D' },
+  /** #453 (CAP-22): the app-wide settings (Appendix F, scope App), like the `config_*` rows. */
+  app_setting_read: BH,
+  app_setting_write: BH,
   mog_set_active: B,
   window_mog_open: B,
   window_mog_close: B,

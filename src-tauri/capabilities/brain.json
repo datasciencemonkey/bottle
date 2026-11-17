@@ -39,6 +39,8 @@
     "allow-config-read",
     "allow-config-write",
     "allow-config-delete",
+    "allow-app-setting-read",
+    "allow-app-setting-write",
     "allow-policy-get",
     "allow-hotkeys-set",
     "allow-mog-set-active",

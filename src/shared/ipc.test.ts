@@ -117,9 +117,9 @@ describe('content-free IPC errors (#333, ADR 0040)', () => {
 });
 
 describe('app settings (CAP-22, #453)', () => {
-  it('[CAP-22] app_setting_read and app_setting_write are hub-only MVP-D rows', () => {
-    expect(COMMANDS.app_setting_read).toEqual({ windows: ['hub'], phase: 'MVP-D' });
-    expect(COMMANDS.app_setting_write).toEqual({ windows: ['hub'], phase: 'MVP-D' });
+  it('[CAP-22] [MOG-08a] app_setting_read and app_setting_write are brain-and-hub MVP-D rows', () => {
+    expect(COMMANDS.app_setting_read).toEqual({ windows: ['brain', 'hub'], phase: 'MVP-D' });
+    expect(COMMANDS.app_setting_write).toEqual({ windows: ['brain', 'hub'], phase: 'MVP-D' });
     const names = schemaDoc.commands.map((c) => c.name);
     expect(names).toContain('app_setting_read');
     expect(names).toContain('app_setting_write');
