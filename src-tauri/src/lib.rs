@@ -71,20 +71,16 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
     });
     // #388 (ADR 0038): the cpal mic on its own audio thread. The frames go nowhere yet.
     // TODO(#21): the RAM-only PTT buffer is the frame sink.
+    // CAP-22 (#453, ADR 0063): `app.capture.preferBuiltInMic` reaches this mic. No mic thread:
+    // the app still runs, and every start answers `host_failed`.
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     let (device, link) = {
         use mog_core::audio_device::{cpal_backend::CpalMicHost, DiscardSink, MicDevice};
-        match MicDevice::spawn(CpalMicHost::new, Box::new(DiscardSink)) {
-            Ok((mic, link)) => (
-                Box::new(mic) as Box<dyn mog_core::capture::AudioDevice>,
-                Some(link),
-            ),
-            // No mic thread: the app still runs, and every start answers `host_failed`.
-            Err(_) => (
-                Box::new(capture_host::UnwiredMic) as Box<dyn mog_core::capture::AudioDevice>,
-                None,
-            ),
-        }
+        let settings = handle.try_state::<std::sync::Arc<mog_core::app_settings::AppSettings>>();
+        capture_host::mic_capture_device(
+            MicDevice::spawn(CpalMicHost::new, Box::new(DiscardSink)),
+            settings.as_ref().map(|s| s.inner().as_ref()),
+        )
     };
     // No mic backend on other platforms (the Linux CI build).
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -121,8 +117,7 @@ pub fn run() {
     builder
         .manage(ipc::BrainChannel::default())
         // #453 (CAP-22): the app-wide settings for `app_setting_*`, in memory until #77.
-        // TODO(#425): when the host builds the `MicDevice`, it calls
-        // `AppSettings::set_mic_preference(Arc::new(mic.preference()))`.
+        // `install_capture` connects them to the mic. Managed before `setup` runs it.
         .manage(std::sync::Arc::new(
             mog_core::app_settings::AppSettings::default(),
         ))

@@ -9,6 +9,8 @@
 //! No audio, transcript or token is in any reply, event or log (CAP-01b): the replies and
 //! events hold only the capture state, lease IDs, MOG IDs, modes and stop reasons.
 
+use mog_core::app_settings::AppSettings;
+use mog_core::audio_device::{FailureLink, MicDevice};
 use mog_core::capture::{
     parse_lease, AudioDevice, AudioSource, CaptureCore, CaptureError, CaptureEvents,
     CaptureRequest, CaptureService, DeviceError, LeaseNo, Stopped,
@@ -46,6 +48,27 @@ impl AudioDevice for UnwiredMic {
         Err(UNWIRED_MIC)
     }
     fn close(&self, _source: AudioSource) {}
+}
+
+/// The capture device from a spawned [`MicDevice`] (#388), with its failure link.
+///
+/// CAP-22 (#453, ADR 0063): `settings` gets the preference handle of the device, so each
+/// write of `app.capture.preferBuiltInMic` reaches the device that the capture core holds, and
+/// the device starts with the value in force. A mic that did not spawn is the [`UnwiredMic`]:
+/// the app still runs, and every start answers `host_failed`.
+pub fn mic_capture_device(
+    spawned: std::io::Result<(MicDevice, FailureLink)>,
+    settings: Option<&AppSettings>,
+) -> (Box<dyn AudioDevice>, Option<FailureLink>) {
+    match spawned {
+        Ok((mic, link)) => {
+            if let Some(settings) = settings {
+                settings.set_mic_preference(Arc::new(mic.preference()));
+            }
+            (Box::new(mic), Some(link))
+        }
+        Err(_) => (Box::new(UnwiredMic), None),
+    }
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
