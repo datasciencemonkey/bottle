@@ -77,19 +77,23 @@ fn arc_f14_std_launcher_fails_cleanly_for_a_missing_program() {
 }
 
 /// Calls `send_frame` with `frame` `times` times on a helper thread and returns how many calls
-/// were refused, or `None` if the calls did not all return within [`BOUND`].
+/// were refused. It panics if the calls do not all return within [`BOUND`]. It panics before
+/// `stop`, because a blocked `send_frame` holds the frame lock that `stop` needs. In that failure
+/// case only, the `sleep 600` runtime outlives the test.
 fn send_on_thread(
     proc: &Arc<Box<dyn mog_core::agent_host::runtime::RuntimeProcess>>,
     frame: serde_json::Value,
     times: usize,
-) -> Option<usize> {
+) -> usize {
     let (done_tx, done_rx) = mpsc::channel();
     let p = proc.clone();
     std::thread::spawn(move || {
         let refused = (0..times).filter(|_| p.send_frame(&frame).is_err()).count();
         let _ = done_tx.send(refused);
     });
-    done_rx.recv_timeout(BOUND).ok()
+    done_rx
+        .recv_timeout(BOUND)
+        .expect("send_frame never blocks: every call returned within BOUND")
 }
 
 #[test]
@@ -106,11 +110,7 @@ fn arc_f14_send_frame_returns_while_the_runtime_does_not_read() {
     let big = json!({ "type": "turn", "sessionId": "as-1", "turn": "x".repeat(256 * 1024) });
     let refused = send_on_thread(&proc, big, 8);
     proc.stop();
-    assert_eq!(
-        refused,
-        Some(0),
-        "send_frame never blocks and queues all 8 frames"
-    );
+    assert_eq!(refused, 0, "send_frame queues all 8 frames");
 }
 
 #[test]
@@ -240,7 +240,10 @@ fn arc_f14_watchdog_reports_exit_and_stops_a_grandchild_that_holds_the_pipes() {
 #[test]
 fn arc_f14_a_full_frame_queue_fails_fast_instead_of_blocking() {
     // The runtime never reads and the write deadline is 600 s, so nothing drains the queue
-    // within BOUND: a `send_frame` that waited for room would block for 600 s.
+    // within BOUND: a `send_frame` that waited for room would block for 600 s. About 10,000
+    // calls meet a full queue, and all of them must return within BOUND (120 s). So a
+    // `send_frame` that waits 12 ms or more on a full queue fails. The earlier check allowed
+    // 2 s for 136 calls, which is about 15 ms for each call.
     let cfg = RuntimeConfig::new("/bin/sleep", vec!["600".into()]);
     let spec = launch_spec(Harness::Codex, &cfg, "http://127.0.0.1:1");
     let launcher = StdRuntimeLauncher {
@@ -248,14 +251,15 @@ fn arc_f14_a_full_frame_queue_fails_fast_instead_of_blocking() {
     };
     let proc = Arc::new(launcher.launch(&spec, Arc::new(|_| {})).expect("spawns"));
     let frame = json!({ "type": "turn", "sessionId": "as-1", "turn": "y".repeat(8 * 1024) });
-    let refused = send_on_thread(
-        &proc,
-        frame,
-        mog_core::agent_host::runtime::FRAME_QUEUE + 72,
-    );
+    let calls = mog_core::agent_host::runtime::FRAME_QUEUE + 10_000;
+    let refused = send_on_thread(&proc, frame, calls);
     proc.stop();
-    let refused = refused.expect("send_frame never blocks");
-    assert!(refused > 0, "a full queue gives agent_unavailable");
+    // At most FRAME_QUEUE frames wait in the queue, and the pipe (64 KiB) plus the writer's
+    // current write hold at most 16 more of these 8 KiB frames.
+    assert!(
+        refused >= calls - mog_core::agent_host::runtime::FRAME_QUEUE - 16,
+        "a full queue gives agent_unavailable ({refused} of {calls} refused)"
+    );
 }
 
 #[test]
