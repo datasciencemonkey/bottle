@@ -146,6 +146,19 @@ export interface SegmentRef {
 }
 /** A capture lease ID issued by R2 CaptureService. Opaque; never reused. */
 export type LeaseId = string;
+/**
+ * MEM-25a, MEM-32a, SEC-14a (#449, ADR 0033 amendment): the ids that fill the
+ * `genie_exchange.session_id`, `workspace_id` and `space_id` columns. Declaration
+ * merging adds them after the 4.7 fields. All are optional.
+ */
+export interface GenieExchange {
+  /** The R10 `session.session_id` (UUID) of the PTT or meeting session that asked. */
+  sessionId?: string;
+  /** The numeric workspace id as a decimal string (the `?o=` value), when known. */
+  workspaceId?: string;
+  /** The Genie space id, when the backend has one. */
+  spaceId?: string;
+}
 
 // ---------- IPC names used by 4.5 but not defined in 4.7 ----------
 /** One entry of `profiles_list` (4.5). The same shape as `Profile`. */
