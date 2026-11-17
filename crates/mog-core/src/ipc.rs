@@ -435,7 +435,9 @@ args!(SessionAttestArgs {
 args!(
     /// SEC-32a: the brain names only the notice version. The Rust side fills the user, the
     /// device and the time (ADR 0060).
-    ConsentNoticeRecordArgs { notice_version: u32 }
+    ConsentNoticeRecordArgs {
+        notice_version: u32
+    }
 );
 
 args!(SttTranscribeArgs {
@@ -654,7 +656,8 @@ macro_rules! for_command {
     ($name:expr, $f:ident) => {
         match $name {
             "cli_status" | "capture_status" | "capture_stop_all" | "mem_remote_status"
-            | "config_list" | "policy_get" | "consent_records_list" => Some($f::<NoArgs>()),
+            | "config_list" | "policy_get" => Some($f::<NoArgs>()),
+            "consent_records_list" => Some($f::<NoArgs>()),
             "cli_install" => Some($f::<CliInstallArgs>()),
             "profiles_list" => Some($f::<ProfilesListArgs>()),
             "profile_status" => Some($f::<ProfileArgs>()),

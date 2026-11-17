@@ -143,8 +143,15 @@ describe('consent records (SEC-32a, #430, ADR 0060)', () => {
     };
     const leaky: CommandReturns['consent_records_list'] = {
       records: [
-        // @ts-expect-error no user crosses IPC
-        { recordId: 'r1', kind: 'notice', noticeVersion: 3, sessionId: null, acceptedAt: 1, user: 'x' },
+        {
+          recordId: 'r1',
+          kind: 'notice',
+          noticeVersion: 3,
+          sessionId: null,
+          acceptedAt: 1,
+          // @ts-expect-error no user crosses IPC
+          user: 'x',
+        },
       ],
     };
     expect([reply.records.length, leaky.records.length]).toEqual([1, 1]);

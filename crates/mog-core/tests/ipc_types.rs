@@ -8,10 +8,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use mog_core::types::{
-    CaptureMode, ConsentRecordKind, ConsentRecordView, CaptureState, CardUpdate, Intent, MicLevelFrame, MogId, MogViewState, Mood,
-    OthersTrack, Profile, ProfileInfo, ProfileName, RouterCommand, RouterDecision, SegmentRef,
-    SessionPolicy, TagApp, TagOp, Tags, TalkKeyReason, TalkKeyState, TalkKeyStatus, TokenState,
-    TokenStatus, Track, Transcript, TranscriptProvider,
+    CaptureMode, CaptureState, CardUpdate, ConsentRecordKind, ConsentRecordView, Intent,
+    MicLevelFrame, MogId, MogViewState, Mood, OthersTrack, Profile, ProfileInfo, ProfileName,
+    RouterCommand, RouterDecision, SegmentRef, SessionPolicy, TagApp, TagOp, Tags, TalkKeyReason,
+    TalkKeyState, TalkKeyStatus, TokenState, TokenStatus, Track, Transcript, TranscriptProvider,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -283,7 +283,8 @@ fn cap_39c_cap_42_talk_key_status_reason_is_required_and_nullable() {
 
 #[test]
 fn sec_32a_consent_record_view_session_id_is_required_and_nullable_and_holds_no_user() {
-    let notice = r#"{"recordId":"r1","kind":"notice","noticeVersion":1,"sessionId":null,"acceptedAt":1}"#;
+    let notice =
+        r#"{"recordId":"r1","kind":"notice","noticeVersion":1,"sessionId":null,"acceptedAt":1}"#;
     let v: ConsentRecordView = serde_json::from_str(notice).unwrap();
     assert_eq!(v.session_id, None);
     assert!(serde_json::from_str::<ConsentRecordView>(
@@ -293,6 +294,9 @@ fn sec_32a_consent_record_view_session_id_is_required_and_nullable_and_holds_no_
     for key in ["user", "device", "mogId"] {
         let mut v: serde_json::Value = serde_json::from_str(notice).unwrap();
         v[key] = serde_json::json!("x");
-        assert!(serde_json::from_value::<ConsentRecordView>(v).is_err(), "{key}");
+        assert!(
+            serde_json::from_value::<ConsentRecordView>(v).is_err(),
+            "{key}"
+        );
     }
 }

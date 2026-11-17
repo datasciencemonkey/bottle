@@ -138,7 +138,22 @@ const everyUnionValueListed: [
   Equal<(typeof CONSENT_RECORD_KINDS)[number], ConsentRecordKind>,
   Equal<ConsentRecordView['sessionId'], string | null>,
 ] = [
-  true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
 ];
 
 // Brain-to-view payloads (#285, ADR 0040).
