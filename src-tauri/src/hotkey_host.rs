@@ -1223,6 +1223,104 @@ mod tests {
         assert_eq!(rt.target.current(), None);
     }
 
+    // ---------- #73: the last-interacted MOG (MB-06a, ADR 0058) ----------
+
+    #[test]
+    fn mb_06a_a_reloaded_mog_view_keeps_the_target() {
+        // #305 review note A: a reload is not an interaction with that MOG.
+        let target = PttTarget::default();
+        target.on_window("mog-a1", WindowSignal::Opened);
+        target.on_window("mog-b2", WindowSignal::Opened);
+        target.on_window("card-a1", WindowSignal::Focused);
+        assert_eq!(target.current().as_deref(), Some("a1"));
+        target.on_window("mog-b2", WindowSignal::Opened);
+        assert_eq!(target.current().as_deref(), Some("a1"));
+    }
+
+    #[test]
+    fn mb_06a_a_closed_target_falls_back_to_the_last_interacted_open_mog() {
+        // #305 review note A: other MOGs are open, so the talk key still has a target.
+        let target = PttTarget::default();
+        for id in ["mog-a1", "mog-b2", "mog-c3"] {
+            target.on_window(id, WindowSignal::Opened);
+        }
+        target.on_window("card-a1", WindowSignal::Focused);
+        target.on_window("card-c3", WindowSignal::Focused);
+        target.on_window("mog-c3", WindowSignal::Destroyed);
+        assert_eq!(target.current().as_deref(), Some("a1"));
+        target.on_window("mog-a1", WindowSignal::Destroyed);
+        assert_eq!(target.current().as_deref(), Some("b2"));
+        target.on_window("mog-b2", WindowSignal::Destroyed);
+        assert_eq!(target.current(), None);
+        // A MOG that opens again is a first open.
+        target.on_window("mog-a1", WindowSignal::Opened);
+        assert_eq!(target.current().as_deref(), Some("a1"));
+    }
+
+    #[test]
+    fn mb_06a_a_card_of_a_closed_mog_never_becomes_the_target() {
+        // #305 review note B: the card of a MOG whose window is closed.
+        let target = PttTarget::default();
+        target.on_window("mog-a1", WindowSignal::Opened);
+        target.on_window("card-z9", WindowSignal::Opened);
+        target.on_window("card-z9", WindowSignal::Focused);
+        assert_eq!(target.current().as_deref(), Some("a1"));
+        target.on_window("mog-a1", WindowSignal::Destroyed);
+        target.on_window("card-a1", WindowSignal::Focused);
+        assert_eq!(target.current(), None);
+    }
+
+    #[test]
+    fn mb_06a_set_active_targets_an_open_mog_and_refuses_an_unknown_one() {
+        // The `mog_set_active` route of #439 calls this (click, drag, card open, chord use).
+        let target = PttTarget::default();
+        let route: &dyn TalkTargetRoute = &target;
+        assert_eq!(route.set_active("a1"), Err(UnknownMog));
+        assert_eq!(target.current(), None);
+        target.on_window("mog-a1", WindowSignal::Opened);
+        target.on_window("mog-b2", WindowSignal::Opened);
+        assert_eq!(route.set_active("a1"), Ok(()));
+        assert_eq!(target.current().as_deref(), Some("a1"));
+        assert_eq!(route.set_active("z9"), Err(UnknownMog));
+        assert_eq!(route.set_active(""), Err(UnknownMog));
+        assert_eq!(target.current().as_deref(), Some("a1"));
+    }
+
+    #[test]
+    fn mb_06a_set_active_moves_the_mog_to_the_front_of_the_fallback_order() {
+        let target = PttTarget::default();
+        for id in ["mog-a1", "mog-b2", "mog-c3"] {
+            target.on_window(id, WindowSignal::Opened);
+        }
+        target.set_active("a1").unwrap();
+        target.set_active("c3").unwrap();
+        target.on_window("mog-c3", WindowSignal::Destroyed);
+        assert_eq!(target.current().as_deref(), Some("a1"));
+    }
+
+    #[test]
+    fn mb_06a_a_press_after_set_active_goes_to_the_new_target() {
+        let target = Arc::new(PttTarget::default());
+        target.on_window("mog-a1", WindowSignal::Opened);
+        target.on_window("mog-b2", WindowSignal::Opened);
+        let (mut f, brain, _) = forwarder(&target);
+        target.set_active("a1").unwrap();
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Down));
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Up));
+        target.set_active("b2").unwrap();
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Down));
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Up));
+        assert_eq!(
+            brain.items(),
+            vec![
+                ptt("a1", "down"),
+                ptt("a1", "up"),
+                ptt("b2", "down"),
+                ptt("b2", "up")
+            ]
+        );
+    }
+
     #[test]
     fn at_30_lib_wires_the_page_load_window_and_exit_hooks() {
         let lib = std::fs::read_to_string(

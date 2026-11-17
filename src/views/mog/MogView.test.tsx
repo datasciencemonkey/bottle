@@ -79,6 +79,8 @@ describe('V2 MOG view', () => {
     await act(async () => target.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })));
     expect(calls).toEqual(['mount', 'poke', 'hover:true']);
     expect(viewEmits()).toEqual([
+      // MB-06a (#73): the view tells the brain that it is open. TODO(#439): a `ready` kind.
+      { mogId: ID, kind: 'click', payload: { action: 'view.ready' } },
       { mogId: ID, kind: 'click' },
       { mogId: ID, kind: 'hover' },
     ]);
@@ -413,5 +415,89 @@ describe('V2 MOG view frame budget (#13, ADR 0031)', () => {
     const main = readFileSync(resolve(import.meta.dirname, 'main.tsx'), 'utf8');
     expect(main).toMatch(/import\.meta\.env\.VITE_BOTTLE_LATENCY_TRACE === '1'/);
     expect(main).toMatch(/probe=\{probe\}/);
+  });
+});
+
+describe('V2 MOG view target marker and toast (#73)', () => {
+  beforeEach(() => tauri.reset());
+
+  const tv = (over: Record<string, unknown> = {}) => ({
+    mogId: ID,
+    name: 'Sales',
+    target: true,
+    toast: false,
+    ...over,
+  });
+
+  it('[UX-28] draws a triangle marker under the target mascot and adds "target" to its name', async () => {
+    const { m } = fakeMascot();
+    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    expect(tauri.listeners('mog:target')).toBe(1);
+    expect(el.querySelector('[data-marker="target"]')).toBeNull();
+    await tauri.emit('mog:target', tv());
+    const mascot = el.querySelector('.mascot') as HTMLElement;
+    expect(mascot.getAttribute('aria-label')).toBe('Sales, target');
+    const marker = el.querySelector('[data-marker="target"]') as HTMLElement;
+    expect(marker).not.toBeNull();
+    expect(marker.getAttribute('aria-hidden')).toBe('true');
+    // The marker sits under the mascot: after it in the DOM, a CSS triangle at the foot.
+    expect(mascot.compareDocumentPosition(marker) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const css = readFileSync(resolve(import.meta.dirname, 'mog.css'), 'utf8');
+    expect(css).toMatch(/\.target-marker\s*\{[^}]*border-top:[^}]*\}/s);
+  });
+
+  it('[UX-28] the marker moves away when this MOG stops being the target', async () => {
+    const { m } = fakeMascot();
+    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    await tauri.emit('mog:target', tv());
+    await tauri.emit('mog:target', tv({ target: false }));
+    expect(el.querySelector('[data-marker="target"]')).toBeNull();
+    expect(el.querySelector('.mascot')?.getAttribute('aria-label')).toBe('Sales');
+  });
+
+  it('[UX-28] ignores a target view for another MOG or with a bad shape', async () => {
+    const { m } = fakeMascot();
+    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    await tauri.emit('mog:target', tv({ mogId: OTHER }));
+    await tauri.emit('mog:target', tv({ target: 'yes' }));
+    await tauri.emit('mog:target', tv({ name: 7 }));
+    await tauri.emit('mog:target', null);
+    expect(el.querySelector('[data-marker="target"]')).toBeNull();
+    expect(el.querySelector('.mascot')?.getAttribute('aria-label')).toBe('MOG');
+  });
+
+  it('[MB-06b] shows the target toast with the MOG name while the brain says so', async () => {
+    const { m } = fakeMascot();
+    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    await tauri.emit('mog:target', tv({ toast: true }));
+    const toast = el.querySelector('[data-toast="target"]') as HTMLElement;
+    expect(toast.textContent).toBe('Talking to Sales');
+    expect(toast.getAttribute('role')).toBe('status');
+    await tauri.emit('mog:target', tv({ toast: false }));
+    expect(el.querySelector('[data-toast="target"]')).toBeNull();
+  });
+
+  it('[MB-06a] tells the brain once that the MOG view is open, after it listens', async () => {
+    const { m } = fakeMascot();
+    await render(<MogView mogId={ID} createMascot={() => m} />);
+    expect(viewEmits()).toEqual([{ mogId: ID, kind: 'click', payload: { action: 'view.ready' } }]);
+  });
+
+  it('[MB-06a] tries view.ready again while no brain listens yet', async () => {
+    vi.useFakeTimers();
+    try {
+      let refusals = 2;
+      tauri.invoke.mockImplementation(async () => {
+        if (refusals-- > 0) throw { error: 'host_failed' };
+        return {};
+      });
+      const { m } = fakeMascot();
+      await render(<MogView mogId={ID} createMascot={() => m} />);
+      for (let i = 0; i < 5; i++) await act(async () => vi.advanceTimersByTimeAsync(1000));
+      expect(viewEmits()).toHaveLength(3);
+    } finally {
+      tauri.invoke.mockImplementation(async () => ({}));
+      vi.useRealTimers();
+    }
   });
 });
