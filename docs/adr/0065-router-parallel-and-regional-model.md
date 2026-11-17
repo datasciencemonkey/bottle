@@ -30,8 +30,10 @@ on main.
    ask (`dictation`, `context`, `command`, `noise`) gets an empty question, so UC1 ends at
    insertion with no agent and no Genie (RTR-01c).
 4. **Entity rule.** An entity is a word that starts with a capital letter, or a word that holds
-   both a letter and a digit (`Contoso`, `EMEA`, `Q3`). The first word of each sentence and the
-   pronoun "I" are not entities. A rewrite is grounded when each of its numbers is in the cleaned
+   both a letter and a digit (`Contoso`, `EMEA`, `Q3`). The pronoun "I" is not an entity. The
+   first word of a sentence is an entity unless it is a common function word ("What", "Show",
+   "And", ...), so a new name at the start of a rewrite is caught. A false match only keeps the
+   cleaned text. A rewrite is grounded when each of its numbers is in the cleaned
    text and each entity is a word of the cleaned text (case-insensitive). The router field rules
    apply the same check against the router `cleaned_text` (rule `genie_question_entities`).
    The check rejects a rewrite that brings a name from an earlier topic. This is the strict

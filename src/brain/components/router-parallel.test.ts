@@ -231,17 +231,28 @@ describe('resolveGenieQuestion', () => {
     expect(resolveGenieQuestion(cleaned, d)).toBe(cleaned);
   });
 
+  it('[RTR-09b] falls back when the rewrite starts with a new entity', () => {
+    const d = routerDecision({
+      follow_up: true,
+      genie_question: 'Fabrikam revenue for March 2026?',
+    });
+    expect(resolveGenieQuestion(cleaned, d)).toBe(cleaned);
+    const ok = routerDecision({ follow_up: true, genie_question: 'Show revenue for March 2026.' });
+    expect(resolveGenieQuestion(cleaned, ok)).toBe('Show revenue for March 2026.');
+  });
+
   it('[RTR-09b] gives no question for an intent that does not ask', () => {
     for (const intent of ['dictation', 'context', 'command', 'noise'] as const)
       expect(resolveGenieQuestion(cleaned, routerDecision({ intent, follow_up: true }))).toBe('');
   });
 
-  it('[RTR-09b] finds entities but not the first word or the pronoun I', () => {
+  it('[RTR-09b] finds entities but not a common first word or the pronoun I', () => {
     expect(entitiesOf('What did Contoso sell in EMEA? I think Q3.')).toEqual([
       'contoso',
       'emea',
       'q3',
     ]);
+    expect(entitiesOf('Fabrikam sold more.')).toEqual(['fabrikam']);
   });
 
   it('[RTR-09b] the router field rules check entities against cleaned_text', () => {

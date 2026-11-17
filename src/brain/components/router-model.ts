@@ -26,7 +26,8 @@ const AZURE_US = /^(?:east|west|central|northcentral|southcentral|westcentral)us
 /**
  * Whether a cloud region serves Llama 3.1 8B. US regions (AWS and GCP `us-*`, Azure `*us`) do;
  * EU regions (`eu-west-1`, `eu-central-1`, COL-51) and all others do not.
- * TODO(#56): SP-13 confirms the served-region list.
+ * TODO(#56): SP-13 confirms the served-region list, including GovCloud (`us-gov-*`), which this
+ * rule treats as US.
  */
 export function servesLlama318b(region: string): boolean {
   const r = region.trim().toLowerCase();
