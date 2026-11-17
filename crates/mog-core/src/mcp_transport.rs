@@ -16,7 +16,8 @@
 //! - Caps on reply size and time ([`McpLimits`]). No token, request content or session ID in a
 //!   log, `Debug` output or an error.
 //!
-//! The in-flight poll guard (G-07b) and the loopback proxy (#139) are not part of #30.
+//! Not part of #30: the in-flight poll guard `E_POLL_INFLIGHT` (G-07b, ARC-F1), TODO(#31); and
+//! the loopback proxy for the main agent, TODO(#139).
 
 use std::fmt;
 use std::time::Duration;
@@ -59,6 +60,7 @@ pub const PROTOCOL_UNSUPPORTED: &str = "protocol_unsupported";
 pub const BAD_REPLY: &str = "bad_reply";
 
 /// The text the card shows for [`GENIE_ONE_OFF`] (G-05b).
+/// TODO(#32): the brain GL-5 mapper turns the `genie_one_off` code into this card text.
 pub fn genie_one_off_message(host: &str) -> String {
     format!("Genie One isn't available in {host}.")
 }
@@ -253,6 +255,30 @@ mod tests {
             outbound_identity_headers(&tags),
             Err(IdentityError::MogIdChars)
         );
+    }
+
+    #[test]
+    fn sec_03_mcp_call_debug_hides_profile_tool_args_and_mog() {
+        let tags = Tags {
+            app: TagApp::Bottle,
+            mog: "mog-secret-id".into(),
+            op: TagOp::Genie,
+        };
+        let mut args = JsonObject::new();
+        args.insert("question".into(), json!("secret question text"));
+        let meta = JsonObject::from([("warehouse_id".to_owned(), json!("wh-secret"))]);
+        let call = McpCall::new("secret-profile", "secret_tool_name", args, &tags).meta(&meta);
+        let text = format!("{call:?}");
+        for needle in [
+            "secret-profile",
+            "secret_tool_name",
+            "secret question",
+            "mog-secret-id",
+            "wh-secret",
+        ] {
+            assert!(!text.contains(needle), "{needle} in {text}");
+        }
+        assert_eq!(text, "McpCall { args: 1, .. }");
     }
 
     #[test]

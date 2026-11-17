@@ -50,7 +50,7 @@ implementer removes the mark and finishes the test.
 |---|---|---|
 | AT-07 | G-02, G-03 (the endpoint config) | #28 |
 | AT-07 | Live run of G-04a..G-06b on a real workspace (SP-09 live part) | #29 |
-| AT-07 | G-07a, G-07c | #31 |
+| AT-07 | G-07c | #31 |
 | AT-07 | W-06a, W-06b | #18 |
 | AT-08 | G-28, G-29a, G-29b, G-29c, G-29d, G-32a, G-32b | #92 |
 | AT-08 | G-30a, G-30b, G-30c | #90 |

@@ -408,28 +408,33 @@ impl ReqwestMcpTransport {
             };
             let status = resp.status().as_u16();
             self.log(&format!("mcp {kind} attempt={attempt} status={status}"));
+            if (300..400).contains(&status) {
+                // Rule 3: no redirect is followed, with or without the token.
+                return Err(err(REDIRECT_REFUSED));
+            }
+            if (200..300).contains(&status) {
+                return self.read_rpc(resp, status, rpc_id);
+            }
+            // Rule 6, before any status rule: a non-JSON page never reaches TS and is never
+            // retried with the token (also on 401 and 404). An empty body is not a page.
+            let ct = header_text(&resp, CONTENT_TYPE.as_str());
+            let bytes = self.read_capped(resp)?;
+            let json = self.seams.policy.reply_for_ts(ct.as_deref(), &bytes);
+            if json.is_none() && (!bytes.is_empty() || !matches!(status, 401 | 404 | 429)) {
+                return Err(err(NON_JSON_REPLY));
+            }
             match status {
-                300..=399 => return Err(err(REDIRECT_REFUSED)),
                 401 if attempt == 1 => {
                     // Drop only the token that got the 401, not a newer one (W-05c).
                     self.seams.tokens.invalidate(t.profile, lease)?;
                     attempt += 1;
-                    continue;
                 }
                 401 => return Err(err(AUTH_EXPIRED)),
                 404 if session.is_some() => return Ok(Posted::SessionGone),
                 404 => return Err(err(GENIE_ONE_OFF)),
                 429 => return Err(err(RATE_LIMITED)),
-                200..=299 => return self.read_rpc(resp, status, rpc_id),
                 _ => {
-                    let ct = header_text(&resp, CONTENT_TYPE.as_str());
-                    let bytes = self.read_capped(resp)?;
-                    // Rule 6: a page never reaches TS and is never retried.
-                    let body = self
-                        .seams
-                        .policy
-                        .reply_for_ts(ct.as_deref(), &bytes)
-                        .ok_or(err(NON_JSON_REPLY))?;
+                    let body = json.ok_or(err(NON_JSON_REPLY))?;
                     return Ok(Posted::HttpError { status, body });
                 }
             }

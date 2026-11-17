@@ -682,6 +682,24 @@ fn arc_6_rule_6_non_json_page_is_not_echoed_or_retried() {
 }
 
 #[test]
+fn arc_6_rule_6_page_on_401_is_not_retried_with_a_token() {
+    let s = genie_one(|x| (x.rpc_method() == "tools/call").then(|| page_reply(401)));
+    let r = rig(&s);
+    assert_eq!(code(poll(&r, MOG)), "non_json_reply");
+    assert_eq!(s.count("tools/call"), 1, "no resend with a fresh token");
+    assert!(r.broker.invalidations().is_empty());
+}
+
+#[test]
+fn arc_6_rule_6_page_on_404_with_a_session_is_not_retried() {
+    let s = genie_one(|x| (x.rpc_method() == "tools/call").then(|| page_reply(404)));
+    let r = rig(&s);
+    assert_eq!(code(poll(&r, MOG)), "non_json_reply");
+    assert_eq!(s.count("tools/call"), 1);
+    assert_eq!(s.count("initialize"), 1, "no new session for a page");
+}
+
+#[test]
 fn arc_6_rule_7_reply_text_is_scrubbed() {
     let s = genie_one(|x| {
         (x.rpc_method() == "tools/call").then(|| {
@@ -879,13 +897,26 @@ fn nfr_mcp_call_that_outlives_the_call_timeout_is_timeout() {
 #[test]
 fn nfr_mcp_per_call_timeout_is_used_and_capped() {
     let (s, release) = held_server();
-    let r = rig(&s);
+    // The default and the max are far above the per-call cap, so only the per-call cap can end
+    // the call. A watchdog releases the reply after 60 s: if the cap were ignored, the call
+    // would then succeed and the assertion below would fail (no hang, no wall-clock window).
+    let limits = McpLimits {
+        call_timeout: Duration::from_secs(3600),
+        max_call_timeout: Duration::from_secs(7200),
+        ..McpLimits::default()
+    };
+    let r = rig_full(&s.origin(), &s.url(), Arc::new(LoopbackPolicy), limits);
+    let watchdog = release.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(60));
+        let _ = watchdog.send(());
+    });
     let t = tags(MOG);
     let got = r.t.call_tool(
         McpCall::new(PROFILE, "genie_poll_response", poll_args(), &t)
             .timeout(Duration::from_millis(300)),
     );
-    release.send(()).unwrap();
+    let _ = release.send(());
     assert_eq!(code(got), "timeout");
     let l = McpLimits::default();
     assert_eq!(l.effective_timeout(None), l.call_timeout);
