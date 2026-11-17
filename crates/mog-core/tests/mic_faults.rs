@@ -18,7 +18,7 @@ use mog_core::capture::{
 };
 use mog_core::clock::SimClock;
 use mog_core::testkit::capture::{FakeAudioDevice, RecordingCaptureEvents};
-use mog_core::types::CaptureMode;
+use mog_core::types::{CaptureMode, MicHealth};
 
 // ---------------------------------------------------------------------------------------------
 // The fake host. The test thread drives each stream's data and fault callbacks.
@@ -608,4 +608,93 @@ fn cap_17a_the_macos_bundle_has_the_mic_usage_text_for_the_prompt() {
     let plist = include_str!("../../../src-tauri/Info.plist");
     assert!(plist.contains("<key>NSMicrophoneUsageDescription</key>"));
     assert!(plist.contains("only while you hold the talk key"));
+}
+
+// ---------------------------------------------------------------------------------------------
+// #453: the mic fault in `capture.state` (CAP-17b) and the app setting hook (CAP-22).
+
+fn ptt() -> CaptureRequest {
+    CaptureRequest {
+        mog_id: "mog-1".to_string(),
+        mode: CaptureMode::Ptt,
+        others_track: false,
+    }
+}
+
+fn core_with(device: FakeAudioDevice) -> (CaptureCore, Arc<RecordingCaptureEvents>) {
+    let events = Arc::new(RecordingCaptureEvents::default());
+    let core = CaptureCore::new(Box::new(device), Arc::new(SimClock::new()), events.clone());
+    (core, events)
+}
+
+#[test]
+fn cap_17b_an_idle_core_reports_no_mic_reading() {
+    let (core, _) = core_with(FakeAudioDevice::new());
+    assert_eq!(core.status().mic, None);
+}
+
+#[test]
+fn cap_17b_zero_buffers_put_the_mic_fault_in_capture_state() {
+    let (core, events) = core_with(FakeAudioDevice::new());
+    let lease = core.start(ptt()).unwrap();
+    assert_eq!(
+        core.status().mic,
+        Some(MicHealth::Ok),
+        "a granted lease is ok"
+    );
+    core.mic_silent();
+    let last = events.states().last().cloned().expect("a capture.state");
+    assert!(!last.recording);
+    assert_eq!(last.mic, Some(MicHealth::ZeroBuffers));
+    assert_eq!(core.status().mic, Some(MicHealth::ZeroBuffers));
+    drop(lease);
+}
+
+#[test]
+fn cap_17b_the_next_granted_lease_resets_the_mic_to_ok() {
+    let (core, _) = core_with(FakeAudioDevice::new());
+    core.start(ptt()).unwrap();
+    core.mic_silent();
+    core.start(ptt()).unwrap();
+    assert_eq!(core.status().mic, Some(MicHealth::Ok));
+}
+
+#[test]
+fn cap_17b_a_lost_mic_reports_no_device() {
+    let (core, _) = core_with(FakeAudioDevice::new());
+    core.start(ptt()).unwrap();
+    core.device_failed(AudioSource::Mic);
+    assert_eq!(core.status().mic, Some(MicHealth::NoDevice));
+}
+
+#[test]
+fn cap_17b_a_refused_mic_open_puts_its_code_in_capture_state() {
+    for (code, health) in [
+        ("permission_denied", MicHealth::PermissionDenied),
+        ("no_device", MicHealth::NoDevice),
+    ] {
+        let device = FakeAudioDevice::new();
+        device.log().fail_next_open = Some((Some(AudioSource::Mic), code));
+        let (core, events) = core_with(device);
+        assert!(core.start(ptt()).is_err(), "{code}");
+        assert_eq!(core.status().mic, Some(health), "{code}");
+        assert_eq!(
+            events.states().last().and_then(|s| s.mic),
+            Some(health),
+            "{code}: the brain got the fault"
+        );
+    }
+}
+
+#[test]
+fn cap_22_the_app_setting_reaches_the_mic_device_at_the_next_build() {
+    let r = polled(Vec::new(), Duration::from_secs(10));
+    let settings = mog_core::app_settings::AppSettings::default();
+    settings.set_mic_preference(Arc::new(r.device.preference()));
+    settings.write(mog_core::types::AppSetting {
+        key: mog_core::types::AppSettingKey::CapturePreferBuiltInMic,
+        value: true,
+    });
+    r.device.open(AudioSource::Mic).unwrap();
+    assert_eq!(log(&r)[..1], ["prefer_built_in true"]);
 }
