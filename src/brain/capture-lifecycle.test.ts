@@ -17,7 +17,7 @@ const B = '00000000-0000-4000-8000-00000000000b';
 type Call = [string, Record<string, unknown>];
 
 /**
- * A typed double of R2 behind the IPC (TODO(#425): the host routes capture_* to CaptureCore).
+ * A typed double of R2 behind the IPC (the host route to CaptureCore is #425, ADR 0055).
  * It keeps R2's one-lease rule (`CaptureCore::start`, ARC-F9): a start while another start is
  * pending gets `mic_busy`, and so does any start while a lease is live, except a PTT over a
  * hands-free lease. A released PTT stays live in the 120 ms post-roll until `endPostRoll()`.

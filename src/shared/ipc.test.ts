@@ -4,6 +4,7 @@ import {
   COMMANDS,
   EVENTS,
   IPC_ERROR_CODES,
+  type CaptureStopReason,
   type CaptureStopped,
   type CommandArgs,
   type CommandName,
@@ -161,8 +162,29 @@ describe('consent records (SEC-32a, #430, ADR 0060)', () => {
 
 describe('capture events (#425, ADR 0055)', () => {
   it('[CAP-02a] [CAP-04a] capture.stopped is a core-to-brain event with a content-free payload', () => {
-    expect(EVENTS['capture.stopped']).toEqual({ name: 'capture:stopped', direction: 'core_to_brain' });
+    expect(EVENTS['capture.stopped']).toEqual({
+      name: 'capture:stopped',
+      direction: 'core_to_brain',
+    });
     const stop: CaptureStopped = { leaseId: '1', mogId: 'a1', mode: 'ptt', reason: 'hold_cap' };
     expect(Object.keys(stop).sort()).toEqual(['leaseId', 'mode', 'mogId', 'reason']);
+  });
+
+  it('[CAP-02a] CaptureStopReason has the R2 stop codes', () => {
+    const reasons: CaptureStopReason[] = [
+      'manual',
+      'hold_cap',
+      'hands_free_cap',
+      'preempted',
+      'panic',
+      'device_lost',
+      'released',
+      'discarded',
+      'tap',
+      'escape',
+      'vad_end',
+      'zero_buffers',
+    ];
+    expect(new Set(reasons).size).toBe(12);
   });
 });

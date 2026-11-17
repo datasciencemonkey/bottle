@@ -68,7 +68,9 @@
 //! ([`CaptureCore::discard`], CAP-44b), the hands-free stop on a tap or Esc
 //! ([`CaptureCore::stop_hands_free`], CAP-14b) and the VAD end ([`CaptureCore::voice_activity`],
 //! CAP-14c). The post-roll and the VAD end are deadlines of [`CaptureService::tick`], like the
-//! caps. TODO(#425): the host timer calls `tick()` at each deadline. The VAD that calls
+//! caps. The host cap timer calls `tick()` at each deadline it is armed with (#425, ADR 0055).
+//! The host arms the post-roll deadline after `release` once `capture_stop` routes it
+//! (TODO(#433)). The VAD that calls
 //! `voice_activity` is the Silero VAD of the segment pipeline (TODO(#116)).
 //!
 //! Follow-up: this crate has no real [`AudioDevice`] yet. The cpal mic backend and the
@@ -223,6 +225,37 @@ pub struct Stopped {
     pub mode: CaptureMode,
     /// Why it stopped.
     pub reason: StopReason,
+}
+
+impl From<StopReason> for types::CaptureStopReason {
+    fn from(r: StopReason) -> Self {
+        match r {
+            StopReason::Manual => types::CaptureStopReason::Manual,
+            StopReason::HoldCap => types::CaptureStopReason::HoldCap,
+            StopReason::HandsFreeCap => types::CaptureStopReason::HandsFreeCap,
+            StopReason::Preempted => types::CaptureStopReason::Preempted,
+            StopReason::Panic => types::CaptureStopReason::Panic,
+            StopReason::DeviceLost => types::CaptureStopReason::DeviceLost,
+            StopReason::Released => types::CaptureStopReason::Released,
+            StopReason::Discarded => types::CaptureStopReason::Discarded,
+            StopReason::Tap => types::CaptureStopReason::Tap,
+            StopReason::Escape => types::CaptureStopReason::Escape,
+            StopReason::VadEnd => types::CaptureStopReason::VadEnd,
+            StopReason::ZeroBuffers => types::CaptureStopReason::ZeroBuffers,
+        }
+    }
+}
+
+/// The `capture.stopped` payload of a stop (#425, ADR 0055).
+impl From<&Stopped> for types::CaptureStopped {
+    fn from(s: &Stopped) -> Self {
+        types::CaptureStopped {
+            lease_id: s.lease_id.to_string(),
+            mog_id: s.mog_id.clone(),
+            mode: s.mode,
+            reason: s.reason.into(),
+        }
+    }
 }
 
 /// The receiver of CaptureService events (the `capture.state` event for the brain). The core
@@ -690,7 +723,7 @@ impl CaptureCore {
     }
 
     /// Set `mog.capture.vadEndMs` of a MOG (CAP-14c). 0 turns the VAD end off. It applies from
-    /// the next hands-free start of that MOG. TODO(#425): the host calls it on each config
+    /// the next hands-free start of that MOG. TODO(#457): the host calls it on each config
     /// change.
     pub fn set_vad_end_ms(&self, mog_id: &str, ms: u64) {
         self.lock_state().vad_end_ms.insert(mog_id.to_string(), ms);

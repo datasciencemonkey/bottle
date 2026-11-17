@@ -44,6 +44,9 @@ pub const HOTKEY_PANIC: &str = "hotkey:panic";
 pub const HOTKEY_STATUS: &str = "hotkey:status";
 pub const CAPTURE_STATE: &str = "capture:state";
 pub const CAPTURE_SEGMENT: &str = "capture:segment";
+/// One capture lease stopped, with its reason (`types::CaptureStopped`, #425, ADR 0055).
+/// Not in the 4.5 list of the requirements.
+pub const CAPTURE_STOPPED: &str = "capture:stopped";
 pub const SESSION_STOP_SIGNAL: &str = "session:stop_signal";
 pub const AUTH_STATUS: &str = "auth:status";
 pub const NET_STATUS: &str = "net:status";
@@ -59,13 +62,14 @@ pub const MOG_LEVEL: &str = "mog:level";
 pub const VIEW_INPUT: &str = "view:input";
 
 /// Every event of 4.5, in the order of the requirements, plus `mog.level` (ADR 0040) and
-/// `hotkey.status` (ADR 0039).
+/// `hotkey.status` (ADR 0039) and `capture.stopped` (ADR 0055).
 pub const ALL: &[EventSpec] = &[
     core(HOTKEY_PTT, "hotkey.ptt"),
     core(HOTKEY_PANIC, "hotkey.panic"),
     core(HOTKEY_STATUS, "hotkey.status"),
     core(CAPTURE_STATE, "capture.state"),
     core(CAPTURE_SEGMENT, "capture.segment"),
+    core(CAPTURE_STOPPED, "capture.stopped"),
     core(SESSION_STOP_SIGNAL, "session.stop_signal"),
     core(AUTH_STATUS, "auth.status"),
     core(NET_STATUS, "net.status"),

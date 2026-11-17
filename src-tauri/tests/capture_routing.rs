@@ -3,8 +3,10 @@
 //! real `CaptureCore` over the fake device and the simulated clock, so the 120 s and 5 min caps
 //! fire with no real sleep.
 
-use bottle_lib::capture_host::{CapTimer, CaptureHost, UnwiredMic, UNWIRED_MIC};
-use bottle_lib::ipc::{route, BrainLink, HostComponents};
+use bottle_lib::capture_host::{
+    CapTimer, CaptureHost, CaptureTicket, TimerWait, UnwiredMic, TICK_RETRY_MS, UNWIRED_MIC,
+};
+use bottle_lib::ipc::{admit, route, BrainLink, HostComponents};
 use mog_core::capture::{AudioDevice, CaptureService, HANDS_FREE_MAX_MS, HOLD_MAX_MS};
 use mog_core::clock::{MonotonicClock, SimClock};
 use mog_core::ipc::{events, ChannelRef};
@@ -37,6 +39,15 @@ struct Rig {
 }
 
 fn rig_with(device: Box<dyn AudioDevice>, fake: FakeAudioDevice) -> Rig {
+    rig_with_relay(device, fake, |_| {})
+}
+
+/// A rig whose relay first calls `before(event)` (for example to panic once).
+fn rig_with_relay(
+    device: Box<dyn AudioDevice>,
+    fake: FakeAudioDevice,
+    before: impl Fn(&str) + Send + Sync + 'static,
+) -> Rig {
     let clock = SimClock::new();
     let relayed: Relayed = Arc::default();
     let sink = Arc::clone(&relayed);
@@ -45,6 +56,7 @@ fn rig_with(device: Box<dyn AudioDevice>, fake: FakeAudioDevice) -> Rig {
         Arc::new(clock.clone()) as Arc<dyn MonotonicClock>,
         Arc::new(move |event: &str, payload: Value| {
             sink.lock().unwrap().push((event.to_owned(), payload));
+            before(event);
             true
         }),
     )
@@ -69,13 +81,39 @@ impl Rig {
             brain: &NoBrain,
             windows: None,
             hotkeys: None,
+            permissions: None,
+            consent: None,
+            config: None,
             capture: Some(&self.host),
+            capture_ticket: None,
         };
         route(components, command, args)
     }
 
     fn call(&self, command: &str, args: Value) -> Result<Value, Value> {
         self.call_from("brain", command, args)
+    }
+
+    /// A call whose admission the IPC thread took earlier (`ticket`), as `handler` does for
+    /// a call that runs on a worker.
+    fn call_admitted(
+        &self,
+        ticket: CaptureTicket,
+        command: &str,
+        args: Value,
+    ) -> Result<Value, Value> {
+        let components = HostComponents {
+            from: "brain",
+            brain: &NoBrain,
+            windows: None,
+            hotkeys: None,
+            permissions: None,
+            consent: None,
+            config: None,
+            capture: Some(&self.host),
+            capture_ticket: Some(ticket),
+        };
+        route(components, command, args)
     }
 
     fn start(&self, mog: &str, mode: &str) -> Result<Value, Value> {
@@ -114,10 +152,11 @@ fn err(code: &str) -> Result<Value, Value> {
     Err(json!({ "error": code }))
 }
 
-const CAPTURE_COMMANDS: [&str; 6] = [
+const CAPTURE_COMMANDS: [&str; 7] = [
     "capture_start",
     "capture_stop",
     "capture_pause",
+    "capture_resume",
     "capture_status",
     "capture_stop_all",
     "capture_subscribe",
@@ -126,7 +165,9 @@ const CAPTURE_COMMANDS: [&str; 6] = [
 fn sample_args(command: &str) -> Value {
     match command {
         "capture_start" => json!({"mogId": "a1", "mode": "ptt"}),
-        "capture_stop" | "capture_pause" => json!({"mogId": "a1", "leaseId": "1"}),
+        "capture_stop" | "capture_pause" | "capture_resume" => {
+            json!({"mogId": "a1", "leaseId": "1"})
+        }
         "capture_subscribe" => json!({"onLevel": "__CHANNEL__:1", "onPartial": "__CHANNEL__:2"}),
         _ => json!({}),
     }
@@ -219,7 +260,7 @@ fn cap_02a_stop_and_pause_need_the_lease_of_the_same_mog() {
             "{command}"
         );
         // R2 never issued these IDs.
-        for unknown in ["999", "0", "007", "+1", "abc"] {
+        for unknown in ["999", "0", "007", "abc"] {
             assert_eq!(
                 r.call(command, json!({"mogId": "a1", "leaseId": unknown})),
                 err("unknown_lease"),
@@ -227,7 +268,7 @@ fn cap_02a_stop_and_pause_need_the_lease_of_the_same_mog() {
             );
         }
         // The gateway refuses a malformed lease ID before R2 sees it.
-        for bad in [json!("a b"), json!(""), json!(7)] {
+        for bad in [json!("a b"), json!("+1"), json!(""), json!(7)] {
             assert_eq!(
                 r.call(command, json!({"mogId": "a1", "leaseId": bad})),
                 err("invalid_args"),
@@ -242,6 +283,41 @@ fn cap_02a_stop_and_pause_need_the_lease_of_the_same_mog() {
         r.call("capture_stop", json!({"mogId": "a1", "leaseId": lease})),
         err("unknown_lease"),
         "a released lease is unknown"
+    );
+}
+
+#[test]
+fn cap_02a_capture_resume_needs_the_lease_of_the_same_mog() {
+    // #279 / ADR 0039: R2 resumes only a paused session. No session starts yet (TODO(#65)),
+    // so a live PTT or hands-free lease answers `invalid_mode` from R2.
+    let r = rig();
+    for mode in ["ptt", "hands_free"] {
+        let lease = r.lease_of("a1", mode);
+        assert_eq!(
+            r.call("capture_resume", json!({"mogId": "a1", "leaseId": lease})),
+            err("invalid_mode"),
+            "{mode}"
+        );
+        assert_eq!(
+            r.call("capture_resume", json!({"mogId": "b2", "leaseId": lease})),
+            err("unknown_lease"),
+            "{mode}: another MOG cannot resume the lease"
+        );
+        r.call("capture_stop", json!({"mogId": "a1", "leaseId": lease}))
+            .unwrap();
+        assert_eq!(
+            r.call("capture_resume", json!({"mogId": "a1", "leaseId": lease})),
+            err("unknown_lease"),
+            "{mode}: a released lease"
+        );
+    }
+    assert_eq!(
+        r.call("capture_resume", json!({"mogId": "a1", "leaseId": "999"})),
+        err("unknown_lease")
+    );
+    assert_eq!(
+        r.call("capture_resume", json!({"mogId": "a1", "leaseId": "a b"})),
+        err("invalid_args")
     );
 }
 
@@ -279,7 +355,10 @@ fn mb_05_capture_stop_all_stops_every_lease_and_closes_the_mic() {
     assert!(!r.device.log().mic_open);
     let reasons: Vec<Value> = r.stops().into_iter().map(|s| s["reason"].clone()).collect();
     assert_eq!(reasons, vec![json!("panic"), json!("panic")]);
-    assert_eq!(r.start("c3", "ptt").map(|s| s["owner"].clone()), Ok(json!("c3")));
+    assert_eq!(
+        r.start("c3", "ptt").map(|s| s["owner"].clone()),
+        Ok(json!("c3"))
+    );
 }
 
 #[test]
@@ -325,7 +404,11 @@ fn cap_01a_no_managed_capture_host_is_host_failed() {
             brain: &NoBrain,
             windows: None,
             hotkeys: None,
+            permissions: None,
+            consent: None,
+            config: None,
             capture: None,
+            capture_ticket: None,
         };
         assert_eq!(
             route(components, command, sample_args(command)),
@@ -337,7 +420,7 @@ fn cap_01a_no_managed_capture_host_is_host_failed() {
 
 #[test]
 fn cap_01a_the_unwired_mic_fails_with_a_typed_code_and_no_lease() {
-    // TODO(#388): the app builds the host on the cpal mic backend.
+    // The app uses `UnwiredMic` only where #388 has no cpal backend (not macOS or Windows).
     let fake = FakeAudioDevice::new();
     let r = rig_with(Box::new(UnwiredMic), fake);
     assert_eq!(
@@ -425,7 +508,7 @@ fn cap_01b_capture_events_and_replies_carry_no_audio_or_text() {
 // ---------- the cap timer (CAP-04a, CAP-04b) ----------
 
 #[test]
-fn cap_04a_the_timer_stops_a_ptt_hold_at_120_s() {
+fn cap_04a_the_timer_stops_a_ptt_hold_after_120_s() {
     let r = rig();
     let lease = r.lease_of("a1", "ptt");
     assert_eq!(r.timer().armed(), Some(HOLD_MAX_MS));
@@ -444,7 +527,7 @@ fn cap_04a_the_timer_stops_a_ptt_hold_at_120_s() {
 }
 
 #[test]
-fn cap_04b_the_timer_stops_hands_free_at_5_min() {
+fn cap_04b_the_timer_stops_hands_free_after_5_min() {
     let r = rig();
     let lease = r.lease_of("a1", "hands_free");
     assert_eq!(r.timer().armed(), Some(HANDS_FREE_MAX_MS));
@@ -453,7 +536,9 @@ fn cap_04b_the_timer_stops_hands_free_at_5_min() {
     r.advance_ms(1);
     assert_eq!(
         r.stops(),
-        vec![json!({"leaseId": lease, "mogId": "a1", "mode": "hands_free", "reason": "hands_free_cap"})]
+        vec![
+            json!({"leaseId": lease, "mogId": "a1", "mode": "hands_free", "reason": "hands_free_cap"})
+        ]
     );
     assert!(!r.device.log().mic_open);
 }
@@ -497,20 +582,32 @@ fn cap_04a_a_manual_stop_leaves_no_cap_to_fire() {
 
 #[test]
 fn cap_04a_the_timer_waits_without_a_busy_loop() {
+    // No real sleep: the timer reports what it waits for. A bounded wait is the exact time left
+    // to the deadline on the clock, and with no deadline it waits with no timeout.
     let r = rig();
     r.lease_of("a1", "ptt");
     r.timer().settle();
-    let (ticks, wakes) = (r.timer().ticks(), r.timer().wakes());
-    // Real time passes, the simulated clock does not: the thread must sleep.
-    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(
+        r.timer().last_wait(),
+        TimerWait::For(Duration::from_millis(HOLD_MAX_MS))
+    );
+    let ticks = r.timer().ticks();
+    r.advance_ms(30_000);
+    assert_eq!(
+        r.timer().last_wait(),
+        TimerWait::For(Duration::from_millis(HOLD_MAX_MS - 30_000))
+    );
     assert_eq!(r.timer().ticks(), ticks, "no tick before the deadline");
-    assert!(r.timer().wakes() <= wakes + 1, "the thread sleeps to the deadline");
     // With no lease there is no deadline, and the thread waits for an arm.
     r.call("capture_stop_all", json!({})).unwrap();
     r.advance_ms(HOLD_MAX_MS);
-    let (ticks, wakes) = (r.timer().ticks(), r.timer().wakes());
-    std::thread::sleep(Duration::from_millis(50));
-    assert_eq!((r.timer().ticks(), r.timer().wakes()), (ticks, wakes));
+    assert_eq!(r.timer().last_wait(), TimerWait::Forever);
+    assert_eq!(r.timer().armed(), None);
+    let ticks = r.timer().ticks();
+    r.timer().settle();
+    r.timer().settle();
+    assert_eq!(r.timer().ticks(), ticks, "no tick with no deadline");
+    assert_eq!(r.timer().last_wait(), TimerWait::Forever);
 }
 
 #[test]
@@ -550,4 +647,162 @@ fn cap_04a_shutdown_stops_every_lease_and_ends_the_timer() {
     assert!(!r.device.log().mic_open, "the mic closes on quit");
     assert!(r.timer().is_stopped());
     r.host.shutdown();
+}
+
+// ---------- order of a queued start and a later stop (MB-05, ADR 0055) ----------
+
+#[test]
+fn mb_05_a_stop_all_after_a_queued_capture_start_wins() {
+    // The IPC thread admits `capture_start` and queues it on a worker. `capture_stop_all`
+    // arrives later and runs inline first. The start must not keep the mic.
+    let r = rig();
+    let ticket = r.host.ticket();
+    r.call("capture_stop_all", json!({})).unwrap();
+    assert_eq!(
+        r.call_admitted(
+            ticket,
+            "capture_start",
+            json!({"mogId": "a1", "mode": "hands_free"})
+        ),
+        err("unknown_lease")
+    );
+    assert!(
+        !r.device.log().mic_open,
+        "the mic is closed after the panic"
+    );
+    assert_eq!(
+        r.device.log().mic_opens,
+        0,
+        "the mic never opened after the panic"
+    );
+    assert!(
+        !r.relayed()
+            .iter()
+            .any(|(e, p)| e == events::CAPTURE_STATE && p["recording"] == true),
+        "the brain never heard recording"
+    );
+    let state = r.call("capture_status", json!({})).unwrap();
+    assert_eq!(state["recording"], false);
+    assert_eq!(r.host.live_owner_count(), 0);
+    // A start admitted after the stop is not affected.
+    let ticket = r.host.ticket();
+    let state = r
+        .call_admitted(
+            ticket,
+            "capture_start",
+            json!({"mogId": "a1", "mode": "ptt"}),
+        )
+        .unwrap();
+    assert_eq!(state["recording"], true);
+}
+
+#[test]
+fn cap_02a_a_stop_of_another_lease_does_not_cancel_a_queued_start() {
+    let r = rig();
+    let hf = r.lease_of("a1", "hands_free");
+    let ticket = r.host.ticket();
+    r.call("capture_stop", json!({"mogId": "a1", "leaseId": hf}))
+        .unwrap();
+    let state = r
+        .call_admitted(
+            ticket,
+            "capture_start",
+            json!({"mogId": "b2", "mode": "ptt"}),
+        )
+        .unwrap();
+    assert_eq!(state["owner"], "b2");
+    assert!(r.device.log().mic_open);
+}
+
+#[test]
+fn cap_04a_shutdown_refuses_a_queued_capture_start() {
+    let r = rig();
+    let ticket = r.host.ticket();
+    r.host.shutdown();
+    assert_eq!(
+        r.call_admitted(
+            ticket,
+            "capture_start",
+            json!({"mogId": "a1", "mode": "ptt"})
+        ),
+        err("host_failed")
+    );
+    assert_eq!(r.start("a1", "ptt"), err("host_failed"));
+    assert_eq!(r.device.log().mic_opens, 0, "no stream opened after quit");
+}
+
+// ---------- the owner map forgets every stopped lease (CAP-02a) ----------
+
+#[test]
+fn cap_02a_the_host_forgets_the_owner_of_every_stopped_lease() {
+    let r = rig();
+    let lease = r.lease_of("a1", "ptt");
+    assert_eq!(r.host.live_owner_count(), 1);
+    r.call("capture_stop", json!({"mogId": "a1", "leaseId": lease}))
+        .unwrap();
+    assert_eq!(r.host.live_owner_count(), 0, "manual stop");
+    r.lease_of("a1", "ptt");
+    r.advance_ms(HOLD_MAX_MS);
+    assert_eq!(r.stops().last().unwrap()["reason"], "hold_cap");
+    assert_eq!(r.host.live_owner_count(), 0, "cap stop");
+    r.lease_of("a1", "hands_free");
+    r.lease_of("b2", "ptt");
+    assert_eq!(r.host.live_owner_count(), 2);
+    r.call("capture_stop_all", json!({})).unwrap();
+    assert_eq!(r.host.live_owner_count(), 0, "stop_all");
+}
+
+// ---------- a panic in tick() does not end the caps (CAP-04a, CAP-04b) ----------
+
+#[test]
+fn cap_04a_cap_04b_a_panicking_event_sink_does_not_end_the_caps() {
+    let fake = FakeAudioDevice::new();
+    let panicked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let once = Arc::clone(&panicked);
+    let r = rig_with_relay(Box::new(fake.clone()), fake, move |event| {
+        if event == events::CAPTURE_STOPPED && !once.swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            panic!("test sink panic");
+        }
+    });
+    r.lease_of("a1", "ptt");
+    // The hold cap fires; the sink panics inside tick() on the timer thread.
+    r.advance_ms(HOLD_MAX_MS);
+    assert!(panicked.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(
+        !r.device.log().mic_open,
+        "the stop was committed before the event"
+    );
+    assert!(!r.timer().is_stopped(), "the timer thread lives on");
+    // The timer retries, and the next cap still fires.
+    r.advance_ms(TICK_RETRY_MS);
+    r.lease_of("a1", "hands_free");
+    r.advance_ms(HANDS_FREE_MAX_MS);
+    assert_eq!(r.stops().last().unwrap()["reason"], "hands_free_cap");
+    assert!(!r.device.log().mic_open);
+}
+
+#[test]
+fn mb_05_the_ipc_thread_admits_every_capture_call_and_only_capture_calls() {
+    // `handler` calls `admit` before `schedule`; without a ticket the order guard is gone.
+    let r = rig();
+    for command in CAPTURE_COMMANDS {
+        assert_eq!(
+            admit(command, Some(&r.host)),
+            Some(r.host.ticket()),
+            "{command}"
+        );
+        assert_eq!(admit(command, None), None, "{command}: no host");
+    }
+    for other in [
+        "window_mog_open",
+        "hotkeys_set",
+        "view_emit",
+        "consent_records_list",
+    ] {
+        assert_eq!(admit(other, Some(&r.host)), None, "{other}");
+    }
+    let before = r.host.ticket();
+    r.call("capture_stop_all", json!({})).unwrap();
+    assert_ne!(admit("capture_start", Some(&r.host)), Some(before));
 }

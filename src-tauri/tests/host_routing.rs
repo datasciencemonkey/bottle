@@ -135,6 +135,7 @@ fn comps<'a>(
         consent: None,
         config: None,
         capture: None,
+        capture_ticket: None,
     }
 }
 
@@ -632,7 +633,7 @@ fn mb_14_hotkeys_set_route_does_not_save_a_duplicate_binding() {
 }
 
 #[test]
-fn arc_3_schedule_runs_window_ops_on_a_worker_and_others_inline() {
+fn arc_3_cap_02a_schedule_runs_window_ops_and_capture_start_on_a_worker_and_others_inline() {
     use std::sync::mpsc;
     let caller = std::thread::current().id();
     for c in COMMANDS {
@@ -643,7 +644,12 @@ fn arc_3_schedule_runs_window_ops_on_a_worker_and_others_inline() {
         let ran_on = rx
             .recv_timeout(std::time::Duration::from_secs(5))
             .expect("the job ran");
-        if c.name.starts_with("window_") || c.name == "permission_request" {
+        let worker = c.name.starts_with("window_")
+            || matches!(
+                c.name,
+                "permission_request" | "capture_start" | "capture_resume"
+            );
+        if worker {
             assert_ne!(ran_on, caller, "{} ran on the calling thread", c.name);
         } else {
             assert_eq!(ran_on, caller, "{} left the calling thread", c.name);
@@ -703,6 +709,8 @@ fn ask(from: &str, route_to: Option<&dyn PermissionRoute>, args: Value) -> Resul
         permissions: route_to,
         consent: None,
         config: None,
+        capture: None,
+        capture_ticket: None,
     };
     route(components, "permission_request", args)
 }
@@ -772,19 +780,20 @@ fn cap_36_permission_request_without_the_hotkey_runtime_is_host_failed() {
     );
 }
 
-// ---------- capture_resume (CAP-02a, #279, ADR 0039) ----------
+// ---------- capture_resume (CAP-02a, #279, ADR 0039, ADR 0055) ----------
 
 #[test]
-fn cap_02a_capture_resume_is_brain_only_and_not_implemented_until_4() {
+fn cap_02a_capture_resume_is_brain_only_and_needs_the_capture_host() {
     let brain = FakeBrain::default();
     let lease = json!({"mogId": "a1", "leaseId": "17"});
+    // #425 routes it to R2; with no managed capture host the answer is `host_failed`.
     assert_eq!(
         route(
             comps("brain", &brain, None, None),
             "capture_resume",
             lease.clone()
         ),
-        err("not_implemented")
+        err("host_failed")
     );
     for label in ["hub", "mog-a1", "card-a1"] {
         assert_eq!(
@@ -836,6 +845,8 @@ fn consent_call(
         permissions: None,
         consent,
         config: None,
+        capture: None,
+        capture_ticket: None,
     };
     route(components, command, args)
 }
