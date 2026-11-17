@@ -98,6 +98,8 @@ fn sample(command: &str) -> (&'static str, Value) {
         "config_read" | "config_delete" => json!({"id": "a1"}),
         "config_write" => json!({"id": "a1", "json": {}}),
         "hotkeys_set" => json!({"bindings": {}}),
+        "consent_notice_record" => json!({"noticeVersion": 1}),
+        "consent_records_list" => json!({}),
         "permission_request" => return ("hub", json!({"permission": "accessibility"})),
         "window_mog_open" => json!({
             "mogId": "a1", "geometry": {"x": 0.0, "y": 0.0, "width": 10.0, "height": 10.0}
@@ -391,6 +393,7 @@ fn sec_03_each_ipc_error_maps_to_a_fixed_code() {
         IpcError::UnknownMog { command: s() },
         IpcError::WindowClosing { command: s() },
         IpcError::ConfigStorageFailed { command: s() },
+        IpcError::ConsentStorageFailed { command: s() },
     ];
     assert_eq!(all.len(), ERROR_CODES.len(), "one code per variant");
     for e in &all {

@@ -107,4 +107,53 @@ describe('content-free IPC errors (#333, ADR 0040)', () => {
   it('[ARC-5] [UX-06a] mog.level is a brain-to-view event', () => {
     expect(EVENTS['mog.level']).toEqual({ name: 'mog:level', direction: 'brain_to_view' });
   });
+
+  it('[SEC-03] consent_storage_failed is a fixed IPC error code', () => {
+    const failed: IpcError = { error: 'consent_storage_failed' };
+    expect(IPC_ERROR_CODES).toContain(failed.error);
+  });
+});
+
+describe('consent records (SEC-32a, #430, ADR 0060)', () => {
+  const doc = schemaDoc as unknown as {
+    arguments: Record<string, { required?: string[]; additionalProperties?: boolean }>;
+  };
+
+  it('[SEC-32a] [AT-24] consent_notice_record and consent_records_list are brain-only MVP-D rows', () => {
+    expect(COMMANDS.consent_notice_record).toEqual({ windows: ['brain'], phase: 'MVP-D' });
+    expect(COMMANDS.consent_records_list).toEqual({ windows: ['brain'], phase: 'MVP-D' });
+  });
+
+  it('[SEC-32a] [AT-24] the brain names only the notice version; Rust fills user, device and time', () => {
+    expect(doc.arguments['consent_notice_record']?.required).toEqual(['noticeVersion']);
+    expect(doc.arguments['consent_notice_record']?.additionalProperties).toBe(false);
+    expect(doc.arguments['consent_records_list']?.additionalProperties).toBe(false);
+    const args: CommandArgs['consent_notice_record'] = { noticeVersion: 3 };
+    // @ts-expect-error the caller cannot name the user (SEC-32a)
+    const forged: CommandArgs['consent_notice_record'] = { noticeVersion: 3, user: 'x' };
+    const reply: CommandReturns['consent_notice_record'] = { recordId: 'r1' };
+    expect([args.noticeVersion, forged.noticeVersion, reply.recordId]).toEqual([3, 3, 'r1']);
+  });
+
+  it('[SEC-32a] the records list reply is content-free', () => {
+    const reply: CommandReturns['consent_records_list'] = {
+      records: [
+        { recordId: 'r1', kind: 'notice', noticeVersion: 3, sessionId: null, acceptedAt: 1 },
+      ],
+    };
+    const leaky: CommandReturns['consent_records_list'] = {
+      records: [
+        {
+          recordId: 'r1',
+          kind: 'notice',
+          noticeVersion: 3,
+          sessionId: null,
+          acceptedAt: 1,
+          // @ts-expect-error no user crosses IPC
+          user: 'x',
+        },
+      ],
+    };
+    expect([reply.records.length, leaky.records.length]).toEqual([1, 1]);
+  });
 });

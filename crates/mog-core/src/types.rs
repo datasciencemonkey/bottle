@@ -661,6 +661,33 @@ pub struct TalkKeyStatus {
     pub reason: Option<TalkKeyReason>,
 }
 
+// ---------- consent records (#430, ADR 0060) ----------
+
+/// What a consent record is for: the first-run notice, or the attestation choice of a
+/// meeting session (9.3, SEC-32a).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ConsentRecordKind {
+    Notice,
+    OnlyMe,
+    OthersAgreed,
+}
+
+/// One consent record as `consent_records_list` returns it. It is content-free: no user, no
+/// device and no MOG ID crosses IPC (SEC-32a, ADR 0060).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConsentRecordView {
+    pub record_id: String,
+    pub kind: ConsentRecordKind,
+    pub notice_version: u32,
+    /// Required and nullable: `null` for a notice record.
+    #[serde(deserialize_with = "nullable")]
+    pub session_id: Option<String>,
+    /// SEC-32a `accepted_at`, Unix ms.
+    pub accepted_at: i64,
+}
+
 /// A required field that may be `null`. Plain `Option` would also accept a missing key.
 fn nullable<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
 where

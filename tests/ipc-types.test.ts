@@ -19,6 +19,8 @@ import type {
 } from '../src/shared/interfaces';
 import type {
   CardUpdate,
+  ConsentRecordKind,
+  ConsentRecordView,
   MicLevelFrame,
   MogViewState,
   TalkKeyReason,
@@ -113,6 +115,11 @@ const TALK_KEY_REASONS = [
   'fallback_chord_unavailable',
   'hook_failed',
 ] as const satisfies TalkKeyReason[];
+const CONSENT_RECORD_KINDS = [
+  'notice',
+  'only_me',
+  'others_agreed',
+] as const satisfies ConsentRecordKind[];
 const everyUnionValueListed: [
   Equal<(typeof MOODS)[number], Mood>,
   Equal<(typeof TRACKS)[number], Track>,
@@ -128,7 +135,26 @@ const everyUnionValueListed: [
   Equal<(typeof TALK_KEY_REASONS)[number], TalkKeyReason>,
   Equal<TalkKeyStatus['talkKey'], TalkKeyState>,
   Equal<TalkKeyStatus['reason'], TalkKeyReason | null>,
-] = [true, true, true, true, true, true, true, true, true, true, true, true, true, true];
+  Equal<(typeof CONSENT_RECORD_KINDS)[number], ConsentRecordKind>,
+  Equal<ConsentRecordView['sessionId'], string | null>,
+] = [
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+];
 
 // Brain-to-view payloads (#285, ADR 0040).
 const VIEW_STATE = {
@@ -243,6 +269,22 @@ const typed: Record<string, unknown> = {
   'TalkKeyStatus.active': { talkKey: 'active', reason: null } satisfies TalkKeyStatus,
   TalkKeyState: TALK_KEY_STATES,
   TalkKeyReason: TALK_KEY_REASONS,
+  // The `consent_records_list` reply (#430, ADR 0060).
+  ConsentRecordView: {
+    recordId: 'c0c0c0c0-0000-4000-8000-000000000002',
+    kind: 'others_agreed',
+    noticeVersion: 3,
+    sessionId: '5e550000-0000-4000-8000-000000000001',
+    acceptedAt: 1736942400000,
+  } satisfies ConsentRecordView,
+  'ConsentRecordView.notice': {
+    recordId: 'c0c0c0c0-0000-4000-8000-000000000001',
+    kind: 'notice',
+    noticeVersion: 3,
+    sessionId: null,
+    acceptedAt: 1736942400000,
+  } satisfies ConsentRecordView,
+  ConsentRecordKind: CONSENT_RECORD_KINDS,
   MogId: MOG satisfies MogId,
   ProfileName: 'DEFAULT' satisfies ProfileName,
   Mood: MOODS,
@@ -412,7 +454,8 @@ const noCredentialField: [
   NoCredential<CardUpdate>,
   NoCredential<MicLevelFrame>,
   NoCredential<TalkKeyStatus>,
-] = [true, true, true, true, true, true, true, true, true, true];
+  NoCredential<ConsentRecordView>,
+] = [true, true, true, true, true, true, true, true, true, true, true];
 
 describe('IPC type fixtures', () => {
   it('every fixture file has a typed twin, and every twin has a file', () => {

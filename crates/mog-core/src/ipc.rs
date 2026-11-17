@@ -108,6 +108,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     row("capture_stop_all", B),
     row("capture_subscribe", B),
     row("session_attest", B),
+    // #430 (ADR 0060): T12 in the brain writes and reads the consent records (SEC-32a).
+    row("consent_notice_record", B),
+    row("consent_records_list", B),
     row("stt_transcribe", B),
     row("insert_text", B),
     row("agent_start", B),
@@ -205,6 +208,10 @@ pub enum IpcError {
     ConfigStorageFailed {
         command: String,
     },
+    /// `consent_*` (#430, ADR 0060): no consent records are managed, or the store failed.
+    ConsentStorageFailed {
+        command: String,
+    },
 }
 
 impl std::fmt::Display for IpcError {
@@ -236,6 +243,9 @@ impl std::fmt::Display for IpcError {
             }
             IpcError::ConfigStorageFailed { command } => {
                 write!(f, "{command}: the config store failed")
+            }
+            IpcError::ConsentStorageFailed { command } => {
+                write!(f, "{command}: the consent record store failed")
             }
         }
     }
@@ -421,6 +431,14 @@ args!(SessionAttestArgs {
     kind: AttestKind,
     notice_version: u32,
 });
+
+args!(
+    /// SEC-32a: the brain names only the notice version. The Rust side fills the user, the
+    /// device and the time (ADR 0060).
+    ConsentNoticeRecordArgs {
+        notice_version: u32
+    }
+);
 
 args!(SttTranscribeArgs {
     segment_id: String,
@@ -639,6 +657,7 @@ macro_rules! for_command {
         match $name {
             "cli_status" | "capture_status" | "capture_stop_all" | "mem_remote_status"
             | "config_list" | "policy_get" => Some($f::<NoArgs>()),
+            "consent_records_list" => Some($f::<NoArgs>()),
             "cli_install" => Some($f::<CliInstallArgs>()),
             "profiles_list" => Some($f::<ProfilesListArgs>()),
             "profile_status" => Some($f::<ProfileArgs>()),
@@ -650,6 +669,7 @@ macro_rules! for_command {
             | "window_card_hide" => Some($f::<MogArgs>()),
             "capture_subscribe" => Some($f::<CaptureSubscribeArgs>()),
             "session_attest" => Some($f::<SessionAttestArgs>()),
+            "consent_notice_record" => Some($f::<ConsentNoticeRecordArgs>()),
             "stt_transcribe" => Some($f::<SttTranscribeArgs>()),
             "insert_text" => Some($f::<InsertTextArgs>()),
             "agent_start" => Some($f::<AgentStartArgs>()),

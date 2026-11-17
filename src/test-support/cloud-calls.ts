@@ -24,6 +24,8 @@ export const CALL_CLASS = {
   capture_stop_all: 'local',
   capture_subscribe: 'local',
   session_attest: 'local',
+  consent_notice_record: 'local',
+  consent_records_list: 'local',
   stt_transcribe: 'cloud_unless_local_stt',
   insert_text: 'local',
   agent_start: 'cloud', // the harness process can reach the network

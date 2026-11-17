@@ -15,7 +15,7 @@ use mog_core::error::{CoreError, CoreResult};
 use mog_core::hotkey_bindings::{DictationShortcut, Os, TalkBinding};
 use mog_core::hotkey_core::{PermissionStatus, UserAction};
 use mog_core::ipc::{events, ChannelRef, Geometry, JsonObject, PermissionKind, COMMANDS};
-use mog_core::ipc_gateway::ERROR_CODES;
+use mog_core::ipc_gateway::{GatewayComponents, ERROR_CODES};
 use mog_core::keyboard_env::EnvReads;
 use mog_core::window_host::WindowHost;
 use serde_json::{json, Value};
@@ -132,6 +132,7 @@ fn comps<'a>(
         windows,
         hotkeys,
         permissions: None,
+        consent: None,
     }
 }
 
@@ -692,6 +693,7 @@ fn ask(from: &str, route_to: Option<&dyn PermissionRoute>, args: Value) -> Resul
         windows: None,
         hotkeys: None,
         permissions: route_to,
+        consent: None,
     };
     route(components, "permission_request", args)
 }
@@ -795,4 +797,95 @@ fn cap_02a_capture_resume_is_brain_only_and_not_implemented_until_4() {
         err("invalid_args")
     );
     assert!(brain.items().is_empty());
+}
+
+// ---------- consent records (#430, ADR 0060) ----------
+
+/// A fake consent component: it keeps each call and answers with a fixed reply.
+#[derive(Default)]
+struct FakeConsent(Mutex<Vec<(String, Value)>>);
+
+impl GatewayComponents for FakeConsent {
+    fn call(&self, command: &'static str, args: Value) -> CoreResult<Value> {
+        self.0.lock().unwrap().push((command.to_owned(), args));
+        Ok(json!({"recordId": "rec-1"}))
+    }
+}
+
+fn consent_call(
+    from: &str,
+    consent: Option<&dyn GatewayComponents>,
+    command: &str,
+    args: Value,
+) -> Result<Value, Value> {
+    let brain = FakeBrain::default();
+    let components = HostComponents {
+        from,
+        brain: &brain,
+        windows: None,
+        hotkeys: None,
+        permissions: None,
+        consent,
+    };
+    route(components, command, args)
+}
+
+#[test]
+fn sec_32a_consent_commands_reach_the_consent_component() {
+    let c = FakeConsent::default();
+    assert_eq!(
+        consent_call(
+            "brain",
+            Some(&c),
+            "consent_notice_record",
+            json!({"noticeVersion": 2})
+        ),
+        Ok(json!({"recordId": "rec-1"}))
+    );
+    assert_eq!(
+        consent_call("brain", Some(&c), "consent_records_list", json!({})),
+        Ok(json!({"recordId": "rec-1"}))
+    );
+    assert_eq!(
+        *c.0.lock().unwrap(),
+        vec![
+            (
+                "consent_notice_record".to_owned(),
+                json!({"noticeVersion": 2})
+            ),
+            ("consent_records_list".to_owned(), json!({})),
+        ]
+    );
+}
+
+#[test]
+fn sec_03_no_managed_consent_store_answers_consent_storage_failed() {
+    for (command, args) in [
+        ("consent_notice_record", json!({"noticeVersion": 1})),
+        ("consent_records_list", json!({})),
+    ] {
+        assert_eq!(
+            consent_call("brain", None, command, args),
+            err("consent_storage_failed"),
+            "{command}"
+        );
+    }
+}
+
+#[test]
+fn sec_02a_views_cannot_call_the_consent_commands() {
+    let c = FakeConsent::default();
+    for from in ["hub", "mog-a1", "card-a1"] {
+        for (command, args) in [
+            ("consent_notice_record", json!({"noticeVersion": 1})),
+            ("consent_records_list", json!({})),
+        ] {
+            assert_eq!(
+                consent_call(from, Some(&c), command, args),
+                err("window_not_allowed"),
+                "{from} {command}"
+            );
+        }
+    }
+    assert!(c.0.lock().unwrap().is_empty(), "no view call reached T12");
 }

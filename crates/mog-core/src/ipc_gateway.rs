@@ -93,6 +93,7 @@ pub const ERROR_CODES: &[&str] = &[
     "unknown_mog",
     "window_closing",
     "config_storage_failed",
+    "consent_storage_failed",
 ];
 
 /// The fixed, content-free code of an [`IpcError`] (its serde tag). It never holds the
@@ -113,6 +114,7 @@ pub fn ipc_error_code(e: &IpcError) -> &'static str {
         IpcError::UnknownMog { .. } => "unknown_mog",
         IpcError::WindowClosing { .. } => "window_closing",
         IpcError::ConfigStorageFailed { .. } => "config_storage_failed",
+        IpcError::ConsentStorageFailed { .. } => "consent_storage_failed",
     }
 }
 

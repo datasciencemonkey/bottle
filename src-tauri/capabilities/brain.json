@@ -21,6 +21,8 @@
     "allow-capture-stop-all",
     "allow-capture-subscribe",
     "allow-session-attest",
+    "allow-consent-notice-record",
+    "allow-consent-records-list",
     "allow-stt-transcribe",
     "allow-insert-text",
     "allow-agent-start",

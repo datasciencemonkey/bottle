@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-consent-notice-record"
+description = "Enables the consent_notice_record command without any pre-configured scope."
+commands.allow = ["consent_notice_record"]
+
+[[permission]]
+identifier = "deny-consent-notice-record"
+description = "Denies the consent_notice_record command without any pre-configured scope."
+commands.deny = ["consent_notice_record"]
