@@ -8,6 +8,17 @@ use crate::token_guard::contains_secret;
 
 const MOG_A: &str = "00000000-0000-4000-8000-0000000000a1";
 const MOG_B: &str = "00000000-0000-4000-8000-0000000000b2";
+const OP_OP_1: &str = "00000000-0000-4000-9000-000000000101";
+const OP_OP_2: &str = "00000000-0000-4000-9000-000000000102";
+const OP_OP_7: &str = "00000000-0000-4000-9000-000000000103";
+const OP_CALL_1: &str = "00000000-0000-4000-9000-000000000104";
+const OP_REQ_1: &str = "00000000-0000-4000-9000-000000000105";
+const OP_OLD: &str = "00000000-0000-4000-9000-000000000106";
+const OP_OLD_B: &str = "00000000-0000-4000-9000-000000000107";
+const OP_EDGE: &str = "00000000-0000-4000-9000-000000000108";
+const OP_NEW: &str = "00000000-0000-4000-9000-000000000109";
+const OP_KEPT: &str = "00000000-0000-4000-9000-00000000010a";
+const OP_GONE: &str = "00000000-0000-4000-9000-00000000010b";
 const NOW: u64 = 1_800_000_000_000;
 
 /// The text that must never reach an entry: a transcript line, a prompt, a question, an answer.
@@ -59,7 +70,7 @@ fn ask() -> AuditAppendArgs {
     args(
         "ask",
         MOG_A,
-        "op-1",
+        OP_OP_1,
         &[("question_chars", 23), ("bytes", 23)],
     )
 }
@@ -83,7 +94,7 @@ fn sec_23_entry_holds_ids_sizes_hashes_and_time_only() {
     assert_eq!(json["atMs"], NOW);
     assert_eq!(json["kind"], "ask");
     assert_eq!(json["mogId"], MOG_A);
-    assert_eq!(json["opId"], "op-1");
+    assert_eq!(json["opId"], OP_OP_1);
     assert_eq!(json["sizes"]["question_chars"], 23);
     assert_eq!(json["hashes"]["sent"], hash('a'));
     assert_eq!(log.entries(MOG_A).unwrap(), vec![e]);
@@ -100,7 +111,7 @@ fn sec_23_each_kind_of_the_requirement_is_accepted() {
         "agent_action:memory.recall",
     ] {
         log.append(
-            &args(kind, MOG_A, "op-1", &[("chars", 1)]),
+            &args(kind, MOG_A, OP_OP_1, &[("chars", 1)]),
             &hashes(&[]),
             NOW,
         )
@@ -126,7 +137,7 @@ fn sec_23_rejects_a_kind_outside_the_closed_set() {
     );
     bad.extend(fakes());
     for kind in bad {
-        let r = log.append(&args(&kind, MOG_A, "op-1", &[]), &hashes(&[]), NOW);
+        let r = log.append(&args(&kind, MOG_A, OP_OP_1, &[]), &hashes(&[]), NOW);
         assert_eq!(r, Err(AuditError::UnknownKind), "kind {kind:?}");
     }
     assert!(log.entries(MOG_A).unwrap().is_empty());
@@ -147,26 +158,36 @@ fn sec_23_rejects_a_mog_id_that_is_not_a_uuid() {
     );
     bad.extend(fakes());
     for mog in bad {
-        let r = log.append(&args("ask", &mog, "op-1", &[]), &hashes(&[]), NOW);
+        let r = log.append(&args("ask", &mog, OP_OP_1, &[]), &hashes(&[]), NOW);
         assert_eq!(r, Err(AuditError::BadMogId), "mogId {mog:?}");
     }
 }
 
 #[test]
-fn sec_23_rejects_text_and_tokens_in_the_op_id() {
+fn sec_23_op_id_must_be_a_uuid_so_no_joined_text_or_token_passes() {
     let log = log();
     let mut bad: Vec<String> = CONTENT.iter().map(|s| (*s).to_owned()).collect();
-    bad.extend(["", "a b", "a\nb", "op/1", "-op", "é1"].map(String::from));
+    bad.extend(
+        [
+            "",
+            "op-1",
+            "What_was_revenue_in_Q3",
+            "what-was-revenue-in-q3",
+            "Priya_said_the_churn_number_is_wrong",
+            "toolu_01AbCdEfGhIjKlMnOpQrStUv",
+            "00000000-0000-4000-9000-0000000001A1",
+        ]
+        .map(String::from),
+    );
     bad.push("x".repeat(65));
     bad.extend(fakes());
     for op in bad {
         let r = log.append(&args("ask", MOG_A, &op, &[]), &hashes(&[]), NOW);
         assert_eq!(r, Err(AuditError::BadOpId), "opId {op:?}");
     }
-    // An ID of 64 chars is fine.
-    let op = "o".repeat(64);
+    // The OperationTracker issues UUIDs; any other shape is refused.
     assert!(log
-        .append(&args("ask", MOG_A, &op, &[]), &hashes(&[]), NOW)
+        .append(&args("ask", MOG_A, OP_OP_1, &[]), &hashes(&[]), NOW)
         .is_ok());
 }
 
@@ -179,7 +200,11 @@ fn sec_23_rejects_size_keys_outside_the_closed_set() {
         .chain(["question", "answer", "CHARS", ""].map(String::from))
         .chain(fakes())
     {
-        let r = log.append(&args("ask", MOG_A, "op-1", &[(&key, 1)]), &hashes(&[]), NOW);
+        let r = log.append(
+            &args("ask", MOG_A, OP_OP_1, &[(&key, 1)]),
+            &hashes(&[]),
+            NOW,
+        );
         assert_eq!(r, Err(AuditError::UnknownSizeKey), "size key {key:?}");
     }
 }
@@ -209,11 +234,11 @@ fn sec_23_errors_never_echo_the_rejected_value() {
     let log = log();
     for text in CONTENT.iter().map(|s| (*s).to_owned()).chain(fakes()) {
         let tries = [
-            log.append(&args(&text, MOG_A, "op-1", &[]), &hashes(&[]), NOW),
-            log.append(&args("ask", &text, "op-1", &[]), &hashes(&[]), NOW),
+            log.append(&args(&text, MOG_A, OP_OP_1, &[]), &hashes(&[]), NOW),
+            log.append(&args("ask", &text, OP_OP_1, &[]), &hashes(&[]), NOW),
             log.append(&args("ask", MOG_A, &text, &[]), &hashes(&[]), NOW),
             log.append(
-                &args("ask", MOG_A, "op-1", &[(&text, 1)]),
+                &args("ask", MOG_A, OP_OP_1, &[(&text, 1)]),
                 &hashes(&[]),
                 NOW,
             ),
@@ -240,10 +265,10 @@ fn sec_23_no_content_or_token_can_reach_a_stored_entry() {
         .collect();
     for s in &samples {
         // Every field gets the sample once. Each call is rejected or stores no sample text.
-        let _ = log.append(&args(s, MOG_A, "op-1", &[("chars", 1)]), &hashes(&[]), NOW);
-        let _ = log.append(&args("ask", s, "op-1", &[("chars", 1)]), &hashes(&[]), NOW);
+        let _ = log.append(&args(s, MOG_A, OP_OP_1, &[("chars", 1)]), &hashes(&[]), NOW);
+        let _ = log.append(&args("ask", s, OP_OP_1, &[("chars", 1)]), &hashes(&[]), NOW);
         let _ = log.append(&args("ask", MOG_A, s, &[("chars", 1)]), &hashes(&[]), NOW);
-        let _ = log.append(&args("ask", MOG_A, "op-1", &[(s, 1)]), &hashes(&[]), NOW);
+        let _ = log.append(&args("ask", MOG_A, OP_OP_1, &[(s, 1)]), &hashes(&[]), NOW);
         let _ = log.append(&ask(), &hashes(&[("sent", s)]), NOW);
         let _ = log.append(&ask(), &hashes(&[(s, &hash('a'))]), NOW);
     }
@@ -266,7 +291,7 @@ fn sec_23_entries_are_kept_per_mog() {
     let log = log();
     log.append(&ask(), &hashes(&[]), NOW).unwrap();
     log.append(
-        &args("sync", MOG_B, "op-2", &[("items", 3)]),
+        &args("sync", MOG_B, OP_OP_2, &[("items", 3)]),
         &hashes(&[]),
         NOW,
     )
@@ -288,7 +313,7 @@ fn at_08_sec_23_context_send_keeps_the_hash_of_the_sent_text_and_no_text() {
             &args(
                 "context_send",
                 MOG_A,
-                "op-7",
+                OP_OP_7,
                 &[
                     ("question_chars", 23),
                     ("preamble_chars", 28),
@@ -315,7 +340,7 @@ fn rtr_30_agent_action_entry_has_mog_id_tool_time_and_sizes() {
                 &args(
                     &kind,
                     MOG_A,
-                    "call-1",
+                    OP_CALL_1,
                     &[("args_bytes", 40), ("result_bytes", 900)],
                 ),
                 &hashes(&[]),
@@ -353,7 +378,7 @@ fn rtr_30_agent_tools_are_the_seven_bottle_mcp_tools_and_genie_one() {
         "agent_action:capture_start",
         "agent_action:Memory.Recall",
     ] {
-        let r = log.append(&args(kind, MOG_A, "call-1", &[]), &hashes(&[]), NOW);
+        let r = log.append(&args(kind, MOG_A, OP_CALL_1, &[]), &hashes(&[]), NOW);
         assert_eq!(r, Err(AuditError::UnknownKind), "kind {kind:?}");
     }
 }
@@ -368,7 +393,7 @@ fn pg_15_page_call_entry_holds_ids_sizes_and_hashes_only() {
             &args(
                 "page_call",
                 MOG_A,
-                "req-1",
+                OP_REQ_1,
                 &[("bytes", 2048), ("synonyms", 3)],
             ),
             &hashes(&[("payload", &hash('d'))]),
@@ -404,13 +429,13 @@ fn at(days_ago: u64, ms_more: u64) -> u64 {
 #[test]
 fn sec_23_rotation_removes_only_entries_older_than_the_retention() {
     let log = log();
-    log.append(&args("ask", MOG_A, "old", &[]), &hashes(&[]), at(31, 0))
+    log.append(&args("ask", MOG_A, OP_OLD, &[]), &hashes(&[]), at(31, 0))
         .unwrap();
-    log.append(&args("ask", MOG_B, "old-b", &[]), &hashes(&[]), at(30, 1))
+    log.append(&args("ask", MOG_B, OP_OLD_B, &[]), &hashes(&[]), at(30, 1))
         .unwrap();
-    log.append(&args("ask", MOG_A, "edge", &[]), &hashes(&[]), at(30, 0))
+    log.append(&args("ask", MOG_A, OP_EDGE, &[]), &hashes(&[]), at(30, 0))
         .unwrap();
-    log.append(&args("ask", MOG_A, "new", &[]), &hashes(&[]), at(29, 0))
+    log.append(&args("ask", MOG_A, OP_NEW, &[]), &hashes(&[]), at(29, 0))
         .unwrap();
     assert_eq!(log.rotate(NOW).unwrap(), 2);
     let ops: Vec<String> = log
@@ -419,7 +444,7 @@ fn sec_23_rotation_removes_only_entries_older_than_the_retention() {
         .into_iter()
         .map(|e| e.op_id)
         .collect();
-    assert_eq!(ops, ["edge", "new"]);
+    assert_eq!(ops, [OP_EDGE, OP_NEW]);
     assert!(log.entries(MOG_B).unwrap().is_empty());
 }
 
@@ -430,12 +455,12 @@ fn sec_23_rotation_follows_a_7_and_a_90_day_policy() {
             MemoryAuditStore::default(),
             AuditRetention::new(days).unwrap(),
         );
-        log.append(&args("ask", MOG_A, "kept", &[]), &hashes(&[]), at(kept, 0))
+        log.append(&args("ask", MOG_A, OP_KEPT, &[]), &hashes(&[]), at(kept, 0))
             .unwrap();
-        log.append(&args("ask", MOG_A, "gone", &[]), &hashes(&[]), at(gone, 0))
+        log.append(&args("ask", MOG_A, OP_GONE, &[]), &hashes(&[]), at(gone, 0))
             .unwrap();
         assert_eq!(log.rotate(NOW).unwrap(), 1, "{days} d policy");
-        assert_eq!(log.entries(MOG_A).unwrap()[0].op_id, "kept");
+        assert_eq!(log.entries(MOG_A).unwrap()[0].op_id, OP_KEPT);
     }
 }
 
@@ -444,7 +469,7 @@ fn sec_23_u9_append_never_deletes_and_only_rotate_expires() {
     // No trigger and no background job: an old entry stays until the expiry run calls rotate
     // (WipeService `run_security_expiries`, #124).
     let log = log();
-    log.append(&args("ask", MOG_A, "old", &[]), &hashes(&[]), at(60, 0))
+    log.append(&args("ask", MOG_A, OP_OLD, &[]), &hashes(&[]), at(60, 0))
         .unwrap();
     log.append(&ask(), &hashes(&[]), NOW).unwrap();
     assert_eq!(log.entries(MOG_A).unwrap().len(), 2);
@@ -457,4 +482,23 @@ fn sec_23_rotation_early_in_the_epoch_does_not_underflow() {
     let log = log();
     log.append(&ask(), &hashes(&[]), 5).unwrap();
     assert_eq!(log.rotate(10).unwrap(), 0);
+}
+
+#[test]
+fn rtr_30_agent_action_holds_sizes_only_and_takes_no_hash() {
+    let log = log();
+    for key in HASH_KEYS {
+        let r = log.append(
+            &args(
+                "agent_action:memory.recall",
+                MOG_A,
+                OP_CALL_1,
+                &[("args_bytes", 4)],
+            ),
+            &hashes(&[(key, &hash('a'))]),
+            NOW,
+        );
+        assert_eq!(r, Err(AuditError::UnknownHashKey), "hash key {key:?}");
+    }
+    assert!(log.entries(MOG_A).unwrap().is_empty());
 }

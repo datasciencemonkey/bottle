@@ -54,6 +54,7 @@ export interface AuditEvent {
   /** Only for `agent_action`, and then required. */
   tool?: AgentTool;
   mogId: MogId;
+  /** A lowercase UUID. */
   opId: string;
   sizes?: Partial<Record<SizeKey, number>>;
   hashes?: Partial<Record<HashKey, string>>;
@@ -91,10 +92,7 @@ export class AuditRejectedError extends Error {
 
 const FIELDS = new Set(['kind', 'tool', 'mogId', 'opId', 'sizes', 'hashes']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const OP_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
-/** The 4.6 rule-7 secret patterns that an ID-shaped string can hold. */
-const SECRET = /eyJ[\w-]+\.|dapi[0-9a-f]{32}|dose[0-9a-f]+|AKIA[0-9A-Z]{16}|ghp_/;
 
 const has = <T extends string>(list: readonly T[], v: unknown): v is T =>
   typeof v === 'string' && (list as readonly string[]).includes(v);
@@ -115,9 +113,8 @@ export function buildAuditRecord(e: AuditEvent): AuditRecord {
   const isAgent = e.kind === 'agent_action';
   if (isAgent ? !has(AGENT_TOOLS, e.tool) : e.tool !== undefined) reject('unknown_kind');
   if (typeof e.mogId !== 'string' || !UUID.test(e.mogId)) reject('bad_mog_id');
-  if (typeof e.opId !== 'string' || !OP_ID.test(e.opId) || SECRET.test(e.opId)) {
-    reject('bad_op_id');
-  }
+  // A UUID from the OperationTracker or the AgentBridge: joined text (`What_was_revenue`) fails.
+  if (typeof e.opId !== 'string' || !UUID.test(e.opId)) reject('bad_op_id');
   const sizes: Record<string, number> = {};
   for (const [k, v] of entriesOf(e.sizes)) {
     if (!has(SIZE_KEYS, k)) reject('unknown_size_key');
@@ -126,7 +123,8 @@ export function buildAuditRecord(e: AuditEvent): AuditRecord {
   }
   const hashes: Record<string, string> = {};
   for (const [k, v] of entriesOf(e.hashes)) {
-    if (!has(HASH_KEYS, k)) reject('unknown_hash_key');
+    // RTR-30: an agent action holds sizes only, so it takes no hash.
+    if (!has(HASH_KEYS, k) || isAgent) reject('unknown_hash_key');
     if (typeof v !== 'string' || !SHA256.test(v)) reject('bad_hash');
     hashes[k] = v as string;
   }

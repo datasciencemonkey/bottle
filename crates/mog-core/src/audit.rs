@@ -2,7 +2,7 @@
 //!
 //! The app writes one entry for each ask, context send, Page call, agent action and sync. An
 //! entry holds IDs, sizes and hashes only (SEC-23). The validation rejects text: every string in
-//! a stored entry is a closed-set name, a UUID, an ID-shaped `opId` or a SHA-256 hex value.
+//! a stored entry is a closed-set name, a UUID (`mogId`, `opId`) or a SHA-256 hex value.
 //!
 //! Rotation (9.2): 30 d by default, admin range 7-90 d. The audit log is content-free security
 //! data, not user content, so U9 lets it expire. [`AuditLog::rotate`] has no trigger and no
@@ -19,7 +19,6 @@ use serde::Serialize;
 
 use crate::error::CoreResult;
 use crate::ipc::AuditAppendArgs;
-use crate::token_guard::contains_secret;
 
 /// One day in milliseconds.
 pub const DAY_MS: u64 = 86_400_000;
@@ -55,9 +54,6 @@ pub const SIZE_KEYS: [&str; 11] = [
 /// The hash names an entry may hold. Each value is a SHA-256 in 64 lowercase hex chars.
 /// `sent` is the hash of the exact text that went to Genie (AT-08, G-35a).
 pub const HASH_KEYS: [&str; 4] = ["sent", "payload", "args", "result"];
-
-/// The longest `opId`.
-pub const OP_ID_MAX: usize = 64;
 
 const AGENT_ACTION_PREFIX: &str = "agent_action:";
 
@@ -181,18 +177,6 @@ fn is_uuid(s: &str) -> bool {
         })
 }
 
-/// An ID: 1-64 chars of `[A-Za-z0-9_-]` that start with a letter or digit and hold no rule-7
-/// secret. Text with a space or punctuation cannot pass.
-fn is_op_id(s: &str) -> bool {
-    let b = s.as_bytes();
-    !b.is_empty()
-        && b.len() <= OP_ID_MAX
-        && b[0].is_ascii_alphanumeric()
-        && b.iter()
-            .all(|c| c.is_ascii_alphanumeric() || *c == b'-' || *c == b'_')
-        && !contains_secret(s)
-}
-
 fn is_sha256_hex(s: &str) -> bool {
     s.len() == 64
         && s.bytes()
@@ -214,7 +198,9 @@ impl AuditEntry {
         if !is_uuid(&args.mog_id) {
             return Err(AuditError::BadMogId);
         }
-        if !is_op_id(&args.op_id) {
+        // The OperationTracker issues a UUID for each operation, and the AgentBridge mints one for
+        // each tool call. A looser ID rule lets joined text through (`What_was_revenue`).
+        if !is_uuid(&args.op_id) {
             return Err(AuditError::BadOpId);
         }
         let sizes = args
@@ -229,7 +215,10 @@ impl AuditEntry {
         let hashes = hashes
             .iter()
             .map(|(k, v)| {
-                let k = known(&HASH_KEYS, k).ok_or(AuditError::UnknownHashKey)?;
+                // RTR-30: an agent action holds sizes only, so it takes no hash.
+                let k = known(&HASH_KEYS, k)
+                    .filter(|_| kind.tool().is_none())
+                    .ok_or(AuditError::UnknownHashKey)?;
                 if !is_sha256_hex(v) {
                     return Err(AuditError::BadHash);
                 }

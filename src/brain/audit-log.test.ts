@@ -14,6 +14,9 @@ vi.mock('@tauri-apps/api/event', async () => (await import('./test-core')).event
 
 const MOG = '00000000-0000-4000-8000-0000000000a1';
 const H = 'a'.repeat(64);
+const OP = '00000000-0000-4000-9000-000000000101';
+const CALL = '00000000-0000-4000-9000-000000000102';
+const REQ = '00000000-0000-4000-9000-000000000103';
 
 /** Text that must never reach an entry: a transcript line, a prompt, a question, an answer. */
 const CONTENT = [
@@ -39,7 +42,7 @@ const SAMPLES = [...CONTENT, ...FAKES];
 const ask = (over: Partial<AuditEvent> = {}): AuditEvent => ({
   kind: 'ask',
   mogId: MOG,
-  opId: 'op-1',
+  opId: OP,
   sizes: { question_chars: 23, bytes: 23 },
   hashes: { sent: H },
   ...over,
@@ -68,7 +71,7 @@ describe('content-free audit log client (#140)', () => {
     expect(r).toEqual({
       kind: 'ask',
       mogId: MOG,
-      opId: 'op-1',
+      opId: OP,
       sizes: { question_chars: 23, bytes: 23 },
       hashes: { sent: H },
     });
@@ -78,9 +81,9 @@ describe('content-free audit log client (#140)', () => {
     for (const kind of ['ask', 'context_send', 'page_call', 'sync'] as const) {
       expect(buildAuditRecord(ask({ kind })).kind).toBe(kind);
     }
-    expect(buildAuditRecord(ask({ kind: 'agent_action', tool: 'memory.recall' })).kind).toBe(
-      'agent_action:memory.recall',
-    );
+    expect(
+      buildAuditRecord(ask({ kind: 'agent_action', tool: 'memory.recall', hashes: {} })).kind,
+    ).toBe('agent_action:memory.recall');
   });
 
   it('[SEC-23] record() sends audit_append with the 4.5 fields and no text', async () => {
@@ -89,7 +92,7 @@ describe('content-free audit log client (#140)', () => {
     expect(core.invoke).toHaveBeenCalledTimes(1);
     // TODO(#442): the hashes go in the call once `audit_append` has a `hashes` field.
     expect(core.invoke).toHaveBeenCalledWith('audit_append', {
-      args: { kind: 'ask', mogId: MOG, opId: 'op-1', sizes: { question_chars: 23, bytes: 23 } },
+      args: { kind: 'ask', mogId: MOG, opId: OP, sizes: { question_chars: 23, bytes: 23 } },
     });
     expect(r.hashes).toEqual({ sent: H });
   });
@@ -121,14 +124,20 @@ describe('content-free audit log client (#140)', () => {
     }
   });
 
-  it('[SEC-23] rejects IDs that are not ID-shaped', () => {
+  it('[SEC-23] rejects a mogId or an opId that is not a UUID, so joined text cannot pass', () => {
     for (const mogId of ['', 'a1', MOG.toUpperCase(), `${MOG}x`]) {
       expect(rejectedCode(() => buildAny({ ...ask(), mogId }))).toBe('bad_mog_id');
     }
-    for (const opId of ['', 'a b', 'a\nb', 'op/1', '-op', 'é1', 'x'.repeat(65)]) {
+    for (const opId of [
+      '',
+      'op-1',
+      'What_was_revenue_in_Q3',
+      'what-was-revenue-in-q3',
+      'toolu_01AbCdEfGhIjKlMnOpQrStUv',
+      '00000000-0000-4000-9000-00000000010A',
+    ]) {
       expect(rejectedCode(() => buildAny({ ...ask(), opId }))).toBe('bad_op_id');
     }
-    expect(buildAuditRecord(ask({ opId: 'o'.repeat(64) })).opId).toHaveLength(64);
   });
 
   it('[SEC-23] rejects sizes that are not whole numbers and hashes that are not SHA-256', () => {
@@ -164,17 +173,22 @@ describe('content-free audit log client (#140)', () => {
         kind: 'agent_action',
         tool,
         mogId: MOG,
-        opId: 'call-1',
+        opId: CALL,
         sizes: { args_bytes: 40, result_bytes: 900 },
       });
       expect(r).toEqual({
         kind: `agent_action:${tool}`,
         mogId: MOG,
-        opId: 'call-1',
+        opId: CALL,
         sizes: { args_bytes: 40, result_bytes: 900 },
         hashes: {},
       });
     }
+    expect(
+      rejectedCode(() =>
+        buildAny({ ...ask(), kind: 'agent_action', tool: 'memory.recall', hashes: { args: H } }),
+      ),
+    ).toBe('unknown_hash_key');
     expect(rejectedCode(() => buildAny({ ...ask(), kind: 'agent_action' }))).toBe('unknown_kind');
     expect(rejectedCode(() => buildAny({ ...ask(), tool: 'memory.recall' }))).toBe('unknown_kind');
     expect(
@@ -186,14 +200,14 @@ describe('content-free audit log client (#140)', () => {
     const r = buildAuditRecord({
       kind: 'page_call',
       mogId: MOG,
-      opId: 'req-1',
+      opId: REQ,
       sizes: { bytes: 2048, synonyms: 3 },
       hashes: { payload: 'd'.repeat(64) },
     });
     expect(r).toEqual({
       kind: 'page_call',
       mogId: MOG,
-      opId: 'req-1',
+      opId: REQ,
       sizes: { bytes: 2048, synonyms: 3 },
       hashes: { payload: 'd'.repeat(64) },
     });

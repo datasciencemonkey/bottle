@@ -96,7 +96,7 @@ describe('AT-08 approve exact context', () => {
     const entry = buildAuditRecord({
       kind: 'context_send',
       mogId: MOG,
-      opId: 'op-1',
+      opId: '00000000-0000-4000-9000-000000000001',
       sizes: {
         ...textSizes(sent),
         question_chars: textSizes(req().question).chars,
