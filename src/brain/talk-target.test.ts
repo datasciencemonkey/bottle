@@ -259,6 +259,28 @@ describe('T1 talk-key target in the brain (#73)', () => {
     expect(marked(sent)).toEqual([A]);
   });
 
+  it('[MB-06a] [UX-28] a late mog_set_active answer does not move the target back to an older MOG', async () => {
+    // Rust applies set_active and then the newer signal, so the newer target wins.
+    const sent: MogTargetView[] = [];
+    const answers: (() => void)[] = [];
+    const t = createTalkTarget({
+      send: (v) => void sent.push(v),
+      setActive: () => new Promise<void>((ok) => void answers.push(ok)),
+      after: () => () => undefined,
+    });
+    t.viewReady(A);
+    t.viewReady(B);
+    t.viewReady(C);
+    answers.splice(0).forEach((ok) => ok());
+    await flush();
+    t.interacted(A);
+    t.pttDown(B);
+    answers.splice(0).forEach((ok) => ok());
+    await flush();
+    expect(t.current()).toBe(B);
+    expect(marked(sent)).toEqual([B]);
+  });
+
   it('[MB-06a] [UX-28] a card load or focus moves the marker at once: Rust sees it too', async () => {
     const { t, sent } = refused();
     t.viewReady(A);
