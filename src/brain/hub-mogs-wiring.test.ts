@@ -2,7 +2,7 @@ import { core } from './test-core';
 import { fakeWindows, memoryConfigs, sequentialIds } from '../test-support/mog-doubles';
 import { BrainBus } from './bus';
 import { createMogManager, type MogManager } from './components/mog-manager';
-import { sendHubMogs, wireHubMogs } from './hub-mogs-wiring';
+import { sendHubMogs, sendHubSnapshot, wireHubMogs } from './hub-mogs-wiring';
 import type { HubMogList } from '../shared/hub-mogs';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('./test-core')).coreModule);
@@ -37,6 +37,22 @@ beforeEach(() => {
 });
 
 describe('hub MOG wiring (#26)', () => {
+  it('[MB-01] [CAP-35a] sendHubSnapshot sends the list with a notice outside a hub action (#562)', async () => {
+    await m.create({ name: 'Ops', home: 'p' });
+    await sendHubSnapshot(m, { kind: 'info', text: 'Create a MOG to start' }, send);
+    expect(last()).toEqual({
+      mogs: [{ mogId: id(1), name: 'Ops', home: 'p', persona: '', running: false }],
+      unreadable: [],
+      runningCount: 0,
+      maxRunning: 1,
+      notice: { kind: 'info', text: 'Create a MOG to start' },
+    });
+    // No hub is open: the send fails quietly.
+    await expect(
+      sendHubSnapshot(m, undefined, async () => Promise.reject(new Error('x'))),
+    ).resolves.toBe(false);
+  });
+
   it('[MB-01] sends the list to the hub once at start and again on mogs.ready', async () => {
     wireHubMogs(bus, m, send);
     await vi.waitFor(() => expect(sent).toHaveLength(1));
