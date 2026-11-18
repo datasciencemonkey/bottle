@@ -13,6 +13,7 @@ pub mod macos_panel;
 pub mod mcp_host;
 pub mod mog_config_host;
 pub mod mog_drag;
+pub mod profiles_host;
 pub mod rate_bucket_host;
 pub mod webview_media;
 pub mod window_host;
@@ -207,6 +208,8 @@ pub fn run() {
             // key store or the data dir is not there, the app still runs; `consent_*` then fail
             // with `consent_storage_failed`, and the notice gate stays closed (MB-08a).
             let _ = consent_host::install(handle);
+            // T7 for `profiles_list` and the R7/R8 profile hosts (#17). Before R8, which uses it.
+            profiles_host::install(handle);
             // R8 for `mcp_call` (#467). If its HTTP client cannot start, the app still runs;
             // `mcp_call` then answers `host_failed`.
             let _ = mcp_host::install(handle);
