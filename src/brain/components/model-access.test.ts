@@ -136,6 +136,18 @@ describe('checkModelServices (ADM-04a, ADM-04b, ADM-09)', () => {
     expect(all).not.toContain('example.invalid');
   });
 
+  it('[ADM-04a] [ADM-09] a probe answer outside the known values counts as a failure', async () => {
+    const probe: ModelServiceProbe = {
+      access: async (t) => (t.service === 'asr' ? 'ok' : ('maybe' as ServiceAccess)),
+      asrInferenceTables: async () => 'perhaps' as InferenceTables,
+    };
+    const r = await checkModelServices({ policy: DEFAULT_POLICY, asrSelected: true }, probe);
+    expect(r.asrInferenceTables).toBe('unknown');
+    expect(statusOf(r, 'agent').access).toBe('unreachable');
+    expect(r.agentRoute).toBe('fallback_classifier');
+    for (const s of r.services) expect(typeof s.text).toBe('string');
+  });
+
   it('[ADM-04b] [AT-36] when cross-geography routing blocks Databricks ASR, SttPolicy=local_only applies', async () => {
     const { probe } = fakeProbe({ asr: 'geo_blocked' });
     const r = await checkModelServices({ policy: DEFAULT_POLICY, asrSelected: true }, probe);

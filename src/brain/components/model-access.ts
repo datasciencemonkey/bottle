@@ -189,9 +189,19 @@ const ASR_TABLES_UNKNOWN =
 
 // ---------- the check ----------
 
+const ACCESS_VALUES: readonly ServiceAccess[] = [
+  'ok',
+  'no_access',
+  'geo_blocked',
+  'unreachable',
+  'not_checked',
+];
+
+/** A probe result outside the union (a bad adapter) counts as `unreachable`. */
 async function probeAccess(probe: ModelServiceProbe, t: ProbeTarget): Promise<ServiceAccess> {
   try {
-    return await probe.access(t);
+    const a = await probe.access(t);
+    return ACCESS_VALUES.includes(a) ? a : 'unreachable';
   } catch {
     return 'unreachable';
   }
@@ -199,7 +209,8 @@ async function probeAccess(probe: ModelServiceProbe, t: ProbeTarget): Promise<Se
 
 async function probeTables(probe: ModelServiceProbe, t: ProbeTarget): Promise<InferenceTables> {
   try {
-    return await probe.asrInferenceTables(t);
+    const v = await probe.asrInferenceTables(t);
+    return v === 'on' || v === 'off' ? v : 'unknown';
   } catch {
     return 'unknown';
   }
