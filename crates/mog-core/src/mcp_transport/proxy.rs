@@ -503,6 +503,95 @@ impl GenieProxy {
 mod tests {
     use super::*;
 
+    /// Counts every R8 call; answers a completed ask.
+    #[derive(Default)]
+    struct CountingTransport {
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl McpTransport for CountingTransport {
+        fn call_tool(&self, _call: McpCall<'_>) -> CoreResult<McpReply> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(McpReply {
+                structured_content: json!({"status": "completed"}),
+                text: String::new(),
+                is_error: false,
+                http_status: 200,
+                rpc_error: None,
+            })
+        }
+        fn list_tools(&self, _: &str, _: &Tags) -> CoreResult<Vec<Value>> {
+            Ok(Vec::new())
+        }
+    }
+
+    struct OneTarget;
+
+    impl GenieTargets for OneTarget {
+        fn target(&self, _: &str) -> CoreResult<GenieTarget> {
+            Ok(GenieTarget {
+                profile: "p".into(),
+                warehouse_id: None,
+            })
+        }
+    }
+
+    const MOG: &str = "00000000-0000-4000-8000-000000000141";
+    const Q: &str = "What was revenue in Q3?";
+
+    fn ask(p: &GenieProxy) -> Value {
+        let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                          "params": {"name": "genie_ask", "arguments": {"question": Q}}});
+        p.handle(&LoopbackRequest {
+            endpoint: crate::loopback::LoopbackEndpoint::GenieOneMcp,
+            method: "POST".into(),
+            path: PROXY_PATH.into(),
+            body: body.to_string().into_bytes(),
+        })
+        .body
+    }
+
+    fn proxy(t: &Arc<CountingTransport>) -> GenieProxy {
+        let transport: Arc<dyn McpTransport> = t.clone();
+        GenieProxy::new(
+            MOG,
+            GenieProxyDeps::new(transport, Arc::new(OneTarget)),
+            Arc::new(AtomicBool::new(false)),
+        )
+    }
+
+    struct BrokenLog;
+
+    impl AgentActionLog for BrokenLog {
+        fn record(&self, _: &str, _: &str, _: u64) -> Result<(), crate::audit::AuditError> {
+            Err(crate::audit::AuditError::BadMogId)
+        }
+    }
+
+    #[test]
+    fn rtr_30_a_proxy_with_no_guard_sends_nothing() {
+        let t = Arc::new(CountingTransport::default());
+        let p = proxy(&t);
+        // Even an approved question goes nowhere: the default log refuses every entry.
+        p.approvals.approve(MOG, Q);
+        let v = ask(&p);
+        assert_eq!(v["result"]["content"][0]["text"], AUDIT_UNAVAILABLE, "{v}");
+        assert_eq!(t.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn rtr_30_a_failed_audit_write_sends_nothing_and_keeps_the_approval() {
+        let t = Arc::new(CountingTransport::default());
+        let approvals = Arc::new(OutboundApprovals::default());
+        approvals.approve(MOG, Q);
+        let p = proxy(&t).with_guard(Arc::new(BrokenLog), approvals.clone());
+        let v = ask(&p);
+        assert_eq!(v["result"]["isError"], json!(true), "{v}");
+        assert_eq!(v["result"]["content"][0]["text"], AUDIT_UNAVAILABLE, "{v}");
+        assert_eq!(t.calls.load(Ordering::SeqCst), 0, "nothing reached R8");
+        assert!(approvals.take(MOG, Q), "the approval was not used");
+    }
+
     #[test]
     fn g_20b_item_id_pattern() {
         for ok in ["pub_1_output", "pub_a_b_output", "pub_x__output"] {

@@ -423,12 +423,17 @@ impl Upstream for NoUpstream {
 #[derive(Default)]
 struct FakeProc {
     frames: Mutex<Vec<Value>>,
+    /// While set, every turn frame fails to send.
+    fail_turns: std::sync::atomic::AtomicBool,
 }
 
 struct FakeProcHandle(Arc<FakeProc>);
 
 impl RuntimeProcess for FakeProcHandle {
     fn send_frame(&self, frame: &Value) -> Result<(), AgentError> {
+        if frame["type"] == "turn" && self.0.fail_turns.load(Ordering::SeqCst) {
+            return Err(AgentError::Unavailable);
+        }
         self.0.frames.lock().unwrap().push(frame.clone());
         Ok(())
     }
@@ -603,4 +608,41 @@ fn rtr_29b_sec_23_approvals_keep_no_text() {
     let shown = format!("{a:?}");
     assert!(!shown.contains("revenue"), "{shown}");
     assert!(!shown.contains(MOG), "{shown}");
+}
+
+#[test]
+fn rtr_29b_a_turn_that_did_not_reach_the_agent_approves_nothing() {
+    let r = host_rig();
+    r.host.start_session(MOG, Harness::Claude).unwrap();
+    r.host.send(MOG, &turn("first question")).unwrap();
+    let p = r.launcher.procs.lock().unwrap()[0].clone();
+    p.fail_turns.store(true, Ordering::SeqCst);
+    assert!(r.host.send(MOG, &turn(QUESTION)).is_err());
+    assert!(
+        !r.approvals.take(MOG, QUESTION),
+        "the agent never got this turn, so it may not ask it"
+    );
+    assert!(
+        !r.approvals.take(MOG, "first question"),
+        "the failed turn also ended the old approval"
+    );
+}
+
+#[test]
+fn rtr_29b_a_turn_with_no_question_clears_the_old_approval() {
+    let r = host_rig();
+    r.host.start_session(MOG, Harness::Claude).unwrap();
+    r.host.send(MOG, &turn(QUESTION)).unwrap();
+    r.host
+        .send(MOG, &json!({ "mogId": MOG, "recall": [] }))
+        .unwrap();
+    assert!(!r.approvals.take(MOG, QUESTION));
+    r.host.send(MOG, &turn(QUESTION)).unwrap();
+    r.host
+        .send(MOG, &json!({ "mogId": MOG, "question": 7 }))
+        .unwrap();
+    assert!(
+        !r.approvals.take(MOG, QUESTION),
+        "a non-text question approves nothing"
+    );
 }

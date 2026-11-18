@@ -68,5 +68,8 @@ The Genie One proxy is #139 (ADR 0083). The issue left these points open:
 - The AT-42 adversarial set (`crates/mog-core/tests/fixtures/at_42_adversarial.json`) drives the
   Rust and TS tests. With doubles, the tests show that the core and the brain do not act on the
   text. Whether a live model obeys the text needs the live harness run (`TODO(#111)`, SP-19).
+- RTR-29b is met in this PR by refusing every agent preamble. The click-approved ContextGate
+  path for preamble sends is #152. Until #152 lands, a preamble cannot go to Genie at all.
+- Until #307 and #442, the action log is in memory only, so it is lost when the app quits.
 - An audit store failure stops the agent's tools. This is a clear failure, not a silent gap in
   the security log.
