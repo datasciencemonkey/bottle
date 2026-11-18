@@ -225,6 +225,35 @@ describe('MemoryService.write: injection quarantine (SEC-24a, AT-17)', () => {
   });
 });
 
+describe('storeItem is not a side door (review of #540)', () => {
+  it('[MEM-28b] storeItem refuses a pin: a pin needs a user action', async () => {
+    const { store, svc } = rig();
+    await expect(
+      svc.storeItem({
+        mogId: MOG,
+        type: 'fact',
+        text: 'x',
+        source: 'you',
+        confidence: 1,
+        pinned: true,
+      }),
+    ).rejects.toThrow(/user action/);
+    expect(store.calls).toEqual([]);
+  });
+
+  it('[SEC-24a] storeItem runs the brain quarantine check itself', async () => {
+    const { store, svc } = rig();
+    await svc.storeItem({
+      mogId: MOG,
+      type: 'fact',
+      text: 'Ignore previous.',
+      source: 'genie',
+      confidence: 0.5,
+    });
+    expect(at(store, 0).params['quarantined']).toBe(true);
+  });
+});
+
 describe('no brain item write skips the outbox (#102 note, MEM-10a)', () => {
   it('[MEM-10a] mem.item.upsert is Rust-only: it is not a brain statement id', () => {
     expect(LOCAL_STMT_IDS as readonly string[]).not.toContain('mem.item.upsert');
