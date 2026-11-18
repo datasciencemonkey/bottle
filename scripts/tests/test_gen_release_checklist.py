@@ -101,5 +101,21 @@ def test_adm_09_admin_doc_covers_model_service_prerequisites():
         assert service in text
     assert "SttPolicy=local_only" in text
     assert "cross-geography routing" in text.lower()
-    assert "inference tables" in text.lower()
+    # ADM-09: the exact config field and its pass value, inside the ADM-09 section.
+    adm09 = text[text.index("(ADM-09)"):]
+    assert "`ai_gateway.inference_table_config.enabled` must be `false` or absent" in adm09
     assert "--profile <your-profile>" in text
+    # Checklist item 5: the service tags.
+    assert "`app=bottle,stage=<x>`" in text
+    # The system.ai.* grant is not verified yet; the page links the human step on #20.
+    assert "not verified" in text
+    assert "issues/20#issuecomment-6966537505" in text
+
+
+def test_adm_04a_admin_doc_says_the_check_is_not_wired_yet():
+    """[ADM-04a] The admin doc does not claim that the access check runs before #19 and #52 wire it."""
+    text = (ROOT / "docs" / "admin" / "model-service-prerequisites.md").read_text()
+    section = text[text.index("## What Bottle does when a prerequisite is missing"):]
+    assert "Bottle checks each service on the home profile" not in section
+    assert "#19" in section and "#52" in section
+    assert "not run yet" in section
