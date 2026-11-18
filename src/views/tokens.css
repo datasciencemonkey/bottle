@@ -1,0 +1,47 @@
+/* Bottle theme tokens (#559). One source for every view: the MOG window, the card pop-up, the
+   hub and its dialogs import this file. The colours come from the MOG mascot (mog-rive): a red
+   lamp, a pink lid, a navy face, sky-blue eyes and a gold spark. Change a colour here, not in a
+   view stylesheet. */
+:root {
+  /* Mascot colours. */
+  --mog-lamp: #e2483b; /* the lamp body */
+  --mog-lamp-deep: #b8322a; /* the lamp shadow and handle; white text on it is 5.6:1 */
+  --mog-lid: #f4a7ac; /* the pink lid */
+  --mog-face: #18202e; /* the navy face */
+  --mog-eye: #8cc8ff; /* the sky-blue eyes */
+  --mog-spark: #f6c463; /* the gold spark over the lamp */
+
+  /* Surfaces and text on the dark theme. */
+  --mog-surface: var(--mog-face);
+  --mog-surface-raised: #222c3d;
+  --mog-edge: rgb(244 167 172 / 22%); /* the lid colour, a hairline round a surface */
+  --mog-text: #f4f1f6; /* 15.6:1 on the surface */
+  --mog-text-muted: #b6bfd0; /* 9.2:1 on the surface */
+  --mog-on-accent: #fff;
+  --mog-accent: var(--mog-lamp-deep);
+  --mog-accent-hover: #cc3a2f;
+  --mog-focus: var(--mog-eye);
+
+  /* Text over the desktop with no fill (MOG-01a): white with a dark halo. */
+  --mog-overlay-text: #fff;
+  --mog-overlay-halo: 0 0 2px #000, 0 0 4px #000;
+
+  /* Type. The system face, so the text matches the desktop. */
+  --mog-font:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, Roboto, 'Helvetica Neue', sans-serif;
+  --mog-text-xs: 11px;
+  --mog-text-sm: 12px;
+  --mog-text-md: 13px;
+  --mog-leading: 1.35;
+
+  /* Shape and depth. */
+  --mog-radius-sm: 4px;
+  --mog-radius-md: 10px;
+  --mog-radius-pill: 999px;
+  --mog-shadow: 0 6px 16px rgb(8 10 18 / 38%), 0 1px 3px rgb(8 10 18 / 30%);
+  --mog-focus-ring: 0 0 0 2px var(--mog-surface), 0 0 0 4px var(--mog-focus);
+
+  /* Motion. */
+  --mog-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --mog-fade-ms: 300ms;
+}
