@@ -41,7 +41,7 @@ describe('ARC-2: thin views', () => {
     }
   });
 
-  it('[ARC-2] [MOG-08a] views call only view_emit and never invoke directly', () => {
+  it('[ARC-2] [MOG-08a] views call only view_* commands and never invoke directly', () => {
     const called = new Set<string>();
     for (const f of viewSources) {
       const text = readFileSync(f, 'utf8');
@@ -49,7 +49,8 @@ describe('ARC-2: thin views', () => {
       expect(text, relative(src, f)).not.toMatch(/\binvoke\b/);
       expect(text, relative(src, f)).not.toMatch(/@tauri-apps\/api\/core/);
     }
-    expect([...called]).toEqual(['view_emit']);
+    // MOG-08a: only `view_*` commands. `view_notice_subscribe` is the hub's notice Channel (#509).
+    expect([...called].sort()).toEqual(['view_emit', 'view_notice_subscribe']);
   });
 
   it('[ARC-2] [MOG-08a] views take event names from EVENTS, not string literals', () => {

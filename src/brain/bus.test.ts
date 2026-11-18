@@ -8,6 +8,7 @@ import {
   onViewInput,
   sendCardUpdate,
   sendMicLevel,
+  sendHubNotice,
   sendMogViewState,
   subscribeBrain,
 } from './bus';
@@ -189,5 +190,57 @@ describe('brain-to-view routing (#8)', () => {
       payload: { from: 'hub', input: { mogId: MOG, kind: 'click' } },
     });
     expect(got).toEqual([]);
+  });
+});
+
+describe('#507 ready and #509 the hub-only notice (ADR 0091)', () => {
+  beforeEach(() => core.reset());
+  const MARKER = 'test-dictation-not-real';
+
+  it('[MOG-18a] [MOG-18b] [MOG-13b] onViewInput takes ready from each view, keyed on from', () => {
+    const bus = new BrainBus();
+    const got: unknown[] = [];
+    onViewInput(bus, (i) => got.push(i));
+    for (const from of ['hub', `mog-${MOG}`, `card-${MOG}`])
+      bus.dispatch({
+        event: 'view:input',
+        payload: { from, input: { mogId: MOG, kind: 'ready' } },
+      });
+    expect(got).toEqual([
+      { from: 'hub', mogId: MOG, kind: 'ready', payload: undefined },
+      { from: `mog-${MOG}`, mogId: MOG, kind: 'ready', payload: undefined },
+      { from: `card-${MOG}`, mogId: MOG, kind: 'ready', payload: undefined },
+    ]);
+  });
+
+  it('[MOG-18a] onViewInput drops a ready that carries a payload', () => {
+    const bus = new BrainBus();
+    const got: unknown[] = [];
+    onViewInput(bus, (i) => got.push(i));
+    for (const payload of [{ x: 1 }, null, 'text'])
+      bus.dispatch({
+        event: 'view:input',
+        payload: { from: `card-${MOG}`, input: { mogId: MOG, kind: 'ready', payload } },
+      });
+    expect(got).toEqual([]);
+  });
+
+  it('[MOG-05b] [MOG-06d] [SEC-02a] sendHubNotice uses hub_notice_send, never a Tauri event', async () => {
+    await expect(sendHubNotice(MOG, MARKER)).resolves.toBe(true);
+    expect(core.invoke.mock.calls).toEqual([
+      ['hub_notice_send', { args: { kind: 'dictation_unshown', mogId: MOG, text: MARKER } }],
+    ]);
+    expect(core.emitTo).not.toHaveBeenCalled();
+    expect(core.emit).not.toHaveBeenCalled();
+  });
+
+  it('[MOG-06d] [SEC-16c] sendHubNotice resolves false on a refusal and logs nothing', async () => {
+    const log = vi.spyOn(console, 'log');
+    const warn = vi.spyOn(console, 'warn');
+    const error = vi.spyOn(console, 'error');
+    core.invoke.mockRejectedValueOnce({ error: 'host_failed' });
+    await expect(sendHubNotice(MOG, MARKER)).resolves.toBe(false);
+    for (const spy of [log, warn, error]) expect(spy).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
   });
 });

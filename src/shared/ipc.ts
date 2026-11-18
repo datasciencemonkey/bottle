@@ -9,6 +9,9 @@
  * carry a token, a header or a request URL (ARC-6).
  */
 import { Channel, invoke } from '@tauri-apps/api/core';
+
+/** Views build a Channel argument with this, so no view imports the Tauri core module. */
+export { Channel };
 import type {
   CaptureMode,
   CaptureState,
@@ -84,6 +87,10 @@ export const COMMANDS = {
   telemetry_span: B,
   /** Not in 4.5 (ADR 0003): the brain's private Channel for core-to-brain traffic. */
   brain_subscribe: B,
+  /** Not in 4.5 (#509, ADR 0091): the brain gives the host a notice for the hub only. */
+  hub_notice_send: B,
+  /** Not in 4.5 (#509, ADR 0091): the hub's private Channel for its notices. */
+  view_notice_subscribe: { windows: ['hub'], phase: 'MVP-D' },
 } as const satisfies Record<string, Spec>;
 
 export type CommandName = keyof typeof COMMANDS;
@@ -162,8 +169,32 @@ export type RouteId =
 /** The OS permission that `permission_request` asks for (CAP-36, CAP-37). */
 export type PermissionKind = 'input_monitoring' | 'accessibility';
 
-export type ViewEmitKind =
-  'poked' | 'hover' | 'drag_end' | 'chip_click' | 'cancel' | 'expand' | 'click';
+/**
+ * The `view_emit` kinds, in the order of the Rust enum. `ready` (#507, ADR 0091): the view
+ * registered its listeners; it has no payload, and the brain sends that window its state again.
+ */
+export const VIEW_EMIT_KINDS = [
+  'poked',
+  'hover',
+  'drag_end',
+  'chip_click',
+  'cancel',
+  'expand',
+  'click',
+  'ready',
+] as const;
+
+export type ViewEmitKind = (typeof VIEW_EMIT_KINDS)[number];
+
+/**
+ * A text-bearing hub notice (#509, ADR 0091). It travels only on the hub's private Channel
+ * (`view_notice_subscribe`), never as a Tauri event. `text` is user content: never log it.
+ */
+export interface HubTextNotice {
+  kind: 'dictation_unshown';
+  mogId: MogId;
+  text: string;
+}
 
 interface MogArgs {
   mogId: MogId;
@@ -257,6 +288,8 @@ export interface CommandArgs {
   audit_append: { kind: string; mogId: MogId; opId: string; sizes: Record<string, number> };
   telemetry_span: { name: string; startMs: number; endMs: number; attrs?: Record<string, number> };
   brain_subscribe: { onEvent: Channel<BrainMessage> };
+  hub_notice_send: HubTextNotice;
+  view_notice_subscribe: { onNotice: Channel<unknown> };
 }
 
 /**
@@ -582,6 +615,8 @@ export interface CommandReturns {
   audit_append: Empty;
   telemetry_span: Empty;
   brain_subscribe: Empty;
+  hub_notice_send: Empty;
+  view_notice_subscribe: Empty;
 }
 
 /** Call a command. A refused call rejects with an `IpcError` (a code only). */

@@ -58,6 +58,9 @@ const SPEC_COMMANDS: &[(&str, &[WindowClass])] = {
         ("telemetry_span", &[B]),
         // Not in 4.5: the brain's private Channel (ADR 0003).
         ("brain_subscribe", &[B]),
+        // #509 (ADR 0091): the hub-only notice path for an unshown dictation.
+        ("hub_notice_send", &[B]),
+        ("view_notice_subscribe", &[H]),
     ]
 };
 
@@ -727,4 +730,137 @@ fn cap_22_app_setting_rows_are_brain_and_hub_rows_and_take_a_known_key() {
             "{name} {bad}"
         );
     }
+}
+
+// ---------- #507 `ready` and #509 the hub-only notice (ADR 0091) ----------
+
+#[test]
+fn mog_18a_mog_18b_mog_13b_every_view_may_send_ready_with_no_payload() {
+    for (label, id) in [("hub", "b2"), ("mog-a1", "a1"), ("card-a1", "a1")] {
+        let ok = ipc::handle(label, "view_emit", json!({"mogId": id, "kind": "ready"}))
+            .unwrap_or_else(|e| panic!("{label}: {e:?}"));
+        assert_eq!(ok, ipc::Handled::RelayToBrain { from: label.into() });
+    }
+    // The brain cannot send `ready` for a view.
+    assert!(matches!(
+        ipc::handle(
+            "brain",
+            "view_emit",
+            json!({"mogId": "a1", "kind": "ready"})
+        )
+        .unwrap_err(),
+        IpcError::WindowNotAllowed { .. }
+    ));
+}
+
+#[test]
+fn mog_18a_ready_with_a_payload_is_invalid_args() {
+    for payload in [json!({"x": 1}), json!(null), json!("text"), json!([])] {
+        let err = ipc::handle(
+            "card-a1",
+            "view_emit",
+            json!({"mogId": "a1", "kind": "ready", "payload": payload}),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, IpcError::InvalidArgs { .. }),
+            "{payload}: {err:?}"
+        );
+    }
+    // Other kinds still take a payload.
+    assert!(ipc::handle(
+        "card-a1",
+        "view_emit",
+        json!({"mogId": "a1", "kind": "click", "payload": {"action": "copy"}})
+    )
+    .is_ok());
+}
+
+#[test]
+fn mog_18a_the_view_emit_schema_lists_ready() {
+    let doc = ipc::schema_document();
+    let kinds = &doc["arguments"]["view_emit"]["$defs"]["ViewEmitKind"]["enum"];
+    assert!(
+        kinds.as_array().expect("enum").contains(&json!("ready")),
+        "{kinds}"
+    );
+}
+
+/// The fake dictation text of the #509 tests. It is plainly not real.
+const MARKER: &str = "test-dictation-not-real";
+
+fn unshown() -> serde_json::Value {
+    json!({"kind": "dictation_unshown", "mogId": "a1", "text": MARKER})
+}
+
+#[test]
+fn sec_02a_mog_05b_only_the_hub_can_take_the_notice_channel() {
+    let args = json!({"onNotice": "__CHANNEL__:9"});
+    // The hub passes the window and schema checks; the host does the rest.
+    assert!(matches!(
+        ipc::handle("hub", "view_notice_subscribe", args.clone()).unwrap_err(),
+        IpcError::NotImplemented { .. }
+    ));
+    for label in ["brain", "mog-a1", "card-a1", "mog-hub", "card-hub"] {
+        assert!(
+            matches!(
+                ipc::handle(label, "view_notice_subscribe", args.clone()).unwrap_err(),
+                IpcError::WindowNotAllowed { .. }
+            ),
+            "{label}"
+        );
+    }
+    assert!(matches!(
+        ipc::handle("hub", "view_notice_subscribe", json!({"onNotice": "x"})).unwrap_err(),
+        IpcError::InvalidArgs { .. }
+    ));
+}
+
+#[test]
+fn sec_02a_mog_06d_only_the_brain_can_send_a_hub_notice() {
+    assert!(matches!(
+        ipc::handle("brain", "hub_notice_send", unshown()).unwrap_err(),
+        IpcError::NotImplemented { .. }
+    ));
+    // No view can send or forward the notice.
+    for label in ["hub", "mog-a1", "card-a1"] {
+        assert!(
+            matches!(
+                ipc::handle(label, "hub_notice_send", unshown()).unwrap_err(),
+                IpcError::WindowNotAllowed { .. }
+            ),
+            "{label}"
+        );
+    }
+}
+
+#[test]
+fn sec_02b_hub_notice_send_takes_only_the_dictation_unshown_shape() {
+    let mut extra = unshown();
+    extra["to"] = json!("mog-a1");
+    let mut other_kind = unshown();
+    other_kind["kind"] = json!("consent");
+    let mut no_text = unshown();
+    no_text.as_object_mut().unwrap().remove("text");
+    for bad in [extra, other_kind, no_text, json!({})] {
+        let err = ipc::handle("brain", "hub_notice_send", bad.clone()).unwrap_err();
+        assert!(matches!(err, IpcError::InvalidArgs { .. }), "{bad}");
+        // The refusal never echoes the text (SEC-03).
+        let shown = format!("{err} {err:?}");
+        assert!(!shown.contains(MARKER), "{shown}");
+    }
+}
+
+#[test]
+fn sec_16c_sec_03_the_notice_type_debug_never_holds_the_text() {
+    let a: ipc::HubNoticeSendArgs = serde_json::from_value(unshown()).expect("parses");
+    assert_eq!(a.text, MARKER);
+    assert_eq!(a.mog_id, "a1");
+    assert_eq!(a.kind, ipc::HubNoticeKind::DictationUnshown);
+    for shown in [format!("{a:?}"), format!("{a:#?}")] {
+        assert!(!shown.contains(MARKER), "{shown}");
+        assert!(shown.contains("redacted"), "{shown}");
+    }
+    // The wire shape is unchanged: the hub gets the text to copy.
+    assert_eq!(serde_json::to_value(&a).unwrap(), unshown());
 }

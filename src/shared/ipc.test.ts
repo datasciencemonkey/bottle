@@ -10,6 +10,8 @@ import {
   type CommandName,
   type CommandReturns,
   type IpcError,
+  type ViewEmitKind,
+  VIEW_EMIT_KINDS,
 } from './ipc';
 
 const schemaDoc = JSON.parse(
@@ -48,6 +50,29 @@ describe('IPC contract (TS side)', () => {
       COMMANDS[n].windows.some((w) => w !== 'brain' && w !== 'hub'),
     );
     expect(viewCommands).toEqual(['view_emit']);
+  });
+});
+
+describe('#507 ready and #509 the hub-only notice (contract, ADR 0091)', () => {
+  const doc = schemaDoc as unknown as {
+    arguments: Record<
+      string,
+      { required?: string[]; $defs?: Record<string, { enum?: string[] }> } & Record<string, unknown>
+    >;
+  };
+
+  it('[MOG-18a] [MOG-18b] ViewEmitKind has ready and equals the Rust enum', () => {
+    const ready: ViewEmitKind = 'ready';
+    expect(VIEW_EMIT_KINDS).toContain(ready);
+    expect([...VIEW_EMIT_KINDS]).toEqual(doc.arguments.view_emit?.$defs?.ViewEmitKind?.enum);
+    expect(COMMANDS.view_emit).toEqual({ windows: ['hub', 'mog', 'card'], phase: 'MVP-D' });
+  });
+
+  it('[SEC-02a] [MOG-05b] [MOG-06d] hub_notice_send is brain-only; view_notice_subscribe is hub-only', () => {
+    expect(COMMANDS.hub_notice_send).toEqual({ windows: ['brain'], phase: 'MVP-D' });
+    expect(COMMANDS.view_notice_subscribe).toEqual({ windows: ['hub'], phase: 'MVP-D' });
+    expect(doc.arguments.hub_notice_send?.required).toEqual(['kind', 'mogId', 'text']);
+    expect(doc.arguments.view_notice_subscribe?.required).toEqual(['onNotice']);
   });
 });
 
