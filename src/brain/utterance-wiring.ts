@@ -28,7 +28,7 @@ export interface UtteranceHandlerDeps {
   /** `app.dictation.insert` (Appendix F). */
   insertionOn(mogId: MogId): boolean;
   route: UtteranceRouteDeps;
-  /** A preview or a chip, with its live owner. The callee releases the owner. */
+  /** A preview or a chip, with its live owner. The callee releases the owner, unless it throws. */
   onAsk(r: AskRoute, owned: OwnedUtterance): void;
   /** Every other route, after the owner is released (the dictation card, TODO(#60)). */
   onDone?(r: Exclude<UtteranceRoute, AskRoute>, owned: OwnedUtterance): void;
@@ -57,8 +57,9 @@ export function createUtteranceHandler(
         deps.route,
       );
       if (isAsk(r)) {
-        handedOff = true;
         deps.onAsk(r, owned);
+        // Only a call that returns hands the owner off; a throw releases it below.
+        handedOff = true;
         return;
       }
       deps.owner.release(owned.utteranceId);

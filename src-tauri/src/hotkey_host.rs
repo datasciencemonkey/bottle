@@ -243,8 +243,8 @@ impl TalkTargetRoute for PttTarget {
     }
 }
 
-/// The `hotkey:ptt` payload of section 4.5: `{ mogId, phase }`. A key-down with Shift held
-/// also gets `shift: true` (RTR-17a, ADR 0053).
+/// The `hotkey:ptt` payload of section 4.5: `{ mogId, phase }`. For a key-down with Shift
+/// held, `PttForwarder` adds `shift: true` (RTR-17a, ADR 0053).
 pub fn ptt_payload(mog_id: &str, phase: PttPhase) -> Value {
     json!({ "mogId": mog_id, "phase": phase.as_str() })
 }
