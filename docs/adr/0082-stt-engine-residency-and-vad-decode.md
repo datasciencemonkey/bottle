@@ -49,10 +49,15 @@ The issue leaves these points open:
    - A zero-buffer `SinkEvent::Discard`.
    A PTT over hands-free keeps two takes apart (ARC-F9, at most 2).
 9. **CAP-72.** The loader reports an `SttIdentity`: `local_parakeet`, `stt::LOCAL_STT_MODEL` and `stt::LOCAL_STT_RUNTIME`. `stt_local::MODEL` and `RUNTIME` are now aliases of these constants. `latencyMs` is the time from the commit to the text, so it measures only the tail decode (section 8.1, step 3).
-10. **Supervision.** The worker catches a panic in the loader or the recognizer. It drops the model and gives the lease the code `stt_engine_failed`. The next use loads a new model. Handy restarts a worker process. Here the recognizer runs in the process, so the caught panic is the restart point.
+10. **Supervision.** The worker catches a panic in the loader, the recognizer, the VAD and the transcript sink, so the worker lives on.
+    - A loader or recognizer panic drops the model and gives the lease the code `stt_engine_failed`. The next use loads a new model.
+    - A VAD panic replaces the VAD of that take with the energy VAD. The window counts as speech, so no audio is dropped as silence.
+    - A sink panic loses that one result. Handy restarts a worker process. Here the recognizer runs in the process, so the caught panic is the restart point.
 11. **Privacy (CAP-01b, CAP-34, section 9.2).**
     - Each segment buffer has a fixed capacity, so it never moves in memory. The engine zeroes it after each decode and before it frees it, and it zeroes each frame message after use.
-    - No audio and no text go to a log, a thread name or a `Debug` output.
+    - No audio and no text go to a log, a thread name or a `Debug` output. `SttDone` has a hand-written `Debug` with no text.
+    - `ptt_buffer::live_utterances()` counts the live utterances (content-free), so a test proves that R4 keeps no second copy (CAP-34).
+    - Each frame message names its lease, and `begin()` enqueues `Begin` before the audio thread can see the new lease. So the first frames of a PTT over hands-free never reach the hands-free take.
     - The sherpa-onnx Silero detector keeps its own copy of a speech segment. R4 drops that copy after each window.
 12. **No Handy code is copied.** Handy's patterns are used: model residency with an idle unload, a supervised worker, preload, and a VAD with an onset and a hangover. Handy's engine (`transcribe-cpp`, GGUF Silero), its history and its logging are not used. So no MIT header and no new THIRD_PARTY_NOTICES entry are needed.
 

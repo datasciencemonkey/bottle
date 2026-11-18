@@ -43,7 +43,7 @@
 
 use std::collections::VecDeque;
 use std::fmt;
-use std::sync::atomic::{compiler_fence, Ordering};
+use std::sync::atomic::{compiler_fence, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use super::normalize::normalize_peak;
@@ -200,6 +200,7 @@ impl Take {
             samples.extend_from_slice(&chunk.0[..n]);
             left -= n;
         }
+        LIVE_UTTERANCES.fetch_add(1, Ordering::SeqCst);
         Utterance {
             lease_id: self.lease,
             mog_id: self.mog_id.clone(),
@@ -209,6 +210,15 @@ impl Take {
             samples,
         }
     }
+}
+
+/// The [`Utterance`] values that exist now in this process. A content-free count, so a test can
+/// prove that the consumer keeps no copy of the audio (CAP-34, #46).
+static LIVE_UTTERANCES: AtomicUsize = AtomicUsize::new(0);
+
+/// The number of [`Utterance`] values that exist now. No audio is read.
+pub fn live_utterances() -> usize {
+    LIVE_UTTERANCES.load(Ordering::SeqCst)
 }
 
 /// The audio of one stopped PTT or hands-free lease, in RAM, ready for STT. Its peak is
@@ -271,6 +281,7 @@ impl Utterance {
 impl Drop for Utterance {
     fn drop(&mut self) {
         self.zeroize();
+        LIVE_UTTERANCES.fetch_sub(1, Ordering::SeqCst);
     }
 }
 

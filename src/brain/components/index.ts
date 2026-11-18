@@ -109,7 +109,7 @@ export function startBrain(): Brain {
     // #14: the PTT and hands-free lifecycle. Every start goes through the T12 consent gate.
     const lifecycle = createCaptureLifecycle({
       control: ipcCaptureControl({ consent: components.T12 }),
-      // TODO(#46): T4 transcribes with local Parakeet; the stub rejects, so nothing is routed yet.
+      // TODO(#52): T4 SttProvider over R4 (#46) and `stt_transcribe` (TODO(#514)); the stub rejects, so nothing is routed yet.
       transcribe: async (seg) =>
         (await components.T4.transcribe(seg, { app: 'bottle', mog: seg.mogId, op: 'asr' })).text,
       // #59 (ADR 0053): the MOG of the key-down owns the utterance (MOG-13a); a dictation ends

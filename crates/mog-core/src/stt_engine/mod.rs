@@ -117,8 +117,8 @@ impl RecognizerLoader for NoModelLoader {
     }
 }
 
-/// The result of one kept capture.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The result of one kept capture. Its `Debug` shows no transcript text (CAP-01b).
+#[derive(Clone, PartialEq, Eq)]
 pub struct SttDone {
     /// The lease of the capture.
     pub lease_id: LeaseNo,
@@ -130,6 +130,25 @@ pub struct SttDone {
     pub duration_ms: u64,
     /// The transcript, or a content-free error code.
     pub result: Result<Transcript, &'static str>,
+}
+
+impl std::fmt::Debug for SttDone {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // No text, no raw text and no MOG ID in a log: only content-free fields.
+        let result: Result<String, &str> = match &self.result {
+            Ok(t) => Ok(format!(
+                "Transcript {{ segment_id: {:?}, provider: {:?}, model: {:?}, runtime: {:?}, latency_ms: {}, .. }}",
+                t.segment_id, t.provider, t.model, t.runtime, t.latency_ms
+            )),
+            Err(code) => Err(code),
+        };
+        f.debug_struct("SttDone")
+            .field("lease_id", &self.lease_id)
+            .field("mode", &self.mode)
+            .field("duration_ms", &self.duration_ms)
+            .field("result", &result)
+            .finish_non_exhaustive()
+    }
 }
 
 /// The consumer of finished transcripts. It runs on the engine worker, so it must be fast.
@@ -216,6 +235,8 @@ pub struct EngineStatus {
     pub held_samples: usize,
     /// The code of the last failed load, if the model is not loaded.
     pub last_error: Option<&'static str>,
+    /// Frame messages that reached the worker since start (content-free; CAP-13a tests).
+    pub frame_messages: u64,
 }
 
 enum Cmd {
@@ -227,6 +248,7 @@ enum Cmd {
     },
     Idle,
     Frames {
+        lease: LeaseNo,
         samples: Vec<f32>,
         rate: u32,
     },
@@ -304,12 +326,15 @@ impl LocalSttEngine {
     /// A PTT or hands-free lease records now: its frames go to its take. A new lease also
     /// preloads the model (CAP-51c).
     pub fn begin(&self, lease: LeaseNo, mog_id: &str, mode: CaptureMode) {
-        self.inner.current.store(lease, Ordering::SeqCst);
+        // The `Begin` goes into the channel before the audio thread can see the new lease, and
+        // each frame message names its lease. So the first frames of a PTT over hands-free
+        // (ARC-F9) never reach the hands-free take.
         self.send(Cmd::Begin {
             lease,
             mog_id: mog_id.to_owned(),
             mode,
         });
+        self.inner.current.store(lease, Ordering::SeqCst);
     }
 
     /// No lease records now (idle, paused or a session): frames are dropped.
@@ -321,10 +346,12 @@ impl LocalSttEngine {
     /// One block of mono mic audio at `rate`, for the live lease. With no live lease the block
     /// is dropped at once (no pre-roll, CAP-13a).
     pub fn frames(&self, samples: &[f32], rate: u32) {
-        if samples.is_empty() || self.inner.current.load(Ordering::SeqCst) == 0 {
+        let lease = self.inner.current.load(Ordering::SeqCst);
+        if samples.is_empty() || lease == 0 {
             return;
         }
         self.send(Cmd::Frames {
+            lease,
             samples: samples.to_vec(),
             rate,
         });
@@ -548,6 +575,7 @@ struct Worker {
     model: Model,
     takes: Vec<Take>,
     current: Option<LeaseNo>,
+    frame_messages: u64,
     status: Arc<Mutex<EngineStatus>>,
 }
 
@@ -574,6 +602,7 @@ impl Worker {
             },
             takes: Vec::new(),
             current: None,
+            frame_messages: 0,
             status,
         }
     }
@@ -603,6 +632,7 @@ impl Worker {
             } else {
                 self.model.last_error
             },
+            frame_messages: self.frame_messages,
         };
     }
 
@@ -628,8 +658,13 @@ impl Worker {
                 let _ = self.model.ensure_loaded(&self.shared);
             }
             Cmd::Idle => self.current = None,
-            Cmd::Frames { mut samples, rate } => {
-                self.frames(&samples, rate);
+            Cmd::Frames {
+                lease,
+                mut samples,
+                rate,
+            } => {
+                self.frame_messages += 1;
+                self.frames(lease, &samples, rate);
                 wipe_vec(&mut samples);
             }
             Cmd::Commit { lease, reason, at } => self.commit(lease, reason, at),
@@ -667,11 +702,12 @@ impl Worker {
         }
     }
 
-    fn frames(&mut self, samples: &[f32], rate: u32) {
-        let Some(current) = self.current else {
+    fn frames(&mut self, lease: LeaseNo, samples: &[f32], rate: u32) {
+        // A frame of a lease that is not live on the worker (stopped, idle or not begun) drops.
+        if self.current != Some(lease) {
             return;
-        };
-        let Some(at) = self.takes.iter().position(|t| t.lease == current) else {
+        }
+        let Some(at) = self.takes.iter().position(|t| t.lease == lease) else {
             return;
         };
         let take = &mut self.takes[at];
@@ -690,7 +726,17 @@ impl Worker {
             if take.window.0.len() < VAD_WINDOW {
                 continue;
             }
-            let speech = take.vad.is_speech(&take.window.0);
+            let window = &take.window.0;
+            let vad = &mut take.vad;
+            let speech = match catch_unwind(AssertUnwindSafe(|| vad.is_speech(window))) {
+                Ok(speech) => speech,
+                Err(_) => {
+                    // A faulted VAD is replaced by the energy VAD for the rest of the take; the
+                    // window counts as speech, so no audio is dropped as silence.
+                    take.vad = Box::new(EnergyVad::default());
+                    true
+                }
+            };
             take.segment.0.extend_from_slice(&take.window.0);
             take.window.clear();
             take.segment_speech |= speech;
@@ -763,13 +809,16 @@ impl Worker {
                 })
             }
         };
-        self.shared.out.done(SttDone {
+        let done = SttDone {
             lease_id: take.lease,
             mog_id: take.mog_id.clone(),
             mode: take.mode,
             duration_ms,
             result,
-        });
+        };
+        let out = &self.shared.out;
+        // A panic in the sink loses this one result; the worker lives on.
+        let _ = catch_unwind(AssertUnwindSafe(|| out.done(done)));
     }
 }
 
