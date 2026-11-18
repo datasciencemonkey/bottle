@@ -191,7 +191,7 @@ describe('V3 card view', () => {
     await tauri.emit('card:update', {
       ...stack,
       blurbs: [b2],
-      chips: [{ id: 'ask_genie:b2', label: 'Ask Genie' }],
+      chips: [{ id: 'copy-b2', label: 'Copy' }],
     });
     const p = el.querySelector('[data-popup-text]') as HTMLElement;
     await act(async () => {

@@ -167,6 +167,8 @@ export function CardView({ mogId }: { mogId: MogId }) {
       setCard(u);
       const first = u.blurbs[0];
       if (first && u.chips.some((c) => c.id === `copy-${first.id}`)) setKept(u);
+      // A newer text replaces the kept Copy pop-up for good.
+      else if (first) setKept((k) => (k && k.blurbs[0]?.id !== first.id ? undefined : k));
     },
     [mogId],
   );

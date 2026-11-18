@@ -25,10 +25,9 @@ const COPY = 'copy-';
 type Chip = { id: string; label: string };
 type Phase = 'shown' | 'fading' | 'gone';
 
-/** The chip of `prefix` for the newest blurb, else the newest chip of that kind. */
-function pick(chips: Chip[], prefix: string, owner: string | undefined): Chip | undefined {
-  const all = chips.filter((c) => c.id.startsWith(prefix));
-  return all.find((c) => c.id.slice(prefix.length) === owner) ?? all[all.length - 1];
+/** The chip of `prefix` for exactly this utterance. A chip of another text is never shown. */
+function pick(chips: Chip[], prefix: string, utterance: string | undefined): Chip | undefined {
+  return utterance === undefined ? undefined : chips.find((c) => c.id === prefix + utterance);
 }
 
 export interface PopupProps {
@@ -45,9 +44,9 @@ export function Popup({ mogId, card, onClose }: PopupProps) {
   const ref = useRef<HTMLDivElement>(null);
   const whyId = useId();
 
-  const utterance = newest?.id.replace(/^ask:/, '');
+  // The ask gate's blurb is `ask:<utterance>` (ask-gate.ts); the #498 Copy blurb is `<utterance>`.
   const copy = pick(card.chips, COPY, newest?.id);
-  const ask = copy ? undefined : pick(card.chips, ASK, utterance);
+  const ask = copy ? undefined : pick(card.chips, ASK, newest?.id.match(/^ask:(.+)$/)?.[1]);
   // Any other chip is a held preview's control or a warning (ask-gate.ts): show it as it is.
   const others = card.chips.filter((c) => !c.id.startsWith(ASK) && !c.id.startsWith(COPY));
   const sticky = copy !== undefined || others.length > 0;
@@ -104,7 +103,6 @@ export function Popup({ mogId, card, onClose }: PopupProps) {
     <div
       ref={ref}
       className="popup"
-      role="status"
       data-popup
       data-variant={copy ? 'copy' : 'ask'}
       data-state={phase}
@@ -124,6 +122,7 @@ export function Popup({ mogId, card, onClose }: PopupProps) {
       <p
         className="popup-text"
         data-popup-text
+        aria-live="polite"
         onMouseEnter={() => report('pointer', true)}
         onMouseLeave={() => report('pointer', false)}
       >
