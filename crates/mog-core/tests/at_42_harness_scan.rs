@@ -194,11 +194,17 @@ fn rtr_28_rtr_27_at_42_harness_env_and_memory_hold_no_token() {
     let report = wait_for_report(&home.join(REPORT_FILE));
     host.stop_session(MOG).unwrap();
     let _ = std::fs::remove_dir_all(&home);
+    // Failure messages show the counts only, never the child's environment or bytes.
+    let mut brief = report.clone();
+    if let Some(o) = brief.as_object_mut() {
+        o.remove("env");
+        o.remove("inflow");
+    }
 
     // The child asked Genie One through the proxy, and the proxy added a pool token to each
     // upstream request: so tokens were live in the Bottle process during the scan.
-    assert_eq!(report["askOk"], json!(true), "{report}");
-    assert_eq!(report["pollOk"], json!(true), "{report}");
+    assert_eq!(report["askOk"], json!(true), "{brief}");
+    assert_eq!(report["pollOk"], json!(true), "{brief}");
     let calls: Vec<Seen> = s
         .seen()
         .into_iter()
@@ -211,8 +217,8 @@ fn rtr_28_rtr_27_at_42_harness_env_and_memory_hold_no_token() {
     }
 
     // No token in the env, the arguments, or any byte that reached the harness.
-    assert_eq!(report["inflowTokenHits"], json!(0), "{report}");
-    assert_eq!(report["inflowPrefixHits"], json!(0), "{report}");
+    assert_eq!(report["inflowTokenHits"], json!(0), "{brief}");
+    assert_eq!(report["inflowPrefixHits"], json!(0), "{brief}");
     let env = report["env"].as_array().unwrap();
     assert!(!env.is_empty());
     for kv in env {
@@ -230,10 +236,10 @@ fn rtr_28_rtr_27_at_42_harness_env_and_memory_hold_no_token() {
     // The memory scan read real memory (it found the canary) and found no token.
     assert!(
         report["scannedBytes"].as_u64().unwrap() > 1 << 20,
-        "{report}"
+        "{brief}"
     );
-    assert_eq!(report["canaryFound"], json!(true), "{report}");
-    assert_eq!(report["memoryTokenHits"], json!(0), "{report}");
+    assert_eq!(report["canaryFound"], json!(true), "{brief}");
+    assert_eq!(report["memoryTokenHits"], json!(0), "{brief}");
 }
 
 // ---------- the child ----------

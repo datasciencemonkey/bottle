@@ -18,14 +18,19 @@
 //!   session's MOG, never from the agent. A `profile` argument and the agent's `_meta` are
 //!   dropped (G-06b, G-07a). The request tags name the session's MOG.
 //! - G-20b: `genie_get_query_result` takes only an `item_id` that matches `^pub_.+_output$`.
-//! - Failures go back as content-free codes, never as upstream text.
+//! - Failures go back as content-free codes. Only a Genie JSON-RPC error also carries the
+//!   upstream `rpcError`, scrubbed (rule 7), as the brain gets it.
 //!
 //! The proxy answers `initialize`, `ping` and notifications itself; only `tools/list` and
 //! `tools/call` reach R8. The R8 call runs on its own thread, so a session stop never waits for
 //! Genie: the waiting request ends within [`STOP_POLL`] with [`SESSION_CLOSED`].
 //!
-//! The brain-side rules of G-11..G-20a (the card, the PollActor schedule, the give-up and the
-//! in-flight ask caps per MOG and per profile) are not in this proxy; ADR 0083 lists them.
+//! - G-11a..c, G-12b: the in-flight caps and the 10 min give-up of agent asks
+//!   ([`super::agent_asks`]), before any send.
+//!
+//! The card and PollActor rules (G-12a, G-13a, G-15b, G-16b, G-17..G-20a) are brain rules; ADR
+//! 0083 lists them. TODO(#518): brain and agent asks in one cap, the late re-polls (G-13a) and
+//! the no-auto-re-ask rules (G-15b, G-16a) for the agent.
 //!
 //! TODO(#307): the app host gives the real [`GenieTargets`] (the MOG's talk target, ADR 0058).
 //! TODO(#111): SP-19 fixes the MCP wire details of the harness (streamable HTTP, SSE).
@@ -41,8 +46,10 @@ use std::time::Duration;
 
 use serde_json::{json, Map, Value};
 
+use super::agent_asks::AgentAsks;
 use super::{forwardable_tool_args, tools, McpCall, McpReply, McpTransport, PROTOCOL_VERSION};
 use super::{INVALID_META, INVALID_TOOL_ARGS, TOOL_NOT_ALLOWED};
+use crate::clock::MonotonicClock;
 use crate::error::{CoreError, CoreResult};
 use crate::ipc::JsonObject;
 use crate::loopback::{LoopbackRequest, LoopbackResponse};
@@ -104,6 +111,9 @@ pub struct GenieProxyDeps {
     pub targets: Arc<dyn GenieTargets>,
     /// The time cap of each call; `None` is the R8 default.
     pub call_timeout: Option<Duration>,
+    /// G-11a..c, G-12b: the in-flight agent asks. Clones of these deps share it, so one deps
+    /// value for the whole host counts the asks of every session.
+    pub asks: Arc<AgentAsks>,
 }
 
 impl fmt::Debug for GenieProxyDeps {
@@ -121,7 +131,14 @@ impl GenieProxyDeps {
             transport,
             targets,
             call_timeout: None,
+            asks: Arc::new(AgentAsks::default()),
         }
+    }
+
+    /// The same deps with the ask ledger on `clock` (for the G-12b give-up time).
+    pub fn with_ask_clock(mut self, clock: Arc<dyn MonotonicClock>) -> Self {
+        self.asks = Arc::new(AgentAsks::new(clock));
+        self
     }
 }
 
@@ -195,6 +212,23 @@ fn tool_result(r: &McpReply) -> Value {
     }
     out.insert("isError".into(), Value::Bool(r.is_error));
     scrub_json(&Value::Object(out))
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Ask,
+    Poll,
+    Cancel,
+    Other,
+}
+
+fn tool_kind(tool: &str) -> Kind {
+    match tool {
+        "genie_ask" => Kind::Ask,
+        "genie_poll_response" => Kind::Poll,
+        "genie_cancel_response" => Kind::Cancel,
+        _ => Kind::Other,
+    }
 }
 
 /// The R8 refusals that mean "the request is wrong", as JSON-RPC errors.
@@ -320,6 +354,25 @@ impl GenieProxy {
             .warehouse_id
             .as_ref()
             .map(|w| JsonObject::from([("warehouse_id".to_owned(), json!(w))]));
+        // G-11a..c, G-12b: the in-flight caps of agent asks, before any send.
+        let asks = Arc::clone(&self.deps.asks);
+        let conversation = args
+            .get("conversation_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let place = match (tool_kind(contract.name), conversation.as_deref()) {
+            (Kind::Ask, c) => match asks.begin(&self.mog_id, &target.profile, c) {
+                Ok(p) => Some(p),
+                Err(code) => return rpc_result(id, tool_error(code)),
+            },
+            (Kind::Poll, Some(c)) => {
+                if let Err(code) = asks.may_poll(c) {
+                    return rpc_result(id, tool_error(code));
+                }
+                None
+            }
+            _ => None,
+        };
         let transport = Arc::clone(&self.deps.transport);
         let tags = self.tags();
         let timeout = self.deps.call_timeout;
@@ -332,7 +385,20 @@ impl GenieProxy {
             if let Some(t) = timeout {
                 call = call.timeout(t);
             }
-            transport.call_tool(call).map_err(|e| e.code())
+            let out = transport.call_tool(call).map_err(|e| e.code());
+            // On this thread, so the ledger is right even if the session stopped meanwhile.
+            let sc = out.as_ref().map(|r| &r.structured_content);
+            match (tool_kind(tool), place, conversation.as_deref()) {
+                (Kind::Ask, Some(p), _) => asks.sent(p, sc.map_err(|c| *c)),
+                (Kind::Poll, _, Some(c)) => {
+                    if let Ok(sc) = sc {
+                        asks.polled(c, sc);
+                    }
+                }
+                (Kind::Cancel, _, Some(c)) => asks.end(c),
+                _ => {}
+            }
+            out
         });
         match reply {
             Ok(Ok(r)) => rpc_result(id, tool_result(&r)),

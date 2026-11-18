@@ -190,7 +190,9 @@ fn rig_with(s: &FakeMcp, warehouse: Option<&str>, targets: Option<Arc<dyn GenieT
     let targets = targets.unwrap_or_else(|| target.clone());
     let transport: Arc<dyn McpTransport> = r8.clone();
     let deps = BottleMcpDeps::new(Arc::new(UnavailableLocalTools), Arc::new(UnavailableRelay))
-        .with_genie_proxy(GenieProxyDeps::new(transport, targets));
+        .with_genie_proxy(
+            GenieProxyDeps::new(transport, targets).with_ask_clock(Arc::new(pause.clock.clone())),
+        );
     let server = BottleMcpServer::start(MOG, &deps).expect("the session listeners bind");
     Rig {
         r8,
@@ -731,4 +733,121 @@ fn arc_f1_g_07b_an_agent_poll_hits_the_r8_poll_guard_while_the_brain_polls() {
     let again = r.call("genie_poll_response", poll_args());
     assert_eq!(again.result()["isError"], json!(false), "{}", again.raw);
     assert_eq!(tool_calls(&s).len(), 2);
+}
+
+// ---------- G-11a, G-11c, G-12b: the in-flight caps and the give-up of agent asks ----------
+
+/// Genie One that answers every ask with a running answer on a new conversation `c-<n>`, and
+/// every poll with `status` for the polled conversation.
+fn running_genie(status: &'static str) -> FakeMcp {
+    let n = std::sync::atomic::AtomicUsize::new(0);
+    genie_one(move |seen| {
+        if seen.rpc_method() != "tools/call" {
+            return None;
+        }
+        let args = &seen.json()["params"]["arguments"];
+        let (cid, st) = match seen.tool().as_str() {
+            "genie_ask" => {
+                let k = n.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                let cid = args["conversation_id"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| format!("c-{k}"));
+                (cid, "in_progress")
+            }
+            _ => (
+                args["conversation_id"].as_str().unwrap_or("").to_owned(),
+                status,
+            ),
+        };
+        Some(json_reply(
+            200,
+            json!({"jsonrpc": "2.0", "id": seen.rpc_id(), "result": {
+                "content": [{"type": "text", "text": "working"}],
+                "structuredContent": {"status": st, "conversation_id": cid, "response_id": "r-1"},
+                "isError": false
+            }}),
+        ))
+    })
+}
+
+fn asks_sent(s: &FakeMcp) -> usize {
+    tool_calls(s)
+        .iter()
+        .filter(|x| x.tool() == "genie_ask")
+        .count()
+}
+
+#[test]
+fn g_11a_g_11c_agent_asks_obey_the_in_flight_caps_before_any_send() {
+    let s = running_genie("completed");
+    let r = rig(&s);
+    for _ in 0..2 {
+        assert_eq!(
+            r.call("genie_ask", ask_args()).result()["isError"],
+            json!(false)
+        );
+    }
+    // G-11a: a 3rd ask on the MOG is refused; nothing is sent.
+    assert_eq!(
+        r.call("genie_ask", ask_args()).tool_error_text(),
+        "ask_limit_mog"
+    );
+    assert_eq!(asks_sent(&s), 2);
+    // G-11c: a follow-up on a conversation with an ask in flight is refused.
+    let follow = json!({"question": QUESTION, "conversation_id": "c-1"});
+    assert_eq!(
+        r.call("genie_ask", follow.clone()).tool_error_text(),
+        "ask_inflight_conversation"
+    );
+    assert_eq!(asks_sent(&s), 2);
+    // A terminal poll ends the ask of c-1: the follow-up goes out.
+    let poll = json!({"conversation_id": "c-1", "response_id": "r-1"});
+    assert_eq!(
+        r.call("genie_poll_response", poll).result()["isError"],
+        json!(false)
+    );
+    assert_eq!(
+        r.call("genie_ask", follow).result()["isError"],
+        json!(false)
+    );
+    assert_eq!(asks_sent(&s), 3);
+    // A cancel ends the ask of c-2 (G-25c), so the MOG has room again.
+    let cancel = json!({"conversation_id": "c-2"});
+    assert_eq!(
+        r.call("genie_cancel_response", cancel).result()["isError"],
+        json!(false)
+    );
+    assert_eq!(
+        r.call("genie_ask", ask_args()).result()["isError"],
+        json!(false)
+    );
+    assert_eq!(asks_sent(&s), 4);
+}
+
+#[test]
+fn g_12b_agent_polls_stop_when_the_ask_gives_up_after_10_min() {
+    let s = running_genie("in_progress");
+    let r = rig(&s);
+    assert_eq!(
+        r.call("genie_ask", ask_args()).result()["isError"],
+        json!(false)
+    );
+    let poll = json!({"conversation_id": "c-1", "response_id": "r-1"});
+    assert_eq!(
+        r.call("genie_poll_response", poll.clone()).result()["isError"],
+        json!(false)
+    );
+    let polls = tool_calls(&s).len();
+    r.pause.clock.advance(Duration::from_secs(10 * 60));
+    assert_eq!(
+        r.call("genie_poll_response", poll).tool_error_text(),
+        "ask_given_up"
+    );
+    assert_eq!(tool_calls(&s).len(), polls, "no poll after the give-up");
+    // The given-up ask left the caps: the MOG can ask again.
+    assert_eq!(
+        r.call("genie_ask", ask_args()).result()["isError"],
+        json!(false)
+    );
 }

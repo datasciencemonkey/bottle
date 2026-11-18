@@ -33,6 +33,7 @@ use crate::request_identity::{BottleIdentity, CallKind, IdentityError, RequestDe
 use crate::token_guard::strip_profile_keys;
 use crate::types::Tags;
 
+pub mod agent_asks;
 mod client;
 mod component;
 pub mod poll;

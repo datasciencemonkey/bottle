@@ -44,14 +44,22 @@ listeners (ADR 0013). `bottle-mcp` serves one listener. The `genie-one-mcp` list
    token for each HTTP request, only to the profile host, the 401 and 404 rules), G-06a (the
    allowlist and the argument contracts), G-07b and ARC-F1 (the poll guard, #31), G-09a..G-10b
    (the bucket) and rule 7 (the scrub). It checks G-06a and G-20b (`item_id` must match
-   `^pub_.+_output$`) itself before the target lookup, so a refused call lends no token. The
-   brain rules for the card and the PollActor (G-11a..c, G-12a..c, G-13a..b, G-15b, G-16a..c,
-   G-17, G-18, G-19, G-20a) need the brain's state of the ask. They do not apply to an agent
-   ask yet. Issue #518 adds the ask caps and the give-up rules for agent asks.
+   `^pub_.+_output$`) itself before the target lookup, so a refused call lends no token. It
+   also keeps a ledger of the agent's in-flight asks (`mcp_transport::agent_asks`): 2 or less
+   for each MOG (G-11a), 4 or less for each profile (G-11b) and 1 for each conversation
+   (G-11c). An ask is in flight until a poll gives `completed`, `incomplete` or `failed`, until a
+   cancel of its conversation (G-25c), or until it gives up after 10 min (G-12b). After the
+   give-up, no poll of that conversation is sent, and no new ask goes to it. An ask whose send
+   timed out stays in flight until its give-up (G-16a), so the agent cannot ask again at once. A
+   capped call is refused before any send, with a content-free code. The agent sees the code and
+   can wait: the card queue of G-11 is a brain rule. The other card and PollActor rules (G-12a,
+   G-13a, G-15b, G-16b, G-17, G-18, G-19, G-20a) need the brain's state of the ask. Issue #518
+   counts brain asks and agent asks in one cap, and adds the late re-polls and the no-re-ask
+   rules for the agent (`TODO(#518)` in the code).
 4. **Content-free failures.** A call off the allowlist, or with bad arguments, gets a JSON-RPC
    `-32602` error, and nothing is sent. Any other failure is an MCP tool result with
    `isError: true` and the fixed R8 code as its only text (for example `genie_one_off`,
-   `rate_limited`, `poll_inflight`, `genie_target_unavailable`). A Genie JSON-RPC error is the
+   `rate_limited`, `poll_inflight`, `ask_limit_mog`, `ask_given_up`, `genie_target_unavailable`). A Genie JSON-RPC error is the
    code `genie_error` with the scrubbed `rpcError`. The proxy answers `initialize`, `ping` and
    notifications itself, so the agent's protocol handshake never reaches Genie One. This
    follows `dispatch`, `tool_result` and `describe` of `genie_bridge.py`. Unlike the plugin,
