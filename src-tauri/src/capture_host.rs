@@ -186,7 +186,7 @@ impl CaptureEvents for BrainCaptureEvents {
 
 /// The [`TranscriptSink`] of R4 in the app (#514, ADR 0082 amendment 1): each R4 result sends
 /// one final `capture:segment` for the user's track to the brain, which then calls
-/// `stt_transcribe` with its `segmentId` (F1 steps 5 and 8). R4's store keeps the result before
+/// `stt_transcribe` with its `segmentId` (F1 step 8). R4's store keeps the result before
 /// this sink runs, so that call finds it. A failed result also gets the event, so
 /// `stt_transcribe` answers its code. The event holds no text and no audio (CAP-01b).
 pub struct BrainSegments {

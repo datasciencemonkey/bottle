@@ -1,4 +1,4 @@
-//! #514 part 2 (F1 steps 5 and 8, CAP-52, CAP-02a, CAP-01b, ADR 0082 amendment 1): the host
+//! #514 part 2 (F1 step 8, CAP-02a, CAP-01b, ADR 0082 amendment 1): the host
 //! sends one final `capture:segment` (`track: 'you'`, `segmentId` `ptt-<lease>`) to the brain
 //! for each R4 result, so the brain can call `stt_transcribe` for it.
 //!
@@ -228,7 +228,7 @@ impl Rig {
 }
 
 #[test]
-fn f1_cap_52_cap_02a_a_ptt_stop_emits_one_final_capture_segment_for_you() {
+fn f1_cap_02a_a_ptt_stop_emits_one_final_capture_segment_for_you() {
     let r = rig(true);
     let lease = r.start();
     r.mic.speak_one_second();
@@ -332,8 +332,11 @@ fn f1_a_failed_r4_result_still_emits_capture_segment_and_stt_transcribe_gives_it
     assert_eq!(*r.answers.lock().unwrap(), [Err("stt_model_missing")]);
 }
 
+/// A regression guard, not coverage: R4 and CaptureCore (#46) make no result for these stops
+/// (MB-05, CAP-17b), so this test passes without `BrainSegments`. It fails if a later change
+/// makes the host emit a segment that has no R4 result.
 #[test]
-fn mb_05_cap_17b_a_panic_stop_or_an_empty_capture_emits_no_capture_segment() {
+fn regression_guard_a_panic_stop_or_an_empty_capture_emits_no_capture_segment() {
     let r = rig(true);
     // MB-05: the panic stop makes no text, so no segment.
     let lease = r.start();

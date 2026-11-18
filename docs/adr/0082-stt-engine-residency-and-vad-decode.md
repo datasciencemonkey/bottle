@@ -80,7 +80,8 @@ The issue leaves these points open:
   - `final` is true. R4 makes one segment for each lease.
 - The `TranscriptStore` keeps the result before the sink runs. So a `stt_transcribe` call on the event finds the text.
 - A failed result also gets the event. Then `stt_transcribe` answers the content-free code (for example `stt_model_missing`), and the brain can show why no text came.
-- A stop that makes no R4 result sends no event: a tap, a cancel, the panic stop (MB-05) and a capture with no audio (CAP-17b).
+- A stop that makes no R4 result sends no event. These stops are the panic stop (MB-05), a capture with no audio (CAP-17b), and a stop whose `StopReason::discards_audio` is true.
+- Gap: the brain ends a tap or a cancel with a plain `capture_stop`, because `capture_stop` has no end argument yet (TODO(#433)). R4 then decodes that audio, and the host sends `capture.segment` for it. The brain marks the lease as discarded and does not call `stt_transcribe`, so no text is routed. But the tap audio still reaches local STT, which is a CAP-44b gap until #433 lands.
 - The event holds no text and no audio (CAP-01b). It goes through `BrainChannel::send`, which scrubs each payload.
 - The #46 parts stay as they are: the `SttFrameSink` tee, `SttCaptureEvents` in the R2 chain, and the preload at key-down (CAP-51c).
 - R4 gives no partial text, so nothing feeds `onPartial` yet. TODO(#547).
