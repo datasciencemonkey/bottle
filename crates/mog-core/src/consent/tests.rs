@@ -414,7 +414,12 @@ fn sec_32a_device_id_is_made_once_and_kept() {
 fn sec_32a_a_damaged_device_id_fails_closed_and_is_kept() {
     let dir = TempDir::new("device-bad");
     let file = dir.path().join(DEVICE_ID_FILE);
-    for bad in ["", "not-a-uuid", "test-token-not-real", "d0d0d0d0-0000-4000-8000"] {
+    for bad in [
+        "",
+        "not-a-uuid",
+        "test-token-not-real",
+        "d0d0d0d0-0000-4000-8000",
+    ] {
         std::fs::write(&file, bad).unwrap();
         assert!(device_id_in(dir.path()).is_err(), "{bad:?}");
         // Nothing is overwritten: the old records keep their device.
@@ -434,7 +439,10 @@ fn sec_32a_at_24_device_records_open_in_the_memory_folder_and_outlive_a_restart(
         ConsentRetention::default(),
     )
     .unwrap();
-    assert_eq!(store.db_path(), dir.path().join(MEMORY_DIR).join("memory.db"));
+    assert_eq!(
+        store.db_path(),
+        dir.path().join(MEMORY_DIR).join("memory.db")
+    );
     let r = records.record_notice(None, 2).unwrap();
     let device = std::fs::read_to_string(dir.path().join(DEVICE_ID_FILE)).unwrap();
     assert_eq!(r.device, device.trim());

@@ -60,3 +60,8 @@ and no hub-level view input. The final legal text is not in the requirements.
   when the gate blocks.
 - The Web Storage record is lost if the user deletes the app data. Then the notice shows again,
   which is the safe result.
+
+## Amendment (#431, ADR 0071)
+
+- Decision 3 is replaced. The notice record is in the Rust local store (ADR 0052), through `consent_notice_record` and `consent_records_list` (ADR 0060). T12 removes the old `bottle.consent.notice` Web Storage key at start and does not copy it. The user accepts the notice once more.
+- Decision 2: T12 sends only the version. Rust fills the time, the user and the device.

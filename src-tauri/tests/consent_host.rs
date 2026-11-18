@@ -88,6 +88,7 @@ fn brain_call(records: &Arc<ConsentRecords>, command: &str, args: Value) -> Resu
         permissions: None,
         consent: Some(&consent),
         config: None,
+        app_settings: None,
         capture: None,
         capture_ticket: None,
     };
@@ -114,11 +115,18 @@ fn sec_32a_at_24_a_notice_acceptance_writes_one_record_with_user_device_version_
     let r = &stored[0];
     assert_eq!(r.consent_id, id);
     let device = std::fs::read_to_string(dir.0.join(DEVICE_ID_FILE)).unwrap();
-    assert_eq!(r.device, device.trim(), "the device ID made once for this device");
+    assert_eq!(
+        r.device,
+        device.trim(),
+        "the device ID made once for this device"
+    );
     assert_eq!(r.notice_version, 1);
     assert_eq!(r.accepted_at, T0);
     // TODO(#478): the user comes from the managed SignedInUser once T7 (#17) gives it.
-    assert_eq!(r.user, None, "no profile is signed in at first run (9.3 step 5)");
+    assert_eq!(
+        r.user, None,
+        "no profile is signed in at first run (9.3 step 5)"
+    );
 
     // The brain list is the same record, content-free.
     assert_eq!(
@@ -144,7 +152,9 @@ fn sec_32a_the_store_and_the_device_id_live_in_the_given_data_dir() {
     .unwrap();
     assert_eq!(
         store.db_path(),
-        dir.0.join(MEMORY_DIR).join(mog_core::local_store::DB_FILE_NAME)
+        dir.0
+            .join(MEMORY_DIR)
+            .join(mog_core::local_store::DB_FILE_NAME)
     );
     assert!(store.db_path().exists());
     assert!(dir.0.join(DEVICE_ID_FILE).exists());
@@ -201,11 +211,16 @@ fn sec_03_with_no_key_store_nothing_is_managed_and_consent_fails_closed() {
         permissions: None,
         consent: None,
         config: None,
+        app_settings: None,
         capture: None,
         capture_ticket: None,
     };
     assert_eq!(
-        route(components, "consent_notice_record", json!({"noticeVersion": 1})),
+        route(
+            components,
+            "consent_notice_record",
+            json!({"noticeVersion": 1})
+        ),
         Err(json!({"error": "consent_storage_failed"}))
     );
 }

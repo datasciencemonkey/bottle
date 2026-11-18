@@ -47,3 +47,7 @@ may run deletes. The host routing in `src-tauri/src/ipc.rs` is a contract file.
 - Feature issues #38, #114, #199, #123, #124 and #102 can change their statements here. Each
   change still needs the MEM-01 and parity tests to pass.
 - MEM-41's live part (AT-31 and AT-32 on a workspace without Lakebase) is #427 (`needs:human`).
+
+## Amendment (#431, ADR 0071)
+
+- The consent statements joined the catalog as the separate entry set `CONSENT`. Each entry is `Access::Core` and has a `Scope` (`Mog` or `DeviceWide` with a reason). They are not in `STATEMENTS`, so `exec` and `mem_local_exec` never run them.

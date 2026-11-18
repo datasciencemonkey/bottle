@@ -710,12 +710,26 @@ fn sec_32a_mem_34a_consent_params_are_declared_bound_and_typed() {
     for c in catalog::CONSENT {
         let st = &c.stmt;
         let declared: BTreeSet<String> = st.params.iter().map(|p| p.name.to_owned()).collect();
-        assert_eq!(declared.len(), st.params.len(), "{}: duplicate param", st.id);
+        assert_eq!(
+            declared.len(),
+            st.params.len(),
+            "{}: duplicate param",
+            st.id
+        );
         assert_eq!(sql_params(st.sql), declared, "{}", st.id);
         assert!(!st.sql.contains('?') && !st.sql.contains('@') && !st.sql.contains('$'));
-        assert!(!st.sql.trim_end().trim_end_matches(';').contains(';'), "{}", st.id);
+        assert!(
+            !st.sql.trim_end().trim_end_matches(';').contains(';'),
+            "{}",
+            st.id
+        );
         let starts = st.sql.trim_start().to_ascii_lowercase();
-        assert_eq!(starts.starts_with("select"), st.kind == Kind::Query, "{}", st.id);
+        assert_eq!(
+            starts.starts_with("select"),
+            st.kind == Kind::Query,
+            "{}",
+            st.id
+        );
     }
 }
 

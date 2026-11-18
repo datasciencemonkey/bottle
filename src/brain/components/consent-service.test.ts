@@ -51,7 +51,9 @@ describe('T12 ConsentService: first-run notice (#27) on the Rust consent records
     const t = createConsentService({ records: ipcConsentRecords(), legacyStorage: null });
     await t.acceptNotice(NOTICE_VERSION);
     const writes = core.invoke.mock.calls.filter(([cmd]) => cmd === 'consent_notice_record');
-    expect(writes).toEqual([['consent_notice_record', { args: { noticeVersion: NOTICE_VERSION } }]]);
+    expect(writes).toEqual([
+      ['consent_notice_record', { args: { noticeVersion: NOTICE_VERSION } }],
+    ]);
     expect(core.invoke).toHaveBeenCalledWith('consent_records_list', { args: {} });
   });
 
@@ -88,9 +90,14 @@ describe('T12 ConsentService: first-run notice (#27) on the Rust consent records
       },
     ]);
     // No user, device or MOG field reaches the brain.
-    for (const r of got) expect(Object.keys(r).sort()).toEqual(
-      ['acceptedAt', 'kind', 'noticeVersion', 'recordId', 'sessionId'],
-    );
+    for (const r of got)
+      expect(Object.keys(r).sort()).toEqual([
+        'acceptedAt',
+        'kind',
+        'noticeVersion',
+        'recordId',
+        'sessionId',
+      ]);
   });
 
   it('[SEC-15b] a record the 13-month purge removed is gone, and the notice shows again', async () => {
@@ -144,7 +151,11 @@ describe('T12 ConsentService: first-run notice (#27) on the Rust consent records
       {},
       { records: 'x' },
       { records: [{ kind: 'notice', noticeVersion: '1' }] },
-      { records: [{ recordId: 'r', kind: 'session', noticeVersion: 1, sessionId: null, acceptedAt: 0 }] },
+      {
+        records: [
+          { recordId: 'r', kind: 'session', noticeVersion: 1, sessionId: null, acceptedAt: 0 },
+        ],
+      },
     ]) {
       core.reset();
       core.invoke.mockImplementation(async () => bad);
@@ -168,9 +179,10 @@ describe('T12 ConsentService: first-run notice (#27) on the Rust consent records
       const src = readFileSync(f, 'utf8');
       if (!/consent/i.test(src)) continue;
       // Web Storage, IndexedDB and cookies are shared by every view of the app origin.
-      expect(/(local|session)Storage\.(setItem|getItem)|indexedDB|document\.cookie/.test(src), f).toBe(
-        false,
-      );
+      expect(
+        /(local|session)Storage\.(setItem|getItem)|indexedDB|document\.cookie/.test(src),
+        f,
+      ).toBe(false);
     }
     // T12 only removes the old #27 key.
     const t12 = readFileSync(join(root, 'brain/components/consent-service.ts'), 'utf8');
