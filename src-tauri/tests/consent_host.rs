@@ -96,7 +96,7 @@ fn brain_call(records: &Arc<ConsentRecords>, command: &str, args: Value) -> Resu
 }
 
 #[test]
-fn sec_32a_at_24_a_notice_acceptance_writes_one_record_with_user_device_version_and_time() {
+fn sec_32a_at_24_a_notice_acceptance_writes_one_record_with_device_version_and_time() {
     let dir = TempDir::new("notice");
     let clock = SimWallClock::at(T0);
     let (_store, records) = open(&dir.0, Arc::new(TestVault::default()), Arc::new(clock)).unwrap();
@@ -123,10 +123,7 @@ fn sec_32a_at_24_a_notice_acceptance_writes_one_record_with_user_device_version_
     assert_eq!(r.notice_version, 1);
     assert_eq!(r.accepted_at, T0);
     // TODO(#478): the user comes from the managed SignedInUser once T7 (#17) gives it.
-    assert_eq!(
-        r.user, None,
-        "no profile is signed in at first run (9.3 step 5)"
-    );
+    assert_eq!(r.user, None, "known gap: no user until #478 and T7 (#17)");
 
     // The brain list is the same record, content-free.
     assert_eq!(

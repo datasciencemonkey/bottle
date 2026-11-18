@@ -95,6 +95,7 @@ const STORAGE_FAILED = { error: 'consent_storage_failed' } as const;
 export class BrainConsentService implements ConsentService {
   readonly #records: ConsentRecordsPort;
   readonly #version: number;
+  #accepting: Promise<boolean> | undefined;
 
   constructor(o: ConsentServiceOptions = {}) {
     this.#records = o.records ?? ipcConsentRecords();
@@ -130,6 +131,14 @@ export class BrainConsentService implements ConsentService {
 
   async acceptNotice(version: number): Promise<boolean> {
     if (version !== this.#version || !isPositiveInt(version)) return false;
+    // Overlapping calls (a fast double click, two hubs) share one write: one record per version.
+    this.#accepting ??= this.#accept(version).finally(() => {
+      this.#accepting = undefined;
+    });
+    return this.#accepting;
+  }
+
+  async #accept(version: number): Promise<boolean> {
     if ((await this.noticeState()).accepted) return true;
     try {
       await this.#records.recordNotice(version);

@@ -10,8 +10,9 @@
 //! If the folder or the key store is not there (for example an unsigned macOS build, #34),
 //! nothing is managed. Then `consent_*` answers `consent_storage_failed`, and the brain keeps the
 //! notice gate closed: no capture before a stored acceptance (MB-08a).
-//! TODO(#478): the host gives the signed-in user from T7 ProfileService (#17); until then the
-//! notice record has no user, as before the first sign-in (9.3 step 5).
+//! Known gap: 9.3 step 5 and SEC-32a need the signed-in `user` in each record. The host still
+//! builds the component with `NoSignedInUser` (contract file `src-tauri/src/ipc.rs`), so a
+//! record has no user. TODO(#478): the host reads a managed user from T7 ProfileService (#17).
 
 use std::path::Path;
 use std::sync::Arc;

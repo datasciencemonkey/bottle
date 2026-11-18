@@ -35,6 +35,15 @@ describe('T12 ConsentService: first-run notice (#27) on the Rust consent records
     // A second click (or a second hub) writes no second record for the same version.
     expect(await t.acceptNotice(NOTICE_VERSION)).toBe(true);
     expect(records.writes).toEqual([NOTICE_VERSION]);
+    // Two clicks at the same time also write one record.
+    const fresh = service();
+    expect(
+      await Promise.all([
+        fresh.t.acceptNotice(NOTICE_VERSION),
+        fresh.t.acceptNotice(NOTICE_VERSION),
+      ]),
+    ).toEqual([true, true]);
+    expect(fresh.records.writes).toEqual([NOTICE_VERSION]);
     // A new brain reads the record from the store, not from its own memory.
     expect(await service(records).t.noticeState()).toEqual({
       version: NOTICE_VERSION,

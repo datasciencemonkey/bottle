@@ -615,7 +615,7 @@ pub const CONSENT_SESSION_GET: ConsentStmt = ConsentStmt {
               session_id, attestation_kind, disclosure_copied, recorded_at, expires_at \
               FROM consent_record WHERE mog_id = :mogId AND session_id = :sessionId \
               AND kind = 'session' ORDER BY recorded_at DESC, consent_id LIMIT 1",
-        params: &[MOG_ID, req("sessionId", text(64))],
+        params: &[MOG_ID, req("sessionId", UUID)],
         kind: Kind::Query,
         access: Access::Core,
     },
