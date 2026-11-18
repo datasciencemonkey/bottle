@@ -20,8 +20,9 @@
 //!   notifier thread calls [`CaptureCore::device_failed`](crate::capture::CaptureCore::device_failed)
 //!   through the [`FailureLink`]. Transient errors (a route change, an overrun) do not stop
 //!   capture.
-//! - **Audio stays in RAM** (CAP-01b, #21). Frames go only to the in-RAM [`FrameSink`]. Nothing
-//!   goes to disk or to a log, and there is no pre-roll. No frame arrives after `close` returns.
+//! - **Audio stays in RAM** (CAP-01b, CAP-12c, #21). Frames go only to the in-RAM [`FrameSink`]:
+//!   the level sink and [`ptt_buffer::PttBuffer`] (ADR 0078). Nothing goes to disk or to a log,
+//!   and there is no pre-roll. No frame arrives after `close` returns.
 //! - **System audio** (the Others track) is not in this backend: `open(SystemAudio)` returns
 //!   [`codes::SYSTEM_AUDIO_UNSUPPORTED`]. TODO(#108) TODO(#109).
 //!
@@ -57,6 +58,7 @@ pub mod cpal_backend;
 pub mod level;
 mod mic;
 pub mod normalize;
+pub mod ptt_buffer;
 pub mod sink;
 
 pub use mic::{FailureLink, MicConfig, MicDevice, MicFault};

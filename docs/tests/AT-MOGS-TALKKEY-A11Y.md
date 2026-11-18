@@ -45,7 +45,6 @@ When the feature issue lands, its implementer removes the mark and finishes the 
 | AT-01 | MOG-04 | #80 |
 | AT-01 | MOG-03b (20 card opens, device only) | device step AT-01, step 3 |
 | AT-03 | CAP-04a, CAP-04b | #4 |
-| AT-03 | CAP-13a, CAP-13b | #21 |
 | AT-03 | CAP-14a, CAP-14b, CAP-14c, CAP-44b | #14 |
 | AT-03 | CAP-17a, CAP-17b, CAP-22 | #22 |
 | AT-03 | MOG-09, MOG-12a, MOG-12b | #83, #98 |
@@ -130,13 +129,13 @@ stops in 200 ms or less (p95).
 4. Two MOGs with their own chords, profiles and colours, the restart and the display removal need
    #26 and #82. Record them as `not run` with the reason.
 
-### AT-03: talk key and permissions (macOS, about 15 min; partial until #4, #14, #21, #22)
+### AT-03: talk key and permissions (macOS, about 15 min; partial until #4, #14, #22)
 
 1. Do steps 3, 15, 16 and 17 of `docs/tests/hotkey-macos.md`. Expected: hold and release give
    `ptt down` and `ptt up`; a tap gives `ptt cancel` and `Tap`; another key in the first 1 s gives
    `ptt cancel`.
 2. Esc, focus loss, the 120 s stop, the denied mic and click-to-listen need R2 and the click rules
-   (#4, #14, #21, #22, #83). Record them as `not run` with the reason.
+   (#4, #14, #22, #83). Record them as `not run` with the reason.
 
 ### AT-20: keyboard only, screen reader, reduced motion, greyscale (blocked)
 

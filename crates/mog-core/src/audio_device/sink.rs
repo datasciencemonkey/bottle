@@ -7,7 +7,8 @@
 //! quiet speech. Handy's VAD, visualiser, history, logging and WAV writing are not ported: the
 //! consumers come later.
 //!
-//! - TODO(#21): the RAM-only PTT buffer (no pre-roll, nothing to disk) implements [`FrameSink`].
+//! - The RAM-only PTT buffer (no pre-roll, nothing to disk, CAP-12c, #21) is
+//!   [`super::ptt_buffer::PttBufferSink`].
 //! - The level stream (CAP-16a, #23) is [`super::level::LevelSink`]; the host tees it with
 //!   the PTT buffer (#476).
 //! - TODO(#46): speech recognition, with the 16 kHz resample, reads the frames.
@@ -58,7 +59,7 @@ pub enum SinkEvent {
     },
     /// The mic gave only zero buffers for the zero window (CAP-17b), for example because the
     /// mic permission is denied. The sink drops the audio of this capture, so no transcript
-    /// is made. TODO(#21): the PTT buffer drops its audio here.
+    /// is made. The PTT buffer wipes its audio here (#21).
     Discard,
 }
 
@@ -98,7 +99,7 @@ impl ZeroWatch {
     }
 }
 
-/// A sink that drops every frame. For a host that has no consumer yet. TODO(#21).
+/// A sink that drops every frame. For a host or a test that has no consumer.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct DiscardSink;
 

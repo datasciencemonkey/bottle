@@ -10,8 +10,9 @@
 //! The segment is a RAM buffer (CAP-01b, #21). This module only scales it: nothing is logged
 //! or kept.
 //!
-//! TODO(#46): the PTT buffer (TODO(#21)) and the segment pipeline (TODO(#116)) call
-//! [`normalize_peak`] on each segment just before R4 reads it.
+//! The PTT buffer ([`super::ptt_buffer`], #21) calls [`normalize_peak`] on each utterance just
+//! before it hands it to R4 (TODO(#46)). The segment pipeline (TODO(#116)) does the same for
+//! each session segment.
 
 use super::level::LEVEL_FLOOR_DBFS;
 

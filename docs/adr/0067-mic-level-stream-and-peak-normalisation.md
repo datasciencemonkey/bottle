@@ -27,7 +27,7 @@ The contract already has the `capture_subscribe` `onLevel: Channel<number>` and 
 6. **No Handy code.** Handy draws an FFT spectrum for its overlay (`audio_toolkit/audio/visualizer.rs` @ aca8985) and has no peak normaliser. Bottle needs one RMS number, so this is new code.
 
 7. **The host hookup (#476, amendment).** `install_capture` builds the level stream in three parts (`src-tauri/src/capture_host.rs`):
-   - `spawn_level_mic` gives `MicDevice` a `TeeSink`. The `LevelSink` gets each frame first, then the PTT buffer (`DiscardSink` until #21).
+   - `spawn_level_mic` gives `MicDevice` a `TeeSink`. The `LevelSink` gets each frame first, then the PTT buffer (since #21 the `PttBuffer` sink, ADR 0078).
    - `CaptureHost::with_levels` builds `CaptureCore` with `LevelCaptureEvents` over the brain event sink, so the gate follows `capture.state`.
    - `capture_subscribe` resolves the `onLevel` reference to a `ChannelLevelOut` and puts it in the gate with `LevelGate::set_out`. The gate starts with `NoLevelOut`, so a level before the first subscribe is dropped. A later subscribe (a brain reload) replaces the receiver. `set_out` takes the send lock, so no level goes to the old Channel after it returns.
    - The app resolver (`brain_level_resolver`) reads the reference on the `brain` webview. The gateway lets only the brain call `capture_subscribe`, so `src-tauri/src/ipc.rs` (a contract file) does not change.
@@ -42,5 +42,5 @@ The contract already has the `capture_subscribe` `onLevel: Channel<number>` and 
 ## Open work
 
 - `TODO(#475)`: a level carries no capture ID. A level that the brain reads after the next capture's `capture:state` can reach the next target MOG. The contract change binds each level to its capture.
-- `TODO(#21)`, `TODO(#46)`: the PTT buffer and the segment pipeline call `normalize_peak` just before R4 reads a segment. The AT-40 test of that hand-off stays pending (`at_40_cap_20_segment_handed_to_r4_peaks_at_minus_3_dbfs`).
+- #21 (ADR 0078): the PTT buffer calls `normalize_peak` on each utterance just before it hands it to R4. The AT-40 test of that hand-off runs (`at_40_cap_20_segment_handed_to_r4_peaks_at_minus_3_dbfs`). `TODO(#46)`: R4 reads the utterance. `TODO(#116)`: the segment pipeline does the same for session segments.
 - `TODO(#46)`: `onPartial` has no reader yet.

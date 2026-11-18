@@ -18,7 +18,7 @@
 //! The host (`src-tauri/src/capture_host.rs`, #476) wraps the `capture_subscribe` `onLevel`
 //! [`ChannelRef`] in a [`LevelOut`] and puts it in the gate with [`LevelGate::set_out`]. It
 //! builds the [`CaptureCore`] with [`LevelCaptureEvents`], and gives the [`MicDevice`] a
-//! [`TeeSink`] of the [`LevelSink`] and the PTT buffer (TODO(#21)).
+//! [`TeeSink`] of the [`LevelSink`] and the PTT buffer (#21, [`super::ptt_buffer`]).
 //!
 //! TODO(#475): a level frame carries no capture ID. So a level that the brain reads after the
 //! next capture's `capture.state` can reach the next target MOG. The contract change binds
@@ -246,7 +246,7 @@ impl FrameSink for LevelSink {
 }
 
 /// Feeds every frame and event to two sinks, `.0` first. For the mic: the level sink and the
-/// PTT buffer (TODO(#21)) read one stream.
+/// PTT buffer (#21) read one stream.
 #[derive(Debug, Default)]
 pub struct TeeSink<A, B>(pub A, pub B);
 

@@ -16,11 +16,18 @@
 //! [`ChannelLevelOut`] on the brain webview, [`brain_level_resolver`]) and puts it in the gate.
 //! Only the dBFS number crosses IPC; no level value is logged. TODO(#475): a level carries no
 //! capture ID, so a late level can reach the next target MOG.
+//!
+//! **The RAM-only PTT buffer (CAP-12c, CAP-13a, CAP-34, #21, ADR 0078).** The PTT half of the
+//! `TeeSink` is a [`PttBuffer`] sink. [`CaptureHost::with_audio`] puts the same buffer in the
+//! core's event chain with `PttCaptureEvents`, so a take starts only when a PTT or hands-free
+//! lease records, and each stop hands one utterance to the buffer's consumer (TODO(#46):
+//! SttEngine) or wipes it.
 
 use mog_core::app_settings::AppSettings;
 use mog_core::audio_device::level::{
     LevelCaptureEvents, LevelGate, LevelOut, LevelSink, NoLevelOut, TeeSink,
 };
+use mog_core::audio_device::ptt_buffer::{NoUtteranceSink, PttBuffer, PttCaptureEvents};
 use mog_core::audio_device::{FailureLink, FrameSink, MicDevice, MicHost};
 use mog_core::capture::{
     parse_lease, AudioDevice, AudioSource, CaptureCore, CaptureError, CaptureEvents,
@@ -246,7 +253,7 @@ impl HostLevels {
 }
 
 /// Start the mic over `make_host`. Its frames go to a `TeeSink`: first the `LevelSink` on
-/// `gate` (CAP-16a), then `ptt` (the RAM-only PTT buffer, TODO(#21)).
+/// `gate` (CAP-16a), then `ptt` (the app passes [`PttBuffer::sink`], CAP-12c, #21).
 pub fn spawn_level_mic<H, F, B>(
     make_host: F,
     ptt: B,
@@ -510,20 +517,40 @@ impl CaptureHost {
 
     /// As [`CaptureHost::new`], with the level stream of `levels` (CAP-16a, CAP-16b): the core
     /// opens the level gate while a capture records, and `capture_subscribe` sets its receiver.
-    /// The mic device must send its frames through the same gate ([`spawn_level_mic`]).
+    /// The mic device must send its frames through the same gate ([`spawn_level_mic`]). This
+    /// host's PTT buffer drops every utterance ([`NoUtteranceSink`]).
     pub fn with_levels(
         device: Box<dyn AudioDevice>,
         clock: Arc<dyn MonotonicClock>,
         relay: BrainRelay,
         levels: HostLevels,
     ) -> std::io::Result<Self> {
+        let ptt = PttBuffer::new(Arc::new(NoUtteranceSink));
+        Self::with_audio(device, clock, relay, levels, ptt)
+    }
+
+    /// As [`CaptureHost::with_levels`], with the RAM-only PTT buffer `ptt` (CAP-12c, CAP-13a,
+    /// CAP-34, #21). The core drives the buffer from each `capture.state` and stop. The mic
+    /// device must send its frames to [`PttBuffer::sink`] of the same buffer
+    /// ([`spawn_level_mic`]).
+    pub fn with_audio(
+        device: Box<dyn AudioDevice>,
+        clock: Arc<dyn MonotonicClock>,
+        relay: BrainRelay,
+        levels: HostLevels,
+        ptt: PttBuffer,
+    ) -> std::io::Result<Self> {
         let owners: Arc<Mutex<LeaseOwners>> = Arc::default();
         let brain = BrainCaptureEvents {
             relay,
             owners: Arc::clone(&owners),
         };
-        // The gate closes before the brain sees a stop state (CAP-16b).
-        let sink = Arc::new(LevelCaptureEvents::new(brain, levels.gate.clone()));
+        // The gate closes before the brain sees a stop state (CAP-16b). The PTT buffer ends its
+        // take before the brain sees the stop (#21).
+        let sink = Arc::new(LevelCaptureEvents::new(
+            PttCaptureEvents::new(brain, ptt),
+            levels.gate.clone(),
+        ));
         let service = Arc::new(CaptureCore::new(device, Arc::clone(&clock), sink));
         let timer = CapTimer::spawn(Arc::clone(&service) as Arc<dyn CaptureService>, clock)?;
         Ok(Self {
