@@ -156,11 +156,17 @@ function Section({
 
 export function CardView({ mogId }: { mogId: MogId }) {
   const [card, setCard] = useState<CardUpdate | undefined>(undefined);
+  // #559, MOG-06d: the last Copy pop-up stays until the user copies or dismisses it, even when
+  // the brain drops its chip (30 s) or its blurb (UX-12). A newer blurb replaces it.
+  const [kept, setKept] = useState<CardUpdate | undefined>(undefined);
 
   const onUpdate = useCallback(
     (p: unknown) => {
       const u = asCardUpdate(p);
-      if (u && u.mogId === mogId) setCard(u);
+      if (!u || u.mogId !== mogId) return;
+      setCard(u);
+      const first = u.blurbs[0];
+      if (first && u.chips.some((c) => c.id === `copy-${first.id}`)) setKept(u);
     },
     [mogId],
   );
@@ -196,10 +202,19 @@ export function CardView({ mogId }: { mogId: MogId }) {
       card.answerMd !== undefined ||
       card.pageDomain !== undefined ||
       card.pagesChecklist !== undefined);
+  const newest = card?.blurbs[0];
+  const shown = kept && (!newest || newest.id === kept.blurbs[0]?.id) ? kept : card;
   if (!panel)
     return (
       <section aria-label="MOG card" className="card card-popup">
-        {card?.blurbs[0] && <Popup key={card.blurbs[0].id} mogId={mogId} card={card} />}
+        {shown?.blurbs[0] && (
+          <Popup
+            key={shown.blurbs[0].id}
+            mogId={mogId}
+            card={shown}
+            onClose={() => setKept(undefined)}
+          />
+        )}
         {probe}
       </section>
     );
