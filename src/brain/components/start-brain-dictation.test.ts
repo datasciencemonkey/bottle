@@ -88,7 +88,7 @@ describe('startBrain dictation Copy card', () => {
     core.emitTo.mockClear();
     brain.bus.dispatch({
       event: 'view:input',
-      payload: { from: `card-${MOG}`, mogId: MOG, kind: 'ready' },
+      payload: { from: `card-${MOG}`, input: { mogId: MOG, kind: 'ready' } },
     });
     await settle();
     expect(
