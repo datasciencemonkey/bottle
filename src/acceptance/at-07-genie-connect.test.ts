@@ -6,7 +6,7 @@
  * task per conversation at a time. So G-07b runs here: concurrent callers on one conversation
  * against the #229 Genie One MCP double never have two polls open. A control case without the
  * queue shows that the double does see an overlap, so the check can fail. The G-POLL cadence
- * (G-07c) and the poll path without `progressToken` (G-07a) are the PollActor (#31). The URL,
+ * (G-07c) and the poll path without `progressToken` (G-07a) run on the PollActor (#31). The URL,
  * the Beta refusal and the thin client are Rust (#28, #30), in
  * `crates/mog-core/tests/at_07_genie_connect.rs`, with the `mcp_call` contract part. The live
  * run needs a person with a U2M profile (docs/tests/AT-GENIE-MCP.md).
@@ -20,6 +20,8 @@ import {
   scenarios,
 } from '../test-support/genie-one-mcp';
 import { liveFixture } from '../test-support/fixtures';
+import { drain, polls, rig } from '../test-support/poll-actor-rig';
+import { basePollDelayMs } from '../brain/components/poll-actor';
 
 const HOST = 'example.cloud.databricks.com';
 const WSID = '1234567890';
@@ -101,12 +103,36 @@ describe('AT-07 connect and poll Genie One', () => {
     expect(bad.error?.code).toBe(-32602);
   });
 
-  it.skip('[AT-07] [G-07a] [G-07c] polls follow Table G-POLL with no progressToken TODO(#31)', () => {
-    // When #31 lands: drive the PollActor on the sim scheduler (src/test-support/sim-scheduler.ts)
-    // against `scenarios.unknownStatus(n)`. Delays count from the end of the previous poll:
-    // 2 s up to 20 s, 3 s up to 60 s, 5 s up to 180 s, then x1.5 to 15 s, each within +-10 %.
-    // No genie_poll_response call carries _meta.progressToken.
-    expect.unreachable('#31: the PollActor and its G-POLL schedule are not built');
+  it('[AT-07] [G-07a] [G-07c] polls follow Table G-POLL with no progressToken', async () => {
+    // The PollActor on the sim scheduler against `scenarios.unknownStatus(n)`, with real jitter.
+    // Delays count from the end of the previous poll: 2 s up to 20 s, 3 s up to 60 s, 5 s up
+    // to 180 s, then x1.5 to 15 s, each within +-10 %. No poll carries _meta.progressToken.
+    let seed = 7;
+    const random = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
+    const r = rig({ responses: [scenarios.unknownStatus(50)], pollMs: 400, random });
+    const target = await r.ask();
+    const { outcome } = await drain(r, r.cm.poll(target));
+    expect(outcome).toMatchObject({ kind: 'terminal', status: 'completed' });
+    const p = polls(r);
+    expect(p).toHaveLength(51);
+    let prevBase: number | undefined;
+    let prevEnd = target.askedAt;
+    for (const x of p) {
+      expect(x.args.meta).toBeUndefined();
+      expect(JSON.stringify(x.args)).not.toContain('progressToken');
+      const base = basePollDelayMs(prevEnd - target.askedAt, prevBase);
+      const gap = x.start - prevEnd;
+      expect(gap).toBeGreaterThanOrEqual(base * 0.9 - 1e-6);
+      expect(gap).toBeLessThanOrEqual(base * 1.1 + 1e-6);
+      prevBase = base;
+      prevEnd = x.end;
+    }
+    // Every band of the table is reached, up to the 15 s cap.
+    expect(prevBase).toBe(15_000);
+    // IDs persist; nothing is asked again.
+    expect(new Set(p.map((x) => JSON.stringify(x.args.args))).size).toBe(1);
+    expect(r.double.asks()).toHaveLength(1);
+    expect(r.double.contractViolations()).toEqual([]);
   });
 
   it.skip('[AT-07] [G-02] [G-03] the MOG backend config builds ?o= and refuses the Beta URL TODO(#28)', () => {

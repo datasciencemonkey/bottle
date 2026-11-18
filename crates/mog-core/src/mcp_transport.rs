@@ -16,8 +16,10 @@
 //! - Caps on reply size and time ([`McpLimits`]). No token, request content or session ID in a
 //!   log, `Debug` output or an error.
 //!
-//! Not part of #30: the in-flight poll guard `E_POLL_INFLIGHT` (G-07b, ARC-F1), TODO(#31); and
-//! the loopback proxy for the main agent, TODO(#139).
+//! - G-07b, ARC-F1 (#31, ADR 0073): one `genie_poll_response` at a time for each conversation;
+//!   a second one fails at once with [`E_POLL_INFLIGHT`] ([`poll`]).
+//!
+//! Not part of #30: the loopback proxy for the main agent, TODO(#139).
 
 use std::fmt;
 use std::time::Duration;
@@ -32,11 +34,13 @@ use crate::types::Tags;
 
 mod client;
 mod component;
+pub mod poll;
 pub mod sse;
 pub mod tools;
 
 pub use client::*;
 pub use component::McpCallComponent;
+pub use poll::{PollInflightGuard, E_POLL_INFLIGHT};
 pub use tools::{ToolContract, ALLOWED_TOOLS};
 
 const ID: &str = "R8";

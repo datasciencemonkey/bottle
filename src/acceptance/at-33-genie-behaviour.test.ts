@@ -6,9 +6,9 @@
  * The card link rule ships (SEC-25a, #210): `trustedUrl` passes only an https link on the
  * profile host. That is the G-19b rule, and it runs here on the deep links of the #229 Genie
  * One MCP double. The double's busy, unknown and null cases are its own `[AT-22]` self-tests;
- * the GL-5 error classes and the busy rule run here (#32, ADR 0072). Still pending: the
- * progress line, the fallback link and the query item merge (#87), and the unknown re-poll
- * (#31). SP-09 (#29, `spikes/sp-09`) proves the busy mapping on its own client offline. The live
+ * the GL-5 error classes and the busy rule run here (#32, ADR 0072). The unknown re-poll runs on
+ * the PollActor (#31). Still pending: the progress line, the fallback link and the query item
+ * merge (#87). SP-09 (#29, `spikes/sp-09`) proves the busy mapping on its own client offline. The live
  * run is a person step (docs/tests/AT-GENIE-MCP.md).
  */
 import { trustedUrl } from '../views/card/safe-markdown';
@@ -16,6 +16,7 @@ import { createGenieBridge } from '../brain/components/genie-bridge';
 import { sendGenieAsk } from '../brain/components/genie-errors';
 import { BUSY_TEXT, createGenieOneMcpDouble, scenarios } from '../test-support/genie-one-mcp';
 import { liveFixture } from '../test-support/fixtures';
+import { drain, polls, rig } from '../test-support/poll-actor-rig';
 
 const HOST = 'example.cloud.databricks.com';
 const WSID = '1234567890';
@@ -100,9 +101,22 @@ describe('AT-33 live Genie One MCP behaviours', () => {
     expect.unreachable('#87: the query item merge is not built');
   });
 
-  it.skip('[AT-33] [G-18a] [G-18b] unknown status keeps polling with the same IDs until the give-up TODO(#31)', () => {
-    // When #31 lands: `scenarios.unknownStatus(n)` gets n + 1 polls with one ask and no re-ask.
-    expect.unreachable('#31: the PollActor is not built');
+  it('[AT-33] [G-18a] [G-18b] unknown status keeps polling with the same IDs until the give-up', async () => {
+    // `scenarios.unknownStatus(n)` gets n + 1 polls with one ask and no re-ask.
+    const r = rig({ responses: [scenarios.unknownStatus(12)] });
+    const target = await r.ask();
+    const { updates, outcome } = await drain(r, r.cm.poll(target));
+    expect(updates).toHaveLength(13);
+    expect(updates.slice(0, 12).every((u) => u.status === 'unknown')).toBe(true);
+    expect(outcome).toMatchObject({ kind: 'terminal', status: 'completed' });
+    // A double that stays unknown reaches the give-up without a re-ask.
+    const forever = rig({ responses: [scenarios.unknownStatus(100_000)] });
+    const t2 = await forever.ask();
+    expect((await drain(forever, forever.cm.poll(t2))).outcome).toEqual({ kind: 'gave_up' });
+    for (const x of [r, forever]) {
+      expect(new Set(polls(x).map((p) => JSON.stringify(p.args.args))).size).toBe(1);
+      expect(x.double.asks()).toHaveLength(1);
+    }
   });
 
   it.skip('[AT-33] live: a second ask to a busy conversation and a short question TODO(#29)', (ctx) => {

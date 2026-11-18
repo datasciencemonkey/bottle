@@ -210,18 +210,16 @@ fn g_04b_sessions_are_kept_per_profile_and_mog() {
 fn g_04b_concurrent_first_calls_share_one_initialize() {
     let s = genie_one(|_| None);
     let r = rig(&s);
+    // One conversation per thread: two open polls on one conversation are E_POLL_INFLIGHT
+    // (ARC-F1, #31), and this test is about the shared `initialize` only.
     let handles: Vec<_> = (0..4)
-        .map(|_| {
+        .map(|i| {
             let t = Arc::clone(&r.t);
             std::thread::spawn(move || {
                 let tg = tags(MOG);
-                t.call_tool(McpCall::new(
-                    PROFILE,
-                    "genie_poll_response",
-                    poll_args(),
-                    &tg,
-                ))
-                .map(|_| ())
+                let args = obj(json!({"conversation_id": format!("c-{i}"), "response_id": "r-1"}));
+                t.call_tool(McpCall::new(PROFILE, "genie_poll_response", args, &tg))
+                    .map(|_| ())
             })
         })
         .collect();
@@ -1028,4 +1026,70 @@ fn at_07_g_06a_mcp_call_reaches_r8_through_the_gateway() {
         4
     );
     assert_eq!(s.count("tools/call"), 1);
+}
+
+// ---------- ARC-F1, G-07b: the in-flight poll guard (#31) ----------
+
+/// Wait (bounded) until the server has seen `n` `tools/call` requests.
+fn wait_for_tool_calls(s: &FakeMcp, n: usize) {
+    for _ in 0..3000 {
+        if s.count("tools/call") >= n {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panic!("the server never saw {n} tools/call");
+}
+
+#[test]
+fn arc_f1_g_07b_second_poll_on_a_conversation_gets_e_poll_inflight_and_sends_nothing() {
+    let (s, release) = held_server();
+    let r = rig(&s);
+    let t = Arc::clone(&r.t);
+    // The PollActor's poll, held open by the server.
+    let first = std::thread::spawn(move || {
+        let tg = tags(MOG);
+        t.call_tool(McpCall::new(
+            PROFILE,
+            "genie_poll_response",
+            poll_args(),
+            &tg,
+        ))
+    });
+    wait_for_tool_calls(&s, 1);
+    let before = s.seen().len();
+    // The main agent polls the same conversation from its own session (ARC-F1: "also for the
+    // calls of the main agent"), through `mcp_call` on the gateway.
+    let gw = hardened_gateway_with(NoLog, McpCallComponent::new(Arc::clone(&r.t)));
+    let args = json!({
+        "profile": PROFILE, "server": "genie_one", "tool": "genie_poll_response",
+        "args": {"conversation_id": "c-1", "response_id": "r-1"},
+        "opId": "op-2", "tags": {"app": "bottle", "mog": MOG_2, "op": "genie"}
+    });
+    let second = gw.dispatch("brain", "mcp_call", args);
+    assert_eq!(code(second), "poll_inflight");
+    assert_eq!(code(poll(&r, MOG)), "poll_inflight");
+    assert_eq!(s.seen().len(), before, "an overlapping poll sends nothing");
+    release.send(()).unwrap();
+    assert!(!first.join().unwrap().unwrap().is_error);
+    // The slot is free again: the next poll goes out with the same IDs.
+    release.send(()).unwrap();
+    assert!(!poll(&r, MOG).unwrap().is_error);
+    let calls = tool_calls(&s);
+    assert_eq!(calls.len(), 2);
+    for c in &calls {
+        assert_eq!(c.json()["params"]["arguments"], json!(poll_args()));
+    }
+}
+
+#[test]
+fn arc_f1_poll_slot_is_freed_after_a_failed_poll() {
+    let s = genie_one(|x| (x.rpc_method() == "tools/call").then(|| empty_reply(500)));
+    let r = rig(&s);
+    let first = poll(&r, MOG);
+    assert!(first.as_ref().map_or(true, |x| x.is_error), "{first:?}");
+    // A failed poll never leaves the conversation locked.
+    let second = poll(&r, MOG);
+    assert_ne!(second.err().map(|e| e.code()), Some("poll_inflight"));
+    assert_eq!(s.count("tools/call"), 2);
 }

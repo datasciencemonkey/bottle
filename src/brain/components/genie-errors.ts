@@ -202,6 +202,11 @@ const TRANSPORT_CODES: Readonly<Record<string, BackendErrorCode>> = {
   bad_reply: 'GENIE_FAILED',
   protocol_unsupported: 'GENIE_FAILED',
   host_failed: 'GENIE_FAILED',
+  // ARC-F1, G-07b (#31, ADR 0073): R8 E_POLL_INFLIGHT, another poll on this conversation is open.
+  // The PollActor polls again with the same IDs and never shows it; any other caller (a manual
+  // "Check again") waits like a busy conversation and never asks again.
+  // It crosses IPC as itself (#495). TODO(#467): the host routes `mcp_call` to R8.
+  poll_inflight: 'CONVERSATION_BUSY',
 };
 
 const ACTIONS: Readonly<Record<BackendErrorCode, readonly FailureAction[]>> = {

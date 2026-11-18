@@ -47,6 +47,7 @@ use reqwest::header::{HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::Url;
 use serde_json::{json, Map, Value};
 
+use super::poll::PollInflightGuard;
 use super::sse::SseParser;
 use super::tools;
 use super::{
@@ -177,6 +178,8 @@ pub struct ReqwestMcpTransport {
     next_id: AtomicU64,
     /// The rate seams (#138). `None` sends with no bucket (tests of other rules only).
     rate: Option<RateLimit>,
+    /// ARC-F1, G-07b: one open poll per conversation, for every caller (#31).
+    polls: PollInflightGuard,
 }
 
 impl std::fmt::Debug for ReqwestMcpTransport {
@@ -290,6 +293,7 @@ impl ReqwestMcpTransport {
             sessions: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
             rate: None,
+            polls: PollInflightGuard::new(),
         })
     }
 
@@ -834,6 +838,11 @@ impl McpTransport for ReqwestMcpTransport {
         }
         let meta = tools::outbound_meta(contract.name, call.meta)
             .map_err(|()| self.refuse(INVALID_META))?;
+        // ARC-F1: before any lookup, lend or send. The slot is held until this call returns.
+        let _poll_slot = self
+            .polls
+            .enter(contract.name, &args)
+            .map_err(|e| self.refuse(e.code()))?;
         let mut t = self.target(call.profile, call.tags, call.timeout)?;
         t.class = CallClass::of_tool(contract.name);
         let mut params = Map::new();
