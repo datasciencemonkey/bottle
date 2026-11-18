@@ -4,8 +4,8 @@
 use std::sync::{Arc, Mutex};
 
 use mog_core::audio_device::level::{
-    rms_dbfs, window_samples, LevelCaptureEvents, LevelGate, LevelOut, LevelSink, TeeSink,
-    LEVEL_FLOOR_DBFS, LEVEL_MAX_HZ,
+    rms_dbfs, window_samples, LevelCaptureEvents, LevelGate, LevelOut, LevelSink, NoLevelOut,
+    TeeSink, LEVEL_FLOOR_DBFS, LEVEL_MAX_HZ,
 };
 use mog_core::audio_device::normalize::{normalize_peak, peak_dbfs, TARGET_PEAK_DBFS};
 use mog_core::audio_device::{FrameSink, MicFrame, SinkEvent};
@@ -349,4 +349,33 @@ fn cap_20_non_finite_samples_do_not_poison_the_segment() {
     normalize_peak(&mut seg);
     assert!(seg.iter().all(|s| s.is_finite()));
     assert!((peak_dbfs(&seg) - -3.0).abs() < 0.05, "{}", peak_dbfs(&seg));
+}
+
+// ---------- the host's Channel swap (#476) ----------
+
+#[test]
+fn cap_16a_set_out_moves_the_stream_to_the_new_receiver() {
+    let (old, gate, mut sink) = open_sink();
+    gate.open();
+    feed(&mut sink, &tone(0.5, 1600), 1600);
+    let new = Arc::new(Levels::default());
+    // A new `capture_subscribe` (a brain reload) gives a new `onLevel` Channel.
+    gate.set_out(new.clone());
+    feed(&mut sink, &tone(0.5, 1600), 1600);
+    assert_eq!(old.take().len(), 1, "the old receiver gets nothing more");
+    assert_eq!(new.take().len(), 1);
+    assert!(gate.is_open(), "the swap keeps the stream open");
+}
+
+#[test]
+fn cap_16b_set_out_does_not_open_a_closed_gate() {
+    let gate = LevelGate::new(Arc::new(NoLevelOut));
+    let mut sink = LevelSink::new(gate.clone());
+    let out = Arc::new(Levels::default());
+    gate.set_out(out.clone());
+    feed(&mut sink, &tone(0.5, 3200), 1600);
+    assert!(out.take().is_empty(), "no capture records: no level");
+    gate.open();
+    feed(&mut sink, &tone(0.5, 1600), 1600);
+    assert_eq!(out.take().len(), 1);
 }
