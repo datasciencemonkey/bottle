@@ -50,6 +50,13 @@ function fakeApi(start: Partial<SttModelView> = {}) {
         pending = { resolve, reject, onProgress };
       });
     },
+    verify: () => {
+      calls.push('verify');
+      view.installing = true;
+      return new Promise((resolve, reject) => {
+        pending = { resolve, reject, onProgress: () => undefined };
+      });
+    },
     cancel: async () => {
       calls.push('cancel');
       return view.installing;
@@ -179,9 +186,21 @@ describe('Wizard STT step (MB-07, #413)', () => {
     const { el } = await render(<SttSetupStep api={f.api} />);
     expect(step(el).textContent).toContain('Checking the speech model');
     expect(step(el).getAttribute('data-done')).toBe('false');
-    expect(f.calls).toEqual(['status', 'install:github']);
+    expect(button(el, 'Cancel')).toBeUndefined();
+    expect(f.calls).toEqual(['status', 'verify']);
     await f.finish({});
     expect(step(el).getAttribute('data-done')).toBe('true');
+  });
+
+  it('[CAP-49a] [CAP-49c] a failed launch check downloads nothing before a click', async () => {
+    const f = fakeApi({ consent: 'granted', model: 'installed' });
+    const { el } = await render(<SttSetupStep api={f.api} />);
+    await f.fail('stt_hash_mismatch', { model: 'missing' });
+    expect(el.querySelector('[role="alert"]')?.textContent).toBe(sttErrorText('stt_hash_mismatch'));
+    expect(step(el).textContent).toContain('Not downloaded');
+    expect(f.calls.filter((c) => c.startsWith('install:'))).toEqual([]);
+    await click(button(el, 'Retry'));
+    expect(f.calls.filter((c) => c.startsWith('install:'))).toEqual(['install:github']);
   });
 
   it('[MB-07] the hub shows the STT step and sends no stt command before a click', async () => {

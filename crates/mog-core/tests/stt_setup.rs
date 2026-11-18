@@ -395,3 +395,26 @@ fn mb_07_app_loader_finds_the_model_that_the_wizard_installed() {
         .unwrap();
     assert_eq!(loader.installed_model_dir(), Some(s.model_dir()));
 }
+
+#[test]
+fn cap_49a_cap_49c_the_launch_check_sends_no_request_and_drops_a_changed_model() {
+    let (_, bodies) = fake_spec();
+    let root = tmp("verify");
+    let net = hf_net(&bodies);
+    let s = setup(&root, net.clone());
+    s.set_consent(ModelConsent::Granted).unwrap();
+    s.install(ModelSource::HuggingFaceMirror, &mut |_| {})
+        .unwrap();
+    s.verify().unwrap();
+    // Change one byte, same size: `status` still shows Installed (sizes only).
+    let tok = s.model_dir().join("tokens.txt");
+    let mut b = fs::read(&tok).unwrap();
+    b[0] ^= 0xff;
+    fs::write(&tok, b).unwrap();
+    assert_eq!(s.status().model, ModelStatus::Installed);
+    let before = net.calls().len();
+    let err = s.verify().unwrap_err();
+    assert_eq!(err.code(), "stt_hash_mismatch");
+    assert_eq!(net.calls().len(), before, "the check downloads nothing");
+    assert_eq!(s.status().model, ModelStatus::Missing);
+}
