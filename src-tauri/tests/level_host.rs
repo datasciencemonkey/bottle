@@ -322,9 +322,79 @@ fn cap_16b_no_level_reaches_the_channel_after_stop_all() {
     let r = rig(HashMap::from([(ON_LEVEL, got.clone())]));
     r.subscribe(ON_LEVEL).unwrap();
     r.start("a1");
+    // Positive control: the stream runs before the panic stop.
+    r.mic.feed(&tone(0.5, WINDOW));
+    assert_eq!(
+        got.all().len(),
+        1,
+        "a level reaches the Channel before stop_all"
+    );
     r.call("capture_stop_all", json!({})).unwrap();
     r.mic.feed(&tone(0.5, WINDOW));
-    assert!(got.all().is_empty());
+    assert_eq!(got.all().len(), 1, "no level after stop_all");
+}
+
+// ---------- CAP-16b: the host's gate alone ----------
+//
+// In the tests above, `MicDevice` also drops a late data callback, because `CaptureCore`
+// closes the mic before it sends the stop state ("decide, close, then tell", MB-05). So those
+// tests pass even if the gate never closes. A frame source that stays open while the capture
+// stops cannot come from the real `MicDevice` today: a paused session keeps its mic open, but
+// no session starts before #65 (TODO(#65)). This test keeps the frame source open (a
+// `LevelSink` on the host's gate, fed directly, over the fake device), so only the gate that
+// the host drives through `LevelCaptureEvents` stops the levels. The gate itself is also
+// covered by `crates/mog-core/tests/level_stream.rs`.
+
+#[test]
+fn cap_16b_the_host_gate_alone_stops_the_levels_when_the_capture_stops() {
+    use mog_core::audio_device::level::LevelSink;
+    use mog_core::audio_device::{FrameSink, MicFrame};
+    use mog_core::testkit::capture::FakeAudioDevice;
+
+    let got = Received::default();
+    let levels = HostLevels::new(resolver(HashMap::from([(ON_LEVEL, got.clone())])));
+    // The frame source stays open the whole test: it never sees the mic close.
+    let mut open_source = LevelSink::new(levels.gate().clone());
+    let mut feed = |samples: &[f32]| {
+        open_source.frame(MicFrame {
+            samples,
+            sample_rate: RATE,
+        })
+    };
+    let host = CaptureHost::with_levels(
+        Box::new(FakeAudioDevice::new()),
+        Arc::new(SimClock::new()) as Arc<dyn MonotonicClock>,
+        Arc::new(|_: &str, _| true),
+        levels,
+    )
+    .expect("the cap timer thread starts");
+    let r = Rig {
+        host,
+        mic: FakeMic::default(),
+        relayed: Arc::default(),
+    };
+    r.subscribe(ON_LEVEL).unwrap();
+    feed(&tone(0.5, WINDOW));
+    assert!(
+        got.all().is_empty(),
+        "no capture records: the gate is closed"
+    );
+    let lease = r.start("a1");
+    feed(&tone(0.5, WINDOW));
+    assert_eq!(got.all().len(), 1, "the capture opened the gate");
+    r.stop("a1", &lease);
+    feed(&tone(0.5, WINDOW));
+    feed(&tone(0.5, WINDOW));
+    assert_eq!(got.all().len(), 1, "the stop closed the gate (CAP-16b)");
+    let _ = r.start("b2");
+    r.call("capture_stop_all", json!({})).unwrap();
+    let before = got.all().len();
+    feed(&tone(0.5, WINDOW));
+    assert_eq!(
+        got.all().len(),
+        before,
+        "stop_all closed the gate (CAP-16b)"
+    );
 }
 
 // ---------- the app resolver ----------
@@ -348,4 +418,21 @@ fn cap_16a_the_app_resolves_onlevel_only_on_the_brain_webview() {
     let out = resolve(&on_level).expect("the brain webview resolves the Channel");
     // A send on the mock webview must not panic on the audio thread.
     out.level(-12.5);
+}
+
+#[test]
+fn cap_16a_a_channel_level_out_stops_sending_after_a_failed_send() {
+    // A failed send means the webview is gone. Each later send would only fail again on the
+    // audio thread, so the receiver stops until the next `capture_subscribe` replaces it.
+    let calls = Arc::new(Mutex::new(0u32));
+    let seen = Arc::clone(&calls);
+    let channel: Channel<f32> = Channel::new(move |_| {
+        *seen.lock().unwrap() += 1;
+        Err(tauri::Error::WebviewNotFound)
+    });
+    let out = ChannelLevelOut::new(channel);
+    out.level(-20.0);
+    out.level(-20.0);
+    out.level(-20.0);
+    assert_eq!(*calls.lock().unwrap(), 1, "one failed send, then no more");
 }
