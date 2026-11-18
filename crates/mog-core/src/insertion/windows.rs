@@ -423,6 +423,72 @@ mod tests {
     }
 
     #[test]
+    fn mog_06a_a_denied_token_query_blocks_input_as_handy_does() {
+        use ForegroundIntegrity::*;
+        // OpenProcess can succeed on an elevated window; Windows then refuses the token query.
+        assert_eq!(integrity_of_query(Err(ERROR_ACCESS_DENIED)), Denied);
+        assert!(integrity_blocks_input(
+            integrity_of_query(Err(ERROR_ACCESS_DENIED)),
+            Some(0x2000)
+        ));
+        assert_eq!(integrity_of_query(Err(6)), Unknown); // ERROR_INVALID_HANDLE
+        assert_eq!(integrity_of_query(Ok(0x3000)), Level(0x3000));
+    }
+
+    /// Records the formats that the host hands to the clipboard. It never opens the clipboard.
+    #[derive(Default)]
+    struct Recorder(std::sync::Mutex<Vec<Vec<ClipboardFormat>>>);
+
+    impl ClipboardBackend for &Recorder {
+        fn write(&self, formats: &[ClipboardFormat]) -> CoreResult<()> {
+            self.0.lock().unwrap().push(formats.to_vec());
+            Ok(())
+        }
+        fn clear(&self) -> CoreResult<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn sec_30_windows_insert_write_has_the_monitor_history_and_cloud_opt_outs() {
+        let rec = Recorder::default();
+        WindowsInsertHost::new(&rec).write_concealed("hi").unwrap();
+        let writes = rec.0.lock().unwrap().clone();
+        assert_eq!(writes.len(), 1, "{writes:?}");
+        let find = |n: &str| writes[0].iter().find(|f| f.name == n).cloned();
+        assert!(find(WIN_EXCLUDE_FROM_MONITOR).is_some());
+        assert_eq!(
+            find(WIN_CAN_INCLUDE_IN_HISTORY).unwrap().data,
+            vec![0, 0, 0, 0]
+        );
+        assert_eq!(
+            find(WIN_CAN_UPLOAD_TO_CLOUD).unwrap().data,
+            vec![0, 0, 0, 0]
+        );
+        assert!(find("CF_UNICODETEXT").is_some());
+    }
+
+    #[test]
+    fn mog_06c_windows_host_sees_a_password_manager_secret() {
+        let host = WindowsInsertHost::default();
+        let id = |n: &str| format_id(n).unwrap();
+        let text = (CF_UNICODETEXT, vec![b'p', 0, b'w', 0, 0, 0]);
+        assert!(host.is_concealed(&vec![
+            text.clone(),
+            (id(WIN_EXCLUDE_FROM_MONITOR), Vec::new())
+        ]));
+        assert!(host.is_concealed(&vec![
+            text.clone(),
+            (id(WIN_CAN_INCLUDE_IN_HISTORY), vec![0; 4])
+        ]));
+        assert!(!host.is_concealed(&vec![
+            text.clone(),
+            (id(WIN_CAN_UPLOAD_TO_CLOUD), vec![1, 0, 0, 0])
+        ]));
+        assert!(!host.is_concealed(&vec![text]));
+    }
+
+    #[test]
     fn mog_06c_snapshot_skips_handle_formats_only() {
         for f in [2, 3, 9, 14, 0x80, 0x200, 0x3FF] {
             assert!(is_handle_format(f), "{f:#x}");

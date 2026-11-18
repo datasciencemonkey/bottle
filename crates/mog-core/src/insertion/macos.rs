@@ -229,3 +229,72 @@ fn secure_input_or_field() -> Focus {
         Focus::Field
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::window_host::{ClipboardBackend, ClipboardFormat};
+    use std::sync::Mutex;
+
+    /// Records the formats that the host hands to the clipboard. It never touches a pasteboard.
+    #[derive(Default)]
+    struct Recorder(Mutex<Vec<Vec<ClipboardFormat>>>);
+
+    impl ClipboardBackend for &Recorder {
+        fn write(&self, formats: &[ClipboardFormat]) -> CoreResult<()> {
+            self.0.lock().unwrap().push(formats.to_vec());
+            Ok(())
+        }
+        fn clear(&self) -> CoreResult<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn sec_30_mac_insert_write_has_the_concealed_and_transient_types() {
+        let rec = Recorder::default();
+        MacInsertHost::new(&rec)
+            .write_concealed("line one\nline two")
+            .unwrap();
+        let writes = rec.0.lock().unwrap().clone();
+        assert_eq!(writes.len(), 1, "one write with every type: {writes:?}");
+        let names: Vec<&str> = writes[0].iter().map(|f| f.name).collect();
+        assert!(
+            names.contains(&"org.nspasteboard.ConcealedType"),
+            "{names:?}"
+        );
+        assert!(
+            names.contains(&"org.nspasteboard.TransientType"),
+            "{names:?}"
+        );
+        let text = writes[0]
+            .iter()
+            .find(|f| f.name == "public.utf8-plain-text")
+            .expect("the text type");
+        assert_eq!(text.data, b"line one\nline two");
+    }
+
+    #[test]
+    fn mog_06c_mac_host_sees_a_password_manager_secret() {
+        let host = MacInsertHost::default();
+        let item = |types: &[&str]| -> Vec<(String, Vec<u8>)> {
+            types
+                .iter()
+                .map(|t| ((*t).to_owned(), Vec::new()))
+                .collect()
+        };
+        let secret = vec![item(&[
+            "public.utf8-plain-text",
+            "org.nspasteboard.ConcealedType",
+        ])];
+        assert!(host.is_concealed(&secret));
+        let transient = vec![
+            item(&["public.png"]),
+            item(&["public.utf8-plain-text", "org.nspasteboard.TransientType"]),
+        ];
+        assert!(host.is_concealed(&transient));
+        let plain = vec![item(&["public.utf8-plain-text", "public.html"])];
+        assert!(!host.is_concealed(&plain));
+        assert!(!host.is_concealed(&Vec::new()));
+    }
+}

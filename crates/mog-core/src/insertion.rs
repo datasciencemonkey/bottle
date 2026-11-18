@@ -371,6 +371,12 @@ mod tests {
         user_copies_during_wait: bool,
         /// The earlier clipboard is a password manager item (concealed or transient).
         concealed: bool,
+        /// The identity of the focused element.
+        target: u64,
+        /// What the permission, the focus and the focused element become once the snapshot is
+        /// taken: the user moved the focus while the clipboard was saved.
+        after_snapshot: Option<(bool, Focus, u64)>,
+        live: Mutex<Option<(bool, Focus, u64)>>,
     }
 
     impl Fake {
@@ -385,7 +391,16 @@ mod tests {
                 fail_keys: false,
                 user_copies_during_wait: false,
                 concealed: false,
+                target: 7,
+                after_snapshot: None,
+                live: Mutex::new(None),
             }
+        }
+        fn now(&self) -> (bool, Focus, u64) {
+            self.live
+                .lock()
+                .unwrap()
+                .unwrap_or((self.permitted, self.focus, self.target))
         }
         fn log(&self) -> Vec<Ev> {
             self.log.lock().unwrap().clone()
@@ -408,13 +423,19 @@ mod tests {
     impl InsertHost for Fake {
         type Snapshot = String;
         fn input_permitted(&self) -> bool {
-            self.permitted
+            self.now().0
         }
         fn focus(&self) -> Focus {
-            self.focus
+            self.now().1
+        }
+        fn focus_target(&self) -> u64 {
+            self.now().2
         }
         fn snapshot_clipboard(&self) -> CoreResult<String> {
             self.log.lock().unwrap().push(Ev::Snapshot);
+            if let Some(after) = self.after_snapshot {
+                *self.live.lock().unwrap() = Some(after);
+            }
             Ok(self.clip())
         }
         fn is_concealed(&self, snapshot: &String) -> bool {
@@ -771,5 +792,90 @@ mod tests {
             );
             assert_eq!(windows_control_focus(class, 0, 0), Focus::Field, "{class}");
         }
+    }
+    #[test]
+    fn mog_06a_the_focus_is_checked_again_right_before_the_chord() {
+        // The user moves the focus while the clipboard is saved: to a password field, to
+        // nothing, to another field, or the permission goes away. No key is sent, the earlier
+        // clipboard is back, and the reply is the refusal code (MOG-06d shows Copy).
+        let cases = [
+            ((true, Focus::SecureField, 7), InsertOutcome::SecureField),
+            ((true, Focus::Nothing, 7), InsertOutcome::NoFocus),
+            ((true, Focus::Field, 8), InsertOutcome::NoFocus),
+            ((false, Focus::Field, 7), InsertOutcome::NoPermission),
+        ];
+        for p in BOTH {
+            for (after, want) in cases {
+                let mut f = Fake::new("earlier");
+                f.after_snapshot = Some(after);
+                assert_eq!(
+                    insert_text(&f, p, "hello").unwrap(),
+                    want,
+                    "{p:?} {after:?}"
+                );
+                assert!(f.keys().is_empty(), "{p:?} {after:?}: {:?}", f.log());
+                assert_eq!(f.clip(), "earlier", "{p:?} {after:?}");
+                // The check comes after the settle wait, so it sees the focus of the chord.
+                let log = f.log();
+                let settle = log
+                    .iter()
+                    .position(|e| *e == Ev::Sleep(SETTLE_BEFORE_PASTE));
+                assert!(settle.is_some(), "{p:?} {after:?}: {log:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn mog_06a_an_unchanged_focus_still_pastes() {
+        let mut f = Fake::new("earlier");
+        f.after_snapshot = Some((true, Focus::Field, 7));
+        assert_eq!(
+            insert_text(&f, ClipboardPlatform::MacOs, "hello").unwrap(),
+            InsertOutcome::Inserted
+        );
+        assert_eq!(f.keys(), paste_chord(ClipboardPlatform::MacOs));
+    }
+
+    #[test]
+    fn mog_06c_mac_a_concealed_marker_without_data_is_still_saved() {
+        // A password manager can declare the marker type with no data. The saved item keeps it
+        // (empty), so the secret check still sees it, as on Windows.
+        let item = mac_saved_item([
+            ("public.utf8-plain-text".to_owned(), Some(b"pw".to_vec())),
+            ("org.nspasteboard.ConcealedType".to_owned(), None),
+            ("public.html".to_owned(), None),
+        ]);
+        assert_eq!(
+            item,
+            vec![
+                ("public.utf8-plain-text".to_owned(), b"pw".to_vec()),
+                ("org.nspasteboard.ConcealedType".to_owned(), Vec::new()),
+            ]
+        );
+        assert!(mac_snapshot_is_concealed(
+            item.iter().map(|(t, _)| t.as_str())
+        ));
+        // A plain type with no data is not saved: there is nothing to put back.
+        let plain = mac_saved_item([("public.html".to_owned(), None)]);
+        assert!(plain.is_empty());
+    }
+
+    #[test]
+    fn sec_30_windows_writes_the_opt_outs_first_and_the_text_last() {
+        let formats = crate::window_host::clipboard_formats(ClipboardPlatform::Windows, "hi");
+        let order: Vec<&str> = windows_write_order(&formats)
+            .iter()
+            .map(|f| f.name)
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                WIN_EXCLUDE_FROM_MONITOR,
+                WIN_CAN_INCLUDE_IN_HISTORY,
+                WIN_CAN_UPLOAD_TO_CLOUD,
+                "CF_UNICODETEXT",
+            ]
+        );
+        assert_eq!(windows_write_order(&formats).len(), formats.len());
     }
 }

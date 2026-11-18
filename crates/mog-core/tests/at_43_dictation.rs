@@ -20,7 +20,9 @@ use mog_core::insertion::{
 };
 use mog_core::ipc::{self, InsertTextArgs, IpcError, WindowClass};
 use mog_core::ipc_gateway::{hardened_gateway_with, IpcGateway, NoLog};
-use mog_core::window_host::ClipboardPlatform;
+use mog_core::window_host::{
+    clipboard_formats, ClipboardBackend, ClipboardFormat, ClipboardPlatform, ClipboardWriter,
+};
 use serde_json::json;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -89,6 +91,18 @@ struct Desk {
     mark: Mutex<u64>,
     keys: Mutex<Vec<KeyStroke>>,
     writes: Mutex<Vec<String>>,
+    /// The formats that reached the clipboard, through the same writer as the OS hosts.
+    formats: Mutex<Vec<Vec<ClipboardFormat>>>,
+}
+
+impl ClipboardBackend for &Desk {
+    fn write(&self, formats: &[ClipboardFormat]) -> CoreResult<()> {
+        self.formats.lock().unwrap().push(formats.to_vec());
+        Ok(())
+    }
+    fn clear(&self) -> CoreResult<()> {
+        Ok(())
+    }
 }
 
 impl InsertHost for Desk {
@@ -99,6 +113,9 @@ impl InsertHost for Desk {
     fn focus(&self) -> Focus {
         Focus::Field
     }
+    fn focus_target(&self) -> u64 {
+        1
+    }
     fn snapshot_clipboard(&self) -> CoreResult<String> {
         Ok(self.clipboard.lock().unwrap().clone())
     }
@@ -106,6 +123,7 @@ impl InsertHost for Desk {
         false
     }
     fn write_concealed(&self, text: &str) -> CoreResult<()> {
+        ClipboardWriter::new(self).write_text_for(ClipboardPlatform::MacOs, text)?;
         self.writes.lock().unwrap().push(text.to_owned());
         *self.clipboard.lock().unwrap() = text.to_owned();
         *self.mark.lock().unwrap() += 1;
@@ -133,6 +151,7 @@ fn at_43_mog_06a_mog_06c_paste_inserts_with_no_enter_and_restores_the_clipboard(
         mark: Mutex::new(0),
         keys: Mutex::new(Vec::new()),
         writes: Mutex::new(Vec::new()),
+        formats: Mutex::new(Vec::new()),
     };
     let platform = ClipboardPlatform::MacOs;
     let gw = hardened_gateway_with(NoLog, InsertTextComponent::new(&desk, Some(platform)));
@@ -152,6 +171,25 @@ fn at_43_mog_06a_mog_06c_paste_inserts_with_no_enter_and_restores_the_clipboard(
     assert!(keys.iter().all(|k| !is_enter_key(platform, k.key)));
     // After the paste the clipboard holds "earlier" again (MOG-06c).
     assert_eq!(*desk.clipboard.lock().unwrap(), "earlier");
+    // Step 5: the clipboard write had the concealed and transient flags (#213, SEC-30), in one
+    // write with the text. The hosts' own writes are checked in `insertion/macos.rs` and
+    // `insertion/windows.rs`. TODO(#408): on a Mac with Maccy (or Windows with Win+V history
+    // on), dictate "echo the dictation test works" into TextEdit (Notepad); expected: the text
+    // is pasted and the clipboard manager history has no new entry for it.
+    let written = desk.formats.lock().unwrap().clone();
+    assert_eq!(
+        written,
+        vec![clipboard_formats(platform, "line one\nline two")]
+    );
+    let names: Vec<&str> = written[0].iter().map(|f| f.name).collect();
+    assert!(
+        names.contains(&"org.nspasteboard.ConcealedType"),
+        "{names:?}"
+    );
+    assert!(
+        names.contains(&"org.nspasteboard.TransientType"),
+        "{names:?}"
+    );
     // A view window still cannot reach it.
     assert!(gw
         .dispatch("mog-a1", "insert_text", json!({"mogId": MOG, "text": "x"}))
