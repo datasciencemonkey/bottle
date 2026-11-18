@@ -62,3 +62,44 @@ def test_nfr_23b_committed_checklist_matches_generator(tmp_path):
     committed = ROOT / "docs" / "release" / "RELEASE-CHECKLIST.md"
     assert committed.exists()
     assert committed.read_text() == text
+
+
+def _admin_rows(text):
+    return {m.group(1): line for line in text.splitlines()
+            if (m := re.match(r"^\| \[ \] \| (ADM-\d+[a-z]?) \|", line))}
+
+
+def test_adm_09_checklist_lists_admin_inspection_rows(tmp_path):
+    """[ADM-09] [AT-22] The checklist has an admin inspection step for each MVP ADM row verified by inspection."""
+    proc, text = _checklist(tmp_path, REAL_REQUIREMENTS)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "## Admin inspection" in text
+    rows = _admin_rows(text)
+    assert "ADM-09" in rows
+    assert "inference tables" in rows["ADM-09"].lower()
+    assert "docs/admin/model-service-prerequisites.md" in rows["ADM-09"]
+    src = REAL_REQUIREMENTS.read_text()
+    expected = set()
+    for line in src.splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if (len(cells) == 8 and re.fullmatch(r"ADM-\d+[a-z]?", cells[0])
+                and cells[2] in ("MVP-D", "MVP-M") and cells[5].startswith("I")):
+            expected.add(cells[0])
+    assert expected and set(rows) == expected
+    # A row verified by a test (T) is not an inspection step.
+    assert "ADM-04a" not in rows
+
+
+def test_adm_09_admin_doc_covers_model_service_prerequisites():
+    """[ADM-04a] [ADM-04b] [ADM-09] The admin doc names each model service, cross-geo routing and inference tables."""
+    doc = ROOT / "docs" / "admin" / "model-service-prerequisites.md"
+    assert doc.exists()
+    text = doc.read_text()
+    for rid in ("ADM-04a", "ADM-04b", "ADM-09"):
+        assert rid in text
+    for service in ("ASR", "cleanup", "router", "writer", "judge", "embedding", "main agent"):
+        assert service in text
+    assert "SttPolicy=local_only" in text
+    assert "cross-geography routing" in text.lower()
+    assert "inference tables" in text.lower()
+    assert "--profile <your-profile>" in text
