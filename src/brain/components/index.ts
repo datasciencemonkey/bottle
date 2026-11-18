@@ -109,6 +109,15 @@ export function startBrain(): Brain {
       if (!s) stacks.set(mogId, (s = createCardStack(mogId, cardStackDeps(mogId, cardClock))));
       return s;
     };
+    // #498: the Copy card of a dictation. TODO(#507): the card view's `view_emit` `ready` calls
+    // `dictation.cardReady(mogId)`, so a new card window gets the kept state.
+    const dictation = createDictationSink({
+      stackFor,
+      showCard: (mogId) => call('window_card_show', { mogId }),
+      // TODO(#498): no hub notice path can hold text yet (the hub notice is the consent notice
+      // only). The card stack keeps the text for the next show or `ready`.
+      onUnshown: () => undefined,
+    });
     // #14: the PTT and hands-free lifecycle. Every start goes through the T12 consent gate.
     const lifecycle = createCaptureLifecycle({
       control: ipcCaptureControl({ consent: components.T12 }),
@@ -130,10 +139,7 @@ export function startBrain(): Brain {
         onAsk: (_r, owned) => owner.release(owned.utteranceId),
         // #498, MOG-05b, MOG-06d: a Copy or a failed insertion shows the text and Copy on the
         // owner's card, so no dictation text is dropped. No main agent and no Genie (RTR-01c).
-        onDone: createDictationSink({
-          stackFor,
-          showCard: (mogId) => call('window_card_show', { mogId }),
-        }),
+        onDone: dictation.onDone,
       }),
     });
     wireCaptureLifecycle(bus, lifecycle, createSystemClock().now);

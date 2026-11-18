@@ -64,6 +64,8 @@ export interface CardStack {
   removeChipsOf(owner: string): void;
   /** UX-18: set the content of the expanded card, or `undefined` to show the small card. */
   setExpanded(input: SectionInput | undefined): void;
+  /** Send the current state again, for a card view that starts to listen late (#498). */
+  republish(): void;
   dispose(): void;
 }
 
@@ -197,6 +199,7 @@ export function createCardStack(
       expanded = input;
       publish();
     },
+    republish: () => publish(),
     dispose() {
       cancel?.();
       cancel = undefined;
