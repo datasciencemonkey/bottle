@@ -121,7 +121,19 @@ fn r7_http_transport_stub_reports_not_implemented() {
 fn r8_mcp_transport_stub_reports_not_implemented() {
     use mog_core::mcp_transport::{McpTransport, StubMcpTransport};
     let s = StubMcpTransport;
-    not_implemented(s.call_tool("p", "tool", serde_json::json!({})), "R8");
+    let tags: mog_core::types::Tags =
+        serde_json::from_value(serde_json::json!({"app": "bottle", "mog": "a1", "op": "genie"}))
+            .unwrap();
+    not_implemented(
+        s.call_tool(mog_core::mcp_transport::McpCall::new(
+            "p",
+            "tool",
+            Default::default(),
+            &tags,
+        )),
+        "R8",
+    );
+    not_implemented(s.list_tools("p", &tags), "R8");
     not_implemented(s.start_loopback_proxy(), "R8");
 }
 

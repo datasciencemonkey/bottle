@@ -71,6 +71,8 @@ Add one row for each Bottle file that holds code or data from antigravity-bricks
 | `src/test-support/genie-tools.json` | `plugins/databricks-genie/scripts/genie_tools.json` (verbatim copy) |
 | `src/test-support/genie-one-mcp.ts` (the contract loader and `contractProblems`) | `plugins/databricks-genie/scripts/genie_tools.json` |
 | `crates/mog-core/src/token_broker.rs` (the token cache: refresh margin, `expires_in` / `expiry` reply fields, drop on 401) | `plugins/databricks-genie/scripts/genie_bridge.py` (`token`, `invalidate`) |
+| `crates/mog-core/src/mcp_transport/client.rs` (R8: one retry on 401, one new session on a 404 with a session, Genie One off on a 404 without one) | `plugins/databricks-genie/scripts/genie_bridge.py` (`forward`, `call_upstream`, `start_session`) |
+| `crates/mog-core/src/mcp_transport/tools.rs` (the tool allowlist and argument names) | `plugins/databricks-genie/scripts/genie_tools.json` |
 
 ## Handy (MIT)
 

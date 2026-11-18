@@ -4,13 +4,22 @@
 //! What runs here is the `mcp_call` contract part: only the brain may call Genie One MCP
 //! (SEC-02a), the server is always `genie_one`, and no argument can carry a URL, so a view or the
 //! brain cannot point R8 at the Beta `/api/2.0/mcp/genie` endpoint or a per-space MCP. These two
-//! IPC checks carry no G-03 tag: G-03 itself (the config loader refuses the Beta URL) is #28. The behaviour is not built: the endpoint config is #28, the thin JSON-RPC client R8 is
-//! #30 (the SP-09 spike client in `spikes/sp-09` proves the design offline, #29), and the
-//! workspace ID of R6 (#18) runs here on a scripted SCIM seam. The other tests are `#[ignore = "pending TODO(#n)"]`. The serial poll
+//! IPC checks carry no G-03 tag: G-03 itself (the config loader refuses the Beta URL) is #28.
+//! The thin JSON-RPC client R8 (#30) runs here on a fake Genie One server through
+//! `McpCallComponent`; the Tauri host routing of `mcp_call` is TODO(#467). The workspace ID of
+//! R6 (#18) runs on a scripted SCIM seam. The other tests are `#[ignore = "pending TODO(#n)"]`. The serial poll
 //! queue (G-07b) is TS and runs in `src/acceptance/at-07-genie-connect.test.ts`. The live run
 //! skips without `BOTTLE_TEST_PROFILE` (docs/tests/AT-GENIE-MCP.md).
 
+#[path = "support/fake_mcp.rs"]
+mod fake_mcp;
+
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+
 use mog_core::ipc::{self, IpcError, WindowClass};
+use mog_core::ipc_gateway::{hardened_gateway_with, IpcGateway, NoLog};
+use mog_core::mcp_transport::{McpCallComponent, McpLimits, McpSeams, ReqwestMcpTransport};
 use serde_json::{json, Value};
 
 const MOG: &str = "00000000-0000-4000-8000-0000000000b7";
@@ -37,8 +46,8 @@ fn at_07_sec_02a_only_the_brain_may_call_genie_one_mcp() {
             "{label}: {err:?}"
         );
     }
-    // The brain passes the gateway; the transport itself is #30. TODO(#30): when R8 lands, this
-    // call reaches it, so replace the NotImplemented check with the scripted-server result.
+    // The brain passes the window check. R8 is `McpCallComponent` (#30); the Tauri host routes
+    // `mcp_call` to it in TODO(#467), so `ipc::handle` alone still ends in NotImplemented.
     let err = ipc::handle("brain", "mcp_call", ask_args()).unwrap_err();
     assert!(matches!(err, IpcError::NotImplemented { .. }), "{err:?}");
 }
@@ -86,33 +95,89 @@ fn at_07_g_02_g_03_endpoint_has_o_and_rejects_beta_urls() {
     todo!("#28: build the endpoint and assert the G-02 URL and the three G-03 refusals")
 }
 
-#[test]
-#[ignore = "pending TODO(#30): R8 McpTransport is a stub"]
-fn at_07_g_04a_g_04d_g_05a_g_05b_g_06a_g_06b_g_07a_thin_client_rules() {
-    // When #30 lands, against a scripted Genie One server: initialize names 2025-06-18 (G-04c);
-    // every later call carries Mcp-Session-Id (G-04b) and a fresh token from R6 (G-04d) on one
-    // reqwest transport with no rmcp (G-04a); a 404 with a session initialises again one time
-    // (G-05a); a 404 without one is GENIE_ONE_OFF (G-05b); tools other than the four Genie tools
-    // and tools/list are refused (G-06a); genie_ask carries _meta.warehouse_id when the MOG has
-    // one (G-06b); no request carries _meta.progressToken (G-07a). The SP-09 tests in
-    // spikes/sp-09/tests/transport.rs are the model.
-    let err = ipc::handle("brain", "mcp_call", ask_args()).unwrap_err();
-    assert!(!matches!(err, IpcError::NotImplemented { .. }), "{err:?}");
-    todo!("#30: run the thin client against the scripted server")
+/// An R8 on the fake Genie One server and fake broker of `support/fake_mcp.rs`.
+fn r8_on(s: &fake_mcp::FakeMcp) -> (Arc<ReqwestMcpTransport>, Arc<fake_mcp::FakeBroker>) {
+    let broker = Arc::new(fake_mcp::FakeBroker::default());
+    let t = ReqwestMcpTransport::with_seams(McpSeams {
+        hosts: fake_mcp::Hosts::one(&s.origin()),
+        endpoints: fake_mcp::Endpoints::one(&s.url()),
+        tokens: broker.clone(),
+        policy: Arc::new(fake_mcp::LoopbackPolicy),
+        decorator: Arc::new(mog_core::request_identity::BottleIdentity::new()),
+        log: Arc::new(fake_mcp::Lines::default()),
+        limits: McpLimits::default(),
+    })
+    .unwrap();
+    (Arc::new(t), broker)
+}
+
+fn r8_ask_args(tool: &str) -> Value {
+    let mut a = ask_args();
+    a["profile"] = json!(fake_mcp::PROFILE);
+    a["tool"] = json!(tool);
+    a["tags"]["mog"] = json!(fake_mcp::MOG);
+    a
 }
 
 #[test]
-#[ignore = "pending TODO(#30): R8 McpTransport is a stub"]
-fn at_07_g_06a_mcp_call_refuses_tools_outside_the_allowlist() {
-    for tool in ["execute_sql", "view_ask", "genie_delete_conversation"] {
-        let mut a = ask_args();
-        a["tool"] = json!(tool);
-        let err = ipc::handle("brain", "mcp_call", a).unwrap_err();
-        assert!(
-            !matches!(err, IpcError::NotImplemented { .. }),
-            "{tool}: R8 must refuse the tool, not be missing: {err:?}"
-        );
+fn at_07_g_04a_g_04b_g_04c_g_04d_g_05a_g_06b_g_07a_thin_client_rules() {
+    // Against a scripted Genie One server (support/fake_mcp.rs), through the gateway component.
+    // The full matrix (G-05b, 401, caps, logs) is in tests/mcp_transport.rs.
+    let first_call = std::sync::atomic::AtomicBool::new(true);
+    let s = fake_mcp::genie_one(move |x| {
+        (x.rpc_method() == "tools/call" && first_call.swap(false, Ordering::SeqCst))
+            .then(|| fake_mcp::empty_reply(404))
+    });
+    let (t, broker) = r8_on(&s);
+    let gw = hardened_gateway_with(NoLog, McpCallComponent::new(t));
+    let mut a = r8_ask_args("genie_ask");
+    a["meta"] = json!({"warehouse_id": "w1", "progressToken": 1});
+    let out = gw.dispatch("brain", "mcp_call", a).unwrap();
+    assert_eq!(out["isError"], false);
+    let seen = s.seen();
+    // G-04c: initialize names 2025-06-18.
+    assert_eq!(seen[0].json()["params"]["protocolVersion"], "2025-06-18");
+    // G-05a: the 404 with a session initialises again one time and resends.
+    assert_eq!(
+        s.methods(),
+        [
+            "initialize",
+            "notifications/initialized",
+            "tools/call",
+            "initialize",
+            "notifications/initialized",
+            "tools/call"
+        ]
+    );
+    // G-04b: each call after initialize carries the session ID.
+    assert_eq!(seen[2].header("mcp-session-id"), Some("sess-1"));
+    assert_eq!(seen[5].header("mcp-session-id"), Some("sess-2"));
+    // G-04d: one fresh token per request on one transport.
+    assert_eq!(broker.lend_count(), seen.len());
+    // G-02: every call carries ?o=. G-06b: _meta.warehouse_id. G-07a: no progressToken.
+    for x in &seen {
+        assert!(x.target.ends_with("?o=1234"));
+        assert!(!String::from_utf8_lossy(&x.body).contains("progressToken"));
     }
+    assert_eq!(
+        seen[5].json()["params"]["_meta"],
+        json!({"warehouse_id": "w1"})
+    );
+}
+
+#[test]
+fn at_07_g_06a_mcp_call_refuses_tools_outside_the_allowlist() {
+    let s = fake_mcp::genie_one(|_| None);
+    let (t, broker) = r8_on(&s);
+    let gw = hardened_gateway_with(NoLog, McpCallComponent::new(t));
+    for tool in ["execute_sql", "view_ask", "genie_delete_conversation"] {
+        let err = gw
+            .dispatch("brain", "mcp_call", r8_ask_args(tool))
+            .unwrap_err();
+        assert_eq!(err.code(), "tool_not_allowed", "{tool}");
+    }
+    assert!(s.seen().is_empty());
+    assert_eq!(broker.lend_count(), 0);
 }
 
 /// A scripted SCIM seam (never a live workspace): counts calls, answers org ID 1234.
@@ -165,11 +230,11 @@ fn at_07_w_06a_w_06b_workspace_id_from_the_org_id_header_once_per_profile() {
 }
 
 #[test]
-#[ignore = "pending TODO(#30): live AT-07 needs R8 and a person with a U2M profile (needs:u2m)"]
+#[ignore = "pending TODO(#29): live AT-07 needs a person with a U2M profile (needs:u2m)"]
 fn at_07_live_connect_list_tools_ask_and_poll() {
     let w = mog_core::live_or_skip!();
     // Steps in docs/tests/AT-GENIE-MCP.md, part AT-07: resolve the workspace ID, run tools/list,
     // ask one question, poll it to a terminal status. Never print the token or the answer.
     let _ = w.profile;
-    todo!("#30: run the live AT-07 script through R8")
+    todo!("#29: run the live AT-07 script through R8")
 }
