@@ -23,7 +23,8 @@ use regex::Regex;
 const FILL: &str = r"(?:(?:all|any|every|of|the|your|my|its|their|these|those|this|that|previous|prior|above|earlier|current|existing|stored|saved|whole|entire|full|raw|out|me|us|everything|in|from)\s+){0,5}";
 const SEND_VERB: &str = r"\b(?:send|sends|sending|post|upload|forward|copy|export|share|email|e-mail|transfer|exfiltrate|leak|push|sync|move|beam|transmit)\b";
 const URL: &str = r"(?:https?://|\bwww\.|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|net|org|io|ai|dev|app|cloud|xyz|ru|cn|me|co|info|biz|site|test|example|invalid|local)\b|[a-z0-9._%+-]+@[a-z0-9-]+\.)";
-const ASSISTANT_NAMES: &str = r"(?:assistant|ai|claude|codex|chatgpt|gpt|llm|bottle|mog|agent|model)";
+const ASSISTANT_NAMES: &str =
+    r"(?:assistant|ai|claude|codex|chatgpt|gpt|llm|bottle|mog|agent|model)";
 const ORDER_VERBS: &str = r"(?:ignore|disregard|forget|delete|remove|send|forward|reveal|show|print|dump|run|execute|call|switch|change|approve|publish|export|share|write|stop|you must|do not|don't)";
 
 /// The pattern sources of each reason code, in a fixed order.
@@ -131,6 +132,9 @@ mod tests {
 
     #[test]
     fn sec_24a_normalize_folds_evasion_forms() {
-        assert_eq!(normalize("\u{ff29}gnore\u{3000}\u{200b}PREVIOUS\n\n x"), "ignore previous x");
+        assert_eq!(
+            normalize("\u{ff29}gnore\u{3000}\u{200b}PREVIOUS\n\n x"),
+            "ignore previous x"
+        );
     }
 }
