@@ -210,3 +210,22 @@ fn cap_72_route_from_reads_the_managed_r4() {
         "the host reads the R4 that install_capture manages"
     );
 }
+
+#[test]
+fn cap_72_install_capture_manages_the_r4_that_route_from_reads() {
+    // Without `handle.manage(stt)`, every `stt_transcribe` answers `host_failed`.
+    let src = include_str!("../src/lib.rs");
+    let start = src.find("fn install_capture").expect("install_capture");
+    let rest = &src[start..];
+    // Only the body of `install_capture`: it ends at the next top-level item.
+    let end = rest.find("\n}\n").expect("the end of install_capture");
+    let body: String = rest[..end].chars().filter(|c| !c.is_whitespace()).collect();
+    assert!(
+        body.contains("letstt=mog_core::stt_engine::LocalStt::new("),
+        "install_capture builds R4 as a LocalStt"
+    );
+    assert!(
+        body.contains("handle.manage(stt);"),
+        "install_capture manages R4, so route_from finds it"
+    );
+}
