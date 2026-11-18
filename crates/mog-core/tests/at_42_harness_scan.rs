@@ -12,8 +12,9 @@
 //!
 //! The fake R6 broker lends random fake tokens (`test-token-not-real-<n>`). The child never gets
 //! a token to look for: it gets only the SHA-256 of each one. It also gets a canary of the same
-//! shape in plain text, which it keeps in memory: the scan must find the canary, so a scan that
-//! reads nothing cannot pass. No live workspace.
+//! shape in plain text, which it keeps in memory, and a second canary that exists only at the
+//! end of a 16 MiB buffer. The scan must find both, so a scan that reads nothing, or that stops
+//! early in a region, cannot pass. No live workspace.
 
 #[path = "support/fake_mcp.rs"]
 mod fake_mcp;
@@ -142,10 +143,20 @@ fn rtr_28_rtr_27_at_42_harness_env_and_memory_hold_no_token() {
         .map(|_| format!("{TOKEN_PREFIX}{}", random_u64()))
         .collect();
     let canary = format!("{TOKEN_PREFIX}{}", random_u64());
+    // A second canary goes at the END of a 16 MiB buffer in the child (its own mapping on every
+    // OS), so a scan that stops early in a region cannot find it.
+    let tail_canary = format!("{TOKEN_PREFIX}{}", random_u64());
     let hashes: Vec<String> = pool.iter().map(|t| sha256_hex(t.as_bytes())).collect();
     std::fs::write(
         home.join(TARGETS_FILE),
-        json!({"hashes": hashes, "canary": canary}).to_string(),
+        json!({
+            "hashes": hashes,
+            "canary": canary,
+            // Reversed, so the targets file and its parsed copy never hold the tail canary.
+            "tailCanaryReversed": tail_canary.chars().rev().collect::<String>(),
+            "tailHash": sha256_hex(tail_canary.as_bytes()),
+        })
+        .to_string(),
     )
     .unwrap();
 
@@ -239,6 +250,8 @@ fn rtr_28_rtr_27_at_42_harness_env_and_memory_hold_no_token() {
         "{brief}"
     );
     assert_eq!(report["canaryFound"], json!(true), "{brief}");
+    assert_eq!(report["tailCanaryFound"], json!(true), "{brief}");
+    assert_eq!(report["inflowTailCanary"], json!(false), "{brief}");
     assert_eq!(report["memoryTokenHits"], json!(0), "{brief}");
 }
 
@@ -309,6 +322,8 @@ fn candidates(bytes: &[u8]) -> impl Iterator<Item = &[u8]> {
 struct Scan<'a> {
     hashes: &'a [String],
     canary_hash: String,
+    tail_hash: String,
+    tail_found: bool,
     token_hits: u64,
     canary_found: bool,
     scanned: u64,
@@ -321,6 +336,9 @@ impl Scan<'_> {
             let h = sha256_hex(c);
             if self.hashes.contains(&h) {
                 self.token_hits += 1;
+            }
+            if h == self.tail_hash {
+                self.tail_found = true;
             }
             if h == self.canary_hash {
                 self.canary_found = true;
@@ -344,6 +362,14 @@ fn child_main() {
         .collect();
     // The canary stays in memory as a String: the memory scan must find it.
     let canary = targets["canary"].as_str().unwrap().to_owned();
+    // The tail canary exists in forward order ONLY at the end of this 16 MiB buffer.
+    let reversed = targets["tailCanaryReversed"].as_str().unwrap().as_bytes();
+    let tail_hash = targets["tailHash"].as_str().unwrap().to_owned();
+    let mut tail_buf = vec![0u8; 16 << 20];
+    let at = tail_buf.len() - reversed.len() - 1;
+    for (i, b) in reversed.iter().rev().enumerate() {
+        tail_buf[at + i] = *b;
+    }
 
     let mut inflow = Inflow::default();
     let stdin = std::io::stdin();
@@ -398,6 +424,8 @@ fn child_main() {
     let mut flow = Scan {
         hashes: &hashes,
         canary_hash: sha256_hex(canary.as_bytes()),
+        tail_hash: tail_hash.clone(),
+        tail_found: false,
         token_hits: 0,
         canary_found: false,
         scanned: 0,
@@ -413,12 +441,15 @@ fn child_main() {
     let mut mem = Scan {
         hashes: &hashes,
         canary_hash: sha256_hex(canary.as_bytes()),
+        tail_hash: tail_hash.clone(),
+        tail_found: false,
         token_hits: 0,
         canary_found: false,
         scanned: 0,
     };
     memscan::scan_writable(&mut |chunk| mem.bytes(chunk));
     std::hint::black_box(&canary);
+    std::hint::black_box(&tail_buf);
 
     let report = json!({
         "askOk": tool_ok(&ask),
@@ -429,6 +460,8 @@ fn child_main() {
         "inflowPrefixHits": inflow_prefix_hits,
         "memoryTokenHits": mem.token_hits,
         "canaryFound": mem.canary_found,
+        "tailCanaryFound": mem.tail_found,
+        "inflowTailCanary": flow.tail_found,
         "scannedBytes": mem.scanned,
     });
     let tmp = home.join("scan-report.tmp");
