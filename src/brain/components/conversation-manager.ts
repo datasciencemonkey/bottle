@@ -29,7 +29,10 @@ export interface ConversationManager {
    * polls on the queue of the conversation. The ask counts as in flight on its profile from
    * this call until the loop ends.
    */
-  poll(target: PollTarget, signal?: AbortSignal): AsyncGenerator<PollUpdate, PollOutcome, undefined>;
+  poll(
+    target: PollTarget,
+    signal?: AbortSignal,
+  ): AsyncGenerator<PollUpdate, PollOutcome, undefined>;
   /** G-08: the asks in flight on `profile`. */
   inflightAsks(profile: ProfileName): number;
   /** ARC-F10: the IDs and profile of every open poll loop. */
@@ -91,7 +94,10 @@ export class ConversationManagerStub implements ConversationManager {
     return this.#actor.enqueue(`poll:${conversationId}`, task);
   }
 
-  poll(target: PollTarget, signal?: AbortSignal): AsyncGenerator<PollUpdate, PollOutcome, undefined> {
+  poll(
+    target: PollTarget,
+    signal?: AbortSignal,
+  ): AsyncGenerator<PollUpdate, PollOutcome, undefined> {
     // Count the ask now, not on the first `next()`, so asks started together see each other.
     // It stops counting when the loop ends, throws, or the caller calls `return()`.
     const remove = this.#env.inflight.add(target.profile);
@@ -100,7 +106,12 @@ export class ConversationManagerStub implements ConversationManager {
       if (counted) remove();
       counted = false;
     };
-    const loop = runPollActor(target, this.#env, (cid, task) => this.enqueuePoll(cid, task), signal);
+    const loop = runPollActor(
+      target,
+      this.#env,
+      (cid, task) => this.enqueuePoll(cid, task),
+      signal,
+    );
     const gen = (async function* () {
       try {
         return yield* loop;

@@ -72,8 +72,23 @@ impl PollInflightGuard {
     /// - A poll on a conversation with an open poll: [`E_POLL_INFLIGHT`].
     /// - Else the slot, held until the returned [`PollSlot`] drops.
     pub fn enter(&self, tool: &str, args: &JsonObject) -> CoreResult<Option<PollSlot<'_>>> {
-        let _ = (tool, args);
-        Ok(None)
+        if tool != POLL_TOOL {
+            return Ok(None);
+        }
+        let Some(conversation) = args.get("conversation_id").and_then(|v| v.as_str()) else {
+            return Ok(None);
+        };
+        let mut open = lock(&self.open);
+        if !open.insert(conversation.to_owned()) {
+            return Err(CoreError::Unavailable {
+                component: "R8",
+                reason: E_POLL_INFLIGHT,
+            });
+        }
+        Ok(Some(PollSlot {
+            guard: self,
+            conversation: conversation.to_owned(),
+        }))
     }
 
     /// The count of open polls.

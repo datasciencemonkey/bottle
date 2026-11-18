@@ -210,18 +210,16 @@ fn g_04b_sessions_are_kept_per_profile_and_mog() {
 fn g_04b_concurrent_first_calls_share_one_initialize() {
     let s = genie_one(|_| None);
     let r = rig(&s);
+    // One conversation per thread: two open polls on one conversation are E_POLL_INFLIGHT
+    // (ARC-F1, #31), and this test is about the shared `initialize` only.
     let handles: Vec<_> = (0..4)
-        .map(|_| {
+        .map(|i| {
             let t = Arc::clone(&r.t);
             std::thread::spawn(move || {
                 let tg = tags(MOG);
-                t.call_tool(McpCall::new(
-                    PROFILE,
-                    "genie_poll_response",
-                    poll_args(),
-                    &tg,
-                ))
-                .map(|_| ())
+                let args = obj(json!({"conversation_id": format!("c-{i}"), "response_id": "r-1"}));
+                t.call_tool(McpCall::new(PROFILE, "genie_poll_response", args, &tg))
+                    .map(|_| ())
             })
         })
         .collect();

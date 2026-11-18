@@ -59,7 +59,10 @@ export type McpCaller = (args: McpCallArgs) => Promise<McpCallReply>;
  * the previous base x 1.5, at most 15 s.
  */
 export function basePollDelayMs(elapsedMs: number, previousBaseMs?: number): number {
-  throw new Error('red for #31');
+  if (elapsedMs < 20_000) return 2_000;
+  if (elapsedMs < 60_000) return 3_000;
+  if (elapsedMs < 180_000) return 5_000;
+  return Math.min(Math.max(previousBaseMs ?? 5_000, 5_000) * 1.5, MAX_POLL_DELAY_MS);
 }
 
 /**
@@ -68,11 +71,15 @@ export function basePollDelayMs(elapsedMs: number, previousBaseMs?: number): num
  */
 export function pollDelayMs(p: {
   elapsedMs: number;
-  previousBaseMs?: number;
+  previousBaseMs?: number | undefined;
   inflightAsks: number;
   random: () => number;
 }): { baseMs: number; delayMs: number } {
-  throw new Error('red for #31');
+  const baseMs = basePollDelayMs(p.elapsedMs, p.previousBaseMs);
+  const r = Math.min(Math.max(p.random(), 0), 1);
+  const jittered = baseMs * (1 + POLL_JITTER * (2 * r - 1));
+  const floor = INFLIGHT_FLOOR_MS * Math.max(1, Math.floor(p.inflightAsks));
+  return { baseMs, delayMs: Math.max(jittered, floor) };
 }
 
 /** What a PollActor needs to poll one accepted ask. This is what the journal keeps (ARC-F10). */
@@ -215,6 +222,54 @@ export async function* runPollActor(
   queue: PollQueue,
   signal?: AbortSignal,
 ): AsyncGenerator<PollUpdate, PollOutcome, undefined> {
-  void [target, env, queue, signal];
-  throw new Error('red for #31');
+  env.journal.save(target);
+  const elapsed = () => Math.max(0, env.now() - target.askedAt);
+  let previousBaseMs: number | undefined;
+  let n = 0;
+  for (;;) {
+    if (signal?.aborted) return { kind: 'aborted' };
+    // The delay counts from now: the end of the ask or of the previous poll (G-07c).
+    const at = elapsed();
+    const { baseMs, delayMs } = pollDelayMs({
+      elapsedMs: at,
+      previousBaseMs,
+      inflightAsks: env.inflight.count(target.profile),
+      random: env.random,
+    });
+    previousBaseMs = baseMs;
+    // G-08: an ask that starts while this actor sleeps raises the floor too, so check it again
+    // on each wake-up and sleep on to the later time.
+    const from = env.now();
+    let due = from + delayMs;
+    for (;;) {
+      // ARC-F4, G-12b: no poll starts after the give-up. TODO(#149): late re-polls.
+      if (due - target.askedAt > env.giveUpMs) return { kind: 'gave_up' };
+      await env.sleep(due - env.now(), signal);
+      if (signal?.aborted) return { kind: 'aborted' };
+      const floorDue = from + INFLIGHT_FLOOR_MS * Math.max(1, env.inflight.count(target.profile));
+      if (floorDue <= env.now()) break;
+      due = floorDue;
+    }
+    let reply: McpCallReply;
+    try {
+      reply = await queue(target.conversationId, () =>
+        env.call(pollCall(target, env.pollTimeoutMs)),
+      );
+    } catch (e) {
+      const code = ipcErrorCode(e);
+      // G-16c: a poll timeout polls again with the same IDs. ARC-F1: another poll on this
+      // conversation is open (the main agent's), so wait one more delay and poll again.
+      if (code === E_TIMEOUT || code === E_POLL_INFLIGHT) continue;
+      // Anything else ends the loop. The IDs stay in the journal, so polls can resume (ARC-F5).
+      throw e;
+    }
+    if (reply.isError) return { kind: 'error', reply };
+    const result = asObject(reply.structuredContent);
+    const status = pollStatus(result.status);
+    yield { n: ++n, status, result, elapsedMs: elapsed() };
+    if (TERMINAL.has(status)) {
+      env.journal.remove(target.conversationId, target.responseId);
+      return { kind: 'terminal', status: status as TerminalPollStatus, result };
+    }
+  }
 }

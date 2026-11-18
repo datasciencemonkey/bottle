@@ -3,14 +3,7 @@
  * No wall time and no live workspace: polls go to the double through a fake `mcp_call`.
  */
 import { scenarios } from '../../test-support/genie-one-mcp';
-import {
-  HOST,
-  PROFILE,
-  collect,
-  drain,
-  polls,
-  rig,
-} from '../../test-support/poll-actor-rig';
+import { HOST, PROFILE, collect, drain, polls, rig } from '../../test-support/poll-actor-rig';
 import { GenieOneMcpBackend } from './genie-bridge';
 import {
   E_POLL_INFLIGHT,
@@ -20,7 +13,6 @@ import {
   pollDelayMs,
 } from './poll-actor';
 import type { AskEvent } from '../../shared/interfaces';
-
 
 describe('PollActor delay schedule (Table G-POLL)', () => {
   it('[G-07c] base delays: 2 s to 20 s, 3 s to 60 s, 5 s to 180 s, then x1.5 to 15 s', () => {
@@ -56,7 +48,7 @@ describe('PollActor delay schedule (Table G-POLL)', () => {
 
   it('[G-08] each delay is at least 1.5 s x the in-flight asks on the profile, after the jitter', () => {
     const at = (inflightAsks: number, elapsedMs = 0, r = 0.5) =>
-      pollDelayMs({ elapsedMs, inflightAsks, random: () => r }).delayMs;
+      pollDelayMs({ elapsedMs, previousBaseMs: 15_000, inflightAsks, random: () => r }).delayMs;
     expect(at(1)).toBe(2_000);
     expect(at(0)).toBe(2_000); // never under one ask
     expect(at(2, 0, 0)).toBe(3_000); // 1.8 s jittered, floor 3 s
@@ -278,9 +270,9 @@ describe('PollActor in-flight floor and journal', () => {
     const b = new GenieOneMcpBackend(r.cm);
     const ref = { backend: 'genie_one_mcp' as const, profile: PROFILE, host: HOST };
     const first = async (it: AsyncIterable<AskEvent>) => it[Symbol.asyncIterator]().next();
-    await expect(first(b.resume({ ...ref, conversationId: target.conversationId }))).rejects.toThrow(
-      /no_response_id/,
-    );
+    await expect(
+      first(b.resume({ ...ref, conversationId: target.conversationId })),
+    ).rejects.toThrow(/no_response_id/);
     await expect(
       first(b.resume({ ...ref, conversationId: target.conversationId, responseId: 'resp-x' })),
     ).rejects.toThrow(/not_in_journal/);
