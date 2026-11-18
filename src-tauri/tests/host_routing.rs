@@ -135,6 +135,7 @@ fn comps<'a>(
         permissions: None,
         consent: None,
         config: None,
+        mcp: None,
         capture: None,
         capture_ticket: None,
         app_settings: None,
@@ -327,11 +328,12 @@ fn mog_18a_r11_makes_the_card_on_the_first_show_through_the_route() {
 }
 
 #[test]
-fn arc_3_cap_02a_window_ops_and_capture_start_run_off_the_main_thread_and_others_inline() {
+fn arc_3_cap_02a_g_04a_window_ops_capture_start_and_mcp_call_run_off_the_main_thread() {
     // ADR 0022 decision 6: an R11 op may wait for the main thread, so it runs on a worker.
     // ADR 0039: `permission_request` waits for an OS prompt, so it runs on a worker too.
     // ADR 0055: `capture_start` and `capture_resume` open the device, which can be slow. The
     // stops stay inline (MB-05).
+    // #467: `mcp_call` is a blocking HTTP call to Genie One MCP (R8, G-04a).
     for c in COMMANDS {
         assert_eq!(
             runs_off_main_thread(c.name),
@@ -339,7 +341,11 @@ fn arc_3_cap_02a_window_ops_and_capture_start_run_off_the_main_thread_and_others
             c.name.starts_with("window_")
                 || matches!(
                     c.name,
-                    "permission_request" | "capture_start" | "capture_resume" | "insert_text"
+                    "permission_request"
+                        | "capture_start"
+                        | "capture_resume"
+                        | "insert_text"
+                        | "mcp_call"
                 ),
             "{}",
             c.name
@@ -808,6 +814,7 @@ fn ask(from: &str, route_to: Option<&dyn PermissionRoute>, args: Value) -> Resul
         permissions: route_to,
         consent: None,
         config: None,
+        mcp: None,
         capture: None,
         capture_ticket: None,
         app_settings: None,
@@ -946,6 +953,7 @@ fn consent_call(
         permissions: None,
         consent,
         config: None,
+        mcp: None,
         capture: None,
         capture_ticket: None,
         app_settings: None,

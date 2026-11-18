@@ -6,7 +6,7 @@
 //! brain cannot point R8 at the Beta `/api/2.0/mcp/genie` endpoint or a per-space MCP. These two
 //! IPC checks carry no G-03 tag: G-03 itself (the config loader refuses the Beta URL) is #28.
 //! The thin JSON-RPC client R8 (#30) runs here on a fake Genie One server through
-//! `McpCallComponent`; the Tauri host routing of `mcp_call` is TODO(#467). The workspace ID of
+//! `McpCallComponent`, which the Tauri host routes `mcp_call` to (#467). The workspace ID of
 //! R6 (#18) runs on a scripted SCIM seam. The other tests are `#[ignore = "pending TODO(#n)"]`. The serial poll
 //! queue (G-07b) is TS and runs in `src/acceptance/at-07-genie-connect.test.ts`. The live run
 //! skips without `BOTTLE_TEST_PROFILE` (docs/tests/AT-GENIE-MCP.md).
@@ -46,10 +46,10 @@ fn at_07_sec_02a_only_the_brain_may_call_genie_one_mcp() {
             "{label}: {err:?}"
         );
     }
-    // The brain passes the window check. R8 is `McpCallComponent` (#30); the Tauri host routes
-    // `mcp_call` to it in TODO(#467), so `ipc::handle` alone still ends in NotImplemented.
-    let err = ipc::handle("brain", "mcp_call", ask_args()).unwrap_err();
-    assert!(matches!(err, IpcError::NotImplemented { .. }), "{err:?}");
+    // The brain passes the window and schema checks. The Tauri host sends the call to R8
+    // `McpCallComponent` (#467), so `ipc::handle` no longer ends in NotImplemented.
+    let h = ipc::handle("brain", "mcp_call", ask_args()).expect("the brain may call mcp_call");
+    assert_eq!(h, ipc::Handled::Component);
 }
 
 #[test]
