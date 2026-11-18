@@ -77,10 +77,11 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
     // #476 (CAP-16a): `capture_subscribe` sends the levels on a Channel of the brain webview.
     let levels = capture_host::HostLevels::new(capture_host::brain_level_resolver(handle.clone()));
     // #46 (ADR 0082): R4 SttEngine, with the #413 loader (`stt_loader`). `stt_transcribe`
-    // takes the results from the store (#514). TODO(#514): the host emits `capture.segment`.
+    // takes the results from the store (#514); `BrainSegments` sends `capture.segment` (#514).
+    let segments = capture_host::BrainSegments::new(std::sync::Arc::clone(&relay));
     let stt = mog_core::stt_engine::LocalStt::new(
         stt_loader(),
-        std::sync::Arc::new(mog_core::stt_engine::NoTranscriptSink),
+        std::sync::Arc::new(segments),
         |_| {},
     );
     // #21 (CAP-12c, CAP-34, ADR 0078): the RAM-only PTT buffer. R4 is its consumer (#46).

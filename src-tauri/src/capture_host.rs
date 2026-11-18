@@ -22,6 +22,7 @@
 //! core's event chain with `PttCaptureEvents`, so a take starts only when a PTT or hands-free
 //! lease records, and each stop hands one utterance to the buffer's consumer (R4
 //! SttEngine, #46) or wipes it. [`CaptureHost::with_stt`] also puts R4 in the chain (ADR 0082).
+//! [`BrainSegments`] sends one `capture:segment` to the brain for each R4 result (#514).
 
 use mog_core::app_settings::AppSettings;
 use mog_core::audio_device::level::{
@@ -40,8 +41,8 @@ use mog_core::ipc::{
     IpcError, MogId,
 };
 use mog_core::ipc_gateway::ipc_error_code;
-use mog_core::stt_engine::{LocalSttEngine, SttCaptureEvents};
-use mog_core::types::{CaptureState, CaptureStopped};
+use mog_core::stt_engine::{self, LocalSttEngine, SttCaptureEvents, SttDone, TranscriptSink};
+use mog_core::types::{CaptureState, CaptureStopped, SegmentRef, Track};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::panic::AssertUnwindSafe;
@@ -177,6 +178,45 @@ impl CaptureEvents for BrainCaptureEvents {
         lock(&self.owners).stopped(stopped.lease_id);
         if let Ok(payload) = serde_json::to_value(CaptureStopped::from(stopped)) {
             let _ = (self.relay)(events::CAPTURE_STOPPED, payload);
+        }
+    }
+}
+
+// ---------- R4 results ----------
+
+/// The [`TranscriptSink`] of R4 in the app (#514, ADR 0082 amendment 1): each R4 result sends
+/// one final `capture:segment` for the user's track to the brain, which then calls
+/// `stt_transcribe` with its `segmentId` (F1 steps 5 and 8). R4's store keeps the result before
+/// this sink runs, so that call finds it. A failed result also gets the event, so
+/// `stt_transcribe` answers its code. The event holds no text and no audio (CAP-01b).
+pub struct BrainSegments {
+    relay: BrainRelay,
+}
+
+impl BrainSegments {
+    /// Send each R4 result on `relay` (the brain relay of the capture host).
+    pub fn new(relay: BrainRelay) -> Self {
+        Self { relay }
+    }
+}
+
+impl TranscriptSink for BrainSegments {
+    fn done(&self, done: SttDone) {
+        let segment = SegmentRef {
+            segment_id: stt_engine::segment_id(done.lease_id),
+            mog_id: done.mog_id,
+            lease_id: done.lease_id.to_string(),
+            session_id: None,
+            track: Track::You,
+            // One segment per lease: its times are relative to the lease's first frame.
+            t_start_ms: 0,
+            t_end_ms: done.duration_ms,
+            is_final: true,
+            directed_to: None,
+        };
+        if let Ok(payload) = serde_json::to_value(segment) {
+            // No brain yet: the result waits in R4's store, and the next result pushes it out.
+            let _ = (self.relay)(events::CAPTURE_SEGMENT, payload);
         }
     }
 }
@@ -690,7 +730,7 @@ impl CaptureHost {
                 // The gateway checked both Channel references.
                 let a: CaptureSubscribeArgs = args_of(command, args)?;
                 // CAP-16a: the levels go to this `onLevel` Channel from now on. A later call
-                // (a brain reload) replaces it. TODO(#514): R4's partial text feeds `onPartial`.
+                // (a brain reload) replaces it. TODO(#547): R4's partial text feeds `onPartial`.
                 let out = (self.levels.resolve)(&a.on_level).ok_or_else(|| {
                     refused(IpcError::HostFailed {
                         command: command.to_owned(),
