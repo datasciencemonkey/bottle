@@ -162,6 +162,7 @@ impl Rig {
             config: None,
             capture: Some(&self.host),
             capture_ticket: None,
+            app_settings: None,
         };
         route(components, command, args)
     }
@@ -283,7 +284,10 @@ fn cap_16a_capture_subscribe_fails_closed_when_the_channel_does_not_resolve() {
     let r = rig(HashMap::from([(ON_LEVEL, got.clone())]));
     r.subscribe(ON_LEVEL).unwrap();
     // A reference that does not resolve (no brain webview) is the host's failure.
-    assert_eq!(r.subscribe("__CHANNEL__:5"), Err(json!({"error": "host_failed"})));
+    assert_eq!(
+        r.subscribe("__CHANNEL__:5"),
+        Err(json!({"error": "host_failed"}))
+    );
     // The Channel that worked before stays.
     r.start("a1");
     r.mic.feed(&tone(0.5, WINDOW));
@@ -334,7 +338,10 @@ fn cap_16a_the_app_resolves_onlevel_only_on_the_brain_webview() {
     tauri::WebviewWindowBuilder::new(&app, "hub", tauri::WebviewUrl::default())
         .build()
         .unwrap();
-    assert!(resolve(&on_level).is_none(), "only the brain owns capture_subscribe");
+    assert!(
+        resolve(&on_level).is_none(),
+        "only the brain owns capture_subscribe"
+    );
     tauri::WebviewWindowBuilder::new(&app, "brain", tauri::WebviewUrl::default())
         .build()
         .unwrap();

@@ -69,16 +69,19 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
     let relay: capture_host::BrainRelay = std::sync::Arc::new(move |event, payload| {
         app.state::<ipc::BrainChannel>().send(event, payload)
     });
-    // #388 (ADR 0038): the cpal mic on its own audio thread. The frames go nowhere yet.
-    // TODO(#21): the RAM-only PTT buffer is the frame sink.
+    // #476 (CAP-16a): `capture_subscribe` sends the levels on a Channel of the brain webview.
+    let levels = capture_host::HostLevels::new(capture_host::brain_level_resolver(handle.clone()));
+    // #388 (ADR 0038): the cpal mic on its own audio thread. Its frames go to the level
+    // stream (#476) and to the PTT buffer. TODO(#21): the RAM-only PTT buffer replaces
+    // `DiscardSink`.
     // CAP-22 (#453, ADR 0063): `app.capture.preferBuiltInMic` reaches this mic. No mic thread:
     // the app still runs, and every start answers `host_failed`.
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     let (device, link) = {
-        use mog_core::audio_device::{cpal_backend::CpalMicHost, DiscardSink, MicDevice};
+        use mog_core::audio_device::{cpal_backend::CpalMicHost, DiscardSink};
         let settings = handle.try_state::<std::sync::Arc<mog_core::app_settings::AppSettings>>();
         capture_host::mic_capture_device(
-            MicDevice::spawn(CpalMicHost::new, Box::new(DiscardSink)),
+            capture_host::spawn_level_mic(CpalMicHost::new, DiscardSink, levels.gate()),
             settings.as_ref().map(|s| s.inner().as_ref()),
         )
     };
@@ -86,10 +89,11 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let (device, link): (Box<dyn mog_core::capture::AudioDevice>, Option<()>) =
         (Box::new(capture_host::UnwiredMic), None);
-    let host = capture_host::CaptureHost::new(
+    let host = capture_host::CaptureHost::with_levels(
         device,
         std::sync::Arc::new(mog_core::clock::SystemClock::new()),
         relay,
+        levels,
     )?;
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     if let Some(link) = link {

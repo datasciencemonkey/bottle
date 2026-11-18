@@ -34,7 +34,7 @@ const EPSILON = 1e-4;
  * The MOG window uses `viewMicLevels()` (`view-ipc.ts`), which reads the `mog.level` event.
  * The brain feeds `sendMicLevel` from the CaptureService level stream (`capture_subscribe`
  * `onLevel`) and sends the `owner: null` frame when the mic closes (`src/brain/level-stream.ts`,
- * #23). TODO(#425): the host routes `capture_subscribe`.
+ * #23). The host routes `capture_subscribe` and feeds `onLevel` (#476).
  */
 export interface MicLevelSource {
   subscribe(onFrame: (frame: MicLevelFrame) => void): () => void;

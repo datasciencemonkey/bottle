@@ -12,8 +12,11 @@
  * - With no target, a level is dropped: no level goes out after the stop (CAP-16b), even if a
  *   late Channel message arrives.
  *
- * TODO(#425): the host does not route `capture_*` to `CaptureCore` yet, so `subscribeLevels`
- * resolves false until it does; the brain start-up calls it with `wireLevelStream`.
+ * The brain start-up calls `subscribeLevels` with `wireLevelStream`. The host routes
+ * `capture_subscribe` to `CaptureCore` and sends the levels on the `onLevel` Channel (#476).
+ *
+ * TODO(#475): a level carries no capture ID, so a level that arrives after the next capture's
+ * `capture:state` goes to the next target. The contract change binds each level to its capture.
  */
 import { Channel } from '@tauri-apps/api/core';
 import type { CaptureState, MogId } from '../shared/interfaces';
@@ -59,7 +62,10 @@ export class LevelRouter {
     if (prev !== null) this.#deliver(prev, { owner: null, dbfs: SILENT_DBFS, t: this.#now() });
   }
 
-  /** One `onLevel` Channel message: a dBFS number. Anything else is dropped. */
+  /**
+   * One `onLevel` Channel message: a dBFS number. Anything else is dropped.
+   * TODO(#475): the message names no capture, so it goes to the current target.
+   */
   onLevel(dbfs: unknown): void {
     const to = this.#target;
     if (to === null || typeof dbfs !== 'number' || !Number.isFinite(dbfs)) return;

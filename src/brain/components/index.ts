@@ -97,8 +97,8 @@ export function startBrain(): Brain {
       onUtterance: () => undefined,
     });
     wireCaptureLifecycle(bus, lifecycle, createSystemClock().now);
-    // CAP-16a, CAP-16b (#23): the mic level goes only to the target MOG, and stops on stop.
-    // TODO(#425): `capture_subscribe` fails until the host routes it to `CaptureCore`.
+    // CAP-16a, CAP-16b (#23, #476): the mic level goes only to the target MOG, and stops on
+    // stop. The host sends the levels on the `capture_subscribe` `onLevel` Channel.
     const levels = new LevelRouter(sendMicLevel, createSystemClock().now);
     wireLevelStream(bus, levels);
     void subscribeLevels(levels);

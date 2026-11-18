@@ -8,7 +8,8 @@
 //! consumers come later.
 //!
 //! - TODO(#21): the RAM-only PTT buffer (no pre-roll, nothing to disk) implements [`FrameSink`].
-//! - The level stream (CAP-16a, #23) is [`super::level::LevelSink`]; TODO(#425) wires it.
+//! - The level stream (CAP-16a, #23) is [`super::level::LevelSink`]; the host tees it with
+//!   the PTT buffer (#476).
 //! - TODO(#46): speech recognition, with the 16 kHz resample, reads the frames.
 //! - The 2 s zero-buffer watch (CAP-17b, #22) is [`ZeroWatch`]; it uses
 //!   [`MicFrame::is_digital_silence`].
