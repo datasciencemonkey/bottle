@@ -600,12 +600,63 @@ fn at_40_cap_20_quiet_input_reaches_minus_3_dbfs_before_stt() {
 }
 
 #[test]
-#[ignore = "pending TODO(#46): R2 does not hand a segment to R4 yet"]
 fn at_40_cap_20_segment_handed_to_r4_peaks_at_minus_3_dbfs() {
-    // TODO(#46): R2 with a quiet synthetic tone at -30 dBFS through the mic sink and the PTT
-    // buffer (#21): the segment that R4 reads peaks at -3 dBFS +- 0.5 dB. The buffer calls
-    // `audio_device::normalize::normalize_peak` on the segment before R4 (ADR 0067).
-    todo!("TODO(#46): read the peak of the segment that R2 hands to R4 and assert -3 dBFS");
+    use mog_core::audio_device::normalize::{peak_dbfs, TARGET_PEAK_DBFS};
+    use mog_core::audio_device::ptt_buffer::{PttBuffer, Utterance, UtteranceSink};
+    use mog_core::audio_device::{FrameSink, MicFrame};
+    use mog_core::capture::{StopReason, Stopped};
+    use mog_core::types::{CaptureMode, CaptureState, OthersTrack};
+    use std::sync::{Arc, Mutex};
+
+    // R4 SttEngine (TODO(#46)) implements `UtteranceSink`; this stand-in keeps what R2 hands it.
+    #[derive(Default)]
+    struct R4(Mutex<Vec<Utterance>>);
+    impl UtteranceSink for R4 {
+        fn utterance(&self, utterance: Utterance) {
+            self.0.lock().unwrap().push(utterance);
+        }
+    }
+
+    // A quiet synthetic tone at -30 dBFS through the mic sink and the PTT buffer (#21).
+    let r4 = Arc::new(R4::default());
+    let buf = PttBuffer::new(r4.clone());
+    let mut mic = buf.sink();
+    buf.on_state(&CaptureState {
+        owner: Some("00000000-0000-4000-8000-0000000000a1".into()),
+        mode: Some(CaptureMode::Ptt),
+        lease_id: Some("1".into()),
+        recording: true,
+        paused: false,
+        session_id: None,
+        started_at: Some(1),
+        directed_to: None,
+        others_track: OthersTrack::Off,
+        mic: None,
+    });
+    let amp = 10f32.powf(-30.0 / 20.0);
+    let tone: Vec<f32> = (0..16_000)
+        .map(|i| amp * (2.0 * std::f32::consts::PI * 220.0 * i as f32 / 16_000.0).sin())
+        .collect();
+    assert!((peak_dbfs(&tone) - -30.0).abs() < 0.5);
+    for block in tone.chunks(160) {
+        mic.frame(MicFrame {
+            samples: block,
+            sample_rate: 16_000,
+        });
+    }
+    buf.on_stopped(&Stopped {
+        lease_id: 1,
+        mog_id: "00000000-0000-4000-8000-0000000000a1".into(),
+        mode: CaptureMode::Ptt,
+        reason: StopReason::Released,
+    });
+    let segments = std::mem::take(&mut *r4.0.lock().unwrap());
+    assert_eq!(segments.len(), 1, "R2 hands one segment to R4");
+    let peak = peak_dbfs(segments[0].samples());
+    assert!(
+        (peak - TARGET_PEAK_DBFS).abs() < 0.5,
+        "the segment that R4 reads peaks at {peak} dBFS"
+    );
 }
 
 #[test]
