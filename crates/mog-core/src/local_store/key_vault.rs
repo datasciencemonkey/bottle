@@ -144,8 +144,8 @@ pub enum KeychainTarget {
     Login,
 }
 
-/// The keychain for a process that has (`true`) or does not have the `keychain-access-groups`
-/// entitlement (#541). There is no fallback between them: an entitled build never reads or writes
+/// The keychain for a process that has (`true`) or does not have a keychain entitlement
+/// ([`entitled_by`], #541). There is no fallback between them: an entitled build never reads or writes
 /// the login keychain, so it never uses a login item that another process of the user planted.
 #[cfg(any(target_os = "macos", test))]
 pub fn target_for(entitled: bool) -> KeychainTarget {
@@ -154,6 +154,22 @@ pub fn target_for(entitled: bool) -> KeychainTarget {
     } else {
         KeychainTarget::Login
     }
+}
+
+/// The entitlements that give a process a keychain access group in the data protection keychain
+/// (Apple: keychain access groups; TN3137). A process with any of them is entitled.
+#[cfg(any(target_os = "macos", test))]
+pub const KEYCHAIN_ENTITLEMENTS: &[&str] = &[
+    "keychain-access-groups",
+    "com.apple.application-identifier",
+    "com.apple.security.application-groups",
+];
+
+/// Whether a process is entitled, given `has(key)` for each entitlement key: true when any of
+/// [`KEYCHAIN_ENTITLEMENTS`] is present.
+#[cfg(any(target_os = "macos", test))]
+pub fn entitled_by(has: impl Fn(&str) -> bool) -> bool {
+    KEYCHAIN_ENTITLEMENTS.iter().any(|k| has(k))
 }
 
 /// The item attributes that the vault sends for one keychain.
@@ -217,10 +233,12 @@ impl KeyVault for NoKeyVault {
 /// the data protection keychain, with `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` and no
 /// iCloud sync. macOS honours the accessibility class only in that keychain. An unsigned or ad-hoc
 /// build (for example `pnpm tauri dev`) has no entitlement, and the data protection keychain
-/// refuses it. The vault checks the entitlement one time at creation ([`target_for`], #541).
+/// refuses it. The vault checks the entitlements one time at creation ([`entitled_by`],
+/// [`target_for`], #541).
 /// Without it, the vault uses only the login keychain, with the same service and account and no
 /// iCloud sync. MEM-08b accessibility is then not enforced (ADR 0071 amendment 1). There is no
-/// fallback between the two keychains. TODO(#34): verify on a signed build (needs:mac).
+/// fallback between the two keychains. TODO(#34): verify on a signed build (needs:mac) that
+/// `KeychainVault::bottle().target()` is `DataProtection` and that no login item is made.
 #[cfg(target_os = "macos")]
 pub mod macos {
     use security_framework::access_control::{ProtectionMode, SecAccessControl};
@@ -237,10 +255,10 @@ pub mod macos {
     /// `errSecItemNotFound`.
     const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
 
-    /// Whether this process has the `keychain-access-groups` entitlement. A signed release build
-    /// has it; an unsigned or ad-hoc build does not. Any failure of the check reads as "not
-    /// entitled".
-    pub fn has_keychain_access_groups() -> bool {
+    /// Whether this process has any of [`KEYCHAIN_ENTITLEMENTS`](super::KEYCHAIN_ENTITLEMENTS).
+    /// A signed release build has one; an unsigned or ad-hoc build has none. A failed check of a
+    /// key reads as "not present".
+    pub fn has_keychain_entitlement() -> bool {
         use std::ffi::c_void;
         type CFRef = *const c_void;
         #[link(name = "CoreFoundation", kind = "framework")]
@@ -264,31 +282,32 @@ pub mod macos {
             ) -> CFRef;
         }
         const UTF8: u32 = 0x0800_0100; // kCFStringEncodingUTF8
-        const NAME: &[u8] = b"keychain-access-groups";
-        // SAFETY: plain CoreFoundation and Security calls. Each object that a Create or Copy
-        // call returns is released once, and a null is never released.
+                                       // SAFETY: plain CoreFoundation and Security calls. Each object that a Create or Copy
+                                       // call returns is released once, and a null is never released.
         unsafe {
             let task = SecTaskCreateFromSelf(std::ptr::null());
             if task.is_null() {
                 return false;
             }
-            let name = CFStringCreateWithBytes(
-                std::ptr::null(),
-                NAME.as_ptr(),
-                NAME.len() as isize,
-                UTF8,
-                0,
-            );
-            if name.is_null() {
-                CFRelease(task);
-                return false;
-            }
-            let value = SecTaskCopyValueForEntitlement(task, name, std::ptr::null_mut());
-            let entitled = !value.is_null();
-            if entitled {
-                CFRelease(value);
-            }
-            CFRelease(name);
+            let entitled = super::entitled_by(|key| {
+                let name = CFStringCreateWithBytes(
+                    std::ptr::null(),
+                    key.as_ptr(),
+                    key.len() as isize,
+                    UTF8,
+                    0,
+                );
+                if name.is_null() {
+                    return false;
+                }
+                let value = SecTaskCopyValueForEntitlement(task, name, std::ptr::null_mut());
+                let present = !value.is_null();
+                if present {
+                    CFRelease(value);
+                }
+                CFRelease(name);
+                present
+            });
             CFRelease(task);
             entitled
         }
@@ -326,11 +345,11 @@ pub mod macos {
     impl KeychainVault {
         /// The Bottle local store key item, in the keychain that this process may use.
         pub fn bottle() -> Self {
-            Self::for_entitlement(has_keychain_access_groups())
+            Self::for_entitlement(has_keychain_entitlement())
         }
 
-        /// The Bottle item for a process that has (`true`) or does not have the
-        /// `keychain-access-groups` entitlement. The seam for tests.
+        /// The Bottle item for a process that has (`true`) or does not have a keychain
+        /// entitlement. The seam for tests.
         pub fn for_entitlement(entitled: bool) -> Self {
             KeychainVault {
                 target: target_for(entitled),
