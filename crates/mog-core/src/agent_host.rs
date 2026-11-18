@@ -181,7 +181,7 @@ pub trait AgentStatusSink: Send + Sync {
 }
 
 /// Resolves the model target of a MOG: the AI Gateway of its home profile, or a local model.
-/// TODO(#16, #18): the real resolver reads the MOG's home profile and host from R5/R6.
+/// TODO(#16): the real resolver reads the MOG's home profile and host from R5/R6.
 pub trait ModelTargets: Send + Sync {
     /// The target of `mog_id`.
     fn target(&self, mog_id: &str) -> Result<ModelTarget, AgentError>;

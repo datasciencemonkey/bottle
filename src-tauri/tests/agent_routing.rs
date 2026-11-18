@@ -1,7 +1,7 @@
 //! #307: the Tauri host sends `agent_start`, `agent_stop` and `agent_send` to the one R16
 //! `SharedAgentHost` of the app through the hardened gateway (RTR-21a, ARC-7). Only the brain
 //! may call them (ARC-4). The host here is the production build (`agent_host::build`); it has
-//! no model target resolver yet (TODO(#16, #18)), so a start answers `agent_target_unavailable`
+//! no model target resolver yet (TODO(#16)), so a start answers `agent_target_unavailable`
 //! before any runtime starts. No harness, no model and no token is used.
 
 use bottle_lib::agent_host;
@@ -63,7 +63,7 @@ fn host() -> agent_host::AgentHostApp {
 fn rtr_21a_arc_7_the_agent_commands_reach_the_shared_agent_host() {
     let h = host();
     let agent = Some(&h as &dyn GatewayComponents);
-    // No model target yet (TODO(#16, #18)): the start stops before any runtime starts.
+    // No model target yet (TODO(#16)): the start stops before any runtime starts.
     assert_eq!(
         call("brain", agent, "agent_start", commands()[0].1.clone()),
         Err(json!({"error": "agent_target_unavailable"}))

@@ -10,7 +10,7 @@
 //! The app has no model target resolver and no runtime program yet, so every `agent_start`
 //! answers `agent_target_unavailable` before any runtime starts, and the brain routes with the
 //! fallback classifier (RTR-15b).
-//! TODO(#16, #18): the real [`ModelTargets`] reads the MOG's home profile and host from R5/R6.
+//! TODO(#16): the real [`ModelTargets`] reads the MOG's home profile and host from R5/R6.
 //! TODO(#111): SP-19 picks the runtime program, the real outbound hop and the token broker.
 
 use std::sync::Arc;
@@ -30,7 +30,7 @@ use tauri::Manager;
 
 use crate::ipc::BrainChannel;
 
-/// No MOG has a model target yet. TODO(#16, #18): the R5/R6 home profile and host.
+/// No MOG has a model target yet. TODO(#16): the R5/R6 home profile and host.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NoModelTargets;
 
