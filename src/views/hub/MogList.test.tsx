@@ -204,6 +204,21 @@ describe('hub MOG list (MB-01, MB-03b)', () => {
     expect(document.activeElement).toBe(cancel);
   });
 
+  it('[MB-01] each row shows Start or Stop and Edit; Duplicate, Forget and Delete sit behind one More entry point (#561)', async () => {
+    const el = await shown();
+    const row = el.querySelector(`li[data-mog-row="${A}"]`) as HTMLElement;
+    const more = row.querySelector('details') as HTMLDetailsElement;
+    expect(more.querySelector('summary')?.getAttribute('aria-label')).toBe(
+      'More actions for Sales',
+    );
+    expect(more.open).toBe(false);
+    const inMore = [...more.querySelectorAll('button')].map((b) => b.getAttribute('aria-label'));
+    expect(inMore).toEqual(['Duplicate Sales', 'Forget the memory of Sales', 'Delete Sales']);
+    // The frequent actions stay visible in the row, outside the menu.
+    for (const label of ['Start Sales', 'Edit Sales'])
+      expect(more.contains(byLabel(row, label))).toBe(false);
+  });
+
   it('[MB-03b] the same error twice gives a new alert, so a screen reader reads it again', async () => {
     const el = await shown();
     const text = '8 MOGs are running. Stop one to start Sales.';
