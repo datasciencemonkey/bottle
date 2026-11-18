@@ -4,7 +4,7 @@
 //! [`MicHost`]) under the real `MicDevice`, whose frame sink is a `TeeSink` of the `LevelSink`
 //! and the PTT buffer sink; the real `CaptureCore` with the PTT buffer in its event chain; and
 //! the real [`CaptureHost`] behind the hardened gateway. No real mic opens. The samples are a
-//! synthetic tone. The consumer is a stand-in for R4 SttEngine (TODO(#46)).
+//! synthetic tone. The consumer here is a stand-in; R4 SttEngine (#46) is the app's consumer (tests/stt_host.rs).
 
 use bottle_lib::capture_host::{spawn_level_mic, CaptureHost, HostLevels, LevelResolver};
 use bottle_lib::ipc::{route, BrainLink, HostComponents};
@@ -235,21 +235,23 @@ fn cap_12c_install_capture_feeds_the_mic_to_the_same_ptt_buffer_that_the_core_dr
         "exactly one PttBuffer in install_capture"
     );
     assert!(
-        body.contains("spawn_level_mic(CpalMicHost::new,ptt.sink(),levels.gate())"),
+        // #46: the same tee also feeds R4 SttEngine (ADR 0082).
+        body.contains("spawn_level_mic(CpalMicHost::new,mog_core::audio_device::level::TeeSink(ptt.sink(),stt.engine().frame_sink()),levels.gate()"),
         "the mic frames go to `ptt.sink()`"
     );
     assert!(
         !body.contains("DiscardSink"),
         "the mic frames must not go to DiscardSink"
     );
+    // #46: `with_stt` is `with_audio` with R4 in the event chain (ADR 0082).
     let host = body
-        .split("CaptureHost::with_audio(")
+        .split("CaptureHost::with_stt(")
         .nth(1)
-        .expect("the host is built with with_audio");
-    let args = &host[..host.find(")?;").expect("the end of the with_audio call")];
+        .expect("the host is built with with_stt");
+    let args = &host[..host.find(")?;").expect("the end of the with_stt call")];
     assert!(
-        args.ends_with(",ptt,") || args.ends_with(",ptt"),
-        "the same `ptt` goes to with_audio: {args}"
+        args.contains(",ptt,stt.engine().clone()"),
+        "the same `ptt` goes to with_stt: {args}"
     );
     assert!(!body.contains("CaptureHost::with_levels("));
 }

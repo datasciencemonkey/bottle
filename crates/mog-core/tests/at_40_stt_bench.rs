@@ -608,7 +608,7 @@ fn at_40_cap_20_segment_handed_to_r4_peaks_at_minus_3_dbfs() {
     use mog_core::types::{CaptureMode, CaptureState, OthersTrack};
     use std::sync::{Arc, Mutex};
 
-    // R4 SttEngine (TODO(#46)) implements `UtteranceSink`; this stand-in keeps what the PTT
+    // R4 SttEngine (#46) implements `UtteranceSink`; this stand-in keeps what the PTT
     // buffer hands it. The test drives the buffer's `capture.state` and stop calls by hand.
     #[derive(Default)]
     struct R4(Mutex<Vec<Utterance>>);
@@ -674,4 +674,59 @@ fn at_40_cap_33a_cap_33b_opus_penalty_is_listed_and_over_0_5_pp_selects_32_kbps(
     );
     assert_eq!(direct.wer_pct, 0.0);
     todo!("TODO(#126): encode with the journal Opus path and read the journal bitrate config");
+}
+
+#[test]
+fn at_40_cap_20_every_segment_r4_decodes_peaks_at_minus_3_dbfs() {
+    use mog_core::audio_device::normalize::{peak_dbfs, TARGET_PEAK_DBFS};
+    use mog_core::audio_device::sink::{FrameSink, MicFrame};
+    use mog_core::stt_engine::{
+        LocalSttEngine, NoTranscriptSink, Recognizer, RecognizerLoader, SttIdentity,
+    };
+    use std::sync::{Arc, Mutex};
+    // #46 (ADR 0082): a quiet synthetic tone at -30 dBFS goes through the mic sink of R4 at
+    // 48 kHz. Every segment that the recognizer reads peaks at -3 dBFS +- 0.5 dB, because R4
+    // calls `normalize_peak` on each segment just before the decode (CAP-20, ADR 0067).
+    struct Peaks(Arc<Mutex<Vec<f32>>>);
+    impl Recognizer for Peaks {
+        fn transcribe(&mut self, samples: &[f32]) -> String {
+            self.0.lock().unwrap().push(peak_dbfs(samples));
+            String::new()
+        }
+    }
+    struct Loader(Arc<Mutex<Vec<f32>>>);
+    impl RecognizerLoader for Loader {
+        fn load(&self) -> Result<Box<dyn Recognizer>, &'static str> {
+            Ok(Box::new(Peaks(Arc::clone(&self.0))))
+        }
+        fn identity(&self) -> SttIdentity {
+            SttIdentity::local_parakeet()
+        }
+    }
+    let peaks = Arc::new(Mutex::new(Vec::new()));
+    let r4 = LocalSttEngine::spawn(mog_core::stt_engine::EngineParts::new(
+        Arc::new(Loader(Arc::clone(&peaks))),
+        Arc::new(NoTranscriptSink),
+    ));
+    let amp = 10f32.powf(-30.0 / 20.0);
+    let tone: Vec<f32> = (0..48_000)
+        .map(|i| amp * (2.0 * std::f32::consts::PI * 220.0 * i as f32 / 48_000.0).sin())
+        .collect();
+    r4.begin(1, "mog-a", mog_core::types::CaptureMode::Ptt);
+    let mut sink = r4.frame_sink();
+    for block in tone.chunks(480) {
+        sink.frame(MicFrame {
+            samples: block,
+            sample_rate: 48_000,
+        });
+    }
+    r4.commit(1, mog_core::capture::StopReason::Released);
+    r4.sync();
+    let peaks = peaks.lock().unwrap().clone();
+    assert_eq!(peaks.len(), 1, "one segment reached R4");
+    assert!(
+        (peaks[0] - TARGET_PEAK_DBFS).abs() < 0.5,
+        "peak {}",
+        peaks[0]
+    );
 }

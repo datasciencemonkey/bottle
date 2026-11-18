@@ -43,6 +43,7 @@ pub mod resource_budget;
 pub mod session_guard;
 pub mod stt;
 pub mod stt_bench;
+pub mod stt_engine;
 #[cfg(feature = "local-stt")]
 pub mod stt_local;
 pub mod stt_model;

@@ -252,6 +252,19 @@ pub fn ptt_payload(mog_id: &str, phase: PttPhase) -> Value {
 /// Whether a Shift key (not the talk key) is down now (RTR-17a).
 pub type ShiftProbe = Box<dyn Fn() -> bool + Send>;
 
+/// CAP-51c (#46): the key-down hook that preloads R4, if the capture host has made it.
+fn r4_preload<R: Runtime>(app: AppHandle<R>) -> KeyDownHook {
+    Box::new(move || {
+        if let Some(stt) = app.try_state::<mog_core::stt_engine::LocalStt>() {
+            stt.engine().preload();
+        }
+    })
+}
+
+/// A warm-up that runs at each talk-key down, before the brain hears of it: the R4 model
+/// preload (CAP-51c, #46). It must not block.
+pub type KeyDownHook = Box<dyn Fn() + Send>;
+
 /// The talk key now, shared by the Shift probe and a talk-key change (RTR-17a, CAP-43a).
 #[derive(Debug, Clone)]
 pub struct TalkNow(Arc<Mutex<TalkBinding>>);
@@ -292,6 +305,7 @@ pub struct PttForwarder<B: BrainSink, S: StatusSink> {
     /// The MOG of the last press that ended, for the `double_tap` that follows it.
     last: Option<String>,
     shift: Option<ShiftProbe>,
+    key_down: Option<KeyDownHook>,
     /// The fallback chord (Ctrl+Shift+Space, CAP-39b) is the talk key now. Shift is part of the
     /// chord, so it never forces the ask route (RTR-17a, ADR 0053).
     chord: bool,
@@ -307,8 +321,16 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
             held: None,
             last: None,
             shift: None,
+            key_down: None,
             chord: false,
         }
+    }
+
+    /// Run `hook` at each talk-key down (CAP-51c: the R4 model preload, in parallel with the
+    /// brain's other warm-ups).
+    pub fn with_key_down(mut self, hook: KeyDownHook) -> Self {
+        self.key_down = Some(hook);
+        self
     }
 
     /// Read the Shift state at each key-down with `probe` (RTR-17a).
@@ -323,6 +345,9 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
             HotkeyOutput::Ptt(phase) => {
                 let mog = match phase {
                     PttPhase::Down => {
+                        if let Some(hook) = &self.key_down {
+                            hook();
+                        }
                         self.held = self.target.current();
                         self.held.clone()
                     }
@@ -839,7 +864,8 @@ where
     spawn_forwarder(
         rx,
         PttForwarder::new(Arc::clone(&target), app.clone(), BrainStatus(app.clone()))
-            .with_shift_probe(talk_now.probe(platform_shift_held)),
+            .with_shift_probe(talk_now.probe(platform_shift_held))
+            .with_key_down(r4_preload(app.clone())),
     )?;
     let sink: Arc<dyn HotkeySink> = Arc::new(sink);
     let (service, permissions) = factory(settings.talk_binding(), Arc::clone(&sink));
@@ -991,6 +1017,91 @@ mod tests {
         f.on_output(HotkeyOutput::Ptt(PttPhase::Down));
         f.on_output(HotkeyOutput::Ptt(PttPhase::Up));
         assert_eq!(brain.items(), vec![ptt("a1", "down"), ptt("a1", "up")]);
+    }
+
+    #[test]
+    fn cap_51c_key_down_runs_the_preload_hook_once_per_press() {
+        let target = Arc::new(PttTarget::default());
+        target.set("a1");
+        let (f, brain, _) = forwarder(&target);
+        let downs = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let seen = Arc::clone(&downs);
+        let mut f = f.with_key_down(Box::new(move || {
+            seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }));
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Down));
+        assert_eq!(downs.load(std::sync::atomic::Ordering::SeqCst), 1);
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Up));
+        f.on_output(HotkeyOutput::Ptt(PttPhase::DoubleTap));
+        assert_eq!(
+            downs.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "only a key-down preloads (CAP-51c)"
+        );
+        assert_eq!(brain.items()[0], ptt("a1", "down"));
+    }
+
+    struct NoText;
+    impl mog_core::stt_engine::Recognizer for NoText {
+        fn transcribe(&mut self, _samples: &[f32]) -> String {
+            String::new()
+        }
+    }
+    struct OkLoader;
+    impl mog_core::stt_engine::RecognizerLoader for OkLoader {
+        fn load(&self) -> Result<Box<dyn mog_core::stt_engine::Recognizer>, &'static str> {
+            Ok(Box::new(NoText))
+        }
+        fn identity(&self) -> mog_core::stt_engine::SttIdentity {
+            mog_core::stt_engine::SttIdentity::local_parakeet()
+        }
+    }
+    struct OnBattery;
+    impl mog_core::stt_engine::PowerProbe for OnBattery {
+        fn source(&self) -> mog_core::stt_engine::PowerSource {
+            mog_core::stt_engine::PowerSource::Battery
+        }
+    }
+
+    #[test]
+    fn cap_51c_the_r4_preload_hook_loads_the_managed_model() {
+        let app = tauri::test::mock_app();
+        // No R4 in the app state yet (the capture install failed): the hook does nothing.
+        r4_preload(app.handle().clone())();
+        let stt = mog_core::stt_engine::LocalStt::new(
+            Arc::new(OkLoader),
+            Arc::new(mog_core::stt_engine::NoTranscriptSink),
+            |parts| parts.power = Arc::new(OnBattery),
+        );
+        let engine = stt.engine().clone();
+        engine.sync();
+        assert!(
+            !engine.status().loaded,
+            "on battery nothing loads before a key-down"
+        );
+        app.manage(stt);
+        r4_preload(app.handle().clone())();
+        engine.sync();
+        assert!(
+            engine.status().loaded,
+            "the key-down hook preloads R4 (CAP-51c)"
+        );
+    }
+
+    #[test]
+    fn cap_51c_the_app_hotkey_install_wires_the_r4_preload() {
+        let src = include_str!("hotkey_host.rs");
+        let install = &src[src
+            .find("    let talk_now = TalkNow::new(")
+            .expect("the install")..];
+        let install = &install[..install
+            .find("let sink: Arc<dyn HotkeySink>")
+            .expect("its end")];
+        let squashed: String = install.chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(
+            squashed.contains(".with_key_down(r4_preload(app.clone()))"),
+            "the app forwarder preloads R4 at key-down: {squashed}"
+        );
     }
 
     #[test]

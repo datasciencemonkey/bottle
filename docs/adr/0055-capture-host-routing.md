@@ -28,4 +28,4 @@ R2 `CaptureCore` (#273) is on main, and `mog_core::ipc` has rows for the `captur
 
 - PTT and hands-free capture work end to end through IPC on macOS and Windows. The captured frames reach STT once #21 adds the PTT buffer. #14, #21, #22 and #23 can use the real route.
 - `capture_resume` (#279, PR #392) routes to `CaptureService::resume`, and the open item of ADR 0039 for #425 is closed. A resume needs a paused session, and no session starts before #65. So today a resume answers `invalid_mode` for a live PTT or hands-free lease.
-- `capture_subscribe` checks its two Channels and answers `{}`. Amended by #476 (ADR 0067, decision 7): the host sends the mic level on `onLevel`. `TODO(#46)`: the partial text feeds `onPartial`.
+- `capture_subscribe` checks its two Channels and answers `{}`. Amended by #476 (ADR 0067, decision 7): the host sends the mic level on `onLevel`. `TODO(#514)`: the partial text of R4 feeds `onPartial`.

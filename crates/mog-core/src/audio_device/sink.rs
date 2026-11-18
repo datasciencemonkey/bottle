@@ -11,7 +11,8 @@
 //!   [`super::ptt_buffer::PttBufferSink`].
 //! - The level stream (CAP-16a, #23) is [`super::level::LevelSink`]; the host tees it with
 //!   the PTT buffer (#476).
-//! - TODO(#46): speech recognition, with the 16 kHz resample, reads the frames.
+//! - R4 speech recognition (`crate::stt_engine::SttFrameSink`, #46) reads the frames on the
+//!   host tee and resamples them to 16 kHz.
 //! - The 2 s zero-buffer watch (CAP-17b, #22) is [`ZeroWatch`]; it uses
 //!   [`MicFrame::is_digital_silence`].
 

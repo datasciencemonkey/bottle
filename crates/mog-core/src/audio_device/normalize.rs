@@ -11,7 +11,8 @@
 //! or kept.
 //!
 //! The PTT buffer ([`super::ptt_buffer`], #21) calls [`normalize_peak`] on each utterance just
-//! before it hands it to R4 (TODO(#46)). The segment pipeline (TODO(#116)) does the same for
+//! before it hands it to R4, and R4 calls it on each segment just before the decode (#46,
+//! ADR 0082). The segment pipeline (TODO(#116)) does the same for
 //! each session segment.
 
 use super::level::LEVEL_FLOOR_DBFS;

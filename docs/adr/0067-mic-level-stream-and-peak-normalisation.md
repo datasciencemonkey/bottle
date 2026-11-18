@@ -42,5 +42,5 @@ The contract already has the `capture_subscribe` `onLevel: Channel<number>` and 
 ## Open work
 
 - `TODO(#475)`: a level carries no capture ID. A level that the brain reads after the next capture's `capture:state` can reach the next target MOG. The contract change binds each level to its capture.
-- #21 (ADR 0078): the PTT buffer calls `normalize_peak` on each utterance just before it hands it to R4. The AT-40 test of that hand-off runs (`at_40_cap_20_segment_handed_to_r4_peaks_at_minus_3_dbfs`). `TODO(#46)`: R4 reads the utterance. `TODO(#116)`: the segment pipeline does the same for session segments.
-- `TODO(#46)`: `onPartial` has no reader yet.
+- #21 (ADR 0078): the PTT buffer calls `normalize_peak` on each utterance just before it hands it to R4. The AT-40 test of that hand-off runs (`at_40_cap_20_segment_handed_to_r4_peaks_at_minus_3_dbfs`). R4 (#46, ADR 0082) calls `normalize_peak` on each segment that it decodes. `TODO(#116)`: the segment pipeline does the same for session segments.
+- `TODO(#514)`: `onPartial` has no reader yet.

@@ -41,8 +41,8 @@ The issue leaves these points open:
    A late `capture.state` of a stopped lease opens no new take.
    The panic stop (`capture_stop_all`, MB-05, `StopReason::Panic`) and the stop at app exit keep the audio, as a manual stop does. This is intended: `discards_audio` is the one rule for which stops drop audio, and the segment pipeline (#116) uses the same rule. The `Utterance` carries the reason `Panic`, so the consumer (#46) can decide not to insert or send it.
 8. **The `Utterance` is the only copy (CAP-34, section 9.2).** It has no `Clone`. Its `Debug` shows only the lease, the mode, the reason, the rate and the length: no sample and no MOG ID. Its `Drop` wipes every sample. So the app keeps no copy after the consumer drops it.
-9. **The consumer is an interface.** R4 SttEngine (TODO(#46)) implements `UtteranceSink`. The sink runs on the thread that stopped the lease, so it must hand the utterance on fast. Until #46 lands, the host uses `NoUtteranceSink`, which drops, and so wipes, each utterance.
-10. **A rate change mid-take.** After a device change (CAP-18), a frame at another rate is resampled to the take's rate by linear interpolation. TODO(#46): SttEngine resamples to 16 kHz.
+9. **The consumer is an interface.** R4 SttEngine implements `UtteranceSink` (#46, ADR 0082). The sink runs on the thread that stopped the lease, so it must hand the utterance on fast. Until #46 lands, the host uses `NoUtteranceSink`, which drops, and so wipes, each utterance.
+10. **A rate change mid-take.** After a device change (CAP-18), a frame at another rate is resampled to the take's rate by linear interpolation. SttEngine resamples its tee input to 16 kHz (#46, ADR 0082).
 11. **The host.** `CaptureHost::with_audio(device, clock, relay, levels, ptt)` builds the event chain `LevelCaptureEvents<PttCaptureEvents<BrainCaptureEvents>>`. `with_levels` keeps its signature and uses `NoUtteranceSink`. `install_capture` gives the mic `ptt.sink()` in place of `DiscardSink`.
 12. **CAP-21 stays on the cold path.** SP-08 (#15) has not run on a device. So `MicDevice` builds the stream at the open, not before key-down (ADR 0038). A test pins this. TODO(#15): pre-build the stream if SP-08 passes. AT-21 (key-down p95 of 60 ms or less) needs that result and a device.
 13. **No Handy code.** Handy keeps its recording in a plain `Vec<f32>` with a VAD pre-fill and no zeroing (`src-tauri/src/managers/audio.rs` @ aca8985). Bottle needs no pre-roll and a wipe, so this is new code.
@@ -57,7 +57,7 @@ The issue leaves these points open:
 
 ## Open work
 
-- `TODO(#46)`: SttEngine implements `UtteranceSink`, resamples to 16 kHz and drops each utterance after the decode.
+- Done in #46 (ADR 0082): SttEngine implements `UtteranceSink`, decodes the tee audio at 16 kHz and drops each utterance at once.
 - `TODO(#116)`: the session segment pipeline, with directed PTT segments and the gap marker.
 - `TODO(#15)`: the pre-built stream if SP-08 passes (CAP-21, AT-21).
 - `TODO(#500)`: lock the buffer pages against swap and the Windows page file.
