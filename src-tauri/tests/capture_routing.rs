@@ -77,18 +77,8 @@ fn rig() -> Rig {
 impl Rig {
     fn call_from(&self, from: &str, command: &str, args: Value) -> Result<Value, Value> {
         let components = HostComponents {
-            from,
-            brain: &NoBrain,
-            windows: None,
-            hotkeys: None,
-            permissions: None,
-            consent: None,
-            config: None,
-            mcp: None,
             capture: Some(&self.host),
-            capture_ticket: None,
-            app_settings: None,
-            insert: None,
+            ..HostComponents::none(from, &NoBrain)
         };
         route(components, command, args)
     }
@@ -106,18 +96,9 @@ impl Rig {
         args: Value,
     ) -> Result<Value, Value> {
         let components = HostComponents {
-            from: "brain",
-            brain: &NoBrain,
-            windows: None,
-            hotkeys: None,
-            permissions: None,
-            consent: None,
-            config: None,
-            mcp: None,
             capture: Some(&self.host),
             capture_ticket: Some(ticket),
-            app_settings: None,
-            insert: None,
+            ..HostComponents::none("brain", &NoBrain)
         };
         route(components, command, args)
     }
@@ -406,20 +387,7 @@ fn cap_02a_a_view_cannot_call_capture() {
 #[test]
 fn cap_01a_no_managed_capture_host_is_host_failed() {
     for command in CAPTURE_COMMANDS {
-        let components = HostComponents {
-            from: "brain",
-            brain: &NoBrain,
-            windows: None,
-            hotkeys: None,
-            permissions: None,
-            consent: None,
-            config: None,
-            mcp: None,
-            capture: None,
-            capture_ticket: None,
-            app_settings: None,
-            insert: None,
-        };
+        let components = HostComponents::none("brain", &NoBrain);
         assert_eq!(
             route(components, command, sample_args(command)),
             err("host_failed"),

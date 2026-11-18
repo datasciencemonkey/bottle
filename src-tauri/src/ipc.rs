@@ -248,6 +248,29 @@ fn hotkeys_error(command: &str, e: CoreError) -> CoreError {
     }
 }
 
+impl<'a> HostComponents<'a> {
+    /// For tests (#532): every component `None`. A fixture names only the fields it needs,
+    /// then `..HostComponents::none(from, brain)`, so a new `Option` component needs no
+    /// fixture edit. `from` and `brain` are not `Option`, so they are arguments, not a
+    /// `Default`. Production code (`route_from`) names every field; a unit test checks it.
+    pub fn none(from: &'a str, brain: &'a dyn BrainLink) -> Self {
+        Self {
+            from,
+            brain,
+            windows: None,
+            hotkeys: None,
+            permissions: None,
+            consent: None,
+            config: None,
+            mcp: None,
+            capture: None,
+            capture_ticket: None,
+            app_settings: None,
+            insert: None,
+        }
+    }
+}
+
 impl HostComponents<'_> {
     fn windows(&self, command: &str) -> CoreResult<&dyn WindowHost> {
         self.windows.ok_or_else(|| host_failed(command))
@@ -681,15 +704,16 @@ mod tests {
     #[test]
     fn arc_5_issue_532_none_sets_every_component_to_none() {
         let c = HostComponents {
-            from: "mog-a1",
-            ..HostComponents::none("brain", &NoBrain)
+            from: "brain",
+            ..HostComponents::none("mog-a1", &NoBrain)
         };
-        assert_eq!(c.from, "mog-a1");
+        assert_eq!(c.from, "brain");
         assert!(c.windows.is_none());
         assert!(c.hotkeys.is_none());
         assert!(c.permissions.is_none());
         assert!(c.consent.is_none());
         assert!(c.config.is_none());
+        assert!(c.mcp.is_none());
         assert!(c.capture.is_none());
         assert!(c.capture_ticket.is_none());
         assert!(c.app_settings.is_none());
@@ -771,6 +795,28 @@ mod tests {
             }
         }
         assert!(literals >= 1, "route_from builds HostComponents");
+    }
+
+    /// Every fixture in `src-tauri/tests` takes a `..HostComponents::none(..)` base, so a new
+    /// `Option` component needs no fixture edit (#532).
+    #[test]
+    fn arc_5_issue_532_test_fixtures_use_a_none_base() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            for body in host_component_literals(&text) {
+                assert!(
+                    body.contains("..HostComponents::none("),
+                    "{}: a HostComponents fixture names every field; end it with \
+                     `..HostComponents::none(from, brain)`: {body}",
+                    path.display()
+                );
+            }
+        }
     }
 
     #[test]

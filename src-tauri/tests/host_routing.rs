@@ -128,18 +128,9 @@ fn comps<'a>(
     hotkeys: Option<&'a dyn HotkeysRoute>,
 ) -> HostComponents<'a> {
     HostComponents {
-        from,
-        brain,
         windows,
         hotkeys,
-        permissions: None,
-        consent: None,
-        config: None,
-        mcp: None,
-        capture: None,
-        capture_ticket: None,
-        app_settings: None,
-        insert: None,
+        ..HostComponents::none(from, brain)
     }
 }
 
@@ -811,18 +802,8 @@ impl PermissionRoute for FakePermissionRoute {
 fn ask(from: &str, route_to: Option<&dyn PermissionRoute>, args: Value) -> Result<Value, Value> {
     let brain = FakeBrain::default();
     let components = HostComponents {
-        from,
-        brain: &brain,
-        windows: None,
-        hotkeys: None,
         permissions: route_to,
-        consent: None,
-        config: None,
-        mcp: None,
-        capture: None,
-        capture_ticket: None,
-        app_settings: None,
-        insert: None,
+        ..HostComponents::none(from, &brain)
     };
     route(components, "permission_request", args)
 }
@@ -950,18 +931,8 @@ fn consent_call(
 ) -> Result<Value, Value> {
     let brain = FakeBrain::default();
     let components = HostComponents {
-        from,
-        brain: &brain,
-        windows: None,
-        hotkeys: None,
-        permissions: None,
         consent,
-        config: None,
-        mcp: None,
-        capture: None,
-        capture_ticket: None,
-        app_settings: None,
-        insert: None,
+        ..HostComponents::none(from, &brain)
     };
     route(components, command, args)
 }
@@ -1046,18 +1017,8 @@ fn settings_call(
 ) -> Result<Value, Value> {
     let brain = FakeBrain::default();
     let components = HostComponents {
-        from,
-        brain: &brain,
-        windows: None,
-        hotkeys: None,
-        permissions: None,
-        consent: None,
-        config: None,
-        mcp: None,
-        capture: None,
-        capture_ticket: None,
         app_settings: settings,
-        insert: None,
+        ..HostComponents::none(from, &brain)
     };
     route(components, command, args)
 }

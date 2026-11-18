@@ -81,18 +81,8 @@ impl Drop for TempDir {
 fn brain_call(records: &Arc<ConsentRecords>, command: &str, args: Value) -> Result<Value, Value> {
     let consent = ConsentComponent::new(records.clone(), Arc::new(NoSignedInUser));
     let components = HostComponents {
-        from: "brain",
-        brain: &NoBrain,
-        windows: None,
-        hotkeys: None,
-        permissions: None,
         consent: Some(&consent),
-        config: None,
-        mcp: None,
-        app_settings: None,
-        capture: None,
-        capture_ticket: None,
-        insert: None,
+        ..HostComponents::none("brain", &NoBrain)
     };
     route(components, command, args)
 }
@@ -202,20 +192,7 @@ fn sec_03_with_no_key_store_nothing_is_managed_and_consent_fails_closed() {
     assert!(app.try_state::<Arc<ConsentRecords>>().is_none());
     assert!(app.try_state::<Arc<SqlCipherLocalStore>>().is_none());
     // So the host answers the fixed code, and the brain keeps the notice gate closed.
-    let components = HostComponents {
-        from: "brain",
-        brain: &NoBrain,
-        windows: None,
-        hotkeys: None,
-        permissions: None,
-        consent: None,
-        config: None,
-        mcp: None,
-        app_settings: None,
-        capture: None,
-        capture_ticket: None,
-        insert: None,
-    };
+    let components = HostComponents::none("brain", &NoBrain);
     assert_eq!(
         route(
             components,
