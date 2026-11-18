@@ -318,6 +318,34 @@ mod tests {
         assert_eq!(text.data, b"line one\nline two");
     }
 
+    /// The body of `fn <name>` in this file's `InsertHost` impl, up to the next `fn `.
+    fn body_of<'a>(src: &'a str, name: &str) -> &'a str {
+        let imp = &src[src.find("InsertHost for MacInsertHost").expect("the impl")..];
+        let start = imp
+            .find(&format!("fn {name}("))
+            .unwrap_or_else(|| panic!("fn {name}"));
+        let rest = &imp[start + 3..];
+        &rest[..rest.find("\n    fn ").unwrap_or(rest.len())]
+    }
+
+    #[test]
+    fn mog_06c_mac_pasteboard_work_runs_in_an_autorelease_pool() {
+        // `insert_text` runs on a reused worker thread with no pool of its own, so an AppKit
+        // object that is autoreleased there lives until the thread ends: a leak on every paste.
+        let src = include_str!("macos.rs");
+        for name in [
+            "snapshot_clipboard",
+            "write_concealed",
+            "clipboard_mark",
+            "restore_clipboard",
+        ] {
+            assert!(
+                body_of(src, name).contains("autoreleasepool("),
+                "{name} must run its AppKit calls in objc2::rc::autoreleasepool"
+            );
+        }
+    }
+
     #[test]
     fn mog_06c_mac_host_sees_a_password_manager_secret() {
         let host: MacInsertHost = MacInsertHost::default();
