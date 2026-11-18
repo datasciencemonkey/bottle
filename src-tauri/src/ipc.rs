@@ -796,6 +796,7 @@ mod tests {
         assert!(c.capture_ticket.is_none());
         assert!(c.app_settings.is_none());
         assert!(c.insert.is_none());
+        assert!(c.agent.is_none());
         // A missing host part still answers `host_failed`.
         assert_eq!(
             route(c, "window_card_show", json!({"mogId": "a1"})),
@@ -1078,6 +1079,26 @@ mod tests {
         assert!(
             code.contains(".manage(ipc::HubChannel::default())"),
             "lib.rs must manage ipc::HubChannel"
+        );
+    }
+
+    #[test]
+    fn rtr_21a_arc_7_the_app_installs_the_shared_agent_host() {
+        // `try_state` turns a missing agent host into a silent `host_failed` for every
+        // `agent_*` call (#307), so the production setup must install it.
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let lib = production_code(&std::fs::read_to_string(src.join("lib.rs")).unwrap());
+        assert!(
+            lib.contains("agent_host::install(handle)"),
+            "lib.rs setup must call agent_host::install"
+        );
+        let host = production_code(&std::fs::read_to_string(src.join("agent_host.rs")).unwrap());
+        assert!(host.contains("SharedAgentHost::new("), "one SharedAgentHost");
+        assert!(host.contains(".manage("), "agent_host::install manages it");
+        let ipc = production_code(&std::fs::read_to_string(src.join("ipc.rs")).unwrap());
+        assert!(
+            ipc.contains("try_state::<crate::agent_host::AgentHostApp>()"),
+            "route_from reads the managed agent host"
         );
     }
 }
