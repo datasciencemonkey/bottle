@@ -15,7 +15,8 @@
  *
  * Outcomes hold profile names, hosts and memory hits only, never a token.
  * TODO(#164): the real `resolveTarget` (W-11a..c). TODO(#200): the RecallGate timing.
- * TODO(#142): the preview gate takes the `preview` outcome. TODO(#165): hop execution.
+ * The ask gate (#142) takes the #59 `preview` route. TODO(#200): the `preview` outcome of this
+ * step (with its recall and target) goes to the ask gate. TODO(#165): hop execution.
  */
 import type {
   MemoryHit,

@@ -2,6 +2,9 @@
  * The registry of the hidden TS brain components T1-T15 of 4.3 (ARC-2, MOG-08b).
  * `startBrain()` constructs each component once; all domain state lives in these objects.
  */
+import type { MogId } from '../../shared/interfaces';
+import { call } from '../../shared/ipc';
+import { createAskGate, wireAskGate } from '../ask-gate';
 import { BrainBus, sendMicLevel, subscribeBrain } from '../bus';
 import { wireForget } from '../forget-wiring';
 import { wireHubMogs } from '../hub-mogs-wiring';
@@ -10,6 +13,7 @@ import {
   ipcCaptureControl,
   wireCaptureLifecycle,
 } from '../capture-lifecycle';
+import { cardStackDeps, createCardStack, timeoutScheduler, type CardStack } from '../card-stack';
 import { createSystemClock } from '../clock';
 import { LevelRouter, subscribeLevels, wireLevelStream } from '../level-stream';
 import { wireNotice } from '../notice-wiring';
@@ -106,6 +110,40 @@ export function startBrain(): Brain {
       newId: () => crypto.randomUUID(),
       sendCard: sendOwnedCard,
     });
+    // #498: the card stack of each MOG, made on first use. TODO(#374): one owner of the stacks
+    // routes the card's `view_emit` input to them and drops a stack when its MOG closes.
+    const cardClock = createSystemClock();
+    const stacks = new Map<MogId, CardStack>();
+    const stackFor = (mogId: MogId): CardStack => {
+      let s = stacks.get(mogId);
+      if (!s)
+        stacks.set(
+          mogId,
+          (s = createCardStack(mogId, {
+            ...cardStackDeps(mogId, cardClock),
+            // #142: a click on a live Ask Genie chip (UX-20c).
+            onChip: (a) => askGate.chip(mogId, a),
+          })),
+        );
+      return s;
+    };
+    // #142 (ADR 0086), B1: T3 runs the 1.5 s preview or shows the Ask Genie chip. Nothing goes
+    // to the main agent, and so to Genie, without the preview or a chip click.
+    const askGate = createAskGate({
+      clock: cardClock,
+      schedule: timeoutScheduler(cardClock),
+      cardFor: stackFor,
+      showCard: (mogId) => call('window_card_show', { mogId }),
+      owner,
+      isOpen: (id) => talkTarget.isOpen(id),
+      // TODO(#163): the MOG's target profile from T7. Bottle never picks one, so until
+      // then nothing is sent.
+      target: () => undefined,
+      // The hand-off seam: T15 `agent_send`. The core approves this one question (#141).
+      send: (t) => components.T15.send(t),
+    });
+    // TODO(#374): the card-hide signal calls `askGate.cardClosed`; none reaches the brain yet.
+    wireAskGate(bus, askGate, stackFor);
     // #14: the PTT and hands-free lifecycle. Every start goes through the T12 consent gate.
     const lifecycle = createCaptureLifecycle({
       control: ipcCaptureControl({ consent: components.T12 }),
@@ -123,8 +161,8 @@ export function startBrain(): Brain {
         // dictation card reads it, a dictation goes to Copy.
         insertionOn: () => false,
         route: ipcUtteranceDeps(),
-        // TODO(#142): T3 runs the 1.5 s preview or shows the chip. Until then nothing is sent.
-        onAsk: (_r, owned) => owner.release(owned.utteranceId),
+        // #142: T3 runs the 1.5 s preview or shows the chip, and it releases the owner.
+        onAsk: askGate.onAsk,
       }),
     });
     wireCaptureLifecycle(bus, lifecycle, createSystemClock().now);

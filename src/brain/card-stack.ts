@@ -7,6 +7,9 @@
  * `input()`.
  * TODO(#77): the settings come from `mog.card.maxBlurbs` and `mog.card.autoHideSec` in the store.
  * TODO(#86): blurb templates. Chips and expanded sections: #89, ADR 0043.
+ * Template controls (#142, ADR 0086): the Appendix E controls of a template, for example the
+ * preview's [Send now] [Edit] [Cancel]. They are not catalogue chips. `CardUpdate` has no
+ * controls field, so they go first in `chips`, and a `chip_click` on one runs its handler.
  */
 import type { MogId } from '../shared/interfaces';
 import type { ViewEmitKind } from '../shared/ipc';
@@ -64,6 +67,13 @@ export interface CardStack {
   removeChipsOf(owner: string): void;
   /** UX-18: set the content of the expanded card, or `undefined` to show the small card. */
   setExpanded(input: SectionInput | undefined): void;
+  /**
+   * Show the template controls of `owner` before the chips (ADR 0086). A click on one runs
+   * `onClick` with its ID (UX-20c); a control with no handler only shows. Replaces the old set.
+   */
+  setControls(owner: string, controls: ChipView[], onClick?: (id: string) => void): void;
+  /** Remove the controls of `owner`. */
+  clearControls(owner: string): void;
   dispose(): void;
 }
 
@@ -110,6 +120,9 @@ export function createCardStack(
   let sttBadge: string | undefined;
   let expanded: SectionInput | undefined;
   const row = new ChipRow();
+  /** The template controls, by owner, in the order set. */
+  const controls = new Map<string, { list: ChipView[]; onClick?: (id: string) => void }>();
+  const controlViews = () => [...controls.values()].flatMap((c) => c.list.map((v) => ({ ...v })));
 
   const publish = () => {
     const v = stack.view();
@@ -118,7 +131,7 @@ export function createCardStack(
       mogId,
       blurbs: v.blurbs,
       historyCount: v.historyCount,
-      chips: c.chips,
+      chips: [...controlViews(), ...c.chips],
       overflowChips: c.overflow,
     };
     if (sttBadge !== undefined) u.sttBadge = sttBadge;
@@ -161,7 +174,11 @@ export function createCardStack(
       if (kind === 'chip_click') {
         // UX-20c: a chip acts only on a click. An unknown or expired chip does nothing.
         const id = isChipClick(payload);
-        const action = id === undefined ? undefined : row.click(id);
+        if (id === undefined) return;
+        // A template control (ADR 0086) runs its own handler; it is not in the chip row.
+        const control = [...controls.values()].find((c) => c.list.some((v) => v.id === id));
+        if (control) return control.onClick?.(id);
+        const action = row.click(id);
         if (action) {
           deps.onChip?.(action);
           changed();
@@ -196,6 +213,13 @@ export function createCardStack(
     setExpanded(input) {
       expanded = input;
       publish();
+    },
+    setControls(owner, list, onClick) {
+      controls.set(owner, onClick ? { list: [...list], onClick } : { list: [...list] });
+      publish();
+    },
+    clearControls(owner) {
+      if (controls.delete(owner)) publish();
     },
     dispose() {
       cancel?.();

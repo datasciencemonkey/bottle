@@ -7,7 +7,7 @@
  * - RTR-01c: a dictation, a Copy, a failed insertion and every other route end here, and the
  *   owner is released. No main agent and no Genie take part.
  * - RTR-04a, RTR-17b, B1: a preview or a chip goes to `onAsk` with its live owner. `onAsk`
- *   (T3 CapturePolicy, TODO(#142)) runs the 1.5 s preview or shows the chip, and it releases
+ *   (the T3 ask gate, `ask-gate.ts`, #142) runs the 1.5 s preview or shows the chip, and it releases
  *   the owner. Nothing here sends to Genie.
  */
 import type { MogId } from '../shared/interfaces';

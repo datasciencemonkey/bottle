@@ -125,7 +125,7 @@ export function applyInjectionGuard(
 /**
  * Whether a router decision may go on to the send preview (PTT, 1.5 s, cancelable). It never
  * sends itself: the user action of the preview gate (#142) still decides.
- * TODO(#142): the preview gate calls this before it shows the send preview.
+ * The #59 route and the ask gate (`ask-gate.ts`, #142) apply its injection rule to every ask.
  */
 export function maySend(d: RouterDecision): boolean {
   if (d.injection_suspected) return false;
@@ -142,7 +142,7 @@ export const INJECTION_WARNING_CHIP: Readonly<{ id: 'injection_warning'; label: 
 
 /**
  * The chips that a router decision adds to the card (`CardUpdate.chips` shape).
- * TODO(#142): the preview gate adds these chips to the card.
+ * The ask gate (#142) shows `INJECTION_WARNING_CHIP` for a flagged ask.
  */
 export function routerChips(d: RouterDecision): { id: string; label: string }[] {
   return d.injection_suspected ? [{ ...INJECTION_WARNING_CHIP }] : [];
