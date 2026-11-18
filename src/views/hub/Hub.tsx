@@ -12,6 +12,7 @@ import {
 } from '../view-ipc';
 import { About } from './About';
 import { DataPanel } from './DataDisclosures';
+import { DictationNotices } from './DictationNotices';
 import { LegalNotice } from './LegalNotice';
 import { MicPreference } from './MicPreference';
 import { ForgetDialogHost } from './ForgetDialogHost';
@@ -50,6 +51,7 @@ export function Hub() {
     <main>
       <h1>Bottle</h1>
       <p>Databricks Labs / experimental</p>
+      <DictationNotices />
       <ul aria-label="MOGs">
         {[...mogs].map(([id, s]) => (
           <li key={id} data-mog={id} data-mood={s.mood}>

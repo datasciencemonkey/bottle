@@ -30,8 +30,11 @@ export interface UtteranceHandlerDeps {
   route: UtteranceRouteDeps;
   /** A preview or a chip, with its live owner. The callee releases the owner, unless it throws. */
   onAsk(r: AskRoute, owned: OwnedUtterance): void;
-  /** Every other route, after the owner is released (the dictation card, TODO(#60)). */
-  onDone?(r: Exclude<UtteranceRoute, AskRoute>, owned: OwnedUtterance): void;
+  /**
+   * Every other route, after the owner is released. It is required: a `copy` or an
+   * `insert_failed` route holds dictation text that must reach the Copy card (#498).
+   */
+  onDone(r: Exclude<UtteranceRoute, AskRoute>, owned: OwnedUtterance): void;
 }
 
 const isAsk = (r: UtteranceRoute): r is AskRoute => r.route === 'preview' || r.route === 'chip';
@@ -64,7 +67,7 @@ export function createUtteranceHandler(
       }
       deps.owner.release(owned.utteranceId);
       handedOff = true;
-      deps.onDone?.(r, owned);
+      deps.onDone(r, owned);
     } catch {
       // A failed route sends nothing and inserts nothing (B1). The capture lifecycle goes on.
     } finally {
