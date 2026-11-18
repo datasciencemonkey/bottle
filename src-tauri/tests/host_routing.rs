@@ -738,7 +738,7 @@ fn mb_14_hotkeys_set_route_does_not_save_a_duplicate_binding() {
 }
 
 #[test]
-fn arc_3_cap_02a_schedule_runs_window_ops_and_capture_start_on_a_worker_and_others_inline() {
+fn arc_3_cap_02a_g_04a_schedule_runs_window_ops_capture_start_and_mcp_call_on_a_worker() {
     use std::sync::mpsc;
     let caller = std::thread::current().id();
     for c in COMMANDS {
@@ -752,7 +752,11 @@ fn arc_3_cap_02a_schedule_runs_window_ops_and_capture_start_on_a_worker_and_othe
         let worker = c.name.starts_with("window_")
             || matches!(
                 c.name,
-                "permission_request" | "capture_start" | "capture_resume" | "insert_text"
+                "permission_request"
+                    | "capture_start"
+                    | "capture_resume"
+                    | "insert_text"
+                    | "mcp_call"
             );
         if worker {
             assert_ne!(ran_on, caller, "{} ran on the calling thread", c.name);
@@ -1049,6 +1053,7 @@ fn settings_call(
         permissions: None,
         consent: None,
         config: None,
+        mcp: None,
         capture: None,
         capture_ticket: None,
         app_settings: settings,

@@ -479,6 +479,9 @@ pub enum Handled {
     RelayToBrain { from: String },
     /// `brain_subscribe`: keep this Channel as the brain's private delivery path.
     SubscribeBrain { channel: ChannelRef },
+    /// The call passed the window and argument checks, and the host sends it to its feature
+    /// component (`mcp_call` to R8 `McpCallComponent`, #467).
+    Component,
 }
 
 // ---------- shared argument types ----------
@@ -1007,6 +1010,9 @@ pub fn handle(window_label: &str, command_name: &str, args: Value) -> Result<Han
                 channel: a.on_event,
             });
         }
+        // SEC-02a: only the brain gets here (the window check above). The host sends the call
+        // to R8 `McpCallComponent`, which runs the G-06a allowlist (#467).
+        "mcp_call" => return Ok(Handled::Component),
         // `config_write`: `mog_config::MogConfigComponent` runs `token_guard::check_config_json`
         // (MB-02, #25, #379).
         _ => {}

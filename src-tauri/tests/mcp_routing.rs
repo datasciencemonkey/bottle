@@ -105,6 +105,7 @@ fn call(
         mcp,
         capture: None,
         capture_ticket: None,
+        app_settings: None,
     };
     route(components, command, args)
 }

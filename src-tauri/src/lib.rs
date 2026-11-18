@@ -10,6 +10,7 @@ pub mod hotkey_settings;
 pub mod ipc;
 #[cfg(target_os = "macos")]
 pub mod macos_panel;
+pub mod mcp_host;
 pub mod mog_config_host;
 pub mod mog_drag;
 pub mod webview_media;
@@ -177,6 +178,9 @@ pub fn run() {
             // key store or the data dir is not there, the app still runs; `consent_*` then fail
             // with `consent_storage_failed`, and the notice gate stays closed (MB-08a).
             let _ = consent_host::install(handle);
+            // R8 for `mcp_call` (#467). If its HTTP client cannot start, the app still runs;
+            // `mcp_call` then answers `host_failed`.
+            let _ = mcp_host::install(handle);
             let host = app.state::<TauriWindowHost<tauri::Wry>>();
             for kind in startup_windows(demo) {
                 // MOG and card windows go through R11, so the cap and the ledger hold.
