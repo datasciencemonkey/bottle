@@ -10,7 +10,7 @@
 ADR 0041 (#342) gave `HttpTransport::request(profile, route_id, params, body, tags)`, the fixed map `http_transport::ROUTES` and `outbound_headers`. Issue #364 asks for the real client. These inputs are not on main when this work starts:
 
 - PR #256 (#207, `crates/http-policy`) is open.
-- #138 (the rate bucket) is open.
+- #138 (the rate bucket) is open. (Later: ADR 0075.)
 - The R5 profile read (#16, #17) is a stub.
 
 ## Decisions
@@ -29,7 +29,7 @@ ADR 0041 (#342) gave `HttpTransport::request(profile, route_id, params, body, ta
 8. **Token.** R7 gets the token through `TokenBroker::with_token` for each send. It builds `Authorization: Bearer ...` inside the closure, zeroes its own copy, and marks the header value sensitive. The header copy inside reqwest cannot be zeroed, and it drops when the send ends. R7 never logs or formats the token.
 9. **Redirects.** Redirects are off in reqwest. R7 follows a 3xx only if the policy allows the token to the new URL and the redirect keeps the same host, for at most 3 hops. A 301, 302 or 303 becomes a GET without a body. R7 drops any other 3xx with `redirect_refused`.
 10. **Replies.** Only a JSON content type with a JSON body reaches the caller, after `token_guard::scrub_json`. A page gives `non_json_reply`, and R7 never retries it. This applies to a 401 page too. A JSON 401 invalidates the token once and retries once. A second 401 gives `auth_expired`.
-11. **Rate bucket.** The `RateBucket` seam has `reserve(profile)` and `on_rate_limited(profile, retry_after)`. `AimdBucket` is the simplest correct version: 40 calls/min in a sliding 60 s window, halved for 5 min after a 429, then 5 calls/min more each minute. `Retry-After` (seconds or IMF-fixdate) or FMAPI `error.retry_after`, clamped to 1-300 s, holds every call of the profile. A 429 returns `rate_limited` at once. The next call waits through the `Pause` seam. A wait of up to 300 s blocks the worker thread, and the caller cannot cancel it until #138 adds G-09b priority for cancels. R7 honours `Retry-After` on 429 only; the 503 case is a #138 follow-up. `TODO(#138)`: G-09b priority queues and G-10b ask backoff need the call class from the bridge.
+11. **Rate bucket.** The `RateBucket` seam has `reserve(profile)` and `on_rate_limited(profile, retry_after)`. `AimdBucket` is the simplest correct version: 40 calls/min in a sliding 60 s window, halved for 5 min after a 429, then 5 calls/min more each minute. `Retry-After` (seconds or IMF-fixdate) or FMAPI `error.retry_after`, clamped to 1-300 s, holds every call of the profile. A 429 returns `rate_limited` at once. The next call waits through the `Pause` seam. A wait of up to 300 s blocks the worker thread, and the caller cannot cancel it until #138 adds G-09b priority for cancels. R7 honours `Retry-After` on 429 only; the 503 case is a #138 follow-up. Amended by ADR 0075 (#138): G-09b priority by ticket and call class, the G-10b ask backoff in R8, and a 503 `Retry-After` hold in R7.
 12. **Online state.** `is_online` is `true` until a call fails to connect. A connect error sets it to `false`, and any HTTP reply sets it to `true`.
 13. **Errors.** All errors are `CoreError::Unavailable { component: "R7", reason }` with a fixed code. No error text holds a URL, a host, a token or body text.
 

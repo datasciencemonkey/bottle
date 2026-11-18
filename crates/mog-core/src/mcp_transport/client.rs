@@ -13,7 +13,16 @@
 //!    that lease once and resends once (W-05d); a second 401 is `auth_expired`.
 //! 6. A 404 with a session initialises again one time and resends (G-05a). A 404 without a
 //!    session is [`GENIE_ONE_OFF`] (G-05b).
-//! 7. Redirects are never followed (rule 3). A non-JSON page is never echoed or retried
+//! 7. Rate (#138, ADR 0075), only with [`ReqwestMcpTransport::with_rate_limit`]: each HTTP
+//!    request waits in the shared per-profile bucket with the class of its tool (G-09a, G-09b);
+//!    a queued ask shows [`BusyState::Queued`]. A 429 cuts the rate (G-09c) and records the
+//!    `Retry-After` or FMAPI `error.retry_after` wait (G-10a); a 503 `Retry-After` holds the
+//!    profile. Only an ask is sent again: after that wait, or else after the G-BACKOFF wait
+//!    (G-10b), [`MAX_ASK_TRIES`] sends or less, with [`BusyState::Retrying`]. A poll or a cancel
+//!    gets `rate_limited` and is never sent again here: its next call waits in the bucket.
+//!    Every wait of one call fits its time cap: a call that would wait past it is not sent.
+//!    TODO(#136): SP-18 confirms the live MCP 429 shape; R8 knows only the HTTP 429 of G-10a.
+//! 8. Redirects are never followed (rule 3). A non-JSON page is never echoed or retried
 //!    (rule 6). The reply is read up to [`McpLimits::max_reply_bytes`] and within the call time
 //!    cap, and is scrubbed (rule 7).
 //!
@@ -26,11 +35,12 @@
 // TODO(#29): the SP-09 live run confirms the live `tools/list` shape, the busy envelope and a
 // mid-session token rotation on a real workspace. Until then, these rules run on doubles only.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::io::Read;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use reqwest::blocking::{Client, Response};
 use reqwest::header::{HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
@@ -46,7 +56,12 @@ use super::{
 };
 use crate::egress_policy::TokenEgressPolicy;
 use crate::error::{CoreError, CoreResult};
+use crate::http_transport::backoff::{ask_backoff, MAX_ASK_TRIES};
 use crate::http_transport::host_policy::AllowlistEgressPolicy;
+use crate::http_transport::rate_bucket::{
+    parse_retry_after, retry_after_from_body, CallClass, RateBucket,
+};
+use crate::http_transport::rate_limit::{acquire_within, BusyState, RateLimit};
 use crate::http_transport::{
     ProfileHosts, AUTH_EXPIRED, CLIENT_INIT_FAILED, HOST_REFUSED, NON_JSON_REPLY, OFFLINE,
     PROFILE_HOST_INVALID, RATE_LIMITED, REDIRECT_REFUSED, REPLY_TOO_LARGE, TIMEOUT, TOKEN_UNUSABLE,
@@ -160,6 +175,8 @@ pub struct ReqwestMcpTransport {
     seams: McpSeams,
     sessions: Mutex<HashMap<SessionKey, Arc<Mutex<Session>>>>,
     next_id: AtomicU64,
+    /// The rate seams (#138). `None` sends with no bucket (tests of other rules only).
+    rate: Option<RateLimit>,
 }
 
 impl std::fmt::Debug for ReqwestMcpTransport {
@@ -178,6 +195,21 @@ struct Target<'a> {
     url: String,
     headers: Vec<(&'static str, String)>,
     timeout: Duration,
+    /// The MOG of the call: only for the busy states, never logged.
+    mog: String,
+    /// The bucket class of the call (G-09b).
+    class: CallClass,
+    /// A busy state is on the card for this call and needs a [`BusyState::Clear`].
+    busy_shown: Cell<bool>,
+    /// The time this call spent waiting for the bucket or a retry, within `timeout`.
+    waited: Cell<Duration>,
+}
+
+impl Target<'_> {
+    /// The wait time left of the call cap.
+    fn wait_left(&self) -> Duration {
+        self.timeout.saturating_sub(self.waited.get())
+    }
 }
 
 /// What one HTTP exchange gave.
@@ -192,6 +224,8 @@ enum Posted {
     HttpError { status: u16, body: Value },
     /// A 404 on a request that carried a session ID (G-05a).
     SessionGone,
+    /// A 429, with the clamped retry wait of the reply if it had one (G-10a).
+    RateLimited { retry_after: Option<Duration> },
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -220,8 +254,12 @@ fn usable_session_id(v: Option<String>) -> Option<String> {
 
 impl ReqwestMcpTransport {
     /// The production transport over R6: [`AllowlistEgressPolicy`], [`BottleIdentity`], no log
-    /// sink and the default caps.
-    pub fn new(hosts: Arc<dyn ProfileHosts>, broker: Arc<CliTokenBroker>) -> CoreResult<Self> {
+    /// sink, the default caps, and the per-profile `bucket` that R7 shares (G-09a, #138).
+    pub fn new(
+        hosts: Arc<dyn ProfileHosts>,
+        broker: Arc<CliTokenBroker>,
+        bucket: Arc<dyn RateBucket>,
+    ) -> CoreResult<Self> {
         Self::with_seams(McpSeams {
             hosts,
             endpoints: broker.clone(),
@@ -231,9 +269,11 @@ impl ReqwestMcpTransport {
             log: Arc::new(NoMcpLog),
             limits: McpLimits::default(),
         })
+        .map(|t| t.with_rate_limit(RateLimit::new(bucket)))
     }
 
-    /// A transport on the given seams.
+    /// A transport on the given seams, with no rate bucket until
+    /// [`ReqwestMcpTransport::with_rate_limit`].
     pub fn with_seams(seams: McpSeams) -> CoreResult<Self> {
         // rustls needs one process-wide crypto provider. An `Err` means one is set already.
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -249,7 +289,53 @@ impl ReqwestMcpTransport {
             seams,
             sessions: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
+            rate: None,
         })
+    }
+
+    /// Send every request through the shared rate bucket and the 429 rules of `rate` (#138).
+    #[must_use]
+    pub fn with_rate_limit(mut self, rate: RateLimit) -> Self {
+        self.rate = Some(rate);
+        self
+    }
+
+    /// G-09a, G-09b: wait for a slot in the bucket of the profile. An ask that must wait shows
+    /// [`BusyState::Queued`]; the `tools/call` request that gets its slot clears the state.
+    /// Every wait of one call counts against its time cap: a call that would wait past it is
+    /// not sent and is `rate_limited`, so nothing goes out after the caller stopped waiting.
+    fn wait_turn(&self, t: &Target<'_>, is_tool_call: bool) -> CoreResult<()> {
+        let Some(rl) = &self.rate else { return Ok(()) };
+        let waited = acquire_within(
+            &*rl.bucket,
+            &*rl.pause,
+            t.profile,
+            t.class,
+            t.wait_left(),
+            &mut |_| {
+                if t.class == CallClass::Ask && !t.busy_shown.get() {
+                    rl.observer.busy(&t.mog, BusyState::Queued);
+                    t.busy_shown.set(true);
+                }
+            },
+        );
+        let Some(waited) = waited else {
+            self.log("mcp refused code=rate_limited wait=over_cap");
+            return Err(err(RATE_LIMITED));
+        };
+        t.waited.set(t.waited.get().saturating_add(waited));
+        if is_tool_call {
+            self.clear_busy(t);
+        }
+        Ok(())
+    }
+
+    fn clear_busy(&self, t: &Target<'_>) {
+        if let Some(rl) = &self.rate {
+            if t.busy_shown.replace(false) {
+                rl.observer.busy(&t.mog, BusyState::Clear);
+            }
+        }
     }
 
     fn log(&self, line: &str) {
@@ -299,6 +385,10 @@ impl ReqwestMcpTransport {
             url,
             headers,
             timeout: self.seams.limits.effective_timeout(timeout),
+            mog: tags.mog.clone(),
+            class: CallClass::Ask,
+            busy_shown: Cell::new(false),
+            waited: Cell::new(Duration::ZERO),
         })
     }
 
@@ -395,6 +485,7 @@ impl ReqwestMcpTransport {
         let body = serde_json::to_vec(message).map_err(|_| err(TRANSPORT_FAILED))?;
         let mut attempt = 1u8;
         loop {
+            self.wait_turn(t, kind == "tools/call")?;
             let sent = self.send_once(t, session, after_init, &body);
             let (resp, lease) = match sent {
                 Ok(x) => x,
@@ -418,8 +509,23 @@ impl ReqwestMcpTransport {
             // Rule 6, before any status rule: a non-JSON page never reaches TS and is never
             // retried with the token (also on 401 and 404). An empty body is not a page.
             let ct = header_text(&resp, CONTENT_TYPE.as_str());
+            let retry_after = header_text(&resp, "retry-after")
+                .and_then(|v| parse_retry_after(&v, SystemTime::now()));
             let bytes = self.read_capped(resp)?;
             let json = self.seams.policy.reply_for_ts(ct.as_deref(), &bytes);
+            if status == 429 {
+                // G-09c, G-10a: the header wait, else the FMAPI body wait (clamped 1-300 s).
+                let wait = retry_after.or_else(|| json.as_ref().and_then(retry_after_from_body));
+                if let Some(rl) = &self.rate {
+                    rl.bucket.on_rate_limited(t.profile, wait);
+                }
+                // A 429 page is dropped, never echoed (rule 6): only the status counts.
+                return Ok(Posted::RateLimited { retry_after: wait });
+            }
+            if let (503, Some(wait), Some(rl)) = (status, retry_after, &self.rate) {
+                // G-10a: a 503 `Retry-After` holds the profile, with no rate cut.
+                rl.bucket.hold(t.profile, wait);
+            }
             if json.is_none() && (!bytes.is_empty() || !matches!(status, 401 | 404 | 429)) {
                 return Err(err(NON_JSON_REPLY));
             }
@@ -432,7 +538,6 @@ impl ReqwestMcpTransport {
                 401 => return Err(err(AUTH_EXPIRED)),
                 404 if session.is_some() => return Ok(Posted::SessionGone),
                 404 => return Err(err(GENIE_ONE_OFF)),
-                429 => return Err(err(RATE_LIMITED)),
                 _ => {
                     let body = json.ok_or(err(NON_JSON_REPLY))?;
                     return Ok(Posted::HttpError { status, body });
@@ -537,6 +642,7 @@ impl ReqwestMcpTransport {
                 message, session, ..
             } => (message, session),
             Posted::HttpError { status, .. } => return Err(err(upstream_code(status))),
+            Posted::RateLimited { .. } => return Err(err(RATE_LIMITED)),
             // `post` gives this only for a request with a session ID.
             Posted::SessionGone => return Err(err(BAD_REPLY)),
         };
@@ -560,6 +666,7 @@ impl ReqwestMcpTransport {
             Posted::Rpc { .. } => {}
             Posted::SessionGone => return Err(err(GENIE_ONE_OFF)),
             Posted::HttpError { status, .. } => return Err(err(upstream_code(status))),
+            Posted::RateLimited { .. } => return Err(err(RATE_LIMITED)),
         }
         s.id = session;
         s.initialized = true;
@@ -599,6 +706,47 @@ impl ReqwestMcpTransport {
             }
         }
         Err(err(GENIE_ONE_OFF))
+    }
+}
+
+impl ReqwestMcpTransport {
+    /// One `tools/call`. G-10b: only an ask that got a 429 is sent again, after the retry wait
+    /// of the reply (the bucket holds the profile for it) or else the G-BACKOFF wait, with
+    /// [`MAX_ASK_TRIES`] sends or less. A 429 means the server did not take the ask, so a new
+    /// send makes no duplicate question (MOG-10b).
+    fn call_with_retry(
+        &self,
+        t: &Target<'_>,
+        session: &Mutex<Session>,
+        params: &Value,
+    ) -> CoreResult<Posted> {
+        let mut tries = 1u32;
+        loop {
+            let posted = self.request(t, session, "tools/call", "tools/call", params.clone())?;
+            let Posted::RateLimited { retry_after } = posted else {
+                return Ok(posted);
+            };
+            let rl = match &self.rate {
+                Some(rl) if t.class == CallClass::Ask && tries < MAX_ASK_TRIES => rl,
+                _ => return Ok(posted),
+            };
+            let wait = retry_after.unwrap_or_else(|| ask_backoff(tries, &*rl.jitter));
+            if wait > t.wait_left() {
+                // The retry would go out after the call cap, when the caller no longer waits
+                // for it (MOG-10b, B1): give up now, nothing more is sent.
+                self.log("mcp tools/call rate_limited wait=over_cap");
+                return Ok(posted);
+            }
+            self.log(&format!("mcp tools/call rate_limited try={tries}"));
+            rl.observer.busy(&t.mog, BusyState::Retrying { wait });
+            t.busy_shown.set(true);
+            if retry_after.is_none() {
+                // With a header the bucket holds the profile for the wait already.
+                rl.pause.pause(wait);
+                t.waited.set(t.waited.get().saturating_add(wait));
+            }
+            tries += 1;
+        }
     }
 }
 
@@ -686,7 +834,8 @@ impl McpTransport for ReqwestMcpTransport {
         }
         let meta = tools::outbound_meta(contract.name, call.meta)
             .map_err(|()| self.refuse(INVALID_META))?;
-        let t = self.target(call.profile, call.tags, call.timeout)?;
+        let mut t = self.target(call.profile, call.tags, call.timeout)?;
+        t.class = CallClass::of_tool(contract.name);
         let mut params = Map::new();
         params.insert("name".to_owned(), Value::String(contract.name.to_owned()));
         params.insert(
@@ -697,13 +846,9 @@ impl McpTransport for ReqwestMcpTransport {
             params.insert("_meta".to_owned(), m);
         }
         let session = self.session(call.profile, &call.tags.mog);
-        match self.request(
-            &t,
-            &session,
-            "tools/call",
-            "tools/call",
-            Value::Object(params),
-        )? {
+        let posted = self.call_with_retry(&t, &session, &Value::Object(params));
+        self.clear_busy(&t);
+        match posted? {
             Posted::Rpc {
                 status,
                 message: Some(m),
@@ -719,6 +864,7 @@ impl McpTransport for ReqwestMcpTransport {
                     rpc_error: Some(scrub_json(&e)),
                 })
             }
+            Posted::RateLimited { .. } => Err(err(RATE_LIMITED)),
             _ => Err(err(BAD_REPLY)),
         }
     }
@@ -737,6 +883,7 @@ impl McpTransport for ReqwestMcpTransport {
                 Posted::Rpc {
                     message: Some(m), ..
                 } => m,
+                Posted::RateLimited { .. } => return Err(err(RATE_LIMITED)),
                 _ => return Err(err(BAD_REPLY)),
             };
             let result = m.get("result").ok_or(err(BAD_REPLY))?;

@@ -63,5 +63,6 @@ part needs a person (`needs:human`). The issue left these points open:
   there in #467 (a contract-change issue for `src-tauri/src/ipc.rs`).
 - The live checks (the real `tools/list`, the busy envelope, a token rotation mid-session) wait for
   the SP-09 live run: `TODO(#29)`.
-- MCP calls do not use the R7 rate bucket yet (G-09a). The in-flight poll guard (G-07b) is the
+- MCP calls do not use the R7 rate bucket yet (G-09a). Amended by ADR 0075 (#138): with
+  `with_rate_limit`, R8 waits in the shared bucket and sends an ask again after a 429. The in-flight poll guard (G-07b) is the
   brain `PollActor` plus #31. The agent loopback proxy is #139.

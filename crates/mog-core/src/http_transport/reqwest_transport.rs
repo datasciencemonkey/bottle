@@ -7,7 +7,8 @@
 //!    (SEC-06a, SEC-06b).
 //! 3. The profile URL from [`ProfileHosts`]; the [`TokenEgressPolicy`] must allow the token to
 //!    go to it (rule 2).
-//! 4. The per-profile [`RateBucket`] (G-09a); a 429 records its retry wait (G-10a).
+//! 4. The per-profile [`RateBucket`] (G-09a), with the call class of the route (G-09b). A 429
+//!    records AIMD and its retry wait; a 503 `Retry-After` holds the profile (G-10a, #138).
 //! 5. The token from [`TokenBroker::with_token`] for this one send only. It is never logged.
 //! 6. Redirects are off in reqwest. R7 follows a 3xx only to the same host (rule 3).
 //! 7. Only a JSON reply reaches the caller (rule 6), scrubbed (rule 7). A page is never retried.
@@ -30,7 +31,8 @@ use reqwest::Url;
 use serde_json::Value;
 
 use super::host_policy::AllowlistEgressPolicy;
-use super::rate_bucket::{parse_retry_after, retry_after_from_body, RateBucket};
+use super::rate_bucket::{parse_retry_after, retry_after_from_body, CallClass, RateBucket};
+use super::rate_limit::acquire;
 use super::routes::{self, Method};
 use super::{outbound_headers, route_call_kind, HttpTransport, ID};
 use crate::egress_policy::TokenEgressPolicy;
@@ -219,14 +221,14 @@ impl ReqwestHttpTransport {
         Ok((origin, host.to_owned()))
     }
 
-    fn wait_for_bucket(&self, profile: &str) {
-        loop {
-            let wait = self.seams.bucket.reserve(profile);
-            if wait.is_zero() {
-                return;
-            }
-            self.seams.pause.pause(wait);
-        }
+    fn wait_for_bucket(&self, profile: &str, class: CallClass) {
+        acquire(
+            &*self.seams.bucket,
+            &*self.seams.pause,
+            profile,
+            class,
+            &mut |_| {},
+        );
     }
 
     /// Send once with the token of `profile`. The token lives only inside the broker call.
@@ -355,6 +357,7 @@ impl ReqwestHttpTransport {
         headers: Vec<(&'static str, String)>,
     ) -> CoreResult<(Value, Option<String>)> {
         let route = routes::route(route_id)?;
+        let class = CallClass::of_route(route_id);
         let path = routes::build_path(route, params)?;
         let (origin, host) = self.origin(profile)?;
         let mut url = format!("{origin}{path}");
@@ -370,7 +373,7 @@ impl ReqwestHttpTransport {
         let mut retried_401 = false;
         let mut hops = 0u8;
         loop {
-            self.wait_for_bucket(profile);
+            self.wait_for_bucket(profile, class);
             let (raw, lease) =
                 self.send_once(profile, &host, method, &url, &headers, body.as_deref())?;
             if (300..400).contains(&raw.status) {
@@ -403,7 +406,19 @@ impl ReqwestHttpTransport {
                     .and_then(|v| parse_retry_after(v, SystemTime::now()))
                     .or_else(|| reply.as_ref().and_then(retry_after_from_body));
                 self.seams.bucket.on_rate_limited(profile, wait);
+                // TODO(#491): the Genie REST ask routes get no G-10b retry here; the UC2 ask
+                // retry is in R8 (ADR 0075).
                 return Err(err(RATE_LIMITED));
+            }
+            if raw.status == 503 {
+                // G-10a: a 503 `Retry-After` holds the profile, with no AIMD cut (#138).
+                if let Some(wait) = raw
+                    .retry_after
+                    .as_deref()
+                    .and_then(|v| parse_retry_after(v, SystemTime::now()))
+                {
+                    self.seams.bucket.hold(profile, wait);
+                }
             }
             // Rule 6: a page never reaches TS and is never retried with the token.
             let Some(json) = reply else {
