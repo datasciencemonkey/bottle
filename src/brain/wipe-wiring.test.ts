@@ -212,7 +212,12 @@ describe('Wipe wiring (#124)', () => {
     const src = resolve(import.meta.dirname, '..');
     // The R14 command and the core seam appear in the flow only, and the flow's confirm is
     // called from the controller's confirm click only.
-    const callers = files(src).filter((f) => /\bmem_wipe\b|\.wipe\(/.test(readFileSync(f, 'utf8')));
+    // Comments are removed first: only code counts.
+    const code = (f: string) =>
+      readFileSync(f, 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^\s*\/\/.*$/gm, '');
+    const callers = files(src).filter((f) => /\bmem_wipe\b|\.wipe\(/.test(code(f)));
     expect(callers.map((f) => f.slice(src.length + 1)).sort()).toEqual([
       'brain/components/wipe-flow.ts',
     ]);
