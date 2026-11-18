@@ -9,10 +9,10 @@ use std::path::{Path, PathBuf};
 
 use mog_core::types::{
     AppSetting, AppSettingKey, CaptureMode, CaptureState, CardUpdate, ConsentRecordKind,
-    ConsentRecordView, Intent, MicHealth, MicLevelFrame, MogId, MogViewState, Mood, OthersTrack,
-    Profile, ProfileInfo, ProfileName, RouterCommand, RouterDecision, SegmentRef, SessionPolicy,
-    TagApp, TagOp, Tags, TalkKeyReason, TalkKeyState, TalkKeyStatus, TokenState, TokenStatus,
-    Track, Transcript, TranscriptProvider,
+    ConsentRecordView, Intent, MicHealth, MicLevelFrame, MogId, MogViewState, Mood, NetStatus,
+    OthersTrack, Profile, ProfileInfo, ProfileName, RouterCommand, RouterDecision, SegmentRef,
+    SessionPolicy, TagApp, TagOp, Tags, TalkKeyReason, TalkKeyState, TalkKeyStatus, TokenState,
+    TokenStatus, Track, Transcript, TranscriptProvider,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -79,6 +79,8 @@ fn round_trip_by_name(type_name: &str, json: &Value) -> Result<Value, String> {
         "TalkKeyStatus" => round_trip::<TalkKeyStatus>(json),
         "TalkKeyState" => round_trip::<Vec<TalkKeyState>>(json),
         "TalkKeyReason" => round_trip::<Vec<TalkKeyReason>>(json),
+        // The `net.status` payload (#466, ARC-F7, MEM-19d).
+        "NetStatus" => round_trip::<NetStatus>(json),
         // The `consent_records_list` reply (#430, ADR 0060).
         "ConsentRecordView" => round_trip::<ConsentRecordView>(json),
         "ConsentRecordKind" => round_trip::<Vec<ConsentRecordKind>>(json),
@@ -105,6 +107,7 @@ const STRUCTS: &[&str] = &[
     "CardUpdate",
     "MicLevelFrame",
     "TalkKeyStatus",
+    "NetStatus",
     "ConsentRecordView",
     "AppSetting",
 ];
@@ -143,6 +146,7 @@ fn every_ipc_type_has_a_fixture() {
         "TalkKeyStatus",
         "TalkKeyState",
         "TalkKeyReason",
+        "NetStatus",
         "ConsentRecordView",
         "ConsentRecordKind",
         "MicHealth",
@@ -366,6 +370,27 @@ fn cap_39c_cap_42_talk_key_status_reason_is_required_and_nullable() {
     for key in ["windowTitle", "processName", "key"] {
         let v = serde_json::json!({"talkKey": "paused", "reason": "secure_input", key: "x"});
         assert!(serde_json::from_value::<TalkKeyStatus>(v).is_err(), "{key}");
+    }
+}
+
+#[test]
+fn arc_f7_mem_19d_net_status_is_online_only() {
+    let online: NetStatus = serde_json::from_str(r#"{"online":true}"#).unwrap();
+    assert!(online.online);
+    let offline: NetStatus = serde_json::from_str(r#"{"online":false}"#).unwrap();
+    assert!(!offline.online);
+    assert_eq!(
+        serde_json::to_value(offline).unwrap(),
+        serde_json::json!({"online": false})
+    );
+    // `online` is required and a bool: no empty payload, no null, no string.
+    assert!(serde_json::from_str::<NetStatus>("{}").is_err());
+    assert!(serde_json::from_str::<NetStatus>(r#"{"online":null}"#).is_err());
+    assert!(serde_json::from_str::<NetStatus>(r#"{"online":"yes"}"#).is_err());
+    // No host name, URL or error text.
+    for key in ["host", "url", "error"] {
+        let v = serde_json::json!({"online": false, key: "x"});
+        assert!(serde_json::from_value::<NetStatus>(v).is_err(), "{key}");
     }
 }
 

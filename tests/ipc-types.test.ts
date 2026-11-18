@@ -26,6 +26,7 @@ import type {
   ConsentRecordView,
   MicLevelFrame,
   MogViewState,
+  NetStatus,
   TalkKeyReason,
   TalkKeyState,
   TalkKeyStatus,
@@ -149,9 +150,11 @@ const everyUnionValueListed: [
   Equal<(typeof APP_SETTING_KEYS)[number], AppSettingKey>,
   Equal<TalkKeyStatus['talkKey'], TalkKeyState>,
   Equal<TalkKeyStatus['reason'], TalkKeyReason | null>,
+  Equal<NetStatus['online'], boolean>,
   Equal<(typeof CONSENT_RECORD_KINDS)[number], ConsentRecordKind>,
   Equal<ConsentRecordView['sessionId'], string | null>,
 ] = [
+  true,
   true,
   true,
   true,
@@ -286,6 +289,9 @@ const typed: Record<string, unknown> = {
   'TalkKeyStatus.active': { talkKey: 'active', reason: null } satisfies TalkKeyStatus,
   TalkKeyState: TALK_KEY_STATES,
   TalkKeyReason: TALK_KEY_REASONS,
+  // The `net.status` payload (#466, ARC-F7, MEM-19d).
+  NetStatus: { online: true } satisfies NetStatus,
+  'NetStatus.offline': { online: false } satisfies NetStatus,
   // The `consent_records_list` reply (#430, ADR 0060).
   ConsentRecordView: {
     recordId: 'c0c0c0c0-0000-4000-8000-000000000002',
@@ -483,9 +489,10 @@ const noCredentialField: [
   NoCredential<CardUpdate>,
   NoCredential<MicLevelFrame>,
   NoCredential<TalkKeyStatus>,
+  NoCredential<NetStatus>,
   NoCredential<ConsentRecordView>,
   NoCredential<AppSetting>,
-] = [true, true, true, true, true, true, true, true, true, true, true, true];
+] = [true, true, true, true, true, true, true, true, true, true, true, true, true];
 
 describe('IPC type fixtures', () => {
   it('every fixture file has a typed twin, and every twin has a file', () => {
@@ -576,5 +583,19 @@ describe('talk-key status (CAP-39c, CAP-42)', () => {
       'reason',
       'talkKey',
     ]);
+  });
+});
+
+describe('net status (ARC-F7, MEM-19d)', () => {
+  it('[ARC-F7] [MEM-19d] online is a required boolean, and the payload names no host, URL or error', () => {
+    // @ts-expect-error online is required
+    const empty: NetStatus = {};
+    expect(empty).toEqual({});
+    // @ts-expect-error the payload carries no host name
+    const leaky: NetStatus = { online: false, host: 'x' };
+    expect(leaky.online).toBe(false);
+    expect(Object.keys(typed['NetStatus.offline'] as NetStatus)).toEqual(['online']);
+    expect((typed['NetStatus.offline'] as NetStatus).online).toBe(false);
+    expect((typed.NetStatus as NetStatus).online).toBe(true);
   });
 });

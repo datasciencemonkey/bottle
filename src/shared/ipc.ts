@@ -108,6 +108,7 @@ export const EVENTS = {
   'capture.stopped': { name: 'capture:stopped', direction: 'core_to_brain' },
   'session.stop_signal': { name: 'session:stop_signal', direction: 'core_to_brain' },
   'auth.status': { name: 'auth:status', direction: 'core_to_brain' },
+  /** Payload: `NetStatus` (ARC-F7, #466). Sticky: the host sends the last one again on subscribe. */
   'net.status': { name: 'net:status', direction: 'core_to_brain' },
   'mem.remote_status': { name: 'mem:remote_status', direction: 'core_to_brain' },
   'agent.tool_call': { name: 'agent:tool_call', direction: 'core_to_brain' },
@@ -481,6 +482,14 @@ export type TalkKeyReason =
 export interface TalkKeyStatus {
   talkKey: TalkKeyState;
   reason: TalkKeyReason | null;
+}
+
+/**
+ * `net.status` payload (ARC-F7). Two failed connects mark the host offline. Sticky: the host
+ * sends the last one again when the brain subscribes. No host name, URL or error text.
+ */
+export interface NetStatus {
+  online: boolean;
 }
 
 // ---------- consent records (#430, ADR 0060; Rust mirror in `mog_core::types`) ----------
