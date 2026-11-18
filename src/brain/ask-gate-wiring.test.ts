@@ -118,7 +118,8 @@ describe('ask gate on the bus (B1)', () => {
       (t) => t.bus.dispatch({ event: 'hotkey:ptt', payload: { mogId: A, phase: 'down' } }),
     ],
     ['a click on [Cancel]', (t) => t.card('chip_click', { chipId: 'preview_cancel' })],
-    ['the card close', (t) => t.gate.cardClosed(A)],
+    // TODO(#374): no card-hide signal reaches the brain yet; this calls the gate's own entry.
+    ['the card close (gate.cardClosed)', (t) => t.gate.cardClosed(A)],
     ['the MOG close', (t) => t.close()],
   ];
   for (const [name, cancel] of cancels) {
@@ -131,6 +132,17 @@ describe('ask gate on the bus (B1)', () => {
       expect(t.outbound()).toEqual([]);
     });
   }
+
+  it('[RTR-04b] a cancel from the MOG window (not its card) does not reach the preview', async () => {
+    const t = setup();
+    t.preview();
+    // `mog-<id>` may speak for its MOG on the bus, but only the card speaks for the preview.
+    t.card('cancel', undefined, `mog-${A}`);
+    t.card('chip_click', { chipId: 'preview_cancel' }, `mog-${A}`);
+    expect(t.gate.pending(A)).toBe('counting');
+    await t.run(PREVIEW_MS);
+    expect(t.outbound()).toEqual(['agent_send']);
+  });
 
   it('[RTR-04b] Esc from another window does not cancel; a hover never sends', async () => {
     const t = setup();

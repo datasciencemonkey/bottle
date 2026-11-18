@@ -85,7 +85,10 @@ export interface AskGate {
   escape(mogId: MogId): boolean;
   /** A talk-key press: every preview is cancelled. */
   keyDown(): void;
-  /** The card of `mogId` closed: its preview is cancelled. */
+  /**
+   * The card of `mogId` closed: its preview is cancelled. TODO(#374): no card-hide signal reaches
+   * the brain yet, so nothing calls it in `startBrain`; a closed MOG is caught when the timer ends.
+   */
   cardClosed(mogId: MogId): void;
   /** The preview state of `mogId`, if one is open. */
   pending(mogId: MogId): 'counting' | 'held' | undefined;
@@ -145,7 +148,7 @@ export function createAskGate(deps: AskGateDeps): AskGate {
       sent = Promise.reject(e);
     }
     // ARC-F14: a rejected send means the agent did not take the question. No retry by itself.
-    // TODO(#112): the fallback classifier route of RTR-15b.
+    // TODO(#143): the fallback classifier route of RTR-15b.
     void sent.catch(() => card.add({ id: blurbId, text: notSentText(question), completed: true }));
   };
 

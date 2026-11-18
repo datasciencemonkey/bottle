@@ -136,12 +136,13 @@ export function startBrain(): Brain {
       showCard: (mogId) => call('window_card_show', { mogId }),
       owner,
       isOpen: (id) => talkTarget.isOpen(id),
-      // TODO(#112, #163): the MOG's target profile from T7. Bottle never picks one, so until
+      // TODO(#163): the MOG's target profile from T7. Bottle never picks one, so until
       // then nothing is sent.
       target: () => undefined,
       // The hand-off seam: T15 `agent_send`. The core approves this one question (#141).
       send: (t) => components.T15.send(t),
     });
+    // TODO(#374): the card-hide signal calls `askGate.cardClosed`; none reaches the brain yet.
     wireAskGate(bus, askGate, stackFor);
     // #14: the PTT and hands-free lifecycle. Every start goes through the T12 consent gate.
     const lifecycle = createCaptureLifecycle({

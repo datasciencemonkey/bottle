@@ -18,7 +18,9 @@ These actions also stop the question, and nothing is sent:
 
 - Press Esc in the card.
 - Press the talk key again.
-- Close the card or the MOG.
+- Close the MOG.
+
+Not yet: closing only the card does not stop the question (TODO(#374)).
 
 Hold Shift with the talk key to ask on purpose. You still get the 1.5 second preview.
 
