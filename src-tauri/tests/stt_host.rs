@@ -181,6 +181,7 @@ impl Rig {
             capture: Some(&self.host),
             capture_ticket: None,
             app_settings: None,
+            insert: None,
         };
         route(components, command, args)
     }
