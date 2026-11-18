@@ -514,6 +514,10 @@ impl LocalStore for RecordingStore {
     }
 }
 
+fn p_now(p: &Value) -> bool {
+    p["now"].as_i64().is_some_and(|n| n > 0)
+}
+
 #[test]
 fn rtr_25_store_local_tools_use_the_fixed_r10_catalog() {
     let store = Arc::new(RecordingStore::default());
@@ -529,7 +533,10 @@ fn rtr_25_store_local_tools_use_the_fixed_r10_catalog() {
         ran[0].1,
         json!({ "mogId": MOG, "query": "revenue", "limit": 5 })
     );
-    assert_eq!(ran[1].0, "mem.item.upsert");
+    // MEM-10a (#102 note): the agent write goes through the atomic group, so its embed job is
+    // queued with the item and no write skips the outbox.
+    assert_eq!(ran[1].0, "mem.item.write");
+    assert!(p_now(&ran[1].1));
     let p = &ran[1].1;
     assert_eq!(p["mogId"], MOG);
     assert_eq!(p["itemType"], "fact");
@@ -537,9 +544,13 @@ fn rtr_25_store_local_tools_use_the_fixed_r10_catalog() {
     assert_eq!(p["source"], "agent");
     assert_eq!(p["deviceId"], "device-test-1");
     assert_eq!(p["itemId"].as_str().unwrap().len(), 36);
-    // Each statement the tools use must be a brain-access entry of the fixed catalog.
+    // Each statement the tools use must be a brain-access entry or group of the fixed catalog.
     for (id, _) in &ran {
-        assert!(mog_core::local_store::catalog::find(id).is_some(), "{id}");
+        assert_eq!(
+            mog_core::local_store::catalog::access_of(id),
+            Some(mog_core::local_store::catalog::Access::Brain),
+            "{id}"
+        );
     }
     // The local catalog has no transcript statement yet (TODO(#61)).
     assert!(matches!(

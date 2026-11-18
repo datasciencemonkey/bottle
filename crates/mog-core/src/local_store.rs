@@ -79,3 +79,5 @@ mod exchange_tests;
 mod forget_tests;
 #[cfg(test)]
 mod outbox_tests;
+#[cfg(test)]
+mod quarantine_tests;
