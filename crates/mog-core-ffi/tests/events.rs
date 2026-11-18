@@ -134,11 +134,17 @@ fn nfr_18b_event_reaches_the_callback_in_1_ms_or_less() {
     let n = 1_000;
     let mut sent = Vec::with_capacity(n);
     let mut emit_took = Vec::with_capacity(n);
+    let mut switches = Vec::with_capacity(n);
     for i in 0..n {
+        let payload = json!({ "seq": i });
+        let before = ctx_switches();
         let start = Instant::now();
+        assert!(emit_event("net:status", payload));
+        let took = start.elapsed();
+        let after = ctx_switches();
         sent.push(start);
-        assert!(emit_event("net:status", json!({ "seq": i })));
-        emit_took.push(start.elapsed());
+        emit_took.push(took);
+        switches.push(before.zip(after).map(|(b, a)| a.since(b)));
         // Let each event land on its own, so the test measures latency, not queue depth.
         assert!(rec.wait_for(i + 1, Duration::from_secs(5)));
     }
@@ -156,8 +162,84 @@ fn nfr_18b_event_reaches_the_callback_in_1_ms_or_less() {
     assert!(p50 <= ONE_MS, "p50 delivery {p50:?} is over 1 ms");
     let p99 = percentile(latencies, 0.99);
     assert!(p99 <= 20 * ONE_MS, "p99 delivery {p99:?} is over 20 ms");
-    let emit_p99 = percentile(emit_took, 0.99);
-    assert!(emit_p99 <= ONE_MS, "p99 emit {emit_p99:?} is over 1 ms");
+    assert_emit_p99_within_1_ms(&emit_took, &switches);
+}
+
+/// The context switches of the calling thread so far. Linux reports them per thread in
+/// `/proc/thread-self/status`. Other systems give `None`.
+#[derive(Clone, Copy, Debug)]
+struct CtxSwitches {
+    /// The thread gave up the CPU itself: it blocked or waited.
+    voluntary: u64,
+    /// The scheduler took the CPU away: preemption by another runnable thread.
+    involuntary: u64,
+}
+
+impl CtxSwitches {
+    fn since(self, earlier: CtxSwitches) -> CtxSwitches {
+        CtxSwitches {
+            voluntary: self.voluntary - earlier.voluntary,
+            involuntary: self.involuntary - earlier.involuntary,
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn ctx_switches() -> Option<CtxSwitches> {
+    let status = std::fs::read_to_string("/proc/thread-self/status").ok()?;
+    let field = |name: &str| -> Option<u64> {
+        status
+            .lines()
+            .find_map(|l| l.strip_prefix(name))
+            .and_then(|v| v.trim().parse().ok())
+    };
+    Some(CtxSwitches {
+        voluntary: field("voluntary_ctxt_switches:")?,
+        involuntary: field("nonvoluntary_ctxt_switches:")?,
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn ctx_switches() -> Option<CtxSwitches> {
+    None
+}
+
+/// NFR-18b, core side: `emit_event` never waits, and it returns in 1 ms or less.
+///
+/// #499: on a shared CI runner, a wall-clock p99 also counts the time that the scheduler gave
+/// the CPU to another thread in the middle of an emit (often the delivery thread that the
+/// emit has just woken). That time is not work that the core does, and it is not a wait. Where
+/// the system reports per-thread context switches (Linux), the test leaves out only the emits
+/// that were preempted and did not block:
+/// - An emit with a voluntary switch blocked (it waited on something). It always stays in the
+///   bound, so a wait on the host or on a lock still fails the test.
+/// - An emit with only involuntary switches lost the CPU to the scheduler. It is left out.
+/// - At least 90% of the emits must stay in the bound, so a busy runner cannot remove it.
+///
+/// Where the counters are not available, the bound applies to every emit.
+fn assert_emit_p99_within_1_ms(emit_took: &[Duration], switches: &[Option<CtxSwitches>]) {
+    if switches.iter().all(Option::is_some) {
+        let clean: Vec<Duration> = emit_took
+            .iter()
+            .zip(switches.iter().flatten())
+            .filter(|(_, s)| s.voluntary > 0 || s.involuntary == 0)
+            .map(|(t, _)| *t)
+            .collect();
+        let preempted = emit_took.len() - clean.len();
+        assert!(
+            clean.len() * 10 >= emit_took.len() * 9,
+            "{preempted} of {} emits were preempted: the runner is too busy to measure",
+            emit_took.len()
+        );
+        let p99 = percentile(clean, 0.99);
+        assert!(
+            p99 <= ONE_MS,
+            "p99 emit {p99:?} is over 1 ms ({preempted} preempted emits left out)"
+        );
+    } else {
+        let p99 = percentile(emit_took.to_vec(), 0.99);
+        assert!(p99 <= ONE_MS, "p99 emit {p99:?} is over 1 ms");
+    }
 }
 
 #[test]
@@ -296,4 +378,75 @@ fn nfr_18b_full_event_queue_drops_and_counts_without_blocking() {
     rec.hold.store(false, Ordering::SeqCst);
     assert!(rec.wait_for(accepted, Duration::from_secs(10)));
     clear();
+}
+
+/// 1,000 emits of 10 us, of which `slow` took 3 ms with the given switches.
+fn samples(slow: usize, slow_switches: CtxSwitches) -> (Vec<Duration>, Vec<Option<CtxSwitches>>) {
+    let fast = CtxSwitches {
+        voluntary: 0,
+        involuntary: 0,
+    };
+    (0..1_000)
+        .map(|i| {
+            if i < slow {
+                (Duration::from_millis(3), Some(slow_switches))
+            } else {
+                (Duration::from_micros(10), Some(fast))
+            }
+        })
+        .unzip()
+}
+
+#[test]
+fn nfr_18b_p99_emit_bound_leaves_out_only_preempted_emits() {
+    // #499: 15 of 1,000 emits lost the CPU to the scheduler. A plain wall-clock p99 fails.
+    let (took, switches) = samples(
+        15,
+        CtxSwitches {
+            voluntary: 0,
+            involuntary: 1,
+        },
+    );
+    assert!(percentile(took.clone(), 0.99) > ONE_MS);
+    assert_emit_p99_within_1_ms(&took, &switches);
+}
+
+#[test]
+#[should_panic(expected = "p99 emit")]
+fn nfr_18b_p99_emit_bound_keeps_emits_that_blocked() {
+    // An emit that waited (a voluntary switch) stays in the bound, even if it was also preempted.
+    let (took, switches) = samples(
+        15,
+        CtxSwitches {
+            voluntary: 1,
+            involuntary: 1,
+        },
+    );
+    assert_emit_p99_within_1_ms(&took, &switches);
+}
+
+#[test]
+#[should_panic(expected = "too busy")]
+fn nfr_18b_p99_emit_bound_needs_90_percent_of_the_emits() {
+    let (took, switches) = samples(
+        101,
+        CtxSwitches {
+            voluntary: 0,
+            involuntary: 1,
+        },
+    );
+    assert_emit_p99_within_1_ms(&took, &switches);
+}
+
+#[test]
+#[should_panic(expected = "p99 emit")]
+fn nfr_18b_p99_emit_bound_applies_to_every_emit_without_counters() {
+    let (took, _) = samples(
+        15,
+        CtxSwitches {
+            voluntary: 0,
+            involuntary: 1,
+        },
+    );
+    assert_emit_p99_within_1_ms(&took, &vec![None; took.len()]);
 }
