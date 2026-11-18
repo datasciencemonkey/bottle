@@ -50,8 +50,7 @@ function apiDouble(
       if (opts.listFails) throw new Error('list failed');
       const ids = store[profile] ?? [];
       // two pages, so the utility must follow next_page_token
-      if (!pageToken)
-        return { ids: ids.slice(0, 1), nextPageToken: ids.length > 1 ? 'p2' : undefined };
+      if (!pageToken) return { ids: ids.slice(0, 1), nextPageToken: 'p2' };
       return { ids: ids.slice(1) };
     }),
     delete: vi.fn(async (profile: string, _mog: string, cid: string) => {
@@ -65,6 +64,20 @@ function apiDouble(
     }),
   };
   return { api, calls };
+}
+
+/** The same thread with no workspace ID (so no link is possible). */
+const noWorkspace = (cid: string): GenieOneThread => ({
+  mogId: MOG,
+  profile: 'dev',
+  host: HOST,
+  conversationId: cid,
+});
+
+/** The value, or a test failure if it is missing. */
+function must<T>(v: T | undefined): T {
+  if (v === undefined) throw new Error('missing value');
+  return v;
 }
 
 beforeEach(() => core.reset());
@@ -181,6 +194,14 @@ describe('Genie One API utility after the SP-11 pass (G-45a)', () => {
     ]);
   });
 
+  it('[G-45a] a failed confirm list does not undo a delete that the API confirmed', async () => {
+    const { api } = apiDouble({ dev: [CID_1] }, () => 'deleted', { listFails: true });
+    const out = await new GenieOneDeleteUtility({ gate: 'on', api }).deleteThreads('forget', [
+      thread(CID_1),
+    ]);
+    expect(out).toEqual([{ conversationId: CID_1, result: 'deleted' }]);
+  });
+
   it('[G-45a] a bad conversation ID is never sent', async () => {
     const { api, calls } = apiDouble({ dev: [] });
     const out = await new GenieOneDeleteUtility({ gate: 'on', api }).deleteThreads('forget', [
@@ -258,7 +279,7 @@ describe('Delete in Genie One fallback (G-45b, AT-16)', () => {
     expect(deleteInGenieOneLink(thread(CID_1, { host: `${HOST}/some/path?x=1` }))).toBe(
       `${HOST}/one/chat/threads/${CID_1}?o=${WSID}`,
     );
-    expect(deleteInGenieOneLink(thread(CID_1, { workspaceId: undefined }))).toBeUndefined();
+    expect(deleteInGenieOneLink(noWorkspace(CID_1))).toBeUndefined();
     expect(deleteInGenieOneLink(thread(CID_1, { workspaceId: '12&x=1' }))).toBeUndefined();
     expect(
       deleteInGenieOneLink(thread(CID_1, { host: 'http://acme.cloud.databricks.com' })),
@@ -268,19 +289,18 @@ describe('Delete in Genie One fallback (G-45b, AT-16)', () => {
   });
 
   it('[G-45b] [AT-16] the notice discloses that Bottle cannot delete and offers Delete in Genie One', async () => {
-    const threads = [thread(CID_1), thread(CID_2, { workspaceId: undefined })];
+    const threads = [thread(CID_1), noWorkspace(CID_2)];
     const out = await new GenieOneDeleteUtility({ gate: 'off' }).deleteThreads('wipe', threads);
-    const n = deleteNotice(MOG, out);
-    expect(n).toBeDefined();
-    expect(n!.mogId).toBe(MOG);
-    expect(n!.label).toBe(DELETE_IN_GENIE_ONE);
-    expect(n!.label).toBe('Delete in Genie One');
-    expect(n!.text).toMatch(/Bottle cannot delete Genie One conversations/);
-    expect(n!.links).toEqual([
+    const n = must(deleteNotice(MOG, out));
+    expect(n.mogId).toBe(MOG);
+    expect(n.label).toBe(DELETE_IN_GENIE_ONE);
+    expect(n.label).toBe('Delete in Genie One');
+    expect(n.text).toMatch(/Bottle cannot delete Genie One conversations/);
+    expect(n.links).toEqual([
       { conversationId: CID_1, url: `${HOST}/one/chat/threads/${CID_1}?o=${WSID}` },
     ]);
-    expect(n!.noLink).toBe(1);
-    expect(n!.noLinkText).toMatch(/1 conversation/);
+    expect(n.noLink).toBe(1);
+    expect(n.noLinkText).toMatch(/1 conversation/);
   });
 
   it('[G-45b] [AT-16] after a partial failure the notice names the count that Bottle could not delete', async () => {
@@ -291,7 +311,7 @@ describe('Delete in Genie One fallback (G-45b, AT-16)', () => {
       thread(CID_1),
       thread(CID_2),
     ]);
-    const n = deleteNotice(MOG, out)!;
+    const n = must(deleteNotice(MOG, out));
     expect(n.text).toMatch(/Bottle could not delete 1 Genie One conversation\b/);
     expect(n.links.map((l) => l.conversationId)).toEqual([CID_1]);
   });

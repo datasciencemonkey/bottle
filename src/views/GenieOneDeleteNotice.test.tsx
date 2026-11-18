@@ -25,25 +25,31 @@ const notice: GenieOneDeleteNoticeModel = {
   noLinkText: 'Bottle has no link for 1 conversation. Find it in your Genie One history.',
 };
 
+/** The element, or a test failure if it is missing. */
+function must<T>(v: T | null): T {
+  if (v === null) throw new Error('missing element');
+  return v;
+}
+
 beforeEach(() => tauri.reset());
 
 describe('GenieOneDeleteNotice (G-45b, AT-16)', () => {
   it('[G-45b] [AT-16] shows the disclosure, the Delete in Genie One link and the no-link text', async () => {
     const { el, root } = await render(<GenieOneDeleteNotice notice={notice} />);
-    const box = el.querySelector('[data-genie-one-delete]')!;
+    const box = must(el.querySelector('[data-genie-one-delete]'));
     expect(box.getAttribute('role')).toBe('status');
     expect(box.textContent).toContain(notice.text);
     expect(box.textContent).toContain(notice.noLinkText);
-    const btn = el.querySelector<HTMLButtonElement>('button[data-genie-one-delete-link]')!;
+    const btn = must(el.querySelector<HTMLButtonElement>('button[data-genie-one-delete-link]'));
     expect(btn.textContent).toBe('Delete in Genie One');
-    expect(el.querySelector('[data-genie-one-delete-url]')!.textContent).toBe(URL_1);
+    expect(must(el.querySelector('[data-genie-one-delete-url]')).textContent).toBe(URL_1);
     act(() => root.unmount());
   });
 
   it('[G-45b] the link click goes to the brain with view_emit, with the conversation ID only', async () => {
     const { el, root } = await render(<GenieOneDeleteNotice notice={notice} />);
     await act(async () => {
-      el.querySelector<HTMLButtonElement>('button[data-genie-one-delete-link]')!.click();
+      must(el.querySelector<HTMLButtonElement>('button[data-genie-one-delete-link]')).click();
     });
     expect(viewEmits()).toContainEqual({
       mogId: MOG,
@@ -55,7 +61,15 @@ describe('GenieOneDeleteNotice (G-45b, AT-16)', () => {
 
   it('[G-45b] hides the no-link text when every thread has a link', async () => {
     const { el, root } = await render(
-      <GenieOneDeleteNotice notice={{ ...notice, noLink: 0, noLinkText: undefined }} />,
+      <GenieOneDeleteNotice
+        notice={{
+          mogId: MOG,
+          label: notice.label,
+          text: notice.text,
+          links: notice.links,
+          noLink: 0,
+        }}
+      />,
     );
     expect(el.querySelector('[data-genie-one-delete-nolink]')).toBeNull();
     act(() => root.unmount());
