@@ -91,6 +91,7 @@ fn brain_call(records: &Arc<ConsentRecords>, command: &str, args: Value) -> Resu
         app_settings: None,
         capture: None,
         capture_ticket: None,
+        insert: None,
     };
     route(components, command, args)
 }
@@ -211,6 +212,7 @@ fn sec_03_with_no_key_store_nothing_is_managed_and_consent_fails_closed() {
         app_settings: None,
         capture: None,
         capture_ticket: None,
+        insert: None,
     };
     assert_eq!(
         route(

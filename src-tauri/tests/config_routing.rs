@@ -58,6 +58,7 @@ fn call(
         capture: None,
         capture_ticket: None,
         app_settings: None,
+        insert: None,
     };
     route(components, command, args)
 }

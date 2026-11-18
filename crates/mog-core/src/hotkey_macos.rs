@@ -533,8 +533,9 @@ mod sys {
     #[link(name = "ApplicationServices", kind = "framework")]
     extern "C" {
         static kAXTrustedCheckOptionPrompt: CFStringRef;
-        fn AXIsProcessTrusted() -> bool;
-        fn AXIsProcessTrustedWithOptions(options: CFDictionaryRef) -> bool;
+        // C `Boolean` is `unsigned char`.
+        fn AXIsProcessTrusted() -> u8;
+        fn AXIsProcessTrustedWithOptions(options: CFDictionaryRef) -> u8;
     }
 
     #[link(name = "IOKit", kind = "framework")]
@@ -711,7 +712,7 @@ mod sys {
                     }
                 }
                 // SAFETY: AXIsProcessTrusted never prompts.
-                Permission::Accessibility => match unsafe { AXIsProcessTrusted() } {
+                Permission::Accessibility => match unsafe { AXIsProcessTrusted() } != 0 {
                     true => PermissionStatus::Granted,
                     false => PermissionStatus::Unknown,
                 },
@@ -740,7 +741,7 @@ mod sys {
                             &kCFTypeDictionaryKeyCallBacks,
                             &kCFTypeDictionaryValueCallBacks,
                         );
-                        let trusted = AXIsProcessTrustedWithOptions(opts);
+                        let trusted = AXIsProcessTrustedWithOptions(opts) != 0;
                         if !opts.is_null() {
                             CFRelease(opts);
                         }

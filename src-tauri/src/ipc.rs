@@ -9,8 +9,8 @@
 //! The gateway is the only entry (ADR 0040). It sends each checked call to [`HostComponents`],
 //! which runs the host actions: `view_emit` (relay to the brain), `brain_subscribe`, the four
 //! `window_*` ops (R11), `hotkeys_set` (R1 settings), `permission_request` (R1, ADR 0039),
-//! `consent_*` (T12 records, ADR 0060), the `capture_*` commands (R2, #425, ADR 0055) and
-//! `app_setting_*` (the app-wide settings, #453).
+//! `consent_*` (T12 records, ADR 0060), the `capture_*` commands (R2, #425, ADR 0055),
+//! `app_setting_*` (the app-wide settings, #453) and `insert_text` (the R11 paste, ADR 0048).
 //! Every other command stays `not_implemented` until its feature issue wires its component.
 //! A rejection is only `{ "error": "<code>" }`, with a code from `ipc_gateway::ERROR_CODES`
 //! (SEC-03).
@@ -18,8 +18,9 @@
 //! The `window_*` ops can wait for the main thread, so they run on a worker and resolve later
 //! (ADR 0022 decision 6). `permission_request` can wait for the OS prompt, so it also runs on
 //! a worker (ADR 0039). `capture_start` and `capture_resume` open the audio device, which can
-//! be slow, so they also run on a worker (ADR 0055). Every other command runs inline, so
-//! `view_emit` keeps its order and the panic stop never waits.
+//! be slow, so they also run on a worker (ADR 0055). `insert_text` waits for the paste and the
+//! clipboard restore, so it also runs on a worker (ADR 0048). Every other command runs inline,
+//! so `view_emit` keeps its order and the panic stop never waits.
 //! The last `hotkey:status` item is sticky: a new brain Channel gets it again (ADR 0039).
 //!
 //! The front end calls `invoke(name, { args })`; any other top-level key is rejected.
@@ -202,6 +203,8 @@ pub struct HostComponents<'a> {
     /// The `app_setting_*` component (#453): `mog_core::app_settings::AppSettings`. `None`
     /// when no settings are managed: `host_failed`.
     pub app_settings: Option<&'a dyn GatewayComponents>,
+    /// The R11 paste for `insert_text` (#58, ADR 0048): `mog_core::insertion::os_component`.
+    pub insert: Option<&'a dyn GatewayComponents>,
 }
 
 fn refused(e: IpcError) -> CoreError {
@@ -324,6 +327,11 @@ impl GatewayComponents for HostComponents<'_> {
                 .app_settings
                 .ok_or_else(|| host_failed(command))?
                 .call(command, args),
+            // #58 (ADR 0048): the R11 paste. The gateway let only the brain through.
+            "insert_text" => self
+                .insert
+                .ok_or_else(|| host_failed(command))?
+                .call(command, args),
             // Each feature issue wires its R1-R17 component here.
             "capture_start" | "capture_stop" | "capture_pause" | "capture_resume"
             | "capture_status" | "capture_stop_all" | "capture_subscribe" => {
@@ -363,6 +371,7 @@ pub fn route(components: HostComponents<'_>, command: &str, args: Value) -> Resu
 /// True for the commands that run on a worker: the R11 ops, which can wait for the main
 /// thread (ADR 0022 decision 6), and `permission_request`, which can wait while the OS prompt
 /// shows (ADR 0039), and `capture_start` and `capture_resume`, which open the device (ADR 0055).
+/// `insert_text` waits about 0.4 s for the paste and the clipboard restore (ADR 0048).
 pub fn runs_off_main_thread(command: &str) -> bool {
     matches!(
         command,
@@ -373,7 +382,25 @@ pub fn runs_off_main_thread(command: &str) -> bool {
             | "permission_request"
             | "capture_start"
             | "capture_resume"
+            | "insert_text"
     )
+}
+
+/// The paste component of this OS, or `None` where Bottle has no paste (`host_failed`).
+#[cfg(any(target_os = "macos", windows))]
+fn os_insert() -> Option<&'static dyn GatewayComponents> {
+    use std::sync::OnceLock;
+    #[cfg(target_os = "macos")]
+    type Host = mog_core::insertion::MacInsertHost;
+    #[cfg(windows)]
+    type Host = mog_core::insertion::WindowsInsertHost;
+    static INSERT: OnceLock<mog_core::insertion::InsertTextComponent<Host>> = OnceLock::new();
+    Some(INSERT.get_or_init(mog_core::insertion::os_component))
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn os_insert() -> Option<&'static dyn GatewayComponents> {
+    None
 }
 
 /// The brain link of one calling webview: its brain Channel state and its Channel IDs.
@@ -436,6 +463,7 @@ fn route_from<R: Runtime>(
         app_settings: app_settings
             .as_ref()
             .map(|s| s.inner().as_ref() as &dyn GatewayComponents),
+        insert: os_insert(),
     };
     route(components, command, args)
 }
