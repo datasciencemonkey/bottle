@@ -29,7 +29,11 @@ const ptt = (owner: string): CaptureState => ({
 function setup() {
   const s = createSimScheduler(1000);
   const sent: PublishedViewState[] = [];
-  const publisher = createMoodPublisher({ clock: s.clock, send: (v) => void sent.push(v), scheduler: s });
+  const publisher = createMoodPublisher({
+    clock: s.clock,
+    send: (v) => void sent.push(v),
+    scheduler: s,
+  });
   const cm = createCaptureMood({ publisher, clock: s.clock, scheduler: s });
   const last = (mogId: string) => sent.filter((v) => v.mogId === mogId).at(-1);
   return { s, sent, cm, last };
@@ -43,10 +47,11 @@ describe('capture mood: capture:state to the MOG mood (#551)', () => {
     expect(s.clock.now()).toBe(1000);
   });
 
-  it('[UX-07] only the owner shows listening; another MOG it has seen keeps its mood', () => {
-    const { cm, last } = setup();
+  it('[UX-07] only the owner shows listening; another MOG it has seen keeps its mood', async () => {
+    const { s, cm, last } = setup();
     cm.onState(ptt(B));
     cm.onState(idle);
+    await s.runUntil(1000 + MOOD_HOLD_MS);
     cm.onState(ptt(A));
     expect(last(A)?.mood).toBe('listening');
     expect(last(B)?.mood).not.toBe('listening');
@@ -71,7 +76,12 @@ describe('capture mood: a refused start is never silent (#551)', () => {
     expect(v?.mood).toBe('error');
     expect(v?.overlays.attention).toBe(true);
     expect(v?.badges).toEqual([
-      { kind: 'capture_refused', text: REFUSAL_TEXT.mic_busy.text, label: REFUSAL_TEXT.mic_busy.label, hoverOnly: false },
+      {
+        kind: 'capture_refused',
+        text: REFUSAL_TEXT.mic_busy.text,
+        label: REFUSAL_TEXT.mic_busy.label,
+        hoverOnly: false,
+      },
     ]);
     expect(last(B)).toBeUndefined();
   });

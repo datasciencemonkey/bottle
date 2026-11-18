@@ -5,13 +5,13 @@
  * defers is sent when the hold ends, on the injected scheduler.
  *
  * With `traceNow` (only when `VITE_BOTTLE_LATENCY_TRACE=1`), each state carries a `ViewTrace`
- * for the view frame probe. TODO(#457): capture:state is routed (#425), so `startBrain` builds one publisher with
- * `sendMogViewState` and `traceNow: latencyTraceClock(import.meta.env.VITE_BOTTLE_LATENCY_TRACE)`,
- * and the capture lifecycle calls `update`. The device run is #355. TODO(#39): the OperationTracker
+ * for the view frame probe. `startBrain` builds one publisher with `sendMogViewState` and
+ * `traceNow: latencyTraceClock(import.meta.env.VITE_BOTTLE_LATENCY_TRACE)`, and `capture-mood.ts`
+ * calls `update` on each `capture:state` (#551). The device run is #355. TODO(#39): the OperationTracker
  * calls `update` for each request phase, and a recheck runs when an error or success window ends.
  */
 import type { Mood, MogId } from '../shared/interfaces';
-import type { MogViewState } from '../shared/ipc';
+import type { MogBadgeView, MogViewState } from '../shared/ipc';
 import { epochNow } from '../shared/latency';
 import type { MonotonicClock } from './clock';
 import { holdMood, mapMood, type HeldMood, type MoodSources } from './components/mood-mapper';
@@ -39,12 +39,16 @@ export interface MoodPublisherOptions {
 }
 
 export interface MoodPublisher {
-  /** The sources of `mogId` changed. `cause` defaults to now on the trace clock. */
-  update(mogId: MogId, sources: MoodSources, cause?: UpdateCause): void;
+  /**
+   * The sources of `mogId` changed. `cause` defaults to now on the trace clock. `badges` are
+   * the brain's badges for the MOG (ADR 0029); they never change the mood.
+   */
+  update(mogId: MogId, sources: MoodSources, cause?: UpdateCause, badges?: MogBadgeView[]): void;
 }
 
 interface MogSlot {
   sources: MoodSources;
+  badges?: MogBadgeView[] | undefined;
   held?: HeldMood;
   lastKey?: string;
   cancel?: (() => void) | undefined;
@@ -81,10 +85,11 @@ export function createMoodPublisher(opts: MoodPublisherOptions): MoodPublisher {
     if (recheckAt !== undefined) {
       slot.cancel = scheduler.at(recheckAt, () => run(mogId, slot, undefined));
     }
-    const key = `${shown.mood}|${JSON.stringify(target.overlays)}`;
+    const key = `${shown.mood}|${JSON.stringify(target.overlays)}|${JSON.stringify(slot.badges ?? null)}`;
     if (key === slot.lastKey) return;
     slot.lastKey = key;
     const state: PublishedViewState = { mogId, mood: shown.mood, overlays: target.overlays };
+    if (slot.badges) state.badges = slot.badges;
     if (traceNow) {
       const sentAt = traceNow();
       state.trace = { seq: ++seq, eventAt: why?.eventAt ?? sentAt, sentAt };
@@ -94,9 +99,10 @@ export function createMoodPublisher(opts: MoodPublisherOptions): MoodPublisher {
   };
 
   return {
-    update(mogId, sources, cause) {
+    update(mogId, sources, cause, badges) {
       const slot = slots.get(mogId) ?? { sources };
       slot.sources = sources;
+      slot.badges = badges;
       slots.set(mogId, slot);
       run(mogId, slot, cause ?? (traceNow ? { eventAt: traceNow() } : undefined));
     },

@@ -6,9 +6,10 @@ import {
   emitView,
   useMogTarget,
   useViewEvent,
+  viewMicLevels,
   type MogViewState,
 } from '../view-ipc';
-import { LevelMeter, NO_MIC_LEVELS, type MicLevelSource } from './level-meter';
+import { LevelMeter, type MicLevelSource } from './level-meter';
 import type { FrameProbe } from './frame-probe';
 import type { MascotRenderer } from './mascot';
 import { RiveMascot } from './rive-mascot';
@@ -17,7 +18,7 @@ export interface MogViewProps {
   mogId: MogId;
   /** The renderer seam (ADR 0002, ADR 0027). */
   createMascot?: () => MascotRenderer;
-  /** Mic frames for the level meter (UX-06a). TODO(#4): the CaptureService level stream. */
+  /** Mic frames for the level meter (UX-06a). Default: the `mog.level` frames of the brain. */
   levels?: MicLevelSource;
   /** The frame probe for the latency run (#13, ADR 0031). Only with the trace flag. */
   probe?: FrameProbe | undefined;
@@ -26,10 +27,16 @@ export interface MogViewProps {
 /** One Rive instance per MOG view, with the PNG fallback (UX-09b). */
 export const defaultMascot = (): MascotRenderer => new RiveMascot();
 
+/**
+ * CAP-16a, UX-06a: the `mog.level` frames the brain sends to this MOG window (`LevelRouter`).
+ * One stable source, so a render does not subscribe again.
+ */
+const VIEW_MIC_LEVELS: MicLevelSource = viewMicLevels();
+
 export function MogView({
   mogId,
   createMascot = defaultMascot,
-  levels = NO_MIC_LEVELS,
+  levels = VIEW_MIC_LEVELS,
   probe,
 }: MogViewProps) {
   const ref = useRef<HTMLDivElement>(null);

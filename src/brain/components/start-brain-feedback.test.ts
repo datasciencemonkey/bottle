@@ -29,20 +29,30 @@ const viewStates = (label: string) =>
     .filter(([to, ev]) => to === label && ev === VIEW_STATE)
     .map(([, , p]) => p as { mogId: string; mood: string; badges?: { text: string }[] });
 
+// The test setup clears mocks before each test, so keep the deps of the one startBrain call.
+let brain: ReturnType<typeof startBrain>;
+let lifecycleDeps: Parameters<typeof createCaptureLifecycle>[0] | undefined;
+let utteranceDeps: Parameters<typeof createUtteranceHandler>[0] | undefined;
+beforeAll(() => {
+  brain = startBrain();
+  lifecycleDeps = vi.mocked(createCaptureLifecycle).mock.calls[0]?.[0];
+  utteranceDeps = vi.mocked(createUtteranceHandler).mock.calls[0]?.[0];
+});
+
 describe('startBrain: visible PTT feedback (#551)', () => {
-  it('[UX-01a] [UX-05b] a capture:state for A sends listening to mog-A and to the hub', () => {
-    const brain = startBrain();
+  it('[UX-01a] [UX-05b] a capture:state for A sends listening to mog-A and to the hub', async () => {
     brain.bus.dispatch({
       event: EVENTS['capture.state'].name,
       payload: { owner: A, mode: 'ptt', recording: true, paused: false, othersTrack: 'off' },
     });
+    // UX-05b: the MOG window gets it in the same task; the hub copy follows.
     expect(viewStates(`mog-${A}`).at(-1)).toMatchObject({ mogId: A, mood: 'listening' });
+    await Promise.resolve();
     expect(viewStates('hub').at(-1)).toMatchObject({ mogId: A, mood: 'listening' });
   });
 
   it('[MB-08a] a refused capture start shows its reason on the MOG', () => {
-    startBrain();
-    const deps = vi.mocked(createCaptureLifecycle).mock.calls[0]?.[0];
+    const deps = lifecycleDeps;
     expect(deps?.onRefused).toBeTypeOf('function');
     const B = '00000000-0000-4000-8000-0000000000b2';
     deps?.onRefused?.({ mogId: B, mode: 'ptt', error: { error: 'mic_busy' } });
@@ -53,8 +63,7 @@ describe('startBrain: visible PTT feedback (#551)', () => {
   });
 
   it('[MOG-06a] [MOG-06d] insertion is on, and a no_permission or failed insert_text keeps the text for Copy', async () => {
-    startBrain();
-    const deps = vi.mocked(createUtteranceHandler).mock.calls[0]?.[0];
+    const deps = utteranceDeps;
     expect(deps?.insertionOn(A)).toBe(true);
     const u = (insertionOn: boolean) => ({
       mogId: A,
@@ -63,7 +72,11 @@ describe('startBrain: visible PTT feedback (#551)', () => {
       insertionOn,
       input: {} as never,
     });
-    const decision = { intent: 'dictation', cleaned_text: 'clean text' } as never;
+    const decision = {
+      intent: 'dictation',
+      cleaned_text: 'clean text',
+      genie_question: '',
+    } as never;
     const route = async () => decision;
     for (const [insertText, reason] of [
       [async () => ({ result: 'no_permission' as const }), 'no_permission'],

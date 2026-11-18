@@ -77,8 +77,9 @@ export interface CaptureLifecycleDeps {
   /**
    * R2 refused a start (`mic_busy`, `consent_required`, `host_failed`), for example a key-down
    * in the 120 ms post-roll of the last PTT (ADR 0057 decision 3). The press records nothing.
+   * `error` is the rejection (an `IpcError`), or undefined when the reply had no lease.
    */
-  onRefused?(e: { mogId: MogId; mode: LifecycleMode }): void;
+  onRefused?(e: { mogId: MogId; mode: LifecycleMode; error?: unknown }): void;
   /** The capture settings of a MOG. Default: the Appendix F defaults. */
   config?: (mogId: MogId) => LifecycleConfig;
 }
@@ -181,14 +182,14 @@ export function createCaptureLifecycle(deps: CaptureLifecycleDeps): CaptureLifec
   };
 
   const start = (l: Live, onFail: () => void) => {
-    const failed = () => {
+    const failed = (error?: unknown) => {
       // consent_required, mic_busy or host_failed: no lease, nothing to stop.
       l.failed = true;
       const fail = l.fail;
       l.end = undefined;
       l.fail = undefined;
       onFail();
-      deps.onRefused?.({ mogId: l.mogId, mode: l.mode });
+      deps.onRefused?.({ mogId: l.mogId, mode: l.mode, error });
       fail?.();
     };
     deps.control.start({ mogId: l.mogId, mode: l.mode }).then((state) => {
