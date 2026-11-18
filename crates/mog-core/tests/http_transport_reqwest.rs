@@ -785,6 +785,27 @@ fn g_10a_fmapi_error_retry_after_is_honoured() {
 }
 
 #[test]
+fn g_10a_a_503_retry_after_holds_the_profile_without_an_aimd_cut() {
+    // Review follow-up of #364 on #138: R7 also obeys `Retry-After` on a 503.
+    let s = serve(vec![
+        with_header(json_reply(503, json!({})), "Retry-After", "6"),
+        json_reply(200, json!({"ok": 1})),
+    ]);
+    let r = rig(&s);
+    let t = tags("m1", "genie");
+    let first = r.transport.request(PROFILE, "scim.me", &none(), None, &t);
+    assert_eq!(code(first), "upstream_failed");
+    assert_eq!(s.seen().len(), 1, "a 503 is not retried by R7");
+    assert_eq!(r.bucket.rate_per_min(PROFILE), DEFAULT_RATE_PER_MIN);
+    r.transport
+        .request(PROFILE, "scim.me", &none(), None, &t)
+        .unwrap();
+    let waited: Duration = r.pause.pauses.lock().unwrap().iter().sum();
+    assert!(waited >= Duration::from_secs(6), "waited {waited:?}");
+    assert!(waited <= Duration::from_secs(7), "waited {waited:?}");
+}
+
+#[test]
 fn g_09c_a_429_halves_the_profile_rate() {
     let s = serve(vec![json_reply(429, json!({}))]);
     let r = rig(&s);
