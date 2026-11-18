@@ -2,7 +2,7 @@
  * UX-06a / UX-06b (AT-14): the MOG view computes `level` with Table UX-LEVEL, and only for the
  * MOG that owns the open mic. Other MOGs show 0.
  */
-import { LEVEL, LevelMeter, NO_MIC_LEVELS, levelTarget, type MicLevelFrame } from './level-meter';
+import { LEVEL, LevelMeter, levelTarget, type MicLevelFrame } from './level-meter';
 
 const ME = '00000000-0000-4000-8000-000000000001';
 const OTHER = '00000000-0000-4000-8000-000000000002';
@@ -114,10 +114,6 @@ describe('UX-06b: level = 0 when the MOG does not own an open mic', () => {
     expect(m.push(f(2030, -10))).toBeCloseTo(1 - Math.exp(-1), 6);
   });
 
-  it('[UX-06b] the default source sends no frames (TODO(#4))', () => {
-    const got: MicLevelFrame[] = [];
-    const off = NO_MIC_LEVELS.subscribe((x) => got.push(x));
-    off();
-    expect(got).toEqual([]);
-  });
+  // The MOG view's default source (the `mog.level` frames the brain sends, CAP-16a) is tested
+  // in MogView.test.tsx: `[UX-06a] [UX-06b] [CAP-16a] with no levels prop ...`.
 });
