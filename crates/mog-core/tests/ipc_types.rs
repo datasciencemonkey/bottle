@@ -380,7 +380,7 @@ fn arc_f7_mem_19d_net_status_is_online_only() {
     let offline: NetStatus = serde_json::from_str(r#"{"online":false}"#).unwrap();
     assert!(!offline.online);
     assert_eq!(
-        serde_json::to_value(&offline).unwrap(),
+        serde_json::to_value(offline).unwrap(),
         serde_json::json!({"online": false})
     );
     // `online` is required and a bool: no empty payload, no null, no string.
