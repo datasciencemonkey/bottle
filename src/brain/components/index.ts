@@ -208,7 +208,7 @@ export function startBrain(): Brain {
         // #142: T3 runs the 1.5 s preview or shows the chip, and it releases the owner.
         onAsk: askGate.onAsk,
         // #498, MOG-05b, MOG-06d: a Copy or a failed insertion reaches the Copy card.
-        onDone: (r, owned) => void dictation.onDone(r, owned),
+        onDone: (r, owned) => void dictation.onDone(r, owned).catch(() => undefined),
       }),
     });
     wireCaptureLifecycle(bus, lifecycle, createSystemClock().now);

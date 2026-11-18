@@ -114,4 +114,56 @@ describe('startBrain dictation Copy card', () => {
     });
     expect(callsTo(core.invoke.mock.calls, [...NO_AGENT_NO_GENIE])).toEqual([]);
   });
+
+  it('[MOG-05b] [MOG-06d] a hub notice that no hub took goes again on the hub ready only', async () => {
+    const brain = startBrain();
+    let hubUp = false;
+    core.invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'window_card_show') throw { code: 'closing' };
+      if (cmd === 'hub_notice_send' && !hubUp) throw { code: 'host_failed' };
+      return {};
+    });
+    await handlerDeps().onDone?.(
+      { route: 'copy', text: SENTENCE },
+      { utteranceId: 'u-5', mogId: MOG },
+    );
+    await settle();
+    const hubSends = () => callsTo(core.invoke.mock.calls, ['hub_notice_send']).length;
+    expect(hubSends()).toBe(1);
+    hubUp = true;
+    // A `ready` from a MOG or card window does not resend the hub notice (keyed on `from`).
+    for (const from of [`mog-${MOG}`, `card-${MOG}`]) {
+      brain.bus.dispatch({
+        event: 'view:input',
+        payload: { from, input: { mogId: MOG, kind: 'ready' } },
+      });
+    }
+    await settle();
+    expect(hubSends()).toBe(1);
+    brain.bus.dispatch({
+      event: 'view:input',
+      payload: { from: 'hub', input: { mogId: 'hub', kind: 'ready' } },
+    });
+    await settle();
+    expect(hubSends()).toBe(2);
+    expect(core.invoke).toHaveBeenLastCalledWith('hub_notice_send', {
+      args: { kind: 'dictation_unshown', mogId: MOG, text: SENTENCE },
+    });
+  });
+
+  it('[MOG-05b] only the card window ready resends the card state', async () => {
+    const brain = startBrain();
+    await handlerDeps().onDone?.(
+      { route: 'copy', text: SENTENCE },
+      { utteranceId: 'u-6', mogId: MOG },
+    );
+    await settle();
+    core.emitTo.mockClear();
+    brain.bus.dispatch({
+      event: 'view:input',
+      payload: { from: `mog-${MOG}`, input: { mogId: MOG, kind: 'ready' } },
+    });
+    await settle();
+    expect(cardUpdates()).toEqual([]);
+  });
 });
