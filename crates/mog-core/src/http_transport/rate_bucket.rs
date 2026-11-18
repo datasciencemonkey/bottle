@@ -7,7 +7,8 @@
 //!   waiting ticket of the highest class (polls, then cancels, then new asks), and in one class
 //!   to the oldest ticket. A call that does not wait ([`RateBucket::reserve`]) never jumps a
 //!   waiting ticket.
-//! - G-09c: a 429 halves the rate for 5 min.
+//! - G-09c: a 429 halves the rate for 5 min. A 429 inside that hold starts the hold again but
+//!   does not halve the rate again.
 //! - G-09d: after the 5 min, the rate gains 5 calls/min each minute up to the limit.
 //! - G-10a: `Retry-After` (seconds or HTTP date) or FMAPI `error.retry_after`, clamped to
 //!   1-300 s, holds every call of the profile until it ends. A `Retry-After` on a 503 holds the
@@ -241,7 +242,13 @@ impl RateBucket for AimdBucket {
             .get(profile)
             .map_or(self.limit, |st| self.rate_at(st, now));
         let st = map.entry(profile.to_owned()).or_default();
-        st.cut = Some((now, (current / 2).max(1)));
+        // G-09c: one halving per hold. A 429 inside the 5 min hold starts the hold again at
+        // the same rate, so a burst of 429s (or the retries of one ask) does not cut it again.
+        let rate = match st.cut {
+            Some((at, rate)) if now < at.saturating_add(HALF_RATE_HOLD) => rate,
+            _ => (current / 2).max(1),
+        };
+        st.cut = Some((now, rate));
         if let Some(wait) = retry_after {
             st.retry_until = st.retry_until.max(now.saturating_add(clamp(wait)));
         }

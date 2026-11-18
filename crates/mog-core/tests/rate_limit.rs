@@ -10,7 +10,7 @@ use mog_core::http_transport::backoff::{
     ask_backoff, backoff_cap, Jitter, OsJitter, BACKOFF_MAX, BACKOFF_START, MAX_ASK_TRIES,
 };
 use mog_core::http_transport::rate_bucket::{AimdBucket, CallClass, RateBucket};
-use mog_core::http_transport::rate_limit::{acquire, BusyState};
+use mog_core::http_transport::rate_limit::{acquire, acquire_within, BusyState};
 use mog_core::http_transport::Pause;
 
 const P: &str = "bottle-test";
@@ -222,4 +222,76 @@ fn g_09b_arc_f3_busy_card_text() {
         "a jitter of 0 s still shows a whole second"
     );
     assert_eq!(BusyState::Clear.card_text(), None);
+}
+
+#[test]
+fn g_09c_a_429_inside_the_hold_restarts_it_without_a_second_cut() {
+    let clock = SimClock::new();
+    let b = AimdBucket::new(Arc::new(clock.clone()));
+    b.on_rate_limited(P, None);
+    clock.advance(Duration::from_secs(120));
+    for _ in 0..4 {
+        b.on_rate_limited(P, None);
+    }
+    assert_eq!(b.rate_per_min(P), 20, "one halving per hold");
+    // The hold runs 5 min from the last 429.
+    clock.advance(Duration::from_secs(299));
+    assert_eq!(b.rate_per_min(P), 20);
+    clock.advance(Duration::from_secs(61));
+    assert_eq!(b.rate_per_min(P), 25);
+    // A 429 after the hold halves the rate it has then.
+    b.on_rate_limited(P, None);
+    assert_eq!(b.rate_per_min(P), 12);
+}
+
+#[test]
+fn g_09b_acquire_within_gives_up_before_a_wait_past_its_budget_and_leaves_the_queue() {
+    let (clock, b) = full_bucket();
+    let pause = SimPause {
+        clock: clock.clone(),
+        pauses: Mutex::new(Vec::new()),
+    };
+    let got = acquire_within(
+        &b,
+        &pause,
+        P,
+        CallClass::Poll,
+        Duration::from_secs(30),
+        &mut |_| {},
+    );
+    assert_eq!(got, None);
+    assert!(pause.pauses.lock().unwrap().is_empty());
+    // The poll left the queue: an ask is not blocked by it.
+    clock.advance(Duration::from_secs(60));
+    assert_eq!(b.reserve(P), Duration::ZERO);
+    let got = acquire_within(
+        &b,
+        &pause,
+        P,
+        CallClass::Ask,
+        Duration::from_secs(60),
+        &mut |_| {},
+    );
+    assert_eq!(got, Some(Duration::ZERO));
+}
+
+#[test]
+fn g_09b_a_panic_while_queued_frees_the_ticket() {
+    let (clock, b) = full_bucket();
+    let pause = SimPause {
+        clock: clock.clone(),
+        pauses: Mutex::new(Vec::new()),
+    };
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        acquire(&b, &pause, P, CallClass::Poll, &mut |_| {
+            panic!("test panic")
+        });
+    }));
+    assert!(caught.is_err());
+    clock.advance(Duration::from_secs(60));
+    assert_eq!(
+        b.reserve(P),
+        Duration::ZERO,
+        "no stale poll ticket blocks the profile"
+    );
 }

@@ -258,15 +258,73 @@ fn g_10a_an_fmapi_error_retry_after_body_is_obeyed() {
 
 #[test]
 fn g_10a_retry_after_is_clamped_to_300_s() {
-    let n = AtomicUsize::new(0);
-    let s = genie_one(move |x| {
-        (x.rpc_method() == "tools/call" && n.fetch_add(1, Ordering::SeqCst) == 0)
+    let s = genie_one(|x| {
+        (x.rpc_method() == "tools/call")
             .then(|| json_reply(429, json!({})).with_header("Retry-After", "900"))
     });
     let r = rig(&s);
+    // 300 s is longer than the call cap (60 s by default), so the ask is not sent again.
+    assert_eq!(code(ask(&r)), "rate_limited");
+    assert_eq!(s.count("tools/call"), 1);
+    assert!(r.seen.all().is_empty());
+    // The profile is held for the clamped 300 s, not 900 s.
+    assert_eq!(r.bucket.reserve(PROFILE), secs(300));
+}
+
+#[test]
+fn g_10a_an_ask_is_never_sent_after_its_call_cap() {
+    let s = genie_one(|x| {
+        (x.rpc_method() == "tools/call")
+            .then(|| json_reply(429, json!({})).with_header("Retry-After", "100"))
+    });
+    let r = rig(&s);
+    let t = tags(MOG);
+    let call = |cap: u64| {
+        r.t.call_tool(
+            McpCall::new(PROFILE, "genie_ask", obj(json!({"question": QUESTION})), &t)
+                .timeout(secs(cap)),
+        )
+    };
+    // A 100 s wait does not fit a 60 s cap: one send, then `rate_limited`.
+    assert_eq!(code(call(60)), "rate_limited");
+    assert_eq!(s.count("tools/call"), 1);
+    // A 120 s cap fits one 100 s wait, but not a second one.
+    let before = r.pause.total();
+    assert_eq!(code(call(120)), "rate_limited");
+    assert_eq!(s.count("tools/call"), 3);
+    assert!(r.pause.total() - before <= secs(120));
+}
+
+#[test]
+fn g_09b_a_queued_ask_that_would_wait_past_its_cap_is_not_sent() {
+    let s = genie_one(|_| None);
+    let r = rig(&s);
+    for _ in 0..DEFAULT_RATE_PER_MIN {
+        r.bucket.reserve(PROFILE);
+    }
+    let t = tags(MOG);
+    let asked = r.t.call_tool(
+        McpCall::new(PROFILE, "genie_ask", obj(json!({"question": QUESTION})), &t)
+            .timeout(secs(30)),
+    );
+    assert_eq!(code(asked), "rate_limited");
+    assert!(s.seen().is_empty(), "nothing is sent");
+    assert_eq!(
+        r.pause.total(),
+        Duration::ZERO,
+        "it does not wait 60 s first"
+    );
+    // Its place in the queue is gone: a later ask goes when the minute ends.
     ask(&r).unwrap();
-    assert_eq!(r.seen.states()[0], BusyState::Retrying { wait: secs(300) });
-    assert!(r.pause.total() >= secs(300) && r.pause.total() < secs(301));
+    assert_eq!(s.count("tools/call"), 1);
+}
+
+#[test]
+fn g_09c_a_429_page_is_rate_limited_and_is_never_echoed() {
+    let s = genie_one(|x| (x.rpc_method() == "tools/call").then(|| page_reply(429)));
+    let r = rig(&s);
+    assert_eq!(code(poll(&r)), "rate_limited");
+    assert_eq!(r.bucket.rate_per_min(PROFILE), DEFAULT_RATE_PER_MIN / 2);
 }
 
 #[test]

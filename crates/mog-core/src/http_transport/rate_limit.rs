@@ -111,26 +111,44 @@ pub fn acquire(
     class: CallClass,
     on_first_wait: &mut dyn FnMut(Duration),
 ) {
+    let _ = acquire_within(bucket, pause, profile, class, Duration::MAX, on_first_wait);
+}
+
+/// [`acquire`] with a time budget. If the next wait would make the total wait longer than
+/// `budget`, the call leaves the queue and is not counted: `None`, and the caller must not
+/// send it. `Some(waited)` means the call has its slot after `waited`.
+pub fn acquire_within(
+    bucket: &dyn RateBucket,
+    pause: &dyn Pause,
+    profile: &str,
+    class: CallClass,
+    budget: Duration,
+    on_first_wait: &mut dyn FnMut(Duration),
+) -> Option<Duration> {
     let mut place = Place {
         bucket,
         profile,
         ticket: Some(bucket.enqueue(profile, class)),
     };
-    let mut waited = false;
+    let mut waited = Duration::ZERO;
     loop {
         let wait = match &place.ticket {
             Some(t) => bucket.take(profile, t),
-            None => return,
+            None => return Some(waited),
         };
         if wait.is_zero() {
             // The ticket is spent: nothing to leave.
             place.ticket = None;
-            return;
+            return Some(waited);
         }
-        if !waited {
-            waited = true;
+        if waited.saturating_add(wait) > budget {
+            // `place` leaves the queue on drop.
+            return None;
+        }
+        if waited.is_zero() {
             on_first_wait(wait);
         }
         pause.pause(wait);
+        waited = waited.saturating_add(wait);
     }
 }

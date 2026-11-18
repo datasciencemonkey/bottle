@@ -406,6 +406,8 @@ impl ReqwestHttpTransport {
                     .and_then(|v| parse_retry_after(v, SystemTime::now()))
                     .or_else(|| reply.as_ref().and_then(retry_after_from_body));
                 self.seams.bucket.on_rate_limited(profile, wait);
+                // TODO(#491): the Genie REST ask routes get no G-10b retry here; the UC2 ask
+                // retry is in R8 (ADR 0075).
                 return Err(err(RATE_LIMITED));
             }
             if raw.status == 503 {
