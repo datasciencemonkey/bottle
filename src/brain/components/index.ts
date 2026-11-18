@@ -114,7 +114,7 @@ export function startBrain(): Brain {
     const dictation = createDictationSink({
       stackFor,
       showCard: (mogId) => call('window_card_show', { mogId }),
-      // TODO(#498): no hub notice path can hold text yet (the hub notice is the consent notice
+      // TODO(#509): no hub notice path can hold text yet (the hub notice is the consent notice
       // only). The card stack keeps the text for the next show or `ready`.
       onUnshown: () => undefined,
     });
