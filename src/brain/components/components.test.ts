@@ -234,7 +234,7 @@ describe('brain component stubs', () => {
     await expectStub(() => t.assembleContext(MOG, { workspaceId: 'w' }, 'q'), 92);
     await expectStub(() => t.write([]), 114);
     // recordExchange is implemented by #38 (memory-exchange.test.ts).
-    await expectStub(() => t.forget({ mogId: MOG }), 123);
+    // forget is implemented by #123 (memory-forget.test.ts).
     expect(t.mode()).toBe('local');
     expect(t.syncStatus()).toEqual({ pending: 0 });
   });
