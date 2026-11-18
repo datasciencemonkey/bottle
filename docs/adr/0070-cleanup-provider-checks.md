@@ -31,10 +31,13 @@ it must use the raw text (CAP-68). The requirements leave these points open:
    cardinal of 2 or more words, or one word of 10 or more ("twenty five" → "25"). A lone "one"
    to "nine" and a digit read-out ("one two three") stay in words. A run next to another number
    also stays in words: next to a digit ("40 thousand"), with "point" on either side ("two
-   point five million", "version two point eleven"), or in a range or list ("three to four
-   hundred", "twenty or thirty"). The pre-pass is pure and idempotent.
+   point five million", "version two point eleven"), in a range or list ("three to four
+   hundred", "twenty or thirty", "twenty, thirty, forty"), before an ordinal ("the twenty
+   first of june", "one hundred and first"), after a currency word ("a dollar fifty"), or split
+   by a removed filler ("twenty uh five" becomes "twenty five", not "25"). The pre-pass is pure
+   and idempotent.
 1a. **Pre-pass self-check (CAP-68).** The fillers, stutter and dictionary steps must keep the
-   numbers of the raw text (digit tokens and number words). The numerals step must only swap
+   numbers of the raw text (digit tokens, number words and ordinal words). The numerals step must only swap
    each run for its value: each new digit token, written back in words, must give the same
    number words. When a check fails, the pre-pass gives the raw text. So a dictionary entry
    that writes a number ("q three" → "Q3") keeps the raw text. The self-check does not judge
@@ -60,7 +63,7 @@ it must use the raw text (CAP-68). The requirements leave these points open:
    text and a late reply is dropped. A test may set a lower deadline, never a higher one.
    TODO(#54): SP-07 may retune 900 ms.
 7. **CAP-CHECK rows as client checks.** Numbers: the sorted numbers must be equal, digit tokens
-   (thousands commas do not count) and spoken number words both. So a reply that writes "two
+   (thousands commas do not count), spoken number words and ordinal words. So a reply that writes "two
    point five million" as "2.5 million" also keeps the raw text. Entities: no name may go or appear, without regard to case, with the
    ADR 0065 entity rule; dotted and snake-case names (table names) must be equal. Length ratio:
    0.5-1.3 of the pre-pass text. URLs: no new URL. Code: no new backtick, script or HTML tag,

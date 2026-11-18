@@ -8,6 +8,7 @@
  * row: a negation goes or appears. A false alarm only keeps the raw text, so each check leans
  * to fail. The checks return check names only, never text.
  */
+import { ORDINAL_WORDS } from './cleanup-prepass';
 import { entitiesOf } from './router-grounding';
 
 export type CleanupCheck =
@@ -28,6 +29,9 @@ const NUMBER_WORDS: ReadonlySet<string> = new Set(
   ).split(' '),
 );
 
+/** Spoken numbers in a reply: number words and ordinal words ("twenty first"). */
+const isSpokenNumber = (w: string) => NUMBER_WORDS.has(w) || ORDINAL_WORDS.has(w);
+
 /**
  * The numbers of `s`: digit tokens with thousands commas dropped ("1,250" and "1250" are the
  * same number), and spoken number words.
@@ -36,7 +40,7 @@ function numbers(s: string): string[] {
   const digits = (s.match(/\d+(?:[.,]\d+)*/g) ?? []).map((n) =>
     n.replace(/,(?=\d{3}(?:\D|$))/g, ''),
   );
-  const spoken = (s.toLowerCase().match(/\p{L}+/gu) ?? []).filter((w) => NUMBER_WORDS.has(w));
+  const spoken = (s.toLowerCase().match(/\p{L}+/gu) ?? []).filter(isSpokenNumber);
   return [...digits, ...spoken];
 }
 

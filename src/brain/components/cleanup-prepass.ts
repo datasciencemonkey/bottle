@@ -99,12 +99,35 @@ function removeMatches(text: string, pattern: RegExp): string {
   return kept;
 }
 
+const NUMBER_ALT = () =>
+  [...Object.keys(UNITS), ...Object.keys(TENS), 'hundred', ...Object.keys(SCALES)].join('|');
+
+/**
+ * Puts `NUMBER_BREAK` in place of a filler between two number words, so that "twenty uh five"
+ * does not become one run once the filler goes.
+ */
+function markNumberBreaks(text: string, language: string): string {
+  let out = text;
+  for (const w of fillersFor(language)) {
+    const re = new RegExp(
+      `(?<=(?<!${WORD_CHAR})(?:${NUMBER_ALT()})[,.]?\\s+)${escapeRegExp(w)}[,.]?(?=\\s+(?:${NUMBER_ALT()})(?!${WORD_CHAR}))`,
+      'giu',
+    );
+    out = out.replace(re, NUMBER_BREAK);
+  }
+  return out;
+}
+
+/** The filler words for a language. */
+function fillersFor(language: string): string[] {
+  const base = language.split(/[-_]/)[0]?.toLowerCase() ?? '';
+  return [...UNIVERSAL_FILLERS, ...(GATED_FILLERS[base] ?? [])];
+}
+
 /** Removes filler sounds. "um", "ah" and "eh" go only for English. */
 export function removeFillers(text: string, language = 'en'): string {
-  const base = language.split(/[-_]/)[0]?.toLowerCase() ?? '';
-  const words = [...UNIVERSAL_FILLERS, ...(GATED_FILLERS[base] ?? [])];
   let out = text;
-  for (const w of words) out = removeMatches(out, wordPattern(w, '[,.]?'));
+  for (const w of fillersFor(language)) out = removeMatches(out, wordPattern(w, '[,.]?'));
   return tidy(out);
 }
 
@@ -186,6 +209,25 @@ const SCALES: Readonly<Record<string, number>> = {
 const isNumberWord = (w: string) =>
   w in UNITS || w in TENS || w === 'hundred' || w in SCALES || w === 'and';
 
+/** Ordinal words: "first" to "nineteenth", "twentieth" to "ninetieth", "hundredth", ... */
+export const ORDINAL_WORDS: ReadonlySet<string> = new Set([
+  ...(
+    'first second third fourth fifth sixth seventh eighth ninth tenth eleventh twelfth ' +
+    'thirteenth fourteenth fifteenth sixteenth seventeenth eighteenth nineteenth'
+  ).split(' '),
+  ...Object.keys(TENS).map((t) => `${t.slice(0, -1)}ieth`),
+  'hundredth',
+  ...Object.keys(SCALES).map((t) => `${t}th`),
+]);
+
+/** Currency words. A number after one stays in words: "a dollar fifty". */
+const CURRENCY: ReadonlySet<string> = new Set(
+  'dollar dollars buck bucks euro euros pound pounds quid yen rupee rupees franc francs'.split(' '),
+);
+
+/** A private-use mark for a filler between two number words, so the run does not join. */
+const NUMBER_BREAK = '\uE000';
+
 /** Parses 1-99 at `i`: a unit or teen, or a tens word with an optional unit 1-9. */
 function parseBelow100(ws: string[], i: number): [number, number] | undefined {
   const w = ws[i];
@@ -248,16 +290,22 @@ const CONNECTORS: ReadonlySet<string> = new Set(['to', 'or', 'and', 'through', '
 
 /** A digit token or a number word. */
 const isNumberish = (w: string) =>
-  /\d/.test(w) || (w !== 'and' && w.split('-').every(isNumberWord));
+  /\d/.test(w) ||
+  ORDINAL_WORDS.has(w) ||
+  (w !== '' && w !== 'and' && w.split('-').every((p) => isNumberWord(p) || ORDINAL_WORDS.has(p)));
 
 /**
- * Whether a run stands next to another number: a digit ("40 thousand"), the word "point" on
- * either side ("two point five million"), or a connector and a number ("three to four
- * hundred"). Such a run stays in words, because its value depends on its neighbours.
+ * Whether a run stands next to another number: a digit ("40 thousand"), a number in a comma
+ * list ("twenty, thirty"), an ordinal ("twenty first"), the word "point" on either side ("two
+ * point five million"), a currency word before it ("a dollar fifty"), a removed filler between
+ * two number words, or a connector and a number ("three to four hundred"). Such a run stays in
+ * words, because its value depends on its neighbours.
  */
 function inNumberContext(prev: string, prev2: string, next: string, next2: string): boolean {
-  if (/\d/.test(prev) || /\d/.test(next)) return true;
+  if (isNumberish(prev) || isNumberish(next)) return true;
   if (prev === 'point' || next === 'point') return true;
+  if (prev === NUMBER_BREAK || next === NUMBER_BREAK) return true;
+  if (CURRENCY.has(prev)) return true;
   if (CONNECTORS.has(prev) && isNumberish(prev2)) return true;
   if (CONNECTORS.has(next) && isNumberish(next2)) return true;
   return false;
@@ -311,8 +359,10 @@ export function spokenNumeralsToDigits(text: string): string {
     // The two words before the run (`out` holds words and spaces), and the two after it.
     const prev = word(out[out.length - 2]);
     const prev2 = word(out[out.length - 4]);
-    const next = punct === '' ? word(tokens[end + 2]) : '';
-    const next2 = punct === '' ? word(tokens[end + 4]) : '';
+    // A comma keeps the list context ("twenty, thirty"); other punctuation ends it.
+    const goesOn = punct === '' || punct === ',';
+    const next = goesOn ? word(tokens[end + 2]) : '';
+    const next2 = goesOn ? word(tokens[end + 4]) : '';
     const value = parseCardinal(words);
     if (
       value !== undefined &&
@@ -372,7 +422,7 @@ function numberSignature(text: string): string {
   const tokens = text.toLowerCase().match(/[\p{L}\p{N}]+(?:[.,][\p{N}]+)*/gu) ?? [];
   return tokens
     .flatMap((t) => (/\d/.test(t) ? [t.replace(/,(?=\d{3}(?:\D|$))/g, '')] : t.split('-')))
-    .filter((t) => /\d/.test(t) || (t !== 'and' && isNumberWord(t)))
+    .filter((t) => /\d/.test(t) || ORDINAL_WORDS.has(t) || (t !== 'and' && isNumberWord(t)))
     .sort()
     .join(' ');
 }
@@ -384,7 +434,8 @@ function numberSignature(text: string): string {
  * the raw text, so a pre-pass error never reaches the card, the router step or the model.
  */
 export function prepass(raw: string, opts: PrepassOptions = {}): string {
-  const noFillers = removeFillers(raw, opts.language ?? 'en');
+  const language = opts.language ?? 'en';
+  const noFillers = removeFillers(markNumberBreaks(raw, language), language);
   const noStutters = collapseStutters(noFillers);
   const dictionary = applyDictionary(noStutters, opts.dictionary ?? []);
   if (numberSignature(dictionary) !== numberSignature(raw)) return raw.trim();
@@ -393,5 +444,5 @@ export function prepass(raw: string, opts: PrepassOptions = {}): string {
   const before = new Set(dictionary.match(/\d+/g) ?? []);
   const restored = out.replace(/\b\d+\b/g, (d) => (before.has(d) ? d : spokenFormOf(Number(d))));
   if (numberSignature(restored) !== numberSignature(dictionary)) return raw.trim();
-  return out;
+  return tidy(out.split(NUMBER_BREAK).join(' '));
 }
