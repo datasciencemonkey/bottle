@@ -19,9 +19,15 @@ import type {
   ProfileName,
 } from '../../shared/interfaces';
 import { NotImplementedError } from '../errors';
-import { classifyGenieError } from './genie-errors';
+import {
+  classifyGenieError,
+  classifyMcpReply,
+  classifyTransportCode,
+  toFailedEvent,
+  userTextFor,
+} from './genie-errors';
 import { createConversationManager, type ConversationManager } from './conversation-manager';
-import type { PollOutcome } from './poll-actor';
+import { ipcErrorCode, type PollOutcome, type PollUpdate } from './poll-actor';
 
 const C = 'GenieBridge';
 
@@ -87,17 +93,6 @@ export class ResumeRefusedError extends Error {
   }
 }
 
-/** A poll loop ended in a Genie `failed` status or an error reply. TODO(#32): the GL-5 mapper. */
-export class PollEndedError extends Error {
-  override readonly name = 'PollEndedError';
-  readonly outcome: PollOutcome;
-
-  constructor(outcome: PollOutcome) {
-    super(`the poll loop ended: ${outcome.kind}`);
-    this.outcome = outcome;
-  }
-}
-
 function progressSteps(v: unknown): string[] | null {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : null;
 }
@@ -114,9 +109,20 @@ async function* resumePolls(ref: ExchangeRef, cm: ConversationManager): AsyncGen
   // A conversation stays in its workspace: resume only on the profile that asked.
   if (target.profile !== ref.profile || target.host !== ref.host)
     throw new ResumeRefusedError('other_profile');
+  const ctx = { host: target.host };
   const polls = cm.poll(target);
   for (;;) {
-    const r = await polls.next();
+    let r: IteratorResult<PollUpdate, PollOutcome>;
+    try {
+      r = await polls.next();
+    } catch (e) {
+      // An R8 refusal ends the loop (the IDs stay in the journal). G-14: classify the code;
+      // the retry is a user action, never an automatic ask.
+      const code = ipcErrorCode(e);
+      if (code === undefined) throw e;
+      yield toFailedEvent(classifyTransportCode(code, ctx));
+      return;
+    }
     if (r.done) {
       const o = r.value;
       if (o.kind === 'terminal' && o.status !== 'failed') {
@@ -139,8 +145,18 @@ async function* resumePolls(ref: ExchangeRef, cm: ConversationManager): AsyncGen
         };
       } else if (o.kind === 'gave_up') {
         yield { t: 'abandoned' }; // TODO(#149): the late re-polls at +15 and +60 min.
-      } else if (o.kind !== 'aborted') {
-        throw new PollEndedError(o);
+      } else if (o.kind === 'error') {
+        // G-14: an isError reply goes through the GL-5 matrix. Upstream text never shows.
+        const failed = classifyMcpReply(o.reply, ctx) ?? classifyTransportCode('bad_reply', ctx);
+        yield toFailedEvent(failed);
+      } else if (o.kind === 'terminal') {
+        // Genie status `failed`.
+        yield {
+          t: 'failed',
+          code: 'GENIE_FAILED',
+          userText: userTextFor('GENIE_FAILED', ctx),
+          retry: 'user',
+        };
       }
       return;
     }

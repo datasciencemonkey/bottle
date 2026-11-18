@@ -50,8 +50,8 @@ open:
 5. A `timeout` (the 30 s poll cap of ARC-F4, G-16c) or a `poll_inflight` refusal makes the actor
    wait one more delay and poll again with the same IDs. The status `unknown`, and any status
    that the bridge does not know, is not terminal (G-18a, ARC-F12). `completed`, `incomplete`
-   and `failed` end the loop. An `isError` reply ends the loop and goes to the GL-5 mapper (#32)
-   unchanged. Any other refusal ends the loop with that error. No poll starts after 10 min
+   and `failed` end the loop. An `isError` reply ends the loop with the reply unchanged. Any other
+   refusal ends the loop with that error. No poll starts after 10 min
    (G-12b). The loop then ends with `gave_up`, and `resume` yields the `abandoned` event. The
    soft notice, the `abandoned` exchange status (G-12c) and the late re-polls stay with #149.
    The actor never calls `genie_ask`.
@@ -68,7 +68,10 @@ open:
    IDs. It refuses a ref with no response ID, a ref that is not in the journal, or a ref for
    another profile or host. It never asks again. Then it runs the PollActor and maps each poll
    to `progress`. The terminal answer is mapped in its simplest form; #33 and #87 normalise it.
-   A `failed` status or an error reply throws `PollEndedError` for the GL-5 mapper (#32).
+   `resume` ends the other outcomes in a `failed` event from the GL-5 matrix (#32, ADR 0072,
+   `genie-errors.ts`): an `isError` reply goes through `classifyMcpReply`, an R8 refusal code
+   goes through `classifyTransportCode`, and a Genie `failed` status is `GENIE_FAILED`. The
+   retry of each event is a user action or none, so nothing is asked again automatically.
 
 ## Consequences
 
