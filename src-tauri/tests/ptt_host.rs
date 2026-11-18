@@ -140,6 +140,7 @@ impl Rig {
             capture_ticket: None,
             app_settings: None,
             insert: None,
+            mcp: None,
         };
         route(components, command, args)
     }

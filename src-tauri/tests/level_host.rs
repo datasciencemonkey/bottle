@@ -160,6 +160,7 @@ impl Rig {
             permissions: None,
             consent: None,
             config: None,
+            mcp: None,
             capture: Some(&self.host),
             capture_ticket: None,
             app_settings: None,

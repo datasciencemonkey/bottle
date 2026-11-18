@@ -1,7 +1,10 @@
 //! The shared per-profile rate bucket of R7 (#364, ADR 0046; #138, ADR 0075; G-09a..G-09d,
 //! G-10a).
 //!
-//! [`AimdBucket`] is the bucket behind the [`RateBucket`] seam. R7 and R8 share one per process:
+//! [`AimdBucket`] is the bucket behind the [`RateBucket`] seam. R7 and R8 share one per process.
+//! The app manages that single instance as `SharedRateBucket` in `src-tauri/src/lib.rs`; every
+//! new caller (for example `model_invoke` and `dbx_http`) must take it from app state (see #511).
+//! The bucket rules:
 //! - G-09a: 40 calls/min per profile in a sliding 60 s window.
 //! - G-09b: a call that must wait takes a [`Ticket`] of its [`CallClass`]. A slot goes to the
 //!   waiting ticket of the highest class (polls, then cancels, then new asks), and in one class

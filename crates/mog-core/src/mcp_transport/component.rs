@@ -3,7 +3,7 @@
 //! The gateway runs the window and schema checks first (SEC-02a, SEC-02b), so only the brain
 //! reaches this. `tool: "tools/list"` lists the allowlisted tools; any other tool goes to
 //! [`McpTransport::call_tool`], which refuses every tool not on the G-06a allowlist.
-//! The Tauri host routes `mcp_call` here in TODO(#467) (`src-tauri/src/ipc.rs` is a contract file).
+//! The Tauri host routes `mcp_call` here (#467, `src-tauri/src/mcp_host.rs`).
 
 use std::time::Duration;
 

@@ -10,7 +10,8 @@
 //! which runs the host actions: `view_emit` (relay to the brain), `brain_subscribe`, the four
 //! `window_*` ops (R11), `hotkeys_set` (R1 settings), `permission_request` (R1, ADR 0039),
 //! `consent_*` (T12 records, ADR 0060), the `capture_*` commands (R2, #425, ADR 0055),
-//! `app_setting_*` (the app-wide settings, #453) and `insert_text` (the R11 paste, ADR 0048).
+//! `app_setting_*` (the app-wide settings, #453), `insert_text` (the R11 paste, ADR 0048) and
+//! `mcp_call` (R8 `McpCallComponent`, #467).
 //! Every other command stays `not_implemented` until its feature issue wires its component.
 //! A rejection is only `{ "error": "<code>" }`, with a code from `ipc_gateway::ERROR_CODES`
 //! (SEC-03).
@@ -19,8 +20,9 @@
 //! (ADR 0022 decision 6). `permission_request` can wait for the OS prompt, so it also runs on
 //! a worker (ADR 0039). `capture_start` and `capture_resume` open the audio device, which can
 //! be slow, so they also run on a worker (ADR 0055). `insert_text` waits for the paste and the
-//! clipboard restore, so it also runs on a worker (ADR 0048). Every other command runs inline,
-//! so `view_emit` keeps its order and the panic stop never waits.
+//! clipboard restore, so it also runs on a worker (ADR 0048). `mcp_call` is a blocking HTTP call
+//! to Genie One MCP, so it also runs on a worker (#467). Every other command runs inline, so
+//! `view_emit` keeps its order and the panic stop never waits.
 //! The last `hotkey:status` item is sticky: a new brain Channel gets it again (ADR 0039).
 //!
 //! The front end calls `invoke(name, { args })`; any other top-level key is rejected.
@@ -195,6 +197,9 @@ pub struct HostComponents<'a> {
     /// The `config_*` component (#379): `mog_config::MogConfigComponent` over the managed
     /// store. `None` when the store is missing: `config_storage_failed`.
     pub config: Option<&'a dyn GatewayComponents>,
+    /// The `mcp_call` component (#467): `mcp_host::McpHost`, R8 `McpCallComponent` over the one
+    /// R8 of the process. `None` when R8 could not start: `host_failed`.
+    pub mcp: Option<&'a dyn GatewayComponents>,
     /// The one R2 CaptureService of the process (#425).
     pub capture: Option<&'a CaptureHost>,
     /// The admission of this call, taken on the IPC thread before `schedule` (ADR 0055).
@@ -332,6 +337,12 @@ impl GatewayComponents for HostComponents<'_> {
                 .insert
                 .ok_or_else(|| host_failed(command))?
                 .call(command, args),
+            // #467: R8. The gateway let only the brain through (SEC-02a). An R8 code outside
+            // `ERROR_CODES` crosses as `host_failed` (`rejection`).
+            "mcp_call" => match self.mcp {
+                Some(mcp) => mcp.call(command, args),
+                None => Err(host_failed(command)),
+            },
             // Each feature issue wires its R1-R17 component here.
             "capture_start" | "capture_stop" | "capture_pause" | "capture_resume"
             | "capture_status" | "capture_stop_all" | "capture_subscribe" => {
@@ -370,8 +381,9 @@ pub fn route(components: HostComponents<'_>, command: &str, args: Value) -> Resu
 
 /// True for the commands that run on a worker: the R11 ops, which can wait for the main
 /// thread (ADR 0022 decision 6), and `permission_request`, which can wait while the OS prompt
-/// shows (ADR 0039), and `capture_start` and `capture_resume`, which open the device (ADR 0055).
-/// `insert_text` waits about 0.4 s for the paste and the clipboard restore (ADR 0048).
+/// shows (ADR 0039), `capture_start` and `capture_resume`, which open the device (ADR 0055),
+/// `insert_text`, which waits about 0.4 s for the paste and the clipboard restore (ADR 0048), and
+/// `mcp_call`, a blocking HTTP call to Genie One MCP (#467).
 pub fn runs_off_main_thread(command: &str) -> bool {
     matches!(
         command,
@@ -383,6 +395,7 @@ pub fn runs_off_main_thread(command: &str) -> bool {
             | "capture_start"
             | "capture_resume"
             | "insert_text"
+            | "mcp_call"
     )
 }
 
@@ -450,6 +463,8 @@ fn route_from<R: Runtime>(
         .map(|store| mog_core::mog_config::MogConfigComponent::new(store.inner().clone()));
     let capture = webview.try_state::<CaptureHost>();
     let app_settings = webview.try_state::<std::sync::Arc<mog_core::app_settings::AppSettings>>();
+    // `try_state`: if R8 could not start, `mcp_call` answers `host_failed` (#467).
+    let mcp = webview.try_state::<crate::mcp_host::McpHost>();
     let components = HostComponents {
         from: label,
         brain: &brain,
@@ -458,6 +473,7 @@ fn route_from<R: Runtime>(
         permissions: runtime.as_ref().map(|r| r.inner() as &dyn PermissionRoute),
         consent: consent.as_ref().map(|c| c as &dyn GatewayComponents),
         config: config.as_ref().map(|c| c as &dyn GatewayComponents),
+        mcp: mcp.as_ref().map(|m| m.inner() as &dyn GatewayComponents),
         capture: capture.as_ref().map(|c| c.inner()),
         capture_ticket,
         app_settings: app_settings
@@ -513,8 +529,9 @@ pub fn admit(command: &str, capture: Option<&CaptureHost>) -> Option<CaptureTick
 /// Run the job of one call. An R11 op goes to a worker (`spawn_blocking`) and resolves later,
 /// because it can wait for the main thread (ADR 0022 decision 6). `permission_request` also
 /// goes to a worker, because the OS prompt can wait for the user (ADR 0039), and so do
-/// `capture_start` and `capture_resume`, whose device open can be slow (ADR 0055). Every other
-/// command runs now, on the calling thread, so `view_emit` keeps its order.
+/// `capture_start` and `capture_resume`, whose device open can be slow (ADR 0055), and
+/// `mcp_call`, which waits for Genie One MCP (#467). Every other command runs now, on the
+/// calling thread, so `view_emit` keeps its order.
 pub fn schedule<F: FnOnce() + Send + 'static>(command: &str, job: F) {
     if runs_off_main_thread(command) {
         tauri::async_runtime::spawn_blocking(job);

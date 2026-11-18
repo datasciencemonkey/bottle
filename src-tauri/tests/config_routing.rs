@@ -55,6 +55,7 @@ fn call(
         permissions: None,
         consent: None,
         config,
+        mcp: None,
         capture: None,
         capture_ticket: None,
         app_settings: None,
