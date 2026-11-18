@@ -240,7 +240,7 @@ fn mem_34a_catalog_ids_are_unique_and_named() {
         "mem.exchange.upsert",
         "mem.item.upsert",
         "mem.recall.fts",
-        "mem.forget.item",
+        "mem.forget.session_conversations",
         "mem.wipe.items_before",
         "mem.outbox.enqueue",
         "mem.outbox.due",
@@ -380,8 +380,9 @@ fn mem_01_reads_writes_and_deletes_stay_inside_their_mog() {
     // B cannot forget A's item.
     let del = exec(
         &s,
-        "mem.forget.item",
-        json!({"mogId": MOG_B, "itemId": ITEM_1}),
+        "mem.forget.items",
+        json!({"mogId": MOG_B, "itemIds": [ITEM_1], "forgetId": FORGET_1,
+               "requestedAt": 20, "deviceId": "test-device"}),
     );
     assert_eq!(changes(&del), 0);
     // Same for exchanges.
@@ -486,26 +487,28 @@ fn mem_41_brain_statements_run_on_the_local_store_with_no_lakebase() {
         1
     );
 
-    // Forget: the log row, the exchange and the item.
-    run(
-        "mem.forget.log",
-        json!({"mogId": MOG_A, "forgetId": FORGET_1, "scope": "item", "targetIds": [ITEM_1],
+    // Forget (#123): the item, its jobs and the log row, in one transaction.
+    let out = run(
+        "mem.forget.items",
+        json!({"mogId": MOG_A, "itemIds": [ITEM_1], "forgetId": FORGET_1,
                "requestedAt": 20, "deviceId": "test-device"}),
     );
-    assert_eq!(
-        changes(&run(
-            "mem.forget.item",
-            json!({"mogId": MOG_A, "itemId": ITEM_1})
-        )),
-        1
+    assert_eq!(changes(&out), 1);
+    let out = run(
+        "mem.forget.mog",
+        json!({"mogId": MOG_A, "forgetId": "11111111-2222-4333-8444-555555555505",
+               "requestedAt": 21, "deviceId": "test-device"}),
     );
     assert_eq!(
-        changes(&run(
-            "mem.forget.exchange",
-            json!({"mogId": MOG_A, "exchangeId": EXCH_1})
-        )),
-        1
+        rows(&out).last().unwrap()["changes"],
+        1,
+        "the forget_log row of the MOG"
     );
+    let got = run(
+        "mem.exchange.get",
+        json!({"mogId": MOG_A, "requestId": REQ_1}),
+    );
+    assert!(rows(&got).is_empty());
     let hits = run(
         "mem.recall.fts",
         json!({"mogId": MOG_A, "query": "region", "limit": 5}),

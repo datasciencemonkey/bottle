@@ -250,8 +250,8 @@ fn mem_26_no_statement_or_trigger_purges_exchanges_by_age() {
         let deletes = sql.contains("delete from genie_exchange");
         if deletes {
             match st.id {
-                // Forget: one exchange by id, on a user action (MEM-32a).
-                "mem.forget.exchange" => {
+                // Forget: the exchanges of one session or one MOG, on a user action (MEM-32a).
+                "mem.forget.session_exchanges" | "mem.forget.mog_exchanges" => {
                     assert!(!sql.contains("_at"), "{}: Forget has no age rule", st.id);
                 }
                 // Wipe: Settings only, through R14 (U9).

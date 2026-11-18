@@ -14,6 +14,7 @@ import { About } from './About';
 import { DataPanel } from './DataDisclosures';
 import { LegalNotice } from './LegalNotice';
 import { MicPreference } from './MicPreference';
+import { ForgetDialogHost } from './ForgetDialogHost';
 import { MogList } from './MogList';
 
 export function Hub() {
@@ -58,6 +59,7 @@ export function Hub() {
         ))}
       </ul>
       <MogList />
+      <ForgetDialogHost />
       <MicPreference />
       <DataPanel />
       <About />

@@ -250,7 +250,8 @@ const EXCHANGE_GET: Stmt = Stmt {
 };
 
 /// The memory items that cite one exchange. `memory_item.source_exchange_id` is `SET NULL`, so
-/// Forget (#123) reads these before it deletes the exchange (MEM-32a).
+/// Forget must find these before it deletes the exchange (MEM-32a); the `mem.forget.session`
+/// group deletes them first.
 const EXCHANGE_DEPENDENTS: Stmt = Stmt {
     id: "mem.exchange.dependents",
     sql: "SELECT item_id AS itemId FROM memory_item \
@@ -338,38 +339,238 @@ const RECALL_FTS: Stmt = Stmt {
     access: Access::Brain,
 };
 
-// ---- Forget (#123): a user action through T10 ----------------------------------------------
+// ---- Forget (#123): a user action through T10 (MEM-32a, U9; ADR 0081) ----------------------
+//
+// Forget runs as one of three atomic groups below (`mem.forget.items`, `mem.forget.session`,
+// `mem.forget.mog`). The steps are `Access::Core`, so the brain cannot run a partial Forget.
+// The optional pointers `genie_exchange.session_id` and `memory_item.source_exchange_id` are
+// `ON DELETE SET NULL` (ADR 0033). So each group deletes the citing items first, while those
+// pointers still lead to their parents, then the embed jobs that point at no item, then the
+// parents. FTS5 and vec0 rows go with their rows through the 0001 triggers. The `forget_log` row
+// is the last step: a failed delete writes no log row. No step has an age rule (U9). Wipe (#124)
+// can reuse the steps that do not name a session or item.
 
-const FORGET_ITEM: Stmt = Stmt {
-    id: "mem.forget.item",
-    sql: "DELETE FROM memory_item WHERE mog_id = :mogId AND item_id = :itemId",
-    params: &[MOG_ID, req("itemId", UUID)],
-    kind: Kind::Write,
+/// The Genie conversations of one session, for Forget (MEM-32c). T10 reads them before the
+/// delete, because the delete removes the exchange rows that hold them. A conversation that an
+/// exchange outside the session also uses is left out: that exchange keeps it.
+const FORGET_SESSION_CONVERSATIONS: Stmt = Stmt {
+    id: "mem.forget.session_conversations",
+    sql: "SELECT DISTINCT backend_kind AS backendKind, profile_name AS profile, \
+          workspace_host AS host, workspace_id AS workspaceId, space_id AS spaceId, \
+          conversation_id AS conversationId FROM genie_exchange \
+          WHERE mog_id = :mogId AND session_id = :sessionId AND conversation_id IS NOT NULL \
+          AND conversation_id NOT IN (SELECT o.conversation_id FROM genie_exchange o \
+          WHERE o.mog_id = :mogId AND o.session_id IS NOT :sessionId \
+          AND o.conversation_id IS NOT NULL) \
+          ORDER BY conversation_id, profile_name",
+    params: &[MOG_ID, req("sessionId", UUID)],
+    kind: Kind::Query,
     access: Access::Brain,
 };
 
-const FORGET_EXCHANGE: Stmt = Stmt {
-    id: "mem.forget.exchange",
-    sql: "DELETE FROM genie_exchange WHERE mog_id = :mogId AND exchange_id = :exchangeId",
-    params: &[MOG_ID, req("exchangeId", UUID)],
-    kind: Kind::Write,
+/// The Genie conversations of one MOG, for Forget of the MOG (MEM-32c).
+const FORGET_MOG_CONVERSATIONS: Stmt = Stmt {
+    id: "mem.forget.mog_conversations",
+    sql: "SELECT DISTINCT backend_kind AS backendKind, profile_name AS profile, \
+          workspace_host AS host, workspace_id AS workspaceId, space_id AS spaceId, \
+          conversation_id AS conversationId FROM genie_exchange \
+          WHERE mog_id = :mogId AND conversation_id IS NOT NULL \
+          ORDER BY conversation_id, profile_name",
+    params: &[MOG_ID],
+    kind: Kind::Query,
     access: Access::Brain,
 };
 
-const FORGET_LOG: Stmt = Stmt {
-    id: "mem.forget.log",
+/// The items named in `itemIds` (a JSON array of item ids).
+const FORGET_ITEM_ROWS: Stmt = Stmt {
+    id: "mem.forget.item_rows",
+    sql: "DELETE FROM memory_item WHERE mog_id = :mogId AND item_id IN \
+          (SELECT m.item_id FROM memory_item m, json_each(:itemIds) j \
+          WHERE m.mog_id = :mogId AND m.item_id = j.value)",
+    params: &[MOG_ID, req("itemIds", json(65_536))],
+    kind: Kind::Write,
+    access: Access::Core,
+};
+
+/// The items that cite the session in `source_session_ids`.
+const FORGET_SESSION_ITEMS_BY_SESSION: Stmt = Stmt {
+    id: "mem.forget.session_items_by_session",
+    sql: "DELETE FROM memory_item WHERE mog_id = :mogId AND item_id IN \
+          (SELECT m.item_id FROM memory_item m, json_each(m.source_session_ids) j \
+          WHERE m.mog_id = :mogId AND j.value = :sessionId)",
+    params: &[MOG_ID, req("sessionId", UUID)],
+    kind: Kind::Write,
+    access: Access::Core,
+};
+
+/// The items that cite an utterance of the session in `source_utterance_ids`.
+const FORGET_SESSION_ITEMS_BY_UTTERANCE: Stmt = Stmt {
+    id: "mem.forget.session_items_by_utterance",
+    sql: "DELETE FROM memory_item WHERE mog_id = :mogId AND item_id IN \
+          (SELECT m.item_id FROM memory_item m, json_each(m.source_utterance_ids) j, utterance u \
+          WHERE m.mog_id = :mogId AND u.mog_id = :mogId AND u.session_id = :sessionId \
+          AND u.utterance_id = j.value)",
+    params: &[MOG_ID, req("sessionId", UUID)],
+    kind: Kind::Write,
+    access: Access::Core,
+};
+
+/// The items that cite an exchange of the session in `source_exchange_id`. It runs before the
+/// exchange delete, which would set the pointer to NULL.
+const FORGET_SESSION_ITEMS_BY_EXCHANGE: Stmt = Stmt {
+    id: "mem.forget.session_items_by_exchange",
+    sql: "DELETE FROM memory_item WHERE mog_id = :mogId AND source_exchange_id IN \
+          (SELECT exchange_id FROM genie_exchange \
+          WHERE mog_id = :mogId AND session_id = :sessionId)",
+    params: &[MOG_ID, req("sessionId", UUID)],
+    kind: Kind::Write,
+    access: Access::Core,
+};
+
+/// The embed jobs that point at no item of the MOG. A job holds no text (ADR 0068); this removes
+/// the pointers that a Forget left behind.
+const FORGET_EMBED_ORPHANS: Stmt = Stmt {
+    id: "mem.forget.embed_orphans",
+    sql: "DELETE FROM outbox WHERE mog_id = :mogId AND kind = 'embed' AND ref_id NOT IN \
+          (SELECT item_id FROM memory_item WHERE mog_id = :mogId)",
+    params: &[MOG_ID],
+    kind: Kind::Write,
+    access: Access::Core,
+};
+
+const FORGET_SESSION_EXCHANGES: Stmt = Stmt {
+    id: "mem.forget.session_exchanges",
+    sql: "DELETE FROM genie_exchange WHERE mog_id = :mogId AND session_id = :sessionId",
+    params: &[MOG_ID, req("sessionId", UUID)],
+    kind: Kind::Write,
+    access: Access::Core,
+};
+
+const FORGET_SESSION_UTTERANCES: Stmt = Stmt {
+    id: "mem.forget.session_utterances",
+    sql: "DELETE FROM utterance WHERE mog_id = :mogId AND session_id = :sessionId",
+    params: &[MOG_ID, req("sessionId", UUID)],
+    kind: Kind::Write,
+    access: Access::Core,
+};
+
+const FORGET_SESSION_ROW: Stmt = Stmt {
+    id: "mem.forget.session_row",
+    sql: "DELETE FROM session WHERE mog_id = :mogId AND session_id = :sessionId",
+    params: &[MOG_ID, req("sessionId", UUID)],
+    kind: Kind::Write,
+    access: Access::Core,
+};
+
+const FORGET_MOG_ITEMS: Stmt = Stmt {
+    id: "mem.forget.mog_items",
+    sql: "DELETE FROM memory_item WHERE mog_id = :mogId",
+    params: &[MOG_ID],
+    kind: Kind::Write,
+    access: Access::Core,
+};
+
+/// Every outbox row of the MOG: its embed jobs and any v1 `sync` row. They point only at rows of
+/// the forgotten MOG. The v1 forget itself travels as the `forget_log` row (MEM-12b).
+const FORGET_MOG_OUTBOX: Stmt = Stmt {
+    id: "mem.forget.mog_outbox",
+    sql: "DELETE FROM outbox WHERE mog_id = :mogId",
+    params: &[MOG_ID],
+    kind: Kind::Write,
+    access: Access::Core,
+};
+
+const FORGET_MOG_EXCHANGES: Stmt = Stmt {
+    id: "mem.forget.mog_exchanges",
+    sql: "DELETE FROM genie_exchange WHERE mog_id = :mogId",
+    params: &[MOG_ID],
+    kind: Kind::Write,
+    access: Access::Core,
+};
+
+const FORGET_MOG_UTTERANCES: Stmt = Stmt {
+    id: "mem.forget.mog_utterances",
+    sql: "DELETE FROM utterance WHERE mog_id = :mogId",
+    params: &[MOG_ID],
+    kind: Kind::Write,
+    access: Access::Core,
+};
+
+const FORGET_MOG_SESSIONS: Stmt = Stmt {
+    id: "mem.forget.mog_sessions",
+    sql: "DELETE FROM session WHERE mog_id = :mogId",
+    params: &[MOG_ID],
+    kind: Kind::Write,
+    access: Access::Core,
+};
+
+const FORGET_MOG_KV: Stmt = Stmt {
+    id: "mem.forget.mog_kv",
+    sql: "DELETE FROM kv WHERE mog_id = :mogId",
+    params: &[MOG_ID],
+    kind: Kind::Write,
+    access: Access::Core,
+};
+
+const FORGET_MOG_SYNC_STATE: Stmt = Stmt {
+    id: "mem.forget.mog_sync_state",
+    sql: "DELETE FROM sync_state WHERE mog_id = :mogId",
+    params: &[MOG_ID],
+    kind: Kind::Write,
+    access: Access::Core,
+};
+
+/// The MOG row itself. The caller registers it again (`mem.mog.upsert`) before a new write.
+const FORGET_MOG_ROW: Stmt = Stmt {
+    id: "mem.forget.mog_row",
+    sql: "DELETE FROM mog WHERE mog_id = :mogId",
+    params: &[MOG_ID],
+    kind: Kind::Write,
+    access: Access::Core,
+};
+
+const FORGET_LOG_ITEMS: Stmt = Stmt {
+    id: "mem.forget.log_items",
     sql: "INSERT INTO forget_log (forget_id, mog_id, scope, target_ids, requested_at, device_id) \
-          VALUES (:forgetId, :mogId, :scope, :targetIds, :requestedAt, :deviceId)",
+          VALUES (:forgetId, :mogId, 'item', :itemIds, :requestedAt, :deviceId)",
     params: &[
         req("forgetId", UUID),
         MOG_ID,
-        req("scope", CODE),
-        req("targetIds", json(65_536)),
+        req("itemIds", json(65_536)),
         req("requestedAt", MS),
         DEVICE_ID,
     ],
     kind: Kind::Write,
-    access: Access::Brain,
+    access: Access::Core,
+};
+
+const FORGET_LOG_SESSION: Stmt = Stmt {
+    id: "mem.forget.log_session",
+    sql: "INSERT INTO forget_log (forget_id, mog_id, scope, target_ids, requested_at, device_id) \
+          VALUES (:forgetId, :mogId, 'session', json_array(:sessionId), :requestedAt, :deviceId)",
+    params: &[
+        req("forgetId", UUID),
+        MOG_ID,
+        req("sessionId", UUID),
+        req("requestedAt", MS),
+        DEVICE_ID,
+    ],
+    kind: Kind::Write,
+    access: Access::Core,
+};
+
+const FORGET_LOG_MOG: Stmt = Stmt {
+    id: "mem.forget.log_mog",
+    sql: "INSERT INTO forget_log (forget_id, mog_id, scope, target_ids, requested_at, device_id) \
+          VALUES (:forgetId, :mogId, 'mog', json_array(:mogId), :requestedAt, :deviceId)",
+    params: &[
+        req("forgetId", UUID),
+        MOG_ID,
+        req("requestedAt", MS),
+        DEVICE_ID,
+    ],
+    kind: Kind::Write,
+    access: Access::Core,
 };
 
 // ---- Wipe (#124): Rust only ----------------------------------------------------------------
@@ -513,8 +714,69 @@ const ITEM_WRITE: Group = Group {
     access: Access::Brain,
 };
 
+/// The params of every Forget group: the log row's id, time and device.
+const FORGET_ID: Param = req("forgetId", UUID);
+const REQUESTED_AT: Param = req("requestedAt", MS);
+
+/// Forget the items in `itemIds` with their embed jobs, vectors and FTS rows (MEM-32a).
+const FORGET_ITEMS: Group = Group {
+    id: "mem.forget.items",
+    steps: &[&FORGET_ITEM_ROWS, &FORGET_EMBED_ORPHANS, &FORGET_LOG_ITEMS],
+    params: &[
+        MOG_ID,
+        req("itemIds", json(65_536)),
+        FORGET_ID,
+        REQUESTED_AT,
+        DEVICE_ID,
+    ],
+    access: Access::Brain,
+};
+
+/// Forget one session: the items that cite it, its exchanges, its utterances and the session
+/// row (MEM-32a, AT-16). The citing items go first (ADR 0081).
+const FORGET_SESSION: Group = Group {
+    id: "mem.forget.session",
+    steps: &[
+        &FORGET_SESSION_ITEMS_BY_SESSION,
+        &FORGET_SESSION_ITEMS_BY_UTTERANCE,
+        &FORGET_SESSION_ITEMS_BY_EXCHANGE,
+        &FORGET_EMBED_ORPHANS,
+        &FORGET_SESSION_EXCHANGES,
+        &FORGET_SESSION_UTTERANCES,
+        &FORGET_SESSION_ROW,
+        &FORGET_LOG_SESSION,
+    ],
+    params: &[
+        MOG_ID,
+        req("sessionId", UUID),
+        FORGET_ID,
+        REQUESTED_AT,
+        DEVICE_ID,
+    ],
+    access: Access::Brain,
+};
+
+/// Forget one MOG: every row of the MOG except its consent records (content-free, SEC-15b
+/// expiry) and its `forget_log` rows (MEM-32a, AT-16).
+const FORGET_MOG: Group = Group {
+    id: "mem.forget.mog",
+    steps: &[
+        &FORGET_MOG_ITEMS,
+        &FORGET_MOG_OUTBOX,
+        &FORGET_MOG_EXCHANGES,
+        &FORGET_MOG_UTTERANCES,
+        &FORGET_MOG_SESSIONS,
+        &FORGET_MOG_KV,
+        &FORGET_MOG_SYNC_STATE,
+        &FORGET_MOG_ROW,
+        &FORGET_LOG_MOG,
+    ],
+    params: &[MOG_ID, FORGET_ID, REQUESTED_AT, DEVICE_ID],
+    access: Access::Brain,
+};
+
 /// The atomic groups. Their IDs never equal a statement ID.
-pub const GROUPS: &[Group] = &[ITEM_WRITE];
+pub const GROUPS: &[Group] = &[ITEM_WRITE, FORGET_ITEMS, FORGET_SESSION, FORGET_MOG];
 
 /// The group with this exact ID.
 pub fn find_group(id: &str) -> Option<&'static Group> {
@@ -538,9 +800,27 @@ pub const STATEMENTS: &[Stmt] = &[
     ITEM_UPSERT,
     ITEM_GET,
     RECALL_FTS,
-    FORGET_ITEM,
-    FORGET_EXCHANGE,
-    FORGET_LOG,
+    FORGET_SESSION_CONVERSATIONS,
+    FORGET_MOG_CONVERSATIONS,
+    FORGET_ITEM_ROWS,
+    FORGET_SESSION_ITEMS_BY_SESSION,
+    FORGET_SESSION_ITEMS_BY_UTTERANCE,
+    FORGET_SESSION_ITEMS_BY_EXCHANGE,
+    FORGET_EMBED_ORPHANS,
+    FORGET_SESSION_EXCHANGES,
+    FORGET_SESSION_UTTERANCES,
+    FORGET_SESSION_ROW,
+    FORGET_MOG_ITEMS,
+    FORGET_MOG_OUTBOX,
+    FORGET_MOG_EXCHANGES,
+    FORGET_MOG_UTTERANCES,
+    FORGET_MOG_SESSIONS,
+    FORGET_MOG_KV,
+    FORGET_MOG_SYNC_STATE,
+    FORGET_MOG_ROW,
+    FORGET_LOG_ITEMS,
+    FORGET_LOG_SESSION,
+    FORGET_LOG_MOG,
     WIPE_ITEMS,
     WIPE_EXCHANGES,
     OUTBOX_ENQUEUE,

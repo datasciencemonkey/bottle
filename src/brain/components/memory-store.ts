@@ -7,6 +7,8 @@
  * `LOCAL_STMT_IDS` lists the ids the brain may use; a Rust test keeps it equal to the catalog.
  * The Wipe statements are Rust-only (R14), so they are not in this list. `mem.item.write` is an
  * atomic group: the item row and its embed job commit in one transaction (MEM-10a, ADR 0068).
+ * The three `mem.forget.*` groups (items, session, MOG) each delete in one transaction, citing
+ * items first (MEM-32a, ADR 0081); their steps are Rust-only.
  */
 import { call, type JsonObject } from '../../shared/ipc';
 
@@ -20,9 +22,11 @@ export const LOCAL_STMT_IDS = [
   'mem.item.get',
   'mem.item.write',
   'mem.recall.fts',
-  'mem.forget.item',
-  'mem.forget.exchange',
-  'mem.forget.log',
+  'mem.forget.session_conversations',
+  'mem.forget.mog_conversations',
+  'mem.forget.items',
+  'mem.forget.session',
+  'mem.forget.mog',
   'mem.outbox.enqueue',
   'mem.outbox.due',
   'mem.outbox.retry',

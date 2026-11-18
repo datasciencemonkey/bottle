@@ -76,4 +76,6 @@ mod catalog_tests;
 #[cfg(test)]
 mod exchange_tests;
 #[cfg(test)]
+mod forget_tests;
+#[cfg(test)]
 mod outbox_tests;

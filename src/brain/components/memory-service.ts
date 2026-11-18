@@ -117,6 +117,79 @@ type GateQuery = Parameters<MemoryService['gate']>[0];
 type GateResult = Awaited<ReturnType<MemoryService['gate']>>;
 type ForgetResult = Awaited<ReturnType<MemoryService['forget']>>;
 
+/** The 4.7 Forget scope. `mogId` is required (MEM-01); then `sessionId`, `itemIds` or neither. */
+export type ForgetScope = Parameters<MemoryService['forget']>[0];
+
+/** One Genie conversation that a Forget scope holds (MEM-32c), from the local exchange rows. */
+export interface ForgetConversation {
+  backend: 'genie_one_mcp' | 'genie_agent' | 'custom_agent';
+  /** The profile that made the conversation. A delete goes to this workspace only. */
+  profile: string;
+  host: string;
+  /** The numeric workspace id as a decimal string (`?o=`), if known. */
+  workspaceId?: string;
+  /** The Genie space (`genie_agent` only). */
+  spaceId?: string;
+  conversationId: string;
+}
+
+/** A checked Forget scope: the group to run and its params. */
+type CheckedScope =
+  | { kind: 'items'; mogId: MogId; itemIds: string[] }
+  | { kind: 'session'; mogId: MogId; sessionId: string }
+  | { kind: 'mog'; mogId: MogId };
+
+/** The most items in one Forget: the `itemIds` JSON stays under the 64 KiB catalog limit. */
+const FORGET_ITEMS_MAX = 1000;
+
+/** Check a Forget scope (MEM-01). Throws on a bad or unclear scope, before any store call. */
+export function checkForgetScope(s: ForgetScope): CheckedScope {
+  const mogId = s.mogId;
+  if (mogId === undefined || !UUID_RE.test(mogId)) throw new Error('forget needs a UUID mogId');
+  if (s.sessionId !== undefined && s.itemIds !== undefined) {
+    throw new Error('forget takes a session or items, not both');
+  }
+  if (s.sessionId !== undefined) {
+    if (!UUID_RE.test(s.sessionId)) throw new Error('forget needs a UUID sessionId');
+    return { kind: 'session', mogId, sessionId: s.sessionId };
+  }
+  if (s.itemIds !== undefined) {
+    const itemIds = [...new Set(s.itemIds)];
+    if (itemIds.length === 0 || itemIds.length > FORGET_ITEMS_MAX) {
+      throw new Error('forget needs 1 to 1000 item ids');
+    }
+    if (!itemIds.every((id) => UUID_RE.test(id))) throw new Error('forget needs UUID item ids');
+    return { kind: 'items', mogId, itemIds };
+  }
+  return { kind: 'mog', mogId };
+}
+
+const BACKENDS: readonly string[] = ['genie_one_mcp', 'genie_agent', 'custom_agent'];
+const str = (v: unknown): string | undefined => (typeof v === 'string' && v !== '' ? v : undefined);
+
+/** One `mem.forget.*_conversations` row as a {@link ForgetConversation}, or undefined. */
+function conversationOf(r: unknown): ForgetConversation | undefined {
+  if (typeof r !== 'object' || r === null) return undefined;
+  const o = r as Record<string, unknown>;
+  const backend = o['backendKind'];
+  const profile = str(o['profile']);
+  const host = str(o['host']);
+  const conversationId = str(o['conversationId']);
+  if (typeof backend !== 'string' || !BACKENDS.includes(backend)) return undefined;
+  if (profile === undefined || host === undefined || conversationId === undefined) return undefined;
+  const c: ForgetConversation = {
+    backend: backend as ForgetConversation['backend'],
+    profile,
+    host,
+    conversationId,
+  };
+  const ws = o['workspaceId'];
+  if (typeof ws === 'number' && Number.isSafeInteger(ws) && ws >= 0) c.workspaceId = String(ws);
+  const space = str(o['spaceId']);
+  if (space !== undefined) c.spaceId = space;
+  return c;
+}
+
 const C = 'MemoryService';
 
 export class LocalMemoryService implements MemoryService {
@@ -253,12 +326,53 @@ export class LocalMemoryService implements MemoryService {
       }),
     );
   }
-  async forget(_scope: {
-    sessionId?: string;
-    mogId?: MogId;
-    itemIds?: string[];
-  }): Promise<ForgetResult> {
-    throw new NotImplementedError(C, 'forget', 123); // TODO(#123)
+  /**
+   * The Genie conversations of a Forget scope (MEM-32c). Call it BEFORE {@link forget}: the
+   * delete removes the exchange rows that hold the conversation ids. Forget of items deletes no
+   * exchange, so it has no conversation.
+   */
+  async forgetConversations(scope: ForgetScope): Promise<ForgetConversation[]> {
+    const s = checkForgetScope(scope);
+    if (s.kind === 'items') return [];
+    const { rows } =
+      s.kind === 'session'
+        ? await this.store.exec('mem.forget.session_conversations', {
+            mogId: s.mogId,
+            sessionId: s.sessionId,
+          })
+        : await this.store.exec('mem.forget.mog_conversations', { mogId: s.mogId });
+    return rows.flatMap((r) => conversationOf(r) ?? []);
+  }
+  /**
+   * Forget on a user action (MEM-32a, U9, ADR 0081). One R10 group deletes the scope in one
+   * transaction: the items that cite it first, their embed jobs, vectors and FTS rows, then the
+   * exchanges, utterances and session (or every row of the MOG). The last step writes the
+   * `forget_log` row for the v1 sync. `local` counts the deleted rows.
+   * MVP (B2): there is no Lakebase, so nothing is pending remotely and there is no PITR window.
+   * TODO(#195): the v1 SyncWorker queues the remote deletes first (MEM-32b) and shows the PITR
+   * window (MEM-32e).
+   */
+  async forget(scope: ForgetScope): Promise<ForgetResult> {
+    const s = checkForgetScope(scope);
+    const log = {
+      forgetId: this.#newId(),
+      requestedAt: this.#now(),
+      deviceId: this.#deviceId(),
+    };
+    const { rows } =
+      s.kind === 'items'
+        ? await this.store.exec('mem.forget.items', { mogId: s.mogId, itemIds: s.itemIds, ...log })
+        : s.kind === 'session'
+          ? await this.store.exec('mem.forget.session', {
+              mogId: s.mogId,
+              sessionId: s.sessionId,
+              ...log,
+            })
+          : await this.store.exec('mem.forget.mog', { mogId: s.mogId, ...log });
+    const changes = rows.map((r) => (r as { changes?: number }).changes ?? 0);
+    // The last step is the forget_log row: it records the Forget, it is not user content.
+    const local = changes.slice(0, -1).reduce((a, b) => a + b, 0);
+    return { local, remotePending: 0, pitrWindowS: 0 };
   }
   /** B2: the MVP has no Lakebase sync. The v1 SyncWorker (#195) adds the other modes. */
   mode(): 'local' | 'local_synced' | 'sync_paused' {

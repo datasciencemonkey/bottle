@@ -15,6 +15,7 @@ import {
   type HubMogRow,
   type MogAction,
 } from '../../shared/hub-mogs';
+import { FORGET_OPEN_TARGET } from '../../shared/forget-view';
 import { emitView } from '../view-ipc';
 
 function send(action: MogAction): void {
@@ -225,6 +226,17 @@ function Row({ row, onDeleted }: { row: HubMogRow; onDeleted: () => void }) {
         onClick={() => send({ action: 'mog.duplicate', mogId: row.mogId })}
       >
         Duplicate
+      </button>
+      {/* #123 (MEM-32a): the brain opens the Forget dialog for this MOG. */}
+      <button
+        type="button"
+        data-forget-open
+        aria-label={`Forget the memory of ${row.name}`}
+        onClick={() =>
+          void emitView(row.mogId, 'click', { target: FORGET_OPEN_TARGET }).catch(() => undefined)
+        }
+      >
+        Forget memory
       </button>
       <button
         type="button"
