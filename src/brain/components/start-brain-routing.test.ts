@@ -72,22 +72,35 @@ describe('startBrain utterance routing (#163)', () => {
     expect(callsTo(core.invoke.mock.calls, [...NO_CLOUD])).toEqual([]);
   });
 
-  it('[RTR-15c] [RTR-01b] with a typed home and no router model on the host, a dictation still routes to Copy', async () => {
+  it('[RTR-15c] [RTR-01b] with a typed home and no router model on the host, a dictation is inserted, or kept for Copy when the insert fails', async () => {
     // The demo setup: the hub MOG form has a home; the host serves no profiles_list (#17) and
     // the model call fails. The real router step must give the heuristic, not `context`.
-    core.invoke.mockImplementation(async (cmd) =>
-      cmd === 'config_read'
-        ? { json: { name: 'Finance', binding: { home: 'fake-home' } } }
-        : Promise.reject({ error: 'not_implemented' }),
-    );
+    // #551: insertion is on. A working insert gets the text; a failed one keeps it for Copy.
+    let insert: 'ok' | 'fails' = 'ok';
+    core.invoke.mockImplementation(async (cmd) => {
+      if (cmd === 'config_read')
+        return { json: { name: 'Finance', binding: { home: 'fake-home' } } };
+      if (cmd === 'insert_text' && insert === 'ok') return { result: 'inserted' };
+      return Promise.reject({ error: 'not_implemented' });
+    });
     const d = handlerDeps();
     const input = await d.routerInput(MOG);
     expect(input.profile).toBe('fake-home');
-    const r = await routeUtterance(
-      { mogId: MOG, text: SENTENCE, forceAsk: false, insertionOn: d.insertionOn(MOG), input },
-      d.route,
-    );
-    expect(r).toEqual({ route: 'copy', text: SENTENCE });
+    const dictate = () =>
+      routeUtterance(
+        { mogId: MOG, text: SENTENCE, forceAsk: false, insertionOn: d.insertionOn(MOG), input },
+        d.route,
+      );
+    expect((await dictate()).route).toBe('inserted');
+    const sent = core.invoke.mock.calls.find(([c]) => c === 'insert_text');
+    expect((sent?.[1] as { args: { text: string } }).args.text).toBe(SENTENCE);
+    insert = 'fails';
+    // No text loss: a failed insert gives the text back for the Copy card (#498).
+    expect(await dictate()).toEqual({
+      route: 'insert_failed',
+      reason: 'host_failed',
+      text: SENTENCE,
+    });
     const q = await d.route.route('What was revenue?', MOG, input);
     expect(q.intent).toBe('question');
     expect(callsTo(core.invoke.mock.calls, ['agent_start', 'agent_send', 'mcp_call'])).toEqual([]);
