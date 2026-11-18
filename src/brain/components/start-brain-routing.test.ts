@@ -39,6 +39,7 @@ type CardPayload = {
   mogId: string;
   blurbs: { text: string }[];
   chips: { id: string; label: string }[];
+  overflowChips: { id: string; label: string }[];
 };
 const cards = () =>
   core.emitTo.mock.calls
@@ -141,5 +142,53 @@ describe('startBrain utterance routing (#163)', () => {
     expect(last()?.chips.map((c) => c.label)).toContain('fake-a');
     // Listing is not picking: nothing is saved before the user clicks a profile.
     expect(core.invoke.mock.calls.map(([c]) => c)).not.toContain('config_write');
+  });
+
+  it('[RTR-15c] [B1] with a listed home profile, an Ask Genie click hands the question over with that home as the target', async () => {
+    core.invoke.mockImplementation(async (cmd) => {
+      if (cmd === 'config_read')
+        return { json: { name: 'Finance', binding: { home: 'fake-home' } } };
+      if (cmd === 'profiles_list')
+        return [
+          {
+            name: 'fake-home',
+            host: 'https://h.example.test',
+            authType: 'databricks-cli',
+            supported: true,
+          },
+        ];
+      if (cmd === 'model_invoke') return Promise.reject({ error: 'offline' });
+      return {};
+    });
+    // The MOG window is open (its view sent `ready`), so the gate may hand the question over.
+    brain?.talkTarget.viewReady(MOG);
+    const d = handlerDeps();
+    const input = await d.routerInput(MOG);
+    const decision = await d.route.route('What was revenue?', MOG, input);
+    d.onAsk(
+      { route: 'chip', decision, warning: undefined },
+      { utteranceId: 'utt-ask-1', mogId: MOG },
+    );
+    await settle();
+    // Nothing goes out before the click (B1).
+    expect(callsTo(core.invoke.mock.calls, ['agent_send', 'mcp_call'])).toEqual([]);
+    const last = cards().at(-1);
+    // The card stack of the MOG is shared across these tests, so the chip may be in the overflow.
+    const ask = [...(last?.chips ?? []), ...(last?.overflowChips ?? [])].find(
+      (c) => c.label === 'Ask Genie',
+    );
+    expect(ask).toBeDefined();
+    brain?.bus.dispatch({
+      event: 'view:input',
+      payload: {
+        from: `card-${MOG}`,
+        input: { mogId: MOG, kind: 'chip_click', payload: { chipId: ask?.id } },
+      },
+    });
+    await settle();
+    const sent = core.invoke.mock.calls.find(([c]) => c === 'agent_send');
+    expect((sent?.[1] as { args: { turn: { target: string } } }).args.turn.target).toBe(
+      'fake-home',
+    );
   });
 });

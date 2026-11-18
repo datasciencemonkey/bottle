@@ -27,8 +27,11 @@ The issue left these points open:
    offline question is a chip and goes out only after a click (RTR-15c, B1). #143 adds the
    RTR-15a grammar and the RTR-15b classifier to the same module.
 2. **Not available.** The router model is not available when the MOG has no usable home
-   profile, or when the router model call fails for any reason. In both cases the heuristic
-   decides. A dictation then goes to insertion or Copy, as before.
+   profile, or when both `model_invoke` calls of the router step fail (no reply at all). In
+   both cases the heuristic decides. A dictation then goes to insertion or Copy, as before.
+   Router output that comes back but does not parse twice still gives intent `context`
+   (RTR-13d). Before this ADR the router step also gave `context` for two failed calls; that
+   dropped every utterance of a MOG whose home is set while the host serves no `model_invoke`.
 3. **Home profile.** The home profile is `mog.binding.home`, which the user chose. The user types
    it in the hub MOG form today, or clicks it on the pick card. A home that `profiles_list` does
    not list as supported is no home. When `profiles_list` fails (the host does not serve it yet,
@@ -47,8 +50,12 @@ The issue left these points open:
   `profiles_list`, `insert_text`, `window_card_show`, and `view_emit` `chip_click`.
 - Until #17 wires `profiles_list` in the host, the pick card says that Bottle cannot list
   profiles. The home that the user typed in the hub stays in use.
-- The pick card has its own card stack per MOG. PR #504 (#498) adds the dictation Copy card
-  stack. The two must become one stack per MOG when both are on main (TODO(#498, #374)).
+- The pick card uses the one card stack per MOG of `startBrain` (from #142). A chip click goes
+  to the T3 ask gate and to the pick card; each acts only on its own chips.
+- The T3 ask gate target is the MOG's usable home profile (no hop yet, #164). With none, an ask
+  shows the pick card and the gate is not used.
+- #504 (#498) wires `onDone`, so a `copy` or `insert_failed` dictation shows on the card. It
+  must merge before or with this change, so that no dictation text is dropped silently.
 - The Copy chip only shows until a clipboard command exists (TODO(#213)), as in PR #504.
 - Follow-ups on #163: full profile settings, sign-out UI over `token_events::sign_out` (#465),
   the first-run multi-select, the ForgetFlow `home` (needs the host and workspace id, #523).

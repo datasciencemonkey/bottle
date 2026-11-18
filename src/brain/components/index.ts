@@ -133,19 +133,6 @@ export function startBrain(): Brain {
       newId: () => crypto.randomUUID(),
       sendCard: sendOwnedCard,
     });
-    // #163 (RTR-15c, W-07d): the home profile of each MOG, and the "Pick a profile to ask
-    // Genie" card for a question with no home profile. The user picks; Bottle never picks.
-    const homes = createHomeProfiles(ipcHomeProfileDeps());
-    const insertionOn = () => true;
-    const route = withOfflineFallback(ipcUtteranceDeps());
-    const pick = createProfilePick({
-      stackFor,
-      showCard: (mogId) => call('window_card_show', { mogId }),
-      listProfiles: ipcListProfiles,
-      saveHome: (mogId, profile) => components.T1.edit(mogId, { home: profile }),
-      insertionOn,
-      insertText: route.insertText,
-    });
     // #498: the card stack of each MOG, made on first use. TODO(#374): drop a stack when its MOG
     // closes.
     const cardClock = createSystemClock();
@@ -212,6 +199,19 @@ export function startBrain(): Brain {
       if (input.kind !== 'ready') return;
       if (input.from === 'hub') void dictation.hubReady();
       else if (input.from === `card-${input.mogId}`) dictation.cardReady(input.mogId);
+    });
+    // #163 (RTR-15c, W-07d): the home profile of each MOG, and the "Pick a profile to ask
+    // Genie" card for a question with no home profile. The user picks; Bottle never picks.
+    const homes = createHomeProfiles(ipcHomeProfileDeps());
+    const insertionOn = () => true;
+    const route = withOfflineFallback(ipcUtteranceDeps());
+    const pick = createProfilePick({
+      stackFor,
+      showCard: (mogId) => call('window_card_show', { mogId }),
+      listProfiles: ipcListProfiles,
+      saveHome: (mogId, profile) => components.T1.edit(mogId, { home: profile }),
+      insertionOn,
+      insertText: route.insertText,
     });
     // #14: the PTT and hands-free lifecycle. Every start goes through the T12 consent gate.
     const lifecycle = createCaptureLifecycle({
