@@ -33,11 +33,11 @@ open:
    host lookup, token lend or send. The slot is an RAII guard, so a reply, an error or a panic
    frees it. This PR changes no contract file. Today the Tauri host (`src-tauri/src/ipc.rs`
    `rejection`) sends every code outside `ERROR_CODES` as `host_failed`, like the other R8
-   reasons (for example `genie_one_off` and `timeout`). Contract-change #479 adds the R8 codes
-   to `ERROR_CODES` and `IPC_ERROR_CODES`, and `poll_inflight` must be in that list. Until #479
+   reasons (for example `genie_one_off` and `timeout`). Contract-change #479 (PR #495) adds the R8 codes,
+   `poll_inflight` included, to `ERROR_CODES` and `IPC_ERROR_CODES`. Until #495
    (and the `mcp_call` routing #467) lands, the brain sees `host_failed` for a poll timeout or
    an overlap. Then its loop ends with the IDs kept in the journal (decision 6), and nothing is
-   asked again. So the brain re-poll of G-16c and ARC-F1 works end to end only after #479.
+   asked again. So the brain re-poll of G-16c and ARC-F1 works end to end only after #495.
 3. The delay is computed at the end of the ask or of the previous poll, from the elapsed time
    of the ask at that moment. The base delay is 2 s, 3 s or 5 s by band. After 180 s it is the
    previous base delay x 1.5, at most 15 s. The x1.5 step uses the previous base delay, not the
@@ -55,6 +55,9 @@ open:
    (G-12b). The loop then ends with `gave_up`, and `resume` yields the `abandoned` event. The
    soft notice, the `abandoned` exchange status (G-12c) and the late re-polls stay with #149.
    The actor never calls `genie_ask`.
+   The GL-5 matrix (#32, `genie-errors.ts`) maps `poll_inflight` to `CONVERSATION_BUSY` with a
+   user retry. Only a caller other than the PollActor (for example a manual "Check again") sees
+   it, and that caller waits and never asks again.
 6. The actor writes `{opId, mogId, profile, host, conversationId, responseId, askedAt}` to a
    `PollJournal` when the loop starts. Only a terminal status removes the entry. A timeout, an
    error, an abort or the give-up keeps it, so a later poll can resume with the same IDs. The
