@@ -25,7 +25,9 @@ The Genie One proxy is #139 (ADR 0083). The issue left these points open:
 
 1. **The core writes the entry, before the action runs.** `bottle-mcp` writes one entry for
    each call of one of its 7 tools. The Genie One proxy writes `agent_action:genie_one` for each
-   allowlisted Genie call. Both write before any argument check or send, so a refused call is in
+   allowlisted Genie call. A `GenieProxy` with no guard uses `NoActionLog`, which refuses every
+   entry, so an unguarded proxy sends nothing. `BottleMcpServer::start` gives each proxy the
+   session's log and approvals. Both write before any argument check or send, so a refused call is in
    the log too (it is a decision of the agent). A name that is not a tool runs nothing and has no
    entry: the closed kind set has no place for it. If the entry cannot be written, nothing runs,
    and the agent gets `audit_unavailable` (fail closed). The brain writes no agent entry.
@@ -39,7 +41,9 @@ The Genie One proxy is #139 (ADR 0083). The issue left these points open:
    agent's `genie_ask` may send only that exact text, once. Any other text is refused with
    `context_not_approved`, before the ask ledger and the target lookup. So the agent cannot add
    memory or transcript text (a preamble) to a question, and injected text cannot start a new
-   ask. A new turn replaces the approval. A session stop or a failed send clears it. A context
+   ask. The proxy uses the approval when it checks the ask. If the target lookup or the ask
+   ledger (G-11a..c) refuses the ask before any send, the proxy gives the approval back
+   (`restore`), and a restore never replaces a newer approval. A new turn replaces the approval. A session stop or a failed send clears it. A context
    send with a preamble goes only through the brain ContextGate approval (#152).
 4. **The prompt and the policy are core constants.** `agent_guard::MAIN_AGENT_SYSTEM_PROMPT`
    and `tool_policy()` go to the harness in the `open_session` frame (`systemPrompt`,

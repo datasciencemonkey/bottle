@@ -749,10 +749,10 @@ impl BottleMcpServer {
     /// Start the server of the session of `mog_id` with a new per-session secret.
     pub fn start(mog_id: &str, deps: &BottleMcpDeps) -> CoreResult<Self> {
         let closed = Arc::new(AtomicBool::new(false));
-        let genie = deps
-            .genie
-            .clone()
-            .map(|g| GenieProxy::new(mog_id, g, closed.clone()));
+        let genie = deps.genie.clone().map(|g| {
+            GenieProxy::new(mog_id, g, closed.clone())
+                .with_guard(deps.audit.clone(), deps.approvals.clone())
+        });
         let has_genie = genie.is_some();
         let handler = Arc::new(Handler {
             mog_id: mog_id.to_owned(),

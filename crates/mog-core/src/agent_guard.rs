@@ -73,6 +73,19 @@ pub trait AgentActionLog: Send + Sync {
     fn record(&self, mog_id: &str, tool: &str, args_bytes: u64) -> Result<(), AuditError>;
 }
 
+/// A log that writes nothing and refuses every entry, so a guarded call never runs. The default
+/// of a Genie One proxy with no guard.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoActionLog;
+
+impl AgentActionLog for NoActionLog {
+    fn record(&self, _: &str, _: &str, _: u64) -> Result<(), AuditError> {
+        Err(AuditError::Store(crate::error::CoreError::NotImplemented {
+            component: "R10",
+        }))
+    }
+}
+
 /// The action log over the #140 audit log, with the time from `clock`.
 pub struct AuditActionLog<S> {
     log: AuditLog<S>,
@@ -180,6 +193,14 @@ impl OutboundApprovals {
         false
     }
 
+    /// Put back an approval that [`Self::take`] used for a call that was refused before any
+    /// send. It never replaces a newer approval.
+    pub fn restore(&self, mog_id: &str, text: &str) {
+        self.lock()
+            .entry(mog_id.to_owned())
+            .or_insert_with(|| digest(text));
+    }
+
     /// Remove the approval of `mog_id` (the session stopped, or the turn was not sent).
     pub fn clear(&self, mog_id: &str) {
         self.lock().remove(mog_id);
@@ -220,6 +241,16 @@ mod tests {
         let a = OutboundApprovals::default();
         a.approve(MOG, "q");
         assert!(!a.take(MOG, "q "));
+        assert!(a.take(MOG, "q"));
+        a.restore(MOG, "q");
+        a.approve(MOG, "newer");
+        a.restore(MOG, "q");
+        assert!(
+            !a.take(MOG, "q"),
+            "a restore never replaces a newer approval"
+        );
+        assert!(a.take(MOG, "newer"));
+        a.restore(MOG, "q");
         assert!(a.take(MOG, "q"));
         a.approve(MOG, "q");
         a.clear(MOG);

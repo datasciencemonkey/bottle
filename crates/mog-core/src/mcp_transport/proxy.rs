@@ -27,6 +27,13 @@
 //!
 //! - G-11a..c, G-12b: the in-flight caps and the 10 min give-up of agent asks
 //!   ([`super::agent_asks`]), before any send.
+//! - RTR-30 (#141, ADR 0085): each allowlisted call writes one content-free
+//!   `agent_action:genie_one` entry before anything else runs. No entry, no call
+//!   ([`AUDIT_UNAVAILABLE`]).
+//! - RTR-29b, B1 (#141, ADR 0085): a `genie_ask` may send only the approved question of the
+//!   MOG's turn, once ([`OutboundApprovals`]). Any other question, for example one with added
+//!   memory or transcript text, gets [`CONTEXT_NOT_APPROVED`] before the target lookup, so it
+//!   lends no token. An ask that the ledger refuses before the send keeps its approval.
 //!
 //! The card and PollActor rules (G-12a, G-13a, G-15b, G-16b, G-17..G-20a) are brain rules; ADR
 //! 0083 lists them. TODO(#518): brain and agent asks in one cap, the late re-polls (G-13a) and
@@ -49,6 +56,9 @@ use serde_json::{json, Map, Value};
 use super::agent_asks::AgentAsks;
 use super::{forwardable_tool_args, tools, McpCall, McpReply, McpTransport, PROTOCOL_VERSION};
 use super::{INVALID_META, INVALID_TOOL_ARGS, TOOL_NOT_ALLOWED};
+use crate::agent_guard::{
+    AgentActionLog, NoActionLog, OutboundApprovals, AUDIT_UNAVAILABLE, CONTEXT_NOT_APPROVED,
+};
 use crate::clock::MonotonicClock;
 use crate::error::{CoreError, CoreResult};
 use crate::ipc::JsonObject;
@@ -154,6 +164,8 @@ pub struct GenieProxy {
     mog_id: String,
     deps: GenieProxyDeps,
     closed: Arc<AtomicBool>,
+    audit: Arc<dyn AgentActionLog>,
+    approvals: Arc<OutboundApprovals>,
 }
 
 impl fmt::Debug for GenieProxy {
@@ -243,7 +255,21 @@ impl GenieProxy {
             mog_id: mog_id.to_owned(),
             deps,
             closed,
+            // Fail closed until `with_guard`: no entry can be written, so no call runs.
+            audit: Arc::new(NoActionLog),
+            approvals: Arc::new(OutboundApprovals::default()),
         }
+    }
+
+    /// The same proxy with the session's action log (RTR-30) and approvals (RTR-29b).
+    pub fn with_guard(
+        mut self,
+        audit: Arc<dyn AgentActionLog>,
+        approvals: Arc<OutboundApprovals>,
+    ) -> Self {
+        self.audit = audit;
+        self.approvals = approvals;
+        self
     }
 
     /// Answer one authorized request of the harness.
@@ -326,6 +352,17 @@ impl GenieProxy {
         let Some(contract) = name.and_then(tools::allowed) else {
             return rpc_error(id, -32602, "unknown tool");
         };
+        // RTR-30: the decision is logged before anything else runs. No entry, no call.
+        let args_bytes = params
+            .and_then(|p| p.get("arguments"))
+            .map_or(0, |a| a.to_string().len() as u64);
+        if self
+            .audit
+            .record(&self.mog_id, "genie_one", args_bytes)
+            .is_err()
+        {
+            return rpc_result(id, tool_error(AUDIT_UNAVAILABLE));
+        }
         let args: JsonObject = match params.and_then(|p| p.get("arguments")) {
             None | Some(Value::Null) => JsonObject::new(),
             Some(Value::Object(a)) => a.clone().into_iter().collect(),
@@ -345,9 +382,27 @@ impl GenieProxy {
         {
             return rpc_error(id, -32602, "invalid arguments");
         }
+        // RTR-29b: an ask sends only the approved question of the turn, once. Before the target
+        // lookup, so a refused ask lends no token.
+        let approved = if tool_kind(contract.name) == Kind::Ask {
+            let q = args.get("question").and_then(Value::as_str).unwrap_or("");
+            if !self.approvals.take(&self.mog_id, q) {
+                return rpc_result(id, tool_error(CONTEXT_NOT_APPROVED));
+            }
+            Some(q.to_owned())
+        } else {
+            None
+        };
+        // A call refused before any send gives the approval back.
+        let refuse = |code: &str| {
+            if let Some(q) = &approved {
+                self.approvals.restore(&self.mog_id, q);
+            }
+            rpc_result(id.clone(), tool_error(code))
+        };
         let target = match self.target() {
             Ok(t) => t,
-            Err(code) => return rpc_result(id, tool_error(code)),
+            Err(code) => return refuse(code),
         };
         // G-06b, G-07a: the MOG's warehouse only; the agent's `_meta` is never read.
         let meta: Option<JsonObject> = target
@@ -363,7 +418,7 @@ impl GenieProxy {
         let place = match (tool_kind(contract.name), conversation.as_deref()) {
             (Kind::Ask, c) => match asks.begin(&self.mog_id, &target.profile, c) {
                 Ok(p) => Some(p),
-                Err(code) => return rpc_result(id, tool_error(code)),
+                Err(code) => return refuse(code),
             },
             (Kind::Poll, Some(c)) => {
                 if let Err(code) = asks.may_poll(c) {

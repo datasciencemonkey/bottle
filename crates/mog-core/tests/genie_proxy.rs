@@ -694,6 +694,8 @@ fn rtr_27_a_session_stop_does_not_wait_for_a_slow_genie_call() {
     let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                       "params": {"name": "genie_ask", "arguments": ask_args()}})
     .to_string();
+    // The turn approved the question (RTR-29b), so the ask goes out and waits on Genie.
+    r.approvals.approve(MOG, QUESTION);
     let caller = std::thread::spawn(move || post(&url, Some(&auth), None, &body));
     let start = Instant::now();
     while tool_calls(&s).is_empty() {
