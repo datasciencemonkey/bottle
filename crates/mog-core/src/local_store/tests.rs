@@ -1548,104 +1548,64 @@ fn mem_01_an_update_or_replace_cannot_take_the_id_of_another_mogs_session() {
     assert!(insert_utterance(&s, "u-2", "sess-a", MOG_B, 1).is_err());
 }
 
-// #541: an unsigned or ad-hoc macOS build has no keychain access group entitlement. Then the data
-// protection keychain refuses a store with errSecMissingEntitlement (-34018), and it answers a get
-// with errSecItemNotFound (-25300), as seen on a live `pnpm tauri dev` run. A store falls back to
-// the login keychain only on -34018. A load falls back only on -34018 or -25300, so a key that an
-// earlier run stored in the login keychain is found again. These tests drive the pure fallback
-// helper with a recording double; they never call the real Keychain.
-mod keychain_fallback {
-    use super::super::key_vault::{
-        with_login_fallback, KeychainTarget, ERR_SEC_ITEM_NOT_FOUND, ERR_SEC_MISSING_ENTITLEMENT,
-        LOAD_FALLBACK, STORE_FALLBACK,
-    };
+// #541: an unsigned or ad-hoc macOS build has no `keychain-access-groups` entitlement, so the data
+// protection keychain refuses it (a store gets -34018, a get gets -25300). The vault checks the
+// entitlement one time at creation. Entitled: only the data protection keychain, with no
+// fallback. Not entitled: only the login keychain. No error code picks the keychain, so a signed
+// build never reads a login item that another process of the same user planted. These tests use
+// the pure seams; they never call the real Keychain.
+mod keychain_target {
+    use super::super::key_vault::{item_plan, target_for, ItemPlan, KeychainTarget};
 
-    /// Runs `with_login_fallback` with a double that answers `answers` in order and records
-    /// each target it is called with.
-    fn run(on: &[i32], answers: Vec<Result<u8, i32>>) -> (Result<u8, i32>, Vec<KeychainTarget>) {
-        let mut calls = Vec::new();
-        let mut it = answers.into_iter();
-        let out = with_login_fallback(on, |t| {
-            calls.push(t);
-            it.next().expect("the double got an extra call")
-        });
-        (out, calls)
+    #[test]
+    fn mem_08b_entitled_build_uses_only_the_data_protection_keychain() {
+        assert_eq!(target_for(true), KeychainTarget::DataProtection);
     }
 
     #[test]
-    fn mem_08b_fallback_codes_are_exact() {
-        assert_eq!(ERR_SEC_MISSING_ENTITLEMENT, -34018);
-        assert_eq!(ERR_SEC_ITEM_NOT_FOUND, -25300);
-        assert_eq!(STORE_FALLBACK, &[-34018]);
-        assert_eq!(LOAD_FALLBACK, &[-34018, -25300]);
+    fn mem_08b_unentitled_build_uses_only_the_login_keychain() {
+        assert_eq!(target_for(false), KeychainTarget::Login);
     }
 
     #[test]
-    fn mem_08b_store_missing_entitlement_falls_back_to_login_keychain() {
-        let (out, calls) = run(
-            STORE_FALLBACK,
-            vec![Err(ERR_SEC_MISSING_ENTITLEMENT), Ok(7)],
-        );
-        assert_eq!(out, Ok(7));
+    fn mem_08b_data_protection_item_keeps_the_accessibility_class() {
         assert_eq!(
-            calls,
-            vec![KeychainTarget::DataProtection, KeychainTarget::Login]
-        );
-    }
-
-    #[test]
-    fn mem_08b_load_item_not_found_reads_login_keychain() {
-        // The live failure of #541: the second start found no key in the data protection
-        // keychain and reported store_key_lost, though the key was in the login keychain.
-        let (out, calls) = run(LOAD_FALLBACK, vec![Err(ERR_SEC_ITEM_NOT_FOUND), Ok(9)]);
-        assert_eq!(out, Ok(9));
-        assert_eq!(
-            calls,
-            vec![KeychainTarget::DataProtection, KeychainTarget::Login]
-        );
-        let (out, _) = run(LOAD_FALLBACK, vec![Err(ERR_SEC_MISSING_ENTITLEMENT), Ok(3)]);
-        assert_eq!(out, Ok(3));
-    }
-
-    #[test]
-    fn mem_08b_store_item_not_found_does_not_fall_back() {
-        let (out, calls) = run(STORE_FALLBACK, vec![Err(ERR_SEC_ITEM_NOT_FOUND)]);
-        assert_eq!(out, Err(ERR_SEC_ITEM_NOT_FOUND));
-        assert_eq!(calls, vec![KeychainTarget::DataProtection]);
-    }
-
-    #[test]
-    fn mem_08b_data_protection_success_does_not_touch_login_keychain() {
-        for on in [LOAD_FALLBACK, STORE_FALLBACK] {
-            let (out, calls) = run(on, vec![Ok(1)]);
-            assert_eq!(out, Ok(1));
-            assert_eq!(calls, vec![KeychainTarget::DataProtection]);
-        }
-    }
-
-    #[test]
-    fn mem_08b_other_errors_do_not_fall_back() {
-        // errSecAuthFailed, errSecUserCanceled, errSecInteractionNotAllowed, errSecParam,
-        // errSecDuplicateItem, errSecDecode.
-        for on in [LOAD_FALLBACK, STORE_FALLBACK] {
-            for code in [-25293, -128, -25308, -50, -25299, -26275] {
-                let (out, calls) = run(on, vec![Err(code)]);
-                assert_eq!(out, Err(code), "code {code}");
-                assert_eq!(calls, vec![KeychainTarget::DataProtection], "code {code}");
+            item_plan(KeychainTarget::DataProtection),
+            ItemPlan {
+                data_protection_keychain: true,
+                access_control: true,
+                synchronizable: false,
             }
-        }
+        );
     }
 
     #[test]
-    fn mem_08b_login_keychain_error_is_returned_as_is() {
-        let (out, calls) = run(
-            LOAD_FALLBACK,
-            vec![
-                Err(ERR_SEC_MISSING_ENTITLEMENT),
-                Err(ERR_SEC_ITEM_NOT_FOUND),
-            ],
+    fn mem_08b_login_item_drops_the_data_protection_flag_and_never_syncs() {
+        assert_eq!(
+            item_plan(KeychainTarget::Login),
+            ItemPlan {
+                data_protection_keychain: false,
+                access_control: false,
+                synchronizable: false,
+            }
         );
-        assert_eq!(out, Err(ERR_SEC_ITEM_NOT_FOUND));
-        assert_eq!(calls.len(), 2, "no third try");
     }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn mem_08b_macos_vault_target_follows_the_entitlement() {
+    use super::key_vault::macos::KeychainVault;
+    use super::key_vault::KeychainTarget;
+    // Builds the vault only. It never calls the real Keychain.
+    assert_eq!(
+        KeychainVault::for_entitlement(true).target(),
+        KeychainTarget::DataProtection
+    );
+    assert_eq!(
+        KeychainVault::for_entitlement(false).target(),
+        KeychainTarget::Login
+    );
+    // The test binary is not signed with the entitlement, as a `pnpm tauri dev` build.
+    assert_eq!(KeychainVault::bottle().target(), KeychainTarget::Login);
 }
