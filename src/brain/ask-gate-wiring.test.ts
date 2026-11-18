@@ -105,14 +105,18 @@ describe('ask gate on the bus (B1)', () => {
     await t.run(1);
     expect(t.outbound()).toEqual(['agent_send']);
     const args = core.invoke.mock.calls.find(([c]) => c === 'agent_send')?.[1];
-    expect(args).toMatchObject({ mogId: A, turn: { mogId: A, question: Q, target: 'home' } });
+    expect(args).toMatchObject({
+      args: { mogId: A, turn: { mogId: A, question: Q, target: 'home' } },
+    });
     expect(t.last()?.chips).toEqual([]);
   });
 
   const cancels: [string, (t: ReturnType<typeof setup>) => unknown][] = [
     ['Esc in the card (view:input cancel)', (t) => t.card('cancel')],
-    ['a second talk-key press (hotkey:ptt down)', (t) =>
-      t.bus.dispatch({ event: 'hotkey:ptt', payload: { mogId: A, phase: 'down' } })],
+    [
+      'a second talk-key press (hotkey:ptt down)',
+      (t) => t.bus.dispatch({ event: 'hotkey:ptt', payload: { mogId: A, phase: 'down' } }),
+    ],
     ['a click on [Cancel]', (t) => t.card('chip_click', { chipId: 'preview_cancel' })],
     ['the card close', (t) => t.gate.cardClosed(A)],
     ['the MOG close', (t) => t.close()],
@@ -144,10 +148,10 @@ describe('ask gate on the bus (B1)', () => {
     t.chip();
     const chip = t.last()?.chips.find((c) => c.label === 'Ask Genie');
     expect(chip).toBeDefined();
-    t.card('hover', { blurbId: chip!.id, on: true, via: 'pointer' });
+    t.card('hover', { blurbId: chip?.id, on: true, via: 'pointer' });
     await t.run(60_000);
     expect(t.outbound()).toEqual([]);
-    t.card('chip_click', { chipId: chip!.id });
+    t.card('chip_click', { chipId: chip?.id });
     await t.run(0);
     expect(t.outbound()).toEqual(['agent_send']);
   });
@@ -158,7 +162,7 @@ describe('ask gate on the bus (B1)', () => {
     const chip = t.last()?.chips.find((c) => c.label === 'Ask Genie');
     await t.run(2 * 60_000);
     expect(t.last()?.chips).toEqual([]);
-    t.card('chip_click', { chipId: chip!.id });
+    t.card('chip_click', { chipId: chip?.id });
     await t.run(0);
     expect(t.outbound()).toEqual([]);
   });

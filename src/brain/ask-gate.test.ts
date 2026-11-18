@@ -260,6 +260,7 @@ describe('ask gate: the Ask Genie chip (RTR-05)', () => {
     const card = t.cardOf(A);
     const chips = [...card.chips.values()];
     expect(chips).toHaveLength(1);
+    const chipId = chips[0]?.id ?? '';
     expect(chips[0]).toMatchObject({ kind: 'ask_genie', label: ASK_CHIP_LABEL });
     expect(ASK_CHIP_LABEL).toBe('Ask Genie');
     expect(card.shownControls()).toEqual([]);
@@ -268,13 +269,13 @@ describe('ask gate: the Ask Genie chip (RTR-05)', () => {
     expect(t.released).toEqual([u.utteranceId]);
     await t.run(60_000);
     expect(t.sent).toEqual([]);
-    t.gate.chip(A, { id: chips[0]!.id, kind: 'ask_genie' });
+    t.gate.chip(A, { id: chipId, kind: 'ask_genie' });
     await t.run(0);
     expect(t.sent).toHaveLength(1);
     expect(t.sent[0]).toMatchObject({ mogId: A, question: Q, target: 'home', recall: [] });
     expect(card.chips.size).toBe(0);
     // A second click does nothing.
-    t.gate.chip(A, { id: chips[0]!.id, kind: 'ask_genie' });
+    t.gate.chip(A, { id: chipId, kind: 'ask_genie' });
     await t.run(0);
     expect(t.sent).toHaveLength(1);
   });
@@ -282,7 +283,7 @@ describe('ask gate: the Ask Genie chip (RTR-05)', () => {
   it('[RTR-05] a chip click after the 2 min expiry sends nothing', async () => {
     const t = setup();
     t.gate.onAsk(chip(), t.owned());
-    const id = [...t.cardOf(A).chips.keys()][0]!;
+    const id = [...t.cardOf(A).chips.keys()][0] ?? '';
     await t.run(2 * 60_000);
     t.gate.chip(A, { id, kind: 'ask_genie' });
     await t.run(0);
@@ -292,7 +293,7 @@ describe('ask gate: the Ask Genie chip (RTR-05)', () => {
   it('[RTR-05] a click on a chip of another MOG, or an unknown chip, sends nothing', async () => {
     const t = setup();
     t.gate.onAsk(chip(), t.owned(A));
-    const id = [...t.cardOf(A).chips.keys()][0]!;
+    const id = [...t.cardOf(A).chips.keys()][0] ?? '';
     t.gate.chip(B, { id, kind: 'ask_genie' });
     t.gate.chip(A, { id: 'nope', kind: 'ask_genie' });
     await t.run(0);
@@ -317,6 +318,15 @@ describe('ask gate: the Ask Genie chip (RTR-05)', () => {
     await t.run(10 * PREVIEW_MS);
     expect(t.sent).toEqual([]);
     expect(t.gate.pending(A)).toBeUndefined();
+  });
+
+  it('[RTR-14] a preview route with an injection-suspected decision shows the warning, never the preview', async () => {
+    const t = setup();
+    t.gate.onAsk(preview({ decision: decision({ injection_suspected: true }) }), t.owned());
+    expect(t.gate.pending(A)).toBeUndefined();
+    expect(t.cardOf(A).shownControls()).toEqual([{ ...INJECTION_WARNING_CHIP }]);
+    await t.run(10 * PREVIEW_MS);
+    expect(t.sent).toEqual([]);
   });
 
   it('[RTR-04b] a failed hand-off is shown as not sent and is not retried', async () => {

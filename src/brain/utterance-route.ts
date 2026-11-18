@@ -6,7 +6,7 @@
  * - RTR-17a: Shift held with the talk key forces the ask route. Only the intent gate is skipped:
  *   the router step still runs (cleaned text, hints), and the route still goes through the preview.
  * - RTR-17b: a forced ask keeps the 1.5 s preview (RTR-04a). The preview, the agent hand-off and
- *   the chip are the caller's (T3 CapturePolicy, TODO(#142)); this module returns the route.
+ *   the chip are the caller's (the T3 ask gate, `ask-gate.ts`, #142); this module returns the route.
  * - B1: nothing goes to Genie here. A question gives a `preview` or a `chip`, never a send.
  * - RTR-07: a session utterance never gets the preview, which sends by itself. It gets a chip.
  * - RTR-14: an injection-suspected utterance never gets the preview. It gets the warning chip.

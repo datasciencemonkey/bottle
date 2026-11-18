@@ -23,7 +23,7 @@ vi.mock('../level-stream', async (orig) => ({
 }));
 
 describe('startBrain wiring', () => {
-  it('[MB-01] [MB-08a] [CAP-16a] [MEM-32a] wires the hub list, the notice and the level stream, once', () => {
+  it('[MB-01] [MB-08a] [CAP-16a] [MEM-32a] [RTR-04b] wires the hub list, the notice and the level stream, once', () => {
     const a = startBrain();
     startBrain();
     expect(vi.mocked(wireHubMogs).mock.calls).toEqual([[a.bus, a.components.T1]]);
@@ -38,13 +38,10 @@ describe('startBrain wiring', () => {
     expect(forget).toHaveLength(1);
     expect(forget[0]?.[0]).toBe(a.bus);
     expect(forget[0]?.[1].flow).toBeInstanceOf(ForgetFlow);
-  });
-
-  it('[RTR-04a] [RTR-04b] [RTR-05] wires the T3 preview and chip gate on the bus, once', () => {
-    const a = startBrain();
-    startBrain();
-    const wired = vi.mocked(wireAskGate).mock.calls;
-    expect(wired).toHaveLength(1);
-    expect(wired[0]?.[0]).toBe(a.bus);
+    // #142 (RTR-04a, RTR-04b, RTR-05): the T3 preview and chip gate on the bus, once.
+    const gate = vi.mocked(wireAskGate).mock.calls;
+    expect(gate).toHaveLength(1);
+    expect(gate[0]?.[0]).toBe(a.bus);
+    expect(typeof gate[0]?.[1].onAsk).toBe('function');
   });
 });

@@ -7,8 +7,8 @@
  * MOG and the talk-key target moves. The request gets the owner's `mogId` and tags, and the
  * answer goes to the owner's card only.
  * The utterance hook (`utterance-wiring.ts`, #59) calls `begin` and `release`.
- * TODO(#142, #112): T3 and the agent runtime call `stampRequest`, `deliverAnswer` and `release`
- * for a preview or a chip.
+ * The T3 ask gate (#142) calls `release` when a preview ends or a chip is offered.
+ * TODO(#112): the agent runtime calls `stampRequest` and `deliverAnswer`.
  */
 import type { AskRequest, MogId } from '../shared/interfaces';
 import type { CardUpdate } from '../shared/ipc';
