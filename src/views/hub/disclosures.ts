@@ -44,7 +44,8 @@ export const SEC_DISC: readonly Disclosure[] = [
     v1: false,
     lines: [
       'Speech-to-text runs on this computer by default, with the local Parakeet model.',
-      'Push-to-talk audio stays in memory and is never written to disk.',
+      'Push-to-talk and hands-free audio stay in memory, and Bottle never writes them to a file.',
+      'Your computer can move memory to its swap or page file on disk. On Windows the page file is not encrypted by default.',
       'Meeting audio is kept encrypted on disk and deleted within 5 minutes after transcription, unless your admin keeps it longer.',
       'Bottle uses Databricks speech-to-text only if you or your admin turn it on, after a check passes.',
       'Then audio goes to your home workspace in short chunks, and Bottle does not store it there.',

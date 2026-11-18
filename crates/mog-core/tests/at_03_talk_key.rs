@@ -4,7 +4,7 @@
 //! no key-up for 120 s, denied mic permission, click-to-listen and drag.
 //!
 //! The talk-key rules of R1 ship (#6, #7, #24), so the hold, the tap and the cancel rules run
-//! here on the #229 simulated clock. The capture side (R2 CaptureService, #4, #14, #21, #22)
+//! here on the #229 simulated clock. The capture side (R2 CaptureService, #4, #14, #22)
 //! and the click rules (#83, #98) are not built. Their tests are written against
 //! `mog_core::capture::CaptureService` and `mog_core::types` and stay `#[ignore]` with the
 //! feature issue, so they never count as a pass. The drag part of AT-03 ("a drag starts no
@@ -14,6 +14,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use mog_core::audio_device::ptt_buffer::{PttBuffer, PttCaptureEvents, Utterance, UtteranceSink};
+use mog_core::audio_device::{FrameSink, MicFrame};
 use mog_core::capture::{
     CaptureCore, CaptureRequest, CaptureService, HandsFreeStop, StopReason, DEFAULT_VAD_END_MS,
 };
@@ -202,16 +204,85 @@ fn at_03_cap_04a_cap_04b_a_missing_key_up_stops_after_two_minutes_and_hands_free
 }
 
 #[test]
-#[ignore = "pending TODO(#21): no pre-roll and the mic close on pause are not built"]
 fn at_03_cap_13a_cap_13b_no_audio_before_key_down_and_the_mic_closes_on_pause() {
-    // TODO(#21): R2 has no frame before capture start, and capture_pause closes the stream.
-    let r2 = r2(&SimClock::new());
-    let lease = r2
-        .start(capture(CaptureMode::Ptt))
-        .expect("TODO(#21): a lease");
-    r2.stop(lease.id)
-        .expect("TODO(#21): the mic closes when no lease is left");
-    todo!("TODO(#21): assert no frame exists before the lease and the OS mic is closed after capture_pause");
+    // R2 with the RAM-only PTT buffer (#21, ADR 0078) on the testkit fake device.
+    let device = FakeAudioDevice::new();
+    let out = Arc::new(KeptUtterances::default());
+    let buf = PttBuffer::new(out.clone());
+    let r2 = CaptureCore::new(
+        Box::new(device.clone()),
+        Arc::new(SimClock::new()),
+        Arc::new(PttCaptureEvents::new(
+            RecordingCaptureEvents::default(),
+            buf.clone(),
+        )),
+    );
+    let mut mic = buf.sink();
+    let frame = |mic: &mut dyn FrameSink, amp: f32| {
+        mic.frame(MicFrame {
+            samples: &[amp; 480],
+            sample_rate: 48_000,
+        })
+    };
+    // CAP-13a: before key-down the mic is closed, and a frame is not kept (no pre-roll).
+    assert!(!device.log().mic_open);
+    assert_eq!(device.log().mic_opens, 0);
+    frame(&mut mic, 0.9);
+    assert_eq!(
+        buf.held_samples(),
+        0,
+        "no audio frame exists before key-down"
+    );
+    let lease = r2.start(capture(CaptureMode::Ptt)).expect("a PTT lease");
+    assert!(device.log().mic_open, "the mic opens at key-down");
+    frame(&mut mic, 0.2);
+    r2.stop(lease.id).expect("the PTT stops");
+    assert!(
+        !device.log().mic_open,
+        "the mic closes when no lease is left"
+    );
+    let kept = out.take();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(
+        kept[0].samples().len(),
+        480,
+        "only the audio after key-down"
+    );
+    assert_eq!(buf.held_samples(), 0);
+
+    // CAP-13b: a session lease pauses, and the mic stream closes on pause.
+    let session = r2
+        .start(capture(CaptureMode::Session))
+        .expect("a session lease");
+    assert!(device.log().mic_open);
+    let paused = r2.pause(session.id).expect("the session pauses");
+    assert!(paused.paused);
+    assert!(
+        !device.log().mic_open,
+        "the OS mic is closed after capture_pause"
+    );
+    frame(&mut mic, 0.2);
+    assert_eq!(buf.held_samples(), 0, "no frame is kept while paused");
+    r2.resume(session.id).expect("the session resumes");
+    assert!(device.log().mic_open);
+    r2.stop(session.id).expect("the session stops");
+    assert!(!device.log().mic_open);
+}
+
+/// The utterances that R2 hands on (a stand-in for R4 SttEngine, TODO(#46)).
+#[derive(Default)]
+struct KeptUtterances(std::sync::Mutex<Vec<Utterance>>);
+
+impl UtteranceSink for KeptUtterances {
+    fn utterance(&self, utterance: Utterance) {
+        self.0.lock().unwrap().push(utterance);
+    }
+}
+
+impl KeptUtterances {
+    fn take(&self) -> Vec<Utterance> {
+        std::mem::take(&mut *self.0.lock().unwrap())
+    }
 }
 
 #[test]

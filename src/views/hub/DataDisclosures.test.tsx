@@ -95,7 +95,14 @@ describe('Table SEC-DISC disclosures', () => {
     expect(t).toMatch(/on this computer by default/);
     expect(t).toMatch(/Parakeet/);
     expect(t).toMatch(/Databricks speech-to-text only if you or your admin turn it on/);
-    expect(t).toMatch(/never written to disk/);
+    // CAP-12c (#21): PTT and hands-free audio never go to a file. The OS can page memory, and
+    // the Windows page file is not encrypted by default (#500), so the text must not promise
+    // "never on disk".
+    expect(t).toMatch(
+      /Push-to-talk and hands-free audio stay in memory, and Bottle never writes them to a file/,
+    );
+    expect(t).toMatch(/On Windows the page file is not encrypted by default/);
+    expect(t).not.toMatch(/never written to disk/);
   });
 
   it('[SEC-17] home-profile processing names the model calls and the hop sentence', () => {

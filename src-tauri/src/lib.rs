@@ -72,17 +72,21 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
     });
     // #476 (CAP-16a): `capture_subscribe` sends the levels on a Channel of the brain webview.
     let levels = capture_host::HostLevels::new(capture_host::brain_level_resolver(handle.clone()));
+    // #21 (CAP-12c, CAP-34, ADR 0078): the RAM-only PTT buffer. TODO(#46): SttEngine is the
+    // consumer; until then each utterance is dropped, and so wiped, at once.
+    let ptt = mog_core::audio_device::ptt_buffer::PttBuffer::new(std::sync::Arc::new(
+        mog_core::audio_device::ptt_buffer::NoUtteranceSink,
+    ));
     // #388 (ADR 0038): the cpal mic on its own audio thread. Its frames go to the level
-    // stream (#476) and to the PTT buffer. TODO(#21): the RAM-only PTT buffer replaces
-    // `DiscardSink`.
+    // stream (#476) and to the PTT buffer (#21).
     // CAP-22 (#453, ADR 0063): `app.capture.preferBuiltInMic` reaches this mic. No mic thread:
     // the app still runs, and every start answers `host_failed`.
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     let (device, link) = {
-        use mog_core::audio_device::{cpal_backend::CpalMicHost, DiscardSink};
+        use mog_core::audio_device::cpal_backend::CpalMicHost;
         let settings = handle.try_state::<std::sync::Arc<mog_core::app_settings::AppSettings>>();
         capture_host::mic_capture_device(
-            capture_host::spawn_level_mic(CpalMicHost::new, DiscardSink, levels.gate()),
+            capture_host::spawn_level_mic(CpalMicHost::new, ptt.sink(), levels.gate()),
             settings.as_ref().map(|s| s.inner().as_ref()),
         )
     };
@@ -90,11 +94,12 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let (device, link): (Box<dyn mog_core::capture::AudioDevice>, Option<()>) =
         (Box::new(capture_host::UnwiredMic), None);
-    let host = capture_host::CaptureHost::with_levels(
+    let host = capture_host::CaptureHost::with_audio(
         device,
         std::sync::Arc::new(mog_core::clock::SystemClock::new()),
         relay,
         levels,
+        ptt,
     )?;
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     if let Some(link) = link {
