@@ -1796,7 +1796,13 @@
     "invalid_tool_args",
     "invalid_meta",
     "profile_invalid",
-    "poll_inflight"
+    "poll_inflight",
+    "agent_unknown_mog",
+    "agent_unavailable",
+    "agent_launch_failed",
+    "agent_target_unavailable",
+    "agent_invalid_target",
+    "agent_harness_mismatch"
   ],
   "events": [
     {

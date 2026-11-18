@@ -126,6 +126,13 @@ pub const ERROR_CODES: &[&str] = &[
     "invalid_meta",
     "profile_invalid",
     "poll_inflight",
+    // `agent_*` (#307): the R16 `AgentError::code` values, so the brain sees each one.
+    "agent_unknown_mog",
+    "agent_unavailable",
+    "agent_launch_failed",
+    "agent_target_unavailable",
+    "agent_invalid_target",
+    "agent_harness_mismatch",
 ];
 
 /// The fixed, content-free code of an [`IpcError`] (its serde tag). It never holds the
@@ -175,6 +182,12 @@ pub fn ipc_error_code(e: &IpcError) -> &'static str {
         IpcError::InvalidMeta { .. } => "invalid_meta",
         IpcError::ProfileInvalid { .. } => "profile_invalid",
         IpcError::PollInflight { .. } => "poll_inflight",
+        IpcError::AgentUnknownMog { .. } => "agent_unknown_mog",
+        IpcError::AgentUnavailable { .. } => "agent_unavailable",
+        IpcError::AgentLaunchFailed { .. } => "agent_launch_failed",
+        IpcError::AgentTargetUnavailable { .. } => "agent_target_unavailable",
+        IpcError::AgentInvalidTarget { .. } => "agent_invalid_target",
+        IpcError::AgentHarnessMismatch { .. } => "agent_harness_mismatch",
     }
 }
 

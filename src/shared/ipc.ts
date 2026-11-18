@@ -139,6 +139,17 @@ export interface BrainMessage {
   payload: unknown;
 }
 
+/**
+ * The `agent.status` payload (#307, `mog_core::agent_host::ipc_route::BrainStatusSink`): the
+ * IDs and the session state only, never content. `failed` means the session failed after its
+ * one restart (ARC-F14): the brain routes with the fallback classifier (RTR-15b).
+ */
+export interface AgentStatusPayload {
+  mogId: MogId;
+  agentSessionId: string;
+  state: 'running' | 'restarted' | 'failed';
+}
+
 // ---------- argument types (camelCase, as Rust serializes them) ----------
 
 export type JsonObject = Record<string, unknown>;
@@ -345,6 +356,16 @@ export const IPC_ERROR_CODES = [
   'profile_invalid',
   /** `mcp_call`: a poll is already open for the conversation (ARC-F1, G-07b, #31). */
   'poll_inflight',
+  /**
+   * `agent_*`: the R16 AgentHost codes (#307). `agent_unavailable` tells the brain to route with
+   * the fallback classifier (ARC-F14, RTR-15b).
+   */
+  'agent_unknown_mog',
+  'agent_unavailable',
+  'agent_launch_failed',
+  'agent_target_unavailable',
+  'agent_invalid_target',
+  'agent_harness_mismatch',
 ] as const;
 
 export type IpcErrorCode = (typeof IPC_ERROR_CODES)[number];

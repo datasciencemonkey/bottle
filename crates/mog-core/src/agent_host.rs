@@ -40,10 +40,13 @@
 //! TODO(#111): the AT-42 tool-contract run with each live harness, the first-tool-call latency
 //! (NFR-03d, 2.0 s or less at p95) and "usage rows show the user" (RTR-23) need SP-19 and a live
 //! workspace; the test doubles here do not measure them.
-//! TODO(#307): `mog_core::ipc::handle` routes `agent_start`/`agent_stop`/`agent_send` here.
+//! #307: `mog_core::ipc::handle` lets `agent_start`, `agent_stop` and `agent_send` through, and
+//! [`ipc_route::AgentComponent`] sends them here; [`ipc_route::BrainStatusSink`] emits
+//! `agent.status`.
 
 pub mod adapter;
 pub mod env;
+pub mod ipc_route;
 pub mod model_proxy;
 pub mod runtime;
 
@@ -114,6 +117,17 @@ impl AgentError {
             AgentError::TargetUnavailable => "agent_target_unavailable",
             AgentError::InvalidTarget => "agent_invalid_target",
             AgentError::HarnessMismatch => "agent_harness_mismatch",
+        }
+    }
+}
+
+impl SessionState {
+    /// The wire name in `agent.status`: `running`, `restarted` or `failed`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SessionState::Running => "running",
+            SessionState::Restarted => "restarted",
+            SessionState::Failed => "failed",
         }
     }
 }

@@ -10,8 +10,9 @@
 //! which runs the host actions: `view_emit` (relay to the brain), `brain_subscribe`, the four
 //! `window_*` ops (R11), `hotkeys_set` (R1 settings), `permission_request` (R1, ADR 0039),
 //! `consent_*` (T12 records, ADR 0060), the `capture_*` commands (R2, #425, ADR 0055),
-//! `app_setting_*` (the app-wide settings, #453), `insert_text` (the R11 paste, ADR 0048) and
-//! `mcp_call` (R8 `McpCallComponent`, #467).
+//! `app_setting_*` (the app-wide settings, #453), `insert_text` (the R11 paste, ADR 0048),
+//! `mcp_call` (R8 `McpCallComponent`, #467) and `agent_start`, `agent_stop` and `agent_send`
+//! (the one R16 `SharedAgentHost`, #307).
 //! Every other command stays `not_implemented` until its feature issue wires its component.
 //! A rejection is only `{ "error": "<code>" }`, with a code from `ipc_gateway::ERROR_CODES`
 //! (SEC-03).
@@ -21,7 +22,10 @@
 //! a worker (ADR 0039). `capture_start` and `capture_resume` open the audio device, which can
 //! be slow, so they also run on a worker (ADR 0055). `insert_text` waits for the paste and the
 //! clipboard restore, so it also runs on a worker (ADR 0048). `mcp_call` is a blocking HTTP call
-//! to Genie One MCP, so it also runs on a worker (#467). Every other command runs inline, so
+//! to Genie One MCP, so it also runs on a worker (#467). The `agent_*` commands run on a worker
+//! too (#307): a start can spawn the runtime and wait for the target lookup, a send can wait for
+//! the host lock while another MOG starts, and a stop kills and reaps the runtime. The brain
+//! awaits each call, so their order holds. Every other command runs inline, so
 //! `view_emit` keeps its order and the panic stop never waits.
 //! The last `hotkey:status` item is sticky: a new brain Channel gets it again (ADR 0039).
 //!
@@ -243,6 +247,9 @@ pub struct HostComponents<'a> {
     pub app_settings: Option<&'a dyn GatewayComponents>,
     /// The R11 paste for `insert_text` (#58, ADR 0048): `mog_core::insertion::os_component`.
     pub insert: Option<&'a dyn GatewayComponents>,
+    /// `agent_start`, `agent_stop` and `agent_send` (#307): `agent_host::AgentHostApp`, the one
+    /// R16 `SharedAgentHost` of the process. `None` when it could not start: `host_failed`.
+    pub agent: Option<&'a dyn GatewayComponents>,
 }
 
 fn refused(e: IpcError) -> CoreError {
@@ -300,6 +307,7 @@ impl<'a> HostComponents<'a> {
             capture_ticket: None,
             app_settings: None,
             insert: None,
+            agent: None,
         }
     }
 }
@@ -419,6 +427,12 @@ impl GatewayComponents for HostComponents<'_> {
                 Some(mcp) => mcp.call(command, args),
                 None => Err(host_failed(command)),
             },
+            // #307: R16. The gateway let only the brain through (ARC-4). Each `AgentError`
+            // code crosses as itself (`ERROR_CODES`), so `agent_unavailable` reaches the brain.
+            "agent_start" | "agent_stop" | "agent_send" => self
+                .agent
+                .ok_or_else(|| host_failed(command))?
+                .call(command, args),
             // Each feature issue wires its R1-R17 component here.
             "capture_start" | "capture_stop" | "capture_pause" | "capture_resume"
             | "capture_status" | "capture_stop_all" | "capture_subscribe" => {
@@ -458,8 +472,9 @@ pub fn route(components: HostComponents<'_>, command: &str, args: Value) -> Resu
 /// True for the commands that run on a worker: the R11 ops, which can wait for the main
 /// thread (ADR 0022 decision 6), and `permission_request`, which can wait while the OS prompt
 /// shows (ADR 0039), `capture_start` and `capture_resume`, which open the device (ADR 0055),
-/// `insert_text`, which waits about 0.4 s for the paste and the clipboard restore (ADR 0048), and
-/// `mcp_call`, a blocking HTTP call to Genie One MCP (#467).
+/// `insert_text`, which waits about 0.4 s for the paste and the clipboard restore (ADR 0048),
+/// `mcp_call`, a blocking HTTP call to Genie One MCP (#467), and the `agent_*` commands (#307),
+/// which can spawn, wait for the host lock or reap the runtime.
 pub fn runs_off_main_thread(command: &str) -> bool {
     matches!(
         command,
@@ -472,6 +487,9 @@ pub fn runs_off_main_thread(command: &str) -> bool {
             | "capture_resume"
             | "insert_text"
             | "mcp_call"
+            | "agent_start"
+            | "agent_stop"
+            | "agent_send"
     )
 }
 
@@ -560,6 +578,8 @@ fn route_from<R: Runtime>(
     let app_settings = webview.try_state::<std::sync::Arc<mog_core::app_settings::AppSettings>>();
     // `try_state`: if R8 could not start, `mcp_call` answers `host_failed` (#467).
     let mcp = webview.try_state::<crate::mcp_host::McpHost>();
+    // `try_state`: if the loopback model proxy could not bind, `agent_*` answer `host_failed`.
+    let agent = webview.try_state::<crate::agent_host::AgentHostApp>();
     let components = HostComponents {
         from: label,
         brain: &brain,
@@ -575,6 +595,7 @@ fn route_from<R: Runtime>(
             .as_ref()
             .map(|s| s.inner().as_ref() as &dyn GatewayComponents),
         insert: os_insert(),
+        agent: agent.as_ref().map(|a| a.inner() as &dyn GatewayComponents),
     };
     route(components, command, args)
 }
@@ -625,7 +646,7 @@ pub fn admit(command: &str, capture: Option<&CaptureHost>) -> Option<CaptureTick
 /// because it can wait for the main thread (ADR 0022 decision 6). `permission_request` also
 /// goes to a worker, because the OS prompt can wait for the user (ADR 0039), and so do
 /// `capture_start` and `capture_resume`, whose device open can be slow (ADR 0055), and
-/// `mcp_call`, which waits for Genie One MCP (#467). Every other command runs now, on the
+/// `mcp_call`, which waits for Genie One MCP (#467), and `agent_*` (#307). Every other command runs now, on the
 /// calling thread, so `view_emit` keeps its order.
 pub fn schedule<F: FnOnce() + Send + 'static>(command: &str, job: F) {
     if runs_off_main_thread(command) {
@@ -1093,7 +1114,10 @@ mod tests {
             "lib.rs setup must call agent_host::install"
         );
         let host = production_code(&std::fs::read_to_string(src.join("agent_host.rs")).unwrap());
-        assert!(host.contains("SharedAgentHost::new("), "one SharedAgentHost");
+        assert!(
+            host.contains("SharedAgentHost::new("),
+            "one SharedAgentHost"
+        );
         assert!(host.contains(".manage("), "agent_host::install manages it");
         let ipc = production_code(&std::fs::read_to_string(src.join("ipc.rs")).unwrap());
         assert!(

@@ -3,6 +3,7 @@
 //! The app only hosts windows. Domain logic runs in the hidden `brain` window (ARC-2);
 //! secrets and I/O stay in `mog-core` (section 4.4). The IPC command surface is in `ipc` (#223).
 
+pub mod agent_host;
 pub mod capture_host;
 pub mod consent_host;
 pub mod hotkey_host;
@@ -213,6 +214,9 @@ pub fn run() {
             // R8 for `mcp_call` (#467). If its HTTP client cannot start, the app still runs;
             // `mcp_call` then answers `host_failed`.
             let _ = mcp_host::install(handle);
+            // R16 for `agent_*` (#307): the one shared AgentHost. If its loopback model proxy
+            // cannot bind, the app still runs; `agent_*` then answer `host_failed`.
+            let _ = agent_host::install(handle);
             let host = app.state::<TauriWindowHost<tauri::Wry>>();
             for kind in startup_windows(demo) {
                 // MOG and card windows go through R11, so the cap and the ledger hold.

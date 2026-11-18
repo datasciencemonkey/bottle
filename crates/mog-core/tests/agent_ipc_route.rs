@@ -15,13 +15,15 @@ use mog_core::agent_host::runtime::{
     LaunchSpec, RuntimeConfig, RuntimeEvent, RuntimeEvents, RuntimeLauncher, RuntimeProcess,
 };
 use mog_core::agent_host::{
-    AgentError, AgentHostDeps, AgentStatus, AgentStatusSink, Harness, ModelTargets,
-    RuntimeConfigs, SessionState, SharedAgentHost,
+    AgentError, AgentHostDeps, AgentStatus, AgentStatusSink, Harness, ModelTargets, RuntimeConfigs,
+    SessionState, SharedAgentHost,
 };
 use mog_core::bottle_mcp::{BottleMcpDeps, UnavailableLocalTools, UnavailableRelay};
 use mog_core::error::CoreError;
 use mog_core::ipc::{self, AgentSendArgs, Handled, IpcError};
-use mog_core::ipc_gateway::{hardened_gateway_with, ipc_error_code, IpcGateway, NoLog, ERROR_CODES};
+use mog_core::ipc_gateway::{
+    hardened_gateway_with, ipc_error_code, IpcGateway, NoLog, ERROR_CODES,
+};
 use mog_core::token_broker::StubTokenBroker;
 use serde_json::{json, Value};
 
@@ -220,7 +222,11 @@ fn arc_4_only_the_brain_may_call_the_agent_commands() {
             );
         }
     }
-    assert_eq!(r.host.session_count(), 0, "no view window started a session");
+    assert_eq!(
+        r.host.session_count(),
+        0,
+        "no view window started a session"
+    );
 }
 
 // ---------- the route ----------
@@ -229,7 +235,10 @@ fn arc_4_only_the_brain_may_call_the_agent_commands() {
 fn rtr_21a_agent_start_returns_the_agent_session_id_and_one_runtime_serves_three_mogs() {
     let r = rig();
     let a = start(&r, MOG, "claude").unwrap();
-    let id = a["agentSessionId"].as_str().expect("agentSessionId").to_owned();
+    let id = a["agentSessionId"]
+        .as_str()
+        .expect("agentSessionId")
+        .to_owned();
     assert!(id.starts_with("as-"), "{id}");
     assert_eq!(a, json!({"agentSessionId": id}), "only the session ID");
     // A second start of the same MOG gives the same session.
@@ -271,7 +280,10 @@ fn rtr_22_agent_start_takes_both_harness_kinds_and_the_model() {
 fn rtr_21a_agent_send_delivers_the_turn_and_agent_stop_ends_the_session() {
     let r = rig();
     start(&r, MOG, "claude").unwrap();
-    assert_eq!(call(&r, "brain", "agent_send", turn_args(MOG)), Ok(json!({})));
+    assert_eq!(
+        call(&r, "brain", "agent_send", turn_args(MOG)),
+        Ok(json!({}))
+    );
     let turns = frames_of(&r.launcher.proc(0), "turn");
     assert_eq!(turns.len(), 1);
     assert_eq!(turns[0]["turn"]["question"], QUESTION);
@@ -335,7 +347,10 @@ fn arc_f14_rtr_15b_a_failed_session_answers_agent_unavailable_to_the_brain() {
         },
     );
     assert_eq!(r.host.session_state(MOG), Some(SessionState::Restarted));
-    assert_eq!(call(&r, "brain", "agent_send", turn_args(MOG)), Ok(json!({})));
+    assert_eq!(
+        call(&r, "brain", "agent_send", turn_args(MOG)),
+        Ok(json!({}))
+    );
     // The second failure: the brain gets `agent_unavailable` and routes with the fallback
     // classifier (RTR-15b).
     r.launcher

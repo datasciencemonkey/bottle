@@ -27,8 +27,8 @@ The issue does not say how the card shows the preview controls, what [Edit] does
 
 ## Consequences
 
-- The #141 approval path (ADR 0085) is verified on both sides of one fixture, `crates/mog-core/tests/fixtures/preview_gate_agent_send.json`. The TS test checks that the gate's `agent_send` after the preview is exactly that file. The Rust test `preview_gate_handoff.rs` passes the same file through the IPC argument check and `AgentHost::send`, then checks that its question is the one `OutboundApprovals` entry that the Genie proxy takes for `genie_ask`, once. With no `agent_send` (before 1.5 s, after a cancel, no chip click) nothing is approved.
-- TODO(#307): `ipc::handle` does not route `agent_send` to `AgentHost::send` yet (it answers `NotImplemented` after the argument check). The Rust test does that step by hand.
+- The #141 approval path (ADR 0085) is verified on both sides of one fixture, `crates/mog-core/tests/fixtures/preview_gate_agent_send.json`. The TS test checks that the gate's `agent_send` after the preview is exactly that file. The Rust test `preview_gate_handoff.rs` passes the same file through the hardened gateway to `AgentHost::send`, then checks that its question is the one `OutboundApprovals` entry that the Genie proxy takes for `genie_ask`, once. With no `agent_send` (before 1.5 s, after a cancel, no chip click) nothing is approved.
+- #307: the hardened gateway routes `agent_send` to `AgentHost::send` through `agent_host::ipc_route::AgentComponent`. The Rust test sends the fixture through that route.
 - The IPC test (`src/brain/ask-gate-wiring.test.ts`) shows no `agent_send` and no `mcp_call` before 1.5 s, after each cancel, or without a chip click.
 - `startBrain` makes the card stack of each MOG on first use, in the same block as #498 (PR #504).
 - TODO(#374): no card-hide signal reaches the brain yet, so `startBrain` does not call `cardClosed`. Until then a closed MOG is caught by the `isOpen` check when the timer ends.
