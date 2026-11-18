@@ -189,6 +189,7 @@ fn at_34_g_10b_a_429_without_retry_after_backs_off_an_ask_only() {
     });
     let tg = tags(MOG);
     // An ask tries again with full jitter: start 2 s, factor 2, 5 tries or less (G-BACKOFF).
+    // The countdown goes when each retry starts (Appendix E chip 8).
     let asked = t.call_tool(McpCall::new(
         PROFILE,
         "genie_ask",
@@ -202,8 +203,11 @@ fn at_34_g_10b_a_429_without_retry_after_backs_off_an_ask_only() {
         waits,
         [
             BusyState::Retrying { wait: secs(1) },
+            BusyState::Clear,
             BusyState::Retrying { wait: secs(2) },
+            BusyState::Clear,
             BusyState::Retrying { wait: secs(4) },
+            BusyState::Clear,
             BusyState::Retrying { wait: secs(8) },
             BusyState::Clear,
         ]

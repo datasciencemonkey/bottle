@@ -309,12 +309,12 @@ fn g_10b_an_ask_429_without_a_header_backs_off_by_g_backoff_for_5_tries() {
     let r = rig(&s);
     assert_eq!(code(ask(&r)), "rate_limited");
     assert_eq!(s.count("tools/call"), 5, "5 tries or less");
-    // Full jitter at 0.5 of the caps 2, 4, 8 and 16 s.
-    let mut want: Vec<BusyState> = [1, 2, 4, 8]
+    // Full jitter at 0.5 of the caps 2, 4, 8 and 16 s. The countdown goes when each retry
+    // starts (Appendix E chip 8).
+    let want: Vec<BusyState> = [1, 2, 4, 8]
         .into_iter()
-        .map(|s| BusyState::Retrying { wait: secs(s) })
+        .flat_map(|s| [BusyState::Retrying { wait: secs(s) }, BusyState::Clear])
         .collect();
-    want.push(BusyState::Clear);
     assert_eq!(r.seen.states(), want);
 }
 

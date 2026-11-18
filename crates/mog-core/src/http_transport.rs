@@ -7,8 +7,10 @@ use crate::ipc::JsonObject;
 use crate::request_identity::{CallKind, RequestDecorator};
 use crate::types::Tags;
 
+pub mod backoff;
 pub mod host_policy;
 pub mod rate_bucket;
+pub mod rate_limit;
 mod reqwest_transport;
 pub mod routes;
 
@@ -113,7 +115,7 @@ impl HttpTransport for StubHttpTransport {
         _body: Option<&serde_json::Value>,
         _tags: &Tags,
     ) -> CoreResult<serde_json::Value> {
-        // TODO(#207): host allowlist, redirect and non-JSON page rules (rate bucket is #138).
+        // TODO(#207): host allowlist, redirect and non-JSON page rules.
         Err(CoreError::NotImplemented { component: ID })
     }
 
