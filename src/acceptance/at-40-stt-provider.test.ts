@@ -3,12 +3,12 @@
  * The scorer and the device run are `crates/mog-core/tests/at_40_stt_bench.rs`
  * (`mog_core::stt_bench`, ADR 0034).
  *
- * SttProvider (#52) and the Databricks ASR client with its guards (#49) are not built, so these
- * tests stay `it.skip` with the feature issue. The release record (CAP-65a, CAP-65b) is #53.
+ * SttProvider (#52) runs on the IPC double. The Databricks ASR client with its guards (#49) is
+ * not built, so its tests stay `it.skip` with the feature issue. The release record (CAP-65a, CAP-65b) is #53.
  * A skipped test never counts as a pass.
  */
 import type { SegmentRef, Tags } from '../shared/interfaces';
-import { createSttProvider } from '../brain/components/stt-provider';
+import { SttFailure, createSttProvider, ipcSttConfig } from '../brain/components/stt-provider';
 import { core } from '../brain/test-core';
 import { argsOf, callsTo } from '../test-support/cloud-calls';
 
@@ -30,15 +30,37 @@ const sttProviders = () =>
     .filter(([cmd]) => cmd === 'stt_transcribe')
     .map(([, a]) => (argsOf(a) as { provider: string }).provider);
 
+const ASR_OPT_IN = { asr: async () => ({ profile: 'user-profile' }) };
+
+/** The core double: `policy_get` gives `policy`; `stt_transcribe` answers for its provider. */
+function useStt(policy: unknown = {}): void {
+  core.invoke.mockImplementation(async (cmd: string, args?: unknown) => {
+    if (cmd === 'policy_get') return policy;
+    const a = argsOf(args) as { segmentId?: string; provider?: string };
+    return {
+      segmentId: a.segmentId,
+      text: 'text',
+      raw: 'text',
+      provider: a.provider,
+      model: 'm',
+      runtime: 'r',
+      latencyMs: 300,
+    };
+  });
+}
+
 describe('AT-40 SttProvider rules', () => {
   beforeEach(() => core.reset());
 
-  it.skip('[AT-40] [CAP-47a] [CAP-47b] SttProvider offers local Parakeet and Databricks ASR, and Whisper only with an admin config TODO(#52)', async () => {
+  it('[AT-40] [CAP-47a] [CAP-47b] SttProvider offers local Parakeet and Databricks ASR, and Whisper only with an admin config', async () => {
+    useStt();
     const stt = createSttProvider();
     expect(stt.activeProvider()).toBe('local_parakeet');
     await stt.transcribe(seg(3_000), tags);
-    // TODO(#52): select dbx_gemini after a passed probe and transcribe again; no config has a
-    // Whisper endpoint, so no call names dbx_whisper.
+    // Databricks ASR after a passed probe and the user's opt-in (#51 fills the opt-in).
+    const asr = createSttProvider({ config: ipcSttConfig(ASR_OPT_IN) });
+    await asr.transcribe(seg(3_000), tags);
+    // No config has a Whisper endpoint, so no call names dbx_whisper.
     expect(sttProviders()).toEqual(['local_parakeet', 'dbx_gemini']);
     expect(sttProviders()).not.toContain('dbx_whisper');
   });
@@ -71,13 +93,30 @@ describe('AT-40 SttProvider rules', () => {
     expect(t.text).toBe('');
   });
 
-  it.skip('[AT-40] [CAP-64a] [CAP-64b] a language Parakeet does not cover goes to Databricks ASR, or the MOG says it is not available TODO(#52)', async () => {
-    // TODO(#52): a Japanese clip with Databricks ASR permitted goes to dbx_gemini (CAP-64a).
-    // With local_only it gives the text "Transcription of this language is not available on this
-    // device." and no empty transcript (CAP-64b).
-    const t = await createSttProvider().transcribe(seg(3_000), tags);
+  it('[AT-40] [CAP-64a] [CAP-64b] a language Parakeet does not cover goes to Databricks ASR, or the MOG says it is not available', async () => {
+    // A Japanese clip with Databricks ASR permitted goes to dbx_gemini (CAP-64a).
+    useStt();
+    const t = await createSttProvider({ config: ipcSttConfig(ASR_OPT_IN) }).transcribe(
+      seg(3_000),
+      tags,
+      { language: 'ja' },
+    );
     expect(t.lang).toBe('ja');
     expect(t.provider).toBe('dbx_gemini');
+    // With local_only it gives the fixed text and no empty transcript (CAP-64b).
+    core.reset();
+    useStt({ SttPolicy: 'local_only' });
+    const failed = createSttProvider({ config: ipcSttConfig(ASR_OPT_IN) }).transcribe(
+      seg(3_000),
+      tags,
+      { language: 'ja' },
+    );
+    await expect(failed).rejects.toBeInstanceOf(SttFailure);
+    await expect(failed).rejects.toMatchObject({
+      kind: 'language_not_available',
+      userText: 'Transcription of this language is not available on this device.',
+    });
+    expect(sttProviders()).toEqual([]);
   });
 
   it.skip('[AT-40] [CAP-65a] [CAP-65b] the release record has a current benchmark report, and only a passing provider can be the default TODO(#53)', () => {
