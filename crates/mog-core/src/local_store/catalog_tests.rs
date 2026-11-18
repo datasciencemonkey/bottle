@@ -630,3 +630,121 @@ fn mem_39a_a_test_double_replaces_the_store_behind_mem_local_exec() {
     }
     assert_eq!(double.0.lock().unwrap().len(), 1);
 }
+
+// ---- #431: the consent statements of #63 are a device-wide entry set of the catalog -----------
+
+const CONSENT_IDS: [&str; 6] = [
+    "consent.session.insert",
+    "consent.session.get",
+    "consent.notice.insert",
+    "consent.notice.latest",
+    "consent.list",
+    "consent.purge",
+];
+
+#[test]
+fn sec_32a_mem_01_consent_statements_are_in_the_catalog_with_their_scope() {
+    let ids: Vec<&str> = catalog::CONSENT.iter().map(|c| c.stmt.id).collect();
+    assert_eq!(ids, CONSENT_IDS);
+    let others: BTreeSet<&str> = STATEMENTS
+        .iter()
+        .map(|s| s.id)
+        .chain(catalog::GROUPS.iter().map(|g| g.id))
+        .collect();
+    for c in catalog::CONSENT {
+        let st = &c.stmt;
+        assert!(!others.contains(st.id), "{} is also a mem entry", st.id);
+        assert_eq!(catalog::find_consent(st.id).map(|f| f.stmt.id), Some(st.id));
+        // Rust only: T12 in the brain reaches the records through consent_* (#430), never SQL.
+        assert_eq!(st.access, Access::Core, "{}", st.id);
+        match c.scope {
+            catalog::Scope::Mog => {
+                assert_eq!(require_mog_id_filter(st.sql), Ok(()), "{}", st.id);
+                let mog = st.params.iter().find(|p| p.name == "mogId");
+                assert!(
+                    mog.is_some_and(|p| p.required && p.ty == ParamType::Uuid),
+                    "{}",
+                    st.id
+                );
+            }
+            catalog::Scope::DeviceWide(why) => {
+                assert!(!why.is_empty(), "{} needs a reason", st.id)
+            }
+        }
+        // Every consent statement, guarded or not, touches the consent_record table only.
+        let lower = st.sql.to_ascii_lowercase();
+        for t in [
+            "mog ",
+            "session ",
+            "utterance",
+            "genie_exchange",
+            "memory_item",
+            "sync_state",
+            "forget_log",
+            "outbox",
+            "kv ",
+        ] {
+            assert!(
+                !lower.contains(&format!("from {t}"))
+                    && !lower.contains(&format!("into {t}"))
+                    && !lower.contains(&format!("join {t}")),
+                "{} touches {t}",
+                st.id
+            );
+        }
+        assert!(lower.contains("consent_record"), "{}", st.id);
+        assert!(!lower.contains("drop "), "{}", st.id);
+    }
+    // The session statements filter by mog_id; the notice, the list and the purge cannot.
+    let mog: Vec<&str> = catalog::CONSENT
+        .iter()
+        .filter(|c| c.scope == catalog::Scope::Mog)
+        .map(|c| c.stmt.id)
+        .collect();
+    assert_eq!(mog, ["consent.session.insert", "consent.session.get"]);
+    assert!(catalog::find_consent("consent.nope").is_none());
+}
+
+#[test]
+fn sec_32a_mem_34a_consent_params_are_declared_bound_and_typed() {
+    for c in catalog::CONSENT {
+        let st = &c.stmt;
+        let declared: BTreeSet<String> = st.params.iter().map(|p| p.name.to_owned()).collect();
+        assert_eq!(declared.len(), st.params.len(), "{}: duplicate param", st.id);
+        assert_eq!(sql_params(st.sql), declared, "{}", st.id);
+        assert!(!st.sql.contains('?') && !st.sql.contains('@') && !st.sql.contains('$'));
+        assert!(!st.sql.trim_end().trim_end_matches(';').contains(';'), "{}", st.id);
+        let starts = st.sql.trim_start().to_ascii_lowercase();
+        assert_eq!(starts.starts_with("select"), st.kind == Kind::Query, "{}", st.id);
+    }
+}
+
+#[test]
+fn sec_32a_mem_34a_consent_statements_prepare_on_the_migrated_schema() {
+    let t = TempDir::new("431-prepare");
+    let s = open(&t);
+    for c in catalog::CONSENT {
+        s.with_conn(|conn| conn.prepare(c.stmt.sql).map(|_| ()))
+            .unwrap_or_else(|e| panic!("{}: {e:?}", c.stmt.id));
+    }
+}
+
+#[test]
+fn sec_32a_mem_34a_exec_and_mem_local_exec_never_run_a_consent_statement() {
+    let t = TempDir::new("431-refuse");
+    let s = open(&t);
+    seed_mog(&s, MOG_A);
+    for id in CONSENT_IDS {
+        let params = json!({"mogId": MOG_A, "cutoff": i64::MAX});
+        assert!(
+            matches!(
+                s.exec(id, params.clone()),
+                Err(CoreError::UnknownStatement { .. })
+            ),
+            "{id}"
+        );
+        let args = json!({"stmtId": id, "params": params});
+        assert_eq!(mem_local_exec(&s, args), invalid_args(), "{id}");
+        assert_eq!(catalog::access_of(id), None, "{id}");
+    }
+}
