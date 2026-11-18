@@ -3,7 +3,9 @@ import { argsOf, callsTo, cloudCalls } from '../../test-support/cloud-calls';
 import { core } from '../test-core';
 import { DEFAULT_ASR_MODEL } from './model-access';
 import {
+  CLOUD_STEP_DEADLINE_MS,
   COULD_NOT_TRANSCRIBE,
+  LOCAL_STEP_DEADLINE_MS,
   HEDGE_MS,
   LANGUAGE_NOT_AVAILABLE,
   RETRY_WINDOW_MS,
@@ -413,6 +415,51 @@ describe('T4 SttProvider (#52)', () => {
       const t = await p;
       expect([t.provider, t.text]).toEqual(['local_parakeet', '']);
       expect(providers()).toEqual(['dbx_gemini', 'local_parakeet']);
+    });
+
+    it('[CAP-60a] [CAP-64b] an ASR call that never replies fails at its deadline: an empty local result is used', async () => {
+      vi.useFakeTimers();
+      useCore({
+        plans: { dbx_gemini: { delayMs: 3_600_000 }, local_parakeet: { delayMs: 0, text: '' } },
+      });
+      let settled = false;
+      const p = createSttProvider({ config: ipcSttConfig(ASR_ON) })
+        .transcribe(seg, tags)
+        .finally(() => (settled = true));
+      await vi.advanceTimersByTimeAsync(CLOUD_STEP_DEADLINE_MS - 1);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      const t = await p;
+      expect([t.provider, t.text]).toEqual(['local_parakeet', '']);
+    });
+
+    it('[CAP-60a] an ASR call that never replies and a failed local decode go on to Whisper, then the failure', async () => {
+      vi.useFakeTimers();
+      useCore({
+        plans: {
+          dbx_gemini: { delayMs: 3_600_000 },
+          local_parakeet: { fail: true },
+          dbx_whisper: { delayMs: 3_600_000 },
+        },
+      });
+      const p = failureOf(
+        createSttProvider({ config: ipcSttConfig({ ...ASR_ON, ...WHISPER_ON }) }).transcribe(
+          seg,
+          tags,
+        ),
+      );
+      await vi.advanceTimersByTimeAsync(2 * CLOUD_STEP_DEADLINE_MS);
+      const f = await p;
+      expect(f.kind).toBe('could_not_transcribe');
+      expect(providers()).toEqual(['dbx_gemini', 'local_parakeet', 'dbx_whisper']);
+    });
+
+    it('[CAP-60a] a local decode that never replies ends in "Could not transcribe. Retry"', async () => {
+      vi.useFakeTimers();
+      useCore({ plans: { local_parakeet: { delayMs: 3_600_000 } } });
+      const p = failureOf(createSttProvider().transcribe(seg, tags));
+      await vi.advanceTimersByTimeAsync(LOCAL_STEP_DEADLINE_MS);
+      expect((await p).kind).toBe('could_not_transcribe');
     });
 
     it('[CAP-59a] [CAP-60a] a cloud failure before 1.2 s starts the local decode at once', async () => {

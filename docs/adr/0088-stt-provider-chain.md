@@ -45,7 +45,9 @@ leave these points open:
 5. **Hedge** (CAP-59a, CAP-59b). The ASR call starts at once. If it has not replied in 1.2 s, the
    local decode of the same segment starts. A cloud failure before 1.2 s starts the local decode
    at once. The first valid result wins; a late reply changes nothing. An empty local result ("no speech") wins only when the cloud call fails, so it never hides cloud text. The host cannot cancel a
-   call, so the loser's result is dropped.
+   call, so the loser's result is dropped. Each step has a backstop deadline (cloud 8 s, local
+   15 s): a step with no reply by then fails and the chain goes on, so a hung call never stops the
+   chain. The ASR client sets its own request timeout (TODO(#49)).
 6. **Languages** (CAP-64a, CAP-64b, D59). Parakeet TDT 0.6B v3 covers 25 languages: bg, hr, cs,
    da, nl, en, et, fi, fr, de, el, hu, it, lv, lt, mt, pl, pt, ro, sk, sl, es, sv, ru, uk. T4
    learns the language from a caller hint (`TranscribeOptions.language`) or from

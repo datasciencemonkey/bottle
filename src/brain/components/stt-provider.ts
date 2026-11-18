@@ -36,6 +36,15 @@ type Provider = Transcript['provider'];
 /** CAP-59a: the local decode starts when no cloud reply came in this time. */
 export const HEDGE_MS = 1_200;
 
+/**
+ * A cloud step (ASR or Whisper) with no reply in this time fails, so the chain goes on.
+ * TODO(#49): the ASR client sets its own request timeout; this is the T4 backstop.
+ */
+export const CLOUD_STEP_DEADLINE_MS = 8_000;
+
+/** A local decode with no reply in this time fails, so the chain ends with a message. */
+export const LOCAL_STEP_DEADLINE_MS = 15_000;
+
 /** 8.3: Retry works this long after "Could not transcribe" (the audio stays in RAM). */
 export const RETRY_WINDOW_MS = 60_000;
 
@@ -328,10 +337,23 @@ class ChainProvider implements SttProvider {
       args.model = target.model;
     }
     if (lang !== undefined && provider !== 'local_parakeet') args.language = lang;
+    const deadline =
+      provider === 'local_parakeet' ? LOCAL_STEP_DEADLINE_MS : CLOUD_STEP_DEADLINE_MS;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<undefined>((resolve) => {
+      timer = setTimeout(() => resolve(undefined), deadline);
+    });
     try {
-      return validReply(await this.invoke(args), seg, provider);
+      const reply = this.invoke(args).then(
+        (t) => validReply(t, seg, provider),
+        () => undefined,
+      );
+      // A step with no reply by its deadline fails; a late reply changes nothing.
+      return await Promise.race([reply, timeout]);
     } catch {
       return undefined;
+    } finally {
+      clearTimeout(timer);
     }
   }
 

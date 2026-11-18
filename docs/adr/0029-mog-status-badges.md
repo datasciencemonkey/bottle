@@ -27,7 +27,7 @@ Issue #50 adds the MOG badges: the hover badge "<profile> · <backend label>" (M
 
 ## Inputs not built yet
 
-`BadgeSources` is typed now and filled with fixtures in tests: profile and host `TODO(#17)`, backend from `MogManager.list()` (`MogSummary.binding.backend`, #26) with the wiring `TODO(#374)`, the backend name `TODO(#156, #158)`, STT provider `TODO(#52)`, hop target and scope `TODO(#164)`, lifecycle `TODO(#98)`, sync `TODO(#195)`. The brain does not send `mog:view_state` with badges yet; that wiring comes with these producers and #285.
+`BadgeSources` is typed now and filled with fixtures in tests: profile and host `TODO(#17)`, backend from `MogManager.list()` (`MogSummary.binding.backend`, #26) with the wiring `TODO(#374)`, the backend name `TODO(#156, #158)`, STT provider from T4 `sttUse(mogId)` (#52) with the wiring `TODO(#374)`, hop target and scope `TODO(#164)`, lifecycle `TODO(#98)`, sync `TODO(#195)`. The brain does not send `mog:view_state` with badges yet; that wiring comes with these producers and #285.
 
 ## Notes
 

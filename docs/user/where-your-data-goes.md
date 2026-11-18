@@ -33,7 +33,7 @@ The copy comes from one file: `src/views/hub/disclosures.ts`. If you change the 
 - The STT badge on each MOG shows which one is on.
 - If your admin sets local-only speech-to-text, no audio leaves this computer, also when local speech-to-text fails.
 - The local model knows 25 European languages. For another language, Bottle uses Databricks speech-to-text only if it is on. If it is off, the MOG shows "Transcription of this language is not available on this device."
-- If no speech-to-text gives a result, the MOG shows "Could not transcribe. Retry".
+- If no speech-to-text gives a result, the MOG shows "Could not transcribe. Retry". The Retry button comes in a later version; until then, press the talk key again.
 
 ## The local speech model
 
