@@ -383,7 +383,7 @@ Bottle runs on one device. Only the Rust core holds credentials and talks to the
 | `audit_append` | `{kind, mogId, opId, sizes}` (content-free) | `{}` | brain |
 | `telemetry_span` | content-free span | `{}` (dropped if `OtlpTable` is unset) | brain |
 
-**Events (Rust → TS):** `hotkey.ptt {mogId, phase: down|up|cancel|double_tap}`, `hotkey.panic`, `capture.state`, `capture.segment`, Channel `onLevel` (~30 Hz), Channel `onPartial`, `session.stop_signal {sessionId, reason, prompt}`, `auth.status`, `net.status`, `mem.remote_status` (v1), `agent.tool_call {mogId, callId, tool, args}`, `agent.status`. **Brain → view:** `mog.view_state`, `card.update`. **View → brain:** the `view_emit` command, relayed as `view.input`. `view_emit` never carries brain-to-view updates.
+**Events (Rust → TS):** `hotkey.ptt {mogId, phase: down|up|cancel|double_tap, shift?: true}` (`shift` only on `down` with Shift held, RTR-17a), `hotkey.panic`, `capture.state`, `capture.segment`, Channel `onLevel` (~30 Hz), Channel `onPartial`, `session.stop_signal {sessionId, reason, prompt}`, `auth.status`, `net.status`, `mem.remote_status` (v1), `agent.tool_call {mogId, callId, tool, args}`, `agent.status`. **Brain → view:** `mog.view_state`, `card.update`. **View → brain:** the `view_emit` command, relayed as `view.input`. `view_emit` never carries brain-to-view updates.
 
 **Remote statement catalog (v1, Lakebase sync only):** `mem.migrate`, `mem.recall.hybrid`, `mem.item.upsert`, `mem.session.upsert`, `mem.exchange.upsert`, `mem.utterance.upsert` (off by default), `mem.consent.upsert` (only with `ConsentRecordUpload`), `mem.forget`, `mem.pull`, `mem.retention.purge`, `mem.export.page`.
 

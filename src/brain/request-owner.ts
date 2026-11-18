@@ -6,8 +6,9 @@
  * latched. That MOG stays the owner until `release`, also when the user interacts with another
  * MOG and the talk-key target moves. The request gets the owner's `mogId` and tags, and the
  * answer goes to the owner's card only.
- * TODO(#424, #112): the utterance route (`onUtterance` of the #14 capture lifecycle, #424) and
- * the agent runtime call `begin`, `stampRequest`, `deliverAnswer` and `release`.
+ * The utterance hook (`utterance-wiring.ts`, #59) calls `begin` and `release`.
+ * TODO(#142, #112): T3 and the agent runtime call `stampRequest`, `deliverAnswer` and `release`
+ * for a preview or a chip.
  */
 import type { AskRequest, MogId } from '../shared/interfaces';
 import type { CardUpdate } from '../shared/ipc';

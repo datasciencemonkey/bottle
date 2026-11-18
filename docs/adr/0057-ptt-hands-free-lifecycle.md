@@ -29,5 +29,5 @@ Issue #14 connects the talk key to R2 CaptureService. R2 `CaptureCore` (#4) has 
 - `TODO(#433)`: `capture_stop` needs an `end` argument for `release`, `discard`, `tap` and `escape`, and `MogViewState` needs a timer field. Until then the IPC adapter sends a plain stop.
 - `TODO(#434)`: the macOS tap does not report Esc, and the host does not stop hands-free on the Windows Esc yet.
 - `TODO(#116)`: the Silero VAD calls `voice_activity`. `TODO(#46)`: the STT step.
-- `TODO(#424)`: `routeUtterance` plugs in at `onUtterance` in `startBrain`.
+- `routeUtterance` plugs in at `onUtterance` in `startBrain` through `createUtteranceHandler` (`src/brain/utterance-wiring.ts`, #59, ADR 0053).
 - Handy (`managers/audio.rs`, `stop_recording`, extra recording buffer) is the pattern for the post-roll. No Handy code is copied.

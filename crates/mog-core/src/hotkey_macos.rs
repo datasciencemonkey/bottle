@@ -167,10 +167,39 @@ pub fn physical_from_hid(talk_key_down: bool, flags: u64, space_down: bool) -> P
     }
 }
 
+/// The HIToolbox virtual key codes of Left-Shift (`kVK_Shift`) and Right-Shift
+/// (`kVK_RightShift`). RTR-17a reads their HID key state, as CAP-45 does for the talk key.
+pub const SHIFT_KEY_CODES: (u16, u16) = (56, 60);
+
+/// RTR-17a: whether a Shift key other than the talk key is down, from the HID key state of
+/// Left-Shift and Right-Shift (ADR 0053).
+pub fn shift_held_from_keys(left_down: bool, right_down: bool, talk: TalkKey) -> bool {
+    left_down || (right_down && talk != TalkKey::RightShift)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::hotkey_core::{HotkeyOutput, PttMachine, PttPhase};
+
+    #[test]
+    fn rtr_17a_shift_from_key_state_ignores_the_talk_key_shift() {
+        assert!(shift_held_from_keys(true, false, TalkKey::RightOption));
+        assert!(shift_held_from_keys(false, true, TalkKey::RightOption));
+        assert!(!shift_held_from_keys(false, false, TalkKey::RightOption));
+        // Right-Shift is the talk key: only Left-Shift counts.
+        assert!(!shift_held_from_keys(false, true, TalkKey::RightShift));
+        assert!(shift_held_from_keys(true, true, TalkKey::RightShift));
+        assert!(!shift_held_from_keys(false, false, TalkKey::RightControl));
+    }
+
+    #[test]
+    fn rtr_17a_shift_codes_are_the_hitoolbox_shift_keys() {
+        // kVK_Shift = 0x38, kVK_RightShift = 0x3C (HIToolbox Events.h). Right-Shift is also the
+        // code of the Right-Shift talk key.
+        assert_eq!(SHIFT_KEY_CODES, (0x38, 0x3C));
+        assert_eq!(talk_key_code(TalkKey::RightShift).0, SHIFT_KEY_CODES.1);
+    }
 
     #[test]
     fn cap_35a_at_30_the_tap_is_listen_only() {
@@ -354,7 +383,7 @@ mod tests {
 }
 
 #[cfg(target_os = "macos")]
-pub use sys::{run_main_loop, MacHotkeyService, MacPermissions, MacProbe};
+pub use sys::{run_main_loop, shift_held, MacHotkeyService, MacPermissions, MacProbe};
 
 /// The macOS OS calls. Raw FFI to system frameworks only, no new crates (ADR 0011).
 #[cfg(target_os = "macos")]
@@ -555,6 +584,21 @@ mod sys {
 
     fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
         m.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// RTR-17a: whether a Shift key other than `talk` is down now (HID key state, any thread).
+    /// It reads the key state of each Shift key, as CAP-45 does for the talk key, because a
+    /// source-state flags read may not carry the device-dependent bits.
+    pub fn shift_held(talk: TalkKey) -> bool {
+        let (left, right) = super::SHIFT_KEY_CODES;
+        // SAFETY: reads of the HID key state; no arguments to keep alive.
+        let (left, right) = unsafe {
+            (
+                CGEventSourceKeyState(CG_EVENT_SOURCE_STATE_HID, left),
+                CGEventSourceKeyState(CG_EVENT_SOURCE_STATE_HID, right),
+            )
+        };
+        super::shift_held_from_keys(left, right, talk)
     }
 
     /// Run the Carbon application event loop on the main thread. Carbon sends the chord

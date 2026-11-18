@@ -7,10 +7,11 @@
  * The router step ships (#57), so its part of RTR-01b and RTR-01c runs here with a model reply
  * from the IPC double: a dictation decision stays dictation for PTT and hands-free, and the step
  * calls only the router model, never the agent, Genie or `insert_text`. Whether a real model
- * gives `dictation` for plain sentences is the live router golden set (#56, AT-06). The dictation
- * route to insertion (#59) and the dictation card with Copy and the "Inserted" pill (#60) are not
- * built, so those tests stay `it.skip` with the feature issue. The `insert_text` contract
- * (MOG-06b) runs in `crates/mog-core/tests/at_43_dictation.rs`, the paste itself is #58, and the
+ * gives `dictation` for plain sentences is the live router golden set (#56, AT-06). The route to
+ * insertion and the Shift-forced ask route (#59) run through `routeUtterance`. The dictation card
+ * with Copy and the "Inserted" pill (#60) are not built, so those tests stay `it.skip` with the
+ * feature issue. The `insert_text` contract (MOG-06b) and the paste (#58) run in
+ * `crates/mog-core/tests/at_43_dictation.rs`, and the
  * latency row NFR-01d is the #171 benchmark (`crates/mog-core/tests/latency_bench.rs`). The four
  * insertion targets are a person's step (docs/tests/AT-DICTATION-STT-OFFLINE.md).
  */
@@ -18,6 +19,7 @@ import type { CaptureMode } from '../shared/interfaces';
 import { createRouterContextGate } from '../brain/components/router-context-gate';
 import type { RouterInput } from '../brain/components/router-step';
 import { core } from '../brain/test-core';
+import { ipcUtteranceDeps, routeUtterance, type Utterance } from '../brain/utterance-route';
 import { argsOf, callsTo } from '../test-support/cloud-calls';
 import { chatCompletion, routerDecision } from '../test-support/model-invoke';
 
@@ -35,6 +37,13 @@ const input = (captureMode: CaptureMode): RouterInput => ({
   profiles: [{ name: 'home', host: 'https://home.example.test', aliases: [] }],
   currentTarget: 'home',
 });
+const utterance = (forceAsk: boolean): Utterance => ({
+  mogId: MOG,
+  text: SENTENCE,
+  forceAsk,
+  insertionOn: true,
+  input: input('ptt'),
+});
 const dictationReply = () =>
   core.invoke.mockImplementation(async (cmd: string) =>
     cmd === 'model_invoke'
@@ -48,7 +57,9 @@ const dictationReply = () =>
             }),
           ),
         )
-      : {},
+      : cmd === 'insert_text'
+        ? { result: 'inserted' }
+        : {},
   );
 
 describe('AT-43 UC1 dictation into the active app', () => {
@@ -74,27 +85,26 @@ describe('AT-43 UC1 dictation into the active app', () => {
     ).toEqual([]);
   });
 
-  it.skip('[AT-43] [RTR-01b] [RTR-01c] a dictation ends at insert_text with no agent turn and no Genie call TODO(#59)', async () => {
+  it('[AT-43] [RTR-01b] [RTR-01c] a dictation ends at insert_text with no agent turn and no Genie call', async () => {
     dictationReply();
-    const d = await createRouterContextGate().route(SENTENCE, MOG, input('ptt'));
-    expect(d.intent).toBe('dictation');
-    // TODO(#59): run the UC1 flow from key-up with this decision.
-    expect(callsTo(core.invoke.mock.calls, ['insert_text'])).toEqual(['insert_text']);
-    expect(
-      callsTo(core.invoke.mock.calls, [
-        'agent_start',
-        'agent_send',
-        'agent_tool_result',
-        'mcp_call',
-      ]),
-    ).toEqual([]);
+    const r = await routeUtterance(utterance(false), ipcUtteranceDeps());
+    expect(r.route).toBe('inserted');
+    const log = core.invoke.mock.calls;
+    expect(log.map(([cmd]) => cmd)).toEqual(['model_invoke', 'insert_text']);
+    expect(argsOf(log[1]?.[1])).toEqual({ mogId: MOG, text: SENTENCE });
+    expect(callsTo(log, ['agent_start', 'agent_send', 'agent_tool_result', 'mcp_call'])).toEqual(
+      [],
+    );
   });
 
-  it.skip('[AT-43] [RTR-17a] Shift held with the talk key forces the ask route TODO(#59)', () => {
-    // TODO(#59): the same plain sentence with Shift held goes to the ask route (preview chip),
-    // not to insert_text; the forced route skips the intent gate only.
+  it('[AT-43] [RTR-17a] Shift held with the talk key forces the ask route', async () => {
+    dictationReply();
+    const r = await routeUtterance(utterance(true), ipcUtteranceDeps());
+    // The same plain sentence goes to the ask route (the preview), not to insert_text.
+    expect(r).toMatchObject({ route: 'preview', forced: true, previewMs: 1500 });
     expect(callsTo(core.invoke.mock.calls, ['insert_text'])).toEqual([]);
-    expect.unreachable('TODO(#59): the Shift-forced route is not built');
+    // The preview sends nothing by itself (B1): no agent turn, no Genie call yet.
+    expect(callsTo(core.invoke.mock.calls, ['agent_start', 'agent_send', 'mcp_call'])).toEqual([]);
   });
 
   it.skip('[AT-43] [MOG-06d] a failed insertion shows the cleaned text, Copy and the reason TODO(#60)', () => {
