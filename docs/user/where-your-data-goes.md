@@ -15,7 +15,8 @@ The copy comes from one file: `src/views/hub/disclosures.ts`. If you change the 
 - For an answer from a workspace that is not your home workspace, Bottle keeps only the link and the full answer.
 - Bottle does not delete answers by age. They stay until you use Forget or Settings → Wipe (older than 30 days, older than 90 days, or everything).
 - Text for cleanup, routing, the memory writer and embeddings goes to your home workspace, as the next sections say.
-- Telemetry is off unless your admin turns it on.
+- Telemetry is off unless your admin turns it on. Telemetry holds only fixed names, times and counts, never your words.
+- Logs hold no transcript, question or answer, unless you and your admin both turn on content logging.
 - Databricks logs each model call in system.ai_gateway.usage: who called, from where and how many tokens, but no content.
 - Databricks keeps model requests in an abuse-check store for up to 30 days.
 - A model on the Gemini global endpoint can send requests to other regions.

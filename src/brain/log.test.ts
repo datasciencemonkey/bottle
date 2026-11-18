@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { contentTelemetryAllowedFrom, createBrainLog } from './log';
+import { contentTelemetryAllowedFrom, createBrainLog, type BrainLogDeps } from './log';
 
 /** Fake content that must never reach a default log line. */
 const TRANSCRIPT = 'canary transcript Priya said the Q3 churn number is wrong';
@@ -12,12 +12,10 @@ const CANARIES = [TRANSCRIPT, PROMPT, ANSWER, TOKEN];
 
 function logWith(opts: { admin?: boolean; user?: boolean } = {}) {
   const lines: string[] = [];
-  const log = createBrainLog({
-    sink: (l) => lines.push(l),
-    adminAllowed: opts.admin === undefined ? undefined : () => opts.admin as boolean,
-    userOptIn: opts.user === undefined ? undefined : () => opts.user as boolean,
-  });
-  return { log, lines };
+  const deps: BrainLogDeps = { sink: (l) => lines.push(l) };
+  if (opts.admin !== undefined) deps.adminAllowed = () => opts.admin === true;
+  if (opts.user !== undefined) deps.userOptIn = () => opts.user === true;
+  return { log: createBrainLog(deps), lines };
 }
 
 function logEverything(log: ReturnType<typeof createBrainLog>): boolean[] {
@@ -57,7 +55,10 @@ describe('brain log content gate (SEC-16c)', () => {
     expect(log.contentAllowed()).toBe(true);
     expect(log.content('genie.ask', ANSWER)).toBe(true);
     expect(log.content('genie.ask', 'a\nevent=forged')).toBe(true);
-    expect(lines).toEqual([`content=genie.ask text=${ANSWER}`, 'content=genie.ask text=a event=forged']);
+    expect(lines).toEqual([
+      `content=genie.ask text=${ANSWER}`,
+      'content=genie.ask text=a event=forged',
+    ]);
   });
 
   it('[SEC-16c] an event name or field with text is dropped, never written', () => {

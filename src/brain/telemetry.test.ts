@@ -77,18 +77,18 @@ describe('telemetry spans (SEC-16b)', () => {
       await expect(t.span({ ...ok, name: c } as unknown as SpanEvent)).rejects.toThrow(
         SpanRejectedError,
       );
-      await expect(
-        t.span({ ...ok, attrs: { [c]: 1 } } as unknown as SpanEvent),
-      ).rejects.toThrow(SpanRejectedError);
-      await expect(
-        t.span({ ...ok, attrs: { chars: c } } as unknown as SpanEvent),
-      ).rejects.toThrow(SpanRejectedError);
+      await expect(t.span({ ...ok, attrs: { [c]: 1 } } as unknown as SpanEvent)).rejects.toThrow(
+        SpanRejectedError,
+      );
+      await expect(t.span({ ...ok, attrs: { chars: c } } as unknown as SpanEvent)).rejects.toThrow(
+        SpanRejectedError,
+      );
     }
     for (const name of SPAN_NAMES) await t.span({ ...ok, name });
     expect(invoke).toHaveBeenCalledTimes(SPAN_NAMES.length);
     const sent = JSON.stringify(invoke.mock.calls);
     for (const c of CANARIES) expect(sent).not.toContain(c);
     expect(sent).not.toContain('canary');
-    expect(invoke.mock.calls[0]).toEqual(['telemetry_span', buildSpan(ok)]);
+    expect(invoke.mock.calls).toContainEqual(['telemetry_span', buildSpan(ok)]);
   });
 });

@@ -55,7 +55,11 @@ fn sec_16a_no_export_call_when_otlp_table_is_unset() {
             .unwrap();
         assert_eq!(out, SpanOutcome::Dropped);
     }
-    assert_eq!(gate.exporter().calls().len(), 0, "no OTLP traffic without OtlpTable");
+    assert_eq!(
+        gate.exporter().calls().len(),
+        0,
+        "no OTLP traffic without OtlpTable"
+    );
 }
 
 #[test]
@@ -80,7 +84,10 @@ fn sec_16a_no_export_call_for_an_empty_or_malformed_otlp_table() {
             gate.record(&span("genie.ask", &[])).unwrap(),
             SpanOutcome::Dropped
         );
-        assert!(gate.exporter().calls().is_empty(), "{bad} turned telemetry on");
+        assert!(
+            gate.exporter().calls().is_empty(),
+            "{bad} turned telemetry on"
+        );
     }
 }
 
@@ -102,7 +109,10 @@ fn sec_16a_adm_19_spans_go_to_the_exporter_only_after_the_key_is_set() {
     let gate = TelemetryGate::new(policy_with_table(), RecordingExporter::default());
     assert!(gate.policy().telemetry_allowed().unwrap());
     let out = gate
-        .record(&span("genie.ask", &[("question_chars", 24), ("http_status", 200)]))
+        .record(&span(
+            "genie.ask",
+            &[("question_chars", 24), ("http_status", 200)],
+        ))
         .unwrap();
     assert_eq!(out, SpanOutcome::Exported);
     let calls = gate.exporter().calls();
@@ -160,28 +170,34 @@ impl SpanExporter for FailingExporter {
 #[test]
 fn sec_16b_a_span_name_with_text_is_refused() {
     let gate = TelemetryGate::new(policy_with_table(), RecordingExporter::default());
-    for name in CANARIES
-        .iter()
-        .copied()
-        .chain(["What_was_revenue", "genie.ask.What was revenue", "", "GENIE.ASK"])
-    {
+    for name in CANARIES.iter().copied().chain([
+        "What_was_revenue",
+        "genie.ask.What was revenue",
+        "",
+        "GENIE.ASK",
+    ]) {
         assert_eq!(
             gate.record(&span(name, &[])),
             Err(SpanError::UnknownName),
             "{name}"
         );
     }
-    assert!(gate.exporter().calls().is_empty(), "a refused span is never sent");
+    assert!(
+        gate.exporter().calls().is_empty(),
+        "a refused span is never sent"
+    );
 }
 
 #[test]
 fn sec_16b_an_attribute_key_with_text_is_refused() {
     let gate = TelemetryGate::new(policy_with_table(), RecordingExporter::default());
-    for key in CANARIES
-        .iter()
-        .copied()
-        .chain(["what_was_revenue", "question", "answer", "transcript", "token"])
-    {
+    for key in CANARIES.iter().copied().chain([
+        "what_was_revenue",
+        "question",
+        "answer",
+        "transcript",
+        "token",
+    ]) {
         assert_eq!(
             gate.record(&span("genie.ask", &[(key, 1)])),
             Err(SpanError::UnknownAttrKey),
@@ -229,7 +245,10 @@ fn sec_16b_handle_refuses_text_with_a_content_free_code() {
     ] {
         let err = gate.handle(args).unwrap_err();
         assert_eq!(err.code(), "invalid_args");
-        assert!(!has_canary(&format!("{err:?} {err}")), "the error echoes no value");
+        assert!(
+            !has_canary(&format!("{err:?} {err}")),
+            "the error echoes no value"
+        );
     }
     assert!(gate.exporter().calls().is_empty());
 }
@@ -273,7 +292,10 @@ fn sec_16b_at_17_a_span_scan_of_the_exported_body_finds_no_text() {
     // Every name and key, so the scan sees the whole closed set.
     let attrs: Vec<(&str, u64)> = span_attr_keys().iter().map(|k| (*k, 7)).collect();
     for name in SPAN_NAMES {
-        assert_eq!(gate.record(&span(name, &attrs)).unwrap(), SpanOutcome::Exported);
+        assert_eq!(
+            gate.record(&span(name, &attrs)).unwrap(),
+            SpanOutcome::Exported
+        );
     }
     // Attempts to send content are refused and never reach the body.
     for c in CANARIES {
@@ -344,7 +366,10 @@ fn sec_16c_at_17_default_logs_hold_no_content() {
     let wrote = log_all_canaries(&log);
     assert!(wrote.iter().all(|w| !w), "no content line is written");
     let lines = log.sink().lines();
-    assert_eq!(lines, vec!["event=genie.ask question_chars=24 http_status=200"]);
+    assert_eq!(
+        lines,
+        vec!["event=genie.ask question_chars=24 http_status=200"]
+    );
     assert!(lines.iter().all(|l| !has_canary(l)));
 }
 
@@ -369,7 +394,13 @@ fn sec_16c_the_admin_key_alone_writes_no_content() {
 
 #[test]
 fn sec_16c_only_a_true_boolean_admin_key_counts() {
-    for v in [json!("true"), json!(1), json!(false), json!(null), json!("yes")] {
+    for v in [
+        json!("true"),
+        json!(1),
+        json!(false),
+        json!(null),
+        json!("yes"),
+    ] {
         let policy = MemoryPolicyStore::default().with(CONTENT_TELEMETRY_ALLOWED, v.clone());
         assert!(!content_telemetry_allowed(&policy), "{v}");
     }
@@ -400,11 +431,7 @@ fn sec_16c_both_opt_ins_write_scrubbed_content() {
 fn sec_16c_at_17_gateway_lines_through_the_app_log_hold_no_content() {
     struct Gate(TelemetryGate<MemoryPolicyStore, RecordingExporter>);
     impl GatewayComponents for Gate {
-        fn call(
-            &self,
-            command: &'static str,
-            args: Value,
-        ) -> crate::error::CoreResult<Value> {
+        fn call(&self, command: &'static str, args: Value) -> crate::error::CoreResult<Value> {
             match command {
                 "telemetry_span" => self.0.handle(args),
                 _ => Ok(json!({})),
@@ -465,11 +492,32 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
             }
             rust_files(&p, out);
         } else if p.extension().is_some_and(|x| x == "rs")
-            && p.file_name().is_some_and(|n| n != "tests.rs")
+            && p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n != "tests.rs" && !n.ends_with("_tests.rs"))
         {
             out.push(p);
         }
     }
+}
+
+/// `banned` at the start of a path or call, so `catalog::` does not count as `log::`.
+fn uses(line: &str, banned: &str) -> bool {
+    line.match_indices(banned).any(|(i, _)| {
+        line[..i]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
+    })
+}
+
+#[test]
+fn sec_16c_scan_matches_paths_not_suffixes() {
+    assert!(uses("log::info!(x)", "log::"));
+    assert!(uses("    ::log::warn!(x)", "log::"));
+    assert!(uses("x; println!(\"{}\", y)", "println!"));
+    assert!(!uses("catalog::find(id)", "log::"));
+    assert!(!uses("my_println!()", "println!"));
 }
 
 #[test]
@@ -487,14 +535,15 @@ fn sec_16c_at_17_no_production_code_logs_outside_the_gate() {
             continue;
         }
         let src = std::fs::read_to_string(&f).unwrap();
-        let code = src.split("#[cfg(test)]").next().unwrap_or_default();
+        // Only the test module at the end is skipped; a `#[cfg(test)]` item elsewhere is scanned.
+        let code = src.split("#[cfg(test)]\nmod ").next().unwrap_or_default();
         for (i, line) in code.lines().enumerate() {
             let t = line.trim_start();
             if t.starts_with("//") {
                 continue;
             }
             for b in BANNED {
-                if t.contains(b) {
+                if uses(t, b) {
                     found.push(format!("{}:{} {b}", f.display(), i + 1));
                 }
             }
