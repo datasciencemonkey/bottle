@@ -5,7 +5,7 @@
 //! label (ARC-4), parses the arguments with `deny_unknown_fields`, and then reaches the
 //! component stub. Arguments never carry a token, a header or a request URL (ARC-6, 4.6).
 //!
-//! `COMMANDS` is 4.5 plus `brain_subscribe` (ADR 0003). Only the foundation lead changes this
+//! `COMMANDS` is 4.5 plus `brain_subscribe` (ADR 0003) and the hub notice pair (ADR 0091). Only the foundation lead changes this
 //! file (brief, "Contracts").
 
 use schemars::{JsonSchema, Schema};
@@ -144,6 +144,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     row("telemetry_span", B),
     // Not in 4.5 (ADR 0003): the brain's private Channel for core-to-brain traffic.
     row("brain_subscribe", B),
+    // #509 (ADR 0091): an unshown dictation goes to the hub only, on the hub's private Channel.
+    row("hub_notice_send", B),
+    row("view_notice_subscribe", H),
 ];
 
 /// The row of a command, if it exists.
@@ -851,6 +854,10 @@ pub enum ViewEmitKind {
     Cancel,
     Expand,
     Click,
+    // #507 (ADR 0091): the view registered its listeners. No payload. The brain sends the
+    // current state of the sending window (`from`) again. (A `//` comment: a doc comment
+    // would turn the schema enum into `oneOf`.)
+    Ready,
 }
 args!(ViewEmitArgs {
     mog_id: MogId,
@@ -868,6 +875,45 @@ args!(AuditAppendArgs {
 args!(BrainSubscribeArgs {
     on_event: ChannelRef
 });
+
+/// The kind of a text-bearing hub notice (#509, ADR 0091).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HubNoticeKind {
+    /// The dictated text found no MOG card to show on (#498, MOG-05b, MOG-06d).
+    DictationUnshown,
+}
+
+/// `hub_notice_send` (#509, ADR 0091): the brain gives the host a notice for the hub window
+/// only. `text` is user content: the `Debug` output redacts it (SEC-16c). #505 is the general
+/// fix for every type that holds content.
+#[derive(Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct HubNoticeSendArgs {
+    pub kind: HubNoticeKind,
+    pub mog_id: MogId,
+    pub text: String,
+}
+
+impl std::fmt::Debug for HubNoticeSendArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HubNoticeSendArgs")
+            .field("kind", &self.kind)
+            .field("mog_id", &self.mog_id)
+            .field(
+                "text",
+                &format_args!("<redacted {} chars>", self.text.chars().count()),
+            )
+            .finish()
+    }
+}
+
+args!(
+    /// `view_notice_subscribe` (#509, ADR 0091): the hub's private Channel for its notices.
+    ViewNoticeSubscribeArgs {
+        on_notice: ChannelRef
+    }
+);
 args!(TelemetrySpanArgs {
     name: String,
     start_ms: u64,
@@ -918,6 +964,8 @@ macro_rules! for_command {
             "audit_append" => Some($f::<AuditAppendArgs>()),
             "telemetry_span" => Some($f::<TelemetrySpanArgs>()),
             "brain_subscribe" => Some($f::<BrainSubscribeArgs>()),
+            "hub_notice_send" => Some($f::<HubNoticeSendArgs>()),
+            "view_notice_subscribe" => Some($f::<ViewNoticeSubscribeArgs>()),
             _ => None,
         }
     };
@@ -990,7 +1038,15 @@ pub fn handle(window_label: &str, command_name: &str, args: Value) -> Result<Han
             }
         }
         "view_emit" => {
+            // #507: `ready` has no payload, not even `null` (ADR 0091).
+            let has_payload = args.get("payload").is_some();
             let a: ViewEmitArgs = parse(spec.name, args)?;
+            if a.kind == ViewEmitKind::Ready && has_payload {
+                return Err(IpcError::InvalidArgs {
+                    command: spec.name.to_owned(),
+                    reason: "ready takes no payload".to_owned(),
+                });
+            }
             // A MOG or card view may only speak for its own MOG.
             if let Some(id) = own_id {
                 if a.mog_id != id {

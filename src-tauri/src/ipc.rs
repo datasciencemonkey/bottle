@@ -30,14 +30,17 @@
 //! Channel that the brain registers with `brain_subscribe`. It never uses Tauri events,
 //! because every window that may listen gets every Tauri event (ADR 0003). Each payload on
 //! that Channel gets the rule-7 scrub (SEC-01).
+//! The hub notice of an unshown dictation (#509, ADR 0091) goes the same way, on the hub's
+//! private Channel (`view_notice_subscribe`), so no MOG or card window can get its text.
 
 use crate::capture_host::{CaptureHost, CaptureTicket};
 use crate::window_host::TauriWindowHost;
 use mog_core::error::{CoreError, CoreResult};
 use mog_core::hotkey_core::{PermissionStatus, UserAction};
 use mog_core::ipc::{
-    self, events, BrainSubscribeArgs, ChannelRef, HotkeysSetArgs, IpcError, JsonObject, MogArgs,
-    PermissionKind, PermissionRequestArgs, WindowMogOpenArgs, INVALID_ARGS_REASON,
+    self, events, BrainSubscribeArgs, ChannelRef, HotkeysSetArgs, HubNoticeSendArgs, IpcError,
+    JsonObject, MogArgs, PermissionKind, PermissionRequestArgs, ViewNoticeSubscribeArgs,
+    WindowMogOpenArgs, INVALID_ARGS_REASON,
 };
 use mog_core::ipc_gateway::{hardened_gateway_with, GatewayComponents, IpcGateway, NoLog};
 use mog_core::ipc_gateway::{ipc_error_code, ERROR_CODES};
@@ -124,6 +127,31 @@ impl BrainChannel {
     }
 }
 
+/// The hub's private notice Channel (#509, ADR 0091). `view_notice_subscribe` sets it; a hub
+/// reload replaces it. The host keeps no notice: with no hub Channel, `send` is `false` and
+/// the brain keeps the text. Never logged.
+#[derive(Default)]
+pub struct HubChannel(Mutex<Option<Channel<Value>>>);
+
+impl HubChannel {
+    fn channel(&self) -> std::sync::MutexGuard<'_, Option<Channel<Value>>> {
+        self.0.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Deliver one notice to the hub. `false` if no hub listens.
+    pub fn send(&self, notice: Value) -> bool {
+        match self.channel().as_ref() {
+            Some(ch) => ch.send(notice).is_ok(),
+            None => false,
+        }
+    }
+
+    /// Use `channel` from now on.
+    pub(crate) fn set(&self, channel: Channel<Value>) {
+        *self.channel() = Some(channel);
+    }
+}
+
 /// The message shape on the brain Channel.
 pub fn brain_message(event: &str, payload: Value) -> Value {
     json!({ "event": event, "payload": payload })
@@ -156,6 +184,15 @@ pub trait BrainLink: Send + Sync {
     fn relay(&self, event: &str, payload: Value) -> bool;
     /// Keep `channel` as the brain's delivery path. `false` if the reference is not usable.
     fn subscribe(&self, channel: &ChannelRef) -> bool;
+    /// #509 (ADR 0091): deliver one notice on the hub's private Channel. `false` if no hub
+    /// listens. The default (a fixture with no hub) delivers nothing.
+    fn notify_hub(&self, _notice: Value) -> bool {
+        false
+    }
+    /// #509: keep `channel` (of the calling hub webview) as the hub's notice path.
+    fn subscribe_hub(&self, _channel: &ChannelRef) -> bool {
+        false
+    }
 }
 
 /// The R1 settings side of `hotkeys_set` (#331). `HotkeySettings` implements it.
@@ -318,6 +355,26 @@ impl GatewayComponents for HostComponents<'_> {
                     Err(host_failed(command))
                 }
             }
+            // #509 (ADR 0091): the gateway let only the brain through. The notice goes only to
+            // the hub's private Channel, never to the brain Channel or a Tauri event.
+            "hub_notice_send" => {
+                let a: HubNoticeSendArgs = args_of(command, args)?;
+                let notice = serde_json::to_value(&a).map_err(|_| host_failed(command))?;
+                if self.brain.notify_hub(notice) {
+                    Ok(json!({}))
+                } else {
+                    Err(host_failed(command))
+                }
+            }
+            // #509: the gateway let only the hub window through.
+            "view_notice_subscribe" => {
+                let a: ViewNoticeSubscribeArgs = args_of(command, args)?;
+                if self.brain.subscribe_hub(&a.on_notice) {
+                    Ok(json!({}))
+                } else {
+                    Err(host_failed(command))
+                }
+            }
             "window_mog_open" | "window_mog_close" | "window_card_show" | "window_card_hide" => {
                 self.window_op(command, args)
             }
@@ -454,6 +511,25 @@ impl<R: Runtime> BrainLink for WebviewBrain<'_, R> {
                 true
             }
             None => false,
+        }
+    }
+
+    fn notify_hub(&self, notice: Value) -> bool {
+        self.0
+            .try_state::<HubChannel>()
+            .is_some_and(|hub| hub.send(notice))
+    }
+
+    fn subscribe_hub(&self, channel: &ChannelRef) -> bool {
+        match (
+            self.0.try_state::<HubChannel>(),
+            channel_on(channel, self.0),
+        ) {
+            (Some(hub), Some(ch)) => {
+                hub.set(ch);
+                true
+            }
+            _ => false,
         }
     }
 }
@@ -974,7 +1050,8 @@ mod tests {
 
     #[test]
     fn mog_06d_hub_channel_delivers_only_to_the_hub_channel_and_keeps_nothing() {
-        let notice = json!({"kind": "dictation_unshown", "mogId": "a1", "text": "test-dictation-not-real"});
+        let notice =
+            json!({"kind": "dictation_unshown", "mogId": "a1", "text": "test-dictation-not-real"});
         let hub = HubChannel::default();
         // No hub yet: `false`, so the brain keeps the text. The host keeps no copy.
         assert!(!hub.send(notice.clone()));

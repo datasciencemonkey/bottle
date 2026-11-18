@@ -56,6 +56,8 @@ export const CALL_CLASS = {
   audit_append: 'local',
   telemetry_span: 'cloud', // exported once an admin sets OtlpTable (4.5, SEC-16a)
   brain_subscribe: 'local',
+  hub_notice_send: 'local',
+  view_notice_subscribe: 'local',
 } as const satisfies Record<keyof typeof COMMANDS, CallClass>;
 
 /** The command arguments of an invoke log entry: `call()` sends them as `{ args }` (ADR 0003). */

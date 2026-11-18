@@ -22,6 +22,7 @@
     "allow-policy-get",
     "allow-hotkeys-set",
     "allow-permission-request",
-    "allow-view-emit"
+    "allow-view-emit",
+    "allow-view-notice-subscribe"
   ]
 }

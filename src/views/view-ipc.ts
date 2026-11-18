@@ -16,10 +16,12 @@ import {
 import type { Mood, MogId } from '../shared/interfaces';
 import {
   call,
+  Channel,
   EVENTS,
   type CardSection,
   type CardUpdate,
   type DomainPickerView,
+  type HubTextNotice,
   type MicLevelFrame,
   type MogViewState,
   type PagesChecklistView,
@@ -267,6 +269,36 @@ export function useHubNotice(): HubNotice | null {
 /** Send the hub's Continue click for notice `version` to the brain. */
 export function acceptNotice(version: number): Promise<unknown> {
   return emitView(HUB_SCOPE, 'click', { action: 'notice.accept', noticeVersion: version });
+}
+
+/** Shape check of a text-bearing hub notice (#509, ADR 0091). */
+export function asHubTextNotice(p: unknown): HubTextNotice | undefined {
+  if (!isObj(p) || p['kind'] !== 'dictation_unshown') return undefined;
+  const { mogId, text } = p;
+  if (typeof mogId !== 'string' || typeof text !== 'string') return undefined;
+  return { kind: 'dictation_unshown', mogId, text };
+}
+
+/**
+ * The hub's notices of unshown dictations (#509, ADR 0091), on the hub's private Channel.
+ * Only the hub window asks; the core refuses every other window. The hub may only copy or
+ * dismiss a notice, and it never logs the text. False when the call is refused.
+ */
+export async function subscribeHubNotices(
+  onNotice: (notice: HubTextNotice) => void,
+): Promise<boolean> {
+  if (getCurrentWindow().label !== 'hub') return false;
+  const channel = new Channel<unknown>();
+  channel.onmessage = (m) => {
+    const n = asHubTextNotice(m);
+    if (n) onNotice(n);
+  };
+  try {
+    await call('view_notice_subscribe', { onNotice: channel });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** How long a MOG view waits before it sends `view.ready` again while no brain listens. */

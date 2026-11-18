@@ -1135,7 +1135,11 @@ fn unshown() -> Value {
 #[test]
 fn mog_05b_mog_06d_hub_notice_send_goes_only_to_the_hub_channel() {
     let brain = FakeBrain::default();
-    let got = route(comps("brain", &brain, None, None), "hub_notice_send", unshown());
+    let got = route(
+        comps("brain", &brain, None, None),
+        "hub_notice_send",
+        unshown(),
+    );
     assert_eq!(got, Ok(json!({})));
     assert_eq!(*brain.hub_notices.lock().unwrap(), vec![unshown()]);
     // Not relayed on the brain Channel, and no Tauri event (see `arc_5_core_to_brain_items_are_never_tauri_events`).
@@ -1149,7 +1153,11 @@ fn mog_06d_hub_notice_send_with_no_hub_is_host_failed() {
         no_hub: true,
         ..FakeBrain::default()
     };
-    let got = route(comps("brain", &brain, None, None), "hub_notice_send", unshown());
+    let got = route(
+        comps("brain", &brain, None, None),
+        "hub_notice_send",
+        unshown(),
+    );
     assert_eq!(got, err("host_failed"));
 }
 
@@ -1157,7 +1165,11 @@ fn mog_06d_hub_notice_send_with_no_hub_is_host_failed() {
 fn sec_02a_no_view_can_send_or_forward_a_hub_notice() {
     for label in ["hub", "mog-a1", "card-a1"] {
         let brain = FakeBrain::default();
-        let got = route(comps(label, &brain, None, None), "hub_notice_send", unshown());
+        let got = route(
+            comps(label, &brain, None, None),
+            "hub_notice_send",
+            unshown(),
+        );
         assert_eq!(got, err("window_not_allowed"), "{label}");
         assert!(brain.hub_notices.lock().unwrap().is_empty(), "{label}");
         assert!(brain.items().is_empty(), "{label}");

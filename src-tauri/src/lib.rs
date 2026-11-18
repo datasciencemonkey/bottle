@@ -147,6 +147,7 @@ pub fn run() {
     let builder = builder.activate_ignoring_other_apps(ACTIVATE_IGNORING_OTHER_APPS);
     builder
         .manage(ipc::BrainChannel::default())
+        .manage(ipc::HubChannel::default())
         // #453 (CAP-22): the app-wide settings for `app_setting_*`, in memory until #77.
         // `install_capture` connects them to the mic. Managed before `setup` runs it.
         .manage(std::sync::Arc::new(

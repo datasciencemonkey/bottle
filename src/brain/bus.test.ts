@@ -202,7 +202,10 @@ describe('#507 ready and #509 the hub-only notice (ADR 0091)', () => {
     const got: unknown[] = [];
     onViewInput(bus, (i) => got.push(i));
     for (const from of ['hub', `mog-${MOG}`, `card-${MOG}`])
-      bus.dispatch({ event: 'view:input', payload: { from, input: { mogId: MOG, kind: 'ready' } } });
+      bus.dispatch({
+        event: 'view:input',
+        payload: { from, input: { mogId: MOG, kind: 'ready' } },
+      });
     expect(got).toEqual([
       { from: 'hub', mogId: MOG, kind: 'ready', payload: undefined },
       { from: `mog-${MOG}`, mogId: MOG, kind: 'ready', payload: undefined },

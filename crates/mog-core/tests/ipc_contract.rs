@@ -743,7 +743,12 @@ fn mog_18a_mog_18b_mog_13b_every_view_may_send_ready_with_no_payload() {
     }
     // The brain cannot send `ready` for a view.
     assert!(matches!(
-        ipc::handle("brain", "view_emit", json!({"mogId": "a1", "kind": "ready"})).unwrap_err(),
+        ipc::handle(
+            "brain",
+            "view_emit",
+            json!({"mogId": "a1", "kind": "ready"})
+        )
+        .unwrap_err(),
         IpcError::WindowNotAllowed { .. }
     ));
 }
@@ -757,7 +762,10 @@ fn mog_18a_ready_with_a_payload_is_invalid_args() {
             json!({"mogId": "a1", "kind": "ready", "payload": payload}),
         )
         .unwrap_err();
-        assert!(matches!(err, IpcError::InvalidArgs { .. }), "{payload}: {err:?}");
+        assert!(
+            matches!(err, IpcError::InvalidArgs { .. }),
+            "{payload}: {err:?}"
+        );
     }
     // Other kinds still take a payload.
     assert!(ipc::handle(
