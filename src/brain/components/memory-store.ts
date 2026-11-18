@@ -7,6 +7,8 @@
  * `LOCAL_STMT_IDS` lists the ids the brain may use; a Rust test keeps it equal to the catalog.
  * The Wipe statements are Rust-only (R14), so they are not in this list. `mem.item.write` is an
  * atomic group: the item row and its embed job commit in one transaction (MEM-10a, ADR 0068).
+ * `mem.item.upsert` is its first step and is Rust-only (#114, ADR 0089), so no brain item write
+ * can skip the outbox.
  * The three `mem.forget.*` groups (items, session, MOG) each delete in one transaction, citing
  * items first (MEM-32a, ADR 0081); their steps are Rust-only.
  */
@@ -18,7 +20,6 @@ export const LOCAL_STMT_IDS = [
   'mem.exchange.get',
   'mem.exchange.dependents',
   'mem.exchange.by_session',
-  'mem.item.upsert',
   'mem.item.get',
   'mem.item.write',
   'mem.recall.fts',

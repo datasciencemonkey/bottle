@@ -22,6 +22,7 @@ import type { JsonObject } from '../../shared/ipc';
 import { NotImplementedError } from '../errors';
 import { distilSummary } from './exchange-summary';
 import { isBackendKind } from './genie-bridge';
+import { isQuarantined } from './memory-quarantine';
 import { IpcLocalMemoryStore, type LocalMemoryStore } from './memory-store';
 
 export interface MemoryServiceOptions {
@@ -56,7 +57,71 @@ export interface ItemWrite {
   workspaceId?: string;
   spaceId?: string;
   sourceExchangeId?: string;
+  /** The sessions that the item comes from (`source_session_ids`); Forget of a session finds it. */
+  sourceSessionIds?: string[];
+  /** The utterances that the item comes from (`source_utterance_ids`). */
+  sourceUtteranceIds?: string[];
+  /**
+   * The brain's SEC-24a result. It can only raise the quarantine: the Rust catalog also checks
+   * the text itself and quarantines on either result (ADR 0089).
+   */
+  quarantined?: boolean;
 }
+
+/**
+ * A `MemoryDraft` with its exchange and utterance links (MEM-31 provenance).
+ * TODO(#533): the contract adds `sourceExchangeId` and `utteranceIds` to `MemoryDraft`; then
+ * this type is `MemoryDraft` again.
+ */
+export type MemoryDraftLinks = MemoryDraft & { sourceExchangeId?: string; utteranceIds?: string[] };
+
+/** The result of one item write. */
+export interface ItemWriteResult {
+  itemId: string;
+  /** The embed job was queued. A quarantined item gets none. */
+  queued: boolean;
+  quarantined: boolean;
+  pinned: boolean;
+}
+
+/**
+ * The user action that makes a "remember this" pin (MEM-28b). Only the user makes one:
+ * - `voice`: the user's own speech on the You track holds the phrase (see {@link isRememberThis});
+ * - `ui`: the user clicks "Remember this" on a card.
+ * The agent cannot make one: the `bottle-mcp` `memory.write` tool never pins.
+ * TODO(#143): the deterministic command grammar calls `rememberThis` for the voice phrase.
+ */
+export type RememberAction =
+  | { kind: 'remember_this'; trigger: 'voice'; speakerTrack: 'you'; utterance: string }
+  | { kind: 'remember_this'; trigger: 'ui' };
+
+/** The "remember this" phrase: an order to remember, not a question about memory. */
+const REMEMBER_THIS =
+  /^\s*(?:(?:please|ok(?:ay)?|hey\s+\w+)[\s,]+)?remember\s+(?:this|that)\b(?!\s+(?:week|month|year|time|morning|quarter)\b)/i;
+
+/** True if the user's utterance is the "remember this" command (MEM-28b). */
+export function isRememberThis(utterance: string): boolean {
+  return REMEMBER_THIS.test(utterance.normalize('NFKC'));
+}
+
+const SOURCES: ReadonlySet<string> = new Set(['you', 'others', 'genie', 'agent']);
+const ITEM_TYPES: ReadonlySet<string> = new Set([
+  'decision',
+  'fact',
+  'entity',
+  'open_question',
+  'genie_answer',
+]);
+/** The confidence of a draft by its source (ADR 0089). A user pin is always 1.0 (MEM-28b). */
+const CONFIDENCE: Record<MemoryDraft['source'], number> = {
+  you: 0.9,
+  genie: 0.8,
+  agent: 0.8,
+  others: 0.6,
+};
+const TEXT_MAX = 600;
+const HOST_RE = /^[a-z0-9](?:[a-z0-9.-]{0,253}[a-z0-9])?$/i;
+const WS_RE = /^\d{1,18}$/;
 
 /** `OperationState` to the `genie_exchange.status` value, and whether it is terminal. */
 const STATUS: Record<OperationState, [string, boolean]> = {
@@ -197,6 +262,42 @@ function conversationOf(r: unknown): ForgetConversation | undefined {
 
 const C = 'MemoryService';
 
+/** MEM-31: check one draft before any store call. Throws with a fixed message, never the text. */
+function checkDraft(d: MemoryDraftLinks | Omit<MemoryDraftLinks, 'pinned'>): void {
+  if (!UUID_RE.test(d.mogId)) throw new Error('write needs a UUID mogId');
+  if (!SOURCES.has(d.source)) throw new Error('write needs a source: you, others, genie or agent');
+  if (!ITEM_TYPES.has(d.type)) throw new Error('write needs a memory item type');
+  const n = typeof d.text === 'string' ? Array.from(d.text).length : 0;
+  if (n < 1 || n > TEXT_MAX || d.text.trim() === '')
+    throw new Error('write needs 1-600 characters');
+  if (d.workspaceHost === undefined || !HOST_RE.test(d.workspaceHost)) {
+    throw new Error('write needs the workspace host');
+  }
+  if (d.workspaceId === undefined || !WS_RE.test(d.workspaceId)) {
+    throw new Error('write needs the decimal workspace id');
+  }
+  if (d.sessionId !== undefined && !UUID_RE.test(d.sessionId)) {
+    throw new Error('write needs a UUID sessionId');
+  }
+  if (d.sourceExchangeId !== undefined && !UUID_RE.test(d.sourceExchangeId)) {
+    throw new Error('write needs a UUID sourceExchangeId');
+  }
+  if (d.utteranceIds !== undefined && !d.utteranceIds.every((u) => UUID_RE.test(u))) {
+    throw new Error('write needs UUID utterance ids');
+  }
+}
+
+/** MEM-28b: a pin needs a real user action. */
+function checkRememberAction(a: RememberAction): void {
+  if (typeof a !== 'object' || a === null || a.kind !== 'remember_this') {
+    throw new Error('rememberThis needs a user action');
+  }
+  if (a.trigger === 'ui') return;
+  if (a.trigger !== 'voice' || a.speakerTrack !== 'you' || !isRememberThis(a.utterance)) {
+    throw new Error('rememberThis needs the user saying "remember this" on the You track');
+  }
+}
+
 export class LocalMemoryService implements MemoryService {
   readonly #now: () => number;
   readonly #newId: () => string;
@@ -232,8 +333,60 @@ export class LocalMemoryService implements MemoryService {
   ): ContextPreamble | null {
     throw new NotImplementedError(C, 'assembleContext', 92); // TODO(#92)
   }
-  async write(_drafts: MemoryDraft[]): Promise<void> {
-    throw new NotImplementedError(C, 'write', 114); // TODO(#114)
+  /**
+   * The MemoryWriter write (#114). Each draft goes through {@link storeItem}, so its row and its
+   * embed job commit in one transaction (MEM-10a); no brain item write skips the outbox.
+   * - MEM-31: each draft must have its source (`you`, `others`, `genie`, `agent`), the workspace
+   *   host and the decimal workspace id; the session, exchange and utterance links are kept.
+   * - SEC-24a: text that looks like an instruction to the assistant is quarantined.
+   * - MEM-28b: a draft with `pinned: true` is refused; a pin needs a user action
+   *   ({@link rememberThis}).
+   * The whole batch is checked before the first write, so a bad draft writes nothing.
+   */
+  async write(drafts: MemoryDraftLinks[]): Promise<void> {
+    await this.writeItems(drafts);
+  }
+  /** {@link write} with one result for each draft: the item id, the embed job and the status. */
+  async writeItems(drafts: MemoryDraftLinks[]): Promise<ItemWriteResult[]> {
+    for (const d of drafts) {
+      if (d.pinned === true) throw new Error('write: a pin needs a user action (rememberThis)');
+      checkDraft(d);
+    }
+    const out: ItemWriteResult[] = [];
+    for (const d of drafts) out.push(await this.#writeDraft(d, false));
+    return out;
+  }
+  /**
+   * "Remember this" (MEM-28b, AT-28): one pinned item at confidence 1.0, only on a user action.
+   * Quarantine still applies: a pin of injection text is stored quarantined (SEC-24a).
+   */
+  async rememberThis(
+    action: RememberAction,
+    draft: Omit<MemoryDraftLinks, 'pinned'>,
+  ): Promise<ItemWriteResult> {
+    checkRememberAction(action);
+    checkDraft(draft);
+    return this.#writeDraft(draft, true);
+  }
+  async #writeDraft(d: MemoryDraftLinks, pinned: boolean): Promise<ItemWriteResult> {
+    const quarantined = isQuarantined(d.text);
+    const w: ItemWrite = {
+      mogId: d.mogId,
+      type: d.type,
+      text: d.text,
+      source: d.source,
+      confidence: pinned ? 1 : CONFIDENCE[d.source],
+      pinned,
+      quarantined,
+    };
+    // checkDraft made sure that both workspace fields are there (MEM-31).
+    if (d.workspaceHost !== undefined) w.workspaceHost = d.workspaceHost;
+    if (d.workspaceId !== undefined) w.workspaceId = d.workspaceId;
+    if (d.sourceExchangeId !== undefined) w.sourceExchangeId = d.sourceExchangeId;
+    if (d.sessionId !== undefined) w.sourceSessionIds = [d.sessionId];
+    if (d.utteranceIds !== undefined) w.sourceUtteranceIds = d.utteranceIds;
+    const r = await this.#storeItem(w);
+    return { ...r, quarantined, pinned };
   }
   /**
    * Write one memory item and queue its embedding with `mem.item.write` (#102, MEM-10a,
@@ -243,6 +396,12 @@ export class LocalMemoryService implements MemoryService {
    * It refuses an item id that another MOG owns (MEM-01): R10 changes no row then.
    */
   async storeItem(w: ItemWrite): Promise<{ itemId: string; queued: boolean }> {
+    // MEM-28b: a pin needs a user action, so only rememberThis() pins (review of #540).
+    if (w.pinned === true) throw new Error('storeItem: a pin needs a user action (rememberThis)');
+    return this.#storeItem(w);
+  }
+  /** The item write itself. SEC-24a: the brain check runs here, so no caller can skip it. */
+  async #storeItem(w: ItemWrite): Promise<{ itemId: string; queued: boolean }> {
     if (!UUID_RE.test(w.mogId)) throw new Error('storeItem needs a UUID mogId');
     const itemId = w.itemId ?? this.#newId();
     const now = this.#now();
@@ -265,6 +424,9 @@ export class LocalMemoryService implements MemoryService {
         workspaceId,
         spaceId: w.spaceId,
         sourceExchangeId: w.sourceExchangeId,
+        sourceSessionIds: w.sourceSessionIds,
+        sourceUtteranceIds: w.sourceUtteranceIds,
+        quarantined: w.quarantined === true || isQuarantined(w.text),
         seenAt: now,
         rowHlc: this.#hlc(now),
         deviceId: this.#deviceId(),

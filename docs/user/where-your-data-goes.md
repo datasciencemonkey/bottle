@@ -48,6 +48,8 @@ The copy comes from one file: `src/views/hub/disclosures.ts`. If you change the 
 - Each MOG has a home workspace (its home profile).
 - Text cleanup, the router step, the memory writer, embeddings and the main agent model run there.
 - Embeddings send the text of memory items to that workspace.
+- If a memory item sounds like an instruction to the assistant, for example a Genie answer or a meeting line that says "ignore previous instructions", Bottle keeps the item on your device but marks it quarantined. A quarantined item is never embedded, never added to a question to Genie and never given to the main agent.
+- "Remember this" pins an item only when you say it or click it. The main agent cannot pin an item.
 - This stays the same when a MOG asks Genie in another workspace.
 - Questions about another workspace are processed in your home workspace.
 - The router step gets only your words, the capture mode, recent topic labels, your MOGs and your profiles. It never gets memory text.

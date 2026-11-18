@@ -9,6 +9,7 @@ pub mod catalog;
 pub mod key_vault;
 mod migrate;
 pub mod mog_guard;
+pub mod quarantine;
 mod store;
 #[cfg(test)]
 mod tests;
@@ -79,3 +80,5 @@ mod exchange_tests;
 mod forget_tests;
 #[cfg(test)]
 mod outbox_tests;
+#[cfg(test)]
+mod quarantine_tests;

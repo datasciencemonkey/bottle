@@ -97,7 +97,7 @@ describe('LocalMemoryStore over mem_local_exec (MEM-34a, MEM-34b)', () => {
       expect(id).toMatch(/^mem(\.[a-z_]+){2,}$/);
       expect(id.startsWith('mem.wipe.'), id).toBe(false);
     }
-    for (const id of ['mem.exchange.upsert', 'mem.item.upsert', 'mem.recall.fts']) {
+    for (const id of ['mem.exchange.upsert', 'mem.item.write', 'mem.recall.fts']) {
       expect(LOCAL_STMT_IDS).toContain(id);
     }
   });

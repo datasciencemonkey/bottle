@@ -248,7 +248,8 @@ describe('brain component stubs', () => {
     const q = { mogId: MOG, text: 't', intent: 'question', target: { workspaceId: 'w' } } as const;
     await expectStub(() => t.gate(q), 200);
     await expectStub(() => t.assembleContext(MOG, { workspaceId: 'w' }, 'q'), 92);
-    await expectStub(() => t.write([]), 114);
+    // write is implemented by #114 (memory-write.test.ts); an empty batch writes nothing.
+    await expect(t.write([])).resolves.toBeUndefined();
     // recordExchange is implemented by #38 (memory-exchange.test.ts).
     // forget is implemented by #123 (memory-forget.test.ts).
     expect(t.mode()).toBe('local');

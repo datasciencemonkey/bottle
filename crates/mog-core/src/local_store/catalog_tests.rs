@@ -418,14 +418,15 @@ fn mem_41_brain_statements_run_on_the_local_store_with_no_lakebase() {
         json!({"mogId": MOG_A, "displayName": "Sales", "backendKind": "genie_one_mcp",
                "rowHlc": 1, "deviceId": "test-device"}),
     );
-    // Item upsert, a second upsert counts the mention, then get and recall.
-    assert_eq!(
-        changes(&run("mem.item.upsert", item(MOG_A, "Use the EU region."))),
-        1
-    );
+    // Item write (the brain's only item write, #114), a second write counts the mention, then
+    // get and recall.
+    let mut first = item(MOG_A, "Use the EU region.");
+    first["now"] = json!(1_000);
+    assert_eq!(changes(&run("mem.item.write", first)), 1);
     let mut again = item(MOG_A, "Use the EU region for new tables.");
     again["seenAt"] = json!(5_000);
-    assert_eq!(changes(&run("mem.item.upsert", again)), 1);
+    again["now"] = json!(5_000);
+    assert_eq!(changes(&run("mem.item.write", again)), 1);
     let got = run("mem.item.get", json!({"mogId": MOG_A, "itemId": ITEM_1}));
     let row = &rows(&got)[0];
     assert_eq!(row["itemId"], ITEM_1);
