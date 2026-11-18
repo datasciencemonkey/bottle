@@ -38,6 +38,8 @@ struct CountingCli {
     runs: Mutex<Vec<String>>,
     fail: Mutex<Vec<String>>,
     n: AtomicUsize,
+    /// Runs inside the next `auth token` run (for example an OS event during the run).
+    during: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 impl CountingCli {
@@ -61,6 +63,10 @@ impl CliRunner for CountingCli {
     }
     fn run_auth_token(&self, profile: &str) -> CoreResult<SecretStdout> {
         self.runs.lock().unwrap().push(profile.to_owned());
+        let during = self.during.lock().unwrap().take();
+        if let Some(f) = during {
+            f();
+        }
         if self.fail.lock().unwrap().iter().any(|p| p == profile) {
             return Err(CoreError::Unavailable {
                 component: "R5",
@@ -145,7 +151,11 @@ fn event_makes_the_next_call_run_the_cli_again(event: SessionEvent) {
     let _watch = watch_token_drops(&source, r.broker.clone()).unwrap();
     let first = lend(&*r.broker, PROFILE, HOST);
     lend(&*r.broker, OTHER, OTHER_HOST);
-    assert_eq!(lend(&*r.broker, PROFILE, HOST), first, "cached before the event");
+    assert_eq!(
+        lend(&*r.broker, PROFILE, HOST),
+        first,
+        "cached before the event"
+    );
     assert_eq!(r.cli.runs_for(PROFILE), 1);
 
     source.fire(event);
@@ -193,6 +203,23 @@ fn w_04b_the_watch_does_not_keep_the_broker_alive() {
     source.fire(SessionEvent::ScreenLock);
 }
 
+#[test]
+fn w_04b_a_sleep_during_a_cli_run_is_not_undone_by_that_run() {
+    let r = rig();
+    let source = Arc::new(FakeSource::default());
+    let _watch = watch_token_drops(&*source, r.broker.clone()).unwrap();
+    let s = source.clone();
+    *r.cli.during.lock().unwrap() = Some(Box::new(move || s.fire(SessionEvent::Sleep)));
+    let first = lend(&*r.broker, PROFILE, HOST);
+    assert_eq!(
+        r.broker.token_state(PROFILE),
+        TokenState::Unknown,
+        "the token from a run that the sleep overlapped is not kept"
+    );
+    assert_ne!(lend(&*r.broker, PROFILE, HOST), first);
+    assert_eq!(r.cli.runs_for(PROFILE), 2);
+}
+
 // ---------- W-18c: sign-out drops the profile's token ----------
 
 #[test]
@@ -204,7 +231,11 @@ fn w_18c_sign_out_drops_only_that_profile_and_the_next_call_runs_the_cli() {
     sign_out(&*r.broker, PROFILE);
 
     assert_eq!(r.broker.token_state(PROFILE), TokenState::Unknown);
-    assert_eq!(r.broker.token_state(OTHER), TokenState::Valid, "other profile kept");
+    assert_eq!(
+        r.broker.token_state(OTHER),
+        TokenState::Valid,
+        "other profile kept"
+    );
     assert_ne!(lend(&*r.broker, PROFILE, HOST), first);
     assert_eq!(r.cli.runs_for(PROFILE), 2);
     lend(&*r.broker, OTHER, OTHER_HOST);
@@ -258,7 +289,11 @@ fn w_04b_profile_status_returns_each_state_and_no_token() {
 fn w_04b_profile_status_does_not_run_the_cli() {
     let r = rig();
     status(&r, PROFILE);
-    assert_eq!(r.cli.runs_for(PROFILE), 0, "a status read never fetches a token");
+    assert_eq!(
+        r.cli.runs_for(PROFILE),
+        0,
+        "a status read never fetches a token"
+    );
 }
 
 #[test]
@@ -297,7 +332,10 @@ fn w_04b_macos_names_map_to_sleep_and_lock_only() {
 fn w_04b_windows_codes_map_to_sleep_and_lock_only() {
     assert_eq!(WTS_SESSION_LOCK, 0x7);
     assert_eq!(PBT_APMSUSPEND, 0x4);
-    assert_eq!(win_session_event(WTS_SESSION_LOCK), Some(SessionEvent::ScreenLock));
+    assert_eq!(
+        win_session_event(WTS_SESSION_LOCK),
+        Some(SessionEvent::ScreenLock)
+    );
     assert_eq!(win_session_event(0x8), None, "WTS_SESSION_UNLOCK");
     assert_eq!(win_power_event(PBT_APMSUSPEND), Some(SessionEvent::Sleep));
     assert_eq!(win_power_event(0x7), None, "PBT_APMRESUMESUSPEND");
@@ -343,7 +381,11 @@ fn w_04b_macos_source_gets_a_local_will_sleep_notification() {
     drop(watch);
     // SAFETY: as above.
     unsafe { center.postNotificationName_object(name, None) };
-    assert_eq!(seen.lock().unwrap().len(), 1, "no event after the watch ends");
+    assert_eq!(
+        seen.lock().unwrap().len(),
+        1,
+        "no event after the watch ends"
+    );
 }
 
 #[cfg(windows)]

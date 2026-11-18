@@ -193,9 +193,10 @@ fn at_02_w_18a_w_18c_after_sign_out_no_call_succeeds_and_no_token_is_left() {
     r6.with_token("bottle-test", HOST, &mut |_| ())
         .expect("TODO(#163): a token before sign-out");
     // TODO(#163): "Sign out of bottle-test" runs `databricks auth logout --profile bottle-test`
-    // through CliRunner, and R6 wipes the profile's buffers (W-18c).
+    // through CliRunner, and R6 wipes the profile's buffers (W-18c) through
+    // `token_events::sign_out` (#465, tested in tests/token_events.rs).
     r6.invalidate("bottle-test", TokenLease::default())
-        .expect("TODO(#163): sign-out calls CliTokenBroker::drop_all");
+        .expect("TODO(#163): sign-out calls token_events::sign_out");
     assert!(
         r6.with_token("bottle-test", HOST, &mut |_| ()).is_err(),
         "W-18a: a call after sign-out must fail"

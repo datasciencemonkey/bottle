@@ -223,6 +223,9 @@ struct Slot {
     generation: u64,
     /// The code of the last run, if it failed.
     failed: Option<&'static str>,
+    /// Counts drops (sleep, lock, sign-out), so a CLI run that started before a drop does not
+    /// cache its token after it.
+    drops: u64,
 }
 
 /// The real R6 TokenBroker (#18). See the module text for the rules it keeps.
@@ -300,14 +303,30 @@ impl CliTokenBroker {
         self.slots.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Drop every token of every profile now (W-04b: sleep, lock, sign-out).
-    /// TODO(#465): the sign-out flow (#163) and the OS sleep and lock events call this.
+    /// Drop every token of every profile now (W-04b: OS sleep and screen lock).
+    /// `token_events::watch_token_drops` calls this for each OS event (#465, ADR 0076). A CLI
+    /// run in flight does not cache its token afterwards. The host keeps the watch:
+    /// TODO(#486).
     pub fn drop_all(&self) {
         let mut slots = self.lock();
         for slot in slots.values_mut() {
-            slot.token = None;
-            slot.failed = None;
+            Self::drop_slot(slot);
         }
+    }
+
+    /// Drop the token of one profile now (W-18c: the user signs out of `profile`). Other
+    /// profiles keep their tokens. `token_events::sign_out` calls this; only the user's
+    /// sign-out action calls that (#163).
+    pub fn drop_profile(&self, profile: &str) {
+        if let Some(slot) = self.lock().get_mut(profile) {
+            Self::drop_slot(slot);
+        }
+    }
+
+    fn drop_slot(slot: &mut Slot) {
+        slot.token = None;
+        slot.failed = None;
+        slot.drops += 1;
     }
 
     /// The token state of `profile` for TS (`profile_status`): never a token.
@@ -383,6 +402,7 @@ impl CliTokenBroker {
                 continue;
             }
             slot.fetching = true;
+            let drops = slot.drops;
             drop(slots);
             let got = self.fetch(profile);
             slots = self.lock();
@@ -392,7 +412,9 @@ impl CliTokenBroker {
             let out = match got {
                 Ok(held) => {
                     let held = Arc::new(held);
-                    slot.token = Some(Arc::clone(&held));
+                    // A drop during the run wins: this caller uses the token once, and the
+                    // next call runs the CLI again (W-04b).
+                    slot.token = (slot.drops == drops).then(|| Arc::clone(&held));
                     slot.failed = None;
                     Ok(held)
                 }
