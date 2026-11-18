@@ -180,20 +180,32 @@ impl CaptureEvents for BrainCaptureEvents {
 pub type LevelResolver = Arc<dyn Fn(&ChannelRef) -> Option<Arc<dyn LevelOut>> + Send + Sync>;
 
 /// A [`LevelOut`] over a Tauri `Channel`: each level crosses as one JSON number (CAP-01b).
-pub struct ChannelLevelOut(tauri::ipc::Channel<f32>);
+/// After a failed send it is dead and sends nothing more, so the audio thread does not retry
+/// a gone webview at 30 Hz. The next `capture_subscribe` replaces it.
+pub struct ChannelLevelOut {
+    channel: tauri::ipc::Channel<f32>,
+    dead: AtomicBool,
+}
 
 impl ChannelLevelOut {
     /// Send the levels on `channel`.
     pub fn new(channel: tauri::ipc::Channel<f32>) -> Self {
-        Self(channel)
+        Self {
+            channel,
+            dead: AtomicBool::new(false),
+        }
     }
 }
 
 impl LevelOut for ChannelLevelOut {
     fn level(&self, dbfs: f32) {
-        // A failed send drops one level: the webview is gone, and the next subscribe replaces
-        // the Channel. Nothing is logged (no level value in logs).
-        let _ = self.0.send(dbfs);
+        if self.dead.load(Ordering::Relaxed) {
+            return;
+        }
+        // A failed send means the webview is gone. Nothing is logged (no level value in logs).
+        if self.channel.send(dbfs).is_err() {
+            self.dead.store(true, Ordering::Relaxed);
+        }
     }
 }
 
