@@ -59,8 +59,10 @@ pub const PROTOCOL_UNSUPPORTED: &str = "protocol_unsupported";
 /// The reply holds no JSON-RPC response for the request.
 pub const BAD_REPLY: &str = "bad_reply";
 
-/// The text the card shows for [`GENIE_ONE_OFF`] (G-05b).
-/// TODO(#32): the brain GL-5 mapper turns the `genie_one_off` code into this card text.
+/// The text the card shows for [`GENIE_ONE_OFF`] (G-05b). The brain GL-5 mapper
+/// (`src/brain/components/genie-errors.ts`, #32, ADR 0072) gives the same text for the
+/// `genie_one_off` code. The code reaches the brain only after TODO(#479) adds it to
+/// `ipc_gateway::ERROR_CODES`; until then the IPC rejection is `host_failed`.
 pub fn genie_one_off_message(host: &str) -> String {
     format!("Genie One isn't available in {host}.")
 }
