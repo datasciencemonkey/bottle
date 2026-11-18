@@ -267,13 +267,17 @@ fn cap_51a_model_loads_at_start_and_stays_resident_for_8_h_on_ac() {
 #[test]
 fn cap_51b_model_unloads_after_30_min_idle_on_battery_only() {
     let r = rig(PowerSource::Battery);
-    assert!(!r.engine.status().loaded, "on battery nothing loads before a key-down");
+    assert!(
+        !r.engine.status().loaded,
+        "on battery nothing loads before a key-down"
+    );
     r.engine.preload();
     r.engine.sync();
     assert!(r.engine.status().loaded);
 
     r.clock.advance(Duration::from_secs(20 * 60));
     r.engine.preload(); // a key-down at 20 min resets the idle time
+    r.engine.sync();
     r.clock.advance(Duration::from_secs(29 * 60));
     r.engine.tick();
     r.engine.sync();
@@ -298,7 +302,10 @@ fn cap_51a_cap_51b_unplug_then_plug_in_follows_the_power_source() {
     r.power.set(PowerSource::Ac);
     r.engine.tick();
     r.engine.sync();
-    assert!(r.engine.status().loaded, "back on AC the model is resident again");
+    assert!(
+        r.engine.status().loaded,
+        "back on AC the model is resident again"
+    );
     assert_eq!(r.log.loads.load(Ordering::SeqCst), 2);
 }
 
@@ -312,7 +319,11 @@ fn cap_51c_key_down_preloads_so_key_up_does_not_load() {
     r.engine.preload();
     events.state(&state(1, CaptureMode::Ptt, true));
     r.engine.sync();
-    assert_eq!(r.log.loads.load(Ordering::SeqCst), 1, "one load per key-down");
+    assert_eq!(
+        r.log.loads.load(Ordering::SeqCst),
+        1,
+        "one load per key-down"
+    );
     feed(&r.engine, &tone(1_000, -6.0, RATE), RATE);
     events.stopped(&stopped(1, StopReason::Released));
     r.engine.sync();
@@ -328,6 +339,7 @@ fn cap_51c_key_down_preloads_so_key_up_does_not_load() {
 fn cap_51c_first_ptt_after_an_unload_reloads_at_key_down() {
     let r = rig(PowerSource::Battery);
     r.engine.preload();
+    r.engine.sync();
     r.clock.advance(Duration::from_secs(31 * 60));
     r.engine.tick();
     r.engine.sync();
@@ -335,7 +347,10 @@ fn cap_51c_first_ptt_after_an_unload_reloads_at_key_down() {
     let events = SttCaptureEvents::new(NoEvents, r.engine.clone());
     events.state(&state(2, CaptureMode::Ptt, true));
     r.engine.sync();
-    assert!(r.engine.status().loaded, "the granted PTT reloads the model");
+    assert!(
+        r.engine.status().loaded,
+        "the granted PTT reloads the model"
+    );
     assert_eq!(r.log.loads.load(Ordering::SeqCst), 2);
 }
 
@@ -365,7 +380,11 @@ fn cap_52_closed_segment_decodes_during_speech_and_only_the_tail_after_key_up() 
     feed(&r.engine, &tone(1_000, -6.0, RATE), RATE);
     r.engine.sync();
     let during = calls(&r.log);
-    assert_eq!(during.len(), 1, "the first segment decodes while the key is down");
+    assert_eq!(
+        during.len(),
+        1,
+        "the first segment decodes while the key is down"
+    );
     assert!(
         (3_200..=3_700).contains(&ms_of(during[0].len)),
         "the first segment ends in the pause: {} ms",
@@ -403,7 +422,11 @@ fn cap_52_short_pause_before_3_s_does_not_cut() {
     assert!(calls(&r.log).is_empty(), "no cut before 3 s of audio");
     r.engine.commit(5, StopReason::Released);
     r.engine.sync();
-    assert_eq!(calls(&r.log).len(), 1, "a short utterance is one tail decode");
+    assert_eq!(
+        calls(&r.log).len(),
+        1,
+        "a short utterance is one tail decode"
+    );
 }
 
 #[test]
@@ -474,7 +497,10 @@ fn cap_52_discarded_and_panic_stops_make_no_transcript_and_hold_no_audio() {
         events.stopped(&stopped(lease, reason));
     }
     r.engine.sync();
-    assert!(r.out.all().is_empty(), "no transcript for a dropped capture");
+    assert!(
+        r.out.all().is_empty(),
+        "no transcript for a dropped capture"
+    );
     let s = r.engine.status();
     assert_eq!(s.open_takes, 0);
     assert_eq!(s.held_samples, 0);
@@ -517,7 +543,11 @@ fn cap_52_frames_with_no_live_lease_are_dropped() {
     events.stopped(&stopped(15, StopReason::Released));
     r.engine.sync();
     assert_eq!(calls(&r.log).len(), 1);
-    assert_eq!(r.engine.status().held_samples, 0, "the audio is gone after the decode");
+    assert_eq!(
+        r.engine.status().held_samples,
+        0,
+        "the audio is gone after the decode"
+    );
 }
 
 #[test]
@@ -536,7 +566,10 @@ fn cap_52_a_recognizer_panic_drops_the_model_and_the_next_use_reloads() {
     feed(&r.engine, &tone(800, -6.0, RATE), RATE);
     r.engine.commit(17, StopReason::Released);
     r.engine.sync();
-    assert!(r.out.all()[1].result.is_ok(), "the next PTT loads a new model");
+    assert!(
+        r.out.all()[1].result.is_ok(),
+        "the next PTT loads a new model"
+    );
     assert_eq!(r.log.loads.load(Ordering::SeqCst), 2);
 }
 
@@ -561,7 +594,10 @@ fn cap_52_ptt_over_hands_free_keeps_two_takes_apart() {
     let c = calls(&r.log);
     assert_eq!(c.len(), 2);
     assert!((650..=750).contains(&ms_of(c[0].len)), "the PTT take alone");
-    assert!((750..=850).contains(&ms_of(c[1].len)), "the hands-free take, both parts");
+    assert!(
+        (750..=850).contains(&ms_of(c[1].len)),
+        "the hands-free take, both parts"
+    );
     let done = r.out.all();
     assert_eq!(done[0].lease_id, 21);
     assert_eq!(done[1].lease_id, 20);
@@ -630,10 +666,14 @@ fn cap_72_stt_transcribe_returns_the_stored_transcript_once() {
         decode_ms: 0,
     });
     let out = Arc::new(Out::default());
-    let stt = LocalStt::new(loader, Arc::clone(&out) as Arc<dyn TranscriptSink>, |parts| {
-        parts.power = Arc::new(FakePower(Mutex::new(PowerSource::Battery)));
-        parts.clock = Arc::new(clock.clone());
-    });
+    let stt = LocalStt::new(
+        loader,
+        Arc::clone(&out) as Arc<dyn TranscriptSink>,
+        |parts| {
+            parts.power = Arc::new(FakePower(Mutex::new(PowerSource::Battery)));
+            parts.clock = Arc::new(clock.clone());
+        },
+    );
     stt.load_model().expect("the fake model loads");
     stt.engine().begin(50, "mog-a", CaptureMode::Ptt);
     feed(stt.engine(), &tone(600, -6.0, RATE), RATE);
@@ -681,7 +721,10 @@ fn cap_52_energy_vad_tells_speech_from_silence() {
     assert_eq!(speech.len(), VAD_WINDOW);
     assert!(vad.is_speech(&speech[..VAD_WINDOW]));
     assert!(!vad.is_speech(&vec![0.0; VAD_WINDOW]));
-    assert!(!vad.is_speech(&vec![1e-4; VAD_WINDOW]), "room noise is not speech");
+    assert!(
+        !vad.is_speech(&vec![1e-4; VAD_WINDOW]),
+        "room noise is not speech"
+    );
 }
 
 #[test]

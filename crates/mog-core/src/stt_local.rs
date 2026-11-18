@@ -6,20 +6,26 @@
 //!   (CAP-49b). It sends no credentials and no cookies.
 //! - [`extract_model_archive`]: unpacks only the pinned model files of the release archive.
 //!
-//! Model residency, preload on key-down and VAD decode are #46.
+//! - [`ParakeetLoader`]: the R4 [`RecognizerLoader`] over [`ParakeetRecognizer`] (#46,
+//!   ADR 0082). The engine (`crate::stt_engine`) owns residency, preload and VAD decode.
+//! - [`SileroVad`]: the Silero VAD on sherpa-onnx, for the R4 segment cut (CAP-52). Its model
+//!   file has no pinned download yet: TODO(#513).
 
 use std::fs::File;
 use std::io::{self, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::stt::LocalSttConfig;
+use crate::stt_engine::{
+    Recognizer, RecognizerLoader, SttIdentity, Vad, STT_SAMPLE_RATE, VAD_WINDOW,
+};
 use crate::stt_model::{content_range_start, is_allowed_url, FetchError, ModelSpec, RangeFetch};
 
 /// The runtime of local STT, for `Transcript.runtime` (CAP-72).
-pub const RUNTIME: &str = "sherpa-onnx 2.0.1 (onnxruntime CPU EP)";
+pub const RUNTIME: &str = crate::stt::LOCAL_STT_RUNTIME;
 /// The model of local STT, for `Transcript.model` (CAP-72).
-pub const MODEL: &str = "parakeet-tdt-0.6b-v3-int8";
+pub const MODEL: &str = crate::stt::LOCAL_STT_MODEL;
 /// The sample rate the recognizer takes.
 pub const SAMPLE_RATE: u32 = 16_000;
 
@@ -78,6 +84,96 @@ impl ParakeetRecognizer {
             .get_result()
             .map(|r| r.text.trim().to_owned())
             .unwrap_or_default()
+    }
+}
+
+impl Recognizer for ParakeetRecognizer {
+    fn transcribe(&mut self, samples: &[f32]) -> String {
+        ParakeetRecognizer::transcribe(self, samples)
+    }
+}
+
+/// The R4 loader of local Parakeet from an installed model folder (#46, CAP-51c).
+#[derive(Debug, Clone)]
+pub struct ParakeetLoader {
+    model_dir: PathBuf,
+    config: LocalSttConfig,
+}
+
+impl ParakeetLoader {
+    /// A loader of the model in `model_dir` with the CAP-48 settings of this device.
+    pub fn new(model_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            model_dir: model_dir.into(),
+            config: LocalSttConfig::for_this_device(),
+        }
+    }
+}
+
+impl RecognizerLoader for ParakeetLoader {
+    fn load(&self) -> Result<Box<dyn Recognizer>, &'static str> {
+        ParakeetRecognizer::load(&self.model_dir, self.config.clone())
+            .map(|r| Box::new(r) as Box<dyn Recognizer>)
+    }
+
+    fn identity(&self) -> SttIdentity {
+        SttIdentity::local_parakeet()
+    }
+}
+
+/// The Silero VAD on sherpa-onnx (CAP-52). It reads one 32 ms window at 16 kHz at a time and
+/// says whether speech is going on. The detector's own speech segments are dropped at once:
+/// R4 cuts its segments with `SegmentCutter`. TODO(#513): pin and install `silero_vad.onnx`.
+pub struct SileroVad {
+    vad: sherpa_onnx::VoiceActivityDetector,
+}
+
+impl std::fmt::Debug for SileroVad {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SileroVad").finish_non_exhaustive()
+    }
+}
+
+impl SileroVad {
+    /// Load the Silero model file `model`. CPU EP, one thread.
+    pub fn load(model: &Path) -> Result<Self, &'static str> {
+        if !model.is_file() {
+            return Err("stt_vad_model_missing");
+        }
+        let c = sherpa_onnx::VadModelConfig {
+            silero_vad: sherpa_onnx::SileroVadModelConfig {
+                model: Some(model.to_string_lossy().into_owned()),
+                threshold: 0.5,
+                min_silence_duration: 0.1,
+                min_speech_duration: 0.05,
+                window_size: VAD_WINDOW as i32,
+                max_speech_duration: 30.0,
+            },
+            sample_rate: STT_SAMPLE_RATE as i32,
+            num_threads: 1,
+            provider: Some(crate::stt::LOCAL_STT_PROVIDER.into()),
+            ..Default::default()
+        };
+        let vad =
+            sherpa_onnx::VoiceActivityDetector::create(&c, 31.0).ok_or("stt_vad_load_failed")?;
+        Ok(Self { vad })
+    }
+}
+
+impl Vad for SileroVad {
+    fn is_speech(&mut self, window: &[f32]) -> bool {
+        self.vad.accept_waveform(window);
+        let speech = self.vad.detected();
+        // The detector keeps a copy of each speech segment; drop it now (audio in RAM only,
+        // and only as long as needed).
+        while !self.vad.is_empty() {
+            self.vad.pop();
+        }
+        speech
+    }
+
+    fn reset(&mut self) {
+        self.vad.reset();
     }
 }
 

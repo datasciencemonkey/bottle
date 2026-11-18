@@ -1,34 +1,29 @@
 //! R4 SttEngine (section 4.3).
 //!
-//! Responsibilities: Parakeet TDT 0.6B v3 int8 on the official `sherpa-onnx` crate, CPU EP, one worker thread. Packs audio for cloud ASR.
+//! Responsibilities: Parakeet TDT 0.6B v3 int8 on the official `sherpa-onnx` crate, CPU EP, one
+//! worker thread. Packs audio for cloud ASR.
+//!
+//! The engine itself (model residency, preload on key-down, the decode of closed VAD segments
+//! during speech) is [`crate::stt_engine`] (#46, ADR 0082). This module keeps the R4 interface,
+//! the recognizer settings and the local model identity.
 
-use crate::error::{CoreError, CoreResult};
-
-const ID: &str = "R4";
+use crate::error::CoreResult;
+use crate::types::Transcript;
 
 /// Local speech to text. It gets segment IDs from R2, not raw audio from callers.
 pub trait SttEngine: Send + Sync {
-    /// Load the local model into memory.
+    /// Load the local model into memory now. Errors are content-free codes
+    /// ([`crate::error::CoreError::Unavailable`], for example `stt_model_missing`).
     fn load_model(&self) -> CoreResult<()>;
-    /// Transcribe one segment that R2 made. Returns the text.
-    fn transcribe(&self, segment_id: &str) -> CoreResult<String>;
+    /// The transcript of one segment that R2 made (the `stt_transcribe` result). Each
+    /// transcript is handed out once.
+    fn transcribe(&self, segment_id: &str) -> CoreResult<Transcript>;
 }
 
-/// The R4 stub. Every method returns [`CoreError::NotImplemented`].
-#[derive(Debug, Default, Clone, Copy)]
-pub struct StubSttEngine;
-
-impl SttEngine for StubSttEngine {
-    fn load_model(&self) -> CoreResult<()> {
-        // TODO(#46): model residency and preload on key-down.
-        Err(CoreError::NotImplemented { component: ID })
-    }
-
-    fn transcribe(&self, _segment_id: &str) -> CoreResult<String> {
-        // TODO(#46): streaming VAD decode on one worker thread.
-        Err(CoreError::NotImplemented { component: ID })
-    }
-}
+/// The model of local STT, for `Transcript.model` (CAP-72).
+pub const LOCAL_STT_MODEL: &str = "parakeet-tdt-0.6b-v3-int8";
+/// The runtime of local STT, for `Transcript.runtime` (CAP-72).
+pub const LOCAL_STT_RUNTIME: &str = "sherpa-onnx 2.0.1 (onnxruntime CPU EP)";
 
 /// The ONNX Runtime execution provider of local STT (CAP-48, D78): the CPU EP only.
 pub const LOCAL_STT_PROVIDER: &str = "cpu";

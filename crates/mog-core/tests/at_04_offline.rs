@@ -69,7 +69,8 @@ fn at_04_cap_72_local_stt_records_the_model_and_runtime_offline() {
         }
     }
     let r4 = LocalStt::new(Arc::new(Loader), Arc::new(NoTranscriptSink), |_| {});
-    r4.load_model().expect("the local model loads with no network");
+    r4.load_model()
+        .expect("the local model loads with no network");
     let tone: Vec<f32> = (0..16_000)
         .map(|i| 0.3 * (2.0 * std::f32::consts::PI * 220.0 * i as f32 / 16_000.0).sin())
         .collect();

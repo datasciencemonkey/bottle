@@ -102,3 +102,56 @@ fn cap_48_recognizer_runs_on_the_cpu_ep_with_p_core_threads() {
     assert!(MODEL.contains("parakeet"));
     assert!(RUNTIME.starts_with("sherpa-onnx 2.0."));
 }
+
+#[test]
+fn cap_51c_cap_52_cap_72_engine_decodes_with_the_real_model() {
+    use mog_core::capture::StopReason;
+    use mog_core::stt_engine::{EngineParts, LocalSttEngine, PowerSource, SttDone, TranscriptSink};
+    use mog_core::stt_local::ParakeetLoader;
+    use mog_core::types::{CaptureMode, TranscriptProvider};
+    use std::sync::{Arc, Mutex};
+    let Some(dir) = std::env::var_os("BOTTLE_STT_MODEL_DIR") else {
+        // TODO(#414): the #414 `local-stt` CI job sets BOTTLE_STT_MODEL_DIR and fails if this
+        // note prints, so the real-model part of #46 runs there.
+        eprintln!("BOTTLE_STT_MODEL_DIR is not set: the #46 real-model engine test did not run");
+        return;
+    };
+    #[derive(Default)]
+    struct Out(Mutex<Vec<SttDone>>);
+    impl TranscriptSink for Out {
+        fn done(&self, d: SttDone) {
+            self.0.lock().unwrap().push(d);
+        }
+    }
+    struct Battery;
+    impl mog_core::stt_engine::PowerProbe for Battery {
+        fn source(&self) -> PowerSource {
+            PowerSource::Battery
+        }
+    }
+    let out = Arc::new(Out::default());
+    let mut parts = EngineParts::new(
+        Arc::new(ParakeetLoader::new(PathBuf::from(dir))),
+        Arc::clone(&out) as Arc<dyn TranscriptSink>,
+    );
+    parts.power = Arc::new(Battery);
+    let r4 = LocalSttEngine::spawn(parts);
+    r4.preload();
+    r4.sync();
+    // A loud failure in the #414 job: the variable is set, so the model must load.
+    assert!(
+        r4.status().loaded,
+        "the model at BOTTLE_STT_MODEL_DIR did not load: {:?}",
+        r4.status()
+    );
+    r4.begin(1, "mog-a", CaptureMode::Ptt);
+    r4.frames(&vec![0.0; 48_000], 48_000);
+    r4.commit(1, StopReason::Released);
+    r4.sync();
+    let done = out.0.lock().unwrap().clone();
+    assert_eq!(done.len(), 1);
+    let t = done[0].result.clone().expect("a transcript");
+    assert_eq!(t.provider, TranscriptProvider::LocalParakeet);
+    assert_eq!(t.model, MODEL);
+    assert_eq!(t.runtime, RUNTIME);
+}

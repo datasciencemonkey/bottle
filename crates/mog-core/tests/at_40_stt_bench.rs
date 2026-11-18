@@ -724,5 +724,9 @@ fn at_40_cap_20_every_segment_r4_decodes_peaks_at_minus_3_dbfs() {
     r4.sync();
     let peaks = peaks.lock().unwrap().clone();
     assert_eq!(peaks.len(), 1, "one segment reached R4");
-    assert!((peaks[0] - TARGET_PEAK_DBFS).abs() < 0.5, "peak {}", peaks[0]);
+    assert!(
+        (peaks[0] - TARGET_PEAK_DBFS).abs() < 0.5,
+        "peak {}",
+        peaks[0]
+    );
 }
