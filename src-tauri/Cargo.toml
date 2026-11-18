@@ -12,6 +12,15 @@ rust-version.workspace = true
 name = "bottle_lib"
 crate-type = ["rlib"]
 
+[features]
+default = []
+# #413 (ADR 0049): the app's local Parakeet STT. It turns on `mog-core/local-stt`, so the PTT
+# host loads the installed model with `stt_local::ParakeetLoader` instead of `NoModelLoader`.
+# Off by default: the build needs the vendored, hash-pinned sherpa-onnx archive in
+# SHERPA_ONNX_ARCHIVE_DIR (`scripts/vendor_sherpa_onnx.py`), and App CI has no such step yet.
+# TODO(#534): CI and the release build turn it on after the vendored archive fetch (with #414).
+local-stt = ["mog-core/local-stt"]
+
 [build-dependencies]
 mog-core.workspace = true
 tauri-build.workspace = true

@@ -103,7 +103,7 @@ pub trait RecognizerLoader: Send + Sync + 'static {
 }
 
 /// The loader when no model can load: a build without `local-stt`, or no installed model.
-/// TODO(#413): the app uses `stt_local::ParakeetLoader` once the wizard installs the model.
+/// The app uses `stt_setup::AppModelLoader` (#413), which loads Parakeet when a model is installed.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NoModelLoader;
 

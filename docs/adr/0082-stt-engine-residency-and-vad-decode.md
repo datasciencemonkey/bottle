@@ -64,7 +64,7 @@ The issue leaves these points open:
 ## Consequences
 
 - The host runs R4 in the capture chain, tested with fakes (`src-tauri/tests/stt_host.rs`). It does not make text in the app yet, for these reasons:
-  - The `local-stt` feature is not on in `src-tauri` (TODO(#413)).
+  - The `local-stt` feature of `src-tauri` is off by default; CI and the release build turn it on in #534 (ADR 0049 amendment 1, #413).
   - `stt_transcribe` has no host route, and no core code emits `capture.segment` yet (TODO(#514)). The route is in `src-tauri/src/ipc.rs`, a contract file.
 - #498 (the Copy card for `copy` and `insert_failed`) must land before #514 or with it, because #514 first produces routed dictation text. This PR produces no routed text: T4 SttProvider (#52) still rejects.
 - The tail latency (AT-21, SP-04) and the 8 h residency on a device stay device steps. The real-model test in `tests/stt_local.rs` runs in the #414 job with `BOTTLE_STT_MODEL_DIR` (TODO(#414)).

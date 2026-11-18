@@ -47,6 +47,7 @@ pub mod stt_engine;
 #[cfg(feature = "local-stt")]
 pub mod stt_local;
 pub mod stt_model;
+pub mod stt_setup;
 pub mod telemetry;
 pub mod testkit;
 pub mod token_broker;

@@ -74,11 +74,10 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
     });
     // #476 (CAP-16a): `capture_subscribe` sends the levels on a Channel of the brain webview.
     let levels = capture_host::HostLevels::new(capture_host::brain_level_resolver(handle.clone()));
-    // #46 (ADR 0082): R4 SttEngine. TODO(#413): the app build has no `local-stt` and no
-    // installed model yet, so the loader reports `stt_model_missing`. TODO(#514): the results
+    // #46 (ADR 0082): R4 SttEngine, with the #413 loader (`stt_loader`). TODO(#514): the results
     // go to `capture.segment` and `stt_transcribe`; until then the store keeps them in RAM.
     let stt = mog_core::stt_engine::LocalStt::new(
-        std::sync::Arc::new(mog_core::stt_engine::NoModelLoader),
+        stt_loader(),
         std::sync::Arc::new(mog_core::stt_engine::NoTranscriptSink),
         |_| {},
     );
@@ -126,6 +125,12 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
     // CAP-51c: the hotkey host preloads R4 at each talk-key down through this state.
     handle.manage(stt);
     Ok(())
+}
+
+/// #413 (ADR 0049 amendment 1): R4 loads the Parakeet model from the W-17e folder when the app
+/// is built with `--features local-stt` and a model is installed; else `stt_model_missing`.
+fn stt_loader() -> std::sync::Arc<dyn mog_core::stt_engine::RecognizerLoader> {
+    std::sync::Arc::new(mog_core::stt_setup::AppModelLoader::for_this_device())
 }
 
 /// The core version that this app links (ARC-1).

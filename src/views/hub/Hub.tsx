@@ -16,6 +16,7 @@ import { LegalNotice } from './LegalNotice';
 import { MicPreference } from './MicPreference';
 import { ForgetDialogHost } from './ForgetDialogHost';
 import { MogList } from './MogList';
+import { SttSetupStep } from './SttSetupStep';
 
 export function Hub() {
   const [mogs, setMogs] = useState<ReadonlyMap<MogId, MogViewState>>(new Map());
@@ -61,6 +62,7 @@ export function Hub() {
       <MogList />
       <ForgetDialogHost />
       <MicPreference />
+      <SttSetupStep />
       <DataPanel />
       <About />
     </main>
