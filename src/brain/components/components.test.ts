@@ -249,7 +249,7 @@ describe('brain component stubs', () => {
     await expectStub(() => t.gate(q), 200);
     await expectStub(() => t.assembleContext(MOG, { workspaceId: 'w' }, 'q'), 92);
     // write is implemented by #114 (memory-write.test.ts); an empty batch writes nothing.
-    await expect(t.write([])).resolves.toBeDefined();
+    await expect(t.write([])).resolves.toBeUndefined();
     // recordExchange is implemented by #38 (memory-exchange.test.ts).
     // forget is implemented by #123 (memory-forget.test.ts).
     expect(t.mode()).toBe('local');

@@ -81,6 +81,13 @@ pub enum ParamType {
     /// Free text for an FTS5 `MATCH`. The core keeps only its words and quotes each one, so the
     /// text can never be FTS5 syntax (MEM-34b). At least one word is required.
     FtsTerms,
+    /// Set by the core, never by the caller: 1 if the text param named `of` must be quarantined
+    /// (SEC-24a, [`super::quarantine::is_quarantined`]), else 0. A caller that sends this key is
+    /// refused, so no item write can skip the check (#114, ADR 0089).
+    Quarantine {
+        /// The name of the text param that the core checks.
+        of: &'static str,
+    },
 }
 
 /// One named parameter.
@@ -273,17 +280,46 @@ const EXCHANGE_BY_SESSION: Stmt = Stmt {
 };
 
 // ---- memory_item (#114) and recall (#199) --------------------------------------------------
+//
+// #114 (ADR 0089): the item write keeps its provenance (MEM-31: source, workspace, the session,
+// utterance and exchange links) and sets `status` at write time (SEC-24a). The status is
+// `quarantined` if the core's check of `:text` (`textQuarantine`) or the brain's own check
+// (`quarantined`) says so, else `active`. A later mention never lowers a quarantine, and adds its
+// session and utterance links to the ones that are there.
 
+/// The provenance and quarantine params of an item write.
+const SOURCE_SESSION_IDS: Param = opt("sourceSessionIds", json(8_192));
+const SOURCE_UTTERANCE_IDS: Param = opt("sourceUtteranceIds", json(65_536));
+const QUARANTINED: Param = opt("quarantined", BOOL);
+const TEXT_QUARANTINE: Param = req("textQuarantine", ParamType::Quarantine { of: "text" });
+
+/// Rust-only (#102 note, MEM-10a): the brain writes an item only with `mem.item.write`, which runs
+/// this step and the embed job in one transaction. So no brain item write skips the outbox.
 const ITEM_UPSERT: Stmt = Stmt {
     id: "mem.item.upsert",
-    sql: "INSERT INTO memory_item (item_id, mog_id, item_type, text, source, confidence, pinned, \
-          sensitivity, workspace_host, workspace_id, space_id, source_exchange_id, \
-          first_seen_at, last_seen_at, row_hlc, origin_device_id) \
+    sql: "INSERT INTO memory_item (item_id, mog_id, item_type, text, source, confidence, status, \
+          pinned, sensitivity, source_session_ids, source_utterance_ids, workspace_host, \
+          workspace_id, space_id, source_exchange_id, first_seen_at, last_seen_at, row_hlc, \
+          origin_device_id) \
           VALUES (:itemId, :mogId, :itemType, :text, :source, :confidence, \
-          coalesce(:pinned, 0), coalesce(:sensitivity, 'normal'), :workspaceHost, :workspaceId, \
-          :spaceId, :sourceExchangeId, :seenAt, :seenAt, :rowHlc, :deviceId) \
+          CASE WHEN max(:textQuarantine, coalesce(:quarantined, 0)) = 1 \
+          THEN 'quarantined' ELSE 'active' END, \
+          coalesce(:pinned, 0), coalesce(:sensitivity, 'normal'), \
+          coalesce(:sourceSessionIds, '[]'), coalesce(:sourceUtteranceIds, '[]'), \
+          :workspaceHost, :workspaceId, :spaceId, :sourceExchangeId, :seenAt, :seenAt, :rowHlc, \
+          :deviceId) \
           ON CONFLICT (item_id) DO UPDATE SET text = excluded.text, \
           confidence = excluded.confidence, pinned = max(memory_item.pinned, excluded.pinned), \
+          status = CASE WHEN excluded.status = 'quarantined' THEN 'quarantined' \
+          ELSE memory_item.status END, \
+          source_session_ids = (SELECT json_group_array(value) FROM (SELECT value \
+          FROM json_each(memory_item.source_session_ids) UNION \
+          SELECT value FROM json_each(excluded.source_session_ids))), \
+          source_utterance_ids = (SELECT json_group_array(value) FROM (SELECT value \
+          FROM json_each(memory_item.source_utterance_ids) UNION \
+          SELECT value FROM json_each(excluded.source_utterance_ids))), \
+          source_exchange_id = coalesce(memory_item.source_exchange_id, \
+          excluded.source_exchange_id), \
           last_seen_at = max(memory_item.last_seen_at, excluded.last_seen_at), \
           mention_count = memory_item.mention_count + 1, row_hlc = excluded.row_hlc, \
           updated_at = CAST(strftime('%s','now') AS INTEGER) * 1000 \
@@ -301,12 +337,16 @@ const ITEM_UPSERT: Stmt = Stmt {
         opt("workspaceId", MS),
         opt("spaceId", text(128)),
         opt("sourceExchangeId", UUID),
+        SOURCE_SESSION_IDS,
+        SOURCE_UTTERANCE_IDS,
+        QUARANTINED,
+        TEXT_QUARANTINE,
         req("seenAt", MS),
         ROW_HLC,
         DEVICE_ID,
     ],
     kind: Kind::Write,
-    access: Access::Brain,
+    access: Access::Core,
 };
 
 const ITEM_GET: Stmt = Stmt {
@@ -314,7 +354,8 @@ const ITEM_GET: Stmt = Stmt {
     sql: "SELECT item_id AS itemId, item_type AS type, text, source, confidence, status, pinned, \
           sensitivity, workspace_host AS workspaceHost, workspace_id AS workspaceId, \
           space_id AS spaceId, mention_count AS mentionCount, first_seen_at AS firstSeenAt, \
-          last_seen_at AS lastSeenAt \
+          last_seen_at AS lastSeenAt, source_session_ids AS sourceSessionIds, \
+          source_utterance_ids AS sourceUtteranceIds, source_exchange_id AS sourceExchangeId \
           FROM memory_item WHERE mog_id = :mogId AND item_id = :itemId AND deleted_at IS NULL",
     params: &[MOG_ID, req("itemId", UUID)],
     kind: Kind::Query,
@@ -653,7 +694,8 @@ const OUTBOX_DONE: Stmt = Stmt {
 };
 
 /// The embed job of one item, as step 2 of `mem.item.write` (MEM-10a, MEM-19d). It adds a job only
-/// if the item is in this MOG (MEM-01), has no embedding yet, and has no embed job waiting: so a
+/// if the item is in this MOG (MEM-01), is `active` (a quarantined item is never embedded, SEC-24a,
+/// ADR 0089), has no embedding yet, and has no embed job waiting: so a
 /// second mention adds no duplicate (SP-21). The job is a pointer (`ref_id` = the item id) and
 /// holds no text. Rust only: the brain adds an embed job only with its item write.
 /// TODO(#198): when the text of an embedded item changes, #198 clears its embedding and its
@@ -663,7 +705,7 @@ const OUTBOX_ENQUEUE_ITEM_EMBED: Stmt = Stmt {
     sql: "INSERT INTO outbox (mog_id, kind, op, ref_id, created_at, next_attempt_at) \
           SELECT m.mog_id, 'embed', 'item.embed', m.item_id, :now, :now FROM memory_item m \
           WHERE m.mog_id = :mogId AND m.item_id = :itemId AND m.embedding IS NULL \
-          AND m.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM outbox o \
+          AND m.deleted_at IS NULL AND m.status = 'active' AND NOT EXISTS (SELECT 1 FROM outbox o \
           WHERE o.mog_id = :mogId AND o.kind = 'embed' AND o.ref_id = :itemId)",
     params: &[MOG_ID, req("itemId", UUID), req("now", MS)],
     kind: Kind::Write,
@@ -706,6 +748,10 @@ const ITEM_WRITE: Group = Group {
         opt("workspaceId", MS),
         opt("spaceId", text(128)),
         opt("sourceExchangeId", UUID),
+        SOURCE_SESSION_IDS,
+        SOURCE_UTTERANCE_IDS,
+        QUARANTINED,
+        TEXT_QUARANTINE,
         req("seenAt", MS),
         ROW_HLC,
         DEVICE_ID,
@@ -1055,6 +1101,8 @@ fn bind_value(ty: ParamType, v: &Value) -> CoreResult<SqlValue> {
             SqlValue::Text(s)
         }
         ParamType::FtsTerms => SqlValue::Text(fts_terms(&text(v)?).ok_or_else(bad)?),
+        // Never bound from a caller value: `check_params` computes it.
+        ParamType::Quarantine { .. } => return Err(bad()),
     })
 }
 
@@ -1082,10 +1130,19 @@ pub fn check_params(decl: &[Param], params: &Value) -> CoreResult<Vec<(&'static 
         return Err(bad());
     }
     decl.iter()
-        .map(|p| match obj.get(p.name) {
-            None | Some(Value::Null) if p.required => Err(bad()),
-            None | Some(Value::Null) => Ok((p.name, SqlValue::Null)),
-            Some(v) => Ok((p.name, bind_value(p.ty, v)?)),
+        .map(|p| match (p.ty, obj.get(p.name)) {
+            // SEC-24a: the core sets the quarantine; a caller that sends the key is refused.
+            (ParamType::Quarantine { .. }, Some(_)) => Err(bad()),
+            (ParamType::Quarantine { of }, None) => {
+                let t = obj.get(of).and_then(Value::as_str).unwrap_or("");
+                Ok((
+                    p.name,
+                    SqlValue::Integer(i64::from(super::quarantine::is_quarantined(t))),
+                ))
+            }
+            (_, None | Some(Value::Null)) if p.required => Err(bad()),
+            (_, None | Some(Value::Null)) => Ok((p.name, SqlValue::Null)),
+            (_, Some(v)) => Ok((p.name, bind_value(p.ty, v)?)),
         })
         .collect()
 }

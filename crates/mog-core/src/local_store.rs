@@ -9,6 +9,7 @@ pub mod catalog;
 pub mod key_vault;
 mod migrate;
 pub mod mog_guard;
+pub mod quarantine;
 mod store;
 #[cfg(test)]
 mod tests;

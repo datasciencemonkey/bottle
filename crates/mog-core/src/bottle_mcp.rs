@@ -185,12 +185,18 @@ impl LocalTools for StoreLocalTools {
         )
     }
 
+    /// The agent's item goes through `mem.item.write` (#114, MEM-10a): the row and its embed job
+    /// commit in one transaction, so this write never skips the outbox. R10 checks the text and
+    /// stores an injection item as `quarantined` (SEC-24a), so `memory.recall` never returns it
+    /// (SEC-24b). The agent never pins (MEM-28b: a pin needs a user action).
+    /// TODO(#141): the agent item has no workspace host or id yet (MEM-31). It is source
+    /// `agent`, so it never goes into a Genie preamble (Table G-CTX).
     fn memory_write(&self, mog_id: &str, item_type: &str, text: &str) -> CoreResult<Value> {
         let now = now_ms();
         // TODO(#195): a hybrid logical clock for `rowHlc` when the v1 sync lands; until then
         // the wall clock in milliseconds (the catalog takes either).
         self.store.exec(
-            "mem.item.upsert",
+            "mem.item.write",
             json!({
                 "itemId": new_uuid()?,
                 "mogId": mog_id,
@@ -201,6 +207,7 @@ impl LocalTools for StoreLocalTools {
                 "seenAt": now,
                 "rowHlc": now,
                 "deviceId": self.device_id,
+                "now": now,
             }),
         )
     }

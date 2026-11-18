@@ -27,6 +27,8 @@ serde.workspace = true
 serde_json.workspace = true
 rusqlite.workspace = true
 sqlite-vec.workspace = true
+# SEC-24a (#114): the memory item quarantine patterns. Already in Cargo.lock (no new crate).
+regex = "1"
 # CAP-49c: the pinned SHA-256 checks of the STT model files.
 sha2 = "0.10"
 # CAP-48: the official sherpa-onnx crate, 2.0.x, static (feature `local-stt`).
