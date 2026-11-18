@@ -196,8 +196,11 @@ body {
   accent-color: var(--mog-lamp-deep);
 }
 
+/* The ring is a shadow; the transparent outline turns into the system colour in forced-colors
+   (Windows High Contrast), where shadows are dropped (WCAG 2.4.7). */
 .hub :focus-visible {
-  outline: none;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
   box-shadow: var(--mog-focus-ring);
 }
 
@@ -518,7 +521,7 @@ body {
 }
 
 .legal-notice:focus {
-  outline: none;
+  outline: 2px solid transparent;
 }
 
 /* The notice takes focus on open (ADR 0022) so a screen reader reads it; it is not a control,

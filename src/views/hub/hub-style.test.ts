@@ -27,6 +27,9 @@ describe('hub and MOG chrome styling (#561)', () => {
     expect(css).toMatch(/\.hub\s*\{[^}]*font:[^;]*var\(--mog-font\)/);
     expect(css).toMatch(/\.hub :focus-visible\s*\{[^}]*box-shadow:\s*var\(--mog-focus-ring\)/);
     expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)/);
+    // Forced-colors drops box-shadow: the outline must stay (transparent), never `none`.
+    expect(css).not.toMatch(/outline:\s*none/);
+    expect(css).toMatch(/\.hub :focus-visible\s*\{[^}]*outline:\s*2px solid transparent/);
   });
 
   it('[#561] colours come from the tokens: the hub declares no hex colour of its own', () => {
