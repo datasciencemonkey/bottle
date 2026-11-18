@@ -86,7 +86,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::clock::MonotonicClock;
 use crate::ipc::IpcError;
-use crate::types::{self, CaptureMode, CaptureState, MogId, OthersTrack};
+use crate::types::{self, CaptureMode, CaptureState, MicHealth, MogId, OthersTrack};
 
 /// The locked hold-to-talk safety stop: 120 s (section 7.1, D54, CAP-04a).
 pub const HOLD_MAX_MS: u64 = 120_000;
@@ -125,6 +125,16 @@ pub enum AudioSource {
 pub struct DeviceError {
     /// The stable error code that may cross IPC.
     pub code: &'static str,
+}
+
+/// The `CaptureState.mic` code of a refused mic open (CAP-17b, #453). Only fixed codes map;
+/// any other code gives no reading.
+fn mic_health_of(e: &DeviceError) -> Option<MicHealth> {
+    match e.code {
+        "permission_denied" => Some(MicHealth::PermissionDenied),
+        "no_device" => Some(MicHealth::NoDevice),
+        _ => None,
+    }
 }
 
 /// The audio device backend. CaptureService is its only caller. It opens each source at most
@@ -171,8 +181,8 @@ pub enum StopReason {
     /// The hands-free VAD end: `mog.capture.vadEndMs` of silence (CAP-14c).
     VadEnd,
     /// The mic gave only zero buffers for 2 s, for example a denied mic permission (CAP-17b).
-    /// The capture makes no transcript, and the MOG shows the fix-it card. TODO(#453): the
-    /// fix-it card reads the mic fault from `capture.state`.
+    /// The capture makes no transcript, and the MOG shows the fix-it card: `capture.state`
+    /// carries `mic: zero_buffers` (#453).
     ZeroBuffers,
 }
 
@@ -469,6 +479,9 @@ struct Inner {
     last_state: Option<CaptureState>,
     /// `mog.capture.vadEndMs` per MOG (CAP-14c). A MOG not here has [`DEFAULT_VAD_END_MS`].
     vad_end_ms: HashMap<MogId, u64>,
+    /// CAP-17b (#453): the last mic health, for `CaptureState.mic`. `None` until the first
+    /// grant or mic fault.
+    mic: Option<MicHealth>,
 }
 
 impl Inner {
@@ -531,6 +544,7 @@ impl Inner {
             started_at: None,
             directed_to: None,
             others_track: OthersTrack::Off,
+            mic: self.mic,
         };
         let Some(primary) = &self.primary else {
             return idle;
@@ -560,6 +574,7 @@ impl Inner {
                 } else {
                     OthersTrack::Off
                 },
+                ..idle
             },
         }
     }
@@ -690,6 +705,13 @@ impl CaptureCore {
         // Mark the stream lost before any lease changes, so no start can reuse it (round 5).
         self.lost(source).store(true, Ordering::SeqCst);
         self.commit(|inner, now, evs| {
+            // CAP-17b (#453): the fix-it card reads the fault from `capture.state`.
+            if source == AudioSource::Mic {
+                inner.mic = Some(match reason {
+                    StopReason::ZeroBuffers => MicHealth::ZeroBuffers,
+                    _ => MicHealth::NoDevice,
+                });
+            }
             let ids: Vec<LeaseNo> = match source {
                 AudioSource::Mic => [&inner.overlay, &inner.primary]
                     .into_iter()
@@ -1177,6 +1199,14 @@ impl CaptureService for CaptureCore {
             };
             // A failed open drops only the new lease; a hands-free capture it would preempt
             // keeps the mic.
+            if let Err(e) = &opened {
+                // CAP-17b (#453): a mic that did not open shows its fixed code.
+                if !dev.mic_open {
+                    if let Some(h) = mic_health_of(e) {
+                        inner.mic = Some(h);
+                    }
+                }
+            }
             opened.map_err(CaptureError::Device)?;
             if inner.pending_lost {
                 return Err(CaptureError::Device(DEVICE_LOST));
@@ -1205,6 +1235,8 @@ impl CaptureService for CaptureCore {
                 // Not reachable: one start at a time, and leases only go away meanwhile.
                 (false, true) => return Err(CaptureError::MicBusy),
             }
+            // CAP-17b (#453): a granted lease has a working mic.
+            inner.mic = Some(MicHealth::Ok);
             Ok(lease)
         })
     }

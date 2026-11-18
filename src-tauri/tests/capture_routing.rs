@@ -86,6 +86,7 @@ impl Rig {
             config: None,
             capture: Some(&self.host),
             capture_ticket: None,
+            app_settings: None,
         };
         route(components, command, args)
     }
@@ -112,6 +113,7 @@ impl Rig {
             config: None,
             capture: Some(&self.host),
             capture_ticket: Some(ticket),
+            app_settings: None,
         };
         route(components, command, args)
     }
@@ -409,6 +411,7 @@ fn cap_01a_no_managed_capture_host_is_host_failed() {
             config: None,
             capture: None,
             capture_ticket: None,
+            app_settings: None,
         };
         assert_eq!(
             route(components, command, sample_args(command)),
@@ -482,6 +485,8 @@ fn cap_01b_capture_events_and_replies_carry_no_audio_or_text() {
         "startedAt",
         "directedTo",
         "othersTrack",
+        // #453 (CAP-17b): the mic health, a fixed code (checked below).
+        "mic",
     ];
     let stop_keys = ["leaseId", "mogId", "mode", "reason"];
     let check = |v: &Value, allowed: &[&str]| {
@@ -489,6 +494,13 @@ fn cap_01b_capture_events_and_replies_carry_no_audio_or_text() {
         for (k, val) in obj {
             assert!(allowed.contains(&k.as_str()), "unexpected field {k}");
             assert!(!val.is_array() && !val.is_object(), "{k} holds a structure");
+            if k == "mic" {
+                let code = val.as_str().expect("mic is a code");
+                assert!(
+                    ["ok", "zero_buffers", "permission_denied", "no_device"].contains(&code),
+                    "mic code {code}"
+                );
+            }
         }
     };
     for reply in &replies {

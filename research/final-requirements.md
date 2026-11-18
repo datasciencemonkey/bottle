@@ -2875,6 +2875,7 @@ Router input (not in the schema): the utterance in `<utterance>` tags, `speaker_
 | App | Notifications | smart | `app.notify.mode` |
 | App | Earcons | on; off in sessions | `app.earcons.enabled`, `app.earcons.inSession` |
 | App | Reduced motion | follow OS | `app.a11y.reducedMotion` |
+| App | Prefer the built-in mic when a Bluetooth headset connects (CAP-22) | off | `app.capture.preferBuiltInMic` |
 | App | Insert dictated text into the active app (UC1) | on after the user grants Accessibility; else Copy | `app.dictation.insert` |
 | App | Home Lakebase endpoint (v1) | created by the app when sync is on | `app.lakebaseEndpoint` |
 | App | Embedding model | `databricks-qwen3-embedding-0-6b`, 1024 | `app.embedModel`, `app.embedDim` |

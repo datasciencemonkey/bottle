@@ -159,6 +159,19 @@ export interface GenieExchange {
   /** The Genie space id, when the backend has one. */
   spaceId?: string;
 }
+/**
+ * CAP-17b (#453): the health of the You track (the mic), for the mic fix-it card. A fixed code
+ * only: no device name or ID (CAP-01b). Mirrors `mog_core::types::MicHealth`.
+ */
+export type MicHealth = 'ok' | 'zero_buffers' | 'permission_denied' | 'no_device';
+/**
+ * CAP-17b (#453): declaration merging adds the mic health to the 4.7 `CaptureState`. The core
+ * sets `ok` at each granted lease and a fault code on a mic fault or a refused open. Absent
+ * before the first reading and in payloads from before #453.
+ */
+export interface CaptureState {
+  mic?: MicHealth;
+}
 
 // ---------- IPC names used by 4.5 but not defined in 4.7 ----------
 /** One entry of `profiles_list` (4.5). The same shape as `Profile`. */

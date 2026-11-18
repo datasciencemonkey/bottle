@@ -69,6 +69,7 @@ fn recording(owner: &str) -> CaptureState {
         started_at: Some(1),
         directed_to: None,
         others_track: OthersTrack::Off,
+        mic: None,
     }
 }
 
@@ -83,6 +84,7 @@ fn idle() -> CaptureState {
         started_at: None,
         directed_to: None,
         others_track: OthersTrack::Off,
+        mic: None,
     }
 }
 

@@ -7,5 +7,6 @@
   "sessionId": "sess-01",
   "startedAt": 1763251200000,
   "directedTo": "0a9b8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d",
-  "othersTrack": "ok"
+  "othersTrack": "ok",
+  "mic": "ok"
 }

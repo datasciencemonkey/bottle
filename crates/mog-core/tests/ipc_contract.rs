@@ -45,6 +45,9 @@ const SPEC_COMMANDS: &[(&str, &[WindowClass])] = {
         ("hotkeys_set", &[B, H]),
         // #312 (ADR 0039): the wizard and Settings ask for an OS permission.
         ("permission_request", &[H]),
+        // #453 (CAP-22): the app-wide settings, like the `config_*` rows.
+        ("app_setting_read", &[B, H]),
+        ("app_setting_write", &[B, H]),
         ("mog_set_active", &[B]),
         ("window_mog_open", &[B]),
         ("window_mog_close", &[B]),
@@ -658,4 +661,70 @@ fn sec_32a_consent_records_list_is_brain_only_and_takes_no_args() {
 #[test]
 fn sec_03_consent_storage_failed_is_a_fixed_code() {
     assert!(mog_core::ipc_gateway::ERROR_CODES.contains(&"consent_storage_failed"));
+}
+
+// ---------- #453 (CAP-22) ----------
+
+#[test]
+fn cap_22_app_setting_rows_are_brain_and_hub_rows_and_take_a_known_key() {
+    for name in ["app_setting_read", "app_setting_write"] {
+        let row = ipc::command(name).expect("an app_setting row");
+        assert_eq!(
+            row.windows,
+            [WindowClass::Brain, WindowClass::Hub],
+            "{name}"
+        );
+        assert_eq!(row.phase, Phase::MvpD, "{name}");
+    }
+    let read = json!({ "key": "app.capture.preferBuiltInMic" });
+    let write = json!({ "key": "app.capture.preferBuiltInMic", "value": true });
+    for (name, args) in [("app_setting_read", &read), ("app_setting_write", &write)] {
+        for label in ["brain", "hub"] {
+            assert!(matches!(
+                ipc::handle(label, name, args.clone()).unwrap_err(),
+                IpcError::NotImplemented { .. }
+            ));
+        }
+        for label in ["mog-a1", "card-a1"] {
+            assert!(
+                matches!(
+                    ipc::handle(label, name, args.clone()).unwrap_err(),
+                    IpcError::WindowNotAllowed { .. }
+                ),
+                "{label} {name}"
+            );
+        }
+    }
+    for (name, bad) in [
+        ("app_setting_read", json!({})),
+        ("app_setting_read", json!({"key": "app.capture.other"})),
+        (
+            "app_setting_read",
+            json!({"key": "app.capture.preferBuiltInMic", "value": true}),
+        ),
+        (
+            "app_setting_write",
+            json!({"key": "app.capture.preferBuiltInMic"}),
+        ),
+        (
+            "app_setting_write",
+            json!({"key": "app.capture.preferBuiltInMic", "value": "on"}),
+        ),
+        (
+            "app_setting_write",
+            json!({"key": "app.capture.other", "value": true}),
+        ),
+        (
+            "app_setting_write",
+            json!({"key": "app.capture.preferBuiltInMic", "value": true, "device": "AirPods"}),
+        ),
+    ] {
+        assert!(
+            matches!(
+                ipc::handle("hub", name, bad.clone()).unwrap_err(),
+                IpcError::InvalidArgs { .. }
+            ),
+            "{name} {bad}"
+        );
+    }
 }

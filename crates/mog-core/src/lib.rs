@@ -6,6 +6,7 @@
 //! a C ABI. There is one module per component (R1-R14, R16, R17); R15 is `mog-core-ffi`.
 
 pub mod agent_host;
+pub mod app_settings;
 pub mod audio_device;
 pub mod audit;
 pub mod bottle_mcp;

@@ -242,6 +242,20 @@ pub enum OthersTrack {
     ZeroBuffers,
 }
 
+/// `CaptureState.mic` (#453, CAP-17b): the health of the You track (the mic), for the mic
+/// fix-it card. A fixed code only: no device name, no device ID (CAP-01b).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MicHealth {
+    Ok,
+    /// 2 s of zero buffers or no buffers (CAP-17b), for example after a revoked permission.
+    ZeroBuffers,
+    /// The OS refused mic access (for example WASAPI `E_ACCESSDENIED`).
+    PermissionDenied,
+    /// No input device is present.
+    NoDevice,
+}
+
 /// The `capture.state` event payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -264,6 +278,29 @@ pub struct CaptureState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub directed_to: Option<MogId>,
     pub others_track: OthersTrack,
+    /// CAP-17b (#453): the mic health for the fix-it card. The core sets `ok` at each granted
+    /// lease, `zero_buffers` or `no_device` on a mic fault, and the code of a refused mic
+    /// open. Absent before the first reading and in payloads from before #453.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mic: Option<MicHealth>,
+}
+
+/// The key of an app-wide setting (Appendix F, scope App; #453).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum AppSettingKey {
+    /// CAP-22: "Prefer the built-in mic when a Bluetooth headset connects". Default off.
+    #[serde(rename = "app.capture.preferBuiltInMic")]
+    CapturePreferBuiltInMic,
+}
+
+/// One app-wide setting and its value: the `app_setting_write` args and the reply of
+/// `app_setting_read` and `app_setting_write` (#453). Every app setting is a boolean now
+/// (CAP-22). A later setting with another type makes `value` a typed union.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppSetting {
+    pub key: AppSettingKey,
+    pub value: bool,
 }
 
 /// Why a capture lease stopped (`CaptureStopped.reason`, #425, ADR 0055).

@@ -4,8 +4,9 @@
  * Bluetooth headset, so the headset stays in A2DP. The setting asks the OS for nothing
  * (CAP-17a). Default off.
  *
- * TODO(#453): there is no app-wide setting IPC yet. Until it lands, the hub keeps the value in
- * memory and the core does not see it.
+ * The value is the app setting `app.capture.preferBuiltInMic` (ADR 0063). A view calls only
+ * `view_emit` (ARC-2, MOG-08a), so the brain reads and writes it with `app_setting_*`.
+ * TODO(#77): the Settings relay through the brain. Until then the hub keeps the value in memory.
  */
 import { useEffect, useState } from 'react';
 
@@ -17,7 +18,7 @@ export interface MicSettings {
   write(preferBuiltIn: boolean): Promise<void>;
 }
 
-/** An in-memory store, default off. TODO(#453): replace with the app setting IPC. */
+/** An in-memory store, default off. TODO(#77): the brain relay of the app setting. */
 export function memoryMicSettings(initial = false): MicSettings {
   let value = initial;
   return {
