@@ -3,7 +3,7 @@
  * No wall time and no live workspace: polls go to the double through a fake `mcp_call`.
  */
 import { scenarios } from '../../test-support/genie-one-mcp';
-import { HOST, PROFILE, collect, drain, polls, rig } from '../../test-support/poll-actor-rig';
+import { HOST, PROFILE, collect, drain, nth, polls, rig } from '../../test-support/poll-actor-rig';
 import { GenieOneMcpBackend } from './genie-bridge';
 import {
   E_POLL_INFLIGHT,
@@ -175,7 +175,7 @@ describe('PollActor loop', () => {
     expect(outcome).toMatchObject({ kind: 'terminal', status: 'completed' });
     const p = polls(r);
     expect(p).toHaveLength(3);
-    expect(p[1]!.start - p[0]!.end).toBe(2_000);
+    expect(nth(p, 1).start - nth(p, 0).end).toBe(2_000);
   });
 
   it('[ARC-F5] another refusal ends the loop and keeps the IDs for a resume', async () => {
@@ -216,9 +216,9 @@ describe('PollActor in-flight floor and journal', () => {
     expect(runs.every((x) => x.ended && x.outcome?.kind === 'terminal')).toBe(true);
     for (const t of targets) {
       const mine = polls(r).filter((p) => p.args.args.conversation_id === t.conversationId);
-      expect(mine[0]!.start - t.askedAt).toBeGreaterThanOrEqual(6_000);
+      expect(nth(mine, 0).start - t.askedAt).toBeGreaterThanOrEqual(6_000);
       for (let i = 1; i < mine.length; i++)
-        expect(mine[i]!.start - mine[i - 1]!.end).toBeGreaterThanOrEqual(6_000);
+        expect(nth(mine, i).start - nth(mine, i - 1).end).toBeGreaterThanOrEqual(6_000);
     }
     expect(r.cm.inflightAsks(PROFILE)).toBe(0);
   });

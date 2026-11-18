@@ -141,3 +141,10 @@ export async function drain(
 
 /** The `genie_poll_response` calls the actor sent. */
 export const polls = (r: Rig) => r.sent.filter((s) => s.args.tool === 'genie_poll_response');
+
+/** Item `i` of `a`; throws when it is missing. */
+export function nth<T>(a: readonly T[], i: number): T {
+  const x = a[i];
+  if (x === undefined) throw new Error(`no item ${i} of ${a.length}`);
+  return x;
+}

@@ -9,7 +9,7 @@
  */
 import { liveFixture } from '../test-support/fixtures';
 import { scenarios } from '../test-support/genie-one-mcp';
-import { PROFILE, collect, polls, rig } from '../test-support/poll-actor-rig';
+import { PROFILE, collect, nth, polls, rig } from '../test-support/poll-actor-rig';
 
 describe('AT-34 poll budget and 429', () => {
   it('[AT-34] [G-08] 4 in-flight asks space each poll by 1.5 s x 4', async () => {
@@ -26,9 +26,9 @@ describe('AT-34 poll budget and 429', () => {
     for (const t of targets) {
       const mine = polls(r).filter((p) => p.args.args.conversation_id === t.conversationId);
       expect(mine.length).toBeGreaterThan(20);
-      expect(mine[0]!.start - t.askedAt).toBeGreaterThanOrEqual(6_000);
+      expect(nth(mine, 0).start - t.askedAt).toBeGreaterThanOrEqual(6_000);
       for (let i = 1; i < mine.length; i++)
-        expect(mine[i]!.start - mine[i - 1]!.end).toBeGreaterThanOrEqual(6_000);
+        expect(nth(mine, i).start - nth(mine, i - 1).end).toBeGreaterThanOrEqual(6_000);
     }
     const starts = [...targets.map((t) => t.askedAt), ...polls(r).map((p) => p.start)];
     for (const t0 of starts) {
