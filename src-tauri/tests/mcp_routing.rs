@@ -221,17 +221,23 @@ fn sec_02a_no_r8_answers_host_failed() {
 
 #[test]
 fn sec_03_an_r8_error_crosses_as_a_content_free_code() {
-    let r8 = Arc::new(FakeR8 {
-        fail: Some("tool_not_allowed"),
-        ..FakeR8::default()
-    });
-    let comp = McpCallComponent::new(r8.clone());
-    let err = call("brain", Some(&comp), "mcp_call", ask_args("genie_ask")).unwrap_err();
-    // A component code outside `ERROR_CODES` becomes `host_failed` (ADR 0040).
-    assert_eq!(err, json!({"error": "host_failed"}));
-    let text = err.to_string();
-    for needle in ["bottle-test", "revenue", MOG, "R8"] {
-        assert!(!text.contains(needle), "{needle} in {text}");
+    // #479 (ARC-F1, G-07b): an R8 `mcp_call` code in `ERROR_CODES` crosses as itself.
+    // Another R8 code (for example `transport_failed`) becomes `host_failed` (ADR 0040).
+    for (code, crosses) in [
+        ("tool_not_allowed", "tool_not_allowed"),
+        ("transport_failed", "host_failed"),
+    ] {
+        let r8 = Arc::new(FakeR8 {
+            fail: Some(code),
+            ..FakeR8::default()
+        });
+        let comp = McpCallComponent::new(r8.clone());
+        let err = call("brain", Some(&comp), "mcp_call", ask_args("genie_ask")).unwrap_err();
+        assert_eq!(err, json!({ "error": crosses }));
+        let text = err.to_string();
+        for needle in ["bottle-test", "revenue", MOG, "R8"] {
+            assert!(!text.contains(needle), "{needle} in {text}");
+        }
     }
 }
 
