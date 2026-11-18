@@ -22,6 +22,12 @@
 //! as `genieOneMcp` with the same `Authorization` value. The proxy sends each agent call to the
 //! brain's R8, which adds the token; the harness never gets one (RTR-28).
 //!
+//! Guardrails (#141, ADR 0085): the `open_session` frame carries the data-only system prompt
+//! and the tool policy of [`crate::agent_guard`] (RTR-03c, RTR-21b). [`AgentHost::send`] makes
+//! the turn's `question` the one approved outbound question of the MOG (RTR-29b): the brain sends
+//! a turn only after the user let the preview go (B1, #142). Each tool call of the agent is in the
+//! content-free action log of `bottle-mcp` (RTR-30).
+//!
 //! The host never starts capture, approves context, publishes a Page or switches the workspace:
 //! it has no handle to any of those components. It writes no log line; its status reports carry
 //! the MOG ID, the session ID and the state only.
@@ -50,6 +56,7 @@ use serde_json::{json, Value};
 use self::adapter::{adapter, launch_spec};
 use self::model_proxy::{ModelProxy, ModelRoute, ModelTarget, SessionSecret};
 use self::runtime::{RuntimeConfig, RuntimeEvent, RuntimeEvents, RuntimeLauncher, RuntimeProcess};
+use crate::agent_guard::{tool_policy, MAIN_AGENT_SYSTEM_PROMPT};
 use crate::bottle_mcp::{BottleMcpDeps, BottleMcpServer};
 
 /// The agent harness kind.
@@ -387,6 +394,9 @@ impl SharedAgentHost {
         if let Some(url) = mcp.genie_one_url() {
             frame["genieOneMcp"] = json!({ "url": url, "authorization": mcp.authorization() });
         }
+        // RTR-03c, RTR-21b: the data-only prompt and the tool policy. No user text joins them.
+        frame["systemPrompt"] = json!(MAIN_AGENT_SYSTEM_PROMPT);
+        frame["toolPolicy"] = tool_policy();
         rt.process.send_frame(&frame)
     }
 
@@ -534,6 +544,8 @@ impl AgentHost for SharedAgentHost {
                 s.mcp.take(),
             )
         };
+        // RTR-29b: a stopped session has no approved question.
+        self.deps.bottle_mcp.approvals.clear(mog_id);
         // Outside the lock: close the session's bottle-mcp, so its secret opens nothing.
         drop(mcp);
         if let Some((p, id)) = close {
@@ -555,7 +567,18 @@ impl AgentHost for SharedAgentHost {
             let rt = st.runtimes.get(&s.harness).ok_or(AgentError::Unavailable)?;
             (rt.process.clone(), s.id.clone())
         };
+        // RTR-29b: the turn's question is the one text the agent may send to Genie, once. A
+        // turn with no question approves nothing, and clears the old approval.
+        let approvals = &self.deps.bottle_mcp.approvals;
+        match turn.get("question").and_then(Value::as_str) {
+            Some(q) => approvals.approve(mog_id, q),
+            None => approvals.clear(mog_id),
+        }
         // Outside the lock: a large or slow turn never stops the other MOGs.
-        process.send_frame(&json!({ "type": "turn", "sessionId": id, "turn": turn }))
+        let sent = process.send_frame(&json!({ "type": "turn", "sessionId": id, "turn": turn }));
+        if sent.is_err() {
+            approvals.clear(mog_id);
+        }
+        sent
     }
 }

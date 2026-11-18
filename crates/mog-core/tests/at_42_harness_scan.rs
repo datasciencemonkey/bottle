@@ -202,6 +202,12 @@ fn rtr_28_rtr_27_at_42_harness_env_and_memory_hold_no_token() {
             .with_genie_proxy(GenieProxyDeps::new(r8, Arc::new(Target))),
     });
     host.start_session(MOG, Harness::Claude).unwrap();
+    // The turn that the user let go (RTR-29b, #141): it approves QUESTION for the agent's ask.
+    host.send(
+        MOG,
+        &json!({ "mogId": MOG, "question": QUESTION, "recall": [] }),
+    )
+    .unwrap();
     let report = wait_for_report(&home.join(REPORT_FILE));
     host.stop_session(MOG).unwrap();
     let _ = std::fs::remove_dir_all(&home);
@@ -383,6 +389,13 @@ fn child_main() {
         .as_str()
         .unwrap()
         .to_owned();
+    // The agent asks the question of its turn, the next frame (RTR-29b, #141).
+    let mut second = String::new();
+    lines.read_line(&mut second).unwrap();
+    inflow.0.extend_from_slice(second.as_bytes());
+    let turn: Value = serde_json::from_str(&second).unwrap();
+    assert_eq!(turn["type"], "turn");
+    let question = turn["turn"]["question"].as_str().unwrap().to_owned();
 
     rpc(
         &mut inflow,
@@ -396,7 +409,7 @@ fn child_main() {
         &url,
         &auth,
         &json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
-                "params": {"name": "genie_ask", "arguments": {"question": QUESTION}}}),
+                "params": {"name": "genie_ask", "arguments": {"question": question}}}),
     );
     let poll = rpc(
         &mut inflow,

@@ -22,8 +22,13 @@
 //! same session serves the R8 Genie One MCP proxy ([`crate::mcp_transport::proxy`]), with the same
 //! per-session secret. Without it that listener answers 501.
 //!
+//! RTR-30 (#141, ADR 0085): each call of one of the 7 tools writes one content-free
+//! `agent_action:<tool>` entry ([`crate::agent_guard::AgentActionLog`]) before anything runs:
+//! the MOG, the tool, the time and the argument size. A call with bad arguments is logged too
+//! (it is a decision of the agent), and runs nothing. If the entry cannot be written, nothing
+//! runs and the agent gets [`crate::agent_guard::AUDIT_UNAVAILABLE`] (fail closed).
+//!
 //! TODO(#111): SP-19 fixes the MCP wire details (streamable HTTP, SSE, session header).
-//! TODO(#141): the guardrails of RTR-29a..d (what the agent may write to memory, audit rows).
 
 use std::collections::HashMap;
 use std::fmt;
@@ -33,6 +38,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Map, Value};
 
+use crate::agent_guard::{AgentActionLog, AuditActionLog, OutboundApprovals, AUDIT_UNAVAILABLE};
+use crate::audit::{AuditLog, AuditRetention, MemoryAuditStore};
+use crate::clock::SystemWallClock;
 use crate::error::{CoreError, CoreResult};
 use crate::ipc::{events, AgentToolResultArgs};
 use crate::local_store::LocalStore;
@@ -308,6 +316,11 @@ pub struct BottleMcpDeps {
     pub relay_timeout: Duration,
     /// The Genie One MCP proxy of the session (RTR-27), on its `genie-one-mcp` listener.
     pub genie: Option<GenieProxyDeps>,
+    /// The content-free agent action log (RTR-30).
+    pub audit: Arc<dyn AgentActionLog>,
+    /// The approved outbound question of each MOG (RTR-29b). The AgentHost sets it on each
+    /// turn; the Genie One proxy uses it.
+    pub approvals: Arc<OutboundApprovals>,
 }
 
 impl fmt::Debug for BottleMcpDeps {
@@ -320,19 +333,38 @@ impl fmt::Debug for BottleMcpDeps {
 }
 
 impl BottleMcpDeps {
-    /// Deps with the default [`RELAY_TIMEOUT`].
+    /// Deps with the default [`RELAY_TIMEOUT`], an in-memory action log on the system clock
+    /// (the #140 store until #442) and no approval.
+    /// TODO(#307): the app host passes the one audit log of the process with [`Self::with_audit`].
     pub fn new(local: Arc<dyn LocalTools>, relay: Arc<dyn ToolRelay>) -> Self {
         Self {
             local,
             relay,
             relay_timeout: RELAY_TIMEOUT,
             genie: None,
+            audit: Arc::new(AuditActionLog::new(
+                AuditLog::new(MemoryAuditStore::default(), AuditRetention::default()),
+                Arc::new(SystemWallClock),
+            )),
+            approvals: Arc::new(OutboundApprovals::default()),
         }
     }
 
     /// The same deps with the Genie One MCP proxy of each session (RTR-27).
     pub fn with_genie_proxy(mut self, genie: GenieProxyDeps) -> Self {
         self.genie = Some(genie);
+        self
+    }
+
+    /// The same deps with another agent action log.
+    pub fn with_audit(mut self, audit: Arc<dyn AgentActionLog>) -> Self {
+        self.audit = audit;
+        self
+    }
+
+    /// The same deps with a shared approval store.
+    pub fn with_approvals(mut self, approvals: Arc<OutboundApprovals>) -> Self {
+        self.approvals = approvals;
         self
     }
 
@@ -608,7 +640,18 @@ impl Handler {
             return rpc_error(id, -32602, "unknown tool");
         };
         let empty = Map::new();
-        let args = match params.and_then(|p| p.get("arguments")) {
+        let raw_args = params.and_then(|p| p.get("arguments"));
+        // RTR-30: the decision is logged before anything runs. No entry, no action.
+        let args_bytes = raw_args.map_or(0, |a| a.to_string().len() as u64);
+        if self
+            .deps
+            .audit
+            .record(&self.mog_id, tool, args_bytes)
+            .is_err()
+        {
+            return rpc_result(id, tool_error(AUDIT_UNAVAILABLE));
+        }
+        let args = match raw_args {
             None | Some(Value::Null) => &empty,
             Some(Value::Object(a)) => a,
             Some(_) => return rpc_error(id, -32602, "invalid arguments"),
@@ -706,10 +749,10 @@ impl BottleMcpServer {
     /// Start the server of the session of `mog_id` with a new per-session secret.
     pub fn start(mog_id: &str, deps: &BottleMcpDeps) -> CoreResult<Self> {
         let closed = Arc::new(AtomicBool::new(false));
-        let genie = deps
-            .genie
-            .clone()
-            .map(|g| GenieProxy::new(mog_id, g, closed.clone()));
+        let genie = deps.genie.clone().map(|g| {
+            GenieProxy::new(mog_id, g, closed.clone())
+                .with_guard(deps.audit.clone(), deps.approvals.clone())
+        });
         let has_genie = genie.is_some();
         let handler = Arc::new(Handler {
             mog_id: mog_id.to_owned(),
