@@ -81,15 +81,14 @@ body {
   font-size: var(--mog-text-sm);
 }
 
-/* Header: the product name and the quiet Labs label (MB-10b). */
-.hub-head {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  margin-bottom: 20px;
+/* Header: the product name and the quiet Labs label (MB-10b), on one line. */
+.hub .hub-title {
+  display: inline-block;
+  margin: 0 10px 20px 0;
 }
 
-.hub-head .hub-labs {
+.hub .hub-labs {
+  display: inline-block;
   margin: 0;
   color: var(--mog-text-muted);
   font-size: var(--mog-text-sm);
