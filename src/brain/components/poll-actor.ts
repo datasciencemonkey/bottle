@@ -19,10 +19,8 @@
  * The actor never calls `genie_ask`: it cannot ask a question again (G-13b, MOG-10b).
  * At the give-up the loop ends with `gave_up`, and `resume` yields `abandoned`. The soft notice,
  * the `abandoned` exchange status and the late re-polls are TODO(#149).
- * The `timeout` and `poll_inflight` codes reach the brain only after TODO(#495) (contract-change
- * #479); until then the
- * host sends `host_failed`, and the loop ends with the IDs kept in the journal.
- * The durable journal over the `genie_exchange` row (ADR 0061) is TODO(#39).
+ * The `timeout` and `poll_inflight` codes cross IPC as themselves (#495). The Tauri host routes
+ * `mcp_call` to R8 in TODO(#467).
  */
 // Adapted from datasciencemonkey/antigravity-bricks-plugin plugins/databricks-genie/scripts/genie_bridge.py @ a31fd2c (MIT).
 // From it: after a poll runs out of time, poll again with the same conversation and response
@@ -263,7 +261,7 @@ export async function* runPollActor(
       const code = ipcErrorCode(e);
       // G-16c: a poll timeout polls again with the same IDs. ARC-F1: another poll on this
       // conversation is open (the main agent's), so wait one more delay and poll again.
-      // TODO(#495): the host sends both codes as `host_failed` until they are in ERROR_CODES.
+      // Both codes are in ERROR_CODES (#495), so they cross IPC as themselves.
       if (code === E_TIMEOUT || code === E_POLL_INFLIGHT) continue;
       // Anything else ends the loop. The IDs stay in the journal, so polls can resume (ARC-F5).
       throw e;

@@ -161,6 +161,15 @@ mod tests {
     }
 
     #[test]
+    fn arc_f1_g_16c_e_poll_inflight_crosses_ipc_as_itself() {
+        // The brain PollActor polls again on this code (and on `timeout`), so the host must not
+        // turn it into `host_failed` (#479).
+        assert_eq!(E_POLL_INFLIGHT, "poll_inflight");
+        assert!(crate::ipc_gateway::ERROR_CODES.contains(&E_POLL_INFLIGHT));
+        assert!(crate::ipc_gateway::ERROR_CODES.contains(&"timeout"));
+    }
+
+    #[test]
     fn sec_03_poll_guard_debug_and_error_hide_the_conversation_id() {
         let g = PollInflightGuard::new();
         let slot = g.enter(POLL_TOOL, &poll_args("conv-secret-id")).unwrap();
