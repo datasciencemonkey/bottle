@@ -135,9 +135,23 @@ impl KeyVault for MemoryKeyVault {
 }
 
 /// `errSecMissingEntitlement`: the app has no keychain access group entitlement (an unsigned or
-/// ad-hoc macOS build), so the data protection keychain refuses it.
+/// ad-hoc macOS build), so the data protection keychain refuses a store.
 #[cfg(any(target_os = "macos", test))]
 pub const ERR_SEC_MISSING_ENTITLEMENT: i32 = -34018;
+
+/// `errSecItemNotFound`. An unentitled build gets it from a data protection get (#541).
+#[cfg(any(target_os = "macos", test))]
+pub const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
+
+/// The data protection codes on which a load also reads the login keychain (#541). An unentitled
+/// build gets -25300 from the get, so a key that an earlier run stored in the login keychain is
+/// found only with this rule.
+#[cfg(any(target_os = "macos", test))]
+pub const LOAD_FALLBACK: &[i32] = &[ERR_SEC_MISSING_ENTITLEMENT, ERR_SEC_ITEM_NOT_FOUND];
+
+/// The data protection codes on which a store goes to the login keychain (#541): only -34018.
+#[cfg(any(target_os = "macos", test))]
+pub const STORE_FALLBACK: &[i32] = &[ERR_SEC_MISSING_ENTITLEMENT];
 
 /// The macOS keychain that one call goes to.
 #[cfg(any(target_os = "macos", test))]
@@ -145,20 +159,21 @@ pub const ERR_SEC_MISSING_ENTITLEMENT: i32 = -34018;
 pub enum KeychainTarget {
     /// The data protection keychain (`kSecUseDataProtectionKeychain`). Signed builds use it.
     DataProtection,
-    /// The user's login (file-based) keychain. Only for a build with no entitlement.
+    /// The user's login (file-based) keychain. A build with no entitlement keeps the key here.
     Login,
 }
 
-/// Run `op` on the data protection keychain. Only when it fails with
-/// [`ERR_SEC_MISSING_ENTITLEMENT`], run it once more on the login keychain (#541). Every other
-/// result, and the result of the login try, is returned as is. `op` gets and returns only
-/// `OSStatus` codes, so no key bytes go through an error.
+/// Run `op` on the data protection keychain. Only when it fails with a code in `fall_back_on`
+/// ([`LOAD_FALLBACK`] or [`STORE_FALLBACK`]), run it once more on the login keychain (#541).
+/// Every other result, and the result of the login try, is returned as is. `op` gets and returns
+/// only `OSStatus` codes, so no key bytes go through an error.
 #[cfg(any(target_os = "macos", test))]
 pub fn with_login_fallback<T>(
+    fall_back_on: &[i32],
     mut op: impl FnMut(KeychainTarget) -> Result<T, i32>,
 ) -> Result<T, i32> {
     match op(KeychainTarget::DataProtection) {
-        Err(ERR_SEC_MISSING_ENTITLEMENT) => op(KeychainTarget::Login),
+        Err(code) if fall_back_on.contains(&code) => op(KeychainTarget::Login),
         other => other,
     }
 }
@@ -200,9 +215,10 @@ impl KeyVault for NoKeyVault {
 /// `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` and no iCloud sync. macOS honours the
 /// accessibility class only in the data protection keychain, and that keychain needs a signed app
 /// with a keychain access group entitlement. An unsigned or ad-hoc build gets
-/// `errSecMissingEntitlement` (-34018). Only on that code the vault retries the same call in the
-/// login keychain, with the same service and account and no iCloud sync ([`with_login_fallback`],
-/// #541). The login keychain does not honour the accessibility class, so MEM-08b accessibility is
+/// `errSecMissingEntitlement` (-34018) on a store, and `errSecItemNotFound` (-25300) on a get.
+/// So a store retries in the login keychain only on -34018, and a load reads the login keychain
+/// only on -34018 or -25300. The item has the same service and account and no iCloud sync
+/// ([`with_login_fallback`], #541). The login keychain does not honour the accessibility class, so MEM-08b accessibility is
 /// not enforced on such a build (ADR 0071 amendment 1). Every other error is `keychain_unavailable`.
 /// TODO(#34): verify on a signed build (needs:mac).
 #[cfg(target_os = "macos")]
@@ -213,13 +229,10 @@ pub mod macos {
     };
 
     use super::{
-        with_login_fallback, KeyVault, KeychainTarget, LocalKey, ID, KEY_ACCOUNT, KEY_LEN,
-        KEY_SERVICE,
+        with_login_fallback, KeyVault, KeychainTarget, LocalKey, ERR_SEC_ITEM_NOT_FOUND, ID,
+        KEY_ACCOUNT, KEY_LEN, KEY_SERVICE, LOAD_FALLBACK, STORE_FALLBACK,
     };
     use crate::error::{CoreError, CoreResult};
-
-    /// `errSecItemNotFound`.
-    const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
 
     /// Keychain item accessibility class.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -280,7 +293,9 @@ pub mod macos {
 
     impl KeyVault for KeychainVault {
         fn load(&self) -> CoreResult<Option<LocalKey>> {
-            match with_login_fallback(|t| generic_password(self.options(t)).map_err(|e| e.code())) {
+            match with_login_fallback(LOAD_FALLBACK, |t| {
+                generic_password(self.options(t)).map_err(|e| e.code())
+            }) {
                 Ok(mut v) => {
                     let out = if v.len() == KEY_LEN {
                         let mut b = [0u8; KEY_LEN];
@@ -299,7 +314,7 @@ pub mod macos {
 
         fn store(&self, key: &LocalKey) -> CoreResult<()> {
             let Accessibility::AfterFirstUnlockThisDeviceOnly = self.spec.accessibility;
-            with_login_fallback(|t| {
+            with_login_fallback(STORE_FALLBACK, |t| {
                 let mut o = self.options(t);
                 // The login keychain does not honour the accessibility class (ADR 0071
                 // amendment 1), so only the data protection item gets the access control.
