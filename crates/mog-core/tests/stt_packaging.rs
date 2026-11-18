@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use mog_core::stt::{
     efficiency_classes_from_slpi, p_cores_from_efficiency_classes, perf_core_count, LocalSttConfig,
@@ -548,4 +548,51 @@ fn cap_49a_cap_49c_errors_are_content_free_codes() {
     ] {
         assert_eq!(err.code(), code);
     }
+}
+
+#[test]
+fn cap_49b_a_cancelled_download_keeps_the_partial_file_for_a_resume() {
+    let (spec, bodies) = fake_spec();
+    let net = hf_net(&bodies);
+    let dir = tmp("cancel");
+    let installer = ModelInstaller::new(&dir, spec.clone());
+    let cancel = AtomicBool::new(false);
+    // The user cancels after the first chunk arrives.
+    let err = installer
+        .install(
+            &Gate(ModelConsent::Granted),
+            &net,
+            ModelSource::HuggingFaceMirror,
+            &no_extract,
+            &cancel,
+            &mut |_| cancel.store(true, Ordering::Relaxed),
+        )
+        .unwrap_err();
+    assert_eq!(err, InstallError::Cancelled);
+    assert_eq!(err.code(), "stt_download_cancelled");
+    assert_eq!(net.calls.borrow().len(), 1, "no request after the cancel");
+    let first = net.calls.borrow()[0].0.clone();
+    let kept = match installer.status() {
+        ModelStatus::Partial { bytes } => bytes,
+        other => panic!("want Partial, got {other:?}"),
+    };
+    assert!(kept > 0, "the partial file stays");
+    // The next install resumes: it does not fetch the bytes it already has again.
+    net.calls.borrow_mut().clear();
+    install(
+        &installer,
+        &Gate(ModelConsent::Granted),
+        &net,
+        ModelSource::HuggingFaceMirror,
+        &no_extract,
+    )
+    .unwrap();
+    assert!(
+        net.calls
+            .borrow()
+            .iter()
+            .all(|(url, offset)| url != &first || *offset == kept),
+        "the resume asks only for the rest of the cancelled file"
+    );
+    assert_eq!(installer.status(), ModelStatus::Installed);
 }

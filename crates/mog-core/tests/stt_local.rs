@@ -87,6 +87,9 @@ fn cap_49c_extract_writes_only_the_pinned_model_files() {
 #[test]
 fn cap_48_recognizer_runs_on_the_cpu_ep_with_p_core_threads() {
     let Some(dir) = std::env::var_os("BOTTLE_STT_MODEL_DIR") else {
+        // TODO(#414): this return exists because the 487 MB model is never downloaded in a test.
+        // The #414 `local-stt` CI job sets BOTTLE_STT_MODEL_DIR to an installed model and fails
+        // if this note prints, so the recognizer part runs there.
         eprintln!("BOTTLE_STT_MODEL_DIR is not set: the model part of this test did not run");
         return;
     };

@@ -6,5 +6,6 @@ CFLAGS_aarch64_apple_darwin = "-DSQLITE_VEC_ENABLE_NEON"
 # #45 (CAP-50a, CAP-50b, ADR 0049): the mog-core `local-stt` build links only the vendored,
 # hash-pinned sherpa-onnx archive. With this set, sherpa-onnx-sys never downloads; fill the
 # folder with `uv run --no-project python scripts/vendor_sherpa_onnx.py`. A value set in the
-# environment wins over this one.
+# environment wins over this one. TODO(#414): the offline CI job proves this line (ADR 0049,
+# decision 2); test_cap_50b_the_default_dest_is_the_cargo_env_folder pins it.
 SHERPA_ONNX_ARCHIVE_DIR = { value = "vendor/sherpa-onnx", relative = true }

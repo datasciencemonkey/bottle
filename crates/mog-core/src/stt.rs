@@ -72,7 +72,8 @@ pub fn p_cores_from_efficiency_classes(classes: &[u8]) -> usize {
 ///
 /// macOS: `hw.perflevel0.physicalcpu` (`hw.physicalcpu` on a Mac with one core type).
 /// Windows: the physical cores of the highest efficiency class
-/// (`GetLogicalProcessorInformationEx`). Other systems: the available parallelism.
+/// (`GetLogicalProcessorInformationEx`). Other systems (Linux is not a ship target): the
+/// available parallelism, which counts logical CPUs (SMT threads), not physical P-cores.
 pub fn perf_core_count() -> usize {
     platform::perf_core_count()
         .filter(|n| *n > 0)

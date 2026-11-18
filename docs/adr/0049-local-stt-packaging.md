@@ -20,7 +20,7 @@ what the build does when the archive is missing.
    "=2.0.1"` (static), `ureq`, `bzip2` and `tar` (the same crates that the `sherpa-onnx-sys` build
    script already uses) and the module `stt_local` (recognizer, HTTPS fetcher, archive extract).
    The default build, and so App CI today, links no native STT library and fetches nothing. The
-   release build and the app turn the feature on. An offline CI job for `local-stt` is a CI change
+   release build and the app do not turn the feature on yet; #413 will turn it on in `src-tauri`. An offline CI job for `local-stt` is a CI change
    (follow-up issue; this PR does not edit workflows).
 2. **The build links only the vendored archive (CAP-50a, CAP-50b).** Three parts:
    - `.cargo/config.toml` sets `SHERPA_ONNX_ARCHIVE_DIR` to `vendor/sherpa-onnx` (gitignored).
@@ -47,7 +47,9 @@ what the build does when the archive is missing.
    network (verified on macOS with a dead proxy and `CARGO_NET_OFFLINE=true`).
 4. **Thread count (CAP-48).** `stt::perf_core_count()`: macOS `hw.perflevel0.physicalcpu`;
    Windows the physical cores of the highest `EfficiencyClass`
-   (`GetLogicalProcessorInformationEx`); other systems the available parallelism.
+   (`GetLogicalProcessorInformationEx`); other systems the available parallelism. On Linux that
+   is the logical CPU count (SMT threads included), not physical P-cores. Linux is not a ship
+   target, so this is accepted.
    `LocalSttConfig::for_this_device()` fixes the provider to `cpu`.
 5. **Model sources (CAP-49b).** The GitHub release archive
    `asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2` is the default. The HF mirror is
@@ -66,7 +68,10 @@ what the build does when the archive is missing.
 8. **The consent gate is an interface (CAP-49a).** `stt_model::ConsentGate` returns
    `NotAsked`, `Declined` or `Granted`. `ModelInstaller::install` checks it before any request
    or file write. The wizard STT step (MB-07, #43) implements the gate, shows `status()` and the
-   `Progress` callback, and can cancel. Wiring the wizard is a follow-up issue. Errors are
+   `Progress` callback, and can cancel. Wiring the wizard is a follow-up issue (#413).
+   `ModelInstaller::new` takes any root folder. #413 must use a user-scoped folder that matches
+   W-17e: `~/Library/Application Support/Bottle/models` on macOS and
+   `%LOCALAPPDATA%\Bottle\models` on Windows. Errors are
    content-free codes (`stt_consent_required`, `stt_hash_mismatch`, ...).
 
 ## Consequences
@@ -76,6 +81,9 @@ what the build does when the archive is missing.
 - Not yet done: the wizard wiring (#43 follow-up), the offline `local-stt` CI job (CI owner), the
   Windows link check of the MT archive with the default Rust CRT (`needs:windows`), and the
   engine lifetime and VAD decode (#46).
+- The model download client (`HttpRangeFetch`, ureq) does not read proxy settings from the
+  environment, and it trusts only the `webpki-roots` CA set. A user behind a corporate proxy or
+  TLS inspection cannot download the model yet. #413 must decide the proxy and the trust store.
 - NFR-05 (RSS 1.0 GB) fails on SP-04 (#282). This ADR does not change it.
 - Dev tool: `cargo run -p mog-core --features local-stt --release --example stt_install --
   --models <dir> --source github --i-consent --wav <16 kHz mono WAV>`.

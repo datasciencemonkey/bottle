@@ -9,6 +9,11 @@
 //!   byte-equal to the archive's `lib/` folder. It prints the result in the build log.
 //!
 //! Without `local-stt` it does nothing.
+//!
+//! TODO(#414): the no-download guarantee rests on the `.cargo/config.toml` `[env]` line, because
+//! `sherpa-onnx-sys` runs first (`scripts/tests/test_vendor_sherpa_onnx.py` pins that line). The
+//! #414 CI job proves it on Windows and Linux: a clean absolute CARGO_TARGET_DIR, the network
+//! blocked at the OS level, and the full `linked lib dir ... matches it` log line.
 
 #[path = "build_support/sherpa_vendor.rs"]
 #[allow(dead_code)]
