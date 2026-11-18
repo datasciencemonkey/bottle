@@ -248,6 +248,29 @@ fn hotkeys_error(command: &str, e: CoreError) -> CoreError {
     }
 }
 
+impl<'a> HostComponents<'a> {
+    /// For tests (#532): every component `None`. A fixture names only the fields it needs,
+    /// then `..HostComponents::none(from, brain)`, so a new `Option` component needs no
+    /// fixture edit. `from` and `brain` are not `Option`, so they are arguments, not a
+    /// `Default`. Production code (`route_from`) names every field; a unit test checks it.
+    pub fn none(from: &'a str, brain: &'a dyn BrainLink) -> Self {
+        Self {
+            from,
+            brain,
+            windows: None,
+            hotkeys: None,
+            permissions: None,
+            consent: None,
+            config: None,
+            mcp: None,
+            capture: None,
+            capture_ticket: None,
+            app_settings: None,
+            insert: None,
+        }
+    }
+}
+
 impl HostComponents<'_> {
     fn windows(&self, command: &str) -> CoreResult<&dyn WindowHost> {
         self.windows.ok_or_else(|| host_failed(command))
@@ -663,6 +686,147 @@ mod tests {
             ipc.contains("schedule(&command"),
             "the handler schedules every call"
         );
+    }
+
+    // ---- ARC-5 (#532): the test constructor and the production guard ----
+
+    struct NoBrain;
+
+    impl BrainLink for NoBrain {
+        fn relay(&self, _event: &str, _payload: Value) -> bool {
+            false
+        }
+        fn subscribe(&self, _channel: &ChannelRef) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn arc_5_issue_532_none_sets_every_component_to_none() {
+        let c = HostComponents {
+            from: "brain",
+            ..HostComponents::none("mog-a1", &NoBrain)
+        };
+        assert_eq!(c.from, "brain");
+        assert!(c.windows.is_none());
+        assert!(c.hotkeys.is_none());
+        assert!(c.permissions.is_none());
+        assert!(c.consent.is_none());
+        assert!(c.config.is_none());
+        assert!(c.mcp.is_none());
+        assert!(c.capture.is_none());
+        assert!(c.capture_ticket.is_none());
+        assert!(c.app_settings.is_none());
+        assert!(c.insert.is_none());
+        // A missing host part still answers `host_failed`.
+        assert_eq!(
+            route(c, "window_card_show", json!({"mogId": "a1"})),
+            Err(json!({"error": "host_failed"}))
+        );
+    }
+
+    /// Every `HostComponents { .. }` literal in `code`: the text between its braces.
+    fn host_component_literals(code: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut rest = code;
+        while let Some(at) = rest.find("HostComponents {") {
+            let before = &rest[..at];
+            let open = at + "HostComponents ".len();
+            let mut depth = 0usize;
+            let mut end = open;
+            for (i, ch) in rest[open..].char_indices() {
+                match ch {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = open + i;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            // The type definition is not a constructor.
+            if !before.trim_end().ends_with("struct") {
+                out.push(rest[open + 1..end].to_owned());
+            }
+            rest = &rest[end..];
+        }
+        out
+    }
+
+    /// The production constructors name every field, so the host cannot miss a new
+    /// component (#532). Only tests may use `HostComponents::none` or a `..base`.
+    #[test]
+    fn arc_5_issue_532_production_host_components_name_every_field() {
+        fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    rust_files(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        rust_files(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut files,
+        );
+        let mut literals = 0;
+        for path in files {
+            let code = production_code(&std::fs::read_to_string(&path).unwrap());
+            for banned in [
+                "HostComponents::none(",
+                "HostComponents::default(",
+                "HostComponents<'_>::default(",
+            ] {
+                assert!(!code.contains(banned), "{} uses {banned}", path.display());
+            }
+            for body in host_component_literals(&code) {
+                literals += 1;
+                assert!(
+                    !body.contains(".."),
+                    "{}: a production HostComponents uses a `..` base: {body}",
+                    path.display()
+                );
+            }
+        }
+        assert!(literals >= 1, "route_from builds HostComponents");
+    }
+
+    /// Every fixture in `src-tauri/tests` takes a `..HostComponents::none(..)` base, so a new
+    /// `Option` component needs no fixture edit (#532).
+    #[test]
+    fn arc_5_issue_532_test_fixtures_use_a_none_base() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            for body in host_component_literals(&text) {
+                assert!(
+                    body.contains("..HostComponents::none("),
+                    "{}: a HostComponents fixture names every field; end it with \
+                     `..HostComponents::none(from, brain)`: {body}",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn arc_5_issue_532_the_guard_sees_a_base_in_a_literal() {
+        let bad = "let c = HostComponents {\n from: label,\n ..HostComponents::none(label, &b)\n};";
+        let found = host_component_literals(bad);
+        assert_eq!(found.len(), 1);
+        assert!(found[0].contains(".."));
+        let def = "pub struct HostComponents { pub from: String }";
+        assert!(host_component_literals(def).is_empty());
     }
 
     #[test]

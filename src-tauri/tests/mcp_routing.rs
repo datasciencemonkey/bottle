@@ -108,18 +108,8 @@ fn call(
     args: Value,
 ) -> Result<Value, Value> {
     let components = HostComponents {
-        from,
-        brain: &NoBrain,
-        windows: None,
-        hotkeys: None,
-        permissions: None,
-        consent: None,
-        config: None,
         mcp,
-        capture: None,
-        capture_ticket: None,
-        app_settings: None,
-        insert: None,
+        ..HostComponents::none(from, &NoBrain)
     };
     route(components, command, args)
 }

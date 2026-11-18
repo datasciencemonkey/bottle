@@ -153,18 +153,8 @@ fn rig(known: HashMap<&'static str, Received>) -> Rig {
 impl Rig {
     fn call(&self, command: &str, args: Value) -> Result<Value, Value> {
         let components = HostComponents {
-            from: "brain",
-            brain: &NoBrain,
-            windows: None,
-            hotkeys: None,
-            permissions: None,
-            consent: None,
-            config: None,
-            mcp: None,
             capture: Some(&self.host),
-            capture_ticket: None,
-            app_settings: None,
-            insert: None,
+            ..HostComponents::none("brain", &NoBrain)
         };
         route(components, command, args)
     }
