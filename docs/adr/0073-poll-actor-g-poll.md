@@ -83,3 +83,6 @@ open:
 - The "poll again with the same IDs after a timeout" rule comes from the reference plugin
   (`genie_bridge.py` `late_text`, MIT). See `THIRD_PARTY_NOTICES.md`.
 - `TODO(#29)`: the SP-09 live run confirms the poll reply shape on a real workspace.
+
+- Amended by ADR 0084 (#33): a poll refused with `rate_limited`, or an `isError` poll reply
+  that GL-5 maps to RATE_LIMITED, polls again with the same IDs after the next delay.

@@ -218,6 +218,21 @@ export async function* oneTerminal(source: AsyncIterable<AskEvent>): AsyncGenera
   yield { t: 'failed', code: 'STREAM_LOST', userText: userTextFor('STREAM_LOST'), retry: 'user' };
 }
 
+/**
+ * G-21b: a fault inside a backend (a throw that is not an IPC refusal) still ends the request in
+ * one failed event, with no upstream text.
+ */
+export async function* faultsAsFailed(
+  source: AsyncIterable<AskEvent>,
+  ctx: Gl5Context = {},
+): AsyncGenerator<AskEvent> {
+  try {
+    yield* source;
+  } catch {
+    yield toFailedEvent(classifyTransportCode('host_failed', ctx));
+  }
+}
+
 /** G-22, GL-3: where the answer to a clarify question goes. */
 export interface ClarifyFollowUps {
   /** A request of `mogId` ended in `needs_input(clarify)` at `at`. */

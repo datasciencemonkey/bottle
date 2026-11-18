@@ -34,8 +34,8 @@ of `genie_bridge.py` in antigravity-bricks-plugin @ a31fd2c (MIT).
      `ask` and `resume` both use it.
    - `oneTerminal` passes events up to the first terminal event and drops the rest. A stream
      that ends with no terminal event ends in `failed STREAM_LOST`.
-   - `submit` uses `oneTerminal` and changes any thrown fault into one `failed` event. The
-     event has no upstream text.
+   - `ask` and `submit` both use `oneTerminal` and `faultsAsFailed`. A thrown fault becomes one
+     `failed` event. The event has no upstream text.
 3. **The outcome rules.**
    - `completed` with an answer of less than 400 chars that ends with "?" and has no query item
      from any poll gives `needs_input(clarify)`. The prompt is the answer and the options are
@@ -60,7 +60,10 @@ of `genie_bridge.py` in antigravity-bricks-plugin @ a31fd2c (MIT).
      #32. R8 holds a profile for 300 s or less.
 6. **A rate-limited poll polls again.** R8 does not send a poll again after a 429. The PollActor
    thus treats `rate_limited` like `timeout` and `poll_inflight`. It waits one more delay and
-   polls again with the same IDs. The next call waits in the halved bucket.
+   polls again with the same IDs. The next call waits in the halved bucket. An `isError` poll
+   reply that GL-5 maps to RATE_LIMITED also polls again. The give-up still stops the loop. Thus
+   only an ask ends in RATE_LIMITED. Genie did not take that question, so [Retry] makes no
+   duplicate question.
 7. **Clarify follow-up.** `ClarifyFollowUps` keeps one open clarify for each MOG, with its
    conversation and profile.
    - The next `submit` of the MOG uses up the clarify.

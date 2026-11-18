@@ -23,6 +23,7 @@ import { createAuditLog, sha256Hex, textSizes, type AuditLogClient } from '../au
 import { NotImplementedError } from '../errors';
 import {
   createClarifyFollowUps,
+  faultsAsFailed,
   oneTerminal,
   pollEvents,
   type ClarifyFollowUps,
@@ -100,7 +101,8 @@ export class GenieOneMcpBackend implements MogBackend {
    * this only after a user action (B1; the preview gate is #142). It never asks again (G-15b).
    */
   ask(req: AskRequest, signal: AbortSignal): AsyncIterable<AskEvent> {
-    return askEvents(req, signal, this.#cm(), this.#deps);
+    // G-21b: each backend ends each request in exactly one terminal event.
+    return oneTerminal(faultsAsFailed(askEvents(req, signal, this.#cm(), this.#deps)));
   }
   resume(ref: ExchangeRef): AsyncIterable<AskEvent> {
     return resumePolls(ref, this.#cm());

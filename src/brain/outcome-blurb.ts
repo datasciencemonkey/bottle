@@ -7,7 +7,6 @@
  * word (UX-16a): every fixed text is a Bottle text, and a failure shows only the GL-5 user text.
  * TODO(#86): the 120-char line cuts, the bold key numbers, the scope line and the
  * "<profile> · <backend label> · Open in Databricks" footer (UX-13..UX-15).
- * TODO(#210): the safe markdown render of the answer.
  */
 import type { BlurbInput } from './blurb-stack';
 import type { TerminalAskEvent } from './components/ask-events';
@@ -35,8 +34,9 @@ function failureControls(
   code: Extract<TerminalAskEvent, { t: 'failed' }>['code'],
   opts: OutcomeOpts,
 ): readonly OutcomeControl[] {
-  // R8 already ran the countdown and its tries (ADR 0075): this failure is final, so the user
-  // retries. The brain starts no second countdown.
+  // Only an ask ends in RATE_LIMITED: R8 already ran the countdown and its tries (ADR 0075), and
+  // Genie did not take the question, so [Retry] makes no duplicate. A poll never ends in it: the
+  // PollActor polls again. The brain starts no second countdown.
   if (code === 'RATE_LIMITED') return ['retry'];
   // ARC-F1: a `poll_inflight` busy means the question is already in Genie and a poll is open.
   // [New conversation] would ask it again, so only [Wait] shows.

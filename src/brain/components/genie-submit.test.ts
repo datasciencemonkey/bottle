@@ -9,7 +9,9 @@ import { HOST, MOG, PROFILE, rig, type Rig } from '../../test-support/poll-actor
 import type { AuditEvent } from '../audit-log';
 import { GenieOneMcpBackend, createGenieBridge } from './genie-bridge';
 import { RETRY_AFTER_TEXT_CAP_S, classifyGenieError, userTextFor } from './genie-errors';
-import { GIVE_UP_MS } from './poll-actor';
+import { GIVE_UP_MS, createInflightAsks } from './poll-actor';
+import { BrainActor } from '../actor';
+import { createConversationManager } from './conversation-manager';
 
 const MIN = 60_000;
 const OP = '00000000-0000-4000-8000-00000000a002';
@@ -136,6 +138,72 @@ describe('GenieOneMcpBackend.ask (#33)', () => {
     );
     expect(events.at(-1)).toMatchObject({ t: 'answer', md: 'Done.' });
     expect(asks(r)).toHaveLength(1);
+  });
+  it('[ARC-F3] [MOG-10b] a rate-limited isError poll reply polls again and never shows a countdown', async () => {
+    const r = rig({ responses: [scenarios.unknownStatus(2)] });
+    let polls = 0;
+    const call: Rig['call'] = async (args) => {
+      if (args.tool === 'genie_poll_response' && ++polls === 1)
+        return {
+          structuredContent: null,
+          text: '',
+          isError: true,
+          httpStatus: 429,
+          rpcError: { retry_after: 30 },
+        };
+      return r.call(args);
+    };
+    const cm = createConversationManager(new BrainActor(), {
+      call,
+      now: () => r.sched.clock.now(),
+      sleep: (ms, signal) => r.sched.sleep(ms, signal),
+      random: () => 0.5,
+      journal: r.journal,
+      inflight: createInflightAsks(),
+    });
+    const events = await run(
+      r,
+      createGenieBridge({ call, conversations: cm }).submit(request()).events,
+    );
+    expect(events.at(-1)).toMatchObject({ t: 'answer', md: 'Done.' });
+    expect(JSON.stringify(events)).not.toMatch(/retrying/i);
+    expect(polls).toBeGreaterThan(1);
+    expect(asks(r)).toHaveLength(1);
+  });
+
+  it('[G-21b] a fault inside the poll loop ends ask and submit in one failed event with no upstream text', async () => {
+    const fault = () => new Error('private upstream detail');
+    const a = rig({ responses: [scenarios.unknownStatus(3)], reject: fault });
+    const backend = new GenieOneMcpBackend(a.cm, { call: a.call });
+    const viaAsk = await run(a, backend.ask(request(), new AbortController().signal));
+    expect(viaAsk.map((e) => e.t)).toEqual(['accepted', 'failed']);
+    const b = rig({ responses: [scenarios.unknownStatus(3)], reject: fault });
+    const viaSubmit = await run(
+      b,
+      createGenieBridge({ call: b.call, conversations: b.cm }).submit(request()).events,
+    );
+    expect(viaSubmit.map((e) => e.t)).toEqual(['accepted', 'failed']);
+    expect(viaSubmit.at(-1)).toMatchObject({ code: 'GENIE_FAILED', retry: 'user' });
+    expect(JSON.stringify([viaAsk, viaSubmit])).not.toContain('private upstream detail');
+  });
+
+  it('[G-21b] submit turns a backend that throws into one failed event', async () => {
+    const r = rig();
+    const bridge = createGenieBridge({ call: r.call, conversations: r.cm });
+    // A backend that breaks after its first event, outside every inner guard.
+    vi.spyOn(bridge, 'backendFor').mockReturnValue({
+      kind: 'genie_one_mcp',
+      probe: () => Promise.resolve('ready'),
+      // eslint-disable-next-line require-yield
+      async *ask() {
+        throw new Error('private upstream detail');
+      },
+      resume: () => (async function* () {})(),
+      cancel: () => Promise.resolve(),
+    });
+    const events = await run(r, bridge.submit(request()).events);
+    expect(events).toEqual([expect.objectContaining({ t: 'failed', code: 'GENIE_FAILED' })]);
+    expect(JSON.stringify(events)).not.toContain('private upstream detail');
   });
 });
 

@@ -27,6 +27,7 @@
 // IDs, because asking again starts a duplicate question (`late_text`, `OUT_OF_TIME`).
 import type { MogId, ProfileName } from '../../shared/interfaces';
 import type { CommandArgs, CommandReturns } from '../../shared/ipc';
+import { classifyMcpReply } from './genie-errors';
 
 /** ARC-F4: the time cap of one poll. */
 export const POLL_TIMEOUT_MS = 30_000;
@@ -272,7 +273,12 @@ export async function* runPollActor(
       // Anything else ends the loop. The IDs stay in the journal, so polls can resume (ARC-F5).
       throw e;
     }
-    if (reply.isError) return { kind: 'error', reply };
+    if (reply.isError) {
+      // ADR 0075, ADR 0084: a rate-limited poll reply is not final. The question is already in
+      // Genie, so the actor polls again with the same IDs after the next delay, up to the give-up.
+      if (classifyMcpReply(reply)?.code === 'RATE_LIMITED') continue;
+      return { kind: 'error', reply };
+    }
     const result = asObject(reply.structuredContent);
     const status = pollStatus(result.status);
     yield { n: ++n, status, result, elapsedMs: elapsed() };
