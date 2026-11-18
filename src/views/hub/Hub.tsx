@@ -38,6 +38,7 @@ export function Hub() {
         <LegalNotice
           key={notice.version}
           version={notice.version}
+          storeError={notice.storeError === true}
           onContinue={(v) => void acceptNotice(v).catch(() => undefined)}
         />
       </main>

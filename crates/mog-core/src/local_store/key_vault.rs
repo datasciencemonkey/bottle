@@ -2,6 +2,8 @@
 //!
 //! The key is 256 random bits. It is kept only in the OS key store: the macOS Keychain with
 //! `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, or the Windows Credential Manager (DPAPI).
+//! A macOS build with no keychain access group entitlement uses the login keychain instead
+//! (#541, ADR 0071 amendment 1).
 //! It is never logged, never sent over IPC and never written to a file. Tests use
 //! `MemoryKeyVault` (tests and the `test-support` feature only); they never touch the real key store.
 
@@ -132,6 +134,35 @@ impl KeyVault for MemoryKeyVault {
     }
 }
 
+/// `errSecMissingEntitlement`: the app has no keychain access group entitlement (an unsigned or
+/// ad-hoc macOS build), so the data protection keychain refuses it.
+#[cfg(any(target_os = "macos", test))]
+pub const ERR_SEC_MISSING_ENTITLEMENT: i32 = -34018;
+
+/// The macOS keychain that one call goes to.
+#[cfg(any(target_os = "macos", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeychainTarget {
+    /// The data protection keychain (`kSecUseDataProtectionKeychain`). Signed builds use it.
+    DataProtection,
+    /// The user's login (file-based) keychain. Only for a build with no entitlement.
+    Login,
+}
+
+/// Run `op` on the data protection keychain. Only when it fails with
+/// [`ERR_SEC_MISSING_ENTITLEMENT`], run it once more on the login keychain (#541). Every other
+/// result, and the result of the login try, is returned as is. `op` gets and returns only
+/// `OSStatus` codes, so no key bytes go through an error.
+#[cfg(any(target_os = "macos", test))]
+pub fn with_login_fallback<T>(
+    mut op: impl FnMut(KeychainTarget) -> Result<T, i32>,
+) -> Result<T, i32> {
+    match op(KeychainTarget::DataProtection) {
+        Err(ERR_SEC_MISSING_ENTITLEMENT) => op(KeychainTarget::Login),
+        other => other,
+    }
+}
+
 /// The key store of this OS: the macOS Keychain or the Windows Credential Manager.
 /// On other systems it returns a vault that always fails with `keychain_unavailable`.
 pub fn os_key_vault() -> Box<dyn KeyVault> {
@@ -168,8 +199,12 @@ impl KeyVault for NoKeyVault {
 /// The item is a generic password in the data protection keychain, with
 /// `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` and no iCloud sync. macOS honours the
 /// accessibility class only in the data protection keychain, and that keychain needs a signed app
-/// with a keychain access group entitlement. An unsigned build gets `errSecMissingEntitlement`,
-/// which R10 reports as `keychain_unavailable`. TODO(#34): verify on a signed build (needs:mac).
+/// with a keychain access group entitlement. An unsigned or ad-hoc build gets
+/// `errSecMissingEntitlement` (-34018). Only on that code the vault retries the same call in the
+/// login keychain, with the same service and account and no iCloud sync ([`with_login_fallback`],
+/// #541). The login keychain does not honour the accessibility class, so MEM-08b accessibility is
+/// not enforced on such a build (ADR 0071 amendment 1). Every other error is `keychain_unavailable`.
+/// TODO(#34): verify on a signed build (needs:mac).
 #[cfg(target_os = "macos")]
 pub mod macos {
     use security_framework::access_control::{ProtectionMode, SecAccessControl};
@@ -177,7 +212,10 @@ pub mod macos {
         generic_password, set_generic_password_options, PasswordOptions,
     };
 
-    use super::{KeyVault, LocalKey, ID, KEY_ACCOUNT, KEY_LEN, KEY_SERVICE};
+    use super::{
+        with_login_fallback, KeyVault, KeychainTarget, LocalKey, ID, KEY_ACCOUNT, KEY_LEN,
+        KEY_SERVICE,
+    };
     use crate::error::{CoreError, CoreResult};
 
     /// `errSecItemNotFound`.
@@ -230,9 +268,9 @@ pub mod macos {
             self.spec.clone()
         }
 
-        fn options(&self) -> PasswordOptions {
+        fn options(&self, target: KeychainTarget) -> PasswordOptions {
             let mut o = PasswordOptions::new_generic_password(self.spec.service, self.spec.account);
-            if self.spec.data_protection_keychain {
+            if self.spec.data_protection_keychain && target == KeychainTarget::DataProtection {
                 o.use_protected_keychain();
             }
             o.set_access_synchronized(Some(self.spec.synchronizable));
@@ -242,7 +280,7 @@ pub mod macos {
 
     impl KeyVault for KeychainVault {
         fn load(&self) -> CoreResult<Option<LocalKey>> {
-            match generic_password(self.options()) {
+            match with_login_fallback(|t| generic_password(self.options(t)).map_err(|e| e.code())) {
                 Ok(mut v) => {
                     let out = if v.len() == KEY_LEN {
                         let mut b = [0u8; KEY_LEN];
@@ -254,22 +292,28 @@ pub mod macos {
                     super::wipe(&mut v);
                     out
                 }
-                Err(e) if e.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(None),
+                Err(ERR_SEC_ITEM_NOT_FOUND) => Ok(None),
                 Err(_) => Err(CoreError::KeychainUnavailable { component: ID }),
             }
         }
 
         fn store(&self, key: &LocalKey) -> CoreResult<()> {
-            let mut o = self.options();
             let Accessibility::AfterFirstUnlockThisDeviceOnly = self.spec.accessibility;
-            let ac = SecAccessControl::create_with_protection(
-                Some(ProtectionMode::AccessibleAfterFirstUnlockThisDeviceOnly),
-                0,
-            )
-            .map_err(|_| CoreError::KeychainUnavailable { component: ID })?;
-            o.set_access_control(ac);
-            set_generic_password_options(key.as_bytes(), o)
-                .map_err(|_| CoreError::KeychainUnavailable { component: ID })
+            with_login_fallback(|t| {
+                let mut o = self.options(t);
+                // The login keychain does not honour the accessibility class (ADR 0071
+                // amendment 1), so only the data protection item gets the access control.
+                if t == KeychainTarget::DataProtection {
+                    let ac = SecAccessControl::create_with_protection(
+                        Some(ProtectionMode::AccessibleAfterFirstUnlockThisDeviceOnly),
+                        0,
+                    )
+                    .map_err(|e| e.code())?;
+                    o.set_access_control(ac);
+                }
+                set_generic_password_options(key.as_bytes(), o).map_err(|e| e.code())
+            })
+            .map_err(|_| CoreError::KeychainUnavailable { component: ID })
         }
     }
 }

@@ -25,3 +25,21 @@ ADR 0052 (#63) put the consent records in the local store (`mog_core::consent::C
 - Each capture start costs one `consent_records_list` call.
 - Users of a #27 build see the notice once more after the update.
 - `TODO(#478)`: the signed-in user in the records. `TODO(#64)`: session records through `session_attest`. `TODO(#186)`: the admin retention.
+
+## Amendment 1 (2026-11-18, #541): the login keychain on a build with no entitlement
+
+### Context
+
+Decision 6 left a gap. An unsigned or ad-hoc macOS build (for example `pnpm tauri dev`) has no keychain access group entitlement. The data protection keychain then answers `errSecMissingEntitlement` (-34018). So the key store failed, the local store did not open, and `consent_notice_record` failed. The notice stayed open, and Continue did nothing. The hub showed no error.
+
+### Decisions
+
+1. **The data protection keychain comes first.** `macos::KeychainVault` sends each get and store to the data protection keychain, as before. A signed release build with the entitlement uses only this keychain. MEM-08b (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`) holds there.
+2. **Only -34018 falls back.** When the data protection call fails with -34018, the vault sends the same call one time to the user's login keychain. The item has the same service and account, and `kSecAttrSynchronizable` is false. No other code falls back. The login result is the final result. The pure helper `with_login_fallback` holds this rule, and the `mem_08b_*` tests check it with a recording double.
+3. **MEM-08b accessibility is not enforced on such a build.** The file-based login keychain does not honour the accessibility class. So the login item gets no access control. The key stays in the OS key store, encrypted by the login keychain. It is never in a plain file, a log or an IPC reply. macOS can ask the user to allow access to the item. This prompt is expected for a dev build.
+4. **The hub shows a fixed message.** When a Continue click for the current version is not recorded, the brain sends `storeError: true` with the notice state. The hub shows only this text: "Bottle could not open its local store. Restart Bottle; if this repeats, see Settings > Diagnostics." It shows no internal error. The gate stays closed (decision 6).
+
+### Consequences
+
+- A dev build that made its key in the login keychain does not find it in the data protection keychain of a later signed build. That build then reports `store_key_lost` (U9). This affects only developer machines. A release user never has a login keychain item.
+- `TODO(#34)`: check on a signed build that the data protection keychain is used and that no login item is made.
