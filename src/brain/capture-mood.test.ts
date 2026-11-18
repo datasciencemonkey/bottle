@@ -138,4 +138,26 @@ describe('capture mood: a refused start is never silent (#551)', () => {
     expect(last(A)?.mood).toBe('listening');
     expect(last(A)?.badges).toBeUndefined();
   });
+  it('[MB-08a] a second refusal within 3 s keeps its own reason for its own 3 s', async () => {
+    const { s, cm, last } = setup();
+    cm.refused(A, { error: 'mic_busy' });
+    s.clock.advance(2000);
+    cm.refused(A, { error: 'host_failed' });
+    await s.runUntil(1000 + ERROR_MS + 100);
+    expect(last(A)?.mood).toBe('error');
+    expect(last(A)?.badges?.[0]?.text).toBe(REFUSAL_TEXT.host_failed.text);
+    await s.runUntil(3000 + ERROR_MS);
+    expect(last(A)?.badges).toBeUndefined();
+  });
+
+  it('[CAP-12b] [MB-08a] a repeated state of the post-roll lease keeps the mic_busy reason', () => {
+    const { cm, last } = setup();
+    const live = { ...ptt(A), leaseId: 'L1' };
+    cm.onState(live);
+    cm.refused(A, { error: 'mic_busy' });
+    cm.onState(live);
+    expect(last(A)?.badges?.[0]?.text).toBe(REFUSAL_TEXT.mic_busy.text);
+    cm.onState({ ...ptt(A), leaseId: 'L2' });
+    expect(last(A)?.badges).toBeUndefined();
+  });
 });

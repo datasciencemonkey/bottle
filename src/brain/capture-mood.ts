@@ -83,6 +83,8 @@ export interface CaptureMood {
 interface Refusal {
   reason: RefusalReason;
   at: number;
+  /** The live lease when the start was refused (the post-roll of the last PTT, CAP-12b). */
+  leaseAtRefusal: string | undefined;
   cancel: () => void;
 }
 
@@ -114,14 +116,21 @@ export function createCaptureMood(deps: CaptureMoodDeps): CaptureMood {
       for (const id of [s.owner, s.directedTo]) if (id) known.add(id);
       const fault = micFault(s);
       for (const [id, r] of refusals) {
-        // A granted capture of this MOG ends its refusal; a mic fault names a host failure.
-        if (s.recording && s.owner === id) clear(id);
+        // A new granted capture of this MOG ends its refusal. A repeated state of the lease that
+        // was live at the refusal does not. A mic fault names a host failure.
+        if (
+          s.recording &&
+          s.owner === id &&
+          (r.leaseAtRefusal === undefined || s.leaseId !== r.leaseAtRefusal)
+        )
+          clear(id);
         else if (fault && r.reason === 'host_failed') r.reason = fault;
       }
       for (const id of known) publish(id);
     },
     refused(mogId, error) {
       known.add(mogId);
+      // A newer refusal replaces the older one and its 3 s timer.
       clear(mogId);
       let reason = refusalReason(error);
       if (reason === 'host_failed') reason = micFault(capture) ?? reason;
@@ -130,7 +139,8 @@ export function createCaptureMood(deps: CaptureMoodDeps): CaptureMood {
         refusals.delete(mogId);
         publish(mogId);
       });
-      refusals.set(mogId, { reason, at, cancel });
+      const leaseAtRefusal = capture.recording ? capture.leaseId : undefined;
+      refusals.set(mogId, { reason, at, leaseAtRefusal, cancel });
       publish(mogId);
     },
   };

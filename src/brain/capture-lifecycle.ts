@@ -189,8 +189,11 @@ export function createCaptureLifecycle(deps: CaptureLifecycleDeps): CaptureLifec
       l.end = undefined;
       l.fail = undefined;
       onFail();
-      deps.onRefused?.({ mogId: l.mogId, mode: l.mode, error });
-      fail?.();
+      try {
+        deps.onRefused?.({ mogId: l.mogId, mode: l.mode, error });
+      } finally {
+        fail?.();
+      }
     };
     deps.control.start({ mogId: l.mogId, mode: l.mode }).then((state) => {
       const leaseId = state.leaseId;
