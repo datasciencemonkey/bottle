@@ -2,6 +2,8 @@
  * The registry of the hidden TS brain components T1-T15 of 4.3 (ARC-2, MOG-08b).
  * `startBrain()` constructs each component once; all domain state lives in these objects.
  */
+import type { MogId } from '../../shared/interfaces';
+import { call } from '../../shared/ipc';
 import { BrainBus, sendMicLevel, subscribeBrain } from '../bus';
 import { wireHubMogs } from '../hub-mogs-wiring';
 import {
@@ -9,7 +11,9 @@ import {
   ipcCaptureControl,
   wireCaptureLifecycle,
 } from '../capture-lifecycle';
+import { cardStackDeps, createCardStack, type CardStack } from '../card-stack';
 import { createSystemClock } from '../clock';
+import { createDictationSink } from '../dictation-copy';
 import { LevelRouter, subscribeLevels, wireLevelStream } from '../level-stream';
 import { wireNotice } from '../notice-wiring';
 import { createRequestOwner, sendOwnedCard } from '../request-owner';
@@ -96,6 +100,15 @@ export function startBrain(): Brain {
       newId: () => crypto.randomUUID(),
       sendCard: sendOwnedCard,
     });
+    // #498: the card stack of each MOG, made on first use. TODO(#374): one owner of the stacks
+    // routes the card's `view_emit` input to them and drops a stack when its MOG closes.
+    const cardClock = createSystemClock();
+    const stacks = new Map<MogId, CardStack>();
+    const stackFor = (mogId: MogId): CardStack => {
+      let s = stacks.get(mogId);
+      if (!s) stacks.set(mogId, (s = createCardStack(mogId, cardStackDeps(mogId, cardClock))));
+      return s;
+    };
     // #14: the PTT and hands-free lifecycle. Every start goes through the T12 consent gate.
     const lifecycle = createCaptureLifecycle({
       control: ipcCaptureControl({ consent: components.T12 }),
@@ -115,6 +128,12 @@ export function startBrain(): Brain {
         route: ipcUtteranceDeps(),
         // TODO(#142): T3 runs the 1.5 s preview or shows the chip. Until then nothing is sent.
         onAsk: (_r, owned) => owner.release(owned.utteranceId),
+        // #498, MOG-05b, MOG-06d: a Copy or a failed insertion shows the text and Copy on the
+        // owner's card, so no dictation text is dropped. No main agent and no Genie (RTR-01c).
+        onDone: createDictationSink({
+          stackFor,
+          showCard: (mogId) => call('window_card_show', { mogId }),
+        }),
       }),
     });
     wireCaptureLifecycle(bus, lifecycle, createSystemClock().now);
