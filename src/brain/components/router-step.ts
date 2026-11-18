@@ -24,6 +24,7 @@ import type {
   RouterDecision,
 } from '../../shared/interfaces';
 import { routerJsonSchema } from '../../shared/router-schema';
+import { offlineDecision } from '../offline-intent';
 import { toolFreeInvoker, type ModelInvoker } from './model-guard';
 import { applyInjectionGuard } from './router-injection';
 import { groundedIn, numbersOf } from './router-grounding';
@@ -95,7 +96,7 @@ export type AttemptFailure = 'invoke_failed' | 'no_content' | 'not_json' | 'sche
 export type RouterTraceEvent =
   | { step: 'router'; attempt: 1 | 2; outcome: 'ok'; fixes: FieldRule[] }
   | { step: 'router'; attempt: 1 | 2; outcome: AttemptFailure }
-  | { step: 'router'; outcome: 'fallback_context' };
+  | { step: 'router'; outcome: 'fallback_context' | 'fallback_offline' };
 
 export interface RouterStepDeps {
   invoke: ModelInvoker;
@@ -478,8 +479,9 @@ export function fallbackDecision(text: string): RouterDecision {
 
 /**
  * Runs the router step for one utterance: at most 2 `model_invoke` calls (RTR-13c), then the
- * `context` fallback (RTR-13d). It never throws for a model or parse failure.
- * TODO(#143): when the router model is not available, the offline heuristic of RTR-15c decides.
+ * `context` fallback when the output does not parse (RTR-13d). It never throws for a model or
+ * parse failure. When both calls fail, the router model is not available, so the RTR-15c
+ * offline heuristic decides (#163, ADR 0092). TODO(#143): the RTR-15b fallback classifier.
  */
 export async function runRouterStep(
   text: string,
@@ -490,6 +492,7 @@ export async function runRouterStep(
   const trace = deps.trace ?? (() => undefined);
   const invoke = toolFreeInvoker(deps.invoke);
   const request = buildRouterRequest(text, input, deps.model);
+  let unavailable = true;
   for (const attempt of [1, 2] as const) {
     let result: CommandReturns['model_invoke'];
     try {
@@ -504,6 +507,7 @@ export async function runRouterStep(
       trace({ step: 'router', attempt, outcome: 'invoke_failed' });
       continue;
     }
+    unavailable = false;
     const parsed = parseRouterResponse(result?.json);
     if (!parsed.ok) {
       trace({ step: 'router', attempt, outcome: parsed.outcome });
@@ -514,6 +518,10 @@ export async function runRouterStep(
     if (guarded.flagged) fixes.push('injection_suspected');
     trace({ step: 'router', attempt, outcome: 'ok', fixes });
     return guarded.decision;
+  }
+  if (unavailable) {
+    trace({ step: 'router', outcome: 'fallback_offline' });
+    return applyInjectionGuard(offlineDecision(text), text).decision;
   }
   trace({ step: 'router', outcome: 'fallback_context' });
   return applyInjectionGuard(fallbackDecision(text), text).decision;

@@ -71,6 +71,8 @@ export function createProfilePick(deps: ProfilePickDeps): ProfilePick {
   };
 
   const pickList = async (mogId: MogId, owner: string) => {
+    // A second click on [Pick a profile] does not offer the profiles again.
+    if ([...actions.keys()].some((id) => id.startsWith(`${owner}-use-`))) return;
     let supported: Profile[];
     try {
       supported = (await deps.listProfiles()).filter((p) => p.supported);
@@ -98,6 +100,8 @@ export function createProfilePick(deps: ProfilePickDeps): ProfilePick {
         }
         for (const q of supported) stack.removeChip(`${owner}-use-${q.name}`);
         stack.removeChip(`${owner}-pick`);
+        actions.delete(`${owner}-pick`);
+        for (const q of supported) actions.delete(`${owner}-use-${q.name}`);
         note(mogId, owner, `${p.name} is the home profile of this MOG now. Ask again.`);
       });
       stack.offerChip({ id, kind: 'choose_profile', label: p.name, owner });

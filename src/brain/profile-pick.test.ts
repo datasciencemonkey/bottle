@@ -163,4 +163,21 @@ describe('the no-profile pick card (#163)', () => {
     expect(s.texts().join('\n')).toMatch(/cannot list/i);
     expect(s.saved).toEqual([]);
   });
+
+  it('[RTR-01c] with insertion off, Insert as text makes no insert_text call', async () => {
+    const s = setup({ insertionOn: () => false });
+    await s.pick.showNoProfile(chip(MISREAD), owned);
+    await s.click('Insert as text');
+    expect(s.log).not.toContain('insert_text');
+    expect(s.texts().join('\n')).toContain(MISREAD);
+  });
+
+  it('[W-07d] a second click on Pick a profile does not list the profiles twice', async () => {
+    const s = setup();
+    await s.pick.showNoProfile(chip('What was revenue?'), owned);
+    await s.click('Pick a profile');
+    await s.click('Pick a profile');
+    expect(s.chips().filter((c) => c.label === 'fake-a')).toHaveLength(1);
+    expect(s.texts().filter((t) => t.startsWith('Which workspace?'))).toHaveLength(1);
+  });
 });
