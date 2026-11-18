@@ -70,7 +70,10 @@ describe('GenieOneMcpBackend.ask (#33)', () => {
   it('[G-15b] a failed ask is never sent again, for any failure', async () => {
     for (const code of ['offline', 'timeout', 'auth_expired', 'genie_one_off', 'non_json_reply']) {
       const r = rig({ rejectAsk: () => ({ error: code }) });
-      const events = await run(r, createGenieBridge({ call: r.call, conversations: r.cm }).submit(request()).events);
+      const events = await run(
+        r,
+        createGenieBridge({ call: r.call, conversations: r.cm }).submit(request()).events,
+      );
       expect(events).toHaveLength(1);
       expect(events[0]?.t).toBe('failed');
       expect(asks(r), code).toHaveLength(1);
@@ -93,10 +96,21 @@ describe('GenieOneMcpBackend.ask (#33)', () => {
     const r = rig();
     const call: Rig['call'] = async (args) =>
       args.tool === 'genie_ask'
-        ? { structuredContent: null, text: '', isError: true, httpStatus: 429, rpcError: { retry_after: 30 } }
+        ? {
+            structuredContent: null,
+            text: '',
+            isError: true,
+            httpStatus: 429,
+            rpcError: { retry_after: 30 },
+          }
         : r.call(args);
-    const events = await run(r, createGenieBridge({ call, conversations: r.cm }).submit(request()).events);
-    expect(events).toEqual([expect.objectContaining({ t: 'failed', code: 'RATE_LIMITED', retry: 'user' })]);
+    const events = await run(
+      r,
+      createGenieBridge({ call, conversations: r.cm }).submit(request()).events,
+    );
+    expect(events).toEqual([
+      expect.objectContaining({ t: 'failed', code: 'RATE_LIMITED', retry: 'user' }),
+    ]);
     expect((events[0] as Extract<AskEvent, { t: 'failed' }>).userText).not.toMatch(/retrying/i);
   });
 
@@ -106,9 +120,9 @@ describe('GenieOneMcpBackend.ask (#33)', () => {
     expect(userTextFor('RATE_LIMITED', {}, 1e308)).toBe(
       `Genie busy, retrying in ${RETRY_AFTER_TEXT_CAP_S} s`,
     );
-    expect(classifyGenieError({ httpStatus: 429, rpcError: { retry_after: 86_400 } }).userText).toBe(
-      `Genie busy, retrying in ${RETRY_AFTER_TEXT_CAP_S} s`,
-    );
+    expect(
+      classifyGenieError({ httpStatus: 429, rpcError: { retry_after: 86_400 } }).userText,
+    ).toBe(`Genie busy, retrying in ${RETRY_AFTER_TEXT_CAP_S} s`);
   });
 
   it('[ARC-F3] a poll refused with rate_limited polls again with the same IDs and still ends in one answer', async () => {
@@ -116,7 +130,10 @@ describe('GenieOneMcpBackend.ask (#33)', () => {
       responses: [scenarios.unknownStatus(2)],
       reject: (n) => (n === 1 ? { error: 'rate_limited' } : undefined),
     });
-    const events = await run(r, createGenieBridge({ call: r.call, conversations: r.cm }).submit(request()).events);
+    const events = await run(
+      r,
+      createGenieBridge({ call: r.call, conversations: r.cm }).submit(request()).events,
+    );
     expect(events.at(-1)).toMatchObject({ t: 'answer', md: 'Done.' });
     expect(asks(r)).toHaveLength(1);
   });
@@ -131,13 +148,17 @@ describe('GenieBridge.submit (#33)', () => {
         request({
           preamble: {
             header: 'Context (from my notes, may be wrong):',
-            items: [{ id: 'm1', text: 'EMEA is the focus', source: 'you', ts: 0, truncated: false }],
+            items: [
+              { id: 'm1', text: 'EMEA is the focus', source: 'you', ts: 0, truncated: false },
+            ],
             chars: 17,
           },
         }),
       ).events,
     );
-    expect(events).toEqual([expect.objectContaining({ t: 'failed', code: 'TOOL_BLOCKED', retry: 'none' })]);
+    expect(events).toEqual([
+      expect.objectContaining({ t: 'failed', code: 'TOOL_BLOCKED', retry: 'none' }),
+    ]);
     expect(r.sent).toEqual([]);
   });
 
@@ -167,7 +188,12 @@ describe('GenieBridge.submit (#33)', () => {
     const bridge = createGenieBridge({
       call: r.call,
       conversations: r.cm,
-      audit: { record: async (e) => (recorded.push(e), { kind: e.kind, mogId: e.mogId, opId: e.opId, sizes: {}, hashes: {} }) },
+      audit: {
+        record: async (e) => (
+          recorded.push(e),
+          { kind: e.kind, mogId: e.mogId, opId: e.opId, sizes: {}, hashes: {} }
+        ),
+      },
     });
     await run(r, bridge.submit(request()).events);
     expect(recorded).toHaveLength(1);

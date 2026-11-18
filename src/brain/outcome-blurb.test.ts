@@ -22,7 +22,10 @@ describe('outcome blurbs (Appendix E)', () => {
     const b = outcomeBlurb(answer('Revenue in EMEA was **$410,500**.', true));
     expect(b).toEqual({
       state: 'partial',
-      lines: ['Partial answer: Revenue in EMEA was **$410,500**.', 'Genie did not finish all steps.'],
+      lines: [
+        'Partial answer: Revenue in EMEA was **$410,500**.',
+        'Genie did not finish all steps.',
+      ],
       controls: ['ask_again'],
       suggestions: [],
     });
@@ -77,8 +80,12 @@ describe('outcome blurbs (Appendix E)', () => {
     });
     // Policy denied: the Appendix E row "Policy denied (after retry)".
     expect(
-      outcomeBlurb({ t: 'failed', code: 'POLICY_DENIED', userText: userTextFor('POLICY_DENIED'), retry: 'without_preamble' })
-        .controls,
+      outcomeBlurb({
+        t: 'failed',
+        code: 'POLICY_DENIED',
+        userText: userTextFor('POLICY_DENIED'),
+        retry: 'without_preamble',
+      }).controls,
     ).toEqual(['resend_without_context']);
   });
 
@@ -97,8 +104,12 @@ describe('outcome blurbs (Appendix E)', () => {
     const busy = classifyTransportCode('poll_inflight');
     expect(outcomeBlurb(toFailedEvent(busy), { row: busy.row }).controls).toEqual(['wait']);
     expect(
-      outcomeBlurb({ t: 'failed', code: 'CONVERSATION_BUSY', userText: userTextFor('CONVERSATION_BUSY'), retry: 'user' })
-        .controls,
+      outcomeBlurb({
+        t: 'failed',
+        code: 'CONVERSATION_BUSY',
+        userText: userTextFor('CONVERSATION_BUSY'),
+        retry: 'user',
+      }).controls,
     ).toEqual(['wait', 'new_conversation']);
   });
 
@@ -128,9 +139,16 @@ describe('outcome blurbs (Appendix E)', () => {
       { t: 'abandoned' },
       { t: 'uncertain' },
       { t: 'cancel_requested' },
-      ...(['offline', 'timeout', 'auth_expired', 'poll_inflight', 'rate_limited', 'bad_reply'] as const).map(
-        (c) => toFailedEvent(classifyTransportCode(c)),
-      ),
+      ...(
+        [
+          'offline',
+          'timeout',
+          'auth_expired',
+          'poll_inflight',
+          'rate_limited',
+          'bad_reply',
+        ] as const
+      ).map((c) => toFailedEvent(classifyTransportCode(c))),
     ];
     for (const e of all) {
       const b = outcomeBlurb(e as Parameters<typeof outcomeBlurb>[0]);

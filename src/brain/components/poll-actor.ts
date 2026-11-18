@@ -42,6 +42,11 @@ export const POLL_JITTER = 0.1;
 export const E_POLL_INFLIGHT = 'poll_inflight';
 /** R8 code of a call that ran out of time (`mog_core::http_transport::TIMEOUT`). */
 export const E_TIMEOUT = 'timeout';
+/**
+ * R8 code of a call that the rate bucket refused (ADR 0075). R8 never sends a poll again, so the
+ * actor polls again after its next delay, with the same IDs (#33, ADR 0084).
+ */
+export const E_RATE_LIMITED = 'rate_limited';
 
 export type PollStatus = 'in_progress' | 'completed' | 'incomplete' | 'failed' | 'unknown';
 export type TerminalPollStatus = 'completed' | 'incomplete' | 'failed';
@@ -261,8 +266,9 @@ export async function* runPollActor(
       const code = ipcErrorCode(e);
       // G-16c: a poll timeout polls again with the same IDs. ARC-F1: another poll on this
       // conversation is open (the main agent's), so wait one more delay and poll again.
-      // Both codes are in ERROR_CODES (#495), so they cross IPC as themselves.
-      if (code === E_TIMEOUT || code === E_POLL_INFLIGHT) continue;
+      // ADR 0075: a rate-limited poll waits one more delay (the next call waits in the bucket).
+      // These codes are in ERROR_CODES (#479, #495), so they cross IPC as themselves.
+      if (code === E_TIMEOUT || code === E_POLL_INFLIGHT || code === E_RATE_LIMITED) continue;
       // Anything else ends the loop. The IDs stay in the journal, so polls can resume (ARC-F5).
       throw e;
     }

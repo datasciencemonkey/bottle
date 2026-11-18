@@ -89,7 +89,12 @@ describe('GL-1 terminal events (G-21b)', () => {
     const refusedAsk = rig({ rejectAsk: () => ({ error: 'offline' }) });
     const a = await submitted(refusedAsk);
     expect(a).toEqual([
-      { t: 'failed', code: 'OFFLINE', userText: userTextFor('OFFLINE', { host: HOST }), retry: 'user' },
+      {
+        t: 'failed',
+        code: 'OFFLINE',
+        userText: userTextFor('OFFLINE', { host: HOST }),
+        retry: 'user',
+      },
     ]);
     const refusedPoll = rig({ reject: () => ({ error: 'auth_expired' }) });
     const b = await submitted(refusedPoll);
@@ -128,7 +133,9 @@ describe('GL-1 terminal events (G-21b)', () => {
       answer,
     ]);
     const lost = await after([{ t: 'progress', steps: null, elapsedMs: 1 }]);
-    expect(terminals(lost)).toEqual([expect.objectContaining({ t: 'failed', code: 'STREAM_LOST' })]);
+    expect(terminals(lost)).toEqual([
+      expect.objectContaining({ t: 'failed', code: 'STREAM_LOST' }),
+    ]);
     // needs_input is terminal only for clarify (approval and choose_profile come before an ask).
     expect(isTerminal({ t: 'needs_input', kind: 'clarify', prompt: '?', options: [] })).toBe(true);
     expect(isTerminal({ t: 'needs_input', kind: 'approval', prompt: '', options: [] })).toBe(false);
@@ -206,7 +213,11 @@ describe('completed and incomplete answers (G-22, G-23a, G-23b)', () => {
         {
           polls: [
             { status: 'in_progress', query_items: [{ item_id: 'pub_q1_output', sql: 'SELECT 1' }] },
-            { status: 'completed', final_answer: 'Is this the table you wanted?', query_items: null },
+            {
+              status: 'completed',
+              final_answer: 'Is this the table you wanted?',
+              query_items: null,
+            },
           ],
         },
       ],
@@ -235,9 +246,9 @@ describe('completed and incomplete answers (G-22, G-23a, G-23b)', () => {
   });
 
   it('[UX-14a] key numbers are bold spans with a digit, verbatim, 3 or less', () => {
-    expect(keyNumbersOf('Revenue was **$1.2M**, up **12.5 %** from **Q2**; **no** change.')).toEqual(
-      [{ text: '$1.2M' }, { text: '12.5 %' }, { text: 'Q2' }],
-    );
+    expect(
+      keyNumbersOf('Revenue was **$1.2M**, up **12.5 %** from **Q2**; **no** change.'),
+    ).toEqual([{ text: '$1.2M' }, { text: '12.5 %' }, { text: 'Q2' }]);
     expect(keyNumbersOf('**1** **2** **3** **4**')).toHaveLength(3);
     expect(keyNumbersOf('Nothing bold 42.')).toEqual([]);
   });
@@ -254,7 +265,12 @@ describe('clarify follow-up (G-22, GL-3)', () => {
     expect(first.at(-1)).toMatchObject({ t: 'needs_input', kind: 'clarify' });
     // 4 min later: the answer to the clarify question goes to the same conversation.
     await r.sched.runUntil(r.sched.clock.now() + 4 * MIN);
-    const second = await submitted(r, request({ question: 'Net revenue' }), bridge, r.sched.clock.now() + MIN);
+    const second = await submitted(
+      r,
+      request({ question: 'Net revenue' }),
+      bridge,
+      r.sched.clock.now() + MIN,
+    );
     expect(r.double.asks()[1]?.args.conversation_id).toBe(cid);
     expect(second.at(-1)).toMatchObject({ t: 'needs_input', kind: 'clarify' });
     // More than 5 min after the second clarify: a new conversation.
@@ -283,7 +299,12 @@ describe('clarify follow-up (G-22, GL-3)', () => {
     const r = rig({ responses: [scenarios.needsInput(), scenarios.normalAnswer()] });
     const bridge = bridgeFor(r);
     await submitted(r, request(), bridge, r.sched.clock.now() + MIN);
-    await submitted(r, request({ conversationId: 'conv-explicit' }), bridge, r.sched.clock.now() + MIN);
+    await submitted(
+      r,
+      request({ conversationId: 'conv-explicit' }),
+      bridge,
+      r.sched.clock.now() + MIN,
+    );
     expect(r.double.asks()[1]?.args.conversation_id).toBe('conv-explicit');
   });
 });

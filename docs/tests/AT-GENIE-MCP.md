@@ -28,7 +28,7 @@ pnpm vitest run src/acceptance/at-07-genie-connect.test.ts src/acceptance/at-08-
 | AT-07 | `crates/mog-core/tests/mcp_transport.rs` | R8 (#30) in full against the fake server and a fake R6: G-04a..d, G-05a, G-05b, G-06a (allowlist, `tools/list` filter, the `genie-tools.json` contract), G-06b, G-07a, the 401 retry (W-05d), 4.6 rules 2, 3, 5, 6, 7, the size and time caps, and no token or content in logs, `Debug` or errors. |
 | AT-07 | `src/acceptance/at-07-genie-connect.test.ts` | G-07b: concurrent poll callers on one conversation go through the shipped `ConversationManager.enqueuePoll` (brain actor). The double sees 1 open poll at most, and every poll keeps the same IDs. A control case without the queue (`[AT-22]`) sees an overlap, so the check can fail. A failed poll does not block the next one. The double lists the four tools of the contract file (`[AT-22]`). |
 | AT-08 | `src/acceptance/at-08-context-approval.test.ts` | The display part of G-35a and G-35b (#89): the expanded card shows the exact "Sent to Genie" text and offers "Resend without context" only when a preamble went. |
-| AT-09 | `src/acceptance/at-09-outcomes.test.ts` | Six double outcomes (completed, incomplete with and without an answer, failed, truncated, needs-input) on the shipped card parts: 3 blurbs newest on top and History (UX-11a, UX-12), a split takes one slot and a pin stays (UX-11b, UX-11c), every expanded section in order (UX-18), a 60-row truncated result shows 50 rows (G-24b display part), a chip that sends gives an action only on a click (UX-20c), success and error moods (UX-01a), one merged notification for a burst from 2 MOGs (UX-26b, UX-26c), and no notification for a chip, a visible card or a blocking Focus mode (UX-26a). |
+| AT-09 | `src/acceptance/at-09-outcomes.test.ts` | Six double outcomes (completed, incomplete with and without an answer, failed, truncated, needs-input) on the shipped card parts: 3 blurbs newest on top and History (UX-11a, UX-12), a split takes one slot and a pin stays (UX-11b, UX-11c), every expanded section in order (UX-18), a 60-row truncated result shows 50 rows (G-24b display part), a chip that sends gives an action only on a click (UX-20c), success and error moods (UX-01a), one merged notification for a burst from 2 MOGs (UX-26b, UX-26c), and no notification for a chip, a visible card or a blocking Focus mode (UX-26a). G-21a, G-21b, G-22, G-23a, G-23b (#33, ADR 0084): each outcome runs through the shipped `GenieBridge.submit` and gives exactly one terminal event; incomplete with an answer shows "Partial answer", incomplete without one shows a failure, and needs-input is `needs_input(clarify)`. The card render reads only the normalised event. |
 | AT-10 | `src/acceptance/at-10-cancel.test.ts` | UX-19b (#78): Esc during a turn makes exactly one cancel call with the exchange ref, and the card stays to show "Cancellation requested", also when the cancel transport fails. The `genie_cancel_response` call is test glue in the callback; G-25a itself is #151. |
 | AT-33 | `src/acceptance/at-33-genie-behaviour.test.ts` | G-19b (SEC-25a, #210): the double's deep link on the profile host passes `trustedUrl`; another host, a look-alike host, http and a link with credentials do not. |
 | AT-34 | `crates/mog-core/tests/at_34_poll_budget.rs`, `src/acceptance/at-34-poll-budget.test.ts` | Nothing yet: all pending. |
@@ -36,8 +36,8 @@ pnpm vitest run src/acceptance/at-07-genie-connect.test.ts src/acceptance/at-08-
 | all | `src/test-support/genie-one-mcp.ts` | New double scenarios `incompleteWithAnswer`, `incompleteNoAnswer`, `failed`, `truncated(rows)` and `needsInput`, with `[AT-22]` self-tests. A query result can carry `truncated: true`. |
 
 The contract parts prove only that the contract cannot ask for the wrong thing. The behaviour
-needs the feature issue. The AT-09 test reads the double's terminal poll with test glue
-(`finalPoll`). That glue is not the bridge; the event normaliser is #33.
+needs the feature issue. The AT-09 card-part tests read the double's terminal poll with test
+glue (`finalPoll`). The G-21 test uses the shipped event normaliser (#33) instead.
 
 ## Pending tests
 
@@ -57,7 +57,6 @@ implementer removes the mark and finishes the test.
 | AT-08 | G-31, G-37a, G-37b, G-37c | #91 |
 | AT-08 | G-33a, G-33b, G-34a, G-34b (and the G-35a, G-35b behaviour) | #152 |
 | AT-08 | SEC-23 | #140 |
-| AT-09 | G-21a, G-21b, G-22, G-23a, G-23b | #33 |
 | AT-09 | UX-13, UX-14a, UX-14b, UX-15, UX-17 | #86 |
 | AT-09 | UX-16a, UX-16b | #88 |
 | AT-09 | G-12a, G-12b, G-12c | #149 |
