@@ -72,13 +72,20 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
     });
     // #476 (CAP-16a): `capture_subscribe` sends the levels on a Channel of the brain webview.
     let levels = capture_host::HostLevels::new(capture_host::brain_level_resolver(handle.clone()));
-    // #21 (CAP-12c, CAP-34, ADR 0078): the RAM-only PTT buffer. TODO(#46): SttEngine is the
-    // consumer; until then each utterance is dropped, and so wiped, at once.
+    // #46 (ADR 0082): R4 SttEngine. TODO(#413): the app build has no `local-stt` and no
+    // installed model yet, so the loader reports `stt_model_missing`. TODO(#514): the results
+    // go to `capture.segment` and `stt_transcribe`; until then the store keeps them in RAM.
+    let stt = mog_core::stt_engine::LocalStt::new(
+        std::sync::Arc::new(mog_core::stt_engine::NoModelLoader),
+        std::sync::Arc::new(mog_core::stt_engine::NoTranscriptSink),
+        |_| {},
+    );
+    // #21 (CAP-12c, CAP-34, ADR 0078): the RAM-only PTT buffer. R4 is its consumer (#46).
     let ptt = mog_core::audio_device::ptt_buffer::PttBuffer::new(std::sync::Arc::new(
-        mog_core::audio_device::ptt_buffer::NoUtteranceSink,
+        stt.engine().clone(),
     ));
     // #388 (ADR 0038): the cpal mic on its own audio thread. Its frames go to the level
-    // stream (#476) and to the PTT buffer (#21).
+    // stream (#476), to the PTT buffer (#21) and to R4 (#46, CAP-52).
     // CAP-22 (#453, ADR 0063): `app.capture.preferBuiltInMic` reaches this mic. No mic thread:
     // the app still runs, and every start answers `host_failed`.
     #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -86,7 +93,11 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
         use mog_core::audio_device::cpal_backend::CpalMicHost;
         let settings = handle.try_state::<std::sync::Arc<mog_core::app_settings::AppSettings>>();
         capture_host::mic_capture_device(
-            capture_host::spawn_level_mic(CpalMicHost::new, ptt.sink(), levels.gate()),
+            capture_host::spawn_level_mic(
+                CpalMicHost::new,
+                mog_core::audio_device::level::TeeSink(ptt.sink(), stt.engine().frame_sink()),
+                levels.gate(),
+            ),
             settings.as_ref().map(|s| s.inner().as_ref()),
         )
     };
@@ -94,12 +105,13 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let (device, link): (Box<dyn mog_core::capture::AudioDevice>, Option<()>) =
         (Box::new(capture_host::UnwiredMic), None);
-    let host = capture_host::CaptureHost::with_audio(
+    let host = capture_host::CaptureHost::with_stt(
         device,
         std::sync::Arc::new(mog_core::clock::SystemClock::new()),
         relay,
         levels,
         ptt,
+        stt.engine().clone(),
     )?;
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     if let Some(link) = link {
@@ -109,6 +121,8 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let _ = link;
     handle.manage(host);
+    // CAP-51c: the hotkey host preloads R4 at each talk-key down through this state.
+    handle.manage(stt);
     Ok(())
 }
 

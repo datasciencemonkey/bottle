@@ -269,7 +269,7 @@ fn at_03_cap_13a_cap_13b_no_audio_before_key_down_and_the_mic_closes_on_pause() 
     assert!(!device.log().mic_open);
 }
 
-/// The utterances that R2 hands on (a stand-in for R4 SttEngine, TODO(#46)).
+/// The utterances that R2 hands on (a stand-in for R4 SttEngine, #46).
 #[derive(Default)]
 struct KeptUtterances(std::sync::Mutex<Vec<Utterance>>);
 

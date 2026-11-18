@@ -368,7 +368,7 @@ fn mb_05_capture_stop_all_stops_every_lease_and_closes_the_mic() {
 #[test]
 fn cap_02a_capture_subscribe_checks_its_channels() {
     // This host has no level stream (`CaptureHost::new`); `level_host.rs` tests the stream
-    // (#476). TODO(#46): the partial text feeds `onPartial`.
+    // (#476). TODO(#514): R4's partial text feeds `onPartial`.
     let r = rig();
     assert_eq!(
         r.call(

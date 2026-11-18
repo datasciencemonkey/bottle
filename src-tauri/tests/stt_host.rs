@@ -255,7 +255,7 @@ fn cap_51c_install_capture_wires_r4_into_the_mic_tee_and_the_events() {
         "R4 is in the R2 event chain"
     );
     assert!(
-        body.contains("PttBuffer::new(std::sync::Arc::new(stt.engine().clone()))"),
+        body.contains("PttBuffer::new(std::sync::Arc::new(stt.engine().clone()"),
         "R4 consumes the PTT buffer utterances"
     );
 }

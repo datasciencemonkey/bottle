@@ -20,8 +20,8 @@
 //! **The RAM-only PTT buffer (CAP-12c, CAP-13a, CAP-34, #21, ADR 0078).** The PTT half of the
 //! `TeeSink` is a [`PttBuffer`] sink. [`CaptureHost::with_audio`] puts the same buffer in the
 //! core's event chain with `PttCaptureEvents`, so a take starts only when a PTT or hands-free
-//! lease records, and each stop hands one utterance to the buffer's consumer (TODO(#46):
-//! SttEngine) or wipes it.
+//! lease records, and each stop hands one utterance to the buffer's consumer (R4
+//! SttEngine, #46) or wipes it. [`CaptureHost::with_stt`] also puts R4 in the chain (ADR 0082).
 
 use mog_core::app_settings::AppSettings;
 use mog_core::audio_device::level::{
@@ -40,6 +40,7 @@ use mog_core::ipc::{
     IpcError, MogId,
 };
 use mog_core::ipc_gateway::ipc_error_code;
+use mog_core::stt_engine::{LocalSttEngine, SttCaptureEvents};
 use mog_core::types::{CaptureState, CaptureStopped};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -268,6 +269,28 @@ where
         make_host,
         Box::new(TeeSink(LevelSink::new(gate.clone()), ptt)),
     )
+}
+
+/// The brain events with or without R4 in front (#46).
+enum SttEvents<E> {
+    On(SttCaptureEvents<E>),
+    Off(E),
+}
+
+impl<E: CaptureEvents> CaptureEvents for SttEvents<E> {
+    fn state(&self, state: &CaptureState) {
+        match self {
+            SttEvents::On(e) => e.state(state),
+            SttEvents::Off(e) => e.state(state),
+        }
+    }
+
+    fn stopped(&self, stopped: &Stopped) {
+        match self {
+            SttEvents::On(e) => e.stopped(stopped),
+            SttEvents::Off(e) => e.stopped(stopped),
+        }
+    }
 }
 
 // ---------- the cap timer ----------
@@ -540,13 +563,44 @@ impl CaptureHost {
         levels: HostLevels,
         ptt: PttBuffer,
     ) -> std::io::Result<Self> {
+        Self::build(device, clock, relay, levels, ptt, None)
+    }
+
+    /// As [`CaptureHost::with_audio`], with R4 SttEngine `stt` in the event chain (#46,
+    /// ADR 0082): a granted PTT or hands-free lease begins its take and preloads the model
+    /// (CAP-51c), and each stop commits or drops it. The mic device must tee its frames to
+    /// [`LocalSttEngine::frame_sink`] next to the PTT buffer ([`spawn_level_mic`]).
+    pub fn with_stt(
+        device: Box<dyn AudioDevice>,
+        clock: Arc<dyn MonotonicClock>,
+        relay: BrainRelay,
+        levels: HostLevels,
+        ptt: PttBuffer,
+        stt: LocalSttEngine,
+    ) -> std::io::Result<Self> {
+        Self::build(device, clock, relay, levels, ptt, Some(stt))
+    }
+
+    fn build(
+        device: Box<dyn AudioDevice>,
+        clock: Arc<dyn MonotonicClock>,
+        relay: BrainRelay,
+        levels: HostLevels,
+        ptt: PttBuffer,
+        stt: Option<LocalSttEngine>,
+    ) -> std::io::Result<Self> {
         let owners: Arc<Mutex<LeaseOwners>> = Arc::default();
         let brain = BrainCaptureEvents {
             relay,
             owners: Arc::clone(&owners),
         };
+        let brain = match stt {
+            Some(engine) => SttEvents::On(SttCaptureEvents::new(brain, engine)),
+            None => SttEvents::Off(brain),
+        };
         // The gate closes before the brain sees a stop state (CAP-16b). The PTT buffer ends its
-        // take before the brain sees the stop (#21).
+        // take before the brain sees the stop (#21). R4 begins, commits or drops its take
+        // before the brain sees the event (#46).
         let sink = Arc::new(LevelCaptureEvents::new(
             PttCaptureEvents::new(brain, ptt),
             levels.gate.clone(),
@@ -636,7 +690,7 @@ impl CaptureHost {
                 // The gateway checked both Channel references.
                 let a: CaptureSubscribeArgs = args_of(command, args)?;
                 // CAP-16a: the levels go to this `onLevel` Channel from now on. A later call
-                // (a brain reload) replaces it. TODO(#46): the partial text feeds `onPartial`.
+                // (a brain reload) replaces it. TODO(#514): R4's partial text feeds `onPartial`.
                 let out = (self.levels.resolve)(&a.on_level).ok_or_else(|| {
                     refused(IpcError::HostFailed {
                         command: command.to_owned(),

@@ -27,9 +27,10 @@
 //!   freed. A dropped capture (a tap, Esc, zero buffers, the panic stop) makes no transcript
 //!   and its audio is zeroed. Nothing here writes a log or telemetry: no audio, no text.
 //!
-//! The adapters connect R4 to R2: [`SttFrameSink`] is the mic tee half and [`SttCaptureEvents`]
-//! wraps the R2 events. TODO(#21): the host tees [`SttFrameSink`] next to the PTT buffer of
-//! #496 and wraps its events, once #496 is on main.
+//! The adapters connect R4 to R2: [`SttFrameSink`] is the mic tee half next to the PTT buffer
+//! (#21), and [`SttCaptureEvents`] wraps the R2 events. R4 is also the PTT buffer's
+//! [`UtteranceSink`]: it has decoded the same audio from the tee, so it drops (and so zeroes)
+//! the utterance at once (CAP-34).
 
 pub mod power;
 mod resample;
@@ -51,6 +52,7 @@ pub use vad::{
 };
 
 use crate::audio_device::normalize::normalize_peak;
+use crate::audio_device::ptt_buffer::{Utterance, UtteranceSink};
 use crate::audio_device::sink::{FrameSink, MicFrame, SinkEvent};
 use crate::capture::{parse_lease, CaptureEvents, LeaseNo, StopReason, Stopped};
 use crate::clock::{MonotonicClock, SystemClock};
@@ -836,5 +838,15 @@ impl<E: CaptureEvents> CaptureEvents for SttCaptureEvents<E> {
     fn stopped(&self, stopped: &Stopped) {
         self.engine.commit(stopped.lease_id, stopped.reason);
         self.inner.stopped(stopped);
+    }
+}
+
+/// R4 is the consumer of the PTT buffer (#21, ADR 0078 decision 9). R4 has read the same
+/// audio from the mic tee and decoded it during speech (CAP-52), and the stop reaches R4
+/// through [`SttCaptureEvents`]. So the utterance is not decoded a second time: it drops here,
+/// which zeroes its samples (CAP-34). The app keeps no second copy of the audio.
+impl UtteranceSink for LocalSttEngine {
+    fn utterance(&self, utterance: Utterance) {
+        drop(utterance);
     }
 }

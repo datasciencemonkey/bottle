@@ -31,7 +31,7 @@ The issue leaves these points open:
    - `Resampler` converts the device rate to 16 kHz.
    - `LocalStt` implements the `stt::SttEngine` interface, and `TranscriptStore` keeps the results until `stt_transcribe` asks for them.
    The R4 stub goes away. Every call sends a message to the worker, so no caller waits for a model load or a decode.
-2. **Live frames, not the stopped utterance.** CAP-52 needs the audio while the key is down. The PTT buffer (#21) gives its audio only at the stop. So R4 reads the mic frames through its own tee half, `SttFrameSink`. It learns the lease start and stop from `SttCaptureEvents`, which wraps the R2 events in the same way as `PttCaptureEvents`. A granted PTT or hands-free state begins a take. Any other state stops the frames. A stop commits the take or drops it. With no live lease, the sink copies no frame, so no pre-roll exists (CAP-13a). TODO(#21): the host tees `SttFrameSink` next to the PTT buffer once #496 is on main.
+2. **Live frames, not the stopped utterance.** CAP-52 needs the audio while the key is down. The PTT buffer (#21) gives its audio only at the stop. So R4 reads the mic frames through its own tee half, `SttFrameSink`. It learns the lease start and stop from `SttCaptureEvents`, which wraps the R2 events in the same way as `PttCaptureEvents`. A granted PTT or hands-free state begins a take. Any other state stops the frames. A stop commits the take or drops it. With no live lease, the sink copies no frame, so no pre-roll exists (CAP-13a). The host tees `SttFrameSink` next to the PTT buffer (`TeeSink`), and `CaptureHost::with_stt` puts `SttCaptureEvents` in the R2 event chain. R4 is also the PTT buffer's `UtteranceSink`. R4 has decoded the same audio, so it drops (and so zeroes) the utterance at once.
 3. **The audio that R4 reads goes through `normalize_peak` (CAP-20).** Each closed segment and the tail get the -3 dBFS peak just before the decode. This is the #23 hand-off. The peak is per segment, so a loud word late in the hold does not make an early segment quieter.
 4. **The segment cut rule (CAP-52).** A segment closes at a VAD pause of 300 ms or more after 3 s of audio. A segment never grows past 30 s, which is the R2 segment limit and the CAP-53a request limit. This is the #283 proposal, and TODO(#283) tracks the final rule.
    - A pause cut needs speech in the segment. So a quiet input that the VAD misses is not cut into pieces and dropped. It decodes at the 30 s cut or at key-up.
@@ -42,7 +42,7 @@ The issue leaves these points open:
    - An unknown source, for example a desktop, counts as AC power.
    - On AC power the model loads at start and stays loaded. On AC power, a model that loaded once loads again after a battery unload.
    - On battery the model unloads after 30 min with no use. A use is a preload, a lease start or a decode. The model never unloads while a take is open.
-7. **Preload (CAP-51c).** `preload()` and a granted lease load the model if it is not loaded, so the key-up path does not load it. TODO(#21): the host calls `preload()` from `PttForwarder` on `hotkey.ptt` down, in parallel with the other warm-ups.
+7. **Preload (CAP-51c).** `preload()` and a granted lease load the model if it is not loaded, so the key-up path does not load it. The hotkey host calls `preload()` from `PttForwarder::with_key_down` at each `hotkey.ptt` down, before the brain gets the event.
 8. **Commit and drop.** A stop that keeps the audio decodes the open tail. Then it gives one `SttDone` with one `Transcript` for each lease (`segmentId` `ptt-<lease>`). These stops make no transcript and zero the audio:
    - A stop for which `StopReason::discards_audio` is true (tap, cancel, Esc, zero buffers).
    - The panic stop (MB-05). ADR 0078 leaves this choice to the consumer: after a panic key, no text is inserted or sent.
@@ -58,9 +58,8 @@ The issue leaves these points open:
 
 ## Consequences
 
-- The R4 core is complete and tested with fakes. The app does not run it yet, for these reasons:
+- The host runs R4 in the capture chain, tested with fakes (`src-tauri/tests/stt_host.rs`). It does not make text in the app yet, for these reasons:
   - The `local-stt` feature is not on in `src-tauri` (TODO(#413)).
-  - The host tee and the preload hook wait for #496 (TODO(#21)).
   - `stt_transcribe` has no host route, and no core code emits `capture.segment` yet (TODO(#514)). The route is in `src-tauri/src/ipc.rs`, a contract file.
 - #498 (the Copy card for `copy` and `insert_failed`) must land before #514 or with it, because #514 first produces routed dictation text. This PR produces no routed text: T4 SttProvider (#52) still rejects.
 - The tail latency (AT-21, SP-04) and the 8 h residency on a device stay device steps. The real-model test in `tests/stt_local.rs` runs in the #414 job with `BOTTLE_STT_MODEL_DIR` (TODO(#414)).

@@ -4,7 +4,8 @@
 //! The mic frames reach this buffer through the [`TeeSink`](super::level::TeeSink) of the host,
 //! after the level sink. The buffer keeps the audio of one PTT or hands-free lease in RAM and
 //! gives it to an [`UtteranceSink`] when the lease stops. The consumer is the speech engine
-//! R4 SttEngine (TODO(#46)). Until it exists, the host uses [`NoUtteranceSink`].
+//! R4 SttEngine (`crate::stt_engine`, #46, ADR 0082), which decodes the same audio from the
+//! mic tee during speech and drops the utterance at once.
 //!
 //! - **RAM only (CAP-12c).** The audio is in heap chunks of [`CHUNK_SAMPLES`] samples. There is
 //!   no file, temp file, memory map, log or telemetry. A full chunk is never moved, so a growing
@@ -31,8 +32,8 @@
 //!   buffered here (TODO(#116)).
 //!
 //! A frame at another sample rate than the first frame of the take (after a device change,
-//! CAP-18) is resampled to the take's rate by linear interpolation. TODO(#46): SttEngine
-//! resamples the utterance to 16 kHz.
+//! CAP-18) is resampled to the take's rate by linear interpolation. R4 resamples its own tee
+//! input to 16 kHz (#46).
 //!
 //! The audio thread takes the buffer lock for each frame. The other side holds the lock only for
 //! short steps: it moves a take out, and then copies, scales and wipes it after it lets go.
@@ -286,7 +287,7 @@ impl fmt::Debug for Utterance {
     }
 }
 
-/// The consumer of finished utterances: R4 SttEngine (TODO(#46)). It runs on the thread that
+/// The consumer of finished utterances: R4 SttEngine (#46). It runs on the thread that
 /// stopped the lease (an IPC worker or the cap timer), so it must hand the utterance on fast.
 /// When it drops the utterance, the samples are wiped.
 pub trait UtteranceSink: Send + Sync + 'static {
@@ -295,7 +296,7 @@ pub trait UtteranceSink: Send + Sync + 'static {
 }
 
 /// An [`UtteranceSink`] that drops each utterance, so its samples are wiped at once. The host
-/// uses it until SttEngine exists (TODO(#46)).
+/// used it before SttEngine existed (#46); tests and `with_levels` still use it.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NoUtteranceSink;
 

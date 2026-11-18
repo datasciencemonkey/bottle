@@ -252,6 +252,19 @@ pub fn ptt_payload(mog_id: &str, phase: PttPhase) -> Value {
 /// Whether a Shift key (not the talk key) is down now (RTR-17a).
 pub type ShiftProbe = Box<dyn Fn() -> bool + Send>;
 
+/// CAP-51c (#46): the key-down hook that preloads R4, if the capture host has made it.
+fn r4_preload<R: Runtime>(app: AppHandle<R>) -> KeyDownHook {
+    Box::new(move || {
+        if let Some(stt) = app.try_state::<mog_core::stt_engine::LocalStt>() {
+            stt.engine().preload();
+        }
+    })
+}
+
+/// A warm-up that runs at each talk-key down, before the brain hears of it: the R4 model
+/// preload (CAP-51c, #46). It must not block.
+pub type KeyDownHook = Box<dyn Fn() + Send>;
+
 /// The talk key now, shared by the Shift probe and a talk-key change (RTR-17a, CAP-43a).
 #[derive(Debug, Clone)]
 pub struct TalkNow(Arc<Mutex<TalkBinding>>);
@@ -292,6 +305,7 @@ pub struct PttForwarder<B: BrainSink, S: StatusSink> {
     /// The MOG of the last press that ended, for the `double_tap` that follows it.
     last: Option<String>,
     shift: Option<ShiftProbe>,
+    key_down: Option<KeyDownHook>,
     /// The fallback chord (Ctrl+Shift+Space, CAP-39b) is the talk key now. Shift is part of the
     /// chord, so it never forces the ask route (RTR-17a, ADR 0053).
     chord: bool,
@@ -307,8 +321,16 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
             held: None,
             last: None,
             shift: None,
+            key_down: None,
             chord: false,
         }
+    }
+
+    /// Run `hook` at each talk-key down (CAP-51c: the R4 model preload, in parallel with the
+    /// brain's other warm-ups).
+    pub fn with_key_down(mut self, hook: KeyDownHook) -> Self {
+        self.key_down = Some(hook);
+        self
     }
 
     /// Read the Shift state at each key-down with `probe` (RTR-17a).
@@ -323,6 +345,9 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
             HotkeyOutput::Ptt(phase) => {
                 let mog = match phase {
                     PttPhase::Down => {
+                        if let Some(hook) = &self.key_down {
+                            hook();
+                        }
                         self.held = self.target.current();
                         self.held.clone()
                     }
@@ -839,7 +864,8 @@ where
     spawn_forwarder(
         rx,
         PttForwarder::new(Arc::clone(&target), app.clone(), BrainStatus(app.clone()))
-            .with_shift_probe(talk_now.probe(platform_shift_held)),
+            .with_shift_probe(talk_now.probe(platform_shift_held))
+            .with_key_down(r4_preload(app.clone())),
     )?;
     let sink: Arc<dyn HotkeySink> = Arc::new(sink);
     let (service, permissions) = factory(settings.talk_binding(), Arc::clone(&sink));
