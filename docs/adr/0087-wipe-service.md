@@ -72,7 +72,7 @@ conversations, and what the admin lock shows.
     for another option does nothing. A test checks that no other source calls it and that there is no timer.
 11. **Hub panel (interim names, like ADR 0081).** `src/views/hub/WipeSettings.tsx` shows the three options (none
     chosen; the button is off until one is), "Also delete Genie conversations" (off), the Wipe button and the 9.2
-    retention rows. The events `hub:wipe_dialog` and `hub:wipe_settings` go to the hub only (ARC-5). The click
+    retention rows behind a "Show how long Bottle keeps data" click. The events `hub:wipe_dialog` and `hub:wipe_settings` go to the hub only (ARC-5). The click
     targets are `wipe_open`, `wipe_confirm`, `wipe_cancel` and `wipe_settings`, with the fixed `mogId` `wipe`,
     because `view_emit` needs one. `TODO(#525)` moves them into the contract.
 12. **Admin lock (SEC-15c, MB-15).** `adminWins(user, admin)` applies the admin value and locks it whenever the admin
