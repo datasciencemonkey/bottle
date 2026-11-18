@@ -108,6 +108,9 @@ describe('T10 forget (#123, MEM-32a)', () => {
       },
     ]);
     await svc.forgetConversations({ mogId: MOG });
+    // G-21a: the backend kind is checked by the bridge list; an unknown kind row is dropped.
+    const bad = setup(() => ({ rows: [{ ...row, backendKind: 'genie_mcp' }] }));
+    expect(await bad.svc.forgetConversations({ mogId: MOG })).toEqual([]);
     // Forget of items deletes no conversation, so it reads nothing.
     expect(await svc.forgetConversations({ mogId: MOG, itemIds: [ITEM_1] })).toEqual([]);
     expect(store.calls).toEqual([

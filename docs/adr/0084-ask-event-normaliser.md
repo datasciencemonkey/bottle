@@ -87,7 +87,10 @@ of `genie_bridge.py` in antigravity-bricks-plugin @ a31fd2c (MIT).
    `AuditLogClient` of ADR 0059 (the `audit_append` IPC client by default). The entry has the question size and the SHA-256 of the sent
    text. A failed audit write does not stop the ask.
 10. **G-21a inspection.** A test reads the views and the mascot, card and memory modules. These
-    files must not name a backend kind.
+    files must not name a backend kind. The Forget code of #123 (`memory-service.ts`) keeps the
+    backend of a conversation as data (`ExchangeRef['backend']`). It checks the value with the
+    bridge's `isBackendKind`, and it never names a kind. The per-backend delete stays in
+    `forget-flow.ts`, beside the Genie One delete utility.
 
 ## Consequences
 

@@ -11,6 +11,7 @@
  */
 import type {
   ContextPreamble,
+  ExchangeRef,
   GenieExchange,
   MemoryDraft,
   MemoryService,
@@ -20,6 +21,7 @@ import type {
 import type { JsonObject } from '../../shared/ipc';
 import { NotImplementedError } from '../errors';
 import { distilSummary } from './exchange-summary';
+import { isBackendKind } from './genie-bridge';
 import { IpcLocalMemoryStore, type LocalMemoryStore } from './memory-store';
 
 export interface MemoryServiceOptions {
@@ -122,13 +124,17 @@ export type ForgetScope = Parameters<MemoryService['forget']>[0];
 
 /** One Genie conversation that a Forget scope holds (MEM-32c), from the local exchange rows. */
 export interface ForgetConversation {
-  backend: 'genie_one_mcp' | 'genie_agent' | 'custom_agent';
+  /**
+   * The backend of the exchange, kept as data. G-21a (ADR 0084): memory code never names or
+   * branches on a backend kind; the bridge owns the list (`isBackendKind`).
+   */
+  backend: ExchangeRef['backend'];
   /** The profile that made the conversation. A delete goes to this workspace only. */
   profile: string;
   host: string;
   /** The numeric workspace id as a decimal string (`?o=`), if known. */
   workspaceId?: string;
-  /** The Genie space (`genie_agent` only). */
+  /** The Genie space, if the backend has one. */
   spaceId?: string;
   conversationId: string;
 }
@@ -164,7 +170,6 @@ export function checkForgetScope(s: ForgetScope): CheckedScope {
   return { kind: 'mog', mogId };
 }
 
-const BACKENDS: readonly string[] = ['genie_one_mcp', 'genie_agent', 'custom_agent'];
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v !== '' ? v : undefined);
 
 /** One `mem.forget.*_conversations` row as a {@link ForgetConversation}, or undefined. */
@@ -175,10 +180,10 @@ function conversationOf(r: unknown): ForgetConversation | undefined {
   const profile = str(o['profile']);
   const host = str(o['host']);
   const conversationId = str(o['conversationId']);
-  if (typeof backend !== 'string' || !BACKENDS.includes(backend)) return undefined;
+  if (!isBackendKind(backend)) return undefined;
   if (profile === undefined || host === undefined || conversationId === undefined) return undefined;
   const c: ForgetConversation = {
-    backend: backend as ForgetConversation['backend'],
+    backend,
     profile,
     host,
     conversationId,
