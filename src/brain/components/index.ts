@@ -12,7 +12,10 @@ import {
 import { createSystemClock } from '../clock';
 import { LevelRouter, subscribeLevels, wireLevelStream } from '../level-stream';
 import { wireNotice } from '../notice-wiring';
+import { createRequestOwner, sendOwnedCard } from '../request-owner';
 import { configName, createAppTalkTarget, wireTalkTarget, type TalkTarget } from '../talk-target';
+import { ipcUtteranceDeps } from '../utterance-route';
+import { createUtteranceHandler } from '../utterance-wiring';
 import { createAgentBridge } from './agent-bridge';
 import { createCapturePolicy } from './capture-policy';
 import { createCleanupProvider } from './cleanup-provider';
@@ -87,14 +90,32 @@ export function startBrain(): Brain {
     // before the capture lifecycle, so a `hotkey:ptt` down updates the target first.
     const talkTarget = createAppTalkTarget(configName);
     wireTalkTarget(bus, talkTarget);
+    // MOG-13a (#73): the MOG that captures an utterance owns its request and its answer.
+    const owner = createRequestOwner({
+      isOpen: (id) => talkTarget.isOpen(id),
+      newId: () => crypto.randomUUID(),
+      sendCard: sendOwnedCard,
+    });
     // #14: the PTT and hands-free lifecycle. Every start goes through the T12 consent gate.
     const lifecycle = createCaptureLifecycle({
       control: ipcCaptureControl({ consent: components.T12 }),
       // TODO(#46): T4 transcribes with local Parakeet; the stub rejects, so nothing is routed yet.
       transcribe: async (seg) =>
         (await components.T4.transcribe(seg, { app: 'bottle', mog: seg.mogId, op: 'asr' })).text,
-      // TODO(#424): `routeUtterance(u, ipcUtteranceDeps())` plugs in here.
-      onUtterance: () => undefined,
+      // #59 (ADR 0053): the MOG of the key-down owns the utterance (MOG-13a); a dictation ends
+      // at `insert_text`; a preview or a chip goes to T3.
+      onUtterance: createUtteranceHandler({
+        owner,
+        // TODO(#112, #163): the router input needs the MOG's home profile from T7 and the
+        // profile list. Bottle never picks a profile, so until then no utterance is routed.
+        routerInput: () => undefined,
+        // TODO(#60): `app.dictation.insert` is on after the user grants Accessibility; until the
+        // dictation card reads it, a dictation goes to Copy.
+        insertionOn: () => false,
+        route: ipcUtteranceDeps(),
+        // TODO(#142): T3 runs the 1.5 s preview or shows the chip. Until then nothing is sent.
+        onAsk: (_r, owned) => owner.release(owned.utteranceId),
+      }),
     });
     wireCaptureLifecycle(bus, lifecycle, createSystemClock().now);
     // CAP-16a, CAP-16b (#23, #476): the mic level goes only to the target MOG, and stops on

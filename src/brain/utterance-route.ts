@@ -8,8 +8,10 @@
  * - RTR-17b: a forced ask keeps the 1.5 s preview (RTR-04a). The preview, the agent hand-off and
  *   the chip are the caller's (T3 CapturePolicy, TODO(#142)); this module returns the route.
  * - B1: nothing goes to Genie here. A question gives a `preview` or a `chip`, never a send.
+ * - RTR-07: a session utterance never gets the preview, which sends by itself. It gets a chip.
+ * - RTR-14: an injection-suspected utterance never gets the preview. It gets the warning chip.
  *
- * The capture lifecycle calls `routeUtterance` at key-up with the STT text: TODO(#14).
+ * The capture lifecycle calls it through `createUtteranceHandler` (`utterance-wiring.ts`).
  */
 import type { MogId, RouterDecision } from '../shared/interfaces';
 import { call, type CommandReturns } from '../shared/ipc';
@@ -49,7 +51,12 @@ export type UtteranceRoute =
       previewMs: typeof PREVIEW_MS;
       decision: RouterDecision;
     }
-  | { route: 'chip'; decision: RouterDecision }
+  | {
+      route: 'chip';
+      decision: RouterDecision;
+      /** RTR-14: the chip shows a warning. */
+      warning: 'injection_suspected' | undefined;
+    }
   | { route: 'other'; decision: RouterDecision };
 
 export interface UtteranceRouteDeps {
@@ -76,17 +83,26 @@ export async function routeUtterance(
   deps: UtteranceRouteDeps,
 ): Promise<UtteranceRoute> {
   const decision = await deps.route(u.text, u.mogId, u.input);
-  const preview = (question: string, forced: boolean): UtteranceRoute => ({
-    route: 'preview',
-    question,
-    forced,
-    previewMs: PREVIEW_MS,
+  const chip = (): UtteranceRoute => ({
+    route: 'chip',
     decision,
+    warning: decision.injection_suspected ? 'injection_suspected' : undefined,
   });
-  // RTR-17a: Shift skips the intent gate only. The preview still guards the send (RTR-17b, B1).
-  if (u.forceAsk) {
-    return preview(firstNonEmpty(decision.genie_question, decision.cleaned_text, u.text), true);
+  const question = firstNonEmpty(decision.genie_question, decision.cleaned_text, u.text);
+  // An ask with no text, or one that the router marks as an injection (RTR-14), never sends.
+  const preview = (forced: boolean): UtteranceRoute =>
+    question === ''
+      ? { route: 'other', decision }
+      : decision.injection_suspected
+        ? chip()
+        : { route: 'preview', question, forced, previewMs: PREVIEW_MS, decision };
+  // RTR-07, B1: in a session nothing sends without a click, so an ask is a chip. A session is
+  // never dictated into the focused app.
+  if (u.input.captureMode === 'session') {
+    return u.forceAsk || decision.intent === 'question' ? chip() : { route: 'other', decision };
   }
+  // RTR-17a: Shift skips the intent gate only. The preview still guards the send (RTR-17b, B1).
+  if (u.forceAsk) return preview(true);
   switch (decision.intent) {
     case 'dictation': {
       // RTR-01c: the flow ends here. No main agent and no Genie take part.
@@ -103,9 +119,7 @@ export async function routeUtterance(
         : { route: 'insert_failed', reason: result, text };
     }
     case 'question':
-      return decision.confidence >= ASK_CONFIDENCE
-        ? preview(firstNonEmpty(decision.genie_question, decision.cleaned_text, u.text), false)
-        : { route: 'chip', decision };
+      return decision.confidence >= ASK_CONFIDENCE ? preview(false) : chip();
     default:
       return { route: 'other', decision };
   }

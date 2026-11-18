@@ -130,8 +130,15 @@ Do one session for each of 10 or more speakers. Each session is one part.
 3. Remove the Accessibility permission for Bottle and dictate into TextEdit. Expected: the card
    shows the text, the reason and Copy.
 4. Hold Shift with the talk key and dictate a plain sentence. Expected: the preview chip (the ask
-   route), not an insertion.
-5. In steps 2 and 3, the card never shows "Asking Genie in <host>", and the Genie One thread list
+   route), not an insertion. Do it once with Left-Shift and once with Right-Shift (RTR-17a, ADR
+   0053: on macOS this checks the HID key-state read of each Shift key). On macOS, set the talk
+   key to Right-Shift and hold Left-Shift with it. Expected: the ask route. Hold only the
+   Right-Shift talk key. Expected: an insertion.
+5. On macOS, click into a password field so that the "Use ⌃⇧Space" pill shows. Hold
+   Ctrl+Shift+Space and dictate a plain sentence. Expected: the card shows the reason and Copy
+   (a dictation into a secure field), not the ask preview. The Shift of the chord does not force
+   the ask route.
+6. In steps 2 and 3, the card never shows "Asking Genie in <host>", and the Genie One thread list
    of the workspace has no new thread. The automated tests check the IPC log for `agent_*` and
    `mcp_call`.
-6. Do Part B of `docs/tests/LATENCY-BENCH.md` with `--gate AT-43` for NFR-01d.
+7. Do Part B of `docs/tests/LATENCY-BENCH.md` with `--gate AT-43` for NFR-01d.

@@ -173,8 +173,8 @@ pub const SHIFT_KEY_CODES: (u16, u16) = (56, 60);
 
 /// RTR-17a: whether a Shift key other than the talk key is down, from the HID key state of
 /// Left-Shift and Right-Shift (ADR 0053).
-pub fn shift_held_from_keys(_left_down: bool, _right_down: bool, _talk: TalkKey) -> bool {
-    false
+pub fn shift_held_from_keys(left_down: bool, right_down: bool, talk: TalkKey) -> bool {
+    left_down || (right_down && talk != TalkKey::RightShift)
 }
 
 #[cfg(test)]

@@ -268,7 +268,9 @@ impl TalkNow {
     }
 
     /// The user chose a new talk key.
-    pub fn set(&self, _talk: TalkBinding) {}
+    pub fn set(&self, talk: TalkBinding) {
+        *lock(&self.0) = talk;
+    }
 
     /// A Shift probe that gives `read` the talk key at each read.
     pub fn probe(&self, read: impl Fn(TalkBinding) -> bool + Send + 'static) -> ShiftProbe {
@@ -290,6 +292,9 @@ pub struct PttForwarder<B: BrainSink, S: StatusSink> {
     /// The MOG of the last press that ended, for the `double_tap` that follows it.
     last: Option<String>,
     shift: Option<ShiftProbe>,
+    /// The fallback chord (Ctrl+Shift+Space, CAP-39b) is the talk key now. Shift is part of the
+    /// chord, so it never forces the ask route (RTR-17a, ADR 0053).
+    chord: bool,
 }
 
 impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
@@ -302,6 +307,7 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
             held: None,
             last: None,
             shift: None,
+            chord: false,
         }
     }
 
@@ -329,16 +335,26 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
                 if let Some(mog) = mog {
                     let mut payload = ptt_payload(&mog, phase);
                     // RTR-17a: Shift with the talk key forces the ask route (ADR 0053).
-                    if phase == PttPhase::Down && self.shift.as_ref().is_some_and(|probe| probe()) {
+                    if phase == PttPhase::Down
+                        && !self.chord
+                        && self.shift.as_ref().is_some_and(|probe| probe())
+                    {
                         payload["shift"] = json!(true);
                     }
                     // `false` means no brain listens yet; the press is dropped.
                     let _ = self.brain.deliver(events::HOTKEY_PTT, payload);
                 }
             }
-            HotkeyOutput::TalkKeyPaused => self.status.status(HotkeyStatus::Paused),
-            HotkeyOutput::TalkKeyRestored => self.status.status(HotkeyStatus::Restored),
+            HotkeyOutput::TalkKeyPaused => {
+                self.chord = true;
+                self.status.status(HotkeyStatus::Paused)
+            }
+            HotkeyOutput::TalkKeyRestored => {
+                self.chord = false;
+                self.status.status(HotkeyStatus::Restored)
+            }
             HotkeyOutput::FallbackChordUnavailable => {
+                self.chord = true;
                 self.status.status(HotkeyStatus::ChordUnavailable)
             }
             // A tap (CAP-44a) comes after `Ptt(Cancel)`, which already ended the PTT and
