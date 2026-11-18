@@ -67,12 +67,6 @@ fn demo_card_cycle(app: tauri::AppHandle<tauri::Wry>) {
 /// R2: build the one [`capture_host::CaptureHost`] of the process and manage it, so the
 /// `capture_*` commands reach it (#425, ADR 0055). Its events go to the brain through
 /// [`ipc::BrainChannel::send`], which scrubs each payload.
-/// #413 (ADR 0049 amendment 1): R4 loads the Parakeet model from the W-17e folder when the app
-/// is built with `--features local-stt` and a model is installed; else `stt_model_missing`.
-fn stt_loader() -> std::sync::Arc<dyn mog_core::stt_engine::RecognizerLoader> {
-    std::sync::Arc::new(mog_core::stt_setup::AppModelLoader::for_this_device())
-}
-
 fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()> {
     let app = handle.clone();
     let relay: capture_host::BrainRelay = std::sync::Arc::new(move |event, payload| {
@@ -131,6 +125,12 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
     // CAP-51c: the hotkey host preloads R4 at each talk-key down through this state.
     handle.manage(stt);
     Ok(())
+}
+
+/// #413 (ADR 0049 amendment 1): R4 loads the Parakeet model from the W-17e folder when the app
+/// is built with `--features local-stt` and a model is installed; else `stt_model_missing`.
+fn stt_loader() -> std::sync::Arc<dyn mog_core::stt_engine::RecognizerLoader> {
+    std::sync::Arc::new(mog_core::stt_setup::AppModelLoader::for_this_device())
 }
 
 /// The core version that this app links (ARC-1).

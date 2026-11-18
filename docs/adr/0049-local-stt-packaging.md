@@ -113,10 +113,12 @@ what the build does when the archive is missing.
    the answer before the install starts, shows Missing / Partial / Installed, a progress bar,
    Cancel and Retry, and a user text for each code. A hash mismatch says that the install
    stopped (CAP-49c). The step is done only when an `install` call resolves, because `status`
-   checks sizes only. When the model shows Installed and the answer is Granted, the step calls
-   `install` to check the hashes. The hub shows the step until the wizard frame (#43) mounts it.
+   checks sizes only. When the model shows Installed and the answer is Granted, the step runs
+   the launch check `SttSetup::verify`: it hashes every file and sends no request. On a mismatch
+   it deletes the model folder, shows Missing and the `stt_hash_mismatch` text, and only a new
+   click starts a download. The app loader (`AppModelLoader`) checks sizes only at each load. The hub shows the step until the wizard frame (#43) mounts it.
 5. **IPC.** The hub commands `stt_model_status`, `stt_model_consent`, `stt_model_install`
-   (progress on a Channel argument) and `stt_model_cancel` are contract change #529. Until it
+   (progress on a Channel argument), `stt_model_verify` and `stt_model_cancel` are contract change #529. Until it
    lands, the hub step uses a seam that answers `stt_setup_unavailable` (`TODO(#529)`).
 6. **App feature.** `src-tauri` has the feature `local-stt = ["mog-core/local-stt"]`. It is off
    by default: App CI on Windows and Linux has no vendored archive step, so a default-on feature

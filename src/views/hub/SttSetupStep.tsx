@@ -38,6 +38,8 @@ export interface SttModelApi {
   status(): Promise<SttModelView>;
   setConsent(consent: 'granted' | 'declined'): Promise<SttModelView>;
   install(source: SttSource, onProgress: (p: SttProgressView) => void): Promise<SttModelView>;
+  /** The launch check: every SHA-256, no request. A mismatch deletes the model files. */
+  verify(): Promise<SttModelView>;
   cancel(): Promise<boolean>;
 }
 
@@ -92,6 +94,7 @@ export const unwiredSttModelApi: SttModelApi = {
   status: () => Promise.reject({ error: 'stt_setup_unavailable' }),
   setConsent: () => Promise.reject({ error: 'stt_setup_unavailable' }),
   install: () => Promise.reject({ error: 'stt_setup_unavailable' }),
+  verify: () => Promise.reject({ error: 'stt_setup_unavailable' }),
   cancel: () => Promise.resolve(false),
 };
 
@@ -116,6 +119,7 @@ export function SttSetupStep({
   const [view, setView] = useState<SttModelView | null>(null);
   const [source, setSource] = useState<SttSource>('github');
   const [installing, setInstalling] = useState(false);
+  const [checking, setChecking] = useState(false);
   const [progress, setProgress] = useState<SttProgressView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
@@ -125,13 +129,17 @@ export function SttSetupStep({
     doneRef.current = onDone;
   }, [onDone]);
 
-  const install = useCallback(
-    async (from: SttSource) => {
+  // `check`: the launch check (verify, no download); else an install from `from`.
+  const run = useCallback(
+    async (from: SttSource, check = false) => {
       setError(null);
       setInstalling(true);
+      setChecking(check);
       setProgress(null);
       try {
-        const v = await api.install(from, (p) => live.current && setProgress(p));
+        const v = check
+          ? await api.verify()
+          : await api.install(from, (p) => live.current && setProgress(p));
         if (!live.current) return;
         setView(v);
         setDone(true);
@@ -145,6 +153,7 @@ export function SttSetupStep({
       } finally {
         if (live.current) {
           setInstalling(false);
+          setChecking(false);
           setProgress(null);
         }
       }
@@ -158,15 +167,16 @@ export function SttSetupStep({
       (v) => {
         if (!live.current) return;
         setView(v);
-        // MB-07: sizes alone do not prove the model; an install call checks every hash.
-        if (v.consent === 'granted' && v.model === 'installed') void install('github');
+        // MB-07: sizes alone do not prove the model. The check hashes every file and never
+        // downloads; after a mismatch only a click starts a download (CAP-49a).
+        if (v.consent === 'granted' && v.model === 'installed') void run('github', true);
       },
       (e) => live.current && setError(errorCode(e)),
     );
     return () => {
       live.current = false;
     };
-  }, [api, install]);
+  }, [api, run]);
 
   const choose = async (answer: 'granted' | 'declined') => {
     setError(null);
@@ -177,14 +187,13 @@ export function SttSetupStep({
       setError(errorCode(e));
       return;
     }
-    if (answer === 'granted') await install(source);
+    if (answer === 'granted') await run(source);
   };
 
-  const start = () => (view?.consent === 'granted' ? install(source) : choose('granted'));
+  const start = () => (view?.consent === 'granted' ? run(source) : choose('granted'));
   const total = view?.totalBytes ?? 487_211_443;
   const percent =
     progress && progress.total > 0 ? Math.floor((progress.done * 100) / progress.total) : 0;
-  const checking = installing && view?.model === 'installed' && !progress;
 
   return (
     <section
@@ -240,7 +249,7 @@ export function SttSetupStep({
           </p>
         </div>
       )}
-      {installing && (
+      {installing && !checking && (
         <button type="button" onClick={() => void api.cancel()}>
           Cancel
         </button>
@@ -250,7 +259,7 @@ export function SttSetupStep({
       {!installing && !done && view && (
         <div>
           {error && error !== 'stt_consent_required' && view.consent === 'granted' ? (
-            <button type="button" onClick={() => void install(source)}>
+            <button type="button" onClick={() => void run(source)}>
               Retry
             </button>
           ) : (

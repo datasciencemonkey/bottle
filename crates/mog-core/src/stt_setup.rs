@@ -209,11 +209,16 @@ pub struct SttSetup {
 }
 
 /// Clears the busy flag when an install ends, also on a panic.
-struct BusyGuard<'a>(&'a AtomicBool);
+struct BusyGuard<'a> {
+    busy: &'a AtomicBool,
+    cancel: &'a AtomicBool,
+}
 
 impl Drop for BusyGuard<'_> {
     fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
+        // Clear a cancel only when the work ends, so a cancel that lands at the start is kept.
+        self.cancel.store(false, Ordering::Release);
+        self.busy.store(false, Ordering::Release);
     }
 }
 
@@ -278,15 +283,7 @@ impl SttSetup {
         source: ModelSource,
         progress: &mut dyn FnMut(Progress),
     ) -> Result<PathBuf, SetupError> {
-        if self
-            .busy
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
-            return Err(SetupError::Busy);
-        }
-        let _guard = BusyGuard(&self.busy);
-        self.cancel.store(false, Ordering::Release);
+        let _guard = self.claim()?;
         let extract = self.extract.clone();
         let extract = move |a: &Path, d: &Path| extract(a, d);
         Ok(self.installer.install(
@@ -297,6 +294,25 @@ impl SttSetup {
             &self.cancel,
             progress,
         )?)
+    }
+
+    /// The launch check (MB-07, CAP-49c): check every model file against its pinned SHA-256.
+    /// It sends no request. On a mismatch the model folder is deleted, `status` shows Missing,
+    /// and only a new user click starts a download.
+    pub fn verify(&self) -> Result<(), SetupError> {
+        let _guard = self.claim()?;
+        Ok(self.installer.verify()?)
+    }
+
+    /// One install or check at a time.
+    fn claim(&self) -> Result<BusyGuard<'_>, SetupError> {
+        self.busy
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| SetupError::Busy)?;
+        Ok(BusyGuard {
+            busy: &self.busy,
+            cancel: &self.cancel,
+        })
     }
 
     /// Ask a running install to stop at its next chunk. `false` when no install runs.
@@ -335,8 +351,9 @@ impl AppModelLoader {
         )
     }
 
-    /// The model folder when every model file is present with its pinned size. The hashes were
-    /// checked by the install (CAP-49c).
+    /// The model folder when every model file is present with its pinned size. Sizes only: the
+    /// install checks the hashes, and the wizard launch check (`SttSetup::verify`) catches a
+    /// file that changed after the install (CAP-49c). Hashing 670 MB at each load costs too much.
     pub fn installed_model_dir(&self) -> Option<PathBuf> {
         let installer = ModelInstaller::new(self.root.as_ref()?, self.spec.clone());
         (installer.status() == ModelStatus::Installed).then(|| installer.model_dir())
