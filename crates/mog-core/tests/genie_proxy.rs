@@ -38,6 +38,10 @@ use serde_json::{json, Value};
 const BOUND: Duration = Duration::from_secs(60);
 /// The wall-clock time of the agent action log.
 const NOW_MS: i64 = 1_800_000_000_000;
+/// The fixture conversation ID. It holds non-hex letters, so it can never match inside a random
+/// UUID opId or a timestamp in a whole-row absence check (#548: "c-1" matched "…2c-1ffe…").
+/// Tests that follow a fake ask keep the `c-<k>` IDs the fake mints; they check no row text.
+const CONV: &str = "conv-fixture-not-a-uuid";
 
 // ---------- the rig ----------
 
@@ -312,7 +316,7 @@ fn ask_args() -> Value {
 }
 
 fn poll_args() -> Value {
-    json!({"conversation_id": "c-1", "response_id": "r-1"})
+    json!({"conversation_id": CONV, "response_id": "r-1"})
 }
 
 // ---------- RTR-27: the proxy adds the token, the harness never holds one ----------
@@ -514,14 +518,14 @@ fn g_20b_query_result_item_ids_must_match_pub_output() {
     ] {
         let a = r.call(
             "genie_get_query_result",
-            json!({"conversation_id": "c-1", "response_id": "r-1", "item_id": bad}),
+            json!({"conversation_id": CONV, "response_id": "r-1", "item_id": bad}),
         );
         assert_eq!(a.rpc_error()["code"], json!(-32602), "{bad:?}: {}", a.raw);
     }
     assert!(tool_calls(&s).is_empty());
     let ok = r.call(
         "genie_get_query_result",
-        json!({"conversation_id": "c-1", "response_id": "r-1", "item_id": "pub_7_output"}),
+        json!({"conversation_id": CONV, "response_id": "r-1", "item_id": "pub_7_output"}),
     );
     assert_eq!(ok.result()["isError"], json!(false), "{}", ok.raw);
     assert_eq!(tool_calls(&s).len(), 1);
@@ -728,14 +732,14 @@ fn arc_f1_g_07b_an_agent_poll_hits_the_r8_poll_guard_while_the_brain_polls() {
         None
     });
     let r = rig(&s);
-    // The brain polls conversation c-1 through `mcp_call` on the shared R8.
+    // The brain polls conversation [`CONV`] through `mcp_call` on the shared R8.
     let r8 = Arc::clone(&r.r8);
     let brain = std::thread::spawn(move || {
         let t = tags(MOG);
         r8.call_tool(McpCall::new(
             PROFILE,
             "genie_poll_response",
-            obj(json!({"conversation_id": "c-1", "response_id": "r-1"})),
+            obj(json!({"conversation_id": CONV, "response_id": "r-1"})),
             &t,
         ))
         .map(|reply| reply.is_error)
@@ -759,7 +763,7 @@ fn arc_f1_g_07b_an_agent_poll_hits_the_r8_poll_guard_while_the_brain_polls() {
 
     let _ = release_tx.send(());
     assert!(!brain.join().unwrap().expect("the brain poll ends"));
-    // After the brain poll ends, the agent can poll c-1 (its poll is let go at once).
+    // After the brain poll ends, the agent can poll [`CONV`] (its poll is let go at once).
     let _ = release_tx.send(());
     let again = r.call("genie_poll_response", poll_args());
     assert_eq!(again.result()["isError"], json!(false), "{}", again.raw);
@@ -912,7 +916,7 @@ fn rtr_30_at_42_an_agent_genie_call_writes_a_content_free_audit_row() {
             assert!(!stored.contains(word), "`{word}` in {stored}");
         }
         assert!(
-            !stored.contains("c-1") && !stored.contains(PROFILE),
+            !stored.contains(CONV) && !stored.contains(PROFILE),
             "{stored}"
         );
         assert!(!stored.contains(TOKEN_PREFIX), "{stored}");
