@@ -25,7 +25,8 @@ const PHASES: ReadonlySet<string> = new Set<PttPhase>(['down', 'up', 'cancel', '
 export function asPttEvent(p: unknown, at: number): PttEvent | undefined {
   if (typeof p !== 'object' || p === null) return undefined;
   const { mogId, phase, shift } = p as { mogId?: unknown; phase?: unknown; shift?: unknown };
-  if (typeof mogId !== 'string' || typeof phase !== 'string' || !PHASES.has(phase))
+  // An empty `mogId` is a press with no open MOG (#562, ADR 0095): `talk-no-mog.ts` handles it.
+  if (typeof mogId !== 'string' || mogId === '' || typeof phase !== 'string' || !PHASES.has(phase))
     return undefined;
   const e: PttEvent = { mogId, phase: phase as PttPhase, at };
   if (phase === 'down' && shift === true) e.shift = true;

@@ -295,7 +295,8 @@ impl TalkNow {
 /// Turns R1 outputs into brain items and status changes.
 ///
 /// The target is read at `down` and kept until `up` or `cancel`, so one press goes to one
-/// MOG even if the target moves during the hold. With no target, the press sends nothing.
+/// MOG even if the target moves during the hold. With no open MOG, the whole press goes to
+/// the brain with an empty `mogId`, and the brain starts the last-used MOG (#562, ADR 0095).
 /// A `double_tap` goes to the MOG of the press it follows (CAP-14a).
 pub struct PttForwarder<B: BrainSink, S: StatusSink> {
     target: Arc<PttTarget>,
@@ -348,7 +349,8 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
                         if let Some(hook) = &self.key_down {
                             hook();
                         }
-                        self.held = self.target.current();
+                        // #562 (ADR 0095): an empty ID is a press with no open MOG.
+                        self.held = Some(self.target.current().unwrap_or_default());
                         self.held.clone()
                     }
                     PttPhase::Up | PttPhase::Cancel => {

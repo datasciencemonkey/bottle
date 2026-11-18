@@ -74,7 +74,9 @@ async function rig(opts: { mogs?: string[]; lastUsed?: string; accepted?: boolea
     await flush();
   };
   const stops = () =>
-    core.invoke.mock.calls.filter(([cmd]) => cmd === 'capture_stop').map(([, a]) => a);
+    core.invoke.mock.calls
+      .filter(([cmd]) => cmd === 'capture_stop')
+      .map(([, a]) => (a as { args: unknown }).args);
   return { bus, manager, windows, starts, blocked, notices, press, stops };
 }
 
