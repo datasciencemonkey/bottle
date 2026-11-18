@@ -1548,21 +1548,24 @@ fn mem_01_an_update_or_replace_cannot_take_the_id_of_another_mogs_session() {
     assert!(insert_utterance(&s, "u-2", "sess-a", MOG_B, 1).is_err());
 }
 
-// #541: an unsigned or ad-hoc macOS build has no keychain access group entitlement, so the data
-// protection keychain answers errSecMissingEntitlement (-34018). Only that code falls back to the
-// login keychain. These tests drive the pure fallback helper with a recording double; they never
-// call the real Keychain.
+// #541: an unsigned or ad-hoc macOS build has no keychain access group entitlement. Then the data
+// protection keychain refuses a store with errSecMissingEntitlement (-34018), and it answers a get
+// with errSecItemNotFound (-25300), as seen on a live `pnpm tauri dev` run. A store falls back to
+// the login keychain only on -34018. A load falls back only on -34018 or -25300, so a key that an
+// earlier run stored in the login keychain is found again. These tests drive the pure fallback
+// helper with a recording double; they never call the real Keychain.
 mod keychain_fallback {
     use super::super::key_vault::{
-        with_login_fallback, KeychainTarget, ERR_SEC_MISSING_ENTITLEMENT,
+        with_login_fallback, KeychainTarget, ERR_SEC_ITEM_NOT_FOUND, ERR_SEC_MISSING_ENTITLEMENT,
+        LOAD_FALLBACK, STORE_FALLBACK,
     };
 
     /// Runs `with_login_fallback` with a double that answers `answers` in order and records
     /// each target it is called with.
-    fn run(answers: Vec<Result<u8, i32>>) -> (Result<u8, i32>, Vec<KeychainTarget>) {
+    fn run(on: &[i32], answers: Vec<Result<u8, i32>>) -> (Result<u8, i32>, Vec<KeychainTarget>) {
         let mut calls = Vec::new();
         let mut it = answers.into_iter();
-        let out = with_login_fallback(|t| {
+        let out = with_login_fallback(on, |t| {
             calls.push(t);
             it.next().expect("the double got an extra call")
         });
@@ -1570,8 +1573,19 @@ mod keychain_fallback {
     }
 
     #[test]
-    fn mem_08b_missing_entitlement_falls_back_to_login_keychain() {
-        let (out, calls) = run(vec![Err(ERR_SEC_MISSING_ENTITLEMENT), Ok(7)]);
+    fn mem_08b_fallback_codes_are_exact() {
+        assert_eq!(ERR_SEC_MISSING_ENTITLEMENT, -34018);
+        assert_eq!(ERR_SEC_ITEM_NOT_FOUND, -25300);
+        assert_eq!(STORE_FALLBACK, &[-34018]);
+        assert_eq!(LOAD_FALLBACK, &[-34018, -25300]);
+    }
+
+    #[test]
+    fn mem_08b_store_missing_entitlement_falls_back_to_login_keychain() {
+        let (out, calls) = run(
+            STORE_FALLBACK,
+            vec![Err(ERR_SEC_MISSING_ENTITLEMENT), Ok(7)],
+        );
         assert_eq!(out, Ok(7));
         assert_eq!(
             calls,
@@ -1580,32 +1594,58 @@ mod keychain_fallback {
     }
 
     #[test]
-    fn mem_08b_data_protection_success_does_not_touch_login_keychain() {
-        let (out, calls) = run(vec![Ok(1)]);
-        assert_eq!(out, Ok(1));
+    fn mem_08b_load_item_not_found_reads_login_keychain() {
+        // The live failure of #541: the second start found no key in the data protection
+        // keychain and reported store_key_lost, though the key was in the login keychain.
+        let (out, calls) = run(LOAD_FALLBACK, vec![Err(ERR_SEC_ITEM_NOT_FOUND), Ok(9)]);
+        assert_eq!(out, Ok(9));
+        assert_eq!(
+            calls,
+            vec![KeychainTarget::DataProtection, KeychainTarget::Login]
+        );
+        let (out, _) = run(LOAD_FALLBACK, vec![Err(ERR_SEC_MISSING_ENTITLEMENT), Ok(3)]);
+        assert_eq!(out, Ok(3));
+    }
+
+    #[test]
+    fn mem_08b_store_item_not_found_does_not_fall_back() {
+        let (out, calls) = run(STORE_FALLBACK, vec![Err(ERR_SEC_ITEM_NOT_FOUND)]);
+        assert_eq!(out, Err(ERR_SEC_ITEM_NOT_FOUND));
         assert_eq!(calls, vec![KeychainTarget::DataProtection]);
     }
 
     #[test]
+    fn mem_08b_data_protection_success_does_not_touch_login_keychain() {
+        for on in [LOAD_FALLBACK, STORE_FALLBACK] {
+            let (out, calls) = run(on, vec![Ok(1)]);
+            assert_eq!(out, Ok(1));
+            assert_eq!(calls, vec![KeychainTarget::DataProtection]);
+        }
+    }
+
+    #[test]
     fn mem_08b_other_errors_do_not_fall_back() {
-        // errSecItemNotFound, errSecAuthFailed, errSecUserCanceled, errSecInteractionNotAllowed,
-        // errSecParam, errSecDuplicateItem.
-        for code in [-25300, -25293, -128, -25308, -50, -25299] {
-            let (out, calls) = run(vec![Err(code)]);
-            assert_eq!(out, Err(code), "code {code}");
-            assert_eq!(calls, vec![KeychainTarget::DataProtection], "code {code}");
+        // errSecAuthFailed, errSecUserCanceled, errSecInteractionNotAllowed, errSecParam,
+        // errSecDuplicateItem, errSecDecode.
+        for on in [LOAD_FALLBACK, STORE_FALLBACK] {
+            for code in [-25293, -128, -25308, -50, -25299, -26275] {
+                let (out, calls) = run(on, vec![Err(code)]);
+                assert_eq!(out, Err(code), "code {code}");
+                assert_eq!(calls, vec![KeychainTarget::DataProtection], "code {code}");
+            }
         }
     }
 
     #[test]
     fn mem_08b_login_keychain_error_is_returned_as_is() {
-        let (out, calls) = run(vec![Err(ERR_SEC_MISSING_ENTITLEMENT), Err(-25300)]);
-        assert_eq!(out, Err(-25300));
+        let (out, calls) = run(
+            LOAD_FALLBACK,
+            vec![
+                Err(ERR_SEC_MISSING_ENTITLEMENT),
+                Err(ERR_SEC_ITEM_NOT_FOUND),
+            ],
+        );
+        assert_eq!(out, Err(ERR_SEC_ITEM_NOT_FOUND));
         assert_eq!(calls.len(), 2, "no third try");
-    }
-
-    #[test]
-    fn mem_08b_missing_entitlement_code_is_minus_34018() {
-        assert_eq!(ERR_SEC_MISSING_ENTITLEMENT, -34018);
     }
 }
