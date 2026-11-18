@@ -34,7 +34,7 @@ function setup(over: Partial<ProfilePickDeps> = {}) {
   const saved: [string, string][] = [];
   const inserted: string[] = [];
   const stacks = new Map<string, ReturnType<typeof createCardStack>>();
-  let pick: ReturnType<typeof createProfilePick>;
+  const ref: { pick?: ReturnType<typeof createProfilePick> } = {};
   const deps: ProfilePickDeps = {
     stackFor: (mogId) => {
       let s = stacks.get(mogId);
@@ -44,7 +44,7 @@ function setup(over: Partial<ProfilePickDeps> = {}) {
           schedule: () => () => undefined,
           send: (u) => void sent.push(u),
           openHistory: () => undefined,
-          onChip: (a) => void pick.chip(mogId, a),
+          onChip: (a) => void ref.pick?.chip(mogId, a),
         });
         stacks.set(mogId, s);
       }
@@ -61,7 +61,8 @@ function setup(over: Partial<ProfilePickDeps> = {}) {
     },
     ...over,
   };
-  pick = createProfilePick(deps);
+  const pick = createProfilePick(deps);
+  ref.pick = pick;
   const last = () => sent.at(-1);
   const texts = () => last()?.blurbs.map((b) => b.text) ?? [];
   const chips = () => [...(last()?.chips ?? []), ...(last()?.overflowChips ?? [])];
