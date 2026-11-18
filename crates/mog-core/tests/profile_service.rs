@@ -18,8 +18,8 @@ use mog_core::error::{CoreError, CoreResult};
 use mog_core::http_transport::ProfileHosts;
 use mog_core::ipc_gateway::{hardened_gateway_with, GatewayComponents, IpcGateway, NoLog};
 use mog_core::profile_service::{
-    config_path, describe_args, parse_config, ConfigFile, ConfigProfile, ConfigSource,
-    ProfileService, U2M_AUTH_TYPE,
+    config_path, describe_args, parse_config, parse_config_lines, ConfigFile, ConfigProfile,
+    ConfigSource, ProfileService, U2M_AUTH_TYPE,
 };
 use mog_core::types::Profile;
 use serde_json::{json, Value};
@@ -554,4 +554,55 @@ fn w_03b_a_profile_added_after_the_first_list_is_read_again_once() {
         1,
         "one storage check for the new profile"
     );
+}
+
+#[test]
+fn w_01a_a_token_line_is_never_kept_by_the_file_read() {
+    let text = format!(
+        "[fake-pat]\nhost = {HOST_B}\ntoken = test-token-not-real-1\n\
+         [fake-u2m]\nhost = {HOST_A}\nauth_type = databricks-cli\n"
+    );
+    let path = temp_file("token", &text);
+    let parsed = ConfigFile::new(Some(path.clone())).profiles().unwrap();
+    remove(&path);
+    assert_eq!(parsed.len(), 2);
+    assert!(!format!("{parsed:?}").contains("test-token-not-real-1"));
+    let s = service(Some(text), secure_cli());
+    let reply = s.call("profiles_list", json!({})).unwrap().to_string();
+    assert!(!reply.contains("test-token-not-real-1"));
+}
+
+#[test]
+fn w_01a_line_read_skips_an_overlong_line_and_keeps_parsing() {
+    let long = "x".repeat(mog_core::profile_service::MAX_LINE + 10);
+    let text = format!(
+        "[fake-a]\nnote = {long}\nhost = {HOST_A}\nauth_type = databricks-cli\n\
+         [fake-b]\r\nhost = {HOST_B}"
+    );
+    let parsed = parse_config_lines(&mut text.as_bytes()).unwrap();
+    assert_eq!(parsed, parse_config(text.as_bytes()));
+    assert_eq!(parsed.len(), 2);
+    assert_eq!(
+        parsed[1].host, HOST_B,
+        "the last line without a newline is parsed"
+    );
+}
+
+#[test]
+fn w_01a_the_file_is_read_one_line_at_a_time() {
+    let code = src("src/profile_service.rs");
+    let code = non_test(&code);
+    for whole in [
+        "fs::read(",
+        "read_to_string",
+        "read_to_end",
+        "BufReader::new",
+    ] {
+        assert!(
+            !code.contains(whole),
+            "T7 must not read the whole file: {whole}"
+        );
+    }
+    assert!(code.contains("File::open(path)"));
+    assert!(code.contains("parse_config_lines(&mut file)"));
 }

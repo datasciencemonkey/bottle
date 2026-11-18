@@ -17,7 +17,7 @@
 //!
 //! The parse keeps only the `[section]` names and the `host` and `auth_type` values. It finds
 //! every other key by its name only and never parses its value, which may be a secret. The file
-//! bytes are overwritten with zeros after the parse. The name-only key scan, the DEFAULT section
+//! is read one line at a time into one buffer that is overwritten with zeros after each line. The name-only key scan, the DEFAULT section
 //! rule and the `databricks-cli` filter follow the reference plugin (`config_sections`, `U2M`).
 // Adapted from datasciencemonkey/antigravity-bricks-plugin plugins/databricks-genie/scripts/genie_bridge.py @ a31fd2c (MIT).
 
@@ -60,40 +60,124 @@ pub struct ConfigProfile {
 /// `DEFAULT`. A key ends at the first `=` or `:`. A repeated section merges into the first one.
 /// `[__settings__]` and a section with no `host` are not profiles.
 pub fn parse_config(text: &[u8]) -> Vec<ConfigProfile> {
-    let text = text.strip_prefix(b"\xef\xbb\xbf").unwrap_or(text);
-    let mut out: Vec<ConfigProfile> = Vec::new();
-    let mut current = Some(section(&mut out, "DEFAULT"));
+    let mut parser = ConfigParser::new();
     for line in text.split(|&b| b == b'\n') {
+        parser.feed_line(line);
+    }
+    parser.finish()
+}
+
+/// The INI parse, one line at a time. It keeps only the section names and the `host` and
+/// `auth_type` values; a line is dropped as soon as it is read.
+struct ConfigParser {
+    out: Vec<ConfigProfile>,
+    current: Option<usize>,
+    first: bool,
+}
+
+impl ConfigParser {
+    fn new() -> Self {
+        let mut out = Vec::new();
+        let current = Some(section(&mut out, "DEFAULT"));
+        Self {
+            out,
+            current,
+            first: true,
+        }
+    }
+
+    fn feed_line(&mut self, line: &[u8]) {
+        let line = if std::mem::take(&mut self.first) {
+            line.strip_prefix(b"\xef\xbb\xbf").unwrap_or(line)
+        } else {
+            line
+        };
         let line = line.trim_ascii();
         if line.is_empty() || line[0] == b'#' || line[0] == b';' {
-            continue;
+            return;
         }
         if line[0] == b'[' {
-            current = line
+            let out = &mut self.out;
+            self.current = line
                 .iter()
                 .position(|&b| b == b']')
                 .and_then(|end| std::str::from_utf8(&line[1..end]).ok())
                 .map(str::trim)
                 .filter(|name| !name.is_empty() && *name != SETTINGS_SECTION)
-                .map(|name| section(&mut out, name));
-            continue;
+                .map(|name| section(out, name));
+            return;
         }
-        let (Some(i), Some(split)) = (current, line.iter().position(|&b| b == b'=' || b == b':'))
-        else {
-            continue;
+        let (Some(i), Some(split)) = (
+            self.current,
+            line.iter().position(|&b| b == b'=' || b == b':'),
+        ) else {
+            return;
         };
         let key = line[..split].trim_ascii();
         // Only these two values are ever parsed. Any other value is skipped unread.
         if key.eq_ignore_ascii_case(b"host") {
-            out[i].host = value(&line[split + 1..])
+            self.out[i].host = value(&line[split + 1..])
                 .and_then(bare_host)
                 .unwrap_or_default();
         } else if key.eq_ignore_ascii_case(b"auth_type") {
-            out[i].auth_type = value(&line[split + 1..]).unwrap_or_default();
+            self.out[i].auth_type = value(&line[split + 1..]).unwrap_or_default();
         }
     }
-    out.retain(|p| !p.host.is_empty());
-    out
+
+    fn finish(mut self) -> Vec<ConfigProfile> {
+        self.out.retain(|p| !p.host.is_empty());
+        self.out
+    }
+}
+
+/// The longest config line T7 reads. A longer line is skipped (a `host` or `auth_type` line is
+/// short). The line buffer has this fixed capacity, so it never grows and leaves no copy behind.
+pub const MAX_LINE: usize = 4096;
+
+/// Overwrite `buf` with zeros.
+fn wipe(buf: &mut [u8]) {
+    buf.fill(0);
+    compiler_fence(Ordering::SeqCst);
+    std::hint::black_box(buf);
+}
+
+/// Read `reader` one byte at a time into one reused line buffer, parse each line, and overwrite
+/// the buffer with zeros after each line. The whole text is never in memory: at most one line.
+/// Use an unbuffered reader (a `std::fs::File`): a `BufReader` keeps many lines that it never
+/// wipes.
+pub fn parse_config_lines(reader: &mut dyn std::io::Read) -> std::io::Result<Vec<ConfigProfile>> {
+    let mut parser = ConfigParser::new();
+    let mut line = [0u8; MAX_LINE];
+    let mut len = 0usize;
+    let mut too_long = false;
+    let mut byte = [0u8; 1];
+    let result = loop {
+        match reader.read(&mut byte) {
+            Ok(0) => break Ok(()),
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => break Err(e),
+        }
+        if byte[0] == b'\n' {
+            if !too_long {
+                parser.feed_line(&line[..len]);
+            }
+            wipe(&mut line[..len]);
+            len = 0;
+            too_long = false;
+        } else if len < MAX_LINE {
+            line[len] = byte[0];
+            len += 1;
+        } else {
+            too_long = true;
+        }
+    };
+    if result.is_ok() && !too_long {
+        parser.feed_line(&line[..len]);
+    }
+    wipe(&mut line);
+    wipe(&mut byte);
+    result.map(|()| parser.finish())
 }
 
 /// The index of section `name` in `out`, added if new.
@@ -157,9 +241,10 @@ pub trait ConfigSource: Send + Sync {
 
 /// The CLI config file at a path. It is only read, never written (W-08).
 ///
-/// It reads the whole file, so PAT and secret values pass through memory for the parse; none is
-/// parsed or kept, and the bytes are zeroed. TODO(#16): when R5 runs the CLI, list through
-/// `databricks auth profiles --skip-validate --output json` instead, so no secret is read.
+/// It reads one line at a time into one reused buffer that it zeroes after each line
+/// ([`parse_config_lines`]); the whole file is never in memory. A secret line passes through that
+/// buffer only, and no secret value is parsed or kept. TODO(#16): when R5 runs the CLI, list
+/// through `databricks auth profiles --skip-validate --output json` instead.
 #[derive(Debug, Clone)]
 pub struct ConfigFile {
     path: Option<PathBuf>,
@@ -182,22 +267,16 @@ impl ConfigSource for ConfigFile {
         let Some(path) = &self.path else {
             return Ok(Vec::new());
         };
-        let mut bytes = match std::fs::read(path) {
-            Ok(b) => b,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(_) => {
-                return Err(CoreError::Unavailable {
-                    component: ID,
-                    reason: "profile_config_unreadable",
-                })
-            }
+        let unreadable = CoreError::Unavailable {
+            component: ID,
+            reason: "profile_config_unreadable",
         };
-        let profiles = parse_config(&bytes);
-        // The file can hold secrets: overwrite the copy with zeros now.
-        bytes.fill(0);
-        compiler_fence(Ordering::SeqCst);
-        std::hint::black_box(&mut bytes);
-        Ok(profiles)
+        let mut file = match std::fs::File::open(path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(_) => return Err(unreadable),
+        };
+        parse_config_lines(&mut file).map_err(|_| unreadable)
     }
 }
 

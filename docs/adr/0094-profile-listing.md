@@ -23,8 +23,8 @@ points open:
    with the clean environment of R5: `~/.databrickscfg`, under `USERPROFILE` on Windows.
    `DATABRICKS_CONFIG_FILE` is not used, because R5 does not pass it to the CLI.
    - The parse keeps only the `[section]` names and the `host` and `auth_type` values. It finds
-     every other key by its name only and never parses its value. It overwrites the file bytes
-     with zeros after the parse. It never writes the file (W-08).
+     every other key by its name only and never parses its value. It reads one line at a time
+     and zeroes the line buffer after each line. It never writes the file (W-08).
    - It follows the CLI's INI rules: keys before the first header belong to `DEFAULT`, a key
      ends at the first `=` or `:`, and a repeated section merges into the first one.
      `[__settings__]` and a section with no `host` are not profiles.
@@ -60,9 +60,10 @@ points open:
 - The lead (agent-lead-2) directed this for issue #17: list through R5 `databricks auth profiles`, or parse only the
   section names and the `host` and `auth_type` keys of `~/.databrickscfg`. R5 is the stub, so only the second
   works now. The user direction for this wave is a demo that works.
-- The read is not a credential source (W-01a): no token or secret is used, kept, logged or returned. But the
-  whole file passes through memory for the parse, so a PAT or client secret is read and then zeroed. This is a
-  known gap against "T7 never sees a token". `TODO(#16)`: when R5 runs the CLI, list through
+- The read is not a credential source (W-01a): no token or secret is used, kept, logged or returned. Lead
+  decision on PR #556: the file is read one byte at a time (an unbuffered `File`) into one fixed 4 KiB line
+  buffer that is zeroed after each line. The whole file is never in memory, and a longer line is skipped. A
+  secret line still passes through that one buffer, so this is a narrowed gap against "T7 never sees a token". `TODO(#16)`: when R5 runs the CLI, list through
   `databricks auth profiles --skip-validate --output json`, and drop the file read.
 - The reference plugin uses the same name-only scan (`config_sections`) for the same file.
 
