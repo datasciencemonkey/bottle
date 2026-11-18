@@ -363,3 +363,34 @@ fn cap_49c_every_setup_error_has_a_content_free_code() {
         assert_eq!(e.to_string(), c);
     }
 }
+
+// ---------- MB-07: the app's R4 loader reads the W-17e folder ----------
+
+#[test]
+fn mb_07_app_loader_reports_model_missing_without_an_installed_model() {
+    use mog_core::stt_engine::RecognizerLoader;
+    use mog_core::stt_setup::AppModelLoader;
+    let (spec, _) = fake_spec();
+    let root = tmp("loader-empty");
+    for loader in [
+        AppModelLoader::new(Some(root.clone()), spec.clone()),
+        AppModelLoader::new(None, spec),
+    ] {
+        assert_eq!(loader.installed_model_dir(), None);
+        assert_eq!(loader.load().err(), Some("stt_model_missing"));
+    }
+}
+
+#[test]
+fn mb_07_app_loader_finds_the_model_that_the_wizard_installed() {
+    use mog_core::stt_setup::AppModelLoader;
+    let (spec, bodies) = fake_spec();
+    let root = tmp("loader-installed");
+    let s = setup(&root, hf_net(&bodies));
+    let loader = AppModelLoader::new(Some(root.clone()), spec);
+    assert_eq!(loader.installed_model_dir(), None);
+    // The loader checks at each load, so an install during the session needs no restart.
+    s.set_consent(ModelConsent::Granted).unwrap();
+    s.install(ModelSource::HuggingFaceMirror, &mut |_| {}).unwrap();
+    assert_eq!(loader.installed_model_dir(), Some(s.model_dir()));
+}
