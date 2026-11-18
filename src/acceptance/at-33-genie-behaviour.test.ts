@@ -6,13 +6,14 @@
  * The card link rule ships (SEC-25a, #210): `trustedUrl` passes only an https link on the
  * profile host. That is the G-19b rule, and it runs here on the deep links of the #229 Genie
  * One MCP double. The double's busy, unknown and null cases are its own `[AT-22]` self-tests;
- * the bridge rules on top of them are pending: the GL-5 error classes and the busy rule (#32),
- * the progress line, the fallback link and the query item merge (#87), and the unknown re-poll
+ * the GL-5 error classes and the busy rule run here (#32, ADR 0072). Still pending: the
+ * progress line, the fallback link and the query item merge (#87), and the unknown re-poll
  * (#31). SP-09 (#29, `spikes/sp-09`) proves the busy mapping on its own client offline. The live
  * run is a person step (docs/tests/AT-GENIE-MCP.md).
  */
 import { trustedUrl } from '../views/card/safe-markdown';
 import { createGenieBridge } from '../brain/components/genie-bridge';
+import { sendGenieAsk } from '../brain/components/genie-errors';
 import { BUSY_TEXT, createGenieOneMcpDouble, scenarios } from '../test-support/genie-one-mcp';
 import { liveFixture } from '../test-support/fixtures';
 
@@ -57,11 +58,30 @@ describe('AT-33 live Genie One MCP behaviours', () => {
     ).toBeUndefined();
   });
 
-  it.skip('[AT-33] [G-14] [G-15a] [G-15b] the busy text maps to CONVERSATION_BUSY and nothing is sent again TODO(#32)', () => {
-    const r = createGenieBridge().mapError({ isErrorText: BUSY_TEXT });
-    expect(r.code).toBe('CONVERSATION_BUSY');
-    // When #32 lands, also through submit: the double gets one genie_ask on the busy
-    // conversation and no second one without a user action.
+  it('[AT-33] [G-14] [G-15a] [G-15b] the busy text maps to CONVERSATION_BUSY and nothing is sent again', async () => {
+    expect(createGenieBridge().mapError({ isErrorText: BUSY_TEXT }).code).toBe('CONVERSATION_BUSY');
+    for (const busyEnvelope of ['isError', 'jsonrpc'] as const) {
+      const d = createGenieOneMcpDouble({
+        host: HOST,
+        workspaceId: WSID,
+        busyEnvelope,
+        responses: [scenarios.normalAnswer()],
+      });
+      const first = await sendGenieAsk(d.call, { question: 'q1' }, { host: HOST });
+      if (first.t !== 'accepted') throw new Error('the first ask must be accepted');
+      const busy = await sendGenieAsk(
+        d.call,
+        { question: 'q2', conversation_id: first.conversationId },
+        { host: HOST },
+      );
+      expect(busy).toMatchObject({ t: 'failed', code: 'CONVERSATION_BUSY', retry: 'user' });
+      // One genie_ask reached the busy conversation, and nothing was sent again.
+      const onBusy = d
+        .calls()
+        .filter((c) => c.tool === 'genie_ask' && c.args.conversation_id === first.conversationId);
+      expect(onBusy).toHaveLength(1);
+      expect(d.calls().filter((c) => c.tool === 'genie_ask')).toHaveLength(2);
+    }
   });
 
   it.skip('[AT-33] [G-17a] [G-17b] null progress steps show the elapsed time; a step replaces the older line TODO(#87)', () => {
@@ -85,9 +105,11 @@ describe('AT-33 live Genie One MCP behaviours', () => {
     expect.unreachable('#31: the PollActor is not built');
   });
 
-  it.skip('[AT-33] live: a second ask to a busy conversation and a short question TODO(#32)', (ctx) => {
+  it.skip('[AT-33] live: a second ask to a busy conversation and a short question TODO(#29)', (ctx) => {
     const live = liveFixture();
     if (!live.enabled) return ctx.skip(live.reason);
-    expect.unreachable('#32: the live path needs the error classes');
+    // The GL-5 classes are built (#32). The live run (SP-09, #29, docs/tests/AT-GENIE-MCP.md)
+    // records the busy envelope and proves that the live busy reply maps the same way.
+    expect.unreachable('#29: the live Genie One MCP run is a person step');
   });
 });
