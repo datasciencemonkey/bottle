@@ -60,3 +60,16 @@ Tick a row only when its evidence (report, log or recording) is linked in the re
 | [ ] | AT-41 | UC3 context send and UC Pages | live | Apple M1 8 GB on macOS 14.4 and the current macOS; a Windows 11 i5/16 GB laptop | No send without approval; a change cancels the approval. The Page exists with state DRAFT, the user as owner, 50 synonyms or less, the domain ID. The retry makes no duplicate. Missing domain or scope shows the admin checklist. Genie One uses the DRAFT in the owner's conversation [U: SP-20]. | |
 | [ ] | AT-42 | Main agent and guardrails | device, live | Apple M1 8 GB on macOS 14.4 and the current macOS; a Windows 11 i5/16 GB laptop | The agent calls only the 7 `bottle-mcp` tools and Genie One through the proxy. None of the 4 forbidden actions occurs without a user action. The fallback classifier takes over. No token is in the harness environment or memory. Each action is in the audit log. First tool call ≤ 2.0 s p95 [U: SP-19]. | |
 | [ ] | AT-43 | UC1 dictation into the active app | device | Apple M1 8 GB on macOS 14.4 and the current macOS; a Windows 11 i5/16 GB laptop | The text appears with no Enter and the earlier clipboard returns. The password field shows the reason and Copy. Without Accessibility the MOG shows Copy. No agent turn and no Genie call occur. Shift forces the ask route. Key-up to inserted text ≤ 1.5 s p95 (local). | |
+
+## Admin inspection
+
+These admin prerequisites (section 5.12) are verified by inspection. Inspect each one in the release workspace and link the evidence in the release PR. Section 10 lists the items.
+
+| Done | Req | Requirement | Pass criterion | Steps | Evidence |
+|---|---|---|---|---|---|
+| [ ] | ADM-09 | The admin must keep inference tables off on the ASR model service. | Inspection of the service config. | `docs/admin/model-service-prerequisites.md` | |
+| [ ] | ADM-12a | The admin must keep the `databricks-cli` published OAuth app active. | The CLI sign-in works. | Section 10 of the requirements | |
+| [ ] | ADM-12b | The admin must set single-use refresh tokens with a 30 d absolute session before the SP-15 change starts. | The setting applies to all CLI users [U: SP-15]. | Section 10 of the requirements | |
+| [ ] | ADM-17a | The admin must create a Genie budget (`databricks-product: genie`) before 2027-02-01. | Budget alerts fire in a test. | Section 10 of the requirements | |
+| [ ] | ADM-17b | The admin must create an `app=bottle` budget before 2027-02-01. | Budget alerts fire in a test. | Section 10 of the requirements | |
+| [ ] | ADM-18 | The customer must complete the legal pack of Table ADM-LEGAL before meeting sessions start. | Evidence exists for the release gate. | Section 10 of the requirements | |
