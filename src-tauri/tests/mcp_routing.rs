@@ -99,9 +99,6 @@ impl McpTransport for FakeR8 {
         });
         self.answer(vec![json!({"name": "genie_ask"})])
     }
-    fn start_loopback_proxy(&self) -> CoreResult<u16> {
-        Err(CoreError::NotImplemented { component: "R8" })
-    }
 }
 
 fn call(
@@ -122,6 +119,7 @@ fn call(
         capture: None,
         capture_ticket: None,
         app_settings: None,
+        insert: None,
     };
     route(components, command, args)
 }
