@@ -82,19 +82,18 @@ pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub const CALL_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The workspace URL of a CLI profile (`host` in the CLI config).
-/// TODO(#17): the real one is the R5 / ProfileService profile read (#16, #17).
+/// The app's one is T7 `profile_service::ProfileService` (#17): only supported profiles have one.
 pub trait ProfileHosts: Send + Sync {
     /// The workspace URL of `profile`, for example `https://<workspace>.cloud.databricks.com`.
     fn workspace_url(&self, profile: &str) -> CoreResult<String>;
 }
 
-/// The R5 profile read is not on main yet: every call is [`CoreError::NotImplemented`].
+/// For tests and builds with no T7: every call is [`CoreError::NotImplemented`].
 #[derive(Debug, Default, Clone, Copy)]
 pub struct StubProfileHosts;
 
 impl ProfileHosts for StubProfileHosts {
     fn workspace_url(&self, _profile: &str) -> CoreResult<String> {
-        // TODO(#17): read the profile host through R5 CliRunner (`databricks auth profiles`).
         Err(CoreError::NotImplemented { component: "R5" })
     }
 }

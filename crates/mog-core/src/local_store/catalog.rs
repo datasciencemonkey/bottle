@@ -614,12 +614,22 @@ const FORGET_LOG_MOG: Stmt = Stmt {
     access: Access::Core,
 };
 
-// ---- Wipe (#124): Rust only ----------------------------------------------------------------
+// ---- Wipe (#124): R14 WipeService only (U9, MEM-33a; ADR 0087) -----------------------------
+//
+// Only the user's Settings -> Wipe runs these, through R14 in Rust. Every statement and group is
+// `Access::Core`, so `mem_local_exec` refuses them. Each one filters by `mog_id` (MEM-01); R14
+// runs them for every MOG of the device in one transaction. There is no cascade (ADR 0033): each
+// table goes by its own age column, citing rows before their parents, and a recent row stays
+// when an old row that it points at goes. The age is the app-clock time of the row: an item's
+// `first_seen_at`, an exchange's `asked_at` (ADR 0061) and an utterance's `started_at` (the
+// transcripts and the dictation history). "Older than" is strict: a row at the cutoff stays.
+
+const BEFORE: Param = req("before", MS);
 
 const WIPE_ITEMS: Stmt = Stmt {
     id: "mem.wipe.items_before",
-    sql: "DELETE FROM memory_item WHERE mog_id = :mogId AND created_at < :before",
-    params: &[MOG_ID, req("before", MS)],
+    sql: "DELETE FROM memory_item WHERE mog_id = :mogId AND first_seen_at < :before",
+    params: &[MOG_ID, BEFORE],
     kind: Kind::Write,
     access: Access::Core,
 };
@@ -629,8 +639,51 @@ const WIPE_EXCHANGES: Stmt = Stmt {
     // The age of an exchange is the time the user asked (`asked_at`, the T10 clock, indexed by
     // `ge_mog_time`), not the local insert time (ADR 0061).
     sql: "DELETE FROM genie_exchange WHERE mog_id = :mogId AND asked_at < :before",
-    params: &[MOG_ID, req("before", MS)],
+    params: &[MOG_ID, BEFORE],
     kind: Kind::Write,
+    access: Access::Core,
+};
+
+/// Transcripts (raw and cleaned) and the dictation history (`route = 'dictation'`) by the time
+/// the speech started. FTS5 rows go through the 0001 trigger.
+const WIPE_UTTERANCES: Stmt = Stmt {
+    id: "mem.wipe.utterances_before",
+    sql: "DELETE FROM utterance WHERE mog_id = :mogId AND started_at < :before",
+    params: &[MOG_ID, BEFORE],
+    kind: Kind::Write,
+    access: Access::Core,
+};
+
+/// An old session goes only when none of its utterances and none of its exchanges is left
+/// (ADR 0033). So a kept exchange never loses its session pointer, and the RESTRICT link from
+/// `utterance` never fails.
+const WIPE_SESSIONS: Stmt = Stmt {
+    id: "mem.wipe.sessions_before",
+    sql: "DELETE FROM session WHERE mog_id = :mogId AND started_at < :before \
+          AND NOT EXISTS (SELECT 1 FROM utterance u WHERE u.mog_id = :mogId \
+          AND u.session_id = session.session_id) \
+          AND NOT EXISTS (SELECT 1 FROM genie_exchange e WHERE e.mog_id = :mogId \
+          AND e.session_id = session.session_id)",
+    params: &[MOG_ID, BEFORE],
+    kind: Kind::Write,
+    access: Access::Core,
+};
+
+/// The Genie conversations of the exchanges that an age Wipe deletes, read before the delete
+/// (9.2 "Also delete Genie conversations", G-49). A conversation that a kept exchange of the MOG
+/// still uses is left out. Ids only: no question, summary or answer.
+const WIPE_CONVERSATIONS: Stmt = Stmt {
+    id: "mem.wipe.conversations_before",
+    sql: "SELECT DISTINCT backend_kind AS backendKind, profile_name AS profile, \
+          workspace_host AS host, workspace_id AS workspaceId, space_id AS spaceId, \
+          conversation_id AS conversationId FROM genie_exchange \
+          WHERE mog_id = :mogId AND asked_at < :before AND conversation_id IS NOT NULL \
+          AND conversation_id NOT IN (SELECT o.conversation_id FROM genie_exchange o \
+          WHERE o.mog_id = :mogId AND o.asked_at >= :before \
+          AND o.conversation_id IS NOT NULL) \
+          ORDER BY conversation_id, profile_name",
+    params: &[MOG_ID, BEFORE],
+    kind: Kind::Query,
     access: Access::Core,
 };
 
@@ -821,8 +874,77 @@ const FORGET_MOG: Group = Group {
     access: Access::Brain,
 };
 
+/// Wipe the rows of one MOG that are older than `before` (MEM-33a, U9; ADR 0087). The items go
+/// first, then the embed jobs that point at no item, then the exchanges, the utterances and the
+/// sessions that have no row left. R14 runs it for each MOG in one transaction.
+const WIPE_BEFORE: Group = Group {
+    id: "mem.wipe.before",
+    steps: &[
+        &WIPE_ITEMS,
+        &FORGET_EMBED_ORPHANS,
+        &WIPE_EXCHANGES,
+        &WIPE_UTTERANCES,
+        &WIPE_SESSIONS,
+    ],
+    params: &[MOG_ID, BEFORE],
+    access: Access::Core,
+};
+
+/// Wipe every row of user content of one MOG (MEM-33a "everything"). It reuses the Forget steps
+/// of `mem.forget.mog` (ADR 0081) for the items, the outbox, the exchanges, the utterances and
+/// the sessions. It keeps the `mog` row (the parent that writers need; no content), `kv`,
+/// `sync_state`, the consent records (SEC-15b) and `forget_log` (ADR 0087).
+const WIPE_EVERYTHING: Group = Group {
+    id: "mem.wipe.everything",
+    steps: &[
+        &FORGET_MOG_ITEMS,
+        &FORGET_MOG_OUTBOX,
+        &FORGET_MOG_EXCHANGES,
+        &FORGET_MOG_UTTERANCES,
+        &FORGET_MOG_SESSIONS,
+    ],
+    params: &[MOG_ID],
+    access: Access::Core,
+};
+
 /// The atomic groups. Their IDs never equal a statement ID.
-pub const GROUPS: &[Group] = &[ITEM_WRITE, FORGET_ITEMS, FORGET_SESSION, FORGET_MOG];
+pub const GROUPS: &[Group] = &[
+    ITEM_WRITE,
+    FORGET_ITEMS,
+    FORGET_SESSION,
+    FORGET_MOG,
+    WIPE_BEFORE,
+    WIPE_EVERYTHING,
+];
+
+/// A Rust-only statement that crosses MOGs on purpose, with its reason (MEM-01 exemption, as the
+/// consent purge of #63). It is not in [`STATEMENTS`], so `exec` and `mem_local_exec` never run
+/// it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeviceStmt {
+    /// The statement. Its access is always [`Access::Core`].
+    pub stmt: Stmt,
+    /// Why it is device-wide.
+    pub why: &'static str,
+}
+
+/// The MOG ids of every table that holds user content (R14, #124). Settings -> Wipe is for the
+/// whole device, so R14 reads this list and then runs a MOG-scoped group for each id. The
+/// outbox has no foreign key to `mog`, so its ids are read too. Ids only.
+pub const WIPE_MOG_LIST: DeviceStmt = DeviceStmt {
+    stmt: Stmt {
+        id: "wipe.mog_list",
+        sql: "SELECT mog_id FROM mog UNION SELECT mog_id FROM memory_item \
+              UNION SELECT mog_id FROM genie_exchange UNION SELECT mog_id FROM utterance \
+              UNION SELECT mog_id FROM session UNION SELECT mog_id FROM outbox \
+              ORDER BY mog_id",
+        params: &[],
+        kind: Kind::Query,
+        access: Access::Core,
+    },
+    why: "Settings -> Wipe is for the whole device (U9, MEM-33a); it reads MOG ids only, and \
+          each delete is MOG-scoped",
+};
 
 /// The group with this exact ID.
 pub fn find_group(id: &str) -> Option<&'static Group> {
@@ -869,6 +991,9 @@ pub const STATEMENTS: &[Stmt] = &[
     FORGET_LOG_MOG,
     WIPE_ITEMS,
     WIPE_EXCHANGES,
+    WIPE_UTTERANCES,
+    WIPE_SESSIONS,
+    WIPE_CONVERSATIONS,
     OUTBOX_ENQUEUE,
     OUTBOX_DUE,
     OUTBOX_RETRY,

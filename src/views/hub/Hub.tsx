@@ -18,6 +18,7 @@ import { MicPreference } from './MicPreference';
 import { ForgetDialogHost } from './ForgetDialogHost';
 import { MogList } from './MogList';
 import { SttSetupStep } from './SttSetupStep';
+import { WipeSettings } from './WipeSettings';
 
 export function Hub() {
   const [mogs, setMogs] = useState<ReadonlyMap<MogId, MogViewState>>(new Map());
@@ -66,6 +67,7 @@ export function Hub() {
       <ForgetDialogHost />
       <MicPreference />
       <SttSetupStep />
+      <WipeSettings />
       <DataPanel />
       <About />
     </main>

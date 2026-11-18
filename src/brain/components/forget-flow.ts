@@ -138,6 +138,91 @@ const CONFIRM: Record<ForgetScopeKind, { title: string; text: (n: number) => str
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
+/** The Genie delete seams that Forget and Wipe share. */
+export interface GenieDeleteDeps {
+  genieOne: GenieOneThreadDelete;
+  genieAgent: GenieAgentConversationDelete;
+}
+
+/** What {@link deleteGenieConversations} did for one MOG. */
+export interface GenieDeleteResult {
+  deleted: number;
+  /** The "Delete in Genie One" notice, if any Genie One thread was given. */
+  notice?: ReturnType<typeof deleteNotice>;
+  /** The other conversations that Bottle could not delete. */
+  notDeleted: number;
+}
+
+/**
+ * Delete the Genie conversations of one MOG where an API permits it, on a user action only
+ * (`'forget'` or `'wipe'`, U9; MEM-32c, G-49, 9.2). Genie One threads go to the #122 utility (its
+ * SP-11 gate is off, TODO(#121), so each gets the "Delete in Genie One" link). `genie_agent`
+ * conversations go to GA `DELETE` in the space and on the profile that made them. Anything else,
+ * or a failed delete, counts as not deleted. A failure never throws.
+ */
+export async function deleteGenieConversations(
+  trigger: 'forget' | 'wipe',
+  mogId: MogId,
+  conversations: readonly ForgetConversation[],
+  deps: GenieDeleteDeps,
+): Promise<GenieDeleteResult> {
+  const threads: GenieOneThread[] = [];
+  const others: ForgetConversation[] = [];
+  for (const c of conversations) {
+    if (c.backend === 'genie_one_mcp') {
+      const t: GenieOneThread = {
+        mogId,
+        profile: c.profile,
+        host: c.host,
+        conversationId: c.conversationId,
+      };
+      if (c.workspaceId !== undefined) t.workspaceId = c.workspaceId;
+      threads.push(t);
+    } else {
+      others.push(c);
+    }
+  }
+  const out: GenieDeleteResult = { deleted: 0, notDeleted: 0 };
+  if (threads.length > 0) {
+    try {
+      const outcomes = await deps.genieOne.deleteThreads(trigger, threads);
+      out.deleted += outcomes.filter((o) => o.result === 'deleted').length;
+      out.notice = deleteNotice(mogId, outcomes);
+    } catch {
+      out.notDeleted += threads.length;
+    }
+  }
+  for (const c of others) {
+    if (await deleteOther(deps.genieAgent, mogId, c)) out.deleted += 1;
+    else out.notDeleted += 1;
+  }
+  return out;
+}
+
+/** The disclosure for `n` Genie conversations that Bottle could not delete, if any. */
+export function notDeletedText(n: number): string | undefined {
+  if (n <= 0) return undefined;
+  return `Bottle could not delete ${plural(n, 'Genie conversation')}. Delete ${
+    n === 1 ? 'it' : 'them'
+  } in Genie.`;
+}
+
+/** GA DELETE for a `genie_agent` conversation; false when no API permits it or it fails. */
+async function deleteOther(
+  genieAgent: GenieAgentConversationDelete,
+  mogId: MogId,
+  c: ForgetConversation,
+): Promise<boolean> {
+  if (c.backend !== 'genie_agent' || c.spaceId === undefined) return false;
+  if (!SLUG.test(c.spaceId) || !SLUG.test(c.conversationId)) return false;
+  try {
+    await genieAgent.delete(c.profile, mogId, c.spaceId, c.conversationId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export interface ForgetFlowDeps {
   memory: ForgetMemory;
   genieOne: GenieOneThreadDelete;
@@ -188,59 +273,17 @@ export class ForgetFlow {
     const conversations = await this.memory.forgetConversations(scope);
     const { local } = await this.memory.forget(scope);
 
-    const threads: GenieOneThread[] = [];
-    const others: ForgetConversation[] = [];
-    for (const c of conversations) {
-      if (c.backend === 'genie_one_mcp') {
-        const t: GenieOneThread = {
-          mogId: base.mogId,
-          profile: c.profile,
-          host: c.host,
-          conversationId: c.conversationId,
-        };
-        if (c.workspaceId !== undefined) t.workspaceId = c.workspaceId;
-        threads.push(t);
-      } else {
-        others.push(c);
-      }
-    }
-
-    let deleted = 0;
-    let notice: ReturnType<typeof deleteNotice>;
-    if (threads.length > 0) {
-      const outcomes = await this.genieOne.deleteThreads('forget', threads);
-      deleted += outcomes.filter((o) => o.result === 'deleted').length;
-      notice = deleteNotice(base.mogId, outcomes);
-    }
-
-    let notDeleted = 0;
-    for (const c of others) {
-      if (await this.deleteOther(base.mogId, c)) deleted += 1;
-      else notDeleted += 1;
-    }
-
+    const g = await deleteGenieConversations('forget', base.mogId, conversations, {
+      genieOne: this.genieOne,
+      genieAgent: this.genieAgent,
+    });
     const result: NonNullable<ForgetDialogModel['result']> = {
       local,
-      deletedConversations: deleted,
+      deletedConversations: g.deleted,
     };
-    if (notice !== undefined) result.notice = notice;
-    if (notDeleted > 0) {
-      result.otherText = `Bottle could not delete ${plural(notDeleted, 'Genie conversation')}. Delete ${
-        notDeleted === 1 ? 'it' : 'them'
-      } in Genie.`;
-    }
+    if (g.notice !== undefined) result.notice = g.notice;
+    const other = notDeletedText(g.notDeleted);
+    if (other !== undefined) result.otherText = other;
     return { ...base, phase: 'done', result };
-  }
-
-  /** GA DELETE for a `genie_agent` conversation; false when no API permits it or it fails. */
-  private async deleteOther(mogId: MogId, c: ForgetConversation): Promise<boolean> {
-    if (c.backend !== 'genie_agent' || c.spaceId === undefined) return false;
-    if (!SLUG.test(c.spaceId) || !SLUG.test(c.conversationId)) return false;
-    try {
-      await this.genieAgent.delete(c.profile, mogId, c.spaceId, c.conversationId);
-      return true;
-    } catch {
-      return false;
-    }
   }
 }

@@ -38,6 +38,7 @@ pub mod mcp_transport;
 pub mod model_request_guard;
 pub mod mog_config;
 pub mod policy_store;
+pub mod profile_service;
 pub mod request_identity;
 pub mod resource_budget;
 pub mod session_guard;

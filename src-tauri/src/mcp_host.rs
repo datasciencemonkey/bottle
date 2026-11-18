@@ -8,8 +8,10 @@
 //! R7 and R8 take the one app-managed [`SharedRateBucket`] (G-09a, ARC-F3); this module builds
 //! no bucket of its own.
 //!
-//! R5 is not on main yet, so R6 and R8 run on the R5 stubs: every `mcp_call` fails closed with
-//! `not_implemented` before any send. TODO(#17): the R5 ProfileService profile hosts.
+//! The profile hosts are the one T7 ProfileService ([`crate::profiles_host`], #17): a profile that
+//! T7 does not support (PAT, service principal, plaintext token storage) has no host, so R7 and
+//! R8 never send for it (W-03b, W-10a). R5 is not on main yet, so R6 runs on the R5 stub: every
+//! `mcp_call` fails closed with `not_implemented` before any send.
 //! TODO(#16): the R5 CliRunner that runs `databricks auth token`.
 
 use std::sync::{Arc, Weak};
@@ -25,6 +27,7 @@ use mog_core::token_broker::{CliTokenBroker, ScimMe};
 use serde_json::Value;
 use tauri::Manager;
 
+use crate::profiles_host::ProfilesHost;
 use crate::rate_bucket_host::SharedRateBucket;
 
 /// The `mcp_call` component of the app: R8 over R6, with the R7 that serves the R6 SCIM seam.
@@ -51,8 +54,14 @@ impl GatewayComponents for McpHost {
 /// seam) and R8 both take this Arc, so the AIMD cut and the `Retry-After` hold are shared.
 /// An `Err` means the HTTP client could not start.
 pub fn build(bucket: Arc<dyn RateBucket>) -> CoreResult<McpHost> {
-    // TODO(#17): the R5 ProfileService profile hosts (`databricks auth profiles`).
-    let hosts: Arc<dyn ProfileHosts> = Arc::new(StubProfileHosts);
+    build_with(bucket, Arc::new(StubProfileHosts))
+}
+
+/// [`build`] on the profile `hosts` (the app passes its one T7, #17).
+pub fn build_with(
+    bucket: Arc<dyn RateBucket>,
+    hosts: Arc<dyn ProfileHosts>,
+) -> CoreResult<McpHost> {
     let mono = Arc::new(SystemClock::new());
     let broker = Arc::new(CliTokenBroker::new(
         // TODO(#16): the R5 CliRunner that runs `databricks auth token --profile <p>`.
@@ -76,7 +85,9 @@ pub fn build(bucket: Arc<dyn RateBucket>) -> CoreResult<McpHost> {
 }
 
 /// Build R8 on the app-managed [`SharedRateBucket`] and manage it, so `mcp_call` reaches it.
-/// If R8 cannot start, the app still runs and `mcp_call` answers `host_failed`.
+/// Its profile hosts are the managed T7 ([`crate::profiles_host::ProfilesHost`]), so
+/// [`crate::profiles_host::install`] runs first. If R8 cannot start, the app still runs and
+/// `mcp_call` answers `host_failed`.
 pub fn install(handle: &tauri::AppHandle<tauri::Wry>) -> CoreResult<()> {
     let bucket = handle
         .try_state::<SharedRateBucket>()
@@ -86,6 +97,10 @@ pub fn install(handle: &tauri::AppHandle<tauri::Wry>) -> CoreResult<()> {
         })?
         .0
         .clone();
-    handle.manage(build(bucket)?);
+    let hosts: Arc<dyn ProfileHosts> = match handle.try_state::<ProfilesHost>() {
+        Some(t7) => t7.0.clone(),
+        None => Arc::new(StubProfileHosts),
+    };
+    handle.manage(build_with(bucket, hosts)?);
     Ok(())
 }

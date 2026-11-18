@@ -208,3 +208,29 @@ fn sec_03_with_no_key_store_nothing_is_managed_and_consent_fails_closed() {
         Err(json!({"error": "consent_storage_failed"}))
     );
 }
+
+#[test]
+fn sec_15a_sec_15b_u9_install_runs_the_security_expiries_once_and_manages_r14() {
+    use mog_core::wipe::{LocalWipeService, WipeService};
+    let dir = TempDir::new("expiry");
+    let vault: Arc<dyn KeyVault> = Arc::new(TestVault::default());
+    // A notice record of 14 months ago and one of today (#124, SEC-15b).
+    let old = mog_core::consent::add_months_utc(T0, -14);
+    {
+        let (store, records) =
+            open(&dir.0, Arc::clone(&vault), Arc::new(SimWallClock::at(old))).unwrap();
+        records.record_notice(None, 1).unwrap();
+        store.close();
+    }
+    let app = tauri::test::mock_app();
+    install_with(app.handle(), &dir.0, vault, Arc::new(SimWallClock::at(T0))).unwrap();
+    // The start ran the content-free expiries once: the 14-month record is gone.
+    let records = app.try_state::<Arc<ConsentRecords>>().expect("records");
+    assert!(records.records().unwrap().is_empty());
+    // R14 is managed for the `mem_wipe` route (TODO(#525)). Its expiries hold the records.
+    let wipe = app
+        .try_state::<Arc<LocalWipeService>>()
+        .expect("wipe service");
+    let report = wipe.run_security_expiries().unwrap();
+    assert_eq!(report.expired, vec![("consent_records", 0)]);
+}

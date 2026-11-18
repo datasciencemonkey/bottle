@@ -204,6 +204,6 @@ describe('ForgetFlow (#123)', () => {
   it('[U9] the flow has no timer: it runs only when the user confirms', () => {
     const src = readFileSync(resolve(import.meta.dirname, 'forget-flow.ts'), 'utf8');
     expect(src).not.toMatch(/setInterval|setTimeout/);
-    expect(src).toContain("deleteThreads('forget'");
+    expect(src).toContain("deleteGenieConversations('forget'");
   });
 });
