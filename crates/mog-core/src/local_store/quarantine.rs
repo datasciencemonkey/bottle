@@ -11,9 +11,8 @@
 //! Both sides run the golden sets `tests/fixtures/memory-adversarial/items.json` and
 //! `tests/fixtures/router-adversarial/utterances.json`.
 //!
-//! Normalization: full-width ASCII forms fold to ASCII (the NFKC part that matters here), the
-//! zero-width and soft-hyphen code points go, the text folds to lower case, and each run of
-//! white space becomes one space.
+//! Normalization: NFKC (the same as the TS check), then the zero-width and soft-hyphen code
+//! points go, the text folds to lower case, and each run of white space becomes one space.
 
 use std::sync::OnceLock;
 
@@ -73,16 +72,14 @@ fn is_zero_width(c: char) -> bool {
     matches!(c, '\u{200b}'..='\u{200f}' | '\u{2060}'..='\u{2064}' | '\u{feff}' | '\u{00ad}')
 }
 
-/// Fold full-width forms, drop zero-width code points, lower-case and collapse white space.
+/// NFKC (as `String.prototype.normalize('NFKC')` in the TS check), then drop zero-width code
+/// points, lower-case and collapse white space. NFKC folds full-width, math alphanumeric and
+/// circled forms to ASCII.
 fn normalize(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
+    let nfkc = icu_normalizer::ComposingNormalizerBorrowed::new_nfkc().normalize(text);
+    let mut out = String::with_capacity(nfkc.len());
     let mut space = false;
-    for c in text.chars() {
-        let c = match c {
-            '\u{ff01}'..='\u{ff5e}' => char::from_u32(c as u32 - 0xfee0).unwrap_or(c),
-            '\u{3000}' => ' ',
-            c => c,
-        };
+    for c in nfkc.chars() {
         if is_zero_width(c) {
             continue;
         }

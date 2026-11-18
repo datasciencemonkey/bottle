@@ -351,8 +351,13 @@ fn sec_24b_at_17_agent_write_of_nfkc_lookalike_injection_is_never_recalled() {
     tools
         .memory_write(MOG_A, "fact", &format!("Revenue note. {bold}"))
         .unwrap();
-    tools.memory_write(MOG_A, "fact", "Revenue note: Q3 was 4.2M.").unwrap();
+    tools
+        .memory_write(MOG_A, "fact", "Revenue note: Q3 was 4.2M.")
+        .unwrap();
     let out = tools.memory_recall(MOG_A, "revenue note", 50).unwrap();
-    let texts: Vec<&str> = rows(&out).iter().map(|r| r["text"].as_str().unwrap()).collect();
+    let texts: Vec<&str> = rows(&out)
+        .iter()
+        .map(|r| r["text"].as_str().unwrap())
+        .collect();
     assert_eq!(texts, vec!["Revenue note: Q3 was 4.2M."]);
 }

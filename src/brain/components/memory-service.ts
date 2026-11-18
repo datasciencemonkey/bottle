@@ -385,7 +385,7 @@ export class LocalMemoryService implements MemoryService {
     if (d.sourceExchangeId !== undefined) w.sourceExchangeId = d.sourceExchangeId;
     if (d.sessionId !== undefined) w.sourceSessionIds = [d.sessionId];
     if (d.utteranceIds !== undefined) w.sourceUtteranceIds = d.utteranceIds;
-    const r = await this.storeItem(w);
+    const r = await this.#storeItem(w);
     return { ...r, quarantined, pinned };
   }
   /**
@@ -396,6 +396,12 @@ export class LocalMemoryService implements MemoryService {
    * It refuses an item id that another MOG owns (MEM-01): R10 changes no row then.
    */
   async storeItem(w: ItemWrite): Promise<{ itemId: string; queued: boolean }> {
+    // MEM-28b: a pin needs a user action, so only rememberThis() pins (review of #540).
+    if (w.pinned === true) throw new Error('storeItem: a pin needs a user action (rememberThis)');
+    return this.#storeItem(w);
+  }
+  /** The item write itself. SEC-24a: the brain check runs here, so no caller can skip it. */
+  async #storeItem(w: ItemWrite): Promise<{ itemId: string; queued: boolean }> {
     if (!UUID_RE.test(w.mogId)) throw new Error('storeItem needs a UUID mogId');
     const itemId = w.itemId ?? this.#newId();
     const now = this.#now();
@@ -420,7 +426,7 @@ export class LocalMemoryService implements MemoryService {
         sourceExchangeId: w.sourceExchangeId,
         sourceSessionIds: w.sourceSessionIds,
         sourceUtteranceIds: w.sourceUtteranceIds,
-        quarantined: w.quarantined,
+        quarantined: w.quarantined === true || isQuarantined(w.text),
         seenAt: now,
         rowHlc: this.#hlc(now),
         deviceId: this.#deviceId(),

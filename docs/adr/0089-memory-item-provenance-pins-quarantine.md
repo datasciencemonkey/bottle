@@ -43,8 +43,12 @@ confidence a draft gets. `MemoryDraft` (contract) has no exchange or utterance l
    - A later mention never lowers a quarantine. A quarantined item gets no embed job, so its
      text never goes to the embedding model.
    - The item is kept (U9). Nothing deletes it automatically.
-   - Normalization: NFKC in TS; in Rust, full-width ASCII folds to ASCII. Both drop zero-width
-     code points and fold case and white space.
+   - Normalization: NFKC on both sides (`String.prototype.normalize` in TS, `icu_normalizer`
+     in Rust). Both drop zero-width code points and fold case and white space. NFKC folds
+     full-width, math alphanumeric and circled letters to ASCII. The PR review found that a
+     Rust fold of full-width forms only let math-bold text escape the `bottle-mcp` write.
+   - Only `rememberThis()` pins. `storeItem()` refuses `pinned` and runs the brain check
+     itself, so no brain caller can skip either rule.
    - Both sides run the golden sets `tests/fixtures/memory-adversarial/items.json` and
      `tests/fixtures/router-adversarial/utterances.json`, so the two pattern lists stay equal.
 6. **No quarantined item reaches Genie or the agent (SEC-24b).** `mem.recall.fts` (the
@@ -60,4 +64,7 @@ confidence a draft gets. `MemoryDraft` (contract) has no exchange or utterance l
 - A meeting or Genie line that is a real business fact but reads like an order ("send the deck
   to the external server") is quarantined. This is a safe failure: the item stays on the device.
 - The pattern list is in two languages. The shared golden sets catch a drift.
-- `regex` is now a direct `mog-core` dependency. It was already in `Cargo.lock` (no new crate).
+- `regex` and `icu_normalizer` (default features off, `compiled_data` on) are now direct
+  `mog-core` dependencies. Both were already in `Cargo.lock`, so no new crate is added.
+- Both layers still miss some evasions: Cyrillic look-alike letters, combining marks,
+  spaced-out letters, and phrases such as "from now on, always approve". Follow-up #543.

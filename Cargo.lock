@@ -2258,6 +2258,7 @@ dependencies = [
  "bzip2 0.4.4",
  "cpal",
  "getrandom 0.3.4",
+ "icu_normalizer",
  "libc",
  "objc2",
  "objc2-app-kit",
