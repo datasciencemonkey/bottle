@@ -44,11 +44,28 @@ fn r3_mic_release_has_three_states() {
 }
 
 #[test]
-fn r4_stt_engine_stub_reports_not_implemented() {
-    use mog_core::stt::{SttEngine, StubSttEngine};
-    let s = StubSttEngine;
-    not_implemented(s.load_model(), "R4");
-    not_implemented(s.transcribe("segment"), "R4");
+fn r4_stt_engine_without_an_installed_model_is_unavailable() {
+    use mog_core::error::CoreError;
+    use mog_core::stt::SttEngine;
+    use mog_core::stt_engine::{LocalStt, NoModelLoader, NoTranscriptSink};
+    use std::sync::Arc;
+    // #46: R4 is built. With no installed model (or a build without `local-stt`) it reports a
+    // content-free code, not a stub error.
+    let s = LocalStt::new(Arc::new(NoModelLoader), Arc::new(NoTranscriptSink), |_| {});
+    assert_eq!(
+        s.load_model(),
+        Err(CoreError::Unavailable {
+            component: "R4",
+            reason: "stt_model_missing"
+        })
+    );
+    assert_eq!(
+        s.transcribe("segment"),
+        Err(CoreError::Unavailable {
+            component: "R4",
+            reason: "stt_segment_unknown"
+        })
+    );
 }
 
 #[test]
