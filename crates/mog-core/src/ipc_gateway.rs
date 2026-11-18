@@ -80,7 +80,8 @@ impl<G: IpcGateway> IpcGateway for ScrubbingGateway<G> {
 
 /// Every code that [`CheckedGateway`] can send to a window: the serde tags of the [`IpcError`]
 /// variants. The gateway itself returns some of them in [`CoreError::IpcRefused`]. The config
-/// codes come from `MogConfigComponent` as `CoreError::Unavailable { reason }`; their variants
+/// codes come from `MogConfigComponent`, and the R8 `mcp_call` codes (#479) from R8, as
+/// `CoreError::Unavailable { reason }`; their variants
 /// exist so that this list equals the serde tags.
 pub const ERROR_CODES: &[&str] = &[
     "unknown_command",
@@ -109,6 +110,22 @@ pub const ERROR_CODES: &[&str] = &[
     "genie_space_mcp_rejected",
     "genie_one_sse_rejected",
     "mcp_url_not_canonical",
+    "genie_one_off",
+    "auth_expired",
+    "rate_limited",
+    "non_json_reply",
+    "timeout",
+    "offline",
+    "host_refused",
+    "redirect_refused",
+    "reply_too_large",
+    "bad_reply",
+    "protocol_unsupported",
+    "tool_not_allowed",
+    "invalid_tool_args",
+    "invalid_meta",
+    "profile_invalid",
+    "poll_inflight",
 ];
 
 /// The fixed, content-free code of an [`IpcError`] (its serde tag). It never holds the
@@ -142,6 +159,22 @@ pub fn ipc_error_code(e: &IpcError) -> &'static str {
         IpcError::GenieSpaceMcpRejected { .. } => "genie_space_mcp_rejected",
         IpcError::GenieOneSseRejected { .. } => "genie_one_sse_rejected",
         IpcError::McpUrlNotCanonical { .. } => "mcp_url_not_canonical",
+        IpcError::GenieOneOff { .. } => "genie_one_off",
+        IpcError::AuthExpired { .. } => "auth_expired",
+        IpcError::RateLimited { .. } => "rate_limited",
+        IpcError::NonJsonReply { .. } => "non_json_reply",
+        IpcError::Timeout { .. } => "timeout",
+        IpcError::Offline { .. } => "offline",
+        IpcError::HostRefused { .. } => "host_refused",
+        IpcError::RedirectRefused { .. } => "redirect_refused",
+        IpcError::ReplyTooLarge { .. } => "reply_too_large",
+        IpcError::BadReply { .. } => "bad_reply",
+        IpcError::ProtocolUnsupported { .. } => "protocol_unsupported",
+        IpcError::ToolNotAllowed { .. } => "tool_not_allowed",
+        IpcError::InvalidToolArgs { .. } => "invalid_tool_args",
+        IpcError::InvalidMeta { .. } => "invalid_meta",
+        IpcError::ProfileInvalid { .. } => "profile_invalid",
+        IpcError::PollInflight { .. } => "poll_inflight",
     }
 }
 

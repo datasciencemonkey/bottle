@@ -61,8 +61,8 @@ pub const BAD_REPLY: &str = "bad_reply";
 
 /// The text the card shows for [`GENIE_ONE_OFF`] (G-05b). The brain GL-5 mapper
 /// (`src/brain/components/genie-errors.ts`, #32, ADR 0072) gives the same text for the
-/// `genie_one_off` code. The code reaches the brain only after TODO(#479) adds it to
-/// `ipc_gateway::ERROR_CODES`; until then the IPC rejection is `host_failed`.
+/// `genie_one_off` code. The code is in `ipc_gateway::ERROR_CODES` (#479), so the IPC
+/// rejection of `mcp_call` is `{ "error": "genie_one_off" }`.
 pub fn genie_one_off_message(host: &str) -> String {
     format!("Genie One isn't available in {host}.")
 }

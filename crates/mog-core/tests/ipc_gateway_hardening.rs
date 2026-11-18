@@ -408,6 +408,22 @@ fn sec_03_each_ipc_error_maps_to_a_fixed_code() {
         IpcError::GenieSpaceMcpRejected { command: s() },
         IpcError::GenieOneSseRejected { command: s() },
         IpcError::McpUrlNotCanonical { command: s() },
+        IpcError::GenieOneOff { command: s() },
+        IpcError::AuthExpired { command: s() },
+        IpcError::RateLimited { command: s() },
+        IpcError::NonJsonReply { command: s() },
+        IpcError::Timeout { command: s() },
+        IpcError::Offline { command: s() },
+        IpcError::HostRefused { command: s() },
+        IpcError::RedirectRefused { command: s() },
+        IpcError::ReplyTooLarge { command: s() },
+        IpcError::BadReply { command: s() },
+        IpcError::ProtocolUnsupported { command: s() },
+        IpcError::ToolNotAllowed { command: s() },
+        IpcError::InvalidToolArgs { command: s() },
+        IpcError::InvalidMeta { command: s() },
+        IpcError::ProfileInvalid { command: s() },
+        IpcError::PollInflight { command: s() },
     ];
     assert_eq!(all.len(), ERROR_CODES.len(), "one code per variant");
     for e in &all {

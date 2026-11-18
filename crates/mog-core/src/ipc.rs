@@ -262,6 +262,70 @@ pub enum IpcError {
     McpUrlNotCanonical {
         command: String,
     },
+    /// `mcp_call` (#479): R8 `genie_one_off`: Genie One is not on in the workspace: a 404 without a session (G-05b).
+    GenieOneOff {
+        command: String,
+    },
+    /// `mcp_call` (#479): R8 `auth_expired`: a 401 again after one token drop and resend (W-05d).
+    AuthExpired {
+        command: String,
+    },
+    /// `mcp_call` (#479): R8 `rate_limited`: the upstream answered 429.
+    RateLimited {
+        command: String,
+    },
+    /// `mcp_call` (#479): R8 `non_json_reply`: the upstream reply was not JSON (SEC-05a).
+    NonJsonReply {
+        command: String,
+    },
+    /// `mcp_call` (#479): R8 `timeout`: the call timed out.
+    Timeout {
+        command: String,
+    },
+    /// `mcp_call` (#479): R8 `offline`: the host did not accept a connection.
+    Offline {
+        command: String,
+    },
+    /// `mcp_call` (#479): R8 `host_refused`: the egress policy refused to send the token to the host (4.6 rule 2).
+    HostRefused {
+        command: String,
+    },
+    /// `mcp_call` (#479): R8 `redirect_refused`: the upstream answered with a redirect (4.6 rule 3).
+    RedirectRefused {
+        command: String,
+    },
+    /// `mcp_call` (#479): R8 `reply_too_large`: the reply is larger than the cap.
+    ReplyTooLarge {
+        command: String,
+    },
+    /// `mcp_call` (#479): R8 `bad_reply`: the reply holds no JSON-RPC response for the request.
+    BadReply {
+        command: String,
+    },
+    /// `mcp_call` (#479): R8 `protocol_unsupported`: the server named another MCP protocol version (G-04c).
+    ProtocolUnsupported {
+        command: String,
+    },
+    /// `mcp_call` (#479): R8 `tool_not_allowed`: the tool is not on the allowlist (G-06a).
+    ToolNotAllowed {
+        command: String,
+    },
+    /// `mcp_call` (#479): R8 `invalid_tool_args`: the tool arguments do not match the tool contract.
+    InvalidToolArgs {
+        command: String,
+    },
+    /// `mcp_call` (#479): R8 `invalid_meta`: the meta is not a warehouse ID (G-06b, G-07a).
+    InvalidMeta {
+        command: String,
+    },
+    /// `mcp_call` (#479): R8 `profile_invalid`: the profile name is empty.
+    ProfileInvalid {
+        command: String,
+    },
+    /// `mcp_call` (#479): R8 `poll_inflight`: a poll is already open for this conversation (G-07b, ARC-F1).
+    PollInflight {
+        command: String,
+    },
 }
 
 impl std::fmt::Display for IpcError {
@@ -333,6 +397,75 @@ impl std::fmt::Display for IpcError {
                 f,
                 "{command}: a config URL path cannot be made canonical (G-03)"
             ),
+            IpcError::GenieOneOff { command } => {
+                write!(f, "{command}: Genie One is not on in the workspace: a 404 without a session (G-05b)")
+            }
+            IpcError::AuthExpired { command } => {
+                write!(
+                    f,
+                    "{command}: a 401 again after one token drop and resend (W-05d)"
+                )
+            }
+            IpcError::RateLimited { command } => {
+                write!(f, "{command}: the upstream answered 429")
+            }
+            IpcError::NonJsonReply { command } => {
+                write!(f, "{command}: the upstream reply was not JSON (SEC-05a)")
+            }
+            IpcError::Timeout { command } => {
+                write!(f, "{command}: the call timed out")
+            }
+            IpcError::Offline { command } => {
+                write!(f, "{command}: the host did not accept a connection")
+            }
+            IpcError::HostRefused { command } => {
+                write!(f, "{command}: the egress policy refused to send the token to the host (4.6 rule 2)")
+            }
+            IpcError::RedirectRefused { command } => {
+                write!(
+                    f,
+                    "{command}: the upstream answered with a redirect (4.6 rule 3)"
+                )
+            }
+            IpcError::ReplyTooLarge { command } => {
+                write!(f, "{command}: the reply is larger than the cap")
+            }
+            IpcError::BadReply { command } => {
+                write!(
+                    f,
+                    "{command}: the reply holds no JSON-RPC response for the request"
+                )
+            }
+            IpcError::ProtocolUnsupported { command } => {
+                write!(
+                    f,
+                    "{command}: the server named another MCP protocol version (G-04c)"
+                )
+            }
+            IpcError::ToolNotAllowed { command } => {
+                write!(f, "{command}: the tool is not on the allowlist (G-06a)")
+            }
+            IpcError::InvalidToolArgs { command } => {
+                write!(
+                    f,
+                    "{command}: the tool arguments do not match the tool contract"
+                )
+            }
+            IpcError::InvalidMeta { command } => {
+                write!(
+                    f,
+                    "{command}: the meta is not a warehouse ID (G-06b, G-07a)"
+                )
+            }
+            IpcError::ProfileInvalid { command } => {
+                write!(f, "{command}: the profile name is empty")
+            }
+            IpcError::PollInflight { command } => {
+                write!(
+                    f,
+                    "{command}: a poll is already open for this conversation (G-07b, ARC-F1)"
+                )
+            }
         }
     }
 }
