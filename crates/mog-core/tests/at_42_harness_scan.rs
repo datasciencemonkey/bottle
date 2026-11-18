@@ -444,6 +444,44 @@ fn child_main() {
 /// A scan of every writable page of this process. A page that cannot be read is skipped.
 mod memscan {
     const CHUNK: usize = 1 << 20;
+    const PAGE: u64 = 4096;
+    /// Consecutive chunks overlap by this much, so no token or canary is cut in two.
+    const OVERLAP: u64 = 128;
+
+    /// Read `start..end` in chunks with `read(addr, buf) -> bytes read`, and give each chunk to
+    /// `f`. A chunk that cannot be read is read again page by page; an unreadable page is
+    /// skipped, so one bad page never hides the rest of the region.
+    fn region(
+        start: u64,
+        end: u64,
+        buf: &mut [u8],
+        read: &mut dyn FnMut(u64, &mut [u8]) -> Option<usize>,
+        f: &mut dyn FnMut(&[u8]),
+    ) {
+        let mut at = start;
+        let mut page_mode = false;
+        while at < end {
+            let want = if page_mode { PAGE } else { buf.len() as u64 };
+            let n = (end - at).min(want) as usize;
+            match read(at, &mut buf[..n]) {
+                Some(got) if got > 0 => {
+                    f(&buf[..got]);
+                    let got = got as u64;
+                    at += if at + got < end && got > OVERLAP {
+                        got - OVERLAP
+                    } else {
+                        got
+                    };
+                }
+                _ if !page_mode => page_mode = true,
+                _ => {
+                    // Skip the unreadable page, then try whole chunks again.
+                    at = (at / PAGE + 1) * PAGE;
+                    page_mode = false;
+                }
+            }
+        }
+    }
 
     #[cfg(target_os = "linux")]
     pub fn scan_writable(f: &mut dyn FnMut(&[u8])) {
@@ -463,23 +501,19 @@ mod memscan {
             let Some((a, b)) = range.split_once('-') else {
                 continue;
             };
-            let (Ok(mut at), Ok(end)) = (u64::from_str_radix(a, 16), u64::from_str_radix(b, 16))
-            else {
+            let (Ok(at), Ok(end)) = (u64::from_str_radix(a, 16), u64::from_str_radix(b, 16)) else {
                 continue;
             };
-            while at < end {
-                let n = ((end - at) as usize).min(CHUNK);
-                if mem.seek(SeekFrom::Start(at)).is_err() {
-                    break;
-                }
-                match mem.read(&mut buf[..n]) {
-                    Ok(0) | Err(_) => break,
-                    Ok(got) => {
-                        f(&buf[..got]);
-                        at += got as u64;
-                    }
-                }
-            }
+            region(
+                at,
+                end,
+                &mut buf,
+                &mut |addr, b| {
+                    mem.seek(SeekFrom::Start(addr)).ok()?;
+                    mem.read(b).ok()
+                },
+                f,
+            );
         }
     }
 
@@ -515,27 +549,27 @@ mod memscan {
                 && info.Protect & writable != 0
                 && info.Protect & (PAGE_GUARD | PAGE_NOACCESS) == 0
             {
-                let mut at = base;
-                while at < base + size {
-                    let n = (base + size - at).min(CHUNK);
-                    let mut read = 0usize;
-                    // SAFETY: ReadProcessMemory copies from this process into `buf`, which
-                    // holds `n` bytes; a page that is gone makes it fail, not fault.
-                    let ok = unsafe {
-                        ReadProcessMemory(
-                            GetCurrentProcess(),
-                            at as *const _,
-                            buf.as_mut_ptr().cast(),
-                            n,
-                            &mut read,
-                        )
-                    };
-                    if ok == 0 || read == 0 {
-                        break;
-                    }
-                    f(&buf[..read]);
-                    at += read;
-                }
+                region(
+                    base as u64,
+                    (base + size) as u64,
+                    &mut buf,
+                    &mut |at, b| {
+                        let mut read = 0usize;
+                        // SAFETY: ReadProcessMemory copies from this process into `b`, which
+                        // holds `b.len()` bytes; a page that is gone makes it fail, not fault.
+                        let ok = unsafe {
+                            ReadProcessMemory(
+                                GetCurrentProcess(),
+                                at as usize as *const _,
+                                b.as_mut_ptr().cast(),
+                                b.len(),
+                                &mut read,
+                            )
+                        };
+                        (ok != 0).then_some(read)
+                    },
+                    f,
+                );
             }
             match base.checked_add(size) {
                 Some(next) if next > addr => addr = next,
@@ -608,21 +642,27 @@ mod memscan {
             }
             let prot = info.protection;
             if prot & VM_PROT_READ != 0 && prot & VM_PROT_WRITE != 0 {
-                let mut at = addr;
-                while at < addr + size {
-                    let n = (addr + size - at).min(CHUNK as u64);
-                    let mut out: u64 = 0;
-                    // SAFETY: the kernel copies at most `n` bytes into `buf`, which holds
-                    // CHUNK >= n bytes; a page that is gone makes the call fail, not fault.
-                    let kr = unsafe {
-                        mach_vm_read_overwrite(task, at, n, buf.as_mut_ptr() as u64, &mut out)
-                    };
-                    if kr != 0 || out == 0 {
-                        break;
-                    }
-                    f(&buf[..out as usize]);
-                    at += out;
-                }
+                region(
+                    addr,
+                    addr + size,
+                    &mut buf,
+                    &mut |at, b| {
+                        let mut out: u64 = 0;
+                        // SAFETY: the kernel copies at most `b.len()` bytes into `b`; a page
+                        // that is gone makes the call fail, not fault.
+                        let kr = unsafe {
+                            mach_vm_read_overwrite(
+                                task,
+                                at,
+                                b.len() as u64,
+                                b.as_mut_ptr() as u64,
+                                &mut out,
+                            )
+                        };
+                        (kr == 0).then_some(out as usize)
+                    },
+                    f,
+                );
             }
             addr += size;
         }
