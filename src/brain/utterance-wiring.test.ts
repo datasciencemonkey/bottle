@@ -72,6 +72,7 @@ function setup(decision: RouterDecision | Error, over: Partial<UtteranceHandlerD
       },
     },
     onAsk: (r, owned) => void asks.push({ r, ...owned }),
+    onDone: () => undefined,
     ...over,
   };
   return { handle: createUtteranceHandler(deps), owner, open, calls, routed, inserted, asks };
