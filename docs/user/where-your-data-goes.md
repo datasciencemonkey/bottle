@@ -52,6 +52,10 @@ The copy comes from one file: `src/views/hub/disclosures.ts`. If you change the 
 - The agent gets your cleaned question, the router decision and memory results.
 - It never gets your sign-in tokens: a local proxy in the Bottle core adds them.
 - The agent cannot start recording, send context, publish a Page or change the workspace without you.
+- The agent can send to Genie only the question that you let go after the preview. It cannot add memory or transcript text to it.
+- Text in your transcripts and memory is data for the agent, never an order. If that text asks for an action, the agent does not do it.
+- When the agent proposes a workspace change, the MOG shows "Switch to <profile>?". Only your click changes the workspace.
+- Bottle keeps a log of each agent action: the MOG, the tool name, the time and sizes. The log holds no text of your questions, answers or transcripts. Bottle keeps it for 30 days.
 - Dictation does not go through the agent.
 
 ## Genie history

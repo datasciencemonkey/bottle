@@ -99,7 +99,7 @@ describe('AgentBridge tool decisions (T15, #141)', () => {
       'tc-propose_page',
       'tc-ask_user',
     ]);
-    expect((results[2]![1] as { args: unknown }).args).toEqual({
+    expect((results[2]?.[1] as { args: unknown }).args).toEqual({
       mogId: MOG,
       callId: 'tc-propose_page',
       result: { ok: true, result: { reviewId: 'r-1' } },
@@ -205,7 +205,7 @@ describe('AgentBridge guardrails over the AT-42 adversarial set (#141)', () => {
       mogId: MOG,
       callId: 'c',
       tool: 'propose_page',
-      args: { title: 'Net revenue', body: SET[6]!.text },
+      args: { title: 'Net revenue', body: SET[6]?.text ?? '' },
     });
     expect(r).toEqual({ ok: true, result: { reviewId: 'r-1' } });
   });
@@ -225,7 +225,7 @@ describe('AgentTurn payload (#141)', () => {
   it('[RTR-21b][RTR-03c] buildAgentTurn takes question, decision, recall and target from the preview outcome', () => {
     const decision = { intent: 'question', cleaned_text: 'q' } as RouterDecision;
     const recall = [
-      { itemId: 'i1', type: 'fact' as const, text: SET[4]!.text, score: 0.9, ageH: 1 },
+      { itemId: 'i1', type: 'fact' as const, text: SET[4]?.text ?? '', score: 0.9, ageH: 1 },
     ];
     const outcome: Extract<DispatchOutcome, { kind: 'preview' }> = {
       kind: 'preview',
@@ -266,7 +266,7 @@ describe('Hop proposals wait for the "Switch to <profile>?" chip (RTR-29d, F5 st
   it('[RTR-29d] only a click calls profile_select with the proposed profile and scope', async () => {
     const row = new ChipRow();
     const hops = new HopChips({ chips: row, now: () => 0 });
-    const id = hops.offer(MOG, proposal)!;
+    const id = hops.offer(MOG, proposal) ?? '';
     await expect(hops.click(id)).resolves.toBe(true);
     expect(core.invoke).toHaveBeenCalledTimes(1);
     expect(core.invoke).toHaveBeenCalledWith('profile_select', {
@@ -281,11 +281,11 @@ describe('Hop proposals wait for the "Switch to <profile>?" chip (RTR-29d, F5 st
     let now = 0;
     const row = new ChipRow();
     const hops = new HopChips({ chips: row, now: () => now });
-    const id = hops.offer(MOG, proposal)!;
+    const id = hops.offer(MOG, proposal) ?? '';
     now = 30_000;
     row.tick(now);
     await expect(hops.click(id)).resolves.toBe(false);
-    const id2 = hops.offer(MOG, { ...proposal, profile: 'dev', scope: 'question' })!;
+    const id2 = hops.offer(MOG, { ...proposal, profile: 'dev', scope: 'question' }) ?? '';
     hops.dismiss(id2);
     await expect(hops.click(id2)).resolves.toBe(false);
     await expect(hops.click('nope')).resolves.toBe(false);

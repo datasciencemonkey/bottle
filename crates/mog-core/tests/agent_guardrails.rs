@@ -52,7 +52,10 @@ struct Adversarial {
 }
 
 fn adversarial() -> Vec<Adversarial> {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/at_42_adversarial.json");
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/at_42_adversarial.json"
+    );
     let raw = std::fs::read_to_string(path).expect("the AT-42 adversarial set exists");
     let v: Value = serde_json::from_str(&raw).expect("the set is JSON");
     v["items"]
@@ -220,7 +223,10 @@ fn rtr_30_rtr_21b_at_42_each_tool_call_writes_one_agent_action_row_with_its_tool
     let rows = entries(&r.log, MOG);
     let kinds: Vec<String> = rows.iter().map(|e| e.kind.wire()).collect();
     let want: Vec<String> = TOOLS.iter().map(|t| format!("agent_action:{t}")).collect();
-    assert_eq!(kinds, want, "the agent log shows each decision with its tool name");
+    assert_eq!(
+        kinds, want,
+        "the agent log shows each decision with its tool name"
+    );
 }
 
 #[test]
@@ -245,7 +251,11 @@ fn rtr_30_at_42_each_row_holds_the_mog_id_the_tool_the_time_and_sizes_only() {
             "{}",
             a.id
         );
-        assert!(row.hashes.is_empty(), "{}: no hash on an agent action", a.id);
+        assert!(
+            row.hashes.is_empty(),
+            "{}: no hash on an agent action",
+            a.id
+        );
         // No content: no word of the text, the question or the arguments is in the row.
         let stored = serde_json::to_string(row).unwrap();
         for word in a.text.split_whitespace().filter(|w| w.len() > 6) {
@@ -291,7 +301,10 @@ fn rtr_30_no_action_runs_when_its_row_cannot_be_written() {
         assert_eq!(v["result"]["content"][0]["text"], AUDIT_UNAVAILABLE, "{v}");
     }
     assert_eq!(local.calls.load(Ordering::SeqCst), 0, "no local tool ran");
-    assert!(relay.calls.lock().unwrap().is_empty(), "nothing was relayed");
+    assert!(
+        relay.calls.lock().unwrap().is_empty(),
+        "nothing was relayed"
+    );
 }
 
 // ---------- RTR-29a, RTR-29c, RTR-29d: no forbidden action ----------
@@ -310,7 +323,11 @@ fn rtr_29a_29c_29d_forbidden_tool_names_run_nothing_and_write_no_row() {
         "profile_select",
         "switch_workspace",
     ] {
-        let v = call(&r.server, name, json!({ "mode": "session", "profile": "prod" }));
+        let v = call(
+            &r.server,
+            name,
+            json!({ "mode": "session", "profile": "prod" }),
+        );
         assert_eq!(v["error"]["code"], -32602, "{name}: {v}");
     }
     assert_eq!(r.local.calls.load(Ordering::SeqCst), 0);
@@ -367,7 +384,10 @@ fn rtr_03c_rtr_21b_the_system_prompt_treats_text_as_data_and_names_the_tool_poli
         assert!(p.contains(must), "the prompt names `{must}`");
     }
     for tool in TOOLS {
-        assert!(MAIN_AGENT_SYSTEM_PROMPT.contains(tool), "the prompt names {tool}");
+        assert!(
+            MAIN_AGENT_SYSTEM_PROMPT.contains(tool),
+            "the prompt names {tool}"
+        );
     }
     let policy = tool_policy();
     assert_eq!(policy["mcpServers"], json!(["bottle-mcp", "genie-one-mcp"]));
@@ -519,17 +539,26 @@ fn rtr_03c_the_turn_carries_question_and_recall_as_data_fields_not_as_prompt_tex
     r.host.send(MOG, &t).unwrap();
     let sent = frames(&r, "turn");
     assert_eq!(sent.len(), 1);
-    assert_eq!(sent[0]["turn"], t, "the turn is passed as JSON data, unchanged");
+    assert_eq!(
+        sent[0]["turn"], t,
+        "the turn is passed as JSON data, unchanged"
+    );
     let open = &frames(&r, "open_session")[0];
     let prompt = open["systemPrompt"].as_str().unwrap();
-    assert!(!prompt.contains(QUESTION), "no user text is joined to the prompt");
+    assert!(
+        !prompt.contains(QUESTION),
+        "no user text is joined to the prompt"
+    );
 }
 
 #[test]
 fn rtr_29b_send_approves_the_turn_question_once_and_nothing_else() {
     let r = host_rig();
     r.host.start_session(MOG, Harness::Claude).unwrap();
-    assert!(!r.approvals.take(MOG, QUESTION), "nothing is approved before a turn");
+    assert!(
+        !r.approvals.take(MOG, QUESTION),
+        "nothing is approved before a turn"
+    );
     r.host.send(MOG, &turn(QUESTION)).unwrap();
     // The question with added memory or transcript text is new outbound context: refused.
     for a in adversarial() {
@@ -537,8 +566,14 @@ fn rtr_29b_send_approves_the_turn_question_once_and_nothing_else() {
         assert!(!r.approvals.take(MOG, &padded), "{}", a.id);
         assert!(!r.approvals.take(MOG, &a.text), "{}", a.id);
     }
-    assert!(!r.approvals.take(MOG_2, QUESTION), "another MOG has no approval");
-    assert!(r.approvals.take(MOG, QUESTION), "the approved question, once");
+    assert!(
+        !r.approvals.take(MOG_2, QUESTION),
+        "another MOG has no approval"
+    );
+    assert!(
+        r.approvals.take(MOG, QUESTION),
+        "the approved question, once"
+    );
     assert!(!r.approvals.take(MOG, QUESTION), "an approval is used once");
 }
 
@@ -548,11 +583,17 @@ fn rtr_29b_a_new_turn_replaces_the_approval_and_a_stop_clears_it() {
     r.host.start_session(MOG, Harness::Claude).unwrap();
     r.host.send(MOG, &turn("first question")).unwrap();
     r.host.send(MOG, &turn(QUESTION)).unwrap();
-    assert!(!r.approvals.take(MOG, "first question"), "the old turn's question expired");
+    assert!(
+        !r.approvals.take(MOG, "first question"),
+        "the old turn's question expired"
+    );
     assert!(r.approvals.take(MOG, QUESTION));
     r.host.send(MOG, &turn(QUESTION)).unwrap();
     r.host.stop_session(MOG).unwrap();
-    assert!(!r.approvals.take(MOG, QUESTION), "a stop clears the approval");
+    assert!(
+        !r.approvals.take(MOG, QUESTION),
+        "a stop clears the approval"
+    );
 }
 
 #[test]
