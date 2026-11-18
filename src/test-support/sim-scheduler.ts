@@ -12,9 +12,19 @@ export interface SimScheduler {
   after(ms: number, fn: () => void | Promise<void>): () => void;
   /** `requestAnimationFrame` on the sim clock: `cb` runs on the next vsync after now. */
   requestFrame(cb: () => void): void;
-  /** Run every timer due at or before `endMs` in time order, then set the clock to `endMs`. */
-  runUntil(endMs: number): Promise<void>;
+  /** A promise that resolves `ms` after now, or at once when `signal` aborts. */
+  sleep(ms: number, signal?: AbortSignal): Promise<void>;
+  /**
+   * Run every timer due at or before `endMs` in time order, then set the clock to `endMs`.
+   * With `settle`, it lets pending promise work finish (one real macrotask) before it picks
+   * each timer, so an async loop that sets its next timer after some awaits (the PollActor,
+   * #31) runs on sim time too.
+   */
+  runUntil(endMs: number, opts?: { settle?: boolean }): Promise<void>;
 }
+
+/** One real macrotask: every queued promise job runs first. */
+const settled = () => new Promise<void>((r) => setTimeout(r, 0));
 
 /** 60 Hz, the refresh rate of the reference displays. */
 export const FRAME_MS = 1000 / 60;
@@ -39,8 +49,23 @@ export function createSimScheduler(startMs = 0, frameMs = FRAME_MS): SimSchedule
       // The next vsync strictly after now, as a browser runs rAF callbacks.
       at((Math.floor(clock.now() / frameMs) + 1) * frameMs, cb);
     },
-    async runUntil(endMs) {
+    sleep(ms, signal) {
+      return new Promise<void>((resolve) => {
+        if (signal?.aborted) return resolve();
+        const cancel = at(clock.now() + ms, resolve);
+        signal?.addEventListener(
+          'abort',
+          () => {
+            cancel();
+            resolve();
+          },
+          { once: true },
+        );
+      });
+    },
+    async runUntil(endMs, opts) {
       for (;;) {
+        if (opts?.settle) await settled();
         timers.sort((a, b) => a.t - b.t || a.n - b.n);
         const first = timers[0];
         if (!first || first.t > endMs) break;

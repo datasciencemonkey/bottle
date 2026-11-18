@@ -51,7 +51,7 @@ export class BackendNotAvailableError extends Error {
  * `https://<host>/ai-gateway/mcp-services/system.ai.genie_one_mcp?o=<workspace_id>`
  * (`mog_core::genie_endpoint`); the brain never builds a URL (4.6 rule 1).
  */
-class GenieOneMcpBackend implements MogBackend {
+export class GenieOneMcpBackend implements MogBackend {
   readonly kind = 'genie_one_mcp' as const;
   probe(
     _profile: ProfileName,
