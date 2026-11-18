@@ -87,3 +87,44 @@ what the build does when the archive is missing.
 - NFR-05 (RSS 1.0 GB) fails on SP-04 (#282). This ADR does not change it.
 - Dev tool: `cargo run -p mog-core --features local-stt --release --example stt_install --
   --models <dir> --source github --i-consent --wav <16 kHz mono WAV>`.
+
+## Amendment 1 (2026-11-18, #413): the wizard STT step
+
+- Status: Accepted. Owner: impl-413. This amendment keeps the number 0049.
+
+1. **Models folder (W-17e).** `stt_setup::models_dir`: macOS
+   `$HOME/Library/Application Support/Bottle/models`, Windows `%LOCALAPPDATA%\Bottle\models`
+   (not the roaming folder). Linux (dev and CI only): `$XDG_DATA_HOME/Bottle/models`, else
+   `$HOME/.local/share/Bottle/models`. A missing, empty or relative base gives no folder, and
+   setup answers `stt_models_dir_unavailable`. The folder needs no admin rights.
+2. **Stored consent (CAP-49a).** `stt_setup::FileConsent` keeps the answer in
+   `<models>/stt-download-consent` as one word, `granted` or `declined`. A missing file or any
+   other content is `NotAsked`. The write goes to a new file, then a rename. It is a file and not
+   an app setting, because the app settings stay in memory until #77, and the answer must last
+   across launches. The file holds no path, time or user data. `FileConsent` is the
+   `ConsentGate` of `ModelInstaller::install`, so each install reads the stored answer.
+3. **`stt_setup::SttSetup`.** It serves `status` (model state, stored answer, `installing`, the
+   pinned archive size), `set_consent`, `install` and `cancel`. One install runs at a time
+   (`stt_install_busy`). `cancel` stops the download at the next chunk
+   (`stt_download_cancelled`) and the `.partial` file stays, so Retry resumes (CAP-49b).
+   Its codes are the `InstallError` codes plus `stt_install_busy` and
+   `stt_models_dir_unavailable`.
+4. **Wizard step 6 (MB-07).** `src/views/hub/SttSetupStep.tsx` asks the 487 MB question, stores
+   the answer before the install starts, shows Missing / Partial / Installed, a progress bar,
+   Cancel and Retry, and a user text for each code. A hash mismatch says that the install
+   stopped (CAP-49c). The step is done only when an `install` call resolves, because `status`
+   checks sizes only. When the model shows Installed and the answer is Granted, the step calls
+   `install` to check the hashes. The hub shows the step until the wizard frame (#43) mounts it.
+5. **IPC.** The hub commands `stt_model_status`, `stt_model_consent`, `stt_model_install`
+   (progress on a Channel argument) and `stt_model_cancel` are contract change #529. Until it
+   lands, the hub step uses a seam that answers `stt_setup_unavailable` (`TODO(#529)`).
+6. **App feature.** `src-tauri` has the feature `local-stt = ["mog-core/local-stt"]`. It is off
+   by default: App CI on Windows and Linux has no vendored archive step, so a default-on feature
+   stops every job. CI and the release build turn it on after the archive fetch (#534, with
+   #414). With the feature, the PTT host loads `ParakeetLoader` on
+   `<models>/<model name>`; without it, or with no models folder, it keeps `NoModelLoader`.
+7. **Proxy and trust store (decision).** The MVP keeps the direct connection and the
+   `webpki-roots` CA set. A macOS app started from Finder does not get the shell proxy
+   variables, so `HTTPS_PROXY` helps little. The OS proxy settings and the OS trust store need
+   new crates and an ARC-4 and supply-chain check. Follow-up: #535. Until then, a user behind a
+   proxy or TLS inspection sees the `stt_download_failed` text.

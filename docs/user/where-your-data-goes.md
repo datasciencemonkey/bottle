@@ -32,6 +32,17 @@ The copy comes from one file: `src/views/hub/disclosures.ts`. If you change the 
 - Then audio goes to your home workspace in short chunks, and Bottle does not store it there.
 - The STT badge on each MOG shows which one is on.
 
+## The local speech model
+
+- The setup step "Local speech" asks before Bottle downloads the speech model (487 MB). Nothing downloads before you select "Download".
+- If you select "Not now", local speech stays off. You can download the model later from the same step.
+- Bottle keeps your answer in the model folder, so it does not ask again at each start.
+- The model comes only from the sherpa-onnx release on GitHub or from its Hugging Face mirror. You select the source.
+- On macOS the model folder is `~/Library/Application Support/Bottle/models`. On Windows it is `%LOCALAPPDATA%\Bottle\models`. Bottle needs no admin rights for it.
+- You can cancel the download. Select Retry to continue from where it stopped.
+- Bottle checks each file against a fixed checksum. If a file does not match, Bottle deletes it and the install stops.
+- The download does not use a proxy server yet (#535).
+
 ## Your home workspace does the processing
 
 - Each MOG has a home workspace (its home profile).
