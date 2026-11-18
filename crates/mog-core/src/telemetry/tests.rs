@@ -392,6 +392,20 @@ fn sec_16c_the_admin_key_alone_writes_no_content() {
 }
 
 #[test]
+fn sec_16c_an_event_name_or_key_with_text_writes_nothing() {
+    let policy = MemoryPolicyStore::default().with(CONTENT_TELEMETRY_ALLOWED, json!(true));
+    let log = AppLog::new(policy, MemoryLogSink::default());
+    log.set_user_opt_in(true);
+    for c in CANARIES {
+        assert!(!log.event(c, &[]));
+        assert!(!log.event("genie.ask", &[(c, 1)]));
+    }
+    assert!(!log.event("genie.ask", &[("chars", MAX_ATTR_VALUE + 1)]));
+    assert!(log.sink().lines().is_empty());
+    assert!(log.event("genie.ask", &[("chars", 3)]));
+}
+
+#[test]
 fn sec_16c_only_a_true_boolean_admin_key_counts() {
     for v in [
         json!("true"),

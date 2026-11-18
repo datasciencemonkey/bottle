@@ -23,6 +23,6 @@ An `OtlpTable` value that is not a three-part name keeps telemetry off. Bottle s
 
 ## Logs
 
-By default, log lines hold only fixed names and counts. Bottle writes content to the log only when both opt-ins are on. Bottle also removes secret patterns from that content.
+By default, log lines hold only fixed names and counts. Bottle writes content to the log only when both opt-ins are on. Even then, the core log removes secret patterns from the content, and the brain log drops a line that has one.
 
-The live export is not built yet (#503).
+The live export is not built yet (#503). The 7-day log file and the telemetry-on notice are #517.

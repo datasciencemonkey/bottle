@@ -420,13 +420,22 @@ impl<P: PolicyStore, S: LogSink> AppLog<P, S> {
         self.user_opt_in.load(Ordering::SeqCst) && content_telemetry_allowed(&self.policy)
     }
 
-    /// A content-free line: a fixed name and whole counts under fixed keys.
-    pub fn event(&self, name: &'static str, fields: &[(&'static str, u64)]) {
+    /// A content-free line: a name from [`SPAN_NAMES`] and whole counts under keys from
+    /// [`span_attr_keys`]. Any other name or key writes nothing and returns false.
+    pub fn event(&self, name: &str, fields: &[(&str, u64)]) -> bool {
+        if known(&SPAN_NAMES, name).is_none()
+            || fields
+                .iter()
+                .any(|(k, v)| attr_key(k).is_none() || *v > MAX_ATTR_VALUE)
+        {
+            return false;
+        }
         let mut line = format!("event={name}");
         for (k, v) in fields {
             let _ = write!(line, " {k}={v}");
         }
         self.sink.write(&line);
+        true
     }
 
     /// A content line, written only if [`AppLog::content_allowed`]. The text is put on one line

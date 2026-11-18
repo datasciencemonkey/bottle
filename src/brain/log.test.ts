@@ -61,6 +61,21 @@ describe('brain log content gate (SEC-16c)', () => {
     ]);
   });
 
+  it('[SEC-16c] [AT-17] a content line with a secret pattern is dropped even with both opt-ins', () => {
+    const { log, lines } = logWith({ user: true, admin: true });
+    for (const secret of [
+      'login password=fake-not-real',
+      'PASSWORD=fake-not-real',
+      '-----BEGIN fake key-----',
+      'header eyJfake-not-real.rest',
+    ]) {
+      expect(log.content('genie.ask', secret)).toBe(false);
+    }
+    expect(lines).toEqual([]);
+    expect(log.content('genie.ask', 'no secret here')).toBe(true);
+    expect(lines).toEqual(['content=genie.ask text=no secret here']);
+  });
+
   it('[SEC-16c] an event name or field with text is dropped, never written', () => {
     const { log, lines } = logWith({ user: true, admin: true });
     for (const c of CANARIES) {

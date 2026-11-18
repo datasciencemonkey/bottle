@@ -4,8 +4,8 @@
  * `event` writes a content-free line: a name from `SPAN_NAMES` and whole counts under keys from
  * `SPAN_ATTR_KEYS`. `content` writes text only when the admin key `ContentTelemetryAllowed`
  * and the user opt-in are both on. This is the only file in `src/` that may use `console`
- * (a test scans for it). The brain holds no token (W-01b, 4.6 rule 9); the Rust `AppLog`
- * applies the rule-7 scrub to its own content lines.
+ * (a test scans for it). A content line that matches a 4.6 rule-7 secret pattern is dropped
+ * whole, so no secret reaches the brain log. The Rust `AppLog` redacts the match instead.
  *
  * TODO(#502): `userOptIn` reads the `app.log.contentOptIn` app setting.
  */
@@ -39,6 +39,20 @@ const has = <T extends string>(list: readonly T[], v: unknown): v is T =>
 
 const off = () => false;
 
+/** The 4.6 rule-7 secret patterns, as `mog_core::token_guard::PATTERNS` writes them. */
+export const SECRET_PATTERNS: readonly RegExp[] = [
+  /eyJ[\w-]+\./,
+  /dapi[0-9a-f]{32}/,
+  /dose[0-9a-f]+/,
+  /AKIA[0-9A-Z]{16}/,
+  /ghp_/,
+  /-----BEGIN/,
+  /password=/i,
+];
+
+/** True if `text` matches a 4.6 rule-7 secret pattern. */
+export const hasSecret = (text: string): boolean => SECRET_PATTERNS.some((p) => p.test(text));
+
 export function createBrainLog(deps: BrainLogDeps = {}): BrainLog {
   const sink = deps.sink ?? ((line: string) => console.info(line));
   const adminAllowed = deps.adminAllowed ?? off;
@@ -58,6 +72,7 @@ export function createBrainLog(deps: BrainLogDeps = {}): BrainLog {
     },
     content(name, text) {
       if (!has(SPAN_NAMES, name) || !contentAllowed()) return false;
+      if (hasSecret(String(text))) return false;
       // One line per call: a control character cannot forge a second line.
       // eslint-disable-next-line no-control-regex
       sink(`content=${name} text=${String(text).replace(/[\u0000-\u001f\u007f]/g, ' ')}`);

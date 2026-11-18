@@ -29,12 +29,12 @@ Contract files belong to contract-lead.
 6. **One log gate.** `AppLog` (Rust) and `createBrainLog` (TS) write two kinds of lines:
    - event lines with a fixed name and whole counts;
    - content lines, only when the user opt-in and `ContentTelemetryAllowed` are both on.
-   A content line is put on one line. The Rust log also applies the 4.6 rule-7 scrub. The brain holds no token (W-01b, 4.6 rule 9). `AppLog` implements `GatewayLog`, so the R12 lines can go to it.
-7. **Scans keep it so.** A Rust test scans the production code of `mog-core`, `mog-core-ffi` and `src-tauri`. It fails on `println!`, `eprintln!`, `print!`, `eprint!`, `dbg!`, `log::`, `tracing::` or `std::io::stderr`. A TS test fails on `console` outside `src/brain/log.ts`. `testkit.rs` is exempt because it is test support.
+   Both logs check event names and keys against the span closed sets. A content line is put on one line. The Rust log redacts the 4.6 rule-7 patterns. The brain log drops a content line that matches one. `AppLog` implements `GatewayLog`, so the R12 lines can go to it.
+7. **Scans keep it so.** A Rust test scans the production code of `mog-core`, `mog-core-ffi` and `src-tauri`. It fails on `println!`, `eprintln!`, `print!`, `eprint!`, `dbg!`, `log::`, `tracing::`, `io::stdout`, `io::stderr`, `stdout()` or `stderr()`. A TS test fails on `console` outside `src/brain/log.ts`. `testkit.rs` is exempt because it is test support.
 
 ## Consequences
 
 - #502 routes `telemetry_span` to `TelemetryGate::handle` and adds the `app.log.contentOptIn` setting. Until then the brain call returns `not_implemented`, and no span leaves the device.
 - #503 adds the live exporter over R7 HttpTransport and the live check with an admin.
 - A new span name or attribute key needs a change in both closed sets (Rust and TS) and a test.
-- The 7-day local log file (Appendix B) is not part of this ADR. A file sink implements `LogSink`.
+- The 7-day local log file and the telemetry-on notice (Appendix B) are #517. A file sink implements `LogSink`.

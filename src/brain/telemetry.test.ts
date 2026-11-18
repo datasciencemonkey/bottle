@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { SIZE_KEYS } from './audit-log';
 import {
@@ -38,7 +40,29 @@ describe('telemetry spans (SEC-16b)', () => {
     });
   });
 
-  it('[SEC-16b] the closed sets match the Rust gate and reuse the audit size names', () => {
+  it('[SEC-16b] the closed sets equal the Rust gate sets', () => {
+    const rs = readFileSync(
+      resolve(import.meta.dirname, '../../crates/mog-core/src/telemetry.rs'),
+      'utf8',
+    );
+    const rustList = (name: string): string[] => {
+      const m = new RegExp(`pub const ${name}: \\[&str; \\d+\\] = \\[([^\\]]*)\\]`).exec(rs);
+      expect(m, name).not.toBeNull();
+      return [...(m as RegExpExecArray)[1].matchAll(/"([^"]+)"/g)].map((x) => x[1] as string);
+    };
+    expect([...SPAN_NAMES]).toEqual(rustList('SPAN_NAMES'));
+    expect([...SPAN_ATTR_KEYS]).toEqual([...SIZE_KEYS, ...rustList('EXTRA_ATTR_KEYS')]);
+    const rustSizes = readFileSync(
+      resolve(import.meta.dirname, '../../crates/mog-core/src/audit.rs'),
+      'utf8',
+    );
+    const sizes = /pub const SIZE_KEYS: \[&str; \d+\] = \[([^\]]*)\]/.exec(rustSizes);
+    expect([...(sizes as RegExpExecArray)[1].matchAll(/"([^"]+)"/g)].map((x) => x[1])).toEqual([
+      ...SIZE_KEYS,
+    ]);
+  });
+
+  it('[SEC-16b] the closed sets reuse the audit size names', () => {
     expect(SPAN_NAMES).toContain('genie.ask');
     for (const k of SIZE_KEYS) expect(SPAN_ATTR_KEYS).toContain(k);
     for (const n of SPAN_NAMES) expect(n).toMatch(/^[a-z_.]+$/);

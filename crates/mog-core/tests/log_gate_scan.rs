@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 /// Production Rust code under these roots must write logs only through `mog_core::telemetry::AppLog`.
 const SCAN_ROOTS: [&str; 3] = ["src", "../mog-core-ffi/src", "../../src-tauri/src"];
-const BANNED: [&str; 8] = [
+const BANNED: [&str; 11] = [
     "println!",
     "eprintln!",
     "print!(",
@@ -14,7 +14,10 @@ const BANNED: [&str; 8] = [
     "dbg!",
     "log::",
     "tracing::",
-    "std::io::stderr",
+    "io::stdout",
+    "io::stderr",
+    "stdout()",
+    "stderr()",
 ];
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -52,6 +55,8 @@ fn sec_16c_scan_matches_paths_not_suffixes() {
     assert!(uses("x; println!(\"{}\", y)", "println!"));
     assert!(!uses("catalog::find(id)", "log::"));
     assert!(!uses("my_println!()", "println!"));
+    assert!(uses("let e = stderr();", "stderr()"));
+    assert!(uses("std::io::stdout().write_all(b)", "io::stdout"));
 }
 
 #[test]
