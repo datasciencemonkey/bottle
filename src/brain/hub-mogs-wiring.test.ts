@@ -37,7 +37,7 @@ beforeEach(() => {
 });
 
 describe('hub MOG wiring (#26)', () => {
-  it('[MB-01] [CAP-35a] sendHubSnapshot sends the list with a notice outside a hub action (#562)', async () => {
+  it('[MB-01] [MB-06a] sendHubSnapshot sends the list with a notice outside a hub action (#562)', async () => {
     await m.create({ name: 'Ops', home: 'p' });
     await sendHubSnapshot(m, { kind: 'info', text: 'Create a MOG to start' }, send);
     expect(last()).toEqual({

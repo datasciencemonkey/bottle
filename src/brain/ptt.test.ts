@@ -18,7 +18,7 @@ describe('hotkey:ptt in the brain (#6 payload, #13)', () => {
     expect(asPttEvent(null, 0)).toBeUndefined();
   });
 
-  it('[CAP-35a] [MB-06a] a press with no open MOG (empty mogId, #562) is not a MOG press', () => {
+  it('[MB-06a] a press with no open MOG (empty mogId, #562) is not a MOG press', () => {
     for (const phase of ['down', 'up', 'cancel', 'double_tap'])
       expect(asPttEvent({ mogId: '', phase }, 0)).toBeUndefined();
   });

@@ -1256,7 +1256,7 @@ mod tests {
     }
 
     #[test]
-    fn mb_06a_cap_35a_a_press_with_no_open_mog_reaches_the_brain_with_no_mog_id() {
+    fn mb_06a_a_press_with_no_open_mog_reaches_the_brain_with_no_mog_id() {
         // #562 (ADR 0095): the press is not dropped. The brain starts the last-used MOG.
         let target = Arc::new(PttTarget::default());
         let (mut f, brain, _) = forwarder(&target);

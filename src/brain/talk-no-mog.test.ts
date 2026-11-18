@@ -66,6 +66,7 @@ async function rig(opts: { mogs?: string[]; lastUsed?: string; accepted?: boolea
   wireTalkNoMog(bus, {
     manager,
     lastUsed: () => opts.lastUsed,
+    openWindow: (mogId) => windows.openMog(mogId),
     notify: (n) => void notices.push(n),
   });
   const press = async (mogId = '', ...phases: string[]) => {
@@ -81,7 +82,7 @@ async function rig(opts: { mogs?: string[]; lastUsed?: string; accepted?: boolea
 }
 
 describe('talk key with no running MOG (#562)', () => {
-  it('[CAP-35a] [MB-06a] a press with no running MOG starts the last-used MOG and captures into it', async () => {
+  it('[MB-06a] a press with no running MOG starts the last-used MOG and captures into it', async () => {
     const r = await rig({ mogs: ['Ops', 'Sales'], lastUsed: id(2) });
     await r.press();
     // The hub Start path: `window_mog_open` for the last-used MOG, and T1 marks it running.
@@ -95,7 +96,7 @@ describe('talk key with no running MOG (#562)', () => {
     expect(r.notices).toEqual([undefined]);
   });
 
-  it('[CAP-35a] [MB-06a] with no last-used MOG, a press starts the first MOG of the hub list', async () => {
+  it('[MB-06a] with no last-used MOG, a press starts the first MOG of the hub list', async () => {
     const r = await rig({ mogs: ['Sales', 'Ops'] });
     await r.press();
     // The hub list is sorted by name: Ops (id 2) is first.
@@ -103,14 +104,14 @@ describe('talk key with no running MOG (#562)', () => {
     expect(r.starts).toEqual([{ mogId: id(2), mode: 'ptt' }]);
   });
 
-  it('[CAP-35a] [MB-06a] a last-used MOG that was deleted falls back to the first MOG of the list', async () => {
+  it('[MB-06a] a last-used MOG that was deleted falls back to the first MOG of the list', async () => {
     const r = await rig({ mogs: ['Ops'], lastUsed: id(9) });
     await r.press();
     expect(r.windows.calls).toEqual([['open', id(1)]]);
     expect(r.starts).toEqual([{ mogId: id(1), mode: 'ptt' }]);
   });
 
-  it('[CAP-35a] [MB-06a] with no MOG at all, a press shows the hub toast and starts no capture', async () => {
+  it('[MB-06a] with no MOG at all, a press shows the hub toast and starts no capture', async () => {
     const r = await rig();
     await r.press();
     expect(r.notices).toEqual([{ kind: 'info', text: NO_MOG_TEXT }]);
@@ -120,7 +121,7 @@ describe('talk key with no running MOG (#562)', () => {
     expect(r.stops()).toEqual([]);
   });
 
-  it('[CAP-35a] [MB-06a] a running MOG: the press is the same as today', async () => {
+  it('[MB-06a] a running MOG: the press is the same as today', async () => {
     const r = await rig({ mogs: ['Ops', 'Sales'], lastUsed: id(2) });
     await r.manager.start(id(1));
     r.windows.calls.length = 0;
@@ -131,7 +132,7 @@ describe('talk key with no running MOG (#562)', () => {
     expect(r.stops()).toEqual([{ mogId: id(1), leaseId: '1' }]);
   });
 
-  it('[CAP-35a] [SEC-32a] the T12 consent gate still applies to the started MOG', async () => {
+  it('[MB-06a] [SEC-32a] the T12 consent gate still applies to the started MOG', async () => {
     const r = await rig({ mogs: ['Ops'], accepted: false });
     await r.press();
     // The MOG starts (the key press is the user action), but no capture starts without consent.
@@ -140,7 +141,7 @@ describe('talk key with no running MOG (#562)', () => {
     expect(r.blocked).toHaveLength(1);
   });
 
-  it('[CAP-35a] [CAP-14a] the up, cancel and double tap of the press go to the started MOG', async () => {
+  it('[MB-06a] [CAP-14a] the up, cancel and double tap of the press go to the started MOG', async () => {
     const r = await rig({ mogs: ['Ops'] });
     // A tap, then the double tap: hands-free in the started MOG (CAP-14a).
     await r.press('', 'down', 'cancel', 'double_tap');
@@ -151,7 +152,20 @@ describe('talk key with no running MOG (#562)', () => {
     ]);
   });
 
-  it('[CAP-35a] a refused start shows its hub text and starts no capture', async () => {
+  it('[MB-06a] a MOG that T1 thinks is running but whose window is gone opens again before capture (#419)', async () => {
+    const r = await rig({ mogs: ['Ops'] });
+    await r.manager.start(id(1));
+    // The window closed outside T1 (#419): T1 still says running.
+    r.windows.open.delete(id(1));
+    r.windows.calls.length = 0;
+    await r.press();
+    expect(r.manager.runState(id(1))).toBe('running');
+    expect(r.windows.calls).toEqual([['open', id(1)]]);
+    expect(r.windows.open.has(id(1))).toBe(true);
+    expect(r.starts).toEqual([{ mogId: id(1), mode: 'ptt' }]);
+  });
+
+  it('[MB-06a] a refused start shows its hub text and starts no capture', async () => {
     const r = await rig({ mogs: ['Ops'] });
     r.windows.openMog = async () => Promise.reject({ error: 'host_failed' });
     await r.press();
@@ -159,7 +173,7 @@ describe('talk key with no running MOG (#562)', () => {
     expect(r.starts).toEqual([]);
   });
 
-  it('[CAP-35a] nothing starts without a key press: only a down starts a MOG', async () => {
+  it('[MB-06a] nothing starts without a key press: only a down starts a MOG', async () => {
     const r = await rig({ mogs: ['Ops'] });
     await r.press('', 'up', 'cancel', 'double_tap');
     expect(r.windows.calls).toEqual([]);

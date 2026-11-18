@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-18
-- Issues: #562 (CAP-35a, MB-06a), after #73 (ADR 0058) and #14
+- Issues: #562 (MB-06a), after #73 (ADR 0058) and #14
 - Owner: impl-562 (agent-lead-2)
 
 ## Context
@@ -22,6 +22,7 @@ The host does not know the MOG configs, the run state of T1 or the hub list. The
 ## Consequences
 
 - A talk-key press is never dropped with no visible result while the hub is open.
-- When the hub window is not open, the "Create a MOG to start" notice is lost. The hub asks for the list again when it opens.
+- When the hub window is not open, the "Create a MOG to start" notice is lost. The hub asks for the list again when it opens. #568 (a contract change) tracks a way to show it with no hub window.
+- T1 keeps its run state in brain memory only (#419). The empty ID proves that no MOG window is open, so when T1 says the picked MOG is running, the brain also calls `window_mog_open` (idempotent) for it. So a capture never starts for a MOG with no window.
 - The capture of the first press starts after the MOG window opens, so it starts later than a press to a running MOG.
 - If a later change saves the last-used MOG (for example in the app settings), only `lastUsed` changes.

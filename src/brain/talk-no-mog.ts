@@ -1,5 +1,5 @@
 /**
- * The talk key with no running MOG (#562, CAP-35a, MB-06a, ADR 0095).
+ * The talk key with no running MOG (#562, MB-06a, ADR 0095).
  *
  * With no open MOG window, the host sends the whole press as `hotkey:ptt` with an empty `mogId`
  * (`hotkey_host::PttForwarder`). On the key-down the brain starts the last-used MOG through T1,
@@ -26,7 +26,12 @@ const PTT = EVENTS['hotkey.ptt'].name;
 const PHASES: ReadonlySet<string> = new Set(['down', 'up', 'cancel', 'double_tap']);
 
 export interface TalkNoMogDeps {
-  manager: Pick<MogManager, 'list' | 'start'>;
+  manager: Pick<MogManager, 'list' | 'start' | 'runState'>;
+  /**
+   * Open the `mog-<id>` window (`window_mog_open`, idempotent). For a MOG that T1 thinks is
+   * running: the empty ID proves that no MOG window is open (TODO(#419)).
+   */
+  openWindow: (mogId: MogId) => Promise<unknown>;
   /** The last-used MOG of this run, open or closed (`TalkTarget.lastUsed`). */
   lastUsed: () => MogId | undefined;
   /** Send the hub list again, with `notice` when there is one (`sendHubSnapshot`). */
@@ -59,13 +64,18 @@ export function wireTalkNoMog(bus: BrainBus, deps: TalkNoMogDeps): () => void {
     }
     const first = mogs[0];
     if (first === undefined) {
+      // TODO(#568): with no hub window open, nobody sees this notice.
       notify({ kind: 'info', text: NO_MOG_TEXT });
       return undefined;
     }
     const last = deps.lastUsed();
     const pick = mogs.find((m) => m.mogId === last) ?? first;
     try {
+      // TODO(#419): T1 keeps its run state in brain memory only. A MOG window that closed
+      // outside T1 still reads `running`, and `start` does nothing for it, so open it here.
+      const stale = deps.manager.runState(pick.mogId) === 'running';
       await deps.manager.start(pick.mogId);
+      if (stale) await deps.openWindow(pick.mogId);
     } catch (e) {
       notify({
         kind: 'error',

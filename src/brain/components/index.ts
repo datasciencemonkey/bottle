@@ -129,11 +129,12 @@ export function startBrain(): Brain {
     // before the capture lifecycle, so a `hotkey:ptt` down updates the target first.
     const talkTarget = createAppTalkTarget(configName);
     wireTalkTarget(bus, talkTarget);
-    // #562 (CAP-35a): a press with no open MOG starts the last-used MOG, or the hub says
+    // #562 (MB-06a): a press with no open MOG starts the last-used MOG, or the hub says
     // "Create a MOG to start".
     wireTalkNoMog(bus, {
       manager: components.T1,
       lastUsed: () => talkTarget.lastUsed(),
+      openWindow: (mogId) => call('window_mog_open', { mogId }),
       notify: (notice) => sendHubSnapshot(components.T1, notice),
     });
     // MOG-13a (#73): the MOG that captures an utterance owns its request and its answer.

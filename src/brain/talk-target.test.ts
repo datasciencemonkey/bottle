@@ -122,7 +122,7 @@ describe('T1 talk-key target in the brain (#73)', () => {
     expect(target.current()).toBeUndefined();
   });
 
-  it('[MB-06a] [CAP-35a] lastUsed keeps the last-used MOG after every MOG closed (#562)', async () => {
+  it('[MB-06a] lastUsed keeps the last-used MOG after every MOG closed (#562)', async () => {
     const { target } = await setup();
     expect(target.lastUsed()).toBeUndefined();
     await openAll(target, A, B);
@@ -423,7 +423,7 @@ describe('wiring of the talk-key target (#73)', () => {
     expect(marked(sent)).toEqual([C]);
   });
 
-  it('[MB-06a] [CAP-35a] a press with no open MOG (empty mogId, #562) opens and targets nothing', async () => {
+  it('[MB-06a] a press with no open MOG (empty mogId, #562) opens and targets nothing', async () => {
     const { bus, target, sent } = await wired();
     bus.dispatch(ptt('', 'down'));
     await flush();
