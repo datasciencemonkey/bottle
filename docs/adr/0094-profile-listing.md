@@ -55,6 +55,27 @@ points open:
 7. W-01a: a source scan test fails if non-test code names the CLI token cache, a token or secret
    environment variable, or the config file outside T7.
 
+## Why the file and not `databricks auth profiles`
+
+- The lead (agent-lead-2) directed this for issue #17: list through R5 `databricks auth profiles`, or parse only the
+  section names and the `host` and `auth_type` keys of `~/.databrickscfg`. R5 is the stub, so only the second
+  works now. The user direction for this wave is a demo that works.
+- The read is not a credential source (W-01a): no token or secret is used, kept, logged or returned. But the
+  whole file passes through memory for the parse, so a PAT or client secret is read and then zeroed. This is a
+  known gap against "T7 never sees a token". `TODO(#16)`: when R5 runs the CLI, list through
+  `databricks auth profiles --skip-validate --output json`, and drop the file read.
+- The reference plugin uses the same name-only scan (`config_sections`) for the same file.
+
+## Review follow-ups (PR #556)
+
+- The cache lock is not held while R5 runs `auth describe`, so R7 and R8 do not wait behind a refresh.
+- `workspace_url` for a name that is not in the last list reads the file again once (a profile added by a sign-in).
+- A behavioural test drives R8 on T7: a PAT, service-principal or plaintext-storage profile sends nothing and lends no token.
+- The hub texts of W-03a and W-10a are #560 (`TODO(#560)`). This PR covers the host part of W-03a and W-10a.
+- The `Unchecked` arm (R5 stub) does not block. Only `StubCliRunner` answers `NotImplemented`, so the arm ends
+  with #16. Blocking there would hide every profile from the #163 picker until #16. No token flows through the
+  stub either.
+
 ## Not in this ADR
 
 - W-03c: the default `databricks-cli` client ID is set at `databricks auth login` (#162).

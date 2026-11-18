@@ -12,6 +12,8 @@
 //!   storage (or no storage mode) is not `supported` until the storage changes. A refresh checks
 //!   it again.
 //! - T7 never picks a profile, not even when only one exists. The user picks (#163).
+//! - The hub texts ("Not supported (PAT or service principal)", the plaintext-storage warning)
+//!   read this list: TODO(#560).
 //!
 //! The parse keeps only the `[section]` names and the `host` and `auth_type` values. It finds
 //! every other key by its name only and never parses its value, which may be a secret. The file
@@ -154,6 +156,10 @@ pub trait ConfigSource: Send + Sync {
 }
 
 /// The CLI config file at a path. It is only read, never written (W-08).
+///
+/// It reads the whole file, so PAT and secret values pass through memory for the parse; none is
+/// parsed or kept, and the bytes are zeroed. TODO(#16): when R5 runs the CLI, list through
+/// `databricks auth profiles --skip-validate --output json` instead, so no secret is read.
 #[derive(Debug, Clone)]
 pub struct ConfigFile {
     path: Option<PathBuf>,
@@ -201,7 +207,9 @@ enum Storage {
     Secure,
     /// Plaintext, no mode (an older CLI keeps tokens in a plaintext file) or a failed check.
     Blocked,
-    /// R5 is not built, so the check cannot run. TODO(#16): R5 runs the CLI.
+    /// R5 is the stub on main, so the check cannot run. Only `StubCliRunner` answers
+    /// `NotImplemented`; the R5 of #16 never does, so this arm ends with it. Through the stub no
+    /// token can flow either (R6 uses the same R5). TODO(#16): R5 runs the CLI.
     Unchecked,
 }
 
@@ -252,10 +260,18 @@ impl ProfileService {
     /// Every profile with its `supported` verdict. The first call and `refresh` read the config
     /// file and check the storage again; other calls return the last list.
     pub fn list(&self, refresh: bool) -> CoreResult<Vec<Profile>> {
-        let mut cache = self.cache.lock().unwrap_or_else(|p| p.into_inner());
-        if let (false, Some(list)) = (refresh, cache.as_ref()) {
-            return Ok(list.clone());
+        if !refresh {
+            if let Some(list) = self
+                .cache
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .as_ref()
+            {
+                return Ok(list.clone());
+            }
         }
+        // The cache lock is not held while R5 runs `auth describe`, so R7 and R8 calls that read
+        // the last list do not wait behind a refresh.
         let list: Vec<Profile> = self
             .config
             .profiles()?
@@ -272,7 +288,7 @@ impl ProfileService {
                 }
             })
             .collect();
-        *cache = Some(list.clone());
+        *self.cache.lock().unwrap_or_else(|p| p.into_inner()) = Some(list.clone());
         Ok(list)
     }
 }
@@ -280,8 +296,12 @@ impl ProfileService {
 impl ProfileHosts for ProfileService {
     /// The host of a supported profile only (W-03b, W-10a).
     fn workspace_url(&self, profile: &str) -> CoreResult<String> {
-        self.list(false)?
-            .into_iter()
+        let mut list = self.list(false)?;
+        if !list.iter().any(|p| p.name == profile) {
+            // A profile added after the last list (for example by a sign-in): read again once.
+            list = self.list(true)?;
+        }
+        list.into_iter()
             .find(|p| p.name == profile && p.supported)
             .map(|p| p.host)
             .ok_or(CoreError::Unavailable {

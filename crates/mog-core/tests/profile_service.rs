@@ -536,3 +536,22 @@ fn w_08_profile_service_never_writes_a_file() {
         assert!(!code.contains(key), "T7 must not look up {key}");
     }
 }
+
+#[test]
+fn w_03b_a_profile_added_after_the_first_list_is_read_again_once() {
+    let config = FakeConfig::new(Some(String::new()));
+    let cli = FakeCli::new(&[("fake-new", Describe::Mode("secure"))]);
+    let s = ProfileService::new(config.clone(), cli.clone());
+    assert!(s.list(false).unwrap().is_empty());
+    *config.0.lock().unwrap() = Some(format!(
+        "[fake-new]\nhost = {HOST_A}\nauth_type = databricks-cli\n"
+    ));
+    // An unknown name reads the file again once; a known name uses the last list.
+    assert_eq!(s.workspace_url("fake-new").unwrap(), HOST_A);
+    assert_eq!(s.workspace_url("fake-new").unwrap(), HOST_A);
+    assert_eq!(
+        cli.calls().len(),
+        1,
+        "one storage check for the new profile"
+    );
+}
