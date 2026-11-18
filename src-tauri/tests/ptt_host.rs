@@ -185,13 +185,70 @@ fn cap_12c_cap_13a_the_host_mic_feeds_the_ram_only_ptt_buffer() {
 }
 
 #[test]
-fn cap_12c_a_capture_stop_all_hands_the_audio_on_and_holds_nothing() {
+fn cap_12c_mb_05_a_capture_stop_all_hands_the_audio_on_and_holds_nothing() {
     let r = rig();
-    r.start();
+    let lease = r.start();
     r.mic.feed(&[0.2; 480]);
     r.call("capture_stop_all", json!({}))
         .expect("the panic stop");
     assert_eq!(r.buf.held_samples(), 0);
     assert_eq!(r.buf.takes(), 0);
     assert!(!r.buf.is_taking());
+    // ADR 0078 decision 7: the panic stop keeps the audio, like a manual stop. The consumer
+    // sees the reason `Panic` and decides what to do with it.
+    let kept = std::mem::take(&mut *r.kept.0.lock().unwrap());
+    assert_eq!(kept.len(), 1, "the panic stop hands the take on");
+    assert_eq!(kept[0].lease_id().to_string(), lease);
+    assert_eq!(kept[0].reason(), StopReason::Panic);
+    assert_eq!(kept[0].samples().len(), 480);
+}
+
+// ---------- the production wiring in `install_capture` ----------
+
+fn install_capture_source() -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs");
+    let text = std::fs::read_to_string(&path).expect("read src/lib.rs");
+    let body = text
+        .split("fn install_capture(")
+        .nth(1)
+        .expect("install_capture in lib.rs");
+    let end = body.find("\n}\n").expect("the end of install_capture");
+    body[..end].to_owned()
+}
+
+/// Whitespace-free text, so a rustfmt line break does not matter.
+fn squash(s: &str) -> String {
+    s.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+#[test]
+fn cap_12c_install_capture_feeds_the_mic_to_the_same_ptt_buffer_that_the_core_drives() {
+    let body = squash(&install_capture_source());
+    assert!(
+        body.contains("letptt=mog_core::audio_device::ptt_buffer::PttBuffer::new("),
+        "install_capture builds one PttBuffer named `ptt`"
+    );
+    assert_eq!(
+        body.matches("PttBuffer::new(").count(),
+        1,
+        "exactly one PttBuffer in install_capture"
+    );
+    assert!(
+        body.contains("spawn_level_mic(CpalMicHost::new,ptt.sink(),levels.gate())"),
+        "the mic frames go to `ptt.sink()`"
+    );
+    assert!(
+        !body.contains("DiscardSink"),
+        "the mic frames must not go to DiscardSink"
+    );
+    let host = body
+        .split("CaptureHost::with_audio(")
+        .nth(1)
+        .expect("the host is built with with_audio");
+    let args = &host[..host.find(")?;").expect("the end of the with_audio call")];
+    assert!(
+        args.ends_with(",ptt,") || args.ends_with(",ptt"),
+        "the same `ptt` goes to with_audio: {args}"
+    );
+    assert!(!body.contains("CaptureHost::with_levels("));
 }
