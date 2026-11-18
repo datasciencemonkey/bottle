@@ -44,6 +44,7 @@ pub mod stt_bench;
 #[cfg(feature = "local-stt")]
 pub mod stt_local;
 pub mod stt_model;
+pub mod telemetry;
 pub mod testkit;
 pub mod token_broker;
 pub mod token_events;
