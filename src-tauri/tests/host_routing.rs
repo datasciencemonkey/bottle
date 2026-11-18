@@ -811,6 +811,7 @@ fn ask(from: &str, route_to: Option<&dyn PermissionRoute>, args: Value) -> Resul
         capture: None,
         capture_ticket: None,
         app_settings: None,
+        insert: None,
     };
     route(components, "permission_request", args)
 }
@@ -948,6 +949,7 @@ fn consent_call(
         capture: None,
         capture_ticket: None,
         app_settings: None,
+        insert: None,
     };
     route(components, command, args)
 }
@@ -1042,6 +1044,7 @@ fn settings_call(
         capture: None,
         capture_ticket: None,
         app_settings: settings,
+        insert: None,
     };
     route(components, command, args)
 }

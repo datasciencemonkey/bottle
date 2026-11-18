@@ -87,6 +87,7 @@ impl Rig {
             capture: Some(&self.host),
             capture_ticket: None,
             app_settings: None,
+            insert: None,
         };
         route(components, command, args)
     }
@@ -114,6 +115,7 @@ impl Rig {
             capture: Some(&self.host),
             capture_ticket: Some(ticket),
             app_settings: None,
+            insert: None,
         };
         route(components, command, args)
     }
@@ -413,6 +415,7 @@ fn cap_01a_no_managed_capture_host_is_host_failed() {
             capture: None,
             capture_ticket: None,
             app_settings: None,
+            insert: None,
         };
         assert_eq!(
             route(components, command, sample_args(command)),
