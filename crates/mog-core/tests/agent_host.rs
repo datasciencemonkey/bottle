@@ -1045,7 +1045,10 @@ fn rtr_27_rtr_28_at_42_each_session_gets_its_own_genie_one_proxy_endpoint_and_no
     let token = std::str::from_utf8(FAKE_TOKEN).unwrap();
     for spec in r.launcher.specs.lock().unwrap().iter() {
         for (k, v) in &spec.env {
-            assert!(!v.contains(&auth_a[7..]) && !v.contains(&auth_b[7..]), "{k}");
+            assert!(
+                !v.contains(&auth_a[7..]) && !v.contains(&auth_b[7..]),
+                "{k}"
+            );
             assert!(!v.contains(&url_a) && !v.contains(&url_b), "{k}");
             assert!(!v.contains(token), "{k}");
         }

@@ -49,7 +49,10 @@ const REPORT_FILE: &str = "scan-report.json";
 const BOUND: Duration = Duration::from_secs(180);
 
 fn sha256_hex(b: &[u8]) -> String {
-    Sha256::digest(b).iter().map(|x| format!("{x:02x}")).collect()
+    Sha256::digest(b)
+        .iter()
+        .map(|x| format!("{x:02x}"))
+        .collect()
 }
 
 fn random_u64() -> u64 {
@@ -447,7 +450,8 @@ mod memscan {
             let (Some(range), Some(perms)) = (parts.next(), parts.next()) else {
                 continue;
             };
-            if !perms.starts_with("rw") || line.ends_with("[vvar]") || line.ends_with("[vsyscall]") {
+            if !perms.starts_with("rw") || line.ends_with("[vvar]") || line.ends_with("[vsyscall]")
+            {
                 continue;
             }
             let Some((a, b)) = range.split_once('-') else {

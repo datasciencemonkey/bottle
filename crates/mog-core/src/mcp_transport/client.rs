@@ -913,11 +913,6 @@ impl McpTransport for ReqwestMcpTransport {
         }
         Err(err(BAD_REPLY))
     }
-
-    fn start_loopback_proxy(&self) -> CoreResult<u16> {
-        // TODO(#139): loopback proxy for the agent's Genie One MCP calls.
-        Err(CoreError::NotImplemented { component: "R8" })
-    }
 }
 
 #[cfg(test)]

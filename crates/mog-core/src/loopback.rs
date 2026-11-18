@@ -11,8 +11,8 @@
 //! connection.
 //! TODO(#111): the SP-19 wire details (MCP streamable HTTP and SSE, paths, how the harness
 //! passes the header). The `bottle-mcp` handler is `crate::bottle_mcp` (#113); the model proxy
-//! is `crate::agent_host::model_proxy` (#112).
-//! TODO(#139): the Genie One MCP proxy handler.
+//! is `crate::agent_host::model_proxy` (#112); the Genie One MCP proxy handler is
+//! `crate::mcp_transport::proxy` (#139), served by the `bottle-mcp` server of the session.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -78,7 +78,8 @@ impl LoopbackEndpoint {
     /// serves in the core and makes no upstream call itself. The handler builds the upstream
     /// request from [`LoopbackRequest`], which holds no harness header, and calls
     /// [`crate::request_identity::RequestDecorator`] with the session's MOG tags.
-    /// The model proxy is `crate::agent_host::model_proxy`. TODO(#139): the Genie One MCP proxy handler.
+    /// The model proxy is `crate::agent_host::model_proxy`; the Genie One MCP proxy handler is
+    /// `crate::mcp_transport::proxy`, which sends each call through R8 with R8's headers.
     pub fn call_kind(&self) -> Option<CallKind> {
         match self {
             LoopbackEndpoint::BottleMcp => None,
@@ -116,7 +117,8 @@ pub trait LoopbackHandler: Send + Sync {
     fn handle(&self, req: &LoopbackRequest) -> LoopbackResponse;
 }
 
-/// The default handler: 501 for every endpoint. `crate::bottle_mcp` serves `bottle-mcp` (#113); TODO(#139).
+/// The default handler: 501 for every endpoint. `crate::bottle_mcp` serves `bottle-mcp` (#113)
+/// and, with a proxy, `genie-one-mcp` (#139).
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NotImplementedHandler;
 

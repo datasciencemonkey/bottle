@@ -61,9 +61,6 @@ impl McpTransport for FailingR8 {
     fn list_tools(&self, _profile: &str, _tags: &Tags) -> CoreResult<Vec<Value>> {
         Err(self.err())
     }
-    fn start_loopback_proxy(&self) -> CoreResult<u16> {
-        Err(self.err())
-    }
 }
 
 fn mcp_call_args(tool: &str) -> Value {

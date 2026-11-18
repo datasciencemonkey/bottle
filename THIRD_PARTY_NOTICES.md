@@ -73,6 +73,7 @@ Add one row for each Bottle file that holds code or data from antigravity-bricks
 | `crates/mog-core/src/token_broker.rs` (the token cache: refresh margin, `expires_in` / `expiry` reply fields, drop on 401) | `plugins/databricks-genie/scripts/genie_bridge.py` (`token`, `invalidate`) |
 | `crates/mog-core/src/mcp_transport/client.rs` (R8: one retry on 401, one new session on a 404 with a session, Genie One off on a 404 without one) | `plugins/databricks-genie/scripts/genie_bridge.py` (`forward`, `call_upstream`, `start_session`) |
 | `crates/mog-core/src/mcp_transport/tools.rs` (the tool allowlist and argument names) | `plugins/databricks-genie/scripts/genie_tools.json` |
+| `crates/mog-core/src/mcp_transport/proxy.rs` (the agent's Genie One proxy: local `initialize` and `ping`, tool failures as tool results, only Bottle's own texts in an error) | `plugins/databricks-genie/scripts/genie_bridge.py` (`dispatch`, `tool_result`, `describe`) |
 | `src/brain/components/genie-errors.ts` (the GL-5 status rules: 401 sign-in, 403 IP access list, 404 Genie One off, a non-JSON page; only Bottle's own texts show) | `plugins/databricks-genie/scripts/genie_bridge.py` (`forward`, `describe`) |
 | `src/brain/components/poll-actor.ts` (after a poll times out, poll again with the same IDs and never ask again) | `plugins/databricks-genie/scripts/genie_bridge.py` (`late_text`, `OUT_OF_TIME`) |
 

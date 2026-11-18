@@ -18,7 +18,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use fake_mcp::*;
-use mog_core::bottle_mcp::{BottleMcpDeps, BottleMcpServer, UnavailableLocalTools, UnavailableRelay};
+use mog_core::bottle_mcp::{
+    BottleMcpDeps, BottleMcpServer, UnavailableLocalTools, UnavailableRelay,
+};
 use mog_core::clock::SimClock;
 use mog_core::error::{CoreError, CoreResult};
 use mog_core::http_transport::backoff::Jitter;
@@ -26,9 +28,7 @@ use mog_core::http_transport::rate_bucket::{AimdBucket, CallClass, RateBucket, T
 use mog_core::http_transport::rate_limit::{NoBusyObserver, RateLimit};
 use mog_core::http_transport::Pause;
 use mog_core::mcp_transport::proxy::{GenieProxyDeps, GenieTarget, GenieTargets};
-use mog_core::mcp_transport::{
-    McpCall, McpLimits, McpSeams, McpTransport, ReqwestMcpTransport,
-};
+use mog_core::mcp_transport::{McpCall, McpLimits, McpSeams, McpTransport, ReqwestMcpTransport};
 use mog_core::request_identity::{BottleIdentity, TAGS_HEADER};
 use serde_json::{json, Value};
 
@@ -79,7 +79,10 @@ impl RateBucket for Recording {
         self.inner.on_rate_limited(profile, retry_after);
     }
     fn enqueue(&self, profile: &str, class: CallClass) -> Ticket {
-        self.queued.lock().unwrap().push((profile.to_owned(), class));
+        self.queued
+            .lock()
+            .unwrap()
+            .push((profile.to_owned(), class));
         self.inner.enqueue(profile, class)
     }
     fn take(&self, profile: &str, ticket: &Ticket) -> Duration {
@@ -441,7 +444,10 @@ fn g_06b_g_07a_warehouse_comes_from_the_mog_and_the_agent_meta_is_dropped() {
                    "_meta": {"progressToken": 6}}}));
     assert_eq!(poll.result()["isError"], json!(false), "{}", poll.raw);
     let calls = tool_calls(&s);
-    assert_eq!(calls[0].json()["params"]["_meta"], json!({"warehouse_id": "abc123"}));
+    assert_eq!(
+        calls[0].json()["params"]["_meta"],
+        json!({"warehouse_id": "abc123"})
+    );
     assert!(calls[1].json()["params"].get("_meta").is_none());
     for c in &calls {
         assert!(!String::from_utf8_lossy(&c.body).contains("progressToken"));
@@ -468,7 +474,13 @@ fn sec_06a_upstream_tags_name_the_session_mog_and_the_genie_op() {
 fn g_20b_query_result_item_ids_must_match_pub_output() {
     let s = genie_one(|_| None);
     let r = rig(&s);
-    for bad in ["x", "pub_1", "pub__output", "pub_1_output\n", "item_1_output"] {
+    for bad in [
+        "x",
+        "pub_1",
+        "pub__output",
+        "pub_1_output\n",
+        "item_1_output",
+    ] {
         let a = r.call(
             "genie_get_query_result",
             json!({"conversation_id": "c-1", "response_id": "r-1", "item_id": bad}),
@@ -490,12 +502,19 @@ fn g_20b_query_result_item_ids_must_match_pub_output() {
 fn g_09a_g_09b_agent_calls_wait_in_the_bucket_the_brain_uses() {
     let s = genie_one(|seen| {
         (seen.rpc_method() == "tools/call" && seen.tool() == "genie_cancel_response").then(|| {
-            json_reply(429, json!({"error": {"code": "RATE_LIMITED"}})).with_header("Retry-After", "30")
+            json_reply(429, json!({"error": {"code": "RATE_LIMITED"}}))
+                .with_header("Retry-After", "30")
         })
     });
     let r = rig(&s);
-    assert_eq!(r.call("genie_ask", ask_args()).result()["isError"], json!(false));
-    assert_eq!(r.call("genie_poll_response", poll_args()).result()["isError"], json!(false));
+    assert_eq!(
+        r.call("genie_ask", ask_args()).result()["isError"],
+        json!(false)
+    );
+    assert_eq!(
+        r.call("genie_poll_response", poll_args()).result()["isError"],
+        json!(false)
+    );
     let queued = r.bucket.queued.lock().unwrap().clone();
     assert!(queued.iter().all(|(p, _)| p == PROFILE), "{queued:?}");
     assert!(queued.contains(&(PROFILE.to_owned(), CallClass::Ask)));
@@ -511,7 +530,10 @@ fn g_09a_g_09b_agent_calls_wait_in_the_bucket_the_brain_uses() {
     ));
     assert_eq!(brain.expect_err("429").code(), "rate_limited");
     let before = r.pause.total();
-    assert_eq!(r.call("genie_poll_response", poll_args()).result()["isError"], json!(false));
+    assert_eq!(
+        r.call("genie_poll_response", poll_args()).result()["isError"],
+        json!(false)
+    );
     assert!(
         r.pause.total() - before >= Duration::from_secs(29),
         "the agent poll waited for the brain's Retry-After: {:?}",
@@ -540,7 +562,10 @@ fn arc_6_rule_7_replies_to_the_harness_are_scrubbed() {
     assert_eq!(a.status, 200, "{}", a.raw);
     assert!(!a.raw.contains(&jwt[..20]), "{}", a.raw);
     assert!(!a.raw.contains("not-real-pass-1"), "{}", a.raw);
-    assert_eq!(a.result()["structuredContent"]["status"], json!("completed"));
+    assert_eq!(
+        a.result()["structuredContent"]["status"],
+        json!("completed")
+    );
 }
 
 // ---------- 4.6 rule 9, ARC-7: the per-session secret ----------
@@ -554,11 +579,28 @@ fn arc_7_rule_9_the_proxy_needs_the_session_secret_and_a_loopback_host() {
                       "params": {"name": "genie_ask", "arguments": ask_args()}})
     .to_string();
     assert_eq!(post(&r.url(), None, None, &body).status, 401);
-    assert_eq!(post(&r.url(), Some("Bearer not-the-secret"), None, &body).status, 401);
-    assert_eq!(post(&r.url(), Some(&other.auth()), None, &body).status, 401);
-    let port = r.url().split(':').nth(2).unwrap().split('/').next().unwrap().to_owned();
     assert_eq!(
-        post(&r.url(), Some(&r.auth()), Some(&format!("evil.example:{port}")), &body).status,
+        post(&r.url(), Some("Bearer not-the-secret"), None, &body).status,
+        401
+    );
+    assert_eq!(post(&r.url(), Some(&other.auth()), None, &body).status, 401);
+    let port = r
+        .url()
+        .split(':')
+        .nth(2)
+        .unwrap()
+        .split('/')
+        .next()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        post(
+            &r.url(),
+            Some(&r.auth()),
+            Some(&format!("evil.example:{port}")),
+            &body
+        )
+        .status,
         403
     );
     assert!(s.seen().is_empty(), "nothing went to Genie One");

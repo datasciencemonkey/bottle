@@ -17,6 +17,11 @@
 //! value go to the runtime child only, in the `open_session` frame (`bottleMcp`), never into
 //! the environment, a status report or a log (RTR-25).
 //!
+//! RTR-27 (#139, ADR 0083): with a Genie One proxy in [`AgentHostDeps::bottle_mcp`], the same
+//! session's `genie-one-mcp` listener is the R8 loopback proxy, and its URL goes in the frame
+//! as `genieOneMcp` with the same `Authorization` value. The proxy sends each agent call to the
+//! brain's R8, which adds the token; the harness never gets one (RTR-28).
+//!
 //! The host never starts capture, approves context, publishes a Page or switches the workspace:
 //! it has no handle to any of those components. It writes no log line; its status reports carry
 //! the MOG ID, the session ID and the state only.
@@ -378,6 +383,10 @@ impl SharedAgentHost {
         // RTR-25: the bottle-mcp URL and secret go to the runtime child only, on stdin.
         let mcp = s.mcp.as_ref().ok_or(AgentError::Unavailable)?;
         frame["bottleMcp"] = json!({ "url": mcp.url(), "authorization": mcp.authorization() });
+        // RTR-27, RTR-28: the Genie One MCP proxy of the session, the same way. No token.
+        if let Some(url) = mcp.genie_one_url() {
+            frame["genieOneMcp"] = json!({ "url": url, "authorization": mcp.authorization() });
+        }
         rt.process.send_frame(&frame)
     }
 
