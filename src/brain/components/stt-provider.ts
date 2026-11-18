@@ -26,7 +26,7 @@
  */
 import { call } from '../../shared/ipc';
 import type { CommandArgs } from '../../shared/ipc';
-import type { ProfileName, SegmentRef, Tags, Transcript } from '../../shared/interfaces';
+import type { MogId, ProfileName, SegmentRef, Tags, Transcript } from '../../shared/interfaces';
 import type { NetworkStatus } from './embedding-queue';
 import { DEFAULT_ASR_MODEL, modelPolicyFrom, type SttPolicy } from './model-access';
 import type { SttUse } from './mog-badges';
@@ -201,8 +201,11 @@ export interface SttProvider {
   retry(seg: SegmentRef, tags: Tags, opts?: TranscribeOptions): Promise<Transcript>;
   /** The head of the current chain. */
   activeProvider(): Provider;
-  /** The STT badge source (UX-38): the last transcript, or the selected provider before one. */
-  sttUse(): SttUse;
+  /**
+   * The STT badge source of one MOG (UX-38): the provider of its last transcript, or the
+   * selected provider before one.
+   */
+  sttUse(mogId: MogId): SttUse;
 }
 
 export type SttInvoke = (args: CommandArgs['stt_transcribe']) => Promise<Transcript>;
@@ -212,7 +215,10 @@ export interface SttProviderDeps {
   config?: SttConfigSource;
   /** Default: `stt_transcribe` over IPC. */
   invoke?: SttInvoke;
-  /** Offline (ARC-F7) removes the cloud steps. Default: online. */
+  /**
+   * Offline (ARC-F7) removes the cloud steps. Default: online, so a cloud step fails and the
+   * chain goes on. TODO(#466): the brain passes the `net.status` NetworkStatus.
+   */
   net?: Pick<NetworkStatus, 'online'>;
   /** Default: `Date.now`. */
   now?: () => number;
@@ -251,7 +257,10 @@ class ChainProvider implements SttProvider {
   private readonly now: () => number;
   private active: Provider = 'local_parakeet';
   private activeModel = '';
-  private last: SttUse | undefined;
+  /** MOG → the provider of its last transcript (UX-38). Ids only; never text. */
+  private readonly last = new Map<MogId, SttUse>();
+  /** segmentId → the running Retry, so a second click starts no second chain. */
+  private readonly retrying = new Map<string, Promise<Transcript>>();
   /** segmentId → the time of its "Could not transcribe". */
   private readonly failedAt = new Map<string, number>();
 
@@ -266,8 +275,8 @@ class ChainProvider implements SttProvider {
     return this.active;
   }
 
-  sttUse(): SttUse {
-    return this.last ?? { provider: this.active, model: this.activeModel };
+  sttUse(mogId: MogId): SttUse {
+    return this.last.get(mogId) ?? { provider: this.active, model: this.activeModel };
   }
 
   async transcribe(seg: SegmentRef, tags: Tags, opts?: TranscribeOptions): Promise<Transcript> {
@@ -278,8 +287,13 @@ class ChainProvider implements SttProvider {
     this.prune();
     const at = this.failedAt.get(seg.segmentId);
     if (at === undefined) throw new SttFailure('could_not_transcribe', seg.segmentId, false);
+    const running = this.retrying.get(seg.segmentId);
+    if (running) return running;
     // TODO(#531): R4 keeps the audio of a failed decode in RAM for 60 s, so this decodes it again.
-    return this.run(seg, tags, opts);
+    // Until then the host has no audio for a Retry, and the Retry control (#60) waits for #531.
+    const p = this.run(seg, tags, opts).finally(() => this.retrying.delete(seg.segmentId));
+    this.retrying.set(seg.segmentId, p);
+    return p;
   }
 
   private prune(): void {
@@ -324,7 +338,8 @@ class ChainProvider implements SttProvider {
   /**
    * CAP-59a, CAP-59b: the cloud call, and the local decode of the same segment if no cloud
    * reply came in 1.2 s (or at once after a cloud failure). The first valid result wins. A local
-   * result in an uncovered language is not valid; its language goes back to the chain.
+   * result in an uncovered language is not valid; its language goes back to the chain. An empty
+   * local result ("no speech") wins only when the cloud call fails: it never hides cloud text.
    */
   private hedge(
     seg: SegmentRef,
@@ -338,6 +353,7 @@ class ChainProvider implements SttProvider {
       let cloudDone = false;
       let local: 'idle' | 'running' | 'done' = 'idle';
       let detected: string | undefined;
+      let emptyLocal: Transcript | undefined;
       const finish = (t?: Transcript) => {
         if (done) return;
         done = true;
@@ -349,7 +365,7 @@ class ChainProvider implements SttProvider {
         });
       };
       const settleIfBothDone = () => {
-        if (cloudDone && (local === 'done' || skipLocal)) finish();
+        if (cloudDone && (local === 'done' || skipLocal)) finish(emptyLocal);
       };
       const startLocal = () => {
         if (done || skipLocal || local !== 'idle') return;
@@ -357,7 +373,11 @@ class ChainProvider implements SttProvider {
         void this.attempt('local_parakeet', seg, tags, undefined, undefined).then((t) => {
           local = 'done';
           const l = primaryLanguage(t?.lang);
-          if (t && !uncovered(l)) return finish(t);
+          if (t && !uncovered(l)) {
+            if (t.text.trim() !== '' || cloudDone) return finish(t);
+            emptyLocal = t;
+            return;
+          }
           if (uncovered(l)) detected = l;
           settleIfBothDone();
         });
@@ -379,12 +399,13 @@ class ChainProvider implements SttProvider {
     const whisper = cfg.whisper;
     this.active = asr ? 'dbx_gemini' : 'local_parakeet';
     this.activeModel = asr ? asr.model : '';
+    // TODO(#531): R4 fills `Transcript.lang`; until then only a caller hint gives the language.
     let lang = primaryLanguage(opts?.language);
     let localTried = false;
 
     const done = (t: Transcript): Transcript => {
       this.failedAt.delete(seg.segmentId);
-      this.last = { provider: t.provider, model: t.model };
+      this.last.set(seg.mogId, { provider: t.provider, model: t.model });
       if (t.lang === undefined && lang !== undefined) return { ...t, lang };
       return t;
     };

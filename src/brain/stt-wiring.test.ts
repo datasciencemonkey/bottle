@@ -32,7 +32,7 @@ function t4(result: Transcript | SttFailure | Error): SttProvider & { seen: Tags
       throw new SttFailure('could_not_transcribe', seg.segmentId, false);
     },
     activeProvider: () => 'local_parakeet',
-    sttUse: () => ({ provider: 'local_parakeet', model: '' }),
+    sttUse: (_m) => ({ provider: 'local_parakeet', model: '' }),
   };
 }
 

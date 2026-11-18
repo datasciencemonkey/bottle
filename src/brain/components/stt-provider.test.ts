@@ -230,6 +230,21 @@ describe('T4 SttProvider (#52)', () => {
       expect(again.retryable).toBe(false);
     });
 
+    it('[CAP-60a] a second Retry click while one runs starts no second chain', async () => {
+      vi.useFakeTimers({ now: 1_000_000 });
+      useCore({ plans: { local_parakeet: { fail: true } } });
+      const stt = createSttProvider();
+      await failureOf(stt.transcribe(seg, tags));
+      useCore({ plans: { local_parakeet: { delayMs: 500 } } });
+      const n = sttCalls().length;
+      const a = stt.retry(seg, tags);
+      const b = stt.retry(seg, tags);
+      await vi.advanceTimersByTimeAsync(500);
+      expect((await a).provider).toBe('local_parakeet');
+      expect(await b).toEqual(await a);
+      expect(sttCalls()).toHaveLength(n + 1);
+    });
+
     it('[CAP-60a] Retry after 60 s is refused with no STT call', async () => {
       vi.useFakeTimers({ now: 1_000_000 });
       useCore({ plans: { local_parakeet: { fail: true } } });
@@ -369,6 +384,37 @@ describe('T4 SttProvider (#52)', () => {
       expect(providers()).toEqual(['dbx_gemini', 'local_parakeet', 'dbx_whisper']);
     });
 
+    it('[CAP-59b] [CAP-64b] an empty local result never hides a slower cloud text', async () => {
+      vi.useFakeTimers();
+      useCore({
+        plans: {
+          dbx_gemini: { delayMs: 1_500, text: 'real words' },
+          local_parakeet: { delayMs: 0, text: '' },
+        },
+      });
+      const p = createSttProvider({ config: ipcSttConfig(ASR_ON) }).transcribe(seg, tags);
+      await vi.advanceTimersByTimeAsync(1_500);
+      const t = await p;
+      expect([t.provider, t.text]).toEqual(['dbx_gemini', 'real words']);
+    });
+
+    it('[CAP-59b] an empty local result is used when the cloud call then fails', async () => {
+      vi.useFakeTimers();
+      useCore({
+        plans: {
+          dbx_gemini: { delayMs: 1_500, fail: true },
+          local_parakeet: { delayMs: 0, text: '' },
+        },
+      });
+      const p = createSttProvider({
+        config: ipcSttConfig({ ...ASR_ON, ...WHISPER_ON }),
+      }).transcribe(seg, tags);
+      await vi.advanceTimersByTimeAsync(1_500);
+      const t = await p;
+      expect([t.provider, t.text]).toEqual(['local_parakeet', '']);
+      expect(providers()).toEqual(['dbx_gemini', 'local_parakeet']);
+    });
+
     it('[CAP-59a] [CAP-60a] a cloud failure before 1.2 s starts the local decode at once', async () => {
       vi.useFakeTimers();
       useCore({ plans: { dbx_gemini: { delayMs: 300, fail: true } } });
@@ -475,11 +521,16 @@ describe('T4 SttProvider (#52)', () => {
     it('[UX-38] sttUse is the selected provider before a transcript, then the provider of the last one', async () => {
       useCore({ plans: { dbx_gemini: { fail: true } } });
       const stt = createSttProvider({ config: ipcSttConfig(ASR_ON) });
-      expect(stt.sttUse()).toEqual({ provider: 'local_parakeet', model: '' });
+      expect(stt.sttUse(MOG)).toEqual({ provider: 'local_parakeet', model: '' });
       await stt.transcribe(seg, tags);
-      expect(stt.sttUse()).toEqual({
+      expect(stt.sttUse(MOG)).toEqual({
         provider: 'local_parakeet',
         model: 'parakeet-tdt-0.6b-v3-int8',
+      });
+      // Another MOG has no transcript yet: it shows the selected provider, not this one.
+      expect(stt.sttUse('00000000-0000-4000-8000-0000000000ff')).toEqual({
+        provider: 'dbx_gemini',
+        model: DEFAULT_ASR_MODEL,
       });
       expect(callsTo(core.invoke.mock.calls, ['dbx_http', 'model_invoke'])).toEqual([]);
     });

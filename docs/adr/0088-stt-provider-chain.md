@@ -41,10 +41,10 @@ leave these points open:
    With the opt-in: `dbx_gemini (hedged) → local_parakeet → dbx_whisper (if configured) →
    failure`. A rejection, a reply for another segment or provider, or an empty cloud text is a
    failed step. An empty local text is a valid "no speech" result. Local Parakeet runs at most once
-   in a chain. Offline (an injected `NetworkStatus`, ARC-F7) removes the cloud steps.
+   in a chain. Offline (an injected `NetworkStatus`, ARC-F7) removes the cloud steps; the brain passes it once #466 gives the `net.status` source.
 5. **Hedge** (CAP-59a, CAP-59b). The ASR call starts at once. If it has not replied in 1.2 s, the
    local decode of the same segment starts. A cloud failure before 1.2 s starts the local decode
-   at once. The first valid result wins; a late reply changes nothing. The host cannot cancel a
+   at once. The first valid result wins; a late reply changes nothing. An empty local result ("no speech") wins only when the cloud call fails, so it never hides cloud text. The host cannot cancel a
    call, so the loser's result is dropped.
 6. **Languages** (CAP-64a, CAP-64b, D59). Parakeet TDT 0.6B v3 covers 25 languages: bg, hr, cs,
    da, nl, en, et, fi, fr, de, el, hu, it, lv, lt, mt, pl, pt, ro, sk, sl, es, sv, ru, uk. T4
@@ -57,13 +57,13 @@ leave these points open:
 7. **Failures** (`SttFailure`). T4 rejects only with `SttFailure`: a fixed code
    (`could_not_transcribe`, `language_not_available`), the fixed user text and the segment ID.
    It holds no transcript text, no audio, no profile and no error detail. `retry()` runs the
-   chain again for 60 s after `could_not_transcribe` (at most 32 segments wait). R4 drops the
+   chain again for 60 s after `could_not_transcribe` (at most 32 segments wait). A second Retry while one runs gets the same result and starts no second chain. R4 drops the
    audio at once today, so a real Retry decode waits for #531.
 8. **Brain wiring** (`src/brain/stt-wiring.ts`). The capture lifecycle STT step shows the failure
    text as one blurb on the owner MOG's card and routes no text. So no empty transcript ends
    without a message. The Retry control is #60.
 9. **Badge source** (UX-38). `sttUse()` gives the provider and model of the last transcript, or
-   the selected provider before one. #374 sends it in the badges.
+   the selected provider before one, for each MOG. #374 sends it in the badges.
 
 ## Consequences
 
