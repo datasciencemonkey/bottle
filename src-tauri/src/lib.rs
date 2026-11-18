@@ -13,6 +13,7 @@ pub mod macos_panel;
 pub mod mcp_host;
 pub mod mog_config_host;
 pub mod mog_drag;
+pub mod rate_bucket_host;
 pub mod webview_media;
 pub mod window_host;
 pub mod windows;
@@ -132,6 +133,14 @@ pub fn run() {
         .manage(std::sync::Arc::new(
             mog_core::app_settings::AppSettings::default(),
         ))
+        // G-09a, ARC-F3 (#467, #138): the ONE rate bucket of the process.
+        // `rate_bucket.rs:4`: "R7 and R8 share one per process". Every R7 and R8 (and the
+        // future `model_invoke` and `dbx_http` callers, #511) takes it from app state.
+        .manage(rate_bucket_host::SharedRateBucket(std::sync::Arc::new(
+            mog_core::http_transport::rate_bucket::AimdBucket::new(std::sync::Arc::new(
+                mog_core::clock::SystemClock::new(),
+            )),
+        )))
         .invoke_handler(ipc::handler)
         // CAP-02b: every WebView denies mic, camera and other permission requests (#387).
         .on_permission_request(webview_media::on_permission_request)
