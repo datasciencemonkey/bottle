@@ -63,6 +63,63 @@ export const MEANING_CORPUS: readonly MeaningItem[] = [
     raw: 'please call extension 4417 after 2 pm',
     keep: ['4417', '2'],
   },
+  // Spoken numbers (#55 review): decimals with a scale, a digit read-out and ranges. The pre-pass
+  // must keep each of them in words, so `keep` is the spoken phrase.
+  {
+    id: 'spoken-1',
+    category: 'numbers',
+    raw: 'revenue was two point five million dollars',
+    keep: ['two point five million'],
+  },
+  {
+    id: 'spoken-2',
+    category: 'numbers',
+    raw: 'call me at five five five one two one two',
+    keep: ['five five five one two one two'],
+  },
+  {
+    id: 'spoken-3',
+    category: 'numbers',
+    raw: 'we need three to four hundred servers',
+    keep: ['three to four hundred'],
+  },
+  {
+    id: 'spoken-4',
+    category: 'numbers',
+    raw: 'version two point eleven ships next week',
+    keep: ['two point eleven'],
+  },
+  {
+    id: 'spoken-5',
+    category: 'numbers',
+    raw: 'one point two thousand rows failed',
+    keep: ['one point two thousand'],
+  },
+  {
+    id: 'spoken-6',
+    category: 'numbers',
+    raw: 'we hit nine point five thousand users or twenty or thirty more',
+    keep: ['nine point five thousand', 'twenty or thirty'],
+  },
+  // Compound ordinals (#55 review round 2): the run before an ordinal stays in words.
+  {
+    id: 'ordinal-1',
+    category: 'numbers',
+    raw: 'the launch is on the twenty first of june',
+    keep: ['twenty first'],
+  },
+  {
+    id: 'ordinal-2',
+    category: 'numbers',
+    raw: 'we finished in twenty first place',
+    keep: ['twenty first place'],
+  },
+  {
+    id: 'ordinal-3',
+    category: 'numbers',
+    raw: 'this is the one hundred and first release',
+    keep: ['one hundred and first'],
+  },
   {
     id: 'unit-1',
     category: 'units',

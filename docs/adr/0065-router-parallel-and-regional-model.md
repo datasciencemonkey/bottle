@@ -24,7 +24,8 @@ on main.
    for the other. The trace records the start and end of each call on the monotonic clock, with
    no text. The router call gets the 900 ms deadline of 8.1 step 5. TODO(#54).
 2. **Cleanup failure keeps the pre-pass text.** A rejected or empty cleanup result gives the
-   pre-pass text with `usedRaw=true` ("not cleaned", D69).
+   pre-pass text with `usedRaw=true` ("not cleaned", D69). Amended by ADR 0070: the mark is
+   `notCleaned=true`; `usedRaw=true` means the raw text (CAP-68).
 3. **The Genie question is the cleaned text.** The router `genie_question` replaces it only when
    `follow_up` is true and the rewrite is grounded in the cleaned text. An intent that does not
    ask (`dictation`, `context`, `command`, `noise`) gets an empty question, so UC1 ends at
