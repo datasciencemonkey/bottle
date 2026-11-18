@@ -74,6 +74,8 @@ export interface CardStack {
   setControls(owner: string, controls: ChipView[], onClick?: (id: string) => void): void;
   /** Remove the controls of `owner`. */
   clearControls(owner: string): void;
+  /** Send the current state again, for a card view that starts to listen late (#498). */
+  republish(): void;
   dispose(): void;
 }
 
@@ -221,6 +223,7 @@ export function createCardStack(
     clearControls(owner) {
       if (controls.delete(owner)) publish();
     },
+    republish: () => publish(),
     dispose() {
       cancel?.();
       cancel = undefined;
