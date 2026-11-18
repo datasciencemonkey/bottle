@@ -101,6 +101,25 @@ export const MEANING_CORPUS: readonly MeaningItem[] = [
     raw: 'we hit nine point five thousand users or twenty or thirty more',
     keep: ['nine point five thousand', 'twenty or thirty'],
   },
+  // Compound ordinals (#55 review round 2): the run before an ordinal stays in words.
+  {
+    id: 'ordinal-1',
+    category: 'numbers',
+    raw: 'the launch is on the twenty first of june',
+    keep: ['twenty first'],
+  },
+  {
+    id: 'ordinal-2',
+    category: 'numbers',
+    raw: 'we finished in twenty first place',
+    keep: ['twenty first place'],
+  },
+  {
+    id: 'ordinal-3',
+    category: 'numbers',
+    raw: 'this is the one hundred and first release',
+    keep: ['one hundred and first'],
+  },
   {
     id: 'unit-1',
     category: 'units',

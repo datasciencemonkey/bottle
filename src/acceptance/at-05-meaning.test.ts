@@ -34,7 +34,7 @@ function transcriptOf(payload: { args: ModelInvokeArgs }): string {
 
 /** A spoken number word: the corpus items with one are number cases too. */
 const NUMBER_WORD =
-  /\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|billion)\b/i;
+  /\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|billion|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\b/i;
 
 const cap = (t: string) => `${t.charAt(0).toUpperCase()}${t.slice(1)}`;
 
@@ -48,6 +48,12 @@ const MUTATIONS: ((t: string) => string)[] = [
   },
   function changeNumberWord(t) {
     return `${cap(t.replace(/\b(two|five|three|nine)\b/, (w) => ({ two: 'three', five: 'six', three: 'four', nine: 'eight' })[w] ?? w))}.`;
+  },
+  function changeOrdinal(t) {
+    return `${cap(t.replace(/\bfirst\b/, 'second'))}.`;
+  },
+  function digitizeOrdinal(t) {
+    return `${cap(t.replace(/\b(\w+) first\b/, '21st'))}.`;
   },
   function digitizeSpokenNumber(t) {
     return `${cap(t.replace(/\b(\w+) point (\w+)\b/, '2.5'))}.`;

@@ -84,6 +84,35 @@ describe('cleanup pre-pass (glossary "pre-pass": fillers, dictionary, numerals)'
     }
   });
 
+  it('[CAP-66a] [CAP-68] never converts a number run before an ordinal', () => {
+    for (const t of [
+      'the twenty first of june',
+      'twenty first place',
+      'one hundred and first',
+      'the thirty second floor',
+      'the two hundredth order',
+    ]) {
+      expect(spokenNumeralsToDigits(t), t).toBe(t);
+    }
+  });
+
+  it('[CAP-66a] [CAP-68] the self-check counts ordinal words', () => {
+    // A dictionary entry that writes an ordinal as digits is a number change: the raw text stays.
+    expect(prepass('um take the first row', { dictionary: [{ from: 'first', to: '1st' }] })).toBe(
+      'um take the first row',
+    );
+  });
+
+  it('[CAP-66a] [CAP-68] keeps a comma list, a number after a currency word, and a run split by a filler in words', () => {
+    expect(spokenNumeralsToDigits('twenty, thirty, forty')).toBe('twenty, thirty, forty');
+    expect(spokenNumeralsToDigits('it costs a dollar fifty')).toBe('it costs a dollar fifty');
+    expect(spokenNumeralsToDigits('it costs a euro twenty')).toBe('it costs a euro twenty');
+    expect(prepass('twenty uh five rows')).toBe('twenty five rows');
+    expect(prepass('twenty uh, five rows')).toBe('twenty five rows');
+    // A plain run still converts.
+    expect(prepass('um twenty five rows')).toBe('25 rows');
+  });
+
   it('[CAP-66a] [CAP-68] never converts a number in a range or a list', () => {
     for (const t of [
       'we need three to four hundred servers',

@@ -43,6 +43,18 @@ describe('Table CAP-CHECK cleanup checks', () => {
     ).toContain('number');
   });
 
+  it('[CAP-68] an ordinal that goes or changes fails the number check', () => {
+    expect(
+      failedChecks('the launch is on the twenty first of june', 'The launch is on June 20.'),
+    ).toContain('number');
+    expect(
+      failedChecks('meet on the twenty first of june', 'Meet on the twenty second of June.'),
+    ).toContain('number');
+    expect(
+      failedChecks('meet on the twenty first of june', 'Meet on the twenty first of June.'),
+    ).toEqual([]);
+  });
+
   it('[CAP-68] an entity that changes, appears or goes fails the entity check', () => {
     expect(
       failedChecks('ask Priya to review the forecast', 'Ask Maria to review the forecast.'),
