@@ -29,6 +29,8 @@ export interface Rig {
   journal: ReturnType<typeof createMemoryPollJournal>;
   /** Every `mcp_call` the actor sent, with sim start and end times. */
   sent: { args: McpCallArgs; start: number; end: number }[];
+  /** The fake `mcp_call` (#33: the bridge sends its `genie_ask` through it too). */
+  call: (args: McpCallArgs) => Promise<McpCallReply>;
   ask(): Promise<PollTarget>;
 }
 
@@ -40,6 +42,8 @@ export function rig(
     pollMs?: number;
     /** Replace the reply of poll number `n` (1-based) with a rejection. */
     reject?: (n: number) => unknown;
+    /** Replace the reply of `genie_ask` number `n` (1-based) with a rejection. */
+    rejectAsk?: (n: number) => unknown;
   } = {},
 ): Rig {
   const sched = createSimScheduler();
@@ -53,12 +57,17 @@ export function rig(
   const journal = createMemoryPollJournal();
   const sent: Rig['sent'] = [];
   let polls = 0;
+  let asks = 0;
   const call = async (args: McpCallArgs): Promise<McpCallReply> => {
     const row = { args, start: sched.clock.now(), end: sched.clock.now() };
     sent.push(row);
     try {
       if (args.tool === 'genie_poll_response') {
         const bad = opts.reject?.(++polls);
+        if (bad !== undefined) throw bad;
+      }
+      if (args.tool === 'genie_ask') {
+        const bad = opts.rejectAsk?.(++asks);
         if (bad !== undefined) throw bad;
       }
       return await double.call(args.tool, args.args);
@@ -80,6 +89,7 @@ export function rig(
     cm,
     journal,
     sent,
+    call,
     async ask() {
       const a = await double.call('genie_ask', { question: 'What was revenue last quarter?' });
       const s = a.structuredContent as { conversation_id: string; response_id: string };

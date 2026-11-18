@@ -70,3 +70,6 @@ antigravity-bricks-plugin @ a31fd2c (MIT).
 - `submit` (#33) and the ARC-F2 conversation queue (#148) build on `sendGenieAsk` and
   `toFailedEvent`. Polling (#31) can use `classifyMcpReply` for a failed poll.
 - W-14 (#42) can reuse `userTextFor` for the Table W-ERR texts.
+
+- Amended by ADR 0084 (#33): the countdown text shows 300 s or less, and a RATE_LIMITED ask
+  that reaches the brain is final, with no countdown and a [Retry] action.

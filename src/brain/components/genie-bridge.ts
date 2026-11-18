@@ -18,16 +18,26 @@ import type {
   OperationState,
   ProfileName,
 } from '../../shared/interfaces';
+import { call as ipcCall } from '../../shared/ipc';
+import { createAuditLog, sha256Hex, textSizes, type AuditLogClient } from '../audit-log';
 import { NotImplementedError } from '../errors';
 import {
-  classifyGenieError,
-  classifyMcpReply,
-  classifyTransportCode,
-  toFailedEvent,
-  userTextFor,
-} from './genie-errors';
+  createClarifyFollowUps,
+  faultsAsFailed,
+  oneTerminal,
+  pollEvents,
+  type ClarifyFollowUps,
+} from './ask-events';
 import { createConversationManager, type ConversationManager } from './conversation-manager';
-import { ipcErrorCode, type PollOutcome, type PollUpdate } from './poll-actor';
+import {
+  classifyGenieError,
+  finalAskFailure,
+  sendGenieAsk,
+  toFailedEvent,
+  classifyTransportCode,
+  type Gl5Context,
+} from './genie-errors';
+import type { McpCaller } from './poll-actor';
 
 const C = 'GenieBridge';
 
@@ -54,6 +64,19 @@ export class BackendNotAvailableError extends Error {
   }
 }
 
+/** The seams of the Genie One MCP backend. Tests give the #229 double and a sim clock. */
+export interface GenieOneMcpDeps {
+  /** One `mcp_call` to the Rust core. Default: the IPC `call`. */
+  call?: McpCaller;
+  /** Epoch milliseconds, on the clock of the PollActor (`PollTarget.askedAt`). */
+  now?: () => number;
+  /**
+   * The workspace host of a profile, for the texts and the journal. TODO(#17): ProfileService
+   * gives it. Without it the texts say "this workspace".
+   */
+  hostOf?: (profile: ProfileName) => string | undefined;
+}
+
 /**
  * The `genie_one_mcp` backend (G-02). Rust R8 sends every call to
  * `https://<host>/ai-gateway/mcp-services/system.ai.genie_one_mcp?o=<workspace_id>`
@@ -62,23 +85,33 @@ export class BackendNotAvailableError extends Error {
 export class GenieOneMcpBackend implements MogBackend {
   readonly kind = 'genie_one_mcp' as const;
   readonly #conversations: ConversationManager | undefined;
+  readonly #deps: GenieOneMcpDeps;
 
-  constructor(conversations?: ConversationManager) {
+  constructor(conversations?: ConversationManager, deps: GenieOneMcpDeps = {}) {
     this.#conversations = conversations;
+    this.#deps = deps;
   }
   probe(
     _profile: ProfileName,
   ): Promise<'ready' | 'login_needed' | 'genie_one_off' | 'no_grant' | 'network_blocked'> {
     throw new NotImplementedError('GenieOneMcpBackend', 'probe', 30); // TODO(#30)
   }
-  ask(_req: AskRequest, _signal: AbortSignal): AsyncIterable<AskEvent> {
-    throw new NotImplementedError('GenieOneMcpBackend', 'ask', 33); // TODO(#33)
+  /**
+   * #33 (ADR 0084): send one `genie_ask` and poll it to one terminal event. The caller calls
+   * this only after a user action (B1; the preview gate is #142). It never asks again (G-15b).
+   */
+  ask(req: AskRequest, signal: AbortSignal): AsyncIterable<AskEvent> {
+    // G-21b: each backend ends each request in exactly one terminal event.
+    return oneTerminal(faultsAsFailed(askEvents(req, signal, this.#cm(), this.#deps)));
   }
   resume(ref: ExchangeRef): AsyncIterable<AskEvent> {
-    return resumePolls(ref, this.#conversations ?? createConversationManager());
+    return resumePolls(ref, this.#cm());
   }
   cancel(_ref: ExchangeRef): Promise<void> {
     throw new NotImplementedError('GenieOneMcpBackend', 'cancel', 151); // TODO(#151)
+  }
+  #cm(): ConversationManager {
+    return this.#conversations ?? createConversationManager();
   }
 }
 
@@ -93,10 +126,6 @@ export class ResumeRefusedError extends Error {
   }
 }
 
-function progressSteps(v: unknown): string[] | null {
-  return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : null;
-}
-
 /**
  * `MogBackend.resume` for Genie One MCP (#31, ARC-F10, MOG-11a): poll the journaled ask again
  * with its original IDs, on the PollActor. It never sends `genie_ask`.
@@ -109,77 +138,151 @@ async function* resumePolls(ref: ExchangeRef, cm: ConversationManager): AsyncGen
   // A conversation stays in its workspace: resume only on the profile that asked.
   if (target.profile !== ref.profile || target.host !== ref.host)
     throw new ResumeRefusedError('other_profile');
-  const ctx = { host: target.host };
-  const polls = cm.poll(target);
-  for (;;) {
-    let r: IteratorResult<PollUpdate, PollOutcome>;
-    try {
-      r = await polls.next();
-    } catch (e) {
-      // An R8 refusal ends the loop (the IDs stay in the journal). G-14: classify the code;
-      // the retry is a user action, never an automatic ask.
-      const code = ipcErrorCode(e);
-      if (code === undefined) throw e;
-      yield toFailedEvent(classifyTransportCode(code, ctx));
-      return;
-    }
-    if (r.done) {
-      const o = r.value;
-      if (o.kind === 'terminal' && o.status !== 'failed') {
-        // TODO(#33): normalise the answer (key numbers); TODO(#87): the fallback deep link and
-        // the query item merge of every poll.
-        yield {
-          t: 'answer',
-          md: typeof o.result.final_answer === 'string' ? o.result.final_answer : '',
-          incomplete: o.status === 'incomplete',
-          keyNumbers: [],
-          deepLink: typeof o.result.deep_link === 'string' ? o.result.deep_link : '',
-          queryItems: Array.isArray(o.result.query_items)
-            ? (o.result.query_items as { item_id?: unknown; sql?: unknown }[])
-                .filter((q) => typeof q?.item_id === 'string')
-                .map((q) => ({
-                  itemId: q.item_id as string,
-                  sql: typeof q.sql === 'string' ? q.sql : null,
-                }))
-            : [],
-        };
-      } else if (o.kind === 'gave_up') {
-        yield { t: 'abandoned' }; // TODO(#149): the late re-polls at +15 and +60 min.
-      } else if (o.kind === 'error') {
-        // G-14: an isError reply goes through the GL-5 matrix. Upstream text never shows.
-        const failed = classifyMcpReply(o.reply, ctx) ?? classifyTransportCode('bad_reply', ctx);
-        yield toFailedEvent(failed);
-      } else if (o.kind === 'terminal') {
-        // Genie status `failed`.
-        yield {
-          t: 'failed',
-          code: 'GENIE_FAILED',
-          userText: userTextFor('GENIE_FAILED', ctx),
-          retry: 'user',
-        };
-      }
-      return;
-    }
-    if (
-      r.value.status !== 'completed' &&
-      r.value.status !== 'incomplete' &&
-      r.value.status !== 'failed'
-    )
-      yield {
-        t: 'progress',
-        steps: progressSteps(r.value.result.progress_steps),
-        elapsedMs: r.value.elapsedMs,
-      };
+  // G-21b: one terminal event (#33, ADR 0084).
+  yield* oneTerminal(pollEvents(target, cm, { host: target.host }));
+}
+
+/** The Genie One ask path of `GenieOneMcpBackend.ask` (#33, ADR 0084). */
+async function* askEvents(
+  req: AskRequest,
+  signal: AbortSignal,
+  cm: ConversationManager,
+  deps: GenieOneMcpDeps,
+): AsyncGenerator<AskEvent> {
+  const { binding } = req;
+  if (binding.kind !== 'genie_one_mcp') {
+    yield toFailedEvent(classifyTransportCode('not_implemented'));
+    return;
   }
+  const { profile } = binding;
+  const host = deps.hostOf?.(profile) ?? '';
+  const ctx: Gl5Context = host ? { host } : {};
+  const call = deps.call ?? ((args) => ipcCall('mcp_call', args));
+  const now = deps.now ?? Date.now;
+  const args: Record<string, unknown> = { question: req.question };
+  if (req.conversationId) args.conversation_id = req.conversationId;
+  // G-15b: one send; no failure sends it again. G-07a: no `meta` on the ask either.
+  const sent = await sendGenieAsk(
+    (tool, a) =>
+      call({
+        profile,
+        server: 'genie_one',
+        tool,
+        args: a as McpCallArgsJson,
+        opId: req.opId,
+        tags: req.tags,
+      }),
+    args,
+    ctx,
+  );
+  if (sent.t === 'failed') {
+    yield finalAskFailure(sent);
+    return;
+  }
+  const askedAt = now();
+  yield sent;
+  yield* pollEvents(
+    {
+      opId: req.opId,
+      mogId: req.mogId,
+      profile,
+      host,
+      conversationId: sent.conversationId,
+      responseId: sent.responseId,
+      askedAt,
+    },
+    cm,
+    ctx,
+    signal,
+  );
+}
+
+type McpCallArgsJson = Parameters<McpCaller>[0]['args'];
+
+/** The seams of the bridge. Tests give the #229 double, a sim clock and a fake audit log. */
+export interface GenieBridgeDeps extends GenieOneMcpDeps {
+  conversations?: ConversationManager;
+  followUps?: ClarifyFollowUps;
+  /**
+   * SEC-23 (ADR 0059): the content-free `ask` entry of each accepted ask. Default: the
+   * `audit_append` IPC client. TODO(#442): `audit_append` carries the hashes.
+   */
+  audit?: AuditLogClient;
 }
 
 export class GenieBridgeStub implements GenieBridge {
+  readonly #deps: GenieBridgeDeps;
+  readonly #followUps: ClarifyFollowUps;
+  readonly #auditLog: AuditLogClient;
+
+  constructor(deps: GenieBridgeDeps = {}) {
+    this.#deps = deps;
+    this.#followUps = deps.followUps ?? createClarifyFollowUps();
+    this.#auditLog = deps.audit ?? createAuditLog();
+  }
+
   backendFor(b: BackendBinding): MogBackend {
-    if (b.kind === 'genie_one_mcp') return new GenieOneMcpBackend();
+    if (b.kind === 'genie_one_mcp')
+      return new GenieOneMcpBackend(this.#deps.conversations, this.#deps);
     throw new BackendNotAvailableError(b.kind); // v1: #156 (genie_agent), #158 (custom_agent)
   }
-  submit(_req: AskRequest): { opId: string; events: AsyncIterable<AskEvent> } {
-    throw new NotImplementedError(C, 'submit', 33); // TODO(#33)
+  /**
+   * #33 (ADR 0084): one request, one terminal event (G-21b). The ask is sent when the caller
+   * reads the events, and the caller calls `submit` only after a user action (B1, #142).
+   * TODO(#39): the OperationTracker states. TODO(#151): cancel aborts the signal.
+   */
+  submit(req: AskRequest): { opId: string; events: AsyncIterable<AskEvent> } {
+    return { opId: req.opId, events: oneTerminal(this.#submitEvents(req)) };
+  }
+  async *#submitEvents(req: AskRequest): AsyncGenerator<AskEvent> {
+    const now = this.#deps.now ?? Date.now;
+    // TODO(#152): the ContextGate approval of the preamble. Until then nothing with a preamble
+    // goes to Genie (B1, AT-08).
+    if (req.preamble) {
+      yield toFailedEvent(classifyTransportCode('tool_not_allowed'));
+      return;
+    }
+    let backend: MogBackend;
+    try {
+      backend = this.backendFor(req.binding);
+    } catch {
+      yield toFailedEvent(classifyTransportCode('not_implemented'));
+      return;
+    }
+    const profile = req.binding.profile;
+    // G-22: the answer to a clarify question goes to the same conversation in 5 min.
+    const followUp = this.#followUps.take(req.mogId, profile, now());
+    const ask: AskRequest =
+      req.conversationId || !followUp ? req : { ...req, conversationId: followUp };
+    let conversationId: string | undefined;
+    try {
+      for await (const e of backend.ask(ask, new AbortController().signal)) {
+        if (e.t === 'accepted') {
+          conversationId = e.conversationId;
+          void this.#audit(ask);
+        }
+        if (e.t === 'needs_input' && e.kind === 'clarify' && conversationId)
+          this.#followUps.note(req.mogId, { conversationId, profile }, now());
+        yield e;
+      }
+    } catch {
+      // G-21b: a fault still ends the request in one failed event, with no upstream text.
+      yield toFailedEvent(classifyTransportCode('host_failed'));
+    }
+  }
+  /** SEC-23: kind, MOG, op, sizes and the hash of the sent text. Never the text itself. */
+  async #audit(req: AskRequest): Promise<void> {
+    try {
+      await this.#auditLog.record({
+        kind: 'ask',
+        mogId: req.mogId,
+        opId: req.opId,
+        sizes: { question_chars: textSizes(req.question).chars },
+        hashes: { sent: await sha256Hex(req.question) },
+      });
+    } catch {
+      // A failed audit write never stops the ask.
+    }
   }
   operations(_mogId?: MogId): { opId: string; state: OperationState }[] {
     throw new NotImplementedError(C, 'operations', 39); // TODO(#39)
@@ -200,6 +303,6 @@ export class GenieBridgeStub implements GenieBridge {
   }
 }
 
-export function createGenieBridge(): GenieBridge {
-  return new GenieBridgeStub();
+export function createGenieBridge(deps: GenieBridgeDeps = {}): GenieBridge {
+  return new GenieBridgeStub(deps);
 }

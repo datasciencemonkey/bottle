@@ -257,6 +257,15 @@ const RETRY: Readonly<Record<BackendErrorCode, RetryKind>> = {
   CLI_MISSING: 'none',
 };
 
+/**
+ * The most `retry_after` seconds a countdown text shows (the #32 review follow-up). R8 holds a
+ * profile for 300 s or less (ADR 0075), so a longer value never waits longer than this.
+ */
+export const RETRY_AFTER_TEXT_CAP_S = 300;
+
+/** The text of an ask that R8 stopped on RATE_LIMITED after its tries (ADR 0075, ADR 0084). */
+export const RATE_LIMITED_FINAL_TEXT = 'Genie is busy. Try again in a minute.';
+
 const PLAIN_HOST = /^[a-z0-9](?:[a-z0-9-]{0,62}\.)*[a-z0-9-]{1,63}(?::\d{1,5})?$/i;
 
 function hostText(ctx: Gl5Context): string | undefined {
@@ -288,7 +297,7 @@ export function userTextFor(
       return 'Genie is still answering your last question here.';
     case 'RATE_LIMITED':
       return retryAfterS !== undefined
-        ? `Genie busy, retrying in ${Math.ceil(retryAfterS)} s`
+        ? `Genie busy, retrying in ${Math.min(Math.ceil(retryAfterS), RETRY_AFTER_TEXT_CAP_S)} s`
         : 'Genie busy, retrying soon';
     case 'PROXY_PAGE':
       return 'Genie sent a page that is not an answer. Check the VPN, the proxy or the sign-in.';
@@ -404,6 +413,19 @@ export function classifyMcpReply(r: McpCallReply, ctx: Gl5Context = {}): Gl5Resu
 /** The failed AskEvent of a GL-5 result. */
 export function toFailedEvent(r: Gl5Result): Extract<AskEvent, { t: 'failed' }> {
   return { t: 'failed', code: r.code, userText: r.userText, retry: r.retry };
+}
+
+/**
+ * The failed event of an ask that R8 has stopped (#33, ADR 0084). R8 runs the RATE_LIMITED
+ * countdown and its 5 tries (ADR 0075), so a `rate_limited` that reaches the brain is final: the
+ * brain starts no second countdown. The card offers [Retry], a user action.
+ */
+export function finalAskFailure(
+  e: Extract<AskEvent, { t: 'failed' }>,
+): Extract<AskEvent, { t: 'failed' }> {
+  return e.code === 'RATE_LIMITED'
+    ? { t: 'failed', code: 'RATE_LIMITED', userText: RATE_LIMITED_FINAL_TEXT, retry: 'user' }
+    : e;
 }
 
 /** One `mcp_call` of a Genie One tool. A refused call rejects with an `IpcError`. */
