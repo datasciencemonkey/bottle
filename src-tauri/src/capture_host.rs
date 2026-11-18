@@ -8,9 +8,20 @@
 //!
 //! No audio, transcript or token is in any reply, event or log (CAP-01b): the replies and
 //! events hold only the capture state, lease IDs, MOG IDs, modes and stop reasons.
+//!
+//! **The level stream (CAP-16a, CAP-16b, #476, ADR 0067).** [`spawn_level_mic`] gives the
+//! [`MicDevice`] a `TeeSink` of the `LevelSink` and the PTT buffer. [`CaptureHost::with_levels`]
+//! builds the core with `LevelCaptureEvents`, so the [`LevelGate`] is open only while a capture
+//! records. `capture_subscribe` resolves its `onLevel` reference to a [`LevelOut`] (in the app a
+//! [`ChannelLevelOut`] on the brain webview, [`brain_level_resolver`]) and puts it in the gate.
+//! Only the dBFS number crosses IPC; no level value is logged. TODO(#475): a level carries no
+//! capture ID, so a late level can reach the next target MOG.
 
 use mog_core::app_settings::AppSettings;
-use mog_core::audio_device::{FailureLink, MicDevice};
+use mog_core::audio_device::level::{
+    LevelCaptureEvents, LevelGate, LevelOut, LevelSink, NoLevelOut, TeeSink,
+};
+use mog_core::audio_device::{FailureLink, FrameSink, MicDevice, MicHost};
 use mog_core::capture::{
     parse_lease, AudioDevice, AudioSource, CaptureCore, CaptureError, CaptureEvents,
     CaptureRequest, CaptureService, DeviceError, LeaseNo, Stopped,
@@ -18,7 +29,8 @@ use mog_core::capture::{
 use mog_core::clock::MonotonicClock;
 use mog_core::error::{CoreError, CoreResult};
 use mog_core::ipc::{
-    events, CaptureLeaseArgs, CaptureMode, CaptureStartArgs, CaptureSubscribeArgs, IpcError, MogId,
+    events, CaptureLeaseArgs, CaptureMode, CaptureStartArgs, CaptureSubscribeArgs, ChannelRef,
+    IpcError, MogId,
 };
 use mog_core::ipc_gateway::ipc_error_code;
 use mog_core::types::{CaptureState, CaptureStopped};
@@ -159,6 +171,96 @@ impl CaptureEvents for BrainCaptureEvents {
             let _ = (self.relay)(events::CAPTURE_STOPPED, payload);
         }
     }
+}
+
+// ---------- the level stream ----------
+
+/// Turns a `capture_subscribe` `onLevel` reference into the receiver of the levels. `None`:
+/// the reference does not resolve (for example the webview is gone).
+pub type LevelResolver = Arc<dyn Fn(&ChannelRef) -> Option<Arc<dyn LevelOut>> + Send + Sync>;
+
+/// A [`LevelOut`] over a Tauri `Channel`: each level crosses as one JSON number (CAP-01b).
+/// After a failed send it is dead and sends nothing more, so the audio thread does not retry
+/// a gone webview at 30 Hz. The next `capture_subscribe` replaces it.
+pub struct ChannelLevelOut {
+    channel: tauri::ipc::Channel<f32>,
+    dead: AtomicBool,
+}
+
+impl ChannelLevelOut {
+    /// Send the levels on `channel`.
+    pub fn new(channel: tauri::ipc::Channel<f32>) -> Self {
+        Self {
+            channel,
+            dead: AtomicBool::new(false),
+        }
+    }
+}
+
+impl LevelOut for ChannelLevelOut {
+    fn level(&self, dbfs: f32) {
+        if self.dead.load(Ordering::Relaxed) {
+            return;
+        }
+        // A failed send means the webview is gone. Nothing is logged (no level value in logs).
+        if self.channel.send(dbfs).is_err() {
+            self.dead.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
+/// The app resolver: the reference is a Channel of the `brain` webview. The gateway lets only
+/// the brain call `capture_subscribe` (ADR 0040), so the caller is that webview.
+pub fn brain_level_resolver<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> LevelResolver {
+    use std::str::FromStr;
+    use tauri::Manager;
+    let brain = crate::windows::WindowKind::Brain.label();
+    Arc::new(move |c: &ChannelRef| {
+        let id = tauri::ipc::JavaScriptChannelId::from_str(c.as_str()).ok()?;
+        let webview = app.get_webview_window(&brain)?;
+        let channel = id.channel_on(webview.as_ref().clone());
+        Some(Arc::new(ChannelLevelOut::new(channel)) as Arc<dyn LevelOut>)
+    })
+}
+
+/// The level parts of the host: the gate that the mic's `LevelSink` sends through, and the
+/// resolver of the `onLevel` reference.
+pub struct HostLevels {
+    gate: LevelGate,
+    resolve: LevelResolver,
+}
+
+impl HostLevels {
+    /// A closed gate with no receiver yet, and `resolve` for `capture_subscribe`.
+    pub fn new(resolve: LevelResolver) -> Self {
+        Self {
+            gate: LevelGate::new(Arc::new(NoLevelOut)),
+            resolve,
+        }
+    }
+
+    /// The gate. [`spawn_level_mic`] gives it to the mic's `LevelSink`.
+    pub fn gate(&self) -> &LevelGate {
+        &self.gate
+    }
+}
+
+/// Start the mic over `make_host`. Its frames go to a `TeeSink`: first the `LevelSink` on
+/// `gate` (CAP-16a), then `ptt` (the RAM-only PTT buffer, TODO(#21)).
+pub fn spawn_level_mic<H, F, B>(
+    make_host: F,
+    ptt: B,
+    gate: &LevelGate,
+) -> std::io::Result<(MicDevice, FailureLink)>
+where
+    H: MicHost,
+    F: FnOnce() -> H + Send + 'static,
+    B: FrameSink,
+{
+    MicDevice::spawn(
+        make_host,
+        Box::new(TeeSink(LevelSink::new(gate.clone()), ptt)),
+    )
 }
 
 // ---------- the cap timer ----------
@@ -390,21 +492,38 @@ pub struct CaptureHost {
     pause_seq: AtomicU64,
     /// Set by `shutdown`: no new lease after it.
     closed: AtomicBool,
+    levels: HostLevels,
 }
 
 impl CaptureHost {
     /// Build the core over `device` and `clock`, relay its events with `relay`, and start the
-    /// cap timer. No stream opens until a lease starts (MOG-09).
+    /// cap timer. No stream opens until a lease starts (MOG-09). This host has no level
+    /// stream: `capture_subscribe` checks its Channels and every level is dropped.
     pub fn new(
         device: Box<dyn AudioDevice>,
         clock: Arc<dyn MonotonicClock>,
         relay: BrainRelay,
     ) -> std::io::Result<Self> {
+        let none: LevelResolver = Arc::new(|_: &ChannelRef| Some(Arc::new(NoLevelOut) as _));
+        Self::with_levels(device, clock, relay, HostLevels::new(none))
+    }
+
+    /// As [`CaptureHost::new`], with the level stream of `levels` (CAP-16a, CAP-16b): the core
+    /// opens the level gate while a capture records, and `capture_subscribe` sets its receiver.
+    /// The mic device must send its frames through the same gate ([`spawn_level_mic`]).
+    pub fn with_levels(
+        device: Box<dyn AudioDevice>,
+        clock: Arc<dyn MonotonicClock>,
+        relay: BrainRelay,
+        levels: HostLevels,
+    ) -> std::io::Result<Self> {
         let owners: Arc<Mutex<LeaseOwners>> = Arc::default();
-        let sink = Arc::new(BrainCaptureEvents {
+        let brain = BrainCaptureEvents {
             relay,
             owners: Arc::clone(&owners),
-        });
+        };
+        // The gate closes before the brain sees a stop state (CAP-16b).
+        let sink = Arc::new(LevelCaptureEvents::new(brain, levels.gate.clone()));
         let service = Arc::new(CaptureCore::new(device, Arc::clone(&clock), sink));
         let timer = CapTimer::spawn(Arc::clone(&service) as Arc<dyn CaptureService>, clock)?;
         Ok(Self {
@@ -414,6 +533,7 @@ impl CaptureHost {
             panic_gen: AtomicU64::new(0),
             pause_seq: AtomicU64::new(0),
             closed: AtomicBool::new(false),
+            levels,
         })
     }
 
@@ -487,9 +607,15 @@ impl CaptureHost {
             }
             "capture_subscribe" => {
                 // The gateway checked both Channel references.
-                let _: CaptureSubscribeArgs = args_of(command, args)?;
-                // TODO(#23): keep the Channels and feed the level stream (and the partial
-                // text) into them. The core has no level or partial stream yet.
+                let a: CaptureSubscribeArgs = args_of(command, args)?;
+                // CAP-16a: the levels go to this `onLevel` Channel from now on. A later call
+                // (a brain reload) replaces it. TODO(#46): the partial text feeds `onPartial`.
+                let out = (self.levels.resolve)(&a.on_level).ok_or_else(|| {
+                    refused(IpcError::HostFailed {
+                        command: command.to_owned(),
+                    })
+                })?;
+                self.levels.gate.set_out(out);
                 Ok(json!({}))
             }
             _ => Err(refused(IpcError::NotImplemented {

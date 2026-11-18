@@ -15,9 +15,14 @@
 //! The Channel has one receiver, the brain. The brain sends each level only to the target MOG
 //! (`src/brain/level-stream.ts`), so other MOGs stay at level 0.
 //!
-//! TODO(#425): the host wraps the `capture_subscribe` `onLevel` [`ChannelRef`] in a
-//! [`LevelOut`], builds the [`CaptureCore`] with [`LevelCaptureEvents`], and gives the
-//! [`MicDevice`] a [`TeeSink`] of the [`LevelSink`] and the PTT buffer (TODO(#21)).
+//! The host (`src-tauri/src/capture_host.rs`, #476) wraps the `capture_subscribe` `onLevel`
+//! [`ChannelRef`] in a [`LevelOut`] and puts it in the gate with [`LevelGate::set_out`]. It
+//! builds the [`CaptureCore`] with [`LevelCaptureEvents`], and gives the [`MicDevice`] a
+//! [`TeeSink`] of the [`LevelSink`] and the PTT buffer (TODO(#21)).
+//!
+//! TODO(#475): a level frame carries no capture ID. So a level that the brain reads after the
+//! next capture's `capture.state` can reach the next target MOG. The contract change binds
+//! each frame to its capture.
 //!
 //! Handy (`src-tauri/src/audio_toolkit/audio/visualizer.rs` @ aca8985) draws an FFT spectrum
 //! for its overlay, not an RMS level, so no Handy code is used here.
@@ -79,6 +84,14 @@ pub trait LevelOut: Send + Sync + 'static {
     fn level(&self, dbfs: f32);
 }
 
+/// A [`LevelOut`] that drops every level: the receiver before the first `capture_subscribe`.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoLevelOut;
+
+impl LevelOut for NoLevelOut {
+    fn level(&self, _dbfs: f32) {}
+}
+
 struct GateShared {
     /// The send lock. `close` takes it, so it waits for a send in flight.
     send: Mutex<Arc<dyn LevelOut>>,
@@ -118,6 +131,13 @@ impl LevelGate {
     pub fn close(&self) {
         let _guard = self.lock();
         self.shared.open.store(false, Ordering::SeqCst);
+    }
+
+    /// Send the levels to `out` from now on, for example the `onLevel` Channel of a new
+    /// `capture_subscribe`. It waits for a send in flight, so no level goes to the old
+    /// receiver after it returns. It does not open or close the stream.
+    pub fn set_out(&self, out: Arc<dyn LevelOut>) {
+        *self.lock() = out;
     }
 
     /// The stream is open.

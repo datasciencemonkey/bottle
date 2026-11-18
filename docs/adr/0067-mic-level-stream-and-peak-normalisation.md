@@ -15,7 +15,7 @@ The issue leaves these points open:
 - The level of silence, because JSON has no `-Infinity`.
 - How the -3 dBFS normalisation treats silence, loud input and bad samples.
 
-The contract already has the `capture_subscribe` `onLevel: Channel<number>` and the `mog.level` event with `MicLevelFrame` (ADR 0040). PR #440 (#425) changes `capture.rs`, `types.rs`, the IPC files and the host. So this work is in new modules, and the host hookup is `TODO(#425)`.
+The contract already has the `capture_subscribe` `onLevel: Channel<number>` and the `mog.level` event with `MicLevelFrame` (ADR 0040). PR #440 (#425) changes `capture.rs`, `types.rs`, the IPC files and the host. So this work is in new modules. The host hookup came later in #476 (decision 7).
 
 ## Decisions
 
@@ -26,14 +26,21 @@ The contract already has the `capture_subscribe` `onLevel: Channel<number>` and 
 5. **Peak normalisation is a whole-segment gain.** `audio_device::normalize::normalize_peak` scales a segment so that its peak is -3 dBFS (CAP-20). Quiet input goes up, and loud input comes down. One gain keeps the shape. Digital silence stays silence (gain 1). There is no gain limit: CAP-20 sets the peak, and the VAD trim (#116, CAP-54b) keeps non-speech out of STT. A non-finite sample becomes 0 first, and the output is clamped to -1..1.
 6. **No Handy code.** Handy draws an FFT spectrum for its overlay (`audio_toolkit/audio/visualizer.rs` @ aca8985) and has no peak normaliser. Bottle needs one RMS number, so this is new code.
 
+7. **The host hookup (#476, amendment).** `install_capture` builds the level stream in three parts (`src-tauri/src/capture_host.rs`):
+   - `spawn_level_mic` gives `MicDevice` a `TeeSink`. The `LevelSink` gets each frame first, then the PTT buffer (`DiscardSink` until #21).
+   - `CaptureHost::with_levels` builds `CaptureCore` with `LevelCaptureEvents` over the brain event sink, so the gate follows `capture.state`.
+   - `capture_subscribe` resolves the `onLevel` reference to a `ChannelLevelOut` and puts it in the gate with `LevelGate::set_out`. The gate starts with `NoLevelOut`, so a level before the first subscribe is dropped. A later subscribe (a brain reload) replaces the receiver. `set_out` takes the send lock, so no level goes to the old Channel after it returns.
+   - The app resolver (`brain_level_resolver`) reads the reference on the `brain` webview. The gateway lets only the brain call `capture_subscribe`, so `src-tauri/src/ipc.rs` (a contract file) does not change.
+   - A reference that does not resolve (no brain webview) answers `host_failed`, and the earlier receiver stays.
+
 ## Consequences
 
 - The level stream and the normaliser work and are tested with synthetic tones. No real mic opens in the tests.
-- `startBrain` registers the `onLevel` Channel and the router. Until #425 routes `capture_subscribe`, the call fails and no level flows.
+- `startBrain` registers the `onLevel` Channel and the router. Since #476 a level from the mic reaches the target MOG end to end (`src-tauri/tests/level_host.rs`, `src/brain/level-wiring.test.ts`).
 - The brain now creates three Channels at start-up: the brain Channel and the two `capture_subscribe` Channels.
 
 ## Open work
 
-- `TODO(#425)`: the host wraps the `onLevel` `ChannelRef` in a `LevelOut`, builds `CaptureCore` with `LevelCaptureEvents`, and gives `MicDevice` a `TeeSink` of the `LevelSink` and the PTT buffer.
+- `TODO(#475)`: a level carries no capture ID. A level that the brain reads after the next capture's `capture:state` can reach the next target MOG. The contract change binds each level to its capture.
 - `TODO(#21)`, `TODO(#46)`: the PTT buffer and the segment pipeline call `normalize_peak` just before R4 reads a segment. The AT-40 test of that hand-off stays pending (`at_40_cap_20_segment_handed_to_r4_peaks_at_minus_3_dbfs`).
 - `TODO(#46)`: `onPartial` has no reader yet.
