@@ -6,7 +6,7 @@
 
 use bottle_lib::window_host::WindowLedger;
 use bottle_lib::window_host::{CardState, NativeWindowStyle, TauriWindowHost, WindowError};
-use bottle_lib::windows::{PanelLevel, WindowKind, CARD_HIDDEN_TTL, CARD_REAP_TICK};
+use bottle_lib::windows::{card_beside, PanelLevel, WindowKind, CARD_HIDDEN_TTL, CARD_REAP_TICK};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -50,7 +50,10 @@ fn mog_03a_card_is_a_key_capable_nonactivating_panel_at_floating_level() {
         p.full_screen_auxiliary,
         "the card shows over a fullscreen Space"
     );
-    assert!(!p.transparent, "the card paints its own background");
+    assert!(
+        p.transparent,
+        "#559: the card is transparent; the pop-up paints its own rounded shape"
+    );
 }
 
 // ---------- MOG-03b: the frontmost app stays ----------
@@ -711,3 +714,65 @@ fn arc_3_a_mog_gone_before_its_event_hands_its_card_to_be_destroyed() {
 // left Tauri's manager while the ledger still has it. The mock runtime drops a destroyed window
 // only inside `App::run`, which never returns, so a mock test cannot reach that branch. The
 // ledger tests above pin its decisions; the device check (#336) runs the real event loop.
+
+// ---------- #559: the pop-up window beside its MOG ----------
+
+#[test]
+fn issue_559_card_window_is_a_small_transparent_window_with_no_native_shadow() {
+    let spec = card().spec();
+    assert!(spec.transparent, "only the pop-up pixels paint");
+    assert!(
+        !spec.shadow,
+        "the pop-up draws its own shadow; a native one halos the window"
+    );
+    assert!(
+        spec.width <= 360 && spec.height <= 96,
+        "{}x{}",
+        spec.width,
+        spec.height
+    );
+}
+
+fn g(x: f64, y: f64, width: f64, height: f64) -> mog_core::ipc::Geometry {
+    mog_core::ipc::Geometry {
+        x,
+        y,
+        width,
+        height,
+    }
+}
+
+#[test]
+fn issue_559_card_sits_beside_the_mog_on_the_right_centred_on_it() {
+    let spec = card().spec();
+    let mog = g(100.0, 200.0, 160.0, 160.0);
+    let c = card_beside(&mog, Some(&g(0.0, 0.0, 1440.0, 900.0)));
+    assert_eq!(
+        (c.width, c.height),
+        (f64::from(spec.width), f64::from(spec.height))
+    );
+    assert!(
+        c.x >= mog.x + mog.width - 24.0 && c.x <= mog.x + mog.width,
+        "x {}",
+        c.x
+    );
+    assert_eq!(c.y, mog.y + (mog.height - c.height) / 2.0);
+}
+
+#[test]
+fn issue_559_card_goes_left_of_the_mog_at_the_right_edge_and_stays_on_screen() {
+    let screen = g(0.0, 0.0, 1440.0, 900.0);
+    let mog = g(1300.0, 860.0, 160.0, 160.0);
+    let c = card_beside(&mog, Some(&screen));
+    assert!(c.x + c.width <= mog.x + 24.0, "left of the MOG: x {}", c.x);
+    assert!(
+        c.y + c.height <= screen.y + screen.height,
+        "on screen: y {}",
+        c.y
+    );
+    let no_screen = card_beside(&mog, None);
+    assert!(
+        no_screen.x >= mog.x + mog.width - 24.0,
+        "no screen: the right side"
+    );
+}
