@@ -32,6 +32,7 @@ class Requirement:
     uc: str
     line: int
     verify_ats: set = field(default_factory=set)
+    criterion: str = ""
 
 
 @dataclass
@@ -110,7 +111,7 @@ def _requirement_row(doc, row, n):
     if len(row) != 8:
         doc.errors.append(f"line {n}: {rid}: expected 8 cells, found {len(row)}")
         return
-    _, pri, phase, req, _crit, verify, _src, uc = row
+    _, pri, phase, req, crit, verify, _src, uc = row
     if pri not in PRIORITIES:
         doc.errors.append(f"line {n}: {rid}: priority {pri!r} is not M, S or C")
         return
@@ -121,7 +122,7 @@ def _requirement_row(doc, row, n):
         doc.errors.append(f"line {n}: {rid}: duplicate ID (first at line {doc.requirements[rid].line})")
         return
     doc.requirements[rid] = Requirement(rid, pri, phase, req, verify, uc, n,
-                                        set(re.findall(r"AT-\d+", verify)))
+                                        set(re.findall(r"AT-\d+", verify)), crit)
 
 
 def _link_row(doc, row, n):
