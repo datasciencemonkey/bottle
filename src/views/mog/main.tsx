@@ -1,4 +1,5 @@
 /** V2 MOG view entry. The MOG ID comes from the `mog-<id>` window label. */
+import '../tokens.css';
 import './mog.css';
 import { mount } from '../mount';
 import { ownMogId, viewMicLevels } from '../view-ipc';

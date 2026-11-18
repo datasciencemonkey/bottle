@@ -144,7 +144,10 @@ export function startBrain(): Brain {
       send: (t) => components.T15.send(t),
     });
     // TODO(#374): the card-hide signal calls `askGate.cardClosed`; none reaches the brain yet.
-    wireAskGate(bus, askGate, stackFor);
+    wireAskGate(bus, askGate, stackFor, {
+      // #559, UX-19b: a cancel with no preview hides the card (`window_card_hide`, R11).
+      hideCard: (mogId) => void call('window_card_hide', { mogId }).catch(() => undefined),
+    });
     // #498: the Copy card of a dictation. TODO(#507): the card view's `view_emit` `ready` calls
     // `dictation.cardReady(mogId)`, so a new card window gets the kept state.
     const dictation = createDictationSink({

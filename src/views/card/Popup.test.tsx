@@ -140,7 +140,8 @@ describe('#559 post-dictation pop-up', () => {
     await hover(popup(el)!, false);
     await advance(FADE_AFTER_MS - 1);
     expect(popup(el)!.getAttribute('data-state')).toBe('shown');
-    await advance(1 + FADE_OUT_MS);
+    await advance(1);
+    await advance(FADE_OUT_MS);
     expect(popup(el)).toBeNull();
   });
 
@@ -158,7 +159,8 @@ describe('#559 post-dictation pop-up', () => {
   it('[#559] a newer dictation shows the pop-up again after a fade', async () => {
     const { el } = await mountCard();
     await tauri.emit('card:update', asks);
-    await advance(FADE_AFTER_MS + FADE_OUT_MS);
+    await advance(FADE_AFTER_MS);
+    await advance(FADE_OUT_MS);
     expect(popup(el)).toBeNull();
     await tauri.emit('card:update', {
       ...asks,

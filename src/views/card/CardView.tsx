@@ -1,4 +1,7 @@
-/** V3 card view (thin): blurbs, chips and the expanded answer from `card.update`. */
+/**
+ * V3 card view (thin) from `card.update`. A small card is the #559 pop-up (`Popup.tsx`): one line
+ * and one action. A card with an answer, sections, a Page domain or a checklist is the panel.
+ */
 import { useCallback, useEffect, useState } from 'react';
 import type { MogId } from '../../shared/interfaces';
 import { DomainPicker } from '../DomainPicker';
@@ -9,6 +12,7 @@ import {
   type CardSection,
   type CardUpdate,
 } from '../view-ipc';
+import { Popup } from './Popup';
 
 /** The MOG ID of the debug demo card (`DEMO_ID` in `src-tauri/src/lib.rs`). */
 const DEMO_ID = 'demo';
@@ -179,8 +183,24 @@ export function CardView({ mogId }: { mogId: MogId }) {
   const hover = (blurbId: string, via: 'pointer' | 'focus', on: boolean) =>
     void emitView(mogId, 'hover', { blurbId, on, via });
   const historyCount = card?.historyCount ?? 0;
+  const probe = import.meta.env.DEV && mogId === DEMO_ID && (
+    <textarea data-probe aria-label="Typing probe (dev demo card)" />
+  );
+  const panel =
+    card !== undefined &&
+    (card.sections !== undefined ||
+      card.answerMd !== undefined ||
+      card.pageDomain !== undefined ||
+      card.pagesChecklist !== undefined);
+  if (!panel)
+    return (
+      <section aria-label="MOG card" className="card card-popup">
+        {card?.blurbs[0] && <Popup key={card.blurbs[0].id} mogId={mogId} card={card} />}
+        {probe}
+      </section>
+    );
   return (
-    <section aria-label="MOG card">
+    <section aria-label="MOG card" className="card card-panel">
       <ul aria-label="Answers">
         {card?.blurbs.map((b) => (
           <li
@@ -261,9 +281,7 @@ export function CardView({ mogId }: { mogId: MogId }) {
         </footer>
       )}
       {/* Dev builds only: a field for the typing and IME check of #78 (tools/mac/card-check.swift). */}
-      {import.meta.env.DEV && mogId === DEMO_ID && (
-        <textarea data-probe aria-label="Typing probe (dev demo card)" />
-      )}
+      {probe}
     </section>
   );
 }
