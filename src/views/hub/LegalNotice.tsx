@@ -8,9 +8,12 @@ import { LEGAL_NOTICE } from '../../shared/hub-notice';
 
 export function LegalNotice({
   version,
+  storeError = false,
   onContinue,
 }: {
   version: number;
+  /** The brain could not record the click (#541): show the fixed message only. */
+  storeError?: boolean;
   onContinue: (version: number) => void;
 }) {
   const [checked, setChecked] = useState(false);
@@ -48,6 +51,7 @@ export function LegalNotice({
       <button type="button" disabled={!checked} onClick={() => onContinue(version)}>
         {LEGAL_NOTICE.continueLabel}
       </button>
+      {storeError && <p role="alert">{LEGAL_NOTICE.storeErrorText}</p>}
     </section>
   );
 }

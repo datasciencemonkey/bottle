@@ -22,10 +22,15 @@ export const HUB_NOTICE_EVENT = 'hub:notice';
  */
 export const HUB_SCOPE = 'hub';
 
-/** What the hub shows: the current version, and whether the user accepted it. */
+/**
+ * What the hub shows: the current version, and whether the user accepted it. `storeError` is set
+ * when the brain could not record a Continue click because the local store did not open (#541).
+ * The gate stays closed; the hub shows only `LEGAL_NOTICE.storeErrorText`, never the error.
+ */
 export interface HubNotice {
   version: number;
   accepted: boolean;
+  storeError?: true;
 }
 
 /** The hub notice actions, sent as `view_emit` kind `click` with mogId `HUB_SCOPE`. */
@@ -39,7 +44,9 @@ const isVersion = (v: unknown): v is number =>
 /** Shape check of a `hub:notice` payload. */
 export function asHubNotice(p: unknown): HubNotice | undefined {
   if (!isObj(p) || !isVersion(p['version']) || typeof p['accepted'] !== 'boolean') return undefined;
-  return { version: p['version'], accepted: p['accepted'] };
+  const n: HubNotice = { version: p['version'], accepted: p['accepted'] };
+  if (p['storeError'] === true) n.storeError = true;
+  return n;
 }
 
 /** Shape check of a hub notice action payload. */
@@ -91,4 +98,7 @@ export const LEGAL_NOTICE = {
   ],
   checkboxLabel: 'I read this notice. I will get consent before I record other people.',
   continueLabel: 'Continue',
+  /** Shown when the Continue click was not recorded (#541). Fixed text: no internal error. */
+  storeErrorText:
+    'Bottle could not open its local store. Restart Bottle; if this repeats, see Settings > Diagnostics.',
 } as const;

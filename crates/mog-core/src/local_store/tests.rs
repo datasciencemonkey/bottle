@@ -1547,3 +1547,88 @@ fn mem_01_an_update_or_replace_cannot_take_the_id_of_another_mogs_session() {
     assert_eq!(count(&s, "SELECT count(*) FROM session"), 2);
     assert!(insert_utterance(&s, "u-2", "sess-a", MOG_B, 1).is_err());
 }
+
+// #541: an unsigned or ad-hoc macOS build has no `keychain-access-groups` entitlement, so the data
+// protection keychain refuses it (a store gets -34018, a get gets -25300). The vault checks the
+// entitlement one time at creation. Entitled: only the data protection keychain, with no
+// fallback. Not entitled: only the login keychain. No error code picks the keychain, so a signed
+// build never reads a login item that another process of the same user planted. These tests use
+// the pure seams; they never call the real Keychain.
+mod keychain_target {
+    use super::super::key_vault::{
+        entitled_by, item_plan, target_for, ItemPlan, KeychainTarget, KEYCHAIN_ENTITLEMENTS,
+    };
+
+    #[test]
+    fn mem_08b_each_keychain_entitlement_counts_as_entitled() {
+        assert_eq!(
+            KEYCHAIN_ENTITLEMENTS,
+            &[
+                "keychain-access-groups",
+                "com.apple.application-identifier",
+                "com.apple.security.application-groups",
+            ]
+        );
+        for key in KEYCHAIN_ENTITLEMENTS {
+            assert!(entitled_by(|k| k == *key), "{key}");
+        }
+    }
+
+    #[test]
+    fn mem_08b_no_keychain_entitlement_is_not_entitled() {
+        assert!(!entitled_by(|_| false));
+        assert!(!entitled_by(|k| k == "com.apple.security.app-sandbox"));
+    }
+
+    #[test]
+    fn mem_08b_entitled_build_uses_only_the_data_protection_keychain() {
+        assert_eq!(target_for(true), KeychainTarget::DataProtection);
+    }
+
+    #[test]
+    fn mem_08b_unentitled_build_uses_only_the_login_keychain() {
+        assert_eq!(target_for(false), KeychainTarget::Login);
+    }
+
+    #[test]
+    fn mem_08b_data_protection_item_keeps_the_accessibility_class() {
+        assert_eq!(
+            item_plan(KeychainTarget::DataProtection),
+            ItemPlan {
+                data_protection_keychain: true,
+                access_control: true,
+                synchronizable: false,
+            }
+        );
+    }
+
+    #[test]
+    fn mem_08b_login_item_drops_the_data_protection_flag_and_never_syncs() {
+        assert_eq!(
+            item_plan(KeychainTarget::Login),
+            ItemPlan {
+                data_protection_keychain: false,
+                access_control: false,
+                synchronizable: false,
+            }
+        );
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn mem_08b_macos_vault_target_follows_the_entitlement() {
+    use super::key_vault::macos::KeychainVault;
+    use super::key_vault::KeychainTarget;
+    // Builds the vault only. It never calls the real Keychain.
+    assert_eq!(
+        KeychainVault::for_entitlement(true).target(),
+        KeychainTarget::DataProtection
+    );
+    assert_eq!(
+        KeychainVault::for_entitlement(false).target(),
+        KeychainTarget::Login
+    );
+    // The test binary is not signed with the entitlement, as a `pnpm tauri dev` build.
+    assert_eq!(KeychainVault::bottle().target(), KeychainTarget::Login);
+}
