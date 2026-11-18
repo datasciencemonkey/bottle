@@ -17,10 +17,10 @@
 //!
 //! None of these calls needs the main thread, so `insert_text` can run on a worker.
 
-use super::{mac_keys, mac_snapshot_is_concealed, Focus, InsertHost, KeyStroke};
+use super::{mac_keys, mac_saved_item, mac_snapshot_is_concealed, Focus, InsertHost, KeyStroke};
 use crate::error::{CoreError, CoreResult};
-use crate::window_host::{ClipboardPlatform, ClipboardWriter, MacPasteboard};
-use objc2::rc::Retained;
+use crate::window_host::{ClipboardBackend, ClipboardPlatform, ClipboardWriter, MacPasteboard};
+use objc2::rc::{autoreleasepool, Retained};
 use objc2::runtime::ProtocolObject;
 use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSPasteboardWriting};
 use objc2_foundation::{NSArray, NSData, NSString};
@@ -35,12 +35,14 @@ type CFTypeRef = *const c_void;
 extern "C" {
     fn CFRelease(cf: CFTypeRef);
     fn CFEqual(a: CFTypeRef, b: CFTypeRef) -> u8;
+    fn CFHash(cf: CFTypeRef) -> usize;
 }
 
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     fn AXIsProcessTrusted() -> u8;
     fn AXUIElementCreateSystemWide() -> CFTypeRef;
+    fn AXUIElementGetPid(element: CFTypeRef, pid: *mut i32) -> i32;
     fn AXUIElementCopyAttributeValue(
         element: CFTypeRef,
         attribute: CFTypeRef,
@@ -59,6 +61,8 @@ extern "C" {
 
 const AX_SUCCESS: i32 = 0;
 const AX_NO_VALUE: i32 = -25212;
+/// `kAXErrorFailure`.
+const AX_FAILURE: i32 = -25200;
 /// `kCGEventSourceStatePrivate`: the events do not merge with the physical key state.
 const SOURCE_PRIVATE: i32 = -1;
 /// `kCGHIDEventTap`.
@@ -101,11 +105,31 @@ fn ax_attribute(element: CFTypeRef, attribute: &str) -> Result<Owned, i32> {
 /// The saved general pasteboard: each item with its (type, data) pairs.
 pub type MacSnapshot = Vec<Vec<(String, Vec<u8>)>>;
 
-/// The macOS [`InsertHost`].
-#[derive(Debug, Default, Clone, Copy)]
-pub struct MacInsertHost;
+/// The focused AX element of the system, or the AX error code.
+fn focused_element() -> Result<Owned, i32> {
+    // SAFETY: returns a new AXUIElement that `Owned` releases.
+    let system = Owned(unsafe { AXUIElementCreateSystemWide() });
+    if system.0.is_null() {
+        return Err(AX_FAILURE);
+    }
+    ax_attribute(system.0, "AXFocusedUIElement")
+}
 
-impl InsertHost for MacInsertHost {
+/// The macOS [`InsertHost`]. The clipboard write goes through `backend` (the general pasteboard
+/// in the app), so a test can check the SEC-30 types without a real pasteboard.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct MacInsertHost<B = MacPasteboard> {
+    backend: B,
+}
+
+impl<B: ClipboardBackend + Copy> MacInsertHost<B> {
+    /// A host that writes the clipboard through `backend`.
+    pub fn new(backend: B) -> Self {
+        Self { backend }
+    }
+}
+
+impl<B: ClipboardBackend + Copy> InsertHost for MacInsertHost<B> {
     type Snapshot = MacSnapshot;
 
     fn input_permitted(&self) -> bool {
@@ -114,12 +138,7 @@ impl InsertHost for MacInsertHost {
     }
 
     fn focus(&self) -> Focus {
-        // SAFETY: returns a new AXUIElement that `Owned` releases.
-        let system = Owned(unsafe { AXUIElementCreateSystemWide() });
-        if system.0.is_null() {
-            return Focus::Field;
-        }
-        let focused = match ax_attribute(system.0, "AXFocusedUIElement") {
+        let focused = match focused_element() {
             Ok(e) => e,
             Err(AX_NO_VALUE) => return Focus::Nothing,
             // The app has no usable AX tree: try the paste.
@@ -135,22 +154,38 @@ impl InsertHost for MacInsertHost {
         secure_input_or_field()
     }
 
-    fn snapshot_clipboard(&self) -> CoreResult<MacSnapshot> {
-        let pasteboard = NSPasteboard::generalPasteboard();
-        let Some(items) = pasteboard.pasteboardItems() else {
-            return Ok(Vec::new());
+    fn focus_target(&self) -> u64 {
+        let Ok(focused) = focused_element() else {
+            return 0;
         };
-        Ok(items
-            .to_vec()
-            .iter()
-            .map(|item| {
-                item.types()
-                    .to_vec()
-                    .iter()
-                    .filter_map(|ty| item.dataForType(ty).map(|d| (ty.to_string(), d.to_vec())))
-                    .collect()
-            })
-            .collect())
+        let mut pid = 0i32;
+        // SAFETY: `focused` is a live AXUIElement and `pid` an out pointer.
+        unsafe { AXUIElementGetPid(focused.0, &mut pid) };
+        // SAFETY: `focused` is a live CF object. CFHash agrees with CFEqual for AX elements.
+        let hash = unsafe { CFHash(focused.0) } as u64;
+        (u64::from(pid as u32) << 32) ^ hash
+    }
+
+    fn snapshot_clipboard(&self) -> CoreResult<MacSnapshot> {
+        // A worker thread has no autorelease pool of its own: drain the AppKit objects here.
+        autoreleasepool(|_| {
+            let pasteboard = NSPasteboard::generalPasteboard();
+            let Some(items) = pasteboard.pasteboardItems() else {
+                return Ok(Vec::new());
+            };
+            Ok(items
+                .to_vec()
+                .iter()
+                .map(|item| {
+                    mac_saved_item(
+                        item.types()
+                            .to_vec()
+                            .iter()
+                            .map(|ty| (ty.to_string(), item.dataForType(ty).map(|d| d.to_vec()))),
+                    )
+                })
+                .collect())
+        })
     }
 
     fn is_concealed(&self, snapshot: &MacSnapshot) -> bool {
@@ -158,11 +193,13 @@ impl InsertHost for MacInsertHost {
     }
 
     fn write_concealed(&self, text: &str) -> CoreResult<()> {
-        ClipboardWriter::new(MacPasteboard).write_text_for(ClipboardPlatform::MacOs, text)
+        autoreleasepool(|_| {
+            ClipboardWriter::new(self.backend).write_text_for(ClipboardPlatform::MacOs, text)
+        })
     }
 
     fn clipboard_mark(&self) -> u64 {
-        NSPasteboard::generalPasteboard().changeCount() as u64
+        autoreleasepool(|_| NSPasteboard::generalPasteboard().changeCount() as u64)
     }
 
     fn send_keys(&self, keys: &[KeyStroke]) -> CoreResult<()> {
@@ -190,6 +227,17 @@ impl InsertHost for MacInsertHost {
     }
 
     fn restore_clipboard(&self, snapshot: MacSnapshot) -> CoreResult<()> {
+        autoreleasepool(|_| restore_general_pasteboard(snapshot))
+    }
+
+    fn sleep(&self, d: Duration) {
+        std::thread::sleep(d);
+    }
+}
+
+/// Put `snapshot` back on the general pasteboard (an empty one clears it).
+fn restore_general_pasteboard(snapshot: MacSnapshot) -> CoreResult<()> {
+    {
         let pasteboard = NSPasteboard::generalPasteboard();
         pasteboard.clearContents();
         if snapshot.is_empty() {
@@ -214,10 +262,6 @@ impl InsertHost for MacInsertHost {
         } else {
             Err(CoreError::NotImplemented { component: ID })
         }
-    }
-
-    fn sleep(&self, d: Duration) {
-        std::thread::sleep(d);
     }
 }
 
@@ -276,7 +320,7 @@ mod tests {
 
     #[test]
     fn mog_06c_mac_host_sees_a_password_manager_secret() {
-        let host = MacInsertHost::default();
+        let host: MacInsertHost = MacInsertHost::default();
         let item = |types: &[&str]| -> Vec<(String, Vec<u8>)> {
             types
                 .iter()

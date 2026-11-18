@@ -17,7 +17,7 @@
 use crate::error::{CoreError, CoreResult};
 use crate::ipc::InsertTextArgs;
 use crate::ipc_gateway::GatewayComponents;
-use crate::window_host::ClipboardPlatform;
+use crate::window_host::{ClipboardFormat, ClipboardPlatform};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::{Mutex, PoisonError};
@@ -102,6 +102,22 @@ pub fn mac_snapshot_is_concealed<'a>(types: impl IntoIterator<Item = &'a str>) -
     types.into_iter().any(|t| MAC_CONCEALED_TYPES.contains(&t))
 }
 
+/// The saved (type, data) pairs of one macOS pasteboard item. A type with no readable data is
+/// left out, except a concealed or transient marker: it is kept with no data, so the secret
+/// check still sees it (ADR 0048, decision 12; as on Windows).
+pub fn mac_saved_item(
+    types: impl IntoIterator<Item = (String, Option<Vec<u8>>)>,
+) -> Vec<(String, Vec<u8>)> {
+    types
+        .into_iter()
+        .filter_map(|(ty, data)| match data {
+            Some(d) => Some((ty, d)),
+            None if MAC_CONCEALED_TYPES.contains(&ty.as_str()) => Some((ty, Vec::new())),
+            None => None,
+        })
+        .collect()
+}
+
 /// Windows: the format that keeps a clipboard monitor away from the content.
 pub const WIN_EXCLUDE_FROM_MONITOR: &str = "ExcludeClipboardContentFromMonitorProcessing";
 /// Windows: the `DWORD` format whose 0 keeps the content out of the clipboard history.
@@ -122,6 +138,13 @@ pub fn windows_snapshot_is_concealed<'a>(
         }
         _ => false,
     })
+}
+
+/// The order of the Windows clipboard write (ADR 0048, decision 8): the opt-out formats first,
+/// the text (`CF_UNICODETEXT`) last. If an opt-out fails, the close publishes no text.
+pub fn windows_write_order(formats: &[ClipboardFormat]) -> Vec<&ClipboardFormat> {
+    let (text, flags): (Vec<_>, Vec<_>) = formats.iter().partition(|f| f.name == "CF_UNICODETEXT");
+    flags.into_iter().chain(text).collect()
 }
 
 /// Windows edit-control constants (`WinUser.h`).
@@ -197,6 +220,9 @@ pub trait InsertHost: Send + Sync {
     fn input_permitted(&self) -> bool;
     /// What has the keyboard focus.
     fn focus(&self) -> Focus;
+    /// The identity of the focused element (macOS: the AX element and its app; Windows: the
+    /// focused window). It changes when the focus moves. 0 when nothing has the focus.
+    fn focus_target(&self) -> u64;
     /// Save the whole clipboard content (every item and type).
     fn snapshot_clipboard(&self) -> CoreResult<Self::Snapshot>;
     /// Whether the saved content is a concealed or transient item (a password manager secret).
@@ -220,6 +246,9 @@ impl<H: InsertHost> InsertHost for &H {
     }
     fn focus(&self) -> Focus {
         (**self).focus()
+    }
+    fn focus_target(&self) -> u64 {
+        (**self).focus_target()
     }
     fn snapshot_clipboard(&self) -> CoreResult<Self::Snapshot> {
         (**self).snapshot_clipboard()
@@ -264,6 +293,7 @@ pub fn insert_text<H: InsertHost>(
         Focus::SecureField => return Ok(InsertOutcome::SecureField),
         Focus::Field => {}
     }
+    let target = host.focus_target();
     let saved = host.snapshot_clipboard()?;
     // A password manager secret is not restored: the restore gives it a new change count, and the
     // manager's auto-clear then never fires. An empty snapshot leaves the clipboard empty.
@@ -279,6 +309,15 @@ pub fn insert_text<H: InsertHost>(
     }
     let ours = host.clipboard_mark();
     host.sleep(SETTLE_BEFORE_PASTE);
+    // The snapshot and the settle wait take time, and the chord goes to whatever has the focus
+    // then. Check again: if the focus moved, became a secure field or the permission went away,
+    // send no key and put the earlier clipboard back (ADR 0048, decision 14).
+    if let Some(refusal) = refusal_before_chord(host, target) {
+        if host.clipboard_mark() == ours {
+            host.restore_clipboard(saved)?;
+        }
+        return Ok(refusal);
+    }
     let chord = paste_chord(platform);
     let (press, release) = chord.split_at(chord.len() - 1);
     let pressed = host.send_keys(press);
@@ -294,6 +333,20 @@ pub fn insert_text<H: InsertHost>(
     };
     pressed.and(released).and(restored)?;
     Ok(InsertOutcome::Inserted)
+}
+
+/// The refusal when the target of the chord is not the field checked before the snapshot.
+fn refusal_before_chord<H: InsertHost>(host: &H, target: u64) -> Option<InsertOutcome> {
+    if !host.input_permitted() {
+        return Some(InsertOutcome::NoPermission);
+    }
+    match host.focus() {
+        Focus::Nothing => Some(InsertOutcome::NoFocus),
+        Focus::SecureField => Some(InsertOutcome::SecureField),
+        // Another field: the checked field lost the focus.
+        Focus::Field if host.focus_target() != target => Some(InsertOutcome::NoFocus),
+        Focus::Field => None,
+    }
 }
 
 /// The `insert_text` component behind the hardened gateway (ADR 0040, ADR 0048).
@@ -331,7 +384,7 @@ impl<H: InsertHost> GatewayComponents for InsertTextComponent<H> {
 #[cfg(target_os = "macos")]
 pub fn os_component() -> InsertTextComponent<MacInsertHost> {
     InsertTextComponent::new(
-        MacInsertHost,
+        MacInsertHost::default(),
         crate::window_host::current_clipboard_platform(),
     )
 }
@@ -340,7 +393,7 @@ pub fn os_component() -> InsertTextComponent<MacInsertHost> {
 #[cfg(windows)]
 pub fn os_component() -> InsertTextComponent<WindowsInsertHost> {
     InsertTextComponent::new(
-        WindowsInsertHost,
+        WindowsInsertHost::default(),
         crate::window_host::current_clipboard_platform(),
     )
 }

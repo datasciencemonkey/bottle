@@ -19,8 +19,9 @@
 //!   with `SendInput` and the virtual key `VK_V` (layout independent).
 
 use super::{
-    win_edit, windows_control_focus, windows_snapshot_is_concealed, Focus, InsertHost, KeyStroke,
-    WIN_CAN_INCLUDE_IN_HISTORY, WIN_CAN_UPLOAD_TO_CLOUD, WIN_EXCLUDE_FROM_MONITOR,
+    win_edit, windows_control_focus, windows_snapshot_is_concealed, windows_write_order, Focus,
+    InsertHost, KeyStroke, WIN_CAN_INCLUDE_IN_HISTORY, WIN_CAN_UPLOAD_TO_CLOUD,
+    WIN_EXCLUDE_FROM_MONITOR,
 };
 use crate::error::{CoreError, CoreResult};
 use crate::window_host::{ClipboardBackend, ClipboardFormat, ClipboardPlatform, ClipboardWriter};
@@ -147,18 +148,14 @@ pub struct WindowsClipboard;
 
 impl ClipboardBackend for WindowsClipboard {
     fn write(&self, formats: &[ClipboardFormat]) -> CoreResult<()> {
-        let ids = formats
-            .iter()
-            .map(|f| format_id(f.name))
+        // The opt-outs first, the text last: if an opt-out fails, the close publishes no text.
+        let ordered = windows_write_order(formats)
+            .into_iter()
+            .map(|f| format_id(f.name).map(|id| (id, f)))
             .collect::<CoreResult<Vec<_>>>()?;
         let open = Open::new()?;
         open.empty()?;
-        // The opt-outs first, the text last: if an opt-out fails, the close publishes no text.
-        let (text, flags): (Vec<_>, Vec<_>) = ids
-            .into_iter()
-            .zip(formats)
-            .partition(|(id, _)| *id == CF_UNICODETEXT);
-        for (id, f) in flags.into_iter().chain(text) {
+        for (id, f) in ordered {
             open.set(id, &f.data)?;
         }
         Ok(())
@@ -172,11 +169,41 @@ impl ClipboardBackend for WindowsClipboard {
 /// The saved clipboard: (format, bytes) for every memory format.
 pub type WindowsSnapshot = Vec<(u32, Vec<u8>)>;
 
-/// The Windows [`InsertHost`].
+/// The Windows [`InsertHost`]. The clipboard write goes through `backend` ([`WindowsClipboard`]
+/// in the app), so a test can check the SEC-30 formats without the real clipboard.
 #[derive(Debug, Default, Clone, Copy)]
-pub struct WindowsInsertHost;
+pub struct WindowsInsertHost<B = WindowsClipboard> {
+    backend: B,
+}
 
-impl InsertHost for WindowsInsertHost {
+impl<B: ClipboardBackend + Copy> WindowsInsertHost<B> {
+    /// A host that writes the clipboard through `backend`.
+    pub fn new(backend: B) -> Self {
+        Self { backend }
+    }
+}
+
+/// The window that has the keyboard focus: the focused control, else the foreground window.
+fn focused_window() -> Option<windows_sys::Win32::Foundation::HWND> {
+    // SAFETY: plain queries; `info` is a correctly sized out struct.
+    unsafe {
+        let window = GetForegroundWindow();
+        if window.is_null() {
+            return None;
+        }
+        let thread = GetWindowThreadProcessId(window, std::ptr::null_mut());
+        let mut info = GUITHREADINFO {
+            cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+            ..Default::default()
+        };
+        if thread == 0 || GetGUIThreadInfo(thread, &mut info) == 0 || info.hwndFocus.is_null() {
+            return Some(window);
+        }
+        Some(info.hwndFocus)
+    }
+}
+
+impl<B: ClipboardBackend + Copy> InsertHost for WindowsInsertHost<B> {
     type Snapshot = WindowsSnapshot;
 
     fn input_permitted(&self) -> bool {
@@ -184,6 +211,8 @@ impl InsertHost for WindowsInsertHost {
     }
 
     fn focus(&self) -> Focus {
+        // TODO(#409): browser and UWP password fields have no Win32 edit control. They need UI
+        // Automation (`IsPassword`); until then they get the paste.
         // SAFETY: plain queries; `info` is a correctly sized out struct.
         unsafe {
             let window = GetForegroundWindow();
@@ -216,6 +245,10 @@ impl InsertHost for WindowsInsertHost {
             );
             windows_control_focus(&class, style, password_char)
         }
+    }
+
+    fn focus_target(&self) -> u64 {
+        focused_window().map_or(0, |w| w as usize as u64)
     }
 
     fn snapshot_clipboard(&self) -> CoreResult<WindowsSnapshot> {
@@ -275,7 +308,7 @@ impl InsertHost for WindowsInsertHost {
     }
 
     fn write_concealed(&self, text: &str) -> CoreResult<()> {
-        ClipboardWriter::new(WindowsClipboard).write_text_for(ClipboardPlatform::Windows, text)
+        ClipboardWriter::new(self.backend).write_text_for(ClipboardPlatform::Windows, text)
     }
 
     fn clipboard_mark(&self) -> u64 {
@@ -339,7 +372,8 @@ enum ForegroundIntegrity {
     Unknown,
 }
 
-/// Fail open: when either level is unknown, Bottle pastes as usual (Handy `integrity_blocks_input`).
+/// Fail open only when a level is unknown; an access-denied query is `Denied` and blocks input
+/// (Handy `integrity_blocks_input`).
 fn integrity_blocks_input(foreground: ForegroundIntegrity, ours: Option<u32>) -> bool {
     match foreground {
         ForegroundIntegrity::Level(theirs) => ours.is_some_and(|ours| theirs > ours),
@@ -350,7 +384,7 @@ fn integrity_blocks_input(foreground: ForegroundIntegrity, ours: Option<u32>) ->
 
 fn foreground_window_is_elevated() -> bool {
     // SAFETY: the pseudo-handle of GetCurrentProcess needs no close.
-    let ours = unsafe { process_integrity_level(GetCurrentProcess()) };
+    let ours = unsafe { process_integrity_level(GetCurrentProcess()) }.ok();
     integrity_blocks_input(foreground_integrity(), ours)
 }
 
@@ -375,7 +409,18 @@ fn foreground_integrity() -> ForegroundIntegrity {
         }
         let level = process_integrity_level(process);
         CloseHandle(process);
-        level.map_or(ForegroundIntegrity::Unknown, ForegroundIntegrity::Level)
+        integrity_of_query(level)
+    }
+}
+
+/// The integrity of the foreground process from the token query: `Err` holds `GetLastError`.
+/// Access denied means a process elevated under another account: `Denied`, so the paste is
+/// refused and the MOG shows Copy (MOG-06d), as in Handy (`E_ACCESSDENIED`).
+fn integrity_of_query(query: Result<u32, u32>) -> ForegroundIntegrity {
+    match query {
+        Ok(level) => ForegroundIntegrity::Level(level),
+        Err(ERROR_ACCESS_DENIED) => ForegroundIntegrity::Denied,
+        Err(_) => ForegroundIntegrity::Unknown,
     }
 }
 
@@ -383,10 +428,10 @@ fn foreground_integrity() -> ForegroundIntegrity {
 ///
 /// # Safety
 /// `process` must be a valid handle with `PROCESS_QUERY_LIMITED_INFORMATION`.
-unsafe fn process_integrity_level(process: HANDLE) -> Option<u32> {
+unsafe fn process_integrity_level(process: HANDLE) -> Result<u32, u32> {
     let mut token: HANDLE = std::ptr::null_mut();
     if OpenProcessToken(process, TOKEN_QUERY, &mut token) == 0 {
-        return None;
+        return Err(GetLastError());
     }
     // A TOKEN_MANDATORY_LABEL and the SID it points to (68 bytes at most); u64 keeps it aligned.
     let mut buffer = [0u64; 16];
@@ -398,14 +443,16 @@ unsafe fn process_integrity_level(process: HANDLE) -> Option<u32> {
         std::mem::size_of_val(&buffer) as u32,
         &mut written,
     );
+    // Read the error before CloseHandle can change it.
+    let error = GetLastError();
     CloseHandle(token);
     if ok == 0 {
-        return None;
+        return Err(error);
     }
     // The level is the last sub-authority of the SID.
     let sid = (*buffer.as_ptr().cast::<TOKEN_MANDATORY_LABEL>()).Label.Sid;
     let count = u32::from(*GetSidSubAuthorityCount(sid));
-    Some(*GetSidSubAuthority(sid, count.saturating_sub(1)))
+    Ok(*GetSidSubAuthority(sid, count.saturating_sub(1)))
 }
 
 #[cfg(test)]
@@ -470,7 +517,7 @@ mod tests {
 
     #[test]
     fn mog_06c_windows_host_sees_a_password_manager_secret() {
-        let host = WindowsInsertHost::default();
+        let host: WindowsInsertHost = WindowsInsertHost::default();
         let id = |n: &str| format_id(n).unwrap();
         let text = (CF_UNICODETEXT, vec![b'p', 0, b'w', 0, 0, 0]);
         assert!(host.is_concealed(&vec![
