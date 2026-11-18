@@ -293,6 +293,24 @@ export const IPC_ERROR_CODES = [
   'genie_space_mcp_rejected',
   'genie_one_sse_rejected',
   'mcp_url_not_canonical',
+  /** `mcp_call` R8 failure codes (#30, ADR 0069) for the GL-5 mapper (#32, #479). */
+  'genie_one_off',
+  'auth_expired',
+  'rate_limited',
+  'non_json_reply',
+  'timeout',
+  'offline',
+  'host_refused',
+  'redirect_refused',
+  'reply_too_large',
+  'bad_reply',
+  'protocol_unsupported',
+  'tool_not_allowed',
+  'invalid_tool_args',
+  'invalid_meta',
+  'profile_invalid',
+  /** `mcp_call`: a poll is already open for the conversation (ARC-F1, G-07b, #31). */
+  'poll_inflight',
 ] as const;
 
 export type IpcErrorCode = (typeof IPC_ERROR_CODES)[number];

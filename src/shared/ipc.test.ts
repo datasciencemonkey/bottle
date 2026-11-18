@@ -110,6 +110,33 @@ describe('content-free IPC errors (#333, ADR 0040)', () => {
     expect(EVENTS['mog.level']).toEqual({ name: 'mog:level', direction: 'brain_to_view' });
   });
 
+  it('[G-05b] [G-14] [W-14] [SEC-05a] every R8 mcp_call failure code is an IpcErrorCode (#479)', () => {
+    const r8 = [
+      'genie_one_off',
+      'auth_expired',
+      'rate_limited',
+      'non_json_reply',
+      'timeout',
+      'offline',
+      'host_refused',
+      'redirect_refused',
+      'reply_too_large',
+      'bad_reply',
+      'protocol_unsupported',
+      'tool_not_allowed',
+      'invalid_tool_args',
+      'invalid_meta',
+      'profile_invalid',
+    ];
+    for (const code of r8) expect(IPC_ERROR_CODES).toContain(code);
+    const off: IpcError = { error: 'genie_one_off' };
+    expect(Object.keys(off)).toEqual(['error']);
+  });
+
+  it('[G-07b] [ARC-F1] [G-16c] poll_inflight is an IpcErrorCode (#479)', () => {
+    expect(IPC_ERROR_CODES).toContain('poll_inflight');
+  });
+
   it('[SEC-03] consent_storage_failed is a fixed IPC error code', () => {
     const failed: IpcError = { error: 'consent_storage_failed' };
     expect(IPC_ERROR_CODES).toContain(failed.error);

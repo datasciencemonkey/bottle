@@ -1709,7 +1709,23 @@
     "genie_beta_mcp_rejected",
     "genie_space_mcp_rejected",
     "genie_one_sse_rejected",
-    "mcp_url_not_canonical"
+    "mcp_url_not_canonical",
+    "genie_one_off",
+    "auth_expired",
+    "rate_limited",
+    "non_json_reply",
+    "timeout",
+    "offline",
+    "host_refused",
+    "redirect_refused",
+    "reply_too_large",
+    "bad_reply",
+    "protocol_unsupported",
+    "tool_not_allowed",
+    "invalid_tool_args",
+    "invalid_meta",
+    "profile_invalid",
+    "poll_inflight"
   ],
   "events": [
     {

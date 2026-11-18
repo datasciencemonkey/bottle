@@ -592,6 +592,45 @@ fn sec_03_a_component_code_outside_the_list_becomes_host_failed() {
 }
 
 #[test]
+fn g_05b_g_14_w_14_r8_codes_reach_the_window_as_themselves() {
+    // #479: the R8 codes that the GL-5 mapper names cross as themselves; an R8 internal code
+    // still crosses as `host_failed`.
+    for reason in [
+        "genie_one_off",
+        "auth_expired",
+        "rate_limited",
+        "non_json_reply",
+        "timeout",
+        "offline",
+        "host_refused",
+        "redirect_refused",
+        "reply_too_large",
+        "bad_reply",
+        "protocol_unsupported",
+        "tool_not_allowed",
+        "invalid_tool_args",
+        "invalid_meta",
+        "profile_invalid",
+        "poll_inflight",
+    ] {
+        assert_eq!(
+            rejection(&CoreError::Unavailable {
+                component: "R8",
+                reason,
+            }),
+            json!({ "error": reason })
+        );
+    }
+    assert_eq!(
+        rejection(&CoreError::Unavailable {
+            component: "R8",
+            reason: "transport_failed",
+        }),
+        json!({"error": "host_failed"})
+    );
+}
+
+#[test]
 fn sec_01_host_component_replies_are_scrubbed() {
     // The gateway's rule-7 scrub covers the host replies: a reply never carries a token.
     let fake = FakeHotkeys(

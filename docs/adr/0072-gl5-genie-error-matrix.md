@@ -60,6 +60,8 @@ antigravity-bricks-plugin @ a31fd2c (MIT).
 5. Gap: the Tauri host turns a code outside `ipc_gateway::ERROR_CODES` into `host_failed`, so
    the R8 codes do not reach the brain yet. Contract-change #479 adds them. Until it lands,
    `host_failed` maps to `GENIE_FAILED`. No contract file changes in #32.
+   Update (#479): the R8 codes, and `poll_inflight`, are now in `ERROR_CODES`, so they reach
+   the brain as themselves (ADR 0040 update).
 
 ## Consequences
 
