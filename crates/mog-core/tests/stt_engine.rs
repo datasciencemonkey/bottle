@@ -18,6 +18,7 @@ use mog_core::stt_engine::{
     residency, EnergyVad, EngineConfig, EngineParts, LocalStt, LocalSttEngine, PowerProbe,
     PowerSource, Recognizer, RecognizerLoader, Resampler, SegmentCutter, SegmentRule,
     SttCaptureEvents, SttDone, SttIdentity, TranscriptSink, Vad, STT_SAMPLE_RATE, VAD_WINDOW,
+    VAD_WINDOW_MS,
 };
 use mog_core::types::{CaptureMode, CaptureState, OthersTrack, TranscriptProvider};
 
@@ -766,4 +767,177 @@ fn cap_52_cap_34_r4_reads_the_mic_tee_and_consumes_the_ptt_buffer_utterance() {
     }
     let t = r.out.all()[0].result.clone().expect("a transcript");
     assert_eq!(t.segment_id, "ptt-60");
+}
+
+// ---------- Review of PR #520: privacy of Debug, supervision, guards ----------
+
+#[test]
+fn sec_cap_01b_stt_done_debug_shows_no_transcript_text() {
+    let r = rig(PowerSource::Ac);
+    r.engine.begin(70, "mog-a", CaptureMode::Ptt);
+    feed(&r.engine, &tone(600, -6.0, RATE), RATE);
+    r.engine.commit(70, StopReason::Released);
+    r.engine.sync();
+    let done = r.out.all().pop().expect("a result");
+    // The fake recognizer's text is "s1"; give the transcript a marker too.
+    let mut marked = done.clone();
+    if let Ok(t) = marked.result.as_mut() {
+        t.text = "SECRET-MARKER-TEXT".into();
+        t.raw = "SECRET-MARKER-RAW".into();
+    }
+    let shown = format!("{marked:?} {:#?}", marked);
+    assert!(
+        !shown.contains("SECRET-MARKER"),
+        "Debug leaked the text: {shown}"
+    );
+    assert!(shown.contains("70"), "Debug still shows the lease");
+}
+
+struct PanicVad(Arc<AtomicU32>);
+impl Vad for PanicVad {
+    fn is_speech(&mut self, _w: &[f32]) -> bool {
+        if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
+            panic!("fake VAD fault");
+        }
+        true
+    }
+}
+
+#[test]
+fn cap_52_a_vad_panic_does_not_kill_the_worker() {
+    let log = Arc::new(Log::default());
+    let clock = SimClock::new();
+    let out = Arc::new(Out::default());
+    let mut parts = EngineParts::new(
+        Arc::new(FakeLoader {
+            log: Arc::clone(&log),
+            clock: clock.clone(),
+            decode_ms: 0,
+        }),
+        Arc::clone(&out) as Arc<dyn TranscriptSink>,
+    );
+    let calls = Arc::new(AtomicU32::new(0));
+    let c = Arc::clone(&calls);
+    parts.vad = Arc::new(move || Box::new(PanicVad(Arc::clone(&c))) as Box<dyn Vad>);
+    parts.power = Arc::new(FakePower(Mutex::new(PowerSource::Ac)));
+    parts.clock = Arc::new(clock);
+    let engine = LocalSttEngine::spawn(parts);
+    for lease in [80, 81] {
+        engine.begin(lease, "mog-a", CaptureMode::Ptt);
+        feed(&engine, &tone(600, -6.0, RATE), RATE);
+        engine.commit(lease, StopReason::Released);
+    }
+    engine.sync();
+    assert_eq!(out.all().len(), 2, "the worker lives on after a VAD panic");
+}
+
+struct PanicOnce(AtomicBool, Out);
+impl TranscriptSink for PanicOnce {
+    fn done(&self, done: SttDone) {
+        if !self.0.swap(true, Ordering::SeqCst) {
+            panic!("fake sink fault");
+        }
+        self.1.done(done);
+    }
+}
+
+#[test]
+fn cap_52_a_transcript_sink_panic_does_not_kill_the_worker() {
+    let log = Arc::new(Log::default());
+    let clock = SimClock::new();
+    let out = Arc::new(PanicOnce(AtomicBool::new(false), Out::default()));
+    let mut parts = EngineParts::new(
+        Arc::new(FakeLoader {
+            log: Arc::clone(&log),
+            clock: clock.clone(),
+            decode_ms: 0,
+        }),
+        Arc::clone(&out) as Arc<dyn TranscriptSink>,
+    );
+    parts.power = Arc::new(FakePower(Mutex::new(PowerSource::Ac)));
+    parts.clock = Arc::new(clock);
+    let engine = LocalSttEngine::spawn(parts);
+    for lease in [82, 83] {
+        engine.begin(lease, "mog-a", CaptureMode::Ptt);
+        feed(&engine, &tone(600, -6.0, RATE), RATE);
+        engine.commit(lease, StopReason::Released);
+    }
+    engine.sync();
+    assert_eq!(
+        out.1.all().len(),
+        1,
+        "the second result arrives after a sink panic"
+    );
+}
+
+struct PanicLoader;
+impl RecognizerLoader for PanicLoader {
+    fn load(&self) -> Result<Box<dyn Recognizer>, &'static str> {
+        panic!("fake loader fault")
+    }
+    fn identity(&self) -> SttIdentity {
+        SttIdentity::local_parakeet()
+    }
+}
+
+#[test]
+fn cap_51c_a_loader_panic_gives_a_content_free_code_and_the_worker_lives() {
+    let out = Arc::new(Out::default());
+    let mut parts = EngineParts::new(
+        Arc::new(PanicLoader),
+        Arc::clone(&out) as Arc<dyn TranscriptSink>,
+    );
+    parts.power = Arc::new(FakePower(Mutex::new(PowerSource::Battery)));
+    let engine = LocalSttEngine::spawn(parts);
+    engine.preload();
+    engine.sync();
+    assert_eq!(engine.status().last_error, Some("stt_engine_failed"));
+    engine.begin(84, "mog-a", CaptureMode::Ptt);
+    feed(&engine, &tone(600, -6.0, RATE), RATE);
+    engine.commit(84, StopReason::Released);
+    engine.sync();
+    assert_eq!(out.all()[0].result, Err("stt_engine_failed"));
+}
+
+#[test]
+fn cap_51b_the_model_never_unloads_while_a_take_is_open() {
+    let r = rig(PowerSource::Battery);
+    r.engine.begin(85, "mog-a", CaptureMode::HandsFree);
+    r.engine.sync();
+    r.clock.advance(Duration::from_secs(31 * 60));
+    r.engine.tick();
+    r.engine.sync();
+    assert!(r.engine.status().loaded, "an open take keeps the model");
+    r.engine.commit(85, StopReason::Released);
+    r.engine.tick();
+    r.engine.sync();
+    assert!(
+        !r.engine.status().loaded,
+        "after the take, the idle rule applies"
+    );
+}
+
+#[test]
+fn cap_52_a_pause_cut_needs_speech_in_the_segment() {
+    let mut cut = SegmentCutter::new(SegmentRule::default());
+    // 10 s of non-speech: no pause cut (a quiet input that the VAD misses is not cut up).
+    for i in 0..(10_000 / VAD_WINDOW_MS) {
+        assert!(!cut.push(false), "no pause cut without speech, window {i}");
+    }
+}
+
+#[test]
+fn cap_13a_no_frame_is_copied_to_the_worker_with_no_live_lease() {
+    let r = rig(PowerSource::Ac);
+    feed(&r.engine, &tone(500, -6.0, RATE), RATE);
+    r.engine.sync();
+    assert_eq!(
+        r.engine.status().frame_messages,
+        0,
+        "the audio thread copied no frame"
+    );
+    r.engine.begin(86, "mog-a", CaptureMode::Ptt);
+    feed(&r.engine, &tone(100, -6.0, RATE), RATE);
+    r.engine.sync();
+    assert_eq!(r.engine.status().frame_messages, 10);
 }

@@ -1041,6 +1041,69 @@ mod tests {
         assert_eq!(brain.items()[0], ptt("a1", "down"));
     }
 
+    struct NoText;
+    impl mog_core::stt_engine::Recognizer for NoText {
+        fn transcribe(&mut self, _samples: &[f32]) -> String {
+            String::new()
+        }
+    }
+    struct OkLoader;
+    impl mog_core::stt_engine::RecognizerLoader for OkLoader {
+        fn load(&self) -> Result<Box<dyn mog_core::stt_engine::Recognizer>, &'static str> {
+            Ok(Box::new(NoText))
+        }
+        fn identity(&self) -> mog_core::stt_engine::SttIdentity {
+            mog_core::stt_engine::SttIdentity::local_parakeet()
+        }
+    }
+    struct OnBattery;
+    impl mog_core::stt_engine::PowerProbe for OnBattery {
+        fn source(&self) -> mog_core::stt_engine::PowerSource {
+            mog_core::stt_engine::PowerSource::Battery
+        }
+    }
+
+    #[test]
+    fn cap_51c_the_r4_preload_hook_loads_the_managed_model() {
+        let app = tauri::test::mock_app();
+        // No R4 in the app state yet (the capture install failed): the hook does nothing.
+        r4_preload(app.handle().clone())();
+        let stt = mog_core::stt_engine::LocalStt::new(
+            Arc::new(OkLoader),
+            Arc::new(mog_core::stt_engine::NoTranscriptSink),
+            |parts| parts.power = Arc::new(OnBattery),
+        );
+        let engine = stt.engine().clone();
+        engine.sync();
+        assert!(
+            !engine.status().loaded,
+            "on battery nothing loads before a key-down"
+        );
+        app.manage(stt);
+        r4_preload(app.handle().clone())();
+        engine.sync();
+        assert!(
+            engine.status().loaded,
+            "the key-down hook preloads R4 (CAP-51c)"
+        );
+    }
+
+    #[test]
+    fn cap_51c_the_app_hotkey_install_wires_the_r4_preload() {
+        let src = include_str!("hotkey_host.rs");
+        let install = &src[src
+            .find("    let talk_now = TalkNow::new(")
+            .expect("the install")..];
+        let install = &install[..install
+            .find("let sink: Arc<dyn HotkeySink>")
+            .expect("its end")];
+        let squashed: String = install.chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(
+            squashed.contains(".with_key_down(r4_preload(app.clone()))"),
+            "the app forwarder preloads R4 at key-down: {squashed}"
+        );
+    }
+
     #[test]
     fn rtr_17a_ptt_down_with_shift_held_carries_shift() {
         let target = Arc::new(PttTarget::default());
