@@ -818,6 +818,7 @@ mod tests {
         assert!(c.app_settings.is_none());
         assert!(c.insert.is_none());
         assert!(c.agent.is_none());
+        assert!(c.stt.is_none());
         // A missing host part still answers `host_failed`.
         assert_eq!(
             route(c, "window_card_show", json!({"mogId": "a1"})),
