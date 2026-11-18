@@ -49,6 +49,7 @@ pub const CAPTURE_SEGMENT: &str = "capture:segment";
 pub const CAPTURE_STOPPED: &str = "capture:stopped";
 pub const SESSION_STOP_SIGNAL: &str = "session:stop_signal";
 pub const AUTH_STATUS: &str = "auth:status";
+/// Online or offline (ARC-F7). Payload: `types::NetStatus` (#466). Sticky.
 pub const NET_STATUS: &str = "net:status";
 pub const MEM_REMOTE_STATUS: &str = "mem:remote_status";
 pub const AGENT_TOOL_CALL: &str = "agent:tool_call";

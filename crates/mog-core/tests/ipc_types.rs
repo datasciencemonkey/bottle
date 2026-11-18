@@ -10,10 +10,9 @@ use std::path::{Path, PathBuf};
 use mog_core::types::{
     AppSetting, AppSettingKey, CaptureMode, CaptureState, CardUpdate, ConsentRecordKind,
     ConsentRecordView, Intent, MicHealth, MicLevelFrame, MogId, MogViewState, Mood, NetStatus,
-    OthersTrack,
-    Profile, ProfileInfo, ProfileName, RouterCommand, RouterDecision, SegmentRef, SessionPolicy,
-    TagApp, TagOp, Tags, TalkKeyReason, TalkKeyState, TalkKeyStatus, TokenState, TokenStatus,
-    Track, Transcript, TranscriptProvider,
+    OthersTrack, Profile, ProfileInfo, ProfileName, RouterCommand, RouterDecision, SegmentRef,
+    SessionPolicy, TagApp, TagOp, Tags, TalkKeyReason, TalkKeyState, TalkKeyStatus, TokenState,
+    TokenStatus, Track, Transcript, TranscriptProvider,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;

@@ -739,6 +739,14 @@ pub struct TalkKeyStatus {
     pub reason: Option<TalkKeyReason>,
 }
 
+/// The `net.status` payload (ARC-F7, #466). Two failed connects mark the host offline. Sticky:
+/// the host sends the last one again when the brain subscribes. No host name, URL or error text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NetStatus {
+    pub online: bool,
+}
+
 // ---------- consent records (#430, ADR 0060) ----------
 
 /// What a consent record is for: the first-run notice, or the attestation choice of a
