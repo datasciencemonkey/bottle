@@ -235,6 +235,41 @@ describe('#559 post-dictation pop-up', () => {
     expect(viewEmits()).toEqual([{ mogId: ID, kind: 'cancel' }]);
   });
 
+  it('[#559] [B1] Ask Genie is only for the text on screen: a preview with older live ask chips shows none', async () => {
+    const { el } = await mountCard();
+    await tauri.emit('card:update', {
+      mogId: ID,
+      blurbs: [{ id: 'preview:u5', text: '"Revenue"\nSending to Genie in 1.5 s' }, ...asks.blurbs],
+      chips: [...asks.chips, { id: 'preview_cancel', label: 'Cancel' }],
+    });
+    expect(el.querySelector('[data-popup-text]')?.textContent).toBe('"Revenue"');
+    expect(el.querySelector('[data-chip^="ask_genie:"]')).toBeNull();
+    // After the hand-off the preview controls go; still no Ask Genie for another text.
+    await tauri.emit('card:update', {
+      mogId: ID,
+      blurbs: [{ id: 'preview:u5', text: '"Revenue"', completed: true }, ...asks.blurbs],
+      chips: asks.chips,
+    });
+    expect(el.querySelector('[data-chip^="ask_genie:"]')).toBeNull();
+  });
+
+  it('[#559] [MOG-05b] a pasted dictation after a refused one shows no Copy of the old text', async () => {
+    const { el } = await mountCard();
+    await tauri.emit('card:update', refused);
+    await tauri.emit('card:update', {
+      mogId: ID,
+      blurbs: [{ id: 'ask:u10', text: '"Margin by product"', completed: true }, ...refused.blurbs],
+      chips: [...refused.chips, { id: 'ask_genie:u10', label: 'Ask Genie' }],
+    });
+    expect(el.querySelector('[data-popup-text]')?.textContent).toBe('"Margin by product"');
+    expect(el.querySelector('[data-chip="copy-u9"]')).toBeNull();
+    expect(pop(el).getAttribute('data-variant')).toBe('ask');
+    expect(el.querySelector('[data-chip="ask_genie:u10"]')).not.toBeNull();
+    // The replaced Copy pop-up does not come back when the newer text goes.
+    await tauri.emit('card:update', { ...refused, chips: [] });
+    expect(el.querySelector('[data-chip="copy-u9"]')).toBeNull();
+  });
+
   it('[#559] [B1] a held preview keeps its controls and does not fade', async () => {
     const { el } = await mountCard();
     await tauri.emit('card:update', {
