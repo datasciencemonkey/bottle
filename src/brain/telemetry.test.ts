@@ -48,7 +48,9 @@ describe('telemetry spans (SEC-16b)', () => {
     const rustList = (name: string): string[] => {
       const m = new RegExp(`pub const ${name}: \\[&str; \\d+\\] = \\[([^\\]]*)\\]`).exec(rs);
       expect(m, name).not.toBeNull();
-      return [...(m as RegExpExecArray)[1].matchAll(/"([^"]+)"/g)].map((x) => x[1] as string);
+      return [...((m as RegExpExecArray)[1] ?? '').matchAll(/"([^"]+)"/g)].map(
+        (x) => x[1] as string,
+      );
     };
     expect([...SPAN_NAMES]).toEqual(rustList('SPAN_NAMES'));
     expect([...SPAN_ATTR_KEYS]).toEqual([...SIZE_KEYS, ...rustList('EXTRA_ATTR_KEYS')]);
@@ -57,9 +59,9 @@ describe('telemetry spans (SEC-16b)', () => {
       'utf8',
     );
     const sizes = /pub const SIZE_KEYS: \[&str; \d+\] = \[([^\]]*)\]/.exec(rustSizes);
-    expect([...(sizes as RegExpExecArray)[1].matchAll(/"([^"]+)"/g)].map((x) => x[1])).toEqual([
-      ...SIZE_KEYS,
-    ]);
+    expect(
+      [...((sizes as RegExpExecArray)[1] ?? '').matchAll(/"([^"]+)"/g)].map((x) => x[1]),
+    ).toEqual([...SIZE_KEYS]);
   });
 
   it('[SEC-16b] the closed sets reuse the audit size names', () => {
