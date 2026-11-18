@@ -266,9 +266,12 @@ describe('brain component stubs', () => {
     await expectStub(() => t.createDraft('r'), 203);
   });
 
-  it('[T15] AgentBridge keeps the onTool stub for #141', async () => {
+  it('[T15] AgentBridge onTool is guarded (#141): with no MOG it runs nothing', async () => {
     const t = createAgentBridge();
-    await expectStub(() => t.onTool({ callId: 'c', tool: 'set_mood', args: {} }), 141);
+    await expect(t.onTool({ callId: 'c', tool: 'set_mood', args: {} })).resolves.toEqual({
+      ok: false,
+      error: 'unknown_mog',
+    });
   });
 
   it('[ARC-2] NotImplementedError names the component, method and issue', () => {
