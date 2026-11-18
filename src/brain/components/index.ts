@@ -23,9 +23,9 @@ import { createCleanupProvider } from './cleanup-provider';
 import { createConsentService } from './consent-service';
 import { createConversationManager } from './conversation-manager';
 import { createGenieBridge } from './genie-bridge';
-import { ForgetFlow } from './forget-flow';
+import { ForgetFlow, isForgetMemory } from './forget-flow';
 import { GenieOneDeleteUtility } from './genie-one-delete';
-import { createMemoryService, LocalMemoryService } from './memory-service';
+import { createMemoryService } from './memory-service';
 import { createMogManager } from './mog-manager';
 import { createMoodMapper } from './mood-mapper';
 import { createOperationTracker } from './operation-tracker';
@@ -91,7 +91,7 @@ export function startBrain(): Brain {
     wireHubMogs(bus, components.T1);
     // #123 (MEM-32a, MEM-32c, MEM-32d): the hub Forget dialog runs Forget on T10 on a user click.
     // TODO(#163): pass `home` (the home host and workspace id from T7) for the memory review link.
-    if (components.T10 instanceof LocalMemoryService) {
+    if (isForgetMemory(components.T10)) {
       wireForget(bus, {
         flow: new ForgetFlow({ memory: components.T10, genieOne: new GenieOneDeleteUtility() }),
       });

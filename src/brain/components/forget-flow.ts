@@ -37,6 +37,12 @@ export interface ForgetMemory {
   ): Promise<{ local: number; remotePending: number; pitrWindowS: number }>;
 }
 
+/** True for a MemoryService that can read the conversations of a scope (`LocalMemoryService`). */
+export function isForgetMemory(m: object): m is ForgetMemory {
+  const o = m as Partial<Record<keyof ForgetMemory, unknown>>;
+  return typeof o.forgetConversations === 'function' && typeof o.forget === 'function';
+}
+
 /** The #122 utility seam. Production: `new GenieOneDeleteUtility()`. */
 export interface GenieOneThreadDelete {
   deleteThreads(
