@@ -95,7 +95,9 @@ describe('T10 forget (#123, MEM-32a)', () => {
       spaceId: null,
       conversationId: 'conv-test-1',
     };
-    const { store, svc } = setup((id) => (id.endsWith('_conversations') ? { rows: [row] } : { rows: [] }));
+    const { store, svc } = setup((id) =>
+      id.endsWith('_conversations') ? { rows: [row] } : { rows: [] },
+    );
     expect(await svc.forgetConversations({ mogId: MOG, sessionId: SESSION })).toEqual([
       {
         backend: 'genie_one_mcp',

@@ -62,7 +62,10 @@ describe('ForgetFlow (#123)', () => {
     const genieOne = {
       async deleteThreads(trigger: 'forget' | 'wipe', threads: readonly GenieOneThread[]) {
         log.push(`genie_one:${trigger}:${threads.map((t) => t.conversationId).join(',')}`);
-        return threads.map((t) => ({ conversationId: t.conversationId, result: 'deleted' as const }));
+        return threads.map((t) => ({
+          conversationId: t.conversationId,
+          result: 'deleted' as const,
+        }));
       },
     };
     const flow = new ForgetFlow({ memory: memory([one(CID_1)], log), genieOne, home: () => HOME });
@@ -122,7 +125,8 @@ describe('ForgetFlow (#123)', () => {
       },
     };
     const flow = new ForgetFlow({
-      memory: memory([agent(CID_1), { ...agent(CID_2), spaceId: undefined }]),
+      // The second one has no space id, so no API can delete it.
+      memory: memory([agent(CID_1), (({ spaceId: _s, ...c }) => c)(agent(CID_2))]),
       genieOne: new GenieOneDeleteUtility(),
       genieAgent,
       home: () => HOME,
@@ -155,7 +159,9 @@ describe('ForgetFlow (#123)', () => {
     expect(genieOneMemoryReviewLink({ host: `https://${HOST}/`, workspaceId: '1001' })).toBe(
       `https://${HOST}/one?o=1001`,
     );
-    expect(genieOneMemoryReviewLink({ host: `http://${HOST}`, workspaceId: '1001' })).toBeUndefined();
+    expect(
+      genieOneMemoryReviewLink({ host: `http://${HOST}`, workspaceId: '1001' }),
+    ).toBeUndefined();
     expect(genieOneMemoryReviewLink({ host: HOST, workspaceId: 'abc' })).toBeUndefined();
     expect(genieOneMemoryReviewLink({ host: 'evil.test@x', workspaceId: '1' })).toBeUndefined();
     expect(genieOneMemoryReviewLink(undefined)).toBeUndefined();
@@ -178,13 +184,17 @@ describe('ForgetFlow (#123)', () => {
       'deleted',
     );
     expect(core.invoke).toHaveBeenCalledWith('dbx_http', {
-      profile: 'dev',
-      routeId: 'genie.delete_conversation',
-      params: { space_id: 'space-test-1', conversation_id: CID_1 },
-      tags: { app: 'bottle', mog: MOG, op: 'genie' },
+      args: {
+        profile: 'dev',
+        routeId: 'genie.delete_conversation',
+        params: { space_id: 'space-test-1', conversation_id: CID_1 },
+        tags: { app: 'bottle', mog: MOG, op: 'genie' },
+      },
     });
     core.invoke.mockResolvedValueOnce({ status: 404, json: {} });
-    expect(await createDbxGenieAgentDelete().delete('dev', MOG, 'space-test-1', CID_1)).toBe('gone');
+    expect(await createDbxGenieAgentDelete().delete('dev', MOG, 'space-test-1', CID_1)).toBe(
+      'gone',
+    );
     core.invoke.mockResolvedValueOnce({ status: 500, json: {} });
     await expect(
       createDbxGenieAgentDelete().delete('dev', MOG, 'space-test-1', CID_1),

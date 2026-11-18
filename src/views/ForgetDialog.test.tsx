@@ -41,7 +41,12 @@ const done: ForgetDialogModel = {
       mogId: MOG,
       label: 'Delete in Genie One',
       text: 'Bottle cannot delete Genie One conversations yet.',
-      links: [{ conversationId: CID, url: `https://acme.cloud.databricks.com/one/chat/threads/${CID}?o=1001` }],
+      links: [
+        {
+          conversationId: CID,
+          url: `https://acme.cloud.databricks.com/one/chat/threads/${CID}?o=1001`,
+        },
+      ],
       noLink: 0,
     },
     otherText: 'Bottle could not delete 1 Genie conversation. Delete it in Genie.',
@@ -96,9 +101,7 @@ describe('ForgetDialog (#123)', () => {
     expect(must(el.querySelector('[data-forget-result]')).textContent).toContain('4');
     const link = must(el.querySelector<HTMLButtonElement>('button[data-genie-one-delete-link]'));
     expect(link.textContent).toBe('Delete in Genie One');
-    expect(must(el.querySelector('[data-forget-other]')).textContent).toBe(
-      done.result?.otherText,
-    );
+    expect(must(el.querySelector('[data-forget-other]')).textContent).toBe(done.result?.otherText);
     // The memory review link stays on the done step (MEM-32d).
     expect(el.querySelector('button[data-genie-one-memory-review]')).not.toBeNull();
     act(() => root.unmount());

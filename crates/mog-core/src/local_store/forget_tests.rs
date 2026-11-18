@@ -125,7 +125,13 @@ fn seeded(tag: &str) -> (TempDir, SqlCipherLocalStore) {
         for (uid, sid, mog, seq, text) in [
             (U1, S1, MOG_A, 1, "we said the pelicanridge number twice"),
             (U2, S1, MOG_A, 2, "and the flamingobay launch slips"),
-            (UB, SB, MOG_B, 1, "MOG B talks about the pelicanridge number"),
+            (
+                UB,
+                SB,
+                MOG_B,
+                1,
+                "MOG B talks about the pelicanridge number",
+            ),
         ] {
             c.execute(
                 "INSERT INTO utterance (utterance_id, session_id, mog_id, seq, speaker_track, \
@@ -141,17 +147,35 @@ fn seeded(tag: &str) -> (TempDir, SqlCipherLocalStore) {
     exec(
         &s,
         "mem.exchange.upsert",
-        exchange(MOG_A, E1, "41111111-2222-4333-8444-555555555501", Some(S1), "conv-s1"),
+        exchange(
+            MOG_A,
+            E1,
+            "41111111-2222-4333-8444-555555555501",
+            Some(S1),
+            "conv-s1",
+        ),
     );
     exec(
         &s,
         "mem.exchange.upsert",
-        exchange(MOG_A, E2, "41111111-2222-4333-8444-555555555502", Some(S2), "conv-s2"),
+        exchange(
+            MOG_A,
+            E2,
+            "41111111-2222-4333-8444-555555555502",
+            Some(S2),
+            "conv-s2",
+        ),
     );
     exec(
         &s,
         "mem.exchange.upsert",
-        exchange(MOG_B, EB, "41111111-2222-4333-8444-5555555555b1", Some(SB), "conv-b"),
+        exchange(
+            MOG_B,
+            EB,
+            "41111111-2222-4333-8444-5555555555b1",
+            Some(SB),
+            "conv-b",
+        ),
     );
     for (mog, id, src) in [
         (MOG_A, I1, Some(E1)),
@@ -184,7 +208,10 @@ fn seeded(tag: &str) -> (TempDir, SqlCipherLocalStore) {
         )
     })
     .unwrap();
-    assert_eq!(count(&s, "SELECT count(*) FROM outbox WHERE kind = 'embed'"), 6);
+    assert_eq!(
+        count(&s, "SELECT count(*) FROM outbox WHERE kind = 'embed'"),
+        6
+    );
     assert_eq!(count(&s, "SELECT count(*) FROM memory_item_vec_256"), 6);
     (t, s)
 }
@@ -250,15 +277,24 @@ fn mem_32a_at_16_forget_session_deletes_its_rows_and_each_citing_item() {
 
     // No row of the scope remains.
     assert_eq!(
-        count(&s, &format!("SELECT count(*) FROM session WHERE session_id = '{S1}'")),
+        count(
+            &s,
+            &format!("SELECT count(*) FROM session WHERE session_id = '{S1}'")
+        ),
         0
     );
     assert_eq!(
-        count(&s, &format!("SELECT count(*) FROM utterance WHERE session_id = '{S1}'")),
+        count(
+            &s,
+            &format!("SELECT count(*) FROM utterance WHERE session_id = '{S1}'")
+        ),
         0
     );
     assert_eq!(
-        count(&s, &format!("SELECT count(*) FROM genie_exchange WHERE exchange_id = '{E1}'")),
+        count(
+            &s,
+            &format!("SELECT count(*) FROM genie_exchange WHERE exchange_id = '{E1}'")
+        ),
         0
     );
     // Each citing item is gone: by exchange (I1), by session id (I2) and by utterance (I3).
@@ -282,7 +318,10 @@ fn mem_32a_at_16_forget_session_deletes_its_rows_and_each_citing_item() {
     assert_eq!(fts_utterance(&s, "pelicanridge"), 1);
     // The other session and MOG B keep their rows.
     assert_eq!(
-        count(&s, &format!("SELECT count(*) FROM genie_exchange WHERE exchange_id IN ('{E2}', '{EB}')")),
+        count(
+            &s,
+            &format!("SELECT count(*) FROM genie_exchange WHERE exchange_id IN ('{E2}', '{EB}')")
+        ),
         2
     );
     assert_eq!(count(&s, "SELECT count(*) FROM session"), 2);
@@ -324,9 +363,11 @@ fn mem_32a_mem_32c_session_conversations_are_collected_before_the_delete() {
     let got = exec(&s, "mem.forget.session_conversations", q.clone());
     assert_eq!(
         rows(&got),
-        &vec![json!({"backendKind": "genie_one_mcp", "profile": "test-profile",
+        &vec![
+            json!({"backendKind": "genie_one_mcp", "profile": "test-profile",
                      "host": "example.cloud.databricks.com", "workspaceId": 1234,
-                     "spaceId": null, "conversationId": "conv-s1"})]
+                     "spaceId": null, "conversationId": "conv-s1"})
+        ]
     );
     // MEM-01: another MOG finds nothing for the same session id.
     let other = exec(
@@ -385,7 +426,10 @@ fn mem_32a_forget_items_deletes_the_items_their_jobs_vectors_and_fts_rows() {
     assert_eq!(recall(&s, MOG_A, "walrusdock"), 1);
     // The exchange that I1 cited stays: Forget of an item deletes the item only.
     assert_eq!(
-        count(&s, &format!("SELECT count(*) FROM genie_exchange WHERE exchange_id = '{E1}'")),
+        count(
+            &s,
+            &format!("SELECT count(*) FROM genie_exchange WHERE exchange_id = '{E1}'")
+        ),
         1
     );
     let log = count(
@@ -438,7 +482,10 @@ fn mem_32a_at_16_forget_mog_leaves_no_row_of_the_mog_except_the_log() {
         "sync_state",
     ] {
         assert_eq!(
-            count(&s, &format!("SELECT count(*) FROM {table} WHERE mog_id = '{MOG_A}'")),
+            count(
+                &s,
+                &format!("SELECT count(*) FROM {table} WHERE mog_id = '{MOG_A}'")
+            ),
             0,
             "{table}"
         );
@@ -448,7 +495,10 @@ fn mem_32a_at_16_forget_mog_leaves_no_row_of_the_mog_except_the_log() {
         1
     );
     assert_eq!(
-        count(&s, &format!("SELECT count(*) FROM consent_record WHERE mog_id = '{MOG_A}'")),
+        count(
+            &s,
+            &format!("SELECT count(*) FROM consent_record WHERE mog_id = '{MOG_A}'")
+        ),
         1,
         "consent records keep their 13-month expiry (SEC-15b)"
     );
@@ -458,9 +508,19 @@ fn mem_32a_at_16_forget_mog_leaves_no_row_of_the_mog_except_the_log() {
     assert_eq!(fts_utterance(&s, "flamingobay"), 0);
     assert_eq!(recall(&s, MOG_B, "narwhalcove"), 1);
     assert_eq!(fts_utterance(&s, "pelicanridge"), 1);
-    for table in ["mog", "session", "utterance", "genie_exchange", "memory_item", "outbox"] {
+    for table in [
+        "mog",
+        "session",
+        "utterance",
+        "genie_exchange",
+        "memory_item",
+        "outbox",
+    ] {
         assert_eq!(
-            count(&s, &format!("SELECT count(*) FROM {table} WHERE mog_id = '{MOG_B}'")),
+            count(
+                &s,
+                &format!("SELECT count(*) FROM {table} WHERE mog_id = '{MOG_B}'")
+            ),
             1,
             "{table} of MOG B"
         );
@@ -507,7 +567,13 @@ fn mem_01_forget_with_another_mog_id_deletes_nothing_of_the_first_mog() {
     );
     assert_eq!(item_ids(&s), vec![I1, I2, I3, I4, I5, IB]);
     assert_eq!(count(&s, "SELECT count(*) FROM utterance"), 3);
-    assert_eq!(count(&s, &format!("SELECT count(*) FROM session WHERE session_id = '{S1}'")), 1);
+    assert_eq!(
+        count(
+            &s,
+            &format!("SELECT count(*) FROM session WHERE session_id = '{S1}'")
+        ),
+        1
+    );
     assert_eq!(count(&s, "SELECT count(*) FROM outbox"), 6);
 }
 
@@ -517,7 +583,12 @@ fn mem_32a_u9_forget_groups_are_brain_and_their_steps_are_rust_only() {
         let g = catalog::find_group(id).unwrap_or_else(|| panic!("{id} is a group"));
         assert_eq!(g.access, Access::Brain, "{id}: a user action through T10");
         for st in g.steps {
-            assert_eq!(st.access, Access::Core, "{}: no partial Forget from the brain", st.id);
+            assert_eq!(
+                st.access,
+                Access::Core,
+                "{}: no partial Forget from the brain",
+                st.id
+            );
             assert_eq!(st.kind, Kind::Write);
             let sql = st.sql.to_ascii_lowercase();
             // U9: Forget deletes by id and scope only, never by age.

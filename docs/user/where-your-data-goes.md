@@ -66,6 +66,15 @@ The copy comes from one file: `src/views/hub/disclosures.ts`. If you change the 
 - Bottle does not control that memory.
 - Forget in Bottle gives you a link to review your Genie One memories.
 
+## Forget
+
+- You can forget a session, some notes, or a whole MOG. Bottle deletes only when you select Forget.
+- Forget deletes the matching rows on this computer at once, also when you are offline. It also deletes each note that cites them, with its search entries.
+- Forget a session deletes its transcript, its notes and its Genie answers. Forget a MOG deletes all of them for that MOG.
+- Bottle keeps a short Forget record with IDs only, for a later sync. Consent records stay for their own 13 months.
+- Bottle cannot delete Genie One conversations yet. The dialog shows a "Delete in Genie One" link for each one.
+- Bottle deletes the conversations of a Genie space MOG through the Genie API. If a delete fails, the dialog tells you.
+
 ## Your DRAFT Pages
 
 - When you approve a definition, Bottle creates a DRAFT Unity Catalog Page that you own, in the home domain of the MOG.
