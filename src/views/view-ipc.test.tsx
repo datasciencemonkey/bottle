@@ -12,6 +12,7 @@ import {
   mogIdFromLabel,
   ownMogId,
   startCardFocusSignal,
+  subscribeHubNotices,
   useViewEvent,
   viewMicLevels,
 } from './view-ipc';
@@ -165,5 +166,43 @@ describe('contract view payloads (#285, ADR 0040)', () => {
   it('[UX-06a] the MOG window entry feeds the level meter from mog.level', () => {
     const main = readFileSync(join(import.meta.dirname, 'mog', 'main.tsx'), 'utf8');
     expect(main).toMatch(/levels=\{viewMicLevels\(\)\}/);
+  });
+});
+
+describe('#509 the hub-only notice (ADR 0091)', () => {
+  beforeEach(() => {
+    tauri.reset();
+    tauri.label = 'hub';
+  });
+  afterEach(() => {
+    tauri.label = 'hub';
+  });
+  const MARKER = 'test-dictation-not-real';
+
+  it('[MOG-05b] [MOG-06d] the hub takes its notices on a private Channel, shape-checked', async () => {
+    const got: unknown[] = [];
+    await expect(subscribeHubNotices((n) => got.push(n))).resolves.toBe(true);
+    expect(tauri.invoke).toHaveBeenCalledTimes(1);
+    const [cmd, envelope] = tauri.invoke.mock.calls[0] ?? [];
+    expect(cmd).toBe('view_notice_subscribe');
+    const ch = (envelope as { args: { onNotice: { onmessage: (m: unknown) => void } } }).args
+      .onNotice;
+    ch.onmessage({ kind: 'dictation_unshown', mogId: ID, text: MARKER });
+    ch.onmessage({ kind: 'dictation_unshown', mogId: ID });
+    ch.onmessage({ kind: 'other', mogId: ID, text: MARKER });
+    expect(got).toEqual([{ kind: 'dictation_unshown', mogId: ID, text: MARKER }]);
+  });
+
+  it('[SEC-02a] a MOG or card window does not ask for the hub notice Channel', async () => {
+    for (const label of [`mog-${ID}`, `card-${ID}`]) {
+      tauri.label = label;
+      await expect(subscribeHubNotices(() => undefined)).resolves.toBe(false);
+    }
+    expect(tauri.invoke).not.toHaveBeenCalled();
+  });
+
+  it('[MOG-06d] a refused subscribe resolves false', async () => {
+    tauri.invoke.mockRejectedValueOnce({ error: 'window_not_allowed' });
+    await expect(subscribeHubNotices(() => undefined)).resolves.toBe(false);
   });
 });

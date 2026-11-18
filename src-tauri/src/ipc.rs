@@ -969,4 +969,25 @@ mod tests {
         assert!(!text.contains(SECRET), "{text}");
         assert!(text.contains(mog_core::token_guard::REDACTED), "{text}");
     }
+
+    // ---- #509 (ADR 0091): the hub's private notice Channel ----
+
+    #[test]
+    fn mog_06d_hub_channel_delivers_only_to_the_hub_channel_and_keeps_nothing() {
+        let notice = json!({"kind": "dictation_unshown", "mogId": "a1", "text": "test-dictation-not-real"});
+        let hub = HubChannel::default();
+        // No hub yet: `false`, so the brain keeps the text. The host keeps no copy.
+        assert!(!hub.send(notice.clone()));
+        let (first, got) = recorder();
+        hub.set(first);
+        assert!(got.lock().unwrap().is_empty(), "nothing is replayed");
+        assert!(hub.send(notice.clone()));
+        assert_eq!(*got.lock().unwrap(), vec![notice.clone()]);
+        // A hub reload replaces the Channel; the old one gets no more notices.
+        let (second, again) = recorder();
+        hub.set(second);
+        assert!(hub.send(notice.clone()));
+        assert_eq!(got.lock().unwrap().len(), 1);
+        assert_eq!(*again.lock().unwrap(), vec![notice]);
+    }
 }
