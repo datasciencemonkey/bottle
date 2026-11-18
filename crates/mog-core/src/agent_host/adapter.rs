@@ -29,8 +29,8 @@ pub trait HarnessAdapter: Send + Sync {
         format!("{proxy_base}{}", self.proxy_prefix())
     }
 
-    /// The `open_session` frame for the runtime. TODO(#111): SP-19 fixes the sidecar protocol;
-    /// the bottle-mcp and Genie One proxy endpoints join in #113 and the RTR-27 issue.
+    /// The `open_session` frame for the runtime. TODO(#111): SP-19 fixes the sidecar protocol.
+    /// The host adds the `bottleMcp` (#113) and `genieOneMcp` (#139) endpoints.
     fn open_frame(
         &self,
         session_id: &str,

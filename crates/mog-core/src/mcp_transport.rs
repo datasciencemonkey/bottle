@@ -18,8 +18,9 @@
 //!
 //! - G-07b, ARC-F1 (#31, ADR 0073): one `genie_poll_response` at a time for each conversation;
 //!   a second one fails at once with [`E_POLL_INFLIGHT`] ([`poll`]).
-//!
-//! Not part of #30: the loopback proxy for the main agent, TODO(#139).
+//! - RTR-27, RTR-28 (#139, ADR 0083): the loopback proxy for the Genie One MCP calls of the main
+//!   agent is [`proxy`]. Each agent session has its own proxy listener and secret; the proxy sends
+//!   every call to the same R8, so the agent's calls get every rule above, the poll guard too.
 
 use std::fmt;
 use std::time::Duration;
@@ -32,9 +33,11 @@ use crate::request_identity::{BottleIdentity, CallKind, IdentityError, RequestDe
 use crate::token_guard::strip_profile_keys;
 use crate::types::Tags;
 
+pub mod agent_asks;
 mod client;
 mod component;
 pub mod poll;
+pub mod proxy;
 pub mod sse;
 pub mod tools;
 
@@ -176,8 +179,6 @@ pub trait McpTransport: Send + Sync {
     fn call_tool(&self, call: McpCall<'_>) -> CoreResult<McpReply>;
     /// `tools/list` for `profile` in the session of `tags.mog`: only the allowlisted tools.
     fn list_tools(&self, profile: &str, tags: &Tags) -> CoreResult<Vec<Value>>;
-    /// Start the loopback proxy for the Genie One MCP calls of the main agent. Returns the port.
-    fn start_loopback_proxy(&self) -> CoreResult<u16>;
 }
 
 impl<T: McpTransport + ?Sized> McpTransport for std::sync::Arc<T> {
@@ -186,9 +187,6 @@ impl<T: McpTransport + ?Sized> McpTransport for std::sync::Arc<T> {
     }
     fn list_tools(&self, profile: &str, tags: &Tags) -> CoreResult<Vec<Value>> {
         (**self).list_tools(profile, tags)
-    }
-    fn start_loopback_proxy(&self) -> CoreResult<u16> {
-        (**self).start_loopback_proxy()
     }
 }
 
@@ -220,11 +218,6 @@ impl McpTransport for StubMcpTransport {
     }
 
     fn list_tools(&self, _profile: &str, _tags: &Tags) -> CoreResult<Vec<Value>> {
-        Err(CoreError::NotImplemented { component: ID })
-    }
-
-    fn start_loopback_proxy(&self) -> CoreResult<u16> {
-        // TODO(#139): loopback proxy for the agent's Genie One MCP calls.
         Err(CoreError::NotImplemented { component: ID })
     }
 }

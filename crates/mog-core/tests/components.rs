@@ -134,7 +134,6 @@ fn r8_mcp_transport_stub_reports_not_implemented() {
         "R8",
     );
     not_implemented(s.list_tools("p", &tags), "R8");
-    not_implemented(s.start_loopback_proxy(), "R8");
 }
 
 #[cfg(feature = "lakebase")]

@@ -957,3 +957,118 @@ fn rtr_25_arc_f14_a_restart_gives_bottle_mcp_a_new_secret() {
     );
     assert_eq!(mcp_tools_list(&new_url, &new_auth).0, 200);
 }
+
+// ---------- RTR-27 / AT-42: the Genie One MCP proxy endpoint of each session ----------
+
+struct OneTarget;
+
+impl mog_core::mcp_transport::proxy::GenieTargets for OneTarget {
+    fn target(&self, _mog_id: &str) -> CoreResult<mog_core::mcp_transport::proxy::GenieTarget> {
+        Ok(mog_core::mcp_transport::proxy::GenieTarget {
+            profile: "bottle-home".into(),
+            warehouse_id: None,
+        })
+    }
+}
+
+fn rig_with_genie() -> Rig {
+    let launcher = Arc::new(FakeLauncher::default());
+    let status = Arc::new(FakeStatus::default());
+    let proxy = Arc::new(
+        ModelProxy::start(
+            Arc::new(FakeTokens {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(NoUpstream),
+        )
+        .expect("proxy binds loopback"),
+    );
+    let genie = mog_core::mcp_transport::proxy::GenieProxyDeps::new(
+        Arc::new(mog_core::mcp_transport::StubMcpTransport),
+        Arc::new(OneTarget),
+    );
+    let host = SharedAgentHost::new(AgentHostDeps {
+        bottle_mcp: mcp_deps().with_genie_proxy(genie),
+        launcher: launcher.clone(),
+        proxy: proxy.clone(),
+        targets: Arc::new(FakeTargets),
+        status: status.clone(),
+        runtimes: RuntimeConfigs {
+            claude: RuntimeConfig::new("fake-claude-runtime", Vec::new()),
+            codex: RuntimeConfig::new("fake-codex-runtime", Vec::new()),
+        },
+    });
+    Rig {
+        host,
+        launcher,
+        status,
+        proxy,
+    }
+}
+
+/// The `genieOneMcp` part of an open frame: the URL and the `Authorization` value.
+fn genie_of(frame: &Value) -> (String, String) {
+    let m = &frame["genieOneMcp"];
+    (
+        m["url"]
+            .as_str()
+            .expect("open frame has a Genie One proxy url")
+            .to_owned(),
+        m["authorization"]
+            .as_str()
+            .expect("open frame has a Genie One proxy authorization")
+            .to_owned(),
+    )
+}
+
+#[test]
+fn rtr_27_rtr_28_at_42_each_session_gets_its_own_genie_one_proxy_endpoint_and_no_token() {
+    let r = rig_with_genie();
+    r.host.start_session("a", Harness::Claude).unwrap();
+    r.host.start_session("b", Harness::Codex).unwrap();
+    let open_a = frames_of(&r.launcher.proc(0), "open_session")[0].clone();
+    let open_b = frames_of(&r.launcher.proc(1), "open_session")[0].clone();
+    let (url_a, auth_a) = genie_of(&open_a);
+    let (url_b, auth_b) = genie_of(&open_b);
+    for url in [&url_a, &url_b] {
+        assert!(url.starts_with("http://127.0.0.1:"), "{url}");
+        assert!(url.ends_with(MCP_PATH), "{url}");
+    }
+    assert_ne!(url_a, url_b, "one proxy listener per session");
+    assert_ne!(auth_a, auth_b, "one secret per session");
+    // It is the session's loopback secret (shared with bottle-mcp), not the model secret.
+    assert_eq!(auth_a, mcp_of(&open_a).1);
+    assert_ne!(url_a, mcp_of(&open_a).0, "its own listener");
+    assert_ne!(&auth_a[7..], secret_of(&open_a));
+
+    // The endpoint goes on stdin only: not in the env or the arguments, and no token anywhere.
+    let token = std::str::from_utf8(FAKE_TOKEN).unwrap();
+    for spec in r.launcher.specs.lock().unwrap().iter() {
+        for (k, v) in &spec.env {
+            assert!(
+                !v.contains(&auth_a[7..]) && !v.contains(&auth_b[7..]),
+                "{k}"
+            );
+            assert!(!v.contains(&url_a) && !v.contains(&url_b), "{k}");
+            assert!(!v.contains(token), "{k}");
+        }
+    }
+    for f in [&open_a, &open_b] {
+        assert!(!f.to_string().contains(token));
+    }
+
+    // The proxy answers with the session secret only, and closes with the session.
+    let (status, v) = mcp_tools_list(&url_a, &auth_a);
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(mcp_tools_list(&url_a, &auth_b).0, 401);
+    r.host.stop_session("a").unwrap();
+    assert_ne!(mcp_tools_list(&url_a, &auth_a).0, 200);
+}
+
+#[test]
+fn rtr_27_without_a_genie_proxy_the_frame_names_no_genie_endpoint() {
+    let r = rig();
+    r.host.start_session("a", Harness::Claude).unwrap();
+    let open = frames_of(&r.launcher.proc(0), "open_session")[0].clone();
+    assert!(open.get("genieOneMcp").is_none(), "{open}");
+}

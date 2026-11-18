@@ -15,8 +15,12 @@
 //!
 //! It speaks a minimal MCP JSON-RPC 2.0 over `POST /mcp`: `initialize`,
 //! `notifications/initialized`, `ping`, `tools/list` and `tools/call`. A call of any tool that is
-//! not one of the 7 is a JSON-RPC error, and nothing runs. Nothing goes to Genie from here, and
-//! the server writes no log line: no request or reply content is kept.
+//! not one of the 7 is a JSON-RPC error, and nothing runs. Nothing goes to Genie from the
+//! `bottle-mcp` endpoint, and the server writes no log line: no request or reply content is kept.
+//!
+//! RTR-27 (#139): with [`BottleMcpDeps::with_genie_proxy`], the `genie-one-mcp` listener of the
+//! same session serves the R8 Genie One MCP proxy ([`crate::mcp_transport::proxy`]), with the same
+//! per-session secret. Without it that listener answers 501.
 //!
 //! TODO(#111): SP-19 fixes the MCP wire details (streamable HTTP, SSE, session header).
 //! TODO(#141): the guardrails of RTR-29a..d (what the agent may write to memory, audit rows).
@@ -36,6 +40,7 @@ use crate::loopback::{
     HarnessConfig, LoopbackEndpoint, LoopbackHandler, LoopbackRequest, LoopbackResponse,
     LoopbackSession, NotImplementedHandler,
 };
+use crate::mcp_transport::proxy::{GenieProxy, GenieProxyDeps, PROXY_PATH};
 use crate::token_guard::scrub_json;
 
 const ID: &str = "R17";
@@ -301,12 +306,15 @@ pub struct BottleMcpDeps {
     pub relay: Arc<dyn ToolRelay>,
     /// How long a UI tool call waits for its result.
     pub relay_timeout: Duration,
+    /// The Genie One MCP proxy of the session (RTR-27), on its `genie-one-mcp` listener.
+    pub genie: Option<GenieProxyDeps>,
 }
 
 impl fmt::Debug for BottleMcpDeps {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BottleMcpDeps")
             .field("relay_timeout", &self.relay_timeout)
+            .field("genie", &self.genie.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -318,7 +326,14 @@ impl BottleMcpDeps {
             local,
             relay,
             relay_timeout: RELAY_TIMEOUT,
+            genie: None,
         }
+    }
+
+    /// The same deps with the Genie One MCP proxy of each session (RTR-27).
+    pub fn with_genie_proxy(mut self, genie: GenieProxyDeps) -> Self {
+        self.genie = Some(genie);
+        self
     }
 
     /// The same deps with another relay timeout.
@@ -479,6 +494,8 @@ struct Handler {
     mog_id: String,
     deps: BottleMcpDeps,
     closed: Arc<AtomicBool>,
+    /// The session's Genie One MCP proxy, if the deps have one.
+    genie: Option<GenieProxy>,
 }
 
 fn rpc_result(id: Value, result: Value) -> LoopbackResponse {
@@ -647,9 +664,12 @@ impl Handler {
 
 impl LoopbackHandler for Handler {
     fn handle(&self, req: &LoopbackRequest) -> LoopbackResponse {
-        if req.endpoint != LoopbackEndpoint::BottleMcp {
-            // TODO(#139): the Genie One MCP proxy; the model proxy is `agent_host::model_proxy`.
-            return NotImplementedHandler.handle(req);
+        match (req.endpoint, &self.genie) {
+            (LoopbackEndpoint::BottleMcp, _) => {}
+            // RTR-27: the R8 Genie One MCP proxy of this session.
+            (LoopbackEndpoint::GenieOneMcp, Some(g)) => return g.handle(req),
+            // The model proxy is `agent_host::model_proxy`, on its own listener.
+            _ => return NotImplementedHandler.handle(req),
         }
         if req.path != MCP_PATH {
             return http_error(404, "not_found");
@@ -667,6 +687,7 @@ impl LoopbackHandler for Handler {
 /// drops; then the secret opens nothing.
 pub struct BottleMcpServer {
     closed: Arc<AtomicBool>,
+    genie: bool,
     config: HarnessConfig,
     session: Option<LoopbackSession>,
 }
@@ -675,6 +696,7 @@ impl fmt::Debug for BottleMcpServer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BottleMcpServer")
             .field("url", &self.url())
+            .field("genie_one_url", &self.genie_one_url())
             .field("authorization", &"<redacted>")
             .finish()
     }
@@ -684,14 +706,21 @@ impl BottleMcpServer {
     /// Start the server of the session of `mog_id` with a new per-session secret.
     pub fn start(mog_id: &str, deps: &BottleMcpDeps) -> CoreResult<Self> {
         let closed = Arc::new(AtomicBool::new(false));
+        let genie = deps
+            .genie
+            .clone()
+            .map(|g| GenieProxy::new(mog_id, g, closed.clone()));
+        let has_genie = genie.is_some();
         let handler = Arc::new(Handler {
             mog_id: mog_id.to_owned(),
             deps: deps.clone(),
             closed: closed.clone(),
+            genie,
         });
         let session = LoopbackSession::open(handler)?;
         Ok(Self {
             closed,
+            genie: has_genie,
             config: session.harness_config(),
             session: Some(session),
         })
@@ -707,6 +736,20 @@ impl BottleMcpServer {
             .map(|(_, u)| u.as_str())
             .unwrap_or("");
         format!("{base}{MCP_PATH}")
+    }
+
+    /// The Genie One MCP proxy URL for the harness, `http://127.0.0.1:<port>/mcp` on the
+    /// session's `genie-one-mcp` listener, if the session has the proxy (RTR-27). The same
+    /// [`Self::authorization`] opens it.
+    pub fn genie_one_url(&self) -> Option<String> {
+        if !self.genie {
+            return None;
+        }
+        self.config
+            .endpoints()
+            .iter()
+            .find(|(e, _)| *e == LoopbackEndpoint::GenieOneMcp)
+            .map(|(_, u)| format!("{u}{PROXY_PATH}"))
     }
 
     /// The `Authorization` header value for the harness: `Bearer <session secret>`.
