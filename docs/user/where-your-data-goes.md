@@ -1,6 +1,6 @@
 # Where your data goes
 
-This page lists what Bottle sends off your computer, and what other services keep. Bottle shows the same text in the hub panel "Where your data goes". The setup wizard will show it too (requirement SEC-17, Table SEC-DISC).
+This page lists what Bottle sends off your computer, and what other services keep. Bottle shows the same text in the hub panel "Where your data goes" (select the heading to open it). The setup wizard will show it too (requirement SEC-17, Table SEC-DISC).
 
 The copy comes from one file: `src/views/hub/disclosures.ts`. If you change the copy there, change this page too.
 
@@ -86,7 +86,7 @@ The copy comes from one file: `src/views/hub/disclosures.ts`. If you change the 
 
 ## Forget
 
-- In the hub, select "Forget memory" next to a MOG. Bottle deletes only when you select Forget in the dialog.
+- In the hub, select "More" next to a MOG, then "Forget memory". Bottle deletes only when you select Forget in the dialog.
 - Bottle can also forget one session or some notes.
 - Forget deletes the matching rows on this computer at once, also when you are offline. It also deletes each note that cites them, with its search entries.
 - Forget a session deletes its transcript, its notes and its Genie answers. Forget a MOG deletes all of them for that MOG.
