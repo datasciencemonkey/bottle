@@ -994,6 +994,28 @@ mod tests {
     }
 
     #[test]
+    fn cap_51c_key_down_runs_the_preload_hook_once_per_press() {
+        let target = Arc::new(PttTarget::default());
+        target.set("a1");
+        let (f, brain, _) = forwarder(&target);
+        let downs = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let seen = Arc::clone(&downs);
+        let mut f = f.with_key_down(Box::new(move || {
+            seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }));
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Down));
+        assert_eq!(downs.load(std::sync::atomic::Ordering::SeqCst), 1);
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Up));
+        f.on_output(HotkeyOutput::Ptt(PttPhase::DoubleTap));
+        assert_eq!(
+            downs.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "only a key-down preloads (CAP-51c)"
+        );
+        assert_eq!(brain.items()[0], ptt("a1", "down"));
+    }
+
+    #[test]
     fn rtr_17a_ptt_down_with_shift_held_carries_shift() {
         let target = Arc::new(PttTarget::default());
         target.set("a1");

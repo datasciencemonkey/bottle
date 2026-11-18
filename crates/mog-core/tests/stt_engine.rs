@@ -734,3 +734,36 @@ fn cap_51a_engine_config_defaults() {
     assert_eq!(c.tick, Duration::from_secs(60));
     assert_eq!(c.rule, SegmentRule::default());
 }
+
+// ---------- #21 hookup: R4 is the PTT buffer's consumer ----------
+
+#[test]
+fn cap_52_cap_34_r4_reads_the_mic_tee_and_consumes_the_ptt_buffer_utterance() {
+    use mog_core::audio_device::level::TeeSink;
+    use mog_core::audio_device::ptt_buffer::{PttBuffer, PttCaptureEvents};
+    let r = rig(PowerSource::Ac);
+    // The host chain (ADR 0082): the mic tees the PTT buffer and R4; R2's events reach the PTT
+    // buffer, then R4; the PTT buffer hands its utterance to R4.
+    let buf = PttBuffer::new(Arc::new(r.engine.clone()));
+    let mut mic = TeeSink(buf.sink(), r.engine.frame_sink());
+    let events = PttCaptureEvents::new(
+        SttCaptureEvents::new(NoEvents, r.engine.clone()),
+        buf.clone(),
+    );
+    for (lease, reason, kept) in [(60, StopReason::Released, 1), (61, StopReason::Panic, 1)] {
+        events.state(&state(lease, CaptureMode::Ptt, true));
+        for block in tone(1_000, -6.0, RATE).chunks(480) {
+            mic.frame(MicFrame {
+                samples: block,
+                sample_rate: RATE,
+            });
+        }
+        events.stopped(&stopped(lease, reason));
+        r.engine.sync();
+        assert_eq!(r.out.all().len(), kept, "lease {lease}");
+        assert_eq!(buf.held_samples(), 0, "the PTT buffer keeps no copy");
+        assert_eq!(r.engine.status().held_samples, 0, "R4 keeps no audio");
+    }
+    let t = r.out.all()[0].result.clone().expect("a transcript");
+    assert_eq!(t.segment_id, "ptt-60");
+}
