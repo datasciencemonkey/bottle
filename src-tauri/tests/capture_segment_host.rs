@@ -142,11 +142,7 @@ fn rig(installed: bool) -> Rig {
     let sent: Sent = Arc::default();
     let answers: Answers = Arc::default();
     let slot: Arc<Mutex<Option<LocalStt>>> = Arc::default();
-    let (log, stored, seen) = (
-        Arc::clone(&sent),
-        Arc::clone(&answers),
-        Arc::clone(&slot),
-    );
+    let (log, stored, seen) = (Arc::clone(&sent), Arc::clone(&answers), Arc::clone(&slot));
     let relay: BrainRelay = Arc::new(move |event: &str, payload: Value| {
         if event == SEGMENT {
             // As the brain: call `stt_transcribe` with the segmentId of the event, at once.
@@ -269,7 +265,13 @@ fn f1_capture_segment_comes_after_the_stop_and_the_result_is_already_stored() {
         [Ok(SPOKEN.to_owned())],
         "stt_transcribe finds the text when capture:segment arrives"
     );
-    let events: Vec<String> = r.sent.lock().unwrap().iter().map(|(e, _)| e.clone()).collect();
+    let events: Vec<String> = r
+        .sent
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(e, _)| e.clone())
+        .collect();
     let stopped = events.iter().position(|e| e == "capture:stopped");
     let segment = events.iter().position(|e| e == SEGMENT);
     assert!(
@@ -298,7 +300,15 @@ fn cap_01b_capture_segment_holds_no_text_and_no_audio() {
     keys.sort_unstable();
     assert_eq!(
         keys,
-        ["final", "leaseId", "mogId", "segmentId", "tEndMs", "tStartMs", "track"],
+        [
+            "final",
+            "leaseId",
+            "mogId",
+            "segmentId",
+            "tEndMs",
+            "tStartMs",
+            "track"
+        ],
         "only the SegmentRef fields, no text and no samples"
     );
 }
@@ -312,7 +322,11 @@ fn f1_a_failed_r4_result_still_emits_capture_segment_and_stt_transcribe_gives_it
     r.mic.speak_one_second();
     r.stop(&lease);
     let segments = r.segments();
-    assert_eq!(segments.len(), 1, "one capture:segment for the failed lease");
+    assert_eq!(
+        segments.len(),
+        1,
+        "one capture:segment for the failed lease"
+    );
     assert_eq!(segments[0]["segmentId"], json!(format!("ptt-{lease}")));
     assert_eq!(segments[0]["final"], json!(true));
     assert_eq!(*r.answers.lock().unwrap(), [Err("stt_model_missing")]);
