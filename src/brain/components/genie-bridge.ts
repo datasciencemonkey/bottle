@@ -19,6 +19,7 @@ import type {
   ProfileName,
 } from '../../shared/interfaces';
 import { NotImplementedError } from '../errors';
+import { classifyGenieError } from './genie-errors';
 
 const C = 'GenieBridge';
 
@@ -79,11 +80,13 @@ export class GenieBridgeStub implements GenieBridge {
   operations(_mogId?: MogId): { opId: string; state: OperationState }[] {
     throw new NotImplementedError(C, 'operations', 39); // TODO(#39)
   }
-  mapError(_e: { httpStatus?: number; rpcError?: unknown; isErrorText?: string }): {
+  /** G-14, G-15a: the GL-5 matrix (genie-errors.ts, ADR 0072). Never upstream text. */
+  mapError(e: { httpStatus?: number; rpcError?: unknown; isErrorText?: string }): {
     code: BackendErrorCode;
     userText: string;
   } {
-    throw new NotImplementedError(C, 'mapError', 32); // TODO(#32)
+    const { code, userText } = classifyGenieError(e);
+    return { code, userText };
   }
   workspaceLine(_profile: ProfileName): string {
     throw new NotImplementedError(C, 'workspaceLine', 40); // TODO(#40)

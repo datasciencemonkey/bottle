@@ -195,7 +195,7 @@ describe('brain component stubs', () => {
     expect(t.backendFor(binding).kind).toBe('genie_one_mcp'); // G-02, #28
     await expectStub(() => t.submit(ask), 33);
     await expectStub(() => t.operations(MOG), 39);
-    await expectStub(() => t.mapError({ httpStatus: 500 }), 32);
+    expect(t.mapError({ httpStatus: 500 }).code).toBe('GENIE_FAILED'); // G-14, #32
     await expectStub(() => t.workspaceLine('p'), 40);
     await expectStub(() => t.pinnedProfile('c'), 145);
   });
