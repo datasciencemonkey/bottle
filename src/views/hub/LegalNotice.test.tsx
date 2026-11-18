@@ -131,6 +131,27 @@ describe('V1 hub: first-run legal notice (#27)', () => {
     expect(d.textContent).toContain('Draft notice. This text is not yet approved.');
   });
 
+  it('[MB-08a] shows a fixed message and keeps the gate closed when the store cannot open (#541)', async () => {
+    const { el } = await hubWithNotice(1);
+    await act(async () => box(el).click());
+    await act(async () => cont(el).click());
+    expect(el.querySelector('[role="alert"]')).toBeNull();
+    await tauri.emitTo('hub', HUB_NOTICE_EVENT, { version: 1, accepted: false, storeError: true });
+    const d = must(dialog(el));
+    const alert = must(d.querySelector('[role="alert"]'));
+    expect(alert.textContent).toBe(
+      'Bottle could not open its local store. Restart Bottle; if this repeats, see Settings > Diagnostics.',
+    );
+    expect(LEGAL_NOTICE.storeErrorText).toBe(alert.textContent);
+    // The gate stays closed: the MOG list stays hidden, and the user can try again.
+    expect(el.querySelector('ul[aria-label="MOGs"]')).toBeNull();
+    expect(box(el).checked).toBe(true);
+    expect(cont(el).disabled).toBe(false);
+    // A later state without the error removes the message.
+    await tauri.emitTo('hub', HUB_NOTICE_EVENT, { version: 1, accepted: false });
+    expect(must(dialog(el)).querySelector('[role="alert"]')).toBeNull();
+  });
+
   it('[MB-08a] ignores a malformed notice payload', async () => {
     const { el } = await render(<Hub />);
     await tauri.emitTo('hub', HUB_NOTICE_EVENT, { version: '1', accepted: false });

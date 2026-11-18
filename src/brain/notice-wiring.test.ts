@@ -61,6 +61,42 @@ describe('brain wiring of the hub notice (#27)', () => {
     expect(send).toHaveBeenLastCalledWith({ version: NOTICE_VERSION, accepted: false });
   });
 
+  it('[MB-08a] a failed record keeps the gate closed and tells the hub the store failed (#541)', async () => {
+    const bus = new BrainBus();
+    const records = consentRecordsDouble();
+    const consent = createConsentService({ records, legacyStorage: null });
+    const send = vi.fn(async () => undefined);
+    wireNotice(bus, consent, send);
+    await flush();
+    records.fail({ write: true });
+    bus.dispatch(
+      input('hub', HUB_SCOPE, { action: 'notice.accept', noticeVersion: NOTICE_VERSION }),
+    );
+    await flush();
+    await flush();
+    expect(await consent.noticeState()).toEqual({ version: NOTICE_VERSION, accepted: false });
+    expect(send).toHaveBeenLastCalledWith({
+      version: NOTICE_VERSION,
+      accepted: false,
+      storeError: true,
+    });
+    // A later retry that works clears the message.
+    records.fail({ write: false });
+    bus.dispatch(
+      input('hub', HUB_SCOPE, { action: 'notice.accept', noticeVersion: NOTICE_VERSION }),
+    );
+    await flush();
+    await flush();
+    expect(send).toHaveBeenLastCalledWith({ version: NOTICE_VERSION, accepted: true });
+  });
+
+  it('[MB-08b] an old-version click is not reported as a store failure (#541)', async () => {
+    const { bus, send } = await setup();
+    bus.dispatch(input('hub', HUB_SCOPE, { action: 'notice.accept', noticeVersion: 0 }));
+    await flush();
+    expect(send).toHaveBeenLastCalledWith({ version: NOTICE_VERSION, accepted: false });
+  });
+
   it('[MB-08a] [ARC-5] sends the notice only to the hub window', async () => {
     await sendHubNotice({ version: NOTICE_VERSION, accepted: false });
     expect(core.emitTo).toHaveBeenCalledWith('hub', HUB_NOTICE_EVENT, {
