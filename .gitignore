@@ -42,3 +42,6 @@ secrets/
 .omc/
 reports/
 .isaac/
+
+# Vendored sherpa-onnx native archives (#45): fetched by scripts/vendor_sherpa_onnx.py, never committed
+vendor/sherpa-onnx/

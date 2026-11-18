@@ -41,6 +41,9 @@ pub mod resource_budget;
 pub mod session_guard;
 pub mod stt;
 pub mod stt_bench;
+#[cfg(feature = "local-stt")]
+pub mod stt_local;
+pub mod stt_model;
 pub mod testkit;
 pub mod token_broker;
 pub mod token_events;
