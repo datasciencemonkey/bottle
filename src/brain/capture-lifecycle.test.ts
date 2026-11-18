@@ -81,7 +81,7 @@ function rig(opts: { holdStart?: boolean; config?: CaptureLifecycleDeps['config'
     for (const id of postRoll) live.delete(id);
     postRoll.clear();
   };
-  const refusals: { mogId: string; mode: string }[] = [];
+  const refusals: { mogId: string; mode: string; error?: unknown }[] = [];
   const utterances: Utterance[] = [];
   const transcribed: SegmentRef[] = [];
   const texts = new Map<string, string>();
@@ -409,7 +409,7 @@ describe('capture lifecycle: R2 one-lease rule (#14)', () => {
     r.ptt('down', 1050);
     await r.flush();
     expect(r.refused).toEqual([['start', { mogId: A, mode: 'ptt' }]]);
-    expect(r.refusals).toEqual([{ mogId: A, mode: 'ptt' }]);
+    expect(r.refusals).toEqual([{ mogId: A, mode: 'ptt', error: new Error('mic_busy') }]);
     r.ptt('up', 2000);
     await r.flush();
     expect(names(r.calls)).toEqual(['start', 'release', 'start']);

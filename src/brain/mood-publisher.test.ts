@@ -141,4 +141,19 @@ describe('mood publisher: mood to mog:view_state (#13, ADR 0031)', () => {
     expect(latencyTraceClock(undefined)).toBeUndefined();
     expect(latencyTraceClock('true')).toBeUndefined();
   });
+  it('[MB-08a] [UX-01b] sends the brain badges with the mood, and a badge change alone sends a state', () => {
+    const { sent, pub } = setup();
+    const badge = {
+      kind: 'capture_refused',
+      text: 'Mic in use',
+      label: 'Mic in use',
+      hoverOnly: false,
+    };
+    pub.update(MOG, src(closed));
+    pub.update(MOG, src(closed), undefined, [badge]);
+    expect(sent.at(-1)).toMatchObject({ mood: 'idle', badges: [badge] });
+    pub.update(MOG, src(closed));
+    expect(sent).toHaveLength(3);
+    expect(sent.at(-1)?.badges).toBeUndefined();
+  });
 });
