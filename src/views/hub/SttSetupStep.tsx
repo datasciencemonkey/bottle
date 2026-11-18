@@ -1,0 +1,270 @@
+/**
+ * Wizard step 6 "Local speech" (MB-07, #413, ADR 0049): the consent question for the 487 MB
+ * Parakeet model (CAP-49a), the model status, progress, Cancel and a Retry that resumes
+ * (CAP-49b), and the content-free error codes as user text (CAP-49c).
+ *
+ * The step stores the answer before any install starts. The core gate reads that stored answer,
+ * so no download starts without Granted. `status` checks file sizes only, so the step is done
+ * only after an `install` call (which checks every SHA-256) resolves.
+ *
+ * TODO(#529): the `stt_model_*` hub commands. Until they land, the hub uses
+ * `unwiredSttModelApi`, which answers `stt_setup_unavailable`. TODO(#43): the wizard frame
+ * mounts this step; until then the hub shows it on its own.
+ */
+import { useCallback, useEffect, useRef, useState } from 'react';
+
+export type SttModelState = 'missing' | 'partial' | 'installed';
+export type SttConsent = 'not_asked' | 'declined' | 'granted';
+export type SttSource = 'github' | 'hf_mirror';
+
+/** Mirrors `SttModelStatus` of #529. */
+export interface SttModelView {
+  model: SttModelState;
+  partialBytes: number;
+  totalBytes: number;
+  consent: SttConsent;
+  installing: boolean;
+}
+
+/** Mirrors `SttModelProgress` of #529: a pinned file name and byte counts only. */
+export interface SttProgressView {
+  file: string;
+  done: number;
+  total: number;
+}
+
+/** The `stt_model_*` commands (#529). A refusal rejects with `{ error: <code> }`. */
+export interface SttModelApi {
+  status(): Promise<SttModelView>;
+  setConsent(consent: 'granted' | 'declined'): Promise<SttModelView>;
+  install(source: SttSource, onProgress: (p: SttProgressView) => void): Promise<SttModelView>;
+  cancel(): Promise<boolean>;
+}
+
+/** The codes of `mog_core::stt_setup::SetupError::code`, plus the unwired seam. */
+export const STT_ERROR_CODES = [
+  'stt_consent_required',
+  'stt_url_not_allowed',
+  'stt_download_failed',
+  'stt_hash_mismatch',
+  'stt_extract_failed',
+  'stt_io_failed',
+  'stt_download_cancelled',
+  'stt_install_busy',
+  'stt_models_dir_unavailable',
+  'stt_setup_unavailable',
+] as const;
+export type SttErrorCode = (typeof STT_ERROR_CODES)[number];
+
+const ERROR_TEXT: Record<SttErrorCode, string> = {
+  stt_consent_required: 'Bottle needs your agreement before it downloads the speech model.',
+  stt_url_not_allowed:
+    'The install stopped. The download address is not one of the approved sources.',
+  stt_download_failed:
+    'The download stopped. Check your network connection, then select Retry. The download continues from where it stopped.',
+  stt_hash_mismatch:
+    'The install stopped. A downloaded file did not match its pinned checksum, so Bottle deleted it. Select Retry to download it again.',
+  stt_extract_failed: 'The install stopped. The model archive did not unpack. Select Retry.',
+  stt_io_failed:
+    'The install stopped. Bottle could not write to the model folder. Check the free disk space, then select Retry.',
+  stt_download_cancelled:
+    'You cancelled the download. Select Retry to continue from where it stopped.',
+  stt_install_busy: 'A download of the speech model is already in progress.',
+  stt_models_dir_unavailable:
+    'The install stopped. Bottle cannot find your user folder for the speech model.',
+  stt_setup_unavailable: 'Local speech setup is not available in this build yet.',
+};
+
+/** The user text for an error code. An unknown code gets a general text, never the code. */
+export function sttErrorText(code: string): string {
+  return (ERROR_TEXT as Record<string, string>)[code] ?? 'The install stopped. Select Retry.';
+}
+
+function errorCode(e: unknown): string {
+  const code = (e as { error?: unknown } | null)?.error;
+  return typeof code === 'string' ? code : 'unknown';
+}
+
+const mb = (bytes: number) => `${Math.round(bytes / 1_000_000)} MB`;
+
+/** TODO(#529): replace with the `stt_model_*` commands. */
+export const unwiredSttModelApi: SttModelApi = {
+  status: () => Promise.reject({ error: 'stt_setup_unavailable' }),
+  setConsent: () => Promise.reject({ error: 'stt_setup_unavailable' }),
+  install: () => Promise.reject({ error: 'stt_setup_unavailable' }),
+  cancel: () => Promise.resolve(false),
+};
+
+function statusText(v: SttModelView): string {
+  switch (v.model) {
+    case 'installed':
+      return 'Downloaded';
+    case 'partial':
+      return `Partly downloaded: ${mb(v.partialBytes)} of ${mb(v.totalBytes)}. A retry continues from there.`;
+    default:
+      return 'Not downloaded';
+  }
+}
+
+export function SttSetupStep({
+  api = unwiredSttModelApi,
+  onDone,
+}: {
+  api?: SttModelApi;
+  onDone?: () => void;
+}) {
+  const [view, setView] = useState<SttModelView | null>(null);
+  const [source, setSource] = useState<SttSource>('github');
+  const [installing, setInstalling] = useState(false);
+  const [progress, setProgress] = useState<SttProgressView | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+  const live = useRef(true);
+  const doneRef = useRef(onDone);
+  useEffect(() => {
+    doneRef.current = onDone;
+  }, [onDone]);
+
+  const install = useCallback(
+    async (from: SttSource) => {
+      setError(null);
+      setInstalling(true);
+      setProgress(null);
+      try {
+        const v = await api.install(from, (p) => live.current && setProgress(p));
+        if (!live.current) return;
+        setView(v);
+        setDone(true);
+        doneRef.current?.();
+      } catch (e) {
+        if (!live.current) return;
+        setError(errorCode(e));
+        // The core status shows what the stopped download kept for a resume.
+        const v = await api.status().catch(() => null);
+        if (live.current && v) setView(v);
+      } finally {
+        if (live.current) {
+          setInstalling(false);
+          setProgress(null);
+        }
+      }
+    },
+    [api],
+  );
+
+  useEffect(() => {
+    live.current = true;
+    void api.status().then(
+      (v) => {
+        if (!live.current) return;
+        setView(v);
+        // MB-07: sizes alone do not prove the model; an install call checks every hash.
+        if (v.consent === 'granted' && v.model === 'installed') void install('github');
+      },
+      (e) => live.current && setError(errorCode(e)),
+    );
+    return () => {
+      live.current = false;
+    };
+  }, [api, install]);
+
+  const choose = async (answer: 'granted' | 'declined') => {
+    setError(null);
+    try {
+      // CAP-49a: the answer is stored before the install starts.
+      setView(await api.setConsent(answer));
+    } catch (e) {
+      setError(errorCode(e));
+      return;
+    }
+    if (answer === 'granted') await install(source);
+  };
+
+  const start = () => (view?.consent === 'granted' ? install(source) : choose('granted'));
+  const total = view?.totalBytes ?? 487_211_443;
+  const percent =
+    progress && progress.total > 0 ? Math.floor((progress.done * 100) / progress.total) : 0;
+  const checking = installing && view?.model === 'installed' && !progress;
+
+  return (
+    <section
+      data-view="stt-setup"
+      data-wizard-step="6"
+      data-done={String(done)}
+      aria-labelledby="stt-setup-title"
+    >
+      <h2 id="stt-setup-title">Local speech</h2>
+      <p>
+        Bottle turns your speech into text on this device. It needs a speech model of {mb(total)}.
+        The model downloads only after you agree.
+      </p>
+      {view && <p data-stt-status={view.model}>{statusText(view)}</p>}
+      {view?.consent === 'declined' && !installing && !done && (
+        <p>Local speech is off. You can download the model at any time.</p>
+      )}
+      {!installing && !done && view && (
+        <fieldset>
+          <legend>Download source</legend>
+          <input
+            id="stt-source-github"
+            type="radio"
+            name="sttSource"
+            value="github"
+            checked={source === 'github'}
+            onChange={() => setSource('github')}
+          />
+          <label htmlFor="stt-source-github">sherpa-onnx release on GitHub</label>
+          <input
+            id="stt-source-hf"
+            type="radio"
+            name="sttSource"
+            value="hf_mirror"
+            checked={source === 'hf_mirror'}
+            onChange={() => setSource('hf_mirror')}
+          />
+          <label htmlFor="stt-source-hf">Hugging Face mirror</label>
+        </fieldset>
+      )}
+      {checking && <p>Checking the speech model…</p>}
+      {installing && progress && (
+        <div>
+          <div
+            role="progressbar"
+            aria-label="Speech model download"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={percent}
+          />
+          <p>
+            {progress.file}: {mb(progress.done)} of {mb(progress.total)}
+          </p>
+        </div>
+      )}
+      {installing && (
+        <button type="button" onClick={() => void api.cancel()}>
+          Cancel
+        </button>
+      )}
+      {error && <p role="alert">{sttErrorText(error)}</p>}
+      {done && <p>The speech model is installed and checked.</p>}
+      {!installing && !done && view && (
+        <div>
+          {error && error !== 'stt_consent_required' && view.consent === 'granted' ? (
+            <button type="button" onClick={() => void install(source)}>
+              Retry
+            </button>
+          ) : (
+            <button type="button" onClick={() => void start()}>
+              Download ({mb(total)})
+            </button>
+          )}
+          {view.consent === 'not_asked' && (
+            <button type="button" onClick={() => void choose('declined')}>
+              Not now
+            </button>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}

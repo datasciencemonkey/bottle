@@ -117,11 +117,11 @@ fn w_17e_macos_models_dir_is_under_application_support() {
 
 #[test]
 fn w_17e_windows_models_dir_is_under_local_app_data() {
-    let local = r"C:\Users\u\AppData\Local";
-    let dir = models_dir(TargetOs::Windows, &env(&[("LOCALAPPDATA", local)]));
+    const LOCAL: &str = r"C:\Users\u\AppData\Local";
+    let dir = models_dir(TargetOs::Windows, &env(&[("LOCALAPPDATA", LOCAL)]));
     assert_eq!(
         dir,
-        Some(PathBuf::from(local).join("Bottle").join("models"))
+        Some(PathBuf::from(LOCAL).join("Bottle").join("models"))
     );
     // Not the roaming folder and not the home folder.
     let roaming_only = models_dir(

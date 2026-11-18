@@ -129,7 +129,7 @@ describe('Wizard STT step (MB-07, #413)', () => {
     const f = fakeApi({ consent: 'granted' });
     const { el } = await render(<SttSetupStep api={f.api} />);
     await click(button(el, 'Download (487 MB)'));
-    await f.progress({ file: 'encoder.int8.onnx', done: 326_000_000, total: 652_282_294 });
+    await f.progress({ file: 'encoder.int8.onnx', done: 326_141_147, total: 652_282_294 });
     const bar = el.querySelector('[role="progressbar"]');
     expect(bar?.getAttribute('aria-valuenow')).toBe('50');
     expect(step(el).textContent).toContain('encoder.int8.onnx: 326 MB of 652 MB');
