@@ -167,11 +167,14 @@ pub fn physical_from_hid(talk_key_down: bool, flags: u64, space_down: bool) -> P
     }
 }
 
-/// RTR-17a: whether a Shift key other than the talk key is down in `flags` (device bits).
-pub fn shift_held_from_flags(flags: u64, talk: TalkKey) -> bool {
-    let left = flags & 0x02 != 0;
-    let right = flags & 0x04 != 0 && talk != TalkKey::RightShift;
-    left || right
+/// The HIToolbox virtual key codes of Left-Shift (`kVK_Shift`) and Right-Shift
+/// (`kVK_RightShift`). RTR-17a reads their HID key state, as CAP-45 does for the talk key.
+pub const SHIFT_KEY_CODES: (u16, u16) = (56, 60);
+
+/// RTR-17a: whether a Shift key other than the talk key is down, from the HID key state of
+/// Left-Shift and Right-Shift (ADR 0053).
+pub fn shift_held_from_keys(_left_down: bool, _right_down: bool, _talk: TalkKey) -> bool {
+    false
 }
 
 #[cfg(test)]
@@ -180,14 +183,22 @@ mod tests {
     use crate::hotkey_core::{HotkeyOutput, PttMachine, PttPhase};
 
     #[test]
-    fn rtr_17a_shift_from_flags_ignores_the_talk_key_shift() {
-        assert!(shift_held_from_flags(0x02, TalkKey::RightOption));
-        assert!(shift_held_from_flags(0x04, TalkKey::RightOption));
-        assert!(!shift_held_from_flags(0x40, TalkKey::RightOption));
+    fn rtr_17a_shift_from_key_state_ignores_the_talk_key_shift() {
+        assert!(shift_held_from_keys(true, false, TalkKey::RightOption));
+        assert!(shift_held_from_keys(false, true, TalkKey::RightOption));
+        assert!(!shift_held_from_keys(false, false, TalkKey::RightOption));
         // Right-Shift is the talk key: only Left-Shift counts.
-        assert!(!shift_held_from_flags(0x04, TalkKey::RightShift));
-        assert!(shift_held_from_flags(0x06, TalkKey::RightShift));
-        assert!(!shift_held_from_flags(0, TalkKey::RightControl));
+        assert!(!shift_held_from_keys(false, true, TalkKey::RightShift));
+        assert!(shift_held_from_keys(true, true, TalkKey::RightShift));
+        assert!(!shift_held_from_keys(false, false, TalkKey::RightControl));
+    }
+
+    #[test]
+    fn rtr_17a_shift_codes_are_the_hitoolbox_shift_keys() {
+        // kVK_Shift = 0x38, kVK_RightShift = 0x3C (HIToolbox Events.h). Right-Shift is also the
+        // code of the Right-Shift talk key.
+        assert_eq!(SHIFT_KEY_CODES, (0x38, 0x3C));
+        assert_eq!(talk_key_code(TalkKey::RightShift).0, SHIFT_KEY_CODES.1);
     }
 
     #[test]
@@ -575,18 +586,24 @@ mod sys {
         m.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// RTR-17a: whether a Shift key other than `talk` is down now (HID key state, any thread).
+    /// It reads the key state of each Shift key, as CAP-45 does for the talk key, because a
+    /// source-state flags read may not carry the device-dependent bits.
+    pub fn shift_held(talk: TalkKey) -> bool {
+        let (left, right) = super::SHIFT_KEY_CODES;
+        // SAFETY: reads of the HID key state; no arguments to keep alive.
+        let (left, right) = unsafe {
+            (
+                CGEventSourceKeyState(CG_EVENT_SOURCE_STATE_HID, left),
+                CGEventSourceKeyState(CG_EVENT_SOURCE_STATE_HID, right),
+            )
+        };
+        super::shift_held_from_keys(left, right, talk)
+    }
+
     /// Run the Carbon application event loop on the main thread. Carbon sends the chord
     /// hot-key events through it, and it also runs the main dispatch queue. A Tauri app runs
     /// its own NSApplication loop instead; the device probe example calls this.
-    /// RTR-17a: whether a Shift key other than `talk` is down now (HID state, any thread).
-    pub fn shift_held(talk: TalkKey) -> bool {
-        // SAFETY: a read of the HID system modifier state; no arguments to keep alive.
-        super::shift_held_from_flags(
-            unsafe { CGEventSourceFlagsState(CG_EVENT_SOURCE_STATE_HID) },
-            talk,
-        )
-    }
-
     pub fn run_main_loop() {
         // SAFETY: called on the main thread; it returns when the app quits.
         unsafe { RunApplicationEventLoop() }

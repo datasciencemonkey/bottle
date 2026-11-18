@@ -1,14 +1,18 @@
 import type { RouterDecision } from '../shared/interfaces';
 import type { RouterInput } from './components/router-step';
-import { routerDecision } from '../test-support/model-invoke';
+import { chatCompletion, routerDecision } from '../test-support/model-invoke';
+import { core } from './test-core';
 import {
   ASK_CONFIDENCE,
   PREVIEW_MS,
+  ipcUtteranceDeps,
   routeUtterance,
   type InsertResult,
   type Utterance,
   type UtteranceRouteDeps,
 } from './utterance-route';
+
+vi.mock('@tauri-apps/api/core', async () => (await import('./test-core')).coreModule);
 
 const MOG = '00000000-0000-4000-8000-0000000000a1';
 const SENTENCE = 'Hi Sam, the deck is attached and I will send the numbers tomorrow.';
@@ -58,7 +62,7 @@ function deps(decision: RouterDecision, result: InsertResult | Error = 'inserted
 }
 
 describe('utterance route (#59)', () => {
-  it('[RTR-01b] [RTR-01c] [MOG-06a] a dictation ends at insert_text with the cleaned text', async () => {
+  it('[RTR-01b] [RTR-01c] a dictation ends at insert_text with the cleaned text', async () => {
     const { d, calls, inserted } = deps(
       dictation({ cleaned_text: 'Hi Sam, the deck is attached.' }),
     );
@@ -145,5 +149,65 @@ describe('utterance route (#59)', () => {
       expect((await routeUtterance(utterance(), d)).route).toBe('other');
       expect(calls).toEqual(['route']);
     }
+  });
+
+  it('[RTR-07] a session utterance never gets the preview, also when it is forced', async () => {
+    const session = { ...input, captureMode: 'session' as const };
+    const q = routerDecision({ confidence: 0.95 });
+    for (const forceAsk of [false, true]) {
+      const { d, calls } = deps(q);
+      const r = await routeUtterance(utterance({ forceAsk, input: session }), d);
+      expect(r.route).toBe('chip');
+      expect(calls).toEqual(['route']);
+    }
+    // A session never inserts into the focused app, also if a decision says `dictation`.
+    const { d, calls } = deps(dictation());
+    expect((await routeUtterance(utterance({ input: session }), d)).route).toBe('other');
+    expect(calls).toEqual(['route']);
+  });
+
+  it('[RTR-17a] a forced ask with no text gives no preview', async () => {
+    const empty = routerDecision({ intent: 'noise', genie_question: '', cleaned_text: '  ' });
+    const r = await routeUtterance(utterance({ forceAsk: true, text: ' \n ' }), deps(empty).d);
+    expect(r.route).toBe('other');
+  });
+
+  it('[RTR-14] an injection-suspected question gets the warning chip, never the preview', async () => {
+    const suspect = routerDecision({ confidence: 0.95, injection_suspected: true });
+    for (const forceAsk of [false, true]) {
+      const r = await routeUtterance(utterance({ forceAsk }), deps(suspect).d);
+      expect(r).toMatchObject({ route: 'chip', warning: 'injection_suspected' });
+    }
+    const plain = await routeUtterance(utterance(), deps(routerDecision({ confidence: 0.4 })).d);
+    expect(plain).toMatchObject({ route: 'chip', warning: undefined });
+  });
+
+  describe('a failed router step (the `context` fallback, ADR 0032)', () => {
+    beforeEach(() => {
+      core.reset();
+      core.invoke.mockImplementation(async (cmd: string) => {
+        if (cmd === 'model_invoke') throw new Error('gateway down');
+        return {};
+      });
+    });
+
+    it('[RTR-01c] a plain utterance is not inserted and nothing is sent', async () => {
+      const r = await routeUtterance(utterance(), ipcUtteranceDeps());
+      expect(r.route).toBe('other');
+      expect(core.invoke.mock.calls.map(([cmd]) => cmd)).not.toContain('insert_text');
+    });
+
+    it('[RTR-17a] [RTR-17b] a forced one still gets the preview of the STT text', async () => {
+      const r = await routeUtterance(utterance({ forceAsk: true }), ipcUtteranceDeps());
+      expect(r).toMatchObject({ route: 'preview', forced: true, question: SENTENCE });
+    });
+  });
+
+  it('[RTR-04a] the model reply of the IPC double reaches the route', async () => {
+    core.reset();
+    core.invoke.mockImplementation(async (cmd: string) =>
+      cmd === 'model_invoke' ? chatCompletion(JSON.stringify(routerDecision())) : {},
+    );
+    expect((await routeUtterance(utterance(), ipcUtteranceDeps())).route).toBe('preview');
   });
 });
