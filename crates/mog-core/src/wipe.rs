@@ -40,3 +40,6 @@ impl WipeService for StubWipeService {
         Err(CoreError::NotImplemented { component: ID })
     }
 }
+
+#[cfg(test)]
+mod tests;
