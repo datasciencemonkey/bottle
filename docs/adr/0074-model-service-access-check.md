@@ -37,7 +37,7 @@ code. No code tells "access denied" or "blocked by geography" apart from other f
    geography, cannot be reached, or has inference tables on. If the ASR probe passed but the
    inference-table config cannot be read (`unknown`), Databricks ASR stays on, and the status
    says that the tables are not verified. Users often cannot read the service config. The
-   admin inspection (decision 6) covers this case.
+   admin inspection (decision 7) covers this case.
 4. **Fallbacks for the other services.** These follow ARC-F7: cleanup gives the pre-pass text
    only, the router step uses the heuristic fallback, embeddings wait in the queue, and the
    writer and judge are off. The main agent model gives the fallback classifier route (RTR-15b).
@@ -57,6 +57,7 @@ code. No code tells "access denied" or "blocked by geography" apart from other f
 ## Consequences
 
 - The UC1 and UC2 paths can read one report at start and after a network change. They do not
-  need to check access themselves.
+  need to check access themselves. No code calls the check yet: `TODO(#52)` (SttProvider) and
+  `TODO(#19)` (model path) mark where it gets wired.
 - The live AT-36 run needs an admin and a real workspace (`needs:human`, `needs:admin` on #20).
 - The admin page is `docs/admin/model-service-prerequisites.md`.

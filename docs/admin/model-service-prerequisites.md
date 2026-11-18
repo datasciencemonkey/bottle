@@ -6,7 +6,7 @@ Bottle never picks a Databricks CLI profile for you. Each command below uses `--
 
 ## 1. Give access to the model services (ADM-04a)
 
-Bottle calls each model service through Unity Gateway (`/ai-gateway/mlflow/v1`) with a `system.ai.*` name (checklist item 5, NFR-21a). Give the group `bottle-users` permission to query each service in this table.
+Bottle calls each model service through Unity Gateway (`/ai-gateway/mlflow/v1`) with a `system.ai.*` name (checklist item 5, NFR-21a). Give the group `bottle-users` permission to query each service in this table. Set the service tags `app=bottle,stage=<x>` on each service, where `<x>` is your stage (for example `dev` or `prod`), so that usage and budgets show Bottle (see `docs/admin/usage-attribution.md`).
 
 | Service | What Bottle uses it for | MDM key for another service name | If access is missing |
 |---|---|---|---|
@@ -25,6 +25,8 @@ databricks serving-endpoints get-permissions <service-name> --profile <your-prof
 ```
 
 The service name is the name in the AI Gateway page, for example `system.ai.gpt-oss-20b`. The group `bottle-users` must have `CAN QUERY`. For a Unity Catalog `system.ai.*` service, also grant `USE CATALOG system` and `USE SCHEMA system.ai` (checklist item 3).
+
+Open question: the grant on a Unity Catalog `system.ai.*` model service itself (for example `EXECUTE`, as checklist item 3 uses for the MCP service) is not verified yet. Step 1 of the live admin check on #20 records it: https://github.com/datasciencemonkey/bottle/issues/20#issuecomment-6966537505. This page will name the grant after that step reports.
 
 ## 2. Cross-geography routing only for Databricks ASR (ADM-04b)
 
@@ -52,12 +54,17 @@ In the output, `ai_gateway.inference_table_config.enabled` must be `false` or ab
 
 ## What Bottle does when a prerequisite is missing
 
-Bottle checks each service on the home profile (`checkModelServices` in `src/brain/components/model-access.ts`). The check sends no user content, and it shows a status for each service with no URL and no token.
+The access check (`checkModelServices` in `src/brain/components/model-access.ts`, ADR 0074) is built and tested, but it is not run yet. Two issues must land first:
 
-- If Databricks ASR is selected and the ASR service has no access, Bottle applies `SttPolicy=local_only`. The STT badge shows "STT: local" and "On this device".
-- If cross-geography routing blocks the ASR service, Bottle applies `SttPolicy=local_only`.
-- If inference tables are on for the ASR service, Bottle applies `SttPolicy=local_only`. If Bottle cannot read the config, the status says that the inference tables are not verified.
-- If the main agent model service has no access, the fallback classifier routes each question.
-- If MDM sets `SttPolicy=local_only`, Bottle sends no ASR request and no ASR probe.
+- #19 wires the model path through the AI Gateway. Until then, the probe cannot reach a service, so Databricks ASR stays off and local speech to text runs.
+- #52 (SttProvider) and the UC2 path read the report of the check. Until then, no status shows in the app.
 
-The live probe through `model_invoke` comes with #19. Until then, Bottle does not turn on Databricks ASR.
+When the check runs, it will do these things. It will send no user content, and its status will hold no URL and no token.
+
+- If Databricks ASR is selected and the ASR service has no access, Bottle will apply `SttPolicy=local_only`. The STT badge will show "STT: local" and "On this device".
+- If cross-geography routing blocks the ASR service, Bottle will apply `SttPolicy=local_only`.
+- If inference tables are on for the ASR service, Bottle will apply `SttPolicy=local_only`. If Bottle cannot read the config, the status will say that the inference tables are not verified.
+- If the main agent model service has no access, the fallback classifier will route each question.
+- If MDM sets `SttPolicy=local_only`, Bottle will send no ASR request and no ASR probe.
+
+So the admin inspection of this page is the control until the check runs: inspect it for each release.
