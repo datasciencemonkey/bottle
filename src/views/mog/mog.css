@@ -27,34 +27,32 @@ body,
 }
 
 /* MOG-07, UX-38, UX-39a (ADR 0029): the badges sit at the foot of the window, over the
-   mascot. No fill (MOG-01a); a text shadow keeps the text readable on any desktop. */
+   mascot, clear of the target marker. No fill (MOG-01a): a hairline pill and a text halo keep
+   the text readable on any desktop. Colours and type come from ../tokens.css (#559). */
 .badges {
   position: absolute;
   left: 0;
   right: 0;
   bottom: 0;
   z-index: 1;
+  padding-bottom: 10px;
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 2px 6px;
-  font:
-    11px/1.3 system-ui,
-    sans-serif;
+  gap: 3px 4px;
+  font: 600 var(--mog-text-xs) / 1.25 var(--mog-font);
   pointer-events: none;
 }
 
 .badges [data-badge] {
   display: inline-flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 1px 4px;
-  border: 1px solid currentColor;
-  border-radius: 4px;
-  color: #fff;
-  text-shadow:
-    0 0 2px #000,
-    0 0 4px #000;
+  align-items: baseline;
+  gap: 4px;
+  padding: 1px 7px;
+  border: 1px solid rgb(255 255 255 / 55%);
+  border-radius: var(--mog-radius-pill);
+  color: var(--mog-overlay-text);
+  text-shadow: var(--mog-overlay-halo);
   font: inherit;
   pointer-events: auto;
 }
@@ -64,8 +62,17 @@ body,
   cursor: pointer;
 }
 
+.badges button[data-badge]:hover {
+  border-color: var(--mog-overlay-text);
+}
+
+.badges button[data-badge]:focus-visible {
+  outline: 2px solid var(--mog-focus);
+  outline-offset: 1px;
+}
+
 .badges [data-badge-detail] {
-  font-size: 10px;
+  font-weight: 400;
   opacity: 0.85;
 }
 
@@ -81,26 +88,74 @@ body,
   transform: translateX(-50%) rotate(180deg);
   border-left: 6px solid transparent;
   border-right: 6px solid transparent;
-  border-top: 8px solid #fff;
+  border-top: 8px solid var(--mog-overlay-text);
   filter: drop-shadow(0 0 2px #000);
   pointer-events: none;
 }
 
 /* MB-06b: the target toast with the MOG name, at the top of the window for 1.2 s. No fill
-   (MOG-01a); a text shadow keeps the text readable on any desktop. */
+   (MOG-01a); the halo keeps the text readable on any desktop. It fades in once. */
 .target-toast {
   position: absolute;
-  top: 2px;
+  top: 4px;
   left: 0;
   right: 0;
   z-index: 2;
   text-align: center;
-  color: #fff;
-  text-shadow:
-    0 0 2px #000,
-    0 0 4px #000;
-  font:
-    600 12px/1.3 system-ui,
-    sans-serif;
+  color: var(--mog-overlay-text);
+  text-shadow: var(--mog-overlay-halo);
+  font: 600 var(--mog-text-sm) / 1.3 var(--mog-font);
+  letter-spacing: 0.01em;
   pointer-events: none;
+  animation: mog-toast-in 160ms var(--mog-ease-out);
+}
+
+@keyframes mog-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+
+/* The REC and Offline overlays (4.7): small labels in the top corners, so they never cover
+   the face. Before #561 they had no position and sat under the window, out of sight. */
+[data-overlay='recording'],
+[data-overlay='offline'] {
+  position: absolute;
+  top: 24px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--mog-overlay-text);
+  text-shadow: var(--mog-overlay-halo);
+  font: 700 10px / 1 var(--mog-font);
+  letter-spacing: 0.06em;
+  pointer-events: none;
+}
+
+[data-overlay='recording'] {
+  left: 8px;
+}
+
+/* The red dot is a border, so the page still paints no background (MOG-01a). */
+[data-overlay='recording']::before {
+  content: '';
+  width: 0;
+  height: 0;
+  border: 3.5px solid var(--mog-lamp);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 50%);
+}
+
+[data-overlay='offline'] {
+  right: 8px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .target-toast {
+    animation: none;
+  }
 }
