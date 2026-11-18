@@ -84,3 +84,40 @@ def test_cap_50b_the_default_dest_is_the_cargo_env_folder():
     cfg = (ROOT / ".cargo" / "config.toml").read_text(encoding="utf-8")
     assert 'SHERPA_ONNX_ARCHIVE_DIR = { value = "vendor/sherpa-onnx", relative = true }' in cfg
     assert vendor.DEFAULT_DEST == ROOT / "vendor" / "sherpa-onnx"
+
+
+def test_cap_50b_a_full_size_bad_partial_restarts_the_download(tmp_path, monkeypatch):
+    """[CAP-50b] A .partial with bad bytes that the server calls complete (HTTP 416) is deleted.
+
+    The script then downloads the archive again from the start, instead of failing on every run.
+    """
+    good = b"the pinned archive"
+    (tmp_path / "a.tar.bz2.partial").write_bytes(b"x" * len(good))
+    calls = []
+
+    class Resp:
+        status = 200
+
+        def __init__(self):
+            self.data = [good, b""]
+
+        def read(self, _n):
+            return self.data.pop(0)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+    def urlopen(req, **_k):
+        calls.append(req.get_header("Range"))
+        if req.get_header("Range"):
+            raise vendor.urllib.error.HTTPError(req.full_url, 416, "Range Not Satisfiable", {}, None)
+        return Resp()
+
+    monkeypatch.setattr(vendor.urllib.request, "urlopen", urlopen)
+    assert vendor.fetch("a.tar.bz2", hashlib.sha256(good).hexdigest(), tmp_path) == 0
+    assert calls == [f"bytes={len(good)}-", None]
+    assert (tmp_path / "a.tar.bz2").read_bytes() == good
+    assert not (tmp_path / "a.tar.bz2.partial").exists()
