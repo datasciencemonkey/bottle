@@ -608,7 +608,8 @@ fn at_40_cap_20_segment_handed_to_r4_peaks_at_minus_3_dbfs() {
     use mog_core::types::{CaptureMode, CaptureState, OthersTrack};
     use std::sync::{Arc, Mutex};
 
-    // R4 SttEngine (TODO(#46)) implements `UtteranceSink`; this stand-in keeps what R2 hands it.
+    // R4 SttEngine (TODO(#46)) implements `UtteranceSink`; this stand-in keeps what the PTT
+    // buffer hands it. The test drives the buffer's `capture.state` and stop calls by hand.
     #[derive(Default)]
     struct R4(Mutex<Vec<Utterance>>);
     impl UtteranceSink for R4 {
@@ -651,7 +652,7 @@ fn at_40_cap_20_segment_handed_to_r4_peaks_at_minus_3_dbfs() {
         reason: StopReason::Released,
     });
     let segments = std::mem::take(&mut *r4.0.lock().unwrap());
-    assert_eq!(segments.len(), 1, "R2 hands one segment to R4");
+    assert_eq!(segments.len(), 1, "the PTT buffer hands one segment to R4");
     let peak = peak_dbfs(segments[0].samples());
     assert!(
         (peak - TARGET_PEAK_DBFS).abs() < 0.5,

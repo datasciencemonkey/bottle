@@ -24,7 +24,8 @@ The copy comes from one file: `src/views/hub/disclosures.ts`. If you change the 
 ## Where speech-to-text runs
 
 - Speech-to-text runs on this computer by default, with the local Parakeet model.
-- Push-to-talk audio stays in memory and is never written to disk. Bottle does not record before you press the talk key. After transcription, Bottle overwrites the audio in memory with zeros.
+- Push-to-talk and hands-free audio stay in memory. Bottle never writes them to a file. Bottle does not record before you press the talk key or start hands-free. After transcription, Bottle overwrites the audio in memory with zeros.
+- Your operating system can move memory to its swap or page file on disk. macOS encrypts swap by default. On Windows, the page file is not encrypted by default, so audio can reach the disk there (#500).
 - Meeting audio is kept encrypted on disk and deleted within 5 minutes after transcription, unless your admin keeps it longer.
 - Bottle uses Databricks speech-to-text only if you or your admin turn it on, after a check passes.
 - Then audio goes to your home workspace in short chunks, and Bottle does not store it there.

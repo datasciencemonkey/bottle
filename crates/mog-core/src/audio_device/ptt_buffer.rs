@@ -8,15 +8,18 @@
 //!
 //! - **RAM only (CAP-12c).** The audio is in heap chunks of [`CHUNK_SAMPLES`] samples. There is
 //!   no file, temp file, memory map, log or telemetry. A full chunk is never moved, so a growing
-//!   take leaves no copy in freed memory.
+//!   take leaves no copy in freed memory. TODO(#500): the pages are not locked, so the OS can
+//!   page them to swap or the Windows page file.
 //! - **No pre-roll (CAP-13a).** A take starts only when `capture.state` shows its lease
-//!   recording. A frame before that is dropped, and the sink keeps no ring buffer. The mic is
+//!   recording. A frame before that is dropped, and the sink keeps no ring buffer. So the first
+//!   data callback after the mic opens (about 10 ms) can be lost. The mic is
 //!   closed before a lease starts ([`CaptureCore`](crate::capture::CaptureCore), MOG-09).
 //! - **Pause (CAP-13b).** A paused state takes no frame. R2 closes the mic stream on pause.
 //! - **Caps.** A PTT take holds at most [`HOLD_MAX_MS`] of audio (CAP-04a) and a hands-free take
 //!   at most [`HANDS_FREE_MAX_MS`] (CAP-04b). Later frames are dropped.
-//! - **Stop.** A stop reason that drops audio ([`StopReason::discards_audio`]: a tap, Esc or zero
-//!   buffers) wipes the take. [`SinkEvent::Discard`] (CAP-17b) wipes every take at once. Any
+//! - **Stop.** A stop reason that drops audio ([`StopReason::discards_audio`]: a PTT tap or cancel,
+//!   Esc or zero buffers) wipes the take. A tap that stops hands-free keeps the audio, and so
+//!   does the panic stop (ADR 0078, decision 7). [`SinkEvent::Discard`] (CAP-17b) wipes every take at once. Any
 //!   other stop makes one contiguous [`Utterance`], sets its peak to -3 dBFS with
 //!   [`normalize_peak`] (CAP-20, ADR 0067), wipes the chunks and gives the utterance to the
 //!   [`UtteranceSink`].
@@ -84,7 +87,7 @@ pub fn wipe(samples: &mut [f32]) {
     compiler_fence(Ordering::SeqCst);
 }
 
-/// One heap chunk of audio. It is wiped before it is freed.
+/// One heap chunk of audio. It is wiped before it is freed. TODO(#500): lock its pages.
 struct Chunk(Box<[f32]>);
 
 impl Chunk {
