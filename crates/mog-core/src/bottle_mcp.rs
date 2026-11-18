@@ -189,7 +189,7 @@ impl LocalTools for StoreLocalTools {
     /// commit in one transaction, so this write never skips the outbox. R10 checks the text and
     /// stores an injection item as `quarantined` (SEC-24a), so `memory.recall` never returns it
     /// (SEC-24b). The agent never pins (MEM-28b: a pin needs a user action).
-    /// TODO(#141): the agent item has no workspace host or id yet (MEM-31). It is source
+    /// TODO(#538): the agent item has no workspace host or id yet (MEM-31). It is source
     /// `agent`, so it never goes into a Genie preamble (Table G-CTX).
     fn memory_write(&self, mog_id: &str, item_type: &str, text: &str) -> CoreResult<Value> {
         let now = now_ms();

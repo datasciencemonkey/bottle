@@ -52,7 +52,7 @@ confidence a draft gets. `MemoryDraft` (contract) has no exchange or utterance l
    `excludeQuarantined()` keeps only `active` rows and fails closed on a row with no status.
    The ContextAssembler (#92) must run its rows through it (`TODO(#92)`).
 7. **Agent items have no workspace yet.** The `bottle-mcp` session does not know the workspace,
-   so an agent item has source `agent` and no workspace fields (`TODO(#141)`). Table G-CTX
+   so an agent item has source `agent` and no workspace fields (`TODO(#538)`). Table G-CTX
    admits only You-track or confirmed items, so an agent item never goes into a preamble.
 
 ## Consequences
