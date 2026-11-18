@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import type { AskRequest, PageDraft, SegmentRef, Tags } from '../../shared/interfaces';
+import type { AskRequest, Intent, PageDraft, SegmentRef, Tags } from '../../shared/interfaces';
 import { BrainActor } from '../actor';
 import { core } from '../test-core';
 import { NotImplementedError } from '../errors';
@@ -144,9 +144,24 @@ describe('brain component stubs', () => {
     await expectStub(() => t.mayAutoResend('op'), 39);
   });
 
-  it('[T3] CapturePolicy stubs decide (#142) and directedTo (#119)', async () => {
+  it('[T3] [RTR-04a] [RTR-05] [RTR-07] CapturePolicy decides with the D30 thresholds (#142) and stubs directedTo (#119)', async () => {
     const t = createCapturePolicy();
-    await expectStub(() => t.decide({ mode: 'ptt', intent: 'question', confidence: 0.9 }), 142);
+    const d = (mode: 'ptt' | 'hands_free' | 'session', intent: Intent, confidence: number) =>
+      t.decide({ mode, intent, confidence });
+    expect(d('ptt', 'question', 0.9)).toBe('preview');
+    expect(d('ptt', 'question', 0.7)).toBe('preview');
+    expect(d('hands_free', 'question', 0.7)).toBe('preview');
+    expect(d('ptt', 'question', 0.69)).toBe('chip');
+    expect(d('hands_free', 'question', 0)).toBe('chip');
+    // RTR-07, B1: a session never previews (a preview sends by itself); a question is a chip.
+    expect(d('session', 'question', 0.99)).toBe('chip');
+    expect(d('session', 'dictation', 0.99)).toBe('drop');
+    expect(d('ptt', 'dictation', 0.2)).toBe('insert');
+    // F1 steps 13-15: a memory question that the RecallGate does not answer previews like a question.
+    expect(d('ptt', 'memory_question', 0.8)).toBe('preview');
+    expect(d('ptt', 'memory_question', 0.3)).toBe('chip');
+    for (const i of ['context', 'command', 'noise'] as const)
+      expect(d('ptt', i, 0.99)).toBe('drop');
     await expectStub(() => t.directedTo(seg), 119);
   });
 

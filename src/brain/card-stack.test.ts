@@ -226,4 +226,34 @@ describe('card stack controller', () => {
     card.setExpanded(undefined);
     expect(last()?.sections).toBeUndefined();
   });
+
+  it('[RTR-04a] [UX-20c] template controls show before the chips, and only a click runs them', () => {
+    const { card, last } = setup();
+    const clicks: string[] = [];
+    card.offerChip({ id: 'c1', kind: 'copy', label: 'Copy' });
+    card.setControls(
+      'preview:u1',
+      [
+        { id: 'preview_send_now', label: 'Send now' },
+        { id: 'preview_cancel', label: 'Cancel' },
+      ],
+      (id) => void clicks.push(id),
+    );
+    expect(last()?.chips.map((c) => c.id)).toEqual(['preview_send_now', 'preview_cancel', 'c1']);
+    card.input('hover', { blurbId: 'preview_send_now', on: true, via: 'pointer' });
+    expect(clicks).toEqual([]);
+    card.input('chip_click', { chipId: 'preview_cancel' });
+    expect(clicks).toEqual(['preview_cancel']);
+    card.clearControls('preview:u1');
+    expect(last()?.chips.map((c) => c.id)).toEqual(['c1']);
+    card.input('chip_click', { chipId: 'preview_cancel' });
+    expect(clicks).toEqual(['preview_cancel']);
+  });
+
+  it('[RTR-14] a control with no handler shows and does nothing on a click', () => {
+    const { card, last } = setup();
+    card.setControls('w', [{ id: 'injection_warning', label: 'Warning' }]);
+    expect(() => card.input('chip_click', { chipId: 'injection_warning' })).not.toThrow();
+    expect(last()?.chips).toEqual([{ id: 'injection_warning', label: 'Warning' }]);
+  });
 });
