@@ -52,10 +52,7 @@ export function Popup({ mogId, card }: { mogId: MogId; card: CardUpdate }) {
   };
 
   useEffect(() => {
-    if (phase === 'gone' || sticky || hovered) {
-      if (phase === 'fading' && hovered) setPhase('shown');
-      return;
-    }
+    if (phase === 'gone' || sticky || hovered) return;
     const t =
       phase === 'shown'
         ? setTimeout(() => setPhase('fading'), FADE_AFTER_MS)
@@ -69,6 +66,8 @@ export function Popup({ mogId, card }: { mogId: MogId; card: CardUpdate }) {
 
   const hover = (via: 'pointer' | 'focus', on: boolean) => {
     if (held[via] === on) return;
+    // A hover or focus during the fade brings the pop-up back.
+    if (on && phase === 'fading') setPhase('shown');
     setHeld((h) => ({ ...h, [via]: on }));
     void emitView(mogId, 'hover', { blurbId: newest.id, on, via });
   };
@@ -98,7 +97,7 @@ export function Popup({ mogId, card }: { mogId: MogId; card: CardUpdate }) {
       data-popup
       data-variant={copy ? 'copy' : 'ask'}
       data-state={phase}
-      title={why || undefined}
+      title={why ? `${line}\n${why}` : line}
       onMouseEnter={() => hover('pointer', true)}
       onMouseLeave={() => hover('pointer', false)}
       onFocus={() => hover('focus', true)}

@@ -54,6 +54,8 @@ const mountCard = async () => {
   return r;
 };
 const popup = (el: HTMLElement) => el.querySelector('[data-popup]') as HTMLElement | null;
+/** The pop-up that the test expects on screen. */
+const pop = (el: HTMLElement) => el.querySelector('[data-popup]') as HTMLElement;
 const advance = (ms: number) => act(async () => void vi.advanceTimersByTime(ms));
 const hover = (el: HTMLElement, on: boolean) =>
   act(async () => {
@@ -95,14 +97,14 @@ describe('#559 post-dictation pop-up', () => {
     expect(el.textContent).not.toContain('Top ten');
     const buttons = [...el.querySelectorAll('button')];
     expect(buttons).toHaveLength(1);
-    expect(buttons[0]!.textContent).toBe('Ask Genie');
-    expect(buttons[0]!.getAttribute('data-chip')).toBe('ask_genie:u3');
+    expect(buttons[0]?.textContent).toBe('Ask Genie');
+    expect(buttons[0]?.getAttribute('data-chip')).toBe('ask_genie:u3');
   });
 
   it('[#559] [UX-20c] Ask Genie sends the chip click of the newest text, and nothing else', async () => {
     const { el } = await mountCard();
     await tauri.emit('card:update', asks);
-    await hover(popup(el)!, true);
+    await hover(pop(el), true);
     await act(async () => (el.querySelector('[data-chip="ask_genie:u3"]') as HTMLElement).click());
     expect(viewEmits()).toEqual([
       { mogId: ID, kind: 'hover', payload: { blurbId: 'ask:u3', on: true, via: 'pointer' } },
@@ -115,16 +117,16 @@ describe('#559 post-dictation pop-up', () => {
     await tauri.emit('card:update', asks);
     await act(async () => (el.querySelector('[data-chip="ask_genie:u3"]') as HTMLElement).focus());
     await advance(FADE_AFTER_MS * 3);
-    expect(popup(el)!.getAttribute('data-state')).toBe('shown');
+    expect(pop(el).getAttribute('data-state')).toBe('shown');
   });
 
   it('[#559] an ignored pop-up fades out, then asks the brain to hide the card', async () => {
     const { el } = await mountCard();
     await tauri.emit('card:update', asks);
     await advance(FADE_AFTER_MS - 1);
-    expect(popup(el)!.getAttribute('data-state')).toBe('shown');
+    expect(pop(el).getAttribute('data-state')).toBe('shown');
     await advance(1);
-    expect(popup(el)!.getAttribute('data-state')).toBe('fading');
+    expect(pop(el).getAttribute('data-state')).toBe('fading');
     await advance(FADE_OUT_MS);
     expect(popup(el)).toBeNull();
     expect(viewEmits()).toEqual([{ mogId: ID, kind: 'cancel' }]);
@@ -134,12 +136,12 @@ describe('#559 post-dictation pop-up', () => {
     const { el } = await mountCard();
     await tauri.emit('card:update', asks);
     await advance(FADE_AFTER_MS - 1000);
-    await hover(popup(el)!, true);
+    await hover(pop(el), true);
     await advance(FADE_AFTER_MS * 4);
-    expect(popup(el)!.getAttribute('data-state')).toBe('shown');
-    await hover(popup(el)!, false);
+    expect(pop(el).getAttribute('data-state')).toBe('shown');
+    await hover(pop(el), false);
     await advance(FADE_AFTER_MS - 1);
-    expect(popup(el)!.getAttribute('data-state')).toBe('shown');
+    expect(pop(el).getAttribute('data-state')).toBe('shown');
     await advance(1);
     await advance(FADE_OUT_MS);
     expect(popup(el)).toBeNull();
@@ -149,10 +151,10 @@ describe('#559 post-dictation pop-up', () => {
     const { el } = await mountCard();
     await tauri.emit('card:update', asks);
     await advance(FADE_AFTER_MS);
-    expect(popup(el)!.getAttribute('data-state')).toBe('fading');
-    await hover(popup(el)!, true);
+    expect(pop(el).getAttribute('data-state')).toBe('fading');
+    await hover(pop(el), true);
     await advance(FADE_OUT_MS * 10);
-    expect(popup(el)!.getAttribute('data-state')).toBe('shown');
+    expect(pop(el).getAttribute('data-state')).toBe('shown');
     expect(viewEmits()).not.toContainEqual({ mogId: ID, kind: 'cancel' });
   });
 
@@ -167,23 +169,23 @@ describe('#559 post-dictation pop-up', () => {
       blurbs: [{ id: 'ask:u4', text: '"Margin by product"', completed: true }, ...asks.blurbs],
       chips: [...asks.chips, { id: 'ask_genie:u4', label: 'Ask Genie' }],
     });
-    expect(popup(el)!.getAttribute('data-state')).toBe('shown');
+    expect(pop(el).getAttribute('data-state')).toBe('shown');
   });
 
   it('[#559] [MOG-06d] a refused paste shows the text and Copy, open, and never fades', async () => {
     const { el } = await mountCard();
     await tauri.emit('card:update', refused);
-    const p = popup(el)!;
+    const p = pop(el);
     expect(p.getAttribute('data-variant')).toBe('copy');
     expect(el.querySelector('[data-popup-text]')?.textContent).toBe('Meet at noon');
     // One line of text: the MOG-06d reason is the accessible description of Copy, and its tooltip.
     const copy = el.querySelector('[data-chip="copy-u9"]') as HTMLElement;
     const why = document.getElementById(copy.getAttribute('aria-describedby') ?? '');
     expect(why?.textContent).toBe('Could not insert: no text field has focus');
-    expect(p.getAttribute('title')).toBe('Could not insert: no text field has focus');
+    expect(p.getAttribute('title')).toBe('Meet at noon\nCould not insert: no text field has focus');
     expect(el.textContent).not.toContain('Ask Genie');
     await advance(FADE_AFTER_MS * 20);
-    expect(popup(el)!.getAttribute('data-state')).toBe('shown');
+    expect(pop(el).getAttribute('data-state')).toBe('shown');
     expect(viewEmits()).toEqual([]);
   });
 
@@ -221,7 +223,7 @@ describe('#559 post-dictation pop-up', () => {
     expect(el.querySelector('[data-chip="preview_send_now"]')).not.toBeNull();
     expect(el.querySelector('[data-chip="preview_cancel"]')).not.toBeNull();
     await advance(FADE_AFTER_MS * 3);
-    expect(popup(el)!.getAttribute('data-state')).toBe('shown');
+    expect(pop(el).getAttribute('data-state')).toBe('shown');
   });
 });
 

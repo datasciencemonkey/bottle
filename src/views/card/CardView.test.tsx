@@ -134,6 +134,7 @@ describe('V3 card view', () => {
     chips: [],
     historyCount: 4,
   };
+  const [g1, b2] = stack.blurbs as [(typeof stack.blurbs)[number], (typeof stack.blurbs)[number]];
   const popupText = (el: HTMLElement) => el.querySelector('[data-popup-text]')?.textContent;
 
   // #559 (user decision): the small card is a pop-up with the newest blurb only. The brain still
@@ -141,7 +142,7 @@ describe('V3 card view', () => {
   // no Pin and no "N more in History".
   it('[UX-11a] [#559] the pop-up shows only the newest blurb and no History link', async () => {
     const { el } = await mountCard(<CardView mogId={ID} />);
-    await tauri.emit('card:update', { ...stack, blurbs: [stack.blurbs[1]!, stack.blurbs[0]!] });
+    await tauri.emit('card:update', { ...stack, blurbs: [b2, g1] });
     expect(popupText(el)).toBe('Churn was 3%');
     expect(el.textContent).not.toContain('EMEA');
     expect(el.querySelector('button[data-action="history"]')).toBeNull();
@@ -172,7 +173,7 @@ describe('V3 card view', () => {
     const { el } = await mountCard(<CardView mogId={ID} />);
     await tauri.emit('card:update', {
       ...stack,
-      blurbs: [stack.blurbs[1]!],
+      blurbs: [b2],
       chips: [{ id: 'ask_genie:b2', label: 'Ask Genie' }],
     });
     const p = el.querySelector('[data-popup]') as HTMLElement;
