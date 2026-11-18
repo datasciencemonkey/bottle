@@ -42,6 +42,23 @@ describe('V3 card view', () => {
     expect(el.querySelector('strong')).toBeNull();
   });
 
+  it('[MOG-05b] sends view_emit ready once, after it listens to card:update (#507)', async () => {
+    tauri.label = `card-${ID}`;
+    let listening = -1;
+    tauri.invoke.mockImplementation(async (cmd: string, a?: unknown) => {
+      const k = (a as { args?: { kind?: string } } | undefined)?.args?.kind;
+      if (cmd === 'view_emit' && k === 'ready') listening = tauri.listeners('card:update');
+      return {};
+    });
+    await mountCard(<CardView mogId={ID} />);
+    expect(viewEmits().filter((e) => (e as { kind: string }).kind === 'ready')).toEqual([
+      { mogId: ID, kind: 'ready' },
+    ]);
+    expect(listening).toBe(1);
+    tauri.invoke.mockImplementation(async () => ({}));
+    tauri.label = 'hub';
+  });
+
   it('[V3] ignores updates for another MOG and malformed payloads', async () => {
     const { el } = await mountCard(<CardView mogId={ID} />);
     await tauri.emit('card:update', { ...update, mogId: OTHER });
