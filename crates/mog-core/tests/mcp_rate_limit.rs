@@ -288,7 +288,8 @@ fn g_10a_an_ask_is_never_sent_after_its_call_cap() {
     // A 100 s wait does not fit a 60 s cap: one send, then `rate_limited`.
     assert_eq!(code(call(60)), "rate_limited");
     assert_eq!(s.count("tools/call"), 1);
-    // A 120 s cap fits one 100 s wait, but not a second one.
+    // After the hold of that 429 ends, a 120 s cap fits one 100 s wait, but not a second one.
+    r.pause.clock.advance(secs(100));
     let before = r.pause.total();
     assert_eq!(code(call(120)), "rate_limited");
     assert_eq!(s.count("tools/call"), 3);
