@@ -8,6 +8,7 @@ import { createAskGate, wireAskGate } from '../ask-gate';
 import { BrainBus, sendMicLevel, sendMogViewState, subscribeBrain } from '../bus';
 import { createCaptureMood, wireCaptureMood } from '../capture-mood';
 import { wireForget } from '../forget-wiring';
+import { wireWipe } from '../wipe-wiring';
 import { wireHubMogs } from '../hub-mogs-wiring';
 import {
   createCaptureLifecycle,
@@ -37,9 +38,11 @@ import { createMoodMapper } from './mood-mapper';
 import { createOperationTracker } from './operation-tracker';
 import { createPageService } from './page-service';
 import { createProfileService } from './profile-service';
+import { readAdminPolicy, retentionSettings } from './retention-settings';
 import { createRecoveryManager } from './recovery-manager';
 import { createRouterContextGate } from './router-context-gate';
 import { createSttProvider } from './stt-provider';
+import { WipeFlow } from './wipe-flow';
 
 export interface BrainComponentEntry {
   readonly id: `T${number}`;
@@ -102,6 +105,13 @@ export function startBrain(): Brain {
         flow: new ForgetFlow({ memory: components.T10, genieOne: new GenieOneDeleteUtility() }),
       });
     }
+    // #124 (MEM-33a, SEC-15c, U9): Settings -> Wipe. The hub dialog runs the R14 Wipe only on the
+    // user's confirm click. TODO(#525): the default core sends `mem_wipe` once it is in the
+    // contract; until then a Wipe fails safe and the dialog says that nothing changed.
+    wireWipe(bus, {
+      flow: new WipeFlow({ genieOne: new GenieOneDeleteUtility() }),
+      settings: async () => retentionSettings(await readAdminPolicy()),
+    });
     // MB-06a, MB-06b, UX-28: the talk-key target, its marker and its toast (#73). It is wired
     // before the capture lifecycle, so a `hotkey:ptt` down updates the target first.
     const talkTarget = createAppTalkTarget(configName);

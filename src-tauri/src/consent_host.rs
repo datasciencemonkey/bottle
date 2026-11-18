@@ -13,6 +13,13 @@
 //! Known gap: 9.3 step 5 and SEC-32a need the signed-in `user` in each record. The host still
 //! builds the component with `NoSignedInUser` (contract file `src-tauri/src/ipc.rs`), so a
 //! record has no user. TODO(#478): the host reads a managed user from T7 ProfileService (#17).
+//!
+//! R14 WipeService (#124, ADR 0087) shares the same store. The host builds it with the consent
+//! records as a content-free expiry, runs `run_security_expiries` once here at start (9.2:
+//! security data keeps its expiry), and manages it as `Arc<LocalWipeService>` for the `mem_wipe`
+//! route. This start call deletes no user content (U9). There is no timer.
+//! TODO(#525): `src-tauri/src/ipc.rs` routes `mem_wipe` to `mog_core::wipe::mem_wipe`.
+//! TODO(#448): add the audit log as an expiry once the host keeps one.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -22,6 +29,7 @@ use mog_core::consent::{open_device_records, ConsentRecords, ConsentRetention};
 use mog_core::error::{CoreError, CoreResult};
 use mog_core::local_store::key_vault::{os_key_vault, KeyVault};
 use mog_core::local_store::SqlCipherLocalStore;
+use mog_core::wipe::{LocalWipeService, SecurityExpiry, WipeService};
 use tauri::{Manager, Runtime};
 
 /// Open the consent records in the app data folder `dir`, kept for the default 13 months
@@ -43,9 +51,14 @@ pub fn install_with<R: Runtime>(
     vault: Arc<dyn KeyVault>,
     clock: Arc<dyn WallClock>,
 ) -> CoreResult<()> {
-    let (store, records) = open(dir, vault, clock)?;
+    let (store, records) = open(dir, vault, Arc::clone(&clock))?;
+    let wipe = LocalWipeService::new(Arc::clone(&store), clock)
+        .with_expiry(Arc::clone(&records) as Arc<dyn SecurityExpiry>);
+    // 9.2: the content-free expiries run at start. A failure leaves the records for the next run.
+    let _ = wipe.run_security_expiries();
     app.manage(store);
     app.manage(records);
+    app.manage(Arc::new(wipe));
     Ok(())
 }
 

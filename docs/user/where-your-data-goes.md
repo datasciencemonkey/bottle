@@ -94,6 +94,18 @@ The copy comes from one file: `src/views/hub/disclosures.ts`. If you change the 
 - Bottle cannot delete Genie One conversations yet. The dialog shows a "Delete in Genie One" link for each one.
 - Bottle deletes the conversations of a Genie space MOG through the Genie API. If a delete fails, the dialog tells you.
 
+## Wipe
+
+- Bottle does not delete your transcripts, dictation history, Genie answers or notes on its own.
+- In the hub, open Wipe. Select one option: older than 30 days, older than 90 days, or everything. Then select Wipe and confirm.
+- Wipe deletes the matching data of every MOG on this computer at once, also when you are offline. Search no longer finds it.
+- A Wipe by age deletes only the data older than the option. A newer note stays, also when it cites an older answer.
+- "Everything" leaves no transcript, dictation, answer or note. Your MOGs and their settings stay.
+- Select "Also delete Genie conversations" to delete the Genie conversations of the deleted answers too. Bottle cannot delete Genie One conversations yet, so the dialog shows a "Delete in Genie One" link for each one.
+- Some records hold no content and expire on their own: the consent records after 13 months and the agent action log after 30 days. A Wipe does not delete them.
+- The Wipe panel shows how long Bottle keeps each kind of data. A lock and "Set by your admin" show a value that your admin sets. You cannot change it.
+- The Wipe button does not work yet in this build. The dialog says that nothing changed (issue #525).
+
 ## Your DRAFT Pages
 
 - When you approve a definition, Bottle creates a DRAFT Unity Catalog Page that you own, in the home domain of the MOG.

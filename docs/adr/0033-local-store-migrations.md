@@ -101,3 +101,10 @@ exchanges of a session, and D37 recall cannot check the workspace and space of a
 - `workspaceId` is a string on the TS side, the same as `MemoryDraft.workspaceId`. The writer (#38) converts
   it to the `INTEGER` column. No schema change. No Rust type has `GenieExchange`, so no Rust mirror changes.
 - The requirements should add the 3 fields to 4.7 `GenieExchange` (comment on #449).
+
+## Amendment (2026-11-18, #124): the Wipe session rule
+
+- Decision 4 says that an age Wipe deletes a session row only when none of its utterances remains. ADR 0087 adds:
+  and none of its exchanges remains. `genie_exchange.session_id` is `SET NULL`, so an old session delete would
+  clear the session pointer of a kept recent exchange, and Forget by session could no longer find it.
+- The Wipe ages items by `first_seen_at` (the app clock), not by `created_at`. No schema change.

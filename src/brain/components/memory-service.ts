@@ -238,7 +238,7 @@ export function checkForgetScope(s: ForgetScope): CheckedScope {
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v !== '' ? v : undefined);
 
 /** One `mem.forget.*_conversations` row as a {@link ForgetConversation}, or undefined. */
-function conversationOf(r: unknown): ForgetConversation | undefined {
+export function conversationOf(r: unknown): ForgetConversation | undefined {
   if (typeof r !== 'object' || r === null) return undefined;
   const o = r as Record<string, unknown>;
   const backend = o['backendKind'];

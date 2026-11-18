@@ -241,6 +241,83 @@ impl SqlCipherLocalStore {
     }
 }
 
+/// One open transaction for a Rust caller of R10 (R14 WipeService, #124). It runs only fixed
+/// catalog entries: [`catalog::STATEMENTS`], [`catalog::GROUPS`] and the device-wide
+/// [`catalog::DeviceStmt`] entries. Nothing commits until the closure returns `Ok`.
+pub(crate) struct CoreTx<'a> {
+    conn: &'a Connection,
+}
+
+impl CoreTx<'_> {
+    /// Run a catalog query or write with a `mogId` (MEM-01) and answer its rows.
+    pub(crate) fn run(
+        &self,
+        stmt_id: &str,
+        params: &serde_json::Value,
+    ) -> CoreResult<Vec<serde_json::Value>> {
+        let stmt = catalog::find(stmt_id).ok_or(CoreError::UnknownStatement { component: ID })?;
+        require_mog_id_param(params)?;
+        let values = catalog::validate(stmt, params)?;
+        let out = run_statement(self.conn, stmt, &values).map_err(unavailable)?;
+        Ok(rows_of(out))
+    }
+
+    /// Run the steps of a catalog group with a `mogId` and answer one `{changes: n}` row each.
+    pub(crate) fn group(
+        &self,
+        group_id: &str,
+        params: &serde_json::Value,
+    ) -> CoreResult<Vec<serde_json::Value>> {
+        let group =
+            catalog::find_group(group_id).ok_or(CoreError::UnknownStatement { component: ID })?;
+        require_mog_id_param(params)?;
+        let values = catalog::validate_params(group.params, params)?;
+        let mut rows = Vec::with_capacity(group.steps.len());
+        for step in group.steps {
+            let out = run_statement(self.conn, step, &values).map_err(unavailable)?;
+            rows.extend(rows_of(out));
+        }
+        Ok(rows)
+    }
+
+    /// Run a device-wide query with no params (it crosses MOGs on purpose, with its reason).
+    pub(crate) fn device_query(
+        &self,
+        d: &catalog::DeviceStmt,
+    ) -> CoreResult<Vec<serde_json::Value>> {
+        if d.stmt.kind != catalog::Kind::Query || !d.stmt.params.is_empty() {
+            return Err(CoreError::UnknownStatement { component: ID });
+        }
+        let out = run_statement(self.conn, &d.stmt, &[]).map_err(unavailable)?;
+        Ok(rows_of(out))
+    }
+}
+
+fn rows_of(out: serde_json::Value) -> Vec<serde_json::Value> {
+    out["rows"].as_array().cloned().unwrap_or_default()
+}
+
+impl SqlCipherLocalStore {
+    /// Run `f` in one IMMEDIATE transaction (R14, #124). It commits only if `f` returns `Ok`;
+    /// any error rolls back every statement that `f` ran. Crate-private: the brain reaches the
+    /// store only through `mem_local_exec` and the fixed catalog (MEM-34a).
+    pub(crate) fn core_transaction<T>(
+        &self,
+        f: impl FnOnce(&CoreTx<'_>) -> CoreResult<T>,
+    ) -> CoreResult<T> {
+        let g = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = g
+            .as_ref()
+            .ok_or(CoreError::StoreUnavailable { component: ID })?;
+        let tx =
+            rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)
+                .map_err(unavailable)?;
+        let out = f(&CoreTx { conn: &tx })?;
+        tx.commit().map_err(unavailable)?;
+        Ok(out)
+    }
+}
+
 /// A SQLite value as JSON. The catalog selects no BLOB column; one would answer `null`.
 fn json_of(v: rusqlite::types::ValueRef<'_>) -> serde_json::Value {
     use rusqlite::types::ValueRef;
