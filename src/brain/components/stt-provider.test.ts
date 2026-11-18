@@ -209,6 +209,16 @@ describe('T4 SttProvider (#52)', () => {
       expect(
         (await createSttProvider({ config: ipcSttConfig(ASR_ON) }).transcribe(seg, tags)).provider,
       ).toBe('local_parakeet');
+      // A reply for the right segment that names another provider is not valid either.
+      core.reset();
+      core.invoke.mockImplementation(async (cmd: string, payload?: unknown) => {
+        if (cmd === 'policy_get') return {};
+        const a = argsOf(payload) as { provider: Provider };
+        return transcript(a.provider === 'dbx_gemini' ? 'dbx_whisper' : a.provider, {});
+      });
+      expect(
+        (await createSttProvider({ config: ipcSttConfig(ASR_ON) }).transcribe(seg, tags)).provider,
+      ).toBe('local_parakeet');
     });
 
     it('[CAP-60a] an empty local transcript is a valid "no speech" result, not a failure', async () => {
@@ -339,6 +349,35 @@ describe('T4 SttProvider (#52)', () => {
       expect(t.provider).toBe('local_parakeet');
       await vi.advanceTimersByTimeAsync(5_000);
       expect(providers()).toEqual(['dbx_gemini', 'local_parakeet']);
+    });
+
+    it('[CAP-60a] [CAP-59b] a cloud failure after 1.2 s, then an empty local result: the local result is used', async () => {
+      vi.useFakeTimers();
+      useCore({
+        plans: {
+          dbx_gemini: { delayMs: 1_300, fail: true },
+          local_parakeet: { delayMs: 500, text: '' },
+        },
+      });
+      let settled = false;
+      const p = createSttProvider({ config: ipcSttConfig(ASR_ON) })
+        .transcribe(seg, tags)
+        .finally(() => (settled = true));
+      await vi.advanceTimersByTimeAsync(1_700);
+      expect(settled).toBe(true);
+      const t = await p;
+      expect([t.provider, t.text]).toEqual(['local_parakeet', '']);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('[CAP-59b] T4 leaves no timer behind after a hedge win and a late cloud reply', async () => {
+      vi.useFakeTimers();
+      useCore({ plans: { dbx_gemini: { delayMs: 5_000 }, local_parakeet: { delayMs: 100 } } });
+      const p = createSttProvider({ config: ipcSttConfig(ASR_ON) }).transcribe(seg, tags);
+      await vi.advanceTimersByTimeAsync(1_300);
+      expect((await p).provider).toBe('local_parakeet');
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(vi.getTimerCount()).toBe(0);
     });
 
     it('[CAP-59a] a cloud reply before 1.2 s starts no local decode', async () => {

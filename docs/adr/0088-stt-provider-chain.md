@@ -4,7 +4,8 @@
 - Issue: #52 (CAP-47a, CAP-47b, CAP-59a, CAP-59b, CAP-60a, CAP-60b, CAP-64a, CAP-64b, AT-04,
   AT-21, AT-40). Soft dependencies: #46 (R4, PR #520), #49 (ASR client), #51 (probe and
   opt-in), #514 (host route of `stt_transcribe`).
-- Follow-ups: #530 (Whisper config key), #531 (R4 language ID and 60 s Retry audio).
+- Follow-ups: #530 (Whisper config key), #531 (R4 language ID and 60 s Retry audio), #550
+  (`net.status` to a brain `NetworkStatus`). The Sessions chain is #116.
 - Date: 2026-11-18
 - Owner: impl-52 (capture-lead-3)
 
@@ -37,14 +38,17 @@ leave these points open:
    because the language is not covered: that is still an opt-in (B5, COL-97).
 3. **Whisper only with an admin config** (CAP-47b). The Whisper source returns nothing until
    #530 names the Appendix C key. Whisper is a cloud step, so `local_only` and offline remove it.
-4. **Chains** (8.3, CAP-60a). Default: `local_parakeet → dbx_whisper (if configured) → failure`.
+4. **Chains** (8.3, CAP-60a). T4 builds the two PTT chains. The 8.3 Sessions chain (local Parakeet →
+   Databricks ASR if allowed → queue) belongs to the meeting STT path, #116 (CAP-61), and is not
+   in this ADR. Default: `local_parakeet → dbx_whisper (if configured) → failure`.
    With the opt-in: `dbx_gemini (hedged) → local_parakeet → dbx_whisper (if configured) →
    failure`. A rejection, a reply for another segment or provider, or an empty cloud text is a
    failed step. An empty local text is a valid "no speech" result. Local Parakeet runs at most once
-   in a chain. Offline (an injected `NetworkStatus`, ARC-F7) removes the cloud steps; the brain passes it once #466 gives the `net.status` source.
+   in a chain. Offline (an injected `NetworkStatus`, ARC-F7) removes the cloud steps; the brain passes it once #550 wires the `net.status` source.
 5. **Hedge** (CAP-59a, CAP-59b). The ASR call starts at once. If it has not replied in 1.2 s, the
    local decode of the same segment starts. A cloud failure before 1.2 s starts the local decode
-   at once. The first valid result wins; a late reply changes nothing. An empty local result ("no speech") wins only when the cloud call fails, so it never hides cloud text. The host cannot cancel a
+   at once. The first valid result wins; a late reply changes nothing. An empty local result ("no speech") wins only when the cloud call fails, so it never hides cloud text. The cost: with the opt-in, a "no speech" clip waits for the
+   cloud reply, up to the 8 s backstop. #49 must set a tighter ASR request timeout. The host cannot cancel a
    call, so the loser's result is dropped. Each step has a backstop deadline (cloud 8 s, local
    15 s): a step with no reply by then fails and the chain goes on, so a hung call never stops the
    chain. The ASR client sets its own request timeout (TODO(#49)).

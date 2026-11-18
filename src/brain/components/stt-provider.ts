@@ -7,10 +7,11 @@
  * - Providers (CAP-47a, CAP-47b): local Parakeet (`local_parakeet`, the default, CAP-57c),
  *   Databricks ASR (`dbx_gemini`) only after the opt-in, and the Whisper endpoint
  *   (`dbx_whisper`) only when the admin configures it. Every decode is one `stt_transcribe`.
- * - The 8.3 chains (CAP-60a). Default: local Parakeet → Whisper (if configured) →
+ * - The 8.3 PTT chains (CAP-60a). Default: local Parakeet → Whisper (if configured) →
  *   "Could not transcribe. Retry". With the ASR opt-in: Databricks ASR (hedged at 1.2 s) →
  *   local Parakeet → Whisper (if configured) → "Could not transcribe. Retry". A rejected or
- *   invalid reply goes to the next step.
+ *   invalid reply goes to the next step. The 8.3 Sessions chain (local Parakeet → Databricks ASR
+ *   if allowed → queue) is TODO(#116), with the meeting STT path.
  * - `SttPolicy=local_only` removes every cloud step: ASR and Whisper (CAP-60b). An unknown
  *   value or a failed policy read is `local_only`. Offline (ARC-F7) also removes them.
  * - The hedge (CAP-59a, CAP-59b): with no cloud reply in 1.2 s, the local decode of the same
@@ -226,7 +227,7 @@ export interface SttProviderDeps {
   invoke?: SttInvoke;
   /**
    * Offline (ARC-F7) removes the cloud steps. Default: online, so a cloud step fails and the
-   * chain goes on. TODO(#466): the brain passes the `net.status` NetworkStatus.
+   * chain goes on. TODO(#550): the brain passes the `net.status` NetworkStatus.
    */
   net?: Pick<NetworkStatus, 'online'>;
   /** Default: `Date.now`. */
@@ -396,9 +397,10 @@ class ChainProvider implements SttProvider {
           local = 'done';
           const l = primaryLanguage(t?.lang);
           if (t && !uncovered(l)) {
-            if (t.text.trim() !== '' || cloudDone) return finish(t);
+            if (t.text.trim() !== '') return finish(t);
+            // "No speech" waits for the cloud call: it wins only if that call fails.
             emptyLocal = t;
-            return;
+            return settleIfBothDone();
           }
           if (uncovered(l)) detected = l;
           settleIfBothDone();
