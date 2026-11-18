@@ -358,7 +358,9 @@ fn f1_install_capture_sends_r4_results_to_the_brain_relay() {
         .filter(|c| !c.is_whitespace())
         .collect();
     assert!(
-        body.contains("capture_host::BrainSegments::new(std::sync::Arc::clone(&relay))"),
+        body.contains(
+            "letsegments=capture_host::BrainSegments::new(std::sync::Arc::clone(&relay));"
+        ) && body.contains("std::sync::Arc::new(segments),"),
         "R4's results go to capture:segment on the brain relay"
     );
     assert!(
