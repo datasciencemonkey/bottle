@@ -21,10 +21,10 @@ export type AskRoute = Extract<UtteranceRoute, { route: 'preview' | 'chip' }>;
 export interface UtteranceHandlerDeps {
   owner: Pick<RequestOwner, 'begin' | 'release'>;
   /**
-   * The router input of a MOG: the profile, the profiles and the MOGs. Undefined while no
-   * profile is chosen (Bottle never picks one), so the utterance is not routed.
+   * The router input of a MOG: the profile, the profiles and the MOGs (#163). With no home
+   * profile it still comes, so the RTR-15c heuristic routes the utterance.
    */
-  routerInput(mogId: MogId): RouterInput | undefined;
+  routerInput(mogId: MogId): RouterInput | Promise<RouterInput>;
   /** `app.dictation.insert` (Appendix F). */
   insertionOn(mogId: MogId): boolean;
   route: UtteranceRouteDeps;
@@ -47,8 +47,7 @@ export function createUtteranceHandler(
     if (!owned) return;
     let handedOff = false;
     try {
-      const input = deps.routerInput(owned.mogId);
-      if (!input) return;
+      const input = await deps.routerInput(owned.mogId);
       const r = await routeUtterance(
         {
           mogId: owned.mogId,

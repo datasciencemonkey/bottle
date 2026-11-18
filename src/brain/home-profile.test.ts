@@ -35,14 +35,14 @@ describe('home profile router input (#163)', () => {
     // Only profiles Bottle can use go to the router (W-03a); never a token.
     expect(input.profiles.map((p) => p.name)).toEqual(['fake-home', 'fake-other']);
     expect(JSON.stringify(input)).not.toMatch(/token/i);
-    expect(h.hasHome(A)).toBe(true);
+    expect(h.home(A)).toBe('fake-home');
   });
 
   it('[RTR-15c] [RTR-01b] a MOG with no readable config still gets a router input, with no home', async () => {
     const h = setup({ readMog: async () => Promise.reject({ error: 'config_not_found' }) });
     const input = await h.routerInput(A);
     expect(input.profile).toBe(NO_HOME);
-    expect(h.hasHome(A)).toBe(false);
+    expect(h.home(A)).toBeUndefined();
   });
 
   it('[RTR-15c] [W-07d] a home profile that the CLI does not list is no home; Bottle picks no other', async () => {
@@ -50,7 +50,7 @@ describe('home profile router input (#163)', () => {
     const input = await h.routerInput(A);
     expect(input.profile).toBe(NO_HOME);
     expect(input.currentTarget).toBe(NO_HOME);
-    expect(h.hasHome(A)).toBe(false);
+    expect(h.home(A)).toBeUndefined();
   });
 
   it('[W-07d] one listed profile is never picked for the user', async () => {
