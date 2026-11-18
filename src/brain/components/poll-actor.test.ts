@@ -5,13 +5,14 @@
 import { scenarios } from '../../test-support/genie-one-mcp';
 import { HOST, PROFILE, collect, drain, nth, polls, rig } from '../../test-support/poll-actor-rig';
 import { GenieOneMcpBackend } from './genie-bridge';
-import { classifyTransportCode } from './genie-errors';
+import { classifyTransportCode, toFailedEvent, userTextFor } from './genie-errors';
 import {
   E_POLL_INFLIGHT,
   GIVE_UP_MS,
   POLL_TIMEOUT_MS,
   basePollDelayMs,
   pollDelayMs,
+  type PollTarget,
 } from './poll-actor';
 import type { AskEvent } from '../../shared/interfaces';
 
@@ -283,6 +284,46 @@ describe('PollActor in-flight floor and journal', () => {
         conversation_id: target.conversationId,
         response_id: target.responseId,
       });
+  });
+
+  it('[G-14] [G-16c] resume ends a failed status, an error reply or a refusal in a GL-5 failed event, never a new ask', async () => {
+    const run = async (r: ReturnType<typeof rig>, target: PollTarget) => {
+      r.journal.save(target);
+      const events: AskEvent[] = [];
+      const done = (async () => {
+        for await (const e of new GenieOneMcpBackend(r.cm).resume({
+          backend: 'genie_one_mcp',
+          profile: PROFILE,
+          host: HOST,
+          conversationId: target.conversationId,
+          responseId: target.responseId,
+        }))
+          events.push(e);
+      })();
+      await r.sched.runUntil(60_000, { settle: true });
+      await done;
+      expect(r.double.asks()).toHaveLength(1);
+      return events.at(-1);
+    };
+    // Genie status `failed`.
+    const a = rig({ responses: [scenarios.failed()] });
+    expect(await run(a, await a.ask())).toEqual({
+      t: 'failed',
+      code: 'GENIE_FAILED',
+      userText: userTextFor('GENIE_FAILED', { host: HOST }),
+      retry: 'user',
+    });
+    // An isError reply: classified by GL-5; the upstream text never shows.
+    const b = rig();
+    const tb = { ...(await b.ask()), responseId: 'resp-missing' };
+    const eb = await run(b, tb);
+    expect(eb).toMatchObject({ t: 'failed' });
+    expect(JSON.stringify(eb)).not.toContain('response not found');
+    // An R8 refusal (here auth_expired) maps through the transport table.
+    const c = rig({ reject: () => ({ error: 'auth_expired' }) });
+    expect(await run(c, await c.ask())).toEqual(
+      toFailedEvent(classifyTransportCode('auth_expired', { host: HOST })),
+    );
   });
 
   it('[MOG-10b] resume without a response ID or a journal row sends nothing', async () => {
