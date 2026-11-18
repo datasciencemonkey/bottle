@@ -43,6 +43,7 @@ pub mod stt;
 pub mod stt_bench;
 pub mod testkit;
 pub mod token_broker;
+pub mod token_events;
 pub mod token_guard;
 pub mod types;
 pub mod window_host;
