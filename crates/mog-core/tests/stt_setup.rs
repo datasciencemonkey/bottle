@@ -13,7 +13,9 @@ use mog_core::stt_model::{
     sha256_hex, ConsentGate, FetchError, ModelConsent, ModelSource, ModelSpec, ModelStatus,
     PinnedFile, RangeFetch,
 };
-use mog_core::stt_setup::{models_dir, FileConsent, SetupError, SttSetup, TargetOs, CONSENT_FILE};
+use mog_core::stt_setup::{
+    models_dir, Extractor, FileConsent, SetupError, SttSetup, TargetOs, CONSENT_FILE,
+};
 
 const HF: &str = "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/ed5d745623472f97cfc2e6c2916ee248798fc5a8/";
 
@@ -84,7 +86,7 @@ fn tmp(tag: &str) -> PathBuf {
     dir
 }
 
-fn no_extract() -> Arc<dyn Fn(&Path, &Path) -> io::Result<()> + Send + Sync> {
+fn no_extract() -> Arc<Extractor> {
     Arc::new(|_, _| panic!("the HF source never extracts"))
 }
 

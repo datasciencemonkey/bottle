@@ -61,14 +61,14 @@ const ERROR_TEXT: Record<SttErrorCode, string> = {
   stt_url_not_allowed:
     'The install stopped. The download address is not one of the approved sources.',
   stt_download_failed:
-    'The download stopped. Check your network connection, then select Retry. The download continues from where it stopped.',
+    'The download stopped. Check your network connection, then select Retry. The download continues at the point where it stopped.',
   stt_hash_mismatch:
     'The install stopped. A downloaded file did not match its pinned checksum, so Bottle deleted it. Select Retry to download it again.',
   stt_extract_failed: 'The install stopped. The model archive did not unpack. Select Retry.',
   stt_io_failed:
     'The install stopped. Bottle could not write to the model folder. Check the free disk space, then select Retry.',
   stt_download_cancelled:
-    'You cancelled the download. Select Retry to continue from where it stopped.',
+    'You cancelled the download. Select Retry to continue at the point where it stopped.',
   stt_install_busy: 'A download of the speech model is already in progress.',
   stt_models_dir_unavailable:
     'The install stopped. Bottle cannot find your user folder for the speech model.',
@@ -100,7 +100,7 @@ function statusText(v: SttModelView): string {
     case 'installed':
       return 'Downloaded';
     case 'partial':
-      return `Partly downloaded: ${mb(v.partialBytes)} of ${mb(v.totalBytes)}. A retry continues from there.`;
+      return `Partly downloaded: ${mb(v.partialBytes)} of ${mb(v.totalBytes)}. A retry continues at that point.`;
     default:
       return 'Not downloaded';
   }
