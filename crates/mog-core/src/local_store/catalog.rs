@@ -11,6 +11,8 @@
 //!   (Wipe) run only from Rust callers, for example R14 WipeService (U9: only Settings → Wipe
 //!   deletes by age).
 //! - A query answers `{ rows: [ {column: value} ] }`. A write answers `{ rows: [ {changes: n} ] }`.
+//! - A [`Group`] is a fixed list of write entries that commit in one transaction (MEM-10a). It
+//!   answers one `{changes: n}` row for each step (`mem.item.write`, #102, ADR 0068).
 //!
 //! The IDs follow the remote catalog of section 4.5 where the local schema supports them. The
 //! feature issues own the logic that uses them: `mem.exchange.*` (#38), `mem.item.*` (#114),
@@ -405,13 +407,20 @@ const OUTBOX_ENQUEUE: Stmt = Stmt {
     access: Access::Brain,
 };
 
+/// The due jobs of one queue kind, oldest first (FIFO). The kind is required, so the embed drain
+/// never reads v1 `sync` rows and the other way round.
 const OUTBOX_DUE: Stmt = Stmt {
     id: "mem.outbox.due",
     sql: "SELECT oid, kind, op, ref_id AS refId, payload_json AS payload, attempts, \
           next_attempt_at AS nextAttemptAt \
-          FROM outbox WHERE mog_id = :mogId AND next_attempt_at <= :now \
+          FROM outbox WHERE mog_id = :mogId AND kind = :kind AND next_attempt_at <= :now \
           ORDER BY oid LIMIT :limit",
-    params: &[MOG_ID, req("now", MS), req("limit", LIMIT)],
+    params: &[
+        MOG_ID,
+        req("kind", CODE),
+        req("now", MS),
+        req("limit", LIMIT),
+    ],
     kind: Kind::Query,
     access: Access::Brain,
 };
@@ -438,6 +447,83 @@ const OUTBOX_DONE: Stmt = Stmt {
     access: Access::Brain,
 };
 
+/// The embed job of one item, as step 2 of `mem.item.write` (MEM-10a, MEM-19d). It adds a job only
+/// if the item is in this MOG (MEM-01), has no embedding yet, and has no embed job waiting: so a
+/// second mention adds no duplicate (SP-21). The job is a pointer (`ref_id` = the item id) and
+/// holds no text. Rust only: the brain adds an embed job only with its item write.
+/// TODO(#198): when the text of an embedded item changes, #198 clears its embedding and its
+/// `vec0` row, so this step queues a new job. Until then the old vector stays.
+const OUTBOX_ENQUEUE_ITEM_EMBED: Stmt = Stmt {
+    id: "mem.outbox.enqueue_item_embed",
+    sql: "INSERT INTO outbox (mog_id, kind, op, ref_id, created_at, next_attempt_at) \
+          SELECT m.mog_id, 'embed', 'item.embed', m.item_id, :now, :now FROM memory_item m \
+          WHERE m.mog_id = :mogId AND m.item_id = :itemId AND m.embedding IS NULL \
+          AND m.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM outbox o \
+          WHERE o.mog_id = :mogId AND o.kind = 'embed' AND o.ref_id = :itemId)",
+    params: &[MOG_ID, req("itemId", UUID), req("now", MS)],
+    kind: Kind::Write,
+    access: Access::Core,
+};
+
+// ---- Atomic groups: fixed statements that commit in one transaction (MEM-10a, ADR 0068) ------
+
+/// A fixed list of catalog write statements that run in one SQLite transaction. The caller sends
+/// one ID and one params object, as for a [`Stmt`]; each step binds the params it names. If any
+/// step fails, or the process dies before the commit, no step is kept. The answer has one
+/// `{changes: n}` row for each step, in order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Group {
+    /// The catalog ID, for example `mem.item.write`.
+    pub id: &'static str,
+    /// The steps, in order. Each one is a [`Kind::Write`] entry of [`STATEMENTS`].
+    pub steps: &'static [&'static Stmt],
+    /// The params: the union of the step params, each one once.
+    pub params: &'static [Param],
+    /// Who may run it.
+    pub access: Access,
+}
+
+/// Write a memory item and queue its embedding in one transaction (#102, MEM-10a, MEM-19d). The
+/// params are those of `mem.item.upsert` plus `now`, the time of the outbox row.
+const ITEM_WRITE: Group = Group {
+    id: "mem.item.write",
+    steps: &[&ITEM_UPSERT, &OUTBOX_ENQUEUE_ITEM_EMBED],
+    params: &[
+        req("itemId", UUID),
+        MOG_ID,
+        req("itemType", CODE),
+        req("text", text(600)),
+        req("source", CODE),
+        req("confidence", REAL),
+        opt("pinned", BOOL),
+        opt("sensitivity", CODE),
+        opt("workspaceHost", text(255)),
+        opt("workspaceId", MS),
+        opt("spaceId", text(128)),
+        opt("sourceExchangeId", UUID),
+        req("seenAt", MS),
+        ROW_HLC,
+        DEVICE_ID,
+        req("now", MS),
+    ],
+    access: Access::Brain,
+};
+
+/// The atomic groups. Their IDs never equal a statement ID.
+pub const GROUPS: &[Group] = &[ITEM_WRITE];
+
+/// The group with this exact ID.
+pub fn find_group(id: &str) -> Option<&'static Group> {
+    GROUPS.iter().find(|g| g.id == id)
+}
+
+/// Who may run the statement or group with this ID, or `None` for an unknown ID.
+pub fn access_of(id: &str) -> Option<Access> {
+    find(id)
+        .map(|s| s.access)
+        .or_else(|| find_group(id).map(|g| g.access))
+}
+
 /// The whole local catalog. `mem_local_exec` and `LocalStore::exec` run nothing else.
 pub const STATEMENTS: &[Stmt] = &[
     MOG_UPSERT,
@@ -457,6 +543,7 @@ pub const STATEMENTS: &[Stmt] = &[
     OUTBOX_DUE,
     OUTBOX_RETRY,
     OUTBOX_DONE,
+    OUTBOX_ENQUEUE_ITEM_EMBED,
 ];
 
 /// The statement with this exact ID.
@@ -542,13 +629,21 @@ fn bind_value(ty: ParamType, v: &Value) -> CoreResult<SqlValue> {
 /// Check `params` against `stmt` and return the value for each parameter, in the order of
 /// `stmt.params`. `mogId` is checked first (MEM-01).
 pub fn validate(stmt: &Stmt, params: &Value) -> CoreResult<Vec<(&'static str, SqlValue)>> {
+    validate_params(stmt.params, params)
+}
+
+/// Check `params` against the declared `decl` and return the value for each one, in order.
+/// `mogId` is checked first (MEM-01). [`validate`] and the atomic groups use it.
+pub fn validate_params(
+    decl: &[Param],
+    params: &Value,
+) -> CoreResult<Vec<(&'static str, SqlValue)>> {
     require_mog_id_param(params)?;
     let obj: &Map<String, Value> = params.as_object().ok_or_else(bad)?;
-    if obj.keys().any(|k| !stmt.params.iter().any(|p| p.name == k)) {
+    if obj.keys().any(|k| !decl.iter().any(|p| p.name == k)) {
         return Err(bad());
     }
-    stmt.params
-        .iter()
+    decl.iter()
         .map(|p| match obj.get(p.name) {
             None | Some(Value::Null) if p.required => Err(bad()),
             None | Some(Value::Null) => Ok((p.name, SqlValue::Null)),

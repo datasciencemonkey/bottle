@@ -29,9 +29,31 @@ export interface MemoryServiceOptions {
   newId?: () => string;
   /**
    * The device id for `origin_device_id`. The default is one random id for each service.
-   * TODO(#102): the v1 SyncWorker needs an id that stays the same across starts.
+   * TODO(#195): the v1 SyncWorker needs an id that stays the same across starts.
    */
   deviceId?: () => string;
+  /** The embedding queue to start after an item write (#102). Without one, jobs wait in R10. */
+  embeddingQueue?: { kick(): void };
+}
+
+/**
+ * One memory item for `storeItem` (#102). The columns of `mem.item.upsert`; `itemId` is new when
+ * it is left out. #114 adds the provenance rules and the quarantine before it calls `storeItem`.
+ */
+export interface ItemWrite {
+  mogId: MogId;
+  itemId?: string;
+  type: MemoryDraft['type'];
+  /** 1-600 characters. */
+  text: string;
+  source: MemoryDraft['source'] | 'confirmed';
+  confidence: number;
+  pinned?: boolean;
+  sensitivity?: 'normal' | 'restricted';
+  workspaceHost?: string;
+  workspaceId?: string;
+  spaceId?: string;
+  sourceExchangeId?: string;
 }
 
 /** `OperationState` to the `genie_exchange.status` value, and whether it is terminal. */
@@ -101,6 +123,7 @@ export class LocalMemoryService implements MemoryService {
   readonly #now: () => number;
   readonly #newId: () => string;
   readonly #deviceId: () => string;
+  readonly #queue: { kick(): void } | undefined;
   #lastHlc = 0;
 
   /** The local store; tests pass a double (MEM-39a). */
@@ -112,6 +135,7 @@ export class LocalMemoryService implements MemoryService {
     this.#newId = o.newId ?? (() => crypto.randomUUID());
     const device = crypto.randomUUID();
     this.#deviceId = o.deviceId ?? (() => device);
+    this.#queue = o.embeddingQueue;
   }
 
   /** A row HLC that never goes back: the clock, or one more than the last value. */
@@ -132,6 +156,47 @@ export class LocalMemoryService implements MemoryService {
   }
   async write(_drafts: MemoryDraft[]): Promise<void> {
     throw new NotImplementedError(C, 'write', 114); // TODO(#114)
+  }
+  /**
+   * Write one memory item and queue its embedding with `mem.item.write` (#102, MEM-10a,
+   * MEM-19d). R10 commits the item row and its outbox row in one transaction, so a crash loses
+   * neither one alone. Offline or online, the embedding waits in the outbox; the queue runs it
+   * when the device is online. A second write of the same item adds no second job.
+   * It refuses an item id that another MOG owns (MEM-01): R10 changes no row then.
+   */
+  async storeItem(w: ItemWrite): Promise<{ itemId: string; queued: boolean }> {
+    if (!UUID_RE.test(w.mogId)) throw new Error('storeItem needs a UUID mogId');
+    const itemId = w.itemId ?? this.#newId();
+    const now = this.#now();
+    const workspaceId =
+      w.workspaceId !== undefined && /^\d{1,18}$/.test(w.workspaceId)
+        ? Number(w.workspaceId)
+        : undefined;
+    const { rows } = await this.store.exec(
+      'mem.item.write',
+      defined({
+        mogId: w.mogId,
+        itemId,
+        itemType: w.type,
+        text: w.text,
+        source: w.source,
+        confidence: w.confidence,
+        pinned: w.pinned,
+        sensitivity: w.sensitivity,
+        workspaceHost: w.workspaceHost,
+        workspaceId,
+        spaceId: w.spaceId,
+        sourceExchangeId: w.sourceExchangeId,
+        seenAt: now,
+        rowHlc: this.#hlc(now),
+        deviceId: this.#deviceId(),
+        now,
+      }),
+    );
+    const changes = rows.map((r) => (r as { changes?: number }).changes ?? 0);
+    if (changes[0] !== 1) throw new Error('storeItem: the item id belongs to another MOG');
+    this.#queue?.kick();
+    return { itemId, queued: changes[1] === 1 };
   }
   /**
    * Store one Genie exchange in R10 with `mem.exchange.upsert` (#38, MEM-25a, MEM-26, D60, U8).
@@ -195,7 +260,7 @@ export class LocalMemoryService implements MemoryService {
   }): Promise<ForgetResult> {
     throw new NotImplementedError(C, 'forget', 123); // TODO(#123)
   }
-  /** B2: the MVP has no Lakebase sync. The v1 SyncWorker (#102) adds the other modes. */
+  /** B2: the MVP has no Lakebase sync. The v1 SyncWorker (#195) adds the other modes. */
   mode(): 'local' | 'local_synced' | 'sync_paused' {
     return 'local';
   }
@@ -205,6 +270,13 @@ export class LocalMemoryService implements MemoryService {
   }
 }
 
+/**
+ * T10 for `startBrain`. It has no embedding queue yet, so item writes queue their jobs in R10 and
+ * nothing drains them.
+ * TODO(#198): `startBrain` builds one `EmbeddingQueue` with the real embedder, a `NetworkStatus`
+ * on the typed `net.status` payload (#466) and the MOG ids of T1, passes it here as
+ * `embeddingQueue`, and calls `start()`.
+ */
 export function createMemoryService(
   store?: LocalMemoryStore,
   o?: MemoryServiceOptions,

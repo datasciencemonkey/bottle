@@ -45,7 +45,7 @@ When the feature issue lands, its implementer removes the mark and finishes the 
 | AT-04 | CAP-72 (the engine fills model and runtime) | #46 |
 | AT-04 | RTR-15a, RTR-15c | #143 |
 | AT-04 | G-46a, G-46b | #41 |
-| AT-04 | MEM-08f, MEM-19d | #102 |
+| AT-04 | MEM-08f, MEM-19d: the queue runs on doubles since #102; the real embedder and the `net.status` payload | #198, #466 |
 | AT-04 | MEM-22a, MEM-22b | #199 |
 | AT-04 | NFR-17a, NFR-17b (the run across components) | #175 |
 | AT-05 | CAP-66a, CAP-66b, CAP-68 | #55 |
@@ -97,7 +97,7 @@ Do one session for each of 10 or more speakers. Each session is one part.
    has rates and counts only. Paste it into `docs/evidence/AT-40-B.md`.
 3. Repeat step 1 and 2 on `win11-i5-16gb`.
 
-### AT-04: dictate offline (macOS, about 15 min; blocked on #41, #52, #102, #143, #175)
+### AT-04: dictate offline (macOS, about 15 min; blocked on #41, #52, #143, #175, #198, #466)
 
 1. Start Bottle with the network on. Turn Wi-Fi off and pull any cable.
 2. Hold the talk key over a text editor and say "the offline test works". Expected: the text is

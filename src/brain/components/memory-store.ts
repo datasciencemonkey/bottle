@@ -5,7 +5,8 @@
  * (`mog_core::local_store::catalog`) and sends its params through `mem_local_exec`. The Rust core
  * checks the id, the params and the MOG (MEM-01), and runs the prepared statement.
  * `LOCAL_STMT_IDS` lists the ids the brain may use; a Rust test keeps it equal to the catalog.
- * The Wipe statements are Rust-only (R14), so they are not in this list.
+ * The Wipe statements are Rust-only (R14), so they are not in this list. `mem.item.write` is an
+ * atomic group: the item row and its embed job commit in one transaction (MEM-10a, ADR 0068).
  */
 import { call, type JsonObject } from '../../shared/ipc';
 
@@ -17,6 +18,7 @@ export const LOCAL_STMT_IDS = [
   'mem.exchange.by_session',
   'mem.item.upsert',
   'mem.item.get',
+  'mem.item.write',
   'mem.recall.fts',
   'mem.forget.item',
   'mem.forget.exchange',

@@ -43,8 +43,8 @@ impl LocalStore for StubLocalStore {
 
 /// The R10 side of the `mem_local_exec` IPC command (#37, MEM-34a, MEM-34b).
 ///
-/// It parses `MemExecArgs`, refuses a `stmtId` that is not a [`catalog::Access::Brain`] entry of
-/// the fixed catalog, runs the statement on `store` and answers `{ "rows": [...] }`. Every
+/// It parses `MemExecArgs`, refuses a `stmtId` that is not a [`catalog::Access::Brain`] entry or
+/// group of the fixed catalog, runs the statement on `store` and answers `{ "rows": [...] }`. Every
 /// refusal is a fixed IPC code with no value in it: `invalid_args` for an unknown or Rust-only
 /// id and for bad params, `not_implemented` for a store that is not there, and `host_failed`
 /// for a store that cannot run the statement.
@@ -55,9 +55,8 @@ pub fn mem_local_exec(
 ) -> CoreResult<serde_json::Value> {
     let refused = |code: &'static str| CoreError::IpcRefused { code };
     let a: MemExecArgs = serde_json::from_value(args).map_err(|_| refused("invalid_args"))?;
-    match catalog::find(&a.stmt_id) {
-        Some(s) if s.access == catalog::Access::Brain => {}
-        _ => return Err(refused("invalid_args")),
+    if catalog::access_of(&a.stmt_id) != Some(catalog::Access::Brain) {
+        return Err(refused("invalid_args"));
     }
     store
         .exec(
@@ -76,3 +75,5 @@ pub fn mem_local_exec(
 mod catalog_tests;
 #[cfg(test)]
 mod exchange_tests;
+#[cfg(test)]
+mod outbox_tests;

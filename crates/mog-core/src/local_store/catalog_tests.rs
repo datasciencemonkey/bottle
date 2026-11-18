@@ -327,6 +327,12 @@ fn mem_34a_ts_statement_ids_match_the_brain_catalog() {
         .iter()
         .filter(|st| st.access == Access::Brain)
         .map(|st| st.id)
+        .chain(
+            catalog::GROUPS
+                .iter()
+                .filter(|g| g.access == Access::Brain)
+                .map(|g| g.id),
+        )
         .collect();
     assert_eq!(ts_ids, brain);
 }
@@ -460,7 +466,7 @@ fn mem_41_brain_statements_run_on_the_local_store_with_no_lakebase() {
     );
     let due = run(
         "mem.outbox.due",
-        json!({"mogId": MOG_A, "now": 10, "limit": 10}),
+        json!({"mogId": MOG_A, "kind": "embed", "now": 10, "limit": 10}),
     );
     assert_eq!(rows(&due).len(), 1);
     let oid = rows(&due)[0]["oid"].as_i64().unwrap();
@@ -472,7 +478,7 @@ fn mem_41_brain_statements_run_on_the_local_store_with_no_lakebase() {
     assert_eq!(changes(&retry), 1);
     let due = run(
         "mem.outbox.due",
-        json!({"mogId": MOG_A, "now": 50, "limit": 10}),
+        json!({"mogId": MOG_A, "kind": "embed", "now": 50, "limit": 10}),
     );
     assert!(rows(&due).is_empty());
     assert_eq!(
