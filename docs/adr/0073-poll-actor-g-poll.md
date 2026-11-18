@@ -31,8 +31,13 @@ open:
    `CoreError::Unavailable { component: "R8", reason: "poll_inflight" }`. The Rust constant is
    `E_POLL_INFLIGHT`. The check runs after the allowlist and argument checks, and before any
    host lookup, token lend or send. The slot is an RAII guard, so a reply, an error or a panic
-   frees it. The code crosses IPC like the other R8 reasons (for example `genie_one_off`), so
-   `IPC_ERROR_CODES` does not change and no contract file changes.
+   frees it. This PR changes no contract file. Today the Tauri host (`src-tauri/src/ipc.rs`
+   `rejection`) sends every code outside `ERROR_CODES` as `host_failed`, like the other R8
+   reasons (for example `genie_one_off` and `timeout`). Contract-change #479 adds the R8 codes
+   to `ERROR_CODES` and `IPC_ERROR_CODES`, and `poll_inflight` must be in that list. Until #479
+   (and the `mcp_call` routing #467) lands, the brain sees `host_failed` for a poll timeout or
+   an overlap. Then its loop ends with the IDs kept in the journal (decision 6), and nothing is
+   asked again. So the brain re-poll of G-16c and ARC-F1 works end to end only after #479.
 3. The delay is computed at the end of the ask or of the previous poll, from the elapsed time
    of the ask at that moment. The base delay is 2 s, 3 s or 5 s by band. After 180 s it is the
    previous base delay x 1.5, at most 15 s. The x1.5 step uses the previous base delay, not the
@@ -47,8 +52,9 @@ open:
    that the bridge does not know, is not terminal (G-18a, ARC-F12). `completed`, `incomplete`
    and `failed` end the loop. An `isError` reply ends the loop and goes to the GL-5 mapper (#32)
    unchanged. Any other refusal ends the loop with that error. No poll starts after 10 min
-   (G-12b). The soft notice, `abandoned` and the late re-polls stay with #149. The actor never
-   calls `genie_ask`.
+   (G-12b). The loop then ends with `gave_up`, and `resume` yields the `abandoned` event. The
+   soft notice, the `abandoned` exchange status (G-12c) and the late re-polls stay with #149.
+   The actor never calls `genie_ask`.
 6. The actor writes `{opId, mogId, profile, host, conversationId, responseId, askedAt}` to a
    `PollJournal` when the loop starts. Only a terminal status removes the entry. A timeout, an
    error, an abort or the give-up keeps it, so a later poll can resume with the same IDs. The

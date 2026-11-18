@@ -52,15 +52,15 @@ export function createSimScheduler(startMs = 0, frameMs = FRAME_MS): SimSchedule
     sleep(ms, signal) {
       return new Promise<void>((resolve) => {
         if (signal?.aborted) return resolve();
-        const cancel = at(clock.now() + ms, resolve);
-        signal?.addEventListener(
-          'abort',
-          () => {
-            cancel();
-            resolve();
-          },
-          { once: true },
-        );
+        const onAbort = () => {
+          cancel();
+          resolve();
+        };
+        const cancel = at(clock.now() + ms, () => {
+          signal?.removeEventListener('abort', onAbort);
+          resolve();
+        });
+        signal?.addEventListener('abort', onAbort, { once: true });
       });
     },
     async runUntil(endMs, opts) {
