@@ -261,6 +261,7 @@ describe('R8 transport codes (ADR 0069 decision 4)', () => {
     ['protocol_unsupported', 'GENIE_FAILED'],
     ['host_failed', 'GENIE_FAILED'],
     ['not_implemented', 'CLIENT_BUG'],
+    ['poll_inflight', 'CONVERSATION_BUSY'],
     ['some_new_code', 'GENIE_FAILED'],
   ])('[G-14] %s maps to %s', (code, want) => {
     const r = classifyTransportCode(code, ctx);

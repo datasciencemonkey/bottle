@@ -5,6 +5,7 @@
 import { scenarios } from '../../test-support/genie-one-mcp';
 import { HOST, PROFILE, collect, drain, nth, polls, rig } from '../../test-support/poll-actor-rig';
 import { GenieOneMcpBackend } from './genie-bridge';
+import { classifyTransportCode } from './genie-errors';
 import {
   E_POLL_INFLIGHT,
   GIVE_UP_MS,
@@ -176,6 +177,26 @@ describe('PollActor loop', () => {
     const p = polls(r);
     expect(p).toHaveLength(3);
     expect(nth(p, 1).start - nth(p, 0).end).toBe(2_000);
+  });
+
+  it('[ARC-F1] [G-14] poll_inflight: the actor polls again; any other caller gets CONVERSATION_BUSY, never a new ask', async () => {
+    expect(E_POLL_INFLIGHT).toBe('poll_inflight');
+    const busy = classifyTransportCode(E_POLL_INFLIGHT, { host: HOST });
+    expect(busy.code).toBe('CONVERSATION_BUSY');
+    expect(busy.row).toBe('transport:poll_inflight');
+    expect(busy.retry).toBe('user');
+    expect(busy.autoRetry).toBe(false);
+    // The actor keeps the same IDs through several refusals in a row and asks nothing.
+    const r = rig({
+      responses: [scenarios.unknownStatus(1)],
+      reject: (n) => (n <= 3 ? { error: E_POLL_INFLIGHT } : undefined),
+    });
+    const target = await r.ask();
+    const { outcome } = await drain(r, r.cm.poll(target));
+    expect(outcome).toMatchObject({ kind: 'terminal', status: 'completed' });
+    expect(polls(r)).toHaveLength(5);
+    expect(new Set(polls(r).map((p) => JSON.stringify(p.args.args))).size).toBe(1);
+    expect(r.double.asks()).toHaveLength(1);
   });
 
   it('[ARC-F5] another refusal ends the loop and keeps the IDs for a resume', async () => {
