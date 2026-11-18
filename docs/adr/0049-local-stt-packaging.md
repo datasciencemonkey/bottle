@@ -37,7 +37,11 @@ what the build does when the archive is missing.
      <dir> matches it (<n> files)`.
    - Pinned targets: macOS arm64 and x64, Windows x64 (`static-MT-Release`), Linux x64.
    - `CARGO_NET_OFFLINE` does not stop a build script from opening a socket. The CI proof (#414)
-     must use a clean target folder with the network blocked at the OS level.
+     must use a clean target folder with the network blocked at the OS level. The lib-dir match
+     is shown on macOS only (13 files); #414 must show it on Windows and Linux too.
+   - A relative `CARGO_TARGET_DIR` resolves against a different working folder in each of the
+     two build scripts. Then the lib-dir check fails and stops the build; it never passes a bad
+     library. Use an absolute `CARGO_TARGET_DIR` for the `local-stt` build.
 3. **`scripts/vendor_sherpa_onnx.py` fetches the archives once** into `vendor/sherpa-onnx` from
    the v2.0.1 GitHub release, with resume, and checks the same pin file. After that, `cargo build --offline` works with no
    network (verified on macOS with a dead proxy and `CARGO_NET_OFFLINE=true`).
