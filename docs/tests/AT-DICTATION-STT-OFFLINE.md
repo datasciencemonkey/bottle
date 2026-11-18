@@ -43,7 +43,6 @@ When the feature issue lands, its implementer removes the mark and finishes the 
 
 | AT | Requirement IDs | Feature issue |
 |---|---|---|
-| AT-04 | CAP-60a, CAP-60b | #52 |
 | AT-04 | CAP-72 (the engine fills model and runtime) | #46 |
 | AT-04 | RTR-15a, RTR-15c | #143 |
 | AT-04 | G-46a, G-46b | #41 |
@@ -55,7 +54,6 @@ When the feature issue lands, its implementer removes the mark and finishes the 
 | AT-05 | MOG-05a, MOG-05b (and the late cleanup result) | #60 |
 | AT-40 | CAP-20 (the hand-off of the normalised segment from R2 to R4; the normaliser is built, #23) | #46 |
 | AT-40 | CAP-33a, CAP-33b | #126 |
-| AT-40 | CAP-47a, CAP-47b, CAP-64a, CAP-64b | #52 |
 | AT-40 | CAP-54a, CAP-54b, CAP-56a, CAP-56b | #49 |
 | AT-40 | CAP-65a, CAP-65b (the runner and the release record) | #53 |
 | AT-43 | MOG-06a, MOG-06c (the paste and the clipboard restore on a device) | #408 |

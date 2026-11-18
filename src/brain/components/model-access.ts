@@ -242,9 +242,10 @@ function serviceStatus(
  * Checks the 7 model services (ADM-04a) and returns the effective STT policy, the agent route
  * and a status for each service. All probes run in parallel. It never throws.
  *
- * TODO(#52): nothing calls this yet. The SttProvider runs it at brain start and after a network
- * change, applies `sttPolicy` and `stt`, and passes `localOnly` to the MoodMapper and
- * `agentRoute` to the UC2 path. It needs the real probe of #19 first (`createModelServiceProbe`).
+ * TODO(#51): nothing calls this yet. The ASR opt-in source of T4 (`IpcSttConfigDeps.asr`, #52)
+ * runs it at brain start and after a network change and applies `sttPolicy`; the brain passes
+ * `localOnly` to the MoodMapper and `agentRoute` to the UC2 path. It needs the real probe of #19
+ * first (`createModelServiceProbe`).
  */
 export async function checkModelServices(
   input: AccessCheckInput,

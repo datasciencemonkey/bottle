@@ -33,6 +33,7 @@ import { withOfflineFallback } from '../offline-intent';
 import { createProfilePick } from '../profile-pick';
 import { createRequestOwner, sendOwnedCard } from '../request-owner';
 import { configName, createAppTalkTarget, wireTalkTarget, type TalkTarget } from '../talk-target';
+import { createLifecycleTranscriber } from '../stt-wiring';
 import { ipcUtteranceDeps } from '../utterance-route';
 import { createUtteranceHandler } from '../utterance-wiring';
 import { createAgentBridge } from './agent-bridge';
@@ -218,9 +219,9 @@ export function startBrain(): Brain {
       control: ipcCaptureControl({ consent: components.T12 }),
       // MB-08a: a refused start is never silent. The consent gate also shows the hub notice.
       onRefused: (e) => captureMood.refused(e.mogId, e.error),
-      // TODO(#52): T4 SttProvider over R4 (#46) and `stt_transcribe` (TODO(#514)); the stub rejects, so nothing is routed yet.
-      transcribe: async (seg) =>
-        (await components.T4.transcribe(seg, { app: 'bottle', mog: seg.mogId, op: 'asr' })).text,
+      // #52 (ADR 0088): T4 runs the 8.3 chain over `stt_transcribe` (host route TODO(#514)).
+      // A failure shows its fixed text on the owner's card, and no text is routed.
+      transcribe: createLifecycleTranscriber(components.T4, sendOwnedCard),
       // #59 (ADR 0053): the MOG of the key-down owns the utterance (MOG-13a); a dictation ends
       // at `insert_text`; a preview or a chip goes to T3.
       onUtterance: createUtteranceHandler({

@@ -31,6 +31,9 @@ The copy comes from one file: `src/views/hub/disclosures.ts`. If you change the 
 - Bottle uses Databricks speech-to-text only if you or your admin turn it on, after a check passes.
 - Then audio goes to your home workspace in short chunks, and Bottle does not store it there.
 - The STT badge on each MOG shows which one is on.
+- If your admin sets local-only speech-to-text, no audio leaves this computer, also when local speech-to-text fails.
+- The local model knows 25 European languages. For another language, Bottle uses Databricks speech-to-text only if it is on. If it is off, the MOG shows "Transcription of this language is not available on this device."
+- If no speech-to-text gives a result, the MOG shows "Could not transcribe. Retry".
 
 ## The local speech model
 
