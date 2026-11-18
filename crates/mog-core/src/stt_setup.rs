@@ -309,3 +309,55 @@ impl SttSetup {
         }
     }
 }
+
+/// The app's R4 loader (#413, ADR 0049 amendment 1). Each load looks for an installed model in
+/// the W-17e folder, so a model that the wizard installs during the session needs no restart.
+/// With feature `local-stt` it loads [`crate::stt_local::ParakeetLoader`] on that folder.
+/// Without the feature, or with no installed model, it answers `stt_model_missing`, like
+/// [`crate::stt_engine::NoModelLoader`].
+#[derive(Debug, Clone)]
+pub struct AppModelLoader {
+    root: Option<PathBuf>,
+    spec: ModelSpec,
+}
+
+impl AppModelLoader {
+    /// A loader of `spec` under the models folder `root` (`None`: no folder on this device).
+    pub fn new(root: Option<PathBuf>, spec: ModelSpec) -> Self {
+        AppModelLoader { root, spec }
+    }
+
+    /// The Parakeet model (D78) in this device's W-17e folder.
+    pub fn for_this_device() -> Self {
+        AppModelLoader::new(
+            models_dir_for_this_device(),
+            ModelSpec::parakeet_tdt_v3_int8(),
+        )
+    }
+
+    /// The model folder when every model file is present with its pinned size. The hashes were
+    /// checked by the install (CAP-49c).
+    pub fn installed_model_dir(&self) -> Option<PathBuf> {
+        let installer = ModelInstaller::new(self.root.as_ref()?, self.spec.clone());
+        (installer.status() == ModelStatus::Installed).then(|| installer.model_dir())
+    }
+}
+
+impl crate::stt_engine::RecognizerLoader for AppModelLoader {
+    fn load(&self) -> Result<Box<dyn crate::stt_engine::Recognizer>, &'static str> {
+        let dir = self.installed_model_dir().ok_or("stt_model_missing")?;
+        #[cfg(feature = "local-stt")]
+        {
+            crate::stt_local::ParakeetLoader::new(dir).load()
+        }
+        #[cfg(not(feature = "local-stt"))]
+        {
+            let _ = dir;
+            Err("stt_model_missing")
+        }
+    }
+
+    fn identity(&self) -> crate::stt_engine::SttIdentity {
+        crate::stt_engine::SttIdentity::local_parakeet()
+    }
+}

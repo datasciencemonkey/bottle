@@ -391,6 +391,7 @@ fn mb_07_app_loader_finds_the_model_that_the_wizard_installed() {
     assert_eq!(loader.installed_model_dir(), None);
     // The loader checks at each load, so an install during the session needs no restart.
     s.set_consent(ModelConsent::Granted).unwrap();
-    s.install(ModelSource::HuggingFaceMirror, &mut |_| {}).unwrap();
+    s.install(ModelSource::HuggingFaceMirror, &mut |_| {})
+        .unwrap();
     assert_eq!(loader.installed_model_dir(), Some(s.model_dir()));
 }
