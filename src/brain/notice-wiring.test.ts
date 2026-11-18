@@ -90,7 +90,7 @@ describe('brain wiring of the hub notice (#27)', () => {
     expect(send).toHaveBeenLastCalledWith({ version: NOTICE_VERSION, accepted: true });
   });
 
-  it('[MB-08b] an old-version click is not reported as a store failure (#541)', async () => {
+  it('[MB-08a] guard: an old-version click is not reported as a store failure (#541)', async () => {
     const { bus, send } = await setup();
     bus.dispatch(input('hub', HUB_SCOPE, { action: 'notice.accept', noticeVersion: 0 }));
     await flush();

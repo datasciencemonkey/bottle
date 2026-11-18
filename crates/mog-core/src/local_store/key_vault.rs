@@ -134,47 +134,49 @@ impl KeyVault for MemoryKeyVault {
     }
 }
 
-/// `errSecMissingEntitlement`: the app has no keychain access group entitlement (an unsigned or
-/// ad-hoc macOS build), so the data protection keychain refuses a store.
-#[cfg(any(target_os = "macos", test))]
-pub const ERR_SEC_MISSING_ENTITLEMENT: i32 = -34018;
-
-/// `errSecItemNotFound`. An unentitled build gets it from a data protection get (#541).
-#[cfg(any(target_os = "macos", test))]
-pub const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
-
-/// The data protection codes on which a load also reads the login keychain (#541). An unentitled
-/// build gets -25300 from the get, so a key that an earlier run stored in the login keychain is
-/// found only with this rule.
-#[cfg(any(target_os = "macos", test))]
-pub const LOAD_FALLBACK: &[i32] = &[ERR_SEC_MISSING_ENTITLEMENT, ERR_SEC_ITEM_NOT_FOUND];
-
-/// The data protection codes on which a store goes to the login keychain (#541): only -34018.
-#[cfg(any(target_os = "macos", test))]
-pub const STORE_FALLBACK: &[i32] = &[ERR_SEC_MISSING_ENTITLEMENT];
-
-/// The macOS keychain that one call goes to.
+/// The macOS keychain that the vault uses. It is chosen one time, from the entitlement.
 #[cfg(any(target_os = "macos", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeychainTarget {
     /// The data protection keychain (`kSecUseDataProtectionKeychain`). Signed builds use it.
     DataProtection,
-    /// The user's login (file-based) keychain. A build with no entitlement keeps the key here.
+    /// The user's login (file-based) keychain. Only a build with no entitlement uses it.
     Login,
 }
 
-/// Run `op` on the data protection keychain. Only when it fails with a code in `fall_back_on`
-/// ([`LOAD_FALLBACK`] or [`STORE_FALLBACK`]), run it once more on the login keychain (#541).
-/// Every other result, and the result of the login try, is returned as is. `op` gets and returns
-/// only `OSStatus` codes, so no key bytes go through an error.
+/// The keychain for a process that has (`true`) or does not have the `keychain-access-groups`
+/// entitlement (#541). There is no fallback between them: an entitled build never reads or writes
+/// the login keychain, so it never uses a login item that another process of the user planted.
 #[cfg(any(target_os = "macos", test))]
-pub fn with_login_fallback<T>(
-    fall_back_on: &[i32],
-    mut op: impl FnMut(KeychainTarget) -> Result<T, i32>,
-) -> Result<T, i32> {
-    match op(KeychainTarget::DataProtection) {
-        Err(code) if fall_back_on.contains(&code) => op(KeychainTarget::Login),
-        other => other,
+pub fn target_for(entitled: bool) -> KeychainTarget {
+    if entitled {
+        KeychainTarget::DataProtection
+    } else {
+        KeychainTarget::Login
+    }
+}
+
+/// The item attributes that the vault sends for one keychain.
+#[cfg(any(target_os = "macos", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ItemPlan {
+    /// `kSecUseDataProtectionKeychain`.
+    pub data_protection_keychain: bool,
+    /// `kSecAttrAccessControl` with `AfterFirstUnlockThisDeviceOnly` on a store (MEM-08b).
+    pub access_control: bool,
+    /// `kSecAttrSynchronizable`. Always false: the key never syncs to iCloud.
+    pub synchronizable: bool,
+}
+
+/// The item attributes for `target`. The login keychain does not honour the accessibility class,
+/// so its item gets no access control (ADR 0071 amendment 1).
+#[cfg(any(target_os = "macos", test))]
+pub fn item_plan(target: KeychainTarget) -> ItemPlan {
+    let dp = target == KeychainTarget::DataProtection;
+    ItemPlan {
+        data_protection_keychain: dp,
+        access_control: dp,
+        synchronizable: false,
     }
 }
 
@@ -211,16 +213,14 @@ impl KeyVault for NoKeyVault {
 
 /// The macOS Keychain vault.
 ///
-/// The item is a generic password in the data protection keychain, with
-/// `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` and no iCloud sync. macOS honours the
-/// accessibility class only in the data protection keychain, and that keychain needs a signed app
-/// with a keychain access group entitlement. An unsigned or ad-hoc build gets
-/// `errSecMissingEntitlement` (-34018) on a store, and `errSecItemNotFound` (-25300) on a get.
-/// So a store retries in the login keychain only on -34018, and a load reads the login keychain
-/// only on -34018 or -25300. The item has the same service and account and no iCloud sync
-/// ([`with_login_fallback`], #541). The login keychain does not honour the accessibility class, so MEM-08b accessibility is
-/// not enforced on such a build (ADR 0071 amendment 1). Every other error is `keychain_unavailable`.
-/// TODO(#34): verify on a signed build (needs:mac).
+/// A signed build has the `keychain-access-groups` entitlement. Its item is a generic password in
+/// the data protection keychain, with `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` and no
+/// iCloud sync. macOS honours the accessibility class only in that keychain. An unsigned or ad-hoc
+/// build (for example `pnpm tauri dev`) has no entitlement, and the data protection keychain
+/// refuses it. The vault checks the entitlement one time at creation ([`target_for`], #541).
+/// Without it, the vault uses only the login keychain, with the same service and account and no
+/// iCloud sync. MEM-08b accessibility is then not enforced (ADR 0071 amendment 1). There is no
+/// fallback between the two keychains. TODO(#34): verify on a signed build (needs:mac).
 #[cfg(target_os = "macos")]
 pub mod macos {
     use security_framework::access_control::{ProtectionMode, SecAccessControl};
@@ -229,10 +229,70 @@ pub mod macos {
     };
 
     use super::{
-        with_login_fallback, KeyVault, KeychainTarget, LocalKey, ERR_SEC_ITEM_NOT_FOUND, ID,
-        KEY_ACCOUNT, KEY_LEN, KEY_SERVICE, LOAD_FALLBACK, STORE_FALLBACK,
+        item_plan, target_for, KeyVault, KeychainTarget, LocalKey, ID, KEY_ACCOUNT, KEY_LEN,
+        KEY_SERVICE,
     };
     use crate::error::{CoreError, CoreResult};
+
+    /// `errSecItemNotFound`.
+    const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
+
+    /// Whether this process has the `keychain-access-groups` entitlement. A signed release build
+    /// has it; an unsigned or ad-hoc build does not. Any failure of the check reads as "not
+    /// entitled".
+    pub fn has_keychain_access_groups() -> bool {
+        use std::ffi::c_void;
+        type CFRef = *const c_void;
+        #[link(name = "CoreFoundation", kind = "framework")]
+        extern "C" {
+            fn CFStringCreateWithBytes(
+                alloc: CFRef,
+                bytes: *const u8,
+                len: isize,
+                encoding: u32,
+                external: u8,
+            ) -> CFRef;
+            fn CFRelease(cf: CFRef);
+        }
+        #[link(name = "Security", kind = "framework")]
+        extern "C" {
+            fn SecTaskCreateFromSelf(alloc: CFRef) -> CFRef;
+            fn SecTaskCopyValueForEntitlement(
+                task: CFRef,
+                entitlement: CFRef,
+                error: *mut CFRef,
+            ) -> CFRef;
+        }
+        const UTF8: u32 = 0x0800_0100; // kCFStringEncodingUTF8
+        const NAME: &[u8] = b"keychain-access-groups";
+        // SAFETY: plain CoreFoundation and Security calls. Each object that a Create or Copy
+        // call returns is released once, and a null is never released.
+        unsafe {
+            let task = SecTaskCreateFromSelf(std::ptr::null());
+            if task.is_null() {
+                return false;
+            }
+            let name = CFStringCreateWithBytes(
+                std::ptr::null(),
+                NAME.as_ptr(),
+                NAME.len() as isize,
+                UTF8,
+                0,
+            );
+            if name.is_null() {
+                CFRelease(task);
+                return false;
+            }
+            let value = SecTaskCopyValueForEntitlement(task, name, std::ptr::null_mut());
+            let entitled = !value.is_null();
+            if entitled {
+                CFRelease(value);
+            }
+            CFRelease(name);
+            CFRelease(task);
+            entitled
+        }
+    }
 
     /// Keychain item accessibility class.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -260,12 +320,20 @@ pub mod macos {
     /// The macOS Keychain vault for the local store key.
     pub struct KeychainVault {
         spec: KeychainSpec,
+        target: KeychainTarget,
     }
 
     impl KeychainVault {
-        /// The Bottle local store key item.
+        /// The Bottle local store key item, in the keychain that this process may use.
         pub fn bottle() -> Self {
+            Self::for_entitlement(has_keychain_access_groups())
+        }
+
+        /// The Bottle item for a process that has (`true`) or does not have the
+        /// `keychain-access-groups` entitlement. The seam for tests.
+        pub fn for_entitlement(entitled: bool) -> Self {
             KeychainVault {
+                target: target_for(entitled),
                 spec: KeychainSpec {
                     service: KEY_SERVICE,
                     account: KEY_ACCOUNT,
@@ -276,26 +344,30 @@ pub mod macos {
             }
         }
 
-        /// The item description.
+        /// The item description of a signed build.
         pub fn spec(&self) -> KeychainSpec {
             self.spec.clone()
         }
 
-        fn options(&self, target: KeychainTarget) -> PasswordOptions {
+        /// The keychain that this vault uses.
+        pub fn target(&self) -> KeychainTarget {
+            self.target
+        }
+
+        fn options(&self) -> PasswordOptions {
+            let plan = item_plan(self.target);
             let mut o = PasswordOptions::new_generic_password(self.spec.service, self.spec.account);
-            if self.spec.data_protection_keychain && target == KeychainTarget::DataProtection {
+            if self.spec.data_protection_keychain && plan.data_protection_keychain {
                 o.use_protected_keychain();
             }
-            o.set_access_synchronized(Some(self.spec.synchronizable));
+            o.set_access_synchronized(Some(self.spec.synchronizable && plan.synchronizable));
             o
         }
     }
 
     impl KeyVault for KeychainVault {
         fn load(&self) -> CoreResult<Option<LocalKey>> {
-            match with_login_fallback(LOAD_FALLBACK, |t| {
-                generic_password(self.options(t)).map_err(|e| e.code())
-            }) {
+            match generic_password(self.options()) {
                 Ok(mut v) => {
                     let out = if v.len() == KEY_LEN {
                         let mut b = [0u8; KEY_LEN];
@@ -307,28 +379,24 @@ pub mod macos {
                     super::wipe(&mut v);
                     out
                 }
-                Err(ERR_SEC_ITEM_NOT_FOUND) => Ok(None),
+                Err(e) if e.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(None),
                 Err(_) => Err(CoreError::KeychainUnavailable { component: ID }),
             }
         }
 
         fn store(&self, key: &LocalKey) -> CoreResult<()> {
-            let Accessibility::AfterFirstUnlockThisDeviceOnly = self.spec.accessibility;
-            with_login_fallback(STORE_FALLBACK, |t| {
-                let mut o = self.options(t);
-                // The login keychain does not honour the accessibility class (ADR 0071
-                // amendment 1), so only the data protection item gets the access control.
-                if t == KeychainTarget::DataProtection {
-                    let ac = SecAccessControl::create_with_protection(
-                        Some(ProtectionMode::AccessibleAfterFirstUnlockThisDeviceOnly),
-                        0,
-                    )
-                    .map_err(|e| e.code())?;
-                    o.set_access_control(ac);
-                }
-                set_generic_password_options(key.as_bytes(), o).map_err(|e| e.code())
-            })
-            .map_err(|_| CoreError::KeychainUnavailable { component: ID })
+            let mut o = self.options();
+            if item_plan(self.target).access_control {
+                let Accessibility::AfterFirstUnlockThisDeviceOnly = self.spec.accessibility;
+                let ac = SecAccessControl::create_with_protection(
+                    Some(ProtectionMode::AccessibleAfterFirstUnlockThisDeviceOnly),
+                    0,
+                )
+                .map_err(|_| CoreError::KeychainUnavailable { component: ID })?;
+                o.set_access_control(ac);
+            }
+            set_generic_password_options(key.as_bytes(), o)
+                .map_err(|_| CoreError::KeychainUnavailable { component: ID })
         }
     }
 }
