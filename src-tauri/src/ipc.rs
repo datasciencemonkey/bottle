@@ -185,14 +185,10 @@ pub trait BrainLink: Send + Sync {
     /// Keep `channel` as the brain's delivery path. `false` if the reference is not usable.
     fn subscribe(&self, channel: &ChannelRef) -> bool;
     /// #509 (ADR 0091): deliver one notice on the hub's private Channel. `false` if no hub
-    /// listens. The default (a fixture with no hub) delivers nothing.
-    fn notify_hub(&self, _notice: Value) -> bool {
-        false
-    }
+    /// listens. Required, like `subscribe`, so a missing wiring does not compile.
+    fn notify_hub(&self, notice: Value) -> bool;
     /// #509: keep `channel` (of the calling hub webview) as the hub's notice path.
-    fn subscribe_hub(&self, _channel: &ChannelRef) -> bool {
-        false
-    }
+    fn subscribe_hub(&self, channel: &ChannelRef) -> bool;
 }
 
 /// The R1 settings side of `hotkeys_set` (#331). `HotkeySettings` implements it.
@@ -1066,5 +1062,16 @@ mod tests {
         assert!(hub.send(notice.clone()));
         assert_eq!(got.lock().unwrap().len(), 1);
         assert_eq!(*again.lock().unwrap(), vec![notice]);
+    }
+
+    #[test]
+    fn mog_06d_the_app_manages_the_hub_channel() {
+        // `try_state` turns a missing `HubChannel` into a silent `host_failed` (#544 review).
+        let lib = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs");
+        let code = production_code(&std::fs::read_to_string(lib).unwrap());
+        assert!(
+            code.contains(".manage(ipc::HubChannel::default())"),
+            "lib.rs must manage ipc::HubChannel"
+        );
     }
 }

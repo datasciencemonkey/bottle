@@ -19,6 +19,7 @@ When `window_card_show` fails twice, #498 must put the dictated text in a hub no
    - `view_notice_subscribe { onNotice: Channel }` is for the `hub` window only. The name starts with `view_` because a view capability may hold only `view_*` commands (MOG-08a). The host keeps the Channel of the calling hub webview in `HubChannel`. A hub reload replaces it.
    - `hub_notice_send { kind: 'dictation_unshown', mogId, text }` is for the `brain` only. The host sends the notice on the hub Channel only. It does not use the brain Channel or a Tauri event. With no hub Channel the answer is `host_failed`, so the brain keeps the text. The host keeps no copy.
    - A MOG or card window cannot take the Channel (`window_not_allowed`), so it never gets a notice. No view can send the notice.
+   - The hub Channel payload deliberately skips the rule-7 scrub that the brain Channel gets, so the user can copy the exact text. The card path does not scrub either.
 4. **No text in Debug or logs.** `HubNoticeSendArgs` has a hand-written `Debug` that shows `<redacted N chars>`. #505 is the general fix for content in `Debug`. The gateway log line holds only the command, the window class and the outcome. A refusal is only a code. The TS helpers (`sendHubNotice`, `subscribeHubNotices`) log nothing.
 5. **The hub only copies or dismisses.** No new command sends the text to another place. The hub dismisses a notice in its own state, so there is no dismiss command. If the brain must know about a dismiss later, the hub sends `view_emit` `click` with an action and no text.
 
