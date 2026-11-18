@@ -18,7 +18,7 @@ import type { ExchangeRef, Mood } from '../shared/interfaces';
 import { decideCardEsc, handleCardEsc } from '../brain/card-esc';
 import { createMoodMapper, MOODS } from '../brain/components/mood-mapper';
 import { accessibleText, contrastRatio } from '../test-support/a11y';
-import { render, tauri, viewEmits } from '../views/test-tauri';
+import { inputEmits, render, tauri } from '../views/test-tauri';
 import { CardView } from '../views/card/CardView';
 import { MogView } from '../views/mog/MogView';
 import { Hub } from '../views/hub/Hub';
@@ -92,7 +92,7 @@ describe('AT-20 without pointer or animation', () => {
     await mount(<CardView mogId={ID} />);
     await key('keydown', { key: 'Escape' });
     await key('keydown', { key: 'Escape', repeat: true });
-    expect(viewEmits()).toEqual([{ mogId: ID, kind: 'cancel' }]);
+    expect(inputEmits()).toEqual([{ mogId: ID, kind: 'cancel' }]);
 
     // With a request in flight the Esc cancels it and the card stays; with none it hides.
     expect(decideCardEsc({ inFlight: ref })).toEqual({ t: 'cancel_request', ref });
@@ -136,9 +136,9 @@ describe('AT-20 without pointer or animation', () => {
           c.dispatchEvent(new MouseEvent(t, { bubbles: true }));
       });
     }
-    expect(viewEmits()).toEqual([]);
+    expect(inputEmits()).toEqual([]);
     await act(async () => chips[0]?.click());
-    expect(viewEmits()).toEqual([{ mogId: ID, kind: 'chip_click', payload: { chipId: 'c1' } }]);
+    expect(inputEmits()).toEqual([{ mogId: ID, kind: 'chip_click', payload: { chipId: 'c1' } }]);
   });
 
   it('[AT-20] the REC, offline and attention overlays show text, not only colour', async () => {
@@ -166,7 +166,7 @@ describe('AT-20 without pointer or animation', () => {
       target.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
       target.click();
     });
-    expect(viewEmits()).toEqual([
+    expect(inputEmits()).toEqual([
       // MB-06a (#73): the MOG view tells the brain on mount that it is open.
       { mogId: ID, kind: 'click', payload: { action: 'view.ready' } },
       { mogId: ID, kind: 'hover' },

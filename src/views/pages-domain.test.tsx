@@ -8,13 +8,13 @@ import type { Root } from 'react-dom/client';
 import { CardView } from './card/CardView';
 import { Hub } from './hub/Hub';
 import { HUB_SCOPE } from '../shared/hub-notice';
-import { render, tauri, viewEmits as allViewEmits } from './test-tauri';
+import { inputEmits as allViewEmits, render, tauri } from './test-tauri';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('./test-tauri')).coreModule);
 vi.mock('@tauri-apps/api/event', async () => (await import('./test-tauri')).eventModule);
 vi.mock('@tauri-apps/api/window', async () => (await import('./test-tauri')).windowModule);
 
-/** The emits of the pickers: drop the hub-scope `notice.ready` (#27) and `mogs.ready` (#26). */
+/** The emits of the pickers: drop `ready` (#507) and the hub-scope `notice.ready` (#27) and `mogs.ready` (#26). */
 const viewEmits = () =>
   allViewEmits().filter((e) => (e as { mogId?: unknown }).mogId !== HUB_SCOPE);
 

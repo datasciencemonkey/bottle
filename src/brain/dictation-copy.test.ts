@@ -98,7 +98,7 @@ describe('dictation Copy card sink', () => {
 
   it('[MOG-05b] the first Copy card of a MOG is not empty: the kept state goes again on ready', async () => {
     // Regression (PR #504 review): the new card window listens only after its view mounts, so
-    // the updates sent before that are lost. `ready` (TODO(#507)) sends the kept state again.
+    // the updates sent before that are lost. The card `ready` (#507) sends the kept state again.
     const { sink, seen, ready } = setup();
     await sink.onDone({ route: 'copy', text: SENTENCE }, owned);
     expect(seen).toEqual([]);

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import type { Root } from 'react-dom/client';
-import { render, tauri, viewEmits } from '../test-tauri';
+import { inputEmits as inputs, render, tauri, viewEmits } from '../test-tauri';
 import { CardView } from './CardView';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('../test-tauri')).coreModule);
@@ -78,7 +78,7 @@ describe('V3 card view', () => {
         .querySelector('section')
         ?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })),
     );
-    expect(viewEmits()).toEqual([
+    expect(inputs()).toEqual([
       { mogId: ID, kind: 'chip_click', payload: { chipId: 'c1' } },
       { mogId: ID, kind: 'expand' },
       { mogId: ID, kind: 'cancel' },
@@ -93,7 +93,7 @@ describe('V3 card view', () => {
   it('[UX-19b] Esc anywhere in the card window sends exactly one cancel', async () => {
     await mountCard(<CardView mogId={ID} />);
     await esc();
-    expect(viewEmits()).toEqual([{ mogId: ID, kind: 'cancel' }]);
+    expect(inputs()).toEqual([{ mogId: ID, kind: 'cancel' }]);
   });
 
   it('[UX-19b] a held Esc (key repeat) sends no second cancel', async () => {
@@ -101,14 +101,14 @@ describe('V3 card view', () => {
     await esc();
     await esc({ repeat: true });
     await esc({ repeat: true });
-    expect(viewEmits()).toEqual([{ mogId: ID, kind: 'cancel' }]);
+    expect(inputs()).toEqual([{ mogId: ID, kind: 'cancel' }]);
   });
 
   it('[UX-19b] [MOG-03a] Esc during IME composition only ends the composition', async () => {
     await mountCard(<CardView mogId={ID} />);
     await esc({ isComposing: true });
     await esc({ keyCode: 229 });
-    expect(viewEmits()).toEqual([]);
+    expect(inputs()).toEqual([]);
   });
 
   it('[UX-19b] other keys send nothing', async () => {
@@ -116,14 +116,14 @@ describe('V3 card view', () => {
     await act(async () => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'a' }));
     });
-    expect(viewEmits()).toEqual([]);
+    expect(inputs()).toEqual([]);
   });
 
   it('[UX-19b] an unmounted card sends no cancel', async () => {
     const { root } = await render(<CardView mogId={ID} />);
     await act(async () => root.unmount());
     await esc();
-    expect(viewEmits()).toEqual([]);
+    expect(inputs()).toEqual([]);
   });
 
   it('[MOG-03a] the dev demo card has a typing probe for the Mac check; other cards do not', async () => {
@@ -160,7 +160,7 @@ describe('V3 card view', () => {
     const link = el.querySelector('button[data-action="history"]') as HTMLElement;
     expect(link.textContent).toBe('4 more in History');
     await act(async () => link.click());
-    expect(viewEmits()).toEqual([{ mogId: ID, kind: 'click', payload: { target: 'history' } }]);
+    expect(inputs()).toEqual([{ mogId: ID, kind: 'click', payload: { target: 'history' } }]);
   });
 
   it('[UX-11a] shows no History link when nothing is in History', async () => {
@@ -195,7 +195,7 @@ describe('V3 card view', () => {
     expect(pin('g1').getAttribute('aria-pressed')).toBe('false');
     expect(pin('b2').getAttribute('aria-pressed')).toBe('true');
     await act(async () => pin('g1').click());
-    expect(viewEmits()).toEqual([
+    expect(inputs()).toEqual([
       { mogId: ID, kind: 'click', payload: { target: 'pin', blurbId: 'g1' } },
     ]);
   });
@@ -215,7 +215,7 @@ describe('V3 card view', () => {
     });
     await act(async () => pin.focus());
     await act(async () => pin.blur());
-    expect(viewEmits()).toEqual([
+    expect(inputs()).toEqual([
       { mogId: ID, kind: 'hover', payload: { blurbId: 'b2', on: true, via: 'pointer' } },
       { mogId: ID, kind: 'hover', payload: { blurbId: 'b2', on: false, via: 'pointer' } },
       { mogId: ID, kind: 'hover', payload: { blurbId: 'b2', on: true, via: 'focus' } },
@@ -291,7 +291,7 @@ describe('V3 card view: expanded sections and chips', () => {
       (el.querySelector('button[data-action="resend"]') as HTMLElement).click(),
     );
     await act(async () => (el.querySelector('button[data-copy="csv"]') as HTMLElement).click());
-    expect(viewEmits()).toEqual([
+    expect(inputs()).toEqual([
       { mogId: ID, kind: 'click', payload: { target: 'resend' } },
       { mogId: ID, kind: 'click', payload: { target: 'copy', format: 'csv' } },
     ]);
@@ -331,9 +331,9 @@ describe('V3 card view: expanded sections and chips', () => {
     });
     await act(async () => chip.focus());
     await act(async () => chip.blur());
-    expect((viewEmits() as { kind: string }[]).filter((e) => e.kind === 'chip_click')).toEqual([]);
+    expect((inputs() as { kind: string }[]).filter((e) => e.kind === 'chip_click')).toEqual([]);
     await act(async () => chip.click());
-    expect(viewEmits()).toEqual([{ mogId: ID, kind: 'chip_click', payload: { chipId: 'c1' } }]);
+    expect(inputs()).toEqual([{ mogId: ID, kind: 'chip_click', payload: { chipId: 'c1' } }]);
   });
 
   it('[UX-18] drops a card update with a bad section list', async () => {
