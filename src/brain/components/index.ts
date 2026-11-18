@@ -3,6 +3,7 @@
  * `startBrain()` constructs each component once; all domain state lives in these objects.
  */
 import { BrainBus, sendMicLevel, subscribeBrain } from '../bus';
+import { wireForget } from '../forget-wiring';
 import { wireHubMogs } from '../hub-mogs-wiring';
 import {
   createCaptureLifecycle,
@@ -22,7 +23,9 @@ import { createCleanupProvider } from './cleanup-provider';
 import { createConsentService } from './consent-service';
 import { createConversationManager } from './conversation-manager';
 import { createGenieBridge } from './genie-bridge';
-import { createMemoryService } from './memory-service';
+import { ForgetFlow } from './forget-flow';
+import { GenieOneDeleteUtility } from './genie-one-delete';
+import { createMemoryService, LocalMemoryService } from './memory-service';
 import { createMogManager } from './mog-manager';
 import { createMoodMapper } from './mood-mapper';
 import { createOperationTracker } from './operation-tracker';
@@ -86,6 +89,13 @@ export function startBrain(): Brain {
     wireNotice(bus, components.T12);
     // #26: the hub MOG list and actions (MB-01).
     wireHubMogs(bus, components.T1);
+    // #123 (MEM-32a, MEM-32c, MEM-32d): the hub Forget dialog runs Forget on T10 on a user click.
+    // TODO(#163): pass `home` (the home host and workspace id from T7) for the memory review link.
+    if (components.T10 instanceof LocalMemoryService) {
+      wireForget(bus, {
+        flow: new ForgetFlow({ memory: components.T10, genieOne: new GenieOneDeleteUtility() }),
+      });
+    }
     // MB-06a, MB-06b, UX-28: the talk-key target, its marker and its toast (#73). It is wired
     // before the capture lifecycle, so a `hotkey:ptt` down updates the target first.
     const talkTarget = createAppTalkTarget(configName);

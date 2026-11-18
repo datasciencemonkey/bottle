@@ -402,6 +402,48 @@ fn mem_32a_mem_32c_mog_conversations_are_distinct_and_mog_scoped() {
     assert_eq!(ids, vec!["conv-s1", "conv-s2"]);
 }
 
+#[test]
+fn mem_32c_a_conversation_that_another_session_uses_is_not_deleted() {
+    let (_t, s) = seeded("32c-shared");
+    // S2 continues the conversation of S1 (the same Genie thread).
+    exec(
+        &s,
+        "mem.exchange.upsert",
+        exchange(
+            MOG_A,
+            "31111111-2222-4333-8444-555555555503",
+            "41111111-2222-4333-8444-555555555503",
+            Some(S2),
+            "conv-s1",
+        ),
+    );
+    let got = exec(
+        &s,
+        "mem.forget.session_conversations",
+        json!({"mogId": MOG_A, "sessionId": S1}),
+    );
+    assert!(rows(&got).is_empty(), "S2 still uses conv-s1");
+    // An exchange with no session counts as outside the session too.
+    let t2 = seeded("32c-nosession");
+    exec(
+        &t2.1,
+        "mem.exchange.upsert",
+        exchange(
+            MOG_A,
+            "31111111-2222-4333-8444-555555555504",
+            "41111111-2222-4333-8444-555555555504",
+            None,
+            "conv-s1",
+        ),
+    );
+    let got = exec(
+        &t2.1,
+        "mem.forget.session_conversations",
+        json!({"mogId": MOG_A, "sessionId": S1}),
+    );
+    assert!(rows(&got).is_empty());
+}
+
 // ---- MEM-32a: Forget items and Forget a MOG -----------------------------------------------------
 
 #[test]
@@ -465,6 +507,12 @@ fn mem_32a_at_16_forget_mog_leaves_no_row_of_the_mog_except_the_log() {
         )
     })
     .unwrap();
+    // A v1 `sync` row of the MOG points at a forgotten row; it goes too.
+    exec(
+        &s,
+        "mem.outbox.enqueue",
+        json!({"mogId": MOG_A, "kind": "sync", "op": "item.upsert", "refId": I4, "now": T0}),
+    );
     exec(
         &s,
         "mem.forget.mog",

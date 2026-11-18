@@ -2,11 +2,16 @@
  * The Forget dialog (thin, MEM-32a, MEM-32c, MEM-32d, G-45b, AT-16; ADR 0081). The brain builds
  * the model (`src/brain/components/forget-flow.ts`). The confirm button sends `view_emit` with the
  * scope kind only; the brain runs Forget. The dialog links to the Genie One memory review
- * (MEM-32d) and, after the delete, mounts the "Delete in Genie One" notice (G-45b).
- * TODO(#87): open the memory review link in the system browser (the G-19a link opener).
+ * (MEM-32d) and, after the delete, mounts the "Delete in Genie One" notice (G-45b). Every click
+ * goes to the brain (`src/brain/forget-wiring.ts`), which owns the scope and the links. The brain
+ * opens a link through the G-19a opener, TODO(#87); the URL also shows as text.
  */
 import type { ForgetDialogModel } from '../shared/forget-view';
-import { FORGET_CONFIRM_TARGET, GENIE_ONE_MEMORY_REVIEW_TARGET } from '../shared/forget-view';
+import {
+  FORGET_CANCEL_TARGET,
+  FORGET_CONFIRM_TARGET,
+  GENIE_ONE_MEMORY_REVIEW_TARGET,
+} from '../shared/forget-view';
 import { GenieOneDeleteNotice } from './GenieOneDeleteNotice';
 import { emitView } from './view-ipc';
 
@@ -58,6 +63,13 @@ export function ForgetDialog({ model }: { model: ForgetDialogModel }) {
           <span data-genie-one-memory-review-url>{memoryReview.url}</span>
         </p>
       )}
+      <button
+        type="button"
+        data-forget-cancel
+        onClick={() => void emitView(model.mogId, 'click', { target: FORGET_CANCEL_TARGET })}
+      >
+        {model.phase === 'confirm' ? 'Cancel' : 'Close'}
+      </button>
     </div>
   );
 }

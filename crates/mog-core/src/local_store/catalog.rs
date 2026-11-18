@@ -351,13 +351,17 @@ const RECALL_FTS: Stmt = Stmt {
 // can reuse the steps that do not name a session or item.
 
 /// The Genie conversations of one session, for Forget (MEM-32c). T10 reads them before the
-/// delete, because the delete removes the exchange rows that hold them.
+/// delete, because the delete removes the exchange rows that hold them. A conversation that an
+/// exchange outside the session also uses is left out: that exchange keeps it.
 const FORGET_SESSION_CONVERSATIONS: Stmt = Stmt {
     id: "mem.forget.session_conversations",
     sql: "SELECT DISTINCT backend_kind AS backendKind, profile_name AS profile, \
           workspace_host AS host, workspace_id AS workspaceId, space_id AS spaceId, \
           conversation_id AS conversationId FROM genie_exchange \
           WHERE mog_id = :mogId AND session_id = :sessionId AND conversation_id IS NOT NULL \
+          AND conversation_id NOT IN (SELECT o.conversation_id FROM genie_exchange o \
+          WHERE o.mog_id = :mogId AND o.session_id IS NOT :sessionId \
+          AND o.conversation_id IS NOT NULL) \
           ORDER BY conversation_id, profile_name",
     params: &[MOG_ID, req("sessionId", UUID)],
     kind: Kind::Query,
@@ -461,6 +465,16 @@ const FORGET_SESSION_ROW: Stmt = Stmt {
 const FORGET_MOG_ITEMS: Stmt = Stmt {
     id: "mem.forget.mog_items",
     sql: "DELETE FROM memory_item WHERE mog_id = :mogId",
+    params: &[MOG_ID],
+    kind: Kind::Write,
+    access: Access::Core,
+};
+
+/// Every outbox row of the MOG: its embed jobs and any v1 `sync` row. They point only at rows of
+/// the forgotten MOG. The v1 forget itself travels as the `forget_log` row (MEM-12b).
+const FORGET_MOG_OUTBOX: Stmt = Stmt {
+    id: "mem.forget.mog_outbox",
+    sql: "DELETE FROM outbox WHERE mog_id = :mogId",
     params: &[MOG_ID],
     kind: Kind::Write,
     access: Access::Core,
@@ -748,7 +762,7 @@ const FORGET_MOG: Group = Group {
     id: "mem.forget.mog",
     steps: &[
         &FORGET_MOG_ITEMS,
-        &FORGET_EMBED_ORPHANS,
+        &FORGET_MOG_OUTBOX,
         &FORGET_MOG_EXCHANGES,
         &FORGET_MOG_UTTERANCES,
         &FORGET_MOG_SESSIONS,
@@ -797,6 +811,7 @@ pub const STATEMENTS: &[Stmt] = &[
     FORGET_SESSION_UTTERANCES,
     FORGET_SESSION_ROW,
     FORGET_MOG_ITEMS,
+    FORGET_MOG_OUTBOX,
     FORGET_MOG_EXCHANGES,
     FORGET_MOG_UTTERANCES,
     FORGET_MOG_SESSIONS,

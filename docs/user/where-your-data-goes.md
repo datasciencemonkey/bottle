@@ -68,7 +68,8 @@ The copy comes from one file: `src/views/hub/disclosures.ts`. If you change the 
 
 ## Forget
 
-- You can forget a session, some notes, or a whole MOG. Bottle deletes only when you select Forget.
+- In the hub, select "Forget memory" next to a MOG. Bottle deletes only when you select Forget in the dialog.
+- Bottle can also forget one session or some notes.
 - Forget deletes the matching rows on this computer at once, also when you are offline. It also deletes each note that cites them, with its search entries.
 - Forget a session deletes its transcript, its notes and its Genie answers. Forget a MOG deletes all of them for that MOG.
 - Bottle keeps a short Forget record with IDs only, for a later sync. Consent records stay for their own 13 months.

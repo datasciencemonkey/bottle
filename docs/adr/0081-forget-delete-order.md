@@ -28,8 +28,8 @@ consent records and the MOG row, and the Genie One memory review link.
      `source_exchange_id`; then the embed jobs that point at no item; then the exchanges, the
      utterances and the session row.
    - `mem.forget.items`: the named items, then the embed jobs that point at no item.
-   - `mem.forget.mog`: every item, the embed jobs, every exchange, utterance, session, `kv` and
-     `sync_state` row of the MOG, then the `mog` row.
+   - `mem.forget.mog`: every item, every outbox row (embed jobs and any v1 `sync` row), every
+     exchange, utterance, session, `kv` and `sync_state` row of the MOG, then the `mog` row.
    - The last step of each group writes one `forget_log` row with a fixed scope (`item`, `session`,
      `mog`) and the target ids. A failed step rolls back every step and writes no log row.
    The MEM-01 guard forbids `OR`, so each kind of citation is its own step. FTS5 and vec0 rows go
@@ -38,7 +38,8 @@ consent records and the MOG row, and the Genie One memory review link.
 3. **Conversations are read first.** The Brain queries `mem.forget.session_conversations` and
    `mem.forget.mog_conversations` return the distinct conversation ids with their backend, profile,
    host, workspace id and space id. `ForgetFlow` reads them before it calls the group. Forget of items
-   deletes no exchange, so it reads no conversation.
+   deletes no exchange, so it reads no conversation. A session leaves out a conversation that an
+   exchange outside the session also uses (another session, or no session): that exchange keeps it.
 4. **Genie delete (MEM-32c).** `genie_one_mcp` threads go to `GenieOneDeleteUtility.deleteThreads
    ('forget', ...)` (ADR 0077). Its SP-11 gate is off (`TODO(#121)`), so the dialog shows the
    "Delete in Genie One" notice. `genie_agent` conversations go to GA `DELETE` on the fixed route
@@ -48,8 +49,9 @@ consent records and the MOG row, and the Genie One memory review link.
 5. **Kept rows.** Consent records stay. They are content-free security data with their own 13-month
    expiry (SEC-15b), and they are the evidence of consent. Old `forget_log` rows stay for the v1 sync
    (MEM-11c, MEM-12b). Embed jobs hold no text (ADR 0068), and the sweep removes each job that points
-   at no item. The MVP writes no `sync` outbox rows. TODO(#195): the v1 SyncWorker queues the remote
-   deletes first (MEM-32b), and decides what happens to the `sync` rows of a forgotten scope.
+   at no item. The MVP writes no `sync` outbox rows; a TS test checks that no brain caller of
+   `mem.outbox.enqueue` uses kind `sync`. TODO(#195): the v1 SyncWorker queues the remote deletes
+   first (MEM-32b), and decides what happens to the `sync` rows of a forgotten session or item.
 6. **The MOG row goes** with `mem.forget.mog`, so no row of the scope is left. A caller registers the
    MOG again with `mem.mog.upsert` before a new write, as the `recordExchange` contract already says.
 7. **Memory review link (MEM-32d, D61).** No source names a Genie One memory page. The public docs
@@ -59,11 +61,20 @@ consent records and the MOG row, and the Genie One memory review link.
 8. **Audit.** SEC-23 lists asks, context sends, Page calls, agent actions and sync. It does not list
    Forget, and `AUDIT_KINDS` is a closed set. So Forget writes no audit entry; `forget_log` is the
    content-free record.
-9. **Dialog.** `src/shared/forget-view.ts` is the model. The brain builds it in
-   `src/brain/components/forget-flow.ts`. The thin view `src/views/ForgetDialog.tsx` shows the confirm
-   text, the memory review link and, after the delete, the `GenieOneDeleteNotice` (ARC-2). A click
-   sends `view_emit` with the scope kind or the link target only. `TODO(#87)`: open the link in the
-   system browser.
+9. **Dialog and entry point.** `src/shared/forget-view.ts` is the model, the event
+   `hub:forget_dialog` and the click targets (interim names, `TODO(#521)`, as the hub notice #393 and
+   the hub MOG list #407 do). Each hub MOG row has "Forget memory", which sends `forget_open` with the
+   MOG id. `src/brain/forget-wiring.ts` (`ForgetDialogController`, wired in `startBrain` on T10) builds
+   the confirm model with `ForgetFlow` and sends it to the hub only (ARC-5). The view sends only the
+   scope kind on `forget_confirm`. The brain keeps the scope, so a kind that does not match the open
+   dialog does nothing. The brain also owns the links: `genie_one_memory_review` and
+   `genie_one_delete` open the URL of the open dialog, never a URL from the view. The thin view
+   `src/views/ForgetDialog.tsx`, hosted by `src/views/hub/ForgetDialogHost.tsx`, shows the confirm
+   text, the memory review link, Cancel or Close and, after the delete, the `GenieOneDeleteNotice`.
+   The opener is a seam: `TODO(#87)` connects the G-19a safe link opener. Until then the dialog shows
+   each URL as text. `TODO(#163)`: T7 gives the home host and workspace id for the review link.
+   Sessions and items get their dialog through `ForgetDialogController.open(scope)`, once a session
+   list or "Stop and delete" (SEC-14a) calls it.
 
 ## Consequences
 

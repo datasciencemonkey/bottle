@@ -106,4 +106,22 @@ describe('ForgetDialog (#123)', () => {
     expect(el.querySelector('button[data-genie-one-memory-review]')).not.toBeNull();
     act(() => root.unmount());
   });
+
+  it('[MEM-32a] Cancel (confirm) and Close (done) send forget_cancel', async () => {
+    const { el, root } = await render(<ForgetDialog model={confirm} />);
+    const btn = must(el.querySelector<HTMLButtonElement>('button[data-forget-cancel]'));
+    expect(btn.textContent).toBe('Cancel');
+    await act(async () => {
+      btn.click();
+    });
+    expect(viewEmits()).toContainEqual({
+      mogId: MOG,
+      kind: 'click',
+      payload: { target: 'forget_cancel' },
+    });
+    act(() => root.unmount());
+    const d = await render(<ForgetDialog model={done} />);
+    expect(must(d.el.querySelector('button[data-forget-cancel]')).textContent).toBe('Close');
+    act(() => d.root.unmount());
+  });
 });
