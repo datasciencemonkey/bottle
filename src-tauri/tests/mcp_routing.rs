@@ -5,11 +5,27 @@
 use bottle_lib::ipc::{route, BrainLink, HostComponents};
 use bottle_lib::mcp_host;
 use mog_core::error::{CoreError, CoreResult};
+use mog_core::http_transport::rate_bucket::RateBucket;
 use mog_core::ipc::ChannelRef;
 use mog_core::ipc_gateway::GatewayComponents;
 use mog_core::mcp_transport::{McpCall, McpCallComponent, McpReply, McpTransport};
 use mog_core::types::Tags;
 use serde_json::{json, Value};
+use std::time::Duration;
+
+/// A bucket that never makes a call wait. The tests only check who holds it.
+struct FakeBucket;
+
+impl RateBucket for FakeBucket {
+    fn reserve(&self, _profile: &str) -> Duration {
+        Duration::ZERO
+    }
+    fn on_rate_limited(&self, _profile: &str, _retry_after: Option<Duration>) {}
+}
+
+fn fake_bucket() -> Arc<dyn RateBucket> {
+    Arc::new(FakeBucket)
+}
 use std::sync::{Arc, Mutex};
 
 const MOG: &str = "00000000-0000-4000-8000-0000000000b7";
@@ -222,7 +238,7 @@ fn sec_03_an_r8_error_crosses_as_a_content_free_code() {
 #[test]
 fn g_04d_w_06a_the_host_builds_r8_on_r6_and_the_r5_profile_hosts() {
     // The production R8: one R6 CliTokenBroker, the R5 profile hosts and R7 for the SCIM seam.
-    let host = mcp_host::build().expect("R8 starts");
+    let host = mcp_host::build(fake_bucket()).expect("R8 starts");
     // R5 (#16, #17) is not on main: the call fails closed with a fixed code, before any send.
     let err = call("brain", Some(&host), "mcp_call", ask_args("genie_ask")).unwrap_err();
     assert_eq!(err, json!({"error": "not_implemented"}));
@@ -243,4 +259,62 @@ fn g_04a_the_app_installs_r8_and_reads_it_with_try_state() {
     let host = std::fs::read_to_string(src.join("mcp_host.rs")).unwrap();
     assert!(host.contains("ReqwestMcpTransport::new("));
     assert!(host.contains("CliTokenBroker::new("));
+}
+
+#[test]
+fn g_09a_arc_f3_r7_and_r8_in_the_host_share_the_bucket_passed_in() {
+    // G-09a, ARC-F3: R7 (the R6 SCIM seam) and R8 take the SAME bucket, so the AIMD cut and
+    // Retry-After hold of a profile are shared. The test holds one Arc, R7 one, R8 one.
+    let bucket = fake_bucket();
+    let host = mcp_host::build(bucket.clone()).expect("R8 starts");
+    assert_eq!(
+        Arc::strong_count(&bucket),
+        3,
+        "R7 and R8 must each hold the bucket passed in, and no other"
+    );
+    drop(host);
+    assert_eq!(
+        Arc::strong_count(&bucket),
+        1,
+        "the host keeps no extra clone"
+    );
+}
+
+#[test]
+fn g_09a_arc_f3_the_app_manages_one_shared_bucket_that_mcp_host_reads() {
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let lib = std::fs::read_to_string(src.join("lib.rs")).unwrap();
+    // One bucket per process, managed before `setup` runs any `*_host::install`.
+    let managed = lib
+        .find("rate_bucket_host::SharedRateBucket(")
+        .expect("lib.rs manages the SharedRateBucket");
+    let install = lib.find("mcp_host::install(handle)").unwrap();
+    assert!(
+        managed < install,
+        "the bucket is managed before mcp_host installs"
+    );
+    let host = std::fs::read_to_string(src.join("mcp_host.rs")).unwrap();
+    assert!(host.contains("try_state::<SharedRateBucket>()"));
+    assert!(host.contains("ReqwestMcpTransport::new(hosts, broker, bucket)"));
+}
+
+#[test]
+fn g_09a_arc_f3_src_tauri_builds_no_aimd_bucket_outside_lib_rs() {
+    // #511: every R7 or R8 in the app takes the managed SharedRateBucket; none builds its own.
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut builds = Vec::new();
+    for entry in std::fs::read_dir(&src).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_some_and(|e| e == "rs") {
+            let text = std::fs::read_to_string(&path).unwrap();
+            for _ in text.matches("AimdBucket::new(") {
+                builds.push(path.file_name().unwrap().to_string_lossy().into_owned());
+            }
+        }
+    }
+    assert_eq!(
+        builds,
+        vec!["lib.rs".to_owned()],
+        "AimdBucket::new sites: {builds:?}"
+    );
 }
