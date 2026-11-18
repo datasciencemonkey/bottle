@@ -129,4 +129,14 @@ describe('the utterance hook of the capture lifecycle (#59, #73)', () => {
     expect(s.inserted).toEqual([]);
     expect(s.owner.ownerOf('utt-1')).toBeUndefined();
   });
+
+  it('[MOG-13a] an onAsk that throws still releases the owner', async () => {
+    const s = setup(dictation, {
+      onAsk: () => {
+        throw new Error('T3 failed');
+      },
+    });
+    await expect(s.handle(captured({ forceAsk: true }))).resolves.toBeUndefined();
+    expect(s.owner.ownerOf('utt-1')).toBeUndefined();
+  });
 });
