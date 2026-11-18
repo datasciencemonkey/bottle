@@ -20,6 +20,16 @@ import { MogList } from './MogList';
 import { SttSetupStep } from './SttSetupStep';
 import { WipeSettings } from './WipeSettings';
 
+/** The product name and the Labs label (MB-10a, MB-10b); the title bar shows the label too. */
+function HubHeader() {
+  return (
+    <header className="hub-head">
+      <h1>Bottle</h1>
+      <p className="hub-labs">Databricks Labs / experimental</p>
+    </header>
+  );
+}
+
 export function Hub() {
   const [mogs, setMogs] = useState<ReadonlyMap<MogId, MogViewState>>(new Map());
 
@@ -34,9 +44,8 @@ export function Hub() {
   // the notice. A new version gets a fresh, unchecked notice (`key`).
   if (notice && !notice.accepted) {
     return (
-      <main>
-        <h1>Bottle</h1>
-        <p>Databricks Labs / experimental</p>
+      <main className="hub hub--notice">
+        <HubHeader />
         <LegalNotice
           key={notice.version}
           version={notice.version}
@@ -49,15 +58,16 @@ export function Hub() {
 
   // TODO(#43, #77, #103): the wizard, settings and history.
   return (
-    <main>
-      <h1>Bottle</h1>
-      <p>Databricks Labs / experimental</p>
+    <main className="hub">
+      <HubHeader />
       <DictationNotices />
-      <ul aria-label="MOGs">
+      {/* The live moods the MOG windows report: one quiet chip per MOG (empty until one runs). */}
+      <ul aria-label="MOGs" className="hub-live">
         {[...mogs].map(([id, s]) => (
           <li key={id} data-mog={id} data-mood={s.mood}>
-            <button type="button" onClick={() => void emitView(id, 'click')}>
-              MOG {id.slice(0, 8)} ({s.mood})
+            <button type="button" className="hub-chip" onClick={() => void emitView(id, 'click')}>
+              <span className="hub-mood-dot" aria-hidden="true" />
+              MOG {id.slice(0, 8)} <span className="hub-muted">({s.mood})</span>
             </button>
             {s.homeDomain && <DomainPicker mogId={id} picker={s.homeDomain} />}
           </li>
