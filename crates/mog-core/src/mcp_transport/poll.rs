@@ -1,7 +1,7 @@
 //! The R8 in-flight poll guard (ARC-F1, G-07b; #31, ADR 0073).
 //!
 //! One `genie_poll_response` at a time for each conversation, whoever calls: the brain PollActor
-//! (T9) through `mcp_call`, or the main agent through the loopback proxy (TODO(#139)). A second
+//! (T9) through `mcp_call`, or the main agent through the loopback proxy (`super::proxy`). A second
 //! poll for a conversation while one is open fails at once with [`E_POLL_INFLIGHT`]; nothing is
 //! sent. The slot is freed when the first poll ends, on every path (reply, error, panic).
 //!

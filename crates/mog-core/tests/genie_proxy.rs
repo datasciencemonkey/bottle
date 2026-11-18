@@ -680,3 +680,55 @@ fn rtr_27_a_session_stop_does_not_wait_for_a_slow_genie_call() {
     );
     assert_ne!(a.result()["isError"], json!(false), "{}", a.raw);
 }
+
+// ---------- ARC-F1, G-07b: the agent's poll meets the brain's poll guard ----------
+
+#[test]
+fn arc_f1_g_07b_an_agent_poll_hits_the_r8_poll_guard_while_the_brain_polls() {
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let release_rx = Mutex::new(release_rx);
+    let s = genie_one(move |seen| {
+        if seen.rpc_method() == "tools/call" && seen.tool() == "genie_poll_response" {
+            // Hold the brain's poll open until the test lets it go.
+            let _ = release_rx.lock().unwrap().recv_timeout(BOUND);
+        }
+        None
+    });
+    let r = rig(&s);
+    // The brain polls conversation c-1 through `mcp_call` on the shared R8.
+    let r8 = Arc::clone(&r.r8);
+    let brain = std::thread::spawn(move || {
+        let t = tags(MOG);
+        r8.call_tool(McpCall::new(
+            PROFILE,
+            "genie_poll_response",
+            obj(json!({"conversation_id": "c-1", "response_id": "r-1"})),
+            &t,
+        ))
+        .map(|reply| reply.is_error)
+    });
+    let start = Instant::now();
+    while tool_calls(&s).is_empty() {
+        assert!(start.elapsed() < BOUND, "the brain poll reached Genie One");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let lends = r.broker.lend_count();
+
+    // The agent polls the same conversation: refused at once, nothing sent, no token lent.
+    let text = r.call("genie_poll_response", poll_args()).tool_error_text();
+    assert_eq!(text, "poll_inflight");
+    assert_eq!(
+        tool_calls(&s).len(),
+        1,
+        "one poll at a time per conversation"
+    );
+    assert_eq!(r.broker.lend_count(), lends, "no token for a refused poll");
+
+    let _ = release_tx.send(());
+    assert!(!brain.join().unwrap().expect("the brain poll ends"));
+    // After the brain poll ends, the agent can poll c-1 (its poll is let go at once).
+    let _ = release_tx.send(());
+    let again = r.call("genie_poll_response", poll_args());
+    assert_eq!(again.result()["isError"], json!(false), "{}", again.raw);
+    assert_eq!(tool_calls(&s).len(), 2);
+}
