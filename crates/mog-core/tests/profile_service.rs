@@ -177,9 +177,15 @@ fn w_03a_parse_keeps_only_name_host_and_auth_type() {
     // `[__settings__]` is the CLI's own section; a section without a host is not a profile.
     assert_eq!(names, ["fake-u2m", "fake-pat", "fake-sp"]);
     let u2m = &parsed[0];
-    assert_eq!(u2m.host, HOST_A, "the host is the bare https://host, with no path");
+    assert_eq!(
+        u2m.host, HOST_A,
+        "the host is the bare https://host, with no path"
+    );
     assert_eq!(u2m.auth_type, U2M_AUTH_TYPE);
-    assert_eq!(parsed[1].auth_type, "", "a PAT profile has no auth_type key");
+    assert_eq!(
+        parsed[1].auth_type, "",
+        "a PAT profile has no auth_type key"
+    );
     assert_eq!(parsed[2].auth_type, "oauth-m2m");
 }
 
@@ -187,8 +193,15 @@ fn w_03a_parse_keeps_only_name_host_and_auth_type() {
 fn w_01a_parse_never_keeps_a_secret_value() {
     let parsed = parse_config(fake_config().as_bytes());
     let dump = format!("{parsed:?}");
-    for secret in [fake_secret("pat"), fake_secret("sp"), "fake-client".to_owned()] {
-        assert!(!dump.contains(&secret), "the parse kept a value it does not need");
+    for secret in [
+        fake_secret("pat"),
+        fake_secret("sp"),
+        "fake-client".to_owned(),
+    ] {
+        assert!(
+            !dump.contains(&secret),
+            "the parse kept a value it does not need"
+        );
     }
 }
 
@@ -207,7 +220,10 @@ fn w_03a_parse_follows_the_cli_ini_rules() {
     let parsed = parse_config(text.as_bytes());
     // Keys before the first header belong to DEFAULT, as in the CLI's INI parser.
     assert_eq!(parsed[0].name, "DEFAULT");
-    assert_eq!(parsed[0].host, "https://example-default.cloud.databricks.com");
+    assert_eq!(
+        parsed[0].host,
+        "https://example-default.cloud.databricks.com"
+    );
     assert_eq!(parsed[0].auth_type, U2M_AUTH_TYPE);
     // A repeated section merges into the first one; the later key wins.
     let spaced = parsed.iter().find(|p| p.name == "spaced").unwrap();
@@ -228,7 +244,11 @@ fn w_03a_parse_of_no_text_or_bad_bytes_gives_no_profiles() {
 fn w_03a_only_databricks_cli_profiles_are_supported() {
     let s = service(Some(fake_config()), secure_cli());
     let list = s.list(false).unwrap();
-    assert_eq!(list.len(), 3, "unsupported profiles are listed too, as not supported");
+    assert_eq!(
+        list.len(),
+        3,
+        "unsupported profiles are listed too, as not supported"
+    );
     assert!(by_name(&list, "fake-u2m").supported);
     assert_eq!(by_name(&list, "fake-u2m").auth_type, U2M_AUTH_TYPE);
     assert!(!by_name(&list, "fake-pat").supported);
@@ -252,7 +272,10 @@ fn w_03b_storage_is_checked_only_for_databricks_cli_profiles() {
     let s = service(Some(fake_config()), cli.clone());
     s.list(false).unwrap();
     let calls = cli.calls();
-    assert_eq!(calls, vec![describe_args("fake-u2m").map(str::to_owned).to_vec()]);
+    assert_eq!(
+        calls,
+        vec![describe_args("fake-u2m").map(str::to_owned).to_vec()]
+    );
 }
 
 // ---------- W-10a, W-10b: plaintext token storage blocks the profile ----------
@@ -343,7 +366,11 @@ fn w_03a_profiles_list_through_the_gateway_from_brain_and_hub() {
 fn w_01a_profiles_list_reply_holds_no_secret_value() {
     let s = service(Some(fake_config()), secure_cli());
     let reply = s.call("profiles_list", json!({})).unwrap().to_string();
-    for secret in [fake_secret("pat"), fake_secret("sp"), "fake-client".to_owned()] {
+    for secret in [
+        fake_secret("pat"),
+        fake_secret("sp"),
+        "fake-client".to_owned(),
+    ] {
         assert!(!reply.contains(&secret));
     }
 }
@@ -351,7 +378,9 @@ fn w_01a_profiles_list_reply_holds_no_secret_value() {
 #[test]
 fn w_03a_other_commands_are_not_this_component() {
     let s = service(Some(fake_config()), secure_cli());
-    let e = s.call("profile_status", json!({ "profile": "fake-u2m" })).unwrap_err();
+    let e = s
+        .call("profile_status", json!({ "profile": "fake-u2m" }))
+        .unwrap_err();
     assert_eq!(e.code(), "not_implemented");
 }
 
@@ -386,7 +415,10 @@ fn w_08_listing_leaves_the_config_file_unchanged() {
     assert_eq!(s.list(true).unwrap().len(), 3);
     s.workspace_url("fake-u2m").unwrap();
     assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
-    assert_eq!(std::fs::metadata(&path).unwrap().modified().unwrap(), before);
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().modified().unwrap(),
+        before
+    );
     remove(&path);
 }
 

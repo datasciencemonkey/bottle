@@ -77,6 +77,7 @@ Add one row for each Bottle file that holds code or data from antigravity-bricks
 | `src/brain/components/genie-errors.ts` (the GL-5 status rules: 401 sign-in, 403 IP access list, 404 Genie One off, a non-JSON page; only Bottle's own texts show) | `plugins/databricks-genie/scripts/genie_bridge.py` (`forward`, `describe`) |
 | `src/brain/components/poll-actor.ts` (after a poll times out, poll again with the same IDs and never ask again) | `plugins/databricks-genie/scripts/genie_bridge.py` (`late_text`, `OUT_OF_TIME`) |
 | `src/brain/components/ask-events.ts` (an answer names its conversation, and the next call of that conversation stays in the workspace where it started: the G-22 clarify follow-up) | `plugins/databricks-genie/scripts/genie_bridge.py` (`conversation_in`, the `conversations` pin in `call_tool`) |
+| `crates/mog-core/src/profile_service.rs` (T7: the config parse that keeps key names only and never a value it does not need, keys before the first header in DEFAULT, only `databricks-cli` profiles supported) | `plugins/databricks-genie/scripts/genie_bridge.py` (`config_sections`, `profiles`, `U2M`) |
 
 ## Handy (MIT)
 
