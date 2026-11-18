@@ -1555,7 +1555,30 @@ fn mem_01_an_update_or_replace_cannot_take_the_id_of_another_mogs_session() {
 // build never reads a login item that another process of the same user planted. These tests use
 // the pure seams; they never call the real Keychain.
 mod keychain_target {
-    use super::super::key_vault::{item_plan, target_for, ItemPlan, KeychainTarget};
+    use super::super::key_vault::{
+        entitled_by, item_plan, target_for, ItemPlan, KeychainTarget, KEYCHAIN_ENTITLEMENTS,
+    };
+
+    #[test]
+    fn mem_08b_each_keychain_entitlement_counts_as_entitled() {
+        assert_eq!(
+            KEYCHAIN_ENTITLEMENTS,
+            &[
+                "keychain-access-groups",
+                "com.apple.application-identifier",
+                "com.apple.security.application-groups",
+            ]
+        );
+        for key in KEYCHAIN_ENTITLEMENTS {
+            assert!(entitled_by(|k| k == *key), "{key}");
+        }
+    }
+
+    #[test]
+    fn mem_08b_no_keychain_entitlement_is_not_entitled() {
+        assert!(!entitled_by(|_| false));
+        assert!(!entitled_by(|k| k == "com.apple.security.app-sandbox"));
+    }
 
     #[test]
     fn mem_08b_entitled_build_uses_only_the_data_protection_keychain() {
