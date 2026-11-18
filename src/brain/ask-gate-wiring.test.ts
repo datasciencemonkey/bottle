@@ -4,6 +4,8 @@
  * before 1.5 s, after a cancel (Esc, a second key press, [Cancel], the card close), or without a
  * chip click (B1, RTR-04b, RTR-05).
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { createSimScheduler } from '../test-support/sim-scheduler';
 import { routerDecision } from '../test-support/model-invoke';
 import { createAskGate, wireAskGate, type AskGate } from './ask-gate';
@@ -19,6 +21,16 @@ vi.mock('@tauri-apps/api/event', async () => (await import('./test-core')).event
 const A = '00000000-0000-4000-8000-0000000000a1';
 const Q = 'What were EMEA bookings last week?';
 const OUTBOUND = new Set(['agent_send', 'mcp_call']);
+/**
+ * The `agent_send` arguments after the preview. The Rust test `preview_gate_handoff.rs` reads the
+ * same file and sends it through `AgentHost::send`, which approves the question for `genie_ask`.
+ */
+const AGENT_SEND_FIXTURE: unknown = JSON.parse(
+  readFileSync(
+    join(import.meta.dirname, '../../crates/mog-core/tests/fixtures/preview_gate_agent_send.json'),
+    'utf8',
+  ),
+);
 
 function setup() {
   core.reset();
@@ -132,6 +144,15 @@ describe('ask gate on the bus (B1)', () => {
       expect(t.outbound()).toEqual([]);
     });
   }
+
+  it('[RTR-04b] [RTR-29b] the agent_send after the preview is the shared fixture the core approves', async () => {
+    const t = setup();
+    t.preview();
+    await t.run(PREVIEW_MS);
+    const sends = core.invoke.mock.calls.filter(([c]) => c === 'agent_send');
+    expect(sends).toHaveLength(1);
+    expect((sends[0]?.[1] as { args: unknown }).args).toEqual(AGENT_SEND_FIXTURE);
+  });
 
   it('[RTR-04b] a cancel from the MOG window (not its card) does not reach the preview', async () => {
     const t = setup();

@@ -1,0 +1,25 @@
+{
+  "mogId": "00000000-0000-4000-8000-0000000000a1",
+  "turn": {
+    "mogId": "00000000-0000-4000-8000-0000000000a1",
+    "question": "What were EMEA bookings last week?",
+    "decision": {
+      "intent": "question",
+      "cleaned_text": "What was revenue last quarter?",
+      "genie_question": "What were EMEA bookings last week?",
+      "target_profile_hint": "",
+      "confidence": 0.9,
+      "follow_up": false,
+      "topic_label": "revenue",
+      "part_questions": [],
+      "part_profile_hints": [],
+      "command": "none",
+      "command_arg": "",
+      "context_note": "",
+      "injection_suspected": false,
+      "directed_mog_id": ""
+    },
+    "recall": [],
+    "target": "home"
+  }
+}
