@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-view-notice-subscribe"
+description = "Enables the view_notice_subscribe command without any pre-configured scope."
+commands.allow = ["view_notice_subscribe"]
+
+[[permission]]
+identifier = "deny-view-notice-subscribe"
+description = "Denies the view_notice_subscribe command without any pre-configured scope."
+commands.deny = ["view_notice_subscribe"]

@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { act } from 'react';
 import type { Root } from 'react-dom/client';
-import { render, tauri, viewEmits } from '../test-tauri';
+import { inputEmits as viewEmits, render, tauri } from '../test-tauri';
 import { CardView } from './CardView';
 import { FADE_AFTER_MS, FADE_OUT_MS } from './Popup';
 
@@ -104,7 +104,7 @@ describe('#559 post-dictation pop-up', () => {
   it('[#559] [UX-20c] Ask Genie sends the chip click of the newest text, and nothing else', async () => {
     const { el } = await mountCard();
     await tauri.emit('card:update', asks);
-    await hover(pop(el), true);
+    await hover(el.querySelector('[data-popup-text]') as HTMLElement, true);
     await act(async () => (el.querySelector('[data-chip="ask_genie:u3"]') as HTMLElement).click());
     expect(viewEmits()).toEqual([
       { mogId: ID, kind: 'hover', payload: { blurbId: 'ask:u3', on: true, via: 'pointer' } },
@@ -198,6 +198,31 @@ describe('#559 post-dictation pop-up', () => {
       { mogId: ID, kind: 'chip_click', payload: { chipId: 'copy-u9' } },
       { mogId: ID, kind: 'cancel' },
     ]);
+  });
+
+  it('[#559] [MOG-06d] the Copy pop-up stays when the brain drops its chip or blurb', async () => {
+    const { el } = await mountCard();
+    await tauri.emit('card:update', refused);
+    // The copy chip expires after 30 s and the blurb goes to History after 60 s (Appendix E,
+    // UX-12); the text stays on screen until the user copies or dismisses it.
+    await tauri.emit('card:update', { ...refused, chips: [] });
+    await tauri.emit('card:update', { ...refused, blurbs: [], chips: [], historyCount: 1 });
+    expect(el.querySelector('[data-popup-text]')?.textContent).toBe('Meet at noon');
+    expect(el.querySelector('[data-chip="copy-u9"]')).not.toBeNull();
+    await act(async () => (el.querySelector('[data-action="dismiss"]') as HTMLElement).click());
+    await tauri.emit('card:update', { ...refused, blurbs: [], chips: [], historyCount: 1 });
+    expect(popup(el)).toBeNull();
+  });
+
+  it('[#559] a newer text replaces a kept Copy pop-up', async () => {
+    const { el } = await mountCard();
+    await tauri.emit('card:update', refused);
+    await tauri.emit('card:update', {
+      mogId: ID,
+      blurbs: [{ id: 'ask:u10', text: '"Margin by product"', completed: true }],
+      chips: [{ id: 'ask_genie:u10', label: 'Ask Genie' }],
+    });
+    expect(el.querySelector('[data-popup-text]')?.textContent).toBe('"Margin by product"');
   });
 
   it('[#559] Dismiss closes the Copy pop-up and asks the brain to hide the card', async () => {

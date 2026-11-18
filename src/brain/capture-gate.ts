@@ -25,13 +25,20 @@ export interface CaptureGateDeps {
 }
 
 export const CONSENT_REQUIRED: IpcError = { error: 'consent_required' };
+export const CONSENT_STORAGE_FAILED: IpcError = { error: 'consent_storage_failed' };
 
 /** Start capture only after the user accepted the current notice version. */
 export async function startCapture(
   deps: CaptureGateDeps,
   args: CommandArgs['capture_start'],
 ): Promise<CommandReturns['capture_start']> {
-  const state = await deps.consent.noticeState();
+  let state: HubNotice;
+  try {
+    state = await deps.consent.noticeState();
+  } catch {
+    // MB-08a: no readable records means no proof of consent, so the start fails closed.
+    throw { ...CONSENT_STORAGE_FAILED };
+  }
   if (!state.accepted) {
     try {
       await (deps.onBlocked ?? sendHubNotice)(state);

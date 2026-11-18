@@ -81,6 +81,12 @@ impl BrainLink for NoBrain {
     fn subscribe(&self, _channel: &ChannelRef) -> bool {
         false
     }
+    fn notify_hub(&self, _notice: Value) -> bool {
+        false
+    }
+    fn subscribe_hub(&self, _channel: &ChannelRef) -> bool {
+        false
+    }
 }
 
 struct Words;

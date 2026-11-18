@@ -8,11 +8,12 @@
  *   "Could not insert: <reason>" and a Copy chip on the card, and shows the card.
  * - RTR-01c: the flow ends here. This module never calls the main agent or Genie.
  *
- * The order (PR #504 review): the sink shows the card first, then puts the text on the card
- * stack. A new card window listens only after its view mounts, so `cardReady` sends the kept
- * state again (TODO(#507): the card view sends `view_emit` `ready`). A failed show is tried
- * once more. If that also fails, the card stack keeps the text for a later show or `ready`,
- * and `onUnshown` gets the text for a place the user can see.
+ * The order (PR #504 review, ADR 0091): the sink shows the card first, then puts the text on
+ * the card stack. A new card window listens only after its view mounts, so the card's
+ * `view_emit` `ready` calls `cardReady`, which sends the kept state again. A failed show is
+ * tried once more. If that also fails, the card stack keeps the text for a later show or
+ * `ready`, and the text goes to the hub only (`hub_notice_send` `dictation_unshown`, #509).
+ * A refused hub notice is kept and sent again on the hub's `ready` (`hubReady`).
  *
  * TODO(#213): a click on Copy writes the clipboard with the concealed and transient flags. No
  * clipboard command is on main yet, so the chip only shows.
@@ -43,8 +44,8 @@ export interface DictationSinkDeps {
   stackFor(mogId: MogId): Pick<CardStack, 'add' | 'offerChip' | 'republish'>;
   /** Show the card window of a MOG (`window_card_show`). */
   showCard(mogId: MogId): Promise<unknown>;
-  /** The show failed twice: give the dictation text to a place the user can see. */
-  onUnshown(mogId: MogId, text: string): void;
+  /** The show failed twice: send the text to the hub only. False: no hub took it. */
+  sendHubNotice(mogId: MogId, text: string): Promise<boolean>;
 }
 
 export interface DictationSink {
@@ -52,11 +53,22 @@ export interface DictationSink {
   onDone(r: DoneRoute, owned: OwnedUtterance): Promise<void>;
   /** The card view of a MOG listens now: send it the kept state again. */
   cardReady(mogId: MogId): void;
+  /** The hub listens now: send it the notices it did not take. */
+  hubReady(): Promise<void>;
 }
 
 export function createDictationSink(deps: DictationSinkDeps): DictationSink {
   /** The MOGs whose card stack holds dictation text. */
   const held = new Set<MogId>();
+  /** The unshown texts that no hub took yet, in order. */
+  let pending: { mogId: MogId; text: string }[] = [];
+  const notifyHub = async (n: { mogId: MogId; text: string }): Promise<boolean> => {
+    try {
+      return await deps.sendHubNotice(n.mogId, n.text);
+    } catch {
+      return false;
+    }
+  };
   const show = async (mogId: MogId): Promise<boolean> => {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
@@ -85,10 +97,18 @@ export function createDictationSink(deps: DictationSinkDeps): DictationSink {
         label: 'Copy',
         owner: owned.utteranceId,
       });
-      if (!shown) deps.onUnshown(owned.mogId, r.text);
+      if (!shown) {
+        const n = { mogId: owned.mogId, text: r.text };
+        if (!(await notifyHub(n))) pending.push(n);
+      }
     },
     cardReady(mogId) {
       if (held.has(mogId)) deps.stackFor(mogId).republish();
+    },
+    async hubReady() {
+      const due = pending;
+      pending = [];
+      for (const n of due) if (!(await notifyHub(n))) pending.push(n);
     },
   };
 }

@@ -110,6 +110,8 @@ fn sample(command: &str) -> (&'static str, Value) {
         "audit_append" => json!({"kind": "k", "mogId": "a1", "opId": "o1", "sizes": {"chars": 1}}),
         "telemetry_span" => json!({"name": "n", "startMs": 1, "endMs": 2}),
         "brain_subscribe" => json!({"onEvent": "__CHANNEL__:3"}),
+        "hub_notice_send" => json!({"kind": "dictation_unshown", "mogId": "a1", "text": "hello"}),
+        "view_notice_subscribe" => return ("hub", json!({"onNotice": "__CHANNEL__:4"})),
         other => panic!("no sample for {other}"),
     };
     ("brain", args)
@@ -698,4 +700,27 @@ fn sec_01_at_17_tauri_reachable_ipc_errors_hold_no_secret() {
             assert!(!contains_secret(&shown), "{}: {shown}", c.name);
         }
     }
+}
+
+#[test]
+fn sec_16c_sec_03_the_hub_notice_text_never_reaches_the_gateway_log() {
+    let marker = "test-dictation-not-real";
+    let log = Recorder::default();
+    let gw = CheckedGateway::new(log.clone());
+    let notice = json!({"kind": "dictation_unshown", "mogId": "a1", "text": marker});
+    let _ = gw.dispatch("brain", "hub_notice_send", notice.clone());
+    let _ = gw.dispatch("mog-a1", "hub_notice_send", notice.clone());
+    let mut extra = notice;
+    extra["note"] = json!(marker);
+    let _ = gw.dispatch("brain", "hub_notice_send", extra);
+    let lines = log.lines();
+    assert_eq!(
+        lines,
+        vec![
+            "ipc command=hub_notice_send window=brain outcome=not_implemented",
+            "ipc command=hub_notice_send window=mog outcome=window_not_allowed",
+            "ipc command=hub_notice_send window=brain outcome=invalid_args",
+        ]
+    );
+    assert!(lines.iter().all(|l| !l.contains(marker)));
 }

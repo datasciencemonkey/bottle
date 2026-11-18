@@ -653,6 +653,41 @@
       "title": "HotkeysSetArgs",
       "type": "object"
     },
+    "hub_notice_send": {
+      "$defs": {
+        "HubNoticeKind": {
+          "description": "The kind of a text-bearing hub notice (#509, ADR 0091).",
+          "oneOf": [
+            {
+              "const": "dictation_unshown",
+              "description": "The dictated text found no MOG card to show on (#498, MOG-05b, MOG-06d).",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "`hub_notice_send` (#509, ADR 0091): the brain gives the host a notice for the hub window\nonly. `text` is user content: the `Debug` output redacts it (SEC-16c). #505 is the general\nfix for every type that holds content.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/HubNoticeKind"
+        },
+        "mogId": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "mogId",
+        "text"
+      ],
+      "title": "HubNoticeSendArgs",
+      "type": "object"
+    },
     "insert_text": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
@@ -1222,7 +1257,8 @@
             "chip_click",
             "cancel",
             "expand",
-            "click"
+            "click",
+            "ready"
           ],
           "type": "string"
         }
@@ -1243,6 +1279,27 @@
         "kind"
       ],
       "title": "ViewEmitArgs",
+      "type": "object"
+    },
+    "view_notice_subscribe": {
+      "$defs": {
+        "ChannelRef": {
+          "pattern": "^__CHANNEL__:[0-9]+$",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "`view_notice_subscribe` (#509, ADR 0091): the hub's private Channel for its notices.",
+      "properties": {
+        "onNotice": {
+          "$ref": "#/$defs/ChannelRef"
+        }
+      },
+      "required": [
+        "onNotice"
+      ],
+      "title": "ViewNoticeSubscribeArgs",
       "type": "object"
     },
     "window_card_hide": {
@@ -1680,6 +1737,20 @@
       "phase": "MVP-D",
       "windows": [
         "brain"
+      ]
+    },
+    {
+      "name": "hub_notice_send",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "view_notice_subscribe",
+      "phase": "MVP-D",
+      "windows": [
+        "hub"
       ]
     }
   ],

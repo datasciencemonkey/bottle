@@ -97,7 +97,7 @@ export interface MogStatus {
 }
 
 /**
- * Everything the mood depends on. TODO(#4): `capture` comes from the CaptureService.
+ * Everything the mood depends on. `capture` is the last `capture:state` (`capture-mood.ts`, #551).
  * TODO(#39): `requests` come from the OperationTracker and the pipeline.
  * TODO(#113): `agentMood` comes from the main agent `set_mood` tool.
  */

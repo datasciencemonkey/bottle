@@ -5,7 +5,15 @@
 import type { MogId } from '../../shared/interfaces';
 import { call } from '../../shared/ipc';
 import { createAskGate, wireAskGate } from '../ask-gate';
-import { BrainBus, sendMicLevel, subscribeBrain } from '../bus';
+import {
+  BrainBus,
+  onViewInput,
+  sendHubNotice,
+  sendMicLevel,
+  sendMogViewState,
+  subscribeBrain,
+} from '../bus';
+import { createCaptureMood, wireCaptureMood } from '../capture-mood';
 import { wireForget } from '../forget-wiring';
 import { wireHubMogs } from '../hub-mogs-wiring';
 import {
@@ -17,6 +25,7 @@ import { cardStackDeps, createCardStack, timeoutScheduler, type CardStack } from
 import { createSystemClock } from '../clock';
 import { createDictationSink } from '../dictation-copy';
 import { LevelRouter, subscribeLevels, wireLevelStream } from '../level-stream';
+import { createMoodPublisher, latencyTraceClock } from '../mood-publisher';
 import { wireNotice } from '../notice-wiring';
 import { createRequestOwner, sendOwnedCard } from '../request-owner';
 import { configName, createAppTalkTarget, wireTalkTarget, type TalkTarget } from '../talk-target';
@@ -111,8 +120,8 @@ export function startBrain(): Brain {
       newId: () => crypto.randomUUID(),
       sendCard: sendOwnedCard,
     });
-    // #498: the card stack of each MOG, made on first use. TODO(#374): one owner of the stacks
-    // routes the card's `view_emit` input to them and drops a stack when its MOG closes.
+    // #498: the card stack of each MOG, made on first use. TODO(#374): drop a stack when its MOG
+    // closes.
     const cardClock = createSystemClock();
     const stacks = new Map<MogId, CardStack>();
     const stackFor = (mogId: MogId): CardStack => {
@@ -148,18 +157,41 @@ export function startBrain(): Brain {
       // #559, UX-19b: a cancel with no preview hides the card (`window_card_hide`, R11).
       hideCard: (mogId) => void call('window_card_hide', { mogId }).catch(() => undefined),
     });
-    // #498: the Copy card of a dictation. TODO(#507): the card view's `view_emit` `ready` calls
-    // `dictation.cardReady(mogId)`, so a new card window gets the kept state.
+    // #551 (UX-01a, UX-05b, UX-07): the MOG mood follows `capture:state`, and a refused start
+    // shows its reason on the MOG (MB-08a). It is wired before the capture lifecycle, so the
+    // `listening` state goes out in the same task as the `capture:state` item.
+    const moodClock = createSystemClock();
+    const captureMood = createCaptureMood({
+      publisher: createMoodPublisher({
+        clock: moodClock,
+        send: (s) => sendMogViewState(s.mogId, s).catch(() => undefined),
+        scheduler: { at: timeoutScheduler(moodClock) },
+        traceNow: latencyTraceClock(import.meta.env.VITE_BOTTLE_LATENCY_TRACE),
+      }),
+      clock: moodClock,
+      scheduler: { at: timeoutScheduler(moodClock) },
+    });
+    wireCaptureMood(bus, captureMood);
+    // #498 (ADR 0091): the Copy card of a dictation. The card is shown first, then the text goes
+    // on its stack. If the card cannot show, the text goes to the hub only. No main agent and no
+    // Genie take part (RTR-01c).
     const dictation = createDictationSink({
       stackFor,
       showCard: (mogId) => call('window_card_show', { mogId }),
-      // TODO(#509): no hub notice path can hold text yet (the hub notice is the consent notice
-      // only). The card stack keeps the text for the next show or `ready`.
-      onUnshown: () => undefined,
+      sendHubNotice,
+    });
+    // #507: a view sends `ready` after it listens. The replay is keyed on `from`, which the host
+    // sets, and it sends state only: it takes no user action.
+    onViewInput(bus, (input) => {
+      if (input.kind !== 'ready') return;
+      if (input.from === 'hub') void dictation.hubReady();
+      else if (input.from === `card-${input.mogId}`) dictation.cardReady(input.mogId);
     });
     // #14: the PTT and hands-free lifecycle. Every start goes through the T12 consent gate.
     const lifecycle = createCaptureLifecycle({
       control: ipcCaptureControl({ consent: components.T12 }),
+      // MB-08a: a refused start is never silent. The consent gate also shows the hub notice.
+      onRefused: (e) => captureMood.refused(e.mogId, e.error),
       // TODO(#52): T4 SttProvider over R4 (#46) and `stt_transcribe` (TODO(#514)); the stub rejects, so nothing is routed yet.
       transcribe: async (seg) =>
         (await components.T4.transcribe(seg, { app: 'bottle', mog: seg.mogId, op: 'asr' })).text,
@@ -170,15 +202,16 @@ export function startBrain(): Brain {
         // TODO(#112, #163): the router input needs the MOG's home profile from T7 and the
         // profile list. Bottle never picks a profile, so until then no utterance is routed.
         routerInput: () => undefined,
-        // TODO(#60): `app.dictation.insert` is on after the user grants Accessibility; until the
-        // dictation card reads it, a dictation goes to Copy.
-        insertionOn: () => false,
+        // MOG-06a, MOG-06d (#551): insertion is on. `insert_text` checks Accessibility before it
+        // touches the clipboard and answers `no_permission`; the route turns that, or a throw,
+        // into `insert_failed` with the text, so the dictation goes to Copy and is not lost.
+        // TODO(#60): the Appendix F `app.dictation.insert` setting; TODO(#552) is parked.
+        insertionOn: () => true,
         route: ipcUtteranceDeps(),
         // #142: T3 runs the 1.5 s preview or shows the chip, and it releases the owner.
         onAsk: askGate.onAsk,
-        // #498, MOG-05b, MOG-06d: a Copy or a failed insertion shows the text and Copy on the
-        // owner's card, so no dictation text is dropped. No main agent and no Genie (RTR-01c).
-        onDone: dictation.onDone,
+        // #498, MOG-05b, MOG-06d: a Copy or a failed insertion reaches the Copy card.
+        onDone: (r, owned) => void dictation.onDone(r, owned),
       }),
     });
     wireCaptureLifecycle(bus, lifecycle, createSystemClock().now);

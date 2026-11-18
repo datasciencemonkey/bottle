@@ -22,9 +22,12 @@ export function wireNotice(
   consent: ConsentService,
   send: (state: HubNotice) => Promise<unknown> = sendHubNotice,
 ): () => void {
-  const publish = async () => {
+  const publish = async (storeError = false) => {
     try {
-      await send(await consent.noticeState());
+      const state = await consent.noticeState();
+      // #541: a Continue click for the current version that was not recorded. The gate stays
+      // closed (it reads the store); the hub shows a fixed message.
+      await send(storeError && !state.accepted ? { ...state, storeError: true } : state);
     } catch {
       // No hub is open. The hub asks again with notice.ready when it opens.
     }
@@ -35,8 +38,12 @@ export function wireNotice(
     const action = asNoticeAction(input.payload);
     if (!action) return;
     void (async () => {
-      if (action.action === 'notice.accept') await consent.acceptNotice(action.noticeVersion);
-      await publish();
+      let failed = false;
+      if (action.action === 'notice.accept') {
+        const current = (await consent.noticeState()).version === action.noticeVersion;
+        failed = !(await consent.acceptNotice(action.noticeVersion)) && current;
+      }
+      await publish(failed);
     })();
   });
 }

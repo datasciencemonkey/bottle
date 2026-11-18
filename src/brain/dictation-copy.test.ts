@@ -12,7 +12,7 @@ const owned = { utteranceId: 'utt-1', mogId: A };
  * A fake card window. Like the host (MOG-18a), the window exists only after a show. Like the
  * view (`useViewEvent`), it gets a `card.update` only while it listens; it listens after `ready`.
  */
-function setup(shows: ('ok' | 'fail')[] = []) {
+function setup(shows: ('ok' | 'fail')[] = [], hub: boolean[] = []) {
   const log: string[] = [];
   const seen: CardStackUpdate[] = [];
   const sent: CardStackUpdate[] = [];
@@ -43,7 +43,11 @@ function setup(shows: ('ok' | 'fail')[] = []) {
       if ((shows.shift() ?? 'ok') === 'fail') throw new Error('closing');
       exists = true;
     },
-    onUnshown: (mogId, text) => void unshown.push([mogId, text]),
+    sendHubNotice: async (mogId, text) => {
+      const ok = hub.shift() ?? true;
+      if (ok) unshown.push([mogId, text]);
+      return ok;
+    },
   };
   const sink = createDictationSink(deps);
   const ready = () => {
@@ -94,7 +98,7 @@ describe('dictation Copy card sink', () => {
 
   it('[MOG-05b] the first Copy card of a MOG is not empty: the kept state goes again on ready', async () => {
     // Regression (PR #504 review): the new card window listens only after its view mounts, so
-    // the updates sent before that are lost. `ready` (TODO(#507)) sends the kept state again.
+    // the updates sent before that are lost. The card `ready` (#507) sends the kept state again.
     const { sink, seen, ready } = setup();
     await sink.onDone({ route: 'copy', text: SENTENCE }, owned);
     expect(seen).toEqual([]);
@@ -122,6 +126,18 @@ describe('dictation Copy card sink', () => {
     expect(unshown).toEqual([[A, SENTENCE]]);
     // The card stack keeps the text, so a later show or `ready` still shows it.
     expect(texts(sent.at(-1))[0]?.startsWith(SENTENCE)).toBe(true);
+  });
+
+  it('[MOG-05b] [MOG-06d] a refused hub notice keeps the text and sends it again on hub ready', async () => {
+    // No hub listens yet: `hub_notice_send` gives false (ADR 0091). The hub's `ready` resends.
+    const { sink, unshown } = setup(['fail', 'fail'], [false]);
+    await sink.onDone({ route: 'copy', text: SENTENCE }, owned);
+    expect(unshown).toEqual([]);
+    await sink.hubReady();
+    expect(unshown).toEqual([[A, SENTENCE]]);
+    // Idempotent: a second ready does not send a second copy.
+    await sink.hubReady();
+    expect(unshown).toEqual([[A, SENTENCE]]);
   });
 
   it('[MOG-05b] ready for a MOG with no dictation sends nothing', () => {

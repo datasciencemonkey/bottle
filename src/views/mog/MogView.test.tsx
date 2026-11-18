@@ -153,6 +153,29 @@ describe('V2 MOG view', () => {
     expect(subs).toBe(0);
   });
 
+  it('[UX-06a] [UX-06b] [CAP-16a] with no levels prop, the meter reads the mog.level frames sent to this window', async () => {
+    tauri.label = `mog-${ID}`;
+    const { m, calls } = fakeMascot();
+    const { root } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    expect(tauri.listeners('mog:level')).toBe(1);
+    const levels = () => calls.filter((c) => c.startsWith('level:')).map((c) => Number(c.slice(6)));
+    // A frame sent to another MOG window never reaches this one.
+    await tauri.emitTo(`mog-${OTHER}`, 'mog:level', { owner: OTHER, dbfs: -10, t: 0 });
+    expect(levels()).toEqual([]);
+    for (let t = 0; t <= 300; t += 10) {
+      await tauri.emitTo(`mog-${ID}`, 'mog:level', { owner: ID, dbfs: -10, t });
+    }
+    expect(levels().length).toBeGreaterThan(3);
+    expect(levels().at(-1)).toBeGreaterThan(0.9);
+    // UX-06b: the brain's `owner: null` frame on the stop sets 0 at once.
+    await tauri.emitTo(`mog-${ID}`, 'mog:level', { owner: null, dbfs: -100, t: 310 });
+    expect(calls.at(-1)).toBe('level:0');
+    act(() => root.unmount());
+    await act(async () => undefined);
+    expect(tauri.listeners('mog:level')).toBe(0);
+    tauri.label = 'hub';
+  });
+
   it('[UX-06a] [UX-06b] a new renderer gets level writes from a new meter during an owned mic stream', async () => {
     const a = fakeMascot();
     const b = fakeMascot();

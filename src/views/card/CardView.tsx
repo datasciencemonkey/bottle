@@ -8,6 +8,7 @@ import { DomainPicker } from '../DomainPicker';
 import {
   asCardUpdate,
   emitView,
+  sendViewReady,
   useViewEvent,
   type CardSection,
   type CardUpdate,
@@ -163,7 +164,10 @@ export function CardView({ mogId }: { mogId: MogId }) {
     },
     [mogId],
   );
-  useViewEvent('card.update', onUpdate);
+  // #507, #498: `ready` after the listener is set, so the brain sends the kept card state again
+  // (a new card window misses the updates sent before it listens).
+  const onListening = useCallback(() => sendViewReady(mogId), [mogId]);
+  useViewEvent('card.update', onUpdate, onListening);
 
   // The card is the only key window (UX-19a), so every key of the card reaches this window.
   useEffect(() => {

@@ -52,6 +52,14 @@ describe('capture_start gate on the first-run notice (#27)', () => {
     expect(core.invoke).toHaveBeenCalledTimes(1);
   });
 
+  it('[MB-08a] a failed consent records read refuses with consent_storage_failed and starts nothing', async () => {
+    const broken = { noticeState: () => Promise.reject(new Error('store down')) };
+    await expect(startCapture({ consent: broken }, args)).rejects.toEqual({
+      error: 'consent_storage_failed',
+    });
+    expect(core.invoke).not.toHaveBeenCalled();
+  });
+
   it('[MB-08a] no brain source except capture-gate.ts calls capture_start', () => {
     const dir = import.meta.dirname;
     const files = (d: string): string[] =>

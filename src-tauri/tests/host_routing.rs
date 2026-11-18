@@ -80,6 +80,10 @@ struct FakeBrain {
     items: Mutex<Vec<(String, Value)>>,
     channels: Mutex<Vec<String>>,
     absent: bool,
+    /// #509: the notices sent on the hub's private Channel, and the hub Channels kept.
+    hub_notices: Mutex<Vec<Value>>,
+    hub_channels: Mutex<Vec<String>>,
+    no_hub: bool,
 }
 
 impl FakeBrain {
@@ -108,6 +112,20 @@ impl BrainLink for FakeBrain {
             .unwrap()
             .push(channel.as_str().to_owned());
         !self.absent
+    }
+    fn notify_hub(&self, notice: Value) -> bool {
+        if self.no_hub {
+            return false;
+        }
+        self.hub_notices.lock().unwrap().push(notice);
+        true
+    }
+    fn subscribe_hub(&self, channel: &ChannelRef) -> bool {
+        self.hub_channels
+            .lock()
+            .unwrap()
+            .push(channel.as_str().to_owned());
+        true
     }
 }
 
@@ -1103,5 +1121,93 @@ fn cap_22_no_managed_settings_is_host_failed() {
             settings_call("hub", None, command, args),
             err("host_failed")
         );
+    }
+}
+
+// ---------- #509 the hub-only notice for an unshown dictation (ADR 0091) ----------
+
+const MARKER: &str = "test-dictation-not-real";
+
+fn unshown() -> Value {
+    json!({"kind": "dictation_unshown", "mogId": "a1", "text": MARKER})
+}
+
+#[test]
+fn mog_05b_mog_06d_hub_notice_send_goes_only_to_the_hub_channel() {
+    let brain = FakeBrain::default();
+    let got = route(
+        comps("brain", &brain, None, None),
+        "hub_notice_send",
+        unshown(),
+    );
+    assert_eq!(got, Ok(json!({})));
+    assert_eq!(*brain.hub_notices.lock().unwrap(), vec![unshown()]);
+    // Not relayed on the brain Channel, and no Tauri event (see `arc_5_core_to_brain_items_are_never_tauri_events`).
+    assert!(brain.items().is_empty());
+}
+
+#[test]
+fn mog_06d_hub_notice_send_with_no_hub_is_host_failed() {
+    // The brain then keeps the text (#498): nothing is dropped silently.
+    let brain = FakeBrain {
+        no_hub: true,
+        ..FakeBrain::default()
+    };
+    let got = route(
+        comps("brain", &brain, None, None),
+        "hub_notice_send",
+        unshown(),
+    );
+    assert_eq!(got, err("host_failed"));
+}
+
+#[test]
+fn sec_02a_no_view_can_send_or_forward_a_hub_notice() {
+    for label in ["hub", "mog-a1", "card-a1"] {
+        let brain = FakeBrain::default();
+        let got = route(
+            comps(label, &brain, None, None),
+            "hub_notice_send",
+            unshown(),
+        );
+        assert_eq!(got, err("window_not_allowed"), "{label}");
+        assert!(brain.hub_notices.lock().unwrap().is_empty(), "{label}");
+        assert!(brain.items().is_empty(), "{label}");
+    }
+}
+
+#[test]
+fn sec_02a_only_the_hub_window_gets_the_notice_channel() {
+    let args = json!({"onNotice": "__CHANNEL__:5"});
+    let brain = FakeBrain::default();
+    let got = route(
+        comps("hub", &brain, None, None),
+        "view_notice_subscribe",
+        args.clone(),
+    );
+    assert_eq!(got, Ok(json!({})));
+    assert_eq!(*brain.hub_channels.lock().unwrap(), vec!["__CHANNEL__:5"]);
+    // A MOG or card window (or the brain) can never take the Channel, so it never gets a notice.
+    for label in ["mog-a1", "card-a1", "brain"] {
+        let brain = FakeBrain::default();
+        let got = route(
+            comps(label, &brain, None, None),
+            "view_notice_subscribe",
+            args.clone(),
+        );
+        assert_eq!(got, err("window_not_allowed"), "{label}");
+        assert!(brain.hub_channels.lock().unwrap().is_empty(), "{label}");
+    }
+}
+
+#[test]
+fn sec_03_a_refused_hub_notice_never_echoes_the_text() {
+    let brain = FakeBrain::default();
+    let mut bad = unshown();
+    bad["extra"] = json!(MARKER);
+    for (label, args) in [("brain", bad), ("mog-a1", unshown())] {
+        let got = route(comps(label, &brain, None, None), "hub_notice_send", args);
+        let shown = format!("{got:?}");
+        assert!(!shown.contains(MARKER), "{shown}");
     }
 }

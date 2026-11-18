@@ -16,10 +16,12 @@ import {
 import type { Mood, MogId } from '../shared/interfaces';
 import {
   call,
+  Channel,
   EVENTS,
   type CardSection,
   type CardUpdate,
   type DomainPickerView,
+  type HubTextNotice,
   type MicLevelFrame,
   type MogViewState,
   type PagesChecklistView,
@@ -183,8 +185,15 @@ export function emitView(mogId: MogId, kind: ViewEmitKind, payload?: unknown): P
   return call('view_emit', payload === undefined ? { mogId, kind } : { mogId, kind, payload });
 }
 
-/** Subscribe to a brain-to-view event while the component is mounted. `onPayload` must be stable. */
-export function useViewEvent(key: ViewEventKey, onPayload: (payload: unknown) => void): void {
+/**
+ * Subscribe to a brain-to-view event while the component is mounted. `onPayload` must be stable.
+ * `onListening` (stable too) runs once the listener is registered, for example to send `ready`.
+ */
+export function useViewEvent(
+  key: ViewEventKey,
+  onPayload: (payload: unknown) => void,
+  onListening?: () => void,
+): void {
   useEffect(() => {
     let off: (() => void) | undefined;
     let gone = false;
@@ -192,13 +201,24 @@ export function useViewEvent(key: ViewEventKey, onPayload: (payload: unknown) =>
     const target = getCurrentWindow().label;
     void listen<unknown>(EVENTS[key].name, (e) => onPayload(e.payload), { target }).then((u) => {
       if (gone) u();
-      else off = u;
+      else {
+        off = u;
+        onListening?.();
+      }
     });
     return () => {
       gone = true;
       off?.();
     };
-  }, [key, onPayload]);
+  }, [key, onPayload, onListening]);
+}
+
+/**
+ * `view_emit` `ready` (#507, ADR 0091): this view registered its listeners, so the brain sends
+ * its state again. No payload. A refusal is dropped: the view sends `ready` again on a reload.
+ */
+export function sendViewReady(mogId: MogId): void {
+  void emitView(mogId, 'ready').catch(() => undefined);
 }
 
 /**
@@ -267,6 +287,36 @@ export function useHubNotice(): HubNotice | null {
 /** Send the hub's Continue click for notice `version` to the brain. */
 export function acceptNotice(version: number): Promise<unknown> {
   return emitView(HUB_SCOPE, 'click', { action: 'notice.accept', noticeVersion: version });
+}
+
+/** Shape check of a text-bearing hub notice (#509, ADR 0091). */
+export function asHubTextNotice(p: unknown): HubTextNotice | undefined {
+  if (!isObj(p) || p['kind'] !== 'dictation_unshown') return undefined;
+  const { mogId, text } = p;
+  if (typeof mogId !== 'string' || typeof text !== 'string') return undefined;
+  return { kind: 'dictation_unshown', mogId, text };
+}
+
+/**
+ * The hub's notices of unshown dictations (#509, ADR 0091), on the hub's private Channel.
+ * Only the hub window asks; the core refuses every other window. The hub may only copy or
+ * dismiss a notice, and it never logs the text. False when the call is refused.
+ */
+export async function subscribeHubNotices(
+  onNotice: (notice: HubTextNotice) => void,
+): Promise<boolean> {
+  if (getCurrentWindow().label !== 'hub') return false;
+  const channel = new Channel<unknown>();
+  channel.onmessage = (m) => {
+    const n = asHubTextNotice(m);
+    if (n) onNotice(n);
+  };
+  try {
+    await call('view_notice_subscribe', { onNotice: channel });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** How long a MOG view waits before it sends `view.ready` again while no brain listens. */

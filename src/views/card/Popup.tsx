@@ -31,7 +31,14 @@ function pick(chips: Chip[], prefix: string, owner: string | undefined): Chip | 
   return all.find((c) => c.id.slice(prefix.length) === owner) ?? all[all.length - 1];
 }
 
-export function Popup({ mogId, card }: { mogId: MogId; card: CardUpdate }) {
+export interface PopupProps {
+  mogId: MogId;
+  card: CardUpdate;
+  /** The user copied or dismissed the pop-up, or it faded. */
+  onClose?: () => void;
+}
+
+export function Popup({ mogId, card, onClose }: PopupProps) {
   const newest = card.blurbs[0];
   const [phase, setPhase] = useState<Phase>('shown');
   const [held, setHeld] = useState({ pointer: false, focus: false });
@@ -48,6 +55,7 @@ export function Popup({ mogId, card }: { mogId: MogId; card: CardUpdate }) {
 
   const close = () => {
     setPhase('gone');
+    onClose?.();
     void emitView(mogId, 'cancel');
   };
 
@@ -58,19 +66,22 @@ export function Popup({ mogId, card }: { mogId: MogId; card: CardUpdate }) {
         ? setTimeout(() => setPhase('fading'), FADE_AFTER_MS)
         : setTimeout(close, FADE_OUT_MS);
     return () => clearTimeout(t);
-    // `close` only reads `mogId`.
+    // `close` only reads `mogId` and `onClose`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, sticky, hovered, mogId]);
 
   if (!newest || phase === 'gone') return null;
 
-  const hover = (via: 'pointer' | 'focus', on: boolean) => {
+  // `hold` keeps the pop-up open. `report` is the UX-12 blurb hover for the brain: the pointer
+  // on the text, or the keyboard focus in the pop-up. A hover on a chip alone sends nothing.
+  const hold = (via: 'pointer' | 'focus', on: boolean) => {
     if (held[via] === on) return;
     // A hover or focus during the fade brings the pop-up back.
     if (on && phase === 'fading') setPhase('shown');
     setHeld((h) => ({ ...h, [via]: on }));
-    void emitView(mogId, 'hover', { blurbId: newest.id, on, via });
   };
+  const report = (via: 'pointer' | 'focus', on: boolean) =>
+    void emitView(mogId, 'hover', { blurbId: newest.id, on, via });
   const [line, ...rest] = newest.text.split('\n');
   const why = rest.join(' ').trim();
   const chip = (c: Chip, after?: () => void) => (
@@ -98,14 +109,24 @@ export function Popup({ mogId, card }: { mogId: MogId; card: CardUpdate }) {
       data-variant={copy ? 'copy' : 'ask'}
       data-state={phase}
       title={why ? `${line}\n${why}` : line}
-      onMouseEnter={() => hover('pointer', true)}
-      onMouseLeave={() => hover('pointer', false)}
-      onFocus={() => hover('focus', true)}
+      onMouseEnter={() => hold('pointer', true)}
+      onMouseLeave={() => hold('pointer', false)}
+      onFocus={() => {
+        if (!held.focus) report('focus', true);
+        hold('focus', true);
+      }}
       onBlur={(e) => {
-        if (!ref.current?.contains(e.relatedTarget as Node | null)) hover('focus', false);
+        if (ref.current?.contains(e.relatedTarget as Node | null)) return;
+        hold('focus', false);
+        report('focus', false);
       }}
     >
-      <p className="popup-text" data-popup-text>
+      <p
+        className="popup-text"
+        data-popup-text
+        onMouseEnter={() => report('pointer', true)}
+        onMouseLeave={() => report('pointer', false)}
+      >
         {newest.parts
           ? newest.parts.map((p) => (
               <span key={p.id} data-part={p.id}>

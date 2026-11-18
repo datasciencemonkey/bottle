@@ -77,4 +77,41 @@ describe('startBrain dictation Copy card', () => {
     expect(core.invoke).toHaveBeenCalledWith('window_card_show', { args: { mogId: MOG } });
     expect(callsTo(core.invoke.mock.calls, [...NO_AGENT_NO_GENIE])).toEqual([]);
   });
+
+  it('[MOG-05b] the card view ready resends the kept Copy card state (first card not empty)', async () => {
+    const brain = startBrain();
+    await handlerDeps().onDone?.(
+      { route: 'copy', text: SENTENCE },
+      { utteranceId: 'u-3', mogId: MOG },
+    );
+    await settle();
+    core.emitTo.mockClear();
+    brain.bus.dispatch({
+      event: 'view:input',
+      payload: { from: `card-${MOG}`, input: { mogId: MOG, kind: 'ready' } },
+    });
+    await settle();
+    expect(
+      cardUpdates()
+        .at(-1)
+        ?.blurbs.map((b) => b.text),
+    ).toContain(SENTENCE);
+  });
+
+  it('[MOG-05b] [MOG-06d] when the card cannot show twice, the text goes to the hub notice only', async () => {
+    core.invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'window_card_show') throw { code: 'closing' };
+      return {};
+    });
+    await handlerDeps().onDone?.(
+      { route: 'insert_failed', reason: 'no_focus', text: SENTENCE },
+      { utteranceId: 'u-4', mogId: MOG },
+    );
+    await settle();
+    expect(callsTo(core.invoke.mock.calls, ['window_card_show'])).toHaveLength(2);
+    expect(core.invoke).toHaveBeenCalledWith('hub_notice_send', {
+      args: { kind: 'dictation_unshown', mogId: MOG, text: SENTENCE },
+    });
+    expect(callsTo(core.invoke.mock.calls, [...NO_AGENT_NO_GENIE])).toEqual([]);
+  });
 });

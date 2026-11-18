@@ -11,9 +11,11 @@ import type { MogId } from '../shared/interfaces';
 import {
   call,
   EVENTS,
+  VIEW_EMIT_KINDS,
   type BrainMessage,
   type CardUpdate,
   type EventName,
+  type HubTextNotice,
   type MicLevelFrame,
   type MogViewState,
   type ViewEmitKind,
@@ -107,6 +109,21 @@ export async function sendMicLevel(mogId: MogId, frame: MicLevelFrame): Promise<
   return emitToView(viewLabel('mog', mogId), 'mog.level', frame);
 }
 
+/**
+ * Send an unshown dictation to the hub only (#509, ADR 0091), on the hub's private Channel.
+ * False when the core refuses (for example no hub listens yet): the caller keeps the text.
+ * Nothing is logged: `text` is user content.
+ */
+export async function sendHubNotice(mogId: MogId, text: string): Promise<boolean> {
+  const notice: HubTextNotice = { kind: 'dictation_unshown', mogId, text };
+  try {
+    await call('hub_notice_send', notice);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** One `view_emit` call, as the brain gets it on the Channel (`view:input`). */
 export interface ViewInput {
   /** The window label of the sender: `hub`, `mog-<id>` or `card-<id>`. */
@@ -116,15 +133,7 @@ export interface ViewInput {
   payload: unknown;
 }
 
-const VIEW_KINDS: ReadonlySet<string> = new Set<ViewEmitKind>([
-  'poked',
-  'hover',
-  'drag_end',
-  'chip_click',
-  'cancel',
-  'expand',
-  'click',
-]);
+const VIEW_KINDS: ReadonlySet<string> = new Set<ViewEmitKind>(VIEW_EMIT_KINDS);
 
 /** Parse a `view:input` payload. The core checks the same rules; the brain checks again. */
 export function asViewInput(p: unknown): ViewInput | undefined {
@@ -136,6 +145,8 @@ export function asViewInput(p: unknown): ViewInput | undefined {
     return undefined;
   // Only views send view_emit. A MOG or card view speaks only for its own MOG.
   if (from !== 'hub' && from !== `mog-${mogId}` && from !== `card-${mogId}`) return undefined;
+  // #507: `ready` has no payload. The core refuses one; the brain drops it too.
+  if (kind === 'ready' && 'payload' in input) return undefined;
   return { from, mogId, kind: kind as ViewEmitKind, payload };
 }
 

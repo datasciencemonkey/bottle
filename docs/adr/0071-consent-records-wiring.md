@@ -25,3 +25,25 @@ ADR 0052 (#63) put the consent records in the local store (`mog_core::consent::C
 - Each capture start costs one `consent_records_list` call.
 - Users of a #27 build see the notice once more after the update.
 - `TODO(#478)`: the signed-in user in the records. `TODO(#64)`: session records through `session_attest`. `TODO(#186)`: the admin retention.
+
+## Amendment 1 (2026-11-18, #541): the login keychain on a build with no entitlement
+
+### Context
+
+Decision 6 left a gap. An unsigned or ad-hoc macOS build (for example `pnpm tauri dev`) has no `keychain-access-groups` entitlement. The data protection keychain refuses such a build. A live run showed two codes: a store gets `errSecMissingEntitlement` (-34018), and a get gets `errSecItemNotFound` (-25300). So the key store failed, the local store did not open, and `consent_notice_record` failed. The notice stayed open, and Continue did nothing. The hub showed no error.
+
+A first fix chose the keychain from the error code: a fall back to the login keychain on -34018 (store) or -25300 (load). Review found a risk in that rule. A signed build with no data protection item also gets -25300. It then read the login keychain. Any process of the same user can put an item with the Bottle service and account in the login keychain, with an ACL that shows no prompt. So that process could plant a key it knows, and the signed build would encrypt the local store with it for good. This amendment replaces the error-code rule.
+
+### Decisions
+
+1. **The entitlements choose the keychain, one time.** At creation, `macos::KeychainVault::bottle()` checks the process with `SecTaskCreateFromSelf` and `SecTaskCopyValueForEntitlement`. The process is entitled when any of these entitlements is present: `keychain-access-groups`, `com.apple.application-identifier` or `com.apple.security.application-groups` (Apple keychain access groups, TN3137). Each of them gives the process an access group in the data protection keychain. The pure function `entitled_by` holds this rule, and `target_for` maps the result to one keychain. `KeychainVault::for_entitlement` is the seam for tests. A failed entitlement check counts as "not entitled". On a signed build, that moves the key to the login keychain with no report. `TODO(#34)` checks this case.
+2. **An entitled build uses only the data protection keychain.** Its load and store are the same as before this amendment. MEM-08b (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`) holds. It never reads or writes the login keychain, so a planted login item has no effect on it. There is no fallback on any error code.
+3. **A build with no entitlement uses only the login keychain.** Its load and store go to the user's login keychain. The item has the same service and account, and `kSecAttrSynchronizable` is false (`item_plan`).
+4. **MEM-08b accessibility is not enforced on such a build.** The file-based login keychain does not honour the accessibility class. So the login item gets no access control. The key stays in the OS key store, encrypted by the login keychain. It is never in a plain file, a log or an IPC reply. A process of the same user can read or plant this item, as for any login item. This risk applies only to unsigned or ad-hoc builds.
+5. **The hub shows a fixed message.** When a Continue click for the current version is not recorded, the brain sends `storeError: true` with the notice state. The hub shows only this text: "Bottle could not open its local store. Restart Bottle; if this repeats, see Settings > Diagnostics." It shows no internal error. The gate stays closed (decision 6 of this ADR).
+
+### Consequences
+
+- A key that a dev build put in the login keychain is not visible to a signed build. A signed build on that machine makes a new key in the data protection keychain. If the store file already exists, that build reports `store_key_lost` (U9). This affects only developer machines.
+- Each rebuild of a dev binary changes its code signature. So macOS can ask the user to allow access to the login item after a rebuild.
+- `TODO(#34)`: on a signed build, confirm that `KeychainVault::bottle().target()` is `DataProtection` (the data protection keychain is used) and that no login item is made.

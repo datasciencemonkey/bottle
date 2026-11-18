@@ -50,6 +50,7 @@
     "allow-window-card-hide",
     "allow-audit-append",
     "allow-telemetry-span",
-    "allow-brain-subscribe"
+    "allow-brain-subscribe",
+    "allow-hub-notice-send"
   ]
 }
