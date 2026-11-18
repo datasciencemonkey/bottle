@@ -6,7 +6,8 @@
  * The Wipe button only asks the brain for the confirm dialog; the brain runs the Wipe after the
  * confirm click. The panel calls only `view_emit` (ARC-2).
  *
- * The retention rows come from the brain on `hub:wipe_settings`, with the admin lock and "Set by
+ * "Show how long Bottle keeps data" asks the brain for the retention rows. They come back on
+ * `hub:wipe_settings`, with the admin lock and "Set by
  * your admin" for each MDM value (SEC-15c, MB-15). Both events are sent to the hub only (ARC-5).
  * TODO(#77): the full Settings view. TODO(#525): the event names move into the contract.
  */
@@ -79,9 +80,6 @@ export function WipeSettings() {
   });
   useHubEvent(WIPE_SETTINGS_EVENT, onSettings);
   useHubEvent(WIPE_DIALOG_EVENT, onDialog);
-  useEffect(() => {
-    void emitView(WIPE_VIEW_ID, 'click', { target: WIPE_SETTINGS_TARGET }).catch(() => undefined);
-  }, []);
 
   return (
     <section data-view="wipe-settings" aria-labelledby="wipe-settings-title">
@@ -122,6 +120,19 @@ export function WipeSettings() {
           }}
         >
           Wipe…
+        </button>
+      </p>
+      <p>
+        <button
+          type="button"
+          data-wipe-settings
+          onClick={() =>
+            void emitView(WIPE_VIEW_ID, 'click', { target: WIPE_SETTINGS_TARGET }).catch(
+              () => undefined,
+            )
+          }
+        >
+          Show how long Bottle keeps data
         </button>
       </p>
       {settings !== undefined && (

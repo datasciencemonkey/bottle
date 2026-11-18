@@ -1,7 +1,7 @@
 /**
  * The brain side of Settings → Wipe (#124; MEM-33a, SEC-15c, MB-15, G-45b, U9, ARC-5; ADR 0087).
  *
- * - The hub panel sends `wipe_settings` when it mounts. The brain answers the 9.2 retention rows
+ * - The hub panel sends `wipe_settings` when the user asks for the retention rows. The brain answers the 9.2 retention rows
  *   with the admin locks, to the hub only.
  * - The hub Wipe button sends `wipe_open` with the option and the Genie choice. The brain builds
  *   the confirm model and sends it to the hub only.
@@ -159,7 +159,7 @@ export class WipeDialogController {
     try {
       await this.sendSettings(await this.settings());
     } catch {
-      // No hub is open, or no policy: the panel asks again when it mounts.
+      // No hub is open, or no policy: the user asks again.
     }
   }
 }

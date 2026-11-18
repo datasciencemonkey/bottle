@@ -112,11 +112,14 @@ describe('Settings → Wipe (#124)', () => {
 
   it('[SEC-15c] [MB-15] [ARC-5] the retention rows show the admin lock with "Set by your admin"', async () => {
     const { el, root } = await render(<WipeSettings />);
-    expect(viewEmits()).toContainEqual({
-      mogId: 'wipe',
-      kind: 'click',
-      payload: { target: 'wipe_settings' },
+    // The panel sends nothing on mount; the user asks for the rows.
+    expect(viewEmits()).toEqual([]);
+    await act(async () => {
+      must(el.querySelector<HTMLButtonElement>('button[data-wipe-settings]')).click();
     });
+    expect(viewEmits()).toEqual([
+      { mogId: 'wipe', kind: 'click', payload: { target: 'wipe_settings' } },
+    ]);
     expect(tauri.listenOptions.get('hub:wipe_settings')).toEqual([{ target: 'hub' }]);
     await tauri.emitTo('hub', 'hub:wipe_settings', settings);
     const rows = [...el.querySelectorAll('[data-retention-row]')];

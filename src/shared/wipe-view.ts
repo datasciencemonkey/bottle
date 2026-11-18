@@ -43,7 +43,7 @@ export const WIPE_OPEN_TARGET = 'wipe_open';
 export const WIPE_CONFIRM_TARGET = 'wipe_confirm';
 /** The Cancel and Close buttons. */
 export const WIPE_CANCEL_TARGET = 'wipe_cancel';
-/** The panel asks for its retention rows when it mounts. */
+/** "Show how long Bottle keeps data": the panel asks for its retention rows. */
 export const WIPE_SETTINGS_TARGET = 'wipe_settings';
 
 export interface WipeDialogModel {
