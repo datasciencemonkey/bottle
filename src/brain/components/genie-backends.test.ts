@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import type { BackendBinding, BackendKind } from '../../shared/interfaces';
-import { NotImplementedError } from '../errors';
 import {
   BACKEND_KINDS,
   BackendNotAvailableError,
@@ -30,8 +29,10 @@ describe('backend kinds (#28)', () => {
   it('[G-02] backendFor gives the Genie One MCP backend for the default binding', () => {
     const b = createGenieBridge().backendFor({ kind: 'genie_one_mcp', profile: 'p' });
     expect(b.kind).toBe('genie_one_mcp');
-    // The ask path is #33; it fails loudly until then.
-    expect(() => b.ask({} as never, new AbortController().signal)).toThrow(NotImplementedError);
+    // The ask path is #33 (ADR 0084): it gives an AskEvent stream, read lazily.
+    expect(typeof b.ask({} as never, new AbortController().signal)[Symbol.asyncIterator]).toBe(
+      'function',
+    );
   });
 
   it('[G-01] [AT-11] v1 backends are not available in the MVP build', () => {

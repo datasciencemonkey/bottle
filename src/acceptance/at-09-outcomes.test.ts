@@ -7,9 +7,9 @@
  * (completed, incomplete, failed, truncated, needs-input): the blurb stack (UX-11a, UX-11b,
  * UX-11c, UX-12; #85), the expanded sections and the 50-row table cap (UX-18, the display part
  * of G-24b; #89), the chip row that acts only on a click (UX-20c), the notification
- * service (UX-26a, UX-26b, UX-26c; #95) and the MoodMapper (UX-01a). The event normaliser that
- * turns a poll into an AskEvent is #33, so `finalPoll` below is test glue that reads the double
- * directly; it is not the bridge. The blurb lines, key numbers and templates (#86), the banned
+ * service (UX-26a, UX-26b, UX-26c; #95) and the MoodMapper (UX-01a). The event normaliser
+ * (#33, ADR 0084) runs through `GenieBridge.submit` in the G-21 test. The card-part tests keep
+ * `finalPoll`, test glue that reads the double directly. The blurb lines, key numbers and templates (#86), the banned
  * words and the 2 s throttle (#88), the long-ask rules (#149), the on-demand table (#150) and
  * the exchange row (#40) are pending. UX-01b (views never set the mood) is the inspection test
  * `src/views/mood-write.test.ts`. The visual check on a device is a person step
@@ -30,6 +30,11 @@ import {
   type QueryResult,
   type ScriptedResponse,
 } from '../test-support/genie-one-mcp';
+import { HOST as RIG_HOST, PROFILE, rig } from '../test-support/poll-actor-rig';
+import type { AskEvent } from '../shared/interfaces';
+import { isTerminal } from '../brain/components/ask-events';
+import { createGenieBridge } from '../brain/components/genie-bridge';
+import { outcomeBlurb } from '../brain/outcome-blurb';
 
 const HOST = 'example.cloud.databricks.com';
 const WSID = '1234567890';
@@ -44,7 +49,7 @@ interface Final {
   result?: QueryResult;
 }
 
-/** Test glue until #33: ask once, poll to the terminal status, fetch the first query item. */
+/** Test glue for the card-part tests: ask once, poll to the terminal status, fetch the first query item. */
 async function finalPoll(script: ScriptedResponse): Promise<Final> {
   const d = createGenieOneMcpDouble({ host: HOST, workspaceId: WSID, responses: [script] });
   const a = (await d.call('genie_ask', { question: 'q' })).structuredContent as {
@@ -246,11 +251,50 @@ describe('AT-09 show every response outcome', () => {
     for (const n of [chip, visible, focus, open]) n.svc.dispose();
   });
 
-  it.skip('[AT-09] [G-21a] [G-21b] [G-22] [G-23a] [G-23b] each outcome gives one normalised terminal event TODO(#33)', () => {
-    // When #33 lands: run every OUTCOMES script through `GenieBridge.submit`; each gives exactly
-    // one terminal AskEvent; incomplete with an answer is answer{incomplete:true} ("Partial
-    // answer"), incomplete without one is failed; needsInput is needs_input{kind:'clarify'}.
-    expect.unreachable('#33: the event normaliser is not built');
+  it('[AT-09] [G-21a] [G-21b] [G-22] [G-23a] [G-23b] each outcome gives one normalised terminal event and its card', async () => {
+    const want = {
+      completed: { t: 'answer', incomplete: false, state: 'completed' },
+      incomplete: { t: 'answer', incomplete: true, state: 'partial' },
+      incompleteNoAnswer: { t: 'failed', code: 'GENIE_INCOMPLETE', state: 'failed' },
+      failed: { t: 'failed', code: 'GENIE_FAILED', state: 'failed' },
+      truncated: { t: 'answer', incomplete: false, state: 'completed' },
+      needsInput: { t: 'needs_input', kind: 'clarify', state: 'clarify' },
+    } as const;
+    for (const [name, make] of Object.entries(OUTCOMES)) {
+      const r = rig({ responses: [make()] });
+      const bridge = createGenieBridge({
+        call: r.call,
+        conversations: r.cm,
+        now: () => r.sched.clock.now(),
+        hostOf: () => RIG_HOST,
+      });
+      const events: AskEvent[] = [];
+      const done = (async () => {
+        for await (const e of bridge.submit({
+          opId: '00000000-0000-4000-8000-00000000a009',
+          mogId: MOG_A,
+          binding: { kind: 'genie_one_mcp', profile: PROFILE },
+          question: 'What was revenue last quarter?',
+          tags: { app: 'bottle', mog: MOG_A, op: 'genie' },
+        }).events)
+          events.push(e);
+      })();
+      await r.sched.runUntil(60_000, { settle: true });
+      await done;
+      // G-21b: exactly one terminal event, the last one.
+      const terminal = events.filter(isTerminal);
+      expect(terminal, name).toHaveLength(1);
+      const last = events.at(-1);
+      if (!last || !isTerminal(last)) throw new Error(`${name}: no terminal event`);
+      const { state, ...shape } = want[name as keyof typeof want];
+      expect(last, name).toMatchObject(shape);
+      // G-21a: the card render reads only the normalised event.
+      const card = outcomeBlurb(last);
+      expect(card.state, name).toBe(state);
+      if (name === 'incomplete') expect(card.lines[0]).toMatch(/^Partial answer: /);
+      if (name === 'incompleteNoAnswer') expect(card.lines[1]).toBe('Code GENIE_INCOMPLETE');
+      expect(r.double.contractViolations(), name).toEqual([]);
+    }
   });
 
   it.skip('[AT-09] [UX-13] [UX-14a] [UX-14b] [UX-15] [UX-17] blurb lines and verbatim key numbers TODO(#86)', () => {

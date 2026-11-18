@@ -193,7 +193,8 @@ describe('brain component stubs', () => {
   it('[T8] GenieBridge implements the 4.7 interface as stubs', async () => {
     const t = createGenieBridge();
     expect(t.backendFor(binding).kind).toBe('genie_one_mcp'); // G-02, #28
-    await expectStub(() => t.submit(ask), 33);
+    // G-21b, #33: submit is built; its events are read lazily, so it sends nothing here.
+    expect(t.submit(ask).opId).toBe(ask.opId);
     await expectStub(() => t.operations(MOG), 39);
     expect(t.mapError({ httpStatus: 500 }).code).toBe('GENIE_FAILED'); // G-14, #32
     await expectStub(() => t.workspaceLine('p'), 40);
