@@ -3,7 +3,8 @@ import { join, relative } from 'node:path';
 import { NOTICE_VERSION } from '../shared/hub-notice';
 import { core } from './test-core';
 import { startCapture } from './capture-gate';
-import { createConsentService, memoryConsentStore } from './components/consent-service';
+import { consentRecordsDouble } from '../test-support/consent-records';
+import { createConsentService } from './components/consent-service';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('./test-core')).coreModule);
 vi.mock('@tauri-apps/api/event', async () => (await import('./test-core')).eventModule);
@@ -11,8 +12,8 @@ vi.mock('@tauri-apps/api/event', async () => (await import('./test-core')).event
 const MOG = '00000000-0000-4000-8000-000000000001';
 const args = { mogId: MOG, mode: 'ptt' } as const;
 
-function consent(store = memoryConsentStore(), version = NOTICE_VERSION) {
-  return createConsentService({ store, version, now: () => new Date(0), newId: () => 'd' });
+function consent(records = consentRecordsDouble(), version = NOTICE_VERSION) {
+  return createConsentService({ records, version, legacyStorage: null });
 }
 
 describe('capture_start gate on the first-run notice (#27)', () => {
@@ -39,7 +40,7 @@ describe('capture_start gate on the first-run notice (#27)', () => {
   });
 
   it('[MB-08b] [AT-24] a notice version change blocks capture again until the user accepts it', async () => {
-    const store = memoryConsentStore();
+    const store = consentRecordsDouble();
     await consent(store, 1).acceptNotice(1);
     const v2 = consent(store, 2);
     await expect(startCapture({ consent: v2 }, args)).rejects.toEqual({

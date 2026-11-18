@@ -1,7 +1,8 @@
 import { HUB_NOTICE_EVENT, HUB_SCOPE, NOTICE_VERSION } from '../shared/hub-notice';
 import { BrainBus } from './bus';
 import { core } from './test-core';
-import { createConsentService, memoryConsentStore } from './components/consent-service';
+import { consentRecordsDouble } from '../test-support/consent-records';
+import { createConsentService } from './components/consent-service';
 import { sendHubNotice, wireNotice } from './notice-wiring';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('./test-core')).coreModule);
@@ -17,11 +18,7 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 
 async function setup() {
   const bus = new BrainBus();
-  const consent = createConsentService({
-    store: memoryConsentStore(),
-    now: () => new Date(0),
-    newId: () => 'd',
-  });
+  const consent = createConsentService({ records: consentRecordsDouble(), legacyStorage: null });
   const send = vi.fn(async () => undefined);
   wireNotice(bus, consent, send);
   await flush();

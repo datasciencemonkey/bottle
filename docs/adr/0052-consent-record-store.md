@@ -23,3 +23,8 @@ T12 ConsentService keeps the notice and attestation logic in the brain (section 
 - #37 must keep the `DeviceWide` statements out of `mem_local_exec`, or add an explicit device-wide entry for them. The MEM-01 test lists the statement IDs, so a new consent statement must state its scope.
 - The first-run notice (#27) and `session_attest` (#64) need an IPC path to reach `ConsentRecords`. That path is contract change #430; the wiring is #431. Neither is in this ADR.
 - An admin who shortens the retention deletes older records on the next purge.
+
+## Amendment (#431, ADR 0071)
+
+- The six statements are now the `local_store::catalog::CONSENT` entry set, with the same IDs and scopes. They have named, typed params. `consent::STATEMENTS` and `consent::Scope` are gone; the scope is `catalog::Scope`.
+- The host opens the records at start with `consent::open_device_records` (store in `<app local data dir>/memory`, device ID in `<app local data dir>/device-id`). The brain reaches them through #430.

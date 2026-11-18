@@ -3,31 +3,24 @@
  *
  * Responsibilities: Versioned notice, per-session attestation, consent records (13 months).
  *
- * #27 ships the first-run notice (9.3, MB-08a, MB-08b, ADR 0044): the accepted versions and the
- * record of each acceptance (version, time, user, device). The capture gate
+ * #27 ships the first-run notice (9.3, MB-08a, MB-08b, ADR 0044). The capture gate
  * (`src/brain/capture-gate.ts`) reads `noticeState()` before each `capture_start`.
+ *
+ * #431 (ADR 0071): the records live only in the Rust local store (`mog_core::consent`, ADR 0052).
+ * T12 reaches them through `consent_notice_record` and `consent_records_list` (#430, ADR 0060),
+ * which only the brain window may call. The brain sends only the notice version; Rust fills the
+ * user, the device and the time (SEC-32a). The brain sees content-free views only. No record is
+ * in Web Storage, IndexedDB or a cookie: the hub, MOG and card views share those with the brain.
+ * The user comes from the Rust `SignedInUser` seam, not from the brain.
+ * TODO(#478): the host gives the signed-in user from T7 ProfileService (#17).
  */
 import type { MogId } from '../../shared/interfaces';
 import { NOTICE_VERSION, type HubNotice } from '../../shared/hub-notice';
+import { call, type ConsentRecordView } from '../../shared/ipc';
 import { NotImplementedError } from '../errors';
 
-export interface ConsentRecord {
-  kind: 'notice' | 'only_me' | 'others_agreed';
-  version: number;
-  at: string;
-}
-
-/** One acceptance of the first-run notice (9.3 step 5). It holds no content. */
-export interface NoticeRecord {
-  kind: 'notice';
-  version: number;
-  /** ISO 8601 time of the Continue click. */
-  at: string;
-  /** The signed-in user, or null when no profile is signed in yet (first run). */
-  user: string | null;
-  /** A random ID of this device, made once. */
-  device: string;
-}
+/** One stored consent record, as `consent_records_list` returns it: content-free. */
+export type ConsentRecord = ConsentRecordView;
 
 export interface ConsentService {
   /** The highest accepted notice version, or null before the first-run notice is accepted. */
@@ -37,152 +30,122 @@ export interface ConsentService {
   /**
    * Store the record for `version`. Called only on a user click on Continue in the hub.
    * Returns false, and stores nothing, if `version` is not the current version or the store
-   * cannot write.
+   * cannot write. A version with a stored record gets no second record.
    */
   acceptNotice(version: number): Promise<boolean>;
-  /** The stored notice records, oldest first. */
-  noticeRecords(): Promise<NoticeRecord[]>;
   /** Called only on a user action in the attestation card. */
   attest(mogId: MogId, kind: 'only_me' | 'others_agreed'): Promise<{ consentToken: string }>;
+  /** The stored consent records, oldest first (SEC-32a). The 13-month purge removes old ones. */
   records(): Promise<ConsentRecord[]>;
 }
 
-/**
- * Where the notice records live: one text value. TODO(#431): move the records to the local store
- * (SEC-32a fields, 13-month purge) once `mem_local_exec` is routed.
- */
-export interface ConsentStore {
-  read(): string | null;
-  write(text: string): void;
+/** The Rust consent records, as the brain reaches them (#430). */
+export interface ConsentRecordsPort {
+  recordNotice(noticeVersion: number): Promise<{ recordId: string }>;
+  list(): Promise<ConsentRecordView[]>;
 }
 
-/** A store in memory, for tests and for a brain with no Web Storage. */
-export function memoryConsentStore(initial: string | null = null): ConsentStore {
-  let text = initial;
+/** The production port: the #430 IPC commands. */
+export function ipcConsentRecords(): ConsentRecordsPort {
   return {
-    read: () => text,
-    write: (t) => {
-      text = t;
-    },
+    recordNotice: (noticeVersion) => call('consent_notice_record', { noticeVersion }),
+    list: async () => (await call('consent_records_list', {})).records,
   };
 }
 
-/** The Web Storage key of the notice records (ADR 0044). */
-export const CONSENT_STORAGE_KEY = 'bottle.consent.notice';
-
 /**
- * A store in the Web Storage of the app origin: local to this device and this OS user.
- * It is NOT private to the brain: the hub, MOG and card views load from the same origin and
- * share this Web Storage, so code in a view could write the record without a Continue click.
- * The views run only bundled code (CSP `script-src 'self'`, no HTML from Genie), which limits this.
- * TODO(#431): before MVP-D, move the record behind the Rust local store, out of view reach.
+ * The Web Storage key where the #27 build kept the notice record (ADR 0044). A view could write
+ * it, so T12 never reads it: it removes it at start, and the user accepts the notice once more.
  */
-export function webConsentStore(storage: Storage): ConsentStore {
-  return {
-    read: () => storage.getItem(CONSENT_STORAGE_KEY),
-    write: (t) => storage.setItem(CONSENT_STORAGE_KEY, t),
-  };
-}
-
-interface StoreData {
-  device: string;
-  notices: NoticeRecord[];
-}
-
-function isRecord(v: unknown): v is NoticeRecord {
-  if (typeof v !== 'object' || v === null) return false;
-  const r = v as Record<string, unknown>;
-  return (
-    r['kind'] === 'notice' &&
-    typeof r['version'] === 'number' &&
-    Number.isInteger(r['version']) &&
-    typeof r['at'] === 'string' &&
-    (r['user'] === null || typeof r['user'] === 'string') &&
-    typeof r['device'] === 'string'
-  );
-}
-
-/** Parse the stored text. Anything else reads as "no records": the gate fails closed. */
-function parse(text: string | null): StoreData | null {
-  if (text === null) return null;
-  try {
-    const v: unknown = JSON.parse(text);
-    if (typeof v !== 'object' || v === null || Array.isArray(v)) return null;
-    const { device, notices } = v as Record<string, unknown>;
-    if (typeof device !== 'string' || !Array.isArray(notices) || !notices.every(isRecord))
-      return null;
-    return { device, notices };
-  } catch {
-    return null;
-  }
-}
+export const LEGACY_CONSENT_STORAGE_KEY = 'bottle.consent.notice';
 
 export interface ConsentServiceOptions {
-  store?: ConsentStore;
+  /** Default: the #430 IPC commands. */
+  records?: ConsentRecordsPort;
   /** The current notice version. Default `NOTICE_VERSION`. */
   version?: number;
-  now?: () => Date;
-  newId?: () => string;
-  /** The signed-in user. TODO(#431): ask T7 ProfileService. */
-  user?: () => string | null;
+  /** Where the #27 record may still be. Default: the brain window's Web Storage, if any. */
+  legacyStorage?: Pick<Storage, 'removeItem'> | null;
 }
 
 const C = 'ConsentService';
+const KINDS: readonly string[] = ['notice', 'only_me', 'others_agreed'];
+
+const isPositiveInt = (v: unknown): v is number =>
+  typeof v === 'number' && Number.isInteger(v) && v > 0;
+
+/** One `ConsentRecordView` of the #430 contract, or false. */
+function isView(v: unknown): v is ConsentRecordView {
+  if (typeof v !== 'object' || v === null) return false;
+  const r = v as Record<string, unknown>;
+  const notice = r['kind'] === 'notice';
+  return (
+    typeof r['recordId'] === 'string' &&
+    typeof r['kind'] === 'string' &&
+    KINDS.includes(r['kind']) &&
+    isPositiveInt(r['noticeVersion']) &&
+    (notice ? r['sessionId'] === null : typeof r['sessionId'] === 'string') &&
+    typeof r['acceptedAt'] === 'number' &&
+    Number.isFinite(r['acceptedAt'])
+  );
+}
+
+const STORAGE_FAILED = { error: 'consent_storage_failed' } as const;
 
 export class BrainConsentService implements ConsentService {
-  readonly #store: ConsentStore;
+  readonly #records: ConsentRecordsPort;
   readonly #version: number;
-  readonly #now: () => Date;
-  readonly #newId: () => string;
-  readonly #user: () => string | null;
+  #accepting: Promise<boolean> | undefined;
 
   constructor(o: ConsentServiceOptions = {}) {
-    this.#store = o.store ?? defaultStore();
+    this.#records = o.records ?? ipcConsentRecords();
     this.#version = o.version ?? NOTICE_VERSION;
-    this.#now = o.now ?? (() => new Date());
-    this.#newId = o.newId ?? (() => crypto.randomUUID());
-    this.#user = o.user ?? (() => null);
+    dropLegacyRecord(o.legacyStorage === undefined ? brainStorage() : o.legacyStorage);
   }
 
-  #data(): StoreData | null {
+  /** The stored records. A reply that is not the #430 shape is a storage failure. */
+  async #list(): Promise<ConsentRecordView[]> {
+    const list: unknown = await this.#records.list();
+    if (!Array.isArray(list) || !list.every(isView)) throw STORAGE_FAILED;
+    return list;
+  }
+
+  /** The accepted notice versions, or none when the store cannot be read: the gate fails closed. */
+  async #noticeVersions(): Promise<number[]> {
     try {
-      return parse(this.#store.read());
+      return (await this.#list()).filter((r) => r.kind === 'notice').map((r) => r.noticeVersion);
     } catch {
-      return null;
+      return [];
     }
   }
 
   async noticeAccepted(): Promise<{ version: number } | null> {
-    const versions = (this.#data()?.notices ?? []).map((r) => r.version);
+    const versions = await this.#noticeVersions();
     return versions.length ? { version: Math.max(...versions) } : null;
   }
 
   async noticeState(): Promise<HubNotice> {
-    const accepted = (this.#data()?.notices ?? []).some((r) => r.version === this.#version);
+    const accepted = (await this.#noticeVersions()).includes(this.#version);
     return { version: this.#version, accepted };
   }
 
   async acceptNotice(version: number): Promise<boolean> {
-    if (version !== this.#version) return false;
-    const data = this.#data() ?? { device: this.#newId(), notices: [] };
-    if (data.notices.some((r) => r.version === version)) return true;
-    const record: NoticeRecord = {
-      kind: 'notice',
-      version,
-      at: this.#now().toISOString(),
-      user: this.#user(),
-      device: data.device,
-    };
+    if (version !== this.#version || !isPositiveInt(version)) return false;
+    // Overlapping calls (a fast double click, two hubs) share one write: one record per version.
+    this.#accepting ??= this.#accept(version).finally(() => {
+      this.#accepting = undefined;
+    });
+    return this.#accepting;
+  }
+
+  async #accept(version: number): Promise<boolean> {
+    if ((await this.noticeState()).accepted) return true;
     try {
-      this.#store.write(JSON.stringify({ ...data, notices: [...data.notices, record] }));
+      await this.#records.recordNotice(version);
     } catch {
       return false;
     }
     return (await this.noticeState()).accepted;
-  }
-
-  async noticeRecords(): Promise<NoticeRecord[]> {
-    return [...(this.#data()?.notices ?? [])];
   }
 
   async attest(
@@ -193,15 +156,21 @@ export class BrainConsentService implements ConsentService {
   }
 
   async records(): Promise<ConsentRecord[]> {
-    throw new NotImplementedError(C, 'records', 431); // TODO(#431)
+    return [...(await this.#list())];
   }
 }
 
-/** The brain window's Web Storage, or memory where there is none (Node tests). */
-function defaultStore(): ConsentStore {
-  if (typeof window !== 'undefined' && window.localStorage)
-    return webConsentStore(window.localStorage);
-  return memoryConsentStore();
+/** The brain window's Web Storage, or null where there is none (Node tests). */
+function brainStorage(): Pick<Storage, 'removeItem'> | null {
+  return typeof window !== 'undefined' && window.localStorage ? window.localStorage : null;
+}
+
+function dropLegacyRecord(storage: Pick<Storage, 'removeItem'> | null): void {
+  try {
+    storage?.removeItem(LEGACY_CONSENT_STORAGE_KEY);
+  } catch {
+    // Web Storage is off: there is nothing to remove.
+  }
 }
 
 export function createConsentService(o?: ConsentServiceOptions): ConsentService {

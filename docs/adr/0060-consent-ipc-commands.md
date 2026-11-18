@@ -27,3 +27,7 @@ ADR 0052 (#63) put the consent records in the local store (`mog_core::consent::C
 
 - `TODO(#431)`: manage `Arc<ConsentRecords>` in the app (open the local store, make the device ID once), and give the signed-in user from the T7 profile state. Until then both commands answer `consent_storage_failed` in the app.
 - `TODO(#64)`: `session_attest` writes the session records. This ADR adds no session write command.
+
+## Amendment (#431, ADR 0071)
+
+- The host now manages `Arc<ConsentRecords>` (`src-tauri/src/consent_host.rs`). The signed-in user part of the `TODO(#431)` line in `src-tauri/src/ipc.rs` moves to contract change #478.

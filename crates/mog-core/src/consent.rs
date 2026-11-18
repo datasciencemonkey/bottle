@@ -14,24 +14,31 @@
 //!   retention (13 months; admin range 12-84 months, 9.2). WipeService (#124) calls it from
 //!   `run_security_expiries`. There is no trigger and no background job (U9).
 //!
-//! MEM-01: the per-MOG statements filter by `mog_id = ?` and pass the guard. The device-wide
-//! statements (a notice has no MOG; the hub's consent list and the purge cross MOGs) are listed
-//! in [`STATEMENTS`] as [`Scope::DeviceWide`] with their reason. They touch `consent_record`
-//! only, and they never reach `exec` or an agent (ADR 0052).
-//! TODO(#37): fold [`STATEMENTS`] into the fixed local catalog with these IDs.
+//! MEM-01: the statements are the [`catalog::CONSENT`] entry set of the fixed local catalog
+//! (#431, ADR 0071). The per-MOG statements filter by `mog_id = :mogId` and pass the guard. The
+//! device-wide statements (a notice has no MOG; the consent list and the purge cross MOGs) are
+//! [`catalog::Scope::DeviceWide`] with their reason. They touch `consent_record` only, and they
+//! never reach `exec`, `mem_local_exec` or an agent (ADR 0052).
+//! The first-run notice (#27) reaches [`ConsentRecords::record_notice`] through
+//! `consent_notice_record` (#430, `consent_ipc`). The host opens the records with
+//! [`open_device_records`] (#431).
 //! TODO(#186): read the admin retention from PolicyStore once Appendix C names its key.
 //! TODO(#64): the consent token flow of `session_attest` calls [`ConsentRecords::record_session`].
-//! TODO(#431): the first-run notice calls [`ConsentRecords::record_notice`] through the IPC command of #430.
 
+use std::io::Write;
+use std::path::Path;
 use std::sync::Arc;
 
-use rusqlite::{params, OptionalExtension, Row};
+use rusqlite::Row;
+use serde_json::{json, Value};
 
 use crate::clock::WallClock;
 use crate::error::{CoreError, CoreResult};
 use crate::ipc::AttestKind;
+use crate::local_store::catalog::{self, ConsentStmt};
+use crate::local_store::key_vault::KeyVault;
 use crate::local_store::mog_guard::is_uuid;
-use crate::local_store::SqlCipherLocalStore;
+use crate::local_store::{LocalStore, SqlCipherLocalStore};
 
 const ID: &str = "T12";
 
@@ -129,83 +136,6 @@ pub struct SessionAttestation<'a> {
     pub disclosure_copied: bool,
 }
 
-/// How a statement keeps MEM-01.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Scope {
-    /// It filters by `mog_id = ?` and passes `require_mog_id_filter`.
-    Mog,
-    /// It is device-wide on purpose, for the reason given. It touches `consent_record` only.
-    DeviceWide(&'static str),
-}
-
-/// One fixed, parameterised statement.
-#[derive(Debug, Clone, Copy)]
-pub struct Stmt {
-    /// The catalog ID, for example `consent.purge`.
-    pub id: &'static str,
-    /// The SQL, with bound parameters only.
-    pub sql: &'static str,
-    /// How it keeps MEM-01.
-    pub scope: Scope,
-}
-
-const SESSION_INSERT: Stmt = Stmt {
-    id: "consent.session.insert",
-    sql: "INSERT INTO consent_record (consent_id, mog_id, owner_principal, device_id, \
-          notice_version, kind, session_id, attestation_kind, disclosure_copied, recorded_at, \
-          expires_at, updated_at) \
-          VALUES (?1, ?2, ?3, ?4, ?5, 'session', ?6, ?7, ?8, ?9, ?10, ?9)",
-    scope: Scope::Mog,
-};
-
-const SESSION_GET: Stmt = Stmt {
-    id: "consent.session.get",
-    sql: "SELECT consent_id, mog_id, owner_principal, device_id, notice_version, kind, \
-          session_id, attestation_kind, disclosure_copied, recorded_at, expires_at \
-          FROM consent_record WHERE mog_id = ?1 AND session_id = ?2 AND kind = 'session' \
-          ORDER BY recorded_at DESC, consent_id LIMIT 1",
-    scope: Scope::Mog,
-};
-
-const NOTICE_INSERT: Stmt = Stmt {
-    id: "consent.notice.insert",
-    sql: "INSERT INTO consent_record (consent_id, mog_id, owner_principal, device_id, \
-          notice_version, kind, recorded_at, expires_at, updated_at) \
-          VALUES (?1, NULL, ?2, ?3, ?4, 'notice', ?5, ?6, ?5)",
-    scope: Scope::DeviceWide("a notice acceptance is device-wide: it has no MOG (mog_id NULL)"),
-};
-
-const NOTICE_LATEST: Stmt = Stmt {
-    id: "consent.notice.latest",
-    sql: "SELECT max(CAST(notice_version AS INTEGER)) FROM consent_record \
-          WHERE kind = 'notice' AND mog_id IS NULL",
-    scope: Scope::DeviceWide("the notice gate (MB-08a) is device-wide"),
-};
-
-const LIST: Stmt = Stmt {
-    id: "consent.list",
-    sql: "SELECT consent_id, mog_id, owner_principal, device_id, notice_version, kind, \
-          session_id, attestation_kind, disclosure_copied, recorded_at, expires_at \
-          FROM consent_record ORDER BY recorded_at, consent_id",
-    scope: Scope::DeviceWide("the hub lists the device's consent records; they hold no content"),
-};
-
-const PURGE: Stmt = Stmt {
-    id: "consent.purge",
-    sql: "DELETE FROM consent_record WHERE recorded_at <= ?1",
-    scope: Scope::DeviceWide("the SEC-15b security expiry runs for the whole device (U9)"),
-};
-
-/// Every consent statement, for the #37 catalog. The MEM-01 test checks each one.
-pub const STATEMENTS: &[Stmt] = &[
-    SESSION_INSERT,
-    SESSION_GET,
-    NOTICE_INSERT,
-    NOTICE_LATEST,
-    LIST,
-    PURGE,
-];
-
 const DAY_MS: i64 = 86_400_000;
 
 /// Days since 1970-01-01 for a proleptic Gregorian date (H. Hinnant's `days_from_civil`).
@@ -264,7 +194,8 @@ fn months_i32(r: ConsentRetention) -> i32 {
     i32::try_from(r.get()).unwrap_or(i32::MAX)
 }
 
-fn new_consent_id() -> CoreResult<String> {
+/// A random UUID v4 from the OS random source.
+fn new_uuid_v4() -> CoreResult<String> {
     let mut b = [0u8; 16];
     getrandom::fill(&mut b).map_err(|_| CoreError::StoreUnavailable { component: ID })?;
     b[6] = (b[6] & 0x0f) | 0x40;
@@ -322,6 +253,68 @@ fn from_row(r: &Row<'_>) -> rusqlite::Result<ConsentRecord> {
     })
 }
 
+/// The folder of the R10 database in the app data folder (MEM-08a: one file for all MOGs).
+pub const MEMORY_DIR: &str = "memory";
+/// The file of the device ID in the app data folder (SEC-32a `device`).
+pub const DEVICE_ID_FILE: &str = "device-id";
+
+/// The device ID in the folder `dir`: a random UUID v4, made on the first call and kept in
+/// [`DEVICE_ID_FILE`]. A file that does not hold a UUID fails with `device_id_invalid`, and it
+/// is never overwritten, so a record never gets a second device by accident (ADR 0071).
+pub fn device_id_in(dir: &Path) -> CoreResult<String> {
+    let invalid = CoreError::Unavailable {
+        component: ID,
+        reason: "device_id_invalid",
+    };
+    let io = |_| CoreError::StoreUnavailable { component: ID };
+    std::fs::create_dir_all(dir).map_err(io)?;
+    let path = dir.join(DEVICE_ID_FILE);
+    let read = |path: &Path| -> CoreResult<String> {
+        let text = std::fs::read_to_string(path).map_err(io)?;
+        let id = text.trim();
+        if is_uuid(id) {
+            Ok(id.to_owned())
+        } else {
+            Err(invalid.clone())
+        }
+    };
+    if path.exists() {
+        return read(&path);
+    }
+    let id = new_uuid_v4()?;
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+    {
+        Ok(mut f) => {
+            f.write_all(id.as_bytes()).map_err(io)?;
+            f.sync_all().map_err(io)?;
+            Ok(id)
+        }
+        // Another start made it first: use that one.
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => read(&path),
+        Err(_) => Err(CoreError::StoreUnavailable { component: ID }),
+    }
+}
+
+/// Open the device's consent records in the app data folder `dir` (#431, ADR 0071): the one
+/// R10 store in `<dir>/memory` with the key from `vault`, and the device ID of
+/// [`device_id_in`]. Any failure (no OS key store, a lost key, a damaged device ID) opens
+/// nothing; the host then manages no records and `consent_*` answers `consent_storage_failed`.
+pub fn open_device_records(
+    dir: &Path,
+    vault: Arc<dyn KeyVault>,
+    clock: Arc<dyn WallClock>,
+    retention: ConsentRetention,
+) -> CoreResult<(Arc<SqlCipherLocalStore>, ConsentRecords)> {
+    let store = Arc::new(SqlCipherLocalStore::new(dir.join(MEMORY_DIR), vault));
+    store.open()?;
+    let device = device_id_in(dir)?;
+    let records = ConsentRecords::new(Arc::clone(&store), clock, &device, retention)?;
+    Ok((store, records))
+}
+
 /// The consent records of this device, in the R10 local store.
 pub struct ConsentRecords {
     store: Arc<SqlCipherLocalStore>,
@@ -357,10 +350,30 @@ impl ConsentRecords {
         self.retention
     }
 
+    /// Run one catalog consent statement: check `params` against its declared types, bind each
+    /// `:name`, and pass the prepared statement to `f` (MEM-34a: fixed SQL, bound values only).
+    fn run<T>(
+        &self,
+        s: &ConsentStmt,
+        params: &Value,
+        f: impl FnOnce(&mut rusqlite::Statement<'_>) -> rusqlite::Result<T>,
+    ) -> CoreResult<T> {
+        let values = catalog::check_params(s.stmt.params, params)?;
+        self.store.with_conn(|c| {
+            let mut st = c.prepare_cached(s.stmt.sql)?;
+            for (name, value) in &values {
+                if let Some(i) = st.parameter_index(&format!(":{name}"))? {
+                    st.raw_bind_parameter(i, value)?;
+                }
+            }
+            f(&mut st)
+        })
+    }
+
     fn stamp(&self) -> CoreResult<(String, i64, i64)> {
         let now = self.clock.now_ms();
         let expires = add_months_utc(now, months_i32(self.retention));
-        Ok((new_consent_id()?, now, expires))
+        Ok((new_uuid_v4()?, now, expires))
     }
 
     /// Store the acceptance of notice `notice_version` (9.3 step 5, SEC-32a).
@@ -371,12 +384,15 @@ impl ConsentRecords {
     ) -> CoreResult<ConsentRecord> {
         let (id, now, expires) = self.stamp()?;
         let version = notice_version.to_string();
-        self.store.with_conn(|c| {
-            c.execute(
-                NOTICE_INSERT.sql,
-                params![id, user, self.device_id, version, now, expires],
-            )
-        })?;
+        let p = json!({
+            "consentId": id,
+            "user": user,
+            "deviceId": self.device_id,
+            "noticeVersion": version,
+            "now": now,
+            "expiresAt": expires,
+        });
+        self.run(&catalog::CONSENT_NOTICE_INSERT, &p, |st| st.raw_execute())?;
         Ok(ConsentRecord {
             consent_id: id,
             mog_id: None,
@@ -405,23 +421,19 @@ impl ConsentRecords {
         }
         let (id, now, expires) = self.stamp()?;
         let version = a.notice_version.to_string();
-        self.store.with_conn(|c| {
-            c.execute(
-                SESSION_INSERT.sql,
-                params![
-                    id,
-                    a.mog_id,
-                    a.user,
-                    self.device_id,
-                    version,
-                    a.session_id,
-                    attest_str(&a.kind),
-                    i64::from(a.disclosure_copied),
-                    now,
-                    expires
-                ],
-            )
-        })?;
+        let p = json!({
+            "consentId": id,
+            "mogId": a.mog_id,
+            "user": a.user,
+            "deviceId": self.device_id,
+            "noticeVersion": version,
+            "sessionId": a.session_id,
+            "attestationKind": attest_str(&a.kind),
+            "disclosureCopied": a.disclosure_copied,
+            "now": now,
+            "expiresAt": expires,
+        });
+        self.run(&catalog::CONSENT_SESSION_INSERT, &p, |st| st.raw_execute())?;
         Ok(ConsentRecord {
             consent_id: id,
             mog_id: Some(a.mog_id.to_owned()),
@@ -439,9 +451,13 @@ impl ConsentRecords {
 
     /// The highest notice version with a stored acceptance, or `None` (MB-08a, MB-08b).
     pub fn latest_notice_version(&self) -> CoreResult<Option<u32>> {
-        let v: Option<i64> = self
-            .store
-            .with_conn(|c| c.query_row(NOTICE_LATEST.sql, [], |r| r.get(0)))?;
+        let v: Option<i64> = self.run(&catalog::CONSENT_NOTICE_LATEST, &json!({}), |st| {
+            let mut rows = st.raw_query();
+            match rows.next()? {
+                Some(r) => r.get(0),
+                None => Ok(None),
+            }
+        })?;
         Ok(v.and_then(|v| u32::try_from(v).ok()))
     }
 
@@ -454,18 +470,22 @@ impl ConsentRecords {
         if !is_uuid(mog_id) {
             return Err(CoreError::MogIdRequired { component: "R10" });
         }
-        self.store.with_conn(|c| {
-            c.query_row(SESSION_GET.sql, params![mog_id, session_id], from_row)
-                .optional()
+        let p = json!({ "mogId": mog_id, "sessionId": session_id });
+        self.run(&catalog::CONSENT_SESSION_GET, &p, |st| {
+            let mut rows = st.raw_query();
+            rows.next()?.map(from_row).transpose()
         })
     }
 
     /// Every consent record of the device, oldest first.
     pub fn records(&self) -> CoreResult<Vec<ConsentRecord>> {
-        self.store.with_conn(|c| {
-            let mut st = c.prepare(LIST.sql)?;
-            let rows = st.query_map([], from_row)?;
-            rows.collect()
+        self.run(&catalog::CONSENT_LIST, &json!({}), |st| {
+            let mut rows = st.raw_query();
+            let mut out = Vec::new();
+            while let Some(r) = rows.next()? {
+                out.push(from_row(r)?);
+            }
+            Ok(out)
         })
     }
 
@@ -478,8 +498,11 @@ impl ConsentRecords {
     /// past its `expires_at`; it is never deleted early.
     pub fn purge_expired(&self) -> CoreResult<usize> {
         let cutoff = add_months_utc(self.clock.now_ms(), -months_i32(self.retention));
-        self.store
-            .with_conn(|c| c.execute(PURGE.sql, params![cutoff]))
+        self.run(
+            &catalog::CONSENT_PURGE,
+            &json!({ "cutoff": cutoff }),
+            |st| st.raw_execute(),
+        )
     }
 }
 

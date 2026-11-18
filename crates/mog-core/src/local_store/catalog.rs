@@ -17,7 +17,11 @@
 //! The IDs follow the remote catalog of section 4.5 where the local schema supports them. The
 //! feature issues own the logic that uses them: `mem.exchange.*` (#38), `mem.item.*` (#114),
 //! `mem.recall.fts` (#199), `mem.forget.*` (#123), `mem.wipe.*` (#124), `mem.outbox.*` (#102).
-//! The consent statements of #63 are a later entry set with a device-wide scope (ADR 0054).
+//! The consent statements of T12 (#63, ADR 0052) are the separate entry set [`CONSENT`] (#431,
+//! ADR 0071). Each has a [`Scope`]: the session statements filter by `mog_id`; the notice, the
+//! device list and the purge are device-wide on purpose, each with its reason. They are
+//! [`Access::Core`] and are not in [`STATEMENTS`], so `exec` and `mem_local_exec` never run them.
+//! Only `mog_core::consent` runs them; the brain reaches the records through `consent_*` (#430).
 
 use rusqlite::types::Value as SqlValue;
 use serde_json::{Map, Value};
@@ -546,6 +550,154 @@ pub const STATEMENTS: &[Stmt] = &[
     OUTBOX_ENQUEUE_ITEM_EMBED,
 ];
 
+// ---- consent_record (T12, #63, ADR 0052; folded in by #431, ADR 0071) -------------------------
+
+/// How a consent statement keeps MEM-01.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    /// It filters by `mog_id = :mogId` and passes `require_mog_id_filter`.
+    Mog,
+    /// It is device-wide on purpose, for the reason given. It touches `consent_record` only.
+    DeviceWide(&'static str),
+}
+
+/// One consent statement and its MEM-01 scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConsentStmt {
+    /// The statement. Its access is always [`Access::Core`].
+    pub stmt: Stmt,
+    /// How it keeps MEM-01.
+    pub scope: Scope,
+}
+
+/// The notice version is stored as decimal text: the column is `TEXT` (ADR 0052, decision 2).
+const NOTICE_VERSION_TEXT: ParamType = text(10);
+/// SEC-32a `user`: the signed-in principal, if known.
+const PRINCIPAL: ParamType = text(320);
+/// Any Unix ms time, also one before 1970 (a cutoff on a clock near the epoch).
+const ANY_MS: ParamType = ParamType::Int {
+    min: i64::MIN,
+    max: i64::MAX,
+};
+
+/// The record of one session attestation (9.3 step 7).
+pub const CONSENT_SESSION_INSERT: ConsentStmt = ConsentStmt {
+    stmt: Stmt {
+        id: "consent.session.insert",
+        sql: "INSERT INTO consent_record (consent_id, mog_id, owner_principal, device_id, \
+              notice_version, kind, session_id, attestation_kind, disclosure_copied, recorded_at, \
+              expires_at, updated_at) \
+              VALUES (:consentId, :mogId, :user, :deviceId, :noticeVersion, 'session', \
+              :sessionId, :attestationKind, :disclosureCopied, :now, :expiresAt, :now)",
+        params: &[
+            req("consentId", UUID),
+            MOG_ID,
+            opt("user", PRINCIPAL),
+            req("deviceId", UUID),
+            req("noticeVersion", NOTICE_VERSION_TEXT),
+            req("sessionId", UUID),
+            req("attestationKind", CODE),
+            req("disclosureCopied", BOOL),
+            req("now", ANY_MS),
+            req("expiresAt", ANY_MS),
+        ],
+        kind: Kind::Write,
+        access: Access::Core,
+    },
+    scope: Scope::Mog,
+};
+
+/// The latest record of one session in one MOG.
+pub const CONSENT_SESSION_GET: ConsentStmt = ConsentStmt {
+    stmt: Stmt {
+        id: "consent.session.get",
+        sql: "SELECT consent_id, mog_id, owner_principal, device_id, notice_version, kind, \
+              session_id, attestation_kind, disclosure_copied, recorded_at, expires_at \
+              FROM consent_record WHERE mog_id = :mogId AND session_id = :sessionId \
+              AND kind = 'session' ORDER BY recorded_at DESC, consent_id LIMIT 1",
+        params: &[MOG_ID, req("sessionId", UUID)],
+        kind: Kind::Query,
+        access: Access::Core,
+    },
+    scope: Scope::Mog,
+};
+
+/// The record of one notice acceptance (9.3 step 5). It has no MOG.
+pub const CONSENT_NOTICE_INSERT: ConsentStmt = ConsentStmt {
+    stmt: Stmt {
+        id: "consent.notice.insert",
+        sql: "INSERT INTO consent_record (consent_id, mog_id, owner_principal, device_id, \
+              notice_version, kind, recorded_at, expires_at, updated_at) \
+              VALUES (:consentId, NULL, :user, :deviceId, :noticeVersion, 'notice', :now, \
+              :expiresAt, :now)",
+        params: &[
+            req("consentId", UUID),
+            opt("user", PRINCIPAL),
+            req("deviceId", UUID),
+            req("noticeVersion", NOTICE_VERSION_TEXT),
+            req("now", ANY_MS),
+            req("expiresAt", ANY_MS),
+        ],
+        kind: Kind::Write,
+        access: Access::Core,
+    },
+    scope: Scope::DeviceWide("a notice acceptance is device-wide: it has no MOG (mog_id NULL)"),
+};
+
+/// The highest accepted notice version (MB-08a, MB-08b).
+pub const CONSENT_NOTICE_LATEST: ConsentStmt = ConsentStmt {
+    stmt: Stmt {
+        id: "consent.notice.latest",
+        sql: "SELECT max(CAST(notice_version AS INTEGER)) FROM consent_record \
+              WHERE kind = 'notice' AND mog_id IS NULL",
+        params: &[],
+        kind: Kind::Query,
+        access: Access::Core,
+    },
+    scope: Scope::DeviceWide("the notice gate (MB-08a) is device-wide"),
+};
+
+/// Every consent record of the device, oldest first.
+pub const CONSENT_LIST: ConsentStmt = ConsentStmt {
+    stmt: Stmt {
+        id: "consent.list",
+        sql: "SELECT consent_id, mog_id, owner_principal, device_id, notice_version, kind, \
+              session_id, attestation_kind, disclosure_copied, recorded_at, expires_at \
+              FROM consent_record ORDER BY recorded_at, consent_id",
+        params: &[],
+        kind: Kind::Query,
+        access: Access::Core,
+    },
+    scope: Scope::DeviceWide("the device's consent list; the records hold no content"),
+};
+
+/// SEC-15b: delete the records at or before the cutoff.
+pub const CONSENT_PURGE: ConsentStmt = ConsentStmt {
+    stmt: Stmt {
+        id: "consent.purge",
+        sql: "DELETE FROM consent_record WHERE recorded_at <= :cutoff",
+        params: &[req("cutoff", ANY_MS)],
+        kind: Kind::Write,
+        access: Access::Core,
+    },
+    scope: Scope::DeviceWide("the SEC-15b security expiry runs for the whole device (U9)"),
+};
+
+/// The consent statements. Rust only: `exec`, `find` and `mem_local_exec` never see them.
+pub const CONSENT: &[ConsentStmt] = &[
+    CONSENT_SESSION_INSERT,
+    CONSENT_SESSION_GET,
+    CONSENT_NOTICE_INSERT,
+    CONSENT_NOTICE_LATEST,
+    CONSENT_LIST,
+    CONSENT_PURGE,
+];
+
+/// The consent statement with this exact ID.
+pub fn find_consent(id: &str) -> Option<&'static ConsentStmt> {
+    CONSENT.iter().find(|c| c.stmt.id == id)
+}
+
 /// The statement with this exact ID.
 pub fn find(id: &str) -> Option<&'static Stmt> {
     STATEMENTS.iter().find(|s| s.id == id)
@@ -639,6 +791,12 @@ pub fn validate_params(
     params: &Value,
 ) -> CoreResult<Vec<(&'static str, SqlValue)>> {
     require_mog_id_param(params)?;
+    check_params(decl, params)
+}
+
+/// Check `params` against `decl` with no `mogId` rule: for the device-wide [`CONSENT`]
+/// statements, which run only from `mog_core::consent`. [`validate_params`] adds the MEM-01 rule.
+pub fn check_params(decl: &[Param], params: &Value) -> CoreResult<Vec<(&'static str, SqlValue)>> {
     let obj: &Map<String, Value> = params.as_object().ok_or_else(bad)?;
     if obj.keys().any(|k| !decl.iter().any(|p| p.name == k)) {
         return Err(bad());

@@ -9,7 +9,6 @@ use std::sync::Arc;
 use super::*;
 use crate::clock::{SimWallClock, WallClock};
 use crate::local_store::key_vault::MemoryKeyVault;
-use crate::local_store::mog_guard::require_mog_id_filter;
 use crate::local_store::{LocalStore, SqlCipherLocalStore};
 
 const MOG_A: &str = "0f8b1a52-6c1e-4d0a-9a51-3a3d2f6f0a01";
@@ -378,51 +377,6 @@ fn sec_15b_sim_wall_clock_moves_only_on_set_or_advance() {
 // ---- MEM-01: the mog_id guard and device-wide records --------------------------------------
 
 #[test]
-fn mem_01_mog_statements_pass_the_guard_and_device_wide_ones_are_listed() {
-    let ids: Vec<&str> = STATEMENTS.iter().map(|s| s.id).collect();
-    assert_eq!(
-        ids,
-        [
-            "consent.session.insert",
-            "consent.session.get",
-            "consent.notice.insert",
-            "consent.notice.latest",
-            "consent.list",
-            "consent.purge",
-        ]
-    );
-    for s in STATEMENTS {
-        match s.scope {
-            Scope::Mog => require_mog_id_filter(s.sql)
-                .unwrap_or_else(|_| panic!("{} must filter by mog_id", s.id)),
-            Scope::DeviceWide(why) => assert!(!why.is_empty(), "{} needs a reason", s.id),
-        }
-        // Every statement, guarded or not, touches the consent_record table only.
-        let lower = s.sql.to_ascii_lowercase();
-        for t in [
-            "mog ",
-            "session ",
-            "utterance",
-            "genie_exchange",
-            "memory_item",
-            "sync_state",
-            "forget_log",
-            "outbox",
-        ] {
-            assert!(
-                !lower.contains(&format!("from {t}"))
-                    && !lower.contains(&format!("into {t}"))
-                    && !lower.contains(&format!("join {t}")),
-                "{} touches {t}",
-                s.id
-            );
-        }
-        assert!(lower.contains("consent_record"), "{}", s.id);
-        assert!(!lower.contains("drop "), "{}", s.id);
-    }
-}
-
-#[test]
 fn mem_01_device_wide_reads_return_only_consent_fields() {
     // A device-wide read crosses MOGs on purpose (the hub's consent list), so it must return
     // only content-free consent fields.
@@ -437,4 +391,96 @@ fn mem_01_device_wide_reads_return_only_consent_fields() {
     let all = f.consent.records().unwrap();
     assert_eq!(all.len(), 3);
     assert_eq!(f.consent.latest_notice_version().unwrap(), Some(4));
+}
+
+// ---- #431: the device's records in the app data folder ---------------------------------------
+
+#[test]
+fn sec_32a_device_id_is_made_once_and_kept() {
+    let dir = TempDir::new("device-once");
+    let first = device_id_in(dir.path()).unwrap();
+    assert!(is_uuid(&first), "{first}");
+    assert_eq!(first.as_bytes()[14], b'4', "a UUID v4");
+    let file = dir.path().join(DEVICE_ID_FILE);
+    assert_eq!(std::fs::read_to_string(&file).unwrap().trim(), first);
+    // The next start reads the same ID; it never makes a second one.
+    assert_eq!(device_id_in(dir.path()).unwrap(), first);
+    // Another device folder gets another ID.
+    let other = TempDir::new("device-other");
+    assert_ne!(device_id_in(other.path()).unwrap(), first);
+}
+
+#[test]
+fn sec_32a_a_damaged_device_id_fails_closed_and_is_kept() {
+    let dir = TempDir::new("device-bad");
+    let file = dir.path().join(DEVICE_ID_FILE);
+    for bad in [
+        "",
+        "not-a-uuid",
+        "test-token-not-real",
+        "d0d0d0d0-0000-4000-8000",
+    ] {
+        std::fs::write(&file, bad).unwrap();
+        assert!(device_id_in(dir.path()).is_err(), "{bad:?}");
+        // Nothing is overwritten: the old records keep their device.
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), bad);
+    }
+}
+
+#[test]
+fn sec_32a_at_24_device_records_open_in_the_memory_folder_and_outlive_a_restart() {
+    let dir = TempDir::new("device-open");
+    let vault: Arc<MemoryKeyVault> = Arc::new(MemoryKeyVault::new());
+    let clock = SimWallClock::at(T0);
+    let (store, records) = open_device_records(
+        dir.path(),
+        vault.clone(),
+        Arc::new(clock.clone()),
+        ConsentRetention::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        store.db_path(),
+        dir.path().join(MEMORY_DIR).join("memory.db")
+    );
+    let r = records.record_notice(None, 2).unwrap();
+    let device = std::fs::read_to_string(dir.path().join(DEVICE_ID_FILE)).unwrap();
+    assert_eq!(r.device, device.trim());
+    assert_eq!(r.accepted_at, T0);
+    store.close();
+    drop(records);
+    // A restart opens the same file with the same key and the same device.
+    let (_store, again) = open_device_records(
+        dir.path(),
+        vault,
+        Arc::new(clock),
+        ConsentRetention::default(),
+    )
+    .unwrap();
+    assert_eq!(again.records().unwrap(), vec![r]);
+    assert_eq!(again.latest_notice_version().unwrap(), Some(2));
+}
+
+#[test]
+fn sec_03_device_records_do_not_open_without_the_key() {
+    // The OS key store is not there (an unsigned macOS build, Linux): nothing opens, and the
+    // consent_* commands answer consent_storage_failed. No key and no record is made.
+    struct NoVault;
+    impl crate::local_store::key_vault::KeyVault for NoVault {
+        fn load(&self) -> CoreResult<Option<crate::local_store::key_vault::LocalKey>> {
+            Err(CoreError::KeychainUnavailable { component: "R10" })
+        }
+        fn store(&self, _k: &crate::local_store::key_vault::LocalKey) -> CoreResult<()> {
+            Err(CoreError::KeychainUnavailable { component: "R10" })
+        }
+    }
+    let dir = TempDir::new("device-nokey");
+    let got = open_device_records(
+        dir.path(),
+        Arc::new(NoVault),
+        Arc::new(SimWallClock::at(T0)),
+        ConsentRetention::default(),
+    );
+    assert!(got.is_err());
+    assert!(!dir.path().join(MEMORY_DIR).join("memory.db").exists());
 }

@@ -4,6 +4,7 @@
 //! secrets and I/O stay in `mog-core` (section 4.4). The IPC command surface is in `ipc` (#223).
 
 pub mod capture_host;
+pub mod consent_host;
 pub mod hotkey_host;
 pub mod hotkey_settings;
 pub mod ipc;
@@ -167,6 +168,10 @@ pub fn run() {
             // MB-02: the MOG config store in the app config dir (#25). If the OS gives no app
             // config dir, the app still runs; `config_*` then fail with a code (#333).
             let _ = mog_config_host::install(handle);
+            // SEC-32a: the T12 consent records in the local store (#431, ADR 0071). If the OS
+            // key store or the data dir is not there, the app still runs; `consent_*` then fail
+            // with `consent_storage_failed`, and the notice gate stays closed (MB-08a).
+            let _ = consent_host::install(handle);
             let host = app.state::<TauriWindowHost<tauri::Wry>>();
             for kind in startup_windows(demo) {
                 // MOG and card windows go through R11, so the cap and the ledger hold.
