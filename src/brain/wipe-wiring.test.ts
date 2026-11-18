@@ -3,7 +3,7 @@
  * is a double; every value here is fake.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, relative, resolve, sep } from 'node:path';
 import type { WipeDialogModel, WipeScope, WipeSettingsModel } from '../shared/wipe-view';
 import { asWipeDialogModel, asWipeSettingsModel, WIPE_VIEW_ID } from '../shared/wipe-view';
 import { BrainBus, type ViewInput } from './bus';
@@ -218,7 +218,7 @@ describe('Wipe wiring (#124)', () => {
         .replace(/\/\*[\s\S]*?\*\//g, '')
         .replace(/^\s*\/\/.*$/gm, '');
     const callers = files(src).filter((f) => /\bmem_wipe\b|\.wipe\(/.test(code(f)));
-    expect(callers.map((f) => f.slice(src.length + 1)).sort()).toEqual([
+    expect(callers.map((f) => relative(src, f).split(sep).join('/')).sort()).toEqual([
       'brain/components/wipe-flow.ts',
     ]);
     const wiring = readFileSync(resolve(import.meta.dirname, 'wipe-wiring.ts'), 'utf8');
