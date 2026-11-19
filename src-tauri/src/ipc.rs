@@ -261,6 +261,9 @@ pub struct HostComponents<'a> {
     /// R10 for `mem_local_exec` (#426): the one managed `SqlCipherLocalStore` that the consent
     /// records and R14 WipeService share. `None` when it is not managed: `host_failed`.
     pub mem: Option<&'a dyn mog_core::local_store::LocalStore>,
+    /// T7 for `profiles_list` (#555, #17): `profiles_host::ProfilesHost`, the one managed
+    /// ProfileService. `None` when it is not managed: `host_failed`.
+    pub profiles: Option<&'a dyn GatewayComponents>,
 }
 
 fn refused(e: IpcError) -> CoreError {
@@ -321,6 +324,7 @@ impl<'a> HostComponents<'a> {
             agent: None,
             stt: None,
             mem: None,
+            profiles: None,
         }
     }
 }
@@ -484,6 +488,11 @@ impl GatewayComponents for HostComponents<'_> {
             "stt_transcribe" => self.stt_transcribe(command, args),
             // #426 (MEM-34a): R10. The gateway let only the brain through (SEC-02a, ARC-4).
             "mem_local_exec" => self.mem_local_exec(command, args),
+            // #555 (#17, W-03a): T7. The gateway let only the brain and the hub through.
+            "profiles_list" => self
+                .profiles
+                .ok_or_else(|| host_failed(command))?
+                .call(command, args),
             // Each feature issue wires its R1-R17 component here.
             "capture_start" | "capture_stop" | "capture_pause" | "capture_resume"
             | "capture_status" | "capture_stop_all" | "capture_subscribe" => {
@@ -527,7 +536,8 @@ pub fn route(components: HostComponents<'_>, command: &str, args: Value) -> Resu
 /// `mcp_call`, a blocking HTTP call to Genie One MCP (#467), and the `agent_*` commands (#307),
 /// which can spawn, wait for the host lock or reap the runtime, `stt_transcribe`, which
 /// takes the R4 store lock that the R4 worker shares (#514), and `mem_local_exec`, which does
-/// SQLite IO under the R10 connection lock (#426).
+/// SQLite IO under the R10 connection lock (#426), and `profiles_list`, where T7 runs
+/// `databricks auth describe` once per `databricks-cli` profile when R5 lands (#555).
 pub fn runs_off_main_thread(command: &str) -> bool {
     matches!(
         command,
@@ -545,6 +555,7 @@ pub fn runs_off_main_thread(command: &str) -> bool {
             | "agent_send"
             | "stt_transcribe"
             | "mem_local_exec"
+            | "profiles_list"
     )
 }
 
@@ -641,6 +652,9 @@ fn route_from<R: Runtime>(
     // `try_state`: `consent_host::install` manages the one R10 store; without it (no key store
     // or no data dir) `mem_local_exec` answers `host_failed` (#426).
     let mem = webview.try_state::<std::sync::Arc<mog_core::local_store::SqlCipherLocalStore>>();
+    // `try_state`: `profiles_host::install` manages T7; without it `profiles_list` answers
+    // `host_failed` (#555).
+    let profiles = webview.try_state::<crate::profiles_host::ProfilesHost>();
     let components = HostComponents {
         from: label,
         brain: &brain,
@@ -661,6 +675,9 @@ fn route_from<R: Runtime>(
         mem: mem
             .as_ref()
             .map(|m| m.inner().as_ref() as &dyn mog_core::local_store::LocalStore),
+        profiles: profiles
+            .as_ref()
+            .map(|p| p.inner() as &dyn GatewayComponents),
     };
     route(components, command, args)
 }
