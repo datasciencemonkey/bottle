@@ -342,6 +342,14 @@ impl RecordingSession {
         }
     }
 
+    /// Red skeleton.
+    pub fn set_active_hook(&self, _hook: Arc<dyn Fn(bool) + Send + Sync>) {}
+
+    /// Red skeleton.
+    pub fn is_recording(&self) -> bool {
+        false
+    }
+
     /// Whether the recording knob is on.
     pub fn enabled(&self) -> bool {
         (self.enabled)()

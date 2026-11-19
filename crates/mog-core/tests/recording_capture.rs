@@ -1192,3 +1192,74 @@ fn adr_0103_the_component_routes_start_stop_state_and_the_knob() {
         "no capture start with the knob off"
     );
 }
+
+// ---------- a muted mic does not end a recording ----------
+
+#[test]
+fn adr_0103_the_mic_zero_watch_holds_while_a_recording_runs() {
+    use mog_core::audio_device::{MicConfig, MicDevice, MicFault};
+    let host = FakeHost::default();
+    let h = host.clone();
+    let (mic, link) = MicDevice::spawn_with(
+        move || h,
+        Box::new(Collect::default()),
+        MicConfig {
+            zero_window: Duration::from_millis(60),
+            ..MicConfig::default()
+        },
+    )
+    .unwrap();
+    let faults = Arc::new(Mutex::new(Vec::new()));
+    let f2 = Arc::clone(&faults);
+    link.connect_fault_fn(move |_, fault| f2.lock().unwrap().push(fault));
+    let hold = link.silence_hold();
+    hold.set(true);
+    mic.open(AudioSource::Mic).unwrap();
+    // A muted mic: only digital silence, far past the zero window.
+    for _ in 0..30 {
+        host.play(&[0.0; 160], 1, 16_000);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        host.live.load(Ordering::SeqCst),
+        1,
+        "the mic stream stays open"
+    );
+    assert!(faults.lock().unwrap().is_empty(), "no zero-buffer fault");
+    // Without the hold (no recording), CAP-17b applies again.
+    hold.set(false);
+    for _ in 0..100 {
+        if !faults.lock().unwrap().is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(*faults.lock().unwrap(), vec![MicFault::ZeroBuffers]);
+    mic.close(AudioSource::Mic);
+}
+
+#[test]
+fn adr_0103_the_session_holds_the_mic_zero_watch_while_it_records() {
+    let r = rig();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let s2 = Arc::clone(&seen);
+    r.session
+        .set_active_hook(Arc::new(move |on| s2.lock().unwrap().push(on)));
+    assert!(!r.session.is_recording());
+    r.session.start(opts("n", 60)).unwrap();
+    assert!(r.session.is_recording());
+    r.session.stop(StopCause::User).unwrap();
+    assert!(!r.session.is_recording());
+    // A refused start releases the hold too.
+    r.enabled.store(false, Ordering::SeqCst);
+    let _ = r.session.start(opts("n", 60));
+    assert_eq!(*seen.lock().unwrap(), vec![true, false]);
+    // A zero-buffer stop of the lease would no longer be a mic loss: it never comes, and a
+    // muted mic records as silence next to the system audio.
+    r.enabled.store(true, Ordering::SeqCst);
+    r.session.start(opts("m", 60)).unwrap();
+    play(&r, 500, 0.0, 0.3);
+    let done = r.session.stop(StopCause::User).unwrap();
+    let (_, _, _, s) = decode(&done.parts[0].path);
+    assert!((s[4_000] - (0.3 * 32_767.0) as i32).abs() < 50);
+}

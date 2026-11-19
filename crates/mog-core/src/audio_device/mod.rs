@@ -68,7 +68,7 @@ pub mod system_macos;
 #[cfg(target_os = "windows")]
 pub mod system_windows;
 
-pub use mic::{FailureLink, MicConfig, MicDevice, MicFault};
+pub use mic::{FailureLink, MicConfig, MicDevice, MicFault, MicSilenceHold};
 pub use sink::{mix_to_mono, DiscardSink, FrameSink, MicFrame, SinkEvent, ZeroWatch};
 
 use crate::capture::DeviceError;

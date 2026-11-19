@@ -96,12 +96,26 @@ impl FailureLink {
         *lock(&self.hook) = Some(Arc::new(f));
     }
 
+    /// Red skeleton.
+    pub fn silence_hold(&self) -> MicSilenceHold {
+        MicSilenceHold
+    }
+
     fn report(&self, source: AudioSource, fault: MicFault) {
         let hook = lock(&self.hook).clone();
         if let Some(hook) = hook {
             hook(source, fault);
         }
     }
+}
+
+/// Red skeleton.
+#[derive(Debug, Clone)]
+pub struct MicSilenceHold;
+
+impl MicSilenceHold {
+    /// Red skeleton.
+    pub fn set(&self, _on: bool) {}
 }
 
 /// The open state of the mic, as `open` and `close` see it.

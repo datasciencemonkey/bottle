@@ -259,3 +259,36 @@ fn adr_0103_the_handoff_slot_forwards_once_the_cloud_side_connects() {
     assert_eq!(cloud.0.lock().unwrap().len(), 2);
     assert!(slot.pending().is_empty());
 }
+
+fn code(r: mog_core::error::CoreResult<Value>) -> &'static str {
+    match r {
+        Err(mog_core::error::CoreError::IpcRefused { code }) => code,
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn adr_0103_no_dictation_while_a_recording_runs() {
+    let r = rig();
+    r.rec.set_enabled(true, &Asker::default());
+    r.rec.session().start(opts()).unwrap();
+    for mode in ["ptt", "hands_free"] {
+        assert_eq!(
+            code(
+                r.capture
+                    .call("capture_start", json!({"mogId": "mog-a1", "mode": mode}))
+            ),
+            "recording_in_progress",
+            "{mode}"
+        );
+    }
+    // No overlay lease: R2 still has only the recording's lease, and the recording runs.
+    let v = serde_json::to_value(r.capture.service().status()).unwrap();
+    assert_eq!(v["mode"], json!("session"));
+    assert_eq!(v["owner"], json!("bottle-recording"));
+    // The recording's stop works, and then dictation is free again.
+    r.rec.session().stop(StopCause::User).unwrap();
+    r.capture
+        .call("capture_start", json!({"mogId": "mog-a1", "mode": "ptt"}))
+        .expect("PTT after the recording");
+}
