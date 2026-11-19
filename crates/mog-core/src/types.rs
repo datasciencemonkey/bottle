@@ -798,3 +798,556 @@ where
 {
     Option::<T>::deserialize(d)
 }
+
+// ---------- call recording (ADR 0103) ----------
+
+/// The default notes model of a new install (ADR 0103). A Settings value.
+pub const RECORDING_DEFAULT_ENDPOINT: &str = "databricks-claude-sonnet-5-5";
+/// The default recording length in minutes. The recording stops by itself at this length.
+pub const RECORDING_DEFAULT_LENGTH_MIN: u16 = 60;
+/// The shortest and the longest recording length that Settings accepts, in minutes.
+pub const RECORDING_LENGTH_MIN_RANGE: (u16, u16) = (5, 180);
+/// The longest instructions text, in characters.
+pub const RECORDING_INSTRUCTIONS_MAX: usize = 16_000;
+/// The default preset prompt of a new install (ADR 0103).
+pub const RECORDING_DEFAULT_INSTRUCTIONS: &str = "You get the transcript of a call. Speakers are labeled Speaker 1, Speaker 2, and so on.
+Write short notes in Markdown with these sections:
+## Summary
+Three to five sentences.
+## Decisions
+A bullet list. Write \"None\" if there are no decisions.
+## Action items
+One sub-heading per speaker. Under each, a bullet list of that speaker's action items, with an owner and a due date if the call names one.
+Use only facts from the transcript.";
+
+/// A string newtype that Rust checks when it parses, with the same rule in its JSON Schema.
+macro_rules! checked_string {
+    ($(#[$m:meta])* $name:ident, $pattern:expr, $check:expr) => {
+        $(#[$m])*
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[serde(try_from = "String", into = "String")]
+        pub struct $name(String);
+
+        impl $name {
+            /// The JSON Schema pattern of the value.
+            pub const PATTERN: &'static str = $pattern;
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl TryFrom<String> for $name {
+            type Error = &'static str;
+            fn try_from(s: String) -> Result<Self, Self::Error> {
+                let check: fn(&str) -> bool = $check;
+                if check(&s) {
+                    Ok(Self(s))
+                } else {
+                    Err(concat!("not a valid ", stringify!($name)))
+                }
+            }
+        }
+
+        impl std::str::FromStr for $name {
+            type Err = &'static str;
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                Self::try_from(s.to_owned())
+            }
+        }
+
+        impl From<$name> for String {
+            fn from(v: $name) -> String {
+                v.0
+            }
+        }
+
+        impl JsonSchema for $name {
+            fn schema_name() -> std::borrow::Cow<'static, str> {
+                stringify!($name).into()
+            }
+            fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+                schemars::json_schema!({ "type": "string", "pattern": $pattern })
+            }
+        }
+    };
+}
+
+fn ascii_id(s: &str, max: usize, extra: &[char]) -> bool {
+    !s.is_empty()
+        && s.len() <= max
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || extra.contains(&c))
+}
+
+checked_string!(
+    /// A recording ID: 1-64 characters of `[A-Za-z0-9_-]`. Opaque on the wire.
+    RecordingId,
+    "^[A-Za-z0-9_-]{1,64}$",
+    |s| ascii_id(s, 64, &['_', '-'])
+);
+
+checked_string!(
+    /// A Unity Catalog volume path: `/Volumes/` plus at least three segments of
+    /// `[A-Za-z0-9_.@-]`, with an optional end `/`. No `.` or `..` segment, no empty segment.
+    /// SQL text and file paths use it as a literal, so the character set is strict.
+    VolumePath,
+    "^/Volumes(/[A-Za-z0-9_.@-]+){3,}/?$",
+    |s| {
+        let Some(rest) = s.strip_prefix("/Volumes/") else {
+            return false;
+        };
+        let rest = rest.strip_suffix('/').unwrap_or(rest);
+        let segs: Vec<&str> = rest.split('/').collect();
+        s.len() <= 1024
+            && segs.len() >= 3
+            && segs.iter().all(|g| {
+                !g.is_empty()
+                    && *g != "."
+                    && *g != ".."
+                    && g.chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '@' | '-'))
+            })
+    }
+);
+
+checked_string!(
+    /// A SQL warehouse ID: 1-64 characters of `[A-Za-z0-9-]`.
+    WarehouseId,
+    "^[A-Za-z0-9-]{1,64}$",
+    |s| ascii_id(s, 64, &['-'])
+);
+
+checked_string!(
+    /// A model serving endpoint name for `ai_query`: 1-128 characters of `[A-Za-z0-9_-]`.
+    EndpointName,
+    "^[A-Za-z0-9_-]{1,128}$",
+    |s| ascii_id(s, 128, &['_', '-'])
+);
+
+checked_string!(
+    /// A Unity Catalog catalog or schema name for `recording_volume_create`: 1-255 characters
+    /// of `[A-Za-z0-9_-]`. No dot, no quote, no back-tick.
+    UcName,
+    "^[A-Za-z0-9_-]{1,255}$",
+    |s| ascii_id(s, 255, &['_', '-'])
+);
+
+/// The instructions for the notes model: the Settings preset or the text for one recording.
+/// 1 to [`RECORDING_INSTRUCTIONS_MAX`] characters.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct Instructions(String);
+
+impl Instructions {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for Instructions {
+    type Error = &'static str;
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        let n = s.chars().count();
+        if n == 0 || n > RECORDING_INSTRUCTIONS_MAX || s.trim().is_empty() {
+            Err("not valid instructions")
+        } else {
+            Ok(Self(s))
+        }
+    }
+}
+
+impl From<Instructions> for String {
+    fn from(v: Instructions) -> String {
+        v.0
+    }
+}
+
+impl JsonSchema for Instructions {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Instructions".into()
+    }
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "minLength": 1,
+            "maxLength": RECORDING_INSTRUCTIONS_MAX
+        })
+    }
+}
+
+/// The recording length in minutes, from 5 to 180 (ADR 0103). Settings offers 15, 30, 45, 60
+/// and 90, or a custom value in the range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "u16", into = "u16")]
+pub struct LengthMin(u16);
+
+impl LengthMin {
+    pub fn get(self) -> u16 {
+        self.0
+    }
+}
+
+impl Default for LengthMin {
+    fn default() -> Self {
+        Self(RECORDING_DEFAULT_LENGTH_MIN)
+    }
+}
+
+impl TryFrom<u16> for LengthMin {
+    type Error = &'static str;
+    fn try_from(v: u16) -> Result<Self, Self::Error> {
+        let (lo, hi) = RECORDING_LENGTH_MIN_RANGE;
+        if (lo..=hi).contains(&v) {
+            Ok(Self(v))
+        } else {
+            Err("the length is out of range")
+        }
+    }
+}
+
+impl From<LengthMin> for u16 {
+    fn from(v: LengthMin) -> u16 {
+        v.0
+    }
+}
+
+impl JsonSchema for LengthMin {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "LengthMin".into()
+    }
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "integer",
+            "minimum": RECORDING_LENGTH_MIN_RANGE.0,
+            "maximum": RECORDING_LENGTH_MIN_RANGE.1
+        })
+    }
+}
+
+/// Where the recordings go: the user's My Files volume, or a volume from Settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordingStorageKind {
+    MyFiles,
+    Volume,
+}
+
+/// The volume root of the recordings. Files go under `<root>/Bottle/Recordings/<name>/`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecordingStorage {
+    pub kind: RecordingStorageKind,
+    pub root: VolumePath,
+}
+
+/// The recording settings (ADR 0103): the `recording_settings_*` reply. No secret: Rust keeps
+/// them in a small JSON file in the app config dir.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecordingSettings {
+    /// The knob. Off by default. When off, `recording_start` answers `recording_off`.
+    pub enabled: bool,
+    /// The user acknowledged the first-use consent notice once.
+    pub consent_ack: bool,
+    /// Required and nullable: `null` until My Files resolves or the user picks a volume.
+    #[serde(deserialize_with = "nullable")]
+    pub storage: Option<RecordingStorage>,
+    /// Required and nullable: the SQL warehouse of the fallback path only.
+    #[serde(deserialize_with = "nullable")]
+    pub warehouse_id: Option<WarehouseId>,
+    pub notes_endpoint: EndpointName,
+    pub preset_instructions: Instructions,
+    pub length_min: LengthMin,
+}
+
+impl Default for RecordingSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            consent_ack: false,
+            storage: None,
+            warehouse_id: None,
+            notes_endpoint: EndpointName(RECORDING_DEFAULT_ENDPOINT.to_owned()),
+            preset_instructions: Instructions(RECORDING_DEFAULT_INSTRUCTIONS.to_owned()),
+            length_min: LengthMin::default(),
+        }
+    }
+}
+
+/// A partial `RecordingSettings` for `recording_settings_write`. An absent field keeps its
+/// value. A value cannot be cleared to `null`: the user picks another one.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecordingSettingsPatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consent_ack: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage: Option<RecordingStorage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warehouse_id: Option<WarehouseId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes_endpoint: Option<EndpointName>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset_instructions: Option<Instructions>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length_min: Option<LengthMin>,
+}
+
+impl RecordingSettings {
+    /// The settings with each field of `patch` that is set.
+    pub fn apply(mut self, patch: RecordingSettingsPatch) -> Self {
+        let RecordingSettingsPatch {
+            enabled,
+            consent_ack,
+            storage,
+            warehouse_id,
+            notes_endpoint,
+            preset_instructions,
+            length_min,
+        } = patch;
+        if let Some(v) = enabled {
+            self.enabled = v;
+        }
+        if let Some(v) = consent_ack {
+            self.consent_ack = v;
+        }
+        if let Some(v) = storage {
+            self.storage = Some(v);
+        }
+        if let Some(v) = warehouse_id {
+            self.warehouse_id = Some(v);
+        }
+        if let Some(v) = notes_endpoint {
+            self.notes_endpoint = v;
+        }
+        if let Some(v) = preset_instructions {
+            self.preset_instructions = v;
+        }
+        if let Some(v) = length_min {
+            self.length_min = v;
+        }
+        self
+    }
+}
+
+/// The phase of the one recording of the device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordingPhase {
+    Idle,
+    Starting,
+    Recording,
+    Stopping,
+}
+
+/// The system audio (the other side of the call) of a recording.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SystemAudio {
+    Ok,
+    /// This OS has no system audio capture (for example macOS before 14.4): mic only.
+    Unavailable,
+    /// 5 s of zero buffers: the permission is denied or the call is silent (CAP-10a).
+    SilentOrDenied,
+    /// No recording runs.
+    Off,
+}
+
+/// The `recording.state` payload and the `recording_start`, `recording_stop` and
+/// `recording_state` reply. Content-free: no audio, no transcript.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecordingState {
+    pub state: RecordingPhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<RecordingId>,
+    /// The folder name, local start time `YYYY-MM-DD_HHMM` (plus `_2`.. on a clash).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Epoch milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at_ms: Option<u64>,
+    /// Epoch milliseconds: the recording stops by itself at this time (`lengthMin`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ends_at_ms: Option<u64>,
+    pub system_audio: SystemAudio,
+}
+
+impl RecordingState {
+    /// No recording runs.
+    pub fn idle() -> Self {
+        Self {
+            state: RecordingPhase::Idle,
+            id: None,
+            name: None,
+            started_at_ms: None,
+            ends_at_ms: None,
+            system_audio: SystemAudio::Off,
+        }
+    }
+}
+
+/// The status of one recording job. `transcribing` covers a queued or running job run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordingStatus {
+    Recording,
+    Uploading,
+    Transcribing,
+    WritingNotes,
+    Done,
+    Failed,
+}
+
+/// Why a recording failed or a recording command was refused (ADR 0103). One plain message and
+/// one action each in the hub. `ipc_code` (in `crate::recording`) gives the IPC refusal code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordingErrorKind {
+    RecordingOff,
+    ConsentRequired,
+    RecordingBusy,
+    MicBusy,
+    NoStorage,
+    NoWarehouse,
+    WarehouseFailed,
+    VolumePermission,
+    AiTranscribeDisabled,
+    EndpointMissing,
+    TooLong,
+    UploadFailed,
+    Network,
+    Auth,
+    SystemAudioDenied,
+    Internal,
+}
+
+/// The path that transcribed a recording: the serverless job run, or the SQL warehouse
+/// fallback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordingEngine {
+    Job,
+    Warehouse,
+}
+
+/// One row of the recordings list, and the `recording.job` payload. Content-free.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecordingSummary {
+    pub id: RecordingId,
+    pub name: String,
+    /// Epoch milliseconds.
+    pub started_at_ms: u64,
+    pub duration_s: u32,
+    pub status: RecordingStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_kind: Option<RecordingErrorKind>,
+    /// The step that failed. Retry starts again at this step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_stage: Option<RecordingStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<RecordingEngine>,
+    /// The Jobs API run ID of the job path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+}
+
+/// One transcript turn. Times are seconds from the start of the recording, across parts.
+/// `speaker` is the ai_transcribe label, with the part as a prefix when there is more than one
+/// part (for example `2.1`). `text` is user content: `Debug` shows only its size (SEC-16c).
+#[derive(Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecordingSegment {
+    pub start: f64,
+    pub end: f64,
+    pub speaker: String,
+    pub text: String,
+    pub part: u32,
+}
+
+impl std::fmt::Debug for RecordingSegment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RecordingSegment")
+            .field("start", &self.start)
+            .field("end", &self.end)
+            .field("part", &self.part)
+            .field(
+                "text",
+                &format_args!("<redacted {} chars>", self.text.chars().count()),
+            )
+            .finish()
+    }
+}
+
+/// The `recording_detail` reply: the summary, the instructions used, the transcript turns and
+/// the two Markdown files. The text is user content: `Debug` shows only sizes (SEC-16c).
+#[derive(Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecordingDetail {
+    pub summary: RecordingSummary,
+    pub instructions: String,
+    pub segments: Vec<RecordingSegment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript_md: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes_md: Option<String>,
+}
+
+impl std::fmt::Debug for RecordingDetail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let size = |s: &Option<String>| s.as_ref().map(|t| t.chars().count());
+        f.debug_struct("RecordingDetail")
+            .field("summary", &self.summary)
+            .field(
+                "instructions",
+                &format_args!("<redacted {} chars>", self.instructions.chars().count()),
+            )
+            .field("segments", &self.segments)
+            .field("transcript_md_chars", &size(&self.transcript_md))
+            .field("notes_md_chars", &size(&self.notes_md))
+            .finish()
+    }
+}
+
+/// The state of a SQL warehouse, mapped from the upstream state string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WarehouseState {
+    Starting,
+    Running,
+    Stopping,
+    Stopped,
+    Deleting,
+    Deleted,
+    Unknown,
+}
+
+/// One SQL warehouse of the user (`recording_warehouses`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WarehouseInfo {
+    pub id: WarehouseId,
+    pub name: String,
+    pub state: WarehouseState,
+    pub serverless: bool,
+}
+
+/// The `recording_storage_probe` reply: the My Files root, or `null` when it does not resolve.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StorageProbe {
+    #[serde(deserialize_with = "nullable")]
+    pub my_files_root: Option<VolumePath>,
+}
+
+/// The `hotkey.record_toggle` payload (ADR 0103): the user pressed the record key (⌥R) in a
+/// talk-key hold while the knob is on. The host ended the hold with a `hotkey.ptt` `cancel`
+/// first, so no dictation and no paste follow. The brain starts or stops the recording.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecordToggle {
+    pub mog_id: MogId,
+}

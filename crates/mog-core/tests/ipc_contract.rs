@@ -931,7 +931,11 @@ const RECORDING_COMMANDS: &[&str] = &[
 fn cap_06_recording_rows_are_brain_and_hub_only() {
     for name in RECORDING_COMMANDS {
         let row = ipc::command(name).unwrap_or_else(|| panic!("no row {name}"));
-        assert_eq!(row.windows, [WindowClass::Brain, WindowClass::Hub], "{name}");
+        assert_eq!(
+            row.windows,
+            [WindowClass::Brain, WindowClass::Hub],
+            "{name}"
+        );
         assert_eq!(row.phase, Phase::MvpD, "{name}");
         for label in ["brain", "hub"] {
             let err = ipc::handle(label, name, recording_sample(name)).unwrap_err();
@@ -957,10 +961,22 @@ fn sec_02b_recording_arguments_are_checked() {
     for (name, bad) in [
         ("recording_settings_read", json!({"x": 1})),
         ("recording_settings_write", json!({})),
-        ("recording_settings_write", json!({"patch": {"lengthMin": 4}})),
-        ("recording_settings_write", json!({"patch": {"lengthMin": 181}})),
-        ("recording_settings_write", json!({"patch": {"enabled": "yes"}})),
-        ("recording_settings_write", json!({"patch": {"other": true}})),
+        (
+            "recording_settings_write",
+            json!({"patch": {"lengthMin": 4}}),
+        ),
+        (
+            "recording_settings_write",
+            json!({"patch": {"lengthMin": 181}}),
+        ),
+        (
+            "recording_settings_write",
+            json!({"patch": {"enabled": "yes"}}),
+        ),
+        (
+            "recording_settings_write",
+            json!({"patch": {"other": true}}),
+        ),
         (
             "recording_settings_write",
             json!({"patch": {"storage": {"kind": "volume", "root": "/tmp/x"}}}),
@@ -981,21 +997,33 @@ fn sec_02b_recording_arguments_are_checked() {
             "recording_settings_write",
             json!({"patch": {"notesEndpoint": "bad endpoint'"}}),
         ),
-        ("recording_settings_write", json!({"patch": {"warehouseId": "a b"}})),
+        (
+            "recording_settings_write",
+            json!({"patch": {"warehouseId": "a b"}}),
+        ),
         (
             "recording_settings_write",
             json!({"patch": {"presetInstructions": long.clone()}}),
         ),
         ("recording_volume_create", json!({"catalog": "main"})),
-        ("recording_volume_create", json!({"catalog": "a.b", "schema": "c"})),
-        ("recording_volume_create", json!({"catalog": "a", "schema": "c`; x"})),
+        (
+            "recording_volume_create",
+            json!({"catalog": "a.b", "schema": "c"}),
+        ),
+        (
+            "recording_volume_create",
+            json!({"catalog": "a", "schema": "c`; x"}),
+        ),
         ("recording_start", json!({"instructions": long})),
         ("recording_start", json!({"mogId": "a1"})),
         ("recording_detail", json!({})),
         ("recording_detail", json!({"id": "../etc"})),
         ("recording_retry", json!({"id": ""})),
         ("recording_open", json!({"id": "rec-1"})),
-        ("recording_open", json!({"id": "rec-1", "target": "https://x"})),
+        (
+            "recording_open",
+            json!({"id": "rec-1", "target": "https://x"}),
+        ),
     ] {
         let err = ipc::handle("hub", name, bad.clone()).unwrap_err();
         assert!(
@@ -1012,7 +1040,8 @@ fn sec_02b_recording_arguments_are_checked() {
         json!({"warehouseId": "abc123def456", "notesEndpoint": "databricks-claude-sonnet-5-5"}),
         json!({}),
     ] {
-        let err = ipc::handle("hub", "recording_settings_write", json!({ "patch": patch })).unwrap_err();
+        let err =
+            ipc::handle("hub", "recording_settings_write", json!({ "patch": patch })).unwrap_err();
         assert!(matches!(err, IpcError::NotImplemented { .. }), "{patch}");
     }
     let err = ipc::handle("brain", "recording_start", json!({})).unwrap_err();

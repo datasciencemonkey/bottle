@@ -779,6 +779,8 @@ fn arc_3_cap_02a_g_04a_schedule_runs_window_ops_capture_start_and_mcp_call_on_a_
             .recv_timeout(std::time::Duration::from_secs(5))
             .expect("the job ran");
         let worker = c.name.starts_with("window_")
+            // ADR 0103: every recording command but the state read.
+            || (c.name.starts_with("recording_") && c.name != "recording_state")
             || matches!(
                 c.name,
                 "permission_request"

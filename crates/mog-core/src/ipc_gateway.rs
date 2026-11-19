@@ -138,6 +138,21 @@ pub const ERROR_CODES: &[&str] = &[
     "login_cancelled",
     "cli_failed",
     "no_grant",
+    // `recording_*` and `capture_start` (ADR 0103): the call recording codes that have no older
+    // code. `consent_required`, `mic_busy`, `offline`, `auth_expired` and `host_failed` also apply.
+    "recording_off",
+    "recording_busy",
+    "recording_in_progress",
+    "unknown_recording",
+    "no_storage",
+    "no_warehouse",
+    "warehouse_failed",
+    "volume_permission",
+    "ai_transcribe_disabled",
+    "endpoint_missing",
+    "too_long",
+    "upload_failed",
+    "system_audio_denied",
 ];
 
 /// The fixed, content-free code of an [`IpcError`] (its serde tag). It never holds the
@@ -197,6 +212,19 @@ pub fn ipc_error_code(e: &IpcError) -> &'static str {
         IpcError::LoginCancelled { .. } => "login_cancelled",
         IpcError::CliFailed { .. } => "cli_failed",
         IpcError::NoGrant { .. } => "no_grant",
+        IpcError::RecordingOff { .. } => "recording_off",
+        IpcError::RecordingBusy { .. } => "recording_busy",
+        IpcError::RecordingInProgress { .. } => "recording_in_progress",
+        IpcError::UnknownRecording { .. } => "unknown_recording",
+        IpcError::NoStorage { .. } => "no_storage",
+        IpcError::NoWarehouse { .. } => "no_warehouse",
+        IpcError::WarehouseFailed { .. } => "warehouse_failed",
+        IpcError::VolumePermission { .. } => "volume_permission",
+        IpcError::AiTranscribeDisabled { .. } => "ai_transcribe_disabled",
+        IpcError::EndpointMissing { .. } => "endpoint_missing",
+        IpcError::TooLong { .. } => "too_long",
+        IpcError::UploadFailed { .. } => "upload_failed",
+        IpcError::SystemAudioDenied { .. } => "system_audio_denied",
     }
 }
 

@@ -34,7 +34,10 @@ fn cap_06_the_knob_is_off_by_default_with_the_brief_defaults() {
     assert_eq!(s.notes_endpoint.as_str(), "databricks-claude-sonnet-5-5");
     assert_eq!(RECORDING_DEFAULT_ENDPOINT, "databricks-claude-sonnet-5-5");
     assert_eq!(s.length_min.get(), 60);
-    assert_eq!(s.preset_instructions.as_str(), RECORDING_DEFAULT_INSTRUCTIONS);
+    assert_eq!(
+        s.preset_instructions.as_str(),
+        RECORDING_DEFAULT_INSTRUCTIONS
+    );
     assert!(RECORDING_DEFAULT_INSTRUCTIONS.contains("## Action items"));
     let wire = serde_json::to_value(&s).unwrap();
     assert_eq!(wire["storage"], Value::Null);
@@ -79,7 +82,10 @@ fn cap_06_an_open_gate_reaches_the_capture_stub() {
         ..RecordingSettings::default()
     };
     let (c, _) = component(s);
-    assert_eq!(code(c.call("recording_start", json!({}))), "not_implemented");
+    assert_eq!(
+        code(c.call("recording_start", json!({}))),
+        "not_implemented"
+    );
 }
 
 #[test]
@@ -99,10 +105,7 @@ fn cap_06_a_settings_write_that_turns_the_knob_off_closes_the_gate() {
     assert_eq!(reply["enabled"], json!(false));
     assert_eq!(reply["lengthMin"], json!(30));
     assert!(!store.load().unwrap().enabled);
-    assert_eq!(
-        c.call("recording_settings_read", json!({})).unwrap(),
-        reply
-    );
+    assert_eq!(c.call("recording_settings_read", json!({})).unwrap(), reply);
     assert_eq!(code(c.call("recording_start", json!({}))), "recording_off");
 }
 
@@ -110,7 +113,10 @@ fn cap_06_a_settings_write_that_turns_the_knob_off_closes_the_gate() {
 fn sec_02b_a_bad_settings_patch_is_invalid_args() {
     let (c, _) = component(RecordingSettings::default());
     assert_eq!(
-        code(c.call("recording_settings_write", json!({"patch": {"lengthMin": 2}}))),
+        code(c.call(
+            "recording_settings_write",
+            json!({"patch": {"lengthMin": 2}})
+        )),
         "invalid_args"
     );
 }
@@ -177,7 +183,11 @@ fn sec_16c_transcript_debug_never_holds_the_text() {
         transcript_md: Some(MARKER.into()),
         notes_md: Some(MARKER.into()),
     };
-    for shown in [format!("{seg:?}"), format!("{detail:?}"), format!("{detail:#?}")] {
+    for shown in [
+        format!("{seg:?}"),
+        format!("{detail:?}"),
+        format!("{detail:#?}"),
+    ] {
         assert!(!shown.contains(MARKER), "{shown}");
     }
     // The wire still holds the text for the hub to show.

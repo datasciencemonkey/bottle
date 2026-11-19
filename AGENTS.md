@@ -41,7 +41,7 @@ Binding decisions for the MVP:
 
 ### Out of scope for now ("we'll consider later")
 
-Meeting recording, UC Pages, Lakebase sync, memory recall and embeddings, the main agent and `bottle-mcp` tools,
+UC Pages, Lakebase sync, memory recall and embeddings, the main agent and `bottle-mcp` tools,
 workspace hop and split questions, mascot artwork work, admin/MDM, telemetry export, audit log, cloud ASR, Linux,
 signed public installers, and most spikes. Code for some of these is already on main. Leave it alone unless an MVP
 change needs it. Do not open new issues for this work. The non-core issues are being closed with "We'll consider this
@@ -59,6 +59,7 @@ later".
 | `mem_local_exec` to the local SQLite store | PR #576. On main the route is still `TODO(#426)`. |
 | CliRunner (R5) | PR #255. On main mcp_host uses a stub, so every `mcp_call` fails `not_implemented`. |
 | CLI install, Connect a workspace | #161, #162 (in progress, stacked on #255). |
+| Call recording (mic plus system audio to a UC volume, server-side transcript and notes) | In flight, ADR 0103: the contract PR on `issue/rec-0-contract`, then capture, cloud and hub PRs stacked on it. The user moved it into the MVP on 2026-11-19. Knob off by default. |
 
 Re-check with `gh pr list` before you rely on this table.
 
