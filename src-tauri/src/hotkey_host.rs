@@ -1205,6 +1205,51 @@ mod tests {
     }
 
     #[test]
+    fn rec_a_record_up_carries_record_true_and_no_ask() {
+        let target = Arc::new(PttTarget::default());
+        target.set("a1");
+        let (mut f, brain, _) = forwarder(&target);
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Down));
+        target.set("b2");
+        f.on_output(HotkeyOutput::PttRecordUp);
+        // A record up with no press sends nothing.
+        f.on_output(HotkeyOutput::PttRecordUp);
+        assert_eq!(
+            brain.items(),
+            vec![
+                ptt("a1", "down"),
+                (
+                    "hotkey:ptt".to_owned(),
+                    json!({ "mogId": "a1", "phase": "up", "record": true })
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn rec_the_record_key_gate_follows_the_knob() {
+        let gate = RecordKeyGate::default();
+        assert!(!gate.is_on(), "the knob is off by default");
+        let shared = gate.shared();
+        gate.set(true);
+        assert!(shared.load(Ordering::Relaxed));
+        assert!(gate.clone().is_on());
+        gate.set(false);
+        assert!(!shared.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn rec_the_macos_service_gets_the_record_key_gate() {
+        // The `cfg(target_os = "macos")` factory wires the gate into the engine.
+        let src = include_str!("hotkey_host.rs");
+        let mac = &src[src
+            .find("use mog_core::hotkey_macos::{MacHotkeyService, MacPermissions};")
+            .expect("the macOS factory")..];
+        let mac = &mac[..mac.find("#[cfg(windows)]").expect("the end")];
+        assert!(mac.contains(".with_record_gate(record.shared())"), "{mac}");
+    }
+
+    #[test]
     fn rtr_17a_an_ask_up_goes_to_the_mog_of_the_press() {
         let target = Arc::new(PttTarget::default());
         target.set("a1");

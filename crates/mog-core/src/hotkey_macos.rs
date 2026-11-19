@@ -367,6 +367,30 @@ mod tests {
     }
 
     #[test]
+    fn rec_the_record_key_is_r_with_the_talk_key_modifier() {
+        // kVK_ANSI_R = 0x0F (HIToolbox Events.h). Same modifier as the ask key: ⌥R by default.
+        assert_eq!(VK_ANSI_R, 0x0F);
+        assert_ne!(RECORD_HOT_KEY_ID, CHORD_HOT_KEY_ID);
+        assert_ne!(RECORD_HOT_KEY_ID, ASK_HOT_KEY_ID);
+    }
+
+    #[test]
+    fn rec_cap_44c_r_is_the_record_key_and_not_an_other_key() {
+        assert_eq!(
+            other_key_from_event(CG_EVENT_KEY_DOWN, i64::from(VK_ANSI_R)),
+            Some(OtherKeyDown::Record)
+        );
+        assert_eq!(
+            other_key_from_event(CG_EVENT_KEY_DOWN, i64::from(VK_ANSI_R) + 0x1_0000),
+            Some(OtherKeyDown::Other)
+        );
+        assert_eq!(
+            other_key_from_event(CG_EVENT_KEY_UP, i64::from(VK_ANSI_R)),
+            None
+        );
+    }
+
+    #[test]
     fn cap_44c_another_modifier_going_down_is_an_other_key() {
         // Right-Option is held (0x40); Left-Shift (56) goes down (0x02, generic 0x20000).
         assert_eq!(
