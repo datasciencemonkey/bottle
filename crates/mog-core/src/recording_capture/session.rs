@@ -9,7 +9,8 @@
 //!   audio (CAP-01a). A PTT during a recording is an R2 overlay on that lease (R2 shares the
 //!   open mic); hands-free gives way to the recording (ARC-F9).
 //! - **Frames** reach the writer thread through the [`RecordingTap`]. The writer mixes
-//!   ([`Mixer`]) and writes 55 min FLAC parts ([`PartWriter`]) in a user-only temp dir.
+//!   ([`Mixer`]) and writes the parts ([`PartWriter`], one FLAC part by default) in a
+//!   user-only temp dir.
 //! - **Stop rules.** The user's stop, the length preset (`length_min`, 5..=180,
 //!   [`RecordingSession::tick`]), OS sleep ([`RecordingSession::session_event`]), app quit
 //!   (the host calls `stop(Quit)`), and the end of the lease (mic loss, CAP-17b zero buffers,
@@ -35,7 +36,7 @@ use crate::clock::{MonotonicClock, WallClock};
 use crate::token_events::SessionEvent;
 use crate::types::{CaptureMode, MogId};
 
-use super::chunker::{create_private_dir, PartFile, PartWriter};
+use super::chunker::{create_private_dir, PartFile, PartFormat, PartWriter};
 use super::mixer::Mixer;
 use super::tap::{Block, RecordingTap};
 use super::PART_MAX_SAMPLES;
@@ -227,12 +228,12 @@ pub type Enabled = Arc<dyn Fn() -> bool + Send + Sync>;
 pub struct SessionConfig {
     /// Where per-recording temp dirs go (the app's cache dir in the host).
     pub temp_root: PathBuf,
-    /// The part limit in samples (55 min by default; tests pass less).
+    /// The part cap in samples; `None` (the default, [`PART_MAX_SAMPLES`]) is one part.
     pub part_max_samples: Option<u64>,
     /// The CAP-10a window.
     pub silence_ms: u64,
-    /// Red skeleton.
-    pub part_format: super::chunker::PartFormat,
+    /// The part encoder (FLAC by default).
+    pub part_format: PartFormat,
     /// The mixer lag bound.
     pub mix_lag_samples: usize,
     /// The MOG ID of the R2 lease.
@@ -245,7 +246,7 @@ impl Default for SessionConfig {
             temp_root: std::env::temp_dir().join("bottle-recordings"),
             part_max_samples: PART_MAX_SAMPLES,
             silence_ms: SYSTEM_SILENCE_MS,
-            part_format: super::chunker::PartFormat::Flac,
+            part_format: PartFormat::Flac,
             mix_lag_samples: MIX_LAG_SAMPLES,
             mog_id: RECORDING_MOG_ID.to_string(),
         }
@@ -378,10 +379,11 @@ impl RecordingSession {
         create_private_dir(&self.config.temp_root)
             .and_then(|()| create_private_dir(&dir))
             .map_err(|_| RecordingCaptureError::Io)?;
-        let parts = match PartWriter::new(
+        let parts = match PartWriter::with_format(
             &dir,
             &opts.name,
             self.config.part_max_samples.unwrap_or(u64::MAX),
+            self.config.part_format,
         ) {
             Ok(p) => p,
             Err(_) => {
@@ -579,7 +581,8 @@ fn existing_parts(dir: &std::path::Path) -> Vec<PartFile> {
         .filter_map(|e| {
             let file_name = e.file_name().into_string().ok()?;
             let index = file_name
-                .strip_suffix(".flac")?
+                .rsplit_once('.')?
+                .0
                 .rsplit_once(".part")?
                 .1
                 .parse()

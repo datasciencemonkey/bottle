@@ -1,7 +1,9 @@
-//! The part chunker: the mixed stream as FLAC parts of at most 55 min (ADR 0103).
+//! The part chunker: the mixed stream as audio parts (ADR 0103).
 //!
 //! Parts are `<name>.part01.flac`, `<name>.part02.flac`, ... in the per-recording temp dir.
-//! A part ends exactly at the part limit (a sample count, so tests can pass a small one).
+//! By default a recording is one part ([`super::PART_MAX_MINUTES`] is `None`); with a cap, a
+//! part ends exactly at the cap (a sample count, so tests can pass a small one). The encoder
+//! sits behind [`PartEncoder`]: [`PartFormat::Flac`] (default) or [`PartFormat::Wav`].
 //! The dir is user-only (0700) and each part file is user-only (0600) on unix; on Windows the
 //! dir is under the user's own local app data, which only the user can read by default.
 //! A part file is created on its first sample, so a recording with no audio has no part.
@@ -11,6 +13,7 @@ use std::io::{self, BufWriter};
 use std::path::{Path, PathBuf};
 
 use super::flac::FlacWriter;
+use super::wav::WavWriter;
 use super::SAMPLE_RATE;
 
 /// One finished part.
@@ -37,7 +40,12 @@ impl PartFile {
 
 /// `<name>.partNN.flac`, with at least two digits.
 pub fn part_file_name(name: &str, index: u32) -> String {
-    format!("{name}.part{index:02}.flac")
+    part_file_name_as(name, index, PartFormat::Flac)
+}
+
+/// `<name>.partNN.<ext>` for `format`.
+pub fn part_file_name_as(name: &str, index: u32, format: PartFormat) -> String {
+    format!("{name}.part{index:02}.{}", format.extension())
 }
 
 /// Create `path` (and missing parents) with user-only permissions on the leaf.
@@ -62,22 +70,79 @@ fn create_private_file(path: &Path) -> io::Result<File> {
     o.open(path)
 }
 
-type Current = (FlacWriter<BufWriter<File>>, PartFile);
+type Current = (Box<dyn PartEncoder>, PartFile);
 
-/// The audio format of the part files (red skeleton).
+/// The audio format of the part files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PartFormat {
-    /// FLAC.
+    /// FLAC 16 kHz mono 16-bit ([`FlacWriter`]).
     #[default]
     Flac,
-    /// WAV.
+    /// WAV PCM 16 kHz mono 16-bit ([`WavWriter`]).
     Wav,
 }
 
 impl PartFormat {
-    /// Red skeleton.
+    /// The file extension, without the dot.
     pub fn extension(&self) -> &'static str {
-        unimplemented!("red")
+        match self {
+            Self::Flac => "flac",
+            Self::Wav => "wav",
+        }
+    }
+
+    /// The MIME type (for a data URL or an upload).
+    pub fn mime(&self) -> &'static str {
+        match self {
+            Self::Flac => "audio/flac",
+            Self::Wav => "audio/wav",
+        }
+    }
+
+    fn open(&self, file: File) -> io::Result<Box<dyn PartEncoder>> {
+        let out = BufWriter::new(file);
+        Ok(match self {
+            Self::Flac => Box::new(FlacWriter::new(out)?),
+            Self::Wav => Box::new(WavWriter::new(out)?),
+        })
+    }
+}
+
+/// One part file's encoder. A new format implements this and gets a [`PartFormat`] variant.
+pub trait PartEncoder: Send {
+    /// Append mono 16 kHz samples.
+    fn write(&mut self, samples: &[f32]) -> io::Result<()>;
+    /// The samples written so far.
+    fn samples(&self) -> u64;
+    /// Finish the file and sync it to disk.
+    fn finish(self: Box<Self>) -> io::Result<()>;
+}
+
+fn sync(buf: BufWriter<File>) -> io::Result<()> {
+    buf.into_inner().map_err(|e| e.into_error())?.sync_all()
+}
+
+impl PartEncoder for FlacWriter<BufWriter<File>> {
+    fn write(&mut self, samples: &[f32]) -> io::Result<()> {
+        FlacWriter::write(self, samples)
+    }
+    fn samples(&self) -> u64 {
+        FlacWriter::samples(self)
+    }
+    fn finish(self: Box<Self>) -> io::Result<()> {
+        sync(FlacWriter::finish(*self)?)
+    }
+}
+
+impl PartEncoder for WavWriter<BufWriter<File>> {
+    fn write(&mut self, samples: &[f32]) -> io::Result<()> {
+        WavWriter::write(self, samples)
+    }
+    fn samples(&self) -> u64 {
+        WavWriter::samples(self)
+    }
+    fn finish(self: Box<Self>) -> io::Result<()> {
+        sync(WavWriter::finish(*self)?)
     }
 }
 
@@ -86,14 +151,26 @@ pub struct PartWriter {
     dir: PathBuf,
     name: String,
     max_samples: u64,
+    format: PartFormat,
     current: Option<Current>,
     done: Vec<PartFile>,
     written: u64,
 }
 
 impl PartWriter {
-    /// Parts of at most `max_samples` samples (at least 1) named after `name`, in `dir`.
+    /// FLAC parts of at most `max_samples` samples (at least 1; `u64::MAX` for one part)
+    /// named after `name`, in `dir`.
     pub fn new(dir: &Path, name: &str, max_samples: u64) -> io::Result<Self> {
+        Self::with_format(dir, name, max_samples, PartFormat::Flac)
+    }
+
+    /// As [`PartWriter::new`], in `format`.
+    pub fn with_format(
+        dir: &Path,
+        name: &str,
+        max_samples: u64,
+        format: PartFormat,
+    ) -> io::Result<Self> {
         if !dir.is_dir() {
             create_private_dir(dir)?;
         }
@@ -101,6 +178,7 @@ impl PartWriter {
             dir: dir.to_path_buf(),
             name: name.to_string(),
             max_samples: max_samples.max(1),
+            format,
             current: None,
             done: Vec::new(),
             written: 0,
@@ -129,11 +207,6 @@ impl PartWriter {
         Ok(())
     }
 
-    /// Red skeleton.
-    pub fn with_format(_dir: &Path, _name: &str, _max: u64, _f: PartFormat) -> io::Result<Self> {
-        unimplemented!("red")
-    }
-
     /// The parts finished so far (not the open one).
     pub fn finished(&self) -> &[PartFile] {
         &self.done
@@ -147,10 +220,10 @@ impl PartWriter {
 
     fn open_next(&mut self) -> io::Result<()> {
         let index = u32::try_from(self.done.len() + 1).unwrap_or(u32::MAX);
-        let file_name = part_file_name(&self.name, index);
+        let file_name = part_file_name_as(&self.name, index, self.format);
         let path = self.dir.join(&file_name);
         let file = create_private_file(&path)?;
-        let writer = FlacWriter::new(BufWriter::new(file))?;
+        let writer = self.format.open(file)?;
         let part = PartFile {
             index,
             file_name,
@@ -165,9 +238,7 @@ impl PartWriter {
     fn close_current(&mut self) -> io::Result<()> {
         if let Some((w, mut part)) = self.current.take() {
             part.samples = w.samples();
-            let buf = w.finish()?;
-            let file = buf.into_inner().map_err(|e| e.into_error())?;
-            file.sync_all()?;
+            w.finish()?;
             self.done.push(part);
         }
         Ok(())
