@@ -299,3 +299,45 @@ fn w_04a_arc_6_the_token_stdout_is_redacted_and_wipes() {
     out.wipe();
     assert!(out.is_zeroed());
 }
+
+/// [W-04a] two token children run at the same time: one slow child does not hold up the others
+#[test]
+fn w_04a_two_token_children_run_at_the_same_time() {
+    use std::sync::Condvar;
+    let inside = Arc::new((Mutex::new(0usize), Condvar::new()));
+    let peak = Arc::new(Mutex::new(0usize));
+    let (i2, p2) = (inside.clone(), peak.clone());
+    let cli = ScriptedCli::new(move || {
+        let (count, cv) = &*i2;
+        let mut n = count.lock().unwrap();
+        *n += 1;
+        let mut top = p2.lock().unwrap();
+        *top = (*top).max(*n);
+        drop(top);
+        cv.notify_all();
+        // Wait (at most 2 s) until the other child is inside too.
+        let (mut n, _) = cv
+            .wait_timeout_while(n, Duration::from_secs(2), |n| *n < 2)
+            .unwrap();
+        *n -= 1;
+        drop(n);
+        ok_token()
+    });
+    let r5 = Arc::new(r5(cli));
+    // The launch check runs first, so both threads find a verified CLI.
+    r5.launch_check(None).unwrap();
+    let threads: Vec<_> = (0..2)
+        .map(|_| {
+            let r5 = r5.clone();
+            std::thread::spawn(move || drop(r5.run_auth_token("caller-profile").unwrap()))
+        })
+        .collect();
+    for t in threads {
+        t.join().unwrap();
+    }
+    assert_eq!(
+        *peak.lock().unwrap(),
+        2,
+        "the second child waited for the first"
+    );
+}

@@ -6,6 +6,7 @@
 //! - `env-names` prints the name of every env variable it received, one per
 //!   line (names only, never values).
 //! - `sleep` waits 60 s, so a test can check the child timeout.
+//! - `orphan` starts `nap` (a 5 s wait) as a grandchild on the same pipes, then exits.
 //! - anything else exits with code 2.
 
 use std::path::PathBuf;
@@ -27,6 +28,13 @@ fn main() {
             }
         }
         "sleep" => std::thread::sleep(std::time::Duration::from_secs(60)),
+        "nap" => std::thread::sleep(std::time::Duration::from_secs(5)),
+        "orphan" => {
+            let exe = std::env::current_exe().expect("own path");
+            // The grandchild inherits stdout and stderr, so the pipes stay open while it naps.
+            let _ = std::process::Command::new(exe).arg("nap").spawn();
+            println!("parent done");
+        }
         _ => {
             eprintln!("fake-databricks: unknown command");
             std::process::exit(2);

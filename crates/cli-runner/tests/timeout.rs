@@ -153,3 +153,46 @@ fn w_04a_a_real_hung_cli_child_is_killed_at_the_timeout() {
         start.elapsed()
     );
 }
+
+/// [W-01b] [W-04b] the Debug of a child output shows only the exit code and byte counts
+#[test]
+fn w_01b_w_04b_debug_of_a_child_output_never_shows_the_output() {
+    let out = ProcOutput {
+        code: Some(0),
+        stdout: b"{\"access_token\":\"test-token-not-real\"}".to_vec(),
+        stderr: b"debug test-token-not-real".to_vec(),
+    };
+    let text = format!("{out:?}");
+    assert!(!text.contains("test-token-not-real"), "{text}");
+    assert!(!text.contains("116"), "no byte values: {text}");
+    assert_eq!(
+        text,
+        "ProcOutput { code: Some(0), stdout: \"<38 bytes>\", stderr: \"<25 bytes>\" }"
+    );
+    let res: Result<ProcOutput, CliError> = Ok(out);
+    assert!(!format!("{res:?}").contains("test-token-not-real"));
+}
+
+/// [W-04a] a grandchild that keeps the pipes open cannot hold the call past the timeout
+#[cfg(unix)]
+#[test]
+fn w_04a_a_grandchild_on_the_pipes_cannot_outlast_the_timeout() {
+    let dir = install_fake("orphan");
+    let mut r = CliRunner::new(
+        RealFs,
+        real_env_for(&dir),
+        RealProcess,
+        CliPolicy::default(),
+    )
+    .with_timeout(Duration::from_millis(1500));
+    r.launch_check(None).unwrap();
+    let start = Instant::now();
+    // The child starts a grandchild that naps 5 s on the inherited pipes, then exits at once.
+    let err = r.run(["orphan"]).unwrap_err();
+    assert_eq!(err, CliError::TimedOut);
+    assert!(
+        start.elapsed() < Duration::from_millis(4000),
+        "the call waited for the grandchild: {:?}",
+        start.elapsed()
+    );
+}
