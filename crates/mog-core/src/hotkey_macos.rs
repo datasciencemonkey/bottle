@@ -522,6 +522,8 @@ mod sys {
     const EVENT_NOT_HANDLED_ERR: i32 = -9874;
     /// The signature of the Bottle hot keys ('BTLE').
     const HOT_KEY_SIGNATURE: u32 = u32::from_be_bytes(*b"BTLE");
+    /// Carbon `kEventDurationNoWait`: a pull that does not wait.
+    const EVENT_DURATION_NO_WAIT: f64 = 0.0;
     /// Carbon `kEventParamDirectObject` ('----') and `typeEventHotKeyID` ('hkid').
     const EVENT_PARAM_DIRECT_OBJECT: u32 = u32::from_be_bytes(*b"----");
     const TYPE_EVENT_HOT_KEY_ID: u32 = u32::from_be_bytes(*b"hkid");
@@ -619,6 +621,16 @@ mod sys {
         ) -> i32;
         fn UnregisterEventHotKey(hot_key: EventHotKeyRef) -> i32;
         fn GetEventKind(event: EventRef) -> u32;
+        fn ReceiveNextEvent(
+            num_types: usize,
+            list: *const EventTypeSpec,
+            timeout: f64,
+            pull_event: u8,
+            out_event: *mut EventRef,
+        ) -> i32;
+        fn SendEventToEventTarget(event: EventRef, target: EventTargetRef) -> i32;
+        fn GetEventDispatcherTarget() -> EventTargetRef;
+        fn ReleaseEvent(event: EventRef);
         fn GetEventParameter(
             event: EventRef,
             name: u32,
@@ -831,7 +843,8 @@ mod sys {
         talk_key: TalkKey,
         engine: Mutex<HotkeyEngine>,
         probe: MacProbe,
-        clock: SystemClock,
+        /// One clock for the engine and the watchdog, so their times compare.
+        clock: Arc<SystemClock>,
         tap_port: AtomicPtr<c_void>,
         /// The other-key tap of CAP-44c (ADR 0017). It is on only while
         /// `HotkeyEngine::other_key_window_open` is true.
@@ -857,6 +870,49 @@ mod sys {
             // The main queue is FIFO, so a grab and its release run in order.
             unsafe { dispatch_async_f(&_dispatch_main_q, ctx, ask_key_on_main) };
         }
+
+        fn drain(&self) {
+            let Some(me) = self.0.upgrade() else { return };
+            let ctx = Box::into_raw(Box::new(me)).cast::<c_void>();
+            // SAFETY: `ask_key_drain_on_main` frees `ctx`. It runs on the main thread, where
+            // Carbon delivers the hot-key events.
+            unsafe { dispatch_async_f(&_dispatch_main_q, ctx, ask_key_drain_on_main) };
+        }
+    }
+
+    /// The most queued hot-key presses that one drain handles. A held G repeats, so the count
+    /// is bounded; the engine's ASK_UP_GRACE bounds the wait in any case.
+    const DRAIN_MAX_EVENTS: usize = 32;
+
+    /// RTR-17a (review M1): handle every hot-key press that Carbon has queued, then let the
+    /// engine decide the waiting key-up. So a G tapped before the release is seen first, also
+    /// when the main thread was busy. The engine lock is not held while the events run, because
+    /// `ask_key_handler` takes it.
+    extern "C" fn ask_key_drain_on_main(ctx: *mut c_void) {
+        // SAFETY: `ctx` is the box made in `drain`, used once.
+        let shared = *unsafe { Box::from_raw(ctx.cast::<Arc<Shared>>()) };
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let types = [EventTypeSpec {
+                event_class: EVENT_CLASS_KEYBOARD,
+                event_kind: EVENT_HOT_KEY_PRESSED,
+            }];
+            for _ in 0..DRAIN_MAX_EVENTS {
+                let mut event: EventRef = ptr::null_mut();
+                // SAFETY: a no-wait pull of one queued hot-key press; the event is sent to
+                // the dispatcher (so its handler runs) and then released.
+                unsafe {
+                    if ReceiveNextEvent(1, types.as_ptr(), EVENT_DURATION_NO_WAIT, 1, &mut event)
+                        != 0
+                        || event.is_null()
+                    {
+                        break;
+                    }
+                    SendEventToEventTarget(event, GetEventDispatcherTarget());
+                    ReleaseEvent(event);
+                }
+            }
+            lock(&shared.engine).on_ask_key_drained();
+        }));
     }
 
     extern "C" fn ask_key_on_main(ctx: *mut c_void) {
@@ -1312,14 +1368,16 @@ mod sys {
         /// A service for `talk_key` (D66 default: [`TalkKey::RightOption`]) that sends its
         /// outputs to `sink`. Nothing starts until [`HotkeyService::start`].
         pub fn new(talk_key: TalkKey, sink: Arc<dyn HotkeySink>) -> Self {
+            let clock = Arc::new(SystemClock::new());
             let shared = Arc::new_cyclic(|me| Shared {
                 me: me.clone(),
                 talk_key,
                 engine: Mutex::new(
-                    HotkeyEngine::new(sink).with_ask_key(Arc::new(AskKeyHandle(me.clone()))),
+                    HotkeyEngine::with_clock(sink, clock.clone())
+                        .with_ask_key(Arc::new(AskKeyHandle(me.clone()))),
                 ),
                 probe: MacProbe::new(talk_key),
-                clock: SystemClock::new(),
+                clock,
                 tap_port: AtomicPtr::new(ptr::null_mut()),
                 other_port: AtomicPtr::new(ptr::null_mut()),
                 other_on: AtomicBool::new(false),

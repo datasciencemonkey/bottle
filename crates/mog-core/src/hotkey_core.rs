@@ -66,6 +66,12 @@ pub const OTHER_KEY_CANCEL_WINDOW: Duration = Duration::from_secs(1);
 /// 120 s PTT safety stop of R2 (CAP-04a), so Option+G never stays grabbed after the capture ends.
 pub const ASK_KEY_MAX_HOLD: Duration = Duration::from_secs(120);
 
+/// The longest wait of a key-up for the queued ask-key presses (RTR-17a, ADR 0098). The ask key
+/// is handled on the main thread and the key-up on the tap thread, so a G tapped just before the
+/// release can come after the key-up. The engine waits for [`AskKeyControl::drain`]; this bound
+/// keeps the key-up on time if the drain never comes. The watchdog tick checks it.
+pub const ASK_UP_GRACE: Duration = Duration::from_millis(200);
+
 /// A modifier-only talk key (CAP-35b, D66). The default is Right-Option.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum TalkKey {
@@ -490,6 +496,11 @@ pub trait AskKeyControl: Send + Sync {
     /// Grab (`true`) or release (`false`) the ask key. It must return fast: the tap callback
     /// calls it with the engine lock held. The OS layer may do the work later, in order.
     fn set_ask_key(&self, on: bool);
+
+    /// Handle every ask-key press that the OS has queued now, then call
+    /// [`HotkeyEngine::on_ask_key_drained`]. The engine calls it at a key-up with the ask key
+    /// grabbed and no G seen yet. It must return fast, as `set_ask_key` must.
+    fn drain(&self);
 }
 
 /// The state of the fallback chord registration.
@@ -525,6 +536,8 @@ pub struct HotkeyEngine {
     ask_key_since: Option<Duration>,
     /// The hold passed [`ASK_KEY_MAX_HOLD`]: the ask key stays released until the hold ends.
     ask_key_expired: bool,
+    /// The time of a talk-key up that waits for the ask-key drain (RTR-17a, review M1).
+    pending_up: Option<Duration>,
 }
 
 impl std::fmt::Debug for HotkeyEngine {
@@ -562,6 +575,7 @@ impl HotkeyEngine {
             ask_key: None,
             ask_key_since: None,
             ask_key_expired: false,
+            pending_up: None,
         }
     }
 
@@ -581,6 +595,34 @@ impl HotkeyEngine {
         }
     }
 
+    /// The OS layer has handled every ask-key press that was queued at the drain request
+    /// ([`AskKeyControl::drain`]). A key-up that waits for it goes out now, as an ask if a G
+    /// came. A late drain does nothing.
+    pub fn on_ask_key_drained(&mut self) {
+        self.resolve_pending_up();
+    }
+
+    /// A key-up waits for the drain only when it can still become an ask: a talk-key hold that
+    /// is no tap, with the ask key grabbed and no G seen yet.
+    fn up_waits_for_ask_key(&self) -> bool {
+        self.ask_key.is_some()
+            && self.ask_key_since.is_some()
+            && !self.ask
+            && self.machine.held_by == Some(TalkKeyMode::TalkKey)
+            && self
+                .held_since
+                .is_some_and(|t| self.clock.now().saturating_sub(t) >= TAP_MAX_HOLD)
+    }
+
+    /// End a key-up that waits for the drain.
+    fn resolve_pending_up(&mut self) {
+        if self.pending_up.take().is_some() {
+            let out = self.machine.on_talk_key(KeyEdge::Up);
+            let out = self.timed(out);
+            self.emit(out);
+        }
+    }
+
     /// Another key went down (CAP-44c). The OS layer gives no key identity. In the first
     /// [`OTHER_KEY_CANCEL_WINDOW`] of a hold the PTT ends with `cancel`, so no STT call
     /// starts; later the key is ignored.
@@ -596,8 +638,10 @@ impl HotkeyEngine {
     /// A PTT is held and it started less than [`OTHER_KEY_CANCEL_WINDOW`] ago. The macOS
     /// layer listens to other key-downs only while this is true (ADR 0017).
     pub fn other_key_window_open(&self) -> bool {
-        // Only a talk-key hold: under Secure Event Input (chord mode) taps get no KeyDown.
+        // Only a talk-key hold: under Secure Event Input (chord mode) taps get no KeyDown. A
+        // key-up that waits for the ask-key drain has ended the hold for the user.
         self.machine.held_by == Some(TalkKeyMode::TalkKey)
+            && self.pending_up.is_none()
             && self
                 .held_since
                 .is_some_and(|t| self.clock.now().saturating_sub(t) < OTHER_KEY_CANCEL_WINDOW)
@@ -696,6 +740,17 @@ impl HotkeyEngine {
 
     /// The tap saw the talk key.
     pub fn on_talk_key(&mut self, edge: KeyEdge) {
+        // A new edge ends a key-up that still waits for the drain.
+        self.resolve_pending_up();
+        // RTR-17a (review M1): a G tapped just before the release can still be queued on the
+        // main thread. The key-up waits for the drain, at most ASK_UP_GRACE.
+        if edge == KeyEdge::Up && self.up_waits_for_ask_key() {
+            self.pending_up = Some(self.clock.now());
+            if let Some(ctl) = &self.ask_key {
+                ctl.drain();
+            }
+            return;
+        }
         let out = self.machine.on_talk_key(edge);
         let out = self.timed(out);
         self.emit(out);
@@ -728,10 +783,17 @@ impl HotkeyEngine {
 
     /// One watchdog tick, every [`WATCHDOG_TICK`]. The first tick records the baseline.
     pub fn tick(&mut self, now: Duration, probe: &dyn PlatformProbe, ctl: &dyn TapControl) {
+        // RTR-17a: a key-up whose drain did not come in ASK_UP_GRACE goes out now.
+        if self
+            .pending_up
+            .is_some_and(|t| now.saturating_sub(t) >= ASK_UP_GRACE)
+        {
+            self.resolve_pending_up();
+        }
         // RTR-17a: a hold past the 120 s cap releases the ask key. The hold itself goes on.
         if self
             .ask_key_since
-            .is_some_and(|t| self.clock.now().saturating_sub(t) >= ASK_KEY_MAX_HOLD)
+            .is_some_and(|t| now.saturating_sub(t) >= ASK_KEY_MAX_HOLD)
         {
             self.ask_key_expired = true;
             self.sync_ask_key();
@@ -843,6 +905,7 @@ impl HotkeyEngine {
         }
         if !self.machine.is_held() {
             self.ask = false;
+            self.pending_up = None;
         }
         self.sync_ask_key();
     }
