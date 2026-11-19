@@ -28,6 +28,7 @@ const list: HubRecordings = {
       startedAt: new Date(2026, 10, 19, 14, 0).getTime(),
       durationS: 600,
       status: 'writing_notes',
+      canOpen: true,
     },
     {
       id: 'r2',
@@ -36,6 +37,7 @@ const list: HubRecordings = {
       durationS: 3900,
       status: 'failed',
       error: RECORDING_ERRORS.transcribe_endpoint_missing,
+      canOpen: true,
     },
     {
       id: 'r1',
@@ -43,6 +45,7 @@ const list: HubRecordings = {
       startedAt: new Date(2026, 10, 18, 9, 0).getTime(),
       durationS: 1500,
       status: 'done',
+      canOpen: true,
     },
   ],
 };

@@ -29,13 +29,52 @@ import {
   type HubRecordings,
   type RecordingRow,
 } from '../../shared/recording-view';
-import { SafeMarkdown } from '../card/safe-markdown';
+import { MAX_ANSWER_CHARS, SafeMarkdown } from '../card/safe-markdown';
 import { RecordingAlert } from './RecordControl';
 import { sendRecording, useHubEvent } from './recording-ipc';
 
 const DAY_MS = 86_400_000;
 /** No host is trusted in recording notes: a link shows as text (SEC-25a). */
 const NO_LINKS = { profileHost: '', allowedAppUrls: [] as string[] };
+
+/**
+ * The notes with a real heading scale: `#`/`##` and `###`+ lines become headings (plain text,
+ * never HTML); every other block goes through the card's allowlist renderer. Lines in a code
+ * fence stay code.
+ */
+function Notes({ text }: { text: string }) {
+  const out: React.ReactNode[] = [];
+  let chunk: string[] = [];
+  let fence = false;
+  const flush = () => {
+    if (chunk.join('').trim() !== '')
+      out.push(<SafeMarkdown key={`m${out.length}`} text={chunk.join('\n')} trust={NO_LINKS} />);
+    chunk = [];
+  };
+  for (const line of text.slice(0, MAX_ANSWER_CHARS).split(/\r?\n/)) {
+    if (line.startsWith('```')) fence = !fence;
+    const h = fence ? null : /^(#{1,6})\s+(.*)$/.exec(line);
+    if (!h) {
+      chunk.push(line);
+      continue;
+    }
+    flush();
+    const words = (h[2] ?? '').replace(/[*`_]/g, '').trim();
+    out.push(
+      (h[1] ?? '').length <= 2 ? (
+        <h4 key={`h${out.length}`} className="rec-h2">
+          {words}
+        </h4>
+      ) : (
+        <h5 key={`h${out.length}`} className="rec-h3">
+          {words}
+        </h5>
+      ),
+    );
+  }
+  flush();
+  return <>{out}</>;
+}
 
 const askForList = () => sendRecording({ action: 'recordings.ready' });
 
@@ -81,7 +120,8 @@ function groupByDay(rows: RecordingRow[], now: number) {
 }
 
 function Status({ row }: { row: Pick<RecordingRow, 'status'> }) {
-  const busy = row.status !== 'done' && row.status !== 'failed';
+  const busy =
+    row.status === 'uploading' || row.status === 'transcribing' || row.status === 'writing_notes';
   return (
     <span className="rec-status" data-status={row.status}>
       <span className="rec-status-dot" aria-hidden="true" data-busy={busy || undefined} />
@@ -128,7 +168,7 @@ function Detail({
             <Status row={{ status }} />
           </p>
         </div>
-        {status !== 'recording' && (
+        {row.canOpen && (
           <button type="button" data-recording-open onClick={open}>
             Open in Databricks
           </button>
@@ -150,7 +190,7 @@ function Detail({
         <section className="rec-notes" aria-label="Notes">
           <h3 className="rec-sub">Notes</h3>
           <div className="rec-md">
-            <SafeMarkdown text={d.notesMd} trust={NO_LINKS} />
+            <Notes text={d.notesMd} />
           </div>
         </section>
       )}
@@ -213,6 +253,8 @@ export function Recordings({
 
   const rows = useMemo(() => list?.rows ?? [], [list]);
   const selected = rows.find((r) => r.id === selectedId);
+  // With nothing selected, the first row is the active option, so the focus ring has a place.
+  const current = selected ?? rows[0];
 
   // Ask for the detail of the selected recording, and again when its status changes.
   const status = selected?.status;
@@ -250,8 +292,14 @@ export function Recordings({
   } else if (list.unavailable && rows.length === 0) {
     body = (
       <div className="rec-message" role="status">
-        <p className="rec-message-title">Bottle can't read your recordings right now.</p>
-        <p className="rec-message-line">They are safe in your volume. Try again in a moment.</p>
+        {list.error ? (
+          <p className="rec-message-title">{list.error.text}</p>
+        ) : (
+          <>
+            <p className="rec-message-title">Bottle can't read your recordings right now.</p>
+            <p className="rec-message-line">They are safe in your volume. Try again in a moment.</p>
+          </>
+        )}
       </div>
     );
   } else if (rows.length === 0) {
@@ -270,7 +318,7 @@ export function Recordings({
           role="listbox"
           aria-label="Recordings"
           tabIndex={0}
-          aria-activedescendant={selected ? `${baseId}-${selected.id}` : undefined}
+          aria-activedescendant={current ? `${baseId}-${current.id}` : undefined}
           onKeyDown={onKeyDown}
         >
           {groups.map((g) => (
@@ -284,6 +332,7 @@ export function Recordings({
                   id={`${baseId}-${r.id}`}
                   role="option"
                   aria-selected={r === selected}
+                  data-active={r === current || undefined}
                   data-recording-row={r.id}
                   className="rec-row"
                   onClick={() => {
@@ -297,19 +346,6 @@ export function Recordings({
                   </span>
                   <span className="rec-row-side">
                     <Status row={r} />
-                    {r.status === 'failed' && (
-                      <button
-                        type="button"
-                        className="rec-link"
-                        data-recording-retry
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          sendRecording({ action: 'recordings.retry', id: r.id });
-                        }}
-                      >
-                        Retry
-                      </button>
-                    )}
                   </span>
                 </div>
               ))}

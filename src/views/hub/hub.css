@@ -1361,12 +1361,15 @@ body {
 }
 
 .rec-on .rec-dot {
-  animation: rec-pulse 1.6s ease-in-out infinite;
+  /* The lamp stays lit: a slightly brighter lamp red on the tinted pill, a gentle breath. */
+  background: color-mix(in srgb, var(--mog-lamp) 85%, var(--mog-on-accent));
+  box-shadow: 0 0 6px rgb(226 72 59 / 55%);
+  animation: rec-pulse 2s ease-in-out infinite;
 }
 
 @keyframes rec-pulse {
   50% {
-    opacity: 0.35;
+    opacity: 0.7;
   }
 }
 
@@ -1446,19 +1449,6 @@ body {
   background: var(--mog-text-muted);
 }
 
-.hub .rec-edit[open] > summary {
-  margin-bottom: 8px;
-}
-
-.hub .rec-edit summary {
-  color: var(--mog-text-muted);
-  font-size: var(--mog-text-sm);
-}
-
-.hub .rec-edit summary:hover {
-  color: var(--mog-text);
-}
-
 .rec-edit {
   max-width: 68ch;
 }
@@ -1527,7 +1517,7 @@ body {
   background: var(--mog-surface-raised);
 }
 
-.rec-list:focus-visible .rec-row[aria-selected='true'] {
+.rec-list:focus-visible .rec-row[data-active] {
   box-shadow: var(--mog-focus-ring);
 }
 
@@ -1578,8 +1568,8 @@ body {
   animation: rec-breathe 1.6s ease-in-out infinite;
 }
 
-.rec-status[data-status='done'] .rec-status-dot {
-  background: var(--mog-spark);
+.rec-status[data-status='recording'] .rec-status-dot {
+  background: var(--mog-lamp);
   opacity: 1;
 }
 
@@ -1639,14 +1629,36 @@ body {
   color: var(--mog-text-muted);
 }
 
+/* "Notes" and "Transcript": section labels that outrank the headings inside the notes. */
 .hub .rec-sub {
-  margin: 28px 0 10px;
+  max-width: 68ch;
+  margin: 28px 0 12px;
+  padding-top: 16px;
+  border-top: 1px solid var(--mog-edge);
+  color: var(--mog-text);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* Headings inside the notes: two steps, more space above than below. */
+.hub .rec-h2 {
+  margin: 20px 0 6px;
+  font-size: var(--mog-text-md);
+  font-weight: 600;
+}
+
+.hub .rec-h3 {
+  margin: 14px 0 4px;
   color: var(--mog-text-muted);
   font-size: var(--mog-text-sm);
   font-weight: 600;
 }
 
-/* Notes: the card's allowlist markdown; a heading line renders as a bold paragraph. */
+.hub .rec-md > .rec-h2:first-child {
+  margin-top: 0;
+}
+
+/* Notes: headings from the view, the rest through the card's allowlist markdown. */
 .rec-md {
   max-width: 68ch;
   line-height: 1.55;

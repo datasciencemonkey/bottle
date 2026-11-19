@@ -281,9 +281,11 @@ describe('Record control (hub)', () => {
     const { el } = await render(<RecordControl model={m} />);
     await click(el.querySelector('[data-recording-start]'));
     expect(emits().at(-1)).toEqual({ action: 'recording.start' });
-    const summary = el.querySelector('[data-recording-edit] summary');
-    expect(summary?.textContent).toBe('Edit instructions for this recording');
-    await click(summary);
+    const toggle = el.querySelector('[data-recording-edit-toggle]');
+    expect(toggle?.textContent).toBe('Edit instructions for this recording');
+    expect(toggle?.getAttribute('aria-expanded')).toBe('false');
+    await click(toggle);
+    expect(toggle?.getAttribute('aria-expanded')).toBe('true');
     const area = el.querySelector<HTMLTextAreaElement>('[data-recording-edit] textarea');
     expect(area?.value).toBe(DEFAULT_INSTRUCTIONS);
     await type(area, 'Only action items.');

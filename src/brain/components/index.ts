@@ -20,6 +20,7 @@ import { wireWipe } from '../wipe-wiring';
 import { wireCliInstall, wireCliSettings } from '../cli-wiring';
 import { cliPlatform } from '../../shared/cli-view';
 import { wireConnectWorkspace } from '../connect-wiring';
+import { recordingProfile } from '../recording-profile';
 import { ipcRecordingApi, wireRecording } from '../recording-wiring';
 import { sendHubSnapshot, wireHubMogs } from '../hub-mogs-wiring';
 import {
@@ -278,13 +279,17 @@ export function startBrain(): Brain {
     // again before any capture. TODO(#95): the short OS notice when the notes are ready, once
     // the notification host has an IPC command.
     wireRecording(bus, {
-      // ADR 0103: the home profile of the last-used MOG, else of the first MOG. Never a guess.
-      api: ipcRecordingApi(bus, async () => {
-        const id = talkTarget.lastUsed() ?? (await components.T1.list()).mogs[0]?.mogId;
-        if (id === undefined) return undefined;
-        const p = (await homes.routerInput(id)).profile;
-        return p === NO_HOME ? undefined : p;
-      }),
+      // ADR 0103: one workspace for the recording: the home that every MOG with a home shares.
+      // Two different homes refuse with `profiles_differ`; Bottle never picks one.
+      api: ipcRecordingApi(bus, () =>
+        recordingProfile({
+          mogs: async () => (await components.T1.list()).mogs.map((m) => m.mogId),
+          home: async (id) => {
+            const p = (await homes.routerInput(id)).profile;
+            return p === NO_HOME ? undefined : p;
+          },
+        }),
+      ),
       platform:
         cliPlatform(globalThis.navigator?.userAgent ?? '') === 'windows' ? 'windows' : 'mac',
       mood: {

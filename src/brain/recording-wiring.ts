@@ -3,7 +3,7 @@
  *
  * The thin hub view sends clicks (id `recording`); the brain owns every rule and every text:
  * - Settings: the knob turns on only after the one consent acknowledgement; the length is a whole
- *   number of minutes from 5 to 180; the notes model is a strict endpoint name; a volume path is
+ *   number of minutes from 5 to 120; the notes model is a strict endpoint name; a volume path is
  *   a strict `/Volumes/c/s/v`; `bottle_audio` is created only on the user's confirm click.
  *   The core checks the knob again before any capture starts (Rust, not only this file).
  * - Record and Stop go to the core (the record key ⌥R is `record-toggle.ts`, #594); the REC state follows `recording.state` (`ends_at_ms`).
@@ -81,6 +81,8 @@ export interface RecSummary {
   durationS: number;
   status: RecordingStatus;
   errorKind?: string;
+  /** The step that failed; Retry starts again there. */
+  errorStage?: RecordingStatus;
 }
 
 /** One transcript segment; times in seconds, absolute across parts. */
@@ -149,6 +151,9 @@ export interface RecordingWireDeps {
 /** The OS notice when the notes of a recording are ready. */
 export const NOTES_READY_TEXT = 'Your call notes are ready.';
 
+/** The refusals of `recordingProfile`: they have their own plain words. */
+const PROFILE_CODES: ReadonlySet<string> = new Set(['no_profile', 'profiles_differ']);
+
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
 const codeOf = (e: unknown): string =>
   isObj(e) && typeof e['error'] === 'string' ? e['error'] : '';
@@ -174,6 +179,18 @@ function controlOf(s: RecState): RecordingControlView {
   return c;
 }
 
+/** The audio is in the volume: past the upload, or failed after it. */
+function inVolume(r: RecSummary): boolean {
+  if (r.status === 'recording' || r.status === 'uploading') return false;
+  if (r.status !== 'failed') return true;
+  return (
+    r.errorKind !== 'upload_failed' &&
+    r.errorStage !== undefined &&
+    r.errorStage !== 'recording' &&
+    r.errorStage !== 'uploading'
+  );
+}
+
 function rowOf(r: RecSummary): RecordingRow {
   const row: RecordingRow = {
     id: r.id,
@@ -181,6 +198,7 @@ function rowOf(r: RecSummary): RecordingRow {
     startedAt: r.startedAt,
     durationS: r.durationS,
     status: r.status,
+    canOpen: inVolume(r),
   };
   if (r.status === 'failed') row.error = recordingNotice(r.errorKind);
   return row;
@@ -271,9 +289,11 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
       // My Files is the default: save it once, so the core knows where to write.
       if (myFiles && settings && !settings.volumePath && settings.myFilesRoot !== myFiles)
         void write({ myFilesRoot: myFiles });
-    } catch {
+    } catch (e) {
       myFiles = null;
-      storageError = RECORDING_TEXT.storageCheckFailed;
+      storageError = PROFILE_CODES.has(codeOf(e))
+        ? recordingNotice(codeOf(e)).text
+        : RECORDING_TEXT.storageCheckFailed;
     }
     publish();
   }
@@ -300,6 +320,11 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
     publish();
   }
 
+  const showError = (e: unknown) => {
+    error = recordingNotice(codeOf(e));
+    publish();
+  };
+
   const refuse = (text: string) => {
     settingsError = text;
     publish();
@@ -308,8 +333,15 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
   async function refreshList(): Promise<void> {
     try {
       rows = await api.list();
-    } catch {
-      if (!gone) toHub(HUB_RECORDINGS_EVENT, { rows: [], unavailable: true });
+    } catch (e) {
+      const code = codeOf(e);
+      if (!gone)
+        toHub(
+          HUB_RECORDINGS_EVENT,
+          PROFILE_CODES.has(code)
+            ? { rows: [], unavailable: true, error: recordingNotice(code) }
+            : { rows: [], unavailable: true },
+        );
       return;
     }
     for (const r of rows) if (!seen.has(r.id)) seen.set(r.id, r.status);
@@ -402,12 +434,16 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
         void load();
         break;
       case 'recording.consent_ack':
-        void write({ consentAck: true });
+        // The one acknowledgement saves the consent and turns the knob on in one write.
+        void write({ consentAck: true, enabled: true });
         break;
       case 'recording.enable':
-        // The consent notice comes first, once. The core checks the knob again on start.
-        if (a.on && !(settings?.consentAck ?? false)) publish();
-        else void write({ enabled: a.on });
+        // The consent notice comes first, once. The check runs in the write queue, so a click
+        // right after the acknowledgement sees it. The core checks the knob again on start.
+        void (writes = writes.then(async () => {
+          if (a.on && !(settings?.consentAck ?? false)) publish();
+          else await writeNow({ enabled: a.on });
+        }));
         break;
       case 'recording.length':
         if (Number.isInteger(a.minutes) && a.minutes >= LENGTH_MIN && a.minutes <= LENGTH_MAX)
@@ -459,13 +495,13 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
         void showDetail(a.id);
         break;
       case 'recordings.retry':
-        void api
-          .retry(a.id)
-          .then(() => refreshList())
-          .catch(() => undefined);
+        void api.retry(a.id).then(
+          () => refreshList(),
+          (e: unknown) => showError(e),
+        );
         break;
       case 'recordings.open':
-        void api.open(a.id).catch(() => undefined);
+        void api.open(a.id).catch((e: unknown) => showError(e));
         break;
     }
   }
@@ -505,6 +541,7 @@ function summaryOf(s: RecordingSummary): RecSummary {
     status: s.status,
   };
   if (s.errorKind !== undefined) r.errorKind = s.errorKind;
+  if (s.errorStage !== undefined) r.errorStage = s.errorStage;
   return r;
 }
 
@@ -540,16 +577,15 @@ export function settingsPatchOf(s: RecSettings): RecordingSettingsPatch {
 
 /**
  * The real `RecordingApi`: the typed `recording_*` commands and the core events on `bus`.
- * `profile` is the brain's home profile (`home-profile.ts`). Every command that reaches
- * Databricks carries it; with none, that command fails `no_profile` and nothing goes out.
+ * `profile` is `recordingProfile` (one workspace for every MOG). Every command that reaches
+ * Databricks carries it; when it refuses, that command fails with its code and nothing goes out.
  */
-export function ipcRecordingApi(
-  bus: BrainBus,
-  profile: () => Promise<ProfileName | undefined>,
-): RecordingApi {
+export function ipcRecordingApi(bus: BrainBus, profile: () => Promise<ProfileName>): RecordingApi {
   const home = async (): Promise<ProfileName> => {
-    const p = await profile().catch(() => undefined);
-    if (p === undefined || p === '') throw { error: 'no_profile' };
+    const p = await profile().catch((e: unknown) => {
+      throw PROFILE_CODES.has(codeOf(e)) ? e : { error: 'no_profile' };
+    });
+    if (p === '') throw { error: 'no_profile' };
     return p;
   };
   return {

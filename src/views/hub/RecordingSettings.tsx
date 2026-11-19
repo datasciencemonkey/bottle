@@ -6,7 +6,7 @@
  * before any capture starts. The first turn-on shows the consent notice once, with one
  * acknowledgement. The view never builds a path or a URL; it only sends what the user typed.
  */
-import { useId, useState, type FormEvent } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import {
   CATALOG_SCHEMA,
   DEFAULT_INSTRUCTIONS,
@@ -25,7 +25,18 @@ const isPreset = (m: number) => (LENGTH_CHOICES as readonly number[]).includes(m
 function Knob({ model, settings }: { model: HubRecording; settings: RecordingSettingsView }) {
   const [asking, setAsking] = useState(false);
   const id = useId();
+  const knob = useRef<HTMLInputElement>(null);
+  const ok = useRef<HTMLButtonElement>(null);
   const binding = RECORDING_TEXT.binding[model.platform];
+  const open = asking && !settings.consentAck;
+  // The notice takes focus when it opens, so a keyboard or screen-reader user lands on it.
+  useEffect(() => {
+    if (open) ok.current?.focus();
+  }, [open]);
+  const close = () => {
+    setAsking(false);
+    knob.current?.focus();
+  };
   const toggle = (on: boolean) => {
     if (on && !settings.consentAck) setAsking(true);
     else sendRecording({ action: 'recording.enable', on });
@@ -35,38 +46,48 @@ function Knob({ model, settings }: { model: HubRecording; settings: RecordingSet
       <div className="rec-knob">
         <label htmlFor={id} className="rec-knob-label">
           <span>Record calls</span>
-          {!asking && <span className="rec-hint">{binding}</span>}
+          {!open && <span className="rec-hint">{binding}</span>}
         </label>
         <input
+          ref={knob}
           id={id}
           type="checkbox"
           role="switch"
           className="hub-switch"
           data-recording-knob
           checked={settings.enabled}
+          aria-expanded={open || undefined}
           onChange={(e) => toggle(e.currentTarget.checked)}
         />
       </div>
-      {asking && !settings.consentAck && (
+      {open && (
         <div
           className="rec-consent"
           data-recording-consent
           role="group"
-          aria-label="Before you record"
+          aria-labelledby={`${id}-consent`}
         >
-          <p className="rec-consent-text">{RECORDING_TEXT.consent}</p>
+          <p className="rec-consent-text" id={`${id}-consent`}>
+            {RECORDING_TEXT.consent}
+          </p>
           <p className="rec-hint">{binding}</p>
-          <button
-            type="button"
-            className="hub-primary"
-            onClick={() => {
-              setAsking(false);
-              sendRecording({ action: 'recording.consent_ack' });
-              sendRecording({ action: 'recording.enable', on: true });
-            }}
-          >
-            Got it
-          </button>
+          <div className="hub-actions">
+            <button
+              ref={ok}
+              type="button"
+              className="hub-primary"
+              onClick={() => {
+                // One atomic ack: the brain saves the consent and turns the knob on.
+                sendRecording({ action: 'recording.consent_ack' });
+                close();
+              }}
+            >
+              Got it
+            </button>
+            <button type="button" onClick={close}>
+              Not now
+            </button>
+          </div>
         </div>
       )}
     </>
@@ -83,7 +104,7 @@ function Length({ minutes }: { minutes: number }) {
   };
   return (
     <form className="rec-length" onSubmit={submit}>
-      <div className="rec-segments" role="radiogroup" aria-label="Recording length">
+      <div className="rec-segments" role="radiogroup" aria-labelledby="recording-length-label">
         {LENGTH_CHOICES.map((m) => (
           <label key={m} className="rec-segment">
             <input
@@ -126,10 +147,12 @@ function Length({ minutes }: { minutes: number }) {
             onBlur={(e) => e.currentTarget.form?.requestSubmit()}
           />
           <span className="rec-hint">
-            {LENGTH_MIN} to {LENGTH_MAX}
+            min, {LENGTH_MIN} to {LENGTH_MAX}
           </span>
         </span>
-      ) : null}
+      ) : (
+        <span className="rec-hint">min</span>
+      )}
     </form>
   );
 }
@@ -320,7 +343,7 @@ export function RecordingSettings({ model }: { model: HubRecording | undefined }
           )}
           <div className="rec-fields">
             <span className="rec-field-label" id="recording-length-label">
-              Length, min
+              Stops after
             </span>
             <Length key={s.lengthMin} minutes={s.lengthMin} />
 

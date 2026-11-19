@@ -117,6 +117,9 @@ export const RECORDING_ERRORS = {
     text: 'Set a home profile on a MOG first, then try again.',
     action: { label: 'Open Settings', target: 'settings' },
   },
+  profiles_differ: {
+    text: 'Your MOGs use different workspaces. Recording needs one workspace for now.',
+  },
   recording_busy: { text: 'A recording is already running.' },
   mic_busy: { text: 'The mic is in use. Finish the dictation, then record.' },
   audio_unreadable: {
@@ -212,11 +215,15 @@ export interface RecordingRow {
   status: RecordingStatus;
   /** Set when `status` is `failed`. */
   error?: RecordingNotice;
+  /** The audio is in the volume, so "Open in Databricks" can show. */
+  canOpen: boolean;
 }
 
 export interface HubRecordings {
   rows: RecordingRow[];
   unavailable?: true;
+  /** Why the list could not be read, when the brain knows a plain reason. */
+  error?: RecordingNotice;
 }
 
 /** One speaker turn: consecutive segments of one speaker, merged. */
@@ -383,7 +390,8 @@ function isRow(v: unknown): v is RecordingRow {
     isNum(v['startedAt']) &&
     isNum(v['durationS']) &&
     isStatus(v['status']) &&
-    optNotice(v['error'])
+    optNotice(v['error']) &&
+    typeof v['canOpen'] === 'boolean'
   );
 }
 
@@ -391,6 +399,7 @@ function isRow(v: unknown): v is RecordingRow {
 export function asHubRecordings(p: unknown): HubRecordings | undefined {
   if (!isObj(p) || !Array.isArray(p['rows']) || !p['rows'].every(isRow)) return undefined;
   if (p['unavailable'] !== undefined && p['unavailable'] !== true) return undefined;
+  if (!optNotice(p['error'])) return undefined;
   return p as unknown as HubRecordings;
 }
 

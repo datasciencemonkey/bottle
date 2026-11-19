@@ -7,7 +7,7 @@
  * plain text and one action; "Open Settings" moves the hub to Settings, the others go to the
  * brain.
  */
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import {
   DEFAULT_INSTRUCTIONS,
   RECORDING_TEXT,
@@ -118,6 +118,8 @@ export function RecordControl({
 }) {
   const preset = model?.settings?.instructions ?? DEFAULT_INSTRUCTIONS;
   const [text, setText] = useState<string | undefined>(undefined);
+  const [editing, setEditing] = useState(false);
+  const editId = useId();
   const enabled = model?.settings?.enabled === true;
   const phase = model?.control.phase ?? 'idle';
   const live = phase === 'recording' || phase === 'stopping';
@@ -159,12 +161,26 @@ export function RecordControl({
               )}
             </p>
           )}
-          {model && enabled && <p className="rec-hint">{RECORDING_TEXT.binding[model.platform]}</p>}
+          {model && enabled && (
+            <p className="rec-hint">
+              {RECORDING_TEXT.binding[model.platform]}
+              <span aria-hidden="true"> · </span>
+              <button
+                type="button"
+                className="rec-link"
+                data-recording-edit-toggle
+                aria-expanded={editing}
+                aria-controls={editId}
+                onClick={() => setEditing((v) => !v)}
+              >
+                Edit instructions for this recording
+              </button>
+            </p>
+          )}
         </div>
       )}
-      {!live && enabled && (
-        <details className="hub-disclosure rec-edit" data-recording-edit>
-          <summary>Edit instructions for this recording</summary>
+      {!live && enabled && editing && (
+        <div className="rec-edit" id={editId} data-recording-edit>
           <textarea
             aria-label="Instructions for this recording"
             rows={7}
@@ -172,7 +188,7 @@ export function RecordControl({
             onChange={(e) => setText(e.currentTarget.value)}
           />
           <p className="rec-hint">Only this recording uses these. Settings keeps the preset.</p>
-        </details>
+        </div>
       )}
       {model?.error && <RecordingAlert notice={model.error} onSettings={onOpenSettings} />}
     </div>
