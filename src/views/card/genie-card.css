@@ -125,39 +125,166 @@
   visibility: hidden;
 }
 
-/* 2. The answer card. The pill grows into it (GenieCard animates the size). */
+/* 2. The answer card. The pill grows into it (GenieCard animates the size). This card itself
+   never scrolls (review round 1, finding 1): only `.genie-answer-body` (the answer text) does,
+   so the footer (Open in Bottle, Show less) and the close control, both outside it, stay put. A
+   flex column (review round 2, finding 1) is the safety net that guarantees this even when the
+   question, key numbers and footer leave less room than `GenieCard.tsx` estimated: the question,
+   key numbers, the failure block and the footer are `flex: none` (their natural size, never
+   shrunk), so only `.genie-md`/`.genie-answer-body` ever gives up height, and the footer can
+   never clip. `max-height` is the hard cap this flexes inside. */
 .genie-answer,
 .genie-failure,
 .genie-message {
+  display: flex;
+  flex-direction: column;
   width: 100%;
   max-height: 280px;
-  overflow: hidden auto;
+  overflow: hidden;
   padding: 12px 14px;
   border-radius: var(--mog-radius-md);
-  scrollbar-width: thin;
-  scrollbar-color: var(--mog-edge) transparent;
-}
-
-.genie-answer::-webkit-scrollbar,
-.genie-failure::-webkit-scrollbar,
-.genie-message::-webkit-scrollbar {
-  width: 6px;
-}
-
-.genie-answer::-webkit-scrollbar-thumb,
-.genie-failure::-webkit-scrollbar-thumb,
-.genie-message::-webkit-scrollbar-thumb {
-  border-radius: var(--mog-radius-pill);
-  background: var(--mog-edge);
 }
 
 .genie-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   animation: genie-card-in 220ms var(--mog-ease-out) 200ms both;
   transform-origin: left 20px;
 }
 
+/* The one part of the card that may give up height under the `.genie-answer` cap. Its own child,
+   `.genie-answer-body`, does the actual shrinking and scrolling (below). */
+.genie-md {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.genie-question,
+.genie-keys,
+.genie-failure-body,
+.genie-foot {
+  flex: none;
+}
+
+/* The close control: top-right of the card, the same shape as the pop-up's dismiss. */
+.genie-dismiss {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+}
+
+/* The answer clamps to a short summary (`--genie-clamp-px`, set from `ANSWER_CLAMP_PX` in
+   GenieCard.tsx, so the two never drift apart); "Show more" expands it in place, to its own
+   capped height (`--genie-expanded-max-px`) with its own inner scroll (review round 1, finding
+   1 and finding 3's "expands in place, capped height with an inner scroll") — the footer and the
+   close control, both outside this element, never move. */
+.genie-answer-body {
+  flex: none;
+  overflow: hidden;
+  transition: max-height 200ms var(--mog-ease-out);
+}
+
+.genie-answer-body[data-expanded='false'] {
+  max-height: var(--genie-clamp-px, 96px);
+}
+
+/* [LOW, round 2] A hard 70% cut through the last visible line's glyphs reads as broken, not as
+   an intentional fade. Starting the fade earlier keeps the cut inside the fade. */
+.genie-answer-body[data-expanded='false'][data-overflowing='true'] {
+  -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 55%, transparent 100%);
+}
+
+/* `--genie-expanded-max-px` (`GenieCard.tsx`'s `toggleExpanded`) is measured fresh on every Show
+   more from the chrome actually on screen, so the transition's target is accurate, not a guess.
+   `flex: 1 1 auto; min-height: 0` is the safety net (review round 2, finding 1): if that estimate
+   is ever wrong, the flex column above still never lets this grow past what the footer leaves. */
+.genie-answer-body[data-expanded='true'] {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: var(--genie-expanded-max-px, 180px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--mog-edge) transparent;
+}
+
+.genie-answer-body[data-expanded='true']::-webkit-scrollbar {
+  width: 6px;
+}
+
+.genie-answer-body[data-expanded='true']::-webkit-scrollbar-thumb {
+  border-radius: var(--mog-radius-pill);
+  background: var(--mog-edge);
+}
+
+/* B3: a bottom fade shows only while the expanded, scrolled answer still has more below it. */
+.genie-answer-body[data-expanded='true'][data-more-below='true'] {
+  -webkit-mask-image: linear-gradient(to bottom, #000 85%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 85%, transparent 100%);
+}
+
+/* [LOW, round 3] A top fade shows once the user has scrolled past the top, to match: without
+   it, the content was cut hard under the question with no warning that it had scrolled. The
+   combined rule (both fades) wins on specificity when both are true, since it is more selectors. */
+.genie-answer-body[data-expanded='true'][data-scrolled-top='true'] {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 15%);
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 15%);
+}
+
+.genie-answer-body[data-expanded='true'][data-scrolled-top='true'][data-more-below='true'] {
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    #000 15%,
+    #000 85%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 15%, #000 85%, transparent 100%);
+}
+
+/* "Show more"/"Show less": a quiet text control, not a second accent pill (review round 1,
+   finding 2 — one primary action, [Open in Bottle], leads). The vertical gap above the footer
+   lives on `.genie-foot` itself (below), not here: a per-button margin-top with none on
+   `.genie-when` ("now") shifted "now" about 4px above the button baseline (review round 2,
+   finding "also fix if cheap"). */
+.genie-toggle {
+  appearance: none;
+  flex: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--mog-text-muted);
+  font: inherit;
+  font-size: var(--mog-text-sm);
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  cursor: pointer;
+  transition:
+    color 120ms ease-out,
+    text-decoration-color 120ms ease-out;
+}
+
+.genie-toggle:hover {
+  color: var(--mog-text);
+  text-decoration-color: currentColor;
+}
+
+.genie-toggle:focus-visible {
+  outline: none;
+  border-radius: var(--mog-radius-sm);
+  box-shadow: var(--mog-focus-ring);
+}
+
 .genie-question {
   margin: 0 0 6px;
+  /* Room for the close control at the top right. */
+  padding-right: 22px;
   overflow: hidden;
   color: var(--mog-text-muted);
   font-size: var(--mog-text-xs);
@@ -247,7 +374,9 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-top: 10px;
+  /* The 8px that moved here from `.genie-open`/`.genie-toggle` (above), so every footer child
+     aligns on the same baseline instead of only two of three being pushed down. */
+  margin-top: 18px;
   color: var(--mog-text-muted);
   font-size: var(--mog-text-xs);
 }
@@ -346,5 +475,9 @@
 
   .genie-body {
     animation: none;
+  }
+
+  .genie-answer-body {
+    transition: none;
   }
 }

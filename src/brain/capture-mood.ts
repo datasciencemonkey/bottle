@@ -71,6 +71,9 @@ export const REFUSAL_TEXT: Readonly<Record<RefusalReason, { text: string; label:
   },
 };
 
+/** ADR 0103: the capture owner of a call recording. It is not a MOG. */
+export const RECORDING_OWNER = 'bottle-recording';
+
 const IPC_REASONS: ReadonlySet<string> = new Set<RefusalReason>([
   'consent_required',
   'consent_storage_failed',
@@ -110,6 +113,13 @@ export interface CaptureMood {
    * `PENDING_ASK_MS`, so an utterance that never becomes a request does not stay working.
    */
   ask(mogId: MogId, phase: GeniePhase | 'pending'): void;
+  /**
+   * ADR 0103: a call recording started (`on`) or ended. While it runs, each known MOG and each
+   * MOG in `mogIds` shows the REC overlay; the mood does not change.
+   */
+  callRecording(on: boolean, mogIds?: readonly MogId[]): void;
+  /** ADR 0103: the notes of a recording are ready: the answer-ready moment on each known MOG. */
+  recordingReady(): void;
 }
 
 interface Refusal {
@@ -132,16 +142,21 @@ export function createCaptureMood(deps: CaptureMoodDeps): CaptureMood {
   const refusals = new Map<MogId, Refusal>();
   const asks = new Map<MogId, { view: RequestView; cancel?: () => void }>();
   let capture: CaptureState = IDLE;
+  let callRec = false;
+  /** When the last recording notes were ready (the success window of 4.8). */
+  let readyAt: number | undefined;
 
   const publish = (mogId: MogId) => {
     const r = refusals.get(mogId);
     const requests: RequestView[] = r ? [{ phase: 'failed', at: r.at, userMustAct: true }] : [];
     const a = asks.get(mogId);
     if (a) requests.push(a.view);
+    if (readyAt !== undefined) requests.push({ phase: 'completed', at: readyAt });
     const badges: MogBadgeView[] | undefined = r
       ? [{ kind: 'capture_refused', ...REFUSAL_TEXT[r.reason], hoverOnly: false }]
       : undefined;
-    publisher.update(mogId, { mog: READY, capture, requests }, undefined, badges);
+    const sources = { mog: READY, capture, requests, ...(callRec ? { callRecording: true } : {}) };
+    publisher.update(mogId, sources, undefined, badges);
   };
   const clear = (mogId: MogId) => {
     refusals.get(mogId)?.cancel();
@@ -194,7 +209,8 @@ export function createCaptureMood(deps: CaptureMoodDeps): CaptureMood {
     },
     onState(s) {
       capture = s;
-      for (const id of [s.owner, s.directedTo]) if (id) known.add(id);
+      // ADR 0103: the call recording holds the mic as `bottle-recording`, which is not a MOG.
+      for (const id of [s.owner, s.directedTo]) if (id && id !== RECORDING_OWNER) known.add(id);
       const fault = micFault(s);
       for (const [id, r] of refusals) {
         // A new granted capture of this MOG ends its refusal. A repeated state of the lease that
@@ -223,6 +239,21 @@ export function createCaptureMood(deps: CaptureMoodDeps): CaptureMood {
       const leaseAtRefusal = capture.recording ? capture.leaseId : undefined;
       refusals.set(mogId, { reason, at, leaseAtRefusal, cancel });
       publish(mogId);
+    },
+    callRecording(on, mogIds = []) {
+      for (const id of mogIds) known.add(id);
+      callRec = on;
+      for (const id of known) publish(id);
+    },
+    recordingReady() {
+      const at = clock.now();
+      readyAt = at;
+      for (const id of known) publish(id);
+      scheduler.at(at + SUCCESS_MS, () => {
+        if (readyAt !== at) return;
+        readyAt = undefined;
+        for (const id of known) publish(id);
+      });
     },
   };
 }

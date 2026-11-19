@@ -17,6 +17,7 @@ pub mod mog_config_host;
 pub mod mog_drag;
 pub mod profiles_host;
 pub mod rate_bucket_host;
+pub mod recording_cloud_host;
 pub mod recording_host;
 pub mod webview_media;
 pub mod window_host;
@@ -141,14 +142,30 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let _ = link;
-    // ADR 0103: the call recording session over this core. The knob is OFF at launch. Parts
-    // go to the hand-off slot that the cloud side connects; until then they stay in the
-    // user-only temp dir under the app cache dir.
+    // ADR 0103: the call recording session over this core. The knob is seeded from the stored
+    // Settings at connect, with no ask. Parts go to the hand-off slot that the cloud side
+    // connects; until then they stay in the user-only temp dir under the app DATA dir (not the
+    // cache dir: the OS may purge a cache, and a recording that waits for Retry must stay).
     let handoff = std::sync::Arc::new(recording_host::HandoffSlot::default());
+    // The settings file path first, so the seed reads the stored knob (PR C).
+    if let (Some(store), Ok(dir)) = (
+        handle.try_state::<std::sync::Arc<
+            mog_core::recording_cloud::settings_store::JsonSettingsStore,
+        >>(),
+        handle.path().app_config_dir(),
+    ) {
+        store.set_path(dir.join(mog_core::recording_cloud::settings_store::SETTINGS_FILE));
+        // ADR 0103: `record_gate.follow` (in `run`) read the knob before this path existed, so
+        // it always saw the default (off). Catch it up now to a prior "on", so a relaunch with
+        // the knob already on does not need a toggle before ⌥R is grabbed again.
+        if let Some(gate) = handle.try_state::<hotkey_host::RecordKeyGate>() {
+            gate.set(store.load().is_ok_and(|s| s.enabled));
+        }
+    }
     let recording_temp_root = handle
         .path()
-        .app_cache_dir()
-        .map(|d| d.join("recordings"))
+        .app_data_dir()
+        .map(|d| d.join(recording_cloud_host::TEMP_DIR))
         .unwrap_or_else(|_| std::env::temp_dir().join("bottle-recordings"));
     let recording = recording_host::RecordingHost::new(
         &host,
@@ -189,11 +206,22 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
         component.connect_capture(mog_core::recording::CaptureLink {
             capture: std::sync::Arc::clone(recording.session()) as _,
             temp_root: recording_temp_root.clone(),
-            on_knob: std::sync::Arc::new(move |on| {
-                if let Some(r) = weak.upgrade() {
-                    r.set_enabled(on, &*asker);
-                }
-            }),
+            // Launch seeds the stored knob with no ask; only a user OFF to ON asks.
+            on_knob: {
+                let seed_weak = weak.clone();
+                recording_host::knob_hook(
+                    move |on| {
+                        if let Some(r) = seed_weak.upgrade() {
+                            r.seed_enabled(on);
+                        }
+                    },
+                    move |on| {
+                        if let Some(r) = weak.upgrade() {
+                            r.set_enabled(on, &*asker);
+                        }
+                    },
+                )
+            },
             on_start: {
                 let session = std::sync::Arc::downgrade(recording.session());
                 std::sync::Arc::new(move |id, profile, instructions| {
@@ -236,6 +264,9 @@ pub fn run() {
     let record_gate = hotkey_host::RecordKeyGate::default();
     #[cfg(target_os = "macos")]
     let builder = builder.activate_ignoring_other_apps(ACTIVATE_IGNORING_OTHER_APPS);
+    let recording_settings = std::sync::Arc::new(
+        mog_core::recording_cloud::settings_store::JsonSettingsStore::deferred(),
+    );
     builder
         .manage(ipc::BrainChannel::default())
         .manage(ipc::HubChannel::default())
@@ -244,13 +275,17 @@ pub fn run() {
         .manage(std::sync::Arc::new(
             mog_core::app_settings::AppSettings::default(),
         ))
-        // ADR 0103: the `recording_*` component. The settings stay in memory, knob off, until
-        // PR C keeps them in a JSON file in the app config dir. TODO(#65).
-        .manage(std::sync::Arc::new(
-            mog_core::recording::RecordingComponent::new(record_gate.follow(std::sync::Arc::new(
-                mog_core::recording::MemorySettingsStore::default(),
-            ))),
-        ))
+        // ADR 0103: the `recording_*` component on the JSON settings file (PR C). The file
+        // path is set in `setup` by `recording_cloud_host::install`; before that, defaults
+        // (knob off) and no write.
+        .manage(recording_settings.clone())
+        // ADR 0103: the component reads and writes through the JsonSettingsStore (persisted
+        // knob, PR C/#595/#592); `record_gate` wraps it with `KnobFollower` so the ⌥R gate
+        // stays in step with the same store, instead of the standalone `MemorySettingsStore`
+        // this branch used before main grew real persistence.
+        .manage(std::sync::Arc::new(mog_core::recording::RecordingComponent::new(
+            record_gate.follow(recording_settings),
+        )))
         // ADR 0103: the ⌥R key follows the knob of the settings above (`hotkey_host`).
         .manage(record_gate)
         // G-09a, ARC-F3 (#467, #138): the ONE rate bucket of the process.
@@ -330,6 +365,8 @@ pub fn run() {
             // R8 for `mcp_call` (#467). If its HTTP client cannot start, the app still runs;
             // `mcp_call` then answers `host_failed`.
             let _ = mcp_host::install(handle);
+            // ADR 0103 (PR C): the recording cloud host, on the R6 of mcp_host.
+            let _ = recording_cloud_host::install(handle);
             // "Connect a workspace" (#162): `profile_login` over R5 and the W-06a check of R6.
             profiles_host::install_login(handle);
             // R16 for `agent_*` (#307): the one shared AgentHost. If its loopback model proxy

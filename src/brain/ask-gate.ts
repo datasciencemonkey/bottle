@@ -219,8 +219,13 @@ export function createAskGate(deps: AskGateDeps): AskGate {
 }
 
 /**
- * Feed the gate from the brain Channel: chip clicks from the card of the MOG, and Esc
+ * Feed the gate from the brain Channel: chip clicks and hover from the card of the MOG, and Esc
  * (`view:input` `cancel`), which hides the card. Returns `off`.
+ *
+ * `hover` (review round 1, #103): the Genie card reports its own pointer hold the same way the
+ * legacy panel always has, so the stack's own, longer idle timer (UX-12) never ages a completed
+ * Genie blurb out while the user still reads it. TODO(#374): the rest of the card's input
+ * (`toggle_pin`, `open_history`) is not yet routed here.
  */
 export function wireAskGate(
   bus: BrainBus,
@@ -228,11 +233,12 @@ export function wireAskGate(
   card: { hideCard?: (mogId: MogId) => void } = {},
 ): () => void {
   return onViewInput(bus, (input) => {
-    // Only the card of the MOG speaks for its chips.
+    // Only the card of the MOG speaks for its chips and hover.
     if (input.from !== `card-${input.mogId}`) return;
     // UX-19b, #559: a cancel hides the card (the pop-up's fade, Copy and Dismiss).
     // TODO(#374): an in-flight request is cancelled first.
     if (input.kind === 'cancel') card.hideCard?.(input.mogId);
     else if (input.kind === 'chip_click') stackFor(input.mogId).input('chip_click', input.payload);
+    else if (input.kind === 'hover') stackFor(input.mogId).input('hover', input.payload);
   });
 }
