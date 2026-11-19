@@ -58,7 +58,11 @@ pub struct SqlCipherLocalStore {
     dir: PathBuf,
     vault: Arc<dyn KeyVault>,
     conn: Mutex<Option<Connection>>,
+    /// Runs once, after the first open, with no store lock held (the R14 start expiries).
+    on_open: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
+
+type ConnGuard<'a> = std::sync::MutexGuard<'a, Option<Connection>>;
 
 impl SqlCipherLocalStore {
     /// A closed store whose database lives in the memory folder `dir`.
@@ -67,7 +71,45 @@ impl SqlCipherLocalStore {
             dir: dir.into(),
             vault,
             conn: Mutex::new(None),
+            on_open: Mutex::new(None),
         }
+    }
+
+    /// Run `hook` once, right after the first successful open. The store opens on first use,
+    /// so the OS key store is read only when a caller needs the store (ADR 0105).
+    pub fn on_first_open(&self, hook: Box<dyn FnOnce() + Send>) {
+        *self.on_open.lock().unwrap_or_else(|e| e.into_inner()) = Some(hook);
+    }
+
+    /// The open connection. A closed store opens now: one key read, then the hook.
+    fn conn(&self) -> CoreResult<ConnGuard<'_>> {
+        {
+            let mut g = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+            if g.is_some() {
+                return Ok(g);
+            }
+            self.open_locked(&mut g)?;
+        }
+        let hook = self
+            .on_open
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        if let Some(hook) = hook {
+            hook();
+        }
+        let g = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        if g.is_none() {
+            return Err(CoreError::StoreUnavailable { component: ID });
+        }
+        Ok(g)
+    }
+
+    fn open_locked(&self, g: &mut ConnGuard<'_>) -> CoreResult<()> {
+        self.create_dir()?;
+        let key = self.key()?;
+        **g = Some(open_connection(&self.db_path(), &key)?);
+        Ok(())
     }
 
     /// The path of the database file.
@@ -88,7 +130,7 @@ impl SqlCipherLocalStore {
         &self,
         f: impl FnOnce(&Connection) -> rusqlite::Result<T>,
     ) -> CoreResult<T> {
-        let g = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let g = self.conn()?;
         let c = g
             .as_ref()
             .ok_or(CoreError::StoreUnavailable { component: ID })?;
@@ -178,14 +220,7 @@ fn open_connection(path: &Path, key: &LocalKey) -> CoreResult<Connection> {
 
 impl LocalStore for SqlCipherLocalStore {
     fn open(&self) -> CoreResult<()> {
-        let mut g = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        if g.is_some() {
-            return Ok(());
-        }
-        self.create_dir()?;
-        let key = self.key()?;
-        *g = Some(open_connection(&self.db_path(), &key)?);
-        Ok(())
+        self.conn().map(drop)
     }
 
     fn exec(&self, stmt_id: &str, params: serde_json::Value) -> CoreResult<serde_json::Value> {
@@ -195,7 +230,7 @@ impl LocalStore for SqlCipherLocalStore {
         }
         let stmt = catalog::find(stmt_id).ok_or(CoreError::UnknownStatement { component: ID })?;
         require_mog_id_param(&params)?;
-        let g = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let g = self.conn()?;
         let conn = g
             .as_ref()
             .ok_or(CoreError::StoreUnavailable { component: ID })?;
@@ -216,7 +251,7 @@ impl SqlCipherLocalStore {
     ) -> CoreResult<serde_json::Value> {
         require_mog_id_param(params)?;
         let values = catalog::validate_params(group.params, params)?;
-        let g = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let g = self.conn()?;
         let conn = g
             .as_ref()
             .ok_or(CoreError::StoreUnavailable { component: ID })?;
@@ -305,7 +340,7 @@ impl SqlCipherLocalStore {
         &self,
         f: impl FnOnce(&CoreTx<'_>) -> CoreResult<T>,
     ) -> CoreResult<T> {
-        let g = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let g = self.conn()?;
         let conn = g
             .as_ref()
             .ok_or(CoreError::StoreUnavailable { component: ID })?;
