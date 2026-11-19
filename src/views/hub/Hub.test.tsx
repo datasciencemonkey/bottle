@@ -77,7 +77,7 @@ describe('V1 hub view', () => {
     await act(async () => (el.querySelector(`li[data-mog="${A}"] button`) as HTMLElement).click());
     // The hub notice (#27, MB-08a) and the MOG list (#26) ask the brain with hub-scope emits
     // (notice.ready, mogs.ready), the CLI step asks with id `cli` (#161), the permission notice
-    // with id `permissions` (ADR 0101) and Conversations with id `conversations` (#103); the
+    // with id `permissions` (ADR 0101), the connect panel with id `connect` (`ready`) and Conversations with id `conversations` (#103); the
     // sidebar area switches are local state (no emit); the MOG selection is the rest.
     expect(viewEmits()).toContainEqual({
       mogId: 'hub',
@@ -87,7 +87,7 @@ describe('V1 hub view', () => {
     expect(
       viewEmits().filter(
         (e) =>
-          !['hub', 'cli', 'permissions', 'conversations', 'recording', 'store'].includes(
+          !['hub', 'cli', 'permissions', 'conversations', 'recording', 'store', 'connect'].includes(
             (e as { mogId: string }).mogId,
           ),
       ),

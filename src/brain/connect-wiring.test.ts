@@ -6,6 +6,7 @@ import { CONNECT_EVENT, CONNECT_VIEW_ID, type ConnectModel } from '../shared/con
 import { BrainBus } from './bus';
 import {
   CONNECT_TEXT,
+  CONNECTED_CLOSE_MS,
   proposedProfileName,
   wireConnectWorkspace,
   workspaceHost,
@@ -93,7 +94,7 @@ describe('Connect a workspace: URL step (W-07a, W-07b, W-07g)', () => {
     const { bus, last, deps } = setup();
     click(bus, { target: 'connect_open' });
     await flush();
-    expect(last()).toEqual({ step: 'url', firstRun: false });
+    expect(last()).toEqual({ step: 'url', firstRun: false, inline: true });
     click(bus, {
       target: 'connect_url',
       url: 'https://acme-prod.cloud.databricks.com/browse?o=123',
@@ -104,6 +105,7 @@ describe('Connect a workspace: URL step (W-07a, W-07b, W-07g)', () => {
       host: HOST,
       proposedName: 'bottle-acme-prod',
       otherAuthNotice: false,
+      inline: true,
     });
     expect(deps.login).not.toHaveBeenCalled();
   });
@@ -170,7 +172,7 @@ describe('Connect a workspace: sign-in (W-07c, W-07g, W-07h, W-15)', () => {
     });
   });
 
-  it('[W-07h] Cancel stops the CLI child and goes back to the name step', async () => {
+  it('[W-07h] Cancel stops the CLI child and closes the flow (not the name step)', async () => {
     const d = deferred();
     const cancel = vi.fn(async () => d.reject({ error: 'login_cancelled' }));
     const { bus, last, deps } = setup({ login: vi.fn(() => d.p), cancel });
@@ -181,12 +183,7 @@ describe('Connect a workspace: sign-in (W-07c, W-07g, W-07h, W-15)', () => {
     click(bus, { target: 'connect_cancel' });
     await flush();
     expect(cancel).toHaveBeenCalledWith('bottle-acme-prod');
-    expect(last()).toEqual({
-      step: 'name',
-      host: HOST,
-      proposedName: 'bottle-acme-prod',
-      otherAuthNotice: false,
-    });
+    expect(last()).toEqual({ step: 'closed' });
     expect(deps.login).toHaveBeenCalledTimes(1);
   });
 
@@ -342,5 +339,165 @@ describe('Connect a workspace: first run and other profiles (W-07f, W-07i)', () 
 describe('Connect a workspace: pasted URLs (review #583)', () => {
   it('[W-07g] a scheme-less paste with a URL in its query keeps its host', () => {
     expect(workspaceHost('acme-prod.cloud.databricks.com/?next=https://x.example')).toBe(HOST);
+  });
+});
+
+/** A fake timer: the test runs the scheduled function itself. */
+function fakeAfter() {
+  const timers: { ms: number; fn: () => void; cancelled: boolean }[] = [];
+  return {
+    timers,
+    after: (ms: number, fn: () => void) => {
+      const t = { ms, fn, cancelled: false };
+      timers.push(t);
+      return () => {
+        t.cancelled = true;
+      };
+    },
+    fire: () => timers.filter((t) => !t.cancelled).forEach((t) => t.fn()),
+  };
+}
+
+describe('Connect a workspace: where the flow shows and how it ends (review of #605)', () => {
+  it('[W-07e] a flow opened from Settings is inline; the first-run flow is not', async () => {
+    const first = setup({ profiles: async () => [] });
+    ready(first.bus);
+    await flush();
+    expect(first.last()).toEqual({ step: 'url', firstRun: true });
+    const settings = setup();
+    click(settings.bus, { target: 'connect_open' });
+    await flush();
+    expect(settings.last()).toEqual({ step: 'url', firstRun: false, inline: true });
+    click(settings.bus, { target: 'connect_url', url: HOST });
+    await flush();
+    expect(settings.last()).toMatchObject({ step: 'name', inline: true });
+  });
+
+  it('[W-07e] connect_close ends a Settings flow at the URL and name steps', async () => {
+    const { bus, last } = setup();
+    click(bus, { target: 'connect_open' });
+    await flush();
+    click(bus, { target: 'connect_close' });
+    await flush();
+    expect(last()).toEqual({ step: 'closed' });
+    click(bus, { target: 'connect_open' });
+    click(bus, { target: 'connect_url', url: HOST });
+    await flush();
+    click(bus, { target: 'connect_close' });
+    await flush();
+    expect(last()).toEqual({ step: 'closed' });
+    // A new flow from Settings is inline again after a close.
+    click(bus, { target: 'connect_open' });
+    await flush();
+    expect(last()).toEqual({ step: 'url', firstRun: false, inline: true });
+  });
+
+  it('[W-07h] connect_close does nothing while the sign-in runs', async () => {
+    const d = deferred();
+    const { bus, last } = setup({ login: vi.fn(() => d.p) });
+    click(bus, { target: 'connect_open' });
+    click(bus, { target: 'connect_url', url: HOST });
+    await flush();
+    click(bus, { target: 'connect_start', profile: 'bottle-x' });
+    await flush();
+    click(bus, { target: 'connect_close' });
+    await flush();
+    expect(last()).toMatchObject({ step: 'waiting', inline: true });
+  });
+
+  it('[W-07h] Cancel in the wait closes a Settings flow', async () => {
+    const d = deferred();
+    const cancel = vi.fn(async () => d.reject({ error: 'login_cancelled' }));
+    const { bus, last } = setup({ login: vi.fn(() => d.p), cancel });
+    click(bus, { target: 'connect_open' });
+    click(bus, { target: 'connect_url', url: HOST });
+    await flush();
+    click(bus, { target: 'connect_start', profile: 'bottle-x' });
+    await flush();
+    click(bus, { target: 'connect_cancel' });
+    await flush();
+    expect(last()).toEqual({ step: 'closed' });
+  });
+
+  it('[W-07f] Cancel in the wait at first run goes back to the first-run URL step', async () => {
+    const d = deferred();
+    const cancel = vi.fn(async () => d.reject({ error: 'login_cancelled' }));
+    const { bus, last } = setup({ login: vi.fn(() => d.p), cancel, profiles: async () => [] });
+    ready(bus);
+    await flush();
+    click(bus, { target: 'connect_url', url: HOST });
+    await flush();
+    click(bus, { target: 'connect_start', profile: 'bottle-x' });
+    await flush();
+    click(bus, { target: 'connect_cancel' });
+    await flush();
+    expect(last()).toEqual({ step: 'url', firstRun: true });
+  });
+
+  it('[W-07h] connected closes by itself after a few seconds', async () => {
+    const t = fakeAfter();
+    const { bus, last } = setup({ after: t.after });
+    click(bus, { target: 'connect_open' });
+    click(bus, { target: 'connect_url', url: HOST });
+    await flush();
+    click(bus, { target: 'connect_start', profile: 'bottle-x' });
+    await flush();
+    expect(last()).toMatchObject({ step: 'connected', inline: true });
+    expect(t.timers).toHaveLength(1);
+    expect(t.timers[0]?.ms).toBe(CONNECTED_CLOSE_MS);
+    t.fire();
+    expect(last()).toEqual({ step: 'closed' });
+  });
+
+  it('[W-07h] Done (connect_close) closes the connected step at once, and the timer does not fire later', async () => {
+    const t = fakeAfter();
+    const { bus, sent, last } = setup({ after: t.after });
+    click(bus, { target: 'connect_url', url: HOST });
+    await flush();
+    click(bus, { target: 'connect_start', profile: 'bottle-x' });
+    await flush();
+    click(bus, { target: 'connect_close' });
+    await flush();
+    expect(last()).toEqual({ step: 'closed' });
+    expect(t.timers[0]?.cancelled).toBe(true);
+    const n = sent.length;
+    t.fire();
+    expect(sent).toHaveLength(n);
+  });
+
+  it('[W-07f] the first-run flow closes after it connects', async () => {
+    const t = fakeAfter();
+    const { bus, last } = setup({ after: t.after, profiles: async () => [] });
+    ready(bus);
+    await flush();
+    click(bus, { target: 'connect_url', url: HOST });
+    await flush();
+    click(bus, { target: 'connect_start', profile: 'bottle-x' });
+    await flush();
+    expect(last()).toEqual({ step: 'connected', host: HOST, profile: 'bottle-x' });
+    t.fire();
+    expect(last()).toEqual({ step: 'closed' });
+  });
+
+  it('[W-07f] the panel-ready signal sends the open step again, or runs the first-run check', async () => {
+    const first = setup({ profiles: async () => [] });
+    click(first.bus, { target: 'connect_url', url: HOST }); // an open flow, before any view listens
+    await flush();
+    const before = first.sent.length;
+    first.bus.dispatch({
+      event: 'view:input',
+      payload: { from: 'hub', input: { mogId: CONNECT_VIEW_ID, kind: 'ready' } },
+    });
+    await flush();
+    expect(first.sent).toHaveLength(before + 1);
+    expect(first.last()).toMatchObject({ step: 'name' });
+    // Nothing open: the panel-ready signal runs the W-07f check, so a lost first send is made up.
+    const fresh = setup({ profiles: async () => [] });
+    fresh.bus.dispatch({
+      event: 'view:input',
+      payload: { from: 'hub', input: { mogId: CONNECT_VIEW_ID, kind: 'ready' } },
+    });
+    await flush();
+    expect(fresh.last()).toEqual({ step: 'url', firstRun: true });
   });
 });

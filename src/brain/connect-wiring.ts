@@ -113,6 +113,22 @@ export interface ConnectDeps {
   profiles: () => Promise<Profile[]>;
   /** Default: `emitTo('hub', CONNECT_EVENT, model)`. */
   send?: (model: ConnectModel) => Promise<unknown>;
+  /** Runs `fn` after `ms`; returns the cancel. Default: `setTimeout`. Tests inject their own. */
+  after?: (ms: number, fn: () => void) => () => void;
+}
+
+/** How long the connected step shows before the brain closes the flow by itself. */
+export const CONNECTED_CLOSE_MS = 4000;
+
+/** Where the open flow came from: first run (W-07f, setup region) or Settings (W-07e, inline). */
+type Origin = 'first_run' | 'settings';
+
+/** The model without the `inline` flag, so `show` sets it again from the current origin. */
+function stripInline(m: ConnectModel): ConnectModel {
+  if (m.step === 'closed') return m;
+  const rest: Record<string, unknown> = { ...m };
+  delete rest['inline'];
+  return rest as ConnectModel;
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
@@ -125,7 +141,31 @@ function codeOf(e: unknown): string {
 /** Wire the hub form to T7. Returns the unsubscribe. */
 export function wireConnectWorkspace(bus: BrainBus, deps: ConnectDeps): () => void {
   const send = deps.send ?? ((m: ConnectModel) => emitTo('hub', CONNECT_EVENT, m));
-  const show = (m: ConnectModel) => void send(m).catch(() => undefined);
+  const after =
+    deps.after ??
+    ((ms: number, fn: () => void) => {
+      const t = setTimeout(fn, ms);
+      return () => clearTimeout(t);
+    });
+  // The flow was opened from Settings (W-07e): the model carries `inline`, so Settings shows it
+  // under its row and the setup region does not. The last model is kept so a view that mounts
+  // late (or a reloaded hub) gets the current step again.
+  let origin: Origin | undefined;
+  let last: ConnectModel | undefined;
+  let cancelClose: (() => void) | undefined;
+  const show = (m: ConnectModel) => {
+    const out: ConnectModel =
+      m.step !== 'closed' && origin === 'settings' ? { ...m, inline: true } : m;
+    last = out;
+    void send(out).catch(() => undefined);
+  };
+  /** End the flow: both hosts render nothing for `closed`. */
+  const close = () => {
+    cancelClose?.();
+    cancelClose = undefined;
+    origin = undefined;
+    show({ step: 'closed' });
+  };
   const profiles = () => deps.profiles().catch((): Profile[] => []);
 
   let host: string | undefined;
@@ -152,6 +192,11 @@ export function wireConnectWorkspace(bus: BrainBus, deps: ConnectDeps): () => vo
       await deps.login(h, profile, clientId === undefined ? undefined : { clientId });
       running = false;
       show({ step: 'connected', host: h, profile });
+      // The confirmation clears by itself; Done closes it sooner.
+      cancelClose?.();
+      cancelClose = after(CONNECTED_CLOSE_MS, () => {
+        if (last?.step === 'connected') close();
+      });
     } catch (e) {
       running = false;
       const code = codeOf(e);
@@ -161,7 +206,9 @@ export function wireConnectWorkspace(bus: BrainBus, deps: ConnectDeps): () => vo
           await signIn();
           return;
         }
-        show(nameStep());
+        // Cancel ends the flow. First run keeps the URL step: W-07f needs a way to connect.
+        if (origin === 'first_run') show({ step: 'url', firstRun: true });
+        else close();
       } else if (code === 'profile_exists' || code === 'invalid_args') {
         show(nameStep(CONNECT_TEXT[code]));
       } else if (code === 'host_refused') {
@@ -210,20 +257,31 @@ export function wireConnectWorkspace(bus: BrainBus, deps: ConnectDeps): () => vo
     show(nameStep());
   }
 
-  const offReady = onViewInput(bus, (input) => {
-    if (input.from !== 'hub' || input.mogId !== 'hub' || input.kind !== 'ready') return;
+  /** Show the current step again, or run the W-07f first-run check when nothing is open. */
+  const refresh = () => {
+    if (last !== undefined && last.step !== 'closed') {
+      show(stripInline(last));
+      return;
+    }
     // W-07f: no usable profile (none, or only PAT or service-principal profiles) opens the URL
-    // step. A usable profile sends the explicit `closed` state, so the hub view (which renders
-    // nothing without a model anyway) also has a model confirming there is nothing to do; a
-    // later `connect_open` (the Settings row) still reopens it. A failed `profiles_list` call
-    // sends nothing at all (the comment above `ConnectDeps.profiles` still holds: "the form
-    // opens only from its button").
+    // step. A usable profile sends the explicit `closed` state. A failed `profiles_list` call
+    // sends nothing: the form opens only from the Settings row.
     void deps
       .profiles()
       .then((list) => {
-        show(list.some((p) => p.supported) ? { step: 'closed' } : { step: 'url', firstRun: true });
+        if (list.some((p) => p.supported)) show({ step: 'closed' });
+        else {
+          origin = 'first_run';
+          show({ step: 'url', firstRun: true });
+        }
       })
       .catch(() => undefined);
+  };
+
+  const offReady = onViewInput(bus, (input) => {
+    if (input.from !== 'hub' || input.kind !== 'ready') return;
+    // The hub is ready, or the connect panel (`mogId` `connect`) mounted and listens.
+    if (input.mogId === 'hub' || input.mogId === CONNECT_VIEW_ID) refresh();
   });
 
   const offClick = onViewInput(bus, (input) => {
@@ -232,7 +290,14 @@ export function wireConnectWorkspace(bus: BrainBus, deps: ConnectDeps): () => vo
     if (!isObj(p)) return;
     switch (p['target']) {
       case 'connect_open':
-        if (!running) show({ step: 'url', firstRun: false });
+        if (running) break;
+        cancelClose?.();
+        cancelClose = undefined;
+        origin ??= 'settings';
+        show({ step: 'url', firstRun: origin === 'first_run' });
+        break;
+      case 'connect_close':
+        if (!running) close();
         break;
       case 'connect_url':
         if (!running && typeof p['url'] === 'string') void onUrl(p['url']);
@@ -263,6 +328,7 @@ export function wireConnectWorkspace(bus: BrainBus, deps: ConnectDeps): () => vo
   });
 
   return () => {
+    cancelClose?.();
     offReady();
     offClick();
   };

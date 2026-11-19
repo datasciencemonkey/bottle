@@ -6,14 +6,15 @@
  * explicit `closed` step). That leaves no way to add a second workspace once a usable profile
  * already exists, so this row is the one quiet, deliberate way back in: it sends the same
  * `connect_open` click the view's old always-visible button used to send (`view_emit`, id
- * `connect`, ARC-2, MOG-08a). The brain (`connect-wiring.ts`) then opens the flow exactly as it
- * does from any other `connect_open` click, and it shows wherever `ConnectWorkspace` is mounted
- * (the setup region, above every hub area). There is exactly one entry point for `connect_open`
- * in the hub: this row.
+ * `connect`, ARC-2, MOG-08a). The brain (`connect-wiring.ts`) then opens the flow with
+ * `inline: true`, and it shows right under this row (a second `ConnectWorkspace`, with Cancel
+ * and Done), with focus on its first field. There is exactly one entry point for `connect_open`
+ * in the hub: this row. W-07e also asks for disconnecting a profile; that is not done here.
  */
 import { CONNECT_VIEW_ID } from '../../shared/connect-view';
 import { Button } from '../ui/button';
 import { emitView } from '../view-ipc';
+import { ConnectWorkspace } from './ConnectWorkspace';
 import { SettingsGroup, SettingsRow } from './SettingsGroup';
 
 export function ConnectAnotherWorkspace() {
@@ -45,6 +46,9 @@ export function ConnectAnotherWorkspace() {
           }
         />
       </SettingsGroup>
+      {/* The flow shows here, under the row that opened it (the brain sets `inline`), not in the
+          setup region at the top of the page, which is out of sight from this row. */}
+      <ConnectWorkspace placement="settings" />
     </section>
   );
 }

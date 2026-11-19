@@ -18,7 +18,9 @@ export type ConnectTarget =
   | 'connect_start'
   | 'connect_cancel'
   | 'connect_reopen'
-  | 'connect_retry';
+  | 'connect_retry'
+  /** Close the flow (the Cancel of a Settings-opened step, or Done). The brain answers `closed`. */
+  | 'connect_close';
 
 /** The one action of a failed step (W-07h, Table W-ERR). */
 export interface ConnectAction {
@@ -26,7 +28,7 @@ export interface ConnectAction {
   target: 'connect_retry' | 'connect_open';
 }
 
-export type ConnectModel =
+type ConnectStep =
   /** W-07a: ask for the workspace URL. `firstRun` (W-07f): no usable profile exists. */
   | { step: 'url'; firstRun: boolean; error?: string }
   /** W-07g, W-07i: the host, an editable proposed name, and the PAT/SP notice. */
@@ -35,12 +37,18 @@ export type ConnectModel =
   | { step: 'waiting'; host: string; profile: string }
   | { step: 'connected'; host: string; profile: string }
   /** W-07h: the Table W-ERR text and one action. */
-  | { step: 'failed'; host: string; profile: string; text: string; action: ConnectAction }
+  | { step: 'failed'; host: string; profile: string; text: string; action: ConnectAction };
+
+/**
+ * `inline` (W-07e): the flow was opened from the Settings row, so Settings shows it under that
+ * row and the setup region does not. Without it, the setup region shows it (first run, W-07f).
+ */
+export type ConnectModel =
+  | (ConnectStep & { inline?: boolean })
   /**
-   * W-07f: the brain's explicit "nothing to do" state, sent when the hub is ready and a usable
-   * profile already exists. The hub view renders nothing for this step (and for no model at
-   * all); `connect_open` (the Settings row, "Connect another workspace…") is the one way to
-   * leave it.
+   * The brain's explicit "nothing to open" state: a usable profile exists (W-07f), or the flow
+   * ended (Done, Cancel, or the connected step timed out). No view renders anything for it;
+   * `connect_open` (the Settings row, "Connect another workspace…") is the way to leave it.
    */
   | { step: 'closed' };
 
@@ -51,6 +59,7 @@ const optStr = (v: unknown) => v === undefined || str(v);
 /** The model, or `undefined` for a payload that is not one. */
 export function asConnectModel(v: unknown): ConnectModel | undefined {
   if (!isObj(v)) return undefined;
+  if (v['inline'] !== undefined && typeof v['inline'] !== 'boolean') return undefined;
   switch (v['step']) {
     case 'url':
       return typeof v['firstRun'] === 'boolean' && optStr(v['error'])

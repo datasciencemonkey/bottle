@@ -4,7 +4,7 @@
  * again from Settings, now that the setup region's step stays hidden until the brain opens it.
  */
 import { act } from 'react';
-import { CONNECT_VIEW_ID } from '../../shared/connect-view';
+import { CONNECT_EVENT, CONNECT_VIEW_ID } from '../../shared/connect-view';
 import { inputEmits, render, tauri } from '../test-tauri';
 import { ConnectAnotherWorkspace } from './ConnectAnotherWorkspace';
 import { Hub } from './Hub';
@@ -50,5 +50,29 @@ describe('Connect another workspace (Settings row)', () => {
       kind: 'click',
       payload: { target: 'connect_open' },
     });
+  });
+
+  it('[W-07e] the flow opens inline under the row, not in the setup region, with focus on the URL field', async () => {
+    const { el } = await render(<Hub />);
+    await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-toggle]')?.click());
+    await act(async () =>
+      el.querySelector<HTMLButtonElement>('[data-sidebar-item="settings"]')?.click(),
+    );
+    await click(el.querySelector('[data-connect-another-open]'));
+    // The brain answers the click with the URL step, marked inline.
+    await tauri.emitTo('hub', CONNECT_EVENT, { step: 'url', firstRun: false, inline: true });
+    const row = el.querySelector('[data-view="connect-another-workspace"]');
+    expect(row?.querySelector('[data-view="connect-workspace"]')).not.toBeNull();
+    expect(el.querySelector('[data-setup-region] [data-view="connect-workspace"]')).toBeNull();
+    expect(document.activeElement).toBe(el.querySelector('input[name="workspace-url"]'));
+    // Cancel closes it again.
+    await click(el.querySelector('[data-connect-close]'));
+    expect(inputEmits()).toContainEqual({
+      mogId: CONNECT_VIEW_ID,
+      kind: 'click',
+      payload: { target: 'connect_close' },
+    });
+    await tauri.emitTo('hub', CONNECT_EVENT, { step: 'closed' });
+    expect(el.querySelector('[data-view="connect-workspace"]')).toBeNull();
   });
 });

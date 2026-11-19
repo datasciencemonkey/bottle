@@ -840,6 +840,46 @@
     border-bottom: 1px solid rgb(255 255 255 / 10%);
   }
 
+  /* The same 616px measure as the MOGs/Settings content below it (review of #605, LOW 3), so the
+   hairline does not run past it; Conversations and Recordings (`hub--wide`) keep the full width.
+   The first Settings section loses its own top line: the header's hairline already is one. */
+  .hub:not(.hub--wide) .hub-area-header {
+    max-width: 616px;
+  }
+
+  .hub [data-hub-view='settings'] > .hub-section:first-child {
+    border-top: 0;
+  }
+
+  /* "Connect a workspace" steps (first run in the setup region, or inline under the Settings
+   row): the label sits above a full-width field, with the buttons in one row below it. */
+  .hub [data-view='connect-workspace'] form,
+  .hub [data-view='connect-workspace'] [data-connect-step='waiting'],
+  .hub [data-view='connect-workspace'] [data-connect-step='connected'],
+  .hub [data-view='connect-workspace'] [data-connect-step='failed'] {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--mog-space-2) var(--mog-space-3);
+  }
+
+  .hub [data-view='connect-workspace'] form > :is(p, label, details),
+  .hub [data-view='connect-workspace'] [data-connect-step] > p {
+    flex: 1 1 100%;
+    margin: 0;
+  }
+
+  .hub [data-view='connect-workspace'] label {
+    display: flex;
+    flex-direction: column;
+    gap: var(--mog-space-1);
+  }
+
+  .hub [data-view='connect-workspace'] input {
+    width: 100%;
+    max-width: 480px;
+  }
+
   .hub-area-title {
     margin: 0;
     font-size: var(--mog-text-xl);

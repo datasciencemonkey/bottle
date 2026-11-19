@@ -6,7 +6,7 @@
  */
 import { act } from 'react';
 import { CONNECT_EVENT, CONNECT_VIEW_ID } from '../../shared/connect-view';
-import { inputEmits, render, tauri } from '../test-tauri';
+import { inputEmits, render, tauri, viewEmits } from '../test-tauri';
 import { ConnectWorkspace } from './ConnectWorkspace';
 import { Hub } from './Hub';
 
@@ -152,5 +152,127 @@ describe('Connect a workspace (hub view)', () => {
     expect(el.querySelector('[data-view="connect-workspace"]')).toBeNull();
     await tauri.emitTo('hub', CONNECT_EVENT, { step: 'url', firstRun: true });
     expect(el.querySelector('[data-view="connect-workspace"]')).not.toBeNull();
+  });
+
+  it('[W-07f] the setup panel sends ready (id connect) once it listens, so the brain sends the step again', async () => {
+    await render(<ConnectWorkspace />);
+    expect(viewEmits()).toContainEqual({ mogId: CONNECT_VIEW_ID, kind: 'ready' });
+    expect(inputEmits()).toEqual([]);
+    tauri.reset();
+    await render(<ConnectWorkspace placement="settings" />);
+    expect(viewEmits()).toEqual([]);
+  });
+
+  it('[W-07f] the first-run steps have no Cancel (W-07f needs a way to connect)', async () => {
+    const { el } = await render(<ConnectWorkspace />);
+    await tauri.emitTo('hub', CONNECT_EVENT, { step: 'url', firstRun: true });
+    expect(el.querySelector('[data-connect-close]')).toBeNull();
+    await tauri.emitTo('hub', CONNECT_EVENT, {
+      step: 'name',
+      host: HOST,
+      proposedName: 'bottle-x',
+      otherAuthNotice: false,
+    });
+    expect(el.querySelector('[data-connect-close]')).toBeNull();
+  });
+
+  it('[W-07h] connected has a Done button that sends connect_close', async () => {
+    const { el } = await render(<ConnectWorkspace />);
+    await tauri.emitTo('hub', CONNECT_EVENT, {
+      step: 'connected',
+      host: HOST,
+      profile: 'bottle-x',
+    });
+    await click(el.querySelector('[data-connect-done]'));
+    expect(inputEmits()).toEqual([
+      { mogId: CONNECT_VIEW_ID, kind: 'click', payload: { target: 'connect_close' } },
+    ]);
+    // The brain answers `closed`: the panel is gone.
+    await tauri.emitTo('hub', CONNECT_EVENT, { step: 'closed' });
+    expect(el.querySelector('[data-view="connect-workspace"]')).toBeNull();
+  });
+});
+
+describe('Connect a workspace: the flow opened from Settings (review of #605)', () => {
+  beforeEach(() => tauri.reset());
+
+  it('[W-07e] each host shows only its own flow, by the inline flag', async () => {
+    const setup = await render(<ConnectWorkspace />);
+    const settings = await render(<ConnectWorkspace placement="settings" />);
+    await tauri.emitTo('hub', CONNECT_EVENT, { step: 'url', firstRun: false, inline: true });
+    expect(setup.el.querySelector('[data-view="connect-workspace"]')).toBeNull();
+    expect(settings.el.querySelector('[data-view="connect-workspace"]')).not.toBeNull();
+    await tauri.emitTo('hub', CONNECT_EVENT, { step: 'url', firstRun: true });
+    expect(setup.el.querySelector('[data-view="connect-workspace"]')).not.toBeNull();
+    expect(settings.el.querySelector('[data-view="connect-workspace"]')).toBeNull();
+  });
+
+  it('[W-07e] the first field gets focus: the URL field, then the name field', async () => {
+    const { el } = await render(<ConnectWorkspace placement="settings" />);
+    await tauri.emitTo('hub', CONNECT_EVENT, { step: 'url', firstRun: false, inline: true });
+    expect(document.activeElement).toBe(el.querySelector('input[name="workspace-url"]'));
+    await tauri.emitTo('hub', CONNECT_EVENT, {
+      step: 'name',
+      host: HOST,
+      proposedName: 'bottle-x',
+      otherAuthNotice: false,
+      inline: true,
+    });
+    expect(document.activeElement).toBe(el.querySelector('input[name="profile-name"]'));
+  });
+
+  it('[W-07e] the URL and name steps have a Cancel that sends connect_close', async () => {
+    const { el } = await render(<ConnectWorkspace placement="settings" />);
+    await tauri.emitTo('hub', CONNECT_EVENT, { step: 'url', firstRun: false, inline: true });
+    await click(el.querySelector('[data-connect-close]'));
+    await tauri.emitTo('hub', CONNECT_EVENT, {
+      step: 'name',
+      host: HOST,
+      proposedName: 'bottle-x',
+      otherAuthNotice: false,
+      inline: true,
+    });
+    await click(el.querySelector('[data-connect-close]'));
+    const close = { mogId: CONNECT_VIEW_ID, kind: 'click', payload: { target: 'connect_close' } };
+    expect(inputEmits()).toEqual([close, close]);
+  });
+
+  it('[W-07h] the waiting step has Cancel and no close; connected has Done; failed can be closed', async () => {
+    const { el } = await render(<ConnectWorkspace placement="settings" />);
+    await tauri.emitTo('hub', CONNECT_EVENT, {
+      step: 'waiting',
+      host: HOST,
+      profile: 'bottle-x',
+      inline: true,
+    });
+    expect(el.querySelector('[data-connect-close]')).toBeNull();
+    expect(el.querySelector('[data-connect-cancel]')).not.toBeNull();
+    await tauri.emitTo('hub', CONNECT_EVENT, {
+      step: 'failed',
+      host: HOST,
+      profile: 'bottle-x',
+      text: 'Sign-in did not finish in 5 minutes.',
+      action: { label: 'Try again', target: 'connect_retry' },
+      inline: true,
+    });
+    expect(el.querySelectorAll('[data-connect-step] button')).toHaveLength(1);
+    await click(el.querySelector('[data-connect-close]'));
+    await tauri.emitTo('hub', CONNECT_EVENT, {
+      step: 'connected',
+      host: HOST,
+      profile: 'bottle-x',
+      inline: true,
+    });
+    await click(el.querySelector('[data-connect-done]'));
+    expect(inputEmits()).toEqual([
+      { mogId: CONNECT_VIEW_ID, kind: 'click', payload: { target: 'connect_close' } },
+      { mogId: CONNECT_VIEW_ID, kind: 'click', payload: { target: 'connect_close' } },
+    ]);
+  });
+
+  it('[W-07e] a bad inline flag is ignored', async () => {
+    const { el } = await render(<ConnectWorkspace placement="settings" />);
+    await tauri.emitTo('hub', CONNECT_EVENT, { step: 'url', firstRun: false, inline: 'yes' });
+    expect(el.querySelector('[data-view="connect-workspace"]')).toBeNull();
   });
 });
