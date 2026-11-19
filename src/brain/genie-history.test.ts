@@ -7,6 +7,7 @@
 import type { MogId, ProfileName } from '../shared/interfaces';
 import type { JsonObject } from '../shared/ipc';
 import { RecordingLocalStore } from '../test-support/memory-double';
+import type { TerminalAskEvent } from './components/ask-events';
 import type { LocalStmtId } from './components/memory-store';
 import { LocalMemoryService } from './components/memory-service';
 import { createGenieHistory, isExchangeMemory, type GenieEnd } from './genie-history';
@@ -123,21 +124,18 @@ describe('genie history: one local exchange row per Ask Genie request (#40)', ()
     ]);
   });
 
-  it.each([
+  it.each<[TerminalAskEvent, string]>([
     [{ t: 'failed', code: 'OFFLINE', userText: 'fake failure text', retry: 'none' }, 'failed'],
     [{ t: 'uncertain' }, 'uncertain'],
     [{ t: 'abandoned' }, 'abandoned'],
     [{ t: 'cancel_requested' }, 'cancelled'],
     [{ t: 'needs_input', kind: 'clarify', prompt: 'Which fake region?', options: [] }, 'completed'],
-  ] as const)(
-    '[AT-09] [MEM-25a] the terminal event %j saves the status %s',
-    async (end, status) => {
-      const { store, record } = rig();
-      await record(answered({ end }));
-      expect(exchange(store).status).toBe(status);
-      expect(exchange(store).questionUser).toBe(Q);
-    },
-  );
+  ])('[AT-09] [MEM-25a] the terminal event %j saves the status %s', async (end, status) => {
+    const { store, record } = rig();
+    await record(answered({ end }));
+    expect(exchange(store).status).toBe(status);
+    expect(exchange(store).questionUser).toBe(Q);
+  });
 
   it('[MEM-25a] a clarify keeps the Genie prompt as the answer text', async () => {
     const { store, record } = rig();

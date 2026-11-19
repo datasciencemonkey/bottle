@@ -5,6 +5,7 @@
  * and the log holds only a fixed code. On main the host R5 is a stub (#16), so the request ends
  * in the fixed failure text. All values are plainly fake.
  */
+import type { MockInstance } from 'vitest';
 import { core } from '../test-core';
 import { routerDecision } from '../../test-support/model-invoke';
 import { createUtteranceHandler, type UtteranceHandlerDeps } from '../utterance-wiring';
@@ -43,7 +44,9 @@ const settle = async () => {
 };
 type Exec = { stmtId: string; params: Record<string, unknown> };
 const execs = () =>
-  core.invoke.mock.calls.filter(([c]) => c === 'mem_local_exec').map(([, a]) => a as Exec);
+  core.invoke.mock.calls
+    .filter(([c]) => c === 'mem_local_exec')
+    .map(([, a]) => (a as { args: Exec }).args);
 const asks = () =>
   core.invoke.mock.calls.filter(
     ([c, a]) => c === 'mcp_call' && (a as { args: { tool: string } }).args.tool === 'genie_ask',
@@ -56,7 +59,7 @@ function host(store: (a: Exec) => Promise<unknown>) {
     if (cmd === 'profiles_list')
       return [{ name: HOME, host: HOST, authType: 'databricks-cli', supported: true }];
     if (cmd === 'mcp_call') return Promise.reject({ error: 'not_implemented' });
-    if (cmd === 'mem_local_exec') return store(args as Exec);
+    if (cmd === 'mem_local_exec') return store((args as { args: Exec }).args);
     return {};
   });
 }
@@ -84,7 +87,7 @@ async function ask(question: string, utteranceId: string) {
 }
 
 describe('startBrain saves each Ask Genie exchange locally (#40)', () => {
-  let info: ReturnType<typeof vi.spyOn>;
+  let info: MockInstance<typeof console.info>;
   beforeAll(() => {
     brain = startBrain();
     deps = vi.mocked(createUtteranceHandler).mock.calls[0]?.[0];

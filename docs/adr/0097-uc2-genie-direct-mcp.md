@@ -1,7 +1,8 @@
 # ADR 0097: UC2 Ask Genie is a direct Genie One MCP call
 
 - Status: accepted (user decision, 2026-11-19)
-- Issues: #573 (this build), #557 (Ask Genie press), #142 (ask gate), #16 (R5 CliRunner)
+- Issues: #573 (this build), #557 (Ask Genie press), #142 (ask gate), #16 (R5 CliRunner),
+  #40 (local history, amendment)
 - Date: 2026-11-19
 - Owner: agent-lead-4 (implemented by impl-genie-direct)
 - Amends: ADR 0086 (the hand-off seam of the ask gate)
@@ -43,14 +44,19 @@ Before this ADR, the ask gate gave the approved question to the main agent throu
    ([Retry], [Open in Databricks]) do not show yet.
 7. **The main agent** (#16, R16, ADR 0014) is only for later open-ended requests. It is not part
    of UC2 Ask Genie.
+8. **Local history** (amendment, #40, AT-09). When a sent request ends, `genie-history.ts` saves
+   one `genie_exchange` row in the local SQLite store through T10 `recordExchange`
+   (`mem_local_exec`, host route #426). The MOG row goes first (`mem.mog.upsert`, ADR 0061). The
+   write comes after the card update. It is one write per request, at the terminal event, so
+   `asked_at` is the time of the end. A failed write (for example `host_failed` with no OS key
+   store) does not change the card. The log then gets only `event=memory.write ok=0`. A request
+   that was never sent has no row.
 
 ## Not in this build
 
 - The workspace host in the Acknowledged line (#40). Until then the line says "this workspace".
 - The newest progress step with the banned words filtered (G-17b, UX-16a, #87).
 - The outcome controls, the footer and the deep link (#86). The table preview (#150).
-- The local SQLite history of each exchange (`mem_local_exec` `mem.exchange.upsert`, #455,
-  host route #426).
 
 ## Consequences
 
@@ -59,4 +65,5 @@ Before this ADR, the ask gate gave the approved question to the main agent throu
 - ADR 0086 stays valid for the preview and the chip. Only its hand-off seam changes.
 - Tests: `src/brain/genie-direct.test.ts`, `src/brain/question-sanitizer.test.ts`,
   `src/brain/components/start-brain-genie-direct.test.ts`, and the gate tests in
-  `src/brain/ask-gate.test.ts`.
+  `src/brain/ask-gate.test.ts`. Local history: `src/brain/genie-history.test.ts` and
+  `src/brain/components/start-brain-genie-history.test.ts`.

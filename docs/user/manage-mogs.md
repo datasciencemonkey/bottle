@@ -29,3 +29,4 @@ If your text looks like a question, the pop-up also shows **Ask Genie**. Move th
 
 - **No home profile:** a press on Ask Genie shows your Databricks CLI profiles. Select one. Bottle saves only its name as the home profile of the MOG, then sends the text. Bottle never picks a profile for you.
 - **Shift with the talk key:** with a home profile, this asks at once, with the 1.5 s preview that you can cancel. With no home profile, you get Ask Genie instead.
+- **History:** Bottle saves each question that it sent to Genie, with the answer and its key numbers, in the encrypted store on this device. Nothing goes to the cloud. If the store is not available, the card still shows the answer, and nothing is saved. Use Forget or Settings → Wipe to delete it.
