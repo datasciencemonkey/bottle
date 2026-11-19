@@ -166,6 +166,20 @@ describe('talk key with no running MOG (#562)', () => {
     ]);
   });
 
+  it('[MB-06a] [ADR-0103] an ⌥R key-up of the press keeps record: true for the started MOG', async () => {
+    const r = await rig({ mogs: ['Ops'] });
+    const seen: unknown[] = [];
+    r.bus.on('hotkey:ptt', (p) => void seen.push(p));
+    r.bus.dispatch({ event: 'hotkey:ptt', payload: { mogId: '', phase: 'down' } });
+    r.bus.dispatch({ event: 'hotkey:ptt', payload: { mogId: '', phase: 'up', record: true } });
+    await flush();
+    const relayed = seen.filter((p) => (p as { mogId: string }).mogId === id(1));
+    expect(relayed).toEqual([
+      { mogId: id(1), phase: 'down' },
+      { mogId: id(1), phase: 'up', record: true },
+    ]);
+  });
+
   it('[MB-06a] a MOG that T1 thinks is running but whose window is gone opens again before capture (#419)', async () => {
     const r = await rig({ mogs: ['Ops'] });
     await r.manager.start(id(1));

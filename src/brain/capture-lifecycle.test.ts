@@ -82,6 +82,7 @@ function rig(opts: { holdStart?: boolean; config?: CaptureLifecycleDeps['config'
     postRoll.clear();
   };
   const refusals: { mogId: string; mode: string; error?: unknown }[] = [];
+  const toggles: { mogId: string; liveAtToggle: number }[] = [];
   const utterances: Utterance[] = [];
   const transcribed: SegmentRef[] = [];
   const texts = new Map<string, string>();
@@ -93,14 +94,21 @@ function rig(opts: { holdStart?: boolean; config?: CaptureLifecycleDeps['config'
     },
     onUtterance: (u) => void utterances.push(u),
     onRefused: (e) => void refusals.push(e),
+    onRecordToggle: (e) => void toggles.push({ mogId: e.mogId, liveAtToggle: live.size }),
     ...(opts.config ? { config: opts.config } : {}),
   };
   const lc = createCaptureLifecycle(deps);
   const flush = async () => {
     for (let i = 0; i < 5; i++) await Promise.resolve();
   };
-  const ptt = (phase: PttEvent['phase'], at: number, mogId = A, ask = false) => {
-    const e = { mogId, phase, at, ...(ask ? { ask: true as const } : {}) };
+  const ptt = (phase: PttEvent['phase'], at: number, mogId = A, ask = false, record = false) => {
+    const e = {
+      mogId,
+      phase,
+      at,
+      ...(ask ? { ask: true as const } : {}),
+      ...(record ? { record: true as const } : {}),
+    };
     lc.onPtt(e);
   };
   const seg = (leaseId: string, segmentId = `s${leaseId}`, mogId = A): SegmentRef => ({
@@ -121,6 +129,7 @@ function rig(opts: { holdStart?: boolean; config?: CaptureLifecycleDeps['config'
     calls,
     refused,
     refusals,
+    toggles,
     live,
     endPostRoll,
     utterances,
@@ -478,7 +487,93 @@ describe('capture lifecycle: segments (#14)', () => {
   });
 });
 
+describe('capture lifecycle: the ⌥R record toggle (ADR 0103)', () => {
+  it('[ADR-0103] an ⌥R key-up drops the PTT audio and toggles the recording once the mic is free', async () => {
+    const r = rig();
+    r.ptt('down', 0);
+    await r.flush();
+    r.ptt('up', 900, A, false, true);
+    // No dictation: the lease is discarded, never released, and nothing reaches STT.
+    expect(r.calls).toEqual([
+      ['start', { mogId: A, mode: 'ptt' }],
+      ['discard', { mogId: A, leaseId: '1' }],
+    ]);
+    await r.flush();
+    await r.lc.onSegment(r.seg('1'));
+    expect(r.transcribed).toEqual([]);
+    expect(r.utterances).toEqual([]);
+    // The toggle comes after the discard settled, so the recording can take the mic.
+    expect(r.toggles).toEqual([{ mogId: A, liveAtToggle: 0 }]);
+  });
+
+  it('[ADR-0103] an ⌥R key-up before the grant toggles after the discard', async () => {
+    const r = rig({ holdStart: true });
+    r.ptt('down', 0);
+    r.ptt('up', 900, A, false, true);
+    await r.flush();
+    expect(r.toggles).toEqual([]);
+    await r.resolveStarts();
+    await r.flush();
+    expect(names(r.calls)).toEqual(['start', 'discard']);
+    expect(r.toggles).toEqual([{ mogId: A, liveAtToggle: 0 }]);
+  });
+
+  it('[ADR-0103] a refused hold (a recording runs) still toggles: ⌥R stops the recording', async () => {
+    const r = rig();
+    // A recording holds the mic, so R2 refuses the PTT start.
+    r.live.set('rec', 'session');
+    r.ptt('down', 0);
+    await r.flush();
+    expect(r.refusals).toHaveLength(1);
+    r.ptt('up', 900, A, false, true);
+    await r.flush();
+    expect(names(r.calls)).toEqual(['start']);
+    expect(r.toggles.map((t) => t.mogId)).toEqual([A]);
+    expect(r.utterances).toEqual([]);
+  });
+
+  it('[ADR-0103] a plain key-up, an ⌥G key-up and a cancel never toggle', async () => {
+    const r = rig();
+    r.ptt('down', 0);
+    await r.flush();
+    r.ptt('up', 900);
+    r.endPostRoll();
+    r.ptt('down', 2000);
+    await r.flush();
+    r.ptt('up', 2900, A, true);
+    r.endPostRoll();
+    r.ptt('down', 4000);
+    await r.flush();
+    r.ptt('cancel', 4500);
+    await r.flush();
+    expect(r.toggles).toEqual([]);
+  });
+
+  it('[ADR-0103] an ⌥R key-up is no tap: it never stops hands-free', async () => {
+    const r = rig();
+    r.lc.click(A);
+    await r.flush();
+    r.ptt('down', 0);
+    await r.flush();
+    r.ptt('up', 300, A, false, true);
+    await r.flush();
+    expect(names(r.calls)).not.toContain('stopHandsFree');
+    expect(r.toggles).toHaveLength(1);
+  });
+});
+
 describe('capture lifecycle wiring (#14)', () => {
+  it('[ADR-0103] the hotkey:ptt up with record: true reaches the lifecycle as a record toggle', async () => {
+    const bus = new BrainBus();
+    const r = rig();
+    wireCaptureLifecycle(bus, r.lc, () => 5);
+    await bus.dispatch({ event: 'hotkey:ptt', payload: { mogId: A, phase: 'down' } });
+    await r.flush();
+    await bus.dispatch({ event: 'hotkey:ptt', payload: { mogId: A, phase: 'up', record: true } });
+    await r.flush();
+    expect(r.toggles.map((t) => t.mogId)).toEqual([A]);
+  });
+
   it('[RTR-17a] the hotkey:ptt up with ask: true reaches the lifecycle as a forced ask', async () => {
     const bus = new BrainBus();
     const r = rig();
