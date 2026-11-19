@@ -72,6 +72,16 @@ describe('Recordings area (hub)', () => {
     expect(el.querySelector('[aria-busy="true"]')).not.toBeNull();
   });
 
+  it('[REC-V12] an unreadable list shows the plain reason from the brain when it sends one', async () => {
+    const { el } = await render(<Recordings active now={() => NOW} />);
+    await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, {
+      rows: [],
+      unavailable: true,
+      error: RECORDING_ERRORS.profiles_differ,
+    });
+    expect(el.textContent).toContain(RECORDING_ERRORS.profiles_differ.text);
+  });
+
   it('[REC-V12] an empty list says how to record', async () => {
     const { el } = await render(<Recordings active now={() => NOW} />);
     await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, { rows: [] });

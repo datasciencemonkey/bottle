@@ -113,10 +113,9 @@ describe('Call recording settings (hub)', () => {
     // A keyboard or screen-reader user lands on the notice.
     expect(notice?.contains(document.activeElement)).toBe(true);
     await click(notice?.querySelector('button'));
-    expect(emits().slice(-2)).toEqual([
-      { action: 'recording.consent_ack' },
-      { action: 'recording.enable', on: true },
-    ]);
+    // One atomic ack: the brain saves the consent and turns the knob on in one write.
+    expect(emits().at(-1)).toEqual({ action: 'recording.consent_ack' });
+    expect(emits()).not.toContainEqual({ action: 'recording.enable', on: true });
   });
 
   it('[REC-V3] Not now closes the notice, keeps the knob off, and returns focus to the switch', async () => {

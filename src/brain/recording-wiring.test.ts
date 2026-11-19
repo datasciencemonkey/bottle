@@ -186,6 +186,52 @@ describe('recording wiring (brain, ADR 0103)', () => {
     expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.settings?.enabled).toBe(true);
   });
 
+  it('[REC-H2] the acknowledgement turns the knob on in one write, also with a click right after it', async () => {
+    const t = setup();
+    t.click({ action: 'recording.ready' });
+    await flush();
+    t.click({ action: 'recording.consent_ack' });
+    t.click({ action: 'recording.enable', on: true });
+    await flush();
+    expect(t.fake.current()).toMatchObject({ enabled: true, consentAck: true });
+    expect(t.fake.api.writeSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ consentAck: true, enabled: true }),
+    );
+  });
+
+  it('[REC-H1] with no single home profile, storage and the list say why in plain words', async () => {
+    const t = setup();
+    t.fake.api.probeStorage.mockRejectedValue({ error: 'profiles_differ' });
+    t.fake.api.list.mockRejectedValue({ error: 'no_profile' });
+    t.click({ action: 'recording.ready' });
+    t.click({ action: 'recordings.ready' });
+    await flush();
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.storage).toEqual({
+      status: 'unavailable',
+      error: RECORDING_ERRORS.profiles_differ.text,
+    });
+    expect(t.last<HubRecordings>(HUB_RECORDINGS_EVENT)).toEqual({
+      rows: [],
+      unavailable: true,
+      error: RECORDING_ERRORS.no_profile,
+    });
+    expect(RECORDING_ERRORS.profiles_differ.text).toBe(
+      'Your MOGs use different workspaces. Recording needs one workspace for now.',
+    );
+  });
+
+  it('[REC-H11] a failed Retry or Open shows its plain text', async () => {
+    const t = setup();
+    t.fake.api.retry.mockRejectedValue({ error: 'network' });
+    t.click({ action: 'recordings.retry', id: 'r2' });
+    await flush();
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.error).toEqual(RECORDING_ERRORS.network);
+    t.fake.api.open.mockRejectedValue({ error: 'no_profile' });
+    t.click({ action: 'recordings.open', id: 'r1' });
+    await flush();
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.error).toEqual(RECORDING_ERRORS.no_profile);
+  });
+
   it('[REC-H3] keeps a length from 5 to 120 minutes and refuses others', async () => {
     const t = setup();
     t.click({ action: 'recording.length', minutes: 90 });
@@ -604,7 +650,9 @@ describe('ipcRecordingApi: the typed recording_* contract (ADR 0103)', () => {
   });
 
   it('[REC-H13] with no home profile, no cloud-bound command goes out and the user sees why', async () => {
-    const api = ipcRecordingApi(new BrainBus(), async () => undefined);
+    const api = ipcRecordingApi(new BrainBus(), async () => {
+      throw { error: 'no_profile' };
+    });
     await expect(api.start()).rejects.toEqual({ error: 'no_profile' });
     await expect(api.list()).rejects.toEqual({ error: 'no_profile' });
     expect(core.invoke).not.toHaveBeenCalled();
