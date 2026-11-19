@@ -262,7 +262,25 @@ describe('LampMascot (#286)', () => {
     expect(root()?.dataset['state']).toBe('peek');
     expect(el.querySelector('[data-mascot="attention"]')).not.toBeNull();
     m.setAttention(false);
+    // A short exit first, then the node goes.
+    const cue = el.querySelector<HTMLElement>('[data-mascot="attention"]');
+    expect(cue?.dataset['out']).toBe('');
+    m.setAttention(true); // back during the exit: the same bubble stays
+    expect(el.querySelector('[data-mascot="attention"]')).toBe(cue);
+    expect(cue?.dataset['out']).toBeUndefined();
+    m.setAttention(false);
+    c.advance(TIMING.cueOut);
     expect(el.querySelector('[data-mascot="attention"]')).toBeNull();
+  });
+
+  it('fades the old pose only for a swap at the same height (answering to success)', () => {
+    const { m, genie } = mountLamp();
+    m.setMood('answering');
+    expect(genie()?.hasAttribute('data-fade')).toBe(false); // the FLIP move carries it
+    m.setMood('success');
+    expect(genie()?.hasAttribute('data-fade')).toBe(true);
+    m.setMood('idle');
+    expect(genie()?.hasAttribute('data-fade')).toBe(false);
   });
 
   it('reduced motion: no sink and no FLIP, but the state and the blink still show', () => {
@@ -306,6 +324,28 @@ describe('lamp motion CSS (#286)', () => {
       if (s === 'listening') expect(reduced).toMatch(/level-ring[^{]*\{[^}]*opacity:\s*calc/);
       else expect(reduced, s).toMatch(new RegExp(`data-state='${s}'[^{]*\\{[^}]*animation`));
     }
+  });
+
+  it('the working halo shows above the rim, clear of the lamp body', () => {
+    const rule = rules.find((r) => /(^|\/|\s)\.lamp-glow$/.test(r.sel));
+    const top = parseFloat(/top:\s*([\d.]+)%/.exec(rule?.body ?? '')?.[1] ?? 'NaN');
+    const height = parseFloat(/height:\s*([\d.]+)%/.exec(rule?.body ?? '')?.[1] ?? 'NaN');
+    // The rim is at about 69% of the art: most of the halo must be above it.
+    expect(top + height / 2).toBeLessThan(60);
+    expect(top).toBeGreaterThanOrEqual(0);
+  });
+
+  it('the answer ring stays inside the window at its largest', () => {
+    const rule = rules.find((r) => /(^|\/|\s)\.answer-ring$/.test(r.sel));
+    const pct = (k: string) =>
+      parseFloat(new RegExp(`${k}:\\s*([\\d.]+)%`).exec(rule?.body ?? '')?.[1] ?? 'NaN');
+    const peak = 1.1;
+    const r = (pct('width') * peak) / 2;
+    const cx = pct('left') + pct('width') / 2;
+    const cy = pct('top') + pct('height') / 2;
+    expect(cy - r).toBeGreaterThanOrEqual(0);
+    expect(cx - r).toBeGreaterThanOrEqual(0);
+    expect(cx + r).toBeLessThanOrEqual(100);
   });
 
   it('moves only transform-type properties and opacity', () => {

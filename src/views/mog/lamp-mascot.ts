@@ -99,7 +99,10 @@ export const TIMING = {
   peekUpMin: 25_000,
   peekUpMax: 45_000,
   peekUpLength: 2000,
+  /** The answer ring burst: it starts as the Genie lands and ends inside this window. */
   glintLength: 900,
+  /** The "?" cue exit, before its node goes. */
+  cueOut: 200,
 } as const;
 
 /**
@@ -204,7 +207,7 @@ function currentY(el: HTMLElement, fallback: number): number {
   return Number.isNaN(px) ? fallback : (px / h) * 100;
 }
 
-type TimerKey = 'rest' | 'blink' | 'blinkEnd' | 'peekUp' | 'peekUpEnd' | 'glint';
+type TimerKey = 'rest' | 'blink' | 'blinkEnd' | 'peekUp' | 'peekUpEnd' | 'glint' | 'cueOut';
 
 export class LampMascot implements MascotRenderer {
   readonly #clock: LampClock;
@@ -214,6 +217,7 @@ export class LampMascot implements MascotRenderer {
   #genie: HTMLDivElement | undefined;
   #poses: Partial<Record<Mood, HTMLImageElement>> = {};
   #cue: HTMLImageElement | undefined;
+  #glow: SVGSVGElement | undefined;
   #mood: Mood = FIRST_FRAME.mood;
   #hover = false;
   #attention = false;
@@ -235,14 +239,24 @@ export class LampMascot implements MascotRenderer {
     root.className = 'lamp';
     root.dataset['mascot'] = 'lamp';
     root.append(img('lamp-back', LAMP_BACK_PNG));
-    // The lamp mouth glows while Genie works.
-    root.append(
-      svg('0 0 100 40', 'lamp-glow', '<ellipse cx="50" cy="20" rx="44" ry="13"></ellipse>'),
+    // A warm halo behind the head while Genie works. It rises from the lamp mouth, so most of
+    // it shows above the rim and round the head.
+    const glow = svg(
+      '0 0 100 100',
+      'lamp-glow',
+      '<ellipse cx="50" cy="50" rx="46" ry="44"></ellipse>',
     );
+    root.append(glow);
+    this.#glow = glow;
     // The level ring sits behind the Genie and the lamp body, like the rings of the art.
     const ring = document.createElement('span');
     ring.className = 'level-ring';
     root.append(ring);
+    // The "response is here" moment: a gold ring bursts out from behind the standing head as
+    // it lands. Behind the Genie, so it never crosses the face.
+    const answer = document.createElement('span');
+    answer.className = 'answer-ring';
+    root.append(answer);
     const clip = document.createElement('div');
     clip.className = 'genie-clip';
     const genie = document.createElement('div');
@@ -268,14 +282,6 @@ export class LampMascot implements MascotRenderer {
     genie.append(body);
     clip.append(genie);
     root.append(clip, img('lamp-front', LAMP_FRONT_PNG));
-    // The answer-ready glint: a 4-point star over the Genie's spark.
-    root.append(
-      svg(
-        '-24 -24 48 48',
-        'glint',
-        '<path d="M0-22C2 -6 6 -2 22 0C6 2 2 6 0 22C-2 6 -6 2 -22 0C-6 -2 -2 -6 0-22Z"></path>',
-      ),
-    );
     this.#root = root;
     this.#genie = genie;
     el.append(root);
@@ -324,7 +330,7 @@ export class LampMascot implements MascotRenderer {
     for (const id of this.#timers.values()) this.#clock.clearTimeout(id);
     this.#timers.clear();
     this.#root?.remove();
-    this.#root = this.#genie = this.#cue = undefined;
+    this.#root = this.#genie = this.#cue = this.#glow = undefined;
     this.#poses = {};
     this.#state = undefined;
   }
@@ -373,10 +379,28 @@ export class LampMascot implements MascotRenderer {
     });
     this.#state = next;
 
-    // The pose: one image per mood, all decoded up front, so a swap never flashes.
+    // The glow loops in working (and, with reduced motion, in listening). When that loop
+    // ends, hand its current opacity to the CSS transition, so it fades out and never snaps.
+    const glow = this.#glow;
+    const glowFrom =
+      glow && prevState !== next && (prevState === 'working' || prevState === 'listening')
+        ? parseFloat(getComputedStyle(glow).opacity)
+        : Number.NaN;
+
+    // The pose: one image per mood, all decoded up front, so a swap never flashes. A swap at
+    // the same height (answering to success) fades the old pose out; a swap with a height
+    // change is a cut that the FLIP move carries, so no ghost of the old pose moves with it.
+    const sameHeight =
+      prevMood !== undefined && prevMood !== this.#mood && poseOffset(prevMood, this.#mood) === 0;
+    genie.toggleAttribute('data-fade', sameHeight);
     for (const m of MOODS) this.#poses[m]?.toggleAttribute('data-on', m === this.#mood);
     root.dataset['mood'] = this.#mood;
     root.dataset['state'] = next;
+    if (glow && glowFrom > 0) {
+      glow.style.opacity = String(glowFrom);
+      void getComputedStyle(glow).opacity;
+      glow.style.opacity = '';
+    }
 
     // The Genie's height: continuous across a pose swap (FLIP), then a move to the target.
     const target = next === 'rest' && !reduced ? REST_SINK_PCT : 0;
@@ -411,14 +435,25 @@ export class LampMascot implements MascotRenderer {
   #renderCue(): void {
     const root = this.#root;
     if (!root) return;
-    if (this.#attention && !this.#cue) {
-      const cue = img('lamp-cue', ATTENTION_PNG);
-      cue.dataset['mascot'] = 'attention';
-      this.#cue = cue;
-      root.append(cue);
-    } else if (!this.#attention && this.#cue) {
-      this.#cue.remove();
-      this.#cue = undefined;
+    const cue = this.#cue;
+    if (this.#attention) {
+      if (cue) {
+        // Back during its exit: keep the same bubble.
+        this.#cancel('cueOut');
+        delete cue.dataset['out'];
+        return;
+      }
+      const el = img('lamp-cue', ATTENTION_PNG);
+      el.dataset['mascot'] = 'attention';
+      this.#cue = el;
+      root.append(el);
+    } else if (cue && cue.dataset['out'] === undefined) {
+      // A short exit, then the node goes.
+      cue.dataset['out'] = '';
+      this.#after('cueOut', TIMING.cueOut, () => {
+        cue.remove();
+        if (this.#cue === cue) this.#cue = undefined;
+      });
     }
   }
 
@@ -451,7 +486,7 @@ export class LampMascot implements MascotRenderer {
       this.#cancel('peekUp', 'peekUpEnd');
       delete genie.dataset['peekUp'];
     }
-    // The "response is here" glint, once, as the Genie comes out with the answer.
+    // The "response is here" ring burst, once, as the Genie comes out with the answer.
     if (next === 'ready' && prev !== 'ready') {
       root.dataset['glint'] = '';
       this.#after('glint', TIMING.glintLength, () => {
