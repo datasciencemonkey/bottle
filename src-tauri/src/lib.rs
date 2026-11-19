@@ -17,6 +17,7 @@ pub mod mog_config_host;
 pub mod mog_drag;
 pub mod profiles_host;
 pub mod rate_bucket_host;
+pub mod stt_model_host;
 pub mod webview_media;
 pub mod window_host;
 pub mod windows;
@@ -134,6 +135,17 @@ fn stt_loader() -> std::sync::Arc<dyn mog_core::stt_engine::RecognizerLoader> {
     std::sync::Arc::new(mog_core::stt_setup::AppModelLoader::for_this_device())
 }
 
+/// #413, #45, #529 (ADR 0104): build and manage the one `SttModelHost`, so the hub's Local
+/// speech step reaches it. Its install progress goes on a Channel of the hub webview
+/// (`stt_model_host::hub_progress_resolver`). With no models folder on this device
+/// `stt_model_*` answer `host_failed`; the app still starts.
+fn install_stt_model(handle: &tauri::AppHandle<tauri::Wry>) {
+    let resolve = stt_model_host::hub_progress_resolver(handle.clone());
+    if let Some(host) = stt_model_host::SttModelHost::for_this_device(resolve) {
+        handle.manage(host);
+    }
+}
+
 /// The core version that this app links (ARC-1).
 pub fn linked_core_version() -> &'static str {
     mog_core::core_version()
@@ -213,6 +225,8 @@ pub fn run() {
             hotkey_host::prompt_at_launch(handle);
             // R2: one CaptureService per process; its events go to the brain Channel (#425).
             install_capture(handle)?;
+            // #413, #45, #529: the hub's Local speech step (`stt_model_*`).
+            install_stt_model(handle);
             // MB-02: the MOG config store in the app config dir (#25). If the OS gives no app
             // config dir, the app still runs; `config_*` then fail with a code (#333).
             let _ = mog_config_host::install(handle);
