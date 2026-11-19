@@ -49,8 +49,12 @@ These steps check the host wiring of `src-tauri/src/hotkey_host.rs`. Use a debug
 | H3 | In Safari > Develop, open the Web Inspector of the `brain` WebView. In `src/brain/bus.ts`, add a logpoint in `BrainBus.dispatch` that logs `msg`. Hold and release Right-Option 5 times. The demo MOG is the target because it opened last. | 5 `{event: "hotkey:ptt", payload: {mogId: "demo", phase: "down"}}` items and 5 with `phase: "up"`. | CAP-35a, MB-06a |
 | H4 | Close the demo MOG window. Hold and release Right-Option. | No `hotkey:ptt` item: no MOG is the target. | MB-06a |
 | H5 | Quit the app (Cmd+Q). Run `pgrep -fl bottle`. | No Bottle process is left. | AT-30 |
+| H6 | Keep the Call recording knob off. Click into TextEdit. Hold Right-Option for 2 s, tap R, then release. Then press Option+R with no hold. | The hold gives a plain `phase: "up"` (dictation). TextEdit gets the R as usual: "®" for Option+R with no hold. | ADR 0103 |
+| H7 | Turn the Call recording knob on. Click into TextEdit. Hold Right-Option for 2 s, tap R, then release. | One `{phase: "up", record: true}` item. TextEdit gets no "r" and no "®". Nothing is pasted. A recording starts. | ADR 0103 |
+| H8 | While the recording of H7 runs, hold Right-Option for 2 s and release. | The MOG shows "Recording in progress". No dictation and no paste. | ADR 0103 |
+| H9 | While the recording runs, hold Right-Option, tap R, then release. Then press Option+R in TextEdit with no hold. | The recording stops. TextEdit gets "®" for the press with no hold. | ADR 0103 |
 
-Report H1-H5 on #303 with the macOS version. Do not post key contents or other terminal output.
+Report H1-H9 on #303 with the macOS version. Do not post key contents or other terminal output.
 
 ## First-run key reads (#322)
 
