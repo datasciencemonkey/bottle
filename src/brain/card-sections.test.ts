@@ -46,6 +46,23 @@ describe('expanded card sections', () => {
     expect(buildSections(full).map((s) => s.id)).toEqual([...SECTION_ORDER]);
   });
 
+  it('[#523] the footer carries the deep link and the workspace host that the card trusts', () => {
+    const footer = buildSections({
+      ...full,
+      deepLink: 'https://h.test/one/chat/threads/c1?o=1',
+      workspaceHost: 'https://h.test',
+    }).find((s) => s.id === 'footer');
+    expect(footer).toEqual({
+      id: 'footer',
+      sttBadge: 'STT: local',
+      deepLink: 'https://h.test/one/chat/threads/c1?o=1',
+      workspaceHost: 'https://h.test',
+    });
+    expect(buildSections({ dataFlowText: 'd' }).find((s) => s.id === 'footer')).toEqual({
+      id: 'footer',
+    });
+  });
+
   it('[UX-18] keeps the order when sections are missing, and always has footer and data flow', () => {
     const ids = buildSections({ answerMd: 'x', dataFlowText: 'd' }).map((s) => s.id);
     expect(ids).toEqual(['answer', 'footer', 'dataFlow']);

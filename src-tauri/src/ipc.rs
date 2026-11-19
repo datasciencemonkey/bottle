@@ -278,6 +278,9 @@ pub struct HostComponents<'a> {
     /// The `recording_*` commands (ADR 0103): `mog_core::recording::RecordingComponent`.
     /// `None` when it is not managed: `host_failed`.
     pub recording: Option<&'a dyn GatewayComponents>,
+    /// `link_open` (#523): `mog_core::link_open::LinkOpenComponent`. `None` when T7 is not
+    /// managed: `host_failed`.
+    pub links: Option<&'a dyn GatewayComponents>,
 }
 
 fn refused(e: IpcError) -> CoreError {
@@ -342,6 +345,7 @@ impl<'a> HostComponents<'a> {
             cli: None,
             login: None,
             recording: None,
+            links: None,
         }
     }
 }
@@ -535,6 +539,12 @@ impl GatewayComponents for HostComponents<'_> {
                 .recording
                 .ok_or_else(|| host_failed(command))?
                 .call(command, args),
+            // #523: the gateway let only the brain through. Rust checks the URL again (https,
+            // the profile's workspace host) before the OS opener runs.
+            "link_open" => self
+                .links
+                .ok_or_else(|| host_failed(command))?
+                .call(command, args),
             // Each feature issue wires its R1-R17 component here.
             "capture_start" | "capture_stop" | "capture_pause" | "capture_resume"
             | "capture_status" | "capture_stop_all" | "capture_subscribe" => {
@@ -709,6 +719,8 @@ fn route_from<R: Runtime>(
     let login = webview.try_state::<crate::profiles_host::ProfileLoginHost>();
     // `try_state`: `lib.rs` manages the one recording component (ADR 0103).
     let recording = webview.try_state::<std::sync::Arc<mog_core::recording::RecordingComponent>>();
+    // `try_state`: `lib.rs` manages the link opener after T7 (#523).
+    let links = webview.try_state::<std::sync::Arc<mog_core::link_open::LinkOpenComponent>>();
     let components = HostComponents {
         from: label,
         brain: &brain,
@@ -739,6 +751,9 @@ fn route_from<R: Runtime>(
         recording: recording
             .as_ref()
             .map(|r| r.inner().as_ref() as &dyn GatewayComponents),
+        links: links
+            .as_ref()
+            .map(|l| l.inner().as_ref() as &dyn GatewayComponents),
     };
     route(components, command, args)
 }

@@ -574,3 +574,108 @@ describe('Genie card: the window fit (#573)', () => {
     expect(sizes.length).toBe(beforeCollapse + 1);
   });
 });
+
+describe('Genie card links (#523)', () => {
+  const WS = 'https://acme-prod.cloud.databricks.test';
+  const DEEP = `${WS}/one/chat/threads/c1?o=1234&utm_source=genie_chat_mcp`;
+  const withLinks = (md: string, footer: Record<string, string> = {}) => ({
+    ...answered,
+    sections: [
+      { id: 'answer', md },
+      { id: 'footer', deepLink: DEEP, workspaceHost: WS, ...footer },
+      { id: 'dataFlow', text: 'x' },
+    ],
+  });
+  beforeEach(() => {
+    tauri.reset();
+    vi.useFakeTimers();
+  });
+  afterEach(async () => {
+    await act(async () => roots.forEach((r) => r.unmount()));
+    roots = [];
+    vi.useRealTimers();
+    tauri.label = 'hub';
+  });
+  const linkClicks = () => clicks().filter((c) => c.payload.target === 'link_open');
+
+  it('[#523] shows Open in Databricks for a trusted deep_link and sends one link_open click', async () => {
+    const el = await mount();
+    await tauri.emitTo(`card-${ID}`, 'card:update', withLinks('Hello.'));
+    const a = el.querySelector('a[data-action="open-in-databricks"]') as HTMLAnchorElement;
+    expect(a.textContent).toBe('Open in Databricks');
+    expect(a.getAttribute('title')).toBe(DEEP);
+    expect(a.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
+    const ev = new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 });
+    await act(async () => void a.dispatchEvent(ev));
+    expect(ev.defaultPrevented).toBe(true);
+    expect(linkClicks()).toHaveLength(1);
+    expect(linkClicks()[0]?.payload).toEqual({ target: 'link_open', url: DEEP });
+    // A click on the link never opens the hub or fades the card.
+    expect(clicks().some((c) => c.payload.target === 'open_conversations')).toBe(false);
+    expect(done()).toBe(0);
+  });
+
+  it.each([
+    ['no deep_link', { deepLink: '' }],
+    ['a deep_link on another host', { deepLink: 'https://evil.test/one/chat/threads/c1' }],
+    ['a deep_link that spoofs the host', { deepLink: `${WS}.evil.test/one/chat/threads/c1` }],
+    ['an http deep_link', { deepLink: DEEP.replace('https:', 'http:') }],
+    ['no known workspace host', { workspaceHost: '' }],
+  ])('[#523] shows no Open in Databricks with %s', async (_n, footer) => {
+    const el = await mount();
+    await tauri.emitTo(`card-${ID}`, 'card:update', withLinks('Hello.', footer));
+    expect(el.querySelector('[data-action="open-in-databricks"]')).toBeNull();
+  });
+
+  it('[#523] shows no Open in Databricks on a failure card', async () => {
+    const el = await mount();
+    await tauri.emitTo(`card-${ID}`, 'card:update', failed);
+    expect(el.querySelector('[data-action="open-in-databricks"]')).toBeNull();
+  });
+
+  it('[#523] a trusted link in the answer is clickable and sends link_open; another host is text', async () => {
+    const el = await mount();
+    await tauri.emitTo(
+      `card-${ID}`,
+      'card:update',
+      withLinks(`[the chat](${WS}/sql/dashboards/9f2) and [docs](https://evil.test/d)`),
+    );
+    const links = [...el.querySelectorAll('.genie-answer-body a')] as HTMLAnchorElement[];
+    expect(links.map((a) => a.textContent)).toEqual(['the chat']);
+    expect(el.querySelector('.genie-answer-body .md-link--blocked')?.textContent).toContain(
+      'evil.test',
+    );
+    await act(
+      async () =>
+        void links[0]?.dispatchEvent(
+          new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }),
+        ),
+    );
+    expect(linkClicks().map((c) => c.payload)).toEqual([
+      { target: 'link_open', url: `${WS}/sql/dashboards/9f2` },
+    ]);
+    expect(clicks().some((c) => c.payload.target === 'open_conversations')).toBe(false);
+  });
+
+  it('[#523] with no workspace host in the footer every link in the answer is text', async () => {
+    const el = await mount();
+    await tauri.emitTo(`card-${ID}`, 'card:update', {
+      ...answered,
+      sections: [{ id: 'answer', md: `[x](${WS}/a) ${WS}/b` }, { id: 'footer' }],
+    });
+    expect(el.querySelector('.genie-answer-body a')).toBeNull();
+  });
+
+  it('[#523] a table in the answer renders with readable numbers', async () => {
+    const el = await mount();
+    await tauri.emitTo(
+      `card-${ID}`,
+      'card:update',
+      withLinks('| a | b |\n| - | - |\n| x | 1220042.3509332137 |'),
+    );
+    expect(el.querySelector('.genie-answer-body table')).not.toBeNull();
+    expect(el.querySelector('.genie-answer-body tbody td:last-child')?.textContent).toBe(
+      new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(1220042.3509332137),
+    );
+  });
+});

@@ -123,6 +123,7 @@ fn sample(command: &str) -> (&'static str, Value) {
         "recording_start" => json!({"profile": "p", "instructions": "Notes."}),
         "recording_detail" | "recording_retry" => json!({"profile": "p", "id": "rec-1"}),
         "recording_open" => json!({"profile": "p", "id": "rec-1", "target": "folder"}),
+        "link_open" => json!({"profile": "p", "url": "https://example.cloud.databricks.com/x"}),
         other => panic!("no sample for {other}"),
     };
     ("brain", args)

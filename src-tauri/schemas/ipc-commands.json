@@ -706,6 +706,25 @@
       "title": "InsertTextArgs",
       "type": "object"
     },
+    "link_open": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "`link_open` (#523). Rust accepts `url` only if it is https on the host of `profile`.",
+      "properties": {
+        "profile": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile",
+        "url"
+      ],
+      "title": "LinkOpenArgs",
+      "type": "object"
+    },
     "mcp_call": {
       "$defs": {
         "McpServer": {
@@ -2244,6 +2263,13 @@
       "windows": [
         "brain",
         "hub"
+      ]
+    },
+    {
+      "name": "link_open",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
       ]
     }
   ],

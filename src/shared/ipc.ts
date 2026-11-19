@@ -118,6 +118,8 @@ export const COMMANDS = {
   recording_open: BH,
   /** The "Allow System Audio Recording" fix-it: Rust opens the OS privacy pane. */
   recording_open_system_audio_settings: BH,
+  /** #523: brain only. Rust opens an https link on the profile's workspace host in the browser. */
+  link_open: B,
 } as const satisfies Record<string, Spec>;
 
 export type CommandName = keyof typeof COMMANDS;
@@ -379,6 +381,7 @@ export interface CommandArgs {
   recording_retry: { profile: ProfileName; id: RecordingId };
   recording_open: { profile: ProfileName; id: RecordingId; target: 'folder' };
   recording_open_system_audio_settings: NoArgs;
+  link_open: { profile: ProfileName; url: string };
 }
 
 /**
@@ -558,7 +561,7 @@ export type CardSection =
   | { id: 'sentToGenie'; text: string }
   | { id: 'resend' }
   | { id: 'copy'; formats: ('markdown' | 'csv')[] }
-  | { id: 'footer'; sttBadge?: string; deepLink?: string }
+  | { id: 'footer'; sttBadge?: string; deepLink?: string; workspaceHost?: string }
   | { id: 'dataFlow'; text: string };
 
 /**
@@ -865,6 +868,7 @@ export interface CommandReturns {
   recording_retry: RecordingSummary;
   recording_open: Empty;
   recording_open_system_audio_settings: Empty;
+  link_open: Empty;
 }
 
 /** Call a command. A refused call rejects with an `IpcError` (a code only). */

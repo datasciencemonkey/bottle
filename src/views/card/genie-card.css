@@ -9,6 +9,11 @@
 
 .genie {
   position: relative;
+  /* Clipping fix (#523): the card paints inside its own box and never scrolls sideways. `clip`
+     (unlike `hidden`) cannot be scrolled by focus or a click on a control, so a wide child can
+     never shift the text under the edge. `hidden` stays as the fallback. */
+  overflow: hidden;
+  overflow: clip;
   /* A double-click opens the hub; it must not select a word while the card fades. */
   user-select: none;
   -webkit-user-select: none;
@@ -168,6 +173,7 @@
   width: 100%;
   max-height: 280px;
   overflow: hidden;
+  overflow: clip;
   padding: 12px 14px;
   border-radius: var(--mog-radius-md);
 }
@@ -175,6 +181,8 @@
 .genie-body {
   display: flex;
   flex-direction: column;
+  /* Clipping fix (#523): a flex item never grows past the card because of its own content. */
+  min-width: 0;
   min-height: 0;
   animation: genie-card-in 220ms var(--mog-ease-out) 200ms both;
   transform-origin: left 20px;
@@ -186,6 +194,7 @@
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
 }
 
@@ -211,6 +220,8 @@
    close control, both outside this element, never move. */
 .genie-answer-body {
   flex: none;
+  min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   transition: max-height 200ms var(--mog-ease-out);
 }
@@ -308,6 +319,17 @@
   box-shadow: var(--mog-focus-ring);
 }
 
+/* #523: "Open in Databricks" is a link, styled like the other quiet footer controls. */
+.genie-databricks {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  /* Its own line under the other controls: it never squeezes them or clips at the card edge. */
+  order: 5;
+  flex: 0 0 100%;
+  white-space: nowrap;
+}
+
 .genie-question {
   margin: 0 0 6px;
   /* Room for the close control at the top right. */
@@ -323,7 +345,20 @@
   color: var(--mog-text);
   font-size: var(--mog-text-md);
   line-height: 1.45;
+  /* Clipping fix (#523): a long word, a dotted name such as `main.schema.table`, or a URL breaks
+     inside the card padding. `word-break: break-word` is the older spelling for engines that
+     lag on `overflow-wrap: anywhere`. */
   overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.genie-body [data-answer] p,
+.genie-body [data-answer] li,
+.genie-body [data-answer] code {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .genie-body [data-answer] p,
@@ -398,9 +433,12 @@
 
 .genie-foot {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  /* The footer wraps to a second line before it can push the card wider (#523). */
+  min-width: 0;
+  gap: 6px 10px;
   /* The 8px that moved here from `.genie-open`/`.genie-toggle` (above), so every footer child
      aligns on the same baseline instead of only two of three being pushed down. */
   margin-top: 18px;
@@ -414,6 +452,7 @@
 
 .genie-when {
   margin-left: auto;
+  order: 4;
 }
 
 @keyframes genie-in {

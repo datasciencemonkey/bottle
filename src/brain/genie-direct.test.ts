@@ -132,6 +132,59 @@ describe('genie direct send (#573, ADR 0097)', () => {
     ]);
   });
 
+  it('[#523] the card gets the deep_link of the answer and the workspace host that it trusts', async () => {
+    const c = fakeCard();
+    const DEEP = 'https://example.cloud.databricks.test/one/chat/threads/c1?o=1';
+    const b = fakeBridge([
+      {
+        t: 'answer',
+        md: 'Revenue was **$1.2M**.',
+        incomplete: false,
+        keyNumbers: [],
+        deepLink: DEEP,
+        queryItems: [],
+      },
+    ]);
+    const hosts: string[] = [];
+    const send = createGenieDirectSend({
+      genie: b.bridge,
+      cardFor: () => c.card,
+      newOpId: () => OP,
+      hostOf: async (p) => {
+        hosts.push(p);
+        return 'https://example.cloud.databricks.test';
+      },
+    });
+    await send(turn());
+    expect(hosts).toEqual([PROFILE]);
+    expect(c.expanded.at(-1)).toEqual({
+      answerMd: 'Revenue was **$1.2M**.',
+      keyNumbers: [],
+      deepLink: DEEP,
+      workspaceHost: 'https://example.cloud.databricks.test',
+      dataFlowText: GENIE_DATA_FLOW_TEXT,
+    });
+  });
+
+  it('[#523] a host lookup that fails still shows the answer, with no trusted host', async () => {
+    const c = fakeCard();
+    const b = fakeBridge([
+      { t: 'answer', md: 'Fine.', incomplete: false, keyNumbers: [], deepLink: '', queryItems: [] },
+    ]);
+    const send = createGenieDirectSend({
+      genie: b.bridge,
+      cardFor: () => c.card,
+      newOpId: () => OP,
+      hostOf: async () => Promise.reject(new Error('profiles')),
+    });
+    await send(turn());
+    expect(c.expanded.at(-1)).toEqual({
+      answerMd: 'Fine.',
+      keyNumbers: [],
+      dataFlowText: GENIE_DATA_FLOW_TEXT,
+    });
+  });
+
   it('[G-14] [#573] a failure shows the fixed failure text and nothing is sent again', async () => {
     const r = rig({ rejectAsk: () => ({ error: 'not_implemented' }) });
     const c = fakeCard();

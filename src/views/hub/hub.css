@@ -1154,12 +1154,31 @@
     background: none;
   }
 
-  /* No opener yet (#523): a trusted URL shows as selectable text in the link colour, not as a
-   control that does nothing. */
-  .conv-answer a {
+  /* #523: links and tables are styled in ../card/safe-markdown.css. A thread with a table uses
+     the full width of the pane, so a wide table is not squeezed to the reading measure. */
+  .conv-answer:has(.md-table-block) {
+    max-width: none;
+    /* `.conv` bleeds 32px past the content column (`margin: 0 -32px`), where the window clips it:
+       keep the table's right edge and its border inside the visible area. */
+    margin-right: 32px;
+  }
+
+  .hub .conv-open {
+    margin: 6px 0 0;
+    font-size: var(--mog-text-xs);
+  }
+
+  .conv-databricks {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
     color: var(--mog-eye);
-    cursor: text;
     text-decoration: none;
+    cursor: pointer;
+  }
+
+  .conv-databricks:hover {
+    text-decoration: underline;
   }
 
   .hub .conv-answer--none {

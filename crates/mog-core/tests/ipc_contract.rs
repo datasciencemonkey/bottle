@@ -79,6 +79,7 @@ const SPEC_COMMANDS: &[(&str, &[WindowClass])] = {
         ("recording_retry", &[B, H]),
         ("recording_open", &[B, H]),
         ("recording_open_system_audio_settings", &[B, H]),
+        ("link_open", &[B]),
     ]
 };
 
