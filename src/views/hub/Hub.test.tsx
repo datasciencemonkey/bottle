@@ -114,3 +114,20 @@ describe('hub navigation and Conversations (#103)', () => {
     expect(nav(el)[0]?.getAttribute('aria-current')).toBe('page');
   });
 });
+
+describe('V1 hub view: call recording (ADR 0103)', () => {
+  beforeEach(() => tauri.reset());
+
+  it('[REC-V15] the hub has a Recordings area and a Call recording settings section', async () => {
+    const { el } = await render(<Hub />);
+    const nav = [...el.querySelectorAll('nav[aria-label="Hub"] button')].map((b) => b.textContent);
+    expect(nav).toContain('Recordings');
+    expect(el.querySelector('[data-view="recording-settings"]')).not.toBeNull();
+    const rec = [...el.querySelectorAll('nav[aria-label="Hub"] button')].find(
+      (b) => b.textContent === 'Recordings',
+    );
+    await act(async () => (rec as HTMLElement).click());
+    expect(el.querySelector('section[aria-label="Recordings"]')?.hasAttribute('hidden')).toBe(false);
+    expect(el.querySelector('[data-hub-view="home"]')?.hasAttribute('hidden')).toBe(true);
+  });
+});

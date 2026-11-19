@@ -1,0 +1,431 @@
+/**
+ * The brain side of call recording in the hub (ADR 0103, refs #65). A fake `RecordingApi` only:
+ * no capture, no network and no token exist here.
+ */
+import {
+  DEFAULT_ENDPOINT,
+  DEFAULT_INSTRUCTIONS,
+  HUB_RECORDING_DETAIL_EVENT,
+  HUB_RECORDING_EVENT,
+  HUB_RECORDINGS_EVENT,
+  RECORDING_ERRORS,
+  RECORDING_TEXT,
+  RECORDING_VIEW_ID,
+  type HubRecording,
+  type HubRecordingDetail,
+  type HubRecordings,
+} from '../shared/recording-view';
+import { BrainBus } from './bus';
+import {
+  turnsOf,
+  wireRecording,
+  type RecDetail,
+  type RecJob,
+  type RecSettings,
+  type RecState,
+  type RecSummary,
+  type RecordingApi,
+} from './recording-wiring';
+
+vi.mock('@tauri-apps/api/core', async () => (await import('./test-core')).coreModule);
+vi.mock('@tauri-apps/api/event', async () => (await import('./test-core')).eventModule);
+
+const flush = async () => {
+  for (let i = 0; i < 5; i += 1) await new Promise((r) => setTimeout(r, 0));
+};
+
+const MY_FILES = '/Volumes/databricks/home/1234/someone@example.com/my_files';
+
+function settings(over: Partial<RecSettings> = {}): RecSettings {
+  return {
+    enabled: false,
+    consentAck: false,
+    lengthMin: 60,
+    endpoint: DEFAULT_ENDPOINT,
+    instructions: DEFAULT_INSTRUCTIONS,
+    ...over,
+  };
+}
+
+function fakeApi(start: Partial<RecSettings> = {}) {
+  let s = settings(start);
+  let stateCb: ((s: RecState) => void) | undefined;
+  let jobCb: ((j: RecJob) => void) | undefined;
+  const rows: RecSummary[] = [
+    { id: 'r1', name: '2026-11-18_0900', startedAt: 1000, durationS: 1500, status: 'done' },
+    {
+      id: 'r2',
+      name: '2026-11-19_1000',
+      startedAt: 5000,
+      durationS: 3600,
+      status: 'failed',
+      errorKind: 'ai_transcribe_disabled',
+    },
+    { id: 'r3', name: '2026-11-19_1100', startedAt: 9000, durationS: 600, status: 'transcribing' },
+  ];
+  const api = {
+    readSettings: vi.fn(async () => s),
+    writeSettings: vi.fn(async (next: RecSettings) => {
+      s = next;
+      return s;
+    }),
+    probeStorage: vi.fn(async (): Promise<{ myFiles: string | null }> => ({ myFiles: MY_FILES })),
+    createVolume: vi.fn(async (c: string, sc: string) => ({ path: `/Volumes/${c}/${sc}/bottle_audio` })),
+    warehouses: vi.fn(async () => [{ id: 'w1', name: 'Shared', state: 'STOPPED' }]),
+    start: vi.fn(
+      async (_i?: string): Promise<RecState> => ({
+        phase: 'recording',
+        startedAtMs: 100,
+        endsAtMs: 3_600_100,
+      }),
+    ),
+    stop: vi.fn(async (): Promise<RecState> => ({ phase: 'stopping' })),
+    state: vi.fn(async (): Promise<RecState> => ({ phase: 'idle' })),
+    list: vi.fn(async () => rows),
+    detail: vi.fn(
+      async (id: string): Promise<RecDetail> => ({
+        id,
+        status: 'done',
+        notesMd: '## Summary\nWe met.',
+        segments: [
+          { start: 0, end: 4, speaker: 'Speaker 1', text: 'Hello.' },
+          { start: 4, end: 9, speaker: 'Speaker 1', text: 'Shall we start?' },
+          { start: 9, end: 12, speaker: 'Speaker 2', text: 'Yes.' },
+        ],
+      }),
+    ),
+    retry: vi.fn(async (_id: string) => undefined),
+    open: vi.fn(async (_id: string) => undefined),
+    openSystemAudioSettings: vi.fn(async () => undefined),
+    onState: (cb: (s: RecState) => void) => {
+      stateCb = cb;
+      return () => (stateCb = undefined);
+    },
+    onJob: (cb: (j: RecJob) => void) => {
+      jobCb = cb;
+      return () => (jobCb = undefined);
+    },
+  } satisfies RecordingApi;
+  return {
+    api,
+    rows,
+    current: () => s,
+    pushState: (st: RecState) => stateCb?.(st),
+    pushJob: (j: RecJob) => jobCb?.(j),
+  };
+}
+
+function setup(start: Partial<RecSettings> = {}) {
+  const bus = new BrainBus();
+  const fake = fakeApi(start);
+  const sent: { event: string; payload: unknown }[] = [];
+  const mood = { callRecording: vi.fn(), ready: vi.fn() };
+  const notify = vi.fn();
+  const off = wireRecording(bus, {
+    api: fake.api,
+    platform: 'mac',
+    send: async (event, payload) => {
+      sent.push({ event, payload });
+    },
+    mood,
+    notify,
+  });
+  const click = (payload: Record<string, unknown>, from = 'hub') =>
+    bus.dispatch({
+      event: 'view:input',
+      payload: { from, input: { mogId: RECORDING_VIEW_ID, kind: 'click', payload } },
+    });
+  const last = <T>(event: string): T | undefined =>
+    sent.filter((s) => s.event === event).at(-1)?.payload as T | undefined;
+  return { bus, fake, sent, mood, notify, off, click, last };
+}
+
+describe('recording wiring (brain, ADR 0103)', () => {
+  it('[REC-H1] on recording.ready sends the settings, the My Files storage and the state', async () => {
+    const t = setup();
+    t.click({ action: 'recording.ready' });
+    await flush();
+    const m = t.last<HubRecording>(HUB_RECORDING_EVENT);
+    expect(m?.platform).toBe('mac');
+    expect(m?.settings).toEqual({
+      enabled: false,
+      consentAck: false,
+      lengthMin: 60,
+      endpoint: DEFAULT_ENDPOINT,
+      instructions: DEFAULT_INSTRUCTIONS,
+    });
+    expect(m?.storage).toEqual({ status: 'my_files', path: MY_FILES });
+    expect(m?.control).toEqual({ phase: 'idle' });
+    expect(m?.warehouses).toEqual([{ id: 'w1', name: 'Shared', state: 'STOPPED' }]);
+  });
+
+  it('[REC-H1] ignores input from a window other than the hub', async () => {
+    const t = setup();
+    t.click({ action: 'recording.ready' }, 'mog-x');
+    t.click({ action: 'recording.start' }, 'card-x');
+    await flush();
+    expect(t.sent).toEqual([]);
+    expect(t.fake.api.start).not.toHaveBeenCalled();
+  });
+
+  it('[REC-H2] the knob stays off until the consent notice is acknowledged', async () => {
+    const t = setup();
+    t.click({ action: 'recording.ready' });
+    await flush();
+    t.click({ action: 'recording.enable', on: true });
+    await flush();
+    expect(t.fake.current().enabled).toBe(false);
+    t.click({ action: 'recording.consent_ack' });
+    await flush();
+    t.click({ action: 'recording.enable', on: true });
+    await flush();
+    expect(t.fake.current()).toMatchObject({ enabled: true, consentAck: true });
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.settings?.enabled).toBe(true);
+  });
+
+  it('[REC-H3] keeps a length from 5 to 180 minutes and refuses others', async () => {
+    const t = setup();
+    t.click({ action: 'recording.length', minutes: 90 });
+    await flush();
+    expect(t.fake.current().lengthMin).toBe(90);
+    t.click({ action: 'recording.length', minutes: 200 });
+    t.click({ action: 'recording.length', minutes: 2.5 });
+    await flush();
+    expect(t.fake.current().lengthMin).toBe(90);
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.settingsError).toBe(RECORDING_TEXT.badLength);
+  });
+
+  it('[REC-H4] keeps a valid notes model name and the instructions; refuses a bad model name', async () => {
+    const t = setup();
+    t.click({ action: 'recording.endpoint', endpoint: 'my-endpoint_2' });
+    t.click({ action: 'recording.instructions', text: 'Only action items.' });
+    await flush();
+    expect(t.fake.current()).toMatchObject({
+      endpoint: 'my-endpoint_2',
+      instructions: 'Only action items.',
+    });
+    t.click({ action: 'recording.endpoint', endpoint: "x'); DROP" });
+    await flush();
+    expect(t.fake.current().endpoint).toBe('my-endpoint_2');
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.settingsError).toBe(
+      RECORDING_TEXT.badEndpoint,
+    );
+  });
+
+  it('[REC-H5] without My Files: an existing volume path is kept; a bad path is refused', async () => {
+    const t = setup();
+    t.fake.api.probeStorage.mockResolvedValue({ myFiles: null });
+    t.click({ action: 'recording.ready' });
+    await flush();
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.storage).toEqual({ status: 'unavailable' });
+    t.click({ action: 'recording.storage_volume', path: '/Volumes/main/team/audio' });
+    await flush();
+    expect(t.fake.current().volumePath).toBe('/Volumes/main/team/audio');
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.storage).toEqual({
+      status: 'volume',
+      path: '/Volumes/main/team/audio',
+      myFiles: false,
+    });
+    t.click({ action: 'recording.storage_volume', path: '/tmp/../etc' });
+    await flush();
+    expect(t.fake.current().volumePath).toBe('/Volumes/main/team/audio');
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.storage).toEqual({
+      status: 'unavailable',
+      error: RECORDING_TEXT.badVolume,
+    });
+  });
+
+  it('[REC-H5] creates bottle_audio only on the confirmed action, then keeps its path', async () => {
+    const t = setup();
+    t.fake.api.probeStorage.mockResolvedValue({ myFiles: null });
+    t.click({ action: 'recording.ready' });
+    await flush();
+    expect(t.fake.api.createVolume).not.toHaveBeenCalled();
+    t.click({ action: 'recording.volume_create', catalog: 'main', schema: 'bad schema' });
+    await flush();
+    expect(t.fake.api.createVolume).not.toHaveBeenCalled();
+    t.click({ action: 'recording.volume_create', catalog: 'main', schema: 'team' });
+    await flush();
+    expect(t.fake.api.createVolume).toHaveBeenCalledWith('main', 'team');
+    expect(t.fake.current().volumePath).toBe('/Volumes/main/team/bottle_audio');
+  });
+
+  it('[REC-H5] a failed volume create shows a plain text and changes nothing', async () => {
+    const t = setup();
+    t.fake.api.probeStorage.mockResolvedValue({ myFiles: null });
+    t.fake.api.createVolume.mockRejectedValue({ error: 'permission_denied' });
+    t.click({ action: 'recording.volume_create', catalog: 'main', schema: 'team' });
+    await flush();
+    expect(t.fake.current().volumePath).toBeUndefined();
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.storage).toEqual({
+      status: 'unavailable',
+      error: RECORDING_TEXT.volumeCreateFailed,
+    });
+  });
+
+  it('[REC-H6] keeps the picked warehouse', async () => {
+    const t = setup();
+    t.click({ action: 'recording.warehouse', id: 'w1' });
+    await flush();
+    expect(t.fake.current().warehouseId).toBe('w1');
+  });
+
+  it('[REC-H7] Record sends only edited instructions, shows REC with ends_at_ms, and the MOG shows it', async () => {
+    const t = setup({ enabled: true, consentAck: true });
+    t.click({ action: 'recording.ready' });
+    await flush();
+    t.click({ action: 'recording.start', instructions: DEFAULT_INSTRUCTIONS });
+    await flush();
+    expect(t.fake.api.start).toHaveBeenLastCalledWith(undefined);
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.control).toEqual({
+      phase: 'recording',
+      startedAtMs: 100,
+      endsAtMs: 3_600_100,
+    });
+    expect(t.mood.callRecording).toHaveBeenLastCalledWith(true);
+    t.fake.pushState({ phase: 'idle' });
+    t.click({ action: 'recording.start', instructions: '  Just decisions.  ' });
+    await flush();
+    expect(t.fake.api.start).toHaveBeenLastCalledWith('Just decisions.');
+  });
+
+  it('[REC-H7] Stop stops early; the idle state clears the MOG REC', async () => {
+    const t = setup({ enabled: true, consentAck: true });
+    t.click({ action: 'recording.start' });
+    await flush();
+    t.click({ action: 'recording.stop' });
+    await flush();
+    expect(t.fake.api.stop).toHaveBeenCalledTimes(1);
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.control.phase).toBe('stopping');
+    t.fake.pushState({ phase: 'idle' });
+    await flush();
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.control).toEqual({ phase: 'idle' });
+    expect(t.mood.callRecording).toHaveBeenLastCalledWith(false);
+  });
+
+  it('[REC-H8] a refused start shows its plain text with one action', async () => {
+    const t = setup({ enabled: true, consentAck: true });
+    t.fake.api.start.mockRejectedValue({ error: 'recording_busy' });
+    t.click({ action: 'recording.start' });
+    await flush();
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.error).toEqual(RECORDING_ERRORS.recording_busy);
+    t.fake.api.start.mockRejectedValue({ error: 'some upstream text' });
+    t.click({ action: 'recording.start' });
+    await flush();
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.error).toEqual(RECORDING_ERRORS.failed);
+  });
+
+  it('[REC-H8] a silent system audio state shows the System Audio fix-it notice', async () => {
+    const t = setup({ enabled: true, consentAck: true });
+    t.click({ action: 'recording.ready' });
+    await flush();
+    t.fake.pushState({ phase: 'recording', endsAtMs: 10, systemAudio: 'silent_or_denied' });
+    await flush();
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.error).toEqual(
+      RECORDING_ERRORS.system_audio_denied,
+    );
+    t.click({ action: 'recording.system_audio' });
+    await flush();
+    expect(t.fake.api.openSystemAudioSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('[REC-H9] the Recordings list is newest first; a failed row has its plain text', async () => {
+    const t = setup();
+    t.click({ action: 'recordings.ready' });
+    await flush();
+    const l = t.last<HubRecordings>(HUB_RECORDINGS_EVENT);
+    expect(l?.rows.map((r) => r.id)).toEqual(['r3', 'r2', 'r1']);
+    expect(l?.rows[1]?.error).toEqual(RECORDING_ERRORS.ai_transcribe_disabled);
+    expect(l?.rows[0]?.error).toBeUndefined();
+  });
+
+  it('[REC-H9] a failed list read sends an empty list marked unavailable', async () => {
+    const t = setup();
+    t.fake.api.list.mockRejectedValue({ error: 'offline' });
+    t.click({ action: 'recordings.ready' });
+    await flush();
+    expect(t.last<HubRecordings>(HUB_RECORDINGS_EVENT)).toEqual({ rows: [], unavailable: true });
+  });
+
+  it('[REC-H10] the detail merges the segments of one speaker into turns', async () => {
+    const t = setup();
+    t.click({ action: 'recordings.detail', id: 'r1' });
+    await flush();
+    const d = t.last<HubRecordingDetail>(HUB_RECORDING_DETAIL_EVENT);
+    expect(d).toEqual({
+      id: 'r1',
+      status: 'done',
+      notesMd: '## Summary\nWe met.',
+      turns: [
+        { speaker: 'Speaker 1', startS: 0, text: 'Hello. Shall we start?' },
+        { speaker: 'Speaker 2', startS: 9, text: 'Yes.' },
+      ],
+    });
+  });
+
+  it('[REC-H10] turnsOf skips empty text and keeps order by time', () => {
+    expect(
+      turnsOf([
+        { start: 5, end: 6, speaker: '2', text: 'B' },
+        { start: 0, end: 1, speaker: '1', text: 'A' },
+        { start: 1, end: 2, speaker: '1', text: '   ' },
+      ]),
+    ).toEqual([
+      { speaker: '1', startS: 0, text: 'A' },
+      { speaker: '2', startS: 5, text: 'B' },
+    ]);
+  });
+
+  it('[REC-H11] Retry and Open in Databricks go to the core with the id; no URL goes to the hub', async () => {
+    const t = setup();
+    t.click({ action: 'recordings.retry', id: 'r2' });
+    t.click({ action: 'recordings.open', id: 'r1' });
+    await flush();
+    expect(t.fake.api.retry).toHaveBeenCalledWith('r2');
+    expect(t.fake.api.open).toHaveBeenCalledWith('r1');
+    expect(JSON.stringify(t.sent)).not.toMatch(/https?:/);
+  });
+
+  it('[REC-H12] a job that finishes notifies once and shows the MOG answer-ready moment', async () => {
+    const t = setup();
+    t.click({ action: 'recordings.ready' });
+    await flush();
+    t.fake.rows[2]!.status = 'done';
+    t.fake.pushJob({ id: 'r3', status: 'done' });
+    await flush();
+    expect(t.notify).toHaveBeenCalledTimes(1);
+    expect(t.notify.mock.calls[0]?.[0]).toMatch(/notes are ready/i);
+    expect(t.mood.ready).toHaveBeenCalledTimes(1);
+    expect(t.last<HubRecordings>(HUB_RECORDINGS_EVENT)?.rows[0]?.status).toBe('done');
+    t.fake.pushJob({ id: 'r3', status: 'done' });
+    t.fake.pushJob({ id: 'r1', status: 'done' });
+    await flush();
+    expect(t.notify).toHaveBeenCalledTimes(1);
+  });
+
+  it('[REC-H12] a job that fails sends no notice and refreshes the open detail', async () => {
+    const t = setup();
+    t.click({ action: 'recordings.detail', id: 'r3' });
+    await flush();
+    t.fake.api.detail.mockResolvedValue({
+      id: 'r3',
+      status: 'failed',
+      errorKind: 'endpoint_missing',
+      segments: [],
+    });
+    t.fake.pushJob({ id: 'r3', status: 'failed', errorKind: 'endpoint_missing' });
+    await flush();
+    expect(t.notify).not.toHaveBeenCalled();
+    expect(t.last<HubRecordingDetail>(HUB_RECORDING_DETAIL_EVENT)?.error).toEqual(
+      RECORDING_ERRORS.endpoint_missing,
+    );
+  });
+
+  it('[REC-H1] the unsubscribe stops the wiring', async () => {
+    const t = setup();
+    t.off();
+    t.click({ action: 'recording.ready' });
+    await flush();
+    expect(t.sent).toEqual([]);
+  });
+});
