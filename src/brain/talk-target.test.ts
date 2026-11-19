@@ -311,6 +311,48 @@ describe('T1 talk-key target in the brain (#73)', () => {
     expect(marked(sent)).toEqual([A]);
   });
 
+  it('[ui-4] [#603] reidentify forgets the cached identity and pushes the new colour to the open MOG', async () => {
+    const sent: MogTargetView[] = [];
+    const identity: { name?: string; colorVariant?: string } = {
+      name: 'Sales',
+      colorVariant: 'coral',
+    };
+    const t = createTalkTarget({
+      send: (v) => void sent.push(v),
+      setActive: async () => undefined,
+      after: () => () => undefined,
+      identityOf: async (id) => (id === A ? { ...identity } : undefined),
+    });
+    t.viewReady(A);
+    await flush();
+    expect(lastViews(sent)[A]?.colorVariant).toBe('coral');
+    // The hub ran mog.set_color: the brain forgets the cached colour and re-reads it.
+    identity.colorVariant = 'teal';
+    t.reidentify(A);
+    await flush();
+    expect(lastViews(sent)[A]?.colorVariant).toBe('teal');
+  });
+
+  it('[ui-4] [#603] reidentify on a MOG that is not open sends nothing (it is not a talk-key move)', async () => {
+    const sent: MogTargetView[] = [];
+    const calls: string[] = [];
+    const t = createTalkTarget({
+      send: (v) => void sent.push(v),
+      setActive: async () => undefined,
+      after: () => () => undefined,
+      identityOf: async (id) => {
+        calls.push(id);
+        return { name: 'Sales' };
+      },
+    });
+    t.reidentify(A);
+    await flush();
+    // Not open: `lookUpIdentity` still reads (so the cache is warm for the next open), but
+    // never sends, since there is no open view to carry it to.
+    expect(calls).toEqual([A]);
+    expect(sent).toEqual([]);
+  });
+
   it('[ui-4] the sent view carries the colour and home workspace once the lookup answers', async () => {
     const sent: MogTargetView[] = [];
     const t = createTalkTarget({

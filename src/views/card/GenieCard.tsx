@@ -502,8 +502,15 @@ export function GenieCard({ mogId, card, onSize, identity }: GenieCardProps) {
       onClick={openInBottle}
       onDoubleClick={onDoubleClick}
     >
-      {/* #ui-4: this card is already target-only (MOG-13a, MOG-13b); this only names the MOG. */}
-      {identity && <span className="genie-identity">{identity.name}</span>}
+      {/* #ui-4: this card is already target-only (MOG-13a, MOG-13b); this only names the MOG.
+          Review #603, finding 5: the name is neutral text (AA on this surface); the dot, not the
+          text, carries the accent colour. */}
+      {identity && (
+        <span className="genie-identity">
+          <span className="genie-identity-dot" aria-hidden="true" />
+          {identity.name}
+        </span>
+      )}
       {kind === 'working' && (
         <>
           <Stage text={line1} />

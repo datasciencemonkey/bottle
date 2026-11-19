@@ -164,4 +164,32 @@ describe('hub MOG wiring (#26)', () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(sent).toHaveLength(1);
   });
+
+  it('[ui-4] [#603] mog.edit and mog.set_color tell onIdentityChanged, so the open MOG and card can pick it up', async () => {
+    const changed: string[] = [];
+    wireHubMogs(bus, m, send, (mogId) => changed.push(mogId));
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    input({ action: 'mog.create', name: 'Ops', home: 'p' });
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+    input({ action: 'mog.edit', mogId: id(1), name: 'Ops EU', home: 'p', persona: '' });
+    await vi.waitFor(() => expect(changed).toEqual([id(1)]));
+    input({ action: 'mog.set_color', mogId: id(1), colorVariant: 'teal' });
+    await vi.waitFor(() => expect(changed).toEqual([id(1), id(1)]));
+    // Actions with no identity change never call it.
+    input({ action: 'mog.stop', mogId: id(1) });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(changed).toEqual([id(1), id(1)]);
+  });
+
+  it('[ui-4] [#603] openEdit ("Change home workspace…") asks the hub to open one MOG\'s Edit form, once', async () => {
+    const wired = wireHubMogs(bus, m, send);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    wired.openEdit(id(1));
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+    expect(last()?.openEdit).toEqual({ mogId: id(1), token: 1 });
+    // A later, unrelated push (mogs.ready) never repeats the ask: it was consumed.
+    input({ action: 'mogs.ready' });
+    await vi.waitFor(() => expect(sent).toHaveLength(3));
+    expect(last()?.openEdit).toBeUndefined();
+  });
 });

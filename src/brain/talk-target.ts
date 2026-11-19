@@ -83,6 +83,14 @@ export interface TalkTarget {
    * the MOG is not open.
    */
   refresh(mogId: MogId): void;
+  /**
+   * #ui-4 (review #603, finding 3): the hub changed `mogId`'s name, colour or home workspace
+   * (`mog.edit`/`mog.set_color`). `lookUpIdentity` otherwise caches an identity forever once
+   * read once, so a running MOG's lamp, pill and card kept the old colour until the app
+   * restarted. This forgets the cached identity and re-reads it, pushing the fresh `mog:target`
+   * to the open MOG and its card once the read answers. A no-op if `identityOf` is not wired.
+   */
+  reidentify(mogId: MogId): void;
   /** The target now. */
   current(): MogId | undefined;
   /**
@@ -168,6 +176,10 @@ export function createTalkTarget(deps: TalkTargetDeps): TalkTarget {
     },
     refresh(id) {
       if (isOpen(id)) send(id);
+    },
+    reidentify(id) {
+      identities.delete(id);
+      lookUpIdentity(id);
     },
     interacted(id, via = 'input') {
       if (!isOpen(id)) return false;

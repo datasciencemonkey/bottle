@@ -140,13 +140,23 @@ function EditForm({ row, onDone }: { row: HubMogRow; onDone: () => void }) {
 
 /**
  * #ui-4: the row colour picker. The swatch shows this MOG's current accent colour; opening it
- * offers the fixed palette (`mog-palette.ts`), so the lamp, the name pill, its answer card and
- * its Conversations rows all pick up the new colour on the next `hub:mogs` push.
- */
+ * offers the fixed palette (`mog-palette.ts`). A pick sends `mog.set_color`, which repaints this
+ * row on the next `hub:mogs` push and, separately, tells `talkTarget.reidentify`
+ * (`hub-mogs-wiring.ts`'s `onIdentityChanged`, `components/index.ts`) to re-read the MOG's
+ * identity and push it straight to its open lamp and card over `mog:target` (review #603,
+ * finding 3: this comment used to claim the `hub:mogs` push alone did that, which it never did —
+ * Conversations rows pick up the stored colour the next time the hub asks for that list). */
 function ColorPicker({ row }: { row: HubMogRow }) {
   const current = paletteColorOf(row.colorVariant, row.mogId);
+  // #603 review, LOW finding: the picker is a `<details>` disclosure, which otherwise stays open
+  // (and open on an outside click) once a swatch is picked, with no next step left to take.
+  const details = useRef<HTMLDetailsElement>(null);
+  const pick = (colorVariant: string) => {
+    send({ action: 'mog.set_color', mogId: row.mogId, colorVariant });
+    if (details.current) details.current.open = false;
+  };
   return (
-    <details className="hub-color-picker">
+    <details className="hub-color-picker" ref={details}>
       <summary aria-label={`Colour for ${row.name}: ${current.label}`}>
         <span
           className="hub-color-dot"
@@ -164,7 +174,7 @@ function ColorPicker({ row }: { row: HubMogRow }) {
             aria-label={c.label}
             aria-pressed={c.id === current.id}
             style={{ background: `var(--mog-palette-${c.id})` }}
-            onClick={() => send({ action: 'mog.set_color', mogId: row.mogId, colorVariant: c.id })}
+            onClick={() => pick(c.id)}
           />
         ))}
       </span>
@@ -228,8 +238,22 @@ function DeleteDialog({
   );
 }
 
-function Row({ row, onDeleted }: { row: HubMogRow; onDeleted: () => void }) {
-  const [mode, setMode] = useState<'view' | 'edit' | 'delete'>('view');
+function Row({
+  row,
+  onDeleted,
+  forceEdit = false,
+}: {
+  row: HubMogRow;
+  onDeleted: () => void;
+  /**
+   * #ui-4 (review #603, MEDIUM finding): opens this row's Edit form right away, the way the MOG
+   * right-click menu's "Change home workspace…" does. `MogList` keys this row on the ask (a
+   * `mogId`+`token` pair), so a fresh ask remounts it with Edit already open, and closing it or
+   * an unrelated render never reopens it (no listener needed here at all).
+   */
+  forceEdit?: boolean;
+}) {
+  const [mode, setMode] = useState<'view' | 'edit' | 'delete'>(forceEdit ? 'edit' : 'view');
   const editBtn = useRef<HTMLButtonElement>(null);
   const deleteBtn = useRef<HTMLButtonElement>(null);
   // WCAG 2.4.3: when the form or the dialog closes, focus goes back to the button that opened it.
@@ -344,9 +368,20 @@ export function MogList() {
         <p>{`${list.unreadable.length} MOG configs cannot be read. Bottle keeps the files.`}</p>
       )}
       <ul aria-label="Defined MOGs" className="hub-rows">
-        {(list?.mogs ?? []).map((r) => (
-          <Row key={r.mogId} row={r} onDeleted={() => heading.current?.focus()} />
-        ))}
+        {(list?.mogs ?? []).map((r) => {
+          // #ui-4 (review #603, MEDIUM finding): a fresh ask (a new token) changes this row's
+          // own key, so React remounts it with Edit already open; the same token twice (an
+          // unrelated republish) keeps the same key, so it is never force-reopened.
+          const edit = list?.openEdit?.mogId === r.mogId ? list.openEdit.token : undefined;
+          return (
+            <Row
+              key={edit === undefined ? r.mogId : `${r.mogId}:${edit}`}
+              row={r}
+              onDeleted={() => heading.current?.focus()}
+              forceEdit={edit !== undefined}
+            />
+          );
+        })}
       </ul>
       <CreateForm />
     </section>

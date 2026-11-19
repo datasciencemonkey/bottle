@@ -40,6 +40,11 @@ body,
   width: min(100vw, 100vh);
   height: min(100vw, 100vh);
   pointer-events: none;
+  /* #603 review, MEDIUM finding: on the base rule (not only `[data-hidden]`), so Hide and the
+     un-hide it is paired with both ease, instead of the lamp snapping back to full size. Anchored
+     at the bottom, so the gap to the name pill just under it never changes with the scale. */
+  transform-origin: 50% 100%;
+  transition: transform 160ms var(--mog-ease-out);
 }
 
 .lamp > svg {
@@ -93,6 +98,8 @@ body,
   position: absolute;
   inset: 0;
   clip-path: inset(0 0 29% 0);
+  /* #603 review, MEDIUM finding: so un-hide (below) fades the Genie back in instead of popping. */
+  transition: opacity 160ms var(--mog-ease-out);
 }
 
 .genie {
@@ -207,6 +214,9 @@ body,
   border-radius: 50%;
   opacity: 0;
   transform: scale(0.6);
+  /* #603 review, MEDIUM finding: so un-hide fades this back in instead of popping; the burst
+     keyframe below still drives it while `[data-glint]` is on. */
+  transition: opacity 160ms var(--mog-ease-out);
 }
 
 .lamp[data-glint] .answer-ring {
@@ -406,11 +416,13 @@ body,
 }
 
 /* UX-28 (#73, ADR 0058): a small triangle at the foot of the target mascot, pointing up at
-   it. The mascot fills the window, so the foot of the window is under the mascot. */
+   it. The mascot fills the window, so the foot of the window is under the mascot. #603 review,
+   finding 2: raised clear of the name pill's own span (`.identity-pill` below), so the triangle
+   never covers the pill's text — the old `bottom: 0` put both in the same few pixels. */
 .target-marker {
   position: absolute;
   left: 50%;
-  bottom: 0;
+  bottom: 24px;
   z-index: 2;
   width: 0;
   height: 0;
@@ -450,11 +462,13 @@ body,
    MOG's accent colour. No fill (MOG-01a: the page paints nothing outside the mascot), the same
    hairline-pill-plus-halo treatment as `.badges [data-badge]` above, so the text reads on any
    desktop; the colour carries the identity instead of a background. It sits just under the lamp,
-   clear of the target marker and the badges. */
+   clear of the target marker and the badges. #603 review, finding 2: fully inside the 160x160
+   window (the old `bottom: -7px` put most of the pill below the window edge, where
+   `overflow: hidden` on `html`/`body`/`#root`, mog.css above, cut it off). */
 .identity-pill {
   position: absolute;
   left: 50%;
-  bottom: -7px;
+  bottom: 4px;
   z-index: 1;
   max-width: 88%;
   transform: translateX(-50%);
@@ -472,12 +486,13 @@ body,
   pointer-events: none;
 }
 
-/* #ui-4: Hide sinks the Genie into the lamp and shrinks the MOG to lamp-only (plain CSS, no
-   Motion). The name pill stays, so a hidden lamp is still identifiable at a glance; a click
-   anywhere on the window (`MogView.tsx`) brings it back. */
+/* #ui-4: Hide sinks the Genie into the lamp and shrinks the lamp art to lamp-only inside the same
+   160x160 window (plain CSS, no brain round trip). The name pill stays, so a hidden lamp is
+   still identifiable at a glance; a click anywhere on the window (`MogView.tsx`) brings it back.
+   The transition lives on the base `.lamp` rule above (#603 review, MEDIUM finding), so un-hide
+   eases back to full size the same way Hide eases down to it, instead of snapping. */
 .mascot[data-hidden] .lamp {
   transform: scale(0.62);
-  transition: transform 160ms var(--mog-ease-out);
 }
 
 .mascot[data-hidden] .genie-clip,
@@ -487,50 +502,17 @@ body,
   opacity: 0 !important;
 }
 
-/* #ui-4: the right-click menu (Hide/Close/Open in Bottle/Change home workspace…). It renders
-   inside this same non-activating, never-key panel (MOG-02), so showing it changes nothing
-   about whether the window can take focus: no more risk than any OS menu. A solid surface
-   (unlike the rest of this transparent page, MOG-01a) because the user asked for this chrome. */
-.mog-menu {
-  position: absolute;
-  z-index: 3;
-  display: flex;
-  flex-direction: column;
-  min-width: 168px;
-  padding: 4px;
-  border-radius: var(--mog-radius-md);
-  background: var(--mog-surface-raised);
-  box-shadow:
-    var(--mog-shadow),
-    0 0 0 1px var(--mog-edge);
-}
-
-.mog-menu [role='menuitem'] {
-  display: flex;
-  align-items: center;
-  min-height: 28px;
-  padding: 0 10px;
-  border: none;
-  border-radius: var(--mog-radius-sm);
-  background: transparent;
-  color: var(--mog-text);
-  font: 500 var(--mog-text-sm) / 1.3 var(--mog-font);
-  text-align: left;
-  cursor: pointer;
-}
-
-.mog-menu [role='menuitem']:hover,
-.mog-menu [role='menuitem']:focus-visible {
-  background: var(--mog-surface);
-}
-
-.mog-menu [role='menuitem']:focus-visible {
-  outline: 2px solid var(--mog-focus);
-  outline-offset: -2px;
-}
+/* #ui-4 (review #603, findings 1 and 4): the right-click menu used to render here as HTML
+   (Hide/Close/Open in Bottle/Change home workspace…). It is now a native Tauri menu, built and
+   popped up from `MogView.tsx` (`@tauri-apps/api/menu`), so it is never part of this page: a
+   native `NSMenu` always fits on screen and closes itself on an outside click or Esc. */
 
 @media (prefers-reduced-motion: reduce) {
-  .mascot[data-hidden] .lamp {
+  .lamp,
+  .genie-clip,
+  .lamp-glow,
+  .level-ring,
+  .answer-ring {
     transition: none;
   }
 }

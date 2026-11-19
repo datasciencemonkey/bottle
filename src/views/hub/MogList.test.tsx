@@ -250,6 +250,33 @@ describe('hub MOG list (MB-01, MB-03b)', () => {
     expect(actions().at(-1)).toEqual({ action: 'mog.set_color', mogId: A, colorVariant: 'teal' });
   });
 
+  it('[ui-4] [#603] the colour picker closes itself after a pick', async () => {
+    const el = await shown();
+    const row = el.querySelector(`li[data-mog-row="${A}"]`) as HTMLElement;
+    const picker = row.querySelector('details.hub-color-picker') as HTMLDetailsElement;
+    picker.open = true;
+    const teal = [...picker.querySelectorAll('[role="group"] button')].find(
+      (b) => b.getAttribute('aria-label') === 'Teal',
+    ) as HTMLElement;
+    await click(teal);
+    expect(picker.open).toBe(false);
+  });
+
+  it('[ui-4] [#603] "Change home workspace…" (openEdit) opens that row\'s own Edit form, once per ask', async () => {
+    const el = await shown();
+    expect(el.querySelector('form[data-edit]')).toBeNull();
+    await tauri.emitTo('hub', 'hub:mogs', { ...list, openEdit: { mogId: B, token: 1 } });
+    expect((el.querySelector('form[data-edit]') as HTMLElement)?.getAttribute('data-edit')).toBe(B);
+    // The user closes it; the very same push (the same token) never reopens it.
+    await key(byLabel(el, 'Name of Ops'), 'Escape');
+    expect(el.querySelector('form[data-edit]')).toBeNull();
+    await tauri.emitTo('hub', 'hub:mogs', { ...list, openEdit: { mogId: B, token: 1 } });
+    expect(el.querySelector('form[data-edit]')).toBeNull();
+    // A fresh ask (a new token) opens it again.
+    await tauri.emitTo('hub', 'hub:mogs', { ...list, openEdit: { mogId: B, token: 2 } });
+    expect((el.querySelector('form[data-edit]') as HTMLElement)?.getAttribute('data-edit')).toBe(B);
+  });
+
   it('[MB-03b] the same error twice gives a new alert, so a screen reader reads it again', async () => {
     const el = await shown();
     const text = '8 MOGs are running. Stop one to start Sales.';

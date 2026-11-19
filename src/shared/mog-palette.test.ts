@@ -1,4 +1,6 @@
 import {
+  CARD_LABEL_TEXT_HEX,
+  CARD_SURFACE_HEX,
   contrastRatio,
   DEFAULT_VARIANT,
   MOG_PALETTE,
@@ -20,6 +22,16 @@ describe('MOG identity palette (#ui-4)', () => {
       expect(ratio).toBeDefined();
       expect(ratio as number).toBeGreaterThanOrEqual(4.5);
     }
+  });
+
+  it('[a11y] [#603] the Genie card label text is at or above 4.5:1 on the card surface (the real use, not the pill)', () => {
+    // #603 review, finding 5: an accent colour (right for the pill's white-on-accent fill) read
+    // 2.1:1 to 3:1 as text on the card's dark surface. `.genie-identity` now uses this neutral
+    // pair instead and carries the colour with a dot, so this checks the pair the card actually
+    // renders, with the real WCAG formula.
+    const ratio = contrastRatio(CARD_LABEL_TEXT_HEX, CARD_SURFACE_HEX);
+    expect(ratio).toBeDefined();
+    expect(ratio as number).toBeGreaterThanOrEqual(4.5);
   });
 
   it('contrastRatio is symmetric and 1 for a colour against itself', () => {

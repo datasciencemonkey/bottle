@@ -45,6 +45,13 @@ export interface HubMogList {
   runningCount: number;
   maxRunning: number;
   notice?: HubNoticeLine;
+  /**
+   * #ui-4 (review #603, MEDIUM finding): the MOG right-click menu's "Change home workspace…"
+   * asks the hub to open this MOG's own Edit form, not only show the hub
+   * (`hub-mogs-wiring.ts`'s `openEdit`). One-shot: `token` changes on every ask, so the hub view
+   * (`MogList.tsx`) can tell a fresh ask from the same `mogId` from the one it already opened.
+   */
+  openEdit?: { mogId: string; token: number };
 }
 
 /** The hub MOG actions, sent as `view_emit` kind `click` with mogId `HUB_SCOPE`. */
@@ -108,7 +115,7 @@ function isRow(v: unknown): v is HubMogRow {
 /** Shape check of a `hub:mogs` payload. */
 export function asHubMogList(p: unknown): HubMogList | undefined {
   if (!isObj(p)) return undefined;
-  const { mogs, unreadable, runningCount, maxRunning, notice } = p;
+  const { mogs, unreadable, runningCount, maxRunning, notice, openEdit } = p;
   if (!Array.isArray(mogs) || !mogs.every(isRow)) return undefined;
   if (!Array.isArray(unreadable) || !unreadable.every(isStr)) return undefined;
   if (!isCount(runningCount) || !isCount(maxRunning)) return undefined;
@@ -119,6 +126,11 @@ export function asHubMogList(p: unknown): HubMogList | undefined {
       (notice['kind'] === 'error' || notice['kind'] === 'info') &&
       isStr(notice['text'])
     )
+  )
+    return undefined;
+  if (
+    openEdit !== undefined &&
+    !(isObj(openEdit) && isStr(openEdit['mogId']) && typeof openEdit['token'] === 'number')
   )
     return undefined;
   return p as unknown as HubMogList;

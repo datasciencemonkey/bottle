@@ -16,6 +16,24 @@ import type { MogId } from './interfaces';
 /** The on-accent text colour of every palette entry (`tokens.css` `--mog-on-accent`). */
 export const PALETTE_TEXT = '#ffffff';
 
+/**
+ * `tokens.css` `--mog-surface`/`--mog-face`: the Genie card's dark surface (#ui-4 review #603,
+ * finding 5). Keep in sync with `tokens.css`.
+ */
+export const CARD_SURFACE_HEX = '#18202e';
+
+/**
+ * `tokens.css` `--mog-text-muted`: the Genie card's label colour for the target MOG's name
+ * (`genie-card.css` `.genie-identity`, review #603, finding 5). The accent itself failed AA for
+ * every palette colour as 11px bold text on `CARD_SURFACE_HEX` (2.1:1 to 3:1, all below the
+ * 4.5:1 small-text threshold): the palette was tuned for white text on the accent
+ * (`PALETTE_TEXT`), not accent text on the dark surface. The name is neutral text instead, and
+ * the colour rides a small dot beside it (`.genie-identity-dot`, which carries `--mog-id-color`
+ * and so needs no contrast of its own, the same as the card's existing accent stripe). Keep in
+ * sync with `tokens.css`.
+ */
+export const CARD_LABEL_TEXT_HEX = '#b6bfd0';
+
 /** One accent colour a MOG can carry. */
 export interface MogPaletteColor {
   /** Stored in `mog.ui.variant`; stable across releases (never renumber or reuse an id). */

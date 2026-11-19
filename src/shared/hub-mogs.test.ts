@@ -69,4 +69,17 @@ describe('hub MOG list shapes (#26, TODO(#407))', () => {
     ])
       expect(asHubMogList(bad)).toBeUndefined();
   });
+
+  it('[ui-4] [#603] asHubMogList accepts and checks openEdit ("Change home workspace…")', () => {
+    const withEdit = { ...list, openEdit: { mogId: 'a', token: 1 } };
+    expect(asHubMogList(withEdit)).toEqual(withEdit);
+    for (const bad of [
+      { ...list, openEdit: { mogId: 'a' } },
+      { ...list, openEdit: { token: 1 } },
+      { ...list, openEdit: { mogId: 7, token: 1 } },
+      { ...list, openEdit: { mogId: 'a', token: '1' } },
+      { ...list, openEdit: 'a' },
+    ])
+      expect(asHubMogList(bad)).toBeUndefined();
+  });
 });

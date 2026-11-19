@@ -26,7 +26,14 @@ describe('startBrain wiring', () => {
   it('[MB-01] [MB-08a] [CAP-16a] [MEM-32a] [RTR-05] wires the hub list, the notice and the level stream, once', () => {
     const a = startBrain();
     startBrain();
-    expect(vi.mocked(wireHubMogs).mock.calls).toEqual([[a.bus, a.components.T1]]);
+    // #ui-4 (review #603, finding 3): the 4th arg re-reads and pushes a changed MOG's identity
+    // (`talkTarget.reidentify`) after a successful hub edit or colour pick.
+    const hubMogsCalls = vi.mocked(wireHubMogs).mock.calls;
+    expect(hubMogsCalls).toHaveLength(1);
+    expect(hubMogsCalls[0]?.[0]).toBe(a.bus);
+    expect(hubMogsCalls[0]?.[1]).toBe(a.components.T1);
+    expect(hubMogsCalls[0]?.[2]).toBeUndefined();
+    expect(typeof hubMogsCalls[0]?.[3]).toBe('function');
     expect(vi.mocked(wireNotice).mock.calls).toEqual([[a.bus, a.components.T12]]);
     const wired = vi.mocked(wireLevelStream).mock.calls;
     expect(wired).toHaveLength(1);

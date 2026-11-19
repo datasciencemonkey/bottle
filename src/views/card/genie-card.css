@@ -26,12 +26,28 @@
     border-radius 220ms var(--mog-ease-out);
 }
 
-/* #ui-4: the name of the target MOG that owns this card (MOG-13a, MOG-13b). */
+/* #ui-4: the name of the target MOG that owns this card (MOG-13a, MOG-13b). Review #603, finding
+   5: the accent colour failed AA as text on this dark surface for every palette colour (2.1:1 to
+   3:1; the palette was tuned for white-on-accent, not accent-on-dark). The name is neutral text
+   (`--mog-text-muted`, 9.2:1 here, `mog-palette.ts`'s `CARD_LABEL_TEXT_HEX`) and the colour rides
+   the dot beside it instead (`.genie-identity-dot`). */
 .genie-identity {
-  display: block;
-  color: var(--mog-id-color, var(--mog-text-muted));
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--mog-text-muted);
   font: 700 var(--mog-text-xs) / 1.3 var(--mog-font);
   letter-spacing: 0.01em;
+}
+
+/* The accent dot: decorative, like the stripe below, so it carries the colour with no text
+   contrast of its own to keep. */
+.genie-identity-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--mog-id-color, var(--mog-text-muted));
 }
 
 /* The tail points at the MOG; it sits on the pop-up line, so it never moves when the card grows. */

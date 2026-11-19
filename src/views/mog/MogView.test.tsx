@@ -13,6 +13,17 @@ vi.mock('@tauri-apps/api/core', async () => (await import('../test-tauri')).core
 vi.mock('@tauri-apps/api/event', async () => (await import('../test-tauri')).eventModule);
 vi.mock('@tauri-apps/api/window', async () => (await import('../test-tauri')).windowModule);
 
+/**
+ * Right-click the MOG. Review #603 (findings 1 and 4): this view no longer builds the menu
+ * itself (ARC-4: a MOG view may only listen and call `view_emit`) — it only asks the brain to
+ * show it (`mog-context-menu.ts`), so this is now a plain `view_emit`, like any other click.
+ */
+async function openMenu(mascot: HTMLElement, at: { clientX?: number; clientY?: number } = {}) {
+  await act(async () => {
+    mascot.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, ...at }));
+  });
+}
+
 const ID = '00000000-0000-4000-8000-000000000001';
 const OTHER = '00000000-0000-4000-8000-000000000002';
 
@@ -593,18 +604,13 @@ describe('V2 MOG view target marker and toast (#73)', () => {
     expect(mascot.title).toBe('Sales · sales-ws');
   });
 
-  it('[ui-4] Hide shrinks the MOG to lamp-only; a click brings it back with no brain call', async () => {
+  it('[ui-4] [#603] Hide shrinks the lamp art to lamp-only once the brain says so; a click brings it back with no brain call', async () => {
     const { m } = fakeMascot();
     const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
     const mascot = el.querySelector('.mascot') as HTMLElement;
-    await act(async () => {
-      mascot.dispatchEvent(
-        new MouseEvent('contextmenu', { bubbles: true, clientX: 10, clientY: 10 }),
-      );
-    });
-    await act(async () => {
-      (el.querySelector('[data-menu-item="hide"]') as HTMLElement).click();
-    });
+    // Review #603, findings 1 and 4: the brain, not this view, builds the native menu
+    // (`mog-context-menu.ts`, ARC-4), and tells this one MOG window to flip Hide after a pick.
+    await act(async () => void tauri.emit('mog:menu_hide', { hidden: true }));
     expect(mascot.dataset['hidden']).toBe('true');
     const before = viewEmits().length;
     await act(async () => void mascot.dispatchEvent(new MouseEvent('click', { bubbles: true })));
@@ -613,82 +619,46 @@ describe('V2 MOG view target marker and toast (#73)', () => {
     expect(viewEmits()).toHaveLength(before);
   });
 
-  it('[ui-4] right-click opens a menu with Hide, Close, Open in Bottle and Change home workspace…', async () => {
+  it('[ui-4] [#603] right-click asks the brain to show the native menu, with the click position and the current Hide state', async () => {
     const { m } = fakeMascot();
     const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
     const mascot = el.querySelector('.mascot') as HTMLElement;
-    await act(async () => {
-      mascot.dispatchEvent(
-        new MouseEvent('contextmenu', { bubbles: true, clientX: 5, clientY: 5 }),
-      );
-    });
-    const menu = el.querySelector('[role="menu"]') as HTMLElement;
-    expect([...menu.querySelectorAll('[role="menuitem"]')].map((b) => b.textContent)).toEqual([
-      'Hide',
-      'Close',
-      'Open in Bottle',
-      'Change home workspace…',
-    ]);
-    await act(async () => {
-      (el.querySelector('[data-menu-item="close"]') as HTMLElement).click();
-    });
+    await openMenu(mascot, { clientX: 5, clientY: 7 });
+    // #603 review, findings 1 and 4: this view never renders the menu itself (a MOG view may
+    // only listen and call `view_emit`, ARC-4) and holds no DOM state for one either.
+    expect(el.querySelector('[role="menu"]')).toBeNull();
     expect(viewEmits()).toEqual([
       { mogId: ID, kind: 'click', payload: { action: 'view.ready' } },
-      { mogId: ID, kind: 'click', payload: { target: 'mog_menu_close' } },
+      { mogId: ID, kind: 'click', payload: { target: 'mog_menu_open', x: 5, y: 7, hidden: false } },
     ]);
-    expect(el.querySelector('[role="menu"]')).toBeNull();
   });
 
-  it('[ui-4] Esc, and a click outside, close the menu with no action sent', async () => {
+  it('[ui-4] [#603] a right-click while hidden reports the current Hide state, so the brain labels the item "Show"', async () => {
     const { m } = fakeMascot();
     const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
     const mascot = el.querySelector('.mascot') as HTMLElement;
-    await act(async () => {
-      mascot.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }));
+    await act(async () => void tauri.emit('mog:menu_hide', { hidden: true }));
+    await openMenu(mascot, { clientX: 1, clientY: 2 });
+    expect(viewEmits().at(-1)).toEqual({
+      mogId: ID,
+      kind: 'click',
+      payload: { target: 'mog_menu_open', x: 1, y: 2, hidden: true },
     });
-    expect(el.querySelector('[role="menu"]')).not.toBeNull();
+  });
+
+  it('[ui-4] [#603] a native menu dismisses on Esc or an outside click with no listener here: this view asks for nothing more', async () => {
+    const { m } = fakeMascot();
+    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    const mascot = el.querySelector('.mascot') as HTMLElement;
+    await openMenu(mascot);
+    const before = viewEmits().length;
     await act(async () => {
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    });
-    expect(el.querySelector('[role="menu"]')).toBeNull();
-    await act(async () => {
-      mascot.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }));
-    });
-    expect(el.querySelector('[role="menu"]')).not.toBeNull();
-    await act(async () => {
       document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
     });
-    expect(el.querySelector('[role="menu"]')).toBeNull();
-  });
-
-  it('[ui-4] change home workspace sends the menu change_home target', async () => {
-    const { m } = fakeMascot();
-    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
-    const mascot = el.querySelector('.mascot') as HTMLElement;
-    await act(async () => mascot.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true })));
-    await act(async () => {
-      (el.querySelector('[data-menu-item="change_home"]') as HTMLElement).click();
-    });
-    expect(viewEmits().at(-1)).toEqual({
-      mogId: ID,
-      kind: 'click',
-      payload: { target: 'mog_menu_change_home' },
-    });
-  });
-
-  it('[ui-4] open in bottle from the menu sends the same target as a double-click', async () => {
-    const { m } = fakeMascot();
-    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
-    const mascot = el.querySelector('.mascot') as HTMLElement;
-    await act(async () => mascot.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true })));
-    await act(async () => {
-      (el.querySelector('[data-menu-item="open_in_bottle"]') as HTMLElement).click();
-    });
-    expect(viewEmits().at(-1)).toEqual({
-      mogId: ID,
-      kind: 'click',
-      payload: { target: 'open_conversations' },
-    });
+    // Nothing in this view listens for either: dismissal is the native menu's own, on the brain
+    // side (`mog-context-menu.ts`), with no round trip back to this window at all.
+    expect(viewEmits()).toHaveLength(before);
   });
 
   it('[MB-06a] tries view.ready again while no brain listens yet', async () => {

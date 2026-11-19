@@ -1,10 +1,8 @@
 /** V2 MOG view (thin): one mascot instance, badges and DOM overlays from `mog.view_state`. */
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
-import {
-  MOG_MENU_CHANGE_HOME,
-  MOG_MENU_CLOSE,
-  OPEN_CONVERSATIONS,
-} from '../../shared/genie-status';
+import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { MOG_MENU_HIDE_EVENT, MOG_MENU_OPEN, OPEN_CONVERSATIONS } from '../../shared/genie-status';
 import type { MogId } from '../../shared/interfaces';
 import { paletteColorOf } from '../../shared/mog-palette';
 import {
@@ -19,7 +17,6 @@ import { LevelMeter, type MicLevelSource } from './level-meter';
 import type { FrameProbe } from './frame-probe';
 import type { MascotRenderer } from './mascot';
 import { RiveMascot } from './rive-mascot';
-import { MOG_MENU_ITEMS, type MogMenuAction } from './mog-menu';
 
 export interface MogViewProps {
   mogId: MogId;
@@ -70,32 +67,35 @@ export function MogView({
     void emitView(mogId, 'hover', { on }).catch(() => undefined);
   };
 
-  // #ui-4: Hide sinks the Genie into the lamp and shrinks the MOG to lamp-only (plain CSS, no
-  // brain round trip: this view holds the flag, so a click brings it back at once). It keeps
-  // running and stays a talk target either way.
+  // #ui-4: Hide sinks the Genie into the lamp and shrinks the lamp art to lamp-only inside the
+  // same 160x160 window (plain CSS, no brain round trip for showing or hiding the art: this
+  // view holds the flag, so a click brings it back at once). It keeps running and stays a talk
+  // target either way (review #603, LOW finding: the window itself never resizes, only the art).
   const [hiddenByUser, setHiddenByUser] = useState(false);
-  // #ui-4: the right-click menu (Hide/Close/Open in Bottle/Change home workspace…). It renders
-  // inside this same non-activating panel (MOG-02), so it never steals focus: showing it changes
-  // nothing about whether the window can become key.
-  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | undefined>(undefined);
-  const closeMenu = () => setMenuAt(undefined);
-  const runMenu = (action: MogMenuAction) => {
-    closeMenu();
-    switch (action) {
-      case 'hide':
-        setHiddenByUser(true);
-        return;
-      case 'close':
-        void emitView(mogId, 'click', { target: MOG_MENU_CLOSE }).catch(() => undefined);
-        return;
-      case 'open_in_bottle':
-        void emitView(mogId, 'click', { target: OPEN_CONVERSATIONS }).catch(() => undefined);
-        return;
-      case 'change_home':
-        void emitView(mogId, 'click', { target: MOG_MENU_CHANGE_HOME }).catch(() => undefined);
-        return;
-    }
-  };
+  // #ui-4 (review #603, findings 1 and 4): the right-click menu is a native Tauri menu, but a
+  // MOG view may only listen to events and call `view_emit` (ARC-4) — only the brain holds
+  // `core:menu:*`. This view only asks the brain to show it (`mog-context-menu.ts` builds and
+  // pops it up on the real OS, which always fits the screen and dismisses on an outside click or
+  // Esc with no listener needed here) and, for Hide only, is told the result back.
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    let gone = false;
+    void listen<{ hidden?: unknown }>(
+      MOG_MENU_HIDE_EVENT,
+      (e) => {
+        const hidden = (e.payload as { hidden?: unknown } | null)?.hidden;
+        if (typeof hidden === 'boolean') setHiddenByUser(hidden);
+      },
+      { target: getCurrentWindow().label },
+    ).then((u) => {
+      if (gone) u();
+      else off = u;
+    });
+    return () => {
+      gone = true;
+      off?.();
+    };
+  }, []);
 
   useEffect(() => {
     const el = ref.current;
@@ -150,23 +150,6 @@ export function MogView({
   // `mog:target` push, no extra round trip).
   const tooltip = target?.home ? `${name} · ${target.home}` : name;
 
-  const menuRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!menuAt) return;
-    const onPointerDown = (e: PointerEvent) => {
-      if (!(e.target instanceof Node) || !menuRef.current?.contains(e.target)) closeMenu();
-    };
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeMenu();
-    };
-    document.addEventListener('pointerdown', onPointerDown, true);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown, true);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, [menuAt]);
-
   // TODO(#83): poke, click-to-listen and drag rules; the brain decides what input means.
   // The hover flag is on the whole view, so moving onto a badge keeps the hover badges open.
   return (
@@ -183,8 +166,16 @@ export function MogView({
         aria-label={target?.target ? `${name}, target` : name}
         onContextMenu={(e) => {
           e.preventDefault();
-          const box = e.currentTarget.getBoundingClientRect();
-          setMenuAt({ x: e.clientX - box.left, y: e.clientY - box.top });
+          // `.mascot` fills the window (mog.css), so the click's viewport position is already
+          // the window-relative position the brain's native popup wants (review #603, finding
+          // 1: a native menu, unlike the old HTML one, always fits on screen regardless of
+          // where this lands).
+          void emitView(mogId, 'click', {
+            target: MOG_MENU_OPEN,
+            x: e.clientX,
+            y: e.clientY,
+            hidden: hiddenByUser,
+          }).catch(() => undefined);
         }}
         onClick={(e) => {
           // The second click of a double-click is part of the double-click.
@@ -222,27 +213,6 @@ export function MogView({
         <span className="target-toast" data-toast="target" role="status">
           {`Talking to ${target.name}`}
         </span>
-      )}
-      {menuAt && (
-        <div
-          ref={menuRef}
-          role="menu"
-          aria-label={`${name} menu`}
-          className="mog-menu"
-          style={{ left: menuAt.x, top: menuAt.y }}
-        >
-          {MOG_MENU_ITEMS.map((item) => (
-            <button
-              key={item.action}
-              type="button"
-              role="menuitem"
-              data-menu-item={item.action}
-              onClick={() => runMenu(item.action)}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
       )}
       {/* The visual "?" cue is the renderer's (UX-03); this empty span is the accessible badge. */}
       {state?.overlays.attention && <span data-overlay="attention" aria-label="Needs attention" />}
