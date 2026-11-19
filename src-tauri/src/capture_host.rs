@@ -51,8 +51,29 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-/// A receiver of every lease stop (red skeleton).
+/// A receiver of every lease stop, after the brain got it (ADR 0103: the call recording
+/// finalizes when its lease stops). It runs on the thread that stopped the lease.
 pub type StopObserver = Arc<dyn Fn(&Stopped) + Send + Sync>;
+
+/// The outermost [`CaptureEvents`] of the host: the inner chain, then each [`StopObserver`].
+struct ObservedEvents<E> {
+    inner: E,
+    observers: Arc<Mutex<Vec<StopObserver>>>,
+}
+
+impl<E: CaptureEvents> CaptureEvents for ObservedEvents<E> {
+    fn state(&self, state: &CaptureState) {
+        self.inner.state(state);
+    }
+
+    fn stopped(&self, stopped: &Stopped) {
+        self.inner.stopped(stopped);
+        let observers = lock(&self.observers).clone();
+        for o in observers {
+            o(stopped);
+        }
+    }
+}
 
 /// The brain relay: deliver one core-to-brain item, `false` if no brain listens. The app
 /// passes `BrainChannel::send`, which scrubs each payload (SEC-01).
@@ -566,6 +587,7 @@ pub struct CaptureHost {
     /// Set by `shutdown`: no new lease after it.
     closed: AtomicBool,
     levels: HostLevels,
+    stop_observers: Arc<Mutex<Vec<StopObserver>>>,
 }
 
 impl CaptureHost {
@@ -644,10 +666,11 @@ impl CaptureHost {
         // The gate closes before the brain sees a stop state (CAP-16b). The PTT buffer ends its
         // take before the brain sees the stop (#21). R4 begins, commits or drops its take
         // before the brain sees the event (#46).
-        let sink = Arc::new(LevelCaptureEvents::new(
-            PttCaptureEvents::new(brain, ptt),
-            levels.gate.clone(),
-        ));
+        let stop_observers: Arc<Mutex<Vec<StopObserver>>> = Arc::default();
+        let sink = Arc::new(ObservedEvents {
+            inner: LevelCaptureEvents::new(PttCaptureEvents::new(brain, ptt), levels.gate.clone()),
+            observers: Arc::clone(&stop_observers),
+        });
         let service = Arc::new(CaptureCore::new(device, Arc::clone(&clock), sink));
         let timer = CapTimer::spawn(Arc::clone(&service) as Arc<dyn CaptureService>, clock)?;
         Ok(Self {
@@ -658,17 +681,18 @@ impl CaptureHost {
             pause_seq: AtomicU64::new(0),
             closed: AtomicBool::new(false),
             levels,
+            stop_observers,
         })
     }
 
-    /// The core (red skeleton).
+    /// The one R2 core. The call recording takes its lease here (ADR 0103).
     pub fn service(&self) -> &Arc<CaptureCore> {
         &self.service
     }
 
-    /// Red skeleton.
-    pub fn add_stop_observer(&self, _f: StopObserver) {
-        unimplemented!("red")
+    /// Send every later lease stop to `observer` too (ADR 0103).
+    pub fn add_stop_observer(&self, observer: StopObserver) {
+        lock(&self.stop_observers).push(observer);
     }
 
     /// Let the mic backend report a failed stream to the core (ADR 0038, decision 7).
