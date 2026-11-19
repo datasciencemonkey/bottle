@@ -33,6 +33,9 @@ async function act(m: MogManager, a: MogAction): Promise<HubNoticeLine | undefin
     case 'mog.edit':
       await m.edit(a.mogId, { name: a.name, home: a.home, persona: a.persona });
       return undefined;
+    case 'mog.set_color':
+      await m.edit(a.mogId, { colorVariant: a.colorVariant });
+      return undefined;
     case 'mog.duplicate':
       await m.duplicate(a.mogId);
       return undefined;
@@ -63,6 +66,7 @@ async function snapshot(m: MogManager, notice?: HubNoticeLine): Promise<HubMogLi
       home: s.binding.home,
       persona: s.persona,
       running: s.runState === 'running',
+      colorVariant: s.colorVariant,
     }));
     return { mogs, unreadable: l.unreadable, ...base, ...(notice ? { notice } : {}) };
   } catch (e) {

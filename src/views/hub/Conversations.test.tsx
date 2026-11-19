@@ -152,6 +152,17 @@ describe('hub Conversations (#103)', () => {
     expect(kn).toEqual(['4.2 %growth', '$1.3M']);
   });
 
+  it('[ui-4] the list row and the detail show the same MOG colour dot', async () => {
+    const { el } = await mount();
+    await tauri.emitTo('hub', 'hub:conversations', {
+      rows: [row(6, at(19, 14, 2), { mogColorVariant: 'teal' })],
+    });
+    const listDot = el.querySelector('.conv-row .conv-mog-dot') as HTMLElement;
+    expect(listDot.style.backgroundColor).toBe('rgb(15, 107, 102)');
+    const detailDot = detail(el).querySelector('.conv-mog-dot') as HTMLElement;
+    expect(detailDot.style.backgroundColor).toBe(listDot.style.backgroundColor);
+  });
+
   it('[#103] a failed exchange shows its status and a calm line instead of an answer', async () => {
     const { el } = await mount();
     await tauri.emitTo('hub', 'hub:conversations', { rows });

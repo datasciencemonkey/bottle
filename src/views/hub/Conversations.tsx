@@ -29,10 +29,24 @@ import {
   type ConversationRow,
   type HubConversations,
 } from '../../shared/hub-conversations';
+import { paletteColorOf } from '../../shared/mog-palette';
 import { SafeMarkdown } from '../card/safe-markdown';
 import { emitView } from '../view-ipc';
 
 const DAY_MS = 86_400_000;
+
+/** #ui-4: the small colour dot next to a MOG's name, the same colour as its lamp and card. */
+function MogDot({ row }: { row: ConversationRow }) {
+  const c = paletteColorOf(row.mogColorVariant, row.mogId);
+  return (
+    <span
+      className="conv-mog-dot"
+      data-color={c.id}
+      style={{ background: c.hex }}
+      aria-hidden="true"
+    />
+  );
+}
 
 function askForList(): void {
   void emitView(CONVERSATIONS_VIEW_ID, 'click', { action: 'conversations.ready' }).catch(
@@ -190,7 +204,10 @@ function Detail({
           {row.profile}
           {row.workspaceHost && <span className="conv-sr">, {row.workspaceHost}</span>}
         </span>
-        <span className="conv-meta-part">{row.mogName}</span>
+        <span className="conv-meta-part conv-mog">
+          <MogDot row={row} />
+          {row.mogName}
+        </span>
       </p>
       {row.answerMd ? (
         // TODO(#523): open a trusted link in the browser once the hub has the link opener. Until then a
@@ -333,6 +350,11 @@ export function Conversations({
                   >
                     <span className="conv-row-q">{r.question || 'Question not saved'}</span>
                     <span className="conv-row-meta">
+                      <span className="conv-mog">
+                        <MogDot row={r} />
+                        {r.mogName}
+                      </span>
+                      {' · '}
                       {timeOf(r.askedAt)}
                       {r.profile && ` · ${r.profile}`}
                       {r.status === 'failed' && (

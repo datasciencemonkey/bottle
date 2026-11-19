@@ -113,6 +113,27 @@ describe('Genie card (#573)', () => {
     expect(done()).toBe(0);
   });
 
+  it('[ui-4] labels the working pill and the answer with the target MOG name and colour', async () => {
+    const el = await mount();
+    // Before the brain answers with the identity, the card shows no label.
+    await tauri.emitTo(`card-${ID}`, 'card:update', working('Asking Genie'));
+    expect(el.querySelector('.genie-identity')).toBeNull();
+    await tauri.emitTo(`card-${ID}`, 'mog:target', {
+      mogId: ID,
+      name: 'Sales',
+      target: true,
+      toast: false,
+      colorVariant: 'teal',
+    });
+    const working1 = el.querySelector('[data-genie="working"]') as HTMLElement;
+    expect(working1.querySelector('.genie-identity')?.textContent).toBe('Sales');
+    expect(working1.style.getPropertyValue('--mog-id-color')).toBe('#0f6b66');
+    await tauri.emitTo(`card-${ID}`, 'card:update', answered);
+    const answer = el.querySelector('[data-genie="answer"]') as HTMLElement;
+    expect(answer.querySelector('.genie-identity')?.textContent).toBe('Sales');
+    expect(answer.style.getPropertyValue('--mog-id-color')).toBe('#0f6b66');
+  });
+
   it('[G-17b] a new stage replaces the old one; the old line leaves hidden from a screen reader', async () => {
     const el = await mount();
     await tauri.emitTo(`card-${ID}`, 'card:update', working('Asking Genie'));

@@ -41,7 +41,16 @@ describe('hub MOG wiring (#26)', () => {
     await m.create({ name: 'Ops', home: 'p' });
     await sendHubSnapshot(m, { kind: 'info', text: 'Create a MOG to start' }, send);
     expect(last()).toEqual({
-      mogs: [{ mogId: id(1), name: 'Ops', home: 'p', persona: '', running: false }],
+      mogs: [
+        {
+          mogId: id(1),
+          name: 'Ops',
+          home: 'p',
+          persona: '',
+          running: false,
+          colorVariant: 'coral',
+        },
+      ],
       unreadable: [],
       runningCount: 0,
       maxRunning: 1,
@@ -71,13 +80,23 @@ describe('hub MOG wiring (#26)', () => {
       return last();
     };
     expect((await step({ action: 'mog.create', name: 'Sales', home: 'p' }))?.mogs).toEqual([
-      { mogId: id(1), name: 'Sales', home: 'p', persona: '', running: false },
+      {
+        mogId: id(1),
+        name: 'Sales',
+        home: 'p',
+        persona: '',
+        running: false,
+        colorVariant: 'coral',
+      },
     ]);
     await step({ action: 'mog.edit', mogId: id(1), name: 'Ops', home: 'q', persona: 'Hi' });
     expect(last()?.mogs[0]).toMatchObject({ name: 'Ops', home: 'q', persona: 'Hi' });
     expect((await step({ action: 'mog.duplicate', mogId: id(1) }))?.mogs).toHaveLength(2);
     expect((await step({ action: 'mog.start', mogId: id(1) }))?.runningCount).toBe(1);
     expect((await step({ action: 'mog.stop', mogId: id(1) }))?.runningCount).toBe(0);
+    // #ui-4: the row swatch picker.
+    const recoloured = await step({ action: 'mog.set_color', mogId: id(1), colorVariant: 'teal' });
+    expect(recoloured?.mogs.find((r) => r.mogId === id(1))?.colorVariant).toBe('teal');
     const del = await step({ action: 'mog.delete', mogId: id(2), confirmed: true });
     expect(del?.mogs.map((r) => r.name)).toEqual(['Ops']);
     expect(del?.notice).toEqual({

@@ -1,4 +1,5 @@
 import {
+  CARD_IDENTITY_READY,
   MOG_TARGET_EVENT,
   TARGET_TOAST_MS,
   VIEW_FOCUS,
@@ -8,7 +9,7 @@ import {
 import { BrainBus } from './bus';
 import { core } from './test-core';
 import {
-  configName,
+  configIdentity,
   createTalkTarget,
   sendMogTarget,
   wireTalkTarget,
@@ -54,7 +55,7 @@ async function setup() {
     send: (v) => void sent.push(v),
     setActive: async (id) => void active.push(id),
     after: timers.after,
-    nameOf: async (id) => NAMES[id],
+    identityOf: async (id) => (NAMES[id] ? { name: NAMES[id] } : undefined),
   });
   return { target, sent, active, timers };
 }
@@ -218,7 +219,7 @@ describe('T1 talk-key target in the brain (#73)', () => {
       send: (v) => void sent.push(v),
       setActive: async () => undefined,
       after: () => () => undefined,
-      nameOf: async () => {
+      identityOf: async () => {
         throw new Error('no store');
       },
     });
@@ -308,6 +309,27 @@ describe('T1 talk-key target in the brain (#73)', () => {
     expect(t.interacted(A, 'focus')).toBe(true);
     expect(t.current()).toBe(A);
     expect(marked(sent)).toEqual([A]);
+  });
+
+  it('[ui-4] the sent view carries the colour and home workspace once the lookup answers', async () => {
+    const sent: MogTargetView[] = [];
+    const t = createTalkTarget({
+      send: (v) => void sent.push(v),
+      setActive: async () => undefined,
+      after: () => () => undefined,
+      identityOf: async (id) =>
+        id === A ? { name: 'Sales', colorVariant: 'teal', home: 'sales-ws' } : undefined,
+    });
+    t.viewReady(A);
+    await flush();
+    expect(sent.at(-1)).toEqual({
+      mogId: A,
+      name: 'Sales',
+      target: true,
+      toast: false,
+      colorVariant: 'teal',
+      home: 'sales-ws',
+    });
   });
 });
 
@@ -432,27 +454,42 @@ describe('wiring of the talk-key target (#73)', () => {
     expect(sent).toEqual([]);
   });
 
-  it('[UX-28] [ARC-5] sends the target view only to its own MOG window', async () => {
-    await sendMogTarget({ mogId: A, name: 'Sales', target: true, toast: false });
-    expect(core.emitTo).toHaveBeenCalledWith(`mog-${A}`, MOG_TARGET_EVENT, {
-      mogId: A,
-      name: 'Sales',
-      target: true,
-      toast: false,
-    });
+  it('[UX-28] [ARC-5] [ui-4] sends the target view to its own MOG and card windows only', async () => {
+    const view = { mogId: A, name: 'Sales', target: true, toast: false };
+    await sendMogTarget(view);
+    expect(core.emitTo).toHaveBeenCalledWith(`mog-${A}`, MOG_TARGET_EVENT, view);
+    expect(core.emitTo).toHaveBeenCalledWith(`card-${A}`, MOG_TARGET_EVENT, view);
+    expect(core.emitTo).toHaveBeenCalledTimes(2);
     expect(core.emit).not.toHaveBeenCalled();
     await expect(
       sendMogTarget({ mogId: 'a b', name: 'x', target: true, toast: false }),
     ).rejects.toThrow();
   });
 
-  it('[MB-06b] the toast name comes from the MOG config (config_read)', async () => {
+  it('[ui-4] a card.identity_ready ping resends the current view with no target move', async () => {
+    const { bus, target, sent } = await wired();
+    bus.dispatch(input(`mog-${A}`, A, 'click', { action: VIEW_READY }));
+    bus.dispatch(input(`mog-${B}`, B, 'click', { action: VIEW_READY }));
+    await flush();
+    sent.length = 0;
+    bus.dispatch(input(`card-${A}`, A, 'click', { action: CARD_IDENTITY_READY }));
+    expect(target.current()).toBe(B);
+    expect(sent).toEqual([{ mogId: A, name: 'Sales', target: false, toast: false }]);
+  });
+
+  it('[MB-06b] [ui-4] the name, colour and home workspace come from the MOG config (config_read)', async () => {
     core.invoke.mockImplementation(async (cmd: string) =>
-      cmd === 'config_read' ? { id: A, json: { name: 'Sales' } } : {},
+      cmd === 'config_read'
+        ? { id: A, json: { name: 'Sales', ui: { variant: 'teal' }, binding: { home: 'sales-ws' } } }
+        : {},
     );
-    await expect(configName(A)).resolves.toBe('Sales');
+    await expect(configIdentity(A)).resolves.toEqual({
+      name: 'Sales',
+      colorVariant: 'teal',
+      home: 'sales-ws',
+    });
     expect(core.invoke).toHaveBeenCalledWith('config_read', { args: { id: A } });
     core.invoke.mockImplementation(async () => ({ id: A, json: { name: 7 } }));
-    await expect(configName(A)).resolves.toBeUndefined();
+    await expect(configIdentity(A)).resolves.toEqual({});
   });
 });

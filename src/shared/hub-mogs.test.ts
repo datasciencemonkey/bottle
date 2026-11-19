@@ -1,6 +1,13 @@
 import { asHubMogList, asMogAction, HUB_MOGS_EVENT, HUB_SCOPE } from './hub-mogs';
 
-const row = { mogId: 'a', name: 'Sales', home: 'p', persona: '', running: false };
+const row = {
+  mogId: 'a',
+  name: 'Sales',
+  home: 'p',
+  persona: '',
+  running: false,
+  colorVariant: 'coral',
+};
 const list = { mogs: [row], unreadable: [], runningCount: 0, maxRunning: 8 };
 
 describe('hub MOG list shapes (#26, TODO(#407))', () => {
@@ -9,7 +16,7 @@ describe('hub MOG list shapes (#26, TODO(#407))', () => {
     expect(HUB_SCOPE).toBe('hub');
   });
 
-  it('[MB-01] asMogAction accepts the seven hub actions', () => {
+  it('[MB-01] asMogAction accepts the eight hub actions', () => {
     const ok = [
       { action: 'mogs.ready' },
       { action: 'mog.create', name: 'A', home: 'p' },
@@ -18,6 +25,7 @@ describe('hub MOG list shapes (#26, TODO(#407))', () => {
       { action: 'mog.start', mogId: 'a' },
       { action: 'mog.stop', mogId: 'a' },
       { action: 'mog.delete', mogId: 'a', confirmed: true },
+      { action: 'mog.set_color', mogId: 'a', colorVariant: 'teal' },
     ];
     for (const a of ok) expect(asMogAction(a)).toEqual(a);
   });
@@ -32,6 +40,8 @@ describe('hub MOG list shapes (#26, TODO(#407))', () => {
       { action: 'mog.delete', mogId: 'a', confirmed: 'yes' },
       { action: 'mog.create', name: 'A' },
       { action: 'mog.edit', mogId: 'a', name: 'A', home: 'p' },
+      { action: 'mog.set_color', mogId: 'a' },
+      { action: 'mog.set_color', colorVariant: 'teal' },
       { action: 'notice.accept', noticeVersion: 1 },
     ])
       expect(asMogAction(bad)).toBeUndefined();
@@ -48,6 +58,11 @@ describe('hub MOG list shapes (#26, TODO(#407))', () => {
     for (const bad of [
       null,
       { ...list, mogs: [{ ...row, running: 'no' }] },
+      { ...list, mogs: [{ ...row, colorVariant: 7 }] },
+      {
+        ...list,
+        mogs: [{ mogId: 'a', name: 'Sales', home: 'p', persona: '', running: false }],
+      },
       { ...list, unreadable: [1] },
       { ...list, maxRunning: '8' },
       { ...list, notice: { kind: 'shout', text: 'x' } },

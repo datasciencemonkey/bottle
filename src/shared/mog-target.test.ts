@@ -1,4 +1,11 @@
-import { asMogTargetView, isViewReady, MOG_TARGET_EVENT, TARGET_TOAST_MS } from './mog-target';
+import {
+  asMogTargetView,
+  CARD_IDENTITY_READY,
+  isCardIdentityReady,
+  isViewReady,
+  MOG_TARGET_EVENT,
+  TARGET_TOAST_MS,
+} from './mog-target';
 
 const A = '00000000-0000-4000-8000-00000000000a';
 
@@ -25,5 +32,28 @@ describe('the view-local mog:target payload (#73, TODO(#439))', () => {
     for (const p of [undefined, null, {}, { action: 'notice.ready' }, 'view.ready']) {
       expect(isViewReady(p)).toBe(false);
     }
+  });
+
+  it('[ui-4] colorVariant is optional, and must be a string when present', () => {
+    const ok = { mogId: A, name: 'Sales', target: true, toast: false };
+    expect(asMogTargetView({ ...ok, colorVariant: 'coral' })).toEqual({
+      ...ok,
+      colorVariant: 'coral',
+    });
+    expect(asMogTargetView({ ...ok, colorVariant: 1 })).toBeUndefined();
+  });
+
+  it('[ui-4] isCardIdentityReady reads only the card.identity_ready action', () => {
+    expect(CARD_IDENTITY_READY).toBe('card.identity_ready');
+    expect(isCardIdentityReady({ action: CARD_IDENTITY_READY })).toBe(true);
+    for (const p of [undefined, null, {}, { action: 'view.ready' }, 'card.identity_ready']) {
+      expect(isCardIdentityReady(p)).toBe(false);
+    }
+  });
+
+  it('[ui-4] home is optional, and must be a string when present', () => {
+    const ok = { mogId: A, name: 'Sales', target: true, toast: false };
+    expect(asMogTargetView({ ...ok, home: 'sales-ws' })).toEqual({ ...ok, home: 'sales-ws' });
+    expect(asMogTargetView({ ...ok, home: 7 })).toBeUndefined();
   });
 });

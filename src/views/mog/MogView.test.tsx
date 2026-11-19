@@ -562,6 +562,135 @@ describe('V2 MOG view target marker and toast (#73)', () => {
     expect(viewEmits()).toEqual([{ mogId: ID, kind: 'click', payload: { action: 'view.ready' } }]);
   });
 
+  it('[ui-4] always shows a name pill, tinted with the palette colour the brain sends', async () => {
+    const { m } = fakeMascot();
+    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    // Before the brain answers, the pill still shows (the fallback name).
+    expect(el.querySelector('[data-identity-pill]')?.textContent).toBe('MOG');
+    await tauri.emit('mog:target', tv({ colorVariant: 'teal' }));
+    expect(el.querySelector('[data-identity-pill]')?.textContent).toBe('Sales');
+    const root = el.firstElementChild as HTMLElement;
+    expect(root.style.getPropertyValue('--mog-id-color')).toBe('#0f6b66');
+  });
+
+  it('[ui-4] an unknown colour variant falls back to a stable hash of the MOG ID', async () => {
+    const { m } = fakeMascot();
+    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    await tauri.emit('mog:target', tv({ colorVariant: 'not-a-colour' }));
+    const root = el.firstElementChild as HTMLElement;
+    const first = root.style.getPropertyValue('--mog-id-color');
+    expect(first).toMatch(/^#[0-9a-f]{6}$/);
+    await tauri.emit('mog:target', tv({ colorVariant: 'still-not-a-colour' }));
+    expect(root.style.getPropertyValue('--mog-id-color')).toBe(first);
+  });
+
+  it('[ui-4] a hover tooltip shows the name and the home workspace, if known', async () => {
+    const { m } = fakeMascot();
+    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    const mascot = el.querySelector('.mascot') as HTMLElement;
+    expect(mascot.title).toBe('MOG');
+    await tauri.emit('mog:target', tv({ home: 'sales-ws' }));
+    expect(mascot.title).toBe('Sales · sales-ws');
+  });
+
+  it('[ui-4] Hide shrinks the MOG to lamp-only; a click brings it back with no brain call', async () => {
+    const { m } = fakeMascot();
+    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    const mascot = el.querySelector('.mascot') as HTMLElement;
+    await act(async () => {
+      mascot.dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, clientX: 10, clientY: 10 }),
+      );
+    });
+    await act(async () => {
+      (el.querySelector('[data-menu-item="hide"]') as HTMLElement).click();
+    });
+    expect(mascot.dataset['hidden']).toBe('true');
+    const before = viewEmits().length;
+    await act(async () => void mascot.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    expect(mascot.dataset['hidden']).toBeUndefined();
+    // Bringing it back is MOG-view-local: it sends nothing more to the brain.
+    expect(viewEmits()).toHaveLength(before);
+  });
+
+  it('[ui-4] right-click opens a menu with Hide, Close, Open in Bottle and Change home workspace…', async () => {
+    const { m } = fakeMascot();
+    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    const mascot = el.querySelector('.mascot') as HTMLElement;
+    await act(async () => {
+      mascot.dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, clientX: 5, clientY: 5 }),
+      );
+    });
+    const menu = el.querySelector('[role="menu"]') as HTMLElement;
+    expect([...menu.querySelectorAll('[role="menuitem"]')].map((b) => b.textContent)).toEqual([
+      'Hide',
+      'Close',
+      'Open in Bottle',
+      'Change home workspace…',
+    ]);
+    await act(async () => {
+      (el.querySelector('[data-menu-item="close"]') as HTMLElement).click();
+    });
+    expect(viewEmits()).toEqual([
+      { mogId: ID, kind: 'click', payload: { action: 'view.ready' } },
+      { mogId: ID, kind: 'click', payload: { target: 'mog_menu_close' } },
+    ]);
+    expect(el.querySelector('[role="menu"]')).toBeNull();
+  });
+
+  it('[ui-4] Esc, and a click outside, close the menu with no action sent', async () => {
+    const { m } = fakeMascot();
+    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    const mascot = el.querySelector('.mascot') as HTMLElement;
+    await act(async () => {
+      mascot.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }));
+    });
+    expect(el.querySelector('[role="menu"]')).not.toBeNull();
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(el.querySelector('[role="menu"]')).toBeNull();
+    await act(async () => {
+      mascot.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }));
+    });
+    expect(el.querySelector('[role="menu"]')).not.toBeNull();
+    await act(async () => {
+      document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    });
+    expect(el.querySelector('[role="menu"]')).toBeNull();
+  });
+
+  it('[ui-4] change home workspace sends the menu change_home target', async () => {
+    const { m } = fakeMascot();
+    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    const mascot = el.querySelector('.mascot') as HTMLElement;
+    await act(async () => mascot.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true })));
+    await act(async () => {
+      (el.querySelector('[data-menu-item="change_home"]') as HTMLElement).click();
+    });
+    expect(viewEmits().at(-1)).toEqual({
+      mogId: ID,
+      kind: 'click',
+      payload: { target: 'mog_menu_change_home' },
+    });
+  });
+
+  it('[ui-4] open in bottle from the menu sends the same target as a double-click', async () => {
+    const { m } = fakeMascot();
+    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    const mascot = el.querySelector('.mascot') as HTMLElement;
+    await act(async () => mascot.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true })));
+    await act(async () => {
+      (el.querySelector('[data-menu-item="open_in_bottle"]') as HTMLElement).click();
+    });
+    expect(viewEmits().at(-1)).toEqual({
+      mogId: ID,
+      kind: 'click',
+      payload: { target: 'open_conversations' },
+    });
+  });
+
   it('[MB-06a] tries view.ready again while no brain listens yet', async () => {
     vi.useFakeTimers();
     try {

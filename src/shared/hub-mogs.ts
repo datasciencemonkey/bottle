@@ -24,6 +24,11 @@ export interface HubMogRow {
   home: string;
   persona: string;
   running: boolean;
+  /**
+   * #ui-4: `mog.ui.variant`, so the row swatch and the lamp, the card and Conversations show the
+   * same colour (`src/shared/mog-palette.ts`). Never a raw hex: the view resolves the id.
+   */
+  colorVariant: string;
 }
 
 /** A line for the hub status region. The brain writes the text; the view shows it as is. */
@@ -50,7 +55,9 @@ export type MogAction =
   | { action: 'mog.duplicate'; mogId: string }
   | { action: 'mog.start'; mogId: string }
   | { action: 'mog.stop'; mogId: string }
-  | { action: 'mog.delete'; mogId: string; confirmed: true };
+  | { action: 'mog.delete'; mogId: string; confirmed: true }
+  /** #ui-4: the row swatch picker. `colorVariant` is a palette id (`mog-palette.ts`). */
+  | { action: 'mog.set_color'; mogId: string; colorVariant: string };
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
 const isStr = (v: unknown): v is string => typeof v === 'string';
@@ -77,6 +84,10 @@ export function asMogAction(p: unknown): MogAction | undefined {
       return isStr(mogId) && p['confirmed'] === true
         ? { action, mogId, confirmed: true }
         : undefined;
+    case 'mog.set_color': {
+      const colorVariant = p['colorVariant'];
+      return isStr(mogId) && isStr(colorVariant) ? { action, mogId, colorVariant } : undefined;
+    }
     default:
       return undefined;
   }
@@ -89,7 +100,8 @@ function isRow(v: unknown): v is HubMogRow {
     isStr(v['name']) &&
     isStr(v['home']) &&
     isStr(v['persona']) &&
-    typeof v['running'] === 'boolean'
+    typeof v['running'] === 'boolean' &&
+    isStr(v['colorVariant'])
   );
 }
 

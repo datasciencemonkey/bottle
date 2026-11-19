@@ -16,6 +16,7 @@ import {
   type MogAction,
 } from '../../shared/hub-mogs';
 import { FORGET_OPEN_TARGET } from '../../shared/forget-view';
+import { MOG_PALETTE, paletteColorOf } from '../../shared/mog-palette';
 import { emitView } from '../view-ipc';
 
 function send(action: MogAction): void {
@@ -137,6 +138,40 @@ function EditForm({ row, onDone }: { row: HubMogRow; onDone: () => void }) {
   );
 }
 
+/**
+ * #ui-4: the row colour picker. The swatch shows this MOG's current accent colour; opening it
+ * offers the fixed palette (`mog-palette.ts`), so the lamp, the name pill, its answer card and
+ * its Conversations rows all pick up the new colour on the next `hub:mogs` push.
+ */
+function ColorPicker({ row }: { row: HubMogRow }) {
+  const current = paletteColorOf(row.colorVariant, row.mogId);
+  return (
+    <details className="hub-color-picker">
+      <summary aria-label={`Colour for ${row.name}: ${current.label}`}>
+        <span
+          className="hub-color-dot"
+          data-color={current.id}
+          style={{ background: `var(--mog-palette-${current.id})` }}
+        />
+      </summary>
+      <span className="hub-color-options" role="group" aria-label={`Colour for ${row.name}`}>
+        {MOG_PALETTE.map((c) => (
+          <button
+            key={c.id}
+            type="button"
+            className="hub-color-dot"
+            data-color={c.id}
+            aria-label={c.label}
+            aria-pressed={c.id === current.id}
+            style={{ background: `var(--mog-palette-${c.id})` }}
+            onClick={() => send({ action: 'mog.set_color', mogId: row.mogId, colorVariant: c.id })}
+          />
+        ))}
+      </span>
+    </details>
+  );
+}
+
 function DeleteDialog({
   row,
   onDone,
@@ -208,6 +243,7 @@ function Row({ row, onDeleted }: { row: HubMogRow; onDeleted: () => void }) {
   };
   return (
     <li data-mog-row={row.mogId} data-running={String(row.running)} className="hub-row">
+      <ColorPicker row={row} />
       <span className="hub-row-name">{row.name}</span>{' '}
       <span className="hub-row-state">{row.running ? 'Running' : 'Stopped'}</span>
       <span className="hub-row-actions">

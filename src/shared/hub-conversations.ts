@@ -38,6 +38,12 @@ export interface ConversationRow {
   requestId: string;
   mogId: string;
   mogName: string;
+  /**
+   * #ui-4: `mog.ui.variant`, so the row shows the same colour as the MOG's lamp and card
+   * (`mog-palette.ts`). Undefined for a MOG the brain could not resolve a colour for; the view
+   * falls back by MOG ID.
+   */
+  mogColorVariant?: string;
   question: string;
   /** The answer markdown; empty when Genie gave none. */
   answerMd: string;
@@ -83,6 +89,7 @@ function isRow(v: unknown): v is ConversationRow {
     isStr(v['requestId']) &&
     isStr(v['mogId']) &&
     isStr(v['mogName']) &&
+    (v['mogColorVariant'] === undefined || isStr(v['mogColorVariant'])) &&
     isStr(v['question']) &&
     isStr(v['answerMd']) &&
     Array.isArray(v['keyNumbers']) &&

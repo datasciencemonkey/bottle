@@ -52,7 +52,7 @@ import { withOfflineFallback } from '../offline-intent';
 import { createProfilePick } from '../profile-pick';
 import { createRequestOwner, sendOwnedCard } from '../request-owner';
 import { wireTalkNoMog } from '../talk-no-mog';
-import { configName, createAppTalkTarget, wireTalkTarget, type TalkTarget } from '../talk-target';
+import { createAppTalkTarget, wireTalkTarget, type TalkTarget } from '../talk-target';
 import { createLifecycleTranscriber } from '../stt-wiring';
 import { ipcUtteranceDeps } from '../utterance-route';
 import { createUtteranceHandler } from '../utterance-wiring';
@@ -138,7 +138,11 @@ export function startBrain(): Brain {
     const conversations = wireHubConversations(bus, {
       store: new IpcLocalMemoryStore(),
       mogs: async () =>
-        (await components.T1.list()).mogs.map((m) => ({ mogId: m.mogId, name: m.name })),
+        (await components.T1.list()).mogs.map((m) => ({
+          mogId: m.mogId,
+          name: m.name,
+          colorVariant: m.colorVariant,
+        })),
       send: sendHubConversations,
       sendOpen: sendHubConversationsOpen,
     });
@@ -173,7 +177,7 @@ export function startBrain(): Brain {
     });
     // MB-06a, MB-06b, UX-28: the talk-key target, its marker and its toast (#73). It is wired
     // before the capture lifecycle, so a `hotkey:ptt` down updates the target first.
-    const talkTarget = createAppTalkTarget(configName);
+    const talkTarget = createAppTalkTarget();
     wireTalkTarget(bus, talkTarget);
     // #562 (MB-06a): a press with no open MOG starts the last-used MOG, or the hub says
     // "Create a MOG to start".
@@ -303,6 +307,11 @@ export function startBrain(): Brain {
         void showHub();
         void conversations.openConversations(requestId);
       },
+      // #ui-4: the MOG right-click menu's Close runs the same stop as the hub's Stop button
+      // (the window closes and the mic lease releases; the MOG stays defined). "Change home
+      // workspace…" shows the hub, where the row's Edit has the home field.
+      closeMog: (mogId) => void components.T1.stop(mogId).catch(() => undefined),
+      changeHome: () => void showHub(),
     });
     // #498 (ADR 0091): the Copy card of a dictation. The card is shown first, then the text goes
     // on its stack. If the card cannot show, the text goes to the hub only. No main agent and no

@@ -79,6 +79,14 @@ export function answerShowMs(md: string): number {
 export const OPEN_CONVERSATIONS = 'open_conversations';
 export const CARD_DONE = 'card_done';
 
+/**
+ * #ui-4: the MOG view's right-click menu sends these as `{ target }` too (no new `view_emit`
+ * kind). "Open in Bottle" reuses `OPEN_CONVERSATIONS`; "Hide" is MOG-view-local (plain CSS, no
+ * brain round trip).
+ */
+export const MOG_MENU_CLOSE = 'mog_menu_close';
+export const MOG_MENU_CHANGE_HOME = 'mog_menu_change_home';
+
 /** The card window event for the pointer on the MOG (the card holds its timer meanwhile). */
 export const CARD_MOG_HOVER_EVENT = 'card:mog_hover';
 /** The card window event that fades the card at once (a double-click on the MOG). */

@@ -29,6 +29,7 @@ import { emitTo } from '@tauri-apps/api/event';
 import type { MogId } from '../shared/interfaces';
 import { call, EVENTS } from '../shared/ipc';
 import {
+  isCardIdentityReady,
   isViewFocus,
   isViewReady,
   MOG_TARGET_EVENT,
@@ -40,15 +41,24 @@ import { onViewInput, viewLabel, type BrainBus } from './bus';
 /** The name a MOG shows before (or without) its config name. */
 const DEFAULT_NAME = 'MOG';
 
+/** #ui-4: the identity fields the config read gives, beyond the plain name (MB-06b). */
+export interface MogIdentity {
+  name?: string;
+  /** `mog.ui.variant`. */
+  colorVariant?: string;
+  /** `mog.binding.home`, for the hover tooltip only. */
+  home?: string;
+}
+
 export interface TalkTargetDeps {
-  /** Send one target view to `mog-<id>`. */
+  /** Send one target view to `mog-<id>` and `card-<id>`. */
   send: (view: MogTargetView) => unknown;
   /** Tell Rust the new target (`mog_set_active`). A refusal leaves the target as it is. */
   setActive: (mogId: MogId) => Promise<unknown>;
   /** Run `fn` after `ms`; the result cancels it. */
   after: (ms: number, fn: () => void) => () => void;
-  /** The display name of a MOG. A failure or `undefined` shows "MOG". */
-  nameOf?: (mogId: MogId) => Promise<string | undefined>;
+  /** The name, colour and home workspace of a MOG. A failure shows "MOG" and no colour or home. */
+  identityOf?: (mogId: MogId) => Promise<MogIdentity | undefined>;
 }
 
 /** How an interaction reaches Rust: by a window signal it sees, or only by `mog_set_active`. */
@@ -67,6 +77,12 @@ export interface TalkTarget {
   pttDown(mogId: MogId): boolean;
   /** The MOG window closed. */
   closed(mogId: MogId): void;
+  /**
+   * #ui-4: a card window pinged `card.identity_ready`: resend the current view to `mogId` (its
+   * name, colour and target state) with no target move and no `mog_set_active` call. A no-op if
+   * the MOG is not open.
+   */
+  refresh(mogId: MogId): void;
   /** The target now. */
   current(): MogId | undefined;
   /**
@@ -81,7 +97,7 @@ export interface TalkTarget {
 export function createTalkTarget(deps: TalkTargetDeps): TalkTarget {
   /** Open MOGs, most recently interacted first. */
   const mru: MogId[] = [];
-  const names = new Map<MogId, string>();
+  const identities = new Map<MogId, MogIdentity>();
   /** The last MOG at the front of `mru`. It stays after the MOG closes (#562). */
   let last: MogId | undefined;
   let toastFor: MogId | undefined;
@@ -89,12 +105,17 @@ export function createTalkTarget(deps: TalkTargetDeps): TalkTarget {
 
   const current = () => mru[0];
   const isOpen = (id: MogId) => mru.includes(id);
-  const view = (id: MogId): MogTargetView => ({
-    mogId: id,
-    name: names.get(id) ?? DEFAULT_NAME,
-    target: current() === id,
-    toast: toastFor === id && current() === id,
-  });
+  const view = (id: MogId): MogTargetView => {
+    const identity = identities.get(id);
+    return {
+      mogId: id,
+      name: identity?.name ?? DEFAULT_NAME,
+      target: current() === id,
+      toast: toastFor === id && current() === id,
+      ...(identity?.colorVariant !== undefined ? { colorVariant: identity.colorVariant } : {}),
+      ...(identity?.home !== undefined ? { home: identity.home } : {}),
+    };
+  };
   const send = (id: MogId) => {
     try {
       void Promise.resolve(deps.send(view(id))).catch(() => undefined);
@@ -124,13 +145,13 @@ export function createTalkTarget(deps: TalkTargetDeps): TalkTarget {
     mru.unshift(id);
     if (old !== undefined && old !== id) send(old);
   };
-  const lookUpName = (id: MogId) => {
-    if (!deps.nameOf || names.has(id)) return;
+  const lookUpIdentity = (id: MogId) => {
+    if (!deps.identityOf || identities.has(id)) return;
     void deps
-      .nameOf(id)
-      .then((n) => {
-        if (typeof n !== 'string' || n.length === 0) return;
-        names.set(id, n);
+      .identityOf(id)
+      .then((i) => {
+        if (!i) return;
+        identities.set(id, i);
         if (isOpen(id)) send(id);
       })
       .catch(() => undefined);
@@ -141,9 +162,12 @@ export function createTalkTarget(deps: TalkTargetDeps): TalkTarget {
       if (!isOpen(id)) {
         front(id);
         void setActive(id);
-        lookUpName(id);
+        lookUpIdentity(id);
       }
       send(id);
+    },
+    refresh(id) {
+      if (isOpen(id)) send(id);
     },
     interacted(id, via = 'input') {
       if (!isOpen(id)) return false;
@@ -205,9 +229,16 @@ export function createTalkTarget(deps: TalkTargetDeps): TalkTarget {
   };
 }
 
-/** Send the target view to the MOG window of its MOG only (ARC-5). */
+/**
+ * Send the target view to the MOG window of its MOG, and to its card window (#ui-4: the card
+ * shows the same name and colour, `card.identity_ready`). The card send is best-effort: a card
+ * window usually does not exist yet (R11 creates it lazily), and `emitTo` an absent label still
+ * resolves, so neither send throws for the other (ARC-5).
+ */
 export async function sendMogTarget(view: MogTargetView): Promise<void> {
-  await emitTo(viewLabel('mog', view.mogId), MOG_TARGET_EVENT, view);
+  const mog = emitTo(viewLabel('mog', view.mogId), MOG_TARGET_EVENT, view);
+  const card = emitTo(viewLabel('card', view.mogId), MOG_TARGET_EVENT, view).catch(() => undefined);
+  await Promise.all([mog, card]);
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
@@ -235,6 +266,13 @@ export function wireTalkTarget(bus: BrainBus, target: TalkTarget): () => void {
       return;
     }
     if (input.from === `card-${input.mogId}` && input.kind !== 'hover') {
+      // #ui-4: the card's one-shot identity ping is not a user interaction: it never moves the
+      // target or calls `mog_set_active`. It only asks for the current name and colour again,
+      // for a card that opened after this MOG's own `view.ready` and so missed the push.
+      if (input.kind === 'click' && isCardIdentityReady(input.payload)) {
+        target.refresh(input.mogId);
+        return;
+      }
       const focus = input.kind === 'click' && isViewFocus(input.payload);
       target.interacted(input.mogId, focus ? 'focus' : 'input');
     }
@@ -254,17 +292,28 @@ export function wireTalkTarget(bus: BrainBus, target: TalkTarget): () => void {
   };
 }
 
-/** The MOG name from its config (`config_read` gives `{ id, json }`, ADR 0035). */
-export async function configName(mogId: MogId): Promise<string | undefined> {
+/**
+ * The MOG name, colour and home workspace from its config (`config_read` gives `{ id, json }`,
+ * ADR 0035). One read gives all three (#ui-4): the toast name, `mog.ui.variant` and
+ * `mog.binding.home` (the hover tooltip).
+ */
+export async function configIdentity(mogId: MogId): Promise<MogIdentity | undefined> {
   const r = await call('config_read', { id: mogId });
   const json = isObj(r) ? r['json'] : undefined;
-  const name = isObj(json) ? json['name'] : undefined;
-  return typeof name === 'string' ? name : undefined;
+  if (!isObj(json)) return undefined;
+  const { name, ui, binding } = json;
+  const colorVariant = isObj(ui) ? ui['variant'] : undefined;
+  const home = isObj(binding) ? binding['home'] : undefined;
+  return {
+    ...(typeof name === 'string' ? { name } : {}),
+    ...(typeof colorVariant === 'string' ? { colorVariant } : {}),
+    ...(typeof home === 'string' ? { home } : {}),
+  };
 }
 
-/** The production tracker: `emitTo` the MOG window, `mog_set_active`, real timers. */
+/** The production tracker: `emitTo` the MOG and card windows, `mog_set_active`, real timers. */
 export function createAppTalkTarget(
-  nameOf?: (mogId: MogId) => Promise<string | undefined>,
+  identityOf: (mogId: MogId) => Promise<MogIdentity | undefined> = configIdentity,
 ): TalkTarget {
   return createTalkTarget({
     send: sendMogTarget,
@@ -273,6 +322,6 @@ export function createAppTalkTarget(
       const t = setTimeout(fn, ms);
       return () => clearTimeout(t);
     },
-    ...(nameOf ? { nameOf } : {}),
+    identityOf,
   });
 }

@@ -12,8 +12,13 @@ describe('MOG page (V2)', () => {
     expect(rule?.[1]).toMatch(/background:\s*transparent;/);
     expect(rule?.[1]).toMatch(/margin:\s*0;/);
     expect(rule?.[1]).toMatch(/overflow:\s*hidden;/);
-    // A coloured background anywhere in the page would cover the desktop.
-    expect(css).not.toMatch(/background(-color)?:\s*(?!transparent)[#a-z]/);
+    // A coloured background anywhere in the page would cover the desktop, except the right-click
+    // menu (#ui-4, `.mog-menu`): it is UI chrome the user explicitly opened (Hide/Close/Open in
+    // Bottle/Change home workspace…), not part of the ambient lamp, and its text needs a real
+    // surface to read; it never shows over the mascot itself, only in the small area the click
+    // opened it in.
+    const withoutMenu = css.replace(/\.mog-menu[^{]*\{[^}]*\}/g, '');
+    expect(withoutMenu).not.toMatch(/background(-color)?:\s*(?!transparent)[#a-z]/);
   });
 
   it('[MOG-01a] the MOG entry loads the style as a file (the CSP blocks inline styles)', () => {

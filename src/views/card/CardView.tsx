@@ -11,6 +11,7 @@ import {
   asCardUpdate,
   emitView,
   sendViewReady,
+  useCardIdentity,
   useViewEvent,
   type CardSection,
   type CardUpdate,
@@ -163,6 +164,9 @@ function Section({
 
 export function CardView({ mogId }: { mogId: MogId }) {
   const [card, setCard] = useState<CardUpdate | undefined>(undefined);
+  // #ui-4: the owner MOG's name and colour (`mog:target`, `card.identity_ready`). The card is
+  // already target-only (MOG-13a, MOG-13b): this only labels it.
+  const identity = useCardIdentity(mogId);
   // #559, MOG-06d: the last Copy pop-up stays until the user copies or dismisses it, even when
   // the brain drops its chip (30 s) or its blurb (UX-12). A newer blurb replaces it.
   const [kept, setKept] = useState<CardUpdate | undefined>(undefined);
@@ -246,7 +250,7 @@ export function CardView({ mogId }: { mogId: MogId }) {
   if (genie && newest)
     return (
       <section aria-label="MOG card" className="card card-genie">
-        <GenieCard key={newest.id} mogId={mogId} card={card} onSize={onSize} />
+        <GenieCard key={newest.id} mogId={mogId} card={card} onSize={onSize} identity={identity} />
         {probe}
       </section>
     );
