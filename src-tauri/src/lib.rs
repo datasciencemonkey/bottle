@@ -17,8 +17,8 @@ pub mod mog_config_host;
 pub mod mog_drag;
 pub mod profiles_host;
 pub mod rate_bucket_host;
-pub mod recording_host;
 pub mod recording_cloud_host;
+pub mod recording_host;
 pub mod webview_media;
 pub mod window_host;
 pub mod windows;
@@ -142,14 +142,24 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let _ = link;
-    // ADR 0103: the call recording session over this core. The knob is OFF at launch. Parts
-    // go to the hand-off slot that the cloud side connects; until then they stay in the
-    // user-only temp dir under the app cache dir.
+    // ADR 0103: the call recording session over this core. The knob is seeded from the stored
+    // Settings at connect, with no ask. Parts go to the hand-off slot that the cloud side
+    // connects; until then they stay in the user-only temp dir under the app DATA dir (not the
+    // cache dir: the OS may purge a cache, and a recording that waits for Retry must stay).
     let handoff = std::sync::Arc::new(recording_host::HandoffSlot::default());
+    // The settings file path first, so the seed reads the stored knob (PR C).
+    if let (Some(store), Ok(dir)) = (
+        handle.try_state::<std::sync::Arc<
+            mog_core::recording_cloud::settings_store::JsonSettingsStore,
+        >>(),
+        handle.path().app_config_dir(),
+    ) {
+        store.set_path(dir.join(mog_core::recording_cloud::settings_store::SETTINGS_FILE));
+    }
     let recording_temp_root = handle
         .path()
-        .app_cache_dir()
-        .map(|d| d.join("recordings"))
+        .app_data_dir()
+        .map(|d| d.join(recording_cloud_host::TEMP_DIR))
         .unwrap_or_else(|_| std::env::temp_dir().join("bottle-recordings"));
     let recording = recording_host::RecordingHost::new(
         &host,
@@ -190,11 +200,22 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
         component.connect_capture(mog_core::recording::CaptureLink {
             capture: std::sync::Arc::clone(recording.session()) as _,
             temp_root: recording_temp_root.clone(),
-            on_knob: std::sync::Arc::new(move |on| {
-                if let Some(r) = weak.upgrade() {
-                    r.set_enabled(on, &*asker);
-                }
-            }),
+            // Launch seeds the stored knob with no ask; only a user OFF to ON asks.
+            on_knob: {
+                let seed_weak = weak.clone();
+                recording_host::knob_hook(
+                    move |on| {
+                        if let Some(r) = seed_weak.upgrade() {
+                            r.seed_enabled(on);
+                        }
+                    },
+                    move |on| {
+                        if let Some(r) = weak.upgrade() {
+                            r.set_enabled(on, &*asker);
+                        }
+                    },
+                )
+            },
             on_start: {
                 let session = std::sync::Arc::downgrade(recording.session());
                 std::sync::Arc::new(move |id, profile, instructions| {

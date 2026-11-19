@@ -9,25 +9,31 @@
 //! the contract PR (`issue/rec-0-contract`) route here once it lands. The caller passes the home
 //! profile the app already uses; this module never picks one.
 
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use mog_core::clock::SystemWallClock;
 use mog_core::error::{CoreError, CoreResult};
 use mog_core::http_transport::{ProfileHosts, ReqwestHttpTransport, ThreadPause};
 use mog_core::ipc::events;
-use mog_core::recording::{RecordingComponent, RecordingSettingsStore};
+use mog_core::recording::{
+    FinishedPart, PipelineRequest, RecordingComponent, RecordingSettingsStore,
+};
+use mog_core::recording_capture::session::{FinishedRecording, PartsHandoff};
 use mog_core::recording_cloud::cloud::{
     is_audio_file_of, CloudDeps, LocalPart, ProfileWorkspace, RecordingCloudService,
 };
 use mog_core::recording_cloud::contract::CloudAdapter;
 use mog_core::recording_cloud::opener::{open_link, SystemOpener, UrlOpener};
 use mog_core::recording_cloud::settings_store::{JsonSettingsStore, SETTINGS_FILE};
+use mog_core::types::{Instructions, RecordingId};
 use tauri::Manager;
 
 use crate::ipc::BrainChannel;
 use crate::mcp_host::McpHost;
 use crate::profiles_host::ProfilesHost;
 use crate::rate_bucket_host::SharedRateBucket;
+use crate::recording_host::HandoffSlot;
 
 const ID: &str = "recording_cloud_host";
 
@@ -84,7 +90,13 @@ pub fn temp_parts_of(root: Option<&std::path::Path>, name: &str) -> Vec<LocalPar
         .flatten()
         .map(|e| e.path())
         .filter(|d| d.is_dir())
-        .flat_map(|d| std::fs::read_dir(d).into_iter().flatten().flatten().map(|e| e.path()))
+        .flat_map(|d| {
+            std::fs::read_dir(d)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.path())
+        })
         .filter(|p| {
             p.file_name()
                 .and_then(|f| f.to_str())
@@ -99,6 +111,98 @@ pub fn temp_parts_of(root: Option<&std::path::Path>, name: &str) -> Vec<LocalPar
             duration_s: 0.0,
         })
         .collect()
+}
+
+/// The cloud end of PR B's hand-off: each finished recording runs the pipeline exactly once,
+/// on its own thread, with the profile and the instructions of its `recording_start`.
+pub struct PipelineHandoff {
+    run: Arc<dyn Fn(PipelineRequest, u64) + Send + Sync>,
+    settings: Arc<dyn RecordingSettingsStore>,
+    seen: Mutex<HashSet<String>>,
+}
+
+impl PipelineHandoff {
+    /// A hand-off that calls `run(request, started_at_ms)` on a worker thread.
+    pub fn new(
+        run: Arc<dyn Fn(PipelineRequest, u64) + Send + Sync>,
+        settings: Arc<dyn RecordingSettingsStore>,
+    ) -> Self {
+        Self {
+            run,
+            settings,
+            seen: Mutex::new(HashSet::new()),
+        }
+    }
+
+    /// The pipeline request of `rec`, or `None` when it cannot run now: no audio (the empty
+    /// temp dir is deleted), no home profile, or no storage in Settings. Then the audio stays
+    /// in the temp dir for Retry.
+    pub fn request(&self, rec: &FinishedRecording) -> Option<PipelineRequest> {
+        if rec.parts.is_empty() {
+            remove_dir_if_empty(&rec.dir);
+            return None;
+        }
+        let settings = self.settings.load().ok()?;
+        let profile = rec.profile.clone().filter(|p| !p.trim().is_empty())?;
+        let storage = settings.storage.clone()?;
+        let id = RecordingId::try_from(rec.id.clone()).ok()?;
+        let instructions = rec
+            .instructions
+            .clone()
+            .and_then(|i| Instructions::try_from(i).ok())
+            .unwrap_or_else(|| settings.preset_instructions.clone());
+        Some(PipelineRequest {
+            profile,
+            storage,
+            id,
+            name: rec.name.clone(),
+            parts: rec
+                .parts
+                .iter()
+                .map(|p| FinishedPart {
+                    index: p.index,
+                    path: p.path.clone(),
+                    offset_s: p.offset_ms as f64 / 1000.0,
+                    duration_s: p.samples as f64 / f64::from(SAMPLE_RATE),
+                })
+                .collect(),
+            instructions,
+            settings,
+        })
+    }
+}
+
+/// The capture sample rate of the parts (16 kHz mono).
+const SAMPLE_RATE: u32 = 16_000;
+
+/// Delete `dir` only when it is empty (after every part was uploaded and deleted).
+pub fn remove_dir_if_empty(dir: &std::path::Path) {
+    let _ = std::fs::remove_dir(dir);
+}
+
+impl PartsHandoff for PipelineHandoff {
+    fn finished(&self, rec: FinishedRecording) {
+        let first = self
+            .seen
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(rec.id.clone());
+        if !first {
+            return;
+        }
+        let Some(req) = self.request(&rec) else {
+            return;
+        };
+        let run = self.run.clone();
+        let dir = rec.dir.clone();
+        let started = rec.started_at_ms.max(0) as u64;
+        let _ = std::thread::Builder::new()
+            .name("bottle-rec-pipeline".into())
+            .spawn(move || {
+                run(req, started);
+                remove_dir_if_empty(&dir);
+            });
+    }
 }
 
 /// Build the recording cloud host. [`crate::mcp_host::install`] and
@@ -153,10 +257,20 @@ pub fn install(handle: &tauri::AppHandle<tauri::Wry>) -> CoreResult<()> {
     });
     let adapter = Arc::new(CloudAdapter::new(
         service.clone(),
-        store,
+        store.clone(),
         temp_parts,
         on_job,
     ));
+    // PR B's finished recordings run the pipeline once each (waiting ones go out now).
+    if let Some(slot) = handle.try_state::<Arc<HandoffSlot>>() {
+        let a = adapter.clone();
+        slot.connect(Arc::new(PipelineHandoff::new(
+            Arc::new(move |req, started| {
+                let _ = a.run_pipeline(&req, started);
+            }),
+            store.clone(),
+        )));
+    }
     let opener: Arc<dyn UrlOpener> = Arc::new(SystemOpener);
     if let Some(component) = handle.try_state::<Arc<RecordingComponent>>() {
         let (svc, op) = (service.clone(), opener.clone());
