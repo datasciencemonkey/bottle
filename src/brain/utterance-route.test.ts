@@ -232,11 +232,11 @@ describe('utterance route (#59)', () => {
     });
   });
 
-  it('[RTR-04a] the model reply of the IPC double reaches the route', async () => {
+  it('[RTR-04a] [#557] the model reply of the IPC double reaches the route (a question is a chip)', async () => {
     core.reset();
     core.invoke.mockImplementation(async (cmd: string) =>
       cmd === 'model_invoke' ? chatCompletion(JSON.stringify(routerDecision())) : {},
     );
-    expect((await routeUtterance(utterance(), ipcUtteranceDeps())).route).toBe('preview');
+    expect((await routeUtterance(utterance(), ipcUtteranceDeps())).route).toBe('chip');
   });
 });

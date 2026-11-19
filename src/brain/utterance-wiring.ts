@@ -9,6 +9,8 @@
  * - RTR-04a, RTR-17b, B1: a preview or a chip goes to `onAsk` with its live owner. `onAsk`
  *   (the T3 ask gate, `ask-gate.ts`, #142) runs the 1.5 s preview or shows the chip, and it releases
  *   the owner. Nothing here sends to Genie.
+ * - #557 (ADR 0096): a question is dictated first. Its chip goes to `onAsk`, then its dictation
+ *   (inserted, failed, or Copy) goes to `onDone`, so a refused paste still reaches the Copy card.
  */
 import type { MogId } from '../shared/interfaces';
 import type { Utterance as CapturedUtterance } from './capture-lifecycle';
@@ -62,6 +64,7 @@ export function createUtteranceHandler(
         deps.onAsk(r, owned);
         // Only a call that returns hands the owner off; a throw releases it below.
         handedOff = true;
+        if (r.route === 'chip' && r.dictated) deps.onDone?.(r.dictated, owned);
         return;
       }
       deps.owner.release(owned.utteranceId);

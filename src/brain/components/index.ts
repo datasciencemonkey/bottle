@@ -177,6 +177,8 @@ export function startBrain(): Brain {
       target: (mogId) => homes.home(mogId),
       // The hand-off seam: T15 `agent_send`. The core approves this one question (#141).
       send: (t) => components.T15.send(t),
+      // #557: a press with no home profile opens the picker; the user picks, then the text goes.
+      pickProfile: (mogId, then) => void pick.choose(mogId, then),
     });
     // TODO(#374): the card-hide signal calls `askGate.cardClosed`; none reaches the brain yet.
     wireAskGate(bus, askGate, stackFor, {
@@ -213,8 +215,8 @@ export function startBrain(): Brain {
       if (input.from === 'hub') void dictation.hubReady();
       else if (input.from === `card-${input.mogId}`) dictation.cardReady(input.mogId);
     });
-    // #163 (RTR-15c, W-07d): the home profile of each MOG, and the "Pick a profile to ask
-    // Genie" card for a question with no home profile. The user picks; Bottle never picks.
+    // #163 (RTR-15c, W-07d): the home profile of each MOG. #557: a press on Ask Genie with no
+    // home profile opens the profile picker. The user picks; Bottle never picks.
     const homes = createHomeProfiles(ipcHomeProfileDeps());
     const insertionOn = () => true;
     const route = withOfflineFallback(ipcUtteranceDeps());
@@ -223,8 +225,6 @@ export function startBrain(): Brain {
       showCard: (mogId) => call('window_card_show', { mogId }),
       listProfiles: ipcListProfiles,
       saveHome: (mogId, profile) => components.T1.edit(mogId, { home: profile }),
-      insertionOn,
-      insertText: route.insertText,
     });
     // #14: the PTT and hands-free lifecycle. Every start goes through the T12 consent gate.
     const lifecycle = createCaptureLifecycle({
@@ -248,12 +248,8 @@ export function startBrain(): Brain {
         insertionOn,
         route,
         // #142: T3 runs the 1.5 s preview or shows the chip, and it releases the owner.
-        // #163: with no home profile an ask shows the pick card instead; it never sends (B1).
-        onAsk: (r, owned) => {
-          if (homes.home(owned.mogId) !== undefined) return askGate.onAsk(r, owned);
-          void pick.showNoProfile(r, owned);
-          owner.release(owned.utteranceId);
-        },
+        // #557: a question is dictated first and gets the chip; nothing sends without a press.
+        onAsk: (r, owned) => askGate.onAsk(r, owned),
         // #498, MOG-05b, MOG-06d: a Copy or a failed insertion reaches the Copy card.
         onDone: (r, owned) => void dictation.onDone(r, owned).catch(() => undefined),
       }),

@@ -3,7 +3,6 @@
  * It never sends by itself and never picks a profile for the user.
  */
 import type { Profile } from '../shared/interfaces';
-import { routerDecision } from '../test-support/model-invoke';
 import { createCardStack, type CardStackUpdate } from './card-stack';
 import { createProfilePick, type ProfilePickDeps } from './profile-pick';
 

@@ -17,6 +17,10 @@
  *   action: a click sends nothing.
  * - A missing target profile, a closed MOG or a failed hand-off sends nothing and shows
  *   "Not sent." No retry runs by itself.
+ * - #557 (ADR 0096): with `pickProfile`, a press on Ask Genie with no target profile opens the
+ *   profile picker and sends nothing. The press is the confirmation: when the user clicks a
+ *   profile, the same text goes out once. Bottle never picks. With no target, a preview route is
+ *   a chip, so only a press can start the picker.
  *
  * The gate never calls `mcp_call` or `agent_*` itself: `send` is its only way out.
  * TODO(#200): the RecallGate hits go in `AgentTurn.recall`; until then it is empty.
@@ -74,6 +78,8 @@ export interface AskGateDeps {
   target(mogId: MogId): ProfileName | undefined;
   /** The hand-off seam: the approved question goes to the main agent (T15, `agent_send`). */
   send(turn: AgentTurn): Promise<void>;
+  /** #557: show the profile picker of a MOG; `then` runs once after the user saves a pick. */
+  pickProfile?(mogId: MogId, then: () => void): void;
 }
 
 export interface AskGate {
@@ -135,6 +141,13 @@ export function createAskGate(deps: AskGateDeps): AskGate {
   const handOff = (mogId: MogId, question: string, decision: RouterDecision, blurbId: string) => {
     const card = deps.cardFor(mogId);
     const target = deps.target(mogId);
+    if (target === undefined && deps.pickProfile && deps.isOpen(mogId)) {
+      // #557: the press waits for the user's pick. A pick that still gives no target sends nothing.
+      deps.pickProfile(mogId, () => {
+        if (deps.target(mogId) !== undefined) handOff(mogId, question, decision, blurbId);
+      });
+      return;
+    }
     if (target === undefined || !deps.isOpen(mogId)) {
       card.add({ id: blurbId, text: notSentText(question), completed: true });
       return;
@@ -250,13 +263,20 @@ export function createAskGate(deps: AskGateDeps): AskGate {
       const old = previews.get(owned.mogId);
       if (old) cancel(old);
       // RTR-14, twice: a flagged decision never previews, also if a route says `preview`.
-      if (r.route === 'preview' && !r.decision.injection_suspected) return startPreview(r, owned);
+      // #557: with no target and a picker, a preview is a chip; only a press starts the picker.
+      const canPreview = !deps.pickProfile || deps.target(owned.mogId) !== undefined;
+      if (r.route === 'preview' && !r.decision.injection_suspected && canPreview)
+        return startPreview(r, owned);
       // A chip holds no owner: the click names its MOG.
       deps.owner.release(owned.utteranceId);
       offerChip(
         r.route === 'chip'
           ? r
-          : { route: 'chip', decision: r.decision, warning: 'injection_suspected' },
+          : {
+              route: 'chip',
+              decision: { ...r.decision, genie_question: r.question },
+              warning: r.decision.injection_suspected ? 'injection_suspected' : undefined,
+            },
         owned,
       );
     },
