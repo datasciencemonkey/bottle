@@ -17,5 +17,9 @@ A screen reader reads its name with ", target" at the end.
 
 When you hold the talk key, the target MOG shows "Talking to <name>" for 1.2 seconds.
 
+When no MOG is running, the talk key starts the MOG that you used last, and you talk to it.
+In a new run of Bottle, the talk key starts the first MOG in the hub list.
+When you have no MOG, the hub shows "Create a MOG to start". No recording starts.
+
 The MOG that heard your question shows the answer.
 This stays true when you use another MOG before the answer comes.

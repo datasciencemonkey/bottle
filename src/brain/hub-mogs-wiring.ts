@@ -71,6 +71,23 @@ async function snapshot(m: MogManager, notice?: HubNoticeLine): Promise<HubMogLi
   }
 }
 
+/**
+ * Send the list to the hub outside a hub action, with an optional `notice` (#562: the talk key
+ * started a MOG, or there is no MOG). False when no hub is open.
+ */
+export async function sendHubSnapshot(
+  manager: MogManager,
+  notice?: HubNoticeLine,
+  send: (list: HubMogList) => Promise<unknown> = sendHubMogs,
+): Promise<boolean> {
+  try {
+    await send(await snapshot(manager, notice));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Wire the hub MOG actions to `manager`, and send the list to the hub once now. */
 export function wireHubMogs(
   bus: BrainBus,

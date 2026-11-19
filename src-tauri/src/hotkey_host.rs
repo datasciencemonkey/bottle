@@ -295,7 +295,8 @@ impl TalkNow {
 /// Turns R1 outputs into brain items and status changes.
 ///
 /// The target is read at `down` and kept until `up` or `cancel`, so one press goes to one
-/// MOG even if the target moves during the hold. With no target, the press sends nothing.
+/// MOG even if the target moves during the hold. With no open MOG, the whole press goes to
+/// the brain with an empty `mogId`, and the brain starts the last-used MOG (#562, ADR 0095).
 /// A `double_tap` goes to the MOG of the press it follows (CAP-14a).
 pub struct PttForwarder<B: BrainSink, S: StatusSink> {
     target: Arc<PttTarget>,
@@ -348,7 +349,8 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
                         if let Some(hook) = &self.key_down {
                             hook();
                         }
-                        self.held = self.target.current();
+                        // #562 (ADR 0095): an empty ID is a press with no open MOG.
+                        self.held = Some(self.target.current().unwrap_or_default());
                         self.held.clone()
                     }
                     PttPhase::Up | PttPhase::Cancel => {
@@ -1254,14 +1256,23 @@ mod tests {
     }
 
     #[test]
-    fn mb_06a_no_target_means_no_ptt_event() {
+    fn mb_06a_a_press_with_no_open_mog_reaches_the_brain_with_no_mog_id() {
+        // #562 (ADR 0095): the press is not dropped. The brain starts the last-used MOG.
         let target = Arc::new(PttTarget::default());
         let (mut f, brain, _) = forwarder(&target);
         f.on_output(HotkeyOutput::Ptt(PttPhase::Down));
-        // A target that shows up during the hold does not get a lone `up`.
+        // A target that shows up during the hold (the brain opened a MOG) does not get a
+        // lone `up`: the whole press stays on the empty ID.
         target.set("a1");
         f.on_output(HotkeyOutput::Ptt(PttPhase::Up));
-        assert!(brain.items().is_empty());
+        f.on_output(HotkeyOutput::Ptt(PttPhase::DoubleTap));
+        assert_eq!(
+            brain.items(),
+            vec![ptt("", "down"), ptt("", "up"), ptt("", "double_tap")]
+        );
+        // The next press goes to the MOG that is open now.
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Down));
+        assert_eq!(brain.items().last(), Some(&ptt("a1", "down")));
     }
 
     #[test]
@@ -2041,10 +2052,11 @@ mod tests {
     fn mb_06a_a_windows_press_goes_to_the_mog_that_got_down() {
         let target = Arc::new(PttTarget::default());
         let mut engine = HotkeyEngine::new(Arc::new(queue().0));
-        // No target: nothing reaches the brain, and the adapter keeps no state of its own.
+        // No target: the adapter keeps no state of its own, and the press reaches the brain
+        // with no MOG ID (#562).
         assert_eq!(adapt_hook_signal(down(), &mut engine), None);
         let (items, _, _) = run_windows_path(&target, &[down(), up()]);
-        assert!(items.is_empty());
+        assert_eq!(items, vec![ptt("", "down"), ptt("", "up")]);
         target.set("b2");
         let (items, _, _) = run_windows_path(&target, &[down(), up()]);
         assert_eq!(items, vec![ptt("b2", "down"), ptt("b2", "up")]);
