@@ -6,7 +6,16 @@ import { AFTER_HOVER_MS, FAILURE_SHOW_MS, answerShowMs } from '../../shared/geni
 import { inputEmits, render, tauri } from '../test-tauri';
 import type { CardUpdate } from '../view-ipc';
 import { CardView } from './CardView';
-import { DISMISS_FADE_MS, FADE_MS, FAILURE_TITLE, FOOTER_HINT } from './GenieCard';
+import {
+  ANSWER_CLAMP_PX,
+  CLOSE_LABEL,
+  DISMISS_FADE_MS,
+  FADE_MS,
+  FAILURE_TITLE,
+  OPEN_IN_BOTTLE_LABEL,
+  SHOW_LESS_LABEL,
+  SHOW_MORE_LABEL,
+} from './GenieCard';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('../test-tauri')).coreModule);
 vi.mock('@tauri-apps/api/event', async () => (await import('../test-tauri')).eventModule);
@@ -130,9 +139,67 @@ describe('Genie card (#573)', () => {
       '150catalogs',
     ]);
     expect(c?.querySelector('.genie-key-value')?.textContent).toBe('8,800');
-    expect(c?.textContent).toContain(FOOTER_HINT);
+    expect(c?.querySelector('button[data-action="open-in-bottle"]')?.textContent).toBe(
+      OPEN_IN_BOTTLE_LABEL,
+    );
+    expect(c?.querySelector('button[data-action="dismiss"]')?.getAttribute('aria-label')).toBe(
+      CLOSE_LABEL,
+    );
     // The card never takes the keyboard from the user's app.
     expect(document.activeElement).toBe(document.body);
+  });
+
+  it('[#103] a single click on the card body opens Conversations, the same as a double-click', async () => {
+    const el = await mount();
+    await tauri.emitTo(`card-${ID}`, 'card:update', answered);
+    await mouse(el.querySelector('[data-genie]') as Element, 'click');
+    expect(clicks()[0]?.payload).toEqual({ target: 'open_conversations', requestId: OP });
+    expect(el.querySelector('[data-genie]')?.getAttribute('data-state')).toBe('dismissing');
+  });
+
+  it('[#103] a click on [Open in Bottle] opens Conversations and does not bubble twice', async () => {
+    const el = await mount();
+    await tauri.emitTo(`card-${ID}`, 'card:update', answered);
+    const btn = el.querySelector('button[data-action="open-in-bottle"]') as HTMLElement;
+    await act(async () => void btn.click());
+    expect(clicks()[0]?.payload).toEqual({ target: 'open_conversations', requestId: OP });
+  });
+
+  it('[#103] a click on the close control fades the card at once and never opens Conversations', async () => {
+    const el = await mount();
+    await tauri.emitTo(`card-${ID}`, 'card:update', answered);
+    const close = el.querySelector('button[data-action="dismiss"]') as HTMLElement;
+    await act(async () => void close.click());
+    expect(clicks()).toEqual([]);
+    expect(el.querySelector('[data-genie]')?.getAttribute('data-state')).toBe('dismissing');
+    await advance(DISMISS_FADE_MS);
+    expect(done()).toBe(1);
+  });
+
+  it('[#103] a long answer clamps to a short summary with Show more, then Show less', async () => {
+    const el = await mount();
+    const longMd = Array.from({ length: 20 }, (_, i) => `Paragraph number ${i}.`).join('\n\n');
+    await tauri.emitTo(`card-${ID}`, 'card:update', {
+      ...answered,
+      sections: [{ id: 'answer', md: longMd }],
+    });
+    const body = el.querySelector('[data-answer] .genie-answer-body') as HTMLElement;
+    Object.defineProperty(body, 'scrollHeight', { value: ANSWER_CLAMP_PX * 3, configurable: true });
+    Object.defineProperty(body, 'clientHeight', { value: ANSWER_CLAMP_PX, configurable: true });
+    await tauri.emitTo(`card-${ID}`, 'card:update', {
+      ...answered,
+      sections: [{ id: 'answer', md: `${longMd} ` }],
+    });
+    const toggle = () => el.querySelector('button.genie-toggle') as HTMLElement | null;
+    expect(toggle()?.textContent).toBe(SHOW_MORE_LABEL);
+    expect(body.getAttribute('data-expanded')).toBe('false');
+    await act(async () => void toggle()?.click());
+    expect(body.getAttribute('data-expanded')).toBe('true');
+    expect(toggle()?.textContent).toBe(SHOW_LESS_LABEL);
+    // Expanding or collapsing is not a click to open Conversations.
+    expect(clicks()).toEqual([]);
+    await act(async () => void toggle()?.click());
+    expect(body.getAttribute('data-expanded')).toBe('false');
   });
 
   it('[#573] an ignored answer fades after its show time and tells the brain, once', async () => {

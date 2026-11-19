@@ -4,17 +4,28 @@
  * 1. Working: the status pill. The stage line ("Asking Genie", then the fixed Genie stage) with a
  *    soft light sweep, and after 3 s the timer ("0:03", then "Working… 1:04"). It stays while
  *    Genie works. Only the stage line is live for a screen reader.
- * 2. Answer: the pill grows into the answer card: the question, the answer (safe markdown), the
- *    key numbers and a footer. Failure: "Genie could not answer.", the GL-5 reason and Try again.
+ * 2. Answer: the pill grows into the answer card: the question, a short summary of the answer
+ *    (safe markdown, clamped to a few lines with "Show more" to read the rest), the key numbers
+ *    and a footer with [Open in Bottle] and a close control. Failure: "Genie could not answer.",
+ *    the GL-5 reason and Try again.
  * 3. Gone: an answer stays for T = 4 s + 0.25 s per word (6 s to 20 s), a failure 8 s. The pointer
  *    on the card or on the MOG holds it; after the pointer leaves it stays 2.5 s or more. Then it
- *    fades and tells the brain (`card_done`), which hides the window. No close button, no drag.
+ *    fades and tells the brain (`card_done`), which hides the window.
  *
- * A double-click opens hub Conversations on this exchange. The card never takes focus: it calls
- * no `focus()`, and the window shows without becoming key (ADR 0102).
+ * A single click on [Open in Bottle] or on the card body (not a link, a button, or a text
+ * selection drag), and a double-click anywhere on the card, open hub Conversations on this
+ * exchange. The close control fades the card at once, the same as a double-click. The card never
+ * takes focus: it calls no `focus()`, and the window shows without becoming key (ADR 0102).
  * Design: the designer-mog spec, sections 4 and 5 (ADR 0102), on `tokens.css` only.
  */
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import type { MogId } from '../../shared/interfaces';
@@ -30,7 +41,7 @@ import {
   timerText,
 } from '../../shared/genie-status';
 import { emitView, type CardUpdate } from '../view-ipc';
-import { SafeMarkdown, type LinkTrust } from './safe-markdown';
+import { NO_LINKS, SafeMarkdown } from './safe-markdown';
 
 /** The card fade at its time; a double-click fades faster. */
 export const FADE_MS = 300;
@@ -39,10 +50,13 @@ export const DISMISS_FADE_MS = 150;
 export const STAGE_LEAVE_MS = 120;
 /** The failure title (design spec 5). */
 export const FAILURE_TITLE = 'Genie could not answer.';
-export const FOOTER_HINT = 'Double-click to open in Bottle';
-
-/** No link in an answer is trusted until the card knows the profile host (TODO(#40)). */
-const NO_LINKS: LinkTrust = { profileHost: '', allowedAppUrls: [] };
+/** The footer action that opens hub Conversations on this exchange (also a single click on the card). */
+export const OPEN_IN_BOTTLE_LABEL = 'Open in Bottle';
+export const SHOW_MORE_LABEL = 'Show more';
+export const SHOW_LESS_LABEL = 'Show less';
+export const CLOSE_LABEL = 'Close';
+/** The answer clamps to about this height (roughly 4 lines) until the user asks to see more. */
+export const ANSWER_CLAMP_PX = 96;
 
 type Vis = 'shown' | 'fading' | 'dismissing' | 'gone';
 
@@ -167,6 +181,26 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
     left: showMs,
   });
 
+  // The answer clamps to a short summary by default (ANSWER_CLAMP_PX); "Show more" expands it to
+  // the full scroll region (`.genie-answer`'s own cap), "Show less" clamps it again. A new answer
+  // always starts collapsed.
+  const [expanded, setExpanded] = useState(false);
+  const [canExpand, setCanExpand] = useState(false);
+  const answerRef = useRef<HTMLDivElement>(null);
+  // Reset during render (not in an effect), the documented way to clear state on a prop change:
+  // https://react.dev/learn/you-might-not-need-an-effect#resetting-all-state-when-a-prop-changes
+  const prevBlurbId = useRef(blurbId);
+  if (prevBlurbId.current !== blurbId) {
+    prevBlurbId.current = blurbId;
+    if (expanded) setExpanded(false);
+  }
+  useLayoutEffect(() => {
+    const el = answerRef.current;
+    // `scrollHeight` is the content's natural height, unclamped by this element's own
+    // `max-height`, so this never flips once the user expands it.
+    setCanExpand(el ? el.scrollHeight > ANSWER_CLAMP_PX + 1 : false);
+  }, [kind, text, answer?.md]);
+
   const end = useCallback(
     (fadeMs: number) => {
       clearTimeout(timer.current.handle);
@@ -230,6 +264,23 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
   }, [end]);
   useWindowEvent(CARD_DISMISS_EVENT, onDismiss);
 
+  // A single click on the card body or on [Open in Bottle] opens hub Conversations, the same as
+  // a double-click (ADR 0102, #103). A link stays inert (TODO(#523)); a text-selection drag never
+  // navigates, though `.genie` already disables text selection.
+  const openInBottle = useCallback(
+    (e: ReactMouseEvent) => {
+      if (workingRef.current) return;
+      if ((e.target as Element | null)?.closest('a')) return;
+      if ((document.getSelection()?.toString() ?? '') !== '') return;
+      void emitView(mogId, 'click', {
+        target: OPEN_CONVERSATIONS,
+        ...(opId ? { requestId: opId } : {}),
+      }).catch(() => undefined);
+      if (visRef.current !== 'gone') end(DISMISS_FADE_MS);
+    },
+    [mogId, opId, end],
+  );
+
   // The window fits the final size first, so the grow motion is never cut. A card that is gone
   // asks for one line, so a later show never gets the old, taller window back.
   const fitted = useRef<Promise<void>>(Promise.resolve());
@@ -237,7 +288,7 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
     if (!onSize) return;
     const frame = ref.current?.parentElement;
     fitted.current = Promise.resolve(onSize(frame ? frame.getBoundingClientRect().height : 0));
-  }, [onSize, kind, text, card.sections, card.blurbs, retry, vis]);
+  }, [onSize, kind, text, card.sections, card.blurbs, retry, vis, expanded]);
 
   // The pill grows into the card: the same element animates from its old size and corners to
   // the new ones. The motion waits until the window has its new height.
@@ -285,6 +336,24 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
   const question = questionOf(card);
   const [line1 = '', ...rest] = text.split('\n');
 
+  const toggleExpanded = (e: ReactMouseEvent) => {
+    e.stopPropagation();
+    setExpanded((x) => !x);
+  };
+  // The safe-markdown answer, clamped to a short summary. "Show more"/"Show less" (rendered once,
+  // beside it) lift or reapply the clamp when it overflows ANSWER_CLAMP_PX. Shared by the
+  // 'answer' and 'message' kinds (UX-14a, #103).
+  const answerBody = (md: string) => (
+    <div
+      ref={answerRef}
+      className="genie-answer-body"
+      data-expanded={expanded}
+      data-overflowing={canExpand}
+    >
+      <SafeMarkdown text={md} trust={NO_LINKS} />
+    </div>
+  );
+
   return (
     <div
       ref={ref}
@@ -293,6 +362,7 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
       data-state={vis}
       onMouseEnter={() => hold('pointer', true)}
       onMouseLeave={() => hold('pointer', false)}
+      onClick={openInBottle}
       onDoubleClick={onDoubleClick}
     >
       {kind === 'working' && (
@@ -300,6 +370,23 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
           <Stage text={line1} />
           <Timer />
         </>
+      )}
+      {kind !== 'working' && (
+        <button
+          type="button"
+          className="popup-dismiss genie-dismiss"
+          data-action="dismiss"
+          aria-label={CLOSE_LABEL}
+          onDoubleClick={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (!workingRef.current && visRef.current !== 'gone') end(DISMISS_FADE_MS);
+          }}
+        >
+          <svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true">
+            <path d="M2 2l6 6M8 2l-6 6" />
+          </svg>
+        </button>
       )}
       {kind !== 'working' && (
         <div className="genie-body" key="body">
@@ -310,8 +397,24 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
           )}
           {kind === 'answer' && answer && (
             <div className="genie-md" data-answer role="status">
-              <SafeMarkdown text={answer.md} trust={NO_LINKS} />
+              {answerBody(answer.md)}
             </div>
+          )}
+          {kind === 'message' && (
+            <div className="genie-md" data-answer>
+              {answerBody([line1, ...rest].join('\n'))}
+            </div>
+          )}
+          {(kind === 'answer' || kind === 'message') && canExpand && (
+            <button
+              type="button"
+              className="popup-action genie-toggle"
+              data-action={expanded ? 'show-less' : 'show-more'}
+              onDoubleClick={(e) => e.stopPropagation()}
+              onClick={toggleExpanded}
+            >
+              {expanded ? SHOW_LESS_LABEL : SHOW_MORE_LABEL}
+            </button>
           )}
           {kind === 'answer' && keys && keys.items.length > 0 && (
             <ul className="genie-keys" aria-label="Key numbers">
@@ -332,11 +435,6 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
               <p className="genie-reason">{line1}</p>
             </div>
           )}
-          {kind === 'message' && (
-            <div className="genie-md" data-answer>
-              <SafeMarkdown text={[line1, ...rest].join('\n')} trust={NO_LINKS} />
-            </div>
-          )}
           <footer className="genie-foot">
             {retry ? (
               <button
@@ -345,6 +443,7 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
                 data-chip={retry.id}
                 onDoubleClick={(e) => e.stopPropagation()}
                 onClick={(e) => {
+                  e.stopPropagation();
                   // The second click of a double-click sends nothing more.
                   if (e.detail > 1) return;
                   void emitView(mogId, 'chip_click', { chipId: retry.id }).catch(() => undefined);
@@ -353,7 +452,18 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
                 {retry.label}
               </button>
             ) : (
-              <span>{FOOTER_HINT}</span>
+              <button
+                type="button"
+                className="popup-action genie-open"
+                data-action="open-in-bottle"
+                onDoubleClick={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openInBottle(e);
+                }}
+              >
+                {OPEN_IN_BOTTLE_LABEL}
+              </button>
             )}
             <span className="genie-when">now</span>
           </footer>

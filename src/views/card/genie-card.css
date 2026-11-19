@@ -156,8 +156,43 @@
   transform-origin: left 20px;
 }
 
+/* The close control: top-right of the card, the same shape as the pop-up's dismiss. */
+.genie-dismiss {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+}
+
+/* The answer clamps to a short summary; "Show more" lifts the clamp (fit-window.ts still caps the
+   window and `.genie-answer`'s own scroll region, so the card never grows past its cap). */
+.genie-answer-body {
+  overflow: hidden;
+  transition: max-height 200ms var(--mog-ease-out);
+}
+
+.genie-answer-body[data-expanded='false'] {
+  max-height: 96px;
+}
+
+.genie-answer-body[data-expanded='false'][data-overflowing='true'] {
+  -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 70%, transparent 100%);
+}
+
+.genie-answer-body[data-expanded='true'] {
+  max-height: 2000px;
+}
+
+.genie-toggle,
+.genie-open {
+  margin-top: 8px;
+}
+
 .genie-question {
   margin: 0 0 6px;
+  /* Room for the close control at the top right. */
+  padding-right: 22px;
   overflow: hidden;
   color: var(--mog-text-muted);
   font-size: var(--mog-text-xs);
@@ -346,5 +381,9 @@
 
   .genie-body {
     animation: none;
+  }
+
+  .genie-answer-body {
+    transition: none;
   }
 }

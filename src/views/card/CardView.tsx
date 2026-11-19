@@ -3,6 +3,7 @@
  * and one action. A card with an answer, sections, a Page domain or a checklist is the panel.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { PIN_ENABLED } from '../../shared/feature-flags';
 import { isGenieBlurbId } from '../../shared/genie-status';
 import type { MogId } from '../../shared/interfaces';
 import { DomainPicker } from '../DomainPicker';
@@ -17,6 +18,7 @@ import {
 import { createWindowFit } from './fit-window';
 import { GenieCard } from './GenieCard';
 import { Popup } from './Popup';
+import { NO_LINKS, SafeMarkdown } from './safe-markdown';
 
 /** The MOG ID of the debug demo card (`DEMO_ID` in `src-tauri/src/lib.rs`). */
 const DEMO_ID = 'demo';
@@ -60,7 +62,9 @@ function Section({
     case 'answer':
       return (
         <section data-section="answer" aria-label="Full answer">
-          <div data-answer>{s.md}</div>
+          <div data-answer>
+            <SafeMarkdown text={s.md} trust={NO_LINKS} />
+          </div>
         </section>
       );
     case 'keyNumbers':
@@ -193,8 +197,7 @@ export function CardView({ mogId }: { mogId: MogId }) {
 
   // The brain orders, limits, pins and collapses the blurbs (UX-11a..UX-12, ADR 0028); the view
   // renders them in the order it gets and reports pointer hover and keyboard focus.
-  // TODO(#86): blurb lines. TODO(#210): answer text goes through `safe-markdown.tsx` (plain text
-  // now, at `data-answer` and `data-section="answer"`); the deep link becomes a trusted link.
+  // TODO(#86): blurb lines. TODO(#210 follow-up): the deep link becomes a trusted link.
   const hover = (blurbId: string, via: 'pointer' | 'focus', on: boolean) =>
     void emitView(mogId, 'hover', { blurbId, on, via });
   const historyCount = card?.historyCount ?? 0;
@@ -284,14 +287,17 @@ export function CardView({ mogId }: { mogId: MogId }) {
             ) : (
               b.text
             )}
-            <button
-              type="button"
-              data-action="pin"
-              aria-pressed={b.pinned === true}
-              onClick={() => void emitView(mogId, 'click', { target: 'pin', blurbId: b.id })}
-            >
-              Pin
-            </button>
+            {/* #574: the host refuses to persist a pin until the pin API ships. */}
+            {PIN_ENABLED && (
+              <button
+                type="button"
+                data-action="pin"
+                aria-pressed={b.pinned === true}
+                onClick={() => void emitView(mogId, 'click', { target: 'pin', blurbId: b.id })}
+              >
+                Pin
+              </button>
+            )}
           </li>
         ))}
       </ul>
@@ -324,7 +330,9 @@ export function CardView({ mogId }: { mogId: MogId }) {
         />
       ))}
       {card?.sections === undefined && card?.answerMd !== undefined && (
-        <div data-answer>{card.answerMd}</div>
+        <div data-answer>
+          <SafeMarkdown text={card.answerMd} trust={NO_LINKS} />
+        </div>
       )}
       {card?.pageDomain && <DomainPicker mogId={mogId} picker={card.pageDomain} />}
       {card?.pagesChecklist && (

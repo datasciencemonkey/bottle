@@ -32,14 +32,15 @@ describe('V3 card view', () => {
     roots = [];
   });
 
-  it('[V3] subscribes to card:update and renders blurbs, chips and the answer as text', async () => {
+  it('[V3] [SEC-25a] subscribes to card:update, renders blurbs and chips, and the answer as safe markdown', async () => {
     const { el } = await mountCard(<CardView mogId={ID} />);
     expect(tauri.listeners('card:update')).toBe(1);
     await tauri.emit('card:update', update);
     expect(el.textContent).toContain('Revenue was 4.2M');
     expect(el.querySelector('button[data-chip="c1"]')?.textContent).toBe('Ask Genie');
-    expect(el.querySelector('[data-answer]')?.textContent).toBe('**4.2M** in Q3');
-    expect(el.querySelector('strong')).toBeNull();
+    // #210 follow-up: the answer renders through the safe markdown allowlist, never raw text.
+    expect(el.querySelector('[data-answer]')?.textContent).not.toContain('**');
+    expect(el.querySelector('[data-answer] strong')?.textContent).toBe('4.2M');
   });
 
   it('[MOG-05b] sends view_emit ready once, after it listens to card:update (#507)', async () => {
@@ -186,6 +187,14 @@ describe('V3 card view', () => {
     expect(el.querySelector('[data-action="pin"]')).toBeNull();
   });
 
+  it('[#574] the panel never shows a Pin control while PIN_ENABLED is false', async () => {
+    const { el } = await mountCard(<CardView mogId={ID} />);
+    // The panel view needs `sections` or `answerMd` to show (not the #559 pop-up).
+    await tauri.emit('card:update', { ...stack, ...update, blurbs: stack.blurbs });
+    expect(el.querySelector('[data-action="pin"]')).toBeNull();
+    expect(el.textContent).not.toContain('Pin');
+  });
+
   it('[UX-12] sends pointer hover and keyboard focus of the pop-up blurb to the brain', async () => {
     const { el } = await mountCard(<CardView mogId={ID} />);
     await tauri.emit('card:update', {
@@ -250,6 +259,59 @@ describe('V3 card view: expanded sections and chips', () => {
     { id: 'footer', sttBadge: 'STT: local', deepLink: 'https://example.com/g' },
     { id: 'dataFlow', text: 'Audio stays on this Mac.' },
   ];
+
+  // Regression (user screenshot): every Genie answer showed raw markdown as one long paragraph
+  // with no line breaks, and an untrusted link showed as literal `[text](url)`. Root cause:
+  // `CardView`'s panel (reached once the completed Genie blurb ages out of the card stack while
+  // its answer sections are still set, UX-12) rendered `s.md` and `card.answerMd` as plain text
+  // instead of through `safe-markdown.tsx` (TODO(#210) in the pre-fix source). This drives the
+  // real section shape `card-sections.ts#buildSections` sends, through the real `CardView`.
+  const BUG_SAMPLE = [
+    'You have a few good options:',
+    '',
+    '**1. Real-time transcription with Model Serving — fastest**',
+    '',
+    'Use a serving endpoint to transcribe audio as it streams in.',
+    '',
+    '**2. Batch Whisper on AI Runtime — most control**',
+    '',
+    'Run the [ai_transcribe function](https://docs.databricks.com/aws/en/notebooks/source/ai_transcribe-example.html) over a batch of files.',
+    '',
+    '- Scales to large volumes',
+    '- Keeps full control of the pipeline',
+    '',
+    '**3. A managed connector — least setup**',
+    '',
+    'Use a managed connector when you want the least setup.',
+  ].join('\n');
+
+  it('[SEC-25a] [SEC-25b] the panel renders a multi-paragraph answer as safe markdown, not raw text', async () => {
+    const { el } = await mountCard(<CardView mogId={ID} />);
+    await tauri.emit('card:update', {
+      ...update,
+      sections: [{ id: 'answer', md: BUG_SAMPLE }],
+    });
+    const answer = el.querySelector('[data-section="answer"] [data-answer]') as HTMLElement;
+    // No literal markdown syntax leaks through.
+    expect(answer.textContent).not.toContain('**');
+    expect(answer.textContent).not.toContain('[ai_transcribe function](');
+    // Three bold headings render as <strong>, each a separate inline span, not one run-on string.
+    const bold = [...answer.querySelectorAll('strong')].map((n) => n.textContent);
+    expect(bold).toEqual([
+      '1. Real-time transcription with Model Serving — fastest',
+      '2. Batch Whisper on AI Runtime — most control',
+      '3. A managed connector — least setup',
+    ]);
+    // Paragraphs and the list are separate blocks, not one long run of text with no breaks.
+    expect(answer.querySelectorAll('p').length).toBeGreaterThan(1);
+    expect([...answer.querySelectorAll('li')].map((n) => n.textContent)).toEqual([
+      'Scales to large volumes',
+      'Keeps full control of the pipeline',
+    ]);
+    // SEC-25b: an untrusted link shows its link text only, inert, never a navigable href.
+    expect(answer.textContent).toContain('ai_transcribe function');
+    expect(answer.querySelector('a')).toBeNull();
+  });
 
   it('[UX-18] [AT-09] renders the sections in the order the brain sends', async () => {
     const { el } = await mountCard(<CardView mogId={ID} />);
