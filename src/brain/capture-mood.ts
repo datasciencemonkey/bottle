@@ -59,11 +59,8 @@ export const REFUSAL_TEXT: Readonly<Record<RefusalReason, { text: string; label:
   no_device: { text: 'No mic found', label: 'Mic not started: connect a microphone' },
 };
 
-/** ADR 0103: the core refuses a talk-key hold while a call recording holds the mic. */
-export const RECORDING_IN_PROGRESS = {
-  text: 'Recording in progress',
-  label: 'Mic not started: a call recording is running',
-} as const;
+/** ADR 0103: the capture owner of a call recording. It is not a MOG. */
+export const RECORDING_OWNER = 'bottle-recording';
 
 const IPC_REASONS: ReadonlySet<string> = new Set<RefusalReason>([
   'consent_required',
@@ -141,10 +138,9 @@ export function createCaptureMood(deps: CaptureMoodDeps): CaptureMood {
     const a = asks.get(mogId);
     if (a) requests.push(a.view);
     if (readyAt !== undefined) requests.push({ phase: 'completed', at: readyAt });
-    const text =
-      r && callRec && r.reason === 'mic_busy' ? RECORDING_IN_PROGRESS : r && REFUSAL_TEXT[r.reason];
-    const badges: MogBadgeView[] | undefined =
-      r && text ? [{ kind: 'capture_refused', ...text, hoverOnly: false }] : undefined;
+    const badges: MogBadgeView[] | undefined = r
+      ? [{ kind: 'capture_refused', ...REFUSAL_TEXT[r.reason], hoverOnly: false }]
+      : undefined;
     const sources = { mog: READY, capture, requests, ...(callRec ? { callRecording: true } : {}) };
     publisher.update(mogId, sources, undefined, badges);
   };
@@ -199,7 +195,8 @@ export function createCaptureMood(deps: CaptureMoodDeps): CaptureMood {
     },
     onState(s) {
       capture = s;
-      for (const id of [s.owner, s.directedTo]) if (id) known.add(id);
+      // ADR 0103: the call recording holds the mic as `bottle-recording`, which is not a MOG.
+      for (const id of [s.owner, s.directedTo]) if (id && id !== RECORDING_OWNER) known.add(id);
       const fault = micFault(s);
       for (const [id, r] of refusals) {
         // A new granted capture of this MOG ends its refusal. A repeated state of the lease that

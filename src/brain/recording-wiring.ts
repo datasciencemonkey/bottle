@@ -6,7 +6,7 @@
  *   number of minutes from 5 to 180; the notes model is a strict endpoint name; a volume path is
  *   a strict `/Volumes/c/s/v`; `bottle_audio` is created only on the user's confirm click.
  *   The core checks the knob again before any capture starts (Rust, not only this file).
- * - Record and Stop go to the core; the REC state follows `recording.state` (`ends_at_ms`).
+ * - Record and Stop go to the core (the record key ⌥R is `record-toggle.ts`, #594); the REC state follows `recording.state` (`ends_at_ms`).
  *   While it runs, the MOGs show the REC overlay through the one mood publisher.
  * - Recordings: the list (newest first), one detail at a time with the speaker turns merged,
  *   Retry and "Open in Databricks". The core builds and opens the link; no URL reaches a view.
@@ -127,8 +127,6 @@ export interface RecordingApi {
   openSystemAudioSettings(): Promise<unknown>;
   onState(cb: (s: RecState) => void): () => void;
   onJob(cb: (j: RecJob) => void): () => void;
-  /** The record key (⌥R) in a talk-key hold. Optional: tests and hosts without the key omit it. */
-  onRecordToggle?(cb: () => void): () => void;
 }
 
 /** The MOG side: the REC overlay and the answer-ready moment (`capture-mood.ts`). */
@@ -478,19 +476,11 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
   });
   const offState = api.onState(setState);
   const offJob = api.onJob(onJob);
-  // ADR 0103: the record key toggles, like Record and Stop in the hub.
-  const offToggle =
-    api.onRecordToggle?.(() => {
-      if (control.phase === 'recording') void stop();
-      else if (control.phase === 'idle') void start();
-    }) ?? (() => undefined);
-
   return () => {
     gone = true;
     offInput();
     offState();
     offJob();
-    offToggle();
   };
 }
 
@@ -593,6 +583,5 @@ export function ipcRecordingApi(bus: BrainBus): RecordingApi {
         if (isObj(p) && typeof p['id'] === 'string' && typeof p['status'] === 'string')
           cb(summaryOf(p as unknown as RecordingSummary));
       }),
-    onRecordToggle: (cb) => bus.on(EVENTS['hotkey.record_toggle'].name, () => cb()),
   };
 }
