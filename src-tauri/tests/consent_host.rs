@@ -2,7 +2,7 @@
 //! ConsentService reaches them only through `consent_notice_record` and `consent_records_list`.
 //! The tests use a key vault double and a temp folder: no OS key store, no profile, no token.
 
-use bottle_lib::consent_host::{install_with, open};
+use bottle_lib::consent_host::install_with;
 use bottle_lib::ipc::{route, BrainLink, HostComponents};
 use mog_core::clock::SimWallClock;
 use mog_core::consent::{ConsentRecords, DEVICE_ID_FILE, MEMORY_DIR};
@@ -34,6 +34,22 @@ impl BrainLink for NoBrain {
     fn subscribe_hub(&self, _channel: &ChannelRef) -> bool {
         false
     }
+}
+
+/// Open the records in `dir` now, kept for the default 13 months (SEC-15b), as a test seeds or
+/// reads them. The host itself opens the store on first use (`install_with`, ADR 0105).
+fn open(
+    dir: &std::path::Path,
+    vault: Arc<dyn KeyVault>,
+    clock: Arc<dyn mog_core::clock::WallClock>,
+) -> CoreResult<(Arc<SqlCipherLocalStore>, Arc<ConsentRecords>)> {
+    let (store, records) = mog_core::consent::open_device_records(
+        dir,
+        vault,
+        clock,
+        mog_core::consent::ConsentRetention::default(),
+    )?;
+    Ok((store, Arc::new(records)))
 }
 
 /// A key vault in memory (the OS key store double).
