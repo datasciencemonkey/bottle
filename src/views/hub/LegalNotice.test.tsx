@@ -25,12 +25,15 @@ const box = (el: HTMLElement) => must(el.querySelector<HTMLInputElement>('input[
 const cont = (el: HTMLElement) =>
   must([...el.querySelectorAll('button')].find((b) => b.textContent === 'Continue'));
 
-/** The notice emits of the hub: drop the MOG list request `mogs.ready` (#26) and the CLI step ask (#161). */
+/**
+ * The notice emits of the hub: drop the MOG list request `mogs.ready` (#26), the CLI step ask
+ * (#161) and the permission notice ask (ADR 0101).
+ */
 const noticeEmits = () =>
   inputEmits().filter(
     (e) =>
       (e as { payload?: { action?: unknown } }).payload?.action !== 'mogs.ready' &&
-      (e as { mogId?: unknown }).mogId !== 'cli',
+      !['cli', 'permissions'].includes((e as { mogId?: string }).mogId ?? ''),
   );
 
 describe('V1 hub: first-run legal notice (#27)', () => {

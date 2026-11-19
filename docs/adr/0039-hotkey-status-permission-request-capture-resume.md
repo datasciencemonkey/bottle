@@ -1,6 +1,6 @@
 # ADR 0039: hotkey.status, permission_request and capture_resume
 
-- Status: Accepted
+- Status: Accepted (decision 5 amended by ADR 0101: `permission_request` is brain and hub)
 - Date: 2026-11-16
 - Issue: #297, #294, #312, #279 (contract PR B)
 - Owner: contract-lead (implemented by impl-297)

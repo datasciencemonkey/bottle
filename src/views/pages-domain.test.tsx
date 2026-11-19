@@ -14,9 +14,11 @@ vi.mock('@tauri-apps/api/core', async () => (await import('./test-tauri')).coreM
 vi.mock('@tauri-apps/api/event', async () => (await import('./test-tauri')).eventModule);
 vi.mock('@tauri-apps/api/window', async () => (await import('./test-tauri')).windowModule);
 
-/** The emits of the pickers: drop `ready` (#507), the hub-scope `notice.ready` (#27) and `mogs.ready` (#26), and the CLI step ask (#161). */
+/** The emits of the pickers: drop `ready` (#507), the hub-scope `notice.ready` (#27) and `mogs.ready` (#26), the CLI step ask (#161) and the permission notice ask (ADR 0101). */
 const viewEmits = () =>
-  allViewEmits().filter((e) => ![HUB_SCOPE, 'cli'].includes((e as { mogId: string }).mogId));
+  allViewEmits().filter(
+    (e) => ![HUB_SCOPE, 'cli', 'permissions'].includes((e as { mogId: string }).mogId),
+  );
 
 const ID = '00000000-0000-4000-8000-000000000001';
 const D1 = '7d3c1f2a-1b2c-4d5e-8f90-0a1b2c3d4e5f';

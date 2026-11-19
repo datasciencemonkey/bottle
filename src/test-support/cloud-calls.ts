@@ -46,6 +46,7 @@ export const CALL_CLASS = {
   policy_get: 'local',
   hotkeys_set: 'local',
   permission_request: 'local',
+  permission_status: 'local',
   app_setting_read: 'local',
   app_setting_write: 'local',
   mog_set_active: 'local',

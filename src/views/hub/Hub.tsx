@@ -20,6 +20,7 @@ import { LegalNotice } from './LegalNotice';
 import { MicPreference } from './MicPreference';
 import { ForgetDialogHost } from './ForgetDialogHost';
 import { MogList } from './MogList';
+import { PermissionNotices } from './PermissionNotices';
 import { SttSetupStep } from './SttSetupStep';
 import { WipeSettings } from './WipeSettings';
 
@@ -66,6 +67,9 @@ export function Hub() {
   return (
     <main className="hub">
       <HubHeader />
+      {/* ADR 0101 (CAP-36, CAP-37): a missing OS permission shows first; without Input
+          Monitoring the talk key does nothing. */}
+      <PermissionNotices />
       {/* W-17c (#161): the CLI install step comes before the workspace setup. */}
       <CliInstallStep />
       <DictationNotices />

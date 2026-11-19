@@ -74,8 +74,13 @@ export const COMMANDS = {
   config_delete: BH,
   policy_get: BH,
   hotkeys_set: BH,
-  /** #312 (ADR 0039): the wizard and Settings ask for an OS permission after a click. */
-  permission_request: { windows: ['hub'], phase: 'MVP-D' },
+  /**
+   * #312 (ADR 0039): ask for an OS permission after a click. ADR 0101: the brain relays the
+   * click of the hub or the pop-up, because views call only `view_*` (MOG-08a).
+   */
+  permission_request: BH,
+  /** #552 (ADR 0101): the state of an OS permission, with no prompt. */
+  permission_status: BH,
   /** #453 (CAP-22): the app-wide settings (Appendix F, scope App), like the `config_*` rows. */
   app_setting_read: BH,
   app_setting_write: BH,
@@ -183,8 +188,11 @@ export type RouteId =
   | 'knowledge.request_publish'
   | 'postgres.credentials';
 
-/** The OS permission that `permission_request` asks for (CAP-36, CAP-37). */
+/** The OS permission that `permission_request` asks for and `permission_status` reads. */
 export type PermissionKind = 'input_monitoring' | 'accessibility';
+
+/** The reply of `permission_request` and `permission_status`. */
+export type PermissionState = 'granted' | 'denied' | 'unknown';
 
 /**
  * The `view_emit` kinds, in the order of the Rust enum. `ready` (#507, ADR 0091): the view
@@ -295,8 +303,10 @@ export interface CommandArgs {
   config_delete: { id: string };
   policy_get: NoArgs;
   hotkeys_set: { bindings: JsonObject };
-  /** The hub call is the user action (CAP-36, CAP-37). */
+  /** The brain sends it only for a click on a control of this permission (CAP-36, CAP-37). */
   permission_request: { permission: PermissionKind };
+  /** No prompt (CAP-36, CAP-37). */
+  permission_status: { permission: PermissionKind };
   app_setting_read: { key: AppSettingKey };
   app_setting_write: AppSetting;
   mog_set_active: MogArgs;
@@ -642,7 +652,8 @@ export interface CommandReturns {
   config_delete: unknown;
   policy_get: unknown;
   hotkeys_set: { conflicts: unknown[] };
-  permission_request: { status: 'granted' | 'denied' | 'unknown' };
+  permission_request: { status: PermissionState };
+  permission_status: { status: PermissionState };
   app_setting_read: AppSetting;
   app_setting_write: AppSetting;
   mog_set_active: Empty;

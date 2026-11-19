@@ -423,6 +423,21 @@ pub trait PermissionApi: Send + Sync {
     fn status(&self, permission: Permission) -> PermissionStatus;
     /// Ask the user. This can show the OS prompt.
     fn request(&self, permission: Permission) -> PermissionStatus;
+    /// Open the OS Settings pane of `permission` ([`settings_pane`]). It shows no prompt. An OS
+    /// with no such pane does nothing.
+    fn open_settings(&self, _permission: Permission) {}
+}
+
+/// The macOS System Settings pane of a permission (Privacy & Security). A fixed URL.
+pub fn settings_pane(permission: Permission) -> &'static str {
+    match permission {
+        Permission::InputMonitoring => {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
+        }
+        Permission::Accessibility => {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        }
+    }
 }
 
 /// Proof that the user did something (a click in the wizard or in Settings) that asks for a
@@ -451,6 +466,28 @@ pub fn check_ptt_permission(api: &dyn PermissionApi) -> CoreResult<()> {
 /// Ask for the PTT permission after a user action: Input Monitoring only (CAP-36).
 pub fn request_ptt_permission(api: &dyn PermissionApi, _action: UserAction) -> PermissionStatus {
     api.request(Permission::InputMonitoring)
+}
+
+/// One user click for `permission` (CAP-36, CAP-37). The OS shows its prompt only once, so:
+/// - granted: nothing to do;
+/// - denied, or `asked_before` in this run: open the Settings pane (no prompt);
+/// - else: show the OS prompt.
+///
+/// The caller passes only the permission that the clicked control names.
+pub fn request_after_click(
+    api: &dyn PermissionApi,
+    permission: Permission,
+    asked_before: bool,
+    _action: UserAction,
+) -> PermissionStatus {
+    match api.status(permission) {
+        PermissionStatus::Granted => PermissionStatus::Granted,
+        PermissionStatus::Unknown if !asked_before => api.request(permission),
+        status => {
+            api.open_settings(permission);
+            status
+        }
+    }
 }
 
 /// Ask for Accessibility after the user selects text insertion, and only then (CAP-37).
@@ -1029,6 +1066,7 @@ mod tests {
         statuses: Mutex<Vec<(Permission, PermissionStatus)>>,
         requested: Mutex<Vec<Permission>>,
         status_calls: Mutex<Vec<Permission>>,
+        opened: Mutex<Vec<Permission>>,
     }
     impl FakePerms {
         fn with(p: Permission, s: PermissionStatus) -> Self {
@@ -1054,6 +1092,9 @@ mod tests {
         fn request(&self, permission: Permission) -> PermissionStatus {
             self.requested.lock().unwrap().push(permission);
             PermissionStatus::Granted
+        }
+        fn open_settings(&self, permission: Permission) {
+            self.opened.lock().unwrap().push(permission);
         }
     }
 
@@ -1142,6 +1183,68 @@ mod tests {
         let s = request_ptt_permission(&perms, UserAction::from_user_click());
         assert_eq!(s, PermissionStatus::Granted);
         assert_eq!(perms.requested(), vec![Permission::InputMonitoring]);
+    }
+
+    #[test]
+    fn cap_36_cap_37_a_click_prompts_once_then_opens_the_settings_pane() {
+        for p in [Permission::InputMonitoring, Permission::Accessibility] {
+            let perms = FakePerms::default();
+            // Not asked yet: the click shows the OS prompt, and only for `p`.
+            let s = request_after_click(&perms, p, false, UserAction::from_user_click());
+            assert_eq!(s, PermissionStatus::Granted);
+            assert_eq!(perms.requested(), vec![p]);
+            assert!(perms.opened.lock().unwrap().is_empty());
+            // A later click in the same run: the OS shows no new prompt, so open the pane.
+            let s = request_after_click(&perms, p, true, UserAction::from_user_click());
+            assert_eq!(s, PermissionStatus::Unknown);
+            assert_eq!(perms.requested(), vec![p]);
+            assert_eq!(*perms.opened.lock().unwrap(), vec![p]);
+        }
+    }
+
+    #[test]
+    fn cap_36_a_denied_permission_opens_the_pane_and_shows_no_prompt() {
+        let perms = FakePerms::with(Permission::InputMonitoring, PermissionStatus::Denied);
+        let s = request_after_click(
+            &perms,
+            Permission::InputMonitoring,
+            false,
+            UserAction::from_user_click(),
+        );
+        assert_eq!(s, PermissionStatus::Denied);
+        assert!(perms.requested().is_empty());
+        assert_eq!(
+            *perms.opened.lock().unwrap(),
+            vec![Permission::InputMonitoring]
+        );
+    }
+
+    #[test]
+    fn cap_36_a_granted_permission_neither_prompts_nor_opens_the_pane() {
+        let perms = FakePerms::with(Permission::InputMonitoring, PermissionStatus::Granted);
+        for asked in [false, true] {
+            let s = request_after_click(
+                &perms,
+                Permission::InputMonitoring,
+                asked,
+                UserAction::from_user_click(),
+            );
+            assert_eq!(s, PermissionStatus::Granted);
+        }
+        assert!(perms.requested().is_empty());
+        assert!(perms.opened.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn cap_36_cap_37_the_settings_panes_are_the_privacy_panes() {
+        assert_eq!(
+            settings_pane(Permission::InputMonitoring),
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
+        );
+        assert_eq!(
+            settings_pane(Permission::Accessibility),
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        );
     }
 
     #[test]

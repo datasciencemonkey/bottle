@@ -23,9 +23,13 @@ export const FADE_OUT_MS = 300;
 /** RTR-17a (ADR 0098): the hint beside Ask Genie. The text is fixed by the user decision. */
 export const POPUP_ASK_HINT = 'Hold ⌥G to ask Genie';
 
-/** Chip IDs from the brain: `ask_genie:<utterance>` (ask-gate.ts), `copy-<utterance>` (#498). */
+/**
+ * Chip IDs from the brain: `ask_genie:<utterance>` (ask-gate.ts), `copy-<utterance>` (#498),
+ * `perm:<permission>` (the OS permission notice, ADR 0101).
+ */
 const ASK = 'ask_genie:';
 const COPY = 'copy-';
+const PERM = 'perm:';
 
 type Chip = { id: string; label: string };
 type Phase = 'shown' | 'fading' | 'gone';
@@ -56,6 +60,8 @@ export function Popup({ mogId, card, onClose }: PopupProps) {
   // Any other chip is a warning (ask-gate.ts, RTR-14): show it as it is.
   const others = card.chips.filter((c) => !c.id.startsWith(ASK) && !c.id.startsWith(COPY));
   const sticky = copy !== undefined || others.length > 0;
+  // ADR 0101: a permission notice wraps, so its whole text shows; its one control is a chip.
+  const perm = newest?.id.startsWith(PERM) === true && others.some((c) => c.id === newest.id);
   const hovered = held.pointer || held.focus;
 
   const close = () => {
@@ -110,7 +116,7 @@ export function Popup({ mogId, card, onClose }: PopupProps) {
       ref={ref}
       className="popup"
       data-popup
-      data-variant={copy ? 'copy' : 'ask'}
+      data-variant={copy ? 'copy' : perm ? 'perm' : 'ask'}
       data-state={phase}
       title={why ? `${line}\n${why}` : line}
       onMouseEnter={() => hold('pointer', true)}

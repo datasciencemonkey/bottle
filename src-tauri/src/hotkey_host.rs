@@ -32,8 +32,8 @@ use mog_core::error::CoreError;
 use mog_core::hotkey::HotkeyService;
 use mog_core::hotkey_bindings::TalkBinding;
 use mog_core::hotkey_core::{
-    self, HotkeyEngine, HotkeyOutput, HotkeySink, PermissionApi, PermissionStatus, PttPhase,
-    UserAction,
+    self, HotkeyEngine, HotkeyOutput, HotkeySink, Permission, PermissionApi, PermissionStatus,
+    PttPhase, UserAction,
 };
 use mog_core::hotkey_windows::{forward_to_engine, HookSignal};
 use mog_core::ipc::{events, PermissionKind, WindowClass};
@@ -582,6 +582,10 @@ pub struct HotkeyHost {
     service: Mutex<Box<dyn HotkeyService>>,
     permissions: Box<dyn PermissionApi>,
     state: Mutex<HostState>,
+    /// The permissions that a click asked for in this run: the OS shows its prompt only once.
+    asked: Mutex<Vec<Permission>>,
+    /// Input Monitoring is granted, but the talk key did not start: Bottle must reopen.
+    reopen: Mutex<bool>,
 }
 
 impl HotkeyHost {
@@ -591,6 +595,8 @@ impl HotkeyHost {
             service: Mutex::new(service),
             permissions,
             state: Mutex::new(HostState::Stopped),
+            asked: Mutex::default(),
+            reopen: Mutex::new(false),
         }
     }
 
@@ -608,19 +614,61 @@ impl HotkeyHost {
     }
 
     /// Ask for Input Monitoring after a user click, then start again if granted (CAP-36).
-    /// The wizard (#43) and Settings call this with the `permission_request` command (#312).
+    /// The first click shows the OS prompt; a later one opens the Settings pane. The brain
+    /// relays the click of the hub or the pop-up with `permission_request` (#312).
     pub fn request_ptt_permission(&self, action: UserAction) -> PermissionStatus {
-        let status = hotkey_core::request_ptt_permission(self.permissions.as_ref(), action);
-        if status == PermissionStatus::Granted {
-            self.start();
+        let status = self.ask(Permission::InputMonitoring, action);
+        if status == PermissionStatus::Granted && self.state() != HostState::Running {
+            self.start_after_grant();
         }
         status
     }
 
-    /// Ask for Accessibility after the user selects text insertion, and only then (CAP-37).
-    /// The hub calls this with `permission_request` `accessibility` (#312).
+    /// Ask for Accessibility after a user click, as for Input Monitoring (CAP-37). Paste needs it.
     pub fn request_insertion_permission(&self, action: UserAction) -> PermissionStatus {
-        hotkey_core::request_insertion_permission(self.permissions.as_ref(), action)
+        self.ask(Permission::Accessibility, action)
+    }
+
+    /// The state of `permission`, with no prompt (`permission_status`, #552). When Input
+    /// Monitoring was granted in Settings while the talk key waits for it, this starts the
+    /// talk key (no prompt, CAP-36). If the talk key still does not start, Input Monitoring
+    /// reads `unknown` until Bottle reopens.
+    pub fn permission_status(&self, permission: Permission) -> PermissionStatus {
+        let status = self.permissions.status(permission);
+        if permission != Permission::InputMonitoring || status != PermissionStatus::Granted {
+            return status;
+        }
+        if self.state() == HostState::NeedsPermission {
+            self.start_after_grant();
+        }
+        if *lock(&self.reopen) {
+            PermissionStatus::Unknown
+        } else {
+            status
+        }
+    }
+
+    fn ask(&self, permission: Permission, action: UserAction) -> PermissionStatus {
+        let asked_before = {
+            let mut asked = lock(&self.asked);
+            let before = asked.contains(&permission);
+            if !before {
+                asked.push(permission);
+            }
+            before
+        };
+        hotkey_core::request_after_click(
+            self.permissions.as_ref(),
+            permission,
+            asked_before,
+            action,
+        )
+    }
+
+    fn start_after_grant(&self) {
+        if self.start() != HostState::Running {
+            *lock(&self.reopen) = true;
+        }
     }
 
     /// Stop the service (app quit).
@@ -682,7 +730,8 @@ impl HotkeyRuntime {
     }
 }
 
-/// `permission_request` (#312, ADR 0039): Input Monitoring starts R1 again when granted.
+/// `permission_request` (#312, ADR 0039) and `permission_status` (#552, ADR 0101): Input
+/// Monitoring starts R1 again when granted.
 impl PermissionRoute for HotkeyRuntime {
     fn request_permission(
         &self,
@@ -693,6 +742,13 @@ impl PermissionRoute for HotkeyRuntime {
             PermissionKind::InputMonitoring => self.host.request_ptt_permission(action),
             PermissionKind::Accessibility => self.host.request_insertion_permission(action),
         }
+    }
+
+    fn permission_status(&self, permission: PermissionKind) -> PermissionStatus {
+        self.host.permission_status(match permission {
+            PermissionKind::InputMonitoring => Permission::InputMonitoring,
+            PermissionKind::Accessibility => Permission::Accessibility,
+        })
     }
 }
 
@@ -1236,10 +1292,12 @@ mod tests {
         }
     }
 
-    /// A HotkeyService double: start fails until `granted` is set.
+    /// A HotkeyService double: start fails until `granted` is set. With `tap_fails`, a granted
+    /// start still fails (macOS makes the tap only after Bottle reopens).
     #[derive(Default, Clone)]
     struct FakeService {
         granted: Arc<std::sync::atomic::AtomicBool>,
+        tap_fails: Arc<std::sync::atomic::AtomicBool>,
         starts: Arc<AtomicUsize>,
         stops: Arc<AtomicUsize>,
     }
@@ -1247,7 +1305,12 @@ mod tests {
     impl HotkeyService for FakeService {
         fn start(&self) -> CoreResult<()> {
             self.starts.fetch_add(1, Ordering::SeqCst);
-            if self.granted.load(Ordering::SeqCst) {
+            if self.granted.load(Ordering::SeqCst) && self.tap_fails.load(Ordering::SeqCst) {
+                Err(CoreError::Unavailable {
+                    component: "R1",
+                    reason: "tap_create_failed",
+                })
+            } else if self.granted.load(Ordering::SeqCst) {
                 Ok(())
             } else {
                 Err(CoreError::Unavailable {
@@ -1265,17 +1328,26 @@ mod tests {
         }
     }
 
-    /// A PermissionApi double that counts prompts. A prompt grants when `grant` is true.
+    /// A PermissionApi double that counts prompts and Settings panes. A prompt grants when
+    /// `grant` is true. Input Monitoring reads granted once the service is granted.
     #[derive(Default, Clone)]
     struct FakePermissions {
         service: FakeService,
         grant: bool,
         prompts: Arc<Mutex<Vec<Permission>>>,
+        panes: Arc<Mutex<Vec<Permission>>>,
     }
 
     impl PermissionApi for FakePermissions {
-        fn status(&self, _p: Permission) -> PermissionStatus {
-            PermissionStatus::Unknown
+        fn status(&self, p: Permission) -> PermissionStatus {
+            if p == Permission::InputMonitoring && self.service.granted.load(Ordering::SeqCst) {
+                PermissionStatus::Granted
+            } else {
+                PermissionStatus::Unknown
+            }
+        }
+        fn open_settings(&self, p: Permission) {
+            self.panes.lock().unwrap().push(p);
         }
         fn request(&self, p: Permission) -> PermissionStatus {
             self.prompts.lock().unwrap().push(p);
@@ -1296,6 +1368,7 @@ mod tests {
             service: service.clone(),
             grant,
             prompts: Arc::default(),
+            panes: Arc::default(),
         };
         (
             HotkeyHost::new(Box::new(service.clone()), Box::new(perms.clone())),
@@ -1342,6 +1415,79 @@ mod tests {
     }
 
     #[test]
+    fn cap_36_cap_37_a_second_click_opens_the_settings_pane_with_no_second_prompt() {
+        let (h, _, perms) = host(false);
+        h.start();
+        let click = UserAction::from_user_click;
+        assert_eq!(h.request_ptt_permission(click()), PermissionStatus::Denied);
+        // The OS shows its prompt once: the next click opens Privacy & Security instead.
+        assert_eq!(h.request_ptt_permission(click()), PermissionStatus::Unknown);
+        assert_eq!(
+            *perms.prompts.lock().unwrap(),
+            vec![Permission::InputMonitoring]
+        );
+        assert_eq!(
+            *perms.panes.lock().unwrap(),
+            vec![Permission::InputMonitoring]
+        );
+        // Accessibility has its own first prompt (CAP-37), then its own pane.
+        h.request_insertion_permission(click());
+        h.request_insertion_permission(click());
+        assert_eq!(
+            *perms.prompts.lock().unwrap(),
+            vec![Permission::InputMonitoring, Permission::Accessibility]
+        );
+        assert_eq!(
+            *perms.panes.lock().unwrap(),
+            vec![Permission::InputMonitoring, Permission::Accessibility]
+        );
+    }
+
+    #[test]
+    fn cap_36_cap_37_status_reads_never_prompt_and_never_open_a_pane() {
+        let (h, service, perms) = host(true);
+        h.start();
+        for p in [Permission::InputMonitoring, Permission::Accessibility] {
+            assert_eq!(h.permission_status(p), PermissionStatus::Unknown);
+        }
+        assert!(perms.prompts.lock().unwrap().is_empty());
+        assert!(perms.panes.lock().unwrap().is_empty());
+        assert_eq!(service.starts.load(Ordering::SeqCst), 1);
+        assert_eq!(h.state(), HostState::NeedsPermission);
+    }
+
+    #[test]
+    fn cap_36_a_grant_in_settings_starts_the_talk_key_on_the_next_status_read() {
+        let (h, service, perms) = host(true);
+        h.start();
+        // The user turned Bottle on in System Settings.
+        service.granted.store(true, Ordering::SeqCst);
+        assert_eq!(
+            h.permission_status(Permission::InputMonitoring),
+            PermissionStatus::Granted
+        );
+        assert_eq!(h.state(), HostState::Running);
+        assert!(perms.prompts.lock().unwrap().is_empty());
+        // A read while the talk key runs starts nothing.
+        h.permission_status(Permission::InputMonitoring);
+        assert_eq!(service.starts.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn cap_36_a_grant_that_needs_a_reopen_reads_as_not_granted() {
+        let (h, service, _) = host(true);
+        h.start();
+        service.granted.store(true, Ordering::SeqCst);
+        service.tap_fails.store(true, Ordering::SeqCst);
+        // The OS says granted, but the tap does not start until Bottle reopens.
+        assert_eq!(
+            h.permission_status(Permission::InputMonitoring),
+            PermissionStatus::Unknown
+        );
+        assert_eq!(h.state(), HostState::Unavailable("tap_create_failed"));
+    }
+
+    #[test]
     fn cap_37_insertion_request_asks_accessibility_only() {
         let (h, service, perms) = host(true);
         h.start();
@@ -1384,7 +1530,7 @@ mod tests {
         let perms = FakePermissions {
             service: service.clone(),
             grant: true,
-            prompts: Arc::default(),
+            ..FakePermissions::default()
         };
         let (s2, p2) = (service.clone(), perms.clone());
         let keys = Arc::new(Mutex::new(Vec::new()));
@@ -2411,7 +2557,9 @@ mod tests {
             *factory.perms.prompts.lock().unwrap(),
             vec![Permission::Accessibility, Permission::InputMonitoring]
         );
-        // A granted Input Monitoring starts R1 again (CAP-36); Accessibility does not.
-        assert_eq!(factory.service(0).starts.load(Ordering::SeqCst), 2);
+        // The talk key of this factory already runs, so a grant does not start it twice. A
+        // grant while it waits starts it again (CAP-36): see
+        // `cap_36_ptt_request_after_a_click_asks_input_monitoring_only_and_starts_again`.
+        assert_eq!(factory.service(0).starts.load(Ordering::SeqCst), 1);
     }
 }

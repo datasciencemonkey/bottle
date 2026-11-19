@@ -340,6 +340,7 @@ fn mog_18a_r11_makes_the_card_on_the_first_show_through_the_route() {
 fn arc_3_cap_02a_g_04a_window_ops_capture_start_and_mcp_call_run_off_the_main_thread() {
     // ADR 0022 decision 6: an R11 op may wait for the main thread, so it runs on a worker.
     // ADR 0039: `permission_request` waits for an OS prompt, so it runs on a worker too.
+    // ADR 0101: `permission_status` can start the talk key after a grant, so it does too.
     // ADR 0055: `capture_start` and `capture_resume` open the device, which can be slow. The
     // stops stay inline (MB-05).
     // #467: `mcp_call` is a blocking HTTP call to Genie One MCP (R8, G-04a).
@@ -354,6 +355,7 @@ fn arc_3_cap_02a_g_04a_window_ops_capture_start_and_mcp_call_run_off_the_main_th
                 || matches!(
                     c.name,
                     "permission_request"
+                        | "permission_status"
                         | "capture_start"
                         | "capture_resume"
                         | "insert_text"
@@ -777,6 +779,7 @@ fn arc_3_cap_02a_g_04a_schedule_runs_window_ops_capture_start_and_mcp_call_on_a_
             || matches!(
                 c.name,
                 "permission_request"
+                    | "permission_status"
                     | "capture_start"
                     | "capture_resume"
                     | "insert_text"
@@ -811,9 +814,10 @@ fn arc_5_an_inline_command_has_run_when_schedule_returns() {
 
 // ---------- permission_request (CAP-36, CAP-37, #312, ADR 0039) ----------
 
-/// A fake permission route: it records each ask and answers with `answer`.
+/// A fake permission route: it records each ask and each read, and answers with `answer`.
 struct FakePermissionRoute {
     asked: Mutex<Vec<PermissionKind>>,
+    read: Mutex<Vec<PermissionKind>>,
     answer: PermissionStatus,
 }
 
@@ -821,11 +825,15 @@ impl FakePermissionRoute {
     fn answering(answer: PermissionStatus) -> Self {
         Self {
             asked: Mutex::default(),
+            read: Mutex::default(),
             answer,
         }
     }
     fn asked(&self) -> Vec<PermissionKind> {
         self.asked.lock().unwrap().clone()
+    }
+    fn read(&self) -> Vec<PermissionKind> {
+        self.read.lock().unwrap().clone()
     }
 }
 
@@ -838,15 +846,28 @@ impl PermissionRoute for FakePermissionRoute {
         self.asked.lock().unwrap().push(permission);
         self.answer
     }
+    fn permission_status(&self, permission: PermissionKind) -> PermissionStatus {
+        self.read.lock().unwrap().push(permission);
+        self.answer
+    }
 }
 
-fn ask(from: &str, route_to: Option<&dyn PermissionRoute>, args: Value) -> Result<Value, Value> {
+fn permission_call(
+    command: &str,
+    from: &str,
+    route_to: Option<&dyn PermissionRoute>,
+    args: Value,
+) -> Result<Value, Value> {
     let brain = FakeBrain::default();
     let components = HostComponents {
         permissions: route_to,
         ..HostComponents::none(from, &brain)
     };
-    route(components, "permission_request", args)
+    route(components, command, args)
+}
+
+fn ask(from: &str, route_to: Option<&dyn PermissionRoute>, args: Value) -> Result<Value, Value> {
+    permission_call("permission_request", from, route_to, args)
 }
 
 #[test]
@@ -876,9 +897,16 @@ fn cap_37_permission_request_accessibility_reaches_the_insertion_permission_call
 }
 
 #[test]
-fn cap_36_cap_37_permission_request_is_hub_only() {
+fn cap_36_cap_37_permission_request_is_brain_and_hub_only() {
     let p = FakePermissionRoute::answering(PermissionStatus::Granted);
-    for label in ["brain", "mog-a1", "card-a1"] {
+    // ADR 0101: the brain relays the click of the hub or the pop-up (MOG-08a).
+    assert_eq!(
+        ask("brain", Some(&p), json!({"permission": "input_monitoring"})),
+        Ok(json!({"status": "granted"}))
+    );
+    assert_eq!(p.asked(), vec![PermissionKind::InputMonitoring]);
+    let p = FakePermissionRoute::answering(PermissionStatus::Granted);
+    for label in ["mog-a1", "card-a1"] {
         assert_eq!(
             ask(label, Some(&p), json!({"permission": "input_monitoring"})),
             err("window_not_allowed"),
@@ -904,6 +932,67 @@ fn cap_36_cap_37_permission_request_bad_args_are_invalid_args() {
         );
     }
     assert!(p.asked().is_empty());
+}
+
+#[test]
+fn cap_36_cap_37_permission_status_reads_with_no_prompt_for_the_brain_and_the_hub() {
+    for (answer, status) in [
+        (PermissionStatus::Granted, "granted"),
+        (PermissionStatus::Denied, "denied"),
+        (PermissionStatus::Unknown, "unknown"),
+    ] {
+        for from in ["brain", "hub"] {
+            let p = FakePermissionRoute::answering(answer);
+            for (arg, kind) in [
+                ("input_monitoring", PermissionKind::InputMonitoring),
+                ("accessibility", PermissionKind::Accessibility),
+            ] {
+                assert_eq!(
+                    permission_call(
+                        "permission_status",
+                        from,
+                        Some(&p),
+                        json!({"permission": arg})
+                    ),
+                    Ok(json!({ "status": status }))
+                );
+                assert_eq!(p.read().last(), Some(&kind));
+            }
+            assert!(p.asked().is_empty(), "a status read reached the OS prompt");
+        }
+    }
+    let p = FakePermissionRoute::answering(PermissionStatus::Granted);
+    for label in ["mog-a1", "card-a1"] {
+        assert_eq!(
+            permission_call(
+                "permission_status",
+                label,
+                Some(&p),
+                json!({"permission": "accessibility"})
+            ),
+            err("window_not_allowed"),
+            "{label}"
+        );
+    }
+    assert_eq!(
+        permission_call(
+            "permission_status",
+            "brain",
+            Some(&p),
+            json!({"permission": "camera"})
+        ),
+        err("invalid_args")
+    );
+    assert_eq!(
+        permission_call(
+            "permission_status",
+            "brain",
+            None,
+            json!({"permission": "accessibility"})
+        ),
+        err("host_failed")
+    );
+    assert!(p.read().is_empty() && p.asked().is_empty());
 }
 
 #[test]

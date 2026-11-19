@@ -965,7 +965,7 @@
     "permission_request": {
       "$defs": {
         "PermissionKind": {
-          "description": "The OS permission that `permission_request` asks for (CAP-36, CAP-37).",
+          "description": "The OS permission that `permission_request` asks for and `permission_status` reads\n(CAP-36, CAP-37).",
           "oneOf": [
             {
               "const": "input_monitoring",
@@ -982,7 +982,39 @@
       },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
-      "description": "`permission_request`: the hub window call is the user action (CAP-36, CAP-37).",
+      "description": "`permission_request` and `permission_status` (ADR 0101). For `permission_request`, the\nbrain or hub call is the user action (CAP-36, CAP-37).",
+      "properties": {
+        "permission": {
+          "$ref": "#/$defs/PermissionKind"
+        }
+      },
+      "required": [
+        "permission"
+      ],
+      "title": "PermissionRequestArgs",
+      "type": "object"
+    },
+    "permission_status": {
+      "$defs": {
+        "PermissionKind": {
+          "description": "The OS permission that `permission_request` asks for and `permission_status` reads\n(CAP-36, CAP-37).",
+          "oneOf": [
+            {
+              "const": "input_monitoring",
+              "description": "Input Monitoring for the talk key (CAP-36).",
+              "type": "string"
+            },
+            {
+              "const": "accessibility",
+              "description": "Accessibility for text insertion (CAP-37).",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "`permission_request` and `permission_status` (ADR 0101). For `permission_request`, the\nbrain or hub call is the user action (CAP-36, CAP-37).",
       "properties": {
         "permission": {
           "$ref": "#/$defs/PermissionKind"
@@ -1677,6 +1709,15 @@
       "name": "permission_request",
       "phase": "MVP-D",
       "windows": [
+        "brain",
+        "hub"
+      ]
+    },
+    {
+      "name": "permission_status",
+      "phase": "MVP-D",
+      "windows": [
+        "brain",
         "hub"
       ]
     },

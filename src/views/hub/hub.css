@@ -94,6 +94,16 @@ body {
   font-size: var(--mog-text-sm);
 }
 
+/* ADR 0101: a missing OS permission. One quiet block per permission, one action each. */
+.hub-permissions > [data-permission] + [data-permission] {
+  margin-top: 16px;
+}
+
+.hub-permission-need {
+  margin: 0 0 4px;
+  font-weight: 600;
+}
+
 /* Sections: space and one hairline, no boxes. */
 .hub-section {
   padding: 20px 0;
