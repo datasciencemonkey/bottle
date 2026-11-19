@@ -104,7 +104,7 @@ pub enum StorageProbe {
 /// One local temp part.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LocalPart {
-    /// The temp file (`.ogg`, `.flac` or `.wav`).
+    /// The temp file (`.opus` Ogg Opus; `.flac` or `.wav` also work).
     pub path: PathBuf,
     /// Its duration in seconds.
     pub duration_s: f64,
@@ -168,12 +168,12 @@ fn obj(v: Value) -> JsonObject {
 type Kind<T> = Result<T, ErrorKind>;
 type Staged<T> = Result<T, (ErrorKind, Stage)>;
 
-/// The part file extension of a local temp file (`ogg` when it has none Bottle knows).
+/// The file extension of a local temp file (`opus`, Ogg Opus, when it has none Bottle knows).
 fn part_ext(p: &std::path::Path) -> &'static str {
     match p.extension().and_then(|e| e.to_str()) {
         Some("flac") => "flac",
         Some("wav") => "wav",
-        _ => "ogg",
+        _ => "opus",
     }
 }
 
@@ -468,10 +468,14 @@ impl RecordingCloudService {
             .iter()
             .enumerate()
             .map(|(i, l)| {
-                PartEntry::new(
-                    &part_file(&job.name, i as u32 + 1, part_ext(&l.path)),
-                    l.duration_s,
-                )
+                let ext = part_ext(&l.path);
+                // One part (the normal case): `<name>.opus`. More: `<name>.partNN.opus`.
+                let file = if job.parts.len() == 1 {
+                    format!("{}.{ext}", job.name)
+                } else {
+                    part_file(&job.name, i as u32 + 1, ext)
+                };
+                PartEntry::new(&file, l.duration_s)
             })
             .collect();
         let mut m = JobManifest::new(

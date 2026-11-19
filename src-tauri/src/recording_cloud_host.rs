@@ -1,7 +1,7 @@
 //! The cloud half of call recording in the app (ADR 0103, PR C): one
 //! [`RecordingCloudService`] on its own R7 [`ReqwestHttpTransport`], over the one R6 of
 //! [`crate::mcp_host`] (the token never leaves R6), the managed T7 profile hosts and the one
-//! [`SharedRateBucket`] (G-09a). The recording Settings live in
+//! [`SharedRateBucket`] (G-09a). It points the settings store of the `recording_*` component at
 //! `<app config dir>/recording-settings.json` (no secret). Links open with the OS opener, only
 //! for a Catalog Explorer URL on the profile host.
 //!
@@ -16,7 +16,7 @@ use mog_core::error::{CoreError, CoreResult};
 use mog_core::http_transport::{ProfileHosts, ReqwestHttpTransport, ThreadPause};
 use mog_core::recording_cloud::cloud::{CloudDeps, ProfileWorkspace, RecordingCloudService};
 use mog_core::recording_cloud::opener::{open_link, SystemOpener, UrlOpener};
-use mog_core::recording_cloud::settings_store::{SettingsFile, SETTINGS_FILE};
+use mog_core::recording_cloud::settings_store::{JsonSettingsStore, SETTINGS_FILE};
 use tauri::Manager;
 
 use crate::mcp_host::McpHost;
@@ -36,8 +36,6 @@ fn missing(reason: &'static str) -> CoreError {
 pub struct RecordingCloudHost {
     /// The pipeline, storage and list service.
     pub service: Arc<RecordingCloudService>,
-    /// The Settings file.
-    pub settings: SettingsFile,
     opener: Arc<dyn UrlOpener>,
     /// R7 of the service: the host keeps it alive.
     _transport: Arc<ReqwestHttpTransport>,
@@ -90,13 +88,16 @@ pub fn install(handle: &tauri::AppHandle<tauri::Wry>) -> CoreResult<()> {
         wall: Arc::new(SystemWallClock),
         pause: Arc::new(ThreadPause),
     }));
-    let settings = match handle.path().app_config_dir() {
-        Ok(dir) => SettingsFile::new(dir.join(SETTINGS_FILE)),
-        Err(_) => SettingsFile::none(),
-    };
+    // The settings file of the `recording_*` component (lib.rs builds it before the config
+    // dir is known). No config dir: the defaults stay (knob off) and writes fail.
+    if let (Some(store), Ok(dir)) = (
+        handle.try_state::<Arc<JsonSettingsStore>>(),
+        handle.path().app_config_dir(),
+    ) {
+        store.set_path(dir.join(SETTINGS_FILE));
+    }
     handle.manage(RecordingCloudHost {
         service,
-        settings,
         opener: Arc::new(SystemOpener),
         _transport: transport,
     });

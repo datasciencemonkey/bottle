@@ -17,7 +17,7 @@ fn rec_layout_volume_paths_are_strict() {
         "/Volumes/c/s/v",
         "/Volumes/c/s/v/",
         "/Volumes/databricks/home/7474645105283837/a.b@example.com/my_files/",
-        "/Volumes/c/s/v/Bottle/Recordings/n/n.part01.ogg",
+        "/Volumes/c/s/v/Bottle/Recordings/n/n.opus",
     ] {
         assert!(is_volume_path(ok), "{ok}");
     }
@@ -57,7 +57,7 @@ fn rec_layout_root_folder_and_file_names() {
     );
     assert!(VolumeRoot::parse("/Volumes/main/team").is_err());
     let n = "2026-11-19_0905";
-    assert_eq!(part_file(n, 1, "ogg"), "2026-11-19_0905.part01.ogg");
+    assert_eq!(part_file(n, 1, "opus"), "2026-11-19_0905.part01.opus");
     assert_eq!(part_file(n, 12, "flac"), "2026-11-19_0905.part12.flac");
     assert_eq!(instructions_file(n), "2026-11-19_0905.instructions.md");
     assert_eq!(job_file(n), "2026-11-19_0905.job.json");
@@ -145,85 +145,50 @@ fn rec_layout_catalog_explorer_link() {
 // ---------- settings ----------
 
 #[test]
-fn rec_settings_defaults_match_the_brief() {
-    let s = RecordingSettings::default();
-    assert!(!s.enabled);
-    assert!(!s.consent_ack);
-    assert_eq!(s.storage, Storage::MyFiles);
-    assert_eq!(s.transcribe_endpoint, "databricks-gemini-3-8-flash");
-    assert_eq!(s.notes_endpoint, "databricks-claude-sonnet-5-5");
-    assert_eq!(s.length_min, 60);
-    assert!(s
-        .preset_instructions
-        .starts_with("You get the transcript of a call."));
-    assert!(s.preset_instructions.contains("## Action items"));
-    assert!(s
-        .preset_instructions
-        .ends_with("Use only facts from the transcript.\n"));
-    assert_eq!(s.validate(), Ok(()));
-}
-
-#[test]
-fn rec_settings_validation() {
-    let ok = RecordingSettings::default();
-    let mut s = ok.clone();
-    s.length_min = 4;
-    assert_eq!(s.validate(), Err(ErrorKind::BadSettings));
-    s.length_min = 121;
-    assert_eq!(s.validate(), Err(ErrorKind::BadSettings));
-    s.length_min = 120;
-    assert_eq!(s.validate(), Ok(()));
-    let mut s = ok.clone();
-    s.notes_endpoint = "bad'name".into();
-    assert_eq!(s.validate(), Err(ErrorKind::BadSettings));
-    let mut s = ok.clone();
-    s.transcribe_endpoint = "a/../b".into();
-    assert_eq!(s.validate(), Err(ErrorKind::BadSettings));
-    let mut s = ok.clone();
-    s.storage = Storage::Volume {
-        path: "/Volumes/c/s".into(),
-    };
-    assert_eq!(s.validate(), Err(ErrorKind::BadSettings));
-    let mut s = ok.clone();
-    s.storage = Storage::CatalogSchema {
-        catalog: "main".into(),
-        schema: "te am".into(),
-    };
-    assert_eq!(s.validate(), Err(ErrorKind::BadSettings));
-    let mut s = ok;
-    s.preset_instructions = String::new();
-    assert_eq!(s.validate(), Err(ErrorKind::BadSettings));
-}
-
-#[test]
-fn rec_settings_file_round_trip_and_bad_file_falls_back() {
+fn rec_settings_json_file_round_trip_and_bad_file_falls_back() {
+    use mog_core::recording::RecordingSettingsStore;
+    use mog_core::types::{RecordingSettings, RecordingSettingsPatch};
     let dir = std::env::temp_dir().join(format!("bottle-rec-settings-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    let file = SettingsFile::new(dir.join(SETTINGS_FILE));
-    assert_eq!(file.read(), RecordingSettings::default());
-    let s = RecordingSettings {
-        enabled: true,
-        storage: Storage::Volume {
-            path: "/Volumes/c/s/v".into(),
-        },
-        transcribe_endpoint: "my-audio-model".into(),
-        ..Default::default()
-    };
-    file.write(&s).unwrap();
-    assert_eq!(file.read(), s);
+    let deferred = JsonSettingsStore::deferred();
+    assert_eq!(deferred.load().unwrap(), RecordingSettings::default());
+    assert!(deferred.save(&RecordingSettings::default()).is_err());
+    let file = JsonSettingsStore::new(dir.join(SETTINGS_FILE));
+    let d = file.load().unwrap();
+    assert!(!d.enabled && !d.consent_ack && d.storage.is_none());
+    assert_eq!(
+        d.transcribe_endpoint.as_str(),
+        "databricks-gemini-3-8-flash"
+    );
+    assert_eq!(d.notes_endpoint.as_str(), "databricks-claude-sonnet-5-5");
+    assert_eq!(d.length_min.get(), 60);
+    let patch: RecordingSettingsPatch = serde_json::from_value(json!({
+        "enabled": true,
+        "storage": {"kind": "volume", "root": "/Volumes/c/s/v"},
+        "lengthMin": 90
+    }))
+    .unwrap();
+    let s = d.apply(patch);
+    file.save(&s).unwrap();
+    assert_eq!(file.load().unwrap(), s);
     let text = std::fs::read_to_string(dir.join(SETTINGS_FILE)).unwrap();
-    assert!(text.contains("\"kind\": \"volume\""), "{text}");
-    let mut bad = s.clone();
-    bad.length_min = 1;
-    assert_eq!(file.write(&bad), Err(ErrorKind::BadSettings));
-    assert_eq!(file.read(), s);
+    assert!(text.contains("\"lengthMin\": 90"), "{text}");
+    assert!(!text.to_ascii_lowercase().contains("token"), "{text}");
     std::fs::write(dir.join(SETTINGS_FILE), b"{not json").unwrap();
-    assert_eq!(file.read(), RecordingSettings::default());
-    std::fs::write(dir.join(SETTINGS_FILE), br#"{"enabled":true}"#).unwrap();
-    let partial = file.read();
-    assert!(partial.enabled);
-    assert_eq!(partial.length_min, 60);
+    assert_eq!(file.load().unwrap(), RecordingSettings::default());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn rec_settings_validators() {
+    assert!(is_endpoint_name("databricks-gemini-3-8-flash"));
+    assert!(!is_endpoint_name("bad'name"));
+    assert!(!is_endpoint_name("a/../b"));
+    assert!(valid_instructions("Write notes."));
+    assert!(!valid_instructions("   "));
+    assert!(valid_catalog_schema("main", "team"));
+    assert!(!valid_catalog_schema("main", "te am"));
+    assert_eq!(Storage::default(), Storage::MyFiles);
 }
 
 // ---------- model requests and replies ----------
@@ -459,7 +424,7 @@ fn rec_job_manifest_shape_and_transitions() {
         "r1",
         "2026-11-19_0905",
         "2026-11-19T14:05:00Z",
-        vec![PartEntry::new("2026-11-19_0905.part01.ogg", 61.5)],
+        vec![PartEntry::new("2026-11-19_0905.opus", 61.5)],
         "databricks-gemini-3-8-flash",
         "databricks-claude-sonnet-5-5",
         "2026-11-19T15:05:00Z",
@@ -477,7 +442,7 @@ fn rec_job_manifest_shape_and_transitions() {
     assert_eq!(v["error_kind"], "volume_permission");
     assert_eq!(v["error_stage"], "uploading");
     assert_eq!(v["updated_at"], "2026-11-19T15:06:00Z");
-    assert_eq!(v["parts"][0]["file"], "2026-11-19_0905.part01.ogg");
+    assert_eq!(v["parts"][0]["file"], "2026-11-19_0905.opus");
     assert_eq!(v["parts"][0]["uploaded"], false);
     assert_eq!(v["transcribe_endpoint"], "databricks-gemini-3-8-flash");
     assert_eq!(v["notes_endpoint"], "databricks-claude-sonnet-5-5");

@@ -63,7 +63,7 @@ fn temp_parts(tag: &str, n: usize) -> (PathBuf, Vec<LocalPart>) {
     std::fs::create_dir_all(&dir).unwrap();
     let parts = (1..=n)
         .map(|i| {
-            let path = dir.join(format!("{NAME}.part{i:02}.ogg"));
+            let path = dir.join(format!("{NAME}.part{i:02}.opus"));
             std::fs::write(&path, format!("OggS-fake-{i}")).unwrap();
             LocalPart {
                 path,
@@ -324,8 +324,8 @@ fn rec_pipeline_uploads_deletes_temp_transcribes_and_writes_notes() {
         assert!(seen.contains(&s), "{s:?} in {seen:?}");
     }
     let up = uploads(&http);
-    let part = up.iter().find(|(p, _)| p.ends_with("part01.ogg")).unwrap();
-    assert_eq!(part.0, format!("{FOLDER}/2026-11-19_0905.part01.ogg"));
+    let part = up.iter().find(|(p, _)| p.ends_with(".opus")).unwrap();
+    assert_eq!(part.0, format!("{FOLDER}/2026-11-19_0905.opus"));
     assert_eq!(part.1, b"OggS-fake-1");
     let instr = up
         .iter()
@@ -341,7 +341,11 @@ fn rec_pipeline_uploads_deletes_temp_transcribes_and_writes_notes() {
             .unwrap_or("");
         assert_eq!(
             ow,
-            if p.ends_with(".ogg") { "false" } else { "true" },
+            if p.ends_with(".opus") {
+                "false"
+            } else {
+                "true"
+            },
             "{p}"
         );
     }
@@ -440,7 +444,7 @@ fn rec_pipeline_refuses_non_audio_before_any_upload_of_it() {
     files_ok(&http);
     let out = service(&http).run(P, &job(parts.clone()), &mut |_| {});
     assert_eq!(out.error_kind, Some(ErrorKind::AudioUnreadable));
-    assert!(uploads(&http).iter().all(|(p, _)| !p.ends_with(".ogg")));
+    assert!(uploads(&http).iter().all(|(p, _)| !p.ends_with(".opus")));
     assert!(http.seen_on(MODEL).is_empty());
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -560,7 +564,7 @@ fn rec_pipeline_retries_a_429_with_backoff() {
 
 fn manifest(name: &str, started: &str, status: &str) -> Value {
     json!({"version":1,"id":name,"name":name,"started_at":started,"duration_s":30.0,
-        "parts":[{"file":format!("{name}.part01.ogg"),"duration_s":30.0,"uploaded":true}],
+        "parts":[{"file":format!("{name}.opus"),"duration_s":30.0,"uploaded":true}],
         "status":status,"transcribe_endpoint":"databricks-gemini-3-8-flash",
         "notes_endpoint":"databricks-claude-sonnet-5-5","updated_at":started})
 }
@@ -670,11 +674,11 @@ fn rec_retry_transcribe_reads_the_part_back_from_the_volume() {
     let out = service(&http).retry(P, &job(vec![]), &mut |_| {});
     assert_eq!(out.status, Status::Done, "{out:?}");
     let reads: Vec<String> = http.seen_on("files.download").iter().map(path_of).collect();
-    assert_eq!(reads[1], format!("{FOLDER}/2026-11-19_0905.part01.ogg"));
+    assert_eq!(reads[1], format!("{FOLDER}/2026-11-19_0905.opus"));
     assert!(http
         .seen_on("files.upload")
         .iter()
-        .all(|c| !path_of(c).ends_with(".ogg")));
+        .all(|c| !path_of(c).ends_with(".opus")));
 }
 
 #[test]
@@ -682,12 +686,11 @@ fn rec_retry_upload_with_temp_audio_gone_is_audio_missing() {
     let http = Arc::new(ScriptedHttp::new());
     let mut failed = manifest(NAME, "2026-11-19T14:05:00Z", "failed");
     failed["error_stage"] = json!("uploading");
-    failed["parts"] =
-        json!([{"file":"2026-11-19_0905.part01.ogg","duration_s":30.0,"uploaded":false}]);
+    failed["parts"] = json!([{"file":"2026-11-19_0905.opus","duration_s":30.0,"uploaded":false}]);
     http.bytes("files.download", &serde_json::to_vec(&failed).unwrap());
     files_ok(&http);
     let gone = LocalPart {
-        path: PathBuf::from("/nonexistent/bottle/x.part01.ogg"),
+        path: PathBuf::from("/nonexistent/bottle/x.opus"),
         duration_s: 30.0,
     };
     let out = service(&http).retry(P, &job(vec![gone]), &mut |_| {});

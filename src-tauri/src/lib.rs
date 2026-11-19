@@ -235,6 +235,9 @@ pub fn run() {
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
     let builder = builder.activate_ignoring_other_apps(ACTIVATE_IGNORING_OTHER_APPS);
+    let recording_settings = std::sync::Arc::new(
+        mog_core::recording_cloud::settings_store::JsonSettingsStore::deferred(),
+    );
     builder
         .manage(ipc::BrainChannel::default())
         .manage(ipc::HubChannel::default())
@@ -243,12 +246,12 @@ pub fn run() {
         .manage(std::sync::Arc::new(
             mog_core::app_settings::AppSettings::default(),
         ))
-        // ADR 0103: the `recording_*` component. The settings stay in memory, knob off, until
-        // PR C keeps them in a JSON file in the app config dir. TODO(#65).
+        // ADR 0103: the `recording_*` component on the JSON settings file (PR C). The file
+        // path is set in `setup` by `recording_cloud_host::install`; before that, defaults
+        // (knob off) and no write.
+        .manage(recording_settings.clone())
         .manage(std::sync::Arc::new(
-            mog_core::recording::RecordingComponent::new(std::sync::Arc::new(
-                mog_core::recording::MemorySettingsStore::default(),
-            )),
+            mog_core::recording::RecordingComponent::new(recording_settings),
         ))
         // G-09a, ARC-F3 (#467, #138): the ONE rate bucket of the process.
         // `rate_bucket.rs:4`: "R7 and R8 share one per process". Every R7 and R8 (and the

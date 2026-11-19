@@ -64,7 +64,8 @@ impl VolumeRoot {
     }
 }
 
-/// `<name>.partNN.<ext>` (1-based), `ext` from the audio format (`ogg`, `flac`, `wav`).
+/// `<name>.partNN.<ext>` (1-based) for a recording of more than one part; `ext` is `opus`
+/// (Ogg Opus), `flac` or `wav`. A one-part recording is `<name>.opus`.
 pub fn part_file(name: &str, n: u32, ext: &str) -> String {
     format!("{name}.part{n:02}.{ext}")
 }
