@@ -1,0 +1,9 @@
+{
+  "enabled": false,
+  "consentAck": false,
+  "storage": null,
+  "warehouseId": null,
+  "notesEndpoint": "databricks-claude-sonnet-5-5",
+  "presetInstructions": "Write short notes in Markdown.",
+  "lengthMin": 60
+}

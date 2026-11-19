@@ -112,6 +112,14 @@ fn sample(command: &str) -> (&'static str, Value) {
         "brain_subscribe" => json!({"onEvent": "__CHANNEL__:3"}),
         "hub_notice_send" => json!({"kind": "dictation_unshown", "mogId": "a1", "text": "hello"}),
         "view_notice_subscribe" => return ("hub", json!({"onNotice": "__CHANNEL__:4"})),
+        // ADR 0103: call recording.
+        "recording_settings_read" | "recording_storage_probe" | "recording_warehouses"
+        | "recording_stop" | "recording_state" | "recording_list" => json!({}),
+        "recording_settings_write" => json!({"patch": {"enabled": true}}),
+        "recording_volume_create" => json!({"catalog": "main", "schema": "calls"}),
+        "recording_start" => json!({"instructions": "Notes."}),
+        "recording_detail" | "recording_retry" => json!({"id": "rec-1"}),
+        "recording_open" => json!({"id": "rec-1", "target": "folder"}),
         other => panic!("no sample for {other}"),
     };
     ("brain", args)

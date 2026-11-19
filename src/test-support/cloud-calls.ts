@@ -60,6 +60,20 @@ export const CALL_CLASS = {
   brain_subscribe: 'local',
   hub_notice_send: 'local',
   view_notice_subscribe: 'local',
+  // ADR 0103: call recording. Rust reads and writes the settings file locally; the rest reach
+  // the workspace (Files API, Unity Catalog, SQL warehouses, Jobs).
+  recording_settings_read: 'local',
+  recording_settings_write: 'local',
+  recording_storage_probe: 'cloud',
+  recording_volume_create: 'cloud',
+  recording_warehouses: 'cloud',
+  recording_start: 'local',
+  recording_stop: 'cloud', // the stop starts the upload and the transcription job
+  recording_state: 'local',
+  recording_list: 'cloud',
+  recording_detail: 'cloud',
+  recording_retry: 'cloud',
+  recording_open: 'local', // opens the browser; Bottle itself sends nothing
 } as const satisfies Record<keyof typeof COMMANDS, CallClass>;
 
 /** The command arguments of an invoke log entry: `call()` sends them as `{ args }` (ADR 0003). */
