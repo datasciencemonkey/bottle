@@ -12,6 +12,7 @@ import type { SectionInput } from './card-sections';
 import { createGenieBridge } from './components/genie-bridge';
 import { GIVE_UP_MS } from './components/poll-actor';
 import { GENIE_DATA_FLOW_TEXT, createGenieDirectSend, workingLine } from './genie-direct';
+import type { GenieEnd } from './genie-history';
 
 const OP = '00000000-0000-4000-8000-00000000c573';
 const Q = 'What was revenue last quarter?';
@@ -169,5 +170,99 @@ describe('genie direct send (#573, ADR 0097)', () => {
       completed: true,
     });
     expect(c.expanded.at(-1)).toMatchObject({ keyNumbers: ['$1.2M'] });
+  });
+});
+
+describe('genie direct send: the end of each request goes to the local history (#40)', () => {
+  const answer: AskEvent = {
+    t: 'answer',
+    md: 'Revenue was **$1.2M**.',
+    incomplete: false,
+    keyNumbers: [{ text: '$1.2M' }],
+    deepLink: 'https://example.cloud.databricks.test/one/chat/threads/c1?o=1',
+    queryItems: [],
+  };
+
+  it('[AT-09] [G-21b] calls onEnd once, after the card, with the exact question and the ids', async () => {
+    const c = fakeCard();
+    const b = fakeBridge([{ t: 'accepted', conversationId: 'c1', responseId: 'r1' }, answer]);
+    const ends: GenieEnd[] = [];
+    const send = createGenieDirectSend({
+      genie: b.bridge,
+      cardFor: () => c.card,
+      newOpId: () => OP,
+      onEnd: (x) => {
+        // The card already shows the answer when the history write starts.
+        expect(c.log.at(-1)?.completed).toBe(true);
+        ends.push(x);
+      },
+    });
+    await send(turn({ question: 'What was EMEA revenue?' }));
+    expect(ends).toEqual([
+      {
+        opId: OP,
+        mogId: MOG,
+        profile: PROFILE,
+        question: 'What was EMEA revenue?',
+        conversationId: 'c1',
+        responseId: 'r1',
+        end: answer,
+      },
+    ]);
+  });
+
+  it('[AT-09] a stream that breaks ends as uncertain, once', async () => {
+    const c = fakeCard();
+    const ends: GenieEnd[] = [];
+    const send = createGenieDirectSend({
+      genie: {
+        submit: (req) => ({
+          opId: req.opId,
+          events: (async function* (): AsyncGenerator<AskEvent> {
+            yield { t: 'progress', steps: null, elapsedMs: 1000 };
+            throw new Error('fake client fault');
+          })(),
+        }),
+      },
+      cardFor: () => c.card,
+      newOpId: () => OP,
+      onEnd: (x) => void ends.push(x),
+    });
+    await send(turn());
+    expect(ends.map((x) => x.end)).toEqual([{ t: 'uncertain' }]);
+    expect(ends[0]?.conversationId).toBeUndefined();
+  });
+
+  it('[AT-09] a throw in onEnd never changes the card or rejects the send', async () => {
+    const c = fakeCard();
+    const b = fakeBridge([answer]);
+    const send = createGenieDirectSend({
+      genie: b.bridge,
+      cardFor: () => c.card,
+      newOpId: () => OP,
+      onEnd: () => {
+        throw new Error('fake history fault');
+      },
+    });
+    await expect(send(turn())).resolves.toBeUndefined();
+    expect(c.log.at(-1)).toMatchObject({ text: 'Revenue was **$1.2M**.', completed: true });
+    expect(c.log.map((x) => x.text)).toHaveLength(2);
+  });
+
+  it('[AT-09] [B1] no onEnd call for a request that was never sent', async () => {
+    const ends: GenieEnd[] = [];
+    const send = createGenieDirectSend({
+      genie: {
+        submit: () => {
+          throw new Error('fake submit refusal');
+        },
+      },
+      cardFor: () => fakeCard().card,
+      newOpId: () => OP,
+      onEnd: (x) => void ends.push(x),
+    });
+    expect(() => send(turn())).toThrow();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(ends).toEqual([]);
   });
 });

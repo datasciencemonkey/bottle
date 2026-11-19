@@ -68,6 +68,14 @@ export interface ItemWrite {
   quarantined?: boolean;
 }
 
+/** The MOG row of `mem.mog.upsert` (#40). */
+export interface MogRow {
+  mogId: MogId;
+  displayName: string;
+  /** The backend of the MOG, a fixed code. T10 passes it on and never reads it (G-21a). */
+  backendKind: string;
+}
+
 /**
  * A `MemoryDraft` with its exchange and utterance links (MEM-31 provenance).
  * TODO(#533): the contract adds `sourceExchangeId` and `utteranceIds` to `MemoryDraft`; then
@@ -143,6 +151,8 @@ const KEY_NUMBERS_MAX = 32;
 const KEY_NUMBERS_JSON_MAX = 16_384;
 const ANSWER_MAX = 200_000;
 const QUESTION_USER_MAX = 1000;
+/** The catalog limit of `mem.mog.upsert` `displayName`. */
+const DISPLAY_NAME_MAX = 80;
 /** The end of a full answer that is longer than the catalog limit. */
 export const ANSWER_CUT_MARK = '\n\n… (answer cut at 200,000 characters)';
 
@@ -437,6 +447,24 @@ export class LocalMemoryService implements MemoryService {
     if (changes[0] !== 1) throw new Error('storeItem: the item id belongs to another MOG');
     this.#queue?.kick();
     return { itemId, queued: changes[1] === 1 };
+  }
+  /**
+   * Register the MOG row in R10 with `mem.mog.upsert` (#40, ADR 0061): every other table links
+   * to it, so it goes before the first exchange of a MOG. The upsert is idempotent; a later call
+   * updates the name. The name is cut to the 80-character catalog limit; an empty name is
+   * refused (the table CHECK).
+   */
+  async registerMog(m: MogRow): Promise<void> {
+    if (!UUID_RE.test(m.mogId)) throw new Error('registerMog needs a UUID mogId');
+    // `mog.display_name` has CHECK (length BETWEEN 1 AND 80).
+    if (m.displayName.length === 0) throw new Error('registerMog needs a name');
+    await this.store.exec('mem.mog.upsert', {
+      mogId: m.mogId,
+      displayName: codePoints(m.displayName, DISPLAY_NAME_MAX),
+      backendKind: m.backendKind,
+      rowHlc: this.#hlc(this.#now()),
+      deviceId: this.#deviceId(),
+    });
   }
   /**
    * Store one Genie exchange in R10 with `mem.exchange.upsert` (#38, MEM-25a, MEM-26, D60, U8).

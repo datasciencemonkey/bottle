@@ -15,10 +15,15 @@
  * No failure is sent again (G-15b): the outcome controls ([Retry], [Open in Databricks]) do not
  * show yet. TODO(#86): the outcome controls, the footer and the deep link. TODO(#150): the table
  * preview. TODO(#40): the workspace host in the Acknowledged line ("this workspace" until then).
+ *
+ * #40 (AT-09): when a sent request ends, `onEnd` gets its end once, after the card update.
+ * `genie-history.ts` saves it as one local exchange row. A request that was never sent (a
+ * `submit` that throws) has no end.
  */
 import type { AgentTurn, AskRequest, GenieBridge, MogId, ProfileName } from '../shared/interfaces';
 import type { CardStack } from './card-stack';
-import { isTerminal } from './components/ask-events';
+import { isTerminal, type TerminalAskEvent } from './components/ask-events';
+import type { GenieEnd } from './genie-history';
 import { outcomeBlurbInput } from './outcome-blurb';
 
 /** The "Where your data goes" line of an answer card. TODO(#94): built from the live config (UX-24a). */
@@ -41,6 +46,8 @@ export interface GenieDirectDeps {
   cardFor(mogId: MogId): Pick<CardStack, 'add' | 'setExpanded'>;
   /** A new operation ID per press. */
   newOpId(): string;
+  /** #40: called once when a sent request ends, after the card shows the outcome. */
+  onEnd?: ((x: GenieEnd) => void) | undefined;
 }
 
 /**
@@ -61,8 +68,12 @@ export function createGenieDirectSend(deps: GenieDirectDeps): (turn: AgentTurn) 
     const id = `genie:${opId}`;
     card.add({ id, text: workingLine(turn.target) });
     return (async () => {
+      let end: TerminalAskEvent | undefined;
+      let accepted: { conversationId: string; responseId: string } | undefined;
       try {
         for await (const e of events) {
+          if (e.t === 'accepted')
+            accepted = { conversationId: e.conversationId, responseId: e.responseId };
           if (isTerminal(e)) {
             card.add(outcomeBlurbInput(id, e));
             if (e.t === 'answer')
@@ -71,7 +82,8 @@ export function createGenieDirectSend(deps: GenieDirectDeps): (turn: AgentTurn) 
                 keyNumbers: e.keyNumbers.map((k) => k.text),
                 dataFlowText: GENIE_DATA_FLOW_TEXT,
               });
-            return;
+            end = e;
+            break;
           }
           if (e.t === 'progress') card.add({ id, text: elapsedLine(e.elapsedMs) });
         }
@@ -79,7 +91,23 @@ export function createGenieDirectSend(deps: GenieDirectDeps): (turn: AgentTurn) 
         // T8 ends every request in one terminal event (G-21b), so this is a client fault. The
         // card must not stay on the working line, and nothing is sent again (G-15b).
       }
-      card.add(outcomeBlurbInput(id, { t: 'uncertain' }));
+      if (!end) {
+        end = { t: 'uncertain' };
+        card.add(outcomeBlurbInput(id, end));
+      }
+      // #40: the history write comes after the card, and a fault in it never reaches the card.
+      try {
+        deps.onEnd?.({
+          opId,
+          mogId: turn.mogId,
+          profile: turn.target,
+          question: turn.question,
+          end,
+          ...accepted,
+        });
+      } catch {
+        // The history logs its own fixed code; the answer on the card stays as it is.
+      }
     })();
   };
 }

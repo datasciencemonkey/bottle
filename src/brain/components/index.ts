@@ -26,6 +26,7 @@ import { cardStackDeps, createCardStack, timeoutScheduler, type CardStack } from
 import { createSystemClock } from '../clock';
 import { createDictationSink } from '../dictation-copy';
 import { createGenieDirectSend } from '../genie-direct';
+import { ipcGenieHistory } from '../genie-history';
 import { createHomeProfiles, ipcHomeProfileDeps, ipcListProfiles } from '../home-profile';
 import { LevelRouter, subscribeLevels, wireLevelStream } from '../level-stream';
 import { createMoodPublisher, latencyTraceClock } from '../mood-publisher';
@@ -182,6 +183,8 @@ export function startBrain(): Brain {
         genie: components.T8,
         cardFor: stackFor,
         newOpId: () => crypto.randomUUID(),
+        // #40 (AT-09): each request that ends saves one local exchange row through T10.
+        onEnd: ipcGenieHistory(components.T10),
       }),
       // #557: a press with no home profile opens the picker; the user picks, then the text goes.
       pickProfile: (mogId, then) => void pick.choose(mogId, then),
