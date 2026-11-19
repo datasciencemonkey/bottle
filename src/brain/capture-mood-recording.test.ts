@@ -1,12 +1,12 @@
 /**
- * Call recording on the MOG (ADR 0103, refs #65): the REC overlay while a call recording runs,
- * "Recording in progress" on a talk-key hold that the core refuses, and the answer-ready moment
- * when the notes are ready. All through the one mood publisher.
+ * Call recording on the MOG (ADR 0103, refs #65): the REC overlay while a call recording runs and
+ * the answer-ready moment when the notes are ready, through the one mood publisher. The
+ * "Recording in progress" refusal text is #594's (`recording_in_progress`).
  */
 import type { CaptureState } from '../shared/interfaces';
 import { createSimScheduler } from '../test-support/sim-scheduler';
 import { ERROR_MS, SUCCESS_MS } from './components/mood-mapper';
-import { RECORDING_IN_PROGRESS, REFUSAL_TEXT, createCaptureMood } from './capture-mood';
+import { createCaptureMood } from './capture-mood';
 import { createMoodPublisher, type PublishedViewState } from './mood-publisher';
 
 const A = '00000000-0000-4000-8000-0000000000a1';
@@ -23,7 +23,7 @@ function setup() {
   });
   const cm = createCaptureMood({ publisher, clock: s.clock, scheduler: s });
   const last = (mogId: string) => sent.filter((v) => v.mogId === mogId).at(-1);
-  return { s, cm, last };
+  return { s, cm, last, sent };
 }
 
 describe('capture mood: call recording (ADR 0103)', () => {
@@ -40,21 +40,17 @@ describe('capture mood: call recording (ADR 0103)', () => {
     expect(last(B)?.overlays.recording).toBe(false);
   });
 
-  it('[REC-M2] a refused talk-key hold during a recording says "Recording in progress"', () => {
-    const { cm, last } = setup();
-    cm.callRecording(true, [A]);
-    cm.refused(A, { error: 'mic_busy' });
-    expect(last(A)?.badges?.[0]).toMatchObject({
-      kind: 'capture_refused',
-      ...RECORDING_IN_PROGRESS,
+  it('[REC-M2] the recording capture owner bottle-recording never shows as a MOG', () => {
+    const { cm, sent } = setup();
+    cm.onState({
+      owner: 'bottle-recording',
+      mode: 'session',
+      recording: true,
+      paused: false,
+      othersTrack: 'off',
     });
-    expect(RECORDING_IN_PROGRESS.text).toBe('Recording in progress');
-  });
-
-  it('[REC-M2] without a recording, mic_busy keeps its own text', () => {
-    const { cm, last } = setup();
-    cm.refused(A, { error: 'mic_busy' });
-    expect(last(A)?.badges?.[0]).toMatchObject(REFUSAL_TEXT.mic_busy);
+    cm.callRecording(true, [A]);
+    expect(sent.some((v) => v.mogId === 'bottle-recording')).toBe(false);
   });
 
   it('[REC-M3] ready notes show the answer-ready moment (success) on every known MOG', async () => {

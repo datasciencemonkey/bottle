@@ -549,48 +549,20 @@ describe('ipcRecordingApi: the typed recording_* contract (ADR 0103)', () => {
     });
   });
 
-  it('[REC-H13] relays recording.state, recording.job and the record key from the bus', () => {
+  it('[REC-H13] relays recording.state and recording.job from the bus; the record key is #594s', () => {
     const bus = new BrainBus();
     const api = ipcRecordingApi(bus);
     const states: unknown[] = [];
     const jobs: unknown[] = [];
-    let toggles = 0;
     api.onState((s) => states.push(s));
     api.onJob((j) => jobs.push(j));
-    api.onRecordToggle?.(() => (toggles += 1));
     bus.dispatch({ event: 'recording:state', payload: { state: 'idle', systemAudio: 'off' } });
     bus.dispatch({
       event: 'recording:job',
       payload: { id: 'a', name: 'n', startedAtMs: 5, durationS: 60, status: 'done' },
     });
-    bus.dispatch({ event: 'hotkey:record_toggle', payload: { mogId: 'm' } });
     expect(states).toEqual([{ phase: 'idle' }]);
     expect(jobs).toEqual([{ id: 'a', name: 'n', startedAt: 5, durationS: 60, status: 'done' }]);
-    expect(toggles).toBe(1);
-  });
-});
-
-describe('record key (ADR 0103)', () => {
-  it('[REC-H14] the record key starts a recording, and stops a running one', async () => {
-    const bus = new BrainBus();
-    const fake = fakeApi({ enabled: true, consentAck: true });
-    let toggle: (() => void) | undefined;
-    wireRecording(bus, {
-      api: {
-        ...fake.api,
-        onRecordToggle: (cb) => {
-          toggle = cb;
-          return () => undefined;
-        },
-      },
-      platform: 'mac',
-      send: async () => undefined,
-    });
-    toggle?.();
-    await flush();
-    expect(fake.api.start).toHaveBeenCalledWith(undefined);
-    toggle?.();
-    await flush();
-    expect(fake.api.stop).toHaveBeenCalledTimes(1);
+    expect('onRecordToggle' in api).toBe(false);
   });
 });
