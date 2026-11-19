@@ -168,6 +168,42 @@ describe('startBrain saves each Ask Genie exchange locally (#40)', () => {
     });
   });
 
+  it('[#103] a double-click open goes through the Conversations wiring: sent now, and once more when the hub asks', async () => {
+    host(async () => ({ rows: [] }));
+    const req = '41111111-2222-4333-8444-555555555577';
+    const opens = () =>
+      core.emitTo.mock.calls.filter(
+        ([target, event]) => target === 'hub' && event === 'hub:conversations.open',
+      );
+    brain?.bus.dispatch({
+      event: 'view:input',
+      payload: {
+        from: `card-${MOG}`,
+        input: {
+          mogId: MOG,
+          kind: 'click',
+          payload: { target: 'open_conversations', requestId: req },
+        },
+      },
+    });
+    await settle();
+    expect(opens().map(([, , p]) => p)).toEqual([{ requestId: req }]);
+    // A hub that was not listening yet asks with conversations.ready and gets the held open.
+    brain?.bus.dispatch({
+      event: 'view:input',
+      payload: {
+        from: 'hub',
+        input: {
+          mogId: 'conversations',
+          kind: 'click',
+          payload: { action: 'conversations.ready' },
+        },
+      },
+    });
+    await settle();
+    expect(opens().map(([, , p]) => p)).toEqual([{ requestId: req }, { requestId: req }]);
+  });
+
   it('[AT-09] [B1] no exchange write for a question that was never sent', async () => {
     host(async () => ({ rows: [{ changes: 1 }] }));
     brain?.talkTarget.viewReady(MOG);

@@ -297,12 +297,11 @@ export function startBrain(): Brain {
         }
       },
       lastOpId: (mogId) => lastGenieOp.get(mogId),
-      // TODO(#103): the hub Conversations wiring (`hub-conversations-wiring.ts`) replaces the
-      // emit below with `openConversations(requestId)`, which also sends it again when the hub
-      // says it is ready.
+      // #103: show the hub, then open Conversations on this exchange. The wiring holds the open
+      // until the hub acks it or asks for the list, so a hub that was not listening still gets it.
       openConversations: (requestId) => {
         void showHub();
-        void emitTo('hub', 'hub:conversations.open', { requestId }).catch(() => undefined);
+        void conversations.openConversations(requestId);
       },
     });
     // #498 (ADR 0091): the Copy card of a dictation. The card is shown first, then the text goes
