@@ -220,9 +220,11 @@ fn adr_0103_the_host_ticker_applies_the_length_preset() {
     r.rec.set_enabled(true, &Asker::default());
     r.rec.session().start(opts()).unwrap();
     r.clock.advance(Duration::from_secs(5 * 60));
-    // The ticker runs every TICK_EVERY of real time and reads the simulated clock.
+    // The ticker runs every TICK_EVERY of real time and reads the simulated clock. The state
+    // turns idle when the stop takes the recording; the hand-off comes after the writer
+    // finishes, so wait for the hand-off.
     for _ in 0..200 {
-        if r.rec.session().snapshot() == Snapshot::Idle {
+        if !r.handoff.0.lock().unwrap().is_empty() {
             break;
         }
         std::thread::sleep(TICK_EVERY);
