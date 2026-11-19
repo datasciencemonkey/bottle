@@ -47,7 +47,9 @@ import { ipcGenieHistory } from '../genie-history';
 import { createHomeProfiles, ipcHomeProfileDeps, ipcListProfiles } from '../home-profile';
 import { LevelRouter, subscribeLevels, wireLevelStream } from '../level-stream';
 import { createMoodPublisher, latencyTraceClock } from '../mood-publisher';
-import { wireNotice } from '../notice-wiring';
+import { sendHubNotice as sendLegalNotice, wireNotice } from '../notice-wiring';
+import { storeGate } from '../store-gate';
+import { isTauriMac, wireStoreGate } from '../store-wiring';
 import { wirePermissions } from '../permission-wiring';
 import { withOfflineFallback } from '../offline-intent';
 import { createProfilePick } from '../profile-pick';
@@ -130,6 +132,15 @@ export function startBrain(): Brain {
     ) as BrainComponents;
     const bus = new BrainBus();
     // TODO(#8, #141): the other components register their handlers on `bus`.
+    // ADR 0105 (MEM-08b): the local store opens once, on first use. On macOS the hub first says
+    // why macOS asks for the password. A refusal turns history off until Try again.
+    wireStoreGate(bus, storeGate, {
+      explain: isTauriMac(),
+      onRetry: () =>
+        void components.T12.noticeState()
+          .then(sendLegalNotice)
+          .catch(() => undefined),
+    });
     // MB-08a, MB-08b: the hub notice talks to T12 (#27).
     wireNotice(bus, components.T12);
     // #26: the hub MOG list and actions (MB-01).
