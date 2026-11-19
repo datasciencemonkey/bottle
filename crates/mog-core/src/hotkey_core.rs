@@ -1858,16 +1858,24 @@ mod tests {
     // ---- RTR-17a (ADR 0098): the talk key + G marks the hold as an ask ----
 
     /// The ask-key seam double: it records each register (`true`) and unregister (`false`).
+    /// The drain requests are counted apart: the test plays the OS layer and calls
+    /// `on_ask_key_drained` itself.
     #[derive(Default)]
-    struct RecAskKey(Mutex<Vec<bool>>);
+    struct RecAskKey(Mutex<Vec<bool>>, Mutex<usize>);
     impl AskKeyControl for RecAskKey {
         fn set_ask_key(&self, on: bool) {
             self.0.lock().unwrap().push(on);
+        }
+        fn drain(&self) {
+            *self.1.lock().unwrap() += 1;
         }
     }
     impl RecAskKey {
         fn take(&self) -> Vec<bool> {
             std::mem::take(&mut *self.0.lock().unwrap())
+        }
+        fn drains(&self) -> usize {
+            std::mem::take(&mut *self.1.lock().unwrap())
         }
     }
 
@@ -1900,6 +1908,7 @@ mod tests {
         e.on_talk_key(Down);
         clock.advance(Duration::from_millis(400));
         e.on_talk_key(Up);
+        e.on_ask_key_drained();
         e.on_talk_key(Down);
         e.on_ask_key();
         clock.advance(Duration::from_millis(400));
@@ -1908,6 +1917,7 @@ mod tests {
         e.on_talk_key(Down);
         clock.advance(Duration::from_millis(400));
         e.on_talk_key(Up);
+        e.on_ask_key_drained();
         assert_eq!(
             sink.take(),
             vec![
@@ -1944,6 +1954,7 @@ mod tests {
         e.on_talk_key(Down);
         clock.advance(Duration::from_millis(400));
         e.on_talk_key(Up);
+        e.on_ask_key_drained();
         assert_eq!(sink.take(), vec![Ptt(PDown), Ptt(PUp)]);
     }
 
@@ -2149,5 +2160,121 @@ mod tests {
         let (_sink, _clock, keys, e) = ask_engine();
         drop(e);
         assert_eq!(keys.take(), Vec::<bool>::new());
+    }
+
+    // ---- RTR-17a (ADR 0098, review M1): the key-up waits for the queued ask-key presses ----
+
+    #[test]
+    fn rtr_17a_a_g_handled_after_the_up_edge_still_asks() {
+        // The user taps G, then releases. The main thread is busy, so the hot-key press is
+        // handled only after the tap thread has seen the key-up edge.
+        let (sink, clock, keys, mut e) = ask_engine();
+        e.on_talk_key(Down);
+        clock.advance(Duration::from_secs(3));
+        e.on_talk_key(Up);
+        assert_eq!(keys.drains(), 1);
+        assert_eq!(sink.take(), vec![Ptt(PDown)]);
+        e.on_ask_key();
+        e.on_ask_key_drained();
+        assert_eq!(sink.take(), vec![PttAskUp]);
+        assert!(!e.machine().is_held());
+        // The grab is released after the decision, not before it.
+        paired(&keys.take());
+    }
+
+    #[test]
+    fn rtr_17a_a_plain_up_waits_only_for_the_drain() {
+        let (sink, clock, keys, mut e) = ask_engine();
+        e.on_talk_key(Down);
+        clock.advance(Duration::from_secs(2));
+        e.on_talk_key(Up);
+        assert_eq!(keys.drains(), 1);
+        // No clock time passes: the up goes out as soon as the drain comes back.
+        e.on_ask_key_drained();
+        assert_eq!(sink.take(), vec![Ptt(PDown), Ptt(PUp)]);
+        paired(&keys.take());
+    }
+
+    #[test]
+    fn rtr_17a_a_lost_drain_ends_the_up_at_the_grace_deadline() {
+        assert_eq!(ASK_UP_GRACE, Duration::from_millis(200));
+        let (sink, clock, keys, mut e) = ask_engine();
+        let probe = FakeProbe::ready();
+        let ctl = FakeCtl::default();
+        *probe.physical.lock().unwrap() = down();
+        e.tick(clock.now(), &probe, &ctl);
+        e.on_talk_key(Down);
+        clock.advance(Duration::from_secs(2));
+        e.on_talk_key(Up);
+        clock.advance(ASK_UP_GRACE - Duration::from_millis(1));
+        e.tick(clock.now(), &probe, &ctl);
+        assert_eq!(sink.take(), vec![Ptt(PDown)]);
+        clock.advance(Duration::from_millis(1));
+        e.tick(clock.now(), &probe, &ctl);
+        assert_eq!(sink.take(), vec![Ptt(PUp)]);
+        paired(&keys.take());
+        // A drain or a G that comes after the decision does nothing.
+        e.on_ask_key();
+        e.on_ask_key_drained();
+        assert_eq!(sink.take(), vec![]);
+        assert_eq!(keys.take(), Vec::<bool>::new());
+    }
+
+    #[test]
+    fn rtr_17a_no_wait_for_a_tap_a_marked_ask_or_an_os_with_no_ask_key() {
+        let (sink, clock, keys, mut e) = ask_engine();
+        // A tap: always `cancel` and `Tap`.
+        e.on_talk_key(Down);
+        clock.advance(Duration::from_millis(100));
+        e.on_talk_key(Up);
+        // G is already marked: the up is an ask at once.
+        clock.advance(Duration::from_secs(2));
+        e.on_talk_key(Down);
+        e.on_ask_key();
+        clock.advance(Duration::from_secs(1));
+        e.on_talk_key(Up);
+        assert_eq!(keys.drains(), 0);
+        assert_eq!(
+            sink.take(),
+            vec![
+                Ptt(PDown),
+                Ptt(Cancel),
+                HotkeyOutput::Tap,
+                Ptt(PDown),
+                PttAskUp
+            ]
+        );
+        // No ask key (Windows): the up goes out at once.
+        let (sink, clock, mut e) = engine_at_zero();
+        e.on_talk_key(Down);
+        clock.advance(Duration::from_secs(2));
+        e.on_talk_key(Up);
+        assert_eq!(sink.take(), vec![Ptt(PDown), Ptt(PUp)]);
+    }
+
+    #[test]
+    fn rtr_17a_a_new_press_during_the_wait_ends_the_old_up_first() {
+        let (sink, clock, keys, mut e) = ask_engine();
+        e.on_talk_key(Down);
+        clock.advance(Duration::from_secs(2));
+        e.on_talk_key(Up);
+        e.on_talk_key(Down);
+        assert_eq!(sink.take(), vec![Ptt(PDown), Ptt(PUp), Ptt(PDown)]);
+        // The late drain of the first press does not end the second one.
+        e.on_ask_key_drained();
+        assert!(e.machine().is_held());
+        assert_eq!(keys.take(), vec![true, false, true]);
+    }
+
+    #[test]
+    fn cap_44c_a_key_after_the_up_edge_does_not_cancel() {
+        let (sink, clock, _keys, mut e) = ask_engine();
+        e.on_talk_key(Down);
+        clock.advance(Duration::from_millis(500));
+        e.on_talk_key(Up);
+        assert!(!e.other_key_window_open());
+        e.on_other_key_down();
+        e.on_ask_key_drained();
+        assert_eq!(sink.take(), vec![Ptt(PDown), Ptt(PUp)]);
     }
 }
