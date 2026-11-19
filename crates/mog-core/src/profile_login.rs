@@ -21,7 +21,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -39,6 +39,10 @@ pub const LOGIN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 pub const LOGIN_SCOPES: &str = "all-apis,offline_access";
 /// The prefix of every profile that Bottle creates (B0, U16).
 pub const PROFILE_PREFIX: &str = "bottle-";
+/// A cancel for a sign-in that has not registered yet stops it if it starts within this time.
+/// It is short, so a late second Cancel click cannot stop the user's next "Sign in": the race
+/// it closes (a cancel that overtakes its `profile_login` on the way to the host) is far shorter.
+const PENDING_CANCEL: Duration = Duration::from_secs(2);
 /// The longest profile name or client ID that Bottle passes to the CLI.
 const MAX_NAME: usize = 64;
 
@@ -50,7 +54,7 @@ pub fn workspace_host(pasted: &str) -> Option<String> {
     if text.is_empty() || text.chars().any(char::is_whitespace) {
         return None;
     }
-    let with_scheme = if text.contains("://") {
+    let with_scheme = if has_scheme(text) {
         text.to_owned()
     } else {
         format!("https://{text}")
@@ -65,6 +69,17 @@ pub fn workspace_host(pasted: &str) -> Option<String> {
     // `domain()` is `None` for an IP address. `Url` gives the host in lower case.
     let host = url.domain()?.to_owned();
     is_workspace_host(&host).then(|| format!("https://{host}"))
+}
+
+/// True if `text` starts with `<scheme>://` (RFC 3986 scheme characters), not just holds `://`
+/// somewhere, for example in a query.
+fn has_scheme(text: &str) -> bool {
+    text.split_once("://").is_some_and(|(scheme, _)| {
+        scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    })
 }
 
 /// W-07g: the proposed name `bottle-<workspace>`, from the first label of `host`.
@@ -107,6 +122,12 @@ pub struct ProfileLogin {
     verifier: Arc<dyn LoginVerifier>,
     /// The running sign-ins, by profile name, with their cancel flags.
     running: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// Names whose `auth login` ended in this app run but whose W-06a check has not passed
+    /// yet, with their host. "Try again" for such a name runs only the check (the CLI already
+    /// wrote the profile, so the name exists).
+    unchecked: Mutex<HashMap<String, String>>,
+    /// Cancels that came before their sign-in registered, by name.
+    pending_cancel: Mutex<HashMap<String, Instant>>,
     next_id: AtomicU64,
 }
 
@@ -170,6 +191,10 @@ impl Drop for Running<'_> {
     }
 }
 
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|p| p.into_inner())
+}
+
 fn args_of<T: for<'de> Deserialize<'de>>(args: Value) -> CoreResult<T> {
     serde_json::from_value(args).map_err(|_| refused("invalid_args"))
 }
@@ -185,6 +210,8 @@ impl ProfileLogin {
             cli,
             verifier,
             running: Mutex::new(HashMap::new()),
+            unchecked: Mutex::new(HashMap::new()),
+            pending_cancel: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
         }
     }
@@ -204,31 +231,53 @@ impl ProfileLogin {
         // W-07g, W-08: never reuse a name. INI section names are compared without case, so a
         // name that differs only in case cannot shadow a profile either.
         let key = profile.to_ascii_lowercase();
-        let exists = self
+        let found = self
             .config
             .profiles()
             .map_err(|_| refused("host_failed"))?
-            .iter()
-            .any(|p| p.name.eq_ignore_ascii_case(profile));
+            .into_iter()
+            .find(|p| p.name.eq_ignore_ascii_case(profile));
+        // W-07h: a name that this app run signed in, whose check failed, for the same host, runs
+        // only the check again. Any other existing name is refused.
+        let check_only = match &found {
+            None => false,
+            Some(p) => {
+                let ours = lock(&self.unchecked).get(&key) == Some(&host) && p.host == host;
+                if !ours {
+                    return Err(refused("profile_exists"));
+                }
+                true
+            }
+        };
         let cancel = Arc::new(AtomicBool::new(false));
         {
             let mut running = self.running();
-            if exists || running.contains_key(&key) {
+            if running.contains_key(&key) {
                 return Err(refused("profile_exists"));
+            }
+            // A cancel that came just before this sign-in registered stops it now.
+            if let Some(at) = lock(&self.pending_cancel).remove(&key) {
+                if at.elapsed() < PENDING_CANCEL {
+                    return Err(refused("login_cancelled"));
+                }
             }
             running.insert(key.clone(), cancel.clone());
         }
         let _running = Running {
             map: &self.running,
-            key,
+            key: key.clone(),
         };
-        self.cli
-            .run_login(
-                &login_args(&host, profile, client_id),
-                LOGIN_TIMEOUT,
-                &cancel,
-            )
-            .map_err(|e| refused(cli_code(&e)))?;
+        if !check_only {
+            self.cli
+                .run_login(
+                    &login_args(&host, profile, client_id),
+                    LOGIN_TIMEOUT,
+                    &cancel,
+                )
+                .map_err(|e| refused(cli_code(&e)))?;
+            // The CLI wrote the profile: until the check passes, "Try again" checks only.
+            lock(&self.unchecked).insert(key.clone(), host.clone());
+        }
         // W-07h: a cancel after the CLI ended still wins.
         if cancel.load(Ordering::SeqCst) {
             return Err(refused("login_cancelled"));
@@ -236,14 +285,24 @@ impl ProfileLogin {
         self.verifier
             .verify(profile)
             .map_err(|e| refused(verify_code(&e)))?;
+        lock(&self.unchecked).remove(&key);
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         Ok(json!({ "loginId": format!("login-{id}") }))
     }
 
     /// `profile_login_cancel`: set the cancel flag of the running sign-in, if any.
+    /// A cancel for a name with no sign-in yet is kept for [`PENDING_CANCEL`], so a cancel that
+    /// overtakes its `profile_login` on the way to the host still stops it.
     fn cancel(&self, a: ProfileArgs) -> CoreResult<Value> {
-        if let Some(flag) = self.running().get(&a.profile.as_str().to_ascii_lowercase()) {
-            flag.store(true, Ordering::SeqCst);
+        let key = a.profile.as_str().to_ascii_lowercase();
+        let running = self.running();
+        match running.get(&key) {
+            Some(flag) => flag.store(true, Ordering::SeqCst),
+            None => {
+                let mut pending = lock(&self.pending_cancel);
+                pending.retain(|_, at| at.elapsed() < PENDING_CANCEL);
+                pending.insert(key, Instant::now());
+            }
         }
         Ok(json!({}))
     }

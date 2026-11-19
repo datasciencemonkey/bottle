@@ -28,3 +28,7 @@ zip = { version = "9.5", default-features = false, features = ["deflate-flate2-z
 serde_json.workspace = true
 sha2 = "0.10"
 tempfile = "3"
+
+[target.'cfg(unix)'.dependencies]
+# #162: kill the process group of a cancelled `auth login` child (`killpg`).
+libc.workspace = true

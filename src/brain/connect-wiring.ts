@@ -75,7 +75,8 @@ export function workspaceHost(pasted: string): string | undefined {
   if (text === '' || /\s/.test(text)) return undefined;
   let url: URL;
   try {
-    url = new URL(text.includes('://') ? text : `https://${text}`);
+    // A scheme only at the start: a `://` in a query does not count.
+    url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(text) ? text : `https://${text}`);
   } catch {
     return undefined;
   }
