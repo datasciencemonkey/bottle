@@ -104,7 +104,7 @@ pub trait LocalTools: Send + Sync {
 }
 
 /// No local store is wired: every call fails with [`CoreError::NotImplemented`].
-/// TODO(#307): the app host wires [`StoreLocalTools`] over the opened R10 store.
+/// TODO(#563): the app host wires [`StoreLocalTools`] over the opened R10 store.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct UnavailableLocalTools;
 
@@ -235,7 +235,7 @@ pub trait ToolRelay: Send + Sync {
 }
 
 /// No brain is wired: every UI tool call fails.
-/// TODO(#307): the app host wires [`BrainRelay`] to the brain channel and `agent_tool_result`.
+/// TODO(#563): the app host wires [`BrainRelay`] to the brain channel and `agent_tool_result`.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct UnavailableRelay;
 
@@ -342,7 +342,7 @@ impl fmt::Debug for BottleMcpDeps {
 impl BottleMcpDeps {
     /// Deps with the default [`RELAY_TIMEOUT`], an in-memory action log on the system clock
     /// (the #140 store until #442) and no approval.
-    /// TODO(#307): the app host passes the one audit log of the process with [`Self::with_audit`].
+    /// TODO(#563): the app host passes the one audit log of the process with [`Self::with_audit`].
     pub fn new(local: Arc<dyn LocalTools>, relay: Arc<dyn ToolRelay>) -> Self {
         Self {
             local,

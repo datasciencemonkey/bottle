@@ -426,6 +426,12 @@ fn sec_03_each_ipc_error_maps_to_a_fixed_code() {
         IpcError::InvalidMeta { command: s() },
         IpcError::ProfileInvalid { command: s() },
         IpcError::PollInflight { command: s() },
+        IpcError::AgentUnknownMog { command: s() },
+        IpcError::AgentUnavailable { command: s() },
+        IpcError::AgentLaunchFailed { command: s() },
+        IpcError::AgentTargetUnavailable { command: s() },
+        IpcError::AgentInvalidTarget { command: s() },
+        IpcError::AgentHarnessMismatch { command: s() },
     ];
     assert_eq!(all.len(), ERROR_CODES.len(), "one code per variant");
     for e in &all {
