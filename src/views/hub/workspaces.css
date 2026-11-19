@@ -1,0 +1,82 @@
+/*
+ * The hub Workspaces area (#560) and the home-profile pickers it adds to the MOG list (#486,
+ * #163). Tokens only (`../tokens.css`); the layout classes below reuse `.hub-rows` / `.hub-row`
+ * / `.hub-section` from `hub.css` as they are, so this file stays small and the restyle onto
+ * ui-1's sidebar and shadcn components is cheap.
+ */
+
+.ws-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-sm);
+}
+
+.ws-state::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.6;
+}
+
+.ws-row[data-signed-in='true'] .ws-state::before {
+  background: var(--mog-eye);
+  opacity: 1;
+}
+
+.ws-row[data-signed-in='false'] .ws-state::before {
+  background: var(--mog-lamp);
+  opacity: 1;
+}
+
+.ws-home-of {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-sm);
+}
+
+.ws-reason {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-sm);
+}
+
+.ws-cli {
+  margin: 4px 0 16px;
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-sm);
+}
+
+/* The supported-profile picker on MOG create and the per-MOG "Change" (#163, W-07d). One click
+ * only; nothing is pre-selected, not even with a single profile. */
+.ws-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 6px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ws-picker-option {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.ws-picker-option .hub-muted {
+  font-size: var(--mog-text-sm);
+}
+
+.ws-home {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-sm);
+}

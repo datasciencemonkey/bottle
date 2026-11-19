@@ -51,7 +51,8 @@ export const CONNECT_TEXT = {
 } as const;
 
 const PREFIX = 'bottle-';
-const U2M = 'databricks-cli';
+/** W-01a, W-03a: the only OAuth U2M auth type Bottle uses. Shared with the Workspaces area (#560). */
+export const U2M = 'databricks-cli';
 
 function isDnsLabel(l: string): boolean {
   return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(l);

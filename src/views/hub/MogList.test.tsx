@@ -19,6 +19,32 @@ const list = {
   runningCount: 1,
   maxRunning: 8,
 };
+const workspaces = {
+  profiles: [
+    {
+      name: 'sales-ws',
+      host: 'https://sales.cloud.databricks.com',
+      authType: 'databricks-cli',
+      supported: true,
+      signIn: 'signed_in' as const,
+      homeOf: ['Sales'],
+    },
+    {
+      name: 'fin-ws',
+      host: 'https://fin.cloud.databricks.com',
+      authType: 'databricks-cli',
+      supported: true,
+      signIn: 'unknown' as const,
+      homeOf: [],
+    },
+  ],
+  cli: {
+    path: '/usr/local/bin/databricks',
+    version: '1.25.0',
+    found: true,
+    plaintextStorage: false,
+  },
+};
 
 const byLabel = (el: HTMLElement, label: string) => {
   const hit = [...el.querySelectorAll('button, input, textarea')].find(
@@ -56,6 +82,7 @@ const actions = () => viewEmits().map((e) => (e as { payload?: unknown }).payloa
 async function shown(): Promise<HTMLElement> {
   const { el } = await render(<MogList />);
   await tauri.emitTo('hub', 'hub:mogs', list);
+  await tauri.emitTo('hub', 'hub:workspaces', workspaces);
   return el;
 }
 
@@ -66,8 +93,10 @@ describe('hub MOG list (MB-01, MB-03b)', () => {
     await render(<MogList />);
     expect(tauri.listeners('hub:mogs')).toBe(1);
     expect(tauri.listenOptions.get('hub:mogs')).toEqual([{ target: 'hub' }]);
+    // #560: MogList also asks the Workspaces area for the supported profiles of its pickers.
     expect(viewEmits()).toEqual([
       { mogId: 'hub', kind: 'click', payload: { action: 'mogs.ready' } },
+      { mogId: 'hub', kind: 'click', payload: { action: 'workspaces.ready' } },
     ]);
   });
 
@@ -86,24 +115,78 @@ describe('hub MOG list (MB-01, MB-03b)', () => {
     expect(byLabel(el, 'Stop Ops')).toBeTruthy();
   });
 
+  it('[MB-01] [#163] each row shows "Home: <profile> · <host>", with a Change picker', async () => {
+    const el = await shown();
+    const row = el.querySelector(`li[data-mog-row="${A}"]`) as HTMLElement;
+    expect(row.textContent).toContain('Home: sales-ws · https://sales.cloud.databricks.com');
+    expect(row.querySelector('ul[aria-label="Home workspace of Sales"]')).toBeNull();
+    await click(byLabel(row, 'Change the home of Sales'));
+    const picker = row.querySelector('ul[aria-label="Home workspace of Sales"]') as HTMLElement;
+    expect(picker).not.toBeNull();
+    expect([...picker.querySelectorAll('button')].map((b) => b.textContent)).toEqual([
+      'sales-ws',
+      'fin-ws',
+    ]);
+  });
+
+  it('[MB-01] [#163] Change saves through the mog.edit action (the same path as saveHome)', async () => {
+    const el = await shown();
+    const row = el.querySelector(`li[data-mog-row="${A}"]`) as HTMLElement;
+    await click(byLabel(row, 'Change the home of Sales'));
+    await click(byLabel(row, 'fin-ws'));
+    expect(actions().at(-1)).toEqual({
+      action: 'mog.edit',
+      mogId: A,
+      name: 'Sales',
+      home: 'fin-ws',
+      persona: '',
+    });
+    // The picker closes after a pick.
+    expect(row.querySelector('ul[aria-label="Home workspace of Sales"]')).toBeNull();
+  });
+
+  it('[MB-01] [#163] Cancel in the Change picker sends nothing and closes it', async () => {
+    const el = await shown();
+    const row = el.querySelector(`li[data-mog-row="${A}"]`) as HTMLElement;
+    await click(byLabel(row, 'Change the home of Sales'));
+    const n = actions().length;
+    await click(byLabel(row, 'Cancel'));
+    expect(actions()).toHaveLength(n);
+    expect(row.querySelector('ul[aria-label="Home workspace of Sales"]')).toBeNull();
+  });
+
   it('[MB-01] start, stop and duplicate send one hub action each', async () => {
     const el = await shown();
     await click(byLabel(el, 'Start Sales'));
     await click(byLabel(el, 'Stop Ops'));
     await click(byLabel(el, 'Duplicate Sales'));
-    expect(actions().slice(1)).toEqual([
+    expect(actions().slice(2)).toEqual([
       { action: 'mog.start', mogId: A },
       { action: 'mog.stop', mogId: B },
       { action: 'mog.duplicate', mogId: A },
     ]);
   });
 
-  it('[MB-01] the create form sends the name and the home profile', async () => {
+  it('[MB-01] [#163] the create form picks a supported profile and sends it as the home', async () => {
     const el = await shown();
+    const form = el.querySelector('form[aria-label="Create a MOG"]') as HTMLElement;
+    // Create is disabled until a profile is picked (W-07d: Bottle never picks one itself).
+    expect((byLabel(form, 'Create MOG') as HTMLButtonElement).disabled).toBe(true);
+    expect(form.textContent).toContain('Pick a home workspace for this MOG.');
     await type(byLabel(el, 'Name'), 'Finance');
-    await type(byLabel(el, 'Home profile'), 'fin-ws');
-    await click(byLabel(el, 'Create MOG'));
+    await click(byLabel(form, 'fin-ws'));
+    expect((byLabel(form, 'Create MOG') as HTMLButtonElement).disabled).toBe(false);
+    await click(byLabel(form, 'Create MOG'));
     expect(actions().at(-1)).toEqual({ action: 'mog.create', name: 'Finance', home: 'fin-ws' });
+  });
+
+  it('[MB-01] [#163] the create form offers Connect a workspace when no profile is supported', async () => {
+    const { el } = await render(<MogList />);
+    await tauri.emitTo('hub', 'hub:mogs', list);
+    await tauri.emitTo('hub', 'hub:workspaces', { profiles: [], cli: workspaces.cli });
+    const form = el.querySelector('form[aria-label="Create a MOG"]') as HTMLElement;
+    expect(byLabel(form, 'Connect a workspace')).toBeTruthy();
+    expect((byLabel(form, 'Create MOG') as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('[MB-01] edit opens a labelled form with the values, Save sends mog.edit, Esc cancels', async () => {

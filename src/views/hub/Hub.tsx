@@ -24,6 +24,7 @@ import { MogList } from './MogList';
 import { PermissionNotices } from './PermissionNotices';
 import { SttSetupStep } from './SttSetupStep';
 import { WipeSettings } from './WipeSettings';
+import { Workspaces } from './Workspaces';
 
 /**
  * The product name and the Labs label (MB-10a, MB-10b); the title bar shows the label too. Both
@@ -38,9 +39,14 @@ function HubHeader() {
   );
 }
 
-type HubView = 'conversations' | 'home';
+type HubView = 'conversations' | 'home' | 'workspaces';
 
-/** The hub navigation (#103): Conversations first, then the MOGs and settings. */
+/**
+ * The hub navigation (#103, #560): Conversations first, then the MOGs and settings, then
+ * Workspaces. TODO(#560): once branch `issue/ui-1-tokens-spacing` pushes its `NAV_ITEMS` sidebar
+ * (`src/views/hub/nav.ts`, `'workspaces'` id reserved there), rebase this onto it instead of this
+ * inline nav.
+ */
 function HubNav({ view, onView }: { view: HubView; onView: (v: HubView) => void }) {
   const item = (v: HubView, label: string) => (
     <button
@@ -56,6 +62,7 @@ function HubNav({ view, onView }: { view: HubView; onView: (v: HubView) => void 
     <nav aria-label="Hub" className="hub-nav">
       {item('conversations', 'Conversations')}
       {item('home', 'MOGs and settings')}
+      {item('workspaces', 'Workspaces')}
     </nav>
   );
 }
@@ -125,6 +132,9 @@ export function Hub() {
         <CliSettings />
         <DataPanel />
         <About />
+      </div>
+      <div data-hub-view="workspaces" hidden={view !== 'workspaces'}>
+        <Workspaces />
       </div>
     </main>
   );

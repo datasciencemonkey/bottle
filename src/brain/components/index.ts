@@ -21,6 +21,8 @@ import { wireCliInstall, wireCliSettings } from '../cli-wiring';
 import { cliPlatform } from '../../shared/cli-view';
 import { wireConnectWorkspace } from '../connect-wiring';
 import { sendHubSnapshot, wireHubMogs } from '../hub-mogs-wiring';
+import { ipcHubWorkspacesIo, wireHubWorkspaces } from '../hub-workspaces-wiring';
+import { createSignInTracker } from '../sign-in-state';
 import {
   sendHubConversations,
   sendHubConversationsOpen,
@@ -133,6 +135,14 @@ export function startBrain(): Brain {
     wireNotice(bus, components.T12);
     // #26: the hub MOG list and actions (MB-01).
     wireHubMogs(bus, components.T1);
+    // #560, #486: the hub Workspaces area. `signIn` is filled in by the GenieBridge onEnd below
+    // (`sign-in-state.ts`); the host has no `profile_status` route yet.
+    const signIn = createSignInTracker();
+    wireHubWorkspaces(bus, {
+      manager: components.T1,
+      signInState: signIn.signInState,
+      ...ipcHubWorkspacesIo(),
+    });
     // #103 (#40): the hub Conversations list. The brain reads the saved exchanges of each MOG
     // (`mem.exchange.recent`) and sends them to the hub; the hub view runs no store statement.
     const conversations = wireHubConversations(bus, {
@@ -211,6 +221,8 @@ export function startBrain(): Brain {
         );
       return s;
     };
+    // #40 (AT-09): each ended request saves one local exchange row through T10.
+    const genieHistory = ipcGenieHistory(components.T10, () => void conversations.refresh());
     // #142 (ADR 0086, ADR 0098), B1: T3 sends an ⌥G ask at once or shows the Ask Genie chip.
     // Nothing goes to Genie without ⌥G or a chip press.
     const askGate = createAskGate({
@@ -230,7 +242,11 @@ export function startBrain(): Brain {
         cardFor: stackFor,
         newOpId: () => crypto.randomUUID(),
         // #40 (AT-09): each request that ends saves one local exchange row through T10.
-        onEnd: ipcGenieHistory(components.T10, () => void conversations.refresh()),
+        // #560, #486: and updates the Workspaces sign-in state of the MOG's home profile.
+        onEnd: (x) => {
+          signIn.record(x);
+          genieHistory?.(x);
+        },
         // #573: the MOG shows the work (processing), then the answer (answering, success) or
         // the failure (error); the card shows next to the MOG when the outcome is on it.
         onPhase: (mogId, phase, opId) => {

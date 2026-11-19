@@ -92,19 +92,35 @@ describe('hub navigation and Conversations (#103)', () => {
   const conv = (el: HTMLElement) =>
     el.querySelector('section[aria-label="Conversations"]') as HTMLElement;
   const home = (el: HTMLElement) => el.querySelector('[data-hub-view="home"]') as HTMLElement;
+  const workspaces = (el: HTMLElement) =>
+    el.querySelector('[data-hub-view="workspaces"]') as HTMLElement;
 
   it('[#103] Conversations is the first navigation item; the hub opens on the MOGs and settings', async () => {
     const { el } = await render(<Hub />);
-    expect(nav(el).map((b) => b.textContent)).toEqual(['Conversations', 'MOGs and settings']);
+    expect(nav(el).map((b) => b.textContent)).toEqual([
+      'Conversations',
+      'MOGs and settings',
+      'Workspaces',
+    ]);
     expect(nav(el)[1]?.getAttribute('aria-current')).toBe('page');
     expect(conv(el).hidden).toBe(true);
     expect(home(el).hidden).toBe(false);
+    expect(workspaces(el).hidden).toBe(true);
     await act(async () => nav(el)[0]?.click());
     expect(nav(el)[0]?.getAttribute('aria-current')).toBe('page');
     expect(conv(el).hidden).toBe(false);
     expect(home(el).hidden).toBe(true);
     // The product header stays a direct child of main (AT-37).
     expect(el.querySelector('main > h1')?.textContent).toBe('Bottle');
+  });
+
+  it('[#560] Workspaces is the third navigation item', async () => {
+    const { el } = await render(<Hub />);
+    await act(async () => nav(el)[2]?.click());
+    expect(nav(el)[2]?.getAttribute('aria-current')).toBe('page');
+    expect(home(el).hidden).toBe(true);
+    expect(workspaces(el).hidden).toBe(false);
+    expect(workspaces(el).querySelector('h2')?.textContent).toBe('Workspaces');
   });
 
   it('[#103] an open from a double-click shows Conversations', async () => {
