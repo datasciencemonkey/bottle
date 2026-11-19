@@ -1,13 +1,14 @@
 /**
  * The T3 ask gate (#142, ADR 0086): the 1.5 s preview and the Ask Genie chip of a PTT or
- * hands-free question. Binding rule B1: nothing goes to the main agent, and so to Genie, without
+ * hands-free question. Binding rule B1: nothing goes to Genie without
  * the cancelable preview or a click on an Ask Genie chip.
  *
  * - RTR-04a: a `preview` route (#59) shows the Appendix E Preview: `"<question>"`,
  *   "Sending in 1.5 s" and [Send now] [Edit] [Cancel]. RTR-17b: a forced ask previews too.
- * - RTR-04b: when the 1.5 s end with no cancel, the question goes to the main agent through the
- *   one hand-off seam `send(turn)` (T15 `AgentBridge.send`, `agent_send`; the core approves that
- *   one question for the agent's `genie_ask`, #141). [Cancel], Esc in the card, a second talk-key
+ * - RTR-04b: when the 1.5 s end with no cancel, the question goes out through the one hand-off
+ *   seam `send(turn)`. ADR 0097 (#573): in `startBrain` that seam sends it straight to Genie One
+ *   MCP (T8 `submit`, `genie_ask`); the main agent takes no part. Before the send, the G-47
+ *   sanitizer and then the G-30a cap run on the text. [Cancel], Esc in the card, a second talk-key
  *   press, the card close and a closed MOG cancel: nothing is sent. [Edit] stops the timer and
  *   holds the question with [Send now] [Cancel]; it never sends by itself. TODO(#526): the
  *   card text box for the edit.
@@ -23,6 +24,7 @@
  *   a chip, so only a press can start the picker.
  *
  * The gate never calls `mcp_call` or `agent_*` itself: `send` is its only way out.
+ * ADR 0097 amends ADR 0086 here: the seam is the direct Genie One send of `genie-direct.ts`.
  * TODO(#200): the RecallGate hits go in `AgentTurn.recall`; until then it is empty.
  * TODO(#374): one owner routes all card input; until then `wireAskGate` routes the card's
  * `cancel` and `chip_click`.
@@ -36,6 +38,7 @@ import type { MonotonicClock } from './clock';
 import { INJECTION_WARNING_CHIP } from './components/router-injection';
 import { asPttEvent } from './ptt';
 import type { OwnedUtterance, RequestOwner } from './request-owner';
+import { sanitizeQuestion } from './question-sanitizer';
 import type { AskRoute } from './utterance-wiring';
 
 /** Appendix E chip 1. */
@@ -91,7 +94,7 @@ export interface AskGateDeps {
   isOpen(mogId: MogId): boolean;
   /** The MOG's current target profile. Undefined while none is chosen: Bottle never picks one. */
   target(mogId: MogId): ProfileName | undefined;
-  /** The hand-off seam: the approved question goes to the main agent (T15, `agent_send`). */
+  /** The hand-off seam: the approved question goes out. ADR 0097: straight to Genie One MCP. */
   send(turn: AgentTurn): Promise<void>;
   /** #557: show the profile picker of a MOG; `then` runs once after the user saves a pick. */
   pickProfile?(mogId: MogId, then: () => void): void;
@@ -152,7 +155,7 @@ export function createAskGate(deps: AskGateDeps): AskGate {
     }
   };
 
-  /** Give the question to the main agent. The only way out of the gate. */
+  /** Send the question through the seam (ADR 0097: Genie One MCP). The only way out of the gate. */
   const handOff = (mogId: MogId, question: string, decision: RouterDecision, blurbId: string) => {
     const card = deps.cardFor(mogId);
     const target = deps.target(mogId);
@@ -167,8 +170,14 @@ export function createAskGate(deps: AskGateDeps): AskGate {
       card.add({ id: blurbId, text: notSentText(question), completed: true });
       return;
     }
-    // G-30a (#557): the size check runs before the send; RTR-14 ran before the offer.
-    const capped = capQuestion(question);
+    // G-47 (#573): the sanitizer runs first, then the G-30a (#557) size check, then the send.
+    // RTR-14 ran before the offer. A text with nothing left after the sanitizer is not sent.
+    const clean = sanitizeQuestion(question);
+    if (clean === '') {
+      card.add({ id: blurbId, text: notSentText(question), completed: true });
+      return;
+    }
+    const capped = capQuestion(clean);
     card.add({
       id: blurbId,
       text: capped.cut ? `${quoted(capped.text)}\n${CUT_NOTICE}` : quoted(capped.text),
@@ -181,7 +190,7 @@ export function createAskGate(deps: AskGateDeps): AskGate {
     } catch (e) {
       sent = Promise.reject(e);
     }
-    // ARC-F14: a rejected send means the agent did not take the question. No retry by itself.
+    // ARC-F14: a rejected send means nothing took the question. No retry by itself (G-15b).
     // TODO(#143): the fallback classifier route of RTR-15b.
     void sent.catch(() => card.add({ id: blurbId, text: notSentText(question), completed: true }));
   };

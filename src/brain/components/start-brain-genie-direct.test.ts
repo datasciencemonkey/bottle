@@ -54,8 +54,10 @@ function hostWithStubR5() {
   });
 }
 
-function offer(question: string, utteranceId: string) {
+/** The utterance hook's ask: the router input first (it learns the home profile), then the chip. */
+async function offer(question: string, utteranceId: string) {
   if (!deps) throw new Error('startBrain made no utterance handler');
+  await deps.routerInput(MOG);
   deps.onAsk(
     {
       route: 'chip',
@@ -86,7 +88,7 @@ describe('startBrain Ask Genie goes straight to Genie One MCP (#573, ADR 0097)',
   it('[B1] [G-47] [G-30a] [G-15b] nothing sends before the press; one press is one genie_ask with the sanitized text, and no agent call', async () => {
     hostWithStubR5();
     brain?.talkTarget.viewReady(MOG);
-    offer('What was\u200b [EMEA](https://evil.example.test) <b>revenue</b>?', 'utt-direct-1');
+    await offer('What was\u200b [EMEA](https://evil.example.test) <b>revenue</b>?', 'utt-direct-1');
     await settle();
     // B1: the chip shows, and nothing leaves the device before the press.
     expect(
@@ -120,7 +122,7 @@ describe('startBrain Ask Genie goes straight to Genie One MCP (#573, ADR 0097)',
   it('[G-23b] [G-15b] a failed mcp_call (R5 stub, #16) shows the fixed failure text and is not sent again', async () => {
     hostWithStubR5();
     brain?.talkTarget.viewReady(MOG);
-    offer('What were EMEA bookings last week?', 'utt-direct-2');
+    await offer('What were EMEA bookings last week?', 'utt-direct-2');
     await settle();
     press('ask_genie:utt-direct-2');
     await settle();
