@@ -8,6 +8,11 @@
 # Notarization runs only when the DMG is signed and APPLE_ID, APPLE_PASSWORD and APPLE_TEAM_ID are
 # set. Without the secrets the DMG is unsigned and not notarized.
 #
+# #413, #45 (ADR 0049, ADR 0104): the packaged DMG always builds with the `local-stt` feature,
+# so a new user gets local dictation with no developer command. App CI stays off the feature
+# (#534, #414: no vendored sherpa-onnx there); this script vendors it here instead, once, with
+# the pinned, SHA-256-checked archive of this Mac's architecture (never a CI concern).
+#
 # Usage: scripts/package-macos.sh          build, sign and notarize as the secrets permit
 #        scripts/package-macos.sh --plan   print the sign and notarize decision only (any OS)
 set -euo pipefail
@@ -35,9 +40,19 @@ fi
 cd "$(git rev-parse --show-toplevel)"
 export PATH="$HOME/.cargo/bin:$PATH"
 BUNDLE_DIR=target/debug/bundle/dmg
+# `.cargo/config.toml` points `SHERPA_ONNX_ARCHIVE_DIR` here by default (relative to the repo
+# root); an env value, if set, still wins over it.
+SHERPA_DEST="vendor/sherpa-onnx"
 
 pnpm install --frozen-lockfile
 rm -f "$BUNDLE_DIR"/*.dmg "$BUNDLE_DIR"/*.sha256
+
+# #413, #45: vendor the pinned sherpa-onnx archive for this Mac only when it is missing
+# (CAP-50a, CAP-50b); `vendor_sherpa_onnx.py` is idempotent and re-checks the SHA-256 either way.
+if [ -z "$(find "$SHERPA_DEST" -maxdepth 1 -name '*.tar.bz2' -print -quit 2>/dev/null)" ]; then
+  echo "Vendoring sherpa-onnx for the local-stt build (ADR 0049, ADR 0104)..."
+  uv run --no-project python scripts/vendor_sherpa_onnx.py --dest "$SHERPA_DEST"
+fi
 
 # The build gets the signing variables only when signing runs, and never the notary variables:
 # the DMG is notarized and stapled below, as the App CI package job did.
@@ -46,7 +61,9 @@ if [ "$sign" = skip ]; then
   unset_vars+=(-u APPLE_CERTIFICATE -u APPLE_CERTIFICATE_PASSWORD -u APPLE_SIGNING_IDENTITY)
   echo "APPLE_* signing secrets are absent; the DMG is unsigned and not notarized."
 fi
-env "${unset_vars[@]}" pnpm tauri build --debug --bundles dmg -- --locked
+# #413, #45 (ADR 0104): `--features local-stt` so the packaged app can load Parakeet; the model
+# itself still downloads only after the user's consent (CAP-49a, the hub's Local speech step).
+env "${unset_vars[@]}" pnpm tauri build --debug --bundles dmg --features local-stt -- --locked
 
 if [ "$notarize" = yes ]; then
   for f in "$BUNDLE_DIR"/*.dmg; do

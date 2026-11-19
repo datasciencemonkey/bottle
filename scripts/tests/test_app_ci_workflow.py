@@ -259,9 +259,23 @@ def test_nfr_15a_macos_signing_and_notarization_skip_without_secrets(extra, sign
 def test_nfr_15a_package_macos_builds_notarizes_and_hashes_the_dmg():
     """[NFR-15a, NFR-15d] package-macos.sh builds the DMG, notarizes and staples it, and writes a SHA-256 file."""
     text = PACKAGE_MACOS.read_text(encoding="utf-8")
-    for cmd in ("pnpm tauri build --debug --bundles dmg -- --locked", "xcrun notarytool submit",
-                "xcrun stapler staple", "shasum -a 256", ".sha256"):
+    for cmd in ("pnpm tauri build --debug --bundles dmg --features local-stt -- --locked",
+                "xcrun notarytool submit", "xcrun stapler staple", "shasum -a 256", ".sha256"):
         assert cmd in text, f"package-macos.sh does not run {cmd!r}"
+
+
+def test_413_package_macos_builds_with_local_stt_and_vendors_it_first():
+    """[#413, #45, ADR 0104] the packaged DMG gets local STT: vendor sherpa-onnx first (when it
+    is missing), then build with --features local-stt, so a new user needs no developer command.
+    """
+    text = PACKAGE_MACOS.read_text(encoding="utf-8")
+    assert "--features local-stt" in text
+    assert "vendor_sherpa_onnx.py" in text
+    assert "uv run --no-project python scripts/vendor_sherpa_onnx.py" in text
+    # Vendoring is skipped when the archive is already there (CAP-50a is idempotent either way).
+    vendor_line = next(line for line in text.splitlines() if "uv run --no-project" in line)
+    guard = text[: text.index(vendor_line)]
+    assert "tar.bz2" in guard, "package-macos.sh does not check for the archive before vendoring"
 
 
 def test_nfr_15b_windows_signing_skips_without_secrets(app_ci):

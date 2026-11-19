@@ -126,7 +126,14 @@ Rules of the boundary:
   `sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8`.
 - Local STT setup: run `uv run --no-project python scripts/vendor_sherpa_onnx.py` and point `SHERPA_ONNX_ARCHIVE_DIR`
   at its output. The `local-stt` feature is off by default; without it the app has no Parakeet.
-- Run the app in dev: `pnpm tauri dev --features local-stt` (or plain `pnpm tauri dev` without local STT). Build a macOS DMG: `scripts/package-macos.sh`.
+- Run the app in dev: `pnpm tauri dev --features local-stt` (or plain `pnpm tauri dev` without local STT).
+- **Packaged macOS builds always include local STT (#413, #45, ADR 0104).** `scripts/package-macos.sh` vendors the
+  pinned sherpa-onnx archive first (only when it is missing: `uv run --no-project python scripts/vendor_sherpa_onnx.py`;
+  the vendor script is idempotent and re-checks the SHA-256 either way), then builds with `--features local-stt`. A
+  new user who installs the packaged app gets the "Local speech" step in the hub (consent, download with progress,
+  cancel, retry) with no developer command; App CI (`.github/workflows/app-ci.yml`) is unchanged and stays off the
+  feature (#534, #414: no vendored sherpa-onnx there). To reproduce it by hand outside the script:
+  `uv run --no-project python scripts/vendor_sherpa_onnx.py && pnpm tauri build --features local-stt`.
 - Before you push, run `scripts/pre-push.sh`. It runs the same suite as the merge gate.
 - Run `cargo clean` in a worktree when you finish with it; target dirs are large.
 - macOS keychain prompt: Bottle keeps its local store key in one keychain item
@@ -167,7 +174,8 @@ This file does not track live status. Use:
 - `gh issue list --state open` — the remaining issues are the MVP set. Issue #245 is the MVP-D exit gate.
 - `gh pr list --state open` — work in flight.
 - `docs/adr/` and open PRs — the latest decisions. The MVP ones: ADR 0096 (dictation-first card, in PRs #571 and
-  #575), ADR 0097 (direct Genie path, in PR #575) and ADR 0098 (the ⌥G key, planned for #577).
+  #575), ADR 0097 (direct Genie path, in PR #575), ADR 0098 (the ⌥G key, planned for #577) and ADR 0104 (the hub's
+  `stt_model_*` commands and the packaged local-stt build, #413, #45, #529).
 
 ## 8. Reference projects
 
