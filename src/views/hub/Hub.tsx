@@ -175,12 +175,14 @@ export function Hub() {
   }
 
   const activeLabel = NAV_ITEMS.find((i) => i.id === view)?.label ?? '';
-  // Pinned open, HubSidebar's panel pushes `.hub-content` over by its own width instead of
-  // overlaying it (review of #602, finding 3): `--hub-sidebar-width` is read by `.hub-content`
-  // in hub.css, which in turn is what `.conv` and `.rec-area` cancel back out with their own
-  // fixed `-32px` margin (review of #602 round 3, blocker 1: `.conv` used to read this variable
-  // itself too, which double-subtracted the sidebar's width and left it under the panel instead
-  // of beside it). 0 (unset) when unpinned or hidden, so an overlay still costs no reflow.
+  // Set on `<main>`, not `.hub-body` (ui-1, review of #602 round 4, blocker 1): a pinned rail
+  // pushes `.hub-content` over by its own width instead of overlaying it (review of #602,
+  // finding 3), and `.hub`'s own header row (`.hub-title`/`.hub-labs`, below) needs the same
+  // push — they are direct children of `main`, outside `.hub-body` entirely (AT-37), so a
+  // variable set only on `.hub-body` never reached them. A custom property set here still
+  // inherits down into `.hub-body`/`.hub-content`/`.conv`/`.rec-area` exactly as before, just
+  // from one level higher. 0 (unset) when unpinned or hidden, so an overlay still costs no
+  // reflow.
   const hubBodyStyle = { '--hub-sidebar-width': `${sidebarWidth(sidebar)}px` } as CSSProperties;
 
   // TODO(#43): the onboarding wizard.
@@ -188,13 +190,13 @@ export function Hub() {
   // MOGs and Settings keep the comfortable reading width (hub.css).
   const wide = view === 'conversations' || view === 'recordings';
   return (
-    <main className={wide ? 'hub hub--wide' : 'hub'}>
+    <main className={wide ? 'hub hub--wide' : 'hub'} style={hubBodyStyle}>
       <HubHeader />
       {/* ADR 0105: why macOS asks for the password, or that history is off. Stays a direct
           sibling of the header, outside the sidebar and every area, so it shows regardless of
           which area or sidebar state is active. */}
       <StoreNotice />
-      <div className="hub-body" style={hubBodyStyle}>
+      <div className="hub-body">
         <HubSidebar state={sidebar} view={view} onView={pickView} />
         <div className="hub-content">
           <div className="hub-area-header">
@@ -205,12 +207,14 @@ export function Hub() {
                     type="button"
                     variant="ghost"
                     size="icon"
-                    // relative z-30 (ui-1, review of #602 round 3, blocker 2): above the
-                    // sidebar panel's own z-20 (HubSidebar.tsx), so the toggle stays reachable
-                    // even while an unpinned overlay covers this corner. `.hub-area-header`
-                    // itself (hub.css) no longer carries that elevation: only the toggle needs
-                    // it, not the area title next to it (which must not paint over the panel).
-                    className="relative z-30 size-7 shrink-0"
+                    // No elevated z-index (ui-1, review of #602 round 4, blocker 2): the
+                    // earlier `relative z-30` kept the toggle clickable above an open overlay,
+                    // but the toggle sits where the sidebar's own first nav item ("MOGs") does,
+                    // so a click there closed the sidebar instead of opening MOGs. The panel
+                    // (z-20 in HubSidebar.tsx) now simply covers the toggle while it is open, the
+                    // way a native macOS sidebar covers whatever is under it — Esc, an outside
+                    // click and the panel's own collapse/pin buttons still close it.
+                    className="size-7 shrink-0"
                     data-sidebar-toggle
                     aria-pressed={sidebar.visible}
                     onClick={sidebar.toggleVisible}

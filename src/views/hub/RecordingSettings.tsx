@@ -196,13 +196,20 @@ function Storage({ storage }: { storage: StorageView }) {
       {storage.status === 'my_files' && (
         <p className="rec-place">
           <span>My Files</span>
-          <span className="rec-path">{storage.path}</span>
+          {/* title (ui-1, review of #602 round 4, MEDIUM): .rec-path (hub.css) truncates a long
+              path with an ellipsis instead of wrapping the row; the title attribute is the
+              native way to still read the full path, on hover or with a screen reader. */}
+          <span className="rec-path" title={storage.path}>
+            {storage.path}
+          </span>
         </p>
       )}
       {storage.status === 'volume' && !changing && (
         <p className="rec-place">
           <span>Volume</span>
-          <span className="rec-path">{storage.path}</span>
+          <span className="rec-path" title={storage.path}>
+            {storage.path}
+          </span>
           <button type="button" className="rec-link" onClick={() => setChanging(true)}>
             Change
           </button>
@@ -344,8 +351,10 @@ export function RecordingSettings({ model }: { model: HubRecording | undefined }
         <div className="rec-skeleton" aria-busy="true" aria-label="Loading" />
       ) : (
         <>
-          {/* The knob, the length and the storage rows share one grouped box (ui-1, review of
-              #602 round 3, P1), like `MicPreference`'s own `SettingsGroup`/`SettingsRow`. The
+          {/* The whole section is one grouped box now (ui-1, review of #602 rounds 3-4, P1 and
+              LOW): knob, length and storage as `SettingsRow`s, like `MicPreference`'s own
+              `SettingsGroup`/`SettingsRow`; Instructions and Advanced moved in too (round 4 LOW)
+              instead of sitting below the group as a second, differently-styled block. The
               consent notice (inside `Knob`) still renders as its own panel right under the
               knob's row, inside the group, when it shows. */}
           <SettingsGroup className="mt-[var(--mog-space-3)]">
@@ -357,52 +366,63 @@ export function RecordingSettings({ model }: { model: HubRecording | undefined }
               label={<span id="recording-length-label">Stops after</span>}
               control={<Length key={s.lengthMin} minutes={s.lengthMin} />}
             />
-            <SettingsRow label="Save to" control={<Storage storage={model.storage} />} />
+            <SettingsRow
+              label="Save to"
+              // min-w-0 flex-1 shrink (ui-1, review of #602 round 4, MEDIUM): a realistic path
+              // is the one thing in this group that can run long, so it is the one control that
+              // must give way instead of the "Save to" label. `.rec-path` (hub.css) truncates
+              // the text itself with an ellipsis once it has room to do so.
+              controlClassName="min-w-0 flex-1 shrink"
+              control={<Storage storage={model.storage} />}
+            />
+            <div className="flex flex-col gap-[var(--mog-space-2)] px-[var(--mog-space-4)] py-[var(--mog-space-3)]">
+              <label className="text-[var(--mog-text-md)]" htmlFor="recording-instructions">
+                Instructions
+              </label>
+              <Instructions key={s.instructions} instructions={s.instructions} />
+            </div>
+            {/* ADR 0103 update 4: the two serving endpoints; most people never change them. One
+                consistent "show more" style (ui-1, review of #602 round 3, P2): the same
+                Collapsible, left chevron and text-sm/muted-foreground trigger as every other
+                disclosure in Settings (Wipe, the Databricks CLI, the data panel, About), not a
+                plain `<details>`/`<summary>` with its own hand-drawn chevron on the right. */}
+            <div className="px-[var(--mog-space-4)] py-[var(--mog-space-3)]">
+              <Collapsible data-recording-advanced>
+                <CollapsibleTrigger className="group flex h-auto min-h-0 items-center gap-[var(--mog-space-2)] border-0 bg-transparent p-0 text-[var(--mog-text-sm)] text-muted-foreground hover:text-foreground">
+                  <ChevronDownIcon className="size-3.5 transition-transform motion-reduce:transition-none group-data-[state=open]:rotate-180" />
+                  Advanced
+                </CollapsibleTrigger>
+                <CollapsibleContent
+                  forceMount
+                  className="mt-[var(--mog-space-2)] data-[state=closed]:hidden"
+                >
+                  <div className="rec-fields rec-fields--inner">
+                    <label className="rec-field-label" htmlFor="recording-endpoint-transcribe">
+                      Transcribe model
+                    </label>
+                    <Endpoint
+                      key={`t-${s.transcribeEndpoint}`}
+                      which="transcribe"
+                      endpoint={s.transcribeEndpoint}
+                    />
+                    <label className="rec-field-label" htmlFor="recording-endpoint-notes">
+                      Notes model
+                    </label>
+                    <Endpoint
+                      key={`n-${s.notesEndpoint}`}
+                      which="notes"
+                      endpoint={s.notesEndpoint}
+                    />
+                  </div>
+                </CollapsibleContent>
+              </Collapsible>
+            </div>
           </SettingsGroup>
           {model.settingsError && (
             <p className="hub-error" role="alert">
               {model.settingsError}
             </p>
           )}
-          <div className="rec-fields mt-[var(--mog-space-4)]">
-            <label
-              className="rec-field-label rec-field-label--top"
-              htmlFor="recording-instructions"
-            >
-              Instructions
-            </label>
-            <Instructions key={s.instructions} instructions={s.instructions} />
-          </div>
-          {/* ADR 0103 update 4: the two serving endpoints; most people never change them. One
-              consistent "show more" style (ui-1, review of #602 round 3, P2): the same
-              Collapsible, left chevron and text-sm/muted-foreground trigger as every other
-              disclosure in Settings (Wipe, the Databricks CLI, the data panel, About), not a
-              plain `<details>`/`<summary>` with its own hand-drawn chevron on the right. */}
-          <Collapsible data-recording-advanced className="mt-[var(--mog-space-3)]">
-            <CollapsibleTrigger className="group flex h-auto min-h-0 items-center gap-[var(--mog-space-2)] border-0 bg-transparent p-0 text-[var(--mog-text-sm)] text-muted-foreground hover:text-foreground">
-              <ChevronDownIcon className="size-3.5 transition-transform motion-reduce:transition-none group-data-[state=open]:rotate-180" />
-              Advanced
-            </CollapsibleTrigger>
-            <CollapsibleContent
-              forceMount
-              className="mt-[var(--mog-space-2)] data-[state=closed]:hidden"
-            >
-              <div className="rec-fields rec-fields--inner">
-                <label className="rec-field-label" htmlFor="recording-endpoint-transcribe">
-                  Transcribe model
-                </label>
-                <Endpoint
-                  key={`t-${s.transcribeEndpoint}`}
-                  which="transcribe"
-                  endpoint={s.transcribeEndpoint}
-                />
-                <label className="rec-field-label" htmlFor="recording-endpoint-notes">
-                  Notes model
-                </label>
-                <Endpoint key={`n-${s.notesEndpoint}`} which="notes" endpoint={s.notesEndpoint} />
-              </div>
-            </CollapsibleContent>
-          </Collapsible>
         </>
       )}
     </section>

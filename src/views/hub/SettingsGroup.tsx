@@ -40,6 +40,7 @@ export function SettingsRow({
   control,
   htmlFor,
   className,
+  controlClassName,
 }: {
   label: ReactNode;
   description?: ReactNode;
@@ -47,6 +48,15 @@ export function SettingsRow({
   /** Associates the row's label with `control`'s id, so clicking the label toggles it too. */
   htmlFor?: string;
   className?: string;
+  /**
+   * Overrides the control column's default `shrink-0` (ui-1, review of #602 round 4, MEDIUM).
+   * Every row but one wants the label side to give way first: `shrink-0` keeps the control at
+   * its own natural size no matter how long the label gets. Call recording's "Save to" row is
+   * the opposite — its control (a volume path) is the one that can run long, and the "Save to"
+   * label must never wrap — so it passes `"min-w-0 flex-1 shrink"` here to let the control give
+   * way instead, and truncates the long text itself (`.rec-path` in hub.css).
+   */
+  controlClassName?: string;
 }) {
   return (
     <div
@@ -67,7 +77,7 @@ export function SettingsRow({
           <span className="text-[var(--mog-text-xs)] text-muted-foreground">{description}</span>
         )}
       </label>
-      <div className="shrink-0">{control}</div>
+      <div className={cn('shrink-0', controlClassName)}>{control}</div>
     </div>
   );
 }

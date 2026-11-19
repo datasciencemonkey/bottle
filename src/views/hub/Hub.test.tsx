@@ -229,17 +229,19 @@ describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
 
   // review of #602, finding 3: pinned, the sidebar pushes `.hub-content` over by its own width
   // (`--hub-sidebar-width`, read in hub.css) instead of overlaying it for good.
+  // review of #602 round 4, blocker 1: the variable is set on `.hub` (main), not `.hub-body`,
+  // so the product header row (outside `.hub-body`, AT-37) can read it too.
   it('[review #602] a pinned sidebar pushes the content column instead of covering it', async () => {
     const { el } = await render(<Hub />);
-    const hubBody = () => el.querySelector<HTMLElement>('.hub-body');
-    expect(hubBody()?.style.getPropertyValue('--hub-sidebar-width')).toBe('0px');
+    const hub = () => el.querySelector<HTMLElement>('main.hub');
+    expect(hub()?.style.getPropertyValue('--hub-sidebar-width')).toBe('0px');
     await act(async () => toggle(el)?.click());
     // Unpinned: still an overlay, no reflow.
-    expect(hubBody()?.style.getPropertyValue('--hub-sidebar-width')).toBe('0px');
+    expect(hub()?.style.getPropertyValue('--hub-sidebar-width')).toBe('0px');
     await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-pin]')?.click());
-    expect(hubBody()?.style.getPropertyValue('--hub-sidebar-width')).toBe('220px');
+    expect(hub()?.style.getPropertyValue('--hub-sidebar-width')).toBe('220px');
     await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-collapse]')?.click());
-    expect(hubBody()?.style.getPropertyValue('--hub-sidebar-width')).toBe('56px');
+    expect(hub()?.style.getPropertyValue('--hub-sidebar-width')).toBe('56px');
   });
 
   // review of #602 ("also fix"): switching areas never unmounts one, so the Wipe scope choice

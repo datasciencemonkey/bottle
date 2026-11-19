@@ -67,13 +67,60 @@ describe('hub and MOG chrome styling (#561)', () => {
     const css = read('hub.css');
     const hubRule = /(?:^|\n)\s*\.hub\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
     expect(hubRule).toMatch(/display:\s*grid/);
-    expect(hubRule).toMatch(/grid-template-columns:\s*auto 1fr/);
+    // review of #602 round 4, blocker 1: a leading `var(--hub-sidebar-width, 0px)` column, so a
+    // pinned rail pushes the header row (outside `.hub-body`) over the same way it pushes
+    // `.hub-content`, instead of covering "Bottle" and the Labs label.
+    expect(hubRule).toMatch(/grid-template-columns:\s*var\(--hub-sidebar-width, 0px\) auto 1fr/);
     expect(hubRule).toMatch(/height:\s*100vh/);
     expect(hubRule).not.toMatch(/min-height/);
     // `.hub--wide` no longer repeats the grid: one header layout, not two.
     const wideRule = /(?:^|\n)\s*\.hub--wide\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
     expect(wideRule).not.toMatch(/display:\s*grid/);
     expect(wideRule).toMatch(/padding-bottom:\s*0/);
+  });
+
+  // review of #602 round 4, blocker 1: `.hub-title`/`.hub-labs` are direct children of `main`
+  // (AT-37), outside `.hub-body` — the box the earlier `--hub-sidebar-width` padding lived on —
+  // so a pinned rail used to sit on top of them with nothing telling them to move over.
+  it('[blocker 1, review #602 round 4] the header row moves with the sidebar-width column', () => {
+    const css = read('hub.css').replace(/\/\*[\s\S]*?\*\//g, '');
+    const title = /(?:^|\n)\s*\.hub > \.hub-title\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    const labs = /(?:^|\n)\s*\.hub > \.hub-labs\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(title).toMatch(/grid-column:\s*2/);
+    expect(labs).toMatch(/grid-column:\s*3/);
+  });
+
+  // review of #602 round 4, blocker 2: the toggle no longer carries an elevated z-index (it
+  // used to be `relative z-30`, above the sidebar panel's own z-20), so an open overlay covers
+  // it instead of the toggle sitting on top of the panel's first nav item.
+  it('[blocker 2, review #602 round 4] the toggle has no elevated z-index', () => {
+    const tsx = read('Hub.tsx')
+      .replace(/\/\/.*$/gm, '')
+      .replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(tsx).not.toMatch(/z-30/);
+    expect(tsx).toMatch(/data-sidebar-toggle/);
+  });
+
+  // MEDIUM, review of #602 round 4: `.hub-content` is the column that scrolls now
+  // (`overflow-y: auto`); without this the toggle scrolled out of reach on a tall Settings page.
+  it('[MEDIUM, review #602 round 4] the area header stays put while the content scrolls', () => {
+    const css = read('hub.css');
+    const rule = /(?:^|\n)\s*\.hub-area-header\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(rule).toMatch(/position:\s*sticky/);
+    expect(rule).toMatch(/top:\s*0/);
+  });
+
+  // MEDIUM, review of #602 round 4: a realistic path must truncate with an ellipsis, not wrap
+  // the row (which pushed "Save to" onto two lines).
+  it('[MEDIUM, review #602 round 4] a long Save-to path truncates instead of wrapping', () => {
+    const css = read('hub.css');
+    const place = /(?:^|\n)\s*\.rec-place\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    const path = /(?:^|\n)\s*\.rec-path\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(place).not.toMatch(/flex-wrap:\s*wrap/);
+    expect(path).toMatch(/text-overflow:\s*ellipsis/);
+    expect(path).toMatch(/white-space:\s*nowrap/);
+    const tsx = read('RecordingSettings.tsx');
+    expect(tsx).toMatch(/className="rec-path"\s+title={storage\.path}/);
   });
 
   it('[UX-39a] the REC and Offline overlays sit inside the MOG window', () => {

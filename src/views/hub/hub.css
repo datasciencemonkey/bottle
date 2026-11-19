@@ -19,19 +19,28 @@
 
   /* display: grid (ui-1, review of #602 round 3, blockers 2 and 3): one grid for every area, not
      a plain flex column plus a second, different `.hub--wide`-only grid. Row 1 is the header
-     (`.hub-title` + `.hub-labs`, side by side in the `auto 1fr` columns); row 2 is `.hub-body`.
-     Before this, the header was a flex column of two stacked lines on MOGs/Settings but one
-     side-by-side grid row on Conversations/Recordings (`.hub--wide`'s own grid, same
-     specificity, declared later, won there), so the whole page shifted 16px between areas
-     (review finding 3). A fixed `height: 100vh`, not `min-height` (review finding 2): the
-     window itself must never grow past the viewport, so `.hub-content`'s own `overflow-y: auto`
-     (below) is what scrolls, and the sidebar's `position: fixed` rail (HubSidebar.tsx) never has
-     to chase a page scroll. `.hub--wide` now only needs its one remaining override: no bottom
-     padding, for the full-bleed Conversations/Recordings frame. */
+     (`.hub-title` + `.hub-labs`, side by side); row 2 is `.hub-body`. Before this, the header
+     was a flex column of two stacked lines on MOGs/Settings but one side-by-side grid row on
+     Conversations/Recordings (`.hub--wide`'s own grid, same specificity, declared later, won
+     there), so the whole page shifted 16px between areas (review finding 3). A fixed
+     `height: 100vh`, not `min-height` (review finding 2): the window itself must never grow
+     past the viewport, so `.hub-content`'s own `overflow-y: auto` (below) is what scrolls, and
+     the sidebar's `position: fixed` rail (HubSidebar.tsx) never has to chase a page scroll.
+     `.hub--wide` now only needs its one remaining override: no bottom padding, for the
+     full-bleed Conversations/Recordings frame.
+
+     The leading `var(--hub-sidebar-width, 0px)` column (ui-1, review of #602 round 4, blocker
+     1): a pinned rail is `position: fixed` (HubSidebar.tsx), entirely outside this grid, so it
+     never reflows anything on its own. `.hub-title`/`.hub-labs` are direct children of `main`
+     (AT-37) — outside `.hub-body`, which is the only box whose own padding used to shift with
+     the rail — so a pinned rail used to sit flush on top of "Bottle" and most of "Databricks
+     Labs / experimental" with no way to tell the header to move over. This empty first column
+     gives the header row the same leading offset `.hub-content`'s padding-left already gives
+     the content column (0 when unpinned or hidden, so nothing moves then). */
   .hub {
     box-sizing: border-box;
     display: grid;
-    grid-template-columns: auto 1fr;
+    grid-template-columns: var(--hub-sidebar-width, 0px) auto 1fr;
     grid-template-rows: auto minmax(0, 1fr);
     align-items: baseline;
     max-width: none;
@@ -40,11 +49,34 @@
     padding: var(--mog-space-6) var(--mog-space-6) var(--mog-space-7);
     font: var(--mog-text-md) / var(--mog-leading) var(--mog-font);
     -webkit-font-smoothing: antialiased;
+    transition: grid-template-columns 0.18s var(--mog-ease-out);
   }
 
-  /* Row 2, both columns: `align-self: stretch` overrides the grid's own `align-items: baseline`
+  @media (prefers-reduced-motion: reduce) {
+    .hub {
+      transition: none;
+    }
+  }
+
+  /* Explicit placement (ui-1, review of #602 round 4): with a third column now in the mix,
+     auto-placement would put `.hub-title` in the new leading (sidebar-width) column instead of
+     the second one. */
+  .hub > .hub-title {
+    grid-row: 1;
+    grid-column: 2;
+  }
+
+  .hub > .hub-labs {
+    grid-row: 1;
+    grid-column: 3;
+  }
+
+  /* Row 2, every column: `align-self: stretch` overrides the grid's own `align-items: baseline`
      (set for row 1's title/labs) for this one item, so the sidebar + content column still fills
-     every remaining pixel of height, in every area (ui-1, review of #602 round 3). */
+     every remaining pixel of height, in every area (ui-1, review of #602 round 3). Spanning the
+     leading sidebar-width column too costs nothing: `.hub-body` positions its own children
+     (the fixed rail, `.hub-content`'s padding-left) itself, the same as when that column did
+     not exist. */
   .hub > .hub-body {
     grid-column: 1 / -1;
     align-self: stretch;
@@ -778,18 +810,28 @@
     }
   }
 
-  /* No z-index here any more (ui-1, review of #602 round 3, blocker 2): only the toggle button
-   itself sits above the sidebar panel (`relative z-30` in Hub.tsx, above the panel's z-20), so
-   it stays reachable while an unpinned sidebar overlaps the top-left corner. The area title
-   next to it is a plain, unelevated flow box, so an open overlay paints over it (and the pin),
-   not the other way around — it was elevated too before this fix, which is why "Conversations"
-   or "MOGs" used to show on top of the open panel, looking like the panel's own title. */
+  /* No elevated z-index on the toggle or this row any more (ui-1, review of #602 rounds 3-4,
+   blocker 2): an open, unpinned overlay simply paints over this whole row, toggle included,
+   the way a native macOS sidebar covers whatever sits under it. Round 3 kept the toggle itself
+   above the panel so it stayed clickable, but the toggle then sat exactly where the panel's own
+   first nav item ("MOGs") does, so a click there closed the sidebar instead of opening MOGs.
+   Esc, an outside click and the panel's own collapse/pin buttons still close it either way.
+   `position: sticky; top: 0` (review of #602 round 4, MEDIUM): `.hub-content` (above) is the
+   one box that scrolls now, so without this the toggle scrolled away with a tall Settings page,
+   leaving only the keyboard shortcut to reach it. `z-index: 1` paints this over the sections
+   that scroll under it (still far below the sidebar panel's own z-20), and `background:
+   var(--mog-surface)` (the page's own colour) keeps that scrolled content from showing through
+   once this row is pinned to the top mid-scroll. */
   .hub-area-header {
+    position: sticky;
+    top: 0;
+    z-index: 1;
     display: flex;
     min-height: 2.5rem;
     align-items: center;
     gap: var(--mog-space-3);
     margin-bottom: var(--mog-space-5);
+    background: var(--mog-surface);
   }
 
   .hub-area-title {
@@ -1198,11 +1240,6 @@
     color: var(--mog-text-muted);
   }
 
-  .rec-field-label--top {
-    align-self: start;
-    padding-top: 5px;
-  }
-
   .hub .rec-wide {
     width: min(100%, 320px);
   }
@@ -1295,19 +1332,29 @@
     margin: 0;
   }
 
+  /* `min-width: 0`, not `flex-wrap: wrap` (ui-1, review of #602 round 4, MEDIUM): inside
+   `SettingsRow`'s control column, a realistic path (`/Volumes/databricks/home/<id>/
+   <email>/my_files`) used to force the whole row to wrap, pushing "Save to" onto its own line
+   ("Save" / "to"). `.rec-path` (below) now truncates with an ellipsis and a `title` tooltip
+   instead (`Storage`, RecordingSettings.tsx), so this row never needs to wrap. */
   .rec-place {
     display: flex;
-    flex-wrap: wrap;
     align-items: baseline;
     gap: 2px 10px;
+    min-width: 0;
   }
 
   .rec-place > span:first-child {
     font-weight: 500;
   }
 
+  /* `flex: 1 1 auto` + `min-width: 0` (not `overflow-wrap: anywhere`, ui-1, review of #602
+   round 4, MEDIUM): the path takes the row's remaining space and truncates there instead of
+   wrapping or breaking mid-word. */
   .rec-path {
+    flex: 1 1 auto;
     min-width: 0;
+    overflow: hidden;
     color: var(--mog-text-muted);
     font:
       var(--mog-text-xs) / 1.5 ui-monospace,
@@ -1315,7 +1362,8 @@
       Menlo,
       Consolas,
       monospace;
-    overflow-wrap: anywhere;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .rec-inline {
