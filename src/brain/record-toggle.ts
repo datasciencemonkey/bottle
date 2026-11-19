@@ -4,8 +4,10 @@
  * none runs, so it starts one with the Settings preset and the brain's home profile
  * (`recording_start {profile}`; with no home profile it starts nothing and reports
  * `no_home_profile`, because Bottle never picks a profile);
- * one starts or runs, so it stops it. Rust checks the knob and the consent again, so a refusal
- * (for example `recording_off` or `consent_required`) goes to `onRefused` and is never thrown.
+ * one runs, so it stops it, the same as the hub Record control's `stop()`. One still starting
+ * does nothing: a press in that narrow window is not a refusal, and it is not queued. Rust
+ * checks the knob and the consent again, so a refusal (for example `recording_off` or
+ * `consent_required`) goes to `onRefused` and is never thrown.
  */
 import type { ProfileName } from '../shared/interfaces';
 import type { CommandArgs, CommandReturns } from '../shared/ipc';
@@ -31,8 +33,8 @@ export function createRecordToggle(deps: RecordToggleDeps): () => Promise<void> 
           return;
         }
         await deps.call('recording_start', { profile });
-      } else if (now.state === 'recording' || now.state === 'starting')
-        await deps.call('recording_stop', {});
+      } else if (now.state === 'recording') await deps.call('recording_stop', {});
+      // `starting`: as the hub's `stop()` does, a press in this narrow window does nothing.
     } catch (error) {
       deps.onRefused?.(error);
     }

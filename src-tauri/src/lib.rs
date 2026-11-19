@@ -277,8 +277,8 @@ pub fn run() {
             mog_core::app_settings::AppSettings::default(),
         ))
         // ADR 0103: the `recording_*` component on the JSON settings file (PR C). The file
-        // path is set in `setup` by `recording_cloud_host::install`; before that, defaults
-        // (knob off) and no write.
+        // path is set in `setup` by `install_capture` (and the `record_gate` re-synced right
+        // after); before that, defaults (knob off) and no write.
         .manage(recording_settings.clone())
         // ADR 0103: the component reads and writes through the JsonSettingsStore (persisted
         // knob, PR C/#595/#592); `record_gate` wraps it with `KnobFollower` so the ⌥R gate

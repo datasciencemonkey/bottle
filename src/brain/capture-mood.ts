@@ -39,6 +39,8 @@ export const REFUSAL_REASONS = [
   'no_device',
   'recording_in_progress',
   'no_home_profile',
+  'no_profile',
+  'profiles_differ',
 ] as const;
 export type RefusalReason = (typeof REFUSAL_REASONS)[number];
 
@@ -69,6 +71,19 @@ export const REFUSAL_TEXT: Readonly<Record<RefusalReason, { text: string; label:
     text: 'Pick a workspace first',
     label: 'Recording not started: pick a home workspace for this MOG first',
   },
+  // ADR 0103, recording-profile.ts: ⌥R shares the hub Record control's `recordingProfile`. No
+  // MOG anywhere has a home yet.
+  no_profile: {
+    text: 'Pick a workspace first',
+    label: 'Recording not started: no MOG has a home workspace yet; pick one first',
+  },
+  // ADR 0103, recording-profile.ts: two or more MOGs have different homes. Bottle never picks
+  // between workspaces, so ⌥R refuses, the same as the hub Record control.
+  profiles_differ: {
+    text: 'MOGs use different workspaces',
+    label:
+      'Recording not started: your MOGs use different home workspaces; recording needs one workspace for all of them',
+  },
 };
 
 /** ADR 0103: the capture owner of a call recording. It is not a MOG. */
@@ -81,6 +96,8 @@ const IPC_REASONS: ReadonlySet<string> = new Set<RefusalReason>([
   'host_failed',
   'recording_in_progress',
   'no_home_profile',
+  'no_profile',
+  'profiles_differ',
 ]);
 
 /** The reason of a refused start. Only a known `IpcError` code counts; anything else is host_failed. */
