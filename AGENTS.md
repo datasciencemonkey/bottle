@@ -9,11 +9,12 @@ assistant window that Bottle creates and manages. Use "Bottle" in all new text, 
 
 ## 1. What we are building (MVP, as of 2026-11-19)
 
-Bottle is a Tauri desktop app (macOS first, Windows second) for Databricks users. The MVP has two jobs:
+Bottle is a Tauri desktop app (macOS first, Windows second) for Databricks users. This section describes the
+**target** MVP. Section 1a says which parts are on main and which are still in open PRs. The MVP has two jobs:
 
 | Key action | What happens |
 |---|---|
-| Hold **Right Option**, speak, release | **Dictation.** Local Parakeet STT transcribes the audio on the device. Bottle pastes the text at the cursor in the frontmost app. A small pop-up on the MOG shows the text with Copy and **Ask Genie**. |
+| Hold **Right Option**, speak, release | **Dictation.** Local Parakeet STT transcribes the audio on the device. Bottle pastes the text at the cursor in the frontmost app. A small pop-up on the MOG shows the text with Copy and **Ask Genie** (PRs #572, #571). |
 | Hold **Right Option**, tap **G** (⌥G) during the hold, release | **Ask Genie.** Nothing is pasted. Bottle sends the exact text to **Genie One** through a direct MCP call, then shows the answer (markdown and key numbers) in the MOG card. |
 
 The user always knows whether they dictate or ask, so the key decides. Bottle does not guess the intent. The pop-up's
@@ -41,6 +42,21 @@ workspace hop and split questions, mascot artwork work, admin/MDM, telemetry exp
 signed public installers, and most spikes. Code for some of these is already on main. Leave it alone unless an MVP
 change needs it. Do not open new issues for this work. The non-core issues are being closed with "We'll consider this
 later".
+
+### 1a. On main vs in flight (2026-11-19)
+
+| Part | State |
+|---|---|
+| Hotkey, capture, local Parakeet STT, paste (`insert_text`) | On main. |
+| TokenBroker, McpTransport, PollActor, GenieBridge (T8) | On main. |
+| Ask route trigger | On main it is **Shift** with the talk key (`hotkey:ptt` sends `shift: true`, ADR 0053), and without Shift a router model guesses the intent. Target: ⌥G, no guess (#577, ADR 0098, not yet written). |
+| Ask send path | On main the ask gate still calls `agent_send` (`src/brain/components/index.ts`). Target: straight to GenieBridge T8 with `genie_one_mcp` (PR #575, ADR 0097, stacked on #571). |
+| Pop-up with Copy and Ask Genie | PR #572 (pop-up) and PR #571 (dictation first, ADR 0096). |
+| `mem_local_exec` to the local SQLite store | PR #576. On main the route is still `TODO(#426)`. |
+| CliRunner (R5) | PR #255. On main mcp_host uses a stub, so every `mcp_call` fails `not_implemented`. |
+| CLI install, Connect a workspace | #161, #162 (in progress, stacked on #255). |
+
+Re-check with `gh pr list` before you rely on this table.
 
 ## 2. Architecture map
 
@@ -76,6 +92,7 @@ Rules of the boundary:
 | Path | What it is |
 |---|---|
 | `crates/mog-core/src/` | The Rust core library. Key modules: `hotkey_*`, `capture.rs`, `stt_*`, `insertion*`, `cli_runner.rs`, `token_broker.rs`, `mcp_transport*`, `http_transport*`, `profile_service.rs`, `local_store*`, `ipc.rs`, `ipc_gateway.rs`, `types.rs`. |
+| `crates/mog-core-ffi/` | A C ABI over mog-core for future non-Tauri hosts. Not on the MVP path. |
 | `crates/mog-core/tests/` | Rust integration and acceptance tests (`at_*` files map to acceptance tests AT-nn). |
 | `crates/cli-runner/` (after #255) | The CLI runner crate and its real-process tests. |
 | `src-tauri/src/` | The Tauri app: `lib.rs` (setup), `ipc.rs` (command routing), `*_host.rs` (hosts that wire core parts into the app), `macos_panel.rs`, `windows.rs`. |
@@ -84,7 +101,7 @@ Rules of the boundary:
 | `src/views/` | React views: `mog/`, `card/`, `hub/`, shared `tokens.css`. |
 | `src/shared/` | Types shared by brain and views, including the IPC contract `ipc.ts` and `interfaces.ts`. |
 | `src/acceptance/`, `tests/` | TypeScript acceptance and repo-level tests (Vitest). |
-| `docs/adr/` | Architecture decision records, `NNNN-title.md`. Check the highest number on main before you add one. |
+| `docs/adr/` | Architecture decision records, `NNNN-title.md`. Before you add one, take a number above the highest on main **and** in open PRs (`gh pr list`), because open PRs reserve numbers too. |
 | `docs/agents/BUILD-DISPATCH-PROMPT.md` | The original orchestrator prompt (agent teams, TDD per issue, PR template). |
 | `requirements.html`, `research/final-requirements.md` | Full requirements v1.3 (ASD-STE100). Requirement IDs (CAP-, RTR-, G-, W-, MEM-, SEC-, NFR-) are cited in code and tests. |
 | `research/connector-spec-2026-11-14.md` | Verified Genie, MCP and OAuth API facts. Read it before Genie or auth work. |
@@ -97,11 +114,15 @@ Rules of the boundary:
 - Node with pnpm, Rust stable, and `uv` for every Python command.
 - Install: `pnpm install`.
 - TypeScript: `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm test` (Vitest).
-- Rust: `cargo nextest run --workspace` (or `cargo test`), `cargo clippy --workspace --all-targets -- -D warnings`,
-  `cargo fmt --check`.
+- Rust (the same commands as the gate): `cargo fmt --all --check`,
+  `cargo clippy --workspace --all-targets --locked -- -D warnings`,
+  `cargo nextest run --workspace --locked --profile ci` (use the cargo-nextest version pinned as `NEXTEST_VERSION` in
+  `.github/workflows/app-ci.yml`), and `cargo test --workspace --locked --doc`.
 - Local STT needs the `local-stt` feature (the vendored sherpa-onnx build) and the Parakeet model
   `sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8`.
-- Run the app in dev: `pnpm tauri dev`. Build a macOS DMG: `scripts/package-macos.sh`.
+- Local STT setup: run `uv run --no-project python scripts/vendor_sherpa_onnx.py` and point `SHERPA_ONNX_ARCHIVE_DIR`
+  at its output. The `local-stt` feature is off by default; without it the app has no Parakeet.
+- Run the app in dev: `pnpm tauri dev --features local-stt` (or plain `pnpm tauri dev` without local STT). Build a macOS DMG: `scripts/package-macos.sh`.
 - Before you push, run `scripts/pre-push.sh`. It runs the same suite as the merge gate.
 - Run `cargo clean` in a worktree when you finish with it; target dirs are large.
 
@@ -125,8 +146,8 @@ Rules of the boundary:
 
 ## 6. Security rules (always)
 
-- Never commit secrets, `.databrickscfg`, `.env*`, `*.pem`, `*.key`, `build/` or `*.riv`. A pre-commit secret hook
-  blocks token-shaped strings; use obviously fake values in tests.
+- Never commit secrets, `.databrickscfg`, `.env*`, `*.pem`, `*.key`, `build/` or `*.riv`. Use obviously fake values in
+  tests. The owner's machine has a secret-scanning commit hook; do not count on it existing in your environment.
 - Never write a token to disk, logs, test output or an agent transcript.
 - Never pick a Databricks profile for the user. Live tests use only a profile the user named.
 - Never route around a permission denial. Report it.
@@ -137,8 +158,8 @@ This file does not track live status. Use:
 
 - `gh issue list --state open` — the remaining issues are the MVP set. Issue #245 is the MVP-D exit gate.
 - `gh pr list --state open` — work in flight.
-- `docs/adr/` — the latest decisions. The MVP ones are ADR 0096 (dictation-first card), ADR 0097 (direct Genie
-  path) and ADR 0098 (the ⌥G key). Some of these may still be in open PRs.
+- `docs/adr/` and open PRs — the latest decisions. The MVP ones: ADR 0096 (dictation-first card, in PRs #571 and
+  #575), ADR 0097 (direct Genie path, in PR #575) and ADR 0098 (the ⌥G key, planned for #577).
 
 ## 8. Reference projects
 
