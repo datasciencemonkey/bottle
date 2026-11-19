@@ -4,6 +4,10 @@
 Writes, under mog-rive/fallback/:
   mood-<mood>.png   one frame per mood (7), with a transparent background
   attention.png     only the "?" cue (UX-03), transparent everywhere else, drawn over any mood
+  layers/lamp-back.png, layers/genie-<mood>.png, layers/lamp-front.png
+                    the same art split in three planes, so the MOG view can slide the genie into
+                    and out of the lamp (#286): the lamp mouth and shadow, the genie alone (no
+                    rim clip, no level rings, no cue), and the lamp body with its rim
 
 The Rive CLI paints its screenshots over a dark clear colour, so this script renders each frame
 twice: once over a black and once over a white backdrop rectangle (added to a temporary copy of
@@ -19,6 +23,7 @@ Needs the Rive CLI (`rive` on PATH, or ~/.rive/bin/rive). No `rive login` is nee
 """
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -66,11 +71,43 @@ def frames():
 ATTENTION = '<Node x="118" y="-58" opacity="0" name="Attention" id="0:71">'
 
 
-def project_with_backdrop(tmp, argb, cue=True):
+# The nodes each layer moves off the artboard. Their `x` is never keyed, so the move holds in
+# every state. The genie layer also drops the rim clip: the view clips it at the rim instead.
+OFF = {
+    "Lamp": '<Node x="200" y="276" name="Lamp"',
+    "LampInside": '<Node x="200" y="270" name="LampInside"',
+    "Shadow": '<Shape x="200" y="370" name="Shadow"',
+    "Mog": '<Node x="200" y="185" name="Mog"',
+    "ListenRings": f'<Node x="0" y="{30 - 8}" opacity="0" name="ListenRings"',
+    "Attention": ATTENTION,
+}
+RIM_CLIP = '<ClippingShape sourceId="0:82" name="LampRimClip"/>'
+LAYERS = {
+    "genie": (["Lamp", "LampInside", "Shadow", "ListenRings", "Attention"], True),
+    "lamp-front": (["Mog", "LampInside", "Shadow"], False),
+    "lamp-back": (["Mog", "Lamp"], False),
+}
+
+
+def hide(text, names, drop_clip):
+    for n in names:
+        tag = OFF[n]
+        if text.count(tag) != 1:
+            sys.exit(f"scene.rml: expected one {n} node")
+        moved = re.sub(r'x="[-0-9.]+"', 'x="5000"', tag, count=1)
+        text = text.replace(tag, moved)
+    if drop_clip:
+        if text.count(RIM_CLIP) != 1:
+            sys.exit("scene.rml: expected one LampRimClip")
+        text = text.replace(RIM_CLIP, "")
+    return text
+
+
+def project_with_backdrop(tmp, argb, cue=True, layer=None):
     """A temporary copy of mog-rive/ with a full-size rectangle behind the art (last sibling).
     With `cue=False` the `Attention` node sits off the artboard (its animations key only `y`
     and `opacity`, so `x` stays put)."""
-    dst = os.path.join(tmp, f"mog-rive-{argb}-{int(cue)}")
+    dst = os.path.join(tmp, f"mog-rive-{argb}-{int(cue)}-{layer or 'all'}")
     shutil.copytree(PROJECT, dst, ignore=shutil.ignore_patterns("build", "shots", "fallback"))
     scene = os.path.join(dst, "scene.rml")
     with open(scene, encoding="utf-8") as f:
@@ -83,14 +120,16 @@ def project_with_backdrop(tmp, argb, cue=True):
         if text.count(ATTENTION) != 1:
             sys.exit("scene.rml: expected one Attention node at x=118")
         text = text.replace(ATTENTION, ATTENTION.replace('x="118"', 'x="5000"'))
+    if layer:
+        text = hide(text, *LAYERS[layer])
     with open(scene, "w", encoding="utf-8") as f:
         f.write(text)
     return dst
 
 
-def render(project, tmp, tag):
+def render(project, tmp, tag, todo=None):
     paths = {}
-    for name, cmds in frames():
+    for name, cmds in (todo or frames()):
         path = os.path.join(tmp, f"{name}-{tag}.png")
         lines = [f"viewport {SIZE}x{SIZE}", *cmds, f"screenshot {path}", "quit"]
         proc = subprocess.run([rive_bin(), project, "--commands"], input="\n".join(lines) + "\n",
@@ -155,8 +194,23 @@ def main():
         white_nocue = render(project_with_backdrop(tmp, "FFFFFFFF", cue=False), tmp, "white-nocue")
         cue = cue_only(matte(black["cue"], white["cue"]), matte(black_nocue["cue"], white_nocue["cue"]))
         cue.save(os.path.join(OUT, "attention.png"), optimize=True)
+        render_layers(tmp)
     write_source_hash()
     print("wrote", OUT)
+
+
+def render_layers(tmp):
+    out = os.path.join(OUT, "layers")
+    os.makedirs(out, exist_ok=True)
+    idle = [("lamp", ["data mood=idle", "advance 1.7s"])]
+    for layer in LAYERS:
+        todo = [(f"{layer}-{m}", cmds) for (name, cmds) in frames() if name.startswith("mood-")
+                for m in [name[len("mood-"):]]] if layer == "genie" else idle
+        b = render(project_with_backdrop(tmp, "FF000000", layer=layer), tmp, f"black-{layer}", todo)
+        w = render(project_with_backdrop(tmp, "FFFFFFFF", layer=layer), tmp, f"white-{layer}", todo)
+        for name in b:
+            file = name if layer == "genie" else layer
+            matte(b[name], w[name]).save(os.path.join(out, f"{file}.png"), optimize=True)
 
 
 if __name__ == "__main__":

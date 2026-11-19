@@ -8,10 +8,12 @@
  * - On load it sets `demo=false`, `level=0`, `hover=false`, `mood=idle` (UX-02b), then the state
  *   the brain has sent so far. It never sets `demo=true`, so a poke never cycles the moods (UX-02a).
  * - If the file does not load, the runtime throws, or the view model is not the one the art
- *   defines (exactly the 7 moods, UX-02a), it shows `PngMascot` instead (UX-09b).
+ *   defines (exactly the 7 moods, UX-02a), it shows `LampMascot` instead (UX-09b, #286): the
+ *   fallback art in layers, with the lamp motion in CSS.
  */
 import type { Mood } from '../../shared/interfaces';
-import { FIRST_FRAME, MOODS, PngMascot, type MascotRenderer } from './mascot';
+import { LampMascot } from './lamp-mascot';
+import { FIRST_FRAME, MOODS, type MascotRenderer } from './mascot';
 import { DrawOptimizationOptions, createOfflineRive, type OfflineRiveOptions } from './rive-loader';
 
 /** The bundled `.riv` (emitted by the `bottle-mog-riv` Vite plugin, ADR 0027). */
@@ -89,7 +91,7 @@ export class RiveMascot implements MascotRenderer {
 
   constructor(
     create: RiveFactory = createOfflineRive,
-    fallback: () => MascotRenderer = () => new PngMascot(),
+    fallback: () => MascotRenderer = () => new LampMascot(),
   ) {
     this.#create = create;
     this.#fallback = fallback;
@@ -126,6 +128,7 @@ export class RiveMascot implements MascotRenderer {
 
   setLevel(level: number): void {
     this.#state.level = clamp01(level);
+    this.#png?.setLevel(this.#state.level);
     if (this.#bound) set(this.#bound.level, this.#state.level);
   }
 
@@ -137,10 +140,12 @@ export class RiveMascot implements MascotRenderer {
 
   setHover(on: boolean): void {
     this.#state.hover = on;
+    this.#png?.setHover(on);
     if (this.#bound) set(this.#bound.hover, on);
   }
 
   poke(): void {
+    this.#png?.poke();
     this.#bound?.poke.trigger();
   }
 
@@ -172,7 +177,7 @@ export class RiveMascot implements MascotRenderer {
     this.setAttention(s.attention);
   }
 
-  /** UX-09b: drop Rive and show the PNG for the current mood and cue. */
+  /** UX-09b: drop Rive and show the fallback for the current mood, cue and hover. */
   #toPng(): void {
     const el = this.#el;
     if (!el || this.#png) return;
@@ -185,6 +190,7 @@ export class RiveMascot implements MascotRenderer {
     png.mount(el);
     png.setMood(s.mood);
     png.setAttention(s.attention);
+    png.setHover(s.hover);
     this.#png = png;
   }
 }

@@ -102,4 +102,30 @@ describe('the transparent PNG fallback (ADR 0027)', () => {
     // The bubble itself is opaque (top right of the art).
     expect(cue.alpha(330, 117)).toBe(255);
   });
+
+  it('[#286] the lamp layers split the art: the Genie alone, the lamp body, the lamp mouth', () => {
+    const layer = (name: string) => decodePng(resolve(dir, 'layers', `${name}.png`));
+    const front = layer('lamp-front');
+    const back = layer('lamp-back');
+    for (const img of [front, back]) expect([img.width, img.height]).toEqual([400, 400]);
+    // The lamp body is in front only; the dark mouth is in the back only.
+    expect(front.alpha(200, 310)).toBe(255);
+    expect(front.alpha(72, 284)).toBe(255); // the handle
+    expect(front.alpha(362, 270)).toBe(255); // the spout tip
+    expect(back.alpha(200, 310)).toBeLessThan(32); // only the soft edge of the mouth glow
+    expect(back.alpha(200, 272)).toBe(255);
+    for (const m of MOODS) {
+      const g = layer(`genie-${m}`);
+      expect([g.width, g.height], m).toEqual([400, 400]);
+      // No lamp in the Genie plane: the lamp handle and spout tip are clear.
+      for (const [x, y] of [
+        [72, 284],
+        [362, 270],
+      ] as const)
+        expect(g.alpha(x, y), `${m} (${x}, ${y})`).toBe(0);
+    }
+    // Every pose with a body shows it above the rim; sleeping is fully in the lamp.
+    expect(layer('genie-idle').alpha(200, 200)).toBe(255);
+    expect(layer('genie-answering').alpha(200, 100)).toBe(255);
+  });
 });
