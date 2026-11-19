@@ -691,7 +691,7 @@ SOFTWARE.
 ### Adapted files
 
 `src/views/ui/button.tsx`, `tooltip.tsx`, `checkbox.tsx`, `switch.tsx`, `radio-group.tsx`,
-`collapsible.tsx`, `input.tsx`, `utils.ts` (`cn()`) — each copied from the matching page of
+`collapsible.tsx`, `input.tsx`, `textarea.tsx`, `utils.ts` (`cn()`) — each copied from the matching page of
 ui.shadcn.com/docs/components/ and adapted for `verbatimModuleSyntax`/`exactOptionalPropertyTypes`.
 `src/views/hub/HubSidebar.tsx` and `use-hub-sidebar.ts` are hand-written (shadcn's Sidebar
 *pattern*, not its copy-in: the hidden-by-default/pin behaviour is this repo's own spec, ADR 0106

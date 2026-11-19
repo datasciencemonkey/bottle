@@ -34,9 +34,15 @@ import { RecordingSettings } from './RecordingSettings';
 import { useHubRecording } from './recording-ipc';
 import { SttSetupStep } from './SttSetupStep';
 import { StoreNotice } from './StoreNotice';
+import { ThreadComposer } from './ThreadComposer';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
 import { useHubSidebar } from './use-hub-sidebar';
 import { WipeSettings } from './WipeSettings';
+
+/** #145: the reply composer of a thread's detail, the genie-followup hub→brain seam. */
+const threadComposer = (thread: Parameters<typeof ThreadComposer>[0]['thread']) => (
+  <ThreadComposer thread={thread} />
+);
 
 /**
  * The product name and the Labs label (MB-10a, MB-10b); the title bar shows the label too. Both
@@ -245,7 +251,11 @@ export function Hub() {
               compact
             />
           )}
-          <Conversations active={view === 'conversations'} onOpen={showConversations} />
+          <Conversations
+            active={view === 'conversations'}
+            onOpen={showConversations}
+            composer={threadComposer}
+          />
           <Recordings
             active={view === 'recordings'}
             onOpenSettings={openRecordingSettings}
