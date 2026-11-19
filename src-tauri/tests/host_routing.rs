@@ -368,6 +368,8 @@ fn arc_3_cap_02a_g_04a_window_ops_capture_start_and_mcp_call_run_off_the_main_th
                         | "profiles_list"
                         // #161: `cli_install` downloads and checks the CLI.
                         | "cli_install"
+                        // #162: `databricks auth login` can wait up to 5 min (W-07c).
+                        | "profile_login"
                 ),
             "{}",
             c.name
@@ -786,6 +788,7 @@ fn arc_3_cap_02a_g_04a_schedule_runs_window_ops_capture_start_and_mcp_call_on_a_
                     | "mem_local_exec"
                     | "profiles_list"
                     | "cli_install"
+                    | "profile_login"
             );
         if worker {
             assert_ne!(ran_on, caller, "{} ran on the calling thread", c.name);
@@ -1229,5 +1232,80 @@ fn sec_03_a_refused_hub_notice_never_echoes_the_text() {
         let got = route(comps(label, &brain, None, None), "hub_notice_send", args);
         let shown = format!("{got:?}");
         assert!(!shown.contains(MARKER), "{shown}");
+    }
+}
+
+/// A fake sign-in component (#162): it keeps each call; `profile_login` answers `timeout`.
+#[derive(Default)]
+struct FakeLogin(Mutex<Vec<(String, Value)>>);
+
+impl GatewayComponents for FakeLogin {
+    fn call(&self, command: &'static str, args: Value) -> CoreResult<Value> {
+        self.0.lock().unwrap().push((command.to_owned(), args));
+        if command == "profile_login" {
+            Err(CoreError::IpcRefused { code: "timeout" })
+        } else {
+            Ok(json!({}))
+        }
+    }
+}
+
+fn login_call(
+    from: &str,
+    login: Option<&dyn GatewayComponents>,
+    command: &str,
+    args: Value,
+) -> Result<Value, Value> {
+    let brain = FakeBrain::default();
+    let components = HostComponents {
+        login,
+        ..HostComponents::none(from, &brain)
+    };
+    route(components, command, args)
+}
+
+#[test]
+fn w_07c_w_07h_profile_login_rows_reach_the_login_component_from_the_brain_and_the_hub() {
+    let c = FakeLogin::default();
+    let login =
+        json!({"workspaceUrl": "https://acme-prod.cloud.databricks.com", "profile": "bottle-x"});
+    // The component code crosses as itself (W-07c: the 5 min limit answers `timeout`).
+    assert_eq!(
+        login_call("brain", Some(&c), "profile_login", login.clone()),
+        err("timeout")
+    );
+    assert_eq!(
+        login_call(
+            "hub",
+            Some(&c),
+            "profile_login_cancel",
+            json!({"profile": "bottle-x"})
+        ),
+        Ok(json!({}))
+    );
+    assert_eq!(
+        *c.0.lock().unwrap(),
+        vec![
+            ("profile_login".to_owned(), login.clone()),
+            (
+                "profile_login_cancel".to_owned(),
+                json!({"profile": "bottle-x"})
+            ),
+        ]
+    );
+    // A MOG window cannot sign in, and with no component both rows answer `host_failed`.
+    assert_eq!(
+        login_call("mog-m1", Some(&c), "profile_login", login.clone()),
+        err("window_not_allowed")
+    );
+    for (command, args) in [
+        ("profile_login", login),
+        ("profile_login_cancel", json!({"profile": "bottle-x"})),
+    ] {
+        assert_eq!(
+            login_call("hub", None, command, args),
+            err("host_failed"),
+            "{command}"
+        );
     }
 }

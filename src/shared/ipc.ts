@@ -41,6 +41,8 @@ export const COMMANDS = {
   profiles_list: BH,
   profile_status: BH,
   profile_login: BH,
+  /** Not in 4.5 (#162): Cancel and "Open the browser again" stop the `auth login` child (W-07h). */
+  profile_login_cancel: BH,
   profile_select: BH,
   capture_start: B,
   capture_stop: B,
@@ -220,7 +222,13 @@ export interface CommandArgs {
   cli_install: { consent: true };
   profiles_list: { refresh?: boolean };
   profile_status: { profile: ProfileName };
+  /**
+   * Blocks until `databricks auth login` and the W-06a check end (#162). Refusals:
+   * `host_refused`, `profile_exists`, `invalid_args`, `login_cancelled`, `timeout`, `cli_failed`
+   * and the Table W-ERR codes `auth_expired`, `no_grant`, `non_json_reply`, `offline`.
+   */
   profile_login: { workspaceUrl: string; profile: ProfileName; clientId?: string };
+  profile_login_cancel: { profile: ProfileName };
   profile_select: { mogId: MogId; profile: ProfileName; scope: 'question' | 'session' };
   capture_start: {
     mogId: MogId;
@@ -370,6 +378,11 @@ export const IPC_ERROR_CODES = [
   'agent_target_unavailable',
   'agent_invalid_target',
   'agent_harness_mismatch',
+  /** `profile_login` (#162): the sign-in codes that have no older code (W-07g, W-07h). */
+  'profile_exists',
+  'login_cancelled',
+  'cli_failed',
+  'no_grant',
 ] as const;
 
 export type IpcErrorCode = (typeof IPC_ERROR_CODES)[number];
@@ -588,6 +601,7 @@ export interface CommandReturns {
   profiles_list: ProfileInfo[];
   profile_status: TokenStatus;
   profile_login: { loginId: string };
+  profile_login_cancel: Empty;
   profile_select: Empty;
   capture_start: CaptureState;
   capture_stop: CaptureState;

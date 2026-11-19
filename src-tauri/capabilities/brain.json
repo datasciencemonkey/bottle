@@ -12,6 +12,7 @@
     "allow-profiles-list",
     "allow-profile-status",
     "allow-profile-login",
+    "allow-profile-login-cancel",
     "allow-profile-select",
     "allow-capture-start",
     "allow-capture-stop",

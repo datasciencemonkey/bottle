@@ -98,6 +98,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     row("profiles_list", BH),
     row("profile_status", BH),
     row("profile_login", BH),
+    // Not in 4.5 (#162): Cancel and "Open the browser again" stop the `auth login` child (W-07h).
+    row("profile_login_cancel", BH),
     row("profile_select", BH),
     row("capture_start", B),
     row("capture_stop", B),
@@ -355,6 +357,22 @@ pub enum IpcError {
     AgentHarnessMismatch {
         command: String,
     },
+    /// `profile_login` (#162, W-07g): a profile with this name exists, or its sign-in runs.
+    ProfileExists {
+        command: String,
+    },
+    /// `profile_login` (#162, W-07h): the user cancelled the sign-in.
+    LoginCancelled {
+        command: String,
+    },
+    /// `profile_login` (#162, W-07h): `databricks auth login` failed or could not start.
+    CliFailed {
+        command: String,
+    },
+    /// `profile_login` (#162, W-07h, Table W-ERR "403 grant"): the account has no grant.
+    NoGrant {
+        command: String,
+    },
 }
 
 impl std::fmt::Display for IpcError {
@@ -465,6 +483,12 @@ impl std::fmt::Display for IpcError {
                     "{command}: the MOG has a session of the other harness kind"
                 )
             }
+            IpcError::ProfileExists { command } => write!(f, "{command}: the profile exists"),
+            IpcError::LoginCancelled { command } => {
+                write!(f, "{command}: the sign-in was cancelled")
+            }
+            IpcError::CliFailed { command } => write!(f, "{command}: the CLI sign-in failed"),
+            IpcError::NoGrant { command } => write!(f, "{command}: the account has no access"),
             IpcError::Offline { command } => {
                 write!(f, "{command}: the host did not accept a connection")
             }
@@ -995,7 +1019,7 @@ macro_rules! for_command {
             "consent_records_list" => Some($f::<NoArgs>()),
             "cli_install" => Some($f::<CliInstallArgs>()),
             "profiles_list" => Some($f::<ProfilesListArgs>()),
-            "profile_status" => Some($f::<ProfileArgs>()),
+            "profile_status" | "profile_login_cancel" => Some($f::<ProfileArgs>()),
             "profile_login" => Some($f::<ProfileLoginArgs>()),
             "profile_select" => Some($f::<ProfileSelectArgs>()),
             "capture_start" => Some($f::<CaptureStartArgs>()),

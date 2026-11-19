@@ -11,6 +11,7 @@
     "allow-profiles-list",
     "allow-profile-status",
     "allow-profile-login",
+    "allow-profile-login-cancel",
     "allow-profile-select",
     "allow-mem-remote-status",
     "allow-config-list",

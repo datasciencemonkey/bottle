@@ -12,6 +12,8 @@ const SPEC_COMMANDS: &[(&str, &[WindowClass])] = {
         ("profiles_list", &[B, H]),
         ("profile_status", &[B, H]),
         ("profile_login", &[B, H]),
+        // #162: Cancel and "Open the browser again" (W-07h).
+        ("profile_login_cancel", &[B, H]),
         ("profile_select", &[B, H]),
         ("capture_start", &[B]),
         ("capture_stop", &[B]),

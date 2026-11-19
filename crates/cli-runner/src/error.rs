@@ -33,6 +33,8 @@ pub enum CliError {
     Spawn { message: String },
     /// The CLI child ran longer than the runner timeout and was killed.
     TimedOut,
+    /// The caller cancelled the CLI child and it was killed (#162, W-07h).
+    Cancelled,
 }
 
 impl CliError {
@@ -46,6 +48,7 @@ impl CliError {
             CliError::NotVerified => "CLI_NOT_VERIFIED",
             CliError::Spawn { .. } => "CLI_SPAWN_FAILED",
             CliError::TimedOut => "CLI_TIMED_OUT",
+            CliError::Cancelled => "CLI_CANCELLED",
         }
     }
 
@@ -86,6 +89,7 @@ impl fmt::Display for CliError {
             CliError::NotVerified => write!(f, "the CLI was not checked at launch"),
             CliError::Spawn { message } => write!(f, "the CLI could not start: {message}"),
             CliError::TimedOut => write!(f, "the CLI did not answer in time"),
+            CliError::Cancelled => write!(f, "the CLI was stopped"),
         }
     }
 }

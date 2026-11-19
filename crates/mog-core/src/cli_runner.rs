@@ -8,7 +8,7 @@
 
 use std::fmt;
 use std::path::PathBuf;
-use std::sync::atomic::{compiler_fence, Ordering};
+use std::sync::atomic::{compiler_fence, AtomicBool, Ordering};
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Duration;
 
@@ -65,6 +65,30 @@ pub trait CliRunner: Send + Sync {
     fn run_auth_token(&self, _profile: &str) -> CoreResult<SecretStdout> {
         Err(CoreError::NotImplemented { component: ID })
     }
+    /// Run `databricks auth login ...` (#162, W-07c) with the caller's `timeout`, and kill it as
+    /// soon as `cancel` is set (W-07h). It refuses any other command ([`login_command_ok`]).
+    /// The CLI keeps the tokens in its own cache: the child output is wiped, never parsed,
+    /// returned or logged. Errors are content-free: `cli_timed_out`, `cli_cancelled`,
+    /// `cli_failed` or a launch-check reason.
+    /// The default answers [`CoreError::NotImplemented`] (component-test doubles).
+    fn run_login(
+        &self,
+        _args: &[&str],
+        _timeout: Duration,
+        _cancel: &AtomicBool,
+    ) -> CoreResult<()> {
+        Err(CoreError::NotImplemented { component: ID })
+    }
+}
+
+/// True for `auth login` with flags only (`--name value` pairs): no `token` word anywhere, so
+/// the ARC-6 refusal holds too. Every [`CliRunner::run_login`] implementation checks this first.
+pub fn login_command_ok(args: &[&str]) -> bool {
+    args.len() >= 2
+        && args[0] == "auth"
+        && args[1] == "login"
+        && refuse_token_command(args).is_ok()
+        && args[2..].chunks(2).all(|pair| pair[0].starts_with("--"))
 }
 
 /// The raw stdout of `databricks auth token`: it holds a token in plain text (W-04b).
@@ -213,6 +237,35 @@ impl<F: Fs + Send + Sync, E: Env + Send + Sync, P: Process + Send + Sync> CliRun
     fn run_auth_token(&self, profile: &str) -> CoreResult<SecretStdout> {
         self.auth_token(profile)
     }
+
+    fn run_login(&self, args: &[&str], timeout: Duration, cancel: &AtomicBool) -> CoreResult<()> {
+        if !login_command_ok(args) {
+            return Err(CoreError::Unavailable {
+                component: ID,
+                reason: "cli_command_refused",
+            });
+        }
+        self.ensure_verified()?;
+        let ProcOutput {
+            code,
+            mut stdout,
+            mut stderr,
+        } = self
+            .read()
+            .run_cancellable(args, timeout, cancel)
+            .map_err(|e| unavailable(&e))?;
+        stdout.fill(0);
+        stderr.fill(0);
+        compiler_fence(Ordering::SeqCst);
+        std::hint::black_box((&mut stdout, &mut stderr));
+        if code != Some(0) {
+            return Err(CoreError::Unavailable {
+                component: ID,
+                reason: "cli_failed",
+            });
+        }
+        Ok(())
+    }
 }
 
 impl<F: Fs + Send + Sync, E: Env + Send + Sync, P: Process + Send + Sync>
@@ -221,6 +274,13 @@ impl<F: Fs + Send + Sync, E: Env + Send + Sync, P: Process + Send + Sync>
     /// Run the verified CLI (the launch check runs first if no CLI is verified yet), with the
     /// clean env (W-09) and [`CLI_TIMEOUT`].
     fn run_verified(&self, args: &[&str]) -> CoreResult<ProcOutput> {
+        self.ensure_verified()?;
+        // `run` re-checks that the verified CLI is still in a safe place (W-02b).
+        self.read().run(args).map_err(|e| unavailable(&e))
+    }
+
+    /// Run the launch check if no CLI is verified yet.
+    fn ensure_verified(&self) -> CoreResult<()> {
         if self.read().verified().is_none() {
             let mut inner = self.write();
             // Another caller may have run the check while this one waited.
@@ -228,8 +288,7 @@ impl<F: Fs + Send + Sync, E: Env + Send + Sync, P: Process + Send + Sync>
                 inner.launch_check(None).map_err(|e| unavailable(&e))?;
             }
         }
-        // `run` re-checks that the verified CLI is still in a safe place (W-02b).
-        self.read().run(args).map_err(|e| unavailable(&e))
+        Ok(())
     }
 
     /// W-04a: run exactly [`auth_token_args`] for the caller's `profile` (R5 never picks one).
@@ -269,6 +328,7 @@ fn unavailable(e: &CliError) -> CoreError {
         CliError::NotVerified => "cli_not_verified",
         CliError::Spawn { .. } => "cli_spawn_failed",
         CliError::TimedOut => "cli_timed_out",
+        CliError::Cancelled => "cli_cancelled",
     };
     CoreError::Unavailable {
         component: ID,

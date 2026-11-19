@@ -6,10 +6,10 @@
  * MOG config is unchanged, paused polls resume with the same IDs, PAT and SP profiles are
  * rejected, and the old CLI and plaintext storage show blocking messages.
  *
- * The parts under test are not built: T7 ProfileService (#17), the "Connect a workspace" dialog
- * (#162), sign-out (#163) and the Table W-ERR texts with held work (#42). So every test here is
- * `it.skip` with the feature issue, written against `src/shared/interfaces.ts`. They never count
- * as a pass. The R5 / R6 side and the one part that runs today (W-18c) are in
+ * Some parts under test are not built: T7 ProfileService (#17), sign-out (#163) and the Table
+ * W-ERR texts with held work (#42). Their tests are `it.skip` with the feature issue, written
+ * against `src/shared/interfaces.ts`. They never count as a pass. The "Connect a workspace"
+ * tests (#162) run. The R5 / R6 side and the one part that runs today (W-18c) are in
  * `crates/mog-core/tests/at_02_signin_recovery.rs`. The live run needs a person:
  * docs/tests/AT-SIGNIN-WORKSPACE-HOP.md. No test here reads or stores a token.
  */
@@ -17,6 +17,10 @@ import type { BackendErrorCode } from '../shared/interfaces';
 import { createGenieBridge } from '../brain/components/genie-bridge';
 import { createProfileService } from '../brain/components/profile-service';
 import { createGenieOneMcpDouble, scenarios } from '../test-support/genie-one-mcp';
+import { BrainBus } from '../brain/bus';
+import { wireConnectWorkspace } from '../brain/connect-wiring';
+import { core } from '../brain/test-core';
+import { CONNECT_VIEW_ID, type ConnectModel } from '../shared/connect-view';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('../brain/test-core')).coreModule);
 vi.mock('@tauri-apps/api/event', async () => (await import('../brain/test-core')).eventModule);
@@ -59,25 +63,60 @@ describe('AT-02 profile rules (ProfileService)', () => {
   });
 });
 
-// ---------- Pending: "Connect a workspace" (W-07a, W-07b, W-07c, W-08, W-15) ----------
+// ---------- "Connect a workspace" (W-07a, W-07b, W-07c, W-15; W-08 pending) ----------
+
+/** A fake workspace host on the Databricks domain list (4.6 rule 2). */
+const DBX_HOST = 'https://home-ws.cloud.databricks.com';
 
 describe('AT-02 sign-in from the chip (Connect a workspace)', () => {
-  it.skip('[AT-02] [W-07a] [W-07b] [W-07c] the dialog asks for the URL, refuses other domains and signs in with a 5 min limit TODO(#162)', async () => {
+  beforeEach(() => core.reset());
+
+  it('[AT-02] [W-07a] [W-07b] [W-07c] the dialog asks for the URL, refuses other domains and signs in through profile_login', async () => {
+    // The host side (the `auth login` arguments and the 5 min limit) is
+    // `crates/mog-core/tests/profile_login.rs`; this is the brain and the T7 call.
     const t7 = createProfileService();
-    await expect(t7.login('https://example.com', 'bottle-x')).rejects.toThrow();
-    const { loginId } = await t7.login(HOST, 'bottle-home');
-    expect(loginId).not.toBe('');
-    throw new Error(
-      'TODO(#162): assert `databricks auth login --host <url> --profile <name>` runs in the background and times out after 5 min on the sim clock',
-    );
+    const sent: ConnectModel[] = [];
+    const bus = new BrainBus();
+    wireConnectWorkspace(bus, {
+      login: (h, n, o) => t7.login(h, n, o),
+      cancel: async () => undefined,
+      profiles: async () => [],
+      send: async (m) => {
+        sent.push(m);
+      },
+    });
+    core.invoke.mockImplementation(async () => ({ loginId: 'login-1' }));
+    const click = (payload: Record<string, unknown>) =>
+      bus.dispatch({
+        event: 'view:input',
+        payload: { from: 'hub', input: { mogId: CONNECT_VIEW_ID, kind: 'click', payload } },
+      });
+    const flush = () => new Promise((r) => setTimeout(r, 0));
+    click({ target: 'connect_open' });
+    await flush();
+    expect(sent.at(-1)).toEqual({ step: 'url', firstRun: false });
+    click({ target: 'connect_url', url: 'https://example.com/?o=1' });
+    await flush();
+    expect(sent.at(-1)).toMatchObject({ step: 'url' });
+    click({ target: 'connect_url', url: `${DBX_HOST}/browse?o=123` });
+    await flush();
+    click({ target: 'connect_start', profile: 'bottle-home-ws' });
+    await flush();
+    expect(core.invoke).toHaveBeenCalledTimes(1);
+    expect(core.invoke).toHaveBeenCalledWith('profile_login', {
+      args: { workspaceUrl: DBX_HOST, profile: 'bottle-home-ws' },
+    });
+    expect(sent.at(-1)).toEqual({ step: 'connected', host: DBX_HOST, profile: 'bottle-home-ws' });
   });
 
-  it.skip('[AT-02] [W-15] a custom public OAuth app signs in with --client-id and the two scopes TODO(#162)', async () => {
+  it('[AT-02] [W-15] a custom public OAuth app signs in with its client ID', async () => {
+    core.invoke.mockImplementation(async () => ({ loginId: 'login-1' }));
     const t7 = createProfileService();
-    await t7.login(HOST, 'bottle-custom', { clientId: 'custom-app-id' });
-    throw new Error(
-      'TODO(#162): assert the CLI args hold `--client-id custom-app-id --scopes all-apis,offline_access`',
-    );
+    await t7.login(DBX_HOST, 'bottle-custom', { clientId: 'custom-app-id' });
+    // The host adds `--scopes all-apis,offline_access` (`profile_login.rs`, W-15).
+    expect(core.invoke).toHaveBeenCalledWith('profile_login', {
+      args: { workspaceUrl: DBX_HOST, profile: 'bottle-custom', clientId: 'custom-app-id' },
+    });
   });
 
   it.skip('[AT-02] [W-08] sign-in and setup never change an existing profile or its host TODO(#17) TODO(#163)', async () => {

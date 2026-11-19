@@ -34,3 +34,35 @@ describe('T7 cliInfo (#16)', () => {
     await expect(createProfileService().cliInfo()).rejects.toEqual({ error: 'not_implemented' });
   });
 });
+
+describe('T7 login (#162)', () => {
+  beforeEach(() => core.reset());
+
+  it('[W-07c] [W-15] login calls profile_login with the host, the name and the client ID', async () => {
+    core.invoke.mockImplementation(async () => ({ loginId: 'login-1' }));
+    const t7 = createProfileService();
+    await expect(
+      t7.login('https://acme-prod.cloud.databricks.com', 'bottle-x', { clientId: 'custom-app-id' }),
+    ).resolves.toEqual({ loginId: 'login-1' });
+    expect(core.invoke).toHaveBeenCalledWith('profile_login', {
+      args: {
+        workspaceUrl: 'https://acme-prod.cloud.databricks.com',
+        profile: 'bottle-x',
+        clientId: 'custom-app-id',
+      },
+    });
+    await t7.login('https://acme-prod.cloud.databricks.com', 'bottle-y');
+    expect(core.invoke).toHaveBeenLastCalledWith('profile_login', {
+      args: { workspaceUrl: 'https://acme-prod.cloud.databricks.com', profile: 'bottle-y' },
+    });
+  });
+
+  it('[W-07b] a refused profile_login rejects with its code', async () => {
+    core.invoke.mockImplementation(async () => {
+      throw { error: 'host_refused' };
+    });
+    await expect(createProfileService().login('https://example.com', 'bottle-x')).rejects.toEqual({
+      error: 'host_refused',
+    });
+  });
+});

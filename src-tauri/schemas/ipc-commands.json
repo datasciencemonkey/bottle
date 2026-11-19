@@ -1026,6 +1026,20 @@
       "title": "ProfileLoginArgs",
       "type": "object"
     },
+    "profile_login_cancel": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile"
+      ],
+      "title": "ProfileArgs",
+      "type": "object"
+    },
     "profile_select": {
       "$defs": {
         "SelectScope": {
@@ -1441,6 +1455,14 @@
       ]
     },
     {
+      "name": "profile_login_cancel",
+      "phase": "MVP-D",
+      "windows": [
+        "brain",
+        "hub"
+      ]
+    },
+    {
       "name": "profile_select",
       "phase": "MVP-D",
       "windows": [
@@ -1802,7 +1824,11 @@
     "agent_launch_failed",
     "agent_target_unavailable",
     "agent_invalid_target",
-    "agent_harness_mismatch"
+    "agent_harness_mismatch",
+    "profile_exists",
+    "login_cancelled",
+    "cli_failed",
+    "no_grant"
   ],
   "events": [
     {

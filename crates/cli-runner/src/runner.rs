@@ -2,6 +2,7 @@
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use crate::env::clean_env;
@@ -172,28 +173,63 @@ impl<F: Fs, E: Env, P: Process> CliRunner<F, E, P> {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let record = self.verified.as_ref().ok_or(CliError::NotVerified)?;
         // Cheap re-check: the verified file must still exist in a safe place.
-        if !self.fs.is_file(&record.path) {
-            return Err(CliError::Missing);
-        }
-        check_location(&self.fs, &self.env, &record.path, &record.path)?;
+        let path = self.checked_path()?;
         let args: Vec<OsString> = args
             .into_iter()
             .map(|a| a.as_ref().to_os_string())
             .collect();
-        self.spawn(&record.path, &args)
+        self.spawn(&path, &args)
+    }
+
+    /// [`CliRunner::run`] for a long child that the user can stop (#162: `databricks auth
+    /// login`). The child gets `timeout` instead of the runner timeout ([`CliError::TimedOut`]),
+    /// and it is killed as soon as `cancel` is set ([`CliError::Cancelled`], W-07h).
+    pub fn run_cancellable<I, S>(
+        &self,
+        args: I,
+        timeout: Duration,
+        cancel: &AtomicBool,
+    ) -> Result<ProcOutput, CliError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let path = self.checked_path()?;
+        let args: Vec<OsString> = args
+            .into_iter()
+            .map(|a| a.as_ref().to_os_string())
+            .collect();
+        self.process
+            .run_cancellable(&path, &args, &self.child_env(), timeout, cancel)
+            .map_err(child_error)
+    }
+
+    /// The verified CLI, if it is still a file in a safe place (W-02b).
+    fn checked_path(&self) -> Result<PathBuf, CliError> {
+        let record = self.verified.as_ref().ok_or(CliError::NotVerified)?;
+        if !self.fs.is_file(&record.path) {
+            return Err(CliError::Missing);
+        }
+        check_location(&self.fs, &self.env, &record.path, &record.path)?;
+        Ok(record.path.clone())
     }
 
     /// Every child goes through here, so every child gets the clean env.
     fn spawn(&self, program: &Path, args: &[OsString]) -> Result<ProcOutput, CliError> {
         self.process
             .run_with_timeout(program, args, &self.child_env(), self.timeout)
-            .map_err(|e| match e.kind() {
-                std::io::ErrorKind::TimedOut => CliError::TimedOut,
-                kind => CliError::Spawn {
-                    message: kind.to_string(),
-                },
-            })
+            .map_err(child_error)
+    }
+}
+
+/// The content-free error of a failed child.
+fn child_error(e: std::io::Error) -> CliError {
+    match e.kind() {
+        std::io::ErrorKind::TimedOut => CliError::TimedOut,
+        std::io::ErrorKind::Interrupted => CliError::Cancelled,
+        kind => CliError::Spawn {
+            message: kind.to_string(),
+        },
     }
 }

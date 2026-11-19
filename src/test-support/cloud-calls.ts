@@ -15,6 +15,7 @@ export const CALL_CLASS = {
   profiles_list: 'local',
   profile_status: 'cloud', // the CLI may refresh the token over the network
   profile_login: 'cloud',
+  profile_login_cancel: 'local',
   profile_select: 'local',
   capture_start: 'local',
   capture_stop: 'local',
