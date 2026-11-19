@@ -20,7 +20,7 @@ use mog_core::audio_device::system::{SystemAudioAvailability, SystemAudioDevice}
 use mog_core::audio_device::system_macos::TapHost;
 use mog_core::audio_device::{FrameSink, MicFrame};
 use mog_core::capture::{AudioDevice, AudioSource};
-use mog_core::recording_capture::chunker::PartWriter;
+use mog_core::recording_capture::chunker::{PartFormat, PartWriter};
 use mog_core::recording_capture::mixer::{Mixer, Track};
 
 #[derive(Clone, Default)]
@@ -120,4 +120,22 @@ fn adr_0103_live_tap_records_say_into_a_non_silent_flac() {
         loud > 1_600,
         "silent: System Audio Recording denied or no output"
     );
+
+    // The decided codec: the same audio as one Ogg Opus file, checked by ffmpeg if installed.
+    let mut opus = PartWriter::with_format(&dir, "live", u64::MAX, PartFormat::Opus).unwrap();
+    opus.write(&out).unwrap();
+    let opus = opus.finish().unwrap();
+    let size = std::fs::metadata(&opus[0].path).unwrap().len();
+    eprintln!("wrote {} ({size} bytes)", opus[0].path.display());
+    if let Ok(o) = std::process::Command::new("ffmpeg")
+        .args(["-v", "error", "-i"])
+        .arg(&opus[0].path)
+        .args(["-f", "null", "-"])
+        .output()
+    {
+        let ok = o.status.success() && o.stderr.is_empty();
+        eprintln!("ffmpeg decode: {}", if ok { "ok" } else { "FAILED" });
+        assert!(ok, "ffmpeg: {}", String::from_utf8_lossy(&o.stderr));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }

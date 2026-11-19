@@ -60,7 +60,7 @@ impl<W: Write + Seek> WavWriter<W> {
     }
 
     /// Fill in the sizes and flush. WAV sizes are 32-bit: a part must stay under 4 GiB
-    /// (about 37 h at 16 kHz; recordings stop at 180 min).
+    /// (about 37 h at 16 kHz; recordings stop at 120 min).
     pub fn finish(mut self) -> io::Result<W> {
         let data = u32::try_from(self.samples * 2).unwrap_or(u32::MAX);
         let end = self.out.stream_position()?;

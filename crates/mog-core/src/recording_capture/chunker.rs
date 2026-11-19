@@ -13,6 +13,7 @@ use std::io::{self, BufWriter};
 use std::path::{Path, PathBuf};
 
 use super::flac::FlacWriter;
+use super::opus::OpusWriter;
 use super::wav::WavWriter;
 use super::SAMPLE_RATE;
 
@@ -76,11 +77,11 @@ type Current = (Box<dyn PartEncoder>, PartFile);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PartFormat {
     /// FLAC 16 kHz mono 16-bit ([`FlacWriter`]).
-    #[default]
     Flac,
     /// WAV PCM 16 kHz mono 16-bit ([`WavWriter`]).
     Wav,
-    /// Red skeleton.
+    /// Ogg Opus 16 kHz mono 16 kbps ([`OpusWriter`]): the default, one part per recording.
+    #[default]
     Opus,
 }
 
@@ -90,7 +91,7 @@ impl PartFormat {
         match self {
             Self::Flac => "flac",
             Self::Wav => "wav",
-            Self::Opus => unimplemented!("red"),
+            Self::Opus => "opus",
         }
     }
 
@@ -99,7 +100,7 @@ impl PartFormat {
         match self {
             Self::Flac => "audio/flac",
             Self::Wav => "audio/wav",
-            Self::Opus => unimplemented!("red"),
+            Self::Opus => "audio/ogg",
         }
     }
 
@@ -108,7 +109,7 @@ impl PartFormat {
         Ok(match self {
             Self::Flac => Box::new(FlacWriter::new(out)?),
             Self::Wav => Box::new(WavWriter::new(out)?),
-            Self::Opus => unimplemented!("red"),
+            Self::Opus => Box::new(OpusWriter::new(out)?),
         })
     }
 }
@@ -136,6 +137,18 @@ impl PartEncoder for FlacWriter<BufWriter<File>> {
     }
     fn finish(self: Box<Self>) -> io::Result<()> {
         sync(FlacWriter::finish(*self)?)
+    }
+}
+
+impl PartEncoder for OpusWriter<BufWriter<File>> {
+    fn write(&mut self, samples: &[f32]) -> io::Result<()> {
+        OpusWriter::write(self, samples)
+    }
+    fn samples(&self) -> u64 {
+        OpusWriter::samples(self)
+    }
+    fn finish(self: Box<Self>) -> io::Result<()> {
+        sync(OpusWriter::finish(*self)?)
     }
 }
 
@@ -225,7 +238,12 @@ impl PartWriter {
 
     fn open_next(&mut self) -> io::Result<()> {
         let index = u32::try_from(self.done.len() + 1).unwrap_or(u32::MAX);
-        let file_name = part_file_name_as(&self.name, index, self.format);
+        // One part (no cap): `<name>.<ext>`; with a cap: `<name>.partNN.<ext>`.
+        let file_name = if self.max_samples == u64::MAX {
+            format!("{}.{}", self.name, self.format.extension())
+        } else {
+            part_file_name_as(&self.name, index, self.format)
+        };
         let path = self.dir.join(&file_name);
         let file = create_private_file(&path)?;
         let writer = self.format.open(file)?;

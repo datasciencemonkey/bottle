@@ -9,9 +9,9 @@
 //!   audio (CAP-01a). A PTT during a recording is an R2 overlay on that lease (R2 shares the
 //!   open mic); hands-free gives way to the recording (ARC-F9).
 //! - **Frames** reach the writer thread through the [`RecordingTap`]. The writer mixes
-//!   ([`Mixer`]) and writes the parts ([`PartWriter`], one FLAC part by default) in a
+//!   ([`Mixer`]) and writes the parts ([`PartWriter`], one Opus part by default) in a
 //!   user-only temp dir.
-//! - **Stop rules.** The user's stop, the length preset (`length_min`, 5..=180,
+//! - **Stop rules.** The user's stop, the length preset (`length_min`, 5..=120,
 //!   [`RecordingSession::tick`]), OS sleep ([`RecordingSession::session_event`]), app quit
 //!   (the host calls `stop(Quit)`), and the end of the lease (mic loss, CAP-17b zero buffers,
 //!   the MB-05 panic stop; [`RecordingSession::lease_stopped`]). Every stop finalizes the open
@@ -44,7 +44,7 @@ use super::PART_MAX_SAMPLES;
 /// The shortest length preset, in minutes.
 pub const LENGTH_MIN_MIN: u32 = 5;
 /// The longest length preset, in minutes.
-pub const LENGTH_MIN_MAX: u32 = 180;
+pub const LENGTH_MIN_MAX: u32 = 120;
 /// The default length preset, in minutes.
 pub const LENGTH_MIN_DEFAULT: u32 = 60;
 /// CAP-10a: system audio with no sound for this long is `silent_or_denied`.
@@ -125,7 +125,7 @@ pub enum RecordingCaptureError {
     Busy,
     /// No recording runs.
     NotRecording,
-    /// `length_min` is outside 5..=180.
+    /// `length_min` is outside 5..=120.
     InvalidLength,
     /// R2 refused the mic lease (`mic_busy`, a device error).
     Capture(CaptureError),
@@ -160,7 +160,7 @@ impl std::error::Error for RecordingCaptureError {}
 pub struct StartOptions {
     /// The recording name (`YYYY-MM-DD_HHMM`, `_2`.. on a clash); the cloud side picks it.
     pub name: String,
-    /// The length preset in minutes (5..=180).
+    /// The length preset in minutes (5..=120).
     pub length_min: u32,
 }
 
@@ -232,7 +232,7 @@ pub struct SessionConfig {
     pub part_max_samples: Option<u64>,
     /// The CAP-10a window.
     pub silence_ms: u64,
-    /// The part encoder (FLAC by default).
+    /// The part encoder (Opus by default).
     pub part_format: PartFormat,
     /// The mixer lag bound.
     pub mix_lag_samples: usize,
@@ -246,7 +246,7 @@ impl Default for SessionConfig {
             temp_root: std::env::temp_dir().join("bottle-recordings"),
             part_max_samples: PART_MAX_SAMPLES,
             silence_ms: SYSTEM_SILENCE_MS,
-            part_format: PartFormat::Flac,
+            part_format: PartFormat::Opus,
             mix_lag_samples: MIX_LAG_SAMPLES,
             mog_id: RECORDING_MOG_ID.to_string(),
         }
