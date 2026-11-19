@@ -218,6 +218,7 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [canExpand, setCanExpand] = useState(false);
   const [moreBelow, setMoreBelow] = useState(false);
+  const [scrolledTop, setScrolledTop] = useState(false);
   // The expanded body's target height, recomputed on every Show more from the chrome actually
   // measured at that moment (review round 2, finding 1): see `toggleExpanded`.
   const [expandedCapPx, setExpandedCapPx] = useState(ANSWER_EXPANDED_MAX_PX);
@@ -237,9 +238,12 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
     setCanExpand(el ? el.scrollHeight > ANSWER_CLAMP_PX + 1 : false);
   }, [kind, text, answer?.md]);
   // B3: a bottom fade shows only while the expanded, scrolled answer still has more below it.
+  // [LOW, round 3] A top fade shows the same way once the user has scrolled past the top, to
+  // match: the content was cut hard under the question with no warning that it had scrolled.
   const updateMoreBelow = useCallback(() => {
     const el = answerRef.current;
     setMoreBelow(el ? el.scrollHeight - el.scrollTop - el.clientHeight > 1 : false);
+    setScrolledTop(el ? el.scrollTop > 0 : false);
   }, []);
   useLayoutEffect(updateMoreBelow, [expanded, canExpand, updateMoreBelow]);
   // B5/finding 3 (review round 1): the answer's own `max-height` animates over 200 ms, so a size
@@ -427,8 +431,11 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
   const toggleExpanded = (e: ReactMouseEvent) => {
     e.stopPropagation();
     if (expanded) {
-      // Collapsing: shrink the body first (the CSS transition below), then shrink the window
-      // once it settles (the `transitionend` effect above). Unchanged from review round 1.
+      // Collapsing: reset the scroll position first (round 3): otherwise the collapsed summary
+      // keeps showing wherever the user last scrolled to, cut at the top instead of starting at
+      // the heading. Then shrink the body (the CSS transition below), then shrink the window
+      // once it settles (the `transitionend` effect above). That order is unchanged from round 1.
+      if (answerRef.current) answerRef.current.scrollTop = 0;
       setExpanded(false);
       return;
     }
@@ -467,6 +474,7 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
       data-expanded={expanded}
       data-overflowing={canExpand}
       data-more-below={moreBelow}
+      data-scrolled-top={scrolledTop}
       onScroll={updateMoreBelow}
     >
       <SafeMarkdown text={md} trust={NO_LINKS} />

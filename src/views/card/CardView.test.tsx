@@ -347,9 +347,15 @@ describe('V3 card view: expanded sections and chips', () => {
     // unique to the answer appears exactly once in the whole panel, not once per render path.
     const once = (el.textContent?.match(/ai_transcribe function/g) ?? []).length;
     expect(once).toBe(1);
-    const genieLi = el.querySelector(`[data-blurb="${GENIE_ID}"]`) as HTMLElement;
-    expect(genieLi.querySelector('strong')).toBeNull();
-    expect(genieLi.textContent).toBe('');
+    // [LOW, round 3] An earlier fix kept an empty `<li>` for the Genie blurb's hover hold, which
+    // left a bare, empty bullet in the list. The `<li>` is gone now; the hold moves to the `div`
+    // wrapping the answer the Section shows, with the same `data-blurb` id.
+    expect(el.querySelector(`li[data-blurb="${GENIE_ID}"]`)).toBeNull();
+    for (const li of [...el.querySelectorAll('ul[aria-label="Answers"] > li')]) {
+      expect(li.textContent).not.toBe('');
+    }
+    const genieHold = el.querySelector(`div[data-blurb="${GENIE_ID}"]`) as HTMLElement;
+    expect(genieHold.querySelector('strong')).not.toBeNull();
 
     // The Genie blurb ages out of the stack (UX-12); the sections it left behind are now
     // orphaned. The panel must never fall back to showing them unbounded and raw.
@@ -361,6 +367,32 @@ describe('V3 card view: expanded sections and chips', () => {
     });
     expect(el.querySelector('[data-section="answer"]')).toBeNull();
     expect(el.textContent).not.toContain('**');
+  });
+
+  // [round 3] The Genie blurb's hover hold (B2, review round 1) moved off the now-removed empty
+  // `<li>` onto the `div` wrapping the answer the Section shows. It must still fire.
+  it('[#598] hovering the Genie answer still holds its blurb, with no empty `<li>` left behind', async () => {
+    const { el } = await mountCard(<CardView mogId={ID} />);
+    await tauri.emit('card:update', {
+      mogId: ID,
+      blurbs: [
+        { id: 'dict-1', text: 'Copied to clipboard' },
+        { id: GENIE_ID, text: BUG_SAMPLE, completed: true },
+      ],
+      chips: [],
+      sections: [{ id: 'answer', md: BUG_SAMPLE }],
+    });
+    const hold = el.querySelector(`div[data-blurb="${GENIE_ID}"]`) as HTMLElement;
+    await act(async () => {
+      hold.dispatchEvent(
+        new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body }),
+      );
+    });
+    expect(inputs()).toContainEqual({
+      mogId: ID,
+      kind: 'hover',
+      payload: { blurbId: GENIE_ID, on: true, via: 'pointer' },
+    });
   });
 
   it('[UX-18] [AT-09] renders the sections in the order the brain sends', async () => {

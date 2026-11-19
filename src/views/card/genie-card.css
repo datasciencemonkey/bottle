@@ -227,6 +227,25 @@
   mask-image: linear-gradient(to bottom, #000 85%, transparent 100%);
 }
 
+/* [LOW, round 3] A top fade shows once the user has scrolled past the top, to match: without
+   it, the content was cut hard under the question with no warning that it had scrolled. The
+   combined rule (both fades) wins on specificity when both are true, since it is more selectors. */
+.genie-answer-body[data-expanded='true'][data-scrolled-top='true'] {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 15%);
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 15%);
+}
+
+.genie-answer-body[data-expanded='true'][data-scrolled-top='true'][data-more-below='true'] {
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    #000 15%,
+    #000 85%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 15%, #000 85%, transparent 100%);
+}
+
 /* "Show more"/"Show less": a quiet text control, not a second accent pill (review round 1,
    finding 2 — one primary action, [Open in Bottle], leads). The vertical gap above the footer
    lives on `.genie-foot` itself (below), not here: a per-button margin-top with none on

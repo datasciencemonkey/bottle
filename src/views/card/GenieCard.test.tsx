@@ -224,6 +224,34 @@ describe('Genie card (#573)', () => {
     expect(body.getAttribute('data-expanded')).toBe('false');
   });
 
+  // [round 3, blocking] Show more, scroll to read the end, then Show less: the collapsed summary
+  // must start at the top of the answer again, not wherever the user last scrolled to (which cut
+  // the top line's glyphs instead of showing the heading).
+  it('[#598] Show less resets the scroll position, so the collapsed summary starts at the top', async () => {
+    const el = await mount();
+    const longMd = Array.from({ length: 20 }, (_, i) => `Paragraph number ${i}.`).join('\n\n');
+    await tauri.emitTo(`card-${ID}`, 'card:update', {
+      ...answered,
+      sections: [{ id: 'answer', md: longMd }],
+    });
+    const body = el.querySelector('[data-answer] .genie-answer-body') as HTMLElement;
+    Object.defineProperty(body, 'scrollHeight', { value: ANSWER_CLAMP_PX * 3, configurable: true });
+    Object.defineProperty(body, 'clientHeight', { value: ANSWER_CLAMP_PX, configurable: true });
+    await tauri.emitTo(`card-${ID}`, 'card:update', {
+      ...answered,
+      sections: [{ id: 'answer', md: `${longMd} ` }],
+    });
+    const toggle = () => el.querySelector('button.genie-toggle') as HTMLElement | null;
+    await act(async () => void toggle()?.click());
+    expect(body.getAttribute('data-expanded')).toBe('true');
+    // The user scrolls down to read the end of the answer.
+    body.scrollTop = 151;
+    expect(body.scrollTop).toBe(151);
+    await act(async () => void toggle()?.click());
+    expect(body.getAttribute('data-expanded')).toBe('false');
+    expect(body.scrollTop).toBe(0);
+  });
+
   // Review round 1, finding 2: one primary action leads ([Open in Bottle], the accent pill);
   // "Show more"/"Show less" is a quiet text control, never a second pill.
   it('[#598] Show more is a quiet control, not a second accent pill', async () => {
