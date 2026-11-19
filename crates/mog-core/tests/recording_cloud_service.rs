@@ -63,7 +63,11 @@ fn temp_parts(tag: &str, n: usize) -> (PathBuf, Vec<LocalPart>) {
     std::fs::create_dir_all(&dir).unwrap();
     let parts = (1..=n)
         .map(|i| {
-            let path = dir.join(format!("{NAME}.part{i:02}.opus"));
+            let path = if n == 1 {
+                dir.join(format!("{NAME}.opus"))
+            } else {
+                dir.join(format!("{NAME}.part{i:02}.opus"))
+            };
             std::fs::write(&path, format!("OggS-fake-{i}")).unwrap();
             LocalPart {
                 path,
@@ -620,7 +624,9 @@ fn rec_detail_reads_transcript_and_notes() {
         "instructions":"x","parts":[{"file":"a","offset_s":0.0,"duration_s":9.0}],
         "segments":[{"start":0.0,"end":1.0,"speaker":"1","text":"Hi.","part":1}]});
     http.bytes("files.download", &serde_json::to_vec(&tj).unwrap());
-    http.json("files.download", 404, not_found());
+    for _ in 0..3 {
+        http.json("files.download", 404, not_found());
+    }
     let d = service(&http).detail(P, ROOT, NAME).unwrap();
     assert_eq!(d.job.name, NAME);
     assert_eq!(d.transcript.unwrap().segments[0].text, "Hi.");

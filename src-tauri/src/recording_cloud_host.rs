@@ -140,7 +140,7 @@ pub fn install(handle: &tauri::AppHandle<tauri::Wry>) -> CoreResult<()> {
         None => Arc::new(JsonSettingsStore::deferred()),
     };
     let temp_root = handle.path().app_data_dir().ok().map(|d| d.join(TEMP_DIR));
-    let temp_parts: Arc<dyn Fn(&str) -> Vec<LocalPart> + Send + Sync> =
+    let temp_parts: mog_core::recording_cloud::contract::TempParts =
         Arc::new(move |name: &str| temp_parts_of(temp_root.as_deref(), name));
     let app = handle.clone();
     let on_job = Arc::new(move |s: &mog_core::types::RecordingSummary| {

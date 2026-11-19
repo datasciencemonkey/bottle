@@ -42,8 +42,10 @@ fn component(
     Opened,
     Arc<Mutex<Vec<RecordingSummary>>>,
 ) {
-    let mut s = RecordingSettings::default();
-    s.storage = storage.map(|v| serde_json::from_value(v).unwrap());
+    let s = RecordingSettings {
+        storage: storage.map(|v| serde_json::from_value(v).unwrap()),
+        ..Default::default()
+    };
     let store = Arc::new(MemorySettingsStore::new(s));
     let service = Arc::new(RecordingCloudService::new(CloudDeps {
         http: http.clone(),

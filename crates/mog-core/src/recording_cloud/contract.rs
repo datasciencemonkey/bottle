@@ -23,6 +23,11 @@ use super::layout::{
 use super::settings_store::Storage;
 use super::transcript::{render_markdown, Segment, TranscriptDoc};
 
+/// The local temp audio of a recording still on the device, by name (PR B's folder).
+pub type TempParts = Arc<dyn Fn(&str) -> Vec<LocalPart> + Send + Sync>;
+/// Gets each manifest change (the host sends `recording.job`).
+pub type JobSink = Arc<dyn Fn(&RecordingSummary) + Send + Sync>;
+
 /// The MOG tag of recording model calls (SEC-06a): recordings belong to the app, not one MOG.
 pub const RECORDING_MOG_TAG: &str = "recording";
 
@@ -98,8 +103,8 @@ fn wire_segment(s: &Segment) -> RecordingSegment {
 pub struct CloudAdapter {
     service: Arc<RecordingCloudService>,
     settings: Arc<dyn RecordingSettingsStore>,
-    temp_parts: Arc<dyn Fn(&str) -> Vec<LocalPart> + Send + Sync>,
-    on_job: Arc<dyn Fn(&RecordingSummary) + Send + Sync>,
+    temp_parts: TempParts,
+    on_job: JobSink,
 }
 
 impl CloudAdapter {
@@ -108,8 +113,8 @@ impl CloudAdapter {
     pub fn new(
         service: Arc<RecordingCloudService>,
         settings: Arc<dyn RecordingSettingsStore>,
-        temp_parts: Arc<dyn Fn(&str) -> Vec<LocalPart> + Send + Sync>,
-        on_job: Arc<dyn Fn(&RecordingSummary) + Send + Sync>,
+        temp_parts: TempParts,
+        on_job: JobSink,
     ) -> Self {
         Self {
             service,
