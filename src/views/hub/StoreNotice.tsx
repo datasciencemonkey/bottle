@@ -37,10 +37,11 @@ export function StoreNotice() {
       },
       { target: getCurrentWindow().label },
     ).then((u) => {
-      if (gone) u();
-      else off = u;
+      if (gone) return u();
+      off = u;
+      // Ask only once the listener exists, so a fast reply is never lost (ADR 0105 review).
+      ask(STORE_CHECK_TARGET);
     });
-    ask(STORE_CHECK_TARGET);
     return () => {
       gone = true;
       off?.();

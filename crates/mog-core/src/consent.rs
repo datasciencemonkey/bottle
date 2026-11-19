@@ -301,7 +301,8 @@ pub fn device_id_in(dir: &Path) -> CoreResult<String> {
 /// Open the device's consent records in the app data folder `dir` (#431, ADR 0071): the one
 /// R10 store in `<dir>/memory` with the key from `vault`, and the device ID of
 /// [`device_id_in`]. Any failure (no OS key store, a lost key, a damaged device ID) opens
-/// nothing; the host then manages no records and `consent_*` answers `consent_storage_failed`.
+/// nothing. The app host does not call it: it uses [`prepare_device_records`], so setup reads no
+/// key (ADR 0105). Tests and tools that need an open store at once use this.
 pub fn open_device_records(
     dir: &Path,
     vault: Arc<dyn KeyVault>,
