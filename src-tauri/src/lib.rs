@@ -144,6 +144,8 @@ pub fn run() {
     let demo =
         cfg!(debug_assertions) && std::env::var("BOTTLE_DEMO_WINDOWS").is_ok_and(|v| v == "1");
     let builder = tauri::Builder::default();
+    // ADR 0103: the ⌥R key gate. It follows the recording knob; `hotkey_host` reads it.
+    let record_gate = hotkey_host::RecordKeyGate::default();
     #[cfg(target_os = "macos")]
     let builder = builder.activate_ignoring_other_apps(ACTIVATE_IGNORING_OTHER_APPS);
     builder
@@ -157,10 +159,12 @@ pub fn run() {
         // ADR 0103: the `recording_*` component. The settings stay in memory, knob off, until
         // PR C keeps them in a JSON file in the app config dir. TODO(#65).
         .manage(std::sync::Arc::new(
-            mog_core::recording::RecordingComponent::new(std::sync::Arc::new(
+            mog_core::recording::RecordingComponent::new(record_gate.follow(std::sync::Arc::new(
                 mog_core::recording::MemorySettingsStore::default(),
-            )),
+            ))),
         ))
+        // ADR 0103: the ⌥R key follows the knob of the settings above (`hotkey_host`).
+        .manage(record_gate)
         // G-09a, ARC-F3 (#467, #138): the ONE rate bucket of the process.
         // `rate_bucket.rs:4`: "R7 and R8 share one per process". Every R7 and R8 (and the
         // future `model_invoke` and `dbx_http` callers, #511) takes it from app state.

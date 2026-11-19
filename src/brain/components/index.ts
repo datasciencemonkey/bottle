@@ -40,6 +40,7 @@ import { createGenieDirectSend } from '../genie-direct';
 import { wireGenieCard } from '../genie-card-wiring';
 import { showHub } from '../hub-window';
 import { asPttEvent } from '../ptt';
+import { createRecordToggle } from '../record-toggle';
 import { emitTo } from '@tauri-apps/api/event';
 import { EVENTS } from '../../shared/ipc';
 import { ipcGenieHistory } from '../genie-history';
@@ -335,6 +336,15 @@ export function startBrain(): Brain {
       control: ipcCaptureControl({ consent: components.T12 }),
       // MB-08a: a refused start is never silent. The consent gate also shows the hub notice.
       onRefused: (e) => captureMood.refused(e.mogId, e.error),
+      // ADR 0103: ⌥R in the hold starts or stops the call recording, after the PTT discard. A
+      // refusal shows on the MOG of the press (none with no open MOG).
+      onRecordToggle: ({ mogId }) =>
+        void createRecordToggle({
+          call,
+          onRefused: (error) => {
+            if (mogId !== '') captureMood.refused(mogId, error);
+          },
+        })(),
       // #52 (ADR 0088): T4 runs the 8.3 chain over `stt_transcribe` (host route TODO(#514)).
       // A failure shows its fixed text on the owner's card, and no text is routed.
       transcribe: createLifecycleTranscriber(components.T4, sendOwnedCard),

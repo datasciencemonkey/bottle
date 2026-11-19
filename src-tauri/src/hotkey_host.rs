@@ -40,6 +40,7 @@ use mog_core::hotkey_core::{
 use mog_core::hotkey_windows::{forward_to_engine, HookSignal};
 use mog_core::ipc::{events, PermissionKind, WindowClass};
 use mog_core::keyboard_env::{self, CopilotKeyFlag, MemoryCopilotKeyFlag, WithCopilotFlag};
+use mog_core::recording::RecordingSettingsStore;
 use mog_core::types::{TalkKeyReason, TalkKeyState, TalkKeyStatus};
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -268,6 +269,40 @@ impl RecordKeyGate {
     pub fn shared(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.0)
     }
+
+    /// `inner`, with this gate following its knob (`enabled`): now, and after each save
+    /// (`recording_settings_write`). The tap callback then reads only the flag, never the store.
+    pub fn follow(
+        &self,
+        inner: Arc<dyn RecordingSettingsStore>,
+    ) -> Arc<dyn RecordingSettingsStore> {
+        self.set(inner.load().is_ok_and(|s| s.enabled));
+        Arc::new(KnobFollower {
+            inner,
+            gate: self.clone(),
+        })
+    }
+}
+
+/// A recording settings store that keeps a [`RecordKeyGate`] in step with the knob (ADR 0103).
+struct KnobFollower {
+    inner: Arc<dyn RecordingSettingsStore>,
+    gate: RecordKeyGate,
+}
+
+impl RecordingSettingsStore for KnobFollower {
+    fn load(&self) -> mog_core::error::CoreResult<mog_core::types::RecordingSettings> {
+        self.inner.load()
+    }
+
+    fn save(
+        &self,
+        settings: &mog_core::types::RecordingSettings,
+    ) -> mog_core::error::CoreResult<()> {
+        self.inner.save(settings)?;
+        self.gate.set(settings.enabled);
+        Ok(())
+    }
 }
 
 /// The `hotkey:ptt` payload of section 4.5: `{ mogId, phase }`. For the up of a hold with
@@ -302,6 +337,8 @@ pub struct PttForwarder<B: BrainSink, S: StatusSink> {
     held: Option<String>,
     /// The MOG of the last press that ended, for the `double_tap` that follows it.
     last: Option<String>,
+    /// The MOG of the press that a `cancel` just ended, for a `RecordToggle` (ADR 0103).
+    toggle: Option<String>,
     key_down: Option<KeyDownHook>,
 }
 
@@ -314,6 +351,7 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
             status,
             held: None,
             last: None,
+            toggle: None,
             key_down: None,
         }
     }
@@ -327,12 +365,10 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
 
     /// Forward one output.
     pub fn on_output(&mut self, output: HotkeyOutput) {
-        // RTR-17a (ADR 0098): the up of a hold with the ask key carries `ask: true`. ADR 0103:
-        // the up of a hold with the record key carries `record: true` (no dictation).
-        let (output, flag) = match output {
-            HotkeyOutput::PttAskUp => (HotkeyOutput::Ptt(PttPhase::Up), Some("ask")),
-            HotkeyOutput::PttRecordUp => (HotkeyOutput::Ptt(PttPhase::Up), Some("record")),
-            other => (other, None),
+        // RTR-17a (ADR 0098): the up of a hold with the ask key carries `ask: true`.
+        let (output, ask) = match output {
+            HotkeyOutput::PttAskUp => (HotkeyOutput::Ptt(PttPhase::Up), true),
+            other => (other, false),
         };
         match output {
             HotkeyOutput::Ptt(phase) => {
@@ -342,19 +378,23 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
                             hook();
                         }
                         // #562 (ADR 0095): an empty ID is a press with no open MOG.
+                        self.toggle = None;
                         self.held = Some(self.target.current().unwrap_or_default());
                         self.held.clone()
                     }
                     PttPhase::Up | PttPhase::Cancel => {
                         self.last = self.held.take();
+                        self.toggle = (phase == PttPhase::Cancel)
+                            .then(|| self.last.clone())
+                            .flatten();
                         self.last.clone()
                     }
                     PttPhase::DoubleTap => self.last.take(),
                 };
                 if let Some(mog) = mog {
                     let mut payload = ptt_payload(&mog, phase);
-                    if let Some(flag) = flag {
-                        payload[flag] = json!(true);
+                    if ask {
+                        payload["ask"] = json!(true);
                     }
                     // `false` means no brain listens yet; the press is dropped.
                     let _ = self.brain.deliver(events::HOTKEY_PTT, payload);
@@ -370,8 +410,17 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
             // `cancel` as a tap (CAP-14b), and R1 sends `Ptt(DoubleTap)` for two (CAP-14a).
             // TODO(#444): mark that `cancel` with `tap: true` so the brain uses R1's decision.
             HotkeyOutput::Tap => {}
+            // ADR 0103: the R press came right after the `cancel` that ended the hold, so the
+            // toggle goes to the MOG of that press, once.
+            HotkeyOutput::RecordToggle => {
+                if let Some(mog) = self.toggle.take() {
+                    let _ = self
+                        .brain
+                        .deliver(events::HOTKEY_RECORD_TOGGLE, json!({ "mogId": mog }));
+                }
+            }
             // Mapped to `Ptt(Up)` above.
-            HotkeyOutput::PttAskUp | HotkeyOutput::PttRecordUp => {}
+            HotkeyOutput::PttAskUp => {}
         }
     }
 }
@@ -918,11 +967,17 @@ impl PermissionApi for NoOsPermission {
 /// prompt). The settings store is in memory until #77 (see `hotkey_settings`). One Copilot
 /// key flag goes to the key check reads and to the hook (#332, ADR 0025); it is in memory
 /// until #341. The Windows hook seam sends the talk-key status to the brain (ADR 0039).
-/// The app manages one [`RecordKeyGate`] (ADR 0103); each service of a talk-key change
-/// shares it.
+/// The app manages one [`RecordKeyGate`] (ADR 0103, `lib.rs` links it to the recording
+/// settings); each service of a talk-key change shares it.
 pub fn install<R: Runtime>(app: &AppHandle<R>) -> std::io::Result<()> {
-    let record = RecordKeyGate::default();
-    app.manage(record.clone());
+    let record = match app.try_state::<RecordKeyGate>() {
+        Some(g) => g.inner().clone(),
+        None => {
+            let g = RecordKeyGate::default();
+            app.manage(g.clone());
+            g
+        }
+    };
     let copilot: Arc<dyn CopilotKeyFlag> = Arc::new(MemoryCopilotKeyFlag::default());
     let status: Arc<dyn StatusSink> = Arc::new(BrainStatus(app.clone()));
     let settings = HotkeySettings::load(
@@ -1281,6 +1336,40 @@ mod tests {
         assert!(gate.clone().is_on());
         gate.set(false);
         assert!(!shared.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn rec_the_gate_follows_the_saved_knob_of_the_recording_settings() {
+        use mog_core::recording::MemorySettingsStore;
+        use mog_core::types::RecordingSettings;
+        let on = RecordingSettings {
+            enabled: true,
+            ..RecordingSettings::default()
+        };
+        // The knob at launch.
+        let gate = RecordKeyGate::default();
+        let _ = gate.follow(Arc::new(MemorySettingsStore::new(on.clone())));
+        assert!(gate.is_on());
+        // Each save moves the gate.
+        let gate = RecordKeyGate::default();
+        let store = gate.follow(Arc::new(MemorySettingsStore::default()));
+        assert!(!gate.is_on());
+        store.save(&on).unwrap();
+        assert!(gate.is_on());
+        assert!(store.load().unwrap().enabled);
+        store.save(&RecordingSettings::default()).unwrap();
+        assert!(!gate.is_on());
+    }
+
+    #[test]
+    fn rec_the_app_links_the_gate_to_the_recording_component() {
+        let src = include_str!("lib.rs");
+        let flat: String = src.split_whitespace().collect();
+        assert!(
+            flat.contains("record_gate.follow(std::sync::Arc::new("),
+            "lib.rs"
+        );
+        assert!(flat.contains(".manage(record_gate)"), "lib.rs");
     }
 
     #[test]

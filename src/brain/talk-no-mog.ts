@@ -97,19 +97,12 @@ export function wireTalkNoMog(bus: BrainBus, deps: TalkNoMogDeps): () => void {
     if (!PHASES.has(phase)) return;
     // RTR-17a (ADR 0098): an ⌥G key-up keeps its `ask` flag.
     const ask = phase === 'up' && p['ask'] === true;
-    // ADR 0103: an ⌥R key-up keeps its `record` flag.
-    const record = phase === 'up' && p['record'] === true;
     if (phase === 'down') press = press.then(startLastUsed, startLastUsed);
     void press.then((mogId) => {
       if (mogId === undefined) return;
       bus.dispatch({
         event: PTT,
-        payload: {
-          mogId,
-          phase,
-          ...(ask ? { ask: true } : {}),
-          ...(record ? { record: true } : {}),
-        },
+        payload: { mogId, phase, ...(ask ? { ask: true } : {}) },
       });
     });
   });

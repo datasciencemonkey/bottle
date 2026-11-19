@@ -14,8 +14,8 @@
 //! [`HotkeyOutput::PttAskUp`]. The engine releases the grab on every path that ends the hold.
 //!
 //! Record key (ADR 0103): with the Call recording knob on, the same seam also grabs talk key + R
-//! during the hold. A press marks the hold as a record toggle, and its `up` becomes
-//! [`HotkeyOutput::PttRecordUp`]. With the knob off, R is any other key, as before.
+//! during the hold. A press ends the hold at once with `Ptt(Cancel)` (no dictation), then
+//! [`HotkeyOutput::RecordToggle`]. With the knob off, R is any other key, as before.
 //!
 //! Requirements: CAP-35b, CAP-36, CAP-37, CAP-38a, CAP-38b, CAP-39a, CAP-39b, CAP-39c, CAP-44a,
 //! CAP-44c, CAP-45, RTR-17a.
@@ -159,11 +159,10 @@ pub enum HotkeyOutput {
     /// ends the PTT as `Ptt(Up)` does; the host adds `ask: true` to the `hotkey.ptt` up. A tap,
     /// a cancel and a double-tap never carry it.
     PttAskUp,
-    /// The talk key came up after a record key press (talk key + R) in the same hold, with the
-    /// Call recording knob on (ADR 0103). It ends the PTT with no dictation and no paste; the
-    /// host turns it into the record toggle. It wins over an ask in the same hold. A tap, a
-    /// cancel and a double-tap never carry it.
-    PttRecordUp,
+    /// The record key (talk key + R) went down in a talk-key hold, with the Call recording knob
+    /// on (ADR 0103). It comes right after the `Ptt(Cancel)` that ends the hold, so no
+    /// dictation and no paste follow. The host sends it as `hotkey.record_toggle`.
+    RecordToggle,
 }
 
 impl HotkeyOutput {
@@ -593,8 +592,6 @@ pub struct HotkeyEngine {
     pending_up: Option<Duration>,
     /// The Call recording knob (ADR 0103). None or false: no record key, R is any other key.
     record_gate: Option<Arc<AtomicBool>>,
-    /// The record key was pressed in this hold (ADR 0103).
-    record: bool,
     /// The record key is grabbed now.
     record_key_on: bool,
 }
@@ -636,7 +633,6 @@ impl HotkeyEngine {
             ask_key_expired: false,
             pending_up: None,
             record_gate: None,
-            record: false,
             record_key_on: false,
         }
     }
@@ -661,14 +657,20 @@ impl HotkeyEngine {
     }
 
     /// The record key went down (ADR 0103): the grabbed hot key, or the other-key tap that
-    /// compares the key code with R. With the knob on, during a talk-key hold it marks the
-    /// hold as a record toggle and never cancels it. With the knob off, R is any other key
-    /// (CAP-44c). With no hold it does nothing.
+    /// compares the key code with R. With the knob on, it ends a talk-key hold at once with
+    /// `Ptt(Cancel)` and emits [`HotkeyOutput::RecordToggle`]; a key-up that waits for the drain
+    /// ends the same way. It wins over an ask in the same hold. With the knob off, R is any other
+    /// key (CAP-44c). With no hold it does nothing.
     pub fn on_record_key(&mut self) {
         if !self.record_knob_on() {
             self.on_other_key_down();
         } else if self.machine.held_by == Some(TalkKeyMode::TalkKey) {
-            self.record = true;
+            self.pending_up = None;
+            self.held_since = None;
+            self.last_tap_down = None;
+            let mut out = self.machine.cancel();
+            out.push(HotkeyOutput::RecordToggle);
+            self.emit(out);
         }
     }
 
@@ -701,7 +703,6 @@ impl HotkeyEngine {
         self.ask_key.is_some()
             && self.ask_key_since.is_some()
             && !self.ask
-            && !self.record
             && self.machine.held_by == Some(TalkKeyMode::TalkKey)
             && self
                 .held_since
@@ -979,7 +980,6 @@ impl HotkeyEngine {
         self.held_since = None;
         self.last_tap_down = None;
         self.ask = false;
-        self.record = false;
         self.emit(out);
     }
 
@@ -989,17 +989,11 @@ impl HotkeyEngine {
     fn emit(&mut self, out: Vec<HotkeyOutput>) {
         for o in out {
             let o = match o {
-                // ADR 0103: a record press wins over an ask in the same hold.
-                HotkeyOutput::Ptt(PttPhase::Up) if std::mem::take(&mut self.record) => {
-                    self.ask = false;
-                    HotkeyOutput::PttRecordUp
-                }
                 HotkeyOutput::Ptt(PttPhase::Up) if std::mem::take(&mut self.ask) => {
                     HotkeyOutput::PttAskUp
                 }
                 HotkeyOutput::Ptt(PttPhase::Down | PttPhase::Cancel) => {
                     self.ask = false;
-                    self.record = false;
                     o
                 }
                 o => o,
@@ -1008,7 +1002,6 @@ impl HotkeyEngine {
         }
         if !self.machine.is_held() {
             self.ask = false;
-            self.record = false;
             self.pending_up = None;
         }
         self.sync_ask_key();
