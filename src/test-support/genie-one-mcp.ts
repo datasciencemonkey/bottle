@@ -227,6 +227,42 @@ export const scenarios = {
       ],
     };
   },
+  /**
+   * #573: the shape of the live run of 2026-11-19 (profile DEFAULT, "What tables can you see?"),
+   * with fake values. Polls 1-2 have `progress_steps` null; then the steps grow, each one a
+   * "Running SQL:", "Query result:" or "Thinking:" line with raw SQL or rows; the terminal poll
+   * has `progress_steps` null again, a markdown `final_answer` (heading, bold numbers) and two
+   * query items. `narration_instruction` is null in every poll.
+   */
+  liveShape(): ScriptedResponse {
+    const steps = [
+      'Running SQL: SELECT `fake_catalog`, COUNT(*) AS tables FROM `fake`.`tables`',
+      'Query result: Query returned 2 rows: | fake_catalog | tables | | --- | --- | | a | 7 |',
+      'Thinking: Get totals.',
+      'Running SQL: SELECT COUNT(*) AS tables FROM `fake`.`tables`',
+    ];
+    return {
+      polls: [
+        { status: 'in_progress', progress_steps: null, narration_instruction: null },
+        { status: 'in_progress', progress_steps: null, narration_instruction: null },
+        { status: 'in_progress', progress_steps: steps.slice(0, 1), narration_instruction: null },
+        { status: 'in_progress', progress_steps: steps.slice(0, 2), narration_instruction: null },
+        { status: 'in_progress', progress_steps: steps.slice(0, 3), narration_instruction: null },
+        { status: 'in_progress', progress_steps: steps, narration_instruction: null },
+        {
+          status: 'completed',
+          progress_steps: null,
+          narration_instruction: null,
+          final_answer:
+            '## Tables you can access\n\nYou can see about **8,800 tables** in **150 catalogs**.\n\n- Most are in `fake_catalog`.',
+          query_items: [
+            { item_id: 'fake_item_1', sql: 'SELECT 1' },
+            { item_id: 'fake_item_2', sql: 'SELECT 2' },
+          ],
+        },
+      ],
+    };
+  },
   /** In-progress polls with progress_steps null, then completed (G-17a). */
   nullProgressSteps(): ScriptedResponse {
     return {

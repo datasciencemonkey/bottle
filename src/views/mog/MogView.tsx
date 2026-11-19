@@ -1,5 +1,6 @@
 /** V2 MOG view (thin): one mascot instance, badges and DOM overlays from `mog.view_state`. */
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { OPEN_CONVERSATIONS } from '../../shared/genie-status';
 import type { MogId } from '../../shared/interfaces';
 import {
   asMogViewState,
@@ -24,6 +25,12 @@ export interface MogViewProps {
   probe?: FrameProbe | undefined;
 }
 
+/**
+ * #573: a single click waits this long, so a double-click (open hub Conversations) never also
+ * runs the single-click action (start or stop listening).
+ */
+export const DOUBLE_CLICK_MS = 250;
+
 /** One Rive instance per MOG view, with the PNG fallback (UX-09b). */
 export const defaultMascot = (): MascotRenderer => new RiveMascot();
 
@@ -46,6 +53,16 @@ export function MogView({
   // The pointer is on the MOG: the view shows the hover badges (MOG-07, UX-38).
   // TODO(#10): hover delivery on the non-activating panel (SP-01, ADR 0009).
   const [hovered, setHovered] = useState(false);
+  // #573: the brain holds the Genie card while the pointer is on the MOG (`hover { on }`).
+  const pointerOn = useRef(false);
+  const clickTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(clickTimer.current), []);
+  const pointer = (on: boolean) => {
+    setHovered(on);
+    if (pointerOn.current === on) return;
+    pointerOn.current = on;
+    void emitView(mogId, 'hover', { on }).catch(() => undefined);
+  };
 
   useEffect(() => {
     const el = ref.current;
@@ -97,14 +114,22 @@ export function MogView({
   // TODO(#83): poke, click-to-listen and drag rules; the brain decides what input means.
   // The hover flag is on the whole view, so moving onto a badge keeps the hover badges open.
   return (
-    <div onMouseOver={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
+    <div onMouseOver={() => pointer(true)} onMouseLeave={() => pointer(false)}>
       <div
         ref={ref}
         className="mascot"
         aria-label={target?.target ? `${name}, target` : name}
-        onClick={() => {
+        onClick={(e) => {
+          // The second click of a double-click is part of the double-click.
+          if (e.detail > 1) return;
           mascot.current?.poke();
-          void emitView(mogId, 'click');
+          clearTimeout(clickTimer.current);
+          clickTimer.current = setTimeout(() => void emitView(mogId, 'click'), DOUBLE_CLICK_MS);
+        }}
+        onDoubleClick={() => {
+          // #573: a user action: the hub opens on Conversations, and the card fades.
+          clearTimeout(clickTimer.current);
+          void emitView(mogId, 'click', { target: OPEN_CONVERSATIONS }).catch(() => undefined);
         }}
         onMouseOver={() => {
           mascot.current?.setHover(true);

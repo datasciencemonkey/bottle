@@ -345,6 +345,19 @@ fn mog_01c_view_capabilities_hold_no_window_drag_permission() {
     for cap in ["mog", "card", "hub"] {
         let text = app_file(&format!("capabilities/{cap}.json"));
         assert!(!text.contains("start-dragging"), "{cap}");
-        assert!(!text.contains("core:window"), "{cap}");
+        // #573 (ADR 0102): the card fits its own size and place; nothing else of the window API.
+        let fit = [
+            "core:window:allow-set-size",
+            "core:window:allow-set-position",
+            "core:window:allow-outer-position",
+            "core:window:allow-scale-factor",
+            "core:window:allow-current-monitor",
+        ];
+        let rest = if cap == "card" {
+            fit.iter().fold(text.clone(), |t, p| t.replace(p, ""))
+        } else {
+            text
+        };
+        assert!(!rest.contains("core:window"), "{cap}");
     }
 }

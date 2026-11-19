@@ -1,0 +1,321 @@
+/* #573: the Ask Genie status pill and answer card (design spec 4 and 5, designer-mog). Every
+   colour, size, radius, shadow and curve comes from ../tokens.css. */
+
+.card-genie {
+  /* Room for the shadow and the tail inside the window, as for the pop-up. */
+  box-sizing: border-box;
+  padding: 10px 12px 14px;
+}
+
+.genie {
+  position: relative;
+  box-sizing: border-box;
+  max-width: 100%;
+  border: 1px solid var(--mog-edge);
+  background: var(--mog-surface);
+  box-shadow: var(--mog-shadow);
+  transition:
+    opacity var(--mog-fade-ms) cubic-bezier(0.4, 0, 1, 1),
+    transform var(--mog-fade-ms) cubic-bezier(0.4, 0, 1, 1),
+    border-radius 220ms var(--mog-ease-out);
+}
+
+/* The tail points at the MOG; it sits on the pop-up line, so it never moves when the card grows. */
+.genie::before {
+  content: '';
+  position: absolute;
+  left: -5px;
+  top: 15px;
+  width: 9px;
+  height: 9px;
+  border-left: 1px solid var(--mog-edge);
+  border-bottom: 1px solid var(--mog-edge);
+  background: var(--mog-surface);
+  transform: rotate(45deg);
+}
+
+.genie[data-state='fading'] {
+  opacity: 0;
+  transform: translateX(-4px);
+}
+
+/* 1. The status pill: the stage line with a light sweep, then the timer. */
+.genie-working {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: var(--mog-radius-pill);
+  animation: genie-in 180ms var(--mog-ease-out) both;
+}
+
+.genie-stage-slot {
+  display: grid;
+  min-width: 0;
+}
+
+.genie-stage {
+  grid-area: 1 / 1;
+  overflow: hidden;
+  color: var(--mog-text);
+  font-size: var(--mog-text-sm);
+  font-weight: 500;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  /* The sweep: a 40 % band of full text moves over 55 % text. The colour stays solid. */
+  -webkit-mask-image: linear-gradient(
+    90deg,
+    rgb(0 0 0 / 55%) 0%,
+    rgb(0 0 0 / 55%) 30%,
+    #000 50%,
+    rgb(0 0 0 / 55%) 70%,
+    rgb(0 0 0 / 55%) 100%
+  );
+  mask-image: linear-gradient(
+    90deg,
+    rgb(0 0 0 / 55%) 0%,
+    rgb(0 0 0 / 55%) 30%,
+    #000 50%,
+    rgb(0 0 0 / 55%) 70%,
+    rgb(0 0 0 / 55%) 100%
+  );
+  -webkit-mask-size: 250% 100%;
+  mask-size: 250% 100%;
+  animation:
+    genie-sweep 1.8s linear infinite,
+    genie-stage-in 180ms var(--mog-ease-out) both;
+}
+
+.genie-stage[data-leaving] {
+  animation: genie-stage-out 120ms cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+
+.genie-timer {
+  flex: none;
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 2. The answer card. The pill grows into it (GenieCard animates the size). */
+.genie-answer,
+.genie-failure,
+.genie-message {
+  width: 100%;
+  max-height: 280px;
+  overflow: hidden auto;
+  padding: 12px 14px;
+  border-radius: var(--mog-radius-md);
+  scrollbar-width: thin;
+  scrollbar-color: var(--mog-edge) transparent;
+}
+
+.genie-answer::-webkit-scrollbar,
+.genie-failure::-webkit-scrollbar,
+.genie-message::-webkit-scrollbar {
+  width: 6px;
+}
+
+.genie-answer::-webkit-scrollbar-thumb,
+.genie-failure::-webkit-scrollbar-thumb,
+.genie-message::-webkit-scrollbar-thumb {
+  border-radius: var(--mog-radius-pill);
+  background: var(--mog-edge);
+}
+
+.genie-body {
+  animation: genie-card-in 220ms var(--mog-ease-out) 200ms both;
+  transform-origin: left 20px;
+}
+
+.genie-question {
+  margin: 0 0 6px;
+  overflow: hidden;
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-xs);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.genie-body [data-answer] {
+  color: var(--mog-text);
+  font-size: var(--mog-text-md);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.genie-body [data-answer] p,
+.genie-body [data-answer] ul,
+.genie-body [data-answer] ol,
+.genie-body [data-answer] pre {
+  margin: 0 0 6px;
+}
+
+.genie-body [data-answer] > :last-child {
+  margin-bottom: 0;
+}
+
+.genie-body [data-answer] ul,
+.genie-body [data-answer] ol {
+  padding-left: 18px;
+}
+
+.genie-body [data-answer] code {
+  padding: 0 3px;
+  border-radius: var(--mog-radius-sm);
+  background: var(--mog-surface-raised);
+  font-size: var(--mog-text-sm);
+}
+
+.genie-body [data-answer] pre {
+  overflow-x: auto;
+  padding: 6px 8px;
+  border-radius: var(--mog-radius-sm);
+  background: var(--mog-surface-raised);
+}
+
+.genie-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.genie-keys li {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.genie-key-value {
+  color: var(--mog-text);
+  font-size: var(--mog-text-md);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.genie-key-label {
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-xs);
+}
+
+.genie-title {
+  margin: 0 0 2px;
+  color: var(--mog-text);
+  font-size: var(--mog-text-md);
+  font-weight: 500;
+}
+
+.genie-reason {
+  margin: 0;
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-sm);
+}
+
+.genie-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-xs);
+}
+
+.genie-foot .popup-action {
+  height: 26px;
+}
+
+.genie-when {
+  margin-left: auto;
+}
+
+@keyframes genie-in {
+  from {
+    opacity: 0;
+    transform: translateX(-6px) scale(0.97);
+  }
+}
+
+@keyframes genie-card-in {
+  from {
+    opacity: 0;
+    transform: translateX(-6px) scale(0.98);
+  }
+}
+
+@keyframes genie-stage-in {
+  from {
+    opacity: 0;
+    translate: 0 3px;
+  }
+}
+
+@keyframes genie-stage-out {
+  to {
+    opacity: 0;
+    translate: 0 -3px;
+  }
+}
+
+@keyframes genie-sweep {
+  from {
+    -webkit-mask-position: 100% 0;
+    mask-position: 100% 0;
+  }
+
+  to {
+    -webkit-mask-position: 0% 0;
+    mask-position: 0% 0;
+  }
+}
+
+@keyframes genie-breathe {
+  from {
+    opacity: 0.7;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes genie-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .genie {
+    transition: opacity var(--mog-fade-ms) linear;
+  }
+
+  .genie[data-state='fading'] {
+    transform: none;
+  }
+
+  .genie-working {
+    animation: genie-fade-in 200ms linear both;
+  }
+
+  /* No sweep and no move: the line breathes, so the work never looks frozen. */
+  .genie-stage {
+    -webkit-mask-image: none;
+    mask-image: none;
+    animation: genie-breathe 2s ease-in-out infinite alternate;
+  }
+
+  .genie-stage[data-leaving] {
+    display: none;
+  }
+
+  .genie-body {
+    animation: genie-fade-in 200ms linear 200ms both;
+  }
+}

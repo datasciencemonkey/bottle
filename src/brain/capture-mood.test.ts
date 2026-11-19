@@ -4,8 +4,9 @@
  */
 import type { CaptureState } from '../shared/interfaces';
 import { createSimScheduler } from '../test-support/sim-scheduler';
-import { ERROR_MS, MOOD_HOLD_MS } from './components/mood-mapper';
+import { BLURB_REVEAL_MS, ERROR_MS, MOOD_HOLD_MS, SUCCESS_MS } from './components/mood-mapper';
 import {
+  PENDING_ASK_MS,
   REFUSAL_REASONS,
   REFUSAL_TEXT,
   createCaptureMood,
@@ -159,5 +160,73 @@ describe('capture mood: a refused start is never silent (#551)', () => {
     expect(last(A)?.badges?.[0]?.text).toBe(REFUSAL_TEXT.mic_busy.text);
     cm.onState({ ...ptt(A), leaseId: 'L2' });
     expect(last(A)?.badges).toBeUndefined();
+  });
+});
+
+describe('capture mood: an Ask Genie request on the MOG (#573)', () => {
+  it('[UX-01a] working shows processing at once and keeps it until the request ends', async () => {
+    const { s, cm, last } = setup();
+    cm.ask(A, 'working');
+    expect(last(A)?.mood).toBe('processing');
+    await s.runUntil(1000 + 60_000);
+    expect(last(A)?.mood).toBe('processing');
+  });
+
+  it('[UX-01a] an answer shows answering, then success, then idle', async () => {
+    const { s, cm, last } = setup();
+    cm.ask(A, 'working');
+    s.clock.advance(5_000);
+    cm.ask(A, 'answered');
+    expect(last(A)?.mood).toBe('answering');
+    await s.runUntil(6_000 + BLURB_REVEAL_MS);
+    expect(last(A)?.mood).toBe('success');
+    await s.runUntil(6_000 + BLURB_REVEAL_MS + SUCCESS_MS);
+    expect(last(A)?.mood).toBe('idle');
+  });
+
+  it('[UX-01a] a failure shows error for 3 s with no attention cue, then idle', async () => {
+    const { s, cm, last } = setup();
+    cm.ask(A, 'working');
+    s.clock.advance(5_000);
+    cm.ask(A, 'failed');
+    expect(last(A)?.mood).toBe('error');
+    expect(last(A)?.overlays.attention).toBe(false);
+    await s.runUntil(6_000 + ERROR_MS);
+    expect(last(A)?.mood).toBe('idle');
+  });
+
+  it('[UX-07] the capture still wins: a new hold shows listening during a request', () => {
+    const { cm, last } = setup();
+    cm.ask(A, 'working');
+    cm.onState(ptt(A));
+    expect(last(A)?.mood).toBe('listening');
+  });
+
+  it('a new request replaces the end timers of the old one', async () => {
+    const { s, cm, last } = setup();
+    cm.ask(A, 'answered');
+    s.clock.advance(500);
+    cm.ask(A, 'working');
+    await s.runUntil(1500 + BLURB_REVEAL_MS + SUCCESS_MS);
+    expect(last(A)?.mood).toBe('processing');
+  });
+});
+
+describe('capture mood: the ⌥G key-up (#573)', () => {
+  it('[UX-01a] pending shows processing at once; the request start keeps it', async () => {
+    const { s, cm, last } = setup();
+    cm.ask(A, 'pending');
+    expect(last(A)?.mood).toBe('processing');
+    s.clock.advance(800);
+    cm.ask(A, 'working');
+    await s.runUntil(1000 + PENDING_ASK_MS + 1);
+    expect(last(A)?.mood).toBe('processing');
+  });
+
+  it('a key-up with no request goes back to idle after 15 s', async () => {
+    const { s, cm, last } = setup();
+    cm.ask(A, 'pending');
+    await s.runUntil(1000 + PENDING_ASK_MS);
+    expect(last(A)?.mood).toBe('idle');
   });
 });

@@ -7,6 +7,11 @@
  *   with the attention cue, 4.8) and one badge with a fixed reason text. The badge has no
  *   content: no transcript, device name or error message (SEC rules, CAP-01b).
  *
+ * - #573: `ask` gives the phase of an Ask Genie request of a MOG: `working` is `processing` until
+ *   the request ends; `answered` is `answering` for 1.2 s, then `success` for 2.5 s; `failed` is
+ *   `error` for 3 s (no attention cue: the card shows the reason and Try again). Then `idle`.
+ *   `pending` (the ⌥G key-up) is `processing` until the request starts, for 15 s or less.
+ *
  * TODO(#98): the MOG lifecycle comes from the MogManager; until then every MOG is `ready`.
  * TODO(#39): the request phases come from the OperationTracker, so `processing` follows a stop.
  */
@@ -14,7 +19,14 @@ import type { CaptureState, MogId } from '../shared/interfaces';
 import type { MogBadgeView } from '../shared/ipc';
 import type { BrainBus } from './bus';
 import type { MonotonicClock } from './clock';
-import { ERROR_MS, type MogStatus, type RequestView } from './components/mood-mapper';
+import {
+  BLURB_REVEAL_MS,
+  ERROR_MS,
+  SUCCESS_MS,
+  type MogStatus,
+  type RequestView,
+} from './components/mood-mapper';
+import type { GeniePhase } from './genie-direct';
 import { EVENTS } from '../shared/ipc';
 import type { MoodPublisher, Scheduler } from './mood-publisher';
 
@@ -78,6 +90,12 @@ export interface CaptureMood {
   onState(s: CaptureState): void;
   /** The capture lifecycle `onRefused`: R2 or the consent gate refused a start for `mogId`. */
   refused(mogId: MogId, error: unknown): void;
+  /**
+   * #573: the phase of the Ask Genie request of `mogId`. A newer phase replaces the older.
+   * `pending` is the ⌥G key-up, before the text is ready: `processing` for up to
+   * `PENDING_ASK_MS`, so an utterance that never becomes a request does not stay working.
+   */
+  ask(mogId: MogId, phase: GeniePhase | 'pending'): void;
 }
 
 interface Refusal {
@@ -88,6 +106,9 @@ interface Refusal {
   cancel: () => void;
 }
 
+/** #573: how long the ⌥G key-up shows `processing` before its request starts. */
+export const PENDING_ASK_MS = 15_000;
+
 const READY: MogStatus = { lifecycle: 'ready', since: 0 };
 const IDLE: CaptureState = { recording: false, paused: false, othersTrack: 'off' };
 
@@ -95,11 +116,14 @@ export function createCaptureMood(deps: CaptureMoodDeps): CaptureMood {
   const { publisher, clock, scheduler } = deps;
   const known = new Set<MogId>();
   const refusals = new Map<MogId, Refusal>();
+  const asks = new Map<MogId, { view: RequestView; cancel?: () => void }>();
   let capture: CaptureState = IDLE;
 
   const publish = (mogId: MogId) => {
     const r = refusals.get(mogId);
     const requests: RequestView[] = r ? [{ phase: 'failed', at: r.at, userMustAct: true }] : [];
+    const a = asks.get(mogId);
+    if (a) requests.push(a.view);
     const badges: MogBadgeView[] | undefined = r
       ? [{ kind: 'capture_refused', ...REFUSAL_TEXT[r.reason], hoverOnly: false }]
       : undefined;
@@ -110,7 +134,50 @@ export function createCaptureMood(deps: CaptureMoodDeps): CaptureMood {
     refusals.delete(mogId);
   };
 
+  /** Show `phase` from now; after `ms`, run `next` (or end the request mood). */
+  const setAsk = (
+    mogId: MogId,
+    phase: RequestView['phase'] | undefined,
+    ms?: number,
+    next?: () => void,
+  ) => {
+    asks.get(mogId)?.cancel?.();
+    asks.delete(mogId);
+    if (phase !== undefined) {
+      const at = clock.now();
+      const slot: { view: RequestView; cancel?: () => void } = { view: { phase, at } };
+      if (ms !== undefined)
+        slot.cancel = scheduler.at(at + ms, () => {
+          if (asks.get(mogId) !== slot) return;
+          if (next) next();
+          else {
+            asks.delete(mogId);
+            publish(mogId);
+          }
+        });
+      asks.set(mogId, slot);
+    }
+    publish(mogId);
+  };
+
   return {
+    ask(mogId, phase) {
+      known.add(mogId);
+      switch (phase) {
+        case 'pending':
+          return setAsk(mogId, 'working', PENDING_ASK_MS);
+        case 'working':
+          return setAsk(mogId, 'working');
+        case 'answered':
+          return setAsk(mogId, 'blurb_reveal', BLURB_REVEAL_MS, () =>
+            setAsk(mogId, 'completed', SUCCESS_MS),
+          );
+        case 'failed':
+          return setAsk(mogId, 'failed', ERROR_MS);
+        case 'cancelled':
+          return setAsk(mogId, undefined);
+      }
+    },
     onState(s) {
       capture = s;
       for (const id of [s.owner, s.directedTo]) if (id) known.add(id);

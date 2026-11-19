@@ -30,9 +30,20 @@ pub fn card_beside(
     mog: &mog_core::ipc::Geometry,
     screen: Option<&mog_core::ipc::Geometry>,
 ) -> mog_core::ipc::Geometry {
-    let (width, height) = (f64::from(CARD_WIDTH), f64::from(CARD_HEIGHT));
+    card_beside_with_height(mog, screen, f64::from(CARD_HEIGHT))
+}
+
+/// [`card_beside`] for a card of `height` (#573: the card view fits its answer). The top stays
+/// where a one-line card has it, so a taller card grows down from the pop-up line; it then moves
+/// up only as far as it must to stay inside `screen`.
+pub fn card_beside_with_height(
+    mog: &mog_core::ipc::Geometry,
+    screen: Option<&mog_core::ipc::Geometry>,
+    height: f64,
+) -> mog_core::ipc::Geometry {
+    let width = f64::from(CARD_WIDTH);
     let mut x = mog.x + mog.width - CARD_OVERLAP;
-    let mut y = mog.y + (mog.height - height) / 2.0;
+    let mut y = mog.y + (mog.height - f64::from(CARD_HEIGHT)) / 2.0;
     if let Some(s) = screen {
         if x + width > s.x + s.width {
             x = mog.x + CARD_OVERLAP - width;
@@ -46,6 +57,12 @@ pub fn card_beside(
         width,
         height,
     }
+}
+
+/// #573: a close of this window hides it and keeps it for a later show. Only the hub: the brain
+/// shows it again after a double-click on a MOG or its card.
+pub fn hides_on_close(label: &str) -> bool {
+    label == "hub"
 }
 
 /// The longest MOG or card id we accept in a window label (a uuid v4 is 36).
@@ -202,7 +219,9 @@ impl WindowKind {
                 skip_taskbar: true,
                 resizable: false,
                 shadow: false,
-                accept_first_mouse: false,
+                // #573 (ADR 0102): the card shows without becoming key, so the first click on
+                // it must act (Try again, Copy) and make it key.
+                accept_first_mouse: true,
                 width: CARD_WIDTH,
                 height: CARD_HEIGHT,
             },

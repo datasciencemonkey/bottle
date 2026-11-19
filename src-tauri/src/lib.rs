@@ -170,6 +170,14 @@ pub fn run() {
         .on_window_event(|window, event| {
             // R1: a focused card or a closed MOG window moves the talk-key target (#305).
             hotkey_host::on_window_event(window, event);
+            // #573: a close of the hub only hides it, so a double-click on a MOG can show it
+            // again (`src/brain/hub-window.ts` finds it by its label). Quit still ends the app.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if windows::hides_on_close(window.label()) {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
             // R11: a window that closes outside the host frees its ledger slot.
             if let tauri::WindowEvent::Destroyed = event {
                 if let Some(host) = window.try_state::<TauriWindowHost<tauri::Wry>>() {

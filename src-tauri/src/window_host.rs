@@ -621,11 +621,21 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
             (ledger.begin_show(mog_id, w.is_some())?, w)
         };
         // #559: the pop-up goes beside its MOG. With no MOG geometry it keeps its place.
-        let at = self.card_geometry(mog_id);
+        // #573: a card that is on screen keeps the height its view fitted (the answer card); only
+        // its place follows the MOG. A hidden card starts again at one line.
+        let kept = existing
+            .as_ref()
+            .filter(|w| w.is_visible().unwrap_or(false))
+            .and_then(logical_height);
+        let at = self.card_geometry(mog_id, kept);
         let shown = match (plan, &existing) {
             (ShowPlan::Reuse(_), Some(w)) => {
                 // A failed move is not a failed show: the card shows where it was.
-                let _ = place(w, at.as_ref());
+                let _ = if kept.is_some() {
+                    move_to(w, at.as_ref())
+                } else {
+                    place(w, at.as_ref())
+                };
                 self.native.show(w, &kind)
             }
             _ => self.make(&kind, at.as_ref()).map(|_| ()),
@@ -645,7 +655,8 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
 
     /// #559: the card place beside the MOG window of `mog_id`, in logical units, on the MOG's
     /// monitor. `None` if the MOG window or its geometry is not there.
-    fn card_geometry(&self, mog_id: &str) -> Option<Geometry> {
+    /// `height` is the height of a card that keeps its size (#573); `None` is one line.
+    fn card_geometry(&self, mog_id: &str, height: Option<f64>) -> Option<Geometry> {
         let w = self.window(&WindowKind::mog(mog_id)?)?;
         let scale = w.scale_factor().ok()?;
         let pos = w.outer_position().ok()?.to_logical::<f64>(scale);
@@ -667,7 +678,10 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
                 height: z.height,
             }
         });
-        Some(windows::card_beside(&mog, screen.as_ref()))
+        Some(match height {
+            Some(h) => windows::card_beside_with_height(&mog, screen.as_ref(), h),
+            None => windows::card_beside(&mog, screen.as_ref()),
+        })
     }
 
     /// Hide the card window of `mog_id`. The ledger marks it hidden only after the window
@@ -718,6 +732,24 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
         }
         reaped
     }
+}
+
+/// The logical height of `w`, if the platform gives it.
+fn logical_height<R: tauri::Runtime>(w: &tauri::WebviewWindow<R>) -> Option<f64> {
+    let scale = w.scale_factor().ok()?;
+    Some(w.outer_size().ok()?.to_logical::<f64>(scale).height)
+}
+
+/// Move `w` to the place of `geometry` (logical units) and keep its size. `None` changes nothing.
+fn move_to<R: tauri::Runtime>(
+    w: &tauri::WebviewWindow<R>,
+    geometry: Option<&Geometry>,
+) -> Result<(), WindowError> {
+    let Some(g) = geometry else {
+        return Ok(());
+    };
+    w.set_position(tauri::LogicalPosition::new(g.x, g.y))
+        .map_err(|_| WindowError::HostFailed)
 }
 
 /// Move and size `w` to `geometry` (logical units). `None` changes nothing.

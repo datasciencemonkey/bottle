@@ -1,7 +1,16 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "card",
-  "description": "Card view windows (V3): listen to brain-to-view events; may only call view_emit.",
+  "description": "Card view windows (V3): listen to brain-to-view events; may only call view_emit. #573 (ADR 0102): the card fits its own window to its content (size, place, monitor read).",
   "windows": ["card-*"],
-  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten", "allow-view-emit"]
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-view-emit",
+    "core:window:allow-set-size",
+    "core:window:allow-set-position",
+    "core:window:allow-outer-position",
+    "core:window:allow-scale-factor",
+    "core:window:allow-current-monitor"
+  ]
 }
