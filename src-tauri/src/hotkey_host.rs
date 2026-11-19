@@ -904,6 +904,8 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> std::io::Result<()> {
 
 /// Run [`HotkeyHost::prompt_at_launch`] on its own thread, so an OS prompt never blocks the
 /// app setup (user decision 2026-11-19, ADR 0101). Without a managed runtime it does nothing.
+/// Setup calls it on macOS only; other OSes have no such prompt.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn prompt_at_launch<R: Runtime>(app: &AppHandle<R>) {
     let app = app.clone();
     // If the thread cannot start, the hub and the pop-up still offer the click.
@@ -1426,6 +1428,10 @@ mod tests {
                 }
                 PermissionStatus::Granted
             } else {
+                // macOS reads Input Monitoring as denied after a refused prompt.
+                if p == Permission::InputMonitoring {
+                    self.denied.lock().unwrap().push(p);
+                }
                 PermissionStatus::Denied
             }
         }
@@ -1491,7 +1497,8 @@ mod tests {
         let click = UserAction::from_user_click;
         assert_eq!(h.request_ptt_permission(click()), PermissionStatus::Denied);
         // The OS shows its prompt once: the next click opens Privacy & Security instead.
-        assert_eq!(h.request_ptt_permission(click()), PermissionStatus::Unknown);
+        // The prompt was refused, so Input Monitoring reads denied: open Privacy & Security.
+        assert_eq!(h.request_ptt_permission(click()), PermissionStatus::Denied);
         assert_eq!(
             *perms.prompts.lock().unwrap(),
             vec![Permission::InputMonitoring]
@@ -1589,24 +1596,27 @@ mod tests {
     }
 
     #[test]
-    fn cap_36_after_a_launch_prompt_the_first_click_still_asks_then_the_pane_opens() {
+    fn cap_36_after_a_refused_launch_prompt_a_click_opens_the_pane_or_asks_once_more() {
         let (h, _, perms) = host(false);
         h.start();
         h.prompt_at_launch();
         let click = UserAction::from_user_click;
+        // Input Monitoring reads denied after the refused prompt: the click opens the pane.
         h.request_ptt_permission(click());
-        h.request_ptt_permission(click());
+        // Accessibility has no denied state: the first click asks once more, the next opens it.
+        h.request_insertion_permission(click());
+        h.request_insertion_permission(click());
         assert_eq!(
             *perms.prompts.lock().unwrap(),
             vec![
                 Permission::InputMonitoring,
                 Permission::Accessibility,
-                Permission::InputMonitoring
+                Permission::Accessibility
             ]
         );
         assert_eq!(
             *perms.panes.lock().unwrap(),
-            vec![Permission::InputMonitoring]
+            vec![Permission::InputMonitoring, Permission::Accessibility]
         );
         assert_eq!(h.state(), HostState::NeedsPermission);
     }

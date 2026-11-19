@@ -209,6 +209,7 @@ pub fn run() {
             }
             // ADR 0101 (user decision 2026-11-19): once per launch, ask for each OS permission
             // that was never asked (macOS Input Monitoring, then Accessibility), on a worker.
+            #[cfg(target_os = "macos")]
             hotkey_host::prompt_at_launch(handle);
             // R2: one CaptureService per process; its events go to the brain Channel (#425).
             install_capture(handle)?;

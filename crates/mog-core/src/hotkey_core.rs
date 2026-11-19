@@ -440,8 +440,9 @@ pub fn settings_pane(permission: Permission) -> &'static str {
     }
 }
 
-/// Proof that the user did something (a click in the wizard or in Settings) that asks for a
-/// permission. Only UI handlers make one, so no code path prompts on its own (CAP-36).
+/// Proof that the user did something (a click in the hub or the pop-up) that asks for a
+/// permission. Only UI handlers make one. The one prompt with no click is the host's launch
+/// prompt, once per launch (user decision 2026-11-19, ADR 0101 decision 7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UserAction(());
 

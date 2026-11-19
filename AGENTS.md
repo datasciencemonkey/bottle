@@ -22,6 +22,10 @@ Ask Genie button is only a fallback for text you dictated and then want to ask a
 
 Binding decisions for the MVP:
 
+- **OS permissions (user decision 2026-11-19, ADR 0101).** Bottle asks at launch, once, for each macOS
+  permission that was never asked (Input Monitoring, then Accessibility). A denied permission shows a hub and
+  pop-up notice with one button (Open Settings) and, for Input Monitoring, "reopen Bottle".
+
 - **Direct Genie path.** Ask Genie is one direct Genie One MCP call (JSON-RPC over HTTPS). No agent, no Claude Agent
   SDK, no Python bridge and no generic fetch layer sits in the middle. The parts on main: TokenBroker (R6),
   McpTransport (R8, tool allowlist `genie_ask`, `genie_poll_response`, `genie_get_query_result`,
