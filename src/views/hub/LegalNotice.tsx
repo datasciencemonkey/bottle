@@ -32,15 +32,17 @@ export function LegalNotice({
       className="legal-notice"
     >
       <h2 id={`${id}-title`}>{LEGAL_NOTICE.title}</h2>
-      <p>Notice version {version}</p>
+      <p className="hub-muted">Notice version {version}</p>
       {/* TODO(#394): the copy is a draft until legal or admin review approves it. */}
-      {LEGAL_NOTICE.draft && <p>Draft notice. This text is not yet approved.</p>}
-      <div id={`${id}-body`}>
+      {LEGAL_NOTICE.draft && (
+        <p className="hub-draft">Draft notice. This text is not yet approved.</p>
+      )}
+      <div id={`${id}-body`} className="legal-notice-body">
         {LEGAL_NOTICE.paragraphs.map((p) => (
           <p key={p.id}>{p.text}</p>
         ))}
       </div>
-      <label>
+      <label className="hub-check">
         <input
           type="checkbox"
           checked={checked}
@@ -48,10 +50,19 @@ export function LegalNotice({
         />
         {LEGAL_NOTICE.checkboxLabel}
       </label>
-      <button type="button" disabled={!checked} onClick={() => onContinue(version)}>
+      <button
+        type="button"
+        className="hub-primary"
+        disabled={!checked}
+        onClick={() => onContinue(version)}
+      >
         {LEGAL_NOTICE.continueLabel}
       </button>
-      {storeError && <p role="alert">{LEGAL_NOTICE.storeErrorText}</p>}
+      {storeError && (
+        <p role="alert" className="hub-error">
+          {LEGAL_NOTICE.storeErrorText}
+        </p>
+      )}
     </section>
   );
 }

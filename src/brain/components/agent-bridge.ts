@@ -64,7 +64,7 @@ type Invoke = <K extends CommandName>(name: K, args: CommandArgs[K]) => Promise<
 export interface AgentBridgeDeps {
   /** The IPC call. Default: the IPC `call`. */
   invoke?: Invoke;
-  /** The UI tool handlers. TODO(#307): the app host wires them; a missing one answers not_available. */
+  /** The UI tool handlers. TODO(#563): the app host wires them; a missing one answers not_available. */
   handlers?: Partial<AgentToolHandlers>;
 }
 

@@ -7,12 +7,13 @@
 //! `AgentHost::send`, and the test checks that its question is the one approval that the Genie
 //! proxy takes for `genie_ask` (RTR-29b): once, and no other text.
 //!
-//! TODO(#307): `ipc::handle` routes `agent_send` to `AgentHost::send`; this test does that step.
+//! #307: the fixture goes through the hardened gateway and `AgentComponent` to `AgentHost::send`.
 //! Every part is a double: no harness starts, no model runs, no profile is read.
 
 use std::sync::{mpsc, Arc, Mutex};
 
 use mog_core::agent_guard::OutboundApprovals;
+use mog_core::agent_host::ipc_route::AgentComponent;
 use mog_core::agent_host::model_proxy::{
     ModelProxy, ModelTarget, Upstream, UpstreamError, UpstreamRequest, UpstreamResponse,
 };
@@ -25,7 +26,7 @@ use mog_core::agent_host::{
 };
 use mog_core::bottle_mcp::{BottleMcpDeps, ToolCall, ToolRelay, UnavailableLocalTools};
 use mog_core::error::CoreResult;
-use mog_core::ipc;
+use mog_core::ipc_gateway::{hardened_gateway_with, IpcGateway, NoLog};
 use mog_core::token_broker::{TokenBroker, TokenLease};
 use serde_json::Value;
 
@@ -159,17 +160,18 @@ fn mog_and_question(args: &Value) -> (String, String) {
     )
 }
 
-/// The #307 route: the IPC check, then `AgentHost::send` with the turn.
+/// The #307 route: the hardened gateway, then `AgentComponent` and `AgentHost::send`.
 fn agent_send(r: &Rig, args: &Value) {
-    // The arguments pass the IPC check; only the route is missing until #307.
-    match ipc::handle("brain", "agent_send", args.clone()) {
-        Ok(_) | Err(ipc::IpcError::NotImplemented { .. }) => {}
-        Err(e) => panic!("the brain's agent_send arguments are refused: {e:?}"),
-    }
-    let (mog, _) = mog_and_question(args);
-    r.host
-        .send(&mog, &args["turn"])
-        .expect("the session takes the turn");
+    let reply = hardened_gateway_with(NoLog, AgentComponent::new(r.host.clone())).dispatch(
+        "brain",
+        "agent_send",
+        args.clone(),
+    );
+    assert_eq!(
+        reply.ok(),
+        Some(serde_json::json!({})),
+        "the session takes the turn"
+    );
 }
 
 #[test]

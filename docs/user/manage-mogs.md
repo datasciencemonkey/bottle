@@ -18,3 +18,13 @@ The hub lists every MOG that you define. You can define any number of MOGs.
 ## Keyboard
 
 Use Tab to move between the buttons and the fields. Each button names its MOG, for example "Start Sales". A screen reader reads the running count and each message.
+
+## Talk with no profile
+
+Dictation works with no Databricks CLI profile and no sign-in. Bottle then decides offline: a sentence with a question mark, or one that starts with a question word (what, when, where, which, who, why, how), is a question. All other speech is dictation.
+
+A question needs a home profile. If the MOG has none, its card shows your text and "Pick a profile to ask Genie." Nothing goes to Genie.
+
+- **Pick a profile:** the card lists your Databricks CLI profiles. Select one. Bottle saves only its name as the home profile of the MOG. Bottle never picks a profile for you.
+- **Insert as text:** if you meant dictation, Bottle inserts the text, or keeps it on the card when insertion is off.
+- **Copy:** the text stays on the card for you to copy.

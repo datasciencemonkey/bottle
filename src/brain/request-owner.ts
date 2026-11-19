@@ -8,7 +8,7 @@
  * answer goes to the owner's card only.
  * The utterance hook (`utterance-wiring.ts`, #59) calls `begin` and `release`.
  * The T3 ask gate (#142) calls `release` when a preview ends or a chip is offered.
- * TODO(#307): the agent runtime calls `stampRequest` and `deliverAnswer`.
+ * TODO(#563): the agent runtime calls `stampRequest` and `deliverAnswer`.
  */
 import type { AskRequest, MogId } from '../shared/interfaces';
 import type { CardUpdate } from '../shared/ipc';

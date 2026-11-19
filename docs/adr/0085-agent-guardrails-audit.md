@@ -33,7 +33,7 @@ The Genie One proxy is #139 (ADR 0083). The issue left these points open:
    and the agent gets `audit_unavailable` (fail closed). The brain writes no agent entry.
 2. **An entry holds the `mogId`, `agent_action:<tool>`, a new UUID `opId`, the wall-clock time
    and `args_bytes`.** No text and no hash (the #140 rule for agent actions). The time comes from
-   a `WallClock` seam. Until the app host wires the one audit log of the process (`TODO(#307)`),
+   a `WallClock` seam. Until the app host wires the one audit log of the process (`TODO(#563)`),
    `BottleMcpDeps::new` uses an in-memory `AuditLog` (the #140 store until #442).
 3. **Outbound approval binds to the turn question.** The brain sends an `AgentTurn` only after
    the user lets the preview go (B1, #142). `SharedAgentHost::send` stores the SHA-256 of the
@@ -59,7 +59,7 @@ The Genie One proxy is #139 (ADR 0083). The issue left these points open:
    tools, checks the arguments with the `bottle-mcp` bounds and passes the text to the handler
    unchanged. The bridge holds no capture, context, Page create or publish, Genie or profile
    handle. `propose_page` returns only the review ID. `handleToolCall` answers with
-   `agent_tool_result`. The handlers are a seam that the app host wires (`TODO(#307)`).
+   `agent_tool_result`. The handlers are a seam that the app host wires (`TODO(#563)`).
 
 ## Consequences
 
@@ -70,6 +70,6 @@ The Genie One proxy is #139 (ADR 0083). The issue left these points open:
   text. Whether a live model obeys the text needs the live harness run (`TODO(#111)`, SP-19).
 - RTR-29b is met in this PR by refusing every agent preamble. The click-approved ContextGate
   path for preamble sends is #152. Until #152 lands, a preamble cannot go to Genie at all.
-- Until #307 and #442, the action log is in memory only, so it is lost when the app quits.
+- Until #563 and #442, the action log is in memory only, so it is lost when the app quits.
 - An audit store failure stops the agent's tools. This is a clear failure, not a silent gap in
   the security log.

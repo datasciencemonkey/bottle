@@ -40,10 +40,13 @@
 //! TODO(#111): the AT-42 tool-contract run with each live harness, the first-tool-call latency
 //! (NFR-03d, 2.0 s or less at p95) and "usage rows show the user" (RTR-23) need SP-19 and a live
 //! workspace; the test doubles here do not measure them.
-//! TODO(#307): `mog_core::ipc::handle` routes `agent_start`/`agent_stop`/`agent_send` here.
+//! #307: `mog_core::ipc::handle` lets `agent_start`, `agent_stop` and `agent_send` through, and
+//! [`ipc_route::AgentComponent`] sends them here; [`ipc_route::BrainStatusSink`] emits
+//! `agent.status`.
 
 pub mod adapter;
 pub mod env;
+pub mod ipc_route;
 pub mod model_proxy;
 pub mod runtime;
 
@@ -118,6 +121,17 @@ impl AgentError {
     }
 }
 
+impl SessionState {
+    /// The wire name in `agent.status`: `running`, `restarted` or `failed`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SessionState::Running => "running",
+            SessionState::Restarted => "restarted",
+            SessionState::Failed => "failed",
+        }
+    }
+}
+
 impl fmt::Display for AgentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.code())
@@ -167,7 +181,7 @@ pub trait AgentStatusSink: Send + Sync {
 }
 
 /// Resolves the model target of a MOG: the AI Gateway of its home profile, or a local model.
-/// TODO(#16, #18): the real resolver reads the MOG's home profile and host from R5/R6.
+/// TODO(#16): the real resolver reads the MOG's home profile and host from R5/R6.
 pub trait ModelTargets: Send + Sync {
     /// The target of `mog_id`.
     fn target(&self, mog_id: &str) -> Result<ModelTarget, AgentError>;

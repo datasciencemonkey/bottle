@@ -117,9 +117,16 @@ describe('the utterance hook of the capture lifecycle (#59, #73)', () => {
     expect(s.routed[0]?.input.captureMode).toBe('hands_free');
   });
 
-  it('[RTR-01c] with no router input (no profile chosen yet) nothing is routed or inserted', async () => {
-    const s = setup(dictation, { routerInput: () => undefined });
+  it('[RTR-15c] [RTR-01b] an async router input (the home profile read) still routes the utterance', async () => {
+    const s = setup(dictation, { routerInput: async () => input });
     await s.handle(captured());
+    expect(s.calls).toEqual(['route', 'insert_text']);
+    expect(s.owner.ownerOf('utt-1')).toBeUndefined();
+  });
+
+  it('[RTR-01c] a router input that fails releases the owner and inserts nothing', async () => {
+    const s = setup(dictation, { routerInput: async () => Promise.reject(new Error('boom')) });
+    await expect(s.handle(captured())).resolves.toBeUndefined();
     expect(s.calls).toEqual([]);
     expect(s.owner.ownerOf('utt-1')).toBeUndefined();
   });

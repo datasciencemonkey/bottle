@@ -11,7 +11,7 @@
  * `unwiredSttModelApi`, which answers `stt_setup_unavailable`. TODO(#43): the wizard frame
  * mounts this step; until then the hub shows it on its own.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 
 export type SttModelState = 'missing' | 'partial' | 'installed';
 export type SttConsent = 'not_asked' | 'declined' | 'granted';
@@ -201,18 +201,23 @@ export function SttSetupStep({
       data-wizard-step="6"
       data-done={String(done)}
       aria-labelledby="stt-setup-title"
+      className="hub-section"
     >
       <h2 id="stt-setup-title">Local speech</h2>
       <p>
         Bottle turns your speech into text on this device. It needs a speech model of {mb(total)}.
         The model downloads only after you agree.
       </p>
-      {view && <p data-stt-status={view.model}>{statusText(view)}</p>}
+      {view && (
+        <p data-stt-status={view.model} className="hub-status">
+          {statusText(view)}
+        </p>
+      )}
       {view?.consent === 'declined' && !installing && !done && (
         <p>Local speech is off. You can download the model at any time.</p>
       )}
       {!installing && !done && view && (
-        <fieldset>
+        <fieldset className="hub-radios">
           <legend>Download source</legend>
           <input
             id="stt-source-github"
@@ -239,12 +244,15 @@ export function SttSetupStep({
         <div>
           <div
             role="progressbar"
+            className="hub-progress"
+            // CSSOM, not a style attribute, so the CSP holds (no inline style element).
+            style={{ '--hub-progress': `${percent}%` } as CSSProperties}
             aria-label="Speech model download"
             aria-valuemin={0}
             aria-valuemax={100}
             aria-valuenow={percent}
           />
-          <p>
+          <p className="hub-muted">
             {progress.file}: {mb(progress.done)} of {mb(progress.total)}
           </p>
         </div>
@@ -254,16 +262,20 @@ export function SttSetupStep({
           Cancel
         </button>
       )}
-      {error && <p role="alert">{sttErrorText(error)}</p>}
+      {error && (
+        <p role="alert" className="hub-error">
+          {sttErrorText(error)}
+        </p>
+      )}
       {done && <p>The speech model is installed and checked.</p>}
       {!installing && !done && view && (
-        <div>
+        <div className="hub-actions">
           {error && error !== 'stt_consent_required' && view.consent === 'granted' ? (
-            <button type="button" onClick={() => void run(source)}>
+            <button type="button" className="hub-primary" onClick={() => void run(source)}>
               Retry
             </button>
           ) : (
-            <button type="button" onClick={() => void start()}>
+            <button type="button" className="hub-primary" onClick={() => void start()}>
               Download ({mb(total)})
             </button>
           )}

@@ -329,6 +329,32 @@ pub enum IpcError {
     PollInflight {
         command: String,
     },
+    /// `agent_*` (#307): R16 `agent_unknown_mog`: the MOG has no agent session.
+    AgentUnknownMog {
+        command: String,
+    },
+    /// `agent_*` (#307): R16 `agent_unavailable`: the session failed after its one restart, or
+    /// the runtime is gone (ARC-F14). The brain routes with the fallback classifier (RTR-15b).
+    AgentUnavailable {
+        command: String,
+    },
+    /// `agent_start` (#307): R16 `agent_launch_failed`: the runtime process did not start.
+    AgentLaunchFailed {
+        command: String,
+    },
+    /// `agent_start` (#307): R16 `agent_target_unavailable`: the MOG has no model target yet.
+    AgentTargetUnavailable {
+        command: String,
+    },
+    /// `agent_start` (#307): R16 `agent_invalid_target`: the model target is not allowed.
+    AgentInvalidTarget {
+        command: String,
+    },
+    /// `agent_start` (#307): R16 `agent_harness_mismatch`: the MOG has a live session of the
+    /// other harness kind. Stop it first.
+    AgentHarnessMismatch {
+        command: String,
+    },
 }
 
 impl std::fmt::Display for IpcError {
@@ -418,6 +444,27 @@ impl std::fmt::Display for IpcError {
             IpcError::Timeout { command } => {
                 write!(f, "{command}: the call timed out")
             }
+            IpcError::AgentUnknownMog { command } => {
+                write!(f, "{command}: the MOG has no agent session")
+            }
+            IpcError::AgentUnavailable { command } => {
+                write!(f, "{command}: the agent session is not available")
+            }
+            IpcError::AgentLaunchFailed { command } => {
+                write!(f, "{command}: the agent runtime did not start")
+            }
+            IpcError::AgentTargetUnavailable { command } => {
+                write!(f, "{command}: the MOG has no model target")
+            }
+            IpcError::AgentInvalidTarget { command } => {
+                write!(f, "{command}: the model target is not allowed")
+            }
+            IpcError::AgentHarnessMismatch { command } => {
+                write!(
+                    f,
+                    "{command}: the MOG has a session of the other harness kind"
+                )
+            }
             IpcError::Offline { command } => {
                 write!(f, "{command}: the host did not accept a connection")
             }
@@ -483,7 +530,8 @@ pub enum Handled {
     /// `brain_subscribe`: keep this Channel as the brain's private delivery path.
     SubscribeBrain { channel: ChannelRef },
     /// The call passed the window and argument checks, and the host sends it to its feature
-    /// component (`mcp_call` to R8 `McpCallComponent`, #467).
+    /// component (`mcp_call` to R8 `McpCallComponent`, #467; `agent_start`, `agent_stop` and
+    /// `agent_send` to the R16 `SharedAgentHost`, #307).
     Component,
 }
 
@@ -693,11 +741,24 @@ args!(AgentStartArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     model: Option<String>,
 });
-args!(AgentSendArgs {
-    mog_id: MogId,
+// `agent_send` (#307). The turn holds the user's question, so `Debug` shows only its size
+// (SEC-16c). A plain comment, so the schema does not change. TODO(#505): the general fix.
+#[derive(Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct AgentSendArgs {
+    pub mog_id: MogId,
     /// `AgentTurn` of 4.7 (owned by #222 and the agent issues).
-    turn: JsonObject,
-});
+    pub turn: JsonObject,
+}
+
+impl std::fmt::Debug for AgentSendArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentSendArgs")
+            .field("mog_id", &self.mog_id)
+            .field("turn", &format_args!("<redacted {} keys>", self.turn.len()))
+            .finish()
+    }
+}
 args!(AgentToolResultArgs {
     mog_id: MogId,
     call_id: String,
@@ -1069,6 +1130,8 @@ pub fn handle(window_label: &str, command_name: &str, args: Value) -> Result<Han
         // SEC-02a: only the brain gets here (the window check above). The host sends the call
         // to R8 `McpCallComponent`, which runs the G-06a allowlist (#467).
         "mcp_call" => return Ok(Handled::Component),
+        // RTR-21a, ARC-7 (#307): the host sends these to the one R16 `SharedAgentHost`.
+        "agent_start" | "agent_stop" | "agent_send" => return Ok(Handled::Component),
         // `config_write`: `mog_config::MogConfigComponent` runs `token_guard::check_config_json`
         // (MB-02, #25, #379).
         _ => {}

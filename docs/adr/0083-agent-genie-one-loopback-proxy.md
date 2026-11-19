@@ -38,7 +38,7 @@ listeners (ADR 0013). `bottle-mcp` serves one listener. The `genie-one-mcp` list
    (RTR-29d) applies to the next call. The proxy drops every `profile` key (4.6 rule 5). It never
    reads the agent's `_meta` or `tags`. `_meta.warehouse_id` comes from the target only (G-06b,
    G-07a). The tags are the session's MOG with `op: genie` (SEC-06a). The real resolver is the
-   MOG talk target (ADR 0058), wired by the app host: `TODO(#307)`. Until then,
+   MOG talk target (ADR 0058), wired by the app host: `TODO(#563)`. Until then,
    `UnavailableGenieTargets` sends nothing.
 3. **Rules.** The proxy applies the R8 rules through R8: G-04a..G-05b (session, protocol, a fresh
    token for each HTTP request, only to the profile host, the 401 and 404 rules), G-06a (the

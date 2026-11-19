@@ -191,7 +191,18 @@ describe('utterance route (#59)', () => {
       });
     });
 
-    it('[RTR-01c] a plain utterance is not inserted and nothing is sent', async () => {
+    it('[RTR-15c] [RTR-01c] with the router model down, a plain sentence is a dictation and nothing is sent to Genie', async () => {
+      // ADR 0092: a model that cannot be reached is RTR-15c, not the RTR-13d parse fallback.
+      const r = await routeUtterance(utterance({ insertionOn: false }), ipcUtteranceDeps());
+      expect(r).toEqual({ route: 'copy', text: SENTENCE });
+      const cmds = core.invoke.mock.calls.map(([cmd]) => cmd);
+      for (const c of ['mcp_call', 'agent_start', 'agent_send']) expect(cmds).not.toContain(c);
+    });
+
+    it('[RTR-13d] [RTR-01c] router output that does not parse is not inserted and nothing is sent', async () => {
+      core.invoke.mockImplementation(async (cmd: string) =>
+        cmd === 'model_invoke' ? chatCompletion('not json') : {},
+      );
       const r = await routeUtterance(utterance(), ipcUtteranceDeps());
       expect(r.route).toBe('other');
       expect(core.invoke.mock.calls.map(([cmd]) => cmd)).not.toContain('insert_text');

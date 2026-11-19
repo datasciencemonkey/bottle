@@ -39,7 +39,7 @@
 //! 0083 lists them. TODO(#518): brain and agent asks in one cap, the late re-polls (G-13a) and
 //! the no-auto-re-ask rules (G-15b, G-16a) for the agent.
 //!
-//! TODO(#307): the app host gives the real [`GenieTargets`] (the MOG's talk target, ADR 0058).
+//! TODO(#563): the app host gives the real [`GenieTargets`] (the MOG's talk target, ADR 0058).
 //! TODO(#111): SP-19 fixes the MCP wire details of the harness (streamable HTTP, SSE).
 //!
 //! The dispatch (local `initialize` and `ping`, tool failures as tool results, only Bottle's own
@@ -102,7 +102,7 @@ pub trait GenieTargets: Send + Sync {
     fn target(&self, mog_id: &str) -> CoreResult<GenieTarget>;
 }
 
-/// No resolver is wired: every MOG has no target, so nothing is sent. TODO(#307).
+/// No resolver is wired: every MOG has no target, so nothing is sent. TODO(#563).
 #[derive(Debug, Default, Clone, Copy)]
 pub struct UnavailableGenieTargets;
 
