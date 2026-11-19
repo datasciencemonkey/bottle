@@ -16,6 +16,7 @@ import { About } from './About';
 import { Button } from '../ui/button';
 import { CliInstallStep } from './CliInstallStep';
 import { CliSettings } from './CliSettings';
+import { ConnectAnotherWorkspace } from './ConnectAnotherWorkspace';
 import { ConnectWorkspace } from './ConnectWorkspace';
 import { Conversations } from './Conversations';
 import { DataPanel } from './DataDisclosures';
@@ -61,7 +62,10 @@ function SetupRegion() {
       {/* W-17c (#161): the CLI install step comes before the workspace setup. */}
       <CliInstallStep />
       <DictationNotices />
-      {/* #162 (W-07f): the brain opens it at first run when no usable profile exists. */}
+      {/* #162 (W-07f): the brain opens it at first run when no usable profile exists, or from
+          a later `connect_open` (Settings, "Connect another workspace…"). Renders nothing with
+          no model, or the brain's explicit `closed` step, so a working profile shows no panel
+          here (review of #602). */}
       <ConnectWorkspace />
     </div>
   );
@@ -113,6 +117,10 @@ function SettingsArea({
       <SttSetupStep />
       <WipeSettings />
       <CliSettings />
+      {/* #162 follow-up (W-07e, review of #602): the one deliberate way to open "Connect a
+          workspace" again once a usable profile exists, now that the setup region's step stays
+          hidden until the brain opens it. */}
+      <ConnectAnotherWorkspace />
       <DataPanel />
       <About />
     </section>
