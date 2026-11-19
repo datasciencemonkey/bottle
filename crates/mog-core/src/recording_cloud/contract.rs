@@ -31,6 +31,12 @@ pub trait LocalAudio: Send + Sync {
     /// Every recording with audio on the device: its name and its start (epoch ms, from the
     /// file time). The launch scan of ADR 0103 decision 7.
     fn names(&self) -> Vec<(String, u64)>;
+    /// The names capture still owns (a recording in progress writes its open part under its
+    /// final name, in the same folder the scan reads), or that finished but are not yet handed
+    /// off to the pipeline. `list` and `retry` both leave these out (review of #592, BLOCKING
+    /// B3): the scan's "upload failed" is for audio left over from an earlier run, never audio
+    /// from the one running now.
+    fn active(&self) -> HashSet<String>;
 }
 
 /// No local audio (tests, and builds with no app data dir).
@@ -43,6 +49,9 @@ impl LocalAudio for NoLocalAudio {
     }
     fn names(&self) -> Vec<(String, u64)> {
         Vec::new()
+    }
+    fn active(&self) -> HashSet<String> {
+        HashSet::new()
     }
 }
 
@@ -203,14 +212,6 @@ impl CloudAdapter {
             error_kind: Some(RecordingErrorKind::UploadFailed),
             error_stage: Some(RecordingStatus::Uploading),
         })
-    }
-
-    /// Tell the brain about a finished recording that could not start its pipeline (no storage
-    /// or no profile): it shows as upload failed, with Retry.
-    pub fn report_local_only(&self, name: &str, started_at_ms: u64) {
-        if let Some(s) = Self::local_only_summary(name, started_at_ms) {
-            (self.on_job)(&s);
-        }
     }
 
     /// May Retry start a run on `m`? Only a failed run, or one whose job.json went stale.
@@ -484,9 +485,12 @@ impl RecordingCloud for CloudAdapter {
             .map_err(err)?;
         let mut out: Vec<RecordingSummary> = rows.iter().filter_map(summary_of).collect();
         // ADR 0103 decision 7: audio left on the device with no job.json in the volume shows
-        // as "Upload failed - Retry".
+        // as "Upload failed - Retry". Never the recording capture owns right now, or one that
+        // finished but has not yet reached the pipeline (review of #592, BLOCKING B3).
+        let active = self.local.active();
         for (name, started) in self.local.names() {
-            if out.iter().any(|r| r.name == name) || self.in_flight(&name) {
+            if out.iter().any(|r| r.name == name) || self.in_flight(&name) || active.contains(&name)
+            {
                 continue;
             }
             if let Some(s) = Self::local_only_summary(&name, started) {
@@ -540,7 +544,11 @@ impl RecordingCloud for CloudAdapter {
         let p = profile.as_str();
         let root = Self::root(storage);
         let name = id.as_str();
-        let current = self.service.job(p, root, name).map_err(wire_kind)?;
+        if self.local.active().contains(name) {
+            // Capture still owns this name, or it is waiting for the hand-off to the pipeline:
+            // Retry must never touch it (review of #592, BLOCKING B3).
+            return Err(RecordingErrorKind::RecordingBusy);
+        }
         let local_started = || {
             self.local
                 .names()
@@ -555,12 +563,17 @@ impl RecordingCloud for CloudAdapter {
                     .ok_or(RecordingErrorKind::Internal),
             }
         };
+        // The guard comes before the job.json read (review of #592, non-blocking item 5): a
+        // read before the guard leaves a gap where a concurrent run can reach `done` before
+        // this call takes the slot, and this call would restart it.
+        let Some(_guard) = self.begin(name) else {
+            let current = self.service.job(p, root, name).map_err(wire_kind)?;
+            return now(&current);
+        };
+        let current = self.service.job(p, root, name).map_err(wire_kind)?;
         if current.as_ref().is_some_and(|m| !self.retry_allowed(m)) {
             return now(&current);
         }
-        let Some(_guard) = self.begin(name) else {
-            return now(&current);
-        };
         let settings = self
             .settings
             .load()

@@ -19,7 +19,7 @@ use mog_core::ipc::events;
 use mog_core::recording::{
     FinishedPart, PipelineRequest, RecordingComponent, RecordingSettingsStore,
 };
-use mog_core::recording_capture::session::{FinishedRecording, PartsHandoff};
+use mog_core::recording_capture::session::{FinishedRecording, PartsHandoff, Snapshot};
 use mog_core::recording_cloud::cloud::{
     is_audio_file_of, CloudDeps, LocalPart, ProfileWorkspace, RecordingCloudService,
 };
@@ -34,7 +34,7 @@ use crate::ipc::BrainChannel;
 use crate::mcp_host::McpHost;
 use crate::profiles_host::ProfilesHost;
 use crate::rate_bucket_host::SharedRateBucket;
-use crate::recording_host::HandoffSlot;
+use crate::recording_host::{HandoffSlot, RecordingHost};
 
 const ID: &str = "recording_cloud_host";
 
@@ -176,6 +176,9 @@ pub fn temp_names_of(root: Option<&std::path::Path>) -> Vec<(String, u64)> {
 /// The [`LocalAudio`] seam over the temp recordings folder (`<app data>/recordings/<id>/`).
 struct TempAudio {
     root: Option<std::path::PathBuf>,
+    /// The names capture still owns, or that finished but are not yet handed off (review of
+    /// #592, BLOCKING B3): the scan and Retry both skip these.
+    busy: Arc<dyn Fn() -> HashSet<String> + Send + Sync>,
 }
 
 impl LocalAudio for TempAudio {
@@ -185,6 +188,45 @@ impl LocalAudio for TempAudio {
     fn names(&self) -> Vec<(String, u64)> {
         temp_names_of(self.root.as_deref())
     }
+    fn active(&self) -> HashSet<String> {
+        (self.busy)()
+    }
+}
+
+/// The recording names a hand-off has taken from PR B but has not yet reached the pipeline's
+/// own in-flight guard (the gap between [`PipelineHandoff::finished`] and
+/// `CloudAdapter::run_pipeline`'s `begin`). Review of #592, BLOCKING B3.
+#[derive(Default)]
+pub struct ActiveNames {
+    names: Mutex<HashSet<String>>,
+}
+
+impl ActiveNames {
+    fn mark(&self, name: &str) {
+        self.names
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(name.to_owned());
+    }
+    fn release(&self, name: &str) {
+        self.names
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(name);
+    }
+    fn get(&self) -> HashSet<String> {
+        self.names
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+    /// Is `name` marked active now? For tests.
+    pub fn contains(&self, name: &str) -> bool {
+        self.names
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains(name)
+    }
 }
 
 /// The cloud end of PR B's hand-off: each finished recording runs the pipeline exactly once,
@@ -193,6 +235,10 @@ pub struct PipelineHandoff {
     run: Arc<dyn Fn(PipelineRequest, u64) + Send + Sync>,
     settings: Arc<dyn RecordingSettingsStore>,
     seen: Mutex<HashSet<String>>,
+    /// Marked for a recording's name from the moment a run is dispatched until `run` returns,
+    /// so the cloud-side scan and Retry never touch it in between (review of #592, BLOCKING
+    /// B3).
+    active: Arc<ActiveNames>,
 }
 
 impl PipelineHandoff {
@@ -200,11 +246,13 @@ impl PipelineHandoff {
     pub fn new(
         run: Arc<dyn Fn(PipelineRequest, u64) + Send + Sync>,
         settings: Arc<dyn RecordingSettingsStore>,
+        active: Arc<ActiveNames>,
     ) -> Self {
         Self {
             run,
             settings,
             seen: Mutex::new(HashSet::new()),
+            active,
         }
     }
 
@@ -267,13 +315,17 @@ impl PartsHandoff for PipelineHandoff {
         let Some(req) = self.request(&rec) else {
             return;
         };
+        self.active.mark(&rec.name);
         let run = self.run.clone();
         let dir = rec.dir.clone();
         let started = rec.started_at_ms.max(0) as u64;
+        let active = self.active.clone();
+        let name = rec.name.clone();
         let _ = std::thread::Builder::new()
             .name("bottle-rec-pipeline".into())
             .spawn(move || {
                 run(req, started);
+                active.release(&name);
                 remove_dir_if_empty(&dir);
             });
     }
@@ -321,7 +373,32 @@ pub fn install(handle: &tauri::AppHandle<tauri::Wry>) -> CoreResult<()> {
         None => Arc::new(JsonSettingsStore::deferred()),
     };
     let temp_root = handle.path().app_data_dir().ok().map(|d| d.join(TEMP_DIR));
-    let local: Arc<dyn LocalAudio> = Arc::new(TempAudio { root: temp_root });
+    let active_names = Arc::new(ActiveNames::default());
+    let busy: Arc<dyn Fn() -> HashSet<String> + Send + Sync> = {
+        let active_names = active_names.clone();
+        let app = handle.clone();
+        Arc::new(move || {
+            let mut names = active_names.get();
+            // Capture owns the name of the recording running right now (review of #592,
+            // BLOCKING B3): the chunker writes its open part under the final name, in the
+            // same folder the scan reads.
+            if let Some(host) = app.try_state::<Arc<RecordingHost>>() {
+                if let Snapshot::Recording(info) = host.session().snapshot() {
+                    names.insert(info.name);
+                }
+            }
+            // A recording that finished before the cloud side connected still waits in the
+            // slot; it is not active capture, but it is not abandoned either.
+            if let Some(slot) = app.try_state::<Arc<HandoffSlot>>() {
+                names.extend(slot.pending().into_iter().map(|rec| rec.name));
+            }
+            names
+        })
+    };
+    let local: Arc<dyn LocalAudio> = Arc::new(TempAudio {
+        root: temp_root,
+        busy,
+    });
     let app = handle.clone();
     let on_job = Arc::new(move |s: &mog_core::types::RecordingSummary| {
         if let (Some(ch), Ok(v)) = (app.try_state::<BrainChannel>(), serde_json::to_value(s)) {
@@ -346,6 +423,7 @@ pub fn install(handle: &tauri::AppHandle<tauri::Wry>) -> CoreResult<()> {
                 let _ = a.run_pipeline(&req, started);
             }),
             store.clone(),
+            active_names.clone(),
         )));
     }
     let opener: Arc<dyn UrlOpener> = Arc::new(SystemOpener);

@@ -1,6 +1,7 @@
 //! PR C on the contract seam (ADR 0103): `CloudAdapter` implements `RecordingCloud`, and
 //! `RecordingComponent` routes the cloud-bound commands to it with the brain's home profile.
 
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -21,8 +22,19 @@ use mog_core::recording_cloud::job::{iso_utc, parse_iso_utc_ms, JobManifest, Par
 use mog_core::types::{RecordingErrorKind, RecordingSettings, RecordingSummary};
 use serde_json::{json, Value};
 
-/// A fixed set of names with temp audio on the device (ADR 0103 decision 7).
-struct FakeLocal(Vec<(String, u64)>);
+/// A fixed set of names with temp audio on the device (ADR 0103 decision 7), and a fixed set
+/// of names that are active (capture still owns them, or they are not yet handed off; review
+/// of #592, BLOCKING B3).
+struct FakeLocal(Vec<(String, u64)>, HashSet<String>);
+
+impl FakeLocal {
+    fn new(names: Vec<(String, u64)>) -> Self {
+        Self(names, HashSet::new())
+    }
+    fn with_active(names: Vec<(String, u64)>, active: &[&str]) -> Self {
+        Self(names, active.iter().map(|s| (*s).to_owned()).collect())
+    }
+}
 
 impl LocalAudio for FakeLocal {
     fn parts(&self, _name: &str) -> Vec<LocalPart> {
@@ -30,6 +42,9 @@ impl LocalAudio for FakeLocal {
     }
     fn names(&self) -> Vec<(String, u64)> {
         self.0.clone()
+    }
+    fn active(&self) -> HashSet<String> {
+        self.1.clone()
     }
 }
 
@@ -322,7 +337,7 @@ fn rec_component_list_shows_local_only_audio_as_upload_failed() {
         json!({"error_code":"NOT_FOUND"}),
     );
     let local: Arc<dyn LocalAudio> =
-        Arc::new(FakeLocal(vec![(NAME.to_owned(), 1_795_097_100_000)]));
+        Arc::new(FakeLocal::new(vec![(NAME.to_owned(), 1_795_097_100_000)]));
     let (c, _, _) = component_with(&http, vol(), local, Arc::new(|| 1_795_100_700_000i64));
     let v = c
         .call("recording_list", json!({"profile":"fake-home"}))
@@ -350,7 +365,7 @@ fn rec_component_list_does_not_duplicate_audio_already_in_a_job() {
         &serde_json::to_vec(&manifest("failed")).unwrap(),
     );
     let local: Arc<dyn LocalAudio> =
-        Arc::new(FakeLocal(vec![(NAME.to_owned(), 1_795_097_100_000)]));
+        Arc::new(FakeLocal::new(vec![(NAME.to_owned(), 1_795_097_100_000)]));
     let (c, _, _) = component_with(&http, vol(), local, Arc::new(|| 1_795_100_700_000i64));
     let v = c
         .call("recording_list", json!({"profile":"fake-home"}))
@@ -361,6 +376,47 @@ fn rec_component_list_does_not_duplicate_audio_already_in_a_job() {
         v[0]["errorKind"], "notes_endpoint_missing",
         "the real job.json wins"
     );
+}
+
+#[test]
+fn rec_component_list_leaves_out_the_recording_running_now() {
+    // Review of #592 (BLOCKING B3): the chunker writes the open part under its final name, in
+    // the same folder the scan reads, so a call in progress must never show as "upload
+    // failed" just because it has no job.json yet.
+    let http = Arc::new(ScriptedHttp::new());
+    http.json(
+        "files.list_directory",
+        404,
+        json!({"error_code":"NOT_FOUND"}),
+    );
+    let local: Arc<dyn LocalAudio> = Arc::new(FakeLocal::with_active(
+        vec![(NAME.to_owned(), 1_795_097_100_000)],
+        &[NAME],
+    ));
+    let (c, _, _) = component_with(&http, vol(), local, Arc::new(|| 1_795_100_700_000i64));
+    let v = c
+        .call("recording_list", json!({"profile":"fake-home"}))
+        .unwrap();
+    assert_eq!(v.as_array().unwrap().len(), 0, "{v}");
+}
+
+#[test]
+fn rec_component_retry_refuses_the_recording_running_now() {
+    // Same review item: Retry on that name must never upload or delete the part the encoder
+    // still writes.
+    let http = Arc::new(ScriptedHttp::new());
+    let local: Arc<dyn LocalAudio> = Arc::new(FakeLocal::with_active(Vec::new(), &[NAME]));
+    let (c, _, jobs) = component_with(&http, vol(), local, Arc::new(|| 1_795_100_700_000i64));
+    let e = c
+        .call("recording_retry", json!({"profile":"fake-home","id":NAME}))
+        .unwrap_err();
+    assert_eq!(e.code(), "recording_busy");
+    assert_eq!(
+        http.seen().len(),
+        0,
+        "no call reads or touches the open part"
+    );
+    assert!(jobs.lock().unwrap().is_empty());
 }
 
 #[test]

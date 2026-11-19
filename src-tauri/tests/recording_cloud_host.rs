@@ -6,7 +6,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use bottle_lib::recording_cloud_host::{temp_names_of, temp_parts_of, PipelineHandoff};
+use bottle_lib::recording_cloud_host::{
+    temp_names_of, temp_parts_of, ActiveNames, PipelineHandoff,
+};
 use bottle_lib::recording_host::knob_hook;
 use mog_core::recording::{MemorySettingsStore, PipelineRequest};
 use mog_core::recording_capture::chunker::PartFile;
@@ -64,13 +66,29 @@ fn store(with_storage: bool) -> Arc<MemorySettingsStore> {
 type Runs = Arc<Mutex<Vec<(PipelineRequest, u64)>>>;
 
 fn handoff(with_storage: bool) -> (PipelineHandoff, Runs) {
+    let (h, runs, _) = handoff_with_run(with_storage, |_, _| {});
+    (h, runs)
+}
+
+/// Like [`handoff`], with `on_run` called from inside the dispatched run (the review of #592,
+/// BLOCKING B3: the window the active-names set must cover), and the active-names set itself
+/// for the test to inspect.
+fn handoff_with_run(
+    with_storage: bool,
+    on_run: impl Fn(&PipelineRequest, u64) + Send + Sync + 'static,
+) -> (PipelineHandoff, Runs, Arc<ActiveNames>) {
     let runs: Runs = Arc::new(Mutex::new(Vec::new()));
+    let active = Arc::new(ActiveNames::default());
     let r = runs.clone();
     let h = PipelineHandoff::new(
-        Arc::new(move |req, started| r.lock().unwrap().push((req, started))),
+        Arc::new(move |req, started| {
+            on_run(&req, started);
+            r.lock().unwrap().push((req, started));
+        }),
         store(with_storage),
+        active.clone(),
     );
-    (h, runs)
+    (h, runs, active)
 }
 
 fn wait_for(runs: &Runs, n: usize) {
@@ -141,6 +159,48 @@ fn rec_handoff_deletes_an_empty_temp_dir() {
     h.finished(rec(&dir, "rec-4", Some("fake-home"), 0));
     assert!(!dir.exists(), "an empty temp dir is deleted");
     assert!(runs.lock().unwrap().is_empty());
+}
+
+#[test]
+fn rec_handoff_marks_the_name_active_for_the_run_and_releases_it_after() {
+    // Review of #592 (BLOCKING B3): the cloud scan and Retry must leave this name out for the
+    // whole dispatched run, not only once `CloudAdapter::run_pipeline`'s own guard takes it.
+    let dir = temp("active");
+    let seen_active_mid_run = Arc::new(Mutex::new(false));
+    let s = seen_active_mid_run.clone();
+    let (h, runs, active) = handoff_with_run(true, move |_, _| {
+        *s.lock().unwrap() = true;
+        std::thread::sleep(Duration::from_millis(30));
+    });
+    assert!(
+        !active.contains("2026-11-19_0905"),
+        "not active before it starts"
+    );
+    h.finished(rec(&dir, "rec-5", Some("fake-home"), 1));
+    // The run starts on its own thread; give it a moment to reach `on_run` and mark busy.
+    for _ in 0..100 {
+        if active.contains("2026-11-19_0905") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        active.contains("2026-11-19_0905"),
+        "active for the whole dispatched run"
+    );
+    wait_for(&runs, 1);
+    for _ in 0..100 {
+        if !active.contains("2026-11-19_0905") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        !active.contains("2026-11-19_0905"),
+        "released once the run returns"
+    );
+    assert!(*seen_active_mid_run.lock().unwrap());
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
