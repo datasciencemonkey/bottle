@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { HUB_NOTICE_EVENT, HUB_SCOPE, LEGAL_NOTICE } from '../../shared/hub-notice';
-import { render, tauri, viewEmits } from '../test-tauri';
+import { inputEmits, render, tauri, viewEmits } from '../test-tauri';
 import { Hub } from './Hub';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('../test-tauri')).coreModule);
@@ -27,7 +27,7 @@ const cont = (el: HTMLElement) =>
 
 /** The notice emits of the hub: drop the MOG list request `mogs.ready` (#26). */
 const noticeEmits = () =>
-  viewEmits().filter(
+  inputEmits().filter(
     (e) => (e as { payload?: { action?: unknown } }).payload?.action !== 'mogs.ready',
   );
 

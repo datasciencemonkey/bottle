@@ -5,7 +5,14 @@
 import type { MogId } from '../../shared/interfaces';
 import { call } from '../../shared/ipc';
 import { createAskGate, wireAskGate } from '../ask-gate';
-import { BrainBus, sendMicLevel, sendMogViewState, subscribeBrain } from '../bus';
+import {
+  BrainBus,
+  onViewInput,
+  sendHubNotice,
+  sendMicLevel,
+  sendMogViewState,
+  subscribeBrain,
+} from '../bus';
 import { createCaptureMood, wireCaptureMood } from '../capture-mood';
 import { wireForget } from '../forget-wiring';
 import { wireWipe } from '../wipe-wiring';
@@ -17,6 +24,7 @@ import {
 } from '../capture-lifecycle';
 import { cardStackDeps, createCardStack, timeoutScheduler, type CardStack } from '../card-stack';
 import { createSystemClock } from '../clock';
+import { createDictationSink } from '../dictation-copy';
 import { LevelRouter, subscribeLevels, wireLevelStream } from '../level-stream';
 import { createMoodPublisher, latencyTraceClock } from '../mood-publisher';
 import { wireNotice } from '../notice-wiring';
@@ -122,8 +130,8 @@ export function startBrain(): Brain {
       newId: () => crypto.randomUUID(),
       sendCard: sendOwnedCard,
     });
-    // #498: the card stack of each MOG, made on first use. TODO(#374): one owner of the stacks
-    // routes the card's `view_emit` input to them and drops a stack when its MOG closes.
+    // #498: the card stack of each MOG, made on first use. TODO(#374): drop a stack when its MOG
+    // closes.
     const cardClock = createSystemClock();
     const stacks = new Map<MogId, CardStack>();
     const stackFor = (mogId: MogId): CardStack => {
@@ -171,6 +179,21 @@ export function startBrain(): Brain {
       scheduler: { at: timeoutScheduler(moodClock) },
     });
     wireCaptureMood(bus, captureMood);
+    // #498 (ADR 0091): the Copy card of a dictation. The card is shown first, then the text goes
+    // on its stack. If the card cannot show, the text goes to the hub only. No main agent and no
+    // Genie take part (RTR-01c).
+    const dictation = createDictationSink({
+      stackFor,
+      showCard: (mogId) => call('window_card_show', { mogId }),
+      sendHubNotice,
+    });
+    // #507: a view sends `ready` after it listens. The replay is keyed on `from`, which the host
+    // sets, and it sends state only: it takes no user action.
+    onViewInput(bus, (input) => {
+      if (input.kind !== 'ready') return;
+      if (input.from === 'hub') void dictation.hubReady();
+      else if (input.from === `card-${input.mogId}`) dictation.cardReady(input.mogId);
+    });
     // #14: the PTT and hands-free lifecycle. Every start goes through the T12 consent gate.
     const lifecycle = createCaptureLifecycle({
       control: ipcCaptureControl({ consent: components.T12 }),
@@ -194,6 +217,8 @@ export function startBrain(): Brain {
         route: ipcUtteranceDeps(),
         // #142: T3 runs the 1.5 s preview or shows the chip, and it releases the owner.
         onAsk: askGate.onAsk,
+        // #498, MOG-05b, MOG-06d: a Copy or a failed insertion reaches the Copy card.
+        onDone: (r, owned) => void dictation.onDone(r, owned).catch(() => undefined),
       }),
     });
     wireCaptureLifecycle(bus, lifecycle, createSystemClock().now);

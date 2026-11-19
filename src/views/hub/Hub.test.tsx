@@ -14,6 +14,31 @@ const overlays = { attention: false, recording: false, offline: false, localOnly
 describe('V1 hub view', () => {
   beforeEach(() => tauri.reset());
 
+  it('[MOG-05b] [MOG-06d] shows an unshown dictation from the hub Channel with Copy, and sends ready after it subscribes', async () => {
+    const { el } = await render(<Hub />);
+    const sub = tauri.invoke.mock.calls.find(([cmd]) => cmd === 'view_notice_subscribe');
+    const channel = (sub?.[1] as { args: { onNotice: { onmessage?: (m: unknown) => void } } }).args
+      .onNotice;
+    // The hub sends `ready` (no payload) only after the subscribe call, so the brain resends.
+    const order = tauri.invoke.mock.calls.map(([cmd, a]) =>
+      cmd === 'view_emit' ? `view_emit:${(a as { args: { kind: string } }).args.kind}` : cmd,
+    );
+    expect(order.indexOf('view_emit:ready')).toBeGreaterThan(
+      order.indexOf('view_notice_subscribe'),
+    );
+    expect(viewEmits()).toContainEqual({ mogId: 'hub', kind: 'ready' });
+    await act(async () =>
+      channel.onmessage?.({ kind: 'dictation_unshown', mogId: A, text: 'Send the deck today.' }),
+    );
+    const notice = el.querySelector('[data-notice="dictation_unshown"]');
+    expect(notice?.textContent).toContain('Send the deck today.');
+    expect(notice?.querySelector('button[data-action="copy"]')?.textContent).toBe('Copy');
+    await act(async () =>
+      (notice?.querySelector('button[data-action="dismiss"]') as HTMLElement).click(),
+    );
+    expect(el.querySelector('[data-notice="dictation_unshown"]')).toBeNull();
+  });
+
   it('[V1] shows the product name and the Labs label', async () => {
     const { el } = await render(<Hub />);
     expect(el.querySelector('h1')?.textContent).toBe('Bottle');

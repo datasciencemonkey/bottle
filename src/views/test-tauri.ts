@@ -85,3 +85,11 @@ export function viewEmits(): unknown[] {
     .filter(([cmd]) => cmd === 'view_emit')
     .map(([, a]) => (a as { args: unknown }).args);
 }
+
+/**
+ * The `view_emit` calls of user input: every call but the `ready` a view sends once it listens
+ * (#507, ADR 0091). Tests of clicks and keys read this; tests of `ready` read `viewEmits`.
+ */
+export function inputEmits(): unknown[] {
+  return viewEmits().filter((e) => (e as { kind?: unknown }).kind !== 'ready');
+}

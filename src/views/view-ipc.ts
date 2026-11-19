@@ -185,8 +185,15 @@ export function emitView(mogId: MogId, kind: ViewEmitKind, payload?: unknown): P
   return call('view_emit', payload === undefined ? { mogId, kind } : { mogId, kind, payload });
 }
 
-/** Subscribe to a brain-to-view event while the component is mounted. `onPayload` must be stable. */
-export function useViewEvent(key: ViewEventKey, onPayload: (payload: unknown) => void): void {
+/**
+ * Subscribe to a brain-to-view event while the component is mounted. `onPayload` must be stable.
+ * `onListening` (stable too) runs once the listener is registered, for example to send `ready`.
+ */
+export function useViewEvent(
+  key: ViewEventKey,
+  onPayload: (payload: unknown) => void,
+  onListening?: () => void,
+): void {
   useEffect(() => {
     let off: (() => void) | undefined;
     let gone = false;
@@ -194,13 +201,24 @@ export function useViewEvent(key: ViewEventKey, onPayload: (payload: unknown) =>
     const target = getCurrentWindow().label;
     void listen<unknown>(EVENTS[key].name, (e) => onPayload(e.payload), { target }).then((u) => {
       if (gone) u();
-      else off = u;
+      else {
+        off = u;
+        onListening?.();
+      }
     });
     return () => {
       gone = true;
       off?.();
     };
-  }, [key, onPayload]);
+  }, [key, onPayload, onListening]);
+}
+
+/**
+ * `view_emit` `ready` (#507, ADR 0091): this view registered its listeners, so the brain sends
+ * its state again. No payload. A refusal is dropped: the view sends `ready` again on a reload.
+ */
+export function sendViewReady(mogId: MogId): void {
+  void emitView(mogId, 'ready').catch(() => undefined);
 }
 
 /**
