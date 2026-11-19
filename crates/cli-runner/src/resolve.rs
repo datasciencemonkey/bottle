@@ -1,4 +1,11 @@
+// Adapted from datasciencemonkey/antigravity-bricks-plugin plugins/databricks-genie/scripts/genie_bridge.py @ a31fd2c (MIT).
 //! Resolve `databricks` to an absolute path (W-02a).
+//!
+//! After the PATH entries, [`resolve`] looks in the usual install folders ([`fallback_dirs`], the
+//! list of the reference `cli_candidates`). A macOS app that starts from Finder, the Dock or at
+//! login gets the launchd PATH `/usr/bin:/bin:/usr/sbin:/sbin`, which has neither Homebrew nor
+//! the install-script folder. The launch check runs the W-02b location check on the CLI found,
+//! wherever it was found. The MDM `CliPath` still wins: then no other folder is searched.
 
 use std::path::{Path, PathBuf};
 
@@ -43,8 +50,30 @@ pub struct Resolved {
     pub canonical: PathBuf,
 }
 
-/// Finds the CLI: the policy path if set, else the first absolute PATH entry
-/// that holds an executable `databricks`.
+/// The usual install folders, searched after PATH: Homebrew on Apple silicon, `/usr/local/bin`
+/// (Homebrew on Intel and the official install script), `~/.local/bin` and `~/bin`. A home folder
+/// is added only when `HOME` is absolute. Windows has none: a Windows app gets the user PATH.
+pub fn fallback_dirs<E: Env + ?Sized>(env: &E) -> Vec<PathBuf> {
+    if cfg!(windows) {
+        return Vec::new();
+    }
+    let mut dirs = vec![
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/usr/local/bin"),
+    ];
+    if let Some(home) = env
+        .var("HOME")
+        .map(PathBuf::from)
+        .filter(|h| h.is_absolute())
+    {
+        dirs.push(home.join(".local").join("bin"));
+        dirs.push(home.join("bin"));
+    }
+    dirs
+}
+
+/// Finds the CLI: the policy path if set, else the first absolute PATH entry, then the first
+/// [`fallback_dirs`] folder, that holds an executable `databricks`.
 pub fn resolve<F: Fs + ?Sized, E: Env + ?Sized>(
     fs: &F,
     env: &E,
@@ -56,9 +85,14 @@ pub fn resolve<F: Fs + ?Sized, E: Env + ?Sized>(
         }
         return found_at(fs, path).ok_or(CliError::Missing);
     }
-    let path_var = env.var("PATH").ok_or(CliError::Missing)?;
     let name = binary_name(cfg!(windows));
-    std::env::split_paths(&path_var)
+    let on_path: Vec<PathBuf> = env
+        .var("PATH")
+        .map(|v| std::env::split_paths(&v).collect())
+        .unwrap_or_default();
+    on_path
+        .into_iter()
+        .chain(fallback_dirs(env))
         .filter(|dir| dir.is_absolute())
         .find_map(|dir| found_at(fs, &dir.join(name)))
         .ok_or(CliError::Missing)

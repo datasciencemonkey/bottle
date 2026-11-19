@@ -111,7 +111,9 @@ pub trait LaunchCheck: Send + Sync {
     fn status(&self) -> CliStatus;
 }
 
-impl<F: Fs + Send, E: Env + Send, P: Process + Send> LaunchCheck for DatabricksCliRunner<F, E, P> {
+impl<F: Fs + Send + Sync, E: Env + Send + Sync, P: Process + Send + Sync> LaunchCheck
+    for DatabricksCliRunner<F, E, P>
+{
     fn launch_check(&self, previous: Option<&CliRecord>) -> CoreResult<LaunchReport> {
         DatabricksCliRunner::launch_check(self, previous)
     }

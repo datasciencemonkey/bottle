@@ -316,11 +316,11 @@ fn w_04a_two_token_children_run_at_the_same_time() {
         drop(top);
         cv.notify_all();
         // Wait (at most 2 s) until the other child is inside too.
-        let (mut n, _) = cv
-            .wait_timeout_while(n, Duration::from_secs(2), |n| *n < 2)
-            .unwrap();
-        *n -= 1;
-        drop(n);
+        // The count only grows, so neither child waits once both have arrived.
+        drop(
+            cv.wait_timeout_while(n, Duration::from_secs(2), |n| *n < 2)
+                .unwrap(),
+        );
         ok_token()
     });
     let r5 = Arc::new(r5(cli));

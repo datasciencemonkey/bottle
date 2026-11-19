@@ -3,6 +3,7 @@
 use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 /// Filesystem access used by CliRunner.
@@ -24,12 +25,23 @@ pub trait Env {
     fn temp_dir(&self) -> PathBuf;
 }
 
-/// Result of a finished child process.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Result of a finished child process. The stdout of `auth token` holds a token, so `Debug`
+/// shows only the exit code and the byte counts (W-01b, W-04b).
+#[derive(Clone, PartialEq, Eq)]
 pub struct ProcOutput {
     pub code: Option<i32>,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
+}
+
+impl std::fmt::Debug for ProcOutput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProcOutput")
+            .field("code", &self.code)
+            .field("stdout", &format!("<{} bytes>", self.stdout.len()))
+            .field("stderr", &format!("<{} bytes>", self.stderr.len()))
+            .finish()
+    }
 }
 
 impl ProcOutput {
@@ -173,35 +185,57 @@ impl Process for RealProcess {
             }
             std::thread::sleep(Duration::from_millis(10));
         };
-        let stdout = join(stdout);
-        let mut stderr = join(stderr);
-        let Some(status) = status else {
-            // Nothing the child wrote leaves this function on a timeout.
-            let mut stdout = stdout;
-            stdout.fill(0);
-            stderr.fill(0);
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "CLI child timed out",
-            ));
-        };
-        Ok(ProcOutput {
-            code: status.code(),
-            stdout,
-            stderr,
-        })
+        // A grandchild can keep the pipes open after the child ends, so the reads get only a
+        // short grace after the deadline.
+        let pipe_deadline = deadline.max(Instant::now()) + PIPE_GRACE;
+        let stdout = join(stdout, pipe_deadline);
+        let stderr = join(stderr, pipe_deadline);
+        match (status, stdout, stderr) {
+            (Some(status), Some(stdout), Some(stderr)) => Ok(ProcOutput {
+                code: status.code(),
+                stdout,
+                stderr,
+            }),
+            (_, stdout, stderr) => {
+                // Nothing the child wrote leaves this function on a timeout.
+                for mut buf in [stdout, stderr].into_iter().flatten() {
+                    buf.fill(0);
+                }
+                Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "CLI child timed out",
+                ))
+            }
+        }
     }
 }
 
-/// Read a child pipe to its end on a thread.
-fn read_all<R: io::Read + Send + 'static>(mut pipe: R) -> std::thread::JoinHandle<Vec<u8>> {
+/// How long the pipe reads may run past the deadline (a grandchild may hold the pipes).
+const PIPE_GRACE: Duration = Duration::from_millis(250);
+
+/// The first size of a pipe buffer. A token reply is far smaller, so the buffer does not grow,
+/// and no partial copy of the token is freed unzeroed.
+const PIPE_BUFFER: usize = 64 * 1024;
+
+/// Read a child pipe to its end on a thread, and send the bytes.
+fn read_all<R: io::Read + Send + 'static>(mut pipe: R) -> mpsc::Receiver<Vec<u8>> {
+    let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let mut buf = Vec::new();
+        let mut buf = Vec::with_capacity(PIPE_BUFFER);
         let _ = pipe.read_to_end(&mut buf);
-        buf
-    })
+        if let Err(mpsc::SendError(mut late)) = tx.send(buf) {
+            // The caller gave up (a grandchild held the pipe): wipe what came late.
+            late.fill(0);
+        }
+    });
+    rx
 }
 
-fn join(handle: Option<std::thread::JoinHandle<Vec<u8>>>) -> Vec<u8> {
-    handle.and_then(|h| h.join().ok()).unwrap_or_default()
+/// The bytes of one pipe, or `None` if the read did not end by `deadline`.
+fn join(rx: Option<mpsc::Receiver<Vec<u8>>>, deadline: Instant) -> Option<Vec<u8>> {
+    let Some(rx) = rx else {
+        return Some(Vec::new());
+    };
+    rx.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .ok()
 }

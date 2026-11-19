@@ -20,7 +20,7 @@ pub mod version;
 pub use env::{clean_env, clean_env_for, is_allowed};
 pub use error::{CliError, UnsafeReason};
 pub use location::{check_location, path_within, temp_roots};
-pub use resolve::{binary_name, resolve, CliPolicy, Resolved, CLI_NAME};
+pub use resolve::{binary_name, fallback_dirs, resolve, CliPolicy, Resolved, CLI_NAME};
 pub use runner::{CliRecord, CliRunner, CliStatus, CliWarning, LaunchReport};
 pub use sys::{Env, Fs, ProcOutput, Process, RealEnv, RealFs, RealProcess};
 pub use version::{Version, MIN_VERSION, RECOMMENDED_VERSION};

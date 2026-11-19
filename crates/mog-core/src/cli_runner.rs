@@ -9,7 +9,7 @@
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::atomic::{compiler_fence, Ordering};
-use std::sync::Mutex;
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Duration;
 
 use ::cli_runner::{CliError, Env, Fs, ProcOutput, Process, RealEnv, RealFs, RealProcess};
@@ -137,23 +137,27 @@ impl CliRunner for StubCliRunner {
 /// adds the ARC-6 `auth token` refusal and maps each refusal to a content-free
 /// [`CoreError::Unavailable`] reason. A path or version never goes into an error.
 pub struct DatabricksCliRunner<F = RealFs, E = RealEnv, P = RealProcess> {
-    inner: Mutex<::cli_runner::CliRunner<F, E, P>>,
+    /// Children run under the read lock, so they run at the same time (one slow `auth token`
+    /// does not hold up the others). The launch check takes the write lock.
+    inner: RwLock<::cli_runner::CliRunner<F, E, P>>,
 }
 
 impl DatabricksCliRunner {
     /// R5 on the real filesystem, environment and processes.
     pub fn system(policy: CliPolicy) -> Self {
         Self {
-            inner: Mutex::new(::cli_runner::CliRunner::system(policy).with_timeout(CLI_TIMEOUT)),
+            inner: RwLock::new(::cli_runner::CliRunner::system(policy).with_timeout(CLI_TIMEOUT)),
         }
     }
 }
 
-impl<F: Fs + Send, E: Env + Send, P: Process + Send> DatabricksCliRunner<F, E, P> {
+impl<F: Fs + Send + Sync, E: Env + Send + Sync, P: Process + Send + Sync>
+    DatabricksCliRunner<F, E, P>
+{
     /// R5 on the given seams (tests use fakes).
     pub fn new(fs: F, env: E, process: P, policy: CliPolicy) -> Self {
         Self {
-            inner: Mutex::new(
+            inner: RwLock::new(
                 ::cli_runner::CliRunner::new(fs, env, process, policy).with_timeout(CLI_TIMEOUT),
             ),
         }
@@ -162,7 +166,7 @@ impl<F: Fs + Send, E: Env + Send, P: Process + Send> DatabricksCliRunner<F, E, P
     /// The launch check (W-02a..d): resolve, vet, read the version, and compare with the record
     /// of the previous launch. Changes come back as warnings, not errors.
     pub fn launch_check(&self, previous: Option<&CliRecord>) -> CoreResult<LaunchReport> {
-        self.lock()
+        self.write()
             .launch_check(previous)
             .map_err(|e| unavailable(&e))
     }
@@ -170,17 +174,23 @@ impl<F: Fs + Send, E: Env + Send, P: Process + Send> DatabricksCliRunner<F, E, P
     /// The `{path, version, found}` part of the `cli_status` reply: the CLI that the last launch
     /// check verified. `plaintextStorage` comes from the profile check (W-10a), not from R5.
     pub fn status(&self) -> CliStatus {
-        self.lock().status()
+        self.read().status()
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, ::cli_runner::CliRunner<F, E, P>> {
-        // A panic in another caller leaves no half-written state worth refusing over: the next
-        // call runs the launch check again.
-        self.inner.lock().unwrap_or_else(|p| p.into_inner())
+    // A panic in another caller leaves no half-written state worth refusing over: the next call
+    // runs the launch check again.
+    fn read(&self) -> RwLockReadGuard<'_, ::cli_runner::CliRunner<F, E, P>> {
+        self.inner.read().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn write(&self) -> RwLockWriteGuard<'_, ::cli_runner::CliRunner<F, E, P>> {
+        self.inner.write().unwrap_or_else(|p| p.into_inner())
     }
 }
 
-impl<F: Fs + Send, E: Env + Send, P: Process + Send> CliRunner for DatabricksCliRunner<F, E, P> {
+impl<F: Fs + Send + Sync, E: Env + Send + Sync, P: Process + Send + Sync> CliRunner
+    for DatabricksCliRunner<F, E, P>
+{
     fn resolve(&self) -> CoreResult<PathBuf> {
         self.launch_check(None).map(|report| report.record.path)
     }
@@ -205,15 +215,21 @@ impl<F: Fs + Send, E: Env + Send, P: Process + Send> CliRunner for DatabricksCli
     }
 }
 
-impl<F: Fs + Send, E: Env + Send, P: Process + Send> DatabricksCliRunner<F, E, P> {
+impl<F: Fs + Send + Sync, E: Env + Send + Sync, P: Process + Send + Sync>
+    DatabricksCliRunner<F, E, P>
+{
     /// Run the verified CLI (the launch check runs first if no CLI is verified yet), with the
     /// clean env (W-09) and [`CLI_TIMEOUT`].
     fn run_verified(&self, args: &[&str]) -> CoreResult<ProcOutput> {
-        let mut inner = self.lock();
-        if inner.verified().is_none() {
-            inner.launch_check(None).map_err(|e| unavailable(&e))?;
+        if self.read().verified().is_none() {
+            let mut inner = self.write();
+            // Another caller may have run the check while this one waited.
+            if inner.verified().is_none() {
+                inner.launch_check(None).map_err(|e| unavailable(&e))?;
+            }
         }
-        inner.run(args).map_err(|e| unavailable(&e))
+        // `run` re-checks that the verified CLI is still in a safe place (W-02b).
+        self.read().run(args).map_err(|e| unavailable(&e))
     }
 
     /// W-04a: run exactly [`auth_token_args`] for the caller's `profile` (R5 never picks one).
