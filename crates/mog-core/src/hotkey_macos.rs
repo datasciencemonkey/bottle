@@ -12,6 +12,9 @@
 //! modifier + G. The OS gives a registered hot key to Bottle only, so the focused app gets no
 //! "g" or "©". The tap stays listen-only (CAP-35a).
 //!
+//! Record key (ADR 0103): with the Call recording knob on, the same hold also grabs the
+//! talk-key modifier + R, so the app gets no "r" or "®". With the knob off, R is not grabbed.
+//!
 //! Requirements: CAP-35a, CAP-35b, CAP-36, CAP-37, CAP-38a, CAP-38b, CAP-39a, CAP-39b,
 //! CAP-44c, CAP-45, RTR-17a. Real-device proof (AT-30) waits for SP-03: TODO(#5).
 
@@ -52,6 +55,10 @@ pub const CARBON_CONTROL_KEY: u32 = 0x1000;
 pub const CHORD_HOT_KEY_ID: u32 = 1;
 /// The Carbon hot-key ID of the ask key.
 pub const ASK_HOT_KEY_ID: u32 = 2;
+/// `kVK_ANSI_R`, the key of the record key (ADR 0103).
+pub const VK_ANSI_R: u16 = 0x0F;
+/// The Carbon hot-key ID of the record key. Its modifier is [`ask_key_modifiers`]: ⌥R.
+pub const RECORD_HOT_KEY_ID: u32 = 3;
 
 /// The Carbon modifier of the ask key: the generic modifier of the talk key, so "hold the talk
 /// key and tap G" works for each talk key. The default, Right-Option, gives Option+G (⌥G).
@@ -93,7 +100,7 @@ pub const TAP_SPEC: TapSpec = TapSpec {
 /// `KeyUp`. It is created off and the OS layer turns it on only while
 /// [`crate::hotkey_core::HotkeyEngine::other_key_window_open`] is true: the first 1 s of a
 /// talk-key hold. Its callback reads one field, the key code, and only compares it with G
-/// (ADR 0098). It never stores or logs the code.
+/// (ADR 0098) and R (ADR 0103). It never stores or logs the code.
 pub const OTHER_KEY_TAP_SPEC: TapSpec = TapSpec {
     location: CG_SESSION_EVENT_TAP,
     placement: CG_HEAD_INSERT_EVENT_TAP,
@@ -107,14 +114,20 @@ pub const OTHER_KEY_TAP_SPEC: TapSpec = TapSpec {
 pub enum OtherKeyDown {
     /// G: the ask key (RTR-17a). It marks the ask and does not cancel (ADR 0098).
     Ask,
+    /// R: the record key (ADR 0103). The engine decides: with the Call recording knob on it
+    /// marks the record toggle; with the knob off it is any other key.
+    Record,
     /// Any other key: it cancels the PTT (CAP-44c).
     Other,
 }
 
-/// Classify an event of the other-key tap. `keycode` is only compared with G; it is not kept.
+/// Classify an event of the other-key tap. `keycode` is only compared with G and R; it is not
+/// kept.
 pub fn other_key_from_event(event_type: u32, keycode: i64) -> Option<OtherKeyDown> {
     (event_type == CG_EVENT_KEY_DOWN).then_some(if keycode == i64::from(VK_ANSI_G) {
         OtherKeyDown::Ask
+    } else if keycode == i64::from(VK_ANSI_R) {
+        OtherKeyDown::Record
     } else {
         OtherKeyDown::Other
     })
@@ -889,6 +902,9 @@ mod sys {
         chord: Mutex<Option<HotKey>>,
         /// The ask key of RTR-17a (ADR 0098). It is registered only during a talk-key hold.
         ask_key: Mutex<Option<HotKey>>,
+        /// The record key of ADR 0103. It is registered only during a talk-key hold with the
+        /// Call recording knob on.
+        record_key: Mutex<Option<HotKey>>,
         stop: AtomicBool,
     }
 
@@ -912,6 +928,55 @@ mod sys {
             // Carbon delivers the hot-key events.
             unsafe { dispatch_async_f(&_dispatch_main_q, ctx, ask_key_drain_on_main) };
         }
+
+        fn set_record_key(&self, on: bool) {
+            let Some(me) = self.0.upgrade() else { return };
+            let ctx = Box::into_raw(Box::new((me, on))).cast::<c_void>();
+            // SAFETY: as `set_ask_key`; `record_key_on_main` frees `ctx`.
+            unsafe { dispatch_async_f(&_dispatch_main_q, ctx, record_key_on_main) };
+        }
+    }
+
+    /// ADR 0103: grab or release ⌥R on the main thread, as `ask_key_on_main` does for ⌥G.
+    extern "C" fn record_key_on_main(ctx: *mut c_void) {
+        // SAFETY: `ctx` is the box made in `set_record_key`, used once.
+        let (shared, on) = *unsafe { Box::from_raw(ctx.cast::<(Arc<Shared>, bool)>()) };
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let mut key = lock(&shared.record_key);
+            if on {
+                if key.is_none() {
+                    // A refused register leaves R to the app; the other-key tap still marks
+                    // the toggle in the first 1 s of the hold.
+                    *key = register_hot_key(
+                        &shared,
+                        u32::from(VK_ANSI_R),
+                        ask_key_modifiers(shared.talk_key),
+                        super::RECORD_HOT_KEY_ID,
+                        record_key_handler,
+                        &[EVENT_HOT_KEY_PRESSED],
+                    );
+                }
+            } else if let Some(k) = key.take() {
+                k.release();
+            }
+        }));
+    }
+
+    extern "C" fn record_key_handler(
+        _next: EventHandlerCallRef,
+        event: EventRef,
+        user: *mut c_void,
+    ) -> i32 {
+        catch_unwind(AssertUnwindSafe(|| {
+            if hot_key_id(event) != Some(super::RECORD_HOT_KEY_ID) {
+                return EVENT_NOT_HANDLED_ERR;
+            }
+            // SAFETY: `user` is the `Shared` kept alive by `HotKey::_owner`.
+            let shared = unsafe { &*user.cast::<Shared>() };
+            lock(&shared.engine).on_record_key();
+            0
+        }))
+        .unwrap_or(EVENT_NOT_HANDLED_ERR)
     }
 
     /// The most queued hot-key presses that one drain handles. A held G repeats, so the count
@@ -1166,9 +1231,9 @@ mod sys {
         let _ = catch_unwind(AssertUnwindSafe(|| {
             // SAFETY: `user` is the `Shared` that the tap thread keeps alive.
             let shared = unsafe { &*user.cast::<Shared>() };
-            // Privacy (ADR 0017, ADR 0098): the event type is used, and for a key-down the key
-            // code is compared with G only. The code and the characters are never stored or
-            // logged, so no key identity crosses this boundary.
+            // Privacy (ADR 0017, ADR 0098, ADR 0103): the event type is used, and for a
+            // key-down the key code is compared with G and R only. The code and the characters
+            // are never stored or logged, so no key identity crosses this boundary.
             if matches!(
                 event_type,
                 CG_EVENT_TAP_DISABLED_BY_TIMEOUT | CG_EVENT_TAP_DISABLED_BY_USER_INPUT
@@ -1187,6 +1252,8 @@ mod sys {
                 // RTR-17a: G marks the ask and does not cancel. This also covers a G that comes
                 // before the main thread has registered the ask key.
                 Some(OtherKeyDown::Ask) => engine.on_ask_key(),
+                // ADR 0103: the engine checks the Call recording knob.
+                Some(OtherKeyDown::Record) => engine.on_record_key(),
                 Some(OtherKeyDown::Other) => engine.on_other_key_down(),
                 None => {}
             }
@@ -1419,6 +1486,7 @@ mod sys {
                 recreate_requested: AtomicBool::new(false),
                 chord: Mutex::new(None),
                 ask_key: Mutex::new(None),
+                record_key: Mutex::new(None),
                 stop: AtomicBool::new(false),
             });
             Self {
@@ -1426,6 +1494,13 @@ mod sys {
                 permissions: MacPermissions,
                 watchdog: Mutex::new(None),
             }
+        }
+
+        /// The same service with the Call recording knob `gate` (ADR 0103): while it is true,
+        /// each talk-key hold also grabs ⌥R (the talk-key modifier + R).
+        pub fn with_record_gate(self, gate: Arc<AtomicBool>) -> Self {
+            lock(&self.shared.engine).set_record_gate(gate);
+            self
         }
     }
 

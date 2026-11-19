@@ -42,6 +42,7 @@ use mog_core::ipc::{events, PermissionKind, WindowClass};
 use mog_core::keyboard_env::{self, CopilotKeyFlag, MemoryCopilotKeyFlag, WithCopilotFlag};
 use mog_core::types::{TalkKeyReason, TalkKeyState, TalkKeyStatus};
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use tauri::{AppHandle, Manager, Runtime};
@@ -245,6 +246,30 @@ impl TalkTargetRoute for PttTarget {
     }
 }
 
+/// The Call recording knob as the hotkey layer sees it (ADR 0103). While it is on, each
+/// talk-key hold grabs ⌥R (macOS) and R toggles a recording. While it is off (the default),
+/// R is not grabbed and types as usual. The app manages one gate; the recording settings set
+/// it at launch and at each knob change.
+#[derive(Debug, Default, Clone)]
+pub struct RecordKeyGate(Arc<AtomicBool>);
+
+impl RecordKeyGate {
+    /// Turn the record key on or off.
+    pub fn set(&self, on: bool) {
+        self.0.store(on, Ordering::Relaxed);
+    }
+
+    /// The knob is on now.
+    pub fn is_on(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+
+    /// The flag that the hotkey engine reads.
+    pub fn shared(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.0)
+    }
+}
+
 /// The `hotkey:ptt` payload of section 4.5: `{ mogId, phase }`. For the up of a hold with
 /// the ask key (`HotkeyOutput::PttAskUp`), `PttForwarder` adds `ask: true` (RTR-17a, ADR 0098).
 pub fn ptt_payload(mog_id: &str, phase: PttPhase) -> Value {
@@ -302,10 +327,12 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
 
     /// Forward one output.
     pub fn on_output(&mut self, output: HotkeyOutput) {
-        // RTR-17a (ADR 0098): the up of a hold with the ask key carries `ask: true`.
-        let (output, ask) = match output {
-            HotkeyOutput::PttAskUp => (HotkeyOutput::Ptt(PttPhase::Up), true),
-            other => (other, false),
+        // RTR-17a (ADR 0098): the up of a hold with the ask key carries `ask: true`. ADR 0103:
+        // the up of a hold with the record key carries `record: true` (no dictation).
+        let (output, flag) = match output {
+            HotkeyOutput::PttAskUp => (HotkeyOutput::Ptt(PttPhase::Up), Some("ask")),
+            HotkeyOutput::PttRecordUp => (HotkeyOutput::Ptt(PttPhase::Up), Some("record")),
+            other => (other, None),
         };
         match output {
             HotkeyOutput::Ptt(phase) => {
@@ -326,8 +353,8 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
                 };
                 if let Some(mog) = mog {
                     let mut payload = ptt_payload(&mog, phase);
-                    if ask {
-                        payload["ask"] = json!(true);
+                    if let Some(flag) = flag {
+                        payload[flag] = json!(true);
                     }
                     // `false` means no brain listens yet; the press is dropped.
                     let _ = self.brain.deliver(events::HOTKEY_PTT, payload);
@@ -344,7 +371,7 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
             // TODO(#444): mark that `cancel` with `tap: true` so the brain uses R1's decision.
             HotkeyOutput::Tap => {}
             // Mapped to `Ptt(Up)` above.
-            HotkeyOutput::PttAskUp => {}
+            HotkeyOutput::PttAskUp | HotkeyOutput::PttRecordUp => {}
         }
     }
 }
@@ -814,19 +841,21 @@ impl<R: Runtime> TalkKeySink for AppTalkKey<R> {
 
 /// The platform service and permission API (macOS).
 /// macOS has no Copilot key and no hook seam, so `_copilot` and `_status` are unused: the
-/// pill outputs reach the status sink through the forwarder.
+/// pill outputs reach the status sink through the forwarder. `record` is the Call recording
+/// knob: while it is on, each talk-key hold grabs ⌥R (ADR 0103).
 #[cfg(target_os = "macos")]
 pub fn platform_service(
     talk: TalkBinding,
     sink: Arc<dyn HotkeySink>,
     _copilot: Arc<dyn CopilotKeyFlag>,
     _status: Arc<dyn StatusSink>,
+    record: &RecordKeyGate,
 ) -> (Box<dyn HotkeyService>, Box<dyn PermissionApi>) {
     use mog_core::hotkey_macos::{MacHotkeyService, MacPermissions};
     // Ctrl+Win is a Windows key: macOS settings never hold it, so it gives the D66 default.
     let talk_key = talk.core_talk_key().unwrap_or_default();
     (
-        Box::new(MacHotkeyService::new(talk_key, sink)),
+        Box::new(MacHotkeyService::new(talk_key, sink).with_record_gate(record.shared())),
         Box::new(MacPermissions),
     )
 }
@@ -836,12 +865,15 @@ pub fn platform_service(
 /// The hook sends [`HookSignal`]s on its own channel; the adapter thread feeds them to the
 /// shared engine, which emits into `sink`. The hook needs no OS prompt. A Copilot chord
 /// seen by the hook sets `copilot` (#332). The talk-key signals go to `status` (ADR 0039).
+/// Windows has no ask key and no record key yet (ADR 0098, ADR 0103): the hook cannot grab
+/// Right-Alt + R, so `_record` is unused and every Windows hold is dictation.
 #[cfg(windows)]
 pub fn platform_service(
     talk: TalkBinding,
     sink: Arc<dyn HotkeySink>,
     copilot: Arc<dyn CopilotKeyFlag>,
     status: Arc<dyn StatusSink>,
+    _record: &RecordKeyGate,
 ) -> (Box<dyn HotkeyService>, Box<dyn PermissionApi>) {
     use mog_core::hotkey_windows::win32::WindowsHotkeyService;
     let (service, rx) = WindowsHotkeyService::new(talk.windows_talk_key());
@@ -860,6 +892,7 @@ pub fn platform_service(
     _sink: Arc<dyn HotkeySink>,
     _copilot: Arc<dyn CopilotKeyFlag>,
     _status: Arc<dyn StatusSink>,
+    _record: &RecordKeyGate,
 ) -> (Box<dyn HotkeyService>, Box<dyn PermissionApi>) {
     (
         Box::new(mog_core::hotkey::StubHotkeyService),
@@ -885,7 +918,11 @@ impl PermissionApi for NoOsPermission {
 /// prompt). The settings store is in memory until #77 (see `hotkey_settings`). One Copilot
 /// key flag goes to the key check reads and to the hook (#332, ADR 0025); it is in memory
 /// until #341. The Windows hook seam sends the talk-key status to the brain (ADR 0039).
+/// The app manages one [`RecordKeyGate`] (ADR 0103); each service of a talk-key change
+/// shares it.
 pub fn install<R: Runtime>(app: &AppHandle<R>) -> std::io::Result<()> {
+    let record = RecordKeyGate::default();
+    app.manage(record.clone());
     let copilot: Arc<dyn CopilotKeyFlag> = Arc::new(MemoryCopilotKeyFlag::default());
     let status: Arc<dyn StatusSink> = Arc::new(BrainStatus(app.clone()));
     let settings = HotkeySettings::load(
@@ -898,7 +935,13 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> std::io::Result<()> {
         Box::new(AppTalkKey(app.clone())),
     );
     install_with(app, settings, move |talk, sink| {
-        platform_service(talk, sink, Arc::clone(&copilot), Arc::clone(&status))
+        platform_service(
+            talk,
+            sink,
+            Arc::clone(&copilot),
+            Arc::clone(&status),
+            &record,
+        )
     })
 }
 
@@ -1246,7 +1289,10 @@ mod tests {
             .find("use mog_core::hotkey_macos::{MacHotkeyService, MacPermissions};")
             .expect("the macOS factory")..];
         let mac = &mac[..mac.find("#[cfg(windows)]").expect("the end")];
-        assert!(mac.contains(".with_record_gate(record.shared())"), "{mac}");
+        assert!(
+            mac.contains("MacHotkeyService::new(talk_key, sink).with_record_gate(record.shared())"),
+            "{mac}"
+        );
     }
 
     #[test]
@@ -2513,7 +2559,7 @@ mod tests {
         for part in [
             "MemoryCopilotKeyFlag::default()",
             "WithCopilotFlag::new(keyboard_env::os_env_reads(),Arc::clone(&copilot)",
-            "platform_service(talk,sink,Arc::clone(&copilot),Arc::clone(&status))",
+            "platform_service(talk,sink,Arc::clone(&copilot),Arc::clone(&status),&record,)",
             "BrainStatus(app.clone())",
         ] {
             assert!(flat.contains(part), "install misses {part}");
