@@ -65,7 +65,7 @@ fn w_03a_host_t7_answers_profiles_list_and_never_picks() {
 #[test]
 fn w_03b_r8_builds_on_the_host_t7() {
     let host = profiles_host::build(Arc::new(FakeConfig), Arc::new(SecureCli));
-    assert!(mcp_host::build_with(Arc::new(NoWait), host.0.clone()).is_ok());
+    assert!(mcp_host::build_with(Arc::new(NoWait), host.0.clone(), Arc::new(SecureCli)).is_ok());
 }
 
 fn src(rel: &str) -> String {

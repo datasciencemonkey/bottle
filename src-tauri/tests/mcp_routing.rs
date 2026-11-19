@@ -239,7 +239,7 @@ fn sec_03_an_r8_error_crosses_as_a_content_free_code() {
 fn g_04d_w_06a_the_host_builds_r8_on_r6_and_the_r5_profile_hosts() {
     // The production R8: one R6 CliTokenBroker, the R5 profile hosts and R7 for the SCIM seam.
     let host = mcp_host::build(fake_bucket()).expect("R8 starts");
-    // R5 (#16, #17) is not on main: the call fails closed with a fixed code, before any send.
+    // `build` takes the R5 test double: the call fails closed with a fixed code, before any send.
     let err = call("brain", Some(&host), "mcp_call", ask_args("genie_ask")).unwrap_err();
     assert_eq!(err, json!({"error": "not_implemented"}));
     // The window check holds on the production component too.

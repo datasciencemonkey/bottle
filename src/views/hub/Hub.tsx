@@ -11,6 +11,7 @@ import {
   type MogViewState,
 } from '../view-ipc';
 import { About } from './About';
+import { CliSettings } from './CliSettings';
 import { DataPanel } from './DataDisclosures';
 import { DictationNotices } from './DictationNotices';
 import { LegalNotice } from './LegalNotice';
@@ -81,6 +82,7 @@ export function Hub() {
       <MicPreference />
       <SttSetupStep />
       <WipeSettings />
+      <CliSettings />
       <DataPanel />
       <About />
     </main>

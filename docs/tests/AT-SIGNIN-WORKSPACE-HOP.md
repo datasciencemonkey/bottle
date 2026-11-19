@@ -17,7 +17,7 @@ pnpm vitest run src/acceptance/at-02-signin-recovery.test.ts src/acceptance/at-1
 
 | AT | File | Runs now on shipped code |
 |---|---|---|
-| AT-02 | `crates/mog-core/tests/at_02_signin_recovery.rs` | The R6 token buffer: a wipe sets every byte to zero, keeps the length and never shows in `Debug` (W-18c, buffer part only). |
+| AT-02 | `crates/mog-core/tests/at_02_signin_recovery.rs` | R5 CliRunner (#16) on fakes of its seams: the CLI resolves to an absolute path (W-02a), a CLI in the temporary folder or a world-writable folder is refused before any child starts (W-02b), 1.16 is refused and 1.25 is accepted (W-02c), a changed CLI version is a warning at the next launch (W-02d), `status()` gives the `cli_status` path and version, and `auth token` is refused before any child starts (ARC-6). The R6 token buffer: a wipe sets every byte to zero, keeps the length and never shows in `Debug` (W-18c, buffer part only). |
 | AT-02 | `src/acceptance/at-02-signin-recovery.test.ts` | Nothing yet: every test is pending. |
 | AT-12 | `src/acceptance/at-12-workspace-hop.test.ts` | The router step returns `switch_workspace_session` and `switch_workspace_once`, resolves an alias hint to its profile and drops an unknown hint (RTR-11a). Parts of unequal length or more than 3 parts are ignored (RTR-11b). During a hop the router model call goes to the home profile (W-21a, router part only). The identity badge reads "<target> · Genie One" and the hop badge names the target and the scope (MOG-07, W-11a badge part, UX-39a). A hop sets the hop overlay and never changes the mood (UX-39b). |
 
@@ -39,7 +39,6 @@ removes the mark and finishes the test.
 
 | AT | Requirement IDs | Feature issue |
 |---|---|---|
-| AT-02 | W-02a, W-02b, W-02c, W-02d | #16 (PR #255 is open) |
 | AT-02 | W-05a, W-05b, W-05c, W-05d | #18 |
 | AT-02 | W-18a, W-18c (sign-out wiring) | #163, #18 |
 | AT-02 | W-18b | #163 |
@@ -66,7 +65,7 @@ in every command. Never run `databricks auth token`, and never put a token, a tr
 profile secret in a log or an evidence file. Write each result to `docs/evidence/<AT>-<part>.md` in
 the format of `docs/tests/EVIDENCE-TEMPLATE.md`, with `Scope | part: <IDs> only`.
 
-Before #16, #17, #18, #42, #162 and #163 (AT-02) or #145, #164 and #165 (AT-12) merge, the live
+Before #17, #18, #42, #162 and #163 (AT-02) or #145, #164 and #165 (AT-12) merge, the live
 tests skip or stay pending, and no evidence file can say `pass`.
 
 ### AT-02 part A: expired U2M sign-in (about 15 min)
@@ -80,7 +79,7 @@ tests skip or stay pending, and no evidence file can say `pass`.
 6. Expected: the paused poll resumes with the same conversation ID and response ID (the card
    "Open in Genie" link has the same thread ID); the held question goes out; the config checksum
    is the same as in step 2.
-7. After #16, #18, #42 and #163 remove the pending marks, run
+7. After #18, #42 and #163 remove the pending marks, run
    `BOTTLE_TEST_PROFILE=<your-profile> cargo test -p mog-core --test at_02_signin_recovery -- --nocapture`.
    Expected: no `skipped:` line, no `ignored` test and no failure.
 

@@ -42,8 +42,10 @@ points open:
    - `plaintext`, another mode, no mode (an older CLI keeps tokens in a plaintext file) or a
      failed run: blocked. This follows W-10b, because MDM `RequireSecureTokenStorage` defaults
      to true.
-   - R5 answers `not_implemented` (the stub on main): not checked, `TODO(#16)`. The token path
-     uses the same R5, so no token can flow for that profile either.
+   - R5 answers `not_implemented` (only the `StubCliRunner` test double since #16): not checked.
+     The token path uses the same R5, so no token can flow for that profile either.
+   - Update (#16): a plaintext or no-mode reply sets the T7 flag that `cli_status` reports as
+     `plaintextStorage`; a failed run blocks the profile but does not set the flag.
    The profile stays blocked until a refresh finds `secure` storage (W-10b).
 4. `ProfileService` is also R7 `ProfileHosts`. `workspace_url` answers only for a supported
    profile, else `profile_not_supported`. So R6, R7 and R8 never send for a PAT,
@@ -58,12 +60,12 @@ points open:
 ## Why the file and not `databricks auth profiles`
 
 - The lead (agent-lead-2) directed this for issue #17: list through R5 `databricks auth profiles`, or parse only the
-  section names and the `host` and `auth_type` keys of `~/.databrickscfg`. R5 is the stub, so only the second
+  section names and the `host` and `auth_type` keys of `~/.databrickscfg`. R5 was the stub (until #16), so only the second
   works now. The user direction for this wave is a demo that works.
 - The read is not a credential source (W-01a): no token or secret is used, kept, logged or returned. Lead
   decision on PR #556: the file is read one byte at a time (an unbuffered `File`) into one fixed 4 KiB line
   buffer that is zeroed after each line. The whole file is never in memory, and a longer line is skipped. A
-  secret line still passes through that one buffer, so this is a narrowed gap against "T7 never sees a token". `TODO(#16)`: when R5 runs the CLI, list through
+  secret line still passes through that one buffer, so this is a narrowed gap against "T7 never sees a token". `TODO(#17)`: R5 runs the CLI since #16, so list through
   `databricks auth profiles --skip-validate --output json`, and drop the file read.
 - The reference plugin uses the same name-only scan (`config_sections`) for the same file.
 

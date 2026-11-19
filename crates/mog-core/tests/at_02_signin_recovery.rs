@@ -5,10 +5,10 @@
 //! MOG config is unchanged, paused polls resume with the same IDs, PAT and SP profiles are
 //! rejected, and the old CLI and plaintext storage show blocking messages.
 //!
-//! The Rust side of AT-02 is R5 CliRunner (#16, PR #255 is open) and R6 TokenBroker (#18). Only
-//! the token buffer of R6 ships, so W-18c's zero overwrite runs here. R6 refresh and 401 (W-05a..c)
-//! run here against the real `CliTokenBroker` with a fake CLI (#18). The other tests are written
-//! against `mog_core::cli_runner::CliRunner` and `mog_core::token_broker::TokenBroker` and stay
+//! The Rust side of AT-02 is R5 CliRunner (#16) and R6 TokenBroker (#18). R5 ships, so W-02a..d
+//! run here on fakes of its seams. Only the token buffer of R6 ships, so W-18c's zero overwrite
+//! runs here. R6 refresh and 401 (W-05a..c) run here against the real `CliTokenBroker` with a
+//! fake CLI (#18). The other tests are written against `mog_core::token_broker::TokenBroker` and stay
 //! `#[ignore]` with the feature issue, so they never count as a pass. The live parts read the
 //! #229 fixture (`BOTTLE_TEST_PROFILE`) and need a person: docs/tests/AT-SIGNIN-WORKSPACE-HOP.md.
 //! The TS side (ProfileService, the chip, held work) is `src/acceptance/at-02-signin-recovery.test.ts`.
@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use mog_core::cli_runner::{CliRunner, SecretStdout, StubCliRunner};
+use mog_core::cli_runner::{CliRunner, SecretStdout};
 use mog_core::clock::{MonotonicClock, SimClock, SimWallClock};
 use mog_core::error::CoreResult;
 use mog_core::http_transport::ProfileHosts;
@@ -51,45 +51,226 @@ fn at_02_w_18c_a_token_buffer_wipe_writes_zeros_buffer_part_only() {
     assert!(!shown.contains("fake-test-token"));
 }
 
-// ---------- Pending: R5 CliRunner (W-02a..d) ----------
+// ---------- R5 CliRunner (W-02a..d), on fakes of the #16 seams ----------
+//
+// The fakes stand in for the filesystem, the environment and the child process, so these run on
+// every OS without a real CLI. They are `Send` because `CliRunner` is `Send + Sync`.
+
+mod r5_fakes {
+    use std::collections::HashMap;
+    use std::ffi::OsString;
+    use std::io;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex};
+
+    use cli_runner::{binary_name, Env, Fs, ProcOutput, Process};
+
+    /// An absolute path on this OS: `/a/b` on unix, `C:\a\b` on Windows.
+    pub fn abs(rel: &str) -> PathBuf {
+        let mut p = PathBuf::from(if cfg!(windows) { "C:\\" } else { "/" });
+        for part in rel.split('/').filter(|s| !s.is_empty()) {
+            p.push(part);
+        }
+        p
+    }
+
+    pub fn cli_in(dir: &Path) -> PathBuf {
+        dir.join(binary_name(cfg!(windows)))
+    }
+
+    /// Files with unix modes; every path is its own canonical path.
+    #[derive(Clone, Default)]
+    pub struct FakeFs(pub HashMap<PathBuf, u32>);
+
+    impl Fs for FakeFs {
+        fn is_file(&self, path: &Path) -> bool {
+            self.0.contains_key(path)
+        }
+        fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+            Ok(path.to_path_buf())
+        }
+        fn unix_mode(&self, path: &Path) -> Option<u32> {
+            if cfg!(windows) {
+                return None;
+            }
+            self.0.get(path).copied().or(Some(0o755))
+        }
+    }
+
+    #[derive(Clone)]
+    pub struct FakeEnv {
+        pub path: OsString,
+        pub temp: PathBuf,
+    }
+
+    impl Env for FakeEnv {
+        fn var(&self, name: &str) -> Option<OsString> {
+            (name == "PATH").then(|| self.path.clone())
+        }
+        fn vars(&self) -> Vec<(OsString, OsString)> {
+            vec![("PATH".into(), self.path.clone())]
+        }
+        fn temp_dir(&self) -> PathBuf {
+            self.temp.clone()
+        }
+    }
+
+    /// A stand-in `databricks` that prints `version`. Every call is recorded.
+    #[derive(Clone)]
+    pub struct FakeCli {
+        pub version: String,
+        pub calls: Arc<Mutex<Vec<Vec<OsString>>>>,
+    }
+
+    impl FakeCli {
+        pub fn new(version: &str) -> Self {
+            Self {
+                version: version.into(),
+                calls: Arc::default(),
+            }
+        }
+        pub fn call_count(&self) -> usize {
+            self.calls.lock().expect("calls").len()
+        }
+    }
+
+    impl Process for FakeCli {
+        fn run(
+            &self,
+            _program: &Path,
+            args: &[OsString],
+            _env: &[(OsString, OsString)],
+        ) -> io::Result<ProcOutput> {
+            self.calls.lock().expect("calls").push(args.to_vec());
+            let stdout = match args.first().and_then(|a| a.to_str()) {
+                Some("--version") => format!("Databricks CLI v{}\n", self.version),
+                Some("version") => format!("{{\"Version\":\"{}\"}}", self.version),
+                _ => String::new(),
+            };
+            Ok(ProcOutput {
+                code: Some(0),
+                stdout: stdout.into_bytes(),
+                stderr: Vec::new(),
+            })
+        }
+    }
+
+    /// A machine with one CLI in `dir` (mode 0755) and `dir` first on PATH.
+    pub fn machine(dir: &Path, version: &str) -> (FakeFs, FakeEnv, FakeCli) {
+        let mut files = HashMap::new();
+        files.insert(cli_in(dir), 0o755);
+        files.insert(dir.to_path_buf(), 0o755);
+        let env = FakeEnv {
+            path: std::env::join_paths([dir]).expect("PATH"),
+            temp: abs("var/fake-temp"),
+        };
+        (FakeFs(files), env, FakeCli::new(version))
+    }
+}
+
+use mog_core::cli_runner::{CliPolicy, DatabricksCliRunner};
+use r5_fakes::{abs, cli_in, machine};
 
 #[test]
-#[ignore = "pending TODO(#16): CliRunner resolve and vet are not built (PR #255 is open)"]
 fn at_02_w_02a_w_02c_the_cli_resolves_to_an_absolute_path_with_version_1_17_or_later() {
-    let r5 = StubCliRunner;
-    let path = r5.resolve().expect("TODO(#16): resolve the CLI");
+    let dir = abs("opt/databricks/bin");
+    let (fs, env, cli) = machine(&dir, "1.25.0");
+    let r5 = DatabricksCliRunner::new(fs, env, cli, CliPolicy::default());
+    let path = r5.resolve().expect("W-02a: resolve the CLI");
     assert!(path.is_absolute(), "W-02a: {path:?} is not absolute");
+    assert_eq!(path, cli_in(&dir));
     let v = r5
         .run_json(&["version", "--output", "json"])
-        .expect("TODO(#16): run the CLI");
-    assert!(v.get("Version").is_some(), "W-02c: no version in {v}");
-    todo!("TODO(#16): assert the version is 1.17 or later and that 1.16 is refused with the 'Install the Databricks CLI' step (W-17c)");
+        .expect("run the CLI");
+    assert_eq!(v["Version"], "1.25.0", "W-02c: {v}");
+
+    // W-02c: 1.16 is refused with a stable, content-free code. The "Install the Databricks
+    // CLI" step that the card shows for it is W-17c (TS side).
+    let (fs, env, cli) = machine(&dir, "1.16.9");
+    let old = DatabricksCliRunner::new(fs, env, cli, CliPolicy::default());
+    let err = old.resolve().expect_err("W-02c: 1.16 is refused");
+    assert_eq!(err.code(), "cli_unsupported", "W-02c: {err}");
+    let err = old
+        .run_json(&["version", "--output", "json"])
+        .expect_err("W-02c: no command runs on an old CLI");
+    assert_eq!(err.code(), "cli_unsupported");
 }
 
 #[test]
-#[ignore = "pending TODO(#16): CliRunner path checks are not built (PR #255 is open)"]
 fn at_02_w_02b_a_cli_in_a_temporary_or_world_writable_folder_is_refused() {
-    // TODO(#16): put a fake `databricks` in a temporary folder first on PATH, then resolve.
-    let r5 = StubCliRunner;
+    // A fake `databricks` in the temporary folder, first on PATH.
+    let temp = abs("var/fake-temp/evil");
+    let (fs, mut env, cli) = machine(&temp, "1.25.0");
+    env.temp = abs("var/fake-temp");
+    let r5 = DatabricksCliRunner::new(fs, env, cli.clone(), CliPolicy::default());
     let err = r5
         .resolve()
-        .expect_err("TODO(#16): a CLI in the temporary folder is refused");
-    assert_ne!(err.code(), "not_implemented", "W-02b: {err}");
-    todo!("TODO(#16): assert the refusal names the folder rule and no child process starts");
+        .expect_err("W-02b: a CLI in the temp folder is refused");
+    assert_eq!(err.code(), "cli_unsafe_path", "W-02b: {err}");
+    assert!(
+        !err.to_string().contains("evil"),
+        "the error names no path: {err}"
+    );
+    assert_eq!(cli.call_count(), 0, "W-02b: no child process starts");
+
+    if cfg!(unix) {
+        let dir = abs("opt/shared/bin");
+        let (mut fs, env, cli) = machine(&dir, "1.25.0");
+        fs.0.insert(dir.clone(), 0o777);
+        let r5 = DatabricksCliRunner::new(fs, env, cli.clone(), CliPolicy::default());
+        let err = r5
+            .resolve()
+            .expect_err("W-02b: a world-writable folder is refused");
+        assert_eq!(err.code(), "cli_unsafe_path", "W-02b: {err}");
+        assert_eq!(cli.call_count(), 0, "W-02b: no child process starts");
+    }
 }
 
 #[test]
-#[ignore = "pending TODO(#16): the launch re-check of the CLI path and version is not built"]
 fn at_02_w_02d_a_changed_cli_shows_a_warning_at_the_next_launch() {
-    let r5 = StubCliRunner;
-    let first = r5.resolve().expect("TODO(#16): resolve at launch 1");
-    // TODO(#16): replace the CLI with a different version, then start a new CliRunner (launch 2)
-    // and read its launch report.
-    assert!(first.is_absolute());
-    StubCliRunner
-        .resolve()
-        .expect("TODO(#16): resolve at launch 2");
-    todo!("TODO(#16): assert launch 2 reports the changed path or version as a warning");
+    let dir = abs("opt/databricks/bin");
+    let (fs, env, cli) = machine(&dir, "1.25.0");
+    let launch_1 = DatabricksCliRunner::new(fs, env, cli, CliPolicy::default());
+    let first = launch_1.launch_check(None).expect("launch 1");
+    assert!(first.warnings.is_empty(), "{:?}", first.warnings);
+
+    // The CLI is replaced by another version; launch 2 compares with the stored record.
+    let (fs, env, cli) = machine(&dir, "1.26.1");
+    let launch_2 = DatabricksCliRunner::new(fs, env, cli, CliPolicy::default());
+    let second = launch_2
+        .launch_check(Some(&first.record))
+        .expect("launch 2");
+    let codes: Vec<_> = second.warnings.iter().map(|w| w.code()).collect();
+    assert_eq!(codes, ["CLI_VERSION_CHANGED"], "W-02d: {codes:?}");
+}
+
+#[test]
+fn at_02_w_02a_w_02c_status_reports_the_verified_path_and_version_for_cli_status() {
+    // The `{path, version, found}` part of the `cli_status` IPC reply (Settings, #16).
+    let dir = abs("opt/databricks/bin");
+    let (fs, env, cli) = machine(&dir, "1.25.0");
+    let r5 = DatabricksCliRunner::new(fs, env, cli, CliPolicy::default());
+    assert!(
+        !r5.status().found,
+        "nothing is verified before the launch check"
+    );
+    r5.launch_check(None).expect("launch");
+    let st = r5.status();
+    assert!(st.found);
+    assert_eq!(st.path.as_deref(), Some(cli_in(&dir).as_path()));
+    assert_eq!(st.version.map(|v| v.to_string()).as_deref(), Some("1.25.0"));
+}
+
+#[test]
+fn arc_6_the_real_cli_runner_refuses_auth_token_before_any_child_starts() {
+    let dir = abs("opt/databricks/bin");
+    let (fs, env, cli) = machine(&dir, "1.25.0");
+    let r5 = DatabricksCliRunner::new(fs, env, cli.clone(), CliPolicy::default());
+    let err = r5
+        .run_json(&["auth", "token", "--profile", "p"])
+        .expect_err("ARC-6: refused");
+    assert_eq!(err.code(), "token_command_refused");
+    assert_eq!(cli.call_count(), 0, "no child process starts");
 }
 
 // ---------- R6 TokenBroker refresh and 401 (W-05a..d, #18) ----------
@@ -207,18 +388,18 @@ fn at_02_w_18a_w_18c_after_sign_out_no_call_succeeds_and_no_token_is_left() {
 // ---------- Pending, live: the AT-02 run on a real workspace (needs:human, needs:u2m) ----------
 
 #[test]
-#[ignore = "pending TODO(#16): live run needs the real CliRunner auth token run and a person with a U2M profile (needs:u2m)"]
+#[ignore = "pending TODO(#42): live run needs R6 on the shipped R5 (DatabricksCliRunner, #16) and a person with a U2M profile (needs:u2m)"]
 fn at_02_w_05c_w_16b_live_an_expired_u2m_profile_recovers_after_sign_in() {
-    // TODO(#16): read workspace_id through R6 on the real CliRunner for the fixture profile
+    // TODO(#42): read workspace_id through R6 on DatabricksCliRunner (#16) for the fixture profile
     // (never a token). The stub check comes first, so a forced run of this pending test fails
     // and never reads as a skip.
     let r6 = StubTokenBroker;
     r6.invalidate("bottle-test", TokenLease::default())
-        .expect("TODO(#16): R6 runs on the real CliRunner");
+        .expect("TODO(#42): R6 runs on DatabricksCliRunner");
     let w = mog_core::live_or_skip!();
     let wsid = r6
         .workspace_id(&w.profile)
-        .expect("TODO(#16): workspace_id from x-databricks-org-id");
+        .expect("TODO(#42): workspace_id from x-databricks-org-id");
     assert!(!wsid.is_empty());
     todo!("TODO(#42): the person runs `databricks auth logout --profile <your-profile>`, asks, signs in from the chip; assert the paused poll resumes with the same conversation and response IDs");
 }

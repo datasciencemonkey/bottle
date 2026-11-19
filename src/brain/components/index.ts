@@ -16,6 +16,7 @@ import {
 import { createCaptureMood, wireCaptureMood } from '../capture-mood';
 import { wireForget } from '../forget-wiring';
 import { wireWipe } from '../wipe-wiring';
+import { wireCliSettings } from '../cli-wiring';
 import { sendHubSnapshot, wireHubMogs } from '../hub-mogs-wiring';
 import {
   createCaptureLifecycle,
@@ -127,6 +128,8 @@ export function startBrain(): Brain {
       flow: new WipeFlow({ genieOne: new GenieOneDeleteUtility() }),
       settings: async () => retentionSettings(await readAdminPolicy()),
     });
+    // #16 (W-02a, W-02c, W-02d): the hub Settings show the CLI path and version from T7.
+    wireCliSettings(bus, { cliInfo: () => components.T7.cliInfo() });
     // MB-06a, MB-06b, UX-28: the talk-key target, its marker and its toast (#73). It is wired
     // before the capture lifecycle, so a `hotkey:ptt` down updates the target first.
     const talkTarget = createAppTalkTarget(configName);

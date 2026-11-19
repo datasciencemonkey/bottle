@@ -1,0 +1,21 @@
+[package]
+name = "cli-runner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+description = "CliRunner (R5): the only way Bottle runs the Databricks CLI."
+
+[lib]
+path = "src/lib.rs"
+
+# Test fixture only: a tiny stand-in for `databricks` used by the real-process
+# tests through CARGO_BIN_EXE_fake-databricks. It is never shipped.
+[[bin]]
+name = "fake-databricks"
+path = "src/bin/fake-databricks.rs"
+test = false
+doc = false
+
+[dependencies]

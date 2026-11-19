@@ -471,6 +471,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "cli-runner"
+version = "0.1.0"
+
+[[package]]
 name = "cmov"
 version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2256,6 +2260,7 @@ version = "0.1.0"
 dependencies = [
  "block2",
  "bzip2 0.4.4",
+ "cli-runner",
  "cpal",
  "getrandom 0.3.4",
  "icu_normalizer",

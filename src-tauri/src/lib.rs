@@ -5,6 +5,7 @@
 
 pub mod agent_host;
 pub mod capture_host;
+pub mod cli_host;
 pub mod consent_host;
 pub mod hotkey_host;
 pub mod hotkey_settings;
@@ -207,8 +208,13 @@ pub fn run() {
             // key store or the data dir is not there, the app still runs; `consent_*` then fail
             // with `consent_storage_failed`, and the notice gate stays closed (MB-08a).
             let _ = consent_host::install(handle);
+            // R5: the one CliRunner of the process (#16), for T7 and R6. It runs no CLI yet.
+            cli_host::install(handle);
             // T7 for `profiles_list` and the R7/R8 profile hosts (#17). Before R8, which uses it.
             profiles_host::install(handle);
+            // R5 launch check on a worker (W-02d) and `cli_status`. A missing CLI never fails the
+            // start.
+            cli_host::start(handle);
             // R8 for `mcp_call` (#467). If its HTTP client cannot start, the app still runs;
             // `mcp_call` then answers `host_failed`.
             let _ = mcp_host::install(handle);

@@ -19,6 +19,7 @@ test-support = []
 local-stt = ["dep:sherpa-onnx", "dep:sherpa-onnx-sys", "dep:ureq", "dep:bzip2", "dep:tar"]
 
 [dependencies]
+cli-runner.workspace = true
 getrandom.workspace = true
 reqwest.workspace = true
 rustls.workspace = true
