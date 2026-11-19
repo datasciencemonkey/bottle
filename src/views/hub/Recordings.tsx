@@ -369,7 +369,12 @@ export function Recordings({
   }
 
   return (
-    <section className="rec-area" data-hub-view="recordings" aria-label="Recordings" hidden={!active}>
+    <section
+      className="rec-area"
+      data-hub-view="recordings"
+      aria-label="Recordings"
+      hidden={!active}
+    >
       {header && <div className="rec-bar">{header}</div>}
       {body}
     </section>

@@ -1072,16 +1072,16 @@
   }
 
   /* ---- Call recording (ADR 0103) ---- */
-  
+
   .rec-hint {
     color: var(--mog-text-muted);
     font-size: var(--mog-text-sm);
   }
-  
+
   .hub p.rec-hint {
     margin: 0;
   }
-  
+
   /* A text button for small in-line actions (Change, Reset to default, Retry). */
   .hub .rec-link {
     min-height: 22px;
@@ -1090,16 +1090,16 @@
     color: var(--mog-eye);
     font-size: var(--mog-text-sm);
   }
-  
+
   .hub .rec-link:hover {
     border-color: transparent;
     background: rgb(140 200 255 / 10%);
   }
-  
+
   .hub .rec-link:disabled {
     color: var(--mog-text-muted);
   }
-  
+
   /* The knob: a switch, not a checkbox, because it turns a feature on. */
   .rec-knob {
     display: flex;
@@ -1108,18 +1108,18 @@
     gap: 16px;
     padding: 2px 0 4px;
   }
-  
+
   .rec-knob-label {
     display: flex;
     flex-direction: column;
     gap: 2px;
     cursor: pointer;
   }
-  
+
   .rec-knob-label > span:first-child {
     font-weight: 500;
   }
-  
+
   .hub input.hub-switch {
     position: relative;
     flex: none;
@@ -1132,7 +1132,7 @@
     appearance: none;
     transition: background-color 150ms var(--mog-ease-out);
   }
-  
+
   .hub input.hub-switch::before {
     content: '';
     position: absolute;
@@ -1145,15 +1145,15 @@
     box-shadow: 0 1px 2px rgb(8 10 18 / 40%);
     transition: transform 180ms var(--mog-ease-out);
   }
-  
+
   .hub input.hub-switch:checked {
     background: var(--mog-accent);
   }
-  
+
   .hub input.hub-switch:checked::before {
     transform: translateX(14px);
   }
-  
+
   /* The consent notice: one quiet panel, one acknowledgement. */
   .rec-consent {
     margin: 10px 0 4px;
@@ -1163,23 +1163,23 @@
     background: var(--mog-surface-raised);
     animation: rec-in 220ms var(--mog-ease-out);
   }
-  
+
   .hub .rec-consent-text {
     margin: 0 0 2px;
     font-weight: 500;
   }
-  
+
   .rec-consent .hub-primary {
     margin-top: 12px;
   }
-  
+
   @keyframes rec-in {
     from {
       opacity: 0;
       transform: translateY(-2px);
     }
   }
-  
+
   /* The fields: labels in one column, controls in the other. */
   .rec-fields {
     display: grid;
@@ -1190,24 +1190,24 @@
     padding-top: 16px;
     border-top: 1px solid rgb(255 255 255 / 6%);
   }
-  
+
   .rec-fields form {
     margin: 0;
   }
-  
+
   .rec-field-label {
     color: var(--mog-text-muted);
   }
-  
+
   .rec-field-label--top {
     align-self: start;
     padding-top: 5px;
   }
-  
+
   .hub .rec-wide {
     width: min(100%, 320px);
   }
-  
+
   /* The length: one segmented control of radios. */
   .rec-length {
     display: flex;
@@ -1215,7 +1215,7 @@
     align-items: center;
     gap: 8px 10px;
   }
-  
+
   .rec-segments {
     display: inline-flex;
     padding: 2px;
@@ -1223,12 +1223,12 @@
     border-radius: var(--mog-radius-sm);
     background: rgb(0 0 0 / 24%);
   }
-  
+
   .rec-segment {
     position: relative;
     cursor: pointer;
   }
-  
+
   .hub .rec-segment input {
     position: absolute;
     inset: 0;
@@ -1238,7 +1238,7 @@
     opacity: 0;
     cursor: pointer;
   }
-  
+
   .rec-segment span {
     display: inline-flex;
     align-items: center;
@@ -1253,27 +1253,27 @@
       background-color 150ms var(--mog-ease-out),
       color 150ms var(--mog-ease-out);
   }
-  
+
   .rec-segment:hover span {
     color: var(--mog-text);
   }
-  
+
   .rec-segment input:checked + span {
     background: var(--mog-surface-raised);
     color: var(--mog-text);
     box-shadow: 0 1px 2px rgb(8 10 18 / 35%);
   }
-  
+
   .rec-segment input:focus-visible + span {
     box-shadow: var(--mog-focus-ring);
   }
-  
+
   .rec-custom {
     display: inline-flex;
     align-items: center;
     gap: 8px;
   }
-  
+
   .hub .rec-custom input {
     width: 64px;
     min-height: 28px;
@@ -1283,7 +1283,7 @@
     background: rgb(0 0 0 / 24%);
     font-variant-numeric: tabular-nums;
   }
-  
+
   /* Storage. */
   .rec-storage {
     display: flex;
@@ -1291,22 +1291,22 @@
     gap: 8px;
     min-width: 0;
   }
-  
+
   .hub .rec-storage p {
     margin: 0;
   }
-  
+
   .rec-place {
     display: flex;
     flex-wrap: wrap;
     align-items: baseline;
     gap: 2px 10px;
   }
-  
+
   .rec-place > span:first-child {
     font-weight: 500;
   }
-  
+
   .rec-path {
     min-width: 0;
     color: var(--mog-text-muted);
@@ -1318,59 +1318,59 @@
       monospace;
     overflow-wrap: anywhere;
   }
-  
+
   .rec-inline {
     display: flex;
     gap: 8px;
   }
-  
+
   .hub .rec-inline input {
     flex: 1 1 auto;
     min-width: 0;
     max-width: 360px;
   }
-  
+
   .rec-confirm {
     padding: 10px 12px;
     border-radius: var(--mog-radius-sm);
     background: rgb(0 0 0 / 18%);
   }
-  
+
   .rec-confirm .hub-actions {
     margin-top: 8px;
   }
-  
+
   /* Advanced: the two model names, behind one quiet entry point. */
   .rec-advanced {
     margin-top: 18px;
   }
-  
+
   .hub .rec-advanced summary {
     color: var(--mog-text-muted);
   }
-  
+
   .hub .rec-advanced summary:hover {
     color: var(--mog-text);
   }
-  
+
   .rec-fields--inner {
     margin-top: 0;
     padding-top: 0;
     border-top: 0;
   }
-  
+
   /* Instructions. */
   .rec-instructions {
     min-width: 0;
   }
-  
+
   .hub .rec-instructions textarea,
   .hub .rec-edit textarea {
     display: block;
     width: 100%;
     line-height: 1.5;
   }
-  
+
   .hub .rec-under {
     display: flex;
     flex-wrap: wrap;
@@ -1379,7 +1379,7 @@
     gap: 4px 12px;
     margin: 6px 0 0;
   }
-  
+
   /* Loading: a quiet block, never a spinner. */
   .rec-skeleton {
     height: 44px;
@@ -1387,28 +1387,28 @@
     background: rgb(255 255 255 / 4%);
     animation: rec-breathe 1.6s ease-in-out infinite;
   }
-  
+
   .rec-skeleton--row {
     height: 40px;
     margin-top: 8px;
   }
-  
+
   .rec-skeleton--row:first-child {
     margin-top: 40px;
   }
-  
+
   .rec-skeleton--tall {
     height: 160px;
     margin-top: 20px;
     max-width: 68ch;
   }
-  
+
   @keyframes rec-breathe {
     50% {
       opacity: 0.5;
     }
   }
-  
+
   /* A plain-words problem and its one action. */
   .rec-alert {
     display: flex;
@@ -1421,12 +1421,12 @@
     border-radius: var(--mog-radius-sm);
     background: rgb(226 72 59 / 10%);
   }
-  
+
   .hub .rec-alert p {
     flex: 1 1 240px;
     margin: 0;
   }
-  
+
   /* The record dot and the REC indicator. */
   .rec-dot {
     flex: none;
@@ -1435,7 +1435,7 @@
     border-radius: 50%;
     background: var(--mog-lamp);
   }
-  
+
   .rec-on {
     display: inline-flex;
     align-items: center;
@@ -1446,32 +1446,32 @@
     border-radius: var(--mog-radius-pill);
     background: rgb(226 72 59 / 12%);
   }
-  
+
   .rec-on .rec-dot {
     /* The lamp stays lit: a slightly brighter lamp red on the tinted pill, a gentle breath. */
     background: color-mix(in srgb, var(--mog-lamp) 85%, var(--mog-on-accent));
     box-shadow: 0 0 6px rgb(226 72 59 / 55%);
     animation: rec-pulse 2s ease-in-out infinite;
   }
-  
+
   @keyframes rec-pulse {
     50% {
       opacity: 0.7;
     }
   }
-  
+
   .rec-on-label {
     font-size: var(--mog-text-xs);
     font-weight: 700;
     letter-spacing: 0.06em;
   }
-  
+
   .rec-on-left {
     color: var(--mog-text-muted);
     font-size: var(--mog-text-sm);
     font-variant-numeric: tabular-nums;
   }
-  
+
   .hub .rec-stop {
     min-height: 24px;
     margin-left: 4px;
@@ -1481,19 +1481,19 @@
     font-size: var(--mog-text-sm);
     font-weight: 500;
   }
-  
+
   /* In the header, next to the Labs label, in every view but Recordings. */
   .rec-on--compact {
     min-height: 26px;
     margin-left: 14px;
     vertical-align: middle;
   }
-  
+
   .hub .rec-on--compact .rec-stop {
     min-height: 20px;
     padding: 0 10px;
   }
-  
+
   /* The Record control, above the list. */
   .rec-control {
     display: flex;
@@ -1501,24 +1501,24 @@
     align-items: flex-start;
     gap: 10px;
   }
-  
+
   .rec-control > .rec-edit,
   .rec-control > .rec-alert {
     align-self: stretch;
     max-width: 72ch;
   }
-  
+
   .rec-control > .rec-alert {
     margin-top: 0;
   }
-  
+
   .rec-start-row {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: 8px 14px;
   }
-  
+
   .hub .rec-start {
     display: inline-flex;
     align-items: center;
@@ -1527,23 +1527,23 @@
     padding: 0 16px 0 14px;
     border-radius: var(--mog-radius-pill);
   }
-  
+
   .rec-start .rec-dot {
     background: var(--mog-on-accent);
   }
-  
+
   .hub .rec-start:disabled .rec-dot {
     background: var(--mog-text-muted);
   }
-  
+
   .rec-edit {
     max-width: 68ch;
   }
-  
+
   .rec-edit .rec-hint {
     margin-top: 6px;
   }
-  
+
   /* The Recordings area: a bar with the Record control, then the list and the detail. */
   .rec-area {
     display: flex;
@@ -1551,19 +1551,19 @@
     margin: 0 -32px;
     border-top: 1px solid var(--mog-edge);
   }
-  
+
   .rec-bar {
     padding: 14px 32px;
     border-bottom: 1px solid rgb(255 255 255 / 6%);
   }
-  
+
   .rec-panes {
     display: grid;
     flex: 1;
     grid-template-columns: 280px minmax(0, 1fr);
     min-height: 0;
   }
-  
+
   .rec-list {
     min-height: 0;
     overflow-y: auto;
@@ -1571,11 +1571,11 @@
     border-right: 1px solid var(--mog-edge);
     overscroll-behavior: contain;
   }
-  
+
   .hub .rec-list:focus-visible {
     box-shadow: none;
   }
-  
+
   .rec-day {
     margin: 16px 0 6px;
     padding: 0 12px;
@@ -1583,7 +1583,7 @@
     font-size: var(--mog-text-xs);
     font-weight: 600;
   }
-  
+
   .rec-row {
     display: flex;
     align-items: center;
@@ -1595,43 +1595,43 @@
     cursor: pointer;
     transition: background-color 120ms var(--mog-ease-out);
   }
-  
+
   .rec-row:hover {
     background: color-mix(in srgb, var(--mog-surface-raised) 50%, transparent);
   }
-  
+
   .rec-row[aria-selected='true'] {
     background: var(--mog-surface-raised);
   }
-  
+
   .rec-list:focus-visible .rec-row[data-active] {
     box-shadow: var(--mog-focus-ring);
   }
-  
+
   .rec-row-main {
     display: flex;
     flex-direction: column;
     gap: 1px;
     min-width: 0;
   }
-  
+
   .rec-row-time {
     font-weight: 500;
     font-variant-numeric: tabular-nums;
   }
-  
+
   .rec-row-len {
     color: var(--mog-text-muted);
     font-size: var(--mog-text-xs);
     font-variant-numeric: tabular-nums;
   }
-  
+
   .rec-row-side {
     display: flex;
     align-items: center;
     gap: 4px;
   }
-  
+
   .rec-status {
     display: inline-flex;
     align-items: center;
@@ -1640,7 +1640,7 @@
     font-size: var(--mog-text-xs);
     white-space: nowrap;
   }
-  
+
   .rec-status-dot {
     width: 6px;
     height: 6px;
@@ -1648,27 +1648,27 @@
     background: currentColor;
     opacity: 0.6;
   }
-  
+
   .rec-status-dot[data-busy] {
     background: var(--mog-eye);
     opacity: 1;
     animation: rec-breathe 1.6s ease-in-out infinite;
   }
-  
+
   .rec-status[data-status='recording'] .rec-status-dot {
     background: var(--mog-lamp);
     opacity: 1;
   }
-  
+
   .rec-status[data-status='failed'] {
     color: var(--mog-lid);
   }
-  
+
   .rec-status[data-status='failed'] .rec-status-dot {
     background: var(--mog-lamp);
     opacity: 1;
   }
-  
+
   /* The detail. */
   .rec-detail {
     min-height: 0;
@@ -1676,11 +1676,11 @@
     padding: 20px 24px 40px;
     overscroll-behavior: contain;
   }
-  
+
   .hub .rec-detail:focus-visible {
     box-shadow: inset 0 0 0 2px var(--mog-focus);
   }
-  
+
   .rec-detail-head {
     display: flex;
     flex-wrap: wrap;
@@ -1689,11 +1689,11 @@
     gap: 8px 16px;
     max-width: 68ch;
   }
-  
+
   .hub .rec-detail-title {
     font-size: 15px;
   }
-  
+
   .hub .rec-detail-meta {
     display: flex;
     flex-wrap: wrap;
@@ -1704,18 +1704,18 @@
     font-size: var(--mog-text-xs);
     font-variant-numeric: tabular-nums;
   }
-  
+
   .rec-detail .rec-alert {
     max-width: 68ch;
     margin-top: 16px;
   }
-  
+
   .hub .rec-pending {
     max-width: 68ch;
     margin: 16px 0 0;
     color: var(--mog-text-muted);
   }
-  
+
   /* "Notes" and "Transcript": section labels that outrank the headings inside the notes. */
   .hub .rec-sub {
     max-width: 68ch;
@@ -1726,60 +1726,60 @@
     font-size: 15px;
     font-weight: 600;
   }
-  
+
   /* Headings inside the notes: two steps, more space above than below. */
   .hub .rec-h2 {
     margin: 20px 0 6px;
     font-size: var(--mog-text-md);
     font-weight: 600;
   }
-  
+
   .hub .rec-h3 {
     margin: 14px 0 4px;
     color: var(--mog-text-muted);
     font-size: var(--mog-text-sm);
     font-weight: 600;
   }
-  
+
   .hub .rec-md > .rec-h2:first-child {
     margin-top: 0;
   }
-  
+
   /* Notes: headings from the view, the rest through the card's allowlist markdown. */
   .rec-md {
     max-width: 68ch;
     line-height: 1.55;
     overflow-wrap: anywhere;
   }
-  
+
   .hub .rec-md p,
   .rec-md ul,
   .rec-md ol {
     margin: 0 0 10px;
   }
-  
+
   .hub .rec-md p:has(> strong:only-child) {
     margin-top: 18px;
     margin-bottom: 4px;
   }
-  
+
   .hub .rec-md p:first-child {
     margin-top: 0;
   }
-  
+
   .rec-md ul,
   .rec-md ol {
     padding-left: 18px;
   }
-  
+
   .rec-md li + li {
     margin-top: 3px;
   }
-  
+
   .rec-md li::marker {
     color: var(--mog-text-muted);
   }
-  
+
   .rec-md code,
   .rec-md pre {
     border-radius: var(--mog-radius-sm);
@@ -1791,16 +1791,16 @@
       Consolas,
       monospace;
   }
-  
+
   .rec-md code {
     padding: 1px 4px;
   }
-  
+
   .rec-md pre {
     overflow-x: auto;
     padding: 10px 12px;
   }
-  
+
   /* Transcript: one turn per speaker change, the time stamp beside the name. */
   .rec-turns {
     max-width: 68ch;
@@ -1808,34 +1808,34 @@
     padding: 0;
     list-style: none;
   }
-  
+
   .rec-turn + .rec-turn {
     margin-top: 14px;
   }
-  
+
   .hub .rec-turn-head {
     display: flex;
     align-items: baseline;
     gap: 8px;
     margin: 0 0 2px;
   }
-  
+
   .rec-speaker {
     font-size: var(--mog-text-sm);
     font-weight: 600;
   }
-  
+
   .rec-stamp {
     color: var(--mog-text-muted);
     font-size: var(--mog-text-xs);
     font-variant-numeric: tabular-nums;
   }
-  
+
   .hub .rec-turn-text {
     margin: 0;
     line-height: 1.55;
   }
-  
+
   /* Empty, unavailable and loading: centred in the area, two quiet lines. */
   .rec-message {
     display: flex;
@@ -1846,11 +1846,11 @@
     padding: 24px 24px 64px;
     text-align: center;
   }
-  
+
   .hub .rec-message-title {
     margin: 0;
   }
-  
+
   .hub .rec-message-line {
     margin: 4px 0 0;
     color: var(--mog-text-muted);

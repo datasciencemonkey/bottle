@@ -124,11 +124,16 @@ describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
     expect(el.querySelector('main > p')?.textContent).toBe('Databricks Labs / experimental');
   });
 
-  it('[#103] the toggle opens the sidebar with Conversations, MOGs and Settings', async () => {
+  it('[#103] the toggle opens the sidebar with Conversations, MOGs, Recordings and Settings', async () => {
     const { el } = await render(<Hub />);
     await act(async () => toggle(el)?.click());
     expect(el.querySelector('[data-sidebar]')).not.toBeNull();
-    expect(items(el).map((b) => b.textContent)).toEqual(['Conversations', 'MOGs', 'Settings']);
+    expect(items(el).map((b) => b.textContent)).toEqual([
+      'Conversations',
+      'MOGs',
+      'Recordings',
+      'Settings',
+    ]);
     expect(items(el)[0]?.getAttribute('aria-current')).toBe('page');
   });
 
@@ -161,7 +166,7 @@ describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
   it('[#103] an open from a double-click shows Conversations', async () => {
     const { el } = await render(<Hub />);
     await act(async () => toggle(el)?.click());
-    await act(async () => items(el)[2]?.click());
+    await act(async () => items(el)[3]?.click());
     expect(conv(el).hidden).toBe(true);
     await tauri.emitTo('hub', 'hub:conversations.open', {});
     expect(conv(el).hidden).toBe(false);
@@ -216,7 +221,7 @@ describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
   it('[review #602] switching areas keeps Settings mounted (the Wipe choice survives)', async () => {
     const { el } = await render(<Hub />);
     await act(async () => toggle(el)?.click());
-    await act(async () => items(el)[2]?.click());
+    await act(async () => items(el)[3]?.click());
     const radios = () => [...el.querySelectorAll<HTMLElement>('[role="radio"]')];
     await act(async () => radios()[2]?.click());
     expect(radios()[2]?.getAttribute('aria-checked')).toBe('true');
@@ -224,7 +229,7 @@ describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
     await act(async () => items(el)[0]?.click());
     expect(el.querySelector('[data-hub-view="settings"]')).not.toBeNull();
     await act(async () => toggle(el)?.click());
-    await act(async () => items(el)[2]?.click());
+    await act(async () => items(el)[3]?.click());
     expect(radios()[2]?.getAttribute('aria-checked')).toBe('true');
   });
 });
@@ -232,18 +237,25 @@ describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
 describe('V1 hub view: call recording (ADR 0103)', () => {
   beforeEach(() => tauri.reset());
 
+  // ui-1 (#97, #103): Recordings is a sidebar item now, like MOGs and Settings, not a button in
+  // the old always-visible HubNav; its settings section lives inside the Settings area.
   it('[REC-V15] the hub has a Recordings area and a Call recording settings section', async () => {
     const { el } = await render(<Hub />);
-    const nav = [...el.querySelectorAll('nav[aria-label="Hub"] button')].map((b) => b.textContent);
-    expect(nav).toContain('Recordings');
+    await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-toggle]')?.click());
+    const items = [...el.querySelectorAll<HTMLElement>('[data-sidebar-item]')];
+    expect(items.map((b) => b.textContent)).toContain('Recordings');
+    const settingsItem = items.find((b) => b.textContent === 'Settings') as HTMLElement;
+    await act(async () => settingsItem.click());
     expect(el.querySelector('[data-view="recording-settings"]')).not.toBeNull();
-    const rec = [...el.querySelectorAll('nav[aria-label="Hub"] button')].find(
+
+    await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-toggle]')?.click());
+    const recItem = [...el.querySelectorAll<HTMLElement>('[data-sidebar-item]')].find(
       (b) => b.textContent === 'Recordings',
-    );
-    await act(async () => (rec as HTMLElement).click());
+    ) as HTMLElement;
+    await act(async () => recItem.click());
     expect(el.querySelector('section[aria-label="Recordings"]')?.hasAttribute('hidden')).toBe(
       false,
     );
-    expect(el.querySelector('[data-hub-view="home"]')?.hasAttribute('hidden')).toBe(true);
+    expect(el.querySelector('[data-hub-view="settings"]')?.hasAttribute('hidden')).toBe(true);
   });
 });
