@@ -35,7 +35,14 @@ export function DataPanel() {
       <Collapsible>
         <CollapsibleTrigger className="group flex h-auto min-h-0 items-center gap-[var(--mog-space-2)] border-0 bg-transparent p-0 text-[var(--mog-text-sm)] text-muted-foreground hover:text-foreground">
           <ChevronDownIcon className="size-3.5 transition-transform motion-reduce:transition-none group-data-[state=open]:rotate-180" />
-          <h2 id="data-panel-title" className="text-[var(--mog-text-sm)] font-normal">
+          {/* m-0 leading-none (ui-1, review of #602 round 3, P2): `.hub h2` (hub.css) still sets
+              this element's line-height and margin by default; without zeroing them out, the
+              row rendered taller than every sibling trigger (Wipe, the Databricks CLI, About),
+              even once the font-size itself matched via `text-[var(--mog-text-sm)]`. */}
+          <h2
+            id="data-panel-title"
+            className="m-0 text-[var(--mog-text-sm)] leading-none font-normal"
+          >
             Where your data goes
           </h2>
         </CollapsibleTrigger>

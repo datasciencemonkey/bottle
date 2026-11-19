@@ -5,7 +5,15 @@
  * `recording`). The brain checks every value and owns every text; the core checks the knob again
  * before any capture starts. The first turn-on shows the consent notice once, with one
  * acknowledgement. The view never builds a path or a URL; it only sends what the user typed.
+ *
+ * ui-1 (review of #602 round 3, P1): the knob, the length and the storage rows now sit in a
+ * `SettingsGroup`/`SettingsRow`, the same grouped, rounded-box layout `MicPreference` already
+ * used, so Settings shows one layout for a toggle-plus-control section, not a bespoke one just
+ * for this section. The knob is the shadcn/ui `Switch` (`MicPreference`'s control), not the
+ * red `input.hub-switch` this used to render: Settings had two different switch styles side by
+ * side before this.
  */
+import { ChevronDownIcon } from 'lucide-react';
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import {
   CATALOG_SCHEMA,
@@ -18,6 +26,9 @@ import {
   type RecordingSettingsView,
   type StorageView,
 } from '../../shared/recording-view';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/collapsible';
+import { Switch } from '../ui/switch';
+import { SettingsGroup, SettingsRow } from './SettingsGroup';
 import { sendRecording } from './recording-ipc';
 
 const isPreset = (m: number) => (LENGTH_CHOICES as readonly number[]).includes(m);
@@ -25,7 +36,7 @@ const isPreset = (m: number) => (LENGTH_CHOICES as readonly number[]).includes(m
 function Knob({ model, settings }: { model: HubRecording; settings: RecordingSettingsView }) {
   const [asking, setAsking] = useState(false);
   const id = useId();
-  const knob = useRef<HTMLInputElement>(null);
+  const knob = useRef<HTMLButtonElement>(null);
   const ok = useRef<HTMLButtonElement>(null);
   const binding = RECORDING_TEXT.binding[model.platform];
   const open = asking && !settings.consentAck;
@@ -43,23 +54,21 @@ function Knob({ model, settings }: { model: HubRecording; settings: RecordingSet
   };
   return (
     <>
-      <div className="rec-knob">
-        <label htmlFor={id} className="rec-knob-label">
-          <span>Record calls</span>
-          {!open && <span className="rec-hint">{binding}</span>}
-        </label>
-        <input
-          ref={knob}
-          id={id}
-          type="checkbox"
-          role="switch"
-          className="hub-switch"
-          data-recording-knob
-          checked={settings.enabled}
-          aria-expanded={open || undefined}
-          onChange={(e) => toggle(e.currentTarget.checked)}
-        />
-      </div>
+      <SettingsRow
+        htmlFor={id}
+        label="Record calls"
+        description={!open ? binding : undefined}
+        control={
+          <Switch
+            ref={knob}
+            id={id}
+            data-recording-knob
+            checked={settings.enabled}
+            aria-expanded={open || undefined}
+            onCheckedChange={toggle}
+          />
+        }
+      />
       {open && (
         <div
           className="rec-consent"
@@ -335,21 +344,27 @@ export function RecordingSettings({ model }: { model: HubRecording | undefined }
         <div className="rec-skeleton" aria-busy="true" aria-label="Loading" />
       ) : (
         <>
-          <Knob model={model} settings={s} />
+          {/* The knob, the length and the storage rows share one grouped box (ui-1, review of
+              #602 round 3, P1), like `MicPreference`'s own `SettingsGroup`/`SettingsRow`. The
+              consent notice (inside `Knob`) still renders as its own panel right under the
+              knob's row, inside the group, when it shows. */}
+          <SettingsGroup className="mt-[var(--mog-space-3)]">
+            <Knob model={model} settings={s} />
+            <SettingsRow
+              // The id (not a plain string label) is `Length`'s `aria-labelledby` target
+              // (`recording-length-label`, below): the radiogroup names itself from this row's
+              // own visible label, not a separate hidden one.
+              label={<span id="recording-length-label">Stops after</span>}
+              control={<Length key={s.lengthMin} minutes={s.lengthMin} />}
+            />
+            <SettingsRow label="Save to" control={<Storage storage={model.storage} />} />
+          </SettingsGroup>
           {model.settingsError && (
             <p className="hub-error" role="alert">
               {model.settingsError}
             </p>
           )}
-          <div className="rec-fields">
-            <span className="rec-field-label" id="recording-length-label">
-              Stops after
-            </span>
-            <Length key={s.lengthMin} minutes={s.lengthMin} />
-
-            <span className="rec-field-label">Save to</span>
-            <Storage storage={model.storage} />
-
+          <div className="rec-fields mt-[var(--mog-space-4)]">
             <label
               className="rec-field-label rec-field-label--top"
               htmlFor="recording-instructions"
@@ -358,24 +373,36 @@ export function RecordingSettings({ model }: { model: HubRecording | undefined }
             </label>
             <Instructions key={s.instructions} instructions={s.instructions} />
           </div>
-          {/* ADR 0103 update 4: the two serving endpoints; most people never change them. */}
-          <details className="hub-disclosure rec-advanced" data-recording-advanced>
-            <summary>Advanced</summary>
-            <div className="rec-fields rec-fields--inner">
-              <label className="rec-field-label" htmlFor="recording-endpoint-transcribe">
-                Transcribe model
-              </label>
-              <Endpoint
-                key={`t-${s.transcribeEndpoint}`}
-                which="transcribe"
-                endpoint={s.transcribeEndpoint}
-              />
-              <label className="rec-field-label" htmlFor="recording-endpoint-notes">
-                Notes model
-              </label>
-              <Endpoint key={`n-${s.notesEndpoint}`} which="notes" endpoint={s.notesEndpoint} />
-            </div>
-          </details>
+          {/* ADR 0103 update 4: the two serving endpoints; most people never change them. One
+              consistent "show more" style (ui-1, review of #602 round 3, P2): the same
+              Collapsible, left chevron and text-sm/muted-foreground trigger as every other
+              disclosure in Settings (Wipe, the Databricks CLI, the data panel, About), not a
+              plain `<details>`/`<summary>` with its own hand-drawn chevron on the right. */}
+          <Collapsible data-recording-advanced className="mt-[var(--mog-space-3)]">
+            <CollapsibleTrigger className="group flex h-auto min-h-0 items-center gap-[var(--mog-space-2)] border-0 bg-transparent p-0 text-[var(--mog-text-sm)] text-muted-foreground hover:text-foreground">
+              <ChevronDownIcon className="size-3.5 transition-transform motion-reduce:transition-none group-data-[state=open]:rotate-180" />
+              Advanced
+            </CollapsibleTrigger>
+            <CollapsibleContent
+              forceMount
+              className="mt-[var(--mog-space-2)] data-[state=closed]:hidden"
+            >
+              <div className="rec-fields rec-fields--inner">
+                <label className="rec-field-label" htmlFor="recording-endpoint-transcribe">
+                  Transcribe model
+                </label>
+                <Endpoint
+                  key={`t-${s.transcribeEndpoint}`}
+                  which="transcribe"
+                  endpoint={s.transcribeEndpoint}
+                />
+                <label className="rec-field-label" htmlFor="recording-endpoint-notes">
+                  Notes model
+                </label>
+                <Endpoint key={`n-${s.notesEndpoint}`} which="notes" endpoint={s.notesEndpoint} />
+              </div>
+            </CollapsibleContent>
+          </Collapsible>
         </>
       )}
     </section>

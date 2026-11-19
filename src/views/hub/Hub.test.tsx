@@ -163,6 +163,32 @@ describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
     expect(el.querySelector('[data-sidebar]')).not.toBeNull();
   });
 
+  // LOW (review of #602 round 3): the Wipe dialog (Radix Dialog, `role="dialog"`) owns Esc while
+  // it is open; the sidebar's own document-level Esc listener used to race it and close the
+  // sidebar underneath the still-open dialog.
+  it('[LOW review #602] Esc does not close the sidebar while the Wipe dialog is open', async () => {
+    const { el } = await render(<Hub />);
+    await act(async () => toggle(el)?.click());
+    await act(async () => items(el)[3]?.click());
+    // Picking an area closes an unpinned overlay (review of #602 "also fix"); reopen it so this
+    // test can check whether Esc leaves it open while the dialog is up.
+    await act(async () => toggle(el)?.click());
+    await act(async () =>
+      tauri.emitTo('hub', 'hub:wipe_dialog', {
+        scope: 'everything',
+        alsoGenie: false,
+        phase: 'confirm',
+        title: 'Wipe everything',
+        text: 'Delete everything on this computer? You cannot undo this.',
+      }),
+    );
+    expect(el.querySelector('[data-wipe-dialog]')).not.toBeNull();
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(el.querySelector('[data-sidebar]')).not.toBeNull();
+  });
+
   it('[#103] an open from a double-click shows Conversations', async () => {
     const { el } = await render(<Hub />);
     await act(async () => toggle(el)?.click());

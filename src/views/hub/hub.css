@@ -17,21 +17,38 @@
     color-scheme: dark;
   }
 
-  /* display: flex; flex-direction: column; min-height: 100vh (ui-1, review of #602 polish
-     note): without a height context, `.hub-body`'s own `flex: 1` (below) was a no-op outside
-     `.hub--wide` (which sets `height: 100vh` and `display: grid` itself, overriding these), so
-     the sidebar's `h-full` fell short of the window's bottom edge on the Settings/MOGs areas.
-     `.hub--wide`'s own rules (same specificity, declared later) still win for Conversations. */
+  /* display: grid (ui-1, review of #602 round 3, blockers 2 and 3): one grid for every area, not
+     a plain flex column plus a second, different `.hub--wide`-only grid. Row 1 is the header
+     (`.hub-title` + `.hub-labs`, side by side in the `auto 1fr` columns); row 2 is `.hub-body`.
+     Before this, the header was a flex column of two stacked lines on MOGs/Settings but one
+     side-by-side grid row on Conversations/Recordings (`.hub--wide`'s own grid, same
+     specificity, declared later, won there), so the whole page shifted 16px between areas
+     (review finding 3). A fixed `height: 100vh`, not `min-height` (review finding 2): the
+     window itself must never grow past the viewport, so `.hub-content`'s own `overflow-y: auto`
+     (below) is what scrolls, and the sidebar's `position: fixed` rail (HubSidebar.tsx) never has
+     to chase a page scroll. `.hub--wide` now only needs its one remaining override: no bottom
+     padding, for the full-bleed Conversations/Recordings frame. */
   .hub {
     box-sizing: border-box;
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+    align-items: baseline;
     max-width: none;
-    min-height: 100vh;
+    height: 100vh;
     margin: 0;
     padding: var(--mog-space-6) var(--mog-space-6) var(--mog-space-7);
     font: var(--mog-text-md) / var(--mog-leading) var(--mog-font);
     -webkit-font-smoothing: antialiased;
+  }
+
+  /* Row 2, both columns: `align-self: stretch` overrides the grid's own `align-items: baseline`
+     (set for row 1's title/labs) for this one item, so the sidebar + content column still fills
+     every remaining pixel of height, in every area (ui-1, review of #602 round 3). */
+  .hub > .hub-body {
+    grid-column: 1 / -1;
+    align-self: stretch;
+    min-height: 0;
   }
 
   .hub *,
@@ -132,9 +149,13 @@
 
   /* Sections: space and one hairline, no boxes. Every settings-area section shares this rhythm
    (ui-1, #97, #103): --mog-space-5 between sections, --mog-space-2/3 inside one group. */
+  /* `rgb(255 255 255 / 10%)`, not `var(--mog-edge)` (ui-1, review of #602 round 3, P5): the
+     tinted, pink `--mog-edge` hairline sat right under a `SettingsGroup` (`border-border/60`,
+     a neutral tone), so the next section's own top divider read as a stray pink line under the
+     Microphone group. One neutral divider tone for every section now. */
   .hub-section {
     padding: var(--mog-space-5) 0;
-    border-top: 1px solid var(--mog-edge);
+    border-top: 1px solid rgb(255 255 255 / 10%);
   }
 
   .hub-section > h2 {
@@ -722,30 +743,32 @@
     margin: 0;
   }
 
-  /* The sidebar + content column (ui-1, #97, #103; review of #602). `.hub-body` is the
-   positioned ancestor the sidebar panel (HubSidebar.tsx, `position: absolute`) anchors to.
-   `margin-left: calc(var(--mog-space-6) * -1)` cancels `.hub`'s own left padding for this one
-   box, so the panel's `left-0` lands flush with the window's true left edge, not inset by
-   32px; `.hub-content`'s matching `padding-left` restores the content column's visual start
-   position. Unpinned, the panel overlays `.hub-content` with no reflow (`position: absolute`
-   takes it out of flow); pinned, `HubSidebar`'s own width (passed up as `--hub-sidebar-width`
-   by `Hub.tsx`) pushes `.hub-content` over by that much padding, so the panel never covers it
-   for good (review finding 3). */
+  /* The sidebar + content column (ui-1, #97, #103; review of #602). `HubSidebar.tsx`'s panel is
+   `position: fixed` now (review of #602 round 3, blocker 2), pinned to the window itself, not
+   anchored to this box any more. `margin-left: calc(var(--mog-space-6) * -1)` still earns its
+   keep: it cancels `.hub`'s own left padding for this one box, so `.hub-content`'s matching
+   `padding-left` (below) restores the usual 32px start, with the pinned sidebar's own width
+   added on top (review finding 3) — the same baseline `.conv`/`.rec-area` cancel back out with
+   their own `-32px` margin, below. */
   .hub-body {
     position: relative;
     display: flex;
-    flex: 1;
     flex-direction: column;
     min-height: 0;
     margin-left: calc(var(--mog-space-6) * -1);
   }
 
+  /* `overflow-y: auto` (ui-1, review of #602 round 3, blocker 2): `.hub` is a fixed `100vh` now,
+   so this column, not the window, scrolls a tall Settings/MOGs area. Conversations/Recordings
+   never show this column's own scrollbar: their panes (`.conv-list`/`.conv-detail`,
+   `.rec-list`/`.rec-detail`) already scroll themselves and exactly fill it. */
   .hub-content {
     display: flex;
     flex: 1;
     flex-direction: column;
     min-height: 0;
     padding-left: calc(var(--mog-space-6) + var(--hub-sidebar-width, 0px));
+    overflow-y: auto;
     transition: padding-left 0.18s var(--mog-ease-out);
   }
 
@@ -755,11 +778,13 @@
     }
   }
 
-  /* Above the sidebar panel (z-20 in HubSidebar.tsx): the toggle stays reachable even while an
-   unpinned sidebar overlaps the top-left corner. */
+  /* No z-index here any more (ui-1, review of #602 round 3, blocker 2): only the toggle button
+   itself sits above the sidebar panel (`relative z-30` in Hub.tsx, above the panel's z-20), so
+   it stays reachable while an unpinned sidebar overlaps the top-left corner. The area title
+   next to it is a plain, unelevated flow box, so an open overlay paints over it (and the pin),
+   not the other way around — it was elevated too before this fix, which is why "Conversations"
+   or "MOGs" used to show on top of the open panel, looking like the panel's own title. */
   .hub-area-header {
-    position: relative;
-    z-index: 25;
     display: flex;
     min-height: 2.5rem;
     align-items: center;
@@ -780,23 +805,23 @@
     max-width: 616px;
   }
 
-  /* Conversations (#103): the window is the frame. List 280 px, detail fills the rest; each pane
-   scrolls on its own. */
-  .hub--wide {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    grid-template-rows: auto minmax(0, 1fr);
-    align-items: baseline;
-    height: 100vh;
-    padding-bottom: 0;
+  /* `[data-setup-region]` (the permission/CLI/dictation/workspace notices above every area)
+     matches that same measure on MOGs/Settings (ui-1, review of #602 round 3, P3): its
+     `hub-section` hairline used to run the full content-column width (to ~928-944px) while the
+     area below it stopped at 616px, so the rule under the area title did not line up with the
+     content it introduced. `:not(.hub--wide)` leaves Conversations/Recordings alone: there the
+     full window already is the frame. */
+  .hub:not(.hub--wide) [data-setup-region] {
+    max-width: 616px;
   }
 
-  /* `.hub-body` (sidebar + content column) replaces the old `.hub-nav`/`.conv` direct children:
-   it now holds both. */
-  .hub--wide > .hub-body {
-    grid-column: 1 / -1;
-    align-self: stretch;
-    min-height: 0;
+  /* Conversations (#103): the window is the frame. List 280 px, detail fills the rest; each pane
+   scrolls on its own. The grid, the header row and `.hub-body`'s stretch are the shared `.hub`
+   rule now (ui-1, review of #602 round 3, blocker 3: one header layout, not a second grid here
+   that only this variant had). This is the one rule Conversations/Recordings still need of
+   their own: no bottom padding, so the frame bleeds to the window's true edges. */
+  .hub--wide {
+    padding-bottom: 0;
   }
 
   .hub--wide .conv,
@@ -812,10 +837,14 @@
   .conv {
     display: flex;
     margin: 0 -32px;
-    /* Cancels `.hub-content`'s own padding-left (review of #602): that padding is no longer a
-       fixed 32px once the sidebar is pinned (see `.hub-content` above), so this side needs the
-       same `--hub-sidebar-width` term, or a pinned sidebar leaves a 220px/56px gap here. */
-    margin-left: calc((var(--mog-space-6) + var(--hub-sidebar-width, 0px)) * -1);
+    /* Review of #602 round 3, blocker 1: this used to also subtract `--hub-sidebar-width`,
+       which cancelled `.hub-content`'s whole padding-left (the base 32px *and* the pinned
+       sidebar's own width), landing `.conv` back at `left: 0` — under the 220px/56px panel
+       instead of beside it. The base `-32px` alone (the same fixed amount `.rec-area` already
+       used, a few rules down) is correct: it cancels only the 32px baseline that
+       `.hub-content`'s padding-left always includes, leaving the pinned sidebar's own width in
+       place as the gap before `.conv` starts. */
+    margin-left: calc(var(--mog-space-6) * -1);
     border-top: 1px solid var(--mog-edge);
   }
 
@@ -1120,39 +1149,9 @@
     font-weight: 500;
   }
 
-  .hub input.hub-switch {
-    position: relative;
-    flex: none;
-    width: 32px;
-    height: 18px;
-    margin: 0;
-    border-radius: var(--mog-radius-pill);
-    background: rgb(255 255 255 / 16%);
-    cursor: pointer;
-    appearance: none;
-    transition: background-color 150ms var(--mog-ease-out);
-  }
-
-  .hub input.hub-switch::before {
-    content: '';
-    position: absolute;
-    top: 2px;
-    left: 2px;
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    background: var(--mog-text);
-    box-shadow: 0 1px 2px rgb(8 10 18 / 40%);
-    transition: transform 180ms var(--mog-ease-out);
-  }
-
-  .hub input.hub-switch:checked {
-    background: var(--mog-accent);
-  }
-
-  .hub input.hub-switch:checked::before {
-    transform: translateX(14px);
-  }
+  /* The red `input.hub-switch` that used to live here is gone (ui-1, review of #602 round 3,
+     P1): `RecordingSettings.tsx`'s knob is the shadcn/ui Switch now, the same control
+     `MicPreference` already used, so Settings shows one switch style, not two. */
 
   /* The consent notice: one quiet panel, one acknowledgement. */
   .rec-consent {

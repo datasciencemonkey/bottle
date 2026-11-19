@@ -44,7 +44,11 @@ function TooltipContent({
         data-slot="tooltip-content"
         sideOffset={sideOffset}
         className={cn(
-          'bg-popover text-popover-foreground animate-in fade-in-0 zoom-in-95 z-50 w-fit origin-(--radix-tooltip-content-transform-origin) rounded-md border border-border px-3 py-1.5 text-xs shadow-md',
+          // No `animate-in`/`fade-in-0`/`zoom-in-95` (ui-1, review of #602 round 3, LOW): those
+          // are `tw-animate-css` classes, a dependency this repo never installed, so they were
+          // dead weight (no enter animation at all). Removing them is the smaller fix than
+          // adding the dependency (and a THIRD_PARTY_NOTICES entry) for one tooltip's fade-in.
+          'bg-popover text-popover-foreground z-50 w-fit origin-(--radix-tooltip-content-transform-origin) rounded-md border border-border px-3 py-1.5 text-xs shadow-md',
           className,
         )}
         {...props}

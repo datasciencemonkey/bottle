@@ -1,11 +1,19 @@
 /**
  * The hub's collapsible sidebar (ui-1, #97, #103; course-corrected to hidden-by-default, see
- * use-hub-sidebar.ts). Unpinned, it overlays the content column (`position: absolute`) with no
- * reflow. Pinned, `Hub.tsx` reads `SIDEBAR_WIDTH` below to push `.hub-content` over by the same
- * amount (`--hub-sidebar-width` in hub.css), so a pinned panel never covers the content for good
- * (review of #602, finding 3). `.hub-body`'s own negative left margin (hub.css) puts this panel
- * flush with the window's true left edge, not inset by `.hub`'s own padding (review polish
- * note).
+ * use-hub-sidebar.ts). The panel is `position: fixed; inset-y-0; left-0` (ui-1, review of #602
+ * round 3, blocker 2): a full-window-height rail pinned to the window itself, not to any
+ * ancestor box, so it never scrolls away with a tall Settings/MOGs area and its own top row (the
+ * pin button) always starts at the window's true top edge, not below the "Bottle" header. Before
+ * this it was `position: absolute; top: 0; h-full` inside `.hub-body` (hub.css): that box sits
+ * below the header in the document, and grows to the page's own (unbounded) height, so the panel
+ * both started too low and scrolled off-screen with the page.
+ *
+ * Unpinned, it still overlays the content column with no reflow, and keeps its soft `shadow-lg`
+ * (an overlay floats above the page). Pinned, `Hub.tsx` reads `SIDEBAR_WIDTH` below to push
+ * `.hub-content` over by the same amount (`--hub-sidebar-width` in hub.css), so a pinned panel
+ * never covers the content for good (review of #602, finding 3) — and drops the shadow (review
+ * of #602 round 3, polish): a pinned rail is flat with a border, not a popover; only an
+ * unpinned overlay floats.
  *
  * Motion only animates the width/slide; `useReducedMotion` turns the transition into an instant
  * show/hide (ui-1, ADR 0106). The active item's highlight uses a shared `layoutId`
@@ -45,7 +53,13 @@ export function HubSidebar({
   useEffect(() => {
     if (!visible) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') requestClose();
+      if (e.key !== 'Escape') return;
+      // LOW (review of #602 round 3): the Wipe dialog (Radix Dialog, `role="dialog"`) owns Esc
+      // while it is open (`WipeDialog.tsx`'s own `onEscapeKeyDown` cancels it) — without this
+      // check, this document-level listener raced it and closed the sidebar underneath the
+      // still-open dialog.
+      if (document.querySelector('[role="dialog"]')) return;
+      requestClose();
     };
     const onPointerDown = (e: PointerEvent) => {
       const target = e.target as Element | null;
@@ -80,7 +94,10 @@ export function HubSidebar({
             aria-label="Hub sidebar"
             data-sidebar
             data-collapsed={collapsed ? '' : undefined}
-            className="bg-popover text-popover-foreground absolute top-0 left-0 z-20 flex h-full flex-col gap-[var(--mog-space-1)] overflow-hidden border-r border-border/70 p-[var(--mog-space-2)] shadow-lg"
+            className={
+              'bg-popover text-popover-foreground fixed inset-y-0 left-0 z-20 flex flex-col gap-[var(--mog-space-1)] overflow-hidden border-r border-border/70 p-[var(--mog-space-2)] ' +
+              (pinned ? '' : 'shadow-lg')
+            }
             initial={reduceMotion ? false : { width: 0, opacity: 0 }}
             animate={{ width, opacity: 1 }}
             transition={

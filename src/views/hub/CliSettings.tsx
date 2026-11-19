@@ -10,7 +10,7 @@
  */
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { ChevronRightIcon } from 'lucide-react';
+import { ChevronDownIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import {
   asCliSettingsModel,
@@ -20,6 +20,7 @@ import {
   CLI_VIEW_ID,
   type CliSettingsModel,
 } from '../../shared/cli-view';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/collapsible';
 import { emitView } from '../view-ipc';
 
 export function CliSettings() {
@@ -48,45 +49,53 @@ export function CliSettings() {
   return (
     // ui-1 (ADR 0106): the path and version move to a Workspaces area in a later PR; for now
     // this stays a quiet row in Settings, not a standalone outline button (the ui-audit
-    // "content as buttons" finding). One consistent "show more" style (review of #602): the
-    // chevron and text-sm/muted-foreground label match every disclosure trigger in Settings,
-    // not a plain text link. The chevron does not rotate (unlike a Collapsible's): asking the
-    // brain is one-way, nothing here folds back closed.
+    // "content as buttons" finding). One consistent "show more" style (ui-1, review of #602
+    // round 3, P2): the same Collapsible, left chevron and text-sm/muted-foreground trigger as
+    // every other disclosure in Settings (Wipe, the data panel, About, Call recording's
+    // Advanced), not a static `ChevronRightIcon` that never rotates. Asking the brain is still
+    // one-way (the trigger re-asks on every open, same as Wipe's own "Show how long..."
+    // trigger); only the chevron now folds back closed like the others.
     <section data-view="cli-settings" aria-labelledby="cli-settings-title" className="hub-section">
       <h2 id="cli-settings-title">Databricks CLI</h2>
-      <button
-        type="button"
-        className="group mt-[var(--mog-space-1)] flex h-auto min-h-0 items-center gap-[var(--mog-space-2)] border-0 bg-transparent p-0 text-[var(--mog-text-sm)] text-muted-foreground hover:text-foreground"
-        data-cli-settings
-        onClick={() =>
-          void emitView(CLI_VIEW_ID, 'click', { target: CLI_SETTINGS_TARGET }).catch(
-            () => undefined,
-          )
-        }
-      >
-        <ChevronRightIcon className="size-3.5" />
-        Show the Databricks CLI
-      </button>
-      {model === undefined ? null : 'unknown' in model ? (
-        <p>Bottle could not read the Databricks CLI status.</p>
-      ) : !model.found ? (
-        <p>Bottle did not find the Databricks CLI.</p>
-      ) : (
-        <>
-          {model.warnings.map((w) => (
-            <p key={w} role="alert">
-              {w}
-            </p>
-          ))}
-          <dl>
-            <dt>Path</dt>
-            <dd data-cli-path>{model.path}</dd>
-            <dt>Version</dt>
-            <dd data-cli-version>{model.version}</dd>
-          </dl>
-          {model.belowRecommended && <p>{CLI_RECOMMENDED_TEXT}</p>}
-        </>
-      )}
+      <Collapsible className="mt-[var(--mog-space-1)]">
+        <CollapsibleTrigger
+          data-cli-settings
+          className="group flex h-auto min-h-0 items-center gap-[var(--mog-space-2)] border-0 bg-transparent p-0 text-[var(--mog-text-sm)] text-muted-foreground hover:text-foreground"
+          onClick={() =>
+            void emitView(CLI_VIEW_ID, 'click', { target: CLI_SETTINGS_TARGET }).catch(
+              () => undefined,
+            )
+          }
+        >
+          <ChevronDownIcon className="size-3.5 transition-transform motion-reduce:transition-none group-data-[state=open]:rotate-180" />
+          Show the Databricks CLI
+        </CollapsibleTrigger>
+        <CollapsibleContent
+          forceMount
+          className="mt-[var(--mog-space-2)] data-[state=closed]:hidden"
+        >
+          {model === undefined ? null : 'unknown' in model ? (
+            <p>Bottle could not read the Databricks CLI status.</p>
+          ) : !model.found ? (
+            <p>Bottle did not find the Databricks CLI.</p>
+          ) : (
+            <>
+              {model.warnings.map((w) => (
+                <p key={w} role="alert">
+                  {w}
+                </p>
+              ))}
+              <dl>
+                <dt>Path</dt>
+                <dd data-cli-path>{model.path}</dd>
+                <dt>Version</dt>
+                <dd data-cli-version>{model.version}</dd>
+              </dl>
+              {model.belowRecommended && <p>{CLI_RECOMMENDED_TEXT}</p>}
+            </>
+          )}
+        </CollapsibleContent>
+      </Collapsible>
     </section>
   );
 }

@@ -177,8 +177,10 @@ export function Hub() {
   const activeLabel = NAV_ITEMS.find((i) => i.id === view)?.label ?? '';
   // Pinned open, HubSidebar's panel pushes `.hub-content` over by its own width instead of
   // overlaying it (review of #602, finding 3): `--hub-sidebar-width` is read by `.hub-content`
-  // and `.conv` in hub.css. 0 (unset) when unpinned or hidden, so an overlay still costs no
-  // reflow.
+  // in hub.css, which in turn is what `.conv` and `.rec-area` cancel back out with their own
+  // fixed `-32px` margin (review of #602 round 3, blocker 1: `.conv` used to read this variable
+  // itself too, which double-subtracted the sidebar's width and left it under the panel instead
+  // of beside it). 0 (unset) when unpinned or hidden, so an overlay still costs no reflow.
   const hubBodyStyle = { '--hub-sidebar-width': `${sidebarWidth(sidebar)}px` } as CSSProperties;
 
   // TODO(#43): the onboarding wizard.
@@ -203,7 +205,12 @@ export function Hub() {
                     type="button"
                     variant="ghost"
                     size="icon"
-                    className="size-7 shrink-0"
+                    // relative z-30 (ui-1, review of #602 round 3, blocker 2): above the
+                    // sidebar panel's own z-20 (HubSidebar.tsx), so the toggle stays reachable
+                    // even while an unpinned overlay covers this corner. `.hub-area-header`
+                    // itself (hub.css) no longer carries that elevation: only the toggle needs
+                    // it, not the area title next to it (which must not paint over the panel).
+                    className="relative z-30 size-7 shrink-0"
                     data-sidebar-toggle
                     aria-pressed={sidebar.visible}
                     onClick={sidebar.toggleVisible}
