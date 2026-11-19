@@ -25,7 +25,7 @@ Dictation works with no Databricks CLI profile and no sign-in. Bottle then decid
 
 Every utterance is dictation first. Bottle pastes your text at the cursor. If the paste is refused, the pop-up beside the MOG shows the text with **Copy**.
 
-If your text looks like a question, the pop-up also shows **Ask Genie**. Move the pointer over the pop-up to keep it open and read the text. Nothing goes to Genie until you press **Ask Genie**. The press sends the exact text that you see. A text over 1,000 characters is cut at a word edge, and the card says so. If you ignore the pop-up, it fades.
+If your text looks like a question, the pop-up also shows **Ask Genie**. Move the pointer over the pop-up to keep it open and read the text. Nothing goes to Genie until you press **Ask Genie**. When you press it, Bottle removes hidden characters, HTML, code fences and link addresses from the text. The card then shows the exact text that goes to Genie. A text over 1,000 characters is cut at a word edge, and the card says so. The press sends the text straight to Genie One in the workspace of your home profile. The card shows "Asking Genie", then the answer. If Genie does not answer, the card shows the reason and a code. Bottle does not send the question again. If you ignore the pop-up, it fades.
 
 - **No home profile:** a press on Ask Genie shows your Databricks CLI profiles. Select one. Bottle saves only its name as the home profile of the MOG, then sends the text. Bottle never picks a profile for you.
 - **Shift with the talk key:** with a home profile, this asks at once, with the 1.5 s preview that you can cancel. With no home profile, you get Ask Genie instead.

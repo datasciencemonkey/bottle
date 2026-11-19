@@ -1,6 +1,6 @@
 # ADR 0086: The T3 ask gate: the 1.5 s preview and the Ask Genie chip
 
-- Status: Accepted (amended by ADR 0096, #557: an unforced question is pasted first and gets a chip; no preview without Shift)
+- Status: Accepted (amended by ADR 0096, #557: an unforced question is pasted first and gets a chip; no preview without Shift; amended by ADR 0097, #573: the hand-off seam sends straight to Genie One MCP, not to the main agent)
 - Date: 2026-11-18
 - Issue: #142 (RTR-04a, RTR-04b, RTR-05; RTR-14, RTR-17b, UX-17, UX-19b, UX-20c; AT-31, AT-06). Depends on #59 (ADR 0053), #57, #117 (ADR 0056), #141.
 - Owner: agent-lead-2 (implemented by impl-142)

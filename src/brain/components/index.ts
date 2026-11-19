@@ -25,6 +25,7 @@ import {
 import { cardStackDeps, createCardStack, timeoutScheduler, type CardStack } from '../card-stack';
 import { createSystemClock } from '../clock';
 import { createDictationSink } from '../dictation-copy';
+import { createGenieDirectSend } from '../genie-direct';
 import { createHomeProfiles, ipcHomeProfileDeps, ipcListProfiles } from '../home-profile';
 import { LevelRouter, subscribeLevels, wireLevelStream } from '../level-stream';
 import { createMoodPublisher, latencyTraceClock } from '../mood-publisher';
@@ -164,7 +165,7 @@ export function startBrain(): Brain {
       return s;
     };
     // #142 (ADR 0086), B1: T3 runs the 1.5 s preview or shows the Ask Genie chip. Nothing goes
-    // to the main agent, and so to Genie, without the preview or a chip click.
+    // to Genie without the preview or a chip click.
     const askGate = createAskGate({
       clock: cardClock,
       schedule: timeoutScheduler(cardClock),
@@ -175,8 +176,13 @@ export function startBrain(): Brain {
       // #163: the target is the MOG's home profile (no hop yet, TODO(#164)). With none,
       // nothing is sent: the pick card asks the user to pick one.
       target: (mogId) => homes.home(mogId),
-      // The hand-off seam: T15 `agent_send`. The core approves this one question (#141).
-      send: (t) => components.T15.send(t),
+      // #573 (ADR 0097): the hand-off seam sends the question straight to Genie One MCP through
+      // T8 `submit` (`mcp_call` `genie_ask`, then the PollActor). No main agent, no retry.
+      send: createGenieDirectSend({
+        genie: components.T8,
+        cardFor: stackFor,
+        newOpId: () => crypto.randomUUID(),
+      }),
       // #557: a press with no home profile opens the picker; the user picks, then the text goes.
       pickProfile: (mogId, then) => void pick.choose(mogId, then),
     });
