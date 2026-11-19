@@ -8,6 +8,7 @@ import {
   LOCAL_STEP_DEADLINE_MS,
   HEDGE_MS,
   LANGUAGE_NOT_AVAILABLE,
+  MODEL_MISSING_TEXT,
   RETRY_WINDOW_MS,
   SttFailure,
   coversLanguage,
@@ -39,6 +40,8 @@ interface Plan {
   delayMs?: number;
   /** Reject with a content-free IPC error. */
   fail?: boolean;
+  /** The rejection's `error` code when `fail` is set. Default `'host_failed'`. */
+  failCode?: string;
   text?: string;
   lang?: string;
   /** Reply for another segment or provider (an invalid reply). */
@@ -73,7 +76,7 @@ function useCore(d: Double = {}): void {
     const a = argsOf(payload) as { provider: Provider };
     const plan = d.plans?.[a.provider] ?? {};
     if (plan.delayMs) await new Promise((r) => setTimeout(r, plan.delayMs));
-    if (plan.fail) throw { error: 'host_failed' };
+    if (plan.fail) throw { error: plan.failCode ?? 'host_failed' };
     return transcript(a.provider, plan);
   });
 }
@@ -589,6 +592,56 @@ describe('T4 SttProvider (#52)', () => {
       );
       expect(f.kind).toBe('could_not_transcribe');
       expect(providers()).toEqual(['dbx_gemini']);
+    });
+  });
+
+  describe('R4 has no installed model (#413, #45): the MOG pop-up points at the hub', () => {
+    it('[#413] the default chain (no ASR, no Whisper) gives the Download message, not the generic one', async () => {
+      useCore({ plans: { local_parakeet: { fail: true, failCode: 'stt_model_missing' } } });
+      const f = await failureOf(createSttProvider().transcribe(seg, tags));
+      expect(f.kind).toBe('model_missing');
+      expect(f.userText).toBe(MODEL_MISSING_TEXT);
+      expect(f.userText).toContain('487 MB');
+      expect(f.retryable).toBe(false);
+      expect(providers()).toEqual(['local_parakeet']);
+    });
+
+    it('[#413] a configured Whisper endpoint still answers even with no local model', async () => {
+      useCore({ plans: { local_parakeet: { fail: true, failCode: 'stt_model_missing' } } });
+      const t = await createSttProvider({ config: ipcSttConfig(WHISPER_ON) }).transcribe(seg, tags);
+      expect(t.provider).toBe('dbx_whisper');
+    });
+
+    it('[#413] with Whisper configured but also failing, the failure is the generic one', async () => {
+      useCore({
+        plans: {
+          local_parakeet: { fail: true, failCode: 'stt_model_missing' },
+          dbx_whisper: { fail: true },
+        },
+      });
+      const f = await failureOf(
+        createSttProvider({ config: ipcSttConfig(WHISPER_ON) }).transcribe(seg, tags),
+      );
+      expect(f.kind).toBe('could_not_transcribe');
+    });
+
+    it('[#413] the hedged ASR chain also reports the Download message with no Whisper configured', async () => {
+      useCore({
+        plans: {
+          dbx_gemini: { fail: true },
+          local_parakeet: { fail: true, failCode: 'stt_model_missing' },
+        },
+      });
+      const f = await failureOf(
+        createSttProvider({ config: ipcSttConfig(ASR_ON) }).transcribe(seg, tags),
+      );
+      expect(f.kind).toBe('model_missing');
+    });
+
+    it("[#413] a plain host_failed on local Parakeet still gives the generic message (it isn't a missing model)", async () => {
+      useCore({ plans: { local_parakeet: { fail: true } } });
+      const f = await failureOf(createSttProvider().transcribe(seg, tags));
+      expect(f.kind).toBe('could_not_transcribe');
     });
   });
 
