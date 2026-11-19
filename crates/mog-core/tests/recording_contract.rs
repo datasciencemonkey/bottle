@@ -54,7 +54,10 @@ fn cap_06_the_knob_is_off_by_default_with_the_brief_defaults() {
 #[test]
 fn cap_06_recording_start_is_refused_when_the_knob_is_off() {
     let (c, _) = component(RecordingSettings::default());
-    assert_eq!(code(c.call("recording_start", json!({}))), "recording_off");
+    assert_eq!(
+        code(c.call("recording_start", json!({"profile": "p"}))),
+        "recording_off"
+    );
     // The consent notice does not open the gate alone.
     let s = RecordingSettings {
         consent_ack: true,
@@ -62,7 +65,10 @@ fn cap_06_recording_start_is_refused_when_the_knob_is_off() {
     };
     let (c, _) = component(s);
     assert_eq!(
-        code(c.call("recording_start", json!({"instructions": "Notes."}))),
+        code(c.call(
+            "recording_start",
+            json!({"profile": "p", "instructions": "Notes."})
+        )),
         "recording_off"
     );
 }
@@ -75,7 +81,7 @@ fn cap_06_recording_start_needs_the_consent_notice_after_the_knob() {
     };
     let (c, _) = component(s);
     assert_eq!(
-        code(c.call("recording_start", json!({}))),
+        code(c.call("recording_start", json!({"profile": "p"}))),
         "consent_required"
     );
 }
@@ -89,7 +95,7 @@ fn cap_06_an_open_gate_reaches_the_capture_stub() {
     };
     let (c, _) = component(s);
     assert_eq!(
-        code(c.call("recording_start", json!({}))),
+        code(c.call("recording_start", json!({"profile": "p"}))),
         "not_implemented"
     );
 }
@@ -112,7 +118,10 @@ fn cap_06_a_settings_write_that_turns_the_knob_off_closes_the_gate() {
     assert_eq!(reply["lengthMin"], json!(30));
     assert!(!store.load().unwrap().enabled);
     assert_eq!(c.call("recording_settings_read", json!({})).unwrap(), reply);
-    assert_eq!(code(c.call("recording_start", json!({}))), "recording_off");
+    assert_eq!(
+        code(c.call("recording_start", json!({"profile": "p"}))),
+        "recording_off"
+    );
 }
 
 #[test]
@@ -131,21 +140,54 @@ fn sec_02b_a_bad_settings_patch_is_invalid_args() {
 fn cap_06_every_other_recording_command_is_a_typed_stub() {
     let (c, _) = component(RecordingSettings::default());
     for (name, args) in [
+        ("recording_storage_probe", json!({"profile": "p"})),
+        (
+            "recording_volume_create",
+            json!({"profile": "p", "catalog": "main", "schema": "calls"}),
+        ),
+        ("recording_stop", json!({})),
+        ("recording_state", json!({})),
+        ("recording_list", json!({"profile": "p"})),
+        ("recording_detail", json!({"profile": "p", "id": "rec-1"})),
+        ("recording_retry", json!({"profile": "p", "id": "rec-1"})),
+        (
+            "recording_open",
+            json!({"profile": "p", "id": "rec-1", "target": "folder"}),
+        ),
+        ("recording_open_system_audio_settings", json!({})),
+    ] {
+        assert_eq!(code(c.call(name, args)), "not_implemented", "{name}");
+    }
+}
+
+#[test]
+fn recording_cloud_commands_require_the_home_profile() {
+    // Rust has no home profile of its own (it never picks one): the brain sends it on every
+    // cloud-bound recording command. Missing it is `invalid_args`, same as any other required
+    // field, before the command ever reaches `not_implemented`.
+    let (c, _) = component(RecordingSettings::default());
+    for (name, args) in [
         ("recording_storage_probe", json!({})),
         (
             "recording_volume_create",
             json!({"catalog": "main", "schema": "calls"}),
         ),
-        ("recording_stop", json!({})),
-        ("recording_state", json!({})),
         ("recording_list", json!({})),
         ("recording_detail", json!({"id": "rec-1"})),
         ("recording_retry", json!({"id": "rec-1"})),
         ("recording_open", json!({"id": "rec-1", "target": "folder"})),
-        ("recording_open_system_audio_settings", json!({})),
     ] {
-        assert_eq!(code(c.call(name, args)), "not_implemented", "{name}");
+        assert_eq!(code(c.call(name, args)), "invalid_args", "{name}");
     }
+    // `recording_start` gates on the knob first (cap_06_recording_start_is_refused_when...),
+    // but a missing profile is still invalid_args even with the knob on, ahead of the gate.
+    let s = RecordingSettings {
+        enabled: true,
+        consent_ack: true,
+        ..RecordingSettings::default()
+    };
+    let (c, _) = component(s);
+    assert_eq!(code(c.call("recording_start", json!({}))), "invalid_args");
 }
 
 #[test]

@@ -358,17 +358,26 @@ export interface CommandArgs {
   view_notice_subscribe: { onNotice: Channel<unknown> };
   recording_settings_read: NoArgs;
   recording_settings_write: { patch: RecordingSettingsPatch };
-  recording_storage_probe: NoArgs;
+  /**
+   * `profile`: the brain's home profile (`src/brain/home-profile.ts`). Rust has no home
+   * profile of its own and never picks one; every recording command that reaches Databricks
+   * carries it.
+   */
+  recording_storage_probe: { profile: ProfileName };
   /** Creates the managed volume `bottle_audio` after the user confirmed. `[A-Za-z0-9_-]` names. */
-  recording_volume_create: { catalog: string; schema: string };
-  /** `instructions`: for this recording only. Absent: the Settings preset. */
-  recording_start: { instructions?: string };
+  recording_volume_create: { profile: ProfileName; catalog: string; schema: string };
+  /**
+   * `profile`: the home profile the pipeline uses for every cloud call of this recording,
+   * including after `recording_stop`. `instructions`: for this recording only. Absent: the
+   * Settings preset.
+   */
+  recording_start: { profile: ProfileName; instructions?: string };
   recording_stop: NoArgs;
   recording_state: NoArgs;
-  recording_list: NoArgs;
-  recording_detail: { id: RecordingId };
-  recording_retry: { id: RecordingId };
-  recording_open: { id: RecordingId; target: 'folder' };
+  recording_list: { profile: ProfileName };
+  recording_detail: { profile: ProfileName; id: RecordingId };
+  recording_retry: { profile: ProfileName; id: RecordingId };
+  recording_open: { profile: ProfileName; id: RecordingId; target: 'folder' };
   recording_open_system_audio_settings: NoArgs;
 }
 

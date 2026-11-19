@@ -1107,24 +1107,43 @@ args!(
     }
 );
 args!(
+    /// `recording_storage_probe` (ADR 0103): probes `GET /api/2.0/fs/directories` on the
+    /// home profile host. Rust never picks a profile: the brain sends the home profile of
+    /// `src/brain/home-profile.ts` on every cloud-bound recording command.
+    RecordingStorageProbeArgs {
+        profile: ProfileName,
+    }
+);
+args!(
     /// `recording_volume_create` (ADR 0103): Bottle creates the managed volume `bottle_audio`
-    /// in `catalog.schema`, after the user confirmed in Settings.
+    /// in `catalog.schema`, after the user confirmed in Settings. `profile`: the home profile
+    /// (the brain never lets Rust pick one).
     RecordingVolumeCreateArgs {
+        profile: ProfileName,
         catalog: crate::types::UcName,
         schema: crate::types::UcName,
     }
 );
 args!(
-    /// `recording_start` (ADR 0103): the instructions for this recording only. Absent: the
-    /// Settings preset.
+    /// `recording_start` (ADR 0103): `profile` is the home profile the pipeline uses for every
+    /// cloud call of this recording, including after `recording_stop`. `instructions`: for
+    /// this recording only. Absent: the Settings preset.
     RecordingStartArgs {
+        profile: ProfileName,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         instructions: Option<crate::types::Instructions>,
     }
 );
 args!(
-    /// `recording_detail` and `recording_retry` (ADR 0103).
+    /// `recording_list` (ADR 0103): lists `<root>/Bottle/Recordings/` on the home profile host.
+    RecordingListArgs {
+        profile: ProfileName,
+    }
+);
+args!(
+    /// `recording_detail` and `recording_retry` (ADR 0103). `profile`: the home profile.
     RecordingIdArgs {
+        profile: ProfileName,
         id: crate::types::RecordingId,
     }
 );
@@ -1137,6 +1156,8 @@ pub enum RecordingOpenTarget {
     Folder,
 }
 args!(RecordingOpenArgs {
+    /// The home profile: Rust builds the folder link from this profile's host.
+    profile: ProfileName,
     id: crate::types::RecordingId,
     target: RecordingOpenTarget,
 });
@@ -1194,14 +1215,14 @@ macro_rules! for_command {
             "hub_notice_send" => Some($f::<HubNoticeSendArgs>()),
             "view_notice_subscribe" => Some($f::<ViewNoticeSubscribeArgs>()),
             "recording_settings_read"
-            | "recording_storage_probe"
             | "recording_stop"
             | "recording_state"
-            | "recording_list"
             | "recording_open_system_audio_settings" => Some($f::<NoArgs>()),
             "recording_settings_write" => Some($f::<RecordingSettingsWriteArgs>()),
+            "recording_storage_probe" => Some($f::<RecordingStorageProbeArgs>()),
             "recording_volume_create" => Some($f::<RecordingVolumeCreateArgs>()),
             "recording_start" => Some($f::<RecordingStartArgs>()),
+            "recording_list" => Some($f::<RecordingListArgs>()),
             "recording_detail" | "recording_retry" => Some($f::<RecordingIdArgs>()),
             "recording_open" => Some($f::<RecordingOpenArgs>()),
             _ => None,

@@ -19,10 +19,13 @@ use std::time::Duration;
 use serde_json::Value;
 
 use crate::error::{CoreError, CoreResult};
-use crate::ipc::{RecordingSettingsWriteArgs, RecordingStartArgs};
+use crate::ipc::{
+    RecordingIdArgs, RecordingListArgs, RecordingOpenArgs, RecordingSettingsWriteArgs,
+    RecordingStartArgs, RecordingStorageProbeArgs, RecordingVolumeCreateArgs,
+};
 use crate::ipc_gateway::GatewayComponents;
 use crate::types::{
-    Instructions, RecordingDetail, RecordingErrorKind, RecordingId, RecordingSegment,
+    Instructions, ProfileName, RecordingDetail, RecordingErrorKind, RecordingId, RecordingSegment,
     RecordingSettings, RecordingState, RecordingStorage, RecordingSummary, StorageProbe, UcName,
 };
 
@@ -91,8 +94,9 @@ pub trait RecordingSettingsStore: Send + Sync {
     fn save(&self, settings: &RecordingSettings) -> CoreResult<()>;
 }
 
-/// One finished audio file on the local disk (Opus in Ogg, 16 kHz mono). A recording has one
-/// part unless a later limit forces a split (ADR 0103 decision 8).
+/// One finished audio file on the local disk: Opus in Ogg, 16 kbps mono. A recording has one
+/// file, `<name>.opus`, unless a later limit forces a split, in which case each file is
+/// `<name>.partNN.opus` (ADR 0103 decision 8).
 #[derive(Debug, Clone, PartialEq)]
 pub struct FinishedPart {
     /// 1-based.
@@ -104,7 +108,9 @@ pub struct FinishedPart {
 }
 
 /// The one recording session of the device (PR B): the mic and the system audio, mixed to one
-/// 16 kHz mono stream, encoded as Opus in Ogg. It shares the one mic owner with PTT.
+/// 16 kHz mono stream, encoded as one Ogg Opus file at 16 kbps (`<name>.opus`, or
+/// `<name>.partNN.opus` per part if a later limit forces a split). It shares the one mic owner
+/// with PTT.
 pub trait RecordingCapture: Send + Sync {
     /// Start the recording `id` into the temp folder `dir`. It stops by itself after
     /// `max_len`. A second start answers `RecordingBusy`.
@@ -121,9 +127,12 @@ pub trait RecordingCapture: Send + Sync {
     fn state(&self) -> RecordingState;
 }
 
-/// One recording job: the folder, the parts and the instructions.
+/// One recording job: the folder, the parts and the instructions. `profile` is the home
+/// profile the brain sent at `recording_start` (`src/brain/home-profile.ts`): the pipeline
+/// uses it for every cloud call of this job, including after `recording_stop`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PipelineRequest {
+    pub profile: ProfileName,
     pub storage: RecordingStorage,
     pub id: RecordingId,
     pub name: String,
@@ -133,18 +142,26 @@ pub struct PipelineRequest {
 }
 
 /// The workspace side (PR C): the Files API for storage, and model serving for the transcript and
-/// the notes. Every call goes through HttpTransport with a TokenBroker token of the home profile.
-/// No method returns upstream text or a token. No method starts compute in the workspace.
+/// the notes. Every call goes through HttpTransport with a TokenBroker token of the home
+/// profile. Rust has no home profile of its own: the brain owns it (`src/brain/home-profile.ts`)
+/// and sends it on every cloud-bound recording command, so every method here takes it as its
+/// own `&ProfileName` argument. No method returns upstream text or a token. No method starts
+/// compute in the workspace.
 pub trait RecordingCloud: Send + Sync {
-    /// Find the My Files root (`GET /api/2.0/fs/directories`, read-only).
-    fn probe_storage(&self) -> RecordingResult<StorageProbe>;
+    /// Find the My Files root (`GET /api/2.0/fs/directories`, read-only) on `profile`'s host.
+    fn probe_storage(&self, profile: &ProfileName) -> RecordingResult<StorageProbe>;
     /// Create the managed volume `bottle_audio` in `catalog.schema`, after the user confirmed.
-    fn create_volume(&self, catalog: &UcName, schema: &UcName)
-        -> RecordingResult<RecordingStorage>;
+    fn create_volume(
+        &self,
+        profile: &ProfileName,
+        catalog: &UcName,
+        schema: &UcName,
+    ) -> RecordingResult<RecordingStorage>;
     /// Upload one part to `<root>/Bottle/Recordings/<name>/`. The caller deletes the local part
     /// only after this succeeds.
     fn upload_part(
         &self,
+        profile: &ProfileName,
         storage: &RecordingStorage,
         name: &str,
         part: &FinishedPart,
@@ -155,6 +172,7 @@ pub trait RecordingCloud: Send + Sync {
     /// previous part, if any.
     fn transcribe_part(
         &self,
+        profile: &ProfileName,
         endpoint: &crate::types::EndpointName,
         part: &FinishedPart,
         context: &[RecordingSegment],
@@ -162,34 +180,48 @@ pub trait RecordingCloud: Send + Sync {
     /// The notes Markdown from one chat call with the instructions and the joined transcript.
     fn write_notes(
         &self,
+        profile: &ProfileName,
         endpoint: &crate::types::EndpointName,
         instructions: &Instructions,
         transcript_md: &str,
     ) -> RecordingResult<String>;
     /// Write the instructions, `job.json`, the transcript files and the notes to the volume
-    /// folder, and give the summary of the job.
+    /// folder, and give the summary of the job. `request.profile` is the same profile; the
+    /// explicit argument keeps every `RecordingCloud` method the same shape.
     fn write_job(
         &self,
+        profile: &ProfileName,
         request: &PipelineRequest,
         status: crate::types::RecordingStatus,
         detail: Option<&RecordingDetail>,
     ) -> RecordingResult<RecordingSummary>;
     /// The recordings in the volume, newest first, from each `<name>.job.json`.
-    fn list(&self, storage: &RecordingStorage) -> RecordingResult<Vec<RecordingSummary>>;
+    fn list(
+        &self,
+        profile: &ProfileName,
+        storage: &RecordingStorage,
+    ) -> RecordingResult<Vec<RecordingSummary>>;
     fn detail(
         &self,
+        profile: &ProfileName,
         storage: &RecordingStorage,
         id: &RecordingId,
     ) -> RecordingResult<RecordingDetail>;
     /// Start again at the failed step.
     fn retry(
         &self,
+        profile: &ProfileName,
         storage: &RecordingStorage,
         id: &RecordingId,
     ) -> RecordingResult<RecordingSummary>;
-    /// The Catalog Explorer URL of the recording folder, built from the profile host. It stays
+    /// The Catalog Explorer URL of the recording folder, built from `profile`'s host. It stays
     /// in Rust: the host opens it with the OS opener, and it never crosses IPC.
-    fn folder_link(&self, storage: &RecordingStorage, id: &RecordingId) -> RecordingResult<String>;
+    fn folder_link(
+        &self,
+        profile: &ProfileName,
+        storage: &RecordingStorage,
+        id: &RecordingId,
+    ) -> RecordingResult<String>;
 }
 
 // ---------- the settings stub ----------
@@ -263,7 +295,36 @@ impl GatewayComponents for RecordingComponent {
                 let _a: RecordingStartArgs =
                     serde_json::from_value(args).map_err(|_| refused("invalid_args"))?;
                 self.gate()?;
-                // TODO(#65): PR B starts the RecordingCapture session here.
+                // TODO(#65): PR B starts the RecordingCapture session here, with `_a.profile`
+                // carried into the `PipelineRequest` the pipeline uses after `recording_stop`.
+                Err(refused("not_implemented"))
+            }
+            // The cloud-bound commands (ADR 0103 follow-up): typed stubs that still require the
+            // brain's home profile (`src/brain/home-profile.ts`), so a missing or malformed
+            // `profile` is `invalid_args` here too, ahead of PR C wiring `RecordingCloud` in.
+            "recording_storage_probe" => {
+                let _a: RecordingStorageProbeArgs =
+                    serde_json::from_value(args).map_err(|_| refused("invalid_args"))?;
+                Err(refused("not_implemented"))
+            }
+            "recording_volume_create" => {
+                let _a: RecordingVolumeCreateArgs =
+                    serde_json::from_value(args).map_err(|_| refused("invalid_args"))?;
+                Err(refused("not_implemented"))
+            }
+            "recording_list" => {
+                let _a: RecordingListArgs =
+                    serde_json::from_value(args).map_err(|_| refused("invalid_args"))?;
+                Err(refused("not_implemented"))
+            }
+            "recording_detail" | "recording_retry" => {
+                let _a: RecordingIdArgs =
+                    serde_json::from_value(args).map_err(|_| refused("invalid_args"))?;
+                Err(refused("not_implemented"))
+            }
+            "recording_open" => {
+                let _a: RecordingOpenArgs =
+                    serde_json::from_value(args).map_err(|_| refused("invalid_args"))?;
                 Err(refused("not_implemented"))
             }
             // TODO(#65): PR B (stop, state) and PR C (the rest) fill these in.

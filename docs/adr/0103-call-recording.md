@@ -117,17 +117,24 @@ replace these rules for call recording.
     notice). Views render and send input only (`view_emit`). Tokens come only from TokenBroker
     with the home profile, live in memory and are never logged. Every call goes through
     HttpTransport to the profile host over HTTPS. The settings are a small JSON file in the
-    app config dir (no secret), because AppSettings is still in memory (#77).
+    app config dir (no secret), because AppSettings is still in memory (#77). Rust has no home
+    profile of its own, so the brain passes its home profile on each cloud-bound recording
+    command, and the pipeline uses the profile given at `recording_start` for every cloud call
+    of that job, including after `recording_stop`.
 
 ## The contract (this PR)
 
 - Commands, brain and hub (the hub view reaches them through the brain, ARC-2):
-  `recording_settings_read`, `recording_settings_write {patch}`, `recording_storage_probe`,
-  `recording_volume_create {catalog, schema}`,
-  `recording_start {instructions?}`, `recording_stop`, `recording_state`, `recording_list`,
-  `recording_detail {id}`, `recording_retry {id}`, `recording_open {id, target}`,
+  `recording_settings_read`, `recording_settings_write {patch}`,
+  `recording_storage_probe {profile}`,
+  `recording_volume_create {profile, catalog, schema}`,
+  `recording_start {profile, instructions?}`, `recording_stop`, `recording_state`,
+  `recording_list {profile}`,
+  `recording_detail {profile, id}`, `recording_retry {profile, id}`,
+  `recording_open {profile, id, target}`,
   `recording_open_system_audio_settings` (Rust opens the OS privacy pane for the fix-it). A MOG view
   has no recording permission: a MOG "Record" click goes through `view_emit` to the brain.
+  `profile` is the brain's home profile (`src/brain/home-profile.ts`): Rust never picks one.
 - Events, core to brain: `hotkey.record_toggle` (`RecordToggle`), `recording.state`
   (`RecordingState`, not sticky) and `recording.job` (`RecordingSummary`).
 - New refusal codes: `recording_off`, `recording_busy`, `recording_in_progress`,

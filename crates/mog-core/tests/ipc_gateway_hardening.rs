@@ -114,16 +114,15 @@ fn sample(command: &str) -> (&'static str, Value) {
         "view_notice_subscribe" => return ("hub", json!({"onNotice": "__CHANNEL__:4"})),
         // ADR 0103: call recording.
         "recording_settings_read"
-        | "recording_storage_probe"
         | "recording_stop"
         | "recording_state"
-        | "recording_list"
         | "recording_open_system_audio_settings" => json!({}),
         "recording_settings_write" => json!({"patch": {"enabled": true}}),
-        "recording_volume_create" => json!({"catalog": "main", "schema": "calls"}),
-        "recording_start" => json!({"instructions": "Notes."}),
-        "recording_detail" | "recording_retry" => json!({"id": "rec-1"}),
-        "recording_open" => json!({"id": "rec-1", "target": "folder"}),
+        "recording_storage_probe" | "recording_list" => json!({"profile": "p"}),
+        "recording_volume_create" => json!({"profile": "p", "catalog": "main", "schema": "calls"}),
+        "recording_start" => json!({"profile": "p", "instructions": "Notes."}),
+        "recording_detail" | "recording_retry" => json!({"profile": "p", "id": "rec-1"}),
+        "recording_open" => json!({"profile": "p", "id": "rec-1", "target": "folder"}),
         other => panic!("no sample for {other}"),
     };
     ("brain", args)
