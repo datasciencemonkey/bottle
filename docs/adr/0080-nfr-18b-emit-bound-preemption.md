@@ -1,6 +1,6 @@
 # ADR 0080: The NFR-18b emit bound leaves out preempted emits
 
-- Status: Accepted
+- Status: Superseded (#508). The wall-clock tests and the preemption filter of this ADR were removed. They kept failing on shared runners ("266 of 1000 emits were preempted"). The `mog-core-ffi` C ABI is not in the MVP app path. The non-blocking checks stay in `crates/mog-core-ffi/tests/events.rs`. A device run of NFR-18b stays the release evidence (AT-17).
 - Date: 2026-11-18
 - Issue: #499
 - Owner: security-lead
