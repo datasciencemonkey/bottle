@@ -5,8 +5,10 @@
 //! `{ mogId, phase }` on the brain Channel (ADR 0003), for the last-interacted MOG (MB-06a).
 //!
 //! Binding rules here:
-//! - The host never prompts on its own. `start` only checks Input Monitoring. A prompt needs a
-//!   [`UserAction`], which only a UI click handler makes (CAP-36, CAP-37).
+//! - `start` never prompts: it only checks Input Monitoring. A click prompt needs a
+//!   [`UserAction`], which only a UI click handler makes (CAP-36, CAP-37). The one exception is
+//!   [`HotkeyHost::prompt_at_launch`] (user decision 2026-11-19, ADR 0101): once per launch, it
+//!   asks for each permission that was never asked.
 //! - Nothing here logs. R1 outputs never carry key contents (ADR 0011).
 //! - No `tauri-plugin-global-shortcut` (ARC-4): the platform service owns the OS hook.
 //!
@@ -586,6 +588,8 @@ pub struct HotkeyHost {
     asked: Mutex<Vec<Permission>>,
     /// Input Monitoring is granted, but the talk key did not start: Bottle must reopen.
     reopen: Mutex<bool>,
+    /// [`HotkeyHost::prompt_at_launch`] ran in this run.
+    launch_asked: Mutex<bool>,
 }
 
 impl HotkeyHost {
@@ -597,6 +601,7 @@ impl HotkeyHost {
             state: Mutex::new(HostState::Stopped),
             asked: Mutex::default(),
             reopen: Mutex::new(false),
+            launch_asked: Mutex::new(false),
         }
     }
 
@@ -610,7 +615,39 @@ impl HotkeyHost {
     pub fn start(&self) -> HostState {
         let mut state = lock(&self.state);
         *state = start_state(lock(&self.service).as_ref());
+        self.note_start(*state);
         *state
+    }
+
+    /// The talk key runs: a reopen note of an earlier failed start no longer applies.
+    fn note_start(&self, state: HostState) {
+        if state == HostState::Running {
+            *lock(&self.reopen) = false;
+        }
+    }
+
+    /// Once per launch (user decision 2026-11-19, ADR 0101): show the OS prompt for each
+    /// permission that was never asked, Input Monitoring first, then Accessibility. A denied
+    /// or granted permission gets no prompt; the hub and the pop-up then offer Open Settings.
+    /// A grant starts the talk key with no restart. The launch prompt does not count as a
+    /// click, so the first click still shows the prompt once more before it opens Settings.
+    pub fn prompt_at_launch(&self) {
+        {
+            let mut done = lock(&self.launch_asked);
+            if *done {
+                return;
+            }
+            *done = true;
+        }
+        for permission in [Permission::InputMonitoring, Permission::Accessibility] {
+            if self.permissions.status(permission) != PermissionStatus::Unknown {
+                continue;
+            }
+            let status = self.permissions.request(permission);
+            if permission == Permission::InputMonitoring && status == PermissionStatus::Granted {
+                self.start_after_grant();
+            }
+        }
     }
 
     /// Ask for Input Monitoring after a user click, then start again if granted (CAP-36).
@@ -618,7 +655,7 @@ impl HotkeyHost {
     /// relays the click of the hub or the pop-up with `permission_request` (#312).
     pub fn request_ptt_permission(&self, action: UserAction) -> PermissionStatus {
         let status = self.ask(Permission::InputMonitoring, action);
-        if status == PermissionStatus::Granted && self.state() != HostState::Running {
+        if status == PermissionStatus::Granted {
             self.start_after_grant();
         }
         status
@@ -641,7 +678,10 @@ impl HotkeyHost {
         if self.state() == HostState::NeedsPermission {
             self.start_after_grant();
         }
-        if *lock(&self.reopen) {
+        // Take the state first: `start` takes the state lock and then the reopen lock.
+        let running = self.state() == HostState::Running;
+        let reopen = *lock(&self.reopen);
+        if reopen && !running {
             PermissionStatus::Unknown
         } else {
             status
@@ -665,8 +705,16 @@ impl HotkeyHost {
         )
     }
 
+    /// Start after a grant, unless the talk key runs already. The check and the start hold the
+    /// state lock, so two callers (a click and a status read) never start it twice.
     fn start_after_grant(&self) {
-        if self.start() != HostState::Running {
+        let mut state = lock(&self.state);
+        if *state == HostState::Running {
+            return;
+        }
+        *state = start_state(lock(&self.service).as_ref());
+        self.note_start(*state);
+        if *state != HostState::Running {
             *lock(&self.reopen) = true;
         }
     }
@@ -694,6 +742,7 @@ impl HotkeyHost {
         *current = service;
         if *state != HostState::Stopped {
             *state = start_state(current.as_ref());
+            self.note_start(*state);
         }
         *state
     }
@@ -851,6 +900,20 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> std::io::Result<()> {
     install_with(app, settings, move |talk, sink| {
         platform_service(talk, sink, Arc::clone(&copilot), Arc::clone(&status))
     })
+}
+
+/// Run [`HotkeyHost::prompt_at_launch`] on its own thread, so an OS prompt never blocks the
+/// app setup (user decision 2026-11-19, ADR 0101). Without a managed runtime it does nothing.
+pub fn prompt_at_launch<R: Runtime>(app: &AppHandle<R>) {
+    let app = app.clone();
+    // If the thread cannot start, the hub and the pop-up still offer the click.
+    let _ = std::thread::Builder::new()
+        .name("r1-launch-prompt".to_owned())
+        .spawn(move || {
+            if let Some(rt) = app.try_state::<HotkeyRuntime>() {
+                rt.host.prompt_at_launch();
+            }
+        });
 }
 
 /// Create the host with `factory` and the saved talk key of `settings`, start the forwarder
@@ -1336,11 +1399,17 @@ mod tests {
         grant: bool,
         prompts: Arc<Mutex<Vec<Permission>>>,
         panes: Arc<Mutex<Vec<Permission>>>,
+        /// The permissions that the user denied before (no OS prompt shows for them).
+        denied: Arc<Mutex<Vec<Permission>>>,
     }
 
     impl PermissionApi for FakePermissions {
         fn status(&self, p: Permission) -> PermissionStatus {
-            if p == Permission::InputMonitoring && self.service.granted.load(Ordering::SeqCst) {
+            if self.denied.lock().unwrap().contains(&p) {
+                PermissionStatus::Denied
+            } else if p == Permission::InputMonitoring
+                && self.service.granted.load(Ordering::SeqCst)
+            {
                 PermissionStatus::Granted
             } else {
                 PermissionStatus::Unknown
@@ -1369,6 +1438,7 @@ mod tests {
             grant,
             prompts: Arc::default(),
             panes: Arc::default(),
+            denied: Arc::default(),
         };
         (
             HotkeyHost::new(Box::new(service.clone()), Box::new(perms.clone())),
@@ -1485,6 +1555,79 @@ mod tests {
             PermissionStatus::Unknown
         );
         assert_eq!(h.state(), HostState::Unavailable("tap_create_failed"));
+    }
+
+    // ---- ADR 0101 amendment (user decision 2026-11-19): Bottle asks at launch ----
+
+    #[test]
+    fn cap_36_launch_asks_each_permission_that_was_never_asked_once_in_order() {
+        let (h, service, perms) = host(true);
+        h.start();
+        h.prompt_at_launch();
+        assert_eq!(
+            *perms.prompts.lock().unwrap(),
+            vec![Permission::InputMonitoring, Permission::Accessibility]
+        );
+        // The grant starts the talk key with no restart.
+        assert_eq!(h.state(), HostState::Running);
+        assert_eq!(service.starts.load(Ordering::SeqCst), 2);
+        // At most once per launch: a second call asks nothing.
+        h.prompt_at_launch();
+        assert_eq!(perms.prompts.lock().unwrap().len(), 2);
+        assert!(perms.panes.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn cap_36_launch_shows_no_prompt_for_a_denied_or_granted_permission() {
+        let (h, service, perms) = host(true);
+        perms.denied.lock().unwrap().push(Permission::Accessibility);
+        service.granted.store(true, Ordering::SeqCst);
+        h.start();
+        h.prompt_at_launch();
+        assert!(perms.prompts.lock().unwrap().is_empty());
+        assert!(perms.panes.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn cap_36_after_a_launch_prompt_the_first_click_still_asks_then_the_pane_opens() {
+        let (h, _, perms) = host(false);
+        h.start();
+        h.prompt_at_launch();
+        let click = UserAction::from_user_click;
+        h.request_ptt_permission(click());
+        h.request_ptt_permission(click());
+        assert_eq!(
+            *perms.prompts.lock().unwrap(),
+            vec![
+                Permission::InputMonitoring,
+                Permission::Accessibility,
+                Permission::InputMonitoring
+            ]
+        );
+        assert_eq!(
+            *perms.panes.lock().unwrap(),
+            vec![Permission::InputMonitoring]
+        );
+        assert_eq!(h.state(), HostState::NeedsPermission);
+    }
+
+    #[test]
+    fn cap_36_the_reopen_note_clears_once_the_talk_key_runs() {
+        let (h, service, _) = host(true);
+        h.start();
+        service.granted.store(true, Ordering::SeqCst);
+        service.tap_fails.store(true, Ordering::SeqCst);
+        assert_eq!(
+            h.permission_status(Permission::InputMonitoring),
+            PermissionStatus::Unknown
+        );
+        // A later start works (for example a new talk key): the note goes away.
+        service.tap_fails.store(false, Ordering::SeqCst);
+        assert_eq!(h.start(), HostState::Running);
+        assert_eq!(
+            h.permission_status(Permission::InputMonitoring),
+            PermissionStatus::Granted
+        );
     }
 
     #[test]

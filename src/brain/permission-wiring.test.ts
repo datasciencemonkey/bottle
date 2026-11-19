@@ -152,6 +152,17 @@ describe('OS permission notice (ADR 0101, #552)', () => {
     });
   });
 
+  it('[CAP-36] a failed request keeps Allow, because the host showed no prompt', async () => {
+    const t = setup({ input_monitoring: 'unknown' });
+    await flush();
+    t.deps.request.mockImplementation(async () => {
+      throw new Error('host_failed');
+    });
+    hubClick(t.bus, { target: PERMISSION_ALLOW_TARGET, permission: 'input_monitoring' });
+    await flush();
+    expect(t.hub.at(-1)).toEqual({ needs: [{ permission: 'input_monitoring', action: 'allow' }] });
+  });
+
   it('[CAP-37] a grant takes the notice away', async () => {
     const t = setup({ accessibility: 'unknown' });
     await flush();

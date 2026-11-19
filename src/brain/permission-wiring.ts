@@ -114,10 +114,11 @@ export function wirePermissions(bus: BrainBus, deps: PermissionWiringDeps): () =
     void (async () => {
       try {
         await deps.request(permission);
-      } catch {
-        // The host did not answer: the next read shows the state.
-      } finally {
+        // The prompt showed: the next click opens Settings.
         asked.add(permission);
+      } catch {
+        // The host did not answer, so no prompt showed: keep Allow.
+      } finally {
         busy.delete(permission);
       }
       await refresh();
