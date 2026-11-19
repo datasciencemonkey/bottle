@@ -12,8 +12,7 @@
 //! `consent_*` (T12 records, ADR 0060), the `capture_*` commands (R2, #425, ADR 0055),
 //! `app_setting_*` (the app-wide settings, #453), `insert_text` (the R11 paste, ADR 0048),
 //! `mcp_call` (R8 `McpCallComponent`, #467) and `agent_start`, `agent_stop` and `agent_send`
-//! (the one R16 `SharedAgentHost`, #307).
-//! `mcp_call` (R8 `McpCallComponent`, #467) and `stt_transcribe` (R4 `LocalStt`, #514).
+//! (the one R16 `SharedAgentHost`, #307) and `stt_transcribe` (R4 `LocalStt`, #514).
 //! Every other command stays `not_implemented` until its feature issue wires its component.
 //! A rejection is only `{ "error": "<code>" }`, with a code from `ipc_gateway::ERROR_CODES`
 //! (SEC-03).
@@ -26,11 +25,9 @@
 //! to Genie One MCP, so it also runs on a worker (#467). The `agent_*` commands run on a worker
 //! too (#307): a start can spawn the runtime and wait for the target lookup, a send can wait for
 //! the host lock while another MOG starts, and a stop kills and reaps the runtime. The brain
-//! awaits each call, so their order holds. Every other command runs inline, so
+//! awaits each call, so their order holds. `stt_transcribe` takes the R4 store lock that the R4
+//! worker shares, so it also runs on a worker (#514). Every other command runs inline, so
 //! `view_emit` keeps its order and the panic stop never waits.
-//! to Genie One MCP, so it also runs on a worker (#467). `stt_transcribe` takes the R4 store
-//! lock that the R4 worker shares, so it also runs on a worker (#514). Every other command runs
-//! inline, so `view_emit` keeps its order and the panic stop never waits.
 //! The last `hotkey:status` item is sticky: a new brain Channel gets it again (ADR 0039).
 //!
 //! The front end calls `invoke(name, { args })`; any other top-level key is rejected.
@@ -503,10 +500,8 @@ pub fn route(components: HostComponents<'_>, command: &str, args: Value) -> Resu
 /// shows (ADR 0039), `capture_start` and `capture_resume`, which open the device (ADR 0055),
 /// `insert_text`, which waits about 0.4 s for the paste and the clipboard restore (ADR 0048),
 /// `mcp_call`, a blocking HTTP call to Genie One MCP (#467), and the `agent_*` commands (#307),
-/// which can spawn, wait for the host lock or reap the runtime.
-/// `insert_text`, which waits about 0.4 s for the paste and the clipboard restore (ADR 0048), and
-/// `mcp_call`, a blocking HTTP call to Genie One MCP (#467), and `stt_transcribe`, which takes
-/// the R4 store lock that the R4 worker shares (#514).
+/// which can spawn, wait for the host lock or reap the runtime, and `stt_transcribe`, which
+/// takes the R4 store lock that the R4 worker shares (#514).
 pub fn runs_off_main_thread(command: &str) -> bool {
     matches!(
         command,
@@ -683,10 +678,8 @@ pub fn admit(command: &str, capture: Option<&CaptureHost>) -> Option<CaptureTick
 /// because it can wait for the main thread (ADR 0022 decision 6). `permission_request` also
 /// goes to a worker, because the OS prompt can wait for the user (ADR 0039), and so do
 /// `capture_start` and `capture_resume`, whose device open can be slow (ADR 0055), and
-/// `mcp_call`, which waits for Genie One MCP (#467), and `agent_*` (#307). Every other command runs now, on the
-/// calling thread, so `view_emit` keeps its order.
-/// `mcp_call`, which waits for Genie One MCP (#467), and `stt_transcribe` (#514). Every other
-/// command runs now, on the calling thread, so `view_emit` keeps its order.
+/// `mcp_call`, which waits for Genie One MCP (#467), `agent_*` (#307) and `stt_transcribe` (#514).
+/// Every other command runs now, on the calling thread, so `view_emit` keeps its order.
 pub fn schedule<F: FnOnce() + Send + 'static>(command: &str, job: F) {
     if runs_off_main_thread(command) {
         tauri::async_runtime::spawn_blocking(job);
