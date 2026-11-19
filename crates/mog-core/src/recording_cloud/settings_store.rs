@@ -62,6 +62,27 @@ pub fn valid_catalog_schema(catalog: &str, schema: &str) -> bool {
     is_uc_name(catalog) && is_uc_name(schema)
 }
 
+/// Write `bytes` to `path`, readable by the user only (0600 on unix; the ACL of the user's
+/// app data folder on Windows).
+fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(0o600);
+    }
+    let mut f = o.open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    f.write_all(bytes)?;
+    f.sync_all()
+}
+
 fn failed() -> CoreError {
     CoreError::IpcRefused {
         code: "host_failed",
@@ -112,7 +133,7 @@ impl RecordingSettingsStore for JsonSettingsStore {
             std::fs::create_dir_all(dir).map_err(|_| failed())?;
         }
         let tmp = p.with_extension("json.tmp");
-        std::fs::write(&tmp, text).map_err(|_| failed())?;
+        write_private(&tmp, &text).map_err(|_| failed())?;
         std::fs::rename(&tmp, p).map_err(|_| failed())
     }
 }

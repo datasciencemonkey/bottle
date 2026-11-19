@@ -601,19 +601,29 @@ impl RecordingCloudService {
             if m.parts[i].uploaded {
                 continue;
             }
-            let local = job.parts.get(i).ok_or(ErrorKind::AudioMissing)?;
+            // Match the local file by name (Retry gets only the files still on disk); by
+            // position only when the local list is the whole recording.
+            let file = m.parts[i].file.clone();
+            let local = job
+                .parts
+                .iter()
+                .find(|l| l.path.file_name().and_then(|f| f.to_str()) == Some(file.as_str()))
+                .or_else(|| (job.parts.len() == m.parts.len()).then(|| &job.parts[i]))
+                .ok_or(ErrorKind::AudioMissing)?;
             let bytes = std::fs::read(&local.path).map_err(|_| ErrorKind::AudioMissing)?;
             if sniff(&bytes).is_none() {
                 return Err(ErrorKind::AudioUnreadable);
             }
-            let dest = format!("{folder}/{}", m.parts[i].file);
+            let dest = format!("{folder}/{file}");
             self.upload(p, &dest, &bytes, false, f)?;
             m.parts[i].uploaded = true;
-            // Only after the upload succeeded (ADR 0103). A failed delete leaves a temp file
-            // that the launch scan shows again; it is never a reason to fail the stage.
+            // job.json first, then the delete (ADR 0103): if the job.json write fails, the
+            // local file stays, and Retry uploads it again (a 409 counts as uploaded).
+            self.update(p, root, m, Status::Uploading, on)?;
+            // A failed delete leaves a temp file that the launch scan shows again; it is never
+            // a reason to fail the stage.
             let _ = std::fs::remove_file(&local.path);
             cache.insert(i, bytes);
-            self.update(p, root, m, Status::Uploading, on)?;
         }
         Ok(cache)
     }

@@ -23,7 +23,8 @@ use mog_core::recording_capture::session::{FinishedRecording, PartsHandoff};
 use mog_core::recording_cloud::cloud::{
     is_audio_file_of, CloudDeps, LocalPart, ProfileWorkspace, RecordingCloudService,
 };
-use mog_core::recording_cloud::contract::CloudAdapter;
+use mog_core::recording_cloud::contract::{CloudAdapter, LocalAudio};
+use mog_core::recording_cloud::layout::is_recording_name;
 use mog_core::recording_cloud::opener::{open_link, SystemOpener, UrlOpener};
 use mog_core::recording_cloud::settings_store::{JsonSettingsStore, SETTINGS_FILE};
 use mog_core::types::{Instructions, RecordingId};
@@ -111,6 +112,79 @@ pub fn temp_parts_of(root: Option<&std::path::Path>, name: &str) -> Vec<LocalPar
             duration_s: 0.0,
         })
         .collect()
+}
+
+/// The recording name encoded by a local temp audio file name (`<name>.<ext>` or
+/// `<name>.partNN.<ext>`), or `None` when the file is not one (ADR 0103 decision 7).
+fn recording_name_of_file(file: &str) -> Option<&str> {
+    let (base, ext) = file.rsplit_once('.')?;
+    if !matches!(ext, "opus" | "ogg" | "flac" | "wav") {
+        return None;
+    }
+    let name = match base.rsplit_once(".part") {
+        Some((n, digits)) if digits.len() == 2 && digits.bytes().all(|c| c.is_ascii_digit()) => n,
+        _ => base,
+    };
+    is_recording_name(name).then_some(name)
+}
+
+/// The modified time of `path`, in epoch ms (`0` when it cannot be read).
+fn modified_ms(path: &std::path::Path) -> u64 {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Every recording name with temp audio still on the device, and its earliest file's modified
+/// time (epoch ms): the launch scan of ADR 0103 decision 7, run lazily on every `recording_list`
+/// (PR B's per-ID folders under `root`, searched the same way as [`temp_parts_of`]).
+pub fn temp_names_of(root: Option<&std::path::Path>) -> Vec<(String, u64)> {
+    let Some(root) = root else {
+        return Vec::new();
+    };
+    let mut names: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+    let dirs = std::fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|d| d.is_dir());
+    for dir in dirs {
+        let files = std::fs::read_dir(&dir).into_iter().flatten().flatten();
+        for entry in files {
+            let path = entry.path();
+            let Some(name) = path
+                .file_name()
+                .and_then(|f| f.to_str())
+                .and_then(recording_name_of_file)
+            else {
+                continue;
+            };
+            let t = modified_ms(&path);
+            names
+                .entry(name.to_owned())
+                .and_modify(|cur| *cur = (*cur).min(t))
+                .or_insert(t);
+        }
+    }
+    names.into_iter().collect()
+}
+
+/// The [`LocalAudio`] seam over the temp recordings folder (`<app data>/recordings/<id>/`).
+struct TempAudio {
+    root: Option<std::path::PathBuf>,
+}
+
+impl LocalAudio for TempAudio {
+    fn parts(&self, name: &str) -> Vec<LocalPart> {
+        temp_parts_of(self.root.as_deref(), name)
+    }
+    fn names(&self) -> Vec<(String, u64)> {
+        temp_names_of(self.root.as_deref())
+    }
 }
 
 /// The cloud end of PR B's hand-off: each finished recording runs the pipeline exactly once,
@@ -247,8 +321,7 @@ pub fn install(handle: &tauri::AppHandle<tauri::Wry>) -> CoreResult<()> {
         None => Arc::new(JsonSettingsStore::deferred()),
     };
     let temp_root = handle.path().app_data_dir().ok().map(|d| d.join(TEMP_DIR));
-    let temp_parts: mog_core::recording_cloud::contract::TempParts =
-        Arc::new(move |name: &str| temp_parts_of(temp_root.as_deref(), name));
+    let local: Arc<dyn LocalAudio> = Arc::new(TempAudio { root: temp_root });
     let app = handle.clone();
     let on_job = Arc::new(move |s: &mog_core::types::RecordingSummary| {
         if let (Some(ch), Ok(v)) = (app.try_state::<BrainChannel>(), serde_json::to_value(s)) {
@@ -258,8 +331,12 @@ pub fn install(handle: &tauri::AppHandle<tauri::Wry>) -> CoreResult<()> {
     let adapter = Arc::new(CloudAdapter::new(
         service.clone(),
         store.clone(),
-        temp_parts,
+        local,
         on_job,
+        Arc::new(|| {
+            use mog_core::clock::WallClock;
+            mog_core::clock::SystemWallClock.now_ms()
+        }),
     ));
     // PR B's finished recordings run the pipeline once each (waiting ones go out now).
     if let Some(slot) = handle.try_state::<Arc<HandoffSlot>>() {

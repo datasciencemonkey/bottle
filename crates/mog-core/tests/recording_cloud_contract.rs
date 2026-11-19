@@ -9,13 +9,29 @@ use mog_core::error::CoreResult;
 use mog_core::http_transport::Pause;
 use mog_core::ipc_gateway::GatewayComponents;
 use mog_core::recording::{MemorySettingsStore, RecordingComponent};
-use mog_core::recording_cloud::cloud::{CloudDeps, RecordingCloudService, WorkspaceInfo};
-use mog_core::recording_cloud::contract::{summary_of, wire_kind, CloudAdapter};
+use mog_core::recording_cloud::cloud::{
+    CloudDeps, LocalPart, RecordingCloudService, WorkspaceInfo,
+};
+use mog_core::recording_cloud::contract::{
+    summary_of, wire_kind, CloudAdapter, LocalAudio, NoLocalAudio,
+};
 use mog_core::recording_cloud::errors::ErrorKind;
 use mog_core::recording_cloud::http::ScriptedHttp;
 use mog_core::recording_cloud::job::{iso_utc, parse_iso_utc_ms, JobManifest, PartEntry};
 use mog_core::types::{RecordingErrorKind, RecordingSettings, RecordingSummary};
 use serde_json::{json, Value};
+
+/// A fixed set of names with temp audio on the device (ADR 0103 decision 7).
+struct FakeLocal(Vec<(String, u64)>);
+
+impl LocalAudio for FakeLocal {
+    fn parts(&self, _name: &str) -> Vec<LocalPart> {
+        Vec::new()
+    }
+    fn names(&self) -> Vec<(String, u64)> {
+        self.0.clone()
+    }
+}
 
 struct Ws;
 impl WorkspaceInfo for Ws {
@@ -42,6 +58,27 @@ fn component(
     Opened,
     Arc<Mutex<Vec<RecordingSummary>>>,
 ) {
+    component_with(
+        http,
+        storage,
+        Arc::new(NoLocalAudio),
+        Arc::new(|| 1_795_100_700_000i64),
+    )
+}
+
+/// Like [`component`], with the local temp audio and the wall clock of the in-flight guard
+/// under the test's control (the review of #592: the launch scan of decision 7, and the
+/// stale-job check of `retry_allowed`).
+fn component_with(
+    http: &Arc<ScriptedHttp>,
+    storage: Option<Value>,
+    local: Arc<dyn LocalAudio>,
+    now_ms: Arc<dyn Fn() -> i64 + Send + Sync>,
+) -> (
+    RecordingComponent,
+    Opened,
+    Arc<Mutex<Vec<RecordingSummary>>>,
+) {
     let s = RecordingSettings {
         storage: storage.map(|v| serde_json::from_value(v).unwrap()),
         ..Default::default()
@@ -58,8 +95,9 @@ fn component(
     let adapter = Arc::new(CloudAdapter::new(
         service,
         store.clone(),
-        Arc::new(|_: &str| Vec::new()),
+        local,
         Arc::new(move |s: &RecordingSummary| j.lock().unwrap().push(s.clone())),
+        now_ms,
     ));
     let opened: Opened = Arc::new(Mutex::new(Vec::new()));
     let o = opened.clone();
@@ -219,15 +257,17 @@ fn rec_component_probe_and_volume_create() {
 #[test]
 fn rec_component_retry_runs_from_the_failed_stage_and_emits_jobs() {
     let http = Arc::new(ScriptedHttp::new());
+    // The review of #592 (BLOCKING 1) reads job.json once more, up front, to gate the retry
+    // (`retry_allowed`) before anything else runs.
+    http.bytes(
+        "files.download",
+        &serde_json::to_vec(&manifest("failed")).unwrap(),
+    ); // the gate's own read (current)
     http.bytes("files.download", b"Write notes."); // instructions.md
     http.bytes(
         "files.download",
         &serde_json::to_vec(&manifest("failed")).unwrap(),
-    ); // started_at
-    http.bytes(
-        "files.download",
-        &serde_json::to_vec(&manifest("failed")).unwrap(),
-    ); // retry reads it
+    ); // the service's own read, inside retry()
     let tj = json!({"version":1,"id":"r1","name":NAME,"started_at":"2026-11-19T14:05:00Z","duration_s":9.0,
         "instructions":"Write notes.","parts":[],
         "segments":[{"start":0.0,"end":1.0,"speaker":"1","text":"Hi.","part":1}]});
@@ -248,6 +288,79 @@ fn rec_component_retry_runs_from_the_failed_stage_and_emits_jobs() {
     let seen: Vec<_> = jobs.lock().unwrap().iter().map(|s| s.status).collect();
     assert!(seen.len() >= 2, "{seen:?}");
     assert_eq!(http.seen_on("mlflow.chat_completions").len(), 1);
+}
+
+#[test]
+fn rec_component_retry_refuses_a_done_recording() {
+    // Review of #592 (BLOCKING 1): Retry may run only a failed, or a stale, job. A `done`
+    // recording never restarts, so no upload or model call is scripted; any attempt to run one
+    // would fail with `no_script` and the test would fail for the right reason.
+    let http = Arc::new(ScriptedHttp::new());
+    http.bytes(
+        "files.download",
+        &serde_json::to_vec(&manifest("done")).unwrap(),
+    );
+    let (c, _, jobs) = component(&http, vol());
+    let v = c
+        .call("recording_retry", json!({"profile":"fake-home","id":NAME}))
+        .unwrap();
+    assert_eq!(v["status"], "done", "{v}");
+    assert_eq!(http.seen().len(), 1, "a done recording starts no new run");
+    assert!(jobs.lock().unwrap().is_empty(), "no job update is emitted");
+}
+
+#[test]
+fn rec_component_list_shows_local_only_audio_as_upload_failed() {
+    // ADR 0103 decision 7: audio left on the device with no job.json in the volume (the first
+    // `mkdir` or `job.json` write never ran: offline, 403, signed out, or no profile/storage at
+    // the hand-off) still shows in Recordings, as upload failed, so Retry can pick it up. The
+    // review of #592 (BLOCKING 2).
+    let http = Arc::new(ScriptedHttp::new());
+    http.json(
+        "files.list_directory",
+        404,
+        json!({"error_code":"NOT_FOUND"}),
+    );
+    let local: Arc<dyn LocalAudio> =
+        Arc::new(FakeLocal(vec![(NAME.to_owned(), 1_795_097_100_000)]));
+    let (c, _, _) = component_with(&http, vol(), local, Arc::new(|| 1_795_100_700_000i64));
+    let v = c
+        .call("recording_list", json!({"profile":"fake-home"}))
+        .unwrap();
+    assert_eq!(v.as_array().unwrap().len(), 1, "{v}");
+    assert_eq!(v[0]["id"], NAME);
+    assert_eq!(v[0]["status"], "failed");
+    assert_eq!(v[0]["errorKind"], "upload_failed");
+    assert_eq!(v[0]["errorStage"], "uploading");
+    assert_eq!(v[0]["startedAtMs"], 1_795_097_100_000u64);
+}
+
+#[test]
+fn rec_component_list_does_not_duplicate_audio_already_in_a_job() {
+    // When the volume already has a job.json for a name, the device-only row of decision 7
+    // must not duplicate it (a 409 can leave the local file, mid-upload, alongside a real row).
+    let http = Arc::new(ScriptedHttp::new());
+    http.json(
+        "files.list_directory",
+        200,
+        json!({"contents":[{"path":"x","is_directory":true,"name":NAME}]}),
+    );
+    http.bytes(
+        "files.download",
+        &serde_json::to_vec(&manifest("failed")).unwrap(),
+    );
+    let local: Arc<dyn LocalAudio> =
+        Arc::new(FakeLocal(vec![(NAME.to_owned(), 1_795_097_100_000)]));
+    let (c, _, _) = component_with(&http, vol(), local, Arc::new(|| 1_795_100_700_000i64));
+    let v = c
+        .call("recording_list", json!({"profile":"fake-home"}))
+        .unwrap();
+    assert_eq!(v.as_array().unwrap().len(), 1, "{v}");
+    assert_eq!(v[0]["status"], "failed");
+    assert_eq!(
+        v[0]["errorKind"], "notes_endpoint_missing",
+        "the real job.json wins"
+    );
 }
 
 #[test]

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use bottle_lib::recording_cloud_host::{temp_parts_of, PipelineHandoff};
+use bottle_lib::recording_cloud_host::{temp_names_of, temp_parts_of, PipelineHandoff};
 use bottle_lib::recording_host::knob_hook;
 use mog_core::recording::{MemorySettingsStore, PipelineRequest};
 use mog_core::recording_capture::chunker::PartFile;
@@ -157,5 +157,27 @@ fn rec_retry_finds_the_opus_file_in_any_per_id_folder() {
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].path, a.join("2026-11-19_0905.opus"));
     assert!(temp_parts_of(None, "2026-11-19_0905").is_empty());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn rec_temp_names_lists_every_recording_left_on_the_device() {
+    // ADR 0103 decision 7 (review of #592, BLOCKING 2): the names with audio still on the
+    // device, so the cloud side can list them as "upload failed" with Retry.
+    let root = temp("names");
+    let a = root.join("rec-abc");
+    std::fs::create_dir_all(&a).unwrap();
+    std::fs::write(a.join("2026-11-19_0905.part01.opus"), b"OggS").unwrap();
+    std::fs::write(a.join("2026-11-19_0905.part02.opus"), b"OggS").unwrap();
+    std::fs::write(a.join("not-a-recording.txt"), b"x").unwrap();
+    let b = root.join("rec-def");
+    std::fs::create_dir_all(&b).unwrap();
+    std::fs::write(b.join("2026-11-18_0900.opus"), b"OggS").unwrap();
+
+    let names = temp_names_of(Some(&root));
+    let mut names: Vec<&str> = names.iter().map(|(n, _)| n.as_str()).collect();
+    names.sort_unstable();
+    assert_eq!(names, vec!["2026-11-18_0900", "2026-11-19_0905"]);
+    assert!(temp_names_of(None).is_empty());
     let _ = std::fs::remove_dir_all(root);
 }

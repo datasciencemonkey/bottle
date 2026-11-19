@@ -3,7 +3,8 @@
 //! kinds, manifests and transcripts to the contract wire types. The recording ID on the wire is
 //! the folder name (`YYYY-MM-DD_HHMM`, with `_N` on a clash), which fits `RecordingId`.
 
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::recording::{
     FinishedPart, PipelineRequest, RecordingCloud, RecordingResult, RecordingSettingsStore,
@@ -23,8 +24,31 @@ use super::layout::{
 use super::settings_store::Storage;
 use super::transcript::{render_markdown, Segment, TranscriptDoc};
 
-/// The local temp audio of a recording still on the device, by name (PR B's folder).
-pub type TempParts = Arc<dyn Fn(&str) -> Vec<LocalPart> + Send + Sync>;
+/// The local temp audio still on the device (PR B's per-ID folders under the app data dir).
+pub trait LocalAudio: Send + Sync {
+    /// The local audio files of recording `name`, in part order.
+    fn parts(&self, name: &str) -> Vec<LocalPart>;
+    /// Every recording with audio on the device: its name and its start (epoch ms, from the
+    /// file time). The launch scan of ADR 0103 decision 7.
+    fn names(&self) -> Vec<(String, u64)>;
+}
+
+/// No local audio (tests, and builds with no app data dir).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoLocalAudio;
+
+impl LocalAudio for NoLocalAudio {
+    fn parts(&self, _name: &str) -> Vec<LocalPart> {
+        Vec::new()
+    }
+    fn names(&self) -> Vec<(String, u64)> {
+        Vec::new()
+    }
+}
+
+/// A job.json that is not `done` or `failed` and has not changed for this long belongs to a
+/// run that died (a crash or a quit): Retry may start again.
+pub const STALE_AFTER_MS: i64 = 30 * 60 * 1000;
 /// Gets each manifest change (the host sends `recording.job`).
 pub type JobSink = Arc<dyn Fn(&RecordingSummary) + Send + Sync>;
 
@@ -103,24 +127,99 @@ fn wire_segment(s: &Segment) -> RecordingSegment {
 pub struct CloudAdapter {
     service: Arc<RecordingCloudService>,
     settings: Arc<dyn RecordingSettingsStore>,
-    temp_parts: TempParts,
+    local: Arc<dyn LocalAudio>,
     on_job: JobSink,
+    /// The recording names with a pipeline run in flight (the hand-off and Retry share it), so
+    /// two runs never race on one recording.
+    inflight: Mutex<HashSet<String>>,
+    now_ms: Arc<dyn Fn() -> i64 + Send + Sync>,
+}
+
+/// Holds a recording name in the in-flight set until it drops.
+struct InFlight<'a> {
+    set: &'a Mutex<HashSet<String>>,
+    name: String,
+}
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        self.set
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.name);
+    }
 }
 
 impl CloudAdapter {
-    /// An adapter. `temp_parts(name)`: the local temp audio of a recording still on the device.
-    /// `on_job`: each manifest change (the host sends `recording.job`).
+    /// An adapter. `local`: the temp audio still on the device. `on_job`: each manifest change
+    /// (the host sends `recording.job`). `now_ms`: wall time, for the stale check.
     pub fn new(
         service: Arc<RecordingCloudService>,
         settings: Arc<dyn RecordingSettingsStore>,
-        temp_parts: TempParts,
+        local: Arc<dyn LocalAudio>,
         on_job: JobSink,
+        now_ms: Arc<dyn Fn() -> i64 + Send + Sync>,
     ) -> Self {
         Self {
             service,
             settings,
-            temp_parts,
+            local,
             on_job,
+            inflight: Mutex::new(HashSet::new()),
+            now_ms,
+        }
+    }
+
+    /// Take `name` for one run, or `None` when a run on it is in flight.
+    fn begin(&self, name: &str) -> Option<InFlight<'_>> {
+        let fresh = self
+            .inflight
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(name.to_owned());
+        fresh.then(|| InFlight {
+            set: &self.inflight,
+            name: name.to_owned(),
+        })
+    }
+
+    /// Is a run on `name` in flight now?
+    pub fn in_flight(&self, name: &str) -> bool {
+        self.inflight
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains(name)
+    }
+
+    /// The list row of a recording whose audio is only on the device (the upload never wrote a
+    /// job.json): failed, `upload_failed`, at the upload step, so Retry runs the whole pipeline.
+    pub fn local_only_summary(name: &str, started_at_ms: u64) -> Option<RecordingSummary> {
+        Some(RecordingSummary {
+            id: RecordingId::try_from(name.to_owned()).ok()?,
+            name: name.to_owned(),
+            started_at_ms,
+            duration_s: 0,
+            status: RecordingStatus::Failed,
+            error_kind: Some(RecordingErrorKind::UploadFailed),
+            error_stage: Some(RecordingStatus::Uploading),
+        })
+    }
+
+    /// Tell the brain about a finished recording that could not start its pipeline (no storage
+    /// or no profile): it shows as upload failed, with Retry.
+    pub fn report_local_only(&self, name: &str, started_at_ms: u64) {
+        if let Some(s) = Self::local_only_summary(name, started_at_ms) {
+            (self.on_job)(&s);
+        }
+    }
+
+    /// May Retry start a run on `m`? Only a failed run, or one whose job.json went stale.
+    fn retry_allowed(&self, m: &JobManifest) -> bool {
+        match m.status {
+            Status::Failed => true,
+            Status::Done => false,
+            _ => parse_iso_utc_ms(&m.updated_at)
+                .is_none_or(|t| (self.now_ms)() - t >= STALE_AFTER_MS),
         }
     }
 
@@ -158,6 +257,9 @@ impl CloudAdapter {
                     duration_s: p.duration_s,
                 })
                 .collect(),
+        };
+        let Some(_guard) = self.begin(&req.name) else {
+            return Err(RecordingErrorKind::RecordingBusy);
         };
         let m = self
             .service
@@ -380,7 +482,23 @@ impl RecordingCloud for CloudAdapter {
             .service
             .list(profile.as_str(), Self::root(storage))
             .map_err(err)?;
-        Ok(rows.iter().filter_map(summary_of).collect())
+        let mut out: Vec<RecordingSummary> = rows.iter().filter_map(summary_of).collect();
+        // ADR 0103 decision 7: audio left on the device with no job.json in the volume shows
+        // as "Upload failed - Retry".
+        for (name, started) in self.local.names() {
+            if out.iter().any(|r| r.name == name) || self.in_flight(&name) {
+                continue;
+            }
+            if let Some(s) = Self::local_only_summary(&name, started) {
+                out.push(s);
+            }
+        }
+        out.sort_by(|a, b| {
+            b.started_at_ms
+                .cmp(&a.started_at_ms)
+                .then(b.name.cmp(&a.name))
+        });
+        Ok(out)
     }
 
     fn detail(
@@ -422,6 +540,27 @@ impl RecordingCloud for CloudAdapter {
         let p = profile.as_str();
         let root = Self::root(storage);
         let name = id.as_str();
+        let current = self.service.job(p, root, name).map_err(wire_kind)?;
+        let local_started = || {
+            self.local
+                .names()
+                .into_iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, t)| t)
+        };
+        let now = |m: &Option<JobManifest>| -> RecordingResult<RecordingSummary> {
+            match m {
+                Some(m) => summary_of(m).ok_or(RecordingErrorKind::Internal),
+                None => Self::local_only_summary(name, local_started().unwrap_or(0))
+                    .ok_or(RecordingErrorKind::Internal),
+            }
+        };
+        if current.as_ref().is_some_and(|m| !self.retry_allowed(m)) {
+            return now(&current);
+        }
+        let Some(_guard) = self.begin(name) else {
+            return now(&current);
+        };
         let settings = self
             .settings
             .load()
@@ -431,12 +570,10 @@ impl RecordingCloud for CloudAdapter {
             .instructions(p, root, name)
             .map_err(wire_kind)?
             .unwrap_or_else(|| settings.preset_instructions.as_str().to_owned());
-        let started_at = self
-            .service
-            .job(p, root, name)
-            .map_err(wire_kind)?
-            .map(|m| m.started_at)
-            .unwrap_or_else(|| iso_utc(0));
+        let started_at = current
+            .as_ref()
+            .map(|m| m.started_at.clone())
+            .unwrap_or_else(|| iso_utc(local_started().unwrap_or(0) as i64));
         let job = RecordingJob {
             root: root.to_owned(),
             id: name.to_owned(),
@@ -446,7 +583,7 @@ impl RecordingCloud for CloudAdapter {
             transcribe_endpoint: settings.transcribe_endpoint.as_str().to_owned(),
             notes_endpoint: settings.notes_endpoint.as_str().to_owned(),
             mog: RECORDING_MOG_TAG.to_owned(),
-            parts: (self.temp_parts)(name),
+            parts: self.local.parts(name),
         };
         let m = self.service.retry(p, &job, &mut |m| self.emit(m));
         summary_of(&m).ok_or(RecordingErrorKind::Internal)
@@ -461,5 +598,138 @@ impl RecordingCloud for CloudAdapter {
         self.service
             .link(profile.as_str(), Self::root(storage), id.as_str())
             .map_err(err)
+    }
+}
+
+// ---------- the in-flight guard (review of #592, BLOCKING 1) ----------
+//
+// `begin`/`InFlight` are private, so the race is tested here, in the crate, rather than through
+// the public `RecordingCloud` seam: a deterministic check of the mutex itself (no thread timing,
+// NFR-23a) stands in for "a double-click on Retry" and "a Retry while the hand-off still runs",
+// which both reduce to two callers racing `begin` on the same name.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::clock::SimWallClock;
+    use crate::error::CoreResult;
+    use crate::http_transport::Pause;
+    use crate::recording::MemorySettingsStore;
+    use crate::recording_cloud::cloud::{CloudDeps, WorkspaceInfo};
+    use crate::recording_cloud::http::ScriptedHttp;
+    use crate::types::RecordingSettings;
+    use std::time::Duration;
+
+    struct Ws;
+    impl WorkspaceInfo for Ws {
+        fn host_url(&self, _p: &str) -> CoreResult<String> {
+            Ok("https://dbc-fake.cloud.databricks.com".into())
+        }
+        fn workspace_id(&self, _p: &str) -> CoreResult<String> {
+            Ok("1".into())
+        }
+    }
+
+    struct NoPause;
+    impl Pause for NoPause {
+        fn pause(&self, _d: Duration) {}
+    }
+
+    fn adapter() -> CloudAdapter {
+        let service = Arc::new(RecordingCloudService::new(CloudDeps {
+            http: Arc::new(ScriptedHttp::new()),
+            workspace: Arc::new(Ws),
+            wall: Arc::new(SimWallClock::at(1_795_100_700_000)),
+            pause: Arc::new(NoPause),
+        }));
+        CloudAdapter::new(
+            service,
+            Arc::new(MemorySettingsStore::new(RecordingSettings::default())),
+            Arc::new(NoLocalAudio),
+            Arc::new(|_: &RecordingSummary| {}),
+            Arc::new(|| 1_795_100_700_000i64),
+        )
+    }
+
+    #[test]
+    fn begin_refuses_a_second_run_on_the_same_name_until_the_first_drops() {
+        let a = adapter();
+        let first = a.begin("2026-11-19_0905").expect("the first run starts");
+        assert!(
+            a.begin("2026-11-19_0905").is_none(),
+            "a double-click on Retry, or a Retry while the hand-off still runs, must not start \
+             a second concurrent run"
+        );
+        assert!(a.in_flight("2026-11-19_0905"));
+        assert!(
+            a.begin("2026-11-19_0901").is_some(),
+            "a different recording is unaffected"
+        );
+        drop(first);
+        assert!(!a.in_flight("2026-11-19_0905"));
+        assert!(
+            a.begin("2026-11-19_0905").is_some(),
+            "a run may start once the first one finishes (drops its guard)"
+        );
+    }
+
+    #[test]
+    fn run_pipeline_refuses_while_a_run_on_the_same_name_is_in_flight() {
+        let a = adapter();
+        let name = "2026-11-19_0905";
+        let _guard = a.begin(name).expect("the first run starts");
+        let req = PipelineRequest {
+            profile: "fake-home".to_owned(),
+            storage: RecordingStorage {
+                kind: RecordingStorageKind::Volume,
+                root: VolumePath::try_from("/Volumes/main/team/audio".to_owned()).unwrap(),
+            },
+            id: RecordingId::try_from(name.to_owned()).unwrap(),
+            name: name.to_owned(),
+            parts: Vec::new(),
+            instructions: Instructions::try_from("Write notes.".to_owned()).unwrap(),
+            settings: RecordingSettings::default(),
+        };
+        let e = a.run_pipeline(&req, 0).unwrap_err();
+        assert_eq!(e, RecordingErrorKind::RecordingBusy);
+    }
+
+    #[test]
+    fn retry_allowed_only_for_failed_or_a_stale_job() {
+        let a = adapter();
+        let fresh = |status| JobManifest {
+            updated_at: iso_utc(1_795_100_700_000),
+            ..manifest_of(status)
+        };
+        assert!(a.retry_allowed(&fresh(Status::Failed)));
+        assert!(!a.retry_allowed(&fresh(Status::Done)));
+        assert!(
+            !a.retry_allowed(&fresh(Status::Transcribing)),
+            "a fresh, running job is not stale"
+        );
+        let stale = JobManifest {
+            updated_at: iso_utc(1_795_100_700_000 - STALE_AFTER_MS - 1),
+            ..manifest_of(Status::Transcribing)
+        };
+        assert!(
+            a.retry_allowed(&stale),
+            "a job that stopped updating (a crash or a quit) may be retried"
+        );
+    }
+
+    fn manifest_of(status: Status) -> JobManifest {
+        let mut m = JobManifest::new(
+            "r1",
+            "2026-11-19_0905",
+            &iso_utc(0),
+            vec![super::super::job::PartEntry::new(
+                "2026-11-19_0905.opus",
+                1.0,
+            )],
+            "databricks-gemini-3-8-flash",
+            "databricks-claude-sonnet-5-5",
+            &iso_utc(0),
+        );
+        m.status = status;
+        m
     }
 }

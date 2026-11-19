@@ -51,7 +51,14 @@ impl UrlOpener for SystemOpener {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .map(|_| ())
+            .map(|mut child| {
+                // Reap the opener on a detached thread, so it leaves no zombie on unix.
+                let _ = std::thread::Builder::new()
+                    .name("bottle-open-reap".into())
+                    .spawn(move || {
+                        let _ = child.wait();
+                    });
+            })
             .map_err(|_| CoreError::Unavailable {
                 component: ID,
                 reason: "open_failed",
