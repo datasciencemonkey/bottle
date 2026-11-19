@@ -115,10 +115,10 @@ fn sample(command: &str) -> (&'static str, Value) {
         // ADR 0103: call recording.
         "recording_settings_read"
         | "recording_storage_probe"
-        | "recording_warehouses"
         | "recording_stop"
         | "recording_state"
-        | "recording_list" => json!({}),
+        | "recording_list"
+        | "recording_open_system_audio_settings" => json!({}),
         "recording_settings_write" => json!({"patch": {"enabled": true}}),
         "recording_volume_create" => json!({"catalog": "main", "schema": "calls"}),
         "recording_start" => json!({"instructions": "Notes."}),
@@ -454,12 +454,11 @@ fn sec_03_each_ipc_error_maps_to_a_fixed_code() {
         IpcError::RecordingInProgress { command: s() },
         IpcError::UnknownRecording { command: s() },
         IpcError::NoStorage { command: s() },
-        IpcError::NoWarehouse { command: s() },
-        IpcError::WarehouseFailed { command: s() },
         IpcError::VolumePermission { command: s() },
-        IpcError::AiTranscribeDisabled { command: s() },
-        IpcError::EndpointMissing { command: s() },
+        IpcError::TranscribeEndpointMissing { command: s() },
+        IpcError::NotesEndpointMissing { command: s() },
         IpcError::TooLong { command: s() },
+        IpcError::AudioUnreadable { command: s() },
         IpcError::UploadFailed { command: s() },
         IpcError::SystemAudioDenied { command: s() },
     ];

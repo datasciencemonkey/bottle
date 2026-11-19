@@ -14,7 +14,7 @@ use mog_core::types::{
     RecordingErrorKind, RecordingSettings, RecordingState, RecordingStatus, RecordingSummary,
     RouterCommand, RouterDecision, SegmentRef, SessionPolicy, StorageProbe, TagApp, TagOp, Tags,
     TalkKeyReason, TalkKeyState, TalkKeyStatus, TokenState, TokenStatus, Track, Transcript,
-    TranscriptProvider, WarehouseInfo,
+    TranscriptProvider,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -97,7 +97,6 @@ fn round_trip_by_name(type_name: &str, json: &Value) -> Result<Value, String> {
         "RecordingDetail" => round_trip::<RecordingDetail>(json),
         "RecordingStatus" => round_trip::<Vec<RecordingStatus>>(json),
         "RecordingErrorKind" => round_trip::<Vec<RecordingErrorKind>>(json),
-        "WarehouseInfo" => round_trip::<Vec<WarehouseInfo>>(json),
         "StorageProbe" => round_trip::<StorageProbe>(json),
         "RecordToggle" => round_trip::<RecordToggle>(json),
         other => panic!("fixture for unknown type {other}: add it to round_trip_by_name"),
@@ -126,7 +125,6 @@ const STRUCTS: &[&str] = &[
     "RecordingState",
     "RecordingSummary",
     "RecordingDetail",
-    "WarehouseInfo",
     "StorageProbe",
     "RecordToggle",
 ];
@@ -177,7 +175,6 @@ fn every_ipc_type_has_a_fixture() {
         "RecordingDetail",
         "RecordingStatus",
         "RecordingErrorKind",
-        "WarehouseInfo",
         "StorageProbe",
         "RecordToggle",
     ] {

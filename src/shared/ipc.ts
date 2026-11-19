@@ -107,7 +107,6 @@ export const COMMANDS = {
   recording_settings_write: BH,
   recording_storage_probe: BH,
   recording_volume_create: BH,
-  recording_warehouses: BH,
   /** Rust refuses it with `recording_off` while the knob is off, then `consent_required`. */
   recording_start: BH,
   recording_stop: BH,
@@ -117,6 +116,8 @@ export const COMMANDS = {
   recording_retry: BH,
   /** Rust builds the Catalog Explorer URL from the profile host and opens it. */
   recording_open: BH,
+  /** The "Allow System Audio Recording" fix-it: Rust opens the OS privacy pane. */
+  recording_open_system_audio_settings: BH,
 } as const satisfies Record<string, Spec>;
 
 export type CommandName = keyof typeof COMMANDS;
@@ -360,7 +361,6 @@ export interface CommandArgs {
   recording_storage_probe: NoArgs;
   /** Creates the managed volume `bottle_audio` after the user confirmed. `[A-Za-z0-9_-]` names. */
   recording_volume_create: { catalog: string; schema: string };
-  recording_warehouses: NoArgs;
   /** `instructions`: for this recording only. Absent: the Settings preset. */
   recording_start: { instructions?: string };
   recording_stop: NoArgs;
@@ -369,6 +369,7 @@ export interface CommandArgs {
   recording_detail: { id: RecordingId };
   recording_retry: { id: RecordingId };
   recording_open: { id: RecordingId; target: 'folder' };
+  recording_open_system_audio_settings: NoArgs;
 }
 
 /**
@@ -448,12 +449,11 @@ export const IPC_ERROR_CODES = [
   'recording_in_progress',
   'unknown_recording',
   'no_storage',
-  'no_warehouse',
-  'warehouse_failed',
   'volume_permission',
-  'ai_transcribe_disabled',
-  'endpoint_missing',
+  'transcribe_endpoint_missing',
+  'notes_endpoint_missing',
   'too_long',
+  'audio_unreadable',
   'upload_failed',
   'system_audio_denied',
 ] as const;
@@ -686,13 +686,13 @@ export interface RecordingSettings {
   /** The user acknowledged the first-use consent notice. Default false. */
   consentAck: boolean;
   storage: RecordingStorage | null;
-  /** The SQL warehouse of the fallback path only. */
-  warehouseId: string | null;
-  /** The `ai_query` notes model. Default `databricks-claude-sonnet-5-5`. */
+  /** The model that transcribes the audio. Default `databricks-gemini-3-8-flash`. */
+  transcribeEndpoint: string;
+  /** The model that writes the notes. Default `databricks-claude-sonnet-5-5`. */
   notesEndpoint: string;
   /** The preset prompt. Default: the ADR 0103 prompt. */
   presetInstructions: string;
-  /** The recording stops by itself after this many minutes: 5 to 180, default 60. */
+  /** The recording stops by itself after this many minutes: 5 to 120, default 60. */
   lengthMin: number;
 }
 
@@ -715,7 +715,7 @@ export interface RecordingState {
   systemAudio: SystemAudio;
 }
 
-/** The status of a recording job. `transcribing` covers a queued or running job run. */
+/** The status of a recording job. `transcribing`: the model calls per part. */
 export type RecordingStatus =
   'recording' | 'uploading' | 'transcribing' | 'writing_notes' | 'done' | 'failed';
 
@@ -726,13 +726,13 @@ export type RecordingErrorKind =
   | 'recording_busy'
   | 'mic_busy'
   | 'no_storage'
-  | 'no_warehouse'
-  | 'warehouse_failed'
   | 'volume_permission'
-  | 'ai_transcribe_disabled'
-  | 'endpoint_missing'
+  | 'transcribe_endpoint_missing'
+  | 'notes_endpoint_missing'
   | 'too_long'
+  | 'audio_unreadable'
   | 'upload_failed'
+  | 'rate_limited'
   | 'network'
   | 'auth'
   | 'system_audio_denied'
@@ -748,9 +748,6 @@ export interface RecordingSummary {
   errorKind?: RecordingErrorKind;
   /** The step that failed; Retry starts again there. */
   errorStage?: RecordingStatus;
-  /** `job`: the serverless job run; `warehouse`: the SQL warehouse fallback. */
-  engine?: 'job' | 'warehouse';
-  runId?: string;
 }
 
 /** One transcript turn. Seconds from the start, across parts. `text` is user content. */
@@ -769,14 +766,6 @@ export interface RecordingDetail {
   segments: RecordingSegment[];
   transcriptMd?: string;
   notesMd?: string;
-}
-
-/** One SQL warehouse of the user (`recording_warehouses`). */
-export interface WarehouseInfo {
-  id: string;
-  name: string;
-  state: 'starting' | 'running' | 'stopping' | 'stopped' | 'deleting' | 'deleted' | 'unknown';
-  serverless: boolean;
 }
 
 /** The `recording_storage_probe` reply: the My Files root, or `null`. */
@@ -858,7 +847,6 @@ export interface CommandReturns {
   recording_settings_write: RecordingSettings;
   recording_storage_probe: StorageProbe;
   recording_volume_create: RecordingStorage;
-  recording_warehouses: WarehouseInfo[];
   recording_start: RecordingState;
   recording_stop: RecordingState;
   recording_state: RecordingState;
@@ -867,6 +855,7 @@ export interface CommandReturns {
   recording_detail: RecordingDetail;
   recording_retry: RecordingSummary;
   recording_open: Empty;
+  recording_open_system_audio_settings: Empty;
 }
 
 /** Call a command. A refused call rejects with an `IpcError` (a code only). */

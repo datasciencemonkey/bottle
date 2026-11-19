@@ -30,7 +30,10 @@ fn cap_06_the_knob_is_off_by_default_with_the_brief_defaults() {
     assert!(!s.enabled);
     assert!(!s.consent_ack);
     assert!(s.storage.is_none());
-    assert!(s.warehouse_id.is_none());
+    assert_eq!(
+        s.transcribe_endpoint.as_str(),
+        "databricks-gemini-3-8-flash"
+    );
     assert_eq!(s.notes_endpoint.as_str(), "databricks-claude-sonnet-5-5");
     assert_eq!(RECORDING_DEFAULT_ENDPOINT, "databricks-claude-sonnet-5-5");
     assert_eq!(s.length_min.get(), 60);
@@ -41,7 +44,10 @@ fn cap_06_the_knob_is_off_by_default_with_the_brief_defaults() {
     assert!(RECORDING_DEFAULT_INSTRUCTIONS.contains("## Action items"));
     let wire = serde_json::to_value(&s).unwrap();
     assert_eq!(wire["storage"], Value::Null);
-    assert_eq!(wire["warehouseId"], Value::Null);
+    assert_eq!(
+        wire["transcribeEndpoint"],
+        json!("databricks-gemini-3-8-flash")
+    );
     assert_eq!(wire["lengthMin"], json!(60));
 }
 
@@ -130,13 +136,13 @@ fn cap_06_every_other_recording_command_is_a_typed_stub() {
             "recording_volume_create",
             json!({"catalog": "main", "schema": "calls"}),
         ),
-        ("recording_warehouses", json!({})),
         ("recording_stop", json!({})),
         ("recording_state", json!({})),
         ("recording_list", json!({})),
         ("recording_detail", json!({"id": "rec-1"})),
         ("recording_retry", json!({"id": "rec-1"})),
         ("recording_open", json!({"id": "rec-1", "target": "folder"})),
+        ("recording_open_system_audio_settings", json!({})),
     ] {
         assert_eq!(code(c.call(name, args)), "not_implemented", "{name}");
     }
@@ -152,6 +158,15 @@ fn sec_03_every_error_kind_maps_to_an_ipc_code() {
     assert_eq!(RecordingErrorKind::Network.ipc_code(), "offline");
     assert_eq!(RecordingErrorKind::Auth.ipc_code(), "auth_expired");
     assert_eq!(RecordingErrorKind::Internal.ipc_code(), "host_failed");
+    assert_eq!(RecordingErrorKind::RateLimited.ipc_code(), "rate_limited");
+    assert_eq!(
+        RecordingErrorKind::TranscribeEndpointMissing.ipc_code(),
+        "transcribe_endpoint_missing"
+    );
+    assert_eq!(
+        RecordingErrorKind::AudioUnreadable.ipc_code(),
+        "audio_unreadable"
+    );
     assert_eq!(RecordingErrorKind::ALL.len(), 16);
 }
 
@@ -175,8 +190,6 @@ fn sec_16c_transcript_debug_never_holds_the_text() {
             status: RecordingStatus::Done,
             error_kind: None,
             error_stage: None,
-            engine: None,
-            run_id: None,
         },
         instructions: MARKER.into(),
         segments: vec![seg.clone()],

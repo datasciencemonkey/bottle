@@ -71,7 +71,6 @@ const SPEC_COMMANDS: &[(&str, &[WindowClass])] = {
         ("recording_settings_write", &[B, H]),
         ("recording_storage_probe", &[B, H]),
         ("recording_volume_create", &[B, H]),
-        ("recording_warehouses", &[B, H]),
         ("recording_start", &[B, H]),
         ("recording_stop", &[B, H]),
         ("recording_state", &[B, H]),
@@ -79,6 +78,7 @@ const SPEC_COMMANDS: &[(&str, &[WindowClass])] = {
         ("recording_detail", &[B, H]),
         ("recording_retry", &[B, H]),
         ("recording_open", &[B, H]),
+        ("recording_open_system_audio_settings", &[B, H]),
     ]
 };
 
@@ -917,7 +917,6 @@ const RECORDING_COMMANDS: &[&str] = &[
     "recording_settings_write",
     "recording_storage_probe",
     "recording_volume_create",
-    "recording_warehouses",
     "recording_start",
     "recording_stop",
     "recording_state",
@@ -925,6 +924,7 @@ const RECORDING_COMMANDS: &[&str] = &[
     "recording_detail",
     "recording_retry",
     "recording_open",
+    "recording_open_system_audio_settings",
 ];
 
 #[test]
@@ -967,7 +967,7 @@ fn sec_02b_recording_arguments_are_checked() {
         ),
         (
             "recording_settings_write",
-            json!({"patch": {"lengthMin": 181}}),
+            json!({"patch": {"lengthMin": 121}}),
         ),
         (
             "recording_settings_write",
@@ -999,7 +999,7 @@ fn sec_02b_recording_arguments_are_checked() {
         ),
         (
             "recording_settings_write",
-            json!({"patch": {"warehouseId": "a b"}}),
+            json!({"patch": {"transcribeEndpoint": "a b"}}),
         ),
         (
             "recording_settings_write",
@@ -1034,10 +1034,10 @@ fn sec_02b_recording_arguments_are_checked() {
     // The valid edges pass the schema.
     for patch in [
         json!({"lengthMin": 5}),
-        json!({"lengthMin": 180}),
+        json!({"lengthMin": 120}),
         json!({"storage": {"kind": "my_files", "root": "/Volumes/databricks/home/123/me@example.com/my_files/"}}),
         json!({"storage": {"kind": "volume", "root": "/Volumes/main/calls/bottle_audio"}}),
-        json!({"warehouseId": "abc123def456", "notesEndpoint": "databricks-claude-sonnet-5-5"}),
+        json!({"transcribeEndpoint": "databricks-gemini-3-8-flash", "notesEndpoint": "databricks-claude-sonnet-5-5"}),
         json!({}),
     ] {
         let err =
@@ -1073,12 +1073,11 @@ fn sec_03_recording_refusals_have_fixed_codes() {
         "recording_in_progress",
         "unknown_recording",
         "no_storage",
-        "no_warehouse",
-        "warehouse_failed",
         "volume_permission",
-        "ai_transcribe_disabled",
-        "endpoint_missing",
+        "transcribe_endpoint_missing",
+        "notes_endpoint_missing",
         "too_long",
+        "audio_unreadable",
         "upload_failed",
         "system_audio_denied",
     ] {

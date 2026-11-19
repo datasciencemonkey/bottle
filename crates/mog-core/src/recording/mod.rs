@@ -9,7 +9,8 @@
 //! This module is not a contract file. The wire types are in `crate::types` and the rows in
 //! `crate::ipc`. TODO(#65): PR B wires [`RecordingCapture`] into `recording_start`,
 //! `recording_stop` and `recording_state`; PR C wires [`RecordingCloud`] into the other
-//! commands and swaps [`MemorySettingsStore`] for a JSON file in the app config dir.
+//! commands and swaps [`MemorySettingsStore`] for a JSON file in the app config dir. No compute
+//! runs in the workspace: two model serving calls transcribe and write the notes.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -21,9 +22,8 @@ use crate::error::{CoreError, CoreResult};
 use crate::ipc::{RecordingSettingsWriteArgs, RecordingStartArgs};
 use crate::ipc_gateway::GatewayComponents;
 use crate::types::{
-    Instructions, RecordingDetail, RecordingEngine, RecordingErrorKind, RecordingId,
+    Instructions, RecordingDetail, RecordingErrorKind, RecordingId, RecordingSegment,
     RecordingSettings, RecordingState, RecordingStorage, RecordingSummary, StorageProbe, UcName,
-    WarehouseInfo,
 };
 
 /// The result of a recording seam: a fixed error kind, never upstream text.
@@ -37,13 +37,13 @@ impl RecordingErrorKind {
         RecordingErrorKind::RecordingBusy,
         RecordingErrorKind::MicBusy,
         RecordingErrorKind::NoStorage,
-        RecordingErrorKind::NoWarehouse,
-        RecordingErrorKind::WarehouseFailed,
         RecordingErrorKind::VolumePermission,
-        RecordingErrorKind::AiTranscribeDisabled,
-        RecordingErrorKind::EndpointMissing,
+        RecordingErrorKind::TranscribeEndpointMissing,
+        RecordingErrorKind::NotesEndpointMissing,
         RecordingErrorKind::TooLong,
+        RecordingErrorKind::AudioUnreadable,
         RecordingErrorKind::UploadFailed,
+        RecordingErrorKind::RateLimited,
         RecordingErrorKind::Network,
         RecordingErrorKind::Auth,
         RecordingErrorKind::SystemAudioDenied,
@@ -59,13 +59,13 @@ impl RecordingErrorKind {
             RecordingErrorKind::RecordingBusy => "recording_busy",
             RecordingErrorKind::MicBusy => "mic_busy",
             RecordingErrorKind::NoStorage => "no_storage",
-            RecordingErrorKind::NoWarehouse => "no_warehouse",
-            RecordingErrorKind::WarehouseFailed => "warehouse_failed",
             RecordingErrorKind::VolumePermission => "volume_permission",
-            RecordingErrorKind::AiTranscribeDisabled => "ai_transcribe_disabled",
-            RecordingErrorKind::EndpointMissing => "endpoint_missing",
+            RecordingErrorKind::TranscribeEndpointMissing => "transcribe_endpoint_missing",
+            RecordingErrorKind::NotesEndpointMissing => "notes_endpoint_missing",
             RecordingErrorKind::TooLong => "too_long",
+            RecordingErrorKind::AudioUnreadable => "audio_unreadable",
             RecordingErrorKind::UploadFailed => "upload_failed",
+            RecordingErrorKind::RateLimited => "rate_limited",
             RecordingErrorKind::Network => "offline",
             RecordingErrorKind::Auth => "auth_expired",
             RecordingErrorKind::SystemAudioDenied => "system_audio_denied",
@@ -91,7 +91,8 @@ pub trait RecordingSettingsStore: Send + Sync {
     fn save(&self, settings: &RecordingSettings) -> CoreResult<()>;
 }
 
-/// One finished FLAC part on the local disk: `<name>.partNN.flac`, 16 kHz mono.
+/// One finished audio file on the local disk (Opus in Ogg, 16 kHz mono). A recording has one
+/// part unless a later limit forces a split (ADR 0103 decision 8).
 #[derive(Debug, Clone, PartialEq)]
 pub struct FinishedPart {
     /// 1-based.
@@ -103,7 +104,7 @@ pub struct FinishedPart {
 }
 
 /// The one recording session of the device (PR B): the mic and the system audio, mixed to one
-/// 16 kHz mono stream, FLAC parts of at most 55 min. It shares the one mic owner with PTT.
+/// 16 kHz mono stream, encoded as Opus in Ogg. It shares the one mic owner with PTT.
 pub trait RecordingCapture: Send + Sync {
     /// Start the recording `id` into the temp folder `dir`. It stops by itself after
     /// `max_len`. A second start answers `RecordingBusy`.
@@ -120,7 +121,7 @@ pub trait RecordingCapture: Send + Sync {
     fn state(&self) -> RecordingState;
 }
 
-/// One transcription to start: the folder, the parts and the instructions are in the volume.
+/// One recording job: the folder, the parts and the instructions.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PipelineRequest {
     pub storage: RecordingStorage,
@@ -131,16 +132,15 @@ pub struct PipelineRequest {
     pub settings: RecordingSettings,
 }
 
-/// The workspace side (PR C). Every call goes through HttpTransport with a TokenBroker token of
-/// the home profile. No method returns upstream text or a token.
+/// The workspace side (PR C): the Files API for storage, and model serving for the transcript and
+/// the notes. Every call goes through HttpTransport with a TokenBroker token of the home profile.
+/// No method returns upstream text or a token. No method starts compute in the workspace.
 pub trait RecordingCloud: Send + Sync {
     /// Find the My Files root (`GET /api/2.0/fs/directories`, read-only).
     fn probe_storage(&self) -> RecordingResult<StorageProbe>;
     /// Create the managed volume `bottle_audio` in `catalog.schema`, after the user confirmed.
     fn create_volume(&self, catalog: &UcName, schema: &UcName)
         -> RecordingResult<RecordingStorage>;
-    /// The SQL warehouses of the user (the fallback path).
-    fn warehouses(&self) -> RecordingResult<Vec<WarehouseInfo>>;
     /// Upload one part to `<root>/Bottle/Recordings/<name>/`. The caller deletes the local part
     /// only after this succeeds.
     fn upload_part(
@@ -149,9 +149,31 @@ pub trait RecordingCloud: Send + Sync {
         name: &str,
         part: &FinishedPart,
     ) -> RecordingResult<()>;
-    /// Write the instructions and the job manifest, then start the serverless job run, or the
-    /// SQL warehouse path when serverless jobs are not usable. Gives the engine that runs.
-    fn run_pipeline(&self, request: &PipelineRequest) -> RecordingResult<RecordingEngine>;
+    /// Transcribe one part with the transcribe endpoint (the AI Gateway route
+    /// `mlflow.chat_completions`, the audio inline as an `audio_url` data URL). Gives the
+    /// segments with the part start added to their times. `context` holds the last lines of the
+    /// previous part, if any.
+    fn transcribe_part(
+        &self,
+        endpoint: &crate::types::EndpointName,
+        part: &FinishedPart,
+        context: &[RecordingSegment],
+    ) -> RecordingResult<Vec<RecordingSegment>>;
+    /// The notes Markdown from one chat call with the instructions and the joined transcript.
+    fn write_notes(
+        &self,
+        endpoint: &crate::types::EndpointName,
+        instructions: &Instructions,
+        transcript_md: &str,
+    ) -> RecordingResult<String>;
+    /// Write the instructions, `job.json`, the transcript files and the notes to the volume
+    /// folder, and give the summary of the job.
+    fn write_job(
+        &self,
+        request: &PipelineRequest,
+        status: crate::types::RecordingStatus,
+        detail: Option<&RecordingDetail>,
+    ) -> RecordingResult<RecordingSummary>;
     /// The recordings in the volume, newest first, from each `<name>.job.json`.
     fn list(&self, storage: &RecordingStorage) -> RecordingResult<Vec<RecordingSummary>>;
     fn detail(

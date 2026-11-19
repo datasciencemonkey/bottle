@@ -4,8 +4,6 @@
   "startedAtMs": 1795620600000,
   "durationS": 3300,
   "status": "failed",
-  "errorKind": "ai_transcribe_disabled",
-  "errorStage": "transcribing",
-  "engine": "job",
-  "runId": "123456789"
+  "errorKind": "transcribe_endpoint_missing",
+  "errorStage": "transcribing"
 }

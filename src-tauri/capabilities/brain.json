@@ -63,13 +63,13 @@
     "allow-recording-settings-write",
     "allow-recording-storage-probe",
     "allow-recording-volume-create",
-    "allow-recording-warehouses",
     "allow-recording-start",
     "allow-recording-stop",
     "allow-recording-state",
     "allow-recording-list",
     "allow-recording-detail",
     "allow-recording-retry",
-    "allow-recording-open"
+    "allow-recording-open",
+    "allow-recording-open-system-audio-settings"
   ]
 }

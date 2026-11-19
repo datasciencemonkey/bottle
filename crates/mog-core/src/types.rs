@@ -803,10 +803,13 @@ where
 
 /// The default notes model of a new install (ADR 0103). A Settings value.
 pub const RECORDING_DEFAULT_ENDPOINT: &str = "databricks-claude-sonnet-5-5";
+/// The default transcribe model of a new install (ADR 0103): a chat model that takes audio
+/// (`audio_url` data URLs). A Settings value.
+pub const RECORDING_DEFAULT_TRANSCRIBE_ENDPOINT: &str = "databricks-gemini-3-8-flash";
 /// The default recording length in minutes. The recording stops by itself at this length.
 pub const RECORDING_DEFAULT_LENGTH_MIN: u16 = 60;
 /// The shortest and the longest recording length that Settings accepts, in minutes.
-pub const RECORDING_LENGTH_MIN_RANGE: (u16, u16) = (5, 180);
+pub const RECORDING_LENGTH_MIN_RANGE: (u16, u16) = (5, 120);
 /// The longest instructions text, in characters.
 pub const RECORDING_INSTRUCTIONS_MAX: usize = 16_000;
 /// The default preset prompt of a new install (ADR 0103).
@@ -889,7 +892,7 @@ checked_string!(
 checked_string!(
     /// A Unity Catalog volume path: `/Volumes/` plus at least three segments of
     /// `[A-Za-z0-9_.@-]`, with an optional end `/`. No `.` or `..` segment, no empty segment.
-    /// SQL text and file paths use it as a literal, so the character set is strict.
+    /// File API paths use it, so the character set is strict.
     VolumePath,
     "^/Volumes(/[A-Za-z0-9_.@-]+){3,}/?$",
     |s| {
@@ -911,14 +914,8 @@ checked_string!(
 );
 
 checked_string!(
-    /// A SQL warehouse ID: 1-64 characters of `[A-Za-z0-9-]`.
-    WarehouseId,
-    "^[A-Za-z0-9-]{1,64}$",
-    |s| ascii_id(s, 64, &['-'])
-);
-
-checked_string!(
-    /// A model serving endpoint name for `ai_query`: 1-128 characters of `[A-Za-z0-9_-]`.
+    /// A model endpoint name (the `model` of an AI Gateway chat call): 1-128 characters of
+    /// `[A-Za-z0-9_-]`.
     EndpointName,
     "^[A-Za-z0-9_-]{1,128}$",
     |s| ascii_id(s, 128, &['_', '-'])
@@ -975,7 +972,7 @@ impl JsonSchema for Instructions {
     }
 }
 
-/// The recording length in minutes, from 5 to 180 (ADR 0103). Settings offers 15, 30, 45, 60
+/// The recording length in minutes, from 5 to 120 (ADR 0103). Settings offers 15, 30, 45, 60
 /// and 90, or a custom value in the range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "u16", into = "u16")]
@@ -1052,9 +1049,9 @@ pub struct RecordingSettings {
     /// Required and nullable: `null` until My Files resolves or the user picks a volume.
     #[serde(deserialize_with = "nullable")]
     pub storage: Option<RecordingStorage>,
-    /// Required and nullable: the SQL warehouse of the fallback path only.
-    #[serde(deserialize_with = "nullable")]
-    pub warehouse_id: Option<WarehouseId>,
+    /// The model that transcribes the audio parts.
+    pub transcribe_endpoint: EndpointName,
+    /// The model that writes the notes from the joined transcript.
     pub notes_endpoint: EndpointName,
     pub preset_instructions: Instructions,
     pub length_min: LengthMin,
@@ -1066,7 +1063,7 @@ impl Default for RecordingSettings {
             enabled: false,
             consent_ack: false,
             storage: None,
-            warehouse_id: None,
+            transcribe_endpoint: EndpointName(RECORDING_DEFAULT_TRANSCRIBE_ENDPOINT.to_owned()),
             notes_endpoint: EndpointName(RECORDING_DEFAULT_ENDPOINT.to_owned()),
             preset_instructions: Instructions(RECORDING_DEFAULT_INSTRUCTIONS.to_owned()),
             length_min: LengthMin::default(),
@@ -1086,7 +1083,7 @@ pub struct RecordingSettingsPatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage: Option<RecordingStorage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub warehouse_id: Option<WarehouseId>,
+    pub transcribe_endpoint: Option<EndpointName>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes_endpoint: Option<EndpointName>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1102,7 +1099,7 @@ impl RecordingSettings {
             enabled,
             consent_ack,
             storage,
-            warehouse_id,
+            transcribe_endpoint,
             notes_endpoint,
             preset_instructions,
             length_min,
@@ -1116,8 +1113,8 @@ impl RecordingSettings {
         if let Some(v) = storage {
             self.storage = Some(v);
         }
-        if let Some(v) = warehouse_id {
-            self.warehouse_id = Some(v);
+        if let Some(v) = transcribe_endpoint {
+            self.transcribe_endpoint = v;
         }
         if let Some(v) = notes_endpoint {
             self.notes_endpoint = v;
@@ -1189,7 +1186,8 @@ impl RecordingState {
     }
 }
 
-/// The status of one recording job. `transcribing` covers a queued or running job run.
+/// The status of one recording job. `transcribing`: the transcribe model calls, part by part.
+/// `writing_notes`: the notes model call and the writes of the result files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RecordingStatus {
@@ -1211,26 +1209,23 @@ pub enum RecordingErrorKind {
     RecordingBusy,
     MicBusy,
     NoStorage,
-    NoWarehouse,
-    WarehouseFailed,
     VolumePermission,
-    AiTranscribeDisabled,
-    EndpointMissing,
+    /// The transcribe endpoint does not exist, or the user may not query it.
+    TranscribeEndpointMissing,
+    /// The notes endpoint does not exist, or the user may not query it.
+    NotesEndpointMissing,
+    /// The audio is over the request budget of the model.
     TooLong,
+    /// The audio file is not a valid encoded file (checked by its magic bytes), or the model
+    /// could not read it.
+    AudioUnreadable,
     UploadFailed,
+    /// 429 again after the backoff of the rate bucket.
+    RateLimited,
     Network,
     Auth,
     SystemAudioDenied,
     Internal,
-}
-
-/// The path that transcribed a recording: the serverless job run, or the SQL warehouse
-/// fallback.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum RecordingEngine {
-    Job,
-    Warehouse,
 }
 
 /// One row of the recordings list, and the `recording.job` payload. Content-free.
@@ -1248,16 +1243,11 @@ pub struct RecordingSummary {
     /// The step that failed. Retry starts again at this step.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_stage: Option<RecordingStatus>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub engine: Option<RecordingEngine>,
-    /// The Jobs API run ID of the job path.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub run_id: Option<String>,
 }
 
 /// One transcript turn. Times are seconds from the start of the recording, across parts.
 /// `speaker` is the ai_transcribe label, with the part as a prefix when there is more than one
-/// part (for example `2.1`). `text` is user content: `Debug` shows only its size (SEC-16c).
+/// part (for example `2.1`), because the labels of two parts can differ. `text` is user content: `Debug` shows only its size (SEC-16c).
 #[derive(Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RecordingSegment {
@@ -1310,29 +1300,6 @@ impl std::fmt::Debug for RecordingDetail {
             .field("notes_md_chars", &size(&self.notes_md))
             .finish()
     }
-}
-
-/// The state of a SQL warehouse, mapped from the upstream state string.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum WarehouseState {
-    Starting,
-    Running,
-    Stopping,
-    Stopped,
-    Deleting,
-    Deleted,
-    Unknown,
-}
-
-/// One SQL warehouse of the user (`recording_warehouses`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct WarehouseInfo {
-    pub id: WarehouseId,
-    pub name: String,
-    pub state: WarehouseState,
-    pub serverless: bool,
 }
 
 /// The `recording_storage_probe` reply: the My Files root, or `null` when it does not resolve.

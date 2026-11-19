@@ -1,4 +1,4 @@
-# ADR 0103: Call recording to a Unity Catalog volume, with a server-side transcript and notes
+# ADR 0103: Call recording to a Unity Catalog volume, with the transcript and notes from model serving
 
 - Status: accepted (user decisions, 2026-11-19)
 - Refs: #65, #107, #108, #116 (no new issue)
@@ -14,7 +14,7 @@
 On 2026-11-19 the user moved call recording into the MVP. Bottle must record a call like a
 call recorder: the mic and the other side of the call. Bottle must keep the audio, the
 transcript and the notes in Unity Catalog, not on the device. The transcript and the notes
-must come from Databricks AI functions.
+must come from Databricks model serving. No compute must start in the workspace.
 
 The requirements describe a different meeting mode. They keep the You track and the Others track
 apart (CAP-07a, CAP-07b) and run local STT on segments (#116). The user decisions below
@@ -23,8 +23,8 @@ replace these rules for call recording.
 ## Decisions
 
 1. **One mixed stream.** Bottle records the mic and the system audio and mixes them to one
-   16 kHz mono stream (sum with a soft clip). This deviates from CAP-07b. `ai_transcribe` does
-   speaker diarization, so the mixed stream still gives speaker turns. macOS 14.4+ uses a global
+   16 kHz mono stream (sum with a soft clip). This deviates from CAP-07b. The transcribe model labels
+   the speakers, so the mixed stream still gives speaker turns. macOS 14.4+ uses a global
    Core Audio process tap that excludes the Bottle process, with a private aggregate device.
    Older macOS records the mic only and shows a plain note. Windows uses WASAPI loopback, or
    the mic only. Bottle uses no private TCC API (CAP-10b). 5 s of zero buffers on the system
@@ -37,7 +37,7 @@ replace these rules for call recording.
    acknowledgement: "Recording a call may need everyone's consent. Let people know."
    Without the acknowledgement, `recording_start` answers `consent_required`.
 4. **Length preset.** Settings has `lengthMin` (default 60). The hub offers 15, 30, 45, 60 and
-   90 minutes, or a custom value. Rust accepts only 5 to 180. The recording stops by itself at
+   90 minutes, or a custom value. Rust accepts only 5 to 120. The recording stops by itself at
    that length. The user can stop it before. `RecordingState.endsAtMs` gives the stop time, so
    the REC state shows the time left.
 5. **The record key.** The default record key is Right Option + R (⌥R) on macOS and Right
@@ -62,53 +62,55 @@ replace these rules for call recording.
    records and uploads. Bottle deletes it after the upload succeeds. After a failed upload the
    temp audio stays, so Retry works. At launch a left temp recording shows as "Upload failed"
    with Retry.
-8. **FLAC parts.** Bottle encodes FLAC (pure-Rust encoder, cross-platform, about 25 MB per hour).
-   `ai_transcribe` accepts FLAC. A part is at most 55 min, under the 1 h and 512 MB limits. A
-   90 min recording gives two parts.
+8. **Opus audio, one request.** Bottle encodes Opus in Ogg, 16 kbps mono. One hour is about
+   9.6 MB as base64, under the 24 MB request budget. Thus one recording goes in one transcribe
+   request, with no split. FLAC does not fit the budget. A smart split (cuts at silence, 3 to 5 s
+   of overlap, the speaker roster carried to the next part, no duplicate lines) is used only if
+   a later limit forces it. Before a request, Bottle checks the magic bytes of the file, and it
+   sends only audio that it encoded: a payload that is not audio can give a 200 with invented
+   text.
 9. **Volume layout.** `<root>/Bottle/Recordings/<name>/`, where `<name>` is the local start time
-   `YYYY-MM-DD_HHMM` (plus `_2`, `_3` on a clash). The folder holds `<name>.part01.flac` and the
-   next parts, `<name>.instructions.md`, `<name>.job.json` (the status manifest),
+   `YYYY-MM-DD_HHMM` (plus `_2`, `_3` on a clash). The folder holds the audio `<name>.ogg` and the
+   `<name>.instructions.md`, `<name>.job.json` (the status manifest),
    `<name>.transcript.json`, `<name>.transcript.md` and `<name>.notes.md`. Times in the
    transcript are from the start of the recording, across parts. With more than one part, a
    speaker label has the part as a prefix (for example `2.1`), because the labels of two parts
    can differ. The recordings list reads each `job.json` under `<root>/Bottle/Recordings/`,
    newest first.
-10. **A server-side job transcribes.** After the upload, Bottle submits a one-time serverless
-    job run (`POST /api/2.2/jobs/runs/submit`, a `spark_python_task` on serverless compute
-    through `environments`, no cluster). The run reads the parts, runs `ai_transcribe` per
-    part, runs `ai_query` with the instructions, and writes the transcript and notes files into
-    the same folder. It also writes the final status (`done` or `failed` with the error kind)
-    into `job.json`. Thus the job ends and the state is correct when the laptop sleeps or
-    Bottle is closed. The task script is a fixed, versioned file in the repo, with its own
-    tests. Bottle uploads it once per version to `<root>/Bottle/.bottle/` (for example
-    `transcribe_v1.py`). Bottle records the `run_id` in `job.json` and reads
-    `GET /api/2.2/jobs/runs/get` while it is awake.
-11. **The SQL warehouse fallback.** If `runs/submit` fails because serverless jobs are not
-    usable in the workspace, Bottle uses a SQL warehouse: the statements API runs
-    `ai_transcribe` and `ai_query`, and Bottle writes the files. The user picks the warehouse
-    once in Settings from `GET /api/2.0/sql/warehouses`. Bottle starts a stopped warehouse and
-    waits. The warehouse setting is optional: a missing warehouse is an error
-    (`no_warehouse`) only when the job path is not usable. `job.json` and `RecordingSummary`
-    record the engine (`job` or `warehouse`).
+10. **Model calls only, no compute.** Bottle uses no SQL warehouse, no job, no
+    `ai_transcribe` and no statements API. Two chat calls go through the existing AI Gateway
+    route `mlflow.chat_completions` (`POST /ai-gateway/mlflow/v1/chat/completions`,
+    `model=<endpoint>`, NFR-21b), with the home profile token. The transcribe call sends the
+    audio inline as an `audio_url` data URL and a prompt for the strict line format
+    `[mm:ss] Speaker N: text`. Bottle parses the lines tolerantly. The answer content can be a
+    list of text parts: Bottle joins them. The notes call is one chat call with the
+    instructions and the transcript.
+11. **Two model settings.** `transcribeEndpoint` (default `databricks-gemini-3-8-flash`) and
+    `notesEndpoint` (default `databricks-claude-sonnet-5-5`) are Settings values under
+    "Advanced". Rust checks each name (`[A-Za-z0-9_-]`). A
+    missing endpoint, or no permission on it, gives `transcribe_endpoint_missing` or
+    `notes_endpoint_missing`: "The <transcribe|notes> model isn't available. Pick another model in
+    Settings." An audio file that fails the magic-byte check, or that the model cannot read,
+    gives `audio_unreadable`. Audio over the request budget gives `too_long`. A 429 retries with backoff through the shared rate bucket, then gives
+    `rate_limited`.
 12. **Instructions per job.** Settings holds a preset prompt (the default is below). The user
     can edit the instructions for one recording at its start (optional, `recording_start
     {instructions?}`). Bottle saves them with the job (`<name>.instructions.md` and in the
-    transcript JSON). The notes come from `ai_query('<endpoint>', concat(instructions,
-    transcript))`. The endpoint is a Settings value; the default is
-    `databricks-claude-sonnet-5-5`. Rust checks the endpoint name (`[A-Za-z0-9_-]`) and each
-    volume path (a strict character set), because SQL text uses them as literals.
+    transcript JSON), and the notes call uses them. Rust checks each volume path with a strict
+    character set.
 13. **Link back.** When a job is done, Bottle shows a link to the folder in Catalog Explorer,
     a short OS notice and the MOG answer-ready moment. Rust builds the link from the profile
     host (`https://<host>/explore/data/volumes/<catalog>/<schema>/<volume>?o=<workspace_id>&volumePath=<folder>/`)
     and opens it with the OS opener (`recording_open {id, target: "folder"}`). A view never gets
     or passes a URL.
-14. **Status flow.** `recording`, `uploading`, `transcribing` (the job run is queued or runs),
-    then `done` or `failed` with an error kind and the failed step. `writing_notes` stays in the
-    enum; the job path reports it only if the script updates `job.json` between its steps.
-    Retry starts again at the failed step.
+14. **Status flow.** `recording`, `uploading`, `transcribing` (the transcribe calls),
+    `writing_notes` (the notes call and the file writes), then `done` or `failed` with an error
+    kind and the failed step. Bottle writes `<name>.transcript.json`, `<name>.transcript.md`
+    and `<name>.notes.md` to the volume, then shows the link. Retry starts again at the failed
+    step.
 15. **Errors in plain words, one action each.** The hub maps each `RecordingErrorKind` to one
-    message. For example, `ai_transcribe_disabled`: "AI Transcribe is off for this workspace.
-    Ask your workspace admin to turn on AI Transcribe in Previews." `system_audio_denied`:
+    message. For example, `volume_permission`: "Bottle can't write to this volume. Pick another
+    volume in Settings." `system_audio_denied`:
     "Bottle can't hear the other side of the call. Allow System Audio Recording."
 16. **Ownership and security.** Rust owns the capture, the files, the network, the tokens and
     the pipeline. The brain relays the state to the MOG (REC mood, answer-ready moment, OS
@@ -121,16 +123,17 @@ replace these rules for call recording.
 
 - Commands, brain and hub (the hub view reaches them through the brain, ARC-2):
   `recording_settings_read`, `recording_settings_write {patch}`, `recording_storage_probe`,
-  `recording_volume_create {catalog, schema}`, `recording_warehouses`,
+  `recording_volume_create {catalog, schema}`,
   `recording_start {instructions?}`, `recording_stop`, `recording_state`, `recording_list`,
-  `recording_detail {id}`, `recording_retry {id}`, `recording_open {id, target}`. A MOG view
+  `recording_detail {id}`, `recording_retry {id}`, `recording_open {id, target}`,
+  `recording_open_system_audio_settings` (Rust opens the OS privacy pane for the fix-it). A MOG view
   has no recording permission: a MOG "Record" click goes through `view_emit` to the brain.
 - Events, core to brain: `hotkey.record_toggle` (`RecordToggle`), `recording.state`
   (`RecordingState`, not sticky) and `recording.job` (`RecordingSummary`).
 - New refusal codes: `recording_off`, `recording_busy`, `recording_in_progress`,
-  `unknown_recording`, `no_storage`, `no_warehouse`, `warehouse_failed`, `volume_permission`,
-  `ai_transcribe_disabled`, `endpoint_missing`, `too_long`, `upload_failed`,
-  `system_audio_denied`. Network, auth and internal faults use `offline`, `auth_expired` and
+  `unknown_recording`, `no_storage`, `volume_permission`, `transcribe_endpoint_missing`,
+  `notes_endpoint_missing`, `too_long`, `audio_unreadable`, `upload_failed`, `system_audio_denied`. Rate limit,
+  network, auth and internal faults use `rate_limited`, `offline`, `auth_expired` and
   `host_failed`.
 - `mog_core::recording` holds the seams `RecordingSettingsStore`, `RecordingCapture` and
   `RecordingCloud`, and `RecordingComponent`, which checks the knob. In this PR every other
@@ -139,12 +142,12 @@ replace these rules for call recording.
 ## The PR split
 
 - PR A (`issue/rec-0-contract`): this ADR and the contract.
-- PR B (`issue/rec-1-capture`): system audio, the mixer, FLAC, parts, the session, start and
+- PR B (`issue/rec-1-capture`): system audio, the mixer, the Opus encoder, the session, start and
   stop, the length stop, sleep, quit and device loss, the record key, the permission ask, the
   `Info.plist` key.
-- PR C (`issue/rec-2-cloud`): the settings file, My Files, the volume, warehouses, the upload,
-  the job run and its task script, the warehouse fallback, `job.json`, list, detail, retry and
-  the link.
+- PR C (`issue/rec-2-cloud`): the settings file, My Files, the volume, the upload,
+  the transcribe and notes calls, the result files, `job.json`, list, detail, retry and the
+  link.
 - PR D (`issue/rec-3-hub`): the Settings section, the Record control, the MOG REC state, the
   Recordings area and its detail, the notices.
 
@@ -162,9 +165,21 @@ One sub-heading per speaker. Under each, a bullet list of that speaker's action 
 Use only facts from the transcript.
 ```
 
+## Findings (probe of 2026-11-19)
+
+The record of the probe is [docs/evidence/rec-transcribe-probe-2026-11-19.md](../evidence/rec-transcribe-probe-2026-11-19.md).
+
+- The `file` and `audio_url` content types take inline data only. A Volumes path, a Files URL
+  or a file ID is refused, and the model provider cannot authenticate to a Files URL.
+- The request cap is about 30 MB. Bottle uses a 24 MB budget.
+- Opus in Ogg at 16 kbps mono is about 9.6 MB of base64 per hour. FLAC does not fit.
+- The audio costs about 1500 tokens per minute. A 60 min recording takes about 2 to 3 min.
+- A payload that is not audio can give a 200 with invented text (decision 8).
+
 ## Consequences
 
 - The requirements rows CAP-07b and the #116 local STT path do not apply to call recording.
+  The audio goes to a model endpoint of the user's workspace through the AI Gateway.
   The requirements owner must update them.
 - The recording audio and text leave the device for the user's workspace. The knob is off by
   default, and the consent notice shows before the first recording.
