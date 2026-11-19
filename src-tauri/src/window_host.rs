@@ -620,9 +620,15 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
             let w = self.window(&kind);
             (ledger.begin_show(mog_id, w.is_some())?, w)
         };
+        // #559: the pop-up goes beside its MOG. With no MOG geometry it keeps its place.
+        let at = self.card_geometry(mog_id);
         let shown = match (plan, &existing) {
-            (ShowPlan::Reuse(_), Some(w)) => self.native.show(w, &kind),
-            _ => self.make(&kind, None).map(|_| ()),
+            (ShowPlan::Reuse(_), Some(w)) => {
+                // A failed move is not a failed show: the card shows where it was.
+                let _ = place(w, at.as_ref());
+                self.native.show(w, &kind)
+            }
+            _ => self.make(&kind, at.as_ref()).map(|_| ()),
         };
         if shown.is_err() {
             let mut ledger = self.ledger();
@@ -635,6 +641,33 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
             }
         }
         shown
+    }
+
+    /// #559: the card place beside the MOG window of `mog_id`, in logical units, on the MOG's
+    /// monitor. `None` if the MOG window or its geometry is not there.
+    fn card_geometry(&self, mog_id: &str) -> Option<Geometry> {
+        let w = self.window(&WindowKind::mog(mog_id)?)?;
+        let scale = w.scale_factor().ok()?;
+        let pos = w.outer_position().ok()?.to_logical::<f64>(scale);
+        let size = w.outer_size().ok()?.to_logical::<f64>(scale);
+        let mog = Geometry {
+            x: pos.x,
+            y: pos.y,
+            width: size.width,
+            height: size.height,
+        };
+        let screen = w.current_monitor().ok().flatten().map(|m| {
+            let s = m.scale_factor();
+            let p = m.position().to_logical::<f64>(s);
+            let z = m.size().to_logical::<f64>(s);
+            Geometry {
+                x: p.x,
+                y: p.y,
+                width: z.width,
+                height: z.height,
+            }
+        });
+        Some(windows::card_beside(&mog, screen.as_ref()))
     }
 
     /// Hide the card window of `mog_id`. The ledger marks it hidden only after the window

@@ -151,23 +151,17 @@ describe('V3 card view', () => {
     chips: [],
     historyCount: 4,
   };
-  const items = (el: HTMLElement) => [...el.querySelectorAll('li[data-blurb]')];
+  const [g1, b2] = stack.blurbs as [(typeof stack.blurbs)[number], (typeof stack.blurbs)[number]];
+  const popupText = (el: HTMLElement) => el.querySelector('[data-popup-text]')?.textContent;
 
-  it('[UX-11a] renders the blurbs in brain order and "N more in History"', async () => {
+  // #559 (user decision): the small card is a pop-up with the newest blurb only. The brain still
+  // keeps the order, the pins and History (UX-11a..UX-12, ADR 0028); the pop-up shows no list,
+  // no Pin and no "N more in History".
+  it('[UX-11a] [#559] the pop-up shows only the newest blurb and no History link', async () => {
     const { el } = await mountCard(<CardView mogId={ID} />);
-    await tauri.emit('card:update', stack);
-    expect(items(el).map((li) => li.getAttribute('data-blurb'))).toEqual(['g1', 'b2']);
-    const link = el.querySelector('button[data-action="history"]') as HTMLElement;
-    expect(link.textContent).toBe('4 more in History');
-    await act(async () => link.click());
-    expect(inputs()).toEqual([{ mogId: ID, kind: 'click', payload: { target: 'history' } }]);
-  });
-
-  it('[UX-11a] shows no History link when nothing is in History', async () => {
-    const { el } = await mountCard(<CardView mogId={ID} />);
-    await tauri.emit('card:update', { ...stack, historyCount: 0 });
-    expect(el.querySelector('button[data-action="history"]')).toBeNull();
-    await tauri.emit('card:update', update);
+    await tauri.emit('card:update', { ...stack, blurbs: [b2, g1] });
+    expect(popupText(el)).toBe('Churn was 3%');
+    expect(el.textContent).not.toContain('EMEA');
     expect(el.querySelector('button[data-action="history"]')).toBeNull();
   });
 
@@ -176,45 +170,39 @@ describe('V3 card view', () => {
     await tauri.emit('card:update', { ...stack, historyCount: -1 });
     await tauri.emit('card:update', { ...stack, historyCount: '4' });
     await tauri.emit('card:update', { ...stack, blurbs: [{ id: 'g', text: 't', parts: 'x' }] });
-    expect(items(el)).toHaveLength(0);
+    expect(el.querySelector('[data-popup]')).toBeNull();
   });
 
-  it('[UX-11b] renders a 3-part split as one blurb with its parts', async () => {
+  it('[UX-11b] renders a 3-part split newest blurb as one text with its parts', async () => {
     const { el } = await mountCard(<CardView mogId={ID} />);
     await tauri.emit('card:update', stack);
-    expect(items(el)).toHaveLength(2);
-    const parts = [...el.querySelectorAll('li[data-blurb="g1"] [data-part]')];
+    const parts = [...el.querySelectorAll('[data-popup] [data-part]')];
     expect(parts.map((p) => p.textContent)).toEqual(['EMEA 1.1M', 'AMER 2.9M', 'APJ 0.2M']);
   });
 
-  it('[UX-11c] shows the pin state and sends a pin click through view_emit', async () => {
+  it('[UX-11c] [#559] the pop-up has no Pin control', async () => {
     const { el } = await mountCard(<CardView mogId={ID} />);
     await tauri.emit('card:update', stack);
-    const pin = (id: string) =>
-      el.querySelector(`li[data-blurb="${id}"] button[data-action="pin"]`) as HTMLElement;
-    expect(pin('g1').getAttribute('aria-pressed')).toBe('false');
-    expect(pin('b2').getAttribute('aria-pressed')).toBe('true');
-    await act(async () => pin('g1').click());
-    expect(inputs()).toEqual([
-      { mogId: ID, kind: 'click', payload: { target: 'pin', blurbId: 'g1' } },
-    ]);
+    expect(el.querySelector('[data-action="pin"]')).toBeNull();
   });
 
-  it('[UX-12] sends pointer hover and keyboard focus of a blurb to the brain', async () => {
+  it('[UX-12] sends pointer hover and keyboard focus of the pop-up blurb to the brain', async () => {
     const { el } = await mountCard(<CardView mogId={ID} />);
-    await tauri.emit('card:update', stack);
-    const li = el.querySelector('li[data-blurb="b2"]') as HTMLElement;
-    const pin = li.querySelector('button[data-action="pin"]') as HTMLElement;
+    await tauri.emit('card:update', {
+      ...stack,
+      blurbs: [b2],
+      chips: [{ id: 'copy-b2', label: 'Copy' }],
+    });
+    const p = el.querySelector('[data-popup-text]') as HTMLElement;
     await act(async () => {
-      li.dispatchEvent(
-        new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body }),
-      );
+      p.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body }));
     });
     await act(async () => {
-      li.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body }));
+      p.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body }));
     });
-    await act(async () => pin.focus());
-    await act(async () => pin.blur());
+    const ask = el.querySelector('button[data-chip]') as HTMLElement;
+    await act(async () => ask.focus());
+    await act(async () => (document.activeElement as HTMLElement).blur());
     expect(inputs()).toEqual([
       { mogId: ID, kind: 'hover', payload: { blurbId: 'b2', on: true, via: 'pointer' } },
       { mogId: ID, kind: 'hover', payload: { blurbId: 'b2', on: false, via: 'pointer' } },

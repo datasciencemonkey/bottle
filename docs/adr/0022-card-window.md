@@ -24,3 +24,15 @@ MOG-03a, MOG-03b, MOG-18a, MOG-18b, UX-19a and UX-19b need each `card-<id>` wind
 - A person checks on a Mac that 20 card opens keep the frontmost app, that the card is the key window, that typing and the IME work, and that the card WebView goes after 5 min hidden. The script is `tools/mac/card-check.swift`. The steps are on #336 (`needs:human`, `needs:mac`, `TODO(#336)`). Debug builds have `BOTTLE_DEMO_CARD_CYCLE=1` (20 hide and show steps of the demo card) and a "Typing probe" field in the demo card only (`import.meta.env.DEV`).
 - Windows: the card shows through `PlainStyle` and can take the foreground (`TODO(#80)`, `WS_EX_NOACTIVATE`).
 - A show of a card in the few milliseconds while its old WebView closes gets `window_closing`. The brain retries after the next `Destroyed` event once #285 routes the window commands.
+
+## Amendment (#559): the card is a small transparent pop-up beside its MOG
+
+User decision (2026-11-18): after a dictation or an ask, the card is a small pop-up next to the owner MOG, not a list.
+
+1. `WindowKind::Card` is transparent with no native shadow (`PanelSpec::transparent = true`), and its size is `CARD_WIDTH` x `CARD_HEIGHT` (340 x 64). The view paints a rounded pill with its own shadow, so only the pill pixels show.
+2. `TauriWindowHost::show_card` places the card with `windows::card_beside`: on the right of the MOG window and centred on it. If the right side leaves the MOG's monitor, the card goes on the left. The card stays inside the monitor.
+3. The view (`src/views/card/Popup.tsx`) shows one line, the newest blurb, and one action: Ask Genie, or Copy for a refused paste (#498). It shows no list, no Pin, no "N more in History" and no Expand. The brain keeps the blurb order, the pins and History (ADR 0028) for the hub.
+4. An ignored pop-up fades after 5 s and sends `cancel`. Hover or focus keeps it. A Copy pop-up and a held preview never fade.
+5. `wireAskGate` hides the card (`window_card_hide`) on a `cancel` when no preview is open. One cancel still does one thing (UX-19b). An in-flight request cancel stays `TODO(#374)`.
+6. A card with an answer, sections, a Page domain or a checklist renders the panel. It scrolls in the small window. Its size is a follow-up for when the expanded card is wired.
+7. The shared theme tokens are in `src/views/tokens.css`. Every view imports them.

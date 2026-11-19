@@ -179,7 +179,10 @@ export function startBrain(): Brain {
       send: (t) => components.T15.send(t),
     });
     // TODO(#374): the card-hide signal calls `askGate.cardClosed`; none reaches the brain yet.
-    wireAskGate(bus, askGate, stackFor);
+    wireAskGate(bus, askGate, stackFor, {
+      // #559, UX-19b: a cancel with no preview hides the card (`window_card_hide`, R11).
+      hideCard: (mogId) => void call('window_card_hide', { mogId }).catch(() => undefined),
+    });
     // #551 (UX-01a, UX-05b, UX-07): the MOG mood follows `capture:state`, and a refused start
     // shows its reason on the MOG (MB-08a). It is wired before the capture lifecycle, so the
     // `listening` state goes out in the same task as the `capture:state` item.

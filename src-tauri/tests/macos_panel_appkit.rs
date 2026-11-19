@@ -352,9 +352,9 @@ mod appkit {
             level: 3,
             collection_behavior: appkit_collection_behavior(&card_spec()),
             hides_on_deactivate: false,
-            // The card is not transparent: the step keeps the window's own opacity and shadow.
-            opaque: true,
-            has_shadow: true,
+            // #559: the card is transparent like a MOG; the pop-up draws its own shadow.
+            opaque: false,
+            has_shadow: false,
         };
         ensure(applied.is_ok() && got == want, || {
             format!("{applied:?}\n  got {got:?}\n  want {want:?}")

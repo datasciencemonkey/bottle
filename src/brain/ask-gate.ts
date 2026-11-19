@@ -294,13 +294,17 @@ export function wireAskGate(
   bus: BrainBus,
   gate: AskGate,
   stackFor: (mogId: MogId) => Pick<CardStack, 'input'>,
+  card: { hideCard?: (mogId: MogId) => void } = {},
 ): () => void {
   const offs = [
     onViewInput(bus, (input) => {
       // Only the card of the MOG speaks for its preview and its chips.
       if (input.from !== `card-${input.mogId}`) return;
-      if (input.kind === 'cancel') gate.escape(input.mogId);
-      else if (input.kind === 'chip_click')
+      // UX-19b: one cancel does one thing. It ends a preview, else it hides the card (#559: the
+      // pop-up's fade, Copy and Dismiss). TODO(#374): an in-flight request is cancelled first.
+      if (input.kind === 'cancel') {
+        if (!gate.escape(input.mogId)) card.hideCard?.(input.mogId);
+      } else if (input.kind === 'chip_click')
         stackFor(input.mogId).input('chip_click', input.payload);
     }),
     bus.on(EVENTS['hotkey.ptt'].name, (p) => {

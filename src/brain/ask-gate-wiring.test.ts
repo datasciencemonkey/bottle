@@ -67,13 +67,15 @@ function setup() {
     target: () => 'home',
     send: (t) => bridge.send(t),
   });
-  const off = wireAskGate(bus, gate, stackFor);
+  const hides: string[] = [];
+  const off = wireAskGate(bus, gate, stackFor, { hideCard: (id) => void hides.push(id) });
   const outbound = () =>
     core.invoke.mock.calls.filter(([cmd]) => OUTBOUND.has(cmd)).map(([cmd]) => cmd);
   const last = () => updates[updates.length - 1];
   const card = (kind: string, payload?: unknown, from = `card-${A}`) =>
     bus.dispatch({ event: 'view:input', payload: { from, input: { mogId: A, kind, payload } } });
   return {
+    hides,
     sim,
     bus,
     gate,
@@ -208,5 +210,17 @@ describe('ask gate on the bus (B1)', () => {
     await t.run(PREVIEW_MS);
     // The cancel did not arrive, so the preview ended and sent (the gate itself still runs).
     expect(t.outbound()).toEqual(['agent_send']);
+  });
+
+  it('[UX-19b] [#559] a card cancel with no preview hides the card; one with a preview only cancels it', async () => {
+    const t = setup();
+    t.card('cancel');
+    expect(t.hides).toEqual([A]);
+    t.preview();
+    t.card('cancel');
+    expect(t.hides).toEqual([A]);
+    t.card('cancel', undefined, `mog-${A}`);
+    expect(t.hides).toEqual([A]);
+    t.off();
   });
 });

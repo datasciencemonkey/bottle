@@ -18,6 +18,36 @@ pub const CARD_HIDDEN_TTL: Duration = Duration::from_secs(5 * 60);
 /// between 5:00 and 5:15 after its hide (ADR 0022).
 pub const CARD_REAP_TICK: Duration = Duration::from_secs(15);
 
+/// #559: the card window holds one pop-up line beside its MOG.
+pub const CARD_WIDTH: u32 = 340;
+pub const CARD_HEIGHT: u32 = 64;
+/// The pop-up tail reaches this far over the MOG window edge, which is mostly transparent.
+const CARD_OVERLAP: f64 = 16.0;
+
+/// #559: where the card goes for a MOG at `mog` (logical units): on its right, centred on it.
+/// If the right side leaves `screen`, it goes on the left; it is then kept inside `screen`.
+pub fn card_beside(
+    mog: &mog_core::ipc::Geometry,
+    screen: Option<&mog_core::ipc::Geometry>,
+) -> mog_core::ipc::Geometry {
+    let (width, height) = (f64::from(CARD_WIDTH), f64::from(CARD_HEIGHT));
+    let mut x = mog.x + mog.width - CARD_OVERLAP;
+    let mut y = mog.y + (mog.height - height) / 2.0;
+    if let Some(s) = screen {
+        if x + width > s.x + s.width {
+            x = mog.x + CARD_OVERLAP - width;
+        }
+        x = x.clamp(s.x, (s.x + s.width - width).max(s.x));
+        y = y.clamp(s.y, (s.y + s.height - height).max(s.y));
+    }
+    mog_core::ipc::Geometry {
+        x,
+        y,
+        width,
+        height,
+    }
+}
+
 /// The longest MOG or card id we accept in a window label (a uuid v4 is 36).
 const MAX_ID_LEN: usize = 64;
 
@@ -163,16 +193,18 @@ impl WindowKind {
                 url: "card.html",
                 title: "MOG card",
                 visible: true,
-                transparent: false,
+                // #559: the card view paints a small rounded pop-up with its own shadow, so the
+                // window is transparent and has no native shadow, like a MOG.
+                transparent: true,
                 decorations: false,
                 always_on_top: true,
                 focusable: true,
                 skip_taskbar: true,
                 resizable: false,
-                shadow: true,
+                shadow: false,
                 accept_first_mouse: false,
-                width: 360,
-                height: 240,
+                width: CARD_WIDTH,
+                height: CARD_HEIGHT,
             },
         }
     }
@@ -216,7 +248,7 @@ impl WindowKind {
                 stationary: true,
                 full_screen_auxiliary: true,
                 ignores_cycle: true,
-                transparent: false,
+                transparent: true,
             }),
             _ => None,
         }

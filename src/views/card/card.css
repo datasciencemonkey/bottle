@@ -1,0 +1,199 @@
+/* #559: the card window is transparent, so only the pop-up or the panel paints. Tokens come
+   from ../tokens.css. */
+html,
+body,
+#root {
+  margin: 0;
+  background: transparent;
+  overflow: hidden;
+  font-family: var(--mog-font);
+  font-size: var(--mog-text-md);
+  line-height: var(--mog-leading);
+  color: var(--mog-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: rgb(140 200 255 / 35%);
+}
+
+.card-popup {
+  /* Room for the shadow and the tail inside the window. */
+  padding: 10px 12px 14px;
+}
+
+/* The pop-up: one line and one action, a speech bubble from the MOG on its left. */
+.popup {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 5px 5px 5px 14px;
+  border: 1px solid var(--mog-edge);
+  border-radius: var(--mog-radius-pill);
+  background: var(--mog-surface);
+  box-shadow: var(--mog-shadow);
+  animation: popup-in 180ms var(--mog-ease-out) both;
+  transition:
+    opacity var(--mog-fade-ms) ease-out,
+    transform var(--mog-fade-ms) ease-out;
+}
+
+.popup::before {
+  content: '';
+  position: absolute;
+  left: -5px;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  border-left: 1px solid var(--mog-edge);
+  border-bottom: 1px solid var(--mog-edge);
+  background: var(--mog-surface);
+  transform: translateY(-50%) rotate(45deg);
+}
+
+.popup[data-state='fading'] {
+  opacity: 0;
+  transform: translateX(-4px);
+}
+
+.popup-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.popup-text [data-part] + [data-part]::before {
+  content: ', ';
+}
+
+.popup-action,
+.popup-dismiss {
+  appearance: none;
+  flex: none;
+  margin: 0;
+  border: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.popup-action {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: var(--mog-radius-pill);
+  background: var(--mog-accent);
+  color: var(--mog-on-accent);
+  font-size: var(--mog-text-sm);
+  font-weight: 600;
+  transition: background-color 120ms ease-out;
+}
+
+.popup-action:hover {
+  background: var(--mog-accent-hover);
+}
+
+/* A second control (a held preview's Cancel) is quiet, so one action leads. */
+.popup-action + .popup-action {
+  background: var(--mog-surface-raised);
+  color: var(--mog-text);
+}
+
+.popup-dismiss {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--mog-radius-pill);
+  background: transparent;
+  color: var(--mog-text-muted);
+}
+
+.popup-dismiss:hover {
+  background: var(--mog-surface-raised);
+  color: var(--mog-text);
+}
+
+.popup-dismiss svg {
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+
+.popup-action:focus-visible,
+.popup-dismiss:focus-visible {
+  outline: none;
+  box-shadow: var(--mog-focus-ring);
+}
+
+.popup-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@keyframes popup-in {
+  from {
+    opacity: 0;
+    transform: translateX(-6px) scale(0.97);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .popup {
+    animation: none;
+    transition: opacity var(--mog-fade-ms) linear;
+  }
+
+  .popup[data-state='fading'] {
+    transform: none;
+  }
+}
+
+/* The panel: the expanded answer, a Page domain or a checklist. It scrolls in the window. */
+.card-panel {
+  box-sizing: border-box;
+  height: 100vh;
+  overflow: auto;
+  padding: 12px 14px;
+  border: 1px solid var(--mog-edge);
+  border-radius: var(--mog-radius-md);
+  background: var(--mog-surface);
+}
+
+.card-panel button {
+  appearance: none;
+  margin: 2px 4px 2px 0;
+  padding: 4px 10px;
+  border: 1px solid var(--mog-edge);
+  border-radius: var(--mog-radius-pill);
+  background: var(--mog-surface-raised);
+  color: var(--mog-text);
+  font: inherit;
+  font-size: var(--mog-text-sm);
+  cursor: pointer;
+}
+
+.card-panel button:focus-visible {
+  outline: none;
+  box-shadow: var(--mog-focus-ring);
+}
+
+.card-panel ul,
+.card-panel ol {
+  margin: 4px 0;
+  padding-left: 18px;
+}
+
+.card-panel [data-badge] {
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-xs);
+}
