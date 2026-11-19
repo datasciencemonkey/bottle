@@ -142,6 +142,10 @@ pub struct RecordingDetail {
     pub transcript: Option<TranscriptDoc>,
     /// The notes markdown, when written.
     pub notes: Option<String>,
+    /// The transcript markdown, when written.
+    pub transcript_md: Option<String>,
+    /// The instructions sidecar, when written.
+    pub instructions: Option<String>,
     /// The Catalog Explorer link of the folder.
     pub link: String,
 }
@@ -167,6 +171,25 @@ fn obj(v: Value) -> JsonObject {
 
 type Kind<T> = Result<T, ErrorKind>;
 type Staged<T> = Result<T, (ErrorKind, Stage)>;
+
+/// `<name>.<ext>` or `<name>.partNN.<ext>`, `ext` one of `opus`, `ogg`, `flac`, `wav`.
+pub fn is_audio_file_of(name: &str, file: &str) -> bool {
+    let Some(rest) = file.strip_prefix(name).and_then(|r| r.strip_prefix('.')) else {
+        return false;
+    };
+    let rest = match rest.strip_prefix("part") {
+        Some(r)
+            if r.len() > 3
+                && r.as_bytes()[..2].iter().all(u8::is_ascii_digit)
+                && r.as_bytes()[2] == b'.' =>
+        {
+            &r[3..]
+        }
+        Some(_) => return false,
+        None => rest,
+    };
+    is_recording_name(name) && matches!(rest, "opus" | "ogg" | "flac" | "wav")
+}
 
 /// The file extension of a local temp file (`opus`, Ogg Opus, when it has none Bottle knows).
 fn part_ext(p: &std::path::Path) -> &'static str {
@@ -469,11 +492,13 @@ impl RecordingCloudService {
             .enumerate()
             .map(|(i, l)| {
                 let ext = part_ext(&l.path);
-                // One part (the normal case): `<name>.opus`. More: `<name>.partNN.opus`.
-                let file = if job.parts.len() == 1 {
-                    format!("{}.{ext}", job.name)
-                } else {
-                    part_file(&job.name, i as u32 + 1, ext)
+                // The local name when it fits (PR B writes `<name>.opus`); else one part is
+                // `<name>.opus` and more are `<name>.partNN.opus`.
+                let local = l.path.file_name().and_then(|f| f.to_str());
+                let file = match local.filter(|f| is_audio_file_of(&job.name, f)) {
+                    Some(f) => f.to_owned(),
+                    None if job.parts.len() == 1 => format!("{}.{ext}", job.name),
+                    None => part_file(&job.name, i as u32 + 1, ext),
                 };
                 PartEntry::new(&file, l.duration_s)
             })
@@ -714,6 +739,116 @@ impl RecordingCloudService {
         self.update(p, root, m, Status::Done, on).map_err(at)
     }
 
+    // ---------- single steps (the contract `RecordingCloud` seam) ----------
+
+    /// Upload one local audio file into the recording folder (`overwrite=false`; a 409 counts
+    /// as uploaded). The file name must be `<name>.opus` or `<name>.partNN.<ext>`.
+    pub fn upload_audio(
+        &self,
+        p: &str,
+        root: &str,
+        name: &str,
+        local: &std::path::Path,
+    ) -> Kind<String> {
+        let root = VolumeRoot::parse(root)?;
+        let file = local
+            .file_name()
+            .and_then(|f| f.to_str())
+            .filter(|f| is_audio_file_of(name, f))
+            .ok_or(ErrorKind::AudioUnreadable)?
+            .to_owned();
+        let bytes = std::fs::read(local).map_err(|_| ErrorKind::AudioMissing)?;
+        if sniff(&bytes).is_none() {
+            return Err(ErrorKind::AudioUnreadable);
+        }
+        let folder = root.folder(name);
+        self.mkdir(p, &folder, ErrorKind::UploadFailed)?;
+        self.upload(
+            p,
+            &format!("{folder}/{file}"),
+            &bytes,
+            false,
+            ErrorKind::UploadFailed,
+        )?;
+        Ok(file)
+    }
+
+    /// Transcribe one audio file (part-relative times). `context`: the last lines before it.
+    pub fn transcribe_audio(
+        &self,
+        p: &str,
+        endpoint: &str,
+        mog: &str,
+        local: &std::path::Path,
+        duration_s: f64,
+        context: Option<&str>,
+    ) -> Kind<Vec<super::transcript::RawSegment>> {
+        let bytes = std::fs::read(local).map_err(|_| ErrorKind::AudioMissing)?;
+        let body = transcribe_request(endpoint, &bytes, context)?;
+        drop(bytes);
+        let text = self.model(
+            p,
+            &body,
+            &Self::tags(mog, TagOp::Asr),
+            ModelCall::Transcribe,
+        )?;
+        Ok(parse_transcript(
+            &text,
+            (duration_s > 0.0).then_some(duration_s),
+        ))
+    }
+
+    /// The notes of a transcript.
+    pub fn notes(
+        &self,
+        p: &str,
+        endpoint: &str,
+        mog: &str,
+        instructions: &str,
+        transcript_md: &str,
+    ) -> Kind<String> {
+        let body = notes_request(endpoint, instructions, transcript_md)?;
+        self.model(p, &body, &Self::tags(mog, TagOp::Writer), ModelCall::Notes)
+    }
+
+    /// Write one text file into the recording folder (`overwrite=true`).
+    pub fn write_text(&self, p: &str, root: &str, name: &str, file: &str, text: &[u8]) -> Kind<()> {
+        let root = VolumeRoot::parse(root)?;
+        if !is_recording_name(name) || !file.starts_with(name) || file.contains('/') {
+            return Err(ErrorKind::BadSettings);
+        }
+        let folder = root.folder(name);
+        self.mkdir(p, &folder, ErrorKind::UploadFailed)?;
+        self.upload(
+            p,
+            &format!("{folder}/{file}"),
+            text,
+            true,
+            ErrorKind::UploadFailed,
+        )
+    }
+
+    /// The job manifest of a recording, if it exists.
+    pub fn job(&self, p: &str, root: &str, name: &str) -> Kind<Option<JobManifest>> {
+        let root = VolumeRoot::parse(root)?;
+        if !is_recording_name(name) {
+            return Err(ErrorKind::BadSettings);
+        }
+        self.read_job(p, &root, name)
+    }
+
+    /// The instructions sidecar of a recording, if it exists.
+    pub fn instructions(&self, p: &str, root: &str, name: &str) -> Kind<Option<String>> {
+        let r = VolumeRoot::parse(root)?;
+        if !is_recording_name(name) {
+            return Err(ErrorKind::BadSettings);
+        }
+        let path = format!("{}/{}", r.folder(name), instructions_file(name));
+        Ok(self
+            .download(p, &path, ErrorKind::VolumeNotFound)?
+            .and_then(|b| String::from_utf8(b).ok()))
+    }
+
     // ---------- list, detail, link ----------
 
     /// The recordings in `<root>/Bottle/Recordings/`, newest first (from each job.json).
@@ -805,11 +940,21 @@ impl RecordingCloudService {
             )
             .map_err(e)?
             .and_then(|b| String::from_utf8(b).ok());
+        let text = |file: String| -> Result<Option<String>, RecordingError> {
+            Ok(self
+                .download(p, &format!("{folder}/{file}"), ErrorKind::VolumeNotFound)
+                .map_err(e)?
+                .and_then(|b| String::from_utf8(b).ok()))
+        };
+        let transcript_md = text(transcript_md_file(name))?;
+        let instructions = text(instructions_file(name))?;
         let link = self.link_for(p, &root, name).map_err(e)?;
         Ok(RecordingDetail {
             job,
             transcript,
             notes,
+            transcript_md,
+            instructions,
             link,
         })
     }

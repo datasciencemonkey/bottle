@@ -14,11 +14,17 @@ use std::sync::Arc;
 use mog_core::clock::SystemWallClock;
 use mog_core::error::{CoreError, CoreResult};
 use mog_core::http_transport::{ProfileHosts, ReqwestHttpTransport, ThreadPause};
-use mog_core::recording_cloud::cloud::{CloudDeps, ProfileWorkspace, RecordingCloudService};
+use mog_core::ipc::events;
+use mog_core::recording::{RecordingComponent, RecordingSettingsStore};
+use mog_core::recording_cloud::cloud::{
+    is_audio_file_of, CloudDeps, LocalPart, ProfileWorkspace, RecordingCloudService,
+};
+use mog_core::recording_cloud::contract::CloudAdapter;
 use mog_core::recording_cloud::opener::{open_link, SystemOpener, UrlOpener};
 use mog_core::recording_cloud::settings_store::{JsonSettingsStore, SETTINGS_FILE};
 use tauri::Manager;
 
+use crate::ipc::BrainChannel;
 use crate::mcp_host::McpHost;
 use crate::profiles_host::ProfilesHost;
 use crate::rate_bucket_host::SharedRateBucket;
@@ -36,6 +42,8 @@ fn missing(reason: &'static str) -> CoreError {
 pub struct RecordingCloudHost {
     /// The pipeline, storage and list service.
     pub service: Arc<RecordingCloudService>,
+    /// The contract seam over the service (the `recording_*` component and the hand-off).
+    pub adapter: Arc<CloudAdapter>,
     opener: Arc<dyn UrlOpener>,
     /// R7 of the service: the host keeps it alive.
     _transport: Arc<ReqwestHttpTransport>,
@@ -58,6 +66,36 @@ impl RecordingCloudHost {
         let host = self.service.host_url(profile)?;
         open_link(&*self.opener, &host, &url)
     }
+}
+
+/// The temp audio folder under the app data dir (not the cache dir, so the OS does not purge a
+/// recording that waits for Retry): `<app data>/recordings/<name>/<name>.opus`.
+pub const TEMP_DIR: &str = "recordings";
+
+/// The local temp audio files of recording `name` still on the device, in part order.
+pub fn temp_parts_of(root: Option<&std::path::Path>, name: &str) -> Vec<LocalPart> {
+    let Some(dir) = root.map(|r| r.join(name)) else {
+        return Vec::new();
+    };
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|f| f.to_str())
+                .is_some_and(|f| is_audio_file_of(name, f))
+        })
+        .collect();
+    files.sort();
+    files
+        .into_iter()
+        .map(|path| LocalPart {
+            path,
+            duration_s: 0.0,
+        })
+        .collect()
 }
 
 /// Build the recording cloud host. [`crate::mcp_host::install`] and
@@ -96,9 +134,41 @@ pub fn install(handle: &tauri::AppHandle<tauri::Wry>) -> CoreResult<()> {
     ) {
         store.set_path(dir.join(SETTINGS_FILE));
     }
+    let store: Arc<dyn RecordingSettingsStore> = match handle.try_state::<Arc<JsonSettingsStore>>()
+    {
+        Some(s) => s.inner().clone(),
+        None => Arc::new(JsonSettingsStore::deferred()),
+    };
+    let temp_root = handle.path().app_data_dir().ok().map(|d| d.join(TEMP_DIR));
+    let temp_parts: Arc<dyn Fn(&str) -> Vec<LocalPart> + Send + Sync> =
+        Arc::new(move |name: &str| temp_parts_of(temp_root.as_deref(), name));
+    let app = handle.clone();
+    let on_job = Arc::new(move |s: &mog_core::types::RecordingSummary| {
+        if let (Some(ch), Ok(v)) = (app.try_state::<BrainChannel>(), serde_json::to_value(s)) {
+            ch.send(events::RECORDING_JOB, v);
+        }
+    });
+    let adapter = Arc::new(CloudAdapter::new(
+        service.clone(),
+        store,
+        temp_parts,
+        on_job,
+    ));
+    let opener: Arc<dyn UrlOpener> = Arc::new(SystemOpener);
+    if let Some(component) = handle.try_state::<Arc<RecordingComponent>>() {
+        let (svc, op) = (service.clone(), opener.clone());
+        component.set_cloud(
+            adapter.clone(),
+            Arc::new(move |profile: &String, url: &str| {
+                let host = svc.host_url(profile)?;
+                open_link(&*op, &host, url)
+            }),
+        );
+    }
     handle.manage(RecordingCloudHost {
         service,
-        opener: Arc::new(SystemOpener),
+        adapter,
+        opener,
         _transport: transport,
     });
     Ok(())

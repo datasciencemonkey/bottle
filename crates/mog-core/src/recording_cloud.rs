@@ -9,6 +9,7 @@
 //! warehouse, no job, no statement (ADR 0103, UPDATE 4).
 
 pub mod cloud;
+pub mod contract;
 pub mod errors;
 pub mod http;
 pub mod job;

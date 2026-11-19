@@ -122,6 +122,36 @@ impl JobManifest {
     }
 }
 
+/// The Unix time in ms of an RFC 3339 UTC stamp `YYYY-MM-DDTHH:MM:SSZ` (as [`iso_utc`] writes).
+pub fn parse_iso_utc_ms(s: &str) -> Option<i64> {
+    let b = s.as_bytes();
+    if b.len() != 20
+        || b[4] != b'-'
+        || b[7] != b'-'
+        || b[10] != b'T'
+        || b[13] != b':'
+        || b[16] != b':'
+        || b[19] != b'Z'
+    {
+        return None;
+    }
+    let n = |r: std::ops::Range<usize>| s.get(r)?.parse::<i64>().ok();
+    let (y, m, d) = (n(0..4)?, n(5..7)?, n(8..10)?);
+    let (hh, mm, ss) = (n(11..13)?, n(14..16)?, n(17..19)?);
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) || hh > 23 || mm > 59 || ss > 59 {
+        return None;
+    }
+    // Days from civil (H. Hinnant).
+    let y2 = if m <= 2 { y - 1 } else { y };
+    let era = y2.div_euclid(400);
+    let yoe = y2 - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    Some(((days * 86_400) + hh * 3600 + mm * 60 + ss) * 1000)
+}
+
 /// RFC 3339 UTC (`YYYY-MM-DDTHH:MM:SSZ`) of a Unix time in ms.
 pub fn iso_utc(ms: i64) -> String {
     let secs = ms.div_euclid(1000);

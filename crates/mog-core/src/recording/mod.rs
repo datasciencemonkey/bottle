@@ -250,9 +250,15 @@ impl RecordingSettingsStore for MemorySettingsStore {
 
 /// The `recording_*` commands behind the hardened gateway. The gateway checked the window and
 /// the arguments already.
+/// Opens a Catalog Explorer link for a profile (the host checks the host and uses the OS
+/// opener; PR C).
+pub type LinkOpener = Arc<dyn Fn(&ProfileName, &str) -> CoreResult<()> + Send + Sync>;
+
 pub struct RecordingComponent {
     settings: Arc<dyn RecordingSettingsStore>,
     capture: Mutex<Option<CaptureLink>>,
+    /// Set once in the app `setup`, after R6 and the rate bucket exist (PR C).
+    cloud: std::sync::OnceLock<(Arc<dyn RecordingCloud>, LinkOpener)>,
 }
 
 /// What PR B connects to the component once the capture host runs (ADR 0103): the capture
@@ -286,6 +292,7 @@ impl RecordingComponent {
         Self {
             settings,
             capture: Mutex::new(None),
+            cloud: std::sync::OnceLock::new(),
         }
     }
 
@@ -303,6 +310,26 @@ impl RecordingComponent {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
+    }
+
+    /// Connect the cloud side (PR C) and the link opener, once. A later call is ignored.
+    pub fn set_cloud(&self, cloud: Arc<dyn RecordingCloud>, opener: LinkOpener) {
+        let _ = self.cloud.set((cloud, opener));
+    }
+
+    fn cloud(&self) -> CoreResult<&Arc<dyn RecordingCloud>> {
+        self.cloud
+            .get()
+            .map(|(c, _)| c)
+            .ok_or(refused("not_implemented"))
+    }
+
+    /// The storage of the Settings, or `no_storage`.
+    fn storage(&self) -> CoreResult<RecordingStorage> {
+        self.settings
+            .load()?
+            .storage
+            .ok_or_else(|| RecordingErrorKind::NoStorage.into())
     }
 
     /// The knob and the first-use notice, checked in Rust before any capture path.
@@ -356,30 +383,50 @@ impl GatewayComponents for RecordingComponent {
             // The cloud-bound commands (ADR 0103 follow-up): typed stubs that still require the
             // brain's home profile (`src/brain/home-profile.ts`), so a missing or malformed
             // `profile` is `invalid_args` here too, ahead of PR C wiring `RecordingCloud` in.
+            // The cloud-bound commands (PR C): every one carries the brain's home profile.
             "recording_storage_probe" => {
-                let _a: RecordingStorageProbeArgs =
+                let a: RecordingStorageProbeArgs =
                     serde_json::from_value(args).map_err(|_| refused("invalid_args"))?;
-                Err(refused("not_implemented"))
+                reply(&self.cloud()?.probe_storage(&a.profile)?)
             }
             "recording_volume_create" => {
-                let _a: RecordingVolumeCreateArgs =
+                let a: RecordingVolumeCreateArgs =
                     serde_json::from_value(args).map_err(|_| refused("invalid_args"))?;
-                Err(refused("not_implemented"))
+                reply(
+                    &self
+                        .cloud()?
+                        .create_volume(&a.profile, &a.catalog, &a.schema)?,
+                )
             }
             "recording_list" => {
-                let _a: RecordingListArgs =
+                let a: RecordingListArgs =
                     serde_json::from_value(args).map_err(|_| refused("invalid_args"))?;
-                Err(refused("not_implemented"))
+                let cloud = self.cloud()?;
+                reply(&cloud.list(&a.profile, &self.storage()?)?)
             }
             "recording_detail" | "recording_retry" => {
-                let _a: RecordingIdArgs =
+                let a: RecordingIdArgs =
                     serde_json::from_value(args).map_err(|_| refused("invalid_args"))?;
-                Err(refused("not_implemented"))
+                let cloud = self.cloud()?;
+                let storage = self.storage()?;
+                if command == "recording_detail" {
+                    reply(&cloud.detail(&a.profile, &storage, &a.id)?)
+                } else {
+                    reply(&cloud.retry(&a.profile, &storage, &a.id)?)
+                }
             }
             "recording_open" => {
-                let _a: RecordingOpenArgs =
+                let a: RecordingOpenArgs =
                     serde_json::from_value(args).map_err(|_| refused("invalid_args"))?;
-                Err(refused("not_implemented"))
+                let cloud = self.cloud()?;
+                let url = cloud.folder_link(&a.profile, &self.storage()?, &a.id)?;
+                let open = self
+                    .cloud
+                    .get()
+                    .map(|(_, o)| o)
+                    .ok_or(refused("not_implemented"))?;
+                open(&a.profile, &url)?;
+                Ok(serde_json::json!({}))
             }
             "recording_stop" => {
                 let link = self.link().ok_or_else(|| refused("not_implemented"))?;
