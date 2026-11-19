@@ -82,6 +82,7 @@ function rig(opts: { holdStart?: boolean; config?: CaptureLifecycleDeps['config'
     postRoll.clear();
   };
   const refusals: { mogId: string; mode: string; error?: unknown }[] = [];
+  const toggles: { mogId: string; liveAtToggle: number }[] = [];
   const utterances: Utterance[] = [];
   const transcribed: SegmentRef[] = [];
   const texts = new Map<string, string>();
@@ -93,6 +94,7 @@ function rig(opts: { holdStart?: boolean; config?: CaptureLifecycleDeps['config'
     },
     onUtterance: (u) => void utterances.push(u),
     onRefused: (e) => void refusals.push(e),
+    onRecordToggle: (e) => void toggles.push({ mogId: e.mogId, liveAtToggle: live.size }),
     ...(opts.config ? { config: opts.config } : {}),
   };
   const lc = createCaptureLifecycle(deps);
@@ -121,6 +123,7 @@ function rig(opts: { holdStart?: boolean; config?: CaptureLifecycleDeps['config'
     calls,
     refused,
     refusals,
+    toggles,
     live,
     endPostRoll,
     utterances,
@@ -478,7 +481,79 @@ describe('capture lifecycle: segments (#14)', () => {
   });
 });
 
+describe('capture lifecycle: the ⌥R record toggle (ADR 0103)', () => {
+  it('[ADR-0103] an ⌥R press drops the PTT audio, then toggles the recording once the mic is free', async () => {
+    const r = rig();
+    r.ptt('down', 0);
+    await r.flush();
+    // The host sends `cancel`, then `hotkey:record_toggle`.
+    r.ptt('cancel', 900);
+    r.lc.recordToggle(A);
+    // No dictation: the lease is discarded, never released, and nothing reaches STT.
+    expect(r.calls).toEqual([
+      ['start', { mogId: A, mode: 'ptt' }],
+      ['discard', { mogId: A, leaseId: '1' }],
+    ]);
+    expect(r.toggles).toEqual([]);
+    await r.flush();
+    await r.lc.onSegment(r.seg('1'));
+    expect(r.transcribed).toEqual([]);
+    expect(r.utterances).toEqual([]);
+    // The toggle comes after the discard settled, so the recording can take the mic.
+    expect(r.toggles).toEqual([{ mogId: A, liveAtToggle: 0 }]);
+  });
+
+  it('[ADR-0103] an ⌥R press before the grant toggles after the discard', async () => {
+    const r = rig({ holdStart: true });
+    r.ptt('down', 0);
+    r.ptt('cancel', 900);
+    r.lc.recordToggle(A);
+    await r.flush();
+    expect(r.toggles).toEqual([]);
+    await r.resolveStarts();
+    await r.flush();
+    expect(names(r.calls)).toEqual(['start', 'discard']);
+    expect(r.toggles).toEqual([{ mogId: A, liveAtToggle: 0 }]);
+  });
+
+  it('[ADR-0103] a refused hold (a recording runs) still toggles: ⌥R stops the recording', async () => {
+    const r = rig();
+    // A recording holds the mic, so R2 refuses the PTT start (`recording_in_progress`).
+    r.live.set('rec', 'session');
+    r.ptt('down', 0);
+    await r.flush();
+    expect(r.refusals).toHaveLength(1);
+    r.ptt('cancel', 900);
+    r.lc.recordToggle(A);
+    await r.flush();
+    expect(names(r.calls)).toEqual(['start']);
+    expect(r.toggles.map((t) => t.mogId)).toEqual([A]);
+    expect(r.utterances).toEqual([]);
+  });
+
+  it('[ADR-0103] a toggle with no press (no open MOG) goes out at once', async () => {
+    const r = rig();
+    r.lc.recordToggle('');
+    await r.flush();
+    expect(r.toggles).toEqual([{ mogId: '', liveAtToggle: 0 }]);
+  });
+});
+
 describe('capture lifecycle wiring (#14)', () => {
+  it('[ADR-0103] hotkey:record_toggle reaches the lifecycle after the cancel of the hold', async () => {
+    const bus = new BrainBus();
+    const r = rig();
+    wireCaptureLifecycle(bus, r.lc, () => 5);
+    await bus.dispatch({ event: 'hotkey:ptt', payload: { mogId: A, phase: 'down' } });
+    await r.flush();
+    await bus.dispatch({ event: 'hotkey:ptt', payload: { mogId: A, phase: 'cancel' } });
+    await bus.dispatch({ event: 'hotkey:record_toggle', payload: { mogId: A } });
+    await bus.dispatch({ event: 'hotkey:record_toggle', payload: { mogId: 7 } });
+    await r.flush();
+    expect(r.toggles.map((t) => t.mogId)).toEqual([A]);
+    expect(names(r.calls)).toEqual(['start', 'discard']);
+  });
+
   it('[RTR-17a] the hotkey:ptt up with ask: true reaches the lifecycle as a forced ask', async () => {
     const bus = new BrainBus();
     const r = rig();

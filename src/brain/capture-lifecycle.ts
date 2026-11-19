@@ -10,6 +10,9 @@
  * - `down`: start a PTT lease through the consent gate (CAP-12a, MB-08a).
  * - `up`: release the lease; R2 stops it after the post-roll (CAP-12b).
  * - `cancel` (a tap, or another key, CAP-44c): discard the lease (CAP-44b).
+ * - `hotkey:record_toggle` (⌥R, ADR 0103): it follows the `cancel` that discarded the press, so no
+ *   dictation runs. Once R2 has that discard, `onRecordToggle` fires and the recording can take
+ *   the mic. A refused press (a recording holds the mic) still toggles, so ⌥R stops it.
  * - `double_tap`, a mascot click or "Talk": start hands-free (CAP-14a), if `mog.capture.modes`
  *   has it. A click on the listening MOG stops it when `clickTogglesListening` is on.
  * - A tap or Esc during hands-free: stop hands-free (CAP-14b). Esc also drops its audio. Esc
@@ -26,7 +29,7 @@
  * The host routes `capture_*` to `CaptureCore` (#425, ADR 0055); the tests use a double of R2.
  */
 import type { CaptureMode, CaptureState, LeaseId, MogId, SegmentRef } from '../shared/interfaces';
-import { EVENTS, call } from '../shared/ipc';
+import { EVENTS, call, type RecordToggle } from '../shared/ipc';
 import { onViewInput, type BrainBus } from './bus';
 import { startCapture, type CaptureGateDeps } from './capture-gate';
 import { asPttEvent, type PttEvent } from './ptt';
@@ -80,6 +83,11 @@ export interface CaptureLifecycleDeps {
    * `error` is the rejection (an `IpcError`), or undefined when the reply had no lease.
    */
   onRefused?(e: { mogId: MogId; mode: LifecycleMode; error?: unknown }): void;
+  /**
+   * ADR 0103: the user tapped ⌥R in the hold. It fires after the PTT lease is discarded, so the
+   * recording can take the mic. The callee starts or stops the recording.
+   */
+  onRecordToggle?(e: { mogId: MogId }): void;
   /** The capture settings of a MOG. Default: the Appendix F defaults. */
   config?: (mogId: MogId) => LifecycleConfig;
 }
@@ -89,6 +97,8 @@ export interface CaptureLifecycle {
   onPtt(e: PttEvent): void;
   /** A mascot click or "Talk" for `mogId` (CAP-14a). */
   click(mogId: MogId): void;
+  /** One `hotkey:record_toggle` item (ADR 0103): fire `onRecordToggle` after the last discard. */
+  recordToggle(mogId: MogId): void;
   /**
    * Esc in a Bottle view (CAP-14b). With `mogId`, only the hands-free capture of that MOG stops.
    * TODO(#434): the host stops hands-free in R2 on the global Esc.
@@ -305,6 +315,11 @@ export function createCaptureLifecycle(deps: CaptureLifecycleDeps): CaptureLifec
           return startHandsFree(e.mogId);
       }
     },
+    recordToggle(mogId) {
+      const toggle = () => deps.onRecordToggle?.({ mogId });
+      if (ending) void ending.then(toggle);
+      else toggle();
+    },
     click(mogId) {
       if (handsFree?.mogId === mogId) {
         if (config(mogId).clickTogglesListening) stopHandsFree('click');
@@ -380,6 +395,11 @@ export function wireCaptureLifecycle(
     }),
     bus.on(EVENTS['capture.state'].name, (p) => {
       if (typeof p === 'object' && p !== null) lc.onState(p as CaptureState);
+    }),
+    // ADR 0103: ⌥R in the hold. The host sent the `cancel` of the press before it.
+    bus.on(EVENTS['hotkey.record_toggle'].name, (p) => {
+      const mogId = typeof p === 'object' && p !== null ? (p as RecordToggle).mogId : undefined;
+      if (typeof mogId === 'string') lc.recordToggle(mogId);
     }),
     bus.on(EVENTS['capture.segment'].name, (p) => {
       if (typeof p !== 'object' || p === null) return;

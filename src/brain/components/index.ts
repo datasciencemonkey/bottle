@@ -43,6 +43,7 @@ import { wireGenieCard } from '../genie-card-wiring';
 import { createAppMogContextMenu } from '../mog-context-menu';
 import { showHub } from '../hub-window';
 import { asPttEvent } from '../ptt';
+import { createRecordToggle } from '../record-toggle';
 import { emitTo } from '@tauri-apps/api/event';
 import { EVENTS } from '../../shared/ipc';
 import { ipcGenieHistory } from '../genie-history';
@@ -293,23 +294,25 @@ export function startBrain(): Brain {
       scheduler: { at: timeoutScheduler(moodClock) },
     });
     wireCaptureMood(bus, captureMood);
+    // ADR 0103, recording-profile.ts: the one workspace of a call recording, shared by every
+    // cloud-bound recording command and the record key (⌥R), so they all reach the same
+    // workspace. Bottle never picks between workspaces: no MOG with a home is `no_profile`;
+    // two or more different homes is `profiles_differ`.
+    const recordingHomeProfile = () =>
+      recordingProfile({
+        mogs: async () => (await components.T1.list()).mogs.map((m) => m.mogId),
+        home: async (id) => {
+          const p = (await homes.routerInput(id)).profile;
+          return p === NO_HOME ? undefined : p;
+        },
+      });
     // ADR 0103: call recording. The hub sends clicks; the brain calls the `recording_*`
     // commands, relays `recording.state` and `recording.job` to the hub, and shows REC and the
     // answer-ready moment on the MOG through the one mood publisher. The core checks the knob
     // again before any capture. TODO(#95): the short OS notice when the notes are ready, once
     // the notification host has an IPC command.
     wireRecording(bus, {
-      // ADR 0103: one workspace for the recording: the home that every MOG with a home shares.
-      // Two different homes refuse with `profiles_differ`; Bottle never picks one.
-      api: ipcRecordingApi(bus, () =>
-        recordingProfile({
-          mogs: async () => (await components.T1.list()).mogs.map((m) => m.mogId),
-          home: async (id) => {
-            const p = (await homes.routerInput(id)).profile;
-            return p === NO_HOME ? undefined : p;
-          },
-        }),
-      ),
+      api: ipcRecordingApi(bus, recordingHomeProfile),
       platform:
         cliPlatform(globalThis.navigator?.userAgent ?? '') === 'windows' ? 'windows' : 'mac',
       mood: {
@@ -400,6 +403,20 @@ export function startBrain(): Brain {
       control: ipcCaptureControl({ consent: components.T12 }),
       // MB-08a: a refused start is never silent. The consent gate also shows the hub notice.
       onRefused: (e) => captureMood.refused(e.mogId, e.error),
+      // ADR 0103: ⌥R in the hold starts or stops the call recording, after the PTT discard. A
+      // refusal shows on the MOG of the press (none with no open MOG).
+      onRecordToggle: ({ mogId }) =>
+        void createRecordToggle({
+          call,
+          // recording-profile.ts: the same shared-home profile the hub Record control uses, so
+          // ⌥R and the hub always reach the same workspace. No open MOG: no profile. Otherwise
+          // `recordingHomeProfile` throws `{ error: 'no_profile' }` or `{ error:
+          // 'profiles_differ' }`, which `createRecordToggle`'s catch forwards to `onRefused`.
+          home: mogId === '' ? async () => undefined : recordingHomeProfile,
+          onRefused: (error) => {
+            if (mogId !== '') captureMood.refused(mogId, error);
+          },
+        })(),
       // #52 (ADR 0088): T4 runs the 8.3 chain over `stt_transcribe` (host route TODO(#514)).
       // A failure shows its fixed text on the owner's card, and no text is routed.
       transcribe: createLifecycleTranscriber(components.T4, sendOwnedCard),

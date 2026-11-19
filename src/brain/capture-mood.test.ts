@@ -118,6 +118,31 @@ describe('capture mood: a refused start is never silent (#551)', () => {
     for (const [err, want] of cases) expect(refusalReason(err)).toBe(want);
   });
 
+  it('[ADR-0103] a talk-key hold during a recording shows "Recording in progress"', () => {
+    expect(refusalReason({ error: 'recording_in_progress' })).toBe('recording_in_progress');
+    expect(REFUSAL_TEXT.recording_in_progress.text).toBe('Recording in progress');
+    const { cm, last } = setup();
+    cm.refused(A, { error: 'recording_in_progress' });
+    expect(last(A)?.badges?.[0]?.text).toBe('Recording in progress');
+  });
+
+  it('[ADR-0103] an ⌥R start with no home profile shows a plain reason', () => {
+    expect(refusalReason({ error: 'no_home_profile' })).toBe('no_home_profile');
+    const { cm, last } = setup();
+    cm.refused(A, { error: 'no_home_profile' });
+    expect(last(A)?.badges?.[0]?.text).toBe(REFUSAL_TEXT.no_home_profile.text);
+  });
+
+  it('[ADR-0103, #594 review] recordingProfile refusals (no_profile, profiles_differ) show their own reason, not host_failed', () => {
+    expect(refusalReason({ error: 'no_profile' })).toBe('no_profile');
+    expect(refusalReason({ error: 'profiles_differ' })).toBe('profiles_differ');
+    const { cm, last } = setup();
+    cm.refused(A, { error: 'no_profile' });
+    expect(last(A)?.badges?.[0]?.text).toBe(REFUSAL_TEXT.no_profile.text);
+    cm.refused(A, { error: 'profiles_differ' });
+    expect(last(A)?.badges?.[0]?.text).toBe(REFUSAL_TEXT.profiles_differ.text);
+  });
+
   it('[CAP-17b] a refused mic open names the mic fault that capture:state reports', () => {
     for (const mic of ['permission_denied', 'no_device'] as const) {
       const { cm, last } = setup();

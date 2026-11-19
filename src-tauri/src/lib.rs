@@ -155,6 +155,13 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
         handle.path().app_config_dir(),
     ) {
         store.set_path(dir.join(mog_core::recording_cloud::settings_store::SETTINGS_FILE));
+        // ADR 0103: `record_gate.follow` (in `run`) read the knob before this path existed, so
+        // it always saw the default (off). Catch it up now to a prior "on", so a relaunch with
+        // the knob already on does not need a toggle before ⌥R is grabbed again.
+        if let Some(gate) = handle.try_state::<hotkey_host::RecordKeyGate>() {
+            use mog_core::recording::RecordingSettingsStore as _;
+            gate.set(store.load().is_ok_and(|s| s.enabled));
+        }
     }
     let recording_temp_root = handle
         .path()
@@ -254,6 +261,8 @@ pub fn run() {
     let demo =
         cfg!(debug_assertions) && std::env::var("BOTTLE_DEMO_WINDOWS").is_ok_and(|v| v == "1");
     let builder = tauri::Builder::default();
+    // ADR 0103: the ⌥R key gate. It follows the recording knob; `hotkey_host` reads it.
+    let record_gate = hotkey_host::RecordKeyGate::default();
     #[cfg(target_os = "macos")]
     let builder = builder.activate_ignoring_other_apps(ACTIVATE_IGNORING_OTHER_APPS);
     let recording_settings = std::sync::Arc::new(
@@ -268,12 +277,18 @@ pub fn run() {
             mog_core::app_settings::AppSettings::default(),
         ))
         // ADR 0103: the `recording_*` component on the JSON settings file (PR C). The file
-        // path is set in `setup` by `recording_cloud_host::install`; before that, defaults
-        // (knob off) and no write.
+        // path is set in `setup` by `install_capture` (and the `record_gate` re-synced right
+        // after); before that, defaults (knob off) and no write.
         .manage(recording_settings.clone())
+        // ADR 0103: the component reads and writes through the JsonSettingsStore (persisted
+        // knob, PR C/#595/#592); `record_gate` wraps it with `KnobFollower` so the ⌥R gate
+        // stays in step with the same store, instead of the standalone `MemorySettingsStore`
+        // this branch used before main grew real persistence.
         .manage(std::sync::Arc::new(
-            mog_core::recording::RecordingComponent::new(recording_settings),
+            mog_core::recording::RecordingComponent::new(record_gate.follow(recording_settings)),
         ))
+        // ADR 0103: the ⌥R key follows the knob of the settings above (`hotkey_host`).
+        .manage(record_gate)
         // G-09a, ARC-F3 (#467, #138): the ONE rate bucket of the process.
         // `rate_bucket.rs:4`: "R7 and R8 share one per process". Every R7 and R8 (and the
         // future `model_invoke` and `dbx_http` callers, #511) takes it from app state.
