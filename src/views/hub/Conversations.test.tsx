@@ -137,7 +137,10 @@ describe('hub Conversations (#103)', () => {
     const d = detail(el);
     expect(d.querySelector('h2')?.textContent).toBe('What were fake bookings 5?');
     expect(d.textContent).toContain('fake-west');
-    expect(d.querySelector(`[title="${HOST}"]`)?.textContent).toBe('fake-west');
+    // The host is in the tooltip and, for screen readers, in hidden text.
+    const profile = d.querySelector(`[title="${HOST}"]`);
+    expect(profile?.textContent).toBe(`fake-west, ${HOST}`);
+    expect(profile?.querySelector('.conv-sr')?.textContent).toBe(`, ${HOST}`);
     expect(d.textContent).toContain('Sales');
     expect(d.textContent).toContain('Answered');
     // Markdown through the card's allowlist renderer: no HTML element, only trusted links.

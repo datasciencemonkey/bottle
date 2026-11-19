@@ -851,8 +851,19 @@ body {
   white-space: nowrap;
 }
 
+/* Text for screen readers only: the workspace host after the profile. */
+.conv-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .conv-meta-part + .conv-meta-part::before {
   content: '·';
+  content: '·' / '';
   margin: 0 4px;
 }
 
@@ -910,9 +921,12 @@ body {
   background: none;
 }
 
+/* No opener yet (#523): a trusted URL shows as selectable text in the link colour, not as a
+   control that does nothing. */
 .conv-answer a {
   color: var(--mog-eye);
-  text-underline-offset: 2px;
+  cursor: text;
+  text-decoration: none;
 }
 
 .hub .conv-answer--none {

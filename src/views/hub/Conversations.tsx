@@ -188,11 +188,12 @@ function Detail({
         {/* One profile is one workspace; the host is in the tooltip. */}
         <span className="conv-meta-part" title={row.workspaceHost || undefined}>
           {row.profile}
+          {row.workspaceHost && <span className="conv-sr">, {row.workspaceHost}</span>}
         </span>
         <span className="conv-meta-part">{row.mogName}</span>
       </p>
       {row.answerMd ? (
-        // TODO(#103): open a trusted link in the browser once the hub has an opener. Until then a
+        // TODO(#523): open a trusted link in the browser once the hub has the link opener. Until then a
         // click never navigates the hub window; the link text stays selectable.
         <div
           className="conv-answer"
