@@ -114,7 +114,7 @@ const chip = (over: Partial<Extract<UtteranceRoute, { route: 'chip' }>> = {}): A
 const LATER_MS = 15_000;
 
 describe('ask gate: ⌥G sends at once (RTR-17a, RTR-17b, ADR 0098)', () => {
-  it('[RTR-17a] [RTR-17b] [RTR-04b] an ⌥G ask sends the exact text once, at once, with no preview', async () => {
+  it('[RTR-17a] [RTR-17b] an ⌥G ask sends the exact text once, at once, with no preview', async () => {
     const t = setup();
     const u = t.owned();
     const r = ask();
@@ -180,7 +180,7 @@ describe('ask gate: ⌥G sends at once (RTR-17a, RTR-17b, ADR 0098)', () => {
     expect(t.sent.map((x) => x.question)).toEqual(['What was EMEA revenue?']);
   });
 
-  it('[RTR-04b] a failed hand-off is shown as not sent and is not retried', async () => {
+  it('[RTR-17b] a failed hand-off is shown as not sent and is not retried', async () => {
     const sim = createSimScheduler();
     const card = fakeCard();
     let calls = 0;

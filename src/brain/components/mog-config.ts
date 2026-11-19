@@ -29,6 +29,11 @@ export interface MogConfig {
   capture: { modes: CaptureMode[]; clickTogglesListening: boolean; vadEndMs: number };
   hotkeys: { chord?: number }; // v1, digit 0-9
   genie: {
+    /**
+     * `autoSendPtt` and `previewMs` have no reader in the MVP: ⌥G sends at once (ADR 0098). They
+     * stay in the stored schema for the v1 preview (RTR-04a), because the core rejects unknown
+     * fields, so removing them would break MOG configs that are already saved.
+     */
     autoSendPtt: boolean;
     previewMs: number;
     shareContext: boolean;

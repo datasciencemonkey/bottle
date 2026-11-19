@@ -132,6 +132,8 @@ Do one session for each of 10 or more speakers. Each session is one part.
    ADR 0098). Expected: no insertion, no "g" and no "©" in TextEdit, and the card shows
    "Asking Genie". Do it again with G in the first 0.2 s of the hold. Expected: the same ask, and
    no cancel. Tap another key (for example X) in the first 1 s. Expected: a cancel (CAP-44c).
+   Hold for 3 s, tap G about 100 ms before the release, and do it while the hub scrolls a long
+   list (a busy main thread). Expected: still an ask, with no insertion (ADR 0098 decision 6).
    After the release, type Option+G in TextEdit. Expected: "©" (the hot key is released).
    On Windows, the same hold gives an insertion: Windows has no ask key in this build.
 5. On macOS, click into a password field so that the "Use ⌃⇧Space" pill shows. Hold

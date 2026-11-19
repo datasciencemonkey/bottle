@@ -23,7 +23,7 @@ vi.mock('../level-stream', async (orig) => ({
 }));
 
 describe('startBrain wiring', () => {
-  it('[MB-01] [MB-08a] [CAP-16a] [MEM-32a] [RTR-04b] wires the hub list, the notice and the level stream, once', () => {
+  it('[MB-01] [MB-08a] [CAP-16a] [MEM-32a] [RTR-05] wires the hub list, the notice and the level stream, once', () => {
     const a = startBrain();
     startBrain();
     expect(vi.mocked(wireHubMogs).mock.calls).toEqual([[a.bus, a.components.T1]]);

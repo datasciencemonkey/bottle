@@ -103,7 +103,7 @@ function setup() {
 }
 
 describe('ask gate on the bus (B1)', () => {
-  it('[RTR-17a] [RTR-17b] [RTR-04b] an ⌥G ask sends one agent_send at once, with no preview on the card', async () => {
+  it('[RTR-17a] [RTR-17b] an ⌥G ask hands one turn to the send seam at once (the agent-bridge double here; startBrain uses the Genie One seam), with no preview on the card', async () => {
     const t = setup();
     t.ask();
     await t.run(0);
@@ -118,7 +118,7 @@ describe('ask gate on the bus (B1)', () => {
     expect(t.outbound()).toEqual(['agent_send']);
   });
 
-  it('[RTR-04b] [RTR-29b] the agent_send of an ⌥G ask is the shared fixture the core approves', async () => {
+  it('[RTR-17b] [RTR-29b] the turn of an ⌥G ask through the agent-bridge double is the shared fixture the core approves', async () => {
     const t = setup();
     t.ask();
     await t.run(0);
