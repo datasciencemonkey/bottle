@@ -4,13 +4,24 @@
     "name": "2026-11-19_1430",
     "startedAtMs": 1795620600000,
     "durationS": 120,
-    "status": "done",
-    "engine": "warehouse"
+    "status": "done"
   },
   "instructions": "Write short notes in Markdown.",
   "segments": [
-    { "start": 0.5, "end": 4.25, "speaker": "1", "text": "Hello.", "part": 1 },
-    { "start": 3305.0, "end": 3310.5, "speaker": "2.1", "text": "Bye.", "part": 2 }
+    {
+      "start": 0.5,
+      "end": 4.25,
+      "speaker": "1",
+      "text": "Hello.",
+      "part": 1
+    },
+    {
+      "start": 3305.0,
+      "end": 3310.5,
+      "speaker": "2.1",
+      "text": "Bye.",
+      "part": 2
+    }
   ],
   "transcriptMd": "**Speaker 1** [00:00:00] Hello.",
   "notesMd": "## Summary\nA short call."

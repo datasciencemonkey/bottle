@@ -59,7 +59,7 @@ later".
 | `mem_local_exec` to the local SQLite store | PR #576. On main the route is still `TODO(#426)`. |
 | CliRunner (R5) | PR #255. On main mcp_host uses a stub, so every `mcp_call` fails `not_implemented`. |
 | CLI install, Connect a workspace | #161, #162 (in progress, stacked on #255). |
-| Call recording (mic plus system audio to a UC volume, server-side transcript and notes) | In flight, ADR 0103: the contract PR on `issue/rec-0-contract`, then capture, cloud and hub PRs stacked on it. The user moved it into the MVP on 2026-11-19. Knob off by default. |
+| Call recording (mic plus system audio to a UC volume, transcript and notes from model serving) | In flight, ADR 0103: the contract PR on `issue/rec-0-contract`, then capture, cloud and hub PRs stacked on it. The user moved it into the MVP on 2026-11-19. Knob off by default. |
 
 Re-check with `gh pr list` before you rely on this table.
 

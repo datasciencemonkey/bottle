@@ -160,7 +160,6 @@ pub const COMMANDS: &[CommandSpec] = &[
     row("recording_settings_write", BH),
     row("recording_storage_probe", BH),
     row("recording_volume_create", BH),
-    row("recording_warehouses", BH),
     row("recording_start", BH),
     row("recording_stop", BH),
     row("recording_state", BH),
@@ -168,6 +167,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     row("recording_detail", BH),
     row("recording_retry", BH),
     row("recording_open", BH),
+    // The "Allow System Audio Recording" fix-it: Rust opens the OS privacy pane.
+    row("recording_open_system_audio_settings", BH),
 ];
 
 /// The row of a command, if it exists.
@@ -412,28 +413,25 @@ pub enum IpcError {
     NoStorage {
         command: String,
     },
-    /// `recording_*` (ADR 0103): the fallback path needs a SQL warehouse and Settings names none.
-    NoWarehouse {
-        command: String,
-    },
-    /// `recording_*` (ADR 0103): the SQL warehouse did not start or did not run the statement.
-    WarehouseFailed {
-        command: String,
-    },
     /// `recording_*` (ADR 0103): the user cannot write to the volume.
     VolumePermission {
         command: String,
     },
-    /// `recording_*` (ADR 0103): AI Transcribe is off in this workspace.
-    AiTranscribeDisabled {
+    /// `recording_*` (ADR 0103): the transcribe endpoint is missing or not allowed.
+    TranscribeEndpointMissing {
         command: String,
     },
-    /// `recording_*` (ADR 0103): the notes model endpoint does not exist.
-    EndpointMissing {
+    /// `recording_*` (ADR 0103): the notes endpoint is missing or not allowed.
+    NotesEndpointMissing {
         command: String,
     },
-    /// `recording_*` (ADR 0103): one part is too long to transcribe.
+    /// `recording_*` (ADR 0103): the audio is over the request budget of the model.
     TooLong {
+        command: String,
+    },
+    /// `recording_*` (ADR 0103): the audio is not a valid encoded file, or the model could not
+    /// read it.
+    AudioUnreadable {
         command: String,
     },
     /// `recording_*` (ADR 0103): an audio part did not upload. The local part stays for Retry.
@@ -571,21 +569,20 @@ impl std::fmt::Display for IpcError {
                 write!(f, "{command}: no recording has this ID")
             }
             IpcError::NoStorage { command } => write!(f, "{command}: no recording storage"),
-            IpcError::NoWarehouse { command } => write!(f, "{command}: no SQL warehouse"),
-            IpcError::WarehouseFailed { command } => {
-                write!(f, "{command}: the SQL warehouse failed")
-            }
             IpcError::VolumePermission { command } => {
                 write!(f, "{command}: no write permission on the volume")
             }
-            IpcError::AiTranscribeDisabled { command } => {
-                write!(f, "{command}: AI Transcribe is off in the workspace")
+            IpcError::TranscribeEndpointMissing { command } => {
+                write!(f, "{command}: the transcribe model is not available")
             }
-            IpcError::EndpointMissing { command } => {
-                write!(f, "{command}: the notes model endpoint does not exist")
+            IpcError::NotesEndpointMissing { command } => {
+                write!(f, "{command}: the notes model is not available")
             }
             IpcError::TooLong { command } => {
                 write!(f, "{command}: the recording part is too long")
+            }
+            IpcError::AudioUnreadable { command } => {
+                write!(f, "{command}: the audio could not be read")
             }
             IpcError::UploadFailed { command } => write!(f, "{command}: the upload failed"),
             IpcError::SystemAudioDenied { command } => {
@@ -1198,10 +1195,10 @@ macro_rules! for_command {
             "view_notice_subscribe" => Some($f::<ViewNoticeSubscribeArgs>()),
             "recording_settings_read"
             | "recording_storage_probe"
-            | "recording_warehouses"
             | "recording_stop"
             | "recording_state"
-            | "recording_list" => Some($f::<NoArgs>()),
+            | "recording_list"
+            | "recording_open_system_audio_settings" => Some($f::<NoArgs>()),
             "recording_settings_write" => Some($f::<RecordingSettingsWriteArgs>()),
             "recording_volume_create" => Some($f::<RecordingVolumeCreateArgs>()),
             "recording_start" => Some($f::<RecordingStartArgs>()),

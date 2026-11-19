@@ -1190,6 +1190,13 @@
       "title": "RecordingOpenArgs",
       "type": "object"
     },
+    "recording_open_system_audio_settings": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "No arguments.",
+      "title": "NoArgs",
+      "type": "object"
+    },
     "recording_retry": {
       "$defs": {
         "RecordingId": {
@@ -1230,7 +1237,7 @@
           "type": "string"
         },
         "LengthMin": {
-          "maximum": 180,
+          "maximum": 120,
           "minimum": 5,
           "type": "integer"
         },
@@ -1290,10 +1297,10 @@
                 }
               ]
             },
-            "warehouseId": {
+            "transcribeEndpoint": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/WarehouseId"
+                  "$ref": "#/$defs/EndpointName"
                 },
                 {
                   "type": "null"
@@ -1330,10 +1337,6 @@
         },
         "VolumePath": {
           "pattern": "^/Volumes(/[A-Za-z0-9_.@-]+){3,}/?$",
-          "type": "string"
-        },
-        "WarehouseId": {
-          "pattern": "^[A-Za-z0-9-]{1,64}$",
           "type": "string"
         }
       },
@@ -1421,13 +1424,6 @@
         "schema"
       ],
       "title": "RecordingVolumeCreateArgs",
-      "type": "object"
-    },
-    "recording_warehouses": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "additionalProperties": false,
-      "description": "No arguments.",
-      "title": "NoArgs",
       "type": "object"
     },
     "session_attest": {
@@ -2148,14 +2144,6 @@
       ]
     },
     {
-      "name": "recording_warehouses",
-      "phase": "MVP-D",
-      "windows": [
-        "brain",
-        "hub"
-      ]
-    },
-    {
       "name": "recording_start",
       "phase": "MVP-D",
       "windows": [
@@ -2205,6 +2193,14 @@
     },
     {
       "name": "recording_open",
+      "phase": "MVP-D",
+      "windows": [
+        "brain",
+        "hub"
+      ]
+    },
+    {
+      "name": "recording_open_system_audio_settings",
       "phase": "MVP-D",
       "windows": [
         "brain",
@@ -2270,12 +2266,11 @@
     "recording_in_progress",
     "unknown_recording",
     "no_storage",
-    "no_warehouse",
-    "warehouse_failed",
     "volume_permission",
-    "ai_transcribe_disabled",
-    "endpoint_missing",
+    "transcribe_endpoint_missing",
+    "notes_endpoint_missing",
     "too_long",
+    "audio_unreadable",
     "upload_failed",
     "system_audio_denied"
   ],

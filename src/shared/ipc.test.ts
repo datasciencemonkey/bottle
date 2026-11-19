@@ -325,7 +325,6 @@ describe('call recording (ADR 0103)', () => {
     'recording_settings_write',
     'recording_storage_probe',
     'recording_volume_create',
-    'recording_warehouses',
     'recording_start',
     'recording_stop',
     'recording_state',
@@ -333,6 +332,7 @@ describe('call recording (ADR 0103)', () => {
     'recording_detail',
     'recording_retry',
     'recording_open',
+    'recording_open_system_audio_settings',
   ] as const satisfies CommandName[];
 
   it('[CAP-06] [MOG-08a] every recording row is a brain-and-hub MVP-D row; no MOG or card view', () => {
@@ -383,12 +383,11 @@ describe('call recording (ADR 0103)', () => {
       'recording_in_progress',
       'unknown_recording',
       'no_storage',
-      'no_warehouse',
-      'warehouse_failed',
       'volume_permission',
-      'ai_transcribe_disabled',
-      'endpoint_missing',
+      'transcribe_endpoint_missing',
+      'notes_endpoint_missing',
       'too_long',
+      'audio_unreadable',
       'upload_failed',
       'system_audio_denied',
     ] as const) {
