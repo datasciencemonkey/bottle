@@ -172,7 +172,10 @@ describe('ask gate: ⌥G sends at once (RTR-17a, RTR-17b, ADR 0098)', () => {
 
   it('[G-47] [G-30a] an ⌥G ask goes through the sanitizer and the cap', async () => {
     const t = setup();
-    t.gate.onAsk(ask({ question: 'What was\u200b [EMEA](https://evil.example.test) revenue?' }), t.owned());
+    t.gate.onAsk(
+      ask({ question: 'What was\u200b [EMEA](https://evil.example.test) revenue?' }),
+      t.owned(),
+    );
     await t.run(0);
     expect(t.sent.map((x) => x.question)).toEqual(['What was EMEA revenue?']);
   });

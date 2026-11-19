@@ -147,7 +147,13 @@ describe('utterance route (#59)', () => {
   });
 
   it('[RTR-17a] [RTR-17b] ⌥G gives the ask route with the exact text: no preview, nothing inserted', async () => {
-    for (const intent of ['dictation', 'question', 'noise', 'context', 'memory_question'] as const) {
+    for (const intent of [
+      'dictation',
+      'question',
+      'noise',
+      'context',
+      'memory_question',
+    ] as const) {
       const decision = routerDecision({
         intent,
         confidence: 0.1,
