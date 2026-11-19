@@ -182,8 +182,11 @@ fn w_04a_a_grandchild_on_the_pipes_cannot_outlast_the_timeout() {
         RealProcess,
         CliPolicy::default(),
     )
-    .with_timeout(Duration::from_millis(1500));
+    // The version check gets 10 s: the first start of a freshly copied binary can take over
+    // 1.5 s on a loaded machine (pre-push runs). The orphan run below gets the short timeout.
+    .with_timeout(Duration::from_secs(10));
     r.launch_check(None).unwrap();
+    let r = r.with_timeout(Duration::from_millis(1500));
     let start = Instant::now();
     // The child starts a grandchild that naps 5 s on the inherited pipes, then exits at once.
     let err = r.run(["orphan"]).unwrap_err();
