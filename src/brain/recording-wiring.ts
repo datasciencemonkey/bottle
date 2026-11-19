@@ -39,7 +39,6 @@ import {
   type RecordingStatus,
   type RecordingTurn,
   type StorageView,
-  type WarehouseView,
 } from '../shared/recording-view';
 import { onViewInput, type BrainBus } from './bus';
 
@@ -48,9 +47,9 @@ export interface RecSettings {
   enabled: boolean;
   consentAck: boolean;
   lengthMin: number;
-  endpoint: string;
+  transcribeEndpoint: string;
+  notesEndpoint: string;
   instructions: string;
-  warehouseId?: string;
   /** The volume when My Files is not used. Missing: My Files. */
   volumePath?: string;
 }
@@ -71,11 +70,9 @@ export interface RecSummary {
   durationS: number;
   status: RecordingStatus;
   errorKind?: string;
-  engine?: 'job' | 'warehouse';
-  runId?: string;
 }
 
-/** One `ai_transcribe` segment; times in seconds, absolute across parts. */
+/** One transcript segment; times in seconds, absolute across parts. */
 export interface RecSegment {
   start: number;
   end: number;
@@ -109,7 +106,6 @@ export interface RecordingApi {
   /** The My Files root, or `null` when it does not resolve on this workspace. */
   probeStorage(): Promise<{ myFiles: string | null }>;
   createVolume(catalog: string, schema: string): Promise<{ path: string }>;
-  warehouses(): Promise<WarehouseView[]>;
   start(instructions?: string): Promise<RecState>;
   stop(): Promise<RecState>;
   state(): Promise<RecState>;
@@ -190,7 +186,6 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
   let myFiles: string | null | undefined;
   let storageError: string | undefined;
   let creating = false;
-  let warehouses: WarehouseView[] | undefined;
   let control: RecordingControlView = { phase: 'idle' };
   let error: RecordingNotice | undefined;
   let settingsError: string | undefined;
@@ -212,11 +207,17 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
     if (gone) return;
     const m: HubRecording = { platform, storage: storage(), control };
     if (settings) {
-      const { enabled, consentAck, lengthMin, endpoint, instructions, warehouseId } = settings;
-      m.settings = { enabled, consentAck, lengthMin, endpoint, instructions };
-      if (warehouseId !== undefined) m.settings.warehouseId = warehouseId;
+      const { enabled, consentAck, lengthMin, transcribeEndpoint, notesEndpoint, instructions } =
+        settings;
+      m.settings = {
+        enabled,
+        consentAck,
+        lengthMin,
+        transcribeEndpoint,
+        notesEndpoint,
+        instructions,
+      };
     }
-    if (warehouses) m.warehouses = warehouses;
     if (error) m.error = error;
     if (settingsError) m.settingsError = settingsError;
     toHub(HUB_RECORDING_EVENT, m);
@@ -249,7 +250,7 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
     if (s) settings = s;
     if (st) setState(st);
     publish();
-    await Promise.all([probe(), listWarehouses()]);
+    await probe();
   }
 
   async function probe(): Promise<void> {
@@ -259,15 +260,6 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
     } catch {
       myFiles = null;
       storageError = RECORDING_TEXT.storageCheckFailed;
-    }
-    publish();
-  }
-
-  async function listWarehouses(): Promise<void> {
-    try {
-      warehouses = await api.warehouses();
-    } catch {
-      warehouses = [];
     }
     publish();
   }
@@ -410,8 +402,9 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
         break;
       case 'recording.endpoint': {
         const e = a.endpoint.trim();
-        if (ENDPOINT_NAME.test(e)) void write({ endpoint: e });
-        else refuse(RECORDING_TEXT.badEndpoint);
+        if (!ENDPOINT_NAME.test(e)) refuse(RECORDING_TEXT.badEndpoint);
+        else if (a.which === 'transcribe') void write({ transcribeEndpoint: e });
+        else void write({ notesEndpoint: e });
         break;
       }
       case 'recording.instructions': {
@@ -419,9 +412,6 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
         void write({ instructions: t.trim() === '' ? DEFAULT_INSTRUCTIONS : t });
         break;
       }
-      case 'recording.warehouse':
-        void write({ warehouseId: a.id });
-        break;
       case 'recording.storage_probe':
         void probe();
         break;

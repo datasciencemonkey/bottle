@@ -26,8 +26,10 @@ export const DEFAULT_LENGTH_MIN = 60;
 export const LENGTH_MIN = 5;
 export const LENGTH_MAX = 180;
 
-/** The notes model the job calls with `ai_query` when the user picks none. */
-export const DEFAULT_ENDPOINT = 'databricks-claude-sonnet-5-5';
+/** The serving endpoint that transcribes the audio (ADR 0103 update 4). */
+export const DEFAULT_TRANSCRIBE_ENDPOINT = 'databricks-gemini-3-8-flash';
+/** The serving endpoint that writes the notes from the transcript. */
+export const DEFAULT_NOTES_ENDPOINT = 'databricks-claude-sonnet-5-5';
 /** The longest instructions text Bottle keeps. */
 export const INSTRUCTIONS_MAX = 8000;
 
@@ -53,7 +55,6 @@ export const RECORDING_TEXT = {
   },
   myFilesMissing:
     "My Files isn't available on this workspace. Pick a volume, or a catalog and schema.",
-  warehouseNote: 'Used only if serverless jobs are off',
   badVolume: 'Use a volume path like /Volumes/catalog/schema/volume.',
   badSchema: 'Use a catalog and schema like main.default.',
   badEndpoint: 'Use the name of a serving endpoint: letters, digits, dashes and underscores.',
@@ -76,12 +77,12 @@ export interface RecordingNotice {
 
 /** The error kinds of the core and the job, and their plain words. */
 export const RECORDING_ERRORS = {
-  ai_transcribe_disabled: {
-    text: 'AI Transcribe is off for this workspace. Ask your workspace admin to turn on AI Transcribe in Previews.',
-    action: { label: 'Retry', target: 'retry' },
+  transcribe_endpoint_missing: {
+    text: "The transcribe model isn't available. Pick another model in Settings.",
+    action: { label: 'Open Settings', target: 'settings' },
   },
-  no_warehouse: {
-    text: 'Pick a SQL warehouse in Settings.',
+  notes_endpoint_missing: {
+    text: "The notes model isn't available. Pick another model in Settings.",
     action: { label: 'Open Settings', target: 'settings' },
   },
   volume_permission: {
@@ -91,10 +92,6 @@ export const RECORDING_ERRORS = {
   too_long: {
     text: 'This recording is too long to transcribe.',
     action: { label: 'Open in Databricks', target: 'open' },
-  },
-  endpoint_missing: {
-    text: "The notes model isn't available. Pick another model in Settings.",
-    action: { label: 'Open Settings', target: 'settings' },
   },
   system_audio_denied: {
     text: "Bottle can't hear the other side of the call. Allow System Audio Recording.",
@@ -133,9 +130,9 @@ export interface RecordingSettingsView {
   enabled: boolean;
   consentAck: boolean;
   lengthMin: number;
-  endpoint: string;
+  transcribeEndpoint: string;
+  notesEndpoint: string;
   instructions: string;
-  warehouseId?: string;
 }
 
 /** Where recordings go. `unavailable`: My Files did not resolve and no volume is set. */
@@ -145,13 +142,6 @@ export type StorageView =
   | { status: 'volume'; path: string }
   | { status: 'unavailable'; error?: string }
   | { status: 'creating' };
-
-export interface WarehouseView {
-  id: string;
-  name: string;
-  /** `RUNNING`, `STOPPED` and so on, as the workspace says it. */
-  state: string;
-}
 
 export type RecordingPhase = 'idle' | 'starting' | 'recording' | 'stopping';
 
@@ -170,8 +160,6 @@ export interface HubRecording {
   platform: RecordingPlatform;
   settings?: RecordingSettingsView;
   storage: StorageView;
-  /** Missing until the brain lists them; empty when the workspace has none. */
-  warehouses?: WarehouseView[];
   control: RecordingControlView;
   /** A problem with the Record control (a refused start). */
   error?: RecordingNotice;
@@ -179,11 +167,13 @@ export interface HubRecording {
   settingsError?: string;
 }
 
-export type RecordingStatus = 'recording' | 'uploading' | 'transcribing' | 'done' | 'failed';
+export type RecordingStatus =
+  'recording' | 'uploading' | 'transcribing' | 'writing_notes' | 'done' | 'failed';
 const STATUSES: readonly RecordingStatus[] = [
   'recording',
   'uploading',
   'transcribing',
+  'writing_notes',
   'done',
   'failed',
 ];
@@ -231,9 +221,8 @@ export type RecordingAction =
   | { action: 'recording.enable'; on: boolean }
   | { action: 'recording.consent_ack' }
   | { action: 'recording.length'; minutes: number }
-  | { action: 'recording.endpoint'; endpoint: string }
+  | { action: 'recording.endpoint'; which: 'transcribe' | 'notes'; endpoint: string }
   | { action: 'recording.instructions'; text: string }
-  | { action: 'recording.warehouse'; id: string }
   | { action: 'recording.storage_probe' }
   | { action: 'recording.storage_volume'; path: string }
   | { action: 'recording.volume_create'; catalog: string; schema: string }
@@ -267,11 +256,11 @@ export function asRecordingAction(p: unknown): RecordingAction | undefined {
     case 'recording.length':
       return isNum(p['minutes']) ? { action: a, minutes: p['minutes'] } : undefined;
     case 'recording.endpoint':
-      return isStr(p['endpoint']) ? { action: a, endpoint: p['endpoint'] } : undefined;
+      return (p['which'] === 'transcribe' || p['which'] === 'notes') && isStr(p['endpoint'])
+        ? { action: a, which: p['which'], endpoint: p['endpoint'] }
+        : undefined;
     case 'recording.instructions':
       return isStr(p['text']) ? { action: a, text: p['text'] } : undefined;
-    case 'recording.warehouse':
-      return isId(p['id']) ? { action: a, id: p['id'] } : undefined;
     case 'recording.storage_volume':
       return isStr(p['path']) ? { action: a, path: p['path'] } : undefined;
     case 'recording.volume_create':
@@ -295,7 +284,7 @@ export const VOLUME_PATH =
   /^\/Volumes\/[A-Za-z0-9_-]{1,255}\/[A-Za-z0-9_-]{1,255}\/[A-Za-z0-9_-]{1,255}\/?$/;
 /** A `catalog.schema` pair. */
 export const CATALOG_SCHEMA = /^([A-Za-z0-9_-]{1,255})\.([A-Za-z0-9_-]{1,255})$/;
-/** A serving endpoint name, as the job passes it to `ai_query`. */
+/** A serving endpoint name (`/serving-endpoints/<name>/invocations`). */
 export const ENDPOINT_NAME = /^[A-Za-z0-9_-]{1,63}$/;
 
 function isNotice(v: unknown): v is RecordingNotice {
@@ -333,9 +322,9 @@ function isSettings(v: unknown): v is RecordingSettingsView {
     typeof v['enabled'] === 'boolean' &&
     typeof v['consentAck'] === 'boolean' &&
     isNum(v['lengthMin']) &&
-    isStr(v['endpoint']) &&
-    isStr(v['instructions']) &&
-    (v['warehouseId'] === undefined || isStr(v['warehouseId']))
+    isStr(v['transcribeEndpoint']) &&
+    isStr(v['notesEndpoint']) &&
+    isStr(v['instructions'])
   );
 }
 
@@ -355,15 +344,6 @@ export function asHubRecording(p: unknown): HubRecording | undefined {
   if (!isObj(p) || (p['platform'] !== 'mac' && p['platform'] !== 'windows')) return undefined;
   if (p['settings'] !== undefined && !isSettings(p['settings'])) return undefined;
   if (!isStorage(p['storage']) || !isControl(p['control'])) return undefined;
-  const w = p['warehouses'];
-  if (
-    w !== undefined &&
-    !(
-      Array.isArray(w) &&
-      w.every((i) => isObj(i) && isStr(i['id']) && isStr(i['name']) && isStr(i['state']))
-    )
-  )
-    return undefined;
   if (!optNotice(p['error'])) return undefined;
   if (p['settingsError'] !== undefined && !isStr(p['settingsError'])) return undefined;
   return p as unknown as HubRecording;
@@ -438,6 +418,7 @@ export const STATUS_LABEL: Readonly<Record<RecordingStatus, string>> = {
   recording: 'Recording',
   uploading: 'Uploading',
   transcribing: 'Transcribing',
+  writing_notes: 'Writing notes',
   done: 'Done',
   failed: 'Failed',
 };

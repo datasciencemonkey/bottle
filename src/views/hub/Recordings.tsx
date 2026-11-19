@@ -81,8 +81,7 @@ function groupByDay(rows: RecordingRow[], now: number) {
 }
 
 function Status({ row }: { row: Pick<RecordingRow, 'status'> }) {
-  const busy =
-    row.status === 'uploading' || row.status === 'transcribing' || row.status === 'recording';
+  const busy = row.status !== 'done' && row.status !== 'failed';
   return (
     <span className="rec-status" data-status={row.status}>
       <span className="rec-status-dot" aria-hidden="true" data-busy={busy || undefined} />
@@ -94,10 +93,19 @@ function Status({ row }: { row: Pick<RecordingRow, 'status'> }) {
 const PENDING_TEXT: Partial<Record<RecordingRow['status'], string>> = {
   recording: 'This call is still recording.',
   uploading: 'Bottle is uploading this call. The notes show here when they are ready.',
-  transcribing: 'Databricks is transcribing this call. The notes show here when they are ready.',
+  transcribing: 'Bottle is transcribing this call. The notes show here when they are ready.',
+  writing_notes: 'Bottle is writing the notes. They show here in a moment.',
 };
 
-function Detail({ row, detail }: { row: RecordingRow; detail: HubRecordingDetail | undefined }) {
+function Detail({
+  row,
+  detail,
+  onOpenSettings,
+}: {
+  row: RecordingRow;
+  detail: HubRecordingDetail | undefined;
+  onOpenSettings: (() => void) | undefined;
+}) {
   const d = detail?.id === row.id ? detail : undefined;
   const status = d?.status ?? row.status;
   const error = d?.error ?? row.error;
@@ -127,7 +135,7 @@ function Detail({ row, detail }: { row: RecordingRow; detail: HubRecordingDetail
         )}
       </header>
       {status === 'failed' && error && (
-        <RecordingAlert notice={error} onRetry={retry} onOpen={open} onSettings={undefined} />
+        <RecordingAlert notice={error} onRetry={retry} onOpen={open} onSettings={onOpenSettings} />
       )}
       {PENDING_TEXT[status] && <p className="rec-pending">{PENDING_TEXT[status]}</p>}
       {d === undefined && status === 'done' && (
@@ -170,9 +178,12 @@ export function Recordings({
   active,
   now = Date.now,
   header,
+  onOpenSettings,
 }: {
   active: boolean;
   now?: () => number;
+  /** "Open Settings" in an error moves the hub to Settings. */
+  onOpenSettings?: () => void;
   /** The Record control, above the list. */
   header?: React.ReactNode;
 }) {
@@ -306,7 +317,12 @@ export function Recordings({
           ))}
         </div>
         {selected ? (
-          <Detail key={selected.id} row={selected} detail={detail} />
+          <Detail
+            key={selected.id}
+            row={selected}
+            detail={detail}
+            onOpenSettings={onOpenSettings}
+          />
         ) : (
           <div className="rec-message">
             <p className="rec-message-line">Pick a recording to read its notes.</p>

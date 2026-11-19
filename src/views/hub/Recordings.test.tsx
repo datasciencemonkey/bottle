@@ -118,7 +118,8 @@ describe('Recordings area (hub)', () => {
   });
 
   it('[REC-V14] a failed recording shows its error text and one action in the detail', async () => {
-    const { el } = await render(<Recordings active now={() => NOW} />);
+    const onSettings = vi.fn();
+    const { el } = await render(<Recordings active now={() => NOW} onOpenSettings={onSettings} />);
     await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, list);
     await click(el.querySelector('[data-recording-row="r2"]'));
     await tauri.emitTo('hub', HUB_RECORDING_DETAIL_EVENT, {
@@ -130,6 +131,14 @@ describe('Recordings area (hub)', () => {
     const alert = el.querySelector('[data-recording-detail] [role="alert"]');
     expect(alert?.textContent).toContain(RECORDING_ERRORS.transcribe_endpoint_missing.text);
     await click(alert?.querySelector('button'));
+    expect(onSettings).toHaveBeenCalledTimes(1);
+    await tauri.emitTo('hub', HUB_RECORDING_DETAIL_EVENT, {
+      id: 'r2',
+      status: 'failed',
+      turns: [],
+      error: RECORDING_ERRORS.upload_failed,
+    });
+    await click(el.querySelector('[data-recording-detail] [role="alert"] button'));
     expect(emits().at(-1)).toEqual({ action: 'recordings.retry', id: 'r2' });
   });
 

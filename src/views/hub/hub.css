@@ -1253,6 +1253,25 @@ body {
   margin-top: 8px;
 }
 
+/* Advanced: the two model names, behind one quiet entry point. */
+.rec-advanced {
+  margin-top: 18px;
+}
+
+.hub .rec-advanced summary {
+  color: var(--mog-text-muted);
+}
+
+.hub .rec-advanced summary:hover {
+  color: var(--mog-text);
+}
+
+.rec-fields--inner {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
 /* Instructions. */
 .rec-instructions {
   min-width: 0;

@@ -17,7 +17,6 @@ import {
   type HubRecording,
   type RecordingSettingsView,
   type StorageView,
-  type WarehouseView,
 } from '../../shared/recording-view';
 import { sendRecording } from './recording-ipc';
 
@@ -234,10 +233,11 @@ function Storage({ storage }: { storage: StorageView }) {
   );
 }
 
-function Endpoint({ endpoint }: { endpoint: string }) {
+function Endpoint({ which, endpoint }: { which: 'transcribe' | 'notes'; endpoint: string }) {
   const [text, setText] = useState(endpoint);
   const commit = () => {
-    if (text.trim() !== endpoint) sendRecording({ action: 'recording.endpoint', endpoint: text });
+    if (text.trim() !== endpoint)
+      sendRecording({ action: 'recording.endpoint', which, endpoint: text });
   };
   return (
     <form
@@ -247,8 +247,8 @@ function Endpoint({ endpoint }: { endpoint: string }) {
       }}
     >
       <input
-        id="recording-endpoint"
-        data-recording-endpoint
+        id={`recording-endpoint-${which}`}
+        data-recording-endpoint={which}
         className="rec-wide"
         value={text}
         spellCheck={false}
@@ -296,40 +296,6 @@ function Instructions({ instructions }: { instructions: string }) {
   );
 }
 
-const stateLabel = (s: string) => (s ? s.charAt(0) + s.slice(1).toLowerCase() : s);
-
-function Warehouse({ id, list }: { id: string | undefined; list: WarehouseView[] | undefined }) {
-  return (
-    <div>
-      <select
-        id="recording-warehouse"
-        data-recording-warehouse
-        className="rec-wide"
-        value={id ?? ''}
-        disabled={list === undefined}
-        onChange={(e) => {
-          const v = e.currentTarget.value;
-          if (v !== '') sendRecording({ action: 'recording.warehouse', id: v });
-        }}
-      >
-        <option value="" disabled>
-          {list === undefined
-            ? 'Loading…'
-            : list.length === 0
-              ? 'No warehouses'
-              : 'Pick a warehouse'}
-        </option>
-        {list?.map((w) => (
-          <option key={w.id} value={w.id}>
-            {w.name} ({stateLabel(w.state)})
-          </option>
-        ))}
-      </select>
-      <p className="rec-hint rec-under">{RECORDING_TEXT.warehouseNote}</p>
-    </div>
-  );
-}
-
 export function RecordingSettings({ model }: { model: HubRecording | undefined }) {
   const s = model?.settings;
   return (
@@ -361,11 +327,6 @@ export function RecordingSettings({ model }: { model: HubRecording | undefined }
             <span className="rec-field-label">Save to</span>
             <Storage storage={model.storage} />
 
-            <label className="rec-field-label" htmlFor="recording-endpoint">
-              Notes model
-            </label>
-            <Endpoint key={s.endpoint} endpoint={s.endpoint} />
-
             <label
               className="rec-field-label rec-field-label--top"
               htmlFor="recording-instructions"
@@ -373,12 +334,25 @@ export function RecordingSettings({ model }: { model: HubRecording | undefined }
               Instructions
             </label>
             <Instructions key={s.instructions} instructions={s.instructions} />
-
-            <label className="rec-field-label" htmlFor="recording-warehouse">
-              SQL warehouse
-            </label>
-            <Warehouse id={s.warehouseId} list={model.warehouses} />
           </div>
+          {/* ADR 0103 update 4: the two serving endpoints; most people never change them. */}
+          <details className="hub-disclosure rec-advanced" data-recording-advanced>
+            <summary>Advanced</summary>
+            <div className="rec-fields rec-fields--inner">
+              <label className="rec-field-label" htmlFor="recording-endpoint-transcribe">
+                Transcribe model
+              </label>
+              <Endpoint
+                key={`t-${s.transcribeEndpoint}`}
+                which="transcribe"
+                endpoint={s.transcribeEndpoint}
+              />
+              <label className="rec-field-label" htmlFor="recording-endpoint-notes">
+                Notes model
+              </label>
+              <Endpoint key={`n-${s.notesEndpoint}`} which="notes" endpoint={s.notesEndpoint} />
+            </div>
+          </details>
         </>
       )}
     </section>

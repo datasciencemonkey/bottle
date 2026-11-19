@@ -123,6 +123,7 @@ export function Hub() {
       <Conversations active={view === 'conversations'} onOpen={showConversations} />
       <Recordings
         active={view === 'recordings'}
+        onOpenSettings={openRecordingSettings}
         header={<RecordControl model={recording} onOpenSettings={openRecordingSettings} />}
       />
       <div data-hub-view="home" hidden={view !== 'home'}>
