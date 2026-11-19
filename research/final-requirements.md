@@ -734,7 +734,7 @@ Columns: **ID** · **Pri** (M/S/C) · **Phase** · **Requirement** · **Acceptan
 |---|---|---|---|---|---|---|---|
 | CAP-35a | M | MVP-D | HotkeyService must use a listen-only CGEventTap on a dedicated run-loop thread for PTT on macOS. | The tap type in the build is listen-only. | T · AT-30 | CAP-HK-01, VER claim 10 | UC1 UC2 |
 | CAP-35b | M | MVP-D | HotkeyService must report key-down and key-up for modifier-only keys. | 100 % of key-ups seen in 1,000 cycles. | T · AT-30 | CAP-HK-01 | UC1 UC2 |
-| CAP-36 | M | MVP-D | The app must ask for Input Monitoring, not Accessibility, for PTT after a user action. | Only the Input Monitoring prompt appears for PTT. | T · AT-30 | D70, CAP-HK-02 | UC1 UC2 |
+| CAP-36 | M | MVP-D | The app must ask for Input Monitoring, not Accessibility, for PTT after a user action. | Only the Input Monitoring prompt appears for PTT. | T · AT-30 | D70, CAP-HK-02; ADR 0101 d7 (user 2026-11-19: Bottle also asks once at launch for a permission never asked) | UC1 UC2 |
 | CAP-37 | M | MVP-D | The app must ask for Accessibility only when the user selects text insertion. | No Accessibility prompt appears before the user selects insertion. | T · AT-30 | D70, CAP-HK-03, B5 | UC1 |
 | CAP-38a | M | MVP-D | If the OS disables the event tap, the tap watchdog must start the tap again. | PTT works after a tap timeout. | T · AT-30 | CAP-HK-04 | UC1 UC2 |
 | CAP-38b | M | MVP-D | The tap watchdog must create the tap again on wake, session activation and permission grant. | PTT works after sleep and wake. | T · AT-30 | CAP-HK-04 | UC1 UC2 |

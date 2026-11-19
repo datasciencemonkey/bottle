@@ -1,5 +1,6 @@
 /**
- * The OS permission notice (CAP-36, CAP-37, #552, ADR 0101). Without Input Monitoring, macOS
+ * The OS permission notice (CAP-36, CAP-37, #552, ADR 0101). At launch the host asks once for
+ * each permission that was never asked (ADR 0101 decision 7). Without Input Monitoring, macOS
  * gives Bottle no talk-key events, so a talk-key press does nothing and shows nothing. Without
  * Accessibility, Bottle cannot paste. The brain reads both with `permission_status` (no prompt)
  * at launch and sends the hub the permissions that are missing. The first MOG that opens shows

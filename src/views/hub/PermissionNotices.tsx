@@ -3,7 +3,8 @@
  *
  * The hub asks the brain with `view_emit` when it opens (ARC-2). The brain answers on
  * `hub:permissions` with the permissions that are missing. Each one shows its text, the System
- * Settings path and one control. A click only tells the brain; the brain asks the OS.
+ * Settings path and one control. A click only tells the brain; the brain asks the OS. The hub
+ * asks again each time its window gets focus.
  * TODO(#43): the wizard step 7 mounts this notice too.
  */
 import { listen } from '@tauri-apps/api/event';
@@ -42,9 +43,13 @@ export function PermissionNotices() {
       else off = u;
     });
     ask({ target: PERMISSION_CHECK_TARGET });
+    // Back from System Settings (or from the launch prompt): ask again.
+    const onFocus = () => ask({ target: PERMISSION_CHECK_TARGET });
+    window.addEventListener('focus', onFocus);
     return () => {
       gone = true;
       off?.();
+      window.removeEventListener('focus', onFocus);
     };
   }, []);
 

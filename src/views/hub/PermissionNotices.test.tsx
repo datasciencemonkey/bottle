@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 /** ADR 0101 (#552, CAP-36, CAP-37): the hub notice of a missing OS permission. */
 import { act } from 'react';
-import { render, tauri, viewEmits } from '../test-tauri';
+import type { Root } from 'react-dom/client';
+import { render as mount, tauri, viewEmits } from '../test-tauri';
 import {
   PERMISSION_ALLOW_TARGET,
   PERMISSION_CHECK_TARGET,
@@ -17,6 +18,18 @@ vi.mock('@tauri-apps/api/event', async () => (await import('../test-tauri')).eve
 vi.mock('@tauri-apps/api/window', async () => (await import('../test-tauri')).windowModule);
 
 const buttons = (el: HTMLElement) => [...el.querySelectorAll('button')];
+
+/** Each test unmounts its views, so a focus listener of an old view sends nothing. */
+let roots: Root[] = [];
+async function render(node: Parameters<typeof mount>[0]) {
+  const r = await mount(node);
+  roots.push(r.root);
+  return r;
+}
+afterEach(async () => {
+  for (const r of roots) await act(async () => r.unmount());
+  roots = [];
+});
 
 describe('Permission notices (hub)', () => {
   beforeEach(() => tauri.reset());
@@ -63,6 +76,23 @@ describe('Permission notices (hub)', () => {
       kind: 'click',
       payload: { target: PERMISSION_ALLOW_TARGET, permission: 'input_monitoring' },
     });
+  });
+
+  it('[CAP-36] the hub asks again when its window gets focus (back from System Settings)', async () => {
+    const { root } = await render(<PermissionNotices />);
+    const check = {
+      mogId: PERMISSION_VIEW_ID,
+      kind: 'click',
+      payload: { target: PERMISSION_CHECK_TARGET },
+    };
+    expect(viewEmits()).toEqual([check]);
+    await act(async () => void window.dispatchEvent(new Event('focus')));
+    expect(viewEmits()).toEqual([check, check]);
+    // An unmounted notice no longer listens.
+    await act(async () => root.unmount());
+    roots = roots.filter((r) => r !== root);
+    await act(async () => void window.dispatchEvent(new Event('focus')));
+    expect(viewEmits()).toHaveLength(2);
   });
 
   it('a malformed payload changes nothing', async () => {

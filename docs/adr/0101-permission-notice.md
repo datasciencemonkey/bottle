@@ -1,13 +1,13 @@
-# ADR 0101: Bottle shows a missing OS permission and asks for it after one click
+# ADR 0101: Bottle shows a missing OS permission and asks for it (after a click; at launch since decision 7)
 
-- Status: accepted
+- Status: accepted (amended 2026-11-19: Bottle asks at launch, decision 7)
 - Issue: refs #43, #552 (CAP-36, CAP-37, MOG-08a, UX-37b)
 - Date: 2026-11-19
 - Owner: impl-perm
 
 ## Context
 
-A new macOS build has a new code signature, so macOS treats it as a new app. Without Input
+(This context is from before decision 7.) A new macOS build has a new code signature, so macOS treats it as a new app. Without Input
 Monitoring, the listen-only tap does not start. The talk key then does nothing, and Bottle
 showed nothing. The host never asks on its own (CAP-36). But no view and no brain code read
 the permission state or called `permission_request`. Views call only `view_*` commands
@@ -38,6 +38,26 @@ call it.
    paste". The hub event `hub:permissions` is not a contract row yet (TODO(#525)).
 6. **Both commands run on a worker.** A request can wait for the prompt. A status read can start
    the talk key.
+
+7. **Amendment, 2026-11-19 (user decision).** The user decided: "if you don't have
+   permissions, can we just ask the user? This is something we can check real quick for the
+   user to enable." For these two permissions, this decision replaces the CAP-36 rule that
+   Bottle asks only after a click.
+   - At launch, on a worker thread, `HotkeyHost::prompt_at_launch` asks once for each
+     permission that was never asked. It asks for Input Monitoring first (`IOHIDRequestAccess`),
+     then for Accessibility (`AXIsProcessTrustedWithOptions` with the prompt option). It asks at
+     most once per launch and never in a loop.
+   - macOS has no "never asked" state for Accessibility, only "trusted" or "not trusted". So
+     Bottle asks at each launch while Accessibility is not trusted.
+   - A denied permission gets no launch prompt. The hub and the pop-up then offer Open Settings.
+   - A grant starts the talk key with no restart where macOS allows it. If the tap still does
+     not start, the "quit and reopen Bottle" text stays. The note goes away when the talk key
+     runs.
+   - The launch prompt does not count as a click. Input Monitoring reads denied after a
+     refused prompt, so its first click opens Settings. Accessibility has no denied state, so
+     its first click shows the prompt once more, and a later click opens Settings.
+   - The hub reads the state again when its window gets focus.
+   - `start`, `replace_service` and `install` still never prompt.
 
 ## Consequences
 

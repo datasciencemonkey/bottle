@@ -207,6 +207,10 @@ pub fn run() {
                 // The brain subscribes later; `hotkey:status` is sticky, so it still gets this.
                 hotkey_host::report_unavailable(handle);
             }
+            // ADR 0101 (user decision 2026-11-19): once per launch, ask for each OS permission
+            // that was never asked (macOS Input Monitoring, then Accessibility), on a worker.
+            #[cfg(target_os = "macos")]
+            hotkey_host::prompt_at_launch(handle);
             // R2: one CaptureService per process; its events go to the brain Channel (#425).
             install_capture(handle)?;
             // MB-02: the MOG config store in the app config dir (#25). If the OS gives no app
