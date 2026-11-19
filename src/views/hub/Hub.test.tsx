@@ -68,7 +68,8 @@ describe('V1 hub view', () => {
     await act(async () => (el.querySelector(`li[data-mog="${A}"] button`) as HTMLElement).click());
     // The hub notice (#27, MB-08a) and the MOG list (#26) ask the brain with hub-scope emits
     // (notice.ready, mogs.ready), the CLI step asks with id `cli` (#161), the permission notice
-    // with id `permissions` (ADR 0101); the MOG selection is the rest.
+    // with id `permissions` (ADR 0101) and Conversations with id `conversations` (#103); the MOG
+    // selection is the rest.
     expect(viewEmits()).toContainEqual({
       mogId: 'hub',
       kind: 'click',
@@ -76,8 +77,40 @@ describe('V1 hub view', () => {
     });
     expect(
       viewEmits().filter(
-        (e) => !['hub', 'cli', 'permissions'].includes((e as { mogId: string }).mogId),
+        (e) =>
+          !['hub', 'cli', 'permissions', 'conversations'].includes((e as { mogId: string }).mogId),
       ),
     ).toEqual([{ mogId: A, kind: 'click' }]);
+  });
+});
+
+describe('hub navigation and Conversations (#103)', () => {
+  beforeEach(() => tauri.reset());
+
+  const nav = (el: HTMLElement) =>
+    [...el.querySelectorAll('nav[aria-label="Hub"] button')] as HTMLElement[];
+  const conv = (el: HTMLElement) =>
+    el.querySelector('section[aria-label="Conversations"]') as HTMLElement;
+  const home = (el: HTMLElement) => el.querySelector('[data-hub-view="home"]') as HTMLElement;
+
+  it('[#103] Conversations is the first navigation item; the hub opens on the MOGs and settings', async () => {
+    const { el } = await render(<Hub />);
+    expect(nav(el).map((b) => b.textContent)).toEqual(['Conversations', 'MOGs and settings']);
+    expect(nav(el)[1]?.getAttribute('aria-current')).toBe('page');
+    expect(conv(el).hidden).toBe(true);
+    expect(home(el).hidden).toBe(false);
+    await act(async () => nav(el)[0]?.click());
+    expect(nav(el)[0]?.getAttribute('aria-current')).toBe('page');
+    expect(conv(el).hidden).toBe(false);
+    expect(home(el).hidden).toBe(true);
+    // The product header stays a direct child of main (AT-37).
+    expect(el.querySelector('main > h1')?.textContent).toBe('Bottle');
+  });
+
+  it('[#103] an open from a double-click shows Conversations', async () => {
+    const { el } = await render(<Hub />);
+    await tauri.emitTo('hub', 'hub:conversations.open', {});
+    expect(conv(el).hidden).toBe(false);
+    expect(nav(el)[0]?.getAttribute('aria-current')).toBe('page');
   });
 });

@@ -90,7 +90,7 @@ describe('CLI install step (hub)', () => {
   it('[W-17c] the hub shows the install step first, before the other setup steps', async () => {
     const { el } = await render(<Hub />);
     await tauri.emitTo('hub', CLI_INSTALL_EVENT, offer);
-    const sections = [...el.querySelectorAll('main > section')];
+    const sections = [...el.querySelectorAll('main > [data-hub-view="home"] > section')];
     expect(sections[0]?.getAttribute('data-view')).toBe('cli-install');
   });
 });

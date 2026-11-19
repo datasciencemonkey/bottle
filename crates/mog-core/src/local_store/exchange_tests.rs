@@ -347,3 +347,83 @@ fn mem_32a_exchange_dependents_and_session_exchanges_are_found() {
         assert_eq!(st.access, Access::Brain, "{id}");
     }
 }
+
+// ---- #103: the hub Conversations list reads the newest exchanges of one MOG ------------------
+
+#[test]
+fn hub_103_exchange_recent_lists_newest_first_inside_one_mog() {
+    let t = TempDir::new("103-recent");
+    let s = open(&t);
+    const EXCH_3: &str = "31111111-2222-4333-8444-555555555503";
+    const REQ_3: &str = "41111111-2222-4333-8444-555555555503";
+    exec(&s, "mem.exchange.upsert", home(EXCH_1, REQ_1, T0));
+    let mut failed = home(EXCH_2, REQ_2, T0 + DAY);
+    failed["status"] = json!("failed");
+    for k in [
+        "answerSummary",
+        "keyNumbers",
+        "finalAnswerMd",
+        "deepLink",
+        "completedAt",
+    ] {
+        failed[k] = Value::Null;
+    }
+    exec(&s, "mem.exchange.upsert", failed);
+    let mut other = home(EXCH_3, REQ_3, T0 + 2 * DAY);
+    other["mogId"] = json!(MOG_B);
+    exec(&s, "mem.exchange.upsert", other);
+
+    let got = exec(
+        &s,
+        "mem.exchange.recent",
+        json!({"mogId": MOG_A, "limit": 50}),
+    );
+    let r = rows(&got);
+    // Newest first; MEM-01: the MOG B row is not in the MOG A list.
+    let ids: Vec<&str> = r.iter().map(|x| x["requestId"].as_str().unwrap()).collect();
+    assert_eq!(ids, vec![REQ_2, REQ_1]);
+    assert_eq!(r[0]["status"], "failed");
+    assert_eq!(r[0]["finalAnswerMd"], Value::Null);
+    let a = &r[1];
+    assert_eq!(a["status"], "completed");
+    assert_eq!(a["questionUser"], "What was Q3 revenue?");
+    assert_eq!(a["finalAnswerMd"], ANSWER_MD);
+    assert_eq!(a["profileName"], "test-profile");
+    assert_eq!(a["workspaceHost"], "example.cloud.databricks.com");
+    assert_eq!(a["askedAt"], T0);
+    assert_eq!(a["completedAt"], T0 + 5_000);
+    let kn: Value = serde_json::from_str(a["keyNumbers"].as_str().expect("key numbers")).unwrap();
+    assert_eq!(
+        kn,
+        json!([{"text": "4.2 %", "label": "growth"}, {"text": "$1.3M"}])
+    );
+
+    // The limit caps the rows; the newest stay.
+    let one = exec(
+        &s,
+        "mem.exchange.recent",
+        json!({"mogId": MOG_A, "limit": 1}),
+    );
+    assert_eq!(rows(&one).len(), 1);
+    assert_eq!(rows(&one)[0]["requestId"], REQ_2);
+
+    // A forgotten (soft-deleted) exchange is not listed.
+    s.with_conn(|c| {
+        c.execute(
+            "UPDATE genie_exchange SET deleted_at = ?1 WHERE request_id = ?2",
+            rusqlite::params![T0 + 3 * DAY, REQ_2],
+        )
+    })
+    .unwrap();
+    let after = exec(
+        &s,
+        "mem.exchange.recent",
+        json!({"mogId": MOG_A, "limit": 50}),
+    );
+    assert_eq!(rows(&after).len(), 1);
+
+    // A read the brain runs through mem_local_exec, like mem.exchange.get.
+    let st = super::catalog::find("mem.exchange.recent").expect("recent");
+    assert_eq!(st.access, Access::Brain);
+    assert_eq!(st.kind, super::catalog::Kind::Query);
+}
