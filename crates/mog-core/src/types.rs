@@ -1246,7 +1246,7 @@ pub struct RecordingSummary {
 }
 
 /// One transcript turn. Times are seconds from the start of the recording, across parts.
-/// `speaker` is the ai_transcribe label, with the part as a prefix when there is more than one
+/// `speaker` is the speaker label from the transcribe model, with the part as a prefix when there is more than one
 /// part (for example `2.1`), because the labels of two parts can differ. `text` is user content: `Debug` shows only its size (SEC-16c).
 #[derive(Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

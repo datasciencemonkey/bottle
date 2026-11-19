@@ -42,7 +42,7 @@ Binding decisions for the MVP:
 ### Out of scope for now ("we'll consider later")
 
 UC Pages, Lakebase sync, memory recall and embeddings, the main agent and `bottle-mcp` tools,
-workspace hop and split questions, mascot artwork work, admin/MDM, telemetry export, audit log, cloud ASR, Linux,
+workspace hop and split questions, mascot artwork work, admin/MDM, telemetry export, audit log, cloud ASR for dictation (call recording uses cloud transcription, ADR 0103), Linux,
 signed public installers, and most spikes. Code for some of these is already on main. Leave it alone unless an MVP
 change needs it. Do not open new issues for this work. The non-core issues are being closed with "We'll consider this
 later".
