@@ -17,6 +17,7 @@ pub mod mog_config_host;
 pub mod mog_drag;
 pub mod profiles_host;
 pub mod rate_bucket_host;
+pub mod recording_host;
 pub mod webview_media;
 pub mod window_host;
 pub mod windows;

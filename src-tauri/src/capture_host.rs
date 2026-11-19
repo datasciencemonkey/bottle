@@ -51,6 +51,9 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+/// A receiver of every lease stop (red skeleton).
+pub type StopObserver = Arc<dyn Fn(&Stopped) + Send + Sync>;
+
 /// The brain relay: deliver one core-to-brain item, `false` if no brain listens. The app
 /// passes `BrainChannel::send`, which scrubs each payload (SEC-01).
 pub type BrainRelay = Arc<dyn Fn(&str, Value) -> bool + Send + Sync>;
@@ -656,6 +659,16 @@ impl CaptureHost {
             closed: AtomicBool::new(false),
             levels,
         })
+    }
+
+    /// The core (red skeleton).
+    pub fn service(&self) -> &Arc<CaptureCore> {
+        &self.service
+    }
+
+    /// Red skeleton.
+    pub fn add_stop_observer(&self, _f: StopObserver) {
+        unimplemented!("red")
     }
 
     /// Let the mic backend report a failed stream to the core (ADR 0038, decision 7).
