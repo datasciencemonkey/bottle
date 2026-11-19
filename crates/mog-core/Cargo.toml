@@ -84,6 +84,10 @@ windows-sys = { workspace = true, features = [
   "Win32_UI_WindowsAndMessaging",
 ] }
 
+[dev-dependencies]
+# ADR 0103: an independent FLAC decoder checks the recording encoder in tests only.
+claxon = "0.4"
+
 [target.'cfg(windows)'.dev-dependencies]
 # AT-42 (#139): the harness memory scan test reads the writable pages of its own process.
 windows-sys = { workspace = true, features = [

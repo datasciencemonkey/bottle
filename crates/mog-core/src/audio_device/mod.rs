@@ -60,6 +60,7 @@ mod mic;
 pub mod normalize;
 pub mod ptt_buffer;
 pub mod sink;
+pub mod system;
 
 pub use mic::{FailureLink, MicConfig, MicDevice, MicFault};
 pub use sink::{mix_to_mono, DiscardSink, FrameSink, MicFrame, SinkEvent, ZeroWatch};
