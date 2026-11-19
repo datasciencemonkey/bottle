@@ -30,8 +30,8 @@ views call only `view_*` commands, so the form logic must run in the brain.
 6. The brain (`src/brain/connect-wiring.ts`) owns the form rules and sends the model to the hub
    on `hub:connect_workspace`. The hub view only shows it and sends `view_emit` clicks.
 7. At first run (W-07f) the brain opens the URL step when the hub is ready and `profiles_list`
-   has no supported profile. Until #555 routes `profiles_list`, the call is refused, and the
-   form opens only from its button.
+   has no supported profile (`profiles_list`, routed by #555). If the call fails, the form
+   opens only from its button.
 
 ## Consequences
 

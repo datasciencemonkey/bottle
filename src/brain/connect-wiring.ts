@@ -15,8 +15,8 @@
  * - W-07h: Cancel calls `profile_login_cancel`; "Open the browser again" cancels and signs in
  *   again. A failure shows one fixed Table W-ERR text and one action, never upstream text.
  * - W-07f: when the hub is ready and no usable (`databricks-cli`) profile exists, the form opens
- *   at the URL step. TODO(#555): until the host routes `profiles_list`, the list call is refused
- *   and the form opens only from its button.
+ *   at the URL step (`profiles_list`, routed by #555). If the list call fails, the form opens
+ *   only from its button.
  */
 import { emitTo } from '@tauri-apps/api/event';
 import { CONNECT_EVENT, CONNECT_VIEW_ID, type ConnectModel } from '../shared/connect-view';
