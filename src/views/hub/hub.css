@@ -1,0 +1,693 @@
+/* The hub window (#561): calm, dark-first, system type. Every colour, size and radius comes
+   from ../tokens.css (#559); this file only lays the hub out. Element rules sit under `.hub`, so
+   a new hub section (Wipe, the profile picker) gets the same look without new classes. */
+
+html,
+body {
+  margin: 0;
+  background: var(--mog-surface);
+  color: var(--mog-text);
+  color-scheme: dark;
+}
+
+.hub {
+  box-sizing: border-box;
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 28px 32px 48px;
+  font: var(--mog-text-md) / var(--mog-leading) var(--mog-font);
+  -webkit-font-smoothing: antialiased;
+}
+
+.hub *,
+.hub *::before,
+.hub *::after {
+  box-sizing: border-box;
+}
+
+.hub ::selection {
+  background: var(--mog-lid);
+  color: var(--mog-face);
+}
+
+/* Type: one family, four steps. */
+.hub h1,
+.hub h2,
+.hub h3 {
+  margin: 0;
+  font-weight: 600;
+  line-height: 1.25;
+  text-wrap: balance;
+}
+
+.hub h1 {
+  font-size: 20px;
+  letter-spacing: -0.01em;
+}
+
+.hub h2 {
+  font-size: 15px;
+}
+
+.hub h3 {
+  font-size: var(--mog-text-md);
+}
+
+.hub p {
+  margin: 0 0 8px;
+  max-width: 68ch;
+}
+
+/* A region that is empty now (an alert or a live status) takes no space. */
+.hub p:empty {
+  margin: 0;
+}
+
+.hub-muted,
+.hub legend {
+  color: var(--mog-text-muted);
+}
+
+.hub-error {
+  color: var(--mog-lid);
+}
+
+.hub-draft {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--mog-radius-pill);
+  background: rgb(246 196 99 / 14%);
+  color: var(--mog-spark);
+  font-size: var(--mog-text-sm);
+}
+
+/* Header: the product name and the quiet Labs label (MB-10b), on one line. */
+.hub .hub-title {
+  display: inline-block;
+  margin: 0 10px 20px 0;
+}
+
+.hub .hub-labs {
+  display: inline-block;
+  margin: 0;
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-sm);
+}
+
+/* Sections: space and one hairline, no boxes. */
+.hub-section {
+  padding: 20px 0;
+  border-top: 1px solid var(--mog-edge);
+}
+
+.hub-section > h2 {
+  margin-bottom: 10px;
+}
+
+.hub-mogs {
+  border-top: 0;
+  padding-top: 4px;
+}
+
+/* Controls. */
+.hub button,
+.hub summary,
+.hub input,
+.hub select,
+.hub textarea {
+  font: inherit;
+  color: inherit;
+}
+
+.hub button {
+  min-height: 28px;
+  padding: 0 12px;
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: var(--mog-radius-sm);
+  background: transparent;
+  cursor: pointer;
+  transition:
+    background-color 150ms var(--mog-ease-out),
+    border-color 150ms var(--mog-ease-out);
+}
+
+.hub button:hover {
+  background: rgb(255 255 255 / 6%);
+  border-color: rgb(255 255 255 / 24%);
+}
+
+.hub button:active {
+  background: rgb(255 255 255 / 10%);
+}
+
+.hub button:disabled {
+  opacity: 0.45;
+  cursor: default;
+  background: transparent;
+}
+
+.hub .hub-primary,
+.hub .hub-danger {
+  border-color: transparent;
+  background: var(--mog-accent);
+  color: var(--mog-on-accent);
+  font-weight: 600;
+}
+
+.hub .hub-primary:hover,
+.hub .hub-danger:hover {
+  border-color: transparent;
+  background: var(--mog-accent-hover);
+}
+
+.hub .hub-primary:disabled {
+  opacity: 1;
+  background: rgb(255 255 255 / 8%);
+  color: var(--mog-text-muted);
+}
+
+.hub input[type='text'],
+.hub input:not([type]),
+.hub select,
+.hub textarea {
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: var(--mog-radius-sm);
+  background: rgb(0 0 0 / 24%);
+}
+
+.hub textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+
+.hub input::placeholder,
+.hub textarea::placeholder {
+  color: var(--mog-text-muted);
+  opacity: 0.8;
+}
+
+.hub input[type='checkbox'],
+.hub input[type='radio'] {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--mog-lamp-deep);
+}
+
+/* The ring is a shadow; the transparent outline turns into the system colour in forced-colors
+   (Windows High Contrast), where shadows are dropped (WCAG 2.4.7). */
+.hub :focus-visible {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  box-shadow: var(--mog-focus-ring);
+}
+
+.hub h2:focus-visible {
+  border-radius: var(--mog-radius-sm);
+}
+
+.hub-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.hub-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 4px 0;
+  cursor: pointer;
+}
+
+.hub-check input {
+  margin-top: 2px;
+}
+
+.hub-check label {
+  cursor: pointer;
+}
+
+/* Live moods: a row of quiet chips (empty until a MOG window reports). */
+.hub-live {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.hub-live:empty {
+  display: none;
+}
+
+.hub-live li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.hub .hub-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 0 10px;
+  border-color: transparent;
+  border-radius: var(--mog-radius-pill);
+  background: rgb(255 255 255 / 5%);
+  font-size: var(--mog-text-sm);
+}
+
+.hub-mood-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--mog-text-muted);
+}
+
+.hub-live [data-mood='listening'] .hub-mood-dot,
+.hub-live [data-mood='processing'] .hub-mood-dot {
+  background: var(--mog-eye);
+}
+
+.hub-live [data-mood='error'] .hub-mood-dot {
+  background: var(--mog-lamp);
+}
+
+/* The MOG list: rows on one raised surface, separated by hairlines. */
+.hub-rows {
+  margin: 8px 0 16px;
+  padding: 0;
+  list-style: none;
+  border-radius: var(--mog-radius-md);
+  background: var(--mog-surface-raised);
+}
+
+.hub-rows:empty {
+  display: none;
+}
+
+.hub-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  min-height: 48px;
+  padding: 8px 12px 8px 16px;
+}
+
+.hub-row + .hub-row {
+  border-top: 1px solid rgb(255 255 255 / 6%);
+}
+
+.hub-row-name {
+  font-weight: 600;
+}
+
+.hub-row-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-sm);
+}
+
+.hub-row-state::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.6;
+}
+
+.hub-row[data-running='true'] .hub-row-state::before {
+  background: var(--mog-eye);
+  opacity: 1;
+}
+
+.hub-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* "More": the less used row actions in a small menu under the button. */
+.hub-more {
+  position: relative;
+}
+
+.hub-more summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: var(--mog-radius-sm);
+  color: var(--mog-text-muted);
+  cursor: pointer;
+  list-style: none;
+}
+
+.hub-more summary::-webkit-details-marker {
+  display: none;
+}
+
+.hub-more summary:hover,
+.hub-more[open] summary {
+  color: var(--mog-text);
+  background: rgb(255 255 255 / 6%);
+}
+
+.hub-more-items {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  min-width: 168px;
+  padding: 4px;
+  border: 1px solid var(--mog-edge);
+  border-radius: var(--mog-radius-md);
+  background: var(--mog-surface-raised);
+  box-shadow: var(--mog-shadow);
+}
+
+.hub .hub-more-items button {
+  justify-content: flex-start;
+  border-color: transparent;
+  text-align: left;
+}
+
+.hub .hub-more-items button:last-child {
+  color: var(--mog-lid);
+}
+
+/* The edit form opens under its row. */
+.hub-edit {
+  flex-basis: 100%;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 8px 0 4px;
+  padding: 12px;
+  border-radius: var(--mog-radius-sm);
+  background: rgb(0 0 0 / 18%);
+}
+
+.hub-edit label {
+  color: var(--mog-text-muted);
+}
+
+.hub-edit label:has(+ textarea) {
+  align-self: start;
+  padding-top: 5px;
+}
+
+.hub-edit textarea {
+  align-self: stretch;
+}
+
+.hub-edit .hub-actions {
+  grid-column: 2;
+  margin-top: 4px;
+}
+
+/* The create form: one line. */
+.hub-create {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.hub-create label {
+  color: var(--mog-text-muted);
+}
+
+.hub-create input {
+  flex: 1 1 140px;
+}
+
+/* Modal confirmations (aria-modal): centred over a scrim. */
+.hub-dialog,
+.hub [data-forget-dialog] {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 10;
+  width: min(420px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  padding: 20px;
+  transform: translate(-50%, -50%);
+  border: 1px solid var(--mog-edge);
+  border-radius: var(--mog-radius-md);
+  background: var(--mog-surface-raised);
+  box-shadow:
+    var(--mog-shadow),
+    0 0 0 100vmax rgb(8 10 18 / 55%);
+}
+
+.hub-dialog-title,
+.hub [data-forget-dialog] h2 {
+  margin-bottom: 8px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.hub [data-forget-dialog] > button {
+  margin: 4px 8px 0 0;
+}
+
+/* The Genie One memory note reads as a footnote under the confirm step (MEM-32d). */
+.hub [data-forget-confirm] + p,
+.hub [data-forget-result] ~ p:not([data-forget-other]) {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid rgb(255 255 255 / 8%);
+  color: var(--mog-text-muted);
+}
+
+.hub [data-forget-dialog] [data-genie-one-memory-review] {
+  margin-right: 6px;
+}
+
+.hub [data-forget-confirm] {
+  border-color: transparent;
+  background: var(--mog-accent);
+  color: var(--mog-on-accent);
+  font-weight: 600;
+}
+
+.hub [data-forget-confirm]:hover {
+  border-color: transparent;
+  background: var(--mog-accent-hover);
+}
+
+.hub [data-genie-one-memory-review-url],
+.hub [data-genie-one-delete-url] {
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-sm);
+  word-break: break-all;
+}
+
+.hub [data-genie-one-delete] ul {
+  margin: 8px 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The first-run notice: one centred reading column. */
+.hub--notice {
+  max-width: 600px;
+}
+
+.legal-notice {
+  padding: 24px;
+  border: 1px solid var(--mog-edge);
+  border-radius: var(--mog-radius-md);
+  background: var(--mog-surface-raised);
+  box-shadow: var(--mog-shadow);
+}
+
+.legal-notice:focus {
+  outline: 2px solid transparent;
+}
+
+/* The notice takes focus on open (ADR 0022) so a screen reader reads it; it is not a control,
+   so it draws no ring. Its checkbox and button do. */
+.legal-notice:focus-visible {
+  box-shadow: var(--mog-shadow);
+}
+
+.legal-notice h2 {
+  margin-bottom: 4px;
+  font-size: 17px;
+}
+
+.legal-notice-body {
+  margin: 16px 0;
+}
+
+.legal-notice-body p {
+  margin-bottom: 10px;
+}
+
+.legal-notice .hub-check {
+  margin: 16px 0;
+  padding-top: 16px;
+  border-top: 1px solid rgb(255 255 255 / 8%);
+}
+
+/* Local speech. */
+.hub-status {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--mog-radius-pill);
+  background: rgb(255 255 255 / 6%);
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-sm);
+}
+
+.hub-radios {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  align-items: center;
+  gap: 6px 8px;
+  margin: 8px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.hub-radios legend {
+  grid-column: 1 / -1;
+  margin-bottom: 6px;
+  padding: 0;
+  font-size: var(--mog-text-sm);
+}
+
+.hub-progress {
+  height: 6px;
+  margin: 8px 0 6px;
+  overflow: hidden;
+  border-radius: var(--mog-radius-pill);
+  background: rgb(255 255 255 / 10%);
+}
+
+.hub-progress::before {
+  content: '';
+  display: block;
+  width: var(--hub-progress, 0%);
+  height: 100%;
+  border-radius: inherit;
+  background: var(--mog-eye);
+  transition: width 250ms var(--mog-ease-out);
+}
+
+/* Long reference text sits behind one labelled entry point. */
+.hub-disclosure summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  border-radius: var(--mog-radius-sm);
+  cursor: pointer;
+  list-style: none;
+}
+
+.hub-disclosure summary::-webkit-details-marker {
+  display: none;
+}
+
+/* A drawn chevron, not a glyph. */
+.hub-disclosure summary::after {
+  content: '';
+  width: 6px;
+  height: 6px;
+  margin-top: -2px;
+  border-right: 1.5px solid var(--mog-text-muted);
+  border-bottom: 1.5px solid var(--mog-text-muted);
+  transform: rotate(-45deg);
+  transition: transform 150ms var(--mog-ease-out);
+}
+
+.hub-disclosure[open] summary::after {
+  margin-top: -4px;
+  transform: rotate(45deg);
+}
+
+.hub-disclosure[open] > summary {
+  margin-bottom: 12px;
+}
+
+.hub-disclosure article {
+  margin-bottom: 14px;
+}
+
+.hub-disclosure article h3 {
+  margin-bottom: 4px;
+}
+
+.hub-disclosure article p {
+  margin-bottom: 4px;
+  color: var(--mog-text-muted);
+}
+
+.hub [data-view='about'] .hub-disclosure {
+  margin-top: 12px;
+}
+
+.hub pre[data-notices] {
+  max-height: 320px;
+  margin: 0;
+  overflow: auto;
+  padding: 12px;
+  border-radius: var(--mog-radius-sm);
+  background: rgb(0 0 0 / 24%);
+  color: var(--mog-text-muted);
+  font:
+    var(--mog-text-sm) / 1.5 ui-monospace,
+    'SF Mono',
+    Menlo,
+    Consolas,
+    monospace;
+  white-space: pre-wrap;
+}
+
+/* The home-domain picker (PG-20) under a live chip. */
+.hub [data-domain-picker] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-sm);
+}
+
+.hub [data-domain-picker] p {
+  margin: 0;
+}
+
+/* Scrollbars in the palette. */
+html,
+.hub pre {
+  scrollbar-color: rgb(255 255 255 / 18%) transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hub *,
+  .hub *::before,
+  .hub *::after {
+    transition: none;
+  }
+}

@@ -12,13 +12,20 @@ export function aboutNotices(md: string): string {
 
 export function About() {
   return (
-    <section data-view="about" aria-labelledby="about-title">
+    <section data-view="about" aria-labelledby="about-title" className="hub-section">
       <h2 id="about-title">About Bottle</h2>
-      <p data-label="labs">Databricks Labs / experimental</p>
-      <h3>Third-party notices</h3>
-      <pre data-notices tabIndex={0}>
-        {aboutNotices(notices)}
-      </pre>
+      <p data-label="labs" className="hub-muted">
+        Databricks Labs / experimental
+      </p>
+      {/* SEC-21b: the full notices, one click away. */}
+      <details className="hub-disclosure">
+        <summary>
+          <h3>Third-party notices</h3>
+        </summary>
+        <pre data-notices tabIndex={0}>
+          {aboutNotices(notices)}
+        </pre>
+      </details>
     </section>
   );
 }

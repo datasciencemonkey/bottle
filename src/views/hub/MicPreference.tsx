@@ -47,16 +47,22 @@ export function MicPreference({ settings = appMicSettings }: { settings?: MicSet
   };
 
   return (
-    <section data-view="mic-preference" aria-labelledby="mic-preference-title">
+    <section
+      data-view="mic-preference"
+      aria-labelledby="mic-preference-title"
+      className="hub-section"
+    >
       <h2 id="mic-preference-title">Microphone</h2>
-      <input
-        id="prefer-built-in-mic"
-        type="checkbox"
-        name="preferBuiltInMic"
-        checked={on}
-        onChange={(e) => void toggle(e.currentTarget.checked)}
-      />
-      <label htmlFor="prefer-built-in-mic">{MIC_PREFERENCE_LABEL}</label>
+      <div className="hub-check">
+        <input
+          id="prefer-built-in-mic"
+          type="checkbox"
+          name="preferBuiltInMic"
+          checked={on}
+          onChange={(e) => void toggle(e.currentTarget.checked)}
+        />
+        <label htmlFor="prefer-built-in-mic">{MIC_PREFERENCE_LABEL}</label>
+      </div>
     </section>
   );
 }

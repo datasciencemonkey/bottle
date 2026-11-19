@@ -23,9 +23,14 @@ export function DisclosureList() {
 /** The hub data panel. */
 export function DataPanel() {
   return (
-    <section data-view="data-panel" aria-labelledby="data-panel-title">
-      <h2 id="data-panel-title">Where your data goes</h2>
-      <DisclosureList />
+    <section data-view="data-panel" aria-labelledby="data-panel-title" className="hub-section">
+      {/* SEC-17: every disclosure stays in the panel, behind one labelled entry point. */}
+      <details className="hub-disclosure">
+        <summary>
+          <h2 id="data-panel-title">Where your data goes</h2>
+        </summary>
+        <DisclosureList />
+      </details>
     </section>
   );
 }
