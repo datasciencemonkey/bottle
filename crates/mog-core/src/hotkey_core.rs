@@ -13,10 +13,15 @@
 //! through [`AskKeyControl`]. A press marks the hold as an ask, and its `up` becomes
 //! [`HotkeyOutput::PttAskUp`]. The engine releases the grab on every path that ends the hold.
 //!
+//! Record key (ADR 0103): with the Call recording knob on, the same seam also grabs talk key + R
+//! during the hold. A press marks the hold as a record toggle, and its `up` becomes
+//! [`HotkeyOutput::PttRecordUp`]. With the knob off, R is any other key, as before.
+//!
 //! Requirements: CAP-35b, CAP-36, CAP-37, CAP-38a, CAP-38b, CAP-39a, CAP-39b, CAP-39c, CAP-44a,
 //! CAP-44c, CAP-45, RTR-17a.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -154,6 +159,11 @@ pub enum HotkeyOutput {
     /// ends the PTT as `Ptt(Up)` does; the host adds `ask: true` to the `hotkey.ptt` up. A tap,
     /// a cancel and a double-tap never carry it.
     PttAskUp,
+    /// The talk key came up after a record key press (talk key + R) in the same hold, with the
+    /// Call recording knob on (ADR 0103). It ends the PTT with no dictation and no paste; the
+    /// host turns it into the record toggle. It wins over an ask in the same hold. A tap, a
+    /// cancel and a double-tap never carry it.
+    PttRecordUp,
 }
 
 impl HotkeyOutput {
@@ -539,6 +549,11 @@ pub trait AskKeyControl: Send + Sync {
     /// [`HotkeyEngine::on_ask_key_drained`]. The engine calls it at a key-up with the ask key
     /// grabbed and no G seen yet. It must return fast, as `set_ask_key` must.
     fn drain(&self);
+
+    /// Grab (`true`) or release (`false`) the record key: the talk key + R (ADR 0103). The
+    /// engine calls it only during a talk-key hold with the Call recording knob on. It must
+    /// return fast, as `set_ask_key` must. An OS layer with no record key keeps the default.
+    fn set_record_key(&self, _on: bool) {}
 }
 
 /// The state of the fallback chord registration.
@@ -576,6 +591,12 @@ pub struct HotkeyEngine {
     ask_key_expired: bool,
     /// The time of a talk-key up that waits for the ask-key drain (RTR-17a, review M1).
     pending_up: Option<Duration>,
+    /// The Call recording knob (ADR 0103). None or false: no record key, R is any other key.
+    record_gate: Option<Arc<AtomicBool>>,
+    /// The record key was pressed in this hold (ADR 0103).
+    record: bool,
+    /// The record key is grabbed now.
+    record_key_on: bool,
 }
 
 impl std::fmt::Debug for HotkeyEngine {
@@ -614,6 +635,40 @@ impl HotkeyEngine {
             ask_key_since: None,
             ask_key_expired: false,
             pending_up: None,
+            record_gate: None,
+            record: false,
+            record_key_on: false,
+        }
+    }
+
+    /// The same engine with the Call recording knob `gate` (ADR 0103). While it is true, each
+    /// talk-key hold also grabs the record key through the [`AskKeyControl`] seam.
+    pub fn with_record_gate(mut self, gate: Arc<AtomicBool>) -> Self {
+        self.set_record_gate(gate);
+        self
+    }
+
+    /// Set the Call recording knob `gate` of a built engine (ADR 0103). The next sync reads it.
+    pub fn set_record_gate(&mut self, gate: Arc<AtomicBool>) {
+        self.record_gate = Some(gate);
+    }
+
+    /// The Call recording knob is on now.
+    fn record_knob_on(&self) -> bool {
+        self.record_gate
+            .as_ref()
+            .is_some_and(|g| g.load(Ordering::Relaxed))
+    }
+
+    /// The record key went down (ADR 0103): the grabbed hot key, or the other-key tap that
+    /// compares the key code with R. With the knob on, during a talk-key hold it marks the
+    /// hold as a record toggle and never cancels it. With the knob off, R is any other key
+    /// (CAP-44c). With no hold it does nothing.
+    pub fn on_record_key(&mut self) {
+        if !self.record_knob_on() {
+            self.on_other_key_down();
+        } else if self.machine.held_by == Some(TalkKeyMode::TalkKey) {
+            self.record = true;
         }
     }
 
@@ -646,6 +701,7 @@ impl HotkeyEngine {
         self.ask_key.is_some()
             && self.ask_key_since.is_some()
             && !self.ask
+            && !self.record
             && self.machine.held_by == Some(TalkKeyMode::TalkKey)
             && self
                 .held_since
@@ -836,6 +892,8 @@ impl HotkeyEngine {
             self.ask_key_expired = true;
             self.sync_ask_key();
         }
+        // ADR 0103: a knob change in a hold grabs or releases the record key.
+        self.sync_record_key();
         // Secure Event Input first: it has the 250 ms deadline (CAP-39a).
         if let Some(active) = self.secure.poll(probe.secure_input_active()) {
             ctl.set_chord(active);
@@ -921,6 +979,7 @@ impl HotkeyEngine {
         self.held_since = None;
         self.last_tap_down = None;
         self.ask = false;
+        self.record = false;
         self.emit(out);
     }
 
@@ -930,11 +989,17 @@ impl HotkeyEngine {
     fn emit(&mut self, out: Vec<HotkeyOutput>) {
         for o in out {
             let o = match o {
+                // ADR 0103: a record press wins over an ask in the same hold.
+                HotkeyOutput::Ptt(PttPhase::Up) if std::mem::take(&mut self.record) => {
+                    self.ask = false;
+                    HotkeyOutput::PttRecordUp
+                }
                 HotkeyOutput::Ptt(PttPhase::Up) if std::mem::take(&mut self.ask) => {
                     HotkeyOutput::PttAskUp
                 }
                 HotkeyOutput::Ptt(PttPhase::Down | PttPhase::Cancel) => {
                     self.ask = false;
+                    self.record = false;
                     o
                 }
                 o => o,
@@ -943,6 +1008,7 @@ impl HotkeyEngine {
         }
         if !self.machine.is_held() {
             self.ask = false;
+            self.record = false;
             self.pending_up = None;
         }
         self.sync_ask_key();
@@ -963,12 +1029,32 @@ impl HotkeyEngine {
         if let Some(ctl) = &self.ask_key {
             ctl.set_ask_key(want);
         }
+        self.sync_record_key();
+    }
+
+    /// Grab the record key while the ask key is grabbed and the Call recording knob is on;
+    /// release it otherwise (ADR 0103). Grab and release pair up, as for the ask key.
+    fn sync_record_key(&mut self) {
+        let want = self.ask_key_since.is_some() && self.record_knob_on();
+        if want == self.record_key_on {
+            return;
+        }
+        self.record_key_on = want;
+        if let Some(ctl) = &self.ask_key {
+            ctl.set_record_key(want);
+        }
     }
 }
 
 impl Drop for HotkeyEngine {
-    /// An engine that goes away in a hold releases the ask key (RTR-17a).
+    /// An engine that goes away in a hold releases the ask key (RTR-17a) and the record key
+    /// (ADR 0103).
     fn drop(&mut self) {
+        if std::mem::take(&mut self.record_key_on) {
+            if let Some(ctl) = &self.ask_key {
+                ctl.set_record_key(false);
+            }
+        }
         if self.ask_key_since.take().is_some() {
             if let Some(ctl) = &self.ask_key {
                 ctl.set_ask_key(false);
@@ -981,7 +1067,6 @@ impl Drop for HotkeyEngine {
 mod tests {
     use super::*;
     use crate::clock::{MonotonicClock, SimClock};
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Mutex;
 
     #[derive(Default)]
