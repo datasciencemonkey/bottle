@@ -29,8 +29,17 @@ import {
   type ConversationRow,
   type HubConversations,
 } from '../../shared/hub-conversations';
+import type { ReactNode } from 'react';
 import { SafeMarkdown } from '../card/safe-markdown';
+import { ConversationsSkeleton } from '../ui/motion-effects';
 import { emitView } from '../view-ipc';
+import { motion } from 'motion/react';
+
+/** A thread the composer slot hands to its caller (ui-1, #103): the minimal shape it needs. */
+export interface ComposerThread {
+  requestId: string;
+  profile: string;
+}
 
 const DAY_MS = 86_400_000;
 
@@ -152,12 +161,37 @@ function KeyNumbers({ items }: { items: ConversationRow['keyNumbers'] }) {
   );
 }
 
+/**
+ * The sticky composer slot (ui-1, #103): an optional `composer` render prop fills it; otherwise
+ * it shows only a static hint, never a dead input. impl-followup owns the real composer; this
+ * component only owns the slot's layout and fallback.
+ */
+function ComposerSlot({
+  row,
+  composer,
+}: {
+  row: ConversationRow;
+  composer?: ((thread: ComposerThread) => ReactNode) | undefined;
+}) {
+  return (
+    <div data-slot="thread-composer" className="conv-composer">
+      {composer ? (
+        composer({ requestId: row.requestId, profile: row.profile })
+      ) : (
+        <p className="conv-composer-hint">Hold Right Option and tap G to ask by voice.</p>
+      )}
+    </div>
+  );
+}
+
 function Detail({
   row,
   focusRef,
+  composer,
 }: {
   row: ConversationRow;
   focusRef: React.RefObject<HTMLElement | null>;
+  composer?: ((thread: ComposerThread) => ReactNode) | undefined;
 }) {
   const failed = row.status === 'failed';
   const trust = useMemo(
@@ -165,12 +199,17 @@ function Detail({
     [row.workspaceHost],
   );
   return (
-    <article
+    // BlurFade (ui-1, stands in for Magic UI's BlurFade): the newly selected thread fades and
+    // un-blurs in, instead of popping in with no transition.
+    <motion.article
       ref={focusRef}
       className="conv-detail"
       data-conversation-detail
       tabIndex={-1}
       aria-labelledby={`conv-q-${row.requestId}`}
+      initial={{ opacity: 0, filter: 'blur(4px)' }}
+      animate={{ opacity: 1, filter: 'blur(0px)' }}
+      transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
     >
       <h2 id={`conv-q-${row.requestId}`} className="conv-question">
         {row.question || 'Question not saved'}
@@ -209,7 +248,8 @@ function Detail({
         </p>
       )}
       <KeyNumbers items={row.keyNumbers} />
-    </article>
+      <ComposerSlot row={row} composer={composer} />
+    </motion.article>
   );
 }
 
@@ -226,10 +266,13 @@ export function Conversations({
   active,
   onOpen,
   now = Date.now,
+  composer,
 }: {
   active: boolean;
   onOpen: () => void;
   now?: () => number;
+  /** Fills the sticky composer slot under the detail pane (ui-1, #103); see `ComposerThread`. */
+  composer?: ((thread: ComposerThread) => ReactNode) | undefined;
 }) {
   const { list, selectedId, setSelectedId } = useConversations(onOpen);
   const listRef = useRef<HTMLDivElement>(null);
@@ -287,7 +330,12 @@ export function Conversations({
 
   let body;
   if (list === null) {
-    body = <div className="conv-message" aria-busy="true" />;
+    // ui-1: a visible skeleton instead of a blank aria-busy div (the ui-audit "loading" finding).
+    body = (
+      <div className="conv-message conv-message--loading" aria-busy="true">
+        <ConversationsSkeleton />
+      </div>
+    );
   } else if (list.unavailable && rows.length === 0) {
     body = (
       <Message
@@ -319,8 +367,11 @@ export function Conversations({
               {g.rows.map((r) => {
                 const isSel = r === selected;
                 return (
-                  <div
+                  // `layout` (ui-1, stands in for Magic UI's AnimatedList): the row animates to
+                  // its new position instead of jumping, when the list re-sorts or grows.
+                  <motion.div
                     key={r.requestId}
+                    layout="position"
                     id={optionId(r.requestId)}
                     role="option"
                     aria-selected={isSel}
@@ -342,19 +393,31 @@ export function Conversations({
                         </>
                       )}
                     </span>
-                  </div>
+                  </motion.div>
                 );
               })}
             </div>
           ))}
         </div>
-        {selected && <Detail key={selected.requestId} row={selected} focusRef={detailRef} />}
+        {selected && (
+          <Detail
+            key={selected.requestId}
+            row={selected}
+            focusRef={detailRef}
+            composer={composer}
+          />
+        )}
       </div>
     );
   }
 
   return (
-    <section className="conv" aria-label="Conversations" hidden={!active}>
+    <section
+      className="conv"
+      data-hub-view="conversations"
+      aria-label="Conversations"
+      hidden={!active}
+    >
       {body}
     </section>
   );

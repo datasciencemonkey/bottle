@@ -46,12 +46,17 @@ describe('V1 hub view', () => {
   });
 
   it('[V1] subscribes to mog:view_state and lists each MOG with its mood', async () => {
+    // ui-1 (#97, #103): the live MOG chips moved into the "mogs" area, not shown by default.
     const { el } = await render(<Hub />);
     expect(tauri.listeners('mog:view_state')).toBe(1);
     await tauri.emit('mog:view_state', { mogId: A, mood: 'idle', overlays });
     await tauri.emit('mog:view_state', { mogId: B, mood: 'processing', overlays });
     await tauri.emit('mog:view_state', { mogId: A, mood: 'sleeping', overlays });
     await tauri.emit('mog:view_state', { mogId: 7 });
+    await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-toggle]')?.click());
+    await act(async () =>
+      el.querySelector<HTMLButtonElement>('[data-sidebar-item="mogs"]')?.click(),
+    );
     const rows = [...el.querySelectorAll('li[data-mog]')].map((li) => [
       li.getAttribute('data-mog'),
       li.getAttribute('data-mood'),
@@ -65,11 +70,15 @@ describe('V1 hub view', () => {
   it('[V1] [ARC-2] sends a MOG selection only through view_emit', async () => {
     const { el } = await render(<Hub />);
     await tauri.emit('mog:view_state', { mogId: A, mood: 'idle', overlays });
+    await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-toggle]')?.click());
+    await act(async () =>
+      el.querySelector<HTMLButtonElement>('[data-sidebar-item="mogs"]')?.click(),
+    );
     await act(async () => (el.querySelector(`li[data-mog="${A}"] button`) as HTMLElement).click());
     // The hub notice (#27, MB-08a) and the MOG list (#26) ask the brain with hub-scope emits
     // (notice.ready, mogs.ready), the CLI step asks with id `cli` (#161), the permission notice
-    // with id `permissions` (ADR 0101) and Conversations with id `conversations` (#103); the MOG
-    // selection is the rest.
+    // with id `permissions` (ADR 0101) and Conversations with id `conversations` (#103); the
+    // sidebar area switches are local state (no emit); the MOG selection is the rest.
     expect(viewEmits()).toContainEqual({
       mogId: 'hub',
       kind: 'click',
@@ -86,33 +95,69 @@ describe('V1 hub view', () => {
   });
 });
 
-describe('hub navigation and Conversations (#103)', () => {
-  beforeEach(() => tauri.reset());
+describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
+  beforeEach(() => {
+    tauri.reset();
+    // The pin is the only sidebar choice that persists (use-hub-sidebar.ts); start each test
+    // from the documented default so one test's pin cannot leak into the next.
+    localStorage.clear();
+  });
 
-  const nav = (el: HTMLElement) =>
-    [...el.querySelectorAll('nav[aria-label="Hub"] button')] as HTMLElement[];
+  const toggle = (el: HTMLElement) => el.querySelector<HTMLButtonElement>('[data-sidebar-toggle]');
+  const items = (el: HTMLElement) => [...el.querySelectorAll<HTMLElement>('[data-sidebar-item]')];
   const conv = (el: HTMLElement) =>
     el.querySelector('section[aria-label="Conversations"]') as HTMLElement;
-  const home = (el: HTMLElement) => el.querySelector('[data-hub-view="home"]') as HTMLElement;
 
-  it('[#103] Conversations is the first navigation item; the hub opens on the MOGs and settings', async () => {
+  it('[#103] the sidebar is hidden by default; the hub opens on Conversations', async () => {
     const { el } = await render(<Hub />);
-    expect(nav(el).map((b) => b.textContent)).toEqual(['Conversations', 'MOGs and settings']);
-    expect(nav(el)[1]?.getAttribute('aria-current')).toBe('page');
-    expect(conv(el).hidden).toBe(true);
-    expect(home(el).hidden).toBe(false);
-    await act(async () => nav(el)[0]?.click());
-    expect(nav(el)[0]?.getAttribute('aria-current')).toBe('page');
+    expect(el.querySelector('[data-sidebar]')).toBeNull();
     expect(conv(el).hidden).toBe(false);
-    expect(home(el).hidden).toBe(true);
+    expect(el.querySelector('.hub-area-title')?.textContent).toBe('Conversations');
     // The product header stays a direct child of main (AT-37).
     expect(el.querySelector('main > h1')?.textContent).toBe('Bottle');
+    expect(el.querySelector('main > p')?.textContent).toBe('Databricks Labs / experimental');
+  });
+
+  it('[#103] the toggle opens the sidebar with Conversations, MOGs and Settings', async () => {
+    const { el } = await render(<Hub />);
+    await act(async () => toggle(el)?.click());
+    expect(el.querySelector('[data-sidebar]')).not.toBeNull();
+    expect(items(el).map((b) => b.textContent)).toEqual(['Conversations', 'MOGs', 'Settings']);
+    expect(items(el)[0]?.getAttribute('aria-current')).toBe('page');
+  });
+
+  it('[#103] picking an area switches it and keeps the content column stable', async () => {
+    const { el } = await render(<Hub />);
+    await act(async () => toggle(el)?.click());
+    await act(async () => items(el)[1]?.click());
+    expect(el.querySelector('.hub-area-title')?.textContent).toBe('MOGs');
+    expect(conv(el).hidden).toBe(true);
+    expect(el.querySelector('[data-hub-view="mogs"]')).not.toBeNull();
+  });
+
+  it('[#103] Esc hides the sidebar; a pin keeps it open across Esc', async () => {
+    const { el } = await render(<Hub />);
+    await act(async () => toggle(el)?.click());
+    expect(el.querySelector('[data-sidebar]')).not.toBeNull();
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(el.querySelector('[data-sidebar]')).toBeNull();
+
+    await act(async () => toggle(el)?.click());
+    await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-pin]')?.click());
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(el.querySelector('[data-sidebar]')).not.toBeNull();
   });
 
   it('[#103] an open from a double-click shows Conversations', async () => {
     const { el } = await render(<Hub />);
+    await act(async () => toggle(el)?.click());
+    await act(async () => items(el)[2]?.click());
+    expect(conv(el).hidden).toBe(true);
     await tauri.emitTo('hub', 'hub:conversations.open', {});
     expect(conv(el).hidden).toBe(false);
-    expect(nav(el)[0]?.getAttribute('aria-current')).toBe('page');
   });
 });

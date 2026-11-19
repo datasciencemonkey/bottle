@@ -1,4 +1,5 @@
 /** V1 hub view (thin): lists the MOGs the brain reports and sends selections with view_emit. */
+import { PanelLeftIcon } from 'lucide-react';
 import { useCallback, useState } from 'react';
 import type { MogId } from '../../shared/interfaces';
 import { DomainPicker } from '../DomainPicker';
@@ -11,19 +12,23 @@ import {
   type MogViewState,
 } from '../view-ipc';
 import { About } from './About';
+import { Button } from '../ui/button';
 import { CliInstallStep } from './CliInstallStep';
 import { CliSettings } from './CliSettings';
 import { ConnectWorkspace } from './ConnectWorkspace';
 import { Conversations } from './Conversations';
 import { DataPanel } from './DataDisclosures';
 import { DictationNotices } from './DictationNotices';
+import { ForgetDialogHost } from './ForgetDialogHost';
+import { HubSidebar } from './HubSidebar';
 import { LegalNotice } from './LegalNotice';
 import { MicPreference } from './MicPreference';
-import { ForgetDialogHost } from './ForgetDialogHost';
 import { MogList } from './MogList';
+import { DEFAULT_HUB_VIEW, NAV_ITEMS, type HubView } from './nav';
 import { PermissionNotices } from './PermissionNotices';
 import { SttSetupStep } from './SttSetupStep';
 import { StoreNotice } from './StoreNotice';
+import { useHubSidebar } from './use-hub-sidebar';
 import { WipeSettings } from './WipeSettings';
 
 /**
@@ -39,34 +44,65 @@ function HubHeader() {
   );
 }
 
-type HubView = 'conversations' | 'home';
-
-/** The hub navigation (#103): Conversations first, then the MOGs and settings. */
-function HubNav({ view, onView }: { view: HubView; onView: (v: HubView) => void }) {
-  const item = (v: HubView, label: string) => (
-    <button
-      type="button"
-      className="hub-nav-item"
-      aria-current={view === v ? 'page' : undefined}
-      onClick={() => onView(v)}
-    >
-      {label}
-    </button>
-  );
+/** The setup steps (ui-1, #97, #103): shown above every area while a step is pending. Each of
+    these already renders nothing (or a quiet status line) once its step clears. */
+function SetupRegion() {
   return (
-    <nav aria-label="Hub" className="hub-nav">
-      {item('conversations', 'Conversations')}
-      {item('home', 'MOGs and settings')}
-    </nav>
+    <div data-setup-region>
+      {/* ADR 0101 (CAP-36, CAP-37): a missing OS permission shows first; without Input
+          Monitoring the talk key does nothing. */}
+      <PermissionNotices />
+      {/* W-17c (#161): the CLI install step comes before the workspace setup. */}
+      <CliInstallStep />
+      <DictationNotices />
+      {/* #162 (W-07f): the brain opens it at first run when no usable profile exists. */}
+      <ConnectWorkspace />
+    </div>
+  );
+}
+
+/** The 'mogs' area: the live mood chips, the MOG list and its dialogs (#26, #103). */
+function MogsArea({ mogs }: { mogs: ReadonlyMap<MogId, MogViewState> }) {
+  return (
+    <section data-hub-view="mogs">
+      <ul aria-label="MOGs" className="hub-live">
+        {[...mogs].map(([id, s]) => (
+          <li key={id} data-mog={id} data-mood={s.mood}>
+            <button type="button" className="hub-chip" onClick={() => void emitView(id, 'click')}>
+              <span className="hub-mood-dot" aria-hidden="true" />
+              MOG {id.slice(0, 8)} <span className="hub-muted">({s.mood})</span>
+            </button>
+            {s.homeDomain && <DomainPicker mogId={id} picker={s.homeDomain} />}
+          </li>
+        ))}
+      </ul>
+      <MogList />
+      <ForgetDialogHost />
+    </section>
+  );
+}
+
+/** The 'settings' area (#97, #103): one grouped, consistently spaced settings pane. */
+function SettingsArea() {
+  return (
+    <section data-hub-view="settings" aria-label="Settings">
+      <MicPreference />
+      <SttSetupStep />
+      <WipeSettings />
+      <CliSettings />
+      <DataPanel />
+      <About />
+    </section>
   );
 }
 
 export function Hub() {
-  // The hub opens on the MOGs and settings, where the first-run steps are. A double-click on the
-  // MOG or the card opens Conversations (#103).
-  const [view, setView] = useState<HubView>('home');
+  // ui-1 (#97, #103): Conversations is the area the hub opens on; the Setup region (above) shows
+  // first-run steps on every area, so the old "home" area's special-casing is gone.
+  const [view, setView] = useState<HubView>(DEFAULT_HUB_VIEW);
   const showConversations = useCallback(() => setView('conversations'), []);
   const [mogs, setMogs] = useState<ReadonlyMap<MogId, MogViewState>>(new Map());
+  const sidebar = useHubSidebar();
 
   const onState = useCallback((p: unknown) => {
     const s = asMogViewState(p);
@@ -93,42 +129,39 @@ export function Hub() {
     );
   }
 
-  // TODO(#43, #77): the wizard and settings.
+  const activeLabel = NAV_ITEMS.find((i) => i.id === view)?.label ?? '';
+
+  // TODO(#43): the onboarding wizard.
   return (
     <main className={view === 'conversations' ? 'hub hub--wide' : 'hub'}>
       <HubHeader />
+      {/* ADR 0105: why macOS asks for the password, or that history is off. Stays a direct
+          sibling of the header, outside the sidebar and every area, so it shows regardless of
+          which area or sidebar state is active. */}
       <StoreNotice />
-      <HubNav view={view} onView={setView} />
-      <Conversations active={view === 'conversations'} onOpen={showConversations} />
-      <div data-hub-view="home" hidden={view !== 'home'}>
-        {/* ADR 0101 (CAP-36, CAP-37): a missing OS permission shows first; without Input
-            Monitoring the talk key does nothing. */}
-        <PermissionNotices />
-        {/* W-17c (#161): the CLI install step comes before the workspace setup. */}
-        <CliInstallStep />
-        <DictationNotices />
-        {/* #162 (W-07f): the brain opens it at first run when no usable profile exists. */}
-        <ConnectWorkspace />
-        {/* The live moods the MOG windows report: one quiet chip per MOG (empty until one runs). */}
-        <ul aria-label="MOGs" className="hub-live">
-          {[...mogs].map(([id, s]) => (
-            <li key={id} data-mog={id} data-mood={s.mood}>
-              <button type="button" className="hub-chip" onClick={() => void emitView(id, 'click')}>
-                <span className="hub-mood-dot" aria-hidden="true" />
-                MOG {id.slice(0, 8)} <span className="hub-muted">({s.mood})</span>
-              </button>
-              {s.homeDomain && <DomainPicker mogId={id} picker={s.homeDomain} />}
-            </li>
-          ))}
-        </ul>
-        <MogList />
-        <ForgetDialogHost />
-        <MicPreference />
-        <SttSetupStep />
-        <WipeSettings />
-        <CliSettings />
-        <DataPanel />
-        <About />
+      <div className="hub-body">
+        <HubSidebar state={sidebar} view={view} onView={setView} />
+        <div className="hub-content">
+          <div className="hub-area-header">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-7 shrink-0"
+              data-sidebar-toggle
+              aria-pressed={sidebar.visible}
+              onClick={sidebar.toggleVisible}
+            >
+              <PanelLeftIcon className="size-4" />
+              <span className="sr-only">Toggle the sidebar (⌘\\ or ⌘B)</span>
+            </Button>
+            <h2 className="hub-area-title">{activeLabel}</h2>
+          </div>
+          <SetupRegion />
+          <Conversations active={view === 'conversations'} onOpen={showConversations} />
+          {view === 'mogs' && <MogsArea mogs={mogs} />}
+          {view === 'settings' && <SettingsArea />}
+        </div>
       </div>
     </main>
   );

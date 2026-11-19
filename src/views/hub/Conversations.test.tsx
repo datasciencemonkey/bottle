@@ -247,3 +247,37 @@ describe('hub Conversations (#103)', () => {
     expect(onOpen).not.toHaveBeenCalled();
   });
 });
+
+describe('the sticky composer slot (ui-1, #103)', () => {
+  beforeEach(() => tauri.reset());
+
+  const composerSlot = (el: HTMLElement) =>
+    el.querySelector('[data-slot="thread-composer"]') as HTMLElement;
+
+  it('shows only a static hint when no composer is passed; never a dead input', async () => {
+    const { el } = await mount();
+    await tauri.emitTo('hub', 'hub:conversations', { rows });
+    const slot = composerSlot(el);
+    expect(slot.textContent).toBe('Hold Right Option and tap G to ask by voice.');
+    expect(slot.querySelector('input, textarea, button')).toBeNull();
+  });
+
+  it('fills the slot with the composer prop, given the selected thread (requestId, profile)', async () => {
+    const seen: { requestId: string; profile: string }[] = [];
+    const { el } = await render(
+      <Conversations
+        active
+        onOpen={vi.fn()}
+        now={() => NOW}
+        composer={(thread) => {
+          seen.push(thread);
+          return <button type="button">Ask about this</button>;
+        }}
+      />,
+    );
+    await tauri.emitTo('hub', 'hub:conversations', { rows });
+    const slot = composerSlot(el);
+    expect(slot.querySelector('button')?.textContent).toBe('Ask about this');
+    expect(seen).toEqual([{ requestId: rows[0]?.requestId, profile: rows[0]?.profile }]);
+  });
+});
