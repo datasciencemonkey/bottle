@@ -1094,7 +1094,7 @@ mod tests {
     fn cap_51c_the_app_hotkey_install_wires_the_r4_preload() {
         let src = include_str!("hotkey_host.rs");
         let install = &src[src
-            .find("    let talk_now = TalkNow::new(")
+            .find("    let (sink, rx) = queue();")
             .expect("the install")..];
         let install = &install[..install
             .find("let sink: Arc<dyn HotkeySink>")
@@ -1107,104 +1107,76 @@ mod tests {
     }
 
     #[test]
-    fn rtr_17a_ptt_down_with_shift_held_carries_shift() {
+    fn rtr_17a_an_ask_up_carries_ask_true() {
         let target = Arc::new(PttTarget::default());
         target.set("a1");
-        let (f, brain, _) = forwarder(&target);
-        let mut f = f.with_shift_probe(Box::new(|| true));
+        let (mut f, brain, _) = forwarder(&target);
         f.on_output(HotkeyOutput::Ptt(PttPhase::Down));
-        f.on_output(HotkeyOutput::Ptt(PttPhase::Up));
-        assert_eq!(
-            brain.items(),
-            vec![
-                (
-                    "hotkey:ptt".to_owned(),
-                    json!({ "mogId": "a1", "phase": "down", "shift": true })
-                ),
-                ptt("a1", "up")
-            ]
-        );
-    }
-
-    #[test]
-    fn rtr_17a_a_chord_ptt_down_never_carries_shift() {
-        // Under Secure Event Input the talk key is Ctrl+Shift+Space (CAP-39b), so Shift is
-        // always down for a chord PTT. It must not force the ask route.
-        let target = Arc::new(PttTarget::default());
-        target.set("a1");
-        let (f, brain, _) = forwarder(&target);
-        let mut f = f.with_shift_probe(Box::new(|| true));
-        f.on_output(HotkeyOutput::TalkKeyPaused);
-        f.on_output(HotkeyOutput::Ptt(PttPhase::Down));
-        f.on_output(HotkeyOutput::Ptt(PttPhase::Up));
-        // The chord failed to register, then registered: still chord mode.
-        f.on_output(HotkeyOutput::FallbackChordUnavailable);
-        f.on_output(HotkeyOutput::TalkKeyPaused);
-        f.on_output(HotkeyOutput::Ptt(PttPhase::Down));
-        f.on_output(HotkeyOutput::Ptt(PttPhase::Up));
-        // The talk key is back: Shift counts again.
-        f.on_output(HotkeyOutput::TalkKeyRestored);
-        f.on_output(HotkeyOutput::Ptt(PttPhase::Down));
+        f.on_output(HotkeyOutput::PttAskUp);
         assert_eq!(
             brain.items(),
             vec![
                 ptt("a1", "down"),
-                ptt("a1", "up"),
-                ptt("a1", "down"),
-                ptt("a1", "up"),
                 (
                     "hotkey:ptt".to_owned(),
-                    json!({ "mogId": "a1", "phase": "down", "shift": true })
+                    json!({ "mogId": "a1", "phase": "up", "ask": true })
                 ),
             ]
         );
     }
 
     #[test]
-    fn rtr_17a_the_shift_probe_reads_the_talk_key_now() {
-        let talk = TalkNow::new(TalkBinding::RightOption);
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let s2 = Arc::clone(&seen);
-        let probe = talk.probe(move |t| {
-            s2.lock().unwrap().push(t);
-            t != TalkBinding::RightShift
-        });
-        assert!(probe());
-        talk.set(TalkBinding::RightShift);
-        assert!(!probe());
-        assert_eq!(
-            *seen.lock().unwrap(),
-            vec![TalkBinding::RightOption, TalkBinding::RightShift]
-        );
-    }
-
-    #[test]
-    fn rtr_17a_cap_43a_a_new_talk_key_reaches_the_shift_probe() {
-        let app = tauri::test::mock_app();
-        let factory = FakeFactory::default();
-        let f2 = factory.clone();
-        let settings = settings_with(
-            MemorySettingsStore::default(),
-            Box::new(AppTalkKey(app.handle().clone())),
-        );
-        install_with(app.handle(), settings, move |k, _| f2.make(k)).unwrap();
-        let rt = app.state::<HotkeyRuntime>();
-        assert_eq!(rt.talk_now.get(), TalkBinding::RightOption);
-        let input: mog_core::ipc::JsonObject =
-            serde_json::from_value(serde_json::json!({ "ptt": "RightShift" })).unwrap();
-        app.state::<HotkeySettings>().set(&input).unwrap();
-        assert_eq!(rt.talk_now.get(), TalkBinding::RightShift);
-        shutdown(app.handle());
-    }
-
-    #[test]
-    fn rtr_17a_ptt_down_without_shift_keeps_the_plain_payload() {
+    fn rtr_17a_only_an_ask_up_carries_ask() {
         let target = Arc::new(PttTarget::default());
         target.set("a1");
-        let (f, brain, _) = forwarder(&target);
-        let mut f = f.with_shift_probe(Box::new(|| false));
+        let (mut f, brain, _) = forwarder(&target);
+        // A plain hold, a cancel, two taps that make a double-tap, and a chord hold.
         f.on_output(HotkeyOutput::Ptt(PttPhase::Down));
-        assert_eq!(brain.items(), vec![ptt("a1", "down")]);
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Up));
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Down));
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Cancel));
+        f.on_output(HotkeyOutput::Tap);
+        f.on_output(HotkeyOutput::Ptt(PttPhase::DoubleTap));
+        f.on_output(HotkeyOutput::TalkKeyPaused);
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Down));
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Up));
+        let items = brain.items();
+        assert_eq!(
+            items,
+            vec![
+                ptt("a1", "down"),
+                ptt("a1", "up"),
+                ptt("a1", "down"),
+                ptt("a1", "cancel"),
+                ptt("a1", "double_tap"),
+                ptt("a1", "down"),
+                ptt("a1", "up"),
+            ]
+        );
+        assert!(items.iter().all(|(_, p)| p.get("ask").is_none()));
+        assert!(items.iter().all(|(_, p)| p.get("shift").is_none()));
+    }
+
+    #[test]
+    fn rtr_17a_an_ask_up_goes_to_the_mog_of_the_press() {
+        let target = Arc::new(PttTarget::default());
+        target.set("a1");
+        let (mut f, brain, _) = forwarder(&target);
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Down));
+        target.set("b2");
+        f.on_output(HotkeyOutput::PttAskUp);
+        // An ask up with no press sends nothing.
+        f.on_output(HotkeyOutput::PttAskUp);
+        assert_eq!(
+            brain.items(),
+            vec![
+                ptt("a1", "down"),
+                (
+                    "hotkey:ptt".to_owned(),
+                    json!({ "mogId": "a1", "phase": "up", "ask": true })
+                ),
+            ]
+        );
     }
 
     #[test]

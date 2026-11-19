@@ -79,15 +79,18 @@ function setup(decision: RouterDecision | Error, over: Partial<UtteranceHandlerD
 }
 
 describe('the utterance hook of the capture lifecycle (#59, #73)', () => {
-  it('[RTR-01c] [MOG-13a] a dictation is owned by the key-down MOG, inserted there, then released', async () => {
+  it('[RTR-01c] [MOG-13a] a dictation is owned by the key-down MOG, inserted there, and its fallback chip goes to onAsk', async () => {
     const s = setup(dictation);
     await s.handle(captured());
     expect(s.calls).toEqual(['route', 'insert_text']);
     expect(s.routed[0]).toMatchObject({ text: SENTENCE, mogId: A });
     expect(s.inserted).toEqual([{ mogId: A, text: SENTENCE }]);
-    expect(s.asks).toEqual([]);
-    // The exchange is done: the owner is dropped (utt-1 was the only utterance).
-    expect(s.owner.ownerOf('utt-1')).toBeUndefined();
+    // ADR 0098: the pop-up's Ask Genie fallback of the exact dictated text. T3 releases the owner.
+    expect(s.asks).toHaveLength(1);
+    expect(s.asks[0]).toMatchObject({
+      mogId: A,
+      r: { route: 'chip', decision: { genie_question: SENTENCE }, dictated: { route: 'inserted' } },
+    });
   });
 
   it('[MOG-13a] an utterance of a MOG that is no longer open is not routed', async () => {
@@ -97,17 +100,21 @@ describe('the utterance hook of the capture lifecycle (#59, #73)', () => {
     expect(s.calls).toEqual([]);
   });
 
-  it('[RTR-17a] [RTR-17b] [MOG-13a] a forced ask goes to the preview with its live owner', async () => {
-    const s = setup(dictation);
+  it('[RTR-17a] [RTR-17b] [MOG-13a] an ⌥G ask goes to onAsk with the exact text and its live owner', async () => {
+    const done: UtteranceRoute[] = [];
+    const s = setup(dictation, { onDone: (r) => void done.push(r) });
     await s.handle(captured({ mogId: B, forceAsk: true }));
     expect(s.calls).toEqual(['route']);
+    expect(s.inserted).toEqual([]);
     expect(s.asks).toHaveLength(1);
     expect(s.asks[0]).toMatchObject({
       utteranceId: 'utt-1',
       mogId: B,
-      r: { route: 'preview', forced: true, previewMs: 1500 },
+      r: { route: 'ask', question: SENTENCE },
     });
-    // T3 owns the preview now, so the owner stays until T3 releases it.
+    // Nothing is dictated, so nothing goes to the Copy card.
+    expect(done).toEqual([]);
+    // T3 owns the ask now, so the owner stays until T3 releases it.
     expect(s.owner.ownerOf('utt-1')).toBe(B);
   });
 

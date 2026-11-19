@@ -1750,4 +1750,300 @@ mod tests {
         assert!(!m.is_held());
         assert_eq!(m.on_talk_key(Up), vec![]);
     }
+
+    // ---- RTR-17a (ADR 0098): the talk key + G marks the hold as an ask ----
+
+    /// The ask-key seam double: it records each register (`true`) and unregister (`false`).
+    #[derive(Default)]
+    struct RecAskKey(Mutex<Vec<bool>>);
+    impl AskKeyControl for RecAskKey {
+        fn set_ask_key(&self, on: bool) {
+            self.0.lock().unwrap().push(on);
+        }
+    }
+    impl RecAskKey {
+        fn take(&self) -> Vec<bool> {
+            std::mem::take(&mut *self.0.lock().unwrap())
+        }
+    }
+
+    fn ask_engine() -> (Arc<RecSink>, SimClock, Arc<RecAskKey>, HotkeyEngine) {
+        let (sink, clock, e) = engine_at_zero();
+        let keys = Arc::new(RecAskKey::default());
+        let e = e.with_ask_key(keys.clone());
+        (sink, clock, keys, e)
+    }
+
+    use HotkeyOutput::PttAskUp;
+
+    #[test]
+    fn rtr_17a_g_during_the_hold_puts_ask_on_the_up() {
+        for ms in [300u64, 1_500, 30_000] {
+            let (sink, clock, _keys, mut e) = ask_engine();
+            e.on_talk_key(Down);
+            clock.advance(Duration::from_millis(ms));
+            e.on_ask_key();
+            assert!(e.machine().is_held(), "{ms} ms");
+            clock.advance(Duration::from_millis(400));
+            e.on_talk_key(Up);
+            assert_eq!(sink.take(), vec![Ptt(PDown), PttAskUp], "{ms} ms");
+        }
+    }
+
+    #[test]
+    fn rtr_17a_a_hold_without_g_is_a_plain_up_and_the_flag_is_per_hold() {
+        let (sink, clock, _keys, mut e) = ask_engine();
+        e.on_talk_key(Down);
+        clock.advance(Duration::from_millis(400));
+        e.on_talk_key(Up);
+        e.on_talk_key(Down);
+        e.on_ask_key();
+        clock.advance(Duration::from_millis(400));
+        e.on_talk_key(Up);
+        // The next hold has no G: no ask.
+        e.on_talk_key(Down);
+        clock.advance(Duration::from_millis(400));
+        e.on_talk_key(Up);
+        assert_eq!(
+            sink.take(),
+            vec![
+                Ptt(PDown),
+                Ptt(PUp),
+                Ptt(PDown),
+                PttAskUp,
+                Ptt(PDown),
+                Ptt(PUp)
+            ]
+        );
+    }
+
+    #[test]
+    fn rtr_17a_an_early_g_from_both_paths_marks_the_ask_once() {
+        // The race: G comes at 0 ms, before the Carbon hot key is registered. The other-key
+        // tap reports it, then the hot key reports a repeat. Both set the same flag.
+        let (sink, clock, _keys, mut e) = ask_engine();
+        e.on_talk_key(Down);
+        e.on_ask_key();
+        e.on_ask_key();
+        assert!(e.machine().is_held());
+        clock.advance(Duration::from_millis(600));
+        e.on_talk_key(Up);
+        assert_eq!(sink.take(), vec![Ptt(PDown), PttAskUp]);
+    }
+
+    #[test]
+    fn rtr_17a_g_with_no_hold_does_nothing() {
+        let (sink, clock, keys, mut e) = ask_engine();
+        e.on_ask_key();
+        assert_eq!(sink.take(), vec![]);
+        assert_eq!(keys.take(), Vec::<bool>::new());
+        e.on_talk_key(Down);
+        clock.advance(Duration::from_millis(400));
+        e.on_talk_key(Up);
+        assert_eq!(sink.take(), vec![Ptt(PDown), Ptt(PUp)]);
+    }
+
+    #[test]
+    fn rtr_17a_a_tap_a_cancel_and_a_double_tap_never_carry_ask() {
+        let (sink, clock, _keys, mut e) = ask_engine();
+        // A tap with G: still a tap (CAP-44a).
+        e.on_talk_key(Down);
+        e.on_ask_key();
+        clock.advance(Duration::from_millis(100));
+        e.on_talk_key(Up);
+        // The second tap makes a double-tap.
+        clock.advance(Duration::from_millis(100));
+        e.on_talk_key(Down);
+        e.on_ask_key();
+        clock.advance(Duration::from_millis(100));
+        e.on_talk_key(Up);
+        // A CAP-44c cancel after G.
+        clock.advance(Duration::from_secs(2));
+        e.on_talk_key(Down);
+        e.on_ask_key();
+        e.on_other_key_down();
+        e.on_talk_key(Up);
+        let out = sink.take();
+        assert!(!out.contains(&PttAskUp), "{out:?}");
+        assert!(out.contains(&Ptt(PttPhase::DoubleTap)), "{out:?}");
+        assert_eq!(out.last(), Some(&Ptt(Cancel)), "{out:?}");
+    }
+
+    #[test]
+    fn rtr_17a_a_chord_hold_never_asks() {
+        let (sink, clock, keys, mut e) = ask_engine();
+        let probe = FakeProbe::ready();
+        let ctl = FakeCtl::default();
+        *probe.secure.lock().unwrap() = true;
+        e.tick(clock.now(), &probe, &ctl);
+        e.on_chord(Down);
+        e.on_ask_key();
+        clock.advance(TAP_MAX_HOLD);
+        e.on_chord(Up);
+        assert_eq!(sink.take(), vec![TalkKeyPaused, Ptt(PDown), Ptt(PUp)]);
+        // No ask key under Secure Event Input: the chord drives PTT.
+        assert_eq!(keys.take(), Vec::<bool>::new());
+    }
+
+    // ---- CAP-44c (ADR 0098): G does not cancel; every other key still cancels ----
+
+    #[test]
+    fn cap_44c_g_in_the_first_second_does_not_cancel() {
+        for ms in [0u64, 300, 999] {
+            let (sink, clock, _keys, mut e) = ask_engine();
+            e.on_talk_key(Down);
+            clock.advance(Duration::from_millis(ms));
+            e.on_ask_key();
+            assert!(e.machine().is_held(), "{ms} ms");
+            clock.advance(Duration::from_millis(500));
+            e.on_talk_key(Up);
+            assert_eq!(sink.take(), vec![Ptt(PDown), PttAskUp], "{ms} ms");
+        }
+    }
+
+    #[test]
+    fn cap_44c_another_key_still_cancels_in_an_ask_hold() {
+        let (sink, clock, _keys, mut e) = ask_engine();
+        e.on_talk_key(Down);
+        clock.advance(Duration::from_millis(100));
+        e.on_ask_key();
+        clock.advance(Duration::from_millis(100));
+        e.on_other_key_down();
+        assert!(!e.machine().is_held());
+        clock.advance(Duration::from_millis(500));
+        e.on_talk_key(Up);
+        assert_eq!(sink.take(), vec![Ptt(PDown), Ptt(Cancel)]);
+    }
+
+    // ---- RTR-17a (ADR 0098): the ask key is grabbed only during a talk-key hold ----
+
+    fn paired(calls: &[bool]) {
+        assert_eq!(calls.first(), Some(&true), "{calls:?}");
+        assert_eq!(calls.last(), Some(&false), "{calls:?}");
+        let on = calls.iter().filter(|c| **c).count();
+        assert_eq!(on, calls.len() - on, "{calls:?}");
+        assert!(calls.windows(2).all(|w| w[0] != w[1]), "{calls:?}");
+    }
+
+    #[test]
+    fn rtr_17a_the_ask_key_is_registered_at_the_hold_and_unregistered_at_the_up() {
+        let (_sink, clock, keys, mut e) = ask_engine();
+        assert_eq!(keys.take(), Vec::<bool>::new());
+        e.on_talk_key(Down);
+        assert_eq!(keys.take(), vec![true]);
+        clock.advance(Duration::from_millis(400));
+        e.on_ask_key();
+        assert_eq!(keys.take(), Vec::<bool>::new());
+        e.on_talk_key(Up);
+        assert_eq!(keys.take(), vec![false]);
+        // Outside a hold, Option+G types "©" again: no register.
+        e.on_ask_key();
+        e.on_other_key_down();
+        assert_eq!(keys.take(), Vec::<bool>::new());
+    }
+
+    #[test]
+    fn rtr_17a_the_ask_key_is_released_on_a_tap_and_on_a_cap_44c_cancel() {
+        let (_sink, clock, keys, mut e) = ask_engine();
+        e.on_talk_key(Down);
+        clock.advance(Duration::from_millis(100));
+        e.on_talk_key(Up);
+        paired(&keys.take());
+        // Esc, or any other key, in the first second cancels and releases the grab.
+        clock.advance(Duration::from_secs(2));
+        e.on_talk_key(Down);
+        e.on_other_key_down();
+        paired(&keys.take());
+        e.on_talk_key(Up);
+        assert_eq!(keys.take(), Vec::<bool>::new());
+    }
+
+    #[test]
+    fn rtr_17a_the_ask_key_is_released_when_secure_input_pauses_the_talk_key() {
+        let (sink, clock, keys, mut e) = ask_engine();
+        let probe = FakeProbe::ready();
+        let ctl = FakeCtl::default();
+        e.tick(clock.now(), &probe, &ctl);
+        e.on_talk_key(Down);
+        e.on_ask_key();
+        *probe.secure.lock().unwrap() = true;
+        *probe.physical.lock().unwrap() = down();
+        clock.advance(WATCHDOG_TICK);
+        e.tick(clock.now(), &probe, &ctl);
+        paired(&keys.take());
+        assert!(!sink.take().contains(&PttAskUp));
+    }
+
+    #[test]
+    fn rtr_17a_the_ask_key_is_released_on_a_tap_disable_gap_and_on_a_lock() {
+        // A tap disable with the key no longer down ends the hold (CAP-45).
+        let (sink, clock, keys, mut e) = ask_engine();
+        let probe = FakeProbe::ready();
+        let ctl = FakeCtl::default();
+        e.on_talk_key(Down);
+        e.on_ask_key();
+        clock.advance(Duration::from_secs(2));
+        *probe.physical.lock().unwrap() = up();
+        e.on_tap_signal(TapSignal::DisabledByTimeout, clock.now(), &probe, &ctl);
+        paired(&keys.take());
+        // The lost key-up of an ask hold still asks: the user tapped G.
+        assert_eq!(sink.take(), vec![Ptt(PDown), PttAskUp]);
+
+        // A re-enable with the key still down keeps the hold and the grab.
+        e.on_talk_key(Down);
+        *probe.physical.lock().unwrap() = down();
+        e.on_tap_signal(TapSignal::DisabledByUserInput, clock.now(), &probe, &ctl);
+        assert_eq!(keys.take(), vec![true]);
+
+        // A lock or a user switch with the key up ends the hold (focus loss).
+        e.tick(clock.now(), &probe, &ctl);
+        *probe.session.lock().unwrap() = false;
+        *probe.physical.lock().unwrap() = up();
+        clock.advance(WATCHDOG_TICK);
+        e.tick(clock.now(), &probe, &ctl);
+        assert_eq!(keys.take(), vec![false]);
+        assert!(!e.machine().is_held());
+    }
+
+    #[test]
+    fn rtr_17a_the_ask_key_is_released_at_the_120_s_hold_cap() {
+        let (sink, clock, keys, mut e) = ask_engine();
+        let probe = FakeProbe::ready();
+        let ctl = FakeCtl::default();
+        *probe.physical.lock().unwrap() = down();
+        e.on_talk_key(Down);
+        e.on_ask_key();
+        clock.advance(ASK_KEY_MAX_HOLD - Duration::from_millis(1));
+        e.tick(clock.now(), &probe, &ctl);
+        assert_eq!(keys.take(), vec![true]);
+        clock.advance(Duration::from_millis(1));
+        e.tick(clock.now(), &probe, &ctl);
+        assert_eq!(keys.take(), vec![false]);
+        // The cap only releases the grab: the hold and its ask stay.
+        assert!(e.machine().is_held());
+        clock.advance(Duration::from_secs(5));
+        e.tick(clock.now(), &probe, &ctl);
+        e.on_talk_key(Up);
+        assert_eq!(keys.take(), Vec::<bool>::new());
+        assert_eq!(sink.take(), vec![Ptt(PDown), PttAskUp]);
+        // The next hold grabs the key again.
+        e.on_talk_key(Down);
+        assert_eq!(keys.take(), vec![true]);
+        assert_eq!(ASK_KEY_MAX_HOLD, Duration::from_secs(120));
+    }
+
+    #[test]
+    fn rtr_17a_the_ask_key_is_released_on_stop_and_on_drop() {
+        let (_sink, _clock, keys, mut e) = ask_engine();
+        e.on_talk_key(Down);
+        e.reset();
+        paired(&keys.take());
+        e.on_talk_key(Down);
+        drop(e);
+        paired(&keys.take());
+        // An engine that is not in a hold unregisters nothing at drop.
+        let (_sink, _clock, keys, e) = ask_engine();
+        drop(e);
+        assert_eq!(keys.take(), Vec::<bool>::new());
+    }
 }

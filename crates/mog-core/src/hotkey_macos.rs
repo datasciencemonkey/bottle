@@ -183,22 +183,19 @@ mod tests {
     use crate::hotkey_core::{HotkeyOutput, PttMachine, PttPhase};
 
     #[test]
-    fn rtr_17a_shift_from_key_state_ignores_the_talk_key_shift() {
-        assert!(shift_held_from_keys(true, false, TalkKey::RightOption));
-        assert!(shift_held_from_keys(false, true, TalkKey::RightOption));
-        assert!(!shift_held_from_keys(false, false, TalkKey::RightOption));
-        // Right-Shift is the talk key: only Left-Shift counts.
-        assert!(!shift_held_from_keys(false, true, TalkKey::RightShift));
-        assert!(shift_held_from_keys(true, true, TalkKey::RightShift));
-        assert!(!shift_held_from_keys(false, false, TalkKey::RightControl));
+    fn rtr_17a_the_ask_key_is_g_with_the_talk_key_modifier() {
+        // kVK_ANSI_G = 0x05 (HIToolbox Events.h).
+        assert_eq!(VK_ANSI_G, 0x05);
+        // Carbon optionKey, cmdKey, shiftKey and controlKey (HIToolbox Events.h).
+        assert_eq!(ask_key_modifiers(TalkKey::RightOption), 0x0800);
+        assert_eq!(ask_key_modifiers(TalkKey::RightCommand), 0x0100);
+        assert_eq!(ask_key_modifiers(TalkKey::RightShift), CARBON_SHIFT_KEY);
+        assert_eq!(ask_key_modifiers(TalkKey::RightControl), CARBON_CONTROL_KEY);
     }
 
     #[test]
-    fn rtr_17a_shift_codes_are_the_hitoolbox_shift_keys() {
-        // kVK_Shift = 0x38, kVK_RightShift = 0x3C (HIToolbox Events.h). Right-Shift is also the
-        // code of the Right-Shift talk key.
-        assert_eq!(SHIFT_KEY_CODES, (0x38, 0x3C));
-        assert_eq!(talk_key_code(TalkKey::RightShift).0, SHIFT_KEY_CODES.1);
+    fn rtr_17a_the_ask_hot_key_id_differs_from_the_chord_id() {
+        assert_ne!(ASK_HOT_KEY_ID, CHORD_HOT_KEY_ID);
     }
 
     #[test]
@@ -302,11 +299,15 @@ mod tests {
 
     #[test]
     fn cap_44c_other_key_events_carry_no_key_identity() {
-        // Only the event type goes in, and a field-less marker comes out.
-        assert_eq!(std::mem::size_of::<OtherKeyDown>(), 0);
+        // The key code goes in only to be compared with G. A field-less marker comes out.
+        assert!(std::mem::size_of::<OtherKeyDown>() <= 1);
         assert_eq!(
-            other_key_from_event_type(CG_EVENT_KEY_DOWN),
-            Some(OtherKeyDown)
+            other_key_from_event(CG_EVENT_KEY_DOWN, 0),
+            Some(OtherKeyDown::Other)
+        );
+        assert_eq!(
+            other_key_from_event(CG_EVENT_KEY_DOWN, 53),
+            Some(OtherKeyDown::Other)
         );
         for t in [
             CG_EVENT_KEY_UP,
@@ -314,8 +315,26 @@ mod tests {
             CG_EVENT_TAP_DISABLED_BY_TIMEOUT,
             CG_EVENT_TAP_DISABLED_BY_USER_INPUT,
         ] {
-            assert_eq!(other_key_from_event_type(t), None, "type {t}");
+            assert_eq!(other_key_from_event(t, 0), None, "type {t}");
+            assert_eq!(other_key_from_event(t, i64::from(VK_ANSI_G)), None, "type {t}");
         }
+    }
+
+    #[test]
+    fn cap_44c_g_is_the_ask_key_and_not_an_other_key() {
+        assert_eq!(
+            other_key_from_event(CG_EVENT_KEY_DOWN, i64::from(VK_ANSI_G)),
+            Some(OtherKeyDown::Ask)
+        );
+        // Only the G code: a code that is out of range is another key.
+        assert_eq!(
+            other_key_from_event(CG_EVENT_KEY_DOWN, i64::from(VK_ANSI_G) + 0x1_0000),
+            Some(OtherKeyDown::Other)
+        );
+        assert_eq!(
+            other_key_from_event(CG_EVENT_KEY_DOWN, -1),
+            Some(OtherKeyDown::Other)
+        );
     }
 
     #[test]

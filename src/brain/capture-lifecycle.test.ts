@@ -99,8 +99,8 @@ function rig(opts: { holdStart?: boolean; config?: CaptureLifecycleDeps['config'
   const flush = async () => {
     for (let i = 0; i < 5; i++) await Promise.resolve();
   };
-  const ptt = (phase: PttEvent['phase'], at: number, mogId = A, shift = false) => {
-    const e = { mogId, phase, at, ...(shift ? { shift: true as const } : {}) };
+  const ptt = (phase: PttEvent['phase'], at: number, mogId = A, ask = false) => {
+    const e = { mogId, phase, at, ...(ask ? { ask: true as const } : {}) };
     lc.onPtt(e);
   };
   const seg = (leaseId: string, segmentId = `s${leaseId}`, mogId = A): SegmentRef => ({
@@ -163,15 +163,33 @@ describe('capture lifecycle: PTT (#14)', () => {
     expect(r.calls[1]).toEqual(['release', { mogId: A, leaseId: '1' }]);
   });
 
-  it('[CAP-12b] [RTR-17a] the utterance of a kept PTT goes to onUtterance with forceAsk from key-down', async () => {
+  it('[CAP-12b] [RTR-17a] the utterance of a kept PTT goes to onUtterance with forceAsk from the ⌥G key-up', async () => {
     const r = rig();
-    r.ptt('down', 0, A, true);
+    r.ptt('down', 0);
     await r.flush();
-    r.ptt('up', 900);
+    r.ptt('up', 900, A, true);
     await r.lc.onSegment(r.seg('1'));
     expect(r.utterances).toEqual([
       { mogId: A, text: 'hello world', forceAsk: true, segment: r.seg('1'), mode: 'ptt' },
     ]);
+  });
+
+  it('[RTR-17a] an ⌥G key-up before the grant still marks the utterance as an ask', async () => {
+    const r = rig({ holdStart: true });
+    r.ptt('down', 0);
+    r.ptt('up', 900, A, true);
+    await r.resolveStarts();
+    await r.lc.onSegment(r.seg('1'));
+    expect(r.utterances.map((u) => u.forceAsk)).toEqual([true]);
+  });
+
+  it('[RTR-17a] a plain key-up is dictation: forceAsk is false', async () => {
+    const r = rig();
+    r.ptt('down', 0);
+    await r.flush();
+    r.ptt('up', 900);
+    await r.lc.onSegment(r.seg('1'));
+    expect(r.utterances.map((u) => u.forceAsk)).toEqual([false]);
   });
 
   it('[CAP-12b] an empty STT result fires no utterance', async () => {
@@ -461,6 +479,21 @@ describe('capture lifecycle: segments (#14)', () => {
 });
 
 describe('capture lifecycle wiring (#14)', () => {
+  it('[RTR-17a] the hotkey:ptt up with ask: true reaches the lifecycle as a forced ask', async () => {
+    const bus = new BrainBus();
+    const r = rig();
+    wireCaptureLifecycle(bus, r.lc, () => 5);
+    await bus.dispatch({ event: 'hotkey:ptt', payload: { mogId: A, phase: 'down' } });
+    await r.flush();
+    await bus.dispatch({ event: 'hotkey:ptt', payload: { mogId: A, phase: 'up', ask: true } });
+    await r.lc.onSegment(r.seg('1'));
+    await bus.dispatch({ event: 'hotkey:ptt', payload: { mogId: A, phase: 'down', shift: true } });
+    await r.flush();
+    await bus.dispatch({ event: 'hotkey:ptt', payload: { mogId: A, phase: 'up' } });
+    await r.lc.onSegment(r.seg('2'));
+    expect(r.utterances.map((u) => u.forceAsk)).toEqual([true, false]);
+  });
+
   it('[CAP-12a] [CAP-14a] hotkey:ptt, view clicks and capture:segment reach the lifecycle on the bus', async () => {
     const bus = new BrainBus();
     const r = rig();
