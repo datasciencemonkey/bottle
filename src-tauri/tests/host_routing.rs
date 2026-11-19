@@ -363,6 +363,8 @@ fn arc_3_cap_02a_g_04a_window_ops_capture_start_and_mcp_call_run_off_the_main_th
                         | "agent_send"
                         | "stt_transcribe"
                         | "mem_local_exec"
+                        // #555: T7 runs `databricks auth describe` per profile once R5 lands.
+                        | "profiles_list"
                 ),
             "{}",
             c.name
@@ -779,6 +781,7 @@ fn arc_3_cap_02a_g_04a_schedule_runs_window_ops_capture_start_and_mcp_call_on_a_
                     | "agent_send"
                     | "stt_transcribe"
                     | "mem_local_exec"
+                    | "profiles_list"
             );
         if worker {
             assert_ne!(ran_on, caller, "{} ran on the calling thread", c.name);
