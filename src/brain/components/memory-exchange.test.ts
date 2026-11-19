@@ -202,3 +202,36 @@ describe('T10 recordExchange (#38, MEM-25a, MEM-26)', () => {
     expect(store.calls).toEqual([]);
   });
 });
+
+describe('T10 registerMog (#40, ADR 0061)', () => {
+  it('[MEM-01] [ADR 0061] writes the MOG row with the device id and an HLC that never goes back', async () => {
+    const { store, svc } = setup();
+    const mogId = genieExchangeDouble().mogId;
+    await svc.registerMog({ mogId, displayName: 'Fake Finance', backendKind: 'genie_one_mcp' });
+    await svc.recordExchange(genieExchangeDouble());
+    expect(store.calls.map((c) => c.stmtId)).toEqual(['mem.mog.upsert', 'mem.exchange.upsert']);
+    const p = at(
+      store.calls.map((c) => c.params),
+      0,
+    );
+    expect(p).toEqual({
+      mogId,
+      displayName: 'Fake Finance',
+      backendKind: 'genie_one_mcp',
+      rowHlc: T0,
+      deviceId: 'test-device',
+    });
+    expect(at(upserts(store), 0).rowHlc).toBe(T0 + 1);
+  });
+
+  it('[MEM-01] cuts a long name to the 80-character catalog limit and refuses a bad mogId', async () => {
+    const { store, svc } = setup();
+    const mogId = genieExchangeDouble().mogId;
+    await svc.registerMog({ mogId, displayName: 'x'.repeat(100), backendKind: 'genie_one_mcp' });
+    expect(Array.from(String(store.calls[0]?.params.displayName))).toHaveLength(80);
+    await expect(
+      svc.registerMog({ mogId: '', displayName: 'Fake', backendKind: 'genie_one_mcp' }),
+    ).rejects.toThrow();
+    expect(store.calls).toHaveLength(1);
+  });
+});
