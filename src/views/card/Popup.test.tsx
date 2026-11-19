@@ -285,6 +285,39 @@ describe('#559 post-dictation pop-up', () => {
     await advance(FADE_AFTER_MS * 3);
     expect(pop(el).getAttribute('data-state')).toBe('shown');
   });
+  it('[#557] [MOG-06d] a refused paste of a question shows Copy and Ask Genie for the same text', async () => {
+    const { el } = await mountCard();
+    await tauri.emit('card:update', {
+      ...refused,
+      blurbs: [...refused.blurbs, { id: 'ask:u9', text: '"Meet at noon"', completed: true }],
+      chips: [...refused.chips, { id: 'ask_genie:u9', label: 'Ask Genie' }],
+    });
+    const ids = [...el.querySelectorAll('button[data-chip]')].map((b) =>
+      b.getAttribute('data-chip'),
+    );
+    expect(ids).toEqual(['copy-u9', 'ask_genie:u9']);
+    // The Copy pop-up still never fades.
+    await advance(FADE_AFTER_MS + FADE_OUT_MS + 10);
+    expect(popup(el)).not.toBeNull();
+    await act(async () => (el.querySelector('[data-chip="ask_genie:u9"]') as HTMLElement).click());
+    expect(viewEmits()).toContainEqual({
+      mogId: ID,
+      kind: 'chip_click',
+      payload: { chipId: 'ask_genie:u9' },
+    });
+  });
+
+  it('[#557] a Copy pop-up shows no Ask Genie of another text', async () => {
+    const { el } = await mountCard();
+    await tauri.emit('card:update', {
+      ...refused,
+      chips: [...refused.chips, { id: 'ask_genie:u8', label: 'Ask Genie' }],
+    });
+    const ids = [...el.querySelectorAll('button[data-chip]')].map((b) =>
+      b.getAttribute('data-chip'),
+    );
+    expect(ids).toEqual(['copy-u9']);
+  });
 });
 
 describe('#559 design tokens', () => {

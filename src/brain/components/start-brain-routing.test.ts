@@ -106,7 +106,7 @@ describe('startBrain utterance routing (#163)', () => {
     expect(callsTo(core.invoke.mock.calls, ['agent_start', 'agent_send', 'mcp_call'])).toEqual([]);
   });
 
-  it('[RTR-15c] [B1] [W-07d] a no-home question shows the pick card; a card chip click lists the profiles', async () => {
+  it('[#557] [RTR-15c] [B1] [W-07d] a no-home question gets the Ask Genie chip; a press lists the profiles and sends nothing', async () => {
     core.invoke.mockImplementation(async (cmd) => {
       if (cmd === 'config_read') return Promise.reject({ error: 'config_not_found' });
       if (cmd === 'profiles_list')
@@ -120,9 +120,8 @@ describe('startBrain utterance routing (#163)', () => {
         ];
       return {};
     });
+    brain?.talkTarget.viewReady(MOG);
     const d = handlerDeps();
-    const owner = 'utt-pick-1';
-    await d.routerInput(MOG);
     d.onAsk(
       {
         route: 'chip',
@@ -131,30 +130,29 @@ describe('startBrain utterance routing (#163)', () => {
         },
         warning: undefined,
       },
-      { utteranceId: owner, mogId: MOG },
+      { utteranceId: 'utt-pick-1', mogId: MOG },
     );
     await settle();
     const last = () => cards().at(-1);
-    expect(
-      last()
-        ?.blurbs.map((b) => b.text)
-        .join('\n'),
-    ).toContain('What was revenue?');
-    expect(last()?.chips.map((c) => c.label)).toEqual(['Pick a profile', 'Insert as text', 'Copy']);
+    const all = () => [...(last()?.chips ?? []), ...(last()?.overflowChips ?? [])];
+    // No pick card any more: the dictated text gets one Ask Genie chip.
+    expect(all().map((c) => c.label)).not.toContain('Pick a profile');
+    const ask = all().find((c) => c.id === 'ask_genie:utt-pick-1');
+    expect(ask?.label).toBe('Ask Genie');
     expect(callsTo(core.invoke.mock.calls, ['agent_start', 'agent_send', 'mcp_call'])).toEqual([]);
-    // The card view's click arrives as `view:input` on the brain Channel.
-    const pickId = last()?.chips.find((c) => c.label === 'Pick a profile')?.id;
+    // The card view's press arrives as `view:input` on the brain Channel.
     brain?.bus.dispatch({
       event: 'view:input',
       payload: {
         from: `card-${MOG}`,
-        input: { mogId: MOG, kind: 'chip_click', payload: { chipId: pickId } },
+        input: { mogId: MOG, kind: 'chip_click', payload: { chipId: ask?.id } },
       },
     });
     await settle();
-    expect(last()?.chips.map((c) => c.label)).toContain('fake-a');
-    // Listing is not picking: nothing is saved before the user clicks a profile.
+    expect(all().map((c) => c.label)).toContain('fake-a');
+    // Listing is not picking: nothing is saved or sent before the user clicks a profile.
     expect(core.invoke.mock.calls.map(([c]) => c)).not.toContain('config_write');
+    expect(callsTo(core.invoke.mock.calls, ['agent_start', 'agent_send', 'mcp_call'])).toEqual([]);
   });
 
   it('[RTR-15c] [B1] with a listed home profile, an Ask Genie click hands the question over with that home as the target', async () => {

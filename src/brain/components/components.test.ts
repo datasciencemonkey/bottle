@@ -144,21 +144,22 @@ describe('brain component stubs', () => {
     await expectStub(() => t.mayAutoResend('op'), 39);
   });
 
-  it('[T3] [RTR-04a] [RTR-05] [RTR-07] CapturePolicy decides with the D30 thresholds (#142) and stubs directedTo (#119)', async () => {
+  it('[T3] [RTR-05] [RTR-07] [#557] CapturePolicy: an unforced question is a chip at any confidence (ADR 0096), and stubs directedTo (#119)', async () => {
     const t = createCapturePolicy();
     const d = (mode: 'ptt' | 'hands_free' | 'session', intent: Intent, confidence: number) =>
       t.decide({ mode, intent, confidence });
-    expect(d('ptt', 'question', 0.9)).toBe('preview');
-    expect(d('ptt', 'question', 0.7)).toBe('preview');
-    expect(d('hands_free', 'question', 0.7)).toBe('preview');
+    // #557: no auto-routing. The question is pasted first; only a press sends it.
+    expect(d('ptt', 'question', 0.9)).toBe('chip');
+    expect(d('ptt', 'question', 0.7)).toBe('chip');
+    expect(d('hands_free', 'question', 0.7)).toBe('chip');
     expect(d('ptt', 'question', 0.69)).toBe('chip');
     expect(d('hands_free', 'question', 0)).toBe('chip');
     // RTR-07, B1: a session never previews (a preview sends by itself); a question is a chip.
     expect(d('session', 'question', 0.99)).toBe('chip');
     expect(d('session', 'dictation', 0.99)).toBe('drop');
     expect(d('ptt', 'dictation', 0.2)).toBe('insert');
-    // F1 steps 13-15: a memory question that the RecallGate does not answer previews like a question.
-    expect(d('ptt', 'memory_question', 0.8)).toBe('preview');
+    // F1 steps 13-15: a memory question that the RecallGate does not answer is a chip like a question.
+    expect(d('ptt', 'memory_question', 0.8)).toBe('chip');
     expect(d('ptt', 'memory_question', 0.3)).toBe('chip');
     for (const i of ['context', 'command', 'noise'] as const)
       expect(d('ptt', i, 0.99)).toBe('drop');

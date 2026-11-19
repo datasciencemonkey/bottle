@@ -7,6 +7,8 @@ import { createSimScheduler } from '../test-support/sim-scheduler';
 import { routerDecision } from '../test-support/model-invoke';
 import {
   ASK_CHIP_LABEL,
+  CUT_NOTICE,
+  QUESTION_MAX_CHARS,
   NOT_SENT_LINE,
   PREVIEW_CONTROLS,
   createAskGate,
@@ -45,7 +47,7 @@ function fakeCard() {
   return { card, blurbs, controls, chips, shownControls, clickControl };
 }
 
-function setup(opts: { open?: boolean; target?: string | undefined } = {}) {
+function setup(opts: { open?: boolean; target?: string | undefined; pick?: boolean } = {}) {
   const sim = createSimScheduler();
   const cards = new Map<string, ReturnType<typeof fakeCard>>();
   const cardOf = (id: string) => {
@@ -57,6 +59,13 @@ function setup(opts: { open?: boolean; target?: string | undefined } = {}) {
   const released: string[] = [];
   const shown: string[] = [];
   let open = opts.open ?? true;
+  let target = 'target' in opts ? opts.target : 'home';
+  /** #557: the profile picker calls. `pickDone` saves the user's pick, then runs the callback. */
+  const picks: { mogId: string; then: () => void }[] = [];
+  const pickDone = (profile: string) => {
+    target = profile;
+    for (const p of picks.splice(0)) p.then();
+  };
   const gate = createAskGate({
     clock: sim.clock,
     schedule: sim.at,
@@ -64,8 +73,9 @@ function setup(opts: { open?: boolean; target?: string | undefined } = {}) {
     showCard: (id) => void shown.push(id),
     owner: { release: (u) => void released.push(u) },
     isOpen: () => open,
-    target: () => ('target' in opts ? opts.target : 'home'),
+    target: () => target,
     send: async (t) => void sent.push(t),
+    ...(opts.pick ? { pickProfile: (mogId, then) => void picks.push({ mogId, then }) } : {}),
   });
   let n = 0;
   const owned = (mogId = A): OwnedUtterance => ({ utteranceId: `u${++n}`, mogId });
@@ -78,6 +88,8 @@ function setup(opts: { open?: boolean; target?: string | undefined } = {}) {
     shown,
     owned,
     close: () => void (open = false),
+    picks,
+    pickDone,
     run: (ms: number) => sim.runUntil(sim.clock.now() + ms, { settle: true }),
   };
 }
@@ -350,5 +362,98 @@ describe('ask gate: the Ask Genie chip (RTR-05)', () => {
     await sim.runUntil(10 * PREVIEW_MS, { settle: true });
     expect(calls).toBe(1);
     expect([...card.blurbs.values()][0]?.text).toBe(`"${Q}"\n${NOT_SENT_LINE}`);
+  });
+});
+
+describe('ask gate: the Ask Genie press of a dictated question (#557, ADR 0096)', () => {
+  it('[#557] [B1] nothing sends without a press, also after the chip expires', async () => {
+    const t = setup();
+    t.gate.onAsk(chip(), t.owned());
+    await t.run(10 * 60_000);
+    expect(t.sent).toEqual([]);
+  });
+
+  it('[#557] a press sends the exact text of the chip', async () => {
+    const t = setup();
+    const exact = 'what were emea bookings last week';
+    t.gate.onAsk(
+      chip({ decision: decision({ genie_question: exact, cleaned_text: exact }) }),
+      t.owned(),
+    );
+    const id = [...t.cardOf(A).chips.keys()][0] ?? '';
+    t.gate.chip(A, { id, kind: 'ask_genie' });
+    await t.run(0);
+    expect(t.sent.map((x) => x.question)).toEqual([exact]);
+  });
+
+  it('[#557] [W-07d] with no profile a press opens the profile picker and sends nothing; the pick then sends the text', async () => {
+    const t = setup({ target: undefined, pick: true });
+    t.gate.onAsk(chip(), t.owned());
+    const id = [...t.cardOf(A).chips.keys()][0] ?? '';
+    t.gate.chip(A, { id, kind: 'ask_genie' });
+    await t.run(0);
+    expect(t.picks.map((p) => p.mogId)).toEqual([A]);
+    expect(t.sent).toEqual([]);
+    expect([...t.cardOf(A).blurbs.values()].some((b) => b.text?.includes(NOT_SENT_LINE))).toBe(
+      false,
+    );
+    // The user clicks a profile. The press was the confirmation, so the same text goes out once.
+    t.pickDone('picked');
+    await t.run(0);
+    expect(t.sent).toHaveLength(1);
+    expect(t.sent[0]).toMatchObject({ mogId: A, question: Q, target: 'picked' });
+  });
+});
+
+describe('ask gate: no profile, Shift, size (#557, ADR 0096)', () => {
+  it('[#557] [RTR-17b] with no profile and a picker, a Shift preview is a chip of the previewed text; nothing sends by itself', async () => {
+    const t = setup({ target: undefined, pick: true });
+    t.gate.onAsk(
+      preview({ question: 'shift text', decision: decision({ genie_question: '' }) }),
+      t.owned(),
+    );
+    expect(t.gate.pending(A)).toBeUndefined();
+    expect(t.cardOf(A).shownControls()).toEqual([]);
+    await t.run(PREVIEW_MS * 4);
+    expect(t.sent).toEqual([]);
+    expect(t.picks).toEqual([]);
+    const id = [...t.cardOf(A).chips.keys()][0] ?? '';
+    t.gate.chip(A, { id, kind: 'ask_genie' });
+    t.pickDone('picked');
+    await t.run(0);
+    expect(t.sent.map((x) => x.question)).toEqual(['shift text']);
+  });
+
+  it('[#557] [RTR-14] with no profile, an injection-suspected Shift ask is still only the warning chip', async () => {
+    const t = setup({ target: undefined, pick: true });
+    t.gate.onAsk(preview({ decision: decision({ injection_suspected: true }) }), t.owned());
+    expect([...t.cardOf(A).chips.values()]).toEqual([]);
+    expect(t.cardOf(A).shownControls()).toEqual([{ ...INJECTION_WARNING_CHIP }]);
+  });
+
+  it('[#557] [G-30a] a pressed text over 1,000 chars is cut at a word edge before the send, with a notice', async () => {
+    const t = setup();
+    const long = `${'word '.repeat(300)}end`;
+    t.gate.onAsk(
+      chip({ decision: decision({ genie_question: long, cleaned_text: long }) }),
+      t.owned(),
+    );
+    const id = [...t.cardOf(A).chips.keys()][0] ?? '';
+    t.gate.chip(A, { id, kind: 'ask_genie' });
+    await t.run(0);
+    const q = t.sent[0]?.question ?? '';
+    expect(q.length).toBeLessThanOrEqual(QUESTION_MAX_CHARS);
+    expect(q.endsWith('word')).toBe(true);
+    expect(long.startsWith(q)).toBe(true);
+    expect([...t.cardOf(A).blurbs.values()].some((b) => b.text?.includes(CUT_NOTICE))).toBe(true);
+  });
+
+  it('[#557] [RTR-14] an injection-suspected question shows its own text with the warning', () => {
+    const t = setup();
+    t.gate.onAsk(
+      chip({ decision: decision({ injection_suspected: true }), warning: 'injection_suspected' }),
+      t.owned(),
+    );
+    expect([...t.cardOf(A).blurbs.values()].map((b) => b.text)).toEqual([`"${Q}"`]);
   });
 });

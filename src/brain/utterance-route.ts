@@ -8,6 +8,9 @@
  * - RTR-17b: a forced ask keeps the 1.5 s preview (RTR-04a). The preview, the agent hand-off and
  *   the chip are the caller's (the T3 ask gate, `ask-gate.ts`, #142); this module returns the route.
  * - B1: nothing goes to Genie here. A question gives a `preview` or a `chip`, never a send.
+ * - #557 (user decision, ADR 0096): every utterance is dictation first. A question with no Shift
+ *   is inserted (or goes to Copy) like a dictation, and it also gets the "Ask Genie" chip of the
+ *   exact dictated text. It never gets the preview: no utterance goes to Genie without a press.
  * - RTR-07: a session utterance never gets the preview, which sends by itself. It gets a chip.
  * - RTR-14: an injection-suspected utterance never gets the preview. It gets the warning chip.
  *
@@ -20,7 +23,7 @@ import type { RouterInput } from './components/router-step';
 
 /** The preview of RTR-04a, "Sending in 1.5 s". */
 export const PREVIEW_MS = 1500;
-/** A question at or above this confidence gets the preview; below it, the "Ask Genie" chip (D30). */
+/** A router confidence mark (D30). Since #557 an unforced question never previews (ADR 0096). */
 export const ASK_CONFIDENCE = 0.7;
 
 export type InsertResult = CommandReturns['insert_text']['result'];
@@ -56,8 +59,16 @@ export type UtteranceRoute =
       decision: RouterDecision;
       /** RTR-14: the chip shows a warning. */
       warning: 'injection_suspected' | undefined;
+      /** #557: the dictation of the same text, done before the chip (inserted, failed, or Copy). */
+      dictated?: DictationRoute;
     }
   | { route: 'other'; decision: RouterDecision };
+
+/** The end of a dictation (#557: also of a question, before its chip). */
+export type DictationRoute = Extract<
+  UtteranceRoute,
+  { route: 'inserted' | 'insert_failed' | 'copy' }
+>;
 
 export interface UtteranceRouteDeps {
   /** The router step (`RouterContextGate.route`). */
@@ -103,23 +114,34 @@ export async function routeUtterance(
   }
   // RTR-17a: Shift skips the intent gate only. The preview still guards the send (RTR-17b, B1).
   if (u.forceAsk) return preview(true);
-  switch (decision.intent) {
-    case 'dictation': {
-      // RTR-01c: the flow ends here. No main agent and no Genie take part.
-      const text = firstNonEmpty(decision.cleaned_text, u.text);
-      if (!u.insertionOn) return { route: 'copy', text };
-      let result: InsertResult | 'host_failed';
-      try {
-        result = (await deps.insertText({ mogId: u.mogId, text })).result;
-      } catch {
-        result = 'host_failed';
-      }
-      return result === 'inserted'
-        ? { route: 'inserted', decision }
-        : { route: 'insert_failed', reason: result, text };
+  // RTR-01c: a dictation ends at `insert_text`, or at Copy. No main agent and no Genie take part.
+  const dictate = async (): Promise<DictationRoute> => {
+    const text = firstNonEmpty(decision.cleaned_text, u.text);
+    if (!u.insertionOn) return { route: 'copy', text };
+    let result: InsertResult | 'host_failed';
+    try {
+      result = (await deps.insertText({ mogId: u.mogId, text })).result;
+    } catch {
+      result = 'host_failed';
     }
-    case 'question':
-      return decision.confidence >= ASK_CONFIDENCE ? preview(false) : chip();
+    return result === 'inserted'
+      ? { route: 'inserted', decision }
+      : { route: 'insert_failed', reason: result, text };
+  };
+  switch (decision.intent) {
+    case 'dictation':
+      return dictate();
+    case 'question': {
+      // #557: dictation first, then the chip of the exact dictated text. Only a press sends it.
+      const dictated = await dictate();
+      const exact = firstNonEmpty(decision.cleaned_text, u.text);
+      return {
+        route: 'chip',
+        decision: { ...decision, genie_question: exact },
+        warning: decision.injection_suspected ? 'injection_suspected' : undefined,
+        dictated,
+      };
+    }
     default:
       return { route: 'other', decision };
   }

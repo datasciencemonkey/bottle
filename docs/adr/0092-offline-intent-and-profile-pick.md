@@ -1,6 +1,6 @@
 # ADR 0092: Route every utterance with the RTR-15c offline heuristic, and pick the home profile on the card
 
-- Status: accepted
+- Status: accepted (amended by ADR 0096, #557: an unforced question is pasted first and gets a chip; no preview without Shift)
 - Issue: #163 (demo part: RTR-15c, RTR-01b, RTR-01c, W-07d picker part, B1, B5)
 - Date: 2026-11-18
 - Owner: impl-163 (agent-lead-2)
