@@ -112,9 +112,7 @@ fn sample(command: &str) -> (&'static str, Value) {
         "brain_subscribe" => json!({"onEvent": "__CHANNEL__:3"}),
         "hub_notice_send" => json!({"kind": "dictation_unshown", "mogId": "a1", "text": "hello"}),
         "view_notice_subscribe" => return ("hub", json!({"onNotice": "__CHANNEL__:4"})),
-        "stt_model_status" | "stt_model_verify" | "stt_model_cancel" => {
-            return ("hub", json!({}))
-        }
+        "stt_model_status" | "stt_model_verify" | "stt_model_cancel" => return ("hub", json!({})),
         "stt_model_consent" => return ("hub", json!({"consent": "granted"})),
         "stt_model_install" => {
             return (
