@@ -23,6 +23,7 @@ import { ForgetDialogHost } from './ForgetDialogHost';
 import { MogList } from './MogList';
 import { PermissionNotices } from './PermissionNotices';
 import { SttSetupStep } from './SttSetupStep';
+import { StoreNotice } from './StoreNotice';
 import { WipeSettings } from './WipeSettings';
 
 /**
@@ -80,6 +81,8 @@ export function Hub() {
     return (
       <main className="hub hub--notice">
         <HubHeader />
+        {/* ADR 0105: why macOS asks for the password, or that history is off. */}
+        <StoreNotice />
         <LegalNotice
           key={notice.version}
           version={notice.version}
@@ -94,6 +97,7 @@ export function Hub() {
   return (
     <main className={view === 'conversations' ? 'hub hub--wide' : 'hub'}>
       <HubHeader />
+      <StoreNotice />
       <HubNav view={view} onView={setView} />
       <Conversations active={view === 'conversations'} onOpen={showConversations} />
       <div data-hub-view="home" hidden={view !== 'home'}>

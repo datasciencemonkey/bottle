@@ -7,8 +7,7 @@
 //! It is never logged, never sent over IPC and never written to a file. Tests use
 //! `MemoryKeyVault` (tests and the `test-support` feature only); they never touch the real key store.
 
-#[cfg(any(test, feature = "test-support"))]
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use crate::error::{CoreError, CoreResult};
 
@@ -99,6 +98,42 @@ pub trait KeyVault: Send + Sync {
     fn load(&self) -> CoreResult<Option<LocalKey>>;
     /// Store the key, replacing any old one.
     fn store(&self, key: &LocalKey) -> CoreResult<()>;
+}
+
+/// One OS key store read per launch: the first key that loads (or is stored) stays in process
+/// memory, so the store, a reopen and every later caller share it, and macOS asks at most once.
+/// A failed read is not kept: a later Try again reads the OS store again. Nothing is written
+/// to disk, and `Debug` shows no key.
+pub struct CachedKeyVault {
+    inner: Arc<dyn KeyVault>,
+    key: Mutex<Option<LocalKey>>,
+}
+
+impl CachedKeyVault {
+    pub fn new(inner: Arc<dyn KeyVault>) -> Self {
+        Self {
+            inner,
+            key: Mutex::new(None),
+        }
+    }
+}
+
+impl KeyVault for CachedKeyVault {
+    fn load(&self) -> CoreResult<Option<LocalKey>> {
+        let mut g = self.key.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(k) = g.as_ref() {
+            return Ok(Some(k.clone()));
+        }
+        let k = self.inner.load()?;
+        g.clone_from(&k);
+        Ok(k)
+    }
+
+    fn store(&self, key: &LocalKey) -> CoreResult<()> {
+        self.inner.store(key)?;
+        *self.key.lock().unwrap_or_else(|e| e.into_inner()) = Some(key.clone());
+        Ok(())
+    }
 }
 
 /// The in-memory test double. It holds the key in process memory only, so it exists only in
@@ -198,19 +233,15 @@ pub fn item_plan(target: KeychainTarget) -> ItemPlan {
 
 /// The key store of this OS: the macOS Keychain or the Windows Credential Manager.
 /// On other systems it returns a vault that always fails with `keychain_unavailable`.
+/// The vault reads the OS store at most once per launch on success ([`CachedKeyVault`]).
 pub fn os_key_vault() -> Box<dyn KeyVault> {
     #[cfg(target_os = "macos")]
-    {
-        Box::new(macos::KeychainVault::bottle())
-    }
+    let inner: Arc<dyn KeyVault> = Arc::new(macos::KeychainVault::bottle());
     #[cfg(windows)]
-    {
-        Box::new(windows::CredentialVault::bottle())
-    }
+    let inner: Arc<dyn KeyVault> = Arc::new(windows::CredentialVault::bottle());
     #[cfg(not(any(target_os = "macos", windows)))]
-    {
-        Box::new(NoKeyVault)
-    }
+    let inner: Arc<dyn KeyVault> = Arc::new(NoKeyVault);
+    Box::new(CachedKeyVault::new(inner))
 }
 
 /// The vault for a system with no supported key store.
