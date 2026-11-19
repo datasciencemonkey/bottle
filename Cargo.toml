@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/mog-core", "crates/mog-core-ffi", "src-tauri"]
+members = ["crates/cli-runner", "crates/mog-core", "crates/mog-core-ffi", "src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,6 +11,8 @@ rust-version = "1.85"
 
 [workspace.dependencies]
 mog-core = { path = "crates/mog-core" }
+# R5 CliRunner: resolve, vet and run the Databricks CLI (#16).
+cli-runner = { path = "crates/cli-runner" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = "1.2"

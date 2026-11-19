@@ -3,8 +3,13 @@
  *
  * Responsibilities: Profile list, status, login and target resolution
  * (select-databricks-profile rules). It never sees a token.
+ *
+ * `cliInfo()` reads `cli_status` (#16): the CLI that the R5 launch check verified, and the W-10a
+ * plaintext-storage flag of the T7 host check. TODO(#570): the host routes `cli_status`; until
+ * then the call is refused with `not_implemented`.
  */
 import type { MogId, Profile, ProfileName, ProfileService } from '../../shared/interfaces';
+import { call } from '../../shared/ipc';
 import { NotImplementedError } from '../errors';
 
 type Status = Awaited<ReturnType<ProfileService['status']>>;
@@ -27,7 +32,8 @@ export class ProfileServiceStub implements ProfileService {
     throw new NotImplementedError(C, 'login', 162); // TODO(#162)
   }
   async cliInfo(): Promise<{ path: string; version: string; plaintextStorage: boolean }> {
-    throw new NotImplementedError(C, 'cliInfo', 16); // TODO(#16)
+    const { path, version, plaintextStorage } = await call('cli_status', {});
+    return { path, version, plaintextStorage };
   }
   home(_mogId: MogId): ProfileName {
     throw new NotImplementedError(C, 'home', 163); // TODO(#163)

@@ -205,7 +205,6 @@ describe('brain component stubs', () => {
     await expectStub(() => t.list(), 17);
     await expectStub(() => t.status('p'), 17);
     await expectStub(() => t.login('h', 'p'), 162);
-    await expectStub(() => t.cliInfo(), 16);
     await expectStub(() => t.home(MOG), 163);
     await expectStub(() => t.resolveTarget([], MOG), 164);
   });

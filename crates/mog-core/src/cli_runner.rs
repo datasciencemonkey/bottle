@@ -9,10 +9,19 @@
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::atomic::{compiler_fence, Ordering};
+use std::sync::Mutex;
+use std::time::Duration;
+
+use ::cli_runner::{CliError, Env, Fs, ProcOutput, Process, RealEnv, RealFs, RealProcess};
+pub use ::cli_runner::{CliPolicy, CliRecord, CliStatus, CliWarning, LaunchReport};
 
 use crate::error::{CoreError, CoreResult};
 
 const ID: &str = "R5";
+
+/// R5 kills a CLI child that runs longer than this (the reference bridge uses 30 s too), so a
+/// hung `databricks auth token` cannot hang R6 or a profile check.
+pub const CLI_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Refuse `databricks auth token` (in any case, with any flags before, between or after).
 ///
@@ -51,8 +60,9 @@ pub trait CliRunner: Send + Sync {
     /// ARC-6: only R6 TokenBroker calls this (a test scans the sources). R6 parses the bytes,
     /// keeps the token in memory only, and wipes the [`SecretStdout`]. The caller passes the
     /// profile: R5 never picks one.
+    /// The default answers [`CoreError::NotImplemented`] (component-test doubles); the shipped
+    /// [`DatabricksCliRunner`] runs the CLI.
     fn run_auth_token(&self, _profile: &str) -> CoreResult<SecretStdout> {
-        // TODO(#16): run `auth_token_args(profile)` as a child process with a clean env.
         Err(CoreError::NotImplemented { component: ID })
     }
 }
@@ -101,19 +111,151 @@ impl fmt::Debug for SecretStdout {
     }
 }
 
-/// The R5 stub. Every method returns [`CoreError::NotImplemented`].
+/// The R5 stub for component tests. Every method returns [`CoreError::NotImplemented`].
+/// The shipped R5 is [`DatabricksCliRunner`].
 #[derive(Debug, Default, Clone, Copy)]
 pub struct StubCliRunner;
 
 impl CliRunner for StubCliRunner {
     fn resolve(&self) -> CoreResult<PathBuf> {
-        // TODO(#16): resolve and vet the CLI path and version.
+        // The stub stays for component tests. The shipped R5 is `DatabricksCliRunner`.
         Err(CoreError::NotImplemented { component: ID })
     }
 
     fn run_json(&self, args: &[&str]) -> CoreResult<serde_json::Value> {
         refuse_token_command(args)?;
-        // TODO(#16): run the CLI with a clean env and parse JSON.
+        // The stub stays for component tests. The shipped R5 is `DatabricksCliRunner`.
         Err(CoreError::NotImplemented { component: ID })
+    }
+}
+
+/// The shipped R5: `cli_runner::CliRunner` (#16) behind the [`CliRunner`] trait.
+///
+/// The `cli-runner` crate resolves the CLI to an absolute path (W-02a), refuses a temporary or
+/// world-writable location (W-02b), needs version 1.17 or later (W-02c), reports a changed CLI
+/// at the next launch (W-02d) and gives every child a clean environment (W-09). This adapter
+/// adds the ARC-6 `auth token` refusal and maps each refusal to a content-free
+/// [`CoreError::Unavailable`] reason. A path or version never goes into an error.
+pub struct DatabricksCliRunner<F = RealFs, E = RealEnv, P = RealProcess> {
+    inner: Mutex<::cli_runner::CliRunner<F, E, P>>,
+}
+
+impl DatabricksCliRunner {
+    /// R5 on the real filesystem, environment and processes.
+    pub fn system(policy: CliPolicy) -> Self {
+        Self {
+            inner: Mutex::new(::cli_runner::CliRunner::system(policy).with_timeout(CLI_TIMEOUT)),
+        }
+    }
+}
+
+impl<F: Fs + Send, E: Env + Send, P: Process + Send> DatabricksCliRunner<F, E, P> {
+    /// R5 on the given seams (tests use fakes).
+    pub fn new(fs: F, env: E, process: P, policy: CliPolicy) -> Self {
+        Self {
+            inner: Mutex::new(
+                ::cli_runner::CliRunner::new(fs, env, process, policy).with_timeout(CLI_TIMEOUT),
+            ),
+        }
+    }
+
+    /// The launch check (W-02a..d): resolve, vet, read the version, and compare with the record
+    /// of the previous launch. Changes come back as warnings, not errors.
+    pub fn launch_check(&self, previous: Option<&CliRecord>) -> CoreResult<LaunchReport> {
+        self.lock()
+            .launch_check(previous)
+            .map_err(|e| unavailable(&e))
+    }
+
+    /// The `{path, version, found}` part of the `cli_status` reply: the CLI that the last launch
+    /// check verified. `plaintextStorage` comes from the profile check (W-10a), not from R5.
+    pub fn status(&self) -> CliStatus {
+        self.lock().status()
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, ::cli_runner::CliRunner<F, E, P>> {
+        // A panic in another caller leaves no half-written state worth refusing over: the next
+        // call runs the launch check again.
+        self.inner.lock().unwrap_or_else(|p| p.into_inner())
+    }
+}
+
+impl<F: Fs + Send, E: Env + Send, P: Process + Send> CliRunner for DatabricksCliRunner<F, E, P> {
+    fn resolve(&self) -> CoreResult<PathBuf> {
+        self.launch_check(None).map(|report| report.record.path)
+    }
+
+    fn run_json(&self, args: &[&str]) -> CoreResult<serde_json::Value> {
+        refuse_token_command(args)?;
+        let out = self.run_verified(args)?;
+        if !out.success() {
+            return Err(CoreError::Unavailable {
+                component: ID,
+                reason: "cli_failed",
+            });
+        }
+        serde_json::from_slice(&out.stdout).map_err(|_| CoreError::Unavailable {
+            component: ID,
+            reason: "cli_output_not_json",
+        })
+    }
+
+    fn run_auth_token(&self, profile: &str) -> CoreResult<SecretStdout> {
+        self.auth_token(profile)
+    }
+}
+
+impl<F: Fs + Send, E: Env + Send, P: Process + Send> DatabricksCliRunner<F, E, P> {
+    /// Run the verified CLI (the launch check runs first if no CLI is verified yet), with the
+    /// clean env (W-09) and [`CLI_TIMEOUT`].
+    fn run_verified(&self, args: &[&str]) -> CoreResult<ProcOutput> {
+        let mut inner = self.lock();
+        if inner.verified().is_none() {
+            inner.launch_check(None).map_err(|e| unavailable(&e))?;
+        }
+        inner.run(args).map_err(|e| unavailable(&e))
+    }
+
+    /// W-04a: run exactly [`auth_token_args`] for the caller's `profile` (R5 never picks one).
+    ///
+    /// The stdout `Vec` moves into the [`SecretStdout`] with no copy. The stderr is overwritten
+    /// with zeros before this returns. A failed exit, a timeout or a refused CLI is a
+    /// content-free [`CoreError::Unavailable`]: no stdout, stderr or profile goes into an error
+    /// or a log.
+    fn auth_token(&self, profile: &str) -> CoreResult<SecretStdout> {
+        let ProcOutput {
+            code,
+            stdout,
+            mut stderr,
+        } = self.run_verified(&auth_token_args(profile))?;
+        // Owned at once, so it is wiped on every path below (drop).
+        let stdout = SecretStdout::new(stdout);
+        stderr.fill(0);
+        compiler_fence(Ordering::SeqCst);
+        std::hint::black_box(&mut stderr);
+        if code != Some(0) {
+            return Err(CoreError::Unavailable {
+                component: ID,
+                reason: "cli_failed",
+            });
+        }
+        Ok(stdout)
+    }
+}
+
+/// The content-free reason code for a `cli-runner` refusal.
+fn unavailable(e: &CliError) -> CoreError {
+    let reason = match e {
+        CliError::Missing | CliError::NotAbsolute { .. } => "cli_missing",
+        CliError::UnsafeLocation { .. } => "cli_unsafe_path",
+        CliError::Unsupported { .. } => "cli_unsupported",
+        CliError::VersionUnreadable => "cli_version_unreadable",
+        CliError::NotVerified => "cli_not_verified",
+        CliError::Spawn { .. } => "cli_spawn_failed",
+        CliError::TimedOut => "cli_timed_out",
+    };
+    CoreError::Unavailable {
+        component: ID,
+        reason,
     }
 }

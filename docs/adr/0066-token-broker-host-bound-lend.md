@@ -24,8 +24,9 @@ header of `GET /api/2.0/preview/scim/v2/Me` (W-06a). The issue left these points
    json` (`cli_runner::auth_token_args`). It returns the raw stdout to R6 as a `SecretStdout`
    (not `Clone`, redacted `Debug`, zeroed on wipe and on drop). R6 parses it with one copy of the
    token into a `SecretToken` and wipes the stdout on success and on failure. A source
-   scan test allows only `token_broker.rs` and `cli_runner.rs` to name `run_auth_token`. The real
-   child process is TODO(#16); the trait default is `NotImplemented`.
+   scan test allows only `token_broker.rs` and `cli_runner.rs` to name `run_auth_token`. Update (#16):
+   `DatabricksCliRunner` runs the real child (clean env, 30 s timeout, stderr zeroed, a failed
+   exit is a content-free `cli_failed`); the trait default stays `NotImplemented` for test doubles.
 2. `TokenBroker::with_token(profile, host, f)` takes the exact host of the request. R6 binds each
    token to the lowercase host of its profile URL when it gets the token. It refuses any other
    host with `token_host_mismatch` and does not call `f`. R7 passes the host of the URL it sends to,

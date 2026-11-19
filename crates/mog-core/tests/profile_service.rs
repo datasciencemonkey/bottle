@@ -303,7 +303,7 @@ fn w_10a_a_describe_without_a_mode_or_a_failed_describe_blocks_the_profile() {
 
 #[test]
 fn w_10a_with_r5_not_built_the_storage_check_does_not_block() {
-    // TODO(#16): R5 is the stub on main. No token can flow through it either.
+    // `StubCliRunner` is the component-test double; the shipped R5 never answers NotImplemented.
     let s = service(Some(fake_config()), Arc::new(StubCliRunner));
     let list = s.list(false).unwrap();
     assert!(by_name(&list, "fake-u2m").supported);
@@ -605,4 +605,32 @@ fn w_01a_the_file_is_read_one_line_at_a_time() {
     }
     assert!(code.contains("File::open(path)"));
     assert!(code.contains("parse_config_lines(&mut file)"));
+}
+
+#[test]
+fn w_10a_plaintext_storage_reports_the_last_profile_check() {
+    use mog_core::cli_status::PlaintextStorage;
+    let cli = FakeCli::new(&[("fake-u2m", Describe::Mode("plaintext"))]);
+    let s = service(Some(fake_config()), cli.clone());
+    assert!(!s.plaintext_storage(), "no check ran yet");
+    s.list(false).unwrap();
+    assert!(s.plaintext_storage());
+    cli.set("fake-u2m", Describe::NoMode);
+    s.list(true).unwrap();
+    assert!(
+        s.plaintext_storage(),
+        "an older CLI with no mode keeps tokens in plaintext"
+    );
+    cli.set("fake-u2m", Describe::Mode("secure"));
+    s.list(true).unwrap();
+    assert!(!s.plaintext_storage());
+}
+
+#[test]
+fn w_10a_a_failed_describe_blocks_but_is_not_plaintext_storage() {
+    use mog_core::cli_status::PlaintextStorage;
+    let cli = FakeCli::new(&[("fake-u2m", Describe::Fails)]);
+    let s = service(Some(fake_config()), cli);
+    assert!(!by_name(&s.list(false).unwrap(), "fake-u2m").supported);
+    assert!(!s.plaintext_storage());
 }

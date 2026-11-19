@@ -10,13 +10,13 @@
 //!
 //! The profile hosts are the one T7 ProfileService ([`crate::profiles_host`], #17): a profile that
 //! T7 does not support (PAT, service principal, plaintext token storage) has no host, so R7 and
-//! R8 never send for it (W-03b, W-10a). R5 is not on main yet, so R6 runs on the R5 stub: every
-//! `mcp_call` fails closed with `not_implemented` before any send.
-//! TODO(#16): the R5 CliRunner that runs `databricks auth token`.
+//! R8 never send for it (W-03b, W-10a). R6 runs `databricks auth token --profile <p>` on the one
+//! shared R5 of the process ([`crate::cli_host::SharedCli`], #16). [`build`] keeps the R5 test
+//! double (`StubCliRunner`) for host tests: there every `mcp_call` fails closed before any send.
 
 use std::sync::{Arc, Weak};
 
-use mog_core::cli_runner::StubCliRunner;
+use mog_core::cli_runner::{CliRunner, StubCliRunner};
 use mog_core::clock::{SystemClock, SystemWallClock};
 use mog_core::error::{CoreError, CoreResult};
 use mog_core::http_transport::rate_bucket::RateBucket;
@@ -27,6 +27,7 @@ use mog_core::token_broker::{CliTokenBroker, ScimMe};
 use serde_json::Value;
 use tauri::Manager;
 
+use crate::cli_host::SharedCli;
 use crate::profiles_host::ProfilesHost;
 use crate::rate_bucket_host::SharedRateBucket;
 
@@ -53,19 +54,21 @@ impl GatewayComponents for McpHost {
 /// Build the one R8 of the process on the shared `bucket` (G-09a, ARC-F3). R7 (the R6 SCIM
 /// seam) and R8 both take this Arc, so the AIMD cut and the `Retry-After` hold are shared.
 /// An `Err` means the HTTP client could not start.
+/// Host tests only: no profile hosts and the R5 test double.
 pub fn build(bucket: Arc<dyn RateBucket>) -> CoreResult<McpHost> {
-    build_with(bucket, Arc::new(StubProfileHosts))
+    build_with(bucket, Arc::new(StubProfileHosts), Arc::new(StubCliRunner))
 }
 
-/// [`build`] on the profile `hosts` (the app passes its one T7, #17).
+/// [`build`] on the profile `hosts` (the app passes its one T7, #17) and R5 `cli` (the app
+/// passes its one shared R5, #16).
 pub fn build_with(
     bucket: Arc<dyn RateBucket>,
     hosts: Arc<dyn ProfileHosts>,
+    cli: Arc<dyn CliRunner>,
 ) -> CoreResult<McpHost> {
     let mono = Arc::new(SystemClock::new());
     let broker = Arc::new(CliTokenBroker::new(
-        // TODO(#16): the R5 CliRunner that runs `databricks auth token --profile <p>`.
-        Arc::new(StubCliRunner),
+        cli,
         hosts.clone(),
         mono,
         Arc::new(SystemWallClock),
@@ -101,6 +104,11 @@ pub fn install(handle: &tauri::AppHandle<tauri::Wry>) -> CoreResult<()> {
         Some(t7) => t7.0.clone(),
         None => Arc::new(StubProfileHosts),
     };
-    handle.manage(build_with(bucket, hosts)?);
+    // The shared R5 (#16). Without it R6 gets the R5 test double and fails closed.
+    let cli: Arc<dyn CliRunner> = match handle.try_state::<SharedCli>() {
+        Some(r5) => r5.0.clone(),
+        None => Arc::new(StubCliRunner),
+    };
+    handle.manage(build_with(bucket, hosts, cli)?);
     Ok(())
 }

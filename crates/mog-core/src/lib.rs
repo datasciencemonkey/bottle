@@ -13,6 +13,7 @@ pub mod audit;
 pub mod bottle_mcp;
 pub mod capture;
 pub mod cli_runner;
+pub mod cli_status;
 pub mod clock;
 pub mod consent;
 pub mod consent_ipc;

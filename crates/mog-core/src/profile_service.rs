@@ -23,7 +23,7 @@
 
 use std::ffi::OsString;
 use std::path::PathBuf;
-use std::sync::atomic::{compiler_fence, Ordering};
+use std::sync::atomic::{compiler_fence, AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
@@ -243,7 +243,7 @@ pub trait ConfigSource: Send + Sync {
 ///
 /// It reads one line at a time into one reused buffer that it zeroes after each line
 /// ([`parse_config_lines`]); the whole file is never in memory. A secret line passes through that
-/// buffer only, and no secret value is parsed or kept. TODO(#16): when R5 runs the CLI, list
+/// buffer only, and no secret value is parsed or kept. TODO(#17): R5 runs the CLI now (#16), so list
 /// through `databricks auth profiles --skip-validate --output json` instead.
 #[derive(Debug, Clone)]
 pub struct ConfigFile {
@@ -284,11 +284,15 @@ impl ConfigSource for ConfigFile {
 enum Storage {
     /// `token_storage.mode` is `secure` (the OS key store).
     Secure,
-    /// Plaintext, no mode (an older CLI keeps tokens in a plaintext file) or a failed check.
-    Blocked,
-    /// R5 is the stub on main, so the check cannot run. Only `StubCliRunner` answers
-    /// `NotImplemented`; the R5 of #16 never does, so this arm ends with it. Through the stub no
-    /// token can flow either (R6 uses the same R5). TODO(#16): R5 runs the CLI.
+    /// Plaintext, or no mode (an older CLI keeps tokens in a plaintext file). It blocks the
+    /// profile, and `cli_status` reports `plaintextStorage: true`.
+    Plaintext,
+    /// The check failed (for example a refused CLI or a failed exit). It blocks the profile, but
+    /// it is no evidence of plaintext storage.
+    Failed,
+    /// The R5 is a component-test double (`StubCliRunner`) that answers `NotImplemented`. The
+    /// shipped R5 (`DatabricksCliRunner`, #16) never does, so the app never takes this arm.
+    /// Through the stub no token can flow either (R6 uses the same R5).
     Unchecked,
 }
 
@@ -306,11 +310,11 @@ fn storage_of(cli: &dyn CliRunner, profile: &str) -> Storage {
             if mode == Some(SECURE_STORAGE) {
                 Storage::Secure
             } else {
-                Storage::Blocked
+                Storage::Plaintext
             }
         }
         Err(CoreError::NotImplemented { .. }) => Storage::Unchecked,
-        Err(_) => Storage::Blocked,
+        Err(_) => Storage::Failed,
     }
 }
 
@@ -319,6 +323,8 @@ pub struct ProfileService {
     config: Arc<dyn ConfigSource>,
     cli: Arc<dyn CliRunner>,
     cache: Mutex<Option<Vec<Profile>>>,
+    /// W-10a: the last profile check found plaintext token storage (`cli_status`).
+    plaintext: AtomicBool,
 }
 
 impl std::fmt::Debug for ProfileService {
@@ -333,6 +339,7 @@ impl ProfileService {
             config,
             cli,
             cache: Mutex::new(None),
+            plaintext: AtomicBool::new(false),
         }
     }
 
@@ -351,13 +358,21 @@ impl ProfileService {
         }
         // The cache lock is not held while R5 runs `auth describe`, so R7 and R8 calls that read
         // the last list do not wait behind a refresh.
+        let mut plaintext = false;
         let list: Vec<Profile> = self
             .config
             .profiles()?
             .into_iter()
             .map(|p| {
                 let supported = p.auth_type == U2M_AUTH_TYPE
-                    && !matches!(storage_of(self.cli.as_ref(), &p.name), Storage::Blocked);
+                    && match storage_of(self.cli.as_ref(), &p.name) {
+                        Storage::Secure | Storage::Unchecked => true,
+                        Storage::Plaintext => {
+                            plaintext = true;
+                            false
+                        }
+                        Storage::Failed => false,
+                    };
                 Profile {
                     name: p.name,
                     host: p.host,
@@ -367,8 +382,17 @@ impl ProfileService {
                 }
             })
             .collect();
+        self.plaintext.store(plaintext, Ordering::SeqCst);
         *self.cache.lock().unwrap_or_else(|p| p.into_inner()) = Some(list.clone());
         Ok(list)
+    }
+}
+
+impl crate::cli_status::PlaintextStorage for ProfileService {
+    /// True when the last profile check found a `databricks-cli` profile with plaintext token
+    /// storage (W-10a). False before the first check. It runs no CLI child.
+    fn plaintext_storage(&self) -> bool {
+        self.plaintext.load(Ordering::SeqCst)
     }
 }
 
