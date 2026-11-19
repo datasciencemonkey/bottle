@@ -39,7 +39,7 @@ fn main() {
         }
         "family" => {
             let exe = std::env::current_exe().expect("own path");
-            let child = std::process::Command::new(&exe)
+            let mut child = std::process::Command::new(&exe)
                 .arg("nap")
                 .spawn()
                 .expect("start nap");
@@ -47,6 +47,7 @@ fn main() {
                 let _ = std::fs::write(dir.join("family-pid.txt"), child.id().to_string());
             }
             std::thread::sleep(std::time::Duration::from_secs(60));
+            let _ = child.wait();
         }
         _ => {
             eprintln!("fake-databricks: unknown command");
