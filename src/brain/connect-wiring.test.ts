@@ -334,3 +334,9 @@ describe('Connect a workspace: first run and other profiles (W-07f, W-07i)', () 
     expect(core.emitTo).toHaveBeenCalledWith('hub', CONNECT_EVENT, { step: 'url', firstRun: true });
   });
 });
+
+describe('Connect a workspace: pasted URLs (review #583)', () => {
+  it('[W-07g] a scheme-less paste with a URL in its query keeps its host', () => {
+    expect(workspaceHost('acme-prod.cloud.databricks.com/?next=https://x.example')).toBe(HOST);
+  });
+});

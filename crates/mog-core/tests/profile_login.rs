@@ -603,3 +603,132 @@ fn w_07h_r5_a_failed_login_is_content_free() {
         }
     ));
 }
+
+// ---------- review fixes (#583): retry after a failed check, early cancel, pasted URLs ----------
+
+/// A config that the fake CLI writes to, as the real `auth login` does.
+#[derive(Default)]
+struct SharedConfig(Mutex<Vec<ConfigProfile>>);
+
+impl ConfigSource for SharedConfig {
+    fn profiles(&self) -> CoreResult<Vec<ConfigProfile>> {
+        Ok(self.0.lock().unwrap().clone())
+    }
+}
+
+/// `auth login` that writes `[profile]` with its host on success.
+struct WritingCli {
+    config: Arc<SharedConfig>,
+    runs: Mutex<usize>,
+}
+
+impl CliRunner for WritingCli {
+    fn resolve(&self) -> CoreResult<PathBuf> {
+        Ok(PathBuf::from("/usr/local/bin/databricks"))
+    }
+    fn run_json(&self, _args: &[&str]) -> CoreResult<Value> {
+        Err(CoreError::NotImplemented { component: "R5" })
+    }
+    fn run_login(&self, args: &[&str], _t: Duration, _c: &AtomicBool) -> CoreResult<()> {
+        *self.runs.lock().unwrap() += 1;
+        let host = args[3].to_owned();
+        let name = args[5].to_owned();
+        self.config
+            .0
+            .lock()
+            .unwrap()
+            .push(profile(&name, &host, "databricks-cli"));
+        Ok(())
+    }
+}
+
+/// Fails the first `fails` checks, then passes.
+struct FlakyVerifier(Mutex<u32>);
+
+impl LoginVerifier for FlakyVerifier {
+    fn verify(&self, _profile: &str) -> CoreResult<()> {
+        let mut left = self.0.lock().unwrap();
+        if *left > 0 {
+            *left -= 1;
+            return Err(CoreError::Unavailable {
+                component: "R6",
+                reason: "offline",
+            });
+        }
+        Ok(())
+    }
+}
+
+/// [W-07h] "Try again" after a failed W-06a check runs only the check: `auth login` already wrote the profile
+#[test]
+fn w_07h_try_again_after_a_failed_check_runs_only_the_check() {
+    let config = Arc::new(SharedConfig::default());
+    let cli = Arc::new(WritingCli {
+        config: config.clone(),
+        runs: Mutex::new(0),
+    });
+    let t7 = ProfileLogin::new(
+        config.clone(),
+        cli.clone(),
+        Arc::new(FlakyVerifier(Mutex::new(1))),
+    );
+    assert_eq!(
+        code(t7.call("profile_login", args(HOST, "bottle-x"))),
+        "offline"
+    );
+    assert_eq!(*cli.runs.lock().unwrap(), 1);
+    // The CLI wrote [bottle-x]; the retry checks it again instead of answering profile_exists.
+    let reply = t7.call("profile_login", args(HOST, "bottle-x")).unwrap();
+    assert!(reply["loginId"].is_string());
+    assert_eq!(*cli.runs.lock().unwrap(), 1, "no second auth login");
+    // Once connected, the name is a normal existing profile again.
+    assert_eq!(
+        code(t7.call("profile_login", args(HOST, "bottle-x"))),
+        "profile_exists"
+    );
+}
+
+/// [W-07h] [W-08] the retry path never adopts a profile for another host
+#[test]
+fn w_07h_w_08_a_retry_for_another_host_is_refused() {
+    let config = Arc::new(SharedConfig::default());
+    let cli = Arc::new(WritingCli {
+        config: config.clone(),
+        runs: Mutex::new(0),
+    });
+    let t7 = ProfileLogin::new(config, cli, Arc::new(FlakyVerifier(Mutex::new(1))));
+    assert_eq!(
+        code(t7.call("profile_login", args(HOST, "bottle-x"))),
+        "offline"
+    );
+    let other = "https://other-ws.cloud.databricks.com";
+    assert_eq!(
+        code(t7.call("profile_login", args(other, "bottle-x"))),
+        "profile_exists"
+    );
+}
+
+/// [W-07h] a cancel that arrives just before the sign-in registers still stops it
+#[test]
+fn w_07h_a_cancel_just_before_the_start_still_stops_the_sign_in() {
+    let cli = FakeCli::new(Cli::Ok);
+    let t7 = login(vec![], cli.clone(), FakeVerifier::new(Ok(())));
+    t7.call("profile_login_cancel", json!({ "profile": "bottle-x" }))
+        .unwrap();
+    assert_eq!(
+        code(t7.call("profile_login", args(HOST, "bottle-x"))),
+        "login_cancelled"
+    );
+    assert!(cli.calls().is_empty(), "no auth login ran");
+    // The marker is used once: the next sign-in runs.
+    t7.call("profile_login", args(HOST, "bottle-x")).unwrap();
+}
+
+/// [W-07g] a pasted URL with no scheme keeps its host even if its query holds another URL
+#[test]
+fn w_07g_a_scheme_less_paste_with_a_url_in_its_query_keeps_its_host() {
+    assert_eq!(
+        workspace_host("acme-prod.cloud.databricks.com/?next=https://x.example").as_deref(),
+        Some(HOST)
+    );
+}

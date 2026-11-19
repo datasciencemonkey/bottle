@@ -168,3 +168,77 @@ fn w_07c_a_real_cancellable_child_is_killed_at_its_timeout() {
     assert_eq!(err, CliError::TimedOut);
     assert!(start.elapsed() < Duration::from_secs(30));
 }
+
+/// [W-07h] a browser helper that keeps the CLI pipes open cannot hold a finished sign-in open
+/// (the child exits at once; its grandchild naps 5 s on the inherited stdout and stderr)
+#[test]
+fn w_07h_a_helper_on_the_pipes_cannot_hold_a_finished_sign_in_open() {
+    let _serial = serial();
+    let dir = install_fake("cancel-orphan");
+    let env = FakeEnv::new()
+        .with_path(&[dir.to_path_buf()])
+        .temp(cli_runner::RealEnv.temp_dir())
+        .set("HOME", dir.as_os_str());
+    let mut r = CliRunner::new(RealFs, env, RealProcess, CliPolicy::default())
+        .with_timeout(Duration::from_secs(10));
+    r.launch_check(None).unwrap();
+    let start = Instant::now();
+    let out = r
+        .run_cancellable(["orphan"], Duration::from_secs(60), &AtomicBool::new(false))
+        .unwrap();
+    assert!(out.success());
+    assert!(
+        start.elapsed() < Duration::from_secs(4),
+        "the run waited for the grandchild: {:?}",
+        start.elapsed()
+    );
+}
+
+/// [W-07h] Cancel kills the whole process group, so a grandchild of the CLI stops too (unix)
+#[cfg(unix)]
+#[test]
+fn w_07h_cancel_kills_the_grandchild_too() {
+    let _serial = serial();
+    let dir = install_fake("cancel-family");
+    let env = FakeEnv::new()
+        .with_path(&[dir.to_path_buf()])
+        .temp(cli_runner::RealEnv.temp_dir())
+        .set("HOME", dir.as_os_str());
+    let mut r = CliRunner::new(RealFs, env, RealProcess, CliPolicy::default())
+        .with_timeout(Duration::from_secs(10));
+    r.launch_check(None).unwrap();
+    let pid_file = dir.join("family-pid.txt");
+    let cancel = Arc::new(AtomicBool::new(false));
+    let flag = cancel.clone();
+    let watch = pid_file.clone();
+    let canceller = std::thread::spawn(move || {
+        for _ in 0..2000 {
+            if std::fs::read_to_string(&watch).is_ok_and(|s| !s.trim().is_empty()) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        flag.store(true, Ordering::SeqCst);
+    });
+    let err = r
+        .run_cancellable(["family"], Duration::from_secs(120), &cancel)
+        .unwrap_err();
+    canceller.join().unwrap();
+    assert_eq!(err, CliError::Cancelled);
+    let pid = std::fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .to_owned();
+    // The grandchild naps 5 s; after the group kill it is gone well before that.
+    let alive = || {
+        std::process::Command::new("kill")
+            .args(["-0", &pid])
+            .status()
+            .is_ok_and(|s| s.success())
+    };
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while alive() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(!alive(), "the grandchild {pid} still runs after the cancel");
+}

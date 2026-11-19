@@ -7,6 +7,8 @@
 //!   line (names only, never values).
 //! - `sleep` waits 60 s, so a test can check the child timeout.
 //! - `orphan` starts `nap` (a 5 s wait) as a grandchild on the same pipes, then exits.
+//! - `family` starts `nap` as a grandchild, writes its pid to `family-pid.txt` next to this
+//!   binary, then waits 60 s, so a test can check that a cancel reaches the grandchild.
 //! - anything else exits with code 2.
 
 use std::path::PathBuf;
@@ -34,6 +36,17 @@ fn main() {
             // The grandchild inherits stdout and stderr, so the pipes stay open while it naps.
             let _ = std::process::Command::new(exe).arg("nap").spawn();
             println!("parent done");
+        }
+        "family" => {
+            let exe = std::env::current_exe().expect("own path");
+            let child = std::process::Command::new(&exe)
+                .arg("nap")
+                .spawn()
+                .expect("start nap");
+            if let Some(dir) = exe.parent() {
+                let _ = std::fs::write(dir.join("family-pid.txt"), child.id().to_string());
+            }
+            std::thread::sleep(std::time::Duration::from_secs(60));
         }
         _ => {
             eprintln!("fake-databricks: unknown command");
