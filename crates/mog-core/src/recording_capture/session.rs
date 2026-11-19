@@ -228,9 +228,11 @@ pub struct SessionConfig {
     /// Where per-recording temp dirs go (the app's cache dir in the host).
     pub temp_root: PathBuf,
     /// The part limit in samples (55 min by default; tests pass less).
-    pub part_max_samples: u64,
+    pub part_max_samples: Option<u64>,
     /// The CAP-10a window.
     pub silence_ms: u64,
+    /// Red skeleton.
+    pub part_format: super::chunker::PartFormat,
     /// The mixer lag bound.
     pub mix_lag_samples: usize,
     /// The MOG ID of the R2 lease.
@@ -243,6 +245,7 @@ impl Default for SessionConfig {
             temp_root: std::env::temp_dir().join("bottle-recordings"),
             part_max_samples: PART_MAX_SAMPLES,
             silence_ms: SYSTEM_SILENCE_MS,
+            part_format: super::chunker::PartFormat::Flac,
             mix_lag_samples: MIX_LAG_SAMPLES,
             mog_id: RECORDING_MOG_ID.to_string(),
         }
@@ -375,7 +378,11 @@ impl RecordingSession {
         create_private_dir(&self.config.temp_root)
             .and_then(|()| create_private_dir(&dir))
             .map_err(|_| RecordingCaptureError::Io)?;
-        let parts = match PartWriter::new(&dir, &opts.name, self.config.part_max_samples) {
+        let parts = match PartWriter::new(
+            &dir,
+            &opts.name,
+            self.config.part_max_samples.unwrap_or(u64::MAX),
+        ) {
             Ok(p) => p,
             Err(_) => {
                 let _ = std::fs::remove_dir_all(&dir);

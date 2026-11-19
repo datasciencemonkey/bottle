@@ -64,6 +64,23 @@ fn create_private_file(path: &Path) -> io::Result<File> {
 
 type Current = (FlacWriter<BufWriter<File>>, PartFile);
 
+/// The audio format of the part files (red skeleton).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PartFormat {
+    /// FLAC.
+    #[default]
+    Flac,
+    /// WAV.
+    Wav,
+}
+
+impl PartFormat {
+    /// Red skeleton.
+    pub fn extension(&self) -> &'static str {
+        unimplemented!("red")
+    }
+}
+
 /// Writes the mixed stream into parts.
 pub struct PartWriter {
     dir: PathBuf,
@@ -110,6 +127,11 @@ impl PartWriter {
             }
         }
         Ok(())
+    }
+
+    /// Red skeleton.
+    pub fn with_format(_dir: &Path, _name: &str, _max: u64, _f: PartFormat) -> io::Result<Self> {
+        unimplemented!("red")
     }
 
     /// The parts finished so far (not the open one).

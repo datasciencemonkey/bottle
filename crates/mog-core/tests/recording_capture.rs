@@ -1,5 +1,5 @@
 //! Call recording, capture half (ADR 0103, Refs #65 #107 #108): the mixer, the FLAC encoder,
-//! the 55 min part chunker, the system audio device and the recording session.
+//! the 10 min part chunker, the system audio device and the recording session.
 //!
 //! Every test is deterministic: time comes from `SimClock` / `SimWallClock`, audio from fake
 //! devices, and files go to a temp dir. No test opens the user's mic or system audio.
@@ -20,7 +20,7 @@ use mog_core::capture::{
     Stopped,
 };
 use mog_core::clock::{SimClock, SimWallClock};
-use mog_core::recording_capture::chunker::{part_file_name, PartWriter};
+use mog_core::recording_capture::chunker::{part_file_name, PartFormat, PartWriter};
 use mog_core::recording_capture::flac::FlacWriter;
 use mog_core::recording_capture::mixer::{soft_clip, Mixer, Track};
 use mog_core::recording_capture::permissions::{ask_on_enable, PermissionAsker};
@@ -216,7 +216,7 @@ fn adr_0103_mixer_soft_clips_a_loud_sum() {
 #[test]
 fn adr_0103_parts_roll_at_the_part_limit() {
     let dir = temp_dir("parts");
-    // A 1 s part limit stands in for 55 min.
+    // A 1 s part limit stands in for 10 min.
     let mut w = PartWriter::new(&dir, "2026-11-19_0930", 16_000).unwrap();
     for _ in 0..25 {
         w.write(&vec![0.2; 1_000]).unwrap();
@@ -246,11 +246,46 @@ fn adr_0103_part_names_have_two_digits() {
 }
 
 #[test]
-fn adr_0103_default_part_limit_is_55_minutes() {
+fn adr_0103_default_is_one_part_with_an_optional_cap() {
+    // The cloud side sends a whole recording in one request if it can: no split by default,
+    // and one constant to set a cap later (UPDATE 4 and later rec-lead notes).
+    assert_eq!(mog_core::recording_capture::PART_MAX_MINUTES, None);
+    assert_eq!(mog_core::recording_capture::PART_MAX_SAMPLES, None);
+    assert_eq!(SessionConfig::default().part_max_samples, None);
+    assert_eq!(SessionConfig::default().part_format, PartFormat::Flac);
     assert_eq!(
-        mog_core::recording_capture::PART_MAX_SAMPLES,
-        55 * 60 * 16_000
+        mog_core::recording_capture::part_max_samples(Some(10)),
+        Some(10 * 60 * 16_000)
     );
+}
+
+#[test]
+fn adr_0103_the_part_encoder_swaps_to_wav() {
+    assert_eq!(PartFormat::Flac.extension(), "flac");
+    assert_eq!(PartFormat::Wav.extension(), "wav");
+    let dir = temp_dir("wav");
+    let mut w = PartWriter::with_format(&dir, "n", 16_000, PartFormat::Wav).unwrap();
+    w.write(&vec![0.5; 20_000]).unwrap();
+    let parts = w.finish().unwrap();
+    assert_eq!(parts.len(), 2);
+    assert_eq!(parts[0].file_name, "n.part01.wav");
+    let bytes = std::fs::read(&parts[0].path).unwrap();
+    assert_eq!(&bytes[0..4], b"RIFF");
+    assert_eq!(&bytes[8..16], b"WAVEfmt ");
+    let u16_at = |i: usize| u16::from_le_bytes([bytes[i], bytes[i + 1]]);
+    let u32_at =
+        |i: usize| u32::from_le_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]);
+    assert_eq!(u16_at(20), 1, "PCM");
+    assert_eq!(u16_at(22), 1, "mono");
+    assert_eq!(u32_at(24), 16_000);
+    assert_eq!(u16_at(34), 16);
+    assert_eq!(&bytes[36..40], b"data");
+    assert_eq!(u32_at(40), 32_000);
+    assert_eq!(u32_at(4) as usize, bytes.len() - 8);
+    assert_eq!(bytes.len(), 44 + 32_000);
+    assert_eq!(i16::from_le_bytes([bytes[44], bytes[45]]), 16_384);
+    assert_eq!(parts[1].samples, 4_000);
+    std::fs::remove_dir_all(dir).ok();
 }
 
 #[cfg(unix)]
@@ -527,7 +562,7 @@ impl Drop for Rig {
     }
 }
 
-fn rig_with(sys_fail: bool, part_max_samples: u64) -> Rig {
+fn rig_with(sys_fail: bool, part_max_samples: Option<u64>) -> Rig {
     let clock = Arc::new(SimClock::new());
     let wall = SimWallClock::at(1_763_544_600_000);
     let tap = RecordingTap::new(clock.clone());
@@ -711,15 +746,16 @@ fn adr_0103_recording_stops_by_itself_at_the_length_preset() {
 }
 
 #[test]
-fn adr_0103_a_90_minute_recording_gives_two_parts() {
-    // 10 ms stands in for 1 min: 550 ms parts, a 900 ms recording.
-    let r = rig_with(false, 55 * 160);
+fn adr_0103_a_90_minute_recording_gives_nine_10_minute_parts() {
+    // 10 ms stands in for 1 min: 100 ms parts, a 900 ms recording.
+    let r = rig_with(false, Some(10 * 160));
     r.session.start(opts("n", 90)).unwrap();
     play(&r, 90 * 10, 0.1, 0.0);
     let done = r.session.stop(StopCause::User).unwrap();
-    assert_eq!(done.parts.len(), 2);
-    assert_eq!(done.parts[0].samples, 55 * 160);
-    assert_eq!(done.parts[1].offset_ms, 550);
+    assert_eq!(done.parts.len(), 9);
+    assert_eq!(done.parts[0].samples, 10 * 160);
+    assert_eq!(done.parts[1].offset_ms, 100);
+    assert_eq!(done.parts[8].file_name, "n.part09.flac");
 }
 
 #[test]
