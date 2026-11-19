@@ -6,7 +6,9 @@
  * - The MOG row goes first (`mem.mog.upsert`): the exchange table links to it (ADR 0061). The
  *   upsert is idempotent, so it goes before each exchange. A Forget or a Wipe that removed the
  *   MOG row never makes a later exchange fail.
- * - One write per request (`opId`): a second end of the same request writes nothing.
+ * - One write per request (`opId`): a second end of the same request writes nothing. The check
+ *   holds the newest `RECENT_OPS_MAX` ids only.
+ * - The MOG name is never empty (`MOG_NAME_FALLBACK`): the table has a length CHECK.
  * - It saves the exact question that was sent, the answer, the key numbers that the card shows,
  *   the deep link, and the conversation and response ids of the `accepted` event.
  * - Status: an answer or a clarify is COMPLETED, then FAILED, UNCERTAIN, ABANDONED and
@@ -63,6 +65,19 @@ export interface GenieHistoryDeps {
   log: Pick<BrainLog, 'event'>;
 }
 
+/**
+ * The MOG row name when `config_read` fails or gives no name. `mog.display_name` has
+ * `CHECK (length BETWEEN 1 AND 80)`, so the row needs a name. A later upsert with the real name
+ * replaces it.
+ */
+export const MOG_NAME_FALLBACK = 'MOG';
+
+/**
+ * The most request ids that the once-per-request check holds. A request ends within the give-up
+ * window, so only recent ids matter; the oldest goes first.
+ */
+export const RECENT_OPS_MAX = 256;
+
 const STATUS: Record<TerminalAskEvent['t'], OperationState> = {
   answer: 'COMPLETED',
   needs_input: 'COMPLETED',
@@ -104,6 +119,8 @@ export function createGenieHistory(deps: GenieHistoryDeps): (x: GenieEnd) => Pro
   return async (x) => {
     if (done.has(x.opId)) return;
     done.add(x.opId);
+    // A Set iterates in insertion order, so the first id is the oldest.
+    if (done.size > RECENT_OPS_MAX) done.delete(done.values().next().value as string);
     try {
       const [name, host] = await Promise.all([
         deps.mogName(x.mogId).catch(() => ''),
@@ -111,7 +128,7 @@ export function createGenieHistory(deps: GenieHistoryDeps): (x: GenieEnd) => Pro
       ]);
       await deps.memory.registerMog({
         mogId: x.mogId,
-        displayName: name,
+        displayName: name.trim() === '' ? MOG_NAME_FALLBACK : name,
         backendKind: 'genie_one_mcp',
       });
       await deps.memory.recordExchange(exchangeOf(x, host ?? ''));

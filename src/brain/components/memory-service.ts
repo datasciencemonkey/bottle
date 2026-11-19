@@ -451,10 +451,13 @@ export class LocalMemoryService implements MemoryService {
   /**
    * Register the MOG row in R10 with `mem.mog.upsert` (#40, ADR 0061): every other table links
    * to it, so it goes before the first exchange of a MOG. The upsert is idempotent; a later call
-   * updates the name. The name is cut to the 80-character catalog limit.
+   * updates the name. The name is cut to the 80-character catalog limit; an empty name is
+   * refused (the table CHECK).
    */
   async registerMog(m: MogRow): Promise<void> {
     if (!UUID_RE.test(m.mogId)) throw new Error('registerMog needs a UUID mogId');
+    // `mog.display_name` has CHECK (length BETWEEN 1 AND 80).
+    if (m.displayName.length === 0) throw new Error('registerMog needs a name');
     await this.store.exec('mem.mog.upsert', {
       mogId: m.mogId,
       displayName: codePoints(m.displayName, DISPLAY_NAME_MAX),
