@@ -275,6 +275,9 @@ pub struct HostComponents<'a> {
     /// `profile_login` and `profile_login_cancel` (#162): `profiles_host::ProfileLoginHost`.
     /// `None` when R5 or R8 could not start: `host_failed`.
     pub login: Option<&'a dyn GatewayComponents>,
+    /// The `recording_*` commands (ADR 0103): `mog_core::recording::RecordingComponent`.
+    /// `None` when it is not managed: `host_failed`.
+    pub recording: Option<&'a dyn GatewayComponents>,
     /// `stt_model_*` (#413, #45, #529, ADR 0104): `stt_model_host::SttModelHost` over the one
     /// managed R4 `SttSetup`. `None` when the OS gives no models folder: `host_failed`.
     pub stt_model: Option<&'a dyn GatewayComponents>,
@@ -341,6 +344,7 @@ impl<'a> HostComponents<'a> {
             profiles: None,
             cli: None,
             login: None,
+            recording: None,
             stt_model: None,
         }
     }
@@ -529,6 +533,12 @@ impl GatewayComponents for HostComponents<'_> {
                 .login
                 .ok_or_else(|| host_failed(command))?
                 .call(command, args),
+            // ADR 0103: call recording. The component checks the knob in Rust before any
+            // capture path (`recording_off`). Its codes cross as themselves (`ERROR_CODES`).
+            c if c.starts_with("recording_") => self
+                .recording
+                .ok_or_else(|| host_failed(command))?
+                .call(command, args),
             // #413, #45, #529 (ADR 0104): the hub's Local speech step. The gateway let only the
             // hub through. Its codes cross as themselves (`ERROR_CODES`).
             "stt_model_status" | "stt_model_consent" | "stt_model_install" | "stt_model_verify"
@@ -583,36 +593,38 @@ pub fn route(components: HostComponents<'_>, command: &str, args: Value) -> Resu
 /// `databricks auth describe` once per `databricks-cli` profile when R5 lands (#555),
 /// `cli_install`, which downloads and checks the CLI (#161), `profile_login`, which waits
 /// up to 5 min for `databricks auth login` (#162), `stt_model_install`, which can download
-/// 487 MB over the network before it checks every SHA-256 (#413, #45, ADR 0104), and
+/// 487 MB over the network before it checks every SHA-256 (#413, #45, ADR 0104),
 /// `stt_model_verify`, which SHA-256s the same ~670 MB with no network IO: run on the main
 /// thread it freezes every window, the MOG drag and the double-click monitor for 1-2 s each
-/// time the hub mounts (#413, PR #600 review).
+/// time the hub mounts (#413, PR #600 review), and every `recording_*` command except
+/// `recording_state`, which does file IO, opens the device or calls the workspace (ADR 0103).
 pub fn runs_off_main_thread(command: &str) -> bool {
-    matches!(
-        command,
-        "window_mog_open"
-            | "window_mog_close"
-            | "window_card_show"
-            | "window_card_hide"
-            | "permission_request"
-            | "permission_status"
-            | "capture_start"
-            | "capture_resume"
-            | "insert_text"
-            | "mcp_call"
-            | "agent_start"
-            | "agent_stop"
-            | "agent_send"
-            | "stt_transcribe"
-            | "mem_local_exec"
-            | "profiles_list"
-            | "cli_install"
-            | "profile_login"
-            // #413, #45: the install can run for minutes over the network (487 MB).
-            | "stt_model_install"
-            // #413, PR #600 review: verify hashes ~670 MB with no network IO.
-            | "stt_model_verify"
-    )
+    (command.starts_with("recording_") && command != "recording_state")
+        || matches!(
+            command,
+            "window_mog_open"
+                | "window_mog_close"
+                | "window_card_show"
+                | "window_card_hide"
+                | "permission_request"
+                | "permission_status"
+                | "capture_start"
+                | "capture_resume"
+                | "insert_text"
+                | "mcp_call"
+                | "agent_start"
+                | "agent_stop"
+                | "agent_send"
+                | "stt_transcribe"
+                | "mem_local_exec"
+                | "profiles_list"
+                | "cli_install"
+                | "profile_login"
+                // #413, #45: the install can run for minutes over the network (487 MB).
+                | "stt_model_install"
+                // #413, PR #600 review: verify SHA-256s ~670 MB with no network IO.
+                | "stt_model_verify"
+        )
 }
 
 /// The paste component of this OS, or `None` where Bottle has no paste (`host_failed`).
@@ -714,6 +726,8 @@ fn route_from<R: Runtime>(
     // `try_state`: `cli_host::start` manages R5 (#16); without it `cli_*` answer `host_failed`.
     let cli = webview.try_state::<crate::cli_host::CliStatusHost>();
     let login = webview.try_state::<crate::profiles_host::ProfileLoginHost>();
+    // `try_state`: `lib.rs` manages the one recording component (ADR 0103).
+    let recording = webview.try_state::<std::sync::Arc<mog_core::recording::RecordingComponent>>();
     // `try_state`: `install_stt_model` manages the one R4 `SttSetup` (#413, #45); without it
     // (no models folder on this device) `stt_model_*` answer `host_failed`.
     let stt_model = webview.try_state::<crate::stt_model_host::SttModelHost>();
@@ -744,6 +758,9 @@ fn route_from<R: Runtime>(
             .as_ref()
             .map(|c| c.inner().0.as_ref() as &dyn GatewayComponents),
         login: login.as_ref().map(|l| l.inner() as &dyn GatewayComponents),
+        recording: recording
+            .as_ref()
+            .map(|r| r.inner().as_ref() as &dyn GatewayComponents),
         stt_model: stt_model
             .as_ref()
             .map(|s| s.inner() as &dyn GatewayComponents),
@@ -1028,6 +1045,7 @@ mod tests {
         assert!(c.agent.is_none());
         assert!(c.stt.is_none());
         assert!(c.mem.is_none());
+        assert!(c.recording.is_none());
         // A missing host part still answers `host_failed`.
         assert_eq!(
             route(c, "window_card_show", json!({"mogId": "a1"})),

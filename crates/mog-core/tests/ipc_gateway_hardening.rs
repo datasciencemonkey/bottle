@@ -112,6 +112,17 @@ fn sample(command: &str) -> (&'static str, Value) {
         "brain_subscribe" => json!({"onEvent": "__CHANNEL__:3"}),
         "hub_notice_send" => json!({"kind": "dictation_unshown", "mogId": "a1", "text": "hello"}),
         "view_notice_subscribe" => return ("hub", json!({"onNotice": "__CHANNEL__:4"})),
+        // ADR 0103: call recording.
+        "recording_settings_read"
+        | "recording_stop"
+        | "recording_state"
+        | "recording_open_system_audio_settings" => json!({}),
+        "recording_settings_write" => json!({"patch": {"enabled": true}}),
+        "recording_storage_probe" | "recording_list" => json!({"profile": "p"}),
+        "recording_volume_create" => json!({"profile": "p", "catalog": "main", "schema": "calls"}),
+        "recording_start" => json!({"profile": "p", "instructions": "Notes."}),
+        "recording_detail" | "recording_retry" => json!({"profile": "p", "id": "rec-1"}),
+        "recording_open" => json!({"profile": "p", "id": "rec-1", "target": "folder"}),
         "stt_model_status" | "stt_model_verify" | "stt_model_cancel" => return ("hub", json!({})),
         "stt_model_consent" => return ("hub", json!({"consent": "granted"})),
         "stt_model_install" => {
@@ -444,6 +455,19 @@ fn sec_03_each_ipc_error_maps_to_a_fixed_code() {
         IpcError::LoginCancelled { command: s() },
         IpcError::CliFailed { command: s() },
         IpcError::NoGrant { command: s() },
+        // ADR 0103: call recording.
+        IpcError::RecordingOff { command: s() },
+        IpcError::RecordingBusy { command: s() },
+        IpcError::RecordingInProgress { command: s() },
+        IpcError::UnknownRecording { command: s() },
+        IpcError::NoStorage { command: s() },
+        IpcError::VolumePermission { command: s() },
+        IpcError::TranscribeEndpointMissing { command: s() },
+        IpcError::NotesEndpointMissing { command: s() },
+        IpcError::TooLong { command: s() },
+        IpcError::AudioUnreadable { command: s() },
+        IpcError::UploadFailed { command: s() },
+        IpcError::SystemAudioDenied { command: s() },
         IpcError::SttModelMissing { command: s() },
         IpcError::SttConsentRequired { command: s() },
         IpcError::SttUrlNotAllowed { command: s() },

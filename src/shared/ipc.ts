@@ -99,6 +99,26 @@ export const COMMANDS = {
   /** Not in 4.5 (#509, ADR 0091): the hub's private Channel for its notices. */
   view_notice_subscribe: { windows: ['hub'], phase: 'MVP-D' },
   /**
+   * ADR 0103: call recording. Brain and hub, like `app_setting_*`: the hub view sends only
+   * `view_emit` (ARC-2, MOG-08a), so the brain relays each click. A MOG "Record" click and the
+   * record key reach `recording_start` and `recording_stop` through the brain too.
+   */
+  recording_settings_read: BH,
+  recording_settings_write: BH,
+  recording_storage_probe: BH,
+  recording_volume_create: BH,
+  /** Rust refuses it with `recording_off` while the knob is off, then `consent_required`. */
+  recording_start: BH,
+  recording_stop: BH,
+  recording_state: BH,
+  recording_list: BH,
+  recording_detail: BH,
+  recording_retry: BH,
+  /** Rust builds the Catalog Explorer URL from the profile host and opens it. */
+  recording_open: BH,
+  /** The "Allow System Audio Recording" fix-it: Rust opens the OS privacy pane. */
+  recording_open_system_audio_settings: BH,
+  /**
    * Not in 4.5 (#413, #45, #529, ADR 0104): the hub's Local speech step. Hub-only, like
    * `view_notice_subscribe`: `stt_model_install`'s progress Channel always resolves on the hub
    * webview.
@@ -146,6 +166,19 @@ export const EVENTS = {
   /** Not in 4.5 (ADR 0040): mic frames for the MOG level meter (UX-06a), sent to `mog-<owner>`. */
   'mog.level': { name: 'mog:level', direction: 'brain_to_view' },
   'view.input': { name: 'view:input', direction: 'core_to_brain' },
+  /**
+   * Not in 4.5 (ADR 0103): the record key (⌥R) in a talk-key hold, with the knob on. Payload:
+   * `RecordToggle`. The host sends a `hotkey.ptt` `cancel` first, so no dictation and no paste
+   * follow. The brain calls `recording_start`, or `recording_stop` while a recording runs.
+   */
+  'hotkey.record_toggle': { name: 'hotkey:record_toggle', direction: 'core_to_brain' },
+  /**
+   * Not in 4.5 (ADR 0103): the one recording of the device. Payload: `RecordingState`. Not
+   * sticky: a brain that subscribes later calls `recording_state`.
+   */
+  'recording.state': { name: 'recording:state', direction: 'core_to_brain' },
+  /** Not in 4.5 (ADR 0103): one job status changed. Payload: `RecordingSummary`. */
+  'recording.job': { name: 'recording:job', direction: 'core_to_brain' },
 } as const;
 
 export type EventName = (typeof EVENTS)[keyof typeof EVENTS]['name'];
@@ -355,6 +388,29 @@ export interface CommandArgs {
   brain_subscribe: { onEvent: Channel<BrainMessage> };
   hub_notice_send: HubTextNotice;
   view_notice_subscribe: { onNotice: Channel<unknown> };
+  recording_settings_read: NoArgs;
+  recording_settings_write: { patch: RecordingSettingsPatch };
+  /**
+   * `profile`: the brain's home profile (`src/brain/home-profile.ts`). Rust has no home
+   * profile of its own and never picks one; every recording command that reaches Databricks
+   * carries it.
+   */
+  recording_storage_probe: { profile: ProfileName };
+  /** Creates the managed volume `bottle_audio` after the user confirmed. `[A-Za-z0-9_-]` names. */
+  recording_volume_create: { profile: ProfileName; catalog: string; schema: string };
+  /**
+   * `profile`: the home profile the pipeline uses for every cloud call of this recording,
+   * including after `recording_stop`. `instructions`: for this recording only. Absent: the
+   * Settings preset.
+   */
+  recording_start: { profile: ProfileName; instructions?: string };
+  recording_stop: NoArgs;
+  recording_state: NoArgs;
+  recording_list: { profile: ProfileName };
+  recording_detail: { profile: ProfileName; id: RecordingId };
+  recording_retry: { profile: ProfileName; id: RecordingId };
+  recording_open: { profile: ProfileName; id: RecordingId; target: 'folder' };
+  recording_open_system_audio_settings: NoArgs;
   stt_model_status: NoArgs;
   stt_model_consent: { consent: 'granted' | 'declined' };
   stt_model_install: { source: 'github' | 'hf_mirror'; onProgress: Channel<SttModelProgress> };
@@ -430,6 +486,22 @@ export const IPC_ERROR_CODES = [
   'login_cancelled',
   'cli_failed',
   'no_grant',
+  /**
+   * `recording_*` and `capture_start` (ADR 0103): the call recording codes that have no older
+   * code. `recording_in_progress`: the talk key cannot take the mic while a recording runs.
+   */
+  'recording_off',
+  'recording_busy',
+  'recording_in_progress',
+  'unknown_recording',
+  'no_storage',
+  'volume_permission',
+  'transcribe_endpoint_missing',
+  'notes_endpoint_missing',
+  'too_long',
+  'audio_unreadable',
+  'upload_failed',
+  'system_audio_denied',
   /** `stt_transcribe`: R4 has no installed, checked model (#413, ADR 0104). */
   'stt_model_missing',
   /** `stt_model_*` (#413, #45, #529, ADR 0104): the `SetupError`/`InstallError` codes. */
@@ -653,6 +725,119 @@ export interface ConsentRecordView {
   acceptedAt: number;
 }
 
+// ---------- call recording (ADR 0103; Rust mirror in `mog_core::types`) ----------
+
+/** A recording ID: 1-64 characters of `[A-Za-z0-9_-]`. */
+export type RecordingId = string;
+
+/**
+ * Where the recordings go. `root` is a `/Volumes/...` path: the My Files root or a volume
+ * `/Volumes/<catalog>/<schema>/<volume>`. Files go under `<root>/Bottle/Recordings/<name>/`.
+ */
+export interface RecordingStorage {
+  kind: 'my_files' | 'volume';
+  root: string;
+}
+
+/** The recording settings (`recording_settings_*`). No secret. */
+export interface RecordingSettings {
+  /** The knob. Default off. */
+  enabled: boolean;
+  /** The user acknowledged the first-use consent notice. Default false. */
+  consentAck: boolean;
+  storage: RecordingStorage | null;
+  /** The model that transcribes the audio. Default `databricks-gemini-3-8-flash`. */
+  transcribeEndpoint: string;
+  /** The model that writes the notes. Default `databricks-claude-sonnet-5-5`. */
+  notesEndpoint: string;
+  /** The preset prompt. Default: the ADR 0103 prompt. */
+  presetInstructions: string;
+  /** The recording stops by itself after this many minutes: 5 to 120, default 60. */
+  lengthMin: number;
+}
+
+/** A partial `RecordingSettings`. An absent field keeps its value; no field clears to null. */
+export type RecordingSettingsPatch = Partial<{
+  [K in keyof RecordingSettings]: NonNullable<RecordingSettings[K]>;
+}>;
+
+/** `system_audio`: the other side of the call. `silent_or_denied`: 5 s of zero buffers. */
+export type SystemAudio = 'ok' | 'unavailable' | 'silent_or_denied' | 'off';
+
+/** The `recording.state` payload. Content-free. Times are epoch milliseconds. */
+export interface RecordingState {
+  state: 'idle' | 'starting' | 'recording' | 'stopping';
+  id?: RecordingId;
+  name?: string;
+  startedAtMs?: number;
+  /** The recording stops by itself at this time; the REC state shows the time left. */
+  endsAtMs?: number;
+  systemAudio: SystemAudio;
+}
+
+/** The status of a recording job. `transcribing`: the model calls per part. */
+export type RecordingStatus =
+  'recording' | 'uploading' | 'transcribing' | 'writing_notes' | 'done' | 'failed';
+
+/** Why a recording failed (`RecordingSummary.errorKind`). One message and one action each. */
+export type RecordingErrorKind =
+  | 'recording_off'
+  | 'consent_required'
+  | 'recording_busy'
+  | 'mic_busy'
+  | 'no_storage'
+  | 'volume_permission'
+  | 'transcribe_endpoint_missing'
+  | 'notes_endpoint_missing'
+  | 'too_long'
+  | 'audio_unreadable'
+  | 'upload_failed'
+  | 'rate_limited'
+  | 'network'
+  | 'auth'
+  | 'system_audio_denied'
+  | 'internal';
+
+/** One recordings list row and the `recording.job` payload. Content-free. */
+export interface RecordingSummary {
+  id: RecordingId;
+  name: string;
+  startedAtMs: number;
+  durationS: number;
+  status: RecordingStatus;
+  errorKind?: RecordingErrorKind;
+  /** The step that failed; Retry starts again there. */
+  errorStage?: RecordingStatus;
+}
+
+/** One transcript turn. Seconds from the start, across parts. `text` is user content. */
+export interface RecordingSegment {
+  start: number;
+  end: number;
+  speaker: string;
+  text: string;
+  part: number;
+}
+
+/** The `recording_detail` reply. User content: never log it. */
+export interface RecordingDetail {
+  summary: RecordingSummary;
+  instructions: string;
+  segments: RecordingSegment[];
+  transcriptMd?: string;
+  notesMd?: string;
+}
+
+/** The `recording_storage_probe` reply: the My Files root, or `null`. */
+export interface StorageProbe {
+  myFilesRoot: string | null;
+}
+
+/** The `hotkey.record_toggle` payload: the MOG of the talk-key hold. */
+export interface RecordToggle {
+  mogId: MogId;
+}
+
 type Empty = Record<string, never>;
 
 /** Return types of 4.5. `unknown` where a feature issue still defines the shape. */
@@ -718,6 +903,19 @@ export interface CommandReturns {
   brain_subscribe: Empty;
   hub_notice_send: Empty;
   view_notice_subscribe: Empty;
+  recording_settings_read: RecordingSettings;
+  recording_settings_write: RecordingSettings;
+  recording_storage_probe: StorageProbe;
+  recording_volume_create: RecordingStorage;
+  recording_start: RecordingState;
+  recording_stop: RecordingState;
+  recording_state: RecordingState;
+  /** Newest first. */
+  recording_list: RecordingSummary[];
+  recording_detail: RecordingDetail;
+  recording_retry: RecordingSummary;
+  recording_open: Empty;
+  recording_open_system_audio_settings: Empty;
   stt_model_status: SttModelStatus;
   stt_model_consent: SttModelStatus;
   stt_model_install: SttModelStatus;

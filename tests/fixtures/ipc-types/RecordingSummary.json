@@ -1,0 +1,9 @@
+{
+  "id": "rec-1",
+  "name": "2026-11-19_1430_2",
+  "startedAtMs": 1795620600000,
+  "durationS": 3300,
+  "status": "failed",
+  "errorKind": "transcribe_endpoint_missing",
+  "errorStage": "transcribing"
+}

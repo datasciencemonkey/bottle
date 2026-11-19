@@ -60,6 +60,20 @@ export const CALL_CLASS = {
   brain_subscribe: 'local',
   hub_notice_send: 'local',
   view_notice_subscribe: 'local',
+  // ADR 0103: call recording. Rust reads and writes the settings file locally; the rest reach
+  // the workspace (Files API, Unity Catalog, model serving).
+  recording_settings_read: 'local',
+  recording_settings_write: 'local',
+  recording_storage_probe: 'cloud',
+  recording_volume_create: 'cloud',
+  recording_start: 'local',
+  recording_stop: 'cloud', // the stop starts the upload and the transcription
+  recording_state: 'local',
+  recording_list: 'cloud',
+  recording_detail: 'cloud',
+  recording_retry: 'cloud',
+  recording_open: 'local', // opens the browser; Bottle itself sends nothing
+  recording_open_system_audio_settings: 'local',
   stt_model_status: 'local',
   stt_model_consent: 'local',
   stt_model_install: 'cloud', // downloads the pinned Parakeet model (github or hf_mirror)
