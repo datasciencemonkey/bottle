@@ -125,7 +125,7 @@ fn w_07h_cancel_kills_a_real_running_cli_child() {
     let _serial = serial();
     let dir = install_fake("cancel");
     let env = FakeEnv::new()
-        .with_path(&[dir.clone()])
+        .with_path(std::slice::from_ref(&dir))
         .temp(cli_runner::RealEnv.temp_dir())
         .set("HOME", dir.as_os_str());
     let mut r = CliRunner::new(RealFs, env, RealProcess, CliPolicy::default())
@@ -156,7 +156,7 @@ fn w_07c_a_real_cancellable_child_is_killed_at_its_timeout() {
     let _serial = serial();
     let dir = install_fake("cancel-timeout");
     let env = FakeEnv::new()
-        .with_path(&[dir.clone()])
+        .with_path(std::slice::from_ref(&dir))
         .temp(cli_runner::RealEnv.temp_dir())
         .set("HOME", dir.as_os_str());
     let mut r = CliRunner::new(RealFs, env, RealProcess, CliPolicy::default())

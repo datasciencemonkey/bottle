@@ -133,6 +133,11 @@ pub const ERROR_CODES: &[&str] = &[
     "agent_target_unavailable",
     "agent_invalid_target",
     "agent_harness_mismatch",
+    // `profile_login` (#162): the sign-in codes that have no older code (W-07g, W-07h).
+    "profile_exists",
+    "login_cancelled",
+    "cli_failed",
+    "no_grant",
 ];
 
 /// The fixed, content-free code of an [`IpcError`] (its serde tag). It never holds the
@@ -188,6 +193,10 @@ pub fn ipc_error_code(e: &IpcError) -> &'static str {
         IpcError::AgentTargetUnavailable { .. } => "agent_target_unavailable",
         IpcError::AgentInvalidTarget { .. } => "agent_invalid_target",
         IpcError::AgentHarnessMismatch { .. } => "agent_harness_mismatch",
+        IpcError::ProfileExists { .. } => "profile_exists",
+        IpcError::LoginCancelled { .. } => "login_cancelled",
+        IpcError::CliFailed { .. } => "cli_failed",
+        IpcError::NoGrant { .. } => "no_grant",
     }
 }
 

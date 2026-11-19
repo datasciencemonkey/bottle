@@ -13,6 +13,7 @@ import {
 import { About } from './About';
 import { CliInstallStep } from './CliInstallStep';
 import { CliSettings } from './CliSettings';
+import { ConnectWorkspace } from './ConnectWorkspace';
 import { DataPanel } from './DataDisclosures';
 import { DictationNotices } from './DictationNotices';
 import { LegalNotice } from './LegalNotice';
@@ -68,6 +69,8 @@ export function Hub() {
       {/* W-17c (#161): the CLI install step comes before the workspace setup. */}
       <CliInstallStep />
       <DictationNotices />
+      {/* #162 (W-07f): the brain opens it at first run when no usable profile exists. */}
+      <ConnectWorkspace />
       {/* The live moods the MOG windows report: one quiet chip per MOG (empty until one runs). */}
       <ul aria-label="MOGs" className="hub-live">
         {[...mogs].map(([id, s]) => (

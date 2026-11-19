@@ -57,7 +57,7 @@ function setup(over: Partial<ConnectDeps> = {}) {
   };
   const bus = new BrainBus();
   wireConnectWorkspace(bus, deps);
-  return { bus, deps, sent, last: () => sent[sent.length - 1] };
+  return { bus, deps, sent, last: (): ConnectModel | undefined => sent.at(-1) };
 }
 
 describe('Connect a workspace: URL step (W-07a, W-07b, W-07g)', () => {
@@ -231,8 +231,8 @@ describe('Connect a workspace: sign-in (W-07c, W-07g, W-07h, W-15)', () => {
       click(bus, { target: 'connect_start', profile: 'bottle-x' });
       await flush();
       const m = last();
-      expect(m.step, code).toBe('failed');
-      if (m.step !== 'failed') continue;
+      expect(m?.step, code).toBe('failed');
+      if (m?.step !== 'failed') continue;
       expect(m.text.length, code).toBeGreaterThan(0);
       expect(JSON.stringify(m)).not.toContain('upstream-detail');
       expect(typeof m.action.label).toBe('string');

@@ -18,6 +18,7 @@ import { wireForget } from '../forget-wiring';
 import { wireWipe } from '../wipe-wiring';
 import { wireCliInstall, wireCliSettings } from '../cli-wiring';
 import { cliPlatform } from '../../shared/cli-view';
+import { wireConnectWorkspace } from '../connect-wiring';
 import { sendHubSnapshot, wireHubMogs } from '../hub-mogs-wiring';
 import {
   createCaptureLifecycle,
@@ -137,6 +138,12 @@ export function startBrain(): Brain {
       cliInfo: () => components.T7.cliInfo(),
       install: () => call('cli_install', { consent: true }),
       platform: cliPlatform(globalThis.navigator?.userAgent ?? ''),
+    });
+    // #162 (W-07a..W-07i, W-15): "Connect a workspace" in the hub signs in through T7.
+    wireConnectWorkspace(bus, {
+      login: (host, name, opts) => components.T7.login(host, name, opts),
+      cancel: (profile) => call('profile_login_cancel', { profile }),
+      profiles: () => call('profiles_list', {}),
     });
     // MB-06a, MB-06b, UX-28: the talk-key target, its marker and its toast (#73). It is wired
     // before the capture lifecycle, so a `hotkey:ptt` down updates the target first.

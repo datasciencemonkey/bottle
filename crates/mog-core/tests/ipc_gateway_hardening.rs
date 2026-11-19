@@ -66,7 +66,7 @@ fn sample(command: &str) -> (&'static str, Value) {
         "cli_status" | "capture_status" | "capture_stop_all" | "mem_remote_status"
         | "config_list" | "policy_get" | "profiles_list" => json!({}),
         "cli_install" => json!({"consent": true}),
-        "profile_status" => json!({"profile": "p"}),
+        "profile_status" | "profile_login_cancel" => json!({"profile": "p"}),
         "profile_login" => {
             json!({"workspaceUrl": "https://x.cloud.databricks.com", "profile": "p"})
         }
@@ -432,6 +432,10 @@ fn sec_03_each_ipc_error_maps_to_a_fixed_code() {
         IpcError::AgentTargetUnavailable { command: s() },
         IpcError::AgentInvalidTarget { command: s() },
         IpcError::AgentHarnessMismatch { command: s() },
+        IpcError::ProfileExists { command: s() },
+        IpcError::LoginCancelled { command: s() },
+        IpcError::CliFailed { command: s() },
+        IpcError::NoGrant { command: s() },
     ];
     assert_eq!(all.len(), ERROR_CODES.len(), "one code per variant");
     for e in &all {

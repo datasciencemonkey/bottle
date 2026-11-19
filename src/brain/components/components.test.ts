@@ -204,7 +204,7 @@ describe('brain component stubs', () => {
     const t = createProfileService();
     await expectStub(() => t.list(), 17);
     await expectStub(() => t.status('p'), 17);
-    await expectStub(() => t.login('h', 'p'), 162);
+    // login is built (#162): `profile-service.test.ts`.
     await expectStub(() => t.home(MOG), 163);
     await expectStub(() => t.resolveTarget([], MOG), 164);
   });

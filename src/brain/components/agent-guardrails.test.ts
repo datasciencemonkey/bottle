@@ -44,6 +44,7 @@ const FORBIDDEN = [
   'capture_resume',
   'profile_select',
   'profile_login',
+  'profile_login_cancel',
   'mcp_call',
   'dbx_http',
   'config_write',

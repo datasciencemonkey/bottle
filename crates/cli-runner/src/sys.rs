@@ -3,6 +3,7 @@
 use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -73,6 +74,30 @@ pub trait Process {
     ) -> io::Result<ProcOutput> {
         self.run(program, args, env)
     }
+
+    /// [`Process::run_with_timeout`], but the child is also killed as soon as `cancel` is set,
+    /// and the call fails with [`io::ErrorKind::Interrupted`] (#162, W-07h: Cancel stops the
+    /// `databricks auth login` child). Nothing the child wrote leaves the call on a cancel.
+    ///
+    /// The default checks `cancel` once before the start, then runs [`Process::run_with_timeout`]
+    /// (for test doubles). [`RealProcess`] checks it while the child runs.
+    fn run_cancellable(
+        &self,
+        program: &Path,
+        args: &[OsString],
+        env: &[(OsString, OsString)],
+        timeout: Duration,
+        cancel: &AtomicBool,
+    ) -> io::Result<ProcOutput> {
+        if cancel.load(Ordering::SeqCst) {
+            return Err(cancelled());
+        }
+        self.run_with_timeout(program, args, env, Some(timeout))
+    }
+}
+
+fn cancelled() -> io::Error {
+    io::Error::new(io::ErrorKind::Interrupted, "CLI child cancelled")
 }
 
 /// The real filesystem.
@@ -151,13 +176,7 @@ impl Process for RealProcess {
         env: &[(OsString, OsString)],
         timeout: Option<Duration>,
     ) -> io::Result<ProcOutput> {
-        use std::process::{Command, Stdio};
-        let mut command = Command::new(program);
-        command
-            .args(args)
-            .env_clear()
-            .envs(env.iter().map(|(k, v)| (k, v)))
-            .stdin(Stdio::null());
+        let mut command = clean_command(program, args, env);
         let Some(timeout) = timeout else {
             let out = command.output()?;
             return Ok(ProcOutput {
@@ -166,46 +185,100 @@ impl Process for RealProcess {
                 stderr: out.stderr,
             });
         };
-        let mut child = command
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
-        // Read both pipes on threads, so a full pipe cannot block the child before the deadline.
-        let stdout = child.stdout.take().map(read_all);
-        let stderr = child.stderr.take().map(read_all);
-        let deadline = Instant::now() + timeout;
-        let status = loop {
-            if let Some(status) = child.try_wait()? {
-                break Some(status);
+        run_until(command, timeout, None)
+    }
+
+    fn run_cancellable(
+        &self,
+        program: &Path,
+        args: &[OsString],
+        env: &[(OsString, OsString)],
+        timeout: Duration,
+        cancel: &AtomicBool,
+    ) -> io::Result<ProcOutput> {
+        if cancel.load(Ordering::SeqCst) {
+            return Err(cancelled());
+        }
+        run_until(clean_command(program, args, env), timeout, Some(cancel))
+    }
+}
+
+/// `program args` with exactly `env` (nothing inherited) and no stdin.
+fn clean_command(
+    program: &Path,
+    args: &[OsString],
+    env: &[(OsString, OsString)],
+) -> std::process::Command {
+    let mut command = std::process::Command::new(program);
+    command
+        .args(args)
+        .env_clear()
+        .envs(env.iter().map(|(k, v)| (k, v)))
+        .stdin(std::process::Stdio::null());
+    command
+}
+
+/// Run `command` with piped output; kill the child at `timeout` ([`io::ErrorKind::TimedOut`])
+/// or when `cancel` is set ([`io::ErrorKind::Interrupted`]).
+fn run_until(
+    mut command: std::process::Command,
+    timeout: Duration,
+    cancel: Option<&AtomicBool>,
+) -> io::Result<ProcOutput> {
+    use std::process::Stdio;
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    // Read both pipes on threads, so a full pipe cannot block the child before the deadline.
+    let stdout = child.stdout.take().map(read_all);
+    let stderr = child.stderr.take().map(read_all);
+    let deadline = Instant::now() + timeout;
+    let mut was_cancelled = false;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break Some(status);
+        }
+        if cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
+            let _ = child.kill();
+            let _ = child.wait();
+            was_cancelled = true;
+            break None;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    // A grandchild can keep the pipes open after the child ends, so the reads get only a
+    // short grace after the deadline. A cancel does not wait for the deadline.
+    let pipe_deadline = if was_cancelled {
+        Instant::now()
+    } else {
+        deadline.max(Instant::now())
+    } + PIPE_GRACE;
+    let stdout = join(stdout, pipe_deadline);
+    let stderr = join(stderr, pipe_deadline);
+    match (status, stdout, stderr) {
+        (Some(status), Some(stdout), Some(stderr)) => Ok(ProcOutput {
+            code: status.code(),
+            stdout,
+            stderr,
+        }),
+        (_, stdout, stderr) => {
+            // Nothing the child wrote leaves this function on a timeout or a cancel.
+            for mut buf in [stdout, stderr].into_iter().flatten() {
+                buf.fill(0);
             }
-            if Instant::now() >= deadline {
-                let _ = child.kill();
-                let _ = child.wait();
-                break None;
+            if was_cancelled {
+                return Err(cancelled());
             }
-            std::thread::sleep(Duration::from_millis(10));
-        };
-        // A grandchild can keep the pipes open after the child ends, so the reads get only a
-        // short grace after the deadline.
-        let pipe_deadline = deadline.max(Instant::now()) + PIPE_GRACE;
-        let stdout = join(stdout, pipe_deadline);
-        let stderr = join(stderr, pipe_deadline);
-        match (status, stdout, stderr) {
-            (Some(status), Some(stdout), Some(stderr)) => Ok(ProcOutput {
-                code: status.code(),
-                stdout,
-                stderr,
-            }),
-            (_, stdout, stderr) => {
-                // Nothing the child wrote leaves this function on a timeout.
-                for mut buf in [stdout, stderr].into_iter().flatten() {
-                    buf.fill(0);
-                }
-                Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "CLI child timed out",
-                ))
-            }
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "CLI child timed out",
+            ))
         }
     }
 }

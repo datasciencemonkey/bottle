@@ -507,10 +507,13 @@ impl Env for PathEnv {
     }
 }
 
+/// One login child: its args and timeout.
+type Seen = (Vec<OsString>, Option<Duration>);
+
 /// Answers `--version` and records the login child (its args and timeout).
 #[derive(Clone, Default)]
 struct LoginProcess {
-    seen: Arc<Mutex<Vec<(Vec<OsString>, Option<Duration>)>>>,
+    seen: Arc<Mutex<Vec<Seen>>>,
     code: Option<i32>,
 }
 

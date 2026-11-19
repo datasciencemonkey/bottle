@@ -23,7 +23,8 @@ use mog_core::http_transport::rate_bucket::RateBucket;
 use mog_core::http_transport::{ProfileHosts, ReqwestHttpTransport, StubProfileHosts};
 use mog_core::ipc_gateway::GatewayComponents;
 use mog_core::mcp_transport::{McpCallComponent, ReqwestMcpTransport};
-use mog_core::token_broker::{CliTokenBroker, ScimMe};
+use mog_core::profile_login::LoginVerifier;
+use mog_core::token_broker::{CliTokenBroker, ScimMe, TokenBroker};
 use serde_json::Value;
 use tauri::Manager;
 
@@ -34,6 +35,8 @@ use crate::rate_bucket_host::SharedRateBucket;
 /// The `mcp_call` component of the app: R8 over R6, with the R7 that serves the R6 SCIM seam.
 pub struct McpHost {
     component: McpCallComponent<Arc<ReqwestMcpTransport>>,
+    /// The R6 of R8, for the W-06a check after a sign-in (#162, [`McpHost::login_verifier`]).
+    broker: Arc<CliTokenBroker>,
     /// R6 holds R7 weakly (`bind_scim`), so the host keeps R7 alive.
     _scim: Arc<ReqwestHttpTransport>,
 }
@@ -80,11 +83,30 @@ pub fn build_with(
     )?);
     let weak: Weak<dyn ScimMe> = Arc::downgrade(&scim) as Weak<dyn ScimMe>;
     broker.bind_scim(weak);
+    let r6 = broker.clone();
     let transport = Arc::new(ReqwestMcpTransport::new(hosts, broker, bucket)?);
     Ok(McpHost {
         component: McpCallComponent::new(transport),
+        broker: r6,
         _scim: scim,
     })
+}
+
+/// The W-06a check of a new profile (#162, W-07h): R6 reads its `workspace_id` from the
+/// `x-databricks-org-id` header of SCIM `Me`. The token stays in R6.
+struct WorkspaceIdCheck(Arc<CliTokenBroker>);
+
+impl LoginVerifier for WorkspaceIdCheck {
+    fn verify(&self, profile: &str) -> CoreResult<()> {
+        self.0.workspace_id(profile).map(|_| ())
+    }
+}
+
+impl McpHost {
+    /// The W-06a check for `profile_login` (#162), on the R6 of this R8.
+    pub fn login_verifier(&self) -> Arc<dyn LoginVerifier> {
+        Arc::new(WorkspaceIdCheck(self.broker.clone()))
+    }
 }
 
 /// Build R8 on the app-managed [`SharedRateBucket`] and manage it, so `mcp_call` reaches it.

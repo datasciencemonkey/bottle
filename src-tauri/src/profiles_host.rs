@@ -13,11 +13,13 @@ use std::sync::Arc;
 use mog_core::cli_runner::CliRunner;
 use mog_core::error::CoreResult;
 use mog_core::ipc_gateway::GatewayComponents;
+use mog_core::profile_login::ProfileLogin;
 use mog_core::profile_service::{ConfigFile, ConfigSource, ProfileService};
 use serde_json::Value;
 use tauri::Manager;
 
 use crate::cli_host::SharedCli;
+use crate::mcp_host::McpHost;
 
 /// The `profiles_list` component of the app, over the one T7.
 #[derive(Debug, Clone)]
@@ -42,4 +44,32 @@ pub fn install(handle: &tauri::AppHandle<tauri::Wry>) {
         return;
     };
     handle.manage(build(Arc::new(ConfigFile::of_user()), cli));
+}
+
+/// The `profile_login` and `profile_login_cancel` component of the app (#162).
+#[derive(Debug, Clone)]
+pub struct ProfileLoginHost(pub Arc<ProfileLogin>);
+
+impl GatewayComponents for ProfileLoginHost {
+    fn call(&self, command: &'static str, args: Value) -> CoreResult<Value> {
+        self.0.call(command, args)
+    }
+}
+
+/// Manage the "Connect a workspace" sign-in over the user's CLI config file (read only, for the
+/// name check), the shared R5 and the W-06a check of R6 ([`McpHost::login_verifier`]).
+/// [`crate::cli_host::install`] and [`crate::mcp_host::install`] run first; without R5 or R8
+/// it is not managed, and both rows answer `host_failed`.
+pub fn install_login(handle: &tauri::AppHandle<tauri::Wry>) {
+    let Some(cli) = handle.try_state::<SharedCli>().map(|c| c.0.clone()) else {
+        return;
+    };
+    let Some(verifier) = handle.try_state::<McpHost>().map(|m| m.login_verifier()) else {
+        return;
+    };
+    handle.manage(ProfileLoginHost(Arc::new(ProfileLogin::new(
+        Arc::new(ConfigFile::of_user()),
+        cli,
+        verifier,
+    ))));
 }

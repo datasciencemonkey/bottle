@@ -267,6 +267,9 @@ pub struct HostComponents<'a> {
     /// `cli_status` and `cli_install` (#16, #161): `cli_host::CliStatusHost` over the one R5 of
     /// the process. `None` when R5 is not managed: `host_failed`.
     pub cli: Option<&'a dyn GatewayComponents>,
+    /// `profile_login` and `profile_login_cancel` (#162): `profiles_host::ProfileLoginHost`.
+    /// `None` when R5 or R8 could not start: `host_failed`.
+    pub login: Option<&'a dyn GatewayComponents>,
 }
 
 fn refused(e: IpcError) -> CoreError {
@@ -329,6 +332,7 @@ impl<'a> HostComponents<'a> {
             mem: None,
             profiles: None,
             cli: None,
+            login: None,
         }
     }
 }
@@ -503,6 +507,11 @@ impl GatewayComponents for HostComponents<'_> {
                 .cli
                 .ok_or_else(|| host_failed(command))?
                 .call(command, args),
+            // #162: "Connect a workspace". Its codes cross as themselves (`ERROR_CODES`).
+            "profile_login" | "profile_login_cancel" => self
+                .login
+                .ok_or_else(|| host_failed(command))?
+                .call(command, args),
             // Each feature issue wires its R1-R17 component here.
             "capture_start" | "capture_stop" | "capture_pause" | "capture_resume"
             | "capture_status" | "capture_stop_all" | "capture_subscribe" => {
@@ -547,8 +556,9 @@ pub fn route(components: HostComponents<'_>, command: &str, args: Value) -> Resu
 /// which can spawn, wait for the host lock or reap the runtime, `stt_transcribe`, which
 /// takes the R4 store lock that the R4 worker shares (#514), `mem_local_exec`, which does
 /// SQLite IO under the R10 connection lock (#426), `profiles_list`, where T7 runs
-/// `databricks auth describe` once per `databricks-cli` profile when R5 lands (#555), and
-/// `cli_install`, which downloads and checks the CLI (#161).
+/// `databricks auth describe` once per `databricks-cli` profile when R5 lands (#555),
+/// `cli_install`, which downloads and checks the CLI (#161), and `profile_login`, which waits
+/// up to 5 min for `databricks auth login` (#162).
 pub fn runs_off_main_thread(command: &str) -> bool {
     matches!(
         command,
@@ -568,6 +578,7 @@ pub fn runs_off_main_thread(command: &str) -> bool {
             | "mem_local_exec"
             | "profiles_list"
             | "cli_install"
+            | "profile_login"
     )
 }
 
@@ -669,6 +680,7 @@ fn route_from<R: Runtime>(
     let profiles = webview.try_state::<crate::profiles_host::ProfilesHost>();
     // `try_state`: `cli_host::start` manages R5 (#16); without it `cli_*` answer `host_failed`.
     let cli = webview.try_state::<crate::cli_host::CliStatusHost>();
+    let login = webview.try_state::<crate::profiles_host::ProfileLoginHost>();
     let components = HostComponents {
         from: label,
         brain: &brain,
@@ -695,6 +707,7 @@ fn route_from<R: Runtime>(
         cli: cli
             .as_ref()
             .map(|c| c.inner().0.as_ref() as &dyn GatewayComponents),
+        login: login.as_ref().map(|l| l.inner() as &dyn GatewayComponents),
     };
     route(components, command, args)
 }

@@ -218,6 +218,8 @@ pub fn run() {
             // R8 for `mcp_call` (#467). If its HTTP client cannot start, the app still runs;
             // `mcp_call` then answers `host_failed`.
             let _ = mcp_host::install(handle);
+            // "Connect a workspace" (#162): `profile_login` over R5 and the W-06a check of R6.
+            profiles_host::install_login(handle);
             // R16 for `agent_*` (#307): the one shared AgentHost. If its loopback model proxy
             // cannot bind, the app still runs; `agent_*` then answer `host_failed`.
             let _ = agent_host::install(handle);
