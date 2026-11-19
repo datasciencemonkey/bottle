@@ -220,6 +220,8 @@ pub trait PartsHandoff: Send + Sync {
 
 /// A state observer (the `recording.state` relay).
 pub type Observer = Arc<dyn Fn(&Snapshot) + Send + Sync>;
+/// The hook of [`RecordingSession::set_active_hook`].
+pub type ActiveHook = Arc<dyn Fn(bool) + Send + Sync>;
 /// The knob check (`settings.enabled`).
 pub type Enabled = Arc<dyn Fn() -> bool + Send + Sync>;
 
@@ -280,7 +282,7 @@ pub struct RecordingSession {
     config: SessionConfig,
     state: Mutex<State>,
     observer: Mutex<Option<Observer>>,
-    active_hook: Mutex<Option<Arc<dyn Fn(bool) + Send + Sync>>>,
+    active_hook: Mutex<Option<ActiveHook>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -347,7 +349,7 @@ impl RecordingSession {
     /// Call `hook(true)` when a start begins and `hook(false)` when the recording ends or the
     /// start fails. The host holds the mic's zero-buffer watch with it (ADR 0103: muting
     /// does not end a recording).
-    pub fn set_active_hook(&self, hook: Arc<dyn Fn(bool) + Send + Sync>) {
+    pub fn set_active_hook(&self, hook: ActiveHook) {
         *lock(&self.active_hook) = Some(hook);
     }
 

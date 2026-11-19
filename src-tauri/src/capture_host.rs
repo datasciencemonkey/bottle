@@ -55,6 +55,9 @@ use std::time::Duration;
 /// finalizes when its lease stops). It runs on the thread that stopped the lease.
 pub type StopObserver = Arc<dyn Fn(&Stopped) + Send + Sync>;
 
+/// ADR 0103: tells whether a call recording runs (see [`CaptureHost::set_recording_check`]).
+pub type RecordingCheck = Arc<dyn Fn() -> bool + Send + Sync>;
+
 /// The outermost [`CaptureEvents`] of the host: the inner chain, then each [`StopObserver`].
 struct ObservedEvents<E> {
     inner: E,
@@ -589,7 +592,7 @@ pub struct CaptureHost {
     levels: HostLevels,
     stop_observers: Arc<Mutex<Vec<StopObserver>>>,
     /// ADR 0103: true while a call recording runs; `capture_start` then refuses dictation.
-    recording: Mutex<Option<Arc<dyn Fn() -> bool + Send + Sync>>>,
+    recording: Mutex<Option<RecordingCheck>>,
 }
 
 impl CaptureHost {
@@ -696,7 +699,7 @@ impl CaptureHost {
     /// ADR 0103 mic rule: while `recording()` is true, `capture_start` (PTT, hands-free)
     /// answers `recording_in_progress`. No overlay lease, so no dictated speech reaches the
     /// recording. The recording's own lease does not go through `capture_start`.
-    pub fn set_recording_check(&self, recording: Arc<dyn Fn() -> bool + Send + Sync>) {
+    pub fn set_recording_check(&self, recording: RecordingCheck) {
         *lock(&self.recording) = Some(recording);
     }
 
