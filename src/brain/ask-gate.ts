@@ -44,6 +44,21 @@ export const ASK_CHIP_LABEL = 'Ask Genie';
 export const PREVIEW_LINE = 'Sending in 1.5 s';
 /** The line of a question that was not sent (ADR 0086: Appendix E has no template for it). */
 export const NOT_SENT_LINE = 'Not sent.';
+/** G-30a, D29: the question cap. #557: a press sends the whole dictated text, so it is cut here. */
+export const QUESTION_MAX_CHARS = 1000;
+/** The notice of a cut question (G-30a). */
+export const CUT_NOTICE = 'Cut to 1,000 characters.';
+
+/** G-30a: cut a question over the cap at a word edge. */
+export function capQuestion(q: string): { text: string; cut: boolean } {
+  if (q.length <= QUESTION_MAX_CHARS) return { text: q, cut: false };
+  const head = q.slice(0, QUESTION_MAX_CHARS + 1);
+  const edge = head.search(/\s\S*$/);
+  return {
+    text: (edge > 0 ? head.slice(0, edge) : head.slice(0, QUESTION_MAX_CHARS)).trimEnd(),
+    cut: true,
+  };
+}
 
 /** The Appendix E Preview controls, in order. */
 export const PREVIEW_CONTROLS = [
@@ -152,8 +167,14 @@ export function createAskGate(deps: AskGateDeps): AskGate {
       card.add({ id: blurbId, text: notSentText(question), completed: true });
       return;
     }
-    card.add({ id: blurbId, text: quoted(question), completed: true });
-    const turn: AgentTurn = { mogId, question, decision, recall: [], target };
+    // G-30a (#557): the size check runs before the send; RTR-14 ran before the offer.
+    const capped = capQuestion(question);
+    card.add({
+      id: blurbId,
+      text: capped.cut ? `${quoted(capped.text)}\n${CUT_NOTICE}` : quoted(capped.text),
+      completed: true,
+    });
+    const turn: AgentTurn = { mogId, question: capped.text, decision, recall: [], target };
     let sent: Promise<void>;
     try {
       sent = deps.send(turn);
@@ -233,6 +254,9 @@ export function createAskGate(deps: AskGateDeps): AskGate {
     if (r.warning === 'injection_suspected') {
       // RTR-14: a warning with no action. It goes with the Ask Genie expiry.
       const owner = `warning:${utteranceId}`;
+      // #557: the warning shows with its own text, not with an older blurb.
+      const text = firstNonEmpty(r.decision.genie_question, r.decision.cleaned_text);
+      if (text !== '') card.add({ id: owner, text: quoted(text), completed: true });
       card.setControls(owner, [{ ...INJECTION_WARNING_CHIP }]);
       deps.schedule(deps.clock.now() + ASK_TTL_MS, () => card.clearControls(owner));
       show(mogId);

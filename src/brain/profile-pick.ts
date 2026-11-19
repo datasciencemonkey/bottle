@@ -25,7 +25,10 @@ export interface ProfilePickDeps {
 }
 
 export interface ProfilePick {
-  /** Show the picker on the card of `mogId`. `then` runs once after the user saves a pick. */
+  /**
+   * Show the picker on the card of `mogId`. `then` runs once after the user saves a pick. A press
+   * while the list is open waits for the same pick.
+   */
   choose(mogId: MogId, then: () => void): Promise<void>;
   /** A click on one of the picker's chips. Other chips are not the picker's and do nothing. */
   chip(mogId: MogId, action: ChipAction): Promise<void>;
@@ -34,17 +37,21 @@ export interface ProfilePick {
 export function createProfilePick(deps: ProfilePickDeps): ProfilePick {
   /** The click handler of each profile chip, by chip ID. */
   const actions = new Map<string, () => Promise<void>>();
-  /** The MOGs whose picker is open. */
-  const open = new Set<MogId>();
+  /** The presses that wait for the open picker of each MOG. One pick runs them all, in order. */
+  const waiting = new Map<MogId, (() => void)[]>();
   let n = 0;
   const note = (mogId: MogId, text: string) =>
     deps.stackFor(mogId).add({ id: `pick-${mogId}-note-${++n}`, text, completed: true });
 
   return {
     async choose(mogId, then) {
-      // A second press while the list is open does not offer the profiles again.
-      if (open.has(mogId)) return;
-      open.add(mogId);
+      // A second press while the list is open does not offer the profiles again; it waits too.
+      const queue = waiting.get(mogId);
+      if (queue) {
+        queue.push(then);
+        return;
+      }
+      waiting.set(mogId, [then]);
       try {
         await deps.showCard(mogId);
       } catch {
@@ -57,7 +64,7 @@ export function createProfilePick(deps: ProfilePickDeps): ProfilePick {
         supported = [];
       }
       if (supported.length === 0) {
-        open.delete(mogId);
+        waiting.delete(mogId);
         note(
           mogId,
           'Bottle cannot list your Databricks CLI profiles. Sign in with `databricks auth login`, then set the home profile of this MOG in the hub.',
@@ -79,8 +86,9 @@ export function createProfilePick(deps: ProfilePickDeps): ProfilePick {
             stack.removeChip(idOf(q));
             actions.delete(idOf(q));
           }
-          open.delete(mogId);
-          then();
+          const due = waiting.get(mogId) ?? [];
+          waiting.delete(mogId);
+          for (const go of due) go();
         });
         stack.offerChip({
           id: idOf(p),

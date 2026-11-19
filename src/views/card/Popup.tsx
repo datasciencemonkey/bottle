@@ -1,6 +1,7 @@
 /**
  * #559: the small pop-up beside the owner MOG after a dictation or an ask. It shows one line,
- * the newest blurb, and one action: Ask Genie, or Copy when the paste was refused (#498).
+ * the newest blurb, and one action: Ask Genie, or Copy when the paste was refused (#498). A
+ * refused paste of a question shows Copy and Ask Genie of the same text (#557).
  *
  * - An ignored pop-up fades after `FADE_AFTER_MS` and then sends `cancel`, so the brain hides
  *   the card. Pointer hover or keyboard focus keeps it open.
@@ -46,7 +47,8 @@ export function Popup({ mogId, card, onClose }: PopupProps) {
 
   // The ask gate's blurb is `ask:<utterance>` (ask-gate.ts); the #498 Copy blurb is `<utterance>`.
   const copy = pick(card.chips, COPY, newest?.id);
-  const ask = copy ? undefined : pick(card.chips, ASK, newest?.id.match(/^ask:(.+)$/)?.[1]);
+  // #557: a refused paste of a question shows Copy and the Ask Genie of the same utterance.
+  const ask = pick(card.chips, ASK, copy ? newest?.id : newest?.id.match(/^ask:(.+)$/)?.[1]);
   // Any other chip is a held preview's control or a warning (ask-gate.ts): show it as it is.
   const others = card.chips.filter((c) => !c.id.startsWith(ASK) && !c.id.startsWith(COPY));
   const sticky = copy !== undefined || others.length > 0;

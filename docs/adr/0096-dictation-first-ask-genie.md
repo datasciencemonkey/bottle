@@ -4,7 +4,7 @@
 - Issue: #557 (user decision, 2026-11-18)
 - Date: 2026-11-18
 - Owner: agent-lead-4
-- Amends: ADR 0092 (decision 4, the no-profile pick card), ADR 0086 (when the preview shows)
+- Amends: ADR 0053 (decision 3, questions), ADR 0086 (when the preview shows), ADR 0092 (decision 4, the no-profile pick card)
 
 ## Context
 
@@ -33,13 +33,23 @@ itself (RTR-04a). A question with no home profile got the pick card of ADR 0092,
 5. **The pick card goes.** The no-profile card of ADR 0092 (decision 4) and [Insert as text]
    are removed: the text is already pasted, or on the Copy pop-up.
 6. **Order on the pop-up.** The chip is offered first, then the dictation result goes to the
-   Copy sink. A refused paste therefore shows Copy (the newest blurb), so the text is not lost.
-   A pasted question shows Ask Genie.
+   Copy sink. A pasted question shows Ask Genie. A refused paste of a question shows Copy and
+   Ask Genie of the same utterance, so the text is not lost and the ask stays one press away.
+   `CapturePolicy.decide` (T3) gives `chip` for every unforced question too.
 7. RTR-14 still holds: an injection-suspected question is pasted and gets the warning chip only.
-   A session utterance (RTR-07) is not dictated into the focused app, as before.
+   The warning shows with its own quoted text. A session utterance (RTR-07) is not dictated into
+   the focused app, as before.
+8. **Size check** (G-30a, D29). A press sends the whole dictated text, so the ask gate cuts a
+   question over 1,000 characters at a word edge before the send. The card shows the sent text
+   and "Cut to 1,000 characters." The RTR-14 check runs before the chip is offered.
+9. **Presses while the picker is open** wait for the same pick. One pick sends each pressed
+   text once. No press is dropped without a line on the card.
 
 ## Consequences
 
 - AT-06 and AT-31 checks of the preview at 0.7 now apply to Shift-forced asks only.
 - The Ask Genie chip keeps its 2 min expiry; an expired press sends nothing.
 - A pick can come long after the press. The text still sends once, because the press confirmed it.
+- ADR 0018: a chip at confidence 0.7 or more still sets no `attention`. More questions are chips
+  now, but the rule reads the confidence, so the mood result for one question does not change.
+- The G-47 sanitizer and the bridge-side G-30a check stay with the Genie bridge work.

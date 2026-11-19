@@ -1,6 +1,6 @@
 # ADR 0053: The utterance route and the Shift-forced ask route
 
-- Status: Accepted
+- Status: Accepted (amended by ADR 0096, #557: an unforced question is pasted first and gets a chip; no preview without Shift)
 - Date: 2026-11-16
 - Issue: #59 (RTR-01b, RTR-01c, RTR-17a, RTR-17b; AT-43, AT-06). Depends on #57 and #58 (ADR 0048).
 - Owner: agent-lead-2 (implemented by mog-b2; review fixes by impl-59)
