@@ -62,13 +62,15 @@ function must<T>(v: T | null | undefined): T {
   return v;
 }
 
-// ui-1 (ADR 0104): WipeSettings now builds the scope picker and the Genie checkbox on
+// ui-1 (ADR 0106): WipeSettings now builds the scope picker and the Genie checkbox on
 // shadcn/ui's RadioGroup and Checkbox (Radix), which render as accessible buttons
 // (`role="radio"` / `role="checkbox"`) rather than native `<input type="radio">`/`<input
-// type="checkbox">` elements with a `<label for>` association. The accessible contract (role,
-// `aria-checked`, and the option/label text in the DOM) is equivalent or stronger; only the
-// concrete tag name changed, so these two tests assert on role instead of `input[type=...]`.
-const radios = (el: HTMLElement) => [...el.querySelectorAll<HTMLElement>('[role="radio"]')];
+// type="checkbox">` elements. The `<label for>` association is still real, though (review of
+// #602): Radix's RadioGroupItem is a `<button id>`, a labelable element, and WipeSettings.tsx
+// points a `<label htmlFor>` at that same id, so `radio.labels[0]` still resolves. These tests
+// assert on role/`aria-checked` instead of `input[type=...]`, plus the `value` order and the
+// label association, which a plain `<input type="radio">` gave for free.
+const radios = (el: HTMLElement) => [...el.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
 
 beforeEach(() => tauri.reset());
 
@@ -77,9 +79,23 @@ describe('Settings → Wipe (#124)', () => {
     const { el, root } = await render(<WipeSettings />);
     const r = radios(el);
     expect(r).toHaveLength(3);
+    // The `value` order (review of #602): a plain `<input type="radio">` asserted this for
+    // free via its own `value` attribute; Radix's radio button keeps the same attribute.
+    expect(r.map((x) => x.getAttribute('value'))).toEqual([
+      'older_than_30d',
+      'older_than_90d',
+      'everything',
+    ]);
     expect(el.textContent).toContain('Older than 30 days');
     expect(el.textContent).toContain('Older than 90 days');
     expect(el.textContent).toContain('Everything');
+    // Each radio's `<label for>` still resolves to its own option (review of #602): `.labels`
+    // is defined for any labelable element (a `<button>` included), not only `<input>`.
+    expect(r.map((x) => x.labels?.[0]?.textContent)).toEqual([
+      'Older than 30 days',
+      'Older than 90 days',
+      'Everything',
+    ]);
     expect(r.every((x) => x.getAttribute('aria-checked') === 'false')).toBe(true);
     const genie = must(el.querySelector<HTMLElement>('[role="checkbox"]'));
     expect(genie.getAttribute('aria-checked')).toBe('false');

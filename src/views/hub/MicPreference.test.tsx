@@ -11,7 +11,7 @@ vi.mock('@tauri-apps/api/window', async () => (await import('../test-tauri')).wi
 describe('Mic preference setting (hub)', () => {
   beforeEach(() => tauri.reset());
 
-  // ui-1 (ADR 0104): the setting is now a shadcn/ui Switch (Radix), which renders as an
+  // ui-1 (ADR 0106): the setting is now a shadcn/ui Switch (Radix), which renders as an
   // accessible `role="switch"` button with `aria-checked`, not a native `<input
   // type="checkbox">`. The accessible contract (role, aria-checked, the label text and its
   // `for`/`id` association) is equivalent; only the concrete tag name changed.

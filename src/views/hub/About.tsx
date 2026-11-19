@@ -20,11 +20,16 @@ export function About() {
         Databricks Labs / experimental
       </p>
       {/* SEC-21b: the full notices, one click away (ui-1: a Collapsible row, same as
-          DataDisclosures). forceMount keeps the <pre> in the DOM while collapsed (AT-37). */}
+          DataDisclosures). forceMount keeps the <pre> in the DOM while collapsed (AT-37). One
+          consistent "show more" style across Settings (review of #602): the chevron and
+          text-sm/muted-foreground label match every other disclosure trigger in Settings, not a
+          heading-weight one — "Third-party notices" is the trigger's own action label, not a
+          heading someone navigating the page outline needs to find, so it is a <span>, not an
+          <h3>. */}
       <Collapsible>
-        <CollapsibleTrigger className="group flex h-auto min-h-0 items-center gap-[var(--mog-space-2)] border-0 bg-transparent p-0">
-          <ChevronDownIcon className="size-3.5 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
-          <h3>Third-party notices</h3>
+        <CollapsibleTrigger className="group flex h-auto min-h-0 items-center gap-[var(--mog-space-2)] border-0 bg-transparent p-0 text-[var(--mog-text-sm)] text-muted-foreground hover:text-foreground">
+          <ChevronDownIcon className="size-3.5 transition-transform motion-reduce:transition-none group-data-[state=open]:rotate-180" />
+          <span>Third-party notices</span>
         </CollapsibleTrigger>
         <CollapsibleContent
           forceMount

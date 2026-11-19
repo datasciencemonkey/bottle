@@ -8,11 +8,13 @@
  * `view_emit` (ARC-2, MOG-08a), so the brain reads and writes it with `app_setting_*`.
  * TODO(#77): the Settings relay through the brain. Until then the hub keeps the value in memory.
  *
- * ui-1 (ADR 0104): rebuilt on shadcn/ui's Switch instead of a bare `<input type="checkbox">`,
- * like a native macOS settings row (a label with its toggle at the trailing edge).
+ * ui-1 (ADR 0106): rebuilt on shadcn/ui's Switch instead of a bare `<input type="checkbox">`,
+ * in a `SettingsGroup`/`SettingsRow` like a native macOS settings row (a label with its toggle
+ * at the trailing edge, inside a rounded group box).
  */
 import { useId } from 'react';
 import { useEffect, useState } from 'react';
+import { SettingsGroup, SettingsRow } from './SettingsGroup';
 import { Switch } from '../ui/switch';
 
 export const MIC_PREFERENCE_LABEL = 'Prefer the built-in mic when a Bluetooth headset connects';
@@ -59,17 +61,20 @@ export function MicPreference({ settings = appMicSettings }: { settings?: MicSet
       className="hub-section"
     >
       <h2 id="mic-preference-title">Microphone</h2>
-      <div className="flex items-center justify-between gap-[var(--mog-space-3)]">
-        <label htmlFor={switchId} className="text-[var(--mog-text-md)] cursor-pointer">
-          {MIC_PREFERENCE_LABEL}
-        </label>
-        <Switch
-          id={switchId}
-          name="preferBuiltInMic"
-          checked={on}
-          onCheckedChange={(checked) => void toggle(checked)}
+      <SettingsGroup className="mt-[var(--mog-space-3)]">
+        <SettingsRow
+          htmlFor={switchId}
+          label={MIC_PREFERENCE_LABEL}
+          control={
+            <Switch
+              id={switchId}
+              name="preferBuiltInMic"
+              checked={on}
+              onCheckedChange={(checked) => void toggle(checked)}
+            />
+          }
         />
-      </div>
+      </SettingsGroup>
     </section>
   );
 }

@@ -27,11 +27,17 @@ export function DataPanel() {
   return (
     <section data-view="data-panel" aria-labelledby="data-panel-title" className="hub-section">
       {/* SEC-17: every disclosure stays in the panel, behind one labelled entry point (ui-1: a
-          Collapsible disclosure row with an animated chevron, instead of a native <details>). */}
+          Collapsible disclosure row with an animated chevron, instead of a native <details>).
+          One consistent "show more" style across Settings (review of #602): the chevron and
+          text-sm/muted-foreground label match WipeSettings' "Show how long Bottle keeps data"
+          and CliSettings' "Show the Databricks CLI", not a heading-weight trigger. The `<h2>`
+          keeps its exact text for DataDisclosures.test.tsx; only its visual weight changes. */}
       <Collapsible>
-        <CollapsibleTrigger className="group flex h-auto min-h-0 items-center gap-[var(--mog-space-2)] border-0 bg-transparent p-0">
-          <ChevronDownIcon className="size-3.5 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
-          <h2 id="data-panel-title">Where your data goes</h2>
+        <CollapsibleTrigger className="group flex h-auto min-h-0 items-center gap-[var(--mog-space-2)] border-0 bg-transparent p-0 text-[var(--mog-text-sm)] text-muted-foreground hover:text-foreground">
+          <ChevronDownIcon className="size-3.5 transition-transform motion-reduce:transition-none group-data-[state=open]:rotate-180" />
+          <h2 id="data-panel-title" className="text-[var(--mog-text-sm)] font-normal">
+            Where your data goes
+          </h2>
         </CollapsibleTrigger>
         {/* forceMount (ui-1): like the native <details> this replaces, the disclosure text stays
             in the DOM even while collapsed (`data-[state=closed]:hidden`), not unmounted — SEC-17

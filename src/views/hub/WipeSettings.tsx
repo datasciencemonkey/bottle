@@ -11,14 +11,18 @@
  * your admin" for each MDM value (SEC-15c, MB-15). Both events are sent to the hub only (ARC-5).
  * TODO(#77): the full Settings view. TODO(#525): the event names move into the contract.
  *
- * ui-1 (ADR 0104): rebuilt on shadcn/ui's RadioGroup, Checkbox, Button and Collapsible instead of
+ * ui-1 (ADR 0106): rebuilt on shadcn/ui's RadioGroup, Checkbox, Button and Collapsible instead of
  * a raw `<fieldset>`/`<legend>` and bare `<input>`s (the ui-audit "Settings baseline" findings).
- * "Delete data" is a RadioGroup with helper text per option; the Wipe button is a real destructive
- * style with helper text while it is disabled; "Show how long Bottle keeps data" is a Collapsible
- * disclosure row instead of a standalone outline button. The RadioGroup and Checkbox render as
- * accessible buttons (`role="radio"`/`role="checkbox"`), not native `<input>`s, so
- * WipeSettings.test.tsx asserts on role and `aria-checked`, not `input[type=...]` (documented
- * there).
+ * "Delete data" is a RadioGroup, one `SettingsGroup` of lighter divided rows rather than three
+ * individually bordered cards (review of #602: "lighter Wipe options"); the Wipe button is a
+ * real destructive style with helper text while it is disabled; "Show how long Bottle keeps
+ * data" is a Collapsible disclosure row in the one style every "show more" trigger in Settings
+ * now shares (review of #602). The RadioGroup and Checkbox render as accessible buttons
+ * (`role="radio"`/`role="checkbox"`), not native `<input>`s, so WipeSettings.test.tsx asserts on
+ * role and `aria-checked`, not `input[type=...]` (documented there). Each option's helper
+ * sentence sits in its own element, referenced by the radio's `aria-describedby`, not inside the
+ * `<label>` (review of #602: the label text alone, not label+helper run together, is each
+ * radio's accessible name).
  */
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -43,6 +47,7 @@ import {
 import { Checkbox } from '../ui/checkbox';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/collapsible';
 import { RadioGroup, RadioGroupItem } from '../ui/radio-group';
+import { SettingsGroup } from './SettingsGroup';
 import { Button } from '../ui/button';
 import { emitView } from '../view-ipc';
 import { WipeDialog } from '../WipeDialog';
@@ -116,27 +121,35 @@ export function WipeSettings() {
         </span>
         <RadioGroup
           aria-labelledby="wipe-scope-label"
-          className="mt-[var(--mog-space-2)] gap-[var(--mog-space-2)]"
+          className="mt-[var(--mog-space-2)] gap-0"
           value={scope ?? ''}
           onValueChange={(v) => setScope(v as WipeScope)}
         >
-          {WIPE_SCOPES.map((s) => (
-            <label
-              key={s}
-              htmlFor={`wipe-${s}`}
-              className="flex items-start gap-[var(--mog-space-3)] rounded-[var(--radius-md)] border border-border/60 p-[var(--mog-space-3)] cursor-pointer hover:bg-accent/40"
-            >
-              <RadioGroupItem id={`wipe-${s}`} value={s} className="mt-0.5" />
-              <span className="flex flex-col gap-[var(--mog-space-1)]">
-                <span className="text-[var(--mog-text-md)] font-medium">
-                  {WIPE_OPTION_LABEL[s]}
-                </span>
-                <span className="text-[var(--mog-text-xs)] text-muted-foreground">
-                  {WIPE_SCOPE_HELP[s]}
-                </span>
-              </span>
-            </label>
-          ))}
+          <SettingsGroup>
+            {WIPE_SCOPES.map((s) => {
+              const id = `wipe-${s}`;
+              const descId = `${id}-desc`;
+              return (
+                <div
+                  key={s}
+                  className="flex items-start gap-[var(--mog-space-3)] px-[var(--mog-space-4)] py-[var(--mog-space-3)] hover:bg-accent/40"
+                >
+                  <RadioGroupItem id={id} value={s} aria-describedby={descId} className="mt-0.5" />
+                  <div className="flex flex-col gap-[var(--mog-space-1)]">
+                    {/* The label wraps only the option title (review of #602): the accessible
+                        name stays "Older than 30 days", not that sentence run together with the
+                        helper text below, which the radio's aria-describedby points at instead. */}
+                    <label htmlFor={id} className="cursor-pointer text-[var(--mog-text-md)]">
+                      {WIPE_OPTION_LABEL[s]}
+                    </label>
+                    <span id={descId} className="text-[var(--mog-text-xs)] text-muted-foreground">
+                      {WIPE_SCOPE_HELP[s]}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </SettingsGroup>
         </RadioGroup>
       </div>
       <label
@@ -180,7 +193,7 @@ export function WipeSettings() {
             )
           }
         >
-          <ChevronDownIcon className="size-3.5 transition-transform group-data-[state=open]:rotate-180" />
+          <ChevronDownIcon className="size-3.5 transition-transform motion-reduce:transition-none group-data-[state=open]:rotate-180" />
           Show how long Bottle keeps data
         </CollapsibleTrigger>
         <CollapsibleContent className="mt-[var(--mog-space-2)]">
