@@ -68,5 +68,6 @@ type yet.
 - `syncStatus().pending` counts only the v1 sync. It stays 0 while embed jobs wait.
 - The `net.status` payload type is contract change #466. When it lands, the brain wires
   `bus.on('net:status', ...)` to a `NetworkStatus`.
-- `mem_local_exec` still has `TODO(#426)`: the app host does not route it yet.
+- The app host routes `mem_local_exec` (#426). It refuses a pinned `mem.item.write` until a
+  user-action proof crosses IPC (`TODO(#574)`).
 - The live run (network off on a device, a real embedding endpoint) is part of #175 and #198.

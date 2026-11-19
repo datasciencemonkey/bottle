@@ -18,6 +18,7 @@
 //! records as a content-free expiry, runs `run_security_expiries` once here at start (9.2:
 //! security data keeps its expiry), and manages it as `Arc<LocalWipeService>` for the `mem_wipe`
 //! route. This start call deletes no user content (U9). There is no timer.
+//! `mem_local_exec` reads the same managed store (#426), so there is one store per app.
 //! TODO(#525): `src-tauri/src/ipc.rs` routes `mem_wipe` to `mog_core::wipe::mem_wipe`.
 //! TODO(#448): add the audit log as an expiry once the host keeps one.
 

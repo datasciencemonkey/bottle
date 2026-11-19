@@ -36,8 +36,11 @@ may run deletes. The host routing in `src-tauri/src/ipc.rs` is a contract file.
 8. The TS side (`src/brain/components/memory-store.ts`) lists the Brain IDs in `LOCAL_STMT_IDS`.
    A Rust test checks that this list equals the Brain entries. `LocalMemoryService` takes a
    `LocalMemoryStore`, so tests pass a double (MEM-39a).
-9. The host routing is contract-change #426. Until it lands, the app answers `not_implemented`
-   for `mem_local_exec` (`TODO(#426)`).
+9. The host routing is contract-change #426 (landed). `src-tauri/src/ipc.rs` sends
+   `mem_local_exec` to `mog_core::local_store::mem_local_exec` over the one managed
+   `Arc<SqlCipherLocalStore>` (opened by `consent_host::install`, shared with R14), on a worker
+   thread. The host refuses `pinned: true` with `invalid_args`: no user-action proof crosses
+   from the brain yet (MEM-28b, `TODO(#574)`).
 
 ## Consequences
 

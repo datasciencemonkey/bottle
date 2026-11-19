@@ -12,7 +12,8 @@
 //! `consent_*` (T12 records, ADR 0060), the `capture_*` commands (R2, #425, ADR 0055),
 //! `app_setting_*` (the app-wide settings, #453), `insert_text` (the R11 paste, ADR 0048),
 //! `mcp_call` (R8 `McpCallComponent`, #467) and `agent_start`, `agent_stop` and `agent_send`
-//! (the one R16 `SharedAgentHost`, #307) and `stt_transcribe` (R4 `LocalStt`, #514).
+//! (the one R16 `SharedAgentHost`, #307), `stt_transcribe` (R4 `LocalStt`, #514) and
+//! `mem_local_exec` (the one R10 store, through `mog_core::local_store::mem_local_exec`, #426).
 //! Every other command stays `not_implemented` until its feature issue wires its component.
 //! A rejection is only `{ "error": "<code>" }`, with a code from `ipc_gateway::ERROR_CODES`
 //! (SEC-03).
@@ -26,7 +27,8 @@
 //! too (#307): a start can spawn the runtime and wait for the target lookup, a send can wait for
 //! the host lock while another MOG starts, and a stop kills and reaps the runtime. The brain
 //! awaits each call, so their order holds. `stt_transcribe` takes the R4 store lock that the R4
-//! worker shares, so it also runs on a worker (#514). Every other command runs inline, so
+//! worker shares, so it also runs on a worker (#514). `mem_local_exec` does SQLite IO under the
+//! R10 connection lock, so it also runs on a worker (#426). Every other command runs inline, so
 //! `view_emit` keeps its order and the panic stop never waits.
 //! The last `hotkey:status` item is sticky: a new brain Channel gets it again (ADR 0039).
 //!
@@ -256,6 +258,9 @@ pub struct HostComponents<'a> {
     /// R4 for `stt_transcribe` (#514, ADR 0082): the managed `stt_engine::LocalStt`. `None`
     /// when R4 is not managed: `host_failed`.
     pub stt: Option<&'a dyn SttEngine>,
+    /// R10 for `mem_local_exec` (#426): the one managed `SqlCipherLocalStore` that the consent
+    /// records and R14 WipeService share. `None` when it is not managed: `host_failed`.
+    pub mem: Option<&'a dyn mog_core::local_store::LocalStore>,
 }
 
 fn refused(e: IpcError) -> CoreError {
@@ -315,6 +320,7 @@ impl<'a> HostComponents<'a> {
             insert: None,
             agent: None,
             stt: None,
+            mem: None,
         }
     }
 }
@@ -335,6 +341,23 @@ impl HostComponents<'_> {
             .transcribe(&a.segment_id)
             .map_err(|_| host_failed(command))?;
         serde_json::to_value(transcript).map_err(|_| host_failed(command))
+    }
+
+    /// #426: the brain's R10 call. `mem_local_exec` refuses an unknown or Rust-only (`Access::Core`)
+    /// `stmtId`, so the brain cannot run a Wipe step. Never `LocalStore::exec` here (#37 review).
+    fn mem_local_exec(&self, command: &str, args: Value) -> CoreResult<Value> {
+        // MEM-28b (security-lead, PR #540 review): a pin needs a user action, and no proof of one
+        // crosses from the brain. So the host refuses every pin. TODO(#574): a host-minted
+        // user-action ticket for "remember this".
+        if args
+            .get("params")
+            .and_then(|p| p.get("pinned"))
+            .is_some_and(|pin| pin != &Value::Bool(false) && !pin.is_null())
+        {
+            return Err(invalid_args(command));
+        }
+        let store = self.mem.ok_or_else(|| host_failed(command))?;
+        mog_core::local_store::mem_local_exec(store, args)
     }
 
     fn windows(&self, command: &str) -> CoreResult<&dyn WindowHost> {
@@ -459,6 +482,8 @@ impl GatewayComponents for HostComponents<'_> {
                 .call(command, args),
             // #514 (ADR 0082): R4. The gateway let only the brain through (SEC-02a).
             "stt_transcribe" => self.stt_transcribe(command, args),
+            // #426 (MEM-34a): R10. The gateway let only the brain through (SEC-02a, ARC-4).
+            "mem_local_exec" => self.mem_local_exec(command, args),
             // Each feature issue wires its R1-R17 component here.
             "capture_start" | "capture_stop" | "capture_pause" | "capture_resume"
             | "capture_status" | "capture_stop_all" | "capture_subscribe" => {
@@ -500,8 +525,9 @@ pub fn route(components: HostComponents<'_>, command: &str, args: Value) -> Resu
 /// shows (ADR 0039), `capture_start` and `capture_resume`, which open the device (ADR 0055),
 /// `insert_text`, which waits about 0.4 s for the paste and the clipboard restore (ADR 0048),
 /// `mcp_call`, a blocking HTTP call to Genie One MCP (#467), and the `agent_*` commands (#307),
-/// which can spawn, wait for the host lock or reap the runtime, and `stt_transcribe`, which
-/// takes the R4 store lock that the R4 worker shares (#514).
+/// which can spawn, wait for the host lock or reap the runtime, `stt_transcribe`, which
+/// takes the R4 store lock that the R4 worker shares (#514), and `mem_local_exec`, which does
+/// SQLite IO under the R10 connection lock (#426).
 pub fn runs_off_main_thread(command: &str) -> bool {
     matches!(
         command,
@@ -518,6 +544,7 @@ pub fn runs_off_main_thread(command: &str) -> bool {
             | "agent_stop"
             | "agent_send"
             | "stt_transcribe"
+            | "mem_local_exec"
     )
 }
 
@@ -611,6 +638,9 @@ fn route_from<R: Runtime>(
     // `try_state`: `install_capture` manages R4 (#46); without it `stt_transcribe` answers
     // `host_failed` (#514).
     let stt = webview.try_state::<mog_core::stt_engine::LocalStt>();
+    // `try_state`: `consent_host::install` manages the one R10 store; without it (no key store
+    // or no data dir) `mem_local_exec` answers `host_failed` (#426).
+    let mem = webview.try_state::<std::sync::Arc<mog_core::local_store::SqlCipherLocalStore>>();
     let components = HostComponents {
         from: label,
         brain: &brain,
@@ -628,6 +658,9 @@ fn route_from<R: Runtime>(
         insert: os_insert(),
         agent: agent.as_ref().map(|a| a.inner() as &dyn GatewayComponents),
         stt: stt.as_ref().map(|s| s.inner() as &dyn SttEngine),
+        mem: mem
+            .as_ref()
+            .map(|m| m.inner().as_ref() as &dyn mog_core::local_store::LocalStore),
     };
     route(components, command, args)
 }
@@ -678,7 +711,8 @@ pub fn admit(command: &str, capture: Option<&CaptureHost>) -> Option<CaptureTick
 /// because it can wait for the main thread (ADR 0022 decision 6). `permission_request` also
 /// goes to a worker, because the OS prompt can wait for the user (ADR 0039), and so do
 /// `capture_start` and `capture_resume`, whose device open can be slow (ADR 0055), and
-/// `mcp_call`, which waits for Genie One MCP (#467), `agent_*` (#307) and `stt_transcribe` (#514).
+/// `mcp_call`, which waits for Genie One MCP (#467), `agent_*` (#307), `stt_transcribe` (#514)
+/// and `mem_local_exec` (#426).
 /// Every other command runs now, on the calling thread, so `view_emit` keeps its order.
 pub fn schedule<F: FnOnce() + Send + 'static>(command: &str, job: F) {
     if runs_off_main_thread(command) {
@@ -851,6 +885,7 @@ mod tests {
         assert!(c.insert.is_none());
         assert!(c.agent.is_none());
         assert!(c.stt.is_none());
+        assert!(c.mem.is_none());
         // A missing host part still answers `host_failed`.
         assert_eq!(
             route(c, "window_card_show", json!({"mogId": "a1"})),
@@ -1134,6 +1169,57 @@ mod tests {
             code.contains(".manage(ipc::HubChannel::default())"),
             "lib.rs must manage ipc::HubChannel"
         );
+    }
+
+    #[test]
+    fn mem_36a_mem_34a_issue_426_the_app_manages_one_store_that_mem_local_exec_reads() {
+        // `try_state` turns a missing store into a silent `host_failed` for every
+        // `mem_local_exec` call, so the setup must manage it. One store per app: the consent
+        // host opens it, and R14 WipeService and `mem_local_exec` share it (#431, #124, #426).
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let lib = production_code(&std::fs::read_to_string(src.join("lib.rs")).unwrap());
+        assert!(
+            lib.contains("consent_host::install(handle)"),
+            "lib.rs setup must call consent_host::install"
+        );
+        let host = production_code(&std::fs::read_to_string(src.join("consent_host.rs")).unwrap());
+        assert!(
+            host.contains("app.manage(store)"),
+            "consent_host manages the store"
+        );
+        assert_eq!(
+            host.matches("SqlCipherLocalStore::new(").count(),
+            0,
+            "consent_host opens the one store through open_device_records"
+        );
+        let ipc = production_code(&std::fs::read_to_string(src.join("ipc.rs")).unwrap());
+        assert!(
+            ipc.contains(
+                "try_state::<std::sync::Arc<mog_core::local_store::SqlCipherLocalStore>>()"
+            ),
+            "route_from reads the managed store"
+        );
+        assert!(
+            ipc.contains("mog_core::local_store::mem_local_exec("),
+            "the route calls mem_local_exec, never LocalStore::exec (#37 review)"
+        );
+        assert!(
+            !ipc.contains(".exec("),
+            "the host never runs a statement itself"
+        );
+        // No other host file builds a second store.
+        for entry in std::fs::read_dir(&src).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let code = production_code(&std::fs::read_to_string(&path).unwrap());
+            assert!(
+                !code.contains("SqlCipherLocalStore::new("),
+                "{} builds a second store",
+                path.display()
+            );
+        }
     }
 
     #[test]

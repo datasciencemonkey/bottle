@@ -54,6 +54,6 @@ contract type `GenieExchange` has no summary, session, workspace id or space id.
 
 - The caller registers the MOG row (`mem.mog.upsert`) before the first exchange, because
   `genie_exchange.mog_id` references `mog`.
-- The host routing of `mem_local_exec` is still contract-change #426 (`TODO(#426)`), so the app
-  answers `not_implemented` until it lands. The tests run on the Rust store and a TS double.
+- The host routes `mem_local_exec` to the managed R10 store (#426), so an exchange persists in
+  the app. The tests run on the Rust store and a TS double.
 - AT-16 is a live test. Its store part (400 d, then Wipe) is covered here on a simulated clock.
