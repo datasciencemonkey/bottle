@@ -113,6 +113,10 @@ export const RECORDING_ERRORS = {
     text: RECORDING_TEXT.turnOn,
     action: { label: 'Open Settings', target: 'settings' },
   },
+  no_profile: {
+    text: 'Set a home profile on a MOG first, then try again.',
+    action: { label: 'Open Settings', target: 'settings' },
+  },
   recording_busy: { text: 'A recording is already running.' },
   mic_busy: { text: 'The mic is in use. Finish the dictation, then record.' },
   audio_unreadable: {

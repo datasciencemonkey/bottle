@@ -48,6 +48,7 @@ import {
   type RecordingState,
   type RecordingSummary,
 } from '../shared/ipc';
+import type { ProfileName } from '../shared/interfaces';
 import { onViewInput, type BrainBus } from './bus';
 
 /** The recording settings as the brain reads and writes them. No secrets. */
@@ -537,25 +538,45 @@ export function settingsPatchOf(s: RecSettings): RecordingSettingsPatch {
   return p;
 }
 
-/** The real `RecordingApi`: the typed `recording_*` commands and the core events on `bus`. */
-export function ipcRecordingApi(bus: BrainBus): RecordingApi {
+/**
+ * The real `RecordingApi`: the typed `recording_*` commands and the core events on `bus`.
+ * `profile` is the brain's home profile (`home-profile.ts`). Every command that reaches
+ * Databricks carries it; with none, that command fails `no_profile` and nothing goes out.
+ */
+export function ipcRecordingApi(
+  bus: BrainBus,
+  profile: () => Promise<ProfileName | undefined>,
+): RecordingApi {
+  const home = async (): Promise<ProfileName> => {
+    const p = await profile().catch(() => undefined);
+    if (p === undefined || p === '') throw { error: 'no_profile' };
+    return p;
+  };
   return {
     readSettings: async () => recSettingsOf(await call('recording_settings_read', {})),
     writeSettings: async (next) =>
       recSettingsOf(await call('recording_settings_write', { patch: settingsPatchOf(next) })),
     probeStorage: async () => ({
-      myFiles: (await call('recording_storage_probe', {})).myFilesRoot,
+      myFiles: (await call('recording_storage_probe', { profile: await home() })).myFilesRoot,
     }),
     createVolume: async (catalog, schema) => ({
-      path: (await call('recording_volume_create', { catalog, schema })).root,
+      path: (await call('recording_volume_create', { profile: await home(), catalog, schema }))
+        .root,
     }),
-    start: async (instructions) =>
-      recStateOf(await call('recording_start', instructions === undefined ? {} : { instructions })),
+    start: async (instructions) => {
+      const profile = await home();
+      return recStateOf(
+        await call(
+          'recording_start',
+          instructions === undefined ? { profile } : { profile, instructions },
+        ),
+      );
+    },
     stop: async () => recStateOf(await call('recording_stop', {})),
     state: async () => recStateOf(await call('recording_state', {})),
-    list: async () => (await call('recording_list', {})).map(summaryOf),
+    list: async () => (await call('recording_list', { profile: await home() })).map(summaryOf),
     detail: async (id) => {
-      const d = await call('recording_detail', { id });
+      const d = await call('recording_detail', { profile: await home(), id });
       const r: RecDetail = {
         id: d.summary.id,
         status: d.summary.status,
@@ -570,8 +591,8 @@ export function ipcRecordingApi(bus: BrainBus): RecordingApi {
       if (d.notesMd !== undefined) r.notesMd = d.notesMd;
       return r;
     },
-    retry: (id) => call('recording_retry', { id }),
-    open: (id) => call('recording_open', { id, target: 'folder' }),
+    retry: async (id) => call('recording_retry', { profile: await home(), id }),
+    open: async (id) => call('recording_open', { profile: await home(), id, target: 'folder' }),
     openSystemAudioSettings: () => call('recording_open_system_audio_settings', {}),
     onState: (cb) =>
       bus.on(EVENTS['recording.state'].name, (p) => {

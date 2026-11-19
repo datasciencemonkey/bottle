@@ -49,7 +49,7 @@ import { LevelRouter, subscribeLevels, wireLevelStream } from '../level-stream';
 import { createMoodPublisher, latencyTraceClock } from '../mood-publisher';
 import { wireNotice } from '../notice-wiring';
 import { wirePermissions } from '../permission-wiring';
-import { withOfflineFallback } from '../offline-intent';
+import { NO_HOME, withOfflineFallback } from '../offline-intent';
 import { createProfilePick } from '../profile-pick';
 import { createRequestOwner, sendOwnedCard } from '../request-owner';
 import { wireTalkNoMog } from '../talk-no-mog';
@@ -278,7 +278,13 @@ export function startBrain(): Brain {
     // again before any capture. TODO(#95): the short OS notice when the notes are ready, once
     // the notification host has an IPC command.
     wireRecording(bus, {
-      api: ipcRecordingApi(bus),
+      // ADR 0103: the home profile of the last-used MOG, else of the first MOG. Never a guess.
+      api: ipcRecordingApi(bus, async () => {
+        const id = talkTarget.lastUsed() ?? (await components.T1.list()).mogs[0]?.mogId;
+        if (id === undefined) return undefined;
+        const p = (await homes.routerInput(id)).profile;
+        return p === NO_HOME ? undefined : p;
+      }),
       platform:
         cliPlatform(globalThis.navigator?.userAgent ?? '') === 'windows' ? 'windows' : 'mac',
       mood: {
