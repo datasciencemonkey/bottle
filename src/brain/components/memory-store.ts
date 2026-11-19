@@ -18,6 +18,7 @@ export const LOCAL_STMT_IDS = [
   'mem.mog.upsert',
   'mem.exchange.upsert',
   'mem.exchange.get',
+  'mem.exchange.recent',
   'mem.exchange.dependents',
   'mem.exchange.by_session',
   'mem.item.get',

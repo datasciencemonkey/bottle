@@ -138,8 +138,14 @@ export function createGenieHistory(deps: GenieHistoryDeps): (x: GenieEnd) => Pro
   };
 }
 
-/** The `startBrain` history over IPC, or undefined when T10 cannot record exchanges. */
-export function ipcGenieHistory(memory: MemoryService): ((x: GenieEnd) => void) | undefined {
+/**
+ * The `startBrain` history over IPC, or undefined when T10 cannot record exchanges. `saved` runs
+ * after each write attempt (#103: the hub Conversations list reads the store again).
+ */
+export function ipcGenieHistory(
+  memory: MemoryService,
+  saved?: () => void,
+): ((x: GenieEnd) => void) | undefined {
   if (!isExchangeMemory(memory)) return undefined;
   const configs = ipcMogConfigClient();
   const record = createGenieHistory({
@@ -149,5 +155,5 @@ export function ipcGenieHistory(memory: MemoryService): ((x: GenieEnd) => void) 
       (await ipcListProfiles()).find((p: Profile) => p.name === profile)?.host,
     log: createBrainLog(),
   });
-  return (x) => void record(x);
+  return (x) => void record(x).then(saved);
 }

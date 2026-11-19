@@ -12,8 +12,8 @@ body {
 
 .hub {
   box-sizing: border-box;
-  max-width: 680px;
-  margin: 0 auto;
+  max-width: none;
+  margin: 0;
   padding: 28px 32px 48px;
   font: var(--mog-text-md) / var(--mog-leading) var(--mog-font);
   -webkit-font-smoothing: antialiased;
@@ -520,6 +520,7 @@ body {
 /* The first-run notice: one centred reading column. */
 .hub--notice {
   max-width: 600px;
+  margin: 0 auto;
 }
 
 .legal-notice {
@@ -688,9 +689,304 @@ body {
   margin: 0;
 }
 
+/* Hub navigation (#103): two quiet items under the header. The header and the navigation keep
+   their place in every view; the MOGs and settings column keeps a 616 px measure (680 px with the padding). */
+.hub-nav {
+  display: flex;
+  gap: 2px;
+  margin: 0 0 20px -10px;
+}
+
+.hub .hub-nav-item {
+  min-height: 28px;
+  padding: 0 10px;
+  border-color: transparent;
+  color: var(--mog-text-muted);
+  font-weight: 500;
+}
+
+.hub .hub-nav-item:hover {
+  border-color: transparent;
+  color: var(--mog-text);
+}
+
+.hub .hub-nav-item[aria-current='page'] {
+  background: var(--mog-surface-raised);
+  color: var(--mog-text);
+}
+
+.hub [data-hub-view='home'] {
+  max-width: 616px;
+}
+
+/* Conversations (#103): the window is the frame. List 280 px, detail fills the rest; each pane
+   scrolls on its own. */
+.hub--wide {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  align-items: baseline;
+  height: 100vh;
+  padding-bottom: 0;
+}
+
+.hub--wide > .hub-nav,
+.hub--wide > .conv {
+  grid-column: 1 / -1;
+}
+
+.hub--wide > .conv {
+  align-self: stretch;
+  min-height: 0;
+}
+
+.hub [hidden] {
+  display: none;
+}
+
+.conv {
+  display: flex;
+  margin: 0 -32px;
+  border-top: 1px solid var(--mog-edge);
+}
+
+.conv-panes {
+  display: grid;
+  flex: 1;
+  grid-template-columns: 280px minmax(0, 1fr);
+  min-height: 0;
+}
+
+.conv-list {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 12px 24px 20px;
+  border-right: 1px solid var(--mog-edge);
+  overscroll-behavior: contain;
+}
+
+/* The listbox takes focus; the ring goes on the active option, not round the whole pane. */
+.hub .conv-list:focus-visible {
+  box-shadow: none;
+}
+
+.conv-day {
+  margin: 16px 0 6px;
+  padding: 0 12px;
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-xs);
+  font-weight: 600;
+}
+
+.conv-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  border-radius: var(--mog-radius-sm);
+  cursor: pointer;
+  transition: background-color 120ms var(--mog-ease-out);
+}
+
+.conv-row:hover {
+  background: color-mix(in srgb, var(--mog-surface-raised) 50%, transparent);
+}
+
+.conv-row[aria-selected='true'] {
+  background: var(--mog-surface-raised);
+}
+
+.conv-list:focus-visible .conv-row[aria-selected='true'] {
+  box-shadow: var(--mog-focus-ring);
+}
+
+.conv-row-q {
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conv-row-meta {
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.conv-status--failed {
+  color: var(--mog-lid);
+}
+
+.conv-detail {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px 24px 32px;
+  overscroll-behavior: contain;
+}
+
+/* The detail pane fills the area, so an outer ring would fall outside the window or under the
+   divider: its ring is inset, in the focus colour. */
+.hub .conv-detail:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--mog-focus);
+}
+
+.hub .conv-question {
+  max-width: 68ch;
+  font-size: var(--mog-text-md);
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.hub .conv-meta {
+  display: flex;
+  flex-wrap: wrap;
+  margin: 4px 0 0;
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.conv-meta-part {
+  white-space: nowrap;
+}
+
+/* Text for screen readers only: the workspace host after the profile. */
+.conv-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.conv-meta-part + .conv-meta-part::before {
+  content: '·';
+  content: '·' / '';
+  margin: 0 4px;
+}
+
+.conv-meta .conv-status--failed {
+  color: var(--mog-lid);
+  font-weight: 500;
+}
+
+.conv-answer {
+  max-width: 68ch;
+  margin-top: 14px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.hub .conv-answer p,
+.conv-answer ul,
+.conv-answer ol {
+  margin: 0 0 10px;
+}
+
+.conv-answer ul,
+.conv-answer ol {
+  padding-left: 18px;
+}
+
+.conv-answer li + li {
+  margin-top: 2px;
+}
+
+.conv-answer code,
+.conv-answer pre {
+  border-radius: var(--mog-radius-sm);
+  background: var(--mog-surface-raised);
+  font:
+    var(--mog-text-sm) / 1.5 ui-monospace,
+    'SF Mono',
+    Menlo,
+    Consolas,
+    monospace;
+}
+
+.conv-answer code {
+  padding: 1px 4px;
+}
+
+.conv-answer pre {
+  margin: 0 0 10px;
+  overflow-x: auto;
+  padding: 10px 12px;
+}
+
+.conv-answer pre code {
+  padding: 0;
+  background: none;
+}
+
+/* No opener yet (#523): a trusted URL shows as selectable text in the link colour, not as a
+   control that does nothing. */
+.conv-answer a {
+  color: var(--mog-eye);
+  cursor: text;
+  text-decoration: none;
+}
+
+.hub .conv-answer--none {
+  margin: 14px 0 0;
+  color: var(--mog-text-muted);
+}
+
+/* Key numbers: the same quiet row as the card, no tiles. */
+.conv-numbers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  max-width: 68ch;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.conv-numbers li {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.conv-number {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.conv-number-label {
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-xs);
+}
+
+/* Empty, unavailable and loading: centred in the area, two quiet lines. */
+.conv-message {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 24px 64px;
+  text-align: center;
+}
+
+.hub .conv-message-title {
+  margin: 0;
+}
+
+.hub .conv-message-line {
+  margin: 4px 0 0;
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-sm);
+}
+
 /* Scrollbars in the palette. */
 html,
-.hub pre {
+.hub pre,
+.conv-list,
+.conv-detail {
   scrollbar-color: rgb(255 255 255 / 18%) transparent;
 }
 

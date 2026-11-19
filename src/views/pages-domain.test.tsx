@@ -17,7 +17,8 @@ vi.mock('@tauri-apps/api/window', async () => (await import('./test-tauri')).win
 /** The emits of the pickers: drop `ready` (#507), the hub-scope `notice.ready` (#27) and `mogs.ready` (#26), the CLI step ask (#161) and the permission notice ask (ADR 0101). */
 const viewEmits = () =>
   allViewEmits().filter(
-    (e) => ![HUB_SCOPE, 'cli', 'permissions'].includes((e as { mogId: string }).mogId),
+    (e) =>
+      ![HUB_SCOPE, 'cli', 'permissions', 'conversations'].includes((e as { mogId: string }).mogId),
   );
 
 const ID = '00000000-0000-4000-8000-000000000001';

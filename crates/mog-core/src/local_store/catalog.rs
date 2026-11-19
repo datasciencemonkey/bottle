@@ -256,6 +256,23 @@ const EXCHANGE_GET: Stmt = Stmt {
     access: Access::Brain,
 };
 
+/// The newest exchanges of one MOG, newest first, for the hub Conversations list (#103). It is a
+/// read only, like `mem.exchange.get`, and it never lists a forgotten (soft-deleted) row. The
+/// brain reads it and sends the rows to the hub; the hub view never runs it.
+const EXCHANGE_RECENT: Stmt = Stmt {
+    id: "mem.exchange.recent",
+    sql: "SELECT request_id AS requestId, status, profile_name AS profileName, \
+          workspace_host AS workspaceHost, question_user AS questionUser, \
+          key_numbers AS keyNumbers, final_answer_md AS finalAnswerMd, \
+          asked_at AS askedAt, completed_at AS completedAt \
+          FROM genie_exchange \
+          WHERE mog_id = :mogId AND deleted_at IS NULL \
+          ORDER BY asked_at DESC, exchange_id DESC LIMIT :limit",
+    params: &[MOG_ID, req("limit", LIMIT)],
+    kind: Kind::Query,
+    access: Access::Brain,
+};
+
 /// The memory items that cite one exchange. `memory_item.source_exchange_id` is `SET NULL`, so
 /// Forget must find these before it deletes the exchange (MEM-32a); the `mem.forget.session`
 /// group deletes them first.
@@ -963,6 +980,7 @@ pub const STATEMENTS: &[Stmt] = &[
     MOG_UPSERT,
     EXCHANGE_UPSERT,
     EXCHANGE_GET,
+    EXCHANGE_RECENT,
     EXCHANGE_DEPENDENTS,
     EXCHANGE_BY_SESSION,
     ITEM_UPSERT,

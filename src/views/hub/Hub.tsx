@@ -14,6 +14,7 @@ import { About } from './About';
 import { CliInstallStep } from './CliInstallStep';
 import { CliSettings } from './CliSettings';
 import { ConnectWorkspace } from './ConnectWorkspace';
+import { Conversations } from './Conversations';
 import { DataPanel } from './DataDisclosures';
 import { DictationNotices } from './DictationNotices';
 import { LegalNotice } from './LegalNotice';
@@ -37,7 +38,33 @@ function HubHeader() {
   );
 }
 
+type HubView = 'conversations' | 'home';
+
+/** The hub navigation (#103): Conversations first, then the MOGs and settings. */
+function HubNav({ view, onView }: { view: HubView; onView: (v: HubView) => void }) {
+  const item = (v: HubView, label: string) => (
+    <button
+      type="button"
+      className="hub-nav-item"
+      aria-current={view === v ? 'page' : undefined}
+      onClick={() => onView(v)}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <nav aria-label="Hub" className="hub-nav">
+      {item('conversations', 'Conversations')}
+      {item('home', 'MOGs and settings')}
+    </nav>
+  );
+}
+
 export function Hub() {
+  // The hub opens on the MOGs and settings, where the first-run steps are. A double-click on the
+  // MOG or the card opens Conversations (#103).
+  const [view, setView] = useState<HubView>('home');
+  const showConversations = useCallback(() => setView('conversations'), []);
   const [mogs, setMogs] = useState<ReadonlyMap<MogId, MogViewState>>(new Map());
 
   const onState = useCallback((p: unknown) => {
@@ -63,38 +90,42 @@ export function Hub() {
     );
   }
 
-  // TODO(#43, #77, #103): the wizard, settings and history.
+  // TODO(#43, #77): the wizard and settings.
   return (
-    <main className="hub">
+    <main className={view === 'conversations' ? 'hub hub--wide' : 'hub'}>
       <HubHeader />
-      {/* ADR 0101 (CAP-36, CAP-37): a missing OS permission shows first; without Input
-          Monitoring the talk key does nothing. */}
-      <PermissionNotices />
-      {/* W-17c (#161): the CLI install step comes before the workspace setup. */}
-      <CliInstallStep />
-      <DictationNotices />
-      {/* #162 (W-07f): the brain opens it at first run when no usable profile exists. */}
-      <ConnectWorkspace />
-      {/* The live moods the MOG windows report: one quiet chip per MOG (empty until one runs). */}
-      <ul aria-label="MOGs" className="hub-live">
-        {[...mogs].map(([id, s]) => (
-          <li key={id} data-mog={id} data-mood={s.mood}>
-            <button type="button" className="hub-chip" onClick={() => void emitView(id, 'click')}>
-              <span className="hub-mood-dot" aria-hidden="true" />
-              MOG {id.slice(0, 8)} <span className="hub-muted">({s.mood})</span>
-            </button>
-            {s.homeDomain && <DomainPicker mogId={id} picker={s.homeDomain} />}
-          </li>
-        ))}
-      </ul>
-      <MogList />
-      <ForgetDialogHost />
-      <MicPreference />
-      <SttSetupStep />
-      <WipeSettings />
-      <CliSettings />
-      <DataPanel />
-      <About />
+      <HubNav view={view} onView={setView} />
+      <Conversations active={view === 'conversations'} onOpen={showConversations} />
+      <div data-hub-view="home" hidden={view !== 'home'}>
+        {/* ADR 0101 (CAP-36, CAP-37): a missing OS permission shows first; without Input
+            Monitoring the talk key does nothing. */}
+        <PermissionNotices />
+        {/* W-17c (#161): the CLI install step comes before the workspace setup. */}
+        <CliInstallStep />
+        <DictationNotices />
+        {/* #162 (W-07f): the brain opens it at first run when no usable profile exists. */}
+        <ConnectWorkspace />
+        {/* The live moods the MOG windows report: one quiet chip per MOG (empty until one runs). */}
+        <ul aria-label="MOGs" className="hub-live">
+          {[...mogs].map(([id, s]) => (
+            <li key={id} data-mog={id} data-mood={s.mood}>
+              <button type="button" className="hub-chip" onClick={() => void emitView(id, 'click')}>
+                <span className="hub-mood-dot" aria-hidden="true" />
+                MOG {id.slice(0, 8)} <span className="hub-muted">({s.mood})</span>
+              </button>
+              {s.homeDomain && <DomainPicker mogId={id} picker={s.homeDomain} />}
+            </li>
+          ))}
+        </ul>
+        <MogList />
+        <ForgetDialogHost />
+        <MicPreference />
+        <SttSetupStep />
+        <WipeSettings />
+        <CliSettings />
+        <DataPanel />
+        <About />
+      </div>
     </main>
   );
 }

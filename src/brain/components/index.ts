@@ -22,6 +22,12 @@ import { cliPlatform } from '../../shared/cli-view';
 import { wireConnectWorkspace } from '../connect-wiring';
 import { sendHubSnapshot, wireHubMogs } from '../hub-mogs-wiring';
 import {
+  sendHubConversations,
+  sendHubConversationsOpen,
+  wireHubConversations,
+  type HubConversationsWiring,
+} from '../hub-conversations-wiring';
+import {
   createCaptureLifecycle,
   ipcCaptureControl,
   wireCaptureLifecycle,
@@ -59,6 +65,7 @@ import { createGenieBridge } from './genie-bridge';
 import { ForgetFlow, isForgetMemory } from './forget-flow';
 import { GenieOneDeleteUtility } from './genie-one-delete';
 import { createMemoryService } from './memory-service';
+import { IpcLocalMemoryStore } from './memory-store';
 import { createMogManager } from './mog-manager';
 import { createMoodMapper } from './mood-mapper';
 import { createOperationTracker } from './operation-tracker';
@@ -106,6 +113,8 @@ export interface Brain {
   readonly bus: BrainBus;
   /** T1 talk-key target (#73, MB-06a, MB-06b, UX-28). */
   readonly talkTarget: TalkTarget;
+  /** #103: the hub Conversations list; `openConversations` opens it on one exchange. */
+  readonly conversations: HubConversationsWiring;
   /** True once `brain_subscribe` succeeds. TODO(#8): retry and surface a refusal. */
   readonly ready: Promise<boolean>;
 }
@@ -124,6 +133,15 @@ export function startBrain(): Brain {
     wireNotice(bus, components.T12);
     // #26: the hub MOG list and actions (MB-01).
     wireHubMogs(bus, components.T1);
+    // #103 (#40): the hub Conversations list. The brain reads the saved exchanges of each MOG
+    // (`mem.exchange.recent`) and sends them to the hub; the hub view runs no store statement.
+    const conversations = wireHubConversations(bus, {
+      store: new IpcLocalMemoryStore(),
+      mogs: async () =>
+        (await components.T1.list()).mogs.map((m) => ({ mogId: m.mogId, name: m.name })),
+      send: sendHubConversations,
+      sendOpen: sendHubConversationsOpen,
+    });
     // #123 (MEM-32a, MEM-32c, MEM-32d): the hub Forget dialog runs Forget on T10 on a user click.
     // TODO(#163): pass `home` (the home host and workspace id from T7) for the memory review link.
     if (isForgetMemory(components.T10)) {
@@ -212,7 +230,7 @@ export function startBrain(): Brain {
         cardFor: stackFor,
         newOpId: () => crypto.randomUUID(),
         // #40 (AT-09): each request that ends saves one local exchange row through T10.
-        onEnd: ipcGenieHistory(components.T10),
+        onEnd: ipcGenieHistory(components.T10, () => void conversations.refresh()),
         // #573: the MOG shows the work (processing), then the answer (answering, success) or
         // the failure (error); the card shows next to the MOG when the outcome is on it.
         onPhase: (mogId, phase, opId) => {
@@ -279,12 +297,11 @@ export function startBrain(): Brain {
         }
       },
       lastOpId: (mogId) => lastGenieOp.get(mogId),
-      // TODO(#103): the hub Conversations wiring (`hub-conversations-wiring.ts`) replaces the
-      // emit below with `openConversations(requestId)`, which also sends it again when the hub
-      // says it is ready.
+      // #103: show the hub, then open Conversations on this exchange. The wiring holds the open
+      // until the hub acks it or asks for the list, so a hub that was not listening still gets it.
       openConversations: (requestId) => {
         void showHub();
-        void emitTo('hub', 'hub:conversations.open', { requestId }).catch(() => undefined);
+        void conversations.openConversations(requestId);
       },
     });
     // #498 (ADR 0091): the Copy card of a dictation. The card is shown first, then the text goes
@@ -347,7 +364,7 @@ export function startBrain(): Brain {
     const levels = new LevelRouter(sendMicLevel, createSystemClock().now);
     wireLevelStream(bus, levels);
     void subscribeLevels(levels);
-    brain = { components, bus, talkTarget, ready: subscribeBrain(bus) };
+    brain = { components, bus, talkTarget, conversations, ready: subscribeBrain(bus) };
   }
   return brain;
 }
