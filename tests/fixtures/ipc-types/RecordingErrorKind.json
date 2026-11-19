@@ -1,0 +1,18 @@
+[
+  "recording_off",
+  "consent_required",
+  "recording_busy",
+  "mic_busy",
+  "no_storage",
+  "volume_permission",
+  "transcribe_endpoint_missing",
+  "notes_endpoint_missing",
+  "too_long",
+  "audio_unreadable",
+  "upload_failed",
+  "rate_limited",
+  "network",
+  "auth",
+  "system_audio_denied",
+  "internal"
+]

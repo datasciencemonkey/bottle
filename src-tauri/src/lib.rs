@@ -154,6 +154,13 @@ pub fn run() {
         .manage(std::sync::Arc::new(
             mog_core::app_settings::AppSettings::default(),
         ))
+        // ADR 0103: the `recording_*` component. The settings stay in memory, knob off, until
+        // PR C keeps them in a JSON file in the app config dir. TODO(#65).
+        .manage(std::sync::Arc::new(
+            mog_core::recording::RecordingComponent::new(std::sync::Arc::new(
+                mog_core::recording::MemorySettingsStore::default(),
+            )),
+        ))
         // G-09a, ARC-F3 (#467, #138): the ONE rate bucket of the process.
         // `rate_bucket.rs:4`: "R7 and R8 share one per process". Every R7 and R8 (and the
         // future `model_invoke` and `dbx_http` callers, #511) takes it from app state.
