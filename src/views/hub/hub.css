@@ -881,6 +881,11 @@
    that scroll under it (still far below the sidebar panel's own z-20), and `background:
    var(--mog-surface)` (the page's own colour) keeps that scrolled content from showing through
    once this row is pinned to the top mid-scroll. */
+  /* `border-bottom` (review of #602, note 2): the `background` above already keeps scrolled
+   content from showing through once this row pins to the top, but with no edge of its own the
+   content still visually ran right up to, and under, this row with nothing marking where the
+   sticky header ends and the scrolling area begins — the same hairline tone `.hub-section`'s
+   own `border-top` uses, so the two read as one consistent divider rhythm. */
   .hub-area-header {
     position: sticky;
     top: 0;
@@ -891,6 +896,52 @@
     gap: var(--mog-space-3);
     margin-bottom: var(--mog-space-5);
     background: var(--mog-surface);
+    border-bottom: 1px solid rgb(255 255 255 / 10%);
+  }
+
+  /* The same 616px measure as the MOGs/Settings content below it (review of #605, LOW 3), so the
+   hairline does not run past it; Conversations and Recordings (`hub--wide`) keep the full width.
+   The first Settings section loses its own top line: the header's hairline already is one. */
+  .hub:not(.hub--wide) .hub-area-header {
+    max-width: 616px;
+  }
+
+  .hub [data-hub-view='settings'] > .hub-section:first-child {
+    border-top: 0;
+  }
+
+  /* "Connect a workspace" steps (first run in the setup region, or inline under the Settings
+   row): the label sits above a full-width field, with the buttons in one row below it. */
+  .hub [data-view='connect-workspace'] form,
+  .hub [data-view='connect-workspace'] [data-connect-step='waiting'],
+  .hub [data-view='connect-workspace'] [data-connect-step='connected'],
+  .hub [data-view='connect-workspace'] [data-connect-step='failed'] {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--mog-space-2) var(--mog-space-3);
+  }
+
+  .hub [data-view='connect-workspace'] form > :is(p, label, details),
+  .hub [data-view='connect-workspace'] [data-connect-step] > p {
+    flex: 1 1 100%;
+    margin: 0;
+  }
+
+  .hub [data-view='connect-workspace'] label {
+    display: flex;
+    flex-direction: column;
+    gap: var(--mog-space-1);
+  }
+
+  .hub [data-view='connect-workspace'] input {
+    max-width: 480px;
+  }
+
+  /* The setup region's first section sits right under the area header's own hairline: one line,
+   not two parallel ones (review of #605, P4; the same for Settings, above). */
+  .hub [data-setup-region] > .hub-section:first-child {
+    border-top: 0;
   }
 
   .hub-area-title {
@@ -1424,8 +1475,13 @@
     min-width: 0;
   }
 
+  /* `flex-shrink: 0` + `white-space: nowrap` (review of #602, note 1): next to `.rec-path`'s
+   truncated path, this label ("My Files" or "Volume") used to wrap onto two lines instead of
+   staying on one and letting the path (which already truncates, above) give way first. */
   .rec-place > span:first-child {
+    flex-shrink: 0;
     font-weight: 500;
+    white-space: nowrap;
   }
 
   /* `flex: 1 1 auto` + `min-width: 0` (not `overflow-wrap: anywhere`, ui-1, review of #602

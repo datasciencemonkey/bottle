@@ -94,7 +94,7 @@ describe('AT-02 sign-in from the chip (Connect a workspace)', () => {
     const flush = () => new Promise((r) => setTimeout(r, 0));
     click({ target: 'connect_open' });
     await flush();
-    expect(sent.at(-1)).toEqual({ step: 'url', firstRun: false });
+    expect(sent.at(-1)).toEqual({ step: 'url', firstRun: false, inline: true });
     click({ target: 'connect_url', url: 'https://example.com/?o=1' });
     await flush();
     expect(sent.at(-1)).toMatchObject({ step: 'url' });
@@ -106,7 +106,12 @@ describe('AT-02 sign-in from the chip (Connect a workspace)', () => {
     expect(core.invoke).toHaveBeenCalledWith('profile_login', {
       args: { workspaceUrl: DBX_HOST, profile: 'bottle-home-ws' },
     });
-    expect(sent.at(-1)).toEqual({ step: 'connected', host: DBX_HOST, profile: 'bottle-home-ws' });
+    expect(sent.at(-1)).toEqual({
+      step: 'connected',
+      host: DBX_HOST,
+      profile: 'bottle-home-ws',
+      inline: true,
+    });
   });
 
   it('[AT-02] [W-15] a custom public OAuth app signs in with its client ID', async () => {
