@@ -4,8 +4,13 @@
 
 mod common;
 
-use cli_runner::{fallback_dirs, resolve, CliError, CliPolicy, CliRunner, UnsafeReason};
-use common::{abs, cli_in, FakeEnv, FakeFs, FakeProcess};
+use cli_runner::fallback_dirs;
+use common::{abs, FakeEnv};
+// Only the unix-shaped tests below resolve a CLI; Windows has no fallback folder to find one in.
+#[cfg(not(windows))]
+use cli_runner::{resolve, CliError, CliPolicy, CliRunner, UnsafeReason};
+#[cfg(not(windows))]
+use common::{cli_in, FakeFs, FakeProcess};
 
 fn launchd_env() -> FakeEnv {
     FakeEnv::new()
