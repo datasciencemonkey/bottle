@@ -115,4 +115,13 @@ describe('the profile picker of an Ask Genie press (#163, #557)', () => {
     expect(s.chips().filter((c) => c.label === 'fake-a')).toHaveLength(1);
     expect(s.texts().filter((t) => t.startsWith('Which workspace?'))).toHaveLength(1);
   });
+
+  it('[#557] a second press while the list is open is kept: one pick sends both presses', async () => {
+    const s = setup();
+    const picked: string[] = [];
+    await s.pick.choose(A, () => void picked.push('first'));
+    await s.pick.choose(A, () => void picked.push('second'));
+    await s.click('fake-a');
+    expect(picked).toEqual(['first', 'second']);
+  });
 });

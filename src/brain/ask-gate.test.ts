@@ -7,6 +7,8 @@ import { createSimScheduler } from '../test-support/sim-scheduler';
 import { routerDecision } from '../test-support/model-invoke';
 import {
   ASK_CHIP_LABEL,
+  CUT_NOTICE,
+  QUESTION_MAX_CHARS,
   NOT_SENT_LINE,
   PREVIEW_CONTROLS,
   createAskGate,
@@ -400,5 +402,58 @@ describe('ask gate: the Ask Genie press of a dictated question (#557, ADR 0096)'
     await t.run(0);
     expect(t.sent).toHaveLength(1);
     expect(t.sent[0]).toMatchObject({ mogId: A, question: Q, target: 'picked' });
+  });
+});
+
+describe('ask gate: no profile, Shift, size (#557, ADR 0096)', () => {
+  it('[#557] [RTR-17b] with no profile and a picker, a Shift preview is a chip of the previewed text; nothing sends by itself', async () => {
+    const t = setup({ target: undefined, pick: true });
+    t.gate.onAsk(
+      preview({ question: 'shift text', decision: decision({ genie_question: '' }) }),
+      t.owned(),
+    );
+    expect(t.gate.pending(A)).toBeUndefined();
+    expect(t.cardOf(A).shownControls()).toEqual([]);
+    await t.run(PREVIEW_MS * 4);
+    expect(t.sent).toEqual([]);
+    expect(t.picks).toEqual([]);
+    const id = [...t.cardOf(A).chips.keys()][0] ?? '';
+    t.gate.chip(A, { id, kind: 'ask_genie' });
+    t.pickDone('picked');
+    await t.run(0);
+    expect(t.sent.map((x) => x.question)).toEqual(['shift text']);
+  });
+
+  it('[#557] [RTR-14] with no profile, an injection-suspected Shift ask is still only the warning chip', async () => {
+    const t = setup({ target: undefined, pick: true });
+    t.gate.onAsk(preview({ decision: decision({ injection_suspected: true }) }), t.owned());
+    expect([...t.cardOf(A).chips.values()]).toEqual([]);
+    expect(t.cardOf(A).shownControls()).toEqual([{ ...INJECTION_WARNING_CHIP }]);
+  });
+
+  it('[#557] [G-30a] a pressed text over 1,000 chars is cut at a word edge before the send, with a notice', async () => {
+    const t = setup();
+    const long = `${'word '.repeat(300)}end`;
+    t.gate.onAsk(
+      chip({ decision: decision({ genie_question: long, cleaned_text: long }) }),
+      t.owned(),
+    );
+    const id = [...t.cardOf(A).chips.keys()][0] ?? '';
+    t.gate.chip(A, { id, kind: 'ask_genie' });
+    await t.run(0);
+    const q = t.sent[0]?.question ?? '';
+    expect(q.length).toBeLessThanOrEqual(QUESTION_MAX_CHARS);
+    expect(q.endsWith('word')).toBe(true);
+    expect(long.startsWith(q)).toBe(true);
+    expect([...t.cardOf(A).blurbs.values()].some((b) => b.text?.includes(CUT_NOTICE))).toBe(true);
+  });
+
+  it('[#557] [RTR-14] an injection-suspected question shows its own text with the warning', () => {
+    const t = setup();
+    t.gate.onAsk(
+      chip({ decision: decision({ injection_suspected: true }), warning: 'injection_suspected' }),
+      t.owned(),
+    );
+    expect([...t.cardOf(A).blurbs.values()].map((b) => b.text)).toEqual([`"${Q}"`]);
   });
 });
