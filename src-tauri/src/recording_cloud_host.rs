@@ -352,6 +352,23 @@ impl PartsHandoff for PipelineHandoff {
     }
 }
 
+/// The names the cloud-side scan and Retry must leave alone right now, from every source
+/// (review of #592, BLOCKING B3 and the LOW ordering item): the recording running now, a stop
+/// still finishing one, a hand-off waiting for the cloud side to connect, and a pipeline run in
+/// flight. Call sites must read `active` last, after `recording` and `finishing`: see
+/// `install`'s `busy` closure.
+fn merge_busy_names(
+    recording: Option<String>,
+    finishing: Option<String>,
+    pending: Vec<String>,
+    active: HashSet<String>,
+) -> HashSet<String> {
+    let mut names: HashSet<String> = recording.into_iter().chain(finishing).collect();
+    names.extend(pending);
+    names.extend(active);
+    names
+}
+
 /// Build the recording cloud host. [`crate::mcp_host::install`] and
 /// [`crate::profiles_host::install`] run first.
 pub fn install(handle: &tauri::AppHandle<tauri::Wry>) -> CoreResult<()> {
@@ -399,26 +416,30 @@ pub fn install(handle: &tauri::AppHandle<tauri::Wry>) -> CoreResult<()> {
         let active_names = active_names.clone();
         let app = handle.clone();
         Arc::new(move || {
-            let mut names = active_names.get();
             // Capture owns the name of the recording running right now (review of #592,
-            // BLOCKING B3): the chunker writes its open part under the final name, in the
-            // same folder the scan reads.
-            if let Some(host) = app.try_state::<Arc<RecordingHost>>() {
-                if let Snapshot::Recording(info) = host.session().snapshot() {
-                    names.insert(info.name);
+            // BLOCKING B3), or a stop still flushing the writer and running the hand-off
+            // (`snapshot()` alone would read `Idle` there already).
+            let (recording, finishing) = match app.try_state::<Arc<RecordingHost>>() {
+                Some(host) => {
+                    let recording = match host.session().snapshot() {
+                        Snapshot::Recording(info) => Some(info.name),
+                        Snapshot::Idle => None,
+                    };
+                    (recording, host.session().finishing_name())
                 }
-                // A stop that is still flushing the writer and running the hand-off (review
-                // of #592): `snapshot()` alone would read `Idle` here already.
-                if let Some(name) = host.session().finishing_name() {
-                    names.insert(name);
-                }
-            }
+                None => (None, None),
+            };
             // A recording that finished before the cloud side connected still waits in the
             // slot; it is not active capture, but it is not abandoned either.
-            if let Some(slot) = app.try_state::<Arc<HandoffSlot>>() {
-                names.extend(slot.pending().into_iter().map(|rec| rec.name));
-            }
-            names
+            let pending = match app.try_state::<Arc<HandoffSlot>>() {
+                Some(slot) => slot.pending().into_iter().map(|rec| rec.name).collect(),
+                None => Vec::new(),
+            };
+            // Read `active_names` last (review of #592, LOW): it is the one source that
+            // overlaps in time with `finishing`, and these reads are not atomic together, so
+            // reading it last catches a hand-off that marks a name while this whole check is
+            // still running, instead of risking a stale "not busy" from an earlier read.
+            merge_busy_names(recording, finishing, pending, active_names.get())
         })
     };
     let local: Arc<dyn LocalAudio> = Arc::new(TempAudio {
@@ -470,4 +491,32 @@ pub fn install(handle: &tauri::AppHandle<tauri::Wry>) -> CoreResult<()> {
         _transport: transport,
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merge_busy_names_unions_every_source() {
+        let active: HashSet<String> = ["d".to_owned()].into_iter().collect();
+        let names = merge_busy_names(
+            Some("a".to_owned()),
+            Some("b".to_owned()),
+            vec!["c".to_owned()],
+            active,
+        );
+        let expected: HashSet<String> =
+            ["a", "b", "c", "d"].into_iter().map(String::from).collect();
+        assert_eq!(names, expected);
+    }
+
+    #[test]
+    fn merge_busy_names_with_only_the_active_mark() {
+        // The case the ordering fix guards: nothing from capture or the slot, only a name the
+        // pipeline's own in-flight guard marked.
+        let active: HashSet<String> = ["2026-11-19_0905".to_owned()].into_iter().collect();
+        let names = merge_busy_names(None, None, Vec::new(), active.clone());
+        assert_eq!(names, active);
+    }
 }
