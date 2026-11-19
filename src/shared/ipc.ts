@@ -100,6 +100,10 @@ export type CommandName = keyof typeof COMMANDS;
  * `:` (ADR 0003). Keys are the names in the requirements.
  */
 export const EVENTS = {
+  /**
+   * Payload `{ mogId, phase, ask?: true }` (section 4.5). `ask` is only on `up`, after the user
+   * tapped G in the hold (RTR-17a, ADR 0098). The `shift` field of ADR 0053 is retired.
+   */
   'hotkey.ptt': { name: 'hotkey:ptt', direction: 'core_to_brain' },
   'hotkey.panic': { name: 'hotkey:panic', direction: 'core_to_brain' },
   /**

@@ -96,14 +96,6 @@ thread_local! {
     static FOREGROUND: RefCell<Option<Sender<u32>>> = const { RefCell::new(None) };
 }
 
-/// RTR-17a: whether a Shift key is down now. No Windows talk key is a Shift key.
-pub fn shift_held() -> bool {
-    [super::vk::LSHIFT, super::vk::RSHIFT]
-        .iter()
-        // SAFETY: GetAsyncKeyState takes any virtual-key code.
-        .any(|&vk| unsafe { GetAsyncKeyState(vk as i32) } as u16 & 0x8000 != 0)
-}
-
 /// The Windows R1 HotkeyService (CAP-40a, CAP-40b, CAP-41, CAP-42, CAP-45).
 ///
 /// The Tauri host creates and starts it (#314, `src-tauri/src/hotkey_host.rs`) and adapts its

@@ -4,7 +4,6 @@ import { chatCompletion, routerDecision } from '../test-support/model-invoke';
 import { core } from './test-core';
 import {
   ASK_CONFIDENCE,
-  PREVIEW_MS,
   ipcUtteranceDeps,
   routeUtterance,
   type InsertResult,
@@ -67,7 +66,7 @@ describe('utterance route (#59)', () => {
       dictation({ cleaned_text: 'Hi Sam, the deck is attached.' }),
     );
     const r = await routeUtterance(utterance(), d);
-    expect(r.route).toBe('inserted');
+    expect(r).toMatchObject({ route: 'chip', dictated: { route: 'inserted' } });
     expect(calls).toEqual(['route', 'insert_text']);
     expect(inserted).toEqual([{ mogId: MOG, text: 'Hi Sam, the deck is attached.' }]);
   });
@@ -81,35 +80,34 @@ describe('utterance route (#59)', () => {
   it('[MOG-06d] a refused insertion returns the reason and the text for Copy', async () => {
     for (const result of ['no_permission', 'no_focus', 'secure_field'] as const) {
       const { d } = deps(dictation(), result);
-      expect(await routeUtterance(utterance(), d)).toEqual({
-        route: 'insert_failed',
-        reason: result,
-        text: SENTENCE,
+      expect(await routeUtterance(utterance(), d)).toMatchObject({
+        route: 'chip',
+        dictated: { route: 'insert_failed', reason: result, text: SENTENCE },
       });
     }
     const { d } = deps(dictation(), new Error('host'));
     expect(await routeUtterance(utterance(), d)).toMatchObject({
-      route: 'insert_failed',
-      reason: 'host_failed',
+      route: 'chip',
+      dictated: { route: 'insert_failed', reason: 'host_failed' },
     });
   });
 
   it('[RTR-01c] with insertion off a dictation goes to Copy and never to insert_text', async () => {
     const { d, calls } = deps(dictation());
-    expect(await routeUtterance(utterance({ insertionOn: false }), d)).toEqual({
-      route: 'copy',
-      text: SENTENCE,
+    expect(await routeUtterance(utterance({ insertionOn: false }), d)).toMatchObject({
+      route: 'chip',
+      dictated: { route: 'copy', text: SENTENCE },
     });
     expect(calls).toEqual(['route']);
   });
 
-  it('[#557] [RTR-01b] a question is dictated first: it is inserted, and it also gets the Ask Genie chip', async () => {
+  it('[#557] [RTR-01b] [RTR-17a] a question with no ⌥G is dictated: it is inserted and gets the Ask Genie chip', async () => {
     const asked = 'What was revenue last quarter?';
-    for (const confidence of [ASK_CONFIDENCE, 0.5]) {
+    for (const confidence of [0.95, ASK_CONFIDENCE, 0.5]) {
       const q = routerDecision({ confidence, cleaned_text: asked, genie_question: 'Revenue Q3?' });
       const { d, calls, inserted } = deps(q);
       const r = await routeUtterance(utterance({ text: asked }), d);
-      // No auto-routing: never a preview without Shift.
+      // ADR 0098: no classifier gate. With no ⌥G the utterance is dictation, at any confidence.
       expect(r).toMatchObject({
         route: 'chip',
         warning: undefined,
@@ -117,14 +115,27 @@ describe('utterance route (#59)', () => {
       });
       expect(calls).toEqual(['route', 'insert_text']);
       expect(inserted).toEqual([{ mogId: MOG, text: asked }]);
-      // The chip holds the exact text that was dictated, not a rewritten question.
+      // The fallback chip holds the exact text that was dictated, not a rewritten question.
       if (r.route !== 'chip') throw new Error('not a chip');
       expect(r.decision.genie_question).toBe(asked);
     }
-    expect(PREVIEW_MS).toBe(1500);
   });
 
-  it('[#557] [MOG-06d] a question whose paste is refused goes to Copy and still gets the chip', async () => {
+  it('[RTR-01c] [RTR-17a] every unforced intent is dictated, and its fallback chip holds the dictated text', async () => {
+    for (const intent of ['dictation', 'memory_question', 'context', 'command', 'noise'] as const) {
+      const { d, calls, inserted } = deps(
+        routerDecision({ intent, genie_question: 'rewritten', cleaned_text: SENTENCE }),
+      );
+      const r = await routeUtterance(utterance(), d);
+      expect(r).toMatchObject({ route: 'chip', dictated: { route: 'inserted' } });
+      if (r.route !== 'chip') throw new Error('not a chip');
+      expect(r.decision.genie_question).toBe(SENTENCE);
+      expect(calls).toEqual(['route', 'insert_text']);
+      expect(inserted).toEqual([{ mogId: MOG, text: SENTENCE }]);
+    }
+  });
+
+  it('[#557] [MOG-06d] a dictation whose paste is refused goes to Copy and still gets the chip', async () => {
     const q = routerDecision({ confidence: 0.9 });
     const r = await routeUtterance(utterance(), deps(q, 'no_permission').d);
     expect(r).toMatchObject({
@@ -135,41 +146,37 @@ describe('utterance route (#59)', () => {
     expect(off).toMatchObject({ route: 'chip', dictated: { route: 'copy', text: q.cleaned_text } });
   });
 
-  it('[RTR-17a] Shift with the talk key forces the ask route for a dictation decision', async () => {
-    const { d, calls } = deps(dictation());
-    const r = await routeUtterance(utterance({ forceAsk: true }), d);
-    expect(r).toMatchObject({ route: 'preview', forced: true, question: SENTENCE });
-    // The router step still runs; only the intent gate is skipped. Nothing is inserted.
-    expect(calls).toEqual(['route']);
-  });
-
-  it('[RTR-17a] a forced route skips the confidence gate and keeps the router question', async () => {
-    const weak = routerDecision({ confidence: 0.1, genie_question: 'Revenue by region?' });
-    const r = await routeUtterance(utterance({ forceAsk: true }), deps(weak).d);
-    expect(r).toMatchObject({ route: 'preview', forced: true, question: 'Revenue by region?' });
-    for (const intent of ['noise', 'context', 'memory_question'] as const) {
-      const other = routerDecision({ intent, genie_question: '', cleaned_text: 'x y' });
-      expect((await routeUtterance(utterance({ forceAsk: true }), deps(other).d)).route).toBe(
-        'preview',
-      );
-    }
-  });
-
-  it('[RTR-17b] a forced ask keeps the 1.5 s preview and never sends on its own', async () => {
-    const r = await routeUtterance(utterance({ forceAsk: true }), deps(dictation()).d);
-    expect(r.route).toBe('preview');
-    if (r.route === 'preview') expect(r.previewMs).toBe(1500);
-  });
-
-  it('[RTR-01b] other intents are left to their owners', async () => {
-    for (const intent of ['memory_question', 'context', 'command', 'noise'] as const) {
-      const { d, calls } = deps(routerDecision({ intent, genie_question: '' }));
-      expect((await routeUtterance(utterance(), d)).route).toBe('other');
+  it('[RTR-17a] [RTR-17b] ⌥G gives the ask route with the exact text: no preview, nothing inserted', async () => {
+    for (const intent of [
+      'dictation',
+      'question',
+      'noise',
+      'context',
+      'memory_question',
+    ] as const) {
+      const decision = routerDecision({
+        intent,
+        confidence: 0.1,
+        cleaned_text: SENTENCE,
+        genie_question: 'Rewritten question?',
+      });
+      const { d, calls } = deps(decision);
+      const r = await routeUtterance(utterance({ forceAsk: true }), d);
+      expect(r).toEqual({ route: 'ask', question: SENTENCE, decision });
+      // The router step still runs (RTR-14); only the intent gate is skipped. No insertion.
       expect(calls).toEqual(['route']);
     }
   });
 
-  it('[RTR-07] a session utterance never gets the preview, also when it is forced', async () => {
+  it('[RTR-17a] a forced ask uses the STT text when the router gives no cleaned text', async () => {
+    const r = await routeUtterance(
+      utterance({ forceAsk: true }),
+      deps(routerDecision({ cleaned_text: '', genie_question: 'x' })).d,
+    );
+    expect(r).toMatchObject({ route: 'ask', question: SENTENCE });
+  });
+
+  it('[RTR-07] a session utterance never gets the ask route, also when it is forced', async () => {
     const session = { ...input, captureMode: 'session' as const };
     const q = routerDecision({ confidence: 0.95 });
     for (const forceAsk of [false, true]) {
@@ -184,20 +191,25 @@ describe('utterance route (#59)', () => {
     expect(calls).toEqual(['route']);
   });
 
-  it('[RTR-17a] a forced ask with no text gives no preview', async () => {
+  it('[RTR-17a] a forced ask with no text sends nothing', async () => {
     const empty = routerDecision({ intent: 'noise', genie_question: '', cleaned_text: '  ' });
     const r = await routeUtterance(utterance({ forceAsk: true, text: ' \n ' }), deps(empty).d);
     expect(r.route).toBe('other');
   });
 
-  it('[RTR-14] an injection-suspected question gets the warning chip, never the preview', async () => {
+  it('[RTR-14] an injection-suspected utterance gets the warning chip, never the ask route', async () => {
     const suspect = routerDecision({ confidence: 0.95, injection_suspected: true });
-    for (const forceAsk of [false, true]) {
-      const r = await routeUtterance(utterance({ forceAsk }), deps(suspect).d);
-      expect(r).toMatchObject({ route: 'chip', warning: 'injection_suspected' });
-    }
-    const plain = await routeUtterance(utterance(), deps(routerDecision({ confidence: 0.4 })).d);
-    expect(plain).toMatchObject({ route: 'chip', warning: undefined });
+    const forced = await routeUtterance(utterance({ forceAsk: true }), deps(suspect).d);
+    expect(forced).toMatchObject({ route: 'chip', warning: 'injection_suspected' });
+    const { d, calls } = deps(suspect);
+    const plain = await routeUtterance(utterance(), d);
+    // Unforced, it is still dictated; its chip is the warning, with no Ask Genie action.
+    expect(plain).toMatchObject({
+      route: 'chip',
+      warning: 'injection_suspected',
+      dictated: { route: 'inserted' },
+    });
+    expect(calls).toEqual(['route', 'insert_text']);
   });
 
   describe('a failed router step (the `context` fallback, ADR 0032)', () => {
@@ -212,27 +224,28 @@ describe('utterance route (#59)', () => {
     it('[RTR-15c] [RTR-01c] with the router model down, a plain sentence is a dictation and nothing is sent to Genie', async () => {
       // ADR 0092: a model that cannot be reached is RTR-15c, not the RTR-13d parse fallback.
       const r = await routeUtterance(utterance({ insertionOn: false }), ipcUtteranceDeps());
-      expect(r).toEqual({ route: 'copy', text: SENTENCE });
+      expect(r).toMatchObject({ route: 'chip', dictated: { route: 'copy', text: SENTENCE } });
       const cmds = core.invoke.mock.calls.map(([cmd]) => cmd);
       for (const c of ['mcp_call', 'agent_start', 'agent_send']) expect(cmds).not.toContain(c);
     });
 
-    it('[RTR-13d] [RTR-01c] router output that does not parse is not inserted and nothing is sent', async () => {
+    it('[RTR-13d] [RTR-01c] router output that does not parse sends nothing; the STT text is dictated', async () => {
       core.invoke.mockImplementation(async (cmd: string) =>
         cmd === 'model_invoke' ? chatCompletion('not json') : {},
       );
-      const r = await routeUtterance(utterance(), ipcUtteranceDeps());
-      expect(r.route).toBe('other');
-      expect(core.invoke.mock.calls.map(([cmd]) => cmd)).not.toContain('insert_text');
+      const r = await routeUtterance(utterance({ insertionOn: false }), ipcUtteranceDeps());
+      expect(r).toMatchObject({ route: 'chip', dictated: { route: 'copy', text: SENTENCE } });
+      const cmds = core.invoke.mock.calls.map(([cmd]) => cmd);
+      for (const c of ['mcp_call', 'agent_start', 'agent_send']) expect(cmds).not.toContain(c);
     });
 
-    it('[RTR-17a] [RTR-17b] a forced one still gets the preview of the STT text', async () => {
+    it('[RTR-17a] a forced one still asks with the STT text', async () => {
       const r = await routeUtterance(utterance({ forceAsk: true }), ipcUtteranceDeps());
-      expect(r).toMatchObject({ route: 'preview', forced: true, question: SENTENCE });
+      expect(r).toMatchObject({ route: 'ask', question: SENTENCE });
     });
   });
 
-  it('[RTR-04a] [#557] the model reply of the IPC double reaches the route (a question is a chip)', async () => {
+  it('[RTR-01c] [#557] the model reply of the IPC double reaches the route (a question is a chip)', async () => {
     core.reset();
     core.invoke.mockImplementation(async (cmd: string) =>
       cmd === 'model_invoke' ? chatCompletion(JSON.stringify(routerDecision())) : {},

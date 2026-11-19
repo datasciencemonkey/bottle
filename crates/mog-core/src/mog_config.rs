@@ -305,7 +305,10 @@ pub struct MogHotkeys {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 pub struct GenieConfig {
+    /// No reader in the MVP: ⌥G sends at once (ADR 0098). Kept for the v1 preview (RTR-04a):
+    /// with `deny_unknown_fields`, a removal would reject the configs that are already saved.
     pub auto_send_ptt: bool,
+    /// `mog.genie.previewMs`: kept for the v1 preview, as `auto_send_ptt` is.
     pub preview_ms: u32,
     pub share_context: bool,
     pub share_context_cross_workspace: bool,

@@ -1,8 +1,7 @@
 /**
- * #142 (ADR 0086), end to end on the brain bus: the card input, the talk key and the T15 hand-off.
- * The check is the IPC itself: no `agent_send` (the main agent) and no `mcp_call` (Genie) goes out
- * before 1.5 s, after a cancel (Esc, a second key press, [Cancel], the card close), or without a
- * chip click (B1, RTR-04b, RTR-05).
+ * #142 (ADR 0086), ADR 0098, end to end on the brain bus: the card input and the T15 hand-off.
+ * The check is the IPC itself: one send for an ⌥G ask (the user action), and no `agent_send` and
+ * no `mcp_call` without a chip press (B1, RTR-04b, RTR-05, RTR-17a).
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -13,7 +12,6 @@ import { BrainBus } from './bus';
 import { createCardStack, type CardStack, type CardStackUpdate } from './card-stack';
 import { createAgentBridge } from './components/agent-bridge';
 import { core } from './test-core';
-import { PREVIEW_MS } from './utterance-route';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('./test-core')).coreModule);
 vi.mock('@tauri-apps/api/event', async () => (await import('./test-core')).eventModule);
@@ -22,7 +20,7 @@ const A = '00000000-0000-4000-8000-0000000000a1';
 const Q = 'What were EMEA bookings last week?';
 const OUTBOUND = new Set(['agent_send', 'mcp_call']);
 /**
- * The `agent_send` arguments after the preview. The Rust test `preview_gate_handoff.rs` reads the
+ * The `agent_send` arguments of an ⌥G ask. The Rust test `preview_gate_handoff.rs` reads the
  * same file and sends it through `AgentHost::send`, which approves the question for `genie_ask`.
  */
 const AGENT_SEND_FIXTURE: unknown = JSON.parse(
@@ -39,7 +37,6 @@ function setup() {
   const updates: CardStackUpdate[] = [];
   const stacks = new Map<string, CardStack>();
   const bridge = createAgentBridge();
-  let open = true;
   // eslint-disable-next-line prefer-const
   let gate: AskGate;
   const stackFor = (mogId: string): CardStack => {
@@ -63,12 +60,12 @@ function setup() {
     cardFor: stackFor,
     showCard: () => undefined,
     owner: { release: () => undefined },
-    isOpen: () => open,
+    isOpen: () => true,
     target: () => 'home',
     send: (t) => bridge.send(t),
   });
   const hides: string[] = [];
-  const off = wireAskGate(bus, gate, stackFor, { hideCard: (id) => void hides.push(id) });
+  const off = wireAskGate(bus, stackFor, { hideCard: (id) => void hides.push(id) });
   const outbound = () =>
     core.invoke.mock.calls.filter(([cmd]) => OUTBOUND.has(cmd)).map(([cmd]) => cmd);
   const last = () => updates[updates.length - 1];
@@ -83,15 +80,12 @@ function setup() {
     outbound,
     last,
     card,
-    close: () => void (open = false),
     run: (ms: number) => sim.runUntil(sim.clock.now() + ms, { settle: true }),
-    preview: () =>
+    ask: () =>
       gate.onAsk(
         {
-          route: 'preview',
+          route: 'ask',
           question: Q,
-          forced: false,
-          previewMs: PREVIEW_MS,
           decision: routerDecision({ genie_question: Q, confidence: 0.9 }),
         },
         { utteranceId: 'u1', mogId: A },
@@ -109,72 +103,37 @@ function setup() {
 }
 
 describe('ask gate on the bus (B1)', () => {
-  it('[RTR-04a] [RTR-04b] the card gets the preview; no agent or Genie call before 1.5 s; one agent_send at 1.5 s', async () => {
+  it('[RTR-17a] [RTR-17b] an ⌥G ask hands one turn to the send seam at once (the agent-bridge double here; startBrain uses the Genie One seam), with no preview on the card', async () => {
     const t = setup();
-    t.preview();
-    expect(t.last()?.blurbs.map((b) => b.text)).toEqual([`"${Q}"\nSending in 1.5 s`]);
-    expect(t.last()?.chips.map((c) => c.label)).toEqual(['Send now', 'Edit', 'Cancel']);
-    await t.run(PREVIEW_MS - 1);
-    expect(t.outbound()).toEqual([]);
-    await t.run(1);
+    t.ask();
+    await t.run(0);
     expect(t.outbound()).toEqual(['agent_send']);
     const args = core.invoke.mock.calls.find(([c]) => c === 'agent_send')?.[1];
     expect(args).toMatchObject({
       args: { mogId: A, turn: { mogId: A, question: Q, target: 'home' } },
     });
+    expect(t.last()?.blurbs.map((b) => b.text)).toEqual([`"${Q}"`]);
     expect(t.last()?.chips).toEqual([]);
+    await t.run(15_000);
+    expect(t.outbound()).toEqual(['agent_send']);
   });
 
-  const cancels: [string, (t: ReturnType<typeof setup>) => unknown][] = [
-    ['Esc in the card (view:input cancel)', (t) => t.card('cancel')],
-    [
-      'a second talk-key press (hotkey:ptt down)',
-      (t) => t.bus.dispatch({ event: 'hotkey:ptt', payload: { mogId: A, phase: 'down' } }),
-    ],
-    ['a click on [Cancel]', (t) => t.card('chip_click', { chipId: 'preview_cancel' })],
-    // TODO(#374): no card-hide signal reaches the brain yet; this calls the gate's own entry.
-    ['the card close (gate.cardClosed)', (t) => t.gate.cardClosed(A)],
-    ['the MOG close', (t) => t.close()],
-  ];
-  for (const [name, cancel] of cancels) {
-    it(`[RTR-04b] ${name} during the preview: no agent or Genie call, ever`, async () => {
-      const t = setup();
-      t.preview();
-      await t.run(PREVIEW_MS - 100);
-      cancel(t);
-      await t.run(10 * PREVIEW_MS);
-      expect(t.outbound()).toEqual([]);
-    });
-  }
-
-  it('[RTR-04b] [RTR-29b] the agent_send after the preview is the shared fixture the core approves', async () => {
+  it('[RTR-17b] [RTR-29b] the turn of an ⌥G ask through the agent-bridge double is the shared fixture the core approves', async () => {
     const t = setup();
-    t.preview();
-    await t.run(PREVIEW_MS);
+    t.ask();
+    await t.run(0);
     const sends = core.invoke.mock.calls.filter(([c]) => c === 'agent_send');
     expect(sends).toHaveLength(1);
     expect((sends[0]?.[1] as { args: unknown }).args).toEqual(AGENT_SEND_FIXTURE);
   });
 
-  it('[RTR-04b] a cancel from the MOG window (not its card) does not reach the preview', async () => {
+  it('[RTR-17a] a talk-key press or a card cancel after an ⌥G ask sends nothing more', async () => {
     const t = setup();
-    t.preview();
-    // `mog-<id>` may speak for its MOG on the bus, but only the card speaks for the preview.
-    t.card('cancel', undefined, `mog-${A}`);
-    t.card('chip_click', { chipId: 'preview_cancel' }, `mog-${A}`);
-    expect(t.gate.pending(A)).toBe('counting');
-    await t.run(PREVIEW_MS);
-    expect(t.outbound()).toEqual(['agent_send']);
-  });
-
-  it('[RTR-04b] Esc from another window does not cancel; a hover never sends', async () => {
-    const t = setup();
-    t.preview();
-    t.card('cancel', undefined, 'card-someone-else');
-    t.card('hover', { blurbId: 'x', on: true, via: 'pointer' });
-    await t.run(PREVIEW_MS - 1);
-    expect(t.outbound()).toEqual([]);
-    await t.run(1);
+    t.ask();
+    await t.run(0);
+    await t.bus.dispatch({ event: 'hotkey:ptt', payload: { mogId: A, phase: 'down' } });
+    await t.card('cancel');
+    await t.run(15_000);
     expect(t.outbound()).toEqual(['agent_send']);
   });
 
@@ -202,24 +161,21 @@ describe('ask gate on the bus (B1)', () => {
     expect(t.outbound()).toEqual([]);
   });
 
-  it('[RTR-04b] after off() the bus input reaches the gate no more', async () => {
+  it('[RTR-05] after off() a chip press on the bus reaches the gate no more', async () => {
     const t = setup();
+    t.chip();
+    const chip = t.last()?.chips.find((c) => c.label === 'Ask Genie');
     t.off();
-    t.preview();
-    t.card('cancel');
-    await t.run(PREVIEW_MS);
-    // The cancel did not arrive, so the preview ended and sent (the gate itself still runs).
-    expect(t.outbound()).toEqual(['agent_send']);
+    await t.card('chip_click', { chipId: chip?.id });
+    await t.run(0);
+    expect(t.outbound()).toEqual([]);
   });
 
-  it('[UX-19b] [#559] a card cancel with no preview hides the card; one with a preview only cancels it', async () => {
+  it('[UX-19b] [#559] a card cancel hides the card; a cancel from the MOG window does not', async () => {
     const t = setup();
-    t.card('cancel');
+    await t.card('cancel');
     expect(t.hides).toEqual([A]);
-    t.preview();
-    t.card('cancel');
-    expect(t.hides).toEqual([A]);
-    t.card('cancel', undefined, `mog-${A}`);
+    await t.card('cancel', undefined, `mog-${A}`);
     expect(t.hides).toEqual([A]);
     t.off();
   });

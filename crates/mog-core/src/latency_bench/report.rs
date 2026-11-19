@@ -93,7 +93,7 @@ impl Gate {
                  layouts, panic <= 200 ms"
             }
             Gate::At43 => {
-                "the target apps, the password field, no Accessibility, Shift to ask, clipboard \
+                "the target apps, the password field, no Accessibility, ⌥G to ask, clipboard \
                  restore, no agent turn and no Genie call"
             }
         }

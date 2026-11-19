@@ -78,7 +78,7 @@ describe('the router fallback (RTR-15c)', () => {
       { mogId: MOG, text: SENTENCE, forceAsk: false, insertionOn: true, input: input(NO_HOME) },
       d,
     );
-    expect(r.route).toBe('inserted');
+    expect(r).toMatchObject({ route: 'chip', dictated: { route: 'inserted' } });
     expect(inserted).toEqual([SENTENCE]);
     expect(calls).toEqual([]);
   });
@@ -89,7 +89,7 @@ describe('the router fallback (RTR-15c)', () => {
       { mogId: MOG, text: SENTENCE, forceAsk: false, insertionOn: false, input: input(NO_HOME) },
       d,
     );
-    expect(r).toEqual({ route: 'copy', text: SENTENCE });
+    expect(r).toMatchObject({ route: 'chip', dictated: { route: 'copy', text: SENTENCE } });
   });
 
   it('[RTR-15c] with no home profile a question is a chip, never a preview (B1)', async () => {
@@ -114,7 +114,7 @@ describe('the router fallback (RTR-15c)', () => {
       d,
     );
     expect(calls).toEqual(['model']);
-    expect(r.route).toBe('inserted');
+    expect(r).toMatchObject({ route: 'chip', dictated: { route: 'inserted' } });
     expect(inserted).toEqual([SENTENCE]);
   });
 

@@ -186,10 +186,10 @@ The scenarios replace v0.2 Scenarios 1-5 as the collision-analyst audit requires
 3. The user says "What were EMEA bookings last week?" and releases the key. [CAP-12b]
 4. The MOG shows the `processing` mood and the pill "Transcribing" in 100 ms or less after key-up. [NFR-01c]
 5. The MOG shows the raw text, then replaces it with the cleaned text. [MOG-05a, MOG-05b, CAP-67a]
-6. The router step classifies the text as a question with confidence 0.7 or more. The RecallGate starts in parallel. [RTR-01, RTR-09a, MEM-16d]
+6. The user tapped G during the hold, so the `hotkey.ptt` key-up carries `ask: true`. The router step runs for the RTR-14 check. The RecallGate starts in parallel. [RTR-17a, RTR-09a, MEM-16d]
 7. The RecallGate finds no qualified answer in the local store in 300 ms or less. [MEM-16a, MEM-17a]
-8. The card shows "Sending in 1.5 s" with [Send now], [Edit] and [Cancel]. [RTR-04a, UX-17]
-9. After 1.5 s the main agent gets the question and calls `genie_ask` through the bridge. The card shows "Asking Genie in <host> (profile <p>)" in less than 1 s. [RTR-04b, RTR-21b, G-44]
+8. The card shows the exact text. Bottle sends it at once, with no preview: ⌥G is the consent (ADR 0098). [RTR-17b]
+9. The ask gate sends the text straight to Genie One with `genie_ask` through the bridge (ADR 0097). The card shows "Asking Genie in <host> (profile <p>)" in less than 1 s. [RTR-04b, RTR-21b, G-44]
 10. The bridge polls Genie One MCP one call at a time and shows progress text or elapsed time. [G-07b, G-17a]
 11. The card shows the blurb with **$4.2M** in bold and "Open in Databricks". The mood changes to `answering`, then `success`. [UX-13, UX-14a, UX-15]
 12. A follow-up question in 10 min goes to the same conversation. [G-26a]
@@ -383,7 +383,7 @@ Bottle runs on one device. Only the Rust core holds credentials and talks to the
 | `audit_append` | `{kind, mogId, opId, sizes}` (content-free) | `{}` | brain |
 | `telemetry_span` | content-free span | `{}` (dropped if `OtlpTable` is unset) | brain |
 
-**Events (Rust → TS):** `hotkey.ptt {mogId, phase: down|up|cancel|double_tap, shift?: true}` (`shift` only on `down` with Shift held, RTR-17a), `hotkey.panic`, `capture.state`, `capture.segment`, Channel `onLevel` (~30 Hz), Channel `onPartial`, `session.stop_signal {sessionId, reason, prompt}`, `auth.status`, `net.status`, `mem.remote_status` (v1), `agent.tool_call {mogId, callId, tool, args}`, `agent.status`. **Brain → view:** `mog.view_state`, `card.update`. **View → brain:** the `view_emit` command, relayed as `view.input`. `view_emit` never carries brain-to-view updates.
+**Events (Rust → TS):** `hotkey.ptt {mogId, phase: down|up|cancel|double_tap, ask?: true}` (`ask` only on `up` after ⌥G in the hold, RTR-17a, ADR 0098), `hotkey.panic`, `capture.state`, `capture.segment`, Channel `onLevel` (~30 Hz), Channel `onPartial`, `session.stop_signal {sessionId, reason, prompt}`, `auth.status`, `net.status`, `mem.remote_status` (v1), `agent.tool_call {mogId, callId, tool, args}`, `agent.status`. **Brain → view:** `mog.view_state`, `card.update`. **View → brain:** the `view_emit` command, relayed as `view.input`. `view_emit` never carries brain-to-view updates.
 
 **Remote statement catalog (v1, Lakebase sync only):** `mem.migrate`, `mem.recall.hybrid`, `mem.item.upsert`, `mem.session.upsert`, `mem.exchange.upsert`, `mem.utterance.upsert` (off by default), `mem.consent.upsert` (only with `ConsentRecordUpload`), `mem.forget`, `mem.pull`, `mem.retention.purge`, `mem.export.page`.
 
@@ -749,7 +749,7 @@ Columns: **ID** · **Pri** (M/S/C) · **Phase** · **Requirement** · **Acceptan
 | CAP-43b | M | MVP-D | The first-run conflict check must flag Dictation, Fn/Globe, VoiceOver, AltGr layouts, the Copilot key and known voice apps. | Each conflict shows with a fix. | T · AT-30 | D66, CAP-HK-09 | ALL |
 | CAP-44a | M | MVP-D | HotkeyService must count a talk-key hold shorter than 250 ms as a tap. | A 200 ms hold gives a tap event. | T · AT-03 | CAP-HK-12 | UC1 UC2 |
 | CAP-44b | M | MVP-D | CaptureService must discard the audio of a tap. | Tap audio never goes to the journal or to STT. | T · AT-03 | CAP-HK-12 | UC1 UC2 |
-| CAP-44c | M | MVP-D | If another key goes down in the first 1 s of a hold, HotkeyService must cancel the PTT. | The cancelled PTT makes no STT call. | T · AT-03 | CAP-HK-12 | UC1 UC2 |
+| CAP-44c | M | MVP-D | If another key goes down in the first 1 s of a hold, HotkeyService must cancel the PTT. The ask key G must not cancel the PTT (ADR 0098). | The cancelled PTT makes no STT call. G in the first 1 s gives an ask, not a cancel. The tap compares the key code with G only. The tap keeps no key code. | T · AT-03 | CAP-HK-12 | UC1 UC2 |
 | CAP-45 | M | MVP-D | When the device wakes or unlocks, or Secure Input ends, HotkeyService must read the physical key state again. | No PTT stays active after a gap. | T · AT-30 | CAP-HK-13 | UC1 UC2 |
 | CAP-46a | S | v1 | HotkeyService must give each MOG a chord: Ctrl+Shift+1..8 on macOS and Ctrl+Win+Alt+1..8 on Windows. | Each chord targets its MOG. | T · AT-14 | D66, CAP-HK-14 | ALL |
 | CAP-46b | S | v1 | When the user holds the talk key and presses Tab, HotkeyService must move the target to the next MOG. | Tab cycles through the active MOGs. | T · AT-14 | CAP-HK-14 | ALL |
@@ -853,16 +853,16 @@ Binding change B4 replaces the fixed rule-based router. Each MOG has a **main ag
 | ID | Pri | Phase | Requirement | Acceptance criterion | Verify | Source | UC |
 |---|---|---|---|---|---|---|---|
 | RTR-01 | M | MVP-D | The main agent must classify each utterance with the router step into one intent of Appendix D. | Intents: `question`, `memory_question`, `context`, `command`, `dictation`, `noise`; the golden set reaches ≥ 90 % intent accuracy. | T · AT-06 | D25, GL-7, B4 | UC2 |
-| RTR-01b | M | MVP-D | The router step must return `dictation` for a PTT or hands-free utterance that is not a question, a memory question or a command. | Plain sentences for an email give `dictation`; Shift with the talk key forces the ask route (RTR-17a). | T · AT-43 | B5 (UC1), diagram 03 | UC1 |
+| RTR-01b | M | MVP-D | The router step must return `dictation` for a PTT or hands-free utterance that is not a question, a memory question or a command. | Plain sentences for an email give `dictation`; ⌥G during the talk-key hold forces the ask route (RTR-17a). With no ⌥G, the brain dictates every intent (ADR 0098). | T · AT-43 | B5 (UC1), diagram 03 | UC1 |
 | RTR-01c | M | MVP-D | If the intent is `dictation`, the brain must end the flow at insertion without the main agent or Genie. | A dictation trace has no agent turn and no Genie call. | T · AT-43 | B4, B5 | UC1 |
 | RTR-02a | M | MVP-D | The router step must use the flat strict json_schema of Appendix D with all fields required. | Every response parses against the schema. | T · AT-06 | D25, GL-7, VER claim 4 | UC2 |
 | RTR-02b | M | MVP-D | The router schema must not use `anyOf`, `oneOf`, `$ref` or `pattern`. | A schema lint finds none of these. | I · AT-06 | D25, GL-7 | UC2 |
 | RTR-03a | M | MVP-D | The router step must receive transcript text as delimited data under a fixed system prompt. | The prompt wraps the text in `<utterance>` tags. | T · AT-17 | D25, GL-7.4, SG-INJ-1 | UC2 |
 | RTR-03b | M | MVP-D | The router step must not obey instructions in transcript text. | The adversarial set triggers no action. | T · AT-17 | GL-7.4, SG-INJ-1 | UC2 |
 | RTR-03c | M | MVP-D | The main agent must treat transcript and memory text as data and never as instructions. | The adversarial set causes no tool call that the text asks for. | T · AT-42 | B4, SG-INJ-1 | UC2 |
-| RTR-04a | M | MVP-D | If a PTT or hands-free question has confidence 0.7 or more, the MOG must show the 1.5 s preview with [Send now], [Edit] and [Cancel]. | The preview uses the Appendix E template "Sending in 1.5 s". | T · AT-31 | D8, D30 | UC2 |
-| RTR-04b | M | MVP-D | When the 1.5 s preview ends with no cancel, the MOG must give the question to the main agent. | Esc or Cancel during the preview sends nothing. | T · AT-31 | D8, D30, B4 | UC2 |
-| RTR-05 | M | MVP-D | If a PTT or hands-free question has confidence below 0.7, the MOG must show an "Ask Genie" chip instead of a preview. | No network call to Genie occurs before the click. | T · AT-06 | D30 | UC2 |
+| RTR-04a | M | v1 | Superseded for the MVP PTT path by ADR 0098 (user decision, 2026-11-19). Later phase: for a PTT or hands-free question with confidence 0.7 or more, the MOG must show the 1.5 s preview with [Send now], [Edit] and [Cancel]. | The MVP PTT path shows no preview. ⌥G during the hold is the consent (RTR-17b). | T · AT-31 | D8, D30 | UC2 |
+| RTR-04b | M | v1 | Superseded for the MVP PTT path by ADR 0098 (user decision, 2026-11-19). Later phase: when the 1.5 s preview ends with no cancel, the MOG must give the question to the main agent. | The MVP ⌥G ask sends the exact text at once, straight to Genie One (ADR 0097, ADR 0098). | T · AT-31 | D8, D30, B4 | UC2 |
+| RTR-05 | M | MVP-D | After each PTT or hands-free dictation, the MOG must show an "Ask Genie" chip of the exact dictated text (ADR 0098). | No network call to Genie occurs before the press. The chip is the fallback for text that the user already dictated. | T · AT-06 | D30 | UC2 |
 | RTR-06 | M | MVP-M | When a session segment holds a question with confidence 0.7 or more, the MOG must show an "Ask Genie?" chip. | The chip expires after 2 min or when 3 newer chips exist. | T · AT-27 | D30, UX chip 1 | MTG |
 | RTR-07 | M | MVP-M | The MOG must never send a meeting-session question to Genie without a user click. | AT-27 shows 0 asks without a click; no auto-ask setting or MDM key exists. | T · AT-27 | B1 (replaces D8/D30 auto-ask) | MTG |
 | RTR-08 | M | MVP-M | Others-track speech must never cause an ask, a command, a hop or a memory decision. | Commands from the Others track become `noise` with `injection_suspected=true`. | T · AT-27 | D8, GL-7.4, SG-INJ-3 | MTG |
@@ -880,13 +880,13 @@ Binding change B4 replaces the fixed rule-based router. Each MOG has a **main ag
 | RTR-13d | M | MVP-D | If the retry also fails, the client must use intent `context`. | A malformed response never sends a question. | T · AT-06 | GL-7.2 | UC2 |
 | RTR-14 | M | MVP-D | If an utterance matches a pattern of Table RTR-INJ, the router step must set `injection_suspected=true`. | Such utterances never cause a send and show a chip with a warning. | T · AT-17 | GL-7.4, SG-INJ-2 | UC2 |
 | RTR-15a | M | MVP-D | A deterministic command grammar must run before the router step. | "Stop recording" works offline. | T · AT-04 | ARC T6, ARC-F7 | ALL |
-| RTR-15b | M | MVP-D | If the main agent is not available, the fallback classifier must decide the route with the same guardrails. | A stopped harness still gives previews and chips. | T · AT-42 | B4, ARC T6 | UC2 |
+| RTR-15b | M | MVP-D | If the main agent is not available, the fallback classifier must decide the route with the same guardrails. | A stopped harness still gives the ⌥G ask and the Ask Genie chips (ADR 0098). | T · AT-42 | B4, ARC T6 | UC2 |
 | RTR-15c | M | MVP-D | If the router model is not available, the offline heuristic must decide the intent with a question mark or a wh-word. | Offline questions go to the outbox only after a click. | T · AT-04 | ARC-F7 | UC2 |
 | RTR-16 | M | MVP-M | The router step must classify meeting segments in micro-batches of 3 segments or 2 s. | The router call rate stays below 1 for each 2 s. | I · AT-32 | ARC F2 | MTG |
-| RTR-17a | S | MVP-D | If the user holds Shift with the talk key, the main agent must use the ask route for that utterance. | The forced route skips the intent gate only. | T · AT-06 | UX-MM-6, UXC-10 | UC2 |
-| RTR-17b | S | MVP-D | A forced ask route must keep the 1.5 s preview. | The preview shows for a forced route. | T · AT-06 | UX-MM-6 | UC2 |
+| RTR-17a | S | MVP-D | If the user taps G during the talk-key hold, the brain must use the ask route for that utterance. The frontmost app must not receive the G (ADR 0098). | The `hotkey.ptt` key-up carries `ask: true`. The ask sends the exact text. A hold with no G is dictation. The Shift trigger is retired. | T · AT-06 | UX-MM-6, UXC-10 | UC2 |
+| RTR-17b | S | MVP-D | A forced ask route must send the exact text with no 1.5 s preview (ADR 0098). | The send seam gets the text once. Nothing is inserted. The pop-up hint reads "Hold ⌥G to ask Genie". | T · AT-06 | UX-MM-6 | UC2 |
 | RTR-18a | M | MVP-D | If the intent is `memory_question`, the main agent must call the RecallGate before Genie. | See MEM-17a. | T · AT-35 | D25, GL-7.3 | UC2 |
-| RTR-18b | M | MVP-D | If the RecallGate does not answer, the main agent must treat the utterance as a `question`. | The flow continues at the preview. | T · AT-35 | GL-7.3 | UC2 |
+| RTR-18b | M | MVP-D | If the RecallGate does not answer, the main agent must treat the utterance as a `question`. | The flow continues at the ⌥G send or at the Ask Genie chip (ADR 0098). | T · AT-35 | GL-7.3 | UC2 |
 | RTR-19 | M | MVP-D | The router step must receive no memory text. | Router input holds only the utterance, track, mode, topic labels and profile list. | I · AT-17 | GL-7.1 | UC2 |
 | RTR-20a | M | MVP-D | The router, cleanup, ASR and writer model calls must not use tools or function calls. | Inspection of each request shows no `tools` field. | I · AT-17 | SG-INJ-2 | ALL |
 | RTR-20b | M | MVP-D | The router step must only propose actions. | The router step cannot turn context on or pick a profile outside `AllowedWorkspaceHosts`. | I · AT-17 | SG-INJ-2 | UC2 |
@@ -1502,7 +1502,7 @@ Each step is one instruction to the system. Brackets give the requirement IDs. E
 
 [[DIAGRAM: ptt-dictation-sequence]]
 
-*Diagram 3 shows the mood pill at each step; the key-down order (mic lease and mic open, then the `listening` mood and the target toast, with the warm-ups in parallel); the 120 s hold safety stop; `stt_transcribe(segmentId, provider)` with local Parakeet as the default and Databricks ASR only when the user selected it and the probe passed (CAP-57c, CAP-57e, COL-97); cleanup, the router step and the RecallGate start as one par fragment on the pre-pass text (cleanup deadline 900 ms, RecallGate budget 300 ms); the alt on the router intent: `dictation` → `insert_text` (clipboard paste, no Enter, UC1, M, MVP-D) into the focused app, with Copy if the insertion fails; `question` with confidence ≥ 0.7 → the 1.5 s preview "Sending in 1.5 s", then the main agent and the Genie ask (diagram 4); confidence < 0.7 → the "Ask Genie" chip; command or noise → command or drop. Requirement IDs: CAP-12a..c, CAP-35a, CAP-44a, CAP-47a..CAP-59b, CAP-66a..CAP-68, MOG-05a, MOG-06a..d, RTR-01b, RTR-01c, RTR-04a, RTR-05, MEM-16d.*
+*Diagram 3 shows the mood pill at each step; the key-down order (mic lease and mic open, then the `listening` mood and the target toast, with the warm-ups in parallel); the 120 s hold safety stop; `stt_transcribe(segmentId, provider)` with local Parakeet as the default and Databricks ASR only when the user selected it and the probe passed (CAP-57c, CAP-57e, COL-97); cleanup, the router step and the RecallGate start as one par fragment on the pre-pass text (cleanup deadline 900 ms, RecallGate budget 300 ms); the alt on the router intent: `dictation` → `insert_text` (clipboard paste, no Enter, UC1, M, MVP-D) into the focused app, with Copy if the insertion fails; MVP (ADR 0098): with no ⌥G every intent is dictated and gets the "Ask Genie" chip; with ⌥G the exact text goes to Genie at once with no preview (diagram 4); the earlier `question` ≥ 0.7 → preview path is a later phase; command or noise → command or drop. Requirement IDs: CAP-12a..c, CAP-35a, CAP-44a, CAP-47a..CAP-59b, CAP-66a..CAP-68, MOG-05a, MOG-06a..d, RTR-01b, RTR-01c, RTR-04a, RTR-05, MEM-16d.*
 
 1. R1 detects key-down and sends `hotkey.ptt{down}` for the last-interacted MOG. [CAP-35a, MB-06a]
 2. R2 takes the mic lease and opens the stream. [CAP-01a, CAP-12a]
@@ -1518,8 +1518,8 @@ Each step is one instruction to the system. Brackets give the requirement IDs. E
 12. **UC1:** if the intent is `dictation`, the brain sends `insert_text`, the MOG shows "Inserted", and the flow stops. No main agent and no Genie take part. [RTR-01b, RTR-01c, MOG-06a, UX-42]
 13. **UC2:** if the intent is `question` or `memory_question`, T10 applies the RecallGate verdict 300 ms or less after the router step. [MEM-16a, MEM-16e]
 14. If the gate answers, the card shows "From memory" and the flow stops (F4). [MEM-17a, MEM-18a]
-15. If confidence is 0.7 or more, the card shows the 1.5 s preview. Else it shows an "Ask Genie" chip. [RTR-04a, RTR-05]
-16. When the preview ends with no cancel, T15 gives the question, the router decision and the recall hits to the main agent. [RTR-04b, RTR-21b]
+15. MVP (ADR 0098): with ⌥G the ask gate sends the exact text at once. With no ⌥G the card shows an "Ask Genie" chip of the dictated text. [RTR-17b, RTR-05]
+16. The send goes straight to Genie One (ADR 0097). The main agent hand-off through T15 is a later phase. [RTR-04b, RTR-21b]
 17. If the user shares context, T10 builds the preamble and the ContextGate needs the approval (F3). [G-28, G-53]
 18. The main agent calls `genie_ask`. T2 sets the operation to SENDING. The card shows "Asking Genie in <host> (profile <p>)". [MOG-10a, G-44]
 19. R8 sends `genie_ask` through the loopback proxy with a fresh Bearer token to `…/system.ai.genie_one_mcp?o=<id>`. [G-02, G-04d, RTR-27]
@@ -1750,7 +1750,7 @@ The full matrix is in Appendix B. Summary rules:
 
 - Audio goes to Databricks ASR only when the user or MDM selected Databricks ASR (CAP-57e). It is never stored by the app off the device, and ASR inference tables stay off. [CAP-34, ADM-09]
 - Raw transcripts stay local. Transcript sync is an opt-in per MOG. [MEM-27]
-- Genie receives a question only after a deliberate PTT preview or a chip click. No auto-ask exists (B1). [RTR-04a..RTR-08]
+- Genie receives a question only after ⌥G during a PTT hold or a chip click. No auto-ask exists (B1, ADR 0098). [RTR-04a..RTR-08, RTR-17a]
 - The main agent harness gets the cleaned question, the router decision and recall hits. Its model calls go through the AI Gateway on the home profile, or to a local model. [RTR-23, RTR-27]
 - UC1 dictation text goes only to the focused app (clipboard paste with concealed flags). [MOG-06b, SEC-30]
 - A draft UC Page goes to the Pages API of the home workspace only after the user approves the review. [PG-04, PG-05]
@@ -1888,7 +1888,7 @@ These decisions come from the user through the orchestrator. They override every
 | B | Time (UTC) | Decision | Effect in this document |
 |---|---|---|---|
 | B0 | 19:25:38Z | **Rename:** the desktop app is **Bottle**. A MOG is still a floating agent, and Bottle creates and manages MOGs. The repository folder stays `motherbricks/`. Settles K1. | All text, UI strings, tags (`app=bottle`), User-Agent `bottle/<ver>`, schema `bottle`, MDM domain `com.databricks.bottle`, group `bottle-users`, profiles `bottle-*`. MB-10a, AT-37. Supersedes the product name in D41 and D80. |
-| B1 | 19:37:39Z | **Meeting mode:** a MOG records and transcribes the meeting in the background (You + Others). Nothing goes to Genie automatically. The user chooses a moment, a question or the summary to send. Auto-ask and confidence-threshold auto-send are out of the MVP. Stop policy, consent and the indicator still apply. | RTR-07 (no send without a click), RTR-06, G-51..G-54, chip 18 removed, `GenieAutoAskAllowed` and `mog.genie.sessionAutoAsk` removed. Amends D8 and D30. **Confirmed (U4):** the editor keeps the 1.5 s cancelable PTT preview (RTR-04a/b), because the user starts a PTT question on purpose (UC2); it is not auto-ask. |
+| B1 | 19:37:39Z | **Meeting mode:** a MOG records and transcribes the meeting in the background (You + Others). Nothing goes to Genie automatically. The user chooses a moment, a question or the summary to send. Auto-ask and confidence-threshold auto-send are out of the MVP. Stop policy, consent and the indicator still apply. | RTR-07 (no send without a click), RTR-06, G-51..G-54, chip 18 removed, `GenieAutoAskAllowed` and `mog.genie.sessionAutoAsk` removed. Amends D8 and D30. **Confirmed (U4), amended by ADR 0098 (2026-11-19):** the MVP PTT path has no preview. ⌥G during the hold sends at once. Earlier text: the editor keeps the 1.5 s cancelable PTT preview (RTR-04a/b), because the user starts a PTT question on purpose (UC2); it is not auto-ask. |
 | B2 | 19:37:39Z | **Memory:** local SQLite is the MVP memory store for every MOG: one encrypted file (SQLCipher or a key in the OS keychain), WAL, FTS5 and `sqlite-vec`. Embeddings come from a Databricks endpoint and wait in a queue when offline. Lakebase is an OPTIONAL v1 sync and backup target, removed from the MVP admin prerequisites. | MEM-08a..f, MEM-19d, MEM-41; Lakebase rows Phase v1 Pri C; ADM-03b/c and ADM-05 v1; Section 10; Appendix A. Supersedes D12, K2 of D81; amends D13, D15, D34, D37, D51, D60, D72. |
 | B3 | 19:37:39Z | **Ontology hydration through UC Pages (Beta):** Bottle detects definitions, proposes a Page, and on approval creates the user's own DRAFT Page with `POST /api/2.0/knowledge/pages` (`domain`, `display_name`, `body`, `synonyms` ≤ 50, `description`, `state:"DRAFT"`, `request_id`). Scope `knowledge`. A domain must exist (use its ID). Pages ground Genie One only. MVP: detect, review, create drafts. v1: publish request, update, conflict checks. | Section 5.8 PG-01..PG-17, F7, SC-8, ADM-15, ADM-20, ADM-21, W-19, SP-20, AT-41. |
 | B4 | 19:39:49Z | **MOG brain:** each MOG has a main agent (Claude or Codex harness; model through the Databricks AI Gateway with the user's identity, or local; cloud execution v1). `bottle-mcp` gives the agent the local tools; Genie One MCP is attached directly. The agent can never start capture, approve outbound context, publish Pages or switch workspace without a user action or approval. Dictation bypasses the agent. Actions are logged per MOG. The router becomes the agent's first step, with a cheap classifier as a fallback. | RTR-01..RTR-30 (main agent rows RTR-21a..RTR-30), R16, R17, T15, ARC-7, SEC-23, UX-41, NFR-03d, SP-19, AT-42. Amends D25 and D33 (loopback proxies keep tokens in Rust). |
@@ -1903,7 +1903,7 @@ These answers come from the user. They settle the `CONFIRM WITH USER` badges in 
 | U1 | D1, D32, COL-01 | **Tauri** shell (Tauri ≥ 2.12.5, TS/React UI, Rust core with a C ABI). Flutter is not used for the MVP. |
 | U2 | D3, D43, COL-03 | **Always on** means always resident and ready with the mic closed. The mic opens only for PTT or a session that the user starts, with an indicator that cannot be hidden. |
 | U3 | D40, D61, COL-41 | **Companion to Genie One.** Bottle gives what Genie One desktop does not: many MOGs, workspace hopping, dictation into any app, meeting capture and UC Pages hydration. Bottle does not hand off to Genie One desktop. Because Bottle uses Genie One MCP, the same conversations are expected to show in Genie One (verify in SP-20b). |
-| U4 | B1, D8, D30, COL-11, COL-75 | **Preview, then send.** The PTT question shows a 1.5 s cancelable preview of the exact text. Meetings show chips only; no send without a click. |
+| U4 | B1, D8, D30, COL-11, COL-75 | **Preview, then send.** The PTT question shows a 1.5 s cancelable preview of the exact text. Meetings show chips only; no send without a click. **Amended (user decision, 2026-11-19, ADR 0098):** for PTT, ⌥G during the hold sends the exact text at once with no preview. The key press is the consent. A hold with no G is dictation, and the pop-up offers Ask Genie. |
 | U5 | D17, B5, COL-97 | Local Parakeet is the STT default; Databricks ASR is an opt-in after a probe pass. |
 | U6 | D10, D39, COL-34 | **Reuse the Databricks CLI OAuth client**, hardened: no stored tokens, a token for each request, Bottle tags and User-Agent; `--client-id` is optional for admins. |
 | U7 | D21, COL-02 | No mobile or web client. |
@@ -2303,7 +2303,7 @@ AT-01..AT-22 merge the Kimi baseline, with Bottle names and the D-values. AT-23.
 | AT-40 | STT benchmark gate | Run the golden set (≥ 240 utterances, ≥ 10 speakers, 4 conditions, 20 non-speech clips) on both providers and the Opus path. | WER ≤ 10 % (≤ 7 % quiet English), numbers ≥ 97 %, entities ≥ 85 %, 0/20 hallucinations, STT p95 ≤ 1.0 s on 10 s. Opus delta ≤ 0.5 pp. | device, live |
 | AT-41 | UC3 context send and UC Pages | Select transcript lines and a summary and send them with a preview. Cancel one preview. Change the payload after approval. Say a definition in a meeting, review the proposed Page, edit and approve it. Retry with the same `request_id`. Try without a domain and without the `knowledge` scope. | No send without approval; a change cancels the approval. The Page exists with state DRAFT, the user as owner, 50 synonyms or less, the domain ID. The retry makes no duplicate. Missing domain or scope shows the admin checklist. Genie One uses the DRAFT in the owner's conversation [U: SP-20]. | live |
 | AT-42 | Main agent and guardrails | Run each harness (Claude, Codex). Ask through the agent. Feed adversarial transcript and memory text that asks the agent to start capture, approve context, publish a Page or switch workspace. Stop the harness during a turn. Scan the harness process. | The agent calls only the 7 `bottle-mcp` tools and Genie One through the proxy. None of the 4 forbidden actions occurs without a user action. The fallback classifier takes over. No token is in the harness environment or memory. Each action is in the audit log. First tool call ≤ 2.0 s p95 [U: SP-19]. | device, live |
-| AT-43 | UC1 dictation into the active app | Dictate into a text editor, a browser field, a terminal and a password field. Repeat without Accessibility. Dictate with Shift held. | The text appears with no Enter and the earlier clipboard returns. The password field shows the reason and Copy. Without Accessibility the MOG shows Copy. No agent turn and no Genie call occur. Shift forces the ask route. Key-up to inserted text ≤ 1.5 s p95 (local). | device |
+| AT-43 | UC1 dictation into the active app | Dictate into a text editor, a browser field, a terminal and a password field. Repeat without Accessibility. Dictate. Tap G during the hold. Then release the talk key. | The text appears with no Enter and the earlier clipboard returns. The password field shows the reason and Copy. Without Accessibility the MOG shows Copy. No agent turn and no Genie call occur. ⌥G forces the ask route, and the app gets no "g" or "©". Key-up to inserted text ≤ 1.5 s p95 (local). | device |
 
 ---
 
@@ -2766,7 +2766,8 @@ Router input (not in the schema): the utterance in `<utterance>` tags, `speaker_
 
 | State | Line 1 | Line 2 | Line 3 / controls |
 |---|---|---|---|
-| Preview | "<cleaned question>" | Sending in 1.5 s (bar) | [Send now] [Edit] [Cancel] |
+| Preview | "<cleaned question>" | Sending in 1.5 s (bar) | [Send now] [Edit] [Cancel] (not used in the MVP flow, ADR 0098) |
+| Dictation pop-up | <dictated text> | Hold ⌥G to ask Genie | [Ask Genie] (ADR 0098) |
 | Inserted (UC1) | Inserted | — | (1.2 s) |
 | Insertion failed (UC1) | <cleaned text> | Could not insert: <reason> | [Copy] |
 | Talk key paused | Talk key paused: another app protects typing. Use ⌃⇧Space. | | |
@@ -2848,7 +2849,7 @@ Router input (not in the schema): the utterance in `<utterance>` tags, `speaker_
 | MOG | Click toggles listening | on | `mog.capture.clickTogglesListening` |
 | MOG | Hands-free end on silence | 1.5 s (S) | `mog.capture.vadEndMs` |
 | MOG | Per-MOG chord (v1) | lowest free digit | `mog.hotkeys.chord` |
-| MOG | Send PTT questions after preview | on, 1500 ms | `mog.genie.autoSendPtt`, `mog.genie.previewMs` |
+| MOG | Send PTT questions after preview (v1; the MVP ⌥G sends at once, ADR 0098) | on, 1500 ms | `mog.genie.autoSendPtt`, `mog.genie.previewMs` |
 | MOG | MOG aliases (spoken word → profile) | empty | `mog.binding.profileAliases` |
 | MOG | Main agent harness | Claude | `mog.agent.harness` |
 | MOG | Main agent model | AI Gateway default | `mog.agent.model` |

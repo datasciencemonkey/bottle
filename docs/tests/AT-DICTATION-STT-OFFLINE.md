@@ -28,7 +28,7 @@ pnpm vitest run src/acceptance/at-04-offline.test.ts src/acceptance/at-05-meanin
 | AT-40 | `src/acceptance/at-40-stt-provider.test.ts` | Nothing yet: the SttProvider rules are pending. |
 | AT-43 | `crates/mog-core/tests/at_43_dictation.rs` | Only the brain may call `insert_text`; its arguments have no key, submit or Enter field; a multi-line text is one argument (MOG-06b, contract part). Through the hardened gateway, the R11 paste over a clipboard and key double sends only the paste chord, writes the text once, and restores the earlier clipboard (MOG-06a, MOG-06c, #58). |
 | AT-43 | `crates/mog-core/src/insertion.rs` (#58, ADR 0048) | The paste sequence: checks before any clipboard change (`no_permission`, `no_focus`, `secure_field`) and again right before the chord, no Enter key, a newer copy wins, a failed write or chord still restores. The hosts write with the SEC-30 flags and see a password manager secret (`insertion/macos.rs`, `insertion/windows.rs`). |
-| AT-43 | `src/acceptance/at-43-dictation.test.ts`, `src/brain/utterance-route.test.ts` (#59, ADR 0053) | A dictation decision ends at `insert_text` with only `model_invoke` before it, no agent turn and no Genie call (RTR-01b, RTR-01c); Shift held forces the ask route, skips only the intent gate and keeps the 1.5 s preview (RTR-17a, RTR-17b). `hotkey_host` puts `shift: true` on the `down` item. |
+| AT-43 | `src/acceptance/at-43-dictation.test.ts`, `src/brain/utterance-route.test.ts` (#59, ADR 0053, ADR 0098) | A dictation decision ends at `insert_text` with only `model_invoke` before it, no agent turn and no Genie call (RTR-01b, RTR-01c); an ⌥G hold forces the ask route with the exact text and no preview (RTR-17a, RTR-17b, ADR 0098). `hotkey_host` puts `ask: true` on the `up` item. |
 | AT-43 | `src/acceptance/at-43-dictation.test.ts` | The router step part (#57), with a model reply from the IPC double: a `dictation` decision stays `dictation` for PTT and hands-free and not for a session (RTR-01b), and the step calls only `model_invoke` role `router`, never the agent, Genie or `insert_text` (RTR-01c). Whether a real model gives `dictation` for plain sentences is the router golden set (#56, AT-06). |
 | AT-43 | `crates/mog-core/tests/latency_bench.rs` (#171) | NFR-01d: `nfr_01d_dictation_insert_p95_within_1_5_s_with_local_stt` and the device run `at_21_at_43_device_samples_meet_the_latency_budgets`. This PR does not copy them. |
 
@@ -128,15 +128,17 @@ Do one session for each of 10 or more speakers. Each session is one part.
    multi-line case (no Enter between lines) is the automated MOG-06b test (#58).
 3. Remove the Accessibility permission for Bottle and dictate into TextEdit. Expected: the card
    shows the text, the reason and Copy.
-4. Hold Shift with the talk key and dictate a plain sentence. Expected: the preview chip (the ask
-   route), not an insertion. Do it once with Left-Shift and once with Right-Shift (RTR-17a, ADR
-   0053: on macOS this checks the HID key-state read of each Shift key). On macOS, set the talk
-   key to Right-Shift and hold Left-Shift with it. Expected: the ask route. Hold only the
-   Right-Shift talk key. Expected: an insertion.
+4. In TextEdit, hold the talk key, dictate a plain sentence, tap G, then release (RTR-17a,
+   ADR 0098). Expected: no insertion, no "g" and no "©" in TextEdit, and the card shows
+   "Asking Genie". Do it again with G in the first 0.2 s of the hold. Expected: the same ask, and
+   no cancel. Tap another key (for example X) in the first 1 s. Expected: a cancel (CAP-44c).
+   Hold for 3 s, tap G about 100 ms before the release, and do it while the hub scrolls a long
+   list (a busy main thread). Expected: still an ask, with no insertion (ADR 0098 decision 6).
+   After the release, type Option+G in TextEdit. Expected: "©" (the hot key is released).
+   On Windows, the same hold gives an insertion: Windows has no ask key in this build.
 5. On macOS, click into a password field so that the "Use ⌃⇧Space" pill shows. Hold
    Ctrl+Shift+Space and dictate a plain sentence. Expected: the card shows the reason and Copy
-   (a dictation into a secure field), not the ask preview. The Shift of the chord does not force
-   the ask route.
+   (a dictation into a secure field). A chord hold never asks.
 6. In steps 2 and 3, the card never shows "Asking Genie in <host>", and the Genie One thread list
    of the workspace has no new thread. The automated tests check the IPC log for `agent_*` and
    `mcp_call`.

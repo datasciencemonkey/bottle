@@ -1,12 +1,14 @@
 /**
  * #559: the small pop-up beside the owner MOG after a dictation or an ask. It shows one line,
  * the newest blurb, and one action: Ask Genie, or Copy when the paste was refused (#498). A
- * refused paste of a question shows Copy and Ask Genie of the same text (#557).
+ * refused paste shows Copy and Ask Genie of the same text (#557).
  *
+ * - ADR 0098: Ask Genie is the fallback for text that was already dictated. Next to it, the
+ *   hint `POPUP_ASK_HINT` tells the user that ⌥G during the hold asks Genie directly.
  * - An ignored pop-up fades after `FADE_AFTER_MS` and then sends `cancel`, so the brain hides
  *   the card. Pointer hover or keyboard focus keeps it open.
- * - A Copy pop-up (MOG-05b, MOG-06d) and a held preview (B1) never fade: the user copies,
- *   dismisses or answers the preview, so no text goes away unseen.
+ * - A Copy pop-up (MOG-05b, MOG-06d) and a warning (RTR-14) never fade: the user copies or
+ *   dismisses them, so no text goes away unseen.
  * - The brain keeps the blurb order, pins and History (UX-11a..UX-12). This surface shows only
  *   the newest blurb; the older ones stay in the brain for the hub History (TODO(#103)).
  */
@@ -18,6 +20,8 @@ import { emitView, type CardUpdate } from '../view-ipc';
 export const FADE_AFTER_MS = 5000;
 /** The fade itself. The card hides at its end. */
 export const FADE_OUT_MS = 300;
+/** RTR-17a (ADR 0098): the hint beside Ask Genie. The text is fixed by the user decision. */
+export const POPUP_ASK_HINT = 'Hold ⌥G to ask Genie';
 
 /** Chip IDs from the brain: `ask_genie:<utterance>` (ask-gate.ts), `copy-<utterance>` (#498). */
 const ASK = 'ask_genie:';
@@ -49,7 +53,7 @@ export function Popup({ mogId, card, onClose }: PopupProps) {
   const copy = pick(card.chips, COPY, newest?.id);
   // #557: a refused paste of a question shows Copy and the Ask Genie of the same utterance.
   const ask = pick(card.chips, ASK, copy ? newest?.id : newest?.id.match(/^ask:(.+)$/)?.[1]);
-  // Any other chip is a held preview's control or a warning (ask-gate.ts): show it as it is.
+  // Any other chip is a warning (ask-gate.ts, RTR-14): show it as it is.
   const others = card.chips.filter((c) => !c.id.startsWith(ASK) && !c.id.startsWith(COPY));
   const sticky = copy !== undefined || others.length > 0;
   const hovered = held.pointer || held.focus;
@@ -143,6 +147,11 @@ export function Popup({ mogId, card, onClose }: PopupProps) {
       )}
       {copy && chip(copy, close)}
       {ask && chip(ask)}
+      {ask && (
+        <span className="popup-hint" data-popup-hint>
+          {POPUP_ASK_HINT}
+        </span>
+      )}
       {others.map((c) => chip(c))}
       {copy && (
         <button

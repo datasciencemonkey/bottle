@@ -46,15 +46,22 @@ describe('hotkey:ptt in the brain (#6 payload, #13)', () => {
     expect(got).toHaveLength(1);
   });
 
-  it('[RTR-17a] a key-down with Shift held carries shift: true; other items never do', () => {
+  it('[RTR-17a] a key-up after ⌥G carries ask: true; other items never do (ADR 0098)', () => {
+    expect(asPttEvent({ mogId: MOG, phase: 'up', ask: true }, 3)).toEqual({
+      mogId: MOG,
+      phase: 'up',
+      at: 3,
+      ask: true,
+    });
+    expect(asPttEvent({ mogId: MOG, phase: 'up' }, 3)).not.toHaveProperty('ask');
+    expect(asPttEvent({ mogId: MOG, phase: 'up', ask: 'yes' }, 3)).not.toHaveProperty('ask');
+    for (const phase of ['down', 'cancel', 'double_tap'])
+      expect(asPttEvent({ mogId: MOG, phase, ask: true }, 3)).not.toHaveProperty('ask');
+    // The Shift trigger of ADR 0053 is retired.
     expect(asPttEvent({ mogId: MOG, phase: 'down', shift: true }, 3)).toEqual({
       mogId: MOG,
       phase: 'down',
       at: 3,
-      shift: true,
     });
-    expect(asPttEvent({ mogId: MOG, phase: 'down' }, 3)).not.toHaveProperty('shift');
-    expect(asPttEvent({ mogId: MOG, phase: 'down', shift: 'yes' }, 3)).not.toHaveProperty('shift');
-    expect(asPttEvent({ mogId: MOG, phase: 'up', shift: true }, 3)).not.toHaveProperty('shift');
   });
 });

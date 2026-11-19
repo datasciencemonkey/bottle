@@ -1,41 +1,37 @@
 # Ask a question with the talk key
 
-Bottle never sends a spoken question to Genie by itself.
-You always have a moment to stop it, or you click to send it.
+Bottle never sends what you say to Genie by itself.
+You ask on purpose with ⌥G, or you press **Ask Genie**.
 
-## The 1.5 second preview
+## Dictate: hold, speak, release
 
-When Bottle is sure that you asked a question, the card shows your question and "Sending in 1.5 s".
-The card also shows three buttons:
+Hold the talk key (Right-Option), speak, then release it.
+Bottle pastes your text at the cursor. This is dictation, also when you ask a question.
+Nothing goes to Genie.
 
-- **Send now** sends the question at once.
-- **Edit** stops the countdown. The question waits until you click **Send now** or **Cancel**.
-- **Cancel** stops the question. The card shows "Not sent."
+## Ask Genie: hold, tap G, release
 
-After 1.5 seconds with no cancel, the main agent gets the question and asks Genie.
+Hold the talk key, speak, and tap G at any time while you hold it. Then release the talk key.
+Bottle does not paste the text. It sends the exact text to Genie One at once, with no countdown.
+The card shows "Asking Genie", then the answer.
 
-These actions also stop the question, and nothing is sent:
+- The app that you type in does not get a "g" or a "©" from that G.
+- Outside a hold, Option+G types "©" as usual.
+- With a different talk key, hold it and tap G. For example, Right-Command + G.
+- With no home profile, Bottle shows your Databricks CLI profiles first. Select one, and Bottle sends the text.
 
-- Press Esc in the card.
-- Press the talk key again.
-- Close the MOG.
+Not yet: ⌥G does not work on Windows. On Windows, use the **Ask Genie** button.
 
-Not yet: closing only the card does not stop the question (TODO(#374)).
+## The Ask Genie button
 
-Hold Shift with the talk key to ask on purpose. You still get the 1.5 second preview.
+After each dictation, the pop-up beside the MOG shows your text, an **Ask Genie** button and the hint "Hold ⌥G to ask Genie".
+Nothing goes to Genie until you press the button. The press sends the exact text that you see.
+The button goes away after 2 minutes, or when 3 newer buttons show.
 
-## The Ask Genie chip
+In a meeting session, a question gets the button. A meeting question never sends by itself.
 
-When Bottle is not sure that you asked a question, the card shows your text and an **Ask Genie** chip.
-Nothing goes to Genie until you click the chip.
-The chip goes away after 2 minutes, or when 3 newer chips show.
-
-In a meeting session, every question gets the chip. A meeting question never sends by itself.
-
-## A warning instead of a chip
+## A warning instead of a button
 
 If your words sounded like an instruction to Bottle, the card shows this warning:
 "Warning: this sounded like an instruction to Bottle. Nothing was sent."
-Bottle sends nothing for that question.
-
-Not yet: Edit does not open a text box (TODO(#526)).
+Bottle sends nothing for that text.

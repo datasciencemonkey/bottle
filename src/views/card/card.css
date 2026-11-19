@@ -98,10 +98,18 @@ body,
   background: var(--mog-accent-hover);
 }
 
-/* A second control (a held preview's Cancel) is quiet, so one action leads. */
+/* A second control (Ask Genie after Copy) is quiet, so one action leads. */
 .popup-action + .popup-action {
   background: var(--mog-surface-raised);
   color: var(--mog-text);
+}
+
+/* RTR-17a (ADR 0098): the ⌥G hint. Quiet text beside the action; it is not a control. */
+.popup-hint {
+  flex: none;
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-sm);
+  white-space: nowrap;
 }
 
 .popup-dismiss {

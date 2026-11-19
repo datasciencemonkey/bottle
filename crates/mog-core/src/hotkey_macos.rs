@@ -5,10 +5,15 @@
 //! tests run everywhere. The OS calls are in [`sys`], built only on macOS.
 //!
 //! Privacy: the tap listens to `FlagsChanged` only. It never sees `KeyDown` or `KeyUp` of
-//! typed text, so no key contents reach Bottle, a log or telemetry (ADR 0011).
+//! typed text, so no key contents reach Bottle, a log or telemetry (ADR 0011). The other-key
+//! tap of CAP-44c compares the key code with G only and keeps no key identity (ADR 0098).
+//!
+//! Ask key (RTR-17a, ADR 0098): during a talk-key hold a Carbon hot key grabs the talk-key
+//! modifier + G. The OS gives a registered hot key to Bottle only, so the focused app gets no
+//! "g" or "©". The tap stays listen-only (CAP-35a).
 //!
 //! Requirements: CAP-35a, CAP-35b, CAP-36, CAP-37, CAP-38a, CAP-38b, CAP-39a, CAP-39b,
-//! CAP-45. Real-device proof (AT-30) waits for SP-03: TODO(#5).
+//! CAP-44c, CAP-45, RTR-17a. Real-device proof (AT-30) waits for SP-03: TODO(#5).
 
 use crate::hotkey_core::{KeyEdge, PhysicalState, TalkKey};
 
@@ -33,10 +38,31 @@ pub const CG_EVENT_TAP_DISABLED_BY_USER_INPUT: u32 = 0xFFFF_FFFF;
 
 /// `kVK_Space`, the key of the fallback chord.
 pub const VK_SPACE: u16 = 49;
-/// Carbon `controlKey`.
-pub const CARBON_CONTROL_KEY: u32 = 0x1000;
+/// `kVK_ANSI_G`, the key of the ask key (RTR-17a, ADR 0098).
+pub const VK_ANSI_G: u16 = 0x05;
+/// Carbon `cmdKey`.
+pub const CARBON_CMD_KEY: u32 = 0x0100;
 /// Carbon `shiftKey`.
 pub const CARBON_SHIFT_KEY: u32 = 0x0200;
+/// Carbon `optionKey`.
+pub const CARBON_OPTION_KEY: u32 = 0x0800;
+/// Carbon `controlKey`.
+pub const CARBON_CONTROL_KEY: u32 = 0x1000;
+/// The Carbon hot-key ID of the fallback chord. Each handler takes only its own ID.
+pub const CHORD_HOT_KEY_ID: u32 = 1;
+/// The Carbon hot-key ID of the ask key.
+pub const ASK_HOT_KEY_ID: u32 = 2;
+
+/// The Carbon modifier of the ask key: the generic modifier of the talk key, so "hold the talk
+/// key and tap G" works for each talk key. The default, Right-Option, gives Option+G (⌥G).
+pub fn ask_key_modifiers(talk: TalkKey) -> u32 {
+    match talk {
+        TalkKey::RightOption => CARBON_OPTION_KEY,
+        TalkKey::RightControl => CARBON_CONTROL_KEY,
+        TalkKey::RightCommand => CARBON_CMD_KEY,
+        TalkKey::RightShift => CARBON_SHIFT_KEY,
+    }
+}
 /// `kCGEventFlagMaskControl`.
 pub const CG_FLAG_CONTROL: u64 = 0x0004_0000;
 /// `kCGEventFlagMaskShift`.
@@ -66,7 +92,8 @@ pub const TAP_SPEC: TapSpec = TapSpec {
 /// The second listen-only tap of CAP-44c (ADR 0017). It asks for `KeyDown` only, never
 /// `KeyUp`. It is created off and the OS layer turns it on only while
 /// [`crate::hotkey_core::HotkeyEngine::other_key_window_open`] is true: the first 1 s of a
-/// talk-key hold. Its callback reads no field of the event.
+/// talk-key hold. Its callback reads one field, the key code, and only compares it with G
+/// (ADR 0098). It never stores or logs the code.
 pub const OTHER_KEY_TAP_SPEC: TapSpec = TapSpec {
     location: CG_SESSION_EVENT_TAP,
     placement: CG_HEAD_INSERT_EVENT_TAP,
@@ -74,15 +101,23 @@ pub const OTHER_KEY_TAP_SPEC: TapSpec = TapSpec {
     events_of_interest: 1 << CG_EVENT_KEY_DOWN,
 };
 
-/// "Another key went down". It has no field, so no key identity can cross the callback
-/// boundary (CAP-44c, SEC rules).
+/// A key went down during the first 1 s of a hold. It has no field, so no key identity can
+/// cross the callback boundary (CAP-44c, SEC rules).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct OtherKeyDown;
+pub enum OtherKeyDown {
+    /// G: the ask key (RTR-17a). It marks the ask and does not cancel (ADR 0098).
+    Ask,
+    /// Any other key: it cancels the PTT (CAP-44c).
+    Other,
+}
 
-/// Classify an event of the other-key tap by its event type only. The function cannot see
-/// the event, so it cannot read a key code or characters.
-pub fn other_key_from_event_type(event_type: u32) -> Option<OtherKeyDown> {
-    (event_type == CG_EVENT_KEY_DOWN).then_some(OtherKeyDown)
+/// Classify an event of the other-key tap. `keycode` is only compared with G; it is not kept.
+pub fn other_key_from_event(event_type: u32, keycode: i64) -> Option<OtherKeyDown> {
+    (event_type == CG_EVENT_KEY_DOWN).then_some(if keycode == i64::from(VK_ANSI_G) {
+        OtherKeyDown::Ask
+    } else {
+        OtherKeyDown::Other
+    })
 }
 
 /// The flag bit that is set while the modifier key `keycode` is down, or `None` for a key
@@ -167,38 +202,25 @@ pub fn physical_from_hid(talk_key_down: bool, flags: u64, space_down: bool) -> P
     }
 }
 
-/// The HIToolbox virtual key codes of Left-Shift (`kVK_Shift`) and Right-Shift
-/// (`kVK_RightShift`). RTR-17a reads their HID key state, as CAP-45 does for the talk key.
-pub const SHIFT_KEY_CODES: (u16, u16) = (56, 60);
-
-/// RTR-17a: whether a Shift key other than the talk key is down, from the HID key state of
-/// Left-Shift and Right-Shift (ADR 0053).
-pub fn shift_held_from_keys(left_down: bool, right_down: bool, talk: TalkKey) -> bool {
-    left_down || (right_down && talk != TalkKey::RightShift)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::hotkey_core::{HotkeyOutput, PttMachine, PttPhase};
 
     #[test]
-    fn rtr_17a_shift_from_key_state_ignores_the_talk_key_shift() {
-        assert!(shift_held_from_keys(true, false, TalkKey::RightOption));
-        assert!(shift_held_from_keys(false, true, TalkKey::RightOption));
-        assert!(!shift_held_from_keys(false, false, TalkKey::RightOption));
-        // Right-Shift is the talk key: only Left-Shift counts.
-        assert!(!shift_held_from_keys(false, true, TalkKey::RightShift));
-        assert!(shift_held_from_keys(true, true, TalkKey::RightShift));
-        assert!(!shift_held_from_keys(false, false, TalkKey::RightControl));
+    fn rtr_17a_the_ask_key_is_g_with_the_talk_key_modifier() {
+        // kVK_ANSI_G = 0x05 (HIToolbox Events.h).
+        assert_eq!(VK_ANSI_G, 0x05);
+        // Carbon optionKey, cmdKey, shiftKey and controlKey (HIToolbox Events.h).
+        assert_eq!(ask_key_modifiers(TalkKey::RightOption), 0x0800);
+        assert_eq!(ask_key_modifiers(TalkKey::RightCommand), 0x0100);
+        assert_eq!(ask_key_modifiers(TalkKey::RightShift), CARBON_SHIFT_KEY);
+        assert_eq!(ask_key_modifiers(TalkKey::RightControl), CARBON_CONTROL_KEY);
     }
 
     #[test]
-    fn rtr_17a_shift_codes_are_the_hitoolbox_shift_keys() {
-        // kVK_Shift = 0x38, kVK_RightShift = 0x3C (HIToolbox Events.h). Right-Shift is also the
-        // code of the Right-Shift talk key.
-        assert_eq!(SHIFT_KEY_CODES, (0x38, 0x3C));
-        assert_eq!(talk_key_code(TalkKey::RightShift).0, SHIFT_KEY_CODES.1);
+    fn rtr_17a_the_ask_hot_key_id_differs_from_the_chord_id() {
+        assert_ne!(ASK_HOT_KEY_ID, CHORD_HOT_KEY_ID);
     }
 
     #[test]
@@ -302,11 +324,15 @@ mod tests {
 
     #[test]
     fn cap_44c_other_key_events_carry_no_key_identity() {
-        // Only the event type goes in, and a field-less marker comes out.
-        assert_eq!(std::mem::size_of::<OtherKeyDown>(), 0);
+        // The key code goes in only to be compared with G. A field-less marker comes out.
+        assert!(std::mem::size_of::<OtherKeyDown>() <= 1);
         assert_eq!(
-            other_key_from_event_type(CG_EVENT_KEY_DOWN),
-            Some(OtherKeyDown)
+            other_key_from_event(CG_EVENT_KEY_DOWN, 0),
+            Some(OtherKeyDown::Other)
+        );
+        assert_eq!(
+            other_key_from_event(CG_EVENT_KEY_DOWN, 53),
+            Some(OtherKeyDown::Other)
         );
         for t in [
             CG_EVENT_KEY_UP,
@@ -314,8 +340,30 @@ mod tests {
             CG_EVENT_TAP_DISABLED_BY_TIMEOUT,
             CG_EVENT_TAP_DISABLED_BY_USER_INPUT,
         ] {
-            assert_eq!(other_key_from_event_type(t), None, "type {t}");
+            assert_eq!(other_key_from_event(t, 0), None, "type {t}");
+            assert_eq!(
+                other_key_from_event(t, i64::from(VK_ANSI_G)),
+                None,
+                "type {t}"
+            );
         }
+    }
+
+    #[test]
+    fn cap_44c_g_is_the_ask_key_and_not_an_other_key() {
+        assert_eq!(
+            other_key_from_event(CG_EVENT_KEY_DOWN, i64::from(VK_ANSI_G)),
+            Some(OtherKeyDown::Ask)
+        );
+        // Only the G code: a code that is out of range is another key.
+        assert_eq!(
+            other_key_from_event(CG_EVENT_KEY_DOWN, i64::from(VK_ANSI_G) + 0x1_0000),
+            Some(OtherKeyDown::Other)
+        );
+        assert_eq!(
+            other_key_from_event(CG_EVENT_KEY_DOWN, -1),
+            Some(OtherKeyDown::Other)
+        );
     }
 
     #[test]
@@ -383,7 +431,7 @@ mod tests {
 }
 
 #[cfg(target_os = "macos")]
-pub use sys::{run_main_loop, shift_held, MacHotkeyService, MacPermissions, MacProbe};
+pub use sys::{run_main_loop, MacHotkeyService, MacPermissions, MacProbe};
 
 /// The macOS OS calls. Raw FFI to system frameworks only, no new crates (ADR 0011).
 #[cfg(target_os = "macos")]
@@ -401,7 +449,7 @@ mod sys {
     use crate::error::{CoreError, CoreResult};
     use crate::hotkey::HotkeyService;
     use crate::hotkey_core::{
-        check_ptt_permission, HotkeyEngine, HotkeySink, Permission, PermissionApi,
+        check_ptt_permission, AskKeyControl, HotkeyEngine, HotkeySink, Permission, PermissionApi,
         PermissionStatus, PlatformProbe, TapControl, TapSignal, WATCHDOG_TICK,
     };
 
@@ -472,8 +520,13 @@ mod sys {
     const EVENT_HOT_KEY_RELEASED: u32 = 6;
     /// `eventNotHandledErr`.
     const EVENT_NOT_HANDLED_ERR: i32 = -9874;
-    /// The signature of the Bottle hot key ('BTLE').
+    /// The signature of the Bottle hot keys ('BTLE').
     const HOT_KEY_SIGNATURE: u32 = u32::from_be_bytes(*b"BTLE");
+    /// Carbon `kEventDurationNoWait`: a pull that does not wait.
+    const EVENT_DURATION_NO_WAIT: f64 = 0.0;
+    /// Carbon `kEventParamDirectObject` ('----') and `typeEventHotKeyID` ('hkid').
+    const EVENT_PARAM_DIRECT_OBJECT: u32 = u32::from_be_bytes(*b"----");
+    const TYPE_EVENT_HOT_KEY_ID: u32 = u32::from_be_bytes(*b"hkid");
 
     #[link(name = "CoreFoundation", kind = "framework")]
     extern "C" {
@@ -568,6 +621,25 @@ mod sys {
         ) -> i32;
         fn UnregisterEventHotKey(hot_key: EventHotKeyRef) -> i32;
         fn GetEventKind(event: EventRef) -> u32;
+        fn ReceiveNextEvent(
+            num_types: usize,
+            list: *const EventTypeSpec,
+            timeout: f64,
+            pull_event: u8,
+            out_event: *mut EventRef,
+        ) -> i32;
+        fn SendEventToEventTarget(event: EventRef, target: EventTargetRef) -> i32;
+        fn GetEventDispatcherTarget() -> EventTargetRef;
+        fn ReleaseEvent(event: EventRef);
+        fn GetEventParameter(
+            event: EventRef,
+            name: u32,
+            desired_type: u32,
+            actual_type: *mut u32,
+            buffer_size: usize,
+            actual_size: *mut usize,
+            data: *mut c_void,
+        ) -> i32;
         fn RunApplicationEventLoop();
     }
 
@@ -585,21 +657,6 @@ mod sys {
 
     fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
         m.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// RTR-17a: whether a Shift key other than `talk` is down now (HID key state, any thread).
-    /// It reads the key state of each Shift key, as CAP-45 does for the talk key, because a
-    /// source-state flags read may not carry the device-dependent bits.
-    pub fn shift_held(talk: TalkKey) -> bool {
-        let (left, right) = super::SHIFT_KEY_CODES;
-        // SAFETY: reads of the HID key state; no arguments to keep alive.
-        let (left, right) = unsafe {
-            (
-                CGEventSourceKeyState(CG_EVENT_SOURCE_STATE_HID, left),
-                CGEventSourceKeyState(CG_EVENT_SOURCE_STATE_HID, right),
-            )
-        };
-        super::shift_held_from_keys(left, right, talk)
     }
 
     /// Run the Carbon application event loop on the main thread. Carbon sends the chord
@@ -762,11 +819,23 @@ mod sys {
         join: JoinHandle<()>,
     }
 
-    struct Chord {
+    /// A registered Carbon hot key and its handler: the fallback chord or the ask key.
+    struct HotKey {
         hot_key: usize,
         handler: usize,
         // Keeps `Shared` alive while Carbon holds its pointer.
         _owner: Arc<Shared>,
+    }
+
+    impl HotKey {
+        /// Unregister the hot key and remove its handler. Main thread only.
+        fn release(self) {
+            // SAFETY: both refs came from the Carbon register calls.
+            unsafe {
+                UnregisterEventHotKey(self.hot_key as EventHotKeyRef);
+                RemoveEventHandler(self.handler as EventHandlerRef);
+            }
+        }
     }
 
     struct Shared {
@@ -774,7 +843,8 @@ mod sys {
         talk_key: TalkKey,
         engine: Mutex<HotkeyEngine>,
         probe: MacProbe,
-        clock: SystemClock,
+        /// One clock for the engine and the watchdog, so their times compare.
+        clock: Arc<SystemClock>,
         tap_port: AtomicPtr<c_void>,
         /// The other-key tap of CAP-44c (ADR 0017). It is on only while
         /// `HotkeyEngine::other_key_window_open` is true.
@@ -782,8 +852,130 @@ mod sys {
         other_on: AtomicBool,
         tap: Mutex<Option<TapThread>>,
         recreate_requested: AtomicBool,
-        chord: Mutex<Option<Chord>>,
+        chord: Mutex<Option<HotKey>>,
+        /// The ask key of RTR-17a (ADR 0098). It is registered only during a talk-key hold.
+        ask_key: Mutex<Option<HotKey>>,
         stop: AtomicBool,
+    }
+
+    /// The engine's [`AskKeyControl`]. It holds a weak ref, so the engine inside `Shared` does
+    /// not keep `Shared` alive.
+    struct AskKeyHandle(Weak<Shared>);
+
+    impl AskKeyControl for AskKeyHandle {
+        fn set_ask_key(&self, on: bool) {
+            let Some(me) = self.0.upgrade() else { return };
+            let ctx = Box::into_raw(Box::new((me, on))).cast::<c_void>();
+            // SAFETY: Carbon hot keys run on the main thread; `ask_key_on_main` frees `ctx`.
+            // The main queue is FIFO, so a grab and its release run in order.
+            unsafe { dispatch_async_f(&_dispatch_main_q, ctx, ask_key_on_main) };
+        }
+
+        fn drain(&self) {
+            let Some(me) = self.0.upgrade() else { return };
+            let ctx = Box::into_raw(Box::new(me)).cast::<c_void>();
+            // SAFETY: `ask_key_drain_on_main` frees `ctx`. It runs on the main thread, where
+            // Carbon delivers the hot-key events.
+            unsafe { dispatch_async_f(&_dispatch_main_q, ctx, ask_key_drain_on_main) };
+        }
+    }
+
+    /// The most queued hot-key presses that one drain handles. A held G repeats, so the count
+    /// is bounded; the engine's ASK_UP_GRACE bounds the wait in any case.
+    const DRAIN_MAX_EVENTS: usize = 32;
+
+    /// RTR-17a (review M1): handle every hot-key press that Carbon has queued, then let the
+    /// engine decide the waiting key-up. So a G tapped before the release is seen first, also
+    /// when the main thread was busy. The engine lock is not held while the events run, because
+    /// `ask_key_handler` takes it.
+    extern "C" fn ask_key_drain_on_main(ctx: *mut c_void) {
+        // SAFETY: `ctx` is the box made in `drain`, used once.
+        let shared = *unsafe { Box::from_raw(ctx.cast::<Arc<Shared>>()) };
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let types = [EventTypeSpec {
+                event_class: EVENT_CLASS_KEYBOARD,
+                event_kind: EVENT_HOT_KEY_PRESSED,
+            }];
+            for _ in 0..DRAIN_MAX_EVENTS {
+                let mut event: EventRef = ptr::null_mut();
+                // SAFETY: a no-wait pull of one queued hot-key press; the event is sent to
+                // the dispatcher (so its handler runs) and then released.
+                unsafe {
+                    if ReceiveNextEvent(1, types.as_ptr(), EVENT_DURATION_NO_WAIT, 1, &mut event)
+                        != 0
+                        || event.is_null()
+                    {
+                        break;
+                    }
+                    SendEventToEventTarget(event, GetEventDispatcherTarget());
+                    ReleaseEvent(event);
+                }
+            }
+            lock(&shared.engine).on_ask_key_drained();
+        }));
+    }
+
+    extern "C" fn ask_key_on_main(ctx: *mut c_void) {
+        // SAFETY: `ctx` is the box made in `set_ask_key`, used once.
+        let (shared, on) = *unsafe { Box::from_raw(ctx.cast::<(Arc<Shared>, bool)>()) };
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let mut key = lock(&shared.ask_key);
+            if on {
+                if key.is_none() {
+                    // A refused register leaves G to the app; the other-key tap still marks an
+                    // ask in the first 1 s of the hold.
+                    *key = register_hot_key(
+                        &shared,
+                        u32::from(VK_ANSI_G),
+                        ask_key_modifiers(shared.talk_key),
+                        super::ASK_HOT_KEY_ID,
+                        ask_key_handler,
+                        &[EVENT_HOT_KEY_PRESSED],
+                    );
+                }
+            } else if let Some(k) = key.take() {
+                k.release();
+            }
+        }));
+    }
+
+    /// The Carbon hot-key ID of `event`, if it is a Bottle hot key.
+    fn hot_key_id(event: EventRef) -> Option<u32> {
+        let mut id = EventHotKeyId {
+            signature: 0,
+            id: 0,
+        };
+        // SAFETY: `event` is the Carbon event of the calling handler; `id` is a valid buffer of
+        // the size passed.
+        let status = unsafe {
+            GetEventParameter(
+                event,
+                EVENT_PARAM_DIRECT_OBJECT,
+                TYPE_EVENT_HOT_KEY_ID,
+                ptr::null_mut(),
+                std::mem::size_of::<EventHotKeyId>(),
+                ptr::null_mut(),
+                (&raw mut id).cast::<c_void>(),
+            )
+        };
+        (status == 0 && id.signature == HOT_KEY_SIGNATURE).then_some(id.id)
+    }
+
+    extern "C" fn ask_key_handler(
+        _next: EventHandlerCallRef,
+        event: EventRef,
+        user: *mut c_void,
+    ) -> i32 {
+        catch_unwind(AssertUnwindSafe(|| {
+            if hot_key_id(event) != Some(super::ASK_HOT_KEY_ID) {
+                return EVENT_NOT_HANDLED_ERR;
+            }
+            // SAFETY: `user` is the `Shared` kept alive by `HotKey::_owner`.
+            let shared = unsafe { &*user.cast::<Shared>() };
+            lock(&shared.engine).on_ask_key();
+            0
+        }))
+        .unwrap_or(EVENT_NOT_HANDLED_ERR)
     }
 
     impl TapControl for Shared {
@@ -819,58 +1011,71 @@ mod sys {
             let mut chord = lock(&shared.chord);
             if on {
                 if chord.is_none() {
-                    *chord = register_chord(&shared);
+                    *chord = register_hot_key(
+                        &shared,
+                        u32::from(VK_SPACE),
+                        CARBON_CONTROL_KEY | CARBON_SHIFT_KEY,
+                        super::CHORD_HOT_KEY_ID,
+                        chord_handler,
+                        &[EVENT_HOT_KEY_PRESSED, EVENT_HOT_KEY_RELEASED],
+                    );
                 }
                 let ok = chord.is_some();
                 drop(chord);
                 // Report the result, so a refused chord is not silent (CAP-39b).
                 let now = shared.clock.now();
                 lock(&shared.engine).on_chord_registered(ok, now);
-            } else {
-                if let Some(c) = chord.take() {
-                    // SAFETY: both refs came from the Carbon register calls.
-                    unsafe {
-                        UnregisterEventHotKey(c.hot_key as EventHotKeyRef);
-                        RemoveEventHandler(c.handler as EventHandlerRef);
-                    }
-                }
+            } else if let Some(c) = chord.take() {
+                c.release();
             }
         }));
     }
 
-    fn register_chord(shared: &Arc<Shared>) -> Option<Chord> {
-        let types = [
-            EventTypeSpec {
+    /// Register the Carbon hot key `key_code` + `mods` with `id`, and install `handler` for
+    /// the event `kinds` on the application target. Main thread only.
+    fn register_hot_key(
+        shared: &Arc<Shared>,
+        key_code: u32,
+        mods: u32,
+        id: u32,
+        handler_proc: EventHandlerProc,
+        kinds: &[u32],
+    ) -> Option<HotKey> {
+        let types: Vec<EventTypeSpec> = kinds
+            .iter()
+            .map(|&event_kind| EventTypeSpec {
                 event_class: EVENT_CLASS_KEYBOARD,
-                event_kind: EVENT_HOT_KEY_PRESSED,
-            },
-            EventTypeSpec {
-                event_class: EVENT_CLASS_KEYBOARD,
-                event_kind: EVENT_HOT_KEY_RELEASED,
-            },
-        ];
+                event_kind,
+            })
+            .collect();
+        let count = u32::try_from(types.len()).ok()?;
         let mut handler: EventHandlerRef = ptr::null_mut();
         let mut hot_key: EventHotKeyRef = ptr::null_mut();
-        // SAFETY: valid out pointers; `user_data` stays alive through `Chord::_owner`.
+        // SAFETY: valid out pointers; `user_data` stays alive through `HotKey::_owner`.
         unsafe {
             let target = GetApplicationEventTarget();
             let user = Arc::as_ptr(shared).cast_mut().cast::<c_void>();
-            if InstallEventHandler(target, chord_handler, 2, types.as_ptr(), user, &mut handler)
-                != 0
+            if InstallEventHandler(
+                target,
+                handler_proc,
+                count,
+                types.as_ptr(),
+                user,
+                &mut handler,
+            ) != 0
             {
                 return None;
             }
             let id = EventHotKeyId {
                 signature: HOT_KEY_SIGNATURE,
-                id: 1,
+                id,
             };
-            let mods = CARBON_CONTROL_KEY | CARBON_SHIFT_KEY;
-            if RegisterEventHotKey(u32::from(VK_SPACE), mods, id, target, 0, &mut hot_key) != 0 {
+            if RegisterEventHotKey(key_code, mods, id, target, 0, &mut hot_key) != 0 {
                 RemoveEventHandler(handler);
                 return None;
             }
         }
-        Some(Chord {
+        Some(HotKey {
             hot_key: hot_key as usize,
             handler: handler as usize,
             _owner: Arc::clone(shared),
@@ -883,7 +1088,10 @@ mod sys {
         user: *mut c_void,
     ) -> i32 {
         catch_unwind(AssertUnwindSafe(|| {
-            // SAFETY: `user` is the `Shared` kept alive by `Chord::_owner`.
+            if hot_key_id(event) != Some(super::CHORD_HOT_KEY_ID) {
+                return EVENT_NOT_HANDLED_ERR;
+            }
+            // SAFETY: `user` is the `Shared` kept alive by `HotKey::_owner`.
             let shared = unsafe { &*user.cast::<Shared>() };
             // SAFETY: `event` is the Carbon event of this call.
             let edge = match unsafe { GetEventKind(event) } {
@@ -924,8 +1132,9 @@ mod sys {
         let _ = catch_unwind(AssertUnwindSafe(|| {
             // SAFETY: `user` is the `Shared` that the tap thread keeps alive.
             let shared = unsafe { &*user.cast::<Shared>() };
-            // Privacy (ADR 0017): only the event type is used. The event itself (key code,
-            // characters) is never read, so no key identity crosses this boundary.
+            // Privacy (ADR 0017, ADR 0098): the event type is used, and for a key-down the key
+            // code is compared with G only. The code and the characters are never stored or
+            // logged, so no key identity crosses this boundary.
             if matches!(
                 event_type,
                 CG_EVENT_TAP_DISABLED_BY_TIMEOUT | CG_EVENT_TAP_DISABLED_BY_USER_INPUT
@@ -933,9 +1142,19 @@ mod sys {
                 // The OS turned the tap off; the next sync turns it on again if needed.
                 shared.other_on.store(false, Ordering::Release);
             }
+            let keycode = if event_type == CG_EVENT_KEY_DOWN {
+                // SAFETY: `event` is the key-down event of this callback.
+                unsafe { CGEventGetIntegerValueField(event, CG_KEYBOARD_EVENT_KEYCODE) }
+            } else {
+                -1
+            };
             let mut engine = lock(&shared.engine);
-            if other_key_from_event_type(event_type).is_some() {
-                engine.on_other_key_down();
+            match other_key_from_event(event_type, keycode) {
+                // RTR-17a: G marks the ask and does not cancel. This also covers a G that comes
+                // before the main thread has registered the ask key.
+                Some(OtherKeyDown::Ask) => engine.on_ask_key(),
+                Some(OtherKeyDown::Other) => engine.on_other_key_down(),
+                None => {}
             }
             sync_other_key_tap(shared, &engine);
         }));
@@ -1149,18 +1368,23 @@ mod sys {
         /// A service for `talk_key` (D66 default: [`TalkKey::RightOption`]) that sends its
         /// outputs to `sink`. Nothing starts until [`HotkeyService::start`].
         pub fn new(talk_key: TalkKey, sink: Arc<dyn HotkeySink>) -> Self {
+            let clock = Arc::new(SystemClock::new());
             let shared = Arc::new_cyclic(|me| Shared {
                 me: me.clone(),
                 talk_key,
-                engine: Mutex::new(HotkeyEngine::new(sink)),
+                engine: Mutex::new(
+                    HotkeyEngine::with_clock(sink, clock.clone())
+                        .with_ask_key(Arc::new(AskKeyHandle(me.clone()))),
+                ),
                 probe: MacProbe::new(talk_key),
-                clock: SystemClock::new(),
+                clock,
                 tap_port: AtomicPtr::new(ptr::null_mut()),
                 other_port: AtomicPtr::new(ptr::null_mut()),
                 other_on: AtomicBool::new(false),
                 tap: Mutex::new(None),
                 recreate_requested: AtomicBool::new(false),
                 chord: Mutex::new(None),
+                ask_key: Mutex::new(None),
                 stop: AtomicBool::new(false),
             });
             Self {
@@ -1217,8 +1441,8 @@ mod sys {
     }
 
     impl Drop for MacHotkeyService {
-        /// Stops the tap and the watchdog. While the chord is registered, `Shared` is also
-        /// owned by `Chord::_owner` (Carbon holds its pointer). The unregister runs on the
+        /// Stops the tap and the watchdog. While the chord or the ask key is registered,
+        /// `Shared` is also owned by `HotKey::_owner` (Carbon holds its pointer). The unregister runs on the
         /// main dispatch queue, so a host that never runs the main queue keeps `Shared` alive
         /// after drop. A Tauri app always runs it.
         fn drop(&mut self) {

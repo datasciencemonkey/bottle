@@ -1,6 +1,6 @@
 /**
- * #142 (ADR 0086): the T3 preview and chip step of a PTT or hands-free question.
- * Nothing goes to the main agent (and so to Genie) without the 1.5 s preview or a chip click (B1).
+ * #142 (ADR 0086), ADR 0098: the T3 ask step of a PTT or hands-free utterance. Nothing goes to
+ * Genie without a user action (B1): ⌥G during the talk-key hold, or a press on an Ask Genie chip.
  */
 import type { AgentTurn } from '../shared/interfaces';
 import { createSimScheduler } from '../test-support/sim-scheduler';
@@ -10,16 +10,14 @@ import {
   CUT_NOTICE,
   QUESTION_MAX_CHARS,
   NOT_SENT_LINE,
-  PREVIEW_CONTROLS,
   createAskGate,
-  previewText,
   type AskCard,
 } from './ask-gate';
 import type { ChipInput, ChipView } from './card-chips';
 import { INJECTION_WARNING_CHIP } from './components/router-injection';
 import type { BlurbInput } from './blurb-stack';
 import type { OwnedUtterance } from './request-owner';
-import { PREVIEW_MS, type UtteranceRoute } from './utterance-route';
+import type { UtteranceRoute } from './utterance-route';
 import type { AskRoute } from './utterance-wiring';
 
 const A = '00000000-0000-4000-8000-0000000000a1';
@@ -97,12 +95,11 @@ function setup(opts: { open?: boolean; target?: string | undefined; pick?: boole
 const decision = (over: Parameters<typeof routerDecision>[0] = {}) =>
   routerDecision({ genie_question: Q, cleaned_text: Q, confidence: 0.9, ...over });
 
-const preview = (over: Partial<Extract<UtteranceRoute, { route: 'preview' }>> = {}): AskRoute => ({
-  route: 'preview',
+/** ADR 0098: the route of an utterance with ⌥G (`hotkey:ptt` up, `ask: true`). */
+const ask = (over: Partial<Extract<UtteranceRoute, { route: 'ask' }>> = {}): AskRoute => ({
+  route: 'ask',
   question: Q,
-  forced: false,
-  previewMs: PREVIEW_MS,
-  decision: decision(),
+  decision: decision({ genie_question: 'Rewritten?', confidence: 0.1 }),
   ...over,
 });
 
@@ -113,159 +110,102 @@ const chip = (over: Partial<Extract<UtteranceRoute, { route: 'chip' }>> = {}): A
   ...over,
 });
 
-const labels = (vs: ChipView[]) => vs.map((v) => v.label);
+/** Longer than any timer of the gate but the 2 min chip expiry. */
+const LATER_MS = 15_000;
 
-describe('ask gate: the 1.5 s preview (RTR-04a, RTR-04b)', () => {
-  it('[RTR-04a] [UX-17] shows the Appendix E preview "Sending in 1.5 s" with [Send now] [Edit] [Cancel]', () => {
+describe('ask gate: ⌥G sends at once (RTR-17a, RTR-17b, ADR 0098)', () => {
+  it('[RTR-17a] [RTR-17b] an ⌥G ask sends the exact text once, at once, with no preview', async () => {
     const t = setup();
     const u = t.owned();
-    t.gate.onAsk(preview(), u);
-    const card = t.cardOf(A);
-    expect([...card.blurbs.values()].map((b) => b.text)).toEqual([`"${Q}"\nSending in 1.5 s`]);
-    expect(previewText(Q)).toBe(`"${Q}"\nSending in 1.5 s`);
-    expect(labels(card.shownControls())).toEqual(['Send now', 'Edit', 'Cancel']);
-    expect(PREVIEW_CONTROLS.map((c) => c.label)).toEqual(['Send now', 'Edit', 'Cancel']);
-    expect(t.shown).toEqual([A]);
-    expect(t.gate.pending(A)).toBe('counting');
-  });
-
-  it('[RTR-04b] gives nothing to the main agent before 1.5 s, and the question once at 1.5 s', async () => {
-    const t = setup();
-    const u = t.owned();
-    const r = preview();
+    const r = ask();
     t.gate.onAsk(r, u);
-    await t.run(PREVIEW_MS - 1);
-    expect(t.sent).toEqual([]);
-    expect(t.released).toEqual([]);
-    await t.run(1);
+    await t.run(0);
+    // The exact text, not the router's rewrite, goes through the send seam (ADR 0097).
     expect(t.sent).toEqual([
       { mogId: A, question: Q, decision: r.decision, recall: [], target: 'home' },
     ]);
+    const card = t.cardOf(A);
+    // No preview: no "Sending in 1.5 s" line, no controls and no chip.
+    expect([...card.blurbs.values()].map((b) => b.text)).toEqual([`"${Q}"`]);
+    expect(card.shownControls()).toEqual([]);
+    expect(card.chips.size).toBe(0);
     expect(t.released).toEqual([u.utteranceId]);
-    expect(t.cardOf(A).shownControls()).toEqual([]);
-    expect(t.gate.pending(A)).toBeUndefined();
-    await t.run(10 * PREVIEW_MS);
+    expect(t.shown).toEqual([A]);
+    await t.run(LATER_MS);
     expect(t.sent).toHaveLength(1);
   });
 
-  it('[RTR-17b] a forced ask (Shift) keeps the 1.5 s preview', async () => {
-    const t = setup();
-    t.gate.onAsk(preview({ forced: true, decision: decision({ confidence: 0.1 }) }), t.owned());
-    expect(t.gate.pending(A)).toBe('counting');
-    await t.run(PREVIEW_MS - 1);
+  it('[RTR-17a] [W-07d] with no profile an ⌥G ask opens the picker; the pick sends the text once', async () => {
+    const t = setup({ target: undefined, pick: true });
+    t.gate.onAsk(ask(), t.owned());
+    await t.run(0);
+    expect(t.picks.map((p) => p.mogId)).toEqual([A]);
     expect(t.sent).toEqual([]);
-    await t.run(1);
-    expect(t.sent).toHaveLength(1);
-  });
-
-  it('[RTR-04a] [Send now] sends at once, and only once', async () => {
-    const t = setup();
-    t.gate.onAsk(preview(), t.owned());
-    t.cardOf(A).clickControl('preview_send_now');
+    t.pickDone('picked');
     await t.run(0);
     expect(t.sent).toHaveLength(1);
-    await t.run(2 * PREVIEW_MS);
-    t.cardOf(A).clickControl('preview_send_now');
-    await t.run(0);
-    expect(t.sent).toHaveLength(1);
+    expect(t.sent[0]).toMatchObject({ mogId: A, question: Q, target: 'picked' });
   });
 
-  it('[RTR-04a] [Edit] stops the timer and holds the question with [Send now] [Cancel]; nothing sends by itself', async () => {
-    const t = setup();
-    t.gate.onAsk(preview(), t.owned());
-    t.cardOf(A).clickControl('preview_edit');
-    expect(t.gate.pending(A)).toBe('held');
-    expect(labels(t.cardOf(A).shownControls())).toEqual(['Send now', 'Cancel']);
-    expect([...t.cardOf(A).blurbs.values()][0]?.text).toBe(`"${Q}"`);
-    await t.run(60 * PREVIEW_MS);
-    expect(t.sent).toEqual([]);
-    t.cardOf(A).clickControl('preview_send_now');
-    await t.run(0);
-    expect(t.sent).toHaveLength(1);
-  });
-});
-
-describe('ask gate: a cancel sends nothing (RTR-04b)', () => {
-  const cancels: [string, (t: ReturnType<typeof setup>) => void][] = [
-    ['[Cancel]', (t) => t.cardOf(A).clickControl('preview_cancel')],
-    ['Esc in the card', (t) => expect(t.gate.escape(A)).toBe(true)],
-    ['a second talk-key press', (t) => t.gate.keyDown()],
-    ['the card close', (t) => t.gate.cardClosed(A)],
-  ];
-  for (const [name, cancel] of cancels) {
-    it(`[RTR-04b] ${name} during the preview sends nothing`, async () => {
-      const t = setup();
-      const u = t.owned();
-      t.gate.onAsk(preview(), u);
-      await t.run(PREVIEW_MS / 2);
-      cancel(t);
-      expect(t.gate.pending(A)).toBeUndefined();
-      expect(t.released).toEqual([u.utteranceId]);
-      await t.run(10 * PREVIEW_MS);
-      expect(t.sent).toEqual([]);
-      const card = t.cardOf(A);
-      expect(card.shownControls()).toEqual([]);
-      expect([...card.blurbs.values()][0]).toMatchObject({
-        text: `"${Q}"\n${NOT_SENT_LINE}`,
-        completed: true,
-      });
-      // A late click on a stale control does nothing.
-      card.clickControl('preview_send_now');
-      await t.run(0);
-      expect(t.sent).toEqual([]);
-    });
-  }
-
-  it('[RTR-04b] [Edit] then Esc sends nothing', async () => {
-    const t = setup();
-    t.gate.onAsk(preview(), t.owned());
-    t.cardOf(A).clickControl('preview_edit');
-    expect(t.gate.escape(A)).toBe(true);
-    await t.run(10 * PREVIEW_MS);
-    expect(t.sent).toEqual([]);
-  });
-
-  it('[RTR-04b] a MOG that closed during the preview gets nothing sent', async () => {
-    const t = setup();
-    t.gate.onAsk(preview(), t.owned());
-    t.close();
-    await t.run(PREVIEW_MS);
-    expect(t.sent).toEqual([]);
-    expect(t.gate.pending(A)).toBeUndefined();
-  });
-
-  it('[RTR-04b] with no chosen target profile nothing is sent (Bottle never picks one)', async () => {
+  it('[RTR-17a] with no chosen target profile and no picker nothing is sent (Bottle never picks one)', async () => {
     const t = setup({ target: undefined });
-    t.gate.onAsk(preview(), t.owned());
-    await t.run(PREVIEW_MS);
+    t.gate.onAsk(ask(), t.owned());
+    await t.run(LATER_MS);
     expect(t.sent).toEqual([]);
     expect([...t.cardOf(A).blurbs.values()][0]?.text).toBe(`"${Q}"\n${NOT_SENT_LINE}`);
   });
 
-  it('[UX-19b] one Esc cancels only the preview of its own MOG; with no preview it does nothing', async () => {
-    const t = setup();
-    t.gate.onAsk(preview(), t.owned(A));
-    t.gate.onAsk(preview(), t.owned(B));
-    expect(t.gate.escape(B)).toBe(true);
-    expect(t.gate.escape(B)).toBe(false);
-    await t.run(PREVIEW_MS);
-    expect(t.sent.map((s) => s.mogId)).toEqual([A]);
+  it('[RTR-17a] an ⌥G ask of a closed MOG sends nothing', async () => {
+    const t = setup({ open: false });
+    t.gate.onAsk(ask(), t.owned());
+    await t.run(LATER_MS);
+    expect(t.sent).toEqual([]);
   });
 
-  it('[RTR-04b] a new ask for the same MOG replaces the old preview, which never sends', async () => {
+  it('[RTR-14] an ⌥G ask with an injection-suspected decision shows the warning and never sends', async () => {
     const t = setup();
-    const first = t.owned();
-    t.gate.onAsk(preview({ question: 'old question?' }), first);
-    await t.run(PREVIEW_MS / 2);
-    t.gate.onAsk(preview(), t.owned());
-    expect(t.released).toEqual([first.utteranceId]);
-    await t.run(PREVIEW_MS);
-    expect(t.sent.map((s) => s.question)).toEqual([Q]);
+    t.gate.onAsk(ask({ decision: decision({ injection_suspected: true }) }), t.owned());
+    await t.run(LATER_MS);
+    expect(t.sent).toEqual([]);
+    expect(t.cardOf(A).shownControls()).toEqual([{ ...INJECTION_WARNING_CHIP }]);
+  });
+
+  it('[G-47] [G-30a] an ⌥G ask goes through the sanitizer and the cap', async () => {
+    const t = setup();
+    t.gate.onAsk(
+      ask({ question: 'What was\u200b [EMEA](https://evil.example.test) revenue?' }),
+      t.owned(),
+    );
+    await t.run(0);
+    expect(t.sent.map((x) => x.question)).toEqual(['What was EMEA revenue?']);
+  });
+
+  it('[RTR-17b] a failed hand-off is shown as not sent and is not retried', async () => {
+    const sim = createSimScheduler();
+    const card = fakeCard();
+    let calls = 0;
+    const gate = createAskGate({
+      clock: sim.clock,
+      schedule: sim.at,
+      cardFor: () => card.card,
+      showCard: () => undefined,
+      owner: { release: () => undefined },
+      isOpen: () => true,
+      target: () => 'home',
+      send: async () => {
+        calls++;
+        throw new Error('session unavailable');
+      },
+    });
+    gate.onAsk(ask(), { utteranceId: 'u1', mogId: A });
+    await sim.runUntil(LATER_MS, { settle: true });
+    expect(calls).toBe(1);
+    expect([...card.blurbs.values()][0]?.text).toBe(`"${Q}"\n${NOT_SENT_LINE}`);
   });
 });
 
-describe('ask gate: the Ask Genie chip (RTR-05)', () => {
-  it('[RTR-05] a low-confidence question shows the Ask Genie chip and no preview; nothing goes out before the click', async () => {
+describe('ask gate: the Ask Genie fallback chip (RTR-05, ADR 0098)', () => {
+  it('[RTR-05] a dictation shows the Ask Genie fallback chip; nothing goes out before the press', async () => {
     const t = setup();
     const u = t.owned();
     t.gate.onAsk(chip(), u);
@@ -276,7 +216,6 @@ describe('ask gate: the Ask Genie chip (RTR-05)', () => {
     expect(chips[0]).toMatchObject({ kind: 'ask_genie', label: ASK_CHIP_LABEL });
     expect(ASK_CHIP_LABEL).toBe('Ask Genie');
     expect(card.shownControls()).toEqual([]);
-    expect(t.gate.pending(A)).toBeUndefined();
     // The chip holds no owner: the request owner is released now.
     expect(t.released).toEqual([u.utteranceId]);
     await t.run(60_000);
@@ -315,7 +254,7 @@ describe('ask gate: the Ask Genie chip (RTR-05)', () => {
   it('[RTR-07] a session question is a chip: no preview and no send before the click', async () => {
     const t = setup();
     t.gate.onAsk(chip({ decision: decision({ confidence: 0.95 }) }), t.owned());
-    await t.run(10 * PREVIEW_MS);
+    await t.run(LATER_MS);
     expect(t.sent).toEqual([]);
     expect(t.cardOf(A).chips.size).toBe(1);
   });
@@ -327,41 +266,8 @@ describe('ask gate: the Ask Genie chip (RTR-05)', () => {
     expect(card.chips.size).toBe(0);
     expect(card.shownControls()).toEqual([{ ...INJECTION_WARNING_CHIP }]);
     card.clickControl(INJECTION_WARNING_CHIP.id);
-    await t.run(10 * PREVIEW_MS);
+    await t.run(LATER_MS);
     expect(t.sent).toEqual([]);
-    expect(t.gate.pending(A)).toBeUndefined();
-  });
-
-  it('[RTR-14] a preview route with an injection-suspected decision shows the warning, never the preview', async () => {
-    const t = setup();
-    t.gate.onAsk(preview({ decision: decision({ injection_suspected: true }) }), t.owned());
-    expect(t.gate.pending(A)).toBeUndefined();
-    expect(t.cardOf(A).shownControls()).toEqual([{ ...INJECTION_WARNING_CHIP }]);
-    await t.run(10 * PREVIEW_MS);
-    expect(t.sent).toEqual([]);
-  });
-
-  it('[RTR-04b] a failed hand-off is shown as not sent and is not retried', async () => {
-    const sim = createSimScheduler();
-    const card = fakeCard();
-    let calls = 0;
-    const gate = createAskGate({
-      clock: sim.clock,
-      schedule: sim.at,
-      cardFor: () => card.card,
-      showCard: () => undefined,
-      owner: { release: () => undefined },
-      isOpen: () => true,
-      target: () => 'home',
-      send: async () => {
-        calls++;
-        throw new Error('session unavailable');
-      },
-    });
-    gate.onAsk(preview(), { utteranceId: 'u1', mogId: A });
-    await sim.runUntil(10 * PREVIEW_MS, { settle: true });
-    expect(calls).toBe(1);
-    expect([...card.blurbs.values()][0]?.text).toBe(`"${Q}"\n${NOT_SENT_LINE}`);
   });
 });
 
@@ -405,32 +311,7 @@ describe('ask gate: the Ask Genie press of a dictated question (#557, ADR 0096)'
   });
 });
 
-describe('ask gate: no profile, Shift, size (#557, ADR 0096)', () => {
-  it('[#557] [RTR-17b] with no profile and a picker, a Shift preview is a chip of the previewed text; nothing sends by itself', async () => {
-    const t = setup({ target: undefined, pick: true });
-    t.gate.onAsk(
-      preview({ question: 'shift text', decision: decision({ genie_question: '' }) }),
-      t.owned(),
-    );
-    expect(t.gate.pending(A)).toBeUndefined();
-    expect(t.cardOf(A).shownControls()).toEqual([]);
-    await t.run(PREVIEW_MS * 4);
-    expect(t.sent).toEqual([]);
-    expect(t.picks).toEqual([]);
-    const id = [...t.cardOf(A).chips.keys()][0] ?? '';
-    t.gate.chip(A, { id, kind: 'ask_genie' });
-    t.pickDone('picked');
-    await t.run(0);
-    expect(t.sent.map((x) => x.question)).toEqual(['shift text']);
-  });
-
-  it('[#557] [RTR-14] with no profile, an injection-suspected Shift ask is still only the warning chip', async () => {
-    const t = setup({ target: undefined, pick: true });
-    t.gate.onAsk(preview({ decision: decision({ injection_suspected: true }) }), t.owned());
-    expect([...t.cardOf(A).chips.values()]).toEqual([]);
-    expect(t.cardOf(A).shownControls()).toEqual([{ ...INJECTION_WARNING_CHIP }]);
-  });
-
+describe('ask gate: size and sanitizer of a press (#557, ADR 0096)', () => {
   it('[#557] [G-30a] a pressed text over 1,000 chars is cut at a word edge before the send, with a notice', async () => {
     const t = setup();
     const long = `${'word '.repeat(300)}end`;

@@ -26,7 +26,7 @@ export const SEC_DISC: readonly Disclosure[] = [
     lines: [
       'Bottle sends data only to your own Databricks workspaces, and only for the jobs on this page.',
       'Dictation text goes to your home workspace for cleanup, then only to the app you type in.',
-      'Nothing goes to Genie until you send it: a question after its preview, or a chip you click.',
+      'Nothing goes to Genie until you send it: ⌥G during the talk-key hold, or an Ask Genie button you press.',
       'Your sign-in tokens stay in the Bottle core. They are never written to disk or logs, and the agent never sees them.',
       'Bottle stores your transcripts, answers and memory in an encrypted file on this computer.',
       'Text for cleanup, routing, the memory writer and embeddings goes to your home workspace, as the next sections say.',

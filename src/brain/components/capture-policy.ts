@@ -23,8 +23,8 @@ const C = 'CapturePolicy';
 export class CapturePolicyStub implements CapturePolicy {
   /**
    * #557 (user decision, ADR 0096): an unforced question is a chip at any confidence. It is
-   * inserted first (dictation first), and only a press sends it. The 1.5 s preview is for a
-   * Shift-forced ask only (RTR-17b, `utterance-route.ts`). A memory question that the
+   * inserted first (dictation first), and only a press sends it. ADR 0098: the MVP route
+   * (`utterance-route.ts`) shows no preview; ⌥G sends at once (RTR-17b). A memory question that the
    * RecallGate did not answer goes on as a question (F1 steps 13-15). In a session a question is
    * a chip (RTR-07, B1). A dictation is inserted outside a session (RTR-01c). Anything else drops.
    */

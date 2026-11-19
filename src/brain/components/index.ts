@@ -165,8 +165,8 @@ export function startBrain(): Brain {
         );
       return s;
     };
-    // #142 (ADR 0086), B1: T3 runs the 1.5 s preview or shows the Ask Genie chip. Nothing goes
-    // to Genie without the preview or a chip click.
+    // #142 (ADR 0086, ADR 0098), B1: T3 sends an ⌥G ask at once or shows the Ask Genie chip.
+    // Nothing goes to Genie without ⌥G or a chip press.
     const askGate = createAskGate({
       clock: cardClock,
       schedule: timeoutScheduler(cardClock),
@@ -186,12 +186,12 @@ export function startBrain(): Brain {
         // #40 (AT-09): each request that ends saves one local exchange row through T10.
         onEnd: ipcGenieHistory(components.T10),
       }),
-      // #557: a press with no home profile opens the picker; the user picks, then the text goes.
+      // #557: an ask or a press with no home profile opens the picker; the user picks, then the
+      // text goes.
       pickProfile: (mogId, then) => void pick.choose(mogId, then),
     });
-    // TODO(#374): the card-hide signal calls `askGate.cardClosed`; none reaches the brain yet.
-    wireAskGate(bus, askGate, stackFor, {
-      // #559, UX-19b: a cancel with no preview hides the card (`window_card_hide`, R11).
+    wireAskGate(bus, stackFor, {
+      // #559, UX-19b: a cancel hides the card (`window_card_hide`, R11).
       hideCard: (mogId) => void call('window_card_hide', { mogId }).catch(() => undefined),
     });
     // #551 (UX-01a, UX-05b, UX-07): the MOG mood follows `capture:state`, and a refused start
@@ -243,8 +243,8 @@ export function startBrain(): Brain {
       // #52 (ADR 0088): T4 runs the 8.3 chain over `stt_transcribe` (host route TODO(#514)).
       // A failure shows its fixed text on the owner's card, and no text is routed.
       transcribe: createLifecycleTranscriber(components.T4, sendOwnedCard),
-      // #59 (ADR 0053): the MOG of the key-down owns the utterance (MOG-13a); a dictation ends
-      // at `insert_text`; a preview or a chip goes to T3.
+      // #59 (ADR 0053, ADR 0098): the MOG of the key-down owns the utterance (MOG-13a); a
+      // dictation ends at `insert_text`; an ⌥G ask or a chip goes to T3.
       onUtterance: createUtteranceHandler({
         owner,
         // #163: every utterance is routed. With no home profile, or when the router model call
@@ -256,8 +256,8 @@ export function startBrain(): Brain {
         // TODO(#60): the Appendix F `app.dictation.insert` setting; TODO(#552) is parked.
         insertionOn,
         route,
-        // #142: T3 runs the 1.5 s preview or shows the chip, and it releases the owner.
-        // #557: a question is dictated first and gets the chip; nothing sends without a press.
+        // #142: T3 sends an ⌥G ask or shows the chip, and it releases the owner.
+        // ADR 0098: with no ⌥G the utterance is dictated and gets the fallback chip.
         onAsk: (r, owned) => askGate.onAsk(r, owned),
         // #498, MOG-05b, MOG-06d: a Copy or a failed insertion reaches the Copy card.
         onDone: (r, owned) => void dictation.onDone(r, owned).catch(() => undefined),

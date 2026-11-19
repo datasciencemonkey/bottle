@@ -83,7 +83,10 @@ describe('startBrain: visible PTT feedback (#551)', () => {
       [() => Promise.reject(new Error('down')), 'host_failed'],
     ] as const) {
       const r = await routeUtterance(u(deps?.insertionOn(A) ?? false), { route, insertText });
-      expect(r).toEqual({ route: 'insert_failed', reason, text: 'clean text' });
+      expect(r).toMatchObject({
+        route: 'chip',
+        dictated: { route: 'insert_failed', reason, text: 'clean text' },
+      });
     }
   });
 });
