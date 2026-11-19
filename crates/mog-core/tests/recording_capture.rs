@@ -9,11 +9,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use mog_core::audio_device::{
-    DataFn, FaultFn, FrameSink, Interleaved, MicFrame, MicHost, StreamFault,
-};
 use mog_core::audio_device::system::{
     RecordingDevice, SystemAudioAvailability, SystemAudioDevice, SystemAudioStatus,
+};
+use mog_core::audio_device::{
+    DataFn, FaultFn, FrameSink, Interleaved, MicFrame, MicHost, StreamFault,
 };
 use mog_core::capture::{
     AudioDevice, AudioSource, CaptureCore, CaptureEvents, CaptureService, DeviceError, StopReason,
@@ -47,7 +47,12 @@ fn decode(path: &Path) -> (u32, u32, u32, Vec<i32>) {
     let mut reader = claxon::FlacReader::open(path).expect("valid FLAC");
     let info = reader.streaminfo();
     let samples: Vec<i32> = reader.samples().map(|s| s.expect("sample")).collect();
-    (info.sample_rate, info.channels, info.bits_per_sample, samples)
+    (
+        info.sample_rate,
+        info.channels,
+        info.bits_per_sample,
+        samples,
+    )
 }
 
 fn tone(rate: u32, hz: f32, amp: f32, n: usize) -> Vec<f32> {
@@ -260,7 +265,11 @@ fn adr_0103_temp_audio_is_user_only() {
     let mut w = PartWriter::new(&dir, "n", 16_000).unwrap();
     w.write(&[0.1; 100]).unwrap();
     let parts = w.finish().unwrap();
-    let mode = std::fs::metadata(&parts[0].path).unwrap().permissions().mode() & 0o777;
+    let mode = std::fs::metadata(&parts[0].path)
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
     assert_eq!(mode, 0o600);
     std::fs::remove_dir_all(root).ok();
 }
@@ -336,12 +345,8 @@ fn adr_0103_system_audio_opens_on_its_own_thread_and_mixes_to_mono() {
     let host = FakeHost::default();
     let got = Collect::default();
     let h = host.clone();
-    let (dev, status) = SystemAudioDevice::spawn(
-        move || h,
-        Box::new(got.clone()),
-        Duration::from_secs(5),
-    )
-    .unwrap();
+    let (dev, status) =
+        SystemAudioDevice::spawn(move || h, Box::new(got.clone()), Duration::from_secs(5)).unwrap();
     assert_eq!(status.get(), SystemAudioAvailability::Off);
     dev.open(AudioSource::SystemAudio).unwrap();
     assert_eq!(status.get(), SystemAudioAvailability::Live);
@@ -350,7 +355,11 @@ fn adr_0103_system_audio_opens_on_its_own_thread_and_mixes_to_mono() {
     assert_eq!(v.len(), 2);
     assert!((v[0] - 0.3).abs() < 1e-6 && (v[1] - 0.7).abs() < 1e-6);
     dev.close(AudioSource::SystemAudio);
-    assert_eq!(host.live.load(Ordering::SeqCst), 0, "stream dropped at close");
+    assert_eq!(
+        host.live.load(Ordering::SeqCst),
+        0,
+        "stream dropped at close"
+    );
     assert_eq!(status.get(), SystemAudioAvailability::Off);
     // The mic is not this device's source.
     assert!(dev.open(AudioSource::Mic).is_err());
@@ -365,9 +374,12 @@ fn adr_0103_a_failed_system_audio_open_is_tolerated_as_unavailable() {
         ..FakeHost::default()
     };
     let h = host.clone();
-    let (dev, status) =
-        SystemAudioDevice::spawn(move || h, Box::new(Collect::default()), Duration::from_secs(5))
-            .unwrap();
+    let (dev, status) = SystemAudioDevice::spawn(
+        move || h,
+        Box::new(Collect::default()),
+        Duration::from_secs(5),
+    )
+    .unwrap();
     // A recording goes on mic-only: open does not fail the lease.
     dev.open(AudioSource::SystemAudio).unwrap();
     assert_eq!(status.get(), SystemAudioAvailability::Unavailable);
@@ -405,9 +417,12 @@ fn adr_0103_a_slow_system_audio_open_times_out_and_cleans_up() {
 fn adr_0103_a_fatal_system_stream_error_marks_it_unavailable() {
     let host = FakeHost::default();
     let h = host.clone();
-    let (dev, status) =
-        SystemAudioDevice::spawn(move || h, Box::new(Collect::default()), Duration::from_secs(5))
-            .unwrap();
+    let (dev, status) = SystemAudioDevice::spawn(
+        move || h,
+        Box::new(Collect::default()),
+        Duration::from_secs(5),
+    )
+    .unwrap();
     dev.open(AudioSource::SystemAudio).unwrap();
     (host.fault.lock().unwrap().as_mut().unwrap())(StreamFault::Fatal);
     for _ in 0..200 {
@@ -451,9 +466,12 @@ fn cap_01a_recording_device_routes_each_source_to_its_backend() {
     let mic = FakeMic::default();
     let host = FakeHost::default();
     let h = host.clone();
-    let (sys, status) =
-        SystemAudioDevice::spawn(move || h, Box::new(Collect::default()), Duration::from_secs(5))
-            .unwrap();
+    let (sys, status) = SystemAudioDevice::spawn(
+        move || h,
+        Box::new(Collect::default()),
+        Duration::from_secs(5),
+    )
+    .unwrap();
     let dev = RecordingDevice::new(Box::new(mic.clone()), Box::new(sys));
     dev.open(AudioSource::Mic).unwrap();
     assert_eq!(mic.open.load(Ordering::SeqCst), 1);
@@ -503,6 +521,12 @@ struct Rig {
     root: PathBuf,
 }
 
+impl Drop for Rig {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
 fn rig_with(sys_fail: bool, part_max_samples: u64) -> Rig {
     let clock = Arc::new(SimClock::new());
     let wall = SimWallClock::at(1_763_544_600_000);
@@ -515,9 +539,12 @@ fn rig_with(sys_fail: bool, part_max_samples: u64) -> Rig {
         ..FakeHost::default()
     };
     let h = sys_host.clone();
-    let (sys, status) =
-        SystemAudioDevice::spawn(move || h, Box::new(tap.system_sink()), Duration::from_secs(5))
-            .unwrap();
+    let (sys, status) = SystemAudioDevice::spawn(
+        move || h,
+        Box::new(tap.system_sink()),
+        Duration::from_secs(5),
+    )
+    .unwrap();
     let events = Arc::new(Events::default());
     let core = Arc::new(CaptureCore::new(
         Box::new(RecordingDevice::new(Box::new(mic.clone()), Box::new(sys))),
@@ -595,7 +622,10 @@ fn adr_0103_knob_off_starts_no_capture_path() {
     assert_eq!(r.mic.opens.load(Ordering::SeqCst), 0, "no mic open");
     assert_eq!(r.sys_host.builds.load(Ordering::SeqCst), 0, "no tap");
     assert_eq!(r.session.snapshot(), Snapshot::Idle);
-    assert!(std::fs::read_dir(&r.root).unwrap().next().is_none(), "no temp file");
+    assert!(
+        std::fs::read_dir(&r.root).unwrap().next().is_none(),
+        "no temp file"
+    );
 }
 
 #[test]
@@ -619,7 +649,11 @@ fn adr_0103_record_mixes_mic_and_system_audio_into_a_flac_part() {
     assert_eq!(done.parts[0].file_name, "2026-11-19_0930.part01.flac");
     let (rate, ch, bits, samples) = decode(&done.parts[0].path);
     assert_eq!((rate, ch, bits), (16_000, 1, 16));
-    assert!((31_000..=32_000).contains(&samples.len()), "{}", samples.len());
+    assert!(
+        (31_000..=32_000).contains(&samples.len()),
+        "{}",
+        samples.len()
+    );
     // 0.1 + 0.2 = 0.3 full scale in the steady part.
     let mid = samples[16_000];
     assert!((mid - (0.3 * 32_767.0) as i32).abs() < 50, "{mid}");
@@ -792,7 +826,9 @@ fn adr_0103_ptt_audio_before_the_recording_is_not_recorded() {
     play(&r, 100, 0.1, 0.0);
     let done = r.session.stop(StopCause::User).unwrap();
     let (_, _, _, s) = decode(&done.parts[0].path);
-    assert!(s.iter().all(|v| (*v - (0.1 * 32_767.0) as i32).abs() < 50 || *v == 0));
+    assert!(s
+        .iter()
+        .all(|v| (*v - (0.1 * 32_767.0) as i32).abs() < 50 || *v == 0));
 }
 
 #[test]
@@ -800,8 +836,9 @@ fn adr_0103_state_observer_sees_start_and_stop() {
     let r = rig();
     let seen = Arc::new(Mutex::new(Vec::new()));
     let s2 = Arc::clone(&seen);
-    r.session
-        .set_observer(Arc::new(move |snap: &Snapshot| s2.lock().unwrap().push(snap.clone())));
+    r.session.set_observer(Arc::new(move |snap: &Snapshot| {
+        s2.lock().unwrap().push(snap.clone())
+    }));
     r.session.start(opts("n", 60)).unwrap();
     r.session.stop(StopCause::User).unwrap();
     let seen = seen.lock().unwrap();
@@ -811,10 +848,22 @@ fn adr_0103_state_observer_sees_start_and_stop() {
 
 #[test]
 fn adr_0103_a_recording_mic_stop_reason_maps_to_a_cause() {
-    assert_eq!(StopCause::from_lease_stop(StopReason::DeviceLost), StopCause::MicLost);
-    assert_eq!(StopCause::from_lease_stop(StopReason::ZeroBuffers), StopCause::MicLost);
-    assert_eq!(StopCause::from_lease_stop(StopReason::Panic), StopCause::Panic);
-    assert_eq!(StopCause::from_lease_stop(StopReason::Preempted), StopCause::MicLost);
+    assert_eq!(
+        StopCause::from_lease_stop(StopReason::DeviceLost),
+        StopCause::MicLost
+    );
+    assert_eq!(
+        StopCause::from_lease_stop(StopReason::ZeroBuffers),
+        StopCause::MicLost
+    );
+    assert_eq!(
+        StopCause::from_lease_stop(StopReason::Panic),
+        StopCause::Panic
+    );
+    assert_eq!(
+        StopCause::from_lease_stop(StopReason::Preempted),
+        StopCause::MicLost
+    );
 }
 
 // ---------- permission ask on knob ON ----------

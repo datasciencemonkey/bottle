@@ -66,14 +66,14 @@ impl MicHost for CpalMicHost {
         let config = supported.config();
         let on_error = move |e: cpal::Error| on_fault(fault_for(e.kind()));
         match format {
-            SampleFormat::F32 => build_as::<f32>(&device, config, on_data, on_error),
-            SampleFormat::F64 => build_as::<f64>(&device, config, on_data, on_error),
-            SampleFormat::I8 => build_as::<i8>(&device, config, on_data, on_error),
-            SampleFormat::I16 => build_as::<i16>(&device, config, on_data, on_error),
-            SampleFormat::I32 => build_as::<i32>(&device, config, on_data, on_error),
-            SampleFormat::U8 => build_as::<u8>(&device, config, on_data, on_error),
-            SampleFormat::U16 => build_as::<u16>(&device, config, on_data, on_error),
-            SampleFormat::U32 => build_as::<u32>(&device, config, on_data, on_error),
+            SampleFormat::F32 => build_input_as::<f32>(&device, config, on_data, on_error),
+            SampleFormat::F64 => build_input_as::<f64>(&device, config, on_data, on_error),
+            SampleFormat::I8 => build_input_as::<i8>(&device, config, on_data, on_error),
+            SampleFormat::I16 => build_input_as::<i16>(&device, config, on_data, on_error),
+            SampleFormat::I32 => build_input_as::<i32>(&device, config, on_data, on_error),
+            SampleFormat::U8 => build_input_as::<u8>(&device, config, on_data, on_error),
+            SampleFormat::U16 => build_input_as::<u16>(&device, config, on_data, on_error),
+            SampleFormat::U32 => build_input_as::<u32>(&device, config, on_data, on_error),
             _ => Err(codes::UNSUPPORTED_FORMAT),
         }
     }
@@ -131,8 +131,9 @@ pub fn kind_for(interface: InterfaceType) -> InputKind {
     }
 }
 
-/// Build an input stream of sample type `T` that hands `f32` blocks to `on_data`.
-fn build_as<T>(
+/// Build an input stream of sample type `T` that hands `f32` blocks to `on_data`. On an output
+/// device this is a WASAPI loopback stream (the Windows system audio backend, ADR 0103).
+pub(crate) fn build_input_as<T>(
     device: &cpal::Device,
     config: StreamConfig,
     mut on_data: DataFn,

@@ -55,7 +55,13 @@ objc2 = "0.6.5"
 # R6 sleep and lock observers (#465): notification blocks.
 block2 = "0.6.2"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSPasteboard", "NSPasteboardItem", "NSWorkspace"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSArray", "NSData", "NSDistributedNotificationCenter", "NSNotification", "NSOperation", "NSString"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSArray", "NSData", "NSDictionary", "NSDistributedNotificationCenter", "NSNotification", "NSOperation", "NSString", "NSUUID", "NSValue"] }
+# ADR 0103: the Core Audio process tap (system audio of a call recording) and the mic prompt.
+# Already in Cargo.lock through cpal (Zlib OR Apache-2.0 OR MIT).
+objc2-core-audio = { version = "0.3.2", default-features = false, features = ["std", "AudioHardware", "objc2", "objc2-core-audio-types", "objc2-foundation"] }
+objc2-core-audio-types = { version = "0.3.2", default-features = false, features = ["std", "CoreAudioBaseTypes"] }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFDictionary"] }
+objc2-avf-audio = { version = "0.3.2", default-features = false, features = ["std", "block2", "AVAudioApplication"] }
 security-framework.workspace = true
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]

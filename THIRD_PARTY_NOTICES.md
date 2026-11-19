@@ -31,6 +31,7 @@ Do these steps in the pull request that adds, ports or adapts third-party code:
 | Tauri, `tauri-nspanel`, `tauri-plugin-global-shortcut` | MIT / Apache-2.0 | Desktop shell |
 | Gemini on Databricks | Applicable model terms | Model called through Databricks |
 | Databricks CLI | Databricks License | Not bundled |
+| objc2 Core Audio bindings, claxon | Apache-2.0 | System audio tap of call recordings; FLAC check in tests only |
 
 ## antigravity-bricks-plugin (MIT)
 
@@ -534,6 +535,20 @@ SOFTWARE.
 Bottle can call Gemini models served by Databricks. Bottle ships no Gemini code
 or weights. The customer accepts the Gemini terms (ADM-04) before the models are
 used.
+
+## objc2 Core Audio bindings, claxon (Apache-2.0)
+
+Call recording (ADR 0103) uses these crates. Bottle copies no code from them.
+
+- `objc2-core-audio`, `objc2-core-audio-types`, `objc2-core-foundation` and `objc2-avf-audio`
+  0.3.2 (https://github.com/madsmtm/objc2): the Rust bindings to the macOS Core Audio process
+  tap and to `AVAudioApplication` (the Microphone prompt). They were already in Cargo.lock
+  through cpal; ADR 0103 makes them direct macOS dependencies of `mog-core`. They are
+  licensed "Zlib OR Apache-2.0 OR MIT"; Bottle uses them under Apache-2.0 (text: see
+  sherpa-onnx above). Copyright the objc2 contributors.
+- `claxon` 0.4.3 (https://github.com/ruuda/claxon): a FLAC decoder, a dev-dependency only. The
+  tests decode Bottle's FLAC parts with it. It is not in the app. Apache-2.0 (text: see
+  sherpa-onnx above). Copyright 2014 Ruud van Asseldonk.
 
 ## Databricks CLI (Databricks License)
 
