@@ -92,7 +92,8 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
         std::sync::Arc::new(mog_core::clock::SystemClock::new());
     let tap = mog_core::recording_capture::tap::RecordingTap::new(std::sync::Arc::clone(&clock));
     // #388 (ADR 0038): the cpal mic on its own audio thread. Its frames go to the level
-    // stream (#476), to the PTT buffer (#21) and to R4 (#46, CAP-52).
+    // stream (#476), to the PTT buffer (#21), to R4 (#46, CAP-52) and to the call recording
+    // tap (ADR 0103; it drops frames while no recording runs).
     // CAP-22 (#453, ADR 0063): `app.capture.preferBuiltInMic` reaches this mic. No mic thread:
     // the app still runs, and every start answers `host_failed`.
     #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -104,7 +105,6 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
                 CpalMicHost::new,
                 mog_core::audio_device::level::TeeSink(
                     mog_core::audio_device::level::TeeSink(ptt.sink(), stt.engine().frame_sink()),
-                    // ADR 0103: the call recording tap (it drops frames while no recording runs).
                     tap.mic_sink(),
                 ),
                 levels.gate(),
