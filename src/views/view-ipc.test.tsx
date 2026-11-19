@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { tauri, viewEmits } from './test-tauri';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { CARD_IDENTITY_READY } from '../shared/mog-target';
 import {
   asCardUpdate,
   asMicLevelFrame,
@@ -13,6 +14,7 @@ import {
   ownMogId,
   startCardFocusSignal,
   subscribeHubNotices,
+  useCardIdentity,
   useViewEvent,
   viewMicLevels,
 } from './view-ipc';
@@ -104,6 +106,38 @@ describe('view IPC helpers', () => {
     await tauri.emitTo(`mog-${ID}`, 'mog:view_state', { mogId: ID, n: 1 });
     await tauri.emitTo('hub', 'mog:view_state', { mogId: ID, n: 2 });
     expect(got).toEqual([{ mogId: ID, n: 2 }]);
+    await act(async () => root.unmount());
+  });
+
+  it('[ui-4] useCardIdentity pings card.identity_ready once and reads the name and colour', async () => {
+    tauri.label = `card-${ID}`;
+    let seen: { name: string; colorVariant?: string } | undefined;
+    function Probe() {
+      seen = useCardIdentity(ID);
+      return null;
+    }
+    const root = createRoot(document.createElement('div'));
+    await act(async () => root.render(<Probe />));
+    expect(viewEmits()).toEqual([
+      { mogId: ID, kind: 'click', payload: { action: CARD_IDENTITY_READY } },
+    ]);
+    await tauri.emitTo(`card-${ID}`, 'mog:target', {
+      mogId: ID,
+      name: 'Sales',
+      target: true,
+      toast: false,
+      colorVariant: 'teal',
+    });
+    expect(seen).toEqual({ name: 'Sales', colorVariant: 'teal' });
+    // A view state sent to another MOG's card never changes this one.
+    const OTHER = '00000000-0000-4000-8000-000000000002';
+    await tauri.emitTo(`card-${OTHER}`, 'mog:target', {
+      mogId: OTHER,
+      name: 'Ops',
+      target: true,
+      toast: false,
+    });
+    expect(seen).toEqual({ name: 'Sales', colorVariant: 'teal' });
     await act(async () => root.unmount());
   });
 });

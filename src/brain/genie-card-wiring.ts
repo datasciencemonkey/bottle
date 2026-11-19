@@ -18,6 +18,8 @@ import {
   CARD_DISMISS_EVENT,
   CARD_DONE,
   CARD_MOG_HOVER_EVENT,
+  MOG_MENU_CHANGE_HOME,
+  MOG_MENU_CLOSE,
   OPEN_CONVERSATIONS,
 } from '../shared/genie-status';
 import { onViewInput, type BrainBus } from './bus';
@@ -38,6 +40,13 @@ export interface GenieCardWiringDeps {
   lastOpId(mogId: MogId): string | undefined;
   /** Show and focus the hub on Conversations; `requestId` selects one exchange. */
   openConversations(requestId: string | undefined): void;
+  /**
+   * #ui-4: the MOG right-click menu's Close. Same as the hub's Stop: the window closes and the
+   * mic lease releases; the MOG is not deleted.
+   */
+  closeMog(mogId: MogId): void;
+  /** #ui-4: the MOG right-click menu's "Change home workspace…". Shows the hub. */
+  changeHome(mogId: MogId): void;
 }
 
 function target(p: unknown): { target?: unknown; requestId?: unknown; on?: unknown } {
@@ -75,6 +84,12 @@ export function wireGenieCard(bus: BrainBus, deps: GenieCardWiringDeps): () => v
     if (p.target === OPEN_CONVERSATIONS) {
       if (fromMog) deps.sendToCard(mogId, CARD_DISMISS_EVENT, {});
       deps.openConversations(requestId ?? deps.lastOpId(mogId));
+      return;
     }
+    // #ui-4: Close and "Change home workspace…" are MOG right-click menu actions only; the card
+    // has no such menu.
+    if (!fromMog) return;
+    if (p.target === MOG_MENU_CLOSE) deps.closeMog(mogId);
+    else if (p.target === MOG_MENU_CHANGE_HOME) deps.changeHome(mogId);
   });
 }

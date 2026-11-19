@@ -79,6 +79,26 @@ export function answerShowMs(md: string): number {
 export const OPEN_CONVERSATIONS = 'open_conversations';
 export const CARD_DONE = 'card_done';
 
+/**
+ * #ui-4: the MOG view's right-click menu sends these as `{ target }` too (no new `view_emit`
+ * kind). "Open in Bottle" reuses `OPEN_CONVERSATIONS`.
+ *
+ * Review #603 (findings 1 and 4): the menu itself is a native Tauri menu, built and shown by the
+ * brain (`mog-context-menu.ts`), not the MOG view — a MOG view may only listen to events and call
+ * `view_emit` (ARC-4), and only the brain holds `core:menu:*`. The view only asks
+ * `{ target: MOG_MENU_OPEN, x, y, hidden }` (window-relative click position, and this MOG's
+ * current Hide state, so the brain can label the Hide/Show item correctly); picking Close, Open
+ * in Bottle or Change home workspace… in the native menu replays the exact `view:input` click a
+ * real HTML-menu click used to send, so `genie-card-wiring.ts` and `talk-target.ts` need no
+ * change. Hide is still MOG-view-local state (plain CSS, no brain round trip to show or hide the
+ * lamp art): picking it only tells the one MOG window to flip it (`MOG_MENU_HIDE_EVENT`).
+ */
+export const MOG_MENU_OPEN = 'mog_menu_open';
+export const MOG_MENU_CLOSE = 'mog_menu_close';
+export const MOG_MENU_CHANGE_HOME = 'mog_menu_change_home';
+/** Brain-to-view (`mog-<id>` only): flip Hide after a native-menu pick. Payload `{ hidden }`. */
+export const MOG_MENU_HIDE_EVENT = 'mog:menu_hide';
+
 /** The card window event for the pointer on the MOG (the card holds its timer meanwhile). */
 export const CARD_MOG_HOVER_EVENT = 'card:mog_hover';
 /** The card window event that fades the card at once (a double-click on the MOG). */

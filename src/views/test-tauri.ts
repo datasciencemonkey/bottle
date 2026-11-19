@@ -86,10 +86,23 @@ export function viewEmits(): unknown[] {
     .map(([, a]) => (a as { args: unknown }).args);
 }
 
+/** True for the `card.identity_ready` one-shot ping (`useCardIdentity`, #ui-4). */
+function isCardIdentityReady(e: unknown): boolean {
+  const payload = (e as { payload?: unknown }).payload;
+  return (
+    typeof payload === 'object' &&
+    payload !== null &&
+    (payload as { action?: unknown }).action === 'card.identity_ready'
+  );
+}
+
 /**
  * The `view_emit` calls of user input: every call but the `ready` a view sends once it listens
- * (#507, ADR 0091). Tests of clicks and keys read this; tests of `ready` read `viewEmits`.
+ * (#507, ADR 0091), and the card's `card.identity_ready` ping (#ui-4, `useCardIdentity`). Tests
+ * of clicks and keys read this; tests of those setup pings read `viewEmits`.
  */
 export function inputEmits(): unknown[] {
-  return viewEmits().filter((e) => (e as { kind?: unknown }).kind !== 'ready');
+  return viewEmits().filter(
+    (e) => (e as { kind?: unknown }).kind !== 'ready' && !isCardIdentityReady(e),
+  );
 }

@@ -12,7 +12,10 @@ describe('MOG page (V2)', () => {
     expect(rule?.[1]).toMatch(/background:\s*transparent;/);
     expect(rule?.[1]).toMatch(/margin:\s*0;/);
     expect(rule?.[1]).toMatch(/overflow:\s*hidden;/);
-    // A coloured background anywhere in the page would cover the desktop.
+    // A coloured background anywhere in this page would cover the desktop. The one past
+    // exception, the right-click menu's own solid surface (`.mog-menu`), is gone (#ui-4 review
+    // #603, findings 1 and 4): that menu is now a native Tauri menu built from `MogView.tsx`, so
+    // it is never part of this page's own CSS at all.
     expect(css).not.toMatch(/background(-color)?:\s*(?!transparent)[#a-z]/);
   });
 

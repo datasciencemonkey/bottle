@@ -7,6 +7,7 @@ import {
   type MemoryConfigs,
 } from '../../test-support/mog-doubles';
 import { MOG_CONFIG_DEFAULTS } from './mog-config';
+import { DEFAULT_VARIANT, MOG_PALETTE } from '../../shared/mog-palette';
 import {
   createMogManager,
   ipcMogConfigClient,
@@ -57,6 +58,8 @@ describe('T1 MogManager: the six hub actions (MB-01)', () => {
     expect(configs.files.get(id(1))).toEqual({
       ...MOG_CONFIG_DEFAULTS,
       name: 'Sales',
+      // #ui-4: the first MOG gets the first palette colour, not the schema's bare "auto".
+      ui: { ...MOG_CONFIG_DEFAULTS.ui, variant: DEFAULT_VARIANT },
       binding: {
         home: 'sales-ws',
         backend: { kind: 'genie_one_mcp', profile: 'sales-ws' },
@@ -64,6 +67,23 @@ describe('T1 MogManager: the six hub actions (MB-01)', () => {
         profileAliases: {},
       },
     });
+  });
+
+  it('[MB-01] [ui-4] create assigns the first unused palette colour, then an even spread', async () => {
+    for (let i = 0; i < MOG_PALETTE.length; i++) await m.create({ name: `MOG ${i}`, home: 'p' });
+    const variants = (await m.list()).mogs.map((s) => s.colorVariant);
+    expect(variants).toEqual(MOG_PALETTE.map((c) => c.id));
+    const extra = await m.create({ name: 'Extra', home: 'p' });
+    expect(extra.colorVariant).toBe(MOG_PALETTE[0]?.id);
+  });
+
+  it('[MB-01] [ui-4] edit changes the colour to a palette id only', async () => {
+    await m.create({ name: 'Sales', home: 'p' });
+    const target = MOG_PALETTE[2]?.id ?? '';
+    const s = await m.edit(id(1), { colorVariant: target });
+    expect(s.colorVariant).toBe(target);
+    const e = await rejection(m.edit(id(1), { colorVariant: 'not-a-colour' }));
+    expect([e.code, e.message]).toEqual(['invalid_color', 'Choose a colour from the MOG palette.']);
   });
 
   it('[MB-01] create with no name uses the lowest free "MOG <n>" (Appendix F)', async () => {

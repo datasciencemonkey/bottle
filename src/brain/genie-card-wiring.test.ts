@@ -16,6 +16,8 @@ function setup() {
     sendToCard: (m, e, p) => void log.push(['card', m, e, p]),
     lastOpId: (m) => (m === A ? OP : undefined),
     openConversations: (id) => void log.push(['open', id]),
+    closeMog: (m) => void log.push(['close', m]),
+    changeHome: (m) => void log.push(['change-home', m]),
   });
   const input = (from: string, kind: string, payload?: unknown, mogId = A) =>
     bus.dispatch({ event: 'view:input', payload: { from, input: { mogId, kind, payload } } });
@@ -88,5 +90,17 @@ describe('Genie card wiring (#573)', () => {
     off();
     input(`card-${A}`, 'click', { target: 'card_done' });
     expect(log).toEqual([]);
+  });
+
+  it('[ui-4] the MOG right-click menu Closes the MOG or opens the hub on Change home', () => {
+    const { log, input } = setup();
+    input(`mog-${A}`, 'click', { target: 'mog_menu_close' });
+    input(`mog-${A}`, 'click', { target: 'mog_menu_change_home' });
+    // Only the MOG's own menu can act on it: the card has no such menu.
+    input(`card-${A}`, 'click', { target: 'mog_menu_close' });
+    expect(log).toEqual([
+      ['close', A],
+      ['change-home', A],
+    ]);
   });
 });

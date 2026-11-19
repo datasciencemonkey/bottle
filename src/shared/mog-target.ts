@@ -28,12 +28,24 @@ export const VIEW_READY = 'view.ready';
  */
 export const VIEW_FOCUS = 'view.focus';
 
-/** What one MOG view shows: its name, the target marker (UX-28) and the toast (MB-06b). */
+/**
+ * What one MOG view shows: its name, the target marker (UX-28), the toast (MB-06b) and its
+ * accent colour (#ui-4, `mog.ui.variant`, `src/shared/mog-palette.ts`). The card window of the
+ * same MOG gets this event too (`sendMogTarget`), so it can show the same name and colour in its
+ * header, with no contract change.
+ */
 export interface MogTargetView {
   mogId: MogId;
   name: string;
   target: boolean;
   toast: boolean;
+  /** `mog.ui.variant`, or undefined before the brain reads the config. */
+  colorVariant?: string;
+  /**
+   * #ui-4: the home profile name (`mog.binding.home`), for the MOG hover tooltip only (cheap:
+   * it rides the same config read as the name and the colour). Never a token.
+   */
+  home?: string;
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
@@ -41,10 +53,32 @@ const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object
 /** Shape check of a `mog:target` payload. */
 export function asMogTargetView(p: unknown): MogTargetView | undefined {
   if (!isObj(p)) return undefined;
-  const { mogId, name, target, toast } = p;
+  const { mogId, name, target, toast, colorVariant, home } = p;
   if (typeof mogId !== 'string' || typeof name !== 'string') return undefined;
   if (typeof target !== 'boolean' || typeof toast !== 'boolean') return undefined;
-  return { mogId, name, target, toast };
+  if (colorVariant !== undefined && typeof colorVariant !== 'string') return undefined;
+  if (home !== undefined && typeof home !== 'string') return undefined;
+  return {
+    mogId,
+    name,
+    target,
+    toast,
+    ...(colorVariant !== undefined ? { colorVariant } : {}),
+    ...(home !== undefined ? { home } : {}),
+  };
+}
+
+/**
+ * The card-window ping of #ui-4: the card view sends this once it listens, so the brain resends
+ * the current `MogTargetView` (name and colour) to the card, which otherwise only gets pushed
+ * state (it never sends `view.ready`, so it would not get the identity if the card opened after
+ * the MOG's own `view.ready`).
+ */
+export const CARD_IDENTITY_READY = 'card.identity_ready';
+
+/** True for the payload of the card identity-ready signal. */
+export function isCardIdentityReady(payload: unknown): boolean {
+  return isObj(payload) && payload['action'] === CARD_IDENTITY_READY;
 }
 
 /** True for the payload of the card focus signal. */

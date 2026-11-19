@@ -23,7 +23,14 @@ export function sendHubMogs(list: HubMogList): Promise<void> {
   return emitTo('hub', HUB_MOGS_EVENT, list);
 }
 
-async function act(m: MogManager, a: MogAction): Promise<HubNoticeLine | undefined> {
+async function act(
+  m: MogManager,
+  a: MogAction,
+  // #ui-4 (review #603, finding 3): called after a successful `mog.edit`/`mog.set_color`, so
+  // the caller can push the fresh identity to an open MOG and its card (`talkTarget.reidentify`
+  // in `components/index.ts`), not only update the hub row.
+  onIdentityChanged?: (mogId: string) => void,
+): Promise<HubNoticeLine | undefined> {
   switch (a.action) {
     case 'mogs.ready':
       return undefined;
@@ -32,6 +39,11 @@ async function act(m: MogManager, a: MogAction): Promise<HubNoticeLine | undefin
       return undefined;
     case 'mog.edit':
       await m.edit(a.mogId, { name: a.name, home: a.home, persona: a.persona });
+      onIdentityChanged?.(a.mogId);
+      return undefined;
+    case 'mog.set_color':
+      await m.edit(a.mogId, { colorVariant: a.colorVariant });
+      onIdentityChanged?.(a.mogId);
       return undefined;
     case 'mog.duplicate':
       await m.duplicate(a.mogId);
@@ -63,6 +75,7 @@ async function snapshot(m: MogManager, notice?: HubNoticeLine): Promise<HubMogLi
       home: s.binding.home,
       persona: s.persona,
       running: s.runState === 'running',
+      colorVariant: s.colorVariant,
     }));
     return { mogs, unreadable: l.unreadable, ...base, ...(notice ? { notice } : {}) };
   } catch (e) {
@@ -88,18 +101,38 @@ export async function sendHubSnapshot(
   }
 }
 
+/**
+ * The function `wireHubMogs` returns: calling it stops the wiring, same as before. `openEdit`
+ * (#ui-4, review #603, MEDIUM finding) asks the hub to open one MOG's own Edit form on the next
+ * list push, for "Change home workspace…" on the MOG right-click menu.
+ */
+export interface HubMogsDisposer {
+  (): void;
+  openEdit(mogId: string): void;
+}
+
 /** Wire the hub MOG actions to `manager`, and send the list to the hub once now. */
 export function wireHubMogs(
   bus: BrainBus,
   manager: MogManager,
   send: (list: HubMogList) => Promise<unknown> = sendHubMogs,
-): () => void {
+  onIdentityChanged?: (mogId: string) => void,
+): HubMogsDisposer {
   let live = true;
+  // #ui-4 (review #603, MEDIUM finding): held the same way `hub-conversations-wiring.ts` holds
+  // a pending Conversations open, so a hub that is not open yet (or whose send races the open)
+  // still gets it, once, on the next push that reaches it.
+  let pendingEdit: { mogId: string; token: number } | undefined;
+  let editToken = 0;
   const publish = async (notice?: HubNoticeLine) => {
     const list = await snapshot(manager, notice);
     if (!live) return;
+    const edit = pendingEdit;
+    const withEdit = edit ? { ...list, openEdit: edit } : list;
     try {
-      await send(list);
+      await send(withEdit);
+      // Consumed only once actually sent; a send failure (no hub open) keeps it for the next try.
+      if (edit) pendingEdit = undefined;
     } catch {
       // No hub is open. The hub asks again with mogs.ready when it opens.
     }
@@ -112,7 +145,7 @@ export function wireHubMogs(
     void (async () => {
       let notice: HubNoticeLine | undefined;
       try {
-        notice = await act(manager, action);
+        notice = await act(manager, action, onIdentityChanged);
       } catch (e) {
         // A MogManagerError holds fixed text only; any other error gets a fixed text.
         notice = {
@@ -123,8 +156,13 @@ export function wireHubMogs(
       await publish(notice);
     })();
   });
-  return () => {
+  const dispose = (() => {
     live = false;
     off();
+  }) as HubMogsDisposer;
+  dispose.openEdit = (mogId) => {
+    pendingEdit = { mogId, token: ++editToken };
+    void publish();
   };
+  return dispose;
 }

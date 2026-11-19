@@ -13,6 +13,17 @@ vi.mock('@tauri-apps/api/core', async () => (await import('../test-tauri')).core
 vi.mock('@tauri-apps/api/event', async () => (await import('../test-tauri')).eventModule);
 vi.mock('@tauri-apps/api/window', async () => (await import('../test-tauri')).windowModule);
 
+/**
+ * Right-click the MOG. Review #603 (findings 1 and 4): this view no longer builds the menu
+ * itself (ARC-4: a MOG view may only listen and call `view_emit`) — it only asks the brain to
+ * show it (`mog-context-menu.ts`), so this is now a plain `view_emit`, like any other click.
+ */
+async function openMenu(mascot: HTMLElement, at: { clientX?: number; clientY?: number } = {}) {
+  await act(async () => {
+    mascot.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, ...at }));
+  });
+}
+
 const ID = '00000000-0000-4000-8000-000000000001';
 const OTHER = '00000000-0000-4000-8000-000000000002';
 
@@ -560,6 +571,94 @@ describe('V2 MOG view target marker and toast (#73)', () => {
     const { m } = fakeMascot();
     await render(<MogView mogId={ID} createMascot={() => m} />);
     expect(viewEmits()).toEqual([{ mogId: ID, kind: 'click', payload: { action: 'view.ready' } }]);
+  });
+
+  it('[ui-4] always shows a name pill, tinted with the palette colour the brain sends', async () => {
+    const { m } = fakeMascot();
+    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    // Before the brain answers, the pill still shows (the fallback name).
+    expect(el.querySelector('[data-identity-pill]')?.textContent).toBe('MOG');
+    await tauri.emit('mog:target', tv({ colorVariant: 'teal' }));
+    expect(el.querySelector('[data-identity-pill]')?.textContent).toBe('Sales');
+    const root = el.firstElementChild as HTMLElement;
+    expect(root.style.getPropertyValue('--mog-id-color')).toBe('#0f6b66');
+  });
+
+  it('[ui-4] an unknown colour variant falls back to a stable hash of the MOG ID', async () => {
+    const { m } = fakeMascot();
+    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    await tauri.emit('mog:target', tv({ colorVariant: 'not-a-colour' }));
+    const root = el.firstElementChild as HTMLElement;
+    const first = root.style.getPropertyValue('--mog-id-color');
+    expect(first).toMatch(/^#[0-9a-f]{6}$/);
+    await tauri.emit('mog:target', tv({ colorVariant: 'still-not-a-colour' }));
+    expect(root.style.getPropertyValue('--mog-id-color')).toBe(first);
+  });
+
+  it('[ui-4] a hover tooltip shows the name and the home workspace, if known', async () => {
+    const { m } = fakeMascot();
+    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    const mascot = el.querySelector('.mascot') as HTMLElement;
+    expect(mascot.title).toBe('MOG');
+    await tauri.emit('mog:target', tv({ home: 'sales-ws' }));
+    expect(mascot.title).toBe('Sales · sales-ws');
+  });
+
+  it('[ui-4] [#603] Hide shrinks the lamp art to lamp-only once the brain says so; a click brings it back with no brain call', async () => {
+    const { m } = fakeMascot();
+    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    const mascot = el.querySelector('.mascot') as HTMLElement;
+    // Review #603, findings 1 and 4: the brain, not this view, builds the native menu
+    // (`mog-context-menu.ts`, ARC-4), and tells this one MOG window to flip Hide after a pick.
+    await act(async () => void tauri.emit('mog:menu_hide', { hidden: true }));
+    expect(mascot.dataset['hidden']).toBe('true');
+    const before = viewEmits().length;
+    await act(async () => void mascot.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    expect(mascot.dataset['hidden']).toBeUndefined();
+    // Bringing it back is MOG-view-local: it sends nothing more to the brain.
+    expect(viewEmits()).toHaveLength(before);
+  });
+
+  it('[ui-4] [#603] right-click asks the brain to show the native menu, with the click position and the current Hide state', async () => {
+    const { m } = fakeMascot();
+    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    const mascot = el.querySelector('.mascot') as HTMLElement;
+    await openMenu(mascot, { clientX: 5, clientY: 7 });
+    // #603 review, findings 1 and 4: this view never renders the menu itself (a MOG view may
+    // only listen and call `view_emit`, ARC-4) and holds no DOM state for one either.
+    expect(el.querySelector('[role="menu"]')).toBeNull();
+    expect(viewEmits()).toEqual([
+      { mogId: ID, kind: 'click', payload: { action: 'view.ready' } },
+      { mogId: ID, kind: 'click', payload: { target: 'mog_menu_open', x: 5, y: 7, hidden: false } },
+    ]);
+  });
+
+  it('[ui-4] [#603] a right-click while hidden reports the current Hide state, so the brain labels the item "Show"', async () => {
+    const { m } = fakeMascot();
+    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    const mascot = el.querySelector('.mascot') as HTMLElement;
+    await act(async () => void tauri.emit('mog:menu_hide', { hidden: true }));
+    await openMenu(mascot, { clientX: 1, clientY: 2 });
+    expect(viewEmits().at(-1)).toEqual({
+      mogId: ID,
+      kind: 'click',
+      payload: { target: 'mog_menu_open', x: 1, y: 2, hidden: true },
+    });
+  });
+
+  it('[ui-4] [#603] a native menu dismisses on Esc or an outside click with no listener here: this view asks for nothing more', async () => {
+    const { m } = fakeMascot();
+    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    const mascot = el.querySelector('.mascot') as HTMLElement;
+    await openMenu(mascot);
+    const before = viewEmits().length;
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    });
+    // Nothing in this view listens for either: dismissal is the native menu's own, on the brain
+    // side (`mog-context-menu.ts`), with no round trip back to this window at all.
+    expect(viewEmits()).toHaveLength(before);
   });
 
   it('[MB-06a] tries view.ready again while no brain listens yet', async () => {

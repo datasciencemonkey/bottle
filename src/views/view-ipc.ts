@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react';
 import { asHubNotice, HUB_NOTICE_EVENT, HUB_SCOPE, type HubNotice } from '../shared/hub-notice';
 import {
   asMogTargetView,
+  CARD_IDENTITY_READY,
   MOG_TARGET_EVENT,
   VIEW_FOCUS,
   VIEW_READY,
@@ -374,4 +375,44 @@ export function useMogTarget(mogId: MogId): MogTargetView | undefined {
     };
   }, [mogId]);
   return view;
+}
+
+/**
+ * #ui-4: the target MOG's name and colour, for the card window (`GenieCard.tsx`). Unlike
+ * `useMogTarget`, the card sends `card.identity_ready` once when it starts listening (not
+ * retried, and not a `view.ready`): a card has no talk-key target of its own to track, it only
+ * asks the brain to resend the `mog:target` it already pushes to `card-<id>` (`sendMogTarget`).
+ */
+export function useCardIdentity(mogId: MogId): { name: string; colorVariant?: string } | undefined {
+  const [identity, setIdentity] = useState<{ name: string; colorVariant?: string } | undefined>(
+    undefined,
+  );
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    let gone = false;
+    const target = getCurrentWindow().label;
+    void listen<unknown>(
+      MOG_TARGET_EVENT,
+      (e) => {
+        const v = asMogTargetView(e.payload);
+        if (v && v.mogId === mogId)
+          setIdentity({
+            name: v.name,
+            ...(v.colorVariant ? { colorVariant: v.colorVariant } : {}),
+          });
+      },
+      { target },
+    ).then((u) => {
+      if (gone) u();
+      else {
+        off = u;
+        void emitView(mogId, 'click', { action: CARD_IDENTITY_READY }).catch(() => undefined);
+      }
+    });
+    return () => {
+      gone = true;
+      off?.();
+    };
+  }, [mogId]);
+  return identity;
 }

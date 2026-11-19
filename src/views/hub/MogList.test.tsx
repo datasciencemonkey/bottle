@@ -12,8 +12,22 @@ const A = '00000000-0000-4000-8000-00000000000a';
 const B = '00000000-0000-4000-8000-00000000000b';
 const list = {
   mogs: [
-    { mogId: A, name: 'Sales', home: 'sales-ws', persona: '', running: false },
-    { mogId: B, name: 'Ops', home: 'ops-ws', persona: 'Short.', running: true },
+    {
+      mogId: A,
+      name: 'Sales',
+      home: 'sales-ws',
+      persona: '',
+      running: false,
+      colorVariant: 'coral',
+    },
+    {
+      mogId: B,
+      name: 'Ops',
+      home: 'ops-ws',
+      persona: 'Short.',
+      running: true,
+      colorVariant: 'teal',
+    },
   ],
   unreadable: [],
   runningCount: 1,
@@ -207,7 +221,7 @@ describe('hub MOG list (MB-01, MB-03b)', () => {
   it('[MB-01] each row shows Start or Stop and Edit; Duplicate, Forget and Delete sit behind one More entry point (#561)', async () => {
     const el = await shown();
     const row = el.querySelector(`li[data-mog-row="${A}"]`) as HTMLElement;
-    const more = row.querySelector('details') as HTMLDetailsElement;
+    const more = row.querySelector('details.hub-more') as HTMLDetailsElement;
     expect(more.querySelector('summary')?.getAttribute('aria-label')).toBe(
       'More actions for Sales',
     );
@@ -217,6 +231,50 @@ describe('hub MOG list (MB-01, MB-03b)', () => {
     // The frequent actions stay visible in the row, outside the menu.
     for (const label of ['Start Sales', 'Edit Sales'])
       expect(more.contains(byLabel(row, label))).toBe(false);
+  });
+
+  it('[ui-4] the row colour picker shows the current colour and sets a new one from the palette', async () => {
+    const el = await shown();
+    const row = el.querySelector(`li[data-mog-row="${A}"]`) as HTMLElement;
+    const picker = row.querySelector('details.hub-color-picker') as HTMLDetailsElement;
+    expect(picker.querySelector('summary')?.getAttribute('aria-label')).toBe(
+      'Colour for Sales: Coral',
+    );
+    const options = [...picker.querySelectorAll('[role="group"] button')];
+    expect(options).toHaveLength(8);
+    expect(options.map((b) => b.getAttribute('aria-label'))[0]).toBe('Coral');
+    const pressed = options.find((b) => b.getAttribute('aria-pressed') === 'true');
+    expect(pressed?.getAttribute('aria-label')).toBe('Coral');
+    const teal = options.find((b) => b.getAttribute('aria-label') === 'Teal') as HTMLElement;
+    await click(teal);
+    expect(actions().at(-1)).toEqual({ action: 'mog.set_color', mogId: A, colorVariant: 'teal' });
+  });
+
+  it('[ui-4] [#603] the colour picker closes itself after a pick', async () => {
+    const el = await shown();
+    const row = el.querySelector(`li[data-mog-row="${A}"]`) as HTMLElement;
+    const picker = row.querySelector('details.hub-color-picker') as HTMLDetailsElement;
+    picker.open = true;
+    const teal = [...picker.querySelectorAll('[role="group"] button')].find(
+      (b) => b.getAttribute('aria-label') === 'Teal',
+    ) as HTMLElement;
+    await click(teal);
+    expect(picker.open).toBe(false);
+  });
+
+  it('[ui-4] [#603] "Change home workspace…" (openEdit) opens that row\'s own Edit form, once per ask', async () => {
+    const el = await shown();
+    expect(el.querySelector('form[data-edit]')).toBeNull();
+    await tauri.emitTo('hub', 'hub:mogs', { ...list, openEdit: { mogId: B, token: 1 } });
+    expect((el.querySelector('form[data-edit]') as HTMLElement)?.getAttribute('data-edit')).toBe(B);
+    // The user closes it; the very same push (the same token) never reopens it.
+    await key(byLabel(el, 'Name of Ops'), 'Escape');
+    expect(el.querySelector('form[data-edit]')).toBeNull();
+    await tauri.emitTo('hub', 'hub:mogs', { ...list, openEdit: { mogId: B, token: 1 } });
+    expect(el.querySelector('form[data-edit]')).toBeNull();
+    // A fresh ask (a new token) opens it again.
+    await tauri.emitTo('hub', 'hub:mogs', { ...list, openEdit: { mogId: B, token: 2 } });
+    expect((el.querySelector('form[data-edit]') as HTMLElement)?.getAttribute('data-edit')).toBe(B);
   });
 
   it('[MB-03b] the same error twice gives a new alert, so a screen reader reads it again', async () => {

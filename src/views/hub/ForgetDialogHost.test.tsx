@@ -51,7 +51,16 @@ describe('hub Forget dialog (#123)', () => {
   it('[MEM-32a] each MOG row has Forget memory, which sends forget_open with the MOG id', async () => {
     const { el, root } = await render(<MogList />);
     await tauri.emitTo('hub', 'hub:mogs', {
-      mogs: [{ mogId: A, name: 'Sales', home: 'sales-ws', persona: '', running: false }],
+      mogs: [
+        {
+          mogId: A,
+          name: 'Sales',
+          home: 'sales-ws',
+          persona: '',
+          running: false,
+          colorVariant: 'coral',
+        },
+      ],
       unreadable: [],
       runningCount: 0,
       maxRunning: 8,
