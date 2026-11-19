@@ -46,19 +46,6 @@ describe('hotkey:ptt in the brain (#6 payload, #13)', () => {
     expect(got).toHaveLength(1);
   });
 
-  it('[ADR-0103] a key-up after ⌥R carries record: true; other items never do', () => {
-    expect(asPttEvent({ mogId: MOG, phase: 'up', record: true }, 3)).toEqual({
-      mogId: MOG,
-      phase: 'up',
-      at: 3,
-      record: true,
-    });
-    expect(asPttEvent({ mogId: MOG, phase: 'up' }, 3)).not.toHaveProperty('record');
-    expect(asPttEvent({ mogId: MOG, phase: 'up', record: 1 }, 3)).not.toHaveProperty('record');
-    for (const phase of ['down', 'cancel', 'double_tap'])
-      expect(asPttEvent({ mogId: MOG, phase, record: true }, 3)).not.toHaveProperty('record');
-  });
-
   it('[RTR-17a] a key-up after ⌥G carries ask: true; other items never do (ADR 0098)', () => {
     expect(asPttEvent({ mogId: MOG, phase: 'up', ask: true }, 3)).toEqual({
       mogId: MOG,

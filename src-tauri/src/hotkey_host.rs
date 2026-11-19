@@ -1248,25 +1248,27 @@ mod tests {
     }
 
     #[test]
-    fn rec_a_record_up_carries_record_true_and_no_ask() {
+    fn rec_an_r_press_sends_cancel_then_the_record_toggle() {
         let target = Arc::new(PttTarget::default());
         target.set("a1");
         let (mut f, brain, _) = forwarder(&target);
+        // A toggle with no press before it sends nothing.
+        f.on_output(HotkeyOutput::RecordToggle);
         f.on_output(HotkeyOutput::Ptt(PttPhase::Down));
         target.set("b2");
-        f.on_output(HotkeyOutput::PttRecordUp);
-        // A record up with no press sends nothing.
-        f.on_output(HotkeyOutput::PttRecordUp);
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Cancel));
+        f.on_output(HotkeyOutput::RecordToggle);
         assert_eq!(
             brain.items(),
             vec![
                 ptt("a1", "down"),
-                (
-                    "hotkey:ptt".to_owned(),
-                    json!({ "mogId": "a1", "phase": "up", "record": true })
-                ),
+                ptt("a1", "cancel"),
+                ("hotkey:record_toggle".to_owned(), json!({ "mogId": "a1" })),
             ]
         );
+        // The toggle goes out once per press.
+        f.on_output(HotkeyOutput::RecordToggle);
+        assert_eq!(brain.items().len(), 3);
     }
 
     #[test]
