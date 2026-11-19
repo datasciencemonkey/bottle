@@ -341,6 +341,12 @@ export function startBrain(): Brain {
       onRecordToggle: ({ mogId }) =>
         void createRecordToggle({
           call,
+          // The home profile of the MOG of the press, read fresh. No open MOG: no profile.
+          home: async () => {
+            if (mogId === '') return undefined;
+            await homes.routerInput(mogId).catch(() => undefined);
+            return homes.home(mogId);
+          },
           onRefused: (error) => {
             if (mogId !== '') captureMood.refused(mogId, error);
           },

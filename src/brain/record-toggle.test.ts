@@ -4,7 +4,8 @@ import { createRecordToggle } from './record-toggle';
 
 const state = (s: RecordingState['state']): RecordingState => ({ state: s, systemAudio: 'off' });
 
-function rig(now: RecordingState['state'] | Error, home: string | undefined = 'work') {
+function rig(now: RecordingState['state'] | Error, ...homeArg: [string | undefined] | []) {
+  const home = homeArg.length === 0 ? 'work' : homeArg[0];
   const calls: string[] = [];
   const args: unknown[] = [];
   const refused: unknown[] = [];

@@ -38,6 +38,7 @@ export const REFUSAL_REASONS = [
   'permission_denied',
   'no_device',
   'recording_in_progress',
+  'no_home_profile',
 ] as const;
 export type RefusalReason = (typeof REFUSAL_REASONS)[number];
 
@@ -63,6 +64,11 @@ export const REFUSAL_TEXT: Readonly<Record<RefusalReason, { text: string; label:
     text: 'Recording in progress',
     label: 'Mic not started: a call recording uses the mic. Press ⌥R in a hold to stop it',
   },
+  // ADR 0103: the ⌥R start needs the home profile; Bottle never picks one.
+  no_home_profile: {
+    text: 'Pick a workspace first',
+    label: 'Recording not started: pick a home workspace for this MOG first',
+  },
 };
 
 const IPC_REASONS: ReadonlySet<string> = new Set<RefusalReason>([
@@ -71,6 +77,7 @@ const IPC_REASONS: ReadonlySet<string> = new Set<RefusalReason>([
   'mic_busy',
   'host_failed',
   'recording_in_progress',
+  'no_home_profile',
 ]);
 
 /** The reason of a refused start. Only a known `IpcError` code counts; anything else is host_failed. */
