@@ -39,7 +39,7 @@ export function mogRivAsset(file: string = MOG_RIV_BUILD): Plugin {
 // One HTML entry per window kind (ARC-3). Tauri expects a fixed dev port.
 export default defineConfig({
   // tailwindcss() only transforms CSS that actually uses Tailwind's `@import`/`@theme` syntax
-  // (ui-1, ADR 0104): src/views/hub/tailwind.css. mog.css and card.css have none, so they pass
+  // (ui-1, ADR 0106): src/views/hub/tailwind.css. mog.css and card.css have none, so they pass
   // through untouched; mog.html and card.html never load tailwind.css at all.
   plugins: [react(), tailwindcss(), mogRivAsset()],
   clearScreen: false,

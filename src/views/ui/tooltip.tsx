@@ -1,5 +1,5 @@
 /**
- * shadcn/ui Tooltip (ui-1, ADR 0104), copied in as source. Source:
+ * shadcn/ui Tooltip (ui-1, ADR 0106), copied in as source. Source:
  * ui.shadcn.com/docs/components/tooltip (MIT), wraps @radix-ui/react-tooltip. See
  * THIRD_PARTY_NOTICES.md.
  */

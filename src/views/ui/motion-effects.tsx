@@ -1,5 +1,5 @@
 /**
- * Small, calm feedback effects, hand-built on Motion (ui-1, ADR 0104; "hand-built on Motion;
+ * Small, calm feedback effects, hand-built on Motion (ui-1, ADR 0106; "hand-built on Motion;
  * Animate UI/Magic UI copy-in deferred to ui-1b" per ui-lead). Each one is named after the
  * Animate UI / Magic UI primitive it stands in for, so a later PR can swap the implementation
  * for a licensed copy-in without renaming call sites. All of them respect

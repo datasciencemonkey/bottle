@@ -11,7 +11,7 @@
  * `unwiredSttModelApi`, which answers `stt_setup_unavailable`. TODO(#43): the wizard frame
  * mounts this step; until then the hub shows it on its own.
  *
- * ui-1 (ADR 0104): rebuilt on shadcn/ui's RadioGroup and Button instead of a raw
+ * ui-1 (ADR 0106): rebuilt on shadcn/ui's RadioGroup and Button instead of a raw
  * `<fieldset>`/`<legend>` with bare `<input type="radio">`s and plain `<button>`s (the ui-audit
  * "Settings baseline" findings). The RadioGroup renders as accessible buttons
  * (`role="radio"`/`aria-checked`), not native `<input>`s, so SttSetupStep.test.tsx asserts on
@@ -280,7 +280,7 @@ export function SttSetupStep({
         </Button>
       )}
       {error && (
-        // ui-1 (ADR 0104): `stt_setup_unavailable` is a missing-feature state, not an error — the
+        // ui-1 (ADR 0106): `stt_setup_unavailable` is a missing-feature state, not an error — the
         // pink error colour (the lamp-lid pink) read as "broken" for a "not built yet" message
         // that fires by default with no brain connected (the ui-audit "contrast/semantics"
         // finding). Every other code keeps the error style; only this one gets the neutral note.

@@ -1,5 +1,5 @@
 /**
- * shadcn/ui Collapsible (ui-1, ADR 0104), copied in as source. Source:
+ * shadcn/ui Collapsible (ui-1, ADR 0106), copied in as source. Source:
  * ui.shadcn.com/docs/components/collapsible (MIT), wraps @radix-ui/react-collapsible. See
  * THIRD_PARTY_NOTICES.md.
  */

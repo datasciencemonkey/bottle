@@ -123,7 +123,7 @@ describe('Wizard STT step (MB-07, #413)', () => {
     expect(done).toHaveBeenCalledTimes(1);
   });
 
-  // ui-1 (ADR 0104): the download source picker is now a shadcn/ui RadioGroup (Radix), which
+  // ui-1 (ADR 0106): the download source picker is now a shadcn/ui RadioGroup (Radix), which
   // renders as accessible buttons (`role="radio"`), not native `<input type="radio">` elements.
   it('[CAP-49b] the user can pick the Hugging Face mirror as the source', async () => {
     const f = fakeApi();

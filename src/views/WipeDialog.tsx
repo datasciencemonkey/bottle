@@ -5,7 +5,7 @@
  * notice for each MOG (G-45b). Every click goes to the brain (`src/brain/wipe-wiring.ts`), which
  * owns the option and the links. TODO(#87): the brain opens a link with the G-19a opener.
  *
- * ui-1 (ADR 0104): rebuilt on Radix's Dialog primitive (focus trap, Escape-to-close) instead of a
+ * ui-1 (ADR 0106): rebuilt on Radix's Dialog primitive (focus trap, Escape-to-close) instead of a
  * plain positioned `<div>`. It renders inline (no `DialogPrimitive.Portal`): the hub's dialogs
  * (ForgetDialog, this one) have always lived in the same document as the rest of the hub, and a
  * portal would move the markup outside the element every test scopes its queries to. The scrim is
