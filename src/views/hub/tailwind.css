@@ -1,0 +1,81 @@
+/*
+ * Tailwind v4 + shadcn/ui (Radix primitives) + Motion, scoped to the hub entry only (ui-1,
+ * ADR 0104). mog.html and card.html never import this file, so those windows stay on plain CSS
+ * with no Tailwind preflight and keep their transparent background (ui-1 scope: hub first).
+ *
+ * hub.css declares and uses the `hub-legacy` layer itself (see the comment at its top): this
+ * file only needs to agree that `base` and `components` sandwich it, which `@import
+ * 'tailwindcss'` does on its own (it always declares `theme, base, components, utilities`).
+ * main.tsx imports tokens.css, then hub.css (declaring the five-layer order), then this file, in
+ * that order, so the order hub.css set up is already in place by the time Tailwind's own layers
+ * register.
+ */
+@import 'tailwindcss';
+
+/* shadcn/ui variables, mapped onto the --mog-* tokens declared in ../tokens.css (ui-1,
+   ADR 0104). There is no second colour system: every value here traces back to tokens.css, so a
+   colour still changes in one place. Exposed to Tailwind's utilities below via `@theme inline`. */
+:root {
+  --background: var(--mog-surface);
+  --foreground: var(--mog-text);
+  --card: var(--mog-surface-raised);
+  --card-foreground: var(--mog-text);
+  --popover: var(--mog-surface-raised);
+  --popover-foreground: var(--mog-text);
+  --primary: var(--mog-accent);
+  --primary-foreground: var(--mog-on-accent);
+  --secondary: var(--mog-surface-raised);
+  --secondary-foreground: var(--mog-text);
+  --muted: var(--mog-surface-raised);
+  --muted-foreground: var(--mog-text-muted);
+  --accent: var(--mog-surface-raised);
+  --accent-foreground: var(--mog-text);
+  --destructive: var(--mog-destructive);
+  --destructive-foreground: var(--mog-destructive-fg);
+  --border: var(--mog-edge);
+  --input: var(--mog-edge);
+  --ring: var(--mog-focus);
+  --radius: var(--mog-radius-md);
+  --sidebar: var(--mog-surface);
+  --sidebar-foreground: var(--mog-text);
+  --sidebar-primary: var(--mog-accent);
+  --sidebar-primary-foreground: var(--mog-on-accent);
+  --sidebar-accent: var(--mog-surface-raised);
+  --sidebar-accent-foreground: var(--mog-text);
+  --sidebar-border: var(--mog-edge);
+  --sidebar-ring: var(--mog-focus);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --font-sans: var(--mog-font);
+}
