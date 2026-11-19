@@ -27,7 +27,7 @@ use mog_core::clock::{MonotonicClock, WallClock};
 use mog_core::error::CoreResult;
 use mog_core::recording_capture::permissions::{ask_on_enable, PermissionAsker};
 use mog_core::recording_capture::session::{
-    PartsHandoff, RecordingSession, SessionConfig, StopCause,
+    FinishedRecording, PartsHandoff, RecordingSession, SessionConfig, StopCause,
 };
 use mog_core::recording_capture::tap::RecordingTap;
 use mog_core::token_events::{SessionEventSource, SessionWatch};
@@ -80,24 +80,56 @@ pub fn os_permission_asker() -> Box<dyn PermissionAsker + Send + Sync> {
     }
 }
 
-/// Red skeleton.
+/// The hand-off to the cloud side, connected late. Until the cloud side connects, finished
+/// recordings wait here; their parts stay in the temp dir, where the launch scan of the cloud
+/// side finds them ("Upload failed - Retry"). At the connect, the waiting ones go out.
 #[derive(Default)]
-pub struct HandoffSlot;
+pub struct HandoffSlot {
+    inner: Mutex<SlotState>,
+}
+
+#[derive(Default)]
+struct SlotState {
+    to: Option<Arc<dyn PartsHandoff>>,
+    pending: Vec<FinishedRecording>,
+}
 
 impl HandoffSlot {
-    /// Red skeleton.
-    pub fn connect(&self, _to: Arc<dyn PartsHandoff>) {
-        unimplemented!("red")
+    /// Send finished recordings to `to` from now on, the waiting ones first.
+    pub fn connect(&self, to: Arc<dyn PartsHandoff>) {
+        let pending = {
+            let mut st = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+            st.to = Some(Arc::clone(&to));
+            std::mem::take(&mut st.pending)
+        };
+        for rec in pending {
+            to.finished(rec);
+        }
     }
-    /// Red skeleton.
-    pub fn pending(&self) -> Vec<mog_core::recording_capture::session::FinishedRecording> {
-        unimplemented!("red")
+
+    /// The recordings that wait for the connect.
+    pub fn pending(&self) -> Vec<FinishedRecording> {
+        self.inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .pending
+            .clone()
     }
 }
 
 impl PartsHandoff for HandoffSlot {
-    fn finished(&self, _rec: mog_core::recording_capture::session::FinishedRecording) {
-        unimplemented!("red")
+    fn finished(&self, rec: FinishedRecording) {
+        let to = {
+            let mut st = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+            match &st.to {
+                Some(to) => Arc::clone(to),
+                None => {
+                    st.pending.push(rec);
+                    return;
+                }
+            }
+        };
+        to.finished(rec);
     }
 }
 
