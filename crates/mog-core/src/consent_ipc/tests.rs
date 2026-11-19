@@ -58,6 +58,7 @@ impl SignedInUser for FakeUser {
 
 struct Fixture {
     _dir: TempDir,
+    vault: Arc<MemoryKeyVault>,
     store: Arc<SqlCipherLocalStore>,
     clock: SimWallClock,
     records: Arc<ConsentRecords>,
@@ -66,9 +67,10 @@ struct Fixture {
 
 fn fixture(tag: &str, user: Option<&'static str>) -> Fixture {
     let dir = TempDir::new(tag);
+    let vault = Arc::new(MemoryKeyVault::new());
     let store = Arc::new(SqlCipherLocalStore::new(
         dir.path().join("memory"),
-        Arc::new(MemoryKeyVault::new()),
+        Arc::clone(&vault) as Arc<dyn crate::local_store::key_vault::KeyVault>,
     ));
     store.open().expect("open");
     let clock = SimWallClock::at(T0);
@@ -84,6 +86,7 @@ fn fixture(tag: &str, user: Option<&'static str>) -> Fixture {
     let component = ConsentComponent::new(Arc::clone(&records), Arc::new(FakeUser(user)));
     Fixture {
         _dir: dir,
+        vault,
         store,
         clock,
         records,
@@ -215,7 +218,9 @@ fn sec_15b_records_list_omits_a_purged_record() {
 #[test]
 fn sec_03_a_store_failure_is_consent_storage_failed() {
     let f = fixture("fail", Some(USER));
+    // The store reopens on use (ADR 0105); with the key gone, the reopen fails.
     f.store.close();
+    f.vault.forget();
     assert_eq!(
         code(
             f.component

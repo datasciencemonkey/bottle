@@ -13,6 +13,7 @@
  * items first (MEM-32a, ADR 0081); their steps are Rust-only.
  */
 import { call, type JsonObject } from '../../shared/ipc';
+import { storeGate } from '../store-gate';
 
 export const LOCAL_STMT_IDS = [
   'mem.mog.upsert',
@@ -56,7 +57,10 @@ export type MemLocalExec = (args: {
 
 /** The store over IPC: `mem_local_exec { stmtId, params }` to the Rust core. */
 export class IpcLocalMemoryStore implements LocalMemoryStore {
-  constructor(private readonly send: MemLocalExec = (a) => call('mem_local_exec', a)) {}
+  /** The default goes through the one store gate (ADR 0105): one key read per launch. */
+  constructor(
+    private readonly send: MemLocalExec = (a) => storeGate.run(() => call('mem_local_exec', a)),
+  ) {}
 
   async exec(stmtId: LocalStmtId, params: JsonObject): Promise<{ rows: unknown[] }> {
     if (!isLocalStmtId(stmtId)) {

@@ -185,28 +185,74 @@ fn sec_32a_install_manages_the_records_that_the_ipc_host_reads() {
 }
 
 #[test]
-fn sec_03_with_no_key_store_nothing_is_managed_and_consent_fails_closed() {
+fn sec_03_with_no_key_store_the_records_fail_closed_on_first_use() {
     let dir = TempDir::new("nokey");
     let app = tauri::test::mock_app();
-    assert!(install_with(
+    // ADR 0105: install reads no key, so it succeeds; the first use fails with the fixed code,
+    // and the brain keeps the notice gate closed.
+    install_with(
         app.handle(),
         &dir.0,
         Arc::new(NoVault),
         Arc::new(SimWallClock::at(T0)),
     )
-    .is_err());
-    assert!(app.try_state::<Arc<ConsentRecords>>().is_none());
-    assert!(app.try_state::<Arc<SqlCipherLocalStore>>().is_none());
-    // So the host answers the fixed code, and the brain keeps the notice gate closed.
-    let components = HostComponents::none("brain", &NoBrain);
+    .unwrap();
+    let records = app.try_state::<Arc<ConsentRecords>>().expect("records");
     assert_eq!(
-        route(
-            components,
+        brain_call(
+            &records,
             "consent_notice_record",
             json!({"noticeVersion": 1})
         ),
         Err(json!({"error": "consent_storage_failed"}))
     );
+    assert_eq!(
+        brain_call(&records, "consent_records_list", json!({})),
+        Err(json!({"error": "consent_storage_failed"}))
+    );
+}
+
+/// A vault double that counts its reads.
+#[derive(Default)]
+struct CountingVault {
+    inner: TestVault,
+    loads: std::sync::atomic::AtomicUsize,
+}
+
+impl KeyVault for CountingVault {
+    fn load(&self) -> CoreResult<Option<LocalKey>> {
+        self.loads.fetch_add(1, Ordering::SeqCst);
+        self.inner.load()
+    }
+    fn store(&self, key: &LocalKey) -> CoreResult<()> {
+        self.inner.store(key)
+    }
+}
+
+#[test]
+fn mem_08b_install_reads_no_key_and_the_first_uses_share_one_read() {
+    let dir = TempDir::new("lazy");
+    let app = tauri::test::mock_app();
+    let vault = Arc::new(CountingVault::default());
+    install_with(
+        app.handle(),
+        &dir.0,
+        Arc::clone(&vault) as Arc<dyn KeyVault>,
+        Arc::new(SimWallClock::at(T0)),
+    )
+    .unwrap();
+    // ADR 0105: setup does not touch the key store, so macOS shows no prompt before the hub.
+    assert_eq!(vault.loads.load(Ordering::SeqCst), 0);
+    let records = app.try_state::<Arc<ConsentRecords>>().expect("records");
+    brain_call(&records, "consent_records_list", json!({})).unwrap();
+    brain_call(
+        &records,
+        "consent_notice_record",
+        json!({"noticeVersion": 1}),
+    )
+    .unwrap();
+    brain_call(&records, "consent_records_list", json!({})).unwrap();
+    assert_eq!(vault.loads.load(Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -224,7 +270,8 @@ fn sec_15a_sec_15b_u9_install_runs_the_security_expiries_once_and_manages_r14() 
     }
     let app = tauri::test::mock_app();
     install_with(app.handle(), &dir.0, vault, Arc::new(SimWallClock::at(T0))).unwrap();
-    // The start ran the content-free expiries once: the 14-month record is gone.
+    // ADR 0105: the first open (not setup) ran the content-free expiries once: the 14-month
+    // record is gone.
     let records = app.try_state::<Arc<ConsentRecords>>().expect("records");
     assert!(records.records().unwrap().is_empty());
     // R14 is managed for the `mem_wipe` route (TODO(#525)). Its expiries hold the records.

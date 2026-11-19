@@ -216,9 +216,10 @@ pub fn run() {
             // MB-02: the MOG config store in the app config dir (#25). If the OS gives no app
             // config dir, the app still runs; `config_*` then fail with a code (#333).
             let _ = mog_config_host::install(handle);
-            // SEC-32a: the T12 consent records in the local store (#431, ADR 0071). If the OS
-            // key store or the data dir is not there, the app still runs; `consent_*` then fail
-            // with `consent_storage_failed`, and the notice gate stays closed (MB-08a).
+            // SEC-32a: the T12 consent records in the local store (#431, ADR 0071). This reads no
+            // key: the store opens on first use, after the hub says why macOS asks (ADR 0105). If
+            // the key store refuses, `consent_*` fail with `consent_storage_failed`, and the
+            // notice gate stays closed (MB-08a).
             let _ = consent_host::install(handle);
             // R5: the one CliRunner of the process (#16), for T7 and R6. It runs no CLI yet.
             cli_host::install(handle);

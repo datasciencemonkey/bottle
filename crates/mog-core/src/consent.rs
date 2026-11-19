@@ -308,8 +308,21 @@ pub fn open_device_records(
     clock: Arc<dyn WallClock>,
     retention: ConsentRetention,
 ) -> CoreResult<(Arc<SqlCipherLocalStore>, ConsentRecords)> {
-    let store = Arc::new(SqlCipherLocalStore::new(dir.join(MEMORY_DIR), vault));
+    let (store, records) = prepare_device_records(dir, vault, clock, retention)?;
     store.open()?;
+    Ok((store, records))
+}
+
+/// [`open_device_records`] without the open: the store opens on its first use, so the OS key
+/// store is read only when the brain first needs the records (ADR 0105). The device ID is a
+/// plain file and is read now.
+pub fn prepare_device_records(
+    dir: &Path,
+    vault: Arc<dyn KeyVault>,
+    clock: Arc<dyn WallClock>,
+    retention: ConsentRetention,
+) -> CoreResult<(Arc<SqlCipherLocalStore>, ConsentRecords)> {
+    let store = Arc::new(SqlCipherLocalStore::new(dir.join(MEMORY_DIR), vault));
     let device = device_id_in(dir)?;
     let records = ConsentRecords::new(Arc::clone(&store), clock, &device, retention)?;
     Ok((store, records))

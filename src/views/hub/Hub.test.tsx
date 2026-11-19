@@ -78,7 +78,9 @@ describe('V1 hub view', () => {
     expect(
       viewEmits().filter(
         (e) =>
-          !['hub', 'cli', 'permissions', 'conversations'].includes((e as { mogId: string }).mogId),
+          !['hub', 'cli', 'permissions', 'conversations', 'store'].includes(
+            (e as { mogId: string }).mogId,
+          ),
       ),
     ).toEqual([{ mogId: A, kind: 'click' }]);
   });

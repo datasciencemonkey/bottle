@@ -529,9 +529,17 @@ fn mem_41_a_store_that_is_not_there_answers_not_implemented() {
 }
 
 #[test]
-fn mem_41_a_closed_store_answers_host_failed() {
+fn mem_41_a_store_that_cannot_open_answers_host_failed() {
+    // ADR 0105: a closed store opens on use; here it cannot (the key is gone, the file is not).
     let t = TempDir::new("41-closed");
-    let s = SqlCipherLocalStore::new(t.0.join("memory"), Arc::new(MemoryKeyVault::new()));
+    let vault = Arc::new(MemoryKeyVault::new());
+    let s = SqlCipherLocalStore::new(
+        t.0.join("memory"),
+        Arc::clone(&vault) as Arc<dyn crate::local_store::key_vault::KeyVault>,
+    );
+    s.open().unwrap();
+    s.close();
+    vault.forget();
     let args = json!({"stmtId": "mem.item.get", "params": {"mogId": MOG_A, "itemId": ITEM_1}});
     assert_eq!(
         mem_local_exec(&s, args),
