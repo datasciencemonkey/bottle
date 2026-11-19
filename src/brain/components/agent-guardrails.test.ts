@@ -49,6 +49,9 @@ const FORBIDDEN = [
   'dbx_http',
   'config_write',
   'insert_text',
+  // ADR 0103: only a user action starts a recording or changes its settings.
+  'recording_start',
+  'recording_settings_write',
 ];
 
 const UI_ARGS = (text: string): [string, Record<string, unknown>][] => [
