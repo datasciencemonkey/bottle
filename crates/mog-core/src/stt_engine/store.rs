@@ -4,8 +4,8 @@
 //! The brain gets `capture.segment` after a capture, then calls `stt_transcribe` with its
 //! `segmentId`. [`TranscriptStore`] keeps each result until that call, and hands it out once.
 //! It keeps at most [`TranscriptStore::CAPACITY`] results; the oldest goes first. The text is
-//! in RAM only. The host routes `stt_transcribe` here (#514). TODO(#514): the host emits
-//! `capture.segment`.
+//! in RAM only. The host emits `capture.segment` (`BrainSegments`, #514) and routes
+//! `stt_transcribe` here (#514).
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, PoisonError};

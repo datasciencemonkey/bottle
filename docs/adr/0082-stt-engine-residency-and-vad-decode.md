@@ -69,3 +69,20 @@ The issue leaves these points open:
 - #498 (the Copy card for `copy` and `insert_failed`) must land before #514 or with it, because #514 first produces routed dictation text. This PR produces no routed text: T4 SttProvider (#52) still rejects.
 - The tail latency (AT-21, SP-04) and the 8 h residency on a device stay device steps. The real-model test in `tests/stt_local.rs` runs in the #414 job with `BOTTLE_STT_MODEL_DIR` (TODO(#414)).
 - Partial text for `onPartial` (the texts of closed segments) is possible, but no contract field carries it. That is a later contract change.
+
+## Amendment 1 (2026-11-18, #514 part 2): `capture.segment` for each R4 result
+
+- The host gives R4 the `BrainSegments` transcript sink (`src-tauri/src/capture_host.rs`) in place of `NoTranscriptSink`.
+- For each `SttDone`, `BrainSegments` sends one `capture.segment` on the brain relay. The `SegmentRef` has these values:
+  - `segmentId` is `ptt-<lease>`, and `leaseId` is the lease (CAP-02a).
+  - `mogId` is the MOG of the lease, and `track` is `you`.
+  - `tStartMs` is 0, and `tEndMs` is the capture length. The times are relative to the first frame of the lease.
+  - `final` is true. R4 makes one segment for each lease.
+- The `TranscriptStore` keeps the result before the sink runs. So a `stt_transcribe` call on the event finds the text.
+- A failed result also gets the event. Then `stt_transcribe` answers the content-free code (for example `stt_model_missing`), and the brain can show why no text came.
+- A stop that makes no R4 result sends no event. These stops are the panic stop (MB-05), a capture with no audio (CAP-17b), and a stop whose `StopReason::discards_audio` is true.
+- Gap: the brain ends a tap or a cancel with a plain `capture_stop`, because `capture_stop` has no end argument yet (TODO(#433)). R4 then decodes that audio, and the host sends `capture.segment` for it. The brain marks the lease as discarded and does not call `stt_transcribe`, so no text is routed. But the tap audio still reaches local STT, which is a CAP-44b gap until #433 lands.
+- The event holds no text and no audio (CAP-01b). It goes through `BrainChannel::send`, which scrubs each payload.
+- The #46 parts stay as they are: the `SttFrameSink` tee, `SttCaptureEvents` in the R2 chain, and the preload at key-down (CAP-51c).
+- R4 gives no partial text, so nothing feeds `onPartial` yet. TODO(#547).
+- Tests: `src-tauri/tests/capture_segment_host.rs`.
