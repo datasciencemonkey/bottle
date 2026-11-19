@@ -9,10 +9,28 @@ const HOST = 'acme-prod.cloud.databricks.test';
 const trust = { profileHost: `https://${HOST}`, allowedAppUrls: [] };
 const html = (md: string) => renderToStaticMarkup(<SafeMarkdown text={md} trust={trust} />);
 
+const textOf = (out: string) => out.replace(/<[^>]*>/g, '');
+
 describe('links in safe markdown (#523)', () => {
+  it('keeps the icon with the last characters of the label, so it never wraps alone', () => {
+    const out = html(`[the quarterly dashboard](https://${HOST}/a)`);
+    expect(out).toMatch(/<span class="md-link-tail">(<!-- -->)?hboard<svg[^>]*aria-hidden="true"/);
+    // A short label is all tail.
+    expect(html(`[ab](https://${HOST}/a)`)).toMatch(/<span class="md-link-tail">(<!-- -->)?ab<svg/);
+  });
+
+  it('[MEDIUM] a hostile run of closing brackets is trimmed in linear time (18 KB)', () => {
+    const bad = `https://${HOST}/x${')'.repeat(2000)} `.repeat(9);
+    expect(bad.length).toBeGreaterThan(18_000);
+    const t = performance.now();
+    html(bad);
+    // Quadratic code took about 190 ms here; linear takes a few ms. A generous bound.
+    expect(performance.now() - t).toBeLessThan(100);
+  });
+
   it('the label is the clickable text, with an icon and the full URL as the tooltip', () => {
     const out = html(`[the Genie chat](https://${HOST}/one/chat/threads/c1?o=1)`);
-    expect(out).toContain('<span class="md-link-text">the Genie chat</span>');
+    expect(textOf(out)).toBe('the Genie chat');
     expect(out).toContain(`title="https://${HOST}/one/chat/threads/c1?o=1"`);
     expect(out).toContain('lucide-external-link');
     expect(out).toContain('aria-hidden="true"');
@@ -22,7 +40,7 @@ describe('links in safe markdown (#523)', () => {
 
   it('an empty label shows the host plus a short path', () => {
     const out = html(`[](https://${HOST}/one/chat/threads/c1?o=1&utm_source=x)`);
-    expect(out).toContain(`<span class="md-link-text">${HOST}/one/chat/threads/c1</span>`);
+    expect(textOf(out)).toContain(`${HOST}/one/chat/threads/c1`);
     expect(out).toContain(
       'href="https://acme-prod.cloud.databricks.test/one/chat/threads/c1?o=1&amp;utm_source=x"',
     );
@@ -30,13 +48,13 @@ describe('links in safe markdown (#523)', () => {
 
   it('a label that is the URL itself also shows the short form', () => {
     const out = html(`[https://${HOST}/sql/dashboards/9f2](https://${HOST}/sql/dashboards/9f2)`);
-    expect(out).toContain(`<span class="md-link-text">${HOST}/sql/dashboards/9f2</span>`);
+    expect(textOf(out)).toBe(`${HOST}/sql/dashboards/9f2`);
   });
 
   it('a bare URL in the text becomes a link under the same trust rule', () => {
     const out = html(`See https://${HOST}/sql/dashboards/9f2 now.`);
     expect(out).toContain(`href="https://${HOST}/sql/dashboards/9f2"`);
-    expect(out).toContain(`<span class="md-link-text">${HOST}/sql/dashboards/9f2</span>`);
+    expect(textOf(out)).toContain(`${HOST}/sql/dashboards/9f2 now.`);
     // The full stop belongs to the sentence, not to the URL.
     expect(out).toMatch(/<\/a> now\.<\/p>$/);
   });

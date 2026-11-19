@@ -1,4 +1,5 @@
 /** #523: the one link trust rule, shared by the views and the brain. Fake hosts only. */
+import cases from './link-cases.json';
 import {
   asLinkOpenClick,
   bareHost,
@@ -29,12 +30,21 @@ describe('trustedUrl (#523, SEC-25b)', () => {
     expect(bareHost('not a host')).toBe('');
   });
 
-  it('allows an AllowedAppUrls entry by origin and path prefix only', () => {
+  it('allows an AllowedAppUrls entry by host only, like Rust', () => {
     expect(trustedUrl('https://app.example.test/base/x', trust)).toBe(
       'https://app.example.test/base/x',
     );
-    expect(trustedUrl('https://app.example.test/base-evil', trust)).toBeUndefined();
-    expect(trustedUrl('https://app.example.test/other', trust)).toBeUndefined();
+    expect(trustedUrl('https://app.example.test/other', trust)).toBe(
+      'https://app.example.test/other',
+    );
+    expect(trustedUrl('https://app.example.test:8443/x', trust)).toBeUndefined();
+    expect(trustedUrl('https://other.example.test/x', trust)).toBeUndefined();
+  });
+
+  it('matches the shared cases that Rust checks too (link-cases.json)', () => {
+    const t = { profileHost: cases.workspace, allowedAppUrls: cases.allowedAppUrls };
+    for (const u of cases.ok) expect(trustedUrl(u, t), u).toBeDefined();
+    for (const u of cases.refused) expect(trustedUrl(u, t), u.slice(0, 80)).toBeUndefined();
   });
 
   it.each([
@@ -47,6 +57,9 @@ describe('trustedUrl (#523, SEC-25b)', () => {
     `https://evil.test@${HOST}/x`,
     `https://user:pw@${HOST}/x`,
     `https://${HOST}:8443/x`,
+    `https://${HOST}:443/x`,
+    `https://${HOST}%2e/x`,
+    'https://[::1]/x',
     `https://${HOST}./x`,
     `https://evil${HOST}/x`,
     `https://x.${HOST}/x`,

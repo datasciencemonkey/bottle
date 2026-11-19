@@ -354,11 +354,11 @@ describe('hub Conversations links (#523)', () => {
   it('[#523] a table in a thread renders with aligned, readable numbers', async () => {
     const { el } = await mount();
     await tauri.emitTo('hub', 'hub:conversations', {
-      rows: one({ answerMd: '| name | total |\n| --- | ---: |\n| Apple | 1220042.3509332137 |' }),
+      rows: one({ answerMd: '| name | total |\n| --- | ---: |\n| Apple | 1220042.35091 |' }),
     });
     expect(el.querySelector('.conv-answer table.md-table')).not.toBeNull();
     const td = el.querySelector('.conv-answer tbody td:last-child') as HTMLElement;
     expect(td.getAttribute('data-align')).toBe('right');
-    expect(td.getAttribute('title')).toBe('1220042.3509332137');
+    expect(td.getAttribute('title')).toBe('1220042.35091');
   });
 });

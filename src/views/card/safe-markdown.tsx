@@ -20,7 +20,7 @@ import {
   trustedUrl,
   type LinkTrust,
 } from '../../shared/link-trust';
-import { formatCellNumber } from './table-numbers';
+import { formatColumn } from './table-numbers';
 import './safe-markdown.css';
 
 export { NO_LINKS, trustedUrl };
@@ -39,16 +39,21 @@ export const INLINE =
 
 /** Trailing punctuation that belongs to the sentence, not to a bare URL. */
 function trimUrl(raw: string): { url: string; rest: string } {
+  // Count the brackets once, then walk back from the end: linear, however many `)` end the URL.
+  let opens = 0;
+  let closes = 0;
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw.charCodeAt(i);
+    if (c === 40) opens++;
+    else if (c === 41) closes++;
+  }
   let end = raw.length;
   while (end > 0) {
     const c = raw[end - 1] ?? '';
     if (/[.,;:!?'"\]}]/.test(c)) end--;
-    else if (c === ')') {
-      const body = raw.slice(0, end);
-      const opens = body.split('(').length - 1;
-      const closes = body.split(')').length - 1;
-      if (closes > opens) end--;
-      else break;
+    else if (c === ')' && closes > opens) {
+      closes--;
+      end--;
     } else break;
   }
   return { url: raw.slice(0, end), rest: raw.slice(end) };
@@ -61,6 +66,9 @@ interface Ctx {
   maxTableRows: number;
   overflowHint: string | undefined;
 }
+
+/** The last characters of a link label that stay on one line with the icon. */
+const TAIL_CHARS = 6;
 
 function TrustedLink({ href, label, ctx }: { href: string; label: string; ctx: Ctx }) {
   const onClick = (e: MouseEvent<HTMLAnchorElement>) => {
@@ -78,8 +86,14 @@ function TrustedLink({ href, label, ctx }: { href: string; label: string; ctx: C
       onClick={onClick}
       onDoubleClick={(e) => e.stopPropagation()}
     >
-      <span className="md-link-text">{label}</span>
-      <ExternalLink className="md-link-icon" size={12} strokeWidth={2} aria-hidden="true" />
+      <span className="md-link-text">
+        {label.slice(0, -TAIL_CHARS)}
+        {/* The icon stays with the last characters, so it never wraps alone onto a new line. */}
+        <span className="md-link-tail">
+          {label.slice(-TAIL_CHARS)}
+          <ExternalLink className="md-link-icon" size={12} strokeWidth={2} aria-hidden="true" />
+        </span>
+      </span>
     </a>
   );
 }
@@ -212,16 +226,17 @@ function Table({
   k: string;
 }) {
   const cols = head.length;
-  // A column with only numbers (and blanks) aligns right unless the separator says otherwise.
-  const numericCol = head.map((_, c) => {
-    let any = false;
-    for (const r of rows) {
-      const v = r[c] ?? '';
-      if (v.trim() === '') continue;
-      if (!formatCellNumber(v, ctx.locale).numeric) return false;
-      any = true;
-    }
-    return any;
+  // One decision per column (`table-numbers.ts`): a column is numeric only if every cell is.
+  const shown = head.map((h, c) =>
+    formatColumn(
+      h,
+      rows.map((r) => r[c] ?? ''),
+      ctx.locale,
+    ),
+  );
+  const numericCol = shown.map((col) => {
+    const filled = col.filter((n) => n.text.trim() !== '');
+    return filled.length > 0 && filled.every((n) => n.numeric);
   });
   const alignOf = (c: number): 'left' | 'right' | 'center' =>
     aligns[c] ?? (numericCol[c] ? 'right' : 'left');
@@ -243,7 +258,7 @@ function Table({
               <tr key={ri}>
                 {Array.from({ length: cols }, (_, c) => {
                   const raw = r[c] ?? '';
-                  const n = formatCellNumber(raw, ctx.locale);
+                  const n = shown[c]?.[ri] ?? { text: raw, changed: false, numeric: false };
                   return (
                     <td
                       key={c}

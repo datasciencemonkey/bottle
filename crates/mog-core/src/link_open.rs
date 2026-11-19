@@ -40,6 +40,19 @@ fn bare_host(origin_or_host: &str) -> Option<String> {
     .then(|| host.to_ascii_lowercase())
 }
 
+/// The host of an `AllowedAppUrls` entry: it must be `https://host[/path]` and it trusts that host
+/// (any path). Anything else, such as a bare host, `http://` or a port, trusts nothing. The TS rule
+/// (`src/shared/link-trust.ts`) is the same.
+fn allowed_entry_host(entry: &str) -> Option<String> {
+    let e = entry.trim();
+    let rest = match e.get(..8) {
+        Some(p) if p.eq_ignore_ascii_case("https://") => &e[8..],
+        _ => return None,
+    };
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    bare_host(&rest[..end])
+}
+
 /// Check `url` and return it, ready to open. `workspace` is the profile's workspace URL
 /// (`https://<host>`); `allowed_hosts` are extra app hosts that the user's policy trusts.
 pub fn validate_link(url: &str, workspace: &str, allowed_hosts: &[&str]) -> CoreResult<String> {
@@ -71,7 +84,7 @@ pub fn validate_link(url: &str, workspace: &str, allowed_hosts: &[&str]) -> Core
     let trusted = bare_host(workspace).is_some_and(|w| w == host)
         || allowed_hosts
             .iter()
-            .filter_map(|a| bare_host(a))
+            .filter_map(|a| allowed_entry_host(a))
             .any(|a| a == host);
     if !trusted {
         return Err(refused());
@@ -152,9 +165,11 @@ mod tests {
     fn allows_an_allowed_app_host_only_when_listed() {
         let u = "https://app.example.com/x";
         assert!(validate_link(u, WS, &[]).is_err());
-        assert!(validate_link(u, WS, &["https://app.example.com/base"]).is_err());
-        assert!(validate_link(u, WS, &["app.example.com"]).is_ok());
+        assert!(validate_link(u, WS, &["https://app.example.com/base"]).is_ok());
         assert!(validate_link(u, WS, &["https://app.example.com"]).is_ok());
+        assert!(validate_link(u, WS, &["app.example.com"]).is_err());
+        assert!(validate_link(u, WS, &["http://app.example.com"]).is_err());
+        assert!(validate_link(u, WS, &["https://app.example.com:8443"]).is_err());
     }
 
     #[test]
@@ -209,6 +224,33 @@ mod tests {
             "https://acme.cloud.databricks.com/{}",
             "a".repeat(MAX_URL_BYTES)
         ));
+    }
+
+    /// The same cases run in `src/shared/link-trust.test.ts` against the TS rule, so a link that
+    /// looks clickable is never one that Rust refuses.
+    #[test]
+    fn shared_cases_match_the_ts_rule() {
+        let v: Value = serde_json::from_str(include_str!("../../../src/shared/link-cases.json"))
+            .expect("link-cases.json");
+        let ws = v["workspace"].as_str().unwrap();
+        let allowed_owned: Vec<String> = v["allowedAppUrls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_str().unwrap().to_owned())
+            .collect();
+        let allowed: Vec<&str> = allowed_owned.iter().map(String::as_str).collect();
+        for u in v["ok"].as_array().unwrap() {
+            let u = u.as_str().unwrap();
+            assert!(validate_link(u, ws, &allowed).is_ok(), "should allow {u:?}");
+        }
+        for u in v["refused"].as_array().unwrap() {
+            let u = u.as_str().unwrap();
+            assert!(
+                validate_link(u, ws, &allowed).is_err(),
+                "should refuse {u:?}"
+            );
+        }
     }
 
     struct Hosts;

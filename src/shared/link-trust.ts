@@ -26,35 +26,42 @@ export function bareHost(profileHost: string): string {
 }
 
 /**
- * Trust model (requirements do not define a match rule for `AllowedAppUrls`, so the stricter reading is used):
- * the profile host matches by host (https only, default port, no credentials); each `AllowedAppUrls`
- * entry must be an https URL and matches by origin plus path prefix on a segment boundary. Entries
- * that are not https URLs trust nothing. Returns the normalised URL, or undefined.
+ * Trust model. It mirrors `mog_core::link_open::validate_link` exactly, so nothing looks clickable
+ * that Rust would refuse (`src/shared/link-cases.json` is checked against both):
+ * - ASCII only, https only (any case), at most {@link MAX_URL_CHARS} characters;
+ * - no control character, space, `\`, `<`, `>` or `"`;
+ * - the authority (up to the first `/`, `?` or `#`) is a bare host of `[A-Za-z0-9.-]`: no userinfo,
+ *   no port (not even `:443`), no `%` escape, no IPv6, no leading, trailing or doubled dot;
+ * - the host equals the workspace host, or the host of an `AllowedAppUrls` entry. An entry must be
+ *   an `https://host` URL and trusts that host (any path); anything else trusts nothing.
+ * Returns the normalised URL (lower-case host), or undefined.
  */
 export function trustedUrl(raw: string, trust: LinkTrust): string | undefined {
-  if (raw.length > MAX_URL_CHARS) return undefined;
-  if (!/^https:\/\//i.test(raw) || /[\s<>"\\]/.test(raw) || raw.includes('..')) return undefined;
-  let u: URL;
-  try {
-    u = new URL(raw);
-  } catch {
+  if (raw.length > MAX_URL_CHARS || !/^https:\/\//i.test(raw) || raw.includes('..'))
     return undefined;
-  }
-  if (u.username || u.password || u.protocol !== 'https:') return undefined;
-  const profile = bareHost(trust.profileHost);
-  if (profile !== '' && u.host === profile) return u.href;
-  for (const entry of trust.allowedAppUrls) {
-    let e: URL;
-    try {
-      e = new URL(entry);
-    } catch {
-      continue;
-    }
-    if (e.protocol !== 'https:' || e.origin !== u.origin) continue;
-    const base = e.pathname.replace(/\/+$/, '');
-    if (u.pathname === base || u.pathname.startsWith(`${base}/`)) return u.href;
-  }
-  return undefined;
+  // eslint-disable-next-line no-control-regex
+  if (/[^\x21-\x7e]|[<>"\\]/.test(raw)) return undefined;
+  const rest = raw.slice(8);
+  const authority = rest.slice(0, rest.search(/[/?#]|$/));
+  const host = hostOfAuthority(authority);
+  if (host === undefined) return undefined;
+  const allowed = trust.allowedAppUrls.map(hostOfEntry);
+  if (host !== bareHost(trust.profileHost) && !allowed.includes(host)) return undefined;
+  return `https://${host}${rest.slice(authority.length)}`;
+}
+
+/** The lower-case host of an authority, or undefined if it is not a plain host. */
+function hostOfAuthority(authority: string): string | undefined {
+  if (!/^[A-Za-z0-9.-]{1,253}$/.test(authority)) return undefined;
+  if (/^\.|\.$|\.\./.test(authority)) return undefined;
+  return authority.toLowerCase();
+}
+
+/** The host of an `AllowedAppUrls` entry (`https://host[/path]`), or undefined. */
+function hostOfEntry(entry: string): string | undefined {
+  if (!/^https:\/\//i.test(entry)) return undefined;
+  const rest = entry.slice(8);
+  return hostOfAuthority(rest.slice(0, rest.search(/[/?#]|$/)));
 }
 
 /** The host of an http(s) URL for display, or undefined for anything else. */

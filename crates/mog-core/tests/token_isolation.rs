@@ -410,7 +410,7 @@ fn arc_6_rule_1_no_command_takes_a_url_argument() {
                     // 4.5 lists `profile_login {workspaceUrl}` for `databricks auth login
                     // --host`; it is not a request target. Rule 1 names only the v1
                     // `custom_agent` URL, so this difference is recorded in ADR 0013 and #224.
-                    // #523: `link_open {profile, url}` opens a link in the browser. It is brain
+                    // #523 (ADR 0107): `link_open {profile, url}` opens a link in the browser. It is brain
                     // only and no request target: Rust checks https and the workspace host of
                     // the profile before the OS opener runs.
                     let allowed = (cmd == "profile_login" && k == "workspaceUrl")

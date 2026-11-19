@@ -22,6 +22,10 @@ a.md-link:focus-visible {
   box-shadow: var(--mog-focus-ring);
 }
 
+.md-link-tail {
+  white-space: nowrap;
+}
+
 .md-link-icon {
   display: inline-block;
   margin-left: 3px;

@@ -310,7 +310,7 @@ fn arc_6_no_command_takes_a_url_token_or_header() {
             "\"url\"",
             "\"host\"",
         ] {
-            // #523: `link_open {profile, url}` is the one exception for "url". It is brain only,
+            // #523 (ADR 0107): `link_open {profile, url}` is the one exception for "url". It is brain only,
             // it is no request target (nothing is fetched), and Rust opens the link only after
             // it checks https and the workspace host of the profile (`mog_core::link_open`).
             if *name == "link_open" && banned == "\"url\"" {

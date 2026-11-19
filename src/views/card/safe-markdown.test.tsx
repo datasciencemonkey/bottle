@@ -87,10 +87,10 @@ describe('safe markdown', () => {
     const out = html('[open](https://adb-1.azuredatabricks.net/genie/1?a=b)');
     expect(out).toContain('href="https://adb-1.azuredatabricks.net/genie/1?a=b"');
     expect(out).toContain('title="https://adb-1.azuredatabricks.net/genie/1?a=b"');
-    expect(out).toContain('<span class="md-link-text">open</span>');
+    expect(out.replace(/<[^>]*>/g, '')).toBe('open');
   });
 
-  it('[SEC-25b] links to an AllowedAppUrls host are allowed', () => {
+  it('[SEC-25b] links to an AllowedAppUrls host are allowed (host only, like Rust)', () => {
     expect(html('[a](https://app.example.com/base/x)')).toContain(
       'href="https://app.example.com/base/x"',
     );
@@ -106,8 +106,7 @@ describe('safe markdown', () => {
     'https://xn--db-1-9ve.azuredatabricks.net/x',
     'https://\u0430db-1.azuredatabricks.net/x',
     'https://user:pw@adb-1.azuredatabricks.net/x',
-    'https://app.example.com/base-evil/x',
-    'https://app.example.com/other',
+    'https://app.example.com:8443/base/x',
     'https://app.example.com/base/../other',
     'http://adb-1.azuredatabricks.net/x',
     'javascript:alert(1)',
