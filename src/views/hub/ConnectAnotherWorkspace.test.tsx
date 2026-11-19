@@ -75,4 +75,23 @@ describe('Connect another workspace (Settings row)', () => {
     await tauri.emitTo('hub', CONNECT_EVENT, { step: 'closed' });
     expect(el.querySelector('[data-view="connect-workspace"]')).toBeNull();
   });
+
+  it('[W-07e] with a first-run flow open, the row scrolls it into view and focuses it', async () => {
+    const { el } = await render(<Hub />);
+    await tauri.emitTo('hub', CONNECT_EVENT, { step: 'url', firstRun: true });
+    const panel = el.querySelector<HTMLElement>(
+      '[data-setup-region] [data-view="connect-workspace"]',
+    );
+    expect(panel).not.toBeNull();
+    const scroll = vi.fn();
+    (panel as HTMLElement).scrollIntoView = scroll;
+    expect(document.activeElement).not.toBe(el.querySelector('input[name="workspace-url"]'));
+    await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-toggle]')?.click());
+    await act(async () =>
+      el.querySelector<HTMLButtonElement>('[data-sidebar-item="settings"]')?.click(),
+    );
+    await click(el.querySelector('[data-connect-another-open]'));
+    expect(scroll).toHaveBeenCalled();
+    expect(document.activeElement).toBe(el.querySelector('input[name="workspace-url"]'));
+  });
 });

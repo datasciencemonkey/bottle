@@ -255,7 +255,10 @@ describe('Connect a workspace: the flow opened from Settings (review of #605)', 
       action: { label: 'Try again', target: 'connect_retry' },
       inline: true,
     });
-    expect(el.querySelectorAll('[data-connect-step] button')).toHaveLength(1);
+    // The one action plus a secondary Close, in the same row of the step.
+    const failed = el.querySelector('[data-connect-step="failed"]');
+    expect(failed?.querySelectorAll('button')).toHaveLength(2);
+    expect(failed?.querySelector('[data-connect-close]')?.textContent).toBe('Close');
     await click(el.querySelector('[data-connect-close]'));
     await tauri.emitTo('hub', CONNECT_EVENT, {
       step: 'connected',
@@ -274,5 +277,67 @@ describe('Connect a workspace: the flow opened from Settings (review of #605)', 
     const { el } = await render(<ConnectWorkspace placement="settings" />);
     await tauri.emitTo('hub', CONNECT_EVENT, { step: 'url', firstRun: false, inline: 'yes' });
     expect(el.querySelector('[data-view="connect-workspace"]')).toBeNull();
+  });
+
+  it('[W-07a] the connect fields are the shadcn Input, so a type=url field has a box', async () => {
+    const { el } = await render(<ConnectWorkspace />);
+    await tauri.emitTo('hub', CONNECT_EVENT, { step: 'url', firstRun: true });
+    const url = el.querySelector('input[name="workspace-url"]');
+    expect(url?.getAttribute('data-slot')).toBe('input');
+    expect(url?.getAttribute('type')).toBe('url');
+    expect(url?.className).toMatch(/\bborder\b/);
+    expect(url?.className).toMatch(/\bh-9\b/);
+    await tauri.emitTo('hub', CONNECT_EVENT, {
+      step: 'name',
+      host: HOST,
+      proposedName: 'bottle-x',
+      otherAuthNotice: false,
+    });
+    for (const n of ['profile-name', 'client-id']) {
+      expect(el.querySelector(`input[name="${n}"]`)?.getAttribute('data-slot')).toBe('input');
+    }
+  });
+
+  it('[W-07h] the connected sentence is one element, so no flex gap lands between its words', async () => {
+    const { el } = await render(<ConnectWorkspace />);
+    await tauri.emitTo('hub', CONNECT_EVENT, {
+      step: 'connected',
+      host: HOST,
+      profile: 'bottle-x',
+    });
+    const step = el.querySelector('[data-connect-step="connected"]');
+    expect(step?.children).toHaveLength(2);
+    expect(step?.children[0]?.textContent).toBe(`Connected ${HOST} as profile bottle-x.`);
+    expect(step?.children[1]?.textContent).toBe('Done');
+  });
+
+  it('[W-07f] a change of step moves focus to the new step, and the first appearance steals none', async () => {
+    const { el } = await render(<ConnectWorkspace />);
+    await tauri.emitTo('hub', CONNECT_EVENT, { step: 'url', firstRun: true });
+    // (Earlier tests leave their DOM in the document: compare with this panel's own field.)
+    expect(document.activeElement).not.toBe(el.querySelector('input[name="workspace-url"]'));
+    await tauri.emitTo('hub', CONNECT_EVENT, {
+      step: 'name',
+      host: HOST,
+      proposedName: 'bottle-x',
+      otherAuthNotice: false,
+    });
+    expect(document.activeElement).toBe(el.querySelector('input[name="profile-name"]'));
+    await tauri.emitTo('hub', CONNECT_EVENT, { step: 'waiting', host: HOST, profile: 'bottle-x' });
+    expect(document.activeElement).toBe(el.querySelector('[data-connect-cancel]'));
+    await tauri.emitTo('hub', CONNECT_EVENT, {
+      step: 'failed',
+      host: HOST,
+      profile: 'bottle-x',
+      text: 'x',
+      action: { label: 'Try again', target: 'connect_retry' },
+    });
+    expect(document.activeElement?.textContent).toBe('Try again');
+    await tauri.emitTo('hub', CONNECT_EVENT, {
+      step: 'connected',
+      host: HOST,
+      profile: 'bottle-x',
+    });
+    expect(document.activeElement).toBe(el.querySelector('[data-connect-done]'));
   });
 });

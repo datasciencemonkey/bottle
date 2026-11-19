@@ -27,28 +27,29 @@ import {
   type ConnectModel,
   type ConnectTarget,
 } from '../../shared/connect-view';
+import { Button } from '../ui/button';
+import { Input } from '../ui/input';
 import { emitView, sendViewReady } from '../view-ipc';
 
 function send(target: ConnectTarget, fields: Record<string, string> = {}) {
   void emitView(CONNECT_VIEW_ID, 'click', { target, ...fields }).catch(() => undefined);
 }
 
-/** Focus the first field of an inline step, so the click on the Settings row visibly did something. */
-function useFocusFirst(inline: boolean) {
-  const ref = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (!inline) return;
-    ref.current?.scrollIntoView?.({ block: 'nearest' });
-    ref.current?.focus({ preventScroll: true });
-  }, [inline]);
-  return ref;
-}
-
-function CancelButton() {
+/**
+ * The button of a step that closes the flow. `secondary`: the step's main action stays the one
+ * primary button. `data-autofocus` marks the element that gets focus when the step changes.
+ */
+function CloseButton({ label }: { label: string }) {
   return (
-    <button type="button" data-connect-close onClick={() => send('connect_close')}>
-      Cancel
-    </button>
+    <Button
+      type="button"
+      variant="secondary"
+      size="sm"
+      data-connect-close
+      onClick={() => send('connect_close')}
+    >
+      {label}
+    </Button>
   );
 }
 
@@ -56,7 +57,6 @@ type Open = Exclude<ConnectModel, { step: 'closed' }>;
 
 function UrlStep({ model }: { model: Extract<Open, { step: 'url' }> }) {
   const [url, setUrl] = useState('');
-  const first = useFocusFirst(model.inline === true);
   return (
     <form
       data-connect-step="url"
@@ -68,8 +68,8 @@ function UrlStep({ model }: { model: Extract<Open, { step: 'url' }> }) {
       {model.firstRun && <p>Connect Bottle to a Databricks workspace to start.</p>}
       <label>
         Workspace URL
-        <input
-          ref={first}
+        <Input
+          data-autofocus
           name="workspace-url"
           type="url"
           value={url}
@@ -78,17 +78,16 @@ function UrlStep({ model }: { model: Extract<Open, { step: 'url' }> }) {
         />
       </label>
       {model.error !== undefined && <p role="alert">{model.error}</p>}
-      <button type="submit" data-connect-next>
+      <Button type="submit" size="sm" data-connect-next>
         Next
-      </button>
-      {model.inline === true && <CancelButton />}
+      </Button>
+      {model.inline === true && <CloseButton label="Cancel" />}
     </form>
   );
 }
 
 function NameStep({ model }: { model: Extract<Open, { step: 'name' }> }) {
   const [name, setName] = useState(model.proposedName);
-  const first = useFocusFirst(model.inline === true);
   const [clientId, setClientId] = useState('');
   return (
     <form
@@ -112,8 +111,8 @@ function NameStep({ model }: { model: Extract<Open, { step: 'name' }> }) {
       )}
       <label>
         Profile name
-        <input
-          ref={first}
+        <Input
+          data-autofocus
           name="profile-name"
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -123,14 +122,14 @@ function NameStep({ model }: { model: Extract<Open, { step: 'name' }> }) {
         <summary>Use a custom OAuth app (optional)</summary>
         <label>
           OAuth client ID
-          <input name="client-id" value={clientId} onChange={(e) => setClientId(e.target.value)} />
+          <Input name="client-id" value={clientId} onChange={(e) => setClientId(e.target.value)} />
         </label>
       </details>
       {model.error !== undefined && <p role="alert">{model.error}</p>}
-      <button type="submit" data-connect-start>
+      <Button type="submit" size="sm" data-connect-start>
         Sign in
-      </button>
-      {model.inline === true && <CancelButton />}
+      </Button>
+      {model.inline === true && <CloseButton label="Cancel" />}
     </form>
   );
 }
@@ -148,30 +147,52 @@ function Step({ model }: { model: Open }) {
       return (
         <div data-connect-step="waiting">
           <p>Finish the sign-in in your browser. Bottle waits up to 5 minutes.</p>
-          <button type="button" data-connect-cancel onClick={() => send('connect_cancel')}>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            data-autofocus
+            data-connect-cancel
+            onClick={() => send('connect_cancel')}
+          >
             Cancel
-          </button>
-          <button type="button" data-connect-reopen onClick={() => send('connect_reopen')}>
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            data-connect-reopen
+            onClick={() => send('connect_reopen')}
+          >
             Open the browser again
-          </button>
+          </Button>
         </div>
       );
     case 'connected':
       return (
         <p data-connect-step="connected">
-          Connected {model.host} as profile <span data-connect-profile>{model.profile}</span>.{' '}
-          <button type="button" data-connect-done onClick={() => send('connect_close')}>
+          <span>
+            Connected {model.host} as profile <span data-connect-profile>{model.profile}</span>.
+          </span>
+          <Button
+            type="button"
+            size="sm"
+            data-autofocus
+            data-connect-done
+            onClick={() => send('connect_close')}
+          >
             Done
-          </button>
+          </Button>
         </p>
       );
     case 'failed':
       return (
         <div data-connect-step="failed">
           <p role="alert">{model.text}</p>
-          <button type="button" onClick={() => send(model.action.target)}>
+          <Button type="button" size="sm" data-autofocus onClick={() => send(model.action.target)}>
             {model.action.label}
-          </button>
+          </Button>
+          {model.inline === true && <CloseButton label="Close" />}
         </div>
       );
   }
@@ -207,24 +228,49 @@ export function ConnectWorkspace({ placement = 'setup' }: { placement?: 'setup' 
 
   // No model yet, the brain's `closed` step, or a flow that the other host shows: render
   // nothing, the way every other setup step does once it clears (`Hub.tsx`'s `SetupRegion`).
-  if (model === undefined || model.step === 'closed') return null;
-  if ((model.inline === true) !== (placement === 'settings')) return null;
-
+  const shown =
+    model !== undefined &&
+    model.step !== 'closed' &&
+    (model.inline === true) === (placement === 'settings');
   const inline = placement === 'settings';
+  // A change of step (or a refused name) moves focus to the new step's first field or button,
+  // so the element that had focus does not drop it when it leaves the page. A flow that Settings
+  // opens also takes focus when it appears and scrolls into view. The first-run panel does not
+  // take focus when it first appears: nothing in the page asked for it.
+  const section = useRef<HTMLElement>(null);
+  const seen = useRef(false);
+  const stepKey = shown ? `${model.step} ${'error' in model ? (model.error ?? '') : ''}` : '';
+  useEffect(() => {
+    if (!shown) {
+      seen.current = false;
+      return;
+    }
+    const had = seen.current;
+    seen.current = true;
+    if (!had && !inline) return;
+    const el = section.current;
+    el?.scrollIntoView?.({ block: 'nearest' });
+    el?.querySelector<HTMLElement>('[data-autofocus]')?.focus({ preventScroll: true });
+  }, [shown, stepKey, inline]);
+
+  if (!shown) return null;
+
   return (
     <section
+      ref={section}
       data-view="connect-workspace"
       data-placement={placement}
       aria-labelledby={inline ? 'connect-workspace-title-inline' : 'connect-workspace-title-setup'}
       className={inline ? 'mt-[var(--mog-space-4)]' : 'hub-section'}
     >
       {inline ? (
-        <h3 id="connect-workspace-title-inline">Connect a workspace</h3>
+        <h3 id="connect-workspace-title-inline" className="mb-[var(--mog-space-2)]">
+          Connect a workspace
+        </h3>
       ) : (
         <h2 id="connect-workspace-title-setup">Connect a workspace</h2>
       )}
       <Step model={model} />
-      {inline && model.step === 'failed' && <CancelButton />}
     </section>
   );
 }

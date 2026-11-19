@@ -17,6 +17,19 @@ import { emitView } from '../view-ipc';
 import { ConnectWorkspace } from './ConnectWorkspace';
 import { SettingsGroup, SettingsRow } from './SettingsGroup';
 
+/**
+ * A first-run flow is already open in the setup region at the top of the page (the brain keeps
+ * it there, W-07f), out of view from this row. Bring it into view and focus it, so the click
+ * visibly did something.
+ */
+function showOpenFirstRunFlow() {
+  const panel = document.querySelector<HTMLElement>(
+    '[data-setup-region] [data-view="connect-workspace"]',
+  );
+  panel?.scrollIntoView?.({ block: 'nearest' });
+  panel?.querySelector<HTMLElement>('[data-autofocus]')?.focus({ preventScroll: true });
+}
+
 export function ConnectAnotherWorkspace() {
   return (
     <section
@@ -35,11 +48,12 @@ export function ConnectAnotherWorkspace() {
               variant="outline"
               size="sm"
               data-connect-another-open
-              onClick={() =>
+              onClick={() => {
                 void emitView(CONNECT_VIEW_ID, 'click', { target: 'connect_open' }).catch(
                   () => undefined,
-                )
-              }
+                );
+                showOpenFirstRunFlow();
+              }}
             >
               Connect…
             </Button>

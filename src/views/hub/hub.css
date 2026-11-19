@@ -935,8 +935,13 @@
   }
 
   .hub [data-view='connect-workspace'] input {
-    width: 100%;
     max-width: 480px;
+  }
+
+  /* The setup region's first section sits right under the area header's own hairline: one line,
+   not two parallel ones (review of #605, P4; the same for Settings, above). */
+  .hub [data-setup-region] > .hub-section:first-child {
+    border-top: 0;
   }
 
   .hub-area-title {
