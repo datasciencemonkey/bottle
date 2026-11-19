@@ -204,12 +204,17 @@ export function CardView({ mogId }: { mogId: MogId }) {
   const probe = import.meta.env.DEV && mogId === DEMO_ID && (
     <textarea data-probe aria-label="Typing probe (dev demo card)" />
   );
+  // B2 (review round 1): the brain ages a completed Genie blurb out of `card.blurbs` on its own
+  // timer (UX-12), independently of the view's own, usually shorter fade. If that already
+  // happened, the sections it left behind are orphaned: never treat them as the panel's answer
+  // (no clamp, no close, no fade, no refit on that path), so the card never falls back to a raw,
+  // unbounded legacy panel for a Genie answer with no Genie blurb backing it any more.
+  const liveGenieBlurb = card?.blurbs.some((b) => isGenieBlurbId(b.id)) ?? false;
+  const hasAnswer =
+    liveGenieBlurb && (card?.sections !== undefined || card?.answerMd !== undefined);
   const panel =
     card !== undefined &&
-    (card.sections !== undefined ||
-      card.answerMd !== undefined ||
-      card.pageDomain !== undefined ||
-      card.pagesChecklist !== undefined);
+    (hasAnswer || card.pageDomain !== undefined || card.pagesChecklist !== undefined);
   const newest = card?.blurbs[0];
   const shown = kept && (!newest || newest.id === kept.blurbs[0]?.id) ? kept : card;
   // #573: the window takes the height of the pop-up or the Genie card (`fit-window.ts`).
@@ -284,6 +289,11 @@ export function CardView({ mogId }: { mogId: MogId }) {
                   </li>
                 ))}
               </ul>
+            ) : isGenieBlurbId(b.id) ? (
+              // B1 (review round 1): a Genie blurb's text is its full markdown answer (a
+              // completed outcome blurb's text is the raw `end.md`), even when it is not the
+              // newest entry (for example a dictation blurb landed after it).
+              <SafeMarkdown text={b.text} trust={NO_LINKS} />
             ) : (
               b.text
             )}
@@ -320,16 +330,17 @@ export function CardView({ mogId }: { mogId: MogId }) {
           Expand
         </button>
       )}
-      {card?.sections?.map((s) => (
-        <Section
-          key={s.id}
-          mogId={mogId}
-          s={s}
-          stt={card.sttBadge}
-          overflow={card.overflowChips ?? []}
-        />
-      ))}
-      {card?.sections === undefined && card?.answerMd !== undefined && (
+      {hasAnswer &&
+        card?.sections?.map((s) => (
+          <Section
+            key={s.id}
+            mogId={mogId}
+            s={s}
+            stt={card.sttBadge}
+            overflow={card.overflowChips ?? []}
+          />
+        ))}
+      {hasAnswer && card?.sections === undefined && card?.answerMd !== undefined && (
         <div data-answer>
           <SafeMarkdown text={card.answerMd} trust={NO_LINKS} />
         </div>

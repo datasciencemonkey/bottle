@@ -202,6 +202,43 @@ describe('Genie card (#573)', () => {
     expect(body.getAttribute('data-expanded')).toBe('false');
   });
 
+  // Review round 1, finding 2: one primary action leads ([Open in Bottle], the accent pill);
+  // "Show more"/"Show less" is a quiet text control, never a second pill.
+  it('[#598] Show more is a quiet control, not a second accent pill', async () => {
+    const el = await mount();
+    const longMd = Array.from({ length: 20 }, (_, i) => `Paragraph number ${i}.`).join('\n\n');
+    await tauri.emitTo(`card-${ID}`, 'card:update', {
+      ...answered,
+      sections: [{ id: 'answer', md: longMd }],
+    });
+    const body = el.querySelector('[data-answer] .genie-answer-body') as HTMLElement;
+    Object.defineProperty(body, 'scrollHeight', { value: ANSWER_CLAMP_PX * 3, configurable: true });
+    Object.defineProperty(body, 'clientHeight', { value: ANSWER_CLAMP_PX, configurable: true });
+    await tauri.emitTo(`card-${ID}`, 'card:update', {
+      ...answered,
+      sections: [{ id: 'answer', md: `${longMd} ` }],
+    });
+    const open = el.querySelector('button[data-action="open-in-bottle"]') as HTMLElement;
+    const toggle = el.querySelector('button.genie-toggle') as HTMLElement;
+    // [Open in Bottle] is the one accent-pill action; Show more carries no pill class at all.
+    expect(open.classList.contains('popup-action')).toBe(true);
+    expect(toggle.classList.contains('popup-action')).toBe(false);
+  });
+
+  // Review round 1, finding 1: when expanded, the footer ([Open in Bottle], Show less) and the
+  // close control stay fixed outside the answer's own scroll area, so they never scroll away.
+  it('[#598] the footer and the close control sit outside the answer scroll area', async () => {
+    const el = await mount();
+    await tauri.emitTo(`card-${ID}`, 'card:update', answered);
+    const scroller = el.querySelector('.genie-answer-body') as HTMLElement;
+    const close = el.querySelector('button[data-action="dismiss"]') as HTMLElement;
+    const open = el.querySelector('button[data-action="open-in-bottle"]') as HTMLElement;
+    expect(close.closest('.genie-answer-body')).toBeNull();
+    expect(open.closest('.genie-answer-body')).toBeNull();
+    expect(scroller.querySelector('button[data-action="dismiss"]')).toBeNull();
+    expect(scroller.querySelector('button[data-action="open-in-bottle"]')).toBeNull();
+  });
+
   it('[#573] an ignored answer fades after its show time and tells the brain, once', async () => {
     const el = await mount();
     await tauri.emitTo(`card-${ID}`, 'card:update', answered);
@@ -364,5 +401,56 @@ describe('Genie card: the window fit (#573)', () => {
     vi.useRealTimers();
     expect(r.el.querySelector('[data-genie]')).toBeNull();
     expect(sizes.at(-1)).toBe(0);
+  });
+
+  // Review round 1, finding 3: the answer's `max-height` animates over 200 ms (genie-card.css), so
+  // a size read on the frame that toggles Show more/less is still the old, pre-transition size.
+  // The window must refit once the transition actually settles (`transitionend`), not before, so
+  // it never measures mid-motion and never jumps.
+  it('[#598] Show more/less refits the window only once the transition settles', async () => {
+    const sizes: number[] = [];
+    const pushSize = (px: number) => void sizes.push(px);
+    const longMd = Array.from({ length: 20 }, (_, i) => `Paragraph number ${i}.`).join('\n\n');
+    const { GenieCard } = await import('./GenieCard');
+    tauri.label = `card-${ID}`;
+    const card = { ...answered, sections: [{ id: 'answer', md: longMd }] } as unknown as CardUpdate;
+    const r = await render(
+      <section>
+        <GenieCard mogId={ID} card={card} onSize={pushSize} />
+      </section>,
+    );
+    roots.push(r.root);
+    const body = r.el.querySelector('.genie-answer-body') as HTMLElement;
+    Object.defineProperty(body, 'scrollHeight', { value: ANSWER_CLAMP_PX * 3, configurable: true });
+    Object.defineProperty(body, 'clientHeight', { value: ANSWER_CLAMP_PX, configurable: true });
+    await act(
+      async () =>
+        void r.root.render(
+          <section>
+            <GenieCard
+              mogId={ID}
+              card={
+                {
+                  ...answered,
+                  sections: [{ id: 'answer', md: `${longMd} ` }],
+                } as unknown as CardUpdate
+              }
+              onSize={pushSize}
+            />
+          </section>,
+        ),
+    );
+    const before = sizes.length;
+    const toggle = r.el.querySelector('button.genie-toggle') as HTMLElement;
+    await act(async () => void toggle.click());
+    // The click itself never measures mid-transition.
+    expect(sizes.length).toBe(before);
+    await act(async () => {
+      const ev = new Event('transitionend');
+      Object.defineProperty(ev, 'propertyName', { value: 'max-height' });
+      body.dispatchEvent(ev);
+    });
+    // Only once `max-height` settles does the window refit, exactly once.
+    expect(sizes.length).toBe(before + 1);
   });
 });

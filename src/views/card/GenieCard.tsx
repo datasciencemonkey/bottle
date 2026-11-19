@@ -21,9 +21,11 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
+  type CSSProperties,
   type MouseEvent as ReactMouseEvent,
 } from 'react';
 import { listen } from '@tauri-apps/api/event';
@@ -55,8 +57,16 @@ export const OPEN_IN_BOTTLE_LABEL = 'Open in Bottle';
 export const SHOW_MORE_LABEL = 'Show more';
 export const SHOW_LESS_LABEL = 'Show less';
 export const CLOSE_LABEL = 'Close';
-/** The answer clamps to about this height (roughly 4 lines) until the user asks to see more. */
-export const ANSWER_CLAMP_PX = 96;
+/** `var(--mog-leading)` is 1.45 (`tokens.css`); 14px is `var(--mog-text-md)`'s usual size. */
+export const ANSWER_CLAMP_LINES = 4;
+const APPROX_LINE_PX = 14 * 1.45;
+/** The one clamp height. It goes to the CSS as `--genie-clamp-px` (`genie-card.css`), so the
+ * real, CSS-driven clamp and the overflow check below can never drift apart. */
+export const ANSWER_CLAMP_PX = ANSWER_CLAMP_LINES * APPROX_LINE_PX;
+/** The expanded answer's own bounded height: it scrolls inside this, so the footer (Open in
+ * Bottle, Show less) and the close control stay outside the scroll area and never move
+ * (review round 1, finding 1). */
+export const ANSWER_EXPANDED_MAX_PX = 180;
 
 type Vis = 'shown' | 'fading' | 'dismissing' | 'gone';
 
@@ -181,12 +191,22 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
     left: showMs,
   });
 
-  // The answer clamps to a short summary by default (ANSWER_CLAMP_PX); "Show more" expands it to
-  // the full scroll region (`.genie-answer`'s own cap), "Show less" clamps it again. A new answer
+  // The window fits the content's final size first, so the grow motion is never cut (used below,
+  // and by the Show more/less settle effect, finding 3, review round 1).
+  const fitted = useRef<Promise<void>>(Promise.resolve());
+  const measure = useCallback(() => {
+    const frame = ref.current?.parentElement;
+    return onSize ? onSize(frame ? frame.getBoundingClientRect().height : 0) : undefined;
+  }, [onSize]);
+
+  // The answer clamps to a short summary by default (ANSWER_CLAMP_LINES); "Show more" expands it
+  // to its own bounded scroll region (genie-card.css), "Show less" clamps it again. A new answer
   // always starts collapsed.
   const [expanded, setExpanded] = useState(false);
   const [canExpand, setCanExpand] = useState(false);
+  const [moreBelow, setMoreBelow] = useState(false);
   const answerRef = useRef<HTMLDivElement>(null);
+  const answerBodyId = useId();
   // Reset during render (not in an effect), the documented way to clear state on a prop change:
   // https://react.dev/learn/you-might-not-need-an-effect#resetting-all-state-when-a-prop-changes
   const prevBlurbId = useRef(blurbId);
@@ -200,6 +220,35 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
     // `max-height`, so this never flips once the user expands it.
     setCanExpand(el ? el.scrollHeight > ANSWER_CLAMP_PX + 1 : false);
   }, [kind, text, answer?.md]);
+  // B3: a bottom fade shows only while the expanded, scrolled answer still has more below it.
+  const updateMoreBelow = useCallback(() => {
+    const el = answerRef.current;
+    setMoreBelow(el ? el.scrollHeight - el.scrollTop - el.clientHeight > 1 : false);
+  }, []);
+  useLayoutEffect(updateMoreBelow, [expanded, canExpand, updateMoreBelow]);
+  // B5/finding 3 (review round 1): the answer's own `max-height` animates over 200 ms, so a size
+  // read on the frame that toggles `expanded` is still the old, pre-transition size (the window
+  // would not grow on Show more, or would stay tall on Show less). Wait for the real
+  // `transitionend` and measure once the layout has actually settled, so the window moves once,
+  // with no jump. Reduced motion never transitions (genie-card.css), so there measure at once.
+  useEffect(() => {
+    const el = answerRef.current;
+    if (!el) return;
+    const settle = () => {
+      void measure();
+      updateMoreBelow();
+    };
+    if (reducedMotion()) {
+      settle();
+      return;
+    }
+    const onTransitionEnd = (e: TransitionEvent) => {
+      if (e.target !== el || e.propertyName !== 'max-height') return;
+      settle();
+    };
+    el.addEventListener('transitionend', onTransitionEnd);
+    return () => el.removeEventListener('transitionend', onTransitionEnd);
+  }, [expanded, measure, updateMoreBelow]);
 
   const end = useCallback(
     (fadeMs: number) => {
@@ -240,6 +289,11 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
       const was = h.pointer || h.mog;
       h[via] = on;
       const is = h.pointer || h.mog;
+      // The brain's own card stack ages a completed blurb out after its own, longer idle time
+      // (UX-12), on a timer that never saw this hold. Report it the same way the panel already
+      // does (`hover`), so the brain never ages this answer out while the user still reads it.
+      if (blurbId)
+        void emitView(mogId, 'hover', { blurbId, on: is, via: 'pointer' }).catch(() => undefined);
       if (workingRef.current || visRef.current === 'gone' || was === is) return;
       if (is) {
         clearTimeout(timer.current.handle);
@@ -248,7 +302,7 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
         setVis('shown');
       } else arm(Math.max(timer.current.left, AFTER_HOVER_MS));
     },
-    [arm],
+    [arm, mogId, blurbId],
   );
 
   const onMogHover = useCallback(
@@ -269,26 +323,29 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
   // navigates, though `.genie` already disables text selection.
   const openInBottle = useCallback(
     (e: ReactMouseEvent) => {
-      if (workingRef.current) return;
+      // Only a true single click, on a card that is still fully shown: the second click of a
+      // double-click, and the dblclick after it, send nothing more (cheap item from review).
+      if (workingRef.current || visRef.current !== 'shown' || e.detail > 1) return;
       if ((e.target as Element | null)?.closest('a')) return;
+      // The answer text is selectable (genie-card.css); a selection drag never opens the hub.
       if ((document.getSelection()?.toString() ?? '') !== '') return;
       void emitView(mogId, 'click', {
         target: OPEN_CONVERSATIONS,
         ...(opId ? { requestId: opId } : {}),
       }).catch(() => undefined);
-      if (visRef.current !== 'gone') end(DISMISS_FADE_MS);
+      end(DISMISS_FADE_MS);
     },
     [mogId, opId, end],
   );
 
-  // The window fits the final size first, so the grow motion is never cut. A card that is gone
-  // asks for one line, so a later show never gets the old, taller window back.
-  const fitted = useRef<Promise<void>>(Promise.resolve());
+  // A card that is gone asks for one line, so a later show never gets the old, taller window
+  // back. `expanded` is not a dependency here: Show more/less resize goes through the dedicated
+  // effect above, which waits for the answer's own `max-height` transition to settle before it
+  // measures (finding 3, review round 1) instead of measuring this frame's pre-transition size.
   useLayoutEffect(() => {
     if (!onSize) return;
-    const frame = ref.current?.parentElement;
-    fitted.current = Promise.resolve(onSize(frame ? frame.getBoundingClientRect().height : 0));
-  }, [onSize, kind, text, card.sections, card.blurbs, retry, vis, expanded]);
+    fitted.current = Promise.resolve(measure());
+  }, [onSize, measure, kind, text, card.sections, card.blurbs, retry, vis]);
 
   // The pill grows into the card: the same element animates from its old size and corners to
   // the new ones. The motion waits until the window has its new height.
@@ -327,6 +384,9 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
   if (!newest || vis === 'gone' || (!working && text === '' && !answer)) return null;
 
   const onDoubleClick = () => {
+    // The card's own single click already sent this and started the fade (cheap item from
+    // review): a double-click never sends it a second time.
+    if (visRef.current !== 'shown') return;
     void emitView(mogId, 'click', {
       target: OPEN_CONVERSATIONS,
       ...(opId ? { requestId: opId } : {}),
@@ -340,15 +400,23 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
     e.stopPropagation();
     setExpanded((x) => !x);
   };
+  const clampStyle = {
+    '--genie-clamp-px': `${ANSWER_CLAMP_PX}px`,
+    '--genie-expanded-max-px': `${ANSWER_EXPANDED_MAX_PX}px`,
+  } as CSSProperties;
   // The safe-markdown answer, clamped to a short summary. "Show more"/"Show less" (rendered once,
-  // beside it) lift or reapply the clamp when it overflows ANSWER_CLAMP_PX. Shared by the
+  // in the footer) lift or reapply the clamp when it overflows ANSWER_CLAMP_LINES. Shared by the
   // 'answer' and 'message' kinds (UX-14a, #103).
   const answerBody = (md: string) => (
     <div
       ref={answerRef}
+      id={answerBodyId}
       className="genie-answer-body"
+      style={clampStyle}
       data-expanded={expanded}
       data-overflowing={canExpand}
+      data-more-below={moreBelow}
+      onScroll={updateMoreBelow}
     >
       <SafeMarkdown text={md} trust={NO_LINKS} />
     </div>
@@ -405,17 +473,6 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
               {answerBody([line1, ...rest].join('\n'))}
             </div>
           )}
-          {(kind === 'answer' || kind === 'message') && canExpand && (
-            <button
-              type="button"
-              className="popup-action genie-toggle"
-              data-action={expanded ? 'show-less' : 'show-more'}
-              onDoubleClick={(e) => e.stopPropagation()}
-              onClick={toggleExpanded}
-            >
-              {expanded ? SHOW_LESS_LABEL : SHOW_MORE_LABEL}
-            </button>
-          )}
           {kind === 'answer' && keys && keys.items.length > 0 && (
             <ul className="genie-keys" aria-label="Key numbers">
               {keys.items.map((k, i) => {
@@ -452,18 +509,33 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
                 {retry.label}
               </button>
             ) : (
-              <button
-                type="button"
-                className="popup-action genie-open"
-                data-action="open-in-bottle"
-                onDoubleClick={(e) => e.stopPropagation()}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  openInBottle(e);
-                }}
-              >
-                {OPEN_IN_BOTTLE_LABEL}
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="popup-action genie-open"
+                  data-action="open-in-bottle"
+                  onDoubleClick={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openInBottle(e);
+                  }}
+                >
+                  {OPEN_IN_BOTTLE_LABEL}
+                </button>
+                {(kind === 'answer' || kind === 'message') && canExpand && (
+                  <button
+                    type="button"
+                    className="genie-toggle"
+                    data-action={expanded ? 'show-less' : 'show-more'}
+                    aria-expanded={expanded}
+                    aria-controls={answerBodyId}
+                    onDoubleClick={(e) => e.stopPropagation()}
+                    onClick={toggleExpanded}
+                  >
+                    {expanded ? SHOW_LESS_LABEL : SHOW_MORE_LABEL}
+                  </button>
+                )}
+              </>
             )}
             <span className="genie-when">now</span>
           </footer>
