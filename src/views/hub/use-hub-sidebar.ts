@@ -25,8 +25,19 @@ function writePinned(
   try {
     storage.setItem(SIDEBAR_STORAGE_KEY, pinned ? 'pinned' : 'hidden');
   } catch {
-    // A private window or a disabled store (ADR 0104): the choice just does not survive a reload.
+    // A private window or a disabled store (ADR 0106): the choice just does not survive a reload.
   }
+}
+
+/** True while the focused element would normally consume Cmd+B or Cmd+\ itself (a
+    text field, a textarea, a contenteditable region) — review of #602: the sidebar shortcut
+    must not steal those keys away from typing. */
+function focusIsInTextInput(): boolean {
+  const el = document.activeElement;
+  if (!(el instanceof HTMLElement)) return false;
+  if (el.isContentEditable) return true;
+  const tag = el.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
 }
 
 export interface HubSidebarState {
@@ -62,14 +73,19 @@ export function useHubSidebar(): HubSidebarState {
     setVisible((v) => (pinned ? v : false));
   }, [pinned]);
 
-  // Cmd+\ and Cmd+B toggle the sidebar from anywhere in the hub window.
+  // Cmd+\ and Cmd+B toggle the sidebar from anywhere in the hub window (review of #602: metaKey
+  // only — Bottle is macOS-first (AGENTS.md), and the previous `metaKey || ctrlKey` let Ctrl+B
+  // fire the toggle on a Mac too, stealing the Emacs "move back a character" binding away from
+  // every text field. Windows ctrlKey parity, if the hub ever ships there, is a separate PR.
+  // Never while a text field, textarea or contenteditable region has focus, so the shortcut
+  // never steals a letter the user meant to type).
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey)) return;
-      if (e.key === '\\' || e.key.toLowerCase() === 'b') {
-        e.preventDefault();
-        toggleVisible();
-      }
+      if (!e.metaKey) return;
+      if (e.key !== '\\' && e.key.toLowerCase() !== 'b') return;
+      if (focusIsInTextInput()) return;
+      e.preventDefault();
+      toggleVisible();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);

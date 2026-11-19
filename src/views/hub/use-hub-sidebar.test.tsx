@@ -93,4 +93,52 @@ describe('useHubSidebar (ui-1)', () => {
     act(() => root.unmount());
     el.remove();
   });
+
+  // review of #602: metaKey only (not `metaKey || ctrlKey`), and never while a text field has
+  // focus, so Ctrl+B (the Emacs "move back a character" binding on a Mac) and ordinary typing
+  // in a MOG name field are never hijacked.
+  describe('Cmd+\\ / Cmd+B toggles the sidebar (review of #602)', () => {
+    const fire = (init: KeyboardEventInit) =>
+      act(() => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, ...init }));
+      });
+
+    it('Cmd+B toggles it', () => {
+      const { state, root, el } = mountHook();
+      fire({ key: 'b', metaKey: true });
+      expect(state().visible).toBe(true);
+      fire({ key: 'b', metaKey: true });
+      expect(state().visible).toBe(false);
+      act(() => root.unmount());
+      el.remove();
+    });
+
+    it('Cmd+\\ toggles it too', () => {
+      const { state, root, el } = mountHook();
+      fire({ key: '\\', metaKey: true });
+      expect(state().visible).toBe(true);
+      act(() => root.unmount());
+      el.remove();
+    });
+
+    it('plain Ctrl+B does nothing (the Mac Emacs binding stays free)', () => {
+      const { state, root, el } = mountHook();
+      fire({ key: 'b', ctrlKey: true });
+      expect(state().visible).toBe(false);
+      act(() => root.unmount());
+      el.remove();
+    });
+
+    it('Cmd+B does nothing while a text input has focus', () => {
+      const { state, root, el } = mountHook();
+      const input = document.createElement('input');
+      document.body.appendChild(input);
+      input.focus();
+      fire({ key: 'b', metaKey: true });
+      expect(state().visible).toBe(false);
+      input.remove();
+      act(() => root.unmount());
+      el.remove();
+    });
+  });
 });

@@ -1,6 +1,6 @@
 /*
  * Tailwind v4 + shadcn/ui (Radix primitives) + Motion, scoped to the hub entry only (ui-1,
- * ADR 0104). mog.html and card.html never import this file, so those windows stay on plain CSS
+ * ADR 0106). mog.html and card.html never import this file, so those windows stay on plain CSS
  * with no Tailwind preflight and keep their transparent background (ui-1 scope: hub first).
  *
  * hub.css declares and uses the `hub-legacy` layer itself (see the comment at its top): this
@@ -13,7 +13,7 @@
 @import 'tailwindcss';
 
 /* shadcn/ui variables, mapped onto the --mog-* tokens declared in ../tokens.css (ui-1,
-   ADR 0104). There is no second colour system: every value here traces back to tokens.css, so a
+   ADR 0106). There is no second colour system: every value here traces back to tokens.css, so a
    colour still changes in one place. Exposed to Tailwind's utilities below via `@theme inline`. */
 :root {
   --background: var(--mog-surface);
@@ -33,7 +33,10 @@
   --destructive: var(--mog-destructive);
   --destructive-foreground: var(--mog-destructive-fg);
   --border: var(--mog-edge);
-  --input: var(--mog-edge);
+  /* --mog-control-border, not --mog-edge (ui-1, ADR 0106, review of #602 finding 5): every
+     control that uses `--input` (a Switch track, a RadioGroupItem/Checkbox outline) is an
+     essential UI boundary under WCAG 1.4.11, not a decorative hairline. */
+  --input: var(--mog-control-border);
   --ring: var(--mog-focus);
   --radius: var(--mog-radius-md);
   --sidebar: var(--mog-surface);

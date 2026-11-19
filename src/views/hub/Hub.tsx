@@ -1,6 +1,6 @@
 /** V1 hub view (thin): lists the MOGs the brain reports and sends selections with view_emit. */
 import { PanelLeftIcon } from 'lucide-react';
-import { useCallback, useState } from 'react';
+import { useCallback, useState, type CSSProperties } from 'react';
 import type { MogId } from '../../shared/interfaces';
 import { DomainPicker } from '../DomainPicker';
 import {
@@ -20,7 +20,7 @@ import { Conversations } from './Conversations';
 import { DataPanel } from './DataDisclosures';
 import { DictationNotices } from './DictationNotices';
 import { ForgetDialogHost } from './ForgetDialogHost';
-import { HubSidebar } from './HubSidebar';
+import { HubSidebar, sidebarWidth } from './HubSidebar';
 import { LegalNotice } from './LegalNotice';
 import { MicPreference } from './MicPreference';
 import { MogList } from './MogList';
@@ -28,6 +28,7 @@ import { DEFAULT_HUB_VIEW, NAV_ITEMS, type HubView } from './nav';
 import { PermissionNotices } from './PermissionNotices';
 import { SttSetupStep } from './SttSetupStep';
 import { StoreNotice } from './StoreNotice';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
 import { useHubSidebar } from './use-hub-sidebar';
 import { WipeSettings } from './WipeSettings';
 
@@ -61,10 +62,14 @@ function SetupRegion() {
   );
 }
 
-/** The 'mogs' area: the live mood chips, the MOG list and its dialogs (#26, #103). */
-function MogsArea({ mogs }: { mogs: ReadonlyMap<MogId, MogViewState> }) {
+/**
+ * The 'mogs' area: the live mood chips, the MOG list and its dialogs (#26, #103). Stays mounted
+ * with `hidden` (review of #602), like `Conversations`, rather than unmounting on `view !==
+ * 'mogs'`: an unmount would have dropped any open MogList form on a sidebar nav click.
+ */
+function MogsArea({ hidden, mogs }: { hidden: boolean; mogs: ReadonlyMap<MogId, MogViewState> }) {
   return (
-    <section data-hub-view="mogs">
+    <section data-hub-view="mogs" hidden={hidden}>
       <ul aria-label="MOGs" className="hub-live">
         {[...mogs].map(([id, s]) => (
           <li key={id} data-mog={id} data-mood={s.mood}>
@@ -82,10 +87,15 @@ function MogsArea({ mogs }: { mogs: ReadonlyMap<MogId, MogViewState> }) {
   );
 }
 
-/** The 'settings' area (#97, #103): one grouped, consistently spaced settings pane. */
-function SettingsArea() {
+/**
+ * The 'settings' area (#97, #103): one grouped, consistently spaced settings pane. Stays
+ * mounted with `hidden` (review of #602), like `Conversations`: unmounting on `view !==
+ * 'settings'` dropped the Wipe scope choice and closed an open Wipe dialog mid-confirm as soon
+ * as the user switched areas.
+ */
+function SettingsArea({ hidden }: { hidden: boolean }) {
   return (
-    <section data-hub-view="settings" aria-label="Settings">
+    <section data-hub-view="settings" aria-label="Settings" hidden={hidden}>
       <MicPreference />
       <SttSetupStep />
       <WipeSettings />
@@ -103,6 +113,16 @@ export function Hub() {
   const showConversations = useCallback(() => setView('conversations'), []);
   const [mogs, setMogs] = useState<ReadonlyMap<MogId, MogViewState>>(new Map());
   const sidebar = useHubSidebar();
+  // review of #602 ("also fix"): picking an area closes an unpinned overlay sidebar, the way a
+  // native overlay sidebar closes once you have told it where to go; a pinned sidebar is a
+  // permanent rail, so it stays.
+  const pickView = useCallback(
+    (v: HubView) => {
+      setView(v);
+      if (!sidebar.pinned) sidebar.requestClose();
+    },
+    [sidebar],
+  );
 
   const onState = useCallback((p: unknown) => {
     const s = asMogViewState(p);
@@ -130,6 +150,11 @@ export function Hub() {
   }
 
   const activeLabel = NAV_ITEMS.find((i) => i.id === view)?.label ?? '';
+  // Pinned open, HubSidebar's panel pushes `.hub-content` over by its own width instead of
+  // overlaying it (review of #602, finding 3): `--hub-sidebar-width` is read by `.hub-content`
+  // and `.conv` in hub.css. 0 (unset) when unpinned or hidden, so an overlay still costs no
+  // reflow.
+  const hubBodyStyle = { '--hub-sidebar-width': `${sidebarWidth(sidebar)}px` } as CSSProperties;
 
   // TODO(#43): the onboarding wizard.
   return (
@@ -139,28 +164,35 @@ export function Hub() {
           sibling of the header, outside the sidebar and every area, so it shows regardless of
           which area or sidebar state is active. */}
       <StoreNotice />
-      <div className="hub-body">
-        <HubSidebar state={sidebar} view={view} onView={setView} />
+      <div className="hub-body" style={hubBodyStyle}>
+        <HubSidebar state={sidebar} view={view} onView={pickView} />
         <div className="hub-content">
           <div className="hub-area-header">
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="size-7 shrink-0"
-              data-sidebar-toggle
-              aria-pressed={sidebar.visible}
-              onClick={sidebar.toggleVisible}
-            >
-              <PanelLeftIcon className="size-4" />
-              <span className="sr-only">Toggle the sidebar (⌘\\ or ⌘B)</span>
-            </Button>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="size-7 shrink-0"
+                    data-sidebar-toggle
+                    aria-pressed={sidebar.visible}
+                    onClick={sidebar.toggleVisible}
+                  >
+                    <PanelLeftIcon className="size-4" />
+                    <span className="sr-only">{'Toggle the sidebar (⌘\\ or ⌘B)'}</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{'Toggle the sidebar (⌘\\ or ⌘B)'}</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
             <h2 className="hub-area-title">{activeLabel}</h2>
           </div>
           <SetupRegion />
           <Conversations active={view === 'conversations'} onOpen={showConversations} />
-          {view === 'mogs' && <MogsArea mogs={mogs} />}
-          {view === 'settings' && <SettingsArea />}
+          <MogsArea hidden={view !== 'mogs'} mogs={mogs} />
+          <SettingsArea hidden={view !== 'settings'} />
         </div>
       </div>
     </main>

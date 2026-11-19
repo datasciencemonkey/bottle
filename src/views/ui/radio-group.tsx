@@ -1,5 +1,5 @@
 /**
- * shadcn/ui RadioGroup (ui-1, ADR 0104), copied in as source. Source:
+ * shadcn/ui RadioGroup (ui-1, ADR 0106), copied in as source. Source:
  * ui.shadcn.com/docs/components/radio-group (MIT), wraps @radix-ui/react-radio-group. See
  * THIRD_PARTY_NOTICES.md.
  */
@@ -23,7 +23,7 @@ function RadioGroupItem({ className, ...props }: ComponentProps<typeof RadioGrou
     <RadioGroupPrimitive.Item
       data-slot="radio-group-item"
       className={cn(
-        'border-input text-primary focus-visible:ring-[3px] focus-visible:ring-ring/50 aspect-square size-4 shrink-0 rounded-full border shadow-xs outline-none transition-[color,box-shadow] disabled:cursor-not-allowed disabled:opacity-50',
+        'border-input text-primary focus-visible:ring-[3px] focus-visible:ring-ring/50 aspect-square size-4 shrink-0 rounded-full border shadow-xs outline-none transition-[color,box-shadow] motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-50',
         className,
       )}
       {...props}

@@ -75,6 +75,14 @@
   --mog-destructive-fg: #fff;
   --mog-destructive-text: #ff6369;
 
+  /* A control border strong enough to read as an edge on its own (ui-1, review of #602 finding
+     5): the editorial hairline (--mog-edge, 22% pink) is about 1.6:1 against --mog-surface, well
+     under the >= 3:1 WCAG 1.4.11 (non-text contrast) floor for an essential control boundary (an
+     unchecked Switch track, a RadioGroupItem or Checkbox outline). White at 40% is about 3.7:1.
+     --mog-edge keeps doing the decorative hairline job (a card edge, a divider); this token is
+     only for a control a user must be able to see the bounds of. */
+  --mog-control-border: rgb(255 255 255 / 40%);
+
   /* Motion. */
   --mog-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --mog-fade-ms: 300ms;

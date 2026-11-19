@@ -1,5 +1,5 @@
 /**
- * shadcn/ui Button (ui-1, ADR 0104), copied in as source and adapted to this repo's strict
+ * shadcn/ui Button (ui-1, ADR 0106), copied in as source and adapted to this repo's strict
  * TypeScript config (verbatimModuleSyntax, exactOptionalPropertyTypes). Source:
  * ui.shadcn.com/docs/components/button (MIT). See THIRD_PARTY_NOTICES.md.
  */
@@ -9,12 +9,12 @@ import type { ComponentProps } from 'react';
 import { cn } from './utils';
 
 const buttonVariants = cva(
-  // border-0 (ui-1, ADR 0104): hub.css's legacy `.hub button { border: 1px solid ... }` (#561)
+  // border-0 (ui-1, ADR 0106): hub.css's legacy `.hub button { border: 1px solid ... }` (#561)
   // sits in a lower-priority cascade layer than this component's Tailwind utilities, but a
   // property only loses a layer fight when something in a higher layer actually sets it; with
   // no border utility of its own, a shadcn button still picked up the legacy hairline. The
   // `outline` variant below re-adds `border` deliberately.
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md border-0 text-sm font-medium outline-none transition-[color,background-color,border-color,box-shadow] disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 focus-visible:ring-[3px] focus-visible:ring-ring/50",
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md border-0 text-sm font-medium outline-none transition-[color,background-color,border-color,box-shadow] motion-reduce:transition-none disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 focus-visible:ring-[3px] focus-visible:ring-ring/50",
   {
     variants: {
       variant: {

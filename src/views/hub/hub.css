@@ -1,7 +1,7 @@
 /* The hub window (#561): calm, dark-first, system type. Every colour, size and radius comes
    from ../tokens.css (#559); this file only lays the hub out. Element rules sit under `.hub`, so
    a new hub section (Wipe, the profile picker) gets the same look without new classes.
-   ui-1 (ADR 0104): this file's own rules sit in the `hub-legacy` cascade layer, declared here
+   ui-1 (ADR 0106): this file's own rules sit in the `hub-legacy` cascade layer, declared here
    (before Tailwind loads, #561 + ./tailwind.css) between `base` and `components`. That keeps
    this file winning over Tailwind's preflight reset exactly as it always did, while a new
    shadcn component's Tailwind utility classes (`components`/`utilities`) still win over a
@@ -17,9 +17,17 @@
     color-scheme: dark;
   }
 
+  /* display: flex; flex-direction: column; min-height: 100vh (ui-1, review of #602 polish
+     note): without a height context, `.hub-body`'s own `flex: 1` (below) was a no-op outside
+     `.hub--wide` (which sets `height: 100vh` and `display: grid` itself, overriding these), so
+     the sidebar's `h-full` fell short of the window's bottom edge on the Settings/MOGs areas.
+     `.hub--wide`'s own rules (same specificity, declared later) still win for Conversations. */
   .hub {
     box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
     max-width: none;
+    min-height: 100vh;
     margin: 0;
     padding: var(--mog-space-6) var(--mog-space-6) var(--mog-space-7);
     font: var(--mog-text-md) / var(--mog-leading) var(--mog-font);
@@ -148,7 +156,13 @@
     color: inherit;
   }
 
-  .hub button {
+  /* :not([data-slot]) (ui-1, ADR 0106, review finding #4): every src/views/ui/* shadcn
+     primitive sets data-slot, and its own Tailwind utilities already size and colour it (a
+     Switch, a RadioGroupItem, a Checkbox). Without this scope, these legacy declarations sat in
+     a lower-priority cascade layer than Tailwind's utilities but still won when a utility did
+     not set the same property (e.g. no utility here sets min-height or padding), stretching a
+     16x16 control up to 26-32px tall. */
+  .hub button:not([data-slot]) {
     min-height: 28px;
     padding: 0 12px;
     border: 1px solid rgb(255 255 255 / 14%);
@@ -160,16 +174,16 @@
       border-color 150ms var(--mog-ease-out);
   }
 
-  .hub button:hover {
+  .hub button:not([data-slot]):hover {
     background: rgb(255 255 255 / 6%);
     border-color: rgb(255 255 255 / 24%);
   }
 
-  .hub button:active {
+  .hub button:not([data-slot]):active {
     background: rgb(255 255 255 / 10%);
   }
 
-  .hub button:disabled {
+  .hub button:not([data-slot]):disabled {
     opacity: 0.45;
     cursor: default;
     background: transparent;
@@ -708,15 +722,22 @@
     margin: 0;
   }
 
-  /* The sidebar + content column (ui-1, #97, #103). `.hub-body` is the positioned ancestor the
-   overlay sidebar (HubSidebar.tsx, `position: absolute`) anchors to; it never changes the
-   content column's width, so a toggle never reflows the page. */
+  /* The sidebar + content column (ui-1, #97, #103; review of #602). `.hub-body` is the
+   positioned ancestor the sidebar panel (HubSidebar.tsx, `position: absolute`) anchors to.
+   `margin-left: calc(var(--mog-space-6) * -1)` cancels `.hub`'s own left padding for this one
+   box, so the panel's `left-0` lands flush with the window's true left edge, not inset by
+   32px; `.hub-content`'s matching `padding-left` restores the content column's visual start
+   position. Unpinned, the panel overlays `.hub-content` with no reflow (`position: absolute`
+   takes it out of flow); pinned, `HubSidebar`'s own width (passed up as `--hub-sidebar-width`
+   by `Hub.tsx`) pushes `.hub-content` over by that much padding, so the panel never covers it
+   for good (review finding 3). */
   .hub-body {
     position: relative;
     display: flex;
     flex: 1;
     flex-direction: column;
     min-height: 0;
+    margin-left: calc(var(--mog-space-6) * -1);
   }
 
   .hub-content {
@@ -724,6 +745,14 @@
     flex: 1;
     flex-direction: column;
     min-height: 0;
+    padding-left: calc(var(--mog-space-6) + var(--hub-sidebar-width, 0px));
+    transition: padding-left 0.18s var(--mog-ease-out);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .hub-content {
+      transition: none;
+    }
   }
 
   /* Above the sidebar panel (z-20 in HubSidebar.tsx): the toggle stays reachable even while an
@@ -732,6 +761,7 @@
     position: relative;
     z-index: 25;
     display: flex;
+    min-height: 2.5rem;
     align-items: center;
     gap: var(--mog-space-3);
     margin-bottom: var(--mog-space-5);
@@ -781,6 +811,10 @@
   .conv {
     display: flex;
     margin: 0 -32px;
+    /* Cancels `.hub-content`'s own padding-left (review of #602): that padding is no longer a
+       fixed 32px once the sidebar is pinned (see `.hub-content` above), so this side needs the
+       same `--hub-sidebar-width` term, or a pinned sidebar leaves a 220px/56px gap here. */
+    margin-left: calc((var(--mog-space-6) + var(--hub-sidebar-width, 0px)) * -1);
     border-top: 1px solid var(--mog-edge);
   }
 

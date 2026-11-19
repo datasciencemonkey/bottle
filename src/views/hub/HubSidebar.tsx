@@ -1,10 +1,14 @@
 /**
  * The hub's collapsible sidebar (ui-1, #97, #103; course-corrected to hidden-by-default, see
- * use-hub-sidebar.ts). An overlay over the content column, not a push layout, so the content
- * column's width never jumps when the sidebar opens.
+ * use-hub-sidebar.ts). Unpinned, it overlays the content column (`position: absolute`) with no
+ * reflow. Pinned, `Hub.tsx` reads `SIDEBAR_WIDTH` below to push `.hub-content` over by the same
+ * amount (`--hub-sidebar-width` in hub.css), so a pinned panel never covers the content for good
+ * (review of #602, finding 3). `.hub-body`'s own negative left margin (hub.css) puts this panel
+ * flush with the window's true left edge, not inset by `.hub`'s own padding (review polish
+ * note).
  *
  * Motion only animates the width/slide; `useReducedMotion` turns the transition into an instant
- * show/hide (ui-1, ADR 0104). The active item's highlight uses a shared `layoutId`
+ * show/hide (ui-1, ADR 0106). The active item's highlight uses a shared `layoutId`
  * ("hand-built on Motion; Animate UI/Magic UI copy-in deferred to ui-1b", per ui-lead).
  */
 import { motion, useReducedMotion } from 'motion/react';
@@ -15,8 +19,14 @@ import { Button } from '../ui/button';
 import { NAV_ITEMS, type HubView } from './nav';
 import type { HubSidebarState } from './use-hub-sidebar';
 
-const EXPANDED_WIDTH = 220;
-const COLLAPSED_WIDTH = 56;
+export const EXPANDED_WIDTH = 220;
+export const COLLAPSED_WIDTH = 56;
+
+/** The current sidebar width in px, or 0 while it is not pinned open (Hub.tsx, hub.css). */
+export function sidebarWidth(state: Pick<HubSidebarState, 'pinned' | 'visible' | 'collapsed'>) {
+  if (!state.pinned || !state.visible) return 0;
+  return state.collapsed ? COLLAPSED_WIDTH : EXPANDED_WIDTH;
+}
 
 export function HubSidebar({
   state,
@@ -38,7 +48,14 @@ export function HubSidebar({
       if (e.key === 'Escape') requestClose();
     };
     const onPointerDown = (e: PointerEvent) => {
-      if (panelRef.current && !panelRef.current.contains(e.target as Node)) requestClose();
+      const target = e.target as Element | null;
+      if (panelRef.current?.contains(target)) return;
+      // review of #602, finding 2: the header toggle sits outside the panel, so a pointerdown
+      // on it used to count as an outside click and close the sidebar; the `click` that follows
+      // then reopened it (toggleVisible flips the now-closed state back open), so the toggle
+      // looked like it did nothing. Skip it here and let its own onClick (toggleVisible) decide.
+      if (target?.closest('[data-sidebar-toggle]')) return;
+      requestClose();
     };
     document.addEventListener('keydown', onKeyDown);
     document.addEventListener('pointerdown', onPointerDown);
@@ -70,8 +87,11 @@ export function HubSidebar({
               reduceMotion ? { duration: 0 } : { duration: 0.18, ease: [0.16, 1, 0.3, 1] }
             }
           >
-            {/* No repeated "Bottle" label here: the hub header already shows it (AT-37). */}
-            <div className="flex items-center justify-end px-[var(--mog-space-1)] py-[var(--mog-space-1)]">
+            {/* No repeated "Bottle" label here: the hub header already shows it (AT-37). h-10,
+                not an extra py on top of the panel's own padding (review polish note): lines
+                the pin button's vertical centre up with the content column's area-header row
+                (hub-area-header in Hub.tsx), which has no top padding of its own either. */}
+            <div className="flex h-10 items-center justify-end px-[var(--mog-space-1)]">
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
@@ -107,7 +127,7 @@ export function HubSidebar({
                     data-sidebar-item={item.id}
                     onClick={() => onView(item.id)}
                     className={
-                      'relative flex h-auto min-h-0 w-full items-center gap-[var(--mog-space-3)] rounded-[var(--radius-sm)] border-0 bg-transparent px-[var(--mog-space-2)] py-[var(--mog-space-2)] text-[var(--mog-text-sm)] transition-colors hover:text-foreground ' +
+                      'relative flex h-auto min-h-0 w-full items-center gap-[var(--mog-space-3)] rounded-[var(--radius-sm)] border-0 bg-transparent px-[var(--mog-space-2)] py-[var(--mog-space-2)] text-[var(--mog-text-sm)] transition-colors motion-reduce:transition-none hover:text-foreground ' +
                       (active ? 'text-foreground' : 'text-muted-foreground')
                     }
                   >

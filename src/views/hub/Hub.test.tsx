@@ -107,6 +107,12 @@ describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
   const items = (el: HTMLElement) => [...el.querySelectorAll<HTMLElement>('[data-sidebar-item]')];
   const conv = (el: HTMLElement) =>
     el.querySelector('section[aria-label="Conversations"]') as HTMLElement;
+  // `.click()` alone never dispatches `pointerdown` (review of #602, finding 2): a real click is
+  // a pointerdown then a click, and HubSidebar's outside-click listener only sees the former.
+  const realClick = (b: HTMLElement | null | undefined) => {
+    b?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    b?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  };
 
   it('[#103] the sidebar is hidden by default; the hub opens on Conversations', async () => {
     const { el } = await render(<Hub />);
@@ -159,5 +165,66 @@ describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
     expect(conv(el).hidden).toBe(true);
     await tauri.emitTo('hub', 'hub:conversations.open', {});
     expect(conv(el).hidden).toBe(false);
+  });
+
+  // review of #602, finding 2: a real click on the toggle while the sidebar is open is a
+  // pointerdown (outside the panel, used to close it) then a click (toggleVisible, which
+  // reopened the now-closed sidebar) — net effect: it looked like the toggle did nothing.
+  it('[review #602] a real click on the toggle closes an open, unpinned sidebar', async () => {
+    const { el } = await render(<Hub />);
+    await act(async () => toggle(el)?.click());
+    expect(el.querySelector('[data-sidebar]')).not.toBeNull();
+    await act(async () => realClick(toggle(el)));
+    expect(el.querySelector('[data-sidebar]')).toBeNull();
+  });
+
+  // review of #602 ("also fix"): a native overlay sidebar closes once it knows where to go.
+  it('[review #602] picking an area closes an unpinned sidebar', async () => {
+    const { el } = await render(<Hub />);
+    await act(async () => toggle(el)?.click());
+    await act(async () => items(el)[1]?.click());
+    expect(el.querySelector('[data-sidebar]')).toBeNull();
+    expect(el.querySelector('.hub-area-title')?.textContent).toBe('MOGs');
+  });
+
+  // review of #602 ("also fix"): a pin keeps the sidebar open across an area pick too.
+  it('[review #602] picking an area keeps a pinned sidebar open', async () => {
+    const { el } = await render(<Hub />);
+    await act(async () => toggle(el)?.click());
+    await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-pin]')?.click());
+    await act(async () => items(el)[1]?.click());
+    expect(el.querySelector('[data-sidebar]')).not.toBeNull();
+  });
+
+  // review of #602, finding 3: pinned, the sidebar pushes `.hub-content` over by its own width
+  // (`--hub-sidebar-width`, read in hub.css) instead of overlaying it for good.
+  it('[review #602] a pinned sidebar pushes the content column instead of covering it', async () => {
+    const { el } = await render(<Hub />);
+    const hubBody = () => el.querySelector<HTMLElement>('.hub-body');
+    expect(hubBody()?.style.getPropertyValue('--hub-sidebar-width')).toBe('0px');
+    await act(async () => toggle(el)?.click());
+    // Unpinned: still an overlay, no reflow.
+    expect(hubBody()?.style.getPropertyValue('--hub-sidebar-width')).toBe('0px');
+    await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-pin]')?.click());
+    expect(hubBody()?.style.getPropertyValue('--hub-sidebar-width')).toBe('220px');
+    await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-collapse]')?.click());
+    expect(hubBody()?.style.getPropertyValue('--hub-sidebar-width')).toBe('56px');
+  });
+
+  // review of #602 ("also fix"): switching areas never unmounts one, so the Wipe scope choice
+  // (and any open Wipe dialog) survives a sidebar nav click.
+  it('[review #602] switching areas keeps Settings mounted (the Wipe choice survives)', async () => {
+    const { el } = await render(<Hub />);
+    await act(async () => toggle(el)?.click());
+    await act(async () => items(el)[2]?.click());
+    const radios = () => [...el.querySelectorAll<HTMLElement>('[role="radio"]')];
+    await act(async () => radios()[2]?.click());
+    expect(radios()[2]?.getAttribute('aria-checked')).toBe('true');
+    await act(async () => toggle(el)?.click());
+    await act(async () => items(el)[0]?.click());
+    expect(el.querySelector('[data-hub-view="settings"]')).not.toBeNull();
+    await act(async () => toggle(el)?.click());
+    await act(async () => items(el)[2]?.click());
+    expect(radios()[2]?.getAttribute('aria-checked')).toBe('true');
   });
 });
