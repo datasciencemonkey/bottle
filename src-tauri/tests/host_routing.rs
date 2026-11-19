@@ -343,6 +343,7 @@ fn arc_3_cap_02a_g_04a_window_ops_capture_start_and_mcp_call_run_off_the_main_th
     // ADR 0055: `capture_start` and `capture_resume` open the device, which can be slow. The
     // stops stay inline (MB-05).
     // #467: `mcp_call` is a blocking HTTP call to Genie One MCP (R8, G-04a).
+    // #514: `stt_transcribe` takes the R4 store lock that the R4 worker shares (NFR-01a).
     for c in COMMANDS {
         assert_eq!(
             runs_off_main_thread(c.name),
@@ -359,6 +360,7 @@ fn arc_3_cap_02a_g_04a_window_ops_capture_start_and_mcp_call_run_off_the_main_th
                         | "agent_start"
                         | "agent_stop"
                         | "agent_send"
+                        | "stt_transcribe"
                 ),
             "{}",
             c.name
@@ -773,6 +775,7 @@ fn arc_3_cap_02a_g_04a_schedule_runs_window_ops_capture_start_and_mcp_call_on_a_
                     | "agent_start"
                     | "agent_stop"
                     | "agent_send"
+                    | "stt_transcribe"
             );
         if worker {
             assert_ne!(ran_on, caller, "{} ran on the calling thread", c.name);

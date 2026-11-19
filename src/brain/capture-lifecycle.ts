@@ -70,7 +70,7 @@ export interface LifecycleConfig {
 
 export interface CaptureLifecycleDeps {
   control: CaptureControl;
-  /** The STT step of one segment: T4 SttProvider (TODO(#52)) over `stt_transcribe` (R4 is #46; host route TODO(#514)). */
+  /** The STT step of one segment: T4 SttProvider (#52) over `stt_transcribe` (host route TODO(#514)). */
   transcribe(segment: SegmentRef): Promise<string>;
   /** Fired once for each kept final segment with a non-empty text. */
   onUtterance(u: Utterance): void | Promise<void>;

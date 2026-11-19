@@ -57,7 +57,7 @@ code. No code tells "access denied" or "blocked by geography" apart from other f
 ## Consequences
 
 - The UC1 and UC2 paths can read one report at start and after a network change. They do not
-  need to check access themselves. No code calls the check yet: `TODO(#52)` (SttProvider) and
+  need to check access themselves. No code calls the check yet: `TODO(#51)` (the T4 ASR opt-in source, ADR 0088) and
   `TODO(#19)` (model path) mark where it gets wired.
 - The live AT-36 run needs an admin and a real workspace (`needs:human`, `needs:admin` on #20).
 - The admin page is `docs/admin/model-service-prerequisites.md`.
