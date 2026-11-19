@@ -448,6 +448,38 @@ describe('ask gate: no profile, Shift, size (#557, ADR 0096)', () => {
     expect([...t.cardOf(A).blurbs.values()].some((b) => b.text?.includes(CUT_NOTICE))).toBe(true);
   });
 
+  it('[G-47] [G-30a] [#573] the press sends the sanitized text, and the cap runs after the sanitizer', async () => {
+    const t = setup();
+    const dirty = `${'<br>'.repeat(300)}What was\u200b [EMEA](https://evil.example.test) revenue?`;
+    t.gate.onAsk(
+      chip({ decision: decision({ genie_question: dirty, cleaned_text: dirty }) }),
+      t.owned(),
+    );
+    const id = [...t.cardOf(A).chips.keys()][0] ?? '';
+    t.gate.chip(A, { id, kind: 'ask_genie' });
+    await t.run(0);
+    // Over 1,000 chars before the sanitizer, short after it: so it is not cut.
+    expect(dirty.length).toBeGreaterThan(QUESTION_MAX_CHARS);
+    expect(t.sent.map((s) => s.question)).toEqual(['What was EMEA revenue?']);
+    const texts = [...t.cardOf(A).blurbs.values()].map((b) => b.text);
+    expect(texts).toContain('"What was EMEA revenue?"');
+    expect(texts.some((x) => x.includes(CUT_NOTICE))).toBe(false);
+  });
+
+  it('[G-47] [#573] a press whose text is empty after the sanitizer sends nothing', async () => {
+    const t = setup();
+    const junk = '<br>\u200b```';
+    t.gate.onAsk(
+      chip({ decision: decision({ genie_question: junk, cleaned_text: junk }) }),
+      t.owned(),
+    );
+    const id = [...t.cardOf(A).chips.keys()][0] ?? '';
+    t.gate.chip(A, { id, kind: 'ask_genie' });
+    await t.run(0);
+    expect(t.sent).toEqual([]);
+    expect([...t.cardOf(A).blurbs.values()].at(-1)?.text).toContain(NOT_SENT_LINE);
+  });
+
   it('[#557] [RTR-14] an injection-suspected question shows its own text with the warning', () => {
     const t = setup();
     t.gate.onAsk(

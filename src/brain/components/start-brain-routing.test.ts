@@ -155,7 +155,7 @@ describe('startBrain utterance routing (#163)', () => {
     expect(callsTo(core.invoke.mock.calls, ['agent_start', 'agent_send', 'mcp_call'])).toEqual([]);
   });
 
-  it('[RTR-15c] [B1] with a listed home profile, an Ask Genie click hands the question over with that home as the target', async () => {
+  it('[RTR-15c] [B1] with a listed home profile, an Ask Genie click sends the question to Genie One on that home profile (#573)', async () => {
     core.invoke.mockImplementation(async (cmd) => {
       if (cmd === 'config_read')
         return { json: { name: 'Finance', binding: { home: 'fake-home' } } };
@@ -197,9 +197,9 @@ describe('startBrain utterance routing (#163)', () => {
       },
     });
     await settle();
-    const sent = core.invoke.mock.calls.find(([c]) => c === 'agent_send');
-    expect((sent?.[1] as { args: { turn: { target: string } } }).args.turn.target).toBe(
-      'fake-home',
-    );
+    // #573 (ADR 0097): the press goes straight to Genie One MCP on the home profile; no agent.
+    const sent = core.invoke.mock.calls.find(([c]) => c === 'mcp_call');
+    expect(sent?.[1]).toMatchObject({ args: { profile: 'fake-home', tool: 'genie_ask' } });
+    expect(callsTo(core.invoke.mock.calls, ['agent_start', 'agent_send'])).toEqual([]);
   });
 });
