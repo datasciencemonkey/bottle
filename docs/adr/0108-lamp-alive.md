@@ -1,4 +1,4 @@
-# ADR 0107: The lamp MOG is alive: an orbiting spark, eyes that follow the pointer, a name row, a close card
+# ADR 0108: The lamp MOG is alive: an orbiting spark, eyes that follow the pointer, a name row, a close card
 
 - Status: accepted
 - Issue: refs #286

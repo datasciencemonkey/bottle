@@ -43,7 +43,7 @@ body,
    The Genie's own loops run only in listening, working and ready (lamp-mascot.ts). The one
    always-alive thing is the gold spark over the head: a slow orbit and a twinkle, on transform and
    opacity only (`.lamp-spark` below), paused while hidden or sleeping and still with reduced
-   motion (lamp-alive, ADR 0107). */
+   motion (lamp-alive, ADR 0108). */
 .lamp {
   position: absolute;
   inset: 0;

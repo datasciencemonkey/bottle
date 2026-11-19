@@ -312,7 +312,7 @@ describe('lamp motion CSS (#286)', () => {
     const loops = rules.filter((r) => /animation[^;]*infinite/.test(r.body));
     expect(loops.length).toBeGreaterThan(0);
     for (const r of loops) {
-      // The gold spark is the one thing that is always alive (lamp-alive, ADR 0107).
+      // The gold spark is the one thing that is always alive (lamp-alive, ADR 0108).
       expect(r.sel, r.sel).toMatch(/data-state='(listening|working|ready)'|^\.spark-/);
     }
   });
