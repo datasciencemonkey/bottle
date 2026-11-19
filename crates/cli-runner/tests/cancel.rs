@@ -6,14 +6,14 @@ mod common;
 use std::cell::RefCell;
 use std::ffi::OsString;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cli_runner::{CliError, CliPolicy, CliRunner, Env, ProcOutput, Process, RealFs, RealProcess};
-use common::{abs, cli_in, FakeEnv, FakeFs};
+use common::{abs, cli_in, fixture_root, FakeEnv, FakeFs, FixtureDir};
 
 /// Records the timeout of each child and answers `--version`.
 #[derive(Clone, Default)]
@@ -103,11 +103,9 @@ fn serial() -> std::sync::MutexGuard<'static, ()> {
     SERIAL.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn install_fake(name: &str) -> PathBuf {
-    let dir =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+/// The fake CLI in a fresh folder under the crate (not a temp root, W-02b; see `common`).
+fn install_fake(name: &str) -> FixtureDir {
+    let dir = FixtureDir::new(&fixture_root(), name);
     let cli = cli_in(&dir);
     std::fs::copy(env!("CARGO_BIN_EXE_fake-databricks"), &cli).unwrap();
     #[cfg(unix)]
@@ -125,7 +123,7 @@ fn w_07h_cancel_kills_a_real_running_cli_child() {
     let _serial = serial();
     let dir = install_fake("cancel");
     let env = FakeEnv::new()
-        .with_path(std::slice::from_ref(&dir))
+        .with_path(&[dir.to_path_buf()])
         .temp(cli_runner::RealEnv.temp_dir())
         .set("HOME", dir.as_os_str());
     let mut r = CliRunner::new(RealFs, env, RealProcess, CliPolicy::default())
@@ -156,7 +154,7 @@ fn w_07c_a_real_cancellable_child_is_killed_at_its_timeout() {
     let _serial = serial();
     let dir = install_fake("cancel-timeout");
     let env = FakeEnv::new()
-        .with_path(std::slice::from_ref(&dir))
+        .with_path(&[dir.to_path_buf()])
         .temp(cli_runner::RealEnv.temp_dir())
         .set("HOME", dir.as_os_str());
     let mut r = CliRunner::new(RealFs, env, RealProcess, CliPolicy::default())
