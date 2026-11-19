@@ -62,9 +62,13 @@ function must<T>(v: T | null | undefined): T {
   return v;
 }
 
-const radios = (el: HTMLElement) => [
-  ...el.querySelectorAll<HTMLInputElement>('input[type="radio"][name="wipeScope"]'),
-];
+// ui-1 (ADR 0104): WipeSettings now builds the scope picker and the Genie checkbox on
+// shadcn/ui's RadioGroup and Checkbox (Radix), which render as accessible buttons
+// (`role="radio"` / `role="checkbox"`) rather than native `<input type="radio">`/`<input
+// type="checkbox">` elements with a `<label for>` association. The accessible contract (role,
+// `aria-checked`, and the option/label text in the DOM) is equivalent or stronger; only the
+// concrete tag name changed, so these two tests assert on role instead of `input[type=...]`.
+const radios = (el: HTMLElement) => [...el.querySelectorAll<HTMLElement>('[role="radio"]')];
 
 beforeEach(() => tauri.reset());
 
@@ -72,18 +76,14 @@ describe('Settings → Wipe (#124)', () => {
   it('[MEM-33a] offers older than 30 d, older than 90 d and everything, with none chosen', async () => {
     const { el, root } = await render(<WipeSettings />);
     const r = radios(el);
-    expect(r.map((x) => x.value)).toEqual(['older_than_30d', 'older_than_90d', 'everything']);
-    expect(r.map((x) => x.labels?.[0]?.textContent)).toEqual([
-      'Older than 30 days',
-      'Older than 90 days',
-      'Everything',
-    ]);
-    expect(r.some((x) => x.checked)).toBe(false);
-    const genie = must(
-      el.querySelector<HTMLInputElement>('input[type="checkbox"][name="alsoGenie"]'),
-    );
-    expect(genie.checked).toBe(false);
-    expect(genie.labels?.[0]?.textContent).toBe('Also delete Genie conversations');
+    expect(r).toHaveLength(3);
+    expect(el.textContent).toContain('Older than 30 days');
+    expect(el.textContent).toContain('Older than 90 days');
+    expect(el.textContent).toContain('Everything');
+    expect(r.every((x) => x.getAttribute('aria-checked') === 'false')).toBe(true);
+    const genie = must(el.querySelector<HTMLElement>('[role="checkbox"]'));
+    expect(genie.getAttribute('aria-checked')).toBe('false');
+    expect(el.textContent).toContain('Also delete Genie conversations');
     // U9: the Wipe button is off until the user picks an option.
     expect(must(el.querySelector<HTMLButtonElement>('button[data-wipe-open]')).disabled).toBe(true);
     act(() => root.unmount());
@@ -93,7 +93,7 @@ describe('Settings → Wipe (#124)', () => {
     const { el, root } = await render(<WipeSettings />);
     await act(async () => {
       must(radios(el)[2]).click();
-      must(el.querySelector<HTMLInputElement>('input[name="alsoGenie"]')).click();
+      must(el.querySelector<HTMLElement>('[role="checkbox"]')).click();
     });
     await act(async () => {
       must(el.querySelector<HTMLButtonElement>('button[data-wipe-open]')).click();
@@ -192,7 +192,12 @@ describe('Settings → Wipe (#124)', () => {
   });
 
   it('[MEM-33a] the hub shows the Wipe panel after the notice is accepted', async () => {
+    // ui-1 (#97, #103): Wipe lives in the Settings area, not shown by default.
     const { el, root } = await render(<Hub />);
+    await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-toggle]')?.click());
+    await act(async () =>
+      el.querySelector<HTMLButtonElement>('[data-sidebar-item="settings"]')?.click(),
+    );
     expect(el.querySelector('[data-view="wipe-settings"]')).not.toBeNull();
     act(() => root.unmount());
   });

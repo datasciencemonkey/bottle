@@ -78,7 +78,12 @@ describe('CLI settings (hub)', () => {
   });
 
   it('[W-02a] the hub shows the CLI settings', async () => {
+    // ui-1 (#97, #103): CLI settings lives in the Settings area, not shown by default.
     const { el } = await render(<Hub />);
+    await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-toggle]')?.click());
+    await act(async () =>
+      el.querySelector<HTMLButtonElement>('[data-sidebar-item="settings"]')?.click(),
+    );
     expect(el.querySelector('[data-view="cli-settings"]')).not.toBeNull();
   });
 });

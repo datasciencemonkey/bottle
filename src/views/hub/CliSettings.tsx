@@ -19,6 +19,7 @@ import {
   CLI_VIEW_ID,
   type CliSettingsModel,
 } from '../../shared/cli-view';
+import { Button } from '../ui/button';
 import { emitView } from '../view-ipc';
 
 export function CliSettings() {
@@ -45,11 +46,16 @@ export function CliSettings() {
   }, []);
 
   return (
-    <section data-view="cli-settings" aria-labelledby="cli-settings-title">
+    // ui-1 (ADR 0104): the path and version move to a Workspaces area in a later PR; for now
+    // this stays a quiet row in Settings, not a standalone outline button (the ui-audit
+    // "content as buttons" finding).
+    <section data-view="cli-settings" aria-labelledby="cli-settings-title" className="hub-section">
       <h2 id="cli-settings-title">Databricks CLI</h2>
-      <p>
-        <button
+      <p className="mt-[var(--mog-space-1)]">
+        <Button
           type="button"
+          variant="link"
+          className="h-auto p-0 text-[var(--mog-text-sm)] text-muted-foreground"
           data-cli-settings
           onClick={() =>
             void emitView(CLI_VIEW_ID, 'click', { target: CLI_SETTINGS_TARGET }).catch(
@@ -58,7 +64,7 @@ export function CliSettings() {
           }
         >
           Show the Databricks CLI
-        </button>
+        </Button>
       </p>
       {model === undefined ? null : 'unknown' in model ? (
         <p>Bottle could not read the Databricks CLI status.</p>

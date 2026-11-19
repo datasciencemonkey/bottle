@@ -5,6 +5,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { act } from 'react';
 import { render, tauri } from '../test-tauri';
 import { DataPanel, OnboardingDisclosures } from './DataDisclosures';
 import { SEC_DISC, type Disclosure } from './disclosures';
@@ -66,7 +67,12 @@ describe('Table SEC-DISC disclosures', () => {
   });
 
   it('[SEC-17] [AT-24] the hub data panel shows every SEC-DISC disclosure', async () => {
+    // ui-1 (#97, #103): the data panel lives in the Settings area, not shown by default.
     const { el } = await render(<Hub />);
+    await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-toggle]')?.click());
+    await act(async () =>
+      el.querySelector<HTMLButtonElement>('[data-sidebar-item="settings"]')?.click(),
+    );
     const panel = el.querySelector<HTMLElement>('section[data-view="data-panel"]');
     expect(panel).not.toBeNull();
     expect(panel?.querySelector('h2')?.textContent).toBe('Where your data goes');
