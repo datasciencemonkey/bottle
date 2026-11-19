@@ -10,6 +10,8 @@ import type { Mood } from '../../shared/interfaces';
 import {
   ACTIVE_STATES,
   EYES,
+  GAZE_MOODS,
+  GAZE_SETTLE_MS,
   LEVEL_STEP,
   LampMascot,
   REST_SINK_PCT,
@@ -310,7 +312,8 @@ describe('lamp motion CSS (#286)', () => {
     const loops = rules.filter((r) => /animation[^;]*infinite/.test(r.body));
     expect(loops.length).toBeGreaterThan(0);
     for (const r of loops) {
-      expect(r.sel, r.sel).toMatch(/data-state='(listening|working|ready)'/);
+      // The gold spark is the one thing that is always alive (lamp-alive, ADR 0107).
+      expect(r.sel, r.sel).toMatch(/data-state='(listening|working|ready)'|^\.spark-/);
     }
   });
 
@@ -355,5 +358,217 @@ describe('lamp motion CSS (#286)', () => {
       const props = [...(k ?? '').matchAll(/([a-z-]+):/g)].map((p) => p[1]);
       for (const p of props) expect(['transform', 'translate', 'opacity', 'scale']).toContain(p);
     }
+  });
+});
+
+describe('lamp-alive: the gold spark', () => {
+  afterEach(() => document.body.replaceChildren());
+
+  it('draws the spark apart from the art: one orbit element with the four nested loops', () => {
+    const { el } = mountLamp();
+    const spark = el.querySelector('.genie-body > .lamp-spark');
+    expect(spark).not.toBeNull();
+    for (const c of ['.spark-orbit', '.spark-arm', '.spark-turn', '.spark-star'])
+      expect(spark?.querySelector(c), c).not.toBeNull();
+    // The spark is vector art, not an image: the Genie layers carry none.
+    expect(spark?.querySelector('img')).toBeNull();
+  });
+
+  it('pauses the orbit when the MOG is hidden and starts it again when shown', () => {
+    const { m, root } = mountLamp();
+    expect(root()?.dataset['paused']).toBeUndefined();
+    m.setHidden(true);
+    expect(root()?.dataset['paused']).toBe('');
+    m.setHidden(false);
+    expect(root()?.dataset['paused']).toBeUndefined();
+  });
+
+  it('runs no timer for the orbit: it is pure CSS, so an idle MOG adds no work', () => {
+    const { c } = mountLamp();
+    const before = c.pending();
+    // Nothing the spark does is scheduled (the blink and the rest timer are the only timers).
+    expect(before).toBeLessThanOrEqual(2);
+  });
+});
+
+describe('lamp-alive: the spark CSS', () => {
+  const css = readFileSync(resolve(import.meta.dirname, 'mog.css'), 'utf8');
+  const rule = (sel: RegExp) =>
+    [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].find((r) => sel.test((r[1] ?? '').trim()))?.[2] ??
+    '';
+
+  it('orbits in 8 to 12 s per loop, and twinkles with scale and opacity', () => {
+    const orbit = /animation:\s*mog-spark-orbit\s+([\d.]+)s\s+linear\s+infinite/.exec(
+      rule(/^\.spark-orbit$/),
+    );
+    expect(Number(orbit?.[1])).toBeGreaterThanOrEqual(8);
+    expect(Number(orbit?.[1])).toBeLessThanOrEqual(12);
+    expect(rule(/^\.spark-turn$/)).toMatch(/mog-spark-turn\s+10s/);
+    expect(rule(/^\.spark-star$/)).toMatch(/mog-spark-twinkle[^;]*ease-in-out[^;]*infinite/);
+    const twinkle = /@keyframes mog-spark-twinkle \{([\s\S]*?)\n\}/.exec(css)?.[1] ?? '';
+    expect(twinkle).toMatch(/opacity/);
+    expect(twinkle).toMatch(/transform:\s*scale/);
+    // The radius breathes with an ease.
+    expect(rule(/^\.spark-arm$/)).toMatch(/ease-in-out\s+infinite\s+alternate/);
+  });
+
+  it('moves only with transform and opacity, so it runs on the compositor', () => {
+    for (const name of ['orbit', 'turn', 'arm', 'twinkle']) {
+      const body = new RegExp(`@keyframes mog-spark-${name} \\{([\\s\\S]*?)\\n\\}`).exec(css)?.[1];
+      expect(body, name).toBeDefined();
+      for (const p of (body ?? '').matchAll(/([a-z-]+):/g))
+        expect(['transform', 'opacity'], `${name}: ${p[1]}`).toContain(p[1]);
+    }
+  });
+
+  it('pauses while hidden or sleeping', () => {
+    const paused = [...css.matchAll(/([^{}]+)\{([^{}]*animation-play-state:\s*paused[^{}]*)\}/g)]
+      .map((r) => r[1])
+      .join(' ');
+    for (const part of ['orbit', 'arm', 'turn', 'star']) {
+      expect(paused, part).toMatch(new RegExp(`\\.lamp\\[data-paused\\] \\.spark-${part}`));
+      expect(paused, part).toMatch(
+        new RegExp(`\\.lamp\\[data-mood='sleeping'\\] \\.spark-${part}`),
+      );
+    }
+  });
+
+  it('is still with reduced motion: no orbit and no twinkle', () => {
+    const reduced =
+      /@media \(prefers-reduced-motion: reduce\) \{([\s\S]*?)\n\}/.exec(css)?.[1] ?? '';
+    expect(reduced).toMatch(/\.spark-orbit,[\s\S]*\.spark-star\s*\{\s*animation:\s*none;/);
+  });
+});
+
+describe('lamp-alive: the eyes follow the pointer', () => {
+  afterEach(() => document.body.replaceChildren());
+
+  const pupilVars = (el: HTMLElement) => {
+    const g = el.querySelector<HTMLElement>('.gaze');
+    return [g?.style.getPropertyValue('--look-x'), g?.style.getPropertyValue('--look-y')];
+  };
+
+  it('draws a cover and a pupil per eye of each open pose, from the EYES geometry', () => {
+    const { el } = mountLamp();
+    for (const m of GAZE_MOODS) {
+      const eyes = el.querySelectorAll(`[data-gaze="${m}"] .gaze-eye`);
+      expect(eyes, m).toHaveLength(EYES[m]?.length ?? -1);
+      const [x, y, w, h] = EYES[m]?.[0] ?? [0, 0, 0, 0];
+      const style = (eyes[0] as HTMLElement).style;
+      expect(parseFloat(style.left)).toBeCloseTo(x / 4, 2);
+      expect(parseFloat(style.top)).toBeCloseTo(y / 4, 2);
+      expect(parseFloat(style.width)).toBeCloseTo(w / 4, 2);
+      expect(parseFloat(style.height)).toBeCloseTo(h / 4, 2);
+      expect(eyes[0]?.querySelector('.gaze-pupil')).not.toBeNull();
+    }
+    // Closed or special eyes have no overlay: sleeping, error and success.
+    for (const m of ['sleeping', 'error', 'success'])
+      expect(el.querySelector(`[data-gaze="${m}"]`), m).toBeNull();
+  });
+
+  it('moves the pupils toward the vector and turns the gaze on', () => {
+    const { el, m, root } = mountLamp();
+    expect(root()?.dataset['look']).toBeUndefined();
+    m.setLook(0.6, -0.4);
+    expect(pupilVars(el)).toEqual(['0.600', '-0.400']);
+    expect(root()?.dataset['look']).toBe('');
+    expect(m.gaze).toEqual({ dx: 0.6, dy: -0.4 });
+  });
+
+  it('clamps a vector to the unit disc and ignores NaN', () => {
+    const { m } = mountLamp();
+    m.setLook(3, 4);
+    expect(Math.hypot(m.gaze.dx, m.gaze.dy)).toBeCloseTo(1);
+    m.setLook(Number.NaN, Number.POSITIVE_INFINITY);
+    expect(Math.hypot(m.gaze.dx, m.gaze.dy)).toBeLessThanOrEqual(1);
+  });
+
+  it('glides back to the centre at 0,0, then shows the baked eyes again', () => {
+    const { el, m, root, c } = mountLamp();
+    m.setLook(1, 0);
+    m.setLook(0, 0);
+    expect(pupilVars(el)).toEqual(['0.000', '0.000']);
+    // The pupils still show while they glide (the CSS transition) ...
+    expect(root()?.dataset['look']).toBe('');
+    c.advance(GAZE_SETTLE_MS + 1);
+    expect(root()?.dataset['look']).toBeUndefined();
+  });
+
+  it('a new vector during the glide keeps the gaze on', () => {
+    const { m, root, c } = mountLamp();
+    m.setLook(1, 0);
+    m.setLook(0, 0);
+    c.advance(GAZE_SETTLE_MS / 2);
+    m.setLook(0, 0.5);
+    c.advance(GAZE_SETTLE_MS * 2);
+    expect(root()?.dataset['look']).toBe('');
+  });
+
+  it('does not track in sleeping, error and success', () => {
+    const { m, root } = mountLamp();
+    for (const mood of ['sleeping', 'error', 'success'] as const) {
+      m.setMood(mood);
+      m.setLook(1, 0);
+      expect(m.gaze, mood).toEqual({ dx: 0, dy: 0 });
+      expect(root()?.dataset['look'], mood).toBeUndefined();
+    }
+    // Back in an open pose, the last vector shows again.
+    m.setMood('listening');
+    expect(m.gaze).toEqual({ dx: 1, dy: 0 });
+  });
+
+  it('tracks in the open poses', () => {
+    const { m } = mountLamp();
+    for (const mood of GAZE_MOODS) {
+      m.setMood(mood);
+      m.setLook(0.5, 0.5);
+      expect(m.gaze.dx, mood).toBeCloseTo(0.5);
+    }
+  });
+
+  it('does not track while hidden', () => {
+    const { el, m, root, c } = mountLamp();
+    m.setLook(0.8, 0);
+    m.setHidden(true);
+    expect(m.gaze).toEqual({ dx: 0, dy: 0 });
+    expect(pupilVars(el)).toEqual(['0.000', '0.000']);
+    m.setLook(0.9, 0);
+    c.advance(GAZE_SETTLE_MS + 1);
+    expect(root()?.dataset['look']).toBeUndefined();
+    m.setHidden(false);
+    expect(m.gaze.dx).toBeCloseTo(0.9);
+  });
+
+  it('does not track with reduced motion', () => {
+    const { el, m, root } = mountLamp(true);
+    m.setLook(1, 0);
+    expect(m.gaze).toEqual({ dx: 0, dy: 0 });
+    expect(pupilVars(el)).toEqual(['0.000', '0.000']);
+    expect(root()?.dataset['look']).toBeUndefined();
+  });
+
+  it('a blink still works on top: it covers the pupil too (scale), and the lids stay', () => {
+    const { el, m, c } = mountLamp();
+    m.setLook(0.7, 0);
+    c.advance(TIMING.blinkMin);
+    expect(el.querySelector('.genie')?.hasAttribute('data-blink')).toBe(true);
+    expect(el.querySelector('.eyelids')).not.toBeNull();
+    const css = readFileSync(resolve(import.meta.dirname, 'mog.css'), 'utf8');
+    expect(css).toMatch(/\.genie\[data-blink\] \.gaze-pupil\s*\{[^}]*mog-gaze-blink/);
+    // The blink moves `scale`; the gaze moves `translate`: the two never fight.
+    expect(css).toMatch(/\.gaze-pupil\s*\{[^}]*\n\s*translate:/);
+    expect(css).toMatch(/@keyframes mog-gaze-blink \{[^}]*scale:/);
+  });
+
+  it('moves the pupils with translate and a short ease, so they lag and glide', () => {
+    const css = readFileSync(resolve(import.meta.dirname, 'mog.css'), 'utf8');
+    const pupil = /\.gaze-pupil\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(pupil).toMatch(/transition:\s*translate\s+(\d+)ms/);
+    const ms = Number(/transition:\s*translate\s+(\d+)ms/.exec(pupil)?.[1]);
+    expect(ms).toBeGreaterThanOrEqual(120);
+    expect(ms).toBeLessThanOrEqual(260);
+    expect(ms).toBeLessThanOrEqual(GAZE_SETTLE_MS);
+    // A few px: at most about a quarter of the eye width in x.
+    expect(pupil).toMatch(/\* 26%/);
   });
 });

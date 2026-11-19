@@ -157,6 +157,12 @@ export const EVENTS = {
   'mog.level': { name: 'mog:level', direction: 'brain_to_view' },
   'view.input': { name: 'view:input', direction: 'core_to_brain' },
   /**
+   * Not in 4.5 (lamp-alive): where one MOG's eyes look. Payload `{ mogId, dx, dy }`, a vector in
+   * the unit disc from the eye centre. Never a pointer position. The brain passes `{ dx, dy }` on
+   * to that one MOG view as `mog:look` (`src/shared/mog-look.ts`).
+   */
+  'mog.look': { name: 'mog:look', direction: 'core_to_brain' },
+  /**
    * Not in 4.5 (ADR 0103): the record key (⌥R) in a talk-key hold, with the knob on. Payload:
    * `RecordToggle`. The host sends a `hotkey.ptt` `cancel` first, so no dictation and no paste
    * follow. The brain calls `recording_start`, or `recording_stop` while a recording runs.

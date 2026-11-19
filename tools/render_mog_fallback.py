@@ -16,10 +16,12 @@ the project, never to mog-rive/). Difference matting gives the exact alpha:
 The cue is the difference between an attention frame and the same frame with the `Attention`
 node moved off the artboard, so the cue file holds only the "?" bubble and none of the body.
 
-Run:  uv run --no-project --with pillow python tools/render_mog_fallback.py
+Run:  uv run --no-project --with pillow --with numpy python tools/render_mog_fallback.py
 It also writes fallback/SOURCE.sha256, the SHA-256 of scene.rml, so `tools/ci_checks.py fallback`
 can tell when scene.rml changed after the PNGs were rendered (UX-09b). CI has no Rive CLI.
 Needs the Rive CLI (`rive` on PATH, or ~/.rive/bin/rive). No `rive login` is needed.
+
+The Genie layers then go through tools/clean_lamp_layers.py, which removes the baked spark.
 """
 import hashlib
 import os
@@ -211,6 +213,11 @@ def render_layers(tmp):
         for name in b:
             file = name if layer == "genie" else layer
             matte(b[name], w[name]).save(os.path.join(out, f"{file}.png"), optimize=True)
+    # The view draws and orbits its own spark, so the baked one comes off every Genie layer.
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import clean_lamp_layers  # noqa: E402
+
+    clean_lamp_layers.main()
 
 
 if __name__ == "__main__":

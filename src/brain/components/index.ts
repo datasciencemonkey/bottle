@@ -49,6 +49,7 @@ import { EVENTS } from '../../shared/ipc';
 import { ipcGenieHistory } from '../genie-history';
 import { createHomeProfiles, ipcHomeProfileDeps, ipcListProfiles } from '../home-profile';
 import { LevelRouter, subscribeLevels, wireLevelStream } from '../level-stream';
+import { wireMogLook } from '../mog-look-relay';
 import { createMoodPublisher, latencyTraceClock } from '../mood-publisher';
 import { sendHubNotice as sendLegalNotice, wireNotice } from '../notice-wiring';
 import { storeGate } from '../store-gate';
@@ -445,6 +446,8 @@ export function startBrain(): Brain {
     // stop. The host sends the levels on the `capture_subscribe` `onLevel` Channel.
     const levels = new LevelRouter(sendMicLevel, createSystemClock().now);
     wireLevelStream(bus, levels);
+    // lamp-alive: the core's look vector goes to the one MOG view it is for.
+    wireMogLook(bus);
     void subscribeLevels(levels);
     brain = { components, bus, talkTarget, conversations, ready: subscribeBrain(bus) };
   }

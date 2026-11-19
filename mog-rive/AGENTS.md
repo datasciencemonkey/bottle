@@ -46,3 +46,23 @@ Showing the user:
 - Do not preview with `rive push`: it uploads to the user's Rive account.
 - Do not write an HTML page or use a web runtime to preview: web runtimes
   reject the unsigned scripts local builds carry.
+
+## Follow-up for the .riv author: the spark orbit and the eyes that follow the pointer
+
+The shipped MOG is the PNG layer renderer (`src/views/mog/lamp-mascot.ts`), because no `.riv` is
+committed. It draws the gold spark as its own element and moves two pupils. The Rive path
+(`src/views/mog/rive-mascot.ts`) has nothing to forward them to: `scene.rml` defines no input for
+either. When someone authors the `.riv`, add these view-model inputs and the matching states, and
+`RiveMascot` can set them (today it only forwards `setLook` and `setHidden` to the fallback):
+
+- `lookX`, `lookY`: numbers from -1 to 1 (a vector in the unit disc, x to the right, y down). The
+  view gets `mog:look` at about 30 Hz while the pointer is near. Drive a blend or the pupil offset
+  of the open poses (idle, listening, processing, answering). Do not track in sleeping, error and
+  success. Ease to the value, and back to `0` when the pointer goes.
+- `idleMotion`: a boolean. `false` while the MOG is hidden, so the spark orbit pauses.
+- The spark: move the `Sparkle` node on a slow circle round the top of the head, about 10 s a
+  loop, with a twinkle in scale and opacity. It must stay still when `mood = sleeping` and with
+  reduced motion.
+
+`tools/clean_lamp_layers.py` removes the baked spark from the PNG layers, so the layer renderer
+draws its own. The Rive art does not need that step.

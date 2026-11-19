@@ -15,6 +15,7 @@ pub mod macos_panel;
 pub mod mcp_host;
 pub mod mog_config_host;
 pub mod mog_drag;
+pub mod mog_look_host;
 pub mod profiles_host;
 pub mod rate_bucket_host;
 pub mod recording_cloud_host;
@@ -388,6 +389,8 @@ pub fn run() {
             host.seal_main_thread();
             // MOG-18b: destroy cards that are hidden for 5 min.
             window_host::spawn_card_reaper(handle.clone())?;
+            // lamp-alive: the eyes of each MOG follow the pointer (the pointer never leaves Rust).
+            mog_look_host::spawn_look_poller(handle.clone())?;
             if demo && std::env::var("BOTTLE_DEMO_CARD_CYCLE").is_ok_and(|v| v == "1") {
                 // The Mac check of #78 (tools/mac/card-check.swift): 20 card opens.
                 demo_card_cycle(handle.clone());

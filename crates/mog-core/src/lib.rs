@@ -38,6 +38,7 @@ pub mod loopback;
 pub mod mcp_transport;
 pub mod model_request_guard;
 pub mod mog_config;
+pub mod mog_look;
 pub mod policy_store;
 pub mod profile_login;
 pub mod profile_service;

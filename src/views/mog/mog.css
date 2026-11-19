@@ -8,12 +8,20 @@ body,
   overflow: hidden;
 }
 
+/* The MOG window is 160 wide and 192 high (`MOG_WIDTH`, `MOG_HEIGHT` in src-tauri/src/windows.rs).
+   The lamp art is the 160 px square at the top. The name row under it (the target marker and the
+   name pill) is its own 32 px, so the pill never covers the lamp. */
+:root {
+  --mog-name-row: 32px;
+  --mog-art: min(100vw, calc(100vh - var(--mog-name-row)));
+}
+
 /* The mascot fills the MOG window: the Rive canvas or the PNG fallback, with the "?" cue
    art on top (ADR 0027). */
 .mascot {
   position: relative;
   width: 100vw;
-  height: 100vh;
+  height: var(--mog-art);
 }
 
 .mascot canvas,
@@ -32,13 +40,16 @@ body,
    mouth, the work halo, the level ring, the Genie (clipped at the rim), the lamp body, the answer
    ring.
    Positions are in % of the 400 px art. Only transform-type properties and opacity move.
-   An idle MOG runs no animation: only listening, working and ready loop (lamp-mascot.ts). */
+   The Genie's own loops run only in listening, working and ready (lamp-mascot.ts). The one
+   always-alive thing is the gold spark over the head: a slow orbit and a twinkle, on transform and
+   opacity only (`.lamp-spark` below), paused while hidden or sleeping and still with reduced
+   motion (lamp-alive, ADR 0107). */
 .lamp {
   position: absolute;
   inset: 0;
   margin: auto;
-  width: min(100vw, 100vh);
-  height: min(100vw, 100vh);
+  width: var(--mog-art);
+  height: var(--mog-art);
   pointer-events: none;
   /* #603 review, MEDIUM finding: on the base rule (not only `[data-hidden]`), so Hide and the
      un-hide it is paired with both ease, instead of the lamp snapping back to full size. Anchored
@@ -223,6 +234,183 @@ body,
   animation: mog-answer-ring 720ms linear 240ms forwards;
 }
 
+/* lamp-alive: the gold spark over the head. It is drawn apart from the art (the Genie layers have
+   none), so it can orbit. Four nested boxes, each with one loop on transform or opacity, so the
+   whole thing runs on the compositor and costs no layout or paint:
+   - `.spark-orbit` turns once in 10 s (linear: the sky is not eased, the rest is);
+   - `.spark-arm` breathes the orbit radius in and out (5.3 s, eased, alternate);
+   - `.spark-turn` turns back, so the star stays upright;
+   - `.spark-star` twinkles in scale and opacity (2.9 s, eased, alternate).
+   The three periods do not divide each other, so the pattern never repeats exactly. It orbits the
+   top of the head of each pose (`--spark-y`, % of the art; the standing poses are lower than the
+   baked spark, so the star clears the top of the window). */
+.lamp-spark {
+  --spark-y: 36.5%;
+  --spark-r: calc(var(--mog-art) * 0.055);
+  position: absolute;
+  left: 50%;
+  top: var(--spark-y);
+  width: 0;
+  height: 0;
+  opacity: 0.95;
+  pointer-events: none;
+  transition: opacity 240ms var(--mog-ease-out);
+}
+
+.lamp[data-mood='listening'] .lamp-spark {
+  --spark-y: 22.25%;
+}
+
+.lamp[data-mood='processing'] .lamp-spark {
+  --spark-y: 28.75%;
+}
+
+.lamp[data-mood='answering'] .lamp-spark,
+.lamp[data-mood='success'] .lamp-spark {
+  --spark-y: 12.5%;
+  --spark-r: calc(var(--mog-art) * 0.04);
+}
+
+.lamp[data-mood='error'] .lamp-spark {
+  --spark-y: 26.5%;
+  opacity: 0.6;
+}
+
+.lamp[data-mood='sleeping'] .lamp-spark {
+  --spark-y: 59.5%;
+  opacity: 0.35;
+}
+
+.spark-orbit,
+.spark-arm,
+.spark-turn {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+}
+
+.spark-orbit {
+  animation: mog-spark-orbit 10s linear infinite;
+}
+
+.spark-arm {
+  animation: mog-spark-arm 5.3s ease-in-out infinite alternate;
+}
+
+.spark-turn {
+  animation: mog-spark-turn 10s linear infinite;
+}
+
+.spark-star {
+  position: absolute;
+  left: calc(var(--mog-art) * -0.07);
+  top: calc(var(--mog-art) * -0.07);
+  width: calc(var(--mog-art) * 0.14);
+  height: calc(var(--mog-art) * 0.14);
+  overflow: visible;
+  animation: mog-spark-twinkle 2.9s ease-in-out infinite alternate;
+}
+
+/* Hidden (the Hide item, or an invisible page) and sleeping: no loop runs, so no frame is made. */
+.lamp[data-paused] .spark-orbit,
+.lamp[data-paused] .spark-arm,
+.lamp[data-paused] .spark-turn,
+.lamp[data-paused] .spark-star,
+.lamp[data-mood='sleeping'] .spark-orbit,
+.lamp[data-mood='sleeping'] .spark-arm,
+.lamp[data-mood='sleeping'] .spark-turn,
+.lamp[data-mood='sleeping'] .spark-star {
+  animation-play-state: paused;
+}
+
+.lamp[data-paused] .lamp-spark {
+  opacity: 0;
+}
+
+@keyframes mog-spark-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes mog-spark-turn {
+  to {
+    transform: rotate(-360deg);
+  }
+}
+
+@keyframes mog-spark-arm {
+  from {
+    transform: translateX(calc(var(--spark-r) * 0.7));
+  }
+  to {
+    transform: translateX(var(--spark-r));
+  }
+}
+
+@keyframes mog-spark-twinkle {
+  from {
+    opacity: 0.8;
+    transform: scale(0.85);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
+/* lamp-alive: the eyes follow the pointer. While a look is on (`data-look`, set by
+   `LampMascot.setLook`), a patch of the screen colour covers the baked eye of the pose and a
+   pupil of the eye colour moves over it by a few px: `translate` (compositor) with a short ease,
+   so it lags a little and glides back to the centre when the pointer goes. A blink covers the
+   pupil too (`scale`, a different property, so the two never fight). */
+.gaze {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  --look-x: 0;
+  --look-y: 0;
+}
+
+.gaze-pose {
+  display: none;
+}
+
+.lamp[data-look][data-mood='idle'] [data-gaze='idle'],
+.lamp[data-look][data-mood='listening'] [data-gaze='listening'],
+.lamp[data-look][data-mood='processing'] [data-gaze='processing'],
+.lamp[data-look][data-mood='answering'] [data-gaze='answering'] {
+  display: block;
+}
+
+.gaze-eye {
+  position: absolute;
+  border-radius: 25%;
+  background: linear-gradient(var(--gaze-top), var(--gaze-bottom));
+}
+
+.gaze-pupil {
+  position: absolute;
+  inset: 6% 7%;
+  border-radius: 50%;
+  background: var(--gaze-eye);
+  translate: calc(var(--look-x) * 26%) calc(var(--look-y) * 16%);
+  transform-origin: 50% 0;
+  transition: translate 170ms cubic-bezier(0.25, 0.8, 0.35, 1);
+}
+
+.genie[data-blink] .gaze-pupil {
+  animation: mog-gaze-blink 160ms ease-in-out;
+}
+
+@keyframes mog-gaze-blink {
+  45% {
+    scale: 1 0;
+  }
+}
+
 /* Error: one shake of the head, then still. */
 .lamp[data-state='error'] .genie-body {
   animation: mog-shake 420ms ease-in-out;
@@ -372,7 +560,8 @@ body,
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 0;
+  /* Over the art, above the name row. */
+  bottom: var(--mog-name-row);
   z-index: 1;
   padding-bottom: 10px;
   display: flex;
@@ -422,14 +611,15 @@ body,
 .target-marker {
   position: absolute;
   left: 50%;
-  bottom: 24px;
+  /* lamp-alive: in the name row, between the art above and the pill below, clear of both. */
+  bottom: 25px;
   z-index: 2;
   width: 0;
   height: 0;
   transform: translateX(-50%) rotate(180deg);
-  border-left: 6px solid transparent;
-  border-right: 6px solid transparent;
-  border-top: 8px solid var(--mog-overlay-text);
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid var(--mog-overlay-text);
   filter: drop-shadow(0 0 2px #000);
   pointer-events: none;
 }
@@ -462,13 +652,14 @@ body,
    MOG's accent colour. No fill (MOG-01a: the page paints nothing outside the mascot), the same
    hairline-pill-plus-halo treatment as `.badges [data-badge]` above, so the text reads on any
    desktop; the colour carries the identity instead of a background. It sits just under the lamp,
-   clear of the target marker and the badges. #603 review, finding 2: fully inside the 160x160
-   window (the old `bottom: -7px` put most of the pill below the window edge, where
-   `overflow: hidden` on `html`/`body`/`#root`, mog.css above, cut it off). */
+   clear of the target marker and the badges. #603 review, finding 2: fully inside the window
+   (the old `bottom: -7px` put most of the pill below the window edge, where `overflow: hidden`
+   on `html`/`body`/`#root`, mog.css above, cut it off). lamp-alive: the pill has the name row
+   under the art (the window is 192 high), so it never covers the lamp. */
 .identity-pill {
   position: absolute;
   left: 50%;
-  bottom: 4px;
+  bottom: 2px;
   z-index: 1;
   max-width: 88%;
   transform: translateX(-50%);
@@ -508,6 +699,19 @@ body,
    native `NSMenu` always fits on screen and closes itself on an outside click or Esc. */
 
 @media (prefers-reduced-motion: reduce) {
+  /* The spark is still: no orbit, no twinkle. It sits where the baked one was. */
+  .spark-orbit,
+  .spark-arm,
+  .spark-turn,
+  .spark-star {
+    animation: none;
+  }
+
+  /* The eyes do not track (LampMascot also ignores the look). */
+  .gaze {
+    display: none;
+  }
+
   .lamp,
   .genie-clip,
   .lamp-glow,

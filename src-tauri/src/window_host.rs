@@ -626,7 +626,7 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
         let kept = existing
             .as_ref()
             .filter(|w| w.is_visible().unwrap_or(false))
-            .and_then(logical_height);
+            .and_then(logical_size);
         let at = self.card_geometry(mog_id, kept);
         let shown = match (plan, &existing) {
             (ShowPlan::Reuse(_), Some(w)) => {
@@ -655,8 +655,8 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
 
     /// #559: the card place beside the MOG window of `mog_id`, in logical units, on the MOG's
     /// monitor. `None` if the MOG window or its geometry is not there.
-    /// `height` is the height of a card that keeps its size (#573); `None` is one line.
-    fn card_geometry(&self, mog_id: &str, height: Option<f64>) -> Option<Geometry> {
+    /// `kept` is the `(width, height)` of a card that keeps its size (#573); `None` is one line.
+    fn card_geometry(&self, mog_id: &str, kept: Option<(f64, f64)>) -> Option<Geometry> {
         let w = self.window(&WindowKind::mog(mog_id)?)?;
         let scale = w.scale_factor().ok()?;
         let pos = w.outer_position().ok()?.to_logical::<f64>(scale);
@@ -678,8 +678,8 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
                 height: z.height,
             }
         });
-        Some(match height {
-            Some(h) => windows::card_beside_with_height(&mog, screen.as_ref(), h),
+        Some(match kept {
+            Some((w, h)) => windows::card_beside_sized(&mog, screen.as_ref(), w, h).0,
             None => windows::card_beside(&mog, screen.as_ref()),
         })
     }
@@ -734,10 +734,11 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
     }
 }
 
-/// The logical height of `w`, if the platform gives it.
-fn logical_height<R: tauri::Runtime>(w: &tauri::WebviewWindow<R>) -> Option<f64> {
+/// The logical `(width, height)` of `w`, if the platform gives it.
+fn logical_size<R: tauri::Runtime>(w: &tauri::WebviewWindow<R>) -> Option<(f64, f64)> {
     let scale = w.scale_factor().ok()?;
-    Some(w.outer_size().ok()?.to_logical::<f64>(scale).height)
+    let size = w.outer_size().ok()?.to_logical::<f64>(scale);
+    Some((size.width, size.height))
 }
 
 /// Move `w` to the place of `geometry` (logical units) and keep its size. `None` changes nothing.

@@ -16,7 +16,7 @@ import {
   type CardSection,
   type CardUpdate,
 } from '../view-ipc';
-import { createWindowFit } from './fit-window';
+import { applyCardSide, createWindowFit, tauriCardWindow } from './fit-window';
 import { GenieCard } from './GenieCard';
 import { Popup } from './Popup';
 import { NO_LINKS, SafeMarkdown } from './safe-markdown';
@@ -224,7 +224,12 @@ export function CardView({ mogId }: { mogId: MogId }) {
   const shown = kept && (!newest || newest.id === kept.blurbs[0]?.id) ? kept : card;
   // #573: the window takes the height of the pop-up or the Genie card (`fit-window.ts`).
   const genie = card !== undefined && isGenieBlurbId(newest?.id);
-  const fit = useMemo(() => createWindowFit(), []);
+  // lamp-alive: the card sits close to its MOG on either side; `data-side` on the page mirrors
+  // the tail (card.css) toward the MOG.
+  const fit = useMemo(
+    () => createWindowFit(() => tauriCardWindow(mogId), { onSide: applyCardSide }),
+    [mogId],
+  );
   const lastPx = useRef<number | undefined>(undefined);
   const onSize = useCallback(
     (px: number) => {

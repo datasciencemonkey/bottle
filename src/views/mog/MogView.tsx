@@ -5,6 +5,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { MOG_MENU_HIDE_EVENT, MOG_MENU_OPEN, OPEN_CONVERSATIONS } from '../../shared/genie-status';
 import type { MogId } from '../../shared/interfaces';
 import { paletteColorOf } from '../../shared/mog-palette';
+import { MOG_LOOK_EVENT, asMogLook } from '../../shared/mog-look';
 import {
   asMogViewState,
   emitView,
@@ -68,7 +69,7 @@ export function MogView({
   };
 
   // #ui-4: Hide sinks the Genie into the lamp and shrinks the lamp art to lamp-only inside the
-  // same 160x160 window (plain CSS, no brain round trip for showing or hiding the art: this
+  // same 160x192 window (plain CSS, no brain round trip for showing or hiding the art: this
   // view holds the flag, so a click brings it back at once). It keeps running and stays a talk
   // target either way (review #603, LOW finding: the window itself never resizes, only the art).
   const [hiddenByUser, setHiddenByUser] = useState(false);
@@ -97,6 +98,47 @@ export function MogView({
     };
   }, []);
 
+  // lamp-alive: the host reads the global pointer and the brain sends this MOG where to look
+  // (`mog:look`, a vector, never a position). The view only listens (ARC-4).
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    let gone = false;
+    void listen<unknown>(
+      MOG_LOOK_EVENT,
+      (e) => {
+        const look = asMogLook(e.payload);
+        if (look) mascot.current?.setLook?.(look.dx, look.dy);
+      },
+      { target: getCurrentWindow().label },
+    )
+      .then((u) => {
+        if (gone) u();
+        else off = u;
+      })
+      .catch(() => undefined);
+    return () => {
+      gone = true;
+      off?.();
+    };
+  }, []);
+
+  // The idle motion (the spark orbit) and the gaze stop while the MOG is hidden: by the Hide menu
+  // item, or because the page is not visible (a hidden window, a locked screen).
+  const [pageHidden, setPageHidden] = useState(
+    typeof document !== 'undefined' && document.visibilityState === 'hidden',
+  );
+  useEffect(() => {
+    const on = () => setPageHidden(document.visibilityState === 'hidden');
+    document.addEventListener('visibilitychange', on);
+    return () => document.removeEventListener('visibilitychange', on);
+  }, []);
+  const idleStopped = hiddenByUser || pageHidden;
+  const stopped = useRef(idleStopped);
+  useEffect(() => {
+    stopped.current = idleStopped;
+    mascot.current?.setHidden?.(idleStopped);
+  }, [idleStopped, createMascot]);
+
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -108,6 +150,7 @@ export function MogView({
       m.setMood(s.mood);
       m.setAttention(s.overlays.attention);
     }
+    m.setHidden?.(stopped.current);
     mascot.current = m;
     return () => {
       m.destroy();

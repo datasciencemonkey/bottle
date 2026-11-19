@@ -508,3 +508,19 @@
     transition: none;
   }
 }
+
+/* lamp-alive: a card on the left of its MOG puts the tail on its right edge, pointing at the MOG
+   at head height, and the fade drifts toward it. The accent strip stays on the left. */
+html[data-side='left'] .genie::before {
+  left: auto;
+  right: -5px;
+  border-left: 0;
+  border-bottom: 0;
+  border-top: 1px solid var(--mog-edge);
+  border-right: 1px solid var(--mog-edge);
+}
+
+html[data-side='left'] .genie[data-state='fading'],
+html[data-side='left'] .genie[data-state='dismissing'] {
+  transform: translateX(4px);
+}

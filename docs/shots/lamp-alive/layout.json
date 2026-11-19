@@ -1,0 +1,49 @@
+{
+  "window": {
+    "w": 160,
+    "h": 192
+  },
+  "art": {
+    "x": 0,
+    "y": 0,
+    "w": 160,
+    "h": 160,
+    "bottom": 160
+  },
+  "mascot": {
+    "x": 0,
+    "y": 0,
+    "w": 160,
+    "h": 160,
+    "bottom": 160
+  },
+  "marker": {
+    "x": 75,
+    "y": 161,
+    "w": 10,
+    "h": 6,
+    "bottom": 167
+  },
+  "pill": {
+    "x": 45.96875,
+    "y": 171.703125,
+    "w": 68.0625,
+    "h": 18.296875,
+    "bottom": 190
+  },
+  "pill_long": {
+    "x": 0.6015625,
+    "y": 171.703125,
+    "w": 158.796875,
+    "h": 18.296875,
+    "bottom": 190
+  },
+  "ok": {
+    "pill_below_art": true,
+    "marker_below_art": true,
+    "marker_above_pill": true,
+    "pill_inside": true,
+    "long_pill_inside": true,
+    "pill_centred": true
+  }
+}

@@ -7,8 +7,8 @@
 use bottle_lib::window_host::WindowLedger;
 use bottle_lib::window_host::{CardState, NativeWindowStyle, TauriWindowHost, WindowError};
 use bottle_lib::windows::{
-    card_beside, card_beside_with_height, hides_on_close, PanelLevel, WindowKind, CARD_HIDDEN_TTL,
-    CARD_REAP_TICK,
+    card_beside, card_beside_sized, card_beside_with_height, hides_on_close, CardSide, PanelLevel,
+    WindowKind, CARD_HIDDEN_TTL, CARD_REAP_TICK,
 };
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -768,7 +768,8 @@ fn issue_559_card_sits_beside_the_mog_on_the_right_centred_on_it() {
         "x {}",
         c.x
     );
-    assert_eq!(c.y, mog.y + (mog.height - c.height) / 2.0);
+    // The tail is at head height: the top of the card is the head line minus the tail offset.
+    assert_eq!(c.y, mog.y + 72.0 - 30.0);
 }
 
 #[test]
@@ -808,4 +809,73 @@ fn issue_573_only_the_hub_hides_on_close() {
     for label in ["brain", "mog-a1", "card-a1", "hubx", ""] {
         assert!(!hides_on_close(label), "{label}");
     }
+}
+
+/// The visible edge of a card (inside the clear window pad) and the lamp art edge of the MOG.
+fn visible_gap(c: &mog_core::ipc::Geometry, mog: &mog_core::ipc::Geometry, side: CardSide) -> f64 {
+    match side {
+        CardSide::Right => (c.x + 12.0) - (mog.x + mog.width - 13.0),
+        CardSide::Left => (mog.x + 18.0) - (c.x + c.width - 12.0),
+    }
+}
+
+#[test]
+fn lamp_alive_card_is_ten_px_from_the_lamp_art_on_both_sides() {
+    let screen = g(0.0, 0.0, 1440.0, 900.0);
+    let mog = g(600.0, 300.0, 160.0, 192.0);
+    let (right, side) = card_beside_sized(&mog, Some(&screen), 340.0, 64.0);
+    assert_eq!(side, CardSide::Right);
+    assert_eq!(visible_gap(&right, &mog, side), 10.0);
+    // A compact pill (a narrow window) on the left sits as close as a wide card does.
+    let edge = g(1280.0, 300.0, 160.0, 192.0);
+    for width in [224.0, 340.0] {
+        let (left, side) = card_beside_sized(&edge, Some(&screen), width, 64.0);
+        assert_eq!(side, CardSide::Left, "width {width}");
+        assert_eq!(visible_gap(&left, &edge, side), 10.0, "width {width}");
+        assert_eq!(left.width, width);
+    }
+}
+
+#[test]
+fn lamp_alive_card_flips_at_the_screen_edge_and_clamps_when_neither_side_fits() {
+    let screen = g(0.0, 0.0, 1440.0, 900.0);
+    // Room on the right: stay right. No room on the right, room on the left: flip.
+    assert_eq!(
+        card_beside_sized(&g(900.0, 300.0, 160.0, 192.0), Some(&screen), 340.0, 64.0).1,
+        CardSide::Right
+    );
+    assert_eq!(
+        card_beside_sized(&g(1100.0, 300.0, 160.0, 192.0), Some(&screen), 340.0, 64.0).1,
+        CardSide::Left
+    );
+    // A small screen: nothing fits, the card still stays on it.
+    let small = g(0.0, 0.0, 400.0, 300.0);
+    let (c, _) = card_beside_sized(&g(120.0, 40.0, 160.0, 192.0), Some(&small), 340.0, 200.0);
+    assert!(c.x >= 0.0 && c.x + c.width <= 400.0, "x {}", c.x);
+    assert!(c.y >= 0.0 && c.y + c.height <= 300.0, "y {}", c.y);
+}
+
+#[test]
+fn lamp_alive_card_follows_a_second_monitor_with_a_negative_origin() {
+    // A monitor to the left of the main one: its frame starts at a negative x.
+    let screen = g(-1440.0, 0.0, 1440.0, 900.0);
+    let mog = g(-250.0, 300.0, 160.0, 192.0); // its right edge is 90 px from the screen edge
+    let (c, side) = card_beside_sized(&mog, Some(&screen), 340.0, 64.0);
+    assert_eq!(side, CardSide::Left);
+    assert!(c.x >= screen.x && c.x + c.width <= screen.x + screen.width);
+    assert_eq!(visible_gap(&c, &mog, side), 10.0);
+}
+
+#[test]
+fn lamp_alive_the_mog_window_has_its_own_row_for_the_name_under_the_art() {
+    use bottle_lib::windows::{MOG_ART_HEIGHT, MOG_HEIGHT, MOG_WIDTH};
+    let spec = WindowKind::Mog("a1".into()).spec();
+    assert_eq!((spec.width, spec.height), (MOG_WIDTH, MOG_HEIGHT));
+    assert_eq!(MOG_ART_HEIGHT, MOG_WIDTH, "the art is a square");
+    const {
+        assert!(
+            MOG_HEIGHT - MOG_ART_HEIGHT >= 24,
+            "room for the marker and the pill"
+        )
+    };
 }

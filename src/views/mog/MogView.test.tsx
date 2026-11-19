@@ -679,3 +679,74 @@ describe('V2 MOG view target marker and toast (#73)', () => {
     }
   });
 });
+
+describe('lamp-alive: the eyes follow the pointer, the spark pauses when hidden', () => {
+  beforeEach(() => tauri.reset());
+
+  function lookMascot() {
+    const calls: string[] = [];
+    const m: MascotRenderer = {
+      mount: () => undefined,
+      setMood: () => undefined,
+      setLevel: () => undefined,
+      setAttention: () => undefined,
+      setHover: () => undefined,
+      poke: () => undefined,
+      destroy: () => undefined,
+      setLook: (dx, dy) => calls.push(`look:${dx},${dy}`),
+      setHidden: (h) => calls.push(`hidden:${h}`),
+    };
+    return { m, calls };
+  }
+
+  it('listens to mog:look (listen only, ARC-4) and passes the vector to the mascot', async () => {
+    const { m, calls } = lookMascot();
+    await render(<MogView mogId={ID} createMascot={() => m} />);
+    expect(tauri.listeners('mog:look')).toBe(1);
+    // Only this MOG's window gets its look (the brain also emits to one window only).
+    expect(tauri.listenOptions.get('mog:look')).toEqual([{ target: tauri.label }]);
+    await tauri.emit('mog:look', { dx: 0.5, dy: -0.25 });
+    expect(calls).toContain('look:0.5,-0.25');
+    // A vector longer than the unit disc is clamped; a bad payload is dropped.
+    await tauri.emit('mog:look', { dx: 3, dy: 4 });
+    await tauri.emit('mog:look', { dx: 'x', dy: 0 });
+    await tauri.emit('mog:look', null);
+    expect(calls.filter((c) => c.startsWith('look:'))).toHaveLength(2);
+    const clamped = calls.filter((c) => c.startsWith('look:'))[1] ?? '';
+    const [dx, dy] = clamped.slice(5).split(',').map(Number);
+    expect(Math.hypot(dx ?? 0, dy ?? 0)).toBeCloseTo(1);
+    // The view sends nothing to the brain for a look (it only listens).
+    expect(tauri.invoke.mock.calls.every(([c]) => c === 'view_emit')).toBe(true);
+  });
+
+  it('stops listening when the view unmounts', async () => {
+    const { m } = lookMascot();
+    const { root } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    expect(tauri.listeners('mog:look')).toBe(1);
+    act(() => root.unmount());
+    expect(tauri.listeners('mog:look')).toBe(0);
+  });
+
+  it('tells the mascot it is hidden by the Hide item, and shown again', async () => {
+    const { m, calls } = lookMascot();
+    await render(<MogView mogId={ID} createMascot={() => m} />);
+    expect(calls).toContain('hidden:false');
+    await tauri.emit('mog:menu_hide', { hidden: true });
+    expect(calls.at(-1)).toBe('hidden:true');
+    await tauri.emit('mog:menu_hide', { hidden: false });
+    expect(calls.at(-1)).toBe('hidden:false');
+  });
+
+  it('tells the mascot it is hidden while the page is not visible', async () => {
+    const { m, calls } = lookMascot();
+    await render(<MogView mogId={ID} createMascot={() => m} />);
+    const state = vi.spyOn(document, 'visibilityState', 'get');
+    state.mockReturnValue('hidden');
+    await act(async () => void document.dispatchEvent(new Event('visibilitychange')));
+    expect(calls.at(-1)).toBe('hidden:true');
+    state.mockReturnValue('visible');
+    await act(async () => void document.dispatchEvent(new Event('visibilitychange')));
+    expect(calls.at(-1)).toBe('hidden:false');
+    state.mockRestore();
+  });
+});

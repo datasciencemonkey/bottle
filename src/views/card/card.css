@@ -216,3 +216,19 @@ body,
   color: var(--mog-text-muted);
   font-size: var(--mog-text-xs);
 }
+
+/* lamp-alive: a card on the left of its MOG mirrors the pop-up: the tail is on the right edge and
+   points at the MOG, and the fade drifts toward it. `data-side` is set on the page by the window
+   fit (`fit-window.ts`, `card-placement.ts`); a card on the right keeps the rules above. */
+html[data-side='left'] .popup::before {
+  left: auto;
+  right: -5px;
+  border-left: 0;
+  border-bottom: 0;
+  border-top: 1px solid var(--mog-edge);
+  border-right: 1px solid var(--mog-edge);
+}
+
+html[data-side='left'] .popup[data-state='fading'] {
+  transform: translateX(4px);
+}
