@@ -40,8 +40,10 @@ use mog_core::hotkey_core::{
 use mog_core::hotkey_windows::{forward_to_engine, HookSignal};
 use mog_core::ipc::{events, PermissionKind, WindowClass};
 use mog_core::keyboard_env::{self, CopilotKeyFlag, MemoryCopilotKeyFlag, WithCopilotFlag};
+use mog_core::recording::RecordingSettingsStore;
 use mog_core::types::{TalkKeyReason, TalkKeyState, TalkKeyStatus};
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use tauri::{AppHandle, Manager, Runtime};
@@ -245,6 +247,64 @@ impl TalkTargetRoute for PttTarget {
     }
 }
 
+/// The Call recording knob as the hotkey layer sees it (ADR 0103). While it is on, each
+/// talk-key hold grabs ⌥R (macOS) and R toggles a recording. While it is off (the default),
+/// R is not grabbed and types as usual. The app manages one gate; the recording settings set
+/// it at launch and at each knob change.
+#[derive(Debug, Default, Clone)]
+pub struct RecordKeyGate(Arc<AtomicBool>);
+
+impl RecordKeyGate {
+    /// Turn the record key on or off.
+    pub fn set(&self, on: bool) {
+        self.0.store(on, Ordering::Relaxed);
+    }
+
+    /// The knob is on now.
+    pub fn is_on(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+
+    /// The flag that the hotkey engine reads.
+    pub fn shared(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.0)
+    }
+
+    /// `inner`, with this gate following its knob (`enabled`): now, and after each save
+    /// (`recording_settings_write`). The tap callback then reads only the flag, never the store.
+    pub fn follow(
+        &self,
+        inner: Arc<dyn RecordingSettingsStore>,
+    ) -> Arc<dyn RecordingSettingsStore> {
+        self.set(inner.load().is_ok_and(|s| s.enabled));
+        Arc::new(KnobFollower {
+            inner,
+            gate: self.clone(),
+        })
+    }
+}
+
+/// A recording settings store that keeps a [`RecordKeyGate`] in step with the knob (ADR 0103).
+struct KnobFollower {
+    inner: Arc<dyn RecordingSettingsStore>,
+    gate: RecordKeyGate,
+}
+
+impl RecordingSettingsStore for KnobFollower {
+    fn load(&self) -> mog_core::error::CoreResult<mog_core::types::RecordingSettings> {
+        self.inner.load()
+    }
+
+    fn save(
+        &self,
+        settings: &mog_core::types::RecordingSettings,
+    ) -> mog_core::error::CoreResult<()> {
+        self.inner.save(settings)?;
+        self.gate.set(settings.enabled);
+        Ok(())
+    }
+}
+
 /// The `hotkey:ptt` payload of section 4.5: `{ mogId, phase }`. For the up of a hold with
 /// the ask key (`HotkeyOutput::PttAskUp`), `PttForwarder` adds `ask: true` (RTR-17a, ADR 0098).
 pub fn ptt_payload(mog_id: &str, phase: PttPhase) -> Value {
@@ -277,6 +337,8 @@ pub struct PttForwarder<B: BrainSink, S: StatusSink> {
     held: Option<String>,
     /// The MOG of the last press that ended, for the `double_tap` that follows it.
     last: Option<String>,
+    /// The MOG of the press that a `cancel` just ended, for a `RecordToggle` (ADR 0103).
+    toggle: Option<String>,
     key_down: Option<KeyDownHook>,
 }
 
@@ -289,6 +351,7 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
             status,
             held: None,
             last: None,
+            toggle: None,
             key_down: None,
         }
     }
@@ -315,11 +378,15 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
                             hook();
                         }
                         // #562 (ADR 0095): an empty ID is a press with no open MOG.
+                        self.toggle = None;
                         self.held = Some(self.target.current().unwrap_or_default());
                         self.held.clone()
                     }
                     PttPhase::Up | PttPhase::Cancel => {
                         self.last = self.held.take();
+                        self.toggle = (phase == PttPhase::Cancel)
+                            .then(|| self.last.clone())
+                            .flatten();
                         self.last.clone()
                     }
                     PttPhase::DoubleTap => self.last.take(),
@@ -343,6 +410,15 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
             // `cancel` as a tap (CAP-14b), and R1 sends `Ptt(DoubleTap)` for two (CAP-14a).
             // TODO(#444): mark that `cancel` with `tap: true` so the brain uses R1's decision.
             HotkeyOutput::Tap => {}
+            // ADR 0103: the R press came right after the `cancel` that ended the hold, so the
+            // toggle goes to the MOG of that press, once.
+            HotkeyOutput::RecordToggle => {
+                if let Some(mog) = self.toggle.take() {
+                    let _ = self
+                        .brain
+                        .deliver(events::HOTKEY_RECORD_TOGGLE, json!({ "mogId": mog }));
+                }
+            }
             // Mapped to `Ptt(Up)` above.
             HotkeyOutput::PttAskUp => {}
         }
@@ -814,19 +890,21 @@ impl<R: Runtime> TalkKeySink for AppTalkKey<R> {
 
 /// The platform service and permission API (macOS).
 /// macOS has no Copilot key and no hook seam, so `_copilot` and `_status` are unused: the
-/// pill outputs reach the status sink through the forwarder.
+/// pill outputs reach the status sink through the forwarder. `record` is the Call recording
+/// knob: while it is on, each talk-key hold grabs ⌥R (ADR 0103).
 #[cfg(target_os = "macos")]
 pub fn platform_service(
     talk: TalkBinding,
     sink: Arc<dyn HotkeySink>,
     _copilot: Arc<dyn CopilotKeyFlag>,
     _status: Arc<dyn StatusSink>,
+    record: &RecordKeyGate,
 ) -> (Box<dyn HotkeyService>, Box<dyn PermissionApi>) {
     use mog_core::hotkey_macos::{MacHotkeyService, MacPermissions};
     // Ctrl+Win is a Windows key: macOS settings never hold it, so it gives the D66 default.
     let talk_key = talk.core_talk_key().unwrap_or_default();
     (
-        Box::new(MacHotkeyService::new(talk_key, sink)),
+        Box::new(MacHotkeyService::new(talk_key, sink).with_record_gate(record.shared())),
         Box::new(MacPermissions),
     )
 }
@@ -836,12 +914,15 @@ pub fn platform_service(
 /// The hook sends [`HookSignal`]s on its own channel; the adapter thread feeds them to the
 /// shared engine, which emits into `sink`. The hook needs no OS prompt. A Copilot chord
 /// seen by the hook sets `copilot` (#332). The talk-key signals go to `status` (ADR 0039).
+/// Windows has no ask key and no record key yet (ADR 0098, ADR 0103): the hook cannot grab
+/// Right-Alt + R, so `_record` is unused and every Windows hold is dictation.
 #[cfg(windows)]
 pub fn platform_service(
     talk: TalkBinding,
     sink: Arc<dyn HotkeySink>,
     copilot: Arc<dyn CopilotKeyFlag>,
     status: Arc<dyn StatusSink>,
+    _record: &RecordKeyGate,
 ) -> (Box<dyn HotkeyService>, Box<dyn PermissionApi>) {
     use mog_core::hotkey_windows::win32::WindowsHotkeyService;
     let (service, rx) = WindowsHotkeyService::new(talk.windows_talk_key());
@@ -860,6 +941,7 @@ pub fn platform_service(
     _sink: Arc<dyn HotkeySink>,
     _copilot: Arc<dyn CopilotKeyFlag>,
     _status: Arc<dyn StatusSink>,
+    _record: &RecordKeyGate,
 ) -> (Box<dyn HotkeyService>, Box<dyn PermissionApi>) {
     (
         Box::new(mog_core::hotkey::StubHotkeyService),
@@ -885,7 +967,17 @@ impl PermissionApi for NoOsPermission {
 /// prompt). The settings store is in memory until #77 (see `hotkey_settings`). One Copilot
 /// key flag goes to the key check reads and to the hook (#332, ADR 0025); it is in memory
 /// until #341. The Windows hook seam sends the talk-key status to the brain (ADR 0039).
+/// The app manages one [`RecordKeyGate`] (ADR 0103, `lib.rs` links it to the recording
+/// settings); each service of a talk-key change shares it.
 pub fn install<R: Runtime>(app: &AppHandle<R>) -> std::io::Result<()> {
+    let record = match app.try_state::<RecordKeyGate>() {
+        Some(g) => g.inner().clone(),
+        None => {
+            let g = RecordKeyGate::default();
+            app.manage(g.clone());
+            g
+        }
+    };
     let copilot: Arc<dyn CopilotKeyFlag> = Arc::new(MemoryCopilotKeyFlag::default());
     let status: Arc<dyn StatusSink> = Arc::new(BrainStatus(app.clone()));
     let settings = HotkeySettings::load(
@@ -898,7 +990,13 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> std::io::Result<()> {
         Box::new(AppTalkKey(app.clone())),
     );
     install_with(app, settings, move |talk, sink| {
-        platform_service(talk, sink, Arc::clone(&copilot), Arc::clone(&status))
+        platform_service(
+            talk,
+            sink,
+            Arc::clone(&copilot),
+            Arc::clone(&status),
+            &record,
+        )
     })
 }
 
@@ -1202,6 +1300,94 @@ mod tests {
         );
         assert!(items.iter().all(|(_, p)| p.get("ask").is_none()));
         assert!(items.iter().all(|(_, p)| p.get("shift").is_none()));
+    }
+
+    #[test]
+    fn rec_an_r_press_sends_cancel_then_the_record_toggle() {
+        let target = Arc::new(PttTarget::default());
+        target.set("a1");
+        let (mut f, brain, _) = forwarder(&target);
+        // A toggle with no press before it sends nothing.
+        f.on_output(HotkeyOutput::RecordToggle);
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Down));
+        target.set("b2");
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Cancel));
+        f.on_output(HotkeyOutput::RecordToggle);
+        assert_eq!(
+            brain.items(),
+            vec![
+                ptt("a1", "down"),
+                ptt("a1", "cancel"),
+                ("hotkey:record_toggle".to_owned(), json!({ "mogId": "a1" })),
+            ]
+        );
+        // The toggle goes out once per press.
+        f.on_output(HotkeyOutput::RecordToggle);
+        assert_eq!(brain.items().len(), 3);
+    }
+
+    #[test]
+    fn rec_the_record_key_gate_follows_the_knob() {
+        let gate = RecordKeyGate::default();
+        assert!(!gate.is_on(), "the knob is off by default");
+        let shared = gate.shared();
+        gate.set(true);
+        assert!(shared.load(Ordering::Relaxed));
+        assert!(gate.clone().is_on());
+        gate.set(false);
+        assert!(!shared.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn rec_the_gate_follows_the_saved_knob_of_the_recording_settings() {
+        use mog_core::recording::MemorySettingsStore;
+        use mog_core::types::RecordingSettings;
+        let on = RecordingSettings {
+            enabled: true,
+            ..RecordingSettings::default()
+        };
+        // The knob at launch.
+        let gate = RecordKeyGate::default();
+        let _ = gate.follow(Arc::new(MemorySettingsStore::new(on.clone())));
+        assert!(gate.is_on());
+        // Each save moves the gate.
+        let gate = RecordKeyGate::default();
+        let store = gate.follow(Arc::new(MemorySettingsStore::default()));
+        assert!(!gate.is_on());
+        store.save(&on).unwrap();
+        assert!(gate.is_on());
+        assert!(store.load().unwrap().enabled);
+        store.save(&RecordingSettings::default()).unwrap();
+        assert!(!gate.is_on());
+    }
+
+    #[test]
+    fn rec_the_app_links_the_gate_to_the_recording_component() {
+        // PR C/#595/#592 gave `run` a real persisted settings store (`recording_settings`, a
+        // `JsonSettingsStore`); the gate now follows that store instead of a throwaway
+        // `MemorySettingsStore`, so both the gate and the `recording_*` commands read and write
+        // the same knob.
+        let src = include_str!("lib.rs");
+        let flat: String = src.split_whitespace().collect();
+        assert!(
+            flat.contains("record_gate.follow(recording_settings)"),
+            "lib.rs"
+        );
+        assert!(flat.contains(".manage(record_gate)"), "lib.rs");
+    }
+
+    #[test]
+    fn rec_the_macos_service_gets_the_record_key_gate() {
+        // The `cfg(target_os = "macos")` factory wires the gate into the engine.
+        let src = include_str!("hotkey_host.rs");
+        let mac = &src[src
+            .find("use mog_core::hotkey_macos::{MacHotkeyService, MacPermissions};")
+            .expect("the macOS factory")..];
+        let mac = &mac[..mac.find("#[cfg(windows)]").expect("the end")];
+        assert!(
+            mac.contains("MacHotkeyService::new(talk_key, sink).with_record_gate(record.shared())"),
+            "{mac}"
+        );
     }
 
     #[test]
@@ -2468,7 +2654,7 @@ mod tests {
         for part in [
             "MemoryCopilotKeyFlag::default()",
             "WithCopilotFlag::new(keyboard_env::os_env_reads(),Arc::clone(&copilot)",
-            "platform_service(talk,sink,Arc::clone(&copilot),Arc::clone(&status))",
+            "platform_service(talk,sink,Arc::clone(&copilot),Arc::clone(&status),&record,)",
             "BrainStatus(app.clone())",
         ] {
             assert!(flat.contains(part), "install misses {part}");

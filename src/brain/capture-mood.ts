@@ -37,6 +37,10 @@ export const REFUSAL_REASONS = [
   'host_failed',
   'permission_denied',
   'no_device',
+  'recording_in_progress',
+  'no_home_profile',
+  'no_profile',
+  'profiles_differ',
 ] as const;
 export type RefusalReason = (typeof REFUSAL_REASONS)[number];
 
@@ -57,6 +61,29 @@ export const REFUSAL_TEXT: Readonly<Record<RefusalReason, { text: string; label:
     label: 'Mic not started: allow the mic for Bottle in the system settings',
   },
   no_device: { text: 'No mic found', label: 'Mic not started: connect a microphone' },
+  // ADR 0103: while a recording runs, the talk key does not take the mic.
+  recording_in_progress: {
+    text: 'Recording in progress',
+    label: 'Mic not started: a call recording uses the mic. Press ⌥R in a hold to stop it',
+  },
+  // ADR 0103: the ⌥R start needs the home profile; Bottle never picks one.
+  no_home_profile: {
+    text: 'Pick a workspace first',
+    label: 'Recording not started: pick a home workspace for this MOG first',
+  },
+  // ADR 0103, recording-profile.ts: ⌥R shares the hub Record control's `recordingProfile`. No
+  // MOG anywhere has a home yet.
+  no_profile: {
+    text: 'Pick a workspace first',
+    label: 'Recording not started: no MOG has a home workspace yet; pick one first',
+  },
+  // ADR 0103, recording-profile.ts: two or more MOGs have different homes. Bottle never picks
+  // between workspaces, so ⌥R refuses, the same as the hub Record control.
+  profiles_differ: {
+    text: 'MOGs use different workspaces',
+    label:
+      'Recording not started: your MOGs use different home workspaces; recording needs one workspace for all of them',
+  },
 };
 
 /** ADR 0103: the capture owner of a call recording. It is not a MOG. */
@@ -67,6 +94,10 @@ const IPC_REASONS: ReadonlySet<string> = new Set<RefusalReason>([
   'consent_storage_failed',
   'mic_busy',
   'host_failed',
+  'recording_in_progress',
+  'no_home_profile',
+  'no_profile',
+  'profiles_differ',
 ]);
 
 /** The reason of a refused start. Only a known `IpcError` code counts; anything else is host_failed. */
