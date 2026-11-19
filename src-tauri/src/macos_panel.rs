@@ -14,8 +14,20 @@
 //! non-activating NSPanel, but it can become key, so typing and the IME work while the
 //! frontmost app stays (MOG-03b). It shows at Floating level and is never dragged.
 //! TODO(#336): the on-screen card checks on a Mac (20 opens, typing and IME, memory after 5 min).
+//!
+//! refs #10, #103: a double-click on a MOG or its card must open the hub on Conversations
+//! (ADR 0102). `accept_first_mouse` (`windows.rs`) already gets every click to the page even
+//! while Bottle is not the active app. But AppKit's own `NSEvent.clickCount` never passes 1 on
+//! these panels: a never-key window (the MOG) or one that was not yet key (the card) delivers
+//! every click through the `acceptsFirstMouse` path, which AppKit does not count toward a
+//! multi-click sequence (confirmed with a minimal AppKit probe outside this repo: two real clicks
+//! 200 ms apart on such a panel both report `clickCount == 1`). So WebKit never makes its own
+//! `dblclick`, and the page's `onDoubleClick` (already correct and tested) never fires. The event
+//! monitor below now also notices the gesture itself from two clicks' timestamps and positions
+//! (`mog_drag::is_double_click`), swallows the second click, and replays it to the page as a
+//! `dblclick` at the same point (`notice_click`, `double_click_script`).
 
-use crate::mog_drag::{DragGesture, MouseInput, Verdict};
+use crate::mog_drag::{is_double_click, ClickEvent, DragGesture, MouseInput, Verdict};
 use crate::window_host::{NativeWindowStyle, WindowError};
 use crate::windows::{PanelLevel, PanelSpec, WindowKind};
 use objc2::rc::Retained;
@@ -26,6 +38,8 @@ use objc2_app_kit::{
     NSColor, NSEvent, NSEventMask, NSEventType, NSFloatingWindowLevel, NSPanel,
     NSStatusWindowLevel, NSWindow, NSWindowCollectionBehavior, NSWindowLevel, NSWindowStyleMask,
 };
+use objc2_foundation::NSString;
+use objc2_web_kit::WKWebView;
 use std::cell::{Cell, RefCell};
 use std::ptr::NonNull;
 
@@ -319,10 +333,15 @@ thread_local! {
     /// The mouse-down that began the gesture: AppKit starts a window drag from it.
     static PRESS: RefCell<Option<Retained<NSEvent>>> = const { RefCell::new(None) };
     static INSTALLED: Cell<bool> = const { Cell::new(false) };
+    /// refs #10, #103: the last completed (non-drag) click on each MOG or card panel, keyed by the
+    /// window's identity, for double-click detection (`notice_click`). One slot per window is
+    /// enough: a third click either matches this one (a double click) or replaces it.
+    static LAST_CLICK: RefCell<Option<(usize, ClickEvent)>> = const { RefCell::new(None) };
 }
 
-/// Install the app-wide event monitor that drags MOG panels (MOG-01c). It sees only the
-/// left-mouse events of `MogPanel` windows; every other event passes unchanged. Idempotent.
+/// Install the app-wide event monitor that drags MOG panels (MOG-01c) and replays a double
+/// click on a MOG or card panel as a page `dblclick` (refs #10, #103). It sees only the left-mouse events
+/// of `MogPanel` and `CardPanel` windows; every other event passes unchanged. Idempotent.
 pub fn install_drag_monitor(_mtm: MainThreadMarker) {
     if INSTALLED.with(|i| i.replace(true)) {
         return;
@@ -362,10 +381,23 @@ pub fn decide(gesture: &mut DragGesture, ev: &NSEvent, window: &NSWindow) -> Opt
     Some(gesture.on(input))
 }
 
-/// `Some(())` when the event is consumed (a drag), `None` to pass it on.
+/// `Some(())` when the event is consumed (a drag, or the second click of a double click that was
+/// already replayed to the page), `None` to pass it on.
 fn handle(ev: &NSEvent) -> Option<()> {
     let mtm = MainThreadMarker::new()?;
     let window = ev.window(mtm)?;
+    let is_up = ev.r#type() == NSEventType::LeftMouseUp;
+
+    if window.isKindOfClass(CardPanel::class()) {
+        // The card never drags (UX-19a): every left-mouse-up on it is a completed click.
+        if is_up && notice_click(&window, ev) {
+            return Some(()); // the second click of a double click: see notice_click.
+        }
+        return None;
+    }
+    if !window.isKindOfClass(MogPanel::class()) {
+        return None;
+    }
     let verdict = GESTURE.with(|g| {
         let mut gesture = g.get();
         let v = decide(&mut gesture, ev, &window);
@@ -377,6 +409,12 @@ fn handle(ev: &NSEvent) -> Option<()> {
         NSEventType::LeftMouseUp => PRESS.with(|p| *p.borrow_mut() = None),
         _ => {}
     }
+    // `Verdict::Pass` on a mouse-up means the gesture was a plain click, not a drag (`mog_drag`'s
+    // `DragGesture::on` only returns `Swallow` there when it was dragging): dragging the MOG
+    // must never count toward a double click, or open the hub.
+    if is_up && verdict == Verdict::Pass && notice_click(&window, ev) {
+        return Some(()); // the second click of a double click: see notice_click.
+    }
     match verdict {
         Verdict::Pass => None,
         Verdict::Swallow => Some(()),
@@ -387,4 +425,66 @@ fn handle(ev: &NSEvent) -> Option<()> {
             Some(())
         }
     }
+}
+
+/// Record a completed click on `window` and report whether it completes a double click (refs #10, #103).
+///
+/// `true` means this mouse-up already got replayed to the page as a `dblclick` (`eval_in_web_view`
+/// below): the caller must swallow it, because letting it through would also fire the page's own
+/// (uncounted, uncoordinated) native `click` a second time, re-arming its single-click timer with
+/// nothing left to cancel it (`MogView.tsx`'s `DOUBLE_CLICK_MS` guard).
+pub fn notice_click(window: &NSWindow, ev: &NSEvent) -> bool {
+    let p = window.convertPointToScreen(ev.locationInWindow());
+    let click = ClickEvent {
+        timestamp: ev.timestamp(),
+        x: p.x,
+        y: p.y,
+    };
+    let key = window as *const NSWindow as usize;
+    let is_double = LAST_CLICK.with(|last| {
+        let mut last = last.borrow_mut();
+        let double = last.is_some_and(|(k, c)| {
+            k == key && is_double_click(c, click, NSEvent::doubleClickInterval())
+        });
+        *last = if double { None } else { Some((key, click)) };
+        double
+    });
+    if is_double {
+        if let Some(content) = window.contentView() {
+            let loc = ev.locationInWindow();
+            let height = content.frame().size.height;
+            eval_in_web_view(window, &double_click_script(loc.x, height - loc.y));
+        }
+    }
+    is_double
+}
+
+/// The script that replays a native double click as a page `dblclick` (refs #10, #103): `elementFromPoint`
+/// finds the same element a real double click would hit (window-local points and CSS pixels
+/// coincide here: these windows have no title bar and the web view fills the content view), and
+/// a bubbling `MouseEvent` with `detail: 2` is what `onDoubleClick` (React) reacts to.
+pub fn double_click_script(x: f64, y: f64) -> String {
+    format!(
+        "(function(){{\
+var el=document.elementFromPoint({x},{y})||document.body;\
+el.dispatchEvent(new MouseEvent('dblclick',{{bubbles:true,cancelable:true,view:window,clientX:{x},clientY:{y},detail:2}}));\
+}})();"
+    )
+}
+
+/// Evaluate `js` in the WKWebView of `window`. Best-effort and silent: nothing to replay to if
+/// the window has no web view (being destroyed, or a plain window in a test).
+fn eval_in_web_view(window: &NSWindow, js: &str) {
+    let Some(cls) = AnyClass::get(c"WKWebView") else {
+        return;
+    };
+    let Some(view) = window.contentView().and_then(|c| find_web_view(&c, cls)) else {
+        return;
+    };
+    let Ok(web) = Retained::downcast::<WKWebView>(view) else {
+        return;
+    };
+    let script = NSString::from_str(js);
+    // SAFETY: main thread (the event monitor runs only there); no completion handler needed.
+    unsafe { web.evaluateJavaScript_completionHandler(&script, None) };
 }

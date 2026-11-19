@@ -107,13 +107,37 @@ const TESTS: &[Test] = &[
         name: "mog_01c_appkit_events_on_other_windows_or_buttons_are_not_touched",
         run: mog_01c_appkit_events_on_other_windows_or_buttons_are_not_touched,
     },
+    Test {
+        name: "dblclick_appkit_two_close_clicks_on_a_mog_panel_notice_the_second",
+        run: dblclick_appkit_two_close_clicks_on_a_mog_panel_notice_the_second,
+    },
+    Test {
+        name: "dblclick_appkit_two_close_clicks_on_a_card_panel_notice_the_second",
+        run: dblclick_appkit_two_close_clicks_on_a_card_panel_notice_the_second,
+    },
+    Test {
+        name: "dblclick_appkit_a_slow_second_click_is_not_a_double_click",
+        run: dblclick_appkit_a_slow_second_click_is_not_a_double_click,
+    },
+    Test {
+        name: "dblclick_appkit_clicks_on_two_different_panels_do_not_pair",
+        run: dblclick_appkit_clicks_on_two_different_panels_do_not_pair,
+    },
+    Test {
+        name: "dblclick_appkit_a_third_click_starts_a_fresh_pair",
+        run: dblclick_appkit_a_third_click_starts_a_fresh_pair,
+    },
+    Test {
+        name: "dblclick_appkit_script_targets_the_point_and_fires_a_bubbling_dblclick",
+        run: dblclick_appkit_script_targets_the_point_and_fires_a_bubbling_dblclick,
+    },
 ];
 
 #[cfg(target_os = "macos")]
 mod appkit {
     use bottle_lib::macos_panel::{
-        appkit_collection_behavior, appkit_level, apply_panel, decide, focus_web_view, read_panel,
-        PanelReadback,
+        appkit_collection_behavior, appkit_level, apply_panel, decide, double_click_script,
+        focus_web_view, notice_click, read_panel, PanelReadback,
     };
     use bottle_lib::mog_drag::{DragGesture, Verdict};
     use bottle_lib::windows::{PanelLevel, PanelSpec, WindowKind};
@@ -225,11 +249,18 @@ mod appkit {
     }
 
     fn event(t: NSEventType, x: f64, y: f64) -> Retained<NSEvent> {
+        event_at(t, x, y, 0.0)
+    }
+
+    /// Like `event`, but with a chosen AppKit timestamp (seconds), for double-click timing
+    /// (refs #10, #103: `notice_click` reads `ev.timestamp()`, not AppKit's own `clickCount`,
+    /// which never passes 1 on a panel that never becomes key or never activates the app).
+    fn event_at(t: NSEventType, x: f64, y: f64, timestamp: f64) -> Retained<NSEvent> {
         NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
             t,
             NSPoint::new(x, y),
             NSEventModifierFlags::empty(),
-            0.0,
+            timestamp,
             0,
             None,
             0,
@@ -490,5 +521,98 @@ mod appkit {
         ensure(other == [None, None, None] && !g.is_dragging(), || {
             format!("{other:?}")
         })
+    }
+
+    // ---- refs #10, #103: a double click notices itself (AppKit's clickCount never passes 1) ----
+
+    pub fn dblclick_appkit_two_close_clicks_on_a_mog_panel_notice_the_second() -> Outcome {
+        let window = mog_panel()?;
+        let first = notice_click(
+            &window,
+            &event_at(NSEventType::LeftMouseUp, 20.0, 20.0, 100.0),
+        );
+        let second = notice_click(
+            &window,
+            &event_at(NSEventType::LeftMouseUp, 21.0, 20.0, 100.05),
+        );
+        ensure(!first && second, || {
+            format!("first={first} second={second}")
+        })
+    }
+
+    pub fn dblclick_appkit_two_close_clicks_on_a_card_panel_notice_the_second() -> Outcome {
+        let (window, _web) = card_panel()?;
+        let first = notice_click(
+            &window,
+            &event_at(NSEventType::LeftMouseUp, 20.0, 20.0, 200.0),
+        );
+        let second = notice_click(
+            &window,
+            &event_at(NSEventType::LeftMouseUp, 20.0, 21.0, 200.05),
+        );
+        ensure(!first && second, || {
+            format!("first={first} second={second}")
+        })
+    }
+
+    pub fn dblclick_appkit_a_slow_second_click_is_not_a_double_click() -> Outcome {
+        let window = mog_panel()?;
+        // 10 s is past any real double-click interval setting: the point is the gate on time,
+        // not a race against the test machine's own `NSEvent.doubleClickInterval`.
+        let first = notice_click(
+            &window,
+            &event_at(NSEventType::LeftMouseUp, 20.0, 20.0, 300.0),
+        );
+        let second = notice_click(
+            &window,
+            &event_at(NSEventType::LeftMouseUp, 20.0, 20.0, 310.0),
+        );
+        ensure(!first && !second, || {
+            format!("first={first} second={second}")
+        })
+    }
+
+    pub fn dblclick_appkit_clicks_on_two_different_panels_do_not_pair() -> Outcome {
+        let a = mog_panel()?;
+        let b = mog_panel()?;
+        let first = notice_click(&a, &event_at(NSEventType::LeftMouseUp, 20.0, 20.0, 400.0));
+        let second = notice_click(&b, &event_at(NSEventType::LeftMouseUp, 20.0, 20.0, 400.05));
+        ensure(!first && !second, || {
+            format!("first={first} second={second}")
+        })
+    }
+
+    pub fn dblclick_appkit_a_third_click_starts_a_fresh_pair() -> Outcome {
+        let window = mog_panel()?;
+        let first = notice_click(
+            &window,
+            &event_at(NSEventType::LeftMouseUp, 20.0, 20.0, 500.0),
+        );
+        let second = notice_click(
+            &window,
+            &event_at(NSEventType::LeftMouseUp, 20.0, 20.0, 500.05),
+        );
+        let third = notice_click(
+            &window,
+            &event_at(NSEventType::LeftMouseUp, 20.0, 20.0, 500.1),
+        );
+        let fourth = notice_click(
+            &window,
+            &event_at(NSEventType::LeftMouseUp, 20.0, 20.0, 500.15),
+        );
+        ensure(!first && second && !third && fourth, || {
+            format!("first={first} second={second} third={third} fourth={fourth}")
+        })
+    }
+
+    pub fn dblclick_appkit_script_targets_the_point_and_fires_a_bubbling_dblclick() -> Outcome {
+        let script = double_click_script(12.5, 34.0);
+        let ok = script.contains("elementFromPoint(")
+            && script.contains("dblclick")
+            && script.contains("bubbles:true")
+            && script.contains("detail:2")
+            && script.contains(&12.5_f64.to_string())
+            && script.contains(&34.0_f64.to_string());
+        ensure(ok, || script.clone())
     }
 }
