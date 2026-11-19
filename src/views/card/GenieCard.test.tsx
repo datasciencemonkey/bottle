@@ -4,6 +4,7 @@ import { act } from 'react';
 import type { Root } from 'react-dom/client';
 import { AFTER_HOVER_MS, FAILURE_SHOW_MS, answerShowMs } from '../../shared/genie-status';
 import { inputEmits, render, tauri } from '../test-tauri';
+import type { CardUpdate } from '../view-ipc';
 import { CardView } from './CardView';
 import { DISMISS_FADE_MS, FADE_MS, FAILURE_TITLE, FOOTER_HINT } from './GenieCard';
 
@@ -284,7 +285,11 @@ describe('Genie card: the window fit (#573)', () => {
     tauri.label = `card-${ID}`;
     const r = await render(
       <section>
-        <GenieCard mogId={ID} card={answered} onSize={(px) => void sizes.push(px)} />
+        <GenieCard
+          mogId={ID}
+          card={answered as unknown as CardUpdate}
+          onSize={(px) => void sizes.push(px)}
+        />
       </section>,
     );
     roots.push(r.root);
