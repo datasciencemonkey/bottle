@@ -18,6 +18,7 @@ import type { MogId } from '../../shared/interfaces';
 import { NOTICE_VERSION, type HubNotice } from '../../shared/hub-notice';
 import { call, type ConsentRecordView } from '../../shared/ipc';
 import { NotImplementedError } from '../errors';
+import { storeGate } from '../store-gate';
 
 /** One stored consent record, as `consent_records_list` returns it: content-free. */
 export type ConsentRecord = ConsentRecordView;
@@ -45,11 +46,12 @@ export interface ConsentRecordsPort {
   list(): Promise<ConsentRecordView[]>;
 }
 
-/** The production port: the #430 IPC commands. */
+/** The production port: the #430 IPC commands, through the one store gate (ADR 0105). */
 export function ipcConsentRecords(): ConsentRecordsPort {
   return {
-    recordNotice: (noticeVersion) => call('consent_notice_record', { noticeVersion }),
-    list: async () => (await call('consent_records_list', {})).records,
+    recordNotice: (noticeVersion) =>
+      storeGate.run(() => call('consent_notice_record', { noticeVersion })),
+    list: async () => (await storeGate.run(() => call('consent_records_list', {}))).records,
   };
 }
 

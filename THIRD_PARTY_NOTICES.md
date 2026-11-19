@@ -31,6 +31,8 @@ Do these steps in the pull request that adds, ports or adapts third-party code:
 | Tauri, `tauri-nspanel`, `tauri-plugin-global-shortcut` | MIT / Apache-2.0 | Desktop shell |
 | Gemini on Databricks | Applicable model terms | Model called through Databricks |
 | Databricks CLI | Databricks License | Not bundled |
+| objc2 Core Audio bindings, claxon | Apache-2.0 | System audio tap of call recordings; FLAC check in tests only |
+| unsafe-libopus (libopus 1.3.1), ogg | BSD-3-Clause | Opus encoder and Ogg container of call recordings |
 
 ## antigravity-bricks-plugin (MIT)
 
@@ -534,6 +536,110 @@ SOFTWARE.
 Bottle can call Gemini models served by Databricks. Bottle ships no Gemini code
 or weights. The customer accepts the Gemini terms (ADM-04) before the models are
 used.
+
+## objc2 Core Audio bindings, claxon (Apache-2.0)
+
+Call recording (ADR 0103) uses these crates. Bottle copies no code from them.
+
+- `objc2-core-audio`, `objc2-core-audio-types`, `objc2-core-foundation` and `objc2-avf-audio`
+  0.3.2 (https://github.com/madsmtm/objc2): the Rust bindings to the macOS Core Audio process
+  tap and to `AVAudioApplication` (the Microphone prompt). They were already in Cargo.lock
+  through cpal; ADR 0103 makes them direct macOS dependencies of `mog-core`. They are
+  licensed "Zlib OR Apache-2.0 OR MIT"; Bottle uses them under Apache-2.0 (text: see
+  sherpa-onnx above). Copyright the objc2 contributors.
+- `claxon` 0.4.3 (https://github.com/ruuda/claxon): a FLAC decoder, a dev-dependency only. The
+  tests decode Bottle's FLAC parts with it. It is not in the app. Apache-2.0 (text: see
+  sherpa-onnx above). Copyright 2014 Ruud van Asseldonk.
+
+## unsafe-libopus (libopus 1.3.1), ogg (BSD-3-Clause)
+
+Call recording (ADR 0103) encodes each recording as one Ogg Opus file (16 kHz mono, 16 kbps).
+Bottle copies no code from these crates; it links them as pinned Cargo dependencies.
+
+- `unsafe-libopus` `=0.2.0` (https://github.com/DCNick3/unsafe-libopus): libopus 1.3.1
+  (https://opus-codec.org) translated from C to Rust with c2rust. It needs no C toolchain.
+  BSD-3-Clause, the libopus licence:
+
+```text
+Copyright 2001-2011 Xiph.Org, Skype Limited, Octasic,
+                    Jean-Marc Valin, Timothy B. Terriberry,
+                    CSIRO, Gregory Maxwell, Mark Borgerding,
+                    Erik de Castro Lopo
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+
+- Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+
+- Redistributions in binary form must reproduce the above copyright
+notice, this list of conditions and the following disclaimer in the
+documentation and/or other materials provided with the distribution.
+
+- Neither the name of Internet Society, IETF or IETF Trust, nor the
+names of specific contributors, may be used to endorse or promote
+products derived from this software without specific prior written
+permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Opus is subject to the royalty-free patent licenses which are
+specified at:
+
+Xiph.Org Foundation:
+https://datatracker.ietf.org/ipr/1524/
+
+Microsoft Corporation:
+https://datatracker.ietf.org/ipr/1914/
+
+Broadcom Corporation:
+https://datatracker.ietf.org/ipr/1526/
+```
+
+- `ogg` `=0.9.2` (https://github.com/RustAudio/ogg): the Ogg container. BSD-3-Clause:
+
+```text
+Copyright (c) 2016-2017 est31 <MTest31@outlook.com> and contributors
+Copyright (c) 2002-2015 Xiph.org Foundation
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+
+- Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+
+- Redistributions in binary form must reproduce the above copyright
+notice, this list of conditions and the following disclaimer in the
+documentation and/or other materials provided with the distribution.
+
+- Neither the name of the Xiph.org Foundation nor the names of its
+contributors may be used to endorse or promote products derived from
+this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE FOUNDATION
+OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
 
 ## Databricks CLI (Databricks License)
 

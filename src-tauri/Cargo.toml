@@ -34,10 +34,14 @@ tauri.workspace = true
 
 # MOG-02 / MOG-01c: the NSPanel class swap and the drag monitor. tao and wry already use these
 # versions, so they add no crate to Cargo.lock (ADR 0009). No git dependency (#160).
+# refs #10, #103: the double-click replay needs WKWebView.evaluateJavaScript and an
+# NSString, both already pulled in by wry at this version, so this adds no crate either.
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6.2"
 objc2 = "0.6.5"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSColor", "NSEvent", "NSGraphics", "NSPanel", "NSResponder", "NSWindow"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString"] }
+objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "WKWebView"] }
 
 [dev-dependencies]
 # ARC-4 test: match window labels the way Tauri matches capability globs.

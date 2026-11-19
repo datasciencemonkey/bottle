@@ -3,7 +3,10 @@
 //! drag that starts no capture (MOG-01c). The AppKit read-back of a real panel is in
 //! `tests/macos_panel_appkit.rs`; the on-screen checks (AT-01) are `needs:mac` steps.
 
-use bottle_lib::mog_drag::{DragGesture, MouseInput, Verdict, DRAG_THRESHOLD_PT};
+use bottle_lib::mog_drag::{
+    is_double_click, ClickEvent, DragGesture, MouseInput, Verdict, DOUBLE_CLICK_DISTANCE_PT,
+    DRAG_THRESHOLD_PT,
+};
 use bottle_lib::window_host::{NativeWindowStyle, TauriWindowHost, WindowError};
 use bottle_lib::windows::{PanelLevel, WindowKind};
 use std::path::PathBuf;
@@ -337,6 +340,57 @@ fn mog_01c_moves_and_ups_without_a_press_pass_through() {
     );
     assert_eq!(g.on(MouseInput::Up), Verdict::Pass);
     assert!(!g.is_dragging());
+}
+
+// ---------- refs #10, #103: native double-click detection (AppKit never counts past 1) ----------
+
+fn click(t: f64, x: f64, y: f64) -> ClickEvent {
+    ClickEvent { timestamp: t, x, y }
+}
+
+#[test]
+fn double_click_distance_matches_the_drag_threshold() {
+    // A move past the drag threshold is a new click on the same panel, not a double click.
+    assert_eq!(DOUBLE_CLICK_DISTANCE_PT, DRAG_THRESHOLD_PT);
+}
+
+#[test]
+fn two_close_fast_clicks_are_a_double_click() {
+    let first = click(100.0, 10.0, 10.0);
+    let second = click(100.2, 11.0, 10.0);
+    assert!(is_double_click(first, second, 0.5));
+}
+
+#[test]
+fn a_click_outside_the_system_interval_is_not_a_double_click() {
+    let first = click(100.0, 10.0, 10.0);
+    let second = click(100.6, 10.0, 10.0);
+    assert!(
+        !is_double_click(first, second, 0.5),
+        "0.6s > the 0.5s interval"
+    );
+}
+
+#[test]
+fn a_click_past_the_distance_threshold_is_not_a_double_click() {
+    let first = click(100.0, 10.0, 10.0);
+    let second = click(100.1, 10.0 + DOUBLE_CLICK_DISTANCE_PT + 0.1, 10.0);
+    assert!(!is_double_click(first, second, 0.5));
+}
+
+#[test]
+fn a_click_at_exactly_the_thresholds_still_counts() {
+    let first = click(100.0, 10.0, 10.0);
+    let second = click(100.5, 10.0 + DOUBLE_CLICK_DISTANCE_PT, 10.0);
+    assert!(is_double_click(first, second, 0.5));
+}
+
+#[test]
+fn an_earlier_second_click_than_the_first_is_not_a_double_click() {
+    // Clock skew or out-of-order delivery must not read as a negative, always-true interval.
+    let first = click(100.5, 10.0, 10.0);
+    let second = click(100.0, 10.0, 10.0);
+    assert!(!is_double_click(first, second, 0.5));
 }
 
 #[test]

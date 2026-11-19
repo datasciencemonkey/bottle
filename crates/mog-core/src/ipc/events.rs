@@ -61,9 +61,19 @@ pub const CARD_UPDATE: &str = "card:update";
 pub const MOG_LEVEL: &str = "mog:level";
 /// `view_emit` arrives in the brain under this name.
 pub const VIEW_INPUT: &str = "view:input";
+/// ADR 0103: the record key (⌥R) in a talk-key hold, with the knob on. Payload:
+/// `types::RecordToggle`. The host sends a `hotkey:ptt` `cancel` first. Not in 4.5.
+pub const HOTKEY_RECORD_TOGGLE: &str = "hotkey:record_toggle";
+/// ADR 0103: the one recording of the device. Payload: `types::RecordingState`. Not sticky:
+/// a brain that subscribes later calls `recording_state`. Not in 4.5.
+pub const RECORDING_STATE: &str = "recording:state";
+/// ADR 0103: the status of one recording job changed. Payload: `types::RecordingSummary`.
+/// Not in 4.5.
+pub const RECORDING_JOB: &str = "recording:job";
 
 /// Every event of 4.5, in the order of the requirements, plus `mog.level` (ADR 0040) and
-/// `hotkey.status` (ADR 0039) and `capture.stopped` (ADR 0055).
+/// `hotkey.status` (ADR 0039) and `capture.stopped` (ADR 0055), plus the call recording events
+/// (ADR 0103).
 pub const ALL: &[EventSpec] = &[
     core(HOTKEY_PTT, "hotkey.ptt"),
     core(HOTKEY_PANIC, "hotkey.panic"),
@@ -93,6 +103,9 @@ pub const ALL: &[EventSpec] = &[
         direction: Direction::BrainToView,
     },
     core(VIEW_INPUT, "view.input"),
+    core(HOTKEY_RECORD_TOGGLE, "hotkey.record_toggle"),
+    core(RECORDING_STATE, "recording.state"),
+    core(RECORDING_JOB, "recording.job"),
 ];
 
 /// The core-to-brain events whose last payload the host keeps and sends again to a brain

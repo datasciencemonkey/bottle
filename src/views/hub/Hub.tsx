@@ -22,7 +22,12 @@ import { MicPreference } from './MicPreference';
 import { ForgetDialogHost } from './ForgetDialogHost';
 import { MogList } from './MogList';
 import { PermissionNotices } from './PermissionNotices';
+import { RecIndicator, RecordControl } from './RecordControl';
+import { Recordings } from './Recordings';
+import { RecordingSettings } from './RecordingSettings';
+import { useHubRecording } from './recording-ipc';
 import { SttSetupStep } from './SttSetupStep';
+import { StoreNotice } from './StoreNotice';
 import { WipeSettings } from './WipeSettings';
 
 /**
@@ -38,9 +43,9 @@ function HubHeader() {
   );
 }
 
-type HubView = 'conversations' | 'home';
+type HubView = 'conversations' | 'recordings' | 'home';
 
-/** The hub navigation (#103): Conversations first, then the MOGs and settings. */
+/** The hub navigation (#103, ADR 0103): Conversations, Recordings, then the MOGs and settings. */
 function HubNav({ view, onView }: { view: HubView; onView: (v: HubView) => void }) {
   const item = (v: HubView, label: string) => (
     <button
@@ -55,6 +60,7 @@ function HubNav({ view, onView }: { view: HubView; onView: (v: HubView) => void 
   return (
     <nav aria-label="Hub" className="hub-nav">
       {item('conversations', 'Conversations')}
+      {item('recordings', 'Recordings')}
       {item('home', 'MOGs and settings')}
     </nav>
   );
@@ -65,6 +71,18 @@ export function Hub() {
   // MOG or the card opens Conversations (#103).
   const [view, setView] = useState<HubView>('home');
   const showConversations = useCallback(() => setView('conversations'), []);
+  const recording = useHubRecording();
+  const openRecordingSettings = useCallback(() => {
+    setView('home');
+    // After the view shows: move to the section, and focus its heading for screen readers.
+    requestAnimationFrame(() => {
+      const h = document.getElementById('recording-settings-title');
+      h?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+      h?.focus({ preventScroll: true });
+    });
+  }, []);
+  const control = recording?.control;
+  const live = control?.phase === 'recording' || control?.phase === 'stopping';
   const [mogs, setMogs] = useState<ReadonlyMap<MogId, MogViewState>>(new Map());
 
   const onState = useCallback((p: unknown) => {
@@ -80,6 +98,8 @@ export function Hub() {
     return (
       <main className="hub hub--notice">
         <HubHeader />
+        {/* ADR 0105: why macOS asks for the password, or that history is off. */}
+        <StoreNotice />
         <LegalNotice
           key={notice.version}
           version={notice.version}
@@ -92,10 +112,24 @@ export function Hub() {
 
   // TODO(#43, #77): the wizard and settings.
   return (
-    <main className={view === 'conversations' ? 'hub hub--wide' : 'hub'}>
+    <main className={view === 'home' ? 'hub' : 'hub hub--wide'}>
       <HubHeader />
+      <StoreNotice />
+      {/* ADR 0103: a running recording shows in every view, with the time left and Stop. */}
+      {live && view !== 'recordings' && (
+        <RecIndicator
+          endsAtMs={control?.endsAtMs}
+          stopping={control?.phase === 'stopping'}
+          compact
+        />
+      )}
       <HubNav view={view} onView={setView} />
       <Conversations active={view === 'conversations'} onOpen={showConversations} />
+      <Recordings
+        active={view === 'recordings'}
+        onOpenSettings={openRecordingSettings}
+        header={<RecordControl model={recording} onOpenSettings={openRecordingSettings} />}
+      />
       <div data-hub-view="home" hidden={view !== 'home'}>
         {/* ADR 0101 (CAP-36, CAP-37): a missing OS permission shows first; without Input
             Monitoring the talk key does nothing. */}
@@ -120,6 +154,7 @@ export function Hub() {
         <MogList />
         <ForgetDialogHost />
         <MicPreference />
+        <RecordingSettings model={recording} />
         <SttSetupStep />
         <WipeSettings />
         <CliSettings />

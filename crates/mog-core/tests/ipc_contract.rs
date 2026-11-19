@@ -65,6 +65,20 @@ const SPEC_COMMANDS: &[(&str, &[WindowClass])] = {
         // #509 (ADR 0091): the hub-only notice path for an unshown dictation.
         ("hub_notice_send", &[B]),
         ("view_notice_subscribe", &[H]),
+        // ADR 0103: call recording. Brain and hub, like `app_setting_*`: the hub view sends
+        // only `view_emit`, so the brain relays each click (ARC-2, MOG-08a).
+        ("recording_settings_read", &[B, H]),
+        ("recording_settings_write", &[B, H]),
+        ("recording_storage_probe", &[B, H]),
+        ("recording_volume_create", &[B, H]),
+        ("recording_start", &[B, H]),
+        ("recording_stop", &[B, H]),
+        ("recording_state", &[B, H]),
+        ("recording_list", &[B, H]),
+        ("recording_detail", &[B, H]),
+        ("recording_retry", &[B, H]),
+        ("recording_open", &[B, H]),
+        ("recording_open_system_audio_settings", &[B, H]),
     ]
 };
 
@@ -256,6 +270,10 @@ fn arc_5_event_names_are_valid_tauri_names() {
         // #285 (ADR 0040): mic frames for the MOG level meter (UX-06a).
         "mog.level",
         "view.input",
+        // ADR 0103: the record key toggle, the recording state and the job status.
+        "hotkey.record_toggle",
+        "recording.state",
+        "recording.job",
     ];
     let names: Vec<&str> = events::ALL.iter().map(|e| e.name).collect();
     let specs: Vec<&str> = events::ALL.iter().map(|e| e.spec_name).collect();
@@ -878,4 +896,229 @@ fn sec_16c_sec_03_the_notice_type_debug_never_holds_the_text() {
     }
     // The wire shape is unchanged: the hub gets the text to copy.
     assert_eq!(serde_json::to_value(&a).unwrap(), unshown());
+}
+
+// ---------- call recording (ADR 0103) ----------
+
+/// A valid argument object for each recording command. The commands that reach Databricks
+/// (ADR 0103 follow-up: Rust has no home profile of its own) also carry `profile`.
+fn recording_sample(name: &str) -> serde_json::Value {
+    match name {
+        "recording_settings_write" => json!({"patch": {"enabled": true, "lengthMin": 30}}),
+        "recording_storage_probe" => json!({"profile": "p"}),
+        "recording_volume_create" => json!({"profile": "p", "catalog": "main", "schema": "calls"}),
+        "recording_start" => json!({"profile": "p", "instructions": "Write short notes."}),
+        "recording_list" => json!({"profile": "p"}),
+        "recording_detail" | "recording_retry" => json!({"profile": "p", "id": "rec-1"}),
+        "recording_open" => json!({"profile": "p", "id": "rec-1", "target": "folder"}),
+        _ => json!({}),
+    }
+}
+
+const RECORDING_COMMANDS: &[&str] = &[
+    "recording_settings_read",
+    "recording_settings_write",
+    "recording_storage_probe",
+    "recording_volume_create",
+    "recording_start",
+    "recording_stop",
+    "recording_state",
+    "recording_list",
+    "recording_detail",
+    "recording_retry",
+    "recording_open",
+    "recording_open_system_audio_settings",
+];
+
+#[test]
+fn cap_06_recording_rows_are_brain_and_hub_only() {
+    for name in RECORDING_COMMANDS {
+        let row = ipc::command(name).unwrap_or_else(|| panic!("no row {name}"));
+        assert_eq!(
+            row.windows,
+            [WindowClass::Brain, WindowClass::Hub],
+            "{name}"
+        );
+        assert_eq!(row.phase, Phase::MvpD, "{name}");
+        for label in ["brain", "hub"] {
+            let err = ipc::handle(label, name, recording_sample(name)).unwrap_err();
+            assert!(
+                matches!(err, IpcError::NotImplemented { .. }),
+                "{label} {name}: {err:?}"
+            );
+        }
+        // A MOG view starts a recording only through the brain (view_emit).
+        for label in ["mog-a1", "card-a1"] {
+            let err = ipc::handle(label, name, recording_sample(name)).unwrap_err();
+            assert!(
+                matches!(err, IpcError::WindowNotAllowed { .. }),
+                "{label} {name}"
+            );
+        }
+    }
+}
+
+#[test]
+fn sec_02b_recording_arguments_are_checked() {
+    let long = "x".repeat(20_000);
+    for (name, bad) in [
+        ("recording_settings_read", json!({"x": 1})),
+        ("recording_settings_write", json!({})),
+        (
+            "recording_settings_write",
+            json!({"patch": {"lengthMin": 4}}),
+        ),
+        (
+            "recording_settings_write",
+            json!({"patch": {"lengthMin": 121}}),
+        ),
+        (
+            "recording_settings_write",
+            json!({"patch": {"enabled": "yes"}}),
+        ),
+        (
+            "recording_settings_write",
+            json!({"patch": {"other": true}}),
+        ),
+        (
+            "recording_settings_write",
+            json!({"patch": {"storage": {"kind": "volume", "root": "/tmp/x"}}}),
+        ),
+        (
+            "recording_settings_write",
+            json!({"patch": {"storage": {"kind": "volume", "root": "/Volumes/a/../b"}}}),
+        ),
+        (
+            "recording_settings_write",
+            json!({"patch": {"storage": {"kind": "volume", "root": "/Volumes/a/b/c'; DROP"}}}),
+        ),
+        (
+            "recording_settings_write",
+            json!({"patch": {"storage": {"kind": "s3", "root": "/Volumes/a/b/c"}}}),
+        ),
+        (
+            "recording_settings_write",
+            json!({"patch": {"notesEndpoint": "bad endpoint'"}}),
+        ),
+        (
+            "recording_settings_write",
+            json!({"patch": {"transcribeEndpoint": "a b"}}),
+        ),
+        (
+            "recording_settings_write",
+            json!({"patch": {"presetInstructions": long.clone()}}),
+        ),
+        (
+            "recording_volume_create",
+            json!({"profile": "p", "catalog": "main"}),
+        ),
+        (
+            "recording_volume_create",
+            json!({"profile": "p", "catalog": "a.b", "schema": "c"}),
+        ),
+        (
+            "recording_volume_create",
+            json!({"profile": "p", "catalog": "a", "schema": "c`; x"}),
+        ),
+        (
+            "recording_start",
+            json!({"profile": "p", "instructions": long}),
+        ),
+        ("recording_start", json!({"profile": "p", "mogId": "a1"})),
+        ("recording_detail", json!({"profile": "p"})),
+        ("recording_detail", json!({"profile": "p", "id": "../etc"})),
+        ("recording_retry", json!({"profile": "p", "id": ""})),
+        ("recording_open", json!({"profile": "p", "id": "rec-1"})),
+        (
+            "recording_open",
+            json!({"profile": "p", "id": "rec-1", "target": "https://x"}),
+        ),
+        // ADR 0103 follow-up: Rust has no home profile of its own, so a missing or empty
+        // `profile` is invalid_args on every cloud-bound recording command, same as any other
+        // required field.
+        ("recording_storage_probe", json!({})),
+        (
+            "recording_volume_create",
+            json!({"catalog": "main", "schema": "calls"}),
+        ),
+        ("recording_start", json!({})),
+        ("recording_list", json!({})),
+        ("recording_detail", json!({"id": "rec-1"})),
+        ("recording_retry", json!({"id": "rec-1"})),
+        ("recording_open", json!({"id": "rec-1", "target": "folder"})),
+        (
+            "recording_open",
+            json!({"profile": 7, "id": "rec-1", "target": "folder"}),
+        ),
+    ] {
+        let err = ipc::handle("hub", name, bad.clone()).unwrap_err();
+        assert!(
+            matches!(err, IpcError::InvalidArgs { .. }),
+            "{name} {bad}: {err:?}"
+        );
+    }
+    // The valid edges pass the schema.
+    for patch in [
+        json!({"lengthMin": 5}),
+        json!({"lengthMin": 120}),
+        json!({"storage": {"kind": "my_files", "root": "/Volumes/databricks/home/123/me@example.com/my_files/"}}),
+        json!({"storage": {"kind": "volume", "root": "/Volumes/main/calls/bottle_audio"}}),
+        json!({"transcribeEndpoint": "databricks-gemini-3-8-flash", "notesEndpoint": "databricks-claude-sonnet-5-5"}),
+        json!({}),
+    ] {
+        let err =
+            ipc::handle("hub", "recording_settings_write", json!({ "patch": patch })).unwrap_err();
+        assert!(matches!(err, IpcError::NotImplemented { .. }), "{patch}");
+    }
+    // A home profile, and only the optional instructions, passes the schema.
+    let err = ipc::handle("brain", "recording_start", json!({"profile": "p"})).unwrap_err();
+    assert!(matches!(err, IpcError::NotImplemented { .. }));
+}
+
+#[test]
+fn arc_5_recording_events_go_to_the_brain() {
+    for (name, spec) in [
+        (events::HOTKEY_RECORD_TOGGLE, "hotkey.record_toggle"),
+        (events::RECORDING_STATE, "recording.state"),
+        (events::RECORDING_JOB, "recording.job"),
+    ] {
+        let e = events::ALL
+            .iter()
+            .find(|e| e.name == name)
+            .unwrap_or_else(|| panic!("no event {name}"));
+        assert_eq!(e.spec_name, spec);
+        assert_eq!(e.direction, events::Direction::CoreToBrain);
+        assert!(!events::is_sticky(name), "{name}");
+    }
+}
+
+#[test]
+fn sec_03_recording_refusals_have_fixed_codes() {
+    for code in [
+        "recording_off",
+        "recording_busy",
+        "recording_in_progress",
+        "unknown_recording",
+        "no_storage",
+        "volume_permission",
+        "transcribe_endpoint_missing",
+        "notes_endpoint_missing",
+        "too_long",
+        "audio_unreadable",
+        "upload_failed",
+        "system_audio_denied",
+    ] {
+        assert!(
+            mog_core::ipc_gateway::ERROR_CODES.contains(&code),
+            "{code} is not an IPC error code"
+        );
+    }
+    let e = IpcError::RecordingOff {
+        command: "recording_start".into(),
+    };
+    assert_eq!(mog_core::ipc_gateway::ipc_error_code(&e), "recording_off");
+    assert_eq!(
+        serde_json::to_value(&e).unwrap()["error"],
+        json!("recording_off")
+    );
 }

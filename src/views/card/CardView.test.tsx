@@ -10,9 +10,17 @@ vi.mock('@tauri-apps/api/window', async () => (await import('../test-tauri')).wi
 
 const ID = '00000000-0000-4000-8000-000000000001';
 const OTHER = '00000000-0000-4000-8000-000000000002';
+/** A real Genie blurb ID (`genie-status.ts`), so the panel's answer counts as live (B2, review
+ * round 1), not an orphan left behind by an aged-out Genie blurb. */
+const GENIE_ID = 'genie:00000000-0000-4000-8000-0000000000aa';
 const update = {
   mogId: ID,
-  blurbs: [{ id: 'b1', text: 'Revenue was 4.2M' }],
+  // `b1` is newest (a later, non-Genie blurb), but the Genie blurb that produced `answerMd` is
+  // still in the stack, exactly as `genie-direct.ts` leaves it until it ages out (UX-12).
+  blurbs: [
+    { id: 'b1', text: 'Revenue was 4.2M' },
+    { id: GENIE_ID, text: 'Revenue was 4.2M', completed: true },
+  ],
   chips: [{ id: 'c1', label: 'Ask Genie' }],
   answerMd: '**4.2M** in Q3',
 };
@@ -311,6 +319,80 @@ describe('V3 card view: expanded sections and chips', () => {
     // SEC-25b: an untrusted link shows its link text only, inert, never a navigable href.
     expect(answer.textContent).toContain('ai_transcribe function');
     expect(answer.querySelector('a')).toBeNull();
+  });
+
+  // B1/B2 (review round 1): a dictation blurb landed after the Genie answer, so the Genie blurb
+  // is no longer newest. The panel must still (a) never leak that Genie blurb's own raw markdown
+  // (B1), and (b) keep treating the sections as a live answer, since the Genie blurb that
+  // produced them is still in the stack (B2). Once the brain ages that Genie blurb out entirely
+  // (UX-12), the sections are orphaned and must not show.
+  it('[#598] a later dictation blurb never brings back raw markdown or an orphaned answer', async () => {
+    const { el } = await mountCard(<CardView mogId={ID} />);
+    await tauri.emit('card:update', {
+      mogId: ID,
+      blurbs: [
+        { id: 'dict-1', text: 'Copied to clipboard' },
+        { id: GENIE_ID, text: BUG_SAMPLE, completed: true },
+      ],
+      chips: [],
+      sections: [{ id: 'answer', md: BUG_SAMPLE }],
+    });
+    // No raw markdown leaks anywhere in the panel, including the Genie blurb's own text.
+    expect(el.textContent).not.toContain('**');
+    expect(el.textContent).not.toContain('[ai_transcribe function](');
+    // The sections answer is still live: the Genie blurb that produced it is still in the stack.
+    expect(el.querySelector('[data-section="answer"]')).not.toBeNull();
+    // [LOW, round 2] "the answer shows twice": the `Section` below already shows this Genie
+    // blurb's answer in full, so the blurb list must not render it a second time. A phrase
+    // unique to the answer appears exactly once in the whole panel, not once per render path.
+    const once = (el.textContent?.match(/ai_transcribe function/g) ?? []).length;
+    expect(once).toBe(1);
+    // [LOW, round 3] An earlier fix kept an empty `<li>` for the Genie blurb's hover hold, which
+    // left a bare, empty bullet in the list. The `<li>` is gone now; the hold moves to the `div`
+    // wrapping the answer the Section shows, with the same `data-blurb` id.
+    expect(el.querySelector(`li[data-blurb="${GENIE_ID}"]`)).toBeNull();
+    for (const li of [...el.querySelectorAll('ul[aria-label="Answers"] > li')]) {
+      expect(li.textContent).not.toBe('');
+    }
+    const genieHold = el.querySelector(`div[data-blurb="${GENIE_ID}"]`) as HTMLElement;
+    expect(genieHold.querySelector('strong')).not.toBeNull();
+
+    // The Genie blurb ages out of the stack (UX-12); the sections it left behind are now
+    // orphaned. The panel must never fall back to showing them unbounded and raw.
+    await tauri.emit('card:update', {
+      mogId: ID,
+      blurbs: [{ id: 'dict-1', text: 'Copied to clipboard' }],
+      chips: [],
+      sections: [{ id: 'answer', md: BUG_SAMPLE }],
+    });
+    expect(el.querySelector('[data-section="answer"]')).toBeNull();
+    expect(el.textContent).not.toContain('**');
+  });
+
+  // [round 3] The Genie blurb's hover hold (B2, review round 1) moved off the now-removed empty
+  // `<li>` onto the `div` wrapping the answer the Section shows. It must still fire.
+  it('[#598] hovering the Genie answer still holds its blurb, with no empty `<li>` left behind', async () => {
+    const { el } = await mountCard(<CardView mogId={ID} />);
+    await tauri.emit('card:update', {
+      mogId: ID,
+      blurbs: [
+        { id: 'dict-1', text: 'Copied to clipboard' },
+        { id: GENIE_ID, text: BUG_SAMPLE, completed: true },
+      ],
+      chips: [],
+      sections: [{ id: 'answer', md: BUG_SAMPLE }],
+    });
+    const hold = el.querySelector(`div[data-blurb="${GENIE_ID}"]`) as HTMLElement;
+    await act(async () => {
+      hold.dispatchEvent(
+        new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body }),
+      );
+    });
+    expect(inputs()).toContainEqual({
+      mogId: ID,
+      kind: 'hover',
+      payload: { blurbId: GENIE_ID, on: true, via: 'pointer' },
+    });
   });
 
   it('[UX-18] [AT-09] renders the sections in the order the brain sends', async () => {

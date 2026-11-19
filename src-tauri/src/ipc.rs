@@ -275,6 +275,9 @@ pub struct HostComponents<'a> {
     /// `profile_login` and `profile_login_cancel` (#162): `profiles_host::ProfileLoginHost`.
     /// `None` when R5 or R8 could not start: `host_failed`.
     pub login: Option<&'a dyn GatewayComponents>,
+    /// The `recording_*` commands (ADR 0103): `mog_core::recording::RecordingComponent`.
+    /// `None` when it is not managed: `host_failed`.
+    pub recording: Option<&'a dyn GatewayComponents>,
 }
 
 fn refused(e: IpcError) -> CoreError {
@@ -338,6 +341,7 @@ impl<'a> HostComponents<'a> {
             profiles: None,
             cli: None,
             login: None,
+            recording: None,
         }
     }
 }
@@ -525,6 +529,12 @@ impl GatewayComponents for HostComponents<'_> {
                 .login
                 .ok_or_else(|| host_failed(command))?
                 .call(command, args),
+            // ADR 0103: call recording. The component checks the knob in Rust before any
+            // capture path (`recording_off`). Its codes cross as themselves (`ERROR_CODES`).
+            c if c.starts_with("recording_") => self
+                .recording
+                .ok_or_else(|| host_failed(command))?
+                .call(command, args),
             // Each feature issue wires its R1-R17 component here.
             "capture_start" | "capture_stop" | "capture_pause" | "capture_resume"
             | "capture_status" | "capture_stop_all" | "capture_subscribe" => {
@@ -571,29 +581,31 @@ pub fn route(components: HostComponents<'_>, command: &str, args: Value) -> Resu
 /// SQLite IO under the R10 connection lock (#426), `profiles_list`, where T7 runs
 /// `databricks auth describe` once per `databricks-cli` profile when R5 lands (#555),
 /// `cli_install`, which downloads and checks the CLI (#161), and `profile_login`, which waits
-/// up to 5 min for `databricks auth login` (#162).
+/// up to 5 min for `databricks auth login` (#162). Every `recording_*` command except
+/// `recording_state` does file IO, opens the device or calls the workspace (ADR 0103).
 pub fn runs_off_main_thread(command: &str) -> bool {
-    matches!(
-        command,
-        "window_mog_open"
-            | "window_mog_close"
-            | "window_card_show"
-            | "window_card_hide"
-            | "permission_request"
-            | "permission_status"
-            | "capture_start"
-            | "capture_resume"
-            | "insert_text"
-            | "mcp_call"
-            | "agent_start"
-            | "agent_stop"
-            | "agent_send"
-            | "stt_transcribe"
-            | "mem_local_exec"
-            | "profiles_list"
-            | "cli_install"
-            | "profile_login"
-    )
+    (command.starts_with("recording_") && command != "recording_state")
+        || matches!(
+            command,
+            "window_mog_open"
+                | "window_mog_close"
+                | "window_card_show"
+                | "window_card_hide"
+                | "permission_request"
+                | "permission_status"
+                | "capture_start"
+                | "capture_resume"
+                | "insert_text"
+                | "mcp_call"
+                | "agent_start"
+                | "agent_stop"
+                | "agent_send"
+                | "stt_transcribe"
+                | "mem_local_exec"
+                | "profiles_list"
+                | "cli_install"
+                | "profile_login"
+        )
 }
 
 /// The paste component of this OS, or `None` where Bottle has no paste (`host_failed`).
@@ -695,6 +707,8 @@ fn route_from<R: Runtime>(
     // `try_state`: `cli_host::start` manages R5 (#16); without it `cli_*` answer `host_failed`.
     let cli = webview.try_state::<crate::cli_host::CliStatusHost>();
     let login = webview.try_state::<crate::profiles_host::ProfileLoginHost>();
+    // `try_state`: `lib.rs` manages the one recording component (ADR 0103).
+    let recording = webview.try_state::<std::sync::Arc<mog_core::recording::RecordingComponent>>();
     let components = HostComponents {
         from: label,
         brain: &brain,
@@ -722,6 +736,9 @@ fn route_from<R: Runtime>(
             .as_ref()
             .map(|c| c.inner().0.as_ref() as &dyn GatewayComponents),
         login: login.as_ref().map(|l| l.inner() as &dyn GatewayComponents),
+        recording: recording
+            .as_ref()
+            .map(|r| r.inner().as_ref() as &dyn GatewayComponents),
     };
     route(components, command, args)
 }
@@ -993,6 +1010,7 @@ mod tests {
         assert!(c.agent.is_none());
         assert!(c.stt.is_none());
         assert!(c.mem.is_none());
+        assert!(c.recording.is_none());
         // A missing host part still answers `host_failed`.
         assert_eq!(
             route(c, "window_card_show", json!({"mogId": "a1"})),
@@ -1297,7 +1315,7 @@ mod tests {
         assert_eq!(
             host.matches("SqlCipherLocalStore::new(").count(),
             0,
-            "consent_host opens the one store through open_device_records"
+            "consent_host builds the one store through prepare_device_records"
         );
         let ipc = production_code(&std::fs::read_to_string(src.join("ipc.rs")).unwrap());
         assert!(

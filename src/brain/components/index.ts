@@ -20,6 +20,8 @@ import { wireWipe } from '../wipe-wiring';
 import { wireCliInstall, wireCliSettings } from '../cli-wiring';
 import { cliPlatform } from '../../shared/cli-view';
 import { wireConnectWorkspace } from '../connect-wiring';
+import { recordingProfile } from '../recording-profile';
+import { ipcRecordingApi, wireRecording } from '../recording-wiring';
 import { sendHubSnapshot, wireHubMogs } from '../hub-mogs-wiring';
 import {
   sendHubConversations,
@@ -46,9 +48,11 @@ import { ipcGenieHistory } from '../genie-history';
 import { createHomeProfiles, ipcHomeProfileDeps, ipcListProfiles } from '../home-profile';
 import { LevelRouter, subscribeLevels, wireLevelStream } from '../level-stream';
 import { createMoodPublisher, latencyTraceClock } from '../mood-publisher';
-import { wireNotice } from '../notice-wiring';
+import { sendHubNotice as sendLegalNotice, wireNotice } from '../notice-wiring';
+import { storeGate } from '../store-gate';
+import { isTauriMac, wireStoreGate } from '../store-wiring';
 import { wirePermissions } from '../permission-wiring';
-import { withOfflineFallback } from '../offline-intent';
+import { NO_HOME, withOfflineFallback } from '../offline-intent';
 import { createProfilePick } from '../profile-pick';
 import { createRequestOwner, sendOwnedCard } from '../request-owner';
 import { wireTalkNoMog } from '../talk-no-mog';
@@ -129,6 +133,15 @@ export function startBrain(): Brain {
     ) as BrainComponents;
     const bus = new BrainBus();
     // TODO(#8, #141): the other components register their handlers on `bus`.
+    // ADR 0105 (MEM-08b): the local store opens once, on first use. On macOS the hub first says
+    // why macOS asks for the password. A refusal turns history off until Try again.
+    wireStoreGate(bus, storeGate, {
+      explain: isTauriMac(),
+      onRetry: () =>
+        void components.T12.noticeState()
+          .then(sendLegalNotice)
+          .catch(() => undefined),
+    });
     // MB-08a, MB-08b: the hub notice talks to T12 (#27).
     wireNotice(bus, components.T12);
     // #26: the hub MOG list and actions (MB-01).
@@ -275,6 +288,33 @@ export function startBrain(): Brain {
       scheduler: { at: timeoutScheduler(moodClock) },
     });
     wireCaptureMood(bus, captureMood);
+    // ADR 0103: call recording. The hub sends clicks; the brain calls the `recording_*`
+    // commands, relays `recording.state` and `recording.job` to the hub, and shows REC and the
+    // answer-ready moment on the MOG through the one mood publisher. The core checks the knob
+    // again before any capture. TODO(#95): the short OS notice when the notes are ready, once
+    // the notification host has an IPC command.
+    wireRecording(bus, {
+      // ADR 0103: one workspace for the recording: the home that every MOG with a home shares.
+      // Two different homes refuse with `profiles_differ`; Bottle never picks one.
+      api: ipcRecordingApi(bus, () =>
+        recordingProfile({
+          mogs: async () => (await components.T1.list()).mogs.map((m) => m.mogId),
+          home: async (id) => {
+            const p = (await homes.routerInput(id)).profile;
+            return p === NO_HOME ? undefined : p;
+          },
+        }),
+      ),
+      platform:
+        cliPlatform(globalThis.navigator?.userAgent ?? '') === 'windows' ? 'windows' : 'mac',
+      mood: {
+        callRecording: (on) => {
+          const id = talkTarget.lastUsed();
+          captureMood.callRecording(on, id === undefined ? [] : [id]);
+        },
+        ready: () => captureMood.recordingReady(),
+      },
+    });
     // #573: the ⌥G key-up shows the working mood at once, before the text is ready.
     bus.on(EVENTS['hotkey.ptt'].name, (p) => {
       const e = asPttEvent(p, 0);

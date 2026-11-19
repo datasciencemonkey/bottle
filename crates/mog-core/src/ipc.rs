@@ -5,7 +5,8 @@
 //! label (ARC-4), parses the arguments with `deny_unknown_fields`, and then reaches the
 //! component stub. Arguments never carry a token, a header or a request URL (ARC-6, 4.6).
 //!
-//! `COMMANDS` is 4.5 plus `brain_subscribe` (ADR 0003) and the hub notice pair (ADR 0091). Only the foundation lead changes this
+//! `COMMANDS` is 4.5 plus `brain_subscribe` (ADR 0003), the hub notice pair (ADR 0091) and the
+//! call recording rows (ADR 0103). Only the foundation lead changes this
 //! file (brief, "Contracts").
 
 use schemars::{JsonSchema, Schema};
@@ -152,6 +153,22 @@ pub const COMMANDS: &[CommandSpec] = &[
     // #509 (ADR 0091): an unshown dictation goes to the hub only, on the hub's private Channel.
     row("hub_notice_send", B),
     row("view_notice_subscribe", H),
+    // ADR 0103: call recording. Brain and hub, like `app_setting_*`: the hub view sends only
+    // `view_emit` (ARC-2, MOG-08a), so the brain relays each click. A MOG "Record" click and the
+    // record key reach `recording_start` and `recording_stop` through the brain too.
+    row("recording_settings_read", BH),
+    row("recording_settings_write", BH),
+    row("recording_storage_probe", BH),
+    row("recording_volume_create", BH),
+    row("recording_start", BH),
+    row("recording_stop", BH),
+    row("recording_state", BH),
+    row("recording_list", BH),
+    row("recording_detail", BH),
+    row("recording_retry", BH),
+    row("recording_open", BH),
+    // The "Allow System Audio Recording" fix-it: Rust opens the OS privacy pane.
+    row("recording_open_system_audio_settings", BH),
 ];
 
 /// The row of a command, if it exists.
@@ -376,6 +393,55 @@ pub enum IpcError {
     NoGrant {
         command: String,
     },
+    /// `recording_start` (ADR 0103): the recording knob in Settings is off.
+    RecordingOff {
+        command: String,
+    },
+    /// `recording_start` (ADR 0103): a recording already runs on this device.
+    RecordingBusy {
+        command: String,
+    },
+    /// `capture_start` (ADR 0103): a recording holds the mic, so the talk key does not take it.
+    RecordingInProgress {
+        command: String,
+    },
+    /// `recording_*` (ADR 0103): no recording has this ID.
+    UnknownRecording {
+        command: String,
+    },
+    /// `recording_*` (ADR 0103): My Files does not resolve and Settings names no volume.
+    NoStorage {
+        command: String,
+    },
+    /// `recording_*` (ADR 0103): the user cannot write to the volume.
+    VolumePermission {
+        command: String,
+    },
+    /// `recording_*` (ADR 0103): the transcribe endpoint is missing or not allowed.
+    TranscribeEndpointMissing {
+        command: String,
+    },
+    /// `recording_*` (ADR 0103): the notes endpoint is missing or not allowed.
+    NotesEndpointMissing {
+        command: String,
+    },
+    /// `recording_*` (ADR 0103): the audio is over the request budget of the model.
+    TooLong {
+        command: String,
+    },
+    /// `recording_*` (ADR 0103): the audio is not a valid encoded file, or the model could not
+    /// read it.
+    AudioUnreadable {
+        command: String,
+    },
+    /// `recording_*` (ADR 0103): an audio part did not upload. The local part stays for Retry.
+    UploadFailed {
+        command: String,
+    },
+    /// `recording_start` (ADR 0103): the OS denied System Audio Recording.
+    SystemAudioDenied {
+        command: String,
+    },
 }
 
 impl std::fmt::Display for IpcError {
@@ -492,6 +558,36 @@ impl std::fmt::Display for IpcError {
             }
             IpcError::CliFailed { command } => write!(f, "{command}: the CLI sign-in failed"),
             IpcError::NoGrant { command } => write!(f, "{command}: the account has no access"),
+            IpcError::RecordingOff { command } => write!(f, "{command}: recording is off"),
+            IpcError::RecordingBusy { command } => {
+                write!(f, "{command}: a recording already runs")
+            }
+            IpcError::RecordingInProgress { command } => {
+                write!(f, "{command}: a recording holds the mic")
+            }
+            IpcError::UnknownRecording { command } => {
+                write!(f, "{command}: no recording has this ID")
+            }
+            IpcError::NoStorage { command } => write!(f, "{command}: no recording storage"),
+            IpcError::VolumePermission { command } => {
+                write!(f, "{command}: no write permission on the volume")
+            }
+            IpcError::TranscribeEndpointMissing { command } => {
+                write!(f, "{command}: the transcribe model is not available")
+            }
+            IpcError::NotesEndpointMissing { command } => {
+                write!(f, "{command}: the notes model is not available")
+            }
+            IpcError::TooLong { command } => {
+                write!(f, "{command}: the recording part is too long")
+            }
+            IpcError::AudioUnreadable { command } => {
+                write!(f, "{command}: the audio could not be read")
+            }
+            IpcError::UploadFailed { command } => write!(f, "{command}: the upload failed"),
+            IpcError::SystemAudioDenied { command } => {
+                write!(f, "{command}: System Audio Recording is denied")
+            }
             IpcError::Offline { command } => {
                 write!(f, "{command}: the host did not accept a connection")
             }
@@ -1004,6 +1100,68 @@ args!(
         on_notice: ChannelRef
     }
 );
+args!(
+    /// `recording_settings_write` (ADR 0103): the fields to change.
+    RecordingSettingsWriteArgs {
+        patch: crate::types::RecordingSettingsPatch,
+    }
+);
+args!(
+    /// `recording_storage_probe` (ADR 0103): probes `GET /api/2.0/fs/directories` on the
+    /// home profile host. Rust never picks a profile: the brain sends the home profile of
+    /// `src/brain/home-profile.ts` on every cloud-bound recording command.
+    RecordingStorageProbeArgs {
+        profile: ProfileName,
+    }
+);
+args!(
+    /// `recording_volume_create` (ADR 0103): Bottle creates the managed volume `bottle_audio`
+    /// in `catalog.schema`, after the user confirmed in Settings. `profile`: the home profile
+    /// (the brain never lets Rust pick one).
+    RecordingVolumeCreateArgs {
+        profile: ProfileName,
+        catalog: crate::types::UcName,
+        schema: crate::types::UcName,
+    }
+);
+args!(
+    /// `recording_start` (ADR 0103): `profile` is the home profile the pipeline uses for every
+    /// cloud call of this recording, including after `recording_stop`. `instructions`: for
+    /// this recording only. Absent: the Settings preset.
+    RecordingStartArgs {
+        profile: ProfileName,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        instructions: Option<crate::types::Instructions>,
+    }
+);
+args!(
+    /// `recording_list` (ADR 0103): lists `<root>/Bottle/Recordings/` on the home profile host.
+    RecordingListArgs {
+        profile: ProfileName,
+    }
+);
+args!(
+    /// `recording_detail` and `recording_retry` (ADR 0103). `profile`: the home profile.
+    RecordingIdArgs {
+        profile: ProfileName,
+        id: crate::types::RecordingId,
+    }
+);
+
+/// What `recording_open` opens (ADR 0103). Rust builds the Catalog Explorer URL from the
+/// profile host; the view never passes a URL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordingOpenTarget {
+    Folder,
+}
+args!(RecordingOpenArgs {
+    /// The home profile: Rust builds the folder link from this profile's host.
+    profile: ProfileName,
+    id: crate::types::RecordingId,
+    target: RecordingOpenTarget,
+});
+
 args!(TelemetrySpanArgs {
     name: String,
     start_ms: u64,
@@ -1056,6 +1214,17 @@ macro_rules! for_command {
             "brain_subscribe" => Some($f::<BrainSubscribeArgs>()),
             "hub_notice_send" => Some($f::<HubNoticeSendArgs>()),
             "view_notice_subscribe" => Some($f::<ViewNoticeSubscribeArgs>()),
+            "recording_settings_read"
+            | "recording_stop"
+            | "recording_state"
+            | "recording_open_system_audio_settings" => Some($f::<NoArgs>()),
+            "recording_settings_write" => Some($f::<RecordingSettingsWriteArgs>()),
+            "recording_storage_probe" => Some($f::<RecordingStorageProbeArgs>()),
+            "recording_volume_create" => Some($f::<RecordingVolumeCreateArgs>()),
+            "recording_start" => Some($f::<RecordingStartArgs>()),
+            "recording_list" => Some($f::<RecordingListArgs>()),
+            "recording_detail" | "recording_retry" => Some($f::<RecordingIdArgs>()),
+            "recording_open" => Some($f::<RecordingOpenArgs>()),
             _ => None,
         }
     };

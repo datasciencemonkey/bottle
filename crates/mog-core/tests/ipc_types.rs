@@ -10,9 +10,11 @@ use std::path::{Path, PathBuf};
 use mog_core::types::{
     AppSetting, AppSettingKey, CaptureMode, CaptureState, CardUpdate, ConsentRecordKind,
     ConsentRecordView, Intent, MicHealth, MicLevelFrame, MogId, MogViewState, Mood, NetStatus,
-    OthersTrack, Profile, ProfileInfo, ProfileName, RouterCommand, RouterDecision, SegmentRef,
-    SessionPolicy, TagApp, TagOp, Tags, TalkKeyReason, TalkKeyState, TalkKeyStatus, TokenState,
-    TokenStatus, Track, Transcript, TranscriptProvider,
+    OthersTrack, Profile, ProfileInfo, ProfileName, RecordToggle, RecordingDetail,
+    RecordingErrorKind, RecordingSettings, RecordingState, RecordingStatus, RecordingSummary,
+    RouterCommand, RouterDecision, SegmentRef, SessionPolicy, StorageProbe, TagApp, TagOp, Tags,
+    TalkKeyReason, TalkKeyState, TalkKeyStatus, TokenState, TokenStatus, Track, Transcript,
+    TranscriptProvider,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -88,6 +90,15 @@ fn round_trip_by_name(type_name: &str, json: &Value) -> Result<Value, String> {
         "MicHealth" => round_trip::<Vec<MicHealth>>(json),
         "AppSettingKey" => round_trip::<Vec<AppSettingKey>>(json),
         "AppSetting" => round_trip::<AppSetting>(json),
+        // Call recording (ADR 0103).
+        "RecordingSettings" => round_trip::<RecordingSettings>(json),
+        "RecordingState" => round_trip::<RecordingState>(json),
+        "RecordingSummary" => round_trip::<RecordingSummary>(json),
+        "RecordingDetail" => round_trip::<RecordingDetail>(json),
+        "RecordingStatus" => round_trip::<Vec<RecordingStatus>>(json),
+        "RecordingErrorKind" => round_trip::<Vec<RecordingErrorKind>>(json),
+        "StorageProbe" => round_trip::<StorageProbe>(json),
+        "RecordToggle" => round_trip::<RecordToggle>(json),
         other => panic!("fixture for unknown type {other}: add it to round_trip_by_name"),
     }
 }
@@ -110,6 +121,12 @@ const STRUCTS: &[&str] = &[
     "NetStatus",
     "ConsentRecordView",
     "AppSetting",
+    "RecordingSettings",
+    "RecordingState",
+    "RecordingSummary",
+    "RecordingDetail",
+    "StorageProbe",
+    "RecordToggle",
 ];
 
 #[test]
@@ -152,6 +169,14 @@ fn every_ipc_type_has_a_fixture() {
         "MicHealth",
         "AppSettingKey",
         "AppSetting",
+        "RecordingSettings",
+        "RecordingState",
+        "RecordingSummary",
+        "RecordingDetail",
+        "RecordingStatus",
+        "RecordingErrorKind",
+        "StorageProbe",
+        "RecordToggle",
     ] {
         assert!(names.iter().any(|n| n == t), "no fixture for {t}");
     }
