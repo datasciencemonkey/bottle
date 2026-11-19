@@ -372,8 +372,8 @@ pub enum TranscriptProvider {
     DbxWhisper,
 }
 
-/// The result of `stt_transcribe`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+/// The result of `stt_transcribe`. Its `Debug` holds no text (#514; #505 is the general fix).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Transcript {
     pub segment_id: String,
@@ -385,6 +385,22 @@ pub struct Transcript {
     pub model: String,
     pub runtime: String,
     pub latency_ms: u64,
+}
+
+impl std::fmt::Debug for Transcript {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // No dictation text in a log, a panic message or an error (ADR 0082, section 9.2).
+        f.debug_struct("Transcript")
+            .field("segment_id", &self.segment_id)
+            .field("text_chars", &self.text.chars().count())
+            .field("raw_chars", &self.raw.chars().count())
+            .field("lang", &self.lang)
+            .field("provider", &self.provider)
+            .field("model", &self.model)
+            .field("runtime", &self.runtime)
+            .field("latency_ms", &self.latency_ms)
+            .finish()
+    }
 }
 
 /// A Databricks CLI profile (D10, D39).

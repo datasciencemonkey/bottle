@@ -76,8 +76,8 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
     });
     // #476 (CAP-16a): `capture_subscribe` sends the levels on a Channel of the brain webview.
     let levels = capture_host::HostLevels::new(capture_host::brain_level_resolver(handle.clone()));
-    // #46 (ADR 0082): R4 SttEngine, with the #413 loader (`stt_loader`). TODO(#514): the results
-    // go to `capture.segment` and `stt_transcribe`; until then the store keeps them in RAM.
+    // #46 (ADR 0082): R4 SttEngine, with the #413 loader (`stt_loader`). `stt_transcribe`
+    // takes the results from the store (#514). TODO(#514): the host emits `capture.segment`.
     let stt = mog_core::stt_engine::LocalStt::new(
         stt_loader(),
         std::sync::Arc::new(mog_core::stt_engine::NoTranscriptSink),
