@@ -233,3 +233,29 @@ fn adr_0103_the_host_ticker_applies_the_length_preset() {
         StopCause::LengthReached
     );
 }
+
+#[test]
+fn adr_0103_the_handoff_slot_forwards_once_the_cloud_side_connects() {
+    use bottle_lib::recording_host::HandoffSlot;
+    let slot = HandoffSlot::default();
+    let rec = FinishedRecording {
+        id: "a1".into(),
+        name: "n".into(),
+        dir: std::env::temp_dir().join("bottle-rec-none"),
+        parts: Vec::new(),
+        started_at_ms: 0,
+        duration_ms: 0,
+        cause: StopCause::User,
+        system_audio: mog_core::recording_capture::session::SystemAudioState::Ok,
+    };
+    // Not connected: the parts stay in the temp dir for the launch scan ("Upload failed").
+    slot.finished(rec.clone());
+    assert_eq!(slot.pending(), vec![rec.clone()]);
+    let cloud = Arc::new(Handoff::default());
+    slot.connect(cloud.clone());
+    // The waiting recording goes out at the connect; later ones go straight through.
+    assert_eq!(cloud.0.lock().unwrap().len(), 1);
+    slot.finished(rec);
+    assert_eq!(cloud.0.lock().unwrap().len(), 2);
+    assert!(slot.pending().is_empty());
+}

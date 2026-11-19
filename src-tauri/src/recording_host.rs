@@ -80,6 +80,27 @@ pub fn os_permission_asker() -> Box<dyn PermissionAsker + Send + Sync> {
     }
 }
 
+/// Red skeleton.
+#[derive(Default)]
+pub struct HandoffSlot;
+
+impl HandoffSlot {
+    /// Red skeleton.
+    pub fn connect(&self, _to: Arc<dyn PartsHandoff>) {
+        unimplemented!("red")
+    }
+    /// Red skeleton.
+    pub fn pending(&self) -> Vec<mog_core::recording_capture::session::FinishedRecording> {
+        unimplemented!("red")
+    }
+}
+
+impl PartsHandoff for HandoffSlot {
+    fn finished(&self, _rec: mog_core::recording_capture::session::FinishedRecording) {
+        unimplemented!("red")
+    }
+}
+
 struct Ticker {
     stop: Mutex<bool>,
     wake: Condvar,
