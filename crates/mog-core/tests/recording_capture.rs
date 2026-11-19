@@ -890,6 +890,89 @@ fn adr_0103_state_observer_sees_start_and_stop() {
     assert_eq!(seen.last(), Some(&Snapshot::Idle));
 }
 
+/// Captures, from inside the hand-off's `finished()` call (which `stop()` makes synchronously,
+/// after it has already notified `Snapshot::Idle`), whether the session still reports the
+/// recording's name as `finishing` at that exact moment. Review of #592 (the finding on
+/// `session.rs`'s `stop`): the cloud-side scan and Retry must never see a window where the
+/// name is neither `Snapshot::Recording` nor `finishing`, yet the writer thread has not
+/// necessarily finished flushing the last part to disk.
+#[derive(Default)]
+struct FinishingWitness {
+    session: Mutex<Option<Arc<RecordingSession>>>,
+    seen: Mutex<Option<(bool, Option<String>)>>,
+}
+
+impl PartsHandoff for FinishingWitness {
+    fn finished(&self, _rec: FinishedRecording) {
+        if let Some(s) = self.session.lock().unwrap().clone() {
+            let idle = matches!(s.snapshot(), Snapshot::Idle);
+            *self.seen.lock().unwrap() = Some((idle, s.finishing_name()));
+        }
+    }
+}
+
+#[test]
+fn rec_finishing_name_covers_the_window_snapshot_already_reads_idle() {
+    let clock = Arc::new(SimClock::new());
+    let wall = SimWallClock::at(1_763_544_600_000);
+    let tap = RecordingTap::new(clock.clone());
+    let mic = FakeMic::default();
+    let (sys, status) = SystemAudioDevice::spawn(
+        FakeHost::default,
+        Box::new(tap.system_sink()),
+        Duration::from_secs(5),
+    )
+    .unwrap();
+    let events = Arc::new(Events::default());
+    let core = Arc::new(CaptureCore::new(
+        Box::new(RecordingDevice::new(Box::new(mic.clone()), Box::new(sys))),
+        clock.clone(),
+        events.clone(),
+    ));
+    let root = temp_dir("session-finishing");
+    let witness = Arc::new(FinishingWitness::default());
+    let session = RecordingSession::new(
+        core.clone(),
+        tap.clone(),
+        status.clone(),
+        clock.clone(),
+        Arc::new(wall.clone()),
+        Arc::new(|| true),
+        witness.clone(),
+        SessionConfig {
+            temp_root: root.clone(),
+            ..SessionConfig::default()
+        },
+    );
+    *events.0.lock().unwrap() = Some(Arc::clone(&session));
+    *witness.session.lock().unwrap() = Some(Arc::clone(&session));
+
+    session.start(opts("2026-11-19_0905", 60)).unwrap();
+    assert_eq!(
+        session.finishing_name(),
+        None,
+        "not finishing before a stop"
+    );
+    session.stop(StopCause::User).unwrap();
+
+    let (was_idle_in_handoff, finishing_in_handoff) = witness.seen.lock().unwrap().take().unwrap();
+    assert!(
+        was_idle_in_handoff,
+        "snapshot() already reads Idle by the hand-off"
+    );
+    assert_eq!(
+        finishing_in_handoff,
+        Some("2026-11-19_0905".to_owned()),
+        "finishing_name() must still name the recording at that exact moment"
+    );
+    assert_eq!(
+        session.finishing_name(),
+        None,
+        "cleared once stop() has returned (the guard dropped)"
+    );
+    std::fs::remove_dir_all(root).ok();
+}
+
 #[test]
 fn adr_0103_a_recording_mic_stop_reason_maps_to_a_cause() {
     assert_eq!(
