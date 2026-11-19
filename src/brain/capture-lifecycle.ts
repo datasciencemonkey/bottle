@@ -10,6 +10,9 @@
  * - `down`: start a PTT lease through the consent gate (CAP-12a, MB-08a).
  * - `up`: release the lease; R2 stops it after the post-roll (CAP-12b).
  * - `cancel` (a tap, or another key, CAP-44c): discard the lease (CAP-44b).
+ * - `up` with `record: true` (⌥R, ADR 0103): discard the lease (no dictation), then, once R2 has
+ *   the discard, `onRecordToggle`. A refused press (a recording holds the mic) still toggles, so
+ *   ⌥R stops the recording.
  * - `double_tap`, a mascot click or "Talk": start hands-free (CAP-14a), if `mog.capture.modes`
  *   has it. A click on the listening MOG stops it when `clickTogglesListening` is on.
  * - A tap or Esc during hands-free: stop hands-free (CAP-14b). Esc also drops its audio. Esc
@@ -80,6 +83,11 @@ export interface CaptureLifecycleDeps {
    * `error` is the rejection (an `IpcError`), or undefined when the reply had no lease.
    */
   onRefused?(e: { mogId: MogId; mode: LifecycleMode; error?: unknown }): void;
+  /**
+   * ADR 0103: the user tapped ⌥R in the hold. It fires after the PTT lease is discarded, so the
+   * recording can take the mic. The callee starts or stops the recording.
+   */
+  onRecordToggle?(e: { mogId: MogId }): void;
   /** The capture settings of a MOG. Default: the Appendix F defaults. */
   config?: (mogId: MogId) => LifecycleConfig;
 }
@@ -291,12 +299,22 @@ export function createCaptureLifecycle(deps: CaptureLifecycleDeps): CaptureLifec
     stoppedBy = [stoppedBy[1], stops];
   };
 
+  const onRecordUp = (e: PttEvent) => {
+    if (!press || press.mogId !== e.mogId) return;
+    onEnd(e, false);
+    const toggle = () => deps.onRecordToggle?.({ mogId: e.mogId });
+    if (ending) void ending.then(toggle);
+    else toggle();
+  };
+
   return {
     onPtt(e) {
       switch (e.phase) {
         case 'down':
           return onDown(e);
         case 'up':
+          // ADR 0103: ⌥R ends the hold with no dictation and toggles the recording.
+          if (e.record === true) return onRecordUp(e);
           return onEnd(e, true);
         case 'cancel':
           return onEnd(e, false);
