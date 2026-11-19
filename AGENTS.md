@@ -49,7 +49,7 @@ later".
 |---|---|
 | Hotkey, capture, local Parakeet STT, paste (`insert_text`) | On main. |
 | TokenBroker, McpTransport, PollActor, GenieBridge (T8) | On main. |
-| Ask route trigger | On main it is **Shift** with the talk key (`hotkey:ptt` sends `shift: true`, ADR 0053), and without Shift a router model guesses the intent. Target: ⌥G, no guess (#577, ADR 0098, not yet written). |
+| Ask route trigger | PR #582 (#577, ADR 0098): ⌥G during the talk-key hold. The `hotkey:ptt` up sends `ask: true`, and the text goes to Genie with no preview. Every other hold is dictation, with no intent guess. Windows has no ⌥G yet. The Shift trigger of ADR 0053 is retired. |
 | Ask send path | On main the ask gate still calls `agent_send` (`src/brain/components/index.ts`). Target: straight to GenieBridge T8 with `genie_one_mcp` (PR #575, ADR 0097, stacked on #571). |
 | Pop-up with Copy and Ask Genie | PR #572 (pop-up) and PR #571 (dictation first, ADR 0096). |
 | `mem_local_exec` to the local SQLite store | PR #576. On main the route is still `TODO(#426)`. |
