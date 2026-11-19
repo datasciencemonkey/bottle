@@ -8,7 +8,8 @@
 //!
 //! The gateway is the only entry (ADR 0040). It sends each checked call to [`HostComponents`],
 //! which runs the host actions: `view_emit` (relay to the brain), `brain_subscribe`, the four
-//! `window_*` ops (R11), `hotkeys_set` (R1 settings), `permission_request` (R1, ADR 0039),
+//! `window_*` ops (R11), `hotkeys_set` (R1 settings), `permission_request` (R1, ADR 0039) and
+//! `permission_status` (R1, #552, ADR 0101),
 //! `consent_*` (T12 records, ADR 0060), the `capture_*` commands (R2, #425, ADR 0055),
 //! `app_setting_*` (the app-wide settings, #453), `insert_text` (the R11 paste, ADR 0048),
 //! `mcp_call` (R8 `McpCallComponent`, #467) and `agent_start`, `agent_stop` and `agent_send`
@@ -20,7 +21,8 @@
 //!
 //! The `window_*` ops can wait for the main thread, so they run on a worker and resolve later
 //! (ADR 0022 decision 6). `permission_request` can wait for the OS prompt, so it also runs on
-//! a worker (ADR 0039). `capture_start` and `capture_resume` open the audio device, which can
+//! a worker (ADR 0039), and so does `permission_status`, which can start the talk key after a
+//! grant in Settings (ADR 0101). `capture_start` and `capture_resume` open the audio device, which can
 //! be slow, so they also run on a worker (ADR 0055). `insert_text` waits for the paste and the
 //! clipboard restore, so it also runs on a worker (ADR 0048). `mcp_call` is a blocking HTTP call
 //! to Genie One MCP, so it also runs on a worker (#467). The `agent_*` commands run on a worker
@@ -206,7 +208,8 @@ pub trait HotkeysRoute: Send + Sync {
     fn set_hotkeys(&self, bindings: &JsonObject) -> CoreResult<Value>;
 }
 
-/// The R1 side of `permission_request` (#312, ADR 0039). `HotkeyRuntime` implements it.
+/// The R1 side of `permission_request` (#312, ADR 0039) and `permission_status` (#552,
+/// ADR 0101). `HotkeyRuntime` implements it.
 pub trait PermissionRoute: Send + Sync {
     /// Ask the OS for `permission`. `action` proves a user click (CAP-36, CAP-37).
     fn request_permission(
@@ -214,6 +217,8 @@ pub trait PermissionRoute: Send + Sync {
         permission: PermissionKind,
         action: UserAction,
     ) -> PermissionStatus;
+    /// The state of `permission` now. It never shows a prompt (CAP-36, CAP-37).
+    fn permission_status(&self, permission: PermissionKind) -> PermissionStatus;
 }
 
 /// The wire value of a permission status: `granted`, `denied` or `unknown`.
@@ -451,9 +456,17 @@ impl GatewayComponents for HostComponents<'_> {
             "permission_request" => {
                 let a: PermissionRequestArgs = args_of(command, args)?;
                 let route = self.permissions.ok_or_else(|| host_failed(command))?;
-                // The gateway let only the hub window through: this call is the user's click
-                // in the wizard or Settings (CAP-36, CAP-37).
+                // The gateway lets only the brain and the hub through. The brain sends it only
+                // for a click on the hub or pop-up control of this permission (ADR 0101), so
+                // this call is the user's click (CAP-36, CAP-37).
                 let status = route.request_permission(a.permission, UserAction::from_user_click());
+                Ok(json!({ "status": permission_status_name(status) }))
+            }
+            "permission_status" => {
+                let a: PermissionRequestArgs = args_of(command, args)?;
+                let route = self.permissions.ok_or_else(|| host_failed(command))?;
+                // No prompt (CAP-36, CAP-37, #552).
+                let status = route.permission_status(a.permission);
                 Ok(json!({ "status": permission_status_name(status) }))
             }
             // #430 (ADR 0060): T12 consent records. Its codes cross as themselves (ERROR_CODES).
@@ -550,7 +563,7 @@ pub fn route(components: HostComponents<'_>, command: &str, args: Value) -> Resu
 
 /// True for the commands that run on a worker: the R11 ops, which can wait for the main
 /// thread (ADR 0022 decision 6), and `permission_request`, which can wait while the OS prompt
-/// shows (ADR 0039), `capture_start` and `capture_resume`, which open the device (ADR 0055),
+/// shows (ADR 0039), `permission_status`, which can start the talk key (ADR 0101), `capture_start` and `capture_resume`, which open the device (ADR 0055),
 /// `insert_text`, which waits about 0.4 s for the paste and the clipboard restore (ADR 0048),
 /// `mcp_call`, a blocking HTTP call to Genie One MCP (#467), and the `agent_*` commands (#307),
 /// which can spawn, wait for the host lock or reap the runtime, `stt_transcribe`, which
@@ -567,6 +580,7 @@ pub fn runs_off_main_thread(command: &str) -> bool {
             | "window_card_show"
             | "window_card_hide"
             | "permission_request"
+            | "permission_status"
             | "capture_start"
             | "capture_resume"
             | "insert_text"

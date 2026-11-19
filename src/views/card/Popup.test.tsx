@@ -278,6 +278,40 @@ describe('#559 post-dictation pop-up', () => {
     expect(pop(el).getAttribute('data-state')).toBe('shown');
   });
 
+  it('[CAP-36] [ADR 0101] a permission notice shows its full text, one control, and stays', async () => {
+    const { el } = await mountCard();
+    await tauri.emit('card:update', {
+      mogId: ID,
+      blurbs: [
+        {
+          id: 'perm:input_monitoring',
+          text: 'Bottle needs Input Monitoring to hear the talk key',
+          completed: true,
+        },
+      ],
+      chips: [{ id: 'perm:input_monitoring', label: 'Allow' }],
+      historyCount: 0,
+    });
+    expect(pop(el).getAttribute('data-variant')).toBe('perm');
+    expect(el.querySelector('[data-popup-text]')?.textContent).toBe(
+      'Bottle needs Input Monitoring to hear the talk key',
+    );
+    expect([...el.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['Allow']);
+    expect(el.querySelector('[data-popup-hint]')).toBeNull();
+    await act(async () => (el.querySelector('[data-chip]') as HTMLElement).click());
+    expect(viewEmits()).toContainEqual({
+      mogId: ID,
+      kind: 'chip_click',
+      payload: { chipId: 'perm:input_monitoring' },
+    });
+    await advance(FADE_AFTER_MS * 3);
+    expect(pop(el).getAttribute('data-state')).toBe('shown');
+    // The text wraps, so the whole notice shows in the small pop-up.
+    expect(readFileSync(join(__dirname, 'card.css'), 'utf8')).toMatch(
+      /\.popup\[data-variant='perm'\] \.popup-text\s*\{[^}]*white-space:\s*normal/,
+    );
+  });
+
   it('[RTR-17a] a pop-up with Ask Genie shows the hint "Hold ⌥G to ask Genie"', async () => {
     const { el } = await mountCard();
     await tauri.emit('card:update', asks);

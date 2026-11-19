@@ -67,14 +67,17 @@ describe('V1 hub view', () => {
     await tauri.emit('mog:view_state', { mogId: A, mood: 'idle', overlays });
     await act(async () => (el.querySelector(`li[data-mog="${A}"] button`) as HTMLElement).click());
     // The hub notice (#27, MB-08a) and the MOG list (#26) ask the brain with hub-scope emits
-    // (notice.ready, mogs.ready), the CLI step asks with id `cli` (#161); the MOG selection is the rest.
+    // (notice.ready, mogs.ready), the CLI step asks with id `cli` (#161), the permission notice
+    // with id `permissions` (ADR 0101); the MOG selection is the rest.
     expect(viewEmits()).toContainEqual({
       mogId: 'hub',
       kind: 'click',
       payload: { action: 'notice.ready' },
     });
     expect(
-      viewEmits().filter((e) => !['hub', 'cli'].includes((e as { mogId: string }).mogId)),
+      viewEmits().filter(
+        (e) => !['hub', 'cli', 'permissions'].includes((e as { mogId: string }).mogId),
+      ),
     ).toEqual([{ mogId: A, kind: 'click' }]);
   });
 });

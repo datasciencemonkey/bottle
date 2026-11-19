@@ -131,8 +131,11 @@ pub const COMMANDS: &[CommandSpec] = &[
     row("config_delete", BH),
     row("policy_get", BH),
     row("hotkeys_set", BH),
-    // #312 (ADR 0039): the wizard and Settings ask for an OS permission after a click.
-    row("permission_request", H),
+    // #312 (ADR 0039): ask for an OS permission after a click. ADR 0101: the brain relays the
+    // click of the hub or the pop-up (views call only `view_*`, MOG-08a).
+    row("permission_request", BH),
+    // #552 (ADR 0101): the state of an OS permission, with no prompt.
+    row("permission_status", BH),
     // #453 (CAP-22): the app-wide settings (Appendix F, scope App), like the `config_*` rows.
     row("app_setting_read", BH),
     row("app_setting_write", BH),
@@ -893,7 +896,8 @@ args!(HotkeysSetArgs {
     bindings: JsonObject
 });
 
-/// The OS permission that `permission_request` asks for (CAP-36, CAP-37).
+/// The OS permission that `permission_request` asks for and `permission_status` reads
+/// (CAP-36, CAP-37).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionKind {
@@ -903,7 +907,8 @@ pub enum PermissionKind {
     Accessibility,
 }
 args!(
-    /// `permission_request`: the hub window call is the user action (CAP-36, CAP-37).
+    /// `permission_request` and `permission_status` (ADR 0101). For `permission_request`, the
+    /// brain or hub call is the user action (CAP-36, CAP-37).
     PermissionRequestArgs {
         permission: PermissionKind,
     }
@@ -1041,7 +1046,7 @@ macro_rules! for_command {
             "config_read" | "config_delete" => Some($f::<ConfigIdArgs>()),
             "config_write" => Some($f::<ConfigWriteArgs>()),
             "hotkeys_set" => Some($f::<HotkeysSetArgs>()),
-            "permission_request" => Some($f::<PermissionRequestArgs>()),
+            "permission_request" | "permission_status" => Some($f::<PermissionRequestArgs>()),
             "app_setting_read" => Some($f::<AppSettingReadArgs>()),
             "app_setting_write" => Some($f::<crate::types::AppSetting>()),
             "window_mog_open" => Some($f::<WindowMogOpenArgs>()),

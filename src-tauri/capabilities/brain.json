@@ -48,6 +48,8 @@
     "allow-app-setting-write",
     "allow-policy-get",
     "allow-hotkeys-set",
+    "allow-permission-request",
+    "allow-permission-status",
     "allow-mog-set-active",
     "allow-window-mog-open",
     "allow-window-mog-close",

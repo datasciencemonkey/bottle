@@ -812,6 +812,16 @@ mod sys {
                 }
             }
         }
+
+        fn open_settings(&self, permission: Permission) {
+            use objc2_app_kit::NSWorkspace;
+            use objc2_foundation::{NSString, NSURL};
+            // A fixed Privacy pane URL: no user text, no prompt. A failed open changes nothing.
+            let url = NSString::from_str(crate::hotkey_core::settings_pane(permission));
+            if let Some(url) = NSURL::URLWithString(&url) {
+                let _ = NSWorkspace::sharedWorkspace().openURL(&url);
+            }
+        }
     }
 
     struct TapThread {

@@ -117,18 +117,25 @@ describe('content-free IPC errors (#333, ADR 0040)', () => {
     expect(EVENTS['hotkey.status']).toEqual({ name: 'hotkey:status', direction: 'core_to_brain' });
   });
 
-  it('[CAP-36] [CAP-37] permission_request is a hub-only MVP-D command', () => {
-    expect(COMMANDS.permission_request).toEqual({ windows: ['hub'], phase: 'MVP-D' });
+  it('[CAP-36] [CAP-37] permission_request and permission_status are brain-and-hub MVP-D commands', () => {
+    // ADR 0101: the brain relays the click of the hub or the pop-up (MOG-08a), and reads the
+    // state with no prompt (#552).
+    expect(COMMANDS.permission_request).toEqual({ windows: ['brain', 'hub'], phase: 'MVP-D' });
+    expect(COMMANDS.permission_status).toEqual({ windows: ['brain', 'hub'], phase: 'MVP-D' });
     const doc = schemaDoc as unknown as {
       arguments: Record<string, { required?: string[]; additionalProperties?: boolean }>;
     };
-    expect(doc.arguments['permission_request']?.required).toEqual(['permission']);
-    expect(doc.arguments['permission_request']?.additionalProperties).toBe(false);
+    for (const c of ['permission_request', 'permission_status']) {
+      expect(doc.arguments[c]?.required).toEqual(['permission']);
+      expect(doc.arguments[c]?.additionalProperties).toBe(false);
+    }
     const ask: CommandArgs['permission_request'] = { permission: 'input_monitoring' };
     // @ts-expect-error only the two permissions of CAP-36 and CAP-37
     const camera: CommandArgs['permission_request'] = { permission: 'camera' };
     const reply: CommandReturns['permission_request'] = { status: 'unknown' };
-    expect([ask.permission, camera.permission, reply.status]).toHaveLength(3);
+    const read: CommandArgs['permission_status'] = { permission: 'accessibility' };
+    const state: CommandReturns['permission_status'] = { status: 'granted' };
+    expect([ask.permission, camera.permission, reply.status, read, state]).toHaveLength(5);
   });
 
   it('[ARC-5] [UX-06a] mog.level is a brain-to-view event', () => {

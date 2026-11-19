@@ -69,6 +69,17 @@ body,
   text-overflow: ellipsis;
 }
 
+/* ADR 0101: an OS permission notice wraps to two short lines, so the whole text shows. */
+.popup[data-variant='perm'] {
+  border-radius: var(--mog-radius-md);
+}
+
+.popup[data-variant='perm'] .popup-text {
+  white-space: normal;
+  font-size: var(--mog-text-sm);
+  line-height: 1.25;
+}
+
 .popup-text [data-part] + [data-part]::before {
   content: ', ';
 }

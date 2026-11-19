@@ -41,6 +41,7 @@ import { createHomeProfiles, ipcHomeProfileDeps, ipcListProfiles } from '../home
 import { LevelRouter, subscribeLevels, wireLevelStream } from '../level-stream';
 import { createMoodPublisher, latencyTraceClock } from '../mood-publisher';
 import { wireNotice } from '../notice-wiring';
+import { wirePermissions } from '../permission-wiring';
 import { withOfflineFallback } from '../offline-intent';
 import { createProfilePick } from '../profile-pick';
 import { createRequestOwner, sendOwnedCard } from '../request-owner';
@@ -223,6 +224,15 @@ export function startBrain(): Brain {
       // #557: an ask or a press with no home profile opens the picker; the user picks, then the
       // text goes.
       pickProfile: (mogId, then) => void pick.choose(mogId, then),
+    });
+    // ADR 0101 (#552, CAP-36, CAP-37): a missing Input Monitoring or Accessibility shows in the
+    // hub and in the pop-up of the first MOG, with one control. Only its click asks the OS.
+    wirePermissions(bus, {
+      status: async (permission) => (await call('permission_status', { permission })).status,
+      request: async (permission) => (await call('permission_request', { permission })).status,
+      stackFor,
+      showCard: (mogId) => call('window_card_show', { mogId }),
+      hideCard: (mogId) => call('window_card_hide', { mogId }),
     });
     wireAskGate(bus, stackFor, {
       // #559, UX-19b: a cancel hides the card (`window_card_hide`, R11).

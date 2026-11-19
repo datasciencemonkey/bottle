@@ -100,7 +100,7 @@ fn sample(command: &str) -> (&'static str, Value) {
         "hotkeys_set" => json!({"bindings": {}}),
         "consent_notice_record" => json!({"noticeVersion": 1}),
         "consent_records_list" => json!({}),
-        "permission_request" => return ("hub", json!({"permission": "accessibility"})),
+        "permission_request" | "permission_status" => json!({"permission": "accessibility"}),
         "app_setting_read" => json!({"key": "app.capture.preferBuiltInMic"}),
         "app_setting_write" => json!({"key": "app.capture.preferBuiltInMic", "value": true}),
         "window_mog_open" => json!({

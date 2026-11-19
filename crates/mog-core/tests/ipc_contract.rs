@@ -45,8 +45,10 @@ const SPEC_COMMANDS: &[(&str, &[WindowClass])] = {
         ("config_delete", &[B, H]),
         ("policy_get", &[B, H]),
         ("hotkeys_set", &[B, H]),
-        // #312 (ADR 0039): the wizard and Settings ask for an OS permission.
-        ("permission_request", &[H]),
+        // #312 (ADR 0039): ask for an OS permission. ADR 0101: the brain relays the click.
+        ("permission_request", &[B, H]),
+        // #552 (ADR 0101): the state of an OS permission, with no prompt.
+        ("permission_status", &[B, H]),
         // #453 (CAP-22): the app-wide settings, like the `config_*` rows.
         ("app_setting_read", &[B, H]),
         ("app_setting_write", &[B, H]),
@@ -555,41 +557,52 @@ fn cap_02a_capture_resume_is_brain_only_and_needs_a_valid_lease_id() {
 }
 
 #[test]
-fn cap_36_cap_37_permission_request_is_hub_only_and_takes_one_known_permission() {
-    let row = ipc::command("permission_request").expect("a permission_request row");
-    assert_eq!(row.windows, [WindowClass::Hub]);
-    assert_eq!(row.phase, Phase::MvpD);
-    for p in ["input_monitoring", "accessibility"] {
-        let args = json!({ "permission": p });
-        // The gateway checks pass; the host makes the user action and asks the OS.
-        assert!(matches!(
-            ipc::handle("hub", "permission_request", args.clone()).unwrap_err(),
-            IpcError::NotImplemented { .. }
-        ));
-        for label in ["brain", "mog-a1", "card-a1"] {
+fn cap_36_cap_37_permission_request_and_status_are_brain_and_hub_only_with_one_known_permission() {
+    for command in ["permission_request", "permission_status"] {
+        let row = ipc::command(command).expect("a permission row");
+        assert_eq!(
+            row.windows,
+            [WindowClass::Brain, WindowClass::Hub],
+            "{command}"
+        );
+        assert_eq!(row.phase, Phase::MvpD);
+        for p in ["input_monitoring", "accessibility"] {
+            let args = json!({ "permission": p });
+            // The gateway checks pass; the host reads or asks the OS.
+            for label in ["brain", "hub"] {
+                assert!(matches!(
+                    ipc::handle(label, command, args.clone()).unwrap_err(),
+                    IpcError::NotImplemented { .. }
+                ));
+            }
+            for label in ["mog-a1", "card-a1"] {
+                assert!(
+                    matches!(
+                        ipc::handle(label, command, args.clone()).unwrap_err(),
+                        IpcError::WindowNotAllowed { .. }
+                    ),
+                    "{command} {label} {p}"
+                );
+            }
+        }
+        for bad in [
+            json!({}),
+            json!({"permission": "camera"}),
+            json!({"permission": "inputMonitoring"}),
+            json!({"permission": "accessibility", "prompt": false}),
+        ] {
             assert!(
                 matches!(
-                    ipc::handle(label, "permission_request", args.clone()).unwrap_err(),
-                    IpcError::WindowNotAllowed { .. }
+                    ipc::handle("brain", command, bad.clone()).unwrap_err(),
+                    IpcError::InvalidArgs { .. }
                 ),
-                "{label} {p}"
+                "{command} {bad}"
             );
         }
     }
-    for bad in [
-        json!({}),
-        json!({"permission": "camera"}),
-        json!({"permission": "inputMonitoring"}),
-        json!({"permission": "accessibility", "prompt": false}),
-    ] {
-        assert!(
-            matches!(
-                ipc::handle("hub", "permission_request", bad.clone()).unwrap_err(),
-                IpcError::InvalidArgs { .. }
-            ),
-            "{bad}"
-        );
-    }
+    // The same argument schema.
+    let schemas = ipc::schemas();
+    assert_eq!(schemas["permission_status"], schemas["permission_request"]);
 }
 
 // ---------- #430 (ADR 0060) ----------
