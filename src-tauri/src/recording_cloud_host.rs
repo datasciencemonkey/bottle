@@ -302,6 +302,20 @@ pub fn remove_dir_if_empty(dir: &std::path::Path) {
     let _ = std::fs::remove_dir(dir);
 }
 
+/// Releases `name` from `active` when dropped: a panic inside the dispatched run still
+/// unwinds through this guard, so the name is never left marked active forever (review of
+/// #592, LOW).
+struct ActiveGuard {
+    active: Arc<ActiveNames>,
+    name: String,
+}
+
+impl Drop for ActiveGuard {
+    fn drop(&mut self) {
+        self.active.release(&self.name);
+    }
+}
+
 impl PartsHandoff for PipelineHandoff {
     fn finished(&self, rec: FinishedRecording) {
         let first = self
@@ -319,15 +333,22 @@ impl PartsHandoff for PipelineHandoff {
         let run = self.run.clone();
         let dir = rec.dir.clone();
         let started = rec.started_at_ms.max(0) as u64;
-        let active = self.active.clone();
-        let name = rec.name.clone();
-        let _ = std::thread::Builder::new()
+        let guard = ActiveGuard {
+            active: self.active.clone(),
+            name: rec.name.clone(),
+        };
+        let spawned = std::thread::Builder::new()
             .name("bottle-rec-pipeline".into())
             .spawn(move || {
+                let _guard = guard;
                 run(req, started);
-                active.release(&name);
                 remove_dir_if_empty(&dir);
             });
+        if spawned.is_err() {
+            // The thread never started, so its guard never ran: release the mark here (a
+            // failed spawn must not leave the name stuck active forever).
+            self.active.release(&rec.name);
+        }
     }
 }
 
@@ -385,6 +406,11 @@ pub fn install(handle: &tauri::AppHandle<tauri::Wry>) -> CoreResult<()> {
             if let Some(host) = app.try_state::<Arc<RecordingHost>>() {
                 if let Snapshot::Recording(info) = host.session().snapshot() {
                     names.insert(info.name);
+                }
+                // A stop that is still flushing the writer and running the hand-off (review
+                // of #592): `snapshot()` alone would read `Idle` here already.
+                if let Some(name) = host.session().finishing_name() {
+                    names.insert(name);
                 }
             }
             // A recording that finished before the cloud side connected still waits in the
