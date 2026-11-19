@@ -56,7 +56,7 @@ export interface CaptureControl {
 export interface Utterance {
   mogId: MogId;
   text: string;
-  /** RTR-17a: Shift was held at the PTT key-down. Always false for hands-free. */
+  /** RTR-17a: the PTT key-up carried `ask: true` (⌥G, ADR 0098). Always false for hands-free. */
   forceAsk: boolean;
   segment: SegmentRef;
   mode: CaptureMode;
@@ -84,12 +84,9 @@ export interface CaptureLifecycleDeps {
   config?: (mogId: MogId) => LifecycleConfig;
 }
 
-/** A `hotkey:ptt` item. #424 adds `shift: true` to a key-down with Shift held (RTR-17a). */
-export type LifecyclePttEvent = PttEvent & { shift?: true };
-
 export interface CaptureLifecycle {
   /** One `hotkey:ptt` item. */
-  onPtt(e: LifecyclePttEvent): void;
+  onPtt(e: PttEvent): void;
   /** A mascot click or "Talk" for `mogId` (CAP-14a). */
   click(mogId: MogId): void;
   /**
@@ -240,12 +237,12 @@ export function createCaptureLifecycle(deps: CaptureLifecycleDeps): CaptureLifec
     });
   };
 
-  const onDown = (e: LifecyclePttEvent) => {
+  const onDown = (e: PttEvent) => {
     if (press) return;
     const p: Press = {
       mogId: e.mogId,
       mode: 'ptt',
-      forceAsk: e.shift === true,
+      forceAsk: false,
       downAt: e.at,
       overHandsFree: handsFree !== undefined,
     };
@@ -259,6 +256,13 @@ export function createCaptureLifecycle(deps: CaptureLifecycleDeps): CaptureLifec
     const p = press;
     if (!p || p.mogId !== e.mogId) return;
     press = undefined;
+    // RTR-17a (ADR 0098): ⌥G during the hold makes the kept utterance an ask. The flag comes
+    // with the key-up, which can come before or after the grant.
+    if (keep && e.ask === true) {
+      p.forceAsk = true;
+      const info = p.leaseId === undefined ? undefined : leases.get(p.leaseId);
+      if (info) info.forceAsk = true;
+    }
     // TODO(#444): R1's tap decision (`HotkeyOutput::Tap`) does not reach the brain, so the
     // brain times the tap itself: a CAP-44c cancel under 250 ms counts as a tap here.
     const tap = !keep && e.at - p.downAt < TAP_MAX_HOLD_MS;
@@ -372,12 +376,7 @@ export function wireCaptureLifecycle(
   const offs = [
     bus.on(EVENTS['hotkey.ptt'].name, (p) => {
       const e = asPttEvent(p, now());
-      if (!e) return;
-      // Keep `shift` for RTR-17a (#424) on a key-down.
-      const { shift } = p as { shift?: unknown };
-      const withShift: LifecyclePttEvent = e;
-      if (e.phase === 'down' && shift === true) withShift.shift = true;
-      lc.onPtt(withShift);
+      if (e) lc.onPtt(e);
     }),
     bus.on(EVENTS['capture.state'].name, (p) => {
       if (typeof p === 'object' && p !== null) lc.onState(p as CaptureState);

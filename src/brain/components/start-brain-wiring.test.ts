@@ -38,10 +38,10 @@ describe('startBrain wiring', () => {
     expect(forget).toHaveLength(1);
     expect(forget[0]?.[0]).toBe(a.bus);
     expect(forget[0]?.[1].flow).toBeInstanceOf(ForgetFlow);
-    // #142 (RTR-04a, RTR-04b, RTR-05): the T3 preview and chip gate on the bus, once.
+    // #142 (RTR-05, ADR 0098): the T3 card input on the bus, once, with the card stacks.
     const gate = vi.mocked(wireAskGate).mock.calls;
     expect(gate).toHaveLength(1);
     expect(gate[0]?.[0]).toBe(a.bus);
-    expect(typeof gate[0]?.[1].onAsk).toBe('function');
+    expect(typeof gate[0]?.[1]).toBe('function');
   });
 });

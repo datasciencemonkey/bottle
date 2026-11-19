@@ -6,10 +6,15 @@
 //! after a gap. It has no OS calls, so tests drive it with fakes and a simulated clock.
 //!
 //! Privacy: no input here carries a key code of typed text. The OS layer reports only the
-//! talk key and the fallback chord, so key contents never reach this module or any log.
+//! talk key, the fallback chord and "the ask key went down", so key contents never reach this
+//! module or any log.
+//!
+//! Ask key (RTR-17a, ADR 0098): while the talk key is held, the OS layer grabs talk key + G
+//! through [`AskKeyControl`]. A press marks the hold as an ask, and its `up` becomes
+//! [`HotkeyOutput::PttAskUp`]. The engine releases the grab on every path that ends the hold.
 //!
 //! Requirements: CAP-35b, CAP-36, CAP-37, CAP-38a, CAP-38b, CAP-39a, CAP-39b, CAP-39c, CAP-44a,
-//! CAP-44c, CAP-45.
+//! CAP-44c, CAP-45, RTR-17a.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -56,6 +61,10 @@ pub const DOUBLE_TAP_MAX_GAP: Duration = Duration::from_millis(400);
 
 /// Another key that goes down this soon after the talk key cancels the PTT (CAP-44c).
 pub const OTHER_KEY_CANCEL_WINDOW: Duration = Duration::from_secs(1);
+
+/// The ask key is grabbed for at most this long in one hold (RTR-17a, ADR 0098). It matches the
+/// 120 s PTT safety stop of R2 (CAP-04a), so Option+G never stays grabbed after the capture ends.
+pub const ASK_KEY_MAX_HOLD: Duration = Duration::from_secs(120);
 
 /// A modifier-only talk key (CAP-35b, D66). The default is Right-Option.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -135,6 +144,10 @@ pub enum HotkeyOutput {
     /// The hands-free stop (CAP-14b) reads it. Two taps close together also give
     /// `Ptt(DoubleTap)` (CAP-14a).
     Tap,
+    /// The talk key came up after an ask key press in the same hold (RTR-17a, ADR 0098). It
+    /// ends the PTT as `Ptt(Up)` does; the host adds `ask: true` to the `hotkey.ptt` up. A tap,
+    /// a cancel and a double-tap never carry it.
+    PttAskUp,
 }
 
 impl HotkeyOutput {
@@ -470,6 +483,15 @@ pub trait TapControl: Send + Sync {
     fn tap_alive(&self) -> bool;
 }
 
+/// Grabs and releases the ask key: the talk key + G (RTR-17a, ADR 0098). A grabbed key goes to
+/// Bottle only, so the focused app gets no "g" or "©". The engine calls it only at the start and
+/// the end of a talk-key hold, so the key types as usual at any other time.
+pub trait AskKeyControl: Send + Sync {
+    /// Grab (`true`) or release (`false`) the ask key. It must return fast: the tap callback
+    /// calls it with the engine lock held. The OS layer may do the work later, in order.
+    fn set_ask_key(&self, on: bool);
+}
+
 /// The state of the fallback chord registration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ChordState {
@@ -495,6 +517,14 @@ pub struct HotkeyEngine {
     held_since: Option<Duration>,
     /// The key-down time of the last tap, while it can still be the first of a double-tap.
     last_tap_down: Option<Duration>,
+    /// The ask key was pressed in this hold (RTR-17a).
+    ask: bool,
+    /// The OS seam that grabs the ask key. None: this OS has no ask key (Windows, ADR 0098).
+    ask_key: Option<Arc<dyn AskKeyControl>>,
+    /// The time the ask key was grabbed, while it is grabbed.
+    ask_key_since: Option<Duration>,
+    /// The hold passed [`ASK_KEY_MAX_HOLD`]: the ask key stays released until the hold ends.
+    ask_key_expired: bool,
 }
 
 impl std::fmt::Debug for HotkeyEngine {
@@ -528,6 +558,26 @@ impl HotkeyEngine {
             clock,
             held_since: None,
             last_tap_down: None,
+            ask: false,
+            ask_key: None,
+            ask_key_since: None,
+            ask_key_expired: false,
+        }
+    }
+
+    /// The same engine with `ctl`, which grabs the ask key during each talk-key hold (RTR-17a).
+    pub fn with_ask_key(mut self, ctl: Arc<dyn AskKeyControl>) -> Self {
+        self.ask_key = Some(ctl);
+        self
+    }
+
+    /// The ask key went down (RTR-17a, ADR 0098): the grabbed hot key, or the other-key tap that
+    /// compares the key code with G. During a talk-key hold it marks the hold as an ask; a
+    /// second report sets the same flag. It never cancels the PTT (CAP-44c). With no talk-key
+    /// hold it does nothing.
+    pub fn on_ask_key(&mut self) {
+        if self.machine.held_by == Some(TalkKeyMode::TalkKey) {
+            self.ask = true;
         }
     }
 
@@ -678,6 +728,14 @@ impl HotkeyEngine {
 
     /// One watchdog tick, every [`WATCHDOG_TICK`]. The first tick records the baseline.
     pub fn tick(&mut self, now: Duration, probe: &dyn PlatformProbe, ctl: &dyn TapControl) {
+        // RTR-17a: a hold past the 120 s cap releases the ask key. The hold itself goes on.
+        if self
+            .ask_key_since
+            .is_some_and(|t| self.clock.now().saturating_sub(t) >= ASK_KEY_MAX_HOLD)
+        {
+            self.ask_key_expired = true;
+            self.sync_ask_key();
+        }
         // Secure Event Input first: it has the 250 ms deadline (CAP-39a).
         if let Some(active) = self.secure.poll(probe.secure_input_active()) {
             ctl.set_chord(active);
@@ -762,12 +820,58 @@ impl HotkeyEngine {
         self.last_tap_retry = None;
         self.held_since = None;
         self.last_tap_down = None;
+        self.ask = false;
         self.emit(out);
     }
 
-    fn emit(&self, out: Vec<HotkeyOutput>) {
+    /// Send `out` to the sink. Every state change ends here, so the ask flag and the ask key
+    /// grab follow the hold on each path: a key edge, a cancel, Secure Event Input, a gap and
+    /// a reset.
+    fn emit(&mut self, out: Vec<HotkeyOutput>) {
         for o in out {
+            let o = match o {
+                HotkeyOutput::Ptt(PttPhase::Up) if std::mem::take(&mut self.ask) => {
+                    HotkeyOutput::PttAskUp
+                }
+                HotkeyOutput::Ptt(PttPhase::Down | PttPhase::Cancel) => {
+                    self.ask = false;
+                    o
+                }
+                o => o,
+            };
             self.sink.emit(o);
+        }
+        if !self.machine.is_held() {
+            self.ask = false;
+        }
+        self.sync_ask_key();
+    }
+
+    /// Grab the ask key while a talk-key hold is active and younger than [`ASK_KEY_MAX_HOLD`];
+    /// release it otherwise. Each change calls the seam once, so grab and release pair up.
+    fn sync_ask_key(&mut self) {
+        let held = self.machine.held_by == Some(TalkKeyMode::TalkKey);
+        if !held {
+            self.ask_key_expired = false;
+        }
+        let want = held && !self.ask_key_expired;
+        if want == self.ask_key_since.is_some() {
+            return;
+        }
+        self.ask_key_since = want.then(|| self.clock.now());
+        if let Some(ctl) = &self.ask_key {
+            ctl.set_ask_key(want);
+        }
+    }
+}
+
+impl Drop for HotkeyEngine {
+    /// An engine that goes away in a hold releases the ask key (RTR-17a).
+    fn drop(&mut self) {
+        if self.ask_key_since.take().is_some() {
+            if let Some(ctl) = &self.ask_key {
+                ctl.set_ask_key(false);
+            }
         }
     }
 }

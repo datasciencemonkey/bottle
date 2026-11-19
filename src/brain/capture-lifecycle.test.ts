@@ -487,6 +487,7 @@ describe('capture lifecycle wiring (#14)', () => {
     await r.flush();
     await bus.dispatch({ event: 'hotkey:ptt', payload: { mogId: A, phase: 'up', ask: true } });
     await r.lc.onSegment(r.seg('1'));
+    r.endPostRoll();
     await bus.dispatch({ event: 'hotkey:ptt', payload: { mogId: A, phase: 'down', shift: true } });
     await r.flush();
     await bus.dispatch({ event: 'hotkey:ptt', payload: { mogId: A, phase: 'up' } });

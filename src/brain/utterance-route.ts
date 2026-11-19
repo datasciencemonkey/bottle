@@ -1,18 +1,19 @@
 /**
- * The route of one PTT or hands-free utterance after the router step (#59, ADR 0053).
+ * The route of one PTT or hands-free utterance after the router step (#59, ADR 0053, ADR 0098).
  *
- * - RTR-01b, RTR-01c: an utterance with the intent `dictation` ends at `insert_text`. The main
- *   agent and Genie take no part: this module never calls `agent_*` or `mcp_call`.
- * - RTR-17a: Shift held with the talk key forces the ask route. Only the intent gate is skipped:
- *   the router step still runs (cleaned text, hints), and the route still goes through the preview.
- * - RTR-17b: a forced ask keeps the 1.5 s preview (RTR-04a). The preview, the agent hand-off and
- *   the chip are the caller's (the T3 ask gate, `ask-gate.ts`, #142); this module returns the route.
- * - B1: nothing goes to Genie here. A question gives a `preview` or a `chip`, never a send.
- * - #557 (user decision, ADR 0096): every utterance is dictation first. A question with no Shift
- *   is inserted (or goes to Copy) like a dictation, and it also gets the "Ask Genie" chip of the
- *   exact dictated text. It never gets the preview: no utterance goes to Genie without a press.
- * - RTR-07: a session utterance never gets the preview, which sends by itself. It gets a chip.
- * - RTR-14: an injection-suspected utterance never gets the preview. It gets the warning chip.
+ * - ADR 0098 (user decision, MVP): with no ⌥G, every utterance is dictation. There is no intent
+ *   gate: a question, a command and a plain sentence are all inserted (or go to Copy). Each
+ *   dictation also gets the "Ask Genie" chip of the exact dictated text, the fallback for text
+ *   that was already dictated. Only a press on that chip sends it.
+ * - RTR-01c: a dictation ends at `insert_text` or at Copy. The main agent and Genie take no part:
+ *   this module never calls `agent_*` or `mcp_call`.
+ * - RTR-17a: ⌥G during the talk-key hold (`hotkey:ptt` up, `ask: true`) forces the ask route.
+ *   The router step still runs (RTR-14), but its intent and its rewritten question are not used:
+ *   the route holds the exact text that a dictation would insert.
+ * - RTR-17b: the ask route has no preview. ⌥G is the user action (B1), so the T3 ask gate
+ *   (`ask-gate.ts`) sends the text at once through its one send seam. Nothing is sent here.
+ * - RTR-07: a session utterance never gets the ask route. It gets a chip.
+ * - RTR-14: an injection-suspected utterance never gets the ask route. It gets the warning chip.
  *
  * The capture lifecycle calls it through `createUtteranceHandler` (`utterance-wiring.ts`).
  */
@@ -21,9 +22,7 @@ import { call, type CommandReturns } from '../shared/ipc';
 import { createRouterContextGate } from './components/router-context-gate';
 import type { RouterInput } from './components/router-step';
 
-/** The preview of RTR-04a, "Sending in 1.5 s". */
-export const PREVIEW_MS = 1500;
-/** A router confidence mark (D30). Since #557 an unforced question never previews (ADR 0096). */
+/** A router confidence mark (D30). The offline heuristic stays below it (RTR-15c). */
 export const ASK_CONFIDENCE = 0.7;
 
 export type InsertResult = CommandReturns['insert_text']['result'];
@@ -32,7 +31,7 @@ export interface Utterance {
   mogId: MogId;
   /** The STT text (pre-pass). */
   text: string;
-  /** Shift was held with the talk key (`hotkey:ptt` down, `shift: true`). */
+  /** ⌥G was tapped during the talk-key hold (`hotkey:ptt` up, `ask: true`, ADR 0098). */
   forceAsk: boolean;
   /** `app.dictation.insert` (Appendix F): on after the user grants Accessibility. */
   insertionOn: boolean;
@@ -48,10 +47,9 @@ export type UtteranceRoute =
     }
   | { route: 'copy'; text: string }
   | {
-      route: 'preview';
+      /** RTR-17a: ⌥G asks Genie with `question`, the exact text, at once (ADR 0098). */
+      route: 'ask';
       question: string;
-      forced: boolean;
-      previewMs: typeof PREVIEW_MS;
       decision: RouterDecision;
     }
   | {
@@ -59,12 +57,12 @@ export type UtteranceRoute =
       decision: RouterDecision;
       /** RTR-14: the chip shows a warning. */
       warning: 'injection_suspected' | undefined;
-      /** #557: the dictation of the same text, done before the chip (inserted, failed, or Copy). */
+      /** The dictation of the same text, done before the chip (inserted, failed, or Copy). */
       dictated?: DictationRoute;
     }
   | { route: 'other'; decision: RouterDecision };
 
-/** The end of a dictation (#557: also of a question, before its chip). */
+/** The end of a dictation, before its fallback chip. */
 export type DictationRoute = Extract<
   UtteranceRoute,
   { route: 'inserted' | 'insert_failed' | 'copy' }
@@ -94,55 +92,41 @@ export async function routeUtterance(
   deps: UtteranceRouteDeps,
 ): Promise<UtteranceRoute> {
   const decision = await deps.route(u.text, u.mogId, u.input);
-  const chip = (): UtteranceRoute => ({
-    route: 'chip',
-    decision,
-    warning: decision.injection_suspected ? 'injection_suspected' : undefined,
-  });
-  const question = firstNonEmpty(decision.genie_question, decision.cleaned_text, u.text);
-  // An ask with no text, or one that the router marks as an injection (RTR-14), never sends.
-  const preview = (forced: boolean): UtteranceRoute =>
-    question === ''
-      ? { route: 'other', decision }
-      : decision.injection_suspected
-        ? chip()
-        : { route: 'preview', question, forced, previewMs: PREVIEW_MS, decision };
+  const warning = decision.injection_suspected ? ('injection_suspected' as const) : undefined;
+  // The exact text: what a dictation inserts, and what ⌥G or the fallback chip sends.
+  const exact = firstNonEmpty(decision.cleaned_text, u.text);
   // RTR-07, B1: in a session nothing sends without a click, so an ask is a chip. A session is
   // never dictated into the focused app.
   if (u.input.captureMode === 'session') {
-    return u.forceAsk || decision.intent === 'question' ? chip() : { route: 'other', decision };
+    return u.forceAsk || decision.intent === 'question'
+      ? { route: 'chip', decision, warning }
+      : { route: 'other', decision };
   }
-  // RTR-17a: Shift skips the intent gate only. The preview still guards the send (RTR-17b, B1).
-  if (u.forceAsk) return preview(true);
-  // RTR-01c: a dictation ends at `insert_text`, or at Copy. No main agent and no Genie take part.
-  const dictate = async (): Promise<DictationRoute> => {
-    const text = firstNonEmpty(decision.cleaned_text, u.text);
-    if (!u.insertionOn) return { route: 'copy', text };
+  if (u.forceAsk) {
+    // RTR-17a: an ask with no text sends nothing. RTR-14: a flagged one is the warning chip.
+    if (exact === '') return { route: 'other', decision };
+    if (warning) return { route: 'chip', decision, warning };
+    return { route: 'ask', question: exact, decision };
+  }
+  // ADR 0098: no intent gate. The utterance is dictated, then gets the chip of the same text.
+  let dictated: DictationRoute;
+  if (!u.insertionOn) dictated = { route: 'copy', text: exact };
+  else {
     let result: InsertResult | 'host_failed';
     try {
-      result = (await deps.insertText({ mogId: u.mogId, text })).result;
+      result = (await deps.insertText({ mogId: u.mogId, text: exact })).result;
     } catch {
       result = 'host_failed';
     }
-    return result === 'inserted'
-      ? { route: 'inserted', decision }
-      : { route: 'insert_failed', reason: result, text };
-  };
-  switch (decision.intent) {
-    case 'dictation':
-      return dictate();
-    case 'question': {
-      // #557: dictation first, then the chip of the exact dictated text. Only a press sends it.
-      const dictated = await dictate();
-      const exact = firstNonEmpty(decision.cleaned_text, u.text);
-      return {
-        route: 'chip',
-        decision: { ...decision, genie_question: exact },
-        warning: decision.injection_suspected ? 'injection_suspected' : undefined,
-        dictated,
-      };
-    }
-    default:
-      return { route: 'other', decision };
+    dictated =
+      result === 'inserted'
+        ? { route: 'inserted', decision }
+        : { route: 'insert_failed', reason: result, text: exact };
   }
+  return {
+    route: 'chip',
+    decision: { ...decision, genie_question: exact },
+    warning,
+    dictated,
+  };
 }

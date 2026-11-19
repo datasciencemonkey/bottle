@@ -243,14 +243,11 @@ impl TalkTargetRoute for PttTarget {
     }
 }
 
-/// The `hotkey:ptt` payload of section 4.5: `{ mogId, phase }`. For a key-down with Shift
-/// held, `PttForwarder` adds `shift: true` (RTR-17a, ADR 0053).
+/// The `hotkey:ptt` payload of section 4.5: `{ mogId, phase }`. For the up of a hold with
+/// the ask key (`HotkeyOutput::PttAskUp`), `PttForwarder` adds `ask: true` (RTR-17a, ADR 0098).
 pub fn ptt_payload(mog_id: &str, phase: PttPhase) -> Value {
     json!({ "mogId": mog_id, "phase": phase.as_str() })
 }
-
-/// Whether a Shift key (not the talk key) is down now (RTR-17a).
-pub type ShiftProbe = Box<dyn Fn() -> bool + Send>;
 
 /// CAP-51c (#46): the key-down hook that preloads R4, if the capture host has made it.
 fn r4_preload<R: Runtime>(app: AppHandle<R>) -> KeyDownHook {
@@ -265,33 +262,6 @@ fn r4_preload<R: Runtime>(app: AppHandle<R>) -> KeyDownHook {
 /// preload (CAP-51c, #46). It must not block.
 pub type KeyDownHook = Box<dyn Fn() + Send>;
 
-/// The talk key now, shared by the Shift probe and a talk-key change (RTR-17a, CAP-43a).
-#[derive(Debug, Clone)]
-pub struct TalkNow(Arc<Mutex<TalkBinding>>);
-
-impl TalkNow {
-    /// Start with `talk`.
-    pub fn new(talk: TalkBinding) -> Self {
-        Self(Arc::new(Mutex::new(talk)))
-    }
-
-    /// The talk key now.
-    pub fn get(&self) -> TalkBinding {
-        *lock(&self.0)
-    }
-
-    /// The user chose a new talk key.
-    pub fn set(&self, talk: TalkBinding) {
-        *lock(&self.0) = talk;
-    }
-
-    /// A Shift probe that gives `read` the talk key at each read.
-    pub fn probe(&self, read: impl Fn(TalkBinding) -> bool + Send + 'static) -> ShiftProbe {
-        let now = self.clone();
-        Box::new(move || read(now.get()))
-    }
-}
-
 /// Turns R1 outputs into brain items and status changes.
 ///
 /// The target is read at `down` and kept until `up` or `cancel`, so one press goes to one
@@ -305,11 +275,7 @@ pub struct PttForwarder<B: BrainSink, S: StatusSink> {
     held: Option<String>,
     /// The MOG of the last press that ended, for the `double_tap` that follows it.
     last: Option<String>,
-    shift: Option<ShiftProbe>,
     key_down: Option<KeyDownHook>,
-    /// The fallback chord (Ctrl+Shift+Space, CAP-39b) is the talk key now. Shift is part of the
-    /// chord, so it never forces the ask route (RTR-17a, ADR 0053).
-    chord: bool,
 }
 
 impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
@@ -321,9 +287,7 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
             status,
             held: None,
             last: None,
-            shift: None,
             key_down: None,
-            chord: false,
         }
     }
 
@@ -334,14 +298,13 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
         self
     }
 
-    /// Read the Shift state at each key-down with `probe` (RTR-17a).
-    pub fn with_shift_probe(mut self, probe: ShiftProbe) -> Self {
-        self.shift = Some(probe);
-        self
-    }
-
     /// Forward one output.
     pub fn on_output(&mut self, output: HotkeyOutput) {
+        // RTR-17a (ADR 0098): the up of a hold with the ask key carries `ask: true`.
+        let (output, ask) = match output {
+            HotkeyOutput::PttAskUp => (HotkeyOutput::Ptt(PttPhase::Up), true),
+            other => (other, false),
+        };
         match output {
             HotkeyOutput::Ptt(phase) => {
                 let mog = match phase {
@@ -361,27 +324,16 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
                 };
                 if let Some(mog) = mog {
                     let mut payload = ptt_payload(&mog, phase);
-                    // RTR-17a: Shift with the talk key forces the ask route (ADR 0053).
-                    if phase == PttPhase::Down
-                        && !self.chord
-                        && self.shift.as_ref().is_some_and(|probe| probe())
-                    {
-                        payload["shift"] = json!(true);
+                    if ask {
+                        payload["ask"] = json!(true);
                     }
                     // `false` means no brain listens yet; the press is dropped.
                     let _ = self.brain.deliver(events::HOTKEY_PTT, payload);
                 }
             }
-            HotkeyOutput::TalkKeyPaused => {
-                self.chord = true;
-                self.status.status(HotkeyStatus::Paused)
-            }
-            HotkeyOutput::TalkKeyRestored => {
-                self.chord = false;
-                self.status.status(HotkeyStatus::Restored)
-            }
+            HotkeyOutput::TalkKeyPaused => self.status.status(HotkeyStatus::Paused),
+            HotkeyOutput::TalkKeyRestored => self.status.status(HotkeyStatus::Restored),
             HotkeyOutput::FallbackChordUnavailable => {
-                self.chord = true;
                 self.status.status(HotkeyStatus::ChordUnavailable)
             }
             // A tap (CAP-44a) comes after `Ptt(Cancel)`, which already ended the PTT and
@@ -389,6 +341,8 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
             // `cancel` as a tap (CAP-14b), and R1 sends `Ptt(DoubleTap)` for two (CAP-14a).
             // TODO(#444): mark that `cancel` with `tap: true` so the brain uses R1's decision.
             HotkeyOutput::Tap => {}
+            // Mapped to `Ptt(Up)` above.
+            HotkeyOutput::PttAskUp => {}
         }
     }
 }
@@ -718,8 +672,6 @@ pub struct HotkeyRuntime {
     pub host: HotkeyHost,
     /// The talk-key target.
     pub target: Arc<PttTarget>,
-    /// The talk key that the Shift probe reads (RTR-17a).
-    pub talk_now: TalkNow,
     make_service: MakeService,
 }
 
@@ -861,12 +813,9 @@ where
 {
     let target = Arc::new(PttTarget::default());
     let (sink, rx) = queue();
-    // The Shift probe must know the talk key: a Right-Shift talk key is not "Shift held".
-    let talk_now = TalkNow::new(settings.talk_binding());
     spawn_forwarder(
         rx,
         PttForwarder::new(Arc::clone(&target), app.clone(), BrainStatus(app.clone()))
-            .with_shift_probe(talk_now.probe(platform_shift_held))
             .with_key_down(r4_preload(app.clone())),
     )?;
     let sink: Arc<dyn HotkeySink> = Arc::new(sink);
@@ -874,37 +823,14 @@ where
     let host = HotkeyHost::new(service, permissions);
     host.start();
     // A later talk key keeps the permission API and makes only a new service.
-    let talk_for_service = talk_now.clone();
-    let make_service: MakeService = Box::new(move |talk| {
-        talk_for_service.set(talk);
-        factory(talk, Arc::clone(&sink)).0
-    });
+    let make_service: MakeService = Box::new(move |talk| factory(talk, Arc::clone(&sink)).0);
     app.manage(HotkeyRuntime {
         host,
         target,
-        talk_now,
         make_service,
     });
     app.manage(settings);
     Ok(())
-}
-
-/// The OS Shift read for the talk key `talk` (RTR-17a, ADR 0053).
-#[cfg(target_os = "macos")]
-fn platform_shift_held(talk: TalkBinding) -> bool {
-    mog_core::hotkey_macos::shift_held(talk.core_talk_key().unwrap_or_default())
-}
-
-/// The OS Shift read (RTR-17a, ADR 0053). No Windows talk key is a Shift key.
-#[cfg(windows)]
-fn platform_shift_held(_talk: TalkBinding) -> bool {
-    mog_core::hotkey_windows::win32::shift_held()
-}
-
-/// No hotkey service on this OS, so no Shift.
-#[cfg(not(any(target_os = "macos", windows)))]
-fn platform_shift_held(_talk: TalkBinding) -> bool {
-    false
 }
 
 /// The target signal of a window event, if any.

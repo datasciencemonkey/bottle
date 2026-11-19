@@ -4,13 +4,14 @@
  *
  * - MOG-13a: the MOG of the `hotkey:ptt` down owns the utterance. If that MOG is no longer
  *   open, nothing is routed.
- * - RTR-01c: a dictation, a Copy, a failed insertion and every other route end here, and the
- *   owner is released. No main agent and no Genie take part.
- * - RTR-04a, RTR-17b, B1: a preview or a chip goes to `onAsk` with its live owner. `onAsk`
- *   (the T3 ask gate, `ask-gate.ts`, #142) runs the 1.5 s preview or shows the chip, and it releases
- *   the owner. Nothing here sends to Genie.
- * - #557 (ADR 0096): a question is dictated first. Its chip goes to `onAsk`, then its dictation
- *   (inserted, failed, or Copy) goes to `onDone`, so a refused paste still reaches the Copy card.
+ * - RTR-01c: a route with no ask ends here, and the owner is released. No main agent and no
+ *   Genie take part.
+ * - RTR-17a, B1: an ⌥G ask or a chip goes to `onAsk` with its live owner. `onAsk` (the T3 ask
+ *   gate, `ask-gate.ts`, #142) sends the ⌥G ask or shows the chip, and it releases the owner.
+ *   Nothing here sends to Genie.
+ * - ADR 0098: an utterance with no ⌥G is dictated first. Its fallback chip goes to `onAsk`, then
+ *   its dictation (inserted, failed, or Copy) goes to `onDone`, so a refused paste still reaches
+ *   the Copy card.
  */
 import type { MogId } from '../shared/interfaces';
 import type { Utterance as CapturedUtterance } from './capture-lifecycle';
@@ -18,7 +19,7 @@ import type { RouterInput } from './components/router-step';
 import type { OwnedUtterance, RequestOwner } from './request-owner';
 import { routeUtterance, type UtteranceRoute, type UtteranceRouteDeps } from './utterance-route';
 
-export type AskRoute = Extract<UtteranceRoute, { route: 'preview' | 'chip' }>;
+export type AskRoute = Extract<UtteranceRoute, { route: 'ask' | 'chip' }>;
 
 export interface UtteranceHandlerDeps {
   owner: Pick<RequestOwner, 'begin' | 'release'>;
@@ -30,7 +31,7 @@ export interface UtteranceHandlerDeps {
   /** `app.dictation.insert` (Appendix F). */
   insertionOn(mogId: MogId): boolean;
   route: UtteranceRouteDeps;
-  /** A preview or a chip, with its live owner. The callee releases the owner, unless it throws. */
+  /** An ⌥G ask or a chip, with its live owner. The callee releases the owner, unless it throws. */
   onAsk(r: AskRoute, owned: OwnedUtterance): void;
   /**
    * Every other route, after the owner is released. It is required: a `copy` or an
@@ -39,7 +40,7 @@ export interface UtteranceHandlerDeps {
   onDone(r: Exclude<UtteranceRoute, AskRoute>, owned: OwnedUtterance): void;
 }
 
-const isAsk = (r: UtteranceRoute): r is AskRoute => r.route === 'preview' || r.route === 'chip';
+const isAsk = (r: UtteranceRoute): r is AskRoute => r.route === 'ask' || r.route === 'chip';
 
 export function createUtteranceHandler(
   deps: UtteranceHandlerDeps,

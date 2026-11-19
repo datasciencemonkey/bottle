@@ -65,7 +65,7 @@ function setup() {
     send: (t) => bridge.send(t),
   });
   const hides: string[] = [];
-  const off = wireAskGate(bus, gate, stackFor, { hideCard: (id) => void hides.push(id) });
+  const off = wireAskGate(bus, stackFor, { hideCard: (id) => void hides.push(id) });
   const outbound = () =>
     core.invoke.mock.calls.filter(([cmd]) => OUTBOUND.has(cmd)).map(([cmd]) => cmd);
   const last = () => updates[updates.length - 1];

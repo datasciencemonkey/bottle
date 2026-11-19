@@ -1,9 +1,9 @@
 //! AT-43 "UC1 dictation into the active app" (#231), section 15. The Rust part.
 //!
 //! The AT script: dictate into a text editor, a browser field, a terminal and a password field;
-//! repeat without Accessibility; dictate with Shift held. Pass: the text appears with no Enter
+//! repeat without Accessibility; dictate and tap G in the hold. Pass: the text appears with no Enter
 //! and the earlier clipboard returns; the password field shows the reason and Copy; without
-//! Accessibility the MOG shows Copy; no agent turn and no Genie call; Shift forces the ask route;
+//! Accessibility the MOG shows Copy; no agent turn and no Genie call; ⌥G forces the ask route;
 //! key-up to inserted text 1.5 s or less at p95 (local).
 //!
 //! What runs here is the `insert_text` contract part of MOG-06b: only the brain may call it, and

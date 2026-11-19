@@ -91,15 +91,14 @@ describe('startBrain utterance routing (#163)', () => {
         { mogId: MOG, text: SENTENCE, forceAsk: false, insertionOn: d.insertionOn(MOG), input },
         d.route,
       );
-    expect((await dictate()).route).toBe('inserted');
+    expect(await dictate()).toMatchObject({ route: 'chip', dictated: { route: 'inserted' } });
     const sent = core.invoke.mock.calls.find(([c]) => c === 'insert_text');
     expect((sent?.[1] as { args: { text: string } }).args.text).toBe(SENTENCE);
     insert = 'fails';
     // No text loss: a failed insert gives the text back for the Copy card (#498).
-    expect(await dictate()).toEqual({
-      route: 'insert_failed',
-      reason: 'host_failed',
-      text: SENTENCE,
+    expect(await dictate()).toMatchObject({
+      route: 'chip',
+      dictated: { route: 'insert_failed', reason: 'host_failed', text: SENTENCE },
     });
     const q = await d.route.route('What was revenue?', MOG, input);
     expect(q.intent).toBe('question');

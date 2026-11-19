@@ -24,8 +24,8 @@ import type { CardStack } from './card-stack';
 import type { OwnedUtterance } from './request-owner';
 import type { InsertResult, UtteranceRoute } from './utterance-route';
 
-/** The routes that reach `onDone` (every route but a preview or a chip). */
-export type DoneRoute = Exclude<UtteranceRoute, { route: 'preview' | 'chip' }>;
+/** The routes that reach `onDone` (every route but an ⌥G ask or a chip). */
+export type DoneRoute = Exclude<UtteranceRoute, { route: 'ask' | 'chip' }>;
 
 export type InsertFailure = Exclude<InsertResult, 'inserted'> | 'host_failed';
 

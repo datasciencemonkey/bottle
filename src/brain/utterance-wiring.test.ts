@@ -128,7 +128,7 @@ describe('the utterance hook of the capture lifecycle (#59, #73)', () => {
     const s = setup(dictation, { routerInput: async () => input });
     await s.handle(captured());
     expect(s.calls).toEqual(['route', 'insert_text']);
-    expect(s.owner.ownerOf('utt-1')).toBeUndefined();
+    expect(s.asks.map((a) => a.r.route)).toEqual(['chip']);
   });
 
   it('[RTR-01c] a router input that fails releases the owner and inserts nothing', async () => {
