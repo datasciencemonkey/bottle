@@ -1,6 +1,7 @@
 /** V3 card view entry. The MOG ID comes from the `card-<id>` window label. */
 import '../tokens.css';
 import './card.css';
+import './genie-card.css';
 import { mount } from '../mount';
 import { ownMogId, startCardFocusSignal } from '../view-ipc';
 import { CardView } from './CardView';

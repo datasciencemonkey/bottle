@@ -5,22 +5,28 @@
  * allowlist, #470; the host adds the R6 token, #464) and polls with the PollActor (#483).
  * The main agent and the Agent SDK take no part, and Bottle adds no typed Genie IPC route.
  *
- * The AskEvents show on the card of the owner MOG (MOG-13a), in one blurb per request:
- * - at the send (G-44, before `genie_ask` returns): the Appendix E Acknowledged line;
- * - on `progress`: "Working... m:ss" (G-17a). TODO(#87): the newest step with banned words
- *   filtered (G-17b, UX-16a). Until then no upstream step text shows.
+ * The AskEvents show on the card of the owner MOG (MOG-13a), in one blurb per request. Genie One
+ * does not stream tokens, so the user sees live status, then the answer (#573):
+ * - at the send (G-44, before `genie_ask` returns): "Asking Genie", and `onPhase('working')`, so
+ *   the MOG shows its working mood in the same task;
+ * - on `progress`: the fixed stage line of the newest Genie step (`genieStage`, G-17b, UX-16a).
+ *   No upstream step text shows. The card view runs the "m:ss" timer (G-17a).
  * - on the terminal event: the `outcome-blurb.ts` text (the answer, or the fixed failure text of
  *   GL-5), and for an answer the expanded sections of `card-sections.ts` (answer, key numbers).
+ *   First the sections or Try again, then `showCard` (awaited), then the outcome blurb and
+ *   `onPhase('answered' | 'failed')`: the card shows next to the MOG even if it was hidden while
+ *   Genie worked, and it changes from the pill to the card in one update.
  *
- * No failure is sent again (G-15b): the outcome controls ([Retry], [Open in Databricks]) do not
- * show yet. TODO(#86): the outcome controls, the footer and the deep link. TODO(#150): the table
- * preview. TODO(#40): the workspace host in the Acknowledged line ("this workspace" until then).
+ * No failure is sent again by itself (G-15b). A failure shows [Try again]; only a click on it
+ * sends the same question again, as a new request. TODO(#86): the footer and the deep link.
+ * TODO(#150): the table preview.
  *
  * #40 (AT-09): when a sent request ends, `onEnd` gets its end once, after the card update.
  * `genie-history.ts` saves it as one local exchange row. A request that was never sent (a
  * `submit` that throws) has no end.
  */
-import type { AgentTurn, AskRequest, GenieBridge, MogId, ProfileName } from '../shared/interfaces';
+import type { AgentTurn, AskRequest, GenieBridge, MogId } from '../shared/interfaces';
+import { ASKING_GENIE, genieBlurbId, genieStage } from '../shared/genie-status';
 import type { CardStack } from './card-stack';
 import { isTerminal, type TerminalAskEvent } from './components/ask-events';
 import type { GenieEnd } from './genie-history';
@@ -29,25 +35,34 @@ import { outcomeBlurbInput } from './outcome-blurb';
 /** The "Where your data goes" line of an answer card. TODO(#94): built from the live config (UX-24a). */
 export const GENIE_DATA_FLOW_TEXT = 'Your question went to Genie One in your workspace.';
 
-/** Appendix E Acknowledged: "Asking Genie in <host> (profile <p>)". TODO(#40): the host. */
-export const workingLine = (profile: ProfileName) =>
-  `Asking Genie in this workspace (profile ${profile})`;
+/** The control of a failed request (GL-5). A click sends the same question once more. */
+export const TRY_AGAIN_LABEL = 'Try again';
 
-/** G-17a: "Working... m:ss". */
-export function elapsedLine(ms: number): string {
-  const s = Math.max(0, Math.floor(ms / 1000));
-  return `Working\u2026 ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-}
+/** The request phases that the MOG mood shows (`capture-mood.ts`). */
+export type GeniePhase = 'working' | 'answered' | 'failed' | 'cancelled';
 
 export interface GenieDirectDeps {
   /** T8. Only `submit` is used. */
   genie: Pick<GenieBridge, 'submit'>;
   /** The card of the owner MOG. */
-  cardFor(mogId: MogId): Pick<CardStack, 'add' | 'setExpanded'>;
+  cardFor(
+    mogId: MogId,
+  ): Pick<CardStack, 'add' | 'setExpanded'> &
+    Partial<Pick<CardStack, 'setControls' | 'clearControls'>>;
   /** A new operation ID per press. */
   newOpId(): string;
   /** #40: called once when a sent request ends, after the card shows the outcome. */
   onEnd?: ((x: GenieEnd) => void) | undefined;
+  /** #573: the MOG mood follows the request (working, then answered or failed). */
+  onPhase?: ((mogId: MogId, phase: GeniePhase, opId: string) => void) | undefined;
+  /** #573: `window_card_show`, after the card holds the outcome. */
+  showCard?: ((mogId: MogId) => unknown) | undefined;
+}
+
+/** The mood phase of a terminal event. A clarify question is an answer: Genie answered. */
+function phaseOf(e: TerminalAskEvent): GeniePhase {
+  if (e.t === 'cancel_requested') return 'cancelled';
+  return e.t === 'answer' || e.t === 'needs_input' ? 'answered' : 'failed';
 }
 
 /**
@@ -55,7 +70,14 @@ export interface GenieDirectDeps {
  * `submit` throws before anything is sent (the gate then shows "Not sent.").
  */
 export function createGenieDirectSend(deps: GenieDirectDeps): (turn: AgentTurn) => Promise<void> {
-  return (turn) => {
+  const safely = (fn: () => unknown) => {
+    try {
+      void Promise.resolve(fn()).catch(() => undefined);
+    } catch {
+      // A mood or window fault never stops the request or changes the card.
+    }
+  };
+  const send = (turn: AgentTurn): Promise<void> => {
     const req: AskRequest = {
       opId: deps.newOpId(),
       mogId: turn.mogId,
@@ -65,8 +87,13 @@ export function createGenieDirectSend(deps: GenieDirectDeps): (turn: AgentTurn) 
     };
     const { opId, events } = deps.genie.submit(req);
     const card = deps.cardFor(turn.mogId);
-    const id = `genie:${opId}`;
-    card.add({ id, text: workingLine(turn.target) });
+    const id = genieBlurbId(opId);
+    // The new status blurb goes on top first, then the old answer goes: the card never shows the
+    // old answer without its sections (no flash).
+    let shown = ASKING_GENIE;
+    card.add({ id, text: shown });
+    card.setExpanded(undefined);
+    if (deps.onPhase) safely(() => deps.onPhase?.(turn.mogId, 'working', opId));
     return (async () => {
       let end: TerminalAskEvent | undefined;
       let accepted: { conversationId: string; responseId: string } | undefined;
@@ -75,26 +102,46 @@ export function createGenieDirectSend(deps: GenieDirectDeps): (turn: AgentTurn) 
           if (e.t === 'accepted')
             accepted = { conversationId: e.conversationId, responseId: e.responseId };
           if (isTerminal(e)) {
-            card.add(outcomeBlurbInput(id, e));
-            if (e.t === 'answer')
-              card.setExpanded({
-                answerMd: e.md,
-                keyNumbers: e.keyNumbers.map((k) => k.text),
-                dataFlowText: GENIE_DATA_FLOW_TEXT,
-              });
             end = e;
             break;
           }
-          if (e.t === 'progress') card.add({ id, text: elapsedLine(e.elapsedMs) });
+          if (e.t === 'progress') {
+            const stage = genieStage(e.steps);
+            if (stage !== undefined && stage !== shown) card.add({ id, text: (shown = stage) });
+          }
         }
       } catch {
         // T8 ends every request in one terminal event (G-21b), so this is a client fault. The
         // card must not stay on the working line, and nothing is sent again (G-15b).
       }
-      if (!end) {
-        end = { t: 'uncertain' };
-        card.add(outcomeBlurbInput(id, end));
+      end ??= { t: 'uncertain' };
+      // The answer sections and the Try again control go on while the blurb still works, so the
+      // card goes from the status pill to the answer or failure card in one step.
+      if (end.t === 'answer')
+        card.setExpanded({
+          answerMd: end.md,
+          keyNumbers: end.keyNumbers.map((k) => k.text),
+          dataFlowText: GENIE_DATA_FLOW_TEXT,
+        });
+      else if (phaseOf(end) === 'failed' && card.setControls) {
+        // GL-5: one user action sends the same question again, as a new request (G-15b).
+        const owner = `retry:${id}`;
+        card.setControls(owner, [{ id: owner, label: TRY_AGAIN_LABEL }], () => {
+          card.clearControls?.(owner);
+          safely(() => send(turn));
+        });
       }
+      // R11 places the card first, then the outcome goes on it, so the view grows the card from
+      // its final place (no race between the view fit and the R11 move).
+      if (deps.showCard) {
+        try {
+          await deps.showCard(turn.mogId);
+        } catch {
+          // The card stays where it was; the outcome still goes on it.
+        }
+      }
+      card.add(outcomeBlurbInput(id, end));
+      safely(() => deps.onPhase?.(turn.mogId, phaseOf(end), opId));
       // #40: the history write comes after the card, and a fault in it never reaches the card.
       try {
         deps.onEnd?.({
@@ -110,4 +157,5 @@ export function createGenieDirectSend(deps: GenieDirectDeps): (turn: AgentTurn) 
       }
     })();
   };
+  return send;
 }

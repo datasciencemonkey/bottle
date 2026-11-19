@@ -12,6 +12,7 @@ import {
   sendMicLevel,
   sendMogViewState,
   subscribeBrain,
+  viewLabel,
 } from '../bus';
 import { createCaptureMood, wireCaptureMood } from '../capture-mood';
 import { wireForget } from '../forget-wiring';
@@ -28,7 +29,13 @@ import {
 import { cardStackDeps, createCardStack, timeoutScheduler, type CardStack } from '../card-stack';
 import { createSystemClock } from '../clock';
 import { createDictationSink } from '../dictation-copy';
+import { genieBlurbId } from '../../shared/genie-status';
 import { createGenieDirectSend } from '../genie-direct';
+import { wireGenieCard } from '../genie-card-wiring';
+import { showHub } from '../hub-window';
+import { asPttEvent } from '../ptt';
+import { emitTo } from '@tauri-apps/api/event';
+import { EVENTS } from '../../shared/ipc';
 import { ipcGenieHistory } from '../genie-history';
 import { createHomeProfiles, ipcHomeProfileDeps, ipcListProfiles } from '../home-profile';
 import { LevelRouter, subscribeLevels, wireLevelStream } from '../level-stream';
@@ -167,6 +174,8 @@ export function startBrain(): Brain {
     // closes.
     const cardClock = createSystemClock();
     const stacks = new Map<MogId, CardStack>();
+    /** #573: the newest Genie request of each MOG, for a double-click on the MOG. */
+    const lastGenieOp = new Map<MogId, string>();
     const stackFor = (mogId: MogId): CardStack => {
       let s = stacks.get(mogId);
       if (!s)
@@ -203,6 +212,13 @@ export function startBrain(): Brain {
         newOpId: () => crypto.randomUUID(),
         // #40 (AT-09): each request that ends saves one local exchange row through T10.
         onEnd: ipcGenieHistory(components.T10),
+        // #573: the MOG shows the work (processing), then the answer (answering, success) or
+        // the failure (error); the card shows next to the MOG when the outcome is on it.
+        onPhase: (mogId, phase, opId) => {
+          lastGenieOp.set(mogId, opId);
+          captureMood.ask(mogId, phase);
+        },
+        showCard: (mogId) => call('window_card_show', { mogId }),
       }),
       // #557: an ask or a press with no home profile opens the picker; the user picks, then the
       // text goes.
@@ -227,6 +243,40 @@ export function startBrain(): Brain {
       scheduler: { at: timeoutScheduler(moodClock) },
     });
     wireCaptureMood(bus, captureMood);
+    // #573: the ⌥G key-up shows the working mood at once, before the text is ready.
+    bus.on(EVENTS['hotkey.ptt'].name, (p) => {
+      const e = asPttEvent(p, 0);
+      if (e?.phase === 'up' && e.ask === true) captureMood.ask(e.mogId, 'pending');
+    });
+    // #573: the transient Genie card (its timer holds while the pointer is on the MOG) and the
+    // double-click on a MOG or its card, which opens hub Conversations.
+    wireGenieCard(bus, {
+      hideCard: (mogId) => void call('window_card_hide', { mogId }).catch(() => undefined),
+      clearAnswer: (mogId) => stackFor(mogId).setExpanded(undefined),
+      // The faded answer leaves the card for good: a card window that loads again (the R11
+      // reaper) gets an empty Genie blurb, which shows nothing.
+      forget: (mogId, requestId) => {
+        const stack = stackFor(mogId);
+        const id = genieBlurbId(requestId);
+        stack.clearControls(`retry:${id}`);
+        stack.add({ id, text: '', completed: true });
+      },
+      sendToCard: (mogId, event, payload) => {
+        try {
+          void emitTo(viewLabel('card', mogId), event, payload).catch(() => undefined);
+        } catch {
+          // Not a valid window label: nothing to hold or fade.
+        }
+      },
+      lastOpId: (mogId) => lastGenieOp.get(mogId),
+      // TODO(#103): the hub Conversations wiring (`hub-conversations-wiring.ts`) replaces the
+      // emit below with `openConversations(requestId)`, which also sends it again when the hub
+      // says it is ready.
+      openConversations: (requestId) => {
+        void showHub();
+        void emitTo('hub', 'hub:conversations.open', { requestId }).catch(() => undefined);
+      },
+    });
     // #498 (ADR 0091): the Copy card of a dictation. The card is shown first, then the text goes
     // on its stack. If the card cannot show, the text goes to the hub only. No main agent and no
     // Genie take part (RTR-01c).

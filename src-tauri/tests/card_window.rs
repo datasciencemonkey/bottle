@@ -6,7 +6,10 @@
 
 use bottle_lib::window_host::WindowLedger;
 use bottle_lib::window_host::{CardState, NativeWindowStyle, TauriWindowHost, WindowError};
-use bottle_lib::windows::{card_beside, PanelLevel, WindowKind, CARD_HIDDEN_TTL, CARD_REAP_TICK};
+use bottle_lib::windows::{
+    card_beside, card_beside_with_height, hides_on_close, PanelLevel, WindowKind, CARD_HIDDEN_TTL,
+    CARD_REAP_TICK,
+};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -83,7 +86,16 @@ fn mog_03b_macos_panel_code_never_activates_bottle() {
         assert!(!code.contains(call), "macos_panel.rs calls {call}");
     }
     assert!(code.contains("orderFrontRegardless"));
-    assert!(code.contains("makeKeyWindow"), "the card panel becomes key");
+    // ADR 0102 (#573): a card shows by itself (an answer), so the show never makes it key; a
+    // click on it does (MOG-03a), so its first click must act.
+    assert!(
+        !code.contains("makeKeyWindow"),
+        "a shown card takes no keys"
+    );
+    assert!(
+        card().spec().accept_first_mouse,
+        "the first click on a card acts"
+    );
 }
 
 #[derive(Default, Clone)]
@@ -775,4 +787,25 @@ fn issue_559_card_goes_left_of_the_mog_at_the_right_edge_and_stays_on_screen() {
         no_screen.x >= mog.x + mog.width - 24.0,
         "no screen: the right side"
     );
+}
+
+#[test]
+fn issue_573_a_taller_card_grows_down_from_the_pop_up_line_and_stays_on_screen() {
+    let screen = g(0.0, 0.0, 1440.0, 900.0);
+    let mog = g(100.0, 200.0, 160.0, 160.0);
+    let line = card_beside(&mog, Some(&screen));
+    let tall = card_beside_with_height(&mog, Some(&screen), 300.0);
+    assert_eq!((tall.x, tall.y, tall.height), (line.x, line.y, 300.0));
+    // Near the bottom of the screen it moves up only as far as it must.
+    let low = g(100.0, 760.0, 160.0, 160.0);
+    let c = card_beside_with_height(&low, Some(&screen), 300.0);
+    assert_eq!(c.y + c.height, screen.y + screen.height);
+}
+
+#[test]
+fn issue_573_only_the_hub_hides_on_close() {
+    assert!(hides_on_close("hub"));
+    for label in ["brain", "mog-a1", "card-a1", "hubx", ""] {
+        assert!(!hides_on_close(label), "{label}");
+    }
 }

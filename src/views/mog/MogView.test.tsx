@@ -7,7 +7,7 @@ import type { MascotRenderer } from './mascot';
 import type { MicLevelFrame, MicLevelSource } from './level-meter';
 import { RiveMascot } from './rive-mascot';
 import { render, tauri, viewEmits } from '../test-tauri';
-import { MogView, defaultMascot } from './MogView';
+import { DOUBLE_CLICK_MS, MogView, defaultMascot } from './MogView';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('../test-tauri')).coreModule);
 vi.mock('@tauri-apps/api/event', async () => (await import('../test-tauri')).eventModule);
@@ -75,16 +75,72 @@ describe('V2 MOG view', () => {
     const { m, calls } = fakeMascot();
     const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
     const target = el.querySelector('[aria-label="MOG"]') as HTMLElement;
+    vi.useFakeTimers();
     await act(async () => target.click());
     await act(async () => target.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })));
+    // #573: the click goes after the double-click time.
+    await act(async () => void vi.advanceTimersByTime(DOUBLE_CLICK_MS));
+    vi.useRealTimers();
     expect(calls).toEqual(['mount', 'poke', 'hover:true']);
     expect(viewEmits()).toEqual([
       // MB-06a (#73): the view tells the brain that it is open. TODO(#439): a `ready` kind.
       { mogId: ID, kind: 'click', payload: { action: 'view.ready' } },
-      { mogId: ID, kind: 'click' },
       { mogId: ID, kind: 'hover' },
+      // #573: the pointer on the MOG, once per enter, for the Genie card hold.
+      { mogId: ID, kind: 'hover', payload: { on: true } },
+      { mogId: ID, kind: 'click' },
     ]);
     expect(tauri.invoke.mock.calls.every(([c]) => c === 'view_emit')).toBe(true);
+  });
+
+  it('[#573] a double-click opens Conversations and sends no single click', async () => {
+    const { m } = fakeMascot();
+    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    const target = el.querySelector('[aria-label="MOG"]') as HTMLElement;
+    vi.useFakeTimers();
+    const click = (detail: number) =>
+      act(
+        async () => void target.dispatchEvent(new MouseEvent('click', { bubbles: true, detail })),
+      );
+    await click(1);
+    await click(2);
+    await act(
+      async () =>
+        void target.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, detail: 2 })),
+    );
+    await act(async () => void vi.advanceTimersByTime(DOUBLE_CLICK_MS * 2));
+    vi.useRealTimers();
+    const clicks = viewEmits().filter(
+      (e) =>
+        (e as { kind: string }).kind === 'click' &&
+        !('payload' in (e as object) && (e as { payload: { action?: string } }).payload.action),
+    );
+    expect(clicks).toEqual([
+      { mogId: ID, kind: 'click', payload: { target: 'open_conversations' } },
+    ]);
+  });
+
+  it('[#573] the pointer leave tells the brain once', async () => {
+    const { m } = fakeMascot();
+    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    const root = el.firstElementChild as HTMLElement;
+    const target = el.querySelector('[aria-label="MOG"]') as HTMLElement;
+    await act(async () => target.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })));
+    await act(async () => target.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })));
+    await act(async () =>
+      root.dispatchEvent(
+        new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body }),
+      ),
+    );
+    const holds = viewEmits().filter(
+      (e) =>
+        (e as { kind: string; payload?: unknown }).kind === 'hover' &&
+        (e as { payload?: unknown }).payload,
+    );
+    expect(holds).toEqual([
+      { mogId: ID, kind: 'hover', payload: { on: true } },
+      { mogId: ID, kind: 'hover', payload: { on: false } },
+    ]);
   });
 
   it('[V2] stops listening on unmount', async () => {

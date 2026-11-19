@@ -2,7 +2,8 @@
  * V3 card view (thin) from `card.update`. A small card is the #559 pop-up (`Popup.tsx`): one line
  * and one action. A card with an answer, sections, a Page domain or a checklist is the panel.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { isGenieBlurbId } from '../../shared/genie-status';
 import type { MogId } from '../../shared/interfaces';
 import { DomainPicker } from '../DomainPicker';
 import {
@@ -13,6 +14,8 @@ import {
   type CardSection,
   type CardUpdate,
 } from '../view-ipc';
+import { createWindowFit } from './fit-window';
+import { GenieCard } from './GenieCard';
 import { Popup } from './Popup';
 
 /** The MOG ID of the debug demo card (`DEMO_ID` in `src-tauri/src/lib.rs`). */
@@ -206,10 +209,48 @@ export function CardView({ mogId }: { mogId: MogId }) {
       card.pagesChecklist !== undefined);
   const newest = card?.blurbs[0];
   const shown = kept && (!newest || newest.id === kept.blurbs[0]?.id) ? kept : card;
+  // #573: the window takes the height of the pop-up or the Genie card (`fit-window.ts`).
+  const genie = card !== undefined && isGenieBlurbId(newest?.id);
+  const fit = useMemo(() => createWindowFit(), []);
+  const lastPx = useRef<number | undefined>(undefined);
+  const onSize = useCallback(
+    (px: number) => {
+      lastPx.current = px;
+      return fit(px, window.innerHeight);
+    },
+    [fit],
+  );
+  const frame = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    if (genie || panel || !frame.current) return;
+    void onSize(frame.current.getBoundingClientRect().height);
+  }, [genie, panel, shown, onSize]);
+  useEffect(() => {
+    // R11 sets a hidden card back to one line when it shows it again: fit once more.
+    const onResize = () => {
+      if (lastPx.current !== undefined) void fit(lastPx.current, window.innerHeight);
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [fit]);
+  // #573: the echo of an ⌥G question (`ask:<utterance>`, one line, no Ask Genie chip) comes in
+  // the same task as the Genie status pill, so it shows nothing: no flash before the pill.
+  const echo =
+    newest !== undefined &&
+    newest.id.startsWith('ask:') &&
+    !newest.text.includes('\n') &&
+    !card?.chips.some((c) => c.id === `ask_genie:${newest.id.slice(4)}`);
+  if (genie && newest)
+    return (
+      <section aria-label="MOG card" className="card card-genie">
+        <GenieCard key={newest.id} mogId={mogId} card={card} onSize={onSize} />
+        {probe}
+      </section>
+    );
   if (!panel)
     return (
-      <section aria-label="MOG card" className="card card-popup">
-        {shown?.blurbs[0] && (
+      <section ref={frame} aria-label="MOG card" className="card card-popup">
+        {shown?.blurbs[0] && !(echo && shown === card) && (
           <Popup
             key={shown.blurbs[0].id}
             mogId={mogId}

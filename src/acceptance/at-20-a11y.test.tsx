@@ -20,7 +20,7 @@ import { createMoodMapper, MOODS } from '../brain/components/mood-mapper';
 import { accessibleText, contrastRatio } from '../test-support/a11y';
 import { inputEmits, render, tauri } from '../views/test-tauri';
 import { CardView } from '../views/card/CardView';
-import { MogView } from '../views/mog/MogView';
+import { DOUBLE_CLICK_MS, MogView } from '../views/mog/MogView';
 import { Hub } from '../views/hub/Hub';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('../views/test-tauri')).coreModule);
@@ -162,14 +162,20 @@ describe('AT-20 without pointer or animation', () => {
   it('[AT-20] DOM pointer events drive hover and click of the MOG', async () => {
     const { el } = await mount(<MogView mogId={ID} />);
     const target = el.querySelector('[aria-label="MOG"]') as HTMLElement;
+    vi.useFakeTimers();
     await act(async () => {
       target.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
       target.click();
     });
+    // #573: a single click goes after the double-click time.
+    await act(async () => void vi.advanceTimersByTime(DOUBLE_CLICK_MS));
+    vi.useRealTimers();
     expect(inputEmits()).toEqual([
       // MB-06a (#73): the MOG view tells the brain on mount that it is open.
       { mogId: ID, kind: 'click', payload: { action: 'view.ready' } },
       { mogId: ID, kind: 'hover' },
+      // #573: the pointer on the MOG holds its Genie card.
+      { mogId: ID, kind: 'hover', payload: { on: true } },
       { mogId: ID, kind: 'click' },
     ]);
   });

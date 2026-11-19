@@ -8,7 +8,7 @@
 import { core } from '../test-core';
 import { routerDecision } from '../../test-support/model-invoke';
 import { createUtteranceHandler, type UtteranceHandlerDeps } from '../utterance-wiring';
-import { workingLine } from '../genie-direct';
+import { ASKING_GENIE } from '../../shared/genie-status';
 import { startBrain, type Brain } from './index';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('../test-core')).coreModule);
@@ -128,14 +128,17 @@ describe('startBrain Ask Genie goes straight to Genie One MCP (#573, ADR 0097)',
     await settle();
     const texts = cards().flatMap((u) => u.blurbs.map((b) => b.text));
     // The working line shows first (G-44), then the failure replaces it.
-    expect(texts).toContain(workingLine(HOME));
+    expect(texts).toContain(ASKING_GENIE);
     const last =
       cards()
         .at(-1)
         ?.blurbs.map((b) => b.text) ?? [];
     expect(last.some((t) => /\nCode [A-Z_]+$/.test(t))).toBe(true);
     expect(last.join('\n')).not.toContain('not_implemented');
-    expect(last).not.toContain(workingLine(HOME));
+    expect(last).not.toContain(ASKING_GENIE);
+    // #573: the card shows again after the outcome is on it (the moods: capture-mood.test.ts).
+    const order = commands();
+    expect(order.lastIndexOf('window_card_show')).toBeGreaterThan(order.indexOf('mcp_call'));
     await new Promise((r) => setTimeout(r, 50));
     expect(genieAsks()).toHaveLength(1);
     expect(commands().filter((c) => c.startsWith('agent_'))).toEqual([]);

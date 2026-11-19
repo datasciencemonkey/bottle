@@ -243,7 +243,8 @@ describe('#559 post-dictation pop-up', () => {
       blurbs: [{ id: 'ask:u5', text: '"Revenue"', completed: true }, ...asks.blurbs],
       chips: asks.chips,
     });
-    expect(el.querySelector('[data-popup-text]')?.textContent).toBe('"Revenue"');
+    // #573: the echo shows nothing; the Genie status pill follows it in the same task.
+    expect(el.querySelector('[data-popup-text]')).toBeNull();
     expect(el.querySelector('[data-chip^="ask_genie:"]')).toBeNull();
     expect(el.querySelector('[data-popup-hint]')).toBeNull();
   });

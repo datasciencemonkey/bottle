@@ -299,18 +299,16 @@ impl<R: tauri::Runtime> NativeWindowStyle<R> for MacPanelStyle {
     }
 
     fn show(&self, window: &tauri::WebviewWindow<R>, kind: &WindowKind) -> Result<(), WindowError> {
-        let Some(spec) = kind.panel() else {
+        if kind.panel().is_none() {
             return window.show().map_err(|_| WindowError::HostFailed);
-        };
-        // `orderFrontRegardless` shows the panel without activating Bottle. A card panel then
-        // becomes key (it is non-activating, so the frontmost app stays) and its page gets the
-        // keys (MOG-03a, MOG-03b). A MOG panel never becomes key (UX-19a).
+        }
+        // `orderFrontRegardless` shows the panel without activating Bottle, and it does not make
+        // it key: a card shows by itself (an answer after 40 s, ADR 0102), so it must never take
+        // the keys from the app the user types in (MOG-03b). A card panel can still become key
+        // (MOG-03a): a click on it makes it key (`accept_first_mouse`), and then its page gets the
+        // keys and the IME. A MOG panel never becomes key (UX-19a).
         on_main(window, move |ns| {
             ns.orderFrontRegardless();
-            if spec.can_become_key {
-                ns.makeKeyWindow();
-                focus_web_view(ns);
-            }
             Ok(())
         })
     }

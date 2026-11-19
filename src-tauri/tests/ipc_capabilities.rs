@@ -49,29 +49,45 @@ fn arc_4_capability_files_match_the_command_table() {
 
 #[test]
 fn arc_4_views_only_listen_to_events() {
-    for id in ["hub", "mog", "card"] {
-        let core: BTreeSet<String> = permissions(&capability(id))
+    let core_of = |id: &str| -> BTreeSet<String> {
+        permissions(&capability(id))
             .into_iter()
             .filter(|p| p.starts_with("core:"))
-            .collect();
-        let want: BTreeSet<String> = ["core:event:allow-listen", "core:event:allow-unlisten"]
-            .map(String::from)
-            .into();
-        assert_eq!(core, want, "view {id} core permissions");
+            .collect()
+    };
+    let listen = ["core:event:allow-listen", "core:event:allow-unlisten"];
+    for id in ["hub", "mog"] {
+        let want: BTreeSet<String> = listen.map(String::from).into();
+        assert_eq!(core_of(id), want, "view {id} core permissions");
     }
-    // ARC-5: the brain sends to one view with emit_to; no global emit.
-    let brain_core: BTreeSet<String> = permissions(&capability("brain"))
+    // #573 (ADR 0102): the card also fits its own window to its content: its size and place, and
+    // the monitor and scale reads for that. It cannot show, focus, create or close a window.
+    let card: BTreeSet<String> = listen
         .into_iter()
-        .filter(|p| p.starts_with("core:"))
+        .chain([
+            "core:window:allow-set-size",
+            "core:window:allow-set-position",
+            "core:window:allow-outer-position",
+            "core:window:allow-scale-factor",
+            "core:window:allow-current-monitor",
+        ])
+        .map(String::from)
         .collect();
+    assert_eq!(core_of("card"), card, "view card core permissions");
+    // ARC-5: the brain sends to one view with emit_to; no global emit. #573 (ADR 0102): after a
+    // double-click it finds the hub, shows it and focuses it. It cannot create or close a window.
     let want: BTreeSet<String> = [
         "core:event:allow-listen",
         "core:event:allow-unlisten",
         "core:event:allow-emit-to",
+        "core:window:allow-get-all-windows",
+        "core:window:allow-show",
+        "core:window:allow-unminimize",
+        "core:window:allow-set-focus",
     ]
     .map(String::from)
     .into();
-    assert_eq!(brain_core, want);
+    assert_eq!(core_of("brain"), want);
 }
 
 #[test]
