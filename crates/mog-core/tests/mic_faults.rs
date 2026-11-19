@@ -337,13 +337,17 @@ fn cap_18_a_lost_device_waits_for_a_replacement_and_reopens_under_the_same_lease
     r.device.open(AudioSource::Mic).unwrap();
     fault(&r.host, 0, StreamFault::Fatal);
     wait_until("the replacement", || alive(&r, 2));
+    // The host marks a stream alive in `build`; the gap marker comes after `play`, on the
+    // audio thread. Wait for the marker, not only for the build (Windows CI, PR #554).
+    wait_until("the gap marker", || {
+        got(&r)
+            .iter()
+            .any(|g| matches!(g, Got::Event(SinkEvent::Gap { .. })))
+    });
     assert!(
         r.faults.lock().unwrap().is_empty(),
         "no loss inside the grace"
     );
-    assert!(got(&r)
-        .iter()
-        .any(|g| matches!(g, Got::Event(SinkEvent::Gap { .. }))));
     r.device.close(AudioSource::Mic);
     assert!(!alive(&r, 2));
 }

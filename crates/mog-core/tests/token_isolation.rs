@@ -781,6 +781,9 @@ fn arc_7_rule_9_close_ends_open_connections() {
     let a = s.addr(LoopbackEndpoint::GenieOneMcp);
     let auth = s.harness_config().authorization().to_owned();
     let mut c = TcpStream::connect(a).unwrap();
+    // #405, #451: set the timeout first, while nothing can have reset the connection. After
+    // close (or a request deadline under load) macOS setsockopt returns EINVAL (os error 22).
+    c.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
     // Half a request with the right secret: the handler must never run after close.
     let head = format!(
         "POST /mcp HTTP/1.1\r\nHost: {}\r\nAuthorization: {auth}\r\nContent-Length: 10\r\n\r\n{{",
@@ -798,9 +801,6 @@ fn arc_7_rule_9_close_ends_open_connections() {
         );
         std::thread::yield_now();
     }
-    // #405: set the timeout BEFORE close. After close the session may reset the
-    // connection, and then macOS setsockopt returns EINVAL (os error 22) on this socket.
-    c.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
     let t = std::time::Instant::now();
     s.close();
     assert!(
