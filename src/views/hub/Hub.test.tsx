@@ -78,7 +78,9 @@ describe('V1 hub view', () => {
     expect(
       viewEmits().filter(
         (e) =>
-          !['hub', 'cli', 'permissions', 'conversations'].includes((e as { mogId: string }).mogId),
+          !['hub', 'cli', 'permissions', 'conversations', 'recording'].includes(
+            (e as { mogId: string }).mogId,
+          ),
       ),
     ).toEqual([{ mogId: A, kind: 'click' }]);
   });
@@ -95,8 +97,12 @@ describe('hub navigation and Conversations (#103)', () => {
 
   it('[#103] Conversations is the first navigation item; the hub opens on the MOGs and settings', async () => {
     const { el } = await render(<Hub />);
-    expect(nav(el).map((b) => b.textContent)).toEqual(['Conversations', 'MOGs and settings']);
-    expect(nav(el)[1]?.getAttribute('aria-current')).toBe('page');
+    expect(nav(el).map((b) => b.textContent)).toEqual([
+      'Conversations',
+      'Recordings',
+      'MOGs and settings',
+    ]);
+    expect(nav(el)[2]?.getAttribute('aria-current')).toBe('page');
     expect(conv(el).hidden).toBe(true);
     expect(home(el).hidden).toBe(false);
     await act(async () => nav(el)[0]?.click());
@@ -127,7 +133,9 @@ describe('V1 hub view: call recording (ADR 0103)', () => {
       (b) => b.textContent === 'Recordings',
     );
     await act(async () => (rec as HTMLElement).click());
-    expect(el.querySelector('section[aria-label="Recordings"]')?.hasAttribute('hidden')).toBe(false);
+    expect(el.querySelector('section[aria-label="Recordings"]')?.hasAttribute('hidden')).toBe(
+      false,
+    );
     expect(el.querySelector('[data-hub-view="home"]')?.hasAttribute('hidden')).toBe(true);
   });
 });

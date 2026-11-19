@@ -33,7 +33,9 @@ const noticeEmits = () =>
   inputEmits().filter(
     (e) =>
       (e as { payload?: { action?: unknown } }).payload?.action !== 'mogs.ready' &&
-      !['cli', 'permissions', 'conversations'].includes((e as { mogId?: string }).mogId ?? ''),
+      !['cli', 'permissions', 'conversations', 'recording'].includes(
+        (e as { mogId?: string }).mogId ?? '',
+      ),
   );
 
 describe('V1 hub: first-run legal notice (#27)', () => {

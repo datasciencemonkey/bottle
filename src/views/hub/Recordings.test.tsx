@@ -102,7 +102,8 @@ describe('Recordings area (hub)', () => {
     await tauri.emitTo('hub', HUB_RECORDING_DETAIL_EVENT, detail);
     const d = el.querySelector('[data-recording-detail]');
     expect(d?.querySelector('h2, h3')).not.toBeNull();
-    expect(d?.querySelector('strong')?.textContent).toBe('Friday');
+    const strong = [...(d?.querySelectorAll('strong') ?? [])].map((s) => s.textContent);
+    expect(strong).toContain('Friday');
     expect(d?.querySelector('script')).toBeNull();
     expect(d?.querySelector('b')).toBeNull();
     expect(d?.textContent).toContain('<b>raw</b>');

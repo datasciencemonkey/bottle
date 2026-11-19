@@ -16,7 +16,11 @@ const idle: CaptureState = { recording: false, paused: false, othersTrack: 'off'
 function setup() {
   const s = createSimScheduler(1000);
   const sent: PublishedViewState[] = [];
-  const publisher = createMoodPublisher({ clock: s.clock, send: (v) => void sent.push(v), scheduler: s });
+  const publisher = createMoodPublisher({
+    clock: s.clock,
+    send: (v) => void sent.push(v),
+    scheduler: s,
+  });
   const cm = createCaptureMood({ publisher, clock: s.clock, scheduler: s });
   const last = (mogId: string) => sent.filter((v) => v.mogId === mogId).at(-1);
   return { s, cm, last };
@@ -40,7 +44,10 @@ describe('capture mood: call recording (ADR 0103)', () => {
     const { cm, last } = setup();
     cm.callRecording(true, [A]);
     cm.refused(A, { error: 'mic_busy' });
-    expect(last(A)?.badges?.[0]).toMatchObject({ kind: 'capture_refused', ...RECORDING_IN_PROGRESS });
+    expect(last(A)?.badges?.[0]).toMatchObject({
+      kind: 'capture_refused',
+      ...RECORDING_IN_PROGRESS,
+    });
     expect(RECORDING_IN_PROGRESS.text).toBe('Recording in progress');
   });
 

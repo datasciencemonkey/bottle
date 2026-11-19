@@ -16,7 +16,13 @@ import {
 } from '../../shared/recording-view';
 import { inputEmits, render, tauri } from '../test-tauri';
 import { RecordControl } from './RecordControl';
-import { RecordingSettings } from './RecordingSettings';
+import { useHubRecording } from './recording-ipc';
+import { RecordingSettings as Section } from './RecordingSettings';
+
+/** The section as the hub mounts it: one model hook, then the section. */
+function RecordingSettings() {
+  return <Section model={useHubRecording()} />;
+}
 
 vi.mock('@tauri-apps/api/core', async () => (await import('../test-tauri')).coreModule);
 vi.mock('@tauri-apps/api/event', async () => (await import('../test-tauri')).eventModule);
@@ -24,7 +30,10 @@ vi.mock('@tauri-apps/api/window', async () => (await import('../test-tauri')).wi
 
 const MY_FILES = '/Volumes/databricks/home/1234/someone@example.com/my_files';
 
-function model(over: Partial<HubRecording> = {}, s: Partial<NonNullable<HubRecording['settings']>> = {}): HubRecording {
+function model(
+  over: Partial<HubRecording> = {},
+  s: Partial<NonNullable<HubRecording['settings']>> = {},
+): HubRecording {
   return {
     platform: 'mac',
     settings: {
@@ -74,7 +83,9 @@ describe('Call recording settings (hub)', () => {
   it('[REC-V1] asks the brain for the model once it listens, and shows a quiet loading state', async () => {
     const { el } = await render(<RecordingSettings />);
     expect(emits()).toContainEqual({ action: 'recording.ready' });
-    expect(el.querySelector('[data-view="recording-settings"] h2')?.textContent).toBe('Call recording');
+    expect(el.querySelector('[data-view="recording-settings"] h2')?.textContent).toBe(
+      'Call recording',
+    );
     expect(el.querySelector('[aria-busy="true"]')).not.toBeNull();
   });
 
@@ -153,7 +164,8 @@ describe('Call recording settings (hub)', () => {
     await show(model({ storage: { status: 'unavailable' } }));
     const storage = el.querySelector('[data-recording-storage]');
     expect(storage?.textContent).toContain(RECORDING_TEXT.myFilesMissing);
-    const input = storage?.querySelector<HTMLInputElement>('[data-recording-storage-input]') ?? null;
+    const input =
+      storage?.querySelector<HTMLInputElement>('[data-recording-storage-input]') ?? null;
     await type(input, '/Volumes/main/team/audio');
     await act(async () => input?.form?.requestSubmit());
     expect(emits().at(-1)).toEqual({
@@ -197,7 +209,10 @@ describe('Call recording settings (hub)', () => {
     const area = el.querySelector<HTMLTextAreaElement>('[data-recording-instructions]');
     expect(area?.value).toBe('Only decisions.');
     await click(el.querySelector('[data-recording-instructions-reset]'));
-    expect(emits().at(-1)).toEqual({ action: 'recording.instructions', text: DEFAULT_INSTRUCTIONS });
+    expect(emits().at(-1)).toEqual({
+      action: 'recording.instructions',
+      text: DEFAULT_INSTRUCTIONS,
+    });
     await show(model());
     expect(
       el.querySelector<HTMLButtonElement>('[data-recording-instructions-reset]')?.disabled,
@@ -240,7 +255,10 @@ describe('Record control (hub)', () => {
     expect(area?.value).toBe(DEFAULT_INSTRUCTIONS);
     await type(area, 'Only action items.');
     await click(el.querySelector('[data-recording-start]'));
-    expect(emits().at(-1)).toEqual({ action: 'recording.start', instructions: 'Only action items.' });
+    expect(emits().at(-1)).toEqual({
+      action: 'recording.start',
+      instructions: 'Only action items.',
+    });
   });
 
   it('[REC-V10] while recording: a REC indicator with the time left, and Stop', async () => {

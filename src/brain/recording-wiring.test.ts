@@ -70,30 +70,28 @@ function fakeApi(start: Partial<RecSettings> = {}) {
       return s;
     }),
     probeStorage: vi.fn(async (): Promise<{ myFiles: string | null }> => ({ myFiles: MY_FILES })),
-    createVolume: vi.fn(async (c: string, sc: string) => ({ path: `/Volumes/${c}/${sc}/bottle_audio` })),
+    createVolume: vi.fn(async (c: string, sc: string) => ({
+      path: `/Volumes/${c}/${sc}/bottle_audio`,
+    })),
     warehouses: vi.fn(async () => [{ id: 'w1', name: 'Shared', state: 'STOPPED' }]),
-    start: vi.fn(
-      async (_i?: string): Promise<RecState> => ({
-        phase: 'recording',
-        startedAtMs: 100,
-        endsAtMs: 3_600_100,
-      }),
-    ),
+    start: vi.fn(async (_i?: string): Promise<RecState> => ({
+      phase: 'recording',
+      startedAtMs: 100,
+      endsAtMs: 3_600_100,
+    })),
     stop: vi.fn(async (): Promise<RecState> => ({ phase: 'stopping' })),
     state: vi.fn(async (): Promise<RecState> => ({ phase: 'idle' })),
     list: vi.fn(async () => rows),
-    detail: vi.fn(
-      async (id: string): Promise<RecDetail> => ({
-        id,
-        status: 'done',
-        notesMd: '## Summary\nWe met.',
-        segments: [
-          { start: 0, end: 4, speaker: 'Speaker 1', text: 'Hello.' },
-          { start: 4, end: 9, speaker: 'Speaker 1', text: 'Shall we start?' },
-          { start: 9, end: 12, speaker: 'Speaker 2', text: 'Yes.' },
-        ],
-      }),
-    ),
+    detail: vi.fn(async (id: string): Promise<RecDetail> => ({
+      id,
+      status: 'done',
+      notesMd: '## Summary\nWe met.',
+      segments: [
+        { start: 0, end: 4, speaker: 'Speaker 1', text: 'Hello.' },
+        { start: 4, end: 9, speaker: 'Speaker 1', text: 'Shall we start?' },
+        { start: 9, end: 12, speaker: 'Speaker 2', text: 'Yes.' },
+      ],
+    })),
     retry: vi.fn(async (_id: string) => undefined),
     open: vi.fn(async (_id: string) => undefined),
     openSystemAudioSettings: vi.fn(async () => undefined),
@@ -224,7 +222,6 @@ describe('recording wiring (brain, ADR 0103)', () => {
     expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.storage).toEqual({
       status: 'volume',
       path: '/Volumes/main/team/audio',
-      myFiles: false,
     });
     t.click({ action: 'recording.storage_volume', path: '/tmp/../etc' });
     await flush();
@@ -308,7 +305,9 @@ describe('recording wiring (brain, ADR 0103)', () => {
     t.fake.api.start.mockRejectedValue({ error: 'recording_busy' });
     t.click({ action: 'recording.start' });
     await flush();
-    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.error).toEqual(RECORDING_ERRORS.recording_busy);
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.error).toEqual(
+      RECORDING_ERRORS.recording_busy,
+    );
     t.fake.api.start.mockRejectedValue({ error: 'some upstream text' });
     t.click({ action: 'recording.start' });
     await flush();
@@ -390,7 +389,8 @@ describe('recording wiring (brain, ADR 0103)', () => {
     const t = setup();
     t.click({ action: 'recordings.ready' });
     await flush();
-    t.fake.rows[2]!.status = 'done';
+    const r3 = t.fake.rows.find((r) => r.id === 'r3');
+    if (r3) r3.status = 'done';
     t.fake.pushJob({ id: 'r3', status: 'done' });
     await flush();
     expect(t.notify).toHaveBeenCalledTimes(1);
