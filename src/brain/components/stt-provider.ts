@@ -91,7 +91,7 @@ export type SttFailureKind = 'could_not_transcribe' | 'language_not_available' |
  * only points there. It never names a file path or a folder (SEC-03).
  */
 export const MODEL_MISSING_TEXT =
-  'Download the speech model (487 MB) for private, on-device dictation. Open Bottle to continue.';
+  'Download the speech model (487 MB) for private, on-device dictation. Open the Bottle hub, then Local speech.';
 
 const USER_TEXT: Readonly<Record<SttFailureKind, string>> = {
   could_not_transcribe: COULD_NOT_TRANSCRIBE,

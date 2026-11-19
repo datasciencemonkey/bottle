@@ -132,16 +132,45 @@ describe('Wizard STT step (MB-07, #413)', () => {
     expect(f.calls).toContain('install:hf_mirror');
   });
 
-  it('[CAP-49b] shows progress and a Cancel button while the download runs', async () => {
+  it('[CAP-49b] shows overall progress (no raw file name) and a Cancel button while the download runs', async () => {
     const f = fakeApi({ consent: 'granted' });
     const { el } = await render(<SttModelStep api={f.api} />);
     await click(button(el, 'Download (487 MB)'));
     await f.progress({ file: 'encoder.int8.onnx', done: 326_141_147, total: 652_282_294 });
     const bar = el.querySelector('[role="progressbar"]');
     expect(bar?.getAttribute('aria-valuenow')).toBe('50');
-    expect(step(el).textContent).toContain('encoder.int8.onnx: 326 MB of 652 MB');
+    expect(step(el).textContent).toContain('326 MB of 652 MB');
+    expect(step(el).textContent).not.toContain('encoder.int8.onnx');
     await click(button(el, 'Cancel'));
     expect(f.calls.at(-1)).toBe('cancel');
+  });
+
+  it('[#413 review] adds progress across files instead of restarting the bar per file', async () => {
+    const f = fakeApi({ consent: 'granted' });
+    const { el } = await render(<SttModelStep api={f.api} />);
+    const hf = el.querySelector<HTMLInputElement>('input[name="sttSource"][value="hf_mirror"]');
+    await click(hf ?? undefined);
+    await click(button(el, 'Download (487 MB)'));
+    await f.progress({ file: 'encoder.int8.onnx', done: 652_282_294, total: 652_282_294 });
+    await f.progress({ file: 'decoder.int8.onnx', done: 5_000_000, total: 11_845_274 });
+    const bar = el.querySelector('[role="progressbar"]');
+    // Overall: 652,282,294 (encoder, done) + 5,000,000 of 11,845,274 (decoder, in flight).
+    expect(step(el).textContent).toContain('657 MB of 664 MB');
+    expect(bar?.getAttribute('aria-valuenow')).toBe('98');
+  });
+
+  it('[#413 review] shows "Unpacking…" instead of a stuck 100% bar, and hides Cancel', async () => {
+    const f = fakeApi({ consent: 'granted' });
+    const { el } = await render(<SttModelStep api={f.api} />);
+    await click(button(el, 'Download (487 MB)'));
+    await f.progress({
+      file: 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2',
+      done: 487_211_443,
+      total: 487_211_443,
+    });
+    expect(step(el).textContent).toContain('Unpacking');
+    expect(el.querySelector('[role="progressbar"]')).toBeNull();
+    expect(button(el, 'Cancel')).toBeUndefined();
   });
 
   it('[CAP-49b] after a cancel the step shows Partial and a retry resumes', async () => {
@@ -190,6 +219,27 @@ describe('Wizard STT step (MB-07, #413)', () => {
     expect(f.calls).toEqual(['status', 'verify']);
     await f.finish({});
     expect(step(el).getAttribute('data-done')).toBe('true');
+  });
+
+  it('[#413 review] an installed model with no stored consent is checked, never asked, and ends in one calm state', async () => {
+    const f = fakeApi({ consent: 'not_asked', model: 'installed' });
+    const { el } = await render(<SttModelStep api={f.api} />);
+    // The real state on a Mac that already has the model: no `stt-download-consent` file.
+    // `verify` sends no request, so it must run regardless, with no consent question first.
+    expect(f.calls).toEqual(['status', 'verify']);
+    expect(step(el).textContent).toContain('Checking the speech model');
+    expect(button(el, 'Download (487 MB)')).toBeUndefined();
+    expect(button(el, 'Not now')).toBeUndefined();
+    expect(el.querySelector('input[name="sttSource"]')).toBeNull();
+    await f.finish({});
+    expect(step(el).getAttribute('data-done')).toBe('true');
+    expect(step(el).textContent).toContain('Speech model ready');
+    // One calm state: no download button, no consent ask, no source picker, and the stale
+    // "Downloaded" status line is not shown alongside it.
+    expect(button(el, 'Download (487 MB)')).toBeUndefined();
+    expect(button(el, 'Not now')).toBeUndefined();
+    expect(el.querySelector('input[name="sttSource"]')).toBeNull();
+    expect(step(el).textContent?.match(/Downloaded/g) ?? []).toHaveLength(0);
   });
 
   it('[CAP-49a] [CAP-49c] a failed launch check downloads nothing before a click', async () => {

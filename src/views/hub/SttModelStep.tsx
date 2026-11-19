@@ -111,6 +111,20 @@ function statusText(v: SttModelView): string {
   }
 }
 
+/** One chunk of download progress, keyed by file name, so a multi-file source (the Hugging
+ * Face mirror) adds up across files instead of a bar that restarts at each one (#413 review). */
+type FileTotals = ReadonlyMap<string, { done: number; total: number }>;
+
+function overallBytes(files: FileTotals): { done: number; total: number } {
+  let done = 0;
+  let total = 0;
+  for (const f of files.values()) {
+    done += f.done;
+    total += f.total;
+  }
+  return { done, total };
+}
+
 export function SttModelStep({
   api = unwiredSttModelApi,
   onDone,
@@ -122,7 +136,10 @@ export function SttModelStep({
   const [source, setSource] = useState<SttSource>('github');
   const [installing, setInstalling] = useState(false);
   const [checking, setChecking] = useState(false);
-  const [progress, setProgress] = useState<SttProgressView | null>(null);
+  // Keyed by file name and summed in render (`overallBytes`), so a multi-file source (the
+  // Hugging Face mirror) adds up across files instead of a bar that restarts at each one, and
+  // never shows a raw file name (#413 review).
+  const [files, setFiles] = useState<FileTotals>(new Map());
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
   const live = useRef(true);
@@ -137,11 +154,14 @@ export function SttModelStep({
       setError(null);
       setInstalling(true);
       setChecking(check);
-      setProgress(null);
+      setFiles(new Map());
       try {
         const v = check
           ? await api.verify()
-          : await api.install(from, (p) => live.current && setProgress(p));
+          : await api.install(from, (p) => {
+              if (!live.current) return;
+              setFiles((prev) => new Map(prev).set(p.file, { done: p.done, total: p.total }));
+            });
         if (!live.current) return;
         setView(v);
         setDone(true);
@@ -156,7 +176,7 @@ export function SttModelStep({
         if (live.current) {
           setInstalling(false);
           setChecking(false);
-          setProgress(null);
+          setFiles(new Map());
         }
       }
     },
@@ -169,9 +189,11 @@ export function SttModelStep({
       (v) => {
         if (!live.current) return;
         setView(v);
-        // MB-07: sizes alone do not prove the model. The check hashes every file and never
-        // downloads; after a mismatch only a click starts a download (CAP-49a).
-        if (v.consent === 'granted' && v.model === 'installed') void run('github', true);
+        // #413 review: an installed model is checked every time, whatever the stored consent.
+        // `verify` sends no request, so no consent gate applies; only a download needs consent
+        // (CAP-49a). Sizes alone do not prove the model: the check hashes every file, and after
+        // a mismatch only a click starts a download.
+        if (v.model === 'installed') void run('github', true);
       },
       (e) => live.current && setError(errorCode(e)),
     );
@@ -194,8 +216,16 @@ export function SttModelStep({
 
   const start = () => (view?.consent === 'granted' ? run(source) : choose('granted'));
   const total = view?.totalBytes ?? 487_211_443;
-  const percent =
-    progress && progress.total > 0 ? Math.floor((progress.done * 100) / progress.total) : 0;
+  // Overall bytes across every file seen this run, not the raw file name of whichever one is
+  // downloading now: a multi-file source (the Hugging Face mirror) would otherwise show a bar
+  // that restarts at each file (#413 review).
+  const { done: overallDone, total: overallTotal } = overallBytes(files);
+  const percent = overallTotal > 0 ? Math.floor((overallDone * 100) / overallTotal) : 0;
+  // Every byte of every file seen so far has arrived, but the install has not resolved: it is
+  // extracting the archive and hashing the result, with no progress event for that work. A
+  // stuck 100% bar with a Cancel that cannot stop it is confusing, so show a calm phase message
+  // instead (#413 review).
+  const unpacking = installing && !checking && overallTotal > 0 && overallDone >= overallTotal;
 
   return (
     <section
@@ -210,7 +240,7 @@ export function SttModelStep({
         Bottle turns your speech into text on this device. It needs a speech model of {mb(total)}.
         The model downloads only after you agree.
       </p>
-      {view && (
+      {view && !done && (
         <p data-stt-status={view.model} className="hub-status">
           {statusText(view)}
         </p>
@@ -242,7 +272,7 @@ export function SttModelStep({
         </fieldset>
       )}
       {checking && <p>Checking the speech model…</p>}
-      {installing && progress && (
+      {installing && files.size > 0 && !unpacking && (
         <div>
           <div
             role="progressbar"
@@ -255,11 +285,12 @@ export function SttModelStep({
             aria-valuenow={percent}
           />
           <p className="hub-muted">
-            {progress.file}: {mb(progress.done)} of {mb(progress.total)}
+            {mb(overallDone)} of {mb(overallTotal)}
           </p>
         </div>
       )}
-      {installing && !checking && (
+      {unpacking && <p className="hub-muted">Unpacking…</p>}
+      {installing && !checking && !unpacking && (
         <button type="button" onClick={() => void api.cancel()}>
           Cancel
         </button>
@@ -269,7 +300,11 @@ export function SttModelStep({
           {sttErrorText(error)}
         </p>
       )}
-      {done && <p>The speech model is installed and checked.</p>}
+      {done && (
+        <p data-stt-status="installed" className="hub-status">
+          Speech model ready. The model is installed and checked.
+        </p>
+      )}
       {!installing && !done && view && (
         <div className="hub-actions">
           {error && error !== 'stt_consent_required' && view.consent === 'granted' ? (

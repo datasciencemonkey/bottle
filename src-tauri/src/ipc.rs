@@ -582,8 +582,11 @@ pub fn route(components: HostComponents<'_>, command: &str, args: Value) -> Resu
 /// SQLite IO under the R10 connection lock (#426), `profiles_list`, where T7 runs
 /// `databricks auth describe` once per `databricks-cli` profile when R5 lands (#555),
 /// `cli_install`, which downloads and checks the CLI (#161), `profile_login`, which waits
-/// up to 5 min for `databricks auth login` (#162), and `stt_model_install`, which can download
-/// 487 MB over the network before it checks every SHA-256 (#413, #45, ADR 0104).
+/// up to 5 min for `databricks auth login` (#162), `stt_model_install`, which can download
+/// 487 MB over the network before it checks every SHA-256 (#413, #45, ADR 0104), and
+/// `stt_model_verify`, which SHA-256s the same ~670 MB with no network IO: run on the main
+/// thread it freezes every window, the MOG drag and the double-click monitor for 1-2 s each
+/// time the hub mounts (#413, PR #600 review).
 pub fn runs_off_main_thread(command: &str) -> bool {
     matches!(
         command,
@@ -607,6 +610,8 @@ pub fn runs_off_main_thread(command: &str) -> bool {
             | "profile_login"
             // #413, #45: the install can run for minutes over the network (487 MB).
             | "stt_model_install"
+            // #413, PR #600 review: verify hashes ~670 MB with no network IO.
+            | "stt_model_verify"
     )
 }
 
@@ -972,6 +977,16 @@ mod tests {
             ),
             Err(json!({"error": "host_failed"}))
         );
+    }
+
+    /// #413, PR #600 review (HIGH): `stt_model_verify` SHA-256s ~670 MB with no network IO.
+    /// Run on the main thread it freezes every window, the MOG drag and the double-click
+    /// monitor for 1-2 s each time the hub mounts. It must run off the main thread, same as
+    /// `stt_model_install`.
+    #[test]
+    fn issue_413_stt_model_verify_runs_off_the_main_thread() {
+        assert!(runs_off_main_thread("stt_model_verify"));
+        assert!(runs_off_main_thread("stt_model_install"));
     }
 
     // ---- ARC-5 (#532): the test constructor and the production guard ----
