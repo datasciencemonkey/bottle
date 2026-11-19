@@ -80,6 +80,8 @@ pub enum PartFormat {
     Flac,
     /// WAV PCM 16 kHz mono 16-bit ([`WavWriter`]).
     Wav,
+    /// Red skeleton.
+    Opus,
 }
 
 impl PartFormat {
@@ -88,6 +90,7 @@ impl PartFormat {
         match self {
             Self::Flac => "flac",
             Self::Wav => "wav",
+            Self::Opus => unimplemented!("red"),
         }
     }
 
@@ -96,6 +99,7 @@ impl PartFormat {
         match self {
             Self::Flac => "audio/flac",
             Self::Wav => "audio/wav",
+            Self::Opus => unimplemented!("red"),
         }
     }
 
@@ -104,6 +108,7 @@ impl PartFormat {
         Ok(match self {
             Self::Flac => Box::new(FlacWriter::new(out)?),
             Self::Wav => Box::new(WavWriter::new(out)?),
+            Self::Opus => unimplemented!("red"),
         })
     }
 }

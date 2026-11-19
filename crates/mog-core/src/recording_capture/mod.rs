@@ -6,6 +6,7 @@
 pub mod chunker;
 pub mod flac;
 pub mod mixer;
+pub mod opus;
 pub mod permissions;
 pub mod session;
 pub mod tap;

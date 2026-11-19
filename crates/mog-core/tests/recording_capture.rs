@@ -23,6 +23,7 @@ use mog_core::clock::{SimClock, SimWallClock};
 use mog_core::recording_capture::chunker::{part_file_name, PartFormat, PartWriter};
 use mog_core::recording_capture::flac::FlacWriter;
 use mog_core::recording_capture::mixer::{soft_clip, Mixer, Track};
+use mog_core::recording_capture::opus::OpusWriter;
 use mog_core::recording_capture::permissions::{ask_on_enable, PermissionAsker};
 use mog_core::recording_capture::session::{
     FinishedRecording, PartsHandoff, RecordingCaptureError, RecordingSession, SessionConfig,
@@ -252,7 +253,7 @@ fn adr_0103_default_is_one_part_with_an_optional_cap() {
     assert_eq!(mog_core::recording_capture::PART_MAX_MINUTES, None);
     assert_eq!(mog_core::recording_capture::PART_MAX_SAMPLES, None);
     assert_eq!(SessionConfig::default().part_max_samples, None);
-    assert_eq!(SessionConfig::default().part_format, PartFormat::Flac);
+    assert_eq!(SessionConfig::default().part_format, PartFormat::Opus);
     assert_eq!(
         mog_core::recording_capture::part_max_samples(Some(10)),
         Some(10 * 60 * 16_000)
@@ -563,6 +564,11 @@ impl Drop for Rig {
 }
 
 fn rig_with(sys_fail: bool, part_max_samples: Option<u64>) -> Rig {
+    rig_full(sys_fail, part_max_samples, PartFormat::Flac)
+}
+
+/// FLAC in most session tests: claxon checks the content.
+fn rig_full(sys_fail: bool, part_max_samples: Option<u64>, part_format: PartFormat) -> Rig {
     let clock = Arc::new(SimClock::new());
     let wall = SimWallClock::at(1_763_544_600_000);
     let tap = RecordingTap::new(clock.clone());
@@ -601,6 +607,7 @@ fn rig_with(sys_fail: bool, part_max_samples: Option<u64>) -> Rig {
         SessionConfig {
             temp_root: root.clone(),
             part_max_samples,
+            part_format,
             ..SessionConfig::default()
         },
     );
@@ -681,7 +688,8 @@ fn adr_0103_record_mixes_mic_and_system_audio_into_a_flac_part() {
     assert_eq!(done.cause, StopCause::User);
     assert_eq!(done.parts.len(), 1);
     assert_eq!(done.duration_ms, 2_000);
-    assert_eq!(done.parts[0].file_name, "2026-11-19_0930.part01.flac");
+    // One part (no cap): `<name>.<ext>`, no part number.
+    assert_eq!(done.parts[0].file_name, "2026-11-19_0930.flac");
     let (rate, ch, bits, samples) = decode(&done.parts[0].path);
     assert_eq!((rate, ch, bits), (16_000, 1, 16));
     assert!(
@@ -714,9 +722,9 @@ fn adr_0103_one_recording_at_a_time() {
 }
 
 #[test]
-fn adr_0103_length_must_be_5_to_180_minutes() {
+fn adr_0103_length_must_be_5_to_120_minutes() {
     let r = rig();
-    for bad in [0, 4, 181] {
+    for bad in [0, 4, 121, 181] {
         assert_eq!(
             r.session.start(opts("n", bad)).unwrap_err(),
             RecordingCaptureError::InvalidLength
@@ -926,4 +934,133 @@ fn adr_0103_turning_the_knob_on_asks_for_mic_and_system_audio() {
         ask_on_enable(was, now, &a);
         assert!(a.0.lock().unwrap().is_empty());
     }
+}
+
+// ---------- Opus (the decided codec) ----------
+
+/// The Ogg packets of an Opus file.
+fn ogg_packets(bytes: &[u8]) -> Vec<ogg::Packet> {
+    let mut r = ogg::PacketReader::new(std::io::Cursor::new(bytes.to_vec()));
+    let mut out = Vec::new();
+    while let Some(p) = r.read_packet().expect("valid Ogg") {
+        out.push(p);
+    }
+    out
+}
+
+/// Decode the audio packets with the same libopus port, at 16 kHz.
+fn opus_decode(packets: &[ogg::Packet]) -> Vec<i16> {
+    let mut err = 0;
+    let dec = unsafe { unsafe_libopus::opus_decoder_create(16_000, 1, &mut err) };
+    assert_eq!(err, 0);
+    let mut pcm = Vec::new();
+    let mut buf = vec![0i16; 5_760];
+    for p in packets {
+        let n = unsafe {
+            unsafe_libopus::opus_decode(
+                dec,
+                p.data.as_ptr(),
+                p.data.len() as i32,
+                buf.as_mut_ptr(),
+                buf.len() as i32,
+                0,
+            )
+        };
+        assert!(n > 0, "decode error {n}");
+        pcm.extend_from_slice(&buf[..n as usize]);
+    }
+    unsafe { unsafe_libopus::opus_decoder_destroy(dec) };
+    pcm
+}
+
+fn rms_i16(s: &[i16]) -> f64 {
+    (s.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>() / s.len().max(1) as f64).sqrt()
+}
+
+#[test]
+fn adr_0103_opus_part_is_ogg_with_head_tags_and_exact_granule() {
+    assert_eq!(PartFormat::Opus.extension(), "opus");
+    assert_eq!(PartFormat::Opus.mime(), "audio/ogg");
+    let input = tone(16_000, 300.0, 0.4, 16_000 * 3 + 77);
+    let mut w = OpusWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+    for c in input.chunks(700) {
+        w.write(c).unwrap();
+    }
+    assert_eq!(w.samples(), input.len() as u64);
+    let bytes = w.finish().unwrap().into_inner();
+    assert_eq!(&bytes[..4], b"OggS");
+    let packets = ogg_packets(&bytes);
+    // OpusHead: version 1, mono, pre-skip, 16 kHz input, gain 0, mapping 0.
+    let head = &packets[0].data;
+    assert_eq!(&head[..8], b"OpusHead");
+    assert_eq!(head.len(), 19);
+    assert_eq!(head[8], 1);
+    assert_eq!(head[9], 1);
+    let pre_skip = u64::from(u16::from_le_bytes([head[10], head[11]]));
+    assert!(pre_skip > 0);
+    assert_eq!(
+        u32::from_le_bytes([head[12], head[13], head[14], head[15]]),
+        16_000
+    );
+    assert_eq!(&head[16..19], &[0, 0, 0]);
+    assert_eq!(&packets[1].data[..8], b"OpusTags");
+    // The last page's granule (48 kHz) is pre-skip plus the input length: the decoder trims
+    // the padding of the last frame.
+    let last = packets.last().unwrap();
+    assert!(last.last_in_stream());
+    assert_eq!(last.absgp_page(), pre_skip + input.len() as u64 * 3);
+    // Round trip: about the same loudness after the pre-skip.
+    let pcm = opus_decode(&packets[2..]);
+    assert!(pcm.len() as u64 >= input.len() as u64 + pre_skip / 3);
+    let skip = (pre_skip / 3) as usize;
+    let want: Vec<i16> = input.iter().map(|v| (v * 32_767.0) as i16).collect();
+    let (a, b) = (
+        rms_i16(&pcm[skip + 1_600..skip + 40_000]),
+        rms_i16(&want[1_600..40_000]),
+    );
+    assert!((a / b - 1.0).abs() < 0.25, "rms {a} vs {b}");
+}
+
+#[test]
+fn adr_0103_an_empty_opus_part_is_still_valid() {
+    let w = OpusWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+    let bytes = w.finish().unwrap().into_inner();
+    let packets = ogg_packets(&bytes);
+    assert_eq!(&packets[0].data[..8], b"OpusHead");
+    assert!(packets.last().unwrap().last_in_stream());
+}
+
+#[test]
+fn adr_0103_sixty_minutes_of_opus_fit_the_24_mb_base64_budget() {
+    // 20 s of a speech-like signal (a tone under noise bursts), scaled to 60 min.
+    let mut x: u32 = 7;
+    let input: Vec<f32> = (0..16_000 * 20)
+        .map(|i| {
+            x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let noise = ((x >> 8) as f32 / (1u32 << 24) as f32) * 2.0 - 1.0;
+            let burst = if (i / 4_000) % 3 == 0 { 0.0 } else { 1.0 };
+            burst * (0.3 * (i as f32 * 0.07).sin() + 0.1 * noise)
+        })
+        .collect();
+    let mut w = OpusWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+    w.write(&input).unwrap();
+    let bytes = w.finish().unwrap().into_inner();
+    let per_hour = bytes.len() as f64 * (3_600.0 / 20.0);
+    let base64 = per_hour * 4.0 / 3.0;
+    assert!(base64 < 24_000_000.0, "{base64} bytes of base64 per hour");
+    // About 16 kbps: well under 3 KB/s.
+    assert!(bytes.len() < 20 * 3_000, "{}", bytes.len());
+}
+
+#[test]
+fn adr_0103_the_default_recording_is_one_opus_file() {
+    let r = rig_full(false, None, PartFormat::Opus);
+    r.session.start(opts("2026-11-19_0930", 60)).unwrap();
+    play(&r, 1_000, 0.1, 0.2);
+    let done = r.session.stop(StopCause::User).unwrap();
+    assert_eq!(done.parts.len(), 1);
+    assert_eq!(done.parts[0].file_name, "2026-11-19_0930.opus");
+    let bytes = std::fs::read(&done.parts[0].path).unwrap();
+    assert_eq!(&bytes[..4], b"OggS");
+    assert!(bytes.windows(8).any(|w| w == b"OpusHead"));
 }
