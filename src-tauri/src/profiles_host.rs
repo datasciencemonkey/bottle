@@ -5,8 +5,8 @@
 //! never reaches Genie (W-03b, W-10a). It reads only the names, hosts and auth types of
 //! `~/.databrickscfg`, never writes it (W-08), and never picks a profile.
 //!
-//! The host routes `profiles_list` here through `HostComponents` in `src-tauri/src/ipc.rs`, a
-//! contract file: TODO(#555). Until then the brain gets `not_implemented`.
+//! The host routes `profiles_list` here through `HostComponents` in `src-tauri/src/ipc.rs`
+//! (#555); without a managed `ProfilesHost` the call answers `host_failed`.
 
 use std::sync::Arc;
 
