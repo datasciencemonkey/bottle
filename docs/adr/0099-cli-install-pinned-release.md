@@ -35,7 +35,7 @@ check against a pinned SHA-256. The issue left these points open:
    and `cli_install` to the R5 status component. An install failure crosses as `host_failed`,
    because `ERROR_CODES` has no install codes. The hub shows one general text.
 8. The MDM key `AllowCliInstall` (W-17g) and the admin install text are out of scope (user
-   decision). A follow-up issue adds them.
+   decision). Follow-up: #579.
 
 ## Consequences
 
