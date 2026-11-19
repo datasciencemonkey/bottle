@@ -477,7 +477,8 @@ describe('ask gate: no profile, Shift, size (#557, ADR 0096)', () => {
     t.gate.chip(A, { id, kind: 'ask_genie' });
     await t.run(0);
     expect(t.sent).toEqual([]);
-    expect([...t.cardOf(A).blurbs.values()].at(-1)?.text).toContain(NOT_SENT_LINE);
+    // #575 review: the card does not show the removed markup again.
+    expect([...t.cardOf(A).blurbs.values()].at(-1)?.text).toBe(NOT_SENT_LINE);
   });
 
   it('[#557] [RTR-14] an injection-suspected question shows its own text with the warning', () => {

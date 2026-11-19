@@ -62,6 +62,23 @@ describe('sanitizeQuestion (G-47)', () => {
     );
   });
 
+  it('[G-47] removes every format character, tag characters and variation selectors (#575 review)', () => {
+    const cp = (...xs: number[]) => String.fromCodePoint(...xs);
+    // Unicode tag characters can hide a whole instruction ("ignore" in tags).
+    const hidden = cp(0xe0001, 0xe0069, 0xe0067, 0xe006e, 0xe006f, 0xe0072, 0xe0065, 0xe007f);
+    expect(sanitizeQuestion(`What was${hidden} revenue?`)).toBe('What was revenue?');
+    // Variation selectors, an Arabic number sign and the combining grapheme joiner (Cf and kin).
+    const marks = cp(0xfe00, 0xfe0f, 0xe0100, 0xe01ef, 0x0600, 0x034f, 0x2065);
+    expect(sanitizeQuestion(`Rev${marks}enue?`)).toBe('Revenue?');
+  });
+
+  it('[G-47] removes a tag with a quoted ">" and an unclosed tag; a link with brackets in its URL gives its text (#575 review)', () => {
+    expect(sanitizeQuestion('<a href=">">x</a> revenue?')).toBe('x revenue?');
+    expect(sanitizeQuestion("<b title='a>b'>What</b> was revenue?")).toBe('What was revenue?');
+    expect(sanitizeQuestion('What was revenue? <script src=x')).toBe('What was revenue?');
+    expect(sanitizeQuestion('See [t](http://x.example.test/(a)) now?')).toBe('See t now?');
+  });
+
   it('[G-47] gives an empty text when nothing is left', () => {
     expect(sanitizeQuestion('\u200b<br>```\u202e')).toBe('');
   });
