@@ -349,6 +349,17 @@ impl RecordingSession {
 
     /// Start a recording. See the module docs for the checks.
     pub fn start(&self, opts: StartOptions) -> Result<ActiveInfo, RecordingCaptureError> {
+        self.start_in(opts, None, None)
+    }
+
+    /// As [`RecordingSession::start`], with the recording ID and temp dir picked by the caller
+    /// (the `recording_start` component). `None` picks a random ID and `temp_root/<id>`.
+    pub fn start_in(
+        &self,
+        opts: StartOptions,
+        id: Option<String>,
+        dir: Option<PathBuf>,
+    ) -> Result<ActiveInfo, RecordingCaptureError> {
         if !(self.enabled)() {
             return Err(RecordingCaptureError::Disabled);
         }
@@ -362,7 +373,7 @@ impl RecordingSession {
             }
             st.starting = true;
         }
-        let result = self.start_inner(opts);
+        let result = self.start_inner(opts, id, dir);
         let mut st = lock(&self.state);
         st.starting = false;
         let active = result?;
@@ -373,9 +384,14 @@ impl RecordingSession {
         Ok(info)
     }
 
-    fn start_inner(&self, opts: StartOptions) -> Result<Active, RecordingCaptureError> {
-        let id = random_id();
-        let dir = self.config.temp_root.join(&id);
+    fn start_inner(
+        &self,
+        opts: StartOptions,
+        id: Option<String>,
+        dir: Option<PathBuf>,
+    ) -> Result<Active, RecordingCaptureError> {
+        let id = id.unwrap_or_else(random_id);
+        let dir = dir.unwrap_or_else(|| self.config.temp_root.join(&id));
         create_private_dir(&self.config.temp_root)
             .and_then(|()| create_private_dir(&dir))
             .map_err(|_| RecordingCaptureError::Io)?;
@@ -598,4 +614,101 @@ fn existing_parts(dir: &std::path::Path) -> Vec<PartFile> {
         .collect();
     found.sort_by_key(|p| p.index);
     found
+}
+
+// ---------- the ADR 0103 contract seam ----------
+
+/// The folder name of a recording that starts now: local time `YYYY-MM-DD_HHMM`. The cloud
+/// side adds `_2`.. if the volume has the name already.
+pub fn local_name_now() -> String {
+    chrono::Local::now().format("%Y-%m-%d_%H%M").to_string()
+}
+
+impl SystemAudioState {
+    /// The wire value of `RecordingState.systemAudio`.
+    pub fn to_wire(self) -> crate::types::SystemAudio {
+        match self {
+            Self::Ok => crate::types::SystemAudio::Ok,
+            Self::Unavailable => crate::types::SystemAudio::Unavailable,
+            Self::SilentOrDenied => crate::types::SystemAudio::SilentOrDenied,
+        }
+    }
+}
+
+impl RecordingCaptureError {
+    /// The contract error kind of this refusal.
+    pub fn kind(self) -> crate::types::RecordingErrorKind {
+        use crate::types::RecordingErrorKind as K;
+        match self {
+            Self::Disabled => K::RecordingOff,
+            Self::Busy => K::RecordingBusy,
+            Self::Capture(CaptureError::MicBusy) => K::MicBusy,
+            Self::NotRecording | Self::InvalidLength | Self::Capture(_) | Self::Io => K::Internal,
+        }
+    }
+}
+
+impl Snapshot {
+    /// The `recording.state` payload.
+    pub fn to_wire(&self) -> crate::types::RecordingState {
+        use crate::types::{RecordingPhase, RecordingState};
+        match self {
+            Snapshot::Idle => RecordingState::idle(),
+            Snapshot::Recording(a) => RecordingState {
+                state: RecordingPhase::Recording,
+                id: crate::types::RecordingId::try_from(a.id.clone()).ok(),
+                name: Some(a.name.clone()),
+                started_at_ms: u64::try_from(a.started_at_ms).ok(),
+                ends_at_ms: u64::try_from(a.ends_at_ms).ok(),
+                system_audio: a.system_audio.to_wire(),
+            },
+        }
+    }
+}
+
+impl PartFile {
+    /// The contract view of this part.
+    pub fn to_finished(&self) -> crate::recording::FinishedPart {
+        crate::recording::FinishedPart {
+            index: self.index,
+            path: self.path.clone(),
+            offset_s: self.offset_ms as f64 / 1_000.0,
+            duration_s: self.samples as f64 / f64::from(super::SAMPLE_RATE),
+        }
+    }
+}
+
+/// The capture seam of the `recording_*` component (ADR 0103). Every stop, this one too, also
+/// goes to the [`PartsHandoff`]: that is how the cloud side learns of the stops that no command
+/// made (the length preset, sleep, quit, mic loss).
+impl crate::recording::RecordingCapture for RecordingSession {
+    fn start(
+        &self,
+        id: &crate::types::RecordingId,
+        dir: &std::path::Path,
+        max_len: std::time::Duration,
+    ) -> crate::recording::RecordingResult<crate::types::RecordingState> {
+        let length_min = u32::try_from(max_len.as_secs() / 60).unwrap_or(u32::MAX);
+        let opts = StartOptions {
+            name: local_name_now(),
+            length_min,
+        };
+        let info = self
+            .start_in(opts, Some(id.as_str().to_owned()), Some(dir.to_path_buf()))
+            .map_err(RecordingCaptureError::kind)?;
+        Ok(Snapshot::Recording(info).to_wire())
+    }
+
+    fn stop(&self) -> crate::recording::RecordingResult<Vec<crate::recording::FinishedPart>> {
+        match RecordingSession::stop(self, StopCause::User) {
+            Ok(rec) => Ok(rec.parts.iter().map(PartFile::to_finished).collect()),
+            // Nothing runs: a stop is a no-op.
+            Err(RecordingCaptureError::NotRecording) => Ok(Vec::new()),
+            Err(e) => Err(e.kind()),
+        }
+    }
+
+    fn state(&self) -> crate::types::RecordingState {
+        self.snapshot().to_wire()
+    }
 }

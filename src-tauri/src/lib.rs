@@ -125,7 +125,7 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
     let host = capture_host::CaptureHost::with_stt(
         device,
         std::sync::Arc::clone(&clock),
-        relay,
+        std::sync::Arc::clone(&relay),
         levels,
         ptt,
         stt.engine().clone(),
@@ -141,7 +141,7 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
     // go to the hand-off slot that the cloud side connects; until then they stay in the
     // user-only temp dir under the app cache dir.
     let handoff = std::sync::Arc::new(recording_host::HandoffSlot::default());
-    let temp_root = handle
+    let recording_temp_root = handle
         .path()
         .app_cache_dir()
         .map(|d| d.join("recordings"))
@@ -154,12 +154,38 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
         std::sync::Arc::new(mog_core::clock::SystemWallClock),
         std::sync::Arc::clone(&handoff) as _,
         mog_core::recording_capture::session::SessionConfig {
-            temp_root,
+            temp_root: recording_temp_root.clone(),
             ..Default::default()
         },
     )?;
+    let recording = std::sync::Arc::new(recording);
     // Sleep stops a recording and finalizes it. Without the OS watch the app still runs.
     let _ = recording.watch_sleep(&*mog_core::token_events::os_session_source());
+    // `recording.state` goes to the brain at each start, stop and system audio change.
+    let state_relay = std::sync::Arc::clone(&relay);
+    recording
+        .session()
+        .set_observer(std::sync::Arc::new(move |snap| {
+            if let Ok(payload) = serde_json::to_value(snap.to_wire()) {
+                let _ = state_relay(mog_core::ipc::events::RECORDING_STATE, payload);
+            }
+        }));
+    // The `recording_*` component reaches the session; its knob writes reach the host.
+    if let Some(component) =
+        handle.try_state::<std::sync::Arc<mog_core::recording::RecordingComponent>>()
+    {
+        let weak = std::sync::Arc::downgrade(&recording);
+        let asker = recording_host::os_permission_asker();
+        component.connect_capture(mog_core::recording::CaptureLink {
+            capture: std::sync::Arc::clone(recording.session()) as _,
+            temp_root: recording_temp_root.clone(),
+            on_knob: std::sync::Arc::new(move |on| {
+                if let Some(r) = weak.upgrade() {
+                    r.set_enabled(on, &*asker);
+                }
+            }),
+        });
+    }
     handle.manage(host);
     handle.manage(recording);
     handle.manage(handoff);
@@ -311,7 +337,9 @@ pub fn run() {
                 hotkey_host::shutdown(app);
                 // ADR 0103: a running call recording stops with `quit` and hands off its
                 // parts, before R2 stops every lease.
-                if let Some(recording) = app.try_state::<recording_host::RecordingHost>() {
+                if let Some(recording) =
+                    app.try_state::<std::sync::Arc<recording_host::RecordingHost>>()
+                {
                     recording.shutdown();
                 }
                 // R2: stop every capture, so the mic closes, and end the cap timer (#425).

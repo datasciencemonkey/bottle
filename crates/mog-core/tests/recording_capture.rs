@@ -1064,3 +1064,131 @@ fn adr_0103_the_default_recording_is_one_opus_file() {
     assert_eq!(&bytes[..4], b"OggS");
     assert!(bytes.windows(8).any(|w| w == b"OpusHead"));
 }
+
+// ---------- the ADR 0103 contract seam ----------
+
+#[test]
+fn adr_0103_the_session_is_the_contract_recording_capture() {
+    use mog_core::recording::RecordingCapture;
+    use mog_core::types::{RecordingId, RecordingPhase, SystemAudio};
+    let r = rig_full(false, None, PartFormat::Opus);
+    let cap: &dyn RecordingCapture = &*r.session;
+    assert_eq!(cap.state().state, RecordingPhase::Idle);
+    assert_eq!(cap.state().system_audio, SystemAudio::Off);
+    let id = RecordingId::try_from("rec-abc".to_owned()).unwrap();
+    let dir = r.root.join("rec-abc");
+    let st = cap.start(&id, &dir, Duration::from_secs(90 * 60)).unwrap();
+    assert_eq!(st.state, RecordingPhase::Recording);
+    assert_eq!(st.id, Some(id.clone()));
+    assert_eq!(st.started_at_ms, Some(1_763_544_600_000));
+    assert_eq!(st.ends_at_ms, Some(1_763_544_600_000 + 90 * 60_000));
+    assert_eq!(st.system_audio, SystemAudio::Ok);
+    let name = st.name.unwrap();
+    assert_eq!(name.len(), "2026-11-19_0930".len(), "{name}");
+    assert_eq!(
+        cap.start(&id, &dir, Duration::from_secs(600))
+            .unwrap_err()
+            .ipc_code(),
+        "recording_busy"
+    );
+    play(&r, 1_000, 0.1, 0.1);
+    let parts = cap.stop().unwrap();
+    assert_eq!(parts.len(), 1);
+    assert_eq!(parts[0].index, 1);
+    assert_eq!(parts[0].path, dir.join(format!("{name}.opus")));
+    assert_eq!(parts[0].offset_s, 0.0);
+    assert!(parts[0].duration_s > 0.9 && parts[0].duration_s <= 1.0);
+    assert_eq!(cap.state().state, RecordingPhase::Idle);
+    // A second stop is a no-op; the hand-off got the recording once.
+    assert!(cap.stop().unwrap().is_empty());
+    assert_eq!(r.handoff.0.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn adr_0103_knob_off_maps_to_recording_off() {
+    use mog_core::recording::RecordingCapture;
+    let r = rig();
+    r.enabled.store(false, Ordering::SeqCst);
+    let id = mog_core::types::RecordingId::try_from("rec-1".to_owned()).unwrap();
+    let e = (&*r.session as &dyn RecordingCapture)
+        .start(&id, &r.root.join("x"), Duration::from_secs(600))
+        .unwrap_err();
+    assert_eq!(e.ipc_code(), "recording_off");
+}
+
+/// A fake capture for the component routing.
+#[derive(Default)]
+struct FakeCapture {
+    calls: Mutex<Vec<String>>,
+}
+impl mog_core::recording::RecordingCapture for FakeCapture {
+    fn start(
+        &self,
+        id: &mog_core::types::RecordingId,
+        dir: &Path,
+        max_len: Duration,
+    ) -> mog_core::recording::RecordingResult<mog_core::types::RecordingState> {
+        assert!(dir.ends_with(id.as_str()));
+        self.calls
+            .lock()
+            .unwrap()
+            .push(format!("start {}", max_len.as_secs()));
+        Ok(mog_core::types::RecordingState::idle())
+    }
+    fn stop(&self) -> mog_core::recording::RecordingResult<Vec<mog_core::recording::FinishedPart>> {
+        self.calls.lock().unwrap().push("stop".into());
+        Ok(Vec::new())
+    }
+    fn state(&self) -> mog_core::types::RecordingState {
+        mog_core::types::RecordingState::idle()
+    }
+}
+
+#[test]
+fn adr_0103_the_component_routes_start_stop_state_and_the_knob() {
+    use mog_core::ipc_gateway::GatewayComponents;
+    use mog_core::recording::{CaptureLink, MemorySettingsStore, RecordingComponent};
+    use mog_core::types::RecordingSettings;
+    use serde_json::json;
+    let store = Arc::new(MemorySettingsStore::new(RecordingSettings {
+        enabled: true,
+        consent_ack: true,
+        ..RecordingSettings::default()
+    }));
+    let c = RecordingComponent::new(store);
+    let fake = Arc::new(FakeCapture::default());
+    let knob = Arc::new(Mutex::new(Vec::new()));
+    let k2 = Arc::clone(&knob);
+    c.connect_capture(CaptureLink {
+        capture: fake.clone(),
+        temp_root: std::env::temp_dir().join("bottle-rec-component"),
+        on_knob: Arc::new(move |on| k2.lock().unwrap().push(on)),
+    });
+    // The stored knob reaches the host at the connect.
+    assert_eq!(*knob.lock().unwrap(), vec![true]);
+    let st = c.call("recording_start", json!({})).unwrap();
+    assert_eq!(st["state"], json!("idle"));
+    c.call("recording_stop", json!({})).unwrap();
+    c.call("recording_state", json!({})).unwrap();
+    // The default length preset is 60 min.
+    assert_eq!(*fake.calls.lock().unwrap(), vec!["start 3600", "stop"]);
+    // A settings write that turns the knob off reaches the host and closes the gate.
+    c.call(
+        "recording_settings_write",
+        json!({"patch": {"enabled": false}}),
+    )
+    .unwrap();
+    assert_eq!(*knob.lock().unwrap(), vec![true, false]);
+    let e = c.call("recording_start", json!({})).unwrap_err();
+    assert!(matches!(
+        e,
+        mog_core::error::CoreError::IpcRefused {
+            code: "recording_off"
+        }
+    ));
+    assert_eq!(
+        fake.calls.lock().unwrap().len(),
+        2,
+        "no capture start with the knob off"
+    );
+}
