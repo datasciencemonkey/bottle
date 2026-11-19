@@ -234,4 +234,13 @@ describe('T10 registerMog (#40, ADR 0061)', () => {
     ).rejects.toThrow();
     expect(store.calls).toHaveLength(1);
   });
+
+  it('[MEM-01] [ADR 0061] refuses an empty name before any store call (CHECK length 1-80)', async () => {
+    const { store, svc } = setup();
+    const mogId = genieExchangeDouble().mogId;
+    await expect(
+      svc.registerMog({ mogId, displayName: '', backendKind: 'genie_one_mcp' }),
+    ).rejects.toThrow();
+    expect(store.calls).toEqual([]);
+  });
 });

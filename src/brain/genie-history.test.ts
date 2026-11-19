@@ -10,7 +10,13 @@ import { RecordingLocalStore } from '../test-support/memory-double';
 import type { TerminalAskEvent } from './components/ask-events';
 import type { LocalStmtId } from './components/memory-store';
 import { LocalMemoryService } from './components/memory-service';
-import { createGenieHistory, isExchangeMemory, type GenieEnd } from './genie-history';
+import {
+  MOG_NAME_FALLBACK,
+  RECENT_OPS_MAX,
+  createGenieHistory,
+  isExchangeMemory,
+  type GenieEnd,
+} from './genie-history';
 
 const MOG = '0f8b1a52-6c1e-4d0a-9a51-3a3d2f6f0a40' as MogId;
 const OP = '41111111-2222-4333-8444-555555555540';
@@ -174,17 +180,39 @@ describe('genie history: one local exchange row per Ask Genie request (#40)', ()
     expect(ids(store).filter((i) => i === 'mem.exchange.upsert')).toHaveLength(2);
   });
 
-  it('[AT-09] an unknown host or MOG name still saves the row with empty values', async () => {
-    const store = new RecordingLocalStore(() => ({ rows: [{ changes: 1 }] }));
-    const record = createGenieHistory({
-      memory: new LocalMemoryService(store),
-      mogName: () => Promise.reject(new Error('fake config_read failure')),
-      hostOf: () => Promise.reject(new Error('fake profiles_list failure')),
-      log: { event: () => true },
-    });
-    await record(answered());
-    expect(store.calls[0]?.params.displayName).toBe('');
-    expect(exchange(store).workspaceHost).toBe('');
+  it.each([
+    ['a failed config_read', () => Promise.reject(new Error('fake config_read failure'))],
+    ['an empty name', async () => ''],
+  ])(
+    '[AT-09] [ADR 0061] %s saves the MOG row with the fallback name and the row with an empty host',
+    async (_case, mogName) => {
+      const store = new RecordingLocalStore(() => ({ rows: [{ changes: 1 }] }));
+      const record = createGenieHistory({
+        memory: new LocalMemoryService(store),
+        mogName,
+        hostOf: () => Promise.reject(new Error('fake profiles_list failure')),
+        log: { event: () => true },
+      });
+      await record(answered());
+      // `mog.display_name` has CHECK (length BETWEEN 1 AND 80): the name is never empty.
+      expect(store.calls[0]?.params.displayName).toBe(MOG_NAME_FALLBACK);
+      expect(MOG_NAME_FALLBACK.length).toBeGreaterThan(0);
+      expect(exchange(store).workspaceHost).toBe('');
+    },
+  );
+
+  it('[AT-09] [G-21b] the once-per-request set is bounded and keeps the newest ids', async () => {
+    const { store, record } = rig();
+    const op = (i: number) => `41111111-2222-4333-8444-${String(1000 + i).padStart(12, '0')}`;
+    for (let i = 0; i <= RECENT_OPS_MAX; i++) await record(answered({ opId: op(i) }));
+    const writes = () => ids(store).filter((i) => i === 'mem.exchange.upsert').length;
+    expect(writes()).toBe(RECENT_OPS_MAX + 1);
+    // The newest id is still held: its second end writes nothing.
+    await record(answered({ opId: op(RECENT_OPS_MAX) }));
+    expect(writes()).toBe(RECENT_OPS_MAX + 1);
+    // The oldest id fell out of the bounded set.
+    await record(answered({ opId: op(0) }));
+    expect(writes()).toBe(RECENT_OPS_MAX + 2);
   });
 
   it('[MEM-39a] isExchangeMemory accepts T10 and refuses an object without registerMog', () => {
