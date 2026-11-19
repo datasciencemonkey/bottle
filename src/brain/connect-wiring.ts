@@ -15,8 +15,10 @@
  * - W-07h: Cancel calls `profile_login_cancel`; "Open the browser again" cancels and signs in
  *   again. A failure shows one fixed Table W-ERR text and one action, never upstream text.
  * - W-07f: when the hub is ready and no usable (`databricks-cli`) profile exists, the form opens
- *   at the URL step (`profiles_list`, routed by #555). If the list call fails, the form opens
- *   only from its button.
+ *   at the URL step (`profiles_list`, routed by #555). With a usable profile, it sends the
+ *   explicit `closed` step instead (the hub's setup region then renders nothing, review of
+ *   #602/the "Connect a workspace" panel bug). If the list call fails, the form opens only from
+ *   its button (Settings, "Connect another workspace…").
  */
 import { emitTo } from '@tauri-apps/api/event';
 import { CONNECT_EVENT, CONNECT_VIEW_ID, type ConnectModel } from '../shared/connect-view';
@@ -210,11 +212,16 @@ export function wireConnectWorkspace(bus: BrainBus, deps: ConnectDeps): () => vo
 
   const offReady = onViewInput(bus, (input) => {
     if (input.from !== 'hub' || input.mogId !== 'hub' || input.kind !== 'ready') return;
-    // W-07f: no usable profile (none, or only PAT or service-principal profiles).
+    // W-07f: no usable profile (none, or only PAT or service-principal profiles) opens the URL
+    // step. A usable profile sends the explicit `closed` state, so the hub view (which renders
+    // nothing without a model anyway) also has a model confirming there is nothing to do; a
+    // later `connect_open` (the Settings row) still reopens it. A failed `profiles_list` call
+    // sends nothing at all (the comment above `ConnectDeps.profiles` still holds: "the form
+    // opens only from its button").
     void deps
       .profiles()
       .then((list) => {
-        if (!list.some((p) => p.supported)) show({ step: 'url', firstRun: true });
+        show(list.some((p) => p.supported) ? { step: 'closed' } : { step: 'url', firstRun: true });
       })
       .catch(() => undefined);
   });

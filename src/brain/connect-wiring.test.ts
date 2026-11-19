@@ -285,23 +285,27 @@ describe('Connect a workspace: first run and other profiles (W-07f, W-07i)', () 
     expect(last()).toEqual({ step: 'url', firstRun: true });
   });
 
-  it('[W-07f] with a usable profile, or an unreadable list, the form stays closed', async () => {
-    const usable = setup({
+  it('[W-07f] with a usable profile, the brain sends the explicit "closed" state', async () => {
+    const { bus, last, sent } = setup({
       profiles: async () => [
         { name: 'bottle-acme-prod', host: HOST, authType: 'databricks-cli', supported: true },
       ],
     });
-    ready(usable.bus);
+    ready(bus);
     await flush();
-    expect(usable.sent).toEqual([]);
-    const refused = setup({
+    expect(last()).toEqual({ step: 'closed' });
+    expect(sent).toEqual([{ step: 'closed' }]);
+  });
+
+  it('[W-07f] with an unreadable profile list, the form stays closed and nothing is sent', async () => {
+    const { bus, sent } = setup({
       profiles: async () => {
         throw { error: 'not_implemented' };
       },
     });
-    ready(refused.bus);
+    ready(bus);
     await flush();
-    expect(refused.sent).toEqual([]);
+    expect(sent).toEqual([]);
   });
 
   it('[W-07i] a PAT or service-principal profile for the host gives the new-profile notice', async () => {

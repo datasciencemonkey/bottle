@@ -35,7 +35,14 @@ export type ConnectModel =
   | { step: 'waiting'; host: string; profile: string }
   | { step: 'connected'; host: string; profile: string }
   /** W-07h: the Table W-ERR text and one action. */
-  | { step: 'failed'; host: string; profile: string; text: string; action: ConnectAction };
+  | { step: 'failed'; host: string; profile: string; text: string; action: ConnectAction }
+  /**
+   * W-07f: the brain's explicit "nothing to do" state, sent when the hub is ready and a usable
+   * profile already exists. The hub view renders nothing for this step (and for no model at
+   * all); `connect_open` (the Settings row, "Connect another workspace…") is the one way to
+   * leave it.
+   */
+  | { step: 'closed' };
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
 const str = (v: unknown): v is string => typeof v === 'string';
@@ -70,6 +77,8 @@ export function asConnectModel(v: unknown): ConnectModel | undefined {
         ? (v as ConnectModel)
         : undefined;
     }
+    case 'closed':
+      return { step: 'closed' };
     default:
       return undefined;
   }

@@ -822,6 +822,11 @@
    that scroll under it (still far below the sidebar panel's own z-20), and `background:
    var(--mog-surface)` (the page's own colour) keeps that scrolled content from showing through
    once this row is pinned to the top mid-scroll. */
+  /* `border-bottom` (review of #602, note 2): the `background` above already keeps scrolled
+   content from showing through once this row pins to the top, but with no edge of its own the
+   content still visually ran right up to, and under, this row with nothing marking where the
+   sticky header ends and the scrolling area begins — the same hairline tone `.hub-section`'s
+   own `border-top` uses, so the two read as one consistent divider rhythm. */
   .hub-area-header {
     position: sticky;
     top: 0;
@@ -832,6 +837,7 @@
     gap: var(--mog-space-3);
     margin-bottom: var(--mog-space-5);
     background: var(--mog-surface);
+    border-bottom: 1px solid rgb(255 255 255 / 10%);
   }
 
   .hub-area-title {
@@ -1344,8 +1350,13 @@
     min-width: 0;
   }
 
+  /* `flex-shrink: 0` + `white-space: nowrap` (review of #602, note 1): next to `.rec-path`'s
+   truncated path, this label ("My Files" or "Volume") used to wrap onto two lines instead of
+   staying on one and letting the path (which already truncates, above) give way first. */
   .rec-place > span:first-child {
+    flex-shrink: 0;
     font-weight: 500;
+    white-space: nowrap;
   }
 
   /* `flex: 1 1 auto` + `min-width: 0` (not `overflow-wrap: anywhere`, ui-1, review of #602

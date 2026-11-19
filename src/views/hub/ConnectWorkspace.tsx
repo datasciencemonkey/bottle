@@ -5,6 +5,14 @@
  * with `view_emit` (id `connect`). The brain owns every rule: the URL check, the proposed name,
  * the sign-in, Cancel, "Open the browser again" and the Table W-ERR texts. The view sends
  * nothing on mount; at first run the brain opens the URL step when the hub is ready (W-07f).
+ *
+ * The setup region's rule ("each step renders nothing once it is cleared", `Hub.tsx`) holds for
+ * this step too (fix for the "Connect a workspace" panel showing on every hub page even with a
+ * working profile): with no model yet, or the brain's explicit `closed` step (W-07f: a usable
+ * profile already exists), this renders nothing — no heading, no button. There is exactly one
+ * way left to open the form on purpose: the "Connect another workspace…" row in Settings
+ * (`ConnectAnotherWorkspace.tsx`), which sends the same `connect_open` click this view used to
+ * send from its own always-visible button.
  */
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -93,7 +101,7 @@ function NameStep({ model }: { model: Extract<ConnectModel, { step: 'name' }> })
   );
 }
 
-function Step({ model }: { model: ConnectModel }) {
+function Step({ model }: { model: Exclude<ConnectModel, { step: 'closed' }> }) {
   switch (model.step) {
     case 'url':
       return <UrlStep model={model} />;
@@ -156,6 +164,11 @@ export function ConnectWorkspace() {
     };
   }, []);
 
+  // No model yet, or the brain's explicit `closed` step (W-07f: a usable profile already
+  // exists): render nothing, the way every other setup step does once it clears (`Hub.tsx`'s
+  // `SetupRegion`). Settings' "Connect another workspace…" row is the one way left to open it.
+  if (model === undefined || model.step === 'closed') return null;
+
   return (
     <section
       data-view="connect-workspace"
@@ -163,15 +176,7 @@ export function ConnectWorkspace() {
       className="hub-section"
     >
       <h2 id="connect-workspace-title">Connect a workspace</h2>
-      {model === undefined ? (
-        <p>
-          <button type="button" data-connect-open onClick={() => send('connect_open')}>
-            Connect a workspace
-          </button>
-        </p>
-      ) : (
-        <Step model={model} />
-      )}
+      <Step model={model} />
     </section>
   );
 }

@@ -28,13 +28,20 @@ const click = (el: Element | null) => act(async () => (el as HTMLElement).click(
 describe('Connect a workspace (hub view)', () => {
   beforeEach(() => tauri.reset());
 
-  it('[W-07a] the button asks the brain for the URL step; the view sends nothing on mount', async () => {
+  it('with no model, the view renders nothing and sends nothing on mount', async () => {
     const { el } = await render(<ConnectWorkspace />);
+    expect(el.querySelector('[data-view="connect-workspace"]')).toBeNull();
+    expect(el.textContent).toBe('');
     expect(inputEmits()).toEqual([]);
-    await click(el.querySelector('[data-connect-open]'));
-    expect(inputEmits()).toEqual([
-      { mogId: CONNECT_VIEW_ID, kind: 'click', payload: { target: 'connect_open' } },
-    ]);
+  });
+
+  it('[W-07f] with the brain\'s explicit "closed" step (a usable profile already exists), the view renders nothing', async () => {
+    const { el } = await render(<ConnectWorkspace />);
+    await tauri.emitTo('hub', CONNECT_EVENT, { step: 'url', firstRun: true });
+    expect(el.querySelector('[data-view="connect-workspace"]')).not.toBeNull();
+    await tauri.emitTo('hub', CONNECT_EVENT, { step: 'closed' });
+    expect(el.querySelector('[data-view="connect-workspace"]')).toBeNull();
+    expect(el.textContent).toBe('');
   });
 
   it('[W-07a] [W-07f] the URL step asks for the URL and sends what the user pasted', async () => {
@@ -138,8 +145,12 @@ describe('Connect a workspace (hub view)', () => {
     expect(el.textContent).toContain('bottle-x');
   });
 
-  it('[W-07f] the hub shows the Connect a workspace view', async () => {
+  it('[W-07f] the hub mounts the Connect a workspace view, open once the brain opens it', async () => {
     const { el } = await render(<Hub />);
+    // No model yet: the setup region shows nothing for this step (review of #602, the panel
+    // bug) — not even with a profile, since the brain never had to say so.
+    expect(el.querySelector('[data-view="connect-workspace"]')).toBeNull();
+    await tauri.emitTo('hub', CONNECT_EVENT, { step: 'url', firstRun: true });
     expect(el.querySelector('[data-view="connect-workspace"]')).not.toBeNull();
   });
 });
