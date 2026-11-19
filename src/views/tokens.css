@@ -32,7 +32,25 @@
   --mog-text-xs: 11px;
   --mog-text-sm: 12px;
   --mog-text-md: 13px;
+  --mog-text-lg: 15px; /* a settings-row label, a conversation question */
+  --mog-text-xl: 20px; /* an area title (ui-1, #97, #103) */
   --mog-leading: 1.35;
+  --mog-leading-tight: 1.25; /* headings */
+  --mog-leading-relaxed: 1.5; /* long-form body copy (legal notice, answers) */
+  --mog-weight-regular: 400;
+  --mog-weight-medium: 500;
+  --mog-weight-semibold: 600;
+
+  /* Spacing scale (ui-1, #97, #103): one set of steps for every gap, margin and padding. Each
+     area's rhythm follows this scale (--mog-space-5/6 between sections, --mog-space-2/3 inside
+     one group) instead of an ad-hoc pixel value. */
+  --mog-space-1: 4px;
+  --mog-space-2: 8px;
+  --mog-space-3: 12px;
+  --mog-space-4: 16px;
+  --mog-space-5: 24px;
+  --mog-space-6: 32px;
+  --mog-space-7: 48px;
 
   /* Shape and depth. */
   --mog-radius-sm: 4px;
@@ -40,6 +58,30 @@
   --mog-radius-pill: 999px;
   --mog-shadow: 0 6px 16px rgb(8 10 18 / 38%), 0 1px 3px rgb(8 10 18 / 30%);
   --mog-focus-ring: 0 0 0 2px var(--mog-surface), 0 0 0 4px var(--mog-focus);
+
+  /* A neutral "missing feature" or informational note (ui-1): distinct from an error, so a
+     not-yet-available state (SttSetupStep) does not read as broken. mog-note-text on mog-note-bg
+     is 7.0:1; mog-note-text on mog-surface is 9.5:1 (WCAG AA, >= 4.5:1). */
+  --mog-note-bg: #2a3650;
+  --mog-note-text: #b9c6e0;
+  --mog-note-border: rgb(185 198 224 / 28%);
+
+  /* A real destructive pair, distinct from the brand accent (ui-1): a filled Wipe button needs a
+     red that is clearly "danger", not the lamp-red brand accent. mog-destructive-fg (#fff) on
+     mog-destructive is 6.5:1; the hover shade is 8.9:1 (WCAG AA, >= 4.5:1). mog-destructive-text
+     (for text-only destructive states, not a filled background) on mog-surface is 5.6:1. */
+  --mog-destructive: #b3261e;
+  --mog-destructive-hover: #8f1d1d;
+  --mog-destructive-fg: #fff;
+  --mog-destructive-text: #ff6369;
+
+  /* A control border strong enough to read as an edge on its own (ui-1, review of #602 finding
+     5): the editorial hairline (--mog-edge, 22% pink) is about 1.6:1 against --mog-surface, well
+     under the >= 3:1 WCAG 1.4.11 (non-text contrast) floor for an essential control boundary (an
+     unchecked Switch track, a RadioGroupItem or Checkbox outline). White at 40% is about 3.7:1.
+     --mog-edge keeps doing the decorative hairline job (a card edge, a divider); this token is
+     only for a control a user must be able to see the bounds of. */
+  --mog-control-border: rgb(255 255 255 / 40%);
 
   /* Motion. */
   --mog-ease-out: cubic-bezier(0.16, 1, 0.3, 1);

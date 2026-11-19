@@ -90,8 +90,11 @@ describe('Call recording settings (hub)', () => {
   it('[REC-V2] the knob is off by default and shows the key binding next to it', async () => {
     const { el } = await render(<RecordingSettings />);
     await show(model());
-    const knob = el.querySelector<HTMLInputElement>('[data-recording-knob]');
-    expect(knob?.checked).toBe(false);
+    // ui-1 (review of #602 round 3, P1): the knob is the shadcn/ui Switch (a `<button
+    // role="switch" aria-checked>`), not a native `<input type="checkbox">`, so this reads
+    // `aria-checked`, the same way WipeSettings.test.tsx reads its Radix controls.
+    const knob = el.querySelector('[data-recording-knob]');
+    expect(knob?.getAttribute('aria-checked')).toBe('false');
     expect(knob?.getAttribute('role')).toBe('switch');
     expect(el.textContent).toContain(RECORDING_TEXT.binding.mac);
     await show(model({ platform: 'windows' }));
@@ -221,7 +224,9 @@ describe('Call recording settings (hub)', () => {
     const { el } = await render(<RecordingSettings />);
     await show(model());
     const adv = el.querySelector('[data-recording-advanced]');
-    expect(adv?.querySelector('summary')?.textContent).toBe('Advanced');
+    // ui-1 (review of #602 round 3, P2): a Collapsible trigger (`data-slot`, same convention as
+    // every shadcn/ui primitive here), not a native `<details>`/`<summary>` any more.
+    expect(adv?.querySelector('[data-slot="collapsible-trigger"]')?.textContent).toBe('Advanced');
     const tr =
       adv?.querySelector<HTMLInputElement>('[data-recording-endpoint="transcribe"]') ?? null;
     const notes = adv?.querySelector<HTMLInputElement>('[data-recording-endpoint="notes"]') ?? null;

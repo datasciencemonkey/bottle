@@ -10,8 +10,16 @@
  * TODO(#529): the `stt_model_*` hub commands. Until they land, the hub uses
  * `unwiredSttModelApi`, which answers `stt_setup_unavailable`. TODO(#43): the wizard frame
  * mounts this step; until then the hub shows it on its own.
+ *
+ * ui-1 (ADR 0106): rebuilt on shadcn/ui's RadioGroup and Button instead of a raw
+ * `<fieldset>`/`<legend>` with bare `<input type="radio">`s and plain `<button>`s (the ui-audit
+ * "Settings baseline" findings). The RadioGroup renders as accessible buttons
+ * (`role="radio"`/`aria-checked`), not native `<input>`s, so SttSetupStep.test.tsx asserts on
+ * role, not `input[type="radio"]` (documented there).
  */
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type CSSProperties } from 'react';
+import { Button } from '../ui/button';
+import { RadioGroup, RadioGroupItem } from '../ui/radio-group';
 
 export type SttModelState = 'missing' | 'partial' | 'installed';
 export type SttConsent = 'not_asked' | 'declined' | 'granted';
@@ -191,6 +199,7 @@ export function SttSetupStep({
   };
 
   const start = () => (view?.consent === 'granted' ? run(source) : choose('granted'));
+  const sourceLabelId = useId();
   const total = view?.totalBytes ?? 487_211_443;
   const percent =
     progress && progress.total > 0 ? Math.floor((progress.done * 100) / progress.total) : 0;
@@ -217,27 +226,35 @@ export function SttSetupStep({
         <p>Local speech is off. You can download the model at any time.</p>
       )}
       {!installing && !done && view && (
-        <fieldset className="hub-radios">
-          <legend>Download source</legend>
-          <input
-            id="stt-source-github"
-            type="radio"
-            name="sttSource"
-            value="github"
-            checked={source === 'github'}
-            onChange={() => setSource('github')}
-          />
-          <label htmlFor="stt-source-github">sherpa-onnx release on GitHub</label>
-          <input
-            id="stt-source-hf"
-            type="radio"
-            name="sttSource"
-            value="hf_mirror"
-            checked={source === 'hf_mirror'}
-            onChange={() => setSource('hf_mirror')}
-          />
-          <label htmlFor="stt-source-hf">Hugging Face mirror</label>
-        </fieldset>
+        <div className="mt-[var(--mog-space-3)]">
+          <span
+            id={sourceLabelId}
+            className="text-[var(--mog-text-sm)] font-medium text-muted-foreground"
+          >
+            Download source
+          </span>
+          <RadioGroup
+            aria-labelledby={sourceLabelId}
+            className="mt-[var(--mog-space-2)] gap-[var(--mog-space-2)]"
+            value={source}
+            onValueChange={(v) => setSource(v as SttSource)}
+          >
+            <label
+              htmlFor="stt-source-github"
+              className="flex items-center gap-[var(--mog-space-2)] cursor-pointer"
+            >
+              <RadioGroupItem id="stt-source-github" value="github" />
+              sherpa-onnx release on GitHub
+            </label>
+            <label
+              htmlFor="stt-source-hf"
+              className="flex items-center gap-[var(--mog-space-2)] cursor-pointer"
+            >
+              <RadioGroupItem id="stt-source-hf" value="hf_mirror" />
+              Hugging Face mirror
+            </label>
+          </RadioGroup>
+        </div>
       )}
       {checking && <p>Checking the speech model…</p>}
       {installing && progress && (
@@ -258,31 +275,35 @@ export function SttSetupStep({
         </div>
       )}
       {installing && !checking && (
-        <button type="button" onClick={() => void api.cancel()}>
+        <Button type="button" variant="outline" onClick={() => void api.cancel()}>
           Cancel
-        </button>
+        </Button>
       )}
       {error && (
-        <p role="alert" className="hub-error">
+        // ui-1 (ADR 0106): `stt_setup_unavailable` is a missing-feature state, not an error — the
+        // pink error colour (the lamp-lid pink) read as "broken" for a "not built yet" message
+        // that fires by default with no brain connected (the ui-audit "contrast/semantics"
+        // finding). Every other code keeps the error style; only this one gets the neutral note.
+        <p role="alert" className={error === 'stt_setup_unavailable' ? 'hub-note' : 'hub-error'}>
           {sttErrorText(error)}
         </p>
       )}
       {done && <p>The speech model is installed and checked.</p>}
       {!installing && !done && view && (
-        <div className="hub-actions">
+        <div className="mt-[var(--mog-space-3)] flex flex-wrap gap-[var(--mog-space-2)]">
           {error && error !== 'stt_consent_required' && view.consent === 'granted' ? (
-            <button type="button" className="hub-primary" onClick={() => void run(source)}>
+            <Button type="button" onClick={() => void run(source)}>
               Retry
-            </button>
+            </Button>
           ) : (
-            <button type="button" className="hub-primary" onClick={() => void start()}>
+            <Button type="button" onClick={() => void start()}>
               Download ({mb(total)})
-            </button>
+            </Button>
           )}
           {view.consent === 'not_asked' && (
-            <button type="button" onClick={() => void choose('declined')}>
+            <Button type="button" variant="outline" onClick={() => void choose('declined')}>
               Not now
-            </button>
+            </Button>
           )}
         </div>
       )}

@@ -123,11 +123,15 @@ describe('Wizard STT step (MB-07, #413)', () => {
     expect(done).toHaveBeenCalledTimes(1);
   });
 
+  // ui-1 (ADR 0106): the download source picker is now a shadcn/ui RadioGroup (Radix), which
+  // renders as accessible buttons (`role="radio"`), not native `<input type="radio">` elements.
   it('[CAP-49b] the user can pick the Hugging Face mirror as the source', async () => {
     const f = fakeApi();
     const { el } = await render(<SttSetupStep api={f.api} />);
-    const hf = el.querySelector<HTMLInputElement>('input[name="sttSource"][value="hf_mirror"]');
-    await click(hf ?? undefined);
+    const hf = [...el.querySelectorAll<HTMLElement>('[role="radio"]')].find(
+      (r) => r.getAttribute('value') === 'hf_mirror',
+    );
+    await click(hf);
     await click(button(el, 'Download (487 MB)'));
     expect(f.calls).toContain('install:hf_mirror');
   });
@@ -204,7 +208,12 @@ describe('Wizard STT step (MB-07, #413)', () => {
   });
 
   it('[MB-07] the hub shows the STT step and sends no stt command before a click', async () => {
+    // ui-1 (#97, #103): the STT step lives in the Settings area, not shown by default.
     const { el } = await render(<Hub />);
+    await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-toggle]')?.click());
+    await act(async () =>
+      el.querySelector<HTMLButtonElement>('[data-sidebar-item="settings"]')?.click(),
+    );
     expect(step(el)).not.toBeNull();
     const calls = tauri.invoke.mock.calls.map(([cmd]) => String(cmd));
     expect(calls.filter((c) => c.startsWith('stt_model_install'))).toEqual([]);

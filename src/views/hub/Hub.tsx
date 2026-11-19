@@ -1,6 +1,8 @@
 /** V1 hub view (thin): lists the MOGs the brain reports and sends selections with view_emit. */
-import { useCallback, useState } from 'react';
+import { PanelLeftIcon } from 'lucide-react';
+import { useCallback, useState, type CSSProperties } from 'react';
 import type { MogId } from '../../shared/interfaces';
+import type { HubRecording } from '../../shared/recording-view';
 import { DomainPicker } from '../DomainPicker';
 import {
   acceptNotice,
@@ -11,16 +13,19 @@ import {
   type MogViewState,
 } from '../view-ipc';
 import { About } from './About';
+import { Button } from '../ui/button';
 import { CliInstallStep } from './CliInstallStep';
 import { CliSettings } from './CliSettings';
 import { ConnectWorkspace } from './ConnectWorkspace';
 import { Conversations } from './Conversations';
 import { DataPanel } from './DataDisclosures';
 import { DictationNotices } from './DictationNotices';
+import { ForgetDialogHost } from './ForgetDialogHost';
+import { HubSidebar, sidebarWidth } from './HubSidebar';
 import { LegalNotice } from './LegalNotice';
 import { MicPreference } from './MicPreference';
-import { ForgetDialogHost } from './ForgetDialogHost';
 import { MogList } from './MogList';
+import { DEFAULT_HUB_VIEW, NAV_ITEMS, type HubView } from './nav';
 import { PermissionNotices } from './PermissionNotices';
 import { RecIndicator, RecordControl } from './RecordControl';
 import { Recordings } from './Recordings';
@@ -28,6 +33,8 @@ import { RecordingSettings } from './RecordingSettings';
 import { useHubRecording } from './recording-ipc';
 import { SttSetupStep } from './SttSetupStep';
 import { StoreNotice } from './StoreNotice';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
+import { useHubSidebar } from './use-hub-sidebar';
 import { WipeSettings } from './WipeSettings';
 
 /**
@@ -43,47 +50,104 @@ function HubHeader() {
   );
 }
 
-type HubView = 'conversations' | 'recordings' | 'home';
-
-/** The hub navigation (#103, ADR 0103): Conversations, Recordings, then the MOGs and settings. */
-function HubNav({ view, onView }: { view: HubView; onView: (v: HubView) => void }) {
-  const item = (v: HubView, label: string) => (
-    <button
-      type="button"
-      className="hub-nav-item"
-      aria-current={view === v ? 'page' : undefined}
-      onClick={() => onView(v)}
-    >
-      {label}
-    </button>
-  );
+/** The setup steps (ui-1, #97, #103): shown above every area while a step is pending. Each of
+    these already renders nothing (or a quiet status line) once its step clears. */
+function SetupRegion() {
   return (
-    <nav aria-label="Hub" className="hub-nav">
-      {item('conversations', 'Conversations')}
-      {item('recordings', 'Recordings')}
-      {item('home', 'MOGs and settings')}
-    </nav>
+    <div data-setup-region>
+      {/* ADR 0101 (CAP-36, CAP-37): a missing OS permission shows first; without Input
+          Monitoring the talk key does nothing. */}
+      <PermissionNotices />
+      {/* W-17c (#161): the CLI install step comes before the workspace setup. */}
+      <CliInstallStep />
+      <DictationNotices />
+      {/* #162 (W-07f): the brain opens it at first run when no usable profile exists. */}
+      <ConnectWorkspace />
+    </div>
+  );
+}
+
+/**
+ * The 'mogs' area: the live mood chips, the MOG list and its dialogs (#26, #103). Stays mounted
+ * with `hidden` (review of #602), like `Conversations`, rather than unmounting on `view !==
+ * 'mogs'`: an unmount would have dropped any open MogList form on a sidebar nav click.
+ */
+function MogsArea({ hidden, mogs }: { hidden: boolean; mogs: ReadonlyMap<MogId, MogViewState> }) {
+  return (
+    <section data-hub-view="mogs" hidden={hidden}>
+      <ul aria-label="MOGs" className="hub-live">
+        {[...mogs].map(([id, s]) => (
+          <li key={id} data-mog={id} data-mood={s.mood}>
+            <button type="button" className="hub-chip" onClick={() => void emitView(id, 'click')}>
+              <span className="hub-mood-dot" aria-hidden="true" />
+              MOG {id.slice(0, 8)} <span className="hub-muted">({s.mood})</span>
+            </button>
+            {s.homeDomain && <DomainPicker mogId={id} picker={s.homeDomain} />}
+          </li>
+        ))}
+      </ul>
+      <MogList />
+      <ForgetDialogHost />
+    </section>
+  );
+}
+
+/**
+ * The 'settings' area (#97, #103): one grouped, consistently spaced settings pane. Stays
+ * mounted with `hidden` (review of #602), like `Conversations`: unmounting on `view !==
+ * 'settings'` dropped the Wipe scope choice and closed an open Wipe dialog mid-confirm as soon
+ * as the user switched areas. RecordingSettings (ADR 0103, merged from main) moved in here from
+ * the old combined "home" area.
+ */
+function SettingsArea({
+  hidden,
+  recording,
+}: {
+  hidden: boolean;
+  recording: HubRecording | undefined;
+}) {
+  return (
+    <section data-hub-view="settings" aria-label="Settings" hidden={hidden}>
+      <MicPreference />
+      <RecordingSettings model={recording} />
+      <SttSetupStep />
+      <WipeSettings />
+      <CliSettings />
+      <DataPanel />
+      <About />
+    </section>
   );
 }
 
 export function Hub() {
-  // The hub opens on the MOGs and settings, where the first-run steps are. A double-click on the
-  // MOG or the card opens Conversations (#103).
-  const [view, setView] = useState<HubView>('home');
+  // ui-1 (#97, #103): Conversations is the area the hub opens on; the Setup region (above) shows
+  // first-run steps on every area, so the old "home" area's special-casing is gone.
+  const [view, setView] = useState<HubView>(DEFAULT_HUB_VIEW);
   const showConversations = useCallback(() => setView('conversations'), []);
+  const [mogs, setMogs] = useState<ReadonlyMap<MogId, MogViewState>>(new Map());
+  const sidebar = useHubSidebar();
+  // review of #602 ("also fix"): picking an area closes an unpinned overlay sidebar, the way a
+  // native overlay sidebar closes once you have told it where to go; a pinned sidebar is a
+  // permanent rail, so it stays.
+  const pickView = useCallback(
+    (v: HubView) => {
+      setView(v);
+      if (!sidebar.pinned) sidebar.requestClose();
+    },
+    [sidebar],
+  );
   const recording = useHubRecording();
   const openRecordingSettings = useCallback(() => {
-    setView('home');
+    pickView('settings');
     // After the view shows: move to the section, and focus its heading for screen readers.
     requestAnimationFrame(() => {
       const h = document.getElementById('recording-settings-title');
       h?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
       h?.focus({ preventScroll: true });
     });
-  }, []);
+  }, [pickView]);
   const control = recording?.control;
   const live = control?.phase === 'recording' || control?.phase === 'stopping';
-  const [mogs, setMogs] = useState<ReadonlyMap<MogId, MogViewState>>(new Map());
 
   const onState = useCallback((p: unknown) => {
     const s = asMogViewState(p);
@@ -110,56 +174,78 @@ export function Hub() {
     );
   }
 
-  // TODO(#43, #77): the wizard and settings.
+  const activeLabel = NAV_ITEMS.find((i) => i.id === view)?.label ?? '';
+  // Set on `<main>`, not `.hub-body` (ui-1, review of #602 round 4, blocker 1): a pinned rail
+  // pushes `.hub-content` over by its own width instead of overlaying it (review of #602,
+  // finding 3), and `.hub`'s own header row (`.hub-title`/`.hub-labs`, below) needs the same
+  // push — they are direct children of `main`, outside `.hub-body` entirely (AT-37), so a
+  // variable set only on `.hub-body` never reached them. A custom property set here still
+  // inherits down into `.hub-body`/`.hub-content`/`.conv`/`.rec-area` exactly as before, just
+  // from one level higher. 0 (unset) when unpinned or hidden, so an overlay still costs no
+  // reflow.
+  const hubBodyStyle = { '--hub-sidebar-width': `${sidebarWidth(sidebar)}px` } as CSSProperties;
+
+  // TODO(#43): the onboarding wizard.
+  // Conversations and Recordings are both a full-height list+detail layout (`hub--wide`);
+  // MOGs and Settings keep the comfortable reading width (hub.css).
+  const wide = view === 'conversations' || view === 'recordings';
   return (
-    <main className={view === 'home' ? 'hub' : 'hub hub--wide'}>
+    <main className={wide ? 'hub hub--wide' : 'hub'} style={hubBodyStyle}>
       <HubHeader />
+      {/* ADR 0105: why macOS asks for the password, or that history is off. Stays a direct
+          sibling of the header, outside the sidebar and every area, so it shows regardless of
+          which area or sidebar state is active. */}
       <StoreNotice />
-      {/* ADR 0103: a running recording shows in every view, with the time left and Stop. */}
-      {live && view !== 'recordings' && (
-        <RecIndicator
-          endsAtMs={control?.endsAtMs}
-          stopping={control?.phase === 'stopping'}
-          compact
-        />
-      )}
-      <HubNav view={view} onView={setView} />
-      <Conversations active={view === 'conversations'} onOpen={showConversations} />
-      <Recordings
-        active={view === 'recordings'}
-        onOpenSettings={openRecordingSettings}
-        header={<RecordControl model={recording} onOpenSettings={openRecordingSettings} />}
-      />
-      <div data-hub-view="home" hidden={view !== 'home'}>
-        {/* ADR 0101 (CAP-36, CAP-37): a missing OS permission shows first; without Input
-            Monitoring the talk key does nothing. */}
-        <PermissionNotices />
-        {/* W-17c (#161): the CLI install step comes before the workspace setup. */}
-        <CliInstallStep />
-        <DictationNotices />
-        {/* #162 (W-07f): the brain opens it at first run when no usable profile exists. */}
-        <ConnectWorkspace />
-        {/* The live moods the MOG windows report: one quiet chip per MOG (empty until one runs). */}
-        <ul aria-label="MOGs" className="hub-live">
-          {[...mogs].map(([id, s]) => (
-            <li key={id} data-mog={id} data-mood={s.mood}>
-              <button type="button" className="hub-chip" onClick={() => void emitView(id, 'click')}>
-                <span className="hub-mood-dot" aria-hidden="true" />
-                MOG {id.slice(0, 8)} <span className="hub-muted">({s.mood})</span>
-              </button>
-              {s.homeDomain && <DomainPicker mogId={id} picker={s.homeDomain} />}
-            </li>
-          ))}
-        </ul>
-        <MogList />
-        <ForgetDialogHost />
-        <MicPreference />
-        <RecordingSettings model={recording} />
-        <SttSetupStep />
-        <WipeSettings />
-        <CliSettings />
-        <DataPanel />
-        <About />
+      <div className="hub-body">
+        <HubSidebar state={sidebar} view={view} onView={pickView} />
+        <div className="hub-content">
+          <div className="hub-area-header">
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    // No elevated z-index (ui-1, review of #602 round 4, blocker 2): the
+                    // earlier `relative z-30` kept the toggle clickable above an open overlay,
+                    // but the toggle sits where the sidebar's own first nav item ("MOGs") does,
+                    // so a click there closed the sidebar instead of opening MOGs. The panel
+                    // (z-20 in HubSidebar.tsx) now simply covers the toggle while it is open, the
+                    // way a native macOS sidebar covers whatever is under it — Esc, an outside
+                    // click and the panel's own collapse/pin buttons still close it.
+                    className="size-7 shrink-0"
+                    data-sidebar-toggle
+                    aria-pressed={sidebar.visible}
+                    onClick={sidebar.toggleVisible}
+                  >
+                    <PanelLeftIcon className="size-4" />
+                    <span className="sr-only">{'Toggle the sidebar (⌘\\ or ⌘B)'}</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{'Toggle the sidebar (⌘\\ or ⌘B)'}</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+            <h2 className="hub-area-title">{activeLabel}</h2>
+          </div>
+          <SetupRegion />
+          {/* ADR 0103: a running recording shows in every view, with the time left and Stop. */}
+          {live && view !== 'recordings' && (
+            <RecIndicator
+              endsAtMs={control?.endsAtMs}
+              stopping={control?.phase === 'stopping'}
+              compact
+            />
+          )}
+          <Conversations active={view === 'conversations'} onOpen={showConversations} />
+          <Recordings
+            active={view === 'recordings'}
+            onOpenSettings={openRecordingSettings}
+            header={<RecordControl model={recording} onOpenSettings={openRecordingSettings} />}
+          />
+          <MogsArea hidden={view !== 'mogs'} mogs={mogs} />
+          <SettingsArea hidden={view !== 'settings'} recording={recording} />
+        </div>
       </div>
     </main>
   );

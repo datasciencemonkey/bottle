@@ -88,9 +88,10 @@ describe('CLI install step (hub)', () => {
   });
 
   it('[W-17c] the hub shows the install step first, before the other setup steps', async () => {
+    // ui-1 (#97, #103): the Setup region now shows above every area, not only "home".
     const { el } = await render(<Hub />);
     await tauri.emitTo('hub', CLI_INSTALL_EVENT, offer);
-    const sections = [...el.querySelectorAll('main > [data-hub-view="home"] > section')];
+    const sections = [...el.querySelectorAll('[data-setup-region] > section')];
     expect(sections[0]?.getAttribute('data-view')).toBe('cli-install');
   });
 });
