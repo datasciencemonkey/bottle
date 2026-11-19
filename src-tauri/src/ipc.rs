@@ -1315,7 +1315,7 @@ mod tests {
         assert_eq!(
             host.matches("SqlCipherLocalStore::new(").count(),
             0,
-            "consent_host opens the one store through open_device_records"
+            "consent_host builds the one store through prepare_device_records"
         );
         let ipc = production_code(&std::fs::read_to_string(src.join("ipc.rs")).unwrap());
         assert!(
