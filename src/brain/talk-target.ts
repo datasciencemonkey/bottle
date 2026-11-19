@@ -69,6 +69,11 @@ export interface TalkTarget {
   closed(mogId: MogId): void;
   /** The target now. */
   current(): MogId | undefined;
+  /**
+   * The last-used MOG: the target now, or else the last target before every MOG closed
+   * (#562). Undefined until a MOG opens in this run.
+   */
+  lastUsed(): MogId | undefined;
   /** True while the MOG window is open. */
   isOpen(mogId: MogId): boolean;
 }
@@ -77,6 +82,8 @@ export function createTalkTarget(deps: TalkTargetDeps): TalkTarget {
   /** Open MOGs, most recently interacted first. */
   const mru: MogId[] = [];
   const names = new Map<MogId, string>();
+  /** The last MOG at the front of `mru`. It stays after the MOG closes (#562). */
+  let last: MogId | undefined;
   let toastFor: MogId | undefined;
   let cancelToast: (() => void) | undefined;
 
@@ -110,6 +117,7 @@ export function createTalkTarget(deps: TalkTargetDeps): TalkTarget {
    */
   const front = (id: MogId, stamp = ++version) => {
     movedAt.set(id, stamp);
+    last = id;
     const old = current();
     const at = mru.indexOf(id);
     if (at >= 0) mru.splice(at, 1);
@@ -188,9 +196,11 @@ export function createTalkTarget(deps: TalkTargetDeps): TalkTarget {
       // Clear the marker of a view that may still be there (a close in progress).
       send(id);
       const next = current();
+      if (next !== undefined) last = next;
       if (wasTarget && next !== undefined) send(next);
     },
     current,
+    lastUsed: () => current() ?? last,
     isOpen,
   };
 }
@@ -231,6 +241,8 @@ export function wireTalkTarget(bus: BrainBus, target: TalkTarget): () => void {
   });
   const offPtt = bus.on(EVENTS['hotkey.ptt'].name, (p) => {
     if (!isObj(p) || typeof p['mogId'] !== 'string' || p['phase'] !== 'down') return;
+    // An empty ID is a press with no open MOG (#562): `talk-no-mog.ts` starts one.
+    if (p['mogId'] === '') return;
     // Rust latches only a MOG whose window is open, so a press for a MOG that the brain
     // missed (for example after a brain restart) is a first open.
     if (!target.isOpen(p['mogId'])) target.viewReady(p['mogId']);

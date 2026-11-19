@@ -90,7 +90,7 @@ export function wireLevelStream(bus: BrainBus, router: LevelRouter): () => void 
 
 /**
  * Register the `onLevel` Channel with `capture_subscribe`. Resolves false when the core
- * refuses (the reason is not logged). `onPartial` has no reader yet: TODO(#514).
+ * refuses (the reason is not logged). `onPartial` has no reader yet: TODO(#547).
  */
 export async function subscribeLevels(router: LevelRouter): Promise<boolean> {
   const onLevel = new Channel<number>();

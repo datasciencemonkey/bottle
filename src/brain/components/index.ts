@@ -16,7 +16,7 @@ import {
 import { createCaptureMood, wireCaptureMood } from '../capture-mood';
 import { wireForget } from '../forget-wiring';
 import { wireWipe } from '../wipe-wiring';
-import { wireHubMogs } from '../hub-mogs-wiring';
+import { sendHubSnapshot, wireHubMogs } from '../hub-mogs-wiring';
 import {
   createCaptureLifecycle,
   ipcCaptureControl,
@@ -32,6 +32,7 @@ import { wireNotice } from '../notice-wiring';
 import { withOfflineFallback } from '../offline-intent';
 import { createProfilePick } from '../profile-pick';
 import { createRequestOwner, sendOwnedCard } from '../request-owner';
+import { wireTalkNoMog } from '../talk-no-mog';
 import { configName, createAppTalkTarget, wireTalkTarget, type TalkTarget } from '../talk-target';
 import { createLifecycleTranscriber } from '../stt-wiring';
 import { ipcUtteranceDeps } from '../utterance-route';
@@ -128,6 +129,14 @@ export function startBrain(): Brain {
     // before the capture lifecycle, so a `hotkey:ptt` down updates the target first.
     const talkTarget = createAppTalkTarget(configName);
     wireTalkTarget(bus, talkTarget);
+    // #562 (MB-06a): a press with no open MOG starts the last-used MOG, or the hub says
+    // "Create a MOG to start".
+    wireTalkNoMog(bus, {
+      manager: components.T1,
+      lastUsed: () => talkTarget.lastUsed(),
+      openWindow: (mogId) => call('window_mog_open', { mogId }),
+      notify: (notice) => sendHubSnapshot(components.T1, notice),
+    });
     // MOG-13a (#73): the MOG that captures an utterance owns its request and its answer.
     const owner = createRequestOwner({
       isOpen: (id) => talkTarget.isOpen(id),

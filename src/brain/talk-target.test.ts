@@ -122,6 +122,21 @@ describe('T1 talk-key target in the brain (#73)', () => {
     expect(target.current()).toBeUndefined();
   });
 
+  it('[MB-06a] lastUsed keeps the last-used MOG after every MOG closed (#562)', async () => {
+    const { target } = await setup();
+    expect(target.lastUsed()).toBeUndefined();
+    await openAll(target, A, B);
+    target.interacted(A);
+    await flush();
+    expect(target.lastUsed()).toBe(A);
+    target.closed(A);
+    // B is the target now, so it is the last used.
+    expect(target.lastUsed()).toBe(B);
+    target.closed(B);
+    expect(target.current()).toBeUndefined();
+    expect(target.lastUsed()).toBe(B);
+  });
+
   it('[MB-06a] the brain ignores a MOG it does not know as open (#305 review note B)', async () => {
     const { target, active, sent } = await setup();
     await openAll(target, A);
@@ -406,6 +421,15 @@ describe('wiring of the talk-key target (#73)', () => {
     expect(target.isOpen(C)).toBe(true);
     expect(lastViews(sent)[C]).toMatchObject({ mogId: C, target: true, toast: true });
     expect(marked(sent)).toEqual([C]);
+  });
+
+  it('[MB-06a] a press with no open MOG (empty mogId, #562) opens and targets nothing', async () => {
+    const { bus, target, sent } = await wired();
+    bus.dispatch(ptt('', 'down'));
+    await flush();
+    expect(target.current()).toBeUndefined();
+    expect(target.isOpen('')).toBe(false);
+    expect(sent).toEqual([]);
   });
 
   it('[UX-28] [ARC-5] sends the target view only to its own MOG window', async () => {
