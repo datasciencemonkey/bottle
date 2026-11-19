@@ -343,25 +343,47 @@ describe('call recording (ADR 0103)', () => {
   });
 
   it('[ARC-6] recording_open takes an ID and a target, never a URL', () => {
-    expect(doc.arguments['recording_open']?.required).toEqual(['id', 'target']);
-    const open: CommandArgs['recording_open'] = { id: 'rec-1', target: 'folder' };
-    // @ts-expect-error the view never passes a URL to open
-    const leak: CommandArgs['recording_open'] = { id: 'rec-1', target: 'https://example.com' };
+    expect(doc.arguments['recording_open']?.required).toEqual(['profile', 'id', 'target']);
+    const open: CommandArgs['recording_open'] = { profile: 'p', id: 'rec-1', target: 'folder' };
+    const leak: CommandArgs['recording_open'] = {
+      ...open,
+      // @ts-expect-error the view never passes a URL to open
+      target: 'https://example.com',
+    };
     const reply: CommandReturns['recording_open'] = {};
     expect([open.target, leak.id, reply]).toHaveLength(3);
   });
 
   it('[CAP-06] the settings patch is partial and the start takes optional instructions', () => {
     expect(doc.arguments['recording_settings_write']?.required).toEqual(['patch']);
-    expect(doc.arguments['recording_volume_create']?.required).toEqual(['catalog', 'schema']);
+    expect(doc.arguments['recording_volume_create']?.required).toEqual([
+      'profile',
+      'catalog',
+      'schema',
+    ]);
     const patch: CommandArgs['recording_settings_write'] = { patch: { enabled: true } };
-    const start: CommandArgs['recording_start'] = {};
-    const edited: CommandArgs['recording_start'] = { instructions: 'Only the decisions.' };
+    const start: CommandArgs['recording_start'] = { profile: 'p' };
+    const edited: CommandArgs['recording_start'] = {
+      profile: 'p',
+      instructions: 'Only the decisions.',
+    };
     const state: CommandReturns['recording_start'] = {
       state: 'starting',
       systemAudio: 'ok',
     };
     expect([patch.patch.enabled, start, edited.instructions, state.state]).toHaveLength(4);
+  });
+
+  it('[ADR 0103] Rust has no home profile of its own: the cloud-bound recording commands require it', () => {
+    expect(doc.arguments['recording_storage_probe']?.required).toEqual(['profile']);
+    expect(doc.arguments['recording_list']?.required).toEqual(['profile']);
+    expect(doc.arguments['recording_detail']?.required).toEqual(['profile', 'id']);
+    expect(doc.arguments['recording_retry']?.required).toEqual(['profile', 'id']);
+    const probe: CommandArgs['recording_storage_probe'] = { profile: 'p' };
+    const list: CommandArgs['recording_list'] = { profile: 'p' };
+    const detail: CommandArgs['recording_detail'] = { profile: 'p', id: 'rec-1' };
+    const retry: CommandArgs['recording_retry'] = { profile: 'p', id: 'rec-1' };
+    expect([probe, list, detail, retry]).toHaveLength(4);
   });
 
   it('[ARC-5] the record key toggle and the recording events are core-to-brain', () => {

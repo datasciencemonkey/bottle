@@ -1266,13 +1266,18 @@ fn cap_06_the_host_refuses_recording_start_while_the_knob_is_off() {
     let rec = recorder(mog_core::types::RecordingSettings::default());
     for from in ["brain", "hub"] {
         assert_eq!(
-            recording_call(from, Some(&rec), "recording_start", json!({})),
+            recording_call(from, Some(&rec), "recording_start", json!({"profile": "p"})),
             err("recording_off"),
             "{from}"
         );
     }
     assert_eq!(
-        recording_call("mog-a1", Some(&rec), "recording_start", json!({})),
+        recording_call(
+            "mog-a1",
+            Some(&rec),
+            "recording_start",
+            json!({"profile": "p"})
+        ),
         err("window_not_allowed")
     );
 }
@@ -1284,7 +1289,7 @@ fn cap_06_the_host_reads_the_default_settings_and_stubs_the_rest() {
     assert_eq!(read["enabled"], json!(false));
     assert_eq!(read["lengthMin"], json!(60));
     assert_eq!(
-        recording_call("hub", Some(&rec), "recording_list", json!({})),
+        recording_call("hub", Some(&rec), "recording_list", json!({"profile": "p"})),
         err("not_implemented")
     );
     // An open gate still reaches only the stub until the capture lands.
@@ -1294,7 +1299,12 @@ fn cap_06_the_host_reads_the_default_settings_and_stubs_the_rest() {
         ..Default::default()
     });
     assert_eq!(
-        recording_call("brain", Some(&on), "recording_start", json!({})),
+        recording_call(
+            "brain",
+            Some(&on),
+            "recording_start",
+            json!({"profile": "p"})
+        ),
         err("not_implemented")
     );
 }

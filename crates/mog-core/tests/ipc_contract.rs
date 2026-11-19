@@ -900,14 +900,17 @@ fn sec_16c_sec_03_the_notice_type_debug_never_holds_the_text() {
 
 // ---------- call recording (ADR 0103) ----------
 
-/// A valid argument object for each recording command.
+/// A valid argument object for each recording command. The commands that reach Databricks
+/// (ADR 0103 follow-up: Rust has no home profile of its own) also carry `profile`.
 fn recording_sample(name: &str) -> serde_json::Value {
     match name {
         "recording_settings_write" => json!({"patch": {"enabled": true, "lengthMin": 30}}),
-        "recording_volume_create" => json!({"catalog": "main", "schema": "calls"}),
-        "recording_start" => json!({"instructions": "Write short notes."}),
-        "recording_detail" | "recording_retry" => json!({"id": "rec-1"}),
-        "recording_open" => json!({"id": "rec-1", "target": "folder"}),
+        "recording_storage_probe" => json!({"profile": "p"}),
+        "recording_volume_create" => json!({"profile": "p", "catalog": "main", "schema": "calls"}),
+        "recording_start" => json!({"profile": "p", "instructions": "Write short notes."}),
+        "recording_list" => json!({"profile": "p"}),
+        "recording_detail" | "recording_retry" => json!({"profile": "p", "id": "rec-1"}),
+        "recording_open" => json!({"profile": "p", "id": "rec-1", "target": "folder"}),
         _ => json!({}),
     }
 }
@@ -1005,24 +1008,47 @@ fn sec_02b_recording_arguments_are_checked() {
             "recording_settings_write",
             json!({"patch": {"presetInstructions": long.clone()}}),
         ),
-        ("recording_volume_create", json!({"catalog": "main"})),
         (
             "recording_volume_create",
-            json!({"catalog": "a.b", "schema": "c"}),
+            json!({"profile": "p", "catalog": "main"}),
         ),
         (
             "recording_volume_create",
-            json!({"catalog": "a", "schema": "c`; x"}),
+            json!({"profile": "p", "catalog": "a.b", "schema": "c"}),
         ),
-        ("recording_start", json!({"instructions": long})),
-        ("recording_start", json!({"mogId": "a1"})),
-        ("recording_detail", json!({})),
-        ("recording_detail", json!({"id": "../etc"})),
-        ("recording_retry", json!({"id": ""})),
-        ("recording_open", json!({"id": "rec-1"})),
+        (
+            "recording_volume_create",
+            json!({"profile": "p", "catalog": "a", "schema": "c`; x"}),
+        ),
+        (
+            "recording_start",
+            json!({"profile": "p", "instructions": long}),
+        ),
+        ("recording_start", json!({"profile": "p", "mogId": "a1"})),
+        ("recording_detail", json!({"profile": "p"})),
+        ("recording_detail", json!({"profile": "p", "id": "../etc"})),
+        ("recording_retry", json!({"profile": "p", "id": ""})),
+        ("recording_open", json!({"profile": "p", "id": "rec-1"})),
         (
             "recording_open",
-            json!({"id": "rec-1", "target": "https://x"}),
+            json!({"profile": "p", "id": "rec-1", "target": "https://x"}),
+        ),
+        // ADR 0103 follow-up: Rust has no home profile of its own, so a missing or empty
+        // `profile` is invalid_args on every cloud-bound recording command, same as any other
+        // required field.
+        ("recording_storage_probe", json!({})),
+        (
+            "recording_volume_create",
+            json!({"catalog": "main", "schema": "calls"}),
+        ),
+        ("recording_start", json!({})),
+        ("recording_list", json!({})),
+        ("recording_detail", json!({"id": "rec-1"})),
+        ("recording_retry", json!({"id": "rec-1"})),
+        ("recording_open", json!({"id": "rec-1", "target": "folder"})),
+        (
+            "recording_open",
+            json!({"profile": 7, "id": "rec-1", "target": "folder"}),
         ),
     ] {
         let err = ipc::handle("hub", name, bad.clone()).unwrap_err();
@@ -1044,7 +1070,8 @@ fn sec_02b_recording_arguments_are_checked() {
             ipc::handle("hub", "recording_settings_write", json!({ "patch": patch })).unwrap_err();
         assert!(matches!(err, IpcError::NotImplemented { .. }), "{patch}");
     }
-    let err = ipc::handle("brain", "recording_start", json!({})).unwrap_err();
+    // A home profile, and only the optional instructions, passes the schema.
+    let err = ipc::handle("brain", "recording_start", json!({"profile": "p"})).unwrap_err();
     assert!(matches!(err, IpcError::NotImplemented { .. }));
 }
 

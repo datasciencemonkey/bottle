@@ -1140,13 +1140,17 @@
       },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
-      "description": "`recording_detail` and `recording_retry` (ADR 0103).",
+      "description": "`recording_detail` and `recording_retry` (ADR 0103). `profile`: the home profile.",
       "properties": {
         "id": {
           "$ref": "#/$defs/RecordingId"
+        },
+        "profile": {
+          "type": "string"
         }
       },
       "required": [
+        "profile",
         "id"
       ],
       "title": "RecordingIdArgs",
@@ -1155,8 +1159,16 @@
     "recording_list": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
-      "description": "No arguments.",
-      "title": "NoArgs",
+      "description": "`recording_list` (ADR 0103): lists `<root>/Bottle/Recordings/` on the home profile host.",
+      "properties": {
+        "profile": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile"
+      ],
+      "title": "RecordingListArgs",
       "type": "object"
     },
     "recording_open": {
@@ -1179,11 +1191,16 @@
         "id": {
           "$ref": "#/$defs/RecordingId"
         },
+        "profile": {
+          "description": "The home profile: Rust builds the folder link from this profile's host.",
+          "type": "string"
+        },
         "target": {
           "$ref": "#/$defs/RecordingOpenTarget"
         }
       },
       "required": [
+        "profile",
         "id",
         "target"
       ],
@@ -1206,13 +1223,17 @@
       },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
-      "description": "`recording_detail` and `recording_retry` (ADR 0103).",
+      "description": "`recording_detail` and `recording_retry` (ADR 0103). `profile`: the home profile.",
       "properties": {
         "id": {
           "$ref": "#/$defs/RecordingId"
+        },
+        "profile": {
+          "type": "string"
         }
       },
       "required": [
+        "profile",
         "id"
       ],
       "title": "RecordingIdArgs",
@@ -1364,7 +1385,7 @@
       },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
-      "description": "`recording_start` (ADR 0103): the instructions for this recording only. Absent: the\nSettings preset.",
+      "description": "`recording_start` (ADR 0103): `profile` is the home profile the pipeline uses for every\ncloud call of this recording, including after `recording_stop`. `instructions`: for\nthis recording only. Absent: the Settings preset.",
       "properties": {
         "instructions": {
           "anyOf": [
@@ -1375,8 +1396,14 @@
               "type": "null"
             }
           ]
+        },
+        "profile": {
+          "type": "string"
         }
       },
+      "required": [
+        "profile"
+      ],
       "title": "RecordingStartArgs",
       "type": "object"
     },
@@ -1397,8 +1424,16 @@
     "recording_storage_probe": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
-      "description": "No arguments.",
-      "title": "NoArgs",
+      "description": "`recording_storage_probe` (ADR 0103): probes `GET /api/2.0/fs/directories` on the\nhome profile host. Rust never picks a profile: the brain sends the home profile of\n`src/brain/home-profile.ts` on every cloud-bound recording command.",
+      "properties": {
+        "profile": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile"
+      ],
+      "title": "RecordingStorageProbeArgs",
       "type": "object"
     },
     "recording_volume_create": {
@@ -1410,16 +1445,20 @@
       },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
-      "description": "`recording_volume_create` (ADR 0103): Bottle creates the managed volume `bottle_audio`\nin `catalog.schema`, after the user confirmed in Settings.",
+      "description": "`recording_volume_create` (ADR 0103): Bottle creates the managed volume `bottle_audio`\nin `catalog.schema`, after the user confirmed in Settings. `profile`: the home profile\n(the brain never lets Rust pick one).",
       "properties": {
         "catalog": {
           "$ref": "#/$defs/UcName"
+        },
+        "profile": {
+          "type": "string"
         },
         "schema": {
           "$ref": "#/$defs/UcName"
         }
       },
       "required": [
+        "profile",
         "catalog",
         "schema"
       ],
