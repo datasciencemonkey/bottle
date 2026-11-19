@@ -17,7 +17,9 @@ import {
   type HubRecordings,
 } from '../shared/recording-view';
 import { BrainBus } from './bus';
+import { core } from './test-core';
 import {
+  ipcRecordingApi,
   turnsOf,
   wireRecording,
   type RecDetail,
@@ -184,7 +186,7 @@ describe('recording wiring (brain, ADR 0103)', () => {
     expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.settings?.enabled).toBe(true);
   });
 
-  it('[REC-H3] keeps a length from 5 to 180 minutes and refuses others', async () => {
+  it('[REC-H3] keeps a length from 5 to 120 minutes and refuses others', async () => {
     const t = setup();
     t.click({ action: 'recording.length', minutes: 90 });
     await flush();
@@ -440,5 +442,155 @@ describe('recording wiring (brain, ADR 0103)', () => {
     t.click({ action: 'recording.ready' });
     await flush();
     expect(t.sent).toEqual([]);
+  });
+});
+
+describe('ipcRecordingApi: the typed recording_* contract (ADR 0103)', () => {
+  beforeEach(() => core.reset());
+
+  const contractSettings = {
+    enabled: true,
+    consentAck: true,
+    storage: { kind: 'volume', root: '/Volumes/main/calls/bottle_audio' },
+    transcribeEndpoint: DEFAULT_TRANSCRIBE_ENDPOINT,
+    notesEndpoint: DEFAULT_NOTES_ENDPOINT,
+    presetInstructions: 'Write short notes in Markdown.',
+    lengthMin: 45,
+  };
+
+  it('[REC-H13] maps settings both ways; a volume wins over My Files in the patch', async () => {
+    core.invoke.mockImplementation(async (cmd: string) =>
+      cmd === 'recording_settings_read' || cmd === 'recording_settings_write'
+        ? contractSettings
+        : {},
+    );
+    const api = ipcRecordingApi(new BrainBus());
+    const s = await api.readSettings();
+    expect(s).toEqual({
+      enabled: true,
+      consentAck: true,
+      lengthMin: 45,
+      transcribeEndpoint: DEFAULT_TRANSCRIBE_ENDPOINT,
+      notesEndpoint: DEFAULT_NOTES_ENDPOINT,
+      instructions: 'Write short notes in Markdown.',
+      volumePath: '/Volumes/main/calls/bottle_audio',
+    });
+    await api.writeSettings({ ...s, myFilesRoot: '/Volumes/databricks/home/1/me/my_files' });
+    expect(core.invoke).toHaveBeenLastCalledWith('recording_settings_write', {
+      args: {
+        patch: {
+          enabled: true,
+          consentAck: true,
+          lengthMin: 45,
+          transcribeEndpoint: DEFAULT_TRANSCRIBE_ENDPOINT,
+          notesEndpoint: DEFAULT_NOTES_ENDPOINT,
+          presetInstructions: 'Write short notes in Markdown.',
+          storage: { kind: 'volume', root: '/Volumes/main/calls/bottle_audio' },
+        },
+      },
+    });
+  });
+
+  it('[REC-H13] maps state, list, detail and the commands with their ids', async () => {
+    core.invoke.mockImplementation(async (cmd: string) => {
+      switch (cmd) {
+        case 'recording_state':
+          return { state: 'recording', startedAtMs: 1, endsAtMs: 2, systemAudio: 'unavailable' };
+        case 'recording_list':
+          return [
+            {
+              id: 'a',
+              name: 'n',
+              startedAtMs: 5,
+              durationS: 60,
+              status: 'failed',
+              errorKind: 'auth',
+            },
+          ];
+        case 'recording_detail':
+          return {
+            summary: { id: 'a', name: 'n', startedAtMs: 5, durationS: 60, status: 'done' },
+            instructions: 'x',
+            segments: [{ start: 0, end: 1, speaker: '1', text: 'Hi.', part: 1 }],
+            notesMd: '## Summary',
+          };
+        case 'recording_storage_probe':
+          return { myFilesRoot: null };
+        default:
+          return {};
+      }
+    });
+    const api = ipcRecordingApi(new BrainBus());
+    expect(await api.state()).toEqual({
+      phase: 'recording',
+      startedAtMs: 1,
+      endsAtMs: 2,
+      systemAudio: 'mic_only',
+    });
+    expect(await api.list()).toEqual([
+      { id: 'a', name: 'n', startedAt: 5, durationS: 60, status: 'failed', errorKind: 'auth' },
+    ]);
+    expect(await api.detail('a')).toEqual({
+      id: 'a',
+      status: 'done',
+      notesMd: '## Summary',
+      segments: [{ start: 0, end: 1, speaker: '1', text: 'Hi.' }],
+    });
+    expect(await api.probeStorage()).toEqual({ myFiles: null });
+    await api.start();
+    expect(core.invoke).toHaveBeenLastCalledWith('recording_start', { args: {} });
+    await api.start('Only decisions.');
+    expect(core.invoke).toHaveBeenLastCalledWith('recording_start', {
+      args: { instructions: 'Only decisions.' },
+    });
+    await api.open('a');
+    expect(core.invoke).toHaveBeenLastCalledWith('recording_open', {
+      args: { id: 'a', target: 'folder' },
+    });
+  });
+
+  it('[REC-H13] relays recording.state, recording.job and the record key from the bus', () => {
+    const bus = new BrainBus();
+    const api = ipcRecordingApi(bus);
+    const states: unknown[] = [];
+    const jobs: unknown[] = [];
+    let toggles = 0;
+    api.onState((s) => states.push(s));
+    api.onJob((j) => jobs.push(j));
+    api.onRecordToggle?.(() => (toggles += 1));
+    bus.dispatch({ event: 'recording:state', payload: { state: 'idle', systemAudio: 'off' } });
+    bus.dispatch({
+      event: 'recording:job',
+      payload: { id: 'a', name: 'n', startedAtMs: 5, durationS: 60, status: 'done' },
+    });
+    bus.dispatch({ event: 'hotkey:record_toggle', payload: { mogId: 'm' } });
+    expect(states).toEqual([{ phase: 'idle' }]);
+    expect(jobs).toEqual([{ id: 'a', name: 'n', startedAt: 5, durationS: 60, status: 'done' }]);
+    expect(toggles).toBe(1);
+  });
+});
+
+describe('record key (ADR 0103)', () => {
+  it('[REC-H14] the record key starts a recording, and stops a running one', async () => {
+    const bus = new BrainBus();
+    const fake = fakeApi({ enabled: true, consentAck: true });
+    let toggle: (() => void) | undefined;
+    wireRecording(bus, {
+      api: {
+        ...fake.api,
+        onRecordToggle: (cb) => {
+          toggle = cb;
+          return () => undefined;
+        },
+      },
+      platform: 'mac',
+      send: async () => undefined,
+    });
+    toggle?.();
+    await flush();
+    expect(fake.api.start).toHaveBeenCalledWith(undefined);
+    toggle?.();
+    await flush();
+    expect(fake.api.stop).toHaveBeenCalledTimes(1);
   });
 });

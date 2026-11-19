@@ -24,7 +24,7 @@ export const LENGTH_CHOICES = [15, 30, 45, 60, 90] as const;
 export const DEFAULT_LENGTH_MIN = 60;
 /** A custom length is a whole number of minutes in this range. */
 export const LENGTH_MIN = 5;
-export const LENGTH_MAX = 180;
+export const LENGTH_MAX = 120;
 
 /** The serving endpoint that transcribes the audio (ADR 0103 update 4). */
 export const DEFAULT_TRANSCRIBE_ENDPOINT = 'databricks-gemini-3-8-flash';
@@ -101,16 +101,36 @@ export const RECORDING_ERRORS = {
     text: "Bottle couldn't upload this recording. It is still on this device.",
     action: { label: 'Retry', target: 'retry' },
   },
-  storage_missing: {
+  no_storage: {
     text: 'Pick where Bottle saves recordings in Settings.',
     action: { label: 'Open Settings', target: 'settings' },
   },
-  recording_disabled: {
+  recording_off: {
+    text: RECORDING_TEXT.turnOn,
+    action: { label: 'Open Settings', target: 'settings' },
+  },
+  consent_required: {
     text: RECORDING_TEXT.turnOn,
     action: { label: 'Open Settings', target: 'settings' },
   },
   recording_busy: { text: 'A recording is already running.' },
   mic_busy: { text: 'The mic is in use. Finish the dictation, then record.' },
+  audio_unreadable: {
+    text: "Bottle couldn't read the audio of this recording.",
+    action: { label: 'Open in Databricks', target: 'open' },
+  },
+  rate_limited: {
+    text: 'The model is busy right now. Try again in a minute.',
+    action: { label: 'Retry', target: 'retry' },
+  },
+  network: {
+    text: "Bottle can't reach Databricks. Check your network, then try again.",
+    action: { label: 'Retry', target: 'retry' },
+  },
+  auth: {
+    text: 'Your Databricks sign-in ended. Sign in again, then try again.',
+    action: { label: 'Retry', target: 'retry' },
+  },
   failed: {
     text: "Bottle couldn't finish this recording.",
     action: { label: 'Retry', target: 'retry' },

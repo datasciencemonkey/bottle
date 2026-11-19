@@ -40,6 +40,14 @@ import {
   type RecordingTurn,
   type StorageView,
 } from '../shared/recording-view';
+import {
+  call,
+  EVENTS,
+  type RecordingSettings,
+  type RecordingSettingsPatch,
+  type RecordingState,
+  type RecordingSummary,
+} from '../shared/ipc';
 import { onViewInput, type BrainBus } from './bus';
 
 /** The recording settings as the brain reads and writes them. No secrets. */
@@ -52,11 +60,13 @@ export interface RecSettings {
   instructions: string;
   /** The volume when My Files is not used. Missing: My Files. */
   volumePath?: string;
+  /** The My Files root once the probe found it and Bottle saved it. */
+  myFilesRoot?: string;
 }
 
 /** The core recording state (`recording.state`). */
 export interface RecState {
-  phase: 'idle' | 'recording' | 'stopping';
+  phase: 'idle' | 'starting' | 'recording' | 'stopping';
   startedAtMs?: number;
   endsAtMs?: number;
   systemAudio?: 'ok' | 'silent_or_denied' | 'mic_only';
@@ -117,6 +127,8 @@ export interface RecordingApi {
   openSystemAudioSettings(): Promise<unknown>;
   onState(cb: (s: RecState) => void): () => void;
   onJob(cb: (j: RecJob) => void): () => void;
+  /** The record key (⌥R) in a talk-key hold. Optional: tests and hosts without the key omit it. */
+  onRecordToggle?(cb: () => void): () => void;
 }
 
 /** The MOG side: the REC overlay and the answer-ready moment (`capture-mood.ts`). */
@@ -257,6 +269,9 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
     try {
       myFiles = (await api.probeStorage()).myFiles;
       storageError = undefined;
+      // My Files is the default: save it once, so the core knows where to write.
+      if (myFiles && settings && !settings.volumePath && settings.myFilesRoot !== myFiles)
+        void write({ myFilesRoot: myFiles });
     } catch {
       myFiles = null;
       storageError = RECORDING_TEXT.storageCheckFailed;
@@ -463,11 +478,121 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
   });
   const offState = api.onState(setState);
   const offJob = api.onJob(onJob);
+  // ADR 0103: the record key toggles, like Record and Stop in the hub.
+  const offToggle =
+    api.onRecordToggle?.(() => {
+      if (control.phase === 'recording') void stop();
+      else if (control.phase === 'idle') void start();
+    }) ?? (() => undefined);
 
   return () => {
     gone = true;
     offInput();
     offState();
     offJob();
+    offToggle();
+  };
+}
+
+/** The `recording.state` of the contract, as the brain reads it. */
+export function recStateOf(s: RecordingState): RecState {
+  const out: RecState = { phase: s.state };
+  if (s.startedAtMs !== undefined) out.startedAtMs = s.startedAtMs;
+  if (s.endsAtMs !== undefined) out.endsAtMs = s.endsAtMs;
+  if (s.systemAudio === 'ok' || s.systemAudio === 'silent_or_denied')
+    out.systemAudio = s.systemAudio;
+  else if (s.systemAudio === 'unavailable') out.systemAudio = 'mic_only';
+  return out;
+}
+
+function summaryOf(s: RecordingSummary): RecSummary {
+  const r: RecSummary = {
+    id: s.id,
+    name: s.name,
+    startedAt: s.startedAtMs,
+    durationS: s.durationS,
+    status: s.status,
+  };
+  if (s.errorKind !== undefined) r.errorKind = s.errorKind;
+  return r;
+}
+
+/** The contract settings, as the brain reads them. */
+export function recSettingsOf(s: RecordingSettings): RecSettings {
+  const r: RecSettings = {
+    enabled: s.enabled,
+    consentAck: s.consentAck,
+    lengthMin: s.lengthMin,
+    transcribeEndpoint: s.transcribeEndpoint,
+    notesEndpoint: s.notesEndpoint,
+    instructions: s.presetInstructions,
+  };
+  if (s.storage?.kind === 'volume') r.volumePath = s.storage.root;
+  else if (s.storage?.kind === 'my_files') r.myFilesRoot = s.storage.root;
+  return r;
+}
+
+/** The brain settings as a contract patch. A volume wins over My Files. */
+export function settingsPatchOf(s: RecSettings): RecordingSettingsPatch {
+  const p: RecordingSettingsPatch = {
+    enabled: s.enabled,
+    consentAck: s.consentAck,
+    lengthMin: s.lengthMin,
+    transcribeEndpoint: s.transcribeEndpoint,
+    notesEndpoint: s.notesEndpoint,
+    presetInstructions: s.instructions,
+  };
+  if (s.volumePath) p.storage = { kind: 'volume', root: s.volumePath };
+  else if (s.myFilesRoot) p.storage = { kind: 'my_files', root: s.myFilesRoot };
+  return p;
+}
+
+/** The real `RecordingApi`: the typed `recording_*` commands and the core events on `bus`. */
+export function ipcRecordingApi(bus: BrainBus): RecordingApi {
+  return {
+    readSettings: async () => recSettingsOf(await call('recording_settings_read', {})),
+    writeSettings: async (next) =>
+      recSettingsOf(await call('recording_settings_write', { patch: settingsPatchOf(next) })),
+    probeStorage: async () => ({
+      myFiles: (await call('recording_storage_probe', {})).myFilesRoot,
+    }),
+    createVolume: async (catalog, schema) => ({
+      path: (await call('recording_volume_create', { catalog, schema })).root,
+    }),
+    start: async (instructions) =>
+      recStateOf(await call('recording_start', instructions === undefined ? {} : { instructions })),
+    stop: async () => recStateOf(await call('recording_stop', {})),
+    state: async () => recStateOf(await call('recording_state', {})),
+    list: async () => (await call('recording_list', {})).map(summaryOf),
+    detail: async (id) => {
+      const d = await call('recording_detail', { id });
+      const r: RecDetail = {
+        id: d.summary.id,
+        status: d.summary.status,
+        segments: d.segments.map(({ start, end, speaker, text }) => ({
+          start,
+          end,
+          speaker,
+          text,
+        })),
+      };
+      if (d.summary.errorKind !== undefined) r.errorKind = d.summary.errorKind;
+      if (d.notesMd !== undefined) r.notesMd = d.notesMd;
+      return r;
+    },
+    retry: (id) => call('recording_retry', { id }),
+    open: (id) => call('recording_open', { id, target: 'folder' }),
+    openSystemAudioSettings: () => call('recording_open_system_audio_settings', {}),
+    onState: (cb) =>
+      bus.on(EVENTS['recording.state'].name, (p) => {
+        if (isObj(p) && typeof p['state'] === 'string')
+          cb(recStateOf(p as unknown as RecordingState));
+      }),
+    onJob: (cb) =>
+      bus.on(EVENTS['recording.job'].name, (p) => {
+        if (isObj(p) && typeof p['id'] === 'string' && typeof p['status'] === 'string')
+          cb(summaryOf(p as unknown as RecordingSummary));
+      }),
+    onRecordToggle: (cb) => bus.on(EVENTS['hotkey.record_toggle'].name, () => cb()),
   };
 }

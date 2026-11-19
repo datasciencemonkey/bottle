@@ -20,6 +20,7 @@ import { wireWipe } from '../wipe-wiring';
 import { wireCliInstall, wireCliSettings } from '../cli-wiring';
 import { cliPlatform } from '../../shared/cli-view';
 import { wireConnectWorkspace } from '../connect-wiring';
+import { ipcRecordingApi, wireRecording } from '../recording-wiring';
 import { sendHubSnapshot, wireHubMogs } from '../hub-mogs-wiring';
 import {
   sendHubConversations,
@@ -271,6 +272,23 @@ export function startBrain(): Brain {
       scheduler: { at: timeoutScheduler(moodClock) },
     });
     wireCaptureMood(bus, captureMood);
+    // ADR 0103: call recording. The hub sends clicks; the brain calls the `recording_*`
+    // commands, relays `recording.state` and `recording.job` to the hub, and shows REC and the
+    // answer-ready moment on the MOG through the one mood publisher. The core checks the knob
+    // again before any capture. TODO(#95): the short OS notice when the notes are ready, once
+    // the notification host has an IPC command.
+    wireRecording(bus, {
+      api: ipcRecordingApi(bus),
+      platform:
+        cliPlatform(globalThis.navigator?.userAgent ?? '') === 'windows' ? 'windows' : 'mac',
+      mood: {
+        callRecording: (on) => {
+          const id = talkTarget.lastUsed();
+          captureMood.callRecording(on, id === undefined ? [] : [id]);
+        },
+        ready: () => captureMood.recordingReady(),
+      },
+    });
     // #573: the ⌥G key-up shows the working mood at once, before the text is ready.
     bus.on(EVENTS['hotkey.ptt'].name, (p) => {
       const e = asPttEvent(p, 0);
