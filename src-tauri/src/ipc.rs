@@ -851,6 +851,7 @@ mod tests {
         assert!(c.insert.is_none());
         assert!(c.agent.is_none());
         assert!(c.stt.is_none());
+        assert!(c.mem.is_none());
         // A missing host part still answers `host_failed`.
         assert_eq!(
             route(c, "window_card_show", json!({"mogId": "a1"})),
@@ -1134,6 +1135,51 @@ mod tests {
             code.contains(".manage(ipc::HubChannel::default())"),
             "lib.rs must manage ipc::HubChannel"
         );
+    }
+
+    #[test]
+    fn mem_36a_mem_34a_issue_426_the_app_manages_one_store_that_mem_local_exec_reads() {
+        // `try_state` turns a missing store into a silent `host_failed` for every
+        // `mem_local_exec` call, so the setup must manage it. One store per app: the consent
+        // host opens it, and R14 WipeService and `mem_local_exec` share it (#431, #124, #426).
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let lib = production_code(&std::fs::read_to_string(src.join("lib.rs")).unwrap());
+        assert!(
+            lib.contains("consent_host::install(handle)"),
+            "lib.rs setup must call consent_host::install"
+        );
+        let host = production_code(&std::fs::read_to_string(src.join("consent_host.rs")).unwrap());
+        assert!(host.contains("app.manage(store)"), "consent_host manages the store");
+        assert_eq!(
+            host.matches("SqlCipherLocalStore::new(").count(),
+            0,
+            "consent_host opens the one store through open_device_records"
+        );
+        let ipc = production_code(&std::fs::read_to_string(src.join("ipc.rs")).unwrap());
+        assert!(
+            ipc.contains(
+                "try_state::<std::sync::Arc<mog_core::local_store::SqlCipherLocalStore>>()"
+            ),
+            "route_from reads the managed store"
+        );
+        assert!(
+            ipc.contains("mog_core::local_store::mem_local_exec("),
+            "the route calls mem_local_exec, never LocalStore::exec (#37 review)"
+        );
+        assert!(!ipc.contains(".exec("), "the host never runs a statement itself");
+        // No other host file builds a second store.
+        for entry in std::fs::read_dir(&src).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let code = production_code(&std::fs::read_to_string(&path).unwrap());
+            assert!(
+                !code.contains("SqlCipherLocalStore::new("),
+                "{} builds a second store",
+                path.display()
+            );
+        }
     }
 
     #[test]
