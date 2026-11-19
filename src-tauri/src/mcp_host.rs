@@ -103,6 +103,12 @@ impl LoginVerifier for WorkspaceIdCheck {
 }
 
 impl McpHost {
+    /// The one R6 of the app, for another R7 (the recording cloud host, ADR 0103). The token
+    /// stays inside R6: callers get only `with_token` and `workspace_id`.
+    pub fn token_broker(&self) -> Arc<dyn TokenBroker> {
+        self.broker.clone()
+    }
+
     /// The W-06a check for `profile_login` (#162), on the R6 of this R8.
     pub fn login_verifier(&self) -> Arc<dyn LoginVerifier> {
         Arc::new(WorkspaceIdCheck(self.broker.clone()))

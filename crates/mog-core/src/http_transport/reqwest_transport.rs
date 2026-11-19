@@ -38,7 +38,8 @@ use super::{outbound_headers, route_call_kind, HttpTransport, ID};
 use crate::egress_policy::TokenEgressPolicy;
 use crate::error::{CoreError, CoreResult};
 use crate::ipc::JsonObject;
-use crate::request_identity::{BottleIdentity, RequestDecorator};
+use crate::recording_cloud::http::{RecordingHttp, Reply, ReplyBody, ReqBody};
+use crate::request_identity::{BottleIdentity, CallKind, RequestDecorator};
 use crate::token_broker::{ScimMe, TokenBroker, TokenLease};
 use crate::token_guard::scrub_json;
 use crate::types::Tags;
@@ -147,6 +148,36 @@ struct Raw {
     body: Vec<u8>,
 }
 
+/// The body of one send: JSON (every IPC route) or raw bytes (a recording upload).
+#[derive(Clone, Copy)]
+enum SendBody<'a> {
+    Json(&'a [u8]),
+    Raw(&'a [u8]),
+}
+
+/// The whole-call timeout of a recording upload (a 2 h Opus part is about 15 MB).
+pub const UPLOAD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+/// The whole-call timeout of a recording model call (a 2 h transcript is a few minutes).
+pub const MODEL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+/// The largest `files.download` reply (an audio part read back for Retry).
+pub const MAX_DOWNLOAD_BYTES: u64 = 64 * 1024 * 1024;
+
+/// The timeout and reply cap of one send.
+#[derive(Clone, Copy)]
+struct Limits {
+    timeout: Option<Duration>,
+    max_reply: u64,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            timeout: None,
+            max_reply: MAX_REPLY_BYTES,
+        }
+    }
+}
+
 /// The `x-databricks-org-id` reply header (W-06a).
 const ORG_ID_HEADER: &str = "x-databricks-org-id";
 
@@ -238,11 +269,11 @@ impl ReqwestHttpTransport {
         method: Method,
         url: &str,
         headers: &[(&'static str, String)],
-        body: Option<&[u8]>,
+        (body, limits): (Option<SendBody<'_>>, Limits),
     ) -> CoreResult<(Raw, TokenLease)> {
         let mut out: Option<CoreResult<Raw>> = None;
         let lease = self.seams.tokens.with_token(profile, host, &mut |token| {
-            out = Some(self.send_with(token, method, url, headers, body));
+            out = Some(self.send_with(token, method, url, headers, body, limits));
         })?;
         out.unwrap_or(Err(err(TOKEN_UNUSABLE)))
             .map(|raw| (raw, lease))
@@ -256,7 +287,8 @@ impl ReqwestHttpTransport {
         method: Method,
         url: &str,
         headers: &[(&'static str, String)],
-        body: Option<&[u8]>,
+        body: Option<SendBody<'_>>,
+        timeout: Option<Duration>,
     ) -> CoreResult<reqwest::blocking::Request> {
         let mut bearer = Vec::with_capacity(7 + token.len());
         bearer.extend_from_slice(b"Bearer ");
@@ -272,6 +304,7 @@ impl ReqwestHttpTransport {
             Method::Post => reqwest::Method::POST,
             Method::Patch => reqwest::Method::PATCH,
             Method::Delete => reqwest::Method::DELETE,
+            Method::Put => reqwest::Method::PUT,
         };
         let mut req = self
             .client
@@ -281,10 +314,21 @@ impl ReqwestHttpTransport {
         for (name, value) in headers {
             req = req.header(*name, value.as_str());
         }
-        if let Some(b) = body {
-            req = req
-                .header(CONTENT_TYPE, "application/json")
-                .body(b.to_vec());
+        match body {
+            Some(SendBody::Json(b)) => {
+                req = req
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(b.to_vec());
+            }
+            Some(SendBody::Raw(b)) => {
+                req = req
+                    .header(CONTENT_TYPE, "application/octet-stream")
+                    .body(b.to_vec());
+            }
+            None => {}
+        }
+        if let Some(t) = timeout {
+            req = req.timeout(t);
         }
         req.build().map_err(|_| err(TRANSPORT_FAILED))
     }
@@ -295,9 +339,10 @@ impl ReqwestHttpTransport {
         method: Method,
         url: &str,
         headers: &[(&'static str, String)],
-        body: Option<&[u8]>,
+        body: Option<SendBody<'_>>,
+        limits: Limits,
     ) -> CoreResult<Raw> {
-        let req = self.build_request(token, method, url, headers, body)?;
+        let req = self.build_request(token, method, url, headers, body, limits.timeout)?;
         let resp = self.client.execute(req).map_err(|e| {
             if e.is_connect() {
                 self.online.store(false, Ordering::SeqCst);
@@ -319,10 +364,10 @@ impl ReqwestHttpTransport {
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned);
         let mut bytes = Vec::new();
-        resp.take(MAX_REPLY_BYTES + 1)
+        resp.take(limits.max_reply + 1)
             .read_to_end(&mut bytes)
             .map_err(|_| err(TRANSPORT_FAILED))?;
-        if bytes.len() as u64 > MAX_REPLY_BYTES {
+        if bytes.len() as u64 > limits.max_reply {
             return Err(err(REPLY_TOO_LARGE));
         }
         Ok(Raw {
@@ -373,8 +418,14 @@ impl ReqwestHttpTransport {
         let mut hops = 0u8;
         loop {
             self.wait_for_bucket(profile, class);
-            let (raw, lease) =
-                self.send_once(profile, &host, method, &url, &headers, body.as_deref())?;
+            let (raw, lease) = self.send_once(
+                profile,
+                &host,
+                method,
+                &url,
+                &headers,
+                (body.as_deref().map(SendBody::Json), Limits::default()),
+            )?;
             if (300..400).contains(&raw.status) {
                 // Rule 3: same host only; anything else is dropped, never followed.
                 let to = raw
@@ -439,6 +490,157 @@ impl ReqwestHttpTransport {
     }
 }
 
+impl ReqwestHttpTransport {
+    /// Rules 1-8 for one recording route (ADR 0103). Like [`Self::request_raw`], but the body
+    /// may be raw bytes, a non-2xx JSON or empty reply comes back with its status (so the
+    /// pipeline can map 403/404), and a `files.download` reply may be raw bytes.
+    fn recording_raw(
+        &self,
+        profile: &str,
+        route_id: &str,
+        params: &JsonObject,
+        body: ReqBody<'_>,
+        tags: Option<&Tags>,
+    ) -> CoreResult<Reply> {
+        let route = routes::recording_route(route_id)?;
+        let class = CallClass::Ask;
+        let model = routes::RECORDING_MODEL_ROUTES.contains(&route_id);
+        let headers = if model {
+            // SEC-06a: the Unity Gateway route carries the tags; no tags, no send.
+            let t = tags.ok_or(err(routes::INVALID_PARAMS))?;
+            outbound_headers(&*self.seams.decorator, route_id, t)?
+        } else {
+            self.seams
+                .decorator
+                .headers(CallKind::Workspace, None)
+                .map_err(|e| err(e.code()))?
+        };
+        let path = routes::build_path(route, params)?;
+        let (origin, host) = self.origin(profile)?;
+        let mut url = format!("{origin}{path}");
+        let policy = &self.seams.policy;
+        if !policy.may_send_token(&host, &url) {
+            return Err(err(HOST_REFUSED));
+        }
+        let json_bytes = match body {
+            ReqBody::Json(v) => {
+                Some(serde_json::to_vec(v).map_err(|_| err(routes::INVALID_PARAMS))?)
+            }
+            _ => None,
+        };
+        let mut send_body = match body {
+            ReqBody::None => None,
+            ReqBody::Json(_) => json_bytes.as_deref().map(SendBody::Json),
+            ReqBody::Bytes(b) => Some(SendBody::Raw(b)),
+        };
+        let limits = Limits {
+            timeout: if model {
+                Some(MODEL_TIMEOUT)
+            } else {
+                matches!(body, ReqBody::Bytes(_)).then_some(UPLOAD_TIMEOUT)
+            },
+            max_reply: if route_id == "files.download" {
+                MAX_DOWNLOAD_BYTES
+            } else {
+                MAX_REPLY_BYTES
+            },
+        };
+        let mut method = route.method;
+        let mut retried_401 = false;
+        let mut hops = 0u8;
+        loop {
+            self.wait_for_bucket(profile, class);
+            let (raw, lease) =
+                self.send_once(profile, &host, method, &url, &headers, (send_body, limits))?;
+            if (300..400).contains(&raw.status) {
+                let to = raw
+                    .location
+                    .as_deref()
+                    .and_then(|l| Url::parse(&url).ok()?.join(l).ok())
+                    .map(String::from)
+                    .ok_or(err(REDIRECT_REFUSED))?;
+                if hops >= MAX_REDIRECTS
+                    || !policy.may_send_token(&host, &to)
+                    || !policy.may_follow_redirect_with_authorization(&host, &url, &to)
+                {
+                    return Err(err(REDIRECT_REFUSED));
+                }
+                if matches!(raw.status, 301..=303) {
+                    method = Method::Get;
+                    send_body = None;
+                }
+                url = to;
+                hops += 1;
+                continue;
+            }
+            if raw.status == 429 {
+                let reply = policy.reply_for_ts(raw.content_type.as_deref(), &raw.body);
+                let wait = raw
+                    .retry_after
+                    .as_deref()
+                    .and_then(|v| parse_retry_after(v, SystemTime::now()))
+                    .or_else(|| reply.as_ref().and_then(retry_after_from_body));
+                self.seams.bucket.on_rate_limited(profile, wait);
+                return Err(err(RATE_LIMITED));
+            }
+            if raw.status == 401 {
+                if retried_401 {
+                    return Err(err(AUTH_EXPIRED));
+                }
+                self.seams.tokens.invalidate(profile, lease)?;
+                retried_401 = true;
+                continue;
+            }
+            if raw.status == 503 {
+                if let Some(wait) = raw
+                    .retry_after
+                    .as_deref()
+                    .and_then(|v| parse_retry_after(v, SystemTime::now()))
+                {
+                    self.seams.bucket.hold(profile, wait);
+                }
+            }
+            if raw.body.is_empty() {
+                return Ok(Reply {
+                    status: raw.status,
+                    body: ReplyBody::Empty,
+                });
+            }
+            let octet = raw
+                .content_type
+                .as_deref()
+                .is_some_and(|c| c.trim().starts_with("application/octet-stream"));
+            if route_id == "files.download" && (200..300).contains(&raw.status) && octet {
+                return Ok(Reply {
+                    status: raw.status,
+                    body: ReplyBody::Bytes(raw.body),
+                });
+            }
+            // Rule 6: a page is never read as content and never retried with the token.
+            let Some(json) = policy.reply_for_ts(raw.content_type.as_deref(), &raw.body) else {
+                return Err(err(NON_JSON_REPLY));
+            };
+            return Ok(Reply {
+                status: raw.status,
+                body: ReplyBody::Json(scrub_json(&json)),
+            });
+        }
+    }
+}
+
+impl RecordingHttp for ReqwestHttpTransport {
+    fn send(
+        &self,
+        profile: &str,
+        route_id: &str,
+        params: &JsonObject,
+        body: ReqBody<'_>,
+        tags: Option<&Tags>,
+    ) -> CoreResult<Reply> {
+        self.recording_raw(profile, route_id, params, body, tags)
+    }
+}
+
 impl ScimMe for ReqwestHttpTransport {
     fn org_id_header(&self, profile: &str) -> CoreResult<Option<String>> {
         let kind = route_call_kind("scim.me").ok_or(err(super::UNKNOWN_ROUTE))?;
@@ -499,7 +701,8 @@ mod tests {
                 Method::Post,
                 "https://dbc-fake.cloud.databricks.com/api/2.0/x",
                 &[("User-Agent", "bottle/0 (macos; mog)".into())],
-                Some(b"{}"),
+                Some(SendBody::Json(b"{}")),
+                None,
             )
             .unwrap();
         assert!(req.headers().contains_key(AUTHORIZATION));

@@ -1,6 +1,6 @@
 //! R7 recording routes (ADR 0103, PR C) on a std loopback server: raw upload body, raw
-//! download reply, status kept for 403/404, volume path slot rules, page refusal, and no
-//! reach from the IPC `dbx_http` route map. Tokens are plainly fake.
+//! download reply, status kept for 403/404, volume path slot rules, page refusal, the model
+//! route with tags, and no reach from the IPC `dbx_http` route map. Tokens are plainly fake.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -15,12 +15,15 @@ use mog_core::error::{CoreError, CoreResult};
 use mog_core::http_transport::host_policy::AllowlistEgressPolicy;
 use mog_core::http_transport::rate_bucket::AimdBucket;
 use mog_core::http_transport::routes::{recording_route, route, RECORDING_ROUTE_TABLE};
-use mog_core::http_transport::{HttpTransport, Pause, ProfileHosts, ReqwestHttpTransport, TransportSeams};
+use mog_core::http_transport::{
+    HttpTransport, Pause, ProfileHosts, ReqwestHttpTransport, TransportSeams,
+};
 use mog_core::ipc::JsonObject;
 use mog_core::recording_cloud::http::{RecordingHttp, ReplyBody, ReqBody};
 use mog_core::recording_cloud::opener::{open_link, UrlOpener};
-use mog_core::request_identity::BottleIdentity;
+use mog_core::request_identity::{BottleIdentity, TAGS_HEADER};
 use mog_core::token_broker::{TokenBroker, TokenLease};
+use mog_core::types::Tags;
 use serde_json::{json, Value};
 
 const TOKEN: &str = "test-token-not-real";
@@ -48,7 +51,9 @@ fn serve(replies: Vec<(u16, Option<&'static str>, Vec<u8>)>) -> (String, Arc<Mut
     let rec = seen.clone();
     thread::spawn(move || {
         for (status, ct, body) in replies {
-            let Ok((mut s, _)) = listener.accept() else { return };
+            let Ok((mut s, _)) = listener.accept() else {
+                return;
+            };
             s.set_read_timeout(Some(Duration::from_secs(5))).ok();
             let mut buf = Vec::new();
             let mut chunk = [0u8; 8192];
@@ -84,8 +89,16 @@ fn serve(replies: Vec<(u16, Option<&'static str>, Vec<u8>)>) -> (String, Arc<Mut
                 }
                 b.extend_from_slice(&chunk[..n]);
             }
-            rec.lock().unwrap().push(Seen { method, target, headers, body: b });
-            let mut out = format!("HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n", body.len());
+            rec.lock().unwrap().push(Seen {
+                method,
+                target,
+                headers,
+                body: b,
+            });
+            let mut out = format!(
+                "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n",
+                body.len()
+            );
             if let Some(ct) = ct {
                 out.push_str(&format!("Content-Type: {ct}\r\n"));
             }
@@ -161,14 +174,21 @@ fn params(v: Value) -> JsonObject {
     serde_json::from_value(v).unwrap()
 }
 
-const PART: &str = "/Volumes/main/team/audio/Bottle/Recordings/2026-11-19_0905/2026-11-19_0905.part01.flac";
+const PART: &str =
+    "/Volumes/main/team/audio/Bottle/Recordings/2026-11-19_0905/2026-11-19_0905.part01.flac";
 
 #[test]
 fn rec_transport_upload_sends_raw_bytes_with_put_and_overwrite_false() {
     let (origin, seen) = serve(vec![(204, None, vec![])]);
     let t = transport(&origin);
     let r = t
-        .send("p", "files.upload", &params(json!({"path": PART, "overwrite": "false"})), ReqBody::Bytes(b"fLaC\x00\x01"))
+        .send(
+            "p",
+            "files.upload",
+            &params(json!({"path": PART, "overwrite": "false"})),
+            ReqBody::Bytes(b"fLaC\x00\x01"),
+            None,
+        )
         .unwrap();
     assert_eq!((r.status, r.body), (204, ReplyBody::Empty));
     let s = seen.lock().unwrap()[0].clone();
@@ -176,51 +196,100 @@ fn rec_transport_upload_sends_raw_bytes_with_put_and_overwrite_false() {
     assert_eq!(s.target, format!("/api/2.0/fs/files{PART}?overwrite=false"));
     assert_eq!(s.body, b"fLaC\x00\x01");
     assert_eq!(header(&s, "content-type"), Some("application/octet-stream"));
-    assert_eq!(header(&s, "authorization"), Some(&*format!("Bearer {TOKEN}")));
+    assert_eq!(
+        header(&s, "authorization"),
+        Some(&*format!("Bearer {TOKEN}"))
+    );
     assert!(header(&s, "user-agent").unwrap().starts_with("bottle/"));
 }
 
 #[test]
 fn rec_transport_download_bytes_and_error_status_are_kept() {
     let (origin, _seen) = serve(vec![
-        (200, Some("application/octet-stream"), b"{\"version\":1}".to_vec()),
-        (404, Some("application/json"), br#"{"error_code":"NOT_FOUND","message":"The file being accessed is not found."}"#.to_vec()),
-        (403, Some("application/json"), br#"{"error_code":"PERMISSION_DENIED","message":"no"}"#.to_vec()),
+        (
+            200,
+            Some("application/octet-stream"),
+            b"{\"version\":1}".to_vec(),
+        ),
+        (
+            404,
+            Some("application/json"),
+            br#"{"error_code":"NOT_FOUND","message":"The file being accessed is not found."}"#
+                .to_vec(),
+        ),
+        (
+            403,
+            Some("application/json"),
+            br#"{"error_code":"PERMISSION_DENIED","message":"no"}"#.to_vec(),
+        ),
     ]);
     let t = transport(&origin);
     let p = params(json!({"path": PART}));
-    let ok = t.send("p", "files.download", &p, ReqBody::None).unwrap();
+    let ok = t
+        .send("p", "files.download", &p, ReqBody::None, None)
+        .unwrap();
     assert_eq!(ok.body, ReplyBody::Bytes(b"{\"version\":1}".to_vec()));
-    let nf = t.send("p", "files.download", &p, ReqBody::None).unwrap();
+    let nf = t
+        .send("p", "files.download", &p, ReqBody::None, None)
+        .unwrap();
     assert_eq!((nf.status, nf.error_code()), (404, "NOT_FOUND"));
     let dir = params(json!({"path": "/Volumes/c/s/v/"}));
-    let den = t.send("p", "files.list_directory", &dir, ReqBody::None).unwrap();
+    let den = t
+        .send("p", "files.list_directory", &dir, ReqBody::None, None)
+        .unwrap();
     assert_eq!((den.status, den.error_code()), (403, "PERMISSION_DENIED"));
 }
 
 #[test]
-fn rec_transport_a_page_is_refused_and_bad_paths_send_nothing() {
-    let (origin, seen) = serve(vec![(200, Some("text/html"), b"<html>Sign in</html>".to_vec())]);
+fn arc_6_rec_a_page_is_refused_and_bad_paths_send_nothing() {
+    let (origin, seen) = serve(vec![(
+        200,
+        Some("text/html"),
+        b"<html>Sign in</html>".to_vec(),
+    )]);
     let t = transport(&origin);
     let e = t
-        .send("p", "files.download", &params(json!({"path": PART})), ReqBody::None)
+        .send(
+            "p",
+            "files.download",
+            &params(json!({"path": PART})),
+            ReqBody::None,
+            None,
+        )
         .unwrap_err();
     assert_eq!(e.code(), "non_json_reply");
-    for bad in ["/Volumes/c/s/v/../../x", "/Volumes/c/s/v/a?b", "https://evil.example/x", "/Volumes/c/s"] {
+    for bad in [
+        "/Volumes/c/s/v/../../x",
+        "/Volumes/c/s/v/a?b",
+        "https://evil.example/x",
+        "/Volumes/c/s",
+    ] {
         let e = t
-            .send("p", "files.download", &params(json!({"path": bad})), ReqBody::None)
+            .send(
+                "p",
+                "files.download",
+                &params(json!({"path": bad})),
+                ReqBody::None,
+                None,
+            )
             .unwrap_err();
         assert_eq!(e.code(), "invalid_params", "{bad}");
     }
     let e = t
-        .send("p", "files.download", &params(json!({"path": PART, "extra": "x"})), ReqBody::None)
+        .send(
+            "p",
+            "files.download",
+            &params(json!({"path": PART, "extra": "x"})),
+            ReqBody::None,
+            None,
+        )
         .unwrap_err();
     assert_eq!(e.code(), "invalid_params");
     assert_eq!(seen.lock().unwrap().len(), 1);
 }
 
 #[test]
-fn rec_transport_recording_routes_are_not_ipc_routes() {
+fn arc_6_rec_recording_routes_are_not_ipc_routes() {
     for r in RECORDING_ROUTE_TABLE {
         assert_eq!(route(r.id).unwrap_err().code(), "unknown_route", "{}", r.id);
         assert!(recording_route(r.id).is_ok());
@@ -228,28 +297,63 @@ fn rec_transport_recording_routes_are_not_ipc_routes() {
     }
     let t = transport("http://127.0.0.1:9");
     let e = t
-        .request("p", "files.upload", &BTreeMap::new(), None, &serde_json::from_value(json!({"app":"bottle","mog":"m1","op":"cleanup"})).unwrap())
+        .request(
+            "p",
+            "files.upload",
+            &BTreeMap::new(),
+            None,
+            &serde_json::from_value(json!({"app":"bottle","mog":"m1","op":"cleanup"})).unwrap(),
+        )
         .unwrap_err();
     assert_eq!(e.code(), "unknown_route");
-    let e = t.send("p", "scim.me", &BTreeMap::new(), ReqBody::None).unwrap_err();
+    let e = t
+        .send("p", "scim.me", &BTreeMap::new(), ReqBody::None, None)
+        .unwrap_err();
     assert_eq!(e.code(), "unknown_route");
 }
 
 #[test]
-fn rec_transport_statement_and_run_routes() {
-    let (origin, seen) = serve(vec![
-        (200, Some("application/json"), br#"{"statement_id":"s1","status":{"state":"PENDING"}}"#.to_vec()),
-        (200, Some("application/json"), br#"{"state":{"life_cycle_state":"RUNNING"}}"#.to_vec()),
-    ]);
+fn nfr_21a_nfr_21b_sec_06a_rec_model_calls_use_the_gateway_route_with_tags() {
+    let (origin, seen) = serve(vec![(
+        200,
+        Some("application/json"),
+        br#"{"choices":[{"message":{"content":"[00:00] Speaker 1: Hi."}}]}"#.to_vec(),
+    )]);
     let t = transport(&origin);
-    let body = json!({"warehouse_id":"w1","statement":"SELECT 1"});
-    let r = t.send("p", "statements.execute", &JsonObject::new(), ReqBody::Json(&body)).unwrap();
-    assert_eq!(r.json()["statement_id"], "s1");
-    t.send("p", "jobs.runs_get", &params(json!({"run_id": 42})), ReqBody::None).unwrap();
+    let body = json!({"model":"databricks-gemini-3-8-flash","messages":[]});
+    let e = t
+        .send(
+            "p",
+            "mlflow.chat_completions",
+            &JsonObject::new(),
+            ReqBody::Json(&body),
+            None,
+        )
+        .unwrap_err();
+    assert_eq!(e.code(), "invalid_params", "no tags, no send");
+    let tags: Tags = serde_json::from_value(json!({"app":"bottle","mog":"m1","op":"asr"})).unwrap();
+    let r = t
+        .send(
+            "p",
+            "mlflow.chat_completions",
+            &JsonObject::new(),
+            ReqBody::Json(&body),
+            Some(&tags),
+        )
+        .unwrap();
+    assert!(r.ok());
     let s = seen.lock().unwrap().clone();
-    assert_eq!((s[0].method.as_str(), s[0].target.as_str()), ("POST", "/api/2.0/sql/statements"));
+    assert_eq!(s.len(), 1);
+    assert_eq!(
+        (s[0].method.as_str(), s[0].target.as_str()),
+        ("POST", "/ai-gateway/mlflow/v1/chat/completions")
+    );
     assert_eq!(header(&s[0], "content-type"), Some("application/json"));
-    assert_eq!(s[1].target, "/api/2.2/jobs/runs/get?run_id=42");
+    assert_eq!(
+        header(&s[0], TAGS_HEADER),
+        Some(r#"{"app":"bottle","mog":"m1","op":"asr"}"#)
+    );
+    assert!(!s[0].target.contains("serving-endpoints"));
 }
 
 // ---------- opener ----------
