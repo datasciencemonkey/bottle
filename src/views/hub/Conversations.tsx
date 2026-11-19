@@ -419,7 +419,10 @@ export function Conversations({
             key={selected?.requestId}
             thread={selectedThread}
             focusRef={detailRef}
-            composer={composer}
+            // [review] the area can stay mounted (`hidden`) while the hub shows another view: the
+            // composer must unmount with it, so its `thread.active` announcement always goes
+            // with it, and a ⌥G never becomes a follow-up in a thread the user cannot see.
+            composer={active ? composer : undefined}
           />
         )}
       </div>

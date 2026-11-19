@@ -49,11 +49,13 @@ export interface HubConversationsWiring {
   /** Open Conversations, with this exchange selected when given. Never rejects. */
   openConversations(requestId?: string): Promise<void>;
   /**
-   * The `mogId` that owns a thread's `conversationId` (genie-followup, #145): a follow-up keeps
-   * the MOG that asked the first question, because a conversation stays in its workspace.
-   * `undefined` for a blank id or one no stored exchange carries. Never rejects.
+   * The MOG and the profile that own a thread's `conversationId` (genie-followup, #145): a
+   * follow-up keeps the MOG and the workspace of the first question, read from the stored
+   * exchanges — never from the hub view, which only names the conversation it wants, not the
+   * workspace it may use (ARC-2). `undefined` for a blank id or one no stored exchange carries.
+   * Never rejects.
    */
-  findMogId(conversationId: string): Promise<string | undefined>;
+  findThread(conversationId: string): Promise<{ mogId: string; profile: string } | undefined>;
   dispose(): void;
 }
 
@@ -172,11 +174,12 @@ export function wireHubConversations(
         // No hub is open yet: the held selection goes when the hub asks.
       }
     },
-    async findMogId(conversationId) {
+    async findThread(conversationId) {
       if (conversationId === '') return undefined;
       try {
         const { rows } = await readConversations(deps);
-        return rows.find((r) => r.conversationId === conversationId)?.mogId;
+        const row = rows.find((r) => r.conversationId === conversationId);
+        return row ? { mogId: row.mogId, profile: row.profile } : undefined;
       } catch {
         return undefined;
       }

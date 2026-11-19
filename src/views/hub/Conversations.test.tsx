@@ -300,6 +300,16 @@ describe('hub Conversations (#103)', () => {
       expect(slot?.querySelector('[data-testid="fake-composer"]')).not.toBeNull();
     });
 
+    it('[review] never mounts the composer while the area is inactive (hub shows another view)', async () => {
+      const spy = vi.fn(() => <div data-testid="fake-composer" />);
+      const { el } = await mount(false, vi.fn(), spy);
+      await tauri.emitTo('hub', 'hub:conversations', {
+        rows: [row(22, at(19, 9, 0), { conversationId: CONV, profile: 'fake-west' })],
+      });
+      expect(spy).not.toHaveBeenCalled();
+      expect(el.querySelector('[data-slot="thread-composer"]')).toBeNull();
+    });
+
     it('[#145] no composer for a thread with no conversationId (saved before #584)', async () => {
       const spy = vi.fn(() => <div data-testid="fake-composer" />);
       const { el } = await mount(true, vi.fn(), spy);

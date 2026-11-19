@@ -168,6 +168,13 @@ describe('ThreadComposer (genie-followup, #145)', () => {
     ]);
   });
 
+  it('[review] never announces thread.active while the OS window has no focus at mount time', async () => {
+    const hasFocus = vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+    await mount();
+    expect(activeActions()).toEqual([{ action: 'thread.inactive' }]);
+    hasFocus.mockRestore();
+  });
+
   it('announces thread.inactive on unmount, so a closed thread is never the ⌥G target', async () => {
     const { root } = await mount();
     await act(async () => root.unmount());

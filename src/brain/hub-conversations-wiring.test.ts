@@ -246,10 +246,10 @@ describe('wireHubConversations (#103)', () => {
     expect(opens).toEqual([{ requestId: req(1) }]);
   });
 
-  it('[#145] findMogId finds the MOG of a thread from its conversationId, across every MOG', async () => {
+  it('[#145] findThread finds the MOG and the profile of a thread from its conversationId, across every MOG', async () => {
     const { store } = fakeStore({
-      [MOG_A]: [dbRow(1, T0, { conversationId: 'conv-x' })],
-      [MOG_B]: [dbRow(2, T0, { conversationId: 'conv-y' })],
+      [MOG_A]: [dbRow(1, T0, { conversationId: 'conv-x', profileName: 'fake-a' })],
+      [MOG_B]: [dbRow(2, T0, { conversationId: 'conv-y', profileName: 'fake-b' })],
     });
     const w = wireHubConversations(bus, {
       store,
@@ -257,8 +257,8 @@ describe('wireHubConversations (#103)', () => {
       send: async () => undefined,
       sendOpen: async () => undefined,
     });
-    await expect(w.findMogId('conv-y')).resolves.toBe(MOG_B);
-    await expect(w.findMogId('conv-does-not-exist')).resolves.toBeUndefined();
+    await expect(w.findThread('conv-y')).resolves.toEqual({ mogId: MOG_B, profile: 'fake-b' });
+    await expect(w.findThread('conv-does-not-exist')).resolves.toBeUndefined();
   });
 
   it('[#145] a blank conversationId never matches (rows saved before #584 would collide)', async () => {
@@ -271,7 +271,7 @@ describe('wireHubConversations (#103)', () => {
       send: async () => undefined,
       sendOpen: async () => undefined,
     });
-    await expect(w.findMogId('')).resolves.toBeUndefined();
+    await expect(w.findThread('')).resolves.toBeUndefined();
   });
 
   it('[#103] dispose stops the hub input', async () => {

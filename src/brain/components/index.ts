@@ -161,12 +161,13 @@ export function startBrain(): Brain {
     const recordGenieExchange = ipcGenieHistory(components.T10, () => void conversations.refresh());
     // genie-followup (#145, #103): a follow-up from the thread composer or from a ⌥G press while
     // the hub is focused on a thread (item 4, wired below with `insertionOn`/`onAsk`). It never
-    // touches a MOG card: the status goes to the hub, and the MOG that owns the thread comes
-    // from the stored exchanges, because the composer itself never carries a `mogId`.
+    // touches a MOG card: the status goes to the hub, and the MOG and the profile that own the
+    // thread come from the stored exchanges (ARC-2), because the composer itself never carries a
+    // `mogId`, and its own copy of the profile is for display only.
     const threadFocus = createThreadFocus();
     const followup = createGenieFollowup({
       genie: components.T8,
-      findMogId: (conversationId) => conversations.findMogId(conversationId),
+      findThread: (conversationId) => conversations.findThread(conversationId),
       sendStatus: (status: ThreadStatus) => {
         void emitTo('hub', HUB_THREAD_STATUS_EVENT, status).catch(() => undefined);
       },

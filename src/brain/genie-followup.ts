@@ -9,13 +9,15 @@
  * (`onEnd`, `genie-history.ts`) that a direct ask uses, so the finished exchange shows up in the
  * thread's own list on the next `hub:conversations` refresh.
  *
- * - One send, straight to T8 `GenieBridge.submit`, with the thread's exact `conversationId` and
- *   `profile` (`binding.kind: 'genie_one_mcp'`): a conversation stays in its workspace. The
- *   composer never carries a `mogId` (only `conversationId`, `exchangeId` and `profile`), so
- *   `findMogId` resolves the MOG that owns this conversation from the stored exchanges — the
- *   same MOG the first question in the thread asked under.
+ * - One send, straight to T8 `GenieBridge.submit`, with the thread's exact `conversationId`
+ *   (`binding.kind: 'genie_one_mcp'`): a conversation stays in its workspace. The composer never
+ *   carries a `mogId`, and ARC-2 (the brain owns domain state) means it is never trusted for the
+ *   workspace either: `findThread` resolves both the MOG and the `profile` that own this
+ *   conversation from the stored exchanges — the same MOG and profile the first question in the
+ *   thread asked under — and that is what every follow-up uses, never `FollowupInput.profile`
+ *   (the view's own copy, for display only; a mismatch never silently moves the conversation).
  * - G-47, G-30a (same as `ask-gate.ts`'s `handOff`): the sanitizer runs first, then the 1,000
- *   character cap. A text with nothing left, or a thread `findMogId` cannot resolve (a stale or
+ *   character cap. A text with nothing left, or a thread `findThread` cannot resolve (a stale or
  *   deleted thread), is never sent: the status line says only "Not sent.", with no opId.
  * - The status text is the same the card shows (`ASKING_GENIE`, then a fixed stage from
  *   `genieStage`): no raw Genie step ever reaches the hub.
@@ -30,7 +32,12 @@ import type { GenieEnd } from './genie-history';
 import type { ThreadPhase, ThreadStatus } from '../shared/hub-conversations';
 import { sanitizeQuestion } from './question-sanitizer';
 
-/** One Send from the composer, or one ⌥G press while the hub is focused on a thread. */
+/**
+ * One Send from the composer, or one ⌥G press while the hub is focused on a thread. `profile` is
+ * the view's own copy, carried along for its own display only: the actual send always uses the
+ * profile `findThread` reads from the store, never this one (ARC-2, a defence against a stale or
+ * mismatched view ever moving a conversation to a workspace it did not start in).
+ */
 export interface FollowupInput {
   conversationId: string;
   profile: ProfileName;
@@ -42,11 +49,12 @@ export interface GenieFollowupDeps {
    * when `AskRequest.conversationId` is set (`genie-bridge.ts`). */
   genie: Pick<GenieBridge, 'submit'>;
   /**
-   * The `mogId` that owns `conversationId` (`HubConversationsWiring.findMogId`): a conversation
-   * stays in its workspace, and in the MOG that started it. `undefined` when no stored exchange
-   * carries this id (a stale or deleted thread): nothing is sent.
+   * The MOG and the profile that own `conversationId` (`HubConversationsWiring.findThread`): a
+   * conversation stays in its workspace, and in the MOG that started it. This, never
+   * `FollowupInput.profile`, decides the workspace a follow-up asks on (ARC-2). `undefined` when
+   * no stored exchange carries this id (a stale or deleted thread): nothing is sent.
    */
-  findMogId(conversationId: string): Promise<string | undefined>;
+  findThread(conversationId: string): Promise<{ mogId: string; profile: ProfileName } | undefined>;
   /** `hub:thread.status`, to the hub window only. Never throws. */
   sendStatus(status: ThreadStatus): void;
   /** #40: the same local-history writer a direct ask uses, so the finished exchange lands in
@@ -74,18 +82,22 @@ export function createGenieFollowup(deps: GenieFollowupDeps): GenieFollowup {
 
   return {
     async send(input) {
-      const { conversationId, profile } = input;
+      const { conversationId } = input;
       const clean = sanitizeQuestion(input.question);
       if (clean === '') {
         refuse(conversationId);
         return;
       }
       const { text: question } = capQuestion(clean);
-      const mogId = await deps.findMogId(conversationId).catch(() => undefined);
-      if (mogId === undefined) {
+      // ARC-2: the workspace of a follow-up is the one `findThread` reads from the store, never
+      // `input.profile` (the view's own copy) — a stale or mismatched view can never move a
+      // conversation to a workspace it did not start in.
+      const thread = await deps.findThread(conversationId).catch(() => undefined);
+      if (thread === undefined) {
         refuse(conversationId);
         return;
       }
+      const { mogId, profile } = thread;
       const opId = deps.newOpId();
       const req: AskRequest = {
         opId,

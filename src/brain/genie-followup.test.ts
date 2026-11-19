@@ -1,8 +1,9 @@
 /**
  * genie-followup (#145, #103, #584): sending a question from the hub thread composer is a true
- * Genie follow-up. It calls T8 `GenieBridge.submit` with the thread's exact `conversationId` and
- * `profile` (a conversation stays in its workspace), resolves the owning MOG from the stored
- * exchanges (the composer itself never carries a `mogId`), and streams the same words the card
+ * Genie follow-up. It calls T8 `GenieBridge.submit` with the thread's exact `conversationId`, on
+ * the MOG and the profile `findThread` resolves from the stored exchanges (ARC-2: never from
+ * `FollowupInput.profile`, the view's own copy, which the composer never carries a `mogId`
+ * alongside anyway) — a conversation stays in its workspace. It streams the same words the card
  * shows (`ASKING_GENIE`, then a fixed stage) to the hub as `ThreadStatus`. The terminal event is
  * saved through the same local-history writer as a direct ask (`onEnd`), so the thread's own
  * list shows the finished exchange.
@@ -42,7 +43,7 @@ function deps(over: Partial<GenieFollowupDeps> = {}): GenieFollowupDeps & {
   const ends: GenieEnd[] = [];
   return {
     genie: fakeBridge([{ t: 'uncertain' }]).bridge,
-    findMogId: async () => MOG,
+    findThread: async () => ({ mogId: MOG, profile: PROFILE }),
     sendStatus: (s) => void statuses.push(s),
     onEnd: (x) => void ends.push(x),
     newOpId: () => OP,
@@ -53,12 +54,12 @@ function deps(over: Partial<GenieFollowupDeps> = {}): GenieFollowupDeps & {
 }
 
 describe('genie-followup (#145)', () => {
-  it("[#145] sends one genie_ask on the thread's exact conversationId and profile, with the resolved mogId", async () => {
+  it("[#145] sends one genie_ask on the thread's exact conversationId, with the resolved mogId and profile", async () => {
     const b = fakeBridge([{ t: 'uncertain' }]);
-    const findMogId = vi.fn(async () => MOG);
-    const f = createGenieFollowup(deps({ genie: b.bridge, findMogId }));
+    const findThread = vi.fn(async () => ({ mogId: MOG, profile: PROFILE }));
+    const f = createGenieFollowup(deps({ genie: b.bridge, findThread }));
     await f.send({ conversationId: CONV, profile: PROFILE, question: 'How many are there?' });
-    expect(findMogId).toHaveBeenCalledWith(CONV);
+    expect(findThread).toHaveBeenCalledWith(CONV);
     expect(b.reqs).toEqual([
       {
         opId: OP,
@@ -69,6 +70,16 @@ describe('genie-followup (#145)', () => {
         tags: { app: 'bottle', mog: MOG, op: 'genie' },
       },
     ]);
+  });
+
+  it('[#145] [ARC-2] a mismatched view profile never moves the conversation: the resolved one from findThread wins', async () => {
+    const b = fakeBridge([{ t: 'uncertain' }]);
+    const f = createGenieFollowup(
+      deps({ genie: b.bridge, findThread: async () => ({ mogId: MOG, profile: 'fake-east' }) }),
+    );
+    // The view sends its own (stale or mismatched) copy of the profile.
+    await f.send({ conversationId: CONV, profile: 'fake-west', question: 'How many are there?' });
+    expect(b.reqs[0]?.binding).toEqual({ kind: 'genie_one_mcp', profile: 'fake-east' });
   });
 
   it('[#145] shows ASKING_GENIE at the send, then a fixed stage line, same as the card', async () => {
@@ -160,7 +171,7 @@ describe('genie-followup (#145)', () => {
 
   it('[#145] a thread with no resolvable mogId (a stale or deleted thread) sends nothing', async () => {
     const b = fakeBridge([{ t: 'uncertain' }]);
-    const d = deps({ genie: b.bridge, findMogId: async () => undefined });
+    const d = deps({ genie: b.bridge, findThread: async () => undefined });
     const f = createGenieFollowup(d);
     await f.send({ conversationId: CONV, profile: PROFILE, question: 'How many are there?' });
     expect(b.reqs).toHaveLength(0);

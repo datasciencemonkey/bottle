@@ -72,7 +72,10 @@ export function ThreadComposer({ thread, now = Date.now }: ThreadComposerProps) 
   // effect depends only on the two fields the brain needs, so an unrelated re-render of the same
   // thread, for example its `exchangeId` moving on, never re-announces it).
   useEffect(() => {
-    let focused = true;
+    // `document.hasFocus()`, not a hardcoded `true`: the Conversations area can mount this
+    // composer while the hub window itself has no OS focus (for example a reload while another
+    // app is frontmost), and a ⌥G must not wrongly become a follow-up in that case.
+    let focused = document.hasFocus();
     const announce = () => announceActive(focused ? { conversationId, profile } : undefined);
     const onFocus = () => {
       focused = true;
