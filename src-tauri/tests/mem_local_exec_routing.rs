@@ -57,10 +57,7 @@ impl LocalStore for FakeStore {
         Ok(())
     }
     fn exec(&self, stmt_id: &str, params: Value) -> CoreResult<Value> {
-        self.seen
-            .lock()
-            .unwrap()
-            .push((stmt_id.to_owned(), params));
+        self.seen.lock().unwrap().push((stmt_id.to_owned(), params));
         Ok(json!({ "rows": [{ "changes": 1 }] }))
     }
 }
@@ -109,7 +106,11 @@ fn mem_34a_issue_426_an_unknown_stmt_id_from_the_brain_is_invalid_args() {
     let store = FakeStore::default();
     for id in ["mem.nope", "DROP TABLE memory_item", ""] {
         assert_eq!(
-            call("brain", Some(&store), exec_args(id, json!({ "mogId": MOG }))),
+            call(
+                "brain",
+                Some(&store),
+                exec_args(id, json!({ "mogId": MOG }))
+            ),
             err("invalid_args"),
             "{id:?}"
         );
@@ -125,7 +126,10 @@ fn sec_02a_arc_4_issue_426_a_view_gets_window_not_allowed() {
             call(
                 from,
                 Some(&store),
-                exec_args("mem.exchange.get", json!({ "mogId": MOG, "requestId": REQ }))
+                exec_args(
+                    "mem.exchange.get",
+                    json!({ "mogId": MOG, "requestId": REQ })
+                )
             ),
             err("window_not_allowed"),
             "{from}"
@@ -164,7 +168,10 @@ fn mem_34a_issue_426_a_rust_only_statement_is_refused() {
             "{id}"
         );
     }
-    assert!(store.seen().is_empty(), "no Rust-only statement reached R10");
+    assert!(
+        store.seen().is_empty(),
+        "no Rust-only statement reached R10"
+    );
 }
 
 #[test]
@@ -252,6 +259,10 @@ fn mem_25a_mem_34a_issue_426_an_exchange_persists_through_the_route() {
     let dir = TempDir::new("exchange");
     let store = SqlCipherLocalStore::new(dir.0.join("memory"), Arc::new(TestVault::default()));
     store.open().unwrap();
+    // The caller registers the MOG row first: `genie_exchange.mog_id` references `mog` (ADR 0061).
+    let mog = json!({ "mogId": MOG, "displayName": "Sales", "backendKind": "genie_one_mcp",
+                      "rowHlc": 1, "deviceId": "test-device" });
+    call("brain", Some(&store), exec_args("mem.mog.upsert", mog)).unwrap();
     let x = json!({
         "mogId": MOG, "exchangeId": EXCH, "requestId": REQ, "backendKind": "genie_one_mcp",
         "profileName": "test-profile", "workspaceHost": "example.cloud.databricks.com",
@@ -266,7 +277,10 @@ fn mem_25a_mem_34a_issue_426_an_exchange_persists_through_the_route() {
     let got = call(
         "brain",
         Some(&store),
-        exec_args("mem.exchange.get", json!({ "mogId": MOG, "requestId": REQ })),
+        exec_args(
+            "mem.exchange.get",
+            json!({ "mogId": MOG, "requestId": REQ }),
+        ),
     )
     .unwrap();
     let rows = got["rows"].as_array().expect("rows");

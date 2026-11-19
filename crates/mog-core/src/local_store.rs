@@ -49,7 +49,7 @@ impl LocalStore for StubLocalStore {
 /// refusal is a fixed IPC code with no value in it: `invalid_args` for an unknown or Rust-only
 /// id and for bad params, `not_implemented` for a store that is not there, and `host_failed`
 /// for a store that cannot run the statement.
-/// TODO(#426): the app host routes `mem_local_exec` here (contract file `src-tauri/src/ipc.rs`).
+/// The app host routes `mem_local_exec` here (`src-tauri/src/ipc.rs`, #426).
 pub fn mem_local_exec(
     store: &dyn LocalStore,
     args: serde_json::Value,
