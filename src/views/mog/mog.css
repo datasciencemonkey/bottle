@@ -208,7 +208,7 @@ body,
 }
 
 .lamp[data-glint] .answer-ring {
-  animation: mog-answer-ring 640ms var(--mog-ease-out) 240ms forwards;
+  animation: mog-answer-ring 720ms linear 240ms forwards;
 }
 
 /* Error: one shake of the head, then still. */
@@ -286,14 +286,23 @@ body,
   }
 }
 
+/* Bright while it clears the head, then it widens and fades. */
 @keyframes mog-answer-ring {
   from {
-    opacity: 0.9;
-    transform: scale(0.6);
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  15% {
+    opacity: 1;
+    transform: scale(0.98);
+  }
+  55% {
+    opacity: 0.75;
+    transform: scale(1.1);
   }
   to {
     opacity: 0;
-    transform: scale(1.1);
+    transform: scale(1.18);
   }
 }
 

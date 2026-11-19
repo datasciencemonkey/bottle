@@ -339,7 +339,7 @@ describe('lamp motion CSS (#286)', () => {
     const rule = rules.find((r) => /(^|\/|\s)\.answer-ring$/.test(r.sel));
     const pct = (k: string) =>
       parseFloat(new RegExp(`${k}:\\s*([\\d.]+)%`).exec(rule?.body ?? '')?.[1] ?? 'NaN');
-    const peak = 1.1;
+    const peak = 1.18;
     const r = (pct('width') * peak) / 2;
     const cx = pct('left') + pct('width') / 2;
     const cy = pct('top') + pct('height') / 2;

@@ -100,7 +100,7 @@ export const TIMING = {
   peekUpMax: 45_000,
   peekUpLength: 2000,
   /** The answer ring burst: it starts as the Genie lands and ends inside this window. */
-  glintLength: 900,
+  glintLength: 1000,
   /** The "?" cue exit, before its node goes. */
   cueOut: 200,
 } as const;
