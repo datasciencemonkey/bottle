@@ -137,7 +137,7 @@ describe('hub Conversations (#103)', () => {
     const d = detail(el);
     expect(d.querySelector('h2')?.textContent).toBe('What were fake bookings 5?');
     expect(d.textContent).toContain('fake-west');
-    expect(d.textContent).toContain(HOST);
+    expect(d.querySelector(`[title="${HOST}"]`)?.textContent).toBe('fake-west');
     expect(d.textContent).toContain('Sales');
     expect(d.textContent).toContain('Answered');
     // Markdown through the card's allowlist renderer: no HTML element, only trusted links.
@@ -197,6 +197,42 @@ describe('hub Conversations (#103)', () => {
     await tauri.emitTo('hub', 'hub:conversations.open', {});
     expect(onOpen).toHaveBeenCalledTimes(2);
     expect(selected(el)).toBe(rows[1]?.requestId);
+  });
+
+  it('[#103] the hub acks each open, so the brain stops holding it', async () => {
+    await mount(false);
+    await tauri.emitTo('hub', 'hub:conversations.open', { requestId: rows[1]?.requestId });
+    expect(
+      viewEmits().filter(
+        (e) => (e as { payload?: { action?: string } }).payload?.action === 'conversations.opened',
+      ),
+    ).toEqual([
+      { mogId: 'conversations', kind: 'click', payload: { action: 'conversations.opened' } },
+    ]);
+  });
+
+  it('[#103] a click selects a row and puts keyboard focus on the list', async () => {
+    const { el } = await mount();
+    await tauri.emitTo('hub', 'hub:conversations', { rows });
+    await act(async () => options(el)[1]?.click());
+    expect(document.activeElement).toBe(listbox(el));
+    await key(listbox(el), 'ArrowDown');
+    expect(selected(el)).toBe(rows[2]?.requestId);
+  });
+
+  it('[#103] a click on an answer link never navigates the hub window', async () => {
+    const { el } = await mount();
+    await tauri.emitTo('hub', 'hub:conversations', {
+      rows: [
+        row(6, at(19, 14, 2), {
+          answerMd: 'See [ws](https://example.cloud.databricks.test/genie)',
+        }),
+      ],
+    });
+    const a = detail(el).querySelector('a') as HTMLAnchorElement;
+    const ev = new MouseEvent('click', { bubbles: true, cancelable: true });
+    await act(async () => void a.dispatchEvent(ev));
+    expect(ev.defaultPrevented).toBe(true);
   });
 
   it('[#103] a bad payload changes nothing', async () => {

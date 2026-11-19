@@ -12,8 +12,8 @@ body {
 
 .hub {
   box-sizing: border-box;
-  max-width: 1040px;
-  margin: 0 auto;
+  max-width: none;
+  margin: 0;
   padding: 28px 32px 48px;
   font: var(--mog-text-md) / var(--mog-leading) var(--mog-font);
   -webkit-font-smoothing: antialiased;
@@ -520,6 +520,7 @@ body {
 /* The first-run notice: one centred reading column. */
 .hub--notice {
   max-width: 600px;
+  margin: 0 auto;
 }
 
 .legal-notice {
@@ -689,7 +690,7 @@ body {
 }
 
 /* Hub navigation (#103): two quiet items under the header. The header and the navigation keep
-   their place in every view; the MOGs and settings column keeps its 680 px measure. */
+   their place in every view; the MOGs and settings column keeps a 616 px measure (680 px with the padding). */
 .hub-nav {
   display: flex;
   gap: 2px;
@@ -796,7 +797,7 @@ body {
 }
 
 .conv-list:focus-visible .conv-row[aria-selected='true'] {
-  box-shadow: inset 0 0 0 2px var(--mog-focus);
+  box-shadow: var(--mog-focus-ring);
 }
 
 .conv-row-q {
@@ -823,6 +824,8 @@ body {
   overscroll-behavior: contain;
 }
 
+/* The detail pane fills the area, so an outer ring would fall outside the window or under the
+   divider: its ring is inset, in the focus colour. */
 .hub .conv-detail:focus-visible {
   box-shadow: inset 0 0 0 2px var(--mog-focus);
 }
@@ -836,19 +839,26 @@ body {
 }
 
 .hub .conv-meta {
+  display: flex;
+  flex-wrap: wrap;
   margin: 4px 0 0;
   color: var(--mog-text-muted);
   font-size: var(--mog-text-xs);
   font-variant-numeric: tabular-nums;
 }
 
-.conv-meta .conv-status {
-  color: var(--mog-text);
-  font-weight: 500;
+.conv-meta-part {
+  white-space: nowrap;
+}
+
+.conv-meta-part + .conv-meta-part::before {
+  content: '·';
+  margin: 0 4px;
 }
 
 .conv-meta .conv-status--failed {
   color: var(--mog-lid);
+  font-weight: 500;
 }
 
 .conv-answer {

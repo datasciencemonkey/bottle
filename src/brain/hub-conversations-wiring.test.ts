@@ -216,6 +216,25 @@ describe('wireHubConversations (#103)', () => {
     expect(opens.at(-1)).toEqual({});
   });
 
+  it('[#103] the hub ack of an open clears the held selection, so a later show keeps the user pick', async () => {
+    const { store } = fakeStore({ [MOG_A]: [dbRow(1, T0)] });
+    const opens: unknown[] = [];
+    const lists: unknown[] = [];
+    const w = wireHubConversations(bus, {
+      store,
+      mogs,
+      send: async (l) => void lists.push(l),
+      sendOpen: async (o) => void opens.push(o),
+    });
+    await w.openConversations(req(1));
+    input({ action: 'conversations.opened' });
+    await Promise.resolve();
+    input({ action: 'conversations.ready' });
+    await vi.waitFor(() => expect(lists).toHaveLength(1));
+    await Promise.resolve();
+    expect(opens).toEqual([{ requestId: req(1) }]);
+  });
+
   it('[#103] dispose stops the hub input', async () => {
     const { store, calls } = fakeStore({});
     const w = wireHubConversations(bus, {

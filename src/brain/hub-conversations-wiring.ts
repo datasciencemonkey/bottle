@@ -8,8 +8,8 @@
  * - The hub sends `conversations.ready` when Conversations opens or shows again. The brain sends
  *   the list again after each saved exchange (`refresh`).
  * - `openConversations(requestId)` opens Conversations on one exchange (a double-click on the
- *   MOG or the card). The brain holds the selection until the hub asks, so a hub that opens late
- *   still selects it, once.
+ *   MOG or the card). The brain holds the selection until the hub acks it
+ *   (`conversations.opened`) or asks for the list, so a hub that opens late still selects it, once.
  * - A failed read sends an empty list marked `unavailable`, with no error text.
  * - Rows of a deleted MOG stay in the store until Wipe; the list shows defined MOGs only.
  */
@@ -141,7 +141,12 @@ export function wireHubConversations(
   const off = onViewInput(bus, (input) => {
     if (input.from !== 'hub' || input.mogId !== CONVERSATIONS_VIEW_ID || input.kind !== 'click')
       return;
-    if (!asConversationsAction(input.payload)) return;
+    const action = asConversationsAction(input.payload);
+    if (!action) return;
+    if (action.action === 'conversations.opened') {
+      held = undefined;
+      return;
+    }
     void (async () => {
       await publish();
       const open = held;

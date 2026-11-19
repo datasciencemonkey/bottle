@@ -56,19 +56,21 @@ export interface HubConversations {
   unavailable?: true;
 }
 
-/** The hub asks for the list: when Conversations opens or shows again. */
-export interface ConversationsReady {
-  action: 'conversations.ready';
-}
+/**
+ * The hub Conversations actions: `conversations.ready` asks for the list (when the area opens or
+ * shows again); `conversations.opened` says the hub got an open, so the brain stops holding it.
+ */
+export type ConversationsAction =
+  { action: 'conversations.ready' } | { action: 'conversations.opened' };
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
 const isStr = (v: unknown): v is string => typeof v === 'string';
 
 /** Shape check of a hub action for Conversations. Unknown fields are dropped. */
-export function asConversationsAction(p: unknown): ConversationsReady | undefined {
-  return isObj(p) && p['action'] === 'conversations.ready'
-    ? { action: 'conversations.ready' }
-    : undefined;
+export function asConversationsAction(p: unknown): ConversationsAction | undefined {
+  if (!isObj(p)) return undefined;
+  const a = p['action'];
+  return a === 'conversations.ready' || a === 'conversations.opened' ? { action: a } : undefined;
 }
 
 function isKeyNumber(v: unknown): v is ConversationKeyNumber {

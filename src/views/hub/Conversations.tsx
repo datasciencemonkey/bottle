@@ -119,6 +119,10 @@ function useConversations(onOpen: () => void) {
           if (!o) return;
           // A double-click selects its exchange, also before the list comes.
           if (o.requestId) setSelectedId(o.requestId);
+          // Ack, so the brain stops holding this open.
+          void emitView(CONVERSATIONS_VIEW_ID, 'click', { action: 'conversations.opened' }).catch(
+            () => undefined,
+          );
           openRef.current();
         },
         { target },
@@ -171,25 +175,31 @@ function Detail({
       <h2 id={`conv-q-${row.requestId}`} className="conv-question">
         {row.question || 'Question not saved'}
       </h2>
+      {/* The parts never break inside; the dot between them is drawn in CSS. */}
       <p className="conv-meta">
-        <span className={failed ? 'conv-status conv-status--failed' : 'conv-status'}>
+        <span
+          className={failed ? 'conv-meta-part conv-status--failed' : 'conv-meta-part conv-status'}
+        >
           {failed ? 'Failed' : 'Answered'}
         </span>
-        <span aria-hidden="true"> · </span>
-        <time dateTime={new Date(row.askedAt).toISOString()}>{fullDateOf(row.askedAt)}</time>
-        <span aria-hidden="true"> · </span>
-        {row.profile}
-        {row.workspaceHost && (
-          <>
-            <span aria-hidden="true"> · </span>
-            <span className="conv-host">{row.workspaceHost}</span>
-          </>
-        )}
-        <span aria-hidden="true"> · </span>
-        {row.mogName}
+        <time className="conv-meta-part" dateTime={new Date(row.askedAt).toISOString()}>
+          {fullDateOf(row.askedAt)}
+        </time>
+        {/* One profile is one workspace; the host is in the tooltip. */}
+        <span className="conv-meta-part" title={row.workspaceHost || undefined}>
+          {row.profile}
+        </span>
+        <span className="conv-meta-part">{row.mogName}</span>
       </p>
       {row.answerMd ? (
-        <div className="conv-answer">
+        // TODO(#103): open a trusted link in the browser once the hub has an opener. Until then a
+        // click never navigates the hub window; the link text stays selectable.
+        <div
+          className="conv-answer"
+          onClick={(e) => {
+            if ((e.target as Element).closest('a')) e.preventDefault();
+          }}
+        >
           <SafeMarkdown text={row.answerMd} trust={trust} />
         </div>
       ) : (
@@ -271,7 +281,8 @@ export function Conversations({
     }
   };
 
-  const groups = useMemo(() => groupByDay(rows, now()), [rows, now]);
+  // Read the clock on each render, so "Today" moves on after midnight.
+  const groups = groupByDay(rows, now());
 
   let body;
   if (list === null) {
@@ -314,7 +325,10 @@ export function Conversations({
                     aria-selected={isSel}
                     data-request={r.requestId}
                     className="conv-row"
-                    onClick={() => select(r)}
+                    onClick={() => {
+                      select(r);
+                      listRef.current?.focus();
+                    }}
                   >
                     <span className="conv-row-q">{r.question || 'Question not saved'}</span>
                     <span className="conv-row-meta">
