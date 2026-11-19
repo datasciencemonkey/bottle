@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "hub",
-  "description": "Hub view window (V1): listens to brain-to-view events; calls the brain-and-hub commands of 4.5, permission_request and permission_status (ADR 0039, ADR 0101), view_emit and view_notice_subscribe (the hub-only notice Channel, ADR 0091).",
+  "description": "Hub view window (V1): listens to brain-to-view events; calls the brain-and-hub commands of 4.5, permission_request and permission_status (ADR 0039, ADR 0101), view_emit and view_notice_subscribe (the hub-only notice Channel, ADR 0091) and the recording_* rows (ADR 0103).",
   "windows": ["hub"],
   "permissions": [
     "core:event:allow-listen",
@@ -25,6 +25,18 @@
     "allow-permission-request",
     "allow-permission-status",
     "allow-view-emit",
-    "allow-view-notice-subscribe"
+    "allow-view-notice-subscribe",
+    "allow-recording-settings-read",
+    "allow-recording-settings-write",
+    "allow-recording-storage-probe",
+    "allow-recording-volume-create",
+    "allow-recording-warehouses",
+    "allow-recording-start",
+    "allow-recording-stop",
+    "allow-recording-state",
+    "allow-recording-list",
+    "allow-recording-detail",
+    "allow-recording-retry",
+    "allow-recording-open"
   ]
 }

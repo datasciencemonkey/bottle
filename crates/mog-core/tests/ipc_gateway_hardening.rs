@@ -113,8 +113,12 @@ fn sample(command: &str) -> (&'static str, Value) {
         "hub_notice_send" => json!({"kind": "dictation_unshown", "mogId": "a1", "text": "hello"}),
         "view_notice_subscribe" => return ("hub", json!({"onNotice": "__CHANNEL__:4"})),
         // ADR 0103: call recording.
-        "recording_settings_read" | "recording_storage_probe" | "recording_warehouses"
-        | "recording_stop" | "recording_state" | "recording_list" => json!({}),
+        "recording_settings_read"
+        | "recording_storage_probe"
+        | "recording_warehouses"
+        | "recording_stop"
+        | "recording_state"
+        | "recording_list" => json!({}),
         "recording_settings_write" => json!({"patch": {"enabled": true}}),
         "recording_volume_create" => json!({"catalog": "main", "schema": "calls"}),
         "recording_start" => json!({"instructions": "Notes."}),
@@ -444,6 +448,20 @@ fn sec_03_each_ipc_error_maps_to_a_fixed_code() {
         IpcError::LoginCancelled { command: s() },
         IpcError::CliFailed { command: s() },
         IpcError::NoGrant { command: s() },
+        // ADR 0103: call recording.
+        IpcError::RecordingOff { command: s() },
+        IpcError::RecordingBusy { command: s() },
+        IpcError::RecordingInProgress { command: s() },
+        IpcError::UnknownRecording { command: s() },
+        IpcError::NoStorage { command: s() },
+        IpcError::NoWarehouse { command: s() },
+        IpcError::WarehouseFailed { command: s() },
+        IpcError::VolumePermission { command: s() },
+        IpcError::AiTranscribeDisabled { command: s() },
+        IpcError::EndpointMissing { command: s() },
+        IpcError::TooLong { command: s() },
+        IpcError::UploadFailed { command: s() },
+        IpcError::SystemAudioDenied { command: s() },
     ];
     assert_eq!(all.len(), ERROR_CODES.len(), "one code per variant");
     for e in &all {

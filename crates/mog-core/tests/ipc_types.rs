@@ -12,9 +12,9 @@ use mog_core::types::{
     ConsentRecordView, Intent, MicHealth, MicLevelFrame, MogId, MogViewState, Mood, NetStatus,
     OthersTrack, Profile, ProfileInfo, ProfileName, RecordToggle, RecordingDetail,
     RecordingErrorKind, RecordingSettings, RecordingState, RecordingStatus, RecordingSummary,
-    RouterCommand, RouterDecision, SegmentRef, StorageProbe, WarehouseInfo,
-    SessionPolicy, TagApp, TagOp, Tags, TalkKeyReason, TalkKeyState, TalkKeyStatus, TokenState,
-    TokenStatus, Track, Transcript, TranscriptProvider,
+    RouterCommand, RouterDecision, SegmentRef, SessionPolicy, StorageProbe, TagApp, TagOp, Tags,
+    TalkKeyReason, TalkKeyState, TalkKeyStatus, TokenState, TokenStatus, Track, Transcript,
+    TranscriptProvider, WarehouseInfo,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
