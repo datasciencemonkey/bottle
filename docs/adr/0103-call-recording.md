@@ -70,7 +70,7 @@ replace these rules for call recording.
    sends only audio that it encoded: a payload that is not audio can give a 200 with invented
    text.
 9. **Volume layout.** `<root>/Bottle/Recordings/<name>/`, where `<name>` is the local start time
-   `YYYY-MM-DD_HHMM` (plus `_2`, `_3` on a clash). The folder holds the audio `<name>.ogg` and the
+   `YYYY-MM-DD_HHMM` (plus `_2`, `_3` on a clash). The folder holds the audio `<name>.opus` (Opus in Ogg: `OggS` magic, MIME `audio/ogg`) and the
    `<name>.instructions.md`, `<name>.job.json` (the status manifest),
    `<name>.transcript.json`, `<name>.transcript.md` and `<name>.notes.md`. Times in the
    transcript are from the start of the recording, across parts. With more than one part, a
