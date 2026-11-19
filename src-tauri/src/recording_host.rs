@@ -179,6 +179,11 @@ impl RecordingHost {
                 s.lease_stopped(stopped.lease_id, stopped.reason);
             }
         }));
+        // The mic rule: no dictation while a recording runs.
+        let weak = Arc::downgrade(&session);
+        capture.set_recording_check(Arc::new(move || {
+            weak.upgrade().is_some_and(|s| s.is_recording())
+        }));
         let ticker = Arc::new(Ticker {
             stop: Mutex::new(false),
             wake: Condvar::new(),

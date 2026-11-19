@@ -280,6 +280,7 @@ pub struct RecordingSession {
     config: SessionConfig,
     state: Mutex<State>,
     observer: Mutex<Option<Observer>>,
+    active_hook: Mutex<Option<Arc<dyn Fn(bool) + Send + Sync>>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -323,6 +324,7 @@ impl RecordingSession {
             config,
             state: Mutex::new(State::default()),
             observer: Mutex::new(None),
+            active_hook: Mutex::new(None),
         })
     }
 
@@ -342,12 +344,25 @@ impl RecordingSession {
         }
     }
 
-    /// Red skeleton.
-    pub fn set_active_hook(&self, _hook: Arc<dyn Fn(bool) + Send + Sync>) {}
+    /// Call `hook(true)` when a start begins and `hook(false)` when the recording ends or the
+    /// start fails. The host holds the mic's zero-buffer watch with it (ADR 0103: muting
+    /// does not end a recording).
+    pub fn set_active_hook(&self, hook: Arc<dyn Fn(bool) + Send + Sync>) {
+        *lock(&self.active_hook) = Some(hook);
+    }
 
-    /// Red skeleton.
+    fn active(&self, on: bool) {
+        let hook = lock(&self.active_hook).clone();
+        if let Some(h) = hook {
+            h(on);
+        }
+    }
+
+    /// A recording runs or starts now. The host refuses dictation meanwhile
+    /// (`recording_in_progress`).
     pub fn is_recording(&self) -> bool {
-        false
+        let st = lock(&self.state);
+        st.active.is_some() || st.starting
     }
 
     /// Whether the recording knob is on.
@@ -381,10 +396,18 @@ impl RecordingSession {
             }
             st.starting = true;
         }
+        self.active(true);
         let result = self.start_inner(opts, id, dir);
         let mut st = lock(&self.state);
         st.starting = false;
-        let active = result?;
+        let active = match result {
+            Ok(a) => a,
+            Err(e) => {
+                drop(st);
+                self.active(false);
+                return Err(e);
+            }
+        };
         let info = active.info.clone();
         st.active = Some(active);
         drop(st);
@@ -476,6 +499,7 @@ impl RecordingSession {
             let _ = self.capture.stop(active.info.lease);
         }
         self.tap.disarm();
+        self.active(false);
         let duration_ms = self.now_ms().saturating_sub(active.started_mono);
         let system_audio = self.system_state(&active.info);
         let parts = match active.writer.join() {

@@ -588,6 +588,8 @@ pub struct CaptureHost {
     closed: AtomicBool,
     levels: HostLevels,
     stop_observers: Arc<Mutex<Vec<StopObserver>>>,
+    /// ADR 0103: true while a call recording runs; `capture_start` then refuses dictation.
+    recording: Mutex<Option<Arc<dyn Fn() -> bool + Send + Sync>>>,
 }
 
 impl CaptureHost {
@@ -682,12 +684,25 @@ impl CaptureHost {
             closed: AtomicBool::new(false),
             levels,
             stop_observers,
+            recording: Mutex::new(None),
         })
     }
 
     /// The one R2 core. The call recording takes its lease here (ADR 0103).
     pub fn service(&self) -> &Arc<CaptureCore> {
         &self.service
+    }
+
+    /// ADR 0103 mic rule: while `recording()` is true, `capture_start` (PTT, hands-free)
+    /// answers `recording_in_progress`. No overlay lease, so no dictated speech reaches the
+    /// recording. The recording's own lease does not go through `capture_start`.
+    pub fn set_recording_check(&self, recording: Arc<dyn Fn() -> bool + Send + Sync>) {
+        *lock(&self.recording) = Some(recording);
+    }
+
+    fn recording_runs(&self) -> bool {
+        let check = lock(&self.recording).clone();
+        check.is_some_and(|f| f())
     }
 
     /// Send every later lease stop to `observer` too (ADR 0103).
@@ -834,6 +849,11 @@ impl CaptureHost {
         if self.closed.load(Ordering::SeqCst) {
             // The app is quitting (`shutdown`): no new lease.
             return Err(refused(IpcError::HostFailed {
+                command: command.to_owned(),
+            }));
+        }
+        if self.recording_runs() {
+            return Err(refused(IpcError::RecordingInProgress {
                 command: command.to_owned(),
             }));
         }

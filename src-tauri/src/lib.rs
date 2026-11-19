@@ -130,6 +130,10 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
         ptt,
         stt.engine().clone(),
     )?;
+    // ADR 0103: a muted mic must not end a call recording, so the session holds the mic's
+    // zero-buffer watch while it records.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    let mic_hold = link.as_ref().map(|l| l.silence_hold());
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     if let Some(link) = link {
         // A stream that fails after it opened stops its leases (`device_failed`).
@@ -159,6 +163,12 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
         },
     )?;
     let recording = std::sync::Arc::new(recording);
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    if let Some(hold) = mic_hold {
+        recording
+            .session()
+            .set_active_hook(std::sync::Arc::new(move |on| hold.set(on)));
+    }
     // Sleep stops a recording and finalizes it. Without the OS watch the app still runs.
     let _ = recording.watch_sleep(&*mog_core::token_events::os_session_source());
     // `recording.state` goes to the brain at each start, stop and system audio change.
