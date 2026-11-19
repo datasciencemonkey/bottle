@@ -44,7 +44,7 @@ export const FOOTER_HINT = 'Double-click to open in Bottle';
 /** No link in an answer is trusted until the card knows the profile host (TODO(#40)). */
 const NO_LINKS: LinkTrust = { profileHost: '', allowedAppUrls: [] };
 
-type Vis = 'shown' | 'fading' | 'gone';
+type Vis = 'shown' | 'fading' | 'dismissing' | 'gone';
 
 const reducedMotion = () =>
   typeof window.matchMedia === 'function' &&
@@ -78,12 +78,16 @@ function Stage({ text }: { text: string }) {
   }, [shown.leaving]);
   return (
     <span className="genie-stage-slot">
+      {/* One stable live region, so a screen reader reads each new stage once. */}
+      <span className="genie-sr" data-genie-live aria-live="polite">
+        {shown.text}
+      </span>
       {shown.leaving !== undefined && (
         <span className="genie-stage" data-leaving aria-hidden="true">
           {shown.leaving}
         </span>
       )}
-      <span key={shown.text} className="genie-stage" data-genie-stage aria-live="polite">
+      <span key={shown.text} className="genie-stage" data-genie-stage aria-hidden="true">
         {shown.text}
       </span>
     </span>
@@ -99,9 +103,15 @@ function Timer() {
     return () => clearInterval(t);
   }, []);
   const text = timerText(elapsed);
-  return text === undefined ? null : (
-    <span className="genie-timer" data-genie-timer aria-hidden="true">
-      {text}
+  // The slot is kept before 3 s, so the pill does not grow when the timer shows.
+  return (
+    <span
+      className="genie-timer"
+      data-genie-timer={text === undefined ? undefined : ''}
+      data-waiting={text === undefined ? '' : undefined}
+      aria-hidden="true"
+    >
+      {text ?? '0:00'}
     </span>
   );
 }
@@ -127,7 +137,7 @@ export interface GenieCardProps {
    * The final height of the card surface with its frame (logical px), after each change of its
    * content and before any size motion, so the window can fit it (`fit-window.ts`).
    */
-  onSize?: (px: number) => void;
+  onSize?: (px: number) => Promise<void> | void;
 }
 
 export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
@@ -145,6 +155,13 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
   const [vis, setVis] = useState<Vis>('shown');
   const ref = useRef<HTMLDivElement>(null);
   const holds = useRef({ pointer: false, mog: false });
+  // `hold` and the event handlers read these refs, so they stay stable and never miss an event.
+  const visRef = useRef<Vis>('shown');
+  const workingRef = useRef(working);
+  useLayoutEffect(() => {
+    visRef.current = vis;
+    workingRef.current = working;
+  });
   const timer = useRef<{ handle?: ReturnType<typeof setTimeout>; due: number; left: number }>({
     due: 0,
     left: showMs,
@@ -153,7 +170,7 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
   const end = useCallback(
     (fadeMs: number) => {
       clearTimeout(timer.current.handle);
-      setVis('fading');
+      setVis(fadeMs === DISMISS_FADE_MS ? 'dismissing' : 'fading');
       timer.current.handle = setTimeout(() => {
         setVis('gone');
         void emitView(mogId, 'click', {
@@ -189,7 +206,7 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
       const was = h.pointer || h.mog;
       h[via] = on;
       const is = h.pointer || h.mog;
-      if (working || vis === 'gone' || was === is) return;
+      if (workingRef.current || visRef.current === 'gone' || was === is) return;
       if (is) {
         clearTimeout(timer.current.handle);
         timer.current.left = Math.max(0, timer.current.due - Date.now());
@@ -197,7 +214,7 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
         setVis('shown');
       } else arm(Math.max(timer.current.left, AFTER_HOVER_MS));
     },
-    [working, vis, arm],
+    [arm],
   );
 
   const onMogHover = useCallback(
@@ -209,31 +226,49 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
   );
   useWindowEvent(CARD_MOG_HOVER_EVENT, onMogHover);
   const onDismiss = useCallback(() => {
-    if (!working && vis !== 'gone') end(DISMISS_FADE_MS);
-  }, [working, vis, end]);
+    if (!workingRef.current && visRef.current !== 'gone') end(DISMISS_FADE_MS);
+  }, [end]);
   useWindowEvent(CARD_DISMISS_EVENT, onDismiss);
 
-  // The window fits the final size first, so the grow motion is never cut.
+  // The window fits the final size first, so the grow motion is never cut. A card that is gone
+  // asks for one line, so a later show never gets the old, taller window back.
+  const fitted = useRef<Promise<void>>(Promise.resolve());
   useLayoutEffect(() => {
+    if (!onSize) return;
     const frame = ref.current?.parentElement;
-    if (frame && onSize) onSize(frame.getBoundingClientRect().height);
-  }, [onSize, kind, text, card.sections, card.blurbs, retry]);
+    fitted.current = Promise.resolve(onSize(frame ? frame.getBoundingClientRect().height : 0));
+  }, [onSize, kind, text, card.sections, card.blurbs, retry, vis]);
 
-  // The pill grows into the card: the same element animates from its old size to the new one.
-  const prev = useRef<{ kind: string; w: number; h: number } | undefined>(undefined);
+  // The pill grows into the card: the same element animates from its old size and corners to
+  // the new ones. The motion waits until the window has its new height.
+  const prev = useRef<{ kind: string; w: number; h: number; radius: string } | undefined>(
+    undefined,
+  );
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
+    const radius = getComputedStyle(el).borderRadius;
     const was = prev.current;
-    prev.current = { kind, w: r.width, h: r.height };
+    prev.current = { kind, w: r.width, h: r.height, radius };
     if (!was || was.kind === kind || reducedMotion() || typeof el.animate !== 'function') return;
-    el.animate(
+    const from = was.kind === 'working' ? `${was.h / 2}px` : was.radius;
+    const anim = el.animate(
       [
-        { width: `${was.w}px`, height: `${was.h}px` },
-        { width: `${r.width}px`, height: `${r.height}px` },
+        { width: `${was.w}px`, height: `${was.h}px`, borderRadius: from, overflow: 'hidden' },
+        {
+          width: `${r.width}px`,
+          height: `${r.height}px`,
+          borderRadius: radius,
+          overflow: 'hidden',
+        },
       ],
       { duration: 220, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' },
+    );
+    anim.pause();
+    void fitted.current.then(
+      () => anim.play(),
+      () => anim.play(),
     );
   }, [kind]);
 
@@ -274,7 +309,7 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
             </p>
           )}
           {kind === 'answer' && answer && (
-            <div className="genie-md" data-answer>
+            <div className="genie-md" data-answer role="status">
               <SafeMarkdown text={answer.md} trust={NO_LINKS} />
             </div>
           )}
@@ -308,9 +343,12 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
                 type="button"
                 className="popup-action"
                 data-chip={retry.id}
-                onClick={() =>
-                  void emitView(mogId, 'chip_click', { chipId: retry.id }).catch(() => undefined)
-                }
+                onDoubleClick={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  // The second click of a double-click sends nothing more.
+                  if (e.detail > 1) return;
+                  void emitView(mogId, 'chip_click', { chipId: retry.id }).catch(() => undefined);
+                }}
               >
                 {retry.label}
               </button>

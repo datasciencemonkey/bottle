@@ -9,6 +9,9 @@
 
 .genie {
   position: relative;
+  /* A double-click opens the hub; it must not select a word while the card fades. */
+  user-select: none;
+  -webkit-user-select: none;
   box-sizing: border-box;
   max-width: 100%;
   border: 1px solid var(--mog-edge);
@@ -34,9 +37,24 @@
   transform: rotate(45deg);
 }
 
-.genie[data-state='fading'] {
+.genie[data-state='fading'],
+.genie[data-state='dismissing'] {
   opacity: 0;
   transform: translateX(-4px);
+}
+
+/* A double-click fades the card at once: the whole fade fits in its 150 ms. */
+.genie[data-state='dismissing'] {
+  transition-duration: 150ms;
+}
+
+.genie-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 /* 1. The status pill: the stage line with a light sweep, then the timer. */
@@ -45,6 +63,8 @@
   align-items: center;
   gap: 8px;
   width: fit-content;
+  /* Most stage lines fit, so the pill keeps its width when the stage changes. */
+  min-width: 184px;
   min-height: 38px;
   padding: 0 14px;
   border-radius: var(--mog-radius-pill);
@@ -94,10 +114,15 @@
 
 .genie-timer {
   flex: none;
+  margin-left: auto;
   color: var(--mog-text-muted);
   font-size: var(--mog-text-xs);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.genie-timer[data-waiting] {
+  visibility: hidden;
 }
 
 /* 2. The answer card. The pill grows into it (GenieCard animates the size). */
@@ -300,7 +325,11 @@
     transform: none;
   }
 
-  .genie-working {
+  /* The whole surface fades in once; its content shows with it, not after it. */
+  .genie-working,
+  .genie-answer,
+  .genie-failure,
+  .genie-message {
     animation: genie-fade-in 200ms linear both;
   }
 
@@ -316,6 +345,6 @@
   }
 
   .genie-body {
-    animation: genie-fade-in 200ms linear 200ms both;
+    animation: none;
   }
 }

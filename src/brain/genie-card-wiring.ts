@@ -28,8 +28,10 @@ const OP_ID = /^[A-Za-z0-9-]{1,64}$/;
 export interface GenieCardWiringDeps {
   /** `window_card_hide`. */
   hideCard(mogId: MogId): void;
-  /** Clear the shown answer of the card stack, and the Genie blurb of `requestId` if given. */
-  clearAnswer(mogId: MogId, requestId: string | undefined): void;
+  /** Clear the shown answer (the expanded sections) of the card stack. */
+  clearAnswer(mogId: MogId): void;
+  /** Empty the Genie blurb of `requestId` and drop its Try again, so it never shows again. */
+  forget(mogId: MogId, requestId: string): void;
   /** Send an event to the card window of `mogId` only. */
   sendToCard(mogId: MogId, event: string, payload: Record<string, unknown>): void;
   /** The operation ID of the newest Genie request of `mogId`. */
@@ -59,8 +61,15 @@ export function wireGenieCard(bus: BrainBus, deps: GenieCardWiringDeps): () => v
         ? p.requestId
         : undefined;
     if (p.target === CARD_DONE && fromCard) {
+      // A late `card_done` of an older request never hides the card of a newer one.
+      const current = deps.lastOpId(mogId);
+      if (requestId !== undefined && current !== undefined && requestId !== current) {
+        deps.forget(mogId, requestId);
+        return;
+      }
       deps.hideCard(mogId);
-      deps.clearAnswer(mogId, requestId);
+      deps.clearAnswer(mogId);
+      if (requestId !== undefined) deps.forget(mogId, requestId);
       return;
     }
     if (p.target === OPEN_CONVERSATIONS) {

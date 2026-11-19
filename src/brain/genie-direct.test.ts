@@ -305,15 +305,20 @@ describe('genie direct send: the MOG shows the work and the answer (#573)', () =
       },
       newOpId: () => OP,
       onPhase: (mogId, phase) => void log.push(`${mogId}:${phase}`),
-      showCard: (mogId) => void log.push(`show:${mogId}:${c.log.at(-1)?.completed === true}`),
+      showCard: (mogId) => {
+        log.push(`show:${mogId}:${c.log.at(-1)?.completed === true}:${c.expanded.length}`);
+        return Promise.resolve();
+      },
     });
     await send(turn());
     expect(log.filter((x) => x !== 'card')).toEqual([
       `${MOG}:working`,
+      // R11 places the card while it still works and already has the answer sections; then the
+      // outcome goes on it in one step.
+      `show:${MOG}:false:2`,
       `${MOG}:answered`,
-      // The card is shown after it holds the answer, so the answer never shows late.
-      `show:${MOG}:true`,
     ]);
+    expect(c.log.at(-1)?.completed).toBe(true);
   });
 
   it('[GL-5] [G-15b] a failure shows its fixed text with Try again; only a click sends again', async () => {

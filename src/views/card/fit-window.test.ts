@@ -58,8 +58,8 @@ describe('card window fit (#573)', () => {
     const f = fakeWindow({ x: 10, top: 800, screenBottom: 900 });
     await createWindowFit(() => f.w)(300);
     expect(f.log).toEqual([
-      ['height', 300],
       ['move', 10, 600],
+      ['height', 300],
     ]);
   });
 

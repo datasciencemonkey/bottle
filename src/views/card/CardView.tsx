@@ -216,14 +216,14 @@ export function CardView({ mogId }: { mogId: MogId }) {
   const onSize = useCallback(
     (px: number) => {
       lastPx.current = px;
-      void fit(px, window.innerHeight);
+      return fit(px, window.innerHeight);
     },
     [fit],
   );
   const frame = useRef<HTMLElement>(null);
   useLayoutEffect(() => {
     if (genie || panel || !frame.current) return;
-    onSize(frame.current.getBoundingClientRect().height);
+    void onSize(frame.current.getBoundingClientRect().height);
   }, [genie, panel, shown, onSize]);
   useEffect(() => {
     // R11 sets a hidden card back to one line when it shows it again: fit once more.

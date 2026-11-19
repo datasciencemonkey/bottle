@@ -13,8 +13,9 @@
  *   No upstream step text shows. The card view runs the "m:ss" timer (G-17a).
  * - on the terminal event: the `outcome-blurb.ts` text (the answer, or the fixed failure text of
  *   GL-5), and for an answer the expanded sections of `card-sections.ts` (answer, key numbers).
- *   Then `onPhase('answered' | 'failed')` and `showCard`: the card shows next to the MOG even if
- *   it was hidden while Genie worked.
+ *   First the sections or Try again, then `showCard` (awaited), then the outcome blurb and
+ *   `onPhase('answered' | 'failed')`: the card shows next to the MOG even if it was hidden while
+ *   Genie worked, and it changes from the pill to the card in one update.
  *
  * No failure is sent again by itself (G-15b). A failure shows [Try again]; only a click on it
  * sends the same question again, as a new request. TODO(#86): the footer and the deep link.
@@ -87,10 +88,11 @@ export function createGenieDirectSend(deps: GenieDirectDeps): (turn: AgentTurn) 
     const { opId, events } = deps.genie.submit(req);
     const card = deps.cardFor(turn.mogId);
     const id = genieBlurbId(opId);
-    // A new request never shows the answer of an older one.
-    card.setExpanded(undefined);
+    // The new status blurb goes on top first, then the old answer goes: the card never shows the
+    // old answer without its sections (no flash).
     let shown = ASKING_GENIE;
     card.add({ id, text: shown });
+    card.setExpanded(undefined);
     if (deps.onPhase) safely(() => deps.onPhase?.(turn.mogId, 'working', opId));
     return (async () => {
       let end: TerminalAskEvent | undefined;
@@ -113,7 +115,8 @@ export function createGenieDirectSend(deps: GenieDirectDeps): (turn: AgentTurn) 
         // card must not stay on the working line, and nothing is sent again (G-15b).
       }
       end ??= { t: 'uncertain' };
-      card.add(outcomeBlurbInput(id, end));
+      // The answer sections and the Try again control go on while the blurb still works, so the
+      // card goes from the status pill to the answer or failure card in one step.
       if (end.t === 'answer')
         card.setExpanded({
           answerMd: end.md,
@@ -128,8 +131,17 @@ export function createGenieDirectSend(deps: GenieDirectDeps): (turn: AgentTurn) 
           safely(() => send(turn));
         });
       }
+      // R11 places the card first, then the outcome goes on it, so the view grows the card from
+      // its final place (no race between the view fit and the R11 move).
+      if (deps.showCard) {
+        try {
+          await deps.showCard(turn.mogId);
+        } catch {
+          // The card stays where it was; the outcome still goes on it.
+        }
+      }
+      card.add(outcomeBlurbInput(id, end));
       safely(() => deps.onPhase?.(turn.mogId, phaseOf(end), opId));
-      if (deps.showCard) safely(() => deps.showCard?.(turn.mogId));
       // #40: the history write comes after the card, and a fault in it never reaches the card.
       try {
         deps.onEnd?.({

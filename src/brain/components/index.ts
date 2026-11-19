@@ -252,12 +252,11 @@ export function startBrain(): Brain {
     // double-click on a MOG or its card, which opens hub Conversations.
     wireGenieCard(bus, {
       hideCard: (mogId) => void call('window_card_hide', { mogId }).catch(() => undefined),
-      clearAnswer: (mogId, requestId) => {
+      clearAnswer: (mogId) => stackFor(mogId).setExpanded(undefined),
+      // The faded answer leaves the card for good: a card window that loads again (the R11
+      // reaper) gets an empty Genie blurb, which shows nothing.
+      forget: (mogId, requestId) => {
         const stack = stackFor(mogId);
-        stack.setExpanded(undefined);
-        if (requestId === undefined) return;
-        // The faded answer leaves the card for good: a card window that loads again (the R11
-        // reaper) gets an empty Genie blurb, which shows nothing.
         const id = genieBlurbId(requestId);
         stack.clearControls(`retry:${id}`);
         stack.add({ id, text: '', completed: true });

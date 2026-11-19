@@ -65,9 +65,10 @@ export function createWindowFit(win: () => CardWindow = tauriCardWindow) {
     last = h;
     try {
       const w = win();
-      await w.setHeight(h);
+      // Move up first, then grow, so no frame goes past the bottom of the screen.
       const at = await w.place();
       if (at && at.top + h > at.screenBottom) await w.moveTo(at.x, at.screenBottom - h);
+      await w.setHeight(h);
     } catch {
       // The window keeps its size; the card scrolls in it.
       last = undefined;

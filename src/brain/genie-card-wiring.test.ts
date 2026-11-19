@@ -11,7 +11,8 @@ function setup() {
   const log: unknown[][] = [];
   const off = wireGenieCard(bus, {
     hideCard: (m) => void log.push(['hide', m]),
-    clearAnswer: (m, id) => void log.push(['clear', m, id]),
+    clearAnswer: (m) => void log.push(['clear', m]),
+    forget: (m, id) => void log.push(['forget', m, id]),
     sendToCard: (m, e, p) => void log.push(['card', m, e, p]),
     lastOpId: (m) => (m === A ? OP : undefined),
     openConversations: (id) => void log.push(['open', id]),
@@ -42,10 +43,17 @@ describe('Genie card wiring (#573)', () => {
     input(`mog-${A}`, 'click', { target: 'card_done' });
     expect(log).toEqual([
       ['hide', A],
-      ['clear', A, OP],
+      ['clear', A],
+      ['forget', A, OP],
       ['hide', A],
-      ['clear', A, undefined],
+      ['clear', A],
     ]);
+  });
+
+  it('a late card_done of an older request only forgets it: the newer card stays', () => {
+    const { log, input } = setup();
+    input(`card-${A}`, 'click', { target: 'card_done', requestId: 'op-older' });
+    expect(log).toEqual([['forget', A, 'op-older']]);
   });
 
   it('a double-click on the card opens Conversations on its exchange', () => {

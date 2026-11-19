@@ -88,8 +88,11 @@ describe('Genie card (#573)', () => {
     await tauri.emitTo(`card-${ID}`, 'card:update', working('Asking Genie'));
     const pill = el.querySelector('[data-genie="working"]');
     expect(pill?.querySelector('[data-genie-stage]')?.textContent).toBe('Asking Genie');
-    // Only the stage line is live; the timer is hidden from a screen reader.
-    expect(pill?.querySelector('[data-genie-stage]')?.getAttribute('aria-live')).toBe('polite');
+    // One stable live region reads the stage; the shown line and the timer are hidden from it.
+    expect(pill?.querySelector('[data-genie-live]')?.getAttribute('aria-live')).toBe('polite');
+    expect(pill?.querySelector('[data-genie-live]')?.textContent).toBe('Asking Genie');
+    expect(pill?.querySelector('[data-genie-stage]')?.getAttribute('aria-hidden')).toBe('true');
+    expect(pill?.querySelectorAll('[aria-live]')).toHaveLength(1);
     expect(pill?.querySelector('[data-genie-timer]')).toBeNull();
     await advance(3_000);
     expect(pill?.querySelector('[data-genie-timer]')?.textContent).toBe('0:03');
@@ -105,6 +108,9 @@ describe('Genie card (#573)', () => {
     await tauri.emitTo(`card-${ID}`, 'card:update', working('Asking Genie'));
     await tauri.emitTo(`card-${ID}`, 'card:update', working('Running the query'));
     expect(el.querySelector('[data-genie-stage]')?.textContent).toBe('Running the query');
+    // The same live node gets the new text.
+    expect(el.querySelectorAll('[data-genie-live]')).toHaveLength(1);
+    expect(el.querySelector('[data-genie-live]')?.textContent).toBe('Running the query');
     expect(el.querySelector('[data-leaving]')?.getAttribute('aria-hidden')).toBe('true');
     await advance(200);
     expect(el.querySelector('[data-leaving]')).toBeNull();
@@ -177,6 +183,8 @@ describe('Genie card (#573)', () => {
     await tauri.emitTo(`card-${ID}`, 'card:update', answered);
     await mouse(el.querySelector('[data-genie]') as Element, 'dblclick');
     expect(clicks()[0]?.payload).toEqual({ target: 'open_conversations', requestId: OP });
+    // The quick fade has its own state, so its whole motion fits in its time.
+    expect(el.querySelector('[data-genie]')?.getAttribute('data-state')).toBe('dismissing');
     await advance(DISMISS_FADE_MS);
     expect(done()).toBe(1);
   });
@@ -207,6 +215,16 @@ describe('Genie card (#573)', () => {
       kind: 'chip_click',
       payload: { chipId: `retry:${G}` },
     });
+    // A double-click on Try again sends it once and does not open the hub.
+    const btn = c?.querySelector(`[data-chip="retry:${G}"]`) as Element;
+    await act(
+      async () => void btn.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 2 })),
+    );
+    await mouse(btn, 'dblclick');
+    expect(inputEmits().filter((e) => (e as { kind: string }).kind === 'chip_click')).toHaveLength(
+      1,
+    );
+    expect(clicks()).toEqual([]);
     await advance(FAILURE_SHOW_MS - 1);
     expect(c?.getAttribute('data-state')).toBe('shown');
     await advance(1 + FADE_MS);
@@ -248,5 +266,31 @@ describe('Genie card: no flash (#573)', () => {
       chips: [],
     });
     expect(el.querySelector('[data-genie]')).toBeNull();
+  });
+});
+
+describe('Genie card: the window fit (#573)', () => {
+  beforeEach(() => tauri.reset());
+  afterEach(async () => {
+    await act(async () => roots.forEach((r) => r.unmount()));
+    roots = [];
+    tauri.label = 'hub';
+  });
+
+  it('a gone card asks for one line, so a later show never gets the old tall window', async () => {
+    vi.useFakeTimers();
+    const sizes: number[] = [];
+    const { GenieCard } = await import('./GenieCard');
+    tauri.label = `card-${ID}`;
+    const r = await render(
+      <section>
+        <GenieCard mogId={ID} card={answered} onSize={(px) => void sizes.push(px)} />
+      </section>,
+    );
+    roots.push(r.root);
+    await act(async () => void vi.advanceTimersByTime(answerShowMs(ANSWER_MD) + FADE_MS));
+    vi.useRealTimers();
+    expect(r.el.querySelector('[data-genie]')).toBeNull();
+    expect(sizes.at(-1)).toBe(0);
   });
 });
