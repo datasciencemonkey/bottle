@@ -1,5 +1,15 @@
 # Call recording: transcribe probe evidence (2026-11-19)
 
+| Field | Value |
+|---|---|
+| Gate | SP-06 |
+| Gate type | spike |
+| Result | partial |
+| Date run | 2026-11-19 |
+| Run by | rec-lead cloud agent (call recording, ADR 0103) |
+| Profile | DEFAULT |
+| Scope | part: audio MIME and payload limits for call recording only |
+
 Drafted to STE100 rules. This record holds no token values, no secrets and no workspace catalog or table names.
 
 ## Setup
