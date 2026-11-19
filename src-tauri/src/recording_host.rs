@@ -80,6 +80,23 @@ pub fn os_permission_asker() -> Box<dyn PermissionAsker + Send + Sync> {
     }
 }
 
+/// The knob hook of the `recording_*` component: its first call (the stored knob at connect,
+/// that is at launch) goes to `seed` with no ask; every later call (a Settings write by the
+/// user) goes to `set`, which asks on OFF to ON.
+pub fn knob_hook(
+    seed: impl Fn(bool) + Send + Sync + 'static,
+    set: impl Fn(bool) + Send + Sync + 'static,
+) -> Arc<dyn Fn(bool) + Send + Sync> {
+    let seeded = AtomicBool::new(false);
+    Arc::new(move |on| {
+        if seeded.swap(true, Ordering::SeqCst) {
+            set(on);
+        } else {
+            seed(on);
+        }
+    })
+}
+
 /// The hand-off to the cloud side, connected late. Until the cloud side connects, finished
 /// recordings wait here; their parts stay in the temp dir, where the launch scan of the cloud
 /// side finds them ("Upload failed - Retry"). At the connect, the waiting ones go out.
@@ -219,6 +236,12 @@ impl RecordingHost {
     pub fn set_enabled(&self, on: bool, asker: &dyn PermissionAsker) {
         let was = self.enabled.swap(on, Ordering::SeqCst);
         ask_on_enable(was, on, asker);
+    }
+
+    /// Seed the knob from the stored Settings at launch: no permission ask (ADR 0103: only an
+    /// OFF to ON change by the user asks).
+    pub fn seed_enabled(&self, on: bool) {
+        self.enabled.store(on, Ordering::SeqCst);
     }
 
     /// Stop the recording on each OS sleep event of `source`, for the host's lifetime.

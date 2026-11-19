@@ -32,6 +32,8 @@ pub enum Method {
     Patch,
     /// `DELETE`
     Delete,
+    /// `PUT` (recording routes only: Files API upload and directory create, ADR 0103).
+    Put,
 }
 
 /// One fixed route: method, path template and the query keys it accepts.
@@ -166,6 +168,80 @@ fn err(reason: &'static str) -> CoreError {
     }
 }
 
+/// The recording routes (ADR 0103, PR C): the Files API, Unity Catalog volume create and SCIM
+/// `Me`. They are NOT in [`super::ROUTES`], so `dbx_http` from the brain can never reach them;
+/// only the Rust recording pipeline ([`crate::recording_cloud`]) sends them, through
+/// [`recording_route`]. Its model calls use the existing `mlflow.chat_completions` route
+/// ([`RECORDING_MODEL_ROUTES`]). A `{*path}` slot takes a validated volume path (see
+/// [`is_volume_path`]), never a host, query or fragment.
+pub const RECORDING_ROUTE_TABLE: &[Route] = &[
+    r("recording.me", Method::Get, "/api/2.0/preview/scim/v2/Me"),
+    Route {
+        id: "files.upload",
+        method: Method::Put,
+        path: "/api/2.0/fs/files{*path}",
+        query: &["overwrite"],
+    },
+    r("files.download", Method::Get, "/api/2.0/fs/files{*path}"),
+    r("files.delete", Method::Delete, "/api/2.0/fs/files{*path}"),
+    Route {
+        id: "files.list_directory",
+        method: Method::Get,
+        path: "/api/2.0/fs/directories{*path}",
+        query: &["page_token"],
+    },
+    r(
+        "files.create_directory",
+        Method::Put,
+        "/api/2.0/fs/directories{*path}",
+    ),
+    r(
+        "volumes.create",
+        Method::Post,
+        "/api/2.1/unity-catalog/volumes",
+    ),
+];
+
+/// The IPC routes of [`ROUTE_TABLE`] that the recording pipeline may also send (with a longer
+/// timeout): the Unity Gateway chat route (NFR-21a; never `/serving-endpoints`, NFR-21b).
+pub const RECORDING_MODEL_ROUTES: &[&str] = &["mlflow.chat_completions"];
+
+/// The fixed recording route of `route_id` (a [`RECORDING_ROUTE_TABLE`] entry or a
+/// [`RECORDING_MODEL_ROUTES`] entry), or `unknown_route`.
+pub fn recording_route(route_id: &str) -> CoreResult<&'static Route> {
+    if RECORDING_MODEL_ROUTES.contains(&route_id) {
+        return route(route_id);
+    }
+    RECORDING_ROUTE_TABLE
+        .iter()
+        .find(|r| r.id == route_id)
+        .ok_or(err(UNKNOWN_ROUTE))
+}
+
+/// The longest volume path.
+pub const MAX_VOLUME_PATH_LEN: usize = 1024;
+
+/// A volume path that may fill a `{*path}` slot: `/Volumes/<catalog>/<schema>/<volume>[/...]`,
+/// only `[A-Za-z0-9_.@-]` and `/`, no empty, `.` or `..` segment (a trailing `/` is allowed).
+pub fn is_volume_path(s: &str) -> bool {
+    let Some(rest) = s.strip_prefix("/Volumes/") else {
+        return false;
+    };
+    if s.len() > MAX_VOLUME_PATH_LEN
+        || !s
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_.@-/".contains(&b))
+    {
+        return false;
+    }
+    let body = rest.strip_suffix('/').unwrap_or(rest);
+    let segs: Vec<&str> = body.split('/').collect();
+    segs.len() >= 3
+        && segs
+            .iter()
+            .all(|g| !g.is_empty() && *g != "." && *g != "..")
+}
+
 /// The fixed route of `route_id`: `unknown_route` if it is not in [`super::ROUTES`],
 /// `route_not_wired` if R7 does not send it yet.
 pub fn route(route_id: &str) -> CoreResult<&'static Route> {
@@ -222,11 +298,21 @@ pub fn build_path(route: &Route, params: &JsonObject) -> CoreResult<String> {
     while let Some(open) = rest.find('{') {
         out.push_str(&rest[..open]);
         let close = rest[open..].find('}').ok_or(err(INVALID_PARAMS))? + open;
-        let name = &rest[open + 1..close];
+        let raw_name = &rest[open + 1..close];
+        let (name, is_path) = match raw_name.strip_prefix('*') {
+            Some(n) => (n, true),
+            None => (raw_name, false),
+        };
         let value = params
             .get(name)
             .and_then(|v| v.as_str())
-            .filter(|s| is_slug(s))
+            .filter(|s| {
+                if is_path {
+                    is_volume_path(s)
+                } else {
+                    is_slug(s)
+                }
+            })
             .ok_or(err(INVALID_PARAMS))?;
         out.push_str(value);
         used += 1;
