@@ -275,6 +275,9 @@ pub struct HostComponents<'a> {
     /// `profile_login` and `profile_login_cancel` (#162): `profiles_host::ProfileLoginHost`.
     /// `None` when R5 or R8 could not start: `host_failed`.
     pub login: Option<&'a dyn GatewayComponents>,
+    /// `stt_model_*` (#413, #45, #529, ADR 0104): `stt_model_host::SttModelHost` over the one
+    /// managed R4 `SttSetup`. `None` when the OS gives no models folder: `host_failed`.
+    pub stt_model: Option<&'a dyn GatewayComponents>,
 }
 
 fn refused(e: IpcError) -> CoreError {
@@ -338,6 +341,7 @@ impl<'a> HostComponents<'a> {
             profiles: None,
             cli: None,
             login: None,
+            stt_model: None,
         }
     }
 }
@@ -525,6 +529,13 @@ impl GatewayComponents for HostComponents<'_> {
                 .login
                 .ok_or_else(|| host_failed(command))?
                 .call(command, args),
+            // #413, #45, #529 (ADR 0104): the hub's Local speech step. The gateway let only the
+            // hub through. Its codes cross as themselves (`ERROR_CODES`).
+            "stt_model_status" | "stt_model_consent" | "stt_model_install" | "stt_model_verify"
+            | "stt_model_cancel" => self
+                .stt_model
+                .ok_or_else(|| host_failed(command))?
+                .call(command, args),
             // Each feature issue wires its R1-R17 component here.
             "capture_start" | "capture_stop" | "capture_pause" | "capture_resume"
             | "capture_status" | "capture_stop_all" | "capture_subscribe" => {
@@ -570,8 +581,9 @@ pub fn route(components: HostComponents<'_>, command: &str, args: Value) -> Resu
 /// takes the R4 store lock that the R4 worker shares (#514), `mem_local_exec`, which does
 /// SQLite IO under the R10 connection lock (#426), `profiles_list`, where T7 runs
 /// `databricks auth describe` once per `databricks-cli` profile when R5 lands (#555),
-/// `cli_install`, which downloads and checks the CLI (#161), and `profile_login`, which waits
-/// up to 5 min for `databricks auth login` (#162).
+/// `cli_install`, which downloads and checks the CLI (#161), `profile_login`, which waits
+/// up to 5 min for `databricks auth login` (#162), and `stt_model_install`, which can download
+/// 487 MB over the network before it checks every SHA-256 (#413, #45, ADR 0104).
 pub fn runs_off_main_thread(command: &str) -> bool {
     matches!(
         command,
@@ -593,6 +605,8 @@ pub fn runs_off_main_thread(command: &str) -> bool {
             | "profiles_list"
             | "cli_install"
             | "profile_login"
+            // #413, #45: the install can run for minutes over the network (487 MB).
+            | "stt_model_install"
     )
 }
 
@@ -695,6 +709,9 @@ fn route_from<R: Runtime>(
     // `try_state`: `cli_host::start` manages R5 (#16); without it `cli_*` answer `host_failed`.
     let cli = webview.try_state::<crate::cli_host::CliStatusHost>();
     let login = webview.try_state::<crate::profiles_host::ProfileLoginHost>();
+    // `try_state`: `install_stt_model` manages the one R4 `SttSetup` (#413, #45); without it
+    // (no models folder on this device) `stt_model_*` answer `host_failed`.
+    let stt_model = webview.try_state::<crate::stt_model_host::SttModelHost>();
     let components = HostComponents {
         from: label,
         brain: &brain,
@@ -722,6 +739,9 @@ fn route_from<R: Runtime>(
             .as_ref()
             .map(|c| c.inner().0.as_ref() as &dyn GatewayComponents),
         login: login.as_ref().map(|l| l.inner() as &dyn GatewayComponents),
+        stt_model: stt_model
+            .as_ref()
+            .map(|s| s.inner() as &dyn GatewayComponents),
     };
     route(components, command, args)
 }

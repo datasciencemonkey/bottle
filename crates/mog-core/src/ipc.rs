@@ -152,6 +152,14 @@ pub const COMMANDS: &[CommandSpec] = &[
     // #509 (ADR 0091): an unshown dictation goes to the hub only, on the hub's private Channel.
     row("hub_notice_send", B),
     row("view_notice_subscribe", H),
+    // #413, #45, #529 (ADR 0104): the hub's Local speech step. Hub-only, like
+    // `view_notice_subscribe`; the Mog pop-up gets a plain text notice instead (no IPC of its
+    // own), so these commands never need to resolve a Channel on a Mog webview.
+    row("stt_model_status", H),
+    row("stt_model_consent", H),
+    row("stt_model_install", H),
+    row("stt_model_verify", H),
+    row("stt_model_cancel", H),
 ];
 
 /// The row of a command, if it exists.
@@ -376,6 +384,53 @@ pub enum IpcError {
     NoGrant {
         command: String,
     },
+    /// `stt_transcribe` (#413, #45, ADR 0104): R4 has no installed, checked model.
+    SttModelMissing {
+        command: String,
+    },
+    /// `stt_model_install` (#413, ADR 0104): the user has not agreed to the download (CAP-49a).
+    SttConsentRequired {
+        command: String,
+    },
+    /// `stt_model_install` (#413, ADR 0104): a URL is not under a pinned source (CAP-49b).
+    SttUrlNotAllowed {
+        command: String,
+    },
+    /// `stt_model_install` (#413, ADR 0104): the download broke; the `.partial` file stays.
+    SttDownloadFailed {
+        command: String,
+    },
+    /// `stt_model_install` or `stt_model_verify` (#413, ADR 0104): a file does not match its
+    /// pinned size or SHA-256 (CAP-49c). The file is deleted.
+    SttHashMismatch {
+        command: String,
+    },
+    /// `stt_model_install` (#413, ADR 0104): the release archive did not extract.
+    SttExtractFailed {
+        command: String,
+    },
+    /// `stt_model_*` (#413, ADR 0104): a local file operation failed.
+    SttIoFailed {
+        command: String,
+    },
+    /// `stt_model_install` (#413, ADR 0104): the user cancelled the download.
+    SttDownloadCancelled {
+        command: String,
+    },
+    /// `stt_model_install` or `stt_model_verify` (#413, ADR 0104): an install or a verify
+    /// already runs.
+    SttInstallBusy {
+        command: String,
+    },
+    /// `stt_model_*` (#413, ADR 0104): the OS gives no user folder for the models (W-17e).
+    SttModelsDirUnavailable {
+        command: String,
+    },
+    /// `stt_model_install` (#413, #45, ADR 0104): this build has no `local-stt` feature, so it
+    /// has no HTTP client for the model download (#534, #414).
+    SttSetupUnavailable {
+        command: String,
+    },
 }
 
 impl std::fmt::Display for IpcError {
@@ -492,6 +547,37 @@ impl std::fmt::Display for IpcError {
             }
             IpcError::CliFailed { command } => write!(f, "{command}: the CLI sign-in failed"),
             IpcError::NoGrant { command } => write!(f, "{command}: the account has no access"),
+            IpcError::SttModelMissing { command } => {
+                write!(f, "{command}: R4 has no installed, checked model")
+            }
+            IpcError::SttConsentRequired { command } => {
+                write!(f, "{command}: the user has not agreed to the download")
+            }
+            IpcError::SttUrlNotAllowed { command } => {
+                write!(f, "{command}: a URL is not under a pinned source")
+            }
+            IpcError::SttDownloadFailed { command } => write!(f, "{command}: the download broke"),
+            IpcError::SttHashMismatch { command } => {
+                write!(f, "{command}: a file does not match its pin")
+            }
+            IpcError::SttExtractFailed { command } => {
+                write!(f, "{command}: the release archive did not extract")
+            }
+            IpcError::SttIoFailed { command } => {
+                write!(f, "{command}: a local file operation failed")
+            }
+            IpcError::SttDownloadCancelled { command } => {
+                write!(f, "{command}: the user cancelled the download")
+            }
+            IpcError::SttInstallBusy { command } => {
+                write!(f, "{command}: an install or a verify already runs")
+            }
+            IpcError::SttModelsDirUnavailable { command } => {
+                write!(f, "{command}: the OS gives no user folder for the models")
+            }
+            IpcError::SttSetupUnavailable { command } => {
+                write!(f, "{command}: this build has no local-stt feature")
+            }
             IpcError::Offline { command } => {
                 write!(f, "{command}: the host did not accept a connection")
             }
@@ -1013,6 +1099,35 @@ args!(TelemetrySpanArgs {
     attrs: BTreeMap<String, serde_json::Number>,
 });
 
+/// The wire form of `mog_core::stt_model::ModelConsent` for `stt_model_consent` (#413, #45,
+/// #529, ADR 0104). No `NotAsked` variant: the step only ever sends the user's answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SttConsentWire {
+    Granted,
+    Declined,
+}
+args!(SttModelConsentArgs {
+    consent: SttConsentWire
+});
+
+/// The wire form of `mog_core::stt_model::ModelSource` for `stt_model_install` (#413, ADR 0104).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SttSourceWire {
+    Github,
+    HfMirror,
+}
+args!(
+    /// `stt_model_install` (#413, #45, ADR 0104): the user's chosen source and the hub's
+    /// progress Channel. The gateway lets only the hub through, so the Channel resolves on the
+    /// hub webview (like `view_notice_subscribe`, ADR 0091).
+    SttModelInstallArgs {
+        source: SttSourceWire,
+        on_progress: ChannelRef,
+    }
+);
+
 // ---------- dispatch ----------
 
 /// Calls `$f::<ArgType>(name)` for the argument type of each command.
@@ -1056,6 +1171,9 @@ macro_rules! for_command {
             "brain_subscribe" => Some($f::<BrainSubscribeArgs>()),
             "hub_notice_send" => Some($f::<HubNoticeSendArgs>()),
             "view_notice_subscribe" => Some($f::<ViewNoticeSubscribeArgs>()),
+            "stt_model_status" | "stt_model_verify" | "stt_model_cancel" => Some($f::<NoArgs>()),
+            "stt_model_consent" => Some($f::<SttModelConsentArgs>()),
+            "stt_model_install" => Some($f::<SttModelInstallArgs>()),
             _ => None,
         }
     };
@@ -1161,6 +1279,10 @@ pub fn handle(window_label: &str, command_name: &str, args: Value) -> Result<Han
         "mcp_call" => return Ok(Handled::Component),
         // RTR-21a, ARC-7 (#307): the host sends these to the one R16 `SharedAgentHost`.
         "agent_start" | "agent_stop" | "agent_send" => return Ok(Handled::Component),
+        // #413, #45, #529 (ADR 0104): the hub's Local speech step, over the managed R4
+        // `SttSetup` (`src-tauri/src/stt_model_host.rs`). The gateway let only the hub through.
+        "stt_model_status" | "stt_model_consent" | "stt_model_install" | "stt_model_verify"
+        | "stt_model_cancel" => return Ok(Handled::Component),
         // `config_write`: `mog_config::MogConfigComponent` runs `token_guard::check_config_json`
         // (MB-02, #25, #379).
         _ => {}

@@ -65,6 +65,13 @@ const SPEC_COMMANDS: &[(&str, &[WindowClass])] = {
         // #509 (ADR 0091): the hub-only notice path for an unshown dictation.
         ("hub_notice_send", &[B]),
         ("view_notice_subscribe", &[H]),
+        // Not in 4.5 (#413, #45, #529, ADR 0104): the hub's Local speech step, hub-only like
+        // `view_notice_subscribe`.
+        ("stt_model_status", &[H]),
+        ("stt_model_consent", &[H]),
+        ("stt_model_install", &[H]),
+        ("stt_model_verify", &[H]),
+        ("stt_model_cancel", &[H]),
     ]
 };
 

@@ -60,6 +60,11 @@ export const CALL_CLASS = {
   brain_subscribe: 'local',
   hub_notice_send: 'local',
   view_notice_subscribe: 'local',
+  stt_model_status: 'local',
+  stt_model_consent: 'local',
+  stt_model_install: 'cloud', // downloads the pinned Parakeet model (github or hf_mirror)
+  stt_model_verify: 'local', // hashes the files on disk only; never a request
+  stt_model_cancel: 'local',
 } as const satisfies Record<keyof typeof COMMANDS, CallClass>;
 
 /** The command arguments of an invoke log entry: `call()` sends them as `{ args }` (ADR 0003). */

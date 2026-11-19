@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-stt-model-install"
+description = "Enables the stt_model_install command without any pre-configured scope."
+commands.allow = ["stt_model_install"]
+
+[[permission]]
+identifier = "deny-stt-model-install"
+description = "Denies the stt_model_install command without any pre-configured scope."
+commands.deny = ["stt_model_install"]

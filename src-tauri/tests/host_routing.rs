@@ -372,6 +372,8 @@ fn arc_3_cap_02a_g_04a_window_ops_capture_start_and_mcp_call_run_off_the_main_th
                         | "cli_install"
                         // #162: `databricks auth login` can wait up to 5 min (W-07c).
                         | "profile_login"
+                        // #413, #45: the install can download 487 MB before it checks hashes.
+                        | "stt_model_install"
                 ),
             "{}",
             c.name
@@ -792,6 +794,7 @@ fn arc_3_cap_02a_g_04a_schedule_runs_window_ops_capture_start_and_mcp_call_on_a_
                     | "profiles_list"
                     | "cli_install"
                     | "profile_login"
+                    | "stt_model_install"
             );
         if worker {
             assert_ne!(ran_on, caller, "{} ran on the calling thread", c.name);

@@ -98,6 +98,16 @@ export const COMMANDS = {
   hub_notice_send: B,
   /** Not in 4.5 (#509, ADR 0091): the hub's private Channel for its notices. */
   view_notice_subscribe: { windows: ['hub'], phase: 'MVP-D' },
+  /**
+   * Not in 4.5 (#413, #45, #529, ADR 0104): the hub's Local speech step. Hub-only, like
+   * `view_notice_subscribe`: `stt_model_install`'s progress Channel always resolves on the hub
+   * webview.
+   */
+  stt_model_status: { windows: ['hub'], phase: 'MVP-D' },
+  stt_model_consent: { windows: ['hub'], phase: 'MVP-D' },
+  stt_model_install: { windows: ['hub'], phase: 'MVP-D' },
+  stt_model_verify: { windows: ['hub'], phase: 'MVP-D' },
+  stt_model_cancel: { windows: ['hub'], phase: 'MVP-D' },
 } as const satisfies Record<string, Spec>;
 
 export type CommandName = keyof typeof COMMANDS;
@@ -221,6 +231,28 @@ export interface HubTextNotice {
   text: string;
 }
 
+/**
+ * The hub's Local speech step (#413, #45, #529, ADR 0104). Mirrors
+ * `mog_core::stt_setup::SetupStatus`. `model` and `consent` sizes/answers only: `install` and
+ * `verify` are what check the SHA-256s.
+ */
+export interface SttModelStatus {
+  model: 'missing' | 'partial' | 'installed';
+  /** Bytes of the `.partial` files on disk, when `model` is `'partial'`. */
+  partialBytes: number;
+  /** The pinned archive size: the "487 MB" text. */
+  totalBytes: number;
+  consent: 'not_asked' | 'granted' | 'declined';
+  installing: boolean;
+}
+
+/** One chunk of `stt_model_install` progress, on the hub's private Channel. */
+export interface SttModelProgress {
+  file: string;
+  done: number;
+  total: number;
+}
+
 interface MogArgs {
   mogId: MogId;
 }
@@ -323,6 +355,11 @@ export interface CommandArgs {
   brain_subscribe: { onEvent: Channel<BrainMessage> };
   hub_notice_send: HubTextNotice;
   view_notice_subscribe: { onNotice: Channel<unknown> };
+  stt_model_status: NoArgs;
+  stt_model_consent: { consent: 'granted' | 'declined' };
+  stt_model_install: { source: 'github' | 'hf_mirror'; onProgress: Channel<SttModelProgress> };
+  stt_model_verify: NoArgs;
+  stt_model_cancel: NoArgs;
 }
 
 /**
@@ -393,6 +430,20 @@ export const IPC_ERROR_CODES = [
   'login_cancelled',
   'cli_failed',
   'no_grant',
+  /** `stt_transcribe`: R4 has no installed, checked model (#413, ADR 0104). */
+  'stt_model_missing',
+  /** `stt_model_*` (#413, #45, #529, ADR 0104): the `SetupError`/`InstallError` codes. */
+  'stt_consent_required',
+  'stt_url_not_allowed',
+  'stt_download_failed',
+  'stt_hash_mismatch',
+  'stt_extract_failed',
+  'stt_io_failed',
+  'stt_download_cancelled',
+  'stt_install_busy',
+  'stt_models_dir_unavailable',
+  /** `stt_model_install`: no `local-stt` feature in this build (#534, #414). */
+  'stt_setup_unavailable',
 ] as const;
 
 export type IpcErrorCode = (typeof IPC_ERROR_CODES)[number];
@@ -667,6 +718,11 @@ export interface CommandReturns {
   brain_subscribe: Empty;
   hub_notice_send: Empty;
   view_notice_subscribe: Empty;
+  stt_model_status: SttModelStatus;
+  stt_model_consent: SttModelStatus;
+  stt_model_install: SttModelStatus;
+  stt_model_verify: SttModelStatus;
+  stt_model_cancel: { cancelled: boolean };
 }
 
 /** Call a command. A refused call rejects with an `IpcError` (a code only). */

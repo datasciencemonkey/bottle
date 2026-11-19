@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-stt-model-verify"
+description = "Enables the stt_model_verify command without any pre-configured scope."
+commands.allow = ["stt_model_verify"]
+
+[[permission]]
+identifier = "deny-stt-model-verify"
+description = "Denies the stt_model_verify command without any pre-configured scope."
+commands.deny = ["stt_model_verify"]
