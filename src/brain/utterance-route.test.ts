@@ -103,18 +103,36 @@ describe('utterance route (#59)', () => {
     expect(calls).toEqual(['route']);
   });
 
-  it('[RTR-04a] a confident question gets the 1.5 s preview, a weak one the chip', async () => {
-    const q = routerDecision({ confidence: ASK_CONFIDENCE });
-    const r = await routeUtterance(utterance(), deps(q).d);
-    expect(r).toMatchObject({
-      route: 'preview',
-      forced: false,
-      previewMs: PREVIEW_MS,
-      question: 'What was revenue last quarter?',
-    });
-    const weak = routerDecision({ confidence: 0.69 });
-    expect((await routeUtterance(utterance(), deps(weak).d)).route).toBe('chip');
+  it('[#557] [RTR-01b] a question is dictated first: it is inserted, and it also gets the Ask Genie chip', async () => {
+    const asked = 'What was revenue last quarter?';
+    for (const confidence of [ASK_CONFIDENCE, 0.5]) {
+      const q = routerDecision({ confidence, cleaned_text: asked, genie_question: 'Revenue Q3?' });
+      const { d, calls, inserted } = deps(q);
+      const r = await routeUtterance(utterance({ text: asked }), d);
+      // No auto-routing: never a preview without Shift.
+      expect(r).toMatchObject({
+        route: 'chip',
+        warning: undefined,
+        dictated: { route: 'inserted' },
+      });
+      expect(calls).toEqual(['route', 'insert_text']);
+      expect(inserted).toEqual([{ mogId: MOG, text: asked }]);
+      // The chip holds the exact text that was dictated, not a rewritten question.
+      if (r.route !== 'chip') throw new Error('not a chip');
+      expect(r.decision.genie_question).toBe(asked);
+    }
     expect(PREVIEW_MS).toBe(1500);
+  });
+
+  it('[#557] [MOG-06d] a question whose paste is refused goes to Copy and still gets the chip', async () => {
+    const q = routerDecision({ confidence: 0.9 });
+    const r = await routeUtterance(utterance(), deps(q, 'no_permission').d);
+    expect(r).toMatchObject({
+      route: 'chip',
+      dictated: { route: 'insert_failed', reason: 'no_permission', text: q.cleaned_text },
+    });
+    const off = await routeUtterance(utterance({ insertionOn: false }), deps(q).d);
+    expect(off).toMatchObject({ route: 'chip', dictated: { route: 'copy', text: q.cleaned_text } });
   });
 
   it('[RTR-17a] Shift with the talk key forces the ask route for a dictation decision', async () => {

@@ -148,3 +148,21 @@ describe('the utterance hook of the capture lifecycle (#59, #73)', () => {
     expect(s.owner.ownerOf('utt-1')).toBeUndefined();
   });
 });
+
+describe('a dictated question (#557, ADR 0096)', () => {
+  it('[#557] [RTR-01b] a question is inserted, its Ask Genie chip goes to onAsk, and the dictation goes to onDone after it', async () => {
+    const order: string[] = [];
+    const done: UtteranceRoute[] = [];
+    const t = setup(routerDecision({ confidence: 0.9 }), {
+      onAsk: (r) => void order.push(`ask:${r.route}`),
+      onDone: (r) => {
+        order.push(`done:${r.route}`);
+        done.push(r);
+      },
+    });
+    await t.handle(captured({ text: 'What was revenue last quarter?' }));
+    expect(t.calls).toEqual(['route', 'insert_text']);
+    expect(order).toEqual(['ask:chip', 'done:inserted']);
+    expect(done[0]).toMatchObject({ route: 'inserted' });
+  });
+});
