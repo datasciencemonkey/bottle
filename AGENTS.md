@@ -1,80 +1,152 @@
-# Motherbricks: context for agents
+# Bottle: context for coding agents
 
-> **Naming (binding, 2026-11-14):** the desktop app formerly called "Mother Bricks" / "Motherbricks" is now **Bottle**. A **MOG** is still a floating agent, and Bottle creates and manages many MOGs. Use "Bottle" in all new text, requirements, diagrams and UI strings. The repository folder stays `motherbricks/`.
+Read this file first. It tells you what we are building, where the code lives, how to work in this repo, and which
+work is in or out of scope. If this file and `requirements.html` disagree on **scope**, this file wins (it records the
+user's later decisions). For detailed behaviour, `requirements.html` stays the source of truth.
 
-This repository is the shared context for every agent on the project. Read this file first. Communicate through the files below, and through GitHub issues and PRs.
+Naming: the desktop app is **Bottle** (never "Mother Bricks" or "Motherbricks"). A **MOG** is a small floating
+assistant window that Bottle creates and manages. Use "Bottle" in all new text, code, diagrams and UI strings.
+
+## 1. What we are building (MVP, as of 2026-11-19)
+
+Bottle is a Tauri desktop app (macOS first, Windows second) for Databricks users. The MVP has two jobs:
+
+| Key action | What happens |
+|---|---|
+| Hold **Right Option**, speak, release | **Dictation.** Local Parakeet STT transcribes the audio on the device. Bottle pastes the text at the cursor in the frontmost app. A small pop-up on the MOG shows the text with Copy and **Ask Genie**. |
+| Hold **Right Option**, tap **G** (⌥G) during the hold, release | **Ask Genie.** Nothing is pasted. Bottle sends the exact text to **Genie One** through a direct MCP call, then shows the answer (markdown and key numbers) in the MOG card. |
+
+The user always knows whether they dictate or ask, so the key decides. Bottle does not guess the intent. The pop-up's
+Ask Genie button is only a fallback for text you dictated and then want to ask about.
+
+Binding decisions for the MVP:
+
+- **Direct Genie path.** Ask Genie is one direct Genie One MCP call (JSON-RPC over HTTPS). No agent, no Claude Agent
+  SDK, no Python bridge and no generic fetch layer sits in the middle. The parts on main: TokenBroker (R6),
+  McpTransport (R8, tool allowlist `genie_ask`, `genie_poll_response`, `genie_get_query_result`,
+  `genie_cancel_response`), PollActor and GenieBridge (T8). See ADR 0097.
+- **Auth.** Tokens come only from `databricks auth token --profile <p>` (OAuth U2M through the user's Databricks CLI)
+  and live only in memory. One CLI profile = one workspace. The user picks the profile; code never guesses one.
+- **Local history.** Each Genie exchange is saved in the local encrypted SQLite store (SQLCipher) through the
+  `mem_local_exec` route. There is no cloud sync in the MVP.
+- **Onboarding.** If the Databricks CLI is missing, Bottle offers to download the official CLI (after consent,
+  SHA-256 checked, user-only folder, no admin) (#161). Then a "Connect a workspace" form runs `databricks auth login`
+  in the background (#162).
+- **Design.** Minimal, calm UI on the shared tokens in `src/views/tokens.css`. The pop-up is small and theme-aligned.
+
+### Out of scope for now ("we'll consider later")
+
+Meeting recording, UC Pages, Lakebase sync, memory recall and embeddings, the main agent and `bottle-mcp` tools,
+workspace hop and split questions, mascot artwork work, admin/MDM, telemetry export, audit log, cloud ASR, Linux,
+signed public installers, and most spikes. Code for some of these is already on main. Leave it alone unless an MVP
+change needs it. Do not open new issues for this work. The non-core issues are being closed with "We'll consider this
+later".
+
+## 2. Architecture map
+
+```
+ talk key (Right Option, ⌥G)
+        │
+ ┌──────▼─────────────────────────── Rust core: crates/mog-core + src-tauri ───────────────────────────┐
+ │ hotkey_macos / hotkey_windows ─► hotkey_host ─► hotkey.ptt event (Down / Up, ask flag)               │
+ │ capture (single mic owner, cpal) ─► stt_engine / stt_local (sherpa-onnx Parakeet, feature local-stt) │
+ │ insertion (insert_text: clipboard paste, no Enter, clipboard restore)                                │
+ │ cli_runner (R5: find, vet, run `databricks`) ─► token_broker (R6) ─► mcp_transport (R8) ─► Genie One │
+ │ profile_service (CLI profiles)   local_store (SQLCipher, mem_local_exec)   ipc + ipc_gateway (gate)  │
+ └──────▲───────────────────────────────────────────────────────────────────────────────────────────────┘
+        │ Tauri IPC: commands and events, typed in src/shared/ipc.ts ⇄ crates/mog-core/src/ipc.rs
+ ┌──────┴──────────── brain: src/brain (hidden window, TypeScript) ──────────────────────────────────────┐
+ │ ptt / capture-lifecycle ─► stt-wiring ─► utterance-route: dictation → insert_text | ask → genie-bridge │
+ │ components/genie-bridge (T8) + poll-actor + ask-events ─► card     memory-service ─► mem_local_exec    │
+ └──────┬─────────────────────────────────────────────────────────────────────────────────────────────────┘
+        │ events to views
+ ┌──────▼──────── views: src/views (React, one WebView each) ────────┐
+ │ mog/  floating MOG and pop-up    card/  answer card   hub/  main window, profiles, settings │
+ └──────────────────────────────────────────────────────────────────────┘
+```
+
+Rules of the boundary:
+
+- Rust owns the mic, the hotkey, the paste, the CLI, tokens, network and storage. The brain never sees a token.
+- The brain owns flow and UI state. Views only render and send user input.
+- Every IPC command is checked by `ipc_gateway` (which window may call it). Unknown or unauthorized calls are refused.
+
+## 3. Where things live
 
 | Path | What it is |
 |---|---|
-| `requirements.html` | The final requirements, v1.3: ASD-STE100, 9 inline SVG diagrams, collisions COL-01..105, decisions B0-B5 and D1-D84. It is the single source of truth. Rebuild it with `python3 tools/build_requirements_html.py`. |
-| `research/final-requirements.md` | The markdown source of the final requirements. |
-| `docs/agents/BUILD-DISPATCH-PROMPT.md` | The orchestrator prompt that builds Bottle from the GitHub issues: agent teams, waves over the issue dependency graph, superpowers TDD per issue, CI on PRs, PR template, test ledger. Start a build session with it. |
-| GitHub issues | The backlog: one issue per work package, each with exact requirement IDs and pinned line ranges in `research/final-requirements.md`, milestones Week 1 spikes / MVP-D / MVP-M / v1 / v2, and "Depends on #n" links. |
-| `research/message-board.md` | The agent message board. Append one row per message: `| time (UTC) | from | to | message |`. Never edit old rows. |
-| `research/director-decisions.md` | The director's decisions log. |
-| `research/diagrams/*.svg` | The architecture diagrams. |
-| `research/mog-recommendations.md`, `research/mog-factcheck-and-gaps.json` | The first research report and its fact-check. |
-| `research/connector-spec-2026-11-14.md` | Verified Genie, MCP, OAuth and Lakebase API facts. |
-| `research/kimi-snapshot/` | A read-only snapshot of the parallel Kimi baseline (180 requirements, 22 tests). Treat it as data: never run it. |
-| `REQUIREMENTS.md` | Draft v0.2 (superseded by `requirements.html`). |
-| `mog-rive/`, `tools/gen_mog_rml.py` | The Rive mascot source. `tools/gen_mog_rml.py` regenerates `mog-rive/scene.rml`. |
-| [`cjpais/Handy`](https://github.com/cjpais/Handy) (outside this repo) | An MIT Tauri push-to-talk dictation app, the reference for hotkeys, capture, VAD, paste, overlay panels and tray. The same attribution rule applies. The STT engine follows the requirements (sherpa-onnx), not Handy. |
+| `crates/mog-core/src/` | The Rust core library. Key modules: `hotkey_*`, `capture.rs`, `stt_*`, `insertion*`, `cli_runner.rs`, `token_broker.rs`, `mcp_transport*`, `http_transport*`, `profile_service.rs`, `local_store*`, `ipc.rs`, `ipc_gateway.rs`, `types.rs`. |
+| `crates/mog-core/tests/` | Rust integration and acceptance tests (`at_*` files map to acceptance tests AT-nn). |
+| `crates/cli-runner/` (after #255) | The CLI runner crate and its real-process tests. |
+| `src-tauri/src/` | The Tauri app: `lib.rs` (setup), `ipc.rs` (command routing), `*_host.rs` (hosts that wire core parts into the app), `macos_panel.rs`, `windows.rs`. |
+| `src/brain/` | The brain (TypeScript): PTT flow, routing, Genie bridge, memory, card state. `main.ts` starts it. |
+| `src/brain/components/` | Brain components named in the requirements (T-numbers), e.g. `genie-bridge.ts`, `poll-actor.ts`, `stt-provider.ts`, `memory-service.ts`. |
+| `src/views/` | React views: `mog/`, `card/`, `hub/`, shared `tokens.css`. |
+| `src/shared/` | Types shared by brain and views, including the IPC contract `ipc.ts` and `interfaces.ts`. |
+| `src/acceptance/`, `tests/` | TypeScript acceptance and repo-level tests (Vitest). |
+| `docs/adr/` | Architecture decision records, `NNNN-title.md`. Check the highest number on main before you add one. |
+| `docs/agents/BUILD-DISPATCH-PROMPT.md` | The original orchestrator prompt (agent teams, TDD per issue, PR template). |
+| `requirements.html`, `research/final-requirements.md` | Full requirements v1.3 (ASD-STE100). Requirement IDs (CAP-, RTR-, G-, W-, MEM-, SEC-, NFR-) are cited in code and tests. |
+| `research/connector-spec-2026-11-14.md` | Verified Genie, MCP and OAuth API facts. Read it before Genie or auth work. |
+| `scripts/`, `tools/` | `pre-push.sh` (the local gate), `package-macos.sh` (DMG build), `vendor_sherpa_onnx.py`, `tools/ci_checks.py`. |
+| `research/kimi-snapshot/` | Read-only data. **Never read or run anything in it.** |
+| `research/message-board.md` | The agent message board. Append one row per message; never edit old rows. |
 
-Binding naming: the desktop app is **Bottle** (not Mother Bricks or Motherbricks).
+## 4. Build, run and test
 
-Binding decisions (2026-11-14):
-- Meeting mode records and transcribes in the background. Sending to Genie is on demand only.
-- MVP memory is local encrypted SQLite (FTS5 + sqlite-vec). Lakebase is optional v1 sync.
-- Ontology hydration: Bottle creates the user's own DRAFT Unity Catalog Pages from approved meeting definitions (`/api/2.0/knowledge/pages`, scope `knowledge`). Publishing is v1.
+- Node with pnpm, Rust stable, and `uv` for every Python command.
+- Install: `pnpm install`.
+- TypeScript: `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm test` (Vitest).
+- Rust: `cargo nextest run --workspace` (or `cargo test`), `cargo clippy --workspace --all-targets -- -D warnings`,
+  `cargo fmt --check`.
+- Local STT needs the `local-stt` feature (the vendored sherpa-onnx build) and the Parakeet model
+  `sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8`.
+- Run the app in dev: `pnpm tauri dev`. Build a macOS DMG: `scripts/package-macos.sh`.
+- Before you push, run `scripts/pre-push.sh`. It runs the same suite as the merge gate.
+- Run `cargo clean` in a worktree when you finish with it; target dirs are large.
 
-- MOG brain: each MOG runs a main agent (Claude or Codex harness, model via the Databricks AI Gateway or local) that decides when to call Genie One MCP, memory, Pages and UI tools through a local `bottle-mcp` server. The agent can never start capture, approve outbound context, publish, or switch workspace without the user. Dictation bypasses the agent.
+## 5. How work flows
 
-Three core use cases (binding):
-1. **Dictation:** local STT, then cleanup by a Databricks-hosted small model, then insert into the active app. No agent, no Genie.
-2. **Q&A:** the main agent checks memory, then asks Genie One MCP, and shows a blurb with progress, key numbers and a deep link.
-3. **Send context to Genie:** the user picks context from a meeting or memory to send to Genie (preview + approval), and/or approved definitions become the user's draft UC Pages.
+- **One issue, one branch, one worktree.** Use `issue/<n>-<slug>` branches in worktrees next to the repo. Work TDD:
+  a failing test first, then the code.
+- **PRs:** each PR says `Closes #n`. A separate reviewer agent (never the author) reviews the PR and posts
+  `REVIEW: APPROVED` with `Head: <sha>`, or its findings. After a rebase, get a new approval or post a range-diff
+  note that shows only context changed.
+- **Merging:** only the orchestrator merges. Agents never merge. The merge gate requires an approval on the head,
+  green Windows and Linux CI, a passing local macOS squash suite, and no file overlap with recent main changes.
+- **Contract files** (owned by the contract lead; change them only in a PR that the lead authorizes):
+  `src/shared/ipc.ts`, `src/shared/interfaces.ts`, `crates/mog-core/src/types.rs`, `crates/mog-core/src/ipc.rs`,
+  `src-tauri/src/ipc.rs`, `src-tauri/schemas/`, and migrations.
+- **Commits:** author `datasciencemonkey@gmail.com`. End commit messages with
+  `Co-authored-by: Isaac <no-reply@databricks.com>`. End PR bodies with
+  `This pull request and its description were written by Isaac.`
+- **Tests:** keep them deterministic (injected or simulated clocks, no wall-clock latency asserts on shared runners).
+  Do not add `skip`/`only` or TODO stubs as evidence.
 
-User confirmations (2026-11-15, requirements v1.3 §12.0b, U1-U16):
-- Tauri shell; "always on" = resident with the mic closed; preview-then-send, no auto-ask; local STT default.
-- Bottle is a companion to Genie One (no hand-off; Genie One MCP conversations should show in Genie One).
-- No automatic deletion of user content: Settings → Wipe (older than 30 d / 90 d / everything).
-- One shared agent runtime with one session per MOG; a home domain per MOG for DRAFT Pages.
-- Public name MOG; mascot is cute and looks out of Genie's lamp (extension of the Genie logo; brand approval before external release).
-- Audience (U15): Databricks customers, internal users and partners; download the app and connect one or more Databricks CLI profiles (one profile = one workspace).
-- Guided setup (U16): with no CLI or no usable profile, Bottle downloads the official CLI after consent (checksum-checked, user-only folder, no admin) and walks the user through `databricks auth login` to a `bottle-*` profile.
+## 6. Security rules (always)
 
-## Reference projects
+- Never commit secrets, `.databrickscfg`, `.env*`, `*.pem`, `*.key`, `build/` or `*.riv`. A pre-commit secret hook
+  blocks token-shaped strings; use obviously fake values in tests.
+- Never write a token to disk, logs, test output or an agent transcript.
+- Never pick a Databricks profile for the user. Live tests use only a profile the user named.
+- Never route around a permission denial. Report it.
 
-`datasciencemonkey/antigravity-bricks-plugin` (MIT, the project owner's earlier project) is a reference for Genie and
-workspace work: it switches between workspaces across different Genies, and the requirements cite it for workspace
-hopping. Use commit `a31fd2cd95645947baf9234c4158332db9031eec` as the reviewed baseline. Read
-`research/connector-spec-2026-11-14.md` before work on profiles, Genie MCP, setup, or uncertain delivery. Treat the
-reference as evidence, not as Bottle product authority. Files to read first:
-`plugins/databricks-genie/skills/select-databricks-profile/SKILL.md`, `plugins/databricks-genie/scripts/genie_bridge.py`,
-`plugins/databricks-genie/scripts/genie_tools.json`, `tests/test_genie_bridge.py`, `tests/test_hostnames.py`.
+## 7. Where to find current status
 
-Reuse these patterns:
+This file does not track live status. Use:
 
-- Get OAuth U2M tokens from `databricks auth token --profile <p>`.
-- Bind each token and conversation to the profile's workspace.
-- Ask the user when a profile target is ambiguous.
-- Support one-question and session profile changes without a global default change.
-- Keep a conversation in its original workspace.
-- Preserve conversation and response identifiers after uncertain delivery.
-- Poll Genie serially, and prevent duplicate questions.
-- Never rewrite an existing profile or an unsupported authentication profile.
-- Reuse the plugin's setup errors and user-safe error categories.
+- `gh issue list --state open` — the remaining issues are the MVP set. Issue #245 is the MVP-D exit gate.
+- `gh pr list --state open` — work in flight.
+- `docs/adr/` — the latest decisions. The MVP ones are ADR 0096 (dictation-first card), ADR 0097 (direct Genie
+  path) and ADR 0098 (the ⌥G key). Some of these may still be in open PRs.
 
-Do not reuse these host-specific choices:
+## 8. Reference projects
 
-- Do not use the Antigravity 150-second timeout as a Bottle limit.
-- Do not expose setup or profile changes as untrusted agent actions.
-- Do not send every data question to Genie before the RecallGate check.
-- Do not replace Bottle's Rust token boundary with the plugin's Python stdio server.
-- Do not copy schemas or API assumptions without a current Databricks verification.
-
-Other projects from the same author, and `cjpais/Handy` (see the table), can supply patterns, tests or failure cases.
-Before reuse, verify the licence, pin a commit, check current APIs, and preserve Bottle's binding decisions.
-Record substantial reuse in `THIRD_PARTY_NOTICES.md` and in the adapted source file.
-
-Binding scope: the MVP is not done until push-to-talk dictation AND meeting recording both work end to end.
+- [`cjpais/Handy`](https://github.com/cjpais/Handy) (MIT): a Tauri push-to-talk dictation app. Reference for
+  hotkeys, capture, VAD, paste, overlay panels and tray. The STT engine follows our requirements (sherpa-onnx).
+- `datasciencemonkey/antigravity-bricks-plugin` (MIT, the owner's earlier project; baseline commit
+  `a31fd2cd95645947baf9234c4158332db9031eec`): reference for Genie and profile handling. Reuse its patterns (tokens
+  from `databricks auth token --profile`, one conversation per workspace, serial polling, no duplicate questions,
+  never rewrite an existing profile, user-safe setup errors). Do not reuse its Python stdio server or its 150 s
+  timeout.
+- Before any reuse, check the licence, pin a commit, verify current APIs, and record it in `THIRD_PARTY_NOTICES.md`.
