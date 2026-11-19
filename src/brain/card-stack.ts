@@ -58,7 +58,7 @@ export interface CardStack {
   complete(blurbId: string): void;
   /** Card input from `view_emit` (`hover`, `click`). Malformed input is dropped. */
   input(kind: ViewEmitKind, payload: unknown): void;
-  /** UX-38: set the footer STT badge. TODO(#52): call it with the provider of each Transcript. */
+  /** UX-38: set the footer STT badge. TODO(#374): call it with `sttBadgeText(T4.sttUse())` (#52). */
   setSttBadge(text: string | undefined): void;
   /** Offer a chip (Appendix E). The row keeps 4 or less, the rest go to the expanded card. */
   offerChip(c: ChipInput): void;

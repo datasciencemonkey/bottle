@@ -165,10 +165,14 @@ describe('brain component stubs', () => {
     await expectStub(() => t.directedTo(seg), 119);
   });
 
-  it('[T4] SttProvider stubs transcribe and activeProvider (#52)', async () => {
+  it('[T4] SttProvider transcribes with local Parakeet over stt_transcribe (#52)', async () => {
     const t = createSttProvider();
-    await expectStub(() => t.transcribe(seg, { ...tags, op: 'asr' }), 52);
-    await expectStub(() => t.activeProvider(), 52);
+    expect(t.activeProvider()).toBe('local_parakeet');
+    // The default core double answers `{}`: not a valid transcript, so the chain ends in a
+    // content-free failure and never resolves an empty transcript.
+    await expect(t.transcribe(seg, { ...tags, op: 'asr' })).rejects.toMatchObject({
+      kind: 'could_not_transcribe',
+    });
   });
 
   it('[T5] CleanupProvider cleans (#55): a short utterance keeps its pre-pass text', async () => {

@@ -20,7 +20,7 @@
 //! - local acknowledgement and preview chip: the brain and the view, TODO(#142). The chip renders
 //!   in the view, so its time needs an IPC event: TODO(#318).
 //! - inserted text: `insert_text`, TODO(#58).
-//! - the STT path: local Parakeet (R4 `stt_engine`, #46; host wiring TODO(#514); SP-04 TODO(#44)), cloud TODO(#52).
+//! - the STT path: local Parakeet (R4 `stt_engine`, #46; host wiring TODO(#514); SP-04 TODO(#44)), cloud: T4 (#52), ASR client TODO(#49).
 //!
 //! Device runs need a person: `docs/tests/LATENCY-BENCH.md`.
 

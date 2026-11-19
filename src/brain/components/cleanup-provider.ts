@@ -16,7 +16,7 @@
  * The result holds the text and its marks only: never an intent, a route, a backend, a profile
  * or a workspace (CAP-69). The provider never logs, and nothing here holds a token: the Rust
  * proxy adds it. The caller picks the profile; Bottle never does.
- * TODO(#52): the raw text comes from the SttProvider fallback chain; today callers pass a string.
+ * The raw text comes from the T4 SttProvider fallback chain (#52).
  */
 import { call } from '../../shared/ipc';
 import type { JsonObject } from '../../shared/ipc';

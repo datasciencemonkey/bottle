@@ -4,7 +4,7 @@
  * when online; the embedding request waits in the outbox.
  *
  * "No cloud request" is checked with `src/test-support/cloud-calls.ts` on the IPC log of the
- * brain. The fallback chain (#52), the command grammar and the offline classifier (#143), the
+ * brain. The fallback chain (#52) runs on the IPC double. The command grammar and the offline classifier (#143), the
  * ask outbox (#41) and offline recall (#199) are not built, so these tests stay `it.skip` with the
  * feature issue. The embedding outbox (#102) runs on doubles of R10, the network and the
  * embedder. The network-off device run is #175 and a person's step (docs/tests/AT-DICTATION-STT-OFFLINE.md). The transcript identity contract (CAP-72) runs in
@@ -17,7 +17,7 @@ import { LocalMemoryService, createMemoryService } from '../brain/components/mem
 import type { LocalStmtId } from '../brain/components/memory-store';
 import { createRouterContextGate } from '../brain/components/router-context-gate';
 import type { RouterInput } from '../brain/components/router-step';
-import { createSttProvider } from '../brain/components/stt-provider';
+import { createSttProvider, ipcSttConfig } from '../brain/components/stt-provider';
 import { core } from '../brain/test-core';
 import { argsOf, callsTo, cloudCalls } from '../test-support/cloud-calls';
 import { createGenieOneMcpDouble } from '../test-support/genie-one-mcp';
@@ -56,9 +56,11 @@ const seg: SegmentRef = {
 describe('AT-04 dictate offline', () => {
   beforeEach(() => core.reset());
 
-  it.skip('[AT-04] [CAP-60a] each STT failure step goes to the next provider TODO(#52)', async () => {
-    // Databricks ASR selected and failing: the chain goes to local Parakeet (8.3).
+  it('[AT-04] [CAP-60a] each STT failure step goes to the next provider', async () => {
+    // Databricks ASR selected (opt-in after a probe pass) and failing: the chain goes to local
+    // Parakeet (8.3).
     core.invoke.mockImplementation(async (cmd: string, args?: unknown) => {
+      if (cmd === 'policy_get') return {};
       const p = (argsOf(args) as { provider?: string } | undefined)?.provider;
       if (cmd === 'stt_transcribe' && p === 'dbx_gemini') throw new Error('OFFLINE');
       return {
@@ -71,13 +73,32 @@ describe('AT-04 dictate offline', () => {
         latencyMs: 300,
       };
     });
-    const t = await createSttProvider().transcribe(seg, tags);
+    const stt = createSttProvider({
+      config: ipcSttConfig({ asr: async () => ({ profile: 'user-profile' }) }),
+    });
+    const t = await stt.transcribe(seg, tags);
     expect(t.provider).toBe('local_parakeet');
+    expect(callsTo(core.invoke.mock.calls, ['stt_transcribe'])).toHaveLength(2);
   });
 
-  it.skip('[AT-04] [CAP-60b] with SttPolicy=local_only no ASR request leaves the device TODO(#52)', async () => {
-    // TODO(#52): set the MDM policy double to local_only (policy_get) before the call.
-    await createSttProvider().transcribe(seg, tags);
+  it('[AT-04] [CAP-60b] with SttPolicy=local_only no ASR request leaves the device', async () => {
+    core.invoke.mockImplementation(async (cmd: string, args?: unknown) => {
+      if (cmd === 'policy_get') return { SttPolicy: 'local_only' };
+      const p = (argsOf(args) as { provider?: string } | undefined)?.provider;
+      return {
+        segmentId: 's1',
+        text: 'hi',
+        raw: 'hi',
+        provider: p,
+        model: 'm',
+        runtime: 'r',
+        latencyMs: 300,
+      };
+    });
+    const stt = createSttProvider({
+      config: ipcSttConfig({ asr: async () => ({ profile: 'user-profile' }) }),
+    });
+    expect((await stt.transcribe(seg, tags)).provider).toBe('local_parakeet');
     expect(cloudCalls(core.invoke.mock.calls)).toEqual([]);
   });
 

@@ -1,0 +1,41 @@
+/**
+ * The STT step of the capture lifecycle (#14, #52, ADR 0088): T4 SttProvider for one final
+ * segment.
+ *
+ * - The transcript text goes on to the utterance route.
+ * - An `SttFailure` ("Could not transcribe. Retry", or CAP-64b "Transcription of this language
+ *   is not available on this device.") shows its fixed text on the card of the MOG that owns
+ *   the segment, and no text is routed. So no empty transcript ends without a message.
+ * - The card holds the fixed text only: never transcript text, a profile or an error detail.
+ *
+ * TODO(#60): the dictation view gives the Retry control that calls `SttProvider.retry`.
+ */
+import type { MogId, SegmentRef } from '../shared/interfaces';
+import type { CardUpdate } from '../shared/ipc';
+import { SttFailure, type SttProvider } from './components/stt-provider';
+
+/** The card update that shows an STT failure on the MOG. */
+export function sttFailureCard(mogId: MogId, f: SttFailure): CardUpdate {
+  return { mogId, blurbs: [{ id: `stt-${f.segmentId}`, text: f.userText }], chips: [] };
+}
+
+/** The `transcribe` dependency of the capture lifecycle. It never throws. */
+export function createLifecycleTranscriber(
+  stt: SttProvider,
+  showCard: (mogId: MogId, update: CardUpdate) => Promise<unknown>,
+): (seg: SegmentRef) => Promise<string> {
+  return async (seg) => {
+    try {
+      return (await stt.transcribe(seg, { app: 'bottle', mog: seg.mogId, op: 'asr' })).text;
+    } catch (e) {
+      const f =
+        e instanceof SttFailure ? e : new SttFailure('could_not_transcribe', seg.segmentId, false);
+      try {
+        await showCard(seg.mogId, sttFailureCard(seg.mogId, f));
+      } catch {
+        // A closed card shows nothing; the utterance still routes no text.
+      }
+      return '';
+    }
+  };
+}
