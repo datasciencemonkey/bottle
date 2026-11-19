@@ -322,10 +322,10 @@ describe('V3 card view: expanded sections and chips', () => {
   });
 
   // B1/B2 (review round 1): a dictation blurb landed after the Genie answer, so the Genie blurb
-  // is no longer newest. The panel must still (a) render that Genie blurb's own raw markdown
-  // through SafeMarkdown in the blurb list (B1), and (b) keep treating the sections as a live
-  // answer, since the Genie blurb that produced them is still in the stack (B2). Once the brain
-  // ages that Genie blurb out entirely (UX-12), the sections are orphaned and must not show.
+  // is no longer newest. The panel must still (a) never leak that Genie blurb's own raw markdown
+  // (B1), and (b) keep treating the sections as a live answer, since the Genie blurb that
+  // produced them is still in the stack (B2). Once the brain ages that Genie blurb out entirely
+  // (UX-12), the sections are orphaned and must not show.
   it('[#598] a later dictation blurb never brings back raw markdown or an orphaned answer', async () => {
     const { el } = await mountCard(<CardView mogId={ID} />);
     await tauri.emit('card:update', {
@@ -337,13 +337,19 @@ describe('V3 card view: expanded sections and chips', () => {
       chips: [],
       sections: [{ id: 'answer', md: BUG_SAMPLE }],
     });
-    const genieLi = el.querySelector(`[data-blurb="${GENIE_ID}"]`) as HTMLElement;
-    // The Genie blurb's own text (not just the `sections` copy) never leaks raw `**`/`[x](y)`.
-    expect(genieLi.textContent).not.toContain('**');
-    expect(genieLi.textContent).not.toContain('[ai_transcribe function](');
-    expect(genieLi.querySelector('strong')).not.toBeNull();
+    // No raw markdown leaks anywhere in the panel, including the Genie blurb's own text.
+    expect(el.textContent).not.toContain('**');
+    expect(el.textContent).not.toContain('[ai_transcribe function](');
     // The sections answer is still live: the Genie blurb that produced it is still in the stack.
     expect(el.querySelector('[data-section="answer"]')).not.toBeNull();
+    // [LOW, round 2] "the answer shows twice": the `Section` below already shows this Genie
+    // blurb's answer in full, so the blurb list must not render it a second time. A phrase
+    // unique to the answer appears exactly once in the whole panel, not once per render path.
+    const once = (el.textContent?.match(/ai_transcribe function/g) ?? []).length;
+    expect(once).toBe(1);
+    const genieLi = el.querySelector(`[data-blurb="${GENIE_ID}"]`) as HTMLElement;
+    expect(genieLi.querySelector('strong')).toBeNull();
+    expect(genieLi.textContent).toBe('');
 
     // The Genie blurb ages out of the stack (UX-12); the sections it left behind are now
     // orphaned. The panel must never fall back to showing them unbounded and raw.

@@ -289,10 +289,18 @@ export function CardView({ mogId }: { mogId: MogId }) {
                   </li>
                 ))}
               </ul>
+            ) : isGenieBlurbId(b.id) && hasAnswer ? (
+              // [LOW, round 2] `hasAnswer` means the `Section` below already shows this exact
+              // Genie answer in full, with key numbers: showing it a second time here, as a raw
+              // blurb line, is the "answer shows twice" finding. Leave the line empty but keep
+              // the `<li>` (and its hover handlers, B2): it is still what holds this blurb live.
+              ''
             ) : isGenieBlurbId(b.id) ? (
               // B1 (review round 1): a Genie blurb's text is its full markdown answer (a
               // completed outcome blurb's text is the raw `end.md`), even when it is not the
-              // newest entry (for example a dictation blurb landed after it).
+              // newest entry (for example a dictation blurb landed after it). Reached only when
+              // `hasAnswer` is false (no live `Section` duplicates it) — for example a page
+              // domain or checklist panel with no answer section at all.
               <SafeMarkdown text={b.text} trust={NO_LINKS} />
             ) : (
               b.text

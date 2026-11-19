@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 /** #573: the Ask Genie status pill and the transient answer card beside the MOG. */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { act } from 'react';
 import type { Root } from 'react-dom/client';
 import { AFTER_HOVER_MS, FAILURE_SHOW_MS, answerShowMs } from '../../shared/genie-status';
@@ -157,6 +159,26 @@ describe('Genie card (#573)', () => {
     expect(el.querySelector('[data-genie]')?.getAttribute('data-state')).toBe('dismissing');
   });
 
+  // [LOW, round 2] "also fix if cheap": a press that moves before release is a drag, not a
+  // click, and must never open Conversations. The old guard (checking `document.getSelection()`)
+  // did nothing, because `.genie` is `user-select:none` and never has a selection to find.
+  it('[#598] a press-drag-release on the card body never opens Conversations', async () => {
+    const el = await mount();
+    await tauri.emitTo(`card-${ID}`, 'card:update', answered);
+    const card = el.querySelector('[data-genie]') as Element;
+    await act(async () => {
+      card.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 10, clientY: 10 }));
+      card.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 60, clientY: 10 }));
+    });
+    expect(clicks()).toEqual([]);
+    // A real click (press and release at the same point) still opens it.
+    await act(async () => {
+      card.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 10, clientY: 10 }));
+      card.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 11, clientY: 9 }));
+    });
+    expect(clicks()[0]?.payload).toEqual({ target: 'open_conversations', requestId: OP });
+  });
+
   it('[#103] a click on [Open in Bottle] opens Conversations and does not bubble twice', async () => {
     const el = await mount();
     await tauri.emitTo(`card-${ID}`, 'card:update', answered);
@@ -237,6 +259,27 @@ describe('Genie card (#573)', () => {
     expect(open.closest('.genie-answer-body')).toBeNull();
     expect(scroller.querySelector('button[data-action="dismiss"]')).toBeNull();
     expect(scroller.querySelector('button[data-action="open-in-bottle"]')).toBeNull();
+  });
+
+  // Review round 2, finding 1: the card clipped its own footer when the answer had key numbers
+  // (max-height 280 + overflow hidden, plus a fixed 180px expanded body: the parts added up to
+  // more than 280). jsdom cannot lay out flex to catch the clip itself, so this checks the actual
+  // rule, the same way `Popup.test.tsx` checks CSS it cannot render: the card is a flex column,
+  // the body is the one part that may give up height, and everything else is `flex: none`.
+  it('[#598] the card is a flex column so the footer and key numbers can never be squeezed out', async () => {
+    const css = readFileSync(join(__dirname, 'genie-card.css'), 'utf8');
+    expect(css).toMatch(
+      /\.genie-answer,\s*\n\.genie-failure,\s*\n\.genie-message\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;/,
+    );
+    expect(css).toMatch(/\.genie-body\s*\{[^}]*display:\s*flex;[^}]*min-height:\s*0;/);
+    expect(css).toMatch(/\.genie-md\s*\{[^}]*flex:\s*1 1 auto;[^}]*min-height:\s*0;/);
+    expect(css).toMatch(
+      /\.genie-question,\n\.genie-keys,\n\.genie-failure-body,\n\.genie-foot\s*\{\s*\n\s*flex:\s*none;/,
+    );
+    // The flex safety net on the expanded body itself, alongside the measured, per-toggle cap.
+    expect(css).toMatch(
+      /\.genie-answer-body\[data-expanded='true'\]\s*\{[^}]*flex:\s*1 1 auto;[^}]*min-height:\s*0;/,
+    );
   });
 
   it('[#573] an ignored answer fades after its show time and tells the brain, once', async () => {
@@ -403,13 +446,23 @@ describe('Genie card: the window fit (#573)', () => {
     expect(sizes.at(-1)).toBe(0);
   });
 
-  // Review round 1, finding 3: the answer's `max-height` animates over 200 ms (genie-card.css), so
-  // a size read on the frame that toggles Show more/less is still the old, pre-transition size.
-  // The window must refit once the transition actually settles (`transitionend`), not before, so
-  // it never measures mid-motion and never jumps.
-  it('[#598] Show more/less refits the window only once the transition settles', async () => {
+  // Review round 2, finding 2: growing the window only after `transitionend` left the footer
+  // below the window edge for the ~200 ms the body's `max-height` animated, then the window
+  // snapped open. On Show more the window must grow to its target size *first* ("the window
+  // fits the final size first", the pattern this file already uses for the pill-to-card grow
+  // motion), and only then does the body open. Collapsing keeps the round-1 order: the body
+  // closes first, and the window shrinks once that settles (`transitionend`).
+  it('[#598] Show more grows the window before the body opens; Show less shrinks it after the body closes', async () => {
     const sizes: number[] = [];
-    const pushSize = (px: number) => void sizes.push(px);
+    // A controllable `onSize`, so the test can see the window mid-resize instead of guessing at
+    // `act`'s microtask timing.
+    let resolveSize: (() => void) | undefined;
+    const pushSize = (px: number) => {
+      sizes.push(px);
+      return new Promise<void>((resolve) => {
+        resolveSize = resolve;
+      });
+    };
     const longMd = Array.from({ length: 20 }, (_, i) => `Paragraph number ${i}.`).join('\n\n');
     const { GenieCard } = await import('./GenieCard');
     tauri.label = `card-${ID}`;
@@ -423,6 +476,7 @@ describe('Genie card: the window fit (#573)', () => {
     const body = r.el.querySelector('.genie-answer-body') as HTMLElement;
     Object.defineProperty(body, 'scrollHeight', { value: ANSWER_CLAMP_PX * 3, configurable: true });
     Object.defineProperty(body, 'clientHeight', { value: ANSWER_CLAMP_PX, configurable: true });
+    await act(async () => void resolveSize?.());
     await act(
       async () =>
         void r.root.render(
@@ -440,17 +494,30 @@ describe('Genie card: the window fit (#573)', () => {
           </section>,
         ),
     );
+    await act(async () => void resolveSize?.());
+
+    // Show more: the window is already asked to grow, but the body stays closed until that
+    // resize resolves.
     const before = sizes.length;
-    const toggle = r.el.querySelector('button.genie-toggle') as HTMLElement;
-    await act(async () => void toggle.click());
-    // The click itself never measures mid-transition.
-    expect(sizes.length).toBe(before);
+    const toggle = () => r.el.querySelector('button.genie-toggle') as HTMLElement;
+    await act(async () => void toggle().click());
+    expect(sizes.length).toBe(before + 1);
+    expect(body.getAttribute('data-expanded')).toBe('false');
+    await act(async () => void resolveSize?.());
+    expect(body.getAttribute('data-expanded')).toBe('true');
+    expect(toggle().textContent).toBe(SHOW_LESS_LABEL);
+
+    // Show less: the body closes at once (no grow call yet); the window only shrinks once the
+    // close transition settles.
+    const beforeCollapse = sizes.length;
+    await act(async () => void toggle().click());
+    expect(body.getAttribute('data-expanded')).toBe('false');
+    expect(sizes.length).toBe(beforeCollapse);
     await act(async () => {
       const ev = new Event('transitionend');
       Object.defineProperty(ev, 'propertyName', { value: 'max-height' });
       body.dispatchEvent(ev);
     });
-    // Only once `max-height` settles does the window refit, exactly once.
-    expect(sizes.length).toBe(before + 1);
+    expect(sizes.length).toBe(beforeCollapse + 1);
   });
 });
