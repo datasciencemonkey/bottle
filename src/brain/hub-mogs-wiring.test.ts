@@ -41,7 +41,16 @@ describe('hub MOG wiring (#26)', () => {
     await m.create({ name: 'Ops', home: 'p' });
     await sendHubSnapshot(m, { kind: 'info', text: 'Create a MOG to start' }, send);
     expect(last()).toEqual({
-      mogs: [{ mogId: id(1), name: 'Ops', home: 'p', persona: '', running: false }],
+      mogs: [
+        {
+          mogId: id(1),
+          name: 'Ops',
+          home: 'p',
+          persona: '',
+          running: false,
+          colorVariant: 'coral',
+        },
+      ],
       unreadable: [],
       runningCount: 0,
       maxRunning: 1,
@@ -71,13 +80,23 @@ describe('hub MOG wiring (#26)', () => {
       return last();
     };
     expect((await step({ action: 'mog.create', name: 'Sales', home: 'p' }))?.mogs).toEqual([
-      { mogId: id(1), name: 'Sales', home: 'p', persona: '', running: false },
+      {
+        mogId: id(1),
+        name: 'Sales',
+        home: 'p',
+        persona: '',
+        running: false,
+        colorVariant: 'coral',
+      },
     ]);
     await step({ action: 'mog.edit', mogId: id(1), name: 'Ops', home: 'q', persona: 'Hi' });
     expect(last()?.mogs[0]).toMatchObject({ name: 'Ops', home: 'q', persona: 'Hi' });
     expect((await step({ action: 'mog.duplicate', mogId: id(1) }))?.mogs).toHaveLength(2);
     expect((await step({ action: 'mog.start', mogId: id(1) }))?.runningCount).toBe(1);
     expect((await step({ action: 'mog.stop', mogId: id(1) }))?.runningCount).toBe(0);
+    // #ui-4: the row swatch picker.
+    const recoloured = await step({ action: 'mog.set_color', mogId: id(1), colorVariant: 'teal' });
+    expect(recoloured?.mogs.find((r) => r.mogId === id(1))?.colorVariant).toBe('teal');
     const del = await step({ action: 'mog.delete', mogId: id(2), confirmed: true });
     expect(del?.mogs.map((r) => r.name)).toEqual(['Ops']);
     expect(del?.notice).toEqual({
@@ -144,5 +163,33 @@ describe('hub MOG wiring (#26)', () => {
     input({ action: 'mogs.ready' });
     await new Promise((r) => setTimeout(r, 20));
     expect(sent).toHaveLength(1);
+  });
+
+  it('[ui-4] [#603] mog.edit and mog.set_color tell onIdentityChanged, so the open MOG and card can pick it up', async () => {
+    const changed: string[] = [];
+    wireHubMogs(bus, m, send, (mogId) => changed.push(mogId));
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    input({ action: 'mog.create', name: 'Ops', home: 'p' });
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+    input({ action: 'mog.edit', mogId: id(1), name: 'Ops EU', home: 'p', persona: '' });
+    await vi.waitFor(() => expect(changed).toEqual([id(1)]));
+    input({ action: 'mog.set_color', mogId: id(1), colorVariant: 'teal' });
+    await vi.waitFor(() => expect(changed).toEqual([id(1), id(1)]));
+    // Actions with no identity change never call it.
+    input({ action: 'mog.stop', mogId: id(1) });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(changed).toEqual([id(1), id(1)]);
+  });
+
+  it('[ui-4] [#603] openEdit ("Change home workspace…") asks the hub to open one MOG\'s Edit form, once', async () => {
+    const wired = wireHubMogs(bus, m, send);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    wired.openEdit(id(1));
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+    expect(last()?.openEdit).toEqual({ mogId: id(1), token: 1 });
+    // A later, unrelated push (mogs.ready) never repeats the ask: it was consumed.
+    input({ action: 'mogs.ready' });
+    await vi.waitFor(() => expect(sent).toHaveLength(3));
+    expect(last()?.openEdit).toBeUndefined();
   });
 });

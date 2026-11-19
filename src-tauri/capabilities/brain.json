@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "brain",
-  "description": "Hidden brain window (ARC-2): every brain command; events: listen and emit_to only.",
+  "description": "Hidden brain window (ARC-2): every brain command; events: listen and emit_to only. #ui-4 (review #603): also the native MOG right-click menu (`mog-context-menu.ts`), since a MOG view may only listen and call view_emit (ARC-4).",
   "windows": ["brain"],
   "permissions": [
     "core:event:allow-listen",
@@ -11,6 +11,8 @@
     "core:window:allow-show",
     "core:window:allow-unminimize",
     "core:window:allow-set-focus",
+    "core:menu:allow-new",
+    "core:menu:allow-popup",
     "allow-cli-status",
     "allow-cli-install",
     "allow-profiles-list",
@@ -58,6 +60,18 @@
     "allow-audit-append",
     "allow-telemetry-span",
     "allow-brain-subscribe",
-    "allow-hub-notice-send"
+    "allow-hub-notice-send",
+    "allow-recording-settings-read",
+    "allow-recording-settings-write",
+    "allow-recording-storage-probe",
+    "allow-recording-volume-create",
+    "allow-recording-start",
+    "allow-recording-stop",
+    "allow-recording-state",
+    "allow-recording-list",
+    "allow-recording-detail",
+    "allow-recording-retry",
+    "allow-recording-open",
+    "allow-recording-open-system-audio-settings"
   ]
 }

@@ -17,6 +17,8 @@ pub mod mog_config_host;
 pub mod mog_drag;
 pub mod profiles_host;
 pub mod rate_bucket_host;
+pub mod recording_cloud_host;
+pub mod recording_host;
 pub mod webview_media;
 pub mod window_host;
 pub mod windows;
@@ -86,8 +88,13 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
     let ptt = mog_core::audio_device::ptt_buffer::PttBuffer::new(std::sync::Arc::new(
         stt.engine().clone(),
     ));
+    // ADR 0103: the call recording tap. The mic and the system audio device feed it.
+    let clock: std::sync::Arc<dyn mog_core::clock::MonotonicClock> =
+        std::sync::Arc::new(mog_core::clock::SystemClock::new());
+    let tap = mog_core::recording_capture::tap::RecordingTap::new(std::sync::Arc::clone(&clock));
     // #388 (ADR 0038): the cpal mic on its own audio thread. Its frames go to the level
-    // stream (#476), to the PTT buffer (#21) and to R4 (#46, CAP-52).
+    // stream (#476), to the PTT buffer (#21), to R4 (#46, CAP-52) and to the call recording
+    // tap (ADR 0103; it drops frames while no recording runs).
     // CAP-22 (#453, ADR 0063): `app.capture.preferBuiltInMic` reaches this mic. No mic thread:
     // the app still runs, and every start answers `host_failed`.
     #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -97,7 +104,10 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
         capture_host::mic_capture_device(
             capture_host::spawn_level_mic(
                 CpalMicHost::new,
-                mog_core::audio_device::level::TeeSink(ptt.sink(), stt.engine().frame_sink()),
+                mog_core::audio_device::level::TeeSink(
+                    mog_core::audio_device::level::TeeSink(ptt.sink(), stt.engine().frame_sink()),
+                    tap.mic_sink(),
+                ),
                 levels.gate(),
             ),
             settings.as_ref().map(|s| s.inner().as_ref()),
@@ -107,14 +117,24 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let (device, link): (Box<dyn mog_core::capture::AudioDevice>, Option<()>) =
         (Box::new(capture_host::UnwiredMic), None);
+    // ADR 0103: R2 owns the mic and the system audio (process tap / WASAPI loopback) as one
+    // device; system audio opens only for the call recording's lease.
+    let (system, system_status) = recording_host::system_audio_device(&tap);
+    let device: Box<dyn mog_core::capture::AudioDevice> = Box::new(
+        mog_core::audio_device::system::RecordingDevice::new(device, system),
+    );
     let host = capture_host::CaptureHost::with_stt(
         device,
-        std::sync::Arc::new(mog_core::clock::SystemClock::new()),
-        relay,
+        std::sync::Arc::clone(&clock),
+        std::sync::Arc::clone(&relay),
         levels,
         ptt,
         stt.engine().clone(),
     )?;
+    // ADR 0103: a muted mic must not end a call recording, so the session holds the mic's
+    // zero-buffer watch while it records.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    let mic_hold = link.as_ref().map(|l| l.silence_hold());
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     if let Some(link) = link {
         // A stream that fails after it opened stops its leases (`device_failed`).
@@ -122,7 +142,104 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let _ = link;
+    // ADR 0103: the call recording session over this core. The knob is seeded from the stored
+    // Settings at connect, with no ask. Parts go to the hand-off slot that the cloud side
+    // connects; until then they stay in the user-only temp dir under the app DATA dir (not the
+    // cache dir: the OS may purge a cache, and a recording that waits for Retry must stay).
+    let handoff = std::sync::Arc::new(recording_host::HandoffSlot::default());
+    // The settings file path first, so the seed reads the stored knob (PR C).
+    if let (Some(store), Ok(dir)) = (
+        handle.try_state::<std::sync::Arc<
+            mog_core::recording_cloud::settings_store::JsonSettingsStore,
+        >>(),
+        handle.path().app_config_dir(),
+    ) {
+        store.set_path(dir.join(mog_core::recording_cloud::settings_store::SETTINGS_FILE));
+        // ADR 0103: `record_gate.follow` (in `run`) read the knob before this path existed, so
+        // it always saw the default (off). Catch it up now to a prior "on", so a relaunch with
+        // the knob already on does not need a toggle before ⌥R is grabbed again.
+        if let Some(gate) = handle.try_state::<hotkey_host::RecordKeyGate>() {
+            use mog_core::recording::RecordingSettingsStore as _;
+            gate.set(store.load().is_ok_and(|s| s.enabled));
+        }
+    }
+    let recording_temp_root = handle
+        .path()
+        .app_data_dir()
+        .map(|d| d.join(recording_cloud_host::TEMP_DIR))
+        .unwrap_or_else(|_| std::env::temp_dir().join("bottle-recordings"));
+    let recording = recording_host::RecordingHost::new(
+        &host,
+        tap,
+        system_status,
+        clock,
+        std::sync::Arc::new(mog_core::clock::SystemWallClock),
+        std::sync::Arc::clone(&handoff) as _,
+        mog_core::recording_capture::session::SessionConfig {
+            temp_root: recording_temp_root.clone(),
+            ..Default::default()
+        },
+    )?;
+    let recording = std::sync::Arc::new(recording);
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    if let Some(hold) = mic_hold {
+        recording
+            .session()
+            .set_active_hook(std::sync::Arc::new(move |on| hold.set(on)));
+    }
+    // Sleep stops a recording and finalizes it. Without the OS watch the app still runs.
+    let _ = recording.watch_sleep(&*mog_core::token_events::os_session_source());
+    // `recording.state` goes to the brain at each start, stop and system audio change.
+    let state_relay = std::sync::Arc::clone(&relay);
+    recording
+        .session()
+        .set_observer(std::sync::Arc::new(move |snap| {
+            if let Ok(payload) = serde_json::to_value(snap.to_wire()) {
+                let _ = state_relay(mog_core::ipc::events::RECORDING_STATE, payload);
+            }
+        }));
+    // The `recording_*` component reaches the session; its knob writes reach the host.
+    if let Some(component) =
+        handle.try_state::<std::sync::Arc<mog_core::recording::RecordingComponent>>()
+    {
+        let weak = std::sync::Arc::downgrade(&recording);
+        let asker = recording_host::os_permission_asker();
+        component.connect_capture(mog_core::recording::CaptureLink {
+            capture: std::sync::Arc::clone(recording.session()) as _,
+            temp_root: recording_temp_root.clone(),
+            // Launch seeds the stored knob with no ask; only a user OFF to ON asks.
+            on_knob: {
+                let seed_weak = weak.clone();
+                recording_host::knob_hook(
+                    move |on| {
+                        if let Some(r) = seed_weak.upgrade() {
+                            r.seed_enabled(on);
+                        }
+                    },
+                    move |on| {
+                        if let Some(r) = weak.upgrade() {
+                            r.set_enabled(on, &*asker);
+                        }
+                    },
+                )
+            },
+            on_start: {
+                let session = std::sync::Arc::downgrade(recording.session());
+                std::sync::Arc::new(move |id, profile, instructions| {
+                    if let Some(s) = session.upgrade() {
+                        s.set_job(
+                            id.as_str(),
+                            Some(profile.clone()),
+                            instructions.map(|i| i.as_str().to_owned()),
+                        );
+                    }
+                })
+            },
+        });
+    }
     handle.manage(host);
+    handle.manage(recording);
+    handle.manage(handoff);
     // CAP-51c: the hotkey host preloads R4 at each talk-key down through this state.
     handle.manage(stt);
     Ok(())
@@ -144,8 +261,13 @@ pub fn run() {
     let demo =
         cfg!(debug_assertions) && std::env::var("BOTTLE_DEMO_WINDOWS").is_ok_and(|v| v == "1");
     let builder = tauri::Builder::default();
+    // ADR 0103: the ⌥R key gate. It follows the recording knob; `hotkey_host` reads it.
+    let record_gate = hotkey_host::RecordKeyGate::default();
     #[cfg(target_os = "macos")]
     let builder = builder.activate_ignoring_other_apps(ACTIVATE_IGNORING_OTHER_APPS);
+    let recording_settings = std::sync::Arc::new(
+        mog_core::recording_cloud::settings_store::JsonSettingsStore::deferred(),
+    );
     builder
         .manage(ipc::BrainChannel::default())
         .manage(ipc::HubChannel::default())
@@ -154,6 +276,19 @@ pub fn run() {
         .manage(std::sync::Arc::new(
             mog_core::app_settings::AppSettings::default(),
         ))
+        // ADR 0103: the `recording_*` component on the JSON settings file (PR C). The file
+        // path is set in `setup` by `install_capture` (and the `record_gate` re-synced right
+        // after); before that, defaults (knob off) and no write.
+        .manage(recording_settings.clone())
+        // ADR 0103: the component reads and writes through the JsonSettingsStore (persisted
+        // knob, PR C/#595/#592); `record_gate` wraps it with `KnobFollower` so the ⌥R gate
+        // stays in step with the same store, instead of the standalone `MemorySettingsStore`
+        // this branch used before main grew real persistence.
+        .manage(std::sync::Arc::new(
+            mog_core::recording::RecordingComponent::new(record_gate.follow(recording_settings)),
+        ))
+        // ADR 0103: the ⌥R key follows the knob of the settings above (`hotkey_host`).
+        .manage(record_gate)
         // G-09a, ARC-F3 (#467, #138): the ONE rate bucket of the process.
         // `rate_bucket.rs:4`: "R7 and R8 share one per process". Every R7 and R8 (and the
         // future `model_invoke` and `dbx_http` callers, #511) takes it from app state.
@@ -231,6 +366,8 @@ pub fn run() {
             // R8 for `mcp_call` (#467). If its HTTP client cannot start, the app still runs;
             // `mcp_call` then answers `host_failed`.
             let _ = mcp_host::install(handle);
+            // ADR 0103 (PR C): the recording cloud host, on the R6 of mcp_host.
+            let _ = recording_cloud_host::install(handle);
             // "Connect a workspace" (#162): `profile_login` over R5 and the W-06a check of R6.
             profiles_host::install_login(handle);
             // R16 for `agent_*` (#307): the one shared AgentHost. If its loopback model proxy
@@ -263,6 +400,13 @@ pub fn run() {
             if let tauri::RunEvent::Exit = event {
                 // R1: remove the key tap on quit (#305).
                 hotkey_host::shutdown(app);
+                // ADR 0103: a running call recording stops with `quit` and hands off its
+                // parts, before R2 stops every lease.
+                if let Some(recording) =
+                    app.try_state::<std::sync::Arc<recording_host::RecordingHost>>()
+                {
+                    recording.shutdown();
+                }
                 // R2: stop every capture, so the mic closes, and end the cap timer (#425).
                 if let Some(capture) = app.try_state::<capture_host::CaptureHost>() {
                     capture.shutdown();

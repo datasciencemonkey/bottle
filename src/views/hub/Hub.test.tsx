@@ -46,12 +46,17 @@ describe('V1 hub view', () => {
   });
 
   it('[V1] subscribes to mog:view_state and lists each MOG with its mood', async () => {
+    // ui-1 (#97, #103): the live MOG chips moved into the "mogs" area, not shown by default.
     const { el } = await render(<Hub />);
     expect(tauri.listeners('mog:view_state')).toBe(1);
     await tauri.emit('mog:view_state', { mogId: A, mood: 'idle', overlays });
     await tauri.emit('mog:view_state', { mogId: B, mood: 'processing', overlays });
     await tauri.emit('mog:view_state', { mogId: A, mood: 'sleeping', overlays });
     await tauri.emit('mog:view_state', { mogId: 7 });
+    await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-toggle]')?.click());
+    await act(async () =>
+      el.querySelector<HTMLButtonElement>('[data-sidebar-item="mogs"]')?.click(),
+    );
     const rows = [...el.querySelectorAll('li[data-mog]')].map((li) => [
       li.getAttribute('data-mog'),
       li.getAttribute('data-mood'),
@@ -65,11 +70,15 @@ describe('V1 hub view', () => {
   it('[V1] [ARC-2] sends a MOG selection only through view_emit', async () => {
     const { el } = await render(<Hub />);
     await tauri.emit('mog:view_state', { mogId: A, mood: 'idle', overlays });
+    await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-toggle]')?.click());
+    await act(async () =>
+      el.querySelector<HTMLButtonElement>('[data-sidebar-item="mogs"]')?.click(),
+    );
     await act(async () => (el.querySelector(`li[data-mog="${A}"] button`) as HTMLElement).click());
     // The hub notice (#27, MB-08a) and the MOG list (#26) ask the brain with hub-scope emits
     // (notice.ready, mogs.ready), the CLI step asks with id `cli` (#161), the permission notice
-    // with id `permissions` (ADR 0101) and Conversations with id `conversations` (#103); the MOG
-    // selection is the rest.
+    // with id `permissions` (ADR 0101) and Conversations with id `conversations` (#103); the
+    // sidebar area switches are local state (no emit); the MOG selection is the rest.
     expect(viewEmits()).toContainEqual({
       mogId: 'hub',
       kind: 'click',
@@ -78,7 +87,7 @@ describe('V1 hub view', () => {
     expect(
       viewEmits().filter(
         (e) =>
-          !['hub', 'cli', 'permissions', 'conversations', 'store'].includes(
+          !['hub', 'cli', 'permissions', 'conversations', 'recording', 'store'].includes(
             (e as { mogId: string }).mogId,
           ),
       ),
@@ -86,33 +95,195 @@ describe('V1 hub view', () => {
   });
 });
 
-describe('hub navigation and Conversations (#103)', () => {
-  beforeEach(() => tauri.reset());
+describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
+  beforeEach(() => {
+    tauri.reset();
+    // The pin is the only sidebar choice that persists (use-hub-sidebar.ts); start each test
+    // from the documented default so one test's pin cannot leak into the next.
+    localStorage.clear();
+  });
 
-  const nav = (el: HTMLElement) =>
-    [...el.querySelectorAll('nav[aria-label="Hub"] button')] as HTMLElement[];
+  const toggle = (el: HTMLElement) => el.querySelector<HTMLButtonElement>('[data-sidebar-toggle]');
+  const items = (el: HTMLElement) => [...el.querySelectorAll<HTMLElement>('[data-sidebar-item]')];
   const conv = (el: HTMLElement) =>
     el.querySelector('section[aria-label="Conversations"]') as HTMLElement;
-  const home = (el: HTMLElement) => el.querySelector('[data-hub-view="home"]') as HTMLElement;
+  // `.click()` alone never dispatches `pointerdown` (review of #602, finding 2): a real click is
+  // a pointerdown then a click, and HubSidebar's outside-click listener only sees the former.
+  const realClick = (b: HTMLElement | null | undefined) => {
+    b?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    b?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  };
 
-  it('[#103] Conversations is the first navigation item; the hub opens on the MOGs and settings', async () => {
+  it('[#103] the sidebar is hidden by default; the hub opens on Conversations', async () => {
     const { el } = await render(<Hub />);
-    expect(nav(el).map((b) => b.textContent)).toEqual(['Conversations', 'MOGs and settings']);
-    expect(nav(el)[1]?.getAttribute('aria-current')).toBe('page');
-    expect(conv(el).hidden).toBe(true);
-    expect(home(el).hidden).toBe(false);
-    await act(async () => nav(el)[0]?.click());
-    expect(nav(el)[0]?.getAttribute('aria-current')).toBe('page');
+    expect(el.querySelector('[data-sidebar]')).toBeNull();
     expect(conv(el).hidden).toBe(false);
-    expect(home(el).hidden).toBe(true);
+    expect(el.querySelector('.hub-area-title')?.textContent).toBe('Conversations');
     // The product header stays a direct child of main (AT-37).
     expect(el.querySelector('main > h1')?.textContent).toBe('Bottle');
+    expect(el.querySelector('main > p')?.textContent).toBe('Databricks Labs / experimental');
+  });
+
+  it('[#103] the toggle opens the sidebar with Conversations, MOGs, Recordings and Settings', async () => {
+    const { el } = await render(<Hub />);
+    await act(async () => toggle(el)?.click());
+    expect(el.querySelector('[data-sidebar]')).not.toBeNull();
+    expect(items(el).map((b) => b.textContent)).toEqual([
+      'Conversations',
+      'MOGs',
+      'Recordings',
+      'Settings',
+    ]);
+    expect(items(el)[0]?.getAttribute('aria-current')).toBe('page');
+  });
+
+  it('[#103] picking an area switches it and keeps the content column stable', async () => {
+    const { el } = await render(<Hub />);
+    await act(async () => toggle(el)?.click());
+    await act(async () => items(el)[1]?.click());
+    expect(el.querySelector('.hub-area-title')?.textContent).toBe('MOGs');
+    expect(conv(el).hidden).toBe(true);
+    expect(el.querySelector('[data-hub-view="mogs"]')).not.toBeNull();
+  });
+
+  it('[#103] Esc hides the sidebar; a pin keeps it open across Esc', async () => {
+    const { el } = await render(<Hub />);
+    await act(async () => toggle(el)?.click());
+    expect(el.querySelector('[data-sidebar]')).not.toBeNull();
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(el.querySelector('[data-sidebar]')).toBeNull();
+
+    await act(async () => toggle(el)?.click());
+    await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-pin]')?.click());
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(el.querySelector('[data-sidebar]')).not.toBeNull();
+  });
+
+  // LOW (review of #602 round 3): the Wipe dialog (Radix Dialog, `role="dialog"`) owns Esc while
+  // it is open; the sidebar's own document-level Esc listener used to race it and close the
+  // sidebar underneath the still-open dialog.
+  it('[LOW review #602] Esc does not close the sidebar while the Wipe dialog is open', async () => {
+    const { el } = await render(<Hub />);
+    await act(async () => toggle(el)?.click());
+    await act(async () => items(el)[3]?.click());
+    // Picking an area closes an unpinned overlay (review of #602 "also fix"); reopen it so this
+    // test can check whether Esc leaves it open while the dialog is up.
+    await act(async () => toggle(el)?.click());
+    await act(async () =>
+      tauri.emitTo('hub', 'hub:wipe_dialog', {
+        scope: 'everything',
+        alsoGenie: false,
+        phase: 'confirm',
+        title: 'Wipe everything',
+        text: 'Delete everything on this computer? You cannot undo this.',
+      }),
+    );
+    expect(el.querySelector('[data-wipe-dialog]')).not.toBeNull();
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(el.querySelector('[data-sidebar]')).not.toBeNull();
   });
 
   it('[#103] an open from a double-click shows Conversations', async () => {
     const { el } = await render(<Hub />);
+    await act(async () => toggle(el)?.click());
+    await act(async () => items(el)[3]?.click());
+    expect(conv(el).hidden).toBe(true);
     await tauri.emitTo('hub', 'hub:conversations.open', {});
     expect(conv(el).hidden).toBe(false);
-    expect(nav(el)[0]?.getAttribute('aria-current')).toBe('page');
+  });
+
+  // review of #602, finding 2: a real click on the toggle while the sidebar is open is a
+  // pointerdown (outside the panel, used to close it) then a click (toggleVisible, which
+  // reopened the now-closed sidebar) — net effect: it looked like the toggle did nothing.
+  it('[review #602] a real click on the toggle closes an open, unpinned sidebar', async () => {
+    const { el } = await render(<Hub />);
+    await act(async () => toggle(el)?.click());
+    expect(el.querySelector('[data-sidebar]')).not.toBeNull();
+    await act(async () => realClick(toggle(el)));
+    expect(el.querySelector('[data-sidebar]')).toBeNull();
+  });
+
+  // review of #602 ("also fix"): a native overlay sidebar closes once it knows where to go.
+  it('[review #602] picking an area closes an unpinned sidebar', async () => {
+    const { el } = await render(<Hub />);
+    await act(async () => toggle(el)?.click());
+    await act(async () => items(el)[1]?.click());
+    expect(el.querySelector('[data-sidebar]')).toBeNull();
+    expect(el.querySelector('.hub-area-title')?.textContent).toBe('MOGs');
+  });
+
+  // review of #602 ("also fix"): a pin keeps the sidebar open across an area pick too.
+  it('[review #602] picking an area keeps a pinned sidebar open', async () => {
+    const { el } = await render(<Hub />);
+    await act(async () => toggle(el)?.click());
+    await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-pin]')?.click());
+    await act(async () => items(el)[1]?.click());
+    expect(el.querySelector('[data-sidebar]')).not.toBeNull();
+  });
+
+  // review of #602, finding 3: pinned, the sidebar pushes `.hub-content` over by its own width
+  // (`--hub-sidebar-width`, read in hub.css) instead of overlaying it for good.
+  // review of #602 round 4, blocker 1: the variable is set on `.hub` (main), not `.hub-body`,
+  // so the product header row (outside `.hub-body`, AT-37) can read it too.
+  it('[review #602] a pinned sidebar pushes the content column instead of covering it', async () => {
+    const { el } = await render(<Hub />);
+    const hub = () => el.querySelector<HTMLElement>('main.hub');
+    expect(hub()?.style.getPropertyValue('--hub-sidebar-width')).toBe('0px');
+    await act(async () => toggle(el)?.click());
+    // Unpinned: still an overlay, no reflow.
+    expect(hub()?.style.getPropertyValue('--hub-sidebar-width')).toBe('0px');
+    await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-pin]')?.click());
+    expect(hub()?.style.getPropertyValue('--hub-sidebar-width')).toBe('220px');
+    await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-collapse]')?.click());
+    expect(hub()?.style.getPropertyValue('--hub-sidebar-width')).toBe('56px');
+  });
+
+  // review of #602 ("also fix"): switching areas never unmounts one, so the Wipe scope choice
+  // (and any open Wipe dialog) survives a sidebar nav click.
+  it('[review #602] switching areas keeps Settings mounted (the Wipe choice survives)', async () => {
+    const { el } = await render(<Hub />);
+    await act(async () => toggle(el)?.click());
+    await act(async () => items(el)[3]?.click());
+    const radios = () => [...el.querySelectorAll<HTMLElement>('[role="radio"]')];
+    await act(async () => radios()[2]?.click());
+    expect(radios()[2]?.getAttribute('aria-checked')).toBe('true');
+    await act(async () => toggle(el)?.click());
+    await act(async () => items(el)[0]?.click());
+    expect(el.querySelector('[data-hub-view="settings"]')).not.toBeNull();
+    await act(async () => toggle(el)?.click());
+    await act(async () => items(el)[3]?.click());
+    expect(radios()[2]?.getAttribute('aria-checked')).toBe('true');
+  });
+});
+
+describe('V1 hub view: call recording (ADR 0103)', () => {
+  beforeEach(() => tauri.reset());
+
+  // ui-1 (#97, #103): Recordings is a sidebar item now, like MOGs and Settings, not a button in
+  // the old always-visible HubNav; its settings section lives inside the Settings area.
+  it('[REC-V15] the hub has a Recordings area and a Call recording settings section', async () => {
+    const { el } = await render(<Hub />);
+    await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-toggle]')?.click());
+    const items = [...el.querySelectorAll<HTMLElement>('[data-sidebar-item]')];
+    expect(items.map((b) => b.textContent)).toContain('Recordings');
+    const settingsItem = items.find((b) => b.textContent === 'Settings') as HTMLElement;
+    await act(async () => settingsItem.click());
+    expect(el.querySelector('[data-view="recording-settings"]')).not.toBeNull();
+
+    await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-toggle]')?.click());
+    const recItem = [...el.querySelectorAll<HTMLElement>('[data-sidebar-item]')].find(
+      (b) => b.textContent === 'Recordings',
+    ) as HTMLElement;
+    await act(async () => recItem.click());
+    expect(el.querySelector('section[aria-label="Recordings"]')?.hasAttribute('hidden')).toBe(
+      false,
+    );
+    expect(el.querySelector('[data-hub-view="settings"]')?.hasAttribute('hidden')).toBe(true);
   });
 });

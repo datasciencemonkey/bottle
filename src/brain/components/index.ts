@@ -20,6 +20,8 @@ import { wireWipe } from '../wipe-wiring';
 import { wireCliInstall, wireCliSettings } from '../cli-wiring';
 import { cliPlatform } from '../../shared/cli-view';
 import { wireConnectWorkspace } from '../connect-wiring';
+import { recordingProfile } from '../recording-profile';
+import { ipcRecordingApi, wireRecording } from '../recording-wiring';
 import { sendHubSnapshot, wireHubMogs } from '../hub-mogs-wiring';
 import {
   sendHubConversations,
@@ -36,13 +38,20 @@ import { cardStackDeps, createCardStack, timeoutScheduler, type CardStack } from
 import { createSystemClock } from '../clock';
 import { createDictationSink } from '../dictation-copy';
 import { genieBlurbId } from '../../shared/genie-status';
-import { HUB_THREAD_STATUS_EVENT, type ThreadStatus } from '../../shared/hub-conversations';
+import {
+  HUB_THREAD_ACCESS_EVENT,
+  HUB_THREAD_STATUS_EVENT,
+  type ThreadAccess,
+  type ThreadStatus,
+} from '../../shared/hub-conversations';
 import { createGenieDirectSend } from '../genie-direct';
 import { createGenieFollowup } from '../genie-followup';
 import { wireGenieCard } from '../genie-card-wiring';
-import { createThreadFocus, wireThreadFollowup } from '../thread-focus';
+import { createAppMogContextMenu } from '../mog-context-menu';
+import { createThreadFocus, routeAskToFocusedThread, wireThreadFollowup } from '../thread-focus';
 import { showHub } from '../hub-window';
 import { asPttEvent } from '../ptt';
+import { createRecordToggle } from '../record-toggle';
 import { emitTo } from '@tauri-apps/api/event';
 import { EVENTS } from '../../shared/ipc';
 import { ipcGenieHistory } from '../genie-history';
@@ -53,11 +62,11 @@ import { sendHubNotice as sendLegalNotice, wireNotice } from '../notice-wiring';
 import { storeGate } from '../store-gate';
 import { isTauriMac, wireStoreGate } from '../store-wiring';
 import { wirePermissions } from '../permission-wiring';
-import { withOfflineFallback } from '../offline-intent';
+import { NO_HOME, withOfflineFallback } from '../offline-intent';
 import { createProfilePick } from '../profile-pick';
 import { createRequestOwner, sendOwnedCard } from '../request-owner';
 import { wireTalkNoMog } from '../talk-no-mog';
-import { configName, createAppTalkTarget, wireTalkTarget, type TalkTarget } from '../talk-target';
+import { createAppTalkTarget, wireTalkTarget, type TalkTarget } from '../talk-target';
 import { createLifecycleTranscriber } from '../stt-wiring';
 import { ipcUtteranceDeps } from '../utterance-route';
 import { createUtteranceHandler } from '../utterance-wiring';
@@ -145,14 +154,22 @@ export function startBrain(): Brain {
     });
     // MB-08a, MB-08b: the hub notice talks to T12 (#27).
     wireNotice(bus, components.T12);
-    // #26: the hub MOG list and actions (MB-01).
-    wireHubMogs(bus, components.T1);
+    // #26: the hub MOG list and actions (MB-01). #ui-4 (review #603, finding 3): a successful
+    // edit or colour pick re-reads that MOG's identity and pushes it to its open MOG and card
+    // (`talkTarget.reidentify`, below), so neither keeps a stale name or colour until restart.
+    const hubMogs = wireHubMogs(bus, components.T1, undefined, (mogId) =>
+      talkTarget.reidentify(mogId),
+    );
     // #103 (#40): the hub Conversations list. The brain reads the saved exchanges of each MOG
     // (`mem.exchange.recent`) and sends them to the hub; the hub view runs no store statement.
     const conversations = wireHubConversations(bus, {
       store: new IpcLocalMemoryStore(),
       mogs: async () =>
-        (await components.T1.list()).mogs.map((m) => ({ mogId: m.mogId, name: m.name })),
+        (await components.T1.list()).mogs.map((m) => ({
+          mogId: m.mogId,
+          name: m.name,
+          colorVariant: m.colorVariant,
+        })),
       send: sendHubConversations,
       sendOpen: sendHubConversationsOpen,
     });
@@ -171,10 +188,17 @@ export function startBrain(): Brain {
       sendStatus: (status: ThreadStatus) => {
         void emitTo('hub', HUB_THREAD_STATUS_EVENT, status).catch(() => undefined);
       },
+      profileStatus: (profile) => call('profile_status', { profile }),
       onEnd: recordGenieExchange,
       newOpId: () => crypto.randomUUID(),
     });
-    wireThreadFollowup(bus, { focus: threadFocus, followup });
+    wireThreadFollowup(bus, {
+      focus: threadFocus,
+      followup,
+      sendAccess: (access: ThreadAccess) => {
+        void emitTo('hub', HUB_THREAD_ACCESS_EVENT, access).catch(() => undefined);
+      },
+    });
     // #123 (MEM-32a, MEM-32c, MEM-32d): the hub Forget dialog runs Forget on T10 on a user click.
     // TODO(#163): pass `home` (the home host and workspace id from T7) for the memory review link.
     if (isForgetMemory(components.T10)) {
@@ -206,7 +230,7 @@ export function startBrain(): Brain {
     });
     // MB-06a, MB-06b, UX-28: the talk-key target, its marker and its toast (#73). It is wired
     // before the capture lifecycle, so a `hotkey:ptt` down updates the target first.
-    const talkTarget = createAppTalkTarget(configName);
+    const talkTarget = createAppTalkTarget();
     wireTalkTarget(bus, talkTarget);
     // #562 (MB-06a): a press with no open MOG starts the last-used MOG, or the hub says
     // "Create a MOG to start".
@@ -304,6 +328,35 @@ export function startBrain(): Brain {
       scheduler: { at: timeoutScheduler(moodClock) },
     });
     wireCaptureMood(bus, captureMood);
+    // ADR 0103, recording-profile.ts: the one workspace of a call recording, shared by every
+    // cloud-bound recording command and the record key (⌥R), so they all reach the same
+    // workspace. Bottle never picks between workspaces: no MOG with a home is `no_profile`;
+    // two or more different homes is `profiles_differ`.
+    const recordingHomeProfile = () =>
+      recordingProfile({
+        mogs: async () => (await components.T1.list()).mogs.map((m) => m.mogId),
+        home: async (id) => {
+          const p = (await homes.routerInput(id)).profile;
+          return p === NO_HOME ? undefined : p;
+        },
+      });
+    // ADR 0103: call recording. The hub sends clicks; the brain calls the `recording_*`
+    // commands, relays `recording.state` and `recording.job` to the hub, and shows REC and the
+    // answer-ready moment on the MOG through the one mood publisher. The core checks the knob
+    // again before any capture. TODO(#95): the short OS notice when the notes are ready, once
+    // the notification host has an IPC command.
+    wireRecording(bus, {
+      api: ipcRecordingApi(bus, recordingHomeProfile),
+      platform:
+        cliPlatform(globalThis.navigator?.userAgent ?? '') === 'windows' ? 'windows' : 'mac',
+      mood: {
+        callRecording: (on) => {
+          const id = talkTarget.lastUsed();
+          captureMood.callRecording(on, id === undefined ? [] : [id]);
+        },
+        ready: () => captureMood.recordingReady(),
+      },
+    });
     // #573: the ⌥G key-up shows the working mood at once, before the text is ready.
     bus.on(EVENTS['hotkey.ptt'].name, (p) => {
       const e = asPttEvent(p, 0);
@@ -336,7 +389,23 @@ export function startBrain(): Brain {
         void showHub();
         void conversations.openConversations(requestId);
       },
+      // #ui-4: the MOG right-click menu's Close runs the same stop as the hub's Stop button
+      // (the window closes and the mic lease releases; the MOG stays defined). "Change home
+      // workspace…" shows the hub and opens that MOG's own Edit form, where the home field is
+      // (review #603, MEDIUM finding: it used to show only the hub, with no next step for the
+      // user to take).
+      closeMog: (mogId) => void components.T1.stop(mogId).catch(() => undefined),
+      changeHome: (mogId) => {
+        void showHub();
+        hubMogs.openEdit(mogId);
+      },
     });
+    // #ui-4 (review #603, findings 1 and 4): the MOG right-click menu's native popup. A MOG
+    // view may only listen and call `view_emit` (ARC-4); the brain holds `core:menu:*` and
+    // builds the menu on the MOG's own window, then replays Close/Open in Bottle/Change home
+    // workspace… through the bus exactly like a real click (`wireGenieCard` above and
+    // `wireTalkTarget` act on it unchanged).
+    createAppMogContextMenu(bus);
     // #498 (ADR 0091): the Copy card of a dictation. The card is shown first, then the text goes
     // on its stack. If the card cannot show, the text goes to the hub only. No main agent and no
     // Genie take part (RTR-01c).
@@ -368,6 +437,20 @@ export function startBrain(): Brain {
       control: ipcCaptureControl({ consent: components.T12 }),
       // MB-08a: a refused start is never silent. The consent gate also shows the hub notice.
       onRefused: (e) => captureMood.refused(e.mogId, e.error),
+      // ADR 0103: ⌥R in the hold starts or stops the call recording, after the PTT discard. A
+      // refusal shows on the MOG of the press (none with no open MOG).
+      onRecordToggle: ({ mogId }) =>
+        void createRecordToggle({
+          call,
+          // recording-profile.ts: the same shared-home profile the hub Record control uses, so
+          // ⌥R and the hub always reach the same workspace. No open MOG: no profile. Otherwise
+          // `recordingHomeProfile` throws `{ error: 'no_profile' }` or `{ error:
+          // 'profiles_differ' }`, which `createRecordToggle`'s catch forwards to `onRefused`.
+          home: mogId === '' ? async () => undefined : recordingHomeProfile,
+          onRefused: (error) => {
+            if (mogId !== '') captureMood.refused(mogId, error);
+          },
+        })(),
       // #52 (ADR 0088): T4 runs the 8.3 chain over `stt_transcribe` (host route TODO(#514)).
       // A failure shows its fixed text on the owner's card, and no text is routed.
       transcribe: createLifecycleTranscriber(components.T4, sendOwnedCard),
@@ -390,18 +473,14 @@ export function startBrain(): Brain {
         // press is a follow-up in it instead, with no card and no home-profile guess. A chip
         // (no ⌥G) and an injection-suspected ask are never affected: only a clean ⌥G is.
         onAsk: (r, owned) => {
-          if (r.route === 'ask' && !r.decision.injection_suspected) {
-            const thread = threadFocus.active();
-            if (thread) {
-              owner.release(owned.utteranceId);
-              void followup.send({
-                conversationId: thread.conversationId,
-                profile: thread.profile,
-                question: r.question,
-              });
-              return;
-            }
-          }
+          if (
+            routeAskToFocusedThread(r, {
+              focus: threadFocus,
+              followup,
+              release: () => owner.release(owned.utteranceId),
+            })
+          )
+            return;
           askGate.onAsk(r, owned);
         },
         // #498, MOG-05b, MOG-06d: a Copy or a failed insertion reaches the Copy card.

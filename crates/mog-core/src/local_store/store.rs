@@ -118,6 +118,7 @@ impl SqlCipherLocalStore {
     }
 
     /// Close the connection. SQLite checkpoints the WAL and removes the `-wal` and `-shm` files.
+    /// The store is not shut: the next use opens it again, with the cached key (ADR 0105).
     pub fn close(&self) {
         let c = self.conn.lock().unwrap_or_else(|e| e.into_inner()).take();
         drop(c);

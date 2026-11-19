@@ -159,6 +159,17 @@ describe('hub Conversations (#103)', () => {
     expect(kn).toEqual(['4.2 %growth', '$1.3M']);
   });
 
+  it('[ui-4] the list row and the detail show the same MOG colour dot', async () => {
+    const { el } = await mount();
+    await tauri.emitTo('hub', 'hub:conversations', {
+      rows: [row(6, at(19, 14, 2), { mogColorVariant: 'teal' })],
+    });
+    const listDot = el.querySelector('.conv-row .conv-mog-dot') as HTMLElement;
+    expect(listDot.style.backgroundColor).toBe('rgb(15, 107, 102)');
+    const detailDot = detail(el).querySelector('.conv-mog-dot') as HTMLElement;
+    expect(detailDot.style.backgroundColor).toBe(listDot.style.backgroundColor);
+  });
+
   it('[#103] a failed exchange shows its status and a calm line instead of an answer', async () => {
     const { el } = await mount();
     await tauri.emitTo('hub', 'hub:conversations', { rows });
@@ -307,23 +318,64 @@ describe('hub Conversations (#103)', () => {
         rows: [row(22, at(19, 9, 0), { conversationId: CONV, profile: 'fake-west' })],
       });
       expect(spy).not.toHaveBeenCalled();
-      expect(el.querySelector('[data-slot="thread-composer"]')).toBeNull();
+      expect(el.querySelector('[data-testid="fake-composer"]')).toBeNull();
+      expect(el.querySelector('[data-slot="thread-composer"] textarea')).toBeNull();
     });
 
-    it('[#145] no composer for a thread with no conversationId (saved before #584)', async () => {
+    it('[#145] no composer for a thread with no conversationId (saved before #584): the hint only', async () => {
       const spy = vi.fn(() => <div data-testid="fake-composer" />);
       const { el } = await mount(true, vi.fn(), spy);
       await tauri.emitTo('hub', 'hub:conversations', { rows });
       expect(spy).not.toHaveBeenCalled();
-      expect(detail(el).querySelector('[data-slot="thread-composer"]')).toBeNull();
+      const slot = detail(el).querySelector('[data-slot="thread-composer"]');
+      expect(slot?.textContent).toBe('Hold Right Option and tap G to ask by voice.');
     });
 
-    it('[#145] with no composer prop at all, the view renders as it did before (#103)', async () => {
+    it('[#145] with no composer prop at all, the slot shows only the voice hint (#103)', async () => {
       const { el } = await mount();
       await tauri.emitTo('hub', 'hub:conversations', {
         rows: [row(21, at(19, 9, 0), { conversationId: CONV })],
       });
-      expect(detail(el).querySelector('[data-slot="thread-composer"]')).toBeNull();
+      expect(detail(el).querySelector('[data-slot="thread-composer"]')?.textContent).toBe(
+        'Hold Right Option and tap G to ask by voice.',
+      );
     });
+  });
+});
+
+describe('the sticky composer slot (ui-1, #103)', () => {
+  beforeEach(() => tauri.reset());
+
+  const composerSlot = (el: HTMLElement) =>
+    el.querySelector('[data-slot="thread-composer"]') as HTMLElement;
+
+  it('shows only a static hint when no composer is passed; never a dead input', async () => {
+    const { el } = await mount();
+    await tauri.emitTo('hub', 'hub:conversations', { rows });
+    const slot = composerSlot(el);
+    expect(slot.textContent).toBe('Hold Right Option and tap G to ask by voice.');
+    expect(slot.querySelector('input, textarea, button')).toBeNull();
+  });
+
+  it('fills the slot with the composer prop, given the selected thread (conversationId, exchangeId, profile)', async () => {
+    const seen: { conversationId: string; exchangeId: string; profile: string }[] = [];
+    const { el } = await render(
+      <Conversations
+        active
+        onOpen={vi.fn()}
+        now={() => NOW}
+        composer={(thread) => {
+          seen.push(thread);
+          return <button type="button">Ask about this</button>;
+        }}
+      />,
+    );
+    const r = row(30, at(19, 9, 0), { conversationId: 'conv-slot-1', profile: 'fake-west' });
+    await tauri.emitTo('hub', 'hub:conversations', { rows: [r] });
+    const slot = composerSlot(el);
+    expect(slot.querySelector('button')?.textContent).toBe('Ask about this');
+    expect(seen).toEqual([
+      { conversationId: 'conv-slot-1', exchangeId: r.requestId, profile: 'fake-west' },
+    ]);
   });
 });

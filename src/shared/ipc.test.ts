@@ -308,3 +308,113 @@ describe('Connect a workspace rows (#162)', () => {
     }
   });
 });
+
+describe('call recording (ADR 0103)', () => {
+  const doc = schemaDoc as unknown as {
+    arguments: Record<
+      string,
+      {
+        required?: string[];
+        additionalProperties?: boolean;
+        properties?: Record<string, unknown>;
+      }
+    >;
+  };
+  const NAMES = [
+    'recording_settings_read',
+    'recording_settings_write',
+    'recording_storage_probe',
+    'recording_volume_create',
+    'recording_start',
+    'recording_stop',
+    'recording_state',
+    'recording_list',
+    'recording_detail',
+    'recording_retry',
+    'recording_open',
+    'recording_open_system_audio_settings',
+  ] as const satisfies CommandName[];
+
+  it('[CAP-06] [MOG-08a] every recording row is a brain-and-hub MVP-D row; no MOG or card view', () => {
+    for (const n of NAMES) {
+      expect(COMMANDS[n], n).toEqual({ windows: ['brain', 'hub'], phase: 'MVP-D' });
+      expect(doc.arguments[n]?.additionalProperties, n).toBe(false);
+    }
+  });
+
+  it('[ARC-6] recording_open takes an ID and a target, never a URL', () => {
+    expect(doc.arguments['recording_open']?.required).toEqual(['profile', 'id', 'target']);
+    const open: CommandArgs['recording_open'] = { profile: 'p', id: 'rec-1', target: 'folder' };
+    const leak: CommandArgs['recording_open'] = {
+      ...open,
+      // @ts-expect-error the view never passes a URL to open
+      target: 'https://example.com',
+    };
+    const reply: CommandReturns['recording_open'] = {};
+    expect([open.target, leak.id, reply]).toHaveLength(3);
+  });
+
+  it('[CAP-06] the settings patch is partial and the start takes optional instructions', () => {
+    expect(doc.arguments['recording_settings_write']?.required).toEqual(['patch']);
+    expect(doc.arguments['recording_volume_create']?.required).toEqual([
+      'profile',
+      'catalog',
+      'schema',
+    ]);
+    const patch: CommandArgs['recording_settings_write'] = { patch: { enabled: true } };
+    const start: CommandArgs['recording_start'] = { profile: 'p' };
+    const edited: CommandArgs['recording_start'] = {
+      profile: 'p',
+      instructions: 'Only the decisions.',
+    };
+    const state: CommandReturns['recording_start'] = {
+      state: 'starting',
+      systemAudio: 'ok',
+    };
+    expect([patch.patch.enabled, start, edited.instructions, state.state]).toHaveLength(4);
+  });
+
+  it('[ADR 0103] Rust has no home profile of its own: the cloud-bound recording commands require it', () => {
+    expect(doc.arguments['recording_storage_probe']?.required).toEqual(['profile']);
+    expect(doc.arguments['recording_list']?.required).toEqual(['profile']);
+    expect(doc.arguments['recording_detail']?.required).toEqual(['profile', 'id']);
+    expect(doc.arguments['recording_retry']?.required).toEqual(['profile', 'id']);
+    const probe: CommandArgs['recording_storage_probe'] = { profile: 'p' };
+    const list: CommandArgs['recording_list'] = { profile: 'p' };
+    const detail: CommandArgs['recording_detail'] = { profile: 'p', id: 'rec-1' };
+    const retry: CommandArgs['recording_retry'] = { profile: 'p', id: 'rec-1' };
+    expect([probe, list, detail, retry]).toHaveLength(4);
+  });
+
+  it('[ARC-5] the record key toggle and the recording events are core-to-brain', () => {
+    expect(EVENTS['hotkey.record_toggle']).toEqual({
+      name: 'hotkey:record_toggle',
+      direction: 'core_to_brain',
+    });
+    expect(EVENTS['recording.state']).toEqual({
+      name: 'recording:state',
+      direction: 'core_to_brain',
+    });
+    expect(EVENTS['recording.job']).toEqual({ name: 'recording:job', direction: 'core_to_brain' });
+  });
+
+  it('[SEC-03] the recording refusals are fixed IPC codes', () => {
+    for (const c of [
+      'recording_off',
+      'recording_busy',
+      'recording_in_progress',
+      'unknown_recording',
+      'no_storage',
+      'volume_permission',
+      'transcribe_endpoint_missing',
+      'notes_endpoint_missing',
+      'too_long',
+      'audio_unreadable',
+      'upload_failed',
+      'system_audio_denied',
+    ] as const) {
+      const e: IpcError = { error: c };
+      expect(IPC_ERROR_CODES).toContain(e.error);
+    }
+  });
+});

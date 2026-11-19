@@ -28,25 +28,11 @@ use std::path::Path;
 use std::sync::Arc;
 
 use mog_core::clock::{SystemWallClock, WallClock};
-use mog_core::consent::{
-    open_device_records, prepare_device_records, ConsentRecords, ConsentRetention,
-};
+use mog_core::consent::{prepare_device_records, ConsentRetention};
 use mog_core::error::{CoreError, CoreResult};
 use mog_core::local_store::key_vault::{os_key_vault, KeyVault};
-use mog_core::local_store::SqlCipherLocalStore;
 use mog_core::wipe::{LocalWipeService, SecurityExpiry, WipeService};
 use tauri::{Manager, Runtime};
-
-/// Open the consent records in the app data folder `dir`, kept for the default 13 months
-/// (SEC-15b). TODO(#186): the admin retention from PolicyStore.
-pub fn open(
-    dir: &Path,
-    vault: Arc<dyn KeyVault>,
-    clock: Arc<dyn WallClock>,
-) -> CoreResult<(Arc<SqlCipherLocalStore>, Arc<ConsentRecords>)> {
-    let (store, records) = open_device_records(dir, vault, clock, ConsentRetention::default())?;
-    Ok((store, Arc::new(records)))
-}
 
 /// Open the records in `dir` and put the store and the records in managed state. On an error
 /// nothing is managed.

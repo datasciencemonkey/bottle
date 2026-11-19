@@ -1,6 +1,7 @@
 /// <reference types="vitest/config" />
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig, type Plugin } from 'vite';
 
@@ -37,7 +38,10 @@ export function mogRivAsset(file: string = MOG_RIV_BUILD): Plugin {
 
 // One HTML entry per window kind (ARC-3). Tauri expects a fixed dev port.
 export default defineConfig({
-  plugins: [react(), mogRivAsset()],
+  // tailwindcss() only transforms CSS that actually uses Tailwind's `@import`/`@theme` syntax
+  // (ui-1, ADR 0106): src/views/hub/tailwind.css. mog.css and card.css have none, so they pass
+  // through untouched; mog.html and card.html never load tailwind.css at all.
+  plugins: [react(), tailwindcss(), mogRivAsset()],
   clearScreen: false,
   server: { port: 1420, strictPort: true, host: '127.0.0.1' },
   envPrefix: ['VITE_', 'TAURI_ENV_'],

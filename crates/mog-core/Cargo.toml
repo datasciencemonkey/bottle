@@ -44,6 +44,14 @@ ureq = { version = "2.12", optional = true }
 bzip2 = { version = "0.4", optional = true }
 tar = { version = "0.4", optional = true }
 
+# ADR 0103: the call recording codec, Opus in Ogg (16 kbps mono, one part per recording).
+# unsafe-libopus is a c2rust port of libopus 1.3.1 to Rust (BSD-3-Clause): no C toolchain
+# or cmake on any OS. ogg is the RustAudio Ogg container crate (BSD-3-Clause).
+unsafe-libopus = "=0.2.0"
+ogg = "=0.9.2"
+# ADR 0103: the local start time of a recording names its folder. Already in Cargo.lock.
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+
 [build-dependencies]
 # CAP-50a: build.rs checks the vendored sherpa-onnx archive and the linked lib dir.
 sha2 = "0.10"
@@ -55,7 +63,13 @@ objc2 = "0.6.5"
 # R6 sleep and lock observers (#465): notification blocks.
 block2 = "0.6.2"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSPasteboard", "NSPasteboardItem", "NSWorkspace"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSArray", "NSData", "NSDistributedNotificationCenter", "NSNotification", "NSOperation", "NSString"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSArray", "NSData", "NSDictionary", "NSDistributedNotificationCenter", "NSNotification", "NSOperation", "NSString", "NSUUID", "NSValue"] }
+# ADR 0103: the Core Audio process tap (system audio of a call recording) and the mic prompt.
+# Already in Cargo.lock through cpal (Zlib OR Apache-2.0 OR MIT).
+objc2-core-audio = { version = "0.3.2", default-features = false, features = ["std", "AudioHardware", "objc2", "objc2-core-audio-types", "objc2-foundation"] }
+objc2-core-audio-types = { version = "0.3.2", default-features = false, features = ["std", "CoreAudioBaseTypes"] }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFDictionary"] }
+objc2-avf-audio = { version = "0.3.2", default-features = false, features = ["std", "block2", "AVAudioApplication"] }
 security-framework.workspace = true
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
@@ -83,6 +97,10 @@ windows-sys = { workspace = true, features = [
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_WindowsAndMessaging",
 ] }
+
+[dev-dependencies]
+# ADR 0103: an independent FLAC decoder checks the recording encoder in tests only.
+claxon = "0.4"
 
 [target.'cfg(windows)'.dev-dependencies]
 # AT-42 (#139): the harness memory scan test reads the writable pages of its own process.

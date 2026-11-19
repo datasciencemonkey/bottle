@@ -9,13 +9,16 @@
  *   never guesses one.
  * - `thread.send` is the composer's Send (or Enter): it goes straight to `GenieFollowup.send`,
  *   the same path a ⌥G follow-up uses.
- * - All three travel under the Conversations view id (`CONVERSATIONS_VIEW_ID`), like
+ * - `thread.check` asks whether the thread's workspace is signed in (`hub:thread.access`).
+ * - All of them travel under the Conversations view id (`CONVERSATIONS_VIEW_ID`), like
  *   `conversations.ready`, so no new `view_emit` kind is needed.
  */
 import {
+  asThreadCheckAction,
   asThreadFocusAction,
   asThreadSendAction,
   CONVERSATIONS_VIEW_ID,
+  type ThreadAccess,
 } from '../shared/hub-conversations';
 import { onViewInput, type BrainBus } from './bus';
 import type { GenieFollowup } from './genie-followup';
@@ -49,7 +52,12 @@ export interface ThreadFollowupWiring {
 /** Wire the composer's `thread.active` / `thread.inactive` / `thread.send`. */
 export function wireThreadFollowup(
   bus: BrainBus,
-  deps: { focus: ThreadFocus; followup: Pick<GenieFollowup, 'send'> },
+  deps: {
+    focus: ThreadFocus;
+    followup: Pick<GenieFollowup, 'send' | 'access'>;
+    /** `hub:thread.access`, to the hub window only. Never throws. */
+    sendAccess?: ((access: ThreadAccess) => void) | undefined;
+  },
 ): ThreadFollowupWiring {
   const off = onViewInput(bus, (input) => {
     if (input.from !== 'hub' || input.mogId !== CONVERSATIONS_VIEW_ID || input.kind !== 'click')
@@ -63,6 +71,14 @@ export function wireThreadFollowup(
       );
       return;
     }
+    const check = asThreadCheckAction(input.payload);
+    if (check) {
+      void deps.followup
+        .access(check.conversationId)
+        .then((a) => deps.sendAccess?.(a))
+        .catch(() => undefined);
+      return;
+    }
     const sendAction = asThreadSendAction(input.payload);
     if (sendAction) {
       void deps.followup.send({
@@ -73,4 +89,35 @@ export function wireThreadFollowup(
     }
   });
   return { dispose: off };
+}
+
+/** The part of a routed utterance that decides whether ⌥G continues a thread. */
+export interface RoutedAsk {
+  route: string;
+  question?: string;
+  decision: { injection_suspected?: boolean | undefined };
+}
+
+/**
+ * ⌥G while the hub window is focused on a thread (item 4): the question is a follow-up in that
+ * thread, with no card and no home-profile guess. Only a clean `ask` route is taken; a dictation,
+ * a chip fallback and an injection-suspected ask never are. `focus.active()` is only set while
+ * the composer is mounted and the hub window has OS focus (the view clears it on blur, on a
+ * view switch and on unmount), so a hidden thread is never the target. Returns true when it took
+ * the ask (and `release` ran).
+ */
+export function routeAskToFocusedThread(
+  r: RoutedAsk,
+  deps: { focus: ThreadFocus; followup: Pick<GenieFollowup, 'send'>; release(): void },
+): boolean {
+  if (r.route !== 'ask' || r.question === undefined || r.decision.injection_suspected) return false;
+  const thread = deps.focus.active();
+  if (!thread) return false;
+  deps.release();
+  void deps.followup.send({
+    conversationId: thread.conversationId,
+    profile: thread.profile,
+    question: r.question,
+  });
+  return true;
 }

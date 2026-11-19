@@ -40,6 +40,11 @@ body,
   width: min(100vw, 100vh);
   height: min(100vw, 100vh);
   pointer-events: none;
+  /* #603 review, MEDIUM finding: on the base rule (not only `[data-hidden]`), so Hide and the
+     un-hide it is paired with both ease, instead of the lamp snapping back to full size. Anchored
+     at the bottom, so the gap to the name pill just under it never changes with the scale. */
+  transform-origin: 50% 100%;
+  transition: transform 160ms var(--mog-ease-out);
 }
 
 .lamp > svg {
@@ -48,20 +53,22 @@ body,
 }
 
 /* A warm halo behind the head while Genie works. It rises from the lamp mouth, and most of
-   it shows above the rim, round the head. */
+   it shows above the rim, round the head. #ui-4: tinted with this MOG's accent colour
+   (`--mog-id-color`, set in `MogView.tsx`); a MOG before its colour loads keeps the spark gold. */
 .lamp-glow {
   left: 19%;
   top: 30%;
   width: 62%;
   height: 42%;
-  fill: var(--mog-spark);
+  fill: var(--mog-id-color, var(--mog-spark));
   fill-opacity: 0.55;
   filter: blur(6px);
   opacity: 0;
   transition: opacity var(--mog-fade-ms) ease-out;
 }
 
-/* The listening ring round the head. It follows the mic level (--level, 0..1). */
+/* The listening ring round the head. It follows the mic level (--level, 0..1). #ui-4: tinted
+   with this MOG's accent colour, same fallback as the glow. */
 .level-ring {
   position: absolute;
   left: 19.75%;
@@ -69,7 +76,7 @@ body,
   width: 60.5%;
   height: 60.5%;
   box-sizing: border-box;
-  border: 2px solid var(--mog-eye);
+  border: 2px solid var(--mog-id-color, var(--mog-eye));
   border-radius: 50%;
   opacity: 0;
   transform: scale(0.94);
@@ -91,6 +98,8 @@ body,
   position: absolute;
   inset: 0;
   clip-path: inset(0 0 29% 0);
+  /* #603 review, MEDIUM finding: so un-hide (below) fades the Genie back in instead of popping. */
+  transition: opacity 160ms var(--mog-ease-out);
 }
 
 .genie {
@@ -193,7 +202,7 @@ body,
 }
 
 /* The "response is here" ring: it bursts round the standing head as the Genie lands, and it
-   stays inside the window at its largest. */
+   stays inside the window at its largest. #ui-4: tinted with this MOG's accent colour. */
 .answer-ring {
   position: absolute;
   left: 28%;
@@ -201,10 +210,13 @@ body,
   width: 44%;
   height: 44%;
   box-sizing: border-box;
-  border: 2px solid var(--mog-spark);
+  border: 2px solid var(--mog-id-color, var(--mog-spark));
   border-radius: 50%;
   opacity: 0;
   transform: scale(0.6);
+  /* #603 review, MEDIUM finding: so un-hide fades this back in instead of popping; the burst
+     keyframe below still drives it while `[data-glint]` is on. */
+  transition: opacity 160ms var(--mog-ease-out);
 }
 
 .lamp[data-glint] .answer-ring {
@@ -404,11 +416,13 @@ body,
 }
 
 /* UX-28 (#73, ADR 0058): a small triangle at the foot of the target mascot, pointing up at
-   it. The mascot fills the window, so the foot of the window is under the mascot. */
+   it. The mascot fills the window, so the foot of the window is under the mascot. #603 review,
+   finding 2: raised clear of the name pill's own span (`.identity-pill` below), so the triangle
+   never covers the pill's text — the old `bottom: 0` put both in the same few pixels. */
 .target-marker {
   position: absolute;
   left: 50%;
-  bottom: 0;
+  bottom: 24px;
   z-index: 2;
   width: 0;
   height: 0;
@@ -441,6 +455,65 @@ body,
   from {
     opacity: 0;
     transform: translateY(-3px);
+  }
+}
+
+/* #ui-4: the MOG's name pill, always on (not only the 1.2 s target toast), outlined in this
+   MOG's accent colour. No fill (MOG-01a: the page paints nothing outside the mascot), the same
+   hairline-pill-plus-halo treatment as `.badges [data-badge]` above, so the text reads on any
+   desktop; the colour carries the identity instead of a background. It sits just under the lamp,
+   clear of the target marker and the badges. #603 review, finding 2: fully inside the 160x160
+   window (the old `bottom: -7px` put most of the pill below the window edge, where
+   `overflow: hidden` on `html`/`body`/`#root`, mog.css above, cut it off). */
+.identity-pill {
+  position: absolute;
+  left: 50%;
+  bottom: 4px;
+  z-index: 1;
+  max-width: 88%;
+  transform: translateX(-50%);
+  overflow: hidden;
+  padding: 1px 8px;
+  border: 1.5px solid var(--mog-id-color, var(--mog-overlay-text));
+  border-radius: var(--mog-radius-pill);
+  color: var(--mog-overlay-text);
+  text-shadow: var(--mog-overlay-halo);
+  font: 600 var(--mog-text-xs) / 1.3 var(--mog-font);
+  letter-spacing: 0.01em;
+  text-align: center;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+/* #ui-4: Hide sinks the Genie into the lamp and shrinks the lamp art to lamp-only inside the same
+   160x160 window (plain CSS, no brain round trip). The name pill stays, so a hidden lamp is
+   still identifiable at a glance; a click anywhere on the window (`MogView.tsx`) brings it back.
+   The transition lives on the base `.lamp` rule above (#603 review, MEDIUM finding), so un-hide
+   eases back to full size the same way Hide eases down to it, instead of snapping. */
+.mascot[data-hidden] .lamp {
+  transform: scale(0.62);
+}
+
+.mascot[data-hidden] .genie-clip,
+.mascot[data-hidden] .lamp-glow,
+.mascot[data-hidden] .level-ring,
+.mascot[data-hidden] .answer-ring {
+  opacity: 0 !important;
+}
+
+/* #ui-4 (review #603, findings 1 and 4): the right-click menu used to render here as HTML
+   (Hide/Close/Open in Bottle/Change home workspace…). It is now a native Tauri menu, built and
+   popped up from `MogView.tsx` (`@tauri-apps/api/menu`), so it is never part of this page: a
+   native `NSMenu` always fits on screen and closes itself on an outside click or Esc. */
+
+@media (prefers-reduced-motion: reduce) {
+  .lamp,
+  .genie-clip,
+  .lamp-glow,
+  .level-ring,
+  .answer-ring {
+    transition: none;
   }
 }
 

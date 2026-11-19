@@ -27,10 +27,12 @@ import {
 import { onViewInput, type BrainBus } from './bus';
 import type { LocalMemoryStore } from './components/memory-store';
 
-/** One defined MOG: its id and name. */
+/** One defined MOG: its id, name and accent colour. */
 export interface ConversationMog {
   mogId: string;
   name: string;
+  /** #ui-4: `mog.ui.variant`. */
+  colorVariant?: string;
 }
 
 export interface ConversationsReadDeps {
@@ -55,7 +57,9 @@ export interface HubConversationsWiring {
    * workspace it may use (ARC-2). `undefined` for a blank id or one no stored exchange carries.
    * Never rejects.
    */
-  findThread(conversationId: string): Promise<{ mogId: string; profile: string } | undefined>;
+  findThread(
+    conversationId: string,
+  ): Promise<{ mogId: string; profile: string; host: string } | undefined>;
   dispose(): void;
 }
 
@@ -100,6 +104,7 @@ function rowOf(r: unknown, mog: ConversationMog): ConversationRow | undefined {
     requestId,
     mogId: mog.mogId,
     mogName: mog.name,
+    ...(mog.colorVariant !== undefined ? { mogColorVariant: mog.colorVariant } : {}),
     question: str(o['questionUser']),
     answerMd: str(o['finalAnswerMd']),
     keyNumbers: keyNumbersOf(o['keyNumbers']),
@@ -179,7 +184,9 @@ export function wireHubConversations(
       try {
         const { rows } = await readConversations(deps);
         const row = rows.find((r) => r.conversationId === conversationId);
-        return row ? { mogId: row.mogId, profile: row.profile } : undefined;
+        return row
+          ? { mogId: row.mogId, profile: row.profile, host: row.workspaceHost }
+          : undefined;
       } catch {
         return undefined;
       }

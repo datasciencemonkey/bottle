@@ -4,17 +4,30 @@
  * 1. Working: the status pill. The stage line ("Asking Genie", then the fixed Genie stage) with a
  *    soft light sweep, and after 3 s the timer ("0:03", then "Working… 1:04"). It stays while
  *    Genie works. Only the stage line is live for a screen reader.
- * 2. Answer: the pill grows into the answer card: the question, the answer (safe markdown), the
- *    key numbers and a footer. Failure: "Genie could not answer.", the GL-5 reason and Try again.
+ * 2. Answer: the pill grows into the answer card: the question, a short summary of the answer
+ *    (safe markdown, clamped to a few lines with "Show more" to read the rest), the key numbers
+ *    and a footer with [Open in Bottle] and a close control. Failure: "Genie could not answer.",
+ *    the GL-5 reason and Try again.
  * 3. Gone: an answer stays for T = 4 s + 0.25 s per word (6 s to 20 s), a failure 8 s. The pointer
  *    on the card or on the MOG holds it; after the pointer leaves it stays 2.5 s or more. Then it
- *    fades and tells the brain (`card_done`), which hides the window. No close button, no drag.
+ *    fades and tells the brain (`card_done`), which hides the window.
  *
- * A double-click opens hub Conversations on this exchange. The card never takes focus: it calls
- * no `focus()`, and the window shows without becoming key (ADR 0102).
+ * A single click on [Open in Bottle] or on the card body (not a link, a button, or a press-drag
+ * release), and a double-click anywhere on the card, open hub Conversations on this exchange. The
+ * close control fades the card at once, the same as a double-click. The card never
+ * takes focus: it calls no `focus()`, and the window shows without becoming key (ADR 0102).
  * Design: the designer-mog spec, sections 4 and 5 (ADR 0102), on `tokens.css` only.
  */
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
+} from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import type { MogId } from '../../shared/interfaces';
@@ -29,8 +42,9 @@ import {
   opIdOfGenieBlurb,
   timerText,
 } from '../../shared/genie-status';
+import { paletteColorOf } from '../../shared/mog-palette';
 import { emitView, type CardUpdate } from '../view-ipc';
-import { SafeMarkdown, type LinkTrust } from './safe-markdown';
+import { NO_LINKS, SafeMarkdown } from './safe-markdown';
 
 /** The card fade at its time; a double-click fades faster. */
 export const FADE_MS = 300;
@@ -39,10 +53,31 @@ export const DISMISS_FADE_MS = 150;
 export const STAGE_LEAVE_MS = 120;
 /** The failure title (design spec 5). */
 export const FAILURE_TITLE = 'Genie could not answer.';
-export const FOOTER_HINT = 'Double-click to open in Bottle';
-
-/** No link in an answer is trusted until the card knows the profile host (TODO(#40)). */
-const NO_LINKS: LinkTrust = { profileHost: '', allowedAppUrls: [] };
+/** The footer action that opens hub Conversations on this exchange (also a single click on the card). */
+export const OPEN_IN_BOTTLE_LABEL = 'Open in Bottle';
+export const SHOW_MORE_LABEL = 'Show more';
+export const SHOW_LESS_LABEL = 'Show less';
+export const CLOSE_LABEL = 'Close';
+/** A press that moves more than this before release is a drag, not a click (review round 2). */
+export const DRAG_SLOP_PX = 4;
+/** `var(--mog-leading)` is 1.45 (`tokens.css`); 14px is `var(--mog-text-md)`'s usual size. */
+export const ANSWER_CLAMP_LINES = 4;
+const APPROX_LINE_PX = 14 * 1.45;
+/** The one clamp height. It goes to the CSS as `--genie-clamp-px` (`genie-card.css`), so the
+ * real, CSS-driven clamp and the overflow check below can never drift apart. */
+export const ANSWER_CLAMP_PX = ANSWER_CLAMP_LINES * APPROX_LINE_PX;
+/** The whole answer card's own hard cap (`.genie-answer`/`.genie-failure`/`.genie-message` in
+ * genie-card.css). The expanded body's target height is always derived from this minus the
+ * chrome around it (question, key numbers, footer), never a constant (review round 2, finding
+ * 1): a constant does not know whether key numbers show, so it either clips the footer or wastes
+ * space, depending on content. The card is a flex column (genie-card.css) as the safety net in
+ * case this estimate is ever wrong, so the footer and the close control can never clip either way.
+ */
+export const ANSWER_CARD_MAX_PX = 280;
+/** The expanded body's height before anything has been measured (first render, or a measurement
+ * that comes back zero, e.g. in a test with no real layout). `toggleExpanded` replaces this with
+ * a chrome-aware value on every Show more. */
+export const ANSWER_EXPANDED_MAX_PX = 180;
 
 type Vis = 'shown' | 'fading' | 'dismissing' | 'gone';
 
@@ -138,9 +173,16 @@ export interface GenieCardProps {
    * content and before any size motion, so the window can fit it (`fit-window.ts`).
    */
   onSize?: (px: number) => Promise<void> | void;
+  /**
+   * #ui-4: the target MOG's name and colour (`CardView.tsx`, `useCardIdentity`). The card is
+   * already target-only (MOG-13a, MOG-13b: the owner of the request is the MOG that captured
+   * it), so this only labels it; undefined before the brain answers shows no label.
+   */
+  identity?: { name: string; colorVariant?: string } | undefined;
 }
 
-export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
+export function GenieCard({ mogId, card, onSize, identity }: GenieCardProps) {
+  const accent = identity && paletteColorOf(identity.colorVariant, mogId).hex;
   const newest = card.blurbs[0];
   const blurbId = newest?.id ?? '';
   const opId = opIdOfGenieBlurb(blurbId);
@@ -155,6 +197,9 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
   const [vis, setVis] = useState<Vis>('shown');
   const ref = useRef<HTMLDivElement>(null);
   const holds = useRef({ pointer: false, mog: false });
+  // The point of the last `mousedown` on the card, so `openInBottle` can tell a click from a
+  // press-drag-release (review round 2, finding "also fix if cheap"): a drag never opens the hub.
+  const pressPos = useRef<{ x: number; y: number } | null>(null);
   // `hold` and the event handlers read these refs, so they stay stable and never miss an event.
   const visRef = useRef<Vis>('shown');
   const workingRef = useRef(working);
@@ -166,6 +211,72 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
     due: 0,
     left: showMs,
   });
+
+  // The window fits the content's final size first, so the grow motion is never cut (used below,
+  // and by the Show more/less settle effect, finding 3, review round 1).
+  const fitted = useRef<Promise<void>>(Promise.resolve());
+  const measure = useCallback(() => {
+    const frame = ref.current?.parentElement;
+    return onSize ? onSize(frame ? frame.getBoundingClientRect().height : 0) : undefined;
+  }, [onSize]);
+
+  // The answer clamps to a short summary by default (ANSWER_CLAMP_LINES); "Show more" expands it
+  // to its own bounded scroll region (genie-card.css), "Show less" clamps it again. A new answer
+  // always starts collapsed.
+  const [expanded, setExpanded] = useState(false);
+  const [canExpand, setCanExpand] = useState(false);
+  const [moreBelow, setMoreBelow] = useState(false);
+  const [scrolledTop, setScrolledTop] = useState(false);
+  // The expanded body's target height, recomputed on every Show more from the chrome actually
+  // measured at that moment (review round 2, finding 1): see `toggleExpanded`.
+  const [expandedCapPx, setExpandedCapPx] = useState(ANSWER_EXPANDED_MAX_PX);
+  const answerRef = useRef<HTMLDivElement>(null);
+  const answerBodyId = useId();
+  // Reset during render (not in an effect), the documented way to clear state on a prop change:
+  // https://react.dev/learn/you-might-not-need-an-effect#resetting-all-state-when-a-prop-changes
+  const prevBlurbId = useRef(blurbId);
+  if (prevBlurbId.current !== blurbId) {
+    prevBlurbId.current = blurbId;
+    if (expanded) setExpanded(false);
+  }
+  useLayoutEffect(() => {
+    const el = answerRef.current;
+    // `scrollHeight` is the content's natural height, unclamped by this element's own
+    // `max-height`, so this never flips once the user expands it.
+    setCanExpand(el ? el.scrollHeight > ANSWER_CLAMP_PX + 1 : false);
+  }, [kind, text, answer?.md]);
+  // B3: a bottom fade shows only while the expanded, scrolled answer still has more below it.
+  // [LOW, round 3] A top fade shows the same way once the user has scrolled past the top, to
+  // match: the content was cut hard under the question with no warning that it had scrolled.
+  const updateMoreBelow = useCallback(() => {
+    const el = answerRef.current;
+    setMoreBelow(el ? el.scrollHeight - el.scrollTop - el.clientHeight > 1 : false);
+    setScrolledTop(el ? el.scrollTop > 0 : false);
+  }, []);
+  useLayoutEffect(updateMoreBelow, [expanded, canExpand, updateMoreBelow]);
+  // B5/finding 3 (review round 1): the answer's own `max-height` animates over 200 ms, so a size
+  // read on the frame that toggles `expanded` is still the old, pre-transition size (the window
+  // would not grow on Show more, or would stay tall on Show less). Wait for the real
+  // `transitionend` and measure once the layout has actually settled, so the window moves once,
+  // with no jump. Reduced motion never transitions (genie-card.css), so there measure at once.
+  useEffect(() => {
+    const el = answerRef.current;
+    if (!el) return;
+    const settle = () => {
+      void measure();
+      updateMoreBelow();
+    };
+    if (reducedMotion()) {
+      settle();
+      return;
+    }
+    const onTransitionEnd = (e: TransitionEvent) => {
+      if (e.target !== el || e.propertyName !== 'max-height') return;
+      settle();
+    };
+    el.addEventListener('transitionend', onTransitionEnd);
+    return () => el.removeEventListener('transitionend', onTransitionEnd);
+  }, [expanded, measure, updateMoreBelow]);
 
   const end = useCallback(
     (fadeMs: number) => {
@@ -206,6 +317,11 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
       const was = h.pointer || h.mog;
       h[via] = on;
       const is = h.pointer || h.mog;
+      // The brain's own card stack ages a completed blurb out after its own, longer idle time
+      // (UX-12), on a timer that never saw this hold. Report it the same way the panel already
+      // does (`hover`), so the brain never ages this answer out while the user still reads it.
+      if (blurbId)
+        void emitView(mogId, 'hover', { blurbId, on: is, via: 'pointer' }).catch(() => undefined);
       if (workingRef.current || visRef.current === 'gone' || was === is) return;
       if (is) {
         clearTimeout(timer.current.handle);
@@ -214,7 +330,7 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
         setVis('shown');
       } else arm(Math.max(timer.current.left, AFTER_HOVER_MS));
     },
-    [arm],
+    [arm, mogId, blurbId],
   );
 
   const onMogHover = useCallback(
@@ -230,14 +346,46 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
   }, [end]);
   useWindowEvent(CARD_DISMISS_EVENT, onDismiss);
 
-  // The window fits the final size first, so the grow motion is never cut. A card that is gone
-  // asks for one line, so a later show never gets the old, taller window back.
-  const fitted = useRef<Promise<void>>(Promise.resolve());
+  const onPress = (e: ReactMouseEvent) => {
+    pressPos.current = { x: e.clientX, y: e.clientY };
+  };
+
+  // A single click on the card body or on [Open in Bottle] opens hub Conversations, the same as
+  // a double-click (ADR 0102, #103). A link stays inert (TODO(#523)).
+  const openInBottle = useCallback(
+    (e: ReactMouseEvent) => {
+      // Only a true single click, on a card that is still fully shown: the second click of a
+      // double-click, and the dblclick after it, send nothing more (cheap item from review).
+      if (workingRef.current || visRef.current !== 'shown' || e.detail > 1) return;
+      if ((e.target as Element | null)?.closest('a')) return;
+      // `.genie` is `user-select:none` (genie-card.css), so there is never a text selection to
+      // check here; a press-drag-release is caught by comparing against the press point instead
+      // (review round 2, "also fix if cheap" — the old selection check did nothing).
+      const start = pressPos.current;
+      pressPos.current = null;
+      if (
+        start &&
+        (Math.abs(e.clientX - start.x) > DRAG_SLOP_PX ||
+          Math.abs(e.clientY - start.y) > DRAG_SLOP_PX)
+      )
+        return;
+      void emitView(mogId, 'click', {
+        target: OPEN_CONVERSATIONS,
+        ...(opId ? { requestId: opId } : {}),
+      }).catch(() => undefined);
+      end(DISMISS_FADE_MS);
+    },
+    [mogId, opId, end],
+  );
+
+  // A card that is gone asks for one line, so a later show never gets the old, taller window
+  // back. `expanded` is not a dependency here: Show more/less resize goes through the dedicated
+  // effect above, which waits for the answer's own `max-height` transition to settle before it
+  // measures (finding 3, review round 1) instead of measuring this frame's pre-transition size.
   useLayoutEffect(() => {
     if (!onSize) return;
-    const frame = ref.current?.parentElement;
-    fitted.current = Promise.resolve(onSize(frame ? frame.getBoundingClientRect().height : 0));
-  }, [onSize, kind, text, card.sections, card.blurbs, retry, vis]);
+    fitted.current = Promise.resolve(measure());
+  }, [onSize, measure, kind, text, card.sections, card.blurbs, retry, vis]);
 
   // The pill grows into the card: the same element animates from its old size and corners to
   // the new ones. The motion waits until the window has its new height.
@@ -276,6 +424,9 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
   if (!newest || vis === 'gone' || (!working && text === '' && !answer)) return null;
 
   const onDoubleClick = () => {
+    // The card's own single click already sent this and started the fade (cheap item from
+    // review): a double-click never sends it a second time.
+    if (visRef.current !== 'shown') return;
     void emitView(mogId, 'click', {
       target: OPEN_CONVERSATIONS,
       ...(opId ? { requestId: opId } : {}),
@@ -285,21 +436,103 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
   const question = questionOf(card);
   const [line1 = '', ...rest] = text.split('\n');
 
+  const toggleExpanded = (e: ReactMouseEvent) => {
+    e.stopPropagation();
+    if (expanded) {
+      // Collapsing: reset the scroll position first (round 3): otherwise the collapsed summary
+      // keeps showing wherever the user last scrolled to, cut at the top instead of starting at
+      // the heading. Then shrink the body (the CSS transition below), then shrink the window
+      // once it settles (the `transitionend` effect above). That order is unchanged from round 1.
+      if (answerRef.current) answerRef.current.scrollTop = 0;
+      setExpanded(false);
+      return;
+    }
+    // Expanding (review round 2, finding 2): grow the window to the target size *before* the
+    // body's own `max-height` transition runs, so the footer is never below the window edge
+    // mid-transition and the window never snaps once it ends ("the window fits the final size
+    // first", the same pattern this file already uses for the pill-to-card grow motion).
+    const el = answerRef.current;
+    const genieEl = ref.current;
+    const frame = genieEl?.parentElement;
+    const bodyNow = el?.getBoundingClientRect().height ?? 0;
+    const genieNow = genieEl?.getBoundingClientRect().height ?? 0;
+    const frameNow = frame?.getBoundingClientRect().height ?? 0;
+    // Everything in the card besides the body: question, key numbers, footer, padding, border.
+    const chrome = Math.max(0, genieNow - bodyNow);
+    const available = Math.max(ANSWER_CLAMP_PX, ANSWER_CARD_MAX_PX - chrome);
+    const targetBody = el ? Math.min(el.scrollHeight, available) : ANSWER_EXPANDED_MAX_PX;
+    setExpandedCapPx(targetBody);
+    const targetFrame = frameNow + Math.max(0, targetBody - bodyNow);
+    const grown = Promise.resolve(onSize?.(targetFrame));
+    void grown.then(() => setExpanded(true));
+  };
+  const clampStyle = {
+    '--genie-clamp-px': `${ANSWER_CLAMP_PX}px`,
+    '--genie-expanded-max-px': `${expandedCapPx}px`,
+  } as CSSProperties;
+  // The safe-markdown answer, clamped to a short summary. "Show more"/"Show less" (rendered once,
+  // in the footer) lift or reapply the clamp when it overflows ANSWER_CLAMP_LINES. Shared by the
+  // 'answer' and 'message' kinds (UX-14a, #103).
+  const answerBody = (md: string) => (
+    <div
+      ref={answerRef}
+      id={answerBodyId}
+      className="genie-answer-body"
+      style={clampStyle}
+      data-expanded={expanded}
+      data-overflowing={canExpand}
+      data-more-below={moreBelow}
+      data-scrolled-top={scrolledTop}
+      onScroll={updateMoreBelow}
+    >
+      <SafeMarkdown text={md} trust={NO_LINKS} />
+    </div>
+  );
+
   return (
     <div
       ref={ref}
       className={`genie genie-${kind}`}
       data-genie={kind}
       data-state={vis}
+      style={accent ? ({ '--mog-id-color': accent } as CSSProperties) : undefined}
       onMouseEnter={() => hold('pointer', true)}
       onMouseLeave={() => hold('pointer', false)}
+      onMouseDown={onPress}
+      onClick={openInBottle}
       onDoubleClick={onDoubleClick}
     >
+      {/* #ui-4: this card is already target-only (MOG-13a, MOG-13b); this only names the MOG.
+          Review #603, finding 5: the name is neutral text (AA on this surface); the dot, not the
+          text, carries the accent colour. */}
+      {identity && (
+        <span className="genie-identity">
+          <span className="genie-identity-dot" aria-hidden="true" />
+          {identity.name}
+        </span>
+      )}
       {kind === 'working' && (
         <>
           <Stage text={line1} />
           <Timer />
         </>
+      )}
+      {kind !== 'working' && (
+        <button
+          type="button"
+          className="popup-dismiss genie-dismiss"
+          data-action="dismiss"
+          aria-label={CLOSE_LABEL}
+          onDoubleClick={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (!workingRef.current && visRef.current !== 'gone') end(DISMISS_FADE_MS);
+          }}
+        >
+          <svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true">
+            <path d="M2 2l6 6M8 2l-6 6" />
+          </svg>
+        </button>
       )}
       {kind !== 'working' && (
         <div className="genie-body" key="body">
@@ -310,7 +543,12 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
           )}
           {kind === 'answer' && answer && (
             <div className="genie-md" data-answer role="status">
-              <SafeMarkdown text={answer.md} trust={NO_LINKS} />
+              {answerBody(answer.md)}
+            </div>
+          )}
+          {kind === 'message' && (
+            <div className="genie-md" data-answer>
+              {answerBody([line1, ...rest].join('\n'))}
             </div>
           )}
           {kind === 'answer' && keys && keys.items.length > 0 && (
@@ -327,14 +565,9 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
             </ul>
           )}
           {kind === 'failure' && (
-            <div role="alert">
+            <div className="genie-failure-body" role="alert">
               <p className="genie-title">{FAILURE_TITLE}</p>
               <p className="genie-reason">{line1}</p>
-            </div>
-          )}
-          {kind === 'message' && (
-            <div className="genie-md" data-answer>
-              <SafeMarkdown text={[line1, ...rest].join('\n')} trust={NO_LINKS} />
             </div>
           )}
           <footer className="genie-foot">
@@ -345,6 +578,7 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
                 data-chip={retry.id}
                 onDoubleClick={(e) => e.stopPropagation()}
                 onClick={(e) => {
+                  e.stopPropagation();
                   // The second click of a double-click sends nothing more.
                   if (e.detail > 1) return;
                   void emitView(mogId, 'chip_click', { chipId: retry.id }).catch(() => undefined);
@@ -353,7 +587,33 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
                 {retry.label}
               </button>
             ) : (
-              <span>{FOOTER_HINT}</span>
+              <>
+                <button
+                  type="button"
+                  className="popup-action genie-open"
+                  data-action="open-in-bottle"
+                  onDoubleClick={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openInBottle(e);
+                  }}
+                >
+                  {OPEN_IN_BOTTLE_LABEL}
+                </button>
+                {(kind === 'answer' || kind === 'message') && canExpand && (
+                  <button
+                    type="button"
+                    className="genie-toggle"
+                    data-action={expanded ? 'show-less' : 'show-more'}
+                    aria-expanded={expanded}
+                    aria-controls={answerBodyId}
+                    onDoubleClick={(e) => e.stopPropagation()}
+                    onClick={toggleExpanded}
+                  >
+                    {expanded ? SHOW_LESS_LABEL : SHOW_MORE_LABEL}
+                  </button>
+                )}
+              </>
             )}
             <span className="genie-when">now</span>
           </footer>

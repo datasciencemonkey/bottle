@@ -52,7 +52,7 @@ function fakeStore(byMog: Record<string, Row[]>, fail = false) {
 }
 
 const mogs = async () => [
-  { mogId: MOG_A, name: 'Sales' },
+  { mogId: MOG_A, name: 'Sales', colorVariant: 'coral' },
   { mogId: MOG_B, name: 'Ops' },
 ];
 
@@ -86,6 +86,7 @@ describe('readConversations (#103)', () => {
       requestId: req(3),
       mogId: MOG_A,
       mogName: 'Sales',
+      mogColorVariant: 'coral',
       question: 'Question 3?',
       answerMd: '**Answer** 3',
       keyNumbers: [{ text: '4.2 %', label: 'growth' }, { text: '$1.3M' }],
@@ -257,7 +258,10 @@ describe('wireHubConversations (#103)', () => {
       send: async () => undefined,
       sendOpen: async () => undefined,
     });
-    await expect(w.findThread('conv-y')).resolves.toEqual({ mogId: MOG_B, profile: 'fake-b' });
+    await expect(w.findThread('conv-y')).resolves.toMatchObject({
+      mogId: MOG_B,
+      profile: 'fake-b',
+    });
     await expect(w.findThread('conv-does-not-exist')).resolves.toBeUndefined();
   });
 

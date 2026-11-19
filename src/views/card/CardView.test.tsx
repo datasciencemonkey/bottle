@@ -10,9 +10,17 @@ vi.mock('@tauri-apps/api/window', async () => (await import('../test-tauri')).wi
 
 const ID = '00000000-0000-4000-8000-000000000001';
 const OTHER = '00000000-0000-4000-8000-000000000002';
+/** A real Genie blurb ID (`genie-status.ts`), so the panel's answer counts as live (B2, review
+ * round 1), not an orphan left behind by an aged-out Genie blurb. */
+const GENIE_ID = 'genie:00000000-0000-4000-8000-0000000000aa';
 const update = {
   mogId: ID,
-  blurbs: [{ id: 'b1', text: 'Revenue was 4.2M' }],
+  // `b1` is newest (a later, non-Genie blurb), but the Genie blurb that produced `answerMd` is
+  // still in the stack, exactly as `genie-direct.ts` leaves it until it ages out (UX-12).
+  blurbs: [
+    { id: 'b1', text: 'Revenue was 4.2M' },
+    { id: GENIE_ID, text: 'Revenue was 4.2M', completed: true },
+  ],
   chips: [{ id: 'c1', label: 'Ask Genie' }],
   answerMd: '**4.2M** in Q3',
 };
@@ -32,14 +40,15 @@ describe('V3 card view', () => {
     roots = [];
   });
 
-  it('[V3] subscribes to card:update and renders blurbs, chips and the answer as text', async () => {
+  it('[V3] [SEC-25a] subscribes to card:update, renders blurbs and chips, and the answer as safe markdown', async () => {
     const { el } = await mountCard(<CardView mogId={ID} />);
     expect(tauri.listeners('card:update')).toBe(1);
     await tauri.emit('card:update', update);
     expect(el.textContent).toContain('Revenue was 4.2M');
     expect(el.querySelector('button[data-chip="c1"]')?.textContent).toBe('Ask Genie');
-    expect(el.querySelector('[data-answer]')?.textContent).toBe('**4.2M** in Q3');
-    expect(el.querySelector('strong')).toBeNull();
+    // #210 follow-up: the answer renders through the safe markdown allowlist, never raw text.
+    expect(el.querySelector('[data-answer]')?.textContent).not.toContain('**');
+    expect(el.querySelector('[data-answer] strong')?.textContent).toBe('4.2M');
   });
 
   it('[MOG-05b] sends view_emit ready once, after it listens to card:update (#507)', async () => {
@@ -186,6 +195,14 @@ describe('V3 card view', () => {
     expect(el.querySelector('[data-action="pin"]')).toBeNull();
   });
 
+  it('[#574] the panel never shows a Pin control while PIN_ENABLED is false', async () => {
+    const { el } = await mountCard(<CardView mogId={ID} />);
+    // The panel view needs `sections` or `answerMd` to show (not the #559 pop-up).
+    await tauri.emit('card:update', { ...stack, ...update, blurbs: stack.blurbs });
+    expect(el.querySelector('[data-action="pin"]')).toBeNull();
+    expect(el.textContent).not.toContain('Pin');
+  });
+
   it('[UX-12] sends pointer hover and keyboard focus of the pop-up blurb to the brain', async () => {
     const { el } = await mountCard(<CardView mogId={ID} />);
     await tauri.emit('card:update', {
@@ -250,6 +267,133 @@ describe('V3 card view: expanded sections and chips', () => {
     { id: 'footer', sttBadge: 'STT: local', deepLink: 'https://example.com/g' },
     { id: 'dataFlow', text: 'Audio stays on this Mac.' },
   ];
+
+  // Regression (user screenshot): every Genie answer showed raw markdown as one long paragraph
+  // with no line breaks, and an untrusted link showed as literal `[text](url)`. Root cause:
+  // `CardView`'s panel (reached once the completed Genie blurb ages out of the card stack while
+  // its answer sections are still set, UX-12) rendered `s.md` and `card.answerMd` as plain text
+  // instead of through `safe-markdown.tsx` (TODO(#210) in the pre-fix source). This drives the
+  // real section shape `card-sections.ts#buildSections` sends, through the real `CardView`.
+  const BUG_SAMPLE = [
+    'You have a few good options:',
+    '',
+    '**1. Real-time transcription with Model Serving — fastest**',
+    '',
+    'Use a serving endpoint to transcribe audio as it streams in.',
+    '',
+    '**2. Batch Whisper on AI Runtime — most control**',
+    '',
+    'Run the [ai_transcribe function](https://docs.databricks.com/aws/en/notebooks/source/ai_transcribe-example.html) over a batch of files.',
+    '',
+    '- Scales to large volumes',
+    '- Keeps full control of the pipeline',
+    '',
+    '**3. A managed connector — least setup**',
+    '',
+    'Use a managed connector when you want the least setup.',
+  ].join('\n');
+
+  it('[SEC-25a] [SEC-25b] the panel renders a multi-paragraph answer as safe markdown, not raw text', async () => {
+    const { el } = await mountCard(<CardView mogId={ID} />);
+    await tauri.emit('card:update', {
+      ...update,
+      sections: [{ id: 'answer', md: BUG_SAMPLE }],
+    });
+    const answer = el.querySelector('[data-section="answer"] [data-answer]') as HTMLElement;
+    // No literal markdown syntax leaks through.
+    expect(answer.textContent).not.toContain('**');
+    expect(answer.textContent).not.toContain('[ai_transcribe function](');
+    // Three bold headings render as <strong>, each a separate inline span, not one run-on string.
+    const bold = [...answer.querySelectorAll('strong')].map((n) => n.textContent);
+    expect(bold).toEqual([
+      '1. Real-time transcription with Model Serving — fastest',
+      '2. Batch Whisper on AI Runtime — most control',
+      '3. A managed connector — least setup',
+    ]);
+    // Paragraphs and the list are separate blocks, not one long run of text with no breaks.
+    expect(answer.querySelectorAll('p').length).toBeGreaterThan(1);
+    expect([...answer.querySelectorAll('li')].map((n) => n.textContent)).toEqual([
+      'Scales to large volumes',
+      'Keeps full control of the pipeline',
+    ]);
+    // SEC-25b: an untrusted link shows its link text only, inert, never a navigable href.
+    expect(answer.textContent).toContain('ai_transcribe function');
+    expect(answer.querySelector('a')).toBeNull();
+  });
+
+  // B1/B2 (review round 1): a dictation blurb landed after the Genie answer, so the Genie blurb
+  // is no longer newest. The panel must still (a) never leak that Genie blurb's own raw markdown
+  // (B1), and (b) keep treating the sections as a live answer, since the Genie blurb that
+  // produced them is still in the stack (B2). Once the brain ages that Genie blurb out entirely
+  // (UX-12), the sections are orphaned and must not show.
+  it('[#598] a later dictation blurb never brings back raw markdown or an orphaned answer', async () => {
+    const { el } = await mountCard(<CardView mogId={ID} />);
+    await tauri.emit('card:update', {
+      mogId: ID,
+      blurbs: [
+        { id: 'dict-1', text: 'Copied to clipboard' },
+        { id: GENIE_ID, text: BUG_SAMPLE, completed: true },
+      ],
+      chips: [],
+      sections: [{ id: 'answer', md: BUG_SAMPLE }],
+    });
+    // No raw markdown leaks anywhere in the panel, including the Genie blurb's own text.
+    expect(el.textContent).not.toContain('**');
+    expect(el.textContent).not.toContain('[ai_transcribe function](');
+    // The sections answer is still live: the Genie blurb that produced it is still in the stack.
+    expect(el.querySelector('[data-section="answer"]')).not.toBeNull();
+    // [LOW, round 2] "the answer shows twice": the `Section` below already shows this Genie
+    // blurb's answer in full, so the blurb list must not render it a second time. A phrase
+    // unique to the answer appears exactly once in the whole panel, not once per render path.
+    const once = (el.textContent?.match(/ai_transcribe function/g) ?? []).length;
+    expect(once).toBe(1);
+    // [LOW, round 3] An earlier fix kept an empty `<li>` for the Genie blurb's hover hold, which
+    // left a bare, empty bullet in the list. The `<li>` is gone now; the hold moves to the `div`
+    // wrapping the answer the Section shows, with the same `data-blurb` id.
+    expect(el.querySelector(`li[data-blurb="${GENIE_ID}"]`)).toBeNull();
+    for (const li of [...el.querySelectorAll('ul[aria-label="Answers"] > li')]) {
+      expect(li.textContent).not.toBe('');
+    }
+    const genieHold = el.querySelector(`div[data-blurb="${GENIE_ID}"]`) as HTMLElement;
+    expect(genieHold.querySelector('strong')).not.toBeNull();
+
+    // The Genie blurb ages out of the stack (UX-12); the sections it left behind are now
+    // orphaned. The panel must never fall back to showing them unbounded and raw.
+    await tauri.emit('card:update', {
+      mogId: ID,
+      blurbs: [{ id: 'dict-1', text: 'Copied to clipboard' }],
+      chips: [],
+      sections: [{ id: 'answer', md: BUG_SAMPLE }],
+    });
+    expect(el.querySelector('[data-section="answer"]')).toBeNull();
+    expect(el.textContent).not.toContain('**');
+  });
+
+  // [round 3] The Genie blurb's hover hold (B2, review round 1) moved off the now-removed empty
+  // `<li>` onto the `div` wrapping the answer the Section shows. It must still fire.
+  it('[#598] hovering the Genie answer still holds its blurb, with no empty `<li>` left behind', async () => {
+    const { el } = await mountCard(<CardView mogId={ID} />);
+    await tauri.emit('card:update', {
+      mogId: ID,
+      blurbs: [
+        { id: 'dict-1', text: 'Copied to clipboard' },
+        { id: GENIE_ID, text: BUG_SAMPLE, completed: true },
+      ],
+      chips: [],
+      sections: [{ id: 'answer', md: BUG_SAMPLE }],
+    });
+    const hold = el.querySelector(`div[data-blurb="${GENIE_ID}"]`) as HTMLElement;
+    await act(async () => {
+      hold.dispatchEvent(
+        new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body }),
+      );
+    });
+    expect(inputs()).toContainEqual({
+      mogId: ID,
+      kind: 'hover',
+      payload: { blurbId: GENIE_ID, on: true, via: 'pointer' },
+    });
+  });
 
   it('[UX-18] [AT-09] renders the sections in the order the brain sends', async () => {
     const { el } = await mountCard(<CardView mogId={ID} />);

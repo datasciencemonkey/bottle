@@ -13,6 +13,10 @@
  *   line; by then the finished exchange is in the thread's own list (`hub:conversations`).
  * - This view is thin (ARC-2): it holds no domain state beyond its own input and status, and it
  *   runs no store statement.
+ * - An error stays inline under the thread as one fixed line (the brain's genie-errors text, never
+ *   upstream text) with Try again, which sends the same question again.
+ * - The brain says whether the thread's workspace is signed in (`thread.check`,
+ *   `hub:thread.access`). When it is not, the field and Send are disabled and the line says why.
  * - Item 4 (voice into the thread): while mounted and the hub window has focus, it announces
  *   `thread.active` with this thread's `conversationId` and `profile`, so a ⌥G press is a
  *   follow-up in this thread instead of a new question on the home workspace. A blur, an
@@ -24,12 +28,19 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useEffect, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { ASKING_GENIE, timerText } from '../../shared/genie-status';
 import {
+  asThreadAccess,
   asThreadStatus,
   CONVERSATIONS_VIEW_ID,
+  HUB_THREAD_ACCESS_EVENT,
   HUB_THREAD_STATUS_EVENT,
   type ThreadComposerThread,
 } from '../../shared/hub-conversations';
+import { Button } from '../ui/button';
+import { Textarea } from '../ui/textarea';
 import { emitView } from '../view-ipc';
+
+/** The inline line when the view itself cannot reach the brain (a fixed Bottle text). */
+const SEND_FAILED = 'Bottle could not send this question.';
 
 /** Appendix-style hint under the field: the voice route into this same thread (item 4). */
 const VOICE_HINT = 'Or hold Right Option and tap G';
@@ -43,6 +54,12 @@ function announceActive(thread: { conversationId: string; profile: string } | un
       }
     : { action: 'thread.inactive' as const };
   void emitView(CONVERSATIONS_VIEW_ID, 'click', payload).catch(() => undefined);
+}
+
+function checkAccess(conversationId: string): void {
+  void emitView(CONVERSATIONS_VIEW_ID, 'click', { action: 'thread.check', conversationId }).catch(
+    () => undefined,
+  );
 }
 
 function sendQuestion(thread: ThreadComposerThread, question: string): Promise<unknown> {
@@ -64,6 +81,10 @@ export function ThreadComposer({ thread, now = Date.now }: ThreadComposerProps) 
   const [text, setText] = useState('');
   const [sentAt, setSentAt] = useState<number | undefined>(undefined);
   const [statusText, setStatusText] = useState<string | undefined>(undefined);
+  const [error, setError] = useState<{ text: string; question: string | undefined } | undefined>(
+    undefined,
+  );
+  const [signIn, setSignIn] = useState<string | undefined>(undefined);
   const [, forceTick] = useState(0);
   const { conversationId, profile } = thread;
 
@@ -107,13 +128,18 @@ export function ThreadComposer({ thread, now = Date.now }: ThreadComposerProps) 
         const s = asThreadStatus(e.payload);
         if (!s || s.conversationId !== conversationId) return;
         if (s.phase === 'working') {
+          setError(undefined);
           setStatusText(s.text);
           return;
         }
-        // The answer (or the failure) is about to show in the thread's own list; the status
-        // line has nothing left to hold, and the field opens for the next question.
+        // The answer is about to show in the thread's own list; the status line has nothing
+        // left to hold, and the field opens for the next question. A failure stays inline.
         setStatusText(undefined);
         setSentAt(undefined);
+        if (s.phase === 'failed') {
+          setError({ text: s.text, question: s.question });
+          checkAccess(conversationId);
+        }
       },
       { target },
     ).then((u) => {
@@ -126,6 +152,34 @@ export function ThreadComposer({ thread, now = Date.now }: ThreadComposerProps) 
     };
   }, [conversationId]);
 
+  // Whether the thread's workspace is signed in: asked on mount and whenever the hub window gets
+  // focus (the user may have signed in meanwhile). The brain reads the profile from the store.
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    let gone = false;
+    const target = getCurrentWindow().label;
+    void listen<unknown>(
+      HUB_THREAD_ACCESS_EVENT,
+      (e) => {
+        const a = asThreadAccess(e.payload);
+        if (!a || a.conversationId !== conversationId) return;
+        setSignIn(a.state === 'sign_in' ? a.text : undefined);
+      },
+      { target },
+    ).then((u) => {
+      if (gone) u();
+      else off = u;
+    });
+    const recheck = () => checkAccess(conversationId);
+    window.addEventListener('focus', recheck);
+    recheck();
+    return () => {
+      gone = true;
+      off?.();
+      window.removeEventListener('focus', recheck);
+    };
+  }, [conversationId]);
+
   // The "m:ss" timer, the same as the card's: it ticks once a second while a request is open.
   useEffect(() => {
     if (sentAt === undefined) return;
@@ -135,16 +189,29 @@ export function ThreadComposer({ thread, now = Date.now }: ThreadComposerProps) 
 
   const sending = sentAt !== undefined;
 
-  const send = () => {
-    const question = text.trim();
-    if (question === '' || sending) return;
-    setText('');
+  const blocked = signIn !== undefined;
+
+  const sendText = (question: string) => {
+    setError(undefined);
     setSentAt(now());
     setStatusText(ASKING_GENIE);
     void sendQuestion(thread, question).catch(() => {
       setSentAt(undefined);
       setStatusText(undefined);
+      setError({ text: SEND_FAILED, question });
     });
+  };
+
+  const send = () => {
+    const question = text.trim();
+    if (question === '' || sending || blocked) return;
+    setText('');
+    sendText(question);
+  };
+
+  const retry = () => {
+    if (!error?.question || sending || blocked) return;
+    sendText(error.question);
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -157,39 +224,63 @@ export function ThreadComposer({ thread, now = Date.now }: ThreadComposerProps) 
   const timer = sentAt !== undefined ? timerText(now() - sentAt) : undefined;
 
   return (
-    <div className="thread-composer">
+    <div className="thread-composer mt-6 max-w-[68ch] border-t border-border pt-4">
       {statusText && (
-        <p className="thread-composer-status" role="status">
+        <p
+          className="thread-composer-status mb-2 text-sm tabular-nums text-muted-foreground"
+          role="status"
+        >
           {statusText}
           {timer && <span className="thread-composer-timer"> {timer}</span>}
         </p>
       )}
+      {signIn !== undefined && (
+        <p className="thread-composer-signin mb-2 text-sm text-muted-foreground" role="status">
+          {signIn}
+        </p>
+      )}
+      {error && !statusText && (
+        <div
+          className="thread-composer-error mb-2 flex items-center gap-3 text-sm text-destructive"
+          role="alert"
+        >
+          <span>{error.text}</span>
+          {error.question && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              data-thread-retry
+              disabled={blocked}
+              onClick={retry}
+            >
+              Try again
+            </Button>
+          )}
+        </div>
+      )}
       <form
-        className="thread-composer-row"
+        className="thread-composer-row flex items-end gap-2"
         onSubmit={(e: FormEvent) => {
           e.preventDefault();
           send();
         }}
       >
-        <textarea
-          className="thread-composer-field"
+        <Textarea
+          className="thread-composer-field max-h-30 flex-1"
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="Ask a follow-up…"
+          placeholder={blocked ? 'Sign in to ask a follow-up' : 'Ask a follow-up…'}
           aria-label="Ask a follow-up in this conversation"
-          disabled={sending}
+          disabled={sending || blocked}
           rows={1}
         />
-        <button
-          type="submit"
-          className="hub-primary thread-composer-send"
-          disabled={sending || text.trim() === ''}
-        >
+        <Button type="submit" disabled={sending || blocked || text.trim() === ''}>
           Send
-        </button>
+        </Button>
       </form>
-      <p className="thread-composer-hint">{VOICE_HINT}</p>
+      <p className="thread-composer-hint mt-2 text-xs text-muted-foreground">{VOICE_HINT}</p>
     </div>
   );
 }

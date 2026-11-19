@@ -1,0 +1,12 @@
+{
+  "enabled": true,
+  "consentAck": true,
+  "storage": {
+    "kind": "volume",
+    "root": "/Volumes/main/calls/bottle_audio"
+  },
+  "transcribeEndpoint": "databricks-gemini-3-8-flash",
+  "notesEndpoint": "databricks-claude-sonnet-5-5",
+  "presetInstructions": "Write short notes in Markdown.",
+  "lengthMin": 45
+}

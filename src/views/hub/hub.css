@@ -1,1040 +1,2012 @@
 /* The hub window (#561): calm, dark-first, system type. Every colour, size and radius comes
    from ../tokens.css (#559); this file only lays the hub out. Element rules sit under `.hub`, so
-   a new hub section (Wipe, the profile picker) gets the same look without new classes. */
+   a new hub section (Wipe, the profile picker) gets the same look without new classes.
+   ui-1 (ADR 0106): this file's own rules sit in the `hub-legacy` cascade layer, declared here
+   (before Tailwind loads, #561 + ./tailwind.css) between `base` and `components`. That keeps
+   this file winning over Tailwind's preflight reset exactly as it always did, while a new
+   shadcn component's Tailwind utility classes (`components`/`utilities`) still win over a
+   generic selector here (`.hub button`) that happens to also match it. Plain CSS cascade layers
+   are a no-op without Tailwind, so this file works the same in a build that never loads it. */
+@layer theme, base, hub-legacy, components, utilities;
+@layer hub-legacy {
+  html,
+  body {
+    margin: 0;
+    background: var(--mog-surface);
+    color: var(--mog-text);
+    color-scheme: dark;
+  }
+
+  /* display: grid (ui-1, review of #602 round 3, blockers 2 and 3): one grid for every area, not
+     a plain flex column plus a second, different `.hub--wide`-only grid. Row 1 is the header
+     (`.hub-title` + `.hub-labs`, side by side); row 2 is `.hub-body`. Before this, the header
+     was a flex column of two stacked lines on MOGs/Settings but one side-by-side grid row on
+     Conversations/Recordings (`.hub--wide`'s own grid, same specificity, declared later, won
+     there), so the whole page shifted 16px between areas (review finding 3). A fixed
+     `height: 100vh`, not `min-height` (review finding 2): the window itself must never grow
+     past the viewport, so `.hub-content`'s own `overflow-y: auto` (below) is what scrolls, and
+     the sidebar's `position: fixed` rail (HubSidebar.tsx) never has to chase a page scroll.
+     `.hub--wide` now only needs its one remaining override: no bottom padding, for the
+     full-bleed Conversations/Recordings frame.
+
+     The leading `var(--hub-sidebar-width, 0px)` column (ui-1, review of #602 round 4, blocker
+     1): a pinned rail is `position: fixed` (HubSidebar.tsx), entirely outside this grid, so it
+     never reflows anything on its own. `.hub-title`/`.hub-labs` are direct children of `main`
+     (AT-37) — outside `.hub-body`, which is the only box whose own padding used to shift with
+     the rail — so a pinned rail used to sit flush on top of "Bottle" and most of "Databricks
+     Labs / experimental" with no way to tell the header to move over. This empty first column
+     gives the header row the same leading offset `.hub-content`'s padding-left already gives
+     the content column (0 when unpinned or hidden, so nothing moves then). */
+  .hub {
+    box-sizing: border-box;
+    display: grid;
+    grid-template-columns: var(--hub-sidebar-width, 0px) auto 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+    align-items: baseline;
+    max-width: none;
+    height: 100vh;
+    margin: 0;
+    padding: var(--mog-space-6) var(--mog-space-6) var(--mog-space-7);
+    font: var(--mog-text-md) / var(--mog-leading) var(--mog-font);
+    -webkit-font-smoothing: antialiased;
+    transition: grid-template-columns 0.18s var(--mog-ease-out);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .hub {
+      transition: none;
+    }
+  }
+
+  /* Explicit placement (ui-1, review of #602 round 4): with a third column now in the mix,
+     auto-placement would put `.hub-title` in the new leading (sidebar-width) column instead of
+     the second one. */
+  .hub > .hub-title {
+    grid-row: 1;
+    grid-column: 2;
+  }
+
+  .hub > .hub-labs {
+    grid-row: 1;
+    grid-column: 3;
+  }
+
+  /* Row 2, every column: `align-self: stretch` overrides the grid's own `align-items: baseline`
+     (set for row 1's title/labs) for this one item, so the sidebar + content column still fills
+     every remaining pixel of height, in every area (ui-1, review of #602 round 3). Spanning the
+     leading sidebar-width column too costs nothing: `.hub-body` positions its own children
+     (the fixed rail, `.hub-content`'s padding-left) itself, the same as when that column did
+     not exist. */
+  .hub > .hub-body {
+    grid-column: 1 / -1;
+    align-self: stretch;
+    min-height: 0;
+  }
 
-html,
-body {
-  margin: 0;
-  background: var(--mog-surface);
-  color: var(--mog-text);
-  color-scheme: dark;
-}
-
-.hub {
-  box-sizing: border-box;
-  max-width: none;
-  margin: 0;
-  padding: 28px 32px 48px;
-  font: var(--mog-text-md) / var(--mog-leading) var(--mog-font);
-  -webkit-font-smoothing: antialiased;
-}
-
-.hub *,
-.hub *::before,
-.hub *::after {
-  box-sizing: border-box;
-}
-
-.hub ::selection {
-  background: var(--mog-lid);
-  color: var(--mog-face);
-}
-
-/* Type: one family, four steps. */
-.hub h1,
-.hub h2,
-.hub h3 {
-  margin: 0;
-  font-weight: 600;
-  line-height: 1.25;
-  text-wrap: balance;
-}
-
-.hub h1 {
-  font-size: 20px;
-  letter-spacing: -0.01em;
-}
-
-.hub h2 {
-  font-size: 15px;
-}
-
-.hub h3 {
-  font-size: var(--mog-text-md);
-}
-
-.hub p {
-  margin: 0 0 8px;
-  max-width: 68ch;
-}
-
-/* A region that is empty now (an alert or a live status) takes no space. */
-.hub p:empty {
-  margin: 0;
-}
-
-.hub-muted,
-.hub legend {
-  color: var(--mog-text-muted);
-}
-
-.hub-error {
-  color: var(--mog-lid);
-}
-
-.hub-draft {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: var(--mog-radius-pill);
-  background: rgb(246 196 99 / 14%);
-  color: var(--mog-spark);
-  font-size: var(--mog-text-sm);
-}
-
-/* Header: the product name and the quiet Labs label (MB-10b), on one line. */
-.hub .hub-title {
-  display: inline-block;
-  margin: 0 10px 20px 0;
-}
-
-.hub .hub-labs {
-  display: inline-block;
-  margin: 0;
-  color: var(--mog-text-muted);
-  font-size: var(--mog-text-sm);
-}
-
-/* ADR 0101: a missing OS permission. One quiet block per permission, one action each. */
-.hub-permissions > [data-permission] + [data-permission] {
-  margin-top: 16px;
-}
-
-.hub-permission-need {
-  margin: 0 0 4px;
-  font-weight: 600;
-}
-
-/* Sections: space and one hairline, no boxes. */
-.hub-section {
-  padding: 20px 0;
-  border-top: 1px solid var(--mog-edge);
-}
-
-.hub-section > h2 {
-  margin-bottom: 10px;
-}
-
-.hub-mogs {
-  border-top: 0;
-  padding-top: 4px;
-}
-
-/* Controls. */
-.hub button,
-.hub summary,
-.hub input,
-.hub select,
-.hub textarea {
-  font: inherit;
-  color: inherit;
-}
-
-.hub button {
-  min-height: 28px;
-  padding: 0 12px;
-  border: 1px solid rgb(255 255 255 / 14%);
-  border-radius: var(--mog-radius-sm);
-  background: transparent;
-  cursor: pointer;
-  transition:
-    background-color 150ms var(--mog-ease-out),
-    border-color 150ms var(--mog-ease-out);
-}
-
-.hub button:hover {
-  background: rgb(255 255 255 / 6%);
-  border-color: rgb(255 255 255 / 24%);
-}
-
-.hub button:active {
-  background: rgb(255 255 255 / 10%);
-}
-
-.hub button:disabled {
-  opacity: 0.45;
-  cursor: default;
-  background: transparent;
-}
-
-.hub .hub-primary,
-.hub .hub-danger {
-  border-color: transparent;
-  background: var(--mog-accent);
-  color: var(--mog-on-accent);
-  font-weight: 600;
-}
-
-.hub .hub-primary:hover,
-.hub .hub-danger:hover {
-  border-color: transparent;
-  background: var(--mog-accent-hover);
-}
-
-.hub .hub-primary:disabled {
-  opacity: 1;
-  background: rgb(255 255 255 / 8%);
-  color: var(--mog-text-muted);
-}
-
-.hub input[type='text'],
-.hub input:not([type]),
-.hub select,
-.hub textarea {
-  min-height: 28px;
-  padding: 4px 8px;
-  border: 1px solid rgb(255 255 255 / 14%);
-  border-radius: var(--mog-radius-sm);
-  background: rgb(0 0 0 / 24%);
-}
-
-.hub textarea {
-  min-height: 72px;
-  resize: vertical;
-}
-
-.hub input::placeholder,
-.hub textarea::placeholder {
-  color: var(--mog-text-muted);
-  opacity: 0.8;
-}
-
-.hub input[type='checkbox'],
-.hub input[type='radio'] {
-  width: 15px;
-  height: 15px;
-  margin: 0;
-  accent-color: var(--mog-lamp-deep);
-}
-
-/* The ring is a shadow; the transparent outline turns into the system colour in forced-colors
-   (Windows High Contrast), where shadows are dropped (WCAG 2.4.7). */
-.hub :focus-visible {
-  outline: 2px solid transparent;
-  outline-offset: 2px;
-  box-shadow: var(--mog-focus-ring);
-}
-
-.hub h2:focus-visible {
-  border-radius: var(--mog-radius-sm);
-}
-
-.hub-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 12px;
-}
-
-.hub-check {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  margin: 4px 0;
-  cursor: pointer;
-}
-
-.hub-check input {
-  margin-top: 2px;
-}
-
-.hub-check label {
-  cursor: pointer;
-}
-
-/* Live moods: a row of quiet chips (empty until a MOG window reports). */
-.hub-live {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 0 0 8px;
-  padding: 0;
-  list-style: none;
-}
-
-.hub-live:empty {
-  display: none;
-}
-
-.hub-live li {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
-
-.hub .hub-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 24px;
-  padding: 0 10px;
-  border-color: transparent;
-  border-radius: var(--mog-radius-pill);
-  background: rgb(255 255 255 / 5%);
-  font-size: var(--mog-text-sm);
-}
-
-.hub-mood-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--mog-text-muted);
-}
-
-.hub-live [data-mood='listening'] .hub-mood-dot,
-.hub-live [data-mood='processing'] .hub-mood-dot {
-  background: var(--mog-eye);
-}
-
-.hub-live [data-mood='error'] .hub-mood-dot {
-  background: var(--mog-lamp);
-}
-
-/* The MOG list: rows on one raised surface, separated by hairlines. */
-.hub-rows {
-  margin: 8px 0 16px;
-  padding: 0;
-  list-style: none;
-  border-radius: var(--mog-radius-md);
-  background: var(--mog-surface-raised);
-}
-
-.hub-rows:empty {
-  display: none;
-}
-
-.hub-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 10px;
-  min-height: 48px;
-  padding: 8px 12px 8px 16px;
-}
-
-.hub-row + .hub-row {
-  border-top: 1px solid rgb(255 255 255 / 6%);
-}
-
-.hub-row-name {
-  font-weight: 600;
-}
-
-.hub-row-state {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--mog-text-muted);
-  font-size: var(--mog-text-sm);
-}
-
-.hub-row-state::before {
-  content: '';
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: currentColor;
-  opacity: 0.6;
-}
-
-.hub-row[data-running='true'] .hub-row-state::before {
-  background: var(--mog-eye);
-  opacity: 1;
-}
-
-.hub-row-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin-left: auto;
-}
-
-/* "More": the less used row actions in a small menu under the button. */
-.hub-more {
-  position: relative;
-}
-
-.hub-more summary {
-  display: inline-flex;
-  align-items: center;
-  min-height: 28px;
-  padding: 0 10px;
-  border-radius: var(--mog-radius-sm);
-  color: var(--mog-text-muted);
-  cursor: pointer;
-  list-style: none;
-}
-
-.hub-more summary::-webkit-details-marker {
-  display: none;
-}
-
-.hub-more summary:hover,
-.hub-more[open] summary {
-  color: var(--mog-text);
-  background: rgb(255 255 255 / 6%);
-}
-
-.hub-more-items {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
-  z-index: 5;
-  display: flex;
-  flex-direction: column;
-  min-width: 168px;
-  padding: 4px;
-  border: 1px solid var(--mog-edge);
-  border-radius: var(--mog-radius-md);
-  background: var(--mog-surface-raised);
-  box-shadow: var(--mog-shadow);
-}
-
-.hub .hub-more-items button {
-  justify-content: flex-start;
-  border-color: transparent;
-  text-align: left;
-}
-
-.hub .hub-more-items button:last-child {
-  color: var(--mog-lid);
-}
-
-/* The edit form opens under its row. */
-.hub-edit {
-  flex-basis: 100%;
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  align-items: center;
-  gap: 8px 12px;
-  margin: 8px 0 4px;
-  padding: 12px;
-  border-radius: var(--mog-radius-sm);
-  background: rgb(0 0 0 / 18%);
-}
-
-.hub-edit label {
-  color: var(--mog-text-muted);
-}
-
-.hub-edit label:has(+ textarea) {
-  align-self: start;
-  padding-top: 5px;
-}
-
-.hub-edit textarea {
-  align-self: stretch;
-}
-
-.hub-edit .hub-actions {
-  grid-column: 2;
-  margin-top: 4px;
-}
-
-/* The create form: one line. */
-.hub-create {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
-.hub-create label {
-  color: var(--mog-text-muted);
-}
-
-.hub-create input {
-  flex: 1 1 140px;
-}
-
-/* Modal confirmations (aria-modal): centred over a scrim. */
-.hub-dialog,
-.hub [data-forget-dialog] {
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  z-index: 10;
-  width: min(420px, calc(100vw - 48px));
-  max-height: calc(100vh - 48px);
-  overflow: auto;
-  padding: 20px;
-  transform: translate(-50%, -50%);
-  border: 1px solid var(--mog-edge);
-  border-radius: var(--mog-radius-md);
-  background: var(--mog-surface-raised);
-  box-shadow:
-    var(--mog-shadow),
-    0 0 0 100vmax rgb(8 10 18 / 55%);
-}
-
-.hub-dialog-title,
-.hub [data-forget-dialog] h2 {
-  margin-bottom: 8px;
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.hub [data-forget-dialog] > button {
-  margin: 4px 8px 0 0;
-}
-
-/* The Genie One memory note reads as a footnote under the confirm step (MEM-32d). */
-.hub [data-forget-confirm] + p,
-.hub [data-forget-result] ~ p:not([data-forget-other]) {
-  margin-top: 16px;
-  padding-top: 12px;
-  border-top: 1px solid rgb(255 255 255 / 8%);
-  color: var(--mog-text-muted);
-}
-
-.hub [data-forget-dialog] [data-genie-one-memory-review] {
-  margin-right: 6px;
-}
-
-.hub [data-forget-confirm] {
-  border-color: transparent;
-  background: var(--mog-accent);
-  color: var(--mog-on-accent);
-  font-weight: 600;
-}
-
-.hub [data-forget-confirm]:hover {
-  border-color: transparent;
-  background: var(--mog-accent-hover);
-}
-
-.hub [data-genie-one-memory-review-url],
-.hub [data-genie-one-delete-url] {
-  color: var(--mog-text-muted);
-  font-size: var(--mog-text-sm);
-  word-break: break-all;
-}
-
-.hub [data-genie-one-delete] ul {
-  margin: 8px 0;
-  padding: 0;
-  list-style: none;
-}
-
-/* The first-run notice: one centred reading column. */
-.hub--notice {
-  max-width: 600px;
-  margin: 0 auto;
-}
-
-.legal-notice {
-  padding: 24px;
-  border: 1px solid var(--mog-edge);
-  border-radius: var(--mog-radius-md);
-  background: var(--mog-surface-raised);
-  box-shadow: var(--mog-shadow);
-}
-
-.legal-notice:focus {
-  outline: 2px solid transparent;
-}
-
-/* The notice takes focus on open (ADR 0022) so a screen reader reads it; it is not a control,
-   so it draws no ring. Its checkbox and button do. */
-.legal-notice:focus-visible {
-  box-shadow: var(--mog-shadow);
-}
-
-.legal-notice h2 {
-  margin-bottom: 4px;
-  font-size: 17px;
-}
-
-.legal-notice-body {
-  margin: 16px 0;
-}
-
-.legal-notice-body p {
-  margin-bottom: 10px;
-}
-
-.legal-notice .hub-check {
-  margin: 16px 0;
-  padding-top: 16px;
-  border-top: 1px solid rgb(255 255 255 / 8%);
-}
-
-/* Local speech. */
-.hub-status {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: var(--mog-radius-pill);
-  background: rgb(255 255 255 / 6%);
-  color: var(--mog-text-muted);
-  font-size: var(--mog-text-sm);
-}
-
-.hub-radios {
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  align-items: center;
-  gap: 6px 8px;
-  margin: 8px 0 0;
-  padding: 0;
-  border: 0;
-}
-
-.hub-radios legend {
-  grid-column: 1 / -1;
-  margin-bottom: 6px;
-  padding: 0;
-  font-size: var(--mog-text-sm);
-}
-
-.hub-progress {
-  height: 6px;
-  margin: 8px 0 6px;
-  overflow: hidden;
-  border-radius: var(--mog-radius-pill);
-  background: rgb(255 255 255 / 10%);
-}
-
-.hub-progress::before {
-  content: '';
-  display: block;
-  width: var(--hub-progress, 0%);
-  height: 100%;
-  border-radius: inherit;
-  background: var(--mog-eye);
-  transition: width 250ms var(--mog-ease-out);
-}
-
-/* Long reference text sits behind one labelled entry point. */
-.hub-disclosure summary {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: fit-content;
-  border-radius: var(--mog-radius-sm);
-  cursor: pointer;
-  list-style: none;
-}
-
-.hub-disclosure summary::-webkit-details-marker {
-  display: none;
-}
-
-/* A drawn chevron, not a glyph. */
-.hub-disclosure summary::after {
-  content: '';
-  width: 6px;
-  height: 6px;
-  margin-top: -2px;
-  border-right: 1.5px solid var(--mog-text-muted);
-  border-bottom: 1.5px solid var(--mog-text-muted);
-  transform: rotate(-45deg);
-  transition: transform 150ms var(--mog-ease-out);
-}
-
-.hub-disclosure[open] summary::after {
-  margin-top: -4px;
-  transform: rotate(45deg);
-}
-
-.hub-disclosure[open] > summary {
-  margin-bottom: 12px;
-}
-
-.hub-disclosure article {
-  margin-bottom: 14px;
-}
-
-.hub-disclosure article h3 {
-  margin-bottom: 4px;
-}
-
-.hub-disclosure article p {
-  margin-bottom: 4px;
-  color: var(--mog-text-muted);
-}
-
-.hub [data-view='about'] .hub-disclosure {
-  margin-top: 12px;
-}
-
-.hub pre[data-notices] {
-  max-height: 320px;
-  margin: 0;
-  overflow: auto;
-  padding: 12px;
-  border-radius: var(--mog-radius-sm);
-  background: rgb(0 0 0 / 24%);
-  color: var(--mog-text-muted);
-  font:
-    var(--mog-text-sm) / 1.5 ui-monospace,
-    'SF Mono',
-    Menlo,
-    Consolas,
-    monospace;
-  white-space: pre-wrap;
-}
-
-/* The home-domain picker (PG-20) under a live chip. */
-.hub [data-domain-picker] {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  color: var(--mog-text-muted);
-  font-size: var(--mog-text-sm);
-}
-
-.hub [data-domain-picker] p {
-  margin: 0;
-}
-
-/* Hub navigation (#103): two quiet items under the header. The header and the navigation keep
-   their place in every view; the MOGs and settings column keeps a 616 px measure (680 px with the padding). */
-.hub-nav {
-  display: flex;
-  gap: 2px;
-  margin: 0 0 20px -10px;
-}
-
-.hub .hub-nav-item {
-  min-height: 28px;
-  padding: 0 10px;
-  border-color: transparent;
-  color: var(--mog-text-muted);
-  font-weight: 500;
-}
-
-.hub .hub-nav-item:hover {
-  border-color: transparent;
-  color: var(--mog-text);
-}
-
-.hub .hub-nav-item[aria-current='page'] {
-  background: var(--mog-surface-raised);
-  color: var(--mog-text);
-}
-
-.hub [data-hub-view='home'] {
-  max-width: 616px;
-}
-
-/* Conversations (#103): the window is the frame. List 280 px, detail fills the rest; each pane
-   scrolls on its own. */
-.hub--wide {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  grid-template-rows: auto auto minmax(0, 1fr);
-  align-items: baseline;
-  height: 100vh;
-  padding-bottom: 0;
-}
-
-.hub--wide > .hub-nav,
-.hub--wide > .conv {
-  grid-column: 1 / -1;
-}
-
-.hub--wide > .conv {
-  align-self: stretch;
-  min-height: 0;
-}
-
-.hub [hidden] {
-  display: none;
-}
-
-.conv {
-  display: flex;
-  margin: 0 -32px;
-  border-top: 1px solid var(--mog-edge);
-}
-
-.conv-panes {
-  display: grid;
-  flex: 1;
-  grid-template-columns: 280px minmax(0, 1fr);
-  min-height: 0;
-}
-
-.conv-list {
-  min-height: 0;
-  overflow-y: auto;
-  padding: 0 12px 24px 20px;
-  border-right: 1px solid var(--mog-edge);
-  overscroll-behavior: contain;
-}
-
-/* The listbox takes focus; the ring goes on the active option, not round the whole pane. */
-.hub .conv-list:focus-visible {
-  box-shadow: none;
-}
-
-.conv-day {
-  margin: 16px 0 6px;
-  padding: 0 12px;
-  color: var(--mog-text-muted);
-  font-size: var(--mog-text-xs);
-  font-weight: 600;
-}
-
-.conv-row {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 8px 12px;
-  border-radius: var(--mog-radius-sm);
-  cursor: pointer;
-  transition: background-color 120ms var(--mog-ease-out);
-}
-
-.conv-row:hover {
-  background: color-mix(in srgb, var(--mog-surface-raised) 50%, transparent);
-}
-
-.conv-row[aria-selected='true'] {
-  background: var(--mog-surface-raised);
-}
-
-.conv-list:focus-visible .conv-row[aria-selected='true'] {
-  box-shadow: var(--mog-focus-ring);
-}
-
-.conv-row-q {
-  overflow: hidden;
-  font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.conv-row-meta {
-  color: var(--mog-text-muted);
-  font-size: var(--mog-text-xs);
-  font-variant-numeric: tabular-nums;
-}
-
-.conv-status--failed {
-  color: var(--mog-lid);
-}
-
-.conv-detail {
-  min-height: 0;
-  overflow-y: auto;
-  padding: 20px 24px 32px;
-  overscroll-behavior: contain;
-}
-
-/* The detail pane fills the area, so an outer ring would fall outside the window or under the
-   divider: its ring is inset, in the focus colour. */
-.hub .conv-detail:focus-visible {
-  box-shadow: inset 0 0 0 2px var(--mog-focus);
-}
-
-.hub .conv-question {
-  max-width: 68ch;
-  font-size: var(--mog-text-md);
-  font-weight: 600;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
-}
-
-.hub .conv-meta {
-  display: flex;
-  flex-wrap: wrap;
-  margin: 4px 0 0;
-  color: var(--mog-text-muted);
-  font-size: var(--mog-text-xs);
-  font-variant-numeric: tabular-nums;
-}
-
-.conv-meta-part {
-  white-space: nowrap;
-}
-
-/* Text for screen readers only: the workspace host after the profile. */
-.conv-sr {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
-
-.conv-meta-part + .conv-meta-part::before {
-  content: '·';
-  content: '·' / '';
-  margin: 0 4px;
-}
-
-.conv-meta .conv-status--failed {
-  color: var(--mog-lid);
-  font-weight: 500;
-}
-
-.conv-answer {
-  max-width: 68ch;
-  margin-top: 14px;
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-}
-
-.hub .conv-answer p,
-.conv-answer ul,
-.conv-answer ol {
-  margin: 0 0 10px;
-}
-
-.conv-answer ul,
-.conv-answer ol {
-  padding-left: 18px;
-}
-
-.conv-answer li + li {
-  margin-top: 2px;
-}
-
-.conv-answer code,
-.conv-answer pre {
-  border-radius: var(--mog-radius-sm);
-  background: var(--mog-surface-raised);
-  font:
-    var(--mog-text-sm) / 1.5 ui-monospace,
-    'SF Mono',
-    Menlo,
-    Consolas,
-    monospace;
-}
-
-.conv-answer code {
-  padding: 1px 4px;
-}
-
-.conv-answer pre {
-  margin: 0 0 10px;
-  overflow-x: auto;
-  padding: 10px 12px;
-}
-
-.conv-answer pre code {
-  padding: 0;
-  background: none;
-}
-
-/* No opener yet (#523): a trusted URL shows as selectable text in the link colour, not as a
-   control that does nothing. */
-.conv-answer a {
-  color: var(--mog-eye);
-  cursor: text;
-  text-decoration: none;
-}
-
-.hub .conv-answer--none {
-  margin: 14px 0 0;
-  color: var(--mog-text-muted);
-}
-
-/* Key numbers: the same quiet row as the card, no tiles. */
-.conv-numbers {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 20px;
-  max-width: 68ch;
-  margin: 14px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.conv-numbers li {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-}
-
-.conv-number {
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-.conv-number-label {
-  color: var(--mog-text-muted);
-  font-size: var(--mog-text-xs);
-}
-
-/* #145: the second and later exchange of a thread gets a divider from the one before it. */
-.conv-exchange + .conv-exchange {
-  margin-top: 28px;
-  padding-top: 20px;
-  border-top: 1px solid var(--mog-edge);
-}
-
-/* #145: the reply composer at the bottom of a thread's detail. */
-.thread-composer {
-  max-width: 68ch;
-  margin-top: 24px;
-  padding-top: 16px;
-  border-top: 1px solid var(--mog-edge);
-}
-
-.thread-composer-status {
-  margin: 0 0 8px;
-  color: var(--mog-text-muted);
-  font-size: var(--mog-text-sm);
-  font-variant-numeric: tabular-nums;
-}
-
-.thread-composer-row {
-  display: flex;
-  gap: 8px;
-  align-items: flex-end;
-}
-
-.thread-composer-field {
-  flex: 1;
-  min-height: 36px;
-  max-height: 120px;
-  resize: none;
-}
-
-.thread-composer-hint {
-  margin: 8px 0 0;
-  color: var(--mog-text-muted);
-  font-size: var(--mog-text-xs);
-}
-
-/* Empty, unavailable and loading: centred in the area, two quiet lines. */
-.conv-message {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 24px 24px 64px;
-  text-align: center;
-}
-
-.hub .conv-message-title {
-  margin: 0;
-}
-
-.hub .conv-message-line {
-  margin: 4px 0 0;
-  color: var(--mog-text-muted);
-  font-size: var(--mog-text-sm);
-}
-
-/* Scrollbars in the palette. */
-html,
-.hub pre,
-.conv-list,
-.conv-detail {
-  scrollbar-color: rgb(255 255 255 / 18%) transparent;
-}
-
-@media (prefers-reduced-motion: reduce) {
   .hub *,
   .hub *::before,
   .hub *::after {
-    transition: none;
+    box-sizing: border-box;
   }
-}
+
+  .hub ::selection {
+    background: var(--mog-lid);
+    color: var(--mog-face);
+  }
+
+  /* Type: one family, four steps. */
+  .hub h1,
+  .hub h2,
+  .hub h3 {
+    margin: 0;
+    font-weight: 600;
+    line-height: 1.25;
+    text-wrap: balance;
+  }
+
+  .hub h1 {
+    font-size: var(--mog-text-xl);
+    letter-spacing: -0.01em;
+  }
+
+  .hub h2 {
+    font-size: var(--mog-text-lg);
+  }
+
+  .hub h3 {
+    font-size: var(--mog-text-md);
+  }
+
+  .hub p {
+    margin: 0 0 8px;
+    max-width: 68ch;
+  }
+
+  /* A region that is empty now (an alert or a live status) takes no space. */
+  .hub p:empty {
+    margin: 0;
+  }
+
+  .hub-muted,
+  .hub legend {
+    color: var(--mog-text-muted);
+  }
+
+  .hub-error {
+    color: var(--mog-lid);
+  }
+
+  /* A neutral "missing feature" / informational note (ui-1): distinct from .hub-error, so a
+   not-yet-available state does not read as broken. */
+  .hub-note {
+    display: inline-block;
+    padding: var(--mog-space-2) var(--mog-space-3);
+    border: 1px solid var(--mog-note-border);
+    border-radius: var(--mog-radius-sm);
+    background: rgb(42 54 80 / 35%);
+    color: var(--mog-note-text);
+  }
+
+  .hub-draft {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: var(--mog-radius-pill);
+    background: rgb(246 196 99 / 14%);
+    color: var(--mog-spark);
+    font-size: var(--mog-text-sm);
+  }
+
+  /* Header: the product name and the quiet Labs label (MB-10b), on one line. */
+  .hub .hub-title {
+    display: inline-block;
+    margin: 0 var(--mog-space-2) var(--mog-space-5) 0;
+  }
+
+  .hub .hub-labs {
+    display: inline-block;
+    margin: 0;
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-sm);
+  }
+
+  /* ADR 0101: a missing OS permission. One quiet block per permission, one action each. */
+  .hub-permissions > [data-permission] + [data-permission] {
+    margin-top: var(--mog-space-4);
+  }
+
+  .hub-permission-need {
+    margin: 0 0 var(--mog-space-1);
+    font-weight: var(--mog-weight-semibold);
+  }
+
+  /* Sections: space and one hairline, no boxes. Every settings-area section shares this rhythm
+   (ui-1, #97, #103): --mog-space-5 between sections, --mog-space-2/3 inside one group. */
+  /* `rgb(255 255 255 / 10%)`, not `var(--mog-edge)` (ui-1, review of #602 round 3, P5): the
+     tinted, pink `--mog-edge` hairline sat right under a `SettingsGroup` (`border-border/60`,
+     a neutral tone), so the next section's own top divider read as a stray pink line under the
+     Microphone group. One neutral divider tone for every section now. */
+  .hub-section {
+    padding: var(--mog-space-5) 0;
+    border-top: 1px solid rgb(255 255 255 / 10%);
+  }
+
+  .hub-section > h2 {
+    margin-bottom: var(--mog-space-2);
+  }
+
+  .hub-mogs {
+    border-top: 0;
+    padding-top: var(--mog-space-1);
+  }
+
+  /* Controls. */
+  .hub button,
+  .hub summary,
+  .hub input,
+  .hub select,
+  .hub textarea {
+    font: inherit;
+    color: inherit;
+  }
+
+  /* :not([data-slot]) (ui-1, ADR 0106, review finding #4): every src/views/ui/* shadcn
+     primitive sets data-slot, and its own Tailwind utilities already size and colour it (a
+     Switch, a RadioGroupItem, a Checkbox). Without this scope, these legacy declarations sat in
+     a lower-priority cascade layer than Tailwind's utilities but still won when a utility did
+     not set the same property (e.g. no utility here sets min-height or padding), stretching a
+     16x16 control up to 26-32px tall. */
+  .hub button:not([data-slot]) {
+    min-height: 28px;
+    padding: 0 12px;
+    border: 1px solid rgb(255 255 255 / 14%);
+    border-radius: var(--mog-radius-sm);
+    background: transparent;
+    cursor: pointer;
+    transition:
+      background-color 150ms var(--mog-ease-out),
+      border-color 150ms var(--mog-ease-out);
+  }
+
+  .hub button:not([data-slot]):hover {
+    background: rgb(255 255 255 / 6%);
+    border-color: rgb(255 255 255 / 24%);
+  }
+
+  .hub button:not([data-slot]):active {
+    background: rgb(255 255 255 / 10%);
+  }
+
+  .hub button:not([data-slot]):disabled {
+    opacity: 0.45;
+    cursor: default;
+    background: transparent;
+  }
+
+  .hub .hub-primary,
+  .hub .hub-danger {
+    border-color: transparent;
+    background: var(--mog-accent);
+    color: var(--mog-on-accent);
+    font-weight: 600;
+  }
+
+  .hub .hub-primary:hover,
+  .hub .hub-danger:hover {
+    border-color: transparent;
+    background: var(--mog-accent-hover);
+  }
+
+  .hub .hub-primary:disabled {
+    opacity: 1;
+    background: rgb(255 255 255 / 8%);
+    color: var(--mog-text-muted);
+  }
+
+  .hub input[type='text'],
+  .hub input:not([type]),
+  .hub select,
+  .hub textarea {
+    min-height: 28px;
+    padding: 4px 8px;
+    border: 1px solid rgb(255 255 255 / 14%);
+    border-radius: var(--mog-radius-sm);
+    background: rgb(0 0 0 / 24%);
+  }
+
+  .hub textarea {
+    min-height: 72px;
+    resize: vertical;
+  }
+
+  .hub input::placeholder,
+  .hub textarea::placeholder {
+    color: var(--mog-text-muted);
+    opacity: 0.8;
+  }
+
+  .hub input[type='checkbox'],
+  .hub input[type='radio'] {
+    width: 15px;
+    height: 15px;
+    margin: 0;
+    accent-color: var(--mog-lamp-deep);
+  }
+
+  /* The ring is a shadow; the transparent outline turns into the system colour in forced-colors
+   (Windows High Contrast), where shadows are dropped (WCAG 2.4.7). */
+  .hub :focus-visible {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+    box-shadow: var(--mog-focus-ring);
+  }
+
+  .hub h2:focus-visible {
+    border-radius: var(--mog-radius-sm);
+  }
+
+  .hub-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+  }
+
+  .hub-check {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin: 4px 0;
+    cursor: pointer;
+  }
+
+  .hub-check input {
+    margin-top: 2px;
+  }
+
+  .hub-check label {
+    cursor: pointer;
+  }
+
+  /* Live moods: a row of quiet chips (empty until a MOG window reports). */
+  .hub-live {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 0 0 8px;
+    padding: 0;
+    list-style: none;
+  }
+
+  .hub-live:empty {
+    display: none;
+  }
+
+  .hub-live li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .hub .hub-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 24px;
+    padding: 0 10px;
+    border-color: transparent;
+    border-radius: var(--mog-radius-pill);
+    background: rgb(255 255 255 / 5%);
+    font-size: var(--mog-text-sm);
+  }
+
+  .hub-mood-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--mog-text-muted);
+  }
+
+  .hub-live [data-mood='listening'] .hub-mood-dot,
+  .hub-live [data-mood='processing'] .hub-mood-dot {
+    background: var(--mog-eye);
+  }
+
+  .hub-live [data-mood='error'] .hub-mood-dot {
+    background: var(--mog-lamp);
+  }
+
+  /* The MOG list: rows on one raised surface, separated by hairlines. */
+  .hub-rows {
+    margin: 8px 0 16px;
+    padding: 0;
+    list-style: none;
+    border-radius: var(--mog-radius-md);
+    background: var(--mog-surface-raised);
+  }
+
+  .hub-rows:empty {
+    display: none;
+  }
+
+  .hub-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+    min-height: 48px;
+    padding: 8px 12px 8px 16px;
+  }
+
+  .hub-row + .hub-row {
+    border-top: 1px solid rgb(255 255 255 / 6%);
+  }
+
+  .hub-row-name {
+    font-weight: 600;
+  }
+
+  .hub-row-state {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-sm);
+  }
+
+  .hub-row-state::before {
+    content: '';
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+    opacity: 0.6;
+  }
+
+  .hub-row[data-running='true'] .hub-row-state::before {
+    background: var(--mog-eye);
+    opacity: 1;
+  }
+
+  .hub-row-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+  }
+
+  /* "More": the less used row actions in a small menu under the button. */
+  .hub-more {
+    position: relative;
+  }
+
+  .hub-more summary {
+    display: inline-flex;
+    align-items: center;
+    min-height: 28px;
+    padding: 0 10px;
+    border-radius: var(--mog-radius-sm);
+    color: var(--mog-text-muted);
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .hub-more summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .hub-more summary:hover,
+  .hub-more[open] summary {
+    color: var(--mog-text);
+    background: rgb(255 255 255 / 6%);
+  }
+
+  .hub-more-items {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    min-width: 168px;
+    padding: 4px;
+    border: 1px solid var(--mog-edge);
+    border-radius: var(--mog-radius-md);
+    background: var(--mog-surface-raised);
+    box-shadow: var(--mog-shadow);
+  }
+
+  .hub .hub-more-items button {
+    justify-content: flex-start;
+    border-color: transparent;
+    text-align: left;
+  }
+
+  .hub .hub-more-items button:last-child {
+    color: var(--mog-lid);
+  }
+
+  /* #ui-4: the row colour picker. The swatch shows this MOG's current accent colour; opening it
+     offers the fixed palette, same shape as "More" above. */
+  .hub-color-picker {
+    position: relative;
+    flex: none;
+  }
+
+  .hub-color-picker summary {
+    display: inline-flex;
+    padding: 4px;
+    border-radius: var(--mog-radius-sm);
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .hub-color-picker summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .hub-color-picker summary:hover,
+  .hub-color-picker[open] summary {
+    background: rgb(255 255 255 / 6%);
+  }
+
+  .hub-color-options {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 5;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+    padding: 8px;
+    border: 1px solid var(--mog-edge);
+    border-radius: var(--mog-radius-md);
+    background: var(--mog-surface-raised);
+    box-shadow: var(--mog-shadow);
+  }
+
+  .hub-color-dot {
+    width: 18px;
+    height: 18px;
+    border: 1px solid rgb(255 255 255 / 25%);
+    border-radius: 50%;
+    padding: 0;
+    cursor: pointer;
+  }
+
+  .hub-color-options .hub-color-dot[aria-pressed='true'] {
+    box-shadow:
+      0 0 0 2px var(--mog-surface-raised),
+      0 0 0 4px var(--mog-focus);
+  }
+
+  .hub-color-dot:focus-visible {
+    outline: 2px solid var(--mog-focus);
+    outline-offset: 2px;
+  }
+
+  /* The edit form opens under its row. */
+  .hub-edit {
+    flex-basis: 100%;
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    align-items: center;
+    gap: 8px 12px;
+    margin: 8px 0 4px;
+    padding: 12px;
+    border-radius: var(--mog-radius-sm);
+    background: rgb(0 0 0 / 18%);
+  }
+
+  .hub-edit label {
+    color: var(--mog-text-muted);
+  }
+
+  .hub-edit label:has(+ textarea) {
+    align-self: start;
+    padding-top: 5px;
+  }
+
+  .hub-edit textarea {
+    align-self: stretch;
+  }
+
+  .hub-edit .hub-actions {
+    grid-column: 2;
+    margin-top: 4px;
+  }
+
+  /* The create form: one line. */
+  .hub-create {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .hub-create label {
+    color: var(--mog-text-muted);
+  }
+
+  .hub-create input {
+    flex: 1 1 140px;
+  }
+
+  /* Modal confirmations (aria-modal): centred over a scrim. */
+  .hub-dialog,
+  .hub [data-forget-dialog] {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    z-index: 10;
+    width: min(420px, calc(100vw - 48px));
+    max-height: calc(100vh - 48px);
+    overflow: auto;
+    padding: 20px;
+    transform: translate(-50%, -50%);
+    border: 1px solid var(--mog-edge);
+    border-radius: var(--mog-radius-md);
+    background: var(--mog-surface-raised);
+    box-shadow:
+      var(--mog-shadow),
+      0 0 0 100vmax rgb(8 10 18 / 55%);
+  }
+
+  .hub-dialog-title,
+  .hub [data-forget-dialog] h2 {
+    margin-bottom: var(--mog-space-2);
+    font-size: var(--mog-text-lg);
+    font-weight: var(--mog-weight-semibold);
+  }
+
+  .hub [data-forget-dialog] > button {
+    margin: 4px 8px 0 0;
+  }
+
+  /* The Genie One memory note reads as a footnote under the confirm step (MEM-32d). */
+  .hub [data-forget-confirm] + p,
+  .hub [data-forget-result] ~ p:not([data-forget-other]) {
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px solid rgb(255 255 255 / 8%);
+    color: var(--mog-text-muted);
+  }
+
+  .hub [data-forget-dialog] [data-genie-one-memory-review] {
+    margin-right: 6px;
+  }
+
+  .hub [data-forget-confirm] {
+    border-color: transparent;
+    background: var(--mog-accent);
+    color: var(--mog-on-accent);
+    font-weight: 600;
+  }
+
+  .hub [data-forget-confirm]:hover {
+    border-color: transparent;
+    background: var(--mog-accent-hover);
+  }
+
+  .hub [data-genie-one-memory-review-url],
+  .hub [data-genie-one-delete-url] {
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-sm);
+    word-break: break-all;
+  }
+
+  .hub [data-genie-one-delete] ul {
+    margin: 8px 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  /* The first-run notice: one centred reading column. */
+  .hub--notice {
+    max-width: 600px;
+    margin: 0 auto;
+  }
+
+  .legal-notice {
+    padding: 24px;
+    border: 1px solid var(--mog-edge);
+    border-radius: var(--mog-radius-md);
+    background: var(--mog-surface-raised);
+    box-shadow: var(--mog-shadow);
+  }
+
+  .legal-notice:focus {
+    outline: 2px solid transparent;
+  }
+
+  /* The notice takes focus on open (ADR 0022) so a screen reader reads it; it is not a control,
+   so it draws no ring. Its checkbox and button do. */
+  .legal-notice:focus-visible {
+    box-shadow: var(--mog-shadow);
+  }
+
+  .legal-notice h2 {
+    margin-bottom: var(--mog-space-1);
+    font-size: var(--mog-text-xl);
+  }
+
+  .legal-notice-body {
+    margin: 16px 0;
+  }
+
+  .legal-notice-body p {
+    margin-bottom: 10px;
+  }
+
+  .legal-notice .hub-check {
+    margin: 16px 0;
+    padding-top: 16px;
+    border-top: 1px solid rgb(255 255 255 / 8%);
+  }
+
+  /* Local speech. */
+  .hub-status {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: var(--mog-radius-pill);
+    background: rgb(255 255 255 / 6%);
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-sm);
+  }
+
+  .hub-radios {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    align-items: center;
+    gap: 6px 8px;
+    margin: 8px 0 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .hub-radios legend {
+    grid-column: 1 / -1;
+    margin-bottom: 6px;
+    padding: 0;
+    font-size: var(--mog-text-sm);
+  }
+
+  .hub-progress {
+    height: 6px;
+    margin: 8px 0 6px;
+    overflow: hidden;
+    border-radius: var(--mog-radius-pill);
+    background: rgb(255 255 255 / 10%);
+  }
+
+  .hub-progress::before {
+    content: '';
+    display: block;
+    width: var(--hub-progress, 0%);
+    height: 100%;
+    border-radius: inherit;
+    background: var(--mog-eye);
+    transition: width 250ms var(--mog-ease-out);
+  }
+
+  /* Long reference text sits behind one labelled entry point. */
+  .hub-disclosure summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: fit-content;
+    border-radius: var(--mog-radius-sm);
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .hub-disclosure summary::-webkit-details-marker {
+    display: none;
+  }
+
+  /* A drawn chevron, not a glyph. */
+  .hub-disclosure summary::after {
+    content: '';
+    width: 6px;
+    height: 6px;
+    margin-top: -2px;
+    border-right: 1.5px solid var(--mog-text-muted);
+    border-bottom: 1.5px solid var(--mog-text-muted);
+    transform: rotate(-45deg);
+    transition: transform 150ms var(--mog-ease-out);
+  }
+
+  .hub-disclosure[open] summary::after {
+    margin-top: -4px;
+    transform: rotate(45deg);
+  }
+
+  .hub-disclosure[open] > summary {
+    margin-bottom: 12px;
+  }
+
+  .hub-disclosure article {
+    margin-bottom: 14px;
+  }
+
+  .hub-disclosure article h3 {
+    margin-bottom: 4px;
+  }
+
+  .hub-disclosure article p {
+    margin-bottom: 4px;
+    color: var(--mog-text-muted);
+  }
+
+  .hub [data-view='about'] .hub-disclosure {
+    margin-top: 12px;
+  }
+
+  .hub pre[data-notices] {
+    max-height: 320px;
+    margin: 0;
+    overflow: auto;
+    padding: 12px;
+    border-radius: var(--mog-radius-sm);
+    background: rgb(0 0 0 / 24%);
+    color: var(--mog-text-muted);
+    font:
+      var(--mog-text-sm) / 1.5 ui-monospace,
+      'SF Mono',
+      Menlo,
+      Consolas,
+      monospace;
+    white-space: pre-wrap;
+  }
+
+  /* The home-domain picker (PG-20) under a live chip. */
+  .hub [data-domain-picker] {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-sm);
+  }
+
+  .hub [data-domain-picker] p {
+    margin: 0;
+  }
+
+  /* The sidebar + content column (ui-1, #97, #103; review of #602). `HubSidebar.tsx`'s panel is
+   `position: fixed` now (review of #602 round 3, blocker 2), pinned to the window itself, not
+   anchored to this box any more. `margin-left: calc(var(--mog-space-6) * -1)` still earns its
+   keep: it cancels `.hub`'s own left padding for this one box, so `.hub-content`'s matching
+   `padding-left` (below) restores the usual 32px start, with the pinned sidebar's own width
+   added on top (review finding 3) — the same baseline `.conv`/`.rec-area` cancel back out with
+   their own `-32px` margin, below. */
+  .hub-body {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    margin-left: calc(var(--mog-space-6) * -1);
+  }
+
+  /* `overflow-y: auto` (ui-1, review of #602 round 3, blocker 2): `.hub` is a fixed `100vh` now,
+   so this column, not the window, scrolls a tall Settings/MOGs area. Conversations/Recordings
+   never show this column's own scrollbar: their panes (`.conv-list`/`.conv-detail`,
+   `.rec-list`/`.rec-detail`) already scroll themselves and exactly fill it. */
+  .hub-content {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
+    padding-left: calc(var(--mog-space-6) + var(--hub-sidebar-width, 0px));
+    overflow-y: auto;
+    transition: padding-left 0.18s var(--mog-ease-out);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .hub-content {
+      transition: none;
+    }
+  }
+
+  /* No elevated z-index on the toggle or this row any more (ui-1, review of #602 rounds 3-4,
+   blocker 2): an open, unpinned overlay simply paints over this whole row, toggle included,
+   the way a native macOS sidebar covers whatever sits under it. Round 3 kept the toggle itself
+   above the panel so it stayed clickable, but the toggle then sat exactly where the panel's own
+   first nav item ("MOGs") does, so a click there closed the sidebar instead of opening MOGs.
+   Esc, an outside click and the panel's own collapse/pin buttons still close it either way.
+   `position: sticky; top: 0` (review of #602 round 4, MEDIUM): `.hub-content` (above) is the
+   one box that scrolls now, so without this the toggle scrolled away with a tall Settings page,
+   leaving only the keyboard shortcut to reach it. `z-index: 1` paints this over the sections
+   that scroll under it (still far below the sidebar panel's own z-20), and `background:
+   var(--mog-surface)` (the page's own colour) keeps that scrolled content from showing through
+   once this row is pinned to the top mid-scroll. */
+  .hub-area-header {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: flex;
+    min-height: 2.5rem;
+    align-items: center;
+    gap: var(--mog-space-3);
+    margin-bottom: var(--mog-space-5);
+    background: var(--mog-surface);
+  }
+
+  .hub-area-title {
+    margin: 0;
+    font-size: var(--mog-text-xl);
+    font-weight: var(--mog-weight-semibold);
+  }
+
+  /* MOGs and Settings keep a comfortable reading width (ui-1); Conversations (`hub--wide`) is
+   allowed the full window. */
+  .hub [data-hub-view='mogs'],
+  .hub [data-hub-view='settings'] {
+    max-width: 616px;
+  }
+
+  /* `[data-setup-region]` (the permission/CLI/dictation/workspace notices above every area)
+     matches that same measure on MOGs/Settings (ui-1, review of #602 round 3, P3): its
+     `hub-section` hairline used to run the full content-column width (to ~928-944px) while the
+     area below it stopped at 616px, so the rule under the area title did not line up with the
+     content it introduced. `:not(.hub--wide)` leaves Conversations/Recordings alone: there the
+     full window already is the frame. */
+  .hub:not(.hub--wide) [data-setup-region] {
+    max-width: 616px;
+  }
+
+  /* Conversations (#103): the window is the frame. List 280 px, detail fills the rest; each pane
+   scrolls on its own. The grid, the header row and `.hub-body`'s stretch are the shared `.hub`
+   rule now (ui-1, review of #602 round 3, blocker 3: one header layout, not a second grid here
+   that only this variant had). This is the one rule Conversations/Recordings still need of
+   their own: no bottom padding, so the frame bleeds to the window's true edges. */
+  .hub--wide {
+    padding-bottom: 0;
+  }
+
+  .hub--wide .conv,
+  .hub--wide .rec-area {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .hub [hidden] {
+    display: none;
+  }
+
+  .conv {
+    display: flex;
+    margin: 0 -32px;
+    /* Review of #602 round 3, blocker 1: this used to also subtract `--hub-sidebar-width`,
+       which cancelled `.hub-content`'s whole padding-left (the base 32px *and* the pinned
+       sidebar's own width), landing `.conv` back at `left: 0` — under the 220px/56px panel
+       instead of beside it. The base `-32px` alone (the same fixed amount `.rec-area` already
+       used, a few rules down) is correct: it cancels only the 32px baseline that
+       `.hub-content`'s padding-left always includes, leaving the pinned sidebar's own width in
+       place as the gap before `.conv` starts. */
+    margin-left: calc(var(--mog-space-6) * -1);
+    border-top: 1px solid var(--mog-edge);
+  }
+
+  .conv-panes {
+    display: grid;
+    flex: 1;
+    grid-template-columns: 280px minmax(0, 1fr);
+    min-height: 0;
+  }
+
+  .conv-list {
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 12px 24px 20px;
+    border-right: 1px solid var(--mog-edge);
+    overscroll-behavior: contain;
+  }
+
+  /* The listbox takes focus; the ring goes on the active option, not round the whole pane. */
+  .hub .conv-list:focus-visible {
+    box-shadow: none;
+  }
+
+  .conv-day {
+    margin: 16px 0 6px;
+    padding: 0 12px;
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-xs);
+    font-weight: 600;
+  }
+
+  .conv-row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px 12px;
+    border-radius: var(--mog-radius-sm);
+    cursor: pointer;
+    transition: background-color 120ms var(--mog-ease-out);
+  }
+
+  .conv-row:hover {
+    background: color-mix(in srgb, var(--mog-surface-raised) 50%, transparent);
+  }
+
+  .conv-row[aria-selected='true'] {
+    background: var(--mog-surface-raised);
+  }
+
+  .conv-list:focus-visible .conv-row[aria-selected='true'] {
+    box-shadow: var(--mog-focus-ring);
+  }
+
+  .conv-row-q {
+    overflow: hidden;
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .conv-row-meta {
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-xs);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* #ui-4: the MOG's accent colour, the same dot as its hub row swatch. */
+  .conv-mog {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  .conv-mog-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex: none;
+  }
+
+  .conv-status--failed {
+    color: var(--mog-lid);
+  }
+
+  .conv-detail {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 20px 24px 32px;
+    overscroll-behavior: contain;
+  }
+
+  /* #145: the second and later exchange of a thread gets a divider from the one before it. */
+  .conv-exchange + .conv-exchange {
+    margin-top: 28px;
+    padding-top: 20px;
+    border-top: 1px solid var(--mog-edge);
+  }
+
+  /* The sticky composer slot (ui-1, #103): pinned to the bottom of the detail pane. impl-followup
+     fills it for a thread with a Genie conversation; otherwise it shows only a muted hint, never a dead input. */
+  .conv-composer {
+    margin-top: auto;
+    padding-top: var(--mog-space-4);
+  }
+
+  .conv-composer-hint {
+    margin: 0;
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-xs);
+  }
+
+  /* The loading skeleton (ui-1): fills the pane instead of a blank aria-busy div. */
+  .conv-message--loading {
+    padding: 0;
+  }
+
+  /* The detail pane fills the area, so an outer ring would fall outside the window or under the
+   divider: its ring is inset, in the focus colour. */
+  .hub .conv-detail:focus-visible {
+    box-shadow: inset 0 0 0 2px var(--mog-focus);
+  }
+
+  .hub .conv-question {
+    max-width: 68ch;
+    font-size: var(--mog-text-md);
+    font-weight: 600;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+  }
+
+  .hub .conv-meta {
+    display: flex;
+    flex-wrap: wrap;
+    margin: 4px 0 0;
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-xs);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .conv-meta-part {
+    white-space: nowrap;
+  }
+
+  /* Text for screen readers only: the workspace host after the profile. */
+  .conv-sr {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .conv-meta-part + .conv-meta-part::before {
+    content: '·';
+    content: '·' / '';
+    margin: 0 4px;
+  }
+
+  .conv-meta .conv-status--failed {
+    color: var(--mog-lid);
+    font-weight: 500;
+  }
+
+  .conv-answer {
+    max-width: 68ch;
+    margin-top: 14px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+
+  .hub .conv-answer p,
+  .conv-answer ul,
+  .conv-answer ol {
+    margin: 0 0 10px;
+  }
+
+  .conv-answer ul,
+  .conv-answer ol {
+    padding-left: 18px;
+  }
+
+  .conv-answer li + li {
+    margin-top: 2px;
+  }
+
+  .conv-answer code,
+  .conv-answer pre {
+    border-radius: var(--mog-radius-sm);
+    background: var(--mog-surface-raised);
+    font:
+      var(--mog-text-sm) / 1.5 ui-monospace,
+      'SF Mono',
+      Menlo,
+      Consolas,
+      monospace;
+  }
+
+  .conv-answer code {
+    padding: 1px 4px;
+  }
+
+  .conv-answer pre {
+    margin: 0 0 10px;
+    overflow-x: auto;
+    padding: 10px 12px;
+  }
+
+  .conv-answer pre code {
+    padding: 0;
+    background: none;
+  }
+
+  /* No opener yet (#523): a trusted URL shows as selectable text in the link colour, not as a
+   control that does nothing. */
+  .conv-answer a {
+    color: var(--mog-eye);
+    cursor: text;
+    text-decoration: none;
+  }
+
+  .hub .conv-answer--none {
+    margin: 14px 0 0;
+    color: var(--mog-text-muted);
+  }
+
+  /* Key numbers: the same quiet row as the card, no tiles. */
+  .conv-numbers {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 20px;
+    max-width: 68ch;
+    margin: 14px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .conv-numbers li {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+
+  .conv-number {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .conv-number-label {
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-xs);
+  }
+
+  /* Empty, unavailable and loading: centred in the area, two quiet lines. */
+  .conv-message {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 24px 64px;
+    text-align: center;
+  }
+
+  .hub .conv-message-title {
+    margin: 0;
+  }
+
+  .hub .conv-message-line {
+    margin: 4px 0 0;
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-sm);
+  }
+
+  /* ---- Call recording (ADR 0103) ---- */
+
+  .rec-hint {
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-sm);
+  }
+
+  .hub p.rec-hint {
+    margin: 0;
+  }
+
+  /* A text button for small in-line actions (Change, Reset to default, Retry). */
+  .hub .rec-link {
+    min-height: 22px;
+    padding: 0 4px;
+    border-color: transparent;
+    color: var(--mog-eye);
+    font-size: var(--mog-text-sm);
+  }
+
+  .hub .rec-link:hover {
+    border-color: transparent;
+    background: rgb(140 200 255 / 10%);
+  }
+
+  .hub .rec-link:disabled {
+    color: var(--mog-text-muted);
+  }
+
+  /* The knob: a switch, not a checkbox, because it turns a feature on. */
+  .rec-knob {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 2px 0 4px;
+  }
+
+  .rec-knob-label {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    cursor: pointer;
+  }
+
+  .rec-knob-label > span:first-child {
+    font-weight: 500;
+  }
+
+  /* The red `input.hub-switch` that used to live here is gone (ui-1, review of #602 round 3,
+     P1): `RecordingSettings.tsx`'s knob is the shadcn/ui Switch now, the same control
+     `MicPreference` already used, so Settings shows one switch style, not two. */
+
+  /* The consent notice: one quiet panel, one acknowledgement. */
+  .rec-consent {
+    margin: 10px 0 4px;
+    padding: 14px 16px;
+    border: 1px solid var(--mog-edge);
+    border-radius: var(--mog-radius-md);
+    background: var(--mog-surface-raised);
+    animation: rec-in 220ms var(--mog-ease-out);
+  }
+
+  .hub .rec-consent-text {
+    margin: 0 0 2px;
+    font-weight: 500;
+  }
+
+  .rec-consent .hub-primary {
+    margin-top: 12px;
+  }
+
+  @keyframes rec-in {
+    from {
+      opacity: 0;
+      transform: translateY(-2px);
+    }
+  }
+
+  /* The fields: labels in one column, controls in the other. */
+  .rec-fields {
+    display: grid;
+    grid-template-columns: 112px minmax(0, 1fr);
+    align-items: baseline;
+    gap: 16px 16px;
+    margin-top: 18px;
+    padding-top: 16px;
+    border-top: 1px solid rgb(255 255 255 / 6%);
+  }
+
+  .rec-fields form {
+    margin: 0;
+  }
+
+  .rec-field-label {
+    color: var(--mog-text-muted);
+  }
+
+  .hub .rec-wide {
+    width: min(100%, 320px);
+  }
+
+  /* The length: one segmented control of radios. */
+  .rec-length {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 10px;
+  }
+
+  .rec-segments {
+    display: inline-flex;
+    padding: 2px;
+    border: 1px solid rgb(255 255 255 / 10%);
+    border-radius: var(--mog-radius-sm);
+    background: rgb(0 0 0 / 24%);
+  }
+
+  .rec-segment {
+    position: relative;
+    cursor: pointer;
+  }
+
+  .hub .rec-segment input {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
+
+  .rec-segment span {
+    display: inline-flex;
+    align-items: center;
+    min-width: 34px;
+    min-height: 24px;
+    justify-content: center;
+    padding: 0 9px;
+    border-radius: 3px;
+    color: var(--mog-text-muted);
+    font-variant-numeric: tabular-nums;
+    transition:
+      background-color 150ms var(--mog-ease-out),
+      color 150ms var(--mog-ease-out);
+  }
+
+  .rec-segment:hover span {
+    color: var(--mog-text);
+  }
+
+  .rec-segment input:checked + span {
+    background: var(--mog-surface-raised);
+    color: var(--mog-text);
+    box-shadow: 0 1px 2px rgb(8 10 18 / 35%);
+  }
+
+  .rec-segment input:focus-visible + span {
+    box-shadow: var(--mog-focus-ring);
+  }
+
+  .rec-custom {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .hub .rec-custom input {
+    width: 64px;
+    min-height: 28px;
+    padding: 4px 8px;
+    border: 1px solid rgb(255 255 255 / 14%);
+    border-radius: var(--mog-radius-sm);
+    background: rgb(0 0 0 / 24%);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Storage. */
+  .rec-storage {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .hub .rec-storage p {
+    margin: 0;
+  }
+
+  /* `min-width: 0`, not `flex-wrap: wrap` (ui-1, review of #602 round 4, MEDIUM): inside
+   `SettingsRow`'s control column, a realistic path (`/Volumes/databricks/home/<id>/
+   <email>/my_files`) used to force the whole row to wrap, pushing "Save to" onto its own line
+   ("Save" / "to"). `.rec-path` (below) now truncates with an ellipsis and a `title` tooltip
+   instead (`Storage`, RecordingSettings.tsx), so this row never needs to wrap. */
+  .rec-place {
+    display: flex;
+    align-items: baseline;
+    gap: 2px 10px;
+    min-width: 0;
+  }
+
+  .rec-place > span:first-child {
+    font-weight: 500;
+  }
+
+  /* `flex: 1 1 auto` + `min-width: 0` (not `overflow-wrap: anywhere`, ui-1, review of #602
+   round 4, MEDIUM): the path takes the row's remaining space and truncates there instead of
+   wrapping or breaking mid-word. */
+  .rec-path {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--mog-text-muted);
+    font:
+      var(--mog-text-xs) / 1.5 ui-monospace,
+      'SF Mono',
+      Menlo,
+      Consolas,
+      monospace;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .rec-inline {
+    display: flex;
+    gap: 8px;
+  }
+
+  .hub .rec-inline input {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 360px;
+  }
+
+  .rec-confirm {
+    padding: 10px 12px;
+    border-radius: var(--mog-radius-sm);
+    background: rgb(0 0 0 / 18%);
+  }
+
+  .rec-confirm .hub-actions {
+    margin-top: 8px;
+  }
+
+  /* Advanced: the two model names, behind one quiet entry point. */
+  .rec-advanced {
+    margin-top: 18px;
+  }
+
+  .hub .rec-advanced summary {
+    color: var(--mog-text-muted);
+  }
+
+  .hub .rec-advanced summary:hover {
+    color: var(--mog-text);
+  }
+
+  .rec-fields--inner {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
+  }
+
+  /* Instructions. */
+  .rec-instructions {
+    min-width: 0;
+  }
+
+  .hub .rec-instructions textarea,
+  .hub .rec-edit textarea {
+    display: block;
+    width: 100%;
+    line-height: 1.5;
+  }
+
+  .hub .rec-under {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px 12px;
+    margin: 6px 0 0;
+  }
+
+  /* Loading: a quiet block, never a spinner. */
+  .rec-skeleton {
+    height: 44px;
+    border-radius: var(--mog-radius-sm);
+    background: rgb(255 255 255 / 4%);
+    animation: rec-breathe 1.6s ease-in-out infinite;
+  }
+
+  .rec-skeleton--row {
+    height: 40px;
+    margin-top: 8px;
+  }
+
+  .rec-skeleton--row:first-child {
+    margin-top: 40px;
+  }
+
+  .rec-skeleton--tall {
+    height: 160px;
+    margin-top: 20px;
+    max-width: 68ch;
+  }
+
+  @keyframes rec-breathe {
+    50% {
+      opacity: 0.5;
+    }
+  }
+
+  /* A plain-words problem and its one action. */
+  .rec-alert {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    margin-top: 12px;
+    padding: 10px 12px;
+    border: 1px solid rgb(226 72 59 / 35%);
+    border-radius: var(--mog-radius-sm);
+    background: rgb(226 72 59 / 10%);
+  }
+
+  .hub .rec-alert p {
+    flex: 1 1 240px;
+    margin: 0;
+  }
+
+  /* The record dot and the REC indicator. */
+  .rec-dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--mog-lamp);
+  }
+
+  .rec-on {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 32px;
+    padding: 3px 3px 3px 12px;
+    border: 1px solid rgb(226 72 59 / 40%);
+    border-radius: var(--mog-radius-pill);
+    background: rgb(226 72 59 / 12%);
+  }
+
+  .rec-on .rec-dot {
+    /* The lamp stays lit: a slightly brighter lamp red on the tinted pill, a gentle breath. */
+    background: color-mix(in srgb, var(--mog-lamp) 85%, var(--mog-on-accent));
+    box-shadow: 0 0 6px rgb(226 72 59 / 55%);
+    animation: rec-pulse 2s ease-in-out infinite;
+  }
+
+  @keyframes rec-pulse {
+    50% {
+      opacity: 0.7;
+    }
+  }
+
+  .rec-on-label {
+    font-size: var(--mog-text-xs);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+  }
+
+  .rec-on-left {
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-sm);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .hub .rec-stop {
+    min-height: 24px;
+    margin-left: 4px;
+    padding: 0 12px;
+    border-color: rgb(255 255 255 / 16%);
+    border-radius: var(--mog-radius-pill);
+    font-size: var(--mog-text-sm);
+    font-weight: 500;
+  }
+
+  /* In the header, next to the Labs label, in every view but Recordings. */
+  .rec-on--compact {
+    min-height: 26px;
+    margin-left: 14px;
+    vertical-align: middle;
+  }
+
+  .hub .rec-on--compact .rec-stop {
+    min-height: 20px;
+    padding: 0 10px;
+  }
+
+  /* The Record control, above the list. */
+  .rec-control {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .rec-control > .rec-edit,
+  .rec-control > .rec-alert {
+    align-self: stretch;
+    max-width: 72ch;
+  }
+
+  .rec-control > .rec-alert {
+    margin-top: 0;
+  }
+
+  .rec-start-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 14px;
+  }
+
+  .hub .rec-start {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 32px;
+    padding: 0 16px 0 14px;
+    border-radius: var(--mog-radius-pill);
+  }
+
+  .rec-start .rec-dot {
+    background: var(--mog-on-accent);
+  }
+
+  .hub .rec-start:disabled .rec-dot {
+    background: var(--mog-text-muted);
+  }
+
+  .rec-edit {
+    max-width: 68ch;
+  }
+
+  .rec-edit .rec-hint {
+    margin-top: 6px;
+  }
+
+  /* The Recordings area: a bar with the Record control, then the list and the detail. */
+  .rec-area {
+    display: flex;
+    flex-direction: column;
+    margin: 0 -32px;
+    border-top: 1px solid var(--mog-edge);
+  }
+
+  .rec-bar {
+    padding: 14px 32px;
+    border-bottom: 1px solid rgb(255 255 255 / 6%);
+  }
+
+  .rec-panes {
+    display: grid;
+    flex: 1;
+    grid-template-columns: 280px minmax(0, 1fr);
+    min-height: 0;
+  }
+
+  .rec-list {
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 12px 24px 20px;
+    border-right: 1px solid var(--mog-edge);
+    overscroll-behavior: contain;
+  }
+
+  .hub .rec-list:focus-visible {
+    box-shadow: none;
+  }
+
+  .rec-day {
+    margin: 16px 0 6px;
+    padding: 0 12px;
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-xs);
+    font-weight: 600;
+  }
+
+  .rec-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-height: 40px;
+    padding: 6px 8px 6px 12px;
+    border-radius: var(--mog-radius-sm);
+    cursor: pointer;
+    transition: background-color 120ms var(--mog-ease-out);
+  }
+
+  .rec-row:hover {
+    background: color-mix(in srgb, var(--mog-surface-raised) 50%, transparent);
+  }
+
+  .rec-row[aria-selected='true'] {
+    background: var(--mog-surface-raised);
+  }
+
+  .rec-list:focus-visible .rec-row[data-active] {
+    box-shadow: var(--mog-focus-ring);
+  }
+
+  .rec-row-main {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+  }
+
+  .rec-row-time {
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .rec-row-len {
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-xs);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .rec-row-side {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .rec-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-xs);
+    white-space: nowrap;
+  }
+
+  .rec-status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    opacity: 0.6;
+  }
+
+  .rec-status-dot[data-busy] {
+    background: var(--mog-eye);
+    opacity: 1;
+    animation: rec-breathe 1.6s ease-in-out infinite;
+  }
+
+  .rec-status[data-status='recording'] .rec-status-dot {
+    background: var(--mog-lamp);
+    opacity: 1;
+  }
+
+  .rec-status[data-status='failed'] {
+    color: var(--mog-lid);
+  }
+
+  .rec-status[data-status='failed'] .rec-status-dot {
+    background: var(--mog-lamp);
+    opacity: 1;
+  }
+
+  /* The detail. */
+  .rec-detail {
+    min-height: 0;
+    overflow-y: auto;
+    padding: 20px 24px 40px;
+    overscroll-behavior: contain;
+  }
+
+  .hub .rec-detail:focus-visible {
+    box-shadow: inset 0 0 0 2px var(--mog-focus);
+  }
+
+  .rec-detail-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px 16px;
+    max-width: 68ch;
+  }
+
+  .hub .rec-detail-title {
+    font-size: 15px;
+  }
+
+  .hub .rec-detail-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 12px;
+    margin: 4px 0 0;
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-xs);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .rec-detail .rec-alert {
+    max-width: 68ch;
+    margin-top: 16px;
+  }
+
+  .hub .rec-pending {
+    max-width: 68ch;
+    margin: 16px 0 0;
+    color: var(--mog-text-muted);
+  }
+
+  /* "Notes" and "Transcript": section labels that outrank the headings inside the notes. */
+  .hub .rec-sub {
+    max-width: 68ch;
+    margin: 28px 0 12px;
+    padding-top: 16px;
+    border-top: 1px solid var(--mog-edge);
+    color: var(--mog-text);
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  /* Headings inside the notes: two steps, more space above than below. */
+  .hub .rec-h2 {
+    margin: 20px 0 6px;
+    font-size: var(--mog-text-md);
+    font-weight: 600;
+  }
+
+  .hub .rec-h3 {
+    margin: 14px 0 4px;
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-sm);
+    font-weight: 600;
+  }
+
+  .hub .rec-md > .rec-h2:first-child {
+    margin-top: 0;
+  }
+
+  /* Notes: headings from the view, the rest through the card's allowlist markdown. */
+  .rec-md {
+    max-width: 68ch;
+    line-height: 1.55;
+    overflow-wrap: anywhere;
+  }
+
+  .hub .rec-md p,
+  .rec-md ul,
+  .rec-md ol {
+    margin: 0 0 10px;
+  }
+
+  .hub .rec-md p:has(> strong:only-child) {
+    margin-top: 18px;
+    margin-bottom: 4px;
+  }
+
+  .hub .rec-md p:first-child {
+    margin-top: 0;
+  }
+
+  .rec-md ul,
+  .rec-md ol {
+    padding-left: 18px;
+  }
+
+  .rec-md li + li {
+    margin-top: 3px;
+  }
+
+  .rec-md li::marker {
+    color: var(--mog-text-muted);
+  }
+
+  .rec-md code,
+  .rec-md pre {
+    border-radius: var(--mog-radius-sm);
+    background: var(--mog-surface-raised);
+    font:
+      var(--mog-text-sm) / 1.5 ui-monospace,
+      'SF Mono',
+      Menlo,
+      Consolas,
+      monospace;
+  }
+
+  .rec-md code {
+    padding: 1px 4px;
+  }
+
+  .rec-md pre {
+    overflow-x: auto;
+    padding: 10px 12px;
+  }
+
+  /* Transcript: one turn per speaker change, the time stamp beside the name. */
+  .rec-turns {
+    max-width: 68ch;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .rec-turn + .rec-turn {
+    margin-top: 14px;
+  }
+
+  .hub .rec-turn-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 0 0 2px;
+  }
+
+  .rec-speaker {
+    font-size: var(--mog-text-sm);
+    font-weight: 600;
+  }
+
+  .rec-stamp {
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-xs);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .hub .rec-turn-text {
+    margin: 0;
+    line-height: 1.55;
+  }
+
+  /* Empty, unavailable and loading: centred in the area, two quiet lines. */
+  .rec-message {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 24px 64px;
+    text-align: center;
+  }
+
+  .hub .rec-message-title {
+    margin: 0;
+  }
+
+  .hub .rec-message-line {
+    margin: 4px 0 0;
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-sm);
+  }
+
+  /* Scrollbars in the palette. */
+  html,
+  .hub pre,
+  .conv-list,
+  .conv-detail,
+  .rec-list,
+  .rec-detail {
+    scrollbar-color: rgb(255 255 255 / 18%) transparent;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .hub *,
+    .hub *::before,
+    .hub *::after {
+      transition: none;
+    }
+
+    /* The REC dot stays lit; nothing pulses or slides. */
+    .rec-on .rec-dot,
+    .rec-status-dot[data-busy],
+    .rec-skeleton,
+    .rec-consent {
+      animation: none;
+    }
+  }
+} /* @layer hub-legacy */

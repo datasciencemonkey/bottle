@@ -232,4 +232,84 @@ describe('genie-followup (#145)', () => {
     expect(d.ends.map((x) => x.end)).toEqual([{ t: 'uncertain' }]);
     expect(d.statuses.at(-1)?.phase).toBe('failed');
   });
+
+  it('[#145] a failure carries the fixed genie-errors text and the question, so the composer can retry', async () => {
+    const failed: AskEvent = {
+      t: 'failed',
+      code: 'AUTH_EXPIRED',
+      userText: 'Sign in to fake.example.com to ask Genie.',
+      retry: 'relogin',
+    };
+    const d = deps({ genie: fakeBridge([failed]).bridge });
+    const f = createGenieFollowup(d);
+    await f.send({ conversationId: CONV, profile: PROFILE, question: 'How many are there?' });
+    expect(d.statuses.at(-1)).toEqual({
+      conversationId: CONV,
+      requestId: OP,
+      phase: 'failed',
+      text: 'Sign in to fake.example.com to ask Genie.',
+      question: 'How many are there?',
+    });
+  });
+
+  it('[#145] an uncertain end shows the fixed ASK_UNCERTAIN text, with the question', async () => {
+    const d = deps({ genie: fakeBridge([{ t: 'uncertain' }]).bridge });
+    const f = createGenieFollowup(d);
+    await f.send({ conversationId: CONV, profile: PROFILE, question: 'How many are there?' });
+    expect(d.statuses.at(-1)).toMatchObject({
+      phase: 'failed',
+      text: 'I do not know if Genie got your question.',
+      question: 'How many are there?',
+    });
+  });
+
+  it('[#145] a stale thread is refused with the question, so Try again can send it again', async () => {
+    const d = deps({ findThread: async () => undefined });
+    const f = createGenieFollowup(d);
+    await f.send({ conversationId: CONV, profile: PROFILE, question: 'How many are there?' });
+    expect(d.statuses).toEqual([
+      {
+        conversationId: CONV,
+        requestId: '',
+        phase: 'failed',
+        text: 'Not sent.',
+        question: 'How many are there?',
+      },
+    ]);
+  });
+
+  describe('access (the disabled state)', () => {
+    it('[#145] a profile that needs a sign-in closes the composer, with the host from the store', async () => {
+      const profileStatus = vi.fn(async () => ({ state: 'login_required' }));
+      const f = createGenieFollowup(
+        deps({
+          findThread: async () => ({ mogId: MOG, profile: 'fake-east', host: 'fake.example.com' }),
+          profileStatus,
+        }),
+      );
+      await expect(f.access(CONV)).resolves.toEqual({
+        conversationId: CONV,
+        state: 'sign_in',
+        text: 'Sign in to fake.example.com to ask Genie.',
+      });
+      // The profile comes from the store, not from the view.
+      expect(profileStatus).toHaveBeenCalledWith('fake-east');
+    });
+
+    it('[#145] a valid profile is ready', async () => {
+      const f = createGenieFollowup(deps({ profileStatus: async () => ({ state: 'valid' }) }));
+      await expect(f.access(CONV)).resolves.toMatchObject({ state: 'ready' });
+    });
+
+    it('[#145] a status that cannot be read, or a stale thread, never blocks the composer', async () => {
+      const broken = createGenieFollowup(
+        deps({ profileStatus: () => Promise.reject(new Error('fake')) }),
+      );
+      await expect(broken.access(CONV)).resolves.toMatchObject({ state: 'ready' });
+      const stale = createGenieFollowup(
+        deps({ findThread: async () => undefined, profileStatus: async () => ({ state: 'x' }) }),
+      );
+      await expect(stale.access(CONV)).resolves.toMatchObject({ state: 'ready' });
+    });
+  });
 });

@@ -43,6 +43,12 @@ export interface ConversationRow {
   requestId: string;
   mogId: string;
   mogName: string;
+  /**
+   * #ui-4: `mog.ui.variant`, so the row shows the same colour as the MOG's lamp and card
+   * (`mog-palette.ts`). Undefined for a MOG the brain could not resolve a colour for; the view
+   * falls back by MOG ID.
+   */
+  mogColorVariant?: string;
   question: string;
   /** The answer markdown; empty when Genie gave none. */
   answerMd: string;
@@ -122,6 +128,22 @@ export type ThreadFocusAction =
  * the terminal outcome): the composer shows it while the answer is not in the list yet. */
 export const HUB_THREAD_STATUS_EVENT = 'hub:thread.status';
 
+/** The brain-to-hub event with whether a thread's workspace can take a follow-up now. */
+export const HUB_THREAD_ACCESS_EVENT = 'hub:thread.access';
+
+/** `ready`: the composer is open. `sign_in`: the workspace has no valid sign-in; `text` says why. */
+export interface ThreadAccess {
+  conversationId: string;
+  state: 'ready' | 'sign_in';
+  text: string;
+}
+
+/** The composer asks the brain for a thread's `ThreadAccess` (on mount, on focus, on a retry). */
+export interface ThreadCheckAction {
+  action: 'thread.check';
+  conversationId: string;
+}
+
 export type ThreadPhase = 'working' | 'answered' | 'failed' | 'cancelled';
 
 /** The composer shows `text` under the input until a later status replaces or clears it. */
@@ -130,6 +152,8 @@ export interface ThreadStatus {
   requestId: string;
   phase: ThreadPhase;
   text: string;
+  /** On a `failed` status: the question that was not answered, so Try again can send it again. */
+  question?: string | undefined;
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
@@ -168,10 +192,28 @@ const PHASES: readonly ThreadPhase[] = ['working', 'answered', 'failed', 'cancel
 /** Shape check of a `hub:thread.status` payload. */
 export function asThreadStatus(p: unknown): ThreadStatus | undefined {
   if (!isObj(p)) return undefined;
-  const { conversationId, requestId, phase, text } = p;
+  const { conversationId, requestId, phase, text, question } = p;
   if (!isStr(conversationId) || !isStr(requestId) || !isStr(text)) return undefined;
   if (!PHASES.includes(phase as ThreadPhase)) return undefined;
-  return { conversationId, requestId, phase: phase as ThreadPhase, text };
+  if (question !== undefined && !isStr(question)) return undefined;
+  return { conversationId, requestId, phase: phase as ThreadPhase, text, question };
+}
+
+/** Shape check of the composer's `thread.check`. */
+export function asThreadCheckAction(p: unknown): ThreadCheckAction | undefined {
+  if (!isObj(p) || p['action'] !== 'thread.check') return undefined;
+  const { conversationId } = p;
+  if (!isStr(conversationId) || conversationId === '') return undefined;
+  return { action: 'thread.check', conversationId };
+}
+
+/** Shape check of a `hub:thread.access` payload. */
+export function asThreadAccess(p: unknown): ThreadAccess | undefined {
+  if (!isObj(p)) return undefined;
+  const { conversationId, state, text } = p;
+  if (!isStr(conversationId) || !isStr(text)) return undefined;
+  if (state !== 'ready' && state !== 'sign_in') return undefined;
+  return { conversationId, state, text };
 }
 
 function isKeyNumber(v: unknown): v is ConversationKeyNumber {
@@ -184,6 +226,7 @@ function isRow(v: unknown): v is ConversationRow {
     isStr(v['requestId']) &&
     isStr(v['mogId']) &&
     isStr(v['mogName']) &&
+    (v['mogColorVariant'] === undefined || isStr(v['mogColorVariant'])) &&
     isStr(v['question']) &&
     isStr(v['answerMd']) &&
     Array.isArray(v['keyNumbers']) &&

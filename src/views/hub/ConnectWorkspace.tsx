@@ -157,7 +157,11 @@ export function ConnectWorkspace() {
   }, []);
 
   return (
-    <section data-view="connect-workspace" aria-labelledby="connect-workspace-title">
+    <section
+      data-view="connect-workspace"
+      aria-labelledby="connect-workspace-title"
+      className="hub-section"
+    >
       <h2 id="connect-workspace-title">Connect a workspace</h2>
       {model === undefined ? (
         <p>

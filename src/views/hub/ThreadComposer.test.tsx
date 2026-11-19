@@ -10,7 +10,7 @@ import { act } from 'react';
 import type { Root } from 'react-dom/client';
 import { render, tauri, viewEmits } from '../test-tauri';
 import { ThreadComposer } from './ThreadComposer';
-import { HUB_THREAD_STATUS_EVENT } from '../../shared/hub-conversations';
+import { HUB_THREAD_ACCESS_EVENT, HUB_THREAD_STATUS_EVENT } from '../../shared/hub-conversations';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('../test-tauri')).coreModule);
 vi.mock('@tauri-apps/api/event', async () => (await import('../test-tauri')).eventModule);
@@ -197,5 +197,130 @@ describe('ThreadComposer (genie-followup, #145)', () => {
       { action: 'thread.active', conversationId: 'conv-2', profile: 'fake-east' },
     ]);
     void el;
+  });
+
+  describe('an error, and Try again', () => {
+    const fail = (over: Record<string, unknown> = {}) =>
+      tauri.emitTo('hub', HUB_THREAD_STATUS_EVENT, {
+        conversationId: 'conv-1',
+        requestId: 'req-2',
+        phase: 'failed',
+        text: 'The connection to Genie stopped.',
+        question: 'How many are there?',
+        ...over,
+      });
+    const retry = (el: HTMLElement) => el.querySelector('[data-thread-retry]') as HTMLButtonElement;
+
+    it('shows the fixed error inline with Try again, and opens the field again', async () => {
+      const { el } = await mount();
+      await act(async () => {
+        type(field(el), 'How many are there?');
+      });
+      await act(async () => void send(el).click());
+      await fail();
+      const alert = el.querySelector('[role="alert"]');
+      expect(alert?.textContent).toContain('The connection to Genie stopped.');
+      expect(retry(el).textContent).toBe('Try again');
+      expect(field(el).disabled).toBe(false);
+      expect(el.textContent).not.toContain('Asking Genie');
+    });
+
+    it('Try again sends the same question again on the same thread', async () => {
+      const { el } = await mount();
+      await act(async () => {
+        type(field(el), 'How many are there?');
+      });
+      await act(async () => void send(el).click());
+      await fail();
+      await act(async () => void retry(el).click());
+      expect(sendActions()).toHaveLength(2);
+      expect(sendActions()[1]).toEqual({
+        action: 'thread.send',
+        conversationId: 'conv-1',
+        profile: 'fake-west',
+        question: 'How many are there?',
+      });
+      // The error line gives way to the working state.
+      expect(el.querySelector('[role="alert"]')).toBeNull();
+      expect(el.textContent).toContain('Asking Genie');
+    });
+
+    it('a failure of a voice follow-up (no typed question) offers Try again with its question', async () => {
+      const { el } = await mount();
+      await fail({ question: 'What about last year?' });
+      await act(async () => void retry(el).click());
+      expect(sendActions()[0]?.['question']).toBe('What about last year?');
+    });
+
+    it('a failure of another conversation never shows here', async () => {
+      const { el } = await mount();
+      await fail({ conversationId: 'conv-other' });
+      expect(el.querySelector('[role="alert"]')).toBeNull();
+    });
+
+    it('shows an error when the view cannot reach the brain, and Try again resends', async () => {
+      const { el } = await mount();
+      tauri.invoke.mockRejectedValueOnce(new Error('fake ipc failure'));
+      await act(async () => {
+        type(field(el), 'How many are there?');
+      });
+      await act(async () => void send(el).click());
+      expect(el.querySelector('[role="alert"]')?.textContent).toContain(
+        'Bottle could not send this question.',
+      );
+      expect(retry(el)).not.toBeNull();
+    });
+  });
+
+  describe('the disabled state (a workspace that is not signed in)', () => {
+    const access = (state: 'ready' | 'sign_in', over: Record<string, unknown> = {}) =>
+      tauri.emitTo('hub', HUB_THREAD_ACCESS_EVENT, {
+        conversationId: 'conv-1',
+        state,
+        text: state === 'sign_in' ? 'Sign in to fake.example.com to ask Genie.' : '',
+        ...over,
+      });
+
+    it('asks the brain whether the thread is signed in, on mount', async () => {
+      await mount();
+      expect(actions().filter((a) => a['action'] === 'thread.check')).toEqual([
+        { action: 'thread.check', conversationId: 'conv-1' },
+      ]);
+    });
+
+    it('disables the field and Send with the reason, and Enter sends nothing', async () => {
+      const { el } = await mount();
+      await access('sign_in');
+      expect(el.textContent).toContain('Sign in to fake.example.com to ask Genie.');
+      expect(field(el).disabled).toBe(true);
+      expect(send(el).disabled).toBe(true);
+      await act(async () => {
+        field(el).dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }),
+        );
+      });
+      expect(sendActions()).toHaveLength(0);
+    });
+
+    it('opens again when the brain says the thread is ready (signed in meanwhile)', async () => {
+      const { el } = await mount();
+      await access('sign_in');
+      await access('ready');
+      expect(field(el).disabled).toBe(false);
+      expect(el.textContent).not.toContain('Sign in to');
+    });
+
+    it('asks again when the hub window gets focus', async () => {
+      await mount();
+      const before = actions().filter((a) => a['action'] === 'thread.check').length;
+      await act(async () => void window.dispatchEvent(new Event('focus')));
+      expect(actions().filter((a) => a['action'] === 'thread.check').length).toBe(before + 1);
+    });
+
+    it('ignores the access of another conversation', async () => {
+      const { el } = await mount();
+      await access('sign_in', { conversationId: 'conv-other' });
+      expect(field(el).disabled).toBe(false);
+    });
   });
 });

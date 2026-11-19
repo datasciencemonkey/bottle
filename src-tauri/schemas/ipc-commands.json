@@ -1131,6 +1131,340 @@
       "title": "ProfilesListArgs",
       "type": "object"
     },
+    "recording_detail": {
+      "$defs": {
+        "RecordingId": {
+          "pattern": "^[A-Za-z0-9_-]{1,64}$",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "`recording_detail` and `recording_retry` (ADR 0103). `profile`: the home profile.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/RecordingId"
+        },
+        "profile": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile",
+        "id"
+      ],
+      "title": "RecordingIdArgs",
+      "type": "object"
+    },
+    "recording_list": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "`recording_list` (ADR 0103): lists `<root>/Bottle/Recordings/` on the home profile host.",
+      "properties": {
+        "profile": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile"
+      ],
+      "title": "RecordingListArgs",
+      "type": "object"
+    },
+    "recording_open": {
+      "$defs": {
+        "RecordingId": {
+          "pattern": "^[A-Za-z0-9_-]{1,64}$",
+          "type": "string"
+        },
+        "RecordingOpenTarget": {
+          "description": "What `recording_open` opens (ADR 0103). Rust builds the Catalog Explorer URL from the\nprofile host; the view never passes a URL.",
+          "enum": [
+            "folder"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/RecordingId"
+        },
+        "profile": {
+          "description": "The home profile: Rust builds the folder link from this profile's host.",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/RecordingOpenTarget"
+        }
+      },
+      "required": [
+        "profile",
+        "id",
+        "target"
+      ],
+      "title": "RecordingOpenArgs",
+      "type": "object"
+    },
+    "recording_open_system_audio_settings": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "No arguments.",
+      "title": "NoArgs",
+      "type": "object"
+    },
+    "recording_retry": {
+      "$defs": {
+        "RecordingId": {
+          "pattern": "^[A-Za-z0-9_-]{1,64}$",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "`recording_detail` and `recording_retry` (ADR 0103). `profile`: the home profile.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/RecordingId"
+        },
+        "profile": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile",
+        "id"
+      ],
+      "title": "RecordingIdArgs",
+      "type": "object"
+    },
+    "recording_settings_read": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "No arguments.",
+      "title": "NoArgs",
+      "type": "object"
+    },
+    "recording_settings_write": {
+      "$defs": {
+        "EndpointName": {
+          "pattern": "^[A-Za-z0-9_-]{1,128}$",
+          "type": "string"
+        },
+        "Instructions": {
+          "maxLength": 16000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "LengthMin": {
+          "maximum": 120,
+          "minimum": 5,
+          "type": "integer"
+        },
+        "RecordingSettingsPatch": {
+          "additionalProperties": false,
+          "description": "A partial `RecordingSettings` for `recording_settings_write`. An absent field keeps its\nvalue. A value cannot be cleared to `null`: the user picks another one.",
+          "properties": {
+            "consentAck": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "enabled": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "lengthMin": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/LengthMin"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "notesEndpoint": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/EndpointName"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "presetInstructions": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Instructions"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "storage": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RecordingStorage"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "transcribeEndpoint": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/EndpointName"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "RecordingStorage": {
+          "additionalProperties": false,
+          "description": "The volume root of the recordings. Files go under `<root>/Bottle/Recordings/<name>/`.",
+          "properties": {
+            "kind": {
+              "$ref": "#/$defs/RecordingStorageKind"
+            },
+            "root": {
+              "$ref": "#/$defs/VolumePath"
+            }
+          },
+          "required": [
+            "kind",
+            "root"
+          ],
+          "type": "object"
+        },
+        "RecordingStorageKind": {
+          "description": "Where the recordings go: the user's My Files volume, or a volume from Settings.",
+          "enum": [
+            "my_files",
+            "volume"
+          ],
+          "type": "string"
+        },
+        "VolumePath": {
+          "pattern": "^/Volumes(/[A-Za-z0-9_.@-]+){3,}/?$",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "`recording_settings_write` (ADR 0103): the fields to change.",
+      "properties": {
+        "patch": {
+          "$ref": "#/$defs/RecordingSettingsPatch"
+        }
+      },
+      "required": [
+        "patch"
+      ],
+      "title": "RecordingSettingsWriteArgs",
+      "type": "object"
+    },
+    "recording_start": {
+      "$defs": {
+        "Instructions": {
+          "maxLength": 16000,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "`recording_start` (ADR 0103): `profile` is the home profile the pipeline uses for every\ncloud call of this recording, including after `recording_stop`. `instructions`: for\nthis recording only. Absent: the Settings preset.",
+      "properties": {
+        "instructions": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Instructions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "profile": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile"
+      ],
+      "title": "RecordingStartArgs",
+      "type": "object"
+    },
+    "recording_state": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "No arguments.",
+      "title": "NoArgs",
+      "type": "object"
+    },
+    "recording_stop": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "No arguments.",
+      "title": "NoArgs",
+      "type": "object"
+    },
+    "recording_storage_probe": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "`recording_storage_probe` (ADR 0103): probes `GET /api/2.0/fs/directories` on the\nhome profile host. Rust never picks a profile: the brain sends the home profile of\n`src/brain/home-profile.ts` on every cloud-bound recording command.",
+      "properties": {
+        "profile": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile"
+      ],
+      "title": "RecordingStorageProbeArgs",
+      "type": "object"
+    },
+    "recording_volume_create": {
+      "$defs": {
+        "UcName": {
+          "pattern": "^[A-Za-z0-9_-]{1,255}$",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "`recording_volume_create` (ADR 0103): Bottle creates the managed volume `bottle_audio`\nin `catalog.schema`, after the user confirmed in Settings. `profile`: the home profile\n(the brain never lets Rust pick one).",
+      "properties": {
+        "catalog": {
+          "$ref": "#/$defs/UcName"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "schema": {
+          "$ref": "#/$defs/UcName"
+        }
+      },
+      "required": [
+        "profile",
+        "catalog",
+        "schema"
+      ],
+      "title": "RecordingVolumeCreateArgs",
+      "type": "object"
+    },
     "session_attest": {
       "$defs": {
         "AttestKind": {
@@ -1815,6 +2149,102 @@
       "windows": [
         "hub"
       ]
+    },
+    {
+      "name": "recording_settings_read",
+      "phase": "MVP-D",
+      "windows": [
+        "brain",
+        "hub"
+      ]
+    },
+    {
+      "name": "recording_settings_write",
+      "phase": "MVP-D",
+      "windows": [
+        "brain",
+        "hub"
+      ]
+    },
+    {
+      "name": "recording_storage_probe",
+      "phase": "MVP-D",
+      "windows": [
+        "brain",
+        "hub"
+      ]
+    },
+    {
+      "name": "recording_volume_create",
+      "phase": "MVP-D",
+      "windows": [
+        "brain",
+        "hub"
+      ]
+    },
+    {
+      "name": "recording_start",
+      "phase": "MVP-D",
+      "windows": [
+        "brain",
+        "hub"
+      ]
+    },
+    {
+      "name": "recording_stop",
+      "phase": "MVP-D",
+      "windows": [
+        "brain",
+        "hub"
+      ]
+    },
+    {
+      "name": "recording_state",
+      "phase": "MVP-D",
+      "windows": [
+        "brain",
+        "hub"
+      ]
+    },
+    {
+      "name": "recording_list",
+      "phase": "MVP-D",
+      "windows": [
+        "brain",
+        "hub"
+      ]
+    },
+    {
+      "name": "recording_detail",
+      "phase": "MVP-D",
+      "windows": [
+        "brain",
+        "hub"
+      ]
+    },
+    {
+      "name": "recording_retry",
+      "phase": "MVP-D",
+      "windows": [
+        "brain",
+        "hub"
+      ]
+    },
+    {
+      "name": "recording_open",
+      "phase": "MVP-D",
+      "windows": [
+        "brain",
+        "hub"
+      ]
+    },
+    {
+      "name": "recording_open_system_audio_settings",
+      "phase": "MVP-D",
+      "windows": [
+        "brain",
+        "hub"
+      ]
     }
   ],
   "errors": [
@@ -1869,7 +2299,19 @@
     "profile_exists",
     "login_cancelled",
     "cli_failed",
-    "no_grant"
+    "no_grant",
+    "recording_off",
+    "recording_busy",
+    "recording_in_progress",
+    "unknown_recording",
+    "no_storage",
+    "volume_permission",
+    "transcribe_endpoint_missing",
+    "notes_endpoint_missing",
+    "too_long",
+    "audio_unreadable",
+    "upload_failed",
+    "system_audio_denied"
   ],
   "events": [
     {
@@ -1951,6 +2393,21 @@
       "direction": "core_to_brain",
       "name": "view:input",
       "specName": "view.input"
+    },
+    {
+      "direction": "core_to_brain",
+      "name": "hotkey:record_toggle",
+      "specName": "hotkey.record_toggle"
+    },
+    {
+      "direction": "core_to_brain",
+      "name": "recording:state",
+      "specName": "recording.state"
+    },
+    {
+      "direction": "core_to_brain",
+      "name": "recording:job",
+      "specName": "recording.job"
     }
   ]
 }

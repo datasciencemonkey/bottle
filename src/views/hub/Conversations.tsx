@@ -35,10 +35,26 @@ import {
   type HubConversations,
   type ThreadComposerThread,
 } from '../../shared/hub-conversations';
+import { paletteColorOf } from '../../shared/mog-palette';
 import { SafeMarkdown } from '../card/safe-markdown';
+import { ConversationsSkeleton } from '../ui/motion-effects';
 import { emitView } from '../view-ipc';
+import { motion } from 'motion/react';
 
 const DAY_MS = 86_400_000;
+
+/** #ui-4: the small colour dot next to a MOG's name, the same colour as its lamp and card. */
+function MogDot({ row }: { row: ConversationRow }) {
+  const c = paletteColorOf(row.mogColorVariant, row.mogId);
+  return (
+    <span
+      className="conv-mog-dot"
+      data-color={c.id}
+      style={{ background: c.hex }}
+      aria-hidden="true"
+    />
+  );
+}
 
 function askForList(): void {
   void emitView(CONVERSATIONS_VIEW_ID, 'click', { action: 'conversations.ready' }).catch(
@@ -202,7 +218,10 @@ function Exchange({ row, headingId }: { row: ConversationRow; headingId?: string
           {row.profile}
           {row.workspaceHost && <span className="conv-sr">, {row.workspaceHost}</span>}
         </span>
-        <span className="conv-meta-part">{row.mogName}</span>
+        <span className="conv-meta-part conv-mog">
+          <MogDot row={row} />
+          {row.mogName}
+        </span>
       </p>
       {row.answerMd ? (
         // TODO(#523): open a trusted link in the browser once the hub has the link opener. Until then a
@@ -226,9 +245,35 @@ function Exchange({ row, headingId }: { row: ConversationRow; headingId?: string
 }
 
 /**
+ * The sticky composer slot (ui-1, #103): an optional `composer` render prop fills it. A thread
+ * with no Genie conversation to continue (a row saved before #584), or a build with no composer,
+ * shows only a static hint, never a dead input.
+ */
+function ComposerSlot({
+  latest,
+  composer,
+}: {
+  latest: ConversationRow;
+  composer?: ((thread: ThreadComposerThread) => ReactNode) | undefined;
+}) {
+  return (
+    <div data-slot="thread-composer" className="conv-composer">
+      {composer && latest.conversationId !== '' ? (
+        composer({
+          conversationId: latest.conversationId,
+          exchangeId: latest.requestId,
+          profile: latest.profile,
+        })
+      ) : (
+        <p className="conv-composer-hint">Hold Right Option and tap G to ask by voice.</p>
+      )}
+    </div>
+  );
+}
+
+/**
  * The thread detail (#145, #103): every exchange that shares one Genie `conversationId`, oldest
- * first (question, answer, question, answer), then the reply composer when the thread has a
- * conversation to continue (a row saved before #584 has none, and gets no composer).
+ * first (question, answer, question, answer), then the reply composer.
  */
 function Detail({
   thread,
@@ -243,12 +288,16 @@ function Detail({
   const latest = thread.at(-1);
   if (!first || !latest) return null;
   return (
-    <article
+    // BlurFade (ui-1): the newly selected thread fades and un-blurs in.
+    <motion.article
       ref={focusRef}
       className="conv-detail"
       data-conversation-detail
       tabIndex={-1}
       aria-labelledby={`conv-q-${first.requestId}`}
+      initial={{ opacity: 0, filter: 'blur(4px)' }}
+      animate={{ opacity: 1, filter: 'blur(0px)' }}
+      transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
     >
       {thread.map((row) => (
         <Exchange
@@ -257,16 +306,8 @@ function Detail({
           headingId={row === first ? `conv-q-${first.requestId}` : undefined}
         />
       ))}
-      {composer && latest.conversationId !== '' && (
-        <div data-slot="thread-composer">
-          {composer({
-            conversationId: latest.conversationId,
-            exchangeId: latest.requestId,
-            profile: latest.profile,
-          })}
-        </div>
-      )}
-    </article>
+      <ComposerSlot latest={latest} composer={composer} />
+    </motion.article>
   );
 }
 
@@ -289,7 +330,7 @@ export function Conversations({
   onOpen: () => void;
   now?: () => number;
   /** #145: the reply composer of the selected thread's detail, or no composer at all. */
-  composer?: (thread: ThreadComposerThread) => ReactNode;
+  composer?: ((thread: ThreadComposerThread) => ReactNode) | undefined;
 }) {
   const { list, selectedId, setSelectedId } = useConversations(onOpen);
   const listRef = useRef<HTMLDivElement>(null);
@@ -353,7 +394,12 @@ export function Conversations({
 
   let body;
   if (list === null) {
-    body = <div className="conv-message" aria-busy="true" />;
+    // ui-1: a visible skeleton instead of a blank aria-busy div (the ui-audit "loading" finding).
+    body = (
+      <div className="conv-message conv-message--loading" aria-busy="true">
+        <ConversationsSkeleton />
+      </div>
+    );
   } else if (list.unavailable && entries.length === 0) {
     body = (
       <Message
@@ -385,8 +431,11 @@ export function Conversations({
               {g.rows.map((r) => {
                 const isSel = r === selected;
                 return (
-                  <div
+                  // `layout` (ui-1, stands in for Magic UI's AnimatedList): the row animates to
+                  // its new position instead of jumping, when the list re-sorts or grows.
+                  <motion.div
                     key={r.requestId}
+                    layout="position"
                     id={optionId(r.requestId)}
                     role="option"
                     aria-selected={isSel}
@@ -399,6 +448,11 @@ export function Conversations({
                   >
                     <span className="conv-row-q">{r.question || 'Question not saved'}</span>
                     <span className="conv-row-meta">
+                      <span className="conv-mog">
+                        <MogDot row={r} />
+                        {r.mogName}
+                      </span>
+                      {' · '}
                       {timeOf(r.askedAt)}
                       {r.profile && ` · ${r.profile}`}
                       {r.status === 'failed' && (
@@ -408,7 +462,7 @@ export function Conversations({
                         </>
                       )}
                     </span>
-                  </div>
+                  </motion.div>
                 );
               })}
             </div>
@@ -430,7 +484,12 @@ export function Conversations({
   }
 
   return (
-    <section className="conv" aria-label="Conversations" hidden={!active}>
+    <section
+      className="conv"
+      data-hub-view="conversations"
+      aria-label="Conversations"
+      hidden={!active}
+    >
       {body}
     </section>
   );
