@@ -6,7 +6,8 @@
  */
 import { act } from 'react';
 import {
-  DEFAULT_ENDPOINT,
+  DEFAULT_NOTES_ENDPOINT,
+  DEFAULT_TRANSCRIBE_ENDPOINT,
   DEFAULT_INSTRUCTIONS,
   HUB_RECORDING_EVENT,
   RECORDING_ERRORS,
@@ -40,15 +41,12 @@ function model(
       enabled: false,
       consentAck: false,
       lengthMin: 60,
-      endpoint: DEFAULT_ENDPOINT,
+      transcribeEndpoint: DEFAULT_TRANSCRIBE_ENDPOINT,
+      notesEndpoint: DEFAULT_NOTES_ENDPOINT,
       instructions: DEFAULT_INSTRUCTIONS,
       ...s,
     },
     storage: { status: 'my_files', path: MY_FILES },
-    warehouses: [
-      { id: 'w1', name: 'Shared warehouse', state: 'STOPPED' },
-      { id: 'w2', name: 'Team', state: 'RUNNING' },
-    ],
     control: { phase: 'idle' },
     ...over,
   };
@@ -193,14 +191,30 @@ describe('Call recording settings (hub)', () => {
     );
   });
 
-  it('[REC-V6] the notes model defaults to databricks-claude-sonnet-5-5 and saves on change', async () => {
+  it('[REC-V6] Advanced holds the transcribe and notes models, with their defaults; each saves on change', async () => {
     const { el } = await render(<RecordingSettings />);
     await show(model());
-    const input = el.querySelector<HTMLInputElement>('[data-recording-endpoint]');
-    expect(input?.value).toBe(DEFAULT_ENDPOINT);
-    await type(input, 'my-endpoint');
-    await act(async () => input?.dispatchEvent(new FocusEvent('focusout', { bubbles: true })));
-    expect(emits().at(-1)).toEqual({ action: 'recording.endpoint', endpoint: 'my-endpoint' });
+    const adv = el.querySelector('[data-recording-advanced]');
+    expect(adv?.querySelector('summary')?.textContent).toBe('Advanced');
+    const tr =
+      adv?.querySelector<HTMLInputElement>('[data-recording-endpoint="transcribe"]') ?? null;
+    const notes = adv?.querySelector<HTMLInputElement>('[data-recording-endpoint="notes"]') ?? null;
+    expect(tr?.value).toBe(DEFAULT_TRANSCRIBE_ENDPOINT);
+    expect(notes?.value).toBe(DEFAULT_NOTES_ENDPOINT);
+    await type(tr, 'my-transcriber');
+    await act(async () => tr?.dispatchEvent(new FocusEvent('focusout', { bubbles: true })));
+    expect(emits().at(-1)).toEqual({
+      action: 'recording.endpoint',
+      which: 'transcribe',
+      endpoint: 'my-transcriber',
+    });
+    await type(notes, 'my-endpoint');
+    await act(async () => notes?.dispatchEvent(new FocusEvent('focusout', { bubbles: true })));
+    expect(emits().at(-1)).toEqual({
+      action: 'recording.endpoint',
+      which: 'notes',
+      endpoint: 'my-endpoint',
+    });
   });
 
   it('[REC-V7] the instructions show the preset; Reset to default sends the default', async () => {
@@ -219,18 +233,11 @@ describe('Call recording settings (hub)', () => {
     ).toBe(true);
   });
 
-  it('[REC-V8] the SQL warehouse is a fallback picker from the list', async () => {
+  it('[REC-V8] Settings has no warehouse or compute setting', async () => {
     const { el } = await render(<RecordingSettings />);
-    await show(model({}, { warehouseId: 'w2' }));
-    const select = el.querySelector<HTMLSelectElement>('[data-recording-warehouse]');
-    expect([...(select?.options ?? [])].map((o) => o.value)).toEqual(['', 'w1', 'w2']);
-    expect(select?.value).toBe('w2');
-    expect(el.textContent).toContain(RECORDING_TEXT.warehouseNote);
-    await act(async () => {
-      if (select) select.value = 'w1';
-      select?.dispatchEvent(new Event('change', { bubbles: true }));
-    });
-    expect(emits().at(-1)).toEqual({ action: 'recording.warehouse', id: 'w1' });
+    await show(model());
+    expect(el.querySelector('select')).toBeNull();
+    expect(el.textContent).not.toMatch(/warehouse|serverless|compute|runs on/i);
   });
 });
 
@@ -292,7 +299,7 @@ describe('Record control (hub)', () => {
     await act(async () =>
       root.render(
         <RecordControl
-          model={{ ...m, error: RECORDING_ERRORS.no_warehouse }}
+          model={{ ...m, error: RECORDING_ERRORS.volume_permission }}
           onOpenSettings={onSettings}
         />,
       ),

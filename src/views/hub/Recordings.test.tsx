@@ -27,7 +27,7 @@ const list: HubRecordings = {
       name: '2026-11-19_1400',
       startedAt: new Date(2026, 10, 19, 14, 0).getTime(),
       durationS: 600,
-      status: 'transcribing',
+      status: 'writing_notes',
     },
     {
       id: 'r2',
@@ -35,7 +35,7 @@ const list: HubRecordings = {
       startedAt: new Date(2026, 10, 19, 10, 0).getTime(),
       durationS: 3900,
       status: 'failed',
-      error: RECORDING_ERRORS.ai_transcribe_disabled,
+      error: RECORDING_ERRORS.transcribe_endpoint_missing,
     },
     {
       id: 'r1',
@@ -84,7 +84,7 @@ describe('Recordings area (hub)', () => {
     const rows = [...el.querySelectorAll('[data-recording-row]')];
     expect(rows.map((r) => r.getAttribute('data-recording-row'))).toEqual(['r3', 'r2', 'r1']);
     expect(rows[0]?.textContent).toContain('10 min');
-    expect(rows[0]?.textContent).toContain('Transcribing');
+    expect(rows[0]?.textContent).toContain('Writing notes');
     expect(rows[1]?.textContent).toContain('1 h 5 min');
     expect(rows[1]?.textContent).toContain('Failed');
     expect(rows[2]?.textContent).toContain('Done');
@@ -125,10 +125,10 @@ describe('Recordings area (hub)', () => {
       id: 'r2',
       status: 'failed',
       turns: [],
-      error: RECORDING_ERRORS.ai_transcribe_disabled,
+      error: RECORDING_ERRORS.transcribe_endpoint_missing,
     });
     const alert = el.querySelector('[data-recording-detail] [role="alert"]');
-    expect(alert?.textContent).toContain(RECORDING_ERRORS.ai_transcribe_disabled.text);
+    expect(alert?.textContent).toContain(RECORDING_ERRORS.transcribe_endpoint_missing.text);
     await click(alert?.querySelector('button'));
     expect(emits().at(-1)).toEqual({ action: 'recordings.retry', id: 'r2' });
   });

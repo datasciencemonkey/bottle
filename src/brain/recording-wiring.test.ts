@@ -3,7 +3,8 @@
  * no capture, no network and no token exist here.
  */
 import {
-  DEFAULT_ENDPOINT,
+  DEFAULT_NOTES_ENDPOINT,
+  DEFAULT_TRANSCRIBE_ENDPOINT,
   DEFAULT_INSTRUCTIONS,
   HUB_RECORDING_DETAIL_EVENT,
   HUB_RECORDING_EVENT,
@@ -41,7 +42,8 @@ function settings(over: Partial<RecSettings> = {}): RecSettings {
     enabled: false,
     consentAck: false,
     lengthMin: 60,
-    endpoint: DEFAULT_ENDPOINT,
+    transcribeEndpoint: DEFAULT_TRANSCRIBE_ENDPOINT,
+    notesEndpoint: DEFAULT_NOTES_ENDPOINT,
     instructions: DEFAULT_INSTRUCTIONS,
     ...over,
   };
@@ -59,7 +61,7 @@ function fakeApi(start: Partial<RecSettings> = {}) {
       startedAt: 5000,
       durationS: 3600,
       status: 'failed',
-      errorKind: 'ai_transcribe_disabled',
+      errorKind: 'transcribe_endpoint_missing',
     },
     { id: 'r3', name: '2026-11-19_1100', startedAt: 9000, durationS: 600, status: 'transcribing' },
   ];
@@ -73,7 +75,6 @@ function fakeApi(start: Partial<RecSettings> = {}) {
     createVolume: vi.fn(async (c: string, sc: string) => ({
       path: `/Volumes/${c}/${sc}/bottle_audio`,
     })),
-    warehouses: vi.fn(async () => [{ id: 'w1', name: 'Shared', state: 'STOPPED' }]),
     start: vi.fn(async (_i?: string): Promise<RecState> => ({
       phase: 'recording',
       startedAtMs: 100,
@@ -149,12 +150,14 @@ describe('recording wiring (brain, ADR 0103)', () => {
       enabled: false,
       consentAck: false,
       lengthMin: 60,
-      endpoint: DEFAULT_ENDPOINT,
+      transcribeEndpoint: DEFAULT_TRANSCRIBE_ENDPOINT,
+      notesEndpoint: DEFAULT_NOTES_ENDPOINT,
       instructions: DEFAULT_INSTRUCTIONS,
     });
     expect(m?.storage).toEqual({ status: 'my_files', path: MY_FILES });
     expect(m?.control).toEqual({ phase: 'idle' });
-    expect(m?.warehouses).toEqual([{ id: 'w1', name: 'Shared', state: 'STOPPED' }]);
+    // ADR 0103 update 4: no compute setting of any kind.
+    expect(JSON.stringify(m)).not.toMatch(/warehouse|serverless|compute/i);
   });
 
   it('[REC-H1] ignores input from a window other than the hub', async () => {
@@ -193,18 +196,20 @@ describe('recording wiring (brain, ADR 0103)', () => {
     expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.settingsError).toBe(RECORDING_TEXT.badLength);
   });
 
-  it('[REC-H4] keeps a valid notes model name and the instructions; refuses a bad model name', async () => {
+  it('[REC-H4] keeps valid transcribe and notes model names and the instructions; refuses a bad name', async () => {
     const t = setup();
-    t.click({ action: 'recording.endpoint', endpoint: 'my-endpoint_2' });
+    t.click({ action: 'recording.endpoint', which: 'transcribe', endpoint: 'my-transcriber' });
+    t.click({ action: 'recording.endpoint', which: 'notes', endpoint: 'my-endpoint_2' });
     t.click({ action: 'recording.instructions', text: 'Only action items.' });
     await flush();
     expect(t.fake.current()).toMatchObject({
-      endpoint: 'my-endpoint_2',
+      transcribeEndpoint: 'my-transcriber',
+      notesEndpoint: 'my-endpoint_2',
       instructions: 'Only action items.',
     });
-    t.click({ action: 'recording.endpoint', endpoint: "x'); DROP" });
+    t.click({ action: 'recording.endpoint', which: 'notes', endpoint: "x'); DROP" });
     await flush();
-    expect(t.fake.current().endpoint).toBe('my-endpoint_2');
+    expect(t.fake.current().notesEndpoint).toBe('my-endpoint_2');
     expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.settingsError).toBe(
       RECORDING_TEXT.badEndpoint,
     );
@@ -258,13 +263,6 @@ describe('recording wiring (brain, ADR 0103)', () => {
       status: 'unavailable',
       error: RECORDING_TEXT.volumeCreateFailed,
     });
-  });
-
-  it('[REC-H6] keeps the picked warehouse', async () => {
-    const t = setup();
-    t.click({ action: 'recording.warehouse', id: 'w1' });
-    await flush();
-    expect(t.fake.current().warehouseId).toBe('w1');
   });
 
   it('[REC-H7] Record sends only edited instructions, shows REC with ends_at_ms, and the MOG shows it', async () => {
@@ -334,7 +332,7 @@ describe('recording wiring (brain, ADR 0103)', () => {
     await flush();
     const l = t.last<HubRecordings>(HUB_RECORDINGS_EVENT);
     expect(l?.rows.map((r) => r.id)).toEqual(['r3', 'r2', 'r1']);
-    expect(l?.rows[1]?.error).toEqual(RECORDING_ERRORS.ai_transcribe_disabled);
+    expect(l?.rows[1]?.error).toEqual(RECORDING_ERRORS.transcribe_endpoint_missing);
     expect(l?.rows[0]?.error).toBeUndefined();
   });
 
@@ -410,14 +408,29 @@ describe('recording wiring (brain, ADR 0103)', () => {
     t.fake.api.detail.mockResolvedValue({
       id: 'r3',
       status: 'failed',
-      errorKind: 'endpoint_missing',
+      errorKind: 'notes_endpoint_missing',
       segments: [],
     });
-    t.fake.pushJob({ id: 'r3', status: 'failed', errorKind: 'endpoint_missing' });
+    t.fake.pushJob({ id: 'r3', status: 'failed', errorKind: 'notes_endpoint_missing' });
     await flush();
     expect(t.notify).not.toHaveBeenCalled();
     expect(t.last<HubRecordingDetail>(HUB_RECORDING_DETAIL_EVENT)?.error).toEqual(
-      RECORDING_ERRORS.endpoint_missing,
+      RECORDING_ERRORS.notes_endpoint_missing,
+    );
+  });
+
+  it('[REC-H9] a job writing notes shows that status; the model errors name the model', async () => {
+    const t = setup();
+    t.click({ action: 'recordings.ready' });
+    await flush();
+    t.fake.pushJob({ id: 'r3', status: 'writing_notes' });
+    await flush();
+    expect(t.last<HubRecordings>(HUB_RECORDINGS_EVENT)?.rows[0]?.status).toBe('writing_notes');
+    expect(RECORDING_ERRORS.transcribe_endpoint_missing.text).toBe(
+      "The transcribe model isn't available. Pick another model in Settings.",
+    );
+    expect(RECORDING_ERRORS.notes_endpoint_missing.text).toBe(
+      "The notes model isn't available. Pick another model in Settings.",
     );
   });
 
