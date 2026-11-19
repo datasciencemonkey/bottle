@@ -29,6 +29,9 @@ Unit tests cover the logic of R1 HotkeyService with fakes. These steps check the
 | 15 | Tap Right-Option quickly (about 0.1 s). Do this 10 times. | Each tap: `ptt down`, `ptt cancel`, then `Tap`. No `ptt up`. | CAP-44a, AT-03 |
 | 16 | Hold Right-Option. In the first 0.5 s, press another key (for example `e`, or Left-Shift). Release both. | `ptt down`, then `ptt cancel` when the other key goes down. No `ptt up` on release. The probe prints no key name. | CAP-44c, AT-03 |
 | 17 | Hold Right-Option for 2 s, then press `e`, then release both. | `ptt down`, then `ptt up` on release. No `ptt cancel`. | CAP-44c |
+| 18 | Click into TextEdit. Hold Right-Option for 2 s, tap G, then release Right-Option. | `ptt down`, then `PttAskUp` on release. TextEdit gets no "g" and no "©". | RTR-17a |
+| 19 | Hold Right-Option and tap G in the first 0.2 s, then release after 1 s. | `ptt down`, then `PttAskUp`. No `ptt cancel`. | RTR-17a, CAP-44c |
+| 20 | After step 18, press Option+G in TextEdit with no hold. | TextEdit gets "©": the hot key is released after the hold. | RTR-17a |
 
 Step 11 needs the Pi Pico HID rig of SP-03. Without the rig, report steps 1-10 only.
 

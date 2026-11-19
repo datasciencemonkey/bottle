@@ -1,6 +1,6 @@
 # ADR 0096: Every utterance is dictation first; a question also gets an Ask Genie chip
 
-- Status: accepted
+- Status: accepted (amended by ADR 0098, #577: no classifier gate; every dictation gets the chip; ⌥G asks with no preview)
 - Issue: #557 (user decision, 2026-11-18)
 - Date: 2026-11-18
 - Owner: agent-lead-4

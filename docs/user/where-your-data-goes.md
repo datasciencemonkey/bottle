@@ -8,7 +8,7 @@ The copy comes from one file: `src/views/hub/disclosures.ts`. If you change the 
 
 - Bottle sends data only to your own Databricks workspaces, and only for the jobs on this page.
 - Dictation text goes to your home workspace for cleanup, then only to the app you type in.
-- Nothing goes to Genie until you send it: a question after its preview, or a chip you click.
+- Nothing goes to Genie until you send it: ⌥G during the talk-key hold, or an Ask Genie button you press.
 - Your sign-in tokens stay in the Bottle core. They are never written to disk or logs, and the agent never sees them.
 - Bottle stores your transcripts, answers and memory in an encrypted file on this computer.
 - For each Genie answer, Bottle keeps a short summary, the key numbers, a link to the answer and the full answer in that file.
@@ -68,7 +68,7 @@ The copy comes from one file: `src/views/hub/disclosures.ts`. If you change the 
 - The agent gets your cleaned question, the router decision and memory results.
 - It never gets your sign-in tokens: a local proxy in the Bottle core adds them.
 - The agent cannot start recording, send context, publish a Page or change the workspace without you.
-- The agent can send to Genie only the question that you let go after the preview. It cannot add memory or transcript text to it.
+- The agent can send to Genie only the question that you sent. It cannot add memory or transcript text to it.
 - Bottle tells the agent that text in your transcripts and memory is data, never an order. Even if the agent follows such text, it has no tool to start recording, approve context, publish a Page or change the workspace.
 - When the agent proposes a workspace change, the MOG shows "Switch to <profile>?". Only your click changes the workspace.
 - Bottle keeps a log of each agent action: the MOG, the tool name, the time and sizes. The log holds no text of your questions, answers or transcripts. In this build, the log stays in memory until Bottle quits. Stored logs are kept for 30 days by default.
