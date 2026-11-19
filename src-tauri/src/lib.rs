@@ -159,6 +159,7 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
         // it always saw the default (off). Catch it up now to a prior "on", so a relaunch with
         // the knob already on does not need a toggle before ⌥R is grabbed again.
         if let Some(gate) = handle.try_state::<hotkey_host::RecordKeyGate>() {
+            use mog_core::recording::RecordingSettingsStore as _;
             gate.set(store.load().is_ok_and(|s| s.enabled));
         }
     }
@@ -283,9 +284,9 @@ pub fn run() {
         // knob, PR C/#595/#592); `record_gate` wraps it with `KnobFollower` so the ⌥R gate
         // stays in step with the same store, instead of the standalone `MemorySettingsStore`
         // this branch used before main grew real persistence.
-        .manage(std::sync::Arc::new(mog_core::recording::RecordingComponent::new(
-            record_gate.follow(recording_settings),
-        )))
+        .manage(std::sync::Arc::new(
+            mog_core::recording::RecordingComponent::new(record_gate.follow(recording_settings)),
+        ))
         // ADR 0103: the ⌥R key follows the knob of the settings above (`hotkey_host`).
         .manage(record_gate)
         // G-09a, ARC-F3 (#467, #138): the ONE rate bucket of the process.

@@ -1363,10 +1363,14 @@ mod tests {
 
     #[test]
     fn rec_the_app_links_the_gate_to_the_recording_component() {
+        // PR C/#595/#592 gave `run` a real persisted settings store (`recording_settings`, a
+        // `JsonSettingsStore`); the gate now follows that store instead of a throwaway
+        // `MemorySettingsStore`, so both the gate and the `recording_*` commands read and write
+        // the same knob.
         let src = include_str!("lib.rs");
         let flat: String = src.split_whitespace().collect();
         assert!(
-            flat.contains("record_gate.follow(std::sync::Arc::new("),
+            flat.contains("record_gate.follow(recording_settings)"),
             "lib.rs"
         );
         assert!(flat.contains(".manage(record_gate)"), "lib.rs");
