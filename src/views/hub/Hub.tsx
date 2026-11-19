@@ -2,6 +2,7 @@
 import { PanelLeftIcon } from 'lucide-react';
 import { useCallback, useState, type CSSProperties } from 'react';
 import type { MogId } from '../../shared/interfaces';
+import type { HubRecording } from '../../shared/recording-view';
 import { DomainPicker } from '../DomainPicker';
 import {
   acceptNotice,
@@ -26,6 +27,10 @@ import { MicPreference } from './MicPreference';
 import { MogList } from './MogList';
 import { DEFAULT_HUB_VIEW, NAV_ITEMS, type HubView } from './nav';
 import { PermissionNotices } from './PermissionNotices';
+import { RecIndicator, RecordControl } from './RecordControl';
+import { Recordings } from './Recordings';
+import { RecordingSettings } from './RecordingSettings';
+import { useHubRecording } from './recording-ipc';
 import { SttSetupStep } from './SttSetupStep';
 import { StoreNotice } from './StoreNotice';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
@@ -91,12 +96,20 @@ function MogsArea({ hidden, mogs }: { hidden: boolean; mogs: ReadonlyMap<MogId, 
  * The 'settings' area (#97, #103): one grouped, consistently spaced settings pane. Stays
  * mounted with `hidden` (review of #602), like `Conversations`: unmounting on `view !==
  * 'settings'` dropped the Wipe scope choice and closed an open Wipe dialog mid-confirm as soon
- * as the user switched areas.
+ * as the user switched areas. RecordingSettings (ADR 0103, merged from main) moved in here from
+ * the old combined "home" area.
  */
-function SettingsArea({ hidden }: { hidden: boolean }) {
+function SettingsArea({
+  hidden,
+  recording,
+}: {
+  hidden: boolean;
+  recording: HubRecording | undefined;
+}) {
   return (
     <section data-hub-view="settings" aria-label="Settings" hidden={hidden}>
       <MicPreference />
+      <RecordingSettings model={recording} />
       <SttSetupStep />
       <WipeSettings />
       <CliSettings />
@@ -123,6 +136,18 @@ export function Hub() {
     },
     [sidebar],
   );
+  const recording = useHubRecording();
+  const openRecordingSettings = useCallback(() => {
+    pickView('settings');
+    // After the view shows: move to the section, and focus its heading for screen readers.
+    requestAnimationFrame(() => {
+      const h = document.getElementById('recording-settings-title');
+      h?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+      h?.focus({ preventScroll: true });
+    });
+  }, [pickView]);
+  const control = recording?.control;
+  const live = control?.phase === 'recording' || control?.phase === 'stopping';
 
   const onState = useCallback((p: unknown) => {
     const s = asMogViewState(p);
@@ -157,8 +182,11 @@ export function Hub() {
   const hubBodyStyle = { '--hub-sidebar-width': `${sidebarWidth(sidebar)}px` } as CSSProperties;
 
   // TODO(#43): the onboarding wizard.
+  // Conversations and Recordings are both a full-height list+detail layout (`hub--wide`);
+  // MOGs and Settings keep the comfortable reading width (hub.css).
+  const wide = view === 'conversations' || view === 'recordings';
   return (
-    <main className={view === 'conversations' ? 'hub hub--wide' : 'hub'}>
+    <main className={wide ? 'hub hub--wide' : 'hub'}>
       <HubHeader />
       {/* ADR 0105: why macOS asks for the password, or that history is off. Stays a direct
           sibling of the header, outside the sidebar and every area, so it shows regardless of
@@ -190,9 +218,22 @@ export function Hub() {
             <h2 className="hub-area-title">{activeLabel}</h2>
           </div>
           <SetupRegion />
+          {/* ADR 0103: a running recording shows in every view, with the time left and Stop. */}
+          {live && view !== 'recordings' && (
+            <RecIndicator
+              endsAtMs={control?.endsAtMs}
+              stopping={control?.phase === 'stopping'}
+              compact
+            />
+          )}
           <Conversations active={view === 'conversations'} onOpen={showConversations} />
+          <Recordings
+            active={view === 'recordings'}
+            onOpenSettings={openRecordingSettings}
+            header={<RecordControl model={recording} onOpenSettings={openRecordingSettings} />}
+          />
           <MogsArea hidden={view !== 'mogs'} mogs={mogs} />
-          <SettingsArea hidden={view !== 'settings'} />
+          <SettingsArea hidden={view !== 'settings'} recording={recording} />
         </div>
       </div>
     </main>

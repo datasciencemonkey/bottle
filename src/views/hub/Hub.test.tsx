@@ -87,7 +87,7 @@ describe('V1 hub view', () => {
     expect(
       viewEmits().filter(
         (e) =>
-          !['hub', 'cli', 'permissions', 'conversations', 'store'].includes(
+          !['hub', 'cli', 'permissions', 'conversations', 'recording', 'store'].includes(
             (e as { mogId: string }).mogId,
           ),
       ),
@@ -226,5 +226,24 @@ describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
     await act(async () => toggle(el)?.click());
     await act(async () => items(el)[2]?.click());
     expect(radios()[2]?.getAttribute('aria-checked')).toBe('true');
+  });
+});
+
+describe('V1 hub view: call recording (ADR 0103)', () => {
+  beforeEach(() => tauri.reset());
+
+  it('[REC-V15] the hub has a Recordings area and a Call recording settings section', async () => {
+    const { el } = await render(<Hub />);
+    const nav = [...el.querySelectorAll('nav[aria-label="Hub"] button')].map((b) => b.textContent);
+    expect(nav).toContain('Recordings');
+    expect(el.querySelector('[data-view="recording-settings"]')).not.toBeNull();
+    const rec = [...el.querySelectorAll('nav[aria-label="Hub"] button')].find(
+      (b) => b.textContent === 'Recordings',
+    );
+    await act(async () => (rec as HTMLElement).click());
+    expect(el.querySelector('section[aria-label="Recordings"]')?.hasAttribute('hidden')).toBe(
+      false,
+    );
+    expect(el.querySelector('[data-hub-view="home"]')?.hasAttribute('hidden')).toBe(true);
   });
 });

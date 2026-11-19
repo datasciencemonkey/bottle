@@ -24,7 +24,9 @@
 //!   the level sink and [`ptt_buffer::PttBuffer`] (ADR 0078). Nothing goes to disk or to a log,
 //!   and there is no pre-roll. No frame arrives after `close` returns.
 //! - **System audio** (the Others track) is not in this backend: `open(SystemAudio)` returns
-//!   [`codes::SYSTEM_AUDIO_UNSUPPORTED`]. TODO(#108) TODO(#109).
+//!   [`codes::SYSTEM_AUDIO_UNSUPPORTED`]. The call recording's system audio is the separate
+//!   [`system::SystemAudioDevice`] (macOS process tap, Windows WASAPI loopback, ADR 0103);
+//!   [`system::RecordingDevice`] puts both behind one device for R2.
 //!
 //! - **Permission (CAP-17a, #22).** Nothing asks the OS for the mic before the first `open`,
 //!   and only a user action (`capture_start`) opens. On macOS the first stream build shows the
@@ -60,8 +62,13 @@ mod mic;
 pub mod normalize;
 pub mod ptt_buffer;
 pub mod sink;
+pub mod system;
+#[cfg(target_os = "macos")]
+pub mod system_macos;
+#[cfg(target_os = "windows")]
+pub mod system_windows;
 
-pub use mic::{FailureLink, MicConfig, MicDevice, MicFault};
+pub use mic::{FailureLink, MicConfig, MicDevice, MicFault, MicSilenceHold};
 pub use sink::{mix_to_mono, DiscardSink, FrameSink, MicFrame, SinkEvent, ZeroWatch};
 
 use crate::capture::DeviceError;

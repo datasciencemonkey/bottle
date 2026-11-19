@@ -1,10 +1,18 @@
 /**
  * The hub's navigation areas (ui-1, #97, #103). `HubView` names every area the sidebar can ever
- * show; `NAV_ITEMS` is the single source of which ones render right now. 'workspaces' (the CLI
- * path/version move, a later PR) and 'recordings' (rec-lead's area) stay out of `NAV_ITEMS` until
- * their PRs land, so the type is ready but the sidebar does not show an empty area.
+ * show; `NAV_ITEMS` is the single source of which ones render right now. 'recordings'
+ * (rec-lead's area, ADR 0103, #595) joined once its own PR landed (merge of origin/main into
+ * ui-1, review of #602); 'workspaces' (the CLI path/version move, a later PR) stays out of
+ * `NAV_ITEMS` until its own PR lands, so the type is ready but the sidebar does not show an
+ * empty area.
  */
-import { MessageSquareIcon, SettingsIcon, SparklesIcon, type LucideIcon } from 'lucide-react';
+import {
+  DiscAlbumIcon,
+  MessageSquareIcon,
+  SettingsIcon,
+  SparklesIcon,
+  type LucideIcon,
+} from 'lucide-react';
 
 export type HubView = 'conversations' | 'mogs' | 'workspaces' | 'recordings' | 'settings';
 
@@ -17,6 +25,7 @@ export interface NavItem {
 export const NAV_ITEMS: readonly NavItem[] = [
   { id: 'conversations', label: 'Conversations', icon: MessageSquareIcon },
   { id: 'mogs', label: 'MOGs', icon: SparklesIcon },
+  { id: 'recordings', label: 'Recordings', icon: DiscAlbumIcon },
   { id: 'settings', label: 'Settings', icon: SettingsIcon },
 ];
 

@@ -41,6 +41,8 @@ pub mod mog_config;
 pub mod policy_store;
 pub mod profile_login;
 pub mod profile_service;
+pub mod recording;
+pub mod recording_capture;
 pub mod request_identity;
 pub mod resource_budget;
 pub mod session_guard;

@@ -6,5 +6,9 @@
 <dict>
   <key>NSMicrophoneUsageDescription</key>
   <string>Bottle uses the microphone only while you hold the talk key, use hands-free capture or record a meeting.</string>
+  <!-- ADR 0103: macOS shows the System Audio Recording prompt with this text at the first
+       process tap (the knob turned ON, or the first call recording). -->
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>Bottle records the other side of a call only when you start a call recording.</string>
 </dict>
 </plist>
