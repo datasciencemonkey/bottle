@@ -5,8 +5,7 @@ It finds the CLI at an absolute path, refuses unsafe locations, needs version 1.
 or later, checks the path and version again at each launch, and runs every CLI
 child process with a clean environment.
 
-Standalone crate (own `[workspace]`, std only, no dependencies) until the root
-workspace from #221 adopts it.
+It also installs the official CLI after consent (`install.rs`, #161).
 
 ## Requirements covered
 
@@ -16,6 +15,8 @@ workspace from #221 adopts it.
 | W-02b | Refuse a CLI in a temporary directory (`std::env::temp_dir`, `TMPDIR`, `TEMP`, `TMP`, `/tmp`, `/var/tmp`, `/private/tmp`, `/private/var/tmp`, `C:\Windows\Temp`; raw and canonical paths) or a world-writable one (unix: o+w bit on the binary or its folder, as found and after symlinks) | `location.rs` |
 | W-02c | Parse `databricks --version` (e.g. `Databricks CLI v1.25.0`); block versions below `CliMinVersion` (default 1.17.0); warn below the recommended 1.25.0 | `version.rs`, `runner.rs` |
 | W-02d | `launch_check(previous)` re-resolves and re-reads the version at every launch and reports `PathChanged` / `VersionChanged` warnings; `run` re-checks that the verified file still exists in a safe place | `runner.rs` |
+| W-17b, W-17d, W-17e, SEC-20b | `install::install(plan, fetch, consent)`: no fetch without consent; the pinned checksum file `databricks_cli_1.26.0_SHA256SUMS` is checked against `PINNED_SUMS_SHA256`, then the OS/CPU zip against its line in that file, before the unpack; only the top-level `databricks` entry is unpacked into the Bottle bin folder (macOS `~/Library/Application Support/Bottle/bin`, Windows `%LOCALAPPDATA%\Bottle\bin`), mode 0755; every failure deletes the download folder. The checks are `artifact-verify` (#160, PR #257). ADR 0099. | `install.rs` |
+| W-17f | `resolve` looks in the Bottle bin folder first (after `CliPath`), so an older CLI on PATH stays unchanged | `resolve.rs` |
 | W-09 | Every child (including `--version`) gets `env_clear()` plus an allowlist: PATH, HOME, `DATABRICKS_CONFIG_FILE`, `XDG_CONFIG_HOME`, proxy (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `ALL_PROXY`, both cases) and CA vars (`SSL_CERT_FILE`, `SSL_CERT_DIR`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`). Windows adds `USERPROFILE`, `APPDATA`, `LOCALAPPDATA` (home/config folders) and `SYSTEMROOT` (needed by the network stack); names match case-insensitively there. All else, including `DATABRICKS_TOKEN`, `DATABRICKS_HOST`, `DATABRICKS_CLIENT_*`, `DATABRICKS_AUTH_TYPE` and `DATABRICKS_CONFIG_PROFILE`, is dropped. | `env.rs`, `sys.rs` |
 
 ## API

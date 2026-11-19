@@ -393,3 +393,26 @@ fn w_17d_a_failed_install_is_refused_without_detail() {
     assert!(c.call("cli_install", json!({"consent": true})).is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// [W-17d] the real download asks only HTTPS GitHub release hosts on port 443
+#[test]
+fn w_17d_release_downloads_go_only_to_github_release_hosts() {
+    use mog_core::cli_status::is_release_url;
+    let ok = |u: &str| is_release_url(&reqwest::Url::parse(u).unwrap());
+    assert!(ok(
+        "https://github.com/databricks/cli/releases/download/v1.26.0/databricks_cli_1.26.0_SHA256SUMS"
+    ));
+    assert!(ok(
+        "https://release-assets.githubusercontent.com/github-production-release-asset/x"
+    ));
+    assert!(ok("https://objects.githubusercontent.com/x"));
+    for bad in [
+        "http://github.com/databricks/cli/releases/download/v1.26.0/x",
+        "https://github.com:8443/x",
+        "https://evil.example/x",
+        "https://github.com.evil.example/x",
+        "https://user@github.com/x",
+    ] {
+        assert!(!ok(bad), "{bad}");
+    }
+}

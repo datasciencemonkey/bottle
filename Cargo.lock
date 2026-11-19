@@ -483,6 +483,7 @@ dependencies = [
 name = "cli-runner"
 version = "0.1.0"
 dependencies = [
+ "artifact-verify",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",

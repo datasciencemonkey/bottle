@@ -1,4 +1,6 @@
 /** #161: the brain side of the first-run "Install the Databricks CLI" step. Values are fake. */
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import {
   CLI_INSTALL_EVENT,
   CLI_INSTALL_SOURCE,
@@ -115,18 +117,29 @@ describe('CLI install wiring (#161)', () => {
 
   it('[W-17b] a second click while the install runs starts no second install', async () => {
     const bus = new BrainBus();
-    let done: (v: unknown) => void = () => undefined;
-    const install = vi.fn(() => new Promise((r) => (done = r)));
+    type Reply = { path: string; version: string };
+    let done: (v: Reply) => void = () => undefined;
+    const install = vi.fn(() => new Promise<Reply>((r) => (done = r)));
     wireCliInstall(bus, { cliInfo: async () => none, install, platform: 'macos' });
     click(bus, CLI_INSTALL_TARGET);
     click(bus, CLI_INSTALL_TARGET);
     await flush();
     expect(install).toHaveBeenCalledTimes(1);
-    done({ path: BOTTLE, version: '1.26.0', found: true, plaintextStorage: false });
+    done({ path: BOTTLE, version: '1.26.0' });
   });
 
   it('[W-17e] the folder text names the user-only folder of each OS', () => {
     expect(cliInstallFolder('macos')).toBe('~/Library/Application Support/Bottle/bin');
     expect(cliInstallFolder('windows')).toBe('%LOCALAPPDATA%\\Bottle\\bin');
+  });
+
+  it('[W-17d] the version and source the step shows are the ones R5 installs', () => {
+    const rust = readFileSync(
+      resolve(import.meta.dirname, '../../crates/cli-runner/src/install.rs'),
+      'utf8',
+    );
+    const [maj, min, pat] = CLI_INSTALL_VERSION.split('.');
+    expect(rust).toContain(`PINNED_CLI_VERSION: Version = Version::new(${maj}, ${min}, ${pat});`);
+    expect(rust).toContain(`RELEASES_PAGE: &str = "${CLI_INSTALL_SOURCE}";`);
   });
 });

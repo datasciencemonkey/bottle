@@ -264,6 +264,9 @@ pub struct HostComponents<'a> {
     /// T7 for `profiles_list` (#555, #17): `profiles_host::ProfilesHost`, the one managed
     /// ProfileService. `None` when it is not managed: `host_failed`.
     pub profiles: Option<&'a dyn GatewayComponents>,
+    /// `cli_status` and `cli_install` (#16, #161): `cli_host::CliStatusHost` over the one R5 of
+    /// the process. `None` when R5 is not managed: `host_failed`.
+    pub cli: Option<&'a dyn GatewayComponents>,
 }
 
 fn refused(e: IpcError) -> CoreError {
@@ -325,6 +328,7 @@ impl<'a> HostComponents<'a> {
             stt: None,
             mem: None,
             profiles: None,
+            cli: None,
         }
     }
 }
@@ -493,6 +497,12 @@ impl GatewayComponents for HostComponents<'_> {
                 .profiles
                 .ok_or_else(|| host_failed(command))?
                 .call(command, args),
+            // #161: R5. The gateway let only the brain and the hub through, and `cli_install`
+            // only with `consent: true` (W-17b). An install failure crosses as `host_failed`.
+            "cli_status" | "cli_install" => self
+                .cli
+                .ok_or_else(|| host_failed(command))?
+                .call(command, args),
             // Each feature issue wires its R1-R17 component here.
             "capture_start" | "capture_stop" | "capture_pause" | "capture_resume"
             | "capture_status" | "capture_stop_all" | "capture_subscribe" => {
@@ -535,9 +545,10 @@ pub fn route(components: HostComponents<'_>, command: &str, args: Value) -> Resu
 /// `insert_text`, which waits about 0.4 s for the paste and the clipboard restore (ADR 0048),
 /// `mcp_call`, a blocking HTTP call to Genie One MCP (#467), and the `agent_*` commands (#307),
 /// which can spawn, wait for the host lock or reap the runtime, `stt_transcribe`, which
-/// takes the R4 store lock that the R4 worker shares (#514), and `mem_local_exec`, which does
-/// SQLite IO under the R10 connection lock (#426), and `profiles_list`, where T7 runs
-/// `databricks auth describe` once per `databricks-cli` profile when R5 lands (#555).
+/// takes the R4 store lock that the R4 worker shares (#514), `mem_local_exec`, which does
+/// SQLite IO under the R10 connection lock (#426), `profiles_list`, where T7 runs
+/// `databricks auth describe` once per `databricks-cli` profile when R5 lands (#555), and
+/// `cli_install`, which downloads and checks the CLI (#161).
 pub fn runs_off_main_thread(command: &str) -> bool {
     matches!(
         command,
@@ -556,6 +567,7 @@ pub fn runs_off_main_thread(command: &str) -> bool {
             | "stt_transcribe"
             | "mem_local_exec"
             | "profiles_list"
+            | "cli_install"
     )
 }
 
@@ -655,6 +667,8 @@ fn route_from<R: Runtime>(
     // `try_state`: `profiles_host::install` manages T7; without it `profiles_list` answers
     // `host_failed` (#555).
     let profiles = webview.try_state::<crate::profiles_host::ProfilesHost>();
+    // `try_state`: `cli_host::start` manages R5 (#16); without it `cli_*` answer `host_failed`.
+    let cli = webview.try_state::<crate::cli_host::CliStatusHost>();
     let components = HostComponents {
         from: label,
         brain: &brain,
@@ -678,6 +692,9 @@ fn route_from<R: Runtime>(
         profiles: profiles
             .as_ref()
             .map(|p| p.inner() as &dyn GatewayComponents),
+        cli: cli
+            .as_ref()
+            .map(|c| c.inner().0.as_ref() as &dyn GatewayComponents),
     };
     route(components, command, args)
 }
@@ -861,6 +878,52 @@ mod tests {
         assert!(
             ipc.contains("schedule(&command"),
             "the handler schedules every call"
+        );
+    }
+
+    /// Records the commands it gets; answers a fake `cli_status` reply.
+    struct FakeCli(std::sync::Mutex<Vec<(String, Value)>>);
+
+    impl GatewayComponents for FakeCli {
+        fn call(&self, command: &'static str, args: Value) -> CoreResult<Value> {
+            self.0.lock().unwrap().push((command.to_owned(), args));
+            Ok(json!({"path": "", "version": "", "found": false, "plaintextStorage": false}))
+        }
+    }
+
+    /// [W-17b] [U16] `cli_install` reaches R5 only with `consent: true`, from the brain or the hub,
+    /// and runs off the main thread (#161)
+    #[test]
+    fn w_17b_cli_install_routes_to_r5_only_with_consent() {
+        let cli = FakeCli(std::sync::Mutex::new(Vec::new()));
+        let host = |from| HostComponents {
+            cli: Some(&cli),
+            ..HostComponents::none(from, &NoBrain)
+        };
+        for bad in [json!({}), json!({"consent": false})] {
+            assert_eq!(
+                route(host("hub"), "cli_install", bad),
+                Err(json!({"error": "invalid_args"}))
+            );
+        }
+        assert!(route(host("mog-a1"), "cli_install", json!({"consent": true})).is_err());
+        assert!(
+            cli.0.lock().unwrap().is_empty(),
+            "no install without consent"
+        );
+        assert!(route(host("hub"), "cli_install", json!({"consent": true})).is_ok());
+        assert!(route(host("brain"), "cli_status", json!({})).is_ok());
+        let calls: Vec<String> = cli.0.lock().unwrap().iter().map(|c| c.0.clone()).collect();
+        assert_eq!(calls, ["cli_install", "cli_status"]);
+        assert!(runs_off_main_thread("cli_install"));
+        // No R5: `host_failed`.
+        assert_eq!(
+            route(
+                HostComponents::none("hub", &NoBrain),
+                "cli_install",
+                json!({"consent": true})
+            ),
+            Err(json!({"error": "host_failed"}))
         );
     }
 

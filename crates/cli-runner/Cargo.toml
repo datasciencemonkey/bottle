@@ -19,10 +19,12 @@ test = false
 doc = false
 
 [dependencies]
+# #161: SHA-256 checks of the CLI download (SEC-20b) and the release zip.
+artifact-verify.workspace = true
+zip = { version = "9.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [dev-dependencies]
 # #161 tests: fake release archives and checksum files (all crates already in Cargo.lock).
 serde_json.workspace = true
 sha2 = "0.10"
 tempfile = "3"
-zip = { version = "9.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }

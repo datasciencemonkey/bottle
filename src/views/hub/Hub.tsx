@@ -11,6 +11,7 @@ import {
   type MogViewState,
 } from '../view-ipc';
 import { About } from './About';
+import { CliInstallStep } from './CliInstallStep';
 import { CliSettings } from './CliSettings';
 import { DataPanel } from './DataDisclosures';
 import { DictationNotices } from './DictationNotices';
@@ -64,6 +65,8 @@ export function Hub() {
   return (
     <main className="hub">
       <HubHeader />
+      {/* W-17c (#161): the CLI install step comes before the workspace setup. */}
+      <CliInstallStep />
       <DictationNotices />
       {/* The live moods the MOG windows report: one quiet chip per MOG (empty until one runs). */}
       <ul aria-label="MOGs" className="hub-live">
