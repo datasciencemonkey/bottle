@@ -232,8 +232,9 @@ fn cap_12c_install_capture_feeds_the_mic_to_the_same_ptt_buffer_that_the_core_dr
         "exactly one PttBuffer in install_capture"
     );
     assert!(
-        // #46: the same tee also feeds R4 SttEngine (ADR 0082).
-        body.contains("spawn_level_mic(CpalMicHost::new,mog_core::audio_device::level::TeeSink(ptt.sink(),stt.engine().frame_sink()),levels.gate()"),
+        // #46: the same tee also feeds R4 SttEngine (ADR 0082), and ADR 0103 the call
+        // recording tap.
+        body.contains("spawn_level_mic(CpalMicHost::new,mog_core::audio_device::level::TeeSink(mog_core::audio_device::level::TeeSink(ptt.sink(),stt.engine().frame_sink()),tap.mic_sink(),),levels.gate()"),
         "the mic frames go to `ptt.sink()`"
     );
     assert!(

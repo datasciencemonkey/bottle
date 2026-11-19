@@ -67,6 +67,7 @@ fn ms(d: Duration) -> u64 {
 #[derive(Clone, Default)]
 pub struct FailureLink {
     hook: Arc<Mutex<Option<Hook>>>,
+    hold: Arc<AtomicBool>,
 }
 
 impl FailureLink {
@@ -96,11 +97,30 @@ impl FailureLink {
         *lock(&self.hook) = Some(Arc::new(f));
     }
 
+    /// The switch that holds the zero-buffer watch of this mic (ADR 0103).
+    pub fn silence_hold(&self) -> MicSilenceHold {
+        MicSilenceHold(Arc::clone(&self.hold))
+    }
+
     fn report(&self, source: AudioSource, fault: MicFault) {
         let hook = lock(&self.hook).clone();
         if let Some(hook) = hook {
             hook(source, fault);
         }
+    }
+}
+
+/// ADR 0103: while a call recording runs, a muted mic must not end it. With the hold on, the
+/// CAP-17b zero-buffer watch never stops the stream or reports [`MicFault::ZeroBuffers`]: the
+/// silent mic goes on as silence next to the system audio. A real loss ([`MicFault::Lost`])
+/// still stops it. The recording session turns the hold on at its start and off at its stop.
+#[derive(Debug, Clone)]
+pub struct MicSilenceHold(Arc<AtomicBool>);
+
+impl MicSilenceHold {
+    /// Hold (`true`) or release (`false`) the zero-buffer watch.
+    pub fn set(&self, on: bool) {
+        self.0.store(on, Ordering::SeqCst);
     }
 }
 
@@ -199,6 +219,7 @@ impl MicDevice {
         F: FnOnce() -> H + Send + 'static,
     {
         let link = FailureLink::default();
+        let hold = Arc::clone(&link.hold);
         let (notify_tx, notify_rx) = mpsc::channel::<(AudioSource, MicFault)>();
         let notifier = {
             let link = link.clone();
@@ -228,6 +249,7 @@ impl MicDevice {
                 tx: tx.clone(),
                 notify: notify_tx,
                 prefer_built_in: Arc::clone(&prefer_built_in),
+                hold,
                 base: Instant::now(),
                 zero_window_ms: ms(config.zero_window),
                 device_poll_ms: ms(config.device_poll),
@@ -361,6 +383,8 @@ impl Drop for MicDevice {
 
 /// The state of the audio thread.
 struct AudioThread {
+    /// ADR 0103: the zero-buffer watch holds while a call recording runs.
+    hold: Arc<AtomicBool>,
     control: Arc<Mutex<Control>>,
     sink: Arc<Mutex<SinkSlot>>,
     /// For the fault callbacks of the streams.
@@ -501,6 +525,17 @@ impl AudioThread {
     /// stop run under one hold of the control lock.
     fn check_zero<S>(&self, current: &mut Current<S>) -> bool {
         let now = self.now_ms();
+        if self.hold.load(Ordering::SeqCst) {
+            // A call recording runs: a muted mic records as silence (ADR 0103). Restart the
+            // window, so the watch wakes once per window and not at every poll.
+            let mut slot = lock(&self.sink);
+            if let Some(w) = slot.watch.as_mut() {
+                if w.expired(now) {
+                    *w = ZeroWatch::new(self.zero_window_ms, now);
+                }
+            }
+            return false;
+        }
         let mut c = lock(&self.control);
         {
             let mut slot = lock(&self.sink);
