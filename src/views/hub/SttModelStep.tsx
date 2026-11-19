@@ -1,15 +1,17 @@
 /**
- * Wizard step 6 "Local speech" (MB-07, #413, ADR 0049): the consent question for the 487 MB
- * Parakeet model (CAP-49a), the model status, progress, Cancel and a Retry that resumes
- * (CAP-49b), and the content-free error codes as user text (CAP-49c).
+ * `SttModelStep`: "Local speech" (MB-07, #413, #45, #529, ADR 0049, ADR 0104), one
+ * self-contained component. It asks consent for the 487 MB Parakeet model (CAP-49a), shows the
+ * model status, download progress, Cancel and a Retry that resumes (CAP-49b), and the
+ * content-free error codes as user text (CAP-49c). It renders its own `<section>` and assumes
+ * nothing about where it is mounted, so the hub can place it in the first-run Setup region, or
+ * in Settings > Local speech once the step is no longer first-run (ADR 0104).
  *
  * The step stores the answer before any install starts. The core gate reads that stored answer,
  * so no download starts without Granted. `status` checks file sizes only, so the step is done
- * only after an `install` call (which checks every SHA-256) resolves.
+ * only after an `install` call (which checks every SHA-256) resolves. `sttModelApi` (same
+ * folder) is the real `api`, over the `stt_model_*` commands of #529; the hub passes it in.
  *
- * TODO(#529): the `stt_model_*` hub commands. Until they land, the hub uses
- * `unwiredSttModelApi`, which answers `stt_setup_unavailable`. TODO(#43): the wizard frame
- * mounts this step; until then the hub shows it on its own.
+ * TODO(#43): the wizard frame may also mount this step directly for a first-run flow.
  */
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 
@@ -109,7 +111,7 @@ function statusText(v: SttModelView): string {
   }
 }
 
-export function SttSetupStep({
+export function SttModelStep({
   api = unwiredSttModelApi,
   onDone,
 }: {

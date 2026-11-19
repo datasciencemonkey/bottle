@@ -22,7 +22,8 @@ import { MicPreference } from './MicPreference';
 import { ForgetDialogHost } from './ForgetDialogHost';
 import { MogList } from './MogList';
 import { PermissionNotices } from './PermissionNotices';
-import { SttSetupStep } from './SttSetupStep';
+import { SttModelStep } from './SttModelStep';
+import { sttModelApi } from './sttModelApi';
 import { StoreNotice } from './StoreNotice';
 import { WipeSettings } from './WipeSettings';
 
@@ -124,7 +125,7 @@ export function Hub() {
         <MogList />
         <ForgetDialogHost />
         <MicPreference />
-        <SttSetupStep />
+        <SttModelStep api={sttModelApi} />
         <WipeSettings />
         <CliSettings />
         <DataPanel />

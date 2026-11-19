@@ -4,12 +4,12 @@ import { render, tauri } from '../test-tauri';
 import { Hub } from './Hub';
 import {
   STT_ERROR_CODES,
-  SttSetupStep,
+  SttModelStep,
   sttErrorText,
   type SttModelApi,
   type SttModelView,
   type SttProgressView,
-} from './SttSetupStep';
+} from './SttModelStep';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('../test-tauri')).coreModule);
 vi.mock('@tauri-apps/api/event', async () => (await import('../test-tauri')).eventModule);
@@ -91,7 +91,7 @@ describe('Wizard STT step (MB-07, #413)', () => {
 
   it('[MB-07] [CAP-49a] asks for consent to the 487 MB download and starts nothing first', async () => {
     const f = fakeApi();
-    const { el } = await render(<SttSetupStep api={f.api} />);
+    const { el } = await render(<SttModelStep api={f.api} />);
     const s = step(el);
     expect(s).not.toBeNull();
     expect(s.textContent).toContain('487 MB');
@@ -103,7 +103,7 @@ describe('Wizard STT step (MB-07, #413)', () => {
 
   it('[CAP-49a] "Not now" stores Declined and starts no install', async () => {
     const f = fakeApi();
-    const { el } = await render(<SttSetupStep api={f.api} />);
+    const { el } = await render(<SttModelStep api={f.api} />);
     await click(button(el, 'Not now'));
     expect(f.calls).toEqual(['status', 'consent:declined']);
     expect(step(el).textContent).toContain('Local speech is off');
@@ -114,7 +114,7 @@ describe('Wizard STT step (MB-07, #413)', () => {
   it('[CAP-49a] [MB-07] the download stores Granted before the install starts', async () => {
     const f = fakeApi();
     const done = vi.fn();
-    const { el } = await render(<SttSetupStep api={f.api} onDone={done} />);
+    const { el } = await render(<SttModelStep api={f.api} onDone={done} />);
     await click(button(el, 'Download (487 MB)'));
     expect(f.calls).toEqual(['status', 'consent:granted', 'install:github']);
     await f.finish({ model: 'installed' });
@@ -125,7 +125,7 @@ describe('Wizard STT step (MB-07, #413)', () => {
 
   it('[CAP-49b] the user can pick the Hugging Face mirror as the source', async () => {
     const f = fakeApi();
-    const { el } = await render(<SttSetupStep api={f.api} />);
+    const { el } = await render(<SttModelStep api={f.api} />);
     const hf = el.querySelector<HTMLInputElement>('input[name="sttSource"][value="hf_mirror"]');
     await click(hf ?? undefined);
     await click(button(el, 'Download (487 MB)'));
@@ -134,7 +134,7 @@ describe('Wizard STT step (MB-07, #413)', () => {
 
   it('[CAP-49b] shows progress and a Cancel button while the download runs', async () => {
     const f = fakeApi({ consent: 'granted' });
-    const { el } = await render(<SttSetupStep api={f.api} />);
+    const { el } = await render(<SttModelStep api={f.api} />);
     await click(button(el, 'Download (487 MB)'));
     await f.progress({ file: 'encoder.int8.onnx', done: 326_141_147, total: 652_282_294 });
     const bar = el.querySelector('[role="progressbar"]');
@@ -146,7 +146,7 @@ describe('Wizard STT step (MB-07, #413)', () => {
 
   it('[CAP-49b] after a cancel the step shows Partial and a retry resumes', async () => {
     const f = fakeApi({ consent: 'granted' });
-    const { el } = await render(<SttSetupStep api={f.api} />);
+    const { el } = await render(<SttModelStep api={f.api} />);
     await click(button(el, 'Download (487 MB)'));
     await click(button(el, 'Cancel'));
     await f.fail('stt_download_cancelled', { model: 'partial', partialBytes: 120_000_000 });
@@ -161,7 +161,7 @@ describe('Wizard STT step (MB-07, #413)', () => {
 
   it('[CAP-49c] a hash mismatch says the install stopped', async () => {
     const f = fakeApi({ consent: 'granted' });
-    const { el } = await render(<SttSetupStep api={f.api} />);
+    const { el } = await render(<SttModelStep api={f.api} />);
     await click(button(el, 'Download (487 MB)'));
     await f.fail('stt_hash_mismatch');
     const alert = el.querySelector('[role="alert"]');
@@ -183,7 +183,7 @@ describe('Wizard STT step (MB-07, #413)', () => {
 
   it('[MB-07] an installed model is checked before the step is done', async () => {
     const f = fakeApi({ consent: 'granted', model: 'installed' });
-    const { el } = await render(<SttSetupStep api={f.api} />);
+    const { el } = await render(<SttModelStep api={f.api} />);
     expect(step(el).textContent).toContain('Checking the speech model');
     expect(step(el).getAttribute('data-done')).toBe('false');
     expect(button(el, 'Cancel')).toBeUndefined();
@@ -194,7 +194,7 @@ describe('Wizard STT step (MB-07, #413)', () => {
 
   it('[CAP-49a] [CAP-49c] a failed launch check downloads nothing before a click', async () => {
     const f = fakeApi({ consent: 'granted', model: 'installed' });
-    const { el } = await render(<SttSetupStep api={f.api} />);
+    const { el } = await render(<SttModelStep api={f.api} />);
     await f.fail('stt_hash_mismatch', { model: 'missing' });
     expect(el.querySelector('[role="alert"]')?.textContent).toBe(sttErrorText('stt_hash_mismatch'));
     expect(step(el).textContent).toContain('Not downloaded');
