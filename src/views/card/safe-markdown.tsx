@@ -11,6 +11,9 @@ export interface LinkTrust {
 /** Answers longer than this are cut before parsing (bounds work on hostile input). */
 export const MAX_ANSWER_CHARS = 20_000;
 
+/** No link in an answer is trusted until the caller knows the profile host (TODO(#40)). */
+export const NO_LINKS: LinkTrust = { profileHost: '', allowedAppUrls: [] };
+
 /**
  * Trust model (requirements do not define a match rule for `AllowedAppUrls`, so the stricter reading is used):
  * the profile host matches by origin (https, host and port); each `AllowedAppUrls` entry must be an https URL

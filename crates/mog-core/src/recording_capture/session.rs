@@ -285,6 +285,24 @@ struct State {
     /// A stop took the recording and has not yet released the tap and the mic hold. A start
     /// meanwhile is `recording_busy`, so it cannot be disarmed by the old stop.
     stopping: bool,
+    /// The name of a recording a `stop` still finishes: from the moment it takes `active`, all
+    /// the way through the writer's flush and the hand-off (review of #592, the finding on
+    /// this `stop`). `snapshot()` already reads `Idle` partway through that work, so the
+    /// cloud-side scan and Retry must check this too, or they can touch the part the writer
+    /// thread still finalizes on disk.
+    finishing: Option<String>,
+}
+
+/// Clears `finishing` on drop, so a panic during the flush or the hand-off never leaves a
+/// name "stuck" as finishing forever (review of #592, LOW).
+struct FinishingGuard<'a> {
+    session: &'a RecordingSession,
+}
+
+impl Drop for FinishingGuard<'_> {
+    fn drop(&mut self) {
+        lock(&self.session.state).finishing = None;
+    }
 }
 
 /// The recording session. See the [module docs](self).
@@ -534,8 +552,13 @@ impl RecordingSession {
                 .take()
                 .ok_or(RecordingCaptureError::NotRecording)?;
             st.stopping = true;
+            // Marked active before the state goes idle below, and held (by `_finishing`) all
+            // the way through the flush and the hand-off (review of #592): `snapshot()` would
+            // otherwise read `Idle` while the writer thread still finalizes the part on disk.
+            st.finishing = Some(active.info.name.clone());
             active
         };
+        let _finishing = FinishingGuard { session: self };
         // The lease is gone already after a mic loss or a panic stop. The stop event of our
         // own stop finds no active recording, so it does nothing.
         if !matches!(cause, StopCause::MicLost | StopCause::Panic) {
@@ -575,6 +598,15 @@ impl RecordingSession {
             Some(a) => Snapshot::Recording(a.info.clone()),
             None => Snapshot::Idle,
         }
+    }
+
+    /// The name of a recording a `stop` still finishes (set the moment `stop` takes the active
+    /// recording, cleared once the flush and the hand-off are done), or `None`. `snapshot()`
+    /// alone reads `Idle` partway through that work; a caller that must never touch the part
+    /// the writer thread still finalizes on disk (the cloud-side scan and Retry, review of
+    /// #592) checks both.
+    pub fn finishing_name(&self) -> Option<String> {
+        lock(&self.state).finishing.clone()
     }
 
     fn system_state(&self, info: &ActiveInfo) -> SystemAudioState {
