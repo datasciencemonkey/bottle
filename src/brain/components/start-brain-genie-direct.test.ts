@@ -85,7 +85,7 @@ describe('startBrain Ask Genie goes straight to Genie One MCP (#573, ADR 0097)',
   });
   beforeEach(() => core.reset());
 
-  it('[B1] [G-47] [G-30a] [G-15b] nothing sends before the press; one press is one genie_ask with the sanitized text, and no agent call', async () => {
+  it('[B1] [G-47] [G-30a] [#573] nothing sends before the press; one press is one genie_ask with the sanitized text, and no agent call', async () => {
     hostWithStubR5();
     brain?.talkTarget.viewReady(MOG);
     await offer('What was\u200b [EMEA](https://evil.example.test) <b>revenue</b>?', 'utt-direct-1');
@@ -119,7 +119,7 @@ describe('startBrain Ask Genie goes straight to Genie One MCP (#573, ADR 0097)',
     expect(genieAsks()).toHaveLength(1);
   });
 
-  it('[G-23b] [G-15b] a failed mcp_call (R5 stub, #16) shows the fixed failure text and is not sent again', async () => {
+  it('[G-14] [#573] a failed mcp_call (R5 stub, #16) shows the fixed failure text and is not sent again', async () => {
     hostWithStubR5();
     brain?.talkTarget.viewReady(MOG);
     await offer('What were EMEA bookings last week?', 'utt-direct-2');

@@ -120,7 +120,7 @@ describe('genie direct send (#573, ADR 0097)', () => {
     ]);
   });
 
-  it('[G-23b] [G-15b] a failure shows the fixed failure text and nothing is sent again', async () => {
+  it('[G-14] [#573] a failure shows the fixed failure text and nothing is sent again', async () => {
     const r = rig({ rejectAsk: () => ({ error: 'not_implemented' }) });
     const c = fakeCard();
     const send = createGenieDirectSend({

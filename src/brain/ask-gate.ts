@@ -174,7 +174,8 @@ export function createAskGate(deps: AskGateDeps): AskGate {
     // RTR-14 ran before the offer. A text with nothing left after the sanitizer is not sent.
     const clean = sanitizeQuestion(question);
     if (clean === '') {
-      card.add({ id: blurbId, text: notSentText(question), completed: true });
+      // The removed markup is not shown again: the line says only that nothing went out.
+      card.add({ id: blurbId, text: NOT_SENT_LINE, completed: true });
       return;
     }
     const capped = capQuestion(clean);

@@ -28,7 +28,9 @@ Before this ADR, the ask gate gave the approved question to the main agent throu
    `genie_get_query_result`, `genie_cancel_response`. Bottle adds no new typed Genie IPC route.
 4. **Sanitizer and cap.** The press is the confirmation (B1, ADR 0096). In the gate, the G-47
    sanitizer (`src/brain/question-sanitizer.ts`) runs first. It removes control, zero-width and
-   bidi characters, code fences, HTML tags and comments, and markdown links (the link text stays).
+   bidi characters (every Unicode Cf and default-ignorable code point, so also the tag
+   characters and the variation selectors), code fences, HTML tags and comments, and markdown
+   links (the link text stays).
    Then the G-30a cap runs. The card shows the text that goes out. A text that is empty after the
    sanitizer is not sent, and the card shows "Not sent."
 5. **Card.** One blurb per request shows on the card of the owner MOG. At the send, it shows the
