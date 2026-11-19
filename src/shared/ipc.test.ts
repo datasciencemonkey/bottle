@@ -269,3 +269,35 @@ describe('capture events (#425, ADR 0055)', () => {
     expect(new Set(reasons).size).toBe(12);
   });
 });
+
+describe('Connect a workspace rows (#162)', () => {
+  const doc = schemaDoc as unknown as {
+    arguments: Record<string, { required?: string[]; additionalProperties?: boolean }>;
+  };
+
+  it('[W-07h] profile_login_cancel is a brain-and-hub MVP-D row that takes only the profile', () => {
+    expect(COMMANDS.profile_login_cancel).toEqual({ windows: ['brain', 'hub'], phase: 'MVP-D' });
+    expect(doc.arguments['profile_login_cancel']?.required).toEqual(['profile']);
+    expect(doc.arguments['profile_login_cancel']?.additionalProperties).toBe(false);
+    const a: CommandArgs['profile_login_cancel'] = { profile: 'bottle-x' };
+    const r: CommandReturns['profile_login_cancel'] = {};
+    expect([a, r]).toBeTruthy();
+  });
+
+  it('[W-07c] [W-07g] [W-07h] the sign-in refusal codes are content-free IPC codes', () => {
+    for (const c of [
+      'host_refused',
+      'profile_exists',
+      'login_cancelled',
+      'cli_failed',
+      'no_grant',
+      'timeout',
+      'auth_expired',
+      'non_json_reply',
+      'offline',
+    ] as const) {
+      const e: IpcError = { error: c };
+      expect(IPC_ERROR_CODES).toContain(e.error);
+    }
+  });
+});
