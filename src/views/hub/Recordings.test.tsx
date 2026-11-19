@@ -78,7 +78,7 @@ describe('Recordings area (hub)', () => {
     expect(el.textContent).toContain('No recordings yet.');
   });
 
-  it('[REC-V13] lists each recording newest first with date, length and status; failed has Retry', async () => {
+  it('[REC-V13] lists each recording newest first with date, length and status; no control inside an option', async () => {
     const { el } = await render(<Recordings active now={() => NOW} />);
     await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, list);
     const rows = [...el.querySelectorAll('[data-recording-row]')];
@@ -90,8 +90,34 @@ describe('Recordings area (hub)', () => {
     expect(rows[2]?.textContent).toContain('Done');
     expect(el.textContent).toContain('Today');
     expect(el.textContent).toContain('Yesterday');
-    await click(rows[1]?.querySelector('[data-recording-retry]'));
-    expect(emits().at(-1)).toEqual({ action: 'recordings.retry', id: 'r2' });
+    for (const row of rows) expect(row.querySelector('button, a, input')).toBeNull();
+  });
+
+  it('[REC-V13] with nothing selected, the first row is the active option of the list', async () => {
+    const { el } = await render(<Recordings active now={() => NOW} />);
+    await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, list);
+    const lb = el.querySelector('[role="listbox"]');
+    const first = el.querySelector('[data-recording-row="r3"]');
+    expect(lb?.getAttribute('aria-activedescendant')).toBe(first?.id);
+    expect(first?.hasAttribute('data-active')).toBe(true);
+    expect(first?.getAttribute('aria-selected')).toBe('false');
+  });
+
+  it('[REC-V16] Open in Databricks shows only once the audio is in the volume', async () => {
+    const { el } = await render(<Recordings active now={() => NOW} />);
+    const row = (status: string, canOpen: boolean) => ({
+      id: 'x',
+      name: 'x',
+      startedAt: NOW - 1000,
+      durationS: 60,
+      status,
+      canOpen,
+    });
+    await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, { rows: [row('uploading', false)] });
+    await click(el.querySelector('[data-recording-row="x"]'));
+    expect(el.querySelector('[data-recording-open]')).toBeNull();
+    await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, { rows: [row('transcribing', true)] });
+    expect(el.querySelector('[data-recording-open]')).not.toBeNull();
   });
 
   it('[REC-V14] a click opens the detail: safe notes, speaker turns with time stamps, Open in Databricks', async () => {

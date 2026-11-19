@@ -338,6 +338,45 @@ describe('recording wiring (brain, ADR 0103)', () => {
     expect(l?.rows[0]?.error).toBeUndefined();
   });
 
+  it('[REC-H9] a row can open in Databricks only once its audio is in the volume', async () => {
+    const t = setup();
+    t.fake.api.list.mockResolvedValue([
+      { id: 'a', name: 'a', startedAt: 6, durationS: 1, status: 'recording' },
+      { id: 'b', name: 'b', startedAt: 5, durationS: 1, status: 'uploading' },
+      { id: 'c', name: 'c', startedAt: 4, durationS: 1, status: 'transcribing' },
+      { id: 'd', name: 'd', startedAt: 3, durationS: 1, status: 'done' },
+      {
+        id: 'e',
+        name: 'e',
+        startedAt: 2,
+        durationS: 1,
+        status: 'failed',
+        errorKind: 'upload_failed',
+        errorStage: 'uploading',
+      },
+      {
+        id: 'f',
+        name: 'f',
+        startedAt: 1,
+        durationS: 1,
+        status: 'failed',
+        errorKind: 'notes_endpoint_missing',
+        errorStage: 'writing_notes',
+      },
+    ]);
+    t.click({ action: 'recordings.ready' });
+    await flush();
+    const rows = t.last<HubRecordings>(HUB_RECORDINGS_EVENT)?.rows ?? [];
+    expect(rows.map((r) => [r.id, r.canOpen])).toEqual([
+      ['a', false],
+      ['b', false],
+      ['c', true],
+      ['d', true],
+      ['e', false],
+      ['f', true],
+    ]);
+  });
+
   it('[REC-H9] a failed list read sends an empty list marked unavailable', async () => {
     const t = setup();
     t.fake.api.list.mockRejectedValue({ error: 'offline' });

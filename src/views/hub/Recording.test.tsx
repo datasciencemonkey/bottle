@@ -106,12 +106,39 @@ describe('Call recording settings (hub)', () => {
     const notice = el.querySelector('[data-recording-consent]');
     expect(notice?.textContent).toContain(RECORDING_TEXT.consent);
     expect(notice?.textContent).toContain(RECORDING_TEXT.binding.mac);
-    expect(notice?.querySelectorAll('button')).toHaveLength(1);
+    expect([...(notice?.querySelectorAll('button') ?? [])].map((b) => b.textContent)).toEqual([
+      'Got it',
+      'Not now',
+    ]);
+    // A keyboard or screen-reader user lands on the notice.
+    expect(notice?.contains(document.activeElement)).toBe(true);
     await click(notice?.querySelector('button'));
     expect(emits().slice(-2)).toEqual([
       { action: 'recording.consent_ack' },
       { action: 'recording.enable', on: true },
     ]);
+  });
+
+  it('[REC-V3] Not now closes the notice, keeps the knob off, and returns focus to the switch', async () => {
+    const { el } = await render(<RecordingSettings />);
+    await show(model());
+    await click(el.querySelector('[data-recording-knob]'));
+    const notNow = [...el.querySelectorAll('[data-recording-consent] button')].find(
+      (b) => b.textContent === 'Not now',
+    );
+    await click(notNow);
+    expect(el.querySelector('[data-recording-consent]')).toBeNull();
+    expect(emits()).not.toContainEqual({ action: 'recording.consent_ack' });
+    expect(emits()).not.toContainEqual({ action: 'recording.enable', on: true });
+    expect(document.activeElement).toBe(el.querySelector('[data-recording-knob]'));
+  });
+
+  it('[REC-V4] the length radiogroup is labelled by its visible label', async () => {
+    const { el } = await render(<RecordingSettings />);
+    await show(model());
+    const group = el.querySelector('[role="radiogroup"]');
+    const id = group?.getAttribute('aria-labelledby') ?? '';
+    expect(el.querySelector(`#${id}`)?.textContent).toBe('Stops after');
   });
 
   it('[REC-V3] after the acknowledgement the knob turns on and off with no notice', async () => {
