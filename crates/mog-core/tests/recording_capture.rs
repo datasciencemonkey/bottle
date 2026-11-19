@@ -1159,15 +1159,40 @@ fn adr_0103_the_component_routes_start_stop_state_and_the_knob() {
     let fake = Arc::new(FakeCapture::default());
     let knob = Arc::new(Mutex::new(Vec::new()));
     let k2 = Arc::clone(&knob);
+    let ctx = Arc::new(Mutex::new(Vec::new()));
     c.connect_capture(CaptureLink {
         capture: fake.clone(),
         temp_root: std::env::temp_dir().join("bottle-rec-component"),
         on_knob: Arc::new(move |on| k2.lock().unwrap().push(on)),
+        on_start: {
+            let ctx = Arc::clone(&ctx);
+            Arc::new(move |id, profile, instructions| {
+                ctx.lock().unwrap().push((
+                    id.as_str().to_owned(),
+                    profile.clone(),
+                    instructions.map(|i| i.as_str().to_owned()),
+                ))
+            })
+        },
     });
     // The stored knob reaches the host at the connect.
     assert_eq!(*knob.lock().unwrap(), vec![true]);
-    let st = c.call("recording_start", json!({})).unwrap();
+    // `profile` is required on the wire (ADR 0103 contract).
+    assert!(c.call("recording_start", json!({})).is_err());
+    let st = c
+        .call(
+            "recording_start",
+            json!({"profile": "home", "instructions": "Only action items."}),
+        )
+        .unwrap();
     assert_eq!(st["state"], json!("idle"));
+    {
+        let ctx = ctx.lock().unwrap();
+        assert_eq!(ctx.len(), 1);
+        assert!(ctx[0].0.starts_with("rec-"));
+        assert_eq!(ctx[0].1, "home");
+        assert_eq!(ctx[0].2.as_deref(), Some("Only action items."));
+    }
     c.call("recording_stop", json!({})).unwrap();
     c.call("recording_state", json!({})).unwrap();
     // The default length preset is 60 min.
@@ -1179,7 +1204,9 @@ fn adr_0103_the_component_routes_start_stop_state_and_the_knob() {
     )
     .unwrap();
     assert_eq!(*knob.lock().unwrap(), vec![true, false]);
-    let e = c.call("recording_start", json!({})).unwrap_err();
+    let e = c
+        .call("recording_start", json!({"profile": "home"}))
+        .unwrap_err();
     assert!(matches!(
         e,
         mog_core::error::CoreError::IpcRefused {
@@ -1262,4 +1289,54 @@ fn adr_0103_the_session_holds_the_mic_zero_watch_while_it_records() {
     let done = r.session.stop(StopCause::User).unwrap();
     let (_, _, _, s) = decode(&done.parts[0].path);
     assert!((s[4_000] - (0.3 * 32_767.0) as i32).abs() < 50);
+}
+
+#[test]
+fn adr_0103_the_job_context_goes_out_with_the_parts() {
+    let r = rig();
+    let info_id = "rec-ctx1";
+    r.session
+        .set_job(info_id, Some("home".into()), Some("Notes, please.".into()));
+    r.session
+        .start_in(opts("n", 60), Some(info_id.into()), None)
+        .unwrap();
+    let done = r.session.stop(StopCause::User).unwrap();
+    assert_eq!(done.profile.as_deref(), Some("home"));
+    assert_eq!(done.instructions.as_deref(), Some("Notes, please."));
+    assert_eq!(
+        r.handoff.0.lock().unwrap()[0].profile.as_deref(),
+        Some("home")
+    );
+    // A recording with no context hands off `None`s.
+    r.session.start(opts("m", 60)).unwrap();
+    let done = r.session.stop(StopCause::User).unwrap();
+    assert_eq!((done.profile, done.instructions), (None, None));
+}
+
+#[test]
+fn adr_0103_a_start_during_a_stop_is_busy() {
+    // Review note 1: a start inside the stop window must not be disarmed by the old stop.
+    let r = rig();
+    let session = Arc::clone(&r.session);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let s2 = Arc::clone(&seen);
+    let weak = Arc::downgrade(&session);
+    r.session.set_active_hook(Arc::new(move |on| {
+        if !on {
+            if let Some(s) = weak.upgrade() {
+                // The old stop is still between its take and its release.
+                s2.lock()
+                    .unwrap()
+                    .push((s.is_recording(), s.start(opts("x", 60)).err()));
+            }
+        }
+    }));
+    session.start(opts("n", 60)).unwrap();
+    session.stop(StopCause::User).unwrap();
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![(true, Some(RecordingCaptureError::Busy))]
+    );
+    assert!(!session.is_recording());
+    session.start(opts("y", 60)).unwrap();
 }

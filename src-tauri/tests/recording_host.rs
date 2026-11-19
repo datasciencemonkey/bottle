@@ -247,6 +247,8 @@ fn adr_0103_the_handoff_slot_forwards_once_the_cloud_side_connects() {
         duration_ms: 0,
         cause: StopCause::User,
         system_audio: mog_core::recording_capture::session::SystemAudioState::Ok,
+        profile: None,
+        instructions: None,
     };
     // Not connected: the parts stay in the temp dir for the launch scan ("Upload failed").
     slot.finished(rec.clone());

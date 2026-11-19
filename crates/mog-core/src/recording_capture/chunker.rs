@@ -1,9 +1,8 @@
 //! The part chunker: the mixed stream as audio parts (ADR 0103).
 //!
-//! Parts are `<name>.part01.flac`, `<name>.part02.flac`, ... in the per-recording temp dir.
-//! By default a recording is one part ([`super::PART_MAX_MINUTES`] is `None`); with a cap, a
-//! part ends exactly at the cap (a sample count, so tests can pass a small one). The encoder
-//! sits behind [`PartEncoder`]: [`PartFormat::Flac`] (default) or [`PartFormat::Wav`].
+//! By default a recording is one part, `<name>.opus`, in the per-recording temp dir ([`super::PART_MAX_MINUTES`] is `None`). With a cap, parts are
+//! `<name>.part01.<ext>`, `<name>.part02.<ext>`, ... and a part ends exactly at the cap (a sample count, so tests can pass a small one). The encoder
+//! sits behind [`PartEncoder`]: [`PartFormat::Opus`] (the default), FLAC or WAV.
 //! The dir is user-only (0700) and each part file is user-only (0600) on unix; on Windows the
 //! dir is under the user's own local app data, which only the user can read by default.
 //! A part file is created on its first sample, so a recording with no audio has no part.
@@ -176,7 +175,7 @@ pub struct PartWriter {
 }
 
 impl PartWriter {
-    /// FLAC parts of at most `max_samples` samples (at least 1; `u64::MAX` for one part)
+    /// Parts of at most `max_samples` samples (at least 1; `u64::MAX` for one part)
     /// named after `name`, in `dir`.
     pub fn new(dir: &Path, name: &str, max_samples: u64) -> io::Result<Self> {
         Self::with_format(dir, name, max_samples, PartFormat::Flac)

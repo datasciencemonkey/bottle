@@ -6,8 +6,11 @@
 //! - **One recording at a time.** A second start gets `recording_busy`.
 //! - **Capture.** The recording holds one R2 `Session` lease with the Others track
 //!   (`others_track: true`), so CaptureService is still the only owner of the mic and system
-//!   audio (CAP-01a). A PTT during a recording is an R2 overlay on that lease (R2 shares the
-//!   open mic); hands-free gives way to the recording (ARC-F9).
+//!   audio (CAP-01a). No dictation runs during a recording: the host answers `capture_start`
+//!   with `recording_in_progress` while [`RecordingSession::is_recording`] is true, so no PTT
+//!   overlay and no dictated speech reach the recording. Hands-free gives way to it (ARC-F9).
+//! - **Muting** does not end a recording: [`RecordingSession::set_active_hook`] holds the
+//!   mic's CAP-17b zero-buffer watch while it records. Only a real device loss stops it.
 //! - **Frames** reach the writer thread through the [`RecordingTap`]. The writer mixes
 //!   ([`Mixer`]) and writes the parts ([`PartWriter`], one Opus part by default) in a
 //!   user-only temp dir.
@@ -209,6 +212,17 @@ pub struct FinishedRecording {
     pub cause: StopCause,
     /// The system audio state at the stop.
     pub system_audio: SystemAudioState,
+    /// The home profile that `recording_start` named (`None` for a start without one).
+    pub profile: Option<String>,
+    /// The per-recording instructions of `recording_start` (`None`: use the preset).
+    pub instructions: Option<String>,
+}
+
+/// The job context of one recording, from `recording_start` (see [`RecordingSession::set_job`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct JobContext {
+    profile: Option<String>,
+    instructions: Option<String>,
 }
 
 /// The receiver of finished recordings (the upload pipeline of the cloud side). It must not
@@ -268,6 +282,9 @@ struct State {
     active: Option<Active>,
     /// A start is between its checks and its lease.
     starting: bool,
+    /// A stop took the recording and has not yet released the tap and the mic hold. A start
+    /// meanwhile is `recording_busy`, so it cannot be disarmed by the old stop.
+    stopping: bool,
 }
 
 /// The recording session. See the [module docs](self).
@@ -283,6 +300,8 @@ pub struct RecordingSession {
     state: Mutex<State>,
     observer: Mutex<Option<Observer>>,
     active_hook: Mutex<Option<ActiveHook>>,
+    /// The job context per recording ID, kept from `set_job` until that recording stops.
+    jobs: Mutex<std::collections::HashMap<String, JobContext>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -327,6 +346,7 @@ impl RecordingSession {
             state: Mutex::new(State::default()),
             observer: Mutex::new(None),
             active_hook: Mutex::new(None),
+            jobs: Mutex::new(std::collections::HashMap::new()),
         })
     }
 
@@ -364,7 +384,19 @@ impl RecordingSession {
     /// (`recording_in_progress`).
     pub fn is_recording(&self) -> bool {
         let st = lock(&self.state);
-        st.active.is_some() || st.starting
+        st.active.is_some() || st.starting || st.stopping
+    }
+
+    /// Keep the home profile and the instructions of the recording `id` that starts next; they
+    /// go out with its [`FinishedRecording`]. A start that fails drops them.
+    pub fn set_job(&self, id: &str, profile: Option<String>, instructions: Option<String>) {
+        lock(&self.jobs).insert(
+            id.to_owned(),
+            JobContext {
+                profile,
+                instructions,
+            },
+        );
     }
 
     /// Whether the recording knob is on.
@@ -393,12 +425,13 @@ impl RecordingSession {
         }
         {
             let mut st = lock(&self.state);
-            if st.active.is_some() || st.starting {
+            if st.active.is_some() || st.starting || st.stopping {
                 return Err(RecordingCaptureError::Busy);
             }
             st.starting = true;
         }
         self.active(true);
+        let failed_id = id.clone();
         let result = self.start_inner(opts, id, dir);
         let mut st = lock(&self.state);
         st.starting = false;
@@ -407,6 +440,9 @@ impl RecordingSession {
             Err(e) => {
                 drop(st);
                 self.active(false);
+                if let Some(id) = &failed_id {
+                    lock(&self.jobs).remove(id);
+                }
                 return Err(e);
             }
         };
@@ -491,10 +527,15 @@ impl RecordingSession {
 
     /// Stop the recording, finalize its parts and hand them off.
     pub fn stop(&self, cause: StopCause) -> Result<FinishedRecording, RecordingCaptureError> {
-        let active = lock(&self.state)
-            .active
-            .take()
-            .ok_or(RecordingCaptureError::NotRecording)?;
+        let active = {
+            let mut st = lock(&self.state);
+            let active = st
+                .active
+                .take()
+                .ok_or(RecordingCaptureError::NotRecording)?;
+            st.stopping = true;
+            active
+        };
         // The lease is gone already after a mic loss or a panic stop. The stop event of our
         // own stop finds no active recording, so it does nothing.
         if !matches!(cause, StopCause::MicLost | StopCause::Panic) {
@@ -502,6 +543,7 @@ impl RecordingSession {
         }
         self.tap.disarm();
         self.active(false);
+        lock(&self.state).stopping = false;
         let duration_ms = self.now_ms().saturating_sub(active.started_mono);
         let system_audio = self.system_state(&active.info);
         let parts = match active.writer.join() {
@@ -509,7 +551,10 @@ impl RecordingSession {
             // A write error: hand off what was finished (the open part may be cut short).
             Ok(Err(_)) | Err(_) => existing_parts(&active.dir),
         };
+        let job = lock(&self.jobs).remove(&active.info.id).unwrap_or_default();
         let rec = FinishedRecording {
+            profile: job.profile,
+            instructions: job.instructions,
             id: active.info.id,
             name: active.info.name,
             dir: active.dir,
@@ -630,13 +675,12 @@ fn existing_parts(dir: &std::path::Path) -> Vec<PartFile> {
         .flatten()
         .filter_map(|e| {
             let file_name = e.file_name().into_string().ok()?;
-            let index = file_name
-                .rsplit_once('.')?
-                .0
-                .rsplit_once(".part")?
-                .1
-                .parse()
-                .ok()?;
+            let stem = file_name.rsplit_once('.')?.0;
+            // `<name>.partNN.<ext>` with a cap, `<name>.<ext>` (one part) without.
+            let index = match stem.rsplit_once(".part") {
+                Some((_, n)) => n.parse().ok()?,
+                None => 1,
+            };
             Some(PartFile {
                 index,
                 path: e.path(),

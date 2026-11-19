@@ -194,6 +194,18 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
                     r.set_enabled(on, &*asker);
                 }
             }),
+            on_start: {
+                let session = std::sync::Arc::downgrade(recording.session());
+                std::sync::Arc::new(move |id, profile, instructions| {
+                    if let Some(s) = session.upgrade() {
+                        s.set_job(
+                            id.as_str(),
+                            Some(profile.clone()),
+                            instructions.map(|i| i.as_str().to_owned()),
+                        );
+                    }
+                })
+            },
         });
     }
     handle.manage(host);

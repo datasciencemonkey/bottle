@@ -263,7 +263,15 @@ pub struct CaptureLink {
     pub capture: Arc<dyn RecordingCapture>,
     pub temp_root: PathBuf,
     pub on_knob: Arc<dyn Fn(bool) + Send + Sync>,
+    /// Called just before each capture start with the new ID, the brain's home profile and
+    /// the per-recording instructions. The capture keeps them and hands them off with the
+    /// finished parts (PR C runs the pipeline with them).
+    pub on_start: StartContextFn,
 }
+
+/// See [`CaptureLink::on_start`].
+pub type StartContextFn =
+    Arc<dyn Fn(&RecordingId, &crate::types::ProfileName, Option<&Instructions>) + Send + Sync>;
 
 fn new_recording_id() -> RecordingId {
     let mut bytes = [0u8; 8];
