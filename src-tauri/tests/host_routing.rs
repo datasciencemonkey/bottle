@@ -18,6 +18,7 @@ use mog_core::hotkey_core::{PermissionStatus, UserAction};
 use mog_core::ipc::{events, ChannelRef, Geometry, JsonObject, PermissionKind, COMMANDS};
 use mog_core::ipc_gateway::{GatewayComponents, ERROR_CODES};
 use mog_core::keyboard_env::EnvReads;
+use mog_core::recording::{MemorySettingsStore as RecordingMemoryStore, RecordingComponent};
 use mog_core::window_host::WindowHost;
 use serde_json::{json, Value};
 use std::sync::Mutex;
@@ -352,6 +353,8 @@ fn arc_3_cap_02a_g_04a_window_ops_capture_start_and_mcp_call_run_off_the_main_th
             runs_off_main_thread(c.name),
             // `insert_text` waits about 0.4 s for the paste and the restore (#58, ADR 0048).
             c.name.starts_with("window_")
+                // ADR 0103: file IO, the device and the workspace; only the state read is inline.
+                || (c.name.starts_with("recording_") && c.name != "recording_state")
                 || matches!(
                     c.name,
                     "permission_request"
@@ -1234,6 +1237,72 @@ fn cap_22_no_managed_settings_is_host_failed() {
             err("host_failed")
         );
     }
+}
+
+// ---------- call recording (ADR 0103) ----------
+
+fn recording_call(
+    from: &str,
+    recording: Option<&dyn GatewayComponents>,
+    command: &str,
+    args: Value,
+) -> Result<Value, Value> {
+    let brain = FakeBrain::default();
+    let components = HostComponents {
+        recording,
+        ..HostComponents::none(from, &brain)
+    };
+    route(components, command, args)
+}
+
+fn recorder(settings: mog_core::types::RecordingSettings) -> RecordingComponent {
+    RecordingComponent::new(std::sync::Arc::new(RecordingMemoryStore::new(settings)))
+}
+
+#[test]
+fn cap_06_the_host_refuses_recording_start_while_the_knob_is_off() {
+    let rec = recorder(mog_core::types::RecordingSettings::default());
+    for from in ["brain", "hub"] {
+        assert_eq!(
+            recording_call(from, Some(&rec), "recording_start", json!({})),
+            err("recording_off"),
+            "{from}"
+        );
+    }
+    assert_eq!(
+        recording_call("mog-a1", Some(&rec), "recording_start", json!({})),
+        err("window_not_allowed")
+    );
+}
+
+#[test]
+fn cap_06_the_host_reads_the_default_settings_and_stubs_the_rest() {
+    let rec = recorder(mog_core::types::RecordingSettings::default());
+    let read = recording_call("hub", Some(&rec), "recording_settings_read", json!({})).unwrap();
+    assert_eq!(read["enabled"], json!(false));
+    assert_eq!(read["lengthMin"], json!(60));
+    assert_eq!(
+        recording_call("hub", Some(&rec), "recording_list", json!({})),
+        err("not_implemented")
+    );
+    // An open gate still reaches only the stub until the capture lands.
+    let on = recorder(mog_core::types::RecordingSettings {
+        enabled: true,
+        consent_ack: true,
+        ..Default::default()
+    });
+    assert_eq!(
+        recording_call("brain", Some(&on), "recording_start", json!({})),
+        err("not_implemented")
+    );
+}
+
+#[test]
+fn cap_06_no_managed_recording_component_is_host_failed() {
+    assert_eq!(
+        recording_call("hub", None, "recording_state", json!({})),
+        err("host_failed")
+    );
 }
 
 // ---------- #509 the hub-only notice for an unshown dictation (ADR 0091) ----------

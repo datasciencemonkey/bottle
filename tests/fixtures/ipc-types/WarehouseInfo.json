@@ -1,0 +1,4 @@
+[
+  { "id": "abc123def456", "name": "Shared serverless", "state": "running", "serverless": true },
+  { "id": "fed654cba321", "name": "Classic", "state": "stopped", "serverless": false }
+]
