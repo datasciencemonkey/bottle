@@ -69,19 +69,22 @@ impl RecordingCloudHost {
 }
 
 /// The temp audio folder under the app data dir (not the cache dir, so the OS does not purge a
-/// recording that waits for Retry): `<app data>/recordings/<name>/<name>.opus`.
+/// recording that waits for Retry): `<app data>/recordings/<id>/<name>.opus`.
 pub const TEMP_DIR: &str = "recordings";
 
-/// The local temp audio files of recording `name` still on the device, in part order.
+/// The local temp audio files of recording `name` still on the device, in part order. PR B
+/// keeps each recording in `<root>/<id>/`, so every folder of `root` is searched.
 pub fn temp_parts_of(root: Option<&std::path::Path>, name: &str) -> Vec<LocalPart> {
-    let Some(dir) = root.map(|r| r.join(name)) else {
+    let Some(root) = root else {
         return Vec::new();
     };
-    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(root)
         .into_iter()
         .flatten()
         .flatten()
         .map(|e| e.path())
+        .filter(|d| d.is_dir())
+        .flat_map(|d| std::fs::read_dir(d).into_iter().flatten().flatten().map(|e| e.path()))
         .filter(|p| {
             p.file_name()
                 .and_then(|f| f.to_str())
