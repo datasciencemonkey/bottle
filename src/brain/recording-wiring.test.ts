@@ -464,7 +464,7 @@ describe('ipcRecordingApi: the typed recording_* contract (ADR 0103)', () => {
         ? contractSettings
         : {},
     );
-    const api = ipcRecordingApi(new BrainBus());
+    const api = ipcRecordingApi(new BrainBus(), async () => 'work');
     const s = await api.readSettings();
     expect(s).toEqual({
       enabled: true,
@@ -520,7 +520,7 @@ describe('ipcRecordingApi: the typed recording_* contract (ADR 0103)', () => {
           return {};
       }
     });
-    const api = ipcRecordingApi(new BrainBus());
+    const api = ipcRecordingApi(new BrainBus(), async () => 'work');
     expect(await api.state()).toEqual({
       phase: 'recording',
       startedAtMs: 1,
@@ -538,20 +538,45 @@ describe('ipcRecordingApi: the typed recording_* contract (ADR 0103)', () => {
     });
     expect(await api.probeStorage()).toEqual({ myFiles: null });
     await api.start();
-    expect(core.invoke).toHaveBeenLastCalledWith('recording_start', { args: {} });
+    expect(core.invoke).toHaveBeenLastCalledWith('recording_start', {
+      args: { profile: 'work' },
+    });
     await api.start('Only decisions.');
     expect(core.invoke).toHaveBeenLastCalledWith('recording_start', {
-      args: { instructions: 'Only decisions.' },
+      args: { profile: 'work', instructions: 'Only decisions.' },
     });
     await api.open('a');
     expect(core.invoke).toHaveBeenLastCalledWith('recording_open', {
-      args: { id: 'a', target: 'folder' },
+      args: { profile: 'work', id: 'a', target: 'folder' },
     });
+    await api.retry('a');
+    expect(core.invoke).toHaveBeenLastCalledWith('recording_retry', {
+      args: { profile: 'work', id: 'a' },
+    });
+    await api.createVolume('main', 'team');
+    expect(core.invoke).toHaveBeenLastCalledWith('recording_volume_create', {
+      args: { profile: 'work', catalog: 'main', schema: 'team' },
+    });
+    const calls = core.invoke.mock.calls.map(([c, a]) => [c, (a as { args: object }).args]);
+    for (const cmd of ['recording_storage_probe', 'recording_list', 'recording_detail'])
+      expect(calls.find(([c]) => c === cmd)?.[1]).toMatchObject({ profile: 'work' });
+    for (const cmd of ['recording_state', 'recording_stop'])
+      expect(calls.find(([c]) => c === cmd)?.[1] ?? {}).not.toHaveProperty('profile');
+  });
+
+  it('[REC-H13] with no home profile, no cloud-bound command goes out and the user sees why', async () => {
+    const api = ipcRecordingApi(new BrainBus(), async () => undefined);
+    await expect(api.start()).rejects.toEqual({ error: 'no_profile' });
+    await expect(api.list()).rejects.toEqual({ error: 'no_profile' });
+    expect(core.invoke).not.toHaveBeenCalled();
+    expect(RECORDING_ERRORS.no_profile.text).toBe(
+      'Set a home profile on a MOG first, then try again.',
+    );
   });
 
   it('[REC-H13] relays recording.state and recording.job from the bus; the record key is #594s', () => {
     const bus = new BrainBus();
-    const api = ipcRecordingApi(bus);
+    const api = ipcRecordingApi(bus, async () => 'work');
     const states: unknown[] = [];
     const jobs: unknown[] = [];
     api.onState((s) => states.push(s));
