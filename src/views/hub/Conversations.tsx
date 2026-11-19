@@ -8,6 +8,9 @@
  *   renderer (SEC-25a), and the key numbers.
  * - `hub:conversations.open` (a double-click on the MOG or the card) shows the area and selects
  *   that exchange, also when it comes before the list.
+ * - #145: a thread is every exchange that shares one Genie `conversationId`. The list shows one
+ *   entry per thread (its latest exchange); the detail shows the whole thread, oldest first,
+ *   then the optional reply composer (`composer`), the hub→brain seam for a follow-up question.
  */
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -19,6 +22,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
+  type ReactNode,
 } from 'react';
 import {
   asConversationsOpen,
@@ -26,8 +30,10 @@ import {
   CONVERSATIONS_VIEW_ID,
   HUB_CONVERSATIONS_EVENT,
   HUB_CONVERSATIONS_OPEN_EVENT,
+  threadOf,
   type ConversationRow,
   type HubConversations,
+  type ThreadComposerThread,
 } from '../../shared/hub-conversations';
 import { SafeMarkdown } from '../card/safe-markdown';
 import { emitView } from '../view-ipc';
@@ -85,6 +91,23 @@ function groupByDay(rows: ConversationRow[], now: number): DayGroup[] {
     const last = out.at(-1);
     if (last && last.label === label) last.rows.push(r);
     else out.push({ label, rows: [r] });
+  }
+  return out;
+}
+
+/**
+ * `all` (newest first), collapsed to its latest exchange of each thread (#145): one list entry
+ * per Genie `conversationId`, in the order its newest exchange comes in `all`. A row with no
+ * `conversationId` is its own thread, so it never merges with an unrelated blank one.
+ */
+function threadsNewestFirst(all: ConversationRow[]): ConversationRow[] {
+  const seen = new Set<string>();
+  const out: ConversationRow[] = [];
+  for (const r of all) {
+    const key = r.conversationId === '' ? `request:${r.requestId}` : r.conversationId;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(r);
   }
   return out;
 }
@@ -152,27 +175,16 @@ function KeyNumbers({ items }: { items: ConversationRow['keyNumbers'] }) {
   );
 }
 
-function Detail({
-  row,
-  focusRef,
-}: {
-  row: ConversationRow;
-  focusRef: React.RefObject<HTMLElement | null>;
-}) {
+/** One exchange of a thread: its question, meta line, answer and key numbers (#145). */
+function Exchange({ row, headingId }: { row: ConversationRow; headingId?: string | undefined }) {
   const failed = row.status === 'failed';
   const trust = useMemo(
     () => ({ profileHost: row.workspaceHost, allowedAppUrls: [] as string[] }),
     [row.workspaceHost],
   );
   return (
-    <article
-      ref={focusRef}
-      className="conv-detail"
-      data-conversation-detail
-      tabIndex={-1}
-      aria-labelledby={`conv-q-${row.requestId}`}
-    >
-      <h2 id={`conv-q-${row.requestId}`} className="conv-question">
+    <div className="conv-exchange" data-exchange={row.requestId}>
+      <h2 id={headingId} className="conv-question">
         {row.question || 'Question not saved'}
       </h2>
       {/* The parts never break inside; the dot between them is drawn in CSS. */}
@@ -209,6 +221,51 @@ function Detail({
         </p>
       )}
       <KeyNumbers items={row.keyNumbers} />
+    </div>
+  );
+}
+
+/**
+ * The thread detail (#145, #103): every exchange that shares one Genie `conversationId`, oldest
+ * first (question, answer, question, answer), then the reply composer when the thread has a
+ * conversation to continue (a row saved before #584 has none, and gets no composer).
+ */
+function Detail({
+  thread,
+  focusRef,
+  composer,
+}: {
+  thread: ConversationRow[];
+  focusRef: React.RefObject<HTMLElement | null>;
+  composer?: ((thread: ThreadComposerThread) => ReactNode) | undefined;
+}) {
+  const first = thread[0];
+  const latest = thread.at(-1);
+  if (!first || !latest) return null;
+  return (
+    <article
+      ref={focusRef}
+      className="conv-detail"
+      data-conversation-detail
+      tabIndex={-1}
+      aria-labelledby={`conv-q-${first.requestId}`}
+    >
+      {thread.map((row) => (
+        <Exchange
+          key={row.requestId}
+          row={row}
+          headingId={row === first ? `conv-q-${first.requestId}` : undefined}
+        />
+      ))}
+      {composer && latest.conversationId !== '' && (
+        <div data-slot="thread-composer">
+          {composer({
+            conversationId: latest.conversationId,
+            exchangeId: latest.requestId,
+            profile: latest.profile,
+          })}
+        </div>
+      )}
     </article>
   );
 }
@@ -226,10 +283,13 @@ export function Conversations({
   active,
   onOpen,
   now = Date.now,
+  composer,
 }: {
   active: boolean;
   onOpen: () => void;
   now?: () => number;
+  /** #145: the reply composer of the selected thread's detail, or no composer at all. */
+  composer?: (thread: ThreadComposerThread) => ReactNode;
 }) {
   const { list, selectedId, setSelectedId } = useConversations(onOpen);
   const listRef = useRef<HTMLDivElement>(null);
@@ -245,8 +305,14 @@ export function Conversations({
     shown.current = active;
   }, [active]);
 
-  const rows = useMemo(() => list?.rows ?? [], [list]);
-  const selected = rows.find((r) => r.requestId === selectedId) ?? rows[0];
+  const allRows = useMemo(() => list?.rows ?? [], [list]);
+  // #145: the list shows one entry per thread (its latest exchange); the detail shows them all.
+  const entries = useMemo(() => threadsNewestFirst(allRows), [allRows]);
+  const selected = entries.find((r) => r.requestId === selectedId) ?? entries[0];
+  const selectedThread = useMemo(
+    () => (selected ? threadOf(allRows, selected) : undefined),
+    [allRows, selected],
+  );
 
   const select = useCallback(
     (r: ConversationRow | undefined) => {
@@ -265,17 +331,17 @@ export function Conversations({
   }, [selected]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (rows.length === 0) return;
-    const i = selected ? rows.indexOf(selected) : 0;
+    if (entries.length === 0) return;
+    const i = selected ? entries.indexOf(selected) : 0;
     const to: Record<string, number> = {
-      ArrowDown: Math.min(i + 1, rows.length - 1),
+      ArrowDown: Math.min(i + 1, entries.length - 1),
       ArrowUp: Math.max(i - 1, 0),
       Home: 0,
-      End: rows.length - 1,
+      End: entries.length - 1,
     };
     if (e.key in to) {
       e.preventDefault();
-      select(rows[to[e.key] as number]);
+      select(entries[to[e.key] as number]);
     } else if (e.key === 'Enter') {
       e.preventDefault();
       detailRef.current?.focus();
@@ -283,19 +349,19 @@ export function Conversations({
   };
 
   // Read the clock on each render, so "Today" moves on after midnight.
-  const groups = groupByDay(rows, now());
+  const groups = groupByDay(entries, now());
 
   let body;
   if (list === null) {
     body = <div className="conv-message" aria-busy="true" />;
-  } else if (list.unavailable && rows.length === 0) {
+  } else if (list.unavailable && entries.length === 0) {
     body = (
       <Message
         title="Bottle cannot read your saved conversations right now."
         line="Your history is still on this device. Try again in a moment."
       />
     );
-  } else if (rows.length === 0) {
+  } else if (entries.length === 0) {
     body = (
       <Message title="No conversations yet." line="Hold Right Option and tap G to ask Genie." />
     );
@@ -348,7 +414,14 @@ export function Conversations({
             </div>
           ))}
         </div>
-        {selected && <Detail key={selected.requestId} row={selected} focusRef={detailRef} />}
+        {selectedThread && (
+          <Detail
+            key={selected?.requestId}
+            thread={selectedThread}
+            focusRef={detailRef}
+            composer={composer}
+          />
+        )}
       </div>
     );
   }

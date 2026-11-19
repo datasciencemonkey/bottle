@@ -29,6 +29,7 @@ function row(n: number, askedAt: number, over: Partial<ConversationRow> = {}): C
     profile: 'fake-west',
     workspaceHost: HOST,
     status: 'answered',
+    conversationId: '',
     ...over,
   };
 }
@@ -58,8 +59,14 @@ const key = async (target: HTMLElement, k: string) =>
     target.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true }));
   });
 
-async function mount(active = true, onOpen = vi.fn()) {
-  const r = await render(<Conversations active={active} onOpen={onOpen} now={() => NOW} />);
+async function mount(
+  active = true,
+  onOpen = vi.fn(),
+  composer?: (thread: { conversationId: string; exchangeId: string; profile: string }) => unknown,
+) {
+  const r = await render(
+    <Conversations active={active} onOpen={onOpen} now={() => NOW} composer={composer as never} />,
+  );
   return { ...r, onOpen };
 }
 
@@ -245,5 +252,68 @@ describe('hub Conversations (#103)', () => {
     await tauri.emitTo('hub', 'hub:conversations.open', { requestId: 7 });
     expect(options(el)).toHaveLength(3);
     expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  describe('threads (#145)', () => {
+    const CONV = 'conv-shared-1';
+
+    it('[#145] groups exchanges that share a conversationId into one list entry and one thread', async () => {
+      const { el } = await mount();
+      const thread = [
+        row(11, at(19, 9, 0), { question: 'What tables can you see?', conversationId: CONV }),
+        row(12, at(19, 9, 5), {
+          question: 'How many are there?',
+          answerMd: '**152** catalogs.',
+          conversationId: CONV,
+        }),
+      ];
+      await tauri.emitTo('hub', 'hub:conversations', { rows: [thread[1], thread[0], ...rows] });
+      // One list entry for the whole thread, keyed on its latest exchange.
+      expect(options(el).map((o) => o.getAttribute('data-request'))).toEqual([
+        thread[1]?.requestId,
+        ...rows.map((r) => r.requestId),
+      ]);
+      // The detail shows every exchange of the thread, oldest first.
+      const d = detail(el);
+      const exchanges = [...d.querySelectorAll('[data-exchange]')];
+      expect(exchanges.map((x) => x.getAttribute('data-exchange'))).toEqual([
+        thread[0]?.requestId,
+        thread[1]?.requestId,
+      ]);
+      expect(exchanges[0]?.textContent).toContain('What tables can you see?');
+      expect(exchanges[1]?.textContent).toContain('How many are there?');
+      expect(exchanges[1]?.textContent).toContain('152');
+    });
+
+    it('[#145] renders the composer below the thread, with its conversationId, exchangeId and profile', async () => {
+      const spy = vi.fn(() => <div data-testid="fake-composer" />);
+      const { el } = await mount(true, vi.fn(), spy);
+      await tauri.emitTo('hub', 'hub:conversations', {
+        rows: [row(20, at(19, 9, 0), { conversationId: CONV, profile: 'fake-west' })],
+      });
+      expect(spy).toHaveBeenCalledWith({
+        conversationId: CONV,
+        exchangeId: row(20, at(19, 9, 0)).requestId,
+        profile: 'fake-west',
+      });
+      const slot = detail(el).querySelector('[data-slot="thread-composer"]');
+      expect(slot?.querySelector('[data-testid="fake-composer"]')).not.toBeNull();
+    });
+
+    it('[#145] no composer for a thread with no conversationId (saved before #584)', async () => {
+      const spy = vi.fn(() => <div data-testid="fake-composer" />);
+      const { el } = await mount(true, vi.fn(), spy);
+      await tauri.emitTo('hub', 'hub:conversations', { rows });
+      expect(spy).not.toHaveBeenCalled();
+      expect(detail(el).querySelector('[data-slot="thread-composer"]')).toBeNull();
+    });
+
+    it('[#145] with no composer prop at all, the view renders as it did before (#103)', async () => {
+      const { el } = await mount();
+      await tauri.emitTo('hub', 'hub:conversations', {
+        rows: [row(21, at(19, 9, 0), { conversationId: CONV })],
+      });
+      expect(detail(el).querySelector('[data-slot="thread-composer"]')).toBeNull();
+    });
   });
 });

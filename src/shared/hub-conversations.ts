@@ -6,6 +6,11 @@
  * statement (ARC-2): it renders what the brain sends and asks again with `conversations.ready`.
  * This file holds names and shape checks only, no state. It is not a contract file, like
  * `hub-mogs.ts`. TODO(#407): the event names move into `src/shared/ipc.ts` with the hub events.
+ *
+ * A thread (genie-followup, #145, #103) is every exchange that shares one Genie
+ * `conversationId`: the reply composer at the bottom of the thread detail (`ThreadComposer.tsx`)
+ * sends a follow-up question with that same id, on the same profile, so Genie keeps the context.
+ * A row saved before #584 has no `conversationId` and is its own one-exchange thread.
  */
 
 /** The brain-to-hub event that carries the list. */
@@ -48,6 +53,8 @@ export interface ConversationRow {
   profile: string;
   workspaceHost: string;
   status: 'answered' | 'failed';
+  /** The Genie `conversation_id` of this exchange; `''` when the row was saved before #584. */
+  conversationId: string;
 }
 
 /** What the hub shows. `unavailable` is true when the brain could not read the store. */
@@ -63,6 +70,68 @@ export interface HubConversations {
 export type ConversationsAction =
   { action: 'conversations.ready' } | { action: 'conversations.opened' };
 
+/** One thread: every exchange that shares one Genie `conversationId`, oldest first. */
+export interface ConversationThread {
+  conversationId: string;
+  profile: string;
+  rows: ConversationRow[];
+}
+
+/**
+ * The reply composer's argument (genie-followup, `ThreadComposer.tsx`): the thread's live
+ * conversation and workspace. `exchangeId` is the thread's latest exchange.
+ */
+export interface ThreadComposerThread {
+  conversationId: string;
+  exchangeId: string;
+  profile: string;
+}
+
+/**
+ * The exchanges of `row`'s thread, oldest first: every row of `all` that shares its
+ * `conversationId`. A row with no `conversationId` (`''`) is its own thread of one, so rows
+ * saved before #584 never merge with an unrelated one just because both are blank.
+ */
+export function threadOf(all: readonly ConversationRow[], row: ConversationRow): ConversationRow[] {
+  const mine =
+    row.conversationId === '' ? [row] : all.filter((r) => r.conversationId === row.conversationId);
+  return [...mine].sort((a, b) => a.askedAt - b.askedAt || (a.requestId < b.requestId ? -1 : 1));
+}
+
+/**
+ * The composer's Send sends `question` to `conversationId` on `profile` (genie-followup). The
+ * hub asks on the same workspace the thread is already in; Bottle never picks a different one.
+ */
+export interface ThreadSendAction {
+  action: 'thread.send';
+  conversationId: string;
+  profile: string;
+  question: string;
+}
+
+/**
+ * `thread.active`: the hub window is focused on this thread, so a ⌥G press is a follow-up in it
+ * (genie-followup, item 4) instead of a new question on the home workspace. `thread.inactive`
+ * clears it: the hub lost focus, or the thread is no longer shown.
+ */
+export type ThreadFocusAction =
+  | { action: 'thread.active'; conversationId: string; profile: string }
+  | { action: 'thread.inactive' };
+
+/** The brain-to-hub event with the live status of a sent follow-up (ASKING_GENIE, a stage, or
+ * the terminal outcome): the composer shows it while the answer is not in the list yet. */
+export const HUB_THREAD_STATUS_EVENT = 'hub:thread.status';
+
+export type ThreadPhase = 'working' | 'answered' | 'failed' | 'cancelled';
+
+/** The composer shows `text` under the input until a later status replaces or clears it. */
+export interface ThreadStatus {
+  conversationId: string;
+  requestId: string;
+  phase: ThreadPhase;
+  text: string;
+}
+
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
 const isStr = (v: unknown): v is string => typeof v === 'string';
 
@@ -71,6 +140,38 @@ export function asConversationsAction(p: unknown): ConversationsAction | undefin
   if (!isObj(p)) return undefined;
   const a = p['action'];
   return a === 'conversations.ready' || a === 'conversations.opened' ? { action: a } : undefined;
+}
+
+/** Shape check of the composer's `thread.send`. A blank id, profile or question is refused. */
+export function asThreadSendAction(p: unknown): ThreadSendAction | undefined {
+  if (!isObj(p) || p['action'] !== 'thread.send') return undefined;
+  const { conversationId, profile, question } = p;
+  if (!isStr(conversationId) || conversationId === '') return undefined;
+  if (!isStr(profile) || profile === '') return undefined;
+  if (!isStr(question) || question.trim() === '') return undefined;
+  return { action: 'thread.send', conversationId, profile, question };
+}
+
+/** Shape check of `thread.active` / `thread.inactive`. */
+export function asThreadFocusAction(p: unknown): ThreadFocusAction | undefined {
+  if (!isObj(p)) return undefined;
+  if (p['action'] === 'thread.inactive') return { action: 'thread.inactive' };
+  if (p['action'] !== 'thread.active') return undefined;
+  const { conversationId, profile } = p;
+  if (!isStr(conversationId) || conversationId === '') return undefined;
+  if (!isStr(profile) || profile === '') return undefined;
+  return { action: 'thread.active', conversationId, profile };
+}
+
+const PHASES: readonly ThreadPhase[] = ['working', 'answered', 'failed', 'cancelled'];
+
+/** Shape check of a `hub:thread.status` payload. */
+export function asThreadStatus(p: unknown): ThreadStatus | undefined {
+  if (!isObj(p)) return undefined;
+  const { conversationId, requestId, phase, text } = p;
+  if (!isStr(conversationId) || !isStr(requestId) || !isStr(text)) return undefined;
+  if (!PHASES.includes(phase as ThreadPhase)) return undefined;
+  return { conversationId, requestId, phase: phase as ThreadPhase, text };
 }
 
 function isKeyNumber(v: unknown): v is ConversationKeyNumber {
@@ -91,7 +192,8 @@ function isRow(v: unknown): v is ConversationRow {
     Number.isFinite(v['askedAt']) &&
     isStr(v['profile']) &&
     isStr(v['workspaceHost']) &&
-    (v['status'] === 'answered' || v['status'] === 'failed')
+    (v['status'] === 'answered' || v['status'] === 'failed') &&
+    isStr(v['conversationId'])
   );
 }
 

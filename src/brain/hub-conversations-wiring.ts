@@ -48,6 +48,12 @@ export interface HubConversationsWiring {
   refresh(): Promise<void>;
   /** Open Conversations, with this exchange selected when given. Never rejects. */
   openConversations(requestId?: string): Promise<void>;
+  /**
+   * The `mogId` that owns a thread's `conversationId` (genie-followup, #145): a follow-up keeps
+   * the MOG that asked the first question, because a conversation stays in its workspace.
+   * `undefined` for a blank id or one no stored exchange carries. Never rejects.
+   */
+  findMogId(conversationId: string): Promise<string | undefined>;
   dispose(): void;
 }
 
@@ -99,6 +105,7 @@ function rowOf(r: unknown, mog: ConversationMog): ConversationRow | undefined {
     profile: str(o['profileName']),
     workspaceHost: str(o['workspaceHost']),
     status: o['status'] === 'completed' ? 'answered' : 'failed',
+    conversationId: str(o['conversationId']),
   };
 }
 
@@ -163,6 +170,15 @@ export function wireHubConversations(
         await deps.sendOpen(open);
       } catch {
         // No hub is open yet: the held selection goes when the hub asks.
+      }
+    },
+    async findMogId(conversationId) {
+      if (conversationId === '') return undefined;
+      try {
+        const { rows } = await readConversations(deps);
+        return rows.find((r) => r.conversationId === conversationId)?.mogId;
+      } catch {
+        return undefined;
       }
     },
     dispose: off,

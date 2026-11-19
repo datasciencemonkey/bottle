@@ -24,7 +24,13 @@ import { MogList } from './MogList';
 import { PermissionNotices } from './PermissionNotices';
 import { SttSetupStep } from './SttSetupStep';
 import { StoreNotice } from './StoreNotice';
+import { ThreadComposer } from './ThreadComposer';
 import { WipeSettings } from './WipeSettings';
+
+/** #145: the reply composer of a thread's detail, the genie-followup hub→brain seam. */
+const threadComposer = (thread: Parameters<typeof ThreadComposer>[0]['thread']) => (
+  <ThreadComposer thread={thread} />
+);
 
 /**
  * The product name and the Labs label (MB-10a, MB-10b); the title bar shows the label too. Both
@@ -99,7 +105,11 @@ export function Hub() {
       <HubHeader />
       <StoreNotice />
       <HubNav view={view} onView={setView} />
-      <Conversations active={view === 'conversations'} onOpen={showConversations} />
+      <Conversations
+        active={view === 'conversations'}
+        onOpen={showConversations}
+        composer={threadComposer}
+      />
       <div data-hub-view="home" hidden={view !== 'home'}>
         {/* ADR 0101 (CAP-36, CAP-37): a missing OS permission shows first; without Input
             Monitoring the talk key does nothing. */}

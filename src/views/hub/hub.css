@@ -961,6 +961,47 @@ body {
   font-size: var(--mog-text-xs);
 }
 
+/* #145: the second and later exchange of a thread gets a divider from the one before it. */
+.conv-exchange + .conv-exchange {
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: 1px solid var(--mog-edge);
+}
+
+/* #145: the reply composer at the bottom of a thread's detail. */
+.thread-composer {
+  max-width: 68ch;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--mog-edge);
+}
+
+.thread-composer-status {
+  margin: 0 0 8px;
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.thread-composer-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.thread-composer-field {
+  flex: 1;
+  min-height: 36px;
+  max-height: 120px;
+  resize: none;
+}
+
+.thread-composer-hint {
+  margin: 8px 0 0;
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-xs);
+}
+
 /* Empty, unavailable and loading: centred in the area, two quiet lines. */
 .conv-message {
   display: flex;

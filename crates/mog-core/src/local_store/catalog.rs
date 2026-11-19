@@ -258,12 +258,15 @@ const EXCHANGE_GET: Stmt = Stmt {
 
 /// The newest exchanges of one MOG, newest first, for the hub Conversations list (#103). It is a
 /// read only, like `mem.exchange.get`, and it never lists a forgotten (soft-deleted) row. The
-/// brain reads it and sends the rows to the hub; the hub view never runs it.
+/// brain reads it and sends the rows to the hub; the hub view never runs it. `conversationId`
+/// (genie-followup, #145) lets the hub group exchanges into threads and send a follow-up on the
+/// same Genie conversation.
 const EXCHANGE_RECENT: Stmt = Stmt {
     id: "mem.exchange.recent",
     sql: "SELECT request_id AS requestId, status, profile_name AS profileName, \
           workspace_host AS workspaceHost, question_user AS questionUser, \
           key_numbers AS keyNumbers, final_answer_md AS finalAnswerMd, \
+          conversation_id AS conversationId, \
           asked_at AS askedAt, completed_at AS completedAt \
           FROM genie_exchange \
           WHERE mog_id = :mogId AND deleted_at IS NULL \

@@ -36,8 +36,11 @@ import { cardStackDeps, createCardStack, timeoutScheduler, type CardStack } from
 import { createSystemClock } from '../clock';
 import { createDictationSink } from '../dictation-copy';
 import { genieBlurbId } from '../../shared/genie-status';
+import { HUB_THREAD_STATUS_EVENT, type ThreadStatus } from '../../shared/hub-conversations';
 import { createGenieDirectSend } from '../genie-direct';
+import { createGenieFollowup } from '../genie-followup';
 import { wireGenieCard } from '../genie-card-wiring';
+import { createThreadFocus, wireThreadFollowup } from '../thread-focus';
 import { showHub } from '../hub-window';
 import { asPttEvent } from '../ptt';
 import { emitTo } from '@tauri-apps/api/event';
@@ -153,6 +156,24 @@ export function startBrain(): Brain {
       send: sendHubConversations,
       sendOpen: sendHubConversationsOpen,
     });
+    // #40 (AT-09): one local-history writer, shared by a direct ask and a thread follow-up, so
+    // each saved exchange refreshes the hub Conversations list the same way.
+    const recordGenieExchange = ipcGenieHistory(components.T10, () => void conversations.refresh());
+    // genie-followup (#145, #103): a follow-up from the thread composer or from a ⌥G press while
+    // the hub is focused on a thread (item 4, wired below with `insertionOn`/`onAsk`). It never
+    // touches a MOG card: the status goes to the hub, and the MOG that owns the thread comes
+    // from the stored exchanges, because the composer itself never carries a `mogId`.
+    const threadFocus = createThreadFocus();
+    const followup = createGenieFollowup({
+      genie: components.T8,
+      findMogId: (conversationId) => conversations.findMogId(conversationId),
+      sendStatus: (status: ThreadStatus) => {
+        void emitTo('hub', HUB_THREAD_STATUS_EVENT, status).catch(() => undefined);
+      },
+      onEnd: recordGenieExchange,
+      newOpId: () => crypto.randomUUID(),
+    });
+    wireThreadFollowup(bus, { focus: threadFocus, followup });
     // #123 (MEM-32a, MEM-32c, MEM-32d): the hub Forget dialog runs Forget on T10 on a user click.
     // TODO(#163): pass `home` (the home host and workspace id from T7) for the memory review link.
     if (isForgetMemory(components.T10)) {
@@ -241,7 +262,7 @@ export function startBrain(): Brain {
         cardFor: stackFor,
         newOpId: () => crypto.randomUUID(),
         // #40 (AT-09): each request that ends saves one local exchange row through T10.
-        onEnd: ipcGenieHistory(components.T10, () => void conversations.refresh()),
+        onEnd: recordGenieExchange,
         // #573: the MOG shows the work (processing), then the answer (answering, success) or
         // the failure (error); the card shows next to the MOG when the outcome is on it.
         onPhase: (mogId, phase, opId) => {
@@ -364,7 +385,24 @@ export function startBrain(): Brain {
         route,
         // #142: T3 sends an ⌥G ask or shows the chip, and it releases the owner.
         // ADR 0098: with no ⌥G the utterance is dictated and gets the fallback chip.
-        onAsk: (r, owned) => askGate.onAsk(r, owned),
+        // genie-followup (#145, item 4): while the hub window is focused on a thread, a ⌥G
+        // press is a follow-up in it instead, with no card and no home-profile guess. A chip
+        // (no ⌥G) and an injection-suspected ask are never affected: only a clean ⌥G is.
+        onAsk: (r, owned) => {
+          if (r.route === 'ask' && !r.decision.injection_suspected) {
+            const thread = threadFocus.active();
+            if (thread) {
+              owner.release(owned.utteranceId);
+              void followup.send({
+                conversationId: thread.conversationId,
+                profile: thread.profile,
+                question: r.question,
+              });
+              return;
+            }
+          }
+          askGate.onAsk(r, owned);
+        },
         // #498, MOG-05b, MOG-06d: a Copy or a failed insertion reaches the Copy card.
         onDone: (r, owned) => void dictation.onDone(r, owned).catch(() => undefined),
       }),

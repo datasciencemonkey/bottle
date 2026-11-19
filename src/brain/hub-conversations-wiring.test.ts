@@ -32,6 +32,7 @@ function dbRow(n: number, askedAt: number, over: Row = {}): Row {
     questionUser: `Question ${n}?`,
     keyNumbers: JSON.stringify([{ text: '4.2 %', label: 'growth' }, { text: '$1.3M' }]),
     finalAnswerMd: `**Answer** ${n}`,
+    conversationId: `conv-${n}`,
     askedAt,
     completedAt: askedAt + 5_000,
     ...over,
@@ -92,12 +93,14 @@ describe('readConversations (#103)', () => {
       profile: 'test-profile',
       workspaceHost: 'example.cloud.databricks.com',
       status: 'answered',
+      conversationId: 'conv-3',
     });
     expect(list.rows[1]).toMatchObject({
       mogName: 'Ops',
       status: 'failed',
       answerMd: '',
       keyNumbers: [],
+      conversationId: 'conv-2',
     });
     // The payload passes the view's own shape check.
     expect(asHubConversations(list)).toEqual(list);
@@ -127,6 +130,14 @@ describe('readConversations (#103)', () => {
     expect(list.rows[0]).toMatchObject({ requestId: req(1), keyNumbers: [] });
     expect(list.rows[1]).toMatchObject({ requestId: req(2), keyNumbers: [{ text: 'ok' }] });
     expect(list.rows.some((r) => r.requestId === req(3))).toBe(false);
+  });
+
+  it('[#145] a row saved before #584 has no conversationId column: it reads as the empty string', async () => {
+    const { store } = fakeStore({
+      [MOG_A]: [dbRow(1, T0, { conversationId: null })],
+    });
+    const list = await readConversations({ store, mogs });
+    expect(list.rows[0]).toMatchObject({ conversationId: '' });
   });
 
   it('[#103] a store that fails gives an empty list marked unavailable, with no error text', async () => {
@@ -233,6 +244,34 @@ describe('wireHubConversations (#103)', () => {
     await vi.waitFor(() => expect(lists).toHaveLength(1));
     await Promise.resolve();
     expect(opens).toEqual([{ requestId: req(1) }]);
+  });
+
+  it('[#145] findMogId finds the MOG of a thread from its conversationId, across every MOG', async () => {
+    const { store } = fakeStore({
+      [MOG_A]: [dbRow(1, T0, { conversationId: 'conv-x' })],
+      [MOG_B]: [dbRow(2, T0, { conversationId: 'conv-y' })],
+    });
+    const w = wireHubConversations(bus, {
+      store,
+      mogs,
+      send: async () => undefined,
+      sendOpen: async () => undefined,
+    });
+    await expect(w.findMogId('conv-y')).resolves.toBe(MOG_B);
+    await expect(w.findMogId('conv-does-not-exist')).resolves.toBeUndefined();
+  });
+
+  it('[#145] a blank conversationId never matches (rows saved before #584 would collide)', async () => {
+    const { store } = fakeStore({
+      [MOG_A]: [dbRow(1, T0, { conversationId: null })],
+    });
+    const w = wireHubConversations(bus, {
+      store,
+      mogs,
+      send: async () => undefined,
+      sendOpen: async () => undefined,
+    });
+    await expect(w.findMogId('')).resolves.toBeUndefined();
   });
 
   it('[#103] dispose stops the hub input', async () => {

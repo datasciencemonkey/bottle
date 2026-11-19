@@ -427,3 +427,30 @@ fn hub_103_exchange_recent_lists_newest_first_inside_one_mog() {
     assert_eq!(st.access, Access::Brain);
     assert_eq!(st.kind, super::catalog::Kind::Query);
 }
+
+/// #(genie-followup): the hub thread view groups exchanges by `conversationId`, so the recent
+/// list must carry it. A follow-up (#584, ADR 0097) keeps the same id across exchanges.
+#[test]
+fn genie_followup_exchange_recent_carries_the_conversation_id() {
+    let t = TempDir::new("followup-recent");
+    let s = open(&t);
+    const EXCH_3: &str = "31111111-2222-4333-8444-555555555504";
+    const REQ_3: &str = "41111111-2222-4333-8444-555555555504";
+    exec(&s, "mem.exchange.upsert", home(EXCH_1, REQ_1, T0));
+    let mut followup = home(EXCH_3, REQ_3, T0 + 1_000);
+    followup["requestId"] = json!(REQ_3);
+    followup["exchangeId"] = json!(EXCH_3);
+    // Same conversation id as EXCH_1 (`home()` always uses "test-conv"): a real follow-up.
+    exec(&s, "mem.exchange.upsert", followup);
+
+    let got = exec(
+        &s,
+        "mem.exchange.recent",
+        json!({"mogId": MOG_A, "limit": 50}),
+    );
+    let r = rows(&got);
+    assert_eq!(r.len(), 2);
+    for row in r {
+        assert_eq!(row["conversationId"], "test-conv");
+    }
+}
