@@ -6,6 +6,7 @@ import {
   chatCompletion,
   type RouterReply,
 } from '../../test-support/model-invoke';
+import { offlineDecision } from '../offline-intent';
 import { core } from '../test-core';
 import { createRouterContextGate } from './router-context-gate';
 import {
@@ -403,9 +404,17 @@ describe('retry and fallback (RTR-13c, RTR-13d)', () => {
     expect((args as { args: { role: string } }).args.role).toBe('router');
   });
 
-  it('[RTR-13d] two rejected model_invoke calls also fall back to context', async () => {
-    const { decision, calls } = await route([{ error: new Error('offline') }]);
+  it('[RTR-15c] two rejected model_invoke calls mean the router model is not available: the offline heuristic decides', async () => {
+    // RTR-13d covers output that does not parse. A model that cannot be reached is RTR-15c (#163).
+    const { decision, calls, trace } = await route([{ error: new Error('offline') }]);
     expect(calls).toHaveLength(2);
+    expect(trace.at(-1)?.outcome).toBe('fallback_offline');
+    expect(decision).toEqual(offlineDecision(UTTERANCE));
+    expect(validateRouterDecision(decision).ok).toBe(true);
+  });
+
+  it('[RTR-13d] one rejected call and one reply that does not parse still give context', async () => {
+    const { decision } = await route([{ error: new Error('offline') }, { content: 'garbage' }]);
     expect(decision.intent).toBe('context');
   });
 });

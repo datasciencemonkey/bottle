@@ -25,9 +25,12 @@ import {
 import { cardStackDeps, createCardStack, timeoutScheduler, type CardStack } from '../card-stack';
 import { createSystemClock } from '../clock';
 import { createDictationSink } from '../dictation-copy';
+import { createHomeProfiles, ipcHomeProfileDeps, ipcListProfiles } from '../home-profile';
 import { LevelRouter, subscribeLevels, wireLevelStream } from '../level-stream';
 import { createMoodPublisher, latencyTraceClock } from '../mood-publisher';
 import { wireNotice } from '../notice-wiring';
+import { withOfflineFallback } from '../offline-intent';
+import { createProfilePick } from '../profile-pick';
 import { createRequestOwner, sendOwnedCard } from '../request-owner';
 import { configName, createAppTalkTarget, wireTalkTarget, type TalkTarget } from '../talk-target';
 import { ipcUtteranceDeps } from '../utterance-route';
@@ -141,8 +144,11 @@ export function startBrain(): Brain {
           mogId,
           (s = createCardStack(mogId, {
             ...cardStackDeps(mogId, cardClock),
-            // #142: a click on a live Ask Genie chip (UX-20c).
-            onChip: (a) => askGate.chip(mogId, a),
+            // #142: a click on a live Ask Genie chip (UX-20c). #163: a click on a pick card chip.
+            onChip: (a) => {
+              askGate.chip(mogId, a);
+              void pick.chip(mogId, a);
+            },
           })),
         );
       return s;
@@ -156,9 +162,9 @@ export function startBrain(): Brain {
       showCard: (mogId) => call('window_card_show', { mogId }),
       owner,
       isOpen: (id) => talkTarget.isOpen(id),
-      // TODO(#163): the MOG's target profile from T7. Bottle never picks one, so until
-      // then nothing is sent.
-      target: () => undefined,
+      // #163: the target is the MOG's home profile (no hop yet, TODO(#164)). With none,
+      // nothing is sent: the pick card asks the user to pick one.
+      target: (mogId) => homes.home(mogId),
       // The hand-off seam: T15 `agent_send`. The core approves this one question (#141).
       send: (t) => components.T15.send(t),
     });
@@ -194,6 +200,19 @@ export function startBrain(): Brain {
       if (input.from === 'hub') void dictation.hubReady();
       else if (input.from === `card-${input.mogId}`) dictation.cardReady(input.mogId);
     });
+    // #163 (RTR-15c, W-07d): the home profile of each MOG, and the "Pick a profile to ask
+    // Genie" card for a question with no home profile. The user picks; Bottle never picks.
+    const homes = createHomeProfiles(ipcHomeProfileDeps());
+    const insertionOn = () => true;
+    const route = withOfflineFallback(ipcUtteranceDeps());
+    const pick = createProfilePick({
+      stackFor,
+      showCard: (mogId) => call('window_card_show', { mogId }),
+      listProfiles: ipcListProfiles,
+      saveHome: (mogId, profile) => components.T1.edit(mogId, { home: profile }),
+      insertionOn,
+      insertText: route.insertText,
+    });
     // #14: the PTT and hands-free lifecycle. Every start goes through the T12 consent gate.
     const lifecycle = createCaptureLifecycle({
       control: ipcCaptureControl({ consent: components.T12 }),
@@ -206,17 +225,22 @@ export function startBrain(): Brain {
       // at `insert_text`; a preview or a chip goes to T3.
       onUtterance: createUtteranceHandler({
         owner,
-        // TODO(#112, #163): the router input needs the MOG's home profile from T7 and the
-        // profile list. Bottle never picks a profile, so until then no utterance is routed.
-        routerInput: () => undefined,
+        // #163: every utterance is routed. With no home profile, or when the router model call
+        // fails, the RTR-15c offline heuristic decides.
+        routerInput: (mogId) => homes.routerInput(mogId),
         // MOG-06a, MOG-06d (#551): insertion is on. `insert_text` checks Accessibility before it
         // touches the clipboard and answers `no_permission`; the route turns that, or a throw,
         // into `insert_failed` with the text, so the dictation goes to Copy and is not lost.
         // TODO(#60): the Appendix F `app.dictation.insert` setting; TODO(#552) is parked.
-        insertionOn: () => true,
-        route: ipcUtteranceDeps(),
+        insertionOn,
+        route,
         // #142: T3 runs the 1.5 s preview or shows the chip, and it releases the owner.
-        onAsk: askGate.onAsk,
+        // #163: with no home profile an ask shows the pick card instead; it never sends (B1).
+        onAsk: (r, owned) => {
+          if (homes.home(owned.mogId) !== undefined) return askGate.onAsk(r, owned);
+          void pick.showNoProfile(r, owned);
+          owner.release(owned.utteranceId);
+        },
         // #498, MOG-05b, MOG-06d: a Copy or a failed insertion reaches the Copy card.
         onDone: (r, owned) => void dictation.onDone(r, owned).catch(() => undefined),
       }),
