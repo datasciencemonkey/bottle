@@ -31,6 +31,13 @@ Do these steps in the pull request that adds, ports or adapts third-party code:
 | Tauri, `tauri-nspanel`, `tauri-plugin-global-shortcut` | MIT / Apache-2.0 | Desktop shell |
 | Gemini on Databricks | Applicable model terms | Model called through Databricks |
 | Databricks CLI | Databricks License | Not bundled |
+| shadcn/ui | MIT | Component source copied into `src/views/ui/` (ui-1, ADR 0106) |
+| Radix UI (`@radix-ui/react-*`) | MIT | Accessible primitives behind `src/views/ui/` (ui-1, ADR 0106) |
+| Motion (`motion`) | MIT | Animation in the hub, hub-only (ui-1, ADR 0106) |
+| Tailwind CSS (`tailwindcss`, `@tailwindcss/vite`) | MIT | Hub-only utility CSS (ui-1, ADR 0106) |
+| lucide-react | ISC | Icons in the hub (ui-1, ADR 0106) |
+| clsx, tailwind-merge | MIT | The `cn()` class helper (ui-1, ADR 0106) |
+| class-variance-authority | Apache-2.0 | Button variants (ui-1, ADR 0106) |
 | objc2 Core Audio bindings, claxon | Apache-2.0 | System audio tap of call recordings; FLAC check in tests only |
 | unsafe-libopus (libopus 1.3.1), ogg | BSD-3-Clause | Opus encoder and Ogg container of call recordings |
 
@@ -647,3 +654,253 @@ The Databricks CLI is not bundled with Bottle; it is deployed by the customer.
 With consent, Bottle downloads the official release from
 github.com/databricks/cli/releases and checks it against the release SHA-256
 checksum file before it unpacks it (W-17d, SEC-20b).
+
+## shadcn/ui (MIT)
+
+Source: https://github.com/shadcn-ui/ui. Bottle copies shadcn/ui component source by hand into
+`src/views/ui/` (ui-1, ADR 0106; the shadcn CLI is not a build or runtime dependency), adapted to
+this repo's strict TypeScript config. Each copied file names its shadcn source doc page in its
+own header comment. shadcn/ui ships no npm package and no version number of its own (it is
+copied source, not a dependency); each file's header comment instead names the doc page it was
+copied from, which is the closest thing to a version this project has.
+
+```text
+MIT License
+
+Copyright (c) 2023 shadcn
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+### Adapted files
+
+`src/views/ui/button.tsx`, `tooltip.tsx`, `checkbox.tsx`, `switch.tsx`, `radio-group.tsx`,
+`collapsible.tsx`, `utils.ts` (`cn()`) — each copied from the matching page of
+ui.shadcn.com/docs/components/ and adapted for `verbatimModuleSyntax`/`exactOptionalPropertyTypes`.
+`src/views/hub/HubSidebar.tsx` and `use-hub-sidebar.ts` are hand-written (shadcn's Sidebar
+*pattern*, not its copy-in: the hidden-by-default/pin behaviour is this repo's own spec, ADR 0106
+decision 6). `dialog.tsx`, `scroll-area.tsx`, `separator.tsx`, `tabs.tsx` and `sonner.tsx` were
+copied in during the first pass but nothing imports them (review of #602): removed, along with
+their Radix/`sonner` dependencies below, rather than kept unused. `src/views/WipeDialog.tsx` uses
+`@radix-ui/react-dialog` directly (not through a `src/views/ui/` copy-in), so that one dependency
+stays.
+
+## Radix UI (MIT)
+
+Source: https://github.com/radix-ui/primitives. Bottle depends on these npm packages (not copied
+in; versions pinned in `package.json`): `@radix-ui/react-checkbox` 1.4.1, `-collapsible` 1.2.1,
+`-radio-group` 1.5.1, `-slot` 1.5.0, `-switch` 1.4.1 and `-tooltip` 1.4.1 sit behind the
+shadcn/ui components in `src/views/ui/`; `-dialog` 1.3.1 backs `src/views/WipeDialog.tsx`
+directly (its focus trap and Escape-to-close), with no `src/views/ui/dialog.tsx` copy-in.
+
+```text
+MIT License
+
+Copyright (c) 2022 WorkOS
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## Motion (MIT)
+
+Source: https://github.com/motiondivision/motion (motion.dev). npm package `motion`, version
+14.13.0, imported as `motion/react`. Used for the hub sidebar's width/slide, the active-item
+highlight, and the hand-built feedback effects in `src/views/ui/motion-effects.tsx` (ui-1, ADR
+0106).
+
+```text
+MIT License
+
+Copyright (c) 2024 Motion (https://motion.dev) B.V.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## Tailwind CSS (MIT)
+
+Source: https://github.com/tailwindlabs/tailwindcss. npm packages `tailwindcss` and
+`@tailwindcss/vite`, both version 4.3.5. Hub-only (ui-1, ADR 0106): `src/views/hub/tailwind.css`;
+`mog.html` and `card.html` never load it.
+
+```text
+MIT License
+
+Copyright (c) Tailwind Labs, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## lucide-react (ISC)
+
+Source: https://github.com/lucide-icons/lucide. npm package `lucide-react`, version 1.72.0;
+icons render as inline SVG, bundled (no CDN sprite).
+
+```text
+ISC License
+
+Copyright (c) 2026 Lucide Icons and Contributors
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.
+```
+
+Some Lucide icons (used by this project: `chevron-down`, `chevron-up`, among others) are
+derived from the Feather project and carry their own MIT sub-licence, per `lucide-react`'s
+`LICENSE` file:
+
+```text
+The MIT License (MIT) (for icons derived from the Feather project)
+
+Copyright (c) 2013-present Cole Bemis
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## clsx, tailwind-merge (MIT)
+
+Sources: https://github.com/lukeed/clsx and https://github.com/dcastil/tailwind-merge. npm
+packages `clsx` 2.1.1 and `tailwind-merge` 3.7.0, combined as the `cn()` helper in
+`src/views/ui/utils.ts`.
+
+```text
+MIT License
+
+Copyright (c) Luke Edwards <luke.edwards05@gmail.com> (lukeed.com)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+```text
+MIT License
+
+Copyright (c) 2021 Dany Castillo
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## class-variance-authority (Apache-2.0)
+
+Source: https://github.com/joe-bell/cva. npm package `class-variance-authority`, version 0.7.1,
+used for the Button variants in `src/views/ui/button.tsx`. Apache License 2.0; the full licence
+text is already reproduced above in the sherpa-onnx section of this file.
