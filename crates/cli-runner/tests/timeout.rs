@@ -8,12 +8,12 @@ mod common;
 use std::cell::RefCell;
 use std::ffi::OsString;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use cli_runner::{CliError, CliPolicy, CliRunner, Env, ProcOutput, Process, RealFs, RealProcess};
-use common::{abs, cli_in, FakeEnv, FakeFs};
+use common::{abs, cli_in, fixture_root, FakeEnv, FakeFs, FixtureDir};
 
 /// Answers `--version`, records the timeout of each child, and can time out the other calls.
 #[derive(Clone, Default)]
@@ -112,11 +112,9 @@ fn real_env_for(dir: &Path) -> FakeEnv {
         .set("HOME", dir.as_os_str())
 }
 
-fn install_fake(name: &str) -> PathBuf {
-    let dir =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+/// Copies the fake CLI into a fresh folder under `common::fixture_root` (not a temp root).
+fn install_fake(name: &str) -> FixtureDir {
+    let dir = FixtureDir::new(&fixture_root(), name);
     let cli = cli_in(&dir);
     std::fs::copy(env!("CARGO_BIN_EXE_fake-databricks"), &cli).unwrap();
     #[cfg(unix)]

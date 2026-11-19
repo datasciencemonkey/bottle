@@ -49,12 +49,14 @@ cargo test --all-targets --locked
 ```
 
 Most tests use the fakes in `tests/common`. `tests/real_process.rs` runs a real
-child: `src/bin/fake-databricks.rs` (test fixture, never shipped) is copied into
-`CARGO_TARGET_TMPDIR` (under `target/`, which is not a temp root, so no test-only
-override of W-02b exists). Its version comes from a `fake-version.txt` next to it,
-because the clean env drops any variable a test could set. One test copies it into
-the OS temp dir and expects refusal. If you build with `target/` inside a temp
-directory, those real-process tests fail by design.
+child: `src/bin/fake-databricks.rs` (test fixture, never shipped) is copied into a
+per-test folder under `target/real-cli-fixtures` in this crate folder (git-ignored,
+removed after each test). That folder is not a temp root even when
+`CARGO_TARGET_DIR` is, so no test-only override of W-02b exists. Its version comes
+from a `fake-version.txt` next to it, because the clean env drops any variable a
+test could set. One test copies it into the OS temp dir and expects refusal. If the
+checkout itself is inside a temp directory, the real-process tests stop with a
+clear message, by design.
 
 ## Out of scope
 

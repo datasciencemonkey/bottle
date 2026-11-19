@@ -8,7 +8,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use cli_runner::{binary_name, Env, Fs, ProcOutput, Process};
+use cli_runner::{
+    binary_name, path_within, temp_roots, Env, Fs, ProcOutput, Process, RealEnv, RealFs,
+};
 
 /// An absolute path on this OS: `/a/b` on unix, `C:\a\b` on Windows.
 pub fn abs(rel: &str) -> PathBuf {
@@ -26,6 +28,62 @@ pub fn abs(rel: &str) -> PathBuf {
 /// `dir/databricks` (or `databricks.exe` on Windows).
 pub fn cli_in(dir: &Path) -> PathBuf {
     dir.join(binary_name(cfg!(windows)))
+}
+
+/// Parent folder for the real fake CLIs: `<crate>/target/real-cli-fixtures` (git-ignored).
+///
+/// Not `CARGO_TARGET_TMPDIR`: `CARGO_TARGET_DIR` can be in a temp root (for example
+/// `/tmp/...`), and W-02b correctly refuses a CLI there. The crate folder is the checkout,
+/// so it is not a temp root unless the checkout itself is in one.
+pub fn fixture_root() -> PathBuf {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join("real-cli-fixtures");
+    std::fs::create_dir_all(&root).unwrap();
+    let canonical = std::fs::canonicalize(&root).unwrap();
+    let temp = temp_roots(&RealFs, &RealEnv);
+    for p in [&root, &canonical] {
+        if let Some(t) = temp.iter().find(|t| path_within(p, t)) {
+            panic!(
+                "the checkout {} is in the temp root {}: W-02b refuses a CLI there",
+                p.display(),
+                t.display()
+            );
+        }
+    }
+    root
+}
+
+/// A fresh, empty folder `parent/<name>-<pid>` for one real-process test.
+/// It is removed when the value is dropped.
+pub struct FixtureDir(PathBuf);
+
+impl FixtureDir {
+    pub fn new(parent: &Path, name: &str) -> Self {
+        let dir = parent.join(format!("{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+}
+
+impl std::ops::Deref for FixtureDir {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl AsRef<Path> for FixtureDir {
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for FixtureDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 #[derive(Default, Clone)]

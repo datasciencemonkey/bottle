@@ -1,7 +1,8 @@
 //! Real-process tests with a tiny fake `databricks` (src/bin/fake-databricks.rs).
 //!
-//! The fake is copied into CARGO_TARGET_TMPDIR (under target/, not a temp
-//! root), so it passes the W-02b location check without any override.
+//! The fake is copied into `<crate>/target/real-cli-fixtures` (see
+//! `common::fixture_root`), which is not a temp root even when CARGO_TARGET_DIR
+//! is, so it passes the W-02b location check without any override.
 
 mod common;
 
@@ -12,7 +13,7 @@ use cli_runner::{
     is_allowed, CliError, CliPolicy, CliRecord, CliRunner, CliWarning, RealFs, RealProcess,
     UnsafeReason, Version,
 };
-use common::{cli_in, FakeEnv};
+use common::{cli_in, fixture_root, FakeEnv, FixtureDir};
 
 const FAKE: &str = env!("CARGO_BIN_EXE_fake-databricks");
 
@@ -26,10 +27,8 @@ fn serial() -> std::sync::MutexGuard<'static, ()> {
 }
 
 /// Copies the fake CLI into `parent/<name>/` and writes its version file.
-fn install_fake(parent: &Path, name: &str, version: &str) -> PathBuf {
-    let dir = parent.join(format!("{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+fn install_fake(parent: &Path, name: &str, version: &str) -> FixtureDir {
+    let dir = FixtureDir::new(parent, name);
     let cli = cli_in(&dir);
     std::fs::copy(FAKE, &cli).unwrap();
     std::fs::write(dir.join("fake-version.txt"), version).unwrap();
@@ -43,7 +42,7 @@ fn install_fake(parent: &Path, name: &str, version: &str) -> PathBuf {
 }
 
 fn safe_parent() -> PathBuf {
-    PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+    fixture_root()
 }
 
 fn env_for(dir: &Path) -> FakeEnv {
