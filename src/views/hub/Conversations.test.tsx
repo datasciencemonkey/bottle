@@ -296,6 +296,19 @@ describe('hub Conversations (#103)', () => {
       expect(exchanges[1]?.textContent).toContain('152');
     });
 
+    it('[#145] the composer is a footer row of the pane, outside the scrolling exchange list', async () => {
+      const { el } = await mount(true, vi.fn(), () => <div data-testid="fake-composer" />);
+      await tauri.emitTo('hub', 'hub:conversations', {
+        rows: [row(40, at(19, 9, 0), { conversationId: 'conv-pin-1' })],
+      });
+      const pane = detail(el);
+      const list = pane.querySelector('.conv-thread') as HTMLElement;
+      const slot = pane.querySelector('[data-slot="thread-composer"]') as HTMLElement;
+      expect(list.querySelector('[data-exchange]')).not.toBeNull();
+      expect(list.contains(slot)).toBe(false);
+      expect(slot.parentElement).toBe(pane);
+    });
+
     it('[#145] a new follow-up answer extends the same pane and keeps the composer mounted', async () => {
       const mounts = vi.fn();
       const Probe = () => {

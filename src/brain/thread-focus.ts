@@ -104,15 +104,30 @@ export interface RoutedAsk {
  * a chip fallback and an injection-suspected ask never are. `focus.active()` is only set while
  * the composer is mounted and the hub window has OS focus (the view clears it on blur, on a
  * view switch and on unmount), so a hidden thread is never the target. Returns true when it took
- * the ask (and `release` ran).
+ * the ask (and `release` ran). It also asks the hub window for its OS focus (`hubFocused`).
  */
-export function routeAskToFocusedThread(
+export async function routeAskToFocusedThread(
   r: RoutedAsk,
-  deps: { focus: ThreadFocus; followup: Pick<GenieFollowup, 'send'>; release(): void },
-): boolean {
+  deps: {
+    focus: ThreadFocus;
+    followup: Pick<GenieFollowup, 'send'>;
+    release(): void;
+    /** The hub window really has OS focus now (`isHubFocused`). A throw counts as false. */
+    hubFocused(): Promise<boolean>;
+  },
+): Promise<boolean> {
   if (r.route !== 'ask' || r.question === undefined || r.decision.injection_suspected) return false;
   const thread = deps.focus.active();
   if (!thread) return false;
+  // The view's `blur` can be missed (the hub hidden to the tray): ask the window itself, and
+  // clear the stale focus so no later press is taken either.
+  const focused = await deps.hubFocused().catch(() => false);
+  if (!focused) {
+    deps.focus.set(undefined);
+    return false;
+  }
+  // The focus may have moved on while we asked.
+  if (deps.focus.active() !== thread) return false;
   deps.release();
   void deps.followup.send({
     conversationId: thread.conversationId,

@@ -95,6 +95,8 @@ function failureText(e: TerminalAskEvent): string {
 }
 
 export function createGenieFollowup(deps: GenieFollowupDeps): GenieFollowup {
+  /** One request at a time for each thread: a second send while one runs is refused. */
+  const inflight = new Set<string>();
   const refuse = (conversationId: string, question?: string): void => {
     deps.sendStatus({
       conversationId,
@@ -107,22 +109,49 @@ export function createGenieFollowup(deps: GenieFollowupDeps): GenieFollowup {
 
   return {
     async access(conversationId) {
-      const ready: ThreadAccess = { conversationId, state: 'ready', text: '' };
+      const ready: ThreadAccess = {
+        conversationId,
+        state: 'ready',
+        text: '',
+        busy: inflight.has(conversationId),
+      };
       const thread = await deps.findThread(conversationId).catch(() => undefined);
       if (thread === undefined || deps.profileStatus === undefined) return ready;
       const status = await deps.profileStatus(thread.profile).catch(() => undefined);
       if (status?.state !== 'login_required') return ready;
       const text = userTextFor('AUTH_EXPIRED', thread.host ? { host: thread.host } : {});
-      return { conversationId, state: 'sign_in', text };
+      return { conversationId, state: 'sign_in', text, busy: inflight.has(conversationId) };
     },
     async send(input) {
       const { conversationId } = input;
+      if (inflight.has(conversationId)) {
+        // Genie takes one question at a time in a conversation: no parallel send.
+        deps.sendStatus({
+          conversationId,
+          requestId: '',
+          phase: 'working',
+          text: userTextFor('CONVERSATION_BUSY'),
+        });
+        return;
+      }
       const clean = sanitizeQuestion(input.question);
       if (clean === '') {
         refuse(conversationId);
         return;
       }
       const { text: question } = capQuestion(clean);
+      inflight.add(conversationId);
+      try {
+        await sendOne(input, question);
+      } finally {
+        inflight.delete(conversationId);
+      }
+    },
+  };
+
+  async function sendOne(input: FollowupInput, question: string): Promise<void> {
+    const { conversationId } = input;
+    {
       // ARC-2: the workspace of a follow-up is the one `findThread` reads from the store, never
       // `input.profile` (the view's own copy) — a stale or mismatched view can never move a
       // conversation to a workspace it did not start in.
@@ -186,6 +215,6 @@ export function createGenieFollowup(deps: GenieFollowupDeps): GenieFollowup {
       } catch {
         // The status line already shows the outcome; a history fault changes nothing here.
       }
-    },
-  };
+    }
+  }
 }

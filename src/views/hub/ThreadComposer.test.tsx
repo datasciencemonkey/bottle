@@ -113,7 +113,9 @@ describe('ThreadComposer (genie-followup, #145)', () => {
     await act(async () => void send(el).click());
     expect(el.textContent).toContain('Asking Genie');
     // Disabled while a request is in flight: no second question before the first answers.
-    expect(field(el).disabled).toBe(true);
+    expect(field(el).readOnly).toBe(true);
+    expect(field(el).disabled).toBe(false);
+    expect(field(el).getAttribute('aria-busy')).toBe('true');
 
     await tauri.emitTo('hub', HUB_THREAD_STATUS_EVENT, {
       conversationId: 'conv-1',
@@ -131,7 +133,8 @@ describe('ThreadComposer (genie-followup, #145)', () => {
     });
     expect(el.textContent).not.toContain('Running the query');
     expect(el.textContent).not.toContain('Asking Genie');
-    expect(field(el).disabled).toBe(false);
+    expect(field(el).readOnly).toBe(false);
+    expect(field(el).getAttribute('aria-busy')).toBe('false');
   });
 
   it('ignores a status event of another conversation', async () => {
@@ -321,6 +324,154 @@ describe('ThreadComposer (genie-followup, #145)', () => {
       const { el } = await mount();
       await access('sign_in', { conversationId: 'conv-other' });
       expect(field(el).disabled).toBe(false);
+    });
+  });
+
+  describe('focus, IME, draft, growth and a voice follow-up', () => {
+    const status = (phase: string, text = '', extra: Record<string, unknown> = {}) =>
+      tauri.emitTo('hub', HUB_THREAD_STATUS_EVENT, {
+        conversationId: 'conv-1',
+        requestId: 'req-2',
+        phase,
+        text,
+        ...extra,
+      });
+    const enter = (el: HTMLElement, init: KeyboardEventInit & { keyCode?: number } = {}) => {
+      const e = new KeyboardEvent('keydown', {
+        key: 'Enter',
+        bubbles: true,
+        cancelable: true,
+        ...init,
+      });
+      return act(async () => void field(el).dispatchEvent(e));
+    };
+
+    it('keeps focus in the field while sending, and after the answer', async () => {
+      const { el } = await mount();
+      const f = field(el);
+      await act(async () => f.focus());
+      await act(async () => {
+        type(f, 'How many are there?');
+      });
+      await enter(el);
+      expect(sendActions()).toHaveLength(1);
+      expect(document.activeElement).toBe(f);
+      await status('working', 'Running the query');
+      expect(document.activeElement).toBe(f);
+      await status('answered');
+      expect(document.activeElement).toBe(f);
+    });
+
+    it('gives focus back to the field when an error arrives, and after Try again', async () => {
+      const { el } = await mount();
+      const f = field(el);
+      await act(async () => f.focus());
+      await act(async () => {
+        type(f, 'How many are there?');
+      });
+      await enter(el);
+      await status('failed', 'The connection to Genie stopped.', {
+        question: 'How many are there?',
+      });
+      expect(document.activeElement).toBe(f);
+      const retry = el.querySelector('[data-thread-retry]') as HTMLButtonElement;
+      await act(async () => {
+        retry.focus();
+        retry.click();
+      });
+      await status('failed', 'The connection to Genie stopped.', {
+        question: 'How many are there?',
+      });
+      expect(document.activeElement).toBe(f);
+    });
+
+    it('does not steal focus from another control the user moved to', async () => {
+      const { el } = await mount();
+      const other = document.createElement('input');
+      document.body.append(other);
+      await act(async () => {
+        type(field(el), 'How many are there?');
+      });
+      await enter(el);
+      await act(async () => other.focus());
+      await status('answered');
+      expect(document.activeElement).toBe(other);
+      other.remove();
+    });
+
+    it('an Enter that confirms an IME candidate never sends', async () => {
+      const { el } = await mount();
+      await act(async () => {
+        type(field(el), 'こんにちは');
+      });
+      await enter(el, { isComposing: true });
+      await enter(el, { keyCode: 229 });
+      expect(sendActions()).toHaveLength(0);
+      await enter(el);
+      expect(sendActions()).toHaveLength(1);
+    });
+
+    it('keeps a half-typed draft for each thread across an unmount, in memory only', async () => {
+      const first = await mount();
+      await act(async () => {
+        type(field(first.el), 'half a thought');
+      });
+      act(() => first.root.unmount());
+      roots.length = 0;
+      const again = await mount();
+      expect(field(again.el).value).toBe('half a thought');
+      // Another thread has its own draft, and a sent question clears it.
+      const other = await mount(() => 1_000, { ...THREAD, conversationId: 'conv-9' });
+      expect(field(other.el).value).toBe('');
+      await enter(again.el);
+      act(() => again.root.unmount());
+      roots.length = 0;
+      const third = await mount();
+      expect(field(third.el).value).toBe('');
+      expect(localStorage.length).toBe(0);
+    });
+
+    it('grows with the text up to about six lines, then scrolls inside', async () => {
+      const { el } = await mount();
+      Object.defineProperty(field(el), 'scrollHeight', { configurable: true, value: 56 });
+      await act(async () => {
+        type(field(el), 'a\nb');
+      });
+      expect(field(el).style.height).toBe('56px');
+      Object.defineProperty(field(el), 'scrollHeight', { configurable: true, value: 400 });
+      await act(async () => {
+        type(field(el), 'a\nb\nc\nd\ne\nf\ng\nh\ni');
+      });
+      expect(field(el).style.height).toBe('136px');
+    });
+
+    it('a follow-up started by ⌥G shows the same busy state and timer, and blocks a parallel send', async () => {
+      let t = 1_000;
+      const { el } = await mount(() => t);
+      await act(async () => {
+        type(field(el), 'my own question');
+      });
+      await status('working', 'Asking Genie');
+      expect(field(el).readOnly).toBe(true);
+      expect(send(el).disabled).toBe(true);
+      t = 6_000;
+      await act(async () => void (await new Promise((r) => setTimeout(r, 1_100))));
+      expect(el.querySelector('.thread-composer-timer')?.textContent).toMatch(/\d:\d\d/);
+      await enter(el);
+      expect(sendActions()).toHaveLength(0);
+      await status('answered');
+      expect(field(el).readOnly).toBe(false);
+    });
+
+    it('a thread the brain says is busy comes back in the busy state', async () => {
+      const { el } = await mount();
+      await tauri.emitTo('hub', HUB_THREAD_ACCESS_EVENT, {
+        conversationId: 'conv-1',
+        state: 'ready',
+        text: '',
+        busy: true,
+      });
+      expect(field(el).readOnly).toBe(true);
     });
   });
 });

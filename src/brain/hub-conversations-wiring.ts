@@ -145,9 +145,27 @@ export function wireHubConversations(
   deps: ConversationsWireDeps,
 ): HubConversationsWiring {
   let held: { requestId?: string } | undefined;
+  /**
+   * The owner of each conversation, from the last list read (#145). A conversation never changes
+   * its MOG or its workspace, so a send takes it from here with no store round trip. Every
+   * publish replaces it, so a Forget or a Wipe (which refresh the list) drops a gone thread.
+   */
+  let owners = new Map<string, { mogId: string; profile: string; host: string }>();
+  const remember = (rows: readonly ConversationRow[]) => {
+    owners = new Map(
+      rows
+        .filter((r) => r.conversationId !== '')
+        .map((r) => [
+          r.conversationId,
+          { mogId: r.mogId, profile: r.profile, host: r.workspaceHost },
+        ]),
+    );
+  };
   const publish = async () => {
     try {
-      await deps.send(await readConversations(deps));
+      const list = await readConversations(deps);
+      if (!list.unavailable) remember(list.rows);
+      await deps.send(list);
     } catch {
       // No hub is open. The hub asks again with conversations.ready when it opens.
     }
@@ -181,6 +199,8 @@ export function wireHubConversations(
     },
     async findThread(conversationId) {
       if (conversationId === '') return undefined;
+      const cached = owners.get(conversationId);
+      if (cached) return cached;
       try {
         const { rows } = await readConversations(deps);
         const row = rows.find((r) => r.conversationId === conversationId);

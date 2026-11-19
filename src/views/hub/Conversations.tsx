@@ -290,13 +290,14 @@ function Detail({
   // composer show (not on first show, which starts at the question).
   const count = thread.length;
   const seen = useRef(count);
+  const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (count > seen.current) {
-      const pane = focusRef.current;
-      pane?.scrollTo?.({ top: pane.scrollHeight, behavior: 'smooth' });
+      const list = scrollRef.current;
+      list?.scrollTo?.({ top: list.scrollHeight, behavior: 'smooth' });
     }
     seen.current = count;
-  }, [count, focusRef]);
+  }, [count]);
   if (!first || !latest) return null;
   return (
     // BlurFade (ui-1): the newly selected thread fades and un-blurs in.
@@ -310,13 +311,15 @@ function Detail({
       animate={{ opacity: 1, filter: 'blur(0px)' }}
       transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
     >
-      {thread.map((row) => (
-        <Exchange
-          key={row.requestId}
-          row={row}
-          headingId={row === first ? `conv-q-${first.requestId}` : undefined}
-        />
-      ))}
+      <div ref={scrollRef} className="conv-thread">
+        {thread.map((row) => (
+          <Exchange
+            key={row.requestId}
+            row={row}
+            headingId={row === first ? `conv-q-${first.requestId}` : undefined}
+          />
+        ))}
+      </div>
       <ComposerSlot latest={latest} composer={composer} />
     </motion.article>
   );

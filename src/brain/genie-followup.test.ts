@@ -291,6 +291,7 @@ describe('genie-followup (#145)', () => {
         conversationId: CONV,
         state: 'sign_in',
         text: 'Sign in to fake.example.com to ask Genie.',
+        busy: false,
       });
       // The profile comes from the store, not from the view.
       expect(profileStatus).toHaveBeenCalledWith('fake-east');
@@ -310,6 +311,59 @@ describe('genie-followup (#145)', () => {
         deps({ findThread: async () => undefined, profileStatus: async () => ({ state: 'x' }) }),
       );
       await expect(stale.access(CONV)).resolves.toMatchObject({ state: 'ready' });
+    });
+  });
+
+  describe('one request at a time for each thread', () => {
+    function gated() {
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      const reqs: AskRequest[] = [];
+      const bridge: Pick<GenieBridge, 'submit'> = {
+        submit(req) {
+          reqs.push(req);
+          return {
+            opId: req.opId,
+            events: (async function* (): AsyncGenerator<AskEvent> {
+              await gate;
+              yield { t: 'uncertain' };
+            })(),
+          };
+        },
+      };
+      return { bridge, reqs, release };
+    }
+
+    it('[#145] a second send while one runs sends nothing, and says Genie is still answering', async () => {
+      const g = gated();
+      const d = deps({ genie: g.bridge });
+      const f = createGenieFollowup(d);
+      const first = f.send({ conversationId: CONV, profile: PROFILE, question: 'First?' });
+      await vi.waitFor(() => expect(g.reqs).toHaveLength(1));
+      await f.send({ conversationId: CONV, profile: PROFILE, question: 'Second?' });
+      expect(g.reqs).toHaveLength(1);
+      expect(d.statuses.at(-1)).toMatchObject({
+        phase: 'working',
+        text: 'Genie is still answering your last question here.',
+      });
+      // The thread says it is busy, for a composer that comes back meanwhile.
+      await expect(f.access(CONV)).resolves.toMatchObject({ busy: true });
+      g.release();
+      await first;
+      await expect(f.access(CONV)).resolves.toMatchObject({ busy: false });
+      // And it takes the next one.
+      await f.send({ conversationId: CONV, profile: PROFILE, question: 'Third?' });
+      expect(g.reqs).toHaveLength(2);
+    });
+
+    it('[#145] another thread is not blocked', async () => {
+      const g = gated();
+      const f = createGenieFollowup(deps({ genie: g.bridge }));
+      void f.send({ conversationId: CONV, profile: PROFILE, question: 'First?' });
+      await vi.waitFor(() => expect(g.reqs).toHaveLength(1));
+      void f.send({ conversationId: 'conv-2', profile: PROFILE, question: 'Other?' });
+      await vi.waitFor(() => expect(g.reqs).toHaveLength(2));
+      g.release();
     });
   });
 });

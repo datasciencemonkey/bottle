@@ -1081,12 +1081,20 @@
     color: var(--mog-lid);
   }
 
+  /* The pane is a column of two parts (#145): the exchange list scrolls, and the composer stays
+     pinned below it as a footer row, so a long thread never pushes it out of the window. */
   .conv-detail {
     display: flex;
     flex-direction: column;
     min-height: 0;
+    overflow: hidden;
+  }
+
+  .conv-thread {
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
-    padding: 20px 24px 32px;
+    padding: 20px 24px 16px;
     overscroll-behavior: contain;
   }
 
@@ -1097,11 +1105,12 @@
     border-top: 1px solid var(--mog-edge);
   }
 
-  /* The sticky composer slot (ui-1, #103): pinned to the bottom of the detail pane. impl-followup
+  /* The sticky composer slot (ui-1, #103): a footer row of the detail pane, below the scrolling exchange list. impl-followup
      fills it for a thread with a Genie conversation; otherwise it shows only a muted hint, never a dead input. */
   .conv-composer {
-    margin-top: auto;
-    padding-top: var(--mog-space-4);
+    flex: none;
+    padding: var(--mog-space-3) 24px var(--mog-space-4);
+    border-top: 1px solid var(--mog-edge);
   }
 
   .conv-composer-hint {
@@ -2044,7 +2053,7 @@
   html,
   .hub pre,
   .conv-list,
-  .conv-detail,
+  .conv-thread,
   .rec-list,
   .rec-detail {
     scrollbar-color: rgb(255 255 255 / 18%) transparent;

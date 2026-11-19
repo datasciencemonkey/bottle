@@ -139,42 +139,65 @@ describe('routeAskToFocusedThread (#145, ⌥G)', () => {
     decision: {},
     ...over,
   });
-
-  it('[#145] ⌥G while the hub is focused on a thread is a follow-up in that thread', () => {
+  const focused = (hubFocused = async () => true) => {
     const focus = createThreadFocus();
     focus.set({ conversationId: 'c1', profile: 'fake-west' });
     const f = fakeFollowup();
     const release = vi.fn();
-    expect(routeAskToFocusedThread(ask(), { focus, followup: f.followup, release })).toBe(true);
-    expect(release).toHaveBeenCalledOnce();
-    expect(f.sends).toEqual([
+    return { focus, f, release, deps: { focus, followup: f.followup, release, hubFocused } };
+  };
+
+  it('[#145] ⌥G while the hub is focused on a thread is a follow-up in that thread', async () => {
+    const t = focused();
+    await expect(routeAskToFocusedThread(ask(), t.deps)).resolves.toBe(true);
+    expect(t.release).toHaveBeenCalledOnce();
+    expect(t.f.sends).toEqual([
       { conversationId: 'c1', profile: 'fake-west', question: 'How many are there?' },
     ]);
   });
 
-  it('[#145] ⌥G with no focused thread (hub hidden, blurred or on another view) is not taken', () => {
+  it('[#145] ⌥G with no focused thread (hub blurred, hidden or on another view) is not taken, and never asks the window', async () => {
     const focus = createThreadFocus();
-    focus.set({ conversationId: 'c1', profile: 'fake-west' });
-    input({ action: 'thread.inactive' });
-    wireThreadFollowup(bus, { focus, followup: fakeFollowup().followup });
-    input({ action: 'thread.inactive' });
     const f = fakeFollowup();
     const release = vi.fn();
-    expect(routeAskToFocusedThread(ask(), { focus, followup: f.followup, release })).toBe(false);
+    const hubFocused = vi.fn(async () => true);
+    const deps = { focus, followup: f.followup, release, hubFocused };
+    await expect(routeAskToFocusedThread(ask(), deps)).resolves.toBe(false);
     expect(release).not.toHaveBeenCalled();
+    expect(hubFocused).not.toHaveBeenCalled();
     expect(f.sends).toEqual([]);
   });
 
-  it('[#145] a dictation, or an injection-suspected ask, is never taken, even with a focused thread', () => {
-    const focus = createThreadFocus();
-    focus.set({ conversationId: 'c1', profile: 'fake-west' });
-    const f = fakeFollowup();
-    const release = vi.fn();
-    const deps = { focus, followup: f.followup, release };
-    expect(routeAskToFocusedThread(ask({ route: 'dictation' }), deps)).toBe(false);
-    expect(routeAskToFocusedThread(ask({ decision: { injection_suspected: true } }), deps)).toBe(
-      false,
-    );
-    expect(f.sends).toEqual([]);
+  it('[#145] a missed blur never sends a ⌥G from another app into the thread: the window itself is not focused', async () => {
+    const t = focused(async () => false);
+    await expect(routeAskToFocusedThread(ask(), t.deps)).resolves.toBe(false);
+    expect(t.release).not.toHaveBeenCalled();
+    expect(t.f.sends).toEqual([]);
+    // The stale focus is dropped, so no later press is taken either.
+    expect(t.focus.active()).toBeUndefined();
+  });
+
+  it('[#145] a window focus check that fails counts as not focused', async () => {
+    const t = focused(() => Promise.reject(new Error('fake')));
+    await expect(routeAskToFocusedThread(ask(), t.deps)).resolves.toBe(false);
+    expect(t.f.sends).toEqual([]);
+  });
+
+  it('[#145] a focus that moves on while the window is asked is not taken', async () => {
+    const t = focused(async () => {
+      t.focus.set(undefined);
+      return true;
+    });
+    await expect(routeAskToFocusedThread(ask(), t.deps)).resolves.toBe(false);
+    expect(t.f.sends).toEqual([]);
+  });
+
+  it('[#145] a dictation, or an injection-suspected ask, is never taken, even with a focused thread', async () => {
+    const t = focused();
+    await expect(routeAskToFocusedThread(ask({ route: 'dictation' }), t.deps)).resolves.toBe(false);
+    await expect(
+      routeAskToFocusedThread(ask({ decision: { injection_suspected: true } }), t.deps),
+    ).resolves.toBe(false);
+    expect(t.f.sends).toEqual([]);
   });
 });

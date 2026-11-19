@@ -1,5 +1,5 @@
 /** #573: a double-click shows and focuses the hub. */
-import { showHub, type HubWindowHandle } from './hub-window';
+import { isHubFocused, showHub, type HubWindowHandle } from './hub-window';
 
 function fakeHub(fail?: keyof HubWindowHandle) {
   const steps: string[] = [];
@@ -35,5 +35,28 @@ describe('showHub (#573)', () => {
     const h = fakeHub('show');
     await expect(showHub(() => Promise.resolve(h.w))).resolves.toBe(false);
     expect(h.steps).toEqual(['unminimize', 'show']);
+  });
+});
+
+describe('isHubFocused (#145)', () => {
+  it('asks the hub window for its OS focus', async () => {
+    const asked: string[] = [];
+    const find = (label: string) => {
+      asked.push(label);
+      return Promise.resolve({ isFocused: () => Promise.resolve(true) });
+    };
+    await expect(isHubFocused(find)).resolves.toBe(true);
+    expect(asked).toEqual(['hub']);
+    await expect(
+      isHubFocused(() => Promise.resolve({ isFocused: () => Promise.resolve(false) })),
+    ).resolves.toBe(false);
+  });
+
+  it('is false with no hub window, and when the call fails', async () => {
+    await expect(isHubFocused(() => Promise.resolve(null))).resolves.toBe(false);
+    await expect(
+      isHubFocused(() => Promise.resolve({ isFocused: () => Promise.reject(new Error('fake')) })),
+    ).resolves.toBe(false);
+    await expect(isHubFocused(() => Promise.reject(new Error('fake')))).resolves.toBe(false);
   });
 });

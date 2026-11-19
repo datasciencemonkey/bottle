@@ -75,7 +75,8 @@ fn arc_4_views_only_listen_to_events() {
         .collect();
     assert_eq!(core_of("card"), card, "view card core permissions");
     // ARC-5: the brain sends to one view with emit_to; no global emit. #573 (ADR 0102): after a
-    // double-click it finds the hub, shows it and focuses it. It cannot create or close a window.
+    // double-click it finds the hub, shows it and focuses it. `allow-is-focused` is read-only: a ⌥G
+    // follow-up into a thread (#145) asks it whether the hub window really has focus. It cannot create or close a window.
     // #ui-4 (review #603, findings 1 and 4): the brain also builds and pops up the MOG
     // right-click menu as a native Tauri menu (`mog-context-menu.ts`), on the MOG's own window
     // (`Window.getByLabel`, already covered by `allow-get-all-windows`): a MOG view itself stays
@@ -88,6 +89,7 @@ fn arc_4_views_only_listen_to_events() {
         "core:window:allow-show",
         "core:window:allow-unminimize",
         "core:window:allow-set-focus",
+        "core:window:allow-is-focused",
         "core:menu:allow-new",
         "core:menu:allow-popup",
     ]

@@ -49,7 +49,7 @@ import { createGenieFollowup } from '../genie-followup';
 import { wireGenieCard } from '../genie-card-wiring';
 import { createAppMogContextMenu } from '../mog-context-menu';
 import { createThreadFocus, routeAskToFocusedThread, wireThreadFollowup } from '../thread-focus';
-import { showHub } from '../hub-window';
+import { isHubFocused, showHub } from '../hub-window';
 import { asPttEvent } from '../ptt';
 import { createRecordToggle } from '../record-toggle';
 import { emitTo } from '@tauri-apps/api/event';
@@ -473,15 +473,16 @@ export function startBrain(): Brain {
         // press is a follow-up in it instead, with no card and no home-profile guess. A chip
         // (no ⌥G) and an injection-suspected ask are never affected: only a clean ⌥G is.
         onAsk: (r, owned) => {
-          if (
-            routeAskToFocusedThread(r, {
-              focus: threadFocus,
-              followup,
-              release: () => owner.release(owned.utteranceId),
-            })
-          )
-            return;
-          askGate.onAsk(r, owned);
+          void routeAskToFocusedThread(r, {
+            focus: threadFocus,
+            followup,
+            release: () => owner.release(owned.utteranceId),
+            hubFocused: () => isHubFocused(),
+          })
+            .catch(() => false)
+            .then((took) => {
+              if (!took) askGate.onAsk(r, owned);
+            });
         },
         // #498, MOG-05b, MOG-06d: a Copy or a failed insertion reaches the Copy card.
         onDone: (r, owned) => void dictation.onDone(r, owned).catch(() => undefined),

@@ -25,7 +25,7 @@
  */
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { useEffect, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { ASKING_GENIE, timerText } from '../../shared/genie-status';
 import {
   asThreadAccess,
@@ -38,6 +38,15 @@ import {
 import { Button } from '../ui/button';
 import { Textarea } from '../ui/textarea';
 import { emitView } from '../view-ipc';
+
+/**
+ * A half-typed question for each thread, kept in memory only (never saved): the composer
+ * unmounts when the hub shows another area, and the draft must be there when it comes back.
+ */
+const drafts = new Map<string, string>();
+
+/** The field grows to about six lines (20 px each, plus its padding), then scrolls inside. */
+const MAX_FIELD_PX = 136;
 
 /** The inline line when the view itself cannot reach the brain (a fixed Bottle text). */
 const SEND_FAILED = 'Bottle could not send this question.';
@@ -78,7 +87,8 @@ export interface ThreadComposerProps {
 }
 
 export function ThreadComposer({ thread, now = Date.now }: ThreadComposerProps) {
-  const [text, setText] = useState('');
+  const [text, setText] = useState(() => drafts.get(thread.conversationId) ?? '');
+  const fieldRef = useRef<HTMLTextAreaElement>(null);
   const [sentAt, setSentAt] = useState<number | undefined>(undefined);
   const [statusText, setStatusText] = useState<string | undefined>(undefined);
   const [error, setError] = useState<{ text: string; question: string | undefined } | undefined>(
@@ -128,8 +138,10 @@ export function ThreadComposer({ thread, now = Date.now }: ThreadComposerProps) 
         const s = asThreadStatus(e.payload);
         if (!s || s.conversationId !== conversationId) return;
         if (s.phase === 'working') {
+          // Also a follow-up this view did not send (⌥G): the same busy state and timer.
           setError(undefined);
           setStatusText(s.text);
+          setSentAt((t) => t ?? now());
           return;
         }
         // The answer is about to show in the thread's own list; the status line has nothing
@@ -164,6 +176,8 @@ export function ThreadComposer({ thread, now = Date.now }: ThreadComposerProps) 
         const a = asThreadAccess(e.payload);
         if (!a || a.conversationId !== conversationId) return;
         setSignIn(a.state === 'sign_in' ? a.text : undefined);
+        // A request of this thread is already running (the view was away, or it was ⌥G).
+        if (a.busy) setSentAt((t) => t ?? now());
       },
       { target },
     ).then((u) => {
@@ -206,6 +220,7 @@ export function ThreadComposer({ thread, now = Date.now }: ThreadComposerProps) 
     const question = text.trim();
     if (question === '' || sending || blocked) return;
     setText('');
+    drafts.delete(conversationId);
     sendText(question);
   };
 
@@ -214,7 +229,29 @@ export function ThreadComposer({ thread, now = Date.now }: ThreadComposerProps) 
     sendText(error.question);
   };
 
+  // Focus: the field stays focusable while a request runs (read-only, not disabled), and takes
+  // focus back when the answer or the error arrives, unless the user moved it to another control.
+  const wasSending = useRef(false);
+  useEffect(() => {
+    if (wasSending.current && !sending) {
+      const active = document.activeElement;
+      if (active === null || active === document.body || active === fieldRef.current)
+        fieldRef.current?.focus();
+    }
+    wasSending.current = sending;
+  }, [sending]);
+
+  // Grow with the text, up to about six lines, then scroll inside.
+  useEffect(() => {
+    const el = fieldRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, MAX_FIELD_PX)}px`;
+  }, [text]);
+
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // An Enter that confirms an IME candidate must not send a half-written question.
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       send();
@@ -224,7 +261,7 @@ export function ThreadComposer({ thread, now = Date.now }: ThreadComposerProps) 
   const timer = sentAt !== undefined ? timerText(now() - sentAt) : undefined;
 
   return (
-    <div className="thread-composer mt-6 max-w-[68ch] border-t border-border pt-4">
+    <div className="thread-composer max-w-[68ch]">
       {statusText && (
         <p
           className="thread-composer-status mb-2 text-sm tabular-nums text-muted-foreground"
@@ -267,13 +304,19 @@ export function ThreadComposer({ thread, now = Date.now }: ThreadComposerProps) 
         }}
       >
         <Textarea
-          className="thread-composer-field max-h-30 flex-1"
+          className="thread-composer-field flex-1 overflow-y-auto"
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          ref={fieldRef}
+          onChange={(e) => {
+            setText(e.target.value);
+            drafts.set(conversationId, e.target.value);
+          }}
           onKeyDown={onKeyDown}
           placeholder={blocked ? 'Sign in to ask a follow-up' : 'Ask a follow-up…'}
           aria-label="Ask a follow-up in this conversation"
-          disabled={sending || blocked}
+          readOnly={sending}
+          disabled={blocked}
+          aria-busy={sending}
           rows={1}
         />
         <Button type="submit" disabled={sending || blocked || text.trim() === ''}>

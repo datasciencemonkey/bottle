@@ -15,6 +15,11 @@ export interface HubWindowHandle {
   setFocus(): Promise<void>;
 }
 
+/** The part of a Tauri `Window` that `isHubFocused` uses. */
+export interface HubFocusHandle {
+  isFocused(): Promise<boolean>;
+}
+
 export type FindWindow = (label: string) => Promise<HubWindowHandle | null>;
 
 const tauriFind: FindWindow = (label) => Window.getByLabel(label);
@@ -28,6 +33,22 @@ export async function showHub(find: FindWindow = tauriFind): Promise<boolean> {
     await w.show();
     await w.setFocus();
     return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether the hub window has OS focus right now (read-only; #145). A ⌥G follow-up into a thread
+ * asks this, so a missed `blur` of the view can never send a ⌥G from another app into a thread.
+ * False when the hub is not there or the call fails.
+ */
+export async function isHubFocused(
+  find: (label: string) => Promise<HubFocusHandle | null> = (label) => Window.getByLabel(label),
+): Promise<boolean> {
+  try {
+    const w = await find('hub');
+    return w ? await w.isFocused() : false;
   } catch {
     return false;
   }

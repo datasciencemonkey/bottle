@@ -136,6 +136,9 @@ export interface ThreadAccess {
   conversationId: string;
   state: 'ready' | 'sign_in';
   text: string;
+  /** A follow-up of this thread is in flight (also one the view did not start, or a view that
+   * was away): the composer shows its busy state and sends no second one. */
+  busy?: boolean | undefined;
 }
 
 /** The composer asks the brain for a thread's `ThreadAccess` (on mount, on focus, on a retry). */
@@ -210,10 +213,11 @@ export function asThreadCheckAction(p: unknown): ThreadCheckAction | undefined {
 /** Shape check of a `hub:thread.access` payload. */
 export function asThreadAccess(p: unknown): ThreadAccess | undefined {
   if (!isObj(p)) return undefined;
-  const { conversationId, state, text } = p;
+  const { conversationId, state, text, busy } = p;
   if (!isStr(conversationId) || !isStr(text)) return undefined;
   if (state !== 'ready' && state !== 'sign_in') return undefined;
-  return { conversationId, state, text };
+  if (busy !== undefined && typeof busy !== 'boolean') return undefined;
+  return { conversationId, state, text, busy };
 }
 
 function isKeyNumber(v: unknown): v is ConversationKeyNumber {

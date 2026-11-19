@@ -265,6 +265,27 @@ describe('wireHubConversations (#103)', () => {
     await expect(w.findThread('conv-does-not-exist')).resolves.toBeUndefined();
   });
 
+  it('[#145] findThread uses the last list read, with no new store read per send', async () => {
+    const { store } = fakeStore({
+      [MOG_A]: [dbRow(1, T0, { conversationId: 'conv-x', profileName: 'fake-a' })],
+    });
+    const exec = vi.spyOn(store, 'exec');
+    const w = wireHubConversations(bus, {
+      store,
+      mogs,
+      send: async () => undefined,
+      sendOpen: async () => undefined,
+    });
+    await w.refresh();
+    const reads = exec.mock.calls.length;
+    await expect(w.findThread('conv-x')).resolves.toMatchObject({ mogId: MOG_A });
+    await expect(w.findThread('conv-x')).resolves.toMatchObject({ mogId: MOG_A });
+    expect(exec.mock.calls.length).toBe(reads);
+    // A conversation the last list does not carry falls back to one read.
+    await expect(w.findThread('conv-unknown')).resolves.toBeUndefined();
+    expect(exec.mock.calls.length).toBeGreaterThan(reads);
+  });
+
   it('[#145] a blank conversationId never matches (rows saved before #584 would collide)', async () => {
     const { store } = fakeStore({
       [MOG_A]: [dbRow(1, T0, { conversationId: null })],
