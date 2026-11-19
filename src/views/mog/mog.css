@@ -26,6 +26,333 @@ body,
   user-select: none;
 }
 
+/* #286: the lamp mascot. The Genie lives in its lamp: it rests inside, looks out on a pointer
+   or a cue, comes out to listen, works with its head over the rim, and climbs out with the
+   answer. Three art planes (mog-rive/fallback/layers) in one square, back to front: the lamp
+   mouth, the work halo, the level ring, the Genie (clipped at the rim), the lamp body, the answer
+   ring.
+   Positions are in % of the 400 px art. Only transform-type properties and opacity move.
+   An idle MOG runs no animation: only listening, working and ready loop (lamp-mascot.ts). */
+.lamp {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: min(100vw, 100vh);
+  height: min(100vw, 100vh);
+  pointer-events: none;
+}
+
+.lamp > svg {
+  position: absolute;
+  overflow: visible;
+}
+
+/* A warm halo behind the head while Genie works. It rises from the lamp mouth, and most of
+   it shows above the rim, round the head. */
+.lamp-glow {
+  left: 19%;
+  top: 30%;
+  width: 62%;
+  height: 42%;
+  fill: var(--mog-spark);
+  fill-opacity: 0.55;
+  filter: blur(6px);
+  opacity: 0;
+  transition: opacity var(--mog-fade-ms) ease-out;
+}
+
+/* The listening ring round the head. It follows the mic level (--level, 0..1). */
+.level-ring {
+  position: absolute;
+  left: 19.75%;
+  top: 21.75%;
+  width: 60.5%;
+  height: 60.5%;
+  box-sizing: border-box;
+  border: 2px solid var(--mog-eye);
+  border-radius: 50%;
+  opacity: 0;
+  transform: scale(0.94);
+  transition:
+    opacity 160ms ease-out,
+    transform 160ms ease-out;
+}
+
+.lamp[data-state='listening'] .level-ring {
+  opacity: calc(0.25 + 0.6 * var(--level, 0));
+  transform: scale(calc(0.94 + 0.14 * var(--level, 0)));
+  transition:
+    opacity 90ms linear,
+    transform 90ms linear;
+}
+
+/* The rim clip is fixed; the Genie moves inside it, so it slides down behind the rim. */
+.genie-clip {
+  position: absolute;
+  inset: 0;
+  clip-path: inset(0 0 29% 0);
+}
+
+.genie {
+  position: absolute;
+  inset: 0;
+  transition: translate var(--move-ms, 360ms) var(--mog-ease-out);
+}
+
+/* Into the lamp: a calm ease in and out. Out of it: a confident arrival. */
+.genie[data-dir='down'] {
+  transition-timing-function: cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+.genie[data-moving] {
+  transition: none;
+}
+
+.genie-body {
+  position: absolute;
+  inset: 0;
+  transform-origin: 50% 71%;
+}
+
+/* One image per pose, all decoded; the current one is on. The swap is instant, and the
+   Genie's height carries across it (FLIP in lamp-mascot.ts). */
+.mascot .genie-pose {
+  opacity: 0;
+}
+
+.mascot .genie-pose[data-on] {
+  opacity: 1;
+}
+
+/* A swap at the same height fades only the old pose out, so there is no dip. */
+.genie[data-fade] .genie-pose {
+  transition: opacity 140ms linear;
+}
+
+.genie[data-fade] .genie-pose[data-on] {
+  transition: none;
+}
+
+/* One lid layer in the screen colour of the art, a lid pair per pose (EYES in lamp-mascot.ts).
+   The lids are open (scaleY 0) except for a blink, in every pose with open eyes. */
+.eyelids {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  fill: rgb(24 45 52);
+}
+
+.eyelids g {
+  display: none;
+}
+
+.lamp[data-mood='idle'] [data-lids='idle'],
+.lamp[data-mood='listening'] [data-lids='listening'],
+.lamp[data-mood='processing'] [data-lids='processing'],
+.lamp[data-mood='answering'] [data-lids='answering'],
+.lamp[data-mood='success'] [data-lids='success'],
+.lamp[data-mood='error'] [data-lids='error'] {
+  display: inline;
+}
+
+.eyelids rect {
+  transform-box: fill-box;
+  transform-origin: 50% 0;
+  transform: scaleY(0);
+}
+
+.genie[data-blink] .eyelids rect {
+  animation: mog-blink 160ms ease-in-out;
+}
+
+/* At rest, now and then: a small look over the rim, then back down. */
+.lamp[data-state='rest'] .genie[data-peek-up] .genie-body {
+  animation: mog-peek-up 2000ms cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+/* Listening: the Genie breathes while the ring follows the voice. */
+.lamp[data-state='listening'] .genie-body {
+  animation: mog-breathe 2400ms ease-in-out infinite alternate;
+}
+
+/* Working: a slow bob, with the halo behind the head glowing in phase. Calm, no spin. */
+.lamp[data-state='working'] .genie-body {
+  animation: mog-bob 1800ms ease-in-out infinite alternate;
+}
+
+.lamp[data-state='working'] .lamp-glow {
+  animation:
+    mog-glow-in 360ms ease-out,
+    mog-glow 1800ms ease-in-out 360ms infinite alternate;
+}
+
+/* Answer ready: out of the lamp with a ring burst, then a gentle sway while it lasts. */
+.lamp[data-state='ready'] .genie-body {
+  animation: mog-sway 5200ms ease-in-out infinite;
+}
+
+/* The "response is here" ring: it bursts round the standing head as the Genie lands, and it
+   stays inside the window at its largest. */
+.answer-ring {
+  position: absolute;
+  left: 28%;
+  top: 4.5%;
+  width: 44%;
+  height: 44%;
+  box-sizing: border-box;
+  border: 2px solid var(--mog-spark);
+  border-radius: 50%;
+  opacity: 0;
+  transform: scale(0.6);
+}
+
+.lamp[data-glint] .answer-ring {
+  animation: mog-answer-ring 720ms linear 240ms forwards;
+}
+
+/* Error: one shake of the head, then still. */
+.lamp[data-state='error'] .genie-body {
+  animation: mog-shake 420ms ease-in-out;
+}
+
+.mascot .lamp-cue {
+  transform-origin: 80% 15%;
+  animation: mog-cue-in 240ms var(--mog-ease-out);
+}
+
+.mascot .lamp-cue[data-out] {
+  animation: mog-cue-out 160ms cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+
+@keyframes mog-blink {
+  45% {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes mog-peek-up {
+  30%,
+  70% {
+    translate: 0 -3%;
+  }
+}
+
+@keyframes mog-breathe {
+  to {
+    scale: 1.015;
+  }
+}
+
+@keyframes mog-bob {
+  to {
+    translate: 0 -3%;
+  }
+}
+
+@keyframes mog-glow-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 0.25;
+  }
+}
+
+@keyframes mog-glow {
+  from {
+    opacity: 0.25;
+  }
+  to {
+    opacity: 0.7;
+  }
+}
+
+@keyframes mog-glow-soft {
+  from {
+    opacity: 0.3;
+  }
+  to {
+    opacity: 0.6;
+  }
+}
+
+@keyframes mog-sway {
+  25% {
+    transform: rotate(-1.2deg);
+  }
+  75% {
+    transform: rotate(1.2deg);
+  }
+}
+
+/* Bright while it clears the head, then it widens and fades. */
+@keyframes mog-answer-ring {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  15% {
+    opacity: 1;
+    transform: scale(0.98);
+  }
+  55% {
+    opacity: 0.75;
+    transform: scale(1.1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.18);
+  }
+}
+
+@keyframes mog-answer-flash {
+  from {
+    opacity: 0;
+  }
+  30% {
+    opacity: 0.9;
+  }
+  to {
+    opacity: 0.2;
+  }
+}
+
+@keyframes mog-answer-soft {
+  from {
+    opacity: 0.2;
+  }
+  to {
+    opacity: 0.6;
+  }
+}
+
+@keyframes mog-cue-out {
+  to {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+}
+
+@keyframes mog-shake {
+  25% {
+    transform: rotate(-3deg);
+  }
+  50% {
+    transform: rotate(3deg);
+  }
+  75% {
+    transform: rotate(-2deg);
+  }
+}
+
+@keyframes mog-cue-in {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+}
+
 /* MOG-07, UX-38, UX-39a (ADR 0029): the badges sit at the foot of the window, over the
    mascot, clear of the target marker. No fill (MOG-01a): a hairline pill and a text halo keep
    the text readable on any desktop. Colours and type come from ../tokens.css (#559). */
@@ -154,8 +481,62 @@ body,
   letter-spacing: 0;
 }
 
+/* Reduced motion: no travel, turn or scale. Poses crossfade, and every active state still
+   shows it is alive by opacity: the listening ring follows the voice and the lamp glows, the
+   working halo breathes, the answer ring pulses. Never a frozen pose. */
 @media (prefers-reduced-motion: reduce) {
   .target-toast {
     animation: none;
+  }
+
+  .genie,
+  .genie[data-dir='down'] {
+    translate: none;
+    transition: none;
+  }
+
+  .genie-body,
+  .lamp[data-state] .genie-body,
+  .mascot .lamp-cue,
+  .genie[data-blink] .eyelids rect {
+    animation: none;
+  }
+
+  .mascot .lamp-cue[data-out] {
+    opacity: 0;
+    transition: opacity 160ms linear;
+  }
+
+  /* The blink is a lid swap by opacity: a state change, not motion. */
+  .eyelids rect {
+    transform: none;
+    opacity: 0;
+  }
+
+  .genie[data-blink] .eyelids rect {
+    opacity: 1;
+  }
+
+  .mascot .genie-pose,
+  .genie[data-fade] .genie-pose {
+    transition: opacity 200ms linear;
+  }
+
+  .lamp[data-state='listening'] .level-ring {
+    transform: none;
+    opacity: calc(0.25 + 0.6 * var(--level, 0));
+  }
+
+  .lamp[data-state='listening'] .lamp-glow,
+  .lamp[data-state='working'] .lamp-glow {
+    animation: mog-glow-soft 2400ms ease-in-out infinite alternate;
+  }
+
+  /* The answer ring flashes once at a fixed size, then pulses while ready lasts. */
+  .lamp[data-state='ready'] .answer-ring {
+    transform: none;
+    animation:
+      mog-answer-flash 480ms ease-out,
+      mog-answer-soft 2400ms ease-in-out 480ms infinite alternate;
   }
 }

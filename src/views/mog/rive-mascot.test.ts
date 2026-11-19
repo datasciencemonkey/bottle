@@ -96,7 +96,10 @@ function mountWith(create: RiveFactory, fallback?: () => MascotRenderer) {
   return { el, m };
 }
 
-const pngMood = (el: HTMLElement) => el.querySelector<HTMLImageElement>('img[data-mascot="png"]');
+const staticPng = (el: HTMLElement) => el.querySelector<HTMLImageElement>('img[data-mascot="png"]');
+/** The fallback pose on show: the lamp mascot's current Genie plane (#286). */
+const pngMood = (el: HTMLElement) =>
+  el.querySelector<HTMLImageElement>('[data-mascot="lamp"] img.genie-pose[data-on]');
 
 describe('RiveMascot', () => {
   it('[UX-09a] [UX-08b] [SEC-20a] builds one offline instance in DrawOnChanged mode with the Rive listeners off', () => {
@@ -235,11 +238,11 @@ describe('RiveMascot', () => {
     m.setAttention(true);
     r.fail();
     expect(el.querySelector('canvas')).toBeNull();
-    expect(pngMood(el)?.getAttribute('src')).toMatch(/mood-error\.png/);
+    expect(pngMood(el)?.getAttribute('src')).toMatch(/genie-error\.png/);
     expect(el.querySelector('[data-mascot="attention"]')).not.toBeNull();
     expect(r.cleaned()).toBe(1);
     m.setMood('success');
-    expect(pngMood(el)?.getAttribute('src')).toMatch(/mood-success\.png/);
+    expect(pngMood(el)?.getAttribute('src')).toMatch(/genie-success\.png/);
   });
 
   it('[UX-09b] [AT-21] a runtime that throws or has no view model also falls back to PNG', () => {
@@ -274,11 +277,11 @@ describe('PngMascot (UX-09b fallback)', () => {
     const el = document.createElement('div');
     const m = new PngMascot();
     m.mount(el);
-    expect(pngMood(el)?.getAttribute('src')).toMatch(/fallback\/mood-idle\.png/);
+    expect(staticPng(el)?.getAttribute('src')).toMatch(/fallback\/mood-idle\.png/);
     const seen = new Set<string>();
     for (const mood of MOODS) {
       m.setMood(mood);
-      const src = pngMood(el)?.getAttribute('src') ?? '';
+      const src = staticPng(el)?.getAttribute('src') ?? '';
       expect(src).toMatch(new RegExp(`mood-${mood}\\.png`));
       seen.add(src);
     }
@@ -316,7 +319,7 @@ describe('PngMascot (UX-09b fallback)', () => {
     m.setLevel(1);
     m.setHover(true);
     m.poke();
-    expect(pngMood(el)?.getAttribute('src')).toMatch(/mood-idle\.png/);
+    expect(staticPng(el)?.getAttribute('src')).toMatch(/mood-idle\.png/);
     m.destroy();
     expect(el.childElementCount).toBe(0);
   });
