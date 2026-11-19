@@ -6,6 +6,9 @@
 //! login gets the launchd PATH `/usr/bin:/bin:/usr/sbin:/sbin`, which has neither Homebrew nor
 //! the install-script folder. The launch check runs the W-02b location check on the CLI found,
 //! wherever it was found. The MDM `CliPath` still wins: then no other folder is searched.
+//!
+//! W-17f (#161): the Bottle bin folder ([`crate::bottle_bin_dir`]) comes first, before PATH. So
+//! after the guided install R5 uses the Bottle copy, and an older CLI on PATH stays unchanged.
 
 use std::path::{Path, PathBuf};
 
@@ -72,8 +75,8 @@ pub fn fallback_dirs<E: Env + ?Sized>(env: &E) -> Vec<PathBuf> {
     dirs
 }
 
-/// Finds the CLI: the policy path if set, else the first absolute PATH entry, then the first
-/// [`fallback_dirs`] folder, that holds an executable `databricks`.
+/// Finds the CLI: the policy path if set, else the Bottle bin folder, then the first absolute
+/// PATH entry, then the first [`fallback_dirs`] folder, that holds an executable `databricks`.
 pub fn resolve<F: Fs + ?Sized, E: Env + ?Sized>(
     fs: &F,
     env: &E,
@@ -90,8 +93,9 @@ pub fn resolve<F: Fs + ?Sized, E: Env + ?Sized>(
         .var("PATH")
         .map(|v| std::env::split_paths(&v).collect())
         .unwrap_or_default();
-    on_path
+    crate::install::bottle_bin_dir(env)
         .into_iter()
+        .chain(on_path)
         .chain(fallback_dirs(env))
         .filter(|dir| dir.is_absolute())
         .find_map(|dir| found_at(fs, &dir.join(name)))

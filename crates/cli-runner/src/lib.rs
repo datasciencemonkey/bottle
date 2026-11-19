@@ -4,13 +4,15 @@
 //! - refuses a CLI in a world-writable or temporary directory (W-02b),
 //! - needs CLI version 1.17 or later (W-02c),
 //! - checks the path and version again at each launch (W-02d),
-//! - runs every CLI child with a clean env (W-09).
+//! - runs every CLI child with a clean env (W-09),
+//! - installs the official CLI in the Bottle bin folder after consent ([`install`], W-17b..W-17f).
 //!
 //! All filesystem, environment and process access goes through the small
 //! traits in [`sys`] so that tests can use fakes.
 
 pub mod env;
 pub mod error;
+pub mod install;
 pub mod location;
 pub mod resolve;
 pub mod runner;
@@ -19,6 +21,7 @@ pub mod version;
 
 pub use env::{clean_env, clean_env_for, is_allowed};
 pub use error::{CliError, UnsafeReason};
+pub use install::bottle_bin_dir;
 pub use location::{check_location, path_within, temp_roots};
 pub use resolve::{binary_name, fallback_dirs, resolve, CliPolicy, Resolved, CLI_NAME};
 pub use runner::{CliRecord, CliRunner, CliStatus, CliWarning, LaunchReport};

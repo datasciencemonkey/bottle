@@ -96,3 +96,79 @@ export function asCliSettingsModel(p: unknown): CliSettingsModel | undefined {
   }
   return { found, path, version, belowRecommended, warnings: [...warnings] };
 }
+
+// ---- #161: the first-run step "Install the Databricks CLI" (W-17b, W-17c, W-17e, W-17f, U16) ----
+
+/** The brain-to-hub event of the install step. TODO(#525). */
+export const CLI_INSTALL_EVENT = 'hub:cli_install';
+/** The hub asks for the step when it opens (`view_emit`, id {@link CLI_VIEW_ID}). */
+export const CLI_SETUP_TARGET = 'cli_setup';
+/** The user selects "Install the Databricks CLI": this click is the consent (W-17b). */
+export const CLI_INSTALL_TARGET = 'cli_install';
+/** The pinned release of `cli_runner::install::PINNED_CLI_VERSION` (a test checks they match). */
+export const CLI_INSTALL_VERSION = '1.26.0';
+/** The source the step shows (`cli_runner::install::RELEASES_PAGE`). */
+export const CLI_INSTALL_SOURCE = 'https://github.com/databricks/cli/releases';
+
+export type CliPlatform = 'macos' | 'windows' | 'other';
+
+/** The OS of a user agent string. */
+export function cliPlatform(userAgent: string): CliPlatform {
+  if (/Windows/i.test(userAgent)) return 'windows';
+  if (/Mac/i.test(userAgent)) return 'macos';
+  return 'other';
+}
+
+/** W-17e: the user-only install folder of `cli_runner::install::bottle_bin_dir_for`. */
+export function cliInstallFolder(platform: CliPlatform): string {
+  switch (platform) {
+    case 'windows':
+      return '%LOCALAPPDATA%\\Bottle\\bin';
+    case 'macos':
+      return '~/Library/Application Support/Bottle/bin';
+    default:
+      return '~/.local/share/Bottle/bin';
+  }
+}
+
+/** What the step shows before and during the install. */
+export interface CliInstallOffer {
+  source: string;
+  version: string;
+  folder: string;
+}
+
+/**
+ * `none`: R5 verified a CLI, so no step. `offer`, `installing`, `failed`: the step. `installed`:
+ * the path and version of the CLI that R5 now uses (W-17f).
+ */
+export type CliInstallModel =
+  | { step: 'none'; path: string; version: string }
+  | ({ step: 'offer' | 'installing' | 'failed' } & CliInstallOffer)
+  | { step: 'installed'; path: string; version: string };
+
+/** The hub's shape check of the install model. */
+export function asCliInstallModel(p: unknown): CliInstallModel | undefined {
+  if (!isObj(p)) return undefined;
+  const str = (k: string) => typeof p[k] === 'string';
+  switch (p['step']) {
+    case 'none':
+    case 'installed':
+      return str('path') && str('version')
+        ? { step: p['step'], path: p['path'] as string, version: p['version'] as string }
+        : undefined;
+    case 'offer':
+    case 'installing':
+    case 'failed':
+      return str('source') && str('version') && str('folder')
+        ? {
+            step: p['step'],
+            source: p['source'] as string,
+            version: p['version'] as string,
+            folder: p['folder'] as string,
+          }
+        : undefined;
+    default:
+      return undefined;
+  }
+}

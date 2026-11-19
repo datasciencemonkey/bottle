@@ -16,7 +16,8 @@ import {
 import { createCaptureMood, wireCaptureMood } from '../capture-mood';
 import { wireForget } from '../forget-wiring';
 import { wireWipe } from '../wipe-wiring';
-import { wireCliSettings } from '../cli-wiring';
+import { wireCliInstall, wireCliSettings } from '../cli-wiring';
+import { cliPlatform } from '../../shared/cli-view';
 import { sendHubSnapshot, wireHubMogs } from '../hub-mogs-wiring';
 import {
   createCaptureLifecycle,
@@ -130,6 +131,13 @@ export function startBrain(): Brain {
     });
     // #16 (W-02a, W-02c, W-02d): the hub Settings show the CLI path and version from T7.
     wireCliSettings(bus, { cliInfo: () => components.T7.cliInfo() });
+    // #161 (W-17b, W-17c, U16): the first-run CLI install step. Only the hub's Install click
+    // calls `cli_install {consent:true}`.
+    wireCliInstall(bus, {
+      cliInfo: () => components.T7.cliInfo(),
+      install: () => call('cli_install', { consent: true }),
+      platform: cliPlatform(globalThis.navigator?.userAgent ?? ''),
+    });
     // MB-06a, MB-06b, UX-28: the talk-key target, its marker and its toast (#73). It is wired
     // before the capture lifecycle, so a `hotkey:ptt` down updates the target first.
     const talkTarget = createAppTalkTarget(configName);

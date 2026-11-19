@@ -14,6 +14,11 @@
 //! the first profile check and when no T7 is given. A failed `auth describe` blocks the profile
 //! but is not reported as plaintext. `cli_status` runs no CLI child of its own.
 //!
+//! `cli_install {consent:true}` (#161; W-17b, W-17d, W-17e, W-17f, U16) runs the guided install
+//! ([`CliInstaller`], `cli_runner::install`), then the launch check again, and answers the
+//! `cli_status` reply of the new CLI. A refused install is a content-free `Unavailable` code.
+//! The shipped installer is [`SystemCliInstaller`] over [`GithubReleaseFetch`].
+//!
 //! The record holds only the CLI path and version: no secret. TODO(#570): the
 //! `cli_status` reply has no field for the launch warnings yet, so they wait in
 //! [`CliStatusComponent::warnings`] for the contract change named in the host (`cli_host.rs`).
@@ -29,7 +34,8 @@ use crate::cli_runner::{
 use crate::error::{CoreError, CoreResult};
 use crate::ipc_gateway::GatewayComponents;
 use crate::policy_store::PolicyStore;
-use ::cli_runner::{Env, Fs, Process, Version, MIN_VERSION};
+use ::cli_runner::install::{install, Fetch, InstallError, InstallPlan};
+use ::cli_runner::{Env, Fs, Process, RealEnv, Version, MIN_VERSION};
 
 /// Appendix C: the absolute CLI path. When set, R5 uses only this path.
 pub const CLI_PATH_KEY: &str = "CliPath";
@@ -127,12 +133,82 @@ pub trait PlaintextStorage: Send + Sync {
     fn plaintext_storage(&self) -> bool;
 }
 
+/// The guided CLI install (#161). It runs only after `cli_install {consent:true}`.
+pub trait CliInstaller: Send + Sync {
+    /// Download, check and install the official CLI; the path of the installed CLI.
+    fn install(&self) -> Result<PathBuf, InstallError>;
+}
+
+/// The shipped installer: the pinned release for this OS and CPU into the Bottle bin folder.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SystemCliInstaller;
+
+impl CliInstaller for SystemCliInstaller {
+    fn install(&self) -> Result<PathBuf, InstallError> {
+        let plan = InstallPlan::for_this_machine(&RealEnv)?;
+        // The gateway let the call through only with `consent: true` (W-17b).
+        install(&plan, &GithubReleaseFetch, true)
+    }
+}
+
+/// The hosts of an official CLI release download: the release URL and its asset redirects.
+pub const RELEASE_HOSTS: &[&str] = &[
+    "github.com",
+    "objects.githubusercontent.com",
+    "release-assets.githubusercontent.com",
+];
+
+/// True if `url` is HTTPS on port 443 to one of [`RELEASE_HOSTS`].
+pub fn is_release_url(url: &reqwest::Url) -> bool {
+    url.scheme() == "https"
+        && url.port().is_none()
+        && url.username().is_empty()
+        && url.host_str().is_some_and(|h| RELEASE_HOSTS.contains(&h))
+}
+
+/// HTTPS download of a release file: no token, no cookie, redirects only to [`RELEASE_HOSTS`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GithubReleaseFetch;
+
+impl Fetch for GithubReleaseFetch {
+    fn fetch(&self, url: &str, out: &mut dyn std::io::Write) -> std::io::Result<()> {
+        let refuse = |m: &'static str| std::io::Error::other(m);
+        let url = reqwest::Url::parse(url).map_err(|_| refuse("bad url"))?;
+        if !is_release_url(&url) {
+            return Err(refuse("not a release url"));
+        }
+        // rustls needs one process-wide crypto provider. An `Err` means one is set already.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let client = reqwest::blocking::Client::builder()
+            .redirect(reqwest::redirect::Policy::custom(|a| {
+                if a.previous().len() < 5 && is_release_url(a.url()) {
+                    a.follow()
+                } else {
+                    a.stop()
+                }
+            }))
+            .connect_timeout(std::time::Duration::from_secs(20))
+            .timeout(std::time::Duration::from_secs(600))
+            .build()
+            .map_err(|_| refuse("client"))?;
+        let mut resp = client.get(url).send().map_err(|_| refuse("send"))?;
+        if !resp.status().is_success() {
+            return Err(refuse("status"));
+        }
+        resp.copy_to(out).map_err(|_| refuse("body"))?;
+        Ok(())
+    }
+}
+
 /// The `cli_status` component over the one R5 of the process.
 pub struct CliStatusComponent {
     cli: Arc<dyn LaunchCheck>,
     record: CliRecordFile,
     plaintext: Option<Arc<dyn PlaintextStorage>>,
     warnings: Mutex<Vec<CliWarning>>,
+    installer: Option<Arc<dyn CliInstaller>>,
+    /// One install at a time.
+    installing: Mutex<()>,
 }
 
 impl std::fmt::Debug for CliStatusComponent {
@@ -152,7 +228,36 @@ impl CliStatusComponent {
             record,
             plaintext,
             warnings: Mutex::new(Vec::new()),
+            installer: None,
+            installing: Mutex::new(()),
         }
+    }
+
+    /// `cli_install` uses `installer` (#161). Without one, `cli_install` is refused.
+    pub fn with_installer(mut self, installer: Arc<dyn CliInstaller>) -> Self {
+        self.installer = Some(installer);
+        self
+    }
+
+    /// `cli_install {consent:true}`: install, check the new CLI at once, answer its status.
+    fn cli_install(&self, args: &Value) -> CoreResult<Value> {
+        let refused = |reason| CoreError::Unavailable {
+            component: "R5",
+            reason,
+        };
+        // The gateway checks this too; the component never installs without it (W-17b).
+        if args.get("consent") != Some(&Value::Bool(true)) {
+            return Err(refused(InstallError::ConsentRequired.code()));
+        }
+        let installer = self
+            .installer
+            .as_ref()
+            .ok_or(refused("cli_install_unavailable"))?;
+        let _one = self.installing.lock().unwrap_or_else(|p| p.into_inner());
+        installer.install().map_err(|e| refused(e.code()))?;
+        // W-17e, W-17f: R5 resolves and checks the new CLI (the Bottle copy comes first).
+        self.launch();
+        Ok(self.reply())
     }
 
     /// The launch check (W-02d). Returns the warnings and keeps them. Never fails: a missing or
@@ -192,12 +297,13 @@ impl CliStatusComponent {
 }
 
 impl GatewayComponents for CliStatusComponent {
-    fn call(&self, command: &'static str, _args: Value) -> CoreResult<Value> {
-        if command != "cli_status" {
-            return Err(CoreError::IpcRefused {
+    fn call(&self, command: &'static str, args: Value) -> CoreResult<Value> {
+        match command {
+            "cli_status" => Ok(self.reply()),
+            "cli_install" => self.cli_install(&args),
+            _ => Err(CoreError::IpcRefused {
                 code: "not_implemented",
-            });
+            }),
         }
-        Ok(self.reply())
     }
 }

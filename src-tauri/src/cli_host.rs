@@ -12,16 +12,19 @@
 //! The R5 policy comes from the MDM keys `CliPath` and `CliMinVersion` through R13. The app has
 //! no MDM source yet, so R13 is the stub and the default policy holds. TODO(#186): read MDM.
 //!
-//! The host routes `cli_status` through `HostComponents` in `src-tauri/src/ipc.rs`, a contract
-//! file, and the reply has no field for the launch warnings: TODO(#570). Until then the brain
-//! gets `not_implemented`, and the warnings wait in [`CliStatusComponent::warnings`].
+//! The host routes `cli_status` and `cli_install` through the `cli` part of `HostComponents` in
+//! `src-tauri/src/ipc.rs` (#161). `cli_install {consent:true}` runs [`SystemCliInstaller`]: the
+//! pinned official release into the Bottle bin folder, SHA-256 checked (W-17b..W-17f). The reply
+//! has no field for the launch warnings yet: TODO(#570). They wait in
+//! [`CliStatusComponent::warnings`].
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use mog_core::cli_runner::DatabricksCliRunner;
 use mog_core::cli_status::{
-    cli_policy, CliRecordFile, CliStatusComponent, PlaintextStorage, RECORD_FILE,
+    cli_policy, CliRecordFile, CliStatusComponent, PlaintextStorage, SystemCliInstaller,
+    RECORD_FILE,
 };
 use mog_core::policy_store::StubPolicyStore;
 use tauri::Manager;
@@ -58,7 +61,10 @@ pub fn start(handle: &tauri::AppHandle<tauri::Wry>) {
     let plaintext = handle
         .try_state::<ProfilesHost>()
         .map(|t7| t7.0.clone() as Arc<dyn PlaintextStorage>);
-    let status = Arc::new(CliStatusComponent::new(cli, record, plaintext));
+    let status = Arc::new(
+        CliStatusComponent::new(cli, record, plaintext)
+            .with_installer(Arc::new(SystemCliInstaller)),
+    );
     handle.manage(CliStatusHost(status.clone()));
     // If the worker cannot start, `cli_status` says `found: false` until R5 runs a command.
     let _ = std::thread::Builder::new()

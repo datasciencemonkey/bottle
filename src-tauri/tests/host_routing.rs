@@ -345,6 +345,7 @@ fn arc_3_cap_02a_g_04a_window_ops_capture_start_and_mcp_call_run_off_the_main_th
     // #467: `mcp_call` is a blocking HTTP call to Genie One MCP (R8, G-04a).
     // #514: `stt_transcribe` takes the R4 store lock that the R4 worker shares (NFR-01a).
     // #426: `mem_local_exec` does SQLite IO under the R10 connection lock.
+    // #161: `cli_install` downloads and checks the CLI (W-17d).
     for c in COMMANDS {
         assert_eq!(
             runs_off_main_thread(c.name),
@@ -365,6 +366,8 @@ fn arc_3_cap_02a_g_04a_window_ops_capture_start_and_mcp_call_run_off_the_main_th
                         | "mem_local_exec"
                         // #555: T7 runs `databricks auth describe` per profile once R5 lands.
                         | "profiles_list"
+                        // #161: `cli_install` downloads and checks the CLI.
+                        | "cli_install"
                 ),
             "{}",
             c.name
@@ -782,6 +785,7 @@ fn arc_3_cap_02a_g_04a_schedule_runs_window_ops_capture_start_and_mcp_call_on_a_
                     | "stt_transcribe"
                     | "mem_local_exec"
                     | "profiles_list"
+                    | "cli_install"
             );
         if worker {
             assert_ne!(ran_on, caller, "{} ran on the calling thread", c.name);

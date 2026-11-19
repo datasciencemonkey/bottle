@@ -10,11 +10,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use cli_runner::install::InstallError;
 use cli_runner::{binary_name, Env, Fs, ProcOutput, Process, Version};
 use mog_core::cli_runner::{CliPolicy, CliRecord, CliWarning, DatabricksCliRunner};
 use mog_core::cli_status::{
-    cli_policy, CliRecordFile, CliStatusComponent, PlaintextStorage, CLI_MIN_VERSION_KEY,
-    CLI_PATH_KEY, RECORD_FILE,
+    cli_policy, CliInstaller, CliRecordFile, CliStatusComponent, PlaintextStorage,
+    CLI_MIN_VERSION_KEY, CLI_PATH_KEY, RECORD_FILE,
 };
 use mog_core::ipc_gateway::GatewayComponents;
 use mog_core::policy_store::{MemoryPolicyStore, StubPolicyStore};
@@ -306,4 +307,112 @@ fn w_02a_w_02c_mdm_cli_path_and_min_version_set_the_policy() {
         .with(CLI_MIN_VERSION_KEY, json!(7))
         .with(CLI_PATH_KEY, json!(""));
     assert_eq!(cli_policy(&bad), CliPolicy::default());
+}
+
+// #161: `cli_install {consent:true}` (W-17b, W-17d, W-17e, W-17f, U16). The installer is a fake:
+// it "installs" by making the one CLI of the fake machine appear. No network.
+
+/// A fake installer: counts its calls, then makes the CLI appear or fails.
+struct FakeInstaller {
+    present: Arc<AtomicBool>,
+    calls: Mutex<u32>,
+    fail: bool,
+}
+
+impl CliInstaller for FakeInstaller {
+    fn install(&self) -> Result<PathBuf, InstallError> {
+        *self.calls.lock().unwrap() += 1;
+        if self.fail {
+            return Err(InstallError::ChecksumMismatch);
+        }
+        self.present.store(true, Ordering::SeqCst);
+        Ok(cli_path())
+    }
+}
+
+fn no_cli_with_installer(fail: bool) -> (Machine, Arc<FakeInstaller>) {
+    let m = Machine::new("1.26.0");
+    m.present.store(false, Ordering::SeqCst);
+    let installer = Arc::new(FakeInstaller {
+        present: m.present.clone(),
+        calls: Mutex::new(0),
+        fail,
+    });
+    (m, installer)
+}
+
+/// [W-17b] [U16] `cli_install` without `consent: true` installs nothing
+#[test]
+fn w_17b_cli_install_needs_consent_true() {
+    let (m, installer) = no_cli_with_installer(false);
+    let dir = record_dir("install-consent");
+    let c = component(&m, &dir, None).with_installer(installer.clone());
+    for args in [json!({}), json!({"consent": false})] {
+        assert!(c.call("cli_install", args).is_err());
+    }
+    assert_eq!(*installer.calls.lock().unwrap(), 0);
+    assert_eq!(status(&c)["found"], json!(false));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// [W-17e] [W-17f] after the install R5 checks the new CLI again and `cli_install` answers its path
+#[test]
+fn w_17e_w_17f_cli_install_runs_the_launch_check_on_the_new_cli() {
+    let (m, installer) = no_cli_with_installer(false);
+    let dir = record_dir("install-ok");
+    let c = component(&m, &dir, None).with_installer(installer.clone());
+    c.launch();
+    assert_eq!(status(&c)["found"], json!(false));
+    let reply = c.call("cli_install", json!({"consent": true})).unwrap();
+    assert_eq!(
+        reply,
+        json!({
+            "path": cli_path().to_str().unwrap(),
+            "version": "1.26.0",
+            "found": true,
+            "plaintextStorage": false
+        })
+    );
+    assert_eq!(*installer.calls.lock().unwrap(), 1);
+    assert_eq!(status(&c), reply);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// [W-17d] [SEC-20b] a refused install is a content-free error and the CLI stays not found
+#[test]
+fn w_17d_a_failed_install_is_refused_without_detail() {
+    let (m, installer) = no_cli_with_installer(true);
+    let dir = record_dir("install-fail");
+    let c = component(&m, &dir, None).with_installer(installer);
+    let err = c.call("cli_install", json!({"consent": true})).unwrap_err();
+    // The host sends it as `host_failed` (not in ERROR_CODES): no path, URL or hash crosses.
+    assert_eq!(err.code(), "cli_install_checksum_mismatch");
+    assert_eq!(status(&c)["found"], json!(false));
+    // No installer (no user folder on this machine): refused too.
+    let c = component(&m, &dir, None);
+    assert!(c.call("cli_install", json!({"consent": true})).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// [W-17d] the real download asks only HTTPS GitHub release hosts on port 443
+#[test]
+fn w_17d_release_downloads_go_only_to_github_release_hosts() {
+    use mog_core::cli_status::is_release_url;
+    let ok = |u: &str| is_release_url(&reqwest::Url::parse(u).unwrap());
+    assert!(ok(
+        "https://github.com/databricks/cli/releases/download/v1.26.0/databricks_cli_1.26.0_SHA256SUMS"
+    ));
+    assert!(ok(
+        "https://release-assets.githubusercontent.com/github-production-release-asset/x"
+    ));
+    assert!(ok("https://objects.githubusercontent.com/x"));
+    for bad in [
+        "http://github.com/databricks/cli/releases/download/v1.26.0/x",
+        "https://github.com:8443/x",
+        "https://evil.example/x",
+        "https://github.com.evil.example/x",
+        "https://user@github.com/x",
+    ] {
+        assert!(!ok(bad), "{bad}");
+    }
 }
