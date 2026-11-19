@@ -487,6 +487,65 @@
     color: var(--mog-lid);
   }
 
+  /* #ui-4: the row colour picker. The swatch shows this MOG's current accent colour; opening it
+     offers the fixed palette, same shape as "More" above. */
+  .hub-color-picker {
+    position: relative;
+    flex: none;
+  }
+
+  .hub-color-picker summary {
+    display: inline-flex;
+    padding: 4px;
+    border-radius: var(--mog-radius-sm);
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .hub-color-picker summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .hub-color-picker summary:hover,
+  .hub-color-picker[open] summary {
+    background: rgb(255 255 255 / 6%);
+  }
+
+  .hub-color-options {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 5;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+    padding: 8px;
+    border: 1px solid var(--mog-edge);
+    border-radius: var(--mog-radius-md);
+    background: var(--mog-surface-raised);
+    box-shadow: var(--mog-shadow);
+  }
+
+  .hub-color-dot {
+    width: 18px;
+    height: 18px;
+    border: 1px solid rgb(255 255 255 / 25%);
+    border-radius: 50%;
+    padding: 0;
+    cursor: pointer;
+  }
+
+  .hub-color-options .hub-color-dot[aria-pressed='true'] {
+    box-shadow:
+      0 0 0 2px var(--mog-surface-raised),
+      0 0 0 4px var(--mog-focus);
+  }
+
+  .hub-color-dot:focus-visible {
+    outline: 2px solid var(--mog-focus);
+    outline-offset: 2px;
+  }
+
   /* The edit form opens under its row. */
   .hub-edit {
     flex-basis: 100%;
@@ -951,6 +1010,20 @@
     color: var(--mog-text-muted);
     font-size: var(--mog-text-xs);
     font-variant-numeric: tabular-nums;
+  }
+
+  /* #ui-4: the MOG's accent colour, the same dot as its hub row swatch. */
+  .conv-mog {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  .conv-mog-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex: none;
   }
 
   .conv-status--failed {

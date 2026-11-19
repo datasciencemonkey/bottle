@@ -86,4 +86,17 @@
   /* Motion. */
   --mog-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --mog-fade-ms: 300ms;
+
+  /* MOG identity palette (#ui-4): one accent colour per MOG, assigned at create time and
+     editable in the hub (`src/shared/mog-palette.ts` is the source; keep the two in sync).
+     White pill text (--mog-on-accent) is >= 4.5:1 on every one (checked in
+     `mog-palette.test.ts` with the real WCAG formula, not by eye). */
+  --mog-palette-coral: #b8322a; /* white text 5.9:1 */
+  --mog-palette-amber: #8a4b08; /* white text 6.8:1 */
+  --mog-palette-emerald: #047857; /* white text 5.5:1 */
+  --mog-palette-teal: #0f6b66; /* white text 6.3:1 */
+  --mog-palette-sky: #0b5fa5; /* white text 6.6:1 */
+  --mog-palette-indigo: #4338ca; /* white text 7.9:1 */
+  --mog-palette-violet: #6d28d9; /* white text 7.1:1 */
+  --mog-palette-rose: #be123c; /* white text 6.3:1 */
 }

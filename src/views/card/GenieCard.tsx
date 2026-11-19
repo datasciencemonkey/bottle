@@ -42,6 +42,7 @@ import {
   opIdOfGenieBlurb,
   timerText,
 } from '../../shared/genie-status';
+import { paletteColorOf } from '../../shared/mog-palette';
 import { emitView, type CardUpdate } from '../view-ipc';
 import { NO_LINKS, SafeMarkdown } from './safe-markdown';
 
@@ -172,9 +173,16 @@ export interface GenieCardProps {
    * content and before any size motion, so the window can fit it (`fit-window.ts`).
    */
   onSize?: (px: number) => Promise<void> | void;
+  /**
+   * #ui-4: the target MOG's name and colour (`CardView.tsx`, `useCardIdentity`). The card is
+   * already target-only (MOG-13a, MOG-13b: the owner of the request is the MOG that captured
+   * it), so this only labels it; undefined before the brain answers shows no label.
+   */
+  identity?: { name: string; colorVariant?: string } | undefined;
 }
 
-export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
+export function GenieCard({ mogId, card, onSize, identity }: GenieCardProps) {
+  const accent = identity && paletteColorOf(identity.colorVariant, mogId).hex;
   const newest = card.blurbs[0];
   const blurbId = newest?.id ?? '';
   const opId = opIdOfGenieBlurb(blurbId);
@@ -487,12 +495,22 @@ export function GenieCard({ mogId, card, onSize }: GenieCardProps) {
       className={`genie genie-${kind}`}
       data-genie={kind}
       data-state={vis}
+      style={accent ? ({ '--mog-id-color': accent } as CSSProperties) : undefined}
       onMouseEnter={() => hold('pointer', true)}
       onMouseLeave={() => hold('pointer', false)}
       onMouseDown={onPress}
       onClick={openInBottle}
       onDoubleClick={onDoubleClick}
     >
+      {/* #ui-4: this card is already target-only (MOG-13a, MOG-13b); this only names the MOG.
+          Review #603, finding 5: the name is neutral text (AA on this surface); the dot, not the
+          text, carries the accent colour. */}
+      {identity && (
+        <span className="genie-identity">
+          <span className="genie-identity-dot" aria-hidden="true" />
+          {identity.name}
+        </span>
+      )}
       {kind === 'working' && (
         <>
           <Stage text={line1} />

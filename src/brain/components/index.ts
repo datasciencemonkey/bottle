@@ -40,6 +40,7 @@ import { createDictationSink } from '../dictation-copy';
 import { genieBlurbId } from '../../shared/genie-status';
 import { createGenieDirectSend } from '../genie-direct';
 import { wireGenieCard } from '../genie-card-wiring';
+import { createAppMogContextMenu } from '../mog-context-menu';
 import { showHub } from '../hub-window';
 import { asPttEvent } from '../ptt';
 import { createRecordToggle } from '../record-toggle';
@@ -57,7 +58,7 @@ import { NO_HOME, withOfflineFallback } from '../offline-intent';
 import { createProfilePick } from '../profile-pick';
 import { createRequestOwner, sendOwnedCard } from '../request-owner';
 import { wireTalkNoMog } from '../talk-no-mog';
-import { configName, createAppTalkTarget, wireTalkTarget, type TalkTarget } from '../talk-target';
+import { createAppTalkTarget, wireTalkTarget, type TalkTarget } from '../talk-target';
 import { createLifecycleTranscriber } from '../stt-wiring';
 import { ipcUtteranceDeps } from '../utterance-route';
 import { createUtteranceHandler } from '../utterance-wiring';
@@ -145,14 +146,22 @@ export function startBrain(): Brain {
     });
     // MB-08a, MB-08b: the hub notice talks to T12 (#27).
     wireNotice(bus, components.T12);
-    // #26: the hub MOG list and actions (MB-01).
-    wireHubMogs(bus, components.T1);
+    // #26: the hub MOG list and actions (MB-01). #ui-4 (review #603, finding 3): a successful
+    // edit or colour pick re-reads that MOG's identity and pushes it to its open MOG and card
+    // (`talkTarget.reidentify`, below), so neither keeps a stale name or colour until restart.
+    const hubMogs = wireHubMogs(bus, components.T1, undefined, (mogId) =>
+      talkTarget.reidentify(mogId),
+    );
     // #103 (#40): the hub Conversations list. The brain reads the saved exchanges of each MOG
     // (`mem.exchange.recent`) and sends them to the hub; the hub view runs no store statement.
     const conversations = wireHubConversations(bus, {
       store: new IpcLocalMemoryStore(),
       mogs: async () =>
-        (await components.T1.list()).mogs.map((m) => ({ mogId: m.mogId, name: m.name })),
+        (await components.T1.list()).mogs.map((m) => ({
+          mogId: m.mogId,
+          name: m.name,
+          colorVariant: m.colorVariant,
+        })),
       send: sendHubConversations,
       sendOpen: sendHubConversationsOpen,
     });
@@ -187,7 +196,7 @@ export function startBrain(): Brain {
     });
     // MB-06a, MB-06b, UX-28: the talk-key target, its marker and its toast (#73). It is wired
     // before the capture lifecycle, so a `hotkey:ptt` down updates the target first.
-    const talkTarget = createAppTalkTarget(configName);
+    const talkTarget = createAppTalkTarget();
     wireTalkTarget(bus, talkTarget);
     // #562 (MB-06a): a press with no open MOG starts the last-used MOG, or the hub says
     // "Create a MOG to start".
@@ -346,7 +355,23 @@ export function startBrain(): Brain {
         void showHub();
         void conversations.openConversations(requestId);
       },
+      // #ui-4: the MOG right-click menu's Close runs the same stop as the hub's Stop button
+      // (the window closes and the mic lease releases; the MOG stays defined). "Change home
+      // workspace…" shows the hub and opens that MOG's own Edit form, where the home field is
+      // (review #603, MEDIUM finding: it used to show only the hub, with no next step for the
+      // user to take).
+      closeMog: (mogId) => void components.T1.stop(mogId).catch(() => undefined),
+      changeHome: (mogId) => {
+        void showHub();
+        hubMogs.openEdit(mogId);
+      },
     });
+    // #ui-4 (review #603, findings 1 and 4): the MOG right-click menu's native popup. A MOG
+    // view may only listen and call `view_emit` (ARC-4); the brain holds `core:menu:*` and
+    // builds the menu on the MOG's own window, then replays Close/Open in Bottle/Change home
+    // workspace… through the bus exactly like a real click (`wireGenieCard` above and
+    // `wireTalkTarget` act on it unchanged).
+    createAppMogContextMenu(bus);
     // #498 (ADR 0091): the Copy card of a dictation. The card is shown first, then the text goes
     // on its stack. If the card cannot show, the text goes to the hub only. No main agent and no
     // Genie take part (RTR-01c).

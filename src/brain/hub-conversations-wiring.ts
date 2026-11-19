@@ -27,10 +27,12 @@ import {
 import { onViewInput, type BrainBus } from './bus';
 import type { LocalMemoryStore } from './components/memory-store';
 
-/** One defined MOG: its id and name. */
+/** One defined MOG: its id, name and accent colour. */
 export interface ConversationMog {
   mogId: string;
   name: string;
+  /** #ui-4: `mog.ui.variant`. */
+  colorVariant?: string;
 }
 
 export interface ConversationsReadDeps {
@@ -92,6 +94,7 @@ function rowOf(r: unknown, mog: ConversationMog): ConversationRow | undefined {
     requestId,
     mogId: mog.mogId,
     mogName: mog.name,
+    ...(mog.colorVariant !== undefined ? { mogColorVariant: mog.colorVariant } : {}),
     question: str(o['questionUser']),
     answerMd: str(o['finalAnswerMd']),
     keyNumbers: keyNumbersOf(o['keyNumbers']),
