@@ -286,6 +286,17 @@ function Detail({
 }) {
   const first = thread[0];
   const latest = thread.at(-1);
+  // A new exchange lands below the fold: scroll the pane to its end so the new answer and the
+  // composer show (not on first show, which starts at the question).
+  const count = thread.length;
+  const seen = useRef(count);
+  useEffect(() => {
+    if (count > seen.current) {
+      const pane = focusRef.current;
+      pane?.scrollTo?.({ top: pane.scrollHeight, behavior: 'smooth' });
+    }
+    seen.current = count;
+  }, [count, focusRef]);
   if (!first || !latest) return null;
   return (
     // BlurFade (ui-1): the newly selected thread fades and un-blurs in.
@@ -470,7 +481,9 @@ export function Conversations({
         </div>
         {selectedThread && (
           <Detail
-            key={selected?.requestId}
+            // One thread keeps one pane: a new exchange (the latest `requestId`) must not remount
+            // it, which would reset its scroll and re-announce the thread to the brain.
+            key={selected?.conversationId || selected?.requestId}
             thread={selectedThread}
             focusRef={detailRef}
             // [review] the area can stay mounted (`hidden`) while the hub shows another view: the

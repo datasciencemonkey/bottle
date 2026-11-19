@@ -4,7 +4,7 @@
  * listbox with day headers and a detail pane. The view renders what the brain sends on
  * `hub:conversations` and runs no store statement (ARC-2). All values are plainly fake.
  */
-import { act } from 'react';
+import { act, useEffect } from 'react';
 import { render, tauri, viewEmits } from '../test-tauri';
 import { Conversations } from './Conversations';
 import type { ConversationRow } from '../../shared/hub-conversations';
@@ -294,6 +294,26 @@ describe('hub Conversations (#103)', () => {
       expect(exchanges[0]?.textContent).toContain('What tables can you see?');
       expect(exchanges[1]?.textContent).toContain('How many are there?');
       expect(exchanges[1]?.textContent).toContain('152');
+    });
+
+    it('[#145] a new follow-up answer extends the same pane and keeps the composer mounted', async () => {
+      const mounts = vi.fn();
+      const Probe = () => {
+        useEffect(() => {
+          mounts();
+        }, []);
+        return <div data-testid="fake-composer" />;
+      };
+      const { el } = await mount(true, vi.fn(), () => <Probe />);
+      const first = row(11, at(19, 9, 0), { conversationId: CONV });
+      await tauri.emitTo('hub', 'hub:conversations', { rows: [first] });
+      const pane = detail(el);
+      const second = row(12, at(19, 9, 5), { conversationId: CONV, question: 'And then?' });
+      await tauri.emitTo('hub', 'hub:conversations', { rows: [second, first] });
+      expect(detail(el)).toBe(pane);
+      expect(pane.querySelectorAll('[data-exchange]')).toHaveLength(2);
+      // The composer is not remounted, so it never announces the thread inactive in between.
+      expect(mounts).toHaveBeenCalledTimes(1);
     });
 
     it('[#145] renders the composer below the thread, with its conversationId, exchangeId and profile', async () => {
