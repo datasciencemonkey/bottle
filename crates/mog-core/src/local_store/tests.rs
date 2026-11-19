@@ -417,7 +417,12 @@ fn mem_01_exec_rejects_params_without_mog_id() {
         require_mog_id_param(&json!({"mogId": "not-a-uuid"})).map(|_| ()),
         refused
     );
-    assert_eq!(require_mog_id_param(&json!({"mogId": MOG_A})), Ok(MOG_A));
+    assert_eq!(
+        require_mog_id_param(
+            &json!({"mogId": MOG_A, "itemId": "11111111-2222-4333-8444-555555555501"})
+        ),
+        Ok(MOG_A)
+    );
 
     let t = TempDir::new("01-exec");
     let s = open_store(t.path(), Arc::new(MemoryKeyVault::new()));
@@ -427,14 +432,125 @@ fn mem_01_exec_rejects_params_without_mog_id() {
     );
 }
 
+/// A vault double that counts reads and can fail them (the user clicked Deny).
+#[derive(Default)]
+struct CountingVault {
+    inner: MemoryKeyVault,
+    loads: std::sync::atomic::AtomicUsize,
+    deny: std::sync::atomic::AtomicBool,
+}
+
+impl KeyVault for CountingVault {
+    fn load(&self) -> crate::error::CoreResult<Option<LocalKey>> {
+        self.loads.fetch_add(1, Ordering::SeqCst);
+        if self.deny.load(Ordering::SeqCst) {
+            return Err(CoreError::KeychainUnavailable { component: "R10" });
+        }
+        self.inner.load()
+    }
+    fn store(&self, key: &LocalKey) -> crate::error::CoreResult<()> {
+        if self.deny.load(Ordering::SeqCst) {
+            return Err(CoreError::KeychainUnavailable { component: "R10" });
+        }
+        self.inner.store(key)
+    }
+}
+
 #[test]
-fn mem_01_exec_needs_an_open_store() {
-    let t = TempDir::new("01-closed");
-    let s = SqlCipherLocalStore::new(t.path().join("memory"), Arc::new(MemoryKeyVault::new()));
+fn mem_08b_a_closed_store_opens_on_first_use_with_one_key_read() {
+    let t = TempDir::new("08b-lazy");
+    let v = Arc::new(CountingVault::default());
+    let s = SqlCipherLocalStore::new(t.path().join("memory"), Arc::clone(&v) as Arc<dyn KeyVault>);
+    // Nothing reads the key store before the first use.
+    assert_eq!(v.loads.load(Ordering::SeqCst), 0);
+    for _ in 0..3 {
+        s.exec(
+            "mem.item.get",
+            json!({"mogId": MOG_A, "itemId": "11111111-2222-4333-8444-555555555501"}),
+        )
+        .unwrap();
+    }
+    assert_eq!(v.loads.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn mem_08b_a_refused_key_leaves_the_store_closed_and_a_later_use_asks_again() {
+    let t = TempDir::new("08b-deny");
+    let v = Arc::new(CountingVault::default());
+    v.deny.store(true, Ordering::SeqCst);
+    let s = SqlCipherLocalStore::new(t.path().join("memory"), Arc::clone(&v) as Arc<dyn KeyVault>);
     assert_eq!(
-        s.exec("mem.item.get", json!({"mogId": MOG_A})),
-        Err(CoreError::StoreUnavailable { component: "R10" })
+        s.exec(
+            "mem.item.get",
+            json!({"mogId": MOG_A, "itemId": "11111111-2222-4333-8444-555555555501"})
+        ),
+        Err(CoreError::KeychainUnavailable { component: "R10" })
     );
+    // Try again: the user allows it now.
+    v.deny.store(false, Ordering::SeqCst);
+    s.exec(
+        "mem.item.get",
+        json!({"mogId": MOG_A, "itemId": "11111111-2222-4333-8444-555555555501"}),
+    )
+    .unwrap();
+    assert_eq!(v.loads.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn mem_08b_the_open_hook_runs_once_after_the_first_open() {
+    let t = TempDir::new("08b-hook");
+    let s = Arc::new(SqlCipherLocalStore::new(
+        t.path().join("memory"),
+        Arc::new(MemoryKeyVault::new()),
+    ));
+    let runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (r, weak) = (Arc::clone(&runs), Arc::downgrade(&s));
+    s.on_first_open(Box::new(move || {
+        r.fetch_add(1, Ordering::SeqCst);
+        // The hook may use the store: the open holds no lock while it runs.
+        if let Some(s) = weak.upgrade() {
+            s.exec(
+                "mem.item.get",
+                json!({"mogId": MOG_A, "itemId": "11111111-2222-4333-8444-555555555501"}),
+            )
+            .unwrap();
+        }
+    }));
+    s.exec(
+        "mem.item.get",
+        json!({"mogId": MOG_A, "itemId": "11111111-2222-4333-8444-555555555501"}),
+    )
+    .unwrap();
+    s.exec(
+        "mem.item.get",
+        json!({"mogId": MOG_A, "itemId": "11111111-2222-4333-8444-555555555501"}),
+    )
+    .unwrap();
+    assert_eq!(runs.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn mem_08b_the_cached_vault_reads_the_os_store_once_per_launch() {
+    use super::key_vault::CachedKeyVault;
+    let inner = Arc::new(CountingVault::default());
+    let v = CachedKeyVault::new(Arc::clone(&inner) as Arc<dyn KeyVault>);
+    // No key yet: a miss is not cached, then the new key is.
+    assert!(v.load().unwrap().is_none());
+    let k = LocalKey::generate().unwrap();
+    v.store(&k).unwrap();
+    assert_eq!(v.load().unwrap().unwrap().as_bytes(), k.as_bytes());
+    assert_eq!(v.load().unwrap().unwrap().as_bytes(), k.as_bytes());
+    assert_eq!(inner.loads.load(Ordering::SeqCst), 1);
+    // A refused read is not cached: Try again reads the OS store once more.
+    let inner = Arc::new(CountingVault::default());
+    inner.inner.store(&k).unwrap();
+    inner.deny.store(true, Ordering::SeqCst);
+    let v = CachedKeyVault::new(Arc::clone(&inner) as Arc<dyn KeyVault>);
+    assert!(v.load().is_err());
+    inner.deny.store(false, Ordering::SeqCst);
+    assert!(v.load().unwrap().is_some());
+    assert!(v.load().unwrap().is_some());
+    assert_eq!(inner.loads.load(Ordering::SeqCst), 2);
 }
 
 // ---- Migrations and schema (MEM-35a, MEM-08d, MEM-08e, MEM-01, U9) -------------------------

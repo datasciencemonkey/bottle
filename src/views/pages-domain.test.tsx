@@ -18,7 +18,7 @@ vi.mock('@tauri-apps/api/window', async () => (await import('./test-tauri')).win
 const viewEmits = () =>
   allViewEmits().filter(
     (e) =>
-      ![HUB_SCOPE, 'cli', 'permissions', 'conversations', 'recording'].includes(
+      ![HUB_SCOPE, 'cli', 'permissions', 'conversations', 'recording', 'store'].includes(
         (e as { mogId: string }).mogId,
       ),
   );

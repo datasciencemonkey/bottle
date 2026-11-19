@@ -27,6 +27,7 @@ import { Recordings } from './Recordings';
 import { RecordingSettings } from './RecordingSettings';
 import { useHubRecording } from './recording-ipc';
 import { SttSetupStep } from './SttSetupStep';
+import { StoreNotice } from './StoreNotice';
 import { WipeSettings } from './WipeSettings';
 
 /**
@@ -97,6 +98,8 @@ export function Hub() {
     return (
       <main className="hub hub--notice">
         <HubHeader />
+        {/* ADR 0105: why macOS asks for the password, or that history is off. */}
+        <StoreNotice />
         <LegalNotice
           key={notice.version}
           version={notice.version}
@@ -111,6 +114,7 @@ export function Hub() {
   return (
     <main className={view === 'home' ? 'hub' : 'hub hub--wide'}>
       <HubHeader />
+      <StoreNotice />
       {/* ADR 0103: a running recording shows in every view, with the time left and Stop. */}
       {live && view !== 'recordings' && (
         <RecIndicator

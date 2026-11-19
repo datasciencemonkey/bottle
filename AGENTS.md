@@ -130,6 +130,10 @@ Rules of the boundary:
 - Run the app in dev: `pnpm tauri dev --features local-stt` (or plain `pnpm tauri dev` without local STT). Build a macOS DMG: `scripts/package-macos.sh`.
 - Before you push, run `scripts/pre-push.sh`. It runs the same suite as the merge gate.
 - Run `cargo clean` in a worktree when you finish with it; target dirs are large.
+- macOS keychain prompt: Bottle keeps its local store key in one keychain item
+  (`com.databricks.bottle.local-store`) and reads it once per launch, on first use (ADR 0105). An unsigned or
+  ad-hoc debug build has a new signature after each rebuild, so macOS asks for the password again. A signed build
+  where the user chose "Always Allow" does not ask again.
 
 ## 5. How work flows
 
