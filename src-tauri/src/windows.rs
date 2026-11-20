@@ -21,11 +21,48 @@ pub const CARD_REAP_TICK: Duration = Duration::from_secs(15);
 /// #559: the card window holds one pop-up line beside its MOG.
 pub const CARD_WIDTH: u32 = 340;
 pub const CARD_HEIGHT: u32 = 64;
-/// The pop-up tail reaches this far over the MOG window edge, which is mostly transparent.
-const CARD_OVERLAP: f64 = 16.0;
 
-/// #559: where the card goes for a MOG at `mog` (logical units): on its right, centred on it.
-/// If the right side leaves `screen`, it goes on the left; it is then kept inside `screen`.
+/// The MOG window: the lamp art is a 160 px square at the top, and the target marker has its own
+/// 8 px row under it, so it never covers the lamp (lamp-alive). The MOG shows no name on the lamp. Mirrored in `src/views/mog/mog.css`
+/// (`--mog-art`, `--mog-marker-row`) and tested in `tests/mog-layout.test.ts`.
+pub const MOG_WIDTH: u32 = 160;
+pub const MOG_ART_HEIGHT: u32 = 160;
+pub const MOG_HEIGHT: u32 = 168;
+/// The visible lamp starts this far in from the left and ends this far in from the right edge of
+/// the MOG window (logical px; the lamp art is 44..367 of 400, measured from `lamp-*.png`).
+pub const MOG_ART_LEFT_INSET: f64 = 18.0;
+pub const MOG_ART_RIGHT_INSET: f64 = 13.0;
+/// The head (the eyes) is this far below the top of the MOG window (logical px).
+pub const MOG_HEAD_Y: f64 = 72.0;
+/// The gap between the lamp art and the visible edge of the card or pop-up.
+pub const CARD_GAP: f64 = 10.0;
+/// The clear window on the side of the card that faces the MOG (`card.css`): equal to
+/// `CARD_GAP`, so the card window ends at the lamp art and never covers it. The far side keeps
+/// more room for the shadow (`CARD_FAR_PAD`).
+pub const CARD_EDGE_PAD: f64 = 10.0;
+pub const CARD_FAR_PAD: f64 = 12.0;
+/// The tail of the pop-up is this far below the top of the card window.
+pub const CARD_TAIL_Y: f64 = 30.0;
+
+/// Which side of the MOG a card is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CardSide {
+    Right,
+    Left,
+}
+
+/// The title of a card window on `side` of its MOG. The card view reads it (it is not shown) to
+/// mirror its tail and to keep the edge that faces the MOG fixed (`src/views/card/card-placement.ts`).
+pub fn card_title(side: CardSide) -> String {
+    match side {
+        CardSide::Right => "Bottle card (right)".to_owned(),
+        CardSide::Left => "Bottle card (left)".to_owned(),
+    }
+}
+
+/// #559: where the card goes for a MOG at `mog` (logical units): on its right, with its tail at
+/// the head. If the right side leaves `screen`, it goes on the left; it is then kept inside
+/// `screen`.
 pub fn card_beside(
     mog: &mog_core::ipc::Geometry,
     screen: Option<&mog_core::ipc::Geometry>,
@@ -41,22 +78,49 @@ pub fn card_beside_with_height(
     screen: Option<&mog_core::ipc::Geometry>,
     height: f64,
 ) -> mog_core::ipc::Geometry {
-    let width = f64::from(CARD_WIDTH);
-    let mut x = mog.x + mog.width - CARD_OVERLAP;
-    let mut y = mog.y + (mog.height - f64::from(CARD_HEIGHT)) / 2.0;
+    card_beside_sized(mog, screen, f64::from(CARD_WIDTH), height).0
+}
+
+/// [`card_beside`] for a card of `width` and `height`, with the side it took. The visible edge of
+/// the card is `CARD_GAP` from the lamp art on either side (`CARD_EDGE_PAD` is clear window
+/// inside it), so a card on the left is as close to the MOG as one on the right. The view mirrors
+/// this in `src/views/card/card-placement.ts` when it refits the window to its content.
+pub fn card_beside_sized(
+    mog: &mog_core::ipc::Geometry,
+    screen: Option<&mog_core::ipc::Geometry>,
+    width: f64,
+    height: f64,
+) -> (mog_core::ipc::Geometry, CardSide) {
+    let right_x = mog.x + mog.width - MOG_ART_RIGHT_INSET + CARD_GAP - CARD_EDGE_PAD;
+    let left_x = mog.x + MOG_ART_LEFT_INSET - CARD_GAP + CARD_EDGE_PAD - width;
+    let mut side = CardSide::Right;
+    let mut x = right_x;
+    let mut y = mog.y + MOG_HEAD_Y - CARD_TAIL_Y;
     if let Some(s) = screen {
-        if x + width > s.x + s.width {
-            x = mog.x + CARD_OVERLAP - width;
+        if right_x + width > s.x + s.width && left_x >= s.x {
+            side = CardSide::Left;
+            x = left_x;
+        } else if right_x + width > s.x + s.width && left_x < s.x {
+            // Neither side fits: keep the side with more room.
+            let room_right = s.x + s.width - (mog.x + mog.width);
+            let room_left = mog.x - s.x;
+            if room_left > room_right {
+                side = CardSide::Left;
+                x = left_x;
+            }
         }
         x = x.clamp(s.x, (s.x + s.width - width).max(s.x));
         y = y.clamp(s.y, (s.y + s.height - height).max(s.y));
     }
-    mog_core::ipc::Geometry {
-        x,
-        y,
-        width,
-        height,
-    }
+    (
+        mog_core::ipc::Geometry {
+            x,
+            y,
+            width,
+            height,
+        },
+        side,
+    )
 }
 
 /// #573: a close of this window hides it and keeps it for a later show. Only the hub: the brain
@@ -199,8 +263,8 @@ impl WindowKind {
                 resizable: false,
                 shadow: false,
                 accept_first_mouse: true,
-                width: 160,
-                height: 160,
+                width: MOG_WIDTH,
+                height: MOG_HEIGHT,
             },
             // macOS: `panel()` makes it a key-capable non-activating NSPanel (#78, ADR 0022).
             // R11 makes it on the first show and the reaper destroys it after 5 min hidden.

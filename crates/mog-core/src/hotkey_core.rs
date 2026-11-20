@@ -13,10 +13,15 @@
 //! through [`AskKeyControl`]. A press marks the hold as an ask, and its `up` becomes
 //! [`HotkeyOutput::PttAskUp`]. The engine releases the grab on every path that ends the hold.
 //!
+//! Record key (ADR 0103): with the Call recording knob on, the same seam also grabs talk key + R
+//! during the hold. A press ends the hold at once with `Ptt(Cancel)` (no dictation), then
+//! [`HotkeyOutput::RecordToggle`]. With the knob off, R is any other key, as before.
+//!
 //! Requirements: CAP-35b, CAP-36, CAP-37, CAP-38a, CAP-38b, CAP-39a, CAP-39b, CAP-39c, CAP-44a,
 //! CAP-44c, CAP-45, RTR-17a.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -154,6 +159,10 @@ pub enum HotkeyOutput {
     /// ends the PTT as `Ptt(Up)` does; the host adds `ask: true` to the `hotkey.ptt` up. A tap,
     /// a cancel and a double-tap never carry it.
     PttAskUp,
+    /// The record key (talk key + R) went down in a talk-key hold, with the Call recording knob
+    /// on (ADR 0103). It comes right after the `Ptt(Cancel)` that ends the hold, so no
+    /// dictation and no paste follow. The host sends it as `hotkey.record_toggle`.
+    RecordToggle,
 }
 
 impl HotkeyOutput {
@@ -539,6 +548,11 @@ pub trait AskKeyControl: Send + Sync {
     /// [`HotkeyEngine::on_ask_key_drained`]. The engine calls it at a key-up with the ask key
     /// grabbed and no G seen yet. It must return fast, as `set_ask_key` must.
     fn drain(&self);
+
+    /// Grab (`true`) or release (`false`) the record key: the talk key + R (ADR 0103). The
+    /// engine calls it only during a talk-key hold with the Call recording knob on. It must
+    /// return fast, as `set_ask_key` must. An OS layer with no record key keeps the default.
+    fn set_record_key(&self, _on: bool) {}
 }
 
 /// The state of the fallback chord registration.
@@ -576,6 +590,10 @@ pub struct HotkeyEngine {
     ask_key_expired: bool,
     /// The time of a talk-key up that waits for the ask-key drain (RTR-17a, review M1).
     pending_up: Option<Duration>,
+    /// The Call recording knob (ADR 0103). None or false: no record key, R is any other key.
+    record_gate: Option<Arc<AtomicBool>>,
+    /// The record key is grabbed now.
+    record_key_on: bool,
 }
 
 impl std::fmt::Debug for HotkeyEngine {
@@ -614,6 +632,45 @@ impl HotkeyEngine {
             ask_key_since: None,
             ask_key_expired: false,
             pending_up: None,
+            record_gate: None,
+            record_key_on: false,
+        }
+    }
+
+    /// The same engine with the Call recording knob `gate` (ADR 0103). While it is true, each
+    /// talk-key hold also grabs the record key through the [`AskKeyControl`] seam.
+    pub fn with_record_gate(mut self, gate: Arc<AtomicBool>) -> Self {
+        self.set_record_gate(gate);
+        self
+    }
+
+    /// Set the Call recording knob `gate` of a built engine (ADR 0103). The next sync reads it.
+    pub fn set_record_gate(&mut self, gate: Arc<AtomicBool>) {
+        self.record_gate = Some(gate);
+    }
+
+    /// The Call recording knob is on now.
+    fn record_knob_on(&self) -> bool {
+        self.record_gate
+            .as_ref()
+            .is_some_and(|g| g.load(Ordering::Relaxed))
+    }
+
+    /// The record key went down (ADR 0103): the grabbed hot key, or the other-key tap that
+    /// compares the key code with R. With the knob on, it ends a talk-key hold at once with
+    /// `Ptt(Cancel)` and emits [`HotkeyOutput::RecordToggle`]; a key-up that waits for the drain
+    /// ends the same way. It wins over an ask in the same hold. With the knob off, R is any other
+    /// key (CAP-44c). With no hold it does nothing.
+    pub fn on_record_key(&mut self) {
+        if !self.record_knob_on() {
+            self.on_other_key_down();
+        } else if self.machine.held_by == Some(TalkKeyMode::TalkKey) {
+            self.pending_up = None;
+            self.held_since = None;
+            self.last_tap_down = None;
+            let mut out = self.machine.cancel();
+            out.push(HotkeyOutput::RecordToggle);
+            self.emit(out);
         }
     }
 
@@ -836,6 +893,8 @@ impl HotkeyEngine {
             self.ask_key_expired = true;
             self.sync_ask_key();
         }
+        // ADR 0103: a knob change in a hold grabs or releases the record key.
+        self.sync_record_key();
         // Secure Event Input first: it has the 250 ms deadline (CAP-39a).
         if let Some(active) = self.secure.poll(probe.secure_input_active()) {
             ctl.set_chord(active);
@@ -963,12 +1022,32 @@ impl HotkeyEngine {
         if let Some(ctl) = &self.ask_key {
             ctl.set_ask_key(want);
         }
+        self.sync_record_key();
+    }
+
+    /// Grab the record key while the ask key is grabbed and the Call recording knob is on;
+    /// release it otherwise (ADR 0103). Grab and release pair up, as for the ask key.
+    fn sync_record_key(&mut self) {
+        let want = self.ask_key_since.is_some() && self.record_knob_on();
+        if want == self.record_key_on {
+            return;
+        }
+        self.record_key_on = want;
+        if let Some(ctl) = &self.ask_key {
+            ctl.set_record_key(want);
+        }
     }
 }
 
 impl Drop for HotkeyEngine {
-    /// An engine that goes away in a hold releases the ask key (RTR-17a).
+    /// An engine that goes away in a hold releases the ask key (RTR-17a) and the record key
+    /// (ADR 0103).
     fn drop(&mut self) {
+        if std::mem::take(&mut self.record_key_on) {
+            if let Some(ctl) = &self.ask_key {
+                ctl.set_record_key(false);
+            }
+        }
         if self.ask_key_since.take().is_some() {
             if let Some(ctl) = &self.ask_key {
                 ctl.set_ask_key(false);
@@ -2443,5 +2522,290 @@ mod tests {
         e.on_other_key_down();
         e.on_ask_key_drained();
         assert_eq!(sink.take(), vec![Ptt(PDown), Ptt(PUp)]);
+    }
+
+    // ---- ADR 0103 (call recording): the talk key + R toggles a recording ----
+
+    /// The key seam double for the record key: it records each grab and release of the ask
+    /// key and of the record key apart.
+    #[derive(Default)]
+    struct RecKeys {
+        ask: Mutex<Vec<bool>>,
+        record: Mutex<Vec<bool>>,
+        drains: Mutex<usize>,
+    }
+    impl AskKeyControl for RecKeys {
+        fn set_ask_key(&self, on: bool) {
+            self.ask.lock().unwrap().push(on);
+        }
+        fn drain(&self) {
+            *self.drains.lock().unwrap() += 1;
+        }
+        fn set_record_key(&self, on: bool) {
+            self.record.lock().unwrap().push(on);
+        }
+    }
+    impl RecKeys {
+        fn record(&self) -> Vec<bool> {
+            std::mem::take(&mut *self.record.lock().unwrap())
+        }
+        fn drains(&self) -> usize {
+            std::mem::take(&mut *self.drains.lock().unwrap())
+        }
+    }
+
+    /// An engine with the ask and record keys; `knob` is the Call recording knob.
+    fn rec_engine(
+        knob: bool,
+    ) -> (
+        Arc<RecSink>,
+        SimClock,
+        Arc<RecKeys>,
+        Arc<AtomicBool>,
+        HotkeyEngine,
+    ) {
+        let (sink, clock, e) = engine_at_zero();
+        let keys = Arc::new(RecKeys::default());
+        let gate = Arc::new(AtomicBool::new(knob));
+        let e = e.with_ask_key(keys.clone()).with_record_gate(gate.clone());
+        (sink, clock, keys, gate, e)
+    }
+
+    use HotkeyOutput::RecordToggle;
+
+    /// The outputs of an R press in a hold: the PTT ends at once, then the toggle.
+    const R_PRESS: [HotkeyOutput; 2] = [Ptt(Cancel), RecordToggle];
+
+    #[test]
+    fn rec_r_during_the_hold_with_the_knob_on_ends_the_ptt_and_toggles() {
+        for ms in [0u64, 300, 999, 1_500, 30_000] {
+            let (sink, clock, _keys, _gate, mut e) = rec_engine(true);
+            e.on_talk_key(Down);
+            clock.advance(Duration::from_millis(ms));
+            e.on_record_key();
+            // The press ends the hold at once: `cancel` (no dictation), then the toggle.
+            assert!(!e.machine().is_held(), "{ms} ms");
+            assert_eq!(
+                sink.take(),
+                vec![Ptt(PDown), Ptt(Cancel), RecordToggle],
+                "{ms} ms"
+            );
+            // The key-up later sends nothing more.
+            clock.advance(Duration::from_millis(400));
+            e.on_talk_key(Up);
+            e.on_ask_key_drained();
+            assert_eq!(sink.take(), vec![], "{ms} ms");
+        }
+    }
+
+    #[test]
+    fn rec_r_with_the_knob_off_is_any_other_key() {
+        // In the first second, R cancels as every other key does (CAP-44c), with no toggle.
+        let (sink, clock, keys, _gate, mut e) = rec_engine(false);
+        e.on_talk_key(Down);
+        clock.advance(Duration::from_millis(300));
+        e.on_record_key();
+        assert!(!e.machine().is_held());
+        e.on_talk_key(Up);
+        assert_eq!(sink.take(), vec![Ptt(PDown), Ptt(Cancel)]);
+        // After the first second it does nothing: the hold is a plain dictation.
+        clock.advance(Duration::from_secs(2));
+        e.on_talk_key(Down);
+        clock.advance(Duration::from_millis(1_500));
+        e.on_record_key();
+        e.on_talk_key(Up);
+        e.on_ask_key_drained();
+        assert_eq!(sink.take(), vec![Ptt(PDown), Ptt(PUp)]);
+        // The record key is never grabbed while the knob is off.
+        assert_eq!(keys.record(), Vec::<bool>::new());
+    }
+
+    #[test]
+    fn rec_r_with_no_hold_does_nothing() {
+        for knob in [true, false] {
+            let (sink, _clock, keys, _gate, mut e) = rec_engine(knob);
+            e.on_record_key();
+            assert_eq!(sink.take(), vec![], "knob {knob}");
+            assert_eq!(keys.record(), Vec::<bool>::new(), "knob {knob}");
+        }
+    }
+
+    #[test]
+    fn rec_the_record_key_is_grabbed_only_in_a_hold_with_the_knob_on() {
+        let (_sink, clock, keys, gate, mut e) = rec_engine(true);
+        assert_eq!(keys.record(), Vec::<bool>::new());
+        e.on_talk_key(Down);
+        assert_eq!(keys.record(), vec![true]);
+        clock.advance(Duration::from_millis(400));
+        e.on_talk_key(Up);
+        e.on_ask_key_drained();
+        assert_eq!(keys.record(), vec![false]);
+        // An R press ends the hold, so it releases the grab too.
+        e.on_talk_key(Down);
+        e.on_record_key();
+        assert_eq!(keys.record(), vec![true, false]);
+        e.on_talk_key(Up);
+        // Knob off: the next hold grabs the ask key only, so R (and "®") types as usual.
+        gate.store(false, Ordering::Relaxed);
+        e.on_talk_key(Down);
+        clock.advance(Duration::from_millis(400));
+        e.on_talk_key(Up);
+        e.on_ask_key_drained();
+        assert_eq!(keys.record(), Vec::<bool>::new());
+        assert_eq!(keys.ask.lock().unwrap().len(), 6);
+    }
+
+    #[test]
+    fn rec_a_knob_change_in_a_hold_takes_effect_at_the_next_tick() {
+        let (sink, clock, keys, gate, mut e) = rec_engine(false);
+        let probe = FakeProbe::ready();
+        let ctl = FakeCtl::default();
+        *probe.physical.lock().unwrap() = down();
+        e.on_talk_key(Down);
+        assert_eq!(keys.record(), Vec::<bool>::new());
+        gate.store(true, Ordering::Relaxed);
+        clock.advance(WATCHDOG_TICK);
+        e.tick(clock.now(), &probe, &ctl);
+        assert_eq!(keys.record(), vec![true]);
+        gate.store(false, Ordering::Relaxed);
+        clock.advance(WATCHDOG_TICK);
+        e.tick(clock.now(), &probe, &ctl);
+        assert_eq!(keys.record(), vec![false]);
+        // An R that comes after the knob went off does not toggle.
+        clock.advance(Duration::from_secs(2));
+        e.on_record_key();
+        e.on_talk_key(Up);
+        e.on_ask_key_drained();
+        assert_eq!(keys.record(), Vec::<bool>::new());
+        assert!(!sink.take().contains(&RecordToggle));
+    }
+
+    #[test]
+    fn rec_the_next_hold_after_an_r_press_is_a_plain_dictation() {
+        let (sink, clock, _keys, _gate, mut e) = rec_engine(true);
+        e.on_talk_key(Down);
+        clock.advance(Duration::from_millis(400));
+        e.on_record_key();
+        e.on_talk_key(Up);
+        clock.advance(Duration::from_secs(2));
+        e.on_talk_key(Down);
+        clock.advance(Duration::from_millis(400));
+        e.on_talk_key(Up);
+        e.on_ask_key_drained();
+        assert_eq!(
+            sink.take(),
+            vec![Ptt(PDown), Ptt(Cancel), RecordToggle, Ptt(PDown), Ptt(PUp)]
+        );
+    }
+
+    #[test]
+    fn rec_r_wins_over_g_in_one_hold() {
+        for r_first in [true, false] {
+            let (sink, clock, _keys, _gate, mut e) = rec_engine(true);
+            e.on_talk_key(Down);
+            clock.advance(Duration::from_millis(400));
+            if r_first {
+                e.on_record_key();
+                e.on_ask_key();
+            } else {
+                e.on_ask_key();
+                e.on_record_key();
+            }
+            e.on_talk_key(Up);
+            assert_eq!(
+                sink.take(),
+                vec![Ptt(PDown), Ptt(Cancel), RecordToggle],
+                "r first {r_first}"
+            );
+        }
+    }
+
+    #[test]
+    fn rec_an_r_handled_after_the_up_edge_still_toggles() {
+        // The main thread is busy: the R hot-key press is handled after the key-up edge.
+        let (sink, clock, keys, _gate, mut e) = rec_engine(true);
+        e.on_talk_key(Down);
+        clock.advance(Duration::from_secs(3));
+        e.on_talk_key(Up);
+        assert_eq!(keys.drains(), 1);
+        assert_eq!(sink.take(), vec![Ptt(PDown)]);
+        e.on_record_key();
+        e.on_ask_key_drained();
+        assert_eq!(sink.take(), R_PRESS.to_vec());
+        assert_eq!(keys.record(), vec![true, false]);
+    }
+
+    #[test]
+    fn rec_the_record_key_is_released_on_every_path_that_ends_the_hold() {
+        // A CAP-44c cancel.
+        let (_sink, _clock, keys, _gate, mut e) = rec_engine(true);
+        e.on_talk_key(Down);
+        e.on_other_key_down();
+        assert_eq!(keys.record(), vec![true, false]);
+        // A service stop.
+        e.on_talk_key(Up);
+        e.on_talk_key(Down);
+        e.reset();
+        assert_eq!(keys.record(), vec![true, false]);
+        // An engine drop in a hold.
+        e.on_talk_key(Down);
+        drop(e);
+        assert_eq!(keys.record(), vec![true, false]);
+        // Secure Event Input pauses the talk key.
+        let (sink, clock, keys, _gate, mut e) = rec_engine(true);
+        let probe = FakeProbe::ready();
+        let ctl = FakeCtl::default();
+        e.tick(clock.now(), &probe, &ctl);
+        e.on_talk_key(Down);
+        *probe.secure.lock().unwrap() = true;
+        *probe.physical.lock().unwrap() = down();
+        clock.advance(WATCHDOG_TICK);
+        e.tick(clock.now(), &probe, &ctl);
+        assert_eq!(keys.record(), vec![true, false]);
+        assert!(!sink.take().contains(&RecordToggle));
+    }
+
+    #[test]
+    fn rec_the_record_key_is_released_at_the_120_s_hold_cap() {
+        let (sink, clock, keys, _gate, mut e) = rec_engine(true);
+        let probe = FakeProbe::ready();
+        let ctl = FakeCtl::default();
+        *probe.physical.lock().unwrap() = down();
+        e.on_talk_key(Down);
+        clock.advance(ASK_KEY_MAX_HOLD);
+        e.tick(clock.now(), &probe, &ctl);
+        assert_eq!(keys.record(), vec![true, false]);
+        e.on_talk_key(Up);
+        assert_eq!(sink.take(), vec![Ptt(PDown), Ptt(PUp)]);
+        assert_eq!(keys.record(), Vec::<bool>::new());
+    }
+
+    #[test]
+    fn rec_a_chord_hold_never_toggles() {
+        let (sink, clock, keys, _gate, mut e) = rec_engine(true);
+        let probe = FakeProbe::ready();
+        let ctl = FakeCtl::default();
+        *probe.secure.lock().unwrap() = true;
+        e.tick(clock.now(), &probe, &ctl);
+        e.on_chord(Down);
+        e.on_record_key();
+        clock.advance(TAP_MAX_HOLD);
+        e.on_chord(Up);
+        assert_eq!(sink.take(), vec![TalkKeyPaused, Ptt(PDown), Ptt(PUp)]);
+        assert_eq!(keys.record(), Vec::<bool>::new());
+    }
+
+    #[test]
+    fn rec_an_engine_with_no_record_gate_never_grabs_r() {
+        let (sink, clock, e) = engine_at_zero();
+        let keys = Arc::new(RecKeys::default());
+        let mut e = e.with_ask_key(keys.clone());
+        e.on_talk_key(Down);
+        clock.advance(Duration::from_millis(1_500));
+        e.on_record_key();
+        e.on_talk_key(Up);
+        e.on_ask_key_drained();
+        assert_eq!(sink.take(), vec![Ptt(PDown), Ptt(PUp)]);
+        assert_eq!(keys.record(), Vec::<bool>::new());
     }
 }

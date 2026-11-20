@@ -33,7 +33,7 @@ const noticeEmits = () =>
   inputEmits().filter(
     (e) =>
       (e as { payload?: { action?: unknown } }).payload?.action !== 'mogs.ready' &&
-      !['cli', 'permissions', 'conversations', 'store'].includes(
+      !['cli', 'permissions', 'conversations', 'recording', 'store'].includes(
         (e as { mogId?: string }).mogId ?? '',
       ),
   );
@@ -103,7 +103,10 @@ describe('V1 hub: first-run legal notice (#27)', () => {
     expect(dialog(el)).not.toBeNull();
     await tauri.emitTo('hub', HUB_NOTICE_EVENT, { version: 1, accepted: true });
     expect(dialog(el)).toBeNull();
-    expect(el.querySelector('ul[aria-label="MOGs"]')).not.toBeNull();
+    // ui-1 (#97, #103): the normal hub (sidebar + Setup region + the default area) shows now,
+    // not only the notice. The MOG list moved from the old default "home" area into "mogs",
+    // which is not the default any more, so this checks the Setup region instead.
+    expect(el.querySelector('[data-setup-region]')).not.toBeNull();
   });
 
   it('[MB-08b] [AT-24] shows the notice again, unchecked, when the version increases', async () => {

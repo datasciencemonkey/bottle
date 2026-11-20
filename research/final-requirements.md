@@ -289,7 +289,7 @@ Bottle runs on one device. Only the Rust core holds credentials and talks to the
 | ARC-3 | Window kinds: `brain` (hidden, 1), `hub` (normal, 0-1), `mog-<id>` (transparent, frameless, always-on-top, non-activating, click-through outside the sprite; 8 active or less), `card-<id>` (key-capable non-activating window at Floating level, made on the first open, destroyed after 5 min hidden). | ARC-3, CAP-WIN-01..09 |
 | ARC-4 | Tauri v2 capabilities are scoped per window label. No window gets `http`, `shell`, `fs` or network plugins. CSP: `default-src 'self'; connect-src ipc: http://ipc.localhost; script-src 'self' 'wasm-unsafe-eval'`. | ARC-4 |
 | ARC-5 | Streams (level, partial text) use `tauri::ipc::Channel`. Low-rate notifications use events with `emit_to(label, …)`. | ARC-5 |
-| ARC-6 | **No Databricks token, Lakebase credential, SQLCipher key or journal key crosses IPC or the C ABI.** Commands take profile names, route IDs and statement IDs, not URLs or headers. | D33, ARC-6 |
+| ARC-6 | **No Databricks token, Lakebase credential, SQLCipher key or journal key crosses IPC or the C ABI.** Commands take profile names, route IDs and statement IDs, not URLs or headers. The one exception is the brain-only `link_open {profile, url}`, which Rust re-validates before it opens the link (ADR 0107). | D33, ARC-6 |
 | ARC-7 | The AgentHost starts one shared harness runtime (U11) and opens one session for each active MOG; sessions share no conversation state. The harness gets three loopback endpoints with a per-session secret: `bottle-mcp`, the Genie One MCP proxy and the model proxy. The Rust core adds the token to each proxied call and applies the bridge rules (G-04a..G-20b). The harness never gets a token [U: SP-19]. | B4, D33 |
 
 ### 4.3 Components (35)

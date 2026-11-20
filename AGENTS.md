@@ -1,5 +1,7 @@
 # Bottle: context for coding agents
 
+For the product story, see [docs/VISION.md](docs/VISION.md).
+
 Read this file first. It tells you what we are building, where the code lives, how to work in this repo, and which
 work is in or out of scope. If this file and `requirements.html` disagree on **scope**, this file wins (it records the
 user's later decisions). For detailed behaviour, `requirements.html` stays the source of truth.
@@ -47,19 +49,24 @@ signed public installers, and most spikes. Code for some of these is already on 
 change needs it. Do not open new issues for this work. The non-core issues are being closed with "We'll consider this
 later".
 
-### 1a. On main vs in flight (2026-11-19)
+### 1a. On main vs in flight (2026-11-20)
 
 | Part | State |
 |---|---|
 | Hotkey, capture, local Parakeet STT, paste (`insert_text`) | On main. |
-| TokenBroker, McpTransport, PollActor, GenieBridge (T8) | On main. |
-| Ask route trigger | PR #582 (#577, ADR 0098): ⌥G during the talk-key hold. The `hotkey:ptt` up sends `ask: true`, and the text goes to Genie with no preview. Every other hold is dictation, with no intent guess. Windows has no ⌥G yet. The Shift trigger of ADR 0053 is retired. |
-| Ask send path | On main the ask gate still calls `agent_send` (`src/brain/components/index.ts`). Target: straight to GenieBridge T8 with `genie_one_mcp` (PR #575, ADR 0097, stacked on #571). |
-| Pop-up with Copy and Ask Genie | PR #572 (pop-up) and PR #571 (dictation first, ADR 0096). |
-| `mem_local_exec` to the local SQLite store | PR #576. On main the route is still `TODO(#426)`. |
-| CliRunner (R5) | PR #255. On main mcp_host uses a stub, so every `mcp_call` fails `not_implemented`. |
-| CLI install, Connect a workspace | #161, #162 (in progress, stacked on #255). |
-| Call recording (mic plus system audio to a UC volume, transcript and notes from model serving) | In flight, ADR 0103: the contract PR on `issue/rec-0-contract`, then capture, cloud and hub PRs stacked on it. The user moved it into the MVP on 2026-11-19. Knob off by default. |
+| TokenBroker, McpTransport, PollActor, GenieBridge (T8), CliRunner (R5) | On main. |
+| Ask route trigger | On main (#582, ADR 0098): ⌥G during the talk-key hold asks Genie with no preview. Every other hold is dictation. Windows has no ⌥G yet. |
+| Ask send path | On main (#575, ADR 0097): straight to Genie One MCP. The answer card shows Markdown, tables and safe links, with Open in Databricks (#598, #607). Follow-up from a thread (#606). |
+| Pop-up with Copy and Ask Genie | On main (#571, #572). |
+| Local store (`mem_local_exec`, SQLCipher) | On main (#576, #584). One keychain read per launch (#596, ADR 0105). |
+| Hub | On main: Conversations (#587), Recordings and recording Settings (#595), shadcn/ui and Motion redo (#602, ADR 0106). |
+| CLI install, Connect a workspace | On main (#581, #583, #605). |
+| MOG lamp | On main: moods and motion (#589), name and accent colour, right-click Hide and Close (#603), orbiting spark, eyes that follow the pointer (#608). |
+| Call recording (ADR 0103) | On main: contract (#591), upload, Gemini transcript and Claude notes (#592), capture of mic and system audio (#593), ⌥R toggle (#594), hub (#595). Knob off by default. Windows has no ⌥R yet. |
+| Hub Local speech step | In flight: #600. |
+| Hub Workspaces area, home workspace pick (draft) | In flight: #599. |
+| Dependabot config | In flight: #398. |
+| Not started or stubbed | Preview and approve of context before Genie, UC Pages drafts (PageService is a stub), memory recall in the ask path (`recall: []`), the main agent in the live ask path, dictation cleanup. |
 
 Re-check with `gh pr list` before you rely on this table.
 
@@ -99,7 +106,7 @@ Rules of the boundary:
 | `crates/mog-core/src/` | The Rust core library. Key modules: `hotkey_*`, `capture.rs`, `stt_*`, `insertion*`, `cli_runner.rs`, `token_broker.rs`, `mcp_transport*`, `http_transport*`, `profile_service.rs`, `local_store*`, `ipc.rs`, `ipc_gateway.rs`, `types.rs`. |
 | `crates/mog-core-ffi/` | A C ABI over mog-core for future non-Tauri hosts. Not on the MVP path. |
 | `crates/mog-core/tests/` | Rust integration and acceptance tests (`at_*` files map to acceptance tests AT-nn). |
-| `crates/cli-runner/` (after #255) | The CLI runner crate and its real-process tests. |
+| `crates/cli-runner/` | The CLI runner crate and its real-process tests. |
 | `src-tauri/src/` | The Tauri app: `lib.rs` (setup), `ipc.rs` (command routing), `*_host.rs` (hosts that wire core parts into the app), `macos_panel.rs`, `windows.rs`. |
 | `src/brain/` | The brain (TypeScript): PTT flow, routing, Genie bridge, memory, card state. `main.ts` starts it. |
 | `src/brain/components/` | Brain components named in the requirements (T-numbers), e.g. `genie-bridge.ts`, `poll-actor.ts`, `stt-provider.ts`, `memory-service.ts`. |
@@ -174,9 +181,9 @@ This file does not track live status. Use:
 
 - `gh issue list --state open` — the remaining issues are the MVP set. Issue #245 is the MVP-D exit gate.
 - `gh pr list --state open` — work in flight.
-- `docs/adr/` and open PRs — the latest decisions. The MVP ones: ADR 0096 (dictation-first card, in PRs #571 and
-  #575), ADR 0097 (direct Genie path, in PR #575), ADR 0098 (the ⌥G key, planned for #577) and ADR 0104 (the hub's
-  `stt_model_*` commands and the packaged local-stt build, #413, #45, #529).
+- `docs/adr/` and open PRs — the latest decisions. The MVP ones: ADR 0096 (dictation-first card), ADR 0097
+  (direct Genie path), ADR 0098 (the ⌥G key) and ADR 0103 (call recording), all on main. In flight: ADR 0104 (the
+  hub's `stt_model_*` commands and the packaged local-stt build, #413, #45, #529).
 
 ## 8. Reference projects
 

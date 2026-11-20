@@ -12,8 +12,14 @@ describe('MOG page (V2)', () => {
     expect(rule?.[1]).toMatch(/background:\s*transparent;/);
     expect(rule?.[1]).toMatch(/margin:\s*0;/);
     expect(rule?.[1]).toMatch(/overflow:\s*hidden;/);
-    // A coloured background anywhere in the page would cover the desktop.
-    expect(css).not.toMatch(/background(-color)?:\s*(?!transparent)[#a-z]/);
+    // A coloured background anywhere in this page would cover the desktop. The one past
+    // exception, the right-click menu's own solid surface (`.mog-menu`), is gone (#ui-4 review
+    // #603, findings 1 and 4): that menu is now a native Tauri menu built from `MogView.tsx`, so
+    // it is never part of this page's own CSS at all.
+    // The gaze overlays (`.gaze-eye`, `.gaze-pupil`) are part of the mascot: they paint the screen
+    // colour and the eye colour over the baked eyes, inside the lamp art (lamp-alive).
+    const page = css.replace(/\.gaze-(eye|pupil)\s*\{[^}]*\}/g, '');
+    expect(page).not.toMatch(/background(-color)?:\s*(?!transparent)[#a-z]/);
   });
 
   it('[MOG-01a] the MOG entry loads the style as a file (the CSP blocks inline styles)', () => {
@@ -27,7 +33,8 @@ describe('MOG page (V2)', () => {
     const rule = /\.badges\s*\{([^}]*)\}/.exec(css);
     expect(rule, 'one rule for .badges').not.toBeNull();
     expect(rule?.[1]).toMatch(/position:\s*absolute;/);
-    expect(rule?.[1]).toMatch(/bottom:\s*0;/);
+    // Over the art: above the marker row under it (lamp-alive).
+    expect(rule?.[1]).toMatch(/bottom:\s*var\(--mog-marker-row\);/);
     expect(rule?.[1]).toMatch(/z-index:\s*1;/);
     // Text on any desktop: a shadow, not a fill (MOG-01a keeps the page transparent).
     expect(css).toMatch(/\.badges [^{]*\{[^}]*text-shadow:/);

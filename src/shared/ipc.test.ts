@@ -354,6 +354,15 @@ describe('call recording (ADR 0103)', () => {
     expect([open.target, leak.id, reply]).toHaveLength(3);
   });
 
+  it('[#523] link_open is brain only and takes a profile and a URL string', () => {
+    expect(COMMANDS['link_open']).toEqual({ windows: ['brain'], phase: 'MVP-D' });
+    expect(doc.arguments['link_open']?.required).toEqual(['profile', 'url']);
+    expect(doc.arguments['link_open']?.additionalProperties).toBe(false);
+    const ok: CommandArgs['link_open'] = { profile: 'p', url: 'https://h.test/x' };
+    const reply: CommandReturns['link_open'] = {};
+    expect([ok.url, reply]).toHaveLength(2);
+  });
+
   it('[CAP-06] the settings patch is partial and the start takes optional instructions', () => {
     expect(doc.arguments['recording_settings_write']?.required).toEqual(['patch']);
     expect(doc.arguments['recording_volume_create']?.required).toEqual([
@@ -396,6 +405,10 @@ describe('call recording (ADR 0103)', () => {
       direction: 'core_to_brain',
     });
     expect(EVENTS['recording.job']).toEqual({ name: 'recording:job', direction: 'core_to_brain' });
+  });
+
+  it('[ARC-5] lamp-alive: the look vector is a core-to-brain event', () => {
+    expect(EVENTS['mog.look']).toEqual({ name: 'mog:look', direction: 'core_to_brain' });
   });
 
   it('[SEC-03] the recording refusals are fixed IPC codes', () => {

@@ -8,6 +8,9 @@
  *   renderer (SEC-25a), and the key numbers.
  * - `hub:conversations.open` (a double-click on the MOG or the card) shows the area and selects
  *   that exchange, also when it comes before the list.
+ * - #145: a thread is every exchange that shares one Genie `conversationId`. The list shows one
+ *   entry per thread (its latest exchange); the detail shows the whole thread, oldest first,
+ *   then the optional reply composer (`composer`), the hub→brain seam for a follow-up question.
  */
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -19,6 +22,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
+  type ReactNode,
 } from 'react';
 import {
   asConversationsOpen,
@@ -26,13 +30,35 @@ import {
   CONVERSATIONS_VIEW_ID,
   HUB_CONVERSATIONS_EVENT,
   HUB_CONVERSATIONS_OPEN_EVENT,
+  threadOf,
   type ConversationRow,
   type HubConversations,
+  type ThreadComposerThread,
 } from '../../shared/hub-conversations';
+import { paletteColorOf } from '../../shared/mog-palette';
+import { ExternalLink } from 'lucide-react';
+import { LINK_OPEN, openInDatabricksUrl } from '../../shared/link-trust';
 import { SafeMarkdown } from '../card/safe-markdown';
+import { ConversationsSkeleton } from '../ui/motion-effects';
 import { emitView } from '../view-ipc';
+import { motion } from 'motion/react';
 
 const DAY_MS = 86_400_000;
+/** The most body rows of a table in a thread (the card shows fewer, `MAX_TABLE_ROWS`). */
+const CONV_TABLE_ROWS = 200;
+
+/** #ui-4: the small colour dot next to a MOG's name, the same colour as its lamp and card. */
+function MogDot({ row }: { row: ConversationRow }) {
+  const c = paletteColorOf(row.mogColorVariant, row.mogId);
+  return (
+    <span
+      className="conv-mog-dot"
+      data-color={c.id}
+      style={{ background: c.hex }}
+      aria-hidden="true"
+    />
+  );
+}
 
 function askForList(): void {
   void emitView(CONVERSATIONS_VIEW_ID, 'click', { action: 'conversations.ready' }).catch(
@@ -85,6 +111,23 @@ function groupByDay(rows: ConversationRow[], now: number): DayGroup[] {
     const last = out.at(-1);
     if (last && last.label === label) last.rows.push(r);
     else out.push({ label, rows: [r] });
+  }
+  return out;
+}
+
+/**
+ * `all` (newest first), collapsed to its latest exchange of each thread (#145): one list entry
+ * per Genie `conversationId`, in the order its newest exchange comes in `all`. A row with no
+ * `conversationId` is its own thread, so it never merges with an unrelated blank one.
+ */
+function threadsNewestFirst(all: ConversationRow[]): ConversationRow[] {
+  const seen = new Set<string>();
+  const out: ConversationRow[] = [];
+  for (const r of all) {
+    const key = r.conversationId === '' ? `request:${r.requestId}` : r.conversationId;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(r);
   }
   return out;
 }
@@ -152,27 +195,29 @@ function KeyNumbers({ items }: { items: ConversationRow['keyNumbers'] }) {
   );
 }
 
-function Detail({
-  row,
-  focusRef,
-}: {
-  row: ConversationRow;
-  focusRef: React.RefObject<HTMLElement | null>;
-}) {
+/** One exchange of a thread: its question, meta line, answer and key numbers (#145). */
+function Exchange({ row, headingId }: { row: ConversationRow; headingId?: string | undefined }) {
   const failed = row.status === 'failed';
   const trust = useMemo(
     () => ({ profileHost: row.workspaceHost, allowedAppUrls: [] as string[] }),
     [row.workspaceHost],
   );
+  const databricksUrl = openInDatabricksUrl(row.deepLink, row.workspaceHost);
+  // #523: the hub never opens a URL. The click goes to the brain with the exchange it belongs to;
+  // the brain finds the workspace itself, checks the URL again, and Rust opens it.
+  const openLink = useCallback(
+    (url: string) => {
+      void emitView(CONVERSATIONS_VIEW_ID, 'click', {
+        target: LINK_OPEN,
+        url,
+        requestId: row.requestId,
+      }).catch(() => undefined);
+    },
+    [row.requestId],
+  );
   return (
-    <article
-      ref={focusRef}
-      className="conv-detail"
-      data-conversation-detail
-      tabIndex={-1}
-      aria-labelledby={`conv-q-${row.requestId}`}
-    >
-      <h2 id={`conv-q-${row.requestId}`} className="conv-question">
+    <div className="conv-exchange" data-exchange={row.requestId}>
+      <h2 id={headingId} className="conv-question">
         {row.question || 'Question not saved'}
       </h2>
       {/* The parts never break inside; the dot between them is drawn in CSS. */}
@@ -190,18 +235,44 @@ function Detail({
           {row.profile}
           {row.workspaceHost && <span className="conv-sr">, {row.workspaceHost}</span>}
         </span>
-        <span className="conv-meta-part">{row.mogName}</span>
+        <span className="conv-meta-part conv-mog">
+          <MogDot row={row} />
+          {row.mogName}
+        </span>
       </p>
+      {databricksUrl !== undefined && (
+        <p className="conv-open">
+          <a
+            className="conv-databricks"
+            data-action="open-in-databricks"
+            href={databricksUrl}
+            rel="noopener noreferrer"
+            title={databricksUrl}
+            onClick={(e) => {
+              e.preventDefault();
+              if (e.detail > 1) return;
+              openLink(databricksUrl);
+            }}
+          >
+            Open in Databricks
+            <ExternalLink size={11} strokeWidth={2} aria-hidden="true" />
+          </a>
+        </p>
+      )}
       {row.answerMd ? (
-        // TODO(#523): open a trusted link in the browser once the hub has the link opener. Until then a
-        // click never navigates the hub window; the link text stays selectable.
+        // #523: a trusted link goes to the brain (`openLink`); a click never navigates the hub.
         <div
           className="conv-answer"
           onClick={(e) => {
             if ((e.target as Element).closest('a')) e.preventDefault();
           }}
         >
-          <SafeMarkdown text={row.answerMd} trust={trust} />
+          <SafeMarkdown
+            text={row.answerMd}
+            trust={trust}
+            onOpenLink={openLink}
+            maxTableRows={CONV_TABLE_ROWS}
+          />
         </div>
       ) : (
         <p className="conv-answer conv-answer--none">
@@ -209,7 +280,88 @@ function Detail({
         </p>
       )}
       <KeyNumbers items={row.keyNumbers} />
-    </article>
+    </div>
+  );
+}
+
+/**
+ * The sticky composer slot (ui-1, #103): an optional `composer` render prop fills it. A thread
+ * with no Genie conversation to continue (a row saved before #584), or a build with no composer,
+ * shows only a static hint, never a dead input.
+ */
+function ComposerSlot({
+  latest,
+  composer,
+}: {
+  latest: ConversationRow;
+  composer?: ((thread: ThreadComposerThread) => ReactNode) | undefined;
+}) {
+  return (
+    <div data-slot="thread-composer" className="conv-composer">
+      {composer && latest.conversationId !== '' ? (
+        composer({
+          conversationId: latest.conversationId,
+          exchangeId: latest.requestId,
+          profile: latest.profile,
+        })
+      ) : (
+        <p className="conv-composer-hint">Hold Right Option and tap G to ask by voice.</p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The thread detail (#145, #103): every exchange that shares one Genie `conversationId`, oldest
+ * first (question, answer, question, answer), then the reply composer.
+ */
+function Detail({
+  thread,
+  focusRef,
+  composer,
+}: {
+  thread: ConversationRow[];
+  focusRef: React.RefObject<HTMLElement | null>;
+  composer?: ((thread: ThreadComposerThread) => ReactNode) | undefined;
+}) {
+  const first = thread[0];
+  const latest = thread.at(-1);
+  // A new exchange lands below the fold: scroll the pane to its end so the new answer and the
+  // composer show (not on first show, which starts at the question).
+  const count = thread.length;
+  const seen = useRef(count);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (count > seen.current) {
+      const list = scrollRef.current;
+      list?.scrollTo?.({ top: list.scrollHeight, behavior: 'smooth' });
+    }
+    seen.current = count;
+  }, [count]);
+  if (!first || !latest) return null;
+  return (
+    // BlurFade (ui-1): the newly selected thread fades and un-blurs in.
+    <motion.article
+      ref={focusRef}
+      className="conv-detail"
+      data-conversation-detail
+      tabIndex={-1}
+      aria-labelledby={`conv-q-${first.requestId}`}
+      initial={{ opacity: 0, filter: 'blur(4px)' }}
+      animate={{ opacity: 1, filter: 'blur(0px)' }}
+      transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+    >
+      <div ref={scrollRef} className="conv-thread">
+        {thread.map((row) => (
+          <Exchange
+            key={row.requestId}
+            row={row}
+            headingId={row === first ? `conv-q-${first.requestId}` : undefined}
+          />
+        ))}
+      </div>
+      <ComposerSlot latest={latest} composer={composer} />
+    </motion.article>
   );
 }
 
@@ -226,10 +378,13 @@ export function Conversations({
   active,
   onOpen,
   now = Date.now,
+  composer,
 }: {
   active: boolean;
   onOpen: () => void;
   now?: () => number;
+  /** #145: the reply composer of the selected thread's detail, or no composer at all. */
+  composer?: ((thread: ThreadComposerThread) => ReactNode) | undefined;
 }) {
   const { list, selectedId, setSelectedId } = useConversations(onOpen);
   const listRef = useRef<HTMLDivElement>(null);
@@ -245,8 +400,14 @@ export function Conversations({
     shown.current = active;
   }, [active]);
 
-  const rows = useMemo(() => list?.rows ?? [], [list]);
-  const selected = rows.find((r) => r.requestId === selectedId) ?? rows[0];
+  const allRows = useMemo(() => list?.rows ?? [], [list]);
+  // #145: the list shows one entry per thread (its latest exchange); the detail shows them all.
+  const entries = useMemo(() => threadsNewestFirst(allRows), [allRows]);
+  const selected = entries.find((r) => r.requestId === selectedId) ?? entries[0];
+  const selectedThread = useMemo(
+    () => (selected ? threadOf(allRows, selected) : undefined),
+    [allRows, selected],
+  );
 
   const select = useCallback(
     (r: ConversationRow | undefined) => {
@@ -265,17 +426,17 @@ export function Conversations({
   }, [selected]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (rows.length === 0) return;
-    const i = selected ? rows.indexOf(selected) : 0;
+    if (entries.length === 0) return;
+    const i = selected ? entries.indexOf(selected) : 0;
     const to: Record<string, number> = {
-      ArrowDown: Math.min(i + 1, rows.length - 1),
+      ArrowDown: Math.min(i + 1, entries.length - 1),
       ArrowUp: Math.max(i - 1, 0),
       Home: 0,
-      End: rows.length - 1,
+      End: entries.length - 1,
     };
     if (e.key in to) {
       e.preventDefault();
-      select(rows[to[e.key] as number]);
+      select(entries[to[e.key] as number]);
     } else if (e.key === 'Enter') {
       e.preventDefault();
       detailRef.current?.focus();
@@ -283,19 +444,24 @@ export function Conversations({
   };
 
   // Read the clock on each render, so "Today" moves on after midnight.
-  const groups = groupByDay(rows, now());
+  const groups = groupByDay(entries, now());
 
   let body;
   if (list === null) {
-    body = <div className="conv-message" aria-busy="true" />;
-  } else if (list.unavailable && rows.length === 0) {
+    // ui-1: a visible skeleton instead of a blank aria-busy div (the ui-audit "loading" finding).
+    body = (
+      <div className="conv-message conv-message--loading" aria-busy="true">
+        <ConversationsSkeleton />
+      </div>
+    );
+  } else if (list.unavailable && entries.length === 0) {
     body = (
       <Message
         title="Bottle cannot read your saved conversations right now."
         line="Your history is still on this device. Try again in a moment."
       />
     );
-  } else if (rows.length === 0) {
+  } else if (entries.length === 0) {
     body = (
       <Message title="No conversations yet." line="Hold Right Option and tap G to ask Genie." />
     );
@@ -319,8 +485,11 @@ export function Conversations({
               {g.rows.map((r) => {
                 const isSel = r === selected;
                 return (
-                  <div
+                  // `layout` (ui-1, stands in for Magic UI's AnimatedList): the row animates to
+                  // its new position instead of jumping, when the list re-sorts or grows.
+                  <motion.div
                     key={r.requestId}
+                    layout="position"
                     id={optionId(r.requestId)}
                     role="option"
                     aria-selected={isSel}
@@ -333,6 +502,11 @@ export function Conversations({
                   >
                     <span className="conv-row-q">{r.question || 'Question not saved'}</span>
                     <span className="conv-row-meta">
+                      <span className="conv-mog">
+                        <MogDot row={r} />
+                        {r.mogName}
+                      </span>
+                      {' · '}
                       {timeOf(r.askedAt)}
                       {r.profile && ` · ${r.profile}`}
                       {r.status === 'failed' && (
@@ -342,19 +516,36 @@ export function Conversations({
                         </>
                       )}
                     </span>
-                  </div>
+                  </motion.div>
                 );
               })}
             </div>
           ))}
         </div>
-        {selected && <Detail key={selected.requestId} row={selected} focusRef={detailRef} />}
+        {selectedThread && (
+          <Detail
+            // One thread keeps one pane: a new exchange (the latest `requestId`) must not remount
+            // it, which would reset its scroll and re-announce the thread to the brain.
+            key={selected?.conversationId || selected?.requestId}
+            thread={selectedThread}
+            focusRef={detailRef}
+            // [review] the area can stay mounted (`hidden`) while the hub shows another view: the
+            // composer must unmount with it, so its `thread.active` announcement always goes
+            // with it, and a ⌥G never becomes a follow-up in a thread the user cannot see.
+            composer={active ? composer : undefined}
+          />
+        )}
       </div>
     );
   }
 
   return (
-    <section className="conv" aria-label="Conversations" hidden={!active}>
+    <section
+      className="conv"
+      data-hub-view="conversations"
+      aria-label="Conversations"
+      hidden={!active}
+    >
       {body}
     </section>
   );

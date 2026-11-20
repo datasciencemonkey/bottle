@@ -107,6 +107,8 @@ export interface MoodSources {
   requests: readonly RequestView[];
   /** The last `set_mood` of the main agent for this MOG (UX-41). */
   agentMood?: AgentMood;
+  /** A call recording runs on this device (ADR 0103): the MOG shows the REC overlay. */
+  callRecording?: boolean;
 }
 
 /** One `set_mood` call of the main agent and when it came (ms, brain clock). */
@@ -222,7 +224,11 @@ export function mapMood(mogId: MogId, src: MoodSources, now: number): MoodOutput
   const overlays: Overlays = {
     attention,
     recording:
-      capture.owner === mogId && capture.mode === 'session' && capture.recording && !capture.paused,
+      src.callRecording === true ||
+      (capture.owner === mogId &&
+        capture.mode === 'session' &&
+        capture.recording &&
+        !capture.paused),
     offline: mog.lifecycle === 'offline',
     localOnly: mog.localOnly === true,
   };

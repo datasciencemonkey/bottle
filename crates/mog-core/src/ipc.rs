@@ -177,6 +177,10 @@ pub const COMMANDS: &[CommandSpec] = &[
     row("stt_model_install", H),
     row("stt_model_verify", H),
     row("stt_model_cancel", H),
+    // #523: open a trusted https link in the default browser. Brain only: a view sends a
+    // `view_emit` click, the brain checks the URL against its workspace, and Rust checks it again
+    // (https, the profile's workspace host) before the OS opener runs. No view can call it.
+    row("link_open", B),
 ];
 
 /// The row of a command, if it exists.
@@ -1248,6 +1252,14 @@ args!(RecordingOpenArgs {
     target: RecordingOpenTarget,
 });
 
+args!(
+    /// `link_open` (#523). Rust accepts `url` only if it is https on the host of `profile`.
+    LinkOpenArgs {
+        profile: ProfileName,
+        url: String,
+    }
+);
+
 args!(TelemetrySpanArgs {
     name: String,
     start_ms: u64,
@@ -1343,6 +1355,7 @@ macro_rules! for_command {
             "stt_model_status" | "stt_model_verify" | "stt_model_cancel" => Some($f::<NoArgs>()),
             "stt_model_consent" => Some($f::<SttModelConsentArgs>()),
             "stt_model_install" => Some($f::<SttModelInstallArgs>()),
+            "link_open" => Some($f::<LinkOpenArgs>()),
             _ => None,
         }
     };

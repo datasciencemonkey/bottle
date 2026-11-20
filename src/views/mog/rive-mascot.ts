@@ -82,6 +82,7 @@ export class RiveMascot implements MascotRenderer {
   #rive: RiveLike | undefined;
   #bound: Bound | undefined;
   #png: MascotRenderer | undefined;
+  #hidden = false;
   #state: { mood: Mood; level: number; hover: boolean; attention: boolean } = {
     mood: FIRST_FRAME.mood,
     level: FIRST_FRAME.level,
@@ -144,6 +145,16 @@ export class RiveMascot implements MascotRenderer {
     if (this.#bound) set(this.#bound.hover, on);
   }
 
+  /** Only the lamp fallback has eyes and a spark to move: the .riv has no such input yet. */
+  setLook(dx: number, dy: number): void {
+    this.#png?.setLook?.(dx, dy);
+  }
+
+  setHidden(hidden: boolean): void {
+    this.#hidden = hidden;
+    this.#png?.setHidden?.(hidden);
+  }
+
   poke(): void {
     this.#png?.poke();
     this.#bound?.poke.trigger();
@@ -191,6 +202,7 @@ export class RiveMascot implements MascotRenderer {
     png.setMood(s.mood);
     png.setAttention(s.attention);
     png.setHover(s.hover);
+    png.setHidden?.(this.#hidden);
     this.#png = png;
   }
 }

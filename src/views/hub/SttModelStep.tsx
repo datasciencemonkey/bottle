@@ -2,18 +2,20 @@
  * `SttModelStep`: "Local speech" (MB-07, #413, #45, #529, ADR 0049, ADR 0104), one
  * self-contained component. It asks consent for the 487 MB Parakeet model (CAP-49a), shows the
  * model status, download progress, Cancel and a Retry that resumes (CAP-49b), and the
- * content-free error codes as user text (CAP-49c). It renders its own `<section>` and assumes
- * nothing about where it is mounted, so the hub can place it in the first-run Setup region, or
- * in Settings > Local speech once the step is no longer first-run (ADR 0104).
+ * content-free error codes as user text (CAP-49c). The hub mounts it in the Setup region: it
+ * renders nothing once the model is installed and checked (like the other setup steps).
  *
  * The step stores the answer before any install starts. The core gate reads that stored answer,
  * so no download starts without Granted. `status` checks file sizes only, so the step is done
- * only after an `install` call (which checks every SHA-256) resolves. `sttModelApi` (same
- * folder) is the real `api`, over the `stt_model_*` commands of #529; the hub passes it in.
+ * only after an `install` or `verify` call (which check every SHA-256) resolves. `sttModelApi`
+ * (same folder) is the real `api`, over the `stt_model_*` commands of #529; the hub passes it in.
  *
+ * ui-1 (ADR 0106): shadcn/ui RadioGroup and Button, the hub's `hub-progress` bar.
  * TODO(#43): the wizard frame may also mount this step directly for a first-run flow.
  */
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type CSSProperties } from 'react';
+import { Button } from '../ui/button';
+import { RadioGroup, RadioGroupItem } from '../ui/radio-group';
 
 export type SttModelState = 'missing' | 'partial' | 'installed';
 export type SttConsent = 'not_asked' | 'declined' | 'granted';
@@ -91,7 +93,7 @@ function errorCode(e: unknown): string {
 
 const mb = (bytes: number) => `${Math.round(bytes / 1_000_000)} MB`;
 
-/** TODO(#529): replace with the `stt_model_*` commands. */
+/** The seam when no `stt_model_*` commands are given (tests, a build without them). */
 export const unwiredSttModelApi: SttModelApi = {
   status: () => Promise.reject({ error: 'stt_setup_unavailable' }),
   setConsent: () => Promise.reject({ error: 'stt_setup_unavailable' }),
@@ -99,17 +101,6 @@ export const unwiredSttModelApi: SttModelApi = {
   verify: () => Promise.reject({ error: 'stt_setup_unavailable' }),
   cancel: () => Promise.resolve(false),
 };
-
-function statusText(v: SttModelView): string {
-  switch (v.model) {
-    case 'installed':
-      return 'Downloaded';
-    case 'partial':
-      return `Partly downloaded: ${mb(v.partialBytes)} of ${mb(v.totalBytes)}. A retry continues at that point.`;
-    default:
-      return 'Not downloaded';
-  }
-}
 
 /** One chunk of download progress, keyed by file name, so a multi-file source (the Hugging
  * Face mirror) adds up across files instead of a bar that restarts at each one (#413 review). */
@@ -125,6 +116,17 @@ function overallBytes(files: FileTotals): { done: number; total: number } {
   return { done, total };
 }
 
+function statusText(v: SttModelView): string {
+  switch (v.model) {
+    case 'installed':
+      return 'Downloaded';
+    case 'partial':
+      return `Partly downloaded: ${mb(v.partialBytes)} of ${mb(v.totalBytes)}. A retry continues at that point.`;
+    default:
+      return 'Not downloaded';
+  }
+}
+
 export function SttModelStep({
   api = unwiredSttModelApi,
   onDone,
@@ -136,12 +138,11 @@ export function SttModelStep({
   const [source, setSource] = useState<SttSource>('github');
   const [installing, setInstalling] = useState(false);
   const [checking, setChecking] = useState(false);
-  // Keyed by file name and summed in render (`overallBytes`), so a multi-file source (the
-  // Hugging Face mirror) adds up across files instead of a bar that restarts at each one, and
-  // never shows a raw file name (#413 review).
   const [files, setFiles] = useState<FileTotals>(new Map());
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  // True after a download the user started; a launch check that passes stays silent.
+  const [fresh, setFresh] = useState(false);
   const live = useRef(true);
   const doneRef = useRef(onDone);
   useEffect(() => {
@@ -165,6 +166,7 @@ export function SttModelStep({
         if (!live.current) return;
         setView(v);
         setDone(true);
+        setFresh(!check);
         doneRef.current?.();
       } catch (e) {
         if (!live.current) return;
@@ -215,17 +217,22 @@ export function SttModelStep({
   };
 
   const start = () => (view?.consent === 'granted' ? run(source) : choose('granted'));
+  const sourceLabelId = useId();
   const total = view?.totalBytes ?? 487_211_443;
-  // Overall bytes across every file seen this run, not the raw file name of whichever one is
-  // downloading now: a multi-file source (the Hugging Face mirror) would otherwise show a bar
-  // that restarts at each file (#413 review).
+  // Overall bytes across every file seen this run, never the raw file name of whichever one is
+  // downloading now (#413 review).
   const { done: overallDone, total: overallTotal } = overallBytes(files);
   const percent = overallTotal > 0 ? Math.floor((overallDone * 100) / overallTotal) : 0;
-  // Every byte of every file seen so far has arrived, but the install has not resolved: it is
-  // extracting the archive and hashing the result, with no progress event for that work. A
-  // stuck 100% bar with a Cancel that cannot stop it is confusing, so show a calm phase message
-  // instead (#413 review).
+  // Every byte has arrived but the install has not resolved: it unpacks and hashes, with no
+  // progress event. A stuck 100% bar with a Cancel that cannot stop it is confusing (#413 review).
   const unpacking = installing && !checking && overallTotal > 0 && overallDone >= overallTotal;
+
+  // Setup region: a step shows only while it is pending (#605). Nothing before the first status
+  // answer, nothing once the model is installed and checked, and nothing while an installed
+  // model is checked at launch (a mismatch deletes the files, then the step shows again).
+  if (!view && !error) return null;
+  if (done && !fresh) return null;
+  if (checking && view?.model === 'installed' && !error) return null;
 
   return (
     <section
@@ -249,27 +256,35 @@ export function SttModelStep({
         <p>Local speech is off. You can download the model at any time.</p>
       )}
       {!installing && !done && view && (
-        <fieldset className="hub-radios">
-          <legend>Download source</legend>
-          <input
-            id="stt-source-github"
-            type="radio"
-            name="sttSource"
-            value="github"
-            checked={source === 'github'}
-            onChange={() => setSource('github')}
-          />
-          <label htmlFor="stt-source-github">sherpa-onnx release on GitHub</label>
-          <input
-            id="stt-source-hf"
-            type="radio"
-            name="sttSource"
-            value="hf_mirror"
-            checked={source === 'hf_mirror'}
-            onChange={() => setSource('hf_mirror')}
-          />
-          <label htmlFor="stt-source-hf">Hugging Face mirror</label>
-        </fieldset>
+        <div className="mt-[var(--mog-space-3)]">
+          <span
+            id={sourceLabelId}
+            className="text-[var(--mog-text-sm)] font-medium text-muted-foreground"
+          >
+            Download source
+          </span>
+          <RadioGroup
+            aria-labelledby={sourceLabelId}
+            className="mt-[var(--mog-space-2)] gap-[var(--mog-space-2)]"
+            value={source}
+            onValueChange={(v) => setSource(v as SttSource)}
+          >
+            <label
+              htmlFor="stt-source-github"
+              className="flex items-center gap-[var(--mog-space-2)] cursor-pointer"
+            >
+              <RadioGroupItem id="stt-source-github" value="github" />
+              sherpa-onnx release on GitHub
+            </label>
+            <label
+              htmlFor="stt-source-hf"
+              className="flex items-center gap-[var(--mog-space-2)] cursor-pointer"
+            >
+              <RadioGroupItem id="stt-source-hf" value="hf_mirror" />
+              Hugging Face mirror
+            </label>
+          </RadioGroup>
+        </div>
       )}
       {checking && <p>Checking the speech model…</p>}
       {installing && files.size > 0 && !unpacking && (
@@ -291,35 +306,39 @@ export function SttModelStep({
       )}
       {unpacking && <p className="hub-muted">Unpacking…</p>}
       {installing && !checking && !unpacking && (
-        <button type="button" onClick={() => void api.cancel()}>
+        <Button type="button" variant="outline" onClick={() => void api.cancel()}>
           Cancel
-        </button>
-      )}
-      {error && (
-        <p role="alert" className="hub-error">
-          {sttErrorText(error)}
-        </p>
+        </Button>
       )}
       {done && (
         <p data-stt-status="installed" className="hub-status">
           Speech model ready. The model is installed and checked.
         </p>
       )}
+      {error && (
+        // ui-1 (ADR 0106): `stt_setup_unavailable` is a missing-feature state, not an error — the
+        // pink error colour (the lamp-lid pink) read as "broken" for a "not built yet" message
+        // that fires by default with no brain connected (the ui-audit "contrast/semantics"
+        // finding). Every other code keeps the error style; only this one gets the neutral note.
+        <p role="alert" className={error === 'stt_setup_unavailable' ? 'hub-note' : 'hub-error'}>
+          {sttErrorText(error)}
+        </p>
+      )}
       {!installing && !done && view && (
-        <div className="hub-actions">
+        <div className="mt-[var(--mog-space-3)] flex flex-wrap gap-[var(--mog-space-2)]">
           {error && error !== 'stt_consent_required' && view.consent === 'granted' ? (
-            <button type="button" className="hub-primary" onClick={() => void run(source)}>
+            <Button type="button" onClick={() => void run(source)}>
               Retry
-            </button>
+            </Button>
           ) : (
-            <button type="button" className="hub-primary" onClick={() => void start()}>
+            <Button type="button" onClick={() => void start()}>
               Download ({mb(total)})
-            </button>
+            </Button>
           )}
           {view.consent === 'not_asked' && (
-            <button type="button" onClick={() => void choose('declined')}>
+            <Button type="button" variant="outline" onClick={() => void choose('declined')}>
               Not now
-            </button>
+            </Button>
           )}
         </div>
       )}

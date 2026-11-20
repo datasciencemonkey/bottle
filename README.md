@@ -1,26 +1,37 @@
 # Bottle
 
-Bottle is a small desktop app (macOS 14.4+ first, Windows 11 second) for creating and managing **MOGs**: floating, always-resident agents that dictate, answer questions through Genie One MCP, and send approved context to Genie on Databricks. Bottle is a companion to Genie One, not a replacement.
+New here? Read the [vision and intro](docs/VISION.md).
 
-**Status:** requirements v1.3 are final (all user confirmations U1-U16 settled). No application code yet; the next step is the week-1 spikes (SP-01..SP-21), then MVP-D and MVP-M.
+Bottle turns your team's unwritten know-how into governed context that every Genie answer can use. It is captured where the work happens, approved by you, and shared with everyone. It is a small desktop app for Databricks users. Floating agents, called **MOGs**, let you dictate into any app, ask Genie One about your governed data, and record calls to your Unity Catalog volume. Bottle is a companion to Genie One, not a replacement.
 
-## Core use cases
+## What ships now (macOS)
 
-1. **Dictation (UC1):** local Parakeet STT, cleanup by a small Databricks-hosted model, insert into the active app. No agent, no Genie.
-2. **Q&A (UC2):** the MOG's main agent (Claude or Codex harness) checks local memory, asks Genie One MCP, and shows a blurb with progress, key numbers and a deep link.
-3. **Send context to Genie (UC3):** pick context from a meeting or memory, preview and approve it; approved definitions become the user's DRAFT Unity Catalog Pages.
+- **Dictation.** Hold **Right Option** and speak. Local Parakeet speech-to-text pastes the text at your cursor. A small pop-up offers Copy and Ask Genie.
+- **Ask Genie.** Hold Right Option and tap **G** (⌥G). Bottle sends your words to Genie One through MCP. The answer card shows Markdown, tables, clickable workspace links and an Open in Databricks link.
+- **The hub.** Conversations (with thread replies), Recordings and Settings.
+- **Call recording.** Hold Right Option and tap **R** (⌥R). Bottle records the mic and system audio to your Unity Catalog volume. A Gemini model writes the transcript and a Claude model writes the notes, through the Databricks AI Gateway. Recording is off until you turn it on in Settings.
+- **Several MOGs.** Each MOG has a name, an accent colour and a right-click menu. The lamp shows moods, an orbiting spark and eyes that follow the cursor.
 
-Meeting sessions record and transcribe in the background (You + Others tracks, consent, fail-closed recording indicator). Nothing goes to Genie without a user click.
+See [`docs/VISION.md`](docs/VISION.md) for what is planned and not yet built, such as ontology hydration (recorded transcripts becoming UC Pages in your domain, after your review) and memory-first answers.
 
-The MVP is done only when **MVP-D** (dictation and Q&A) and **MVP-M** (meeting recording) both pass end to end on a physical device against a live workspace.
+## Requirements
 
-## Architecture at a glance
+- macOS 14.4 or later. Windows 11 is second: its hotkeys are partly done (no Windows ⌥G yet).
+- The Databricks CLI. Bottle can install the official CLI after you consent, then sign you in to a workspace.
+- Tokens come from the CLI (`databricks auth token --profile <p>`) and live only in memory. One CLI profile is one workspace.
 
-- **Tauri v2** shell with a Rust core (`mog-core`) and a TS/React UI; one hidden `brain` window holds the domain logic.
-- **No token crosses IPC.** Only the Rust core holds Databricks tokens; agent harnesses reach the model, Genie One MCP and the local `bottle-mcp` server through loopback proxies.
-- The agent can never start capture, approve outbound context, publish a Page or switch workspace without the user.
-- **Memory:** local encrypted SQLite (SQLCipher, FTS5, `sqlite-vec`). Lakebase is an optional v1 sync target.
-- **Auth:** Databricks CLI U2M profiles (one profile = one workspace). Guided setup installs the official CLI after consent if it is missing.
+## Run locally
+
+You need Node with pnpm, Rust stable, and `uv` for every Python command.
+
+```sh
+pnpm install
+pnpm tauri dev                      # add --features local-stt for local Parakeet
+scripts/package-macos.sh            # build a macOS DMG
+scripts/pre-push.sh                 # the full local gate, before you push
+```
+
+Local speech-to-text needs the vendored sherpa-onnx build. See [`AGENTS.md`](AGENTS.md) section 4 for the setup steps.
 
 ## Start here
 

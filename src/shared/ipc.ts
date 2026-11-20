@@ -128,6 +128,8 @@ export const COMMANDS = {
   stt_model_install: { windows: ['hub'], phase: 'MVP-D' },
   stt_model_verify: { windows: ['hub'], phase: 'MVP-D' },
   stt_model_cancel: { windows: ['hub'], phase: 'MVP-D' },
+  /** #523: brain only. Rust opens an https link on the profile's workspace host in the browser. */
+  link_open: B,
 } as const satisfies Record<string, Spec>;
 
 export type CommandName = keyof typeof COMMANDS;
@@ -166,6 +168,12 @@ export const EVENTS = {
   /** Not in 4.5 (ADR 0040): mic frames for the MOG level meter (UX-06a), sent to `mog-<owner>`. */
   'mog.level': { name: 'mog:level', direction: 'brain_to_view' },
   'view.input': { name: 'view:input', direction: 'core_to_brain' },
+  /**
+   * Not in 4.5 (lamp-alive): where one MOG's eyes look. Payload `{ mogId, dx, dy }`, a vector in
+   * the unit disc from the eye centre. Never a pointer position. The brain passes `{ dx, dy }` on
+   * to that one MOG view as `mog:look` (`src/shared/mog-look.ts`).
+   */
+  'mog.look': { name: 'mog:look', direction: 'core_to_brain' },
   /**
    * Not in 4.5 (ADR 0103): the record key (⌥R) in a talk-key hold, with the knob on. Payload:
    * `RecordToggle`. The host sends a `hotkey.ptt` `cancel` first, so no dictation and no paste
@@ -416,6 +424,7 @@ export interface CommandArgs {
   stt_model_install: { source: 'github' | 'hf_mirror'; onProgress: Channel<SttModelProgress> };
   stt_model_verify: NoArgs;
   stt_model_cancel: NoArgs;
+  link_open: { profile: ProfileName; url: string };
 }
 
 /**
@@ -609,7 +618,7 @@ export type CardSection =
   | { id: 'sentToGenie'; text: string }
   | { id: 'resend' }
   | { id: 'copy'; formats: ('markdown' | 'csv')[] }
-  | { id: 'footer'; sttBadge?: string; deepLink?: string }
+  | { id: 'footer'; sttBadge?: string; deepLink?: string; workspaceHost?: string }
   | { id: 'dataFlow'; text: string };
 
 /**
@@ -808,6 +817,12 @@ export interface RecordingSummary {
   errorKind?: RecordingErrorKind;
   /** The step that failed; Retry starts again there. */
   errorStage?: RecordingStatus;
+  /** Parts of the recording that are in the volume. */
+  partsUploaded?: number;
+  /** Parts of the recording so far (all of them once it has stopped). */
+  partsTotal?: number;
+  /** The audio is only on this device: no job.json in the volume and no upload runs now. */
+  onDeviceOnly?: boolean;
 }
 
 /** One transcript turn. Seconds from the start, across parts. `text` is user content. */
@@ -921,6 +936,7 @@ export interface CommandReturns {
   stt_model_install: SttModelStatus;
   stt_model_verify: SttModelStatus;
   stt_model_cancel: { cancelled: boolean };
+  link_open: Empty;
 }
 
 /** Call a command. A refused call rejects with an `IpcError` (a code only). */

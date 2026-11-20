@@ -62,9 +62,15 @@ function must<T>(v: T | null | undefined): T {
   return v;
 }
 
-const radios = (el: HTMLElement) => [
-  ...el.querySelectorAll<HTMLInputElement>('input[type="radio"][name="wipeScope"]'),
-];
+// ui-1 (ADR 0106): WipeSettings now builds the scope picker and the Genie checkbox on
+// shadcn/ui's RadioGroup and Checkbox (Radix), which render as accessible buttons
+// (`role="radio"` / `role="checkbox"`) rather than native `<input type="radio">`/`<input
+// type="checkbox">` elements. The `<label for>` association is still real, though (review of
+// #602): Radix's RadioGroupItem is a `<button id>`, a labelable element, and WipeSettings.tsx
+// points a `<label htmlFor>` at that same id, so `radio.labels[0]` still resolves. These tests
+// assert on role/`aria-checked` instead of `input[type=...]`, plus the `value` order and the
+// label association, which a plain `<input type="radio">` gave for free.
+const radios = (el: HTMLElement) => [...el.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
 
 beforeEach(() => tauri.reset());
 
@@ -72,18 +78,28 @@ describe('Settings → Wipe (#124)', () => {
   it('[MEM-33a] offers older than 30 d, older than 90 d and everything, with none chosen', async () => {
     const { el, root } = await render(<WipeSettings />);
     const r = radios(el);
-    expect(r.map((x) => x.value)).toEqual(['older_than_30d', 'older_than_90d', 'everything']);
+    expect(r).toHaveLength(3);
+    // The `value` order (review of #602): a plain `<input type="radio">` asserted this for
+    // free via its own `value` attribute; Radix's radio button keeps the same attribute.
+    expect(r.map((x) => x.getAttribute('value'))).toEqual([
+      'older_than_30d',
+      'older_than_90d',
+      'everything',
+    ]);
+    expect(el.textContent).toContain('Older than 30 days');
+    expect(el.textContent).toContain('Older than 90 days');
+    expect(el.textContent).toContain('Everything');
+    // Each radio's `<label for>` still resolves to its own option (review of #602): `.labels`
+    // is defined for any labelable element (a `<button>` included), not only `<input>`.
     expect(r.map((x) => x.labels?.[0]?.textContent)).toEqual([
       'Older than 30 days',
       'Older than 90 days',
       'Everything',
     ]);
-    expect(r.some((x) => x.checked)).toBe(false);
-    const genie = must(
-      el.querySelector<HTMLInputElement>('input[type="checkbox"][name="alsoGenie"]'),
-    );
-    expect(genie.checked).toBe(false);
-    expect(genie.labels?.[0]?.textContent).toBe('Also delete Genie conversations');
+    expect(r.every((x) => x.getAttribute('aria-checked') === 'false')).toBe(true);
+    const genie = must(el.querySelector<HTMLElement>('[role="checkbox"]'));
+    expect(genie.getAttribute('aria-checked')).toBe('false');
+    expect(el.textContent).toContain('Also delete Genie conversations');
     // U9: the Wipe button is off until the user picks an option.
     expect(must(el.querySelector<HTMLButtonElement>('button[data-wipe-open]')).disabled).toBe(true);
     act(() => root.unmount());
@@ -93,7 +109,7 @@ describe('Settings → Wipe (#124)', () => {
     const { el, root } = await render(<WipeSettings />);
     await act(async () => {
       must(radios(el)[2]).click();
-      must(el.querySelector<HTMLInputElement>('input[name="alsoGenie"]')).click();
+      must(el.querySelector<HTMLElement>('[role="checkbox"]')).click();
     });
     await act(async () => {
       must(el.querySelector<HTMLButtonElement>('button[data-wipe-open]')).click();
@@ -192,7 +208,12 @@ describe('Settings → Wipe (#124)', () => {
   });
 
   it('[MEM-33a] the hub shows the Wipe panel after the notice is accepted', async () => {
+    // ui-1 (#97, #103): Wipe lives in the Settings area, not shown by default.
     const { el, root } = await render(<Hub />);
+    await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-toggle]')?.click());
+    await act(async () =>
+      el.querySelector<HTMLButtonElement>('[data-sidebar-item="settings"]')?.click(),
+    );
     expect(el.querySelector('[data-view="wipe-settings"]')).not.toBeNull();
     act(() => root.unmount());
   });

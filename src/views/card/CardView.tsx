@@ -3,6 +3,7 @@
  * and one action. A card with an answer, sections, a Page domain or a checklist is the panel.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { PIN_ENABLED } from '../../shared/feature-flags';
 import { isGenieBlurbId } from '../../shared/genie-status';
 import type { MogId } from '../../shared/interfaces';
 import { DomainPicker } from '../DomainPicker';
@@ -10,13 +11,15 @@ import {
   asCardUpdate,
   emitView,
   sendViewReady,
+  useCardIdentity,
   useViewEvent,
   type CardSection,
   type CardUpdate,
 } from '../view-ipc';
-import { createWindowFit } from './fit-window';
+import { applyCardSide, createWindowFit, tauriCardWindow, widthMayChangeIn } from './fit-window';
 import { GenieCard } from './GenieCard';
 import { Popup } from './Popup';
+import { NO_LINKS, SafeMarkdown } from './safe-markdown';
 
 /** The MOG ID of the debug demo card (`DEMO_ID` in `src-tauri/src/lib.rs`). */
 const DEMO_ID = 'demo';
@@ -60,7 +63,9 @@ function Section({
     case 'answer':
       return (
         <section data-section="answer" aria-label="Full answer">
-          <div data-answer>{s.md}</div>
+          <div data-answer>
+            <SafeMarkdown text={s.md} trust={NO_LINKS} />
+          </div>
         </section>
       );
     case 'keyNumbers':
@@ -159,6 +164,9 @@ function Section({
 
 export function CardView({ mogId }: { mogId: MogId }) {
   const [card, setCard] = useState<CardUpdate | undefined>(undefined);
+  // #ui-4: the owner MOG's name and colour (`mog:target`, `card.identity_ready`). The card is
+  // already target-only (MOG-13a, MOG-13b): this only labels it.
+  const identity = useCardIdentity(mogId);
   // #559, MOG-06d: the last Copy pop-up stays until the user copies or dismisses it, even when
   // the brain drops its chip (30 s) or its blurb (UX-12). A newer blurb replaces it.
   const [kept, setKept] = useState<CardUpdate | undefined>(undefined);
@@ -193,25 +201,32 @@ export function CardView({ mogId }: { mogId: MogId }) {
 
   // The brain orders, limits, pins and collapses the blurbs (UX-11a..UX-12, ADR 0028); the view
   // renders them in the order it gets and reports pointer hover and keyboard focus.
-  // TODO(#86): blurb lines. TODO(#210): answer text goes through `safe-markdown.tsx` (plain text
-  // now, at `data-answer` and `data-section="answer"`); the deep link becomes a trusted link.
+  // TODO(#86): blurb lines. TODO(#210 follow-up): the deep link becomes a trusted link.
   const hover = (blurbId: string, via: 'pointer' | 'focus', on: boolean) =>
     void emitView(mogId, 'hover', { blurbId, on, via });
   const historyCount = card?.historyCount ?? 0;
   const probe = import.meta.env.DEV && mogId === DEMO_ID && (
     <textarea data-probe aria-label="Typing probe (dev demo card)" />
   );
+  // B2 (review round 1): the brain ages a completed Genie blurb out of `card.blurbs` on its own
+  // timer (UX-12), independently of the view's own, usually shorter fade. If that already
+  // happened, the sections it left behind are orphaned: never treat them as the panel's answer
+  // (no clamp, no close, no fade, no refit on that path), so the card never falls back to a raw,
+  // unbounded legacy panel for a Genie answer with no Genie blurb backing it any more.
+  const liveGenieBlurbId = card?.blurbs.find((b) => isGenieBlurbId(b.id))?.id;
+  const hasAnswer =
+    liveGenieBlurbId !== undefined &&
+    (card?.sections !== undefined || card?.answerMd !== undefined);
   const panel =
     card !== undefined &&
-    (card.sections !== undefined ||
-      card.answerMd !== undefined ||
-      card.pageDomain !== undefined ||
-      card.pagesChecklist !== undefined);
+    (hasAnswer || card.pageDomain !== undefined || card.pagesChecklist !== undefined);
   const newest = card?.blurbs[0];
   const shown = kept && (!newest || newest.id === kept.blurbs[0]?.id) ? kept : card;
   // #573: the window takes the height of the pop-up or the Genie card (`fit-window.ts`).
   const genie = card !== undefined && isGenieBlurbId(newest?.id);
-  const fit = useMemo(() => createWindowFit(), []);
+  // lamp-alive: the card sits close to its MOG on either side; `data-side` on the page mirrors
+  // the tail (card.css) toward the MOG.
+  const fit = useMemo(() => createWindowFit(tauriCardWindow, { onSide: applyCardSide }), []);
   const lastPx = useRef<number | undefined>(undefined);
   const onSize = useCallback(
     (px: number) => {
@@ -233,6 +248,30 @@ export function CardView({ mogId }: { mogId: MogId }) {
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, [fit]);
+  // lamp-alive: the pill changes width after the first fit (the timer comes in after 3 s, the stage
+  // line changes): fit the window again, so no clear window lies between the pill and the MOG.
+  useEffect(() => {
+    if (typeof MutationObserver === 'undefined') return;
+    let raf = 0;
+    const mo = new MutationObserver((records) => {
+      const widthMayChange = widthMayChangeIn(records);
+      if (!widthMayChange) return;
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        if (lastPx.current !== undefined) void fit(lastPx.current, window.innerHeight);
+      });
+    });
+    mo.observe(document.getElementById('root') ?? document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      characterDataOldValue: true,
+    });
+    return () => {
+      mo.disconnect();
+      cancelAnimationFrame(raf);
+    };
+  }, [fit]);
   // #573: the echo of an ⌥G question (`ask:<utterance>`, one line, no Ask Genie chip) comes in
   // the same task as the Genie status pill, so it shows nothing: no flash before the pill.
   const echo =
@@ -243,7 +282,7 @@ export function CardView({ mogId }: { mogId: MogId }) {
   if (genie && newest)
     return (
       <section aria-label="MOG card" className="card card-genie">
-        <GenieCard key={newest.id} mogId={mogId} card={card} onSize={onSize} />
+        <GenieCard key={newest.id} mogId={mogId} card={card} onSize={onSize} identity={identity} />
         {probe}
       </section>
     );
@@ -264,36 +303,54 @@ export function CardView({ mogId }: { mogId: MogId }) {
   return (
     <section aria-label="MOG card" className="card card-panel">
       <ul aria-label="Answers">
-        {card?.blurbs.map((b) => (
-          <li
-            key={b.id}
-            data-blurb={b.id}
-            onMouseEnter={() => hover(b.id, 'pointer', true)}
-            onMouseLeave={() => hover(b.id, 'pointer', false)}
-            onFocus={() => hover(b.id, 'focus', true)}
-            onBlur={() => hover(b.id, 'focus', false)}
-          >
-            {b.parts ? (
-              <ul aria-label="Answer parts">
-                {b.parts.map((p) => (
-                  <li key={p.id} data-part={p.id}>
-                    {p.text}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              b.text
-            )}
-            <button
-              type="button"
-              data-action="pin"
-              aria-pressed={b.pinned === true}
-              onClick={() => void emitView(mogId, 'click', { target: 'pin', blurbId: b.id })}
+        {card?.blurbs
+          // [LOW, round 2/3] `hasAnswer` means the `Section` below already shows this exact
+          // Genie answer in full, with key numbers: showing it a second time here, as a raw
+          // blurb line, is the "answer shows twice" finding. An empty `<li>` kept the B2 hover
+          // hold alive but left a bare, empty bullet showing (round 3) — drop the `<li>`
+          // entirely instead, and move its hover hold onto the `Section` wrapper below, which
+          // shows this same blurb's answer.
+          .filter((b) => !(isGenieBlurbId(b.id) && hasAnswer))
+          .map((b) => (
+            <li
+              key={b.id}
+              data-blurb={b.id}
+              onMouseEnter={() => hover(b.id, 'pointer', true)}
+              onMouseLeave={() => hover(b.id, 'pointer', false)}
+              onFocus={() => hover(b.id, 'focus', true)}
+              onBlur={() => hover(b.id, 'focus', false)}
             >
-              Pin
-            </button>
-          </li>
-        ))}
+              {b.parts ? (
+                <ul aria-label="Answer parts">
+                  {b.parts.map((p) => (
+                    <li key={p.id} data-part={p.id}>
+                      {p.text}
+                    </li>
+                  ))}
+                </ul>
+              ) : isGenieBlurbId(b.id) ? (
+                // B1 (review round 1): a Genie blurb's text is its full markdown answer (a
+                // completed outcome blurb's text is the raw `end.md`), even when it is not the
+                // newest entry (for example a dictation blurb landed after it). Reached only when
+                // `hasAnswer` is false (no live `Section` duplicates it) — for example a page
+                // domain or checklist panel with no answer section at all.
+                <SafeMarkdown text={b.text} trust={NO_LINKS} />
+              ) : (
+                b.text
+              )}
+              {/* #574: the host refuses to persist a pin until the pin API ships. */}
+              {PIN_ENABLED && (
+                <button
+                  type="button"
+                  data-action="pin"
+                  aria-pressed={b.pinned === true}
+                  onClick={() => void emitView(mogId, 'click', { target: 'pin', blurbId: b.id })}
+                >
+                  Pin
+                </button>
+              )}
+            </li>
+          ))}
       </ul>
       {historyCount > 0 && (
         <button
@@ -314,17 +371,31 @@ export function CardView({ mogId }: { mogId: MogId }) {
           Expand
         </button>
       )}
-      {card?.sections?.map((s) => (
-        <Section
-          key={s.id}
-          mogId={mogId}
-          s={s}
-          stt={card.sttBadge}
-          overflow={card.overflowChips ?? []}
-        />
-      ))}
-      {card?.sections === undefined && card?.answerMd !== undefined && (
-        <div data-answer>{card.answerMd}</div>
+      {hasAnswer && liveGenieBlurbId !== undefined && (
+        // The Genie blurb's own `<li>` is gone from the list above (round 3): its hover hold
+        // (B2, review round 1) moves here, onto the answer it actually shows.
+        <div
+          data-blurb={liveGenieBlurbId}
+          onMouseEnter={() => hover(liveGenieBlurbId, 'pointer', true)}
+          onMouseLeave={() => hover(liveGenieBlurbId, 'pointer', false)}
+          onFocus={() => hover(liveGenieBlurbId, 'focus', true)}
+          onBlur={() => hover(liveGenieBlurbId, 'focus', false)}
+        >
+          {card?.sections?.map((s) => (
+            <Section
+              key={s.id}
+              mogId={mogId}
+              s={s}
+              stt={card.sttBadge}
+              overflow={card.overflowChips ?? []}
+            />
+          ))}
+          {card?.sections === undefined && card?.answerMd !== undefined && (
+            <div data-answer>
+              <SafeMarkdown text={card.answerMd} trust={NO_LINKS} />
+            </div>
+          )}
+        </div>
       )}
       {card?.pageDomain && <DomainPicker mogId={mogId} picker={card.pageDomain} />}
       {card?.pagesChecklist && (

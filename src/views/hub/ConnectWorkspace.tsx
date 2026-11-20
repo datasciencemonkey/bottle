@@ -1,14 +1,25 @@
 /**
- * "Connect a workspace" in the hub (thin; #162, W-07a, W-07f, W-07g, W-07h, W-07i, W-15, ARC-2).
+ * "Connect a workspace" in the hub (thin; #162, W-07a, W-07e, W-07f, W-07g, W-07h, W-07i, W-15,
+ * ARC-2).
  *
  * The view shows the model that the brain sends on `hub:connect_workspace` and sends each click
  * with `view_emit` (id `connect`). The brain owns every rule: the URL check, the proposed name,
- * the sign-in, Cancel, "Open the browser again" and the Table W-ERR texts. The view sends
- * nothing on mount; at first run the brain opens the URL step when the hub is ready (W-07f).
+ * the sign-in, Cancel, "Open the browser again" and the Table W-ERR texts.
+ *
+ * Two hosts show it, by the `inline` flag of the model. The setup region (`placement="setup"`)
+ * shows the first-run flow (W-07f). Settings (`placement="settings"`, under the "Connect another
+ * workspace…" row) shows a flow that the user opened from that row (W-07e), so the result is
+ * next to the click, and the first field gets focus. With no model, or the brain's `closed`
+ * step, both render nothing (the setup region rule, `Hub.tsx`). A flow that Settings opened can
+ * be closed (Cancel, Done, or the connected step times out in the brain). The first-run flow has
+ * no Cancel: W-07f must always give a way to connect.
+ *
+ * On mount the setup host sends `view_emit` `ready` (id `connect`), so the brain sends the
+ * current step again if the first send came before this view listened.
  */
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   asConnectModel,
   CONNECT_EVENT,
@@ -16,13 +27,35 @@ import {
   type ConnectModel,
   type ConnectTarget,
 } from '../../shared/connect-view';
-import { emitView } from '../view-ipc';
+import { Button } from '../ui/button';
+import { Input } from '../ui/input';
+import { emitView, sendViewReady } from '../view-ipc';
 
 function send(target: ConnectTarget, fields: Record<string, string> = {}) {
   void emitView(CONNECT_VIEW_ID, 'click', { target, ...fields }).catch(() => undefined);
 }
 
-function UrlStep({ model }: { model: Extract<ConnectModel, { step: 'url' }> }) {
+/**
+ * The button of a step that closes the flow. `secondary`: the step's main action stays the one
+ * primary button. `data-autofocus` marks the element that gets focus when the step changes.
+ */
+function CloseButton({ label }: { label: string }) {
+  return (
+    <Button
+      type="button"
+      variant="secondary"
+      size="sm"
+      data-connect-close
+      onClick={() => send('connect_close')}
+    >
+      {label}
+    </Button>
+  );
+}
+
+type Open = Exclude<ConnectModel, { step: 'closed' }>;
+
+function UrlStep({ model }: { model: Extract<Open, { step: 'url' }> }) {
   const [url, setUrl] = useState('');
   return (
     <form
@@ -35,7 +68,8 @@ function UrlStep({ model }: { model: Extract<ConnectModel, { step: 'url' }> }) {
       {model.firstRun && <p>Connect Bottle to a Databricks workspace to start.</p>}
       <label>
         Workspace URL
-        <input
+        <Input
+          data-autofocus
           name="workspace-url"
           type="url"
           value={url}
@@ -44,14 +78,15 @@ function UrlStep({ model }: { model: Extract<ConnectModel, { step: 'url' }> }) {
         />
       </label>
       {model.error !== undefined && <p role="alert">{model.error}</p>}
-      <button type="submit" data-connect-next>
+      <Button type="submit" size="sm" data-connect-next>
         Next
-      </button>
+      </Button>
+      {model.inline === true && <CloseButton label="Cancel" />}
     </form>
   );
 }
 
-function NameStep({ model }: { model: Extract<ConnectModel, { step: 'name' }> }) {
+function NameStep({ model }: { model: Extract<Open, { step: 'name' }> }) {
   const [name, setName] = useState(model.proposedName);
   const [clientId, setClientId] = useState('');
   return (
@@ -76,24 +111,30 @@ function NameStep({ model }: { model: Extract<ConnectModel, { step: 'name' }> })
       )}
       <label>
         Profile name
-        <input name="profile-name" value={name} onChange={(e) => setName(e.target.value)} />
+        <Input
+          data-autofocus
+          name="profile-name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
       </label>
       <details>
         <summary>Use a custom OAuth app (optional)</summary>
         <label>
           OAuth client ID
-          <input name="client-id" value={clientId} onChange={(e) => setClientId(e.target.value)} />
+          <Input name="client-id" value={clientId} onChange={(e) => setClientId(e.target.value)} />
         </label>
       </details>
       {model.error !== undefined && <p role="alert">{model.error}</p>}
-      <button type="submit" data-connect-start>
+      <Button type="submit" size="sm" data-connect-start>
         Sign in
-      </button>
+      </Button>
+      {model.inline === true && <CloseButton label="Cancel" />}
     </form>
   );
 }
 
-function Step({ model }: { model: ConnectModel }) {
+function Step({ model }: { model: Open }) {
   switch (model.step) {
     case 'url':
       return <UrlStep model={model} />;
@@ -106,33 +147,58 @@ function Step({ model }: { model: ConnectModel }) {
       return (
         <div data-connect-step="waiting">
           <p>Finish the sign-in in your browser. Bottle waits up to 5 minutes.</p>
-          <button type="button" data-connect-cancel onClick={() => send('connect_cancel')}>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            data-autofocus
+            data-connect-cancel
+            onClick={() => send('connect_cancel')}
+          >
             Cancel
-          </button>
-          <button type="button" data-connect-reopen onClick={() => send('connect_reopen')}>
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            data-connect-reopen
+            onClick={() => send('connect_reopen')}
+          >
             Open the browser again
-          </button>
+          </Button>
         </div>
       );
     case 'connected':
       return (
         <p data-connect-step="connected">
-          Connected {model.host} as profile <span data-connect-profile>{model.profile}</span>.
+          <span>
+            Connected {model.host} as profile <span data-connect-profile>{model.profile}</span>.
+          </span>
+          <Button
+            type="button"
+            size="sm"
+            data-autofocus
+            data-connect-done
+            onClick={() => send('connect_close')}
+          >
+            Done
+          </Button>
         </p>
       );
     case 'failed':
       return (
         <div data-connect-step="failed">
           <p role="alert">{model.text}</p>
-          <button type="button" onClick={() => send(model.action.target)}>
+          <Button type="button" size="sm" data-autofocus onClick={() => send(model.action.target)}>
             {model.action.label}
-          </button>
+          </Button>
+          {model.inline === true && <CloseButton label="Close" />}
         </div>
       );
   }
 }
 
-export function ConnectWorkspace() {
+export function ConnectWorkspace({ placement = 'setup' }: { placement?: 'setup' | 'settings' }) {
   const [model, setModel] = useState<ConnectModel | undefined>(undefined);
   useEffect(() => {
     let off: (() => void) | undefined;
@@ -148,26 +214,63 @@ export function ConnectWorkspace() {
       { target },
     ).then((u) => {
       if (gone) u();
-      else off = u;
+      else {
+        off = u;
+        // One host asks: the brain sends the current step again to every listener.
+        if (placement === 'setup') sendViewReady(CONNECT_VIEW_ID);
+      }
     });
     return () => {
       gone = true;
       off?.();
     };
-  }, []);
+  }, [placement]);
+
+  // No model yet, the brain's `closed` step, or a flow that the other host shows: render
+  // nothing, the way every other setup step does once it clears (`Hub.tsx`'s `SetupRegion`).
+  const shown =
+    model !== undefined &&
+    model.step !== 'closed' &&
+    (model.inline === true) === (placement === 'settings');
+  const inline = placement === 'settings';
+  // A change of step (or a refused name) moves focus to the new step's first field or button,
+  // so the element that had focus does not drop it when it leaves the page. A flow that Settings
+  // opens also takes focus when it appears and scrolls into view. The first-run panel does not
+  // take focus when it first appears: nothing in the page asked for it.
+  const section = useRef<HTMLElement>(null);
+  const seen = useRef(false);
+  const stepKey = shown ? `${model.step} ${'error' in model ? (model.error ?? '') : ''}` : '';
+  useEffect(() => {
+    if (!shown) {
+      seen.current = false;
+      return;
+    }
+    const had = seen.current;
+    seen.current = true;
+    if (!had && !inline) return;
+    const el = section.current;
+    el?.scrollIntoView?.({ block: 'nearest' });
+    el?.querySelector<HTMLElement>('[data-autofocus]')?.focus({ preventScroll: true });
+  }, [shown, stepKey, inline]);
+
+  if (!shown) return null;
 
   return (
-    <section data-view="connect-workspace" aria-labelledby="connect-workspace-title">
-      <h2 id="connect-workspace-title">Connect a workspace</h2>
-      {model === undefined ? (
-        <p>
-          <button type="button" data-connect-open onClick={() => send('connect_open')}>
-            Connect a workspace
-          </button>
-        </p>
+    <section
+      ref={section}
+      data-view="connect-workspace"
+      data-placement={placement}
+      aria-labelledby={inline ? 'connect-workspace-title-inline' : 'connect-workspace-title-setup'}
+      className={inline ? 'mt-[var(--mog-space-4)]' : 'hub-section'}
+    >
+      {inline ? (
+        <h3 id="connect-workspace-title-inline" className="mb-[var(--mog-space-2)]">
+          Connect a workspace
+        </h3>
       ) : (
-        <Step model={model} />
+        <h2 id="connect-workspace-title-setup">Connect a workspace</h2>
       )}
+      <Step model={model} />
     </section>
   );
 }

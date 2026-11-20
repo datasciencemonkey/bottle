@@ -281,6 +281,9 @@ pub struct HostComponents<'a> {
     /// `stt_model_*` (#413, #45, #529, ADR 0104): `stt_model_host::SttModelHost` over the one
     /// managed R4 `SttSetup`. `None` when the OS gives no models folder: `host_failed`.
     pub stt_model: Option<&'a dyn GatewayComponents>,
+    /// `link_open` (#523): `mog_core::link_open::LinkOpenComponent`. `None` when T7 is not
+    /// managed: `host_failed`.
+    pub links: Option<&'a dyn GatewayComponents>,
 }
 
 fn refused(e: IpcError) -> CoreError {
@@ -346,6 +349,7 @@ impl<'a> HostComponents<'a> {
             login: None,
             recording: None,
             stt_model: None,
+            links: None,
         }
     }
 }
@@ -416,6 +420,11 @@ impl GatewayComponents for HostComponents<'_> {
     fn call(&self, command: &'static str, args: Value) -> CoreResult<Value> {
         match command {
             "view_emit" => {
+                // lamp-alive: the hide notice of a MOG view is for the host (the eye poller), not
+                // a user click: it never reaches the brain.
+                if crate::mog_look_host::hide_notice(self.from, &args) {
+                    return Ok(json!({}));
+                }
                 let item = view_input_payload(self.from, args);
                 if self.brain.relay(events::VIEW_INPUT, item) {
                     Ok(json!({}))
@@ -544,6 +553,12 @@ impl GatewayComponents for HostComponents<'_> {
             "stt_model_status" | "stt_model_consent" | "stt_model_install" | "stt_model_verify"
             | "stt_model_cancel" => self
                 .stt_model
+                .ok_or_else(|| host_failed(command))?
+                .call(command, args),
+            // #523: the gateway let only the brain through. Rust checks the URL again (https,
+            // the profile's workspace host) before the OS opener runs.
+            "link_open" => self
+                .links
                 .ok_or_else(|| host_failed(command))?
                 .call(command, args),
             // Each feature issue wires its R1-R17 component here.
@@ -731,6 +746,8 @@ fn route_from<R: Runtime>(
     // `try_state`: `install_stt_model` manages the one R4 `SttSetup` (#413, #45); without it
     // (no models folder on this device) `stt_model_*` answer `host_failed`.
     let stt_model = webview.try_state::<crate::stt_model_host::SttModelHost>();
+    // `try_state`: `lib.rs` manages the link opener after T7 (#523).
+    let links = webview.try_state::<std::sync::Arc<mog_core::link_open::LinkOpenComponent>>();
     let components = HostComponents {
         from: label,
         brain: &brain,
@@ -764,6 +781,9 @@ fn route_from<R: Runtime>(
         stt_model: stt_model
             .as_ref()
             .map(|s| s.inner() as &dyn GatewayComponents),
+        links: links
+            .as_ref()
+            .map(|l| l.inner().as_ref() as &dyn GatewayComponents),
     };
     route(components, command, args)
 }

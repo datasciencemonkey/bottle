@@ -119,3 +119,12 @@ def test_adm_04a_admin_doc_says_the_check_is_not_wired_yet():
     assert "Bottle checks each service on the home profile" not in section
     assert "#19" in section and "#52" in section
     assert "not run yet" in section
+
+
+def test_release_steps_section_lists_local_signing_flow(tmp_path):
+    """[NFR-23b] The checklist ends with the release steps: local macOS script, tag, gh release."""
+    proc, text = _checklist(tmp_path, SMALL)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    section = text[text.index("## Release steps"):]
+    for needle in ("scripts/release-macos.sh", "release.yml", "gh release create --verify-tag", "codesign -d -r-"):
+        assert needle in section

@@ -131,6 +131,7 @@ fn sample(command: &str) -> (&'static str, Value) {
                 json!({"source": "github", "onProgress": "__CHANNEL__:5"}),
             )
         }
+        "link_open" => json!({"profile": "p", "url": "https://example.cloud.databricks.com/x"}),
         other => panic!("no sample for {other}"),
     };
     ("brain", args)

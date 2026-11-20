@@ -392,6 +392,10 @@ fn hub_103_exchange_recent_lists_newest_first_inside_one_mog() {
     assert_eq!(a["workspaceHost"], "example.cloud.databricks.com");
     assert_eq!(a["askedAt"], T0);
     assert_eq!(a["completedAt"], T0 + 5_000);
+    // #523: the stored `deep_link` (the URL Genie One returned) reaches the hub, so "Open in
+    // Databricks" needs no new column and no migration. A failed row has none.
+    assert_eq!(a["deepLink"], DEEP_LINK);
+    assert_eq!(r[0]["deepLink"], Value::Null);
     let kn: Value = serde_json::from_str(a["keyNumbers"].as_str().expect("key numbers")).unwrap();
     assert_eq!(
         kn,
@@ -426,4 +430,31 @@ fn hub_103_exchange_recent_lists_newest_first_inside_one_mog() {
     let st = super::catalog::find("mem.exchange.recent").expect("recent");
     assert_eq!(st.access, Access::Brain);
     assert_eq!(st.kind, super::catalog::Kind::Query);
+}
+
+/// #(genie-followup): the hub thread view groups exchanges by `conversationId`, so the recent
+/// list must carry it. A follow-up (#584, ADR 0097) keeps the same id across exchanges.
+#[test]
+fn genie_followup_exchange_recent_carries_the_conversation_id() {
+    let t = TempDir::new("followup-recent");
+    let s = open(&t);
+    const EXCH_3: &str = "31111111-2222-4333-8444-555555555504";
+    const REQ_3: &str = "41111111-2222-4333-8444-555555555504";
+    exec(&s, "mem.exchange.upsert", home(EXCH_1, REQ_1, T0));
+    let mut followup = home(EXCH_3, REQ_3, T0 + 1_000);
+    followup["requestId"] = json!(REQ_3);
+    followup["exchangeId"] = json!(EXCH_3);
+    // Same conversation id as EXCH_1 (`home()` always uses "test-conv"): a real follow-up.
+    exec(&s, "mem.exchange.upsert", followup);
+
+    let got = exec(
+        &s,
+        "mem.exchange.recent",
+        json!({"mogId": MOG_A, "limit": 50}),
+    );
+    let r = rows(&got);
+    assert_eq!(r.len(), 2);
+    for row in r {
+        assert_eq!(row["conversationId"], "test-conv");
+    }
 }

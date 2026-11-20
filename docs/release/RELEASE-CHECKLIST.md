@@ -73,3 +73,14 @@ These admin prerequisites (section 5.12) are verified by inspection. Inspect eac
 | [ ] | ADM-17a | The admin must create a Genie budget (`databricks-product: genie`) before 2027-02-01. | Budget alerts fire in a test. | Section 10 of the requirements | |
 | [ ] | ADM-17b | The admin must create an `app=bottle` budget before 2027-02-01. | Budget alerts fire in a test. | Section 10 of the requirements | |
 | [ ] | ADM-18 | The customer must complete the legal pack of Table ADM-LEGAL before meeting sessions start. | Evidence exists for the release gate. | Section 10 of the requirements | |
+
+## Release steps
+
+The macOS build is signed on the owner's Mac with the self-signed identity "Bottle Local Dev Signing". The key never leaves that Mac, so no CI job signs for macOS. The Windows installer is built by `.github/workflows/release.yml` and is unsigned.
+
+1. Land the release PR. Check the version in `package.json`, `src-tauri/tauri.conf.json` and `Cargo.toml`, and write `docs/release/notes-vX.Y.Z.md`.
+2. On the Mac, check out `main` at `origin/main` with a clean tree.
+3. Run `scripts/release-macos.sh X.Y.Z`. It builds, signs and checks the app, makes the DMG, signs it and writes the SHA-256 under `dist/release/`.
+4. Push the tag `vX.Y.Z`. The Release workflow builds the Windows installer and attaches it to a draft release.
+5. Run the `gh release` command that the script prints. If the draft exists, it is `gh release upload` for the DMG and the SHA-256 file, then `gh release edit` with `--notes-file` and `--draft=false`. Otherwise it is `gh release create --verify-tag`.
+6. Install the DMG on a clean Mac. Check the Gatekeeper steps in the notes, the permissions and `codesign -d -r-` (the leaf hash must be unchanged).

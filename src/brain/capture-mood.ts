@@ -37,6 +37,10 @@ export const REFUSAL_REASONS = [
   'host_failed',
   'permission_denied',
   'no_device',
+  'recording_in_progress',
+  'no_home_profile',
+  'no_profile',
+  'profiles_differ',
 ] as const;
 export type RefusalReason = (typeof REFUSAL_REASONS)[number];
 
@@ -57,13 +61,43 @@ export const REFUSAL_TEXT: Readonly<Record<RefusalReason, { text: string; label:
     label: 'Mic not started: allow the mic for Bottle in the system settings',
   },
   no_device: { text: 'No mic found', label: 'Mic not started: connect a microphone' },
+  // ADR 0103: while a recording runs, the talk key does not take the mic.
+  recording_in_progress: {
+    text: 'Recording in progress',
+    label: 'Mic not started: a call recording uses the mic. Press ⌥R in a hold to stop it',
+  },
+  // ADR 0103: the ⌥R start needs the home profile; Bottle never picks one.
+  no_home_profile: {
+    text: 'Pick a workspace first',
+    label: 'Recording not started: pick a home workspace for this MOG first',
+  },
+  // ADR 0103, recording-profile.ts: ⌥R shares the hub Record control's `recordingProfile`. No
+  // MOG anywhere has a home yet.
+  no_profile: {
+    text: 'Pick a workspace first',
+    label: 'Recording not started: no MOG has a home workspace yet; pick one first',
+  },
+  // ADR 0103, recording-profile.ts: two or more MOGs have different homes. Bottle never picks
+  // between workspaces, so ⌥R refuses, the same as the hub Record control.
+  profiles_differ: {
+    text: 'MOGs use different workspaces',
+    label:
+      'Recording not started: your MOGs use different home workspaces; recording needs one workspace for all of them',
+  },
 };
+
+/** ADR 0103: the capture owner of a call recording. It is not a MOG. */
+export const RECORDING_OWNER = 'bottle-recording';
 
 const IPC_REASONS: ReadonlySet<string> = new Set<RefusalReason>([
   'consent_required',
   'consent_storage_failed',
   'mic_busy',
   'host_failed',
+  'recording_in_progress',
+  'no_home_profile',
+  'no_profile',
+  'profiles_differ',
 ]);
 
 /** The reason of a refused start. Only a known `IpcError` code counts; anything else is host_failed. */
@@ -96,6 +130,13 @@ export interface CaptureMood {
    * `PENDING_ASK_MS`, so an utterance that never becomes a request does not stay working.
    */
   ask(mogId: MogId, phase: GeniePhase | 'pending'): void;
+  /**
+   * ADR 0103: a call recording started (`on`) or ended. While it runs, each known MOG and each
+   * MOG in `mogIds` shows the REC overlay; the mood does not change.
+   */
+  callRecording(on: boolean, mogIds?: readonly MogId[]): void;
+  /** ADR 0103: the notes of a recording are ready: the answer-ready moment on each known MOG. */
+  recordingReady(): void;
 }
 
 interface Refusal {
@@ -118,16 +159,21 @@ export function createCaptureMood(deps: CaptureMoodDeps): CaptureMood {
   const refusals = new Map<MogId, Refusal>();
   const asks = new Map<MogId, { view: RequestView; cancel?: () => void }>();
   let capture: CaptureState = IDLE;
+  let callRec = false;
+  /** When the last recording notes were ready (the success window of 4.8). */
+  let readyAt: number | undefined;
 
   const publish = (mogId: MogId) => {
     const r = refusals.get(mogId);
     const requests: RequestView[] = r ? [{ phase: 'failed', at: r.at, userMustAct: true }] : [];
     const a = asks.get(mogId);
     if (a) requests.push(a.view);
+    if (readyAt !== undefined) requests.push({ phase: 'completed', at: readyAt });
     const badges: MogBadgeView[] | undefined = r
       ? [{ kind: 'capture_refused', ...REFUSAL_TEXT[r.reason], hoverOnly: false }]
       : undefined;
-    publisher.update(mogId, { mog: READY, capture, requests }, undefined, badges);
+    const sources = { mog: READY, capture, requests, ...(callRec ? { callRecording: true } : {}) };
+    publisher.update(mogId, sources, undefined, badges);
   };
   const clear = (mogId: MogId) => {
     refusals.get(mogId)?.cancel();
@@ -180,7 +226,8 @@ export function createCaptureMood(deps: CaptureMoodDeps): CaptureMood {
     },
     onState(s) {
       capture = s;
-      for (const id of [s.owner, s.directedTo]) if (id) known.add(id);
+      // ADR 0103: the call recording holds the mic as `bottle-recording`, which is not a MOG.
+      for (const id of [s.owner, s.directedTo]) if (id && id !== RECORDING_OWNER) known.add(id);
       const fault = micFault(s);
       for (const [id, r] of refusals) {
         // A new granted capture of this MOG ends its refusal. A repeated state of the lease that
@@ -209,6 +256,21 @@ export function createCaptureMood(deps: CaptureMoodDeps): CaptureMood {
       const leaseAtRefusal = capture.recording ? capture.leaseId : undefined;
       refusals.set(mogId, { reason, at, leaseAtRefusal, cancel });
       publish(mogId);
+    },
+    callRecording(on, mogIds = []) {
+      for (const id of mogIds) known.add(id);
+      callRec = on;
+      for (const id of known) publish(id);
+    },
+    recordingReady() {
+      const at = clock.now();
+      readyAt = at;
+      for (const id of known) publish(id);
+      scheduler.at(at + SUCCESS_MS, () => {
+        if (readyAt !== at) return;
+        readyAt = undefined;
+        for (const id of known) publish(id);
+      });
     },
   };
 }

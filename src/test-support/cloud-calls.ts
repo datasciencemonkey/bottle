@@ -79,6 +79,7 @@ export const CALL_CLASS = {
   stt_model_install: 'cloud', // downloads the pinned Parakeet model (github or hf_mirror)
   stt_model_verify: 'local', // hashes the files on disk only; never a request
   stt_model_cancel: 'local',
+  link_open: 'local', // opens the browser; Bottle itself sends nothing
 } as const satisfies Record<keyof typeof COMMANDS, CallClass>;
 
 /** The command arguments of an invoke log entry: `call()` sends them as `{ args }` (ADR 0003). */

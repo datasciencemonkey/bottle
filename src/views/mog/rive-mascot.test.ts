@@ -324,3 +324,43 @@ describe('PngMascot (UX-09b fallback)', () => {
     expect(el.childElementCount).toBe(0);
   });
 });
+
+describe('lamp-alive: look and hidden reach the lamp fallback only', () => {
+  it('forwards setLook and setHidden to the fallback, and the hidden state to a late one', () => {
+    const calls: string[] = [];
+    const fallback: MascotRenderer = {
+      mount: () => undefined,
+      setMood: () => undefined,
+      setLevel: () => undefined,
+      setAttention: () => undefined,
+      setHover: () => undefined,
+      poke: () => undefined,
+      destroy: () => undefined,
+      setLook: (dx, dy) => calls.push(`look:${dx},${dy}`),
+      setHidden: (h) => calls.push(`hidden:${h}`),
+    };
+    const r = new RiveMascot(
+      () => {
+        throw new Error('no rive');
+      },
+      () => fallback,
+    );
+    r.setHidden(true);
+    r.mount(document.createElement('div'));
+    r.setLook(0.25, -0.5);
+    r.setHidden(false);
+    expect(calls).toEqual(['hidden:true', 'look:0.25,-0.5', 'hidden:false']);
+  });
+
+  it('does nothing before a fallback exists (the .riv has no look input yet)', () => {
+    const r = new RiveMascot(() => ({
+      viewModelInstance: null,
+      resizeDrawingSurfaceToCanvas: () => undefined,
+      cleanup: () => undefined,
+    }));
+    expect(() => {
+      r.setLook(1, 0);
+      r.setHidden(true);
+    }).not.toThrow();
+  });
+});

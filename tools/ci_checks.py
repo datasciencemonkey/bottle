@@ -76,7 +76,7 @@ def check_mascot():
 def fallback_problems(root):
     """The PNG fallback must come from the current scene.rml (UX-09b). No Rive CLI is needed:
     tools/render_mog_fallback.py records the SHA-256 of scene.rml in fallback/SOURCE.sha256."""
-    rerun = "run uv run --no-project --with pillow python tools/render_mog_fallback.py and commit the result"
+    rerun = "run uv run --no-project --with pillow --with numpy python tools/render_mog_fallback.py and commit the result"
     recorded = os.path.join(root, "mog-rive", "fallback", "SOURCE.sha256")
     if not os.path.exists(recorded):
         return [f"mog-rive/fallback/SOURCE.sha256 is missing: {rerun}"]
@@ -126,6 +126,8 @@ TOP_LEVEL = {
     ".editorconfig", ".nvmrc", ".node-version", ".npmrc", "rust-toolchain.toml", ".env.example",
     "eslint.config.js", "package.json", "pnpm-lock.yaml", "tsconfig.json", "vite.config.ts",
     "Cargo.toml", "Cargo.lock",
+    # pnpm 11 reads overrides only from this file; no packages key, so the repo stays a single package
+    "pnpm-workspace.yaml",
     # docs
     "AGENTS.md", "CONTRIBUTING.md", "README.md", "LICENSE", "THIRD_PARTY_NOTICES.md",
     "REQUIREMENTS.md", "requirements.html",

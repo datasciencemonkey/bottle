@@ -1,0 +1,111 @@
+# Release workflow (Windows only). The macOS release is built, signed and uploaded on the owner's
+# Mac with scripts/release-macos.sh, because the signing key never leaves that Mac. This workflow
+# builds the unsigned Windows NSIS installer for a v* tag and attaches it to the GitHub Release for
+# that tag. It creates the release as a draft when the release does not exist.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release, for example v0.1.0 (the tag must exist)"
+        required: true
+      local_stt:
+        description: "Build with local-stt (turn off only as a fallback)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: "1.100.0"
+  NODE_VERSION: "24"
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  windows:
+    name: Windows installer
+    runs-on: windows-2025
+    timeout-minutes: 90
+    permissions:
+      contents: write # create the draft release and upload the installer
+    env:
+      BUNDLE_DIR: target/release/bundle/nsis
+    steps:
+      - name: Check the tag name and that the tag exists on the remote
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] || { echo "bad tag: $TAG"; exit 1; }
+          git ls-remote --tags "https://github.com/${GITHUB_REPOSITORY}" "refs/tags/$TAG" | grep -q . \
+            || { echo "tag $TAG is not on the remote"; exit 1; }
+      - name: Keep LF line endings
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TAG }}
+      # The vendored OpenSSL in the SQLCipher build (#35) runs Configure with perl. Git Bash's
+      # MSYS perl lacks Locale::Maketext::Simple, so point openssl-src at Strawberry Perl (#375).
+      - name: Use Strawberry Perl for vendored OpenSSL (Windows)
+        run: |
+          test -x /c/Strawberry/perl/bin/perl.exe
+          echo 'OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl.exe' >> "$GITHUB_ENV"
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable branch
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          python-version: "3.12"
+      - name: Install JS dependencies
+        run: pnpm install --frozen-lockfile
+      # local-stt links the vendored, hash-pinned sherpa-onnx archive (ADR 0049).
+      - name: Fetch the pinned sherpa-onnx archive
+        if: github.event_name != 'workflow_dispatch' || inputs.local_stt
+        run: uv run --no-project python scripts/vendor_sherpa_onnx.py
+      # The pinned sherpa-onnx archive is static-MT (/MT). crt-static makes Rust and cc build the
+      # C dependencies with /MT too, so the link does not mix /MT and /MD.
+      - name: Build the unsigned release installer
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
+          LOCAL_STT: ${{ github.event_name != 'workflow_dispatch' || inputs.local_stt }}
+        run: |
+          features=()
+          [ "$LOCAL_STT" = "true" ] && features=(--features local-stt)
+          pnpm tauri build "${features[@]}" --bundles nsis -- --locked
+      - name: Write a SHA-256 file for each installer
+        run: |
+          cd "$BUNDLE_DIR"
+          shopt -s nullglob
+          files=(*.exe)
+          [ ${#files[@]} -gt 0 ] || { echo "no installer in $BUNDLE_DIR"; exit 1; }
+          for f in "${files[@]}"; do
+            sha256sum "$f" > "$f.sha256"
+            tee -a "$GITHUB_STEP_SUMMARY" < "$f.sha256"
+          done
+      - name: Upload the installer to the GitHub Release (draft when new)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            pre=()
+            [[ "$TAG" == *-rc.* ]] && pre=(--prerelease)
+            gh release create "$TAG" --verify-tag --draft "${pre[@]}" --title "$TAG" --notes "Draft. The release notes are added by the owner."
+          fi
+          gh release upload "$TAG" "$BUNDLE_DIR"/*.exe "$BUNDLE_DIR"/*.sha256 --clobber

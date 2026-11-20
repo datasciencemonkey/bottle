@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { act } from 'react';
 import { render, tauri } from '../test-tauri';
 import { About, aboutNotices } from './About';
 import { Hub } from './Hub';
@@ -63,7 +64,12 @@ describe('About screen (in the V1 hub)', () => {
   });
 
   it('[SEC-21b] [MB-10b] the hub includes the About screen', async () => {
+    // ui-1 (#97, #103): About lives in the Settings area, not shown by default.
     const { el } = await render(<Hub />);
+    await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-toggle]')?.click());
+    await act(async () =>
+      el.querySelector<HTMLButtonElement>('[data-sidebar-item="settings"]')?.click(),
+    );
     expect(el.querySelector('section[data-view="about"] pre[data-notices]')).not.toBeNull();
   });
 });

@@ -68,6 +68,10 @@ fn arc_4_views_only_listen_to_events() {
             "core:window:allow-set-size",
             "core:window:allow-set-position",
             "core:window:allow-outer-position",
+            // lamp-alive: the card also reads the size and the title of its own window
+            // (the side of its MOG, which the host sets, `card-placement.ts`); it reads no other window.
+            "core:window:allow-outer-size",
+            "core:window:allow-title",
             "core:window:allow-scale-factor",
             "core:window:allow-current-monitor",
         ])
@@ -75,7 +79,12 @@ fn arc_4_views_only_listen_to_events() {
         .collect();
     assert_eq!(core_of("card"), card, "view card core permissions");
     // ARC-5: the brain sends to one view with emit_to; no global emit. #573 (ADR 0102): after a
-    // double-click it finds the hub, shows it and focuses it. It cannot create or close a window.
+    // double-click it finds the hub, shows it and focuses it. `allow-is-focused` is read-only: a ⌥G
+    // follow-up into a thread (#145) asks it whether the hub window really has focus. It cannot create or close a window.
+    // #ui-4 (review #603, findings 1 and 4): the brain also builds and pops up the MOG
+    // right-click menu as a native Tauri menu (`mog-context-menu.ts`), on the MOG's own window
+    // (`Window.getByLabel`, already covered by `allow-get-all-windows`): a MOG view itself stays
+    // listen-and-view_emit-only (above), since only the brain holds `core:menu:*`.
     let want: BTreeSet<String> = [
         "core:event:allow-listen",
         "core:event:allow-unlisten",
@@ -84,10 +93,54 @@ fn arc_4_views_only_listen_to_events() {
         "core:window:allow-show",
         "core:window:allow-unminimize",
         "core:window:allow-set-focus",
+        "core:window:allow-is-focused",
+        "core:menu:allow-new",
+        "core:menu:allow-popup",
     ]
     .map(String::from)
     .into();
     assert_eq!(core_of("brain"), want);
+}
+
+/// #523: a view cannot open a URL. The only ways out are `link_open` (brain only) and the
+/// opener plugins, so no view capability may name `link_open`, `opener:*`, `shell:*` or
+/// `core:webview:*`, and the opener plugin is not a dependency of the app.
+#[test]
+fn arc_4_views_cannot_open_urls_directly() {
+    let spec = COMMANDS
+        .iter()
+        .find(|c| c.name == "link_open")
+        .expect("link_open row");
+    assert_eq!(
+        spec.windows,
+        [WindowClass::Brain],
+        "link_open is brain only"
+    );
+    for id in ["hub", "mog", "card"] {
+        let perms = permissions(&capability(id));
+        assert!(!perms.contains(&allow("link_open")), "view {id}");
+        assert!(
+            !perms.contains(&allow("recording_open")) || id == "hub",
+            "view {id}"
+        );
+        for p in &perms {
+            for banned in [
+                "opener:",
+                "shell:",
+                "core:webview:",
+                "core:window:allow-create",
+            ] {
+                assert!(!p.starts_with(banned), "view {id} has {p}");
+            }
+        }
+    }
+    assert!(permissions(&capability("brain")).contains(&allow("link_open")));
+    let cargo =
+        std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
+            .expect("Cargo.toml");
+    for banned in ["tauri-plugin-opener", "tauri-plugin-shell"] {
+        assert!(!cargo.contains(banned), "{banned} must stay out");
+    }
 }
 
 #[test]

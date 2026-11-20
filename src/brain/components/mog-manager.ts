@@ -21,6 +21,7 @@ import type { MogBinding, MogId, ProfileName } from '../../shared/interfaces';
 import { BrainActor } from '../actor';
 import type { MogPagesConfig } from '../pages/home-domain';
 import { MOG_CONFIG_DEFAULTS, type MogConfig } from './mog-config';
+import { MOG_PALETTE, nextVariant } from '../../shared/mog-palette';
 
 /** Appendix F `app.maxRunningMogs` default (D44, MB-03b). */
 export const MAX_RUNNING_MOGS_DEFAULT = 8;
@@ -51,6 +52,8 @@ export interface MogDefinition {
 export interface MogSummary extends MogDefinition {
   persona: string;
   runState: MogRunState;
+  /** #ui-4: `mog.ui.variant` (a palette id, or `auto` for a legacy config). */
+  colorVariant: string;
 }
 
 export interface MogListing {
@@ -65,6 +68,7 @@ export type MogErrorCode =
   | 'invalid_name'
   | 'invalid_home'
   | 'invalid_persona'
+  | 'invalid_color'
   | 'not_found'
   | 'not_confirmed'
   | 'cap_reached'
@@ -184,7 +188,7 @@ export interface MogManager {
   create(input: { name?: string; home: ProfileName }): Promise<MogSummary>;
   edit(
     mogId: MogId,
-    patch: { name?: string; home?: ProfileName; persona?: string },
+    patch: { name?: string; home?: ProfileName; persona?: string; colorVariant?: string },
   ): Promise<MogSummary>;
   /** A copy under a new ID, named "<name> copy", without the per-MOG chord (MB-14). */
   duplicate(mogId: MogId): Promise<MogSummary>;
@@ -264,6 +268,9 @@ class Manager implements MogManager {
       },
       persona: c.persona,
       runState: this.runState(mogId),
+      // Defensive: a config a test double or an old file did not fill in (the real core always
+      // does) still lists, with the "auto" fallback `paletteColorOf` resolves by MOG ID.
+      colorVariant: c.ui?.variant ?? MOG_CONFIG_DEFAULTS.ui.variant,
     };
   }
 
@@ -326,16 +333,23 @@ class Manager implements MogManager {
   create(input: { name?: string; home: ProfileName }): Promise<MogSummary> {
     return this.#run(async () => {
       const home = checkHome(input.home);
+      const existing = (await this.#listNow()).mogs;
       let name = (input.name ?? '').trim();
       if (!name) {
-        const used = new Set((await this.#listNow()).mogs.map((m) => m.name));
+        const used = new Set(existing.map((m) => m.name));
         let n = 1;
         while (used.has(`MOG ${n}`)) n++;
         name = `MOG ${n}`;
       }
+      // #ui-4 (D-identity): the first unused palette colour, or an even spread past it.
+      const variant = nextVariant(
+        existing.map((m) => m.colorVariant),
+        existing.length,
+      );
       const config: MogConfig = {
         ...structuredClone(MOG_CONFIG_DEFAULTS),
         name: checkName(name),
+        ui: { ...MOG_CONFIG_DEFAULTS.ui, variant },
         binding: {
           home,
           backend: { kind: 'genie_one_mcp', profile: home },
@@ -349,15 +363,18 @@ class Manager implements MogManager {
 
   edit(
     mogId: MogId,
-    patch: { name?: string; home?: ProfileName; persona?: string },
+    patch: { name?: string; home?: ProfileName; persona?: string; colorVariant?: string },
   ): Promise<MogSummary> {
     return this.#run(async () => {
       const name = patch.name === undefined ? undefined : checkName(patch.name.trim());
       const home = patch.home === undefined ? undefined : checkHome(patch.home);
       const persona = patch.persona === undefined ? undefined : checkPersona(patch.persona);
+      const colorVariant =
+        patch.colorVariant === undefined ? undefined : checkColorVariant(patch.colorVariant);
       const c = await this.#read(mogId);
       if (name !== undefined) c.name = name;
       if (persona !== undefined) c.persona = persona;
+      if (colorVariant !== undefined) c.ui = { ...c.ui, variant: colorVariant };
       if (home !== undefined && home !== c.binding.home) {
         // The backend follows the home profile when it used the old home (G-01).
         if (c.binding.backend.profile === c.binding.home)
@@ -463,6 +480,14 @@ function checkPersona(persona: string): string {
       'Persona instructions can have at most 2,000 characters.',
     );
   return persona;
+}
+
+/** #ui-4: the row colour picker in the hub offers only the fixed palette, never a raw hex. */
+const PALETTE_IDS = new Set(MOG_PALETTE.map((c) => c.id));
+function checkColorVariant(colorVariant: string): string {
+  if (!PALETTE_IDS.has(colorVariant))
+    throw new MogManagerError('invalid_color', 'Choose a colour from the MOG palette.');
+  return colorVariant;
 }
 
 export function createMogManager(opts: MogManagerOptions = {}): MogManager {

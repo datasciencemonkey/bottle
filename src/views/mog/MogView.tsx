@@ -1,7 +1,11 @@
 /** V2 MOG view (thin): one mascot instance, badges and DOM overlays from `mog.view_state`. */
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { OPEN_CONVERSATIONS } from '../../shared/genie-status';
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { MOG_MENU_HIDE_EVENT, MOG_MENU_OPEN, OPEN_CONVERSATIONS } from '../../shared/genie-status';
 import type { MogId } from '../../shared/interfaces';
+import { paletteColorOf } from '../../shared/mog-palette';
+import { MOG_LOOK_EVENT, MOG_VIEW_HIDDEN, asMogLook } from '../../shared/mog-look';
 import {
   asMogViewState,
   emitView,
@@ -64,6 +68,85 @@ export function MogView({
     void emitView(mogId, 'hover', { on }).catch(() => undefined);
   };
 
+  // #ui-4: Hide sinks the Genie into the lamp and shrinks the lamp art to lamp-only inside the
+  // same 160x168 window (plain CSS, no brain round trip for showing or hiding the art: this
+  // view holds the flag, so a click brings it back at once). It keeps running and stays a talk
+  // target either way (review #603, LOW finding: the window itself never resizes, only the art).
+  const [hiddenByUser, setHiddenByUser] = useState(false);
+  // #ui-4 (review #603, findings 1 and 4): the right-click menu is a native Tauri menu, but a
+  // MOG view may only listen to events and call `view_emit` (ARC-4) — only the brain holds
+  // `core:menu:*`. This view only asks the brain to show it (`mog-context-menu.ts` builds and
+  // pops it up on the real OS, which always fits the screen and dismisses on an outside click or
+  // Esc with no listener needed here) and, for Hide only, is told the result back.
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    let gone = false;
+    void listen<{ hidden?: unknown }>(
+      MOG_MENU_HIDE_EVENT,
+      (e) => {
+        const hidden = (e.payload as { hidden?: unknown } | null)?.hidden;
+        if (typeof hidden === 'boolean') setHiddenByUser(hidden);
+      },
+      { target: getCurrentWindow().label },
+    ).then((u) => {
+      if (gone) u();
+      else off = u;
+    });
+    return () => {
+      gone = true;
+      off?.();
+    };
+  }, []);
+
+  // lamp-alive: the host reads the global pointer and the brain sends this MOG where to look
+  // (`mog:look`, a vector, never a position). The view only listens (ARC-4).
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    let gone = false;
+    void listen<unknown>(
+      MOG_LOOK_EVENT,
+      (e) => {
+        const look = asMogLook(e.payload);
+        if (look) mascot.current?.setLook?.(look.dx, look.dy);
+      },
+      { target: getCurrentWindow().label },
+    )
+      .then((u) => {
+        if (gone) u();
+        else off = u;
+      })
+      .catch(() => undefined);
+    return () => {
+      gone = true;
+      off?.();
+    };
+  }, []);
+
+  // The host polls the pointer only for a MOG the user did not hide: tell it (it does not relay
+  // this to the brain). Also once on load, so a reopened MOG is not left marked hidden.
+  useEffect(() => {
+    void emitView(mogId, 'click', { action: MOG_VIEW_HIDDEN, hidden: hiddenByUser }).catch(
+      () => undefined,
+    );
+  }, [mogId, hiddenByUser]);
+
+  // The idle motion (the spark orbit) and the gaze stop while the MOG is hidden: by the Hide menu
+  // item, or because the page is not visible (a hidden window, a locked screen).
+  const [pageHidden, setPageHidden] = useState(
+    typeof document !== 'undefined' && document.visibilityState === 'hidden',
+  );
+  useEffect(() => {
+    const on = () => setPageHidden(document.visibilityState === 'hidden');
+    document.addEventListener('visibilitychange', on);
+    return () => document.removeEventListener('visibilitychange', on);
+  }, []);
+  const idleStopped = hiddenByUser || pageHidden;
+  const stopped = useRef(idleStopped);
+  useEffect(() => {
+    stopped.current = idleStopped;
+    mascot.current?.setHidden?.(idleStopped);
+  }, [idleStopped, createMascot]);
+
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -75,6 +158,7 @@ export function MogView({
       m.setMood(s.mood);
       m.setAttention(s.overlays.attention);
     }
+    m.setHidden?.(stopped.current);
     mascot.current = m;
     return () => {
       m.destroy();
@@ -110,18 +194,48 @@ export function MogView({
   // MB-06b, UX-28 (#73): the brain says which MOG the talk key targets and when to show the toast.
   const target = useMogTarget(mogId);
   const name = target?.name ?? 'MOG';
+  // #ui-4: the fixed, accessible palette (`mog-palette.ts`); an unknown or missing variant falls
+  // back to a colour hashed from the MOG ID, so even a pre-identity render stays stable.
+  const accent = paletteColorOf(target?.colorVariant, mogId);
+  // #ui-4: a hover tooltip with the name and home workspace, if known (cheap: it rides the same
+  // `mog:target` push, no extra round trip).
+  const tooltip = target?.home ? `${name} · ${target.home}` : name;
 
   // TODO(#83): poke, click-to-listen and drag rules; the brain decides what input means.
   // The hover flag is on the whole view, so moving onto a badge keeps the hover badges open.
   return (
-    <div onMouseOver={() => pointer(true)} onMouseLeave={() => pointer(false)}>
+    <div
+      style={{ '--mog-id-color': accent.hex } as CSSProperties}
+      onMouseOver={() => pointer(true)}
+      onMouseLeave={() => pointer(false)}
+    >
       <div
         ref={ref}
         className="mascot"
+        data-hidden={hiddenByUser || undefined}
+        title={tooltip}
         aria-label={target?.target ? `${name}, target` : name}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          // `.mascot` fills the window (mog.css), so the click's viewport position is already
+          // the window-relative position the brain's native popup wants (review #603, finding
+          // 1: a native menu, unlike the old HTML one, always fits on screen regardless of
+          // where this lands).
+          void emitView(mogId, 'click', {
+            target: MOG_MENU_OPEN,
+            x: e.clientX,
+            y: e.clientY,
+            hidden: hiddenByUser,
+          }).catch(() => undefined);
+        }}
         onClick={(e) => {
           // The second click of a double-click is part of the double-click.
           if (e.detail > 1) return;
+          // #ui-4: Hide is local-only; a click anywhere on the MOG brings it back.
+          if (hiddenByUser) {
+            setHiddenByUser(false);
+            return;
+          }
           mascot.current?.poke();
           clearTimeout(clickTimer.current);
           clickTimer.current = setTimeout(() => void emitView(mogId, 'click'), DOUBLE_CLICK_MS);

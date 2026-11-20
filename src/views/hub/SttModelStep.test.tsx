@@ -123,11 +123,15 @@ describe('Wizard STT step (MB-07, #413)', () => {
     expect(done).toHaveBeenCalledTimes(1);
   });
 
+  // ui-1 (ADR 0106): the download source picker is now a shadcn/ui RadioGroup (Radix), which
+  // renders as accessible buttons (`role="radio"`), not native `<input type="radio">` elements.
   it('[CAP-49b] the user can pick the Hugging Face mirror as the source', async () => {
     const f = fakeApi();
     const { el } = await render(<SttModelStep api={f.api} />);
-    const hf = el.querySelector<HTMLInputElement>('input[name="sttSource"][value="hf_mirror"]');
-    await click(hf ?? undefined);
+    const hf = [...el.querySelectorAll<HTMLElement>('[role="radio"]')].find(
+      (r) => r.getAttribute('value') === 'hf_mirror',
+    );
+    await click(hf);
     await click(button(el, 'Download (487 MB)'));
     expect(f.calls).toContain('install:hf_mirror');
   });
@@ -148,8 +152,10 @@ describe('Wizard STT step (MB-07, #413)', () => {
   it('[#413 review] adds progress across files instead of restarting the bar per file', async () => {
     const f = fakeApi({ consent: 'granted' });
     const { el } = await render(<SttModelStep api={f.api} />);
-    const hf = el.querySelector<HTMLInputElement>('input[name="sttSource"][value="hf_mirror"]');
-    await click(hf ?? undefined);
+    const hf = [...el.querySelectorAll<HTMLElement>('[role="radio"]')].find(
+      (r) => r.getAttribute('value') === 'hf_mirror',
+    );
+    await click(hf);
     await click(button(el, 'Download (487 MB)'));
     await f.progress({ file: 'encoder.int8.onnx', done: 652_282_294, total: 652_282_294 });
     await f.progress({ file: 'decoder.int8.onnx', done: 5_000_000, total: 11_845_274 });
@@ -210,36 +216,29 @@ describe('Wizard STT step (MB-07, #413)', () => {
     expect(sttErrorText('something_new')).toMatch(/install stopped/i);
   });
 
-  it('[MB-07] an installed model is checked before the step is done', async () => {
+  it('[MB-07] an installed model is checked before the step is done, and shows nothing', async () => {
     const f = fakeApi({ consent: 'granted', model: 'installed' });
     const { el } = await render(<SttModelStep api={f.api} />);
-    expect(step(el).textContent).toContain('Checking the speech model');
-    expect(step(el).getAttribute('data-done')).toBe('false');
-    expect(button(el, 'Cancel')).toBeUndefined();
+    // Setup region (#605): an installed model is a cleared step, so nothing renders during the
+    // launch check or after it passes.
     expect(f.calls).toEqual(['status', 'verify']);
+    expect(el.querySelector('[data-view="stt-setup"]')).toBeNull();
     await f.finish({});
-    expect(step(el).getAttribute('data-done')).toBe('true');
+    expect(el.querySelector('[data-view="stt-setup"]')).toBeNull();
   });
 
-  it('[#413 review] an installed model with no stored consent is checked, never asked, and ends in one calm state', async () => {
+  it('[#413 review] an installed model with no stored consent is checked, never asked, and renders nothing', async () => {
     const f = fakeApi({ consent: 'not_asked', model: 'installed' });
     const { el } = await render(<SttModelStep api={f.api} />);
     // The real state on a Mac that already has the model: no `stt-download-consent` file.
     // `verify` sends no request, so it must run regardless, with no consent question first.
     expect(f.calls).toEqual(['status', 'verify']);
-    expect(step(el).textContent).toContain('Checking the speech model');
     expect(button(el, 'Download (487 MB)')).toBeUndefined();
     expect(button(el, 'Not now')).toBeUndefined();
-    expect(el.querySelector('input[name="sttSource"]')).toBeNull();
     await f.finish({});
-    expect(step(el).getAttribute('data-done')).toBe('true');
-    expect(step(el).textContent).toContain('Speech model ready');
-    // One calm state: no download button, no consent ask, no source picker, and the stale
-    // "Downloaded" status line is not shown alongside it.
+    expect(el.querySelector('[data-view="stt-setup"]')).toBeNull();
     expect(button(el, 'Download (487 MB)')).toBeUndefined();
     expect(button(el, 'Not now')).toBeUndefined();
-    expect(el.querySelector('input[name="sttSource"]')).toBeNull();
-    expect(step(el).textContent?.match(/Downloaded/g) ?? []).toHaveLength(0);
   });
 
   it('[CAP-49a] [CAP-49c] a failed launch check downloads nothing before a click', async () => {
@@ -254,7 +253,12 @@ describe('Wizard STT step (MB-07, #413)', () => {
   });
 
   it('[MB-07] the hub shows the STT step and sends no stt command before a click', async () => {
+    // ui-1 (#97, #103): the STT step lives in the Settings area, not shown by default.
     const { el } = await render(<Hub />);
+    await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-toggle]')?.click());
+    await act(async () =>
+      el.querySelector<HTMLButtonElement>('[data-sidebar-item="settings"]')?.click(),
+    );
     expect(step(el)).not.toBeNull();
     const calls = tauri.invoke.mock.calls.map(([cmd]) => String(cmd));
     expect(calls.filter((c) => c.startsWith('stt_model_install'))).toEqual([]);
