@@ -2,7 +2,7 @@
 
 New here? Read the [vision and intro](docs/VISION.md).
 
-Bottle is a small desktop app for Databricks users. It puts floating, always-resident agents, called **MOGs**, on your screen. You dictate into any app, ask Genie One about your governed data, and record calls to your Unity Catalog volume. Bottle is a companion to Genie One, not a replacement.
+Bottle turns your team's unwritten know-how into governed context that every Genie answer can use. It is captured where the work happens, approved by you, and shared with everyone. It is a small desktop app for Databricks users. Floating agents, called **MOGs**, let you dictate into any app, ask Genie One about your governed data, and record calls to your Unity Catalog volume. Bottle is a companion to Genie One, not a replacement.
 
 ## What ships now (macOS)
 
@@ -12,7 +12,7 @@ Bottle is a small desktop app for Databricks users. It puts floating, always-res
 - **Call recording.** Hold Right Option and tap **R** (⌥R). Bottle records the mic and system audio to your Unity Catalog volume. A Gemini model writes the transcript and a Claude model writes the notes, through the Databricks AI Gateway. Recording is off until you turn it on in Settings.
 - **Several MOGs.** Each MOG has a name, an accent colour and a right-click menu. The lamp shows moods, an orbiting spark and eyes that follow the cursor.
 
-See [`docs/VISION.md`](docs/VISION.md) for what is planned and not yet built, such as memory-first answers and DRAFT UC Pages from recorded definitions.
+See [`docs/VISION.md`](docs/VISION.md) for what is planned and not yet built, such as ontology hydration (recorded transcripts becoming UC Pages in your domain, after your review) and memory-first answers.
 
 ## Requirements
 
