@@ -22,6 +22,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useMemo,
   useLayoutEffect,
   useRef,
   useState,
@@ -29,6 +30,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from 'react';
 import { listen } from '@tauri-apps/api/event';
+import { ExternalLink } from 'lucide-react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import type { MogId } from '../../shared/interfaces';
 import {
@@ -44,7 +46,8 @@ import {
 } from '../../shared/genie-status';
 import { paletteColorOf } from '../../shared/mog-palette';
 import { emitView, type CardUpdate } from '../view-ipc';
-import { NO_LINKS, SafeMarkdown } from './safe-markdown';
+import { LINK_OPEN, openInDatabricksUrl } from '../../shared/link-trust';
+import { SafeMarkdown } from './safe-markdown';
 
 /** The card fade at its time; a double-click fades faster. */
 export const FADE_MS = 300;
@@ -55,6 +58,9 @@ export const STAGE_LEAVE_MS = 120;
 export const FAILURE_TITLE = 'Genie could not answer.';
 /** The footer action that opens hub Conversations on this exchange (also a single click on the card). */
 export const OPEN_IN_BOTTLE_LABEL = 'Open in Bottle';
+/** #523: the footer link to the same conversation in the workspace (the brain opens it). */
+export const OPEN_IN_DATABRICKS_LABEL = 'Open in Databricks';
+export const TABLE_MORE_HINT = 'Open in Bottle to see them all';
 export const SHOW_MORE_LABEL = 'Show more';
 export const SHOW_LESS_LABEL = 'Show less';
 export const CLOSE_LABEL = 'Close';
@@ -189,6 +195,20 @@ export function GenieCard({ mogId, card, onSize, identity }: GenieCardProps) {
   const working = newest !== undefined && !newest.completed;
   const answer = card.sections?.find((s) => s.id === 'answer');
   const keys = card.sections?.find((s) => s.id === 'keyNumbers');
+  const footer = card.sections?.find((s) => s.id === 'footer');
+  // #523: links are live only for the workspace the answer came from. The brain checks the click
+  // again; a link to any other host is text.
+  const linkTrust = useMemo(
+    () => ({ profileHost: footer?.workspaceHost ?? '', allowedAppUrls: [] as string[] }),
+    [footer?.workspaceHost],
+  );
+  const databricksUrl = openInDatabricksUrl(footer?.deepLink, footer?.workspaceHost);
+  const openLink = useCallback(
+    (url: string) => {
+      void emitView(mogId, 'click', { target: LINK_OPEN, url }).catch(() => undefined);
+    },
+    [mogId],
+  );
   const retry = card.chips.find((c) => c.id === `retry:${blurbId}`);
   const kind = working ? 'working' : answer ? 'answer' : retry ? 'failure' : 'message';
   const text = newest?.text ?? '';
@@ -351,7 +371,7 @@ export function GenieCard({ mogId, card, onSize, identity }: GenieCardProps) {
   };
 
   // A single click on the card body or on [Open in Bottle] opens hub Conversations, the same as
-  // a double-click (ADR 0102, #103). A link stays inert (TODO(#523)).
+  // a double-click (ADR 0102, #103). A link never does: it asks the brain to open it (#523).
   const openInBottle = useCallback(
     (e: ReactMouseEvent) => {
       // Only a true single click, on a card that is still fully shown: the second click of a
@@ -485,7 +505,12 @@ export function GenieCard({ mogId, card, onSize, identity }: GenieCardProps) {
       data-scrolled-top={scrolledTop}
       onScroll={updateMoreBelow}
     >
-      <SafeMarkdown text={md} trust={NO_LINKS} />
+      <SafeMarkdown
+        text={md}
+        trust={linkTrust}
+        onOpenLink={openLink}
+        overflowHint={TABLE_MORE_HINT}
+      />
     </div>
   );
 
@@ -600,6 +625,25 @@ export function GenieCard({ mogId, card, onSize, identity }: GenieCardProps) {
                 >
                   {OPEN_IN_BOTTLE_LABEL}
                 </button>
+                {kind === 'answer' && databricksUrl !== undefined && (
+                  <a
+                    className="genie-toggle genie-databricks"
+                    data-action="open-in-databricks"
+                    href={databricksUrl}
+                    rel="noopener noreferrer"
+                    title={databricksUrl}
+                    onDoubleClick={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (e.detail > 1) return;
+                      openLink(databricksUrl);
+                    }}
+                  >
+                    {OPEN_IN_DATABRICKS_LABEL}
+                    <ExternalLink size={11} strokeWidth={2} aria-hidden="true" />
+                  </a>
+                )}
                 {(kind === 'answer' || kind === 'message') && canExpand && (
                   <button
                     type="button"

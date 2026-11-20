@@ -93,7 +93,7 @@ function isSections(v: unknown): v is CardSection[] {
             s['formats'].every((f) => f === 'markdown' || f === 'csv')
           );
         case 'footer':
-          return optStr(s['sttBadge']) && optStr(s['deepLink']);
+          return optStr(s['sttBadge']) && optStr(s['deepLink']) && optStr(s['workspaceHost']);
         default:
           return false;
       }

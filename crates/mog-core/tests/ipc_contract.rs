@@ -79,6 +79,7 @@ const SPEC_COMMANDS: &[(&str, &[WindowClass])] = {
         ("recording_retry", &[B, H]),
         ("recording_open", &[B, H]),
         ("recording_open_system_audio_settings", &[B, H]),
+        ("link_open", &[B]),
     ]
 };
 
@@ -309,6 +310,12 @@ fn arc_6_no_command_takes_a_url_token_or_header() {
             "\"url\"",
             "\"host\"",
         ] {
+            // #523 (ADR 0107): `link_open {profile, url}` is the one exception for "url". It is brain only,
+            // it is no request target (nothing is fetched), and Rust opens the link only after
+            // it checks https and the workspace host of the profile (`mog_core::link_open`).
+            if *name == "link_open" && banned == "\"url\"" {
+                continue;
+            }
             assert!(!text.contains(banned), "{name} has a {banned} field");
         }
         // 4.5 profile_login takes the workspace URL that `databricks auth login --host` needs.
@@ -317,6 +324,21 @@ fn arc_6_no_command_takes_a_url_token_or_header() {
             assert!(!text.contains("workspaceurl"), "{name} takes a URL");
         }
     }
+}
+
+/// #523: the one URL-like field is `link_open.url`. Nothing else may have it, and the command
+/// stays brain only (a view cannot open a URL: `src-tauri/tests/ipc_capabilities.rs`).
+#[test]
+fn arc_6_link_open_is_the_only_command_with_a_url_field_and_is_brain_only() {
+    let schemas = ipc::schemas();
+    let with_url: Vec<&str> = schemas
+        .iter()
+        .filter(|(n, s)| **n != "profile_login" && s.to_string().contains("\"url\""))
+        .map(|(n, _)| *n)
+        .collect();
+    assert_eq!(with_url, ["link_open"]);
+    let row = ipc::command("link_open").expect("row");
+    assert_eq!(row.windows, [WindowClass::Brain]);
 }
 
 const SECRET: &str = concat!("dap", "i0123456789abcdef0123456789abcdef");

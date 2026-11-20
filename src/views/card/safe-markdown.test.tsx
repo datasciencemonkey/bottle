@@ -83,13 +83,14 @@ describe('safe markdown', () => {
     expect(out).toContain('x');
   });
 
-  it('[SEC-25b] links to the profile host show the full URL', () => {
+  it('[SEC-25b] [#523] a link to the profile host shows its label, with the full URL in the title', () => {
     const out = html('[open](https://adb-1.azuredatabricks.net/genie/1?a=b)');
     expect(out).toContain('href="https://adb-1.azuredatabricks.net/genie/1?a=b"');
-    expect(out).toContain('https://adb-1.azuredatabricks.net/genie/1?a=b</');
+    expect(out).toContain('title="https://adb-1.azuredatabricks.net/genie/1?a=b"');
+    expect(out.replace(/<[^>]*>/g, '')).toBe('open');
   });
 
-  it('[SEC-25b] links to an AllowedAppUrls host are allowed', () => {
+  it('[SEC-25b] links to an AllowedAppUrls host are allowed (host only, like Rust)', () => {
     expect(html('[a](https://app.example.com/base/x)')).toContain(
       'href="https://app.example.com/base/x"',
     );
@@ -98,7 +99,6 @@ describe('safe markdown', () => {
   it.each([
     'https://evil.example/x',
     'HTTP://adb-1.azuredatabricks.net/x',
-    ' https://adb-1.azuredatabricks.net/x',
     'vbscript:msgbox(1)',
     'JaVaScRiPt:alert(1)',
     'https://adb-1.azuredatabricks.net:8443/x',
@@ -106,8 +106,7 @@ describe('safe markdown', () => {
     'https://xn--db-1-9ve.azuredatabricks.net/x',
     'https://\u0430db-1.azuredatabricks.net/x',
     'https://user:pw@adb-1.azuredatabricks.net/x',
-    'https://app.example.com/base-evil/x',
-    'https://app.example.com/other',
+    'https://app.example.com:8443/base/x',
     'https://app.example.com/base/../other',
     'http://adb-1.azuredatabricks.net/x',
     'javascript:alert(1)',
@@ -122,6 +121,11 @@ describe('safe markdown', () => {
     expect(out).not.toContain('<a');
     expect(out).not.toContain('href');
     expect(out).toContain('click');
+  });
+
+  it('[#523] a space before a trusted URL makes a bare URL, which is a trusted link', () => {
+    const out = html('[click]( https://adb-1.azuredatabricks.net/x)');
+    expect(out).toContain('href="https://adb-1.azuredatabricks.net/x"');
   });
 
   it('[SEC-25b] a link never opens by itself and has no script hooks', () => {

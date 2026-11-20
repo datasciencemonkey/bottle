@@ -58,6 +58,12 @@ export interface ConversationRow {
   /** The CLI profile name (never a token). */
   profile: string;
   workspaceHost: string;
+  /**
+   * #523: the `deep_link` that Genie One returned for this answer (the conversation in the
+   * workspace), or '' if it gave none. The view draws "Open in Databricks" only if it passes the
+   * link trust rule for `workspaceHost`; the brain checks the click again.
+   */
+  deepLink?: string;
   status: 'answered' | 'failed';
   /** The Genie `conversation_id` of this exchange; `''` when the row was saved before #584. */
   conversationId: string;
@@ -239,6 +245,7 @@ function isRow(v: unknown): v is ConversationRow {
     Number.isFinite(v['askedAt']) &&
     isStr(v['profile']) &&
     isStr(v['workspaceHost']) &&
+    (v['deepLink'] === undefined || isStr(v['deepLink'])) &&
     (v['status'] === 'answered' || v['status'] === 'failed') &&
     isStr(v['conversationId'])
   );

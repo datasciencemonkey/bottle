@@ -1,0 +1,140 @@
+/* Links and tables of the safe markdown renderer (#523). Shared by the card and hub
+   Conversations; every colour, size and radius comes from tokens.css. Not layered, so it wins
+   over the hub's `hub-legacy` rules for the same elements. */
+
+/* A trusted link: its label is the clickable text, a small icon says it leaves the app. */
+.md-link {
+  color: var(--mog-eye);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 2px;
+  transition: text-decoration-color 120ms ease-out;
+}
+
+a.md-link:hover {
+  text-decoration-color: currentColor;
+}
+
+a.md-link:focus-visible {
+  outline: 2px solid transparent;
+  border-radius: var(--mog-radius-sm);
+  box-shadow: var(--mog-focus-ring);
+}
+
+.md-link-tail {
+  white-space: nowrap;
+}
+
+.md-link-icon {
+  display: inline-block;
+  margin-left: 3px;
+  vertical-align: -1px;
+  opacity: 0.75;
+}
+
+/* A link to another host: text that says where it points, never a control. */
+.md-link--blocked {
+  color: var(--mog-text-muted);
+  cursor: text;
+  text-decoration: none;
+}
+
+.md-link-host {
+  font-size: 0.92em;
+  opacity: 0.85;
+}
+
+/* A long path or code name wraps inside the card instead of being cut at its edge. */
+.md-link-text,
+.md-link--blocked {
+  overflow-wrap: anywhere;
+}
+
+/* Tables: a real <table> in a scroll box. The box fades at the edge that has more to see. */
+.md-table-block {
+  min-width: 0;
+  margin: 0 0 8px;
+}
+
+.md-table-wrap {
+  overflow-x: auto;
+  max-width: 100%;
+  border: 1px solid var(--mog-edge);
+  border-radius: var(--mog-radius-sm);
+  scrollbar-width: thin;
+  scrollbar-color: var(--mog-edge) transparent;
+  /* Scroll shadows (no script): the covers move with the content and hide the shadow at an end;
+     the shadows stay at the box edge and show only while there is more to scroll to. */
+  background:
+    linear-gradient(to right, var(--mog-surface) 30%, rgb(0 0 0 / 0%)) left center / 28px 100%
+      no-repeat local,
+    linear-gradient(to left, var(--mog-surface) 30%, rgb(0 0 0 / 0%)) right center / 28px 100%
+      no-repeat local,
+    linear-gradient(to right, rgb(140 200 255 / 22%), rgb(140 200 255 / 0%)) left center / 14px 100%
+      no-repeat scroll,
+    linear-gradient(to left, rgb(140 200 255 / 22%), rgb(140 200 255 / 0%)) right center / 14px 100%
+      no-repeat scroll;
+}
+
+.md-table-wrap::-webkit-scrollbar {
+  height: 6px;
+}
+
+.md-table-wrap::-webkit-scrollbar-thumb {
+  border-radius: var(--mog-radius-pill);
+  background: var(--mog-edge);
+}
+
+.md-table-wrap:focus-visible {
+  outline: 2px solid transparent;
+  box-shadow: var(--mog-focus-ring);
+}
+
+.md-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--mog-text-sm);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+}
+
+.md-table th,
+.md-table td {
+  max-width: 32ch;
+  padding: 4px 10px;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.md-table th {
+  background: var(--mog-surface-raised);
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-xs);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.md-table tbody tr + tr td {
+  border-top: 1px solid var(--mog-edge);
+}
+
+.md-table [data-align='right'] {
+  text-align: right;
+}
+
+.md-table [data-align='center'] {
+  text-align: center;
+}
+
+.md-table code {
+  white-space: nowrap;
+}
+
+.md-table-more {
+  margin: 4px 0 0;
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-xs);
+}

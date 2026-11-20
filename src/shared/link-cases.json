@@ -1,0 +1,50 @@
+{
+  "workspace": "https://acme.cloud.databricks.com",
+  "allowedAppUrls": [
+    "https://app.example.com/base",
+    "app.example.com",
+    "http://other.example.com",
+    "https://app.example.com:8443"
+  ],
+  "ok": [
+    "https://acme.cloud.databricks.com/one/chat/threads/c1?o=1&utm_source=x",
+    "HTTPS://ACME.CLOUD.DATABRICKS.COM/a",
+    "https://acme.cloud.databricks.com",
+    "https://acme.cloud.databricks.com?q=1",
+    "https://acme.cloud.databricks.com#f",
+    "https://acme.cloud.databricks.com/a%2e%2e/b",
+    "https://app.example.com/anything"
+  ],
+  "refused": [
+    "http://acme.cloud.databricks.com/",
+    "https://acme.cloud.databricks.com:443/",
+    "https://acme.cloud.databricks.com:8443/",
+    "https://acme.cloud.databricks.com%2e/",
+    "https://ac%6de.cloud.databricks.com/",
+    "https://acme.cloud.databricks.com./",
+    "https://.acme.cloud.databricks.com/",
+    "https://acme..cloud.databricks.com/",
+    "https://[::1]/",
+    "https://user:pw@acme.cloud.databricks.com/",
+    "https://acme.cloud.databricks.com@evil.com/",
+    "https://evil.com/@acme.cloud.databricks.com",
+    "https://acme.cloud.databricks.com.evil.com/",
+    "https://evilacme.cloud.databricks.com/",
+    "https://\u0430cme.cloud.databricks.com/",
+    "https://acme.cloud.databricks.com/\u00e9",
+    "https://acme.cloud.databricks.com/a b",
+    "https://acme.cloud.databricks.com/a\nb",
+    "https://acme.cloud.databricks.com/<x>",
+    "https://acme.cloud.databricks.com/\"",
+    "https://acme.cloud.databricks.com\\@evil.com/",
+    "javascript:alert(1)",
+    "file:///etc/passwd",
+    "//acme.cloud.databricks.com/x",
+    "https:/acme.cloud.databricks.com/x",
+    "https:acme.cloud.databricks.com/x",
+    "",
+    "https://app.example.com:8443/x",
+    "https://other.example.com/x",
+    "https://acme.cloud.databricks.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  ]
+}

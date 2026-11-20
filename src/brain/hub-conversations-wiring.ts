@@ -48,6 +48,11 @@ export interface ConversationsWireDeps extends ConversationsReadDeps {
 export interface HubConversationsWiring {
   /** Send the list to the hub again. Never rejects. */
   refresh(): Promise<void>;
+  /**
+   * #523: the profile and host of a listed exchange, from the last list the brain sent (never
+   * from a view). The link opener trusts this, not the click.
+   */
+  workspaceOf(requestId: string): { profile: string; host: string } | undefined;
   /** Open Conversations, with this exchange selected when given. Never rejects. */
   openConversations(requestId?: string): Promise<void>;
   /**
@@ -111,6 +116,7 @@ function rowOf(r: unknown, mog: ConversationMog): ConversationRow | undefined {
     askedAt,
     profile: str(o['profileName']),
     workspaceHost: str(o['workspaceHost']),
+    deepLink: str(o['deepLink']),
     status: o['status'] === 'completed' ? 'answered' : 'failed',
     conversationId: str(o['conversationId']),
   };
@@ -151,6 +157,7 @@ export function wireHubConversations(
    * publish replaces it, so a Forget or a Wipe (which refresh the list) drops a gone thread.
    */
   let owners = new Map<string, { mogId: string; profile: string; host: string }>();
+  let known = new Map<string, { profile: string; host: string }>();
   const remember = (rows: readonly ConversationRow[]) => {
     owners = new Map(
       rows
@@ -165,6 +172,9 @@ export function wireHubConversations(
     try {
       const list = await readConversations(deps);
       if (!list.unavailable) remember(list.rows);
+      known = new Map(
+        list.rows.map((r) => [r.requestId, { profile: r.profile, host: r.workspaceHost }]),
+      );
       await deps.send(list);
     } catch {
       // No hub is open. The hub asks again with conversations.ready when it opens.
@@ -188,6 +198,7 @@ export function wireHubConversations(
   });
   return {
     refresh: publish,
+    workspaceOf: (requestId) => known.get(requestId),
     async openConversations(requestId) {
       const open = requestId ? { requestId } : {};
       held = open;

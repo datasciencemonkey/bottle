@@ -25,7 +25,7 @@
  * `genie-history.ts` saves it as one local exchange row. A request that was never sent (a
  * `submit` that throws) has no end.
  */
-import type { AgentTurn, AskRequest, GenieBridge, MogId } from '../shared/interfaces';
+import type { AgentTurn, AskRequest, GenieBridge, MogId, ProfileName } from '../shared/interfaces';
 import { ASKING_GENIE, genieBlurbId, genieStage } from '../shared/genie-status';
 import type { CardStack } from './card-stack';
 import { isTerminal, type TerminalAskEvent } from './components/ask-events';
@@ -55,6 +55,8 @@ export interface GenieDirectDeps {
   onEnd?: ((x: GenieEnd) => void) | undefined;
   /** #573: the MOG mood follows the request (working, then answered or failed). */
   onPhase?: ((mogId: MogId, phase: GeniePhase, opId: string) => void) | undefined;
+  /** #523: the workspace host of a profile (`profiles_list`); the card trusts links on it only. */
+  hostOf?: ((profile: ProfileName) => Promise<string | undefined>) | undefined;
   /** #573: `window_card_show`, after the card holds the outcome. */
   showCard?: ((mogId: MogId) => unknown) | undefined;
 }
@@ -117,13 +119,17 @@ export function createGenieDirectSend(deps: GenieDirectDeps): (turn: AgentTurn) 
       end ??= { t: 'uncertain' };
       // The answer sections and the Try again control go on while the blurb still works, so the
       // card goes from the status pill to the answer or failure card in one step.
-      if (end.t === 'answer')
+      if (end.t === 'answer') {
+        // #523: the card draws links and "Open in Databricks" only for this workspace.
+        const host = await deps.hostOf?.(turn.target).catch(() => undefined);
         card.setExpanded({
           answerMd: end.md,
           keyNumbers: end.keyNumbers.map((k) => k.text),
+          ...(end.deepLink ? { deepLink: end.deepLink } : {}),
+          ...(host ? { workspaceHost: host } : {}),
           dataFlowText: GENIE_DATA_FLOW_TEXT,
         });
-      else if (phaseOf(end) === 'failed' && card.setControls) {
+      } else if (phaseOf(end) === 'failed' && card.setControls) {
         // GL-5: one user action sends the same question again, as a new request (G-15b).
         const owner = `retry:${id}`;
         card.setControls(owner, [{ id: owner, label: TRY_AGAIN_LABEL }], () => {
