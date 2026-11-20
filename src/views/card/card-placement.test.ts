@@ -11,8 +11,8 @@ const SCREEN: Rect = { x: 0, y: 0, w: 1440, h: 900 };
 
 describe('the card keeps the edge that faces its MOG (lamp-alive)', () => {
   it('reads the side from the window title the host sets', () => {
-    expect(sideFromTitle('MOG card (left)')).toBe('left');
-    expect(sideFromTitle('MOG card (right)')).toBe('right');
+    expect(sideFromTitle('Bottle card (left)')).toBe('left');
+    expect(sideFromTitle('Bottle card (right)')).toBe('right');
     expect(sideFromTitle('MOG card')).toBe('right');
     expect(sideFromTitle(undefined)).toBe('right');
   });

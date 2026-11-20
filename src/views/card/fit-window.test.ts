@@ -49,8 +49,10 @@ describe('card window fit (#573, lamp-alive)', () => {
     expect(cardWindowWidth(undefined)).toBe(CARD_WINDOW_WIDTH);
     expect(cardWindowWidth(Number.NaN)).toBe(CARD_WINDOW_WIDTH);
     // 10 px facing the MOG and 12 px on the far side.
-    expect(cardWindowWidth(210.2)).toBe(211 + 22);
-    expect(cardWindowWidth(100)).toBe(122);
+    // The text width is rounded up and has 1 px of slack, so a fraction never cuts a letter.
+    expect(cardWindowWidth(210.2)).toBe(211 + 1 + 22);
+    expect(cardWindowWidth(210)).toBe(210 + 1 + 22);
+    expect(cardWindowWidth(100)).toBe(123);
     expect(cardWindowWidth(900)).toBe(CARD_WINDOW_WIDTH);
   });
 
@@ -65,8 +67,8 @@ describe('card window fit (#573, lamp-alive)', () => {
     measured = undefined;
     await fit(200);
     expect(f.log.map((l) => [l.r.w, l.r.h])).toEqual([
-      [222, 64],
-      [260, 64],
+      [223, 64],
+      [261, 64],
       [340, 200],
     ]);
   });
@@ -122,6 +124,54 @@ describe('card window fit (#573, lamp-alive)', () => {
     await fit(200);
     await fit(200);
     expect(f.log).toHaveLength(2);
+  });
+});
+
+describe('lamp-alive: the pill is measured with its fraction', () => {
+  it('reads the layout width as a fraction, so a text of 209.56 px gets a window of 210 + 1 + 22', async () => {
+    const { measureCompactWidth } = await import('./fit-window');
+    document.body.innerHTML = '<div class="popup" style="width: 209.56px"></div>';
+    const w = measureCompactWidth(document);
+    expect(w).toBeCloseTo(209.56, 2);
+    expect(cardWindowWidth(w)).toBe(210 + 1 + 22);
+    // The max-width of the window is not left on the element.
+    expect((document.querySelector('.popup') as HTMLElement).style.maxWidth).toBe('');
+    document.body.innerHTML = '';
+  });
+
+  it('is undefined for the answer card, which keeps the full width', async () => {
+    const { measureCompactWidth } = await import('./fit-window');
+    document.body.innerHTML = '<div class="genie genie-answer"></div>';
+    expect(measureCompactWidth(document)).toBeUndefined();
+    document.body.innerHTML = '';
+  });
+});
+
+describe('lamp-alive: a timer tick does not force a layout read', () => {
+  const text = (parent: string, old: string, now: string) => {
+    document.body.innerHTML = parent;
+    const t = document.body.querySelector('span')?.firstChild as Text;
+    t.data = now;
+    return { type: 'characterData' as const, target: t, oldValue: old };
+  };
+
+  it('skips a tick that keeps its digits, and fits when the timer gets a digit', async () => {
+    const { widthMayChangeIn } = await import('./fit-window');
+    const timer = '<span data-genie-timer>0:04</span>';
+    expect(widthMayChangeIn([text(timer, '0:03', '0:04')])).toBe(false);
+    expect(widthMayChangeIn([text(timer, '0:59', '1:00')])).toBe(false);
+    expect(widthMayChangeIn([text(timer, '9:59', '10:00')])).toBe(true);
+  });
+
+  it('fits for a new node (the timer appears) and for any other text change', async () => {
+    const { widthMayChangeIn } = await import('./fit-window');
+    const node = document.createElement('span');
+    expect(widthMayChangeIn([{ type: 'childList', target: node, oldValue: null }])).toBe(true);
+    expect(widthMayChangeIn([text('<span>Asking Genie</span>', 'Asking', 'Asking Genie')])).toBe(
+      true,
+    );
+    expect(widthMayChangeIn([])).toBe(false);
+    document.body.innerHTML = '';
   });
 });
 

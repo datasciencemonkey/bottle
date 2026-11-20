@@ -271,7 +271,7 @@ def card_scene(browser, name, mog_x, payload, mood="processing"):
     side = "right" if right_x + 340 <= SCREEN[0] else "left"
     card_pos = {"x": right_x if side == "right" else mog_x + 18 - 340, "y": 342}
     init = (
-        f"window.__LABEL__ = 'card-{CARD_ID}'; window.__TITLE__ = 'MOG card ({side})';"
+        f"window.__LABEL__ = 'card-{CARD_ID}'; window.__TITLE__ = 'Bottle card ({side})';"
         f"window.__POS__ = {{'card-{CARD_ID}': {json.dumps(card_pos)}, 'mog-{MOG_ID}': {json.dumps(mog_pos)}}};"
         f"window.__SIZE__ = {{'card-{CARD_ID}': {{width: 340, height: 64}}, 'mog-{MOG_ID}': {{width: 160, height: {H}}}}};"
     )

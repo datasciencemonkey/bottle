@@ -55,8 +55,8 @@ pub enum CardSide {
 /// mirror its tail and to keep the edge that faces the MOG fixed (`src/views/card/card-placement.ts`).
 pub fn card_title(side: CardSide) -> String {
     match side {
-        CardSide::Right => "MOG card (right)".to_owned(),
-        CardSide::Left => "MOG card (left)".to_owned(),
+        CardSide::Right => "Bottle card (right)".to_owned(),
+        CardSide::Left => "Bottle card (left)".to_owned(),
     }
 }
 

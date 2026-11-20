@@ -896,6 +896,6 @@ fn lamp_alive_the_card_window_ends_at_the_lamp_art_and_never_covers_it() {
 
 #[test]
 fn lamp_alive_the_card_title_tells_the_view_its_side() {
-    assert_eq!(card_title(CardSide::Left), "MOG card (left)");
-    assert_eq!(card_title(CardSide::Right), "MOG card (right)");
+    assert_eq!(card_title(CardSide::Left), "Bottle card (left)");
+    assert_eq!(card_title(CardSide::Right), "Bottle card (right)");
 }

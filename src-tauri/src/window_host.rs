@@ -642,15 +642,15 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
                 } else {
                     place(w, at.as_ref())
                 };
+                // The side goes into the title before the card shows, so the view never reads
+                // the side of its last show.
+                set_side_title(w, side);
                 self.native.show(w, &kind)
             }
             _ => self.make(&kind, at.as_ref()).map(|w| {
                 set_side_title(&w, side);
             }),
         };
-        if let (Some(w), Some(side)) = (&existing, side) {
-            set_side_title(w, Some(side));
-        }
         if shown.is_err() {
             let mut ledger = self.ledger();
             match plan {

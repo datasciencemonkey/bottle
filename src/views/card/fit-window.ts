@@ -95,7 +95,8 @@ export const tauriCardWindow = (): CardWindow => {
 export function cardWindowWidth(measured: number | undefined): number {
   if (measured === undefined || !Number.isFinite(measured) || measured <= 0)
     return CARD_WINDOW_WIDTH;
-  const w = Math.ceil(measured) + CARD_FACING_PAD + CARD_FAR_PAD;
+  // Round up and leave 1 px: a fractional text width must never cut the last letter.
+  const w = Math.ceil(measured) + 1 + CARD_FACING_PAD + CARD_FAR_PAD;
   return Math.min(CARD_WINDOW_WIDTH, w);
 }
 
@@ -115,10 +116,28 @@ export function measureCompactWidth(doc: Document = document): number | undefine
   if (!pill) return undefined;
   const prev = pill.style.maxWidth;
   pill.style.maxWidth = 'none';
-  // Layout width (`offsetWidth`), not the box under a transform: the pill fades and scales in.
-  const w = pill.offsetWidth;
+  // The layout width with its fraction: not `offsetWidth`, which rounds down and cut the last
+  // letter, and not the box under a transform, because the pill fades and scales in. The used
+  // `width` of a border-box is the whole pill. `getBoundingClientRect` is the fallback.
+  const used = parseFloat(getComputedStyle(pill).width);
+  const w = Number.isFinite(used) && used > 0 ? used : pill.getBoundingClientRect().width;
   pill.style.maxWidth = prev;
   return w;
+}
+
+/**
+ * Whether these DOM changes can change the width of the pill. A timer tick that keeps the number
+ * of digits cannot, so it skips the layout read of the fit (one per second). A new node (the
+ * timer appears) or a new text length (the stage line, a timer digit) can.
+ */
+export function widthMayChangeIn(
+  records: readonly Pick<MutationRecord, 'type' | 'target' | 'oldValue'>[],
+): boolean {
+  return records.some((r) => {
+    if (r.type !== 'characterData') return true;
+    const timer = r.target.parentElement?.closest('[data-genie-timer]') != null;
+    return !timer || (r.oldValue?.length ?? -1) !== (r.target.textContent?.length ?? -2);
+  });
 }
 
 /**

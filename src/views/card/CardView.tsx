@@ -16,7 +16,7 @@ import {
   type CardSection,
   type CardUpdate,
 } from '../view-ipc';
-import { applyCardSide, createWindowFit, tauriCardWindow } from './fit-window';
+import { applyCardSide, createWindowFit, tauriCardWindow, widthMayChangeIn } from './fit-window';
 import { GenieCard } from './GenieCard';
 import { Popup } from './Popup';
 import { NO_LINKS, SafeMarkdown } from './safe-markdown';
@@ -253,7 +253,9 @@ export function CardView({ mogId }: { mogId: MogId }) {
   useEffect(() => {
     if (typeof MutationObserver === 'undefined') return;
     let raf = 0;
-    const mo = new MutationObserver(() => {
+    const mo = new MutationObserver((records) => {
+      const widthMayChange = widthMayChangeIn(records);
+      if (!widthMayChange) return;
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => {
         if (lastPx.current !== undefined) void fit(lastPx.current, window.innerHeight);
@@ -263,6 +265,7 @@ export function CardView({ mogId }: { mogId: MogId }) {
       childList: true,
       subtree: true,
       characterData: true,
+      characterDataOldValue: true,
     });
     return () => {
       mo.disconnect();
