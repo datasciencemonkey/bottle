@@ -45,11 +45,9 @@ jobs:
       BUNDLE_DIR: target/release/bundle/nsis
     steps:
       - name: Check the tag name and that the tag exists on the remote
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] || { echo "bad tag: $TAG"; exit 1; }
-          git ls-remote --tags "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$TAG" | grep -q . \
+          git ls-remote --tags "https://github.com/${GITHUB_REPOSITORY}" "refs/tags/$TAG" | grep -q . \
             || { echo "tag $TAG is not on the remote"; exit 1; }
       - name: Keep LF line endings
         run: git config --global core.autocrlf false
