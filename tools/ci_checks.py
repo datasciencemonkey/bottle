@@ -126,6 +126,8 @@ TOP_LEVEL = {
     ".editorconfig", ".nvmrc", ".node-version", ".npmrc", "rust-toolchain.toml", ".env.example",
     "eslint.config.js", "package.json", "pnpm-lock.yaml", "tsconfig.json", "vite.config.ts",
     "Cargo.toml", "Cargo.lock",
+    # pnpm 11 reads overrides only from this file; no packages key, so the repo stays a single package
+    "pnpm-workspace.yaml",
     # docs
     "AGENTS.md", "CONTRIBUTING.md", "README.md", "LICENSE", "THIRD_PARTY_NOTICES.md",
     "REQUIREMENTS.md", "requirements.html",
