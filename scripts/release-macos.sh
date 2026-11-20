@@ -5,9 +5,10 @@
 # leaf = H"<sha1>"` across releases, so macOS keeps the TCC grants. Users see Gatekeeper once
 # (the build is not notarized) and click Open Anyway.
 #
-# Usage: scripts/release-macos.sh <version> [--skip-build] [--skip-git-check]
-#   --skip-build      do not run pnpm/tauri; sign the app at $BOTTLE_APP (a stub app for a dry run)
-#   --skip-git-check  skip the clean main == origin/main check (dry run only)
+# Usage: scripts/release-macos.sh <version> [--skip-build [--skip-git-check]]
+#   --skip-build      DRY RUN: do not run pnpm/tauri; sign the app at $BOTTLE_APP (a stub app).
+#                     The output name gets the -DRYRUN suffix and no gh command is printed.
+#   --skip-git-check  skip the clean main == origin/main check (needs --skip-build)
 # Output: dist/release/Bottle-<version>-macos-arm64.dmg and its .sha256. It prints the gh command
 # and does not run it. Architecture: arm64 only. The vendored sherpa-onnx archives are pinned per
 # target (osx-arm64 and osx-x64), so a universal build needs two archive sets and lipo.
@@ -28,6 +29,12 @@ for a in "$@"; do
     *) echo "unknown flag: $a" >&2; exit 2 ;;
   esac
 done
+[ "$skip_git" = 0 ] || [ "$skip_build" = 1 ] || { echo "--skip-git-check needs --skip-build" >&2; exit 2; }
+dry=""
+if [ "$skip_build" = 1 ]; then
+  dry="-DRYRUN"
+  echo "################ DRY RUN: stub app, not a release build. Do not publish the output. ################"
+fi
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "version must look like 0.1.0" >&2; exit 2; }
 [ "$(uname -s)" = Darwin ] || { echo "release-macos.sh runs on macOS only" >&2; exit 1; }
 [ "$(uname -m)" = arm64 ] || { echo "release-macos.sh builds arm64; run it on Apple Silicon" >&2; exit 1; }
@@ -74,7 +81,7 @@ fi
 # Everything below writes under dist/release. Do it after the build: the frontend build clears dist/.
 out="dist/release"
 stage="$out/stage"
-dmg="$out/${APP_NAME}-${version}-macos-arm64.dmg"
+dmg="$out/${APP_NAME}-${version}-macos-arm64${dry}.dmg"
 rm -rf "$stage" "$dmg" "$dmg.sha256"
 mkdir -p "$stage"
 ditto "$app" "$stage/${APP_NAME}.app"
@@ -102,6 +109,18 @@ rm -rf "$stage"
 cat "$dmg.sha256"
 
 # 6. The command for the owner. This script does not run it.
+if [ -n "$dry" ]; then
+  echo "DRY RUN: no gh command printed."
+  exit 0
+fi
+pre=""
+case "$version" in *-rc*) pre=" --prerelease" ;; esac
 echo
-echo "Release command (run it after the v${version} tag is pushed):"
-echo "gh release create v${version} $dmg $dmg.sha256 --notes-file $notes"
+if gh release view "v${version}" >/dev/null 2>&1; then
+  echo "The release v${version} exists (the Windows workflow made the draft). Run:"
+  echo "gh release upload v${version} $dmg $dmg.sha256"
+  echo "gh release edit v${version} --notes-file $notes --draft=false"
+else
+  echo "Run after the v${version} tag is pushed:"
+  echo "gh release create v${version} $dmg $dmg.sha256 --notes-file $notes --verify-tag${pre}"
+fi

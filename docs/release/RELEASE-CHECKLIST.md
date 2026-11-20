@@ -82,5 +82,5 @@ The macOS build is signed on the owner's Mac with the self-signed identity "Bott
 2. On the Mac, check out `main` at `origin/main` with a clean tree.
 3. Run `scripts/release-macos.sh X.Y.Z`. It builds, signs and checks the app, makes the DMG, signs it and writes the SHA-256 under `dist/release/`.
 4. Push the tag `vX.Y.Z`. The Release workflow builds the Windows installer and attaches it to a draft release.
-5. Create or complete the release with the `gh release` command that the script prints. If the draft exists, run `gh release upload` for the DMG and the SHA-256 file, then `gh release edit` with `--notes-file` and `--draft=false`.
+5. Run the `gh release` command that the script prints. If the draft exists, it is `gh release upload` for the DMG and the SHA-256 file, then `gh release edit` with `--notes-file` and `--draft=false`. Otherwise it is `gh release create --verify-tag`.
 6. Install the DMG on a clean Mac. Check the Gatekeeper steps in the notes, the permissions and `codesign -d -r-` (the leaf hash must be unchanged).

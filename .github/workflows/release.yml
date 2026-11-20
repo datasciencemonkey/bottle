@@ -12,6 +12,10 @@ on:
       tag:
         description: "Tag to release, for example v0.1.0 (the tag must exist)"
         required: true
+      local_stt:
+        description: "Build with local-stt (turn off only as a fallback)"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -40,6 +44,13 @@ jobs:
     env:
       BUNDLE_DIR: target/release/bundle/nsis
     steps:
+      - name: Check the tag name and that the tag exists on the remote
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] || { echo "bad tag: $TAG"; exit 1; }
+          git ls-remote --tags "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$TAG" | grep -q . \
+            || { echo "tag $TAG is not on the remote"; exit 1; }
       - name: Keep LF line endings
         run: git config --global core.autocrlf false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -67,9 +78,18 @@ jobs:
         run: pnpm install --frozen-lockfile
       # local-stt links the vendored, hash-pinned sherpa-onnx archive (ADR 0049).
       - name: Fetch the pinned sherpa-onnx archive
+        if: github.event_name != 'workflow_dispatch' || inputs.local_stt
         run: uv run --no-project python scripts/vendor_sherpa_onnx.py
+      # The pinned sherpa-onnx archive is static-MT (/MT). crt-static makes Rust and cc build the
+      # C dependencies with /MT too, so the link does not mix /MT and /MD.
       - name: Build the unsigned release installer
-        run: pnpm tauri build --features local-stt --bundles nsis -- --locked
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
+          LOCAL_STT: ${{ github.event_name != 'workflow_dispatch' || inputs.local_stt }}
+        run: |
+          features=()
+          [ "$LOCAL_STT" = "true" ] && features=(--features local-stt)
+          pnpm tauri build "${features[@]}" --bundles nsis -- --locked
       - name: Write a SHA-256 file for each installer
         run: |
           cd "$BUNDLE_DIR"
@@ -86,6 +106,8 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --draft --title "$TAG" --notes "Draft. The release notes are added by the owner."
+            pre=()
+            [[ "$TAG" == *-rc.* ]] && pre=(--prerelease)
+            gh release create "$TAG" --verify-tag --draft "${pre[@]}" --title "$TAG" --notes "Draft. The release notes are added by the owner."
           fi
           gh release upload "$TAG" "$BUNDLE_DIR"/*.exe "$BUNDLE_DIR"/*.sha256 --clobber

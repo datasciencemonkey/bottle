@@ -11,9 +11,8 @@ The build is signed with a self-signed certificate. It is not notarized. macOS s
 1. Download `Bottle-0.1.0-macos-arm64.dmg` and open it.
 2. Drag Bottle to Applications.
 3. Open Bottle from Applications. macOS shows a warning. Click **Done**.
-4. Open System Settings, then Privacy & Security. Scroll down and click **Open Anyway** next to Bottle. Confirm.
-5. Or run this command in Terminal, then open Bottle again: `xattr -dr com.apple.quarantine /Applications/Bottle.app`
-6. Grant the permissions when Bottle asks: **Microphone**, **Accessibility** and **Input Monitoring**. If you deny one, open System Settings, then Privacy & Security, and turn it on. Reopen Bottle after you grant Input Monitoring.
+4. Open System Settings, then Privacy & Security. Scroll down and click **Open Anyway** next to Bottle. Confirm. Or, instead of this step, run this command in Terminal and open Bottle again: `xattr -dr com.apple.quarantine /Applications/Bottle.app`
+5. Grant the permissions when Bottle asks: **Microphone**, **Accessibility** and **Input Monitoring**. If you deny one, open System Settings, then Privacy & Security, and turn it on. Reopen Bottle after you grant Input Monitoring.
 
 Later versions keep the same signing identity, so you only see the warning once and your permissions stay.
 
