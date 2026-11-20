@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-stt-model-cancel"
+description = "Enables the stt_model_cancel command without any pre-configured scope."
+commands.allow = ["stt_model_cancel"]
+
+[[permission]]
+identifier = "deny-stt-model-cancel"
+description = "Denies the stt_model_cancel command without any pre-configured scope."
+commands.deny = ["stt_model_cancel"]

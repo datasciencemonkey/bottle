@@ -278,6 +278,9 @@ pub struct HostComponents<'a> {
     /// The `recording_*` commands (ADR 0103): `mog_core::recording::RecordingComponent`.
     /// `None` when it is not managed: `host_failed`.
     pub recording: Option<&'a dyn GatewayComponents>,
+    /// `stt_model_*` (#413, #45, #529, ADR 0104): `stt_model_host::SttModelHost` over the one
+    /// managed R4 `SttSetup`. `None` when the OS gives no models folder: `host_failed`.
+    pub stt_model: Option<&'a dyn GatewayComponents>,
     /// `link_open` (#523): `mog_core::link_open::LinkOpenComponent`. `None` when T7 is not
     /// managed: `host_failed`.
     pub links: Option<&'a dyn GatewayComponents>,
@@ -345,6 +348,7 @@ impl<'a> HostComponents<'a> {
             cli: None,
             login: None,
             recording: None,
+            stt_model: None,
             links: None,
         }
     }
@@ -544,6 +548,13 @@ impl GatewayComponents for HostComponents<'_> {
                 .recording
                 .ok_or_else(|| host_failed(command))?
                 .call(command, args),
+            // #413, #45, #529 (ADR 0104): the hub's Local speech step. The gateway let only the
+            // hub through. Its codes cross as themselves (`ERROR_CODES`).
+            "stt_model_status" | "stt_model_consent" | "stt_model_install" | "stt_model_verify"
+            | "stt_model_cancel" => self
+                .stt_model
+                .ok_or_else(|| host_failed(command))?
+                .call(command, args),
             // #523: the gateway let only the brain through. Rust checks the URL again (https,
             // the profile's workspace host) before the OS opener runs.
             "link_open" => self
@@ -595,9 +606,13 @@ pub fn route(components: HostComponents<'_>, command: &str, args: Value) -> Resu
 /// takes the R4 store lock that the R4 worker shares (#514), `mem_local_exec`, which does
 /// SQLite IO under the R10 connection lock (#426), `profiles_list`, where T7 runs
 /// `databricks auth describe` once per `databricks-cli` profile when R5 lands (#555),
-/// `cli_install`, which downloads and checks the CLI (#161), and `profile_login`, which waits
-/// up to 5 min for `databricks auth login` (#162). Every `recording_*` command except
-/// `recording_state` does file IO, opens the device or calls the workspace (ADR 0103).
+/// `cli_install`, which downloads and checks the CLI (#161), `profile_login`, which waits
+/// up to 5 min for `databricks auth login` (#162), `stt_model_install`, which can download
+/// 487 MB over the network before it checks every SHA-256 (#413, #45, ADR 0104),
+/// `stt_model_verify`, which SHA-256s the same ~670 MB with no network IO: run on the main
+/// thread it freezes every window, the MOG drag and the double-click monitor for 1-2 s each
+/// time the hub mounts (#413, PR #600 review), and every `recording_*` command except
+/// `recording_state`, which does file IO, opens the device or calls the workspace (ADR 0103).
 pub fn runs_off_main_thread(command: &str) -> bool {
     (command.starts_with("recording_") && command != "recording_state")
         || matches!(
@@ -620,6 +635,10 @@ pub fn runs_off_main_thread(command: &str) -> bool {
                 | "profiles_list"
                 | "cli_install"
                 | "profile_login"
+                // #413, #45: the install can run for minutes over the network (487 MB).
+                | "stt_model_install"
+                // #413, PR #600 review: verify SHA-256s ~670 MB with no network IO.
+                | "stt_model_verify"
         )
 }
 
@@ -724,6 +743,9 @@ fn route_from<R: Runtime>(
     let login = webview.try_state::<crate::profiles_host::ProfileLoginHost>();
     // `try_state`: `lib.rs` manages the one recording component (ADR 0103).
     let recording = webview.try_state::<std::sync::Arc<mog_core::recording::RecordingComponent>>();
+    // `try_state`: `install_stt_model` manages the one R4 `SttSetup` (#413, #45); without it
+    // (no models folder on this device) `stt_model_*` answer `host_failed`.
+    let stt_model = webview.try_state::<crate::stt_model_host::SttModelHost>();
     // `try_state`: `lib.rs` manages the link opener after T7 (#523).
     let links = webview.try_state::<std::sync::Arc<mog_core::link_open::LinkOpenComponent>>();
     let components = HostComponents {
@@ -756,6 +778,9 @@ fn route_from<R: Runtime>(
         recording: recording
             .as_ref()
             .map(|r| r.inner().as_ref() as &dyn GatewayComponents),
+        stt_model: stt_model
+            .as_ref()
+            .map(|s| s.inner() as &dyn GatewayComponents),
         links: links
             .as_ref()
             .map(|l| l.inner().as_ref() as &dyn GatewayComponents),
@@ -989,6 +1014,16 @@ mod tests {
             ),
             Err(json!({"error": "host_failed"}))
         );
+    }
+
+    /// #413, PR #600 review (HIGH): `stt_model_verify` SHA-256s ~670 MB with no network IO.
+    /// Run on the main thread it freezes every window, the MOG drag and the double-click
+    /// monitor for 1-2 s each time the hub mounts. It must run off the main thread, same as
+    /// `stt_model_install`.
+    #[test]
+    fn issue_413_stt_model_verify_runs_off_the_main_thread() {
+        assert!(runs_off_main_thread("stt_model_verify"));
+        assert!(runs_off_main_thread("stt_model_install"));
     }
 
     // ---- ARC-5 (#532): the test constructor and the production guard ----

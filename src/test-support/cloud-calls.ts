@@ -74,6 +74,11 @@ export const CALL_CLASS = {
   recording_retry: 'cloud',
   recording_open: 'local', // opens the browser; Bottle itself sends nothing
   recording_open_system_audio_settings: 'local',
+  stt_model_status: 'local',
+  stt_model_consent: 'local',
+  stt_model_install: 'cloud', // downloads the pinned Parakeet model (github or hf_mirror)
+  stt_model_verify: 'local', // hashes the files on disk only; never a request
+  stt_model_cancel: 'local',
   link_open: 'local', // opens the browser; Bottle itself sends nothing
 } as const satisfies Record<keyof typeof COMMANDS, CallClass>;
 

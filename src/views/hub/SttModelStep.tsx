@@ -1,21 +1,17 @@
 /**
- * Wizard step 6 "Local speech" (MB-07, #413, ADR 0049): the consent question for the 487 MB
- * Parakeet model (CAP-49a), the model status, progress, Cancel and a Retry that resumes
- * (CAP-49b), and the content-free error codes as user text (CAP-49c).
+ * `SttModelStep`: "Local speech" (MB-07, #413, #45, #529, ADR 0049, ADR 0104), one
+ * self-contained component. It asks consent for the 487 MB Parakeet model (CAP-49a), shows the
+ * model status, download progress, Cancel and a Retry that resumes (CAP-49b), and the
+ * content-free error codes as user text (CAP-49c). The hub mounts it in the Setup region: it
+ * renders nothing once the model is installed and checked (like the other setup steps).
  *
  * The step stores the answer before any install starts. The core gate reads that stored answer,
  * so no download starts without Granted. `status` checks file sizes only, so the step is done
- * only after an `install` call (which checks every SHA-256) resolves.
+ * only after an `install` or `verify` call (which check every SHA-256) resolves. `sttModelApi`
+ * (same folder) is the real `api`, over the `stt_model_*` commands of #529; the hub passes it in.
  *
- * TODO(#529): the `stt_model_*` hub commands. Until they land, the hub uses
- * `unwiredSttModelApi`, which answers `stt_setup_unavailable`. TODO(#43): the wizard frame
- * mounts this step; until then the hub shows it on its own.
- *
- * ui-1 (ADR 0106): rebuilt on shadcn/ui's RadioGroup and Button instead of a raw
- * `<fieldset>`/`<legend>` with bare `<input type="radio">`s and plain `<button>`s (the ui-audit
- * "Settings baseline" findings). The RadioGroup renders as accessible buttons
- * (`role="radio"`/`aria-checked`), not native `<input>`s, so SttSetupStep.test.tsx asserts on
- * role, not `input[type="radio"]` (documented there).
+ * ui-1 (ADR 0106): shadcn/ui RadioGroup and Button, the hub's `hub-progress` bar.
+ * TODO(#43): the wizard frame may also mount this step directly for a first-run flow.
  */
 import { useCallback, useEffect, useId, useRef, useState, type CSSProperties } from 'react';
 import { Button } from '../ui/button';
@@ -97,7 +93,7 @@ function errorCode(e: unknown): string {
 
 const mb = (bytes: number) => `${Math.round(bytes / 1_000_000)} MB`;
 
-/** TODO(#529): replace with the `stt_model_*` commands. */
+/** The seam when no `stt_model_*` commands are given (tests, a build without them). */
 export const unwiredSttModelApi: SttModelApi = {
   status: () => Promise.reject({ error: 'stt_setup_unavailable' }),
   setConsent: () => Promise.reject({ error: 'stt_setup_unavailable' }),
@@ -105,6 +101,20 @@ export const unwiredSttModelApi: SttModelApi = {
   verify: () => Promise.reject({ error: 'stt_setup_unavailable' }),
   cancel: () => Promise.resolve(false),
 };
+
+/** One chunk of download progress, keyed by file name, so a multi-file source (the Hugging
+ * Face mirror) adds up across files instead of a bar that restarts at each one (#413 review). */
+type FileTotals = ReadonlyMap<string, { done: number; total: number }>;
+
+function overallBytes(files: FileTotals): { done: number; total: number } {
+  let done = 0;
+  let total = 0;
+  for (const f of files.values()) {
+    done += f.done;
+    total += f.total;
+  }
+  return { done, total };
+}
 
 function statusText(v: SttModelView): string {
   switch (v.model) {
@@ -117,7 +127,7 @@ function statusText(v: SttModelView): string {
   }
 }
 
-export function SttSetupStep({
+export function SttModelStep({
   api = unwiredSttModelApi,
   onDone,
 }: {
@@ -128,9 +138,11 @@ export function SttSetupStep({
   const [source, setSource] = useState<SttSource>('github');
   const [installing, setInstalling] = useState(false);
   const [checking, setChecking] = useState(false);
-  const [progress, setProgress] = useState<SttProgressView | null>(null);
+  const [files, setFiles] = useState<FileTotals>(new Map());
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  // True after a download the user started; a launch check that passes stays silent.
+  const [fresh, setFresh] = useState(false);
   const live = useRef(true);
   const doneRef = useRef(onDone);
   useEffect(() => {
@@ -143,14 +155,18 @@ export function SttSetupStep({
       setError(null);
       setInstalling(true);
       setChecking(check);
-      setProgress(null);
+      setFiles(new Map());
       try {
         const v = check
           ? await api.verify()
-          : await api.install(from, (p) => live.current && setProgress(p));
+          : await api.install(from, (p) => {
+              if (!live.current) return;
+              setFiles((prev) => new Map(prev).set(p.file, { done: p.done, total: p.total }));
+            });
         if (!live.current) return;
         setView(v);
         setDone(true);
+        setFresh(!check);
         doneRef.current?.();
       } catch (e) {
         if (!live.current) return;
@@ -162,7 +178,7 @@ export function SttSetupStep({
         if (live.current) {
           setInstalling(false);
           setChecking(false);
-          setProgress(null);
+          setFiles(new Map());
         }
       }
     },
@@ -175,9 +191,11 @@ export function SttSetupStep({
       (v) => {
         if (!live.current) return;
         setView(v);
-        // MB-07: sizes alone do not prove the model. The check hashes every file and never
-        // downloads; after a mismatch only a click starts a download (CAP-49a).
-        if (v.consent === 'granted' && v.model === 'installed') void run('github', true);
+        // #413 review: an installed model is checked every time, whatever the stored consent.
+        // `verify` sends no request, so no consent gate applies; only a download needs consent
+        // (CAP-49a). Sizes alone do not prove the model: the check hashes every file, and after
+        // a mismatch only a click starts a download.
+        if (v.model === 'installed') void run('github', true);
       },
       (e) => live.current && setError(errorCode(e)),
     );
@@ -201,8 +219,20 @@ export function SttSetupStep({
   const start = () => (view?.consent === 'granted' ? run(source) : choose('granted'));
   const sourceLabelId = useId();
   const total = view?.totalBytes ?? 487_211_443;
-  const percent =
-    progress && progress.total > 0 ? Math.floor((progress.done * 100) / progress.total) : 0;
+  // Overall bytes across every file seen this run, never the raw file name of whichever one is
+  // downloading now (#413 review).
+  const { done: overallDone, total: overallTotal } = overallBytes(files);
+  const percent = overallTotal > 0 ? Math.floor((overallDone * 100) / overallTotal) : 0;
+  // Every byte has arrived but the install has not resolved: it unpacks and hashes, with no
+  // progress event. A stuck 100% bar with a Cancel that cannot stop it is confusing (#413 review).
+  const unpacking = installing && !checking && overallTotal > 0 && overallDone >= overallTotal;
+
+  // Setup region: a step shows only while it is pending (#605). Nothing before the first status
+  // answer, nothing once the model is installed and checked, and nothing while an installed
+  // model is checked at launch (a mismatch deletes the files, then the step shows again).
+  if (!view && !error) return null;
+  if (done && !fresh) return null;
+  if (checking && view?.model === 'installed' && !error) return null;
 
   return (
     <section
@@ -217,7 +247,7 @@ export function SttSetupStep({
         Bottle turns your speech into text on this device. It needs a speech model of {mb(total)}.
         The model downloads only after you agree.
       </p>
-      {view && (
+      {view && !done && (
         <p data-stt-status={view.model} className="hub-status">
           {statusText(view)}
         </p>
@@ -257,7 +287,7 @@ export function SttSetupStep({
         </div>
       )}
       {checking && <p>Checking the speech model…</p>}
-      {installing && progress && (
+      {installing && files.size > 0 && !unpacking && (
         <div>
           <div
             role="progressbar"
@@ -270,14 +300,20 @@ export function SttSetupStep({
             aria-valuenow={percent}
           />
           <p className="hub-muted">
-            {progress.file}: {mb(progress.done)} of {mb(progress.total)}
+            {mb(overallDone)} of {mb(overallTotal)}
           </p>
         </div>
       )}
-      {installing && !checking && (
+      {unpacking && <p className="hub-muted">Unpacking…</p>}
+      {installing && !checking && !unpacking && (
         <Button type="button" variant="outline" onClick={() => void api.cancel()}>
           Cancel
         </Button>
+      )}
+      {done && (
+        <p data-stt-status="installed" className="hub-status">
+          Speech model ready. The model is installed and checked.
+        </p>
       )}
       {error && (
         // ui-1 (ADR 0106): `stt_setup_unavailable` is a missing-feature state, not an error — the
@@ -288,7 +324,6 @@ export function SttSetupStep({
           {sttErrorText(error)}
         </p>
       )}
-      {done && <p>The speech model is installed and checked.</p>}
       {!installing && !done && view && (
         <div className="mt-[var(--mog-space-3)] flex flex-wrap gap-[var(--mog-space-2)]">
           {error && error !== 'stt_consent_required' && view.consent === 'granted' ? (

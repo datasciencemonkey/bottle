@@ -49,8 +49,18 @@ describe('ARC-2: thin views', () => {
       expect(text, relative(src, f)).not.toMatch(/\binvoke\b/);
       expect(text, relative(src, f)).not.toMatch(/@tauri-apps\/api\/core/);
     }
-    // MOG-08a: only `view_*` commands. `view_notice_subscribe` is the hub's notice Channel (#509).
-    expect([...called].sort()).toEqual(['view_emit', 'view_notice_subscribe']);
+    // MOG-08a: only `view_*` commands. `view_notice_subscribe` is the hub's notice Channel
+    // (#509); `stt_model_*` is the hub's Local speech step (#413, #45, #529, ADR 0104), the
+    // same hub-only direct-call shape.
+    expect([...called].sort()).toEqual([
+      'stt_model_cancel',
+      'stt_model_consent',
+      'stt_model_install',
+      'stt_model_status',
+      'stt_model_verify',
+      'view_emit',
+      'view_notice_subscribe',
+    ]);
   });
 
   it('[ARC-2] [MOG-08a] views take event names from EVENTS, not string literals', () => {

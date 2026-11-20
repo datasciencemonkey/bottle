@@ -4,12 +4,12 @@ import { render, tauri } from '../test-tauri';
 import { Hub } from './Hub';
 import {
   STT_ERROR_CODES,
-  SttSetupStep,
+  SttModelStep,
   sttErrorText,
   type SttModelApi,
   type SttModelView,
   type SttProgressView,
-} from './SttSetupStep';
+} from './SttModelStep';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('../test-tauri')).coreModule);
 vi.mock('@tauri-apps/api/event', async () => (await import('../test-tauri')).eventModule);
@@ -91,7 +91,7 @@ describe('Wizard STT step (MB-07, #413)', () => {
 
   it('[MB-07] [CAP-49a] asks for consent to the 487 MB download and starts nothing first', async () => {
     const f = fakeApi();
-    const { el } = await render(<SttSetupStep api={f.api} />);
+    const { el } = await render(<SttModelStep api={f.api} />);
     const s = step(el);
     expect(s).not.toBeNull();
     expect(s.textContent).toContain('487 MB');
@@ -103,7 +103,7 @@ describe('Wizard STT step (MB-07, #413)', () => {
 
   it('[CAP-49a] "Not now" stores Declined and starts no install', async () => {
     const f = fakeApi();
-    const { el } = await render(<SttSetupStep api={f.api} />);
+    const { el } = await render(<SttModelStep api={f.api} />);
     await click(button(el, 'Not now'));
     expect(f.calls).toEqual(['status', 'consent:declined']);
     expect(step(el).textContent).toContain('Local speech is off');
@@ -114,7 +114,7 @@ describe('Wizard STT step (MB-07, #413)', () => {
   it('[CAP-49a] [MB-07] the download stores Granted before the install starts', async () => {
     const f = fakeApi();
     const done = vi.fn();
-    const { el } = await render(<SttSetupStep api={f.api} onDone={done} />);
+    const { el } = await render(<SttModelStep api={f.api} onDone={done} />);
     await click(button(el, 'Download (487 MB)'));
     expect(f.calls).toEqual(['status', 'consent:granted', 'install:github']);
     await f.finish({ model: 'installed' });
@@ -127,7 +127,7 @@ describe('Wizard STT step (MB-07, #413)', () => {
   // renders as accessible buttons (`role="radio"`), not native `<input type="radio">` elements.
   it('[CAP-49b] the user can pick the Hugging Face mirror as the source', async () => {
     const f = fakeApi();
-    const { el } = await render(<SttSetupStep api={f.api} />);
+    const { el } = await render(<SttModelStep api={f.api} />);
     const hf = [...el.querySelectorAll<HTMLElement>('[role="radio"]')].find(
       (r) => r.getAttribute('value') === 'hf_mirror',
     );
@@ -136,21 +136,52 @@ describe('Wizard STT step (MB-07, #413)', () => {
     expect(f.calls).toContain('install:hf_mirror');
   });
 
-  it('[CAP-49b] shows progress and a Cancel button while the download runs', async () => {
+  it('[CAP-49b] shows overall progress (no raw file name) and a Cancel button while the download runs', async () => {
     const f = fakeApi({ consent: 'granted' });
-    const { el } = await render(<SttSetupStep api={f.api} />);
+    const { el } = await render(<SttModelStep api={f.api} />);
     await click(button(el, 'Download (487 MB)'));
     await f.progress({ file: 'encoder.int8.onnx', done: 326_141_147, total: 652_282_294 });
     const bar = el.querySelector('[role="progressbar"]');
     expect(bar?.getAttribute('aria-valuenow')).toBe('50');
-    expect(step(el).textContent).toContain('encoder.int8.onnx: 326 MB of 652 MB');
+    expect(step(el).textContent).toContain('326 MB of 652 MB');
+    expect(step(el).textContent).not.toContain('encoder.int8.onnx');
     await click(button(el, 'Cancel'));
     expect(f.calls.at(-1)).toBe('cancel');
   });
 
+  it('[#413 review] adds progress across files instead of restarting the bar per file', async () => {
+    const f = fakeApi({ consent: 'granted' });
+    const { el } = await render(<SttModelStep api={f.api} />);
+    const hf = [...el.querySelectorAll<HTMLElement>('[role="radio"]')].find(
+      (r) => r.getAttribute('value') === 'hf_mirror',
+    );
+    await click(hf);
+    await click(button(el, 'Download (487 MB)'));
+    await f.progress({ file: 'encoder.int8.onnx', done: 652_282_294, total: 652_282_294 });
+    await f.progress({ file: 'decoder.int8.onnx', done: 5_000_000, total: 11_845_274 });
+    const bar = el.querySelector('[role="progressbar"]');
+    // Overall: 652,282,294 (encoder, done) + 5,000,000 of 11,845,274 (decoder, in flight).
+    expect(step(el).textContent).toContain('657 MB of 664 MB');
+    expect(bar?.getAttribute('aria-valuenow')).toBe('98');
+  });
+
+  it('[#413 review] shows "Unpacking…" instead of a stuck 100% bar, and hides Cancel', async () => {
+    const f = fakeApi({ consent: 'granted' });
+    const { el } = await render(<SttModelStep api={f.api} />);
+    await click(button(el, 'Download (487 MB)'));
+    await f.progress({
+      file: 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2',
+      done: 487_211_443,
+      total: 487_211_443,
+    });
+    expect(step(el).textContent).toContain('Unpacking');
+    expect(el.querySelector('[role="progressbar"]')).toBeNull();
+    expect(button(el, 'Cancel')).toBeUndefined();
+  });
+
   it('[CAP-49b] after a cancel the step shows Partial and a retry resumes', async () => {
     const f = fakeApi({ consent: 'granted' });
-    const { el } = await render(<SttSetupStep api={f.api} />);
+    const { el } = await render(<SttModelStep api={f.api} />);
     await click(button(el, 'Download (487 MB)'));
     await click(button(el, 'Cancel'));
     await f.fail('stt_download_cancelled', { model: 'partial', partialBytes: 120_000_000 });
@@ -165,7 +196,7 @@ describe('Wizard STT step (MB-07, #413)', () => {
 
   it('[CAP-49c] a hash mismatch says the install stopped', async () => {
     const f = fakeApi({ consent: 'granted' });
-    const { el } = await render(<SttSetupStep api={f.api} />);
+    const { el } = await render(<SttModelStep api={f.api} />);
     await click(button(el, 'Download (487 MB)'));
     await f.fail('stt_hash_mismatch');
     const alert = el.querySelector('[role="alert"]');
@@ -185,20 +216,34 @@ describe('Wizard STT step (MB-07, #413)', () => {
     expect(sttErrorText('something_new')).toMatch(/install stopped/i);
   });
 
-  it('[MB-07] an installed model is checked before the step is done', async () => {
+  it('[MB-07] an installed model is checked before the step is done, and shows nothing', async () => {
     const f = fakeApi({ consent: 'granted', model: 'installed' });
-    const { el } = await render(<SttSetupStep api={f.api} />);
-    expect(step(el).textContent).toContain('Checking the speech model');
-    expect(step(el).getAttribute('data-done')).toBe('false');
-    expect(button(el, 'Cancel')).toBeUndefined();
+    const { el } = await render(<SttModelStep api={f.api} />);
+    // Setup region (#605): an installed model is a cleared step, so nothing renders during the
+    // launch check or after it passes.
     expect(f.calls).toEqual(['status', 'verify']);
+    expect(el.querySelector('[data-view="stt-setup"]')).toBeNull();
     await f.finish({});
-    expect(step(el).getAttribute('data-done')).toBe('true');
+    expect(el.querySelector('[data-view="stt-setup"]')).toBeNull();
+  });
+
+  it('[#413 review] an installed model with no stored consent is checked, never asked, and renders nothing', async () => {
+    const f = fakeApi({ consent: 'not_asked', model: 'installed' });
+    const { el } = await render(<SttModelStep api={f.api} />);
+    // The real state on a Mac that already has the model: no `stt-download-consent` file.
+    // `verify` sends no request, so it must run regardless, with no consent question first.
+    expect(f.calls).toEqual(['status', 'verify']);
+    expect(button(el, 'Download (487 MB)')).toBeUndefined();
+    expect(button(el, 'Not now')).toBeUndefined();
+    await f.finish({});
+    expect(el.querySelector('[data-view="stt-setup"]')).toBeNull();
+    expect(button(el, 'Download (487 MB)')).toBeUndefined();
+    expect(button(el, 'Not now')).toBeUndefined();
   });
 
   it('[CAP-49a] [CAP-49c] a failed launch check downloads nothing before a click', async () => {
     const f = fakeApi({ consent: 'granted', model: 'installed' });
-    const { el } = await render(<SttSetupStep api={f.api} />);
+    const { el } = await render(<SttModelStep api={f.api} />);
     await f.fail('stt_hash_mismatch', { model: 'missing' });
     expect(el.querySelector('[role="alert"]')?.textContent).toBe(sttErrorText('stt_hash_mismatch'));
     expect(step(el).textContent).toContain('Not downloaded');

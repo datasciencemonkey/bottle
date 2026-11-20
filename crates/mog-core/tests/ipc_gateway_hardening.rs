@@ -123,6 +123,14 @@ fn sample(command: &str) -> (&'static str, Value) {
         "recording_start" => json!({"profile": "p", "instructions": "Notes."}),
         "recording_detail" | "recording_retry" => json!({"profile": "p", "id": "rec-1"}),
         "recording_open" => json!({"profile": "p", "id": "rec-1", "target": "folder"}),
+        "stt_model_status" | "stt_model_verify" | "stt_model_cancel" => return ("hub", json!({})),
+        "stt_model_consent" => return ("hub", json!({"consent": "granted"})),
+        "stt_model_install" => {
+            return (
+                "hub",
+                json!({"source": "github", "onProgress": "__CHANNEL__:5"}),
+            )
+        }
         "link_open" => json!({"profile": "p", "url": "https://example.cloud.databricks.com/x"}),
         other => panic!("no sample for {other}"),
     };
@@ -461,6 +469,17 @@ fn sec_03_each_ipc_error_maps_to_a_fixed_code() {
         IpcError::AudioUnreadable { command: s() },
         IpcError::UploadFailed { command: s() },
         IpcError::SystemAudioDenied { command: s() },
+        IpcError::SttModelMissing { command: s() },
+        IpcError::SttConsentRequired { command: s() },
+        IpcError::SttUrlNotAllowed { command: s() },
+        IpcError::SttDownloadFailed { command: s() },
+        IpcError::SttHashMismatch { command: s() },
+        IpcError::SttExtractFailed { command: s() },
+        IpcError::SttIoFailed { command: s() },
+        IpcError::SttDownloadCancelled { command: s() },
+        IpcError::SttInstallBusy { command: s() },
+        IpcError::SttModelsDirUnavailable { command: s() },
+        IpcError::SttSetupUnavailable { command: s() },
     ];
     assert_eq!(all.len(), ERROR_CODES.len(), "one code per variant");
     for e in &all {

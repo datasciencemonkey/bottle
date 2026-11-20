@@ -32,7 +32,8 @@ import { RecIndicator, RecordControl } from './RecordControl';
 import { Recordings } from './Recordings';
 import { RecordingSettings } from './RecordingSettings';
 import { useHubRecording } from './recording-ipc';
-import { SttSetupStep } from './SttSetupStep';
+import { SttModelStep } from './SttModelStep';
+import { sttModelApi } from './sttModelApi';
 import { StoreNotice } from './StoreNotice';
 import { ThreadComposer } from './ThreadComposer';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
@@ -73,6 +74,10 @@ function SetupRegion() {
           no model, or the brain's explicit `closed` step, so a working profile shows no panel
           here (review of #602). */}
       <ConnectWorkspace />
+      {/* #413, #45, #529 (ADR 0104): the Local speech step, over the real `stt_model_*`
+          commands. It shows only while the model is pending (not downloaded, partly
+          downloaded, or declined) and renders nothing once the model is installed and checked. */}
+      <SttModelStep api={sttModelApi} />
     </div>
   );
 }
@@ -120,7 +125,6 @@ function SettingsArea({
     <section data-hub-view="settings" aria-label="Settings" hidden={hidden}>
       <MicPreference />
       <RecordingSettings model={recording} />
-      <SttSetupStep />
       <WipeSettings />
       <CliSettings />
       {/* #162 follow-up (W-07e, review of #602): the one deliberate way to open "Connect a

@@ -1517,6 +1517,84 @@
       "title": "SessionAttestArgs",
       "type": "object"
     },
+    "stt_model_cancel": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "No arguments.",
+      "title": "NoArgs",
+      "type": "object"
+    },
+    "stt_model_consent": {
+      "$defs": {
+        "SttConsentWire": {
+          "description": "The wire form of `mog_core::stt_model::ModelConsent` for `stt_model_consent` (#413, #45,\n#529, ADR 0104). No `NotAsked` variant: the step only ever sends the user's answer.",
+          "enum": [
+            "granted",
+            "declined"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "consent": {
+          "$ref": "#/$defs/SttConsentWire"
+        }
+      },
+      "required": [
+        "consent"
+      ],
+      "title": "SttModelConsentArgs",
+      "type": "object"
+    },
+    "stt_model_install": {
+      "$defs": {
+        "ChannelRef": {
+          "pattern": "^__CHANNEL__:[0-9]+$",
+          "type": "string"
+        },
+        "SttSourceWire": {
+          "description": "The wire form of `mog_core::stt_model::ModelSource` for `stt_model_install` (#413, ADR 0104).",
+          "enum": [
+            "github",
+            "hf_mirror"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "`stt_model_install` (#413, #45, ADR 0104): the user's chosen source and the hub's\nprogress Channel. The gateway lets only the hub through, so the Channel resolves on the\nhub webview (like `view_notice_subscribe`, ADR 0091).",
+      "properties": {
+        "onProgress": {
+          "$ref": "#/$defs/ChannelRef"
+        },
+        "source": {
+          "$ref": "#/$defs/SttSourceWire"
+        }
+      },
+      "required": [
+        "source",
+        "onProgress"
+      ],
+      "title": "SttModelInstallArgs",
+      "type": "object"
+    },
+    "stt_model_status": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "No arguments.",
+      "title": "NoArgs",
+      "type": "object"
+    },
+    "stt_model_verify": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "No arguments.",
+      "title": "NoArgs",
+      "type": "object"
+    },
     "stt_transcribe": {
       "$defs": {
         "TagApp": {
@@ -2266,6 +2344,41 @@
       ]
     },
     {
+      "name": "stt_model_status",
+      "phase": "MVP-D",
+      "windows": [
+        "hub"
+      ]
+    },
+    {
+      "name": "stt_model_consent",
+      "phase": "MVP-D",
+      "windows": [
+        "hub"
+      ]
+    },
+    {
+      "name": "stt_model_install",
+      "phase": "MVP-D",
+      "windows": [
+        "hub"
+      ]
+    },
+    {
+      "name": "stt_model_verify",
+      "phase": "MVP-D",
+      "windows": [
+        "hub"
+      ]
+    },
+    {
+      "name": "stt_model_cancel",
+      "phase": "MVP-D",
+      "windows": [
+        "hub"
+      ]
+    },
+    {
       "name": "link_open",
       "phase": "MVP-D",
       "windows": [
@@ -2337,7 +2450,18 @@
     "too_long",
     "audio_unreadable",
     "upload_failed",
-    "system_audio_denied"
+    "system_audio_denied",
+    "stt_model_missing",
+    "stt_consent_required",
+    "stt_url_not_allowed",
+    "stt_download_failed",
+    "stt_hash_mismatch",
+    "stt_extract_failed",
+    "stt_io_failed",
+    "stt_download_cancelled",
+    "stt_install_busy",
+    "stt_models_dir_unavailable",
+    "stt_setup_unavailable"
   ],
   "events": [
     {

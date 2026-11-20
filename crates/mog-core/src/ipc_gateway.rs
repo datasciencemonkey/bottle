@@ -153,6 +153,22 @@ pub const ERROR_CODES: &[&str] = &[
     "audio_unreadable",
     "upload_failed",
     "system_audio_denied",
+    // `stt_transcribe` (#413, ADR 0104): R4 has no installed, checked model (#46, #413).
+    "stt_model_missing",
+    // `stt_model_*` (#413, #45, #529, ADR 0104): the `mog_core::stt_setup::SetupError` and
+    // `mog_core::stt_model::InstallError` codes, so the hub step shows the real reason.
+    "stt_consent_required",
+    "stt_url_not_allowed",
+    "stt_download_failed",
+    "stt_hash_mismatch",
+    "stt_extract_failed",
+    "stt_io_failed",
+    "stt_download_cancelled",
+    "stt_install_busy",
+    "stt_models_dir_unavailable",
+    // The host-side code for a build with no `local-stt` feature (#534, #414): the hub shows
+    // "Local speech setup is not available in this build yet."
+    "stt_setup_unavailable",
 ];
 
 /// The fixed, content-free code of an [`IpcError`] (its serde tag). It never holds the
@@ -224,6 +240,17 @@ pub fn ipc_error_code(e: &IpcError) -> &'static str {
         IpcError::AudioUnreadable { .. } => "audio_unreadable",
         IpcError::UploadFailed { .. } => "upload_failed",
         IpcError::SystemAudioDenied { .. } => "system_audio_denied",
+        IpcError::SttModelMissing { .. } => "stt_model_missing",
+        IpcError::SttConsentRequired { .. } => "stt_consent_required",
+        IpcError::SttUrlNotAllowed { .. } => "stt_url_not_allowed",
+        IpcError::SttDownloadFailed { .. } => "stt_download_failed",
+        IpcError::SttHashMismatch { .. } => "stt_hash_mismatch",
+        IpcError::SttExtractFailed { .. } => "stt_extract_failed",
+        IpcError::SttIoFailed { .. } => "stt_io_failed",
+        IpcError::SttDownloadCancelled { .. } => "stt_download_cancelled",
+        IpcError::SttInstallBusy { .. } => "stt_install_busy",
+        IpcError::SttModelsDirUnavailable { .. } => "stt_models_dir_unavailable",
+        IpcError::SttSetupUnavailable { .. } => "stt_setup_unavailable",
     }
 }
 

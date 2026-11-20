@@ -84,11 +84,19 @@ const uncovered = (lang: string | undefined): boolean =>
 
 // ---------- failures ----------
 
-export type SttFailureKind = 'could_not_transcribe' | 'language_not_available';
+export type SttFailureKind = 'could_not_transcribe' | 'language_not_available' | 'model_missing';
+
+/**
+ * #413, #45: the hub's Local speech step (`SttModelStep`) owns the Download button; this text
+ * only points there. It never names a file path or a folder (SEC-03).
+ */
+export const MODEL_MISSING_TEXT =
+  'Download the speech model (487 MB) for private, on-device dictation. Open the Bottle hub, then Local speech.';
 
 const USER_TEXT: Readonly<Record<SttFailureKind, string>> = {
   could_not_transcribe: COULD_NOT_TRANSCRIBE,
   language_not_available: LANGUAGE_NOT_AVAILABLE,
+  model_missing: MODEL_MISSING_TEXT,
 };
 
 /**
@@ -240,6 +248,12 @@ const MAX_RETRY_ENTRIES = 32;
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 
+/** The `{ error: <code> }` rejection shape of a refused IPC call; `''` for anything else. */
+const errorCode = (e: unknown): string => {
+  const c = isRecord(e) ? e['error'] : undefined;
+  return typeof c === 'string' ? c : '';
+};
+
 /** A reply is valid for the segment and the provider it asked; cloud text is never empty. */
 function validReply(t: unknown, seg: SegmentRef, provider: Provider): Transcript | undefined {
   if (!isRecord(t)) return undefined;
@@ -267,6 +281,8 @@ class ChainProvider implements SttProvider {
   private readonly now: () => number;
   private active: Provider = 'local_parakeet';
   private activeModel = '';
+  /** #413, #45: the local decode of the current `run` failed with `stt_model_missing`. */
+  private modelMissing = false;
   /** MOG → the provider of its last transcript (UX-38). Ids only; never text. */
   private readonly last = new Map<MogId, SttUse>();
   /** segmentId → the running Retry, so a second click starts no second chain. */
@@ -347,7 +363,14 @@ class ChainProvider implements SttProvider {
     try {
       const reply = this.invoke(args).then(
         (t) => validReply(t, seg, provider),
-        () => undefined,
+        (e: unknown) => {
+          // #413, #45: R4 has no installed, checked model. The hub's Download step (not a
+          // Retry here) is the way out, so the local failure is marked for `run` to report.
+          if (provider === 'local_parakeet' && errorCode(e) === 'stt_model_missing') {
+            this.modelMissing = true;
+          }
+          return undefined;
+        },
       );
       // A step with no reply by its deadline fails; a late reply changes nothing.
       return await Promise.race([reply, timeout]);
@@ -426,6 +449,7 @@ class ChainProvider implements SttProvider {
     // TODO(#531): R4 fills `Transcript.lang`; until then only a caller hint gives the language.
     let lang = primaryLanguage(opts?.language);
     let localTried = false;
+    this.modelMissing = false;
 
     const done = (t: Transcript): Transcript => {
       this.failedAt.delete(seg.segmentId);
@@ -456,6 +480,13 @@ class ChainProvider implements SttProvider {
     // CAP-64b: no permitted provider covers the language.
     if (uncovered(lang) && !asr && !whisper) {
       throw new SttFailure('language_not_available', seg.segmentId, false);
+    }
+    // #413, #45: local Parakeet has no installed, checked model, and nothing else came back
+    // with a transcript. Point at the hub's Download step instead of the generic "Could not
+    // transcribe. Retry" (a Retry alone cannot fix this); a configured ASR opt-in may still
+    // have failed for its own reason, but the local path stays blocked until the model lands.
+    if (this.modelMissing && !whisper) {
+      throw new SttFailure('model_missing', seg.segmentId, false);
     }
     this.prune();
     if (!this.failedAt.has(seg.segmentId) && this.failedAt.size >= MAX_RETRY_ENTRIES) {
