@@ -8,12 +8,13 @@ body,
   overflow: hidden;
 }
 
-/* The MOG window is 160 wide and 192 high (`MOG_WIDTH`, `MOG_HEIGHT` in src-tauri/src/windows.rs).
-   The lamp art is the 160 px square at the top. The name row under it (the target marker and the
-   name pill) is its own 32 px, so the pill never covers the lamp. */
+/* The MOG window is 160 wide and 168 high (`MOG_WIDTH`, `MOG_HEIGHT` in src-tauri/src/windows.rs).
+   The lamp art is the 160 px square at the top. The target marker has its own 8 px row under it, so
+   it never covers the lamp. The MOG shows no name on the lamp (the user's choice): the name and
+   colour are in the hub, Conversations and the card. */
 :root {
-  --mog-name-row: 32px;
-  --mog-art: min(100vw, calc(100vh - var(--mog-name-row)));
+  --mog-marker-row: 8px;
+  --mog-art: min(100vw, calc(100vh - var(--mog-marker-row)));
 }
 
 /* The mascot fills the MOG window: the Rive canvas or the PNG fallback, with the "?" cue
@@ -53,7 +54,7 @@ body,
   pointer-events: none;
   /* #603 review, MEDIUM finding: on the base rule (not only `[data-hidden]`), so Hide and the
      un-hide it is paired with both ease, instead of the lamp snapping back to full size. Anchored
-     at the bottom, so the gap to the name pill just under it never changes with the scale. */
+     at the bottom, so the gap to the target marker just under it never changes with the scale. */
   transform-origin: 50% 100%;
   transition: transform 160ms var(--mog-ease-out);
 }
@@ -560,8 +561,8 @@ body,
   position: absolute;
   left: 0;
   right: 0;
-  /* Over the art, above the name row. */
-  bottom: var(--mog-name-row);
+  /* Over the art, above the marker row. */
+  bottom: var(--mog-marker-row);
   z-index: 1;
   padding-bottom: 10px;
   display: flex;
@@ -605,14 +606,12 @@ body,
 }
 
 /* UX-28 (#73, ADR 0058): a small triangle at the foot of the target mascot, pointing up at
-   it. The mascot fills the window, so the foot of the window is under the mascot. #603 review,
-   finding 2: raised clear of the name pill's own span (`.identity-pill` below), so the triangle
-   never covers the pill's text — the old `bottom: 0` put both in the same few pixels. */
+   it. lamp-alive: it sits in its own 8 px row
+   under the art (the window is 168 high), 1 px clear of the art box and of the window edge. */
 .target-marker {
   position: absolute;
   left: 50%;
-  /* lamp-alive: in the name row, between the art above and the pill below, clear of both. */
-  bottom: 25px;
+  bottom: 1px;
   z-index: 2;
   width: 0;
   height: 0;
@@ -648,38 +647,8 @@ body,
   }
 }
 
-/* #ui-4: the MOG's name pill, always on (not only the 1.2 s target toast), outlined in this
-   MOG's accent colour. No fill (MOG-01a: the page paints nothing outside the mascot), the same
-   hairline-pill-plus-halo treatment as `.badges [data-badge]` above, so the text reads on any
-   desktop; the colour carries the identity instead of a background. It sits just under the lamp,
-   clear of the target marker and the badges. #603 review, finding 2: fully inside the window
-   (the old `bottom: -7px` put most of the pill below the window edge, where `overflow: hidden`
-   on `html`/`body`/`#root`, mog.css above, cut it off). lamp-alive: the pill has the name row
-   under the art (the window is 192 high), so it never covers the lamp. */
-.identity-pill {
-  position: absolute;
-  left: 50%;
-  bottom: 2px;
-  z-index: 1;
-  max-width: 88%;
-  transform: translateX(-50%);
-  overflow: hidden;
-  padding: 1px 8px;
-  border: 1.5px solid var(--mog-id-color, var(--mog-overlay-text));
-  border-radius: var(--mog-radius-pill);
-  color: var(--mog-overlay-text);
-  text-shadow: var(--mog-overlay-halo);
-  font: 600 var(--mog-text-xs) / 1.3 var(--mog-font);
-  letter-spacing: 0.01em;
-  text-align: center;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  pointer-events: none;
-}
-
 /* #ui-4: Hide sinks the Genie into the lamp and shrinks the lamp art to lamp-only inside the same
-   160x160 window (plain CSS, no brain round trip). The name pill stays, so a hidden lamp is
-   still identifiable at a glance; a click anywhere on the window (`MogView.tsx`) brings it back.
+   art box (plain CSS, no brain round trip). A click anywhere on the window (`MogView.tsx`) brings it back.
    The transition lives on the base `.lamp` rule above (#603 review, MEDIUM finding), so un-hide
    eases back to full size the same way Hide eases down to it, instead of snapping. */
 .mascot[data-hidden] .lamp {

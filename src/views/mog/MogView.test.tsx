@@ -584,13 +584,17 @@ describe('V2 MOG view target marker and toast (#73)', () => {
     expect(userEmits()).toEqual([{ mogId: ID, kind: 'click', payload: { action: 'view.ready' } }]);
   });
 
-  it('[ui-4] always shows a name pill, tinted with the palette colour the brain sends', async () => {
+  it("[ui-4] shows no name on the lamp (the user's choice), but keeps the name for the tooltip and the palette colour", async () => {
     const { m } = fakeMascot();
     const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
-    // Before the brain answers, the pill still shows (the fallback name).
-    expect(el.querySelector('[data-identity-pill]')?.textContent).toBe('MOG');
+    expect(el.querySelector('[data-identity-pill]')).toBeNull();
+    expect(el.querySelector('.identity-pill')).toBeNull();
+    // Before the brain answers, the fallback name is only in the accessible name.
+    expect(el.querySelector('[aria-label="MOG"]')).not.toBeNull();
     await tauri.emit('mog:target', tv({ colorVariant: 'teal' }));
-    expect(el.querySelector('[data-identity-pill]')?.textContent).toBe('Sales');
+    expect(el.querySelector('[data-identity-pill]')).toBeNull();
+    expect(el.textContent).not.toContain('Sales');
+    expect(el.querySelector('[title="Sales"]')).not.toBeNull();
     const root = el.firstElementChild as HTMLElement;
     expect(root.style.getPropertyValue('--mog-id-color')).toBe('#0f6b66');
   });

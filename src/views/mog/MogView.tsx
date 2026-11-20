@@ -69,7 +69,7 @@ export function MogView({
   };
 
   // #ui-4: Hide sinks the Genie into the lamp and shrinks the lamp art to lamp-only inside the
-  // same 160x192 window (plain CSS, no brain round trip for showing or hiding the art: this
+  // same 160x168 window (plain CSS, no brain round trip for showing or hiding the art: this
   // view holds the flag, so a click brings it back at once). It keeps running and stays a talk
   // target either way (review #603, LOW finding: the window itself never resizes, only the art).
   const [hiddenByUser, setHiddenByUser] = useState(false);
@@ -253,10 +253,6 @@ export function MogView({
           mascot.current?.setHover(false);
         }}
       />
-      {/* #ui-4: the name pill, always on (not only the 1.2 s toast), tinted with the accent. */}
-      <span className="identity-pill" data-identity-pill>
-        {name}
-      </span>
       {/* UX-28: a triangle under the target mascot; the accessible name says "target". */}
       {target?.target && <span className="target-marker" data-marker="target" aria-hidden="true" />}
       {/* MB-06b: the brain shows the toast for 1.2 s after the talk key goes down. */}

@@ -33,8 +33,8 @@ describe('MOG page (V2)', () => {
     const rule = /\.badges\s*\{([^}]*)\}/.exec(css);
     expect(rule, 'one rule for .badges').not.toBeNull();
     expect(rule?.[1]).toMatch(/position:\s*absolute;/);
-    // Over the art: above the name row under it (lamp-alive).
-    expect(rule?.[1]).toMatch(/bottom:\s*var\(--mog-name-row\);/);
+    // Over the art: above the marker row under it (lamp-alive).
+    expect(rule?.[1]).toMatch(/bottom:\s*var\(--mog-marker-row\);/);
     expect(rule?.[1]).toMatch(/z-index:\s*1;/);
     // Text on any desktop: a shadow, not a fill (MOG-01a keeps the page transparent).
     expect(css).toMatch(/\.badges [^{]*\{[^}]*text-shadow:/);

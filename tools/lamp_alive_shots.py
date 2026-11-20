@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Shots and measures of the real MOG page for lamp-alive (spark orbit, eyes, name row, cards).
+"""Shots and measures of the real MOG page for lamp-alive (spark orbit, eyes, marker row, cards).
 
 It starts the Vite dev server on its own port, opens `mog.html` (and `card.html`) in headless
 Chromium (Playwright) with a stub of the Tauri bridge, and pushes mocked `mog:look`,
 `mog:view_state` and `mog:target` events. Nothing here touches the real desktop or the app.
 
-Writes under docs/shots/lamp-alive/ (the real 160 x 192 MOG window, device scale 2):
+Writes under docs/shots/lamp-alive/ (the real 160 x 168 MOG window, device scale 2):
   eyes-<dir>.png     the eyes looking left, right, up and down
   eyes-sheet.png     the four, side by side
   orbit.gif          one loop of the orbiting spark (10 s sped up 4x)
   orbit-sheet.png    8 frames of the loop
-  name-row.png       the MOG with the name pill under the lamp
-  layout.json        the measured boxes of the art, the marker and the pill
+  marker-row.png     the target MOG with its marker under the lamp (no name on the lamp)
+  layout.json        the measured boxes of the art and the marker
   cpu.json           the measured idle cost (see measure_cost)
 
 Run:  uv run --no-project --with playwright --with pillow python tools/lamp_alive_shots.py
@@ -31,7 +31,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 OUT = os.path.join(ROOT, "docs", "shots", "lamp-alive")
 PORT = int(os.environ.get("SHOT_PORT", "5287"))
 MOG_ID = "00000000-0000-4000-8000-000000000001"
-W, H = 160, 192
+W, H = 160, 168
 
 # A stub of the Tauri bridge: enough for `listen`, `emit` and `invoke` of the MOG and card views.
 STUB = """
@@ -171,31 +171,31 @@ def shots_orbit(browser):
         os.remove(os.path.join(OUT, f"_f{i:02d}.png"))
 
 
-def shots_name_row(browser):
+def shots_marker_row(browser):
+    """The target MOG: the lamp art with its marker under it, and no name on the lamp."""
     ctx, p = page(browser, "mog", f"mog-{MOG_ID}")
     mog_state(p, name="Log-mog")
     emit(p, "mog:target", {"mogId": MOG_ID, "name": "Log-mog", "target": True, "toast": False, "colorVariant": "ember"})
     p.mouse.move(80, 90)
     p.wait_for_timeout(700)
-    shot(p, "name-row.png")
+    shot(p, "marker-row.png")
     box = lambda sel: p.evaluate(
-        "(s) => { const r = document.querySelector(s).getBoundingClientRect(); return {x:r.x,y:r.y,w:r.width,h:r.height,bottom:r.bottom} }", sel
+        "(s) => { const e = document.querySelector(s); if (!e) return null; const r = e.getBoundingClientRect(); return {x:r.x,y:r.y,w:r.width,h:r.height,bottom:r.bottom} }", sel
     )
-    lay = {"window": {"w": W, "h": H}, "art": box(".lamp"), "mascot": box(".mascot"), "marker": box(".target-marker"), "pill": box(".identity-pill")}
-    # Long names keep the pill centred, inside the window, with an ellipsis.
-    emit(p, "mog:target", {"mogId": MOG_ID, "name": "A very long MOG name that cannot fit", "target": True, "toast": False, "colorVariant": "ember"})
-    p.wait_for_timeout(100)
-    lay["pill_long"] = box(".identity-pill")
-    shot(p, "name-row-long.png")
+    lay = {"window": {"w": W, "h": H}, "art": box(".lamp"), "mascot": box(".mascot"), "marker": box(".target-marker"), "name_pill": box(".identity-pill")}
     ctx.close()
-    a, m, pill = lay["art"], lay["marker"], lay["pill"]
+    # The visible bottom of the lamp art (opaque pixels above the marker row), from the shot.
+    im = Image.open(os.path.join(OUT, "marker-row.png")).convert("RGBA")
+    art_alpha = im.crop((0, 0, W * 2, 160 * 2)).split()[3].point(lambda a: 255 if a > 40 else 0)
+    lay["art_visible_bottom"] = art_alpha.getbbox()[3] / 2
+    a, m = lay["art"], lay["marker"]
     lay["ok"] = {
-        "pill_below_art": pill["y"] >= a["bottom"],
-        "marker_below_art": m["y"] >= a["bottom"],
-        "marker_above_pill": m["bottom"] <= pill["y"],
-        "pill_inside": pill["bottom"] <= H and pill["x"] >= 0 and pill["x"] + pill["w"] <= W,
-        "long_pill_inside": lay["pill_long"]["bottom"] <= H and lay["pill_long"]["x"] >= 0 and lay["pill_long"]["x"] + lay["pill_long"]["w"] <= W,
-        "pill_centred": abs(pill["x"] + pill["w"] / 2 - W / 2) < 1,
+        "no_name_pill": lay["name_pill"] is None,
+        "marker_below_art_box": m["y"] >= a["bottom"],
+        "marker_below_visible_art": m["y"] >= lay["art_visible_bottom"],
+        "marker_inside_window": m["bottom"] <= H and m["x"] >= 0 and m["x"] + m["w"] <= W,
+        "marker_centred": abs(m["x"] + m["w"] / 2 - W / 2) < 1,
+        "window_is_art_plus_marker_row": H - a["bottom"] == 8,
     }
     with open(os.path.join(OUT, "layout.json"), "w") as f:
         json.dump(lay, f, indent=2)
@@ -405,7 +405,7 @@ def main():
         wait_http(f"http://localhost:{PORT}/mog.html")
         with sync_playwright() as pw:
             browser = pw.chromium.launch()
-            what = sys.argv[1:] or ["eyes", "orbit", "name", "cards", "cost"]
+            what = sys.argv[1:] or ["eyes", "orbit", "marker", "cards", "cost"]
             if "eyes" in what:
                 shots_eyes(browser)
             if "orbit" in what:
@@ -414,8 +414,8 @@ def main():
                 shots_cards(browser)
             if "cost" in what:
                 measure_cost(browser)
-            if "name" in what:
-                shots_name_row(browser)
+            if "marker" in what:
+                shots_marker_row(browser)
             browser.close()
     finally:
         vite.terminate()

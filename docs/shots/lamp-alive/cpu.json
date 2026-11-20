@@ -2,41 +2,41 @@
   "seconds": 20,
   "modes": {
     "orbit_on": {
-      "cpu_percent_of_one_core": 3.62,
+      "cpu_percent_of_one_core": 5.06,
       "main_thread_delta": {
-        "LayoutCount": 13,
-        "RecalcStyleCount": 88,
-        "ScriptDuration": 0.0032,
-        "LayoutDuration": 0.0003,
-        "RecalcStyleDuration": 0.0122,
-        "TaskDuration": 0.0415
+        "LayoutCount": 20,
+        "RecalcStyleCount": 91,
+        "ScriptDuration": 0.0037,
+        "LayoutDuration": 0.0006,
+        "RecalcStyleDuration": 0.0204,
+        "TaskDuration": 0.0673
       },
       "running_animations": 4
     },
     "orbit_paused_hidden": {
-      "cpu_percent_of_one_core": 0.46,
+      "cpu_percent_of_one_core": 0.47,
       "main_thread_delta": {
-        "LayoutCount": 15,
-        "RecalcStyleCount": 30,
-        "ScriptDuration": 0.0038,
-        "LayoutDuration": 0.0009,
-        "RecalcStyleDuration": 0.007,
-        "TaskDuration": 0.0275
+        "LayoutCount": 20,
+        "RecalcStyleCount": 35,
+        "ScriptDuration": 0.0033,
+        "LayoutDuration": 0.001,
+        "RecalcStyleDuration": 0.0078,
+        "TaskDuration": 0.0331
       },
       "running_animations": 0
     },
     "reduced_motion_static": {
-      "cpu_percent_of_one_core": 0.26,
+      "cpu_percent_of_one_core": 0.16,
       "main_thread_delta": {
-        "LayoutCount": 7,
-        "RecalcStyleCount": 8,
-        "ScriptDuration": 0.0023,
-        "LayoutDuration": 0.0005,
-        "RecalcStyleDuration": 0.002,
-        "TaskDuration": 0.0124
+        "LayoutCount": 8,
+        "RecalcStyleCount": 9,
+        "ScriptDuration": 0.0012,
+        "LayoutDuration": 0.0003,
+        "RecalcStyleDuration": 0.0012,
+        "TaskDuration": 0.0072
       },
       "running_animations": 0
     }
   },
-  "orbit_overhead_cpu_percent_of_one_core": 3.36
+  "orbit_overhead_cpu_percent_of_one_core": 4.9
 }

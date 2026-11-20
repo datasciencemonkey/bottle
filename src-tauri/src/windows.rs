@@ -22,12 +22,12 @@ pub const CARD_REAP_TICK: Duration = Duration::from_secs(15);
 pub const CARD_WIDTH: u32 = 340;
 pub const CARD_HEIGHT: u32 = 64;
 
-/// The MOG window: the lamp art is a 160 px square at the top, and the name pill has its own row
-/// under it, so the pill never covers the lamp (lamp-alive). Mirrored in `src/views/mog/mog.css`
-/// (`--mog-art`, `--mog-name-row`) and tested in `tests/mog-layout.test.ts`.
+/// The MOG window: the lamp art is a 160 px square at the top, and the target marker has its own
+/// 8 px row under it, so it never covers the lamp (lamp-alive). The MOG shows no name on the lamp. Mirrored in `src/views/mog/mog.css`
+/// (`--mog-art`, `--mog-marker-row`) and tested in `tests/mog-layout.test.ts`.
 pub const MOG_WIDTH: u32 = 160;
 pub const MOG_ART_HEIGHT: u32 = 160;
-pub const MOG_HEIGHT: u32 = 192;
+pub const MOG_HEIGHT: u32 = 168;
 /// The visible lamp starts this far in from the left and ends this far in from the right edge of
 /// the MOG window (logical px; the lamp art is 44..367 of 400, measured from `lamp-*.png`).
 pub const MOG_ART_LEFT_INSET: f64 = 18.0;

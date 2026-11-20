@@ -1,4 +1,4 @@
-# ADR 0108: The lamp MOG is alive: an orbiting spark, eyes that follow the pointer, a name row, a close card
+# ADR 0108: The lamp MOG is alive: an orbiting spark, eyes that follow the pointer, a marker row, a close card
 
 - Status: accepted
 - Issue: refs #286
@@ -11,7 +11,7 @@ The user asked for four things on the MOG:
 
 1. The gold four-point spark over the head should move slowly in a circle.
 2. The eyes should follow the mouse when it moves around the MOG.
-3. The name of the MOG should sit right under the picture, not on the lamp.
+3. The name of the MOG should not sit on the lamp. (The user first asked for it right under the picture, then chose to remove the name from the lamp altogether.)
 4. The card (the "Asking Genie" pill, and the answer) should sit close to the MOG, on either side.
 
 The user thought items 1 and 2 were Rive changes. The build does not ship Rive art: the `.riv` is
@@ -75,10 +75,13 @@ colour covers the baked eye and a pupil in the eye colour moves over it by a few
 error and success keep their eyes. A blink still shows on top (the lids, and the pupil scales
 away with the same keyframes). Hidden, sleeping and reduced motion turn the tracking off.
 
-### The name row
+### No name on the lamp
 
-The MOG window is 160 x 192 (`MOG_WIDTH`, `MOG_HEIGHT`): the 160 px art square on top, and a 32 px
-row under it for the target marker and the name pill. The pill no longer covers the lamp.
+By the user's choice the MOG window no longer shows its name: the identity pill of #603 is removed
+(markup, style and tests). The name and the accent colour stay everywhere else: the hover tooltip
+and accessible name, the target toast ("Talking to ..."), the hub, Conversations and the dot in the
+card. The window is 160 x 168 (`MOG_WIDTH`, `MOG_HEIGHT`): the 160 px art square on top and an 8 px
+row under it for the target marker, 1 px clear of the art box and of the window edge.
 
 ### The card sits close to the MOG
 
