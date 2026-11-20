@@ -22,7 +22,7 @@ The answers live in Databricks. The questions come up somewhere else.
 
 So people switch to a browser. They lose their place. The context is gone before the answer arrives.
 
-There is a second loss, and it is larger. The know-how that makes data useful is never written down. Somebody says "an active user is anyone who logged in this month". The call ends. Nobody records it. The glossary stays empty, Genie does not know the definition, and the next team defines it again.
+There is a second loss, and it is larger. The know-how that makes data useful is never written down. Somebody says "an active user is anyone who logged in this month". The call ends. Nobody keeps it. The glossary stays empty, Genie cannot find the definition, and the next team defines it again.
 
 ## 2. The vision: a knowledge flywheel
 
@@ -30,18 +30,18 @@ Bottle exists to help you get better by turning your unwritten know-how into con
 
 The flywheel has three steps.
 
-1. **Capture.** Know-how is caught where work happens: in dictation, in questions and in recorded calls.
-2. **Approve and govern.** The know-how becomes shared, governed context in the Genie ontology: definitions, metrics and decisions. Each item arrives as a DRAFT Unity Catalog (UC) Page. You preview it and approve it.
-3. **Benefit.** Every Genie answer gets better, yours and your colleagues'. So using Bottle makes it more useful for everyone.
+1. **Capture.** Calls are recorded and turned into full transcripts with speakers. Dictation and questions also capture know-how where the work happens.
+2. **Govern.** Each transcript becomes a Unity Catalog (UC) Page in your domain, through the UC Pages API. You review it first. (Planned.)
+3. **Benefit.** Genie finds and uses those Pages for everyone, so every answer, yours and your colleagues', gets better. Using Bottle makes it more useful for the whole team.
 
 ```mermaid
 flowchart LR
-  C[Capture<br/>dictate, ask, record] --> A[Approve and govern<br/>preview, then DRAFT UC Pages]
+  C[Capture<br/>dictate, ask, record] --> A[Govern<br/>transcript becomes a UC Page, after your review]
   A --> B[Benefit<br/>better Genie answers for everyone]
   B --> C
 ```
 
-This is **ontology hydration**: what people say in calls becomes governed definitions that a person approves. Capture and benefit ship today. Hydration, the path from proposal to review to DRAFT Pages, is planned. It is the next major piece of work.
+This is **ontology hydration**: what people say in calls becomes governed context in your domain. The main unit is the transcript Page. Definitions, metrics and decisions can come out of it later. Capture and benefit ship today. Hydration, the path from transcript to review to UC Page, is planned. It is the next major piece of work. Whether Bottle creates the Page as a draft or publishes it is an open decision.
 
 > **Genie One, everywhere you work. And a little smarter each day.**
 
@@ -66,15 +66,15 @@ Bottle also shows moods for success, error and sleeping. During a recording the 
 
 ## 4. How the flywheel turns: three things it does
 
-Dictate and Ask are the everyday surfaces. Dictate captures what you say. Ask is where you benefit. Record, and hydrate, is the engine that feeds the ontology.
+Dictate and Ask are the everyday surfaces. Dictate captures what you say. Ask is where you benefit. Record, and hydrate, is the engine that turns calls into Pages.
 
 | Dictate (capture) | Ask (benefit) | Record, and hydrate (the engine) |
 |---|---|---|
 | Hold **Right Option** and speak. | Hold **Right Option**, tap **G** (⌥G) while you speak, then release. | Hold **Right Option**, tap **R** (⌥R) to start a recording. Tap it again to stop. |
 | Local speech-to-text turns your voice into text on the device. | Memory first (planned), then Genie One. | Bottle records your mic and the other side of the call. |
 | Cleanup removes filler words (planned). | You get a short answer with key numbers and a deep link. | The call becomes a transcript and notes in your UC volume. |
-| The text goes into any app, at your cursor. | Follow-up questions continue the same Genie conversation. | Definitions and decisions are proposed from the call (planned). |
-| A small pop-up shows the text, with Copy and Ask Genie. | Every question is saved in a local history. | You preview and approve them. Approved items become DRAFT UC Pages in the ontology (planned). |
+| The text goes into any app, at your cursor. | Follow-up questions continue the same Genie conversation. | The transcript is prepared as a UC Page for your domain (planned). |
+| A small pop-up shows the text, with Copy and Ask Genie. | Every question is saved in a local history. | You review it. After your review, Genie can find and use it (planned). |
 
 Notes on the table:
 
@@ -93,9 +93,9 @@ One person, one colleague, two days.
 
 **11:15, a follow-up email.** Maya holds Right Option, dictates two sentences, and releases. The text lands in her mail draft. No window switch.
 
-**15:00, a definition.** In a planning call, the team agrees what "Active user" means. Bottle proposes that definition as a DRAFT UC Page. Maya previews it, fixes one word and approves it. Nothing becomes official until she publishes it. (Planned. The recording, transcript and notes part ships today. The proposal and the Page draft do not.)
+**15:00, a definition.** In a planning call, the team agrees what "Active user" means. Maya records the call. Bottle turns the transcript into a UC Page in her domain. She reviews it first. (Planned. The recording, transcript and notes part ships today. The Page step does not.)
 
-**The next morning.** Dev, a colleague on another team, asks Genie about active users. The answer now uses the definition from Maya's call. Dev did not attend the call. He did not write anything. He just benefits. And the next thing Dev captures will help Maya.
+**The next morning.** Dev, a colleague on another team, asks Genie about active users. Genie finds the Page from Maya's call, and the answer uses the definition in it. Dev did not attend the call. He did not write anything. He just benefits. And the next thing Dev captures will help Maya.
 
 That is the flywheel: one person captures, one person approves, and everyone gets better answers.
 
@@ -106,7 +106,7 @@ The user stays in control. This is how Bottle is built, not a promise in a polic
 - **The mic is closed by default.** Bottle listens only while you hold the talk key or run a recording that you started. Call recording is off until you turn it on. The core checks that setting, not only the UI.
 - **The agent cannot start a capture.** No tool in the agent's tool set can start the mic, approve outbound context, publish a Page or switch workspace. The set has seven tools and the core logs each call without its content.
 - **Genie is never asked automatically.** A question goes out only when you press ⌥G or click Ask Genie. A plain dictation never goes to Genie.
-- **Nothing enters the ontology without your review.** The design rule is that Bottle sends nothing from a meeting or from memory to Genie until you have seen it and approved it. What you approve becomes a DRAFT Page, not a published one. You publish it yourself. (Planned. Today Bottle does not send recording context to Genie at all.)
+- **Nothing enters the ontology without your review.** The design rule is that Bottle sends nothing from a meeting or from memory to Genie until you have seen it and approved it. Bottle creates a Page only after your review. Whether it is a draft or published is an open decision. (Planned. Today Bottle does not send recording context to Genie at all.)
 - **Tokens stay behind a Rust boundary.** Databricks tokens come from the Databricks CLI, live only in memory, and never cross into the UI or the agent. Every network call is made by the Rust core.
 - **Nothing is deleted automatically.** Bottle keeps your user content until you choose Wipe in Settings. (One exception: the local temporary audio of a recording is removed after the upload succeeds, because the audio belongs in your volume, not on the device.)
 - **Your data stays in your workspace.** Recordings, transcripts and notes go to your own UC volume. Questions and answers go to your own Genie One. Local history is stored on the device in an encrypted SQLite database (SQLCipher), with the key in the OS keychain. Bottle has no server of its own.
@@ -131,7 +131,7 @@ flowchart LR
   A --> B[Local bottle-mcp]
   A --> G[Genie One MCP]
   A --> M[(Memory<br/>encrypted SQLite)]
-  B --> P[UC Pages<br/>DRAFT]
+  B --> P[UC Pages<br/>after your review]
   T --> AI[AI Gateway<br/>Gemini audio, Claude notes]
   AI --> V[(Your UC volume)]
 ```
@@ -147,9 +147,9 @@ flowchart LR
 ## 8. Why Databricks wins with this
 
 - It extends Genie One into the desktop and into meetings.
-- It makes Genie better with use. Every approved definition improves the answers for the whole team.
+- It makes Genie better with use. Every reviewed Page improves the answers for the whole team.
 - It drives use of Genie, AI Gateway and Unity Catalog.
-- It turns tribal knowledge into governed definitions. Nothing else connects what is said in a meeting to governed data.
+- It turns tribal knowledge into governed UC Pages that Genie can find. Nothing else connects what is said in a meeting to governed data.
 
 ## Where we are today
 
@@ -166,7 +166,7 @@ This list is checked against `main` on 2026-11-20. Re-check the repo for the lat
 
 **In progress or planned**
 
-- Ontology hydration, the next major piece of work: propose definitions from recordings, preview and approve them, and write them as DRAFT UC Pages (the Page service is a stub today).
+- Ontology hydration, the next major piece of work: turn recorded transcripts into UC Pages in your domain through the UC Pages API, after your review (the Page service is a stub today; draft or published is undecided).
 - Memory-first ask (the recall step is not wired into the ask path yet).
 - The MOG agent harness and the bottle-mcp tools in the live ask path.
 - Dictation cleanup (the component exists but is not wired in).

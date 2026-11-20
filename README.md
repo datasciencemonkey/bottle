@@ -12,7 +12,7 @@ Bottle turns your team's unwritten know-how into governed context that every Gen
 - **Call recording.** Hold Right Option and tap **R** (⌥R). Bottle records the mic and system audio to your Unity Catalog volume. A Gemini model writes the transcript and a Claude model writes the notes, through the Databricks AI Gateway. Recording is off until you turn it on in Settings.
 - **Several MOGs.** Each MOG has a name, an accent colour and a right-click menu. The lamp shows moods, an orbiting spark and eyes that follow the cursor.
 
-See [`docs/VISION.md`](docs/VISION.md) for what is planned and not yet built, such as ontology hydration (DRAFT UC Pages from recorded definitions, after your review) and memory-first answers.
+See [`docs/VISION.md`](docs/VISION.md) for what is planned and not yet built, such as ontology hydration (recorded transcripts becoming UC Pages in your domain, after your review) and memory-first answers.
 
 ## Requirements
 
