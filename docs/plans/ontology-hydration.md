@@ -165,7 +165,7 @@ So a full transcript must be safe for the domain's readers before Bottle writes 
 
 ### 3.5 Limits and warnings in the docs
 
-- **"Do not include PII or regulated data in Page content."** [D1] A full transcript is at high risk here. Section 7 handles it.
+- **"Do not include PII or regulated data in Page content."** [D1] A full transcript is at high risk here. Section 5.10 handles it.
 - Pages have no customer-managed key encryption. Databricks-managed keys encrypt the data. The docs say that Databricks can replicate the data globally. [D1]
 - Compliance-profile workspaces can use Pages only with some standards. Pages are not in AWS GovCloud. [D1]
 - Domains: the REST API for domains is Beta. Domain management needs `MANAGE DISCOVER`. [D4]
