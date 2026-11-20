@@ -36,8 +36,11 @@ pub const MOG_ART_RIGHT_INSET: f64 = 13.0;
 pub const MOG_HEAD_Y: f64 = 72.0;
 /// The gap between the lamp art and the visible edge of the card or pop-up.
 pub const CARD_GAP: f64 = 10.0;
-/// The card view keeps this much clear window (shadow, tail) round the pop-up (`card.css`).
-pub const CARD_EDGE_PAD: f64 = 12.0;
+/// The clear window on the side of the card that faces the MOG (`card.css`): equal to
+/// `CARD_GAP`, so the card window ends at the lamp art and never covers it. The far side keeps
+/// more room for the shadow (`CARD_FAR_PAD`).
+pub const CARD_EDGE_PAD: f64 = 10.0;
+pub const CARD_FAR_PAD: f64 = 12.0;
 /// The tail of the pop-up is this far below the top of the card window.
 pub const CARD_TAIL_Y: f64 = 30.0;
 
@@ -46,6 +49,15 @@ pub const CARD_TAIL_Y: f64 = 30.0;
 pub enum CardSide {
     Right,
     Left,
+}
+
+/// The title of a card window on `side` of its MOG. The card view reads it (it is not shown) to
+/// mirror its tail and to keep the edge that faces the MOG fixed (`src/views/card/card-placement.ts`).
+pub fn card_title(side: CardSide) -> String {
+    match side {
+        CardSide::Right => "MOG card (right)".to_owned(),
+        CardSide::Left => "MOG card (left)".to_owned(),
+    }
 }
 
 /// #559: where the card goes for a MOG at `mog` (logical units): on its right, with its tail at

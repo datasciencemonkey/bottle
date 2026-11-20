@@ -559,13 +559,17 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
         }
         if let Some(w) = existing {
             place(&w, geometry)?;
-            return self.native.show(&w, &kind);
+            self.native.show(&w, &kind)?;
+            // lamp-alive: the eye poller sleeps with no visible MOG; a shown one wakes it.
+            crate::mog_look_host::gate().wake();
+            return Ok(());
         }
         // Only this call made the reservation, and its window does not exist: roll it back.
         if let Err(e) = self.make(&kind, geometry) {
             self.ledger().close_mog(mog_id);
             return Err(e);
         }
+        crate::mog_look_host::gate().wake();
         Ok(())
     }
 
@@ -627,7 +631,9 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
             .as_ref()
             .filter(|w| w.is_visible().unwrap_or(false))
             .and_then(logical_size);
-        let at = self.card_geometry(mog_id, kept);
+        let placed = self.card_geometry(mog_id, kept);
+        let at = placed.as_ref().map(|(g, _)| g.clone());
+        let side = placed.map(|(_, side)| side);
         let shown = match (plan, &existing) {
             (ShowPlan::Reuse(_), Some(w)) => {
                 // A failed move is not a failed show: the card shows where it was.
@@ -638,8 +644,13 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
                 };
                 self.native.show(w, &kind)
             }
-            _ => self.make(&kind, at.as_ref()).map(|_| ()),
+            _ => self.make(&kind, at.as_ref()).map(|w| {
+                set_side_title(&w, side);
+            }),
         };
+        if let (Some(w), Some(side)) = (&existing, side) {
+            set_side_title(w, Some(side));
+        }
         if shown.is_err() {
             let mut ledger = self.ledger();
             match plan {
@@ -656,7 +667,11 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
     /// #559: the card place beside the MOG window of `mog_id`, in logical units, on the MOG's
     /// monitor. `None` if the MOG window or its geometry is not there.
     /// `kept` is the `(width, height)` of a card that keeps its size (#573); `None` is one line.
-    fn card_geometry(&self, mog_id: &str, kept: Option<(f64, f64)>) -> Option<Geometry> {
+    fn card_geometry(
+        &self,
+        mog_id: &str,
+        kept: Option<(f64, f64)>,
+    ) -> Option<(Geometry, windows::CardSide)> {
         let w = self.window(&WindowKind::mog(mog_id)?)?;
         let scale = w.scale_factor().ok()?;
         let pos = w.outer_position().ok()?.to_logical::<f64>(scale);
@@ -678,10 +693,11 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
                 height: z.height,
             }
         });
-        Some(match kept {
-            Some((w, h)) => windows::card_beside_sized(&mog, screen.as_ref(), w, h).0,
-            None => windows::card_beside(&mog, screen.as_ref()),
-        })
+        let (w, h) = kept.unwrap_or((
+            f64::from(windows::CARD_WIDTH),
+            f64::from(windows::CARD_HEIGHT),
+        ));
+        Some(windows::card_beside_sized(&mog, screen.as_ref(), w, h))
     }
 
     /// Hide the card window of `mog_id`. The ledger marks it hidden only after the window
@@ -731,6 +747,15 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
             reaped += 1;
         }
         reaped
+    }
+}
+
+/// Tell the card view which side of its MOG it is on, in the window title (`windows::card_title`).
+/// The title is not shown (no decorations); the view reads it, so the card needs no read of the
+/// MOG window. A failed set changes nothing.
+fn set_side_title<R: tauri::Runtime>(w: &tauri::WebviewWindow<R>, side: Option<windows::CardSide>) {
+    if let Some(side) = side {
+        let _ = w.set_title(&windows::card_title(side));
     }
 }
 

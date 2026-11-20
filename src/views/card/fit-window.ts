@@ -9,13 +9,18 @@
  * reads and writes that this needs, and the read of the MOG window.
  */
 import { LogicalPosition, LogicalSize } from '@tauri-apps/api/dpi';
-import { Window, currentMonitor, getCurrentWindow } from '@tauri-apps/api/window';
-import { CARD_EDGE_PAD, placeCard, sideOf, type CardSide, type Rect } from './card-placement';
+import { currentMonitor, getCurrentWindow } from '@tauri-apps/api/window';
+import {
+  CARD_FACING_PAD,
+  CARD_FAR_PAD,
+  anchoredBounds,
+  sideFromTitle,
+  type CardSide,
+  type Rect,
+} from './card-placement';
 
 /** `CARD_WIDTH` of R11 (logical px). */
 export const CARD_WINDOW_WIDTH = 340;
-/** The compact pill is never narrower than this window (logical px). */
-export const CARD_WINDOW_MIN_WIDTH = 200;
 /** `CARD_HEIGHT` of R11: the height of one pop-up line. The window is never lower. */
 export const CARD_WINDOW_MIN_HEIGHT = 64;
 /** The card window is never higher (the answer card scrolls inside it). */
@@ -31,85 +36,79 @@ export function cardWindowHeight(contentPx: number): number {
 export interface CardPlace {
   /** This card window. */
   card: Rect;
-  /** The MOG window this card belongs to, if it is there. */
-  mog?: Rect | undefined;
+  /** The side of its MOG the host put the card on. */
+  side: CardSide;
   /** The monitor the card is on. */
   screen?: Rect | undefined;
 }
 
 /** The window seams. Tests give a fake; the app uses the Tauri window of this view. */
 export interface CardWindow {
-  /** Move and size the window in one step. */
-  setBounds(r: Rect): Promise<void>;
+  /**
+   * Move and size the window. Tauri has no single call for both, so the order keeps the transient
+   * frame away from the MOG: a window that grows toward the left moves first, then grows; one that
+   * shrinks shrinks first, then moves. The window never covers the lamp in between.
+   */
+  setBounds(r: Rect, from: Rect): Promise<void>;
   place(): Promise<CardPlace | undefined>;
 }
 
-export const tauriCardWindow = (mogId?: string): CardWindow => {
+export const tauriCardWindow = (): CardWindow => {
   const w = getCurrentWindow();
+  const move = (r: Rect) => w.setPosition(new LogicalPosition(r.x, r.y));
+  const size = (r: Rect) => w.setSize(new LogicalSize(r.w, r.h));
   return {
-    setBounds: async (r) => {
-      // Move first when it grows toward the MOG side, so no frame jumps; the order is the same
-      // for every call, one step each (Tauri applies them in order on the window thread).
-      await w.setPosition(new LogicalPosition(r.x, r.y));
-      await w.setSize(new LogicalSize(r.w, r.h));
+    async setBounds(r, from) {
+      if (r.w > from.w) {
+        await move(r);
+        await size(r);
+      } else {
+        await size(r);
+        await move(r);
+      }
     },
     async place() {
-      const [scale, pos, size, mon] = await Promise.all([
+      const [scale, pos, sz, title, mon] = await Promise.all([
         w.scaleFactor(),
         w.outerPosition(),
         w.outerSize(),
+        w.title(),
         currentMonitor(),
       ]);
       const p = pos.toLogical(scale);
-      const sz = size.toLogical(scale);
-      const out: CardPlace = { card: { x: p.x, y: p.y, w: sz.width, h: sz.height } };
+      const z = sz.toLogical(scale);
+      const out: CardPlace = {
+        card: { x: p.x, y: p.y, w: z.width, h: z.height },
+        side: sideFromTitle(title),
+      };
       if (mon) {
         const m = mon.position.toLogical(mon.scaleFactor);
-        const z = mon.size.toLogical(mon.scaleFactor);
-        out.screen = { x: m.x, y: m.y, w: z.width, h: z.height };
-      }
-      if (mogId !== undefined) {
-        try {
-          const mogWin = await Window.getByLabel(`mog-${mogId}`);
-          if (mogWin) {
-            const [ms, mp, mz] = await Promise.all([
-              mogWin.scaleFactor(),
-              mogWin.outerPosition(),
-              mogWin.outerSize(),
-            ]);
-            const a = mp.toLogical(ms);
-            const b = mz.toLogical(ms);
-            out.mog = { x: a.x, y: a.y, w: b.width, h: b.height };
-          }
-        } catch {
-          // No MOG geometry: the card keeps its left edge, as before.
-        }
+        const d = mon.size.toLogical(mon.scaleFactor);
+        out.screen = { x: m.x, y: m.y, w: d.width, h: d.height };
       }
       return out;
     },
   };
 };
 
+/** The width of the card window for the content on screen: a compact pill, or the full card. */
+export function cardWindowWidth(measured: number | undefined): number {
+  if (measured === undefined || !Number.isFinite(measured) || measured <= 0)
+    return CARD_WINDOW_WIDTH;
+  const w = Math.ceil(measured) + CARD_FACING_PAD + CARD_FAR_PAD;
+  return Math.min(CARD_WINDOW_WIDTH, w);
+}
+
 /** Mark the page with the side of the MOG the card is on (the tail mirrors in `card.css`). */
 export function applyCardSide(side: CardSide, doc: Document = document): void {
   doc.documentElement.dataset['side'] = side;
 }
 
-/** Room for the `0:13` timer of the status pill, which comes in after 3 s (logical px). */
-export const TIMER_RESERVE_PX = 44;
-
-/** The width of the card window for the content on screen: a compact pill, or the full card. */
-export function cardWindowWidth(measured: number | undefined): number {
-  if (measured === undefined || !Number.isFinite(measured) || measured <= 0)
-    return CARD_WINDOW_WIDTH;
-  const w = Math.ceil(measured) + 2 * CARD_EDGE_PAD;
-  return Math.min(CARD_WINDOW_WIDTH, Math.max(CARD_WINDOW_MIN_WIDTH, w));
-}
-
 /**
  * The natural width (px) of the compact pill on screen (the pop-up or the Genie status pill), or
  * `undefined` for the answer card, which keeps the full width. The pill is measured without the
- * `max-width` of the window, so a longer text widens the window again.
+ * `max-width` of the window, so a longer text, or the timer that comes in after 3 s, widens the
+ * window again (the fit runs again when the card changes, `CardView.tsx`).
  */
 export function measureCompactWidth(doc: Document = document): number | undefined {
   const pill = doc.querySelector<HTMLElement>('.popup, .genie-working');
@@ -119,17 +118,14 @@ export function measureCompactWidth(doc: Document = document): number | undefine
   // Layout width (`offsetWidth`), not the box under a transform: the pill fades and scales in.
   const w = pill.offsetWidth;
   pill.style.maxWidth = prev;
-  // The status pill shows its timer only after 3 s: leave room for it, so it never clips.
-  const timerLater =
-    pill.classList.contains('genie-working') && !pill.querySelector('[data-genie-timer]');
-  return timerLater ? w + TIMER_RESERVE_PX : w;
+  return w;
 }
 
 /**
  * Make a fitter: each call sets the window to the height of `contentPx` and the width of the
  * content, at most once per size, and keeps the edge that faces the MOG fixed. `windowPx` is the
  * window height now, if known: R11 sets a hidden card back to one line when it shows it again, so
- * a different height fits again. `onSide` gets the side of the MOG (the view aligns its tail
+ * a different height fits again. `onSide` gets the side of the MOG (the view mirrors its tail
  * with it). A failed step leaves the window as it is.
  */
 export function createWindowFit(
@@ -138,7 +134,6 @@ export function createWindowFit(
 ) {
   const measure = opts.measureWidth ?? (() => measureCompactWidth());
   let last: string | undefined;
-  let side: CardSide | undefined;
   return async (contentPx: number, windowPx?: number): Promise<void> => {
     const h = cardWindowHeight(contentPx);
     const width = cardWindowWidth(measure());
@@ -149,23 +144,8 @@ export function createWindowFit(
       const w = win();
       const at = await w.place();
       if (!at) return;
-      const mog = at.mog;
-      if (mog) {
-        // The edge that faces the MOG stays: place the new size beside the MOG again.
-        const prefer = side ?? sideOf(at.card, mog);
-        const placed = placeCard(mog, at.screen, width, h, prefer);
-        side = placed.side;
-        opts.onSide?.(placed.side);
-        await w.setBounds(placed.rect);
-        return;
-      }
-      // No MOG geometry: keep the left edge, and stay on the screen (as before).
-      let { x, y } = at.card;
-      if (at.screen) {
-        y = Math.min(y, at.screen.y + at.screen.h - h);
-        x = Math.min(x, at.screen.x + at.screen.w - width);
-      }
-      await w.setBounds({ x, y, w: width, h });
+      opts.onSide?.(at.side);
+      await w.setBounds(anchoredBounds(at.card, at.side, at.screen, width, h), at.card);
     } catch {
       // The window keeps its size; the card scrolls in it.
       last = undefined;

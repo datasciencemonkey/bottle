@@ -7,8 +7,8 @@
 use bottle_lib::window_host::WindowLedger;
 use bottle_lib::window_host::{CardState, NativeWindowStyle, TauriWindowHost, WindowError};
 use bottle_lib::windows::{
-    card_beside, card_beside_sized, card_beside_with_height, hides_on_close, CardSide, PanelLevel,
-    WindowKind, CARD_HIDDEN_TTL, CARD_REAP_TICK,
+    card_beside, card_beside_sized, card_beside_with_height, card_title, hides_on_close, CardSide,
+    PanelLevel, WindowKind, CARD_HIDDEN_TTL, CARD_REAP_TICK,
 };
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -814,8 +814,8 @@ fn issue_573_only_the_hub_hides_on_close() {
 /// The visible edge of a card (inside the clear window pad) and the lamp art edge of the MOG.
 fn visible_gap(c: &mog_core::ipc::Geometry, mog: &mog_core::ipc::Geometry, side: CardSide) -> f64 {
     match side {
-        CardSide::Right => (c.x + 12.0) - (mog.x + mog.width - 13.0),
-        CardSide::Left => (mog.x + 18.0) - (c.x + c.width - 12.0),
+        CardSide::Right => (c.x + 10.0) - (mog.x + mog.width - 13.0),
+        CardSide::Left => (mog.x + 18.0) - (c.x + c.width - 10.0),
     }
 }
 
@@ -878,4 +878,24 @@ fn lamp_alive_the_mog_window_has_its_own_row_for_the_name_under_the_art() {
             "room for the marker and the pill"
         )
     };
+}
+
+#[test]
+fn lamp_alive_the_card_window_ends_at_the_lamp_art_and_never_covers_it() {
+    let screen = g(0.0, 0.0, 1440.0, 900.0);
+    for x in [600.0, 1250.0] {
+        let mog = g(x, 300.0, 160.0, 192.0);
+        let (c, side) = card_beside_sized(&mog, Some(&screen), 340.0, 64.0);
+        match side {
+            // The window starts at the right edge of the lamp art and ends at its left edge.
+            CardSide::Right => assert_eq!(c.x, mog.x + mog.width - 13.0),
+            CardSide::Left => assert_eq!(c.x + c.width, mog.x + 18.0),
+        }
+    }
+}
+
+#[test]
+fn lamp_alive_the_card_title_tells_the_view_its_side() {
+    assert_eq!(card_title(CardSide::Left), "MOG card (left)");
+    assert_eq!(card_title(CardSide::Right), "MOG card (right)");
 }

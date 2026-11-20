@@ -7,6 +7,15 @@
  */
 export const MOG_LOOK_EVENT = 'mog:look';
 
+/**
+ * The `action` of the `view_emit` `click` that a MOG view sends when the user hides or shows its
+ * art (payload `{ action, hidden }`), and once when it loads. Hide only hides the art, the OS
+ * window stays visible, so the host must be told, or it would keep polling the pointer for a
+ * hidden MOG. The host (`mog_look_host::hide_notice`) takes it and does not relay it to the
+ * brain: it is not a user click.
+ */
+export const MOG_VIEW_HIDDEN = 'view.hidden';
+
 /** A look vector in the unit disc; x grows right, y grows down. `0, 0` is straight ahead. */
 export interface MogLook {
   dx: number;

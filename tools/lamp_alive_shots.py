@@ -53,7 +53,7 @@ STUB = """
         return id;
       }
       if (cmd === 'plugin:event|unlisten') return null;
-      if (cmd === 'plugin:window|get_all_windows') return window.__WINDOWS__ || [];
+      if (cmd === 'plugin:window|title') return window.__TITLE__ || 'MOG card';
       if (cmd === 'plugin:window|outer_position') return window.__POS__?.[args.label] || { x: 0, y: 0 };
       if (cmd === 'plugin:window|outer_size') return window.__SIZE__?.[args.label] || { width: 340, height: 64 };
       if (cmd === 'plugin:window|scale_factor') return 1;
@@ -265,9 +265,13 @@ SCREEN = (1440, 900)
 def card_scene(browser, name, mog_x, payload, mood="processing"):
     """One MOG and its card, each in its own headless page, composed at their real window places."""
     mog_pos = {"x": mog_x, "y": 300}
-    card_pos = {"x": mog_x + 160 - 13 + 10 - 12, "y": 342}  # where Rust places the first, 340 wide card
+    # Where the Rust host places the first, 340 wide card (`card_beside_sized`): the window edge is
+    # at the lamp art (a 10 px pad), on the right if it fits, else on the left. It sets the title.
+    right_x = mog_x + 160 - 13
+    side = "right" if right_x + 340 <= SCREEN[0] else "left"
+    card_pos = {"x": right_x if side == "right" else mog_x + 18 - 340, "y": 342}
     init = (
-        f"window.__LABEL__ = 'card-{CARD_ID}'; window.__WINDOWS__ = ['card-{CARD_ID}', 'mog-{MOG_ID}'];"
+        f"window.__LABEL__ = 'card-{CARD_ID}'; window.__TITLE__ = 'MOG card ({side})';"
         f"window.__POS__ = {{'card-{CARD_ID}': {json.dumps(card_pos)}, 'mog-{MOG_ID}': {json.dumps(mog_pos)}}};"
         f"window.__SIZE__ = {{'card-{CARD_ID}': {{width: 340, height: 64}}, 'mog-{MOG_ID}': {{width: 160, height: {H}}}}};"
     )
@@ -282,9 +286,15 @@ def card_scene(browser, name, mog_x, payload, mood="processing"):
     p.wait_for_timeout(1200 if payload is not WORKING else 4600)  # the working pill shows its timer after 3 s
     size = p.evaluate("window.__SIZE__['card-%s']" % CARD_ID)
     pos = p.evaluate("window.__POS__['card-%s']" % CARD_ID)
-    side = p.evaluate("document.documentElement.dataset.side || 'right'")
+    page_side = p.evaluate("document.documentElement.dataset.side || 'right'")
+    assert page_side == side, (page_side, side)
+    # The window now has the size the fit set: give the page that viewport, then measure.
     p.set_viewport_size({"width": int(size["width"]), "height": int(size["height"])})
     p.wait_for_timeout(300)
+    # The visible box of the pill itself, not the window (a window can be wider than its pill).
+    pill = p.evaluate(
+        "() => { const e = document.querySelector('.popup, .genie'); const r = e.getBoundingClientRect(); return {x: r.x, y: r.y, w: r.width, h: r.height}; }"
+    )
     card_png = os.path.join(OUT, f"_card-{name}.png")
     p.screenshot(path=card_png, omit_background=True)
     ctx.close()
@@ -296,6 +306,11 @@ def card_scene(browser, name, mog_x, payload, mood="processing"):
     mog_png = os.path.join(OUT, f"_mog-{name}.png")
     mp.screenshot(path=mog_png, omit_background=True)
     mctx.close()
+    # The visible edges of the lamp art (not the window): the opaque pixels of the MOG shot above
+    # the name row (the lamp, the head, the spark).
+    art = Image.open(mog_png).convert("RGBA").crop((0, 0, W * 2, 160 * 2)).split()[3].point(lambda a: 255 if a > 40 else 0)
+    art_l, _, art_r, _ = art.getbbox()
+    art_left, art_right = mog_x + art_l / 2, mog_x + art_r / 2
     # Compose on a desktop-like backdrop, around the MOG, with the screen edge marked.
     x0 = int(min(pos["x"], mog_x) - 30)
     x1 = int(max(pos["x"] + size["width"], mog_x + 160) + 30)
@@ -311,10 +326,13 @@ def card_scene(browser, name, mog_x, payload, mood="processing"):
         "card": {"x": pos["x"], "y": pos["y"], "w": size["width"], "h": size["height"]},
         "side": side,
     }
-    gap = (
-        pos["x"] + 12 - (mog_x + 160 - 13) if side == "right" else (mog_x + 18) - (pos["x"] + size["width"] - 12)
-    )
-    info["visible_gap_px"] = gap
+    # The gap is measured from the box of the pill to the lamp art, not from the window.
+    pill_l, pill_r = pos["x"] + pill["x"], pos["x"] + pill["x"] + pill["w"]
+    gap = pill_l - art_right if side == "right" else art_left - pill_r
+    info["pill"] = {"x": pill_l, "w": pill["w"], "h": pill["h"]}
+    info["lamp_art"] = {"left": art_left, "right": art_right}
+    info["visible_gap_px"] = round(gap, 2)
+    info["window_covers_art_px"] = round(max(0, art_left - pos["x"] - 0) if False else (pos["x"] + size["width"] - art_left if side == "left" else art_right - pos["x"]), 2)
     info["on_screen"] = pos["x"] >= 0 and pos["x"] + size["width"] <= SCREEN[0]
     print("card", name, json.dumps(info))
     return info
@@ -352,7 +370,8 @@ def shots_cards(browser):
         res[f"answer-{side}"] = card_scene(browser, f"answer-{side}", x, ANSWERED, mood="success")
     with open(os.path.join(OUT, "card-layout.json"), "w") as f:
         json.dump(res, f, indent=2)
-    assert all(abs(r["visible_gap_px"] - 10) < 0.01 and r["on_screen"] for r in res.values()), res
+    assert all(abs(r["visible_gap_px"] - 10) <= 1.0 and r["on_screen"] for r in res.values()), res
+    assert all(r["window_covers_art_px"] <= 1.0 for r in res.values()), res
 
 
 def main():

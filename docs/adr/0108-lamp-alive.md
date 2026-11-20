@@ -56,6 +56,12 @@ the host reads the global pointer:
   to the unit disc, with a dead zone of 14 px; a poll period of about 30 Hz while the pointer is
   within 400 px of a visible MOG, and about 4 Hz when it is further or no MOG is visible; and a
   send-on-change rule (a still pointer sends nothing; a far pointer sends one reset to `0, 0`).
+- The poll thread sleeps when it has nothing to look at. With no visible MOG (none open, or every
+  one hidden by the user) it reads neither the pointer nor the window list and has no timer: it
+  blocks on a wake signal (`LookGate`: a condvar) until a MOG window is shown or the user shows the
+  art again. Hide only hides the art and the OS window stays visible, so the MOG view sends the
+  host a hide notice (`view_emit` `click`, `action: "view.hidden"`, on load and on each change).
+  The host takes it and does not relay it to the brain. A hidden MOG counts as not visible.
 - Only the vector leaves Rust. A pointer position is never logged, stored or sent.
 - ARC-5 bans Tauri events in the app crate, so the host sends `mog.look` `{ mogId, dx, dy }` to
   the brain on the brain Channel (`events::MOG_LOOK`, `EVENTS['mog.look']`, core to brain). The
@@ -76,7 +82,7 @@ row under it for the target marker and the name pill. The pill no longer covers 
 
 ### The card sits close to the MOG
 
-The card window keeps a 10 px gap between the lamp art and the visible edge of the pill on both
+The card pill keeps a 10 px gap between the lamp art and the visible edge of the pill on both
 sides. It is as wide as its content (a compact pill) or 340 px (the answer card), so no clear
 window lies between the MOG and the card and takes the user's clicks. The edge that faces the MOG
 never moves. On the left the tail is on the right edge and the content drifts toward the MOG. The
@@ -84,6 +90,9 @@ placement is in `windows::card_beside_sized` (Rust, at show time) and `card-plac
 view, when it fits the window to its content). To read its MOG window the card view gets two
 more window permissions (`core:window:allow-outer-size`, `core:window:allow-get-all-windows`);
 `ipc_capabilities.rs` checks them.
+
+ADR 0107 (PR #607, the link-open ARC-6 exception) adds the other contract row of this cycle. It
+lands separately; this ADR depends on nothing in it.
 
 ## Consequences
 

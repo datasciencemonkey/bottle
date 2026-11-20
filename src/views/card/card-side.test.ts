@@ -33,3 +33,25 @@ describe('lamp-alive: the tail is on the MOG side', () => {
     );
   });
 });
+
+describe('lamp-alive: the pill is next to the MOG and the window does not cover the lamp', () => {
+  it('right-aligns the pill and the card on the left side', () => {
+    expect(rule(css('card.css'), "html[data-side='left'] .card-popup .popup")).toMatch(
+      /margin-left:\s*auto/,
+    );
+    expect(rule(css('genie-card.css'), "html[data-side='left'] .card-genie .genie")).toMatch(
+      /margin-left:\s*auto/,
+    );
+  });
+
+  it('has 10 px (the gap to the art) of window on the side that faces the MOG, and 12 on the far side', () => {
+    expect(rule(css('card.css'), '.card-popup')).toMatch(/padding:\s*10px 12px 14px 10px/);
+    expect(rule(css('card.css'), "html[data-side='left'] .card-popup")).toMatch(
+      /padding:\s*10px 10px 14px 12px/,
+    );
+    expect(rule(css('genie-card.css'), '.card-genie')).toMatch(/padding:\s*10px 12px 14px 10px/);
+    expect(rule(css('genie-card.css'), "html[data-side='left'] .card-genie")).toMatch(
+      /padding:\s*10px 10px 14px 12px/,
+    );
+  });
+});

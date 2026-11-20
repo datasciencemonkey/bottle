@@ -11,12 +11,40 @@
 //! `GEOMETRY_TTL`, so a fast poll costs one pointer read per tick.
 
 use mog_core::ipc::events;
-use mog_core::mog_look::{CursorSource, LookPlanner, WindowGeom, FAR_PERIOD};
-use std::time::{Duration, Instant};
+use mog_core::mog_look::{CursorSource, LookGate, LookLoop, WindowGeom, WindowSource};
+use std::sync::{Arc, OnceLock};
+use std::time::Instant;
 use tauri::Manager;
 
-/// How long the window rectangles stay valid. A drag moves a MOG; the eyes can lag a little.
-const GEOMETRY_TTL: Duration = Duration::from_millis(250);
+/// The one wake signal of the poll thread. The window host wakes it when a MOG window is shown;
+/// the `view_emit` of a MOG view wakes it when the user hides or shows the art (`hide_notice`).
+pub fn gate() -> &'static Arc<LookGate> {
+    static GATE: OnceLock<Arc<LookGate>> = OnceLock::new();
+    GATE.get_or_init(|| Arc::new(LookGate::default()))
+}
+
+/// The `action` of the `click` a MOG view sends when the user hides or shows its art (the Hide
+/// item, or a click on the hidden lamp). Payload `{ action, hidden }`. The host takes it for
+/// itself and does not relay it to the brain: it is not a user click.
+pub const VIEW_HIDDEN: &str = "view.hidden";
+
+/// If `input` (the `view_emit` arguments of window `from`) is the hide notice of a MOG view, tell
+/// the gate and return `true`; the caller then does not relay it.
+pub fn hide_notice(from: &str, input: &serde_json::Value) -> bool {
+    let Some(id) = from.strip_prefix("mog-") else {
+        return false;
+    };
+    let p = input.get("payload");
+    if input.get("kind").and_then(|k| k.as_str()) != Some("click")
+        || p.and_then(|p| p.get("action")).and_then(|a| a.as_str()) != Some(VIEW_HIDDEN)
+    {
+        return false;
+    }
+    if let Some(hidden) = p.and_then(|p| p.get("hidden")).and_then(|h| h.as_bool()) {
+        gate().set_hidden(id, hidden);
+    }
+    true
+}
 
 struct TauriCursor<'a>(&'a tauri::AppHandle<tauri::Wry>);
 
@@ -26,62 +54,105 @@ impl CursorSource for TauriCursor<'_> {
     }
 }
 
-/// The visible MOG windows, as `(mog id, physical rectangle, scale)`.
-fn visible_mogs(app: &tauri::AppHandle<tauri::Wry>) -> Vec<(String, WindowGeom)> {
-    let mut out = Vec::new();
-    for (label, w) in app.webview_windows() {
-        let Some(id) = label.strip_prefix("mog-") else {
-            continue;
-        };
-        if !w.is_visible().unwrap_or(false) {
-            continue;
+struct TauriWindows<'a>(&'a tauri::AppHandle<tauri::Wry>);
+
+impl WindowSource for TauriWindows<'_> {
+    fn visible(&mut self) -> Vec<(String, WindowGeom)> {
+        let mut out = Vec::new();
+        for (label, w) in self.0.webview_windows() {
+            let Some(id) = label.strip_prefix("mog-") else {
+                continue;
+            };
+            if !w.is_visible().unwrap_or(false) {
+                continue;
+            }
+            let (Ok(pos), Ok(size), Ok(scale)) =
+                (w.outer_position(), w.outer_size(), w.scale_factor())
+            else {
+                continue;
+            };
+            out.push((
+                id.to_owned(),
+                WindowGeom {
+                    x: f64::from(pos.x),
+                    y: f64::from(pos.y),
+                    w: f64::from(size.width),
+                    h: f64::from(size.height),
+                    scale,
+                },
+            ));
         }
-        let (Ok(pos), Ok(size), Ok(scale)) = (w.outer_position(), w.outer_size(), w.scale_factor())
-        else {
-            continue;
-        };
-        out.push((
-            id.to_owned(),
-            WindowGeom {
-                x: f64::from(pos.x),
-                y: f64::from(pos.y),
-                w: f64::from(size.width),
-                h: f64::from(size.height),
-                scale,
-            },
-        ));
+        out
     }
-    out
 }
 
-/// Start the poll thread. It ends when the brain channel is no longer managed state.
+/// Start the poll thread. It blocks on the gate while no MOG is visible (none open, or every one
+/// hidden by the user): then it reads neither the pointer nor the window list and has no timer.
+/// It ends when the brain channel is no longer managed state.
 pub fn spawn_look_poller(
     app: tauri::AppHandle<tauri::Wry>,
 ) -> std::io::Result<std::thread::JoinHandle<()>> {
     std::thread::Builder::new()
         .name("bottle-mog-look".into())
         .spawn(move || {
-            let mut planner = LookPlanner::default();
-            let mut windows: Vec<(String, WindowGeom)> = Vec::new();
-            let mut read_at: Option<Instant> = None;
-            let mut period = FAR_PERIOD;
+            let gate = gate();
+            let start = Instant::now();
+            let mut look = LookLoop::default();
+            let mut seen = u64::MAX;
             loop {
-                std::thread::sleep(period);
                 let Some(brain) = app.try_state::<crate::ipc::BrainChannel>() else {
                     return;
                 };
-                if read_at.is_none_or(|t| t.elapsed() >= GEOMETRY_TTL) {
-                    windows = visible_mogs(&app);
-                    read_at = Some(Instant::now());
-                }
-                let (updates, next) = planner.poll(&mut TauriCursor(&app), &windows);
-                period = next;
+                let (epoch, hidden) = gate.snapshot();
+                let woken = epoch != seen;
+                let now_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
+                let (updates, wait) = look.tick(
+                    now_ms,
+                    woken,
+                    &hidden,
+                    &mut TauriCursor(&app),
+                    &mut TauriWindows(&app),
+                );
                 for u in updates {
                     brain.send(
                         events::MOG_LOOK,
                         serde_json::json!({ "mogId": u.mog_id, "dx": u.dx, "dy": u.dy }),
                     );
                 }
+                seen = gate.wait(epoch, wait);
             }
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn the_hide_notice_of_a_mog_view_is_taken_and_wakes_the_gate() {
+        let before = gate().snapshot().0;
+        let input = json!({"mogId": "t1", "kind": "click", "payload": {"action": "view.hidden", "hidden": true}});
+        assert!(hide_notice("mog-t1", &input));
+        assert!(gate().snapshot().1.contains("t1"));
+        assert!(gate().snapshot().0 > before);
+        let input = json!({"mogId": "t1", "kind": "click", "payload": {"action": "view.hidden", "hidden": false}});
+        assert!(hide_notice("mog-t1", &input));
+        assert!(!gate().snapshot().1.contains("t1"));
+    }
+
+    #[test]
+    fn other_input_and_other_windows_are_not_taken() {
+        let hidden = json!({"kind": "click", "payload": {"action": "view.hidden", "hidden": true}});
+        assert!(!hide_notice("card-t2", &hidden), "only a MOG view");
+        assert!(!hide_notice("hub", &hidden));
+        for other in [
+            json!({"kind": "click"}),
+            json!({"kind": "hover", "payload": {"action": "view.hidden", "hidden": true}}),
+            json!({"kind": "click", "payload": {"action": "view.ready"}}),
+        ] {
+            assert!(!hide_notice("mog-t2", &other), "{other}");
+        }
+        assert!(!gate().snapshot().1.contains("t2"));
+    }
 }

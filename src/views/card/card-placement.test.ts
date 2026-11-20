@@ -1,79 +1,71 @@
 import {
-  CARD_EDGE_PAD,
+  CARD_FACING_PAD,
+  CARD_FAR_PAD,
   CARD_GAP,
-  MOG_HEAD_Y,
-  placeCard,
-  sideOf,
-  visibleGap,
+  anchoredBounds,
+  sideFromTitle,
   type Rect,
 } from './card-placement';
 
 const SCREEN: Rect = { x: 0, y: 0, w: 1440, h: 900 };
-const mog = (x: number, y = 300): Rect => ({ x, y, w: 160, h: 192 });
 
-describe('card placement beside the MOG (lamp-alive)', () => {
-  it('puts the card on the right, 10 px from the lamp art, with its tail at head height', () => {
-    const m = mog(600);
-    const { rect, side } = placeCard(m, SCREEN, 340, 64);
-    expect(side).toBe('right');
-    expect(visibleGap(rect, m, side)).toBe(CARD_GAP);
-    expect(rect.y).toBe(m.y + MOG_HEAD_Y - 30);
+describe('the card keeps the edge that faces its MOG (lamp-alive)', () => {
+  it('reads the side from the window title the host sets', () => {
+    expect(sideFromTitle('MOG card (left)')).toBe('left');
+    expect(sideFromTitle('MOG card (right)')).toBe('right');
+    expect(sideFromTitle('MOG card')).toBe('right');
+    expect(sideFromTitle(undefined)).toBe('right');
   });
 
-  it('puts a narrow pill on the left as close as a wide card (no clear window between)', () => {
-    const m = mog(1250);
-    for (const w of [224, 340]) {
-      const { rect, side } = placeCard(m, SCREEN, w, 64);
-      expect(side, `${w}`).toBe('left');
-      expect(visibleGap(rect, m, side), `${w}`).toBe(CARD_GAP);
-      // The window itself ends 12 px (the clear pad) past the visible edge, inside the MOG window.
-      expect(rect.x + rect.w - (m.x + 18)).toBe(CARD_EDGE_PAD - CARD_GAP);
+  it('on the right the left edge stays and the card grows to the right', () => {
+    const card: Rect = { x: 745, y: 342, w: 340, h: 64 };
+    expect(anchoredBounds(card, 'right', SCREEN, 234, 64)).toEqual({
+      x: 745,
+      y: 342,
+      w: 234,
+      h: 64,
+    });
+  });
+
+  it('on the left the right edge stays and the card grows to the left', () => {
+    const card: Rect = { x: 930, y: 342, w: 340, h: 64 };
+    const r = anchoredBounds(card, 'left', SCREEN, 234, 64);
+    expect(r.x + r.w).toBe(930 + 340);
+    expect(r.w).toBe(234);
+    const grown = anchoredBounds(r, 'left', SCREEN, 340, 226);
+    expect(grown.x + grown.w).toBe(930 + 340);
+  });
+
+  it('the gap to the lamp art does not change at any width, because the facing edge is fixed', () => {
+    // The host put the window edge at the art edge (pad = gap), on either side.
+    expect(CARD_FACING_PAD).toBe(CARD_GAP);
+    for (const w of [120, 234, 340]) {
+      const left = anchoredBounds({ x: 930, y: 0, w: 340, h: 64 }, 'left', SCREEN, w, 64);
+      expect(left.x + left.w).toBe(1270);
+      const right = anchoredBounds({ x: 745, y: 0, w: 340, h: 64 }, 'right', SCREEN, w, 64);
+      expect(right.x).toBe(745);
     }
+    expect(CARD_FAR_PAD).toBeGreaterThanOrEqual(CARD_FACING_PAD);
   });
 
-  it('flips to the left at the right screen edge and back to the right at the left edge', () => {
-    expect(placeCard(mog(1100), SCREEN, 340, 64).side).toBe('left');
-    expect(placeCard(mog(40), SCREEN, 340, 64, 'left').side).toBe('right');
-    expect(placeCard(mog(900), SCREEN, 340, 64).side).toBe('right');
+  it('moves a tall card up that would go past the bottom of the screen', () => {
+    const r = anchoredBounds({ x: 745, y: 800, w: 340, h: 64 }, 'right', SCREEN, 340, 300);
+    expect(r.y + r.h).toBe(900);
   });
 
-  it('keeps the current side while it still fits, so a growing card does not jump the MOG', () => {
-    expect(placeCard(mog(600), SCREEN, 340, 64, 'left').side).toBe('left');
-    expect(placeCard(mog(600), SCREEN, 340, 64, 'right').side).toBe('right');
-  });
-
-  it('clamps inside the screen when neither side fits', () => {
-    const small: Rect = { x: 0, y: 0, w: 400, h: 300 };
-    const { rect } = placeCard(mog(120, 40), small, 340, 200);
-    expect(rect.x).toBeGreaterThanOrEqual(0);
-    expect(rect.x + rect.w).toBeLessThanOrEqual(400);
-    expect(rect.y + rect.h).toBeLessThanOrEqual(300);
-  });
-
-  it('handles a second monitor with a negative origin', () => {
+  it('stays inside a monitor with a negative origin and does not leave its left edge', () => {
     const left: Rect = { x: -1440, y: 0, w: 1440, h: 900 };
-    const m = mog(-250);
-    const { rect, side } = placeCard(m, left, 340, 64);
-    expect(side).toBe('left');
-    expect(rect.x).toBeGreaterThanOrEqual(left.x);
-    expect(rect.x + rect.w).toBeLessThanOrEqual(left.x + left.w);
-    expect(visibleGap(rect, m, side)).toBe(CARD_GAP);
+    const r = anchoredBounds({ x: -1430, y: 100, w: 340, h: 64 }, 'left', left, 340, 64);
+    expect(r.x).toBeGreaterThanOrEqual(-1440);
+    expect(r.x + r.w).toBeLessThanOrEqual(0);
   });
 
-  it('moves a tall card up only as far as it must', () => {
-    const { rect } = placeCard(mog(600, 760), SCREEN, 340, 300);
-    expect(rect.y + rect.h).toBe(900);
-  });
-
-  it('places with no screen as the right side beside the MOG', () => {
-    const { rect, side } = placeCard(mog(600), undefined, 340, 64);
-    expect(side).toBe('right');
-    expect(rect.x).toBe(600 + 160 - 13 + 10 - 12);
-  });
-
-  it('finds the side of a window by its centre', () => {
-    const m = mog(600);
-    expect(sideOf({ x: 745, y: 0, w: 340, h: 64 }, m)).toBe('right');
-    expect(sideOf({ x: 600 + 18 - 10 + 12 - 340, y: 0, w: 340, h: 64 }, m)).toBe('left');
+  it('keeps the place with no screen read', () => {
+    expect(anchoredBounds({ x: 10, y: 20, w: 340, h: 64 }, 'right', undefined, 200, 100)).toEqual({
+      x: 10,
+      y: 20,
+      w: 200,
+      h: 100,
+    });
   });
 });

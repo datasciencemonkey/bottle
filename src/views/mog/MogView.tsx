@@ -5,7 +5,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { MOG_MENU_HIDE_EVENT, MOG_MENU_OPEN, OPEN_CONVERSATIONS } from '../../shared/genie-status';
 import type { MogId } from '../../shared/interfaces';
 import { paletteColorOf } from '../../shared/mog-palette';
-import { MOG_LOOK_EVENT, asMogLook } from '../../shared/mog-look';
+import { MOG_LOOK_EVENT, MOG_VIEW_HIDDEN, asMogLook } from '../../shared/mog-look';
 import {
   asMogViewState,
   emitView,
@@ -121,6 +121,14 @@ export function MogView({
       off?.();
     };
   }, []);
+
+  // The host polls the pointer only for a MOG the user did not hide: tell it (it does not relay
+  // this to the brain). Also once on load, so a reopened MOG is not left marked hidden.
+  useEffect(() => {
+    void emitView(mogId, 'click', { action: MOG_VIEW_HIDDEN, hidden: hiddenByUser }).catch(
+      () => undefined,
+    );
+  }, [mogId, hiddenByUser]);
 
   // The idle motion (the spark orbit) and the gaze stop while the MOG is hidden: by the Hide menu
   // item, or because the page is not visible (a hidden window, a locked screen).

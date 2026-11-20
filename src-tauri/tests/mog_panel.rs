@@ -404,9 +404,9 @@ fn mog_01c_view_capabilities_hold_no_window_drag_permission() {
             "core:window:allow-set-size",
             "core:window:allow-set-position",
             "core:window:allow-outer-position",
-            // lamp-alive: it also reads the size of its window and finds its MOG window.
+            // lamp-alive: it also reads the size and the title (the side of its MOG) of its own window.
             "core:window:allow-outer-size",
-            "core:window:allow-get-all-windows",
+            "core:window:allow-title",
             "core:window:allow-scale-factor",
             "core:window:allow-current-monitor",
         ];

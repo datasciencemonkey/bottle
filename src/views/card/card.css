@@ -18,8 +18,10 @@ body,
 }
 
 .card-popup {
-  /* Room for the shadow and the tail inside the window. */
-  padding: 10px 12px 14px;
+  /* Room for the shadow and the tail inside the window. lamp-alive: the side that faces the MOG
+     (the left, until the host says the card is on the left) has 10 px, the gap to the lamp art,
+     so the window ends at the art and never covers it (`CARD_FACING_PAD`); the far side has 12. */
+  padding: 10px 12px 14px 10px;
 }
 
 /* The pop-up: one line and one action, a speech bubble from the MOG on its left. */
@@ -220,6 +222,15 @@ body,
 /* lamp-alive: a card on the left of its MOG mirrors the pop-up: the tail is on the right edge and
    points at the MOG, and the fade drifts toward it. `data-side` is set on the page by the window
    fit (`fit-window.ts`, `card-placement.ts`); a card on the right keeps the rules above. */
+html[data-side='left'] .card-popup {
+  padding: 10px 10px 14px 12px;
+}
+
+/* The pill is right-aligned, so it is next to the MOG whatever the width of the window. */
+html[data-side='left'] .card-popup .popup {
+  margin-left: auto;
+}
+
 html[data-side='left'] .popup::before {
   left: auto;
   right: -5px;
