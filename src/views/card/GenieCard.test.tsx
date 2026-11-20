@@ -671,11 +671,11 @@ describe('Genie card links (#523)', () => {
     await tauri.emitTo(
       `card-${ID}`,
       'card:update',
-      withLinks('| a | b |\n| - | - |\n| x | 1220042.35091 |'),
+      withLinks('| a | b |\n| - | - |\n| x | 1220042.3509332137 |'),
     );
     expect(el.querySelector('.genie-answer-body table')).not.toBeNull();
     expect(el.querySelector('.genie-answer-body tbody td:last-child')?.textContent).toBe(
-      new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(1220042.35091),
+      new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(1220042.3509332137),
     );
   });
 });

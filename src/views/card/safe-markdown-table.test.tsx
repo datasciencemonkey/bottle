@@ -15,7 +15,7 @@ const cells = (el: Element, sel: string) => [...el.querySelectorAll(sel)].map((c
 
 const TABLE = `| sfdc_account_name | start_date | end_date | total_dbu_dollars | all_total |
 | --- | --- | --- | --- | --- |
-| Apple | 2026-11-01 | 2026-11-18 | 1220042.35091 | 3.62387909843917E8 |`;
+| Apple | 2026-11-01 | 2026-11-18 | 1220042.3509332137 | 3.62387909843917E8 |`;
 
 describe('splitRow (#523)', () => {
   it('splits on pipes and drops the edge pipes', () => {
@@ -71,7 +71,7 @@ describe('tables in safe markdown (#523)', () => {
       '1,220,042.35',
       '362,387,909.84',
     ]);
-    expect(tds[3]?.getAttribute('title')).toBe('1220042.35091');
+    expect(tds[3]?.getAttribute('title')).toBe('1220042.3509332137');
     expect(tds[4]?.getAttribute('title')).toBe('3.62387909843917E8');
     // Text and dates keep their value and get no tooltip.
     expect(tds[0]?.hasAttribute('title')).toBe(false);
@@ -91,8 +91,8 @@ describe('tables in safe markdown (#523)', () => {
   });
 
   it('does not touch numbers in sentences', () => {
-    const el = render(`Total was 1220042.35091 today.\n\n${TABLE}`);
-    expect(el.querySelector('p')?.textContent).toBe('Total was 1220042.35091 today.');
+    const el = render(`Total was 1220042.3509332137 today.\n\n${TABLE}`);
+    expect(el.querySelector('p')?.textContent).toBe('Total was 1220042.3509332137 today.');
   });
 
   it('aligns numeric columns right by default and honours the separator alignment', () => {

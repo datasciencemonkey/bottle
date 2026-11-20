@@ -12,8 +12,10 @@
  * - A value below 1 is never rounded: "0.0072", "0.0149" and "0.006" stay as written.
  * - Scientific notation is shown as a plain number only when its plain form is exact
  *   ("3.62387909843917E8" -> "362,387,909.84", "1.2E-7" -> "0.00000012").
- * - A value above Number.MAX_SAFE_INTEGER, or with more than 15 significant digits, is left as
- *   written (a double cannot hold it).
+ * - A value above Number.MAX_SAFE_INTEGER, or whose integer part has more than 15 digits, is left
+ *   as written (a double cannot hold it). The decimals that the display rounds away do not count:
+ *   "1220042.3509332137" shows as "1,220,042.35" and the raw value stays in the title. An exponent
+ *   form with more than 15 significant digits is left as written, because it must be exact.
  * - Integers get thousands separators too, so one column reads the same all the way down, unless
  *   the column looks like ids or years (the header says id/key/code/zip/phone/year, a cell has a
  *   leading zero, or every cell is a four-digit year).
@@ -43,7 +45,7 @@ export function userLocale(): string | undefined {
 }
 
 interface Seps {
-  group: (int: number) => string;
+  group: (int: number | bigint) => string;
   decimal: string;
 }
 const seps = new Map<string, Seps>();
@@ -117,7 +119,9 @@ function formatOne(raw: string, id: boolean, locale: string | undefined): CellNu
   const value = Number(`${int}.${frac || '0'}`);
   if (!Number.isFinite(value) || value > Number.MAX_SAFE_INTEGER) return same();
   // The digits the source wrote (an exponent form is judged on its plain digits).
-  if (sigDigits(int, frac) > 15) return same();
+  // A plain decimal is judged on its integer part only: the decimals that the display rounds away
+  // on purpose stay in the title. An exponent form must be exact, so its digits are counted.
+  if (int.length > 15 || (sci && sigDigits(int, frac) > 15)) return same();
   const sgn = sign === '-' ? '-' : sign === '+' && !sci ? '+' : '';
   const done = (body: string): CellNumber => {
     const text = sgn + body;
@@ -137,9 +141,11 @@ function formatOne(raw: string, id: boolean, locale: string | undefined): CellNu
   if (decimals <= 2) {
     return done(s.group(Number(int)) + (decimals > 0 ? s.decimal + frac : ''));
   }
-  const fixed = value.toFixed(2);
-  const [i = '0', f = '00'] = fixed.split('.');
-  return done(`${s.group(Number(i))}${s.decimal}${f}`);
+  // Round half up on the written digits (no binary floating point), so 15 integer digits stay exact.
+  let scaled = BigInt(int + frac.slice(0, 2).padEnd(2, '0'));
+  if ((frac[2] ?? '0') >= '5') scaled += 1n;
+  const f = (scaled % 100n).toString().padStart(2, '0');
+  return done(`${s.group(scaled / 100n)}${s.decimal}${f}`);
 }
 
 /** True if a header names an identifier or a year. */

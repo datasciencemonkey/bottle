@@ -32,8 +32,15 @@ describe('formatColumn (#523)', () => {
     expect(texts(['12345678901234567.89'])).toEqual(['12345678901234567.89']);
     expect(texts(['9007199254740993.5'])).toEqual(['9007199254740993.5']);
     expect(texts(['9007199254740993'])).toEqual(['9007199254740993']);
-    expect(texts(['1220042.3509332137'])).toEqual(['1220042.3509332137']);
-    expect(texts(['123456789012345.5'])).toEqual(['123456789012345.5']);
+    expect(texts(['1234567890123456.5'])).toEqual(['1234567890123456.5']);
+    expect(texts(['1.2345678901234567E5'])).toEqual(['1.2345678901234567E5']);
+  });
+
+  it('rounds away long decimals when the integer part is safe: the user example', () => {
+    expect(texts(['1220042.3509332137'])).toEqual(['1,220,042.35']);
+    expect(col(['1220042.3509332137'])[0]?.changed).toBe(true);
+    expect(texts(['123456789012345.5678'])).toEqual(['123,456,789,012,345.57']);
+    expect(texts(['12345678901234567.89'])).toEqual(['12345678901234567.89']);
   });
 
   it('keeps the trailing zeros the source wrote', () => {
