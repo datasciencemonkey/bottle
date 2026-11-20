@@ -1,5 +1,7 @@
 # Bottle: context for coding agents
 
+For the product story, see [docs/VISION.md](docs/VISION.md).
+
 Read this file first. It tells you what we are building, where the code lives, how to work in this repo, and which
 work is in or out of scope. If this file and `requirements.html` disagree on **scope**, this file wins (it records the
 user's later decisions). For detailed behaviour, `requirements.html` stays the source of truth.

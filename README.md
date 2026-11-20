@@ -1,5 +1,7 @@
 # Bottle
 
+New here? Read the [vision and intro](docs/VISION.md).
+
 Bottle is a small desktop app (macOS 14.4+ first, Windows 11 second) for creating and managing **MOGs**: floating, always-resident agents that dictate, answer questions through Genie One MCP, and send approved context to Genie on Databricks. Bottle is a companion to Genie One, not a replacement.
 
 **Status:** requirements v1.3 are final (all user confirmations U1-U16 settled). No application code yet; the next step is the week-1 spikes (SP-01..SP-21), then MVP-D and MVP-M.
