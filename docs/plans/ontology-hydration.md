@@ -14,11 +14,12 @@ Bottle records a call and writes a transcript and notes to the user's volume (AD
 2. The user reviews the Page in the hub before any write. The user can edit the title, remove lines, redact text and change the domain.
 3. On approval, the Rust core creates the Page through the **Unity Catalog Pages API**. Bottle sends the Page to the home domain of the MOG.
 4. Genie One finds the Page through Genie Ontology and cites it in its answers.
-5. Colleagues get the benefit only after the Page is **published**. A DRAFT Page helps only its owner.
+5. Bottle creates DRAFT Pages only. Bottle never publishes a Page. The user publishes a Page in Databricks, outside Bottle.
+6. Colleagues benefit only after the Page is **published** in Databricks. Genie One uses a DRAFT Page only in its owner's conversations.
 
 The first slice is: one finished recording → one reviewed Transcript Page → one write to the home domain.
 
-The top open question is the publish rule (Section 6). The current rules say "DRAFT only". The user said "publish". The owner must decide.
+The owner decided three questions on 2026-11-20 (Section 12.1). Bottle creates DRAFT Pages only. Slice 1 has no automatic PII scrub. The only trigger is a manual action on a recording.
 
 ## 1. Glossary
 
@@ -35,7 +36,7 @@ The top open question is the publish rule (Section 6). The current rules say "DR
 | Curator | A principal with `MANAGE DISCOVER` (account) or `MANAGE DOMAIN` (domain). A curator can also certify and deprecate Pages. |
 | Review | The hub screen where the user checks a Page before Bottle writes it. |
 | Approval | The user action that lets Bottle write one exact Page body. It binds to a SHA-256 hash of that body. |
-| Scrub | The fixed rules that replace or remove personal data and secrets before the review (G-37a..c). |
+| Scrub | The fixed rules that replace or remove personal data and secrets (G-37a..c). It is a later offline step (slice 5). It is not in slice 1. |
 | Evidence | For a Term Page: the transcript quotes, with time and speaker, that support the definition. |
 | Page record | One local row that links a recording to its Page name, request ID, body hash and state. |
 | Request ID | The UUIDv4 `request_id` query value of a create call. A retry with the same value creates no second Page. |
@@ -176,7 +177,7 @@ So a full transcript must be safe for the domain's readers before Bottle writes 
 | `request_id` | PG-07 and B3 put it in the body. The `knowledge.create_page` route allows no query keys. | A query parameter. | Contract change K3. |
 | Retry with the same `request_id` | `classifyPagesResponse` treats only a 409 with the same ID as created. | A retry returns the current Page (a success reply). `ALREADY_EXISTS` means a published title clash. | Change the classifier in slice 1. |
 | "DRAFT is the owner's only" | Disclosure text implies privacy. | Page managers see all drafts. The default makes every user a Page manager. | Change the disclosure text (K7). |
-| Publish | "No publish endpoint is documented" (routes.rs). | Publish is `PATCH` with `update_mask=state` and `state: PUBLISHED`. | Decision P (Section 6). |
+| Publish | "No publish endpoint is documented" (routes.rs). | Publish is `PATCH` with `update_mask=state` and `state: PUBLISHED`. | No change. Bottle does not publish (Section 6). |
 | Unit of a Page | PG-01: a definition. | Pages are "a governed, authoritative definition of a business concept". | A Transcript Page is a wider use. See risk R1. |
 
 ## 4. Design principles
@@ -184,8 +185,8 @@ So a full transcript must be safe for the domain's readers before Bottle writes 
 1. **Nothing enters without review.** Bottle writes no Page that the user did not see and approve.
 2. **Rust owns the write.** The Rust core renders the body and checks the approval hash. It holds the token and sends the call. The brain and views never send a Pages call.
 3. **One recording, one Page.** A second write for the same recording updates the same Page. It never makes a new one.
-4. **The agent cannot publish.** No agent tool and no automatic path can set `PUBLISHED`.
-5. **Privacy before the review.** The scrub runs before the user sees the Page. The user sees what Bottle sends.
+4. **Bottle never publishes.** No Bottle path can set `PUBLISHED`: not the user, not the agent and not an automatic step.
+5. **Privacy in the review.** The user sees each line before the write and can remove or redact it. The user sees what Bottle sends.
 6. **No compute, few model calls.** Slice 1 uses no model call. Later slices use the existing notes endpoint.
 
 ## 5. The end-to-end flow
@@ -206,8 +207,8 @@ sequenceDiagram
   U->>B: open the review
   B->>R: page_preview {profile, recordingId, edits}
   R->>V: read transcript.json
-  R->>R: scrub, render, hash
-  R-->>B: body, scrub report, bodySha256
+  R->>R: render, hash
+  R-->>B: body, bodySha256
   B-->>U: review screen
   U->>B: Approve (hash)
   B->>R: page_write {profile, recordingId, domainId, bodySha256}
@@ -222,15 +223,15 @@ sequenceDiagram
 
 Steps:
 
-1. A recording reaches `done`. The hub shows the action "Make a Page from this call" on that recording. Bottle makes no Page by itself.
-2. The user opens the review. The brain calls `page_preview`. Rust reads `transcript.json` from the volume and runs the scrub. Then it renders the body and returns it with a scrub report and a SHA-256 hash.
-3. The review screen shows the title, description, synonyms, domain and body. It shows each scrub change.
+1. A recording reaches `done`. The hub shows the action "Make a Page from this call" on that recording. This manual action is the only trigger. Bottle opens no review by itself after a call, and no setting changes this.
+2. The user opens the review. The brain calls `page_preview`. Rust reads `transcript.json` from the volume. Then it renders the body and returns it with a SHA-256 hash. Slice 1 runs no automatic scrub.
+3. The review screen shows the title, description, synonyms, domain and body. Each transcript line has Remove and Redact. A banner shows the PII warning of the docs (Section 5.10).
 4. The user can edit the title, description and synonyms. The user can remove lines, redact a span and map a speaker label to a name. The user can change the domain for this Page (PG-19). Each edit makes a new preview and a new hash.
 5. The user selects Approve. The brain sends `page_write` with the hash of the last preview.
 6. Rust checks that the hash equals the hash of its last preview for that recording. A different hash gives `approval_stale`, and Rust sends nothing.
 7. Rust runs the preflight (domain, scope) and sends the create call with `state: "DRAFT"` and a new request ID.
 8. Rust writes the Page record and a content-free audit entry. The hub shows the state and an Open in Databricks link.
-9. Publish follows the rule that the owner picks in Section 6.
+9. Bottle stops here. The Page stays a DRAFT. To share it, the user publishes it in Databricks (Section 6).
 
 ### 5.2 The Transcript Page format
 
@@ -261,7 +262,7 @@ Recommendation on the notes: put Summary and Decisions in the same Page, in slic
 - If a body is larger than the cap, Rust must split the transcript into parts at segment boundaries.
 - Each part is its own Page, `<title> (part 2 of 3)`. Each part repeats the "About this call" and "Files" sections.
 - The review shows all parts. One approval covers all parts, with one hash for each part.
-- Slice 1 refuses a body over the cap with `page_too_large`. Slice 5 adds the split.
+- Slice 1 refuses a body over the cap with `page_too_large`. Slice 6 adds the split.
 
 ### 5.4 Term Pages (slice 4)
 
@@ -281,7 +282,7 @@ Recommendation on the notes: put Summary and Decisions in the same Page, in slic
 
 Example: the Growth team and the Finance team each define "Active user".
 
-- In one domain, a published title must be unique. A create or publish with the same title gives `ALREADY_EXISTS`.
+- In one domain, a published title must be unique. A create with the title of a published Page gives `ALREADY_EXISTS`. A later publish in Databricks can also clash.
 - On `ALREADY_EXISTS`, the hub shows three choices. The user can rename the Page (for example "Active user (Growth)"). The user can open the existing Page in Databricks to suggest an edit. The user can keep the Page as a DRAFT.
 - In two domains, two Pages can have the same title. Bottle shows the domain name next to each Page title.
 - Bottle never overwrites a Page that it did not create (PG-17). Bottle never edits a Page that is not the user's own draft.
@@ -299,28 +300,28 @@ Example: the Growth team and the Finance team each define "Active user".
 |---|---|---|
 | Create a DRAFT | The signed-in user, through the CLI profile token. | The `knowledge` scope or `all-apis` (PG-12). A domain ID that exists (PG-11). |
 | Edit the user's own DRAFT | The user. | The Page record shows that Bottle created it. |
-| Publish | The user, only after the decision in Section 6. | A Page manager or domain admin right on the domain. A `PERMISSION_DENIED` shows the admin checklist. |
+| Publish | Not in Bottle. The user, or a Page manager, publishes in Databricks. | A Page manager or domain admin right on the domain [D3]. |
 | Certify or deprecate | Curators only. Bottle does not do this. | Not applicable. |
 
 ### 5.9 Trust rules
 
 - **Nothing enters without review.** `page_write` must carry the hash of a preview that Rust made for that recording. Rust must refuse any other body.
 - **DRAFT on create.** Rust must send `state: "DRAFT"` on every create call. No IPC argument can change this value.
-- **No silent publish.** Rust must refuse a `PATCH` that has `state` in its mask. The only exception is the publish command of Section 6.
-- **The agent cannot publish.** The agent tool set must not get a publish tool. `propose_page` must stay a proposal. `agent_guard` keeps its rule.
+- **No publish.** Rust must refuse a `PATCH` that has `state` in its mask. Rust must never send `PUBLISHED` in a create or an update.
+- **The agent cannot publish.** The agent tool set must not get a publish tool. `propose_page` must stay a proposal. `agent_guard` keeps its rule as on main.
 - **Rust only.** The Pages routes must leave the brain route table (K2). Only the Rust Pages component can send them, as with the recording routes.
-- **No automatic write.** Bottle must not start a review or a write without a user action.
+- **No automatic write.** Bottle must not start a review or a write without a user action. The only start is "Make a Page from this call".
 
 ### 5.10 Privacy
 
-The Pages docs say: "Do not include PII or regulated data in Page content." [D1] A call transcript holds names, opinions and personal data. The plan uses four layers:
+The Pages docs say: "Do not include PII or regulated data in Page content." [D1] A call transcript holds names, opinions and personal data. The owner decided on 2026-11-20 to defer the automatic scrub. Slice 1 uses these layers:
 
-1. **Speaker labels.** The transcript keeps `Speaker N` labels. A name appears only if the user maps a label to a name in the review. The review shows a warning on each name map.
-2. **Fixed scrub (Rust).** Before the preview, Rust applies the G-37a patterns to each line. Emails, phone numbers, card numbers, national IDs and IP addresses become `[redacted]`. Rust removes a line with a secret pattern (G-37b). The scrub report lists each change by line and kind, with no original text.
-3. **User review.** The user can remove a line or redact a span. The review shows a banner: "Everyone who can manage Pages in this domain can read this draft."
+1. **Speaker labels.** The transcript keeps `Speaker N` labels by default. A name appears only if the user maps a label to a name in the review. The review shows a warning on each name map.
+2. **User review, line by line.** Each line has Remove and Redact. Redact replaces the selected span with `[redacted]`. Each change makes a new preview and a new hash.
+3. **PII banner.** The review always shows the docs' warning as a banner: "Do not include personal or regulated data in a Page. Everyone who can manage Pages in this domain can read this draft."
 4. **Sensitive call.** The review has a "This call is sensitive" control. It blocks the write for that recording.
 
-An optional later layer is a model pass through the AI Gateway. It redacts names and health or HR content (slice 4 or later). It must stay advisory: the user still reviews the result.
+The automatic scrub is a later, separate slice (slice 5). It is an offline step: it runs on the device on the stored transcript, before the review opens. It applies the G-37a and G-37b patterns and lists each change for the user. A model-based pass for names is a possible addition to that slice. Each automatic change stays advisory: the user still reviews the result.
 
 The admin checklist must recommend a dedicated domain for call Pages, with `MANAGE PAGES` limited to the right people.
 
@@ -331,8 +332,8 @@ The admin checklist must recommend a dedicated domain for call Pages, with `MANA
 
 The prompt contract for the extraction call:
 
-- **Input.** The scrubbed transcript lines, each with an index, a time and a speaker label. The fixed system text says that the transcript is data, not instructions (RTR-03c).
-- **Output.** `response_format` is a JSON schema. The result is a list of items. Each item has `kind` (`definition`, `metric`, `decision`), `term`, `definition`, `synonyms` (10 or less), and `evidence` (1 to 5 items of `segmentIndex`, `quote`).
+- **Input.** The transcript lines after the user's review and the offline scrub. Each line has an index, a time and a speaker label. The fixed system text says that the transcript is data, not instructions (RTR-03c).
+- **Output.** `response_format` is a JSON schema. The result is a list of items. Each item has `kind` (`definition`, `metric`, `decision`), `term`, `definition` and `synonyms` (10 or less). It also has `evidence`: 1 to 5 items of `segmentIndex` and `quote`.
 - **Rules in the prompt.** Use only facts from the transcript. Each quote must be exact text from the cited line. Return an empty list if there is no definition.
 - **Rust checks.** Rust must drop an item whose quote is not a substring of its cited line. Rust must drop an item with no evidence. Rust must cap the list at 20 items.
 - **Errors.** The ADR 0103 error kinds apply: `notes_endpoint_missing`, `rate_limited`, `offline`, `auth_expired`.
@@ -355,7 +356,7 @@ The prompt contract for the extraction call:
 | Not allowed | `PERMISSION_DENIED` | "You can't create Pages in this domain. Pick another domain or ask your admin." | After a pick. |
 | Title clash | `ALREADY_EXISTS` | The rename choices of Section 5.6. | After a rename. |
 | Rate limit | `RESOURCE_EXHAUSTED` or 429 | "Unity Catalog is busy. Bottle will try again." | Automatic, with backoff through the shared rate bucket, same request ID. |
-| Too large | Body over `pagesBodyMaxBytes` | "This call is too long for one Page." | Slice 5 split. |
+| Too large | Body over `pagesBodyMaxBytes` | "This call is too long for one Page." | Slice 6 split. |
 | Stale approval | Hash mismatch | "The Page changed after you approved it. Review it again." | After a new review. |
 | Offline or 5xx | Network fault, `INTERNAL_ERROR` | "Not sent yet. Bottle will try again." | Automatic, same request ID. |
 | Token expired | `auth_expired` | The existing sign-in notice. | After sign-in. |
@@ -383,53 +384,45 @@ This is the "everyone benefits" part. The user must see the loop close.
 
 1. **Answer card chip.** A Genie answer can cite a Page that is in the Page records. Then the card shows "Used your Page: <title>". Bottle reads the cited links from `genie_poll_response` [D6]. Slice 0 must confirm the link format for a Page.
 2. **Hub Pages area.** A list of the user's Pages, with title, domain, state and date. Each row shows the count of local answers that cited the Page.
-3. **Colleague benefit.** A colleague's Genie One uses a Page only after it is published. Bottle cannot see a colleague's questions. The hub shows the line "Published Pages help everyone in this domain. Bottle can't count other people's questions."
-4. **Admin view (not in Bottle).** An admin can count Page use in `system.access.audit` under `pages` [D9]. The admin guide must name this table. This is an open question (Q6).
+3. **Colleague benefit.** Colleagues benefit only after the Page is published in Databricks, outside Bottle. A DRAFT is used only in the owner's Genie One conversations [D1]. Bottle cannot see a colleague's questions. The hub shows the line "Published Pages help everyone in this domain. Bottle can't count other people's questions."
+4. **Admin view (not in Bottle).** An admin can count Page use in `system.access.audit` under `pages` [D9]. The admin guide must name this table. This is an open question (Section 12.2, item 3).
 
-## 6. The publish decision (open, for the owner)
+## 6. Publish: decided, outside Bottle
 
-Main says DRAFT only. B3 and PG-05 say DRAFT. PG-16 makes publish a v1 request to a Page manager. `routes.rs` says "B3 allows DRAFT Pages only". `agent_guard` says "You cannot publish a Page".
+The owner decided on 2026-11-20: "publishing of a Unity Catalog Page needs to happen separately."
 
-The user said "publish" on 2026-11-20. A DRAFT helps only its owner [D1]. So colleagues get no benefit without a publish.
+- Bottle creates the Transcript Page as a DRAFT only, after the user's review.
+- Bottle never publishes a Page. Publish is a separate step outside the Bottle create flow.
+- Today the user publishes in Databricks. A Page manager or domain admin right is necessary for that step [D3].
+- B3, PG-05, PG-16 and `agent_guard` stay as they are on main (DRAFT only).
+- `knowledge.request_publish` stays not wired. Rust refuses a `state` change (Section 5.9).
 
-| Option | What happens | Trust impact | Requirement impact |
-|---|---|---|---|
-| (a) DRAFT, then one-click Publish | Bottle creates a DRAFT after the review. The hub shows a separate Publish button on that Page. A second confirmation names the domain and its readers. Rust sends `PATCH ?update_mask=state` with `PUBLISHED`. | Two user decisions: "this is correct" and "share it with the domain". The user can check the DRAFT in Genie One first. Matches the Genie Code import pattern [D1]. | B3 changes from "DRAFT only" to "DRAFT first, user publishes". PG-16 moves to MVP and changes from a request to a direct publish. `routes.rs` gets a guarded publish path. `agent_guard` stays. |
-| (b) Publish at review | The review has "Publish" next to "Save as DRAFT". Rust creates the Page with `state: PUBLISHED` in one call. | One decision covers two questions: "is it correct" and "can others read it". A mistake is public at once. A failed publish right can fail the whole write. | B3 and PG-05 change. Create as PUBLISHED needs Page manager rights [D3], so Rust needs a fallback to DRAFT. |
-| (c) Auto-publish | Bottle publishes with no review. | Breaks "nothing enters without review" and B1. Risks PII in public Pages against the docs' warning [D1]. | Breaks B3, PG-03, PG-04, PG-14. Not recommended. |
+The effect on the benefit: colleagues benefit only after the Page is published in Databricks. Genie One uses a DRAFT Page only in its owner's conversations [D1]. So the hub shows "Publish this Page in Databricks to share it with your domain", next to Open in Databricks.
 
-**Recommendation: option (a).** It keeps both trust rules. It gives colleagues the benefit with one more click. The second click is a natural place for the audience warning. The agent still cannot publish.
-
-If the owner picks (a) or (b), the publish path must follow these rules:
-
-- Only a hub user action can start a publish. The MOG view, the card and the agent cannot.
-- The publish command must carry the Page name and the hash of the approved body. Rust must refuse a publish of a body that differs from the approved body.
-- Rust must write a content-free audit entry for the publish.
-- A `PERMISSION_DENIED` on publish leaves the Page as DRAFT. The hub shows "Ask a Page manager of this domain to publish it."
+Later option: an in-hub Publish button can come later, but only if the owner asks for it. It needs a new ADR and changes to B3 and PG-16.
 
 ## 7. Contract changes (each one needs the owner's sign-off)
 
 | ID | File or rule | Change | Slice |
 |---|---|---|---|
 | K1 | `crates/mog-core/src/ipc.rs`, `src/shared/ipc.ts`, `src-tauri/src/ipc.rs`, `src-tauri/schemas/` | New brain-only commands: `page_preview {profile, recordingId, edits}`, `page_write {profile, recordingId, domainId, bodySha256}`, `page_list {profile}`, `page_retry {profile, recordingId}`, `page_open {profile, recordingId}`. New event `page.state`. | 1 |
-| K1b | Same files | `page_publish {profile, recordingId, bodySha256}` (only for options (a) or (b)). | 2 |
 | K2 | `http_transport/routes.rs`, `RouteId` in `src/shared/ipc.ts` | Move the `knowledge.*` routes from the brain route table to a Rust-only Pages route list. The recording routes use the same model. Remove `knowledge.request_publish`. | 1 |
 | K3 | `routes.rs` | Allow the query key `request_id` on `knowledge.create_page`. | 1 |
-| K4 | `crates/mog-core/src/types.rs` | New types `PageEdits`, `PagePreview`, `ScrubReport`, `PageRecord`, `PageState` (`pending`, `draft`, `published`, `failed`) and `PageErrorKind`. | 1 |
+| K4 | `crates/mog-core/src/types.rs` | New types `PageEdits`, `PagePreview`, `PageRecord`, `PageState` (`pending`, `draft`, `failed`) and `PageErrorKind`. Slice 5 adds `ScrubReport`. | 1 |
 | K5 | Refusal codes | New: `approval_stale`, `page_exists`, `page_too_large`, `pages_no_domain`, `pages_no_scope`, `pages_beta_off`, `domain_not_found`, `pages_permission`, `title_taken`, `call_sensitive`. Reuse `rate_limited`, `offline`, `auth_expired`, `host_failed`. | 1 |
 | K6 | Local store migration and statement catalog | New table `page_record`. No body text column, except a `pending_body` that Rust clears after success. | 1 |
 | K7 | `src/views/hub/disclosures.ts` | New text: Page managers in the domain can read DRAFT Pages. | 1 |
 | K8 | `src/shared/interfaces.ts` | `PageDraft` gets `kind` (`transcript`, `term`), `recordingId`, `evidence`. `PageService.createDraft` moves its network part to Rust. | 1 (kind), 4 (evidence) |
 | K9 | `bottle_mcp.rs` `propose_page` schema | Add `evidence` (1 to 5 items) and `kind`. The tool stays a proposal. | 4 |
-| K10 | Recording settings | New settings `pagesBodyMaxBytes` and `pagesEnabled` (off by default). | 1 |
-| K11 | Requirements (`research/final-requirements.md`) | B3 per the decision in Section 6. PG-01 adds Transcript Pages. PG-05 and PG-07: `request_id` is a query value. PG-14: for a mixed call recording, the user's review of the whole Page counts as the confirm. PG-16 per Section 6. PG-13 stays. | 1 |
+| K10 | Recording settings | New setting `pagesBodyMaxBytes`. No trigger setting: the manual action is the only trigger. | 1 |
+| K11 | Requirements (`research/final-requirements.md`) | PG-01 adds Transcript Pages. PG-07: `request_id` is a query value. PG-14: for a mixed call recording, the user's review of the whole Page counts as the confirm. B3, PG-05, PG-13 and PG-16 stay as on main. | 1 |
 | K12 | `AGENTS.md` section 1 | Move "UC Pages" from out of scope into the MVP. | 1 |
 
 ## 8. New ADRs
 
 Take numbers above the highest on main (0108) and in open PRs (#600 reserves 0104). Check `gh pr list` again before the first PR.
 
-- **ADR 0109: Transcript Pages to the Unity Catalog Pages API.** The unit, the format, the Rust ownership and the review hash. The scrub layers, DRAFT on create, the size cap and the publish rule.
+- **ADR 0109: Transcript Pages to the Unity Catalog Pages API.** The unit, the format, the Rust ownership and the review hash. DRAFT only with no publish, the manual trigger and the size cap.
 - **ADR 0110: Rust-only Pages routes and request IDs.** K2 and K3. The retry rule of Section 5.14. The reply classes of Section 5.13.
 - **ADR 0111: Term Page extraction with evidence.** The prompt contract of Section 5.11, the quote check, dedup and conflicts.
 - **ADR 0112: Page citation chip.** The link format from slice 0, and the hub Pages area.
@@ -438,9 +431,8 @@ Take numbers above the highest on main (0108) and in open PRs (#600 reserves 010
 
 Each slice is one or more PRs. Each PR is TDD, with a failing test first, and a reviewer agent that is not the author.
 
-### Slice 0: probe and decisions (no app code)
+### Slice 0: probe (no app code)
 
-- The owner picks the publish option (Section 6).
 - The user runs the SP-20 probe (#187) with a profile that the user names. The probe checks these items:
   - A create with `?request_id=` and the same value twice gives one Page.
   - The largest body that the API accepts.
@@ -457,11 +449,12 @@ PR 1a, contract (`issue/pages-0-contract`):
 - Acceptance: the contract tests pass. The brain route table has no `knowledge.*` route. The gateway refuses each new command from a MOG view and from the card.
 
 PR 1b, Rust core (`issue/pages-1-core`):
-- The scrub, the render, the preview hash and the preflight.
+- The render, the line edits (Remove, Redact), the preview hash and the preflight.
 - The create call, the Page record, the audit entry and the retry.
 - Acceptance:
   - A golden test renders a fixed `transcript.json` to the expected body.
-  - Each G-37a pattern becomes `[redacted]`, and Rust removes a line with a secret.
+  - A Remove edit drops the line, and a Redact edit gives `[redacted]` in the body and a new hash.
+  - No create or update body holds `PUBLISHED`, and a mask with `state` is refused.
   - `page_write` with a stale hash sends nothing and answers `approval_stale`.
   - Each create call has `state: "DRAFT"` and a `request_id` query value.
   - A second `page_write` for the same recording sends no create.
@@ -471,20 +464,19 @@ PR 1b, Rust core (`issue/pages-1-core`):
 
 PR 1c, brain and hub (`issue/pages-2-hub`):
 - "Make a Page from this call" on a done recording. The review screen and the domain picker for one Page.
-- The privacy banner, the sensitive control, the state and Open in Databricks. K7, K11, K12.
+- The PII banner, the sensitive control, the state, Open in Databricks and the "publish in Databricks" hint. K7, K11, K12.
 - Acceptance:
   - Cancel or Edit makes no write.
-  - The review shows each scrub change.
-  - The banner text is present.
-  - With the `pagesEnabled` setting off, the action does not show.
+  - Each line has Remove and Redact.
+  - The PII banner text is present.
+  - No review opens after a call without the user's action.
   - The view sends input only through `view_emit`.
   - A person checks the screen against the polish bar (impeccable review).
 
-### Slice 2: publish and the notes sections
+### Slice 2: the notes sections
 
-- K1b and the publish path of Section 6 (if the owner picks (a) or (b)).
 - `## Summary` and `## Decisions` from `notes.md` in the body.
-- Acceptance: only a hub action can publish. Rust refuses a publish of a changed body. `PERMISSION_DENIED` leaves a DRAFT with the listed text. The agent tool list has no publish tool.
+- Acceptance: the golden test body has both sections from a fixed `notes.md`. Action items are not in the body.
 
 ### Slice 3: show that it helped
 
@@ -497,14 +489,20 @@ PR 1c, brain and hub (`issue/pages-2-hub`):
 - The local dedup index, the conflict choices, and proposals on demand from a Conversations thread. K8 (evidence) and K9.
 - Acceptance: Rust drops an item with a quote that is not in its line. Two equal candidates give one. `ALREADY_EXISTS` shows the rename choices. Bottle sends nothing without approval.
 
-### Slice 5: long calls, more checks and Windows
+### Slice 5: the offline PII scrub
+
+- An offline step on the device. It runs on the stored transcript before the review opens.
+- It applies the G-37a and G-37b patterns. The review lists each change, with no original text in any log.
+- Acceptance: each G-37a pattern becomes `[redacted]`. Rust removes a line with a secret. The user can undo each change in the review.
+
+### Slice 6: long calls, more checks and Windows
 
 - The split into parts of Section 5.3. The launch scan for `pending` records. Windows parity.
 - Acceptance: a 120 min golden transcript gives parts under the cap, with no lost or repeated line. A `pending` record at launch shows Retry.
 
 ## 10. Test strategy
 
-- **Unit (Rust).** Render golden files, scrub patterns, the hash check and the DRAFT check. The state-mask refusal, request ID reuse, the split and the reply classifier.
+- **Unit (Rust).** Render golden files, line edits, the hash check and the DRAFT check. Scrub patterns in slice 5. The state-mask refusal, request ID reuse, the split and the reply classifier.
 - **Contract.** Gateway tests for each new command and window. A test that the brain route table has no Pages route.
 - **Integration (Rust).** A fake HTTPS Pages server gives each error of Section 5.13. It also gives a lost reply and a retry reply with an older body.
 - **Unit (TypeScript).** The review state, the edits, cancel, and the chip logic, with injected clocks.
@@ -517,20 +515,29 @@ PR 1c, brain and hub (`issue/pages-2-hub`):
 | ID | Risk | Effect | Mitigation |
 |---|---|---|---|
 | R1 | Pages are made for business definitions. A full transcript is a wider use. | Long transcript Pages can add noise to Genie Ontology. Curators can push back. | A dedicated domain. Clear titles. Summary first. Term Pages in slice 4 give the clean definitions. |
-| R2 | PII in transcripts, against the docs' warning. | Personal data in a governed, globally replicated store with no CMK. | Scrub, review, banner, sensitive control, dedicated domain. Q2 to the owner. |
+| R2 | PII in transcripts, against the docs' warning. | Personal data in a governed, globally replicated store with no CMK. | Line review, PII banner, sensitive control, dedicated domain. The offline scrub in slice 5. |
 | R3 | DRAFT is not private with the default grant. | Colleagues can read or publish a draft. | The banner and the admin checklist. Q3. |
 | R4 | The body size limit is unknown. | A long call fails or is cut. | The cap and the split. The slice 0 probe. |
 | R5 | The citation link format for a Page is not documented. | The chip of slice 3 can fail. | The slice 0 probe. The chip shows only on a sure match. |
 | R6 | The Pages API is new and can change. | Calls fail after a change. | One Rust component, typed reply classes, fake-server tests. |
 | R7 | Model speaker labels are wrong. | A wrong attribution in a governed Page. | The "can be wrong" line. The speaker map in the review. |
 
-## 12. Open questions for the user
+## 12. Questions for the user
 
-1. **Publish rule.** Which option do you pick: (a) DRAFT, then one-click Publish in the hub; (b) publish at the review; or (c) auto-publish? The plan recommends (a).
-2. **PII and full transcripts.** The Pages docs say not to put PII in Pages. Do you accept full transcripts with the scrub and the review? Or do you want the Page to hold only the summary and decisions, with the full transcript in the volume?
-3. **Domain readers.** By default every account user can manage Pages and read DRAFT Pages. Must the admin guide require a dedicated domain with a limited `MANAGE PAGES` grant?
-4. **Names.** Can the review let the user map a speaker label to a real name? Names make the Page more useful and less private.
-5. **Opt-in.** Must "Make a Page from this call" be a per-recording action only? Or do you want a setting that opens the review after each recording?
-6. **Colleague benefit.** Bottle cannot count other people's questions. Is the local citation count plus the admin audit table enough?
-7. **Notes in the Page.** Do you agree to put Summary and Decisions in the Transcript Page? Do you agree to keep action items out?
-8. **Scope.** Do you agree to move UC Pages into the MVP scope in AGENTS.md?
+### 12.1 Decided (2026-11-20)
+
+1. **Publish rule.** Owner: "publishing of a Unity Catalog Page needs to happen separately."
+   - Decision: Bottle creates DRAFT Pages only, after the review, and never publishes (Section 6).
+2. **PII and full transcripts.** Owner: "We can leave that for the time being, but this can be something that can be done offline."
+   - Decision: slice 1 has no automatic scrub. The line review and the PII banner stay. The scrub is the offline slice 5.
+3. **Trigger.** Owner: "Not needed right now."
+   - Decision: no automatic review after a call. The only trigger is the manual action "Make a Page from this call". No setting.
+
+### 12.2 Open
+
+1. **Domain readers.** By default every account user can manage Pages and read DRAFT Pages. Must the admin guide require a dedicated domain with a limited `MANAGE PAGES` grant?
+2. **Names.** Can the review let the user map a speaker label to a real name? Names make the Page more useful and less private.
+3. **Colleague benefit.** Bottle cannot count other people's questions. Is the local citation count plus the admin audit table enough?
+4. **Notes in the Page.** Do you agree to put Summary and Decisions in the Transcript Page? Do you agree to keep action items out?
+5. **Scope.** Do you agree to move UC Pages into the MVP scope in AGENTS.md?
+6. **Offline scrub.** When must the offline scrub of slice 5 run? It can run once after Bottle writes the transcript, or each time the review opens.
