@@ -171,6 +171,9 @@ describe('AT-20 without pointer or animation', () => {
     await act(async () => void vi.advanceTimersByTime(DOUBLE_CLICK_MS));
     vi.useRealTimers();
     expect(inputEmits()).toEqual([
+      // lamp-alive: the host (not the brain) learns that the art is not hidden, so its eye poller
+      // runs for this MOG (`mog_look_host::hide_notice` takes it).
+      { mogId: ID, kind: 'click', payload: { action: 'view.hidden', hidden: false } },
       // MB-06a (#73): the MOG view tells the brain on mount that it is open.
       { mogId: ID, kind: 'click', payload: { action: 'view.ready' } },
       { mogId: ID, kind: 'hover' },

@@ -5,6 +5,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { createHash } from 'node:crypto';
 import { inflateSync } from 'node:zlib';
 
 const dir = resolve(import.meta.dirname, '../mog-rive/fallback');
@@ -127,5 +128,45 @@ describe('the transparent PNG fallback (ADR 0027)', () => {
     // Every pose with a body shows it above the rim; sleeping is fully in the lamp.
     expect(layer('genie-idle').alpha(200, 200)).toBe(255);
     expect(layer('genie-answering').alpha(200, 100)).toBe(255);
+  });
+
+  it('[lamp-alive] the baked gold spark is gone from every Genie layer, and the body is not', () => {
+    // Where the Sparkle node of scene.rml sat in each pose (tools/clean_lamp_layers.py).
+    const centre: Record<string, number> = {
+      idle: 146,
+      listening: 89,
+      processing: 115,
+      answering: 27,
+      success: 29,
+      error: 106,
+      sleeping: 238,
+    };
+    for (const m of MOODS) {
+      const g = decodePng(resolve(dir, 'layers', `genie-${m}.png`));
+      const cy = centre[m] ?? 0;
+      for (const dx of [-14, -6, 0, 6, 14]) expect(g.alpha(200 + dx, cy), `${m} dx ${dx}`).toBe(0);
+    }
+    // The art next to it stays: the head of the standing pose and the lamp-free body.
+    expect(decodePng(resolve(dir, 'layers', 'genie-idle.png')).alpha(200, 210)).toBe(255);
+    expect(decodePng(resolve(dir, 'layers', 'genie-answering.png')).alpha(200, 70)).toBe(255);
+  });
+
+  it('[lamp-alive] the cleaned layers match SPARK-CLEAN.sha256 (no hand edit, no re-render without the clean step)', () => {
+    const sha = (f: string) => createHash('sha256').update(readFileSync(f)).digest('hex');
+    const lines = readFileSync(resolve(dir, 'layers', 'SPARK-CLEAN.sha256'), 'utf8')
+      .trim()
+      .split('\n')
+      .map((l) => l.split(/\s+/) as [string, string]);
+    expect(lines.map(([, n]) => n)).toEqual([
+      'tools/clean_lamp_layers.py',
+      ...MOODS.map((m) => `genie-${m}.png`).sort(),
+    ]);
+    for (const [hash, name] of lines) {
+      const file = name.startsWith('tools/')
+        ? resolve(import.meta.dirname, '..', name)
+        : resolve(dir, 'layers', name);
+      // The script is read with its line endings as they are on disk (the file is LF only).
+      expect(sha(file), name).toBe(hash);
+    }
   });
 });

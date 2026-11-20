@@ -416,6 +416,11 @@ impl GatewayComponents for HostComponents<'_> {
     fn call(&self, command: &'static str, args: Value) -> CoreResult<Value> {
         match command {
             "view_emit" => {
+                // lamp-alive: the hide notice of a MOG view is for the host (the eye poller), not
+                // a user click: it never reaches the brain.
+                if crate::mog_look_host::hide_notice(self.from, &args) {
+                    return Ok(json!({}));
+                }
                 let item = view_input_payload(self.from, args);
                 if self.brain.relay(events::VIEW_INPUT, item) {
                     Ok(json!({}))

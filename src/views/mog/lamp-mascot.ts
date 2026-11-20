@@ -7,8 +7,12 @@
  * the Genie's height continuous when the pose changes (FLIP), and schedules the one-shot life
  * signs with timers: a blink in every pose with open eyes, and a small peek-up at rest.
  *
- * CPU: in the rest, peek, error and sleeping states no CSS loop and no animation frame runs.
- * Only listening, working and answer-ready loop, and only while they last.
+ * CPU: the Genie's own loops run only in listening, working and answer-ready, and only while they
+ * last. The gold spark over the head is the one thing that is always alive (a slow orbit and a
+ * twinkle, 8..12 s a loop, `.lamp-spark` in mog.css, transform and opacity only, so it runs on the
+ * compositor). It pauses while the MOG is hidden or sleeping, and it is still with reduced motion.
+ * The eyes follow the pointer (`setLook`): the host reads the global pointer, so the view only
+ * moves two pupil overlays by a few px with a CSS transition; no timer and no frame loop.
  *
  * Like every renderer it only shows what the brain sends; it never picks a mood (UX-01b).
  */
@@ -136,6 +140,32 @@ export const EYES: Readonly<Partial<Record<Mood, readonly [number, number, numbe
   ],
 };
 
+/**
+ * The poses whose eyes follow the pointer: the open ones. Sleeping (closed), error (X eyes) and
+ * success (closed, happy) keep their eyes, so they never track.
+ */
+export const GAZE_MOODS: readonly Mood[] = ['idle', 'listening', 'processing', 'answering'];
+
+/**
+ * The gaze overlay of each tracking pose: the eye colour, and the top and bottom colour of the
+ * dark screen behind the eyes (the screen is a vertical gradient), sampled from the layers. While
+ * the gaze is off the baked eyes show. While it is on, a patch of the screen colour covers the
+ * baked eye (the EYES rect) and a pupil of the eye colour moves over it.
+ */
+export const GAZE_COLOURS: Readonly<
+  Partial<Record<Mood, { eye: string; top: string; bottom: string }>>
+> = {
+  idle: { eye: '#8acaff', top: 'rgb(25 47 55)', bottom: 'rgb(16 37 44)' },
+  listening: { eye: '#70c4ab', top: 'rgb(26 48 56)', bottom: 'rgb(16 37 44)' },
+  processing: { eye: '#ff9e94', top: 'rgb(24 46 54)', bottom: 'rgb(19 40 47)' },
+  answering: { eye: '#fcba33', top: 'rgb(25 47 55)', bottom: 'rgb(16 37 44)' },
+};
+
+/** The gaze goes back to straight ahead this long after the last vector (ms, the CSS transition). */
+export const GAZE_SETTLE_MS = 260;
+/** A look vector shorter than this is "straight ahead". */
+export const GAZE_EPSILON = 0.02;
+
 /** The level ring redraws only for a change this big (0..1). */
 export const LEVEL_STEP = 0.02;
 
@@ -207,7 +237,52 @@ function currentY(el: HTMLElement, fallback: number): number {
   return Number.isNaN(px) ? fallback : (px / h) * 100;
 }
 
-type TimerKey = 'rest' | 'blink' | 'blinkEnd' | 'peekUp' | 'peekUpEnd' | 'glint' | 'cueOut';
+type TimerKey =
+  'rest' | 'blink' | 'blinkEnd' | 'peekUp' | 'peekUpEnd' | 'glint' | 'cueOut' | 'gazeSettle';
+
+const STAR_PATH =
+  'M0 -16 C1.6 -5 5 -1.6 16 0 C5 1.6 1.6 5 0 16 C-1.6 5 -5 1.6 -16 0 C-5 -1.6 -1.6 -5 0 -16Z';
+
+/** The gold spark over the head, drawn apart from the art (the layers have none). */
+function spark(): HTMLElement {
+  const anchor = document.createElement('div');
+  anchor.className = 'lamp-spark';
+  anchor.dataset['spark'] = '';
+  anchor.innerHTML =
+    '<div class="spark-orbit"><div class="spark-arm"><div class="spark-turn">' +
+    '<svg class="spark-star" viewBox="-24 -24 48 48" aria-hidden="true">' +
+    '<defs><radialGradient id="spark-halo"><stop offset="0" stop-color="#f6c463" stop-opacity="0.5"/>' +
+    '<stop offset="1" stop-color="#f6c463" stop-opacity="0"/></radialGradient></defs>' +
+    '<circle r="24" fill="url(#spark-halo)"/>' +
+    `<path d="${STAR_PATH}" fill="#f6c463"/>` +
+    `<path d="${STAR_PATH}" fill="#fff3c4" transform="scale(0.45)"/>` +
+    '</svg></div></div></div>';
+  return anchor;
+}
+
+/** The gaze layer: per tracking pose, a cover and a pupil over each baked eye. */
+function gazeLayer(): HTMLElement {
+  const layer = document.createElement('div');
+  layer.className = 'gaze';
+  for (const m of GAZE_MOODS) {
+    const c = GAZE_COLOURS[m];
+    if (!c) continue;
+    const pose = document.createElement('div');
+    pose.className = 'gaze-pose';
+    pose.dataset['gaze'] = m;
+    for (const [x, y, w, h] of EYES[m] ?? []) {
+      const eye = document.createElement('div');
+      eye.className = 'gaze-eye';
+      eye.style.cssText = `left:${(x / 4).toFixed(3)}%;top:${(y / 4).toFixed(3)}%;width:${(w / 4).toFixed(3)}%;height:${(h / 4).toFixed(3)}%;--gaze-top:${c.top};--gaze-bottom:${c.bottom};--gaze-eye:${c.eye}`;
+      const pupil = document.createElement('i');
+      pupil.className = 'gaze-pupil';
+      eye.append(pupil);
+      pose.append(eye);
+    }
+    layer.append(pose);
+  }
+  return layer;
+}
 
 export class LampMascot implements MascotRenderer {
   readonly #clock: LampClock;
@@ -218,6 +293,9 @@ export class LampMascot implements MascotRenderer {
   #poses: Partial<Record<Mood, HTMLImageElement>> = {};
   #cue: HTMLImageElement | undefined;
   #glow: SVGSVGElement | undefined;
+  #gaze: HTMLElement | undefined;
+  #look = { dx: 0, dy: 0 };
+  #hidden = false;
   #mood: Mood = FIRST_FRAME.mood;
   #hover = false;
   #attention = false;
@@ -270,6 +348,11 @@ export class LampMascot implements MascotRenderer {
       this.#poses[m] = pose;
       body.append(pose);
     }
+    // The gold spark over the head, on its own orbit, and the gaze overlay over the eyes.
+    body.append(spark());
+    const gaze = gazeLayer();
+    this.#gaze = gaze;
+    body.append(gaze);
     // One shared lid layer in the screen colour of the art: a lid pair per pose.
     const lids = MOODS.map((m) =>
       (EYES[m] ?? [])
@@ -319,6 +402,68 @@ export class LampMascot implements MascotRenderer {
     root.style.setProperty('--level', v.toFixed(3));
   }
 
+  /**
+   * Where the eyes look: a vector in the unit disc from the eye centre (`mog:look`, the host reads
+   * the pointer). The pupils move a few px toward it and ease back to centre at `0, 0`. It does
+   * nothing while the MOG is hidden, in a pose with closed or special eyes, or with reduced motion.
+   */
+  setLook(dx: number, dy: number): void {
+    const x = Number.isFinite(dx) ? Math.max(-1, Math.min(1, dx)) : 0;
+    const y = Number.isFinite(dy) ? Math.max(-1, Math.min(1, dy)) : 0;
+    const len = Math.hypot(x, y);
+    this.#look = len > 1 ? { dx: x / len, dy: y / len } : { dx: x, dy: y };
+    this.#applyGaze();
+  }
+
+  /**
+   * The MOG is hidden (the Hide menu item, or the page is not visible): the spark orbit pauses
+   * and the eyes look ahead.
+   */
+  setHidden(hidden: boolean): void {
+    if (hidden === this.#hidden) return;
+    this.#hidden = hidden;
+    const root = this.#root;
+    if (root) {
+      if (hidden) root.dataset['paused'] = '';
+      else delete root.dataset['paused'];
+    }
+    this.#applyGaze();
+  }
+
+  /** The gaze offset the pupils show now, for tests and the shots: `{ dx, dy }` in the unit disc. */
+  get gaze(): { dx: number; dy: number } {
+    return this.#tracking() ? this.#look : { dx: 0, dy: 0 };
+  }
+
+  #tracking(): boolean {
+    return (
+      !this.#hidden &&
+      !this.#reduced() &&
+      this.#root !== undefined &&
+      GAZE_MOODS.includes(this.#mood) &&
+      this.#state !== 'sleeping'
+    );
+  }
+
+  #applyGaze(): void {
+    const root = this.#root;
+    const gaze = this.#gaze;
+    if (!root || !gaze) return;
+    const { dx, dy } = this.gaze;
+    gaze.style.setProperty('--look-x', dx.toFixed(3));
+    gaze.style.setProperty('--look-y', dy.toFixed(3));
+    if (Math.hypot(dx, dy) >= GAZE_EPSILON) {
+      this.#cancel('gazeSettle');
+      root.dataset['look'] = '';
+    } else if (root.dataset['look'] !== undefined && !this.#timers.has('gazeSettle')) {
+      // Straight ahead: let the pupils glide to the centre, then show the baked eyes again.
+      this.#after('gazeSettle', GAZE_SETTLE_MS, () => {
+        if (this.#root && this.gaze.dx === 0 && this.gaze.dy === 0)
+          delete this.#root.dataset['look'];
+      });
+    }
+  }
+
   /** A poke is a peek: the Genie looks out. It never changes the mood (UX-02a). */
   poke(): void {
     if (this.#state !== 'rest') return;
@@ -330,7 +475,8 @@ export class LampMascot implements MascotRenderer {
     for (const id of this.#timers.values()) this.#clock.clearTimeout(id);
     this.#timers.clear();
     this.#root?.remove();
-    this.#root = this.#genie = this.#cue = this.#glow = undefined;
+    this.#root = this.#genie = this.#cue = this.#glow = this.#gaze = undefined;
+    this.#look = { dx: 0, dy: 0 };
     this.#poses = {};
     this.#state = undefined;
   }
@@ -430,6 +576,7 @@ export class LampMascot implements MascotRenderer {
     }
     this.#renderCue();
     this.#schedule(prevState, next, reduced);
+    this.#applyGaze();
   }
 
   #renderCue(): void {

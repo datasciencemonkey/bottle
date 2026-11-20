@@ -16,7 +16,7 @@ import {
   type CardSection,
   type CardUpdate,
 } from '../view-ipc';
-import { createWindowFit } from './fit-window';
+import { applyCardSide, createWindowFit, tauriCardWindow, widthMayChangeIn } from './fit-window';
 import { GenieCard } from './GenieCard';
 import { Popup } from './Popup';
 import { NO_LINKS, SafeMarkdown } from './safe-markdown';
@@ -224,7 +224,9 @@ export function CardView({ mogId }: { mogId: MogId }) {
   const shown = kept && (!newest || newest.id === kept.blurbs[0]?.id) ? kept : card;
   // #573: the window takes the height of the pop-up or the Genie card (`fit-window.ts`).
   const genie = card !== undefined && isGenieBlurbId(newest?.id);
-  const fit = useMemo(() => createWindowFit(), []);
+  // lamp-alive: the card sits close to its MOG on either side; `data-side` on the page mirrors
+  // the tail (card.css) toward the MOG.
+  const fit = useMemo(() => createWindowFit(tauriCardWindow, { onSide: applyCardSide }), []);
   const lastPx = useRef<number | undefined>(undefined);
   const onSize = useCallback(
     (px: number) => {
@@ -245,6 +247,30 @@ export function CardView({ mogId }: { mogId: MogId }) {
     };
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
+  }, [fit]);
+  // lamp-alive: the pill changes width after the first fit (the timer comes in after 3 s, the stage
+  // line changes): fit the window again, so no clear window lies between the pill and the MOG.
+  useEffect(() => {
+    if (typeof MutationObserver === 'undefined') return;
+    let raf = 0;
+    const mo = new MutationObserver((records) => {
+      const widthMayChange = widthMayChangeIn(records);
+      if (!widthMayChange) return;
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        if (lastPx.current !== undefined) void fit(lastPx.current, window.innerHeight);
+      });
+    });
+    mo.observe(document.getElementById('root') ?? document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      characterDataOldValue: true,
+    });
+    return () => {
+      mo.disconnect();
+      cancelAnimationFrame(raf);
+    };
   }, [fit]);
   // #573: the echo of an ⌥G question (`ask:<utterance>`, one line, no Ask Genie chip) comes in
   // the same task as the Genie status pill, so it shows nothing: no flash before the pill.

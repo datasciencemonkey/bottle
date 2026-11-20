@@ -59,6 +59,10 @@ pub const CARD_UPDATE: &str = "card:update";
 /// Mic frames for the MOG level meter (UX-06a), sent to `mog-<owner>` (#285, ADR 0040).
 /// Not in the 4.5 list of the requirements.
 pub const MOG_LEVEL: &str = "mog:level";
+/// Where one MOG's eyes look, from the global pointer (lamp-alive). Payload
+/// `{ mogId, dx, dy }`: a unit-disc vector from the eye centre, never a pointer position.
+/// The brain passes `{ dx, dy }` on to that one MOG view as `mog:look`. Not in the 4.5 list.
+pub const MOG_LOOK: &str = "mog:look";
 /// `view_emit` arrives in the brain under this name.
 pub const VIEW_INPUT: &str = "view:input";
 /// ADR 0103: the record key (⌥R) in a talk-key hold, with the knob on. Payload:
@@ -103,6 +107,7 @@ pub const ALL: &[EventSpec] = &[
         direction: Direction::BrainToView,
     },
     core(VIEW_INPUT, "view.input"),
+    core(MOG_LOOK, "mog.look"),
     core(HOTKEY_RECORD_TOGGLE, "hotkey.record_toggle"),
     core(RECORDING_STATE, "recording.state"),
     core(RECORDING_JOB, "recording.job"),

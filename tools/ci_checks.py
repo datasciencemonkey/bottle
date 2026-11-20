@@ -76,7 +76,7 @@ def check_mascot():
 def fallback_problems(root):
     """The PNG fallback must come from the current scene.rml (UX-09b). No Rive CLI is needed:
     tools/render_mog_fallback.py records the SHA-256 of scene.rml in fallback/SOURCE.sha256."""
-    rerun = "run uv run --no-project --with pillow python tools/render_mog_fallback.py and commit the result"
+    rerun = "run uv run --no-project --with pillow --with numpy python tools/render_mog_fallback.py and commit the result"
     recorded = os.path.join(root, "mog-rive", "fallback", "SOURCE.sha256")
     if not os.path.exists(recorded):
         return [f"mog-rive/fallback/SOURCE.sha256 is missing: {rerun}"]
