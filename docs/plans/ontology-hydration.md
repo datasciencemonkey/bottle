@@ -36,6 +36,8 @@ The owner decided three questions on 2026-11-20 (Section 12.1). Bottle creates D
 | Curator | A principal with `MANAGE DISCOVER` (account) or `MANAGE DOMAIN` (domain). A curator can also certify and deprecate Pages. |
 | Review | The hub screen where the user checks a Page before Bottle writes it. |
 | Approval | The user action that lets Bottle write one exact Page body. It binds to a SHA-256 hash of that body. |
+| PII | Personal data that can identify a person. |
+| PII banner | The review text that warns the user about personal data in a Page. It is always on. |
 | Scrub | The fixed rules that replace or remove personal data and secrets (G-37a..c). It is a later offline step (slice 5). It is not in slice 1. |
 | Evidence | For a Term Page: the transcript quotes, with time and speaker, that support the definition. |
 | Page record | One local row that links a recording to its Page name, request ID, body hash and state. |
@@ -384,7 +386,7 @@ This is the "everyone benefits" part. The user must see the loop close.
 
 1. **Answer card chip.** A Genie answer can cite a Page that is in the Page records. Then the card shows "Used your Page: <title>". Bottle reads the cited links from `genie_poll_response` [D6]. Slice 0 must confirm the link format for a Page.
 2. **Hub Pages area.** A list of the user's Pages, with title, domain, state and date. Each row shows the count of local answers that cited the Page.
-3. **Colleague benefit.** Colleagues benefit only after the Page is published in Databricks, outside Bottle. A DRAFT is used only in the owner's Genie One conversations [D1]. Bottle cannot see a colleague's questions. The hub shows the line "Published Pages help everyone in this domain. Bottle can't count other people's questions."
+3. **Colleague benefit.** Colleagues benefit only after the Page is published in Databricks, outside Bottle. Genie One uses a DRAFT only in the owner's conversations [D1]. Bottle cannot see a colleague's questions. The hub shows the line "Published Pages help everyone in this domain. Bottle can't count other people's questions."
 4. **Admin view (not in Bottle).** An admin can count Page use in `system.access.audit` under `pages` [D9]. The admin guide must name this table. This is an open question (Section 12.2, item 3).
 
 ## 6. Publish: decided, outside Bottle
