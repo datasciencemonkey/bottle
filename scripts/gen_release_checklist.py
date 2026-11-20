@@ -25,6 +25,27 @@ INSPECTION_STEPS = {
 }
 
 
+# The local release steps (no Apple Developer Program: the owner signs on the owner's Mac).
+RELEASE_STEPS = [
+    "", "## Release steps", "",
+    "The macOS build is signed on the owner's Mac with the self-signed identity \"Bottle Local Dev "
+    "Signing\". The key never leaves that Mac, so no CI job signs for macOS. The Windows installer "
+    "is built by `.github/workflows/release.yml` and is unsigned.", "",
+    "1. Land the release PR. Check the version in `package.json`, `src-tauri/tauri.conf.json` and "
+    "`Cargo.toml`, and write `docs/release/notes-vX.Y.Z.md`.",
+    "2. On the Mac, check out `main` at `origin/main` with a clean tree.",
+    "3. Run `scripts/release-macos.sh X.Y.Z`. It builds, signs and checks the app, makes the DMG, "
+    "signs it and writes the SHA-256 under `dist/release/`.",
+    "4. Push the tag `vX.Y.Z`. The Release workflow builds the Windows installer and attaches it to a "
+    "draft release.",
+    "5. Create or complete the release with the `gh release` command that the script prints. If the "
+    "draft exists, run `gh release upload` for the DMG and the SHA-256 file, then `gh release edit` "
+    "with `--notes-file` and `--draft=false`.",
+    "6. Install the DMG on a clean Mac. Check the Gatekeeper steps in the notes, the permissions and "
+    "`codesign -d -r-` (the leaf hash must be unchanged).",
+]
+
+
 def platforms(doc, at):
     text = f"{at.name} {at.procedure} {at.criterion}"
     extra = [p for p in EXTRA_PLATFORMS if p in text]
@@ -50,6 +71,7 @@ def build(doc, source):
     for at in sorted(gated, key=lambda a: req_parse.id_sort_key(a.id)):
         out.append(f"| [ ] | {at.id} | {at.name} | {at.gate} | {platforms(doc, at)} | {at.criterion} | |")
     out += admin_inspection(doc)
+    out += RELEASE_STEPS
     return "\n".join(out) + "\n"
 
 
