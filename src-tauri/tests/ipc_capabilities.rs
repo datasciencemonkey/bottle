@@ -102,6 +102,47 @@ fn arc_4_views_only_listen_to_events() {
     assert_eq!(core_of("brain"), want);
 }
 
+/// #523: a view cannot open a URL. The only ways out are `link_open` (brain only) and the
+/// opener plugins, so no view capability may name `link_open`, `opener:*`, `shell:*` or
+/// `core:webview:*`, and the opener plugin is not a dependency of the app.
+#[test]
+fn arc_4_views_cannot_open_urls_directly() {
+    let spec = COMMANDS
+        .iter()
+        .find(|c| c.name == "link_open")
+        .expect("link_open row");
+    assert_eq!(
+        spec.windows,
+        [WindowClass::Brain],
+        "link_open is brain only"
+    );
+    for id in ["hub", "mog", "card"] {
+        let perms = permissions(&capability(id));
+        assert!(!perms.contains(&allow("link_open")), "view {id}");
+        assert!(
+            !perms.contains(&allow("recording_open")) || id == "hub",
+            "view {id}"
+        );
+        for p in &perms {
+            for banned in [
+                "opener:",
+                "shell:",
+                "core:webview:",
+                "core:window:allow-create",
+            ] {
+                assert!(!p.starts_with(banned), "view {id} has {p}");
+            }
+        }
+    }
+    assert!(permissions(&capability("brain")).contains(&allow("link_open")));
+    let cargo =
+        std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
+            .expect("Cargo.toml");
+    for banned in ["tauri-plugin-opener", "tauri-plugin-shell"] {
+        assert!(!cargo.contains(banned), "{banned} must stay out");
+    }
+}
+
 #[test]
 fn arc_4_build_script_registers_the_table_in_the_app_manifest() {
     let build = std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("build.rs"))

@@ -29,6 +29,7 @@ function dbRow(n: number, askedAt: number, over: Row = {}): Row {
     status: 'completed',
     profileName: 'test-profile',
     workspaceHost: 'example.cloud.databricks.com',
+    deepLink: 'https://example.cloud.databricks.com/one/chat/threads/c1?o=1',
     questionUser: `Question ${n}?`,
     keyNumbers: JSON.stringify([{ text: '4.2 %', label: 'growth' }, { text: '$1.3M' }]),
     finalAnswerMd: `**Answer** ${n}`,
@@ -93,6 +94,7 @@ describe('readConversations (#103)', () => {
       askedAt: T0 + 3000,
       profile: 'test-profile',
       workspaceHost: 'example.cloud.databricks.com',
+      deepLink: 'https://example.cloud.databricks.com/one/chat/threads/c1?o=1',
       status: 'answered',
       conversationId: 'conv-3',
     });
@@ -174,6 +176,23 @@ describe('wireHubConversations (#103)', () => {
     input({ action: 'conversations.ready' });
     await vi.waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]?.rows.map((r) => r.requestId)).toEqual([req(1)]);
+  });
+
+  it('[#523] workspaceOf gives the profile and host of a listed exchange, from the brain only', async () => {
+    const { store } = fakeStore({ [MOG_A]: [dbRow(1, T0)] });
+    const w = wireHubConversations(bus, {
+      store,
+      mogs,
+      send: async () => undefined,
+      sendOpen: async () => undefined,
+    });
+    expect(w.workspaceOf(req(1))).toBeUndefined();
+    await w.refresh();
+    expect(w.workspaceOf(req(1))).toEqual({
+      profile: 'test-profile',
+      host: 'example.cloud.databricks.com',
+    });
+    expect(w.workspaceOf(req(99))).toBeUndefined();
   });
 
   it('[#103] refresh() sends the list again after a new exchange is saved', async () => {

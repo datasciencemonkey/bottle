@@ -33,6 +33,7 @@ pub mod keyboard_env;
 #[cfg(feature = "lakebase")]
 pub mod lakebase_pool;
 pub mod latency_bench;
+pub mod link_open;
 pub mod local_store;
 pub mod loopback;
 pub mod mcp_transport;

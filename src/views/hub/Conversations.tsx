@@ -36,12 +36,16 @@ import {
   type ThreadComposerThread,
 } from '../../shared/hub-conversations';
 import { paletteColorOf } from '../../shared/mog-palette';
+import { ExternalLink } from 'lucide-react';
+import { LINK_OPEN, openInDatabricksUrl } from '../../shared/link-trust';
 import { SafeMarkdown } from '../card/safe-markdown';
 import { ConversationsSkeleton } from '../ui/motion-effects';
 import { emitView } from '../view-ipc';
 import { motion } from 'motion/react';
 
 const DAY_MS = 86_400_000;
+/** The most body rows of a table in a thread (the card shows fewer, `MAX_TABLE_ROWS`). */
+const CONV_TABLE_ROWS = 200;
 
 /** #ui-4: the small colour dot next to a MOG's name, the same colour as its lamp and card. */
 function MogDot({ row }: { row: ConversationRow }) {
@@ -198,6 +202,19 @@ function Exchange({ row, headingId }: { row: ConversationRow; headingId?: string
     () => ({ profileHost: row.workspaceHost, allowedAppUrls: [] as string[] }),
     [row.workspaceHost],
   );
+  const databricksUrl = openInDatabricksUrl(row.deepLink, row.workspaceHost);
+  // #523: the hub never opens a URL. The click goes to the brain with the exchange it belongs to;
+  // the brain finds the workspace itself, checks the URL again, and Rust opens it.
+  const openLink = useCallback(
+    (url: string) => {
+      void emitView(CONVERSATIONS_VIEW_ID, 'click', {
+        target: LINK_OPEN,
+        url,
+        requestId: row.requestId,
+      }).catch(() => undefined);
+    },
+    [row.requestId],
+  );
   return (
     <div className="conv-exchange" data-exchange={row.requestId}>
       <h2 id={headingId} className="conv-question">
@@ -223,16 +240,39 @@ function Exchange({ row, headingId }: { row: ConversationRow; headingId?: string
           {row.mogName}
         </span>
       </p>
+      {databricksUrl !== undefined && (
+        <p className="conv-open">
+          <a
+            className="conv-databricks"
+            data-action="open-in-databricks"
+            href={databricksUrl}
+            rel="noopener noreferrer"
+            title={databricksUrl}
+            onClick={(e) => {
+              e.preventDefault();
+              if (e.detail > 1) return;
+              openLink(databricksUrl);
+            }}
+          >
+            Open in Databricks
+            <ExternalLink size={11} strokeWidth={2} aria-hidden="true" />
+          </a>
+        </p>
+      )}
       {row.answerMd ? (
-        // TODO(#523): open a trusted link in the browser once the hub has the link opener. Until then a
-        // click never navigates the hub window; the link text stays selectable.
+        // #523: a trusted link goes to the brain (`openLink`); a click never navigates the hub.
         <div
           className="conv-answer"
           onClick={(e) => {
             if ((e.target as Element).closest('a')) e.preventDefault();
           }}
         >
-          <SafeMarkdown text={row.answerMd} trust={trust} />
+          <SafeMarkdown
+            text={row.answerMd}
+            trust={trust}
+            onOpenLink={openLink}
+            maxTableRows={CONV_TABLE_ROWS}
+          />
         </div>
       ) : (
         <p className="conv-answer conv-answer--none">

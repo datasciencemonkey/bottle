@@ -392,6 +392,10 @@ fn hub_103_exchange_recent_lists_newest_first_inside_one_mog() {
     assert_eq!(a["workspaceHost"], "example.cloud.databricks.com");
     assert_eq!(a["askedAt"], T0);
     assert_eq!(a["completedAt"], T0 + 5_000);
+    // #523: the stored `deep_link` (the URL Genie One returned) reaches the hub, so "Open in
+    // Databricks" needs no new column and no migration. A failed row has none.
+    assert_eq!(a["deepLink"], DEEP_LINK);
+    assert_eq!(r[0]["deepLink"], Value::Null);
     let kn: Value = serde_json::from_str(a["keyNumbers"].as_str().expect("key numbers")).unwrap();
     assert_eq!(
         kn,

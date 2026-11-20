@@ -412,3 +412,73 @@ describe('the sticky composer slot (ui-1, #103)', () => {
     ]);
   });
 });
+
+describe('hub Conversations links (#523)', () => {
+  beforeEach(() => tauri.reset());
+  const WS = 'https://acme-prod.cloud.databricks.test';
+  const DEEP = `${WS}/one/chat/threads/c1?o=1234&utm_source=genie_chat_mcp`;
+  const one = (over: Partial<ConversationRow>) => [
+    row(1, at(19, 14, 2), { workspaceHost: WS, ...over }),
+  ];
+  const linkClicks = () =>
+    viewEmits().filter(
+      (e) => (e as { payload?: { target?: string } }).payload?.target === 'link_open',
+    ) as { mogId: string; payload: { url: string; requestId: string } }[];
+
+  it('[#523] shows Open in Databricks in the thread header and sends link_open with the exchange', async () => {
+    const { el } = await mount();
+    const rows1 = one({ deepLink: DEEP });
+    await tauri.emitTo('hub', 'hub:conversations', { rows: rows1 });
+    const a = el.querySelector('a[data-action="open-in-databricks"]') as HTMLAnchorElement;
+    expect(a.textContent).toBe('Open in Databricks');
+    expect(a.getAttribute('title')).toBe(DEEP);
+    const ev = new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 });
+    await act(async () => void a.dispatchEvent(ev));
+    expect(ev.defaultPrevented).toBe(true);
+    expect(linkClicks()).toEqual([
+      {
+        mogId: 'conversations',
+        kind: 'click',
+        payload: { target: 'link_open', url: DEEP, requestId: rows1[0]?.requestId },
+      },
+    ]);
+  });
+
+  it.each([
+    ['no deep_link', { deepLink: '' }],
+    ['a deep_link of another host', { deepLink: 'https://evil.test/one/chat/threads/c1' }],
+    ['a spoofed host', { deepLink: `${WS}.evil.test/x` }],
+    ['an old row with no deepLink field', {}],
+  ])('[#523] shows no Open in Databricks for %s', async (_n, over) => {
+    const { el } = await mount();
+    await tauri.emitTo('hub', 'hub:conversations', { rows: one(over) });
+    expect(el.querySelector('[data-action="open-in-databricks"]')).toBeNull();
+  });
+
+  it('[#523] a trusted link in the answer sends link_open, never navigates; another host is text', async () => {
+    const { el } = await mount();
+    const r = one({ answerMd: `[chat](${WS}/a/b) and [docs](https://evil.test/d) and ${WS}/c` });
+    await tauri.emitTo('hub', 'hub:conversations', { rows: r });
+    const links = [...el.querySelectorAll('.conv-answer a')] as HTMLAnchorElement[];
+    expect(links.map((a) => a.getAttribute('href'))).toEqual([`${WS}/a/b`, `${WS}/c`]);
+    const evs = links.map(
+      () => new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }),
+    );
+    await act(async () => links.forEach((a, i) => a.dispatchEvent(evs[i] as Event)));
+    expect(evs.every((e) => e.defaultPrevented)).toBe(true);
+    expect(linkClicks().map((c) => c.payload.url)).toEqual([`${WS}/a/b`, `${WS}/c`]);
+    expect(linkClicks().every((c) => c.payload.requestId === r[0]?.requestId)).toBe(true);
+    expect(el.querySelector('.conv-answer .md-link--blocked')?.textContent).toContain('evil.test');
+  });
+
+  it('[#523] a table in a thread renders with aligned, readable numbers', async () => {
+    const { el } = await mount();
+    await tauri.emitTo('hub', 'hub:conversations', {
+      rows: one({ answerMd: '| name | total |\n| --- | ---: |\n| Apple | 1220042.3509332137 |' }),
+    });
+    expect(el.querySelector('.conv-answer table.md-table')).not.toBeNull();
+    const td = el.querySelector('.conv-answer tbody td:last-child') as HTMLElement;
+    expect(td.getAttribute('data-align')).toBe('right');
+    expect(td.getAttribute('title')).toBe('1220042.3509332137');
+  });
+});

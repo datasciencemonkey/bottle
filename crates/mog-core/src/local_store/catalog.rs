@@ -266,7 +266,7 @@ const EXCHANGE_RECENT: Stmt = Stmt {
     sql: "SELECT request_id AS requestId, status, profile_name AS profileName, \
           workspace_host AS workspaceHost, question_user AS questionUser, \
           key_numbers AS keyNumbers, final_answer_md AS finalAnswerMd, \
-          conversation_id AS conversationId, \
+          deep_link AS deepLink, conversation_id AS conversationId, \
           asked_at AS askedAt, completed_at AS completedAt \
           FROM genie_exchange \
           WHERE mog_id = :mogId AND deleted_at IS NULL \

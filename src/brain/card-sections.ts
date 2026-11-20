@@ -45,7 +45,10 @@ export interface SectionInput {
   /** True when "Resend without context" applies (a preamble was sent, or POLICY_DENIED). */
   canResend?: boolean;
   sttBadge?: string;
+  /** The `deep_link` of the answer (the conversation in the workspace), for "Open in Databricks". */
   deepLink?: string;
+  /** #523: the workspace host (`https://host`) the card trusts links for; a link elsewhere is text. */
+  workspaceHost?: string;
   /** The "Where your data goes" text. */
   dataFlowText: string;
 }
@@ -64,7 +67,7 @@ export type ExpandedSection =
   | { id: 'sentToGenie'; text: string }
   | { id: 'resend' }
   | { id: 'copy'; formats: ('markdown' | 'csv')[] }
-  | { id: 'footer'; sttBadge?: string; deepLink?: string }
+  | { id: 'footer'; sttBadge?: string; deepLink?: string; workspaceHost?: string }
   | { id: 'dataFlow'; text: string };
 
 export function buildSections(i: SectionInput): ExpandedSection[] {
@@ -92,6 +95,7 @@ export function buildSections(i: SectionInput): ExpandedSection[] {
     id: 'footer',
     ...(i.sttBadge !== undefined ? { sttBadge: i.sttBadge } : {}),
     ...(i.deepLink !== undefined ? { deepLink: i.deepLink } : {}),
+    ...(i.workspaceHost !== undefined ? { workspaceHost: i.workspaceHost } : {}),
   });
   out.push({ id: 'dataFlow', text: i.dataFlowText });
   return out;

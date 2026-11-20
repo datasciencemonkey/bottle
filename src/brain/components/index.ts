@@ -47,6 +47,7 @@ import {
 import { createGenieDirectSend } from '../genie-direct';
 import { createGenieFollowup } from '../genie-followup';
 import { wireGenieCard } from '../genie-card-wiring';
+import { wireLinkOpen } from '../link-open-wiring';
 import { createAppMogContextMenu } from '../mog-context-menu';
 import { createThreadFocus, routeAskToFocusedThread, wireThreadFollowup } from '../thread-focus';
 import { isHubFocused, showHub } from '../hub-window';
@@ -296,6 +297,7 @@ export function startBrain(): Brain {
           captureMood.ask(mogId, phase);
         },
         showCard: (mogId) => call('window_card_show', { mogId }),
+        hostOf: async (profile) => (await ipcListProfiles()).find((p) => p.name === profile)?.host,
       }),
       // #557: an ask or a press with no home profile opens the picker; the user picks, then the
       // text goes.
@@ -362,6 +364,22 @@ export function startBrain(): Brain {
     bus.on(EVENTS['hotkey.ptt'].name, (p) => {
       const e = asPttEvent(p, 0);
       if (e?.phase === 'up' && e.ask === true) captureMood.ask(e.mogId, 'pending');
+    });
+    // #523: a link click in the card or in hub Conversations. The brain finds the workspace from
+    // its own data (the MOG's home profile, or the exchange the hub lists), checks the URL again
+    // and asks Rust to open it (Rust checks it a third time).
+    wireLinkOpen(bus, {
+      resolve: async (input, requestId) => {
+        if (input.from === 'hub') {
+          const ws = requestId ? conversations.workspaceOf(requestId) : undefined;
+          return ws && ws.host !== '' ? { profile: ws.profile, host: ws.host } : undefined;
+        }
+        const profile = homes.home(input.mogId);
+        if (!profile) return undefined;
+        const host = (await ipcListProfiles()).find((p) => p.name === profile)?.host;
+        return host ? { profile, host } : undefined;
+      },
+      open: (args) => call('link_open', args),
     });
     // #573: the transient Genie card (its timer holds while the pointer is on the MOG) and the
     // double-click on a MOG or its card, which opens hub Conversations.

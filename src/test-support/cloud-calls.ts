@@ -74,6 +74,7 @@ export const CALL_CLASS = {
   recording_retry: 'cloud',
   recording_open: 'local', // opens the browser; Bottle itself sends nothing
   recording_open_system_audio_settings: 'local',
+  link_open: 'local', // opens the browser; Bottle itself sends nothing
 } as const satisfies Record<keyof typeof COMMANDS, CallClass>;
 
 /** The command arguments of an invoke log entry: `call()` sends them as `{ args }` (ADR 0003). */
