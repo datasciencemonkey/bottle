@@ -188,4 +188,126 @@ describe('Recordings area (hub)', () => {
     await tauri.emitTo('hub', HUB_RECORDING_DETAIL_EVENT, detail);
     expect(el.querySelector('[data-recording-detail]')?.textContent).not.toContain('Friday');
   });
+
+  describe('every status and action (upload in parts)', () => {
+    const base = { name: 'x', startedAt: NOW - 1000, durationS: 600, canOpen: false };
+    const rowsOf = (...r: object[]) =>
+      r.map((x, i) => ({ ...base, id: `s${i}`, startedAt: NOW - i * 1000, ...x }));
+    const label = (el: Element, id: string) =>
+      el.querySelector(`[data-recording-row="${id}"] [data-recording-status]`)?.textContent;
+
+    it('[REC-P1] shows recording, uploading N/M, waiting for network, transcribing, writing notes, done, failed with a reason, and not uploaded', async () => {
+      const { el } = await render(<Recordings active now={() => NOW} />);
+      await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, {
+        rows: rowsOf(
+          { status: 'recording', partsUploaded: 1, partsTotal: 2 },
+          { status: 'uploading', partsUploaded: 2, partsTotal: 5 },
+          { status: 'recording', waitingNetwork: true, partsUploaded: 0, partsTotal: 3 },
+          { status: 'transcribing', canOpen: true },
+          { status: 'writing_notes', canOpen: true },
+          { status: 'done', canOpen: true },
+          {
+            status: 'failed',
+            error: RECORDING_ERRORS.volume_permission,
+            canOpen: true,
+          },
+          { status: 'failed', onDeviceOnly: true, error: RECORDING_ERRORS.upload_failed },
+        ),
+      });
+      expect([0, 1, 2, 3, 4, 5, 6, 7].map((i) => label(el, `s${i}`))).toEqual([
+        'Recording',
+        'Uploading 2/5',
+        'Waiting for network',
+        'Transcribing',
+        'Writing notes',
+        'Done',
+        'Failed',
+        'Not uploaded',
+      ]);
+      // The failed row gives its reason in the list; a device-only row is not "failed".
+      expect(el.querySelector('[data-recording-row="s6"]')?.textContent).toContain(
+        RECORDING_ERRORS.volume_permission.text,
+      );
+      expect(el.querySelector('[data-recording-row="s7"] [data-recording-reason]')).toBeNull();
+    });
+
+    it('[REC-P2] a device-only recording has Upload, not Open in volume, and asks for no detail', async () => {
+      const { el } = await render(<Recordings active now={() => NOW} />);
+      await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, {
+        rows: rowsOf({
+          status: 'failed',
+          onDeviceOnly: true,
+          error: RECORDING_ERRORS.upload_failed,
+        }),
+      });
+      const before = emits().length;
+      await click(el.querySelector('[data-recording-row="s0"]'));
+      expect(emits().length).toBe(before);
+      expect(el.querySelector('[data-recording-open]')).toBeNull();
+      expect(el.querySelector('[data-recording-device]')?.textContent).toContain(
+        'only on this device',
+      );
+      await click(el.querySelector('[data-recording-upload]'));
+      expect(emits().at(-1)).toEqual({ action: 'recordings.retry', id: 's0' });
+    });
+
+    it('[REC-P3] Retry shows for a failed recording and sends the retry once', async () => {
+      const { el } = await render(<Recordings active now={() => NOW} />);
+      await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, {
+        rows: rowsOf({
+          status: 'failed',
+          error: RECORDING_ERRORS.volume_permission,
+          canOpen: true,
+        }),
+      });
+      await click(el.querySelector('[data-recording-row="s0"]'));
+      await click(el.querySelector('[data-recording-retry]'));
+      expect(emits().at(-1)).toEqual({ action: 'recordings.retry', id: 's0' });
+      // An error whose own action is Retry shows that action, not a second button.
+      await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, {
+        rows: rowsOf({ status: 'failed', error: RECORDING_ERRORS.network, canOpen: true }),
+      });
+      expect(el.querySelector('[data-recording-retry]')).toBeNull();
+      expect(el.querySelectorAll('[role="alert"] button')).toHaveLength(1);
+    });
+
+    it('[REC-P4] Open in volume shows once a part is in the volume, while the call goes on', async () => {
+      const { el } = await render(<Recordings active now={() => NOW} />);
+      await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, {
+        rows: rowsOf({ status: 'recording', partsUploaded: 1, partsTotal: 2, canOpen: true }),
+      });
+      await click(el.querySelector('[data-recording-row="s0"]'));
+      await click(el.querySelector('[data-recording-open]'));
+      expect(emits().at(-1)).toEqual({ action: 'recordings.open', id: 's0' });
+    });
+
+    it('[REC-P5] waiting for network explains that the audio stays on the device', async () => {
+      const { el } = await render(<Recordings active now={() => NOW} />);
+      await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, {
+        rows: rowsOf({
+          status: 'uploading',
+          waitingNetwork: true,
+          partsUploaded: 1,
+          partsTotal: 3,
+        }),
+      });
+      await click(el.querySelector('[data-recording-row="s0"]'));
+      expect(el.querySelector('[data-recording-waiting]')?.textContent).toContain('network');
+      expect(el.querySelector('[data-recording-retry], [data-recording-upload]')).toBeNull();
+    });
+
+    it('[REC-P6] a list update replaces the rows with no ask (the brain pushes on each job event)', async () => {
+      const { el } = await render(<Recordings active now={() => NOW} />);
+      await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, {
+        rows: rowsOf({ status: 'uploading', partsUploaded: 1, partsTotal: 5 }),
+      });
+      expect(label(el, 's0')).toBe('Uploading 1/5');
+      const asks = emits().length;
+      await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, {
+        rows: rowsOf({ status: 'uploading', partsUploaded: 4, partsTotal: 5 }),
+      });
+      expect(label(el, 's0')).toBe('Uploading 4/5');
+      expect(emits().length).toBe(asks);
+    });
+  });
 });

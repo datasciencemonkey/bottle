@@ -135,6 +135,30 @@ impl HandoffSlot {
 }
 
 impl PartsHandoff for HandoffSlot {
+    fn started(&self, rec: &mog_core::recording_capture::session::StartedRecording) {
+        let to = self
+            .inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .to
+            .clone();
+        if let Some(to) = to {
+            to.started(rec);
+        }
+    }
+
+    fn part_ready(&self, id: &str, part: &mog_core::recording_capture::chunker::PartFile) {
+        let to = self
+            .inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .to
+            .clone();
+        if let Some(to) = to {
+            to.part_ready(id, part);
+        }
+    }
+
     fn finished(&self, rec: FinishedRecording) {
         let to = {
             let mut st = self.inner.lock().unwrap_or_else(PoisonError::into_inner);

@@ -14,10 +14,11 @@ pub mod wav;
 
 /// The rate of the recorded stream: 16 kHz mono.
 pub const SAMPLE_RATE: u32 = 16_000;
-/// The part cap in minutes. `None`: no split, one part per recording (recordings stop at
-/// 120 min). The cloud side sends parts to a serving endpoint as data URLs; set a cap here if
-/// one request cannot take a whole recording (for example `Some(10)`).
-pub const PART_MAX_MINUTES: Option<u64> = None;
+/// The part length in minutes. The capture cuts a new Ogg Opus part every 5 minutes of audio
+/// (counted in samples, so it is exact and needs no clock), and the cloud side uploads each
+/// finished part while the call goes on. A crash then loses at most the part that is open.
+/// `None` is one part per recording. At 16 kbps a part is about 600 KB.
+pub const PART_MAX_MINUTES: Option<u64> = Some(5);
 /// [`PART_MAX_MINUTES`] in 16 kHz samples.
 pub const PART_MAX_SAMPLES: Option<u64> = part_max_samples(PART_MAX_MINUTES);
 

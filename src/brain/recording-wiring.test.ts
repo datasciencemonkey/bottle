@@ -506,6 +506,42 @@ describe('recording wiring (brain, ADR 0103)', () => {
     );
   });
 
+  it('[REC-P7] each job event updates the open list: part counts, the network mark and its end, and a device-only row', async () => {
+    const t = setup();
+    t.click({ action: 'recordings.ready' });
+    await flush();
+    const row = () => t.last<HubRecordings>(HUB_RECORDINGS_EVENT)?.rows.find((r) => r.id === 'r3');
+    t.fake.pushJob({ id: 'r3', status: 'uploading', partsUploaded: 1, partsTotal: 4 });
+    await flush();
+    expect(row()).toMatchObject({ status: 'uploading', partsUploaded: 1, partsTotal: 4 });
+    expect(row()?.canOpen).toBe(true);
+    expect(row()?.waitingNetwork).toBeUndefined();
+    t.fake.pushJob({
+      id: 'r3',
+      status: 'uploading',
+      errorKind: 'network',
+      partsUploaded: 1,
+      partsTotal: 4,
+    });
+    await flush();
+    expect(row()?.waitingNetwork).toBe(true);
+    expect(row()?.error).toBeUndefined();
+    // The network is back: the event has no error, so the mark goes.
+    t.fake.pushJob({ id: 'r3', status: 'uploading', partsUploaded: 2, partsTotal: 4 });
+    await flush();
+    expect(row()?.waitingNetwork).toBeUndefined();
+    expect(row()?.partsUploaded).toBe(2);
+    t.fake.pushJob({
+      id: 'r3',
+      status: 'failed',
+      errorKind: 'upload_failed',
+      errorStage: 'uploading',
+      onDeviceOnly: true,
+    });
+    await flush();
+    expect(row()).toMatchObject({ status: 'failed', onDeviceOnly: true, canOpen: false });
+  });
+
   it('[REC-H9] a job writing notes shows that status; the model errors name the model', async () => {
     const t = setup();
     t.click({ action: 'recordings.ready' });

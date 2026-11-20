@@ -83,6 +83,9 @@ export interface RecSummary {
   errorKind?: string;
   /** The step that failed; Retry starts again there. */
   errorStage?: RecordingStatus;
+  partsUploaded?: number;
+  partsTotal?: number;
+  onDeviceOnly?: boolean;
 }
 
 /** One transcript segment; times in seconds, absolute across parts. */
@@ -107,6 +110,11 @@ export interface RecJob {
   id: string;
   status: RecordingStatus;
   errorKind?: string;
+  errorStage?: RecordingStatus;
+  durationS?: number;
+  partsUploaded?: number;
+  partsTotal?: number;
+  onDeviceOnly?: boolean;
 }
 
 /**
@@ -181,7 +189,9 @@ function controlOf(s: RecState): RecordingControlView {
 
 /** The audio is in the volume: past the upload, or failed after it. */
 function inVolume(r: RecSummary): boolean {
-  if (r.status === 'recording' || r.status === 'uploading') return false;
+  if (r.onDeviceOnly) return false;
+  // Upload in parts: the folder exists as soon as the first part is in.
+  if (r.status === 'recording' || r.status === 'uploading') return (r.partsUploaded ?? 0) > 0;
   if (r.status !== 'failed') return true;
   return (
     r.errorKind !== 'upload_failed' &&
@@ -201,6 +211,12 @@ function rowOf(r: RecSummary): RecordingRow {
     canOpen: inVolume(r),
   };
   if (r.status === 'failed') row.error = recordingNotice(r.errorKind);
+  if (r.partsUploaded !== undefined) row.partsUploaded = r.partsUploaded;
+  if (r.partsTotal !== undefined) row.partsTotal = r.partsTotal;
+  if (r.onDeviceOnly) row.onDeviceOnly = true;
+  // A live recording or upload that waits for the network: not a failure, no action.
+  if ((r.status === 'recording' || r.status === 'uploading') && r.errorKind === 'network')
+    row.waitingNetwork = true;
   return row;
 }
 
@@ -368,8 +384,20 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
     seen.set(j.id, j.status);
     const row = rows.find((r) => r.id === j.id);
     if (row) {
+      // The event carries the whole row state: a mark that went away (the network is back)
+      // must clear too. Each event refreshes the open list; nothing polls.
       row.status = j.status;
+      delete row.errorKind;
+      delete row.errorStage;
+      delete row.partsUploaded;
+      delete row.partsTotal;
+      delete row.onDeviceOnly;
       if (j.errorKind !== undefined) row.errorKind = j.errorKind;
+      if (j.errorStage !== undefined) row.errorStage = j.errorStage;
+      if (j.durationS !== undefined && j.durationS > 0) row.durationS = j.durationS;
+      if (j.partsUploaded !== undefined) row.partsUploaded = j.partsUploaded;
+      if (j.partsTotal !== undefined) row.partsTotal = j.partsTotal;
+      if (j.onDeviceOnly) row.onDeviceOnly = true;
       publishList();
     } else void refreshList();
     if (j.status === 'done' && before !== 'done') {
@@ -542,6 +570,9 @@ function summaryOf(s: RecordingSummary): RecSummary {
   };
   if (s.errorKind !== undefined) r.errorKind = s.errorKind;
   if (s.errorStage !== undefined) r.errorStage = s.errorStage;
+  if (s.partsUploaded !== undefined) r.partsUploaded = s.partsUploaded;
+  if (s.partsTotal !== undefined) r.partsTotal = s.partsTotal;
+  if (s.onDeviceOnly) r.onDeviceOnly = true;
   return r;
 }
 

@@ -247,12 +247,17 @@ fn adr_0103_part_names_have_two_digits() {
 }
 
 #[test]
-fn adr_0103_default_is_one_part_with_an_optional_cap() {
-    // The cloud side sends a whole recording in one request if it can: no split by default,
-    // and one constant to set a cap later (UPDATE 4 and later rec-lead notes).
-    assert_eq!(mog_core::recording_capture::PART_MAX_MINUTES, None);
-    assert_eq!(mog_core::recording_capture::PART_MAX_SAMPLES, None);
-    assert_eq!(SessionConfig::default().part_max_samples, None);
+fn adr_0103_default_cuts_a_part_every_five_minutes() {
+    // Upload in parts during the call: one constant sets the part length.
+    assert_eq!(mog_core::recording_capture::PART_MAX_MINUTES, Some(5));
+    assert_eq!(
+        mog_core::recording_capture::PART_MAX_SAMPLES,
+        Some(5 * 60 * 16_000)
+    );
+    assert_eq!(
+        SessionConfig::default().part_max_samples,
+        Some(5 * 60 * 16_000)
+    );
     assert_eq!(SessionConfig::default().part_format, PartFormat::Opus);
     assert_eq!(
         mog_core::recording_capture::part_max_samples(Some(10)),
@@ -522,10 +527,24 @@ fn cap_01a_recording_device_routes_each_source_to_its_backend() {
 
 // ---------- recording session ----------
 
+/// The finished recordings, and a log of the hand-off calls in order.
 #[derive(Default)]
-struct Handoff(Mutex<Vec<FinishedRecording>>);
+struct Handoff(Mutex<Vec<FinishedRecording>>, Mutex<Vec<String>>);
 impl PartsHandoff for Handoff {
+    fn started(&self, rec: &mog_core::recording_capture::session::StartedRecording) {
+        self.1.lock().unwrap().push(format!("started:{}", rec.name));
+    }
+    fn part_ready(&self, _id: &str, part: &mog_core::recording_capture::chunker::PartFile) {
+        // The part is closed when it is announced: it must be a whole Ogg Opus file.
+        let bytes = std::fs::read(&part.path).unwrap();
+        assert!(!bytes.is_empty());
+        self.1
+            .lock()
+            .unwrap()
+            .push(format!("part:{}", part.file_name));
+    }
     fn finished(&self, rec: FinishedRecording) {
+        self.1.lock().unwrap().push("finished".to_owned());
         self.0.lock().unwrap().push(rec);
     }
 }
@@ -628,7 +647,8 @@ fn rig_full(sys_fail: bool, part_max_samples: Option<u64>, part_format: PartForm
 }
 
 fn rig() -> Rig {
-    rig_with(false, mog_core::recording_capture::PART_MAX_SAMPLES)
+    // One part: most tests look at one file.
+    rig_with(false, None)
 }
 
 fn opts(name: &str, length_min: u32) -> StartOptions {
@@ -796,7 +816,7 @@ fn cap_10a_five_seconds_of_zero_system_audio_is_silent_or_denied() {
 
 #[test]
 fn adr_0103_no_system_audio_backend_records_mic_only() {
-    let r = rig_with(true, mog_core::recording_capture::PART_MAX_SAMPLES);
+    let r = rig_with(true, None);
     let info = r.session.start(opts("n", 60)).unwrap();
     assert_eq!(info.system_audio, SystemAudioState::Unavailable);
     assert_eq!(info.system_audio.code(), "unavailable");
@@ -1422,4 +1442,53 @@ fn adr_0103_a_start_during_a_stop_is_busy() {
     );
     assert!(!session.is_recording());
     session.start(opts("y", 60)).unwrap();
+}
+
+/// Wait (no latency assert) until the writer thread has announced `n` log entries.
+fn wait_log(r: &Rig, n: usize) -> Vec<String> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let log = r.handoff.1.lock().unwrap().clone();
+        if log.len() >= n || std::time::Instant::now() > deadline {
+            return log;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn rec_parts_rotation_follows_the_audio_clock() {
+    // The part length counts 16 kHz samples of the mixed stream, and the simulated clock moves
+    // with the audio, so the cut is exact and no real time passes. Scale: 10 ms stands in for
+    // one minute (as in the 90 minute test), so the 5 minute cap is 50 ms = 800 samples.
+    let r = rig_full(false, Some(5 * 160), PartFormat::Flac);
+    r.session.start(opts("2026-11-20_0900", 60)).unwrap();
+    assert_eq!(
+        r.handoff.1.lock().unwrap().as_slice(),
+        ["started:2026-11-20_0900"]
+    );
+    // Just under "5 minutes" (40 ms of 50 ms): no part is announced yet.
+    play(&r, 40, 0.1, 0.0);
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(
+        r.handoff.1.lock().unwrap().len(),
+        1,
+        "no part before the cap"
+    );
+    play(&r, 20, 0.1, 0.0);
+    let log = wait_log(&r, 2);
+    assert_eq!(log[1], "part:2026-11-20_0900.part01.flac");
+    play(&r, 50, 0.1, 0.0);
+    let log = wait_log(&r, 3);
+    assert_eq!(log[2], "part:2026-11-20_0900.part02.flac");
+    play(&r, 10, 0.1, 0.0);
+    let done = r.session.stop(StopCause::User).unwrap();
+    // Three parts at the stop; the last one is not announced, `finished` carries it.
+    assert_eq!(done.parts.len(), 3);
+    assert_eq!(done.parts[0].samples, 5 * 160);
+    assert_eq!(done.parts[1].offset_ms, 50);
+    assert_eq!(done.parts[2].offset_ms, 100);
+    let log = r.handoff.1.lock().unwrap().clone();
+    assert_eq!(log.last().unwrap(), "finished");
+    assert_eq!(log.iter().filter(|l| l.starts_with("part:")).count(), 2);
 }

@@ -766,6 +766,12 @@ export interface RecordingSummary {
   errorKind?: RecordingErrorKind;
   /** The step that failed; Retry starts again there. */
   errorStage?: RecordingStatus;
+  /** Parts of the recording that are in the volume. */
+  partsUploaded?: number;
+  /** Parts of the recording so far (all of them once it has stopped). */
+  partsTotal?: number;
+  /** The audio is only on this device: no job.json in the volume and no upload runs now. */
+  onDeviceOnly?: boolean;
 }
 
 /** One transcript turn. Seconds from the start, across parts. `text` is user content. */

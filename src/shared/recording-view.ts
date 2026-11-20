@@ -215,8 +215,15 @@ export interface RecordingRow {
   status: RecordingStatus;
   /** Set when `status` is `failed`. */
   error?: RecordingNotice;
-  /** The audio is in the volume, so "Open in Databricks" can show. */
+  /** The audio is in the volume, so "Open in volume" can show. */
   canOpen: boolean;
+  /** Parts in the volume, and parts so far (upload in parts during the call). */
+  partsUploaded?: number;
+  partsTotal?: number;
+  /** The audio is only on this device ("Not uploaded", with Upload). */
+  onDeviceOnly?: true;
+  /** A recording or upload that retries in the background until the network is back. */
+  waitingNetwork?: true;
 }
 
 export interface HubRecordings {
@@ -391,7 +398,11 @@ function isRow(v: unknown): v is RecordingRow {
     isNum(v['durationS']) &&
     isStatus(v['status']) &&
     optNotice(v['error']) &&
-    typeof v['canOpen'] === 'boolean'
+    typeof v['canOpen'] === 'boolean' &&
+    (v['partsUploaded'] === undefined || isNum(v['partsUploaded'])) &&
+    (v['partsTotal'] === undefined || isNum(v['partsTotal'])) &&
+    (v['onDeviceOnly'] === undefined || v['onDeviceOnly'] === true) &&
+    (v['waitingNetwork'] === undefined || v['waitingNetwork'] === true)
   );
 }
 
@@ -455,3 +466,26 @@ export const STATUS_LABEL: Readonly<Record<RecordingStatus, string>> = {
   done: 'Done',
   failed: 'Failed',
 };
+
+/** The status words of a row, with the part count while it uploads. */
+export function statusLabelOf(
+  row: Pick<
+    RecordingRow,
+    'status' | 'partsUploaded' | 'partsTotal' | 'onDeviceOnly' | 'waitingNetwork'
+  >,
+): string {
+  if (row.onDeviceOnly) return 'Not uploaded';
+  if (row.waitingNetwork) return 'Waiting for network';
+  if (row.status === 'uploading' && row.partsTotal !== undefined && row.partsTotal > 0)
+    return `Uploading ${Math.min(row.partsUploaded ?? 0, row.partsTotal)}/${row.partsTotal}`;
+  return STATUS_LABEL[row.status];
+}
+
+/** The one action of a row that has none in its error: Upload (device only) or Retry (failed). */
+export function rowActionOf(row: {
+  status: RecordingStatus;
+  onDeviceOnly?: true;
+}): 'upload' | 'retry' | undefined {
+  if (row.onDeviceOnly) return 'upload';
+  return row.status === 'failed' ? 'retry' : undefined;
+}

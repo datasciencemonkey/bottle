@@ -23,8 +23,9 @@ import {
   HUB_RECORDING_DETAIL_EVENT,
   HUB_RECORDINGS_EVENT,
   lengthOf,
-  STATUS_LABEL,
+  rowActionOf,
   stampOf,
+  statusLabelOf,
   type HubRecordingDetail,
   type HubRecordings,
   type RecordingRow,
@@ -119,19 +120,33 @@ function groupByDay(rows: RecordingRow[], now: number) {
   return out;
 }
 
-function Status({ row }: { row: Pick<RecordingRow, 'status'> }) {
+type StatusRow = Pick<
+  RecordingRow,
+  'status' | 'partsUploaded' | 'partsTotal' | 'onDeviceOnly' | 'waitingNetwork'
+>;
+
+/** The tone of a status chip: the words differ from the stage for the device and network cases. */
+function toneOf(row: StatusRow): string {
+  if (row.onDeviceOnly) return 'device';
+  if (row.waitingNetwork) return 'waiting';
+  return row.status;
+}
+
+function Status({ row }: { row: StatusRow }) {
   const busy =
-    row.status === 'uploading' || row.status === 'transcribing' || row.status === 'writing_notes';
+    !row.onDeviceOnly &&
+    !row.waitingNetwork &&
+    (row.status === 'uploading' || row.status === 'transcribing' || row.status === 'writing_notes');
   return (
-    <span className="rec-status" data-status={row.status}>
+    <span className="rec-status" data-status={toneOf(row)} data-recording-status>
       <span className="rec-status-dot" aria-hidden="true" data-busy={busy || undefined} />
-      {STATUS_LABEL[row.status]}
+      {statusLabelOf(row)}
     </span>
   );
 }
 
 const PENDING_TEXT: Partial<Record<RecordingRow['status'], string>> = {
-  recording: 'This call is still recording.',
+  recording: 'This call is still recording. Bottle uploads it in parts while you talk.',
   uploading: 'Bottle is uploading this call. The notes show here when they are ready.',
   transcribing: 'Bottle is transcribing this call. The notes show here when they are ready.',
   writing_notes: 'Bottle is writing the notes. They show here in a moment.',
@@ -151,6 +166,9 @@ function Detail({
   const error = d?.error ?? row.error;
   const open = () => sendRecording({ action: 'recordings.open', id: row.id });
   const retry = () => sendRecording({ action: 'recordings.retry', id: row.id });
+  const action = rowActionOf(row.onDeviceOnly ? { status, onDeviceOnly: true } : { status });
+  // A failed recording whose error already offers Retry shows it in the alert, once.
+  const alertHasRetry = error?.action?.target === 'retry';
   return (
     <article
       className="rec-detail"
@@ -165,20 +183,46 @@ function Detail({
           </h2>
           <p className="rec-detail-meta">
             <span>{lengthOf(row.durationS)}</span>
-            <Status row={{ status }} />
+            <Status row={{ ...row, status }} />
           </p>
         </div>
-        {row.canOpen && (
-          <button type="button" data-recording-open onClick={open}>
-            Open in Databricks
-          </button>
-        )}
+        <div className="rec-actions">
+          {action === 'upload' && (
+            <button type="button" data-recording-upload onClick={retry}>
+              Upload
+            </button>
+          )}
+          {action === 'retry' && !alertHasRetry && (
+            <button type="button" data-recording-retry onClick={retry}>
+              Retry
+            </button>
+          )}
+          {row.canOpen && (
+            <button type="button" data-recording-open onClick={open}>
+              Open in volume
+            </button>
+          )}
+        </div>
       </header>
-      {status === 'failed' && error && (
+      {row.onDeviceOnly && (
+        <p className="rec-pending" data-recording-device>
+          This recording is only on this device. Upload it to your volume to get the transcript and
+          the notes.
+        </p>
+      )}
+      {row.waitingNetwork && (
+        <p className="rec-pending" data-recording-waiting>
+          Bottle can't reach your workspace. It keeps the audio on this device and uploads again
+          when the network is back.
+        </p>
+      )}
+      {status === 'failed' && error && !row.onDeviceOnly && (
         <RecordingAlert notice={error} onRetry={retry} onOpen={open} onSettings={onOpenSettings} />
       )}
-      {PENDING_TEXT[status] && <p className="rec-pending">{PENDING_TEXT[status]}</p>}
-      {d === undefined && status === 'done' && (
+      {!row.onDeviceOnly && !row.waitingNetwork && PENDING_TEXT[status] && (
+        <p className="rec-pending">{PENDING_TEXT[status]}</p>
+      )}
+      {d === undefined && status === 'done' && !row.onDeviceOnly && (
         <div className="rec-skeleton rec-skeleton--tall" aria-busy="true" />
       )}
       {d?.unavailable && (
@@ -258,9 +302,12 @@ export function Recordings({
 
   // Ask for the detail of the selected recording, and again when its status changes.
   const status = selected?.status;
+  const deviceOnly = selected?.onDeviceOnly === true;
   useEffect(() => {
-    if (selectedId && status) sendRecording({ action: 'recordings.detail', id: selectedId });
-  }, [selectedId, status]);
+    // A recording that is only on the device has no files in the volume to read.
+    if (selectedId && status && !deviceOnly)
+      sendRecording({ action: 'recordings.detail', id: selectedId });
+  }, [selectedId, status, deviceOnly]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (rows.length === 0) return;
@@ -342,7 +389,15 @@ export function Recordings({
                 >
                   <span className="rec-row-main">
                     <span className="rec-row-time">{timeOf(r.startedAt)}</span>
-                    <span className="rec-row-len">{lengthOf(r.durationS)}</span>
+                    <span className="rec-row-len">
+                      {lengthOf(r.durationS)}
+                      {r.status === 'failed' && !r.onDeviceOnly && r.error && (
+                        <span className="rec-row-reason" data-recording-reason>
+                          {' · '}
+                          {r.error.text}
+                        </span>
+                      )}
+                    </span>
                   </span>
                   <span className="rec-row-side">
                     <Status row={r} />

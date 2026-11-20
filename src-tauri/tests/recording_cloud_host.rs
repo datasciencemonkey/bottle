@@ -7,7 +7,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bottle_lib::recording_cloud_host::{
-    temp_names_of, temp_parts_of, ActiveNames, PipelineHandoff,
+    resumable, resume_left, temp_names_in, temp_names_of, temp_parts_in, temp_parts_of, tidy_dir,
+    ActiveNames, LiveHandoff, PipelineHandoff, TempAudio,
 };
 use bottle_lib::recording_host::knob_hook;
 use mog_core::recording::{MemorySettingsStore, PipelineRequest};
@@ -239,5 +240,242 @@ fn rec_temp_names_lists_every_recording_left_on_the_device() {
     names.sort_unstable();
     assert_eq!(names, vec!["2026-11-18_0900", "2026-11-19_0905"]);
     assert!(temp_names_of(None).is_empty());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+// ---------- upload in parts: the old location, the sidecar, the resume ----------
+
+/// The pre-#592 layout: `<app cache>/recordings/<id>/<name>.opus`.
+#[test]
+fn rec_parts_old_cache_location_is_scanned_with_the_data_location() {
+    let data = temp("scan-data");
+    let cache = temp("scan-cache");
+    let new = data.join("rec-new");
+    std::fs::create_dir_all(&new).unwrap();
+    std::fs::write(new.join("2026-11-20_0900.part01.opus"), b"OggS").unwrap();
+    let old1 = cache.join("rec-aaa");
+    let old2 = cache.join("rec-bbb");
+    std::fs::create_dir_all(&old1).unwrap();
+    std::fs::create_dir_all(&old2).unwrap();
+    std::fs::write(old1.join("2026-11-19_0905.opus"), b"OggS").unwrap();
+    std::fs::write(old2.join("2026-11-19_1030.opus"), b"OggS").unwrap();
+
+    let roots = vec![data.clone(), cache.clone()];
+    let mut names: Vec<String> = temp_names_in(&roots).into_iter().map(|(n, _)| n).collect();
+    names.sort();
+    assert_eq!(
+        names,
+        ["2026-11-19_0905", "2026-11-19_1030", "2026-11-20_0900"]
+    );
+    assert_eq!(temp_parts_in(&roots, "2026-11-19_1030").len(), 1);
+    // Old builds wrote no sidecar: nothing resumes by itself.
+    assert!(resumable(&roots).is_empty());
+    // Through the seam: the cloud side sees them as device-only recordings.
+    use mog_core::recording_cloud::contract::LocalAudio;
+    let seam = TempAudio::new(roots, Arc::new(Default::default));
+    assert_eq!(seam.names().len(), 3);
+    assert!(seam.sidecar("2026-11-19_0905").is_none());
+    let _ = std::fs::remove_dir_all(data);
+    let _ = std::fs::remove_dir_all(cache);
+}
+
+#[test]
+fn rec_parts_a_sidecar_marks_a_dir_as_resumable_and_tidy_removes_it() {
+    use mog_core::recording_cloud::sidecar::{self, Sidecar};
+    let root = temp("sidecar");
+    let d = root.join("rec-1");
+    std::fs::create_dir_all(&d).unwrap();
+    sidecar::write(
+        &d,
+        &Sidecar::new(
+            "rec-1",
+            "2026-11-20_0900",
+            1_000,
+            "fake-home",
+            Some("Notes."),
+        ),
+    )
+    .unwrap();
+    // No audio yet: not resumable.
+    assert!(resumable(std::slice::from_ref(&root)).is_empty());
+    std::fs::write(d.join("2026-11-20_0900.part01.opus"), b"OggS").unwrap();
+    std::fs::write(d.join("2026-11-20_0900.part02.opus"), b"OggS").unwrap();
+    let found = resumable(std::slice::from_ref(&root));
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].1.profile, "fake-home");
+    assert_eq!(found[0].1.instructions.as_deref(), Some("Notes."));
+    assert_eq!(found[0].2.len(), 2, "both parts, in order");
+    // The sidecar holds no token and no audio.
+    let text = std::fs::read_to_string(d.join("job.local.json")).unwrap();
+    assert!(!text.contains("token") && text.len() < 400, "{text}");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(d.join("job.local.json"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+    // Audio left: tidy keeps the sidecar. Audio gone: it removes it and the dir.
+    tidy_dir(&d);
+    assert!(d.join("job.local.json").exists());
+    std::fs::remove_file(d.join("2026-11-20_0900.part01.opus")).unwrap();
+    std::fs::remove_file(d.join("2026-11-20_0900.part02.opus")).unwrap();
+    tidy_dir(&d);
+    assert!(!d.join("job.local.json").exists());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+fn live_handoff(enabled: bool, consent: bool, with_storage: bool) -> LiveHandoff {
+    use mog_core::clock::SimWallClock;
+    use mog_core::recording_cloud::cloud::{CloudDeps, ProfileWorkspace, RecordingCloudService};
+    struct NoWait;
+    impl mog_core::http_transport::Pause for NoWait {
+        fn pause(&self, _d: Duration) {}
+    }
+    struct Ws;
+    impl mog_core::recording_cloud::cloud::WorkspaceInfo for Ws {
+        fn host_url(&self, _p: &str) -> mog_core::error::CoreResult<String> {
+            Ok("https://dbc-fake.cloud.databricks.com".into())
+        }
+        fn workspace_id(&self, _p: &str) -> mog_core::error::CoreResult<String> {
+            Ok("1".into())
+        }
+    }
+    let _ = std::any::type_name::<ProfileWorkspace>();
+    let service = Arc::new(RecordingCloudService::new(CloudDeps {
+        http: Arc::new(mog_core::recording_cloud::http::ScriptedHttp::new()),
+        workspace: Arc::new(Ws),
+        wall: Arc::new(SimWallClock::at(1_795_100_700_000)),
+        pause: Arc::new(NoWait),
+    }));
+    let storage = with_storage.then(|| {
+        serde_json::from_value(serde_json::json!({"kind":"volume","root":"/Volumes/c/s/v"}))
+            .unwrap()
+    });
+    let settings = Arc::new(MemorySettingsStore::new(RecordingSettings {
+        enabled,
+        consent_ack: consent,
+        storage,
+        ..RecordingSettings::default()
+    }));
+    let adapter = Arc::new(mog_core::recording_cloud::contract::CloudAdapter::new(
+        service,
+        settings.clone(),
+        Arc::new(mog_core::recording_cloud::contract::NoLocalAudio),
+        Arc::new(|_| {}),
+        Arc::new(|| 1_795_100_700_000i64),
+    ));
+    let active = Arc::new(ActiveNames::default());
+    let fallback = PipelineHandoff::new(Arc::new(|_, _| {}), settings.clone(), active.clone());
+    LiveHandoff::new(adapter, settings, fallback, active)
+}
+
+fn started(dir: &std::path::Path) -> mog_core::recording_capture::session::StartedRecording {
+    mog_core::recording_capture::session::StartedRecording {
+        id: "rec-1234".into(),
+        name: "2026-11-20_0900".into(),
+        dir: dir.to_path_buf(),
+        started_at_ms: 1_795_100_400_000,
+        profile: Some("fake-home".into()),
+        instructions: None,
+    }
+}
+
+#[test]
+fn rec_parts_the_knob_and_consent_gate_the_upload_during_the_call() {
+    // Knob off, no consent, no storage, no profile: no worker, no sidecar, nothing leaves.
+    for (enabled, consent, storage) in [
+        (false, true, true),
+        (true, false, true),
+        (true, true, false),
+    ] {
+        let d = temp("gate");
+        let h = live_handoff(enabled, consent, storage);
+        h.started(&started(&d));
+        assert!(
+            !d.join("job.local.json").exists(),
+            "knob={enabled} consent={consent} storage={storage}"
+        );
+        let _ = std::fs::remove_dir_all(d);
+    }
+    let d = temp("gate-noprofile");
+    let h = live_handoff(true, true, true);
+    let mut s = started(&d);
+    s.profile = None;
+    h.started(&s);
+    assert!(!d.join("job.local.json").exists());
+    // All set: the sidecar is written and a worker takes the recording.
+    let d2 = temp("gate-on");
+    h.started(&started(&d2));
+    assert!(d2.join("job.local.json").exists());
+    let _ = std::fs::remove_dir_all(d);
+    let _ = std::fs::remove_dir_all(d2);
+}
+
+#[test]
+fn rec_parts_resume_at_launch_needs_the_knob_consent_and_storage() {
+    let root = temp("resume");
+    let d = root.join("rec-1");
+    std::fs::create_dir_all(&d).unwrap();
+    mog_core::recording_cloud::sidecar::write(
+        &d,
+        &mog_core::recording_cloud::sidecar::Sidecar::new(
+            "rec-1",
+            "2026-11-20_0900",
+            1_000,
+            "fake-home",
+            None,
+        ),
+    )
+    .unwrap();
+    std::fs::write(d.join("2026-11-20_0900.part01.opus"), b"OggS").unwrap();
+    let none = std::collections::HashSet::new();
+    assert_eq!(
+        resume_left(
+            &live_handoff(false, true, true),
+            std::slice::from_ref(&root),
+            &none
+        ),
+        0
+    );
+    assert_eq!(
+        resume_left(
+            &live_handoff(true, false, true),
+            std::slice::from_ref(&root),
+            &none
+        ),
+        0
+    );
+    assert_eq!(
+        resume_left(
+            &live_handoff(true, true, false),
+            std::slice::from_ref(&root),
+            &none
+        ),
+        0
+    );
+    let busy: std::collections::HashSet<String> = ["2026-11-20_0900".to_owned()].into();
+    assert_eq!(
+        resume_left(
+            &live_handoff(true, true, true),
+            std::slice::from_ref(&root),
+            &busy
+        ),
+        0
+    );
+    assert_eq!(
+        resume_left(
+            &live_handoff(true, true, true),
+            std::slice::from_ref(&root),
+            &none
+        ),
+        1
+    );
+    assert!(
+        d.join("2026-11-20_0900.part01.opus").exists(),
+        "audio stays until uploaded"
+    );
     let _ = std::fs::remove_dir_all(root);
 }

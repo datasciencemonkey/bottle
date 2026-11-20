@@ -1871,6 +1871,32 @@
     opacity: 1;
   }
 
+  .rec-row-reason {
+    display: inline-block;
+    max-width: 34ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: bottom;
+    white-space: nowrap;
+  }
+
+  .rec-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .rec-status[data-status='device'],
+  .rec-status[data-status='waiting'] {
+    color: var(--mog-text);
+  }
+
+  .rec-status[data-status='waiting'] .rec-status-dot {
+    background: var(--mog-eye);
+    opacity: 1;
+  }
+
   .rec-status[data-status='failed'] {
     color: var(--mog-lid);
   }
