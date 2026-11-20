@@ -69,6 +69,21 @@ describe('GenieOneMcpBackend.ask (#33)', () => {
     expect(r.journal.list()).toEqual([]);
   });
 
+  it('[#145] a follow-up sends the thread conversation_id on the one genie_ask, and a first ask sends none', async () => {
+    const r = rig({ responses: [scenarios.normalAnswer()] });
+    const bridge = createGenieBridge({ call: r.call, conversations: r.cm, hostOf: () => HOST });
+    await run(r, bridge.submit(request({ conversationId: 'fake-conv-7' })).events);
+    expect(asks(r)).toHaveLength(1);
+    expect(asks(r)[0]?.args.args).toEqual({
+      question: 'What was revenue last quarter?',
+      conversation_id: 'fake-conv-7',
+    });
+    const r2 = rig({ responses: [scenarios.normalAnswer()] });
+    const b2 = createGenieBridge({ call: r2.call, conversations: r2.cm, hostOf: () => HOST });
+    await run(r2, b2.submit(request()).events);
+    expect(asks(r2)[0]?.args.args).toEqual({ question: 'What was revenue last quarter?' });
+  });
+
   it('[G-15b] a failed ask is never sent again, for any failure', async () => {
     for (const code of ['offline', 'timeout', 'auth_expired', 'genie_one_off', 'non_json_reply']) {
       const r = rig({ rejectAsk: () => ({ error: code }) });

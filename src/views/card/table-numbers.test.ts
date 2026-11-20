@@ -74,7 +74,21 @@ describe('formatColumn (#523)', () => {
     expect(texts(['2024', '2025'], 'Year')).toEqual(['2024', '2025']);
     expect(texts(['00123', '00456'])).toEqual(['00123', '00456']);
     expect(texts(['007.5', '12.5'])).toEqual(['007.5', '12.5']);
-    for (const h of ['id', 'ID', 'user id', 'sfdc_id', 'order_key', 'customerId', 'phone'])
+    for (const h of [
+      'id',
+      'ID',
+      'user id',
+      'sfdc_id',
+      'order_key',
+      'customerId',
+      'phone',
+      'orderNo',
+      'invoiceNumber',
+      'order_no',
+      'invoice number',
+      'po_num',
+      'ticketNo',
+    ])
       expect(isIdHeader(h), h).toBe(true);
     for (const h of ['amount', 'total_dbu_dollars', 'count', 'valid', 'width'])
       expect(isIdHeader(h), h).toBe(false);

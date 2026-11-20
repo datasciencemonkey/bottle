@@ -11,6 +11,7 @@
     "core:window:allow-show",
     "core:window:allow-unminimize",
     "core:window:allow-set-focus",
+    "core:window:allow-is-focused",
     "core:menu:allow-new",
     "core:menu:allow-popup",
     "allow-cli-status",

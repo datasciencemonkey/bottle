@@ -26,9 +26,9 @@ const DECIMAL = /^[-+]?(?:\d{1,40}(?:\.\d{0,40})?|\.\d{1,40})(?:[eE][-+]?\d{1,4}
 const INTEGER = /^[-+]?\d{1,40}$/;
 /** A header that names an identifier or a year, so its integers are labels, not quantities. */
 const ID_HEADER =
-  /(^|[^a-z0-9])(id|ids|uuid|key|code|zip|zipcode|postal|phone|fax|year|yr|ssn|ein|sku|ref|num|no)([^a-z0-9]|$)/i;
+  /(^|[^a-z0-9])(id|ids|uuid|key|code|zip|zipcode|postal|phone|fax|year|yr|ssn|ein|sku|ref|num|no|number|order|invoice)([^a-z0-9]|$)/i;
 /** camelCase names such as `customerId` or `orderKey`. */
-const ID_CAMEL = /[a-z](Id|Key|Code|Year)$/;
+const ID_CAMEL = /[a-z](Id|Key|Code|Year|No|Num|Number)$/;
 
 export interface CellNumber {
   /** What the cell shows. */

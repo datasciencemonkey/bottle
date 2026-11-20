@@ -38,11 +38,19 @@ import { cardStackDeps, createCardStack, timeoutScheduler, type CardStack } from
 import { createSystemClock } from '../clock';
 import { createDictationSink } from '../dictation-copy';
 import { genieBlurbId } from '../../shared/genie-status';
+import {
+  HUB_THREAD_ACCESS_EVENT,
+  HUB_THREAD_STATUS_EVENT,
+  type ThreadAccess,
+  type ThreadStatus,
+} from '../../shared/hub-conversations';
 import { createGenieDirectSend } from '../genie-direct';
+import { createGenieFollowup } from '../genie-followup';
 import { wireGenieCard } from '../genie-card-wiring';
 import { wireLinkOpen } from '../link-open-wiring';
 import { createAppMogContextMenu } from '../mog-context-menu';
-import { showHub } from '../hub-window';
+import { createThreadFocus, routeAskToFocusedThread, wireThreadFollowup } from '../thread-focus';
+import { isHubFocused, showHub } from '../hub-window';
 import { asPttEvent } from '../ptt';
 import { createRecordToggle } from '../record-toggle';
 import { emitTo } from '@tauri-apps/api/event';
@@ -166,6 +174,32 @@ export function startBrain(): Brain {
       send: sendHubConversations,
       sendOpen: sendHubConversationsOpen,
     });
+    // #40 (AT-09): one local-history writer, shared by a direct ask and a thread follow-up, so
+    // each saved exchange refreshes the hub Conversations list the same way.
+    const recordGenieExchange = ipcGenieHistory(components.T10, () => void conversations.refresh());
+    // genie-followup (#145, #103): a follow-up from the thread composer or from a ⌥G press while
+    // the hub is focused on a thread (item 4, wired below with `insertionOn`/`onAsk`). It never
+    // touches a MOG card: the status goes to the hub, and the MOG and the profile that own the
+    // thread come from the stored exchanges (ARC-2), because the composer itself never carries a
+    // `mogId`, and its own copy of the profile is for display only.
+    const threadFocus = createThreadFocus();
+    const followup = createGenieFollowup({
+      genie: components.T8,
+      findThread: (conversationId) => conversations.findThread(conversationId),
+      sendStatus: (status: ThreadStatus) => {
+        void emitTo('hub', HUB_THREAD_STATUS_EVENT, status).catch(() => undefined);
+      },
+      profileStatus: (profile) => call('profile_status', { profile }),
+      onEnd: recordGenieExchange,
+      newOpId: () => crypto.randomUUID(),
+    });
+    wireThreadFollowup(bus, {
+      focus: threadFocus,
+      followup,
+      sendAccess: (access: ThreadAccess) => {
+        void emitTo('hub', HUB_THREAD_ACCESS_EVENT, access).catch(() => undefined);
+      },
+    });
     // #123 (MEM-32a, MEM-32c, MEM-32d): the hub Forget dialog runs Forget on T10 on a user click.
     // TODO(#163): pass `home` (the home host and workspace id from T7) for the memory review link.
     if (isForgetMemory(components.T10)) {
@@ -254,7 +288,7 @@ export function startBrain(): Brain {
         cardFor: stackFor,
         newOpId: () => crypto.randomUUID(),
         // #40 (AT-09): each request that ends saves one local exchange row through T10.
-        onEnd: ipcGenieHistory(components.T10, () => void conversations.refresh()),
+        onEnd: recordGenieExchange,
         // #573: the MOG shows the work (processing), then the answer (answering, success) or
         // the failure (error); the card shows next to the MOG when the outcome is on it.
         onPhase: (mogId, phase, opId) => {
@@ -453,7 +487,21 @@ export function startBrain(): Brain {
         route,
         // #142: T3 sends an ⌥G ask or shows the chip, and it releases the owner.
         // ADR 0098: with no ⌥G the utterance is dictated and gets the fallback chip.
-        onAsk: (r, owned) => askGate.onAsk(r, owned),
+        // genie-followup (#145, item 4): while the hub window is focused on a thread, a ⌥G
+        // press is a follow-up in it instead, with no card and no home-profile guess. A chip
+        // (no ⌥G) and an injection-suspected ask are never affected: only a clean ⌥G is.
+        onAsk: (r, owned) => {
+          void routeAskToFocusedThread(r, {
+            focus: threadFocus,
+            followup,
+            release: () => owner.release(owned.utteranceId),
+            hubFocused: () => isHubFocused(),
+          })
+            .catch(() => false)
+            .then((took) => {
+              if (!took) askGate.onAsk(r, owned);
+            });
+        },
         // #498, MOG-05b, MOG-06d: a Copy or a failed insertion reaches the Copy card.
         onDone: (r, owned) => void dictation.onDone(r, owned).catch(() => undefined),
       }),

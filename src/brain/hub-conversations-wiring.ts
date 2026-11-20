@@ -55,6 +55,16 @@ export interface HubConversationsWiring {
   workspaceOf(requestId: string): { profile: string; host: string } | undefined;
   /** Open Conversations, with this exchange selected when given. Never rejects. */
   openConversations(requestId?: string): Promise<void>;
+  /**
+   * The MOG and the profile that own a thread's `conversationId` (genie-followup, #145): a
+   * follow-up keeps the MOG and the workspace of the first question, read from the stored
+   * exchanges — never from the hub view, which only names the conversation it wants, not the
+   * workspace it may use (ARC-2). `undefined` for a blank id or one no stored exchange carries.
+   * Never rejects.
+   */
+  findThread(
+    conversationId: string,
+  ): Promise<{ mogId: string; profile: string; host: string } | undefined>;
   dispose(): void;
 }
 
@@ -108,6 +118,7 @@ function rowOf(r: unknown, mog: ConversationMog): ConversationRow | undefined {
     workspaceHost: str(o['workspaceHost']),
     deepLink: str(o['deepLink']),
     status: o['status'] === 'completed' ? 'answered' : 'failed',
+    conversationId: str(o['conversationId']),
   };
 }
 
@@ -140,10 +151,27 @@ export function wireHubConversations(
   deps: ConversationsWireDeps,
 ): HubConversationsWiring {
   let held: { requestId?: string } | undefined;
+  /**
+   * The owner of each conversation, from the last list read (#145). A conversation never changes
+   * its MOG or its workspace, so a send takes it from here with no store round trip. Every
+   * publish replaces it, so a Forget or a Wipe (which refresh the list) drops a gone thread.
+   */
+  let owners = new Map<string, { mogId: string; profile: string; host: string }>();
   let known = new Map<string, { profile: string; host: string }>();
+  const remember = (rows: readonly ConversationRow[]) => {
+    owners = new Map(
+      rows
+        .filter((r) => r.conversationId !== '')
+        .map((r) => [
+          r.conversationId,
+          { mogId: r.mogId, profile: r.profile, host: r.workspaceHost },
+        ]),
+    );
+  };
   const publish = async () => {
     try {
       const list = await readConversations(deps);
+      if (!list.unavailable) remember(list.rows);
       known = new Map(
         list.rows.map((r) => [r.requestId, { profile: r.profile, host: r.workspaceHost }]),
       );
@@ -178,6 +206,20 @@ export function wireHubConversations(
         await deps.sendOpen(open);
       } catch {
         // No hub is open yet: the held selection goes when the hub asks.
+      }
+    },
+    async findThread(conversationId) {
+      if (conversationId === '') return undefined;
+      const cached = owners.get(conversationId);
+      if (cached) return cached;
+      try {
+        const { rows } = await readConversations(deps);
+        const row = rows.find((r) => r.conversationId === conversationId);
+        return row
+          ? { mogId: row.mogId, profile: row.profile, host: row.workspaceHost }
+          : undefined;
+      } catch {
+        return undefined;
       }
     },
     dispose: off,

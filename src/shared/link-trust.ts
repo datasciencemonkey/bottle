@@ -39,7 +39,6 @@ export function bareHost(profileHost: string): string {
 export function trustedUrl(raw: string, trust: LinkTrust): string | undefined {
   if (raw.length > MAX_URL_CHARS || !/^https:\/\//i.test(raw) || raw.includes('..'))
     return undefined;
-  // eslint-disable-next-line no-control-regex
   if (/[^\x21-\x7e]|[<>"\\]/.test(raw)) return undefined;
   const rest = raw.slice(8);
   const authority = rest.slice(0, rest.search(/[/?#]|$/));
