@@ -4,7 +4,7 @@
  * listbox with day headers and a detail pane. The view renders what the brain sends on
  * `hub:conversations` and runs no store statement (ARC-2). All values are plainly fake.
  */
-import { act } from 'react';
+import { act, useEffect } from 'react';
 import { render, tauri, viewEmits } from '../test-tauri';
 import { Conversations } from './Conversations';
 import type { ConversationRow } from '../../shared/hub-conversations';
@@ -29,6 +29,7 @@ function row(n: number, askedAt: number, over: Partial<ConversationRow> = {}): C
     profile: 'fake-west',
     workspaceHost: HOST,
     status: 'answered',
+    conversationId: '',
     ...over,
   };
 }
@@ -58,8 +59,14 @@ const key = async (target: HTMLElement, k: string) =>
     target.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true }));
   });
 
-async function mount(active = true, onOpen = vi.fn()) {
-  const r = await render(<Conversations active={active} onOpen={onOpen} now={() => NOW} />);
+async function mount(
+  active = true,
+  onOpen = vi.fn(),
+  composer?: (thread: { conversationId: string; exchangeId: string; profile: string }) => unknown,
+) {
+  const r = await render(
+    <Conversations active={active} onOpen={onOpen} now={() => NOW} composer={composer as never} />,
+  );
   return { ...r, onOpen };
 }
 
@@ -257,6 +264,116 @@ describe('hub Conversations (#103)', () => {
     expect(options(el)).toHaveLength(3);
     expect(onOpen).not.toHaveBeenCalled();
   });
+
+  describe('threads (#145)', () => {
+    const CONV = 'conv-shared-1';
+
+    it('[#145] groups exchanges that share a conversationId into one list entry and one thread', async () => {
+      const { el } = await mount();
+      const thread = [
+        row(11, at(19, 9, 0), { question: 'What tables can you see?', conversationId: CONV }),
+        row(12, at(19, 9, 5), {
+          question: 'How many are there?',
+          answerMd: '**152** catalogs.',
+          conversationId: CONV,
+        }),
+      ];
+      await tauri.emitTo('hub', 'hub:conversations', { rows: [thread[1], thread[0], ...rows] });
+      // One list entry for the whole thread, keyed on its latest exchange.
+      expect(options(el).map((o) => o.getAttribute('data-request'))).toEqual([
+        thread[1]?.requestId,
+        ...rows.map((r) => r.requestId),
+      ]);
+      // The detail shows every exchange of the thread, oldest first.
+      const d = detail(el);
+      const exchanges = [...d.querySelectorAll('[data-exchange]')];
+      expect(exchanges.map((x) => x.getAttribute('data-exchange'))).toEqual([
+        thread[0]?.requestId,
+        thread[1]?.requestId,
+      ]);
+      expect(exchanges[0]?.textContent).toContain('What tables can you see?');
+      expect(exchanges[1]?.textContent).toContain('How many are there?');
+      expect(exchanges[1]?.textContent).toContain('152');
+    });
+
+    it('[#145] the composer is a footer row of the pane, outside the scrolling exchange list', async () => {
+      const { el } = await mount(true, vi.fn(), () => <div data-testid="fake-composer" />);
+      await tauri.emitTo('hub', 'hub:conversations', {
+        rows: [row(40, at(19, 9, 0), { conversationId: 'conv-pin-1' })],
+      });
+      const pane = detail(el);
+      const list = pane.querySelector('.conv-thread') as HTMLElement;
+      const slot = pane.querySelector('[data-slot="thread-composer"]') as HTMLElement;
+      expect(list.querySelector('[data-exchange]')).not.toBeNull();
+      expect(list.contains(slot)).toBe(false);
+      expect(slot.parentElement).toBe(pane);
+    });
+
+    it('[#145] a new follow-up answer extends the same pane and keeps the composer mounted', async () => {
+      const mounts = vi.fn();
+      const Probe = () => {
+        useEffect(() => {
+          mounts();
+        }, []);
+        return <div data-testid="fake-composer" />;
+      };
+      const { el } = await mount(true, vi.fn(), () => <Probe />);
+      const first = row(11, at(19, 9, 0), { conversationId: CONV });
+      await tauri.emitTo('hub', 'hub:conversations', { rows: [first] });
+      const pane = detail(el);
+      const second = row(12, at(19, 9, 5), { conversationId: CONV, question: 'And then?' });
+      await tauri.emitTo('hub', 'hub:conversations', { rows: [second, first] });
+      expect(detail(el)).toBe(pane);
+      expect(pane.querySelectorAll('[data-exchange]')).toHaveLength(2);
+      // The composer is not remounted, so it never announces the thread inactive in between.
+      expect(mounts).toHaveBeenCalledTimes(1);
+    });
+
+    it('[#145] renders the composer below the thread, with its conversationId, exchangeId and profile', async () => {
+      const spy = vi.fn(() => <div data-testid="fake-composer" />);
+      const { el } = await mount(true, vi.fn(), spy);
+      await tauri.emitTo('hub', 'hub:conversations', {
+        rows: [row(20, at(19, 9, 0), { conversationId: CONV, profile: 'fake-west' })],
+      });
+      expect(spy).toHaveBeenCalledWith({
+        conversationId: CONV,
+        exchangeId: row(20, at(19, 9, 0)).requestId,
+        profile: 'fake-west',
+      });
+      const slot = detail(el).querySelector('[data-slot="thread-composer"]');
+      expect(slot?.querySelector('[data-testid="fake-composer"]')).not.toBeNull();
+    });
+
+    it('[review] never mounts the composer while the area is inactive (hub shows another view)', async () => {
+      const spy = vi.fn(() => <div data-testid="fake-composer" />);
+      const { el } = await mount(false, vi.fn(), spy);
+      await tauri.emitTo('hub', 'hub:conversations', {
+        rows: [row(22, at(19, 9, 0), { conversationId: CONV, profile: 'fake-west' })],
+      });
+      expect(spy).not.toHaveBeenCalled();
+      expect(el.querySelector('[data-testid="fake-composer"]')).toBeNull();
+      expect(el.querySelector('[data-slot="thread-composer"] textarea')).toBeNull();
+    });
+
+    it('[#145] no composer for a thread with no conversationId (saved before #584): the hint only', async () => {
+      const spy = vi.fn(() => <div data-testid="fake-composer" />);
+      const { el } = await mount(true, vi.fn(), spy);
+      await tauri.emitTo('hub', 'hub:conversations', { rows });
+      expect(spy).not.toHaveBeenCalled();
+      const slot = detail(el).querySelector('[data-slot="thread-composer"]');
+      expect(slot?.textContent).toBe('Hold Right Option and tap G to ask by voice.');
+    });
+
+    it('[#145] with no composer prop at all, the slot shows only the voice hint (#103)', async () => {
+      const { el } = await mount();
+      await tauri.emitTo('hub', 'hub:conversations', {
+        rows: [row(21, at(19, 9, 0), { conversationId: CONV })],
+      });
+      expect(detail(el).querySelector('[data-slot="thread-composer"]')?.textContent).toBe(
+        'Hold Right Option and tap G to ask by voice.',
+      );
+    });
+  });
 });
 
 describe('the sticky composer slot (ui-1, #103)', () => {
@@ -273,8 +390,8 @@ describe('the sticky composer slot (ui-1, #103)', () => {
     expect(slot.querySelector('input, textarea, button')).toBeNull();
   });
 
-  it('fills the slot with the composer prop, given the selected thread (requestId, profile)', async () => {
-    const seen: { requestId: string; profile: string }[] = [];
+  it('fills the slot with the composer prop, given the selected thread (conversationId, exchangeId, profile)', async () => {
+    const seen: { conversationId: string; exchangeId: string; profile: string }[] = [];
     const { el } = await render(
       <Conversations
         active
@@ -286,9 +403,12 @@ describe('the sticky composer slot (ui-1, #103)', () => {
         }}
       />,
     );
-    await tauri.emitTo('hub', 'hub:conversations', { rows });
+    const r = row(30, at(19, 9, 0), { conversationId: 'conv-slot-1', profile: 'fake-west' });
+    await tauri.emitTo('hub', 'hub:conversations', { rows: [r] });
     const slot = composerSlot(el);
     expect(slot.querySelector('button')?.textContent).toBe('Ask about this');
-    expect(seen).toEqual([{ requestId: rows[0]?.requestId, profile: rows[0]?.profile }]);
+    expect(seen).toEqual([
+      { conversationId: 'conv-slot-1', exchangeId: r.requestId, profile: 'fake-west' },
+    ]);
   });
 });
