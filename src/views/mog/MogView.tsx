@@ -5,6 +5,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { MOG_MENU_HIDE_EVENT, MOG_MENU_OPEN, OPEN_CONVERSATIONS } from '../../shared/genie-status';
 import type { MogId } from '../../shared/interfaces';
 import { paletteColorOf } from '../../shared/mog-palette';
+import { MOG_LOOK_EVENT, MOG_VIEW_HIDDEN, asMogLook } from '../../shared/mog-look';
 import {
   asMogViewState,
   emitView,
@@ -68,7 +69,7 @@ export function MogView({
   };
 
   // #ui-4: Hide sinks the Genie into the lamp and shrinks the lamp art to lamp-only inside the
-  // same 160x160 window (plain CSS, no brain round trip for showing or hiding the art: this
+  // same 160x168 window (plain CSS, no brain round trip for showing or hiding the art: this
   // view holds the flag, so a click brings it back at once). It keeps running and stays a talk
   // target either way (review #603, LOW finding: the window itself never resizes, only the art).
   const [hiddenByUser, setHiddenByUser] = useState(false);
@@ -97,6 +98,55 @@ export function MogView({
     };
   }, []);
 
+  // lamp-alive: the host reads the global pointer and the brain sends this MOG where to look
+  // (`mog:look`, a vector, never a position). The view only listens (ARC-4).
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    let gone = false;
+    void listen<unknown>(
+      MOG_LOOK_EVENT,
+      (e) => {
+        const look = asMogLook(e.payload);
+        if (look) mascot.current?.setLook?.(look.dx, look.dy);
+      },
+      { target: getCurrentWindow().label },
+    )
+      .then((u) => {
+        if (gone) u();
+        else off = u;
+      })
+      .catch(() => undefined);
+    return () => {
+      gone = true;
+      off?.();
+    };
+  }, []);
+
+  // The host polls the pointer only for a MOG the user did not hide: tell it (it does not relay
+  // this to the brain). Also once on load, so a reopened MOG is not left marked hidden.
+  useEffect(() => {
+    void emitView(mogId, 'click', { action: MOG_VIEW_HIDDEN, hidden: hiddenByUser }).catch(
+      () => undefined,
+    );
+  }, [mogId, hiddenByUser]);
+
+  // The idle motion (the spark orbit) and the gaze stop while the MOG is hidden: by the Hide menu
+  // item, or because the page is not visible (a hidden window, a locked screen).
+  const [pageHidden, setPageHidden] = useState(
+    typeof document !== 'undefined' && document.visibilityState === 'hidden',
+  );
+  useEffect(() => {
+    const on = () => setPageHidden(document.visibilityState === 'hidden');
+    document.addEventListener('visibilitychange', on);
+    return () => document.removeEventListener('visibilitychange', on);
+  }, []);
+  const idleStopped = hiddenByUser || pageHidden;
+  const stopped = useRef(idleStopped);
+  useEffect(() => {
+    stopped.current = idleStopped;
+    mascot.current?.setHidden?.(idleStopped);
+  }, [idleStopped, createMascot]);
+
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -108,6 +158,7 @@ export function MogView({
       m.setMood(s.mood);
       m.setAttention(s.overlays.attention);
     }
+    m.setHidden?.(stopped.current);
     mascot.current = m;
     return () => {
       m.destroy();
@@ -202,10 +253,6 @@ export function MogView({
           mascot.current?.setHover(false);
         }}
       />
-      {/* #ui-4: the name pill, always on (not only the 1.2 s toast), tinted with the accent. */}
-      <span className="identity-pill" data-identity-pill>
-        {name}
-      </span>
       {/* UX-28: a triangle under the target mascot; the accessible name says "target". */}
       {target?.target && <span className="target-marker" data-marker="target" aria-hidden="true" />}
       {/* MB-06b: the brain shows the toast for 1.2 s after the talk key goes down. */}

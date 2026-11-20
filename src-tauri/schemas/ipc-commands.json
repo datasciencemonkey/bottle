@@ -2422,6 +2422,11 @@
     },
     {
       "direction": "core_to_brain",
+      "name": "mog:look",
+      "specName": "mog.look"
+    },
+    {
+      "direction": "core_to_brain",
       "name": "hotkey:record_toggle",
       "specName": "hotkey.record_toggle"
     },

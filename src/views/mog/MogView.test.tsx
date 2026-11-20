@@ -24,6 +24,17 @@ async function openMenu(mascot: HTMLElement, at: { clientX?: number; clientY?: n
   });
 }
 
+/** The view_emit calls without the hide notice, which the host takes and the brain never sees. */
+const userEmits = () =>
+  viewEmits().filter(
+    (e) => (e as { payload?: { action?: string } }).payload?.action !== 'view.hidden',
+  );
+const hideNotices = () =>
+  viewEmits()
+    .map((e) => (e as { payload?: { action?: string; hidden?: boolean } }).payload)
+    .filter((p) => p?.action === 'view.hidden')
+    .map((p) => p?.hidden);
+
 const ID = '00000000-0000-4000-8000-000000000001';
 const OTHER = '00000000-0000-4000-8000-000000000002';
 
@@ -93,7 +104,7 @@ describe('V2 MOG view', () => {
     await act(async () => void vi.advanceTimersByTime(DOUBLE_CLICK_MS));
     vi.useRealTimers();
     expect(calls).toEqual(['mount', 'poke', 'hover:true']);
-    expect(viewEmits()).toEqual([
+    expect(userEmits()).toEqual([
       // MB-06a (#73): the view tells the brain that it is open. TODO(#439): a `ready` kind.
       { mogId: ID, kind: 'click', payload: { action: 'view.ready' } },
       { mogId: ID, kind: 'hover' },
@@ -121,7 +132,7 @@ describe('V2 MOG view', () => {
     );
     await act(async () => void vi.advanceTimersByTime(DOUBLE_CLICK_MS * 2));
     vi.useRealTimers();
-    const clicks = viewEmits().filter(
+    const clicks = userEmits().filter(
       (e) =>
         (e as { kind: string }).kind === 'click' &&
         !('payload' in (e as object) && (e as { payload: { action?: string } }).payload.action),
@@ -143,7 +154,7 @@ describe('V2 MOG view', () => {
         new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body }),
       ),
     );
-    const holds = viewEmits().filter(
+    const holds = userEmits().filter(
       (e) =>
         (e as { kind: string; payload?: unknown }).kind === 'hover' &&
         (e as { payload?: unknown }).payload,
@@ -428,7 +439,7 @@ describe('V2 MOG view', () => {
     expect(el.querySelector('button[data-badge="hop"]')).toBeNull();
     await act(async () => stt.click());
     await act(async () => sync.click());
-    expect(viewEmits().slice(-2)).toEqual([
+    expect(userEmits().slice(-2)).toEqual([
       { mogId: ID, kind: 'click', payload: { target: 'badge', badge: 'stt' } },
       { mogId: ID, kind: 'click', payload: { target: 'badge', badge: 'sync' } },
     ]);
@@ -570,16 +581,20 @@ describe('V2 MOG view target marker and toast (#73)', () => {
   it('[MB-06a] tells the brain once that the MOG view is open, after it listens', async () => {
     const { m } = fakeMascot();
     await render(<MogView mogId={ID} createMascot={() => m} />);
-    expect(viewEmits()).toEqual([{ mogId: ID, kind: 'click', payload: { action: 'view.ready' } }]);
+    expect(userEmits()).toEqual([{ mogId: ID, kind: 'click', payload: { action: 'view.ready' } }]);
   });
 
-  it('[ui-4] always shows a name pill, tinted with the palette colour the brain sends', async () => {
+  it("[ui-4] shows no name on the lamp (the user's choice), but keeps the name for the tooltip and the palette colour", async () => {
     const { m } = fakeMascot();
     const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
-    // Before the brain answers, the pill still shows (the fallback name).
-    expect(el.querySelector('[data-identity-pill]')?.textContent).toBe('MOG');
+    expect(el.querySelector('[data-identity-pill]')).toBeNull();
+    expect(el.querySelector('.identity-pill')).toBeNull();
+    // Before the brain answers, the fallback name is only in the accessible name.
+    expect(el.querySelector('[aria-label="MOG"]')).not.toBeNull();
     await tauri.emit('mog:target', tv({ colorVariant: 'teal' }));
-    expect(el.querySelector('[data-identity-pill]')?.textContent).toBe('Sales');
+    expect(el.querySelector('[data-identity-pill]')).toBeNull();
+    expect(el.textContent).not.toContain('Sales');
+    expect(el.querySelector('[title="Sales"]')).not.toBeNull();
     const root = el.firstElementChild as HTMLElement;
     expect(root.style.getPropertyValue('--mog-id-color')).toBe('#0f6b66');
   });
@@ -612,11 +627,11 @@ describe('V2 MOG view target marker and toast (#73)', () => {
     // (`mog-context-menu.ts`, ARC-4), and tells this one MOG window to flip Hide after a pick.
     await act(async () => void tauri.emit('mog:menu_hide', { hidden: true }));
     expect(mascot.dataset['hidden']).toBe('true');
-    const before = viewEmits().length;
+    const before = userEmits().length;
     await act(async () => void mascot.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     expect(mascot.dataset['hidden']).toBeUndefined();
     // Bringing it back is MOG-view-local: it sends nothing more to the brain.
-    expect(viewEmits()).toHaveLength(before);
+    expect(userEmits()).toHaveLength(before);
   });
 
   it('[ui-4] [#603] right-click asks the brain to show the native menu, with the click position and the current Hide state', async () => {
@@ -627,7 +642,7 @@ describe('V2 MOG view target marker and toast (#73)', () => {
     // #603 review, findings 1 and 4: this view never renders the menu itself (a MOG view may
     // only listen and call `view_emit`, ARC-4) and holds no DOM state for one either.
     expect(el.querySelector('[role="menu"]')).toBeNull();
-    expect(viewEmits()).toEqual([
+    expect(userEmits()).toEqual([
       { mogId: ID, kind: 'click', payload: { action: 'view.ready' } },
       { mogId: ID, kind: 'click', payload: { target: 'mog_menu_open', x: 5, y: 7, hidden: false } },
     ]);
@@ -639,7 +654,7 @@ describe('V2 MOG view target marker and toast (#73)', () => {
     const mascot = el.querySelector('.mascot') as HTMLElement;
     await act(async () => void tauri.emit('mog:menu_hide', { hidden: true }));
     await openMenu(mascot, { clientX: 1, clientY: 2 });
-    expect(viewEmits().at(-1)).toEqual({
+    expect(userEmits().at(-1)).toEqual({
       mogId: ID,
       kind: 'click',
       payload: { target: 'mog_menu_open', x: 1, y: 2, hidden: true },
@@ -651,31 +666,135 @@ describe('V2 MOG view target marker and toast (#73)', () => {
     const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
     const mascot = el.querySelector('.mascot') as HTMLElement;
     await openMenu(mascot);
-    const before = viewEmits().length;
+    const before = userEmits().length;
     await act(async () => {
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
       document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
     });
     // Nothing in this view listens for either: dismissal is the native menu's own, on the brain
     // side (`mog-context-menu.ts`), with no round trip back to this window at all.
-    expect(viewEmits()).toHaveLength(before);
+    expect(userEmits()).toHaveLength(before);
   });
 
   it('[MB-06a] tries view.ready again while no brain listens yet', async () => {
     vi.useFakeTimers();
     try {
       let refusals = 2;
-      tauri.invoke.mockImplementation(async () => {
-        if (refusals-- > 0) throw { error: 'host_failed' };
+      tauri.invoke.mockImplementation(async (_cmd, args) => {
+        // Only the ready call is refused (the host takes the hide notice for itself).
+        const action = (args as { args?: { payload?: { action?: string } } })?.args?.payload
+          ?.action;
+        if (action === 'view.ready' && refusals-- > 0) throw { error: 'host_failed' };
         return {};
       });
       const { m } = fakeMascot();
       await render(<MogView mogId={ID} createMascot={() => m} />);
       for (let i = 0; i < 5; i++) await act(async () => vi.advanceTimersByTimeAsync(1000));
-      expect(viewEmits()).toHaveLength(3);
+      expect(userEmits()).toHaveLength(3);
     } finally {
       tauri.invoke.mockImplementation(async () => ({}));
       vi.useRealTimers();
     }
+  });
+});
+
+describe('lamp-alive: the eyes follow the pointer, the spark pauses when hidden', () => {
+  beforeEach(() => tauri.reset());
+
+  function lookMascot() {
+    const calls: string[] = [];
+    const m: MascotRenderer = {
+      mount: () => undefined,
+      setMood: () => undefined,
+      setLevel: () => undefined,
+      setAttention: () => undefined,
+      setHover: () => undefined,
+      poke: () => undefined,
+      destroy: () => undefined,
+      setLook: (dx, dy) => calls.push(`look:${dx},${dy}`),
+      setHidden: (h) => calls.push(`hidden:${h}`),
+    };
+    return { m, calls };
+  }
+
+  it('listens to mog:look (listen only, ARC-4) and passes the vector to the mascot', async () => {
+    const { m, calls } = lookMascot();
+    await render(<MogView mogId={ID} createMascot={() => m} />);
+    expect(tauri.listeners('mog:look')).toBe(1);
+    // Only this MOG's window gets its look (the brain also emits to one window only).
+    expect(tauri.listenOptions.get('mog:look')).toEqual([{ target: tauri.label }]);
+    await tauri.emit('mog:look', { dx: 0.5, dy: -0.25 });
+    expect(calls).toContain('look:0.5,-0.25');
+    // A vector longer than the unit disc is clamped; a bad payload is dropped.
+    await tauri.emit('mog:look', { dx: 3, dy: 4 });
+    await tauri.emit('mog:look', { dx: 'x', dy: 0 });
+    await tauri.emit('mog:look', null);
+    expect(calls.filter((c) => c.startsWith('look:'))).toHaveLength(2);
+    const clamped = calls.filter((c) => c.startsWith('look:'))[1] ?? '';
+    const [dx, dy] = clamped.slice(5).split(',').map(Number);
+    expect(Math.hypot(dx ?? 0, dy ?? 0)).toBeCloseTo(1);
+    // The view sends nothing to the brain for a look (it only listens).
+    expect(tauri.invoke.mock.calls.every(([c]) => c === 'view_emit')).toBe(true);
+  });
+
+  it('stops listening when the view unmounts', async () => {
+    const { m } = lookMascot();
+    const { root } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    expect(tauri.listeners('mog:look')).toBe(1);
+    act(() => root.unmount());
+    expect(tauri.listeners('mog:look')).toBe(0);
+  });
+
+  it('tells the mascot it is hidden by the Hide item, and shown again', async () => {
+    const { m, calls } = lookMascot();
+    await render(<MogView mogId={ID} createMascot={() => m} />);
+    expect(calls).toContain('hidden:false');
+    await tauri.emit('mog:menu_hide', { hidden: true });
+    expect(calls.at(-1)).toBe('hidden:true');
+    await tauri.emit('mog:menu_hide', { hidden: false });
+    expect(calls.at(-1)).toBe('hidden:false');
+  });
+
+  it('tells the mascot it is hidden while the page is not visible', async () => {
+    const { m, calls } = lookMascot();
+    await render(<MogView mogId={ID} createMascot={() => m} />);
+    const state = vi.spyOn(document, 'visibilityState', 'get');
+    state.mockReturnValue('hidden');
+    await act(async () => void document.dispatchEvent(new Event('visibilitychange')));
+    expect(calls.at(-1)).toBe('hidden:true');
+    state.mockReturnValue('visible');
+    await act(async () => void document.dispatchEvent(new Event('visibilitychange')));
+    expect(calls.at(-1)).toBe('hidden:false');
+    state.mockRestore();
+  });
+});
+
+describe('lamp-alive: the host is told when the user hides the art', () => {
+  beforeEach(() => tauri.reset());
+
+  it('sends one hide notice on load (not hidden), then one on each Hide and show', async () => {
+    const { m } = fakeMascot();
+    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    expect(hideNotices()).toEqual([false]);
+    await tauri.emit('mog:menu_hide', { hidden: true });
+    expect(hideNotices()).toEqual([false, true]);
+    // A click brings the lamp back, with no brain call, and tells the host.
+    const target = el.querySelector('[aria-label="MOG"]') as HTMLElement;
+    await act(async () => target.click());
+    expect(hideNotices()).toEqual([false, true, false]);
+  });
+
+  it('sends the notice only through view_emit, as a click with an action (not a user click)', async () => {
+    const { m } = fakeMascot();
+    await render(<MogView mogId={ID} createMascot={() => m} />);
+    const notice = viewEmits().find(
+      (e) => (e as { payload?: { action?: string } }).payload?.action === 'view.hidden',
+    );
+    expect(notice).toEqual({
+      mogId: ID,
+      kind: 'click',
+      payload: { action: 'view.hidden', hidden: false },
+    });
+    expect(tauri.invoke.mock.calls.every(([c]) => c === 'view_emit')).toBe(true);
   });
 });

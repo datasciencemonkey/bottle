@@ -24,6 +24,14 @@ export interface MascotRenderer {
   setHover(on: boolean): void;
   /** A visual poke. It never changes the mood (UX-02a). */
   poke(): void;
+  /**
+   * Where the eyes look: a vector in the unit disc, `0, 0` straight ahead (`mog:look`). Optional:
+   * a renderer without eyes to move ignores it. The Rive file has no look input yet (see
+   * `mog-rive/AGENTS.md`, "Follow-up for the .riv author").
+   */
+  setLook?(dx: number, dy: number): void;
+  /** The MOG is hidden (the Hide menu or an invisible page): pause idle motion, look ahead. */
+  setHidden?(hidden: boolean): void;
   destroy(): void;
 }
 

@@ -407,6 +407,10 @@ describe('call recording (ADR 0103)', () => {
     expect(EVENTS['recording.job']).toEqual({ name: 'recording:job', direction: 'core_to_brain' });
   });
 
+  it('[ARC-5] lamp-alive: the look vector is a core-to-brain event', () => {
+    expect(EVENTS['mog.look']).toEqual({ name: 'mog:look', direction: 'core_to_brain' });
+  });
+
   it('[SEC-03] the recording refusals are fixed IPC codes', () => {
     for (const c of [
       'recording_off',

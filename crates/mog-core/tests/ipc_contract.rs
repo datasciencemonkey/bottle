@@ -271,6 +271,8 @@ fn arc_5_event_names_are_valid_tauri_names() {
         // #285 (ADR 0040): mic frames for the MOG level meter (UX-06a).
         "mog.level",
         "view.input",
+        // lamp-alive: where one MOG's eyes look.
+        "mog.look",
         // ADR 0103: the record key toggle, the recording state and the job status.
         "hotkey.record_toggle",
         "recording.state",

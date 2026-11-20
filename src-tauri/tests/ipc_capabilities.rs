@@ -68,6 +68,10 @@ fn arc_4_views_only_listen_to_events() {
             "core:window:allow-set-size",
             "core:window:allow-set-position",
             "core:window:allow-outer-position",
+            // lamp-alive: the card also reads the size and the title of its own window
+            // (the side of its MOG, which the host sets, `card-placement.ts`); it reads no other window.
+            "core:window:allow-outer-size",
+            "core:window:allow-title",
             "core:window:allow-scale-factor",
             "core:window:allow-current-monitor",
         ])
