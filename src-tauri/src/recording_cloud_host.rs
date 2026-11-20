@@ -19,14 +19,18 @@ use mog_core::ipc::events;
 use mog_core::recording::{
     FinishedPart, PipelineRequest, RecordingComponent, RecordingSettingsStore,
 };
-use mog_core::recording_capture::session::{FinishedRecording, PartsHandoff, Snapshot};
+use mog_core::recording_capture::chunker::PartFile;
+use mog_core::recording_capture::session::{
+    FinishedRecording, PartsHandoff, Snapshot, StartedRecording,
+};
 use mog_core::recording_cloud::cloud::{
     is_audio_file_of, CloudDeps, LocalPart, ProfileWorkspace, RecordingCloudService,
 };
-use mog_core::recording_cloud::contract::{CloudAdapter, LocalAudio};
+use mog_core::recording_cloud::contract::{CloudAdapter, LiveMsg, LocalAudio, Recv};
 use mog_core::recording_cloud::layout::is_recording_name;
 use mog_core::recording_cloud::opener::{open_link, SystemOpener, UrlOpener};
 use mog_core::recording_cloud::settings_store::{JsonSettingsStore, SETTINGS_FILE};
+use mog_core::recording_cloud::sidecar::{self, Sidecar};
 use mog_core::types::{Instructions, RecordingId};
 use tauri::Manager;
 
@@ -82,21 +86,34 @@ pub const TEMP_DIR: &str = "recordings";
 /// The local temp audio files of recording `name` still on the device, in part order. PR B
 /// keeps each recording in `<root>/<id>/`, so every folder of `root` is searched.
 pub fn temp_parts_of(root: Option<&std::path::Path>, name: &str) -> Vec<LocalPart> {
-    let Some(root) = root else {
-        return Vec::new();
-    };
-    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(root)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| e.path())
-        .filter(|d| d.is_dir())
-        .flat_map(|d| {
-            std::fs::read_dir(d)
+    temp_parts_in(
+        &root
+            .map(std::path::Path::to_path_buf)
+            .into_iter()
+            .collect::<Vec<_>>(),
+        name,
+    )
+}
+
+/// As [`temp_parts_of`] over several roots (the app data dir, and the cache dir of builds
+/// before #592).
+pub fn temp_parts_in(roots: &[std::path::PathBuf], name: &str) -> Vec<LocalPart> {
+    let mut files: Vec<std::path::PathBuf> = roots
+        .iter()
+        .flat_map(|root| {
+            std::fs::read_dir(root)
                 .into_iter()
                 .flatten()
                 .flatten()
                 .map(|e| e.path())
+                .filter(|d| d.is_dir())
+                .flat_map(|d| {
+                    std::fs::read_dir(d)
+                        .into_iter()
+                        .flatten()
+                        .flatten()
+                        .map(|e| e.path())
+                })
         })
         .filter(|p| {
             p.file_name()
@@ -104,7 +121,7 @@ pub fn temp_parts_of(root: Option<&std::path::Path>, name: &str) -> Vec<LocalPar
                 .is_some_and(|f| is_audio_file_of(name, f))
         })
         .collect();
-    files.sort();
+    files.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
     files
         .into_iter()
         .map(|path| LocalPart {
@@ -142,14 +159,20 @@ fn modified_ms(path: &std::path::Path) -> u64 {
 /// time (epoch ms): the launch scan of ADR 0103 decision 7, run lazily on every `recording_list`
 /// (PR B's per-ID folders under `root`, searched the same way as [`temp_parts_of`]).
 pub fn temp_names_of(root: Option<&std::path::Path>) -> Vec<(String, u64)> {
-    let Some(root) = root else {
-        return Vec::new();
-    };
+    temp_names_in(
+        &root
+            .map(std::path::Path::to_path_buf)
+            .into_iter()
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// As [`temp_names_of`] over several roots. A name in two roots keeps the earliest time.
+pub fn temp_names_in(roots: &[std::path::PathBuf]) -> Vec<(String, u64)> {
     let mut names: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
-    let dirs = std::fs::read_dir(root)
-        .into_iter()
-        .flatten()
-        .flatten()
+    let dirs = roots
+        .iter()
+        .flat_map(|root| std::fs::read_dir(root).into_iter().flatten().flatten())
         .map(|e| e.path())
         .filter(|d| d.is_dir());
     for dir in dirs {
@@ -173,23 +196,106 @@ pub fn temp_names_of(root: Option<&std::path::Path>) -> Vec<(String, u64)> {
     names.into_iter().collect()
 }
 
-/// The [`LocalAudio`] seam over the temp recordings folder (`<app data>/recordings/<id>/`).
-struct TempAudio {
-    root: Option<std::path::PathBuf>,
+/// The temp dirs of `roots` that hold a sidecar, with the audio parts in each: the recordings
+/// that a crash left and that can resume with no click.
+pub fn resumable(
+    roots: &[std::path::PathBuf],
+) -> Vec<(std::path::PathBuf, Sidecar, Vec<LocalPart>)> {
+    let mut out = Vec::new();
+    let dirs = roots
+        .iter()
+        .flat_map(|root| std::fs::read_dir(root).into_iter().flatten().flatten())
+        .map(|e| e.path())
+        .filter(|d| d.is_dir());
+    for dir in dirs {
+        let Some(sc) = sidecar::read(&dir) else {
+            continue;
+        };
+        let mut parts: Vec<LocalPart> = std::fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|f| f.to_str())
+                    .is_some_and(|f| is_audio_file_of(&sc.name, f))
+            })
+            .map(|path| LocalPart {
+                path,
+                duration_s: 0.0,
+            })
+            .collect();
+        parts.sort_by(|a, b| a.path.file_name().cmp(&b.path.file_name()));
+        if parts.is_empty() {
+            continue;
+        }
+        out.push((dir, sc, parts));
+    }
+    out
+}
+
+/// Delete the sidecar of `dir` when no audio is left in it, then the dir if it is empty.
+pub fn tidy_dir(dir: &std::path::Path) {
+    let has_audio = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|e| {
+            e.file_name()
+                .to_str()
+                .is_some_and(|f| recording_name_of_file(f).is_some())
+        });
+    if !has_audio {
+        sidecar::remove(dir);
+    }
+}
+
+/// The [`LocalAudio`] seam over the temp recordings folders: `<app data>/recordings/<id>/`, and
+/// `<app cache>/recordings/<id>/` where builds before #592 left their audio.
+pub struct TempAudio {
+    roots: Vec<std::path::PathBuf>,
     /// The names capture still owns, or that finished but are not yet handed off (review of
     /// #592, BLOCKING B3): the scan and Retry both skip these.
     busy: Arc<dyn Fn() -> HashSet<String> + Send + Sync>,
 }
 
+impl TempAudio {
+    /// The seam over `roots`; `busy` names the recordings capture or a worker owns now.
+    pub fn new(
+        roots: Vec<std::path::PathBuf>,
+        busy: Arc<dyn Fn() -> HashSet<String> + Send + Sync>,
+    ) -> Self {
+        Self { roots, busy }
+    }
+}
+
 impl LocalAudio for TempAudio {
     fn parts(&self, name: &str) -> Vec<LocalPart> {
-        temp_parts_of(self.root.as_deref(), name)
+        temp_parts_in(&self.roots, name)
     }
     fn names(&self) -> Vec<(String, u64)> {
-        temp_names_of(self.root.as_deref())
+        temp_names_in(&self.roots)
     }
     fn active(&self) -> HashSet<String> {
         (self.busy)()
+    }
+    fn sidecar(&self, name: &str) -> Option<Sidecar> {
+        resumable(&self.roots)
+            .into_iter()
+            .find(|(_, s, _)| s.name == name)
+            .map(|(_, s, _)| s)
+    }
+    fn tidy(&self, name: &str) {
+        for root in &self.roots {
+            for dir in std::fs::read_dir(root).into_iter().flatten().flatten() {
+                let dir = dir.path();
+                if sidecar::read(&dir).is_some_and(|s| s.name == name) {
+                    tidy_dir(&dir);
+                    let _ = std::fs::remove_dir(&dir);
+                }
+            }
+        }
     }
 }
 
@@ -299,6 +405,7 @@ const SAMPLE_RATE: u32 = 16_000;
 
 /// Delete `dir` only when it is empty (after every part was uploaded and deleted).
 pub fn remove_dir_if_empty(dir: &std::path::Path) {
+    tidy_dir(dir);
     let _ = std::fs::remove_dir(dir);
 }
 
@@ -350,6 +457,246 @@ impl PartsHandoff for PipelineHandoff {
             self.active.release(&rec.name);
         }
     }
+}
+
+/// The channel side of one live worker: parts go in, the worker uploads them.
+type LiveTx = std::sync::mpsc::Sender<LiveMsg>;
+
+/// The local part of a part file (its length is known from the samples).
+fn local_part(p: &PartFile) -> LocalPart {
+    LocalPart {
+        path: p.path.clone(),
+        duration_s: p.samples as f64 / f64::from(SAMPLE_RATE),
+    }
+}
+
+/// Drives the worker of one recording off a channel: `None` waits for a message with no limit;
+/// `Some(d)` waits at most `d` (the retry wait after a failed upload).
+fn recv_from(rx: &std::sync::mpsc::Receiver<LiveMsg>, wait: Option<std::time::Duration>) -> Recv {
+    use std::sync::mpsc::RecvTimeoutError;
+    match wait {
+        None => rx.recv().map_or(Recv::Closed, Recv::Msg),
+        Some(d) => match rx.recv_timeout(d) {
+            Ok(m) => Recv::Msg(m),
+            Err(RecvTimeoutError::Timeout) => Recv::Timeout,
+            // The stop message came and the sender is gone: nothing more arrives, but the
+            // worker still retries a failed upload. Wait the time, then say it ran out.
+            Err(RecvTimeoutError::Disconnected) => {
+                std::thread::sleep(d);
+                Recv::Timeout
+            }
+        },
+    }
+}
+
+/// Upload in parts during the call (ADR 0103 follow-up). `started` opens one worker thread for
+/// the recording (only for a recording that `recording_start` let through: the knob is on and
+/// the consent notice is acknowledged), `part_ready` sends each closed part to it, and
+/// `finished` tells it to stop. The worker uploads, retries in the background, and at the stop
+/// runs the one transcription. A recording that has no worker (no storage in Settings, no home
+/// profile) goes the old way: the pipeline runs at the stop ([`PipelineHandoff`]).
+pub struct LiveHandoff {
+    adapter: Arc<CloudAdapter>,
+    settings: Arc<dyn RecordingSettingsStore>,
+    fallback: PipelineHandoff,
+    active: Arc<ActiveNames>,
+    workers: Mutex<std::collections::HashMap<String, LiveTx>>,
+}
+
+impl LiveHandoff {
+    /// A hand-off over `adapter`, with `fallback` for a recording that has no worker.
+    pub fn new(
+        adapter: Arc<CloudAdapter>,
+        settings: Arc<dyn RecordingSettingsStore>,
+        fallback: PipelineHandoff,
+        active: Arc<ActiveNames>,
+    ) -> Self {
+        Self {
+            adapter,
+            settings,
+            fallback,
+            active,
+            workers: Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// Run one worker on its own thread. `dir` is the temp dir of the recording: on a `done`
+    /// job the sidecar and the dir go; on any other end the sidecar goes too (the audio stays
+    /// for Retry, and the launch scan does not run the same failure again).
+    fn spawn_worker(
+        &self,
+        ctx: mog_core::recording_cloud::contract::LiveContext,
+        dir: std::path::PathBuf,
+        rx: std::sync::mpsc::Receiver<LiveMsg>,
+    ) -> bool {
+        let name = ctx.job.name.clone();
+        self.active.mark(&name);
+        let guard = ActiveGuard {
+            active: self.active.clone(),
+            name: name.clone(),
+        };
+        let adapter = self.adapter.clone();
+        let spawned = std::thread::Builder::new()
+            .name("bottle-rec-live".into())
+            .spawn(move || {
+                let _guard = guard;
+                // A result (done or failed) ends the recording's live state: the sidecar goes,
+                // and the dir if no audio is left. A failed job keeps its audio for Retry.
+                if adapter
+                    .run_live(&ctx, &mut |wait| recv_from(&rx, wait))
+                    .is_some()
+                {
+                    sidecar::remove(&dir);
+                }
+            });
+        if spawned.is_err() {
+            self.active.release(&name);
+        }
+        spawned.is_ok()
+    }
+}
+
+impl PartsHandoff for LiveHandoff {
+    fn started(&self, rec: &StartedRecording) {
+        let Ok(settings) = self.settings.load() else {
+            return;
+        };
+        let Some(profile) = rec.profile.clone().filter(|p| !p.trim().is_empty()) else {
+            return;
+        };
+        // The knob gates everything, also the upload during the call.
+        if !(settings.enabled && settings.consent_ack) {
+            return;
+        }
+        let Some(storage) = settings.storage.clone() else {
+            return;
+        };
+        let (Ok(id), true) = (
+            RecordingId::try_from(rec.id.clone()),
+            is_recording_name(&rec.name),
+        ) else {
+            return;
+        };
+        let instructions = rec
+            .instructions
+            .clone()
+            .and_then(|i| Instructions::try_from(i).ok())
+            .unwrap_or_else(|| settings.preset_instructions.clone());
+        // The sidecar lets a crash resume with no click. No token, no audio.
+        let _ = sidecar::write(
+            &rec.dir,
+            &Sidecar::new(
+                &rec.id,
+                &rec.name,
+                rec.started_at_ms,
+                &profile,
+                rec.instructions.as_deref(),
+            ),
+        );
+        let ctx = self.adapter.job_for(
+            &profile,
+            &storage,
+            &id,
+            &rec.name,
+            rec.started_at_ms.max(0) as u64,
+            &instructions,
+            &settings,
+            true,
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        if self.spawn_worker(ctx, rec.dir.clone(), rx) {
+            self.workers
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(rec.id.clone(), tx);
+        }
+    }
+
+    fn part_ready(&self, id: &str, part: &PartFile) {
+        let tx = self
+            .workers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(id)
+            .cloned();
+        if let Some(tx) = tx {
+            let _ = tx.send(LiveMsg::Part(local_part(part)));
+        }
+    }
+
+    fn finished(&self, rec: FinishedRecording) {
+        let tx = self
+            .workers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&rec.id);
+        match tx {
+            Some(tx) => {
+                if rec.parts.is_empty() {
+                    // No audio came in: nothing to upload. Dropping the sender ends the worker
+                    // with no result; the empty dir and the sidecar go.
+                    drop(tx);
+                    remove_dir_if_empty(&rec.dir);
+                    sidecar::remove(&rec.dir);
+                    return;
+                }
+                let parts = rec.parts.iter().map(local_part).collect();
+                let _ = tx.send(LiveMsg::Finished(parts));
+            }
+            None => self.fallback.finished(rec),
+        }
+    }
+}
+
+/// Resume the recordings that a crash left (they have a sidecar): each one gets a worker that
+/// sends the parts on disk and runs the one transcription. It runs only with the knob on, the
+/// consent acknowledged and a storage chosen. A recording with no sidecar (an old build)
+/// stays on the device as "Not uploaded" until the user clicks Upload.
+pub fn resume_left(
+    live: &LiveHandoff,
+    roots: &[std::path::PathBuf],
+    busy: &HashSet<String>,
+) -> usize {
+    let Ok(settings) = live.settings.load() else {
+        return 0;
+    };
+    let Some(storage) = settings.storage.clone() else {
+        return 0;
+    };
+    if !(settings.enabled && settings.consent_ack) {
+        return 0;
+    }
+    let mut n = 0;
+    for (dir, sc, parts) in resumable(roots) {
+        if busy.contains(&sc.name) || live.adapter.is_live(&sc.name) {
+            continue;
+        }
+        let Ok(id) = RecordingId::try_from(sc.id.clone()) else {
+            continue;
+        };
+        let instructions = sc
+            .instructions
+            .clone()
+            .and_then(|i| Instructions::try_from(i).ok())
+            .unwrap_or_else(|| settings.preset_instructions.clone());
+        let ctx = live.adapter.job_for(
+            &sc.profile,
+            &storage,
+            &id,
+            &sc.name,
+            sc.started_at_ms.max(0) as u64,
+            &instructions,
+            &settings,
+            false,
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _ = tx.send(LiveMsg::Finished(parts));
+        drop(tx);
+        if live.spawn_worker(ctx, dir, rx) {
+            n += 1;
+        }
+    }
+    n
 }
 
 /// The names the cloud-side scan and Retry must leave alone right now, from every source
@@ -410,7 +757,16 @@ pub fn install(handle: &tauri::AppHandle<tauri::Wry>) -> CoreResult<()> {
         Some(s) => s.inner().clone(),
         None => Arc::new(JsonSettingsStore::deferred()),
     };
-    let temp_root = handle.path().app_data_dir().ok().map(|d| d.join(TEMP_DIR));
+    // Where the temp audio lives: the app data dir, and the cache dir where builds before #592
+    // left it. Both are scanned, so those recordings show as "Not uploaded".
+    let temp_roots: Vec<std::path::PathBuf> = [
+        handle.path().app_data_dir().ok(),
+        handle.path().app_cache_dir().ok(),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|d| d.join(TEMP_DIR))
+    .collect();
     let active_names = Arc::new(ActiveNames::default());
     let busy: Arc<dyn Fn() -> HashSet<String> + Send + Sync> = {
         let active_names = active_names.clone();
@@ -443,7 +799,7 @@ pub fn install(handle: &tauri::AppHandle<tauri::Wry>) -> CoreResult<()> {
         })
     };
     let local: Arc<dyn LocalAudio> = Arc::new(TempAudio {
-        root: temp_root,
+        roots: temp_roots.clone(),
         busy,
     });
     let app = handle.clone();
@@ -465,13 +821,27 @@ pub fn install(handle: &tauri::AppHandle<tauri::Wry>) -> CoreResult<()> {
     // PR B's finished recordings run the pipeline once each (waiting ones go out now).
     if let Some(slot) = handle.try_state::<Arc<HandoffSlot>>() {
         let a = adapter.clone();
-        slot.connect(Arc::new(PipelineHandoff::new(
+        let fallback = PipelineHandoff::new(
             Arc::new(move |req, started| {
                 let _ = a.run_pipeline(&req, started);
             }),
             store.clone(),
             active_names.clone(),
-        )));
+        );
+        let live = Arc::new(LiveHandoff::new(
+            adapter.clone(),
+            store.clone(),
+            fallback,
+            active_names.clone(),
+        ));
+        slot.connect(live.clone());
+        // A crash left parts and sidecars: resume them in the background, off the setup path.
+        let roots = temp_roots.clone();
+        let _ = std::thread::Builder::new()
+            .name("bottle-rec-resume".into())
+            .spawn(move || {
+                let _ = resume_left(&live, &roots, &HashSet::new());
+            });
     }
     let opener: Arc<dyn UrlOpener> = Arc::new(SystemOpener);
     if let Some(component) = handle.try_state::<Arc<RecordingComponent>>() {

@@ -397,7 +397,12 @@ fn rec_component_list_leaves_out_the_recording_running_now() {
     let v = c
         .call("recording_list", json!({"profile":"fake-home"}))
         .unwrap();
-    assert_eq!(v.as_array().unwrap().len(), 0, "{v}");
+    // Upload in parts: the hub list shows the call in progress as "recording", never as a failed
+    // upload.
+    let rows = v.as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{v}");
+    assert_eq!(rows[0]["status"], "recording");
+    assert!(rows[0].get("errorKind").is_none(), "{v}");
 }
 
 #[test]

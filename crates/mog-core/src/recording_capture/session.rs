@@ -228,8 +228,32 @@ struct JobContext {
 /// The receiver of finished recordings (the upload pipeline of the cloud side). It must not
 /// block for long: it runs on the thread that stopped the recording.
 pub trait PartsHandoff: Send + Sync {
-    /// One recording finished.
+    /// A recording started. The job context (profile, instructions) is the one that
+    /// `recording_start` gave. The default does nothing.
+    fn started(&self, _rec: &StartedRecording) {}
+    /// The writer finished one part while the call goes on (a part is cut every
+    /// [`super::PART_MAX_MINUTES`]). It runs on the writer thread: it must not block. The
+    /// part file is closed and synced. The default does nothing.
+    fn part_ready(&self, _id: &str, _part: &PartFile) {}
+    /// One recording finished. `parts` holds every part, also those that `part_ready` sent.
     fn finished(&self, rec: FinishedRecording);
+}
+
+/// A recording that started, for [`PartsHandoff::started`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartedRecording {
+    /// The recording ID.
+    pub id: String,
+    /// The recording name.
+    pub name: String,
+    /// The local temp dir that holds the parts.
+    pub dir: PathBuf,
+    /// Wall clock epoch ms of the start.
+    pub started_at_ms: i64,
+    /// The home profile that `recording_start` named.
+    pub profile: Option<String>,
+    /// The per-recording instructions of `recording_start`.
+    pub instructions: Option<String>,
 }
 
 /// A state observer (the `recording.state` relay).
@@ -465,8 +489,20 @@ impl RecordingSession {
             }
         };
         let info = active.info.clone();
+        let dir = active.dir.clone();
         st.active = Some(active);
         drop(st);
+        {
+            let job = lock(&self.jobs).get(&info.id).cloned().unwrap_or_default();
+            self.handoff.started(&StartedRecording {
+                id: info.id.clone(),
+                name: info.name.clone(),
+                dir,
+                started_at_ms: info.started_at_ms,
+                profile: job.profile,
+                instructions: job.instructions,
+            });
+        }
         self.notify(&Snapshot::Recording(info.clone()));
         Ok(info)
     }
@@ -508,9 +544,14 @@ impl RecordingSession {
         // Frames count from here: the streams are open.
         let rx = self.tap.arm();
         let lag = self.config.mix_lag_samples;
+        let on_part: PartSink = {
+            let handoff = Arc::clone(&self.handoff);
+            let id = id.clone();
+            Box::new(move |part| handoff.part_ready(&id, part))
+        };
         let writer = thread::Builder::new()
             .name("bottle-rec-writer".into())
-            .spawn(move || write_loop(rx, Mixer::new(lag), parts));
+            .spawn(move || write_loop(rx, Mixer::new(lag), parts, on_part));
         let writer = match writer {
             Ok(w) => w,
             Err(_) => {
@@ -680,18 +721,28 @@ impl RecordingSession {
     }
 }
 
-/// The writer thread: mix each block, write parts, flush at the end of the queue.
+/// Gets each part the writer closes while the recording runs.
+type PartSink = Box<dyn Fn(&PartFile) + Send>;
+
+/// The writer thread: mix each block, write parts, flush at the end of the queue. `on_part`
+/// sees each part as it closes (the last one is not sent: `stop` hands it over).
 fn write_loop(
     rx: Receiver<Block>,
     mut mixer: Mixer,
     mut parts: PartWriter,
+    on_part: PartSink,
 ) -> std::io::Result<Vec<PartFile>> {
     let mut out = Vec::new();
+    let mut sent = 0;
     for block in rx {
         mixer.push(block.track, &block.samples, block.rate);
         out.clear();
         mixer.drain(&mut out);
         parts.write(&out)?;
+        for part in &parts.finished()[sent..] {
+            on_part(part);
+        }
+        sent = parts.finished().len();
     }
     out.clear();
     mixer.flush(&mut out);

@@ -3,8 +3,9 @@
 //! kinds, manifests and transcripts to the contract wire types. The recording ID on the wire is
 //! the folder name (`YYYY-MM-DD_HHMM`, with `_N` on a clash), which fits `RecordingId`.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use crate::recording::{
     FinishedPart, PipelineRequest, RecordingCloud, RecordingResult, RecordingSettingsStore,
@@ -22,6 +23,7 @@ use super::layout::{
     instructions_file, job_file, notes_file, transcript_json_file, transcript_md_file,
 };
 use super::settings_store::Storage;
+use super::sidecar::Sidecar;
 use super::transcript::{render_markdown, Segment, TranscriptDoc};
 
 /// The local temp audio still on the device (PR B's per-ID folders under the app data dir).
@@ -37,6 +39,14 @@ pub trait LocalAudio: Send + Sync {
     /// B3): the scan's "upload failed" is for audio left over from an earlier run, never audio
     /// from the one running now.
     fn active(&self) -> HashSet<String>;
+    /// The sidecar of the recording `name` (its profile and instructions), when the temp dir
+    /// has one. The default has none.
+    fn sidecar(&self, _name: &str) -> Option<Sidecar> {
+        None
+    }
+    /// Delete what is left of `name` on the device after its pipeline ended with `done` (the
+    /// sidecar and the empty temp dir). The default does nothing.
+    fn tidy(&self, _name: &str) {}
 }
 
 /// No local audio (tests, and builds with no app data dir).
@@ -118,6 +128,9 @@ pub fn summary_of(m: &JobManifest) -> Option<RecordingSummary> {
         status: wire_status(m.status),
         error_kind: m.error_kind.map(wire_kind),
         error_stage: m.error_stage.map(wire_stage),
+        parts_uploaded: Some(m.parts.iter().filter(|p| p.uploaded).count() as u32),
+        parts_total: Some(m.parts.len() as u32),
+        on_device_only: false,
     })
 }
 
@@ -141,7 +154,101 @@ pub struct CloudAdapter {
     /// The recording names with a pipeline run in flight (the hand-off and Retry share it), so
     /// two runs never race on one recording.
     inflight: Mutex<HashSet<String>>,
+    /// The recordings that upload during the call or resume after a crash, by name.
+    live: Mutex<HashMap<String, LiveStatus>>,
     now_ms: Arc<dyn Fn() -> i64 + Send + Sync>,
+}
+
+/// Where a live recording is, for the list row. Content-free.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LiveStatus {
+    id: String,
+    started_at_ms: u64,
+    /// The call still runs (the open part counts in the total).
+    recording: bool,
+    announced: BTreeSet<String>,
+    uploaded: u32,
+    /// The kind of the last failed attempt, until a try works.
+    error: Option<ErrorKind>,
+}
+
+impl LiveStatus {
+    fn total(&self) -> u32 {
+        self.announced.len() as u32 + u32::from(self.recording)
+    }
+}
+
+/// A message to the live worker of one recording.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LiveMsg {
+    /// A part closed while the call goes on.
+    Part(LocalPart),
+    /// The call stopped. Every part that is still on the device, in order.
+    Finished(Vec<LocalPart>),
+}
+
+/// What the live worker got while it waited.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Recv {
+    /// A message.
+    Msg(LiveMsg),
+    /// The wait ran out (time to try an upload again).
+    Timeout,
+    /// The sender is gone: the app ends. The parts stay on the device.
+    Closed,
+}
+
+/// The wait between two upload tries after a failure: 5 s, doubling, at most 60 s. A try that
+/// works resets it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Backoff(Duration);
+
+impl Backoff {
+    /// The first wait.
+    pub const FIRST: Duration = Duration::from_secs(5);
+    /// The longest wait.
+    pub const MAX: Duration = Duration::from_secs(60);
+    /// A new backoff.
+    pub fn new() -> Self {
+        Self(Self::FIRST)
+    }
+    /// The wait now, and double it for the next failure.
+    pub fn advance(&mut self) -> Duration {
+        let d = self.0;
+        self.0 = (self.0 * 2).min(Self::MAX);
+        d
+    }
+    /// A try worked.
+    pub fn reset(&mut self) {
+        self.0 = Self::FIRST;
+    }
+}
+
+impl Default for Backoff {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The job of a live recording: the profile and the job with no parts yet.
+#[derive(Debug, Clone)]
+pub struct LiveContext {
+    /// The home profile of `recording_start`.
+    pub profile: String,
+    /// The job. `parts` stays empty: parts come as messages.
+    pub job: RecordingJob,
+    /// Epoch ms of the start.
+    pub started_at_ms: u64,
+    /// The call still runs when the worker starts (false: a resume after a crash).
+    pub recording: bool,
+}
+
+/// A failure that a later try can fix: the network, a gateway fault, a rate limit.
+pub fn is_transient(k: ErrorKind) -> bool {
+    matches!(
+        k,
+        ErrorKind::Offline | ErrorKind::UploadFailed | ErrorKind::RateLimited
+    )
 }
 
 /// Holds a recording name in the in-flight set until it drops.
@@ -153,6 +260,21 @@ struct InFlight<'a> {
 impl Drop for InFlight<'_> {
     fn drop(&mut self) {
         self.set
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.name);
+    }
+}
+
+/// Removes a live recording from the registry when its worker ends.
+struct LiveGuard<'a> {
+    map: &'a Mutex<HashMap<String, LiveStatus>>,
+    name: String,
+}
+
+impl Drop for LiveGuard<'_> {
+    fn drop(&mut self) {
+        self.map
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(&self.name);
@@ -175,6 +297,7 @@ impl CloudAdapter {
             local,
             on_job,
             inflight: Mutex::new(HashSet::new()),
+            live: Mutex::new(HashMap::new()),
             now_ms,
         }
     }
@@ -211,13 +334,34 @@ impl CloudAdapter {
             status: RecordingStatus::Failed,
             error_kind: Some(RecordingErrorKind::UploadFailed),
             error_stage: Some(RecordingStatus::Uploading),
+            parts_uploaded: Some(0),
+            parts_total: None,
+            on_device_only: true,
+        })
+    }
+
+    /// The row of a recording that capture owns and no worker uploads.
+    fn recording_row(name: &str, started_at_ms: u64) -> Option<RecordingSummary> {
+        Some(RecordingSummary {
+            id: RecordingId::try_from(name.to_owned()).ok()?,
+            name: name.to_owned(),
+            started_at_ms,
+            duration_s: 0,
+            status: RecordingStatus::Recording,
+            error_kind: None,
+            error_stage: None,
+            parts_uploaded: None,
+            parts_total: None,
+            on_device_only: false,
         })
     }
 
     /// May Retry start a run on `m`? Only a failed run, or one whose job.json went stale.
     fn retry_allowed(&self, m: &JobManifest) -> bool {
         match m.status {
-            Status::Failed => true,
+            // A job.json still in `recording` has no live worker here: `retry` checked the
+            // capture, and the in-flight guard comes before this call.
+            Status::Failed | Status::Recording => true,
             Status::Done => false,
             _ => parse_iso_utc_ms(&m.updated_at)
                 .is_none_or(|t| (self.now_ms)() - t >= STALE_AFTER_MS),
@@ -231,8 +375,262 @@ impl CloudAdapter {
 
     fn emit(&self, m: &JobManifest) {
         if let Some(s) = summary_of(m) {
+            let s = self.overlay(s);
             (self.on_job)(&s);
         }
+    }
+
+    /// The summary of a recording with the live state on it: the counts of the open call and
+    /// the "waiting for network" mark (`errorKind: network` on a status that is not failed).
+    fn overlay(&self, mut s: RecordingSummary) -> RecordingSummary {
+        let live = self
+            .live
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&s.name)
+            .cloned();
+        let Some(l) = live else { return s };
+        if matches!(
+            s.status,
+            RecordingStatus::Recording | RecordingStatus::Uploading
+        ) {
+            s.parts_uploaded = Some(l.uploaded.max(s.parts_uploaded.unwrap_or(0)));
+            s.parts_total = Some(l.total().max(s.parts_total.unwrap_or(0)));
+            s.error_kind = l.error.map(|k| {
+                if is_transient(k) {
+                    RecordingErrorKind::Network
+                } else {
+                    wire_kind(k)
+                }
+            });
+        }
+        s
+    }
+
+    /// The row of a live recording that has no job.json yet (the volume was not reachable).
+    fn live_row(&self, name: &str, l: &LiveStatus) -> Option<RecordingSummary> {
+        let now = (self.now_ms)().max(0) as u64;
+        let s = RecordingSummary {
+            id: RecordingId::try_from(name.to_owned()).ok()?,
+            name: name.to_owned(),
+            started_at_ms: l.started_at_ms,
+            duration_s: if l.recording {
+                (now.saturating_sub(l.started_at_ms) / 1000) as u32
+            } else {
+                0
+            },
+            status: if l.recording {
+                RecordingStatus::Recording
+            } else {
+                RecordingStatus::Uploading
+            },
+            error_kind: None,
+            error_stage: None,
+            parts_uploaded: Some(l.uploaded),
+            parts_total: Some(l.total()),
+            on_device_only: false,
+        };
+        Some(self.overlay(s))
+    }
+
+    fn live_edit(&self, name: &str, f: impl FnOnce(&mut LiveStatus)) {
+        if let Some(l) = self
+            .live
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_mut(name)
+        {
+            f(l);
+        }
+    }
+
+    /// Tell the sink about a live change that no manifest write carries (an error that begins
+    /// or ends, a part that closes).
+    fn emit_live(&self, name: &str) {
+        let l = self
+            .live
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(name)
+            .cloned();
+        if let Some(s) = l.and_then(|l| self.live_row(name, &l)) {
+            (self.on_job)(&s);
+        }
+    }
+
+    /// Is `name` a live recording now?
+    pub fn is_live(&self, name: &str) -> bool {
+        self.live
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains_key(name)
+    }
+
+    /// The job of a recording for the live worker and the pipeline.
+    #[allow(clippy::too_many_arguments)]
+    pub fn job_for(
+        &self,
+        profile: &str,
+        storage: &RecordingStorage,
+        id: &RecordingId,
+        name: &str,
+        started_at_ms: u64,
+        instructions: &Instructions,
+        settings: &crate::types::RecordingSettings,
+        recording: bool,
+    ) -> LiveContext {
+        LiveContext {
+            profile: profile.to_owned(),
+            job: RecordingJob {
+                root: storage.root.as_str().to_owned(),
+                id: id.as_str().to_owned(),
+                name: name.to_owned(),
+                started_at: iso_utc(started_at_ms as i64),
+                instructions: instructions.as_str().to_owned(),
+                transcribe_endpoint: settings.transcribe_endpoint.as_str().to_owned(),
+                notes_endpoint: settings.notes_endpoint.as_str().to_owned(),
+                mog: RECORDING_MOG_TAG.to_owned(),
+                parts: Vec::new(),
+            },
+            started_at_ms,
+            recording,
+        }
+    }
+
+    /// Upload the parts of one recording while it runs, then finish it. The worker of one
+    /// recording: it takes `recv` messages (a part closed, the stop), uploads every part in
+    /// order (upload, job.json, delete), and on any failure keeps the part on the device and
+    /// tries again after a [`Backoff`] wait, for the whole call. Recording never depends on it.
+    /// After the stop it uploads the last part, then runs ONE transcription over the whole call
+    /// and writes the notes. Returns the final summary, or `None` when the sender went away
+    /// (the app ends: the parts stay for the launch scan) or a run on this name is in flight.
+    pub fn run_live(
+        &self,
+        ctx: &LiveContext,
+        recv: &mut dyn FnMut(Option<Duration>) -> Recv,
+    ) -> Option<RecordingSummary> {
+        let name = ctx.job.name.clone();
+        let p = ctx.profile.as_str();
+        let _guard = self.begin(&name)?;
+        self.live
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(
+                name.clone(),
+                LiveStatus {
+                    id: ctx.job.id.clone(),
+                    started_at_ms: ctx.started_at_ms,
+                    recording: ctx.recording,
+                    announced: BTreeSet::new(),
+                    uploaded: 0,
+                    error: None,
+                },
+            );
+        let _live = LiveGuard {
+            map: &self.live,
+            name: name.clone(),
+        };
+        let mut manifest: Option<JobManifest> = None;
+        let mut queue: Vec<LocalPart> = Vec::new();
+        let mut backoff = Backoff::new();
+        let mut finished: Option<Vec<LocalPart>> = None;
+        loop {
+            let tried = self.live_pump(p, ctx, &mut manifest, &mut queue);
+            let err = tried.err();
+            self.live_edit(&name, |l| {
+                l.error = err;
+                if let Some(m) = &manifest {
+                    l.uploaded = m.parts.iter().filter(|e| e.uploaded).count() as u32;
+                }
+            });
+            self.emit_live(&name);
+            if err.is_none() {
+                backoff.reset();
+            }
+            if finished.is_some() {
+                // After the stop: leave the loop when nothing is left to send, or when the
+                // failure is not one that waiting fixes (the job then fails with its kind).
+                if err.is_none() || err.is_some_and(|k| !is_transient(k)) {
+                    break;
+                }
+            }
+            let wait = err.is_some().then(|| backoff.advance());
+            match recv(wait) {
+                Recv::Msg(LiveMsg::Part(part)) => {
+                    self.live_announce(&name, &part);
+                    queue.push(part);
+                }
+                Recv::Msg(LiveMsg::Finished(parts)) => {
+                    for part in &parts {
+                        self.live_announce(&name, part);
+                        let file = part.path.file_name();
+                        let known = queue.iter().any(|q| q.path.file_name() == file);
+                        let sent = manifest.as_ref().is_some_and(|m| {
+                            m.parts.iter().any(|e| {
+                                e.uploaded && Some(e.file.as_str()) == file.and_then(|f| f.to_str())
+                            })
+                        });
+                        if !known && !sent && part.path.exists() {
+                            queue.push(part.clone());
+                        }
+                    }
+                    self.live_edit(&name, |l| l.recording = false);
+                    finished = Some(parts);
+                }
+                Recv::Timeout => {}
+                Recv::Closed => return None,
+            }
+        }
+        let mut job = ctx.job.clone();
+        job.parts = finished
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|l| l.path.exists())
+            .collect();
+        // Parts that failed in the pump and are still queued stay in `job.parts` (they are on
+        // the device), so the upload stage of the finish tries them once more.
+        let m = self
+            .service
+            .live_finish(p, &job, manifest, &mut |m| self.emit(m));
+        summary_of(&m).map(|s| self.overlay(s))
+    }
+
+    fn live_announce(&self, name: &str, part: &LocalPart) {
+        if let Some(f) = part.path.file_name().and_then(|f| f.to_str()) {
+            self.live_edit(name, |l| {
+                l.announced.insert(f.to_owned());
+            });
+        }
+    }
+
+    /// One try to send what waits: the folder and job.json first, then each queued part in
+    /// order. A part that is gone, or is not audio, is dropped (it can never be sent).
+    fn live_pump(
+        &self,
+        p: &str,
+        ctx: &LiveContext,
+        manifest: &mut Option<JobManifest>,
+        queue: &mut Vec<LocalPart>,
+    ) -> Result<(), ErrorKind> {
+        let mut on = |m: &JobManifest| self.emit(m);
+        if manifest.is_none() {
+            *manifest = Some(self.service.live_begin(p, &ctx.job, &mut on)?);
+        }
+        let Some(m) = manifest.as_mut() else {
+            return Ok(());
+        };
+        while let Some(part) = queue.first().cloned() {
+            match self
+                .service
+                .live_upload_part(p, &ctx.job, m, &part, &mut on)
+            {
+                Ok(()) => {}
+                Err(ErrorKind::AudioMissing | ErrorKind::AudioUnreadable) => {}
+                Err(k) => return Err(k),
+            }
+            queue.remove(0);
+        }
+        Ok(())
     }
 
     /// Run the whole pipeline for one finished capture, once. Returns the final summary.
@@ -483,17 +881,74 @@ impl RecordingCloud for CloudAdapter {
             .service
             .list(profile.as_str(), Self::root(storage))
             .map_err(err)?;
-        let mut out: Vec<RecordingSummary> = rows.iter().filter_map(summary_of).collect();
-        // ADR 0103 decision 7: audio left on the device with no job.json in the volume shows
-        // as "Upload failed - Retry". Never the recording capture owns right now, or one that
-        // finished but has not yet reached the pipeline (review of #592, BLOCKING B3).
         let active = self.local.active();
-        for (name, started) in self.local.names() {
-            if out.iter().any(|r| r.name == name) || self.in_flight(&name) || active.contains(&name)
+        let now = (self.now_ms)();
+        // A job.json that is neither done nor failed and stopped changing belongs to a run that
+        // died (a crash, a quit). No worker, no run and no capture owns it: it reads as failed
+        // at its step, so Retry shows.
+        let rows: Vec<JobManifest> = rows
+            .into_iter()
+            .map(|mut m| {
+                let stuck = !self.in_flight(&m.name)
+                    && !active.contains(&m.name)
+                    && !self.is_live(&m.name)
+                    && parse_iso_utc_ms(&m.updated_at).is_some_and(|t| now - t >= STALE_AFTER_MS);
+                let step = match m.status {
+                    Status::Uploading => Some((ErrorKind::UploadFailed, Stage::Uploading)),
+                    Status::Transcribing => {
+                        Some((ErrorKind::TranscribeFailed, Stage::Transcribing))
+                    }
+                    Status::WritingNotes => Some((ErrorKind::NotesFailed, Stage::WritingNotes)),
+                    _ => None,
+                };
+                if let (true, Some((k, st))) = (stuck, step) {
+                    m.fail(k, st, &m.updated_at.clone());
+                }
+                m
+            })
+            .collect();
+        let mut out: Vec<RecordingSummary> = rows.iter().filter_map(summary_of).collect();
+        let live: HashMap<String, LiveStatus> = self
+            .live
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let local: HashMap<String, u64> = self.local.names().into_iter().collect();
+        for row in &mut out {
+            if live.contains_key(&row.name) {
+                // A worker owns it: show its live counts and its network mark.
+                *row = self.overlay(row.clone());
+            } else if row.status == RecordingStatus::Recording
+                && !self.in_flight(&row.name)
+                && !active.contains(&row.name)
+            {
+                // job.json says "recording", but no capture and no worker has it: a crash.
+                // With the audio still here the row is a failed upload that Retry fixes.
+                row.status = RecordingStatus::Failed;
+                row.error_kind = Some(RecordingErrorKind::UploadFailed);
+                row.error_stage = Some(RecordingStatus::Uploading);
+            }
+        }
+        // A recording that runs or uploads now, with no job.json in the volume yet.
+        for (name, l) in &live {
+            if !out.iter().any(|r| &r.name == name) {
+                out.extend(self.live_row(name, l));
+            }
+        }
+        // ADR 0103 decision 7: audio left on the device with no job.json in the volume. Never
+        // the recording capture owns right now, or one that finished but has not yet reached
+        // the pipeline (review of #592, BLOCKING B3). A recording that capture owns, with no
+        // worker (the live upload could not start), shows as recording.
+        for (name, started) in &local {
+            if out.iter().any(|r| &r.name == name)
+                || self.in_flight(name)
+                || live.contains_key(name)
             {
                 continue;
             }
-            if let Some(s) = Self::local_only_summary(&name, started) {
+            if active.contains(name) {
+                out.extend(Self::recording_row(name, *started));
+            } else if let Some(s) = Self::local_only_summary(name, *started) {
                 out.push(s);
             }
         }
@@ -599,6 +1054,9 @@ impl RecordingCloud for CloudAdapter {
             parts: self.local.parts(name),
         };
         let m = self.service.retry(p, &job, &mut |m| self.emit(m));
+        if m.status == Status::Done {
+            self.local.tidy(name);
+        }
         summary_of(&m).ok_or(RecordingErrorKind::Internal)
     }
 

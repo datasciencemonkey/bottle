@@ -1243,6 +1243,16 @@ pub struct RecordingSummary {
     /// The step that failed. Retry starts again at this step.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_stage: Option<RecordingStatus>,
+    /// Parts of the recording that are in the volume. Absent when unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parts_uploaded: Option<u32>,
+    /// Parts of the recording so far (all of them once it has stopped). Absent when unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parts_total: Option<u32>,
+    /// The audio is only on this device: no job.json in the volume and no upload runs now
+    /// (an old build, or a crash with no way to resume).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub on_device_only: bool,
 }
 
 /// One transcript turn. Times are seconds from the start of the recording, across parts.

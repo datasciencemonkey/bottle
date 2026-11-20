@@ -34,7 +34,10 @@ use super::layout::{
 };
 use super::model::{notes_request, parse_transcript, reply_text, sniff, transcribe_request};
 use super::settings_store::{is_endpoint_name, valid_instructions, Storage};
-use super::transcript::{merge_parts, render_markdown, PartInput, PartTranscript, TranscriptDoc};
+use super::stitch;
+use super::transcript::{
+    merge_parts, render_markdown, PartInfo, PartInput, PartTranscript, TranscriptDoc,
+};
 
 /// The model route (Unity Gateway chat, NFR-21a).
 pub const MODEL_ROUTE: &str = "mlflow.chat_completions";
@@ -198,6 +201,31 @@ fn part_ext(p: &std::path::Path) -> &'static str {
         Some("wav") => "wav",
         _ => "opus",
     }
+}
+
+/// Add a manifest entry for each local part that the manifest does not list yet (a part that
+/// the live upload never saw, or a recording that a crash left), and keep the entries in file
+/// order. A part with an unknown length is measured from its Ogg Opus granule position.
+pub fn merge_local_parts(m: &mut JobManifest, parts: &[LocalPart]) {
+    for l in parts {
+        let Some(file) = l.path.file_name().and_then(|f| f.to_str()) else {
+            continue;
+        };
+        if !is_audio_file_of(&m.name, file) || m.parts.iter().any(|e| e.file == file) {
+            continue;
+        }
+        let dur = if l.duration_s > 0.0 {
+            l.duration_s
+        } else {
+            std::fs::read(&l.path)
+                .ok()
+                .and_then(|b| stitch::duration_s(&b))
+                .unwrap_or(0.0)
+        };
+        m.parts.push(PartEntry::new(file, dur));
+    }
+    m.parts.sort_by(|a, b| a.file.cmp(&b.file));
+    m.duration_s = m.parts.iter().map(|p| p.duration_s).sum();
 }
 
 impl RecordingCloudService {
@@ -500,7 +528,16 @@ impl RecordingCloudService {
                     None if job.parts.len() == 1 => format!("{}.{ext}", job.name),
                     None => part_file(&job.name, i as u32 + 1, ext),
                 };
-                PartEntry::new(&file, l.duration_s)
+                // A part of unknown length is measured from its Ogg Opus granule position.
+                let dur = if l.duration_s > 0.0 {
+                    l.duration_s
+                } else {
+                    std::fs::read(&l.path)
+                        .ok()
+                        .and_then(|b| stitch::duration_s(&b))
+                        .unwrap_or(0.0)
+                };
+                PartEntry::new(&file, dur)
             })
             .collect();
         let mut m = JobManifest::new(
@@ -532,10 +569,12 @@ impl RecordingCloudService {
         let Ok(root) = self.check_job(job) else {
             return self.run(p, job, on);
         };
-        let m = match self.read_job(p, &root, &job.name) {
+        let mut m = match self.read_job(p, &root, &job.name) {
             Ok(Some(m)) => m,
             _ => return self.run(p, job, on),
         };
+        // Parts that the live upload never listed (a crash) join the manifest.
+        merge_local_parts(&mut m, &job.parts);
         let stage = match (m.status, m.error_stage) {
             (Status::Done, _) => return m,
             (Status::Failed, Some(s)) => s,
@@ -610,22 +649,166 @@ impl RecordingCloudService {
                 .find(|l| l.path.file_name().and_then(|f| f.to_str()) == Some(file.as_str()))
                 .or_else(|| (job.parts.len() == m.parts.len()).then(|| &job.parts[i]))
                 .ok_or(ErrorKind::AudioMissing)?;
-            let bytes = std::fs::read(&local.path).map_err(|_| ErrorKind::AudioMissing)?;
-            if sniff(&bytes).is_none() {
-                return Err(ErrorKind::AudioUnreadable);
-            }
-            let dest = format!("{folder}/{file}");
-            self.upload(p, &dest, &bytes, false, f)?;
-            m.parts[i].uploaded = true;
-            // job.json first, then the delete (ADR 0103): if the job.json write fails, the
-            // local file stays, and Retry uploads it again (a 409 counts as uploaded).
-            self.update(p, root, m, Status::Uploading, on)?;
-            // A failed delete leaves a temp file that the launch scan shows again; it is never
-            // a reason to fail the stage.
-            let _ = std::fs::remove_file(&local.path);
+            let bytes = self.upload_one(p, root, &folder, m, i, local, on)?;
             cache.insert(i, bytes);
         }
         Ok(cache)
+    }
+
+    /// Upload part `i` of `m`, then write job.json, then delete the local file (ADR 0103 order).
+    /// If the job.json write fails, the part counts as not uploaded, the local file stays, and a
+    /// retry uploads it again (a 409 counts as uploaded). Returns the audio bytes.
+    #[allow(clippy::too_many_arguments)]
+    fn upload_one(
+        &self,
+        p: &str,
+        root: &VolumeRoot,
+        folder: &str,
+        m: &mut JobManifest,
+        i: usize,
+        local: &LocalPart,
+        on: &mut dyn FnMut(&JobManifest),
+    ) -> Kind<Vec<u8>> {
+        let bytes = std::fs::read(&local.path).map_err(|_| ErrorKind::AudioMissing)?;
+        if sniff(&bytes).is_none() {
+            return Err(ErrorKind::AudioUnreadable);
+        }
+        let dest = format!("{folder}/{}", m.parts[i].file);
+        self.upload(p, &dest, &bytes, false, ErrorKind::UploadFailed)?;
+        m.parts[i].uploaded = true;
+        if let Err(k) = self.touch(p, root, m, on) {
+            m.parts[i].uploaded = false;
+            return Err(k);
+        }
+        // A failed delete leaves a temp file that the launch scan shows again; it is never a
+        // reason to fail the stage.
+        let _ = std::fs::remove_file(&local.path);
+        Ok(bytes)
+    }
+
+    /// Write job.json as it is (the status stays), with a fresh stamp, and tell `on`.
+    fn touch(
+        &self,
+        p: &str,
+        root: &VolumeRoot,
+        m: &mut JobManifest,
+        on: &mut dyn FnMut(&JobManifest),
+    ) -> Kind<()> {
+        m.updated_at = self.now();
+        self.write_job(p, root, m, ErrorKind::UploadFailed)?;
+        on(m);
+        Ok(())
+    }
+
+    // ---------- upload during the call ----------
+
+    /// The folder, the instructions and a job.json in `recording`, at the start of a call (or
+    /// at the resume of one after a crash: a job.json that is in the volume already is kept).
+    /// Call it again after a failure: every step can run twice.
+    pub fn live_begin(
+        &self,
+        p: &str,
+        job: &RecordingJob,
+        on: &mut dyn FnMut(&JobManifest),
+    ) -> Kind<JobManifest> {
+        let root = self.check_job(job)?;
+        let f = ErrorKind::UploadFailed;
+        let folder = root.folder(&job.name);
+        self.mkdir(p, &folder, f)?;
+        let instr = format!("{folder}/{}", instructions_file(&job.name));
+        self.upload(p, &instr, job.instructions.as_bytes(), true, f)?;
+        let mut m = match self.read_job(p, &root, &job.name) {
+            Ok(Some(m)) => m,
+            _ => JobManifest::new(
+                &job.id,
+                &job.name,
+                &job.started_at,
+                Vec::new(),
+                &job.transcribe_endpoint,
+                &job.notes_endpoint,
+                &self.now(),
+            ),
+        };
+        m.set_status(Status::Recording, &self.now());
+        self.write_job(p, &root, &m, f)?;
+        on(&m);
+        Ok(m)
+    }
+
+    /// Upload one finished part while the call goes on: upload, then job.json, then delete the
+    /// local file. A part that is in the volume already (it is marked in `m`) is not sent
+    /// again. `m` keeps its status (`recording`).
+    pub fn live_upload_part(
+        &self,
+        p: &str,
+        job: &RecordingJob,
+        m: &mut JobManifest,
+        local: &LocalPart,
+        on: &mut dyn FnMut(&JobManifest),
+    ) -> Kind<()> {
+        let root = self.check_job(job)?;
+        let file = local
+            .path
+            .file_name()
+            .and_then(|f| f.to_str())
+            .filter(|f| is_audio_file_of(&job.name, f))
+            .ok_or(ErrorKind::AudioUnreadable)?
+            .to_owned();
+        if m.parts.iter().any(|e| e.file == file && e.uploaded) {
+            let _ = std::fs::remove_file(&local.path);
+            return Ok(());
+        }
+        merge_local_parts(m, std::slice::from_ref(local));
+        let i = m
+            .parts
+            .iter()
+            .position(|e| e.file == file)
+            .ok_or(ErrorKind::AudioMissing)?;
+        let folder = root.folder(&job.name);
+        self.upload_one(p, &root, &folder, m, i, local, on)
+            .map(|_| ())
+    }
+
+    /// The call stopped: upload what is left, then run the one transcription over the whole call
+    /// and write the notes. `m` is the manifest of the live upload, if there is one; `job.parts`
+    /// holds the parts still on the device.
+    pub fn live_finish(
+        &self,
+        p: &str,
+        job: &RecordingJob,
+        m: Option<JobManifest>,
+        on: &mut dyn FnMut(&JobManifest),
+    ) -> JobManifest {
+        let root = match self.check_job(job) {
+            Ok(r) => r,
+            Err(k) => {
+                let mut m = m.unwrap_or_else(|| self.fresh_manifest(job));
+                self.finish_fail(p, None, &mut m, k, Stage::Uploading, on);
+                return m;
+            }
+        };
+        let mut m = match m {
+            Some(m) => m,
+            None => match self.read_job(p, &root, &job.name) {
+                Ok(Some(m)) => m,
+                _ => self.fresh_manifest(job),
+            },
+        };
+        merge_local_parts(&mut m, &job.parts);
+        m.started_at = job.started_at.clone();
+        self.run_from_stage(p, &root, job, m, Stage::Uploading, on)
+    }
+
+    fn fresh_manifest(&self, job: &RecordingJob) -> JobManifest {
+        JobManifest::new(
+            &job.id,
+            &job.name,
+            &job.started_at,
+            Vec::new(),
+            &job.transcribe_endpoint,
+            &job.notes_endpoint,
+            &self.now(),
+        )
     }
 
     fn transcribe_stage(
@@ -646,10 +829,10 @@ impl RecordingCloudService {
         }
         let folder = root.folder(&m.name);
         let tags = Self::tags(&job.mog, TagOp::Asr);
-        let mut inputs = Vec::with_capacity(m.parts.len());
-        let mut context: Option<String> = None;
+        // Every part, in order: the bytes this run uploaded, else the volume copy.
+        let mut audio: Vec<Vec<u8>> = Vec::with_capacity(m.parts.len());
         for (i, part) in m.parts.iter().enumerate() {
-            let bytes = match cache.remove(&i) {
+            audio.push(match cache.remove(&i) {
                 Some(b) => b,
                 None => self
                     .download(
@@ -659,26 +842,75 @@ impl RecordingCloudService {
                     )
                     .map_err(at)?
                     .ok_or(at(ErrorKind::AudioMissing))?,
-            };
-            let body = transcribe_request(&m.transcribe_endpoint, &bytes, context.as_deref())
-                .map_err(at)?;
+            });
+        }
+        // One pass over the whole call (ADR 0103 follow-up): the Ogg Opus parts join into one
+        // stream, so the speaker labels stay the same from start to end. Anything else (FLAC,
+        // WAV, a part that does not join) goes part by part, as before.
+        let joined = if audio.len() > 1 {
+            let refs: Vec<&[u8]> = audio.iter().map(Vec::as_slice).collect();
+            stitch::join(&refs).ok()
+        } else {
+            None
+        };
+        let mut inputs = Vec::with_capacity(m.parts.len());
+        let mut context: Option<String> = None;
+        if let Some(bytes) = joined {
+            drop(audio);
+            let body = transcribe_request(&m.transcribe_endpoint, &bytes, None).map_err(at)?;
             drop(bytes);
             let text = self
                 .model(p, &body, &tags, ModelCall::Transcribe)
                 .map_err(at)?;
-            let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
-            context = Some(lines[lines.len().saturating_sub(CONTEXT_LINES)..].join("\n"));
-            let dur = (part.duration_s > 0.0).then_some(part.duration_s);
+            let total: f64 = m.parts.iter().map(|x| x.duration_s).sum();
+            let dur = (total > 0.0).then_some(total);
             inputs.push(PartInput {
-                file: part.file.clone(),
+                file: m.parts[0].file.clone(),
                 duration_s: dur,
                 transcript: PartTranscript {
-                    duration_s: part.duration_s,
+                    duration_s: total,
                     segments: parse_transcript(&text, dur),
                 },
             });
+        } else {
+            for (part, bytes) in m.parts.iter().zip(audio) {
+                let body = transcribe_request(&m.transcribe_endpoint, &bytes, context.as_deref())
+                    .map_err(at)?;
+                drop(bytes);
+                let text = self
+                    .model(p, &body, &tags, ModelCall::Transcribe)
+                    .map_err(at)?;
+                let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+                context = Some(lines[lines.len().saturating_sub(CONTEXT_LINES)..].join("\n"));
+                let dur = (part.duration_s > 0.0).then_some(part.duration_s);
+                inputs.push(PartInput {
+                    file: part.file.clone(),
+                    duration_s: dur,
+                    transcript: PartTranscript {
+                        duration_s: part.duration_s,
+                        segments: parse_transcript(&text, dur),
+                    },
+                });
+            }
         }
-        let merged = merge_parts(&inputs);
+        let mut merged = merge_parts(&inputs);
+        if inputs.len() == 1 && m.parts.len() > 1 {
+            // One transcript over the joined parts: list the real files with their offsets.
+            let mut offset = 0.0;
+            merged.parts = m
+                .parts
+                .iter()
+                .map(|x| {
+                    let info = PartInfo {
+                        file: x.file.clone(),
+                        offset_s: offset,
+                        duration_s: x.duration_s,
+                    };
+                    offset += x.duration_s;
+                    info
+                })
+                .collect();
+        }
         let doc = TranscriptDoc {
             version: 1,
             id: m.id.clone(),

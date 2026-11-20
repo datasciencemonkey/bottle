@@ -17,4 +17,6 @@ pub mod layout;
 pub mod model;
 pub mod opener;
 pub mod settings_store;
+pub mod sidecar;
+pub mod stitch;
 pub mod transcript;
