@@ -53,6 +53,33 @@
     "window_covers_art_px": 0.0,
     "on_screen": true
   },
+  "answer-table-right": {
+    "mog": {
+      "x": 600,
+      "y": 300,
+      "w": 160,
+      "h": 192
+    },
+    "card": {
+      "x": 747,
+      "y": 342,
+      "w": 340,
+      "h": 238
+    },
+    "side": "right",
+    "pill": {
+      "x": 757,
+      "w": 318,
+      "h": 213.875
+    },
+    "lamp_art": {
+      "left": 617.5,
+      "right": 747.0
+    },
+    "visible_gap_px": 10.0,
+    "window_covers_art_px": 0.0,
+    "on_screen": true
+  },
   "working-left": {
     "mog": {
       "x": 1250,
@@ -98,6 +125,33 @@
       "x": 940,
       "w": 318,
       "h": 201.21875
+    },
+    "lamp_art": {
+      "left": 1267.5,
+      "right": 1397.0
+    },
+    "visible_gap_px": 9.5,
+    "window_covers_art_px": 0.5,
+    "on_screen": true
+  },
+  "answer-table-left": {
+    "mog": {
+      "x": 1250,
+      "y": 300,
+      "w": 160,
+      "h": 192
+    },
+    "card": {
+      "x": 928,
+      "y": 342,
+      "w": 340,
+      "h": 238
+    },
+    "side": "left",
+    "pill": {
+      "x": 940,
+      "w": 318,
+      "h": 213.875
     },
     "lamp_art": {
       "left": 1267.5,

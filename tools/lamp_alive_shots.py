@@ -363,11 +363,27 @@ ANSWERED = {
 }
 
 
+TABLE_MD = "## Largest catalogs\n\n| Catalog | Schemas | Tables |\n| --- | ---: | ---: |\n" + "\n".join(
+    f"| catalog_{i:02d}_with_a_long_name | {i * 3} | {i * 117} |" for i in range(1, 14)
+)
+ANSWERED_TABLE = {
+    **ANSWERED,
+    "sections": [
+        {"id": "answer", "md": TABLE_MD},
+        {"id": "keyNumbers", "items": ["8,800 tables", "150 catalogs"]},
+        {"id": "footer"},
+        {"id": "dataFlow", "text": "Your question went to Genie One in your workspace."},
+    ],
+}
+
+
 def shots_cards(browser):
     res = {}
     for side, x in (("right", 600), ("left", 1250)):
         res[f"working-{side}"] = card_scene(browser, f"working-{side}", x, WORKING)
         res[f"answer-{side}"] = card_scene(browser, f"answer-{side}", x, ANSWERED, mood="success")
+        # A tall GFM table (#607) fills the card to its height cap: the facing edge and the gap hold.
+        res[f"answer-table-{side}"] = card_scene(browser, f"answer-table-{side}", x, ANSWERED_TABLE, mood="success")
     with open(os.path.join(OUT, "card-layout.json"), "w") as f:
         json.dump(res, f, indent=2)
     assert all(abs(r["visible_gap_px"] - 10) <= 1.0 and r["on_screen"] for r in res.values()), res
