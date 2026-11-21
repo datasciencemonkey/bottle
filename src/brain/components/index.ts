@@ -16,6 +16,7 @@ import {
 } from '../bus';
 import { createCaptureMood, wireCaptureMood } from '../capture-mood';
 import { wireForget } from '../forget-wiring';
+import { clearingDictationWords } from '../wipe-dictation-words';
 import { wireWipe } from '../wipe-wiring';
 import { wireCliInstall, wireCliSettings } from '../cli-wiring';
 import { cliPlatform } from '../../shared/cli-view';
@@ -69,6 +70,7 @@ import { createProfilePick } from '../profile-pick';
 import { createRequestOwner, sendOwnedCard } from '../request-owner';
 import { wireTalkNoMog } from '../talk-no-mog';
 import { createAppTalkTarget, wireTalkTarget, type TalkTarget } from '../talk-target';
+import { createDictationCorrector } from '../../shared/dictation-vocab';
 import { createLifecycleTranscriber } from '../stt-wiring';
 import { ipcUtteranceDeps } from '../utterance-route';
 import { createUtteranceHandler } from '../utterance-wiring';
@@ -212,7 +214,7 @@ export function startBrain(): Brain {
     // user's confirm click. TODO(#525): the default core sends `mem_wipe` once it is in the
     // contract; until then a Wipe fails safe and the dialog says that nothing changed.
     wireWipe(bus, {
-      flow: new WipeFlow({ genieOne: new GenieOneDeleteUtility() }),
+      flow: clearingDictationWords(new WipeFlow({ genieOne: new GenieOneDeleteUtility() })),
       settings: async () => retentionSettings(await readAdminPolicy()),
     });
     // #16 (W-02a, W-02c, W-02d): the hub Settings show the CLI path and version from T7.
@@ -479,7 +481,11 @@ export function startBrain(): Brain {
         })(),
       // #52 (ADR 0088): T4 runs the 8.3 chain over `stt_transcribe` (host route TODO(#514)).
       // A failure shows its fixed text on the owner's card, and no text is routed.
-      transcribe: createLifecycleTranscriber(components.T4, sendOwnedCard),
+      transcribe: createLifecycleTranscriber(
+        components.T4,
+        sendOwnedCard,
+        createDictationCorrector(),
+      ),
       // #59 (ADR 0053, ADR 0098): the MOG of the key-down owns the utterance (MOG-13a); a
       // dictation ends at `insert_text`; an ⌥G ask or a chip goes to T3.
       onUtterance: createUtteranceHandler({
