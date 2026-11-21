@@ -1843,6 +1843,73 @@
     gap: 4px;
   }
 
+  .rec-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 8px;
+  }
+
+  .rec-links--detail {
+    flex-direction: column;
+    gap: 6px;
+    margin: 0 0 16px;
+  }
+
+  .rec-link-item {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+
+  /* The file the link cannot open: Databricks opens the folder, the name says what to find. */
+  .rec-file {
+    padding: 1px 6px;
+    border-radius: var(--mog-radius-sm);
+    background: rgb(140 200 255 / 14%);
+    color: var(--mog-text);
+    font-size: var(--mog-text-xs);
+  }
+
+  .rec-banner {
+    margin: 12px 32px 0;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .hub .rec-banner p {
+    flex: none;
+  }
+
+  .rec-banner-title {
+    font-weight: 600;
+  }
+
+  .hub .rec-links .rec-link {
+    justify-content: flex-start;
+    min-height: 20px;
+    padding: 0 4px;
+    border: 0;
+    background: none;
+  }
+
+  .hub .rec-links .rec-link:hover {
+    background: rgb(140 200 255 / 10%);
+  }
+
+  .rec-upload-all {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 12px 32px 0;
+  }
+
+  .rec-upload-progress {
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-sm);
+    font-variant-numeric: tabular-nums;
+  }
+
   .rec-status {
     display: inline-flex;
     align-items: center;

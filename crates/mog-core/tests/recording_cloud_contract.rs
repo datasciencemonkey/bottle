@@ -146,10 +146,11 @@ fn vol() -> Option<Value> {
 fn rec_component_list_needs_storage_and_the_profile() {
     let http = Arc::new(ScriptedHttp::new());
     let (c, _, _) = component(&http, None);
-    let e = c
+    // No storage: no volume call, and the list is the audio that waits on the device.
+    let v = c
         .call("recording_list", json!({"profile":"fake-home"}))
-        .unwrap_err();
-    assert_eq!(e.code(), "no_storage");
+        .unwrap();
+    assert_eq!(v, json!([]));
     let e = c.call("recording_list", json!({})).unwrap_err();
     assert_eq!(e.code(), "invalid_args");
 
@@ -464,4 +465,75 @@ fn rec_component_without_cloud_answers_not_implemented() {
         .call("recording_list", json!({"profile":"fake-home"}))
         .unwrap_err();
     assert_eq!(e.code(), "not_implemented");
+}
+
+#[test]
+fn rec_component_list_without_storage_shows_the_device_only_recordings_newest_first() {
+    let http = Arc::new(ScriptedHttp::new());
+    let local = Arc::new(FakeLocal::new(vec![
+        ("2026-11-19_0905".to_owned(), 1_000),
+        ("2026-11-20_1000".to_owned(), 2_000),
+    ]));
+    let (c, _, _) = component_with(&http, None, local, Arc::new(|| 1_795_100_700_000i64));
+    let v = c
+        .call("recording_list", json!({"profile":"fake-home"}))
+        .unwrap();
+    let rows = v.as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["id"], "2026-11-20_1000");
+    assert_eq!(rows[0]["onDeviceOnly"], true);
+    assert_eq!(rows[0]["errorKind"], "upload_failed");
+    // A call that records now shows as recording, not as a failed upload.
+    let local = Arc::new(FakeLocal::with_active(
+        vec![("2026-11-20_1000".to_owned(), 2_000)],
+        &["2026-11-20_1000"],
+    ));
+    let (c2, _, _) = component_with(&http, None, local, Arc::new(|| 1_795_100_700_000i64));
+    let v2 = c2
+        .call("recording_list", json!({"profile":"fake-home"}))
+        .unwrap();
+    assert_eq!(v2[0]["status"], "recording");
+    // Retry still needs a storage: the brain shows why.
+    let e = c
+        .call(
+            "recording_retry",
+            json!({"profile":"fake-home","id":"2026-11-20_1000"}),
+        )
+        .unwrap_err();
+    assert_eq!(e.code(), "no_storage");
+}
+
+#[test]
+fn rec_component_open_transcript_and_notes_open_the_folder_link_only_for_a_good_name() {
+    let http = Arc::new(ScriptedHttp::new());
+    let (c, opened, _) = component(&http, vol());
+    for target in ["transcript", "notes", "folder"] {
+        let v = c
+            .call(
+                "recording_open",
+                json!({"profile":"fake-home","id":NAME,"target":target}),
+            )
+            .unwrap();
+        assert_eq!(v, json!({}));
+    }
+    let o = opened.lock().unwrap().clone();
+    assert_eq!(o.len(), 3);
+    assert!(o.iter().all(|(_, u)| u == &o[0].1));
+    assert!(o[0].1.starts_with(
+        "https://dbc-fake.cloud.databricks.com/explore/data/volumes/main/team/audio?o=1234567890&volumePath=%2FVolumes%2Fmain%2Fteam%2Faudio%2FBottle%2FRecordings%2F2026-11-19_0905%2F"
+    ));
+    // An unknown target and a bad name never reach the opener.
+    assert!(c
+        .call(
+            "recording_open",
+            json!({"profile":"fake-home","id":NAME,"target":"audio"})
+        )
+        .is_err());
+    assert!(c
+        .call(
+            "recording_open",
+            json!({"profile":"fake-home","id":"..-x","target":"notes"})
+        )
+        .is_err());
+    assert_eq!(opened.lock().unwrap().len(), 3);
 }

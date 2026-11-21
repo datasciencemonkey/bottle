@@ -464,3 +464,54 @@ fn rec_job_iso_utc() {
     assert_eq!(iso_utc(1_795_100_700_000), "2026-11-19T15:05:00Z");
     assert_eq!(iso_utc(951_782_400_000), "2000-02-29T00:00:00Z");
 }
+
+#[test]
+fn rec_layout_file_link_names_the_file_and_opens_the_strict_folder_link() {
+    use mog_core::recording_cloud::layout::{catalog_explorer_file_link, RecordingFile};
+    let root = VolumeRoot::parse("/Volumes/main/team/audio").unwrap();
+    let host = "https://dbc-fake.cloud.databricks.com";
+    let folder = catalog_explorer_url(host, "1234567890", &root, "2026-11-19_0905").unwrap();
+    for (file, want) in [
+        (RecordingFile::Transcript, "2026-11-19_0905.transcript.md"),
+        (RecordingFile::Notes, "2026-11-19_0905.notes.md"),
+    ] {
+        let l =
+            catalog_explorer_file_link(host, "1234567890", &root, "2026-11-19_0905", file).unwrap();
+        assert_eq!(l.file_name, want);
+        // Databricks documents no file deep link: the URL is the folder URL.
+        assert_eq!(l.url, folder);
+    }
+    for (h, ws, name) in [
+        (
+            "http://dbc-fake.cloud.databricks.com",
+            "1",
+            "2026-11-19_0905",
+        ),
+        (
+            "https://dbc-fake.cloud.databricks.com/x",
+            "1",
+            "2026-11-19_0905",
+        ),
+        (
+            "https://dbc-fake.cloud.databricks.com",
+            "1x",
+            "2026-11-19_0905",
+        ),
+        ("https://dbc-fake.cloud.databricks.com", "1", "../x"),
+        (
+            "https://dbc-fake.cloud.databricks.com",
+            "1",
+            "2026-11-19_0905.notes.md",
+        ),
+        (
+            "https://dbc-fake.cloud.databricks.com",
+            "1",
+            "2026-11-19_0905/../x",
+        ),
+    ] {
+        assert!(
+            catalog_explorer_file_link(h, ws, &root, name, RecordingFile::Notes).is_err(),
+            "{h} {ws} {name}"
+        );
+    }
+}

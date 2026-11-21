@@ -198,6 +198,52 @@ pub fn bare_https_origin(host_url: &str) -> Option<String> {
     .then(|| format!("https://{host}"))
 }
 
+/// A finished file of a recording that the hub can link to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordingFile {
+    /// `<name>.transcript.md`.
+    Transcript,
+    /// `<name>.notes.md`.
+    Notes,
+}
+
+impl RecordingFile {
+    /// The file name inside the recording folder.
+    pub fn file_name(self, name: &str) -> String {
+        match self {
+            Self::Transcript => transcript_md_file(name),
+            Self::Notes => notes_file(name),
+        }
+    }
+}
+
+/// The link of one finished file, and the name of the file the user looks for there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileLink {
+    /// A Catalog Explorer URL on the profile host.
+    pub url: String,
+    /// The file name in the folder that the link opens.
+    pub file_name: String,
+}
+
+/// The Catalog Explorer link for one finished file of a recording.
+///
+/// Databricks documents `volumePath` only for a folder. It documents no file deep link, so
+/// this opens the folder (the documented, strict format of [`catalog_explorer_url`]) and gives
+/// the file name for the UI to highlight. It builds no `volumePath=<folder>/<file>` URL.
+pub fn catalog_explorer_file_link(
+    host_url: &str,
+    workspace_id: &str,
+    root: &VolumeRoot,
+    name: &str,
+    file: RecordingFile,
+) -> Result<FileLink, ErrorKind> {
+    Ok(FileLink {
+        url: catalog_explorer_url(host_url, workspace_id, root, name)?,
+        file_name: file.file_name(name),
+    })
+}
+
 /// The Catalog Explorer link of a recording folder:
 /// `https://<host>/explore/data/volumes/<c>/<s>/<v>?o=<workspace_id>&volumePath=<folder/>`.
 pub fn catalog_explorer_url(

@@ -31,13 +31,17 @@ import {
   VOLUME_PATH,
   type HubRecording,
   type HubRecordingDetail,
+  type HubRecordings,
+  type BatchState,
   type RecordingAction,
   type RecordingControlView,
+  type RecordingOpenWhat,
   type RecordingNotice,
   type RecordingPlatform,
   type RecordingRow,
   type RecordingStatus,
   type RecordingTurn,
+  type StorageProblem,
   type StorageView,
 } from '../shared/recording-view';
 import {
@@ -102,6 +106,7 @@ export interface RecDetail {
   status: RecordingStatus;
   errorKind?: string;
   notesMd?: string;
+  transcriptMd?: string;
   segments: RecSegment[];
 }
 
@@ -133,7 +138,7 @@ export interface RecordingApi {
   list(): Promise<RecSummary[]>;
   detail(id: string): Promise<RecDetail>;
   retry(id: string): Promise<unknown>;
-  open(id: string): Promise<unknown>;
+  open(id: string, target?: RecordingOpenWhat): Promise<unknown>;
   /** Open the OS privacy pane for System Audio Recording. */
   openSystemAudioSettings(): Promise<unknown>;
   onState(cb: (s: RecState) => void): () => void;
@@ -201,6 +206,20 @@ function inVolume(r: RecSummary): boolean {
   );
 }
 
+/** Error kinds that hit every recording alike: Upload all stops and says why. */
+const STOP_KINDS = ['no_storage', 'volume_permission', 'auth', 'network'];
+
+/** Not uploaded, or failed at the upload step: Upload all sends it. */
+export function needsUpload(r: RecSummary): boolean {
+  if (r.onDeviceOnly) return true;
+  return (
+    r.status === 'failed' &&
+    (r.errorKind === 'upload_failed' ||
+      r.errorStage === 'uploading' ||
+      r.errorKind === 'no_storage')
+  );
+}
+
 function rowOf(r: RecSummary): RecordingRow {
   const row: RecordingRow = {
     id: r.id,
@@ -210,7 +229,9 @@ function rowOf(r: RecSummary): RecordingRow {
     status: r.status,
     canOpen: inVolume(r),
   };
-  if (r.status === 'failed') row.error = recordingNotice(r.errorKind);
+  // A recording that never left the device has no failure of its own: the list shows the
+  // reason of the storage (when there is one), not "couldn't upload".
+  if (r.status === 'failed' && !r.onDeviceOnly) row.error = recordingNotice(r.errorKind);
   if (r.partsUploaded !== undefined) row.partsUploaded = r.partsUploaded;
   if (r.partsTotal !== undefined) row.partsTotal = r.partsTotal;
   if (r.onDeviceOnly) row.onDeviceOnly = true;
@@ -238,7 +259,23 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
   /** The last status of each recording the brain has seen, to notify once per finish. */
   const seen = new Map<string, RecordingStatus>();
   let rows: RecSummary[] = [];
+  let listed = false;
   let gone = false;
+  /** The Upload all batch that runs now, or the one that just ended. */
+  let batch: { order: string[]; state: Map<string, BatchState>; running: boolean } | undefined;
+
+  /**
+   * Why recordings cannot upload now, or `undefined`. "No My Files" is the probe of ADR 0103
+   * decision 7 (`MyFilesUnavailable`): no volume is set and My Files did not resolve. A failed
+   * row with `volume_permission` says the chosen volume is not writable.
+   */
+  const storageProblem = (): StorageProblem | undefined => {
+    if (!settings?.volumePath && myFiles === null && !storageError)
+      return { reason: RECORDING_TEXT.noMyFiles, canUpload: false };
+    if (rows.some((r) => r.status === 'failed' && r.errorKind === 'volume_permission'))
+      return { reason: recordingNotice('volume_permission').text, canUpload: true };
+    return undefined;
+  };
 
   const storage = (): StorageView => {
     if (creating) return { status: 'creating' };
@@ -271,7 +308,37 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
   const publishList = () => {
     if (gone) return;
     const sorted = [...rows].sort((a, b) => b.startedAt - a.startedAt || (a.id < b.id ? 1 : -1));
-    toHub(HUB_RECORDINGS_EVENT, { rows: sorted.map(rowOf) });
+    const problem = storageProblem();
+    const out: HubRecordings = {
+      rows: sorted.map((r) => {
+        const row = rowOf(r);
+        // The banner explains why; a waiting row only says "Not uploaded".
+        if (needsUpload(r)) row.needsUpload = true;
+        // A call that records now, with nowhere to upload: a short local-only warning.
+        if (r.status === 'recording' && problem && !problem.canUpload)
+          row.error = {
+            text: RECORDING_TEXT.localOnlyRow,
+            action: { label: RECORDING_TEXT.chooseWhere, target: 'settings' },
+          };
+        const b = batch?.state.get(r.id);
+        if (b) row.batch = b;
+        return row;
+      }),
+    };
+    if (problem) out.storageProblem = problem;
+    if (batch) {
+      const states = [...batch.state.values()];
+      out.uploadAll = {
+        running: batch.running,
+        total: states.length,
+        done: states.filter((s) => s === 'done' || s === 'failed').length,
+        failed: states.filter((s) => s === 'failed').length,
+      };
+    } else {
+      const n = rows.filter(needsUpload).length;
+      if (n > 0) out.uploadAll = { running: false, total: n, done: 0, failed: 0 };
+    }
+    toHub(HUB_RECORDINGS_EVENT, out);
   };
 
   let recOn = false;
@@ -283,9 +350,26 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
     if (on !== recOn) {
       recOn = on;
       deps.mood?.callRecording(on);
+      if (on) void warnIfLocalOnly();
     }
     publish();
   };
+
+  /**
+   * A recording starts even when storage is unusable (the audio stays on the device), but the
+   * user sees why at once, for the Record control and for ⌥R alike.
+   */
+  async function warnIfLocalOnly(): Promise<void> {
+    if (myFiles === undefined) await probe();
+    const p = storageProblem();
+    if (!p || gone || !recOn) return;
+    error = {
+      text: `${p.reason} ${RECORDING_TEXT.keepsLocal}`,
+      action: { label: RECORDING_TEXT.chooseWhere, target: 'settings' },
+    };
+    deps.notify?.(p.reason);
+    publish();
+  }
 
   async function load(): Promise<void> {
     const [s, st] = await Promise.all([
@@ -312,6 +396,7 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
         : RECORDING_TEXT.storageCheckFailed;
     }
     publish();
+    if (listed) publishList();
   }
 
   /** Writes run one at a time, each on the result of the one before. */
@@ -334,6 +419,7 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
       settingsError = RECORDING_TEXT.settingsFailed;
     }
     publish();
+    if (listed) publishList();
   }
 
   const showError = (e: unknown) => {
@@ -347,8 +433,11 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
   };
 
   async function refreshList(): Promise<void> {
+    if (!settings) settings = await api.readSettings().catch(() => undefined);
+    if (myFiles === undefined && !batch?.running) await probe();
     try {
       rows = await api.list();
+      listed = true;
     } catch (e) {
       const code = codeOf(e);
       if (!gone)
@@ -361,7 +450,65 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
       return;
     }
     for (const r of rows) if (!seen.has(r.id)) seen.set(r.id, r.status);
+    if (batch && !batch.running) batch = undefined;
     publishList();
+  }
+
+  /** Upload all: each waiting recording through the retry path, one at a time, oldest first. */
+  async function uploadAll(): Promise<void> {
+    if (batch?.running) return;
+    await probe();
+    await writes;
+    const problem = storageProblem();
+    if (problem && !problem.canUpload) {
+      publishList();
+      return;
+    }
+    const order = rows
+      .filter(needsUpload)
+      .sort((a, b) => a.startedAt - b.startedAt || (a.id < b.id ? -1 : 1))
+      .map((r) => r.id);
+    if (order.length === 0) return;
+    const run = {
+      order,
+      state: new Map<string, BatchState>(order.map((id) => [id, 'queued'])),
+      running: true,
+    };
+    batch = run;
+    publishList();
+    for (const id of order) {
+      run.state.set(id, 'running');
+      publishList();
+      let result: BatchState = 'done';
+      let stop = false;
+      try {
+        const r = await api.retry(id);
+        if (isObj(r) && r['status'] === 'failed') {
+          result = 'failed';
+          // A failed result with a storage or sign-in kind stops the batch like a throw.
+          const kind = typeof r['errorKind'] === 'string' ? r['errorKind'] : '';
+          if (STOP_KINDS.includes(kind)) {
+            stop = true;
+            showError({ error: kind });
+          }
+        }
+      } catch (e) {
+        result = 'failed';
+        // A storage or sign-in fault hits every recording alike: stop and say why.
+        if (STOP_KINDS.includes(codeOf(e))) {
+          stop = true;
+          showError(e);
+        }
+      }
+      run.state.set(id, result);
+      if (stop) {
+        for (const [k, v] of run.state) if (v === 'queued') run.state.delete(k);
+        break;
+      }
+      publishList();
+    }
+    run.running = false;
+    await refreshList();
   }
 
   async function showDetail(id: string): Promise<void> {
@@ -371,6 +518,7 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
       const raw = await api.detail(id);
       d = { id: raw.id, status: raw.status, turns: turnsOf(raw.segments) };
       if (raw.notesMd !== undefined) d.notesMd = raw.notesMd;
+      if (d.turns.length === 0 && raw.transcriptMd) d.transcriptMd = raw.transcriptMd;
       if (raw.status === 'failed') d.error = recordingNotice(raw.errorKind);
     } catch {
       const row = rows.find((r) => r.id === id);
@@ -529,7 +677,12 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
         );
         break;
       case 'recordings.open':
-        void api.open(a.id).catch((e: unknown) => showError(e));
+        void (a.target ? api.open(a.id, a.target) : api.open(a.id)).catch((e: unknown) =>
+          showError(e),
+        );
+        break;
+      case 'recordings.upload_all':
+        void uploadAll();
         break;
     }
   }
@@ -656,10 +809,12 @@ export function ipcRecordingApi(bus: BrainBus, profile: () => Promise<ProfileNam
       };
       if (d.summary.errorKind !== undefined) r.errorKind = d.summary.errorKind;
       if (d.notesMd !== undefined) r.notesMd = d.notesMd;
+      if (d.transcriptMd !== undefined) r.transcriptMd = d.transcriptMd;
       return r;
     },
     retry: async (id) => call('recording_retry', { profile: await home(), id }),
-    open: async (id) => call('recording_open', { profile: await home(), id, target: 'folder' }),
+    open: async (id, target = 'folder') =>
+      call('recording_open', { profile: await home(), id, target }),
     openSystemAudioSettings: () => call('recording_open_system_audio_settings', {}),
     onState: (cb) =>
       bus.on(EVENTS['recording.state'].name, (p) => {

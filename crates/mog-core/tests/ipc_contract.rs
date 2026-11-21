@@ -1153,3 +1153,20 @@ fn sec_03_recording_refusals_have_fixed_codes() {
         json!("recording_off")
     );
 }
+
+#[test]
+fn recording_open_takes_only_the_three_known_targets() {
+    for target in ["folder", "transcript", "notes"] {
+        let args = json!({"profile": "p", "id": "rec-1", "target": target});
+        let r = ipc::handle("hub", "recording_open", args);
+        assert!(
+            !matches!(r, Err(IpcError::InvalidArgs { .. })),
+            "{target}: {r:?}"
+        );
+    }
+    for target in ["audio", "Transcript", "", "transcript.md"] {
+        let args = json!({"profile": "p", "id": "rec-1", "target": target});
+        let err = ipc::handle("hub", "recording_open", args).unwrap_err();
+        assert!(matches!(err, IpcError::InvalidArgs { .. }), "{target}");
+    }
+}

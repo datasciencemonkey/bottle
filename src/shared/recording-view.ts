@@ -64,7 +64,23 @@ export const RECORDING_TEXT = {
   storageCheckFailed: "Bottle couldn't check My Files. Check your network, then try again.",
   settingsFailed: "Bottle couldn't save this setting. Try again.",
   turnOn: 'Turn on call recording in Settings to record.',
+  /** The banner title of Recordings when recordings cannot upload (storage is unusable). */
+  cantUpload: "Recordings can't upload: choose where to save them",
+  chooseWhere: 'Choose where to save',
+  /** My Files does not resolve and no volume is set (the probe of ADR 0103 decision 7). */
+  noMyFiles: 'No My Files on this workspace. Choose a volume in Settings.',
+  /** Shown after a recording starts while storage is unusable. The audio stays local. */
+  localOnlyRow: 'Saved on this device only for now.',
+  keepsLocal: 'Until then, Bottle keeps the audio on this device.',
 } as const;
+
+/** The file names of a finished recording, in its folder (Databricks opens the folder). */
+export function recordingFileNames(name: string): { transcript: string; notes: string } {
+  return { transcript: `${name}.transcript.md`, notes: `${name}.notes.md` };
+}
+
+/** What `recordings.open` opens. The core builds the link; the view never passes a URL. */
+export type RecordingOpenWhat = 'folder' | 'transcript' | 'notes';
 
 /** What a notice button does. `settings` is handled in the hub; the brain handles the rest. */
 export type RecordingActionTarget = 'settings' | 'system_audio' | 'retry' | 'open';
@@ -224,10 +240,36 @@ export interface RecordingRow {
   onDeviceOnly?: true;
   /** A recording or upload that retries in the background until the network is back. */
   waitingNetwork?: true;
+  /** Not uploaded, or failed at the upload: Upload all sends it. */
+  needsUpload?: true;
+  /** Its place in the Upload all batch that runs or just ran. */
+  batch?: BatchState;
+}
+
+export type BatchState = 'queued' | 'running' | 'done' | 'failed';
+const BATCH_STATES: readonly BatchState[] = ['queued', 'running', 'done', 'failed'];
+
+/** Recordings cannot upload now. The banner shows `reason` under `RECORDING_TEXT.cantUpload`. */
+export interface StorageProblem {
+  reason: string;
+  /** False when Upload all cannot work yet (no storage at all). */
+  canUpload: boolean;
+}
+
+/** Upload all: the one action that sends every waiting recording, one at a time. */
+export interface UploadAllView {
+  running: boolean;
+  /** Finished so far (done or failed). */
+  done: number;
+  total: number;
+  failed: number;
 }
 
 export interface HubRecordings {
   rows: RecordingRow[];
+  storageProblem?: StorageProblem;
+  /** Rows that Upload all would send (`needsUpload`), or the batch that runs now. */
+  uploadAll?: UploadAllView;
   unavailable?: true;
   /** Why the list could not be read, when the brain knows a plain reason. */
   error?: RecordingNotice;
@@ -247,6 +289,8 @@ export interface HubRecordingDetail {
   status: RecordingStatus;
   /** The notes markdown; missing until the job writes them. */
   notesMd?: string;
+  /** The transcript markdown, for a recording whose turns could not be read. */
+  transcriptMd?: string;
   turns: RecordingTurn[];
   error?: RecordingNotice;
   /** True when the brain could not read the files. */
@@ -270,7 +314,8 @@ export type RecordingAction =
   | { action: 'recordings.ready' }
   | { action: 'recordings.detail'; id: string }
   | { action: 'recordings.retry'; id: string }
-  | { action: 'recordings.open'; id: string };
+  | { action: 'recordings.open'; id: string; target?: RecordingOpenWhat }
+  | { action: 'recordings.upload_all' };
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
 const isStr = (v: unknown): v is string => typeof v === 'string';
@@ -288,6 +333,7 @@ export function asRecordingAction(p: unknown): RecordingAction | undefined {
     case 'recording.stop':
     case 'recording.system_audio':
     case 'recordings.ready':
+    case 'recordings.upload_all':
       return { action: a };
     case 'recording.enable':
       return typeof p['on'] === 'boolean' ? { action: a, on: p['on'] } : undefined;
@@ -310,8 +356,15 @@ export function asRecordingAction(p: unknown): RecordingAction | undefined {
       return isStr(p['instructions']) ? { action: a, instructions: p['instructions'] } : undefined;
     case 'recordings.detail':
     case 'recordings.retry':
-    case 'recordings.open':
       return isId(p['id']) ? { action: a, id: p['id'] } : undefined;
+    case 'recordings.open': {
+      if (!isId(p['id'])) return undefined;
+      const t = p['target'];
+      if (t === undefined) return { action: a, id: p['id'] };
+      return t === 'folder' || t === 'transcript' || t === 'notes'
+        ? { action: a, id: p['id'], target: t }
+        : undefined;
+    }
     default:
       return undefined;
   }
@@ -402,7 +455,9 @@ function isRow(v: unknown): v is RecordingRow {
     (v['partsUploaded'] === undefined || isNum(v['partsUploaded'])) &&
     (v['partsTotal'] === undefined || isNum(v['partsTotal'])) &&
     (v['onDeviceOnly'] === undefined || v['onDeviceOnly'] === true) &&
-    (v['waitingNetwork'] === undefined || v['waitingNetwork'] === true)
+    (v['waitingNetwork'] === undefined || v['waitingNetwork'] === true) &&
+    (v['needsUpload'] === undefined || v['needsUpload'] === true) &&
+    (v['batch'] === undefined || BATCH_STATES.includes(v['batch'] as BatchState))
   );
 }
 
@@ -411,6 +466,24 @@ export function asHubRecordings(p: unknown): HubRecordings | undefined {
   if (!isObj(p) || !Array.isArray(p['rows']) || !p['rows'].every(isRow)) return undefined;
   if (p['unavailable'] !== undefined && p['unavailable'] !== true) return undefined;
   if (!optNotice(p['error'])) return undefined;
+  const sp = p['storageProblem'];
+  if (
+    sp !== undefined &&
+    !(isObj(sp) && isStr(sp['reason']) && typeof sp['canUpload'] === 'boolean')
+  )
+    return undefined;
+  const ua = p['uploadAll'];
+  if (
+    ua !== undefined &&
+    !(
+      isObj(ua) &&
+      typeof ua['running'] === 'boolean' &&
+      isNum(ua['done']) &&
+      isNum(ua['total']) &&
+      isNum(ua['failed'])
+    )
+  )
+    return undefined;
   return p as unknown as HubRecordings;
 }
 
@@ -418,6 +491,7 @@ export function asHubRecordings(p: unknown): HubRecordings | undefined {
 export function asHubRecordingDetail(p: unknown): HubRecordingDetail | undefined {
   if (!isObj(p) || !isId(p['id']) || !isStatus(p['status'])) return undefined;
   if (p['notesMd'] !== undefined && !isStr(p['notesMd'])) return undefined;
+  if (p['transcriptMd'] !== undefined && !isStr(p['transcriptMd'])) return undefined;
   const t = p['turns'];
   if (
     !Array.isArray(t) ||

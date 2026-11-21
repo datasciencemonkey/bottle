@@ -417,7 +417,11 @@ export interface CommandArgs {
   recording_list: { profile: ProfileName };
   recording_detail: { profile: ProfileName; id: RecordingId };
   recording_retry: { profile: ProfileName; id: RecordingId };
-  recording_open: { profile: ProfileName; id: RecordingId; target: 'folder' };
+  recording_open: {
+    profile: ProfileName;
+    id: RecordingId;
+    target: 'folder' | 'transcript' | 'notes';
+  };
   recording_open_system_audio_settings: NoArgs;
   stt_model_status: NoArgs;
   stt_model_consent: { consent: 'granted' | 'declined' };

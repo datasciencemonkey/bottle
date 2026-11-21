@@ -373,7 +373,16 @@ fn rec_open_link_only_opens_explorer_links_on_the_profile_host() {
     let host = "https://dbc-fake.cloud.databricks.com";
     let good = "https://dbc-fake.cloud.databricks.com/explore/data/volumes/main/team/audio?o=1&volumePath=%2FVolumes%2Fmain%2F";
     open_link(&o, host, good).unwrap();
+    // A file link of a finished recording is the folder link (Databricks documents no file
+    // deep link), so it passes the same strict rule.
+    let file = "https://dbc-fake.cloud.databricks.com/explore/data/volumes/main/team/audio?o=1&volumePath=%2FVolumes%2Fmain%2Fteam%2Faudio%2FBottle%2FRecordings%2F2026-11-19_0905%2F";
+    open_link(&o, host, file).unwrap();
     for bad in [
+        // A file path with a quote, a space, an angle bracket or a foreign scheme.
+        "https://dbc-fake.cloud.databricks.com/explore/data/volumes/m/t/a?o=1&volumePath=a\"b",
+        "https://dbc-fake.cloud.databricks.com/explore/data/volumes/m/t/a?o=1&volumePath=a b",
+        "https://dbc-fake.cloud.databricks.com/explore/data/volumes/m/t/a?o=1&x=<b>",
+        "https://dbc-fake.cloud.databricks.com/explore/data/volumes/m/t/a?o=1&volumePath=a;b",
         "https://evil.example/explore/data/volumes/main/team/audio?o=1",
         "http://dbc-fake.cloud.databricks.com/explore/data/volumes/m/t/a?o=1",
         "https://dbc-fake.cloud.databricks.com/login?next=https://evil.example",
@@ -382,5 +391,8 @@ fn rec_open_link_only_opens_explorer_links_on_the_profile_host() {
     ] {
         assert!(open_link(&o, host, bad).is_err(), "{bad}");
     }
-    assert_eq!(o.0.lock().unwrap().clone(), vec![good.to_owned()]);
+    assert_eq!(
+        o.0.lock().unwrap().clone(),
+        vec![good.to_owned(), file.to_owned()]
+    );
 }
