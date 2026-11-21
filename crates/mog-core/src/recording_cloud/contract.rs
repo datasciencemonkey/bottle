@@ -1070,6 +1070,43 @@ impl RecordingCloud for CloudAdapter {
             .link(profile.as_str(), Self::root(storage), id.as_str())
             .map_err(err)
     }
+
+    fn target_link(
+        &self,
+        profile: &ProfileName,
+        storage: &RecordingStorage,
+        id: &RecordingId,
+        target: crate::ipc::RecordingOpenTarget,
+    ) -> RecordingResult<String> {
+        use super::layout::RecordingFile;
+        use crate::ipc::RecordingOpenTarget as T;
+        let file = match target {
+            T::Folder => return self.folder_link(profile, storage, id),
+            T::Transcript => RecordingFile::Transcript,
+            T::Notes => RecordingFile::Notes,
+        };
+        self.service
+            .file_link(profile.as_str(), Self::root(storage), id.as_str(), file)
+            .map(|l| l.url)
+            .map_err(err)
+    }
+
+    fn list_local(&self) -> RecordingResult<Vec<RecordingSummary>> {
+        let active = self.local.active();
+        let mut out: Vec<RecordingSummary> = self
+            .local
+            .names()
+            .into_iter()
+            .filter(|(name, _)| !active.contains(name) && !self.in_flight(name))
+            .filter_map(|(name, started)| Self::local_only_summary(&name, started))
+            .collect();
+        out.sort_by(|a, b| {
+            b.started_at_ms
+                .cmp(&a.started_at_ms)
+                .then(b.name.cmp(&a.name))
+        });
+        Ok(out)
+    }
 }
 
 // ---------- the in-flight guard (review of #592, BLOCKING 1) ----------

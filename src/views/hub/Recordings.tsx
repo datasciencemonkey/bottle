@@ -9,6 +9,7 @@
  *   Databricks". The core opens that link; the view never builds or opens a URL.
  */
 import {
+  Fragment,
   useCallback,
   useEffect,
   useId,
@@ -23,11 +24,14 @@ import {
   HUB_RECORDING_DETAIL_EVENT,
   HUB_RECORDINGS_EVENT,
   lengthOf,
+  RECORDING_TEXT,
+  recordingFileNames,
   rowActionOf,
   stampOf,
   statusLabelOf,
   type HubRecordingDetail,
   type HubRecordings,
+  type RecordingOpenWhat,
   type RecordingRow,
 } from '../../shared/recording-view';
 import { MAX_ANSWER_CHARS, SafeMarkdown } from '../card/safe-markdown';
@@ -75,6 +79,110 @@ function Notes({ text }: { text: string }) {
   }
   flush();
   return <>{out}</>;
+}
+
+/** The banner of Recordings when recordings cannot upload: the reason and one button. */
+function StorageBanner({
+  reason,
+  onOpenSettings,
+}: {
+  reason: string;
+  onOpenSettings: (() => void) | undefined;
+}) {
+  return (
+    <div className="rec-alert rec-banner" role="alert" data-recording-banner>
+      <p className="rec-banner-title">{RECORDING_TEXT.cantUpload}</p>
+      <p className="rec-banner-reason">{reason}</p>
+      {onOpenSettings && (
+        <button type="button" data-recording-banner-action onClick={onOpenSettings}>
+          {RECORDING_TEXT.chooseWhere}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Upload all, and its progress while it runs. */
+function UploadAll({
+  state,
+  blocked,
+}: {
+  state: NonNullable<HubRecordings['uploadAll']>;
+  blocked: boolean;
+}) {
+  const { running, done, total, failed } = state;
+  return (
+    <div className="rec-upload-all" data-recording-upload-all>
+      <button
+        type="button"
+        disabled={running || blocked}
+        onClick={() => sendRecording({ action: 'recordings.upload_all' })}
+      >
+        {running ? 'Uploading…' : `Upload all (${total})`}
+      </button>
+      {running && (
+        <span className="rec-upload-progress" role="status" data-recording-upload-progress>
+          {Math.min(done + 1, total)} of {total}
+        </span>
+      )}
+      {!running && failed > 0 && (
+        <span className="rec-upload-progress" role="status">
+          {failed} did not upload
+        </span>
+      )}
+    </div>
+  );
+}
+
+const BATCH_LABEL = {
+  queued: 'Queued',
+  running: 'Uploading…',
+  done: 'Uploaded',
+  failed: 'Did not upload',
+} as const;
+
+const OPEN_LABEL: Record<RecordingOpenWhat, string> = {
+  transcript: 'Open transcript in Databricks',
+  notes: 'Open notes in Databricks',
+  folder: 'Open folder in Databricks',
+};
+
+/**
+ * The three links of a finished recording. Databricks has no file deep link, so the transcript
+ * and notes links open the folder, and the file name shows so the user knows what to look for.
+ */
+function FileLinks({ row, detail }: { row: RecordingRow; detail?: boolean }) {
+  const files = recordingFileNames(row.name);
+  const open = (target: RecordingOpenWhat) => (e: React.MouseEvent) => {
+    e.stopPropagation();
+    sendRecording({ action: 'recordings.open', id: row.id, target });
+  };
+  const name: Record<RecordingOpenWhat, string | undefined> = {
+    transcript: files.transcript,
+    notes: files.notes,
+    folder: undefined,
+  };
+  return (
+    <div className={detail ? 'rec-links rec-links--detail' : 'rec-links'} data-recording-links>
+      {(['transcript', 'notes', 'folder'] as const).map((t) => (
+        <span key={t} className="rec-link-item">
+          <button type="button" className="rec-link" data-recording-link={t} onClick={open(t)}>
+            {OPEN_LABEL[t]}
+          </button>
+          {detail && name[t] && (
+            <code className="rec-file" data-recording-file={t}>
+              {name[t]}
+            </code>
+          )}
+        </span>
+      ))}
+      {detail && (
+        <p className="rec-hint" data-recording-links-hint>
+          Databricks opens the folder. Find the highlighted file there.
+        </p>
+      )}
+    </div>
+  );
 }
 
 const askForList = () => sendRecording({ action: 'recordings.ready' });
@@ -197,18 +305,22 @@ function Detail({
               Retry
             </button>
           )}
-          {row.canOpen && (
+          {row.canOpen && status !== 'done' && (
             <button type="button" data-recording-open onClick={open}>
               Open in volume
             </button>
           )}
         </div>
       </header>
+      {status === 'done' && !row.onDeviceOnly && <FileLinks row={row} detail />}
       {row.onDeviceOnly && (
         <p className="rec-pending" data-recording-device>
           This recording is only on this device. Upload it to your volume to get the transcript and
           the notes.
         </p>
+      )}
+      {row.onDeviceOnly && row.error && (
+        <RecordingAlert notice={row.error} onSettings={onOpenSettings} />
       )}
       {row.waitingNetwork && (
         <p className="rec-pending" data-recording-waiting>
@@ -236,6 +348,14 @@ function Detail({
           <div className="rec-md">
             <Notes text={d.notesMd} />
           </div>
+        </section>
+      )}
+      {d && d.turns.length === 0 && d.transcriptMd && (
+        <section className="rec-transcript" aria-label="Transcript">
+          <h3 className="rec-sub">Transcript</h3>
+          <pre className="rec-turn-text" data-transcript-raw>
+            {d.transcriptMd}
+          </pre>
         </section>
       )}
       {d && d.turns.length > 0 && (
@@ -374,35 +494,62 @@ export function Recordings({
                 {g.label}
               </div>
               {g.rows.map((r) => (
-                <div
-                  key={r.id}
-                  id={`${baseId}-${r.id}`}
-                  role="option"
-                  aria-selected={r === selected}
-                  data-active={r === current || undefined}
-                  data-recording-row={r.id}
-                  className="rec-row"
-                  onClick={() => {
-                    setSelectedId(r.id);
-                    listRef.current?.focus();
-                  }}
-                >
-                  <span className="rec-row-main">
-                    <span className="rec-row-time">{timeOf(r.startedAt)}</span>
-                    <span className="rec-row-len">
-                      {lengthOf(r.durationS)}
-                      {r.status === 'failed' && !r.onDeviceOnly && r.error && (
-                        <span className="rec-row-reason" data-recording-reason>
-                          {' · '}
-                          {r.error.text}
+                <Fragment key={r.id}>
+                  <div
+                    id={`${baseId}-${r.id}`}
+                    role="option"
+                    aria-selected={r === selected}
+                    data-active={r === current || undefined}
+                    data-recording-row={r.id}
+                    className="rec-row"
+                    onClick={() => {
+                      setSelectedId(r.id);
+                      listRef.current?.focus();
+                    }}
+                  >
+                    <span className="rec-row-main">
+                      <span className="rec-row-time">{timeOf(r.startedAt)}</span>
+                      <span className="rec-row-len">
+                        {lengthOf(r.durationS)}
+                        {r.error && (r.onDeviceOnly || r.status === 'failed') && (
+                          <span className="rec-row-reason" data-recording-reason>
+                            {' · '}
+                            {r.error.text}
+                          </span>
+                        )}
+                      </span>
+                    </span>
+                    <span className="rec-row-side">
+                      {r.batch ? (
+                        <span
+                          className="rec-status"
+                          data-status={
+                            r.batch === 'done'
+                              ? 'done'
+                              : r.batch === 'failed'
+                                ? 'failed'
+                                : 'uploading'
+                          }
+                          data-recording-batch={r.batch}
+                        >
+                          <span
+                            className="rec-status-dot"
+                            aria-hidden="true"
+                            data-busy={r.batch === 'running' || undefined}
+                          />
+                          {BATCH_LABEL[r.batch]}
                         </span>
+                      ) : (
+                        <Status row={r} />
                       )}
                     </span>
-                  </span>
-                  <span className="rec-row-side">
-                    <Status row={r} />
-                  </span>
-                </div>
+                  </div>
+                  {r.status === 'done' && !r.onDeviceOnly && (
+                    <div role="none" className="rec-row-links">
+                      <FileLinks row={r} />
+                    </div>
+                  )}
+                </Fragment>
               ))}
             </div>
           ))}
@@ -431,6 +578,15 @@ export function Recordings({
       hidden={!active}
     >
       {header && <div className="rec-bar">{header}</div>}
+      {list?.storageProblem && (
+        <StorageBanner reason={list.storageProblem.reason} onOpenSettings={onOpenSettings} />
+      )}
+      {list?.uploadAll && (
+        <UploadAll
+          state={list.uploadAll}
+          blocked={list.storageProblem ? !list.storageProblem.canUpload : false}
+        />
+      )}
       {body}
     </section>
   );

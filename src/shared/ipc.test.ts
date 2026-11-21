@@ -354,6 +354,13 @@ describe('call recording (ADR 0103)', () => {
     expect([open.target, leak.id, reply]).toHaveLength(3);
   });
 
+  it('[ARC-6] recording_open targets are the folder, the transcript and the notes', () => {
+    const targets: CommandArgs['recording_open']['target'][] = ['folder', 'transcript', 'notes'];
+    const schema = JSON.stringify(doc.arguments['recording_open']);
+    expect(schema).toContain('RecordingOpenTarget');
+    expect(targets).toHaveLength(3);
+  });
+
   it('[#523] link_open is brain only and takes a profile and a URL string', () => {
     expect(COMMANDS['link_open']).toEqual({ windows: ['brain'], phase: 'MVP-D' });
     expect(doc.arguments['link_open']?.required).toEqual(['profile', 'url']);

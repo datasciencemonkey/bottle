@@ -1199,7 +1199,9 @@
         "RecordingOpenTarget": {
           "description": "What `recording_open` opens (ADR 0103). Rust builds the Catalog Explorer URL from the\nprofile host; the view never passes a URL.",
           "enum": [
-            "folder"
+            "folder",
+            "transcript",
+            "notes"
           ],
           "type": "string"
         }

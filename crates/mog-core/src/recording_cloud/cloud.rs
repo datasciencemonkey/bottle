@@ -1222,6 +1222,30 @@ impl RecordingCloudService {
         self.link_for(p, &root, name).map_err(e)
     }
 
+    /// The Catalog Explorer link for one finished file of a recording (see
+    /// [`super::layout::catalog_explorer_file_link`]: it opens the folder).
+    pub fn file_link(
+        &self,
+        p: &str,
+        root: &str,
+        name: &str,
+        file: super::layout::RecordingFile,
+    ) -> Result<super::layout::FileLink, RecordingError> {
+        let e = RecordingError::new;
+        let root = VolumeRoot::parse(root).map_err(e)?;
+        let host = self
+            .d
+            .workspace
+            .host_url(p)
+            .map_err(|x| e(from_core(&x, ErrorKind::BadSettings)))?;
+        let ws = self
+            .d
+            .workspace
+            .workspace_id(p)
+            .map_err(|x| e(from_core(&x, ErrorKind::BadSettings)))?;
+        super::layout::catalog_explorer_file_link(&host, &ws, &root, name, file).map_err(e)
+    }
+
     /// The profile host (for [`super::opener::open_link`]).
     pub fn host_url(&self, p: &str) -> CoreResult<String> {
         self.d.workspace.host_url(p)

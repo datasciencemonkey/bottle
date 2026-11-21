@@ -8,6 +8,7 @@ import {
   HUB_RECORDING_DETAIL_EVENT,
   HUB_RECORDINGS_EVENT,
   RECORDING_ERRORS,
+  RECORDING_TEXT,
   RECORDING_VIEW_ID,
   type HubRecordingDetail,
   type HubRecordings,
@@ -152,8 +153,8 @@ describe('Recordings area (hub)', () => {
       expect.stringContaining('01:23'),
     ]);
     expect(d?.querySelector('a[href]')).toBeNull();
-    await click(d?.querySelector('[data-recording-open]'));
-    expect(emits().at(-1)).toEqual({ action: 'recordings.open', id: 'r1' });
+    await click(d?.querySelector('[data-recording-link="folder"]'));
+    expect(emits().at(-1)).toEqual({ action: 'recordings.open', id: 'r1', target: 'folder' });
   });
 
   it('[REC-V14] a failed recording shows its error text and one action in the detail', async () => {
@@ -211,7 +212,7 @@ describe('Recordings area (hub)', () => {
             error: RECORDING_ERRORS.volume_permission,
             canOpen: true,
           },
-          { status: 'failed', onDeviceOnly: true, error: RECORDING_ERRORS.upload_failed },
+          { status: 'failed', onDeviceOnly: true },
         ),
       });
       expect([0, 1, 2, 3, 4, 5, 6, 7].map((i) => label(el, `s${i}`))).toEqual([
@@ -224,7 +225,8 @@ describe('Recordings area (hub)', () => {
         'Failed',
         'Not uploaded',
       ]);
-      // The failed row gives its reason in the list; a device-only row is not "failed".
+      // The failed row gives its reason in the list; a device-only row has none of its own
+      // (the brain adds the storage reason when there is one).
       expect(el.querySelector('[data-recording-row="s6"]')?.textContent).toContain(
         RECORDING_ERRORS.volume_permission.text,
       );
@@ -309,5 +311,121 @@ describe('Recordings area (hub)', () => {
       expect(label(el, 's0')).toBe('Uploading 4/5');
       expect(emits().length).toBe(asks);
     });
+  });
+});
+
+describe('storage banner, Upload all and file links (hub)', () => {
+  beforeEach(() => tauri.reset());
+  const base = new Date(2026, 10, 19, 9, 0).getTime();
+  const waiting = (id: string, n: number, extra: Record<string, unknown> = {}) => ({
+    id,
+    name: `2026-11-19_09${n}0`,
+    startedAt: base + n * 1000,
+    durationS: 60,
+    status: 'failed' as const,
+    canOpen: false,
+    onDeviceOnly: true as const,
+    needsUpload: true as const,
+    ...extra,
+  });
+
+  it('[REC-L1] shows the banner with the reason and a button to Settings', async () => {
+    const onSettings = vi.fn();
+    const { el } = await render(<Recordings active now={() => NOW} onOpenSettings={onSettings} />);
+    await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, {
+      rows: [
+        waiting('a', 1, {
+          error: { text: RECORDING_TEXT.noMyFiles, action: { label: 'x', target: 'settings' } },
+        }),
+      ],
+      storageProblem: { reason: RECORDING_TEXT.noMyFiles, canUpload: false },
+      uploadAll: { running: false, total: 1, done: 0, failed: 0 },
+    });
+    const b = el.querySelector('[data-recording-banner]');
+    expect(b?.textContent).toContain("Recordings can't upload: choose where to save them");
+    expect(b?.textContent).toContain('No My Files on this workspace. Choose a volume in Settings.');
+    await click(b?.querySelector('button'));
+    expect(onSettings).toHaveBeenCalledTimes(1);
+    // The failed row shows the real reason, and Upload all waits for the storage.
+    expect(el.querySelector('[data-recording-reason]')?.textContent).toContain('No My Files');
+    expect(
+      el.querySelector<HTMLButtonElement>('[data-recording-upload-all] button')?.disabled,
+    ).toBe(true);
+  });
+
+  it('[REC-L1] shows no banner when storage works', async () => {
+    const { el } = await render(<Recordings active now={() => NOW} />);
+    await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, list);
+    expect(el.querySelector('[data-recording-banner]')).toBeNull();
+    expect(el.querySelector('[data-recording-upload-all]')).toBeNull();
+  });
+
+  it('[REC-L2] Upload all sends one action and shows progress and the state of each row', async () => {
+    const { el } = await render(<Recordings active now={() => NOW} />);
+    await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, {
+      rows: [waiting('a', 1), waiting('b', 2)],
+      uploadAll: { running: false, total: 2, done: 0, failed: 0 },
+    });
+    const btn = el.querySelector<HTMLButtonElement>('[data-recording-upload-all] button');
+    expect(btn?.textContent).toBe('Upload all (2)');
+    await click(btn);
+    expect(emits().at(-1)).toEqual({ action: 'recordings.upload_all' });
+    await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, {
+      rows: [waiting('a', 1, { batch: 'done' }), waiting('b', 2, { batch: 'running' })],
+      uploadAll: { running: true, total: 2, done: 1, failed: 0 },
+    });
+    expect(
+      el.querySelector<HTMLButtonElement>('[data-recording-upload-all] button')?.disabled,
+    ).toBe(true);
+    expect(el.querySelector('[data-recording-upload-progress]')?.textContent).toBe('2 of 2');
+    const chips = [...el.querySelectorAll('[data-recording-batch]')].map((c) => c.textContent);
+    expect(chips).toEqual(['Uploaded', 'Uploading…']);
+  });
+
+  it('[REC-L3] a done row and its detail link to the transcript, the notes and the folder', async () => {
+    const { el } = await render(<Recordings active now={() => NOW} />);
+    await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, list);
+    const rowLinks = el.querySelector('.rec-row-links');
+    expect(rowLinks?.textContent).toContain('Open transcript in Databricks');
+    expect(rowLinks?.textContent).toContain('Open notes in Databricks');
+    expect(rowLinks?.textContent).toContain('Open folder in Databricks');
+    // Only the done row has them, and none sits inside an option.
+    expect(el.querySelectorAll('.rec-row-links')).toHaveLength(1);
+    expect(el.querySelector('[role="option"] button')).toBeNull();
+    await click(rowLinks?.querySelector('[data-recording-link="transcript"]'));
+    expect(emits().at(-1)).toEqual({ action: 'recordings.open', id: 'r1', target: 'transcript' });
+    await click(rowLinks?.querySelector('[data-recording-link="notes"]'));
+    expect(emits().at(-1)).toEqual({ action: 'recordings.open', id: 'r1', target: 'notes' });
+
+    await click(el.querySelector('[data-recording-row="r1"]'));
+    await tauri.emitTo('hub', HUB_RECORDING_DETAIL_EVENT, detail);
+    const d = el.querySelector('[data-recording-detail]');
+    expect(d?.querySelector('[data-recording-link="transcript"]')?.textContent).toBe(
+      'Open transcript in Databricks',
+    );
+    expect(d?.querySelector('[data-recording-file="transcript"]')?.textContent).toBe(
+      '2026-11-18_0900.transcript.md',
+    );
+    expect(d?.querySelector('[data-recording-file="notes"]')?.textContent).toBe(
+      '2026-11-18_0900.notes.md',
+    );
+    await click(d?.querySelector('[data-recording-link="folder"]'));
+    expect(emits().at(-1)).toEqual({ action: 'recordings.open', id: 'r1', target: 'folder' });
+  });
+
+  it('[REC-L4] the transcript shows with speaker labels and times, or as text when turns are missing', async () => {
+    const { el } = await render(<Recordings active now={() => NOW} />);
+    await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, list);
+    await click(el.querySelector('[data-recording-row="r1"]'));
+    await tauri.emitTo('hub', HUB_RECORDING_DETAIL_EVENT, {
+      id: 'r1',
+      status: 'done',
+      turns: [],
+      transcriptMd: '**Speaker 1** [00:00:00]\nHi.',
+    });
+    expect(el.querySelector('[data-transcript-raw]')?.textContent).toContain('Speaker 1');
+    await tauri.emitTo('hub', HUB_RECORDING_DETAIL_EVENT, detail);
+    expect(el.querySelector('[data-transcript-raw]')).toBeNull();
+    expect(el.querySelectorAll('[data-turn]')).toHaveLength(2);
   });
 });

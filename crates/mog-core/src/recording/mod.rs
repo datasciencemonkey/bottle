@@ -222,6 +222,19 @@ pub trait RecordingCloud: Send + Sync {
         storage: &RecordingStorage,
         id: &RecordingId,
     ) -> RecordingResult<String>;
+    /// The link that `recording_open` opens for `target`: the folder link, or the link of the
+    /// transcript or notes file (which opens the folder, because Databricks documents no file
+    /// deep link). Only a finished recording has these files.
+    fn target_link(
+        &self,
+        profile: &ProfileName,
+        storage: &RecordingStorage,
+        id: &RecordingId,
+        target: crate::ipc::RecordingOpenTarget,
+    ) -> RecordingResult<String>;
+    /// The recordings that are only on this device, newest first. They need no storage: this
+    /// is what the list shows while Settings has no usable storage.
+    fn list_local(&self) -> RecordingResult<Vec<RecordingSummary>>;
 }
 
 // ---------- the settings stub ----------
@@ -402,7 +415,15 @@ impl GatewayComponents for RecordingComponent {
                 let a: RecordingListArgs =
                     serde_json::from_value(args).map_err(|_| refused("invalid_args"))?;
                 let cloud = self.cloud()?;
-                reply(&cloud.list(&a.profile, &self.storage()?)?)
+                // No storage yet: the list is the audio that waits on this device, so the user
+                // sees what Upload will send once Settings has a volume.
+                match self.storage() {
+                    Ok(storage) => reply(&cloud.list(&a.profile, &storage)?),
+                    Err(CoreError::IpcRefused { code: "no_storage" }) => {
+                        reply(&cloud.list_local()?)
+                    }
+                    Err(e) => Err(e),
+                }
             }
             "recording_detail" | "recording_retry" => {
                 let a: RecordingIdArgs =
@@ -419,7 +440,7 @@ impl GatewayComponents for RecordingComponent {
                 let a: RecordingOpenArgs =
                     serde_json::from_value(args).map_err(|_| refused("invalid_args"))?;
                 let cloud = self.cloud()?;
-                let url = cloud.folder_link(&a.profile, &self.storage()?, &a.id)?;
+                let url = cloud.target_link(&a.profile, &self.storage()?, &a.id, a.target)?;
                 let open = self
                     .cloud
                     .get()

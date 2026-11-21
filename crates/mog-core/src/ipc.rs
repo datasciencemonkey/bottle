@@ -1244,6 +1244,10 @@ args!(
 #[serde(rename_all = "snake_case")]
 pub enum RecordingOpenTarget {
     Folder,
+    /// The finished transcript file. Opens the folder in Catalog Explorer (no file deep link).
+    Transcript,
+    /// The finished notes file. Opens the folder in Catalog Explorer (no file deep link).
+    Notes,
 }
 args!(RecordingOpenArgs {
     /// The home profile: Rust builds the folder link from this profile's host.
