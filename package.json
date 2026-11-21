@@ -1,7 +1,7 @@
 {
   "name": "bottle",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Bottle desktop app: TS brain and thin views (Databricks Labs / experimental).",
   "license": "MIT",
   "type": "module",
