@@ -63,11 +63,16 @@ async function rig(opts: { mogs?: string[]; lastUsed?: string; accepted?: boolea
   });
   wireCaptureLifecycle(bus, lc, () => 0);
   const notices: (HubNoticeLine | undefined)[] = [];
+  const order: string[] = [];
   wireTalkNoMog(bus, {
+    showHub: () => void order.push('showHub'),
     manager,
     lastUsed: () => opts.lastUsed,
     openWindow: (mogId) => windows.openMog(mogId),
-    notify: (n) => void notices.push(n),
+    notify: (n) => {
+      order.push('notify');
+      notices.push(n);
+    },
   });
   const press = async (mogId = '', ...phases: string[]) => {
     for (const phase of phases.length ? phases : ['down', 'up'])
@@ -78,7 +83,7 @@ async function rig(opts: { mogs?: string[]; lastUsed?: string; accepted?: boolea
     core.invoke.mock.calls
       .filter(([cmd]) => cmd === 'capture_stop')
       .map(([, a]) => (a as { args: unknown }).args);
-  return { bus, manager, windows, starts, blocked, notices, press, stops };
+  return { bus, manager, windows, starts, blocked, notices, order, press, stops };
 }
 
 describe('talk key with no running MOG (#562)', () => {
@@ -94,6 +99,8 @@ describe('talk key with no running MOG (#562)', () => {
     expect(r.stops()).toEqual([{ mogId: id(2), leaseId: '1' }]);
     // The hub list is sent again (the MOG now shows as running), with no error text.
     expect(r.notices).toEqual([undefined]);
+    // A start with no notice does not pull the hub up.
+    expect(r.order).toEqual(['notify']);
   });
 
   it('[MB-06a] with no last-used MOG, a press starts the first MOG of the hub list', async () => {
@@ -115,10 +122,29 @@ describe('talk key with no running MOG (#562)', () => {
     const r = await rig();
     await r.press();
     expect(r.notices).toEqual([{ kind: 'info', text: NO_MOG_TEXT }]);
+    // #568: the hub window shows first (it may be closed), then the notice goes to it.
+    expect(r.order).toEqual(['showHub', 'notify']);
     expect(NO_MOG_TEXT).toBe('Create a MOG to start');
     expect(r.windows.calls).toEqual([]);
     expect(r.starts).toEqual([]);
     expect(r.stops()).toEqual([]);
+  });
+
+  it('[#568] a hub that fails to show still gets the notice, and a throwing showHub is safe', async () => {
+    const r = await rig();
+    // A second wiring on a fresh bus whose showHub rejects.
+    const bus = new BrainBus();
+    const seen: (HubNoticeLine | undefined)[] = [];
+    wireTalkNoMog(bus, {
+      manager: r.manager,
+      lastUsed: () => undefined,
+      openWindow: async () => undefined,
+      showHub: () => Promise.reject(new Error('no hub')),
+      notify: (n) => void seen.push(n),
+    });
+    bus.dispatch({ event: 'hotkey:ptt', payload: { mogId: '', phase: 'down' } });
+    await flush();
+    expect(seen).toEqual([{ kind: 'info', text: NO_MOG_TEXT }]);
   });
 
   it('[MB-06a] a running MOG: the press is the same as today', async () => {
@@ -184,6 +210,7 @@ describe('talk key with no running MOG (#562)', () => {
     r.windows.openMog = async () => Promise.reject({ error: 'host_failed' });
     await r.press();
     expect(r.notices).toEqual([{ kind: 'error', text: 'Bottle could not start Ops.' }]);
+    expect(r.order).toEqual(['showHub', 'notify']);
     expect(r.starts).toEqual([]);
   });
 

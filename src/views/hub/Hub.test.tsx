@@ -39,6 +39,28 @@ describe('V1 hub view', () => {
     expect(el.querySelector('[data-notice="dictation_unshown"]')).toBeNull();
   });
 
+  it('[#568] a hub list with a notice, or with an Edit ask, shows the MOGs area', async () => {
+    const { el } = await render(<Hub />);
+    const mogsArea = () => el.querySelector<HTMLElement>('[data-hub-view="mogs"]');
+    expect(mogsArea()?.hidden).toBe(true);
+    const list = { mogs: [], unreadable: [], runningCount: 0, maxRunning: 3 };
+    // A list with neither a notice nor an Edit ask does not move the hub.
+    await tauri.emit('hub:mogs', list);
+    expect(mogsArea()?.hidden).toBe(true);
+    await tauri.emit('hub:mogs', {
+      ...list,
+      notice: { kind: 'info', text: 'Create a MOG to start' },
+    });
+    expect(mogsArea()?.hidden).toBe(false);
+  });
+
+  it('[GL-5] an Edit ask shows the MOGs area', async () => {
+    const { el } = await render(<Hub />);
+    const list = { mogs: [], unreadable: [], runningCount: 0, maxRunning: 3 };
+    await tauri.emit('hub:mogs', { ...list, openEdit: { mogId: A, token: 1 } });
+    expect(el.querySelector<HTMLElement>('[data-hub-view="mogs"]')?.hidden).toBe(false);
+  });
+
   it('[V1] shows the product name and the Labs label', async () => {
     const { el } = await render(<Hub />);
     expect(el.querySelector('h1')?.textContent).toBe('Bottle');

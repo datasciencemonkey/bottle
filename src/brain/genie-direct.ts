@@ -30,6 +30,7 @@ import { ASKING_GENIE, genieBlurbId, genieStage } from '../shared/genie-status';
 import type { CardStack } from './card-stack';
 import { isTerminal, type TerminalAskEvent } from './components/ask-events';
 import type { GenieEnd } from './genie-history';
+import { WORKSPACE_CODES } from './components/genie-errors';
 import { outcomeBlurbInput } from './outcome-blurb';
 
 /** The "Where your data goes" line of an answer card. TODO(#94): built from the live config (UX-24a). */
@@ -37,6 +38,9 @@ export const GENIE_DATA_FLOW_TEXT = 'Your question went to Genie One in your wor
 
 /** The control of a failed request (GL-5). A click sends the same question once more. */
 export const TRY_AGAIN_LABEL = 'Try again';
+
+/** The text link beside Try again when the workspace is the likely cause (VPN, proxy, network). */
+export const CHANGE_WORKSPACE_LABEL = 'Change workspace…';
 
 /** The request phases that the MOG mood shows (`capture-mood.ts`). */
 export type GeniePhase = 'working' | 'answered' | 'failed' | 'cancelled';
@@ -59,6 +63,8 @@ export interface GenieDirectDeps {
   hostOf?: ((profile: ProfileName) => Promise<string | undefined>) | undefined;
   /** #573: `window_card_show`, after the card holds the outcome. */
   showCard?: ((mogId: MogId) => unknown) | undefined;
+  /** "Change workspace…": show the hub on this MOG's Edit form (the home workspace field). */
+  changeWorkspace?: ((mogId: MogId) => unknown) | undefined;
 }
 
 /** The mood phase of a terminal event. A clarify question is an answer: Genie answered. */
@@ -132,7 +138,18 @@ export function createGenieDirectSend(deps: GenieDirectDeps): (turn: AgentTurn) 
       } else if (phaseOf(end) === 'failed' && card.setControls) {
         // GL-5: one user action sends the same question again, as a new request (G-15b).
         const owner = `retry:${id}`;
-        card.setControls(owner, [{ id: owner, label: TRY_AGAIN_LABEL }], () => {
+        // A workspace failure (VPN, proxy, network) also offers a text link to the MOG's Edit
+        // form. Try again stays the only button (W-07h: one primary action).
+        const wsId = `workspace:${id}`;
+        const offerWorkspace =
+          end.t === 'failed' && WORKSPACE_CODES.has(end.code) && deps.changeWorkspace !== undefined;
+        const chips = [{ id: owner, label: TRY_AGAIN_LABEL }];
+        if (offerWorkspace) chips.push({ id: wsId, label: CHANGE_WORKSPACE_LABEL });
+        card.setControls(owner, chips, (clicked) => {
+          if (clicked === wsId) {
+            safely(() => deps.changeWorkspace?.(turn.mogId));
+            return;
+          }
           card.clearControls?.(owner);
           safely(() => send(turn));
         });

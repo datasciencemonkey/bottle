@@ -18,7 +18,7 @@
 //! Requirements: CAP-35a, CAP-35b, CAP-36, CAP-37, CAP-38a, CAP-38b, CAP-39a, CAP-39b,
 //! CAP-44c, CAP-45, RTR-17a. Real-device proof (AT-30) waits for SP-03: TODO(#5).
 
-use crate::hotkey_core::{KeyEdge, PhysicalState, TalkKey};
+use crate::hotkey_core::{HotkeyEngine, KeyEdge, PhysicalState, TalkKey};
 
 /// `kCGSessionEventTap`: the tap sees the events of the login session.
 pub const CG_SESSION_EVENT_TAP: u32 = 1;
@@ -202,6 +202,31 @@ pub fn decode_flags_changed(key: TalkKey, keycode: u16, flags: u64) -> Option<Ke
     } else {
         KeyEdge::Up
     })
+}
+
+/// Give one classified `FlagsChanged` event to the engine. The tap callback calls it with the
+/// engine lock held. The talk-key edges also end the physical hold that keeps the ask and
+/// record keys grabbed (#604), so a Right-Option up always reaches the engine.
+pub fn apply_flags_event(engine: &mut HotkeyEngine, event: FlagsEvent) {
+    match event {
+        FlagsEvent::Talk(edge) => engine.on_talk_key(edge),
+        FlagsEvent::OtherModifierDown => engine.on_other_key_down(),
+        FlagsEvent::Ignore => {}
+    }
+}
+
+/// Give one classified event of the other-key tap to the engine (CAP-44c, RTR-17a, ADR 0103).
+/// The grabbed Carbon hot keys of G and R call [`HotkeyEngine::on_ask_key`] and
+/// [`HotkeyEngine::on_record_key`] the same way.
+pub fn apply_other_key(engine: &mut HotkeyEngine, key: OtherKeyDown) {
+    match key {
+        // RTR-17a: G marks the ask and does not cancel. This also covers a G that comes
+        // before the main thread has registered the ask key.
+        OtherKeyDown::Ask => engine.on_ask_key(),
+        // ADR 0103: the engine checks the Call recording knob.
+        OtherKeyDown::Record => engine.on_record_key(),
+        OtherKeyDown::Other => engine.on_other_key_down(),
+    }
 }
 
 /// The physical state from the HID key state of the talk key, the HID flag state and the
@@ -465,6 +490,119 @@ mod tests {
         assert!(!physical_from_hid(false, chord, false).chord_down);
         assert!(!physical_from_hid(false, CG_FLAG_CONTROL, true).chord_down);
     }
+
+    // ---- #604: ⌥G and ⌥R stay grabbed until Right-Option is physically up ----
+
+    /// The key seam: it records each grab (`true`) and release (`false`) of ⌥G and ⌥R.
+    #[derive(Default)]
+    struct Grabs {
+        ask: std::sync::Mutex<Vec<bool>>,
+        record: std::sync::Mutex<Vec<bool>>,
+    }
+    impl crate::hotkey_core::AskKeyControl for Grabs {
+        fn set_ask_key(&self, on: bool) {
+            self.ask.lock().unwrap().push(on);
+        }
+        fn drain(&self) {}
+        fn set_record_key(&self, on: bool) {
+            self.record.lock().unwrap().push(on);
+        }
+    }
+    impl Grabs {
+        fn take(&self) -> (Vec<bool>, Vec<bool>) {
+            (
+                std::mem::take(&mut *self.ask.lock().unwrap()),
+                std::mem::take(&mut *self.record.lock().unwrap()),
+            )
+        }
+    }
+    #[derive(Default)]
+    struct Outs(std::sync::Mutex<Vec<HotkeyOutput>>);
+    impl crate::hotkey_core::HotkeySink for Outs {
+        fn emit(&self, o: HotkeyOutput) {
+            self.0.lock().unwrap().push(o);
+        }
+    }
+
+    /// The flags of the tap: Right-Option (61, bit 0x40) and Left-Option (58, bit 0x20), with
+    /// the generic Option bit while either is down.
+    fn flags(right: bool, left: bool) -> u64 {
+        let mut f = 0x100;
+        if right {
+            f |= 0x0008_0040;
+        }
+        if left {
+            f |= 0x0008_0020;
+        }
+        f
+    }
+
+    fn mac_engine() -> (
+        std::sync::Arc<Outs>,
+        crate::clock::SimClock,
+        std::sync::Arc<Grabs>,
+        HotkeyEngine,
+    ) {
+        use std::sync::Arc;
+        let outs = Arc::new(Outs::default());
+        let clock = crate::clock::SimClock::new();
+        let grabs = Arc::new(Grabs::default());
+        let e = HotkeyEngine::with_clock(outs.clone(), Arc::new(clock.clone()))
+            .with_ask_key(grabs.clone())
+            .with_record_gate(Arc::new(std::sync::atomic::AtomicBool::new(true)));
+        (outs, clock, grabs, e)
+    }
+
+    fn flags_event(e: &mut HotkeyEngine, keycode: u16, f: u64) {
+        apply_flags_event(e, classify_flags_changed(TalkKey::RightOption, keycode, f));
+    }
+
+    #[test]
+    fn issue_604_r_twice_in_one_right_option_hold_stays_grabbed_until_the_key_up() {
+        let (outs, clock, grabs, mut e) = mac_engine();
+        flags_event(&mut e, 61, flags(true, false));
+        assert_eq!(grabs.take(), (vec![true], vec![true]));
+        clock.advance(std::time::Duration::from_millis(400));
+        // The first R comes from the other-key tap, the next ones from the Carbon hot key.
+        apply_other_key(
+            &mut e,
+            other_key_from_event(CG_EVENT_KEY_DOWN, i64::from(VK_ANSI_R)).unwrap(),
+        );
+        for _ in 0..5 {
+            clock.advance(std::time::Duration::from_millis(33));
+            e.on_record_key();
+            e.on_ask_key();
+        }
+        assert_eq!(grabs.take(), (vec![], vec![]), "⌥G and ⌥R stay grabbed");
+        assert_eq!(
+            std::mem::take(&mut *outs.0.lock().unwrap()),
+            vec![
+                HotkeyOutput::Ptt(PttPhase::Down),
+                HotkeyOutput::Ptt(PttPhase::Cancel),
+                HotkeyOutput::RecordToggle
+            ]
+        );
+        // Right-Option up, with Left-Option still down: both grabs end, so a Left-Option + R
+        // types "®" again.
+        flags_event(&mut e, 58, flags(true, true));
+        assert_eq!(grabs.take(), (vec![], vec![]));
+        flags_event(&mut e, 61, flags(false, true));
+        assert_eq!(grabs.take(), (vec![false], vec![false]));
+        e.on_record_key();
+        assert_eq!(grabs.take(), (vec![], vec![]));
+        assert!(outs.0.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn issue_604_left_option_alone_never_grabs_r_or_g() {
+        let (outs, _clock, grabs, mut e) = mac_engine();
+        flags_event(&mut e, 58, flags(false, true));
+        e.on_record_key();
+        e.on_ask_key();
+        flags_event(&mut e, 58, flags(false, false));
+        assert_eq!(grabs.take(), (vec![], vec![]));
+        assert!(outs.0.lock().unwrap().is_empty());
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -486,7 +624,7 @@ mod sys {
     use crate::error::{CoreError, CoreResult};
     use crate::hotkey::HotkeyService;
     use crate::hotkey_core::{
-        check_ptt_permission, AskKeyControl, HotkeyEngine, HotkeySink, Permission, PermissionApi,
+        check_ptt_permission, AskKeyControl, HotkeySink, Permission, PermissionApi,
         PermissionStatus, PlatformProbe, TapControl, TapSignal, WATCHDOG_TICK,
     };
 
@@ -1248,14 +1386,8 @@ mod sys {
                 -1
             };
             let mut engine = lock(&shared.engine);
-            match other_key_from_event(event_type, keycode) {
-                // RTR-17a: G marks the ask and does not cancel. This also covers a G that comes
-                // before the main thread has registered the ask key.
-                Some(OtherKeyDown::Ask) => engine.on_ask_key(),
-                // ADR 0103: the engine checks the Call recording knob.
-                Some(OtherKeyDown::Record) => engine.on_record_key(),
-                Some(OtherKeyDown::Other) => engine.on_other_key_down(),
-                None => {}
+            if let Some(key) = other_key_from_event(event_type, keycode) {
+                apply_other_key(&mut engine, key);
             }
             sync_other_key_tap(shared, &engine);
         }));
@@ -1289,11 +1421,7 @@ mod sys {
                     let class = classify_flags_changed(shared.talk_key, code, flags);
                     if class != FlagsEvent::Ignore {
                         let mut engine = lock(&shared.engine);
-                        match class {
-                            FlagsEvent::Talk(edge) => engine.on_talk_key(edge),
-                            FlagsEvent::OtherModifierDown => engine.on_other_key_down(),
-                            FlagsEvent::Ignore => {}
-                        }
+                        apply_flags_event(&mut engine, class);
                         sync_other_key_tap(shared, &engine);
                     }
                     return;
