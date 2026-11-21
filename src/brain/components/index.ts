@@ -51,7 +51,7 @@ import { wireGenieCard } from '../genie-card-wiring';
 import { wireLinkOpen } from '../link-open-wiring';
 import { createAppMogContextMenu } from '../mog-context-menu';
 import { createThreadFocus, routeAskToFocusedThread, wireThreadFollowup } from '../thread-focus';
-import { isHubFocused, showHub } from '../hub-window';
+import { hubExists, isHubFocused, showHub } from '../hub-window';
 import { asPttEvent } from '../ptt';
 import { createRecordToggle } from '../record-toggle';
 import { emitTo } from '@tauri-apps/api/event';
@@ -64,6 +64,7 @@ import { createMoodPublisher, latencyTraceClock } from '../mood-publisher';
 import { sendHubNotice as sendLegalNotice, wireNotice } from '../notice-wiring';
 import { storeGate } from '../store-gate';
 import { isTauriMac, wireStoreGate } from '../store-wiring';
+import { STORE_EVENT } from '../../shared/store-view';
 import { wirePermissions } from '../permission-wiring';
 import { NO_HOME, withOfflineFallback } from '../offline-intent';
 import { createProfilePick } from '../profile-pick';
@@ -176,7 +177,13 @@ export function startBrain(): Brain {
         })),
       send: sendHubConversations,
       sendOpen: sendHubConversationsOpen,
+      hubPresent: () => hubExists(),
     });
+    // The hub asks for its list with `conversations.ready`, and that request is lost while this
+    // brain has no Channel yet (the core refuses `view_emit`) or while the store is locked. So
+    // the brain also sends the list by itself when the store opens (ADR 0105), and once it
+    // listens (below).
+    storeGate.onOpen(() => void conversations.push());
     // #40 (AT-09): one local-history writer, shared by a direct ask and a thread follow-up, so
     // each saved exchange refreshes the hub Conversations list the same way.
     const recordGenieExchange = ipcGenieHistory(components.T10, () => void conversations.refresh());
@@ -528,7 +535,15 @@ export function startBrain(): Brain {
     // lamp-alive: the core's look vector goes to the one MOG view it is for.
     wireMogLook(bus);
     void subscribeLevels(levels);
-    brain = { components, bus, talkTarget, conversations, ready: subscribeBrain(bus) };
+    const subscribed = subscribeBrain(bus);
+    // The brain listens now: send the hub what it could not ask for while the brain was not up.
+    // The store notice goes first, because on macOS the store waits for the hub to show its reason.
+    void subscribed.then((ok) => {
+      if (!ok) return;
+      void emitTo('hub', STORE_EVENT, storeGate.view()).catch(() => undefined);
+      void conversations.push();
+    });
+    brain = { components, bus, talkTarget, conversations, ready: subscribed };
   }
   return brain;
 }

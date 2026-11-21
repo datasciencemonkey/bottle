@@ -19,7 +19,7 @@ import {
   STORE_VIEW_ID,
   type StoreModel,
 } from '../../shared/store-view';
-import { emitView } from '../view-ipc';
+import { askBrain, emitView } from '../view-ipc';
 
 const ask = (target: string) =>
   void emitView(STORE_VIEW_ID, 'click', { target }).catch(() => undefined);
@@ -40,7 +40,7 @@ export function StoreNotice() {
       if (gone) return u();
       off = u;
       // Ask only once the listener exists, so a fast reply is never lost (ADR 0105 review).
-      ask(STORE_CHECK_TARGET);
+      askBrain(STORE_VIEW_ID, 'click', { target: STORE_CHECK_TARGET });
     });
     return () => {
       gone = true;

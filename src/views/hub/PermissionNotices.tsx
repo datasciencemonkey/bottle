@@ -21,7 +21,7 @@ import {
   PERMISSION_VIEW_ID,
   type PermissionNeed,
 } from '../../shared/permission-view';
-import { emitView } from '../view-ipc';
+import { askBrain, emitView } from '../view-ipc';
 
 const ask = (payload: { target: string; permission?: PermissionKind }) =>
   void emitView(PERMISSION_VIEW_ID, 'click', payload).catch(() => undefined);
@@ -42,7 +42,7 @@ export function PermissionNotices() {
       if (gone) u();
       else off = u;
     });
-    ask({ target: PERMISSION_CHECK_TARGET });
+    askBrain(PERMISSION_VIEW_ID, 'click', { target: PERMISSION_CHECK_TARGET });
     // Back from System Settings (or from the launch prompt): ask again.
     const onFocus = () => ask({ target: PERMISSION_CHECK_TARGET });
     window.addEventListener('focus', onFocus);
