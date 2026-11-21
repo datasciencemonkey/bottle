@@ -483,6 +483,16 @@ fn rec_component_list_without_storage_shows_the_device_only_recordings_newest_fi
     assert_eq!(rows[0]["id"], "2026-11-20_1000");
     assert_eq!(rows[0]["onDeviceOnly"], true);
     assert_eq!(rows[0]["errorKind"], "upload_failed");
+    // A call that records now shows as recording, not as a failed upload.
+    let local = Arc::new(FakeLocal::with_active(
+        vec![("2026-11-20_1000".to_owned(), 2_000)],
+        &["2026-11-20_1000"],
+    ));
+    let (c2, _, _) = component_with(&http, None, local, Arc::new(|| 1_795_100_700_000i64));
+    let v2 = c2
+        .call("recording_list", json!({"profile":"fake-home"}))
+        .unwrap();
+    assert_eq!(v2[0]["status"], "recording");
     // Retry still needs a storage: the brain shows why.
     let e = c
         .call(

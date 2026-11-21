@@ -206,6 +206,9 @@ function inVolume(r: RecSummary): boolean {
   );
 }
 
+/** Error kinds that hit every recording alike: Upload all stops and says why. */
+const STOP_KINDS = ['no_storage', 'volume_permission', 'auth', 'network'];
+
 /** Not uploaded, or failed at the upload step: Upload all sends it. */
 export function needsUpload(r: RecSummary): boolean {
   if (r.onDeviceOnly) return true;
@@ -309,15 +312,14 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
     const out: HubRecordings = {
       rows: sorted.map((r) => {
         const row = rowOf(r);
-        if (needsUpload(r)) {
-          row.needsUpload = true;
-          // The real reason, not the generic "couldn't upload" text.
-          if (problem && !problem.canUpload)
-            row.error = {
-              text: problem.reason,
-              action: { label: RECORDING_TEXT.chooseWhere, target: 'settings' },
-            };
-        }
+        // The banner explains why; a waiting row only says "Not uploaded".
+        if (needsUpload(r)) row.needsUpload = true;
+        // A call that records now, with nowhere to upload: a short local-only warning.
+        if (r.status === 'recording' && problem && !problem.canUpload)
+          row.error = {
+            text: RECORDING_TEXT.localOnlyRow,
+            action: { label: RECORDING_TEXT.chooseWhere, target: 'settings' },
+          };
         const b = batch?.state.get(r.id);
         if (b) row.batch = b;
         return row;
@@ -481,11 +483,19 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
       let stop = false;
       try {
         const r = await api.retry(id);
-        if (isObj(r) && r['status'] === 'failed') result = 'failed';
+        if (isObj(r) && r['status'] === 'failed') {
+          result = 'failed';
+          // A failed result with a storage or sign-in kind stops the batch like a throw.
+          const kind = typeof r['errorKind'] === 'string' ? r['errorKind'] : '';
+          if (STOP_KINDS.includes(kind)) {
+            stop = true;
+            showError({ error: kind });
+          }
+        }
       } catch (e) {
         result = 'failed';
         // A storage or sign-in fault hits every recording alike: stop and say why.
-        if (['no_storage', 'volume_permission', 'auth', 'network'].includes(codeOf(e))) {
+        if (STOP_KINDS.includes(codeOf(e))) {
           stop = true;
           showError(e);
         }

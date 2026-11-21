@@ -9,7 +9,6 @@
  *   Databricks". The core opens that link; the view never builds or opens a URL.
  */
 import {
-  Fragment,
   useCallback,
   useEffect,
   useId,
@@ -494,62 +493,57 @@ export function Recordings({
                 {g.label}
               </div>
               {g.rows.map((r) => (
-                <Fragment key={r.id}>
-                  <div
-                    id={`${baseId}-${r.id}`}
-                    role="option"
-                    aria-selected={r === selected}
-                    data-active={r === current || undefined}
-                    data-recording-row={r.id}
-                    className="rec-row"
-                    onClick={() => {
-                      setSelectedId(r.id);
-                      listRef.current?.focus();
-                    }}
-                  >
-                    <span className="rec-row-main">
-                      <span className="rec-row-time">{timeOf(r.startedAt)}</span>
-                      <span className="rec-row-len">
-                        {lengthOf(r.durationS)}
-                        {r.error && (r.onDeviceOnly || r.status === 'failed') && (
+                <div
+                  key={r.id}
+                  id={`${baseId}-${r.id}`}
+                  role="option"
+                  aria-selected={r === selected}
+                  data-active={r === current || undefined}
+                  data-recording-row={r.id}
+                  className="rec-row"
+                  onClick={() => {
+                    setSelectedId(r.id);
+                    listRef.current?.focus();
+                  }}
+                >
+                  <span className="rec-row-main">
+                    <span className="rec-row-time">{timeOf(r.startedAt)}</span>
+                    <span className="rec-row-len">
+                      {lengthOf(r.durationS)}
+                      {r.error &&
+                        (r.onDeviceOnly || r.status === 'failed' || r.status === 'recording') && (
                           <span className="rec-row-reason" data-recording-reason>
                             {' · '}
                             {r.error.text}
                           </span>
                         )}
-                      </span>
                     </span>
-                    <span className="rec-row-side">
-                      {r.batch ? (
+                  </span>
+                  <span className="rec-row-side">
+                    {r.batch ? (
+                      <span
+                        className="rec-status"
+                        data-status={
+                          r.batch === 'done'
+                            ? 'done'
+                            : r.batch === 'failed'
+                              ? 'failed'
+                              : 'uploading'
+                        }
+                        data-recording-batch={r.batch}
+                      >
                         <span
-                          className="rec-status"
-                          data-status={
-                            r.batch === 'done'
-                              ? 'done'
-                              : r.batch === 'failed'
-                                ? 'failed'
-                                : 'uploading'
-                          }
-                          data-recording-batch={r.batch}
-                        >
-                          <span
-                            className="rec-status-dot"
-                            aria-hidden="true"
-                            data-busy={r.batch === 'running' || undefined}
-                          />
-                          {BATCH_LABEL[r.batch]}
-                        </span>
-                      ) : (
-                        <Status row={r} />
-                      )}
-                    </span>
-                  </div>
-                  {r.status === 'done' && !r.onDeviceOnly && (
-                    <div role="none" className="rec-row-links">
-                      <FileLinks row={r} />
-                    </div>
-                  )}
-                </Fragment>
+                          className="rec-status-dot"
+                          aria-hidden="true"
+                          data-busy={r.batch === 'running' || undefined}
+                        />
+                        {BATCH_LABEL[r.batch]}
+                      </span>
+                    ) : (
+                      <Status row={r} />
+                    )}
+                  </span>
+                </div>
               ))}
             </div>
           ))}

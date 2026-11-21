@@ -1097,8 +1097,15 @@ impl RecordingCloud for CloudAdapter {
             .local
             .names()
             .into_iter()
-            .filter(|(name, _)| !active.contains(name) && !self.in_flight(name))
-            .filter_map(|(name, started)| Self::local_only_summary(&name, started))
+            .filter(|(name, _)| !self.in_flight(name))
+            .filter_map(|(name, started)| {
+                // A call that records now shows as recording, not as a failed upload.
+                if active.contains(&name) {
+                    Self::recording_row(&name, started)
+                } else {
+                    Self::local_only_summary(&name, started)
+                }
+            })
             .collect();
         out.sort_by(|a, b| {
             b.started_at_ms

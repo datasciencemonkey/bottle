@@ -333,11 +333,7 @@ describe('storage banner, Upload all and file links (hub)', () => {
     const onSettings = vi.fn();
     const { el } = await render(<Recordings active now={() => NOW} onOpenSettings={onSettings} />);
     await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, {
-      rows: [
-        waiting('a', 1, {
-          error: { text: RECORDING_TEXT.noMyFiles, action: { label: 'x', target: 'settings' } },
-        }),
-      ],
+      rows: [waiting('a', 1)],
       storageProblem: { reason: RECORDING_TEXT.noMyFiles, canUpload: false },
       uploadAll: { running: false, total: 1, done: 0, failed: 0 },
     });
@@ -346,8 +342,9 @@ describe('storage banner, Upload all and file links (hub)', () => {
     expect(b?.textContent).toContain('No My Files on this workspace. Choose a volume in Settings.');
     await click(b?.querySelector('button'));
     expect(onSettings).toHaveBeenCalledTimes(1);
-    // The failed row shows the real reason, and Upload all waits for the storage.
-    expect(el.querySelector('[data-recording-reason]')?.textContent).toContain('No My Files');
+    // The row says only "Not uploaded"; the banner explains.
+    expect(el.querySelector('[data-recording-row="a"]')?.textContent).toContain('Not uploaded');
+    expect(el.querySelector('[data-recording-row="a"]')?.textContent).not.toContain('My Files');
     expect(
       el.querySelector<HTMLButtonElement>('[data-recording-upload-all] button')?.disabled,
     ).toBe(true);
@@ -382,26 +379,20 @@ describe('storage banner, Upload all and file links (hub)', () => {
     expect(chips).toEqual(['Uploaded', 'Uploading…']);
   });
 
-  it('[REC-L3] a done row and its detail link to the transcript, the notes and the folder', async () => {
+  it('[REC-L3] only the detail pane links to the transcript, the notes and the folder', async () => {
     const { el } = await render(<Recordings active now={() => NOW} />);
     await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, list);
-    const rowLinks = el.querySelector('.rec-row-links');
-    expect(rowLinks?.textContent).toContain('Open transcript in Databricks');
-    expect(rowLinks?.textContent).toContain('Open notes in Databricks');
-    expect(rowLinks?.textContent).toContain('Open folder in Databricks');
-    // Only the done row has them, and none sits inside an option.
-    expect(el.querySelectorAll('.rec-row-links')).toHaveLength(1);
-    expect(el.querySelector('[role="option"] button')).toBeNull();
-    await click(rowLinks?.querySelector('[data-recording-link="transcript"]'));
-    expect(emits().at(-1)).toEqual({ action: 'recordings.open', id: 'r1', target: 'transcript' });
-    await click(rowLinks?.querySelector('[data-recording-link="notes"]'));
-    expect(emits().at(-1)).toEqual({ action: 'recordings.open', id: 'r1', target: 'notes' });
-
+    // The list stays clean: no control inside the listbox at all.
+    expect(el.querySelector('.rec-row-links')).toBeNull();
+    expect(el.querySelector('[role="listbox"] button')).toBeNull();
     await click(el.querySelector('[data-recording-row="r1"]'));
     await tauri.emitTo('hub', HUB_RECORDING_DETAIL_EVENT, detail);
     const d = el.querySelector('[data-recording-detail]');
     expect(d?.querySelector('[data-recording-link="transcript"]')?.textContent).toBe(
       'Open transcript in Databricks',
+    );
+    expect(d?.querySelector('[data-recording-link="notes"]')?.textContent).toBe(
+      'Open notes in Databricks',
     );
     expect(d?.querySelector('[data-recording-file="transcript"]')?.textContent).toBe(
       '2026-11-18_0900.transcript.md',
@@ -409,6 +400,10 @@ describe('storage banner, Upload all and file links (hub)', () => {
     expect(d?.querySelector('[data-recording-file="notes"]')?.textContent).toBe(
       '2026-11-18_0900.notes.md',
     );
+    await click(d?.querySelector('[data-recording-link="transcript"]'));
+    expect(emits().at(-1)).toEqual({ action: 'recordings.open', id: 'r1', target: 'transcript' });
+    await click(d?.querySelector('[data-recording-link="notes"]'));
+    expect(emits().at(-1)).toEqual({ action: 'recordings.open', id: 'r1', target: 'notes' });
     await click(d?.querySelector('[data-recording-link="folder"]'));
     expect(emits().at(-1)).toEqual({ action: 'recordings.open', id: 'r1', target: 'folder' });
   });

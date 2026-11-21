@@ -114,10 +114,9 @@ describe('storage check (brain)', () => {
     await flush();
     const l = t.lists().at(-1);
     expect(l?.storageProblem).toEqual({ reason: RECORDING_TEXT.noMyFiles, canUpload: false });
-    expect(l?.rows[0]?.error?.text).toBe(
-      'No My Files on this workspace. Choose a volume in Settings.',
-    );
-    expect(l?.rows[0]?.error?.action?.target).toBe('settings');
+    // The banner carries the reason; the waiting row has no copy of it.
+    expect(l?.rows[0]?.error).toBeUndefined();
+    expect(l?.rows[0]?.needsUpload).toBe(true);
   });
 
   it('[REC-L1] My Files that resolves, or a chosen volume, is no problem', async () => {
@@ -253,6 +252,33 @@ describe('Upload all (brain)', () => {
     t.click({ action: 'recordings.upload_all' });
     await flush();
     expect(t.api.retry).toHaveBeenCalledTimes(2);
+  });
+
+  it('[REC-L2] a failed result with a storage kind stops the batch and shows why', async () => {
+    const t = setup({ rows: [local('a', 1), local('b', 2)] });
+    t.api.retry.mockResolvedValueOnce({ status: 'failed', errorKind: 'volume_permission' });
+    t.click({ action: 'recordings.ready' });
+    await flush();
+    t.click({ action: 'recordings.upload_all' });
+    await flush();
+    expect(t.api.retry).toHaveBeenCalledTimes(1);
+    expect(t.model()?.error?.text).toContain("can't write to this volume");
+  });
+
+  it('[REC-L1] a call that records now, with no storage, is a recording row with a short local-only warning', async () => {
+    const live: RecSummary = {
+      id: 'live',
+      name: 'live',
+      startedAt: 5,
+      durationS: 0,
+      status: 'recording',
+    };
+    const t = setup({ myFiles: null, rows: [live] });
+    t.click({ action: 'recordings.ready' });
+    await flush();
+    const r = t.lists().at(-1)?.rows[0];
+    expect(r?.status).toBe('recording');
+    expect(r?.error?.text).toBe(RECORDING_TEXT.localOnlyRow);
   });
 
   it('[REC-L2] a storage fault stops the batch and shows the reason', async () => {

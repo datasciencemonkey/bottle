@@ -70,6 +70,7 @@ export const RECORDING_TEXT = {
   /** My Files does not resolve and no volume is set (the probe of ADR 0103 decision 7). */
   noMyFiles: 'No My Files on this workspace. Choose a volume in Settings.',
   /** Shown after a recording starts while storage is unusable. The audio stays local. */
+  localOnlyRow: 'Saved on this device only for now.',
   keepsLocal: 'Until then, Bottle keeps the audio on this device.',
 } as const;
 
