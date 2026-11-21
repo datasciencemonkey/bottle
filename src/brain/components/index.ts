@@ -16,6 +16,7 @@ import {
 } from '../bus';
 import { createCaptureMood, wireCaptureMood } from '../capture-mood';
 import { wireForget } from '../forget-wiring';
+import { clearingDictationWords } from '../wipe-dictation-words';
 import { wireWipe } from '../wipe-wiring';
 import { wireCliInstall, wireCliSettings } from '../cli-wiring';
 import { cliPlatform } from '../../shared/cli-view';
@@ -213,7 +214,7 @@ export function startBrain(): Brain {
     // user's confirm click. TODO(#525): the default core sends `mem_wipe` once it is in the
     // contract; until then a Wipe fails safe and the dialog says that nothing changed.
     wireWipe(bus, {
-      flow: new WipeFlow({ genieOne: new GenieOneDeleteUtility() }),
+      flow: clearingDictationWords(new WipeFlow({ genieOne: new GenieOneDeleteUtility() })),
       settings: async () => retentionSettings(await readAdminPolicy()),
     });
     // #16 (W-02a, W-02c, W-02d): the hub Settings show the CLI path and version from T7.

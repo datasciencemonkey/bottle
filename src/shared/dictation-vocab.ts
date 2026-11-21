@@ -9,8 +9,6 @@
  * - A rule is "heard" to "write". Matching is case-insensitive and needs word boundaries on
  *   both sides. Text outside a match is never touched.
  * - The user list (Settings, "Dictation words") wins over the built-in list.
- * - A built-in term that starts lowercase (such as "lakehouse") takes a capital letter when
- *   the heard words started with one.
  */
 
 /** The localStorage key of the user list (hub Settings). */
@@ -26,31 +24,29 @@ export interface VocabRule {
 const MAX_RULES = 200;
 const MAX_FIELD = 80;
 
-/** Known mis-hearings of Databricks terms. Each "heard" is specific enough to be safe. */
+/**
+ * Known mis-hearings of Databricks terms. Each "heard" must be a phrase nobody says on purpose
+ * in plain English: dictation pastes into any app, and a wrong rewrite is hard to undo. Phrases
+ * such as "lake house", "gee way" or "data brick" are left out on purpose; a user can add them
+ * to their own list.
+ */
 export const BUILT_IN_RULES: readonly VocabRule[] = [
   { heard: 'g way n', write: 'Gateway' },
   { heard: 'gee way n', write: 'Gateway' },
-  { heard: 'gee way', write: 'Gateway' },
-  { heard: 'g way', write: 'Gateway' },
   { heard: 'uni tea catalog', write: 'Unity Catalog' },
   { heard: 'uni tea catalogue', write: 'Unity Catalog' },
   { heard: 'unity catalogue', write: 'Unity Catalog' },
   { heard: 'lake base', write: 'Lakebase' },
   { heard: 'lake flow', write: 'Lakeflow' },
-  { heard: 'lake house', write: 'lakehouse' },
   { heard: 'data bricks', write: 'Databricks' },
-  { heard: 'data brick', write: 'Databricks' },
   { heard: 'ml flow', write: 'MLflow' },
   { heard: 'm l flow', write: 'MLflow' },
   { heard: 'ml-flow', write: 'MLflow' },
   { heard: 'py spark', write: 'PySpark' },
-  { heard: 'pie spark', write: 'PySpark' },
   { heard: 'jeannie space', write: 'Genie space' },
   { heard: 'jeannie spaces', write: 'Genie spaces' },
   { heard: 'jeanie space', write: 'Genie space' },
   { heard: 'jeanie spaces', write: 'Genie spaces' },
-  { heard: 'jenny space', write: 'Genie space' },
-  { heard: 'genie spaces', write: 'Genie spaces' },
 ];
 
 const normalize = (s: string): string => s.trim().toLowerCase().replace(/\s+/g, ' ');
@@ -107,6 +103,8 @@ export function correctDictation(text: string, userRules: readonly VocabRule[] =
   };
   add(userRules, false);
   add(BUILT_IN_RULES, true);
+  // The lookbehind below needs Safari 16.4 WebKit. The minimum OS is macOS 14.4 (Safari 17), so
+  // it compiles. On an older engine the `try` in the corrector returns the text unchanged.
   // Longest first, so "g way n" beats "g way" in the one alternation.
   const keys = [...entries.keys()].sort((a, b) => b.length - a.length);
   const alternation = keys.map((k) => k.split(' ').map(escapeRegex).join('\\s+')).join('|');
@@ -150,6 +148,17 @@ export function writeUserWordsText(
     storage?.setItem(DICTATION_WORDS_STORAGE_KEY, text);
   } catch {
     // A disabled store: the list just does not survive a reload.
+  }
+}
+
+/** Remove the saved user list ("Wipe everything"). */
+export function clearUserWords(
+  storage: Pick<Storage, 'removeItem'> | undefined = defaultStore(),
+): void {
+  try {
+    storage?.removeItem(DICTATION_WORDS_STORAGE_KEY);
+  } catch {
+    // A disabled store holds nothing to remove.
   }
 }
 

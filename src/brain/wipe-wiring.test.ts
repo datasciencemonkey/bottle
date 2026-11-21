@@ -7,6 +7,7 @@ import { join, relative, resolve, sep } from 'node:path';
 import type { WipeDialogModel, WipeScope, WipeSettingsModel } from '../shared/wipe-view';
 import { asWipeDialogModel, asWipeSettingsModel, WIPE_VIEW_ID } from '../shared/wipe-view';
 import { BrainBus, type ViewInput } from './bus';
+import { clearingDictationWords } from './wipe-dictation-words';
 import { WipeDialogController, wireWipe } from './wipe-wiring';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('./test-core')).coreModule);
@@ -228,5 +229,24 @@ describe('Wipe wiring (#124)', () => {
     const index = readFileSync(resolve(import.meta.dirname, 'components', 'index.ts'), 'utf8');
     expect(index).toContain('wireWipe(');
     expect(index).not.toMatch(/\.confirm\(|\.wipe\(/);
+  });
+});
+
+describe('Wipe everything clears the dictation words', () => {
+  const done = { done: true } as never;
+  it('clears on everything, keeps on an older-than wipe and on a failure', async () => {
+    const clear = vi.fn();
+    const flow = {
+      dialog: vi.fn(),
+      confirm: vi.fn(async () => done),
+    };
+    const w = clearingDictationWords(flow, clear);
+    await w.confirm('older_than_30d', false);
+    expect(clear).not.toHaveBeenCalled();
+    await w.confirm('everything', false);
+    expect(clear).toHaveBeenCalledTimes(1);
+    flow.confirm.mockRejectedValueOnce(new Error('x'));
+    await expect(w.confirm('everything', false)).rejects.toThrow();
+    expect(clear).toHaveBeenCalledTimes(1);
   });
 });

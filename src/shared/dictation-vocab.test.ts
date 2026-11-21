@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  clearUserWords,
   correctDictation,
   createDictationCorrector,
   DICTATION_WORDS_STORAGE_KEY,
@@ -11,13 +12,12 @@ import {
 describe('built-in corrections', () => {
   it.each([
     ['Can I create a G Way N API?', 'Can I create a Gateway API?'],
-    ['can i create a gee way api', 'can i create a Gateway api'],
+    ['can i create a gee way n api', 'can i create a Gateway api'],
     ['Use uni tea catalog for that.', 'Use Unity Catalog for that.'],
     ['Open lake base, please.', 'Open Lakebase, please.'],
     ['I work at Data Bricks.', 'I work at Databricks.'],
     ['Log it with ML flow today', 'Log it with MLflow today'],
     ['Ask the jeannie space about sales', 'Ask the Genie space about sales'],
-    ['Lake house is great. A lake house too.', 'Lakehouse is great. A lakehouse too.'],
     ['G WAY N, then more', 'Gateway, then more'],
   ])('%s', (input, out) => {
     expect(correctDictation(input)).toBe(out);
@@ -59,6 +59,33 @@ describe('built-in corrections', () => {
   });
 });
 
+describe('plain English stays as it is', () => {
+  it.each([
+    'We rented a lake house for the weekend.',
+    'Gee way to go!',
+    'Big data brick wall ahead.',
+    'My pie spark plugs are new.',
+    'Jenny space is a nice name for a cafe.',
+    'Is this the g way to the station?',
+    'The lake house had a view of the lake.',
+    'He built a wall of red bricks.',
+    'The gateway to the city is wide.',
+    'Call the API gateway team about the catalog of unity songs.',
+    'Pie and spark of joy.',
+    'Machine learning flow charts are handy.',
+    'I love the lake and the base camp.',
+    'She said gee, way to go, champ.',
+    'The py file and the spark job both ran.',
+    'Unity is a great game engine, and the catalog is long.',
+    'Jeannie is my aunt and she likes space movies.',
+    'The Genie in the lamp granted three wishes.',
+    'Open the data and check the bricks in the report.',
+    'River flow rates were low in July.',
+  ])('%s', (s) => {
+    expect(correctDictation(s)).toBe(s);
+  });
+});
+
 describe('user words', () => {
   it('parses heard → write lines and counts the bad ones', () => {
     const { rules, invalid } = parseUserWords(
@@ -96,6 +123,19 @@ describe('user words', () => {
 });
 
 describe('storage', () => {
+  it('clears the saved list', () => {
+    const map = new Map([[DICTATION_WORDS_STORAGE_KEY, 'a → b']]);
+    clearUserWords({ removeItem: (k: string) => void map.delete(k) });
+    expect(map.size).toBe(0);
+    expect(() =>
+      clearUserWords({
+        removeItem: () => {
+          throw new Error('x');
+        },
+      }),
+    ).not.toThrow();
+  });
+
   it('saves and reads the text, and survives a failing store', () => {
     const map = new Map<string, string>();
     const store = {
