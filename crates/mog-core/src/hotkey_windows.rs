@@ -1518,9 +1518,10 @@ mod tests {
     }
 
     #[test]
-    fn issue_604_a_grab_on_the_hook_seam_ends_at_the_talk_key_up_not_at_the_cancel() {
+    fn issue_604_a_grab_on_the_hook_seam_follows_the_talk_key_and_ends_at_another_key() {
         use crate::hotkey_core::HotkeyEngine;
         const VK_R: u32 = 0x52;
+        const VK_2: u32 = 0x32;
         let sink = Arc::new(RecordingSink::default());
         let clock = crate::clock::SimClock::new();
         let grabs = Arc::new(Grabs::default());
@@ -1531,32 +1532,29 @@ mod tests {
         forward_to_engine(sig.unwrap(), &mut engine);
         assert_eq!(grabs.take(), vec![true]);
         clock.advance(Duration::from_millis(300));
-        // Windows has no record key: R passes and cancels as any other key (CAP-44c). The
-        // talk key is still down, so the grab stays.
-        for _ in 0..3 {
-            let (verdict, sig) = f.on_key(KeyEvent::down(VK_R), T0);
+        // AltGr + 2, then R: another key cancels (CAP-44c) and ends the grab at once, so the
+        // later keys type as usual. Windows has no record key: R passes.
+        for k in [VK_2, VK_R, VK_R] {
+            let (verdict, sig) = f.on_key(KeyEvent::down(k), T0);
             assert_eq!(verdict, Verdict::Pass);
             if let Some(sig) = sig {
                 forward_to_engine(sig, &mut engine);
             }
+            f.on_key(KeyEvent::up(k), T0);
         }
-        f.on_key(KeyEvent::up(VK_R), T0);
         assert!(!engine.machine().is_held());
-        assert!(engine.machine().talk_key_physically_down());
-        assert_eq!(grabs.take(), Vec::<bool>::new());
+        assert!(!engine.machine().talk_key_physically_down());
+        assert_eq!(grabs.take(), vec![false]);
         let (_, sig) = f.on_key(KeyEvent::up(vk::RMENU), T0);
         forward_to_engine(sig.unwrap(), &mut engine);
-        assert_eq!(grabs.take(), vec![false]);
-        assert!(!engine.machine().talk_key_physically_down());
+        assert_eq!(grabs.take(), Vec::<bool>::new());
         // With no hold, R passes with no signal and nothing is grabbed.
         assert_eq!(f.on_key(KeyEvent::down(VK_R), T0), (Verdict::Pass, None));
         f.on_key(KeyEvent::up(VK_R), T0);
         assert_eq!(grabs.take(), Vec::<bool>::new());
 
-        // A resume with the hold cancelled ends the physical hold too.
+        // A resume ends the physical hold and its grab.
         let (_, sig) = f.on_key(KeyEvent::down(vk::RMENU), T0);
-        forward_to_engine(sig.unwrap(), &mut engine);
-        let (_, sig) = f.on_key(KeyEvent::down(VK_R), T0);
         forward_to_engine(sig.unwrap(), &mut engine);
         assert_eq!(grabs.take(), vec![true]);
         let sig = f.on_resume(T0).unwrap();

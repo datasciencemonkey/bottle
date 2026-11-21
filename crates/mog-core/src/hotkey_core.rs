@@ -14,9 +14,10 @@
 //! [`HotkeyOutput::PttAskUp`].
 //!
 //! The grab follows the physical talk-key hold, not the logical PTT (#604). A hold that a press
-//! of R, another key or a lost key-up ends logically keeps the grab until the talk key comes up,
-//! so a second G or R in the same hold (or an auto-repeat) never types "©" or "®" into the
-//! focused app. The grab starts only at a talk-key down that starts a PTT. Secure Event Input
+//! of R ends keeps the grab until the talk key comes up, so a second G or R in the same hold (or
+//! an auto-repeat) never types "©" or "®" into the focused app. A cancel by another key (CAP-44c)
+//! ends the grab at once: the user types with the key as a plain Option or AltGr modifier, so a
+//! later G or R in that hold types as usual. The grab starts only at a talk-key down that starts a PTT. Secure Event Input
 //! and a re-read with the key up end it, so no key is grabbed outside a physical hold.
 //!
 //! Record key (ADR 0103): with the Call recording knob on, the same seam also grabs talk key + R
@@ -202,8 +203,9 @@ pub struct PttMachine {
     mode: TalkKeyMode,
     held_by: Option<TalkKeyMode>,
     /// The talk key is physically down in a hold that started a PTT (#604). A `cancel` keeps
-    /// it; only a talk-key up, a re-read with the key up, Secure Event Input or a reset clears
-    /// it. It never becomes true without a talk-key down that starts a PTT.
+    /// it; a talk-key up, a re-read with the key up, Secure Event Input, a cancel by another key
+    /// ([`Self::end_grab_hold`]) or a reset clears it. It never becomes true without a talk-key
+    /// down that starts a PTT.
     talk_key_down: bool,
 }
 
@@ -309,6 +311,12 @@ impl PttMachine {
             HotkeyOutput::TalkKeyRestored
         });
         out
+    }
+
+    /// End the physical hold of the grabs now, with the talk key still down (CAP-44c, #604). The
+    /// key-up later changes nothing. A re-read never starts the hold again.
+    fn end_grab_hold(&mut self) {
+        self.talk_key_down = false;
     }
 
     /// End an active PTT with `cancel` (CAP-44c). The later key-up gives nothing. The physical
@@ -768,6 +776,9 @@ impl HotkeyEngine {
             self.held_since = None;
             self.last_tap_down = None;
             let out = self.machine.cancel();
+            // #604: another key means the talk key is a plain Option or AltGr modifier in this
+            // hold. The grabs end now, so a later G or R types as usual ("©", "®", "@").
+            self.machine.end_grab_hold();
             self.emit(out);
         }
     }
@@ -2355,21 +2366,19 @@ mod tests {
     }
 
     #[test]
-    fn rtr_17a_the_ask_key_is_released_on_a_tap_and_at_the_key_up_after_a_cap_44c_cancel() {
+    fn rtr_17a_the_ask_key_is_released_on_a_tap_and_on_a_cap_44c_cancel() {
         let (_sink, clock, keys, mut e) = ask_engine();
         e.on_talk_key(Down);
         clock.advance(Duration::from_millis(100));
         e.on_talk_key(Up);
         paired(&keys.take());
-        // Esc, or any other key, in the first second cancels the PTT. The talk key is still
-        // down, so the grab stays until the key-up (#604).
+        // Esc, or any other key, in the first second cancels and releases the grab.
         clock.advance(Duration::from_secs(2));
         e.on_talk_key(Down);
         e.on_other_key_down();
-        assert!(!e.machine().is_held());
-        assert_eq!(keys.take(), vec![true]);
+        paired(&keys.take());
         e.on_talk_key(Up);
-        assert_eq!(keys.take(), vec![false]);
+        assert_eq!(keys.take(), Vec::<bool>::new());
     }
 
     #[test]
@@ -2791,14 +2800,13 @@ mod tests {
 
     #[test]
     fn rec_the_record_key_is_released_on_every_path_that_ends_the_hold() {
-        // A CAP-44c cancel ends the PTT; the key-up ends the physical hold and the grab (#604).
+        // A CAP-44c cancel.
         let (_sink, _clock, keys, _gate, mut e) = rec_engine(true);
         e.on_talk_key(Down);
         e.on_other_key_down();
-        assert_eq!(keys.record(), vec![true]);
-        e.on_talk_key(Up);
-        assert_eq!(keys.record(), vec![false]);
+        assert_eq!(keys.record(), vec![true, false]);
         // A service stop.
+        e.on_talk_key(Up);
         e.on_talk_key(Down);
         e.reset();
         assert_eq!(keys.record(), vec![true, false]);
@@ -2991,22 +2999,55 @@ mod tests {
     }
 
     #[test]
-    fn issue_604_r_after_a_cap_44c_cancel_is_swallowed_and_does_not_toggle() {
+    fn issue_604_option_2_then_r_types_and_is_not_grabbed() {
+        // Right-Option, then "2" ("™"), then R: the user types with Right-Option as a plain
+        // Option or AltGr key. The "2" cancels (CAP-44c) and ends both grabs at once, so the R
+        // and a G after it reach the app ("®", "©") and toggle nothing. Knob on and off.
+        for knob in [true, false] {
+            let (sink, clock, keys, _gate, mut e) = rec_engine(knob);
+            e.on_talk_key(Down);
+            clock.advance(Duration::from_millis(200));
+            e.on_other_key_down();
+            assert_eq!(sink.take(), vec![Ptt(PDown), Ptt(Cancel)], "knob {knob}");
+            assert_eq!(keys.asks(), vec![true, false], "knob {knob}");
+            let record = if knob { vec![true, false] } else { vec![] };
+            assert_eq!(keys.record(), record, "knob {knob}");
+            assert!(!e.machine().talk_key_physically_down(), "knob {knob}");
+            for _ in 0..3 {
+                clock.advance(Duration::from_millis(300));
+                e.on_record_key();
+                e.on_ask_key();
+            }
+            // A gap or a tick with the key still down does not grab again.
+            let probe = FakeProbe::ready();
+            let ctl = FakeCtl::default();
+            *probe.physical.lock().unwrap() = down();
+            e.on_tap_signal(TapSignal::DisabledByTimeout, clock.now(), &probe, &ctl);
+            e.tick(clock.now(), &probe, &ctl);
+            e.on_record_key();
+            e.on_talk_key(Up);
+            assert_eq!(sink.take(), vec![], "knob {knob}");
+            assert_eq!(keys.record(), Vec::<bool>::new(), "knob {knob}");
+            assert_eq!(keys.asks(), Vec::<bool>::new(), "knob {knob}");
+        }
+    }
+
+    #[test]
+    fn issue_604_g_ask_keeps_the_grab_and_another_key_after_it_ends_it() {
+        // An ask (G) does not cancel: the hold and both grabs go on.
         let (sink, clock, keys, _gate, mut e) = rec_engine(true);
         e.on_talk_key(Down);
-        clock.advance(Duration::from_millis(200));
-        e.on_other_key_down();
-        assert_eq!(sink.take(), vec![Ptt(PDown), Ptt(Cancel)]);
-        clock.advance(Duration::from_millis(300));
-        e.on_record_key();
+        clock.advance(Duration::from_millis(400));
         e.on_ask_key();
-        assert_eq!(sink.take(), vec![]);
-        assert_eq!(keys.record(), vec![true]);
+        e.on_ask_key();
+        assert!(e.machine().is_held());
         assert_eq!(keys.asks(), vec![true]);
+        assert_eq!(keys.record(), vec![true]);
+        clock.advance(Duration::from_secs(1));
         e.on_talk_key(Up);
-        assert_eq!(keys.record(), vec![false]);
+        assert_eq!(sink.take(), vec![Ptt(PDown), PttAskUp]);
         assert_eq!(keys.asks(), vec![false]);
-        assert_eq!(sink.take(), vec![]);
+        assert_eq!(keys.record(), vec![false]);
     }
 
     #[test]
