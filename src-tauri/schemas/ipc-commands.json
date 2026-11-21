@@ -1198,12 +1198,24 @@
         },
         "RecordingOpenTarget": {
           "description": "What `recording_open` opens (ADR 0103). Rust builds the Catalog Explorer URL from the\nprofile host; the view never passes a URL.",
-          "enum": [
-            "folder",
-            "transcript",
-            "notes"
-          ],
-          "type": "string"
+          "oneOf": [
+            {
+              "enum": [
+                "folder"
+              ],
+              "type": "string"
+            },
+            {
+              "const": "transcript",
+              "description": "The finished transcript file. Opens the folder in Catalog Explorer (no file deep link).",
+              "type": "string"
+            },
+            {
+              "const": "notes",
+              "description": "The finished notes file. Opens the folder in Catalog Explorer (no file deep link).",
+              "type": "string"
+            }
+          ]
         }
       },
       "$schema": "https://json-schema.org/draft/2020-12/schema",

@@ -83,12 +83,12 @@ function setup(opts: {
       return () => undefined;
     },
     onJob: (_cb: (j: RecJob) => void) => () => undefined,
-  } as unknown as RecordingApi & Record<string, ReturnType<typeof vi.fn>>;
+  };
   const bus = new BrainBus();
   const sent: { event: string; payload: unknown }[] = [];
   const notify = vi.fn();
   wireRecording(bus, {
-    api,
+    api: api as unknown as RecordingApi,
     platform: 'mac',
     send: async (event, payload) => {
       sent.push({ event, payload });
@@ -142,7 +142,17 @@ describe('storage check (brain)', () => {
   it('[REC-L1] a volume the user cannot write to is a problem that Upload all can retry', async () => {
     const t = setup({
       settings: { volumePath: '/Volumes/c/s/v' },
-      rows: [{ ...local('a', 1), onDeviceOnly: undefined, errorKind: 'volume_permission' }],
+      rows: [
+        {
+          id: 'a',
+          name: 'a',
+          startedAt: 1,
+          durationS: 30,
+          status: 'failed',
+          errorKind: 'volume_permission',
+          errorStage: 'uploading',
+        },
+      ],
     });
     t.click({ action: 'recordings.ready' });
     await flush();
