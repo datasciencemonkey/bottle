@@ -139,7 +139,7 @@ async function* resumePolls(ref: ExchangeRef, cm: ConversationManager): AsyncGen
   if (target.profile !== ref.profile || target.host !== ref.host)
     throw new ResumeRefusedError('other_profile');
   // G-21b: one terminal event (#33, ADR 0084).
-  yield* oneTerminal(pollEvents(target, cm, { host: target.host }));
+  yield* oneTerminal(pollEvents(target, cm, { host: target.host, profile: target.profile }));
 }
 
 /** The Genie One ask path of `GenieOneMcpBackend.ask` (#33, ADR 0084). */
@@ -156,7 +156,7 @@ async function* askEvents(
   }
   const { profile } = binding;
   const host = deps.hostOf?.(profile) ?? '';
-  const ctx: Gl5Context = host ? { host } : {};
+  const ctx: Gl5Context = host ? { host, profile } : { profile };
   const call = deps.call ?? ((args) => ipcCall('mcp_call', args));
   const now = deps.now ?? Date.now;
   const args: Record<string, unknown> = { question: req.question };

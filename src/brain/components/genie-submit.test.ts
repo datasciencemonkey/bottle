@@ -97,6 +97,20 @@ describe('GenieOneMcpBackend.ask (#33)', () => {
     }
   });
 
+  it('[GL-5] a proxy page on the ask names the profile and the host and asks about the VPN', async () => {
+    const r = rig({ rejectAsk: () => ({ error: 'non_json_reply' }) });
+    const bridge = createGenieBridge({ call: r.call, conversations: r.cm, hostOf: () => HOST });
+    const events = await run(r, bridge.submit(request()).events);
+    expect(events).toEqual([
+      {
+        t: 'failed',
+        code: 'PROXY_PAGE',
+        userText: `${PROFILE} (${HOST}) didn't answer. Are you on the VPN?`,
+        retry: 'user',
+      },
+    ]);
+  });
+
   it('[ARC-F3] after R8 stops on RATE_LIMITED the brain starts no countdown and never asks again', async () => {
     const r = rig({ rejectAsk: () => ({ error: 'rate_limited' }) });
     const bridge = createGenieBridge({ call: r.call, conversations: r.cm, hostOf: () => HOST });
