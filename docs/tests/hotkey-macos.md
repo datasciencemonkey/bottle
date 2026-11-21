@@ -53,8 +53,9 @@ These steps check the host wiring of `src-tauri/src/hotkey_host.rs`. Use a debug
 | H7 | Turn the Call recording knob on. Click into TextEdit. Hold Right-Option for 2 s, tap R, then release. | At the R press: a `phase: "cancel"` item, then one `{event: "hotkey:record_toggle", payload: {mogId: "demo"}}` item. Nothing on release. TextEdit gets no "r" and no "®". Nothing is pasted. A recording starts. | ADR 0103 |
 | H8 | While the recording of H7 runs, hold Right-Option for 2 s and release. | The MOG shows "Recording in progress". No dictation and no paste. | ADR 0103 |
 | H9 | While the recording runs, hold Right-Option, tap R, then release. Then press Option+R in TextEdit with no hold. | The recording stops. TextEdit gets "®" for the press with no hold. | ADR 0103 |
+| H10 | Keep the Call recording knob on, with no recording running (after H9). Click into TextEdit. Hold Right-Option for 2 s, tap R, tap R again, then tap G. Then hold R for 2 s (past the key-repeat delay). Release R, then Right-Option. Then press Option+R with no hold, and Left-Option+R. | One `hotkey:record_toggle` item only, at the first R. A recording starts. TextEdit gets no "r", no "®", no "g" and no "©" while Right-Option is down. After the release, TextEdit gets "®" for Option+R and for Left-Option+R. Then stop the recording (H9). | ADR 0103, #604 |
 
-Report H1-H9 on #303 with the macOS version. Do not post key contents or other terminal output.
+Report H1-H10 on #303 with the macOS version. Do not post key contents or other terminal output.
 
 ## First-run key reads (#322)
 

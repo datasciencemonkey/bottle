@@ -1500,6 +1500,70 @@ mod tests {
         );
     }
 
+    // ---- #604: a grab through the shared engine follows the physical talk-key hold ----
+
+    /// A key seam double: it records each grab (`true`) and release (`false`).
+    #[derive(Default)]
+    struct Grabs(std::sync::Mutex<Vec<bool>>);
+    impl crate::hotkey_core::AskKeyControl for Grabs {
+        fn set_ask_key(&self, on: bool) {
+            self.0.lock().unwrap().push(on);
+        }
+        fn drain(&self) {}
+    }
+    impl Grabs {
+        fn take(&self) -> Vec<bool> {
+            std::mem::take(&mut *self.0.lock().unwrap())
+        }
+    }
+
+    #[test]
+    fn issue_604_a_grab_on_the_hook_seam_ends_at_the_talk_key_up_not_at_the_cancel() {
+        use crate::hotkey_core::HotkeyEngine;
+        const VK_R: u32 = 0x52;
+        let sink = Arc::new(RecordingSink::default());
+        let clock = crate::clock::SimClock::new();
+        let grabs = Arc::new(Grabs::default());
+        let mut engine = HotkeyEngine::with_clock(sink.clone(), Arc::new(clock.clone()))
+            .with_ask_key(grabs.clone());
+        let mut f = HookFilter::new(TalkKey::RightAlt);
+        let (_, sig) = f.on_key(KeyEvent::down(vk::RMENU), T0);
+        forward_to_engine(sig.unwrap(), &mut engine);
+        assert_eq!(grabs.take(), vec![true]);
+        clock.advance(Duration::from_millis(300));
+        // Windows has no record key: R passes and cancels as any other key (CAP-44c). The
+        // talk key is still down, so the grab stays.
+        for _ in 0..3 {
+            let (verdict, sig) = f.on_key(KeyEvent::down(VK_R), T0);
+            assert_eq!(verdict, Verdict::Pass);
+            if let Some(sig) = sig {
+                forward_to_engine(sig, &mut engine);
+            }
+        }
+        f.on_key(KeyEvent::up(VK_R), T0);
+        assert!(!engine.machine().is_held());
+        assert!(engine.machine().talk_key_physically_down());
+        assert_eq!(grabs.take(), Vec::<bool>::new());
+        let (_, sig) = f.on_key(KeyEvent::up(vk::RMENU), T0);
+        forward_to_engine(sig.unwrap(), &mut engine);
+        assert_eq!(grabs.take(), vec![false]);
+        assert!(!engine.machine().talk_key_physically_down());
+        // With no hold, R passes with no signal and nothing is grabbed.
+        assert_eq!(f.on_key(KeyEvent::down(VK_R), T0), (Verdict::Pass, None));
+        f.on_key(KeyEvent::up(VK_R), T0);
+        assert_eq!(grabs.take(), Vec::<bool>::new());
+
+        // A resume with the hold cancelled ends the physical hold too.
+        let (_, sig) = f.on_key(KeyEvent::down(vk::RMENU), T0);
+        forward_to_engine(sig.unwrap(), &mut engine);
+        let (_, sig) = f.on_key(KeyEvent::down(VK_R), T0);
+        forward_to_engine(sig.unwrap(), &mut engine);
+        assert_eq!(grabs.take(), vec![true]);
+        let sig = f.on_resume(T0).unwrap();
+        forward_to_engine(sig, &mut engine);
+        assert_eq!(grabs.take(), vec![false]);
+    }
+
     // ---- CAP-42: tooltip when an elevated window blocks the talk key ----
 
     #[test]
