@@ -2,7 +2,8 @@
  * The STT step of the capture lifecycle (#14, #52, ADR 0088): T4 SttProvider for one final
  * segment.
  *
- * - The transcript text goes on to the utterance route.
+ * - The transcript text goes on to the utterance route, after the dictation-words correction
+ *   (`shared/dictation-vocab.ts`): a paste and an ⌥G ask both get the fixed text.
  * - An `SttFailure` ("Could not transcribe. Retry", or CAP-64b "Transcription of this language
  *   is not available on this device.") shows its fixed text on the card of the MOG that owns
  *   the segment, and no text is routed. So no empty transcript ends without a message.
@@ -23,10 +24,13 @@ export function sttFailureCard(mogId: MogId, f: SttFailure): CardUpdate {
 export function createLifecycleTranscriber(
   stt: SttProvider,
   showCard: (mogId: MogId, update: CardUpdate) => Promise<unknown>,
+  /** Dictation words: fixes the text before the route, so dictation and ⌥G both get it. */
+  correct: (text: string) => string = (t) => t,
 ): (seg: SegmentRef) => Promise<string> {
   return async (seg) => {
     try {
-      return (await stt.transcribe(seg, { app: 'bottle', mog: seg.mogId, op: 'asr' })).text;
+      const { text } = await stt.transcribe(seg, { app: 'bottle', mog: seg.mogId, op: 'asr' });
+      return correct(text);
     } catch (e) {
       const f =
         e instanceof SttFailure ? e : new SttFailure('could_not_transcribe', seg.segmentId, false);

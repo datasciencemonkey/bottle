@@ -16,6 +16,7 @@ import { About } from './About';
 import { Button } from '../ui/button';
 import { CliInstallStep } from './CliInstallStep';
 import { CliSettings } from './CliSettings';
+import { DictationWords } from './DictationWords';
 import { ConnectAnotherWorkspace } from './ConnectAnotherWorkspace';
 import { ConnectWorkspace } from './ConnectWorkspace';
 import { Conversations } from './Conversations';
@@ -124,6 +125,7 @@ function SettingsArea({
   return (
     <section data-hub-view="settings" aria-label="Settings" hidden={hidden}>
       <MicPreference />
+      <DictationWords />
       <RecordingSettings model={recording} />
       <WipeSettings />
       <CliSettings />

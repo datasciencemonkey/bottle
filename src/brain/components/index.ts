@@ -69,6 +69,7 @@ import { createProfilePick } from '../profile-pick';
 import { createRequestOwner, sendOwnedCard } from '../request-owner';
 import { wireTalkNoMog } from '../talk-no-mog';
 import { createAppTalkTarget, wireTalkTarget, type TalkTarget } from '../talk-target';
+import { createDictationCorrector } from '../../shared/dictation-vocab';
 import { createLifecycleTranscriber } from '../stt-wiring';
 import { ipcUtteranceDeps } from '../utterance-route';
 import { createUtteranceHandler } from '../utterance-wiring';
@@ -472,7 +473,11 @@ export function startBrain(): Brain {
         })(),
       // #52 (ADR 0088): T4 runs the 8.3 chain over `stt_transcribe` (host route TODO(#514)).
       // A failure shows its fixed text on the owner's card, and no text is routed.
-      transcribe: createLifecycleTranscriber(components.T4, sendOwnedCard),
+      transcribe: createLifecycleTranscriber(
+        components.T4,
+        sendOwnedCard,
+        createDictationCorrector(),
+      ),
       // #59 (ADR 0053, ADR 0098): the MOG of the key-down owns the utterance (MOG-13a); a
       // dictation ends at `insert_text`; an ⌥G ask or a chip goes to T3.
       onUtterance: createUtteranceHandler({

@@ -1,3 +1,4 @@
+import { createDictationCorrector } from '../shared/dictation-vocab';
 import type { SegmentRef, Tags, Transcript } from '../shared/interfaces';
 import type { CardUpdate } from '../shared/ipc';
 import {
@@ -51,6 +52,24 @@ describe('the capture lifecycle STT step (#52)', () => {
     expect(await createLifecycleTranscriber(stt, show)(seg)).toBe('hello');
     expect(stt.seen).toEqual([{ app: 'bottle', mog: MOG, op: 'asr' }]);
     expect(show).not.toHaveBeenCalled();
+  });
+
+  it('dictation words: the corrected text goes on, so a paste and an ask get it', async () => {
+    const stt = t4({
+      segmentId: seg.segmentId,
+      text: 'Can I create a G Way N API?',
+      raw: 'Can I create a G Way N API?',
+      provider: 'local_parakeet',
+      model: 'm',
+      runtime: 'r',
+      latencyMs: 1,
+    });
+    const text = await createLifecycleTranscriber(
+      stt,
+      vi.fn(),
+      createDictationCorrector(() => ''),
+    )(seg);
+    expect(text).toBe('Can I create a Gateway API?');
   });
 
   it('[CAP-64b] [AT-40] "not available" shows on the MOG, and no text is routed', async () => {
