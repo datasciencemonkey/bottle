@@ -92,7 +92,7 @@ describe('GL-1 terminal events (G-21b)', () => {
       {
         t: 'failed',
         code: 'OFFLINE',
-        userText: userTextFor('OFFLINE', { host: HOST }),
+        userText: userTextFor('OFFLINE', { host: HOST, profile: PROFILE }),
         retry: 'user',
       },
     ]);

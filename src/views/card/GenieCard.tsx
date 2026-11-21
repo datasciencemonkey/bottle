@@ -210,6 +210,7 @@ export function GenieCard({ mogId, card, onSize, identity }: GenieCardProps) {
     [mogId],
   );
   const retry = card.chips.find((c) => c.id === `retry:${blurbId}`);
+  const changeWorkspace = card.chips.find((c) => c.id === `workspace:${blurbId}`);
   const kind = working ? 'working' : answer ? 'answer' : retry ? 'failure' : 'message';
   const text = newest?.text ?? '';
   const showMs = kind === 'failure' ? FAILURE_SHOW_MS : answerShowMs(answer?.md ?? text);
@@ -597,20 +598,39 @@ export function GenieCard({ mogId, card, onSize, identity }: GenieCardProps) {
           )}
           <footer className="genie-foot">
             {retry ? (
-              <button
-                type="button"
-                className="popup-action"
-                data-chip={retry.id}
-                onDoubleClick={(e) => e.stopPropagation()}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  // The second click of a double-click sends nothing more.
-                  if (e.detail > 1) return;
-                  void emitView(mogId, 'chip_click', { chipId: retry.id }).catch(() => undefined);
-                }}
-              >
-                {retry.label}
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="popup-action"
+                  data-chip={retry.id}
+                  onDoubleClick={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    // The second click of a double-click sends nothing more.
+                    if (e.detail > 1) return;
+                    void emitView(mogId, 'chip_click', { chipId: retry.id }).catch(() => undefined);
+                  }}
+                >
+                  {retry.label}
+                </button>
+                {changeWorkspace && (
+                  <button
+                    type="button"
+                    className="genie-toggle genie-workspace"
+                    data-chip={changeWorkspace.id}
+                    onDoubleClick={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (e.detail > 1) return;
+                      void emitView(mogId, 'chip_click', { chipId: changeWorkspace.id }).catch(
+                        () => undefined,
+                      );
+                    }}
+                  >
+                    {changeWorkspace.label}
+                  </button>
+                )}
+              </>
             ) : (
               <>
                 <button

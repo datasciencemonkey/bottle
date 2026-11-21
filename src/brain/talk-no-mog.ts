@@ -6,7 +6,9 @@
  * as the hub Start does (`window_mog_open`). Then it sends each phase of the press again on the
  * bus with the ID of that MOG. So the talk-key target, the T12 consent gate and the capture
  * lease rules apply as for any other press. With no MOG at all, the hub shows
- * "Create a MOG to start" and no capture starts.
+ * "Create a MOG to start" and no capture starts. A hub that is closed (Bottle keeps running)
+ * opens first on the MOGs area (#568), so the press always has a visible result. This needs no
+ * contract change: the brain already shows the hub with the Tauri window API (`hub-window.ts`).
  *
  * Only a key-down starts a MOG: the key press is the user action. An `up`, `cancel` or
  * `double_tap` goes to the MOG that the key-down of its press started, or nowhere.
@@ -34,6 +36,8 @@ export interface TalkNoMogDeps {
   openWindow: (mogId: MogId) => Promise<unknown>;
   /** The last-used MOG of this run, open or closed (`TalkTarget.lastUsed`). */
   lastUsed: () => MogId | undefined;
+  /** Show and focus the hub window (`showHub`). Called before a notice, so the user sees it. */
+  showHub: () => unknown;
   /** Send the hub list again, with `notice` when there is one (`sendHubSnapshot`). */
   notify: (notice?: HubNoticeLine) => unknown;
 }
@@ -44,7 +48,13 @@ const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object
 export function wireTalkNoMog(bus: BrainBus, deps: TalkNoMogDeps): () => void {
   const notify = (notice?: HubNoticeLine) => {
     try {
-      void Promise.resolve(deps.notify(notice)).catch(() => undefined);
+      // #568: a notice is only useful if the hub is on screen. The hub switches to its MOGs area
+      // when a list with a notice arrives.
+      const shown =
+        notice === undefined
+          ? Promise.resolve()
+          : Promise.resolve(deps.showHub()).catch(() => undefined);
+      void shown.then(() => deps.notify(notice)).catch(() => undefined);
     } catch {
       // No hub: nothing to show.
     }
@@ -64,7 +74,6 @@ export function wireTalkNoMog(bus: BrainBus, deps: TalkNoMogDeps): () => void {
     }
     const first = mogs[0];
     if (first === undefined) {
-      // TODO(#568): with no hub window open, nobody sees this notice.
       notify({ kind: 'info', text: NO_MOG_TEXT });
       return undefined;
     }

@@ -21,6 +21,7 @@ import {
   sendGenieAsk,
   toFailedEvent,
   userTextFor,
+  WORKSPACE_CODES,
   type GenieErrorInput,
 } from './genie-errors';
 
@@ -408,5 +409,50 @@ describe('GenieBridge.mapError (4.7) uses the GL-5 matrix', () => {
     expect(b.mapError({ httpStatus: 404 }).userText).toBe(
       "Genie One isn't available in this workspace.",
     );
+  });
+});
+
+describe('workspace failure texts name the workspace and lead with the VPN', () => {
+  const named = { host: 'logfood.cloud.databricks.com', profile: 'logfood' };
+
+  it('[GL-5] PROXY_PAGE names the profile and the host and asks about the VPN first', () => {
+    expect(userTextFor('PROXY_PAGE', named)).toBe(
+      "logfood (logfood.cloud.databricks.com) didn't answer. Are you on the VPN?",
+    );
+  });
+
+  it('[GL-5] NETWORK_BLOCKED and OFFLINE name the workspace', () => {
+    expect(userTextFor('NETWORK_BLOCKED', named)).toBe(
+      'logfood (logfood.cloud.databricks.com) refused the connection. Are you on the VPN?',
+    );
+    expect(userTextFor('OFFLINE', named)).toBe(
+      'Cannot reach logfood (logfood.cloud.databricks.com). Are you on the VPN or online?',
+    );
+  });
+
+  it('[GL-5] with only a host or only a profile, the text uses what it has', () => {
+    expect(userTextFor('PROXY_PAGE', { host: HOST })).toBe(
+      `${HOST} didn't answer. Are you on the VPN?`,
+    );
+    expect(userTextFor('PROXY_PAGE', { profile: 'logfood' })).toBe(
+      "logfood didn't answer. Are you on the VPN?",
+    );
+    expect(userTextFor('PROXY_PAGE')).toBe("This workspace didn't answer. Are you on the VPN?");
+  });
+
+  it('[W-14] a profile name that is not plain never goes into a text', () => {
+    const t = userTextFor('PROXY_PAGE', { profile: 'bad <b>name</b> https://evil.test' });
+    expect(t).toBe("This workspace didn't answer. Are you on the VPN?");
+  });
+
+  it('[GL-5] a transport proxy page classifies to the named text and keeps Try again', () => {
+    const r = classifyTransportCode('non_json_reply', named);
+    expect(r.code).toBe('PROXY_PAGE');
+    expect(r.userText).toBe(userTextFor('PROXY_PAGE', named));
+    expect(r.actions).toEqual(['retry']);
+  });
+
+  it('[GL-5] only the workspace codes offer Change workspace', () => {
+    expect([...WORKSPACE_CODES].sort()).toEqual(['NETWORK_BLOCKED', 'OFFLINE', 'PROXY_PAGE']);
   });
 });

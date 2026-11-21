@@ -240,6 +240,7 @@ export function startBrain(): Brain {
       manager: components.T1,
       lastUsed: () => talkTarget.lastUsed(),
       openWindow: (mogId) => call('window_mog_open', { mogId }),
+      showHub: () => showHub(),
       notify: (notice) => sendHubSnapshot(components.T1, notice),
     });
     // MOG-13a (#73): the MOG that captures an utterance owns its request and its answer.
@@ -297,6 +298,12 @@ export function startBrain(): Brain {
           captureMood.ask(mogId, phase);
         },
         showCard: (mogId) => call('window_card_show', { mogId }),
+        // The card's "Change workspace…": the same path as the right-click "Change home
+        // workspace…": show the hub on that MOG's Edit form.
+        changeWorkspace: (mogId) => {
+          void showHub();
+          hubMogs.openEdit(mogId);
+        },
         hostOf: async (profile) => (await ipcListProfiles()).find((p) => p.name === profile)?.host,
       }),
       // #557: an ask or a press with no home profile opens the picker; the user picks, then the

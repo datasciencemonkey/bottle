@@ -35,6 +35,8 @@ export interface GenieErrorInput {
 /** What the mapper may put in a text. Only values that Bottle owns (the profile host). */
 export interface Gl5Context {
   host?: string;
+  /** The profile name (the workspace the user knows it by). Shown only if it is a plain name. */
+  profile?: string;
 }
 
 /** The card actions of the Appendix E failure action map. */
@@ -273,6 +275,24 @@ function hostText(ctx: Gl5Context): string | undefined {
   return h !== undefined && h.length <= 253 && PLAIN_HOST.test(h) ? h : undefined;
 }
 
+const PLAIN_PROFILE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+/** The workspace as the user knows it: "logfood (host)", "logfood", the host, or undefined. */
+function workspaceLabel(ctx: Gl5Context): string | undefined {
+  const host = hostText(ctx);
+  const p = ctx.profile;
+  const name = p !== undefined && PLAIN_PROFILE.test(p) ? p : undefined;
+  if (name !== undefined && host !== undefined) return name === host ? host : `${name} (${host})`;
+  return name ?? host;
+}
+
+/** The codes that point at the MOG's home workspace: the card offers "Change workspace…". */
+export const WORKSPACE_CODES: ReadonlySet<BackendErrorCode> = new Set<BackendErrorCode>([
+  'PROXY_PAGE',
+  'NETWORK_BLOCKED',
+  'OFFLINE',
+]);
+
 /** The fixed user text of a code (Appendix E, Table W-ERR, the plugin texts). */
 export function userTextFor(
   code: BackendErrorCode,
@@ -281,11 +301,12 @@ export function userTextFor(
 ): string {
   const host = hostText(ctx);
   const at = host ?? 'this workspace';
+  const ws = workspaceLabel(ctx);
   switch (code) {
     case 'AUTH_EXPIRED':
       return `Sign in to ${host ?? 'Databricks'} to ask Genie.`;
     case 'NETWORK_BLOCKED':
-      return `The workspace ${at} accepts connections only from some networks. Connect to the VPN if it needs one.`;
+      return `${ws ?? 'This workspace'} refused the connection. Are you on the VPN?`;
     case 'NO_GRANT':
       return `You cannot use Genie in ${at}. Ask a workspace admin for access.`;
     case 'GENIE_ONE_OFF':
@@ -300,9 +321,9 @@ export function userTextFor(
         ? `Genie busy, retrying in ${Math.min(Math.ceil(retryAfterS), RETRY_AFTER_TEXT_CAP_S)} s`
         : 'Genie busy, retrying soon';
     case 'PROXY_PAGE':
-      return 'Genie sent a page that is not an answer. Check the VPN, the proxy or the sign-in.';
+      return `${ws ?? 'This workspace'} didn't answer. Are you on the VPN?`;
     case 'OFFLINE':
-      return `Cannot reach ${at}. Check the network connection.`;
+      return `Cannot reach ${ws ?? 'this workspace'}. Are you on the VPN or online?`;
     case 'ASK_UNCERTAIN':
       return 'I do not know if Genie got your question.';
     case 'TOOL_BLOCKED':

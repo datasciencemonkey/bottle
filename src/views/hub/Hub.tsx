@@ -1,6 +1,9 @@
 /** V1 hub view (thin): lists the MOGs the brain reports and sends selections with view_emit. */
 import { PanelLeftIcon } from 'lucide-react';
-import { useCallback, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useState, type CSSProperties } from 'react';
+import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { HUB_MOGS_EVENT, asHubMogList } from '../../shared/hub-mogs';
 import type { MogId } from '../../shared/interfaces';
 import type { HubRecording } from '../../shared/recording-view';
 import { DomainPicker } from '../DomainPicker';
@@ -154,6 +157,27 @@ export function Hub() {
     },
     [sidebar],
   );
+  // #568 and "Change workspace…": a list push that carries a notice or an Edit ask (a talk key
+  // with no MOG, a card's "Change workspace…") shows the MOGs area, where both live.
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    let gone = false;
+    void listen<unknown>(
+      HUB_MOGS_EVENT,
+      (e) => {
+        const l = asHubMogList(e.payload);
+        if (l && (l.notice !== undefined || l.openEdit !== undefined)) setView('mogs');
+      },
+      { target: getCurrentWindow().label },
+    ).then((u) => {
+      if (gone) u();
+      else off = u;
+    });
+    return () => {
+      gone = true;
+      off?.();
+    };
+  }, []);
   const recording = useHubRecording();
   const openRecordingSettings = useCallback(() => {
     pickView('settings');

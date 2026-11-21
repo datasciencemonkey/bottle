@@ -67,6 +67,23 @@ const failed = {
   chips: [{ id: `retry:${G}`, label: 'Try again' }],
 };
 
+const workspaceFailed = {
+  ...failed,
+  blurbs: [
+    {
+      id: G,
+      text: "logfood (logfood.cloud.databricks.com) didn't answer. Are you on the VPN?",
+      pinned: false,
+      completed: true,
+    },
+    ask,
+  ],
+  chips: [
+    { id: `retry:${G}`, label: 'Try again' },
+    { id: `workspace:${G}`, label: 'Change workspace…' },
+  ],
+};
+
 let roots: Root[] = [];
 async function mount() {
   tauri.label = `card-${ID}`;
@@ -400,6 +417,35 @@ describe('Genie card (#573)', () => {
     await tauri.emitTo(`card-${ID}`, 'card:dismiss', {});
     await advance(DISMISS_FADE_MS);
     expect(done()).toBe(1);
+  });
+
+  it('[GL-5] [W-07h] a workspace failure keeps one button (Try again) and adds a text link', async () => {
+    const el = await mount();
+    await tauri.emitTo(`card-${ID}`, 'card:update', workspaceFailed);
+    const c = el.querySelector('[data-genie="failure"]');
+    expect(c?.querySelector('[role="alert"]')?.textContent).toContain('Are you on the VPN?');
+    const foot = c?.querySelector('footer') as Element;
+    // One primary action: a single `popup-action` button. The link is a quiet text control.
+    expect(foot.querySelectorAll('button.popup-action')).toHaveLength(1);
+    const link = foot.querySelector(`[data-chip="workspace:${G}"]`) as HTMLElement;
+    expect(link.textContent).toBe('Change workspace…');
+    expect(link.classList.contains('popup-action')).toBe(false);
+    await act(async () => link.click());
+    expect(inputEmits()).toContainEqual({
+      mogId: ID,
+      kind: 'chip_click',
+      payload: { chipId: `workspace:${G}` },
+    });
+    // It does not open the hub Conversations (no body click).
+    expect(clicks()).toEqual([]);
+  });
+
+  it('[GL-5] a failure with no workspace chip shows no Change workspace link', async () => {
+    const el = await mount();
+    await tauri.emitTo(`card-${ID}`, 'card:update', failed);
+    expect(el.querySelector('[data-genie="failure"]')?.textContent).not.toContain(
+      'Change workspace',
+    );
   });
 
   it('[GL-5] a failure shows the fixed text plainly with Try again, and stays 8 s', async () => {

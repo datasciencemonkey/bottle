@@ -13,7 +13,12 @@ import type { SectionInput } from './card-sections';
 import { createGenieBridge } from './components/genie-bridge';
 import { GIVE_UP_MS } from './components/poll-actor';
 import { ASKING_GENIE } from '../shared/genie-status';
-import { GENIE_DATA_FLOW_TEXT, TRY_AGAIN_LABEL, createGenieDirectSend } from './genie-direct';
+import {
+  CHANGE_WORKSPACE_LABEL,
+  GENIE_DATA_FLOW_TEXT,
+  TRY_AGAIN_LABEL,
+  createGenieDirectSend,
+} from './genie-direct';
 import type { GenieEnd } from './genie-history';
 
 const OP = '00000000-0000-4000-8000-00000000c573';
@@ -403,6 +408,46 @@ describe('genie direct send: the MOG shows the work and the answer (#573)', () =
     ]);
     // The control goes with the click, so a second click sends nothing.
     expect(c.controls.has('retry:genie:op-1')).toBe(false);
+  });
+
+  it('[GL-5] a workspace failure adds a Change workspace link; it opens that MOG and keeps the request', async () => {
+    const c = fakeCard();
+    const changed: string[] = [];
+    const b = fakeBridge([{ ...failed, code: 'PROXY_PAGE', userText: 'x' }]);
+    const send = createGenieDirectSend({
+      genie: b.bridge,
+      cardFor: () => c.card,
+      newOpId: () => 'op-1',
+      showCard: () => undefined,
+      changeWorkspace: (m) => void changed.push(m),
+    });
+    await send(turn());
+    const ctl = c.controls.get('retry:genie:op-1');
+    expect(ctl?.list).toEqual([
+      { id: 'retry:genie:op-1', label: TRY_AGAIN_LABEL },
+      { id: 'workspace:genie:op-1', label: CHANGE_WORKSPACE_LABEL },
+    ]);
+    ctl?.onClick?.('workspace:genie:op-1');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(changed).toEqual([MOG]);
+    // It sends nothing again and Try again stays.
+    expect(b.reqs).toHaveLength(1);
+    expect(c.controls.has('retry:genie:op-1')).toBe(true);
+  });
+
+  it('[GL-5] a failure that is not about the workspace has no Change workspace link', async () => {
+    const c = fakeCard();
+    const send = createGenieDirectSend({
+      genie: fakeBridge([failed]).bridge,
+      cardFor: () => c.card,
+      newOpId: () => 'op-1',
+      showCard: () => undefined,
+      changeWorkspace: () => undefined,
+    });
+    await send(turn());
+    expect(c.controls.get('retry:genie:op-1')?.list).toEqual([
+      { id: 'retry:genie:op-1', label: TRY_AGAIN_LABEL },
+    ]);
   });
 
   it('[G-17b] [#573] the live reply shape (fake values): stage lines, then the markdown answer', async () => {
