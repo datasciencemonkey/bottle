@@ -7,7 +7,10 @@
 //!
 //! The check is the 7 outbound patterns of 4.6 rule 7 ([`crate::token_guard::contains_secret`])
 //! plus the memory patterns below. It runs on the raw text and on a folded form (NFKC, no
-//! zero-width code points), so a full-width or zero-width form of a token is found too.
+//! default-ignorable code points), so a full-width or zero-width form of a token is found too.
+//!
+//! The check is best effort against a hostile brain: it finds the known credential shapes, not
+//! every way to spell a secret (ADR 0113).
 
 use std::sync::OnceLock;
 
@@ -56,17 +59,25 @@ fn extra() -> &'static [Regex] {
     })
 }
 
-fn is_zero_width(c: char) -> bool {
-    matches!(c, '\u{200b}'..='\u{200f}' | '\u{2060}'..='\u{2064}' | '\u{feff}' | '\u{00ad}')
+/// The Unicode `Default_Ignorable_Code_Point` set (DerivedCoreProperties): code points that
+/// render as nothing, such as the soft hyphen, the joiners, the bidi marks, the variation
+/// selectors and the tag characters. A token with one of them inside still is a token.
+fn is_ignorable(c: char) -> bool {
+    matches!(c,
+        '\u{00ad}' | '\u{034f}' | '\u{061c}' | '\u{115f}'..='\u{1160}' | '\u{17b4}'..='\u{17b5}'
+        | '\u{180b}'..='\u{180f}' | '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}'
+        | '\u{2060}'..='\u{206f}' | '\u{3164}' | '\u{fe00}'..='\u{fe0f}' | '\u{feff}'
+        | '\u{ffa0}' | '\u{fff0}'..='\u{fff8}' | '\u{1bca0}'..='\u{1bca3}'
+        | '\u{1d173}'..='\u{1d17a}' | '\u{e0000}'..='\u{e0fff}')
 }
 
-/// NFKC, then drop zero-width code points. Case and white space stay: the token patterns are
+/// NFKC, then drop the default-ignorable code points. Case and white space stay: the token patterns are
 /// case-sensitive.
 fn fold(text: &str) -> String {
     icu_normalizer::ComposingNormalizerBorrowed::new_nfkc()
         .normalize(text)
         .chars()
-        .filter(|c| !is_zero_width(*c))
+        .filter(|c| !is_ignorable(*c))
         .collect()
 }
 
@@ -162,6 +173,12 @@ mod tests {
         assert!(has_secret(&full_width));
         let zw = fake_dapi().replacen("dapi", "da\u{200b}pi", 1);
         assert!(has_secret(&zw));
+        // Variation selectors, the combining grapheme joiner, the Mongolian vowel separator and
+        // the tag characters are ignorable too (security review L1).
+        for mark in ['\u{fe0f}', '\u{034f}', '\u{180e}', '\u{e0041}', '\u{2066}'] {
+            let t = fake_dapi().replacen("dapi", &format!("da{mark}pi"), 1);
+            assert!(has_secret(&t), "{:04x}", mark as u32);
+        }
     }
 
     #[test]

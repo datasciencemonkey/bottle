@@ -81,6 +81,15 @@ pub enum ParamType {
     /// Free text for an FTS5 `MATCH`. The core keeps only its words and quotes each one, so the
     /// text can never be FTS5 syntax (MEM-34b). At least one word is required.
     FtsTerms,
+    /// A list of at most `max_items` strings, each of at most `max_chars` characters, stored as
+    /// JSON text. Any other shape (an object, a nested list, a number) is refused, so each tag
+    /// reaches the secret check and the quarantine as a string.
+    Tags {
+        /// The most items.
+        max_items: usize,
+        /// The most characters of one item.
+        max_chars: usize,
+    },
     /// Set by the core, never by the caller: 1 if the text params named in `of` must be
     /// quarantined (SEC-24a, [`super::quarantine::is_quarantined`]), else 0. A caller that sends
     /// this key is refused, so no item write can skip the check (#114, ADR 0089).
@@ -102,13 +111,10 @@ pub enum ParamType {
         /// The names of the text params, in order.
         of: &'static [&'static str],
     },
-    /// Set by the core, never by the caller (ADR 0112): the local calendar day `YYYY-MM-DD` of
-    /// the time param `of`, at the device offset (or the offset of [`with_day_offset`]). So the
-    /// brain cannot file an item under another day.
-    Day {
-        /// The name of the time param (epoch ms).
-        of: &'static str,
-    },
+    /// Set by the core, never by the caller (ADR 0112): today's local calendar day
+    /// `YYYY-MM-DD` on the core's own clock and device offset (or those of [`with_day_clock`]).
+    /// It never reads a caller's time, so the brain cannot file an item under another day.
+    Day,
 }
 
 impl ParamType {
@@ -119,43 +125,57 @@ impl ParamType {
             ParamType::Quarantine { .. }
                 | ParamType::Secret { .. }
                 | ParamType::Slug { .. }
-                | ParamType::Day { .. }
+                | ParamType::Day
         )
     }
 }
 
 thread_local! {
-    /// The offset of [`with_day_offset`] on this thread, if any.
-    static DAY_OFFSET: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
+    /// The `(offset east of UTC in seconds, now in epoch ms)` of [`with_day_clock`] on this
+    /// thread, if any.
+    static DAY_CLOCK: std::cell::Cell<Option<(i32, i64)>> = const { std::cell::Cell::new(None) };
 }
 
-/// Run `f` with the `Day` params computed at `offset_s` seconds east of UTC instead of the
-/// device offset. For tests and for a host that owns its own clock; it holds for this thread only.
-pub fn with_day_offset<T>(offset_s: i32, f: impl FnOnce() -> T) -> T {
-    let before = DAY_OFFSET.with(|c| c.replace(Some(offset_s)));
-    let out = f();
-    DAY_OFFSET.with(|c| c.set(before));
-    out
+/// Restores the clock of the thread when it drops, also on a panic.
+struct DayClockGuard(Option<(i32, i64)>);
+
+impl Drop for DayClockGuard {
+    fn drop(&mut self) {
+        DAY_CLOCK.with(|c| c.set(self.0));
+    }
+}
+
+/// Run `f` with the `Day` params computed at `now_ms` and `offset_s` seconds east of UTC,
+/// instead of the wall clock and the device offset. For tests; it holds for this thread only,
+/// and the old clock comes back when `f` returns or panics.
+pub fn with_day_clock<T>(offset_s: i32, now_ms: i64, f: impl FnOnce() -> T) -> T {
+    let _guard = DayClockGuard(DAY_CLOCK.with(|c| c.replace(Some((offset_s, now_ms)))));
+    f()
+}
+
+fn wall_now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+}
+
+/// The core clock of a `Day` param: `(offset east of UTC in seconds, now in epoch ms)`.
+fn day_clock() -> (i32, i64) {
+    use chrono::{Offset, TimeZone};
+    DAY_CLOCK.with(std::cell::Cell::get).unwrap_or_else(|| {
+        let now = wall_now_ms();
+        let offset = chrono::Local
+            .timestamp_millis_opt(now)
+            .single()
+            .map_or(0, |t| t.offset().fix().local_minus_utc());
+        (offset, now)
+    })
 }
 
 /// The offset east of UTC, in seconds, that a `Day` param uses now: for the times of day in a
 /// rendered note.
 pub fn current_day_offset() -> i32 {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
-    day_offset_at(now)
-}
-
-/// The offset east of UTC, in seconds, that a `Day` param uses at `ms`.
-fn day_offset_at(ms: i64) -> i32 {
-    use chrono::{Offset, TimeZone};
-    DAY_OFFSET.with(std::cell::Cell::get).unwrap_or_else(|| {
-        chrono::Local
-            .timestamp_millis_opt(ms)
-            .single()
-            .map_or(0, |t| t.offset().fix().local_minus_utc())
-    })
+    day_clock().0
 }
 
 /// One named parameter.
@@ -381,10 +401,21 @@ const SOURCE_UTTERANCE_IDS: Param = opt("sourceUtteranceIds", json(65_536));
 const QUARANTINED: Param = opt("quarantined", BOOL);
 /// The three text fields of a write, as the core checks them (ADR 0113).
 const WRITE_TEXTS: &[&str] = &["title", "text", "body"];
-const TEXT_QUARANTINE: Param = req("textQuarantine", ParamType::Quarantine { of: WRITE_TEXTS });
-const SECRET_CHECK: Param = req("secretCheck", ParamType::Secret { of: WRITE_TEXTS });
+/// The tags of a memory: at most 8, each at most 64 characters (migration 0003 caps the count).
+const TAGS: ParamType = ParamType::Tags {
+    max_items: 8,
+    max_chars: 64,
+};
+/// The fields that the secret check and the quarantine read: the texts and each tag string
+/// (security review M2).
+const CHECKED_TEXTS: &[&str] = &["title", "text", "body", "tags"];
+const TEXT_QUARANTINE: Param = req(
+    "textQuarantine",
+    ParamType::Quarantine { of: CHECKED_TEXTS },
+);
+const SECRET_CHECK: Param = req("secretCheck", ParamType::Secret { of: CHECKED_TEXTS });
 const SLUG: Param = req("slug", ParamType::Slug { of: WRITE_TEXTS });
-const NOTE_DAY: Param = req("noteDay", ParamType::Day { of: "seenAt" });
+const NOTE_DAY: Param = req("noteDay", ParamType::Day);
 
 /// Rust-only (#102 note, MEM-10a): the brain writes an item only with `mem.item.write`, which runs
 /// this step and the embed job in one transaction. So no brain item write skips the outbox.
@@ -401,7 +432,7 @@ const ITEM_UPSERT: Stmt = Stmt {
           pinned, sensitivity, source_session_ids, source_utterance_ids, workspace_host, \
           workspace_id, space_id, source_exchange_id, first_seen_at, last_seen_at, row_hlc, \
           origin_device_id, title, body_md, tags, origin, layer, note_day, slug, rating, \
-          reviewed_at, profile) \
+          reviewed_at, profile, updated_at) \
           SELECT :itemId, :mogId, :itemType, coalesce(:text, substr(:body, 1, 600)), :source, \
           :confidence, \
           CASE WHEN max(:textQuarantine, coalesce(:quarantined, 0)) = 1 \
@@ -413,19 +444,28 @@ const ITEM_UPSERT: Stmt = Stmt {
           coalesce(:body, ''), coalesce(:tags, '[]'), \
           coalesce(:origin, CASE WHEN :source = 'agent' THEN 'agent' ELSE 'legacy' END), \
           'daily', :noteDay, \
-          CASE WHEN EXISTS (SELECT 1 FROM memory_item c WHERE c.mog_id = :mogId \
+          CASE WHEN NOT EXISTS (SELECT 1 FROM memory_item c WHERE c.mog_id = :mogId \
           AND c.layer = 'daily' AND c.note_day = :noteDay AND c.slug = :slug \
-          AND c.item_id <> :itemId AND c.deleted_at IS NULL) \
-          THEN :slug || '-' || lower(substr(replace(:itemId, '-', ''), 1, 6)) ELSE :slug END, \
-          coalesce(:pinned, 0), CASE WHEN coalesce(:pinned, 0) = 1 THEN :seenAt END, :profile \
+          AND c.item_id <> :itemId AND c.deleted_at IS NULL) THEN :slug \
+          WHEN NOT EXISTS (SELECT 1 FROM memory_item d WHERE d.mog_id = :mogId \
+          AND d.layer = 'daily' AND d.note_day = :noteDay \
+          AND d.slug = :slug || '-' || lower(substr(replace(:itemId, '-', ''), 1, 6)) \
+          AND d.item_id <> :itemId AND d.deleted_at IS NULL) \
+          THEN :slug || '-' || lower(substr(replace(:itemId, '-', ''), 1, 6)) \
+          ELSE rtrim(substr(:slug, 1, 39), '-') || '-' || lower(replace(:itemId, '-', '')) END, \
+          coalesce(:pinned, 0), CASE WHEN coalesce(:pinned, 0) = 1 THEN :seenAt END, :profile, \
+          CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) \
           FROM mog WHERE mog_id = :mogId AND :secretCheck = 0 \
           AND coalesce(:text, :body) IS NOT NULL \
           ON CONFLICT (item_id) DO UPDATE SET \
-          text = CASE WHEN max(memory_item.pinned, memory_item.reviewed_at IS NOT NULL) = 1 \
+          text = CASE WHEN max(memory_item.pinned, memory_item.reviewed_at IS NOT NULL, \
+          memory_item.status = 'quarantined') = 1 \
           THEN memory_item.text ELSE excluded.text END, \
-          title = CASE WHEN max(memory_item.pinned, memory_item.reviewed_at IS NOT NULL) = 1 \
+          title = CASE WHEN max(memory_item.pinned, memory_item.reviewed_at IS NOT NULL, \
+          memory_item.status = 'quarantined') = 1 \
           THEN memory_item.title ELSE excluded.title END, \
-          body_md = CASE WHEN max(memory_item.pinned, memory_item.reviewed_at IS NOT NULL) = 1 \
+          body_md = CASE WHEN max(memory_item.pinned, memory_item.reviewed_at IS NOT NULL, \
+          memory_item.status = 'quarantined') = 1 \
           THEN memory_item.body_md ELSE excluded.body_md END, \
           confidence = max(memory_item.confidence, excluded.confidence), \
           pinned = max(memory_item.pinned, excluded.pinned), \
@@ -443,7 +483,7 @@ const ITEM_UPSERT: Stmt = Stmt {
           excluded.source_exchange_id), \
           last_seen_at = max(memory_item.last_seen_at, excluded.last_seen_at), \
           mention_count = memory_item.mention_count + 1, row_hlc = excluded.row_hlc, \
-          updated_at = CAST(strftime('%s','now') AS INTEGER) * 1000 \
+          updated_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) \
           WHERE memory_item.mog_id = excluded.mog_id",
     params: &[
         req("itemId", UUID),
@@ -452,7 +492,7 @@ const ITEM_UPSERT: Stmt = Stmt {
         opt("text", text(600)),
         opt("title", text(80)),
         opt("body", text(4_000)),
-        opt("tags", json(1_024)),
+        opt("tags", TAGS),
         opt("origin", CODE),
         opt("profile", text(128)),
         req("source", CODE),
@@ -542,19 +582,32 @@ const MOG_NAME: Stmt = Stmt {
     access: Access::Core,
 };
 
+/// The wall clock of the Rate ticket's mint. `exec_ticketed` sets it from the redeemed ticket;
+/// a caller that sends it is refused (security review M1).
+const MINTED_AT: Param = req("mintedAt", MS);
+
 /// Rust-only, only with a hub Rate ticket (ADR 0113): a thumbs up. Rating 1, reviewed now,
 /// confidence at least 0.9, and the item in use: a stale item and a quarantined item become
 /// `active`; a quarantined one gets `released_at` (SEC-24c). SQLite reads every `SET`
-/// expression from the old row, so `released_at` sees the old status.
+/// expression from the old row, so `released_at` sees the old status. Only a row that no write
+/// touched after the click changes (`updated_at < mintedAt`, all writers set `updated_at` in ms
+/// on the SQLite clock), so the brain cannot swap the text between the click and the release.
 const ITEM_RATE: Stmt = Stmt {
     id: "mem.item.rate_row",
     sql: "UPDATE memory_item SET rating = 1, reviewed_at = :now, \
           confidence = max(confidence, 0.9), \
           released_at = CASE WHEN status = 'quarantined' THEN :now ELSE released_at END, \
-          stale_at = NULL, status = 'active', row_hlc = :rowHlc, updated_at = :now \
+          stale_at = NULL, status = 'active', row_hlc = :rowHlc, \
+          updated_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) \
           WHERE mog_id = :mogId AND item_id = :itemId AND deleted_at IS NULL \
-          AND status IN ('active','stale','quarantined')",
-    params: &[MOG_ID, req("itemId", UUID), req("now", MS), ROW_HLC],
+          AND status IN ('active','stale','quarantined') AND updated_at < :mintedAt",
+    params: &[
+        MOG_ID,
+        req("itemId", UUID),
+        req("now", MS),
+        ROW_HLC,
+        MINTED_AT,
+    ],
     kind: Kind::Write,
     access: Access::Core,
 };
@@ -572,17 +625,23 @@ const ITEM_EDIT: Stmt = Stmt {
     id: "mem.item.edit_row",
     sql: "UPDATE memory_item SET item_type = :itemType, title = :title, body_md = :body, \
           text = substr(:body, 1, 600), \
-          slug = CASE WHEN EXISTS (SELECT 1 FROM memory_item c WHERE c.mog_id = :mogId \
+          slug = CASE WHEN NOT EXISTS (SELECT 1 FROM memory_item c WHERE c.mog_id = :mogId \
           AND c.layer = memory_item.layer \
           AND coalesce(c.note_day, '') = coalesce(memory_item.note_day, '') \
-          AND c.slug = :slug AND c.item_id <> :itemId AND c.deleted_at IS NULL) \
-          THEN :slug || '-' || lower(substr(replace(:itemId, '-', ''), 1, 6)) ELSE :slug END, \
+          AND c.slug = :slug AND c.item_id <> :itemId AND c.deleted_at IS NULL) THEN :slug \
+          WHEN NOT EXISTS (SELECT 1 FROM memory_item d WHERE d.mog_id = :mogId \
+          AND d.layer = memory_item.layer \
+          AND coalesce(d.note_day, '') = coalesce(memory_item.note_day, '') \
+          AND d.slug = :slug || '-' || lower(substr(replace(:itemId, '-', ''), 1, 6)) \
+          AND d.item_id <> :itemId AND d.deleted_at IS NULL) \
+          THEN :slug || '-' || lower(substr(replace(:itemId, '-', ''), 1, 6)) \
+          ELSE rtrim(substr(:slug, 1, 39), '-') || '-' || lower(replace(:itemId, '-', '')) END, \
           status = CASE WHEN :textQuarantine = 1 THEN 'quarantined' ELSE 'active' END, \
           released_at = NULL, stale_at = NULL, rating = 1, reviewed_at = :now, \
           confidence = max(confidence, 0.9), \
           source = CASE WHEN source = 'you' THEN 'you' ELSE 'confirmed' END, \
           embedding = NULL, embedding_model = NULL, embedding_dims = NULL, embedded_at = NULL, \
-          row_hlc = :rowHlc, updated_at = :now \
+          row_hlc = :rowHlc, updated_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) \
           WHERE mog_id = :mogId AND item_id = :itemId AND deleted_at IS NULL \
           AND status IN ('active','stale','quarantined') AND :secretCheck = 0 \
           AND trim(:title) <> '' AND trim(:body) <> '' AND :itemType <> 'preference' \
@@ -1042,7 +1101,7 @@ const ITEM_WRITE: Group = Group {
         opt("text", text(600)),
         opt("title", text(80)),
         opt("body", text(4_000)),
-        opt("tags", json(1_024)),
+        opt("tags", TAGS),
         opt("origin", CODE),
         opt("profile", text(128)),
         req("source", CODE),
@@ -1073,7 +1132,13 @@ const ITEM_WRITE: Group = Group {
 const ITEM_RATE_GROUP: Group = Group {
     id: "mem.item.rate",
     steps: &[&ITEM_RATE, &OUTBOX_ENQUEUE_ITEM_EMBED],
-    params: &[MOG_ID, req("itemId", UUID), req("now", MS), ROW_HLC],
+    params: &[
+        MOG_ID,
+        req("itemId", UUID),
+        req("now", MS),
+        ROW_HLC,
+        MINTED_AT,
+    ],
     access: Access::Core,
 };
 
@@ -1536,11 +1601,25 @@ fn bind_value(ty: ParamType, v: &Value) -> CoreResult<SqlValue> {
             SqlValue::Text(s)
         }
         ParamType::FtsTerms => SqlValue::Text(fts_terms(&text(v)?).ok_or_else(bad)?),
+        ParamType::Tags {
+            max_items,
+            max_chars,
+        } => {
+            let items = v.as_array().ok_or_else(bad)?;
+            if items.len() > max_items
+                || !items
+                    .iter()
+                    .all(|t| t.as_str().is_some_and(|t| t.chars().count() <= max_chars))
+            {
+                return Err(bad());
+            }
+            SqlValue::Text(serde_json::to_string(v).map_err(|_| bad())?)
+        }
         // Never bound from a caller value: `check_params` computes it.
         ParamType::Quarantine { .. }
         | ParamType::Secret { .. }
         | ParamType::Slug { .. }
-        | ParamType::Day { .. } => return Err(bad()),
+        | ParamType::Day => return Err(bad()),
     })
 }
 
@@ -1563,8 +1642,12 @@ pub fn validate_params(
 /// The string values of the params named in `of`, in order. A missing or non-string one is left
 /// out (its own type check refuses a non-string value).
 fn texts<'a>(obj: &'a Map<String, Value>, of: &'a [&'a str]) -> impl Iterator<Item = &'a str> {
-    of.iter()
-        .filter_map(|k| obj.get(*k).and_then(Value::as_str))
+    // A list param (`tags`) gives each of its strings.
+    of.iter().filter_map(|k| obj.get(*k)).flat_map(|v| match v {
+        Value::String(s) => vec![s.as_str()],
+        Value::Array(a) => a.iter().filter_map(Value::as_str).collect(),
+        _ => Vec::new(),
+    })
 }
 
 /// Check `params` against `decl` with no `mogId` rule: for the device-wide [`CONSENT`]
@@ -1587,7 +1670,12 @@ pub fn check_params(decl: &[Param], params: &Value) -> CoreResult<Vec<(&'static 
                 ))
             }
             (ParamType::Secret { of }, None) => {
-                if super::secret_check::any_secret(texts(obj, of)) {
+                // Each field, and the fields run together: a token split across two fields is
+                // found too (security review L1).
+                let joined: String = texts(obj, of).collect();
+                if super::secret_check::any_secret(texts(obj, of))
+                    || super::secret_check::has_secret(&joined)
+                {
                     Err(CoreError::SecretRefused { component: ID })
                 } else {
                     Ok((p.name, SqlValue::Integer(0)))
@@ -1597,9 +1685,9 @@ pub fn check_params(decl: &[Param], params: &Value) -> CoreResult<Vec<(&'static 
                 let first = texts(obj, of).find(|t| !t.trim().is_empty()).unwrap_or("");
                 Ok((p.name, SqlValue::Text(super::memory_files::slugify(first))))
             }
-            (ParamType::Day { of }, None) => {
-                let ms = obj.get(of).and_then(Value::as_i64).ok_or_else(bad)?;
-                let day = super::memory_files::day_of(ms, day_offset_at(ms)).ok_or_else(bad)?;
+            (ParamType::Day, None) => {
+                let (offset, now) = day_clock();
+                let day = super::memory_files::day_of(now, offset).ok_or_else(bad)?;
                 Ok((p.name, SqlValue::Text(day)))
             }
             (_, None | Some(Value::Null)) if p.required => Err(bad()),
