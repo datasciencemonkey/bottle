@@ -82,6 +82,9 @@ describe('memory slice 1: card and pop-up', () => {
   it('S1 saved shows the line with Undo, and Undo sends memory.undo', async () => {
     const el = await mount();
     await tauri.emitTo(`card-${ID}`, 'card:update', answered);
+    await act(
+      async () => void (el.querySelector('[data-action="remember"]') as HTMLElement).click(),
+    );
     await saved({ outcome: 'saved', itemId: ITEM });
     expect(line(el)?.textContent).toBe(`${SAVED_LINE}·Undo`);
     expect(el.querySelector('[data-action="remember"]')).toBeNull();
@@ -186,6 +189,9 @@ describe('memory slice 1: card and pop-up', () => {
     const el = await mount();
     await tauri.emitTo(`card-${ID}`, 'card:update', answered);
     expect(el.querySelector('.memory-saved-live')?.getAttribute('role')).toBe('status');
+    await act(
+      async () => void (el.querySelector('[data-action="remember"]') as HTMLElement).click(),
+    );
     await saved({ outcome: 'saved', itemId: ITEM });
     expect(el.querySelector('[data-action="remember"]')).toBeNull();
     expect(el.querySelector('[data-remembered]')?.textContent).toBe('In today’s note');
@@ -243,5 +249,31 @@ describe('memory slice 1: card and pop-up', () => {
     expect(sent[0]?.payload['itemId']).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
     );
+  });
+
+  it('the no-blurb pop-up leaves with its line and sends no cancel', async () => {
+    const el = await mount();
+    await saved({ outcome: 'secret_refused' });
+    expect(el.querySelector('[data-popup]')).not.toBeNull();
+    await advance(6100);
+    expect(el.querySelector('[data-popup]')).toBeNull();
+    await advance(10_000);
+    expect(inputEmits().filter((e) => (e as { kind: string }).kind === 'cancel')).toHaveLength(0);
+  });
+
+  it('a voice save does not mark an answer card as remembered', async () => {
+    const el = await mount();
+    await tauri.emitTo(`card-${ID}`, 'card:update', answered);
+    await saved({ outcome: 'saved', itemId: ITEM });
+    expect(el.querySelector('[data-remembered]')).toBeNull();
+    expect(el.querySelector('[data-action="remember"]')).not.toBeNull();
+  });
+
+  it('a bad itemId shows the line with no Undo', async () => {
+    const el = await mount();
+    await tauri.emitTo(`card-${ID}`, 'card:update', answered);
+    await saved({ outcome: 'saved', itemId: 'not-a-uuid' });
+    expect(line(el)).not.toBeNull();
+    expect(el.querySelector('[data-action="memory-undo"]')).toBeNull();
   });
 });

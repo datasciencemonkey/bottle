@@ -310,7 +310,7 @@ export function CardView({ mogId }: { mogId: MogId }) {
           />
         )}
         {/* A voice remember shows the card with no blurb: the line is all there is. */}
-        {!shown?.blurbs[0] && saved.seq > 0 && (
+        {!shown?.blurbs[0] && saved.line !== undefined && (
           <Popup
             key={`memory-saved-${saved.seq}`}
             mogId={mogId}

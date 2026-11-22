@@ -277,8 +277,11 @@ export function GenieCard({ mogId, card, onSize, identity, saved = NO_SAVED }: G
   if (seenLine !== saved.line) {
     setSeenLine(saved.line);
     const o = saved.line?.outcome;
-    if (o === 'saved' || o === 'quarantined') setRemember('kept');
-    else if (o !== undefined) setRemember('idle');
+    // Only a click of this card marks it: a voice save leaves the answer card alone.
+    if (remember === 'sending') {
+      if (o === 'saved' || o === 'quarantined') setRemember('kept');
+      else if (o !== undefined) setRemember('idle');
+    }
   }
   useLayoutEffect(() => {
     const el = answerRef.current;

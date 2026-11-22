@@ -26,6 +26,7 @@ export const UNDO_LABEL = 'Undo';
 export const NOTE_MS = 6_000;
 export const UNDONE_MS = 2_500;
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const OUTCOMES: ReadonlySet<string> = new Set(['saved', 'quarantined', 'secret_refused', 'failed']);
 
 /** Shape check of a `memory:saved` payload. */
@@ -39,7 +40,7 @@ export function asMemorySaved(p: unknown): MemorySaved | undefined {
     mogId: o['mogId'],
     outcome: o['outcome'] as MemorySaved['outcome'],
     undoMs,
-    ...(typeof o['itemId'] === 'string' ? { itemId: o['itemId'] } : {}),
+    ...(typeof o['itemId'] === 'string' && UUID.test(o['itemId']) ? { itemId: o['itemId'] } : {}),
   };
 }
 
