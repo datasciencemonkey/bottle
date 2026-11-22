@@ -66,6 +66,7 @@ export const COMMANDS = {
   mcp_call: B,
   dbx_http: B,
   mem_local_exec: B,
+  mem_wipe: B,
   mem_remote_exec: { windows: ['brain'], phase: 'v1' },
   mem_remote_status: { windows: ['brain', 'hub'], phase: 'v1' },
   config_list: BH,
@@ -368,6 +369,8 @@ export interface CommandArgs {
     tags: Tags;
   };
   mem_local_exec: { stmtId: string; params: JsonObject };
+  /** #525 (ADR 0087): the confirm click of the hub Wipe dialog (MEM-33a). */
+  mem_wipe: { scope: 'older_than_30d' | 'older_than_90d' | 'everything' };
   mem_remote_exec: { stmtId: string; params: JsonObject };
   mem_remote_status: NoArgs;
   config_list: NoArgs;
@@ -895,6 +898,8 @@ export interface CommandReturns {
   };
   dbx_http: { status: number; json?: unknown };
   mem_local_exec: { rows: unknown[] };
+  /** The local rows deleted and the Genie conversations of the wiped exchanges (ids only). */
+  mem_wipe: { local: number; conversations: unknown[] };
   mem_remote_exec: { rows: unknown[] };
   mem_remote_status: {
     endpoint: string;

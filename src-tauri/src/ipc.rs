@@ -266,6 +266,9 @@ pub struct HostComponents<'a> {
     /// R10 for `mem_local_exec` (#426): the one managed `SqlCipherLocalStore` that the consent
     /// records and R14 WipeService share. `None` when it is not managed: `host_failed`.
     pub mem: Option<&'a dyn mog_core::local_store::LocalStore>,
+    /// R14 for `mem_wipe` (#525, ADR 0087): the managed `LocalWipeService` over the same R10
+    /// store. `None` when it is not managed: `host_failed`.
+    pub wipe: Option<&'a dyn mog_core::wipe::WipeService>,
     /// T7 for `profiles_list` (#555, #17): `profiles_host::ProfilesHost`, the one managed
     /// ProfileService. `None` when it is not managed: `host_failed`.
     pub profiles: Option<&'a dyn GatewayComponents>,
@@ -344,6 +347,7 @@ impl<'a> HostComponents<'a> {
             agent: None,
             stt: None,
             mem: None,
+            wipe: None,
             profiles: None,
             cli: None,
             login: None,
@@ -526,6 +530,11 @@ impl GatewayComponents for HostComponents<'_> {
             "stt_transcribe" => self.stt_transcribe(command, args),
             // #426 (MEM-34a): R10. The gateway let only the brain through (SEC-02a, ARC-4).
             "mem_local_exec" => self.mem_local_exec(command, args),
+            // #525 (MEM-33a): R14. The gateway let only the brain through; the brain sends it
+            // only from the confirm click of the hub Wipe dialog.
+            "mem_wipe" => {
+                mog_core::wipe::mem_wipe(self.wipe.ok_or_else(|| host_failed(command))?, args)
+            }
             // #555 (#17, W-03a): T7. The gateway let only the brain and the hub through.
             "profiles_list" => self
                 .profiles
@@ -632,6 +641,8 @@ pub fn runs_off_main_thread(command: &str) -> bool {
                 | "agent_send"
                 | "stt_transcribe"
                 | "mem_local_exec"
+                // #525: the Wipe deletes rows in one R10 transaction.
+                | "mem_wipe"
                 | "profiles_list"
                 | "cli_install"
                 | "profile_login"
@@ -735,6 +746,8 @@ fn route_from<R: Runtime>(
     // `try_state`: `consent_host::install` manages the one R10 store; without it (no key store
     // or no data dir) `mem_local_exec` answers `host_failed` (#426).
     let mem = webview.try_state::<std::sync::Arc<mog_core::local_store::SqlCipherLocalStore>>();
+    // `try_state`: `consent_host::install` manages R14 over the same store (#525).
+    let wipe = webview.try_state::<std::sync::Arc<mog_core::wipe::LocalWipeService>>();
     // `try_state`: `profiles_host::install` manages T7; without it `profiles_list` answers
     // `host_failed` (#555).
     let profiles = webview.try_state::<crate::profiles_host::ProfilesHost>();
@@ -768,6 +781,9 @@ fn route_from<R: Runtime>(
         mem: mem
             .as_ref()
             .map(|m| m.inner().as_ref() as &dyn mog_core::local_store::LocalStore),
+        wipe: wipe
+            .as_ref()
+            .map(|w| w.inner().as_ref() as &dyn mog_core::wipe::WipeService),
         profiles: profiles
             .as_ref()
             .map(|p| p.inner() as &dyn GatewayComponents),

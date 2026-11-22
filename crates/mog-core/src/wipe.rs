@@ -25,6 +25,7 @@ use crate::audit::{AuditLog, AuditStore};
 use crate::clock::WallClock;
 use crate::consent::ConsentRecords;
 use crate::error::{CoreError, CoreResult};
+use crate::ipc::MemWipeArgs;
 use crate::local_store::catalog;
 use crate::local_store::SqlCipherLocalStore;
 
@@ -257,19 +258,12 @@ impl WipeService for LocalWipeService {
     }
 }
 
-/// The args of `mem_wipe` (#525). TODO(#525): move to `ipc::MemWipeArgs` in the contract.
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct MemWipeArgs {
-    scope: String,
-}
-
 /// The R14 side of the `mem_wipe` command (contract change #525). It parses `{ scope }`, runs the
 /// Wipe, then the security expiries, and answers `{ local, conversations }` with ids only. Every
 /// refusal is a fixed IPC code with no value in it: `invalid_args` for bad args,
 /// `not_implemented` for a service that is not there and `host_failed` for a store failure.
 /// An expiry failure after the Wipe does not undo the Wipe or hide its answer.
-/// TODO(#525): the app host routes `mem_wipe` here (contract file `src-tauri/src/ipc.rs`).
+/// The app host routes `mem_wipe` here (`src-tauri/src/ipc.rs`, #525).
 pub fn mem_wipe(service: &dyn WipeService, args: Value) -> CoreResult<Value> {
     let refused = |code: &'static str| CoreError::IpcRefused { code };
     let a: MemWipeArgs = serde_json::from_value(args).map_err(|_| refused("invalid_args"))?;

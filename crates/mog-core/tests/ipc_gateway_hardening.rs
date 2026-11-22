@@ -95,6 +95,7 @@ fn sample(command: &str) -> (&'static str, Value) {
         }),
         "dbx_http" => json!({"profile": "p", "routeId": "scim.me", "params": {}, "tags": t}),
         "mem_local_exec" | "mem_remote_exec" => json!({"stmtId": "s", "params": {}}),
+        "mem_wipe" => json!({"scope": "older_than_90d"}),
         "config_read" | "config_delete" => json!({"id": "a1"}),
         "config_write" => json!({"id": "a1", "json": {}}),
         "hotkeys_set" => json!({"bindings": {}}),
