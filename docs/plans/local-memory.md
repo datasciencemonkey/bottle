@@ -1,6 +1,6 @@
 # Plan: local file-system memories (capture, consolidate, recall)
 
-- Status: draft plan. The owner decided Q1, Q2, Q4, Q7, the layout (Q11) and auto-save with feedback (Q12) on 2026-11-21 (Section 15.1). The other questions stay open.
+- Status: draft plan. The owner decided Q1, Q2, Q4, Q7, the layout (Q11) and auto-save with feedback (Q12) and the quarantine release (Q13) on 2026-11-21 (Section 15.1). The other questions stay open.
 - Date: 2026-11-21
 - Author: planner agent (branch `chore/plan-memory`)
 - Language: drafted to STE100 rules. A script checked the sentence lengths. Verbatim quotes of the owner are exempt. Nobody did the official dictionary check.
@@ -189,7 +189,7 @@ What Bottle copies, and what Bottle keeps (owner decision "OpenClaw layout, Bott
 
 - R-1. Bottle tells the user that local history is encrypted (ADR 0105). Memories are history.
 - R-2. Bottle never writes a token to disk, logs, test output or an agent transcript (`AGENTS.md` section 6).
-- R-3. Every write passes the quarantine check in Rust (ADR 0089). A quarantined item never reaches a model (SEC-24b).
+- R-3. Every write passes the quarantine check in Rust (ADR 0089). A quarantined item never reaches a model (SEC-24b). Only the user can release it (Q13).
 - R-4. Only Wipe, Forget and the memory purge of M13 delete user content. Each delete is atomic with its citing rows (ADR 0081).
 - R-5. Every statement filters by `mog_id` (MEM-01). The brain never sends SQL (MEM-34b).
 - R-6. Logs carry no content (SEC-16c).
@@ -409,6 +409,7 @@ Rules for the layout:
 - Each writer must store an `active` memory at once (auto-save, Q12). There is no approval queue and no hold.
 - Only the secret check must refuse a write. Each other check must store the memory.
 - A quarantine hit must store the memory with the status `quarantined`. It is not a refusal (ADR 0089).
+- The quarantine stays (SEC-24a, SEC-24b). Only the release rule of 6.5 can change a `quarantined` status (Q13).
 - A memory from a model or the agent must start unrated, with the New badge.
 - A memory from a user action must start rated up.
 - Each write from a card or a voice command must show "Saved to memory" with Undo for 8 s.
@@ -473,6 +474,20 @@ The owner chose auto-save with user feedback. The store is local, and the user c
 - The hub must have a "New" filter. It lists the unrated memories, newest first.
 - A rating must never leave the device in the MVP.
 
+Release of a quarantined memory (decided, Q13):
+
+- The hub must show each `quarantined` memory with a "Quarantined" mark and its reason code.
+- The hub must show thumbs up on a `quarantined` memory.
+- A thumbs up on a `quarantined` memory must set the status `active` and the rating `up`.
+- This release must need a valid, unused #574 UI action ticket.
+- The host must mint this ticket only on a user click in the hub.
+- Rust must refuse a release with no valid ticket. A replayed ticket must also fail.
+- No brain caller, agent tool or model writer can release a memory.
+- The memory tool, the forget tool and `bottle-mcp` must have no rate or release command.
+- Rust must record the time of the release in `quarantine_released_at`.
+- The hub must show "You released this memory" on a released memory.
+- A card must never show a `quarantined` memory, so a card has no release action.
+
 ## 7. The consolidation job
 
 ### 7.1 Where and when it runs
@@ -496,7 +511,7 @@ The owner chose auto-save with user feedback. The store is local, and the user c
 | Stale-out | An unpinned `active` memory has no recall use and no edit for 90 d. | The status becomes `stale`. |
 | Fade | An unrated `daily` memory has no recall use for 30 d. | The status becomes `stale`. |
 | Revive | The user gives a `stale` memory a thumbs up. | The status becomes `active` again. |
-| Re-scan | The quarantine pattern version changed (for example after #543). | Each memory gets the new check. A hit becomes `quarantined`. A check never lowers a quarantine. |
+| Re-scan | The quarantine pattern version changed (for example after #543). | Each memory gets the new check. A hit becomes `quarantined`. A check never lowers a quarantine. A released memory is skipped until its text changes. |
 | Remove | See the rules of 7.2a. | The status becomes `removed`. The hub shows it in "Recently removed". |
 | Purge | A `removed` memory has had that status for 30 d, with no Restore. | The job deletes the row through a Forget step. |
 | Cap | A folder is over its cap (5.4). | Automatic capture stops. The hub shows "Memory is full". Nothing is deleted. |
@@ -609,7 +624,7 @@ The agent memory tool fits the later tool loop of the MOG-to-MOG plan (PR #617, 
 - The tool must see only `USER.md` and the folder of the asking MOG.
 - `view /memories` must list `USER.md`, `MEMORY.md` and the daily notes of the last 30 d.
 - An edit command must name the entry by its short id `m:<id>`, or by a unique text match.
-- The tool must never show a `quarantined` memory (SEC-24b).
+- The tool must never show a `quarantined` memory (SEC-24b). It shows a released memory as other `active` memories.
 - `view` must return at most 16,000 characters.
 - `view` must accept `view_range`.
 - `insert` on today's daily note must make an `active`, unrated `daily` memory.
@@ -735,6 +750,8 @@ Not in slice 1: recall, edit, search, export, the shared folder, automatic captu
 - AC-2.3: A `stale`, `removed` or `quarantined` memory never shows on a card.
 - AC-2.7: Each card hit shows thumbs up and thumbs down. Thumbs down deletes the memory after the 8 s Undo.
 - AC-2.8: A rated-up memory outranks an unrated memory with the same keyword score.
+- AC-2.9: A hub thumbs up with a valid ticket moves a `quarantined` memory to `active` and rated up.
+- AC-2.10: A release with no ticket, or from a brain or agent caller, gets `invalid_args`. The memory stays `quarantined`.
 - AC-2.4: A Genie answer memory from another workspace never shows (MEM-17b).
 - AC-2.5: The Genie question that R8 sends equals the user text. No memory text is in it.
 - AC-2.6: A late hit shows as a chip and the ask continues (MEM-16c).
@@ -753,6 +770,7 @@ Not in slice 1: recall, edit, search, export, the shared folder, automatic captu
 - AC-3.3: The job does not start on battery under 50 % or in Low Power Mode. A test double gives the power state.
 - AC-3.4: The job stops within 100 ms of a talk-key press.
 - AC-3.5: A pattern version change quarantines a memory that matches the new pattern.
+- AC-3.5a: A released memory stays `active` after a pattern version change, until its text changes.
 - AC-3.6: The run log line holds counts only.
 - AC-3.7: A daily memory with 2 recall uses from 2 questions moves to `MEMORY.md` as one `active` `curated` memory in one run.
 - AC-3.7a: A rated-up daily memory moves before an unrated one when the run limit applies.
@@ -798,7 +816,7 @@ Not in slice 1: recall, edit, search, export, the shared folder, automatic captu
 
 | ID | Flag | File(s) | Change | Slice |
 |---|---|---|---|---|
-| M1 | CONTRACT + SCHEMA | `local_store/migrations/0003_memory_files.sql` | Rebuild `memory_item` with the new kinds and statuses. Add `title`, `body_md`, `tags`, `origin`, `tier`, `note_date`, `profile`, `recording_id`, `last_used_at`, `use_count`, `recall_query_count`, `stale_at`, `slug`, `rating`, `rated_at`. Old rows get the tier `curated`, and `genie_answer` rows get `daily`. Add the status `removed` and the columns `removed_at` and `status_before_removed`. Drop the kinds `entity` and `person`. Change old `entity` rows to `fact`, `stale`, tag `legacy-entity` (5.1). The table has no `proposed` status. Keep the FTS and vec triggers. | 0 |
+| M1 | CONTRACT + SCHEMA | `local_store/migrations/0003_memory_files.sql` | Rebuild `memory_item` with the new kinds and statuses. Add `title`, `body_md`, `tags`, `origin`, `tier`, `note_date`, `profile`, `recording_id`, `last_used_at`, `use_count`, `recall_query_count`, `stale_at`, `slug`, `rating`, `rated_at`, `quarantine_released_at`. Old rows get the tier `curated`, and `genie_answer` rows get `daily`. Add the status `removed` and the columns `removed_at` and `status_before_removed`. Drop the kinds `entity` and `person`. Change old `entity` rows to `fact`, `stale`, tag `legacy-entity` (5.1). The table has no `proposed` status. Keep the FTS and vec triggers. | 0 |
 | M2 | CONTRACT | `local_store/catalog.rs`, `src/brain/components/memory-store.ts` | New brain ids: `mem.item.list`, `mem.item.search`, `mem.item.edit`, `mem.item.set_status`, `mem.render.get`, `mem.item.export`. New Rust-only ids: `mem.consolidate.*`. | 0, 2, 3 |
 | M3 | CONTRACT | `src/shared/interfaces.ts` | `MemoryHit['type']` and `MemoryDraft` get the new kinds, `title`, `body`, `tags` and `origin`. `MemoryDraft` gets the #533 link fields. | 0 |
 | M4 | CONTRACT | `src-tauri/src/ipc.rs`, `crates/mog-core/src/ipc.rs`, `src/shared/ipc.ts` | The action ticket of #574: a host-minted, single-use ticket bound to one MOG. `mem_local_exec` accepts `pinned: true` only with it. | 0 |
@@ -810,6 +828,7 @@ Not in slice 1: recall, edit, search, export, the shared folder, automatic captu
 | M10 | CONTRACT | `src/shared/ipc.ts`, `crates/mog-core/src/ipc.rs` | A Rust handler for the `memory` function inside `agent_model_step` (PR #617 C9). | 5 |
 | M14 | CONTRACT | `src/shared/ipc.ts`, `crates/mog-core/src/ipc.rs` | Later: a Rust `forget` handler in `agent_model_step`, with the forget grammar check (8.3). | 6 |
 | M15 | CONTRACT | `src/shared/ipc.ts`, card events, `local_store/catalog.rs` | Card and hub actions `rate_up` and `rate_down`, and the brain id `mem.item.rate`. | 2 |
+| M16 | CONTRACT | `local_store/catalog.rs`, `src-tauri/src/ipc.rs`, `src/shared/ipc.ts` | The hub action `release_quarantine` and the group `mem.item.release`. The group needs the #574 UI action ticket (MEM-59). | 2 |
 | M11 | SCOPE | `AGENTS.md` section 1 | Lift "memory recall" (FTS5 only) from the out-of-scope list. Embeddings stay out. | 2 |
 | M12 | REQUIREMENT | `research/final-requirements.md` | New rows for this plan: kinds, statuses, caps, secret check, consolidation job and memory tool. Amend MEM-28a and MEM-29a for auto-save and the feedback model (Q12). | 0 |
 | M13 | REQUIREMENT (decided, Q2) | `research/final-requirements.md` (U9, MEM-33a, Section 9.2), `AGENTS.md` | Amend U9 and MEM-33a for the memory remove and purge of 7.2a. Add the rows of 12.1. | 0 (text), 3 (code) |
@@ -847,6 +866,14 @@ The new requirement rows (priority M, milestone MVP-D, use case UC2):
 | MEM-56 | The job must set `stale` on an unrated daily memory with no recall use for 30 d. | The simulated clock test passes. |
 | MEM-57 | Dreaming must promote daily memories into `MEMORY.md` with no approval step. | A qualified memory moves in one run. |
 | MEM-58 | The `forget` tool must run only in a turn with a forget request from the user. | A call with no request gets an error. |
+| MEM-59 | A release of a `quarantined` memory must need a #574 UI action ticket from a hub click. | A release from the brain or an agent tool gets `invalid_args`. |
+| MEM-60 | The re-scan must skip a released memory until its text changes. | A released memory stays `active` after a pattern update. |
+
+The amended row SEC-24b (Q13):
+
+| ID | Requirement | Acceptance |
+|---|---|---|
+| SEC-24b | The ContextAssembler and the `memory.recall` tool must not give quarantined items to Genie or to the main agent. Only a user release by MEM-59 makes a quarantined item `active`. | Quarantined items never appear in a preamble or a tool result. A released item appears as other active items. |
 
 **Table MEM-REMOVE (conditions for a remove, MEM-44).**
 
@@ -918,6 +945,10 @@ PR #611 must reserve new numbers with `adr-next.sh` before it merges.
   - Dreaming promotes daily memories automatically. Rated and often-used memories come first. Unrated daily memories fade after 30 d.
   - A later slice (6) adds the forget tool, so "forget X" works.
   - The OpenClaw layout, the flush, the encryption, the secret check and the user-only pin ticket stay.
+- **Q13. Quarantine release.** The quarantine stays (SEC-24a, SEC-24b), with a release rule (6.5).
+  - A thumbs up from the user in the hub moves a quarantined memory to `active` and rated up.
+  - The thumbs-up action needs a #574 UI action ticket. So no brain or agent caller can release an item.
+  - MEM-59 and MEM-60 are new. The SEC-24b row changes (12.1).
 - **Next work.** Build slice 0 (contract, ADRs and migration 0003) at the contract gate. Then build slice 1.
 
 ### 15.2 Still open
