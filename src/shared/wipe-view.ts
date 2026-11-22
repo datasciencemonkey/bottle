@@ -127,6 +127,7 @@ export function asWipeDialogModel(p: unknown): WipeDialogModel | null | undefine
       deletedConversations: r['deletedConversations'],
       notices: r['notices'].flatMap((n) => asNotice(n) ?? []),
     };
+    if (isStr(r['emptyText'])) result.emptyText = r['emptyText'];
     if (isStr(r['otherText'])) result.otherText = r['otherText'];
     m.result = result;
   }

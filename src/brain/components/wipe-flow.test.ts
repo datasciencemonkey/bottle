@@ -261,6 +261,16 @@ describe('WipeFlow (#124)', () => {
     expect((await flow.confirm('everything', false)).result?.emptyText).toBe('Nothing to wipe.');
   });
 
+  it('[MEM-33a] local 0 with conversations to delete is not an empty wipe', async () => {
+    const flow = new WipeFlow({
+      core: wipeCore({ local: 0, conversations: [row(MOG_A, CID_1, 'genie_one_mcp')] }),
+      genieOne: new GenieOneDeleteUtility(),
+    });
+    const done = await flow.confirm('older_than_90d', true);
+    expect(done.result?.emptyText).toBeUndefined();
+    expect(done.result?.notices.length).toBe(1);
+  });
+
   it('[U9] the flow has no timer, and Genie One deletes run with the wipe trigger', () => {
     const src = readFileSync(resolve(import.meta.dirname, 'wipe-flow.ts'), 'utf8');
     expect(src).not.toMatch(/setInterval|setTimeout|requestIdleCallback/);

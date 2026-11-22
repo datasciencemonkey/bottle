@@ -4,7 +4,11 @@
  * ARC-2, ARC-5; ADR 0087). The brain builds every model. Every value here is fake.
  */
 import { act } from 'react';
-import type { WipeDialogModel, WipeSettingsModel } from '../../shared/wipe-view';
+import {
+  asWipeDialogModel,
+  type WipeDialogModel,
+  type WipeSettingsModel,
+} from '../../shared/wipe-view';
 import { render, tauri, viewEmits } from '../test-tauri';
 import { WipeDialog } from '../WipeDialog';
 import { Hub } from './Hub';
@@ -204,6 +208,26 @@ describe('Settings → Wipe (#124)', () => {
     ).toBe('Delete in Genie One');
     expect(must(el.querySelector('[data-wipe-other]')).textContent).toBe(done.result?.otherText);
     expect(must(el.querySelector('button[data-wipe-cancel]')).textContent).toBe('Close');
+    act(() => root.unmount());
+  });
+
+  it('[MEM-33a] an empty wipe survives the hub shape check and shows "Nothing to wipe"', async () => {
+    const empty: WipeDialogModel = {
+      ...confirm,
+      phase: 'done',
+      result: {
+        local: 0,
+        deletedConversations: 0,
+        notices: [],
+        emptyText: 'Nothing to wipe. No data is older than 90 days.',
+      },
+    };
+    const model = asWipeDialogModel(JSON.parse(JSON.stringify(empty)));
+    expect(model).toEqual(empty);
+    const { el, root } = await render(<WipeDialog model={must(model)} />);
+    expect(must(el.querySelector('[data-wipe-result]')).textContent).toBe(
+      'Nothing to wipe. No data is older than 90 days.',
+    );
     act(() => root.unmount());
   });
 
