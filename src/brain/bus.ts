@@ -124,6 +124,9 @@ export async function sendHubNotice(mogId: MogId, text: string): Promise<boolean
   }
 }
 
+/** The longest `actionTicket` the brain accepts, from a view click or a transcript. */
+export const ACTION_TICKET_MAX = 256;
+
 /** One `view_emit` call, as the brain gets it on the Channel (`view:input`). */
 export interface ViewInput {
   /** The window label of the sender: `hub`, `mog-<id>` or `card-<id>`. */
@@ -154,7 +157,9 @@ export function asViewInput(p: unknown): ViewInput | undefined {
   // #507: `ready` has no payload. The core refuses one; the brain drops it too.
   if (kind === 'ready' && 'payload' in input) return undefined;
   const ticket =
-    typeof actionTicket === 'string' && actionTicket !== '' && actionTicket.length <= 256
+    typeof actionTicket === 'string' &&
+    actionTicket !== '' &&
+    actionTicket.length <= ACTION_TICKET_MAX
       ? { actionTicket }
       : {};
   return { from, mogId, kind: kind as ViewEmitKind, payload, ...ticket };

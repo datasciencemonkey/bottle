@@ -25,6 +25,7 @@ import {
 import { onViewInput, type BrainBus } from './bus';
 
 /** An operation ID as the brain makes it (a UUID), or the debug demo ID. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const OP_ID = /^[A-Za-z0-9-]{1,64}$/;
 
 export interface GenieCardWiringDeps {
@@ -52,8 +53,8 @@ export interface GenieCardWiringDeps {
    * the brain never makes one. The callee sends `memory:saved` to that card only.
    */
   remember?(mogId: MogId, requestId: string | undefined, ticket: string | undefined): void;
-  /** ADR 0113: the card's Undo of a save. The callee forgets only a recent save of this MOG. */
-  undoRemember?(mogId: MogId): void;
+  /** ADR 0113: the card's Undo of a save. The callee forgets that item only if this MOG saved it in the last 8 s. */
+  undoRemember?(mogId: MogId, itemId: string): void;
 }
 
 function target(p: unknown): { target?: unknown; requestId?: unknown; on?: unknown } {
@@ -80,8 +81,13 @@ export function wireGenieCard(bus: BrainBus, deps: GenieCardWiringDeps): () => v
     const action = (p as { action?: unknown }).action;
     if (action === 'memory.remember' || action === 'memory.undo') {
       if (!fromCard) return;
-      if (action === 'memory.undo') deps.undoRemember?.(mogId);
-      else deps.remember?.(mogId, requestId ?? deps.lastOpId(mogId), input.actionTicket);
+      if (action === 'memory.undo') {
+        const itemId = (p as { itemId?: unknown }).itemId;
+        if (typeof itemId === 'string' && UUID.test(itemId)) deps.undoRemember?.(mogId, itemId);
+      } else {
+        // The card names the exchange. There is no fallback to the newest request.
+        deps.remember?.(mogId, requestId, input.actionTicket);
+      }
       return;
     }
     if (p.target === CARD_DONE && fromCard) {

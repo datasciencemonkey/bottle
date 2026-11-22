@@ -27,6 +27,7 @@
  */
 import { call } from '../../shared/ipc';
 import type { CommandArgs } from '../../shared/ipc';
+import { ACTION_TICKET_MAX } from '../bus';
 import type { MogId, ProfileName, SegmentRef, Tags, Transcript } from '../../shared/interfaces';
 import type { NetworkStatus } from './embedding-queue';
 import { DEFAULT_ASR_MODEL, modelPolicyFrom, type SttPolicy } from './model-access';
@@ -274,7 +275,7 @@ function validReply(t: unknown, seg: SegmentRef, provider: Provider): Transcript
   // ADR 0113: Rust parsed "remember this" and minted the ticket. Keep both, or neither.
   const r = t['remember'];
   if (isRecord(r) && typeof r['ticket'] === 'string' && typeof r['text'] === 'string') {
-    if (r['ticket'] !== '' && r['text'].trim() !== '') {
+    if (r['ticket'] !== '' && r['ticket'].length <= ACTION_TICKET_MAX && r['text'].trim() !== '') {
       out.remember = { ticket: r['ticket'], text: r['text'] };
     }
   }

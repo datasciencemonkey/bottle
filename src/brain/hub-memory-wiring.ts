@@ -22,6 +22,7 @@ import {
   HUB_MEMORY_ITEM_EVENT,
   HUB_MEMORY_RESULT_EVENT,
   MEMORY_KINDS,
+  MEMORY_STATUSES,
   MEMORY_VIEW_ID,
   type EditableKind,
   type HubMemory,
@@ -41,6 +42,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const REQUEST_ID = /^[A-Za-z0-9-]{1,64}$/;
 const FILE_PATH = /^\/memories\/[A-Za-z0-9./#_-]{1,200}$/;
 const KINDS: ReadonlySet<string> = new Set(MEMORY_KINDS);
+const STATUSES: ReadonlySet<string> = new Set(MEMORY_STATUSES);
 const EDITABLE: ReadonlySet<string> = new Set(EDITABLE_KINDS);
 
 /** One defined MOG: its id, name and accent colour. */
@@ -74,6 +76,8 @@ export interface HubMemoryWiring {
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
+/** The length in code points, like the catalog caps. */
+const len = (s: string): number => Array.from(s).length;
 const isStr = (v: unknown): v is string => typeof v === 'string';
 
 /** Check a hub click payload. Anything that is not a well-formed action is `undefined`. */
@@ -154,7 +158,7 @@ function folderOf(rows: readonly unknown[], name: string): string {
   for (const r of rows) {
     const file = isObj(r) && isStr(r['file']) ? r['file'] : '';
     const m = /^\/memories\/([a-z0-9-]+)\//.exec(file);
-    if (m?.[1] && m[1] !== 'USER.md') return m[1];
+    if (m?.[1]) return m[1];
   }
   return slugOf(name);
 }
@@ -249,7 +253,7 @@ export function wireHubMemory(bus: BrainBus, deps: HubMemoryDeps): HubMemoryWiri
       }
       case 'memory.item': {
         const item = await deps.memory.readItem(a.mogId, a.itemId).catch(() => undefined);
-        if (!item || !KINDS.has(item.kind)) return;
+        if (!item || !KINDS.has(item.kind) || !STATUSES.has(item.status)) return;
         const fields: MemoryItemFields = {
           mogId: a.mogId,
           itemId: a.itemId,
@@ -264,7 +268,7 @@ export function wireHubMemory(bus: BrainBus, deps: HubMemoryDeps): HubMemoryWiri
         return;
       }
       case 'memory.add':
-        if (a.title.length > TITLE_MAX || a.body.length > BODY_MAX || a.body.trim() === '') {
+        if (len(a.title) > TITLE_MAX || len(a.body) > BODY_MAX || a.body.trim() === '') {
           await result({ requestId: a.requestId, ok: false, code: 'invalid' });
           return;
         }
@@ -277,13 +281,22 @@ export function wireHubMemory(bus: BrainBus, deps: HubMemoryDeps): HubMemoryWiri
         return;
       case 'memory.edit':
         if (
-          a.title.length > TITLE_MAX ||
-          a.body.length > BODY_MAX ||
+          a.kind === 'preference' ||
+          len(a.title) > TITLE_MAX ||
+          len(a.body) > BODY_MAX ||
           a.title.trim() === '' ||
           a.body.trim() === ''
         ) {
           await result({ requestId: a.requestId, ok: false, code: 'invalid' });
           return;
+        }
+        if (a.kind === 'genie_answer') {
+          // Only a Genie answer stays one. No other kind becomes one.
+          const was = await deps.memory.readItem(a.mogId, a.itemId).catch(() => undefined);
+          if (was?.kind !== 'genie_answer') {
+            await result({ requestId: a.requestId, ok: false, code: 'invalid' });
+            return;
+          }
         }
         await write(a.requestId, ticket, async (t) => ({
           itemId: a.itemId,

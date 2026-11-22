@@ -10,7 +10,7 @@ import type { JsonObject } from '../shared/ipc';
 const MOG = '00000000-0000-4000-8000-00000000000a';
 const REQ = '41111111-2222-4333-8444-000000000001';
 const EX = '51111111-2222-4333-8444-000000000001';
-const NEW = '22222222-2222-4333-8444-555555555555';
+const NEW = '22222222-2222-4333-8444-000000000001';
 const T = 1_767_225_600_000;
 
 interface Call {
@@ -19,9 +19,13 @@ interface Call {
   ticket: string | undefined;
 }
 
-function setup(opts: { fail?: unknown; status?: string; noExchange?: boolean } = {}) {
+function setup(
+  opts: { fail?: unknown; status?: string; noExchange?: boolean; getFails?: boolean } = {},
+) {
   const calls: Call[] = [];
   let now = T;
+  let seq = 0;
+  const idOf = (n: number) => `22222222-2222-4333-8444-${String(n).padStart(12, '0')}`;
   const store: LocalMemoryStore = {
     exec: async (stmtId, params, ticket) => {
       calls.push({ stmtId, params, ticket });
@@ -46,6 +50,7 @@ function setup(opts: { fail?: unknown; status?: string; noExchange?: boolean } =
         case 'mem.exchange.recent':
           return { rows: [{ requestId: REQ, profileName: 'prof' }] };
         case 'mem.item.get':
+          if (opts.getFails) throw { error: 'host_failed' };
           return {
             rows: [
               { type: 'fact', title: 't', bodyMd: '', status: opts.status ?? 'active', pinned: 1 },
@@ -61,18 +66,22 @@ function setup(opts: { fail?: unknown; status?: string; noExchange?: boolean } =
   };
   const memory = new LocalMemoryService(store, {
     now: () => now,
-    newId: () => NEW,
+    newId: () => `22222222-2222-4333-8444-${String(++seq).padStart(12, '0')}`,
     deviceId: () => 'd',
   });
+  const changed = { n: 0 };
   const sent: { mogId: string; saved: MemorySaved }[] = [];
   const flow = createRememberFlow({
     memory,
     store,
     send: async (mogId, saved) => void sent.push({ mogId, saved }),
     now: () => now,
+    onChanged: () => void changed.n++,
   });
   return {
     flow,
+    changed,
+    idOf,
     calls,
     sent,
     advance: (ms: number) => void (now += ms),
@@ -166,26 +175,47 @@ describe('Undo', () => {
     const s = setup();
     await s.flow.voice(MOG, 'x', 't');
     s.advance(7_999);
-    await s.flow.undo(MOG);
+    await s.flow.undo(MOG, NEW);
     const f = s.calls.find((c) => c.stmtId === 'mem.forget.items');
     expect(f?.params).toMatchObject({ mogId: MOG, itemIds: [NEW] });
   });
 
-  it('does nothing after 8 s, for another MOG, or with no save', async () => {
+  it('does nothing after 8 s, for another MOG, for another id, or with no save', async () => {
     const s = setup();
-    await s.flow.undo(MOG);
+    await s.flow.undo(MOG, NEW);
     await s.flow.voice(MOG, 'x', 't');
-    await s.flow.undo('00000000-0000-4000-8000-00000000000b');
+    await s.flow.undo('00000000-0000-4000-8000-00000000000b', NEW);
+    await s.flow.undo(MOG, s.idOf(99));
     s.advance(8_001);
-    await s.flow.undo(MOG);
+    await s.flow.undo(MOG, NEW);
     expect(s.calls.some((c) => c.stmtId === 'mem.forget.items')).toBe(false);
   });
 
-  it('a second Undo does not forget twice', async () => {
+  it('two saves and two Undos forget each item once, by its own id', async () => {
+    const s = setup();
+    await s.flow.voice(MOG, 'one', 't1');
+    await s.flow.voice(MOG, 'two', 't2');
+    await s.flow.undo(MOG, s.idOf(1));
+    await s.flow.undo(MOG, s.idOf(1));
+    await s.flow.undo(MOG, s.idOf(2));
+    expect(
+      s.calls.filter((c) => c.stmtId === 'mem.forget.items').map((c) => c.params['itemIds']),
+    ).toEqual([[s.idOf(1)], [s.idOf(2)]]);
+  });
+
+  it('a save and an Undo tell the hub that the list changed', async () => {
     const s = setup();
     await s.flow.voice(MOG, 'x', 't');
-    await s.flow.undo(MOG);
-    await s.flow.undo(MOG);
-    expect(s.calls.filter((c) => c.stmtId === 'mem.forget.items')).toHaveLength(1);
+    await s.flow.undo(MOG, NEW);
+    expect(s.changed.n).toBe(2);
+  });
+});
+
+describe('status re-read', () => {
+  it('a re-read that fails twice still reports saved', async () => {
+    const s = setup({ getFails: true });
+    await s.flow.voice(MOG, 'x', 't');
+    expect(s.calls.filter((c) => c.stmtId === 'mem.item.get')).toHaveLength(2);
+    expect(s.sent[0]?.saved).toMatchObject({ outcome: 'saved', itemId: NEW });
   });
 });

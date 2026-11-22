@@ -129,6 +129,8 @@ describe('T4 SttProvider (#52)', () => {
         ticket: 'tkt',
         text: 'a fact',
       });
+      reply({ ticket: 'x'.repeat(257), text: 'a fact' });
+      expect((await createSttProvider().transcribe(seg, tags)).remember).toBeUndefined();
       reply({ ticket: 'tkt' });
       expect((await createSttProvider().transcribe(seg, tags)).remember).toBeUndefined();
     });

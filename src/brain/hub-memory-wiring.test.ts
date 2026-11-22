@@ -403,6 +403,44 @@ describe('hub Memory wiring: writes', () => {
   });
 });
 
+describe('hub Memory wiring: edit rules', () => {
+  const edit = (over: Record<string, unknown>) => ({
+    action: 'memory.edit',
+    requestId: 'r',
+    mogId: MOG,
+    itemId: ITEM,
+    kind: 'fact',
+    title: 'T',
+    body: 'B',
+    ...over,
+  });
+
+  it('refuses preference, and a change of a fact to a Genie answer, with no write', async () => {
+    const s = setup();
+    await s.click(edit({ kind: 'preference' }), 't');
+    await s.click(edit({ kind: 'genie_answer' }), 't');
+    expect(s.writes()).toEqual([]);
+    expect(result(s.sent)).toEqual([
+      { requestId: 'r', ok: false, code: 'invalid' },
+      { requestId: 'r', ok: false, code: 'invalid' },
+    ]);
+  });
+
+  it('caps count code points, not UTF-16 units', async () => {
+    const s = setup();
+    await s.click(edit({ title: '😀'.repeat(80) }), 't');
+    expect(s.writes()).toHaveLength(1);
+    await s.click(edit({ title: '😀'.repeat(81) }), 't');
+    expect(s.writes()).toHaveLength(1);
+  });
+
+  it('memory.item with an unknown status sends nothing', async () => {
+    const s = setup({ status: 'bogus' });
+    await s.click({ action: 'memory.item', mogId: MOG, itemId: ITEM });
+    expect(s.sent).toEqual([]);
+  });
+});
+
 describe('asMemoryAction', () => {
   it('rejects unknown actions and bad ids', () => {
     expect(asMemoryAction({ action: 'memory.pin' })).toBeUndefined();
@@ -436,7 +474,7 @@ describe('no memory content in a log', () => {
   });
 
   it('the source files of the memory flow have no console or telemetry call', () => {
-    for (const f of ['hub-memory-wiring.ts', 'remember-flow.ts']) {
+    for (const f of ['hub-memory-wiring.ts', 'remember-flow.ts', 'components/memory-service.ts']) {
       const src = readFileSync(new URL(`./${f}`, import.meta.url), 'utf8');
       expect(src).not.toMatch(/console\.|createBrainLog|\.event\(/);
     }

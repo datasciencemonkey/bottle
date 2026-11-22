@@ -96,26 +96,6 @@ export interface ItemWriteResult {
   pinned: boolean;
 }
 
-/**
- * The user action that makes a "remember this" pin (MEM-28b). Only the user makes one:
- * - `voice`: the user's own speech on the You track holds the phrase (see {@link isRememberThis});
- * - `ui`: the user clicks "Remember this" on a card.
- * The agent cannot make one: the `bottle-mcp` `memory.write` tool never pins.
- * TODO(#143): the deterministic command grammar calls `rememberThis` for the voice phrase.
- */
-export type RememberAction =
-  | { kind: 'remember_this'; trigger: 'voice'; speakerTrack: 'you'; utterance: string }
-  | { kind: 'remember_this'; trigger: 'ui' };
-
-/** The "remember this" phrase: an order to remember, not a question about memory. */
-const REMEMBER_THIS =
-  /^\s*(?:(?:please|ok(?:ay)?|hey\s+\w+)[\s,]+)?remember\s+(?:this|that)\b(?!\s+(?:week|month|year|time|morning|quarter)\b)/i;
-
-/** True if the user's utterance is the "remember this" command (MEM-28b). */
-export function isRememberThis(utterance: string): boolean {
-  return REMEMBER_THIS.test(utterance.normalize('NFKC'));
-}
-
 const SOURCES: ReadonlySet<string> = new Set(['you', 'others', 'genie', 'agent']);
 const ITEM_TYPES: ReadonlySet<string> = new Set([
   'decision',
@@ -277,7 +257,7 @@ export function conversationOf(r: unknown): ForgetConversation | undefined {
 const C = 'MemoryService';
 
 /** MEM-31: check one draft before any store call. Throws with a fixed message, never the text. */
-function checkDraft(d: MemoryDraftLinks | Omit<MemoryDraftLinks, 'pinned'>): void {
+function checkDraft(d: MemoryDraftLinks): void {
   if (!UUID_RE.test(d.mogId)) throw new Error('write needs a UUID mogId');
   if (!SOURCES.has(d.source)) throw new Error('write needs a source: you, others, genie or agent');
   if (!ITEM_TYPES.has(d.type)) throw new Error('write needs a memory item type');
@@ -298,17 +278,6 @@ function checkDraft(d: MemoryDraftLinks | Omit<MemoryDraftLinks, 'pinned'>): voi
   }
   if (d.utteranceIds !== undefined && !d.utteranceIds.every((u) => UUID_RE.test(u))) {
     throw new Error('write needs UUID utterance ids');
-  }
-}
-
-/** MEM-28b: a pin needs a real user action. */
-function checkRememberAction(a: RememberAction): void {
-  if (typeof a !== 'object' || a === null || a.kind !== 'remember_this') {
-    throw new Error('rememberThis needs a user action');
-  }
-  if (a.trigger === 'ui') return;
-  if (a.trigger !== 'voice' || a.speakerTrack !== 'you' || !isRememberThis(a.utterance)) {
-    throw new Error('rememberThis needs the user saying "remember this" on the You track');
   }
 }
 
@@ -401,8 +370,7 @@ export class LocalMemoryService implements MemoryService {
    * - MEM-31: each draft must have its source (`you`, `others`, `genie`, `agent`), the workspace
    *   host and the decimal workspace id; the session, exchange and utterance links are kept.
    * - SEC-24a: text that looks like an instruction to the assistant is quarantined.
-   * - MEM-28b: a draft with `pinned: true` is refused; a pin needs a user action
-   *   ({@link rememberThis}).
+   * - MEM-28b: a draft with `pinned: true` is refused; only a ticketed {@link pinItem} pins.
    * The whole batch is checked before the first write, so a bad draft writes nothing.
    */
   async write(drafts: MemoryDraftLinks[]): Promise<void> {
@@ -411,40 +379,24 @@ export class LocalMemoryService implements MemoryService {
   /** {@link write} with one result for each draft: the item id, the embed job and the status. */
   async writeItems(drafts: MemoryDraftLinks[]): Promise<ItemWriteResult[]> {
     for (const d of drafts) {
-      if (d.pinned === true) throw new Error('write: a pin needs a user action (rememberThis)');
+      if (d.pinned === true) throw new Error('write: a pin needs a user action (pinItem)');
       checkDraft(d);
     }
     const out: ItemWriteResult[] = [];
-    for (const d of drafts) out.push(await this.#writeDraft(d, false));
+    for (const d of drafts) out.push(await this.#writeDraft(d));
     return out;
   }
-  /**
-   * "Remember this" (MEM-28b, AT-28): one pinned item at confidence 1.0, only on a user action.
-   * Quarantine still applies: a pin of injection text is stored quarantined (SEC-24a).
-   */
-  async rememberThis(
-    action: RememberAction,
-    draft: Omit<MemoryDraftLinks, 'pinned'>,
-  ): Promise<ItemWriteResult> {
-    checkRememberAction(action);
-    checkDraft(draft);
-    return this.#writeDraft(draft, true);
-  }
-  async #writeDraft(d: MemoryDraftLinks, pinned: boolean): Promise<ItemWriteResult> {
+  async #writeDraft(d: MemoryDraftLinks): Promise<ItemWriteResult> {
     const quarantined = isQuarantined(d.text);
     const w: ItemWrite = {
       mogId: d.mogId,
       type: d.type,
       text: d.text,
       source: d.source,
-      confidence: pinned ? 1 : CONFIDENCE[d.source],
-      pinned,
+      confidence: CONFIDENCE[d.source],
+      pinned: false,
       quarantined,
-      origin: pinned
-        ? 'pin'
-        : d.origin === 'pin' || d.origin === 'added'
-          ? 'agent'
-          : (d.origin ?? 'agent'),
+      ...(d.origin !== undefined ? { origin: d.origin } : {}),
     };
     // checkDraft made sure that both workspace fields are there (MEM-31).
     if (d.workspaceHost !== undefined) w.workspaceHost = d.workspaceHost;
@@ -453,7 +405,7 @@ export class LocalMemoryService implements MemoryService {
     if (d.sessionId !== undefined) w.sourceSessionIds = [d.sessionId];
     if (d.utteranceIds !== undefined) w.sourceUtteranceIds = d.utteranceIds;
     const r = await this.#storeItem(w);
-    return { ...r, quarantined, pinned };
+    return { ...r, quarantined, pinned: false };
   }
   /**
    * Write one memory item and queue its embedding with `mem.item.write` (#102, MEM-10a,
@@ -463,8 +415,8 @@ export class LocalMemoryService implements MemoryService {
    * It refuses an item id that another MOG owns (MEM-01): R10 changes no row then.
    */
   async storeItem(w: ItemWrite): Promise<{ itemId: string; queued: boolean }> {
-    // MEM-28b: a pin needs a user action, so only rememberThis() pins (review of #540).
-    if (w.pinned === true) throw new Error('storeItem: a pin needs a user action (rememberThis)');
+    // MEM-28b: a pin needs a user action, so only the ticketed pinItem() pins (review of #540).
+    if (w.pinned === true) throw new Error('storeItem: a pin needs a user action (pinItem)');
     return this.#storeItem(w);
   }
   /** The item write itself. SEC-24a: the brain check runs here, so no caller can skip it. */
@@ -493,7 +445,9 @@ export class LocalMemoryService implements MemoryService {
         sourceExchangeId: w.sourceExchangeId,
         sourceSessionIds: w.sourceSessionIds,
         sourceUtteranceIds: w.sourceUtteranceIds,
-        origin: w.origin ?? 'agent',
+        // A user origin needs a ticket (pinItem): no brain write can label itself `pin` or `added`.
+        origin:
+          w.origin === undefined || w.origin === 'pin' || w.origin === 'added' ? 'agent' : w.origin,
         quarantined: w.quarantined === true || isQuarantined(w.text),
         seenAt: now,
         rowHlc: this.#hlc(now),

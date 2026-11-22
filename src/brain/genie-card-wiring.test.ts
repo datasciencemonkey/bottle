@@ -19,7 +19,7 @@ function setup() {
     closeMog: (m) => void log.push(['close', m]),
     changeHome: (m) => void log.push(['change-home', m]),
     remember: (m, id, t) => void log.push(['remember', m, id, t]),
-    undoRemember: (m) => void log.push(['undo', m]),
+    undoRemember: (m, id) => void log.push(['undo', m, id]),
   });
   const input = (from: string, kind: string, payload?: unknown, mogId = A, actionTicket?: string) =>
     bus.dispatch({
@@ -112,12 +112,13 @@ describe('Genie card wiring (#573)', () => {
   it('[ADR 0113] a card remember click passes the host ticket and the exchange on', () => {
     const { log, input } = setup();
     input(`card-${A}`, 'click', { action: 'memory.remember', requestId: OP }, A, 'tkt');
+    // The card names the exchange: there is no fallback to the newest request.
     input(`card-${A}`, 'click', { action: 'memory.remember' }, A, 'tkt2');
     // No ticket: the callee gets none, and the brain makes none.
     input(`card-${A}`, 'click', { action: 'memory.remember', requestId: OP });
     expect(log).toEqual([
       ['remember', A, OP, 'tkt'],
-      ['remember', A, OP, 'tkt2'],
+      ['remember', A, undefined, 'tkt2'],
       ['remember', A, OP, undefined],
     ]);
   });
@@ -125,10 +126,13 @@ describe('Genie card wiring (#573)', () => {
   it('[ADR 0113] remember and undo come only from the card of the same MOG', () => {
     const { log, input } = setup();
     input(`mog-${A}`, 'click', { action: 'memory.remember' }, A, 'tkt');
-    input(`mog-${A}`, 'click', { action: 'memory.undo' });
-    input('hub', 'click', { action: 'memory.undo' });
+    input(`mog-${A}`, 'click', { action: 'memory.undo', itemId: OP });
+    input('hub', 'click', { action: 'memory.undo', itemId: OP });
     input(`card-${B}`, 'click', { action: 'memory.remember' }, A, 'tkt');
+    // An Undo with no valid item id does nothing.
     input(`card-${A}`, 'click', { action: 'memory.undo' });
-    expect(log).toEqual([['undo', A]]);
+    input(`card-${A}`, 'click', { action: 'memory.undo', itemId: 'x' });
+    input(`card-${A}`, 'click', { action: 'memory.undo', itemId: OP });
+    expect(log).toEqual([['undo', A, OP]]);
   });
 });

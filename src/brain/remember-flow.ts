@@ -6,7 +6,8 @@
  * - Voice: Rust parsed the phrase from its own transcript and minted the ticket. The brain saves
  *   one pinned `fact` with `text = remember.text` and does not paste. It never parses the phrase.
  * - Each save sends `memory:saved` (content-free) to that MOG's card only.
- * - Undo (`memory.undo`) forgets an item that this MOG saved in the last {@link MEMORY_UNDO_MS}.
+ * - Undo (`memory.undo` with an `itemId`) forgets that item if this MOG saved it in the last
+ *   {@link MEMORY_UNDO_MS}, once.
  * - No ticket: no call, and the card gets `failed`. The brain never makes a ticket.
  * - Nothing here logs. No question, answer, text or error detail leaves this module.
  */
@@ -32,7 +33,7 @@ const cut = (s: string, max: number): string => {
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
 
 export interface RememberDeps {
-  memory: Pick<LocalMemoryService, 'pinItem' | 'forget'>;
+  memory: Pick<LocalMemoryService, 'pinItem' | 'readItem' | 'forget'>;
   /** Reads the exchange of a card (`mem.exchange.get`, `mem.exchange.recent`). */
   store: LocalMemoryStore;
   /** Send `memory:saved` to the card of `mogId` only. */
@@ -40,6 +41,8 @@ export interface RememberDeps {
   /** Show the card of `mogId` (a voice save shows its line there). Optional. */
   showCard?(mogId: MogId): Promise<unknown>;
   now?: () => number;
+  /** A save or an Undo changed the store: the hub list is stale. */
+  onChanged?(): void;
 }
 
 export interface RememberFlow {
@@ -47,8 +50,11 @@ export interface RememberFlow {
   card(mogId: MogId, requestId: string | undefined, ticket: string | undefined): Promise<void>;
   /** The voice phrase, with the host's ticket and the text of Rust's own transcript. */
   voice(mogId: MogId, text: string, ticket: string): Promise<void>;
-  /** `memory.undo`: forget the newest item saved for `mogId` in the last 8 s. Never rejects. */
-  undo(mogId: MogId): Promise<void>;
+  /**
+   * `memory.undo`: forget `itemId` if this MOG saved it in the last 8 s, once. Any other id,
+   * another MOG's id or a late call does nothing. Never rejects.
+   */
+  undo(mogId: MogId, itemId: string): Promise<void>;
 }
 
 /** Send `memory:saved` to the card window of `mogId` only. */
@@ -73,13 +79,24 @@ export function createRememberFlow(deps: RememberDeps): RememberFlow {
     ticket: string,
   ) => {
     try {
-      const { itemId, status } = await deps.memory.pinItem(write, ticket);
+      const pinned = await deps.memory.pinItem(write, ticket);
+      const { itemId } = pinned;
+      let status = pinned.status;
+      if (status === undefined) {
+        // The re-read failed. Try once more. If it fails again, report `saved`: the next
+        // `hub:memory` shows the real status, and a quarantined item stays out of recall anyway.
+        status = await deps.memory
+          .readItem(mogId, itemId)
+          .then((r) => r?.status)
+          .catch(() => undefined);
+      }
       const list = (savedAt.get(mogId) ?? []).filter((e) => now() - e.at <= MEMORY_UNDO_MS);
       savedAt.set(mogId, [...list, { itemId, at: now() }]);
       await reply(mogId, {
         itemId,
         outcome: status === 'quarantined' ? 'quarantined' : 'saved',
       });
+      deps.onChanged?.();
     } catch (e) {
       await reply(mogId, {
         outcome: writeCodeOf(e) === 'secret_refused' ? 'secret_refused' : 'failed',
@@ -151,13 +168,17 @@ export function createRememberFlow(deps: RememberDeps): RememberFlow {
       }
       await save(mogId, { mogId, itemType: 'fact', origin: 'pin', text }, ticket);
     },
-    async undo(mogId) {
+    async undo(mogId, itemId) {
       const list = savedAt.get(mogId) ?? [];
-      const last = list[list.length - 1];
-      if (!last || now() - last.at > MEMORY_UNDO_MS) return;
-      savedAt.set(mogId, list.slice(0, -1));
+      const hit = list.find((e) => e.itemId === itemId);
+      if (!hit || now() - hit.at > MEMORY_UNDO_MS) return;
+      savedAt.set(
+        mogId,
+        list.filter((e) => e !== hit),
+      );
       try {
-        await deps.memory.forget({ mogId, itemIds: [last.itemId] });
+        await deps.memory.forget({ mogId, itemIds: [itemId] });
+        deps.onChanged?.();
       } catch {
         // Nothing to say: the item stays, and the user can delete it in the hub.
       }
