@@ -58,7 +58,7 @@ import { asPttEvent } from '../ptt';
 import { createRecordToggle } from '../record-toggle';
 import { emitTo } from '@tauri-apps/api/event';
 import { EVENTS } from '../../shared/ipc';
-import { ipcGenieHistory } from '../genie-history';
+import { ipcGenieHistory, MOG_BACKEND_KIND } from '../genie-history';
 import { createHomeProfiles, ipcHomeProfileDeps, ipcListProfiles } from '../home-profile';
 import { LevelRouter, subscribeLevels, wireLevelStream } from '../level-stream';
 import { wireMogLook } from '../mog-look-relay';
@@ -198,6 +198,7 @@ export function startBrain(): Brain {
               mogId: m.mogId,
               name: m.name,
               colorVariant: m.colorVariant,
+              backendKind: MOG_BACKEND_KIND,
             })),
           hubPresent: () => hubExists(),
         })
@@ -209,6 +210,11 @@ export function startBrain(): Brain {
           store: memorySvc.store,
           send: sendMemorySaved,
           showCard: (mogId) => call('window_card_show', { mogId }),
+          ensureMog: async (mogId) => {
+            const m = (await components.T1.list()).mogs.find((x) => x.mogId === mogId);
+            if (m)
+              await memorySvc.ensureMog({ mogId, name: m.name, backendKind: MOG_BACKEND_KIND });
+          },
           // A save or an Undo changes the store: the hub list is stale.
           onChanged: () => void hubMemory?.push(),
         })

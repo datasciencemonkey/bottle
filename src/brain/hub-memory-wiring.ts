@@ -50,11 +50,20 @@ export interface MemoryMog {
   mogId: string;
   name: string;
   colorVariant?: string;
+  /** The backend of the MOG row, for the row that a MOG with no exchange yet needs. */
+  backendKind: string;
 }
 
 export type HubMemoryOps = Pick<
   LocalMemoryService,
-  'pinItem' | 'editItem' | 'rateItem' | 'readItem' | 'listItems' | 'readFile' | 'forget'
+  | 'pinItem'
+  | 'editItem'
+  | 'rateItem'
+  | 'readItem'
+  | 'listItems'
+  | 'ensureMog'
+  | 'readFile'
+  | 'forget'
 >;
 
 export interface HubMemoryDeps {
@@ -142,58 +151,44 @@ export function asMemoryAction(p: unknown): MemoryAction | undefined {
   }
 }
 
-/** The folder name of a MOG with no rows: its name as a slug. */
-function slugOf(name: string): string {
-  const s = name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 40)
-    .replace(/-+$/g, '');
-  return s === '' ? 'mog' : s;
-}
+const FOLDER = /^[a-z0-9-]{1,72}$/;
 
-/** The folder name that the rows already use, else the slug of the name. */
-function folderOf(rows: readonly unknown[], name: string): string {
-  for (const r of rows) {
-    const file = isObj(r) && isStr(r['file']) ? r['file'] : '';
-    const m = /^\/memories\/([a-z0-9-]+)\//.exec(file);
-    if (m?.[1]) return m[1];
-  }
-  return slugOf(name);
-}
-
-/** Read the folders of all MOGs. A failed read gives an empty list marked `unavailable`. */
+/**
+ * Read the folders of all MOGs. A MOG that fails to read is left out; the others still show.
+ * The list is `unavailable` only if the MOG list fails or every MOG fails.
+ */
 export async function readMemory(
-  memory: Pick<HubMemoryOps, 'listItems'>,
+  memory: Pick<HubMemoryOps, 'listItems' | 'ensureMog'>,
   mogs: () => Promise<MemoryMog[]>,
 ): Promise<HubMemory> {
+  const unavailable = { userItems: 0, folders: [], unavailable: true as const };
   try {
     const defined = await mogs();
     const raw: MemoryFolder[] = [];
     const user = new Set<string>();
     for (const m of defined) {
-      const rows = await memory.listItems(m.mogId);
-      for (const r of rows) {
-        if (isObj(r) && r['layer'] === 'user' && isStr(r['itemId'])) user.add(r['itemId']);
+      try {
+        await memory.ensureMog({ mogId: m.mogId, name: m.name, backendKind: m.backendKind });
+        const { rows, folder } = await memory.listItems(m.mogId);
+        if (folder === undefined || !FOLDER.test(folder)) continue;
+        for (const r of rows) {
+          if (isObj(r) && r['layer'] === 'user' && isStr(r['itemId'])) user.add(r['itemId']);
+        }
+        raw.push({
+          mogId: m.mogId,
+          folder,
+          mogName: m.name,
+          ...(m.colorVariant !== undefined ? { mogColorVariant: m.colorVariant } : {}),
+          rows: rows.filter((r) => !(isObj(r) && r['layer'] === 'user')) as MemoryFolder['rows'],
+        });
+      } catch {
+        // This MOG shows no folder. The others do.
       }
-      raw.push({
-        mogId: m.mogId,
-        folder: folderOf(rows, m.name),
-        mogName: m.name,
-        ...(m.colorVariant !== undefined ? { mogColorVariant: m.colorVariant } : {}),
-        rows: rows.filter((r) => !(isObj(r) && r['layer'] === 'user')) as MemoryFolder['rows'],
-      });
     }
-    return (
-      asHubMemory({ userItems: user.size, folders: raw }) ?? {
-        userItems: 0,
-        folders: [],
-        unavailable: true,
-      }
-    );
+    if (defined.length > 0 && raw.length === 0) return unavailable;
+    return asHubMemory({ userItems: user.size, folders: raw }) ?? unavailable;
   } catch {
-    return { userItems: 0, folders: [], unavailable: true };
+    return unavailable;
   }
 }
 
@@ -272,12 +267,18 @@ export function wireHubMemory(bus: BrainBus, deps: HubMemoryDeps): HubMemoryWiri
           await result({ requestId: a.requestId, ok: false, code: 'invalid' });
           return;
         }
-        await write(a.requestId, ticket, (t) =>
-          deps.memory.pinItem(
+        await write(a.requestId, ticket, async (t) => {
+          // A MOG with no exchange yet has no store row: register it first.
+          const m = (await deps.mogs()).find((x) => x.mogId === a.mogId);
+          if (m)
+            await deps.memory
+              .ensureMog({ mogId: m.mogId, name: m.name, backendKind: m.backendKind })
+              .catch(() => undefined);
+          return deps.memory.pinItem(
             { mogId: a.mogId, itemType: a.kind, origin: 'added', title: a.title, body: a.body },
             t,
-          ),
-        );
+          );
+        });
         return;
       case 'memory.edit':
         if (

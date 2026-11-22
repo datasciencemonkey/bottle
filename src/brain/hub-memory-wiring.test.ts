@@ -50,15 +50,29 @@ const listRow = (over: Record<string, unknown> = {}) => ({
 
 function setup(opts: { fail?: unknown; changes?: number; status?: string } = {}) {
   const calls: Call[] = [];
+  // A MOG has a store row only after `mem.mog.upsert` (its first exchange, or ensureMog).
+  const registered = new Set<string>();
   const store: LocalMemoryStore = {
     exec: async (stmtId, params, ticket) => {
       calls.push({ stmtId, params, ticket });
-      if (opts.fail !== undefined && stmtId !== 'mem.item.get' && stmtId !== 'mem.item.list') {
+      if (
+        opts.fail !== undefined &&
+        stmtId !== 'mem.item.get' &&
+        stmtId !== 'mem.item.list' &&
+        stmtId !== 'mem.mog.upsert'
+      ) {
         throw opts.fail;
       }
       switch (stmtId) {
+        case 'mem.mog.upsert':
+          registered.add(params['mogId'] as string);
+          return { rows: [{ changes: 1 }] };
         case 'mem.item.list':
-          return { rows: params['mogId'] === MOG ? [listRow()] : [] };
+          if (!registered.has(params['mogId'] as string)) throw { error: 'invalid_args' };
+          return {
+            rows: params['mogId'] === MOG ? [listRow()] : [],
+            folder: params['mogId'] === MOG ? 'sales' : 'ops-team',
+          };
         case 'mem.item.get':
           return {
             rows: [
@@ -75,6 +89,12 @@ function setup(opts: { fail?: unknown; changes?: number; status?: string } = {})
         case 'mem.file.get':
           return { rows: [{ path: params['path'], text: '# file' }] };
         case 'mem.item.write':
+          return {
+            rows: [
+              { changes: registered.has(params['mogId'] as string) ? (opts.changes ?? 1) : 0 },
+              { changes: 1 },
+            ],
+          };
         case 'mem.item.edit':
         case 'mem.item.rate':
           return { rows: [{ changes: opts.changes ?? 1 }, { changes: 1 }] };
@@ -93,8 +113,8 @@ function setup(opts: { fail?: unknown; changes?: number; status?: string } = {})
   const wiring = wireHubMemory(bus, {
     memory,
     mogs: async () => [
-      { mogId: MOG, name: 'Sales', colorVariant: 'coral' },
-      { mogId: MOG2, name: 'Ops Team' },
+      { mogId: MOG, name: 'Sales', colorVariant: 'coral', backendKind: 'k' },
+      { mogId: MOG2, name: 'Ops Team', backendKind: 'k' },
     ],
     send: async (event, payload) =>
       void sent.push({ event, payload: payload as Record<string, unknown> }),
@@ -111,7 +131,13 @@ function setup(opts: { fail?: unknown; changes?: number; status?: string } = {})
     sent,
     click,
     wiring,
-    writes: () => calls.filter((c) => c.stmtId !== 'mem.item.get' && c.stmtId !== 'mem.item.list'),
+    writes: () =>
+      calls.filter(
+        (c) =>
+          c.stmtId !== 'mem.item.get' &&
+          c.stmtId !== 'mem.item.list' &&
+          c.stmtId !== 'mem.mog.upsert',
+      ),
   };
 }
 
@@ -122,9 +148,11 @@ describe('hub Memory wiring: reads', () => {
   it('memory.ready lists each MOG and sends hub:memory with folders', async () => {
     const s = setup();
     await s.click({ action: 'memory.ready' });
-    expect(s.calls.map((c) => [c.stmtId, c.params])).toEqual([
-      ['mem.item.list', { mogId: MOG }],
-      ['mem.item.list', { mogId: MOG2 }],
+    expect(s.calls.map((c) => [c.stmtId, c.params['mogId']])).toEqual([
+      ['mem.mog.upsert', MOG],
+      ['mem.item.list', MOG],
+      ['mem.mog.upsert', MOG2],
+      ['mem.item.list', MOG2],
     ]);
     const m = s.sent.find((e) => e.event === 'hub:memory')?.payload as {
       folders: { mogId: string; folder: string; rows: unknown[]; mogColorVariant?: string }[];
@@ -142,9 +170,59 @@ describe('hub Memory wiring: reads', () => {
     expect(m.folders[0]?.mogColorVariant).toBe('coral');
   });
 
+  it('a MOG with no exchange yet shows an empty folder, and a hub add works', async () => {
+    const s = setup();
+    await s.click({ action: 'memory.ready' });
+    await s.click({ action: 'memory.ready' });
+    // Registered once per session, not on each list.
+    expect(s.calls.filter((c) => c.stmtId === 'mem.mog.upsert')).toHaveLength(2);
+    const ops = (
+      s.sent[0]?.payload as { folders: { mogId: string; folder: string; rows: unknown[] }[] }
+    ).folders[1];
+    expect(ops).toMatchObject({ mogId: MOG2, folder: 'ops-team', rows: [] });
+    await s.click(
+      { action: 'memory.add', requestId: 'r9', mogId: MOG2, kind: 'fact', title: 'T', body: 'B' },
+      'tkt',
+    );
+    expect(result(s.sent)).toEqual([{ requestId: 'r9', ok: true, itemId: NEW, status: 'active' }]);
+  });
+
+  it('one MOG that fails to list does not hide the others', async () => {
+    const memory = {
+      ensureMog: async () => undefined,
+      listItems: async (id: string) => {
+        if (id === MOG2) throw { error: 'invalid_args' };
+        return { rows: [listRow()], folder: 'sales' };
+      },
+    };
+    const m = await readMemory(memory, async () => [
+      { mogId: MOG, name: 'Sales', backendKind: 'k' },
+      { mogId: MOG2, name: 'Ops', backendKind: 'k' },
+    ]);
+    expect(m.unavailable).toBeUndefined();
+    expect(m.folders.map((f) => f.mogId)).toEqual([MOG]);
+  });
+
+  it('every MOG failing, or no folder name from Rust, is unavailable', async () => {
+    const bad = {
+      ensureMog: async () => undefined,
+      listItems: async () => ({ rows: [] }),
+    };
+    expect(
+      (await readMemory(bad, async () => [{ mogId: MOG, name: 'Sales', backendKind: 'k' }]))
+        .unavailable,
+    ).toBe(true);
+    expect((await readMemory(bad, async () => [])).unavailable).toBeUndefined();
+  });
+
   it('a failed list sends an unavailable list with no error text', async () => {
-    const memory = { listItems: async () => Promise.reject({ error: 'host_failed' }) };
-    expect(await readMemory(memory, async () => [{ mogId: MOG, name: 'Sales' }])).toEqual({
+    const memory = {
+      ensureMog: async () => undefined,
+      listItems: async () => Promise.reject({ error: 'host_failed' }),
+    };
+    expect(
+      await readMemory(memory, async () => [{ mogId: MOG, name: 'Sales', backendKind: 'k' }]),
+    ).toEqual({
       userItems: 0,
       folders: [],
       unavailable: true,
@@ -241,7 +319,7 @@ describe('hub Memory wiring: writes', () => {
         title: 'T',
         body: 'B',
         seenAt: T,
-        rowHlc: T,
+        rowHlc: T + 1,
         deviceId: 'device-1',
         now: T,
       },

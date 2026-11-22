@@ -69,6 +69,7 @@ function setup(
     newId: () => `22222222-2222-4333-8444-${String(++seq).padStart(12, '0')}`,
     deviceId: () => 'd',
   });
+  const order: string[] = [];
   const changed = { n: 0 };
   const sent: { mogId: string; saved: MemorySaved }[] = [];
   const flow = createRememberFlow({
@@ -76,11 +77,13 @@ function setup(
     store,
     send: async (mogId, saved) => void sent.push({ mogId, saved }),
     now: () => now,
+    ensureMog: async (m) => void order.push(`ensure:${m}`),
     onChanged: () => void changed.n++,
   });
   return {
     flow,
     changed,
+    order,
     idOf,
     calls,
     sent,
@@ -167,6 +170,12 @@ describe('voice "remember this"', () => {
       now: T,
     });
     expect(s.sent[0]?.saved).toEqual({ mogId: MOG, itemId: NEW, outcome: 'saved', undoMs: 8000 });
+  });
+
+  it('registers the MOG row before the pin', async () => {
+    const s = setup();
+    await s.flow.voice(MOG, 'x', 't');
+    expect(s.order).toEqual([`ensure:${MOG}`]);
   });
 });
 

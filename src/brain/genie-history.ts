@@ -70,6 +70,9 @@ export interface GenieHistoryDeps {
  * `CHECK (length BETWEEN 1 AND 80)`, so the row needs a name. A later upsert with the real name
  * replaces it.
  */
+/** The backend of a MOG row that the direct Genie path makes (ADR 0097). */
+export const MOG_BACKEND_KIND = 'genie_one_mcp';
+
 export const MOG_NAME_FALLBACK = 'MOG';
 
 /**
@@ -129,7 +132,7 @@ export function createGenieHistory(deps: GenieHistoryDeps): (x: GenieEnd) => Pro
       await deps.memory.registerMog({
         mogId: x.mogId,
         displayName: name.trim() === '' ? MOG_NAME_FALLBACK : name,
-        backendKind: 'genie_one_mcp',
+        backendKind: MOG_BACKEND_KIND,
       });
       await deps.memory.recordExchange(exchangeOf(x, host ?? ''));
     } catch {

@@ -7,6 +7,7 @@
  */
 import { act } from 'react';
 import { render } from '../test-tauri';
+import { deriveTitle } from './MemoryForm';
 import { MemoryArea, type MemoryHandlers, type MemorySource } from './Memory';
 import {
   asHubMemory,
@@ -405,6 +406,19 @@ describe('S3 add a memory', () => {
     await typeInto(field(el, 'title'), 'My title');
     await typeInto(field(el, 'body'), 'Other text');
     expect((field(el, 'title') as HTMLInputElement).value).toBe('My title');
+  });
+
+  it('cuts the derived and the typed title by code points, never inside an emoji', async () => {
+    const t = deriveTitle('😀'.repeat(90));
+    expect(Array.from(t)).toHaveLength(80);
+    expect(t).toBe('😀'.repeat(80));
+    const { src, el } = await setup();
+    await openAddForm(el);
+    await typeInto(field(el, 'body'), 'Body text');
+    await typeInto(field(el, 'title'), '😀'.repeat(85));
+    await pressKey(field(el, 'body'), { key: 'Enter', metaKey: true });
+    const sent = src.actions('memory.add')[0] as { title: string };
+    expect(sent.title).toBe('😀'.repeat(80));
   });
 
   it('Cmd+Enter saves, selects the new item, and Undo sends memory.delete', async () => {

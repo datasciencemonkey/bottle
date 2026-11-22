@@ -41,6 +41,8 @@ export interface RememberDeps {
   /** Show the card of `mogId` (a voice save shows its line there). Optional. */
   showCard?(mogId: MogId): Promise<unknown>;
   now?: () => number;
+  /** Register the MOG row before a pin (a MOG with no exchange has none). Optional. */
+  ensureMog?(mogId: MogId): Promise<unknown>;
   /** A save or an Undo changed the store: the hub list is stale. */
   onChanged?(): void;
 }
@@ -79,6 +81,7 @@ export function createRememberFlow(deps: RememberDeps): RememberFlow {
     ticket: string,
   ) => {
     try {
+      await deps.ensureMog?.(mogId).catch(() => undefined);
       const pinned = await deps.memory.pinItem(write, ticket);
       const { itemId } = pinned;
       let status = pinned.status;

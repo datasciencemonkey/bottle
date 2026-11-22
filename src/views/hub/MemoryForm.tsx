@@ -24,10 +24,12 @@ export function deriveTitle(body: string): string {
       .split('\n')
       .find((l) => l.trim() !== '')
       ?.trim() ?? '';
-  if (line.length <= TITLE_MAX) return line;
-  const cut = line.slice(0, TITLE_MAX);
+  // Code points, like the catalog cap: no emoji is cut in half.
+  const cps = Array.from(line);
+  if (cps.length <= TITLE_MAX) return line;
+  const cut = cps.slice(0, TITLE_MAX).join('');
   // The cut falls inside a word when the next character is not a space: drop that part word.
-  const at = line[TITLE_MAX] === ' ' ? -1 : cut.lastIndexOf(' ');
+  const at = cps[TITLE_MAX] === ' ' ? -1 : cut.lastIndexOf(' ');
   return (at > 0 ? cut.slice(0, at) : cut).trim();
 }
 
@@ -72,7 +74,7 @@ export function MemoryForm({ mode, initial, busy, error, onSubmit, onCancel }: M
     if (!canSave) return;
     // A cleared title falls back to the first line, so a save never sends an empty title.
     const t = shownTitle.trim() || deriveTitle(body);
-    onSubmit({ kind, title: t.slice(0, TITLE_MAX), body });
+    onSubmit({ kind, title: Array.from(t).slice(0, TITLE_MAX).join(''), body });
   };
   const onKeyDown = (e: KeyboardEvent<HTMLFormElement>) => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
@@ -118,7 +120,6 @@ export function MemoryForm({ mode, initial, busy, error, onSubmit, onCancel }: M
           <Input
             id={`${id}-title`}
             value={shownTitle}
-            maxLength={TITLE_MAX}
             placeholder="First line of the text"
             data-field="title"
             onChange={(e) => {

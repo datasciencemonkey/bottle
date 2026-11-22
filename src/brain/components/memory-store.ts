@@ -56,14 +56,14 @@ export interface LocalMemoryStore {
     params: JsonObject,
     /** ADR 0113: a host-minted ticket for a user write. The store never makes one. */
     actionTicket?: string,
-  ): Promise<{ rows: unknown[] }>;
+  ): Promise<{ rows: unknown[]; folder?: string }>;
 }
 
 export type MemLocalExec = (args: {
   stmtId: string;
   params: JsonObject;
   actionTicket?: string;
-}) => Promise<{ rows: unknown[] }>;
+}) => Promise<{ rows: unknown[]; folder?: string }>;
 
 /** The store over IPC: `mem_local_exec { stmtId, params }` to the Rust core. */
 export class IpcLocalMemoryStore implements LocalMemoryStore {
@@ -76,7 +76,7 @@ export class IpcLocalMemoryStore implements LocalMemoryStore {
     stmtId: LocalStmtId,
     params: JsonObject,
     actionTicket?: string,
-  ): Promise<{ rows: unknown[] }> {
+  ): Promise<{ rows: unknown[]; folder?: string }> {
     if (!isLocalStmtId(stmtId)) {
       throw new Error('stmtId is not in the local statement catalog');
     }
