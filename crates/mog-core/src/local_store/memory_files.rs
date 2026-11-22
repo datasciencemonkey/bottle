@@ -1,45 +1,51 @@
-//! The virtual memory folder `/memories` (local memory plan 5.2, 5.3; ADR 0112).
+//! The virtual memory folder `/memories` (local memory plan; ADR 0112, the OpenClaw-style layout).
 //!
-//! No real folder exists. Each memory is one `memory_item` row, and Rust computes its file form
-//! (YAML frontmatter, then a Markdown body) and the `index.md` of each folder from the columns.
-//! The hub, the export and the agent memory tool all see this form. This module holds:
-//! - the memory kinds and their kind folders;
-//! - the slug rules of a memory and of a MOG folder;
-//! - the fixed path grammar `/memories/(shared|<mog-slug>)/[<kind-folder>/<slug>.md | index.md]`
-//!   (anything else is refused, so a path can never point outside the store);
-//! - the renderers of one memory file and of one folder index.
+//! No real folder exists. Each memory is one encrypted `memory_item` row, and Rust renders the
+//! files from the rows:
+//! - `/memories/USER.md`: the shared preferences across MOGs (layer `user`);
+//! - `/memories/<mog-slug>/MEMORY.md`: the curated durable memories of one MOG (layer `durable`);
+//! - `/memories/<mog-slug>/memory/<YYYY-MM-DD>.md`: the daily notes of one MOG (layer `daily`),
+//!   one section for each item.
+//!
+//! `<file>#<slug>` names one item in a file. This module holds the kinds and layers, the slug
+//! rules, the fixed path grammar (anything else is refused, so a path never points outside the
+//! store) and the renderers. The renderer has two audiences: the user (hub, export) sees each
+//! item with a mark; a model (recall, the later agent tool) sees only `active` items, in caps.
 //!
 //! Logs: nothing here logs. A rendered file is user content (SEC-16c).
 
-use chrono::{DateTime, SecondsFormat};
+use chrono::{DateTime, NaiveDate, SecondsFormat};
 use serde_json::Value;
 
 /// The root of the virtual folder.
 pub const ROOT: &str = "/memories";
-/// The reserved folder name of the shared folder. No MOG folder can take it.
-pub const SHARED: &str = "shared";
-/// The most characters of a slug.
+/// The file of the shared preferences.
+pub const USER_FILE: &str = "USER.md";
+/// The file of the curated memories of one MOG.
+pub const MEMORY_FILE: &str = "MEMORY.md";
+/// The folder of the daily notes of one MOG.
+pub const DAILY_DIR: &str = "memory";
+/// The most characters of a slug base.
 pub const SLUG_MAX: usize = 64;
-/// The most lines of one index file (plan 5.3).
-pub const INDEX_MAX_LINES: usize = 200;
-/// The most bytes of one index file (plan 5.3).
-pub const INDEX_MAX_BYTES: usize = 25 * 1024;
-/// The most characters of the summary on one index line (plan 5.3).
-pub const INDEX_SUMMARY_MAX: usize = 80;
+/// The most items of MEMORY.md for a model (OpenClaw loads it at session start).
+pub const MODEL_MEMORY_MAX_ITEMS: usize = 200;
+/// The most bytes of MEMORY.md for a model.
+pub const MODEL_MEMORY_MAX_BYTES: usize = 25 * 1024;
+/// The most characters of one file view for a model (the memory tool `view` cap).
+pub const MODEL_VIEW_MAX_CHARS: usize = 16_000;
 
-/// The kind of a memory (plan 5.1). `entity` and `person` are not kinds (owner, Q7).
+/// The kind of a memory. There is no `entity` or `person` kind (owner, Q7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Kind {
     Fact,
-    Preference,
     Definition,
     Decision,
     OpenQuestion,
     GenieAnswer,
+    Preference,
 }
 
 impl Kind {
-    /// Every kind, in the order of the index and the hub tree.
     pub const ALL: [Kind; 6] = [
         Kind::Fact,
         Kind::Definition,
@@ -53,33 +59,66 @@ impl Kind {
     pub fn code(self) -> &'static str {
         match self {
             Kind::Fact => "fact",
-            Kind::Preference => "preference",
             Kind::Definition => "definition",
             Kind::Decision => "decision",
             Kind::OpenQuestion => "open_question",
             Kind::GenieAnswer => "genie_answer",
+            Kind::Preference => "preference",
         }
     }
 
-    /// The kind folder of the path.
-    pub fn folder(self) -> &'static str {
+    /// The section title of the kind in MEMORY.md.
+    pub fn heading(self) -> &'static str {
         match self {
-            Kind::Fact => "facts",
-            Kind::Preference => "preferences",
-            Kind::Definition => "definitions",
-            Kind::Decision => "decisions",
-            Kind::OpenQuestion => "open-questions",
-            Kind::GenieAnswer => "answers",
+            Kind::Fact => "Facts",
+            Kind::Definition => "Definitions",
+            Kind::Decision => "Decisions",
+            Kind::OpenQuestion => "Open questions",
+            Kind::GenieAnswer => "Answers",
+            Kind::Preference => "Preferences",
         }
     }
 
     pub fn from_code(code: &str) -> Option<Kind> {
         Kind::ALL.into_iter().find(|k| k.code() == code)
     }
+}
 
-    pub fn from_folder(folder: &str) -> Option<Kind> {
-        Kind::ALL.into_iter().find(|k| k.folder() == folder)
+/// The file layer of a row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Layer {
+    /// `USER.md`.
+    User,
+    /// `MEMORY.md`.
+    Durable,
+    /// `memory/<day>.md`.
+    Daily,
+}
+
+impl Layer {
+    pub fn code(self) -> &'static str {
+        match self {
+            Layer::User => "user",
+            Layer::Durable => "durable",
+            Layer::Daily => "daily",
+        }
     }
+
+    pub fn from_code(code: &str) -> Option<Layer> {
+        [Layer::User, Layer::Durable, Layer::Daily]
+            .into_iter()
+            .find(|l| l.code() == code)
+    }
+}
+
+/// Who reads a rendering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Audience {
+    /// The hub and the export: every item in use, with a mark for `stale` and `quarantined`.
+    User,
+    /// Recall and the agent tool: only `active` items, within the model caps. A `quarantined`
+    /// item never reaches a model (SEC-24b).
+    Model,
 }
 
 /// The slug of `text`: lower-case ASCII letters and digits, with one hyphen for each run of
@@ -116,14 +155,13 @@ pub fn slugify(text: &str) -> String {
     }
 }
 
-/// The combining marks that NFKD splits off a Latin letter (U+0300..U+036F and the extended
-/// blocks). A slug drops them, so `Café` becomes `cafe`.
+/// The combining marks that NFKD splits off a Latin letter. A slug drops them (`Café` → `cafe`).
 fn is_combining_mark(c: char) -> bool {
     matches!(c, '\u{0300}'..='\u{036f}' | '\u{1ab0}'..='\u{1aff}' | '\u{1dc0}'..='\u{1dff}' | '\u{20d0}'..='\u{20ff}' | '\u{fe20}'..='\u{fe2f}')
 }
 
 /// True if `s` is a well-formed slug: 1 to 72 characters (a 64-character base plus a suffix) of
-/// `a-z`, `0-9` and single inner hyphens.
+/// `a-z`, `0-9` and single inner hyphens. A slug has no dot, so it can never be a file name.
 pub fn is_slug(s: &str) -> bool {
     (1..=SLUG_MAX + 8).contains(&s.len())
         && s.bytes()
@@ -142,8 +180,8 @@ fn id_prefix(id: &str, n: usize) -> String {
         .to_ascii_lowercase()
 }
 
-/// The file slug of a memory: its stored slug, or `item-<first 8 of id>` for a row that has none
-/// (a row from before migration 0003).
+/// The item slug: the stored slug, or `item-<first 8 of id>` for a row that has none (a row from
+/// before migration 0003).
 pub fn item_slug(stored: Option<&str>, item_id: &str) -> String {
     match stored {
         Some(s) if is_slug(s) => s.to_owned(),
@@ -152,14 +190,13 @@ pub fn item_slug(stored: Option<&str>, item_id: &str) -> String {
 }
 
 /// The folder slug of each MOG on the device, in the order of `mogs` (`(mog_id, display_name)`).
-/// The base is the slug of the name. A clash with another MOG, or with the reserved name
-/// [`SHARED`], adds `-<first 6 of mog_id>`. So each folder name is unique on the device.
+/// A clash with another MOG adds `-<first 6 of mog_id>`, so each folder name is unique.
 pub fn mog_slugs(mogs: &[(String, String)]) -> Vec<(String, String)> {
     let bases: Vec<String> = mogs.iter().map(|(_, name)| slugify(name)).collect();
     mogs.iter()
         .zip(&bases)
         .map(|((id, _), base)| {
-            let clash = base == SHARED || bases.iter().filter(|b| *b == base).count() > 1;
+            let clash = bases.iter().filter(|b| *b == base).count() > 1;
             let slug = if clash {
                 format!("{base}-{}", id_prefix(id, 6))
             } else {
@@ -170,67 +207,109 @@ pub fn mog_slugs(mogs: &[(String, String)]) -> Vec<(String, String)> {
         .collect()
 }
 
-/// One parsed path of the virtual folder.
+/// True if `day` is a real calendar date in the form `YYYY-MM-DD`.
+pub fn is_day(day: &str) -> bool {
+    day.len() == 10
+        && day.as_bytes()[4] == b'-'
+        && day.as_bytes()[7] == b'-'
+        && NaiveDate::parse_from_str(day, "%Y-%m-%d")
+            .is_ok_and(|d| d.format("%Y-%m-%d").to_string() == day)
+}
+
+/// The local calendar day of `ms`, at `offset_s` seconds east of UTC. The core computes the
+/// `note_day` of a write with it, so the brain cannot put an item into another day's note.
+pub fn day_of(ms: i64, offset_s: i32) -> Option<String> {
+    let offset = chrono::FixedOffset::east_opt(offset_s)?;
+    let t = DateTime::from_timestamp_millis(ms)?.with_timezone(&offset);
+    Some(t.format("%Y-%m-%d").to_string())
+}
+
+/// One file of the virtual folder.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum File {
+    /// `/memories/USER.md`.
+    User,
+    /// `/memories/<folder>/MEMORY.md`.
+    Memory { folder: String },
+    /// `/memories/<folder>/memory/<day>.md`.
+    Daily { folder: String, day: String },
+}
+
+impl File {
+    pub fn path(&self) -> String {
+        match self {
+            File::User => format!("{ROOT}/{USER_FILE}"),
+            File::Memory { folder } => format!("{ROOT}/{folder}/{MEMORY_FILE}"),
+            File::Daily { folder, day } => format!("{ROOT}/{folder}/{DAILY_DIR}/{day}.md"),
+        }
+    }
+
+    pub fn layer(&self) -> Layer {
+        match self {
+            File::User => Layer::User,
+            File::Memory { .. } => Layer::Durable,
+            File::Daily { .. } => Layer::Daily,
+        }
+    }
+}
+
+/// One parsed path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VPath {
-    /// `/memories` or `/memories/index.md`: the list of folders.
+    /// `/memories` or `/memories/`: the list of files.
     Root,
-    /// `/memories/<folder>/index.md` (or the folder itself).
-    Index { folder: String },
-    /// `/memories/<folder>/<kind-folder>/<slug>.md`.
-    File {
-        folder: String,
-        kind: Kind,
-        slug: String,
-    },
+    /// One whole file.
+    File(File),
+    /// One item of a file: `<file>#<slug>`.
+    Item { file: File, slug: String },
 }
 
-/// Parse a path by the fixed grammar. Anything else is `None`: `..`, `.`, a double slash, a
-/// backslash, a percent form, an unknown kind folder or a bad slug.
+/// Parse a path by the fixed grammar. Anything else is `None`.
 pub fn parse_path(path: &str) -> Option<VPath> {
     let rest = path.strip_prefix(ROOT)?;
-    if rest.is_empty() || rest == "/" || rest == "/index.md" {
+    if rest.is_empty() || rest == "/" {
         return Some(VPath::Root);
     }
-    let rest = rest.strip_prefix('/')?;
-    let rest = rest.strip_suffix('/').unwrap_or(rest);
-    let parts: Vec<&str> = rest.split('/').collect();
-    let folder_ok = |f: &str| is_slug(f);
-    match parts.as_slice() {
-        [folder] | [folder, "index.md"] if folder_ok(folder) => Some(VPath::Index {
+    let (file_part, anchor) = match rest.split_once('#') {
+        Some((f, a)) => (f, Some(a)),
+        None => (rest, None),
+    };
+    let file_part = file_part.strip_prefix('/')?;
+    let parts: Vec<&str> = file_part.split('/').collect();
+    let file = match parts.as_slice() {
+        [f] if *f == USER_FILE => File::User,
+        [folder, f] if is_slug(folder) && *f == MEMORY_FILE => File::Memory {
             folder: (*folder).to_owned(),
-        }),
-        [folder, kind, file] if folder_ok(folder) => {
-            let kind = Kind::from_folder(kind)?;
-            let slug = file.strip_suffix(".md")?;
-            if !is_slug(slug) || slug == "index" {
+        },
+        [folder, dir, f] if is_slug(folder) && *dir == DAILY_DIR => {
+            let day = f.strip_suffix(".md")?;
+            if !is_day(day) {
                 return None;
             }
-            Some(VPath::File {
+            File::Daily {
                 folder: (*folder).to_owned(),
-                kind,
-                slug: slug.to_owned(),
-            })
+                day: day.to_owned(),
+            }
         }
-        _ => None,
+        _ => return None,
+    };
+    match anchor {
+        None => Some(VPath::File(file)),
+        Some(slug) if is_slug(slug) => Some(VPath::Item {
+            file,
+            slug: slug.to_owned(),
+        }),
+        Some(_) => None,
     }
 }
 
-/// The path of one memory file.
-pub fn file_path(folder: &str, kind: Kind, slug: &str) -> String {
-    format!("{ROOT}/{folder}/{}/{slug}.md", kind.folder())
-}
-
-/// The path of the index of one folder.
-pub fn index_path(folder: &str) -> String {
-    format!("{ROOT}/{folder}/index.md")
-}
-
-/// One memory as the renderer reads it: the columns of `mem.item.list` / `mem.item.get`.
+/// One memory as the renderer reads it: the columns of `mem.item.list` (camelCase keys).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct MemoryRow {
     pub item_id: String,
     pub kind: String,
+    pub layer: String,
+    pub note_day: Option<String>,
     pub title: String,
     /// The summary line (`text`).
     pub text: String,
@@ -242,20 +321,22 @@ pub struct MemoryRow {
     pub origin: String,
     pub tags: Vec<String>,
     pub confidence: f64,
-    pub sensitivity: String,
     pub workspace_host: Option<String>,
     pub workspace_id: Option<String>,
     pub profile: Option<String>,
     pub exchange_id: Option<String>,
     pub recording_id: Option<String>,
-    pub superseded_by: Option<String>,
     pub created_ms: i64,
     pub updated_ms: i64,
     pub last_used_ms: Option<i64>,
+    /// The user's feedback: 1 (thumbs up or an edit), 0 (none yet) or -1 (kept for later use).
+    pub rating: i64,
+    /// When the user last rated or edited the item.
+    pub reviewed_ms: Option<i64>,
 }
 
 impl MemoryRow {
-    /// Read one row of `{rows: [...]}` (camelCase keys). `None` if a required key is missing.
+    /// Read one row of `{rows: [...]}`. `None` if a required key is missing.
     pub fn from_json(v: &Value) -> Option<MemoryRow> {
         let s = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_owned);
         let opt = |k: &str| -> Option<String> {
@@ -277,6 +358,8 @@ impl MemoryRow {
         Some(MemoryRow {
             item_id: s("itemId")?,
             kind: s("kind")?,
+            layer: s("layer").unwrap_or_else(|| "daily".to_owned()),
+            note_day: s("noteDay"),
             title: s("title").unwrap_or_else(|| text.chars().take(80).collect()),
             body_md: s("bodyMd").unwrap_or_default(),
             text,
@@ -288,16 +371,16 @@ impl MemoryRow {
             origin: s("origin").unwrap_or_else(|| "legacy".to_owned()),
             tags,
             confidence: v.get("confidence").and_then(Value::as_f64).unwrap_or(0.0),
-            sensitivity: s("sensitivity").unwrap_or_else(|| "normal".to_owned()),
             workspace_host: s("workspaceHost"),
             workspace_id: opt("workspaceId"),
             profile: s("profile"),
             exchange_id: s("exchangeId"),
             recording_id: s("recordingId"),
-            superseded_by: s("supersededBy"),
             created_ms: v.get("createdAt").and_then(Value::as_i64).unwrap_or(0),
             updated_ms: v.get("updatedAt").and_then(Value::as_i64).unwrap_or(0),
             last_used_ms: v.get("lastUsedAt").and_then(Value::as_i64),
+            rating: v.get("rating").and_then(Value::as_i64).unwrap_or(0),
+            reviewed_ms: v.get("reviewedAt").and_then(Value::as_i64),
         })
     }
 
@@ -309,21 +392,44 @@ impl MemoryRow {
         item_slug(self.slug.as_deref(), &self.item_id)
     }
 
-    /// The path of this memory in the folder `folder`. `None` for an unknown kind.
-    pub fn path(&self, folder: &str) -> Option<String> {
-        Some(file_path(folder, self.kind()?, &self.slug()))
+    /// True if the user has not rated or edited the item yet: the hub shows "New".
+    pub fn is_new(&self) -> bool {
+        self.rating == 0 && self.reviewed_ms.is_none()
     }
 
-    /// The time the index sorts by: the last use, else the last update.
-    fn recency(&self) -> i64 {
-        self.last_used_ms
-            .unwrap_or(self.updated_ms)
-            .max(self.updated_ms)
+    /// The file of this row in the MOG folder `folder`. `None` for a bad layer or day.
+    pub fn file(&self, folder: &str) -> Option<File> {
+        match Layer::from_code(&self.layer)? {
+            Layer::User => Some(File::User),
+            Layer::Durable => Some(File::Memory {
+                folder: folder.to_owned(),
+            }),
+            Layer::Daily => {
+                let day = self.note_day.as_deref().filter(|d| is_day(d))?;
+                Some(File::Daily {
+                    folder: folder.to_owned(),
+                    day: day.to_owned(),
+                })
+            }
+        }
+    }
+
+    /// The address of this item: `<file path>#<slug>`.
+    pub fn path(&self, folder: &str) -> Option<String> {
+        Some(format!("{}#{}", self.file(folder)?.path(), self.slug()))
     }
 }
 
-/// A YAML scalar: a JSON string (valid YAML), so a `:`, `#`, quote or new line in user text can
-/// never start a new key.
+/// The statuses that a file shows. `superseded`, `resolved`, `retracted` and `removed` items
+/// are not in use; the hub shows them in its own lists (later slices).
+fn shown(status: &str, audience: Audience) -> bool {
+    match audience {
+        Audience::User => matches!(status, "active" | "stale" | "quarantined"),
+        Audience::Model => status == "active",
+    }
+}
+
+/// A YAML scalar: a JSON string (valid YAML), so user text can never start a new key.
 fn quoted(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_owned())
 }
@@ -334,146 +440,285 @@ fn opt_quoted(s: Option<&str>) -> String {
 
 fn iso(ms: i64) -> String {
     DateTime::from_timestamp_millis(ms).map_or_else(
-        || "null".to_owned(),
+        || "-".to_owned(),
         |d| d.to_rfc3339_opts(SecondsFormat::Secs, true),
     )
 }
 
-/// The file form of one memory (plan 5.2): the frontmatter fields of the plan, in its order,
-/// then the body. The body is `body_md`, or the summary when the body is empty.
-pub fn render_file(row: &MemoryRow, folder: &str) -> String {
-    let tags = format!(
-        "[{}]",
-        row.tags
-            .iter()
-            .map(|t| quoted(t))
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
-    let supersedes = "[]";
-    let lines = [
-        format!("id: {}", row.item_id),
-        format!("kind: {}", row.kind),
-        format!("title: {}", quoted(&row.title)),
-        format!("status: {}", row.status),
-        format!("pinned: {}", row.pinned),
-        format!("source: {}", row.source),
-        format!("origin: {}", row.origin),
-        format!("mog: {folder}"),
-        format!(
-            "workspace_host: {}",
-            opt_quoted(row.workspace_host.as_deref())
-        ),
-        format!("workspace_id: {}", opt_quoted(row.workspace_id.as_deref())),
-        format!("profile: {}", opt_quoted(row.profile.as_deref())),
-        format!(
-            "exchange_id: {}",
-            row.exchange_id.as_deref().unwrap_or("null")
-        ),
-        format!(
-            "recording_id: {}",
-            row.recording_id.as_deref().unwrap_or("null")
-        ),
-        format!("created: {}", iso(row.created_ms)),
-        format!("updated: {}", iso(row.updated_ms)),
-        format!(
-            "last_used: {}",
-            row.last_used_ms.map_or_else(|| "null".to_owned(), iso)
-        ),
-        format!("confidence: {}", row.confidence),
-        format!("sensitivity: {}", row.sensitivity),
-        format!("tags: {tags}"),
-        format!("supersedes: {supersedes}"),
-    ];
-    let body = if row.body_md.trim().is_empty() {
-        row.text.as_str()
-    } else {
-        row.body_md.as_str()
-    };
-    format!("---\n{}\n---\n{}\n", lines.join("\n"), body.trim_end())
-}
-
-/// One line of text: each run of white space is one space, at most `max` characters, with `…`
-/// when it is cut.
-fn one_line(s: &str, max: usize) -> String {
+/// One line: each run of white space is one space, and no `#` can start a heading.
+fn heading_text(s: &str) -> String {
     let flat = s.split_whitespace().collect::<Vec<_>>().join(" ");
-    if flat.chars().count() <= max {
-        return flat;
+    flat.trim_start_matches('#').trim_start().to_owned()
+}
+
+/// A code or an id for the hidden metadata line: only `a-z0-9_-`, so no user text and no `-->`
+/// can be in the comment.
+fn code(s: &str) -> String {
+    let c: String = s
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .take(64)
+        .collect::<String>()
+        .replace("--", "-");
+    if c.is_empty() {
+        "-".to_owned()
+    } else {
+        c
     }
-    let mut cut: String = flat.chars().take(max.saturating_sub(1)).collect();
-    cut = cut.trim_end().to_owned();
-    cut.push('…');
-    cut
 }
 
-/// The link text of a Markdown link: no `[`, `]` or new line can close it early.
-fn link_text(s: &str) -> String {
-    one_line(s, 80).replace('[', "(").replace(']', ")")
-}
+const SOURCE_LABEL: &[(&str, &str)] = &[
+    ("you", "You"),
+    ("others", "Others in a call"),
+    ("genie", "Genie"),
+    ("agent", "Agent"),
+    ("confirmed", "You (confirmed)"),
+];
 
-/// The statuses that an index lists. `superseded`, `retracted` and `removed` memories are not
-/// in use, so the index leaves them out; the hub shows them in its own lists.
-fn listed(status: &str) -> bool {
-    matches!(status, "active" | "proposed" | "stale" | "quarantined")
-}
+const ORIGIN_LABEL: &[(&str, &str)] = &[
+    ("pin", "Remember this"),
+    ("kept_answer", "Kept answer"),
+    ("correction", "Your edit"),
+    ("dictation_word", "Dictation word"),
+    ("call_notes", "Call notes"),
+    ("agent", "Agent"),
+    ("merge", "Merge"),
+    ("legacy", "Earlier version of Bottle"),
+];
 
-/// The `index.md` of one folder (plan 5.3): a title line, then one line per listed memory,
-/// pinned first, then by the last use. At most [`INDEX_MAX_LINES`] lines and
-/// [`INDEX_MAX_BYTES`] bytes; a last line names how many memories it left out.
-pub fn render_index(folder: &str, rows: &[MemoryRow]) -> String {
-    let mut items: Vec<&MemoryRow> = rows
+fn label(table: &[(&str, &'static str)], key: &str) -> String {
+    table
         .iter()
-        .filter(|r| listed(&r.status) && r.kind().is_some())
-        .collect();
-    items.sort_by(|a, b| {
-        b.pinned
-            .cmp(&a.pinned)
-            .then(b.recency().cmp(&a.recency()))
-            .then(a.item_id.cmp(&b.item_id))
-    });
-    let head = format!("# {folder}\n\n");
-    let mut out = head.clone();
-    let mut lines = 1usize;
-    let mut shown = 0usize;
-    for r in &items {
-        let Some(kind) = r.kind() else { continue };
-        let mark = match r.status.as_str() {
-            "proposed" => " (proposed)",
-            "stale" => " (stale)",
-            "quarantined" => " (quarantined)",
-            _ => "",
-        };
-        let line = format!(
-            "- [{}]({}/{}.md){mark} — {}\n",
-            link_text(&r.title),
-            kind.folder(),
-            r.slug(),
-            one_line(&r.text, INDEX_SUMMARY_MAX)
-        );
-        // Keep room for the "more" line.
-        if lines + 2 > INDEX_MAX_LINES || out.len() + line.len() + 64 > INDEX_MAX_BYTES {
-            break;
-        }
-        out.push_str(&line);
-        lines += 1;
-        shown += 1;
+        .find(|(k, _)| *k == key)
+        .map_or_else(|| code(key), |(_, v)| (*v).to_owned())
+}
+
+/// The local time `HH:MM` of `ms` at `offset_s`.
+fn clock(ms: i64, offset_s: i32) -> String {
+    chrono::FixedOffset::east_opt(offset_s)
+        .and_then(|o| DateTime::from_timestamp_millis(ms).map(|t| t.with_timezone(&o)))
+        .map_or_else(|| "--:--".to_owned(), |t| t.format("%H:%M").to_string())
+}
+
+/// The section of one item: a heading, a hidden metadata line (codes, ids and times only), a
+/// visible meta line, the body (or the summary) and the tags.
+pub fn render_item(row: &MemoryRow, level: usize, offset_s: i32) -> String {
+    let hashes = "#".repeat(level.clamp(2, 3));
+    let mut out = format!("{hashes} {}\n", heading_text(&row.title));
+    out.push_str(&format!(
+        "<!-- memory id={} slug={} kind={} status={} pinned={} rating={} source={} origin={} created={} reviewed={} exchange={} recording={} -->\n",
+        code(&row.item_id),
+        row.slug(),
+        code(&row.kind),
+        code(&row.status),
+        row.pinned,
+        row.rating.clamp(-1, 1),
+        code(&row.source),
+        code(&row.origin),
+        iso(row.created_ms),
+        row.reviewed_ms.map_or_else(|| "-".to_owned(), iso),
+        row.exchange_id.as_deref().map_or_else(|| "-".to_owned(), code),
+        row.recording_id.as_deref().map_or_else(|| "-".to_owned(), code),
+    ));
+    let mut meta = vec![
+        clock(row.created_ms, offset_s),
+        label(SOURCE_LABEL, &row.source),
+        label(ORIGIN_LABEL, &row.origin),
+    ];
+    if row.pinned {
+        meta.push("Pinned".to_owned());
     }
-    if shown == 0 {
-        out.push_str("No memories yet.\n");
-    } else if shown < items.len() {
-        out.push_str(&format!("- … and {} more\n", items.len() - shown));
+    if row.is_new() {
+        meta.push("New".to_owned());
+    }
+    match row.status.as_str() {
+        "stale" => meta.push("Not used lately".to_owned()),
+        "quarantined" => meta.push("Quarantined".to_owned()),
+        _ => {}
+    }
+    out.push_str(&format!("_{}_\n\n", meta.join(" · ")));
+    let body = if row.body_md.trim().is_empty() {
+        row.text.trim_end()
+    } else {
+        row.body_md.trim_end()
+    };
+    out.push_str(body);
+    out.push('\n');
+    if !row.tags.is_empty() {
+        out.push_str(&format!("\nTags: {}\n", row.tags.join(", ")));
     }
     out
 }
 
-/// The `/memories/index.md` root: one line per folder, `(folder, count)`.
-pub fn render_root(folders: &[(String, usize)]) -> String {
-    let mut out = String::from("# memories\n\n");
-    if folders.is_empty() {
-        out.push_str("No memories yet.\n");
+/// The context of one rendering.
+#[derive(Debug, Clone, Copy)]
+pub struct Ctx<'a> {
+    /// The MOG folder slug.
+    pub folder: &'a str,
+    /// The MOG display name.
+    pub mog_name: &'a str,
+    pub audience: Audience,
+    /// The device offset east of UTC, for the times of the day.
+    pub offset_s: i32,
+}
+
+fn front(file: &File, ctx: &Ctx<'_>, rows: &[&MemoryRow]) -> String {
+    let kind = match file {
+        File::User => USER_FILE,
+        File::Memory { .. } => MEMORY_FILE,
+        File::Daily { .. } => "daily",
+    };
+    let first = rows.first();
+    let mut lines = vec![format!("file: {kind}")];
+    if !matches!(file, File::User) {
+        lines.push(format!("mog: {}", ctx.folder));
+        lines.push(format!(
+            "workspace_host: {}",
+            opt_quoted(first.and_then(|r| r.workspace_host.as_deref()))
+        ));
+        lines.push(format!(
+            "profile: {}",
+            opt_quoted(first.and_then(|r| r.profile.as_deref()))
+        ));
     }
-    for (f, n) in folders {
-        out.push_str(&format!("- [{f}]({f}/index.md) — {n} memories\n"));
+    if let File::Daily { day, .. } = file {
+        lines.push(format!("day: {day}"));
+    }
+    lines.push(format!("items: {}", rows.len()));
+    let updated = rows.iter().map(|r| r.updated_ms).max();
+    lines.push(format!(
+        "updated: {}",
+        updated.map_or_else(|| "null".to_owned(), iso)
+    ));
+    format!("---\n{}\n---\n", lines.join("\n"))
+}
+
+/// The rows of `file`, in the file order: MEMORY.md and USER.md pinned first, then by the last
+/// use; a daily note oldest first.
+fn rows_of<'a>(file: &File, ctx: &Ctx<'_>, rows: &'a [MemoryRow]) -> Vec<&'a MemoryRow> {
+    let mut mine: Vec<&MemoryRow> = rows
+        .iter()
+        .filter(|r| shown(&r.status, ctx.audience))
+        .filter(|r| r.kind().is_some())
+        .filter(|r| r.file(ctx.folder).as_ref() == Some(file))
+        .collect();
+    match file {
+        File::Daily { .. } => mine.sort_by(|a, b| {
+            a.created_ms
+                .cmp(&b.created_ms)
+                .then(a.item_id.cmp(&b.item_id))
+        }),
+        _ => mine.sort_by(|a, b| {
+            let use_of = |r: &MemoryRow| r.last_used_ms.unwrap_or(r.updated_ms).max(r.updated_ms);
+            b.pinned
+                .cmp(&a.pinned)
+                .then(use_of(b).cmp(&use_of(a)))
+                .then(a.item_id.cmp(&b.item_id))
+        }),
+    }
+    mine
+}
+
+/// Render one whole file from the rows of its MOG (and, for USER.md, of the shared folder).
+pub fn render_file(file: &File, ctx: &Ctx<'_>, rows: &[MemoryRow]) -> String {
+    let mut mine = rows_of(file, ctx, rows);
+    if ctx.audience == Audience::Model && matches!(file, File::Memory { .. }) {
+        mine.truncate(MODEL_MEMORY_MAX_ITEMS);
+    }
+    let mut out = front(file, ctx, &mine);
+    match file {
+        File::User => {
+            out.push_str("# Preferences\n\n");
+            if mine.is_empty() {
+                out.push_str("No preferences yet.\n");
+            }
+            for r in &mine {
+                out.push('\n');
+                out.push_str(&render_item(r, 2, ctx.offset_s));
+            }
+        }
+        File::Memory { .. } => {
+            out.push_str(&format!("# Memory: {}\n", heading_text(ctx.mog_name)));
+            if mine.is_empty() {
+                out.push_str(
+                    "\nNothing here yet. Bottle moves lasting memories here from your daily notes.\n",
+                );
+            }
+            for kind in Kind::ALL {
+                let of_kind: Vec<&&MemoryRow> =
+                    mine.iter().filter(|r| r.kind() == Some(kind)).collect();
+                if of_kind.is_empty() {
+                    continue;
+                }
+                out.push_str(&format!("\n## {}\n", kind.heading()));
+                for r in of_kind {
+                    out.push('\n');
+                    out.push_str(&render_item(r, 3, ctx.offset_s));
+                }
+            }
+        }
+        File::Daily { day, .. } => {
+            out.push_str(&format!("# {day}: {}\n", heading_text(ctx.mog_name)));
+            if mine.is_empty() {
+                out.push_str("\nNo notes on this day.\n");
+            }
+            for r in &mine {
+                out.push('\n');
+                out.push_str(&render_item(r, 2, ctx.offset_s));
+            }
+        }
+    }
+    if ctx.audience == Audience::Model {
+        cap_chars(&mut out, MODEL_VIEW_MAX_CHARS);
+        if matches!(file, File::Memory { .. }) && out.len() > MODEL_MEMORY_MAX_BYTES {
+            let mut end = MODEL_MEMORY_MAX_BYTES;
+            while !out.is_char_boundary(end) {
+                end -= 1;
+            }
+            out.truncate(end);
+        }
+    }
+    out
+}
+
+fn cap_chars(s: &mut String, max: usize) {
+    if let Some((i, _)) = s.char_indices().nth(max) {
+        s.truncate(i);
+    }
+}
+
+/// Render one item of `file` by its slug. `None` if the file has no shown item with that slug.
+pub fn render_one(file: &File, slug: &str, ctx: &Ctx<'_>, rows: &[MemoryRow]) -> Option<String> {
+    let r = rows_of(file, ctx, rows)
+        .into_iter()
+        .find(|r| r.slug() == slug)?;
+    Some(render_item(r, 2, ctx.offset_s))
+}
+
+/// The files of one MOG folder that hold a shown item, with their item counts: MEMORY.md
+/// first (always, also when empty), then the daily notes, newest first.
+pub fn files_of(ctx: &Ctx<'_>, rows: &[MemoryRow]) -> Vec<(File, usize)> {
+    let memory = File::Memory {
+        folder: ctx.folder.to_owned(),
+    };
+    let mut out = vec![(memory.clone(), rows_of(&memory, ctx, rows).len())];
+    let mut days: Vec<String> = rows
+        .iter()
+        .filter(|r| shown(&r.status, ctx.audience))
+        .filter_map(|r| match r.file(ctx.folder)? {
+            File::Daily { day, .. } => Some(day),
+            _ => None,
+        })
+        .collect();
+    days.sort_unstable_by(|a, b| b.cmp(a));
+    days.dedup();
+    for day in days {
+        let f = File::Daily {
+            folder: ctx.folder.to_owned(),
+            day,
+        };
+        let n = rows_of(&f, ctx, rows).len();
+        out.push((f, n));
     }
     out
 }
@@ -482,26 +727,46 @@ pub fn render_root(folders: &[(String, usize)]) -> String {
 mod tests {
     use super::*;
 
+    const ID_A: &str = "7f0c2e1a-3d4b-4c5e-9f60-1a2b3c4d5e6f";
+    const ID_B: &str = "0a1b2c3d-0000-4000-8000-000000000002";
+    /// 2026-11-21T10:05:00Z.
+    const T: i64 = 1_795_255_500_000;
+
     fn row(id: &str, kind: &str, title: &str) -> MemoryRow {
         MemoryRow {
             item_id: id.to_owned(),
             kind: kind.to_owned(),
+            layer: "daily".to_owned(),
+            note_day: Some("2026-11-21".to_owned()),
             title: title.to_owned(),
             text: format!("{title} summary"),
             slug: Some(slugify(title)),
             status: "active".to_owned(),
             source: "you".to_owned(),
             origin: "pin".to_owned(),
+            pinned: true,
             confidence: 1.0,
-            sensitivity: "normal".to_owned(),
-            created_ms: 1_795_000_000_000,
-            updated_ms: 1_795_000_000_000,
+            created_ms: T,
+            updated_ms: T,
             ..MemoryRow::default()
         }
     }
 
-    const ID_A: &str = "7f0c2e1a-3d4b-4c5e-9f60-1a2b3c4d5e6f";
-    const ID_B: &str = "0a1b2c3d-0000-4000-8000-000000000002";
+    fn ctx(audience: Audience) -> Ctx<'static> {
+        Ctx {
+            folder: "sales",
+            mog_name: "Sales",
+            audience,
+            offset_s: 0,
+        }
+    }
+
+    fn day_file() -> File {
+        File::Daily {
+            folder: "sales".into(),
+            day: "2026-11-21".into(),
+        }
+    }
 
     #[test]
     fn slugify_rules() {
@@ -511,16 +776,11 @@ mod tests {
             "the-mart-refreshes-at-six"
         );
         assert_eq!(slugify("Café crème"), "cafe-creme");
-        assert_eq!(slugify("Q3 churn: new formula"), "q3-churn-new-formula");
         assert_eq!(slugify("../../etc/passwd"), "etc-passwd");
+        assert_eq!(slugify("USER.md"), "user-md");
         assert_eq!(slugify("日本語"), "memory");
-        assert_eq!(slugify(""), "memory");
         let long = slugify(&"word ".repeat(40));
         assert!(long.len() <= SLUG_MAX && is_slug(&long), "{long}");
-    }
-
-    #[test]
-    fn every_slugify_result_is_a_slug() {
         for t in [
             "a", "A--B", "-x-", "x__y", "ÅÄÖ", "1.2.3", "%2e%2e", "a/b\\c",
         ] {
@@ -536,73 +796,107 @@ mod tests {
     }
 
     #[test]
-    fn mog_slugs_are_unique_and_never_shared() {
-        let mogs = vec![
+    fn mog_slugs_are_unique() {
+        let s = mog_slugs(&[
             (ID_A.to_owned(), "Sales MOG".to_owned()),
             (ID_B.to_owned(), "sales mog".to_owned()),
-            (
-                "11111111-2222-4333-8444-555555555555".to_owned(),
-                "Shared".to_owned(),
-            ),
             (
                 "99999999-2222-4333-8444-555555555555".to_owned(),
                 "Finance".to_owned(),
             ),
-        ];
-        let s = mog_slugs(&mogs);
+        ]);
         assert_eq!(s[0].1, "sales-mog-7f0c2e");
         assert_eq!(s[1].1, "sales-mog-0a1b2c");
-        assert_eq!(s[2].1, "shared-111111");
-        assert_eq!(s[3].1, "finance");
+        assert_eq!(s[2].1, "finance");
     }
 
     #[test]
-    fn ac_1_7_the_path_of_a_fact() {
+    fn day_rules() {
+        assert!(is_day("2026-11-21"));
+        assert!(is_day("2028-02-29"));
+        for d in [
+            "2026-02-30",
+            "2026-13-01",
+            "26-11-21",
+            "2026-1-21",
+            "2026-11-21x",
+            "2026/11/21",
+        ] {
+            assert!(!is_day(d), "{d}");
+        }
+        assert_eq!(day_of(T, 0).as_deref(), Some("2026-11-21"));
+        // 10:05 UTC is the next day at UTC+14, and the same day at UTC-10.
+        assert_eq!(day_of(T, 14 * 3600).as_deref(), Some("2026-11-22"));
+        assert_eq!(day_of(T, -10 * 3600).as_deref(), Some("2026-11-21"));
+        assert_eq!(day_of(T, -11 * 3600).as_deref(), Some("2026-11-20"));
+    }
+
+    #[test]
+    fn ac_1_7_the_address_of_a_remembered_fact() {
         let r = row(ID_A, "fact", "The mart refreshes at six");
         assert_eq!(
-            r.path("mog-a").as_deref(),
-            Some("/memories/mog-a/facts/the-mart-refreshes-at-six.md")
+            r.path("sales").as_deref(),
+            Some("/memories/sales/memory/2026-11-21.md#the-mart-refreshes-at-six")
         );
-        let a = row(ID_B, "genie_answer", "Churn in Q3");
+        let mut d = row(ID_B, "definition", "Active user");
+        d.layer = "durable".into();
+        d.note_day = None;
         assert_eq!(
-            a.path("mog-a").as_deref(),
-            Some("/memories/mog-a/answers/churn-in-q3.md")
+            d.path("sales").as_deref(),
+            Some("/memories/sales/MEMORY.md#active-user")
         );
+        let mut p = row(ID_B, "preference", "Amounts in EUR");
+        p.layer = "user".into();
+        assert_eq!(
+            p.path("x").as_deref(),
+            Some("/memories/USER.md#amounts-in-eur")
+        );
+        let mut bad = row(ID_B, "fact", "x");
+        bad.note_day = Some("2026-02-30".into());
+        assert_eq!(bad.path("sales"), None);
     }
 
     #[test]
-    fn parse_path_accepts_the_grammar() {
+    fn parse_path_accepts_the_layout() {
         assert_eq!(parse_path("/memories"), Some(VPath::Root));
         assert_eq!(parse_path("/memories/"), Some(VPath::Root));
-        assert_eq!(parse_path("/memories/index.md"), Some(VPath::Root));
         assert_eq!(
-            parse_path("/memories/mog-a/index.md"),
-            Some(VPath::Index {
-                folder: "mog-a".into()
+            parse_path("/memories/USER.md"),
+            Some(VPath::File(File::User))
+        );
+        assert_eq!(
+            parse_path("/memories/sales/MEMORY.md"),
+            Some(VPath::File(File::Memory {
+                folder: "sales".into()
+            }))
+        );
+        assert_eq!(
+            parse_path("/memories/sales/memory/2026-11-21.md"),
+            Some(VPath::File(day_file()))
+        );
+        assert_eq!(
+            parse_path("/memories/sales/memory/2026-11-21.md#mart-at-six"),
+            Some(VPath::Item {
+                file: day_file(),
+                slug: "mart-at-six".into()
             })
         );
         assert_eq!(
-            parse_path("/memories/mog-a"),
-            Some(VPath::Index {
-                folder: "mog-a".into()
-            })
-        );
-        assert_eq!(
-            parse_path("/memories/mog-a/facts/a-b.md"),
-            Some(VPath::File {
-                folder: "mog-a".into(),
-                kind: Kind::Fact,
-                slug: "a-b".into()
-            })
-        );
-        assert_eq!(
-            parse_path("/memories/shared/preferences/eur.md"),
-            Some(VPath::File {
-                folder: "shared".into(),
-                kind: Kind::Preference,
+            parse_path("/memories/USER.md#eur"),
+            Some(VPath::Item {
+                file: File::User,
                 slug: "eur".into()
             })
         );
+        for f in [
+            File::User,
+            day_file(),
+            File::Memory {
+                folder: "a-b".into(),
+            },
+        ] {
+            assert_eq!(parse_path(&f.path()), Some(VPath::File(f.clone())));
+        }
     }
 
     #[test]
@@ -613,19 +907,29 @@ mod tests {
             "memories",
             "/memoriesx",
             "/memories/../x",
-            "/memories/mog-a/../b/facts/x.md",
-            "/memories/./facts/x.md",
-            "/memories//facts/x.md",
-            "/memories/mog-a/facts/../x.md",
-            "/memories/mog-a/facts/x",
-            "/memories/mog-a/facts/x.txt",
-            "/memories/mog-a/people/x.md",
-            "/memories/mog-a/facts/X.md",
-            "/memories/mog-a/facts/index.md",
-            "/memories/mog-a/facts/a/b.md",
-            "/memories/mog-a/facts/%2e%2e.md",
-            "/memories/mog-a\\facts\\x.md",
-            "/memories/Mog-A/index.md",
+            "/memories/sales/../USER.md",
+            "/memories/./MEMORY.md",
+            "/memories//MEMORY.md",
+            "/memories/sales/memory.md",
+            "/memories/sales/user.md",
+            "/memories/sales/USER.md",
+            "/memories/user.md",
+            "/memories/MEMORY.md",
+            "/memories/sales/MEMORY.md/x",
+            "/memories/sales/memory/2026-11-21",
+            "/memories/sales/memory/2026-02-30.md",
+            "/memories/sales/memory/today.md",
+            "/memories/sales/memory/2026-11-21.md/x",
+            "/memories/sales/memories/2026-11-21.md",
+            "/memories/sales/facts/x.md",
+            "/memories/sales/index.md",
+            "/memories/Sales/MEMORY.md",
+            "/memories/sales/MEMORY.md#",
+            "/memories/sales/MEMORY.md#Bad",
+            "/memories/sales/MEMORY.md#a#b",
+            "/memories/sales/MEMORY.md#../x",
+            "/memories/%2e%2e/MEMORY.md",
+            "/memories/sales\\MEMORY.md",
             "/etc/passwd",
         ] {
             assert_eq!(parse_path(p), None, "{p}");
@@ -633,139 +937,190 @@ mod tests {
     }
 
     #[test]
-    fn render_file_has_the_plan_fields_in_order() {
-        let mut r = row(ID_A, "definition", "Active user");
-        r.pinned = true;
-        r.tags = vec!["metrics".into(), "growth".into()];
-        r.workspace_host = Some("<host-a>".into());
-        r.workspace_id = Some("1234567890".into());
-        r.profile = Some("profile-a".into());
-        r.body_md = "An active user logged in this month.".into();
-        let f = render_file(&r, "mog-a");
-        let keys: Vec<&str> = f
+    fn a_daily_note_has_one_section_per_item_oldest_first() {
+        let mut late = row(ID_B, "genie_answer", "Churn in Q3");
+        late.created_ms = T + 3_600_000;
+        late.source = "genie".into();
+        late.exchange_id = Some("41111111-2222-4333-8444-000000000001".into());
+        late.body_md = "**Churn** was 4.2 %.".into();
+        let early = row(ID_A, "fact", "The mart refreshes at six");
+        let f = render_file(&day_file(), &ctx(Audience::User), &[late, early]);
+        assert!(f.starts_with("---\nfile: daily\nmog: sales\n"), "{f}");
+        assert!(f.contains("day: 2026-11-21\nitems: 2\n"));
+        assert!(f.contains("# 2026-11-21: Sales\n"));
+        let a = f.find("## The mart refreshes at six").unwrap_or(usize::MAX);
+        let b = f.find("## Churn in Q3").unwrap_or(0);
+        assert!(a < b, "{f}");
+        assert!(f.contains("_10:05 · You · Remember this · Pinned · New_"));
+        assert!(
+            f.contains("_11:05 · Genie · Remember this · Pinned · New_\n\n**Churn** was 4.2 %.\n")
+        );
+        assert!(f.contains(&format!(
+            "<!-- memory id={ID_B} slug=churn-in-q3 kind=genie_answer status=active pinned=true rating=0 source=genie origin=pin created=2026-11-21T11:05:00Z reviewed=- exchange=41111111-2222-4333-8444-000000000001 recording=- -->"
+        )));
+    }
+
+    #[test]
+    fn a_rated_item_is_not_new() {
+        let mut r = row(ID_A, "fact", "Mart");
+        assert!(r.is_new());
+        r.rating = 1;
+        r.reviewed_ms = Some(T + 1);
+        assert!(!r.is_new());
+        let f = render_item(&r, 2, 0);
+        assert!(f.contains("rating=1 ") && f.contains("reviewed=2026-11-21T10:05:00Z"));
+        assert!(!f.contains("New_"));
+    }
+
+    #[test]
+    fn memory_md_groups_by_kind() {
+        let mut fact = row(ID_A, "fact", "Mart refresh");
+        fact.layer = "durable".into();
+        let mut def = row(ID_B, "definition", "Active user");
+        def.layer = "durable".into();
+        let daily = row("44444444-0000-4000-8000-000000000004", "fact", "Only daily");
+        let file = File::Memory {
+            folder: "sales".into(),
+        };
+        let rows = [def, fact, daily];
+        let f = render_file(&file, &ctx(Audience::User), &rows);
+        let facts = f.find("## Facts").unwrap_or(usize::MAX);
+        let defs = f.find("## Definitions").unwrap_or(0);
+        assert!(facts < defs, "{f}");
+        assert!(f.contains("### Mart refresh"));
+        assert!(!f.contains("Only daily"));
+        assert!(!f.contains("## Decisions"));
+        assert!(!f.contains("Suggested"));
+        let empty = render_file(&file, &ctx(Audience::User), &[]);
+        assert!(empty.contains("Nothing here yet."));
+    }
+
+    #[test]
+    fn a_model_never_sees_a_quarantined_item() {
+        let mut q = row(ID_A, "fact", "Odd one");
+        q.status = "quarantined".into();
+        let mut a = row(ID_B, "fact", "Agent fact");
+        a.source = "agent".into();
+        a.origin = "agent".into();
+        a.pinned = false;
+        let rows = [q, a];
+        let user = render_file(&day_file(), &ctx(Audience::User), &rows);
+        assert!(user.contains("Quarantined") && user.contains("Agent fact"));
+        let model = render_file(&day_file(), &ctx(Audience::Model), &rows);
+        assert!(!model.contains("Odd one"));
+        assert!(model.contains("Agent fact"));
+        assert_eq!(
+            render_one(&day_file(), "odd-one", &ctx(Audience::Model), &rows),
+            None
+        );
+    }
+
+    #[test]
+    fn user_text_cannot_add_a_key_a_heading_or_a_comment() {
+        let mut r = row(ID_A, "fact", "## x\nstatus: removed");
+        r.body_md = "body --> <!-- y".into();
+        r.source = "you --> x".into();
+        let f = render_file(&day_file(), &ctx(Audience::User), &[r]);
+        let front: Vec<&str> = f.lines().skip(1).take_while(|l| *l != "---").collect();
+        assert!(front.iter().all(|l| !l.starts_with("status:")));
+        assert!(f.contains("\n## x status: removed\n"), "{f}");
+        let meta = f
             .lines()
-            .skip(1)
-            .take_while(|l| *l != "---")
-            .filter_map(|l| l.split(':').next())
+            .find(|l| l.starts_with("<!-- memory"))
+            .unwrap_or("");
+        assert_eq!(meta.matches("-->").count(), 1, "{meta}");
+        assert!(meta.ends_with(" -->"));
+    }
+
+    #[test]
+    fn hidden_statuses_are_left_out() {
+        let mut gone = row(ID_A, "fact", "Gone");
+        gone.status = "removed".into();
+        let mut old = row(ID_B, "fact", "Old");
+        old.status = "superseded".into();
+        let f = render_file(&day_file(), &ctx(Audience::User), &[gone, old]);
+        assert!(f.contains("No notes on this day."));
+        assert!(f.contains("items: 0"));
+    }
+
+    #[test]
+    fn render_one_finds_an_item_by_slug() {
+        let r = row(ID_A, "fact", "Mart");
+        let s = render_one(&day_file(), "mart", &ctx(Audience::User), &[r]).unwrap_or_default();
+        assert!(s.starts_with("## Mart\n<!-- memory "));
+        assert_eq!(
+            render_one(&day_file(), "nope", &ctx(Audience::User), &[]),
+            None
+        );
+    }
+
+    #[test]
+    fn files_of_lists_memory_md_then_days_newest_first() {
+        let a = row(ID_A, "fact", "A");
+        let mut b = row(ID_B, "fact", "B");
+        b.note_day = Some("2026-11-22".into());
+        let mut c = row("33333333-0000-4000-8000-000000000003", "fact", "C");
+        c.note_day = Some("2026-11-22".into());
+        let got: Vec<(String, usize)> = files_of(&ctx(Audience::User), &[a, b, c])
+            .into_iter()
+            .map(|(f, n)| (f.path(), n))
             .collect();
         assert_eq!(
-            keys,
+            got,
             [
-                "id",
-                "kind",
-                "title",
-                "status",
-                "pinned",
-                "source",
-                "origin",
-                "mog",
-                "workspace_host",
-                "workspace_id",
-                "profile",
-                "exchange_id",
-                "recording_id",
-                "created",
-                "updated",
-                "last_used",
-                "confidence",
-                "sensitivity",
-                "tags",
-                "supersedes"
+                ("/memories/sales/MEMORY.md".to_owned(), 0),
+                ("/memories/sales/memory/2026-11-22.md".to_owned(), 2),
+                ("/memories/sales/memory/2026-11-21.md".to_owned(), 1),
             ]
         );
-        assert!(f.contains("title: \"Active user\"\n"));
-        assert!(f.contains("workspace_id: \"1234567890\"\n"));
-        assert!(f.contains("pinned: true\n"));
-        assert!(f.contains("tags: [\"metrics\", \"growth\"]\n"));
-        assert!(f.contains("created: 2026-11-18T"));
-        assert!(f.ends_with("---\nAn active user logged in this month.\n"));
     }
 
     #[test]
-    fn render_file_quotes_user_text_so_it_cannot_add_a_key() {
-        let mut r = row(ID_A, "fact", "x\nstatus: active\n---");
-        r.status = "quarantined".into();
-        let f = render_file(&r, "mog-a");
-        let front: Vec<&str> = f.lines().skip(1).take_while(|l| *l != "---").collect();
-        assert_eq!(front.iter().filter(|l| l.starts_with("status:")).count(), 1);
-        assert!(front.contains(&"status: quarantined"));
+    fn user_md_is_empty_in_slice_1() {
+        let f = render_file(&File::User, &ctx(Audience::User), &[]);
+        assert!(f.starts_with("---\nfile: USER.md\nitems: 0\n"));
+        assert!(f.contains("No preferences yet."));
     }
 
     #[test]
-    fn render_file_uses_the_summary_when_the_body_is_empty() {
-        let r = row(ID_A, "fact", "Mart");
-        assert!(render_file(&r, "mog-a").ends_with("---\nMart summary\n"));
-    }
-
-    #[test]
-    fn render_index_orders_by_pin_then_last_use_and_marks_status() {
-        let mut a = row(ID_A, "fact", "Older pinned");
-        a.pinned = true;
-        let mut b = row(ID_B, "decision", "Newer");
-        b.last_used_ms = Some(1_796_000_000_000);
-        let mut q = row("33333333-0000-4000-8000-000000000003", "fact", "Bad one");
-        q.status = "quarantined".into();
-        let mut gone = row("44444444-0000-4000-8000-000000000004", "fact", "Gone");
-        gone.status = "superseded".into();
-        let idx = render_index("mog-a", &[b, gone, q, a]);
-        let lines: Vec<&str> = idx.lines().filter(|l| l.starts_with("- ")).collect();
-        assert_eq!(lines.len(), 3);
-        assert!(lines[0].starts_with("- [Older pinned](facts/older-pinned.md) — "));
-        assert!(lines[1].starts_with("- [Newer](decisions/newer.md) — "));
-        assert!(lines[2].contains("(quarantined)"));
-        assert!(!idx.contains("Gone"));
-    }
-
-    #[test]
-    fn render_index_keeps_the_caps() {
-        let rows: Vec<MemoryRow> = (0..400)
+    fn model_caps_hold() {
+        let rows: Vec<MemoryRow> = (0..300)
             .map(|i| {
                 let mut r = row(
                     &format!("{i:08x}-0000-4000-8000-000000000000"),
                     "fact",
-                    &format!("Memory {i} {}", "long title ".repeat(6)),
+                    &format!("M {i}"),
                 );
-                r.text = "s".repeat(600);
+                r.layer = "durable".into();
+                r.body_md = "b".repeat(400);
                 r.slug = Some(format!("m-{i}"));
                 r
             })
             .collect();
-        let idx = render_index("mog-a", &rows);
-        assert!(idx.lines().count() <= INDEX_MAX_LINES + 2);
-        assert!(idx.len() <= INDEX_MAX_BYTES);
-        assert!(idx.contains("more\n"));
-        for l in idx.lines().filter(|l| l.starts_with("- [")) {
-            let summary = l.rsplit(" — ").next().unwrap_or("");
-            assert!(summary.chars().count() <= INDEX_SUMMARY_MAX, "{l}");
-        }
-    }
-
-    #[test]
-    fn index_link_text_cannot_break_the_link() {
-        let r = row(ID_A, "fact", "a](http://x) [b");
-        let idx = render_index("mog-a", &[r]);
-        assert!(idx.contains("- [a)(http://x) (b]("));
+        let file = File::Memory {
+            folder: "sales".into(),
+        };
+        let m = render_file(&file, &ctx(Audience::Model), &rows);
+        assert!(m.len() <= MODEL_MEMORY_MAX_BYTES);
+        assert!(m.chars().count() <= MODEL_VIEW_MAX_CHARS);
+        assert!(render_file(&file, &ctx(Audience::User), &rows).len() > MODEL_MEMORY_MAX_BYTES);
     }
 
     #[test]
     fn row_from_json_reads_the_list_columns() {
         let v = serde_json::json!({
-            "itemId": ID_A, "kind": "fact", "title": "T", "text": "S", "slug": "t",
-            "status": "active", "pinned": 1, "source": "you", "origin": "pin",
-            "tags": "[\"a\"]", "confidence": 1.0, "workspaceId": 1234567890_i64,
-            "createdAt": 1, "updatedAt": 2
+            "itemId": ID_A, "kind": "fact", "layer": "daily", "noteDay": "2026-11-21",
+            "title": "T", "text": "S", "slug": "t", "status": "active", "pinned": 1,
+            "source": "you", "origin": "pin", "tags": "[\"a\"]", "confidence": 1.0,
+            "workspaceId": 1234567890_i64, "createdAt": 1, "updatedAt": 2
         });
         let r = MemoryRow::from_json(&v).expect("row");
         assert!(r.pinned);
         assert_eq!(r.tags, ["a"]);
         assert_eq!(r.workspace_id.as_deref(), Some("1234567890"));
-        assert_eq!(r.path("f").as_deref(), Some("/memories/f/facts/t.md"));
-    }
-
-    #[test]
-    fn render_root_lists_folders() {
-        let r = render_root(&[("mog-a".into(), 3)]);
-        assert!(r.contains("- [mog-a](mog-a/index.md) — 3 memories\n"));
-        assert!(render_root(&[]).contains("No memories yet."));
+        assert_eq!(
+            r.path("f").as_deref(),
+            Some("/memories/f/memory/2026-11-21.md#t")
+        );
     }
 }
