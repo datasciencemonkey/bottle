@@ -24,6 +24,10 @@ export const LOCAL_STMT_IDS = [
   'mem.exchange.by_session',
   'mem.item.get',
   'mem.item.write',
+  'mem.item.list',
+  'mem.item.rate',
+  'mem.item.edit',
+  'mem.file.get',
   'mem.recall.fts',
   'mem.forget.session_conversations',
   'mem.forget.mog_conversations',
@@ -47,12 +51,18 @@ export function isLocalStmtId(id: string): id is LocalStmtId {
 /** The local store behind MemoryService (MEM-39a). Tests replace it with a double. */
 export interface LocalMemoryStore {
   /** Run one catalog statement. A query gives its rows; a write gives `[{ changes }]`. */
-  exec(stmtId: LocalStmtId, params: JsonObject): Promise<{ rows: unknown[] }>;
+  exec(
+    stmtId: LocalStmtId,
+    params: JsonObject,
+    /** ADR 0113: a host-minted ticket for a user write. The store never makes one. */
+    actionTicket?: string,
+  ): Promise<{ rows: unknown[] }>;
 }
 
 export type MemLocalExec = (args: {
   stmtId: string;
   params: JsonObject;
+  actionTicket?: string;
 }) => Promise<{ rows: unknown[] }>;
 
 /** The store over IPC: `mem_local_exec { stmtId, params }` to the Rust core. */
@@ -62,10 +72,16 @@ export class IpcLocalMemoryStore implements LocalMemoryStore {
     private readonly send: MemLocalExec = (a) => storeGate.run(() => call('mem_local_exec', a)),
   ) {}
 
-  async exec(stmtId: LocalStmtId, params: JsonObject): Promise<{ rows: unknown[] }> {
+  async exec(
+    stmtId: LocalStmtId,
+    params: JsonObject,
+    actionTicket?: string,
+  ): Promise<{ rows: unknown[] }> {
     if (!isLocalStmtId(stmtId)) {
       throw new Error('stmtId is not in the local statement catalog');
     }
-    return this.send({ stmtId, params });
+    return this.send(
+      actionTicket === undefined ? { stmtId, params } : { stmtId, params, actionTicket },
+    );
   }
 }

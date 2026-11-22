@@ -25,6 +25,7 @@ import {
 import { onViewInput, type BrainBus } from './bus';
 
 /** An operation ID as the brain makes it (a UUID), or the debug demo ID. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const OP_ID = /^[A-Za-z0-9-]{1,64}$/;
 
 export interface GenieCardWiringDeps {
@@ -47,6 +48,13 @@ export interface GenieCardWiringDeps {
   closeMog(mogId: MogId): void;
   /** #ui-4: the MOG right-click menu's "Change home workspace…". Shows the hub. */
   changeHome(mogId: MogId): void;
+  /**
+   * ADR 0113: "Remember this" on the card. `ticket` is the host's `actionTicket` of the click;
+   * the brain never makes one. The callee sends `memory:saved` to that card only.
+   */
+  remember?(mogId: MogId, requestId: string | undefined, ticket: string | undefined): void;
+  /** ADR 0113: the card's Undo of a save. The callee forgets that item only if this MOG saved it in the last 8 s. */
+  undoRemember?(mogId: MogId, itemId: string): void;
 }
 
 function target(p: unknown): { target?: unknown; requestId?: unknown; on?: unknown } {
@@ -69,6 +77,19 @@ export function wireGenieCard(bus: BrainBus, deps: GenieCardWiringDeps): () => v
       fromCard && typeof p.requestId === 'string' && OP_ID.test(p.requestId)
         ? p.requestId
         : undefined;
+    // ADR 0113: only the card of this MOG saves or undoes a memory.
+    const action = (p as { action?: unknown }).action;
+    if (action === 'memory.remember' || action === 'memory.undo') {
+      if (!fromCard) return;
+      if (action === 'memory.undo') {
+        const itemId = (p as { itemId?: unknown }).itemId;
+        if (typeof itemId === 'string' && UUID.test(itemId)) deps.undoRemember?.(mogId, itemId);
+      } else {
+        // The card names the exchange. There is no fallback to the newest request.
+        deps.remember?.(mogId, requestId, input.actionTicket);
+      }
+      return;
+    }
     if (p.target === CARD_DONE && fromCard) {
       // A late `card_done` of an older request never hides the card of a newer one.
       const current = deps.lastOpId(mogId);

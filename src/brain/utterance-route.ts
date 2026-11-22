@@ -36,9 +36,17 @@ export interface Utterance {
   /** `app.dictation.insert` (Appendix F): on after the user grants Accessibility. */
   insertionOn: boolean;
   input: RouterInput;
+  /** ADR 0113: Rust parsed "remember this …" from its own transcript. The brain only passes it on. */
+  remember?: { ticket: string; text: string };
 }
 
 export type UtteranceRoute =
+  | {
+      /** ADR 0113: a "remember this" order. Nothing is pasted, routed or sent to a model. */
+      route: 'remember';
+      ticket: string;
+      text: string;
+    }
   | { route: 'inserted'; decision: RouterDecision }
   | {
       route: 'insert_failed';
@@ -91,6 +99,9 @@ export async function routeUtterance(
   u: Utterance,
   deps: UtteranceRouteDeps,
 ): Promise<UtteranceRoute> {
+  // ADR 0113: Rust decides. A remember order is saved, never pasted, and its text never goes to
+  // the router model. The brain has no "remember this" grammar of its own.
+  if (u.remember) return { route: 'remember', ticket: u.remember.ticket, text: u.remember.text };
   const decision = await deps.route(u.text, u.mogId, u.input);
   const warning = decision.injection_suspected ? ('injection_suspected' as const) : undefined;
   // The exact text: what a dictation inserts, and what ⌥G or the fallback chip sends.
