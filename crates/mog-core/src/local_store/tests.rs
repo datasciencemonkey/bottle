@@ -634,8 +634,8 @@ fn seed_item(s: &SqlCipherLocalStore, mog: &str, item: &str, text: &str) -> i64 
     s.with_conn(|c| {
         c.execute(
             "INSERT INTO memory_item (item_id, mog_id, item_type, text, source, confidence,
-               first_seen_at, last_seen_at, row_hlc, origin_device_id)
-             VALUES (?1, ?2, 'fact', ?3, 'you', 0.9, 1, 1, 1, ?2)",
+               first_seen_at, last_seen_at, row_hlc, origin_device_id, title, note_day)
+             VALUES (?1, ?2, 'fact', ?3, 'you', 0.9, 1, 1, 1, ?2, substr(?3, 1, 80), '1970-01-01')",
             [item, mog, text],
         )?;
         Ok(c.last_insert_rowid())
@@ -801,7 +801,7 @@ fn mem_08d_fts5_finds_inserted_item() {
     // A text update moves the index entry with it.
     s.with_conn(|c| {
         c.execute(
-            "UPDATE memory_item SET text = 'churn by segment' WHERE mog_id = ?1",
+            "UPDATE memory_item SET text = 'churn by segment', title = 'churn by segment' WHERE mog_id = ?1",
             [MOG_A],
         )
     })
@@ -894,9 +894,13 @@ fn mem_01_every_index_has_mog_id() {
         let cols: Vec<String> = s
             .with_conn(|c| {
                 let mut st = c.prepare(&format!("PRAGMA index_info(\"{name}\")"))?;
+                // An expression column (0003 `coalesce(note_day, '')`) has no name.
                 let v = st
-                    .query_map([], |r| r.get::<_, String>(2))?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                    .query_map([], |r| r.get::<_, Option<String>>(2))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?
+                    .into_iter()
+                    .map(Option::unwrap_or_default)
+                    .collect::<Vec<_>>();
                 Ok(v)
             })
             .unwrap();
@@ -1395,6 +1399,23 @@ fn mem_08a_local_mirror_has_every_appendix_a_column() {
                 "row_hlc",
                 "origin_device_id",
                 "server_seq",
+                "title",
+                "body_md",
+                "tags",
+                "origin",
+                "layer",
+                "note_day",
+                "slug",
+                "profile",
+                "recording_id",
+                "last_used_at",
+                "use_count",
+                "stale_at",
+                "removed_at",
+                "status_before_removed",
+                "rating",
+                "reviewed_at",
+                "released_at",
             ],
         ),
         (
@@ -1582,7 +1603,7 @@ fn mem_35a_migration_0002_applies_to_a_store_that_has_0001_and_data() {
              DROP TRIGGER utterance_session_mog_bu;
              DROP TRIGGER session_mog_with_utterances_bu;
              DROP TRIGGER session_mog_with_utterances_bi;
-             DELETE FROM schema_migrations WHERE version = 2;",
+             DELETE FROM schema_migrations WHERE version >= 2;",
         )
     })
     .unwrap();

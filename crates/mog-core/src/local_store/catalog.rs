@@ -320,14 +320,15 @@ const ITEM_UPSERT: Stmt = Stmt {
     sql: "INSERT INTO memory_item (item_id, mog_id, item_type, text, source, confidence, status, \
           pinned, sensitivity, source_session_ids, source_utterance_ids, workspace_host, \
           workspace_id, space_id, source_exchange_id, first_seen_at, last_seen_at, row_hlc, \
-          origin_device_id) \
+          origin_device_id, title, note_day) \
           VALUES (:itemId, :mogId, :itemType, :text, :source, :confidence, \
           CASE WHEN max(:textQuarantine, coalesce(:quarantined, 0)) = 1 \
           THEN 'quarantined' ELSE 'active' END, \
           coalesce(:pinned, 0), coalesce(:sensitivity, 'normal'), \
           coalesce(:sourceSessionIds, '[]'), coalesce(:sourceUtteranceIds, '[]'), \
           :workspaceHost, :workspaceId, :spaceId, :sourceExchangeId, :seenAt, :seenAt, :rowHlc, \
-          :deviceId) \
+          :deviceId, coalesce(nullif(trim(substr(trim(:text), 1, 80)), ''), 'Untitled'), \
+          strftime('%Y-%m-%d', :seenAt / 1000, 'unixepoch', 'localtime')) \
           ON CONFLICT (item_id) DO UPDATE SET text = excluded.text, \
           confidence = excluded.confidence, pinned = max(memory_item.pinned, excluded.pinned), \
           status = CASE WHEN excluded.status = 'quarantined' THEN 'quarantined' \
