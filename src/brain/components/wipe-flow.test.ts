@@ -7,7 +7,14 @@ import { resolve } from 'node:path';
 import { core } from '../test-core';
 import type { GenieAgentConversationDelete } from './forget-flow';
 import { GenieOneDeleteUtility, type GenieOneThread } from './genie-one-delete';
-import { createIpcWipeCore, WipeFlow, type WipeCore, type WipeCoreResult } from './wipe-flow';
+import { createStoreGate } from '../store-gate';
+import {
+  createIpcWipeCore,
+  WipeFailed,
+  WipeFlow,
+  type WipeCore,
+  type WipeCoreResult,
+} from './wipe-flow';
 import type { WipeScope } from '../../shared/wipe-view';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('../test-core')).coreModule);
@@ -204,16 +211,60 @@ describe('WipeFlow (#124)', () => {
     expect(threads).toEqual([]);
   });
 
-  it('[MEM-33a] TODO(#525): until mem_wipe is in the contract, the default core refuses and deletes nothing', async () => {
-    await expect(createIpcWipeCore().wipe('everything')).rejects.toThrow(/#525/);
-    expect(core.invoke).not.toHaveBeenCalled();
+  it('[MEM-33a] [#525] the default core sends mem_wipe { scope } through the store gate, for each scope', async () => {
+    core.invoke.mockImplementation(async () => ({ local: 3, conversations: [] }));
+    for (const scope of ['older_than_30d', 'older_than_90d', 'everything'] as const) {
+      await expect(createIpcWipeCore(createStoreGate()).wipe(scope)).resolves.toEqual({
+        local: 3,
+        conversations: [],
+      });
+      expect(core.invoke).toHaveBeenLastCalledWith('mem_wipe', { args: { scope } });
+    }
+  });
+
+  it('[MEM-33a] [ADR 0105] a locked store fails at once with a fixed reason and no second mem_wipe call', async () => {
+    const gate = createStoreGate();
+    gate.arm({ explain: false, onChange: () => undefined });
+    core.invoke.mockRejectedValue({ error: 'host_failed' });
+    const wipe = createIpcWipeCore(gate);
+    const first = await wipe.wipe('older_than_90d').catch((e: unknown) => e);
+    expect(first).toBeInstanceOf(WipeFailed);
+    expect((first as WipeFailed).reason).toContain('The store is locked');
+    const calls = core.invoke.mock.calls.length;
+    const again = await wipe.wipe('older_than_90d').catch((e: unknown) => e);
+    expect((again as WipeFailed).reason).toContain('The store is locked');
+    expect(core.invoke.mock.calls.length).toBe(calls);
+  });
+
+  it('[MEM-33a] an error of an open store has a short fixed reason, and an unknown one has none', async () => {
+    const gate = createStoreGate();
+    core.invoke.mockRejectedValueOnce({ error: 'host_failed' });
+    const a = await createIpcWipeCore(gate)
+      .wipe('everything')
+      .catch((e: unknown) => e);
+    expect((a as WipeFailed).reason).toBe('The local store could not be used.');
+    core.invoke.mockRejectedValueOnce(new Error('secret-ish detail'));
+    const b = await createIpcWipeCore(gate)
+      .wipe('everything')
+      .catch((e: unknown) => e);
+    expect((b as WipeFailed).reason).toBeUndefined();
+  });
+
+  it('[MEM-33a] an empty wipe succeeds with "Nothing to wipe"', async () => {
+    const flow = new WipeFlow({
+      core: wipeCore({ local: 0, conversations: [] }),
+      genieOne: new GenieOneDeleteUtility(),
+    });
+    const done = await flow.confirm('older_than_90d', true);
+    expect(done.phase).toBe('done');
+    expect(done.result?.emptyText).toBe('Nothing to wipe. No data is older than 90 days.');
+    expect((await flow.confirm('everything', false)).result?.emptyText).toBe('Nothing to wipe.');
   });
 
   it('[U9] the flow has no timer, and Genie One deletes run with the wipe trigger', () => {
     const src = readFileSync(resolve(import.meta.dirname, 'wipe-flow.ts'), 'utf8');
     expect(src).not.toMatch(/setInterval|setTimeout|requestIdleCallback/);
     expect(src).toContain("'wipe'");
-    expect(src).toContain('TODO(#525)');
     expect(src).toContain('TODO(#121)');
   });
 });

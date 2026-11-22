@@ -29,7 +29,7 @@ import {
   type WipeSettingsModel,
 } from '../shared/wipe-view';
 import { onViewInput, type BrainBus, type ViewInput } from './bus';
-import type { WipeFlow } from './components/wipe-flow';
+import { WipeFailed, type WipeFlow } from './components/wipe-flow';
 
 /** Send the dialog model (or `null` to close it) to the hub window only (ARC-5). */
 export function sendWipeDialog(model: WipeDialogModel | null): Promise<void> {
@@ -130,8 +130,9 @@ export class WipeDialogController {
       const done = await this.flow.confirm(cur.scope, cur.alsoGenie);
       this.current = done;
       await this.publish(done);
-    } catch {
-      const model = { ...cur, text: FAILED };
+    } catch (e) {
+      const reason = e instanceof WipeFailed ? e.reason : undefined;
+      const model = { ...cur, text: reason === undefined ? FAILED : `${FAILED} ${reason}` };
       this.current = model;
       await this.publish(model);
     } finally {

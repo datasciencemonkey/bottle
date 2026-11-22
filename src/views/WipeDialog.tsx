@@ -68,9 +68,13 @@ export function WipeDialog({ model }: { model: WipeDialogModel }) {
         {model.phase === 'done' && result !== undefined && (
           <>
             <p data-wipe-result>
-              Bottle deleted {result.local} {result.local === 1 ? 'row' : 'rows'} on this computer
-              and {result.deletedConversations} Genie{' '}
-              {result.deletedConversations === 1 ? 'conversation' : 'conversations'}.
+              {result.emptyText ?? (
+                <>
+                  Bottle deleted {result.local} {result.local === 1 ? 'row' : 'rows'} on this
+                  computer and {result.deletedConversations} Genie{' '}
+                  {result.deletedConversations === 1 ? 'conversation' : 'conversations'}.
+                </>
+              )}
             </p>
             {result.notices.map((n) => (
               <GenieOneDeleteNotice key={n.mogId} notice={n} />

@@ -63,6 +63,8 @@ export interface WipeDialogModel {
     deletedConversations: number;
     /** One "Delete in Genie One" notice for each MOG with threads Bottle did not delete. */
     notices: GenieOneDeleteNoticeModel[];
+    /** Set when there was nothing to delete: a success, shown as "Nothing to wipe". */
+    emptyText?: string;
     /** The disclosure for other Genie conversations that Bottle could not delete. */
     otherText?: string;
   };
