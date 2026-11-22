@@ -5,8 +5,10 @@
  *   (`mem.exchange.recent` through `mem_local_exec`, MEM-01: one MOG per read), merges them
  *   newest first and sends the list to the hub window only (ARC-5). The hub view never runs a
  *   store statement.
- * - The hub sends `conversations.ready` when Conversations opens or shows again. The brain sends
- *   the list again after each saved exchange (`refresh`).
+ * - The hub sends `conversations.ready` when Conversations opens or shows again, and again with a
+ *   backoff while it has no list. The brain sends the list again after each saved exchange
+ *   (`refresh`), and by itself once it listens and once the store unlocks (`push`), so a request
+ *   lost at launch never leaves the hub with no list.
  * - `openConversations(requestId)` opens Conversations on one exchange (a double-click on the
  *   MOG or the card). The brain holds the selection until the hub acks it
  *   (`conversations.opened`) or asks for the list, so a hub that opens late still selects it, once.
@@ -43,11 +45,20 @@ export interface ConversationsReadDeps {
 export interface ConversationsWireDeps extends ConversationsReadDeps {
   send(list: HubConversations): Promise<unknown>;
   sendOpen(open: { requestId?: string }): Promise<unknown>;
+  /** Whether a hub window exists. Default: yes (the hub is built at start and only hidden). */
+  hubPresent?(): Promise<boolean>;
 }
 
 export interface HubConversationsWiring {
   /** Send the list to the hub again. Never rejects. */
   refresh(): Promise<void>;
+  /**
+   * Send the list to the hub with no request from it, when a hub window exists. The brain calls
+   * it once its listener is wired and again when the local store unlocks, because the hub's own
+   * `conversations.ready` is lost while the brain is not yet listening or the store is locked.
+   * Never rejects.
+   */
+  push(): Promise<void>;
   /**
    * #523: the profile and host of a listed exchange, from the last list the brain sent (never
    * from a view). The link opener trusts this, not the click.
@@ -198,6 +209,14 @@ export function wireHubConversations(
   });
   return {
     refresh: publish,
+    async push() {
+      try {
+        if (deps.hubPresent && !(await deps.hubPresent())) return;
+      } catch {
+        return;
+      }
+      await publish();
+    },
     workspaceOf: (requestId) => known.get(requestId),
     async openConversations(requestId) {
       const open = requestId ? { requestId } : {};

@@ -35,7 +35,7 @@ import {
 } from '../../shared/recording-view';
 import { MAX_ANSWER_CHARS, SafeMarkdown } from '../card/safe-markdown';
 import { RecordingAlert } from './RecordControl';
-import { sendRecording, useHubEvent } from './recording-ipc';
+import { askRecording, sendRecording, useHubEvent } from './recording-ipc';
 
 const DAY_MS = 86_400_000;
 /** No host is trusted in recording notes: a link shows as text (SEC-25a). */
@@ -184,7 +184,7 @@ function FileLinks({ row, detail }: { row: RecordingRow; detail?: boolean }) {
   );
 }
 
-const askForList = () => sendRecording({ action: 'recordings.ready' });
+const askForList = () => askRecording({ action: 'recordings.ready' });
 
 function startOfDay(ms: number): number {
   const d = new Date(ms);

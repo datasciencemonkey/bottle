@@ -332,3 +332,77 @@ describe('wireHubConversations (#103)', () => {
     expect(calls).toHaveLength(0);
   });
 });
+
+describe('hub conversations push (launch race)', () => {
+  it('[#103] a lost conversations.ready is recovered: the brain pushes the list with no request', async () => {
+    const { store } = fakeStore({ [MOG_A]: [dbRow(1, T0)] });
+    const sent: HubConversations[] = [];
+    const w = wireHubConversations(bus, {
+      store,
+      mogs,
+      send: async (l) => void sent.push(l),
+      sendOpen: async () => undefined,
+      hubPresent: async () => true,
+    });
+    // The hub's request never reached the brain (no Channel yet). Nothing was sent.
+    expect(sent).toHaveLength(0);
+    await w.push();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.rows.map((r) => r.requestId)).toEqual([req(1)]);
+  });
+
+  it('[#103] does not read the store when no hub window exists', async () => {
+    const { store, calls } = fakeStore({ [MOG_A]: [dbRow(1, T0)] });
+    const sent: HubConversations[] = [];
+    const w = wireHubConversations(bus, {
+      store,
+      mogs,
+      send: async (l) => void sent.push(l),
+      sendOpen: async () => undefined,
+      hubPresent: async () => false,
+    });
+    await w.push();
+    expect(sent).toHaveLength(0);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('[#103] push never rejects when the send fails', async () => {
+    const { store } = fakeStore({ [MOG_A]: [dbRow(1, T0)] });
+    const w = wireHubConversations(bus, {
+      store,
+      mogs,
+      send: async () => {
+        throw new Error('no hub');
+      },
+      sendOpen: async () => undefined,
+    });
+    await expect(w.push()).resolves.toBeUndefined();
+  });
+
+  it('[#103] [MEM-08b] pushes when the store unlocks, after the gate held the first read', async () => {
+    const { createStoreGate } = await import('./store-gate');
+    const gate = createStoreGate();
+    gate.arm({ explain: true, onChange: () => undefined });
+    const { store } = fakeStore({ [MOG_A]: [dbRow(1, T0)] });
+    const sent: HubConversations[] = [];
+    const w = wireHubConversations(bus, {
+      store: { exec: (id, p) => gate.run(() => store.exec(id, p)) },
+      mogs,
+      send: async (l) => void sent.push(l),
+      sendOpen: async () => undefined,
+      hubPresent: async () => true,
+    });
+    const off = gate.onOpen(() => void w.push());
+    // The store is locked: the first push waits at the gate and sends nothing yet.
+    const first = w.push();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sent).toHaveLength(0);
+    gate.allow();
+    await first;
+    // The unlock fired a second push; the list reached the hub at least once.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sent.length).toBeGreaterThanOrEqual(1);
+    expect(sent.every((l) => l.rows.length === 1)).toBe(true);
+    off();
+  });
+});

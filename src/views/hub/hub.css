@@ -1367,6 +1367,10 @@
     font-size: var(--mog-text-sm);
   }
 
+  .hub .conv-message-action {
+    margin-top: 12px;
+  }
+
   /* ---- Call recording (ADR 0103) ---- */
 
   .rec-hint {

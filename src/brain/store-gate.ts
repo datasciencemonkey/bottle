@@ -35,6 +35,8 @@ export interface StoreGate {
   retry(): void;
   /** The hub model now. */
   view(): StoreView;
+  /** Run `cb` each time the store opens (the first call succeeded). The result stops it. */
+  onOpen(cb: () => void): () => void;
 }
 
 export function createStoreGate(): StoreGate {
@@ -47,6 +49,7 @@ export function createStoreGate(): StoreGate {
   let allowed: Promise<void> = Promise.resolve();
   /** The first call, while it opens the store. */
   let probe: Promise<unknown> | undefined;
+  const openers = new Set<() => void>();
 
   const view = (): StoreView => {
     if (state === 'off') return { state: 'off' };
@@ -79,6 +82,13 @@ export function createStoreGate(): StoreGate {
       try {
         const out = await p;
         set('open');
+        for (const cb of [...openers]) {
+          try {
+            cb();
+          } catch {
+            // A listener never breaks the store call.
+          }
+        }
         return out;
       } catch (e) {
         if (isStoreFailure(e)) {
@@ -119,6 +129,10 @@ export function createStoreGate(): StoreGate {
       set('ready');
     },
     view,
+    onOpen(cb) {
+      openers.add(cb);
+      return () => openers.delete(cb);
+    },
   };
 }
 

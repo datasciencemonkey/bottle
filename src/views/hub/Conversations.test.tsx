@@ -482,3 +482,76 @@ describe('hub Conversations links (#523)', () => {
     expect(td.getAttribute('title')).toBe('1220042.3509332137');
   });
 });
+
+describe('hub Conversations launch race: retry and give up', () => {
+  beforeEach(() => {
+    tauri.reset();
+    vi.useFakeTimers();
+  });
+  afterEach(() => vi.useRealTimers());
+
+  const tick = (ms: number) => act(async () => void (await vi.advanceTimersByTimeAsync(ms)));
+
+  it('asks again at 0.5, 1.5, 3.5 and 7.5 s while there is no list', async () => {
+    await mount();
+    expect(ready()).toHaveLength(1);
+    await tick(499);
+    expect(ready()).toHaveLength(1);
+    await tick(1);
+    expect(ready()).toHaveLength(2);
+    await tick(1000);
+    expect(ready()).toHaveLength(3);
+    await tick(2000);
+    expect(ready()).toHaveLength(4);
+    await tick(4000);
+    expect(ready()).toHaveLength(5);
+    // No more asks after the last backoff step.
+    await tick(20_000);
+    expect(ready()).toHaveLength(5);
+  });
+
+  it('stops asking as soon as the first list arrives', async () => {
+    const { el } = await mount();
+    await tick(500);
+    expect(ready()).toHaveLength(2);
+    await tauri.emitTo('hub', 'hub:conversations', { rows });
+    expect(options(el).length).toBeGreaterThan(0);
+    await tick(30_000);
+    expect(ready()).toHaveLength(2);
+    expect(el.textContent).not.toContain('cannot read');
+  });
+
+  it('shows the skeleton before 10 s and the message with Try again after it', async () => {
+    const { el } = await mount();
+    await tick(9_999);
+    expect(el.querySelector('[aria-busy="true"]')).not.toBeNull();
+    expect(el.textContent).not.toContain('Bottle cannot read your saved conversations');
+    await tick(1);
+    expect(el.querySelector('[aria-busy="true"]')).toBeNull();
+    expect(el.textContent).toContain('Bottle cannot read your saved conversations right now.');
+    expect(el.textContent).not.toContain('No conversations yet.');
+    expect([...el.querySelectorAll('button')].map((b) => b.textContent)).toContain('Try again');
+  });
+
+  it('Try again asks at once, shows the skeleton, and a late list replaces it', async () => {
+    const { el } = await mount();
+    await tick(10_000);
+    const before = ready().length;
+    const btn = [...el.querySelectorAll('button')].find((b) => b.textContent === 'Try again');
+    await act(async () => btn?.click());
+    expect(ready()).toHaveLength(before + 1);
+    expect(el.querySelector('[aria-busy="true"]')).not.toBeNull();
+    await tick(500);
+    expect(ready()).toHaveLength(before + 2);
+    await tauri.emitTo('hub', 'hub:conversations', { rows });
+    expect(options(el).length).toBeGreaterThan(0);
+  });
+
+  it('a list that comes after the message replaces the message', async () => {
+    const { el } = await mount();
+    await tick(10_000);
+    await tauri.emitTo('hub', 'hub:conversations', { rows });
+    expect(el.textContent).not.toContain('cannot read');
+    expect(options(el).length).toBeGreaterThan(0);
+  });
+});
