@@ -7,9 +7,11 @@ use crate::ipc::MemExecArgs;
 
 pub mod catalog;
 pub mod key_vault;
+pub mod memory_files;
 mod migrate;
 pub mod mog_guard;
 pub mod quarantine;
+pub mod secret_check;
 mod store;
 #[cfg(test)]
 mod tests;
