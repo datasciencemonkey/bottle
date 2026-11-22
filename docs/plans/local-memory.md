@@ -73,6 +73,7 @@ The owner chose option (c) for storage (Q1). The next work is slice 0 (contract,
 | Outbox | The local queue of rows that the v1 SyncWorker sends (MEM-10a, MEM-11a). |
 | Slice | One delivery step of this plan (Section 11). |
 | ADR | Architecture decision record. Each ADR is a file in `docs/adr/`. |
+| Page record | One local row of the hydration plan (PR #611). It links a recording to its Page. |
 | Wipe | The Settings action that deletes user content by age (ADR 0087, MEM-33a). |
 | Forget | The action that deletes named items, a session or a MOG with the items that cite them (ADR 0081). |
 | U9 | The binding rule "Bottle deletes no user content on its own". This plan amends it for removed memories (M13). |
@@ -403,7 +404,7 @@ The job must remove a memory only if each of these conditions is true:
 - The user must not have edited the memory in the last 180 d.
 - The memory must not be cited by a Page record of the hydration plan.
 
-Each other memory stays. Pinned memories are never removed by the job. A pin always wins over each rule of this section.
+Every other memory stays. The job never removes a pinned memory. A pin always overrides each rule of this section.
 
 Further rules:
 
@@ -411,12 +412,12 @@ Further rules:
 - Recall, the index files and the memory tool must not use a `removed` memory.
 - "Restore" must set the status that the memory had before the remove.
 - The job must purge a memory only after 30 d with the status `removed`.
-- A purge must use the Forget step for items, so FTS rows and embed jobs go too (ADR 0081).
+- A purge must use the Forget step for items, so that the Forget step also deletes the FTS rows and the embed jobs (ADR 0081).
 - A purge must write one `forget_log` row with the scope `purge` and the item ids only.
 - The job must purge 200 memories or less in one run.
 - Wipe and Forget must also delete `removed` memories, as other memories.
 
-The user stays in control. Each memory that the job removes goes through "Suggested to remove" for 90 d first. Then it waits 30 d in "Recently removed". So a memory leaves the device 120 d or more after it first shows as a suggestion.
+The user stays in control. Each memory that the job removes first stays in "Suggested to remove" for 90 d. Then it waits 30 d in "Recently removed". So a memory leaves the device 120 d or more after it first shows as a suggestion.
 
 ### 7.3 Model use (later, off by default)
 
@@ -490,7 +491,8 @@ The agent memory tool fits the later tool loop of the MOG-to-MOG plan (PR #617, 
 - The area must have a "Suggested to add" list. It shows the `proposed` memories with Approve, Edit and Reject.
 - The area must have a "Suggested to remove" list. It shows the `stale` memories with Delete now and Keep.
 - Delete now must run `mem.forget.items` for that memory after a confirm click.
-- Keep must set the status `active` and reset the 90 d count.
+- Keep must set the status `active`.
+- Keep must reset the 90 d count.
 - The area must have a "Recently removed" list. It shows the `removed` memories with Restore and the purge date.
 - The "Recently removed" list must also have Delete now.
 - Reject must run `mem.forget.items` for that memory, because the user asked for the delete.
@@ -575,7 +577,7 @@ Not in slice 1: recall, edit, search, export, the shared folder, automatic captu
 - The hub lists "Suggested to remove" and "Recently removed" with Restore.
 - AC-3.1: With a simulated clock, a 91 d unused unpinned memory becomes `stale`. A pinned one stays `active`.
 - AC-3.1a: A memory `stale` for 91 d with no recall in 180 d becomes `removed`. A pinned memory with the same history stays.
-- AC-3.1b: A `removed` memory is purged after 30 d. Restore before that sets its old status again.
+- AC-3.1b: The job purges a `removed` memory after 30 d. Restore before that sets its old status again.
 - AC-3.1c: A purge leaves no row, FTS row or embed job. It writes one `forget_log` row with the scope `purge`.
 - AC-3.2: The job deletes only rows that meet the purge rule. A row count test before and after a run proves it.
 - AC-3.3: The job does not start on battery under 50 % or in Low Power Mode. A test double gives the power state.
@@ -707,7 +709,7 @@ PR #611 must reserve new numbers with `adr-next.sh` before it merges.
   - The job removes only unpinned, stale, unused memories by Table MEM-REMOVE (7.2a).
   - A removed memory stays 30 d in "Recently removed" with Restore. Then the job purges it.
   - The hub shows "Suggested to remove" and "Suggested to add".
-  - Pinned memories are never removed by the job.
+  - The job never removes a pinned memory.
   - This amends U9 and MEM-33a (M13, Section 12.1).
 - **Q4. Model writes.** A model-written memory has the status `proposed`. It needs the user's approval.
 - **Q7. The `person` kind.** It is dropped for now. Old `entity` rows become `fact`, `proposed`, tag `legacy-entity` (5.1).
