@@ -89,7 +89,7 @@ checksum = "76a2e8124351fda1ef8aaaa3bbd7ebbcb486bbcd4225aca0aa0d84bb2db8fecb"
 
 [[package]]
 name = "artifact-verify"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "sha2 0.10.9",
  "subtle",
@@ -224,7 +224,7 @@ dependencies = [
 
 [[package]]
 name = "bottle"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "block2",
  "glob",
@@ -493,7 +493,7 @@ checksum = "4bfbf56724aa9eca8afa4fcfadeb479e722935bb2a0900c2d37e0cc477af0688"
 
 [[package]]
 name = "cli-runner"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "artifact-verify",
  "libc",
@@ -2285,7 +2285,7 @@ dependencies = [
 
 [[package]]
 name = "mog-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "block2",
  "bzip2 0.4.4",
@@ -2324,7 +2324,7 @@ dependencies = [
 
 [[package]]
 name = "mog-core-ffi"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "cbindgen",
  "mog-core",
