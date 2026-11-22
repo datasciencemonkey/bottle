@@ -23,6 +23,7 @@ import { DictationWords } from './DictationWords';
 import { ConnectAnotherWorkspace } from './ConnectAnotherWorkspace';
 import { ConnectWorkspace } from './ConnectWorkspace';
 import { Conversations } from './Conversations';
+import { MemoryArea } from './Memory';
 import { DataPanel } from './DataDisclosures';
 import { DictationNotices } from './DictationNotices';
 import { ForgetDialogHost } from './ForgetDialogHost';
@@ -231,9 +232,9 @@ export function Hub() {
   const hubBodyStyle = { '--hub-sidebar-width': `${sidebarWidth(sidebar)}px` } as CSSProperties;
 
   // TODO(#43): the onboarding wizard.
-  // Conversations and Recordings are both a full-height list+detail layout (`hub--wide`);
+  // Conversations, Memory and Recordings are full-height list+detail layouts (`hub--wide`);
   // MOGs and Settings keep the comfortable reading width (hub.css).
-  const wide = view === 'conversations' || view === 'recordings';
+  const wide = view === 'conversations' || view === 'memory' || view === 'recordings';
   return (
     <main className={wide ? 'hub hub--wide' : 'hub'} style={hubBodyStyle}>
       <HubHeader />
@@ -288,6 +289,7 @@ export function Hub() {
             onOpen={showConversations}
             composer={threadComposer}
           />
+          <MemoryArea active={view === 'memory'} />
           <Recordings
             active={view === 'recordings'}
             onOpenSettings={openRecordingSettings}

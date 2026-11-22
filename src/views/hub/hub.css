@@ -1043,6 +1043,7 @@
   }
 
   .hub--wide .conv,
+  .hub--wide .mem,
   .hub--wide .rec-area {
     flex: 1;
     min-height: 0;
@@ -2255,5 +2256,299 @@
     .rec-consent {
       animation: none;
     }
+  }
+
+  /* Memory (local memory plan 9.1): tree 220 px, list 280 px, the file fills the rest. The same
+     frame as Conversations: each pane scrolls on its own, and the frame bleeds to the edges. */
+  .mem {
+    position: relative;
+    display: flex;
+    margin: 0 -32px;
+    margin-left: calc(var(--mog-space-6) * -1);
+    border-top: 1px solid var(--mog-edge);
+  }
+
+  .mem-panes {
+    display: grid;
+    flex: 1;
+    grid-template-columns: 220px 280px minmax(0, 1fr);
+    min-height: 0;
+  }
+
+  .mem-tree,
+  .mem-list {
+    min-height: 0;
+    overflow-y: auto;
+    padding: 12px 8px 24px 12px;
+    border-right: 1px solid var(--mog-edge);
+    overscroll-behavior: contain;
+  }
+
+  .mem-tree ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .mem-tree [role='group'] {
+    margin: 2px 0 6px 14px;
+  }
+
+  .mem-tree-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 10px;
+    border: 0;
+    border-radius: var(--mog-radius-sm);
+    background: transparent;
+    color: var(--mog-text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color 120ms var(--mog-ease-out);
+  }
+
+  .mem-tree-row--kind {
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-sm);
+  }
+
+  .mem-tree-row:hover,
+  .mem-row:hover {
+    background: color-mix(in srgb, var(--mog-surface-raised) 50%, transparent);
+  }
+
+  .mem-tree [aria-selected='true'] > .mem-tree-row,
+  .mem-row[aria-selected='true'] {
+    background: var(--mog-surface-raised);
+    color: var(--mog-text);
+  }
+
+  .hub .mem-tree [role='tree']:focus-visible,
+  .hub .mem-list:focus-visible {
+    box-shadow: none;
+  }
+
+  .mem-tree [role='tree']:focus-visible [aria-selected='true'] > .mem-tree-row,
+  .mem-list:focus-visible .mem-row[aria-selected='true'] {
+    box-shadow: var(--mog-focus-ring);
+  }
+
+  .mem-tree-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mem-count {
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-xs);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .mem-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex: none;
+  }
+
+  .mem-row {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 8px 12px;
+    border-radius: var(--mog-radius-sm);
+    cursor: pointer;
+    transition: background-color 120ms var(--mog-ease-out);
+  }
+
+  .mem-row-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    overflow: hidden;
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mem-pin {
+    flex: none;
+    color: var(--mog-accent);
+  }
+
+  .mem-row-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-xs);
+  }
+
+  .mem-row-path {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mem-mark {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    flex: none;
+    padding: 0 6px;
+    border: 1px solid var(--mog-edge);
+    border-radius: var(--mog-radius-pill);
+    font-size: var(--mog-text-xs);
+    line-height: 1.6;
+  }
+
+  .mem-mark--quarantined {
+    border-color: var(--mog-note-border);
+    background: var(--mog-note-bg);
+    color: var(--mog-note-text);
+  }
+
+  .mem-file {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .mem-doc {
+    display: flex;
+    flex-direction: column;
+    gap: var(--mog-space-4);
+    max-width: 68ch;
+    padding: 20px 28px 32px;
+  }
+
+  .mem-path {
+    color: var(--mog-text-muted);
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    font-size: var(--mog-text-xs);
+    word-break: break-all;
+  }
+
+  .hub .mem-doc-title {
+    margin: 6px 0 4px;
+    font-size: var(--mog-text-lg);
+    font-weight: var(--mog-weight-semibold);
+    line-height: var(--mog-leading-tight);
+  }
+
+  .hub .mem-doc-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 12px;
+    margin: 0;
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-xs);
+  }
+
+  .hub .mem-note {
+    margin: 0;
+    padding: 10px 12px;
+    border: 1px solid var(--mog-note-border);
+    border-radius: var(--mog-radius-sm);
+    background: var(--mog-note-bg);
+    color: var(--mog-note-text);
+    font-size: var(--mog-text-sm);
+  }
+
+  .mem-doc-body {
+    line-height: var(--mog-leading-relaxed);
+  }
+
+  .mem-plain {
+    margin: 0;
+    font: inherit;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .mem-front summary {
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-sm);
+    cursor: pointer;
+  }
+
+  .mem-front dl {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 4px 16px;
+    margin: 10px 0 0;
+    font-size: var(--mog-text-xs);
+  }
+
+  .mem-field {
+    display: contents;
+  }
+
+  .mem-field dt {
+    color: var(--mog-text-muted);
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  }
+
+  .mem-field dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .mem-doc-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-top: var(--mog-space-3);
+    border-top: 1px solid var(--mog-edge);
+  }
+
+  .mem-confirm-text {
+    margin-right: 4px;
+    font-size: var(--mog-text-sm);
+  }
+
+  .mem-message {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-width: 52ch;
+    margin: 0;
+    padding: 32px;
+    color: var(--mog-text-muted);
+  }
+
+  .mem-message--quiet {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    font-size: var(--mog-text-sm);
+  }
+
+  .mem-empty-title {
+    color: var(--mog-text);
+    font-weight: var(--mog-weight-semibold);
+  }
+
+  .mem-toast {
+    position: absolute;
+    bottom: 20px;
+    left: 50%;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px 4px 14px;
+    border: 1px solid var(--mog-edge);
+    border-radius: var(--mog-radius-pill);
+    background: var(--mog-surface-raised);
+    box-shadow: var(--mog-shadow);
+    font-size: var(--mog-text-sm);
+    transform: translateX(-50%);
   }
 } /* @layer hub-legacy */
