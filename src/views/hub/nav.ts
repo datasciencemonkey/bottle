@@ -8,13 +8,14 @@
  */
 import {
   DiscAlbumIcon,
+  HouseIcon,
   MessageSquareIcon,
   SettingsIcon,
   SparklesIcon,
   type LucideIcon,
 } from 'lucide-react';
 
-export type HubView = 'conversations' | 'mogs' | 'workspaces' | 'recordings' | 'settings';
+export type HubView = 'home' | 'conversations' | 'mogs' | 'workspaces' | 'recordings' | 'settings';
 
 export interface NavItem {
   readonly id: HubView;
@@ -23,11 +24,16 @@ export interface NavItem {
 }
 
 export const NAV_ITEMS: readonly NavItem[] = [
-  { id: 'conversations', label: 'Conversations', icon: MessageSquareIcon },
+  { id: 'home', label: 'Home', icon: HouseIcon },
   { id: 'mogs', label: 'MOGs', icon: SparklesIcon },
+  { id: 'conversations', label: 'Conversations', icon: MessageSquareIcon },
   { id: 'recordings', label: 'Recordings', icon: DiscAlbumIcon },
   { id: 'settings', label: 'Settings', icon: SettingsIcon },
 ];
 
-/** The area the hub opens on: the first item, where the first-run setup steps live (#103). */
-export const DEFAULT_HUB_VIEW: HubView = NAV_ITEMS[0]?.id ?? 'conversations';
+/**
+ * The area the hub opens on: Home, the calm launch screen. The setup steps sit above every area,
+ * so first-run users are never blocked (#103). An open for a purpose (Open in Bottle, Change
+ * workspace, the talk key with no MOG, Choose where to save) switches to its own area.
+ */
+export const DEFAULT_HUB_VIEW: HubView = 'home';
