@@ -1,6 +1,6 @@
 # Plan: local file-system memories (capture, consolidate, recall)
 
-- Status: draft plan. The owner decided Q1, Q2, Q4 and Q7 on 2026-11-21 (Section 15.1). The other questions stay open.
+- Status: draft plan. The owner decided Q1, Q2, Q4, Q7 and the layout (Q11) on 2026-11-21 (Section 15.1). The other questions stay open.
 - Date: 2026-11-21
 - Author: planner agent (branch `chore/plan-memory`)
 - Language: drafted to STE100 rules. A script checked the sentence lengths. Verbatim quotes of the owner are exempt. Nobody did the official dictionary check.
@@ -14,7 +14,7 @@
 The owner wants Bottle to keep memories on the device. Bottle forms them from user actions. A background job cleans them up. Later, Bottle can share them.
 
 1. A **memory** is one typed item: a fact, a preference, a definition, a decision, an open question or a kept Genie answer.
-2. Each memory has the shape of one Markdown file with frontmatter. An index file lists the memories.
+2. Bottle uses the OpenClaw layout (decided): `USER.md`, one `MEMORY.md` for each MOG and dated daily notes. The rows stay the source of truth. The files are renderings.
 3. The home is the existing encrypted SQLCipher store (decided, Q1). Bottle shows it as a virtual folder `/memories`. Export gives real `.md` files.
 4. The user, the hub and the agent memory tool see files. The disk holds only the encrypted store.
 5. Slice 1 is small: the store, the "Remember this" pin and a hub Memory list with Delete.
@@ -34,13 +34,21 @@ The owner chose option (c) for storage (Q1). The next work is slice 0 (contract,
 |---|---|
 | Memory | One typed item that Bottle keeps for the user. It has a kind, a title, a summary, a body and frontmatter. |
 | Kind | The type of a memory: `fact`, `preference`, `definition`, `decision`, `open_question` or `genie_answer`. |
-| Memory file | The Markdown form of one memory: YAML frontmatter, then a Markdown body. |
-| Index file | `index.md` in a folder. It has one line for each active memory in that folder. |
+| Memory record | The fields of one memory (5.2). The store row holds them. The hub shows them as frontmatter. |
+| Rendering | A Markdown file that Rust computes from store rows. Nobody stores the file. |
+| Entry | The part of a rendering that shows one memory: a heading, a body and one metadata line. |
+| `USER.md` | The rendering `/memories/USER.md`. It shows the shared `preference` memories. |
+| `MEMORY.md` | The rendering `/memories/<mog-slug>/MEMORY.md`. It shows the curated memories of one MOG. |
+| Daily note | The rendering `/memories/<mog-slug>/memory/YYYY-MM-DD.md`. It shows the daily memories of one day. |
+| Tier | The layer of a memory: `curated` (in `MEMORY.md` or `USER.md`) or `daily` (in a daily note). |
+| Memory flush | One step before Bottle summarizes a long Genie thread or the agent context. The agent proposes memories to save. |
+| Dreaming | A step of the consolidation job. It promotes qualified daily memories into `MEMORY.md` as `proposed`. |
+| OpenClaw | An open-source agent project. Bottle copies its memory layout (3.4). |
 | Virtual folder | The path tree `/memories/...` that Bottle computes from store rows. No real folder exists. |
 | Local store | R10, the one SQLCipher 4 file `memory.db`. Its key is in the OS keychain (ADR 0105). |
-| Store row | One row of the `memory_item` table. One store row is one memory. |
+| Store row | One row of the `memory_item` table. One store row is one memory. The rows are the source of truth. |
 | MOG folder | The folder of one MOG, `/memories/<mog-slug>/`. One MOG is one CLI profile and one workspace. |
-| Shared folder | `/memories/shared/`. It holds memories that belong to no workspace, such as preferences. |
+| Shared folder | The memories of the reserved MOG id `shared`. `USER.md` shows them. They belong to no workspace. |
 | Status | The state of a memory: `proposed`, `active`, `stale`, `removed`, `superseded`, `retracted` or `quarantined`. |
 | Removed | A status. The job took the memory out of use. The hub shows it in "Recently removed" for 30 d. |
 | Recently removed | The hub list of `removed` memories, with Restore. |
@@ -51,7 +59,7 @@ The owner chose option (c) for storage (Q1). The next work is slice 0 (contract,
 | Stale | A status. The consolidation job found no use for a long time. Recall does not use it. Bottle keeps it. |
 | Pin | A user mark on a memory. A pinned memory never goes stale. Only a user action makes a pin (MEM-28b). |
 | Action ticket | A one-time Rust record that proves a user click or a user voice command (#574). |
-| Origin | The event that made a memory: `pin`, `kept_answer`, `correction`, `dictation_word`, `call_notes`, `agent`, `merge`. |
+| Origin | The event that made a memory: `pin`, `kept_answer`, `correction`, `dictation_word`, `call_notes`, `agent`, `flush`, `dream`, `merge`. |
 | Source | The speaker or system behind the text: `you`, `others`, `genie`, `agent` or `confirmed` (ADR 0089). |
 | Quarantine | The R10 check of injection text (SEC-24a, ADR 0089). A hit sets the status `quarantined`. |
 | Secret check | A new R10 check. It refuses a write with a token, key or password pattern. |
@@ -137,7 +145,30 @@ Fit for Bottle:
 - Each topic file has a `type` field in its frontmatter: `user`, `feedback`, `project` or `reference`.
 - Only "the first 200 lines or 25KB of `MEMORY.md`" load at session start. Topic files load on demand.
 - The files are plain text on disk. "Auto memory is machine-local."
-- Bottle copies the shape (one file per memory, one index, a type field, an index cap). Bottle does not copy the plain-text storage.
+- Bottle copies the index cap and the type field. The layout comes from OpenClaw (3.4). Bottle does not copy the plain-text storage.
+
+### 3.4 OpenClaw memory (docs.openclaw.ai/concepts/memory)
+
+Source: https://docs.openclaw.ai/concepts/memory, fetched 2026-11-21.
+
+- `MEMORY.md` is the long-term layer "for durable non-profile facts and decisions". It loads at session start. It is "not a raw transcript, daily log, or exhaustive archive."
+- `memory/YYYY-MM-DD.md` holds daily notes and raw context. Today's and yesterday's notes load on a new session. Search tools index the older notes.
+- `USER.md` holds stable preferences as directives, with a small budget. A changed preference replaces its entry in place.
+- The memory flush: "Before compaction summarizes a conversation, OpenClaw runs a silent turn that reminds the agent to save important context to durable memory." The flush writes only to the daily note. A failed flush does not block compaction.
+- Dreaming is the background consolidation. It "promotes qualified owner- or agent-derived items into `MEMORY.md`." Items must pass score, recall-frequency and query-diversity gates.
+- In OpenClaw, "Untrusted and system-derived candidates never reach the consolidation or promotion path."
+- OpenClaw keeps these files as plain files in the agent workspace. Its promotions write to `MEMORY.md` with no user approval step.
+
+What Bottle copies, and what Bottle keeps (owner decision "OpenClaw layout, Bottle safety", Q11):
+
+| OpenClaw part | Bottle |
+|---|---|
+| `USER.md`, `MEMORY.md`, daily notes | Copied as renderings of store rows. |
+| Plain files on disk | Not copied. The encrypted store stays (Q1). |
+| Memory flush before compaction | Copied. The flush output is `proposed` (Q4). |
+| Dreaming promotion into `MEMORY.md` | Copied. A promotion is `proposed` and needs the user's approval. |
+| Untrusted candidates never promoted | Copied. Source `others` never promotes. |
+| Agent writes to files directly | Not copied. Each write passes the R10 quarantine and secret checks. |
 
 ### 3.3 OpenAI Agents SDK
 
@@ -199,13 +230,13 @@ How the user views and edits memories in option (c):
 
 - The hub Memory area shows each memory as a file in a folder tree, with its frontmatter and its rendered body.
 - The user edits the title, the body, the kind and the tags in the hub. Rust checks each edit as a new write.
-- "Export" writes a zip of real `.md` files and the index files to a place that the user picks (MEM-38a).
+- "Export" writes a zip of the real files (`USER.md`, each `MEMORY.md` and the daily notes) to a place that the user picks (MEM-38a).
 - The export dialog says that the files have no encryption (MEM-38b).
 - An import of edited files is a later item. It runs each file through the same write checks.
 
 ### 4.5 Decision (owner, 2026-11-21)
 
-The owner chose option (c). Export gives real `.md` files and the index files on request.
+The owner chose option (c). Export gives the real `.md` files of the layout in 5.3 on request.
 
 The reasons for option (c):
 
@@ -238,14 +269,15 @@ The reason: an `entity` row can hold data about a person. As a `proposed` memory
 - The `bottle-mcp` list `AGENT_ITEM_TYPES` must drop `entity`.
 - A writer must not make a memory with a person as its subject.
 
-### 5.2 Memory file format
+### 5.2 Memory record and entry format
 
-Each memory file has this form. The values are placeholders.
+Each memory is one store row. The hub shows its fields as frontmatter. The values are placeholders.
 
 ```markdown
 ---
 id: 7f0c2e1a-3d4b-4c5e-9f60-1a2b3c4d5e6f
 kind: definition
+tier: curated
 title: Active user
 status: active
 pinned: true
@@ -255,6 +287,7 @@ mog: mog-a
 workspace_host: <host-a>
 workspace_id: "1234567890"
 profile: profile-a
+note_date: null
 exchange_id: null
 recording_id: null
 created: 2026-11-21T10:00:00Z
@@ -268,49 +301,71 @@ supersedes: []
 An active user is a user who logged in at least once in the calendar month.
 ```
 
-Rules for the format:
+In a rendering, the same memory is one entry:
 
-- The frontmatter must use only the fields of this list.
-- Rust must compute the frontmatter from the store columns. Rust does not store the frontmatter text.
+```markdown
+### Active user
+<!-- m:7f0c2e1a kind:definition pinned source:you origin:pin updated:2026-11-21 -->
+An active user is a user who logged in at least once in the calendar month.
+```
+
+Rules for the record and the entry:
+
+- The record must use only the fields of this list.
+- Rust must compute the frontmatter and each entry from the store columns. Rust does not store the text of a rendering.
+- The metadata line of an entry must hold the short id `m:<first 8 hex chars>`. The memory tool uses it to find the row.
 - The `title` must have 1 to 80 characters.
 - The `text` column (the summary line) must have 1 to 600 characters, as today.
 - The body must have 4,000 characters or less.
 - The `tags` list must have 8 tags or less.
 - Each tag must have 32 characters or less.
 - The `profile` field holds the CLI profile name. It must never hold a token or a host credential.
+- The `note_date` field holds the day of a `daily` memory. It is `null` for a `curated` memory.
 
-### 5.3 Virtual folder layout
+### 5.3 Virtual folder layout (OpenClaw layout, decided)
 
 ```text
 /memories/
-  index.md                       one line per folder
-  shared/
-    index.md
-    preferences/<slug>.md
+  USER.md                        shared preferences (MOG id `shared`), tier curated
   <mog-slug>/                    one folder per MOG = one profile = one workspace
-    index.md
-    facts/<slug>.md
-    definitions/<slug>.md
-    decisions/<slug>.md
-    open-questions/<slug>.md
-    answers/<slug>.md
+    MEMORY.md                    curated facts, definitions, decisions and open questions
+    memory/
+      2026-11-20.md              daily note: the daily memories of that day
+      2026-11-21.md
 ```
 
+What each rendering shows:
+
+| Rendering | Memories | Order |
+|---|---|---|
+| `USER.md` | `active` memories of MOG id `shared`, kind `preference`. | Pinned first, then by `last_used`. |
+| `MEMORY.md` | `active` `curated` memories of the MOG, kinds `fact`, `definition`, `decision` and `open_question`. | One `##` section per kind. Pinned first, then by `last_used`. |
+| Daily note | `active` `daily` memories of the MOG with that `note_date`. Kept Genie answers go here. | By `created`. |
+
+Rules for the layout:
+
+- The store rows must stay the source of truth. Each file must be a rendering of rows.
 - Rust makes the `<mog-slug>` from the MOG name. Rust must keep it unique on the device.
-- Rust makes the `<slug>` from the title, in lower case with hyphens. Rust must add a short id suffix on a clash.
-- A path must match the fixed grammar `/memories/(shared|<mog-slug>)/<kind-folder>/<slug>.md`. Rust must refuse any other path.
-- The shared folder must hold only `preference` memories in the first slices. Q5 asks the owner about more kinds.
-- A Genie answer must never enter the shared folder. It belongs to one workspace (D60).
-- Each line of an index file has the form `- [<title>](<kind-folder>/<slug>.md) — <summary, 80 chars or less>`.
-- An index file must have 200 lines or less. An index file must have 25 KB or less. Pinned memories come first, then by `last_used`.
+- A path must match the fixed grammar `/memories/USER.md`, `/memories/<mog-slug>/MEMORY.md` or `/memories/<mog-slug>/memory/YYYY-MM-DD.md`. Rust must refuse any other path.
+- A rendering must never show a `proposed`, `stale`, `removed`, `superseded`, `retracted` or `quarantined` memory.
+- The hub shows `proposed` memories only in "Suggested to add".
+- `USER.md` must hold only `preference` memories in the first slices. Q5 asks the owner about more kinds.
+- A Genie answer must never enter `USER.md`. It belongs to one workspace (D60).
+- A Genie answer must have the tier `daily`. It ages fast (MEM-17b).
+- A user pin must have the tier `curated`, except a kept Genie answer.
+- `MEMORY.md` must have 200 lines or less and 25 KB or less, as the Claude Code index cap. Pinned memories come first.
+- If `MEMORY.md` is over its cap, Rust must leave out the oldest unpinned entries. The hub shows "MEMORY.md is full".
+- `USER.md` must have 100 lines or less and 10 KB or less.
+- A daily note must show 50 entries or less.
+- At the start of an agent session, the agent gets `USER.md`, `MEMORY.md`, today's note and yesterday's note, within their caps.
 
 ### 5.4 Size caps
 
 | Item | Cap | Effect at the cap |
 |---|---|---|
 | Body of one memory | 4,000 characters | Rust refuses the write with `body_too_long`. |
-| Active memories in one MOG folder | 2,000 | Automatic capture stops. The hub shows "Memory is full". User writes still work. |
-| Memories in the shared folder | 500 | The same as above. |
+| Active memories in one MOG (both tiers) | 2,000 | Automatic capture stops. The hub shows "Memory is full". User writes still work. |
+| Memories of the shared MOG id (`USER.md`) | 500 | The same as above. |
 | All memory text on the device | 20 MB | The same as above. |
 | One `view` result for the memory tool | 16,000 characters | Rust returns the first part and the line count. The model pages with `view_range`. |
 | Recall hits on the card | 3 hits, 1,500 characters | Rust returns the top hits only. |
@@ -324,12 +379,14 @@ Rules for the format:
 | The user clicks "Remember this" on a card. | `pin` | Deterministic rule | `active`, pinned, confidence 1.0 | 1 |
 | The user says "remember this: <text>" on the You track. | `pin` | Deterministic rule (`isRememberThis`) | `active`, pinned, confidence 1.0 | 1 |
 | The user adds a memory in the hub. | `pin` | Deterministic rule | `active`, source `you` | 1 |
-| The user clicks "Keep" on a Genie answer card. | `kept_answer` | Deterministic rule | `active`, kind `genie_answer` | 4 |
+| The user clicks "Keep" on a Genie answer card. | `kept_answer` | Deterministic rule | `active`, kind `genie_answer`, tier `daily` | 4 |
 | The user edits a memory in the hub. | `correction` | Deterministic rule | `active`, source `confirmed`; the old version becomes `superseded` | 3 |
 | The user clicks "Ask Genie anyway" on a memory hit. | `correction` | Deterministic rule | The memory loses one point of confidence. | 2 |
 | The user turns on "Save dictation words as memories". | `dictation_word` | Deterministic rule | `active`, kind `preference`, tag `dictation-word` | 4 |
 | A recording finishes and has notes. | `call_notes` | One model call through the AI Gateway | `proposed` | 4 |
 | The agent calls the memory tool. | `agent` | The model, in a tool loop | `proposed` | 5 |
+| A long Genie thread or the agent context is about to be summarized (6.4). | `flush` | One model call, or the agent in its loop | `proposed`, tier `daily` | 4, 5 |
+| The consolidation job promotes a daily memory (7.2b). | `dream` | Rules | `proposed`, tier `curated` | 3 |
 | The consolidation job merges two memories. | `merge` | Rule, or a model call later | `proposed` | 3 |
 
 ### 6.2 Write rules
@@ -362,6 +419,30 @@ Rules for the format:
 6. Rust writes each candidate as `proposed`, with `recording_id` and confidence 0.6 to 0.8.
 7. The hub shows the candidates under "Suggested to add". The user approves, edits or rejects each one.
 
+### 6.4 The memory flush (slice 4 for Genie threads, slice 5 for the agent)
+
+The flush copies the OpenClaw "memory flush" (3.4). It saves know-how before a summary drops the detail.
+
+When it runs:
+
+- For a Genie thread: when the thread reaches 8 follow-ups, before the brain shortens the thread for the card.
+- For the agent loop: when the context reaches 75 % of its budget, before the loop summarizes it.
+
+Rules:
+
+- The flush must run at most once for each summary.
+- For a Genie thread, Rust must send one tool-free `json_schema` call through the AI Gateway with the home profile.
+- For the agent loop, the agent gets one silent step. It can call only the memory tool with `insert` on today's daily note.
+- The flush must propose 5 memories or less.
+- Each flush memory must have the origin `flush`, the tier `daily` and the status `proposed`.
+- Each flush memory must pass the R10 quarantine and secret checks.
+- The flush must write only to the daily note of the MOG that owns the thread.
+- The flush must never write to `MEMORY.md` or `USER.md`.
+- A failed or skipped flush must not block the summary.
+- The flush must never send Others-track text or a quarantined memory to the model.
+- The flush must respect the off setting `memory.flush` (default on, Q4 keeps its output `proposed`).
+- The log line of a flush must hold counts only.
+
 ## 7. The consolidation job
 
 ### 7.1 Where and when it runs
@@ -389,7 +470,33 @@ Rules for the format:
 | Remove | See the rules of 7.2a. | The status becomes `removed`. The hub shows it in "Recently removed". |
 | Purge | A `removed` memory has had that status for 30 d, with no Restore. | The job deletes the row through a Forget step. |
 | Cap | A folder is over its cap (5.4). | Automatic capture stops. The hub shows "Memory is full". Nothing is deleted. |
-| Index | Any change in a folder. | Rust rebuilds the index file and runs the FTS5 `optimize` command. |
+| Dream | A `daily` memory meets the rules of 7.2b. | The job writes a `curated` copy as `proposed`. The hub shows it in "Suggested to add". |
+| Render | Any change in a MOG. | Rust marks its renderings for a new render and runs the FTS5 `optimize` command. |
+
+### 7.2b Dreaming: promote daily memories (decided, Q11)
+
+Dreaming copies the OpenClaw promotion (3.4). Bottle keeps the user approval.
+
+The job must promote a `daily` memory only if each of these conditions is true:
+
+- The memory must have the status `active`.
+- The memory must have the source `you`, `confirmed` or `genie`.
+- The memory must not have the kind `genie_answer`. A Genie answer stays daily (MEM-17b).
+- The memory must have 2 recall uses or more.
+- The recall uses must come from 2 different questions or more.
+- The memory must be 3 d old or more.
+- No `curated` memory of the MOG must have the same normalized summary.
+
+Further rules:
+
+- A promotion must write a new `curated` memory with the status `proposed` and the origin `dream`.
+- The new memory must cite the daily memory in `supersedes`.
+- The daily memory must become `superseded` only after the user approves the promotion.
+- A promotion must pass the R10 quarantine and secret checks.
+- Dreaming must never promote a memory with the source `others` or `agent`. These sources are not trusted.
+- Dreaming must never promote a `quarantined`, `proposed` or `restricted` memory.
+- Dreaming must use rules only in slice 3. A model merge is later (7.3).
+- Dreaming must propose 10 promotions or less in one run.
 
 ### 7.2a Remove and purge rules (decided, Q2)
 
@@ -409,10 +516,11 @@ Every other memory stays. The job never removes a pinned memory. A pin always ov
 Further rules:
 
 - A removed memory must keep all of its fields.
-- Recall, the index files and the memory tool must not use a `removed` memory.
+- Recall, the renderings and the memory tool must not use a `removed` memory.
 - "Restore" must set the status that the memory had before the remove.
 - The job must purge a memory only after 30 d with the status `removed`.
-- A purge must use the Forget step for items, so that the Forget step also deletes the FTS rows and the embed jobs (ADR 0081).
+- A purge must use the Forget step for items (ADR 0081).
+- That step also deletes the FTS rows and the embed jobs.
 - A purge must write one `forget_log` row with the scope `purge` and the item ids only.
 - The job must purge 200 memories or less in one run.
 - Wipe and Forget must also delete `removed` memories, as other memories.
@@ -430,7 +538,7 @@ The user stays in control. Each memory that the job removes first stays in "Sugg
 
 ### 7.4 Logs
 
-- Each run must write one log line with counts only: for example `event=memory.consolidate deduped=2 staled=5 removed=3 purged=1 rescanned=40 ms=310`.
+- Each run must write one log line with counts only: for example `event=memory.consolidate deduped=2 staled=5 dreamed=2 removed=3 purged=1 rescanned=40 ms=310`.
 - A log line must never hold a title, a summary, a body, a tag or a path.
 
 ## 8. Recall
@@ -460,13 +568,18 @@ The agent memory tool fits the later tool loop of the MOG-to-MOG plan (PR #617, 
 
 - The tool must be a Chat Completions function named `memory` with the 6 commands of `memory_20250818`.
 - Rust must own the tool. The brain loop must send each call to Rust. The brain loop must not touch the store.
-- The tool must see only the folder of the asking MOG and the shared folder.
+- The tool must see only `USER.md` and the folder of the asking MOG.
+- `view /memories` must list `USER.md`, `MEMORY.md` and the daily notes of the last 30 d.
+- An edit command must name the entry by its short id `m:<id>`, or by a unique text match.
 - The tool must never show a `quarantined` memory (SEC-24b).
 - `view` must return at most 16,000 characters.
 - `view` must accept `view_range`.
-- `create`, `str_replace` and `insert` must make a `proposed` memory, or a `proposed` new version of a memory.
+- `insert` on a daily note must make a `proposed` `daily` memory.
+- `insert` on `MEMORY.md` or `USER.md` must make a `proposed` `curated` memory.
+- `str_replace` must make a `proposed` new version of one entry.
+- `create` must return an error, because Rust owns the files. The error tells the model to use `insert`.
 - `delete` must mark the memory `retracted` only if the agent made it and it is still `proposed`. Each other `delete` must return an error.
-- `rename` must change only the title and the slug. It must not move a memory to another MOG folder.
+- `rename` must return an error. The paths are fixed.
 - Each tool call must write one content-free action log entry (ADR 0085).
 - The tool result is data, never instructions (RTR-03c). The agent cannot add memory text to a Genie ask (ADR 0085).
 - The route-only planner of PR #617 must never see a memory (MTM-03, MTM-08).
@@ -541,8 +654,8 @@ Scope:
 2. The card button "Remember this". It pins the answer summary as a `genie_answer` or `fact` memory.
 3. The voice command "remember this: <text>" on the You track. It pins the text as a `fact` memory.
 4. The R10 secret check (6.2).
-5. The virtual folder read path: `mem.item.list` and `mem.index.get`.
-6. The hub Memory area with the folder tree, the list, the file view and Delete. No edit, search or export yet.
+5. The virtual folder read path: `mem.item.list` and `mem.render.get` for `MEMORY.md` and the daily notes.
+6. The hub Memory area with the folder tree (`MEMORY.md`, `memory/`), the list, the file view and Delete. No edit, search or export yet.
 
 Acceptance criteria:
 
@@ -552,7 +665,8 @@ Acceptance criteria:
 - AC-1.4: The phrase "remember this week" stores nothing.
 - AC-1.5: A text with a fake Databricks token pattern gets `secret_refused`. The store has no row with the text.
 - AC-1.6: A text from the adversarial fixtures stores a `quarantined` memory. The hub list marks it.
-- AC-1.7: The hub shows the new memory under its MOG folder with the path `/memories/<mog-slug>/facts/<slug>.md`.
+- AC-1.7: A pinned `fact` shows as one entry in `/memories/<mog-slug>/MEMORY.md`. A pinned Genie answer shows in today's daily note.
+- AC-1.7a: The rendering is computed from the rows. A row delete removes the entry at the next render.
 - AC-1.8: Delete in the hub removes the row, its FTS row and its embed job. `mem.recall.fts` no longer finds it.
 - AC-1.9: The card shows "Saved to memory" with Undo. Undo removes the memory.
 - AC-1.10: No log line has memory text. A log scan test checks this.
@@ -562,7 +676,7 @@ Not in slice 1: recall, edit, search, export, the shared folder, automatic captu
 ### Slice 2: recall in the ask path
 
 - The RecallGate of #200 with FTS5 only. The card section "From your memory" with the provenance chip.
-- The shared folder for `preference` memories, and the hub search.
+- `USER.md` for shared `preference` memories, and the hub search.
 - AC-2.1: A trace shows the `genie_ask` delay of 300 ms or less (MEM-16a).
 - AC-2.2: A dictation utterance gets no memory verdict (MEM-16e).
 - AC-2.3: A `stale`, `proposed` or `quarantined` memory never shows on a card.
@@ -575,6 +689,7 @@ Not in slice 1: recall, edit, search, export, the shared folder, automatic captu
 - ADR 0114. The Rust worker, the power policy, the steps of 7.2, the remove and purge rules of 7.2a and "Tidy up now".
 - The hub edit (origin `correction`) and the "Merge?" cards.
 - The hub lists "Suggested to remove" and "Recently removed" with Restore.
+- Dreaming (7.2b).
 - AC-3.1: With a simulated clock, a 91 d unused unpinned memory becomes `stale`. A pinned one stays `active`.
 - AC-3.1a: A memory `stale` for 91 d with no recall in 180 d becomes `removed`. A pinned memory with the same history stays.
 - AC-3.1b: The job purges a `removed` memory after 30 d. Restore before that sets its old status again.
@@ -584,26 +699,30 @@ Not in slice 1: recall, edit, search, export, the shared folder, automatic captu
 - AC-3.4: The job stops within 100 ms of a talk-key press.
 - AC-3.5: A pattern version change quarantines a memory that matches the new pattern.
 - AC-3.6: The run log line holds counts only.
+- AC-3.7: A daily `you` memory with 2 recall uses from 2 questions gives one `proposed` `curated` memory. `MEMORY.md` does not show it before approval.
+- AC-3.8: A daily memory with source `others` or `agent` never gives a promotion.
 
 ### Slice 4: automatic capture
 
 - Slice 4 uses the `proposed` default of ADR 0113 (decided, Q4).
-- "Keep" on Genie answer cards, the dictation words option and the call-notes writer of 6.3.
+- "Keep" on Genie answer cards, the dictation words option, the call-notes writer of 6.3 and the Genie thread flush of 6.4.
 - The hub "Suggested to add" list and the export.
 - AC-4.1: A finished recording with notes gives up to 10 `proposed` memories, each with a quote that matches the notes.
 - AC-4.2: Bottle sends no transcript text to the model. The request body test checks this.
 - AC-4.3: The writer request uses the home profile and `/ai-gateway/mlflow/v1/chat/completions`.
 - AC-4.4: With the dictation words option off, no dictation word becomes a memory.
-- AC-4.5: Export writes a zip with one `.md` file for each memory and the index files. The warning shows first.
+- AC-4.5: Export writes a zip with `USER.md`, each `MEMORY.md` and the daily notes. The warning shows first.
+- AC-4.6: A Genie thread at 8 follow-ups gives 5 `proposed` daily memories or less. A failed flush still lets the summary run.
 
 ### Slice 5: the agent memory tool
 
 - ADR 0115. The `memory` function of 8.2 in the tool loop of PR #617 (C9). The `bottle-mcp` tools move to the same code.
-- AC-5.1: `view /memories` returns the index of the asking MOG and the shared folder only.
-- AC-5.2: The path `/memories/../x` and the path `/memories/<other-mog>/facts/a.md` get an error.
+- AC-5.1: `view /memories` lists `USER.md` and the files of the asking MOG only.
+- AC-5.2: The path `/memories/../x` and the path `/memories/<other-mog>/MEMORY.md` get an error.
 - AC-5.3: `create` makes a `proposed` memory with source `agent`. It never pins.
 - AC-5.4: A `quarantined` memory never appears in a tool result.
 - AC-5.5: Each call writes one content-free action log entry.
+- AC-5.6: The agent flush at 75 % of the context gives only `proposed` daily memories.
 
 ### Later
 
@@ -613,15 +732,15 @@ Not in slice 1: recall, edit, search, export, the shared folder, automatic captu
 
 | ID | Flag | File(s) | Change | Slice |
 |---|---|---|---|---|
-| M1 | CONTRACT + SCHEMA | `local_store/migrations/0003_memory_files.sql` | Rebuild `memory_item` with the new kinds and statuses. Add `title`, `body_md`, `tags`, `origin`, `slug`, `profile`, `recording_id`, `last_used_at`, `use_count`, `stale_at`. Add the status `removed` and the columns `removed_at` and `status_before_removed`. Drop the kinds `entity` and `person`. Change old `entity` rows to `fact`, `proposed`, tag `legacy-entity` (5.1). Keep the FTS and vec triggers. | 0 |
-| M2 | CONTRACT | `local_store/catalog.rs`, `src/brain/components/memory-store.ts` | New brain ids: `mem.item.list`, `mem.item.search`, `mem.item.edit`, `mem.item.set_status`, `mem.index.get`, `mem.item.export`. New Rust-only ids: `mem.consolidate.*`. | 0, 2, 3 |
+| M1 | CONTRACT + SCHEMA | `local_store/migrations/0003_memory_files.sql` | Rebuild `memory_item` with the new kinds and statuses. Add `title`, `body_md`, `tags`, `origin`, `tier`, `note_date`, `profile`, `recording_id`, `last_used_at`, `use_count`, `recall_query_count`, `stale_at`. Old rows get the tier `curated`, and `genie_answer` rows get `daily`. Add the status `removed` and the columns `removed_at` and `status_before_removed`. Drop the kinds `entity` and `person`. Change old `entity` rows to `fact`, `proposed`, tag `legacy-entity` (5.1). Keep the FTS and vec triggers. | 0 |
+| M2 | CONTRACT | `local_store/catalog.rs`, `src/brain/components/memory-store.ts` | New brain ids: `mem.item.list`, `mem.item.search`, `mem.item.edit`, `mem.item.set_status`, `mem.render.get`, `mem.item.export`. New Rust-only ids: `mem.consolidate.*`. | 0, 2, 3 |
 | M3 | CONTRACT | `src/shared/interfaces.ts` | `MemoryHit['type']` and `MemoryDraft` get the new kinds, `title`, `body`, `tags` and `origin`. `MemoryDraft` gets the #533 link fields. | 0 |
 | M4 | CONTRACT | `src-tauri/src/ipc.rs`, `crates/mog-core/src/ipc.rs`, `src/shared/ipc.ts` | The action ticket of #574: a host-minted, single-use ticket bound to one MOG. `mem_local_exec` accepts `pinned: true` only with it. | 0 |
 | M5 | REQUIREMENT | `research/final-requirements.md` (MEM-01) | A reserved MOG id `shared` for the shared folder. Each statement still filters by one `mog_id`. | 2 |
 | M6 | CONTRACT | `local_store/catalog.rs`, `quarantine.rs` | A new core-computed param `textSecret`, as `textQuarantine` is. New error code `secret_refused`. | 1 |
 | M7 | CONTRACT | `src/shared/ipc.ts` (card events) | Card section kind `memory_hits` and card actions `remember_this` and `keep_answer`. | 1, 2 |
 | M8 | CONTRACT | `src/shared/ipc.ts` | New content-free event `memory.changed {mogId, count}` for the hub. | 1 |
-| M9 | CONTRACT + SCHEMA | `crates/mog-core/src/app_settings.rs`, schema | New settings: `memory.autoCapture`, `memory.dictationWords`, `memory.modelMerge`. `deny_unknown_fields` makes this a schema change. | 3, 4 |
+| M9 | CONTRACT + SCHEMA | `crates/mog-core/src/app_settings.rs`, schema | New settings: `memory.autoCapture`, `memory.dictationWords`, `memory.modelMerge`, `memory.flush`, `memory.dreaming`. `deny_unknown_fields` makes this a schema change. | 3, 4 |
 | M10 | CONTRACT | `src/shared/ipc.ts`, `crates/mog-core/src/ipc.rs` | A Rust handler for the `memory` function inside `agent_model_step` (PR #617 C9). | 5 |
 | M11 | SCOPE | `AGENTS.md` section 1 | Lift "memory recall" (FTS5 only) from the out-of-scope list. Embeddings stay out. | 2 |
 | M12 | REQUIREMENT | `research/final-requirements.md` | New rows for this plan: kinds, statuses, caps, secret check, consolidation job and memory tool. Amend MEM-28a and MEM-29a for the `proposed` status. | 0 |
@@ -646,7 +765,7 @@ The new requirement rows (priority M, milestone MVP-D, use case UC2):
 | MEM-42 | The consolidation job must never remove or purge a pinned memory. | A pinned memory with no use for 400 d stays `active`. |
 | MEM-43 | The job must set `stale` on an unpinned `active` memory with no recall use and no edit for 90 d. | The simulated clock test passes. |
 | MEM-44 | The consolidation job must remove a memory only if it meets each condition of Table MEM-REMOVE. | A memory that fails one condition stays. |
-| MEM-45 | A `removed` memory must not appear in recall, in an index file or in a memory tool result. | The recall, index and tool tests find no `removed` memory. |
+| MEM-45 | A `removed` memory must not appear in recall, in a rendering or in a memory tool result. | The recall, rendering and tool tests find no `removed` memory. |
 | MEM-46 | The hub must show each `removed` memory in "Recently removed" with Restore and its purge date. | Restore sets the status from before the remove. |
 | MEM-47 | The consolidation job must purge a memory only after 30 d with the status `removed`. | A memory at 29 d stays. A memory at 31 d is gone. |
 | MEM-48 | A purge must delete the memory row, its FTS row and its embed job in one transaction. | `mem.recall.fts` no longer finds the text. |
@@ -669,10 +788,10 @@ Section 9.2 of the requirements gets one new row: "Removed memories: purged by t
 
 ## 13. New ADRs
 
-- **ADR 0112: Local memories as a virtual folder on the SQLCipher store.** It records option (c) and the file format. It also records the folder layout, the path grammar, the caps, the export and migration 0003.
+- **ADR 0112: Local memories as a virtual folder on the SQLCipher store.** It records option (c), the record and entry format and the OpenClaw layout. It also records the path grammar, the caps, the export and migration 0003.
 - **ADR 0113: Memory capture rules.** The write triggers and the writers. It also records the `proposed` status (decided), the action ticket, the secret check and Undo.
-- **ADR 0114: The memory consolidation job.** The Rust worker, idle and power rules, the steps, the remove and purge rules (M13) and the content-free log.
-- **ADR 0115: Memory recall in the ask path and the agent memory tool.** It records the RecallGate with FTS5 and the provenance chip. It also records the `memory` function with the `memory_20250818` command shape.
+- **ADR 0114: The memory consolidation job.** It records the Rust worker, the idle and power rules and the steps. It also records dreaming (7.2b), the remove and purge rules (M13) and the content-free log.
+- **ADR 0115: Memory recall in the ask path and the agent memory tool.** It records the RecallGate with FTS5 and the provenance chip. It also records the `memory` function with the `memory_20250818` command shape on the renderings, and the memory flush (6.4).
 
 Note on ADR numbers: the hydration plan (PR #611) names ADR 0109 to ADR 0112 for its own work. Those numbers are not free.
 
@@ -713,6 +832,10 @@ PR #611 must reserve new numbers with `adr-next.sh` before it merges.
   - This amends U9 and MEM-33a (M13, Section 12.1).
 - **Q4. Model writes.** A model-written memory has the status `proposed`. It needs the user's approval.
 - **Q7. The `person` kind.** It is dropped for now. Old `entity` rows become `fact`, `proposed`, tag `legacy-entity` (5.1).
+- **Q11. Layout: "OpenClaw layout, Bottle safety".** Bottle uses `USER.md`, `MEMORY.md` for each MOG and dated daily notes (5.3).
+  - The rows stay the source of truth. The files are renderings.
+  - Bottle adds the memory flush (6.4) and dreaming (7.2b).
+  - Each Bottle safety decision stays: encryption, the quarantine and secret checks, the #574 ticket, `proposed` AI writes and the removal rules.
 - **Next work.** Build slice 0 (contract, ADRs and migration 0003) at the contract gate. Then build slice 1.
 
 ### 15.2 Still open
