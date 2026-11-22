@@ -7,6 +7,7 @@ import { act } from 'react';
 import type { Root } from 'react-dom/client';
 import { inputEmits, render, tauri } from '../test-tauri';
 import { CardView } from './CardView';
+import { REMEMBER_WAIT_MS } from './GenieCard';
 import { FAILED_LINE, QUARANTINE_LINE, SAVED_LINE, SECRET_LINE, UNDONE_LINE } from './memory-saved';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('../test-tauri')).coreModule);
@@ -156,5 +157,59 @@ describe('memory slice 1: card and pop-up', () => {
     await tauri.emitTo(`card-${ID}`, 'card:update', dictated);
     await saved({ outcome: 'secret_refused' });
     expect(el.querySelector('[data-popup] [data-memory-saved]')?.textContent).toBe(SECRET_LINE);
+  });
+
+  it('S2 a voice save with no blurb and no earlier card:update shows the line', async () => {
+    const el = await mount();
+    await saved({ outcome: 'saved', itemId: ITEM });
+    expect(el.querySelector('[data-popup] [data-memory-saved]')?.textContent).toBe(
+      `${SAVED_LINE}·Undo`,
+    );
+    await act(
+      async () => void (el.querySelector('[data-action="memory-undo"]') as HTMLElement).click(),
+    );
+    expect(clicks().filter((c) => c.payload['action'] === 'memory.undo')).toHaveLength(1);
+  });
+
+  it('S2 the line survives a new blurb (the pop-up remounts)', async () => {
+    const el = await mount();
+    await tauri.emitTo(`card-${ID}`, 'card:update', dictated);
+    await saved({ outcome: 'saved', itemId: ITEM });
+    await tauri.emitTo(`card-${ID}`, 'card:update', {
+      ...dictated,
+      blurbs: [{ id: 'u10', text: 'Another line', completed: true }],
+    });
+    expect(el.querySelector('[data-popup] [data-memory-saved]')).not.toBeNull();
+  });
+
+  it('S1 keeps a quiet In today’s note label after a save, and one live region stays mounted', async () => {
+    const el = await mount();
+    await tauri.emitTo(`card-${ID}`, 'card:update', answered);
+    expect(el.querySelector('.memory-saved-live')?.getAttribute('role')).toBe('status');
+    await saved({ outcome: 'saved', itemId: ITEM });
+    expect(el.querySelector('[data-action="remember"]')).toBeNull();
+    expect(el.querySelector('[data-remembered]')?.textContent).toBe('In today’s note');
+    await advance(8100);
+    expect(line(el)).toBeNull();
+    expect(el.querySelector('[data-remembered]')).not.toBeNull();
+    expect(el.querySelector('.memory-saved-live')).not.toBeNull();
+  });
+
+  it('S1 a click with no answer frees the button after a wait', async () => {
+    const el = await mount();
+    await tauri.emitTo(`card-${ID}`, 'card:update', answered);
+    // The pointer holds the card open while the brain stays silent.
+    await act(async () =>
+      el
+        .querySelector('.genie')
+        ?.dispatchEvent(
+          new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body }),
+        ),
+    );
+    const btn = el.querySelector('[data-action="remember"]') as HTMLButtonElement;
+    await act(async () => void btn.click());
+    expect(btn.disabled).toBe(true);
+    await advance(REMEMBER_WAIT_MS + 100);
+    expect(btn.disabled).toBe(false);
   });
 });

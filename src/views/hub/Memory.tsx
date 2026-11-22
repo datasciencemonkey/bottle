@@ -188,10 +188,12 @@ interface Pending {
 interface Toast {
   key: number;
   text: string;
-  undo: () => void;
+  undo?: () => void;
 }
 
-export const SECRET_MESSAGE = 'This looks like a key or password. Bottle does not save secrets.';
+export const SECRET_MESSAGE = 'Not saved: this looks like a key or password.';
+/** A write that gets no answer from the brain ends after this time. */
+export const WRITE_TIMEOUT_MS = 15_000;
 export const QUARANTINE_MESSAGE =
   'Genie and the agent will not see this, because it reads like an instruction.';
 const FAILED_MESSAGE = 'Bottle could not save this. Try again.';
@@ -263,6 +265,18 @@ function Marks({ row, pinned = false }: { row: MemoryFileRow; pinned?: boolean }
   );
 }
 
+/** The item section without its `## Title` line: the title shows in the heading. */
+const withoutHeading = (body: string) => body.replace(/^\s*## [^\n]*\n?/, '');
+
+/** The pane heading of a whole file: `MEMORY.md`, or the day of a daily note. */
+function fileLabel(path: string | undefined, nowMs: number): string {
+  const name = path?.slice(path.lastIndexOf('/') + 1) ?? '';
+  return name.endsWith('.md') && /^\d{4}-/.test(name) ? dayLabel(name.slice(0, -3), nowMs) : name;
+}
+
+const fileDomId = (path: string) => `mem-file-${path}`;
+const itemDomId = (id: string) => `mem-item-${id}`;
+
 const sameFile = (a: TreeFile | undefined, b: TreeFile) =>
   a !== undefined && a.mogId === b.mogId && a.path === b.path;
 
@@ -302,6 +316,12 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
   const pendingRef = useRef<Pending | undefined>(undefined);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const requests = useRef(new Map<string, (r: MemoryResult) => void>());
+  /** The request the form waits for. A result of any other request never touches the form. */
+  const activeReq = useRef<string | undefined>(undefined);
+  const busyRef = useRef(false);
+  const writeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const listRef = useRef<HTMLDivElement>(null);
+  const treeRef = useRef<HTMLUListElement>(null);
   useEffect(() => {
     pendingRef.current = pending;
   }, [pending]);
@@ -309,7 +329,11 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
   useEffect(
     () =>
       source.subscribe({
-        onList: setModel,
+        onList: (m) => {
+          // The brain's list is the truth again: local changes on top of it end.
+          setPatch({});
+          setModel(m);
+        },
         onFile: setView,
         onItem: setFields,
         onResult: (r) => {
@@ -325,24 +349,42 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
     if (active) source.send({ action: 'memory.ready' });
   }, [active, source]);
 
-  // The delete goes when the area goes away: the user asked for it.
-  useEffect(
-    () => () => {
-      clearTimeout(toastTimer.current);
+  // The delete goes when the area goes away or the window closes: the user asked for it.
+  useEffect(() => {
+    const flush = () => {
       const p = pendingRef.current;
       if (!p) return;
+      pendingRef.current = undefined;
       clearTimeout(p.timer);
       source.send({ action: 'memory.delete', mogId: p.mogId, itemId: p.itemId });
+    };
+    window.addEventListener('pagehide', flush);
+    return () => {
+      window.removeEventListener('pagehide', flush);
+      clearTimeout(toastTimer.current);
+      clearTimeout(writeTimer.current);
+      flush();
+    };
+  }, [source]);
+
+  // One toast at a time. A new toast ends a pending delete first (it goes at once), so the
+  // "Memory deleted" toast never hides an add or edit Undo.
+  const showToast = useCallback(
+    (text: string, undo?: () => void) => {
+      const p = pendingRef.current;
+      if (p) {
+        pendingRef.current = undefined;
+        clearTimeout(p.timer);
+        source.send({ action: 'memory.delete', mogId: p.mogId, itemId: p.itemId });
+        setPending(undefined);
+      }
+      clearTimeout(toastTimer.current);
+      toastKey += 1;
+      setToast({ key: toastKey, text, ...(undo ? { undo } : {}) });
+      toastTimer.current = setTimeout(() => setToast(undefined), MEMORY_UNDO_MS);
     },
     [source],
   );
-
-  const showToast = useCallback((text: string, undo: () => void) => {
-    clearTimeout(toastTimer.current);
-    toastKey += 1;
-    setToast({ key: toastKey, text, undo });
-    toastTimer.current = setTimeout(() => setToast(undefined), MEMORY_UNDO_MS);
-  }, []);
 
   // The rows the view shows: a pending delete hides its row; local changes show at once.
   const folders = useMemo(
@@ -435,6 +477,33 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
     return requestId;
   }, []);
 
+  /** A write the form waits for. `done(r, live)`: `live` is false when the form moved on. */
+  const formWrite = useCallback(
+    (done: (r: MemoryResult, live: boolean) => void) => {
+      const id = request((r) => {
+        const live = activeReq.current === id;
+        if (live) {
+          activeReq.current = undefined;
+          busyRef.current = false;
+          clearTimeout(writeTimer.current);
+          setBusy(false);
+        }
+        done(r, live);
+      });
+      activeReq.current = id;
+      clearTimeout(writeTimer.current);
+      writeTimer.current = setTimeout(() => {
+        if (activeReq.current !== id) return;
+        activeReq.current = undefined;
+        busyRef.current = false;
+        setBusy(false);
+        setFormError(FAILED_MESSAGE);
+      }, WRITE_TIMEOUT_MS);
+      return id;
+    },
+    [request],
+  );
+
   const startDelete = useCallback(() => {
     if (!sel?.mogId || !row) return;
     // A second delete sends the first one at once.
@@ -456,6 +525,8 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
     setPending(p);
     setCompose(undefined);
     setItemId(undefined);
+    // The row is gone: the keyboard stays in the list.
+    listRef.current?.focus();
   }, [sel, row, source]);
 
   const undoDelete = useCallback(() => {
@@ -468,12 +539,19 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
   const rate = useCallback(() => {
     if (!sel?.mogId || !row) return;
     const id = row.itemId;
-    source.send({
-      action: 'memory.rate',
-      requestId: crypto.randomUUID(),
-      mogId: sel.mogId,
-      itemId: id,
+    const mogId = sel.mogId;
+    const requestId = request((r) => {
+      if (r.ok) {
+        source.send({ action: 'memory.ready' });
+        return;
+      }
+      // The brain refused: the local change goes and the user sees why.
+      setPatch((p) => {
+        return Object.fromEntries(Object.entries(p).filter(([k]) => k !== id));
+      });
+      showToast(FAILED_MESSAGE);
     });
+    source.send({ action: 'memory.rate', requestId, mogId, itemId: id });
     setPatch((p) => ({
       ...p,
       [id]: {
@@ -484,47 +562,58 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
         ...(row.status === 'quarantined' ? { releasedAt: now() } : {}),
       },
     }));
-  }, [sel, row, source, now]);
+  }, [sel, row, source, now, request, showToast]);
 
-  const openAdd = useCallback((mogId: string) => {
+  const resetForm = useCallback(() => {
+    activeReq.current = undefined;
+    busyRef.current = false;
+    clearTimeout(writeTimer.current);
     setFormError(undefined);
     setBusy(false);
-    setCompose({ mode: 'add', mogId });
   }, []);
+
+  const openAdd = useCallback(
+    (mogId: string) => {
+      resetForm();
+      setCompose({ mode: 'add', mogId });
+    },
+    [resetForm],
+  );
 
   const openEdit = useCallback(() => {
     if (!sel?.mogId || !row || !itemFields) return;
-    setFormError(undefined);
-    setBusy(false);
+    resetForm();
     setCompose({ mode: 'edit', mogId: sel.mogId, itemId: row.itemId, from: itemFields });
-  }, [sel, row, itemFields]);
+  }, [sel, row, itemFields, resetForm]);
 
   const closeForm = useCallback(() => {
+    resetForm();
     setCompose(undefined);
-    setBusy(false);
-    setFormError(undefined);
-  }, []);
+  }, [resetForm]);
 
   const failure = (code: MemoryResult['code']) =>
     code === 'secret_refused' ? SECRET_MESSAGE : FAILED_MESSAGE;
 
   const submit = useCallback(
     (v: MemoryFormValues) => {
-      if (!compose || busy) return;
+      if (!compose || busyRef.current) return;
+      busyRef.current = true;
       setBusy(true);
       setFormError(undefined);
       if (compose.mode === 'add') {
         const { mogId } = compose;
-        const requestId = request((r) => {
-          setBusy(false);
+        const requestId = formWrite((r, live) => {
           if (!r.ok || !r.itemId) {
-            setFormError(failure(r.code));
+            if (live) setFormError(failure(r.code));
             return;
           }
           const itemId = r.itemId;
-          setCompose(undefined);
-          setWant(itemId);
+          if (live) {
+            setCompose(undefined);
+            setWant(itemId);
+          }
           source.send({ action: 'memory.ready' });
+          // Even when the form moved on, the memory was saved: the Undo stays.
           showToast(
             r.status === 'quarantined' ? 'Memory saved, but hidden from Genie' : 'Memory saved',
             () => {
@@ -547,14 +636,14 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
         return;
       }
       const { mogId, itemId, from } = compose;
-      const requestId = request((r) => {
-        setBusy(false);
+      const filePath = row?.path ?? sel?.path ?? '';
+      const requestId = formWrite((r, live) => {
         if (!r.ok) {
-          setFormError(failure(r.code));
+          if (live) setFormError(failure(r.code));
           return;
         }
         const status = r.status ?? 'active';
-        setCompose(undefined);
+        if (live) setCompose(undefined);
         setFields({ ...from, kind: v.kind, title: v.title, body: v.body, status });
         setPatch((p) => ({
           ...p,
@@ -568,11 +657,16 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
           },
         }));
         source.send({ action: 'memory.ready' });
-        source.send({ action: 'memory.file', mogId, path: row?.path ?? sel?.path ?? '' });
+        source.send({ action: 'memory.file', mogId, path: filePath });
         showToast('Memory updated', () => {
           // Undo is a new edit click, so it has its own request.
-          const undoId = request(() => {
-            source.send({ action: 'memory.ready' });
+          const undoId = request((u) => {
+            if (u.ok) {
+              source.send({ action: 'memory.ready' });
+              source.send({ action: 'memory.item', mogId, itemId });
+              return;
+            }
+            showToast('Could not undo. Try again.');
             source.send({ action: 'memory.item', mogId, itemId });
           });
           source.send({
@@ -602,7 +696,7 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
         body: v.body,
       });
     },
-    [compose, busy, request, source, showToast, row?.path, sel?.path],
+    [compose, formWrite, request, source, showToast, row?.path, sel?.path],
   );
 
   const onTreeKey = useCallback(
@@ -642,11 +736,20 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
     <li
       key={t.path}
       role="treeitem"
+      id={fileDomId(t.path)}
       aria-selected={sameFile(sel, t)}
       data-file={t.path}
       className="mem-tree-file"
     >
-      <button type="button" tabIndex={-1} className="mem-tree-row" onClick={() => pickFile(t)}>
+      <button
+        type="button"
+        tabIndex={-1}
+        className="mem-tree-row"
+        onClick={() => {
+          pickFile(t);
+          treeRef.current?.focus();
+        }}
+      >
         {icon}
         <span className="mem-tree-name">{label}</span>
         <span className="mem-count">{count}</span>
@@ -699,7 +802,13 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
     );
   } else {
     const parts = view && view.path === viewPath ? splitFile(view.text) : undefined;
-    const quarantined = row?.status === 'quarantined';
+    // A quarantined body is never Markdown: on the item and in the whole-file view.
+    const quarantined = row
+      ? row.status === 'quarantined'
+      : rows.some((r) => r.status === 'quarantined');
+    const itemQuarantined = row?.status === 'quarantined';
+    const bodyText = parts ? (row ? withoutHeading(parts.body) : parts.body) : '';
+    const heading = row ? row.title : fileLabel(sel?.path, now());
     const composeRow =
       compose?.mode === 'edit'
         ? { kind: compose.from.kind, title: compose.from.title, body: compose.from.body }
@@ -708,7 +817,14 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
     body = (
       <div className="mem-panes">
         <nav className="mem-tree" aria-label="Memory files">
-          <ul role="tree" tabIndex={0} onKeyDown={onTreeKey} aria-label="Memory files">
+          <ul
+            ref={treeRef}
+            role="tree"
+            tabIndex={0}
+            onKeyDown={onTreeKey}
+            aria-label="Memory files"
+            aria-activedescendant={sel ? fileDomId(sel.path) : undefined}
+          >
             {showUser &&
               treeItem(
                 { mogId: '', path: USER_FILE_PATH },
@@ -772,10 +888,12 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
             </div>
           )}
           <div
+            ref={listRef}
             className="mem-list"
             role="listbox"
             tabIndex={0}
             aria-label="Memories in this file"
+            aria-activedescendant={row ? itemDomId(row.itemId) : undefined}
             onKeyDown={onListKey}
           >
             {rows.length === 0 && (
@@ -788,12 +906,16 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
             {rows.map((r) => (
               <div
                 key={r.itemId}
+                id={itemDomId(r.itemId)}
                 role="option"
                 aria-selected={r.itemId === itemId}
                 className="mem-row"
                 data-item={r.itemId}
                 data-status={r.status}
-                onClick={() => pickRow(r)}
+                onClick={() => {
+                  pickRow(r);
+                  listRef.current?.focus();
+                }}
               >
                 <span className="mem-row-title">
                   {r.pinned && (
@@ -832,6 +954,11 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
           ) : (
             <article className="mem-doc">
               <header className="mem-doc-head">
+                {heading && (
+                  <h3 className="mem-doc-title" data-memory-heading>
+                    {heading}
+                  </h3>
+                )}
                 <code className="mem-path" data-memory-path>
                   {viewPath}
                 </code>
@@ -843,7 +970,7 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
                   </p>
                 )}
               </header>
-              {quarantined && (
+              {itemQuarantined && (
                 <p className="mem-note" role="note" data-memory-quarantine-note>
                   <span>{QUARANTINE_MESSAGE}</span>
                   <Button
@@ -862,9 +989,9 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
                 <>
                   <div className="mem-doc-body">
                     {quarantined ? (
-                      <pre className="mem-plain">{parts.body.trim()}</pre>
+                      <pre className="mem-plain">{bodyText.trim()}</pre>
                     ) : (
-                      <SafeMarkdown text={parts.body} trust={NO_LINKS} />
+                      <SafeMarkdown text={bodyText} trust={NO_LINKS} />
                     )}
                   </div>
                   <details className="mem-front">
@@ -890,8 +1017,7 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
                     type="button"
                     variant="ghost"
                     size="sm"
-                    aria-pressed={row.rating === 1}
-                    disabled={row.rating === 1}
+                    disabled={row.rating === 1 && row.status === 'active'}
                     onClick={rate}
                     data-action="thumbs-up"
                   >
@@ -903,6 +1029,7 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
                     variant="ghost"
                     size="sm"
                     onClick={startDelete}
+                    title="Not useful: deletes this memory"
                     data-action="thumbs-down"
                   >
                     <ThumbsDownIcon aria-hidden="true" />
@@ -918,7 +1045,7 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
                     data-action="edit"
                   >
                     <PencilIcon aria-hidden="true" />
-                    Edit
+                    {itemFields ? 'Edit' : 'Loading…'}
                   </Button>
                   <Button
                     type="button"
@@ -944,28 +1071,31 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
   return (
     <section className="mem" hidden={!active} aria-label="Memory" data-memory-area>
       {body}
-      {toastText !== undefined && (
-        <motion.div
-          key={toastKeyNow}
-          className="mem-toast"
-          role="status"
-          data-memory-undo
-          initial={reduce ? false : { opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-        >
-          <span>{toastText}</span>
-          <Button
-            type="button"
-            variant="link"
-            size="sm"
-            onClick={pending ? undoDelete : toast?.undo}
-            data-action="undo"
+      <div role="status" className="mem-toast-live">
+        {toastText !== undefined && (
+          <motion.div
+            key={toastKeyNow}
+            className="mem-toast"
+            data-memory-undo
+            initial={reduce ? false : { opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
           >
-            Undo
-          </Button>
-        </motion.div>
-      )}
+            <span>{toastText}</span>
+            {(pending || toast?.undo) && (
+              <Button
+                type="button"
+                variant="link"
+                size="sm"
+                onClick={pending ? undoDelete : toast?.undo}
+                data-action="undo"
+              >
+                Undo
+              </Button>
+            )}
+          </motion.div>
+        )}
+      </div>
     </section>
   );
 }

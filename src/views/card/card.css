@@ -284,8 +284,7 @@ html[data-side='left'] .popup[data-state='fading'] {
   white-space: nowrap;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .memory-saved {
-    transition: none;
-  }
+.genie-remembered {
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-sm);
 }

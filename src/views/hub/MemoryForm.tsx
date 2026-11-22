@@ -70,7 +70,9 @@ export function MemoryForm({ mode, initial, busy, error, onSubmit, onCancel }: M
   const canSave = !busy && body.trim() !== '';
   const submit = () => {
     if (!canSave) return;
-    onSubmit({ kind, title: shownTitle.trim().slice(0, TITLE_MAX), body });
+    // A cleared title falls back to the first line, so a save never sends an empty title.
+    const t = shownTitle.trim() || deriveTitle(body);
+    onSubmit({ kind, title: t.slice(0, TITLE_MAX), body });
   };
   const onKeyDown = (e: KeyboardEvent<HTMLFormElement>) => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {

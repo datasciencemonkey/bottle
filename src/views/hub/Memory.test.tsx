@@ -248,7 +248,8 @@ describe('hub Memory area', () => {
     const row = MODEL.folders[0]?.rows[2] as MemoryFileRow;
     await view(src, row.path, '## Fake odd one\n**not markdown**');
     expect(q(el, '[data-memory-quarantine-note]')).not.toBeNull();
-    expect(q(el, '.mem-plain')?.textContent).toBe('## Fake odd one\n**not markdown**');
+    expect(q(el, '.mem-plain')?.textContent).toBe('**not markdown**');
+    expect(q(el, '[data-memory-heading]')?.textContent).toBe('Fake odd one');
   });
 
   it('thumbs up sends memory.rate and clears the New badge at once', async () => {
@@ -491,7 +492,7 @@ describe('S3 add a memory', () => {
       code: 'secret_refused',
     });
     expect(q(el, '[data-memory-form-error]')?.textContent).toBe(
-      'This looks like a key or password. Bottle does not save secrets.',
+      'Not saved: this looks like a key or password.',
     );
     expect((field(el, 'body') as HTMLTextAreaElement).value).toBe('fake-secret-value-123');
     expect(q(el, '[data-memory-undo]')).toBeNull();
@@ -621,7 +622,7 @@ describe('S4 edit a memory', () => {
       code: 'secret_refused',
     });
     expect(q(el, '[data-memory-form-error]')?.textContent).toContain(
-      'Bottle does not save secrets.',
+      'Not saved: this looks like a key or password.',
     );
     expect((field(el, 'body') as HTMLTextAreaElement).value).toBe('fake-secret-value-123');
     expect(q(el, '[data-memory-undo]')).toBeNull();
@@ -732,6 +733,214 @@ describe('S5 delete', () => {
       vi.advanceTimersByTime(MEMORY_UNDO_MS);
     });
     expect(src.actions('memory.delete')).toHaveLength(1);
+  });
+});
+
+describe('review fixes', () => {
+  const addBody = async (el: HTMLElement, text = 'Some text') => {
+    await openAddForm(el);
+    await typeInto(field(el, 'body'), text);
+  };
+
+  it('a cleared title falls back to the first line, in add and in edit', async () => {
+    const { src, el } = await setup();
+    await addBody(el, 'The mart refreshes at six');
+    await typeInto(field(el, 'title'), 'x');
+    await typeInto(field(el, 'title'), '');
+    await click(q(el, '[data-action="form-save"]'));
+    expect(src.actions('memory.add')[0]?.title).toBe('The mart refreshes at six');
+    await src.result({ requestId: src.actions('memory.add')[0]?.requestId ?? '', ok: false });
+    await click(q(el, '[data-action="form-cancel"]'));
+    await click(options(el)[0] ?? null);
+    await src.item(fieldsOf(1));
+    await click(q(el, '[data-action="edit"]'));
+    await typeInto(field(el, 'title'), '');
+    await click(q(el, '[data-action="form-save"]'));
+    expect(src.actions('memory.edit')[0]?.title).toBe('Body of fake fact 1');
+  });
+
+  it('a quarantined item in the whole-file view shows as plain text', async () => {
+    const { src, el } = await setup();
+    await view(src, TODAY, '## Fake odd one\n**not markdown**');
+    expect(q(el, '.mem-doc-body strong')).toBeNull();
+    expect(q(el, '.mem-plain')?.textContent).toContain('**not markdown**');
+    expect(q(el, '[data-memory-heading]')?.textContent).toBe('Today');
+  });
+
+  it('a result with another requestId does not touch the form', async () => {
+    const { src, el } = await setup();
+    await addBody(el);
+    await click(q(el, '[data-action="form-save"]'));
+    await src.result({ requestId: 'someone-else', ok: false, code: 'secret_refused' });
+    expect(q(el, '[data-memory-form-error]')).toBeNull();
+    expect(q(el, '[data-action="form-save"]')?.hasAttribute('disabled')).toBe(true);
+  });
+
+  it('a late ok after Cancel keeps the Undo toast but does not reopen or select', async () => {
+    const { src, el } = await setup();
+    await addBody(el);
+    await click(q(el, '[data-action="form-save"]'));
+    await click(q(el, '[data-action="form-cancel"]'));
+    await src.result({
+      requestId: src.actions('memory.add')[0]?.requestId ?? '',
+      ok: true,
+      itemId: 'late1',
+    });
+    expect(form(el)).toBeNull();
+    expect(q(el, '[data-memory-undo]')?.textContent).toContain('Memory saved');
+  });
+
+  it('a result after unmount does nothing', async () => {
+    const { src, el, root } = await setup();
+    await addBody(el);
+    await click(q(el, '[data-action="form-save"]'));
+    await act(async () => root.unmount());
+    await src.result({
+      requestId: src.actions('memory.add')[0]?.requestId ?? '',
+      ok: true,
+      itemId: 'x',
+    });
+    expect(src.actions('memory.delete')).toHaveLength(0);
+  });
+
+  it('a write with no answer ends after 15 s with a failure line', async () => {
+    vi.useFakeTimers();
+    const { src, el } = await setup();
+    await addBody(el);
+    await click(q(el, '[data-action="form-save"]'));
+    await act(async () => {
+      vi.advanceTimersByTime(15_000);
+    });
+    expect(q(el, '[data-memory-form-error]')?.textContent).toContain('could not save');
+    expect(q(el, '[data-action="form-save"]')?.hasAttribute('disabled')).toBe(false);
+    expect(src.actions('memory.add')).toHaveLength(1);
+  });
+
+  it('a double submit sends one add', async () => {
+    const { src, el } = await setup();
+    await addBody(el);
+    await pressKey(field(el, 'body'), { key: 'Enter', metaKey: true });
+    await pressKey(field(el, 'body'), { key: 'Enter', metaKey: true });
+    expect(src.actions('memory.add')).toHaveLength(1);
+  });
+
+  it('a rate failure drops the local change and says so', async () => {
+    const { src, el } = await setup();
+    await click(options(el)[0] ?? null);
+    await click(q(el, '[data-action="thumbs-up"]'));
+    expect(options(el)[0]?.querySelector('[data-mark="new"]')).toBeNull();
+    await src.result({
+      requestId: src.actions('memory.rate')[0]?.requestId ?? '',
+      ok: false,
+      code: 'failed',
+    });
+    expect(options(el)[0]?.querySelector('[data-mark="new"]')).not.toBeNull();
+    expect(q(el, '[data-memory-undo]')?.textContent).toContain('could not save');
+    expect(buttonByText(el, 'Undo')).toBeNull();
+  });
+
+  it('a rate success asks for the list again', async () => {
+    const { src, el } = await setup();
+    await click(options(el)[0] ?? null);
+    const before = src.actions('memory.ready').length;
+    await click(q(el, '[data-action="thumbs-up"]'));
+    await src.result({ requestId: src.actions('memory.rate')[0]?.requestId ?? '', ok: true });
+    expect(src.actions('memory.ready').length).toBe(before + 1);
+  });
+
+  it('thumbs up still works on a stale item that was rated', async () => {
+    const src = new LocalSource();
+    const v = await render(<MemoryArea active source={src} now={() => NOW} />);
+    const first = MODEL.folders[0];
+    if (!first) throw new Error('fixture');
+    await src.list({
+      userItems: 0,
+      folders: [{ ...first, rows: [mem(1, { status: 'stale', rating: 1, reviewedAt: 5 })] }],
+    });
+    await click(options(v.el)[0] ?? null);
+    expect(q(v.el, '[data-action="thumbs-up"]')?.hasAttribute('disabled')).toBe(false);
+    expect(q(v.el, '[data-action="thumbs-up"]')?.hasAttribute('aria-pressed')).toBe(false);
+  });
+
+  it('a failed Undo of an edit says so and asks for the item again', async () => {
+    vi.useFakeTimers();
+    const { src, el } = await setup();
+    await click(options(el)[0] ?? null);
+    await src.item(fieldsOf(1));
+    await click(q(el, '[data-action="edit"]'));
+    await typeInto(field(el, 'body'), 'Changed');
+    await click(q(el, '[data-action="form-save"]'));
+    await src.result({
+      requestId: src.actions('memory.edit')[0]?.requestId ?? '',
+      ok: true,
+      itemId: 'i',
+      status: 'active',
+    });
+    await click(q(el, '[data-action="undo"]'));
+    const items = src.actions('memory.item').length;
+    await src.result({ requestId: src.actions('memory.edit')[1]?.requestId ?? '', ok: false });
+    expect(q(el, '[data-memory-undo]')?.textContent).toContain('Could not undo');
+    expect(src.actions('memory.item').length).toBe(items + 1);
+  });
+
+  it('a new add toast sends a pending delete at once and shows its own Undo', async () => {
+    vi.useFakeTimers();
+    const { src, el } = await setup();
+    await click(options(el)[0] ?? null);
+    await click(q(el, '[data-action="thumbs-down"]'));
+    await addBody(el);
+    await click(q(el, '[data-action="form-save"]'));
+    await src.result({
+      requestId: src.actions('memory.add')[0]?.requestId ?? '',
+      ok: true,
+      itemId: 'n1',
+    });
+    expect(src.actions('memory.delete')).toHaveLength(1);
+    expect(q(el, '[data-memory-undo]')?.textContent).toContain('Memory saved');
+  });
+
+  it('a pending delete goes on pagehide', async () => {
+    vi.useFakeTimers();
+    const { src, el } = await setup();
+    await click(options(el)[0] ?? null);
+    await click(q(el, '[data-action="thumbs-down"]'));
+    await act(async () => {
+      window.dispatchEvent(new Event('pagehide'));
+    });
+    expect(src.actions('memory.delete')).toHaveLength(1);
+  });
+
+  it('the tree and the list point at the selected entry with aria-activedescendant', async () => {
+    const { el } = await setup();
+    const tree = q(el, '[role="tree"]');
+    expect(tree?.getAttribute('aria-activedescendant')).toBe(`mem-file-${TODAY}`);
+    expect(document.getElementById(`mem-file-${TODAY}`)).not.toBeNull();
+    const list = q(el, '[role="listbox"]');
+    expect(list?.hasAttribute('aria-activedescendant')).toBe(false);
+    await click(options(el)[0] ?? null);
+    const id = list?.getAttribute('aria-activedescendant');
+    expect(id).toBe(`mem-item-${MODEL.folders[0]?.rows[0]?.itemId}`);
+    expect(document.getElementById(id ?? '')?.getAttribute('role')).toBe('option');
+    // A row click moves focus to the list.
+    expect(document.activeElement).toBe(list);
+  });
+
+  it('Edit shows Loading until the item fields arrive; the toast region stays mounted', async () => {
+    const { src, el } = await setup();
+    expect(q(el, '.mem-toast-live')?.getAttribute('role')).toBe('status');
+    await click(options(el)[0] ?? null);
+    expect(q(el, '[data-action="edit"]')?.textContent).toBe('Loading…');
+    await src.item(fieldsOf(1));
+    expect(q(el, '[data-action="edit"]')?.textContent).toBe('Edit');
+  });
+
+  it('Not useful has a tooltip and the item heading shows the title', async () => {
+    const { el } = await setup();
+    await click(options(el)[0] ?? null);
+    expect(q(el, '[data-action="thumbs-down"]')?.getAttribute('title')).toBe(
+      'Not useful: deletes this memory',
+    );
+    expect(q(el, '[data-memory-heading]')?.textContent).toBe('Fake fact 1');
   });
 });
 

@@ -19,6 +19,7 @@ import {
 import { applyCardSide, createWindowFit, tauriCardWindow, widthMayChangeIn } from './fit-window';
 import { GenieCard } from './GenieCard';
 import { Popup } from './Popup';
+import { useMemorySaved } from './memory-saved';
 import { NO_LINKS, SafeMarkdown } from './safe-markdown';
 
 /** The MOG ID of the debug demo card (`DEMO_ID` in `src-tauri/src/lib.rs`). */
@@ -167,6 +168,9 @@ export function CardView({ mogId }: { mogId: MogId }) {
   // #ui-4: the owner MOG's name and colour (`mog:target`, `card.identity_ready`). The card is
   // already target-only (MOG-13a, MOG-13b): this only labels it.
   const identity = useCardIdentity(mogId);
+  // Memory slice 1: one `memory:saved` listener per card window. A voice remember can show the
+  // card with no blurb, and a Popup that remounts must not lose the line.
+  const saved = useMemorySaved(mogId);
   // #559, MOG-06d: the last Copy pop-up stays until the user copies or dismisses it, even when
   // the brain drops its chip (30 s) or its blurb (UX-12). A newer blurb replaces it.
   const [kept, setKept] = useState<CardUpdate | undefined>(undefined);
@@ -282,7 +286,14 @@ export function CardView({ mogId }: { mogId: MogId }) {
   if (genie && newest)
     return (
       <section aria-label="MOG card" className="card card-genie">
-        <GenieCard key={newest.id} mogId={mogId} card={card} onSize={onSize} identity={identity} />
+        <GenieCard
+          key={newest.id}
+          mogId={mogId}
+          card={card}
+          onSize={onSize}
+          identity={identity}
+          saved={saved}
+        />
         {probe}
       </section>
     );
@@ -294,6 +305,17 @@ export function CardView({ mogId }: { mogId: MogId }) {
             key={shown.blurbs[0].id}
             mogId={mogId}
             card={shown}
+            saved={saved}
+            onClose={() => setKept(undefined)}
+          />
+        )}
+        {/* A voice remember shows the card with no blurb: the line is all there is. */}
+        {!shown?.blurbs[0] && saved.seq > 0 && (
+          <Popup
+            key={`memory-saved-${saved.seq}`}
+            mogId={mogId}
+            card={{ mogId, blurbs: [], chips: [] }}
+            saved={saved}
             onClose={() => setKept(undefined)}
           />
         )}

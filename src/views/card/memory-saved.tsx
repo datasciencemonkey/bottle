@@ -10,10 +10,12 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { motion, useReducedMotion } from 'motion/react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MemorySaved, MogId } from '../../shared/interfaces';
+import { MEMORY_UNDO_MS } from '../../shared/hub-memory';
 import { EVENTS } from '../../shared/ipc';
 import { emitView } from '../view-ipc';
 
 export const SAVED_LINE = 'Saved to today’s note';
+/** The one secret sentence, on the card, the pop-up and in the hub. */
 export const SECRET_LINE = 'Not saved: this looks like a key or password.';
 export const QUARANTINE_LINE =
   'Saved. Genie and the agent will not see it until you release it in Memory.';
@@ -45,24 +47,33 @@ export interface SavedLine {
   outcome: MemorySaved['outcome'] | 'undone';
   /** Set while the Undo control shows. */
   itemId?: string;
+  /** How long the line shows (ms). */
+  ms: number;
+}
+
+export interface MemorySavedApi {
+  line: SavedLine | undefined;
+  /** Counts the lines shown, so a view can start over for each one. 0 until the first. */
+  seq: number;
+  undo: () => void;
 }
 
 /**
- * The state of the line for one MOG. `onShow(ms)` runs when a line starts (the card holds its
- * fade for that time). `undo` sends `memory.undo`; `clear` hides the line.
+ * The state of the line for one MOG. `undo` sends `memory.undo`. One listener per card window:
+ * CardView owns it, so a voice remember with no pop-up blurb still shows its line.
  */
-export function useMemorySaved(mogId: MogId, onShow?: (ms: number) => void) {
-  const [line, setLine] = useState<SavedLine | undefined>(undefined);
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const show = useRef(onShow);
-  useEffect(() => {
-    show.current = onShow;
-  });
+/** No line, for a view that has no `memory:saved` listener (a test of the card alone). */
+export const NO_SAVED: MemorySavedApi = { line: undefined, seq: 0, undo: () => undefined };
 
-  const start = useCallback((next: SavedLine, ms: number) => {
+export function useMemorySaved(mogId: MogId): MemorySavedApi {
+  const [line, setLine] = useState<SavedLine | undefined>(undefined);
+  const [seq, setSeq] = useState(0);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  const start = useCallback((next: Omit<SavedLine, 'ms'>, ms: number) => {
     clearTimeout(timer.current);
-    setLine(next);
-    show.current?.(ms);
+    setLine({ ...next, ms });
+    setSeq((n) => n + 1);
     timer.current = setTimeout(() => setLine(undefined), ms);
   }, []);
 
@@ -76,7 +87,7 @@ export function useMemorySaved(mogId: MogId, onShow?: (ms: number) => void) {
         const m = asMemorySaved(e.payload);
         if (!m || m.mogId !== mogId) return;
         if (m.outcome === 'saved' && m.itemId !== undefined)
-          start({ outcome: 'saved', itemId: m.itemId }, m.undoMs || 8_000);
+          start({ outcome: 'saved', itemId: m.itemId }, m.undoMs || MEMORY_UNDO_MS);
         else start({ outcome: m.outcome }, NOTE_MS);
       },
       { target },
@@ -102,7 +113,7 @@ export function useMemorySaved(mogId: MogId, onShow?: (ms: number) => void) {
     start({ outcome: 'undone' }, UNDONE_MS);
   }, [mogId, start]);
 
-  return { line, undo };
+  return { line, seq, undo };
 }
 
 const TEXT: Readonly<Record<SavedLine['outcome'], string>> = {
@@ -113,7 +124,24 @@ const TEXT: Readonly<Record<SavedLine['outcome'], string>> = {
   undone: UNDONE_LINE,
 };
 
-/** The line. It is a polite live region, so a screen reader reads each outcome once. */
+/**
+ * The line inside a live region that stays mounted, so a screen reader reads each new outcome
+ * (a status region that appears together with its text is often not announced).
+ */
+export function MemorySavedLive({
+  line,
+  onUndo,
+}: {
+  line: SavedLine | undefined;
+  onUndo: () => void;
+}) {
+  return (
+    <div role="status" className="memory-saved-live">
+      {line && <MemorySavedLine line={line} onUndo={onUndo} />}
+    </div>
+  );
+}
+
 export function MemorySavedLine({ line, onUndo }: { line: SavedLine; onUndo: () => void }) {
   const reduce = useReducedMotion();
   const bad = line.outcome === 'secret_refused' || line.outcome === 'failed';
@@ -122,7 +150,6 @@ export function MemorySavedLine({ line, onUndo }: { line: SavedLine; onUndo: () 
       className="memory-saved"
       data-memory-saved={line.outcome}
       data-tone={bad ? 'bad' : 'ok'}
-      role="status"
       initial={reduce ? false : { opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}

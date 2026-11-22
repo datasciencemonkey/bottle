@@ -2440,7 +2440,7 @@
     padding: 0 10px;
     color: var(--mog-text-muted);
     font-size: var(--mog-text-xs);
-    font-weight: 600;
+    font-weight: var(--mog-weight-semibold);
   }
 
   .mem-tree-folder-name {
@@ -2462,7 +2462,7 @@
     background: transparent;
     color: var(--mog-text-muted);
     cursor: pointer;
-    opacity: 0;
+    opacity: 0.5;
     transition:
       opacity 120ms ease-out,
       background-color 120ms ease-out;
@@ -2660,11 +2660,23 @@
   }
 
   .mem-select {
+    appearance: none;
     height: 36px;
-    padding: 0 10px;
+    padding: 0 30px 0 10px;
     border: 1px solid var(--mog-control-border);
     border-radius: var(--mog-radius-sm);
-    background: transparent;
+    background-color: var(--mog-surface-raised);
+    background-image:
+      linear-gradient(45deg, transparent 50%, var(--mog-text-muted) 50%),
+      linear-gradient(135deg, var(--mog-text-muted) 50%, transparent 50%);
+    background-position:
+      calc(100% - 17px) 15px,
+      calc(100% - 12px) 15px;
+    background-size:
+      5px 5px,
+      5px 5px;
+    background-repeat: no-repeat;
+    color-scheme: dark light;
     color: var(--mog-text);
     font: inherit;
     font-size: var(--mog-text-sm);
@@ -2726,16 +2738,21 @@
     font-weight: var(--mog-weight-semibold);
   }
 
-  .mem-toast {
+  .mem-toast-live {
     position: absolute;
-    bottom: 20px;
     right: 0;
+    bottom: 20px;
     left: 0;
+    display: flex;
+    justify-content: center;
+    pointer-events: none;
+  }
+
+  .mem-toast {
     display: flex;
     align-items: center;
     gap: 6px;
-    width: fit-content;
-    margin-inline: auto;
+    pointer-events: auto;
     padding: 4px 6px 4px 14px;
     border: 1px solid var(--mog-edge);
     border-radius: var(--mog-radius-pill);

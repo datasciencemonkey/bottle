@@ -15,7 +15,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import type { MogId } from '../../shared/interfaces';
 import { emitView, type CardUpdate } from '../view-ipc';
-import { MemorySavedLine, useMemorySaved } from './memory-saved';
+import { MemorySavedLive, type MemorySavedApi } from './memory-saved';
 
 /** An ignored pop-up starts to fade after this time. */
 export const FADE_AFTER_MS = 5000;
@@ -41,20 +41,21 @@ function pick(chips: Chip[], prefix: string, utterance: string | undefined): Chi
 }
 
 export interface PopupProps {
+  /** Memory slice 1: the `memory:saved` line (`useMemorySaved` in CardView). */
+  saved: MemorySavedApi;
   mogId: MogId;
   card: CardUpdate;
   /** The user copied or dismissed the pop-up, or it faded. */
   onClose?: () => void;
 }
 
-export function Popup({ mogId, card, onClose }: PopupProps) {
+export function Popup({ mogId, card, onClose, saved }: PopupProps) {
   const newest = card.blurbs[0];
   const [phase, setPhase] = useState<Phase>('shown');
   const [held, setHeld] = useState({ pointer: false, focus: false });
   const ref = useRef<HTMLDivElement>(null);
   const whyId = useId();
   // Memory S2: a voice "remember this: …" shows "Saved to today's note · Undo" for the Undo time.
-  const saved = useMemorySaved(mogId);
 
   // The ask gate's blurb is `ask:<utterance>` (ask-gate.ts); the #498 Copy blurb is `<utterance>`.
   const copy = pick(card.chips, COPY, newest?.id);
@@ -163,7 +164,7 @@ export function Popup({ mogId, card, onClose }: PopupProps) {
         </span>
       )}
       {others.map((c) => chip(c))}
-      {saved.line && <MemorySavedLine line={saved.line} onUndo={saved.undo} />}
+      <MemorySavedLive line={saved.line} onUndo={saved.undo} />
       {copy && (
         <button
           type="button"
