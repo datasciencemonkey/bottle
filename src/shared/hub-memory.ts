@@ -271,6 +271,7 @@ function asRow(v: unknown): MemoryFileRow | undefined {
     tags: tags as string[],
     rating,
     ...(isNum(v.reviewedAt) ? { reviewedAt: v.reviewedAt } : {}),
+    ...(isNum(v.releasedAt) ? { releasedAt: v.releasedAt } : {}),
     createdAt: v.createdAt,
     updatedAt: v.updatedAt,
   };
