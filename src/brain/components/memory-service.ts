@@ -14,6 +14,7 @@ import type {
   ExchangeRef,
   GenieExchange,
   MemoryDraft,
+  MemoryOrigin,
   MemoryService,
   MogId,
   OperationState,
@@ -24,6 +25,7 @@ import { distilSummary } from './exchange-summary';
 import { isBackendKind } from './genie-bridge';
 import { isQuarantined } from './memory-quarantine';
 import { IpcLocalMemoryStore, type LocalMemoryStore } from './memory-store';
+import type { MemoryFileView } from '../../shared/hub-memory';
 
 export interface MemoryServiceOptions {
   /** The clock in epoch ms. Tests pass a simulated clock. */
@@ -61,6 +63,8 @@ export interface ItemWrite {
   sourceSessionIds?: string[];
   /** The utterances that the item comes from (`source_utterance_ids`). */
   sourceUtteranceIds?: string[];
+  /** ADR 0112: why the item exists. A user origin (`pin`, `added`) needs a ticket, not this path. */
+  origin?: MemoryOrigin;
   /**
    * The brain's SEC-24a result. It can only raise the quarantine: the Rust catalog also checks
    * the text itself and quarantines on either result (ADR 0089).
@@ -308,6 +312,54 @@ function checkRememberAction(a: RememberAction): void {
   }
 }
 
+/** The result code of a user memory write (ADR 0113). It never holds text. */
+export type MemoryWriteCode = 'secret_refused' | 'invalid' | 'failed';
+
+/** A user memory write that failed. The message is the code only: no title, body or path. */
+export class MemoryWriteError extends Error {
+  constructor(readonly code: MemoryWriteCode) {
+    super(code);
+    this.name = 'MemoryWriteError';
+  }
+}
+
+/** The code of a refused store call: `secret_refused` and `invalid_args` are named, the rest fails. */
+export function writeCodeOf(e: unknown): MemoryWriteCode {
+  if (e instanceof MemoryWriteError) return e.code;
+  const code = typeof e === 'object' && e !== null ? (e as { error?: unknown }).error : undefined;
+  if (code === 'secret_refused') return 'secret_refused';
+  return code === 'invalid_args' ? 'invalid' : 'failed';
+}
+
+/** One pinned item the user made: a card "remember", a voice "remember", or a hub add. */
+export interface PinWrite {
+  mogId: MogId;
+  itemType: 'fact' | 'definition' | 'decision' | 'open_question' | 'genie_answer';
+  origin: 'pin' | 'added';
+  /** A voice pin sends `text` only. A hub add sends `title` and `body` and no `text`. */
+  title?: string;
+  text?: string;
+  body?: string;
+  workspaceHost?: string;
+  workspaceId?: string | number;
+  spaceId?: string;
+  profile?: string;
+  sourceExchangeId?: string;
+}
+
+/** The fields of one item that the editor needs (`mem.item.get`). */
+export interface MemoryItemRead {
+  kind: string;
+  title: string;
+  body: string;
+  status: string;
+  pinned: boolean;
+  releasedAt?: number;
+}
+
+const changesOf = (rows: unknown[]): number[] =>
+  rows.map((r) => (r as { changes?: number }).changes ?? 0);
+
 export class LocalMemoryService implements MemoryService {
   readonly #now: () => number;
   readonly #newId: () => string;
@@ -388,6 +440,11 @@ export class LocalMemoryService implements MemoryService {
       confidence: pinned ? 1 : CONFIDENCE[d.source],
       pinned,
       quarantined,
+      origin: pinned
+        ? 'pin'
+        : d.origin === 'pin' || d.origin === 'added'
+          ? 'agent'
+          : (d.origin ?? 'agent'),
     };
     // checkDraft made sure that both workspace fields are there (MEM-31).
     if (d.workspaceHost !== undefined) w.workspaceHost = d.workspaceHost;
@@ -436,6 +493,7 @@ export class LocalMemoryService implements MemoryService {
         sourceExchangeId: w.sourceExchangeId,
         sourceSessionIds: w.sourceSessionIds,
         sourceUtteranceIds: w.sourceUtteranceIds,
+        origin: w.origin ?? 'agent',
         quarantined: w.quarantined === true || isQuarantined(w.text),
         seenAt: now,
         rowHlc: this.#hlc(now),
@@ -568,6 +626,137 @@ export class LocalMemoryService implements MemoryService {
     // The last step is the forget_log row: it records the Forget, it is not user content.
     const local = changes.slice(0, -1).reduce((a, b) => a + b, 0);
     return { local, remotePending: 0, pitrWindowS: 0 };
+  }
+  /**
+   * One pinned item of the user (ADR 0113). The ticket comes from the host, never from here; the
+   * core binds it to the click. No `quarantined`, `secretCheck` or `slug` goes in: the core
+   * computes those. Throws {@link MemoryWriteError}; the message holds a code only.
+   */
+  async pinItem(
+    w: PinWrite,
+    ticket: string,
+  ): Promise<{ itemId: string; status?: string | undefined }> {
+    const itemId = this.#newId();
+    const now = this.#now();
+    const workspaceId =
+      w.workspaceId === undefined
+        ? undefined
+        : typeof w.workspaceId === 'number'
+          ? w.workspaceId
+          : /^\d{1,18}$/.test(w.workspaceId)
+            ? Number(w.workspaceId)
+            : undefined;
+    try {
+      const { rows } = await this.store.exec(
+        'mem.item.write',
+        defined({
+          mogId: w.mogId,
+          itemId,
+          itemType: w.itemType,
+          source: 'you',
+          confidence: 1,
+          pinned: true,
+          origin: w.origin,
+          title: w.title,
+          text: w.text,
+          body: w.body,
+          workspaceHost: w.workspaceHost,
+          workspaceId,
+          spaceId: w.spaceId,
+          profile: w.profile,
+          sourceExchangeId: w.sourceExchangeId,
+          seenAt: now,
+          rowHlc: this.#hlc(now),
+          deviceId: this.#deviceId(),
+          now,
+        }),
+        ticket,
+      );
+      if (changesOf(rows)[0] !== 1) throw new MemoryWriteError('invalid');
+    } catch (e) {
+      throw new MemoryWriteError(writeCodeOf(e));
+    }
+    this.#queue?.kick();
+    return { itemId, status: (await this.#statusOf(w.mogId, itemId)) ?? undefined };
+  }
+  /** Edit one item (`mem.item.edit`, ADR 0113). Returns the new status. */
+  async editItem(
+    a: { mogId: MogId; itemId: string; itemType: string; title: string; body: string },
+    ticket: string,
+  ): Promise<{ status?: string | undefined }> {
+    const now = this.#now();
+    await this.#ticketed(
+      'mem.item.edit',
+      {
+        mogId: a.mogId,
+        itemId: a.itemId,
+        itemType: a.itemType,
+        title: a.title,
+        body: a.body,
+        now,
+        rowHlc: this.#hlc(now),
+      },
+      ticket,
+    );
+    this.#queue?.kick();
+    return { status: (await this.#statusOf(a.mogId, a.itemId)) ?? undefined };
+  }
+  /** A thumbs up (`mem.item.rate`, ADR 0113). Returns the new status. */
+  async rateItem(
+    a: { mogId: MogId; itemId: string },
+    ticket: string,
+  ): Promise<{ status?: string | undefined }> {
+    const now = this.#now();
+    await this.#ticketed(
+      'mem.item.rate',
+      { mogId: a.mogId, itemId: a.itemId, now, rowHlc: this.#hlc(now) },
+      ticket,
+    );
+    this.#queue?.kick();
+    return { status: (await this.#statusOf(a.mogId, a.itemId)) ?? undefined };
+  }
+  async #ticketed(stmt: 'mem.item.edit' | 'mem.item.rate', params: JsonObject, ticket: string) {
+    try {
+      const { rows } = await this.store.exec(stmt, params, ticket);
+      // Step 1 changed no row: the item is gone, or the rule refused it.
+      if (changesOf(rows)[0] !== 1) throw new MemoryWriteError('invalid');
+    } catch (e) {
+      throw new MemoryWriteError(writeCodeOf(e));
+    }
+  }
+  /** `active` or `quarantined` after a write, else undefined. */
+  async #statusOf(mogId: MogId, itemId: string): Promise<'active' | 'quarantined' | undefined> {
+    try {
+      const status = (await this.readItem(mogId, itemId))?.status;
+      return status === 'active' || status === 'quarantined' ? status : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  /** One item for the editor (`mem.item.get`), or undefined if there is none. */
+  async readItem(mogId: MogId, itemId: string): Promise<MemoryItemRead | undefined> {
+    const { rows } = await this.store.exec('mem.item.get', { mogId, itemId });
+    const r = rows[0] as Record<string, unknown> | undefined;
+    if (!r) return undefined;
+    const str = (v: unknown) => (typeof v === 'string' ? v : '');
+    return {
+      kind: str(r['type']),
+      title: str(r['title']),
+      body: str(r['bodyMd']),
+      status: str(r['status']),
+      pinned: r['pinned'] === 1 || r['pinned'] === true,
+      ...(typeof r['releasedAt'] === 'number' ? { releasedAt: r['releasedAt'] } : {}),
+    };
+  }
+  /** The rows of one MOG for the hub list (`mem.item.list`), as the store gives them. */
+  async listItems(mogId: MogId): Promise<unknown[]> {
+    return (await this.store.exec('mem.item.list', { mogId })).rows;
+  }
+  /** One rendered file or item section (`mem.file.get`). */
+  async readFile(mogId: MogId, path: string): Promise<Pick<MemoryFileView, 'text'> | undefined> {
+    const { rows } = await this.store.exec('mem.file.get', { mogId, path });
+    const text = (rows[0] as { text?: unknown } | undefined)?.text;
+    return typeof text === 'string' ? { text } : undefined;
   }
   /** B2: the MVP has no Lakebase sync. The v1 SyncWorker (#195) adds the other modes. */
   mode(): 'local' | 'local_synced' | 'sync_paused' {

@@ -47,6 +47,13 @@ export interface GenieCardWiringDeps {
   closeMog(mogId: MogId): void;
   /** #ui-4: the MOG right-click menu's "Change home workspace…". Shows the hub. */
   changeHome(mogId: MogId): void;
+  /**
+   * ADR 0113: "Remember this" on the card. `ticket` is the host's `actionTicket` of the click;
+   * the brain never makes one. The callee sends `memory:saved` to that card only.
+   */
+  remember?(mogId: MogId, requestId: string | undefined, ticket: string | undefined): void;
+  /** ADR 0113: the card's Undo of a save. The callee forgets only a recent save of this MOG. */
+  undoRemember?(mogId: MogId): void;
 }
 
 function target(p: unknown): { target?: unknown; requestId?: unknown; on?: unknown } {
@@ -69,6 +76,14 @@ export function wireGenieCard(bus: BrainBus, deps: GenieCardWiringDeps): () => v
       fromCard && typeof p.requestId === 'string' && OP_ID.test(p.requestId)
         ? p.requestId
         : undefined;
+    // ADR 0113: only the card of this MOG saves or undoes a memory.
+    const action = (p as { action?: unknown }).action;
+    if (action === 'memory.remember' || action === 'memory.undo') {
+      if (!fromCard) return;
+      if (action === 'memory.undo') deps.undoRemember?.(mogId);
+      else deps.remember?.(mogId, requestId ?? deps.lastOpId(mogId), input.actionTicket);
+      return;
+    }
     if (p.target === CARD_DONE && fromCard) {
       // A late `card_done` of an older request never hides the card of a newer one.
       const current = deps.lastOpId(mogId);

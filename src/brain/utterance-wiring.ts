@@ -20,6 +20,7 @@ import type { OwnedUtterance, RequestOwner } from './request-owner';
 import { routeUtterance, type UtteranceRoute, type UtteranceRouteDeps } from './utterance-route';
 
 export type AskRoute = Extract<UtteranceRoute, { route: 'ask' | 'chip' }>;
+export type RememberRoute = Extract<UtteranceRoute, { route: 'remember' }>;
 
 export interface UtteranceHandlerDeps {
   owner: Pick<RequestOwner, 'begin' | 'release'>;
@@ -37,7 +38,9 @@ export interface UtteranceHandlerDeps {
    * Every other route, after the owner is released. It is required: a `copy` or an
    * `insert_failed` route holds dictation text that must reach the Copy card (#498).
    */
-  onDone(r: Exclude<UtteranceRoute, AskRoute>, owned: OwnedUtterance): void;
+  onDone(r: Exclude<UtteranceRoute, AskRoute | RememberRoute>, owned: OwnedUtterance): void;
+  /** ADR 0113: a "remember this" order, after the owner is released. Nothing is pasted. */
+  onRemember?(r: RememberRoute, owned: OwnedUtterance): void;
 }
 
 const isAsk = (r: UtteranceRoute): r is AskRoute => r.route === 'ask' || r.route === 'chip';
@@ -58,6 +61,7 @@ export function createUtteranceHandler(
           forceAsk: u.forceAsk,
           insertionOn: deps.insertionOn(owned.mogId),
           input: { ...input, speakerTrack: 'you', captureMode: u.mode },
+          ...(u.remember !== undefined ? { remember: u.remember } : {}),
         },
         deps.route,
       );
@@ -70,7 +74,8 @@ export function createUtteranceHandler(
       }
       deps.owner.release(owned.utteranceId);
       handedOff = true;
-      deps.onDone(r, owned);
+      if (r.route === 'remember') deps.onRemember?.(r, owned);
+      else deps.onDone(r, owned);
     } catch {
       // A failed route sends nothing and inserts nothing (B1). The capture lifecycle goes on.
     } finally {

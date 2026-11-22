@@ -18,9 +18,14 @@ function setup() {
     openConversations: (id) => void log.push(['open', id]),
     closeMog: (m) => void log.push(['close', m]),
     changeHome: (m) => void log.push(['change-home', m]),
+    remember: (m, id, t) => void log.push(['remember', m, id, t]),
+    undoRemember: (m) => void log.push(['undo', m]),
   });
-  const input = (from: string, kind: string, payload?: unknown, mogId = A) =>
-    bus.dispatch({ event: 'view:input', payload: { from, input: { mogId, kind, payload } } });
+  const input = (from: string, kind: string, payload?: unknown, mogId = A, actionTicket?: string) =>
+    bus.dispatch({
+      event: 'view:input',
+      payload: { from, input: { mogId, kind, payload }, actionTicket },
+    });
   return { log, input, off };
 }
 
@@ -102,5 +107,28 @@ describe('Genie card wiring (#573)', () => {
       ['close', A],
       ['change-home', A],
     ]);
+  });
+
+  it('[ADR 0113] a card remember click passes the host ticket and the exchange on', () => {
+    const { log, input } = setup();
+    input(`card-${A}`, 'click', { action: 'memory.remember', requestId: OP }, A, 'tkt');
+    input(`card-${A}`, 'click', { action: 'memory.remember' }, A, 'tkt2');
+    // No ticket: the callee gets none, and the brain makes none.
+    input(`card-${A}`, 'click', { action: 'memory.remember', requestId: OP });
+    expect(log).toEqual([
+      ['remember', A, OP, 'tkt'],
+      ['remember', A, OP, 'tkt2'],
+      ['remember', A, OP, undefined],
+    ]);
+  });
+
+  it('[ADR 0113] remember and undo come only from the card of the same MOG', () => {
+    const { log, input } = setup();
+    input(`mog-${A}`, 'click', { action: 'memory.remember' }, A, 'tkt');
+    input(`mog-${A}`, 'click', { action: 'memory.undo' });
+    input('hub', 'click', { action: 'memory.undo' });
+    input(`card-${B}`, 'click', { action: 'memory.remember' }, A, 'tkt');
+    input(`card-${A}`, 'click', { action: 'memory.undo' });
+    expect(log).toEqual([['undo', A]]);
   });
 });

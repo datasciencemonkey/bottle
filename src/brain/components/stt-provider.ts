@@ -271,6 +271,13 @@ function validReply(t: unknown, seg: SegmentRef, provider: Provider): Transcript
     latencyMs: typeof latencyMs === 'number' && Number.isFinite(latencyMs) ? latencyMs : 0,
   };
   if (typeof lang === 'string' && lang !== '') out.lang = lang;
+  // ADR 0113: Rust parsed "remember this" and minted the ticket. Keep both, or neither.
+  const r = t['remember'];
+  if (isRecord(r) && typeof r['ticket'] === 'string' && typeof r['text'] === 'string') {
+    if (r['ticket'] !== '' && r['text'].trim() !== '') {
+      out.remember = { ticket: r['ticket'], text: r['text'] };
+    }
+  }
   return out;
 }
 

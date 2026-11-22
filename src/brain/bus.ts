@@ -131,6 +131,8 @@ export interface ViewInput {
   mogId: MogId;
   kind: ViewEmitKind;
   payload: unknown;
+  /** ADR 0113: the host minted this ticket for the click. The brain passes it on, never makes one. */
+  actionTicket?: string;
 }
 
 const VIEW_KINDS: ReadonlySet<string> = new Set<ViewEmitKind>(VIEW_EMIT_KINDS);
@@ -138,7 +140,11 @@ const VIEW_KINDS: ReadonlySet<string> = new Set<ViewEmitKind>(VIEW_EMIT_KINDS);
 /** Parse a `view:input` payload. The core checks the same rules; the brain checks again. */
 export function asViewInput(p: unknown): ViewInput | undefined {
   if (typeof p !== 'object' || p === null) return undefined;
-  const { from, input } = p as { from?: unknown; input?: unknown };
+  const { from, input, actionTicket } = p as {
+    from?: unknown;
+    input?: unknown;
+    actionTicket?: unknown;
+  };
   if (typeof from !== 'string' || typeof input !== 'object' || input === null) return undefined;
   const { mogId, kind, payload } = input as { mogId?: unknown; kind?: unknown; payload?: unknown };
   if (typeof mogId !== 'string' || typeof kind !== 'string' || !VIEW_KINDS.has(kind))
@@ -147,7 +153,11 @@ export function asViewInput(p: unknown): ViewInput | undefined {
   if (from !== 'hub' && from !== `mog-${mogId}` && from !== `card-${mogId}`) return undefined;
   // #507: `ready` has no payload. The core refuses one; the brain drops it too.
   if (kind === 'ready' && 'payload' in input) return undefined;
-  return { from, mogId, kind: kind as ViewEmitKind, payload };
+  const ticket =
+    typeof actionTicket === 'string' && actionTicket !== '' && actionTicket.length <= 256
+      ? { actionTicket }
+      : {};
+  return { from, mogId, kind: kind as ViewEmitKind, payload, ...ticket };
 }
 
 /** Register a handler for view input (`view_emit` relayed as `view:input`). */
