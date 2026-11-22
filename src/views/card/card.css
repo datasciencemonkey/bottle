@@ -243,3 +243,49 @@ html[data-side='left'] .popup::before {
 html[data-side='left'] .popup[data-state='fading'] {
   transform: translateX(4px);
 }
+
+/* Memory slice 1 (ADR 0113): "Saved to today's note · Undo" on the Genie card and the pop-up. */
+.memory-saved {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 6px;
+  min-width: 0;
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-sm);
+  line-height: var(--mog-leading);
+}
+
+.memory-saved[data-tone='bad'] .memory-saved-text {
+  color: var(--mog-destructive-text);
+}
+
+.memory-saved-undo {
+  appearance: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--mog-text);
+  font: inherit;
+  font-weight: var(--mog-weight-semibold);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.memory-saved-undo:focus-visible {
+  outline: none;
+  border-radius: var(--mog-radius-sm);
+  box-shadow: var(--mog-focus-ring);
+}
+
+.popup .memory-saved {
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .memory-saved {
+    transition: none;
+  }
+}

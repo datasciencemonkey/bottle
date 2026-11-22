@@ -15,6 +15,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import type { MogId } from '../../shared/interfaces';
 import { emitView, type CardUpdate } from '../view-ipc';
+import { MemorySavedLine, useMemorySaved } from './memory-saved';
 
 /** An ignored pop-up starts to fade after this time. */
 export const FADE_AFTER_MS = 5000;
@@ -52,6 +53,8 @@ export function Popup({ mogId, card, onClose }: PopupProps) {
   const [held, setHeld] = useState({ pointer: false, focus: false });
   const ref = useRef<HTMLDivElement>(null);
   const whyId = useId();
+  // Memory S2: a voice "remember this: …" shows "Saved to today's note · Undo" for the Undo time.
+  const saved = useMemorySaved(mogId);
 
   // The ask gate's blurb is `ask:<utterance>` (ask-gate.ts); the #498 Copy blurb is `<utterance>`.
   const copy = pick(card.chips, COPY, newest?.id);
@@ -62,7 +65,7 @@ export function Popup({ mogId, card, onClose }: PopupProps) {
   const sticky = copy !== undefined || others.length > 0;
   // ADR 0101: a permission notice wraps, so its whole text shows; its one control is a chip.
   const perm = newest?.id.startsWith(PERM) === true && others.some((c) => c.id === newest.id);
-  const hovered = held.pointer || held.focus;
+  const hovered = held.pointer || held.focus || saved.line !== undefined;
 
   const close = () => {
     setPhase('gone');
@@ -81,7 +84,7 @@ export function Popup({ mogId, card, onClose }: PopupProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, sticky, hovered, mogId]);
 
-  if (!newest || phase === 'gone') return null;
+  if ((!newest && !saved.line) || phase === 'gone') return null;
 
   // `hold` keeps the pop-up open. `report` is the UX-12 blurb hover for the brain: the pointer
   // on the text, or the keyboard focus in the pop-up. A hover on a chip alone sends nothing.
@@ -91,9 +94,10 @@ export function Popup({ mogId, card, onClose }: PopupProps) {
     if (on && phase === 'fading') setPhase('shown');
     setHeld((h) => ({ ...h, [via]: on }));
   };
-  const report = (via: 'pointer' | 'focus', on: boolean) =>
-    void emitView(mogId, 'hover', { blurbId: newest.id, on, via });
-  const [line, ...rest] = newest.text.split('\n');
+  const report = (via: 'pointer' | 'focus', on: boolean) => {
+    if (newest) void emitView(mogId, 'hover', { blurbId: newest.id, on, via });
+  };
+  const [line = '', ...rest] = (newest?.text ?? '').split('\n');
   const why = rest.join(' ').trim();
   const chip = (c: Chip, after?: () => void) => (
     <button
@@ -138,7 +142,7 @@ export function Popup({ mogId, card, onClose }: PopupProps) {
         onMouseEnter={() => report('pointer', true)}
         onMouseLeave={() => report('pointer', false)}
       >
-        {newest.parts
+        {newest?.parts
           ? newest.parts.map((p) => (
               <span key={p.id} data-part={p.id}>
                 {p.text}
@@ -159,6 +163,7 @@ export function Popup({ mogId, card, onClose }: PopupProps) {
         </span>
       )}
       {others.map((c) => chip(c))}
+      {saved.line && <MemorySavedLine line={saved.line} onUndo={saved.undo} />}
       {copy && (
         <button
           type="button"

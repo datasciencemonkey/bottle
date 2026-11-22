@@ -7,17 +7,23 @@
  * - The view: the whole rendered file, or the selected item's section, as Rust renders it.
  * - Feedback: thumbs up (`memory.rate`); thumbs down deletes. A thumbs up on a quarantined item
  *   releases it (owner ruling 2026-11-21): the host checks a ticket of this click, so only the
- *   user can do it. Delete needs a confirm click. Both
- *   deletes show "Memory deleted" with Undo for 8 s, and the view sends `memory.delete` only
- *   when the 8 s end, so Undo needs no new write. If the area goes away in the 8 s, the delete
- *   goes at once: the user asked for it.
+ *   user can do it. The inline Release button sends the same click.
+ * - Delete and thumbs down have no confirm step. The item hides at once and "Memory deleted"
+ *   shows with Undo for 8 s. The view sends `memory.delete` only when the 8 s end, so Undo needs
+ *   no new write. If the area goes away in the 8 s, the delete goes at once: the user asked for it.
+ * - Add (S3) and edit (S4): `MemoryForm`. A write is a `requestId` request; the answer is
+ *   `hub:memory.result`. A secret keeps the text in the form. A saved add or edit shows Undo for 8 s:
+ *   undo of an add sends `memory.delete`, undo of an edit sends `memory.edit` with the old fields.
  * The view reaches the brain only through a {@link MemorySource}; tests pass a local one.
  */
 import { listen } from '@tauri-apps/api/event';
+import { motion, useReducedMotion } from 'motion/react';
 import {
   CalendarDaysIcon,
   FileTextIcon,
+  PencilIcon,
   PinIcon,
+  PlusIcon,
   ShieldAlertIcon,
   ThumbsDownIcon,
   ThumbsUpIcon,
@@ -38,34 +44,95 @@ import {
   filesOf,
   HUB_MEMORY_EVENT,
   HUB_MEMORY_FILE_EVENT,
+  HUB_MEMORY_ITEM_EVENT,
+  HUB_MEMORY_RESULT_EVENT,
   isNew,
   KIND_LABEL,
   MEMORY_UNDO_MS,
   MEMORY_VIEW_ID,
   splitFile,
   USER_FILE_PATH,
+  type EditableKind,
   type HubMemory,
   type MemoryAction,
   type MemoryFileRow,
   type MemoryFileView,
+  type MemoryItemFields,
+  type MemoryKindName,
+  type MemoryResult,
 } from '../../shared/hub-memory';
 import { NO_LINKS } from '../../shared/link-trust';
 import { paletteColorOf } from '../../shared/mog-palette';
 import { SafeMarkdown } from '../card/safe-markdown';
 import { Button } from '../ui/button';
 import { emitView } from '../view-ipc';
+import { MemoryForm, type MemoryFormValues } from './MemoryForm';
 
 /** The seam between the view and the brain. */
 export interface MemorySource {
-  /** Listen for the folders and the files. Returns the stop function. */
-  subscribe(onList: (m: HubMemory) => void, onFile: (f: MemoryFileView) => void): () => void;
+  /**
+   * Listen for the folders, the files, the raw fields of one item and the result of a write.
+   * Returns the stop function.
+   */
+  subscribe(handlers: MemoryHandlers): () => void;
   /** Send one user action to the brain. */
   send(a: MemoryAction): void;
 }
 
+export interface MemoryHandlers {
+  onList: (m: HubMemory) => void;
+  onFile: (f: MemoryFileView) => void;
+  onItem: (i: MemoryItemFields) => void;
+  onResult: (r: MemoryResult) => void;
+}
+
+const isObj = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/** Check a `hub:memory.item` payload. */
+export function asMemoryItem(p: unknown): MemoryItemFields | undefined {
+  if (!isObj(p)) return undefined;
+  const { mogId, itemId, kind, title, body, status, pinned, releasedAt } = p;
+  if (
+    typeof mogId !== 'string' ||
+    typeof itemId !== 'string' ||
+    typeof kind !== 'string' ||
+    !(kind in KIND_LABEL) ||
+    typeof title !== 'string' ||
+    typeof body !== 'string' ||
+    typeof status !== 'string' ||
+    typeof pinned !== 'boolean'
+  )
+    return undefined;
+  return {
+    mogId,
+    itemId,
+    kind: kind as MemoryKindName,
+    title,
+    body,
+    status: status as MemoryItemFields['status'],
+    pinned,
+    ...(typeof releasedAt === 'number' ? { releasedAt } : {}),
+  };
+}
+
+/** Check a `hub:memory.result` payload. */
+export function asMemoryResult(p: unknown): MemoryResult | undefined {
+  if (!isObj(p) || typeof p['requestId'] !== 'string' || typeof p['ok'] !== 'boolean')
+    return undefined;
+  const { code, itemId, status } = p;
+  return {
+    requestId: p['requestId'],
+    ok: p['ok'],
+    ...(code === 'secret_refused' || code === 'invalid' || code === 'failed' ? { code } : {}),
+    ...(typeof itemId === 'string' ? { itemId } : {}),
+    ...(status === 'active' || status === 'quarantined' ? { status } : {}),
+  };
+}
+
 /** The default source: `hub:memory` events in, `view_emit` clicks out. */
 export const ipcMemorySource: MemorySource = {
-  subscribe(onList, onFile) {
+  subscribe(h) {
     const stops: (() => void)[] = [];
     let stopped = false;
     const keep = (p: Promise<() => void>) =>
@@ -73,13 +140,25 @@ export const ipcMemorySource: MemorySource = {
     keep(
       listen(HUB_MEMORY_EVENT, (e) => {
         const m = asHubMemory(e.payload);
-        if (m) onList(m);
+        if (m) h.onList(m);
       }),
     );
     keep(
       listen(HUB_MEMORY_FILE_EVENT, (e) => {
         const f = asMemoryFileView(e.payload);
-        if (f) onFile(f);
+        if (f) h.onFile(f);
+      }),
+    );
+    keep(
+      listen(HUB_MEMORY_ITEM_EVENT, (e) => {
+        const i = asMemoryItem(e.payload);
+        if (i) h.onItem(i);
+      }),
+    );
+    keep(
+      listen(HUB_MEMORY_RESULT_EVENT, (e) => {
+        const r = asMemoryResult(e.payload);
+        if (r) h.onResult(r);
       }),
     );
     return () => {
@@ -104,6 +183,18 @@ interface Pending {
   itemId: string;
   timer: ReturnType<typeof setTimeout>;
 }
+
+/** The one Undo toast. A delete also has a {@link Pending}; an add or an edit has only `undo`. */
+interface Toast {
+  key: number;
+  text: string;
+  undo: () => void;
+}
+
+export const SECRET_MESSAGE = 'This looks like a key or password. Bottle does not save secrets.';
+export const QUARANTINE_MESSAGE =
+  'Genie and the agent will not see this, because it reads like an instruction.';
+const FAILED_MESSAGE = 'Bottle could not save this. Try again.';
 
 const SOURCE_LABEL: Readonly<Record<string, string>> = {
   you: 'You',
@@ -138,9 +229,15 @@ function dayLabel(day: string, now: number): string {
   });
 }
 
-function Marks({ row }: { row: MemoryFileRow }) {
+function Marks({ row, pinned = false }: { row: MemoryFileRow; pinned?: boolean }) {
   return (
     <>
+      {pinned && row.pinned && (
+        <span className="mem-mark" data-mark="pinned">
+          <PinIcon className="size-3" aria-hidden="true" />
+          Pinned
+        </span>
+      )}
       {isNew(row) && (
         <span className="mem-mark mem-mark--new" data-mark="new">
           New
@@ -155,6 +252,11 @@ function Marks({ row }: { row: MemoryFileRow }) {
       {row.status === 'stale' && (
         <span className="mem-mark" data-mark="stale">
           Not used lately
+        </span>
+      )}
+      {row.releasedAt !== undefined && (
+        <span className="mem-mark" data-mark="released">
+          You released this
         </span>
       )}
     </>
@@ -172,20 +274,52 @@ export interface MemoryAreaProps {
   now?: () => number;
 }
 
+/** What the right pane shows instead of the file: the add form or the edit form. */
+type Compose =
+  | { mode: 'add'; mogId: string }
+  | { mode: 'edit'; mogId: string; itemId: string; from: MemoryItemFields };
+
+let toastKey = 0;
+
 export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }: MemoryAreaProps) {
+  const reduce = useReducedMotion();
   const [model, setModel] = useState<HubMemory | undefined>(undefined);
   const [view, setView] = useState<MemoryFileView | undefined>(undefined);
+  const [fields, setFields] = useState<MemoryItemFields | undefined>(undefined);
   const [picked, setPicked] = useState<TreeFile | undefined>(undefined);
-  const [itemId, setItemId] = useState<string | undefined>(undefined);
-  const [confirming, setConfirming] = useState(false);
+  const [pickedItem, setItemId] = useState<string | undefined>(undefined);
   const [pending, setPending] = useState<Pending | undefined>(undefined);
-  const [rated, setRated] = useState<ReadonlySet<string>>(new Set());
+  /** Local changes on top of the model, so a click shows at once (rate, release, edit). */
+  const [patch, setPatch] = useState<Readonly<Record<string, Partial<MemoryFileRow>>>>({});
+  /** Items the user removed (the Undo of an add). */
+  const [gone, setGone] = useState<ReadonlySet<string>>(new Set());
+  const [compose, setCompose] = useState<Compose | undefined>(undefined);
+  const [busy, setBusy] = useState(false);
+  const [formError, setFormError] = useState<string | undefined>(undefined);
+  const [toast, setToast] = useState<Toast | undefined>(undefined);
+  /** The new item to select once the list has it. */
+  const [want, setWant] = useState<string | undefined>(undefined);
   const pendingRef = useRef<Pending | undefined>(undefined);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const requests = useRef(new Map<string, (r: MemoryResult) => void>());
   useEffect(() => {
     pendingRef.current = pending;
   }, [pending]);
 
-  useEffect(() => source.subscribe(setModel, setView), [source]);
+  useEffect(
+    () =>
+      source.subscribe({
+        onList: setModel,
+        onFile: setView,
+        onItem: setFields,
+        onResult: (r) => {
+          const done = requests.current.get(r.requestId);
+          requests.current.delete(r.requestId);
+          done?.(r);
+        },
+      }),
+    [source],
+  );
 
   useEffect(() => {
     if (active) source.send({ action: 'memory.ready' });
@@ -194,6 +328,7 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
   // The delete goes when the area goes away: the user asked for it.
   useEffect(
     () => () => {
+      clearTimeout(toastTimer.current);
       const p = pendingRef.current;
       if (!p) return;
       clearTimeout(p.timer);
@@ -202,44 +337,57 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
     [source],
   );
 
-  // The rows the view shows: a pending delete hides its row; a thumbs up shows at once.
+  const showToast = useCallback((text: string, undo: () => void) => {
+    clearTimeout(toastTimer.current);
+    toastKey += 1;
+    setToast({ key: toastKey, text, undo });
+    toastTimer.current = setTimeout(() => setToast(undefined), MEMORY_UNDO_MS);
+  }, []);
+
+  // The rows the view shows: a pending delete hides its row; local changes show at once.
   const folders = useMemo(
     () =>
       (model?.folders ?? []).map((f) => ({
         ...f,
         rows: f.rows
-          .filter((r) => r.itemId !== pending?.itemId)
-          .map((r) =>
-            rated.has(r.itemId)
-              ? {
-                  ...r,
-                  rating: 1 as const,
-                  reviewedAt: 0,
-                  status: r.status === 'quarantined' ? ('active' as const) : r.status,
-                }
-              : r,
-          ),
+          .filter((r) => r.itemId !== pending?.itemId && !gone.has(r.itemId))
+          .map((r) => (patch[r.itemId] ? { ...r, ...patch[r.itemId] } : r)),
       })),
-    [model, pending, rated],
+    [model, pending, patch, gone],
   );
 
+  // USER.md shows only when it has items (S8).
+  const showUser = (model?.userItems ?? 0) > 0;
   const tree = useMemo<TreeFile[]>(
     () => [
-      { mogId: '', path: USER_FILE_PATH },
+      ...(showUser ? [{ mogId: '', path: USER_FILE_PATH }] : []),
       ...folders.flatMap((f) => filesOf(f).map((e) => ({ mogId: f.mogId, path: e.path }))),
     ],
-    [folders],
+    [folders, showUser],
   );
+
+  // A new item is selected as soon as the list has it.
+  const wantRow = useMemo(
+    () =>
+      want
+        ? folders
+            .flatMap((f) => f.rows.map((row) => ({ mogId: f.mogId, row })))
+            .find((x) => x.row.itemId === want)
+        : undefined,
+    [want, folders],
+  );
+  const itemId = wantRow ? wantRow.row.itemId : pickedItem;
 
   // Until the user picks a file: the newest daily note of the first MOG, else its MEMORY.md.
   const sel = useMemo<TreeFile | undefined>(() => {
+    if (wantRow) return { mogId: wantRow.mogId, path: wantRow.row.file };
     if (picked && tree.some((t) => sameFile(picked, t))) return picked;
     const first = folders[0];
     if (!first) return tree[0];
     const files = filesOf(first);
     const entry = files.find((e) => e.layer === 'daily') ?? files[0];
     return entry ? { mogId: first.mogId, path: entry.path } : tree[0];
-  }, [picked, tree, folders]);
+  }, [picked, tree, folders, wantRow]);
 
   const rows = useMemo(
     () =>
@@ -252,6 +400,8 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
   );
   const row = rows.find((r) => r.itemId === itemId);
   const viewPath = row ? row.path : sel?.path;
+  const itemFields = row && fields?.itemId === row.itemId ? fields : undefined;
+  const releasedAt = row?.releasedAt ?? itemFields?.releasedAt;
 
   // Ask for the rendered file or item each time the selection changes.
   useEffect(() => {
@@ -259,15 +409,30 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
     source.send({ action: 'memory.file', mogId: sel.mogId, path: viewPath });
   }, [active, sel, viewPath, source]);
 
+  // Ask for the raw fields of the selected item (the editor and the Released mark).
+  const rowId = row?.itemId;
+  useEffect(() => {
+    if (!active || !sel?.mogId || !rowId) return;
+    source.send({ action: 'memory.item', mogId: sel.mogId, itemId: rowId });
+  }, [active, sel?.mogId, rowId, source]);
+
   const pickFile = useCallback((t: TreeFile) => {
+    setWant(undefined);
     setPicked(t);
     setItemId(undefined);
-    setConfirming(false);
+    setCompose(undefined);
   }, []);
 
   const pickRow = useCallback((r: MemoryFileRow) => {
+    setWant(undefined);
     setItemId(r.itemId);
-    setConfirming(false);
+    setCompose(undefined);
+  }, []);
+
+  const request = useCallback((done: (r: MemoryResult) => void) => {
+    const requestId = crypto.randomUUID();
+    requests.current.set(requestId, done);
+    return requestId;
   }, []);
 
   const startDelete = useCallback(() => {
@@ -286,12 +451,14 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
         setPending((cur) => (cur?.itemId === p.itemId ? undefined : cur));
       }, MEMORY_UNDO_MS),
     };
+    clearTimeout(toastTimer.current);
+    setToast(undefined);
     setPending(p);
-    setConfirming(false);
+    setCompose(undefined);
     setItemId(undefined);
   }, [sel, row, source]);
 
-  const undo = useCallback(() => {
+  const undoDelete = useCallback(() => {
     const p = pendingRef.current;
     if (!p) return;
     clearTimeout(p.timer);
@@ -300,14 +467,143 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
 
   const rate = useCallback(() => {
     if (!sel?.mogId || !row) return;
+    const id = row.itemId;
     source.send({
       action: 'memory.rate',
       requestId: crypto.randomUUID(),
       mogId: sel.mogId,
-      itemId: row.itemId,
+      itemId: id,
     });
-    setRated((s) => new Set([...s, row.itemId]));
-  }, [sel, row, source]);
+    setPatch((p) => ({
+      ...p,
+      [id]: {
+        ...p[id],
+        rating: 1,
+        reviewedAt: 0,
+        status: row.status === 'quarantined' ? 'active' : row.status,
+        ...(row.status === 'quarantined' ? { releasedAt: now() } : {}),
+      },
+    }));
+  }, [sel, row, source, now]);
+
+  const openAdd = useCallback((mogId: string) => {
+    setFormError(undefined);
+    setBusy(false);
+    setCompose({ mode: 'add', mogId });
+  }, []);
+
+  const openEdit = useCallback(() => {
+    if (!sel?.mogId || !row || !itemFields) return;
+    setFormError(undefined);
+    setBusy(false);
+    setCompose({ mode: 'edit', mogId: sel.mogId, itemId: row.itemId, from: itemFields });
+  }, [sel, row, itemFields]);
+
+  const closeForm = useCallback(() => {
+    setCompose(undefined);
+    setBusy(false);
+    setFormError(undefined);
+  }, []);
+
+  const failure = (code: MemoryResult['code']) =>
+    code === 'secret_refused' ? SECRET_MESSAGE : FAILED_MESSAGE;
+
+  const submit = useCallback(
+    (v: MemoryFormValues) => {
+      if (!compose || busy) return;
+      setBusy(true);
+      setFormError(undefined);
+      if (compose.mode === 'add') {
+        const { mogId } = compose;
+        const requestId = request((r) => {
+          setBusy(false);
+          if (!r.ok || !r.itemId) {
+            setFormError(failure(r.code));
+            return;
+          }
+          const itemId = r.itemId;
+          setCompose(undefined);
+          setWant(itemId);
+          source.send({ action: 'memory.ready' });
+          showToast(
+            r.status === 'quarantined' ? 'Memory saved, but hidden from Genie' : 'Memory saved',
+            () => {
+              source.send({ action: 'memory.delete', mogId, itemId });
+              setGone((g) => new Set([...g, itemId]));
+              setWant(undefined);
+              setItemId((cur) => (cur === itemId ? undefined : cur));
+              setToast(undefined);
+            },
+          );
+        });
+        source.send({
+          action: 'memory.add',
+          requestId,
+          mogId,
+          kind: v.kind as EditableKind,
+          title: v.title,
+          body: v.body,
+        });
+        return;
+      }
+      const { mogId, itemId, from } = compose;
+      const requestId = request((r) => {
+        setBusy(false);
+        if (!r.ok) {
+          setFormError(failure(r.code));
+          return;
+        }
+        const status = r.status ?? 'active';
+        setCompose(undefined);
+        setFields({ ...from, kind: v.kind, title: v.title, body: v.body, status });
+        setPatch((p) => ({
+          ...p,
+          [itemId]: {
+            ...p[itemId],
+            title: v.title || p[itemId]?.title || from.title,
+            kind: v.kind,
+            status,
+            rating: 1,
+            reviewedAt: 0,
+          },
+        }));
+        source.send({ action: 'memory.ready' });
+        source.send({ action: 'memory.file', mogId, path: row?.path ?? sel?.path ?? '' });
+        showToast('Memory updated', () => {
+          // Undo is a new edit click, so it has its own request.
+          const undoId = request(() => {
+            source.send({ action: 'memory.ready' });
+            source.send({ action: 'memory.item', mogId, itemId });
+          });
+          source.send({
+            action: 'memory.edit',
+            requestId: undoId,
+            mogId,
+            itemId,
+            kind: from.kind,
+            title: from.title,
+            body: from.body,
+          });
+          setFields({ ...from });
+          setPatch((p) => ({
+            ...p,
+            [itemId]: { ...p[itemId], title: from.title, kind: from.kind, status: from.status },
+          }));
+          setToast(undefined);
+        });
+      });
+      source.send({
+        action: 'memory.edit',
+        requestId,
+        mogId,
+        itemId,
+        kind: v.kind,
+        title: v.title,
+        body: v.body,
+      });
+    },
+    [compose, busy, request, source, showToast, row?.path, sel?.path],
+  );
 
   const onTreeKey = useCallback(
     (e: KeyboardEvent<HTMLElement>) => {
@@ -332,8 +628,10 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
       else if (e.key === 'ArrowUp') next = rows[Math.max(0, at - 1)];
       else if (e.key === 'Home') next = rows[0];
       else if (e.key === 'End') next = rows.at(-1);
-      else if (e.key === 'Escape') setItemId(undefined);
-      else return;
+      else if (e.key === 'Escape') {
+        setWant(undefined);
+        setItemId(undefined);
+      } else return;
       e.preventDefault();
       if (next) pickRow(next);
     },
@@ -356,6 +654,22 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
     </li>
   );
 
+  const selFolder = folders.find((f) => f.mogId === sel?.mogId);
+  const newButton = (mogId: string, name: string, variant: 'default' | 'outline') => (
+    <Button
+      type="button"
+      variant={variant}
+      size="sm"
+      onClick={() => openAdd(mogId)}
+      aria-label={`New memory in ${name}`}
+      data-action="new-memory"
+      data-mog={mogId}
+    >
+      <PlusIcon aria-hidden="true" />
+      New memory
+    </Button>
+  );
+
   let body: ReactNode;
   if (!model) {
     body = (
@@ -370,28 +684,38 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
         Mac.
       </p>
     );
-  } else if (folders.every((f) => f.rows.length === 0) && model.userItems === 0) {
+  } else if (folders.every((f) => f.rows.length === 0) && model.userItems === 0 && !compose) {
     body = (
-      <div className="mem-message" data-memory-empty>
+      <div className="mem-message mem-empty" data-memory-empty>
         <p className="mem-empty-title">No memories yet</p>
         <p>
-          Click <strong>Remember this</strong> on a Genie answer, or hold the talk key and say
-          “remember this:” and then the fact. Each one goes into today’s note.
+          Add one here, click <strong>Remember this</strong> on a Genie answer, or hold the talk key
+          and say “remember this:” and then the fact. Each one goes into today’s note.
         </p>
+        <div className="mem-empty-actions">
+          {folders.map((f, i) => newButton(f.mogId, f.mogName, i === 0 ? 'default' : 'outline'))}
+        </div>
       </div>
     );
   } else {
     const parts = view && view.path === viewPath ? splitFile(view.text) : undefined;
+    const quarantined = row?.status === 'quarantined';
+    const composeRow =
+      compose?.mode === 'edit'
+        ? { kind: compose.from.kind, title: compose.from.title, body: compose.from.body }
+        : { kind: 'fact' as MemoryKindName, title: '', body: '' };
+    const composeFolder = compose && folders.find((f) => f.mogId === compose.mogId);
     body = (
       <div className="mem-panes">
         <nav className="mem-tree" aria-label="Memory files">
           <ul role="tree" tabIndex={0} onKeyDown={onTreeKey} aria-label="Memory files">
-            {treeItem(
-              { mogId: '', path: USER_FILE_PATH },
-              'USER.md',
-              model.userItems,
-              <UserIcon className="size-3.5" aria-hidden="true" />,
-            )}
+            {showUser &&
+              treeItem(
+                { mogId: '', path: USER_FILE_PATH },
+                'USER.md',
+                model.userItems,
+                <UserIcon className="size-3.5" aria-hidden="true" />,
+              )}
             {folders.map((f) => {
               const c = paletteColorOf(f.mogColorVariant, f.mogId);
               const files = filesOf(f);
@@ -405,7 +729,19 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
                       data-color={c.id}
                       aria-hidden="true"
                     />
-                    {f.mogName}
+                    <span className="mem-tree-folder-name">{f.mogName}</span>
+                    <button
+                      type="button"
+                      tabIndex={-1}
+                      className="mem-tree-add"
+                      aria-label={`New memory in ${f.mogName}`}
+                      title="New memory"
+                      data-action="new-memory-folder"
+                      data-mog={f.mogId}
+                      onClick={() => openAdd(f.mogId)}
+                    >
+                      <PlusIcon className="size-3.5" aria-hidden="true" />
+                    </button>
                   </span>
                   <ul role="group">
                     {memory &&
@@ -429,158 +765,206 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
             })}
           </ul>
         </nav>
-        <div
-          className="mem-list"
-          role="listbox"
-          tabIndex={0}
-          aria-label="Memories in this file"
-          onKeyDown={onListKey}
-        >
-          {rows.length === 0 && (
-            <p className="mem-message mem-message--quiet">
-              {sel?.path === USER_FILE_PATH
-                ? 'Shared preferences come in a later version.'
-                : 'Nothing here yet.'}
-            </p>
-          )}
-          {rows.map((r) => (
-            <div
-              key={r.itemId}
-              role="option"
-              aria-selected={r.itemId === itemId}
-              className="mem-row"
-              data-item={r.itemId}
-              data-status={r.status}
-              onClick={() => pickRow(r)}
-            >
-              <span className="mem-row-title">
-                {r.pinned && <PinIcon className="mem-pin size-3" aria-label="Pinned" role="img" />}
-                {r.title}
-              </span>
-              <span className="mem-row-meta">
-                <Marks row={r} />
-                <span>{KIND_LABEL[r.kind]}</span>
-              </span>
+        <div className="mem-list-pane">
+          {selFolder && (
+            <div className="mem-list-head">
+              {newButton(selFolder.mogId, selFolder.mogName, 'outline')}
             </div>
-          ))}
+          )}
+          <div
+            className="mem-list"
+            role="listbox"
+            tabIndex={0}
+            aria-label="Memories in this file"
+            onKeyDown={onListKey}
+          >
+            {rows.length === 0 && (
+              <p className="mem-message mem-message--quiet">
+                {sel?.path === USER_FILE_PATH
+                  ? 'Shared preferences come in a later version.'
+                  : 'Nothing here yet.'}
+              </p>
+            )}
+            {rows.map((r) => (
+              <div
+                key={r.itemId}
+                role="option"
+                aria-selected={r.itemId === itemId}
+                className="mem-row"
+                data-item={r.itemId}
+                data-status={r.status}
+                onClick={() => pickRow(r)}
+              >
+                <span className="mem-row-title">
+                  {r.pinned && (
+                    <PinIcon className="mem-pin size-3" aria-label="Pinned" role="img" />
+                  )}
+                  {r.title}
+                </span>
+                <span className="mem-row-meta">
+                  <Marks row={r} />
+                  <span>{KIND_LABEL[r.kind]}</span>
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
         <section className="mem-file" aria-label="Memory file" data-memory-file>
-          <article className="mem-doc">
-            <header className="mem-doc-head">
-              <code className="mem-path" data-memory-path>
-                {viewPath}
-              </code>
-              {row && (
-                <p className="mem-doc-meta">
-                  <span>{SOURCE_LABEL[row.source] ?? row.source}</span>
-                  <span>{dateOf(row.createdAt)}</span>
-                  <Marks row={row} />
+          {compose ? (
+            <article className="mem-doc">
+              <header className="mem-doc-head">
+                <p className="mem-form-title">
+                  {compose.mode === 'add'
+                    ? `New memory${composeFolder ? ` in ${composeFolder.mogName}` : ''}`
+                    : 'Edit memory'}
+                </p>
+              </header>
+              <MemoryForm
+                key={compose.mode === 'edit' ? compose.itemId : `add-${compose.mogId}`}
+                mode={compose.mode}
+                initial={composeRow}
+                busy={busy}
+                error={formError}
+                onSubmit={submit}
+                onCancel={closeForm}
+              />
+            </article>
+          ) : (
+            <article className="mem-doc">
+              <header className="mem-doc-head">
+                <code className="mem-path" data-memory-path>
+                  {viewPath}
+                </code>
+                {row && (
+                  <p className="mem-doc-meta">
+                    <span>{SOURCE_LABEL[row.source] ?? row.source}</span>
+                    <span>{dateOf(row.createdAt)}</span>
+                    <Marks row={releasedAt === undefined ? row : { ...row, releasedAt }} pinned />
+                  </p>
+                )}
+              </header>
+              {quarantined && (
+                <p className="mem-note" role="note" data-memory-quarantine-note>
+                  <span>{QUARANTINE_MESSAGE}</span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={rate}
+                    data-action="release"
+                    aria-label="Release this memory to Genie and the agent"
+                  >
+                    Release
+                  </Button>
                 </p>
               )}
-            </header>
-            {row?.status === 'quarantined' && (
-              <p className="mem-note" role="note" data-memory-quarantine-note>
-                This memory reads like an instruction to an assistant. Bottle keeps it, but never
-                gives it to Genie or the agent. If you trust it, click Useful: then it is a normal
-                memory.
-              </p>
-            )}
-            {parts ? (
-              <>
-                <div className="mem-doc-body">
-                  {row?.status === 'quarantined' ? (
-                    <pre className="mem-plain">{parts.body.trim()}</pre>
-                  ) : (
-                    <SafeMarkdown text={parts.body} trust={NO_LINKS} />
-                  )}
-                </div>
-                <details className="mem-front">
-                  <summary>File details</summary>
-                  <dl>
-                    {parts.fields.map(([k, v]) => (
-                      <div key={k} className="mem-field">
-                        <dt>{k}</dt>
-                        <dd>{v}</dd>
-                      </div>
-                    ))}
-                  </dl>
-                </details>
-              </>
-            ) : (
-              <p className="mem-message mem-message--quiet" data-memory-file-loading>
-                Loading the file…
-              </p>
-            )}
-            {row && (
-              <footer className="mem-doc-actions">
-                {confirming ? (
-                  <>
-                    <span className="mem-confirm-text">Delete this memory?</span>
-                    <Button type="button" variant="destructive" size="sm" onClick={startDelete}>
-                      Delete
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setConfirming(false)}
-                    >
-                      Cancel
-                    </Button>
-                  </>
-                ) : (
-                  <>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      aria-pressed={row.rating === 1}
-                      disabled={row.rating === 1}
-                      onClick={rate}
-                      data-action="thumbs-up"
-                    >
-                      <ThumbsUpIcon aria-hidden="true" />
-                      Useful
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={startDelete}
-                      data-action="thumbs-down"
-                    >
-                      <ThumbsDownIcon aria-hidden="true" />
-                      Not useful
-                    </Button>
-                    <span className="mem-spacer" />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setConfirming(true)}
-                    >
-                      Delete…
-                    </Button>
-                  </>
-                )}
-              </footer>
-            )}
-          </article>
+              {parts ? (
+                <>
+                  <div className="mem-doc-body">
+                    {quarantined ? (
+                      <pre className="mem-plain">{parts.body.trim()}</pre>
+                    ) : (
+                      <SafeMarkdown text={parts.body} trust={NO_LINKS} />
+                    )}
+                  </div>
+                  <details className="mem-front">
+                    <summary>File details</summary>
+                    <dl>
+                      {parts.fields.map(([k, v]) => (
+                        <div key={k} className="mem-field">
+                          <dt>{k}</dt>
+                          <dd>{v}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </details>
+                </>
+              ) : (
+                <p className="mem-message mem-message--quiet" data-memory-file-loading>
+                  Loading the file…
+                </p>
+              )}
+              {row && (
+                <footer className="mem-doc-actions">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    aria-pressed={row.rating === 1}
+                    disabled={row.rating === 1}
+                    onClick={rate}
+                    data-action="thumbs-up"
+                  >
+                    <ThumbsUpIcon aria-hidden="true" />
+                    Useful
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={startDelete}
+                    data-action="thumbs-down"
+                  >
+                    <ThumbsDownIcon aria-hidden="true" />
+                    Not useful
+                  </Button>
+                  <span className="mem-spacer" />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={!itemFields}
+                    onClick={openEdit}
+                    data-action="edit"
+                  >
+                    <PencilIcon aria-hidden="true" />
+                    Edit
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={startDelete}
+                    data-action="delete"
+                  >
+                    Delete
+                  </Button>
+                </footer>
+              )}
+            </article>
+          )}
         </section>
       </div>
     );
   }
 
+  const toastText = pending ? 'Memory deleted' : toast?.text;
+  const toastKeyNow = pending ? -1 : toast?.key;
+
   return (
     <section className="mem" hidden={!active} aria-label="Memory" data-memory-area>
       {body}
-      {pending && (
-        <div className="mem-toast" role="status" data-memory-undo>
-          <span>Memory deleted</span>
-          <Button type="button" variant="link" size="sm" onClick={undo}>
+      {toastText !== undefined && (
+        <motion.div
+          key={toastKeyNow}
+          className="mem-toast"
+          role="status"
+          data-memory-undo
+          initial={reduce ? false : { opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+        >
+          <span>{toastText}</span>
+          <Button
+            type="button"
+            variant="link"
+            size="sm"
+            onClick={pending ? undoDelete : toast?.undo}
+            data-action="undo"
+          >
             Undo
           </Button>
-        </div>
+        </motion.div>
       )}
     </section>
   );
