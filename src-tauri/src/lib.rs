@@ -286,6 +286,11 @@ pub fn run() {
     builder
         .manage(ipc::BrainChannel::default())
         .manage(ipc::HubChannel::default())
+        // #574 (ADR 0113): the one ticket store for user-only memory writes. `ipc.rs` reads it
+        // with `try_state`; `memory_host` mints and redeems.
+        .manage(std::sync::Arc::new(
+            mog_core::action_ticket::ActionTickets::new(),
+        ))
         // #453 (CAP-22): the app-wide settings for `app_setting_*`, in memory until #77.
         // `install_capture` connects them to the mic. Managed before `setup` runs it.
         .manage(std::sync::Arc::new(

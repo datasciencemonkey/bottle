@@ -333,6 +333,8 @@ pub struct MemoryRow {
     pub rating: i64,
     /// When the user last rated or edited the item.
     pub reviewed_ms: Option<i64>,
+    /// When the user released the item from quarantine.
+    pub released_ms: Option<i64>,
 }
 
 impl MemoryRow {
@@ -381,6 +383,7 @@ impl MemoryRow {
             last_used_ms: v.get("lastUsedAt").and_then(Value::as_i64),
             rating: v.get("rating").and_then(Value::as_i64).unwrap_or(0),
             reviewed_ms: v.get("reviewedAt").and_then(Value::as_i64),
+            released_ms: v.get("releasedAt").and_then(Value::as_i64),
         })
     }
 
@@ -530,6 +533,9 @@ pub fn render_item(row: &MemoryRow, level: usize, offset_s: i32) -> String {
     }
     if row.is_new() {
         meta.push("New".to_owned());
+    }
+    if row.released_ms.is_some() {
+        meta.push("Released".to_owned());
     }
     match row.status.as_str() {
         "stale" => meta.push("Not used lately".to_owned()),

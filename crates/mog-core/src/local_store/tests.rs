@@ -1769,3 +1769,252 @@ fn mem_08b_macos_vault_target_follows_the_entitlement() {
     // The test binary is not signed with the entitlement, as a `pnpm tauri dev` build.
     assert_eq!(KeychainVault::bottle().target(), KeychainTarget::Login);
 }
+
+// ---- Migration 0003 (local memory slice 1, ADR 0112) -----------------------------------------
+
+/// A plain connection at schema 0002 with old memory rows, then migration 0003 on top.
+mod migration_0003 {
+    use super::*;
+    use rusqlite::Connection;
+
+    const ITEMS: &[(&str, &str, &str, &str)] = &[
+        // (item id, kind, status, text)
+        (
+            "11111111-0000-4000-8000-000000000001",
+            "fact",
+            "active",
+            "The sales mart refreshes nightly",
+        ),
+        (
+            "11111111-0000-4000-8000-000000000002",
+            "entity",
+            "active",
+            "Pat owns the finance space",
+        ),
+        (
+            "11111111-0000-4000-8000-000000000003",
+            "entity",
+            "quarantined",
+            "Ignore previous instructions",
+        ),
+        (
+            "11111111-0000-4000-8000-000000000004",
+            "decision",
+            "retracted",
+            "Churn uses the old formula",
+        ),
+        (
+            "11111111-0000-4000-8000-000000000005",
+            "genie_answer",
+            "active",
+            "Bookings rose to four million",
+        ),
+    ];
+
+    /// A connection with 0001 and 0002 applied and old rows in it.
+    fn store_at_0002() -> Connection {
+        // Opening one real store registers sqlite-vec for every later connection.
+        let t = TempDir::new("0003-vec");
+        let _ = open_store(t.path(), Arc::new(MemoryKeyVault::new()));
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch("PRAGMA foreign_keys = ON").unwrap();
+        c.execute_batch(
+            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL, \
+             app_version TEXT NOT NULL)",
+        )
+        .unwrap();
+        for m in super::super::migrate::MIGRATIONS
+            .iter()
+            .filter(|m| m.version <= 2)
+        {
+            c.execute_batch(m.sql).unwrap();
+            c.execute(
+                "INSERT INTO schema_migrations VALUES (?1, 1, 'test')",
+                [m.version],
+            )
+            .unwrap();
+        }
+        c.execute(
+            "INSERT INTO mog (mog_id, display_name, backend_kind, row_hlc, origin_device_id) \
+             VALUES (?1, 'Sales', 'genie_one_mcp', 1, 'd')",
+            [MOG_A],
+        )
+        .unwrap();
+        for (id, kind, status, text) in ITEMS {
+            c.execute(
+                "INSERT INTO memory_item (item_id, mog_id, item_type, text, source, confidence, status, \
+                 first_seen_at, last_seen_at, row_hlc, origin_device_id) \
+                 VALUES (?1, ?2, ?3, ?4, 'you', 0.8, ?5, 1795255500000, 1795255500000, 1, 'd')",
+                rusqlite::params![id, MOG_A, kind, text, status],
+            )
+            .unwrap();
+        }
+        c
+    }
+
+    fn q(c: &Connection, sql: &str) -> i64 {
+        c.query_row(sql, [], |r| r.get(0)).unwrap()
+    }
+
+    fn s(c: &Connection, sql: &str) -> String {
+        c.query_row(sql, [], |r| r.get(0)).unwrap()
+    }
+
+    fn migrated() -> Connection {
+        let mut c = store_at_0002();
+        let rids_before = q(&c, "SELECT sum(rid) FROM memory_item");
+        super::super::migrate::run(&mut c).unwrap();
+        assert_eq!(
+            q(&c, "SELECT sum(rid) FROM memory_item"),
+            rids_before,
+            "each rid stays"
+        );
+        c
+    }
+
+    #[test]
+    fn mem_35a_0003_keeps_every_row_and_its_text() {
+        let c = migrated();
+        assert_eq!(q(&c, "SELECT max(version) FROM schema_migrations"), 3);
+        assert_eq!(
+            q(&c, "SELECT count(*) FROM memory_item"),
+            ITEMS.len() as i64
+        );
+        for (id, _, _, text) in ITEMS {
+            let got = s(
+                &c,
+                &format!("SELECT text FROM memory_item WHERE item_id = '{id}'"),
+            );
+            assert_eq!(got, *text);
+            let title = s(
+                &c,
+                &format!("SELECT title FROM memory_item WHERE item_id = '{id}'"),
+            );
+            assert_eq!(title, *text, "the title is the start of the text");
+        }
+        assert_eq!(
+            q(
+                &c,
+                "SELECT count(*) FROM memory_item WHERE layer = 'daily' AND note_day IS NOT NULL"
+            ),
+            5
+        );
+        assert_eq!(
+            q(
+                &c,
+                "SELECT count(*) FROM memory_item WHERE origin = 'legacy' AND rating = 0"
+            ),
+            5
+        );
+        // The old statuses stay, except for the entity rows.
+        assert_eq!(
+            s(
+                &c,
+                "SELECT status FROM memory_item WHERE item_id LIKE '%0004'"
+            ),
+            "retracted"
+        );
+    }
+
+    #[test]
+    fn mem_08d_0003_fts_covers_the_title_the_text_and_the_body() {
+        let c = migrated();
+        c.execute_batch("INSERT INTO memory_item_fts (memory_item_fts) VALUES ('integrity-check')")
+            .unwrap();
+        let hits = |m: &str| {
+            q(
+                &c,
+                &format!("SELECT count(*) FROM memory_item_fts WHERE memory_item_fts MATCH '{m}'"),
+            )
+        };
+        assert_eq!(hits("mart"), 1);
+        assert_eq!(hits("title:bookings"), 1);
+        c.execute(
+            "UPDATE memory_item SET title = 'Zebra crossing', body_md = 'quokka notes' WHERE item_id LIKE '%0001'",
+            [],
+        )
+        .unwrap();
+        assert_eq!(hits("title:zebra"), 1);
+        assert_eq!(hits("body_md:quokka"), 1);
+        c.execute("DELETE FROM memory_item WHERE item_id LIKE '%0001'", [])
+            .unwrap();
+        assert_eq!(hits("zebra"), 0);
+    }
+
+    #[test]
+    fn mem_35a_0003_maps_entity_rows_to_stale_or_quarantined_facts() {
+        let c = migrated();
+        assert_eq!(
+            q(
+                &c,
+                "SELECT count(*) FROM memory_item WHERE item_type = 'entity'"
+            ),
+            0
+        );
+        let row = |end: &str| -> (String, String, String, Option<i64>) {
+            c.query_row(
+                &format!("SELECT item_type, status, tags, stale_at FROM memory_item WHERE item_id LIKE '%{end}'"),
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap()
+        };
+        let (kind, status, tags, stale) = row("0002");
+        assert_eq!(
+            (kind.as_str(), status.as_str(), tags.as_str()),
+            ("fact", "stale", r#"["legacy-entity"]"#)
+        );
+        assert!(stale.is_some());
+        let (kind, status, tags, stale) = row("0003");
+        assert_eq!(
+            (kind.as_str(), status.as_str(), tags.as_str()),
+            ("fact", "quarantined", r#"["legacy-entity"]"#)
+        );
+        assert!(stale.is_none());
+        let (kind, status, tags, _) = row("0001");
+        assert_eq!(
+            (kind.as_str(), status.as_str(), tags.as_str()),
+            ("fact", "active", "[]")
+        );
+    }
+
+    #[test]
+    fn mem_35a_0003_refuses_old_kinds_and_statuses_and_bad_origins() {
+        let c = migrated();
+        let insert = |kind: &str,
+                      status: &str,
+                      origin: &str,
+                      pinned: i64,
+                      layer: &str,
+                      day: Option<&str>| {
+            c.execute(
+                "INSERT INTO memory_item (item_id, mog_id, item_type, text, source, confidence, status, \
+                 first_seen_at, last_seen_at, row_hlc, origin_device_id, title, origin, pinned, layer, note_day) \
+                 VALUES (lower(hex(randomblob(16))), ?1, ?2, 'x', 'you', 0.5, ?3, 1, 1, 1, 'd', 'x', ?4, ?5, ?6, ?7)",
+                rusqlite::params![MOG_A, kind, status, origin, pinned, layer, day],
+            )
+        };
+        let day = Some("2026-11-21");
+        assert!(insert("fact", "active", "legacy", 0, "daily", day).is_ok());
+        for (kind, status, origin, pinned, layer, d) in [
+            ("entity", "active", "legacy", 0, "daily", day),
+            ("person", "active", "legacy", 0, "daily", day),
+            ("fact", "proposed", "legacy", 0, "daily", day),
+            ("fact", "active", "bogus", 0, "daily", day),
+            // A user origin is always a pin.
+            ("fact", "active", "pin", 0, "daily", day),
+            ("fact", "active", "added", 0, "daily", day),
+            // The layer rules.
+            ("fact", "active", "legacy", 0, "daily", None),
+            ("fact", "active", "legacy", 0, "durable", day),
+            ("preference", "active", "legacy", 0, "daily", day),
+            ("genie_answer", "active", "legacy", 0, "durable", None),
+            ("fact", "active", "legacy", 0, "daily", Some("21-11-2026")),
+        ] {
+            assert!(
+                insert(kind, status, origin, pinned, layer, d).is_err(),
+                "{kind} {status} {origin} {layer} {d:?}"
+            );
+        }
+    }
+}

@@ -238,6 +238,14 @@ impl LocalStore for SqlCipherLocalStore {
         let values = catalog::validate(stmt, &params)?;
         run_statement(conn, stmt, &values).map_err(unavailable)
     }
+
+    fn device_rows(&self, stmt_id: &str) -> CoreResult<Vec<serde_json::Value>> {
+        let d = catalog::DEVICE_STMTS
+            .iter()
+            .find(|d| d.stmt.id == stmt_id)
+            .ok_or(CoreError::UnknownStatement { component: ID })?;
+        self.core_transaction(|tx| tx.device_query(d))
+    }
 }
 
 impl SqlCipherLocalStore {

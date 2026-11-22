@@ -1,8 +1,8 @@
 # ADR 0112: Local memories in an OpenClaw-style virtual folder on the SQLCipher store
 
-- Status: proposed (draft; the contract gate of slice 0 is open)
+- Status: accepted (the owner approved slice 1 on 2026-11-22)
 - Issue: local memory plan (PR #623), slices 0 and 1
-- Date: 2026-11-21
+- Date: 2026-11-22
 - Owner: impl-memory-s1
 
 ## Context
@@ -39,8 +39,12 @@ files on disk.
 4. **The grammar is fixed.** Rust accepts only these paths: `/memories`, `/memories/USER.md`,
    `/memories/<mog-slug>/MEMORY.md` and `/memories/<mog-slug>/memory/<date>.md`, each with an
    optional `#<slug>`. The date must be a real calendar date. Rust refuses each other path.
-5. **The slugs.**
-   - An item slug is the lower-case ASCII form of its title, 64 characters or less.
+5. **The slugs and the day.**
+   - The core computes the slug and the `note_day` (the `Slug` and `Day` params). A caller that
+     sends either gets `invalid_args`. The day is the local calendar day of the write time at the
+     device offset; tests inject the offset.
+   - An item slug is the lower-case ASCII form of its title (else its summary, else its body), 64
+     characters or less. An edit computes the slug again from the new title.
    - A clash in the same file adds `-<first 6 hex of the item id>`.
    - A unique index on `(mog_id, layer, note_day, slug)` keeps one address for one row.
    - A MOG slug is the slug of the MOG name. A clash adds `-<first 6 of the MOG id>`.
@@ -50,7 +54,8 @@ files on disk.
    - Each item is a section: a heading, a hidden metadata line with codes, ids and times only, a
      visible line (time, source, origin, pin, "New"), the body and the tags.
    - MEMORY.md groups its items by kind.
-   - The user audience (hub, export) sees each item in use, with a mark.
+   - The user audience (hub, export) sees each item in use (`active`, `stale`, `quarantined`),
+     with a mark: Pinned, New, Quarantined, Not used lately, Released.
    - The model audience sees only `active` items, and never a quarantined one (SEC-24b).
      MEMORY.md for a model has at most 200 items and 25 KB. One view has at most 16,000
      characters.
@@ -59,10 +64,17 @@ files on disk.
      stay valid.
    - It adds the columns: title, body, tags, origin, layer, note_day, slug, profile, the
      recording link, the last use and use count, `stale_at`, the remove fields, `rating`
-     (-1, 0, 1) and `reviewed_at`.
-   - Each old row becomes `daily`.
-   - Each old `entity` row becomes a `fact` with the tag `legacy-entity`.
-8. **Export** (a later slice) writes real `.md` files in exactly this layout. A warning first says
+     (-1, 0, 1), `reviewed_at` and `released_at` (the user released a quarantine, ADR 0113).
+   - FTS5 covers the title, the summary and the body.
+   - Each old row becomes `daily`, in the note of the day it was first seen, with origin `legacy`.
+   - Each old `entity` row becomes a `fact` with the tag `legacy-entity`. If it is not
+     quarantined it becomes `stale`, so recall does not use it until the user rates it up.
+   - The table refuses the kinds `entity` and `person`, the status `proposed`, an unknown
+     origin, and a user origin (`pin`, `added`) on a row that is not pinned.
+8. **The read path.** `mem.item.list` and `mem.file.get` are Rust handlers over fixed
+   MOG-scoped statements and this renderer. The MOG folder names come from the device-wide
+   `mem.mog.names` (ids and names only). A MOG reads only its own folder and USER.md.
+9. **Export** (a later slice) writes real `.md` files in exactly this layout. A warning first says
    that the files have no encryption (MEM-38a, MEM-38b).
 
 ## Later slices (recorded here, not built now)
@@ -79,5 +91,5 @@ files on disk.
 
 - R-1 to R-6 of the plan hold with no new crypto.
 - The user cannot open a live file in an outside editor. Export is the way out and the backup.
-- Code: `local_store/memory_files.rs`, migration 0003, and the catalog ids `mem.item.list` and
-  `mem.file.get`.
+- Code: `local_store/memory_files.rs`, migration 0003, `local_store.rs` (the handlers), and the
+  catalog ids `mem.item.list` and `mem.file.get`.

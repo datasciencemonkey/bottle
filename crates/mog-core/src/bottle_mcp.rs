@@ -85,7 +85,7 @@ const STOP_POLL: Duration = Duration::from_millis(50);
 pub const AGENT_MOODS: [&str; 5] = ["idle", "processing", "answering", "success", "error"];
 
 /// The memory item types that the agent may write. `genie_answer` rows come from Genie only.
-pub const AGENT_ITEM_TYPES: [&str; 4] = ["decision", "fact", "entity", "open_question"];
+pub const AGENT_ITEM_TYPES: [&str; 3] = ["decision", "fact", "open_question"];
 
 const DEFAULT_LIMIT: u32 = 10;
 const MAX_LIMIT: u32 = 50;

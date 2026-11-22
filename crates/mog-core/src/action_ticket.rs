@@ -1,27 +1,28 @@
 //! Host-minted user-action tickets (#574, MEM-28b; ADR 0113).
 //!
-//! A "Remember this" pin needs proof of a user action, and the brain cannot give that proof: it
-//! is code, not a user. So the host mints a ticket on the user's own action and the brain passes
-//! it back with the pin:
-//! - `Ui`: the card window of a MOG sends the click `remember_this`. Only a view window can send
-//!   `view_emit`; the brain cannot.
-//! - `Voice`: the host's own transcript of the user's speech holds "remember this: <text>"
-//!   ([`remember_body`]). The ticket binds the SHA-256 of `<text>`, so the pin must hold exactly
-//!   the words the user said.
-//! - `HubRate`: the hub sends a thumbs up (`memory.rate`) on one item. The ticket binds the item
-//!   id. With it, and only with it, the host lets the thumbs up release a `quarantined` item to
-//!   `active` (owner ruling 2026-11-21, "Quarantine, thumbs up releases"; SEC-24b amended).
+//! Some memory writes need proof of a user action, and the brain cannot give that proof: it is
+//! code, not a user. So the host mints a ticket on the user's own action and the brain passes it
+//! back with the write. The host redeems it before the write runs:
 //!
-//! Each ticket has a [`Purpose`], so a pin ticket can never release an item and a release ticket
-//! can never pin.
+//! | Trigger | Minted on | Purpose | Binds |
+//! |---|---|---|---|
+//! | `Ui` | a card `memory.remember` click | `Pin` | the MOG only |
+//! | `Voice` | Rust's own transcript holds "remember this: …" | `Pin` | `[text]` |
+//! | `HubAdd` | a hub `memory.add` click | `Pin` | `["add", kind, title, body]` |
+//! | `HubRate` | a hub `memory.rate` click | `Rate` | `[itemId]` |
+//! | `HubEdit` | a hub `memory.edit` click | `Edit` | `["edit", itemId, kind, title, body]` |
 //!
-//! A ticket is single-use, bound to one MOG, and expires after [`TICKET_TTL_MS`]. [`ActionTickets::redeem`]
-//! takes it out of the map before the write runs, so a replay is refused. The map holds at
-//! most [`MAX_OPEN`] tickets; a new one drops the oldest. A ticket holds no text, only a hash.
+//! The binding is the SHA-256 of the compact JSON array. At redeem time the ticket builds the
+//! array again from the write params (`itemType` is the kind), so the write must hold exactly
+//! what the user clicked or said. A ticket is single-use, bound to one MOG, and expires after
+//! [`TICKET_TTL_MS`]. [`ActionTickets::redeem`] takes it out of the map first, so a replay or a
+//! second try after a refusal is refused. The map holds at most [`MAX_OPEN`] tickets; a new one
+//! drops the oldest. A ticket holds no text, only a hash.
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 /// How long a ticket is valid.
@@ -36,24 +37,31 @@ pub enum Trigger {
     Ui,
     /// The voice command "remember this: <text>".
     Voice,
-    /// A thumbs up on one item in the hub.
+    /// "New memory" saved in the hub.
+    HubAdd,
+    /// A thumbs up in the hub (it also releases a quarantined item).
     HubRate,
+    /// An edit saved in the hub.
+    HubEdit,
 }
 
 /// What a ticket allows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Purpose {
-    /// A "remember this" pin (`mem.item.write` with `pinned: true`).
+    /// A pinned `mem.item.write`.
     Pin,
-    /// A thumbs up that may release a quarantined item (`mem.item.rate`).
+    /// `mem.item.rate`.
     Rate,
+    /// `mem.item.edit`.
+    Edit,
 }
 
 impl Trigger {
-    fn purpose(self) -> Purpose {
+    pub fn purpose(self) -> Purpose {
         match self {
-            Trigger::Ui | Trigger::Voice => Purpose::Pin,
+            Trigger::Ui | Trigger::Voice | Trigger::HubAdd => Purpose::Pin,
             Trigger::HubRate => Purpose::Rate,
+            Trigger::HubEdit => Purpose::Edit,
         }
     }
 }
@@ -61,9 +69,10 @@ impl Trigger {
 #[derive(Debug, Clone)]
 struct Ticket {
     id: String,
-    mog_id: String,
+    /// `None` only for a voice ticket whose MOG the host could not tell (see `mint_voice`).
+    mog_id: Option<String>,
     trigger: Trigger,
-    text_sha256: Option<[u8; 32]>,
+    binding: Option<[u8; 32]>,
     expires_at_ms: u64,
 }
 
@@ -73,9 +82,10 @@ struct Ticket {
 pub enum Refusal {
     Unknown,
     Expired,
-    WrongMog,
-    WrongText,
     WrongPurpose,
+    WrongMog,
+    /// The write does not hold what the user clicked or said.
+    WrongBinding,
 }
 
 /// The open tickets of the process.
@@ -84,8 +94,75 @@ pub struct ActionTickets {
     open: Mutex<VecDeque<Ticket>>,
 }
 
-fn sha256(text: &str) -> [u8; 32] {
-    Sha256::digest(text.as_bytes()).into()
+fn hash(v: &Value) -> [u8; 32] {
+    // `to_string` of a `Value` is compact JSON with no extra white space.
+    Sha256::digest(v.to_string().as_bytes()).into()
+}
+
+fn str_of<'a>(p: &'a Value, key: &str) -> Option<&'a str> {
+    p.get(key).and_then(Value::as_str)
+}
+
+/// A field that must be absent or `null`.
+fn absent(p: &Value, key: &str) -> bool {
+    p.get(key).is_none_or(Value::is_null)
+}
+
+/// The binding array of `trigger` from the write params, or `None` if the params break a rule
+/// of the trigger.
+fn binding_of(trigger: Trigger, p: &Value) -> Option<Option<Value>> {
+    let origin_ok = |want: Option<&str>| match (str_of(p, "origin"), want) {
+        (None, None) => absent(p, "origin"),
+        (Some(o), None) => o == "pin",
+        (Some(o), Some(w)) => o == w,
+        (None, Some(_)) => false,
+    };
+    match trigger {
+        Trigger::Ui => origin_ok(None).then_some(None),
+        Trigger::Voice => {
+            if !absent(p, "title") || !absent(p, "body") || !origin_ok(None) {
+                return None;
+            }
+            Some(Some(json!([str_of(p, "text")?])))
+        }
+        Trigger::HubAdd => {
+            if !absent(p, "text") || !origin_ok(Some("added")) {
+                return None;
+            }
+            Some(Some(json!([
+                "add",
+                str_of(p, "itemType")?,
+                str_of(p, "title").unwrap_or(""),
+                str_of(p, "body")?,
+            ])))
+        }
+        Trigger::HubRate => Some(Some(json!([str_of(p, "itemId")?]))),
+        Trigger::HubEdit => Some(Some(json!([
+            "edit",
+            str_of(p, "itemId")?,
+            str_of(p, "itemType")?,
+            str_of(p, "title")?,
+            str_of(p, "body")?,
+        ]))),
+    }
+}
+
+/// A new random ticket id (a UUID v4 from the OS random source), or `None` if the OS gives no
+/// random bytes: then the host mints no ticket and the user-only write is refused.
+pub fn new_ticket_id() -> Option<String> {
+    let mut b = [0u8; 16];
+    getrandom::fill(&mut b).ok()?;
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    let h: String = b.iter().map(|x| format!("{x:02x}")).collect();
+    Some(format!(
+        "{}-{}-{}-{}-{}",
+        &h[0..8],
+        &h[8..12],
+        &h[12..16],
+        &h[16..20],
+        &h[20..32]
+    ))
 }
 
 impl ActionTickets {
@@ -102,9 +179,9 @@ impl ActionTickets {
     fn mint(
         &self,
         id: String,
-        mog_id: &str,
+        mog_id: Option<&str>,
         trigger: Trigger,
-        text: Option<&str>,
+        binding: Option<Value>,
         now_ms: u64,
     ) -> String {
         let mut open = self.lock();
@@ -114,80 +191,96 @@ impl ActionTickets {
         }
         open.push_back(Ticket {
             id: id.clone(),
-            mog_id: mog_id.to_owned(),
+            mog_id: mog_id.map(str::to_owned),
             trigger,
-            text_sha256: text.map(sha256),
+            binding: binding.as_ref().map(hash),
             expires_at_ms: now_ms.saturating_add(TICKET_TTL_MS),
         });
         id
     }
 
-    /// A ticket for a card click of `mog_id`. `id` is a new UUID.
+    /// A card "Remember this" click of `mog_id`. `id` is a new UUID.
     pub fn mint_ui(&self, id: String, mog_id: &str, now_ms: u64) -> String {
-        self.mint(id, mog_id, Trigger::Ui, None, now_ms)
+        self.mint(id, Some(mog_id), Trigger::Ui, None, now_ms)
     }
 
-    /// A ticket for the voice command of `mog_id`, bound to the remembered `text`.
-    pub fn mint_voice(&self, id: String, mog_id: &str, text: &str, now_ms: u64) -> String {
-        self.mint(id, mog_id, Trigger::Voice, Some(text), now_ms)
+    /// The voice command, bound to the remembered `text`. `mog_id` is the MOG of the lease, if
+    /// the host can tell it; with `None` the ticket fits a pin of exactly `text` in any MOG.
+    pub fn mint_voice(&self, id: String, mog_id: Option<&str>, text: &str, now_ms: u64) -> String {
+        self.mint(id, mog_id, Trigger::Voice, Some(json!([text])), now_ms)
     }
 
-    /// A ticket for a hub thumbs up on the item `item_id` of `mog_id`.
-    pub fn mint_rate(&self, id: String, mog_id: &str, item_id: &str, now_ms: u64) -> String {
-        self.mint(id, mog_id, Trigger::HubRate, Some(item_id), now_ms)
+    /// A hub "New memory" save.
+    pub fn mint_hub_add(
+        &self,
+        id: String,
+        mog_id: &str,
+        kind: &str,
+        title: &str,
+        body: &str,
+        now_ms: u64,
+    ) -> String {
+        let b = json!(["add", kind, title, body]);
+        self.mint(id, Some(mog_id), Trigger::HubAdd, Some(b), now_ms)
     }
 
-    /// Use the ticket `id` for a pin of `text` in `mog_id`. The ticket is gone after this call,
-    /// also when it is refused, so it can never be tried twice.
+    /// A hub thumbs up on `item_id`.
+    pub fn mint_hub_rate(&self, id: String, mog_id: &str, item_id: &str, now_ms: u64) -> String {
+        self.mint(
+            id,
+            Some(mog_id),
+            Trigger::HubRate,
+            Some(json!([item_id])),
+            now_ms,
+        )
+    }
+
+    /// A hub edit of `item_id`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn mint_hub_edit(
+        &self,
+        id: String,
+        mog_id: &str,
+        item_id: &str,
+        kind: &str,
+        title: &str,
+        body: &str,
+        now_ms: u64,
+    ) -> String {
+        let b = json!(["edit", item_id, kind, title, body]);
+        self.mint(id, Some(mog_id), Trigger::HubEdit, Some(b), now_ms)
+    }
+
+    /// Use the ticket `id` for a write of `purpose` with `params` in `mog_id`. The ticket is gone
+    /// after this call, also when it is refused, so it can never be tried twice.
     pub fn redeem(
         &self,
         id: &str,
         mog_id: &str,
-        text: &str,
-        now_ms: u64,
-    ) -> Result<Trigger, Refusal> {
-        self.redeem_for(Purpose::Pin, id, mog_id, text, now_ms)
-    }
-
-    /// Use the ticket `id` for a thumbs up on `item_id` in `mog_id`.
-    pub fn redeem_rate(
-        &self,
-        id: &str,
-        mog_id: &str,
-        item_id: &str,
-        now_ms: u64,
-    ) -> Result<Trigger, Refusal> {
-        self.redeem_for(Purpose::Rate, id, mog_id, item_id, now_ms)
-    }
-
-    fn redeem_for(
-        &self,
         purpose: Purpose,
-        id: &str,
-        mog_id: &str,
-        bound: &str,
+        params: &Value,
         now_ms: u64,
     ) -> Result<Trigger, Refusal> {
-        let mut open = self.lock();
-        let at = open
-            .iter()
-            .position(|t| t.id == id)
-            .ok_or(Refusal::Unknown)?;
-        let t = open.remove(at).ok_or(Refusal::Unknown)?;
-        drop(open);
+        let t = {
+            let mut open = self.lock();
+            let at = open
+                .iter()
+                .position(|t| t.id == id)
+                .ok_or(Refusal::Unknown)?;
+            open.remove(at).ok_or(Refusal::Unknown)?
+        };
         if t.expires_at_ms <= now_ms {
             return Err(Refusal::Expired);
         }
         if t.trigger.purpose() != purpose {
             return Err(Refusal::WrongPurpose);
         }
-        if t.mog_id != mog_id {
+        if t.mog_id.as_deref().is_some_and(|m| m != mog_id) {
             return Err(Refusal::WrongMog);
         }
-        if let Some(h) = t.text_sha256 {
-            if h != sha256(bound) {
-                return Err(Refusal::WrongText);
-            }
+        let want = binding_of(t.trigger, params).ok_or(Refusal::WrongBinding)?;
+        if want.as_ref().map(hash) != t.binding {
+            return Err(Refusal::WrongBinding);
         }
         Ok(t.trigger)
     }
@@ -268,16 +361,33 @@ mod tests {
 
     const MOG_A: &str = "7f0c2e1a-3d4b-4c5e-9f60-1a2b3c4d5e6f";
     const MOG_B: &str = "0a1b2c3d-0000-4000-8000-000000000002";
+    const ITEM: &str = "33333333-0000-4000-8000-000000000003";
+    const ITEM_2: &str = "44444444-0000-4000-8000-000000000004";
     const T1: &str = "11111111-0000-4000-8000-000000000001";
-    const T2: &str = "22222222-0000-4000-8000-000000000002";
+
+    fn pin(text: &str) -> Value {
+        json!({ "mogId": MOG_A, "text": text, "pinned": true, "origin": "pin" })
+    }
+
+    fn add(kind: &str, title: &str, body: &str) -> Value {
+        json!({ "mogId": MOG_A, "itemType": kind, "title": title, "body": body,
+                "pinned": true, "origin": "added" })
+    }
+
+    fn edit(item: &str, kind: &str, title: &str, body: &str) -> Value {
+        json!({ "mogId": MOG_A, "itemId": item, "itemType": kind, "title": title, "body": body })
+    }
 
     #[test]
-    fn ac_1_2_a_ticket_works_once() {
+    fn ac_1_2_a_ui_ticket_works_once() {
         let t = ActionTickets::new();
-        let id = t.mint_ui(T1.into(), MOG_A, 1_000);
-        assert_eq!(t.redeem(&id, MOG_A, "any text", 2_000), Ok(Trigger::Ui));
+        t.mint_ui(T1.into(), MOG_A, 1_000);
         assert_eq!(
-            t.redeem(&id, MOG_A, "any text", 2_000),
+            t.redeem(T1, MOG_A, Purpose::Pin, &pin("x"), 2_000),
+            Ok(Trigger::Ui)
+        );
+        assert_eq!(
+            t.redeem(T1, MOG_A, Purpose::Pin, &pin("x"), 2_000),
             Err(Refusal::Unknown)
         );
     }
@@ -285,62 +395,188 @@ mod tests {
     #[test]
     fn an_unknown_ticket_is_refused() {
         let t = ActionTickets::new();
-        assert_eq!(t.redeem(T1, MOG_A, "x", 0), Err(Refusal::Unknown));
+        assert_eq!(
+            t.redeem(T1, MOG_A, Purpose::Pin, &pin("x"), 0),
+            Err(Refusal::Unknown)
+        );
     }
 
     #[test]
-    fn a_ticket_expires() {
+    fn a_ticket_expires_on_the_injected_clock() {
         let t = ActionTickets::new();
         t.mint_ui(T1.into(), MOG_A, 1_000);
         assert_eq!(
-            t.redeem(T1, MOG_A, "x", 1_000 + TICKET_TTL_MS),
+            t.redeem(T1, MOG_A, Purpose::Pin, &pin("x"), 1_000 + TICKET_TTL_MS),
             Err(Refusal::Expired)
         );
+        t.mint_ui(T1.into(), MOG_A, 1_000);
+        assert!(t
+            .redeem(
+                T1,
+                MOG_A,
+                Purpose::Pin,
+                &pin("x"),
+                1_000 + TICKET_TTL_MS - 1
+            )
+            .is_ok());
     }
 
     #[test]
     fn a_ticket_is_bound_to_its_mog_and_is_gone_after_a_refusal() {
         let t = ActionTickets::new();
         t.mint_ui(T1.into(), MOG_A, 0);
-        assert_eq!(t.redeem(T1, MOG_B, "x", 1), Err(Refusal::WrongMog));
-        assert_eq!(t.redeem(T1, MOG_A, "x", 1), Err(Refusal::Unknown));
+        assert_eq!(
+            t.redeem(T1, MOG_B, Purpose::Pin, &pin("x"), 1),
+            Err(Refusal::WrongMog)
+        );
+        assert_eq!(
+            t.redeem(T1, MOG_A, Purpose::Pin, &pin("x"), 1),
+            Err(Refusal::Unknown)
+        );
+    }
+
+    #[test]
+    fn a_ui_pin_cannot_claim_a_hub_add() {
+        let t = ActionTickets::new();
+        t.mint_ui(T1.into(), MOG_A, 0);
+        assert_eq!(
+            t.redeem(T1, MOG_A, Purpose::Pin, &add("fact", "", "x"), 1),
+            Err(Refusal::WrongBinding)
+        );
     }
 
     #[test]
     fn a_voice_ticket_is_bound_to_the_spoken_text() {
         let t = ActionTickets::new();
-        t.mint_voice(T1.into(), MOG_A, "the mart refreshes at six", 0);
+        t.mint_voice(T1.into(), Some(MOG_A), "the mart refreshes at six", 0);
         assert_eq!(
-            t.redeem(T1, MOG_A, "the mart refreshes at seven", 1),
-            Err(Refusal::WrongText)
+            t.redeem(
+                T1,
+                MOG_A,
+                Purpose::Pin,
+                &pin("the mart refreshes at seven"),
+                1
+            ),
+            Err(Refusal::WrongBinding)
         );
-        t.mint_voice(T2.into(), MOG_A, "the mart refreshes at six", 0);
+        t.mint_voice(T1.into(), Some(MOG_A), "the mart refreshes at six", 0);
         assert_eq!(
-            t.redeem(T2, MOG_A, "the mart refreshes at six", 1),
+            t.redeem(
+                T1,
+                MOG_A,
+                Purpose::Pin,
+                &pin("the mart refreshes at six"),
+                1
+            ),
+            Ok(Trigger::Voice)
+        );
+        // A voice pin has no title or body of its own.
+        t.mint_voice(T1.into(), Some(MOG_A), "x", 0);
+        let mut p = pin("x");
+        p["body"] = json!("other words");
+        assert_eq!(
+            t.redeem(T1, MOG_A, Purpose::Pin, &p, 1),
+            Err(Refusal::WrongBinding)
+        );
+        // With no lease MOG the ticket fits any MOG, but only the spoken text.
+        t.mint_voice(T1.into(), None, "x", 0);
+        assert_eq!(
+            t.redeem(T1, MOG_B, Purpose::Pin, &json!({"text": "x"}), 1),
             Ok(Trigger::Voice)
         );
     }
 
     #[test]
+    fn a_hub_add_binds_kind_title_body_and_origin() {
+        let t = ActionTickets::new();
+        t.mint_hub_add(T1.into(), MOG_A, "fact", "", "Mart at six", 0);
+        assert_eq!(
+            t.redeem(T1, MOG_A, Purpose::Pin, &add("fact", "", "Mart at six"), 1),
+            Ok(Trigger::HubAdd)
+        );
+        for p in [
+            add("decision", "", "Mart at six"),
+            add("fact", "T", "Mart at six"),
+            add("fact", "", "Mart at seven"),
+            {
+                let mut p = add("fact", "", "Mart at six");
+                p["origin"] = json!("pin");
+                p
+            },
+            {
+                let mut p = add("fact", "", "Mart at six");
+                p["text"] = json!("a different summary");
+                p
+            },
+        ] {
+            t.mint_hub_add(T1.into(), MOG_A, "fact", "", "Mart at six", 0);
+            assert_eq!(
+                t.redeem(T1, MOG_A, Purpose::Pin, &p, 1),
+                Err(Refusal::WrongBinding),
+                "{p}"
+            );
+        }
+        // A missing title binds as "".
+        t.mint_hub_add(T1.into(), MOG_A, "fact", "", "b", 0);
+        let mut p = add("fact", "", "b");
+        p.as_object_mut().map(|o| o.remove("title"));
+        assert!(t.redeem(T1, MOG_A, Purpose::Pin, &p, 1).is_ok());
+    }
+
+    #[test]
     fn a_rate_ticket_is_bound_to_its_item_and_its_purpose() {
         let t = ActionTickets::new();
-        let item = "33333333-0000-4000-8000-000000000003";
-        t.mint_rate(T1.into(), MOG_A, item, 0);
-        assert_eq!(t.redeem_rate(T1, MOG_A, item, 1), Ok(Trigger::HubRate));
-        t.mint_rate(T1.into(), MOG_A, item, 0);
+        let rate = |item: &str| json!({ "mogId": MOG_A, "itemId": item });
+        t.mint_hub_rate(T1.into(), MOG_A, ITEM, 0);
         assert_eq!(
-            t.redeem_rate(T1, MOG_A, "44444444-0000-4000-8000-000000000004", 1),
-            Err(Refusal::WrongText)
+            t.redeem(T1, MOG_A, Purpose::Rate, &rate(ITEM), 1),
+            Ok(Trigger::HubRate)
         );
-        // A rate ticket never pins, and a pin ticket never releases.
-        t.mint_rate(T1.into(), MOG_A, item, 0);
-        assert_eq!(t.redeem(T1, MOG_A, item, 1), Err(Refusal::WrongPurpose));
-        t.mint_ui(T2.into(), MOG_A, 0);
+        t.mint_hub_rate(T1.into(), MOG_A, ITEM, 0);
         assert_eq!(
-            t.redeem_rate(T2, MOG_A, item, 1),
+            t.redeem(T1, MOG_A, Purpose::Rate, &rate(ITEM_2), 1),
+            Err(Refusal::WrongBinding)
+        );
+        // A rate ticket never pins or edits, and a pin ticket never rates.
+        t.mint_hub_rate(T1.into(), MOG_A, ITEM, 0);
+        assert_eq!(
+            t.redeem(T1, MOG_A, Purpose::Pin, &pin("x"), 1),
+            Err(Refusal::WrongPurpose)
+        );
+        t.mint_hub_rate(T1.into(), MOG_A, ITEM, 0);
+        assert_eq!(
+            t.redeem(T1, MOG_A, Purpose::Edit, &edit(ITEM, "fact", "t", "b"), 1),
+            Err(Refusal::WrongPurpose)
+        );
+        t.mint_ui(T1.into(), MOG_A, 0);
+        assert_eq!(
+            t.redeem(T1, MOG_A, Purpose::Rate, &rate(ITEM), 1),
             Err(Refusal::WrongPurpose)
         );
         assert_eq!(t.open_count(), 0);
+    }
+
+    #[test]
+    fn an_edit_ticket_binds_item_kind_title_and_body() {
+        let t = ActionTickets::new();
+        t.mint_hub_edit(T1.into(), MOG_A, ITEM, "fact", "T", "B", 0);
+        assert_eq!(
+            t.redeem(T1, MOG_A, Purpose::Edit, &edit(ITEM, "fact", "T", "B"), 1),
+            Ok(Trigger::HubEdit)
+        );
+        for p in [
+            edit(ITEM_2, "fact", "T", "B"),
+            edit(ITEM, "decision", "T", "B"),
+            edit(ITEM, "fact", "T2", "B"),
+            edit(ITEM, "fact", "T", "B2"),
+        ] {
+            t.mint_hub_edit(T1.into(), MOG_A, ITEM, "fact", "T", "B", 0);
+            assert_eq!(
+                t.redeem(T1, MOG_A, Purpose::Edit, &p, 1),
+                Err(Refusal::WrongBinding),
+                "{p}"
+            );
+        }
     }
 
     #[test]
@@ -352,33 +588,40 @@ mod tests {
         assert_eq!(t.open_count(), MAX_OPEN);
         // The oldest went first.
         assert_eq!(
-            t.redeem("00000000-0000-4000-8000-000000000000", MOG_A, "x", 1),
+            t.redeem(
+                "00000000-0000-4000-8000-000000000000",
+                MOG_A,
+                Purpose::Pin,
+                &pin("x"),
+                1
+            ),
             Err(Refusal::Unknown)
         );
     }
 
     #[test]
     fn ac_1_3_the_voice_body() {
-        assert_eq!(
-            remember_body("remember this: the mart refreshes at six").as_deref(),
-            Some("the mart refreshes at six")
-        );
-        assert_eq!(
-            remember_body("Remember this, the mart refreshes at six.").as_deref(),
-            Some("the mart refreshes at six")
-        );
-        assert_eq!(
-            remember_body("Please remember that Q3 churn uses the new formula").as_deref(),
-            Some("Q3 churn uses the new formula")
-        );
-        assert_eq!(
-            remember_body("hey Bottle, remember this — EUR for amounts").as_deref(),
-            Some("EUR for amounts")
-        );
-        assert_eq!(
-            remember_body("ＲＥＭＥＭＢＥＲ this: x").as_deref(),
-            Some("x")
-        );
+        for (u, want) in [
+            (
+                "remember this: the mart refreshes at six",
+                "the mart refreshes at six",
+            ),
+            (
+                "Remember this, the mart refreshes at six.",
+                "the mart refreshes at six",
+            ),
+            (
+                "Please remember that Q3 churn uses the new formula",
+                "Q3 churn uses the new formula",
+            ),
+            (
+                "hey Bottle, remember this — EUR for amounts",
+                "EUR for amounts",
+            ),
+            ("ＲＥＭＥＭＢＥＲ this: x", "x"),
+        ] {
+            assert_eq!(remember_body(u).as_deref(), Some(want), "{u}");
+        }
     }
 
     #[test]
