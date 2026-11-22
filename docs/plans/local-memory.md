@@ -1,6 +1,6 @@
 # Plan: local file-system memories (capture, consolidate, recall)
 
-- Status: draft plan. The owner decided Q1, Q2, Q4, Q7, the layout (Q11) and auto-save with feedback (Q12) and the quarantine release (Q13) on 2026-11-21 (Section 15.1). The other questions stay open.
+- Status: draft plan. The owner decided Q1, Q2, Q4, Q7, the layout (Q11), auto-save with feedback (Q12) and the quarantine release (Q13) on 2026-11-21. The owner set the slice 1 scope (Q14) on 2026-11-22 (Section 15.1). The other questions stay open.
 - Date: 2026-11-21
 - Author: planner agent (branch `chore/plan-memory`)
 - Language: drafted to STE100 rules. A script checked the sentence lengths. Verbatim quotes of the owner are exempt. Nobody did the official dictionary check.
@@ -17,7 +17,7 @@ The owner wants Bottle to keep memories on the device. Bottle forms them from us
 2. Bottle uses the OpenClaw layout (decided): `USER.md`, one `MEMORY.md` for each MOG and dated daily notes. The rows stay the source of truth. The files are renderings.
 3. The home is the existing encrypted SQLCipher store (decided, Q1). Bottle shows it as a virtual folder `/memories`. Export gives real `.md` files.
 4. The user, the hub and the agent memory tool see files. The disk holds only the encrypted store.
-5. Slice 1 is small: the store, the "Remember this" pin and a hub Memory list with Delete.
+5. Slice 1 puts the user in control (Q14): "Remember this", hub Add, hub Edit, Delete with Undo, thumbs up and down, and the quarantine release.
 6. Then come recall in the ask path, the consolidation job, automatic capture, the agent memory tool and the forget tool.
 7. Every write passes the quarantine check and a new secret check in Rust. Only the secret check refuses a write.
 8. AI-written memories auto-save as `active` with a New badge (decided, Q12). Thumbs up keeps a memory. Thumbs down deletes it with Undo.
@@ -55,7 +55,7 @@ The owner chose option (c) for storage (Q1). The next work is slice 0 (contract,
 | Recently removed | The hub list of `removed` memories, with Restore. |
 | Purge | The permanent delete of a `removed` memory after 30 d. Only the job purges. |
 | Auto-save | Each writer, also a model or the agent, stores an `active` memory at once. There is no approval queue (Q12). |
-| Rating | The user's feedback on one memory: thumbs up, or none. Thumbs down deletes the memory. |
+| Rating | The user's feedback on one memory: `1` (thumbs up) or none. Thumbs down deletes the memory. `reviewed_at` holds the time of the last rating. |
 | Unrated | A memory with no thumbs up, no edit and no pin. |
 | New badge | The hub and card mark on each unrated memory. |
 | Thumbs up | A user click that keeps a memory and raises its recall weight. An edit or a pin counts as a thumbs up. |
@@ -64,8 +64,9 @@ The owner chose option (c) for storage (Q1). The next work is slice 0 (contract,
 | Forget tool | A later agent tool. It deletes the memories that the user names in a "forget X" request. |
 | Stale | A status. The consolidation job found no use for a long time. Recall does not use it. Bottle keeps it. |
 | Pin | A user mark on a memory. A pinned memory never goes stale. Only a user action makes a pin (MEM-28b). |
-| Action ticket | A one-time Rust record that proves a user click or a user voice command (#574). |
-| Origin | The event that made a memory: `pin`, `kept_answer`, `correction`, `dictation_word`, `call_notes`, `agent`, `flush`, `dream`, `merge`. |
+| Action ticket | A one-time Rust record that proves a user click or a user voice command (#574). It has a purpose (`Pin`, `Rate` or `Edit`) and binds its content. |
+| User-only write | A write that only a user action can start: a pin, a hub add, a rating, a release or an edit. Each one needs an action ticket. |
+| Origin | The event that made a memory: `pin`, `added`, `kept_answer`, `correction`, `dictation_word`, `call_notes`, `agent`, `flush`, `dream`, `merge`. |
 | Source | The speaker or system behind the text: `you`, `others`, `genie`, `agent` or `confirmed` (ADR 0089). |
 | Quarantine | The R10 check of injection text (SEC-24a, ADR 0089). A hit sets the status `quarantined`. |
 | Secret check | A new R10 check. It refuses a write with a token, key or password pattern. |
@@ -92,7 +93,7 @@ The owner chose option (c) for storage (Q1). The next work is slice 0 (contract,
 | Forget | The action that deletes named items, a session or a MOG with the items that cite them (ADR 0081). |
 | U9 | The binding rule "Bottle deletes no user content on its own". This plan amends it for removed memories (M13). |
 | AI Gateway | The Databricks route `/ai-gateway/mlflow/v1/...` of a workspace. Bottle reaches models only through it. |
-| FTS5 | The SQLite full-text search module. The local store already has `memory_item_fts`. |
+| FTS5 | The SQLite full-text search module. The local store already has `memory_item_fts`. Migration 0003 makes it cover the title, the summary and the body. |
 
 ## 2. What exists today (facts from the code)
 
@@ -235,7 +236,7 @@ Each memory is one store row. The row holds the frontmatter fields as columns an
 How the user views and edits memories in option (c):
 
 - The hub Memory area shows each memory as a file in a folder tree, with its frontmatter and its rendered body.
-- The user edits the title, the body, the kind and the tags in the hub. Rust checks each edit as a new write.
+- The user adds a memory and edits its title, body and kind in the hub, from slice 1 (Q14). Rust checks each edit as a new write.
 - "Export" writes a zip of the real files (`USER.md`, each `MEMORY.md` and the daily notes) to a place that the user picks (MEM-38a).
 - The export dialog says that the files have no encryption (MEM-38b).
 - An import of edited files is a later item. It runs each file through the same write checks.
@@ -386,9 +387,9 @@ Rules for the layout:
 |---|---|---|---|---|
 | The user clicks "Remember this" on a card. | `pin` | Deterministic rule | `active`, pinned, confidence 1.0 | 1 |
 | The user says "remember this: <text>" on the You track. | `pin` | Deterministic rule (`isRememberThis`) | `active`, pinned, confidence 1.0 | 1 |
-| The user adds a memory in the hub. | `pin` | Deterministic rule | `active`, source `you` | 1 |
+| The user adds a memory in the hub ("New memory" in a MOG folder). | `added` | Deterministic rule | `active`, pinned, rating `1`, source `you`, in today's daily note | 1 |
 | The user clicks "Keep" on a Genie answer card. | `kept_answer` | Deterministic rule | `active`, kind `genie_answer`, tier `daily`, rated up | 4 |
-| The user edits a memory in the hub. | `correction` | Deterministic rule | `active`, source `confirmed`, rated up; the old version becomes `superseded` | 3 |
+| The user edits a memory in the hub. | The origin stays. | Deterministic rule | The same row: source `confirmed`, rating `1`, new `reviewed_at` (6.6) | 1 |
 | The user clicks "Ask Genie anyway" on a memory hit. | `correction` | Deterministic rule | The memory loses one point of confidence. | 2 |
 | The user turns on "Save dictation words as memories". | `dictation_word` | Deterministic rule | `active`, kind `preference`, tag `dictation-word` | 4 |
 | A recording finishes and has notes. | `call_notes` | One model call through the AI Gateway | `active`, unrated (New badge) | 4 |
@@ -404,7 +405,12 @@ Rules for the layout:
 - R10 must run the secret check on the title, the summary and the body before each write.
 - If the secret check finds a match, R10 must refuse the write with `secret_refused`. R10 must not store the text.
 - The secret check must cover Databricks tokens, JWTs, cloud access keys, private key blocks and `password=` forms.
-- A pin must need a valid, unused action ticket (#574).
+- Each user-only write must need a valid, unused #574 action ticket that the host mints.
+- A pin and a hub add must use a ticket with the purpose `Pin`. The ticket binds the MOG and the text.
+- A rating and a release must use a ticket with the purpose `Rate`. The ticket binds the MOG and the item id.
+- An edit must use a ticket with the purpose `Edit`. The ticket binds the item id and a SHA-256 of the new title, body and kind.
+- Rust must refuse a ticket with the wrong purpose, the wrong content or an earlier use.
+- `mem.item.rate` and `mem.item.edit` must be Rust-only. A caller must reach them only through a ticket.
 - The agent and a model writer must never pin.
 - Each writer must store an `active` memory at once (auto-save, Q12). There is no approval queue and no hold.
 - Only the secret check must refuse a write. Each other check must store the memory.
@@ -462,7 +468,7 @@ The owner chose auto-save with user feedback. The store is local, and the user c
 - The hub must show the New badge on each unrated memory.
 - Each memory hit on a card must also show the New badge if the memory is unrated.
 - The hub and each memory hit on a card must show thumbs up and thumbs down.
-- Thumbs up must keep the memory, set its rating to `up` and clear the New badge.
+- Thumbs up must keep the memory, set its rating to `1`, set `reviewed_at` and clear the New badge.
 - Thumbs up must add 0.15 to the recall score of the memory.
 - Thumbs up must set the confidence of the memory to 0.9 or more.
 - An edit by the user must count as a thumbs up.
@@ -470,23 +476,55 @@ The owner chose auto-save with user feedback. The store is local, and the user c
 - Thumbs down must show "Memory deleted" with Undo for 8 s.
 - After the 8 s, thumbs down must run `mem.forget.items` for that memory.
 - Thumbs down is a user action, so it needs no consolidation rule.
-- Thumbs down on a pinned memory must need one confirm click.
-- The hub must have a "New" filter. It lists the unrated memories, newest first.
+- Thumbs down must need no confirm click, also on a pinned memory. The 8 s Undo is the safety (Q14).
+- Each thumbs up and each thumbs down must need a `Rate` ticket.
+- The hub must have a "New" filter (slice 2). It lists the unrated memories, newest first.
 - A rating must never leave the device in the MVP.
 
 Release of a quarantined memory (decided, Q13):
 
 - The hub must show each `quarantined` memory with a "Quarantined" mark and its reason code.
 - The hub must show thumbs up on a `quarantined` memory.
-- A thumbs up on a `quarantined` memory must set the status `active` and the rating `up`.
-- This release must need a valid, unused #574 UI action ticket.
+- A thumbs up on a `quarantined` memory must set the status `active` and the rating `1`.
+- This release must need a valid, unused #574 ticket with the purpose `Rate`.
 - The host must mint this ticket only on a user click in the hub.
 - Rust must refuse a release with no valid ticket. A replayed ticket must also fail.
 - No brain caller, agent tool or model writer can release a memory.
 - The memory tool, the forget tool and `bottle-mcp` must have no rate or release command.
-- Rust must record the time of the release in `quarantine_released_at`.
+- Rust must record the time of the release in `released_at`.
 - The hub must show "You released this memory" on a released memory.
 - A card must never show a `quarantined` memory, so a card has no release action.
+
+### 6.6 Hub Add and Edit (decided, Q14)
+
+The owner wants minimal friction, maximum utility and the agency to change things. The user must be able to edit each memory.
+
+Add:
+
+- Each MOG folder in the hub must have "New memory".
+- The form must have a body field, an optional title and a kind select.
+- If the title is empty, the hub must use the first line of the body, cut to 80 characters.
+- The kind select must offer `fact`, `definition`, `decision` and `open_question`. `preference` goes to `USER.md` (slice 2).
+- Save must store one memory: pinned, rating `1`, origin `added`, source `you`, in today's daily note.
+- Save must use a `Pin` ticket that binds the body text.
+
+Edit:
+
+- The hub must let the user edit the title, the body and the kind of each memory.
+- An edit must change the same row. It must not make a new version.
+- An edit must count as a thumbs up: rating `1` and a new `reviewed_at`.
+- An edit must set the source `confirmed`. The origin stays.
+- An edit must run the secret check again. A match must refuse the edit with `secret_refused`.
+- An edit must run the quarantine check again. A hit must set the status `quarantined`.
+- The quarantine check must also run on a released memory. So an edit can quarantine a released memory again.
+- An edit must clear `released_at`.
+- An edit must clear the embedding. A new embed job runs when embeddings are in scope.
+- An edit must use an `Edit` ticket that binds the item id and the new content.
+
+Delete:
+
+- Delete must need no confirm click, also on a pinned memory (Q14).
+- Delete must show "Memory deleted" with Undo for 8 s. After the 8 s, Delete must run `mem.forget.items`.
 
 ## 7. The consolidation job
 
@@ -655,6 +693,7 @@ A later agent slice adds a `forget` function, so "forget X" works.
 - `forget` must set the status `removed`, so "Recently removed" keeps each memory for 30 d with Restore.
 - The card must list the forgotten titles with Undo.
 - A pinned memory must need one confirm click on the card before `forget` removes it.
+- This click stays because the agent, not the user, picks the items. Q14 covers only user clicks.
 - Each `forget` call must write one content-free action log entry (ADR 0085).
 
 ## 9. User controls in the hub
@@ -665,14 +704,15 @@ A later agent slice adds a `forget` function, so "forget X" works.
 - The area must show a folder tree: Shared, then one folder for each MOG.
 - The area must list the memories of a folder by pin, then by `last_used`.
 - The area must filter by kind, status and tag.
-- The area must search with FTS5 across the folders that the user selects.
+- The area must search with FTS5 across the folders that the user selects (slice 2).
 - The area must show a memory as a file: its path, its frontmatter fields and its rendered body.
-- The area must let the user edit the title, the body, the kind and the tags. An edit runs the write rules of 6.2.
-- The area must let the user delete a memory. Delete runs `mem.forget.items` after a confirm click.
-- The area must let the user pin a memory.
-- The area must let the user unpin a memory. A pin click mints an action ticket.
+- The area must have "New memory" in each MOG folder (6.6).
+- The area must let the user edit the title, the body and the kind (6.6). Tags come in slice 3.
+- The area must let the user delete a memory with no confirm click and an 8 s Undo (6.6).
+- The area must let the user pin and unpin a memory (slice 3). A pin click mints a `Pin` ticket.
+- The area must let the user move a daily memory to `MEMORY.md` (slice 3).
 - The area must show the New badge, thumbs up and thumbs down of 6.5 on each memory.
-- The area must have a "New" filter for unrated memories.
+- The area must have a "New" filter for unrated memories (slice 2).
 - The area must have a "Recently removed" list. It shows the `removed` memories with Restore and the purge date.
 - The "Recently removed" list must also have Delete now.
 - The area must show the source, the origin and a link to the exchange or the recording.
@@ -713,45 +753,64 @@ A later agent slice adds a `forget` function, so "forget X" works.
 - AC-0.5: The new table refuses the status `proposed`.
 - AC-0.4: The new table refuses the kinds `entity` and `person`.
 
-### Slice 1: local memory store, "Remember this" and the hub list (small and useful)
+### Slice 1: the local memory store with user control (decided, Q14)
 
 Scope:
 
-1. The action ticket of #574. The host mints it on a card click or a voice command. `mem.item.write` accepts `pinned: true` only with it.
+1. The #574 action tickets with the purposes `Pin`, `Rate` and `Edit`. Each ticket binds its content.
 2. The card button "Remember this". It pins the answer summary as a `genie_answer` or `fact` memory.
 3. The voice command "remember this: <text>" on the You track. It pins the text as a `fact` memory.
-4. The R10 secret check (6.2).
+4. The R10 secret check (6.2) and migration 0003, with FTS over the title, the summary and the body.
 5. The virtual folder read path: `mem.item.list` and `mem.render.get` for `MEMORY.md` and the daily notes.
-6. The hub Memory area with the folder tree (`MEMORY.md`, `memory/`), the list, the file view and Delete. No edit, search or export yet.
+6. The hub Memory area: the folder tree (`MEMORY.md`, `memory/`), the list and the file view.
+7. Hub Add ("New memory") and hub Edit of the title, the body and the kind (6.6).
+8. Delete and thumbs down with no confirm click and an 8 s Undo. Thumbs up in the hub.
+9. The quarantine release by a hub thumbs up (6.5, Q13).
 
 Acceptance criteria:
 
 - AC-1.1: A click on "Remember this" stores one pinned, `active` memory with confidence 1.0 and the exchange link.
 - AC-1.2: A pin without a ticket gets `invalid_args` from Rust. A replayed ticket gets `invalid_args`.
+- AC-1.2a: A `Rate` ticket used for an edit, or an `Edit` ticket with other content, gets `invalid_args`.
 - AC-1.3: The voice phrase "remember this: the mart refreshes at six" stores one pinned `fact` memory.
 - AC-1.4: The phrase "remember this week" stores nothing.
 - AC-1.5: A text with a fake Databricks token pattern gets `secret_refused`. The store has no row with the text.
 - AC-1.6: A text from the adversarial fixtures stores a `quarantined` memory. The hub list marks it.
 - AC-1.7: A pinned memory shows as one entry at `/memories/<mog-slug>/memory/<day>.md#<slug>`, in the daily note of its day.
 - AC-1.7a: The rendering is computed from the rows. A row delete removes the entry at the next render.
-- AC-1.8: Delete in the hub removes the row, its FTS row and its embed job. `mem.recall.fts` no longer finds it.
+- AC-1.8: Delete in the hub removes the row, its FTS row and its embed job after the Undo time. FTS no longer finds it.
 - AC-1.9: The card shows "Saved to memory" with Undo. Undo removes the memory.
-- AC-1.11: A pinned memory has no New badge, because a pin counts as a thumbs up.
 - AC-1.10: No log line has memory text. A log scan test checks this.
+- AC-1.11: A pinned memory has no New badge, because a pin counts as a thumbs up.
+- AC-1.12: "New memory" with an empty title stores the first line of the body as the title.
+- AC-1.12a: The new memory is pinned, with rating `1` and origin `added`, in today's note.
+- AC-1.13: An edit of the body changes the same row. The rating is `1` and `reviewed_at` is new.
+- AC-1.14: An edit that adds a fake token pattern gets `secret_refused`. The row keeps its old text.
+- AC-1.15: An edit of a released memory to an adversarial text sets `quarantined` again and clears `released_at`.
+- AC-1.16: An edit clears the embedding of the row.
+- AC-1.17: `mem.item.rate` and `mem.item.edit` from the brain with no ticket get `invalid_args`.
+- AC-1.18: Delete and thumbs down on a pinned memory show no confirm dialog. Undo within 8 s keeps the memory.
+- AC-1.19: A hub thumbs up with a valid ticket moves a `quarantined` memory to `active` with rating `1`.
+- AC-1.20: A release with no ticket, or from a brain or agent caller, gets `invalid_args`. The memory stays `quarantined`.
+- AC-1.21: FTS finds a memory by a word in its title only. FTS also finds a memory by a word in its body only.
 
-Not in slice 1: recall, edit, search, export, the shared folder, automatic capture, the consolidation job and the agent tool.
+Not in slice 1:
+
+- Recall in the ask path, search, the New filter and `USER.md` (slice 2).
+- Pin and unpin in the hub, tags, move to `MEMORY.md` and the consolidation job (slice 3).
+- The pop-up "Remember" button, automatic capture and the export (slice 4).
+- The agent tool (slice 5) and the forget tool (slice 6).
 
 ### Slice 2: recall in the ask path
 
 - The RecallGate of #200 with FTS5 only. The card section "From your memory" with the provenance chip.
-- `USER.md` for shared `preference` memories, and the hub search.
+- `USER.md` for shared `preference` memories, the hub search and the New filter.
+- Thumbs up and thumbs down on card hits.
 - AC-2.1: A trace shows the `genie_ask` delay of 300 ms or less (MEM-16a).
 - AC-2.2: A dictation utterance gets no memory verdict (MEM-16e).
 - AC-2.3: A `stale`, `removed` or `quarantined` memory never shows on a card.
 - AC-2.7: Each card hit shows thumbs up and thumbs down. Thumbs down deletes the memory after the 8 s Undo.
 - AC-2.8: A rated-up memory outranks an unrated memory with the same keyword score.
-- AC-2.9: A hub thumbs up with a valid ticket moves a `quarantined` memory to `active` and rated up.
-- AC-2.10: A release with no ticket, or from a brain or agent caller, gets `invalid_args`. The memory stays `quarantined`.
 - AC-2.4: A Genie answer memory from another workspace never shows (MEM-17b).
 - AC-2.5: The Genie question that R8 sends equals the user text. No memory text is in it.
 - AC-2.6: A late hit shows as a chip and the ask continues (MEM-16c).
@@ -759,8 +818,8 @@ Not in slice 1: recall, edit, search, export, the shared folder, automatic captu
 ### Slice 3: the consolidation job (rules only)
 
 - ADR 0114. The Rust worker, the power policy, the steps of 7.2, the remove and purge rules of 7.2a and "Tidy up now".
-- The hub edit (origin `correction`) and the "Merge?" cards.
-- The hub list "Recently removed" with Restore, the New filter and the fade rule.
+- Pin and unpin in the hub, tags, "Move to MEMORY.md" and the "Merge?" cards.
+- The hub list "Recently removed" with Restore, and the fade rule.
 - Dreaming (7.2b).
 - AC-3.1: With a simulated clock, a 91 d unused unpinned memory becomes `stale`. A pinned one stays `active`.
 - AC-3.1a: A memory `stale` for 91 d with no recall in 180 d becomes `removed`. A pinned memory with the same history stays.
@@ -780,7 +839,7 @@ Not in slice 1: recall, edit, search, export, the shared folder, automatic captu
 ### Slice 4: automatic capture
 
 - Slice 4 uses auto-save with the New badge (ADR 0113, decided, Q12).
-- "Keep" on Genie answer cards, the dictation words option, the call-notes writer of 6.3 and the Genie thread flush of 6.4.
+- The pop-up "Remember" button, "Keep" on Genie answer cards, the dictation words option, the call-notes writer of 6.3 and the Genie thread flush of 6.4.
 - The export.
 - AC-4.1: A finished recording with notes gives up to 10 `active`, unrated memories, each with a quote that matches the notes.
 - AC-4.2: Bottle sends no transcript text to the model. The request body test checks this.
@@ -816,10 +875,10 @@ Not in slice 1: recall, edit, search, export, the shared folder, automatic captu
 
 | ID | Flag | File(s) | Change | Slice |
 |---|---|---|---|---|
-| M1 | CONTRACT + SCHEMA | `local_store/migrations/0003_memory_files.sql` | Rebuild `memory_item` with the new kinds and statuses. Add `title`, `body_md`, `tags`, `origin`, `tier`, `note_date`, `profile`, `recording_id`, `last_used_at`, `use_count`, `recall_query_count`, `stale_at`, `slug`, `rating`, `rated_at`, `quarantine_released_at`. Old rows get the tier `curated`, and `genie_answer` rows get `daily`. Add the status `removed` and the columns `removed_at` and `status_before_removed`. Drop the kinds `entity` and `person`. Change old `entity` rows to `fact`, `stale`, tag `legacy-entity` (5.1). The table has no `proposed` status. Keep the FTS and vec triggers. | 0 |
-| M2 | CONTRACT | `local_store/catalog.rs`, `src/brain/components/memory-store.ts` | New brain ids: `mem.item.list`, `mem.item.search`, `mem.item.edit`, `mem.item.set_status`, `mem.render.get`, `mem.item.export`. New Rust-only ids: `mem.consolidate.*`. | 0, 2, 3 |
+| M1 | CONTRACT + SCHEMA | `local_store/migrations/0003_memory_files.sql` | Rebuild `memory_item` with the new kinds and statuses. Add `title`, `body_md`, `tags`, `origin`, `tier`, `note_date`, `profile` and `recording_id`. Add `last_used_at`, `use_count`, `recall_query_count`, `stale_at` and `slug`. Add `rating` (integer `1` or NULL), `reviewed_at` and `released_at`. Add the origin `added`. Make `memory_item_fts` cover `title`, `text` and `body_md`. Old rows get the tier `curated`, and `genie_answer` rows get `daily`. Add the status `removed` and the columns `removed_at` and `status_before_removed`. Drop the kinds `entity` and `person`. Change old `entity` rows to `fact`, `stale`, tag `legacy-entity` (5.1). The table has no `proposed` status. Keep the FTS and vec triggers. | 0 |
+| M2 | CONTRACT | `local_store/catalog.rs`, `src/brain/components/memory-store.ts` | New brain ids: `mem.item.list`, `mem.item.search`, `mem.item.set_status`, `mem.render.get`, `mem.item.export`. New Rust-only ids, reached only with a ticket: `mem.item.rate`, `mem.item.edit`, `mem.item.release`. New Rust-only ids: `mem.consolidate.*`. | 0, 2, 3 |
 | M3 | CONTRACT | `src/shared/interfaces.ts` | `MemoryHit['type']` and `MemoryDraft` get the new kinds, `title`, `body`, `tags` and `origin`. `MemoryDraft` gets the #533 link fields. | 0 |
-| M4 | CONTRACT | `src-tauri/src/ipc.rs`, `crates/mog-core/src/ipc.rs`, `src/shared/ipc.ts` | The action ticket of #574: a host-minted, single-use ticket bound to one MOG. `mem_local_exec` accepts `pinned: true` only with it. | 0 |
+| M4 | CONTRACT | `src-tauri/src/ipc.rs`, `crates/mog-core/src/ipc.rs`, `src/shared/ipc.ts` | The action ticket of #574: host-minted, single-use, bound to one MOG, with a purpose (`Pin`, `Rate`, `Edit`) that binds its content. Each user-only write needs it. | 0 |
 | M5 | REQUIREMENT | `research/final-requirements.md` (MEM-01) | A reserved MOG id `shared` for the shared folder. Each statement still filters by one `mog_id`. | 2 |
 | M6 | CONTRACT | `local_store/catalog.rs`, `quarantine.rs` | A new core-computed param `textSecret`, as `textQuarantine` is. New error code `secret_refused`. | 1 |
 | M7 | CONTRACT | `src/shared/ipc.ts` (card events) | Card section kind `memory_hits` and card actions `remember_this` and `keep_answer`. | 1, 2 |
@@ -827,8 +886,8 @@ Not in slice 1: recall, edit, search, export, the shared folder, automatic captu
 | M9 | CONTRACT + SCHEMA | `crates/mog-core/src/app_settings.rs`, schema | New settings: `memory.autoCapture`, `memory.dictationWords`, `memory.modelMerge`, `memory.flush`, `memory.dreaming`. No setting adds an approval queue. `deny_unknown_fields` makes this a schema change. | 3, 4 |
 | M10 | CONTRACT | `src/shared/ipc.ts`, `crates/mog-core/src/ipc.rs` | A Rust handler for the `memory` function inside `agent_model_step` (PR #617 C9). | 5 |
 | M14 | CONTRACT | `src/shared/ipc.ts`, `crates/mog-core/src/ipc.rs` | Later: a Rust `forget` handler in `agent_model_step`, with the forget grammar check (8.3). | 6 |
-| M15 | CONTRACT | `src/shared/ipc.ts`, card events, `local_store/catalog.rs` | Card and hub actions `rate_up` and `rate_down`, and the brain id `mem.item.rate`. | 2 |
-| M16 | CONTRACT | `local_store/catalog.rs`, `src-tauri/src/ipc.rs`, `src/shared/ipc.ts` | The hub action `release_quarantine` and the group `mem.item.release`. The group needs the #574 UI action ticket (MEM-59). | 2 |
+| M15 | CONTRACT | `src/shared/ipc.ts`, card events, `local_store/catalog.rs` | Hub actions `rate_up`, `rate_down`, `add_memory` and `edit_memory` (slice 1). Card actions `rate_up` and `rate_down` (slice 2). Each one mints a ticket for the Rust-only ids of M2. | 1, 2 |
+| M16 | CONTRACT | `local_store/catalog.rs`, `src-tauri/src/ipc.rs`, `src/shared/ipc.ts` | The hub action `release_quarantine` and the group `mem.item.release`. The group needs a #574 `Rate` ticket (MEM-59). | 1 |
 | M11 | SCOPE | `AGENTS.md` section 1 | Lift "memory recall" (FTS5 only) from the out-of-scope list. Embeddings stay out. | 2 |
 | M12 | REQUIREMENT | `research/final-requirements.md` | New rows for this plan: kinds, statuses, caps, secret check, consolidation job and memory tool. Amend MEM-28a and MEM-29a for auto-save and the feedback model (Q12). | 0 |
 | M13 | REQUIREMENT (decided, Q2) | `research/final-requirements.md` (U9, MEM-33a, Section 9.2), `AGENTS.md` | Amend U9 and MEM-33a for the memory remove and purge of 7.2a. Add the rows of 12.1. | 0 (text), 3 (code) |
@@ -862,12 +921,16 @@ The new requirement rows (priority M, milestone MVP-D, use case UC2):
 | MEM-52 | The hub must show the New badge on each unrated memory. | A memory from the agent shows the badge. A pinned one does not. |
 | MEM-53 | Thumbs up must keep a memory and add 0.15 to its recall score. | A rated memory outranks an unrated tie. |
 | MEM-54 | Thumbs down must delete a memory after an 8 s Undo. | Undo keeps the memory. No Undo removes the row. |
-| MEM-55 | A user edit or a pin must count as a thumbs up. | An edited memory has the rating `up`. |
+| MEM-55 | A user edit or a pin must count as a thumbs up. | An edited memory has the rating `1` and a new `reviewed_at`. |
 | MEM-56 | The job must set `stale` on an unrated daily memory with no recall use for 30 d. | The simulated clock test passes. |
 | MEM-57 | Dreaming must promote daily memories into `MEMORY.md` with no approval step. | A qualified memory moves in one run. |
 | MEM-58 | The `forget` tool must run only in a turn with a forget request from the user. | A call with no request gets an error. |
 | MEM-59 | A release of a `quarantined` memory must need a #574 UI action ticket from a hub click. | A release from the brain or an agent tool gets `invalid_args`. |
 | MEM-60 | The re-scan must skip a released memory until its text changes. | A released memory stays `active` after a pattern update. |
+| MEM-61 | Each user-only write must need a #574 ticket with the purpose `Pin`, `Rate` or `Edit`. | A ticket with the wrong purpose or content gets `invalid_args`. |
+| MEM-62 | An edit must run the secret check and the quarantine check again. | A secret refuses the edit. An injection text quarantines the row, also a released row. |
+| MEM-63 | An edit must clear `released_at` and the embedding. | Both fields are NULL after an edit. |
+| MEM-64 | Delete and thumbs down must need no confirm click. | The 8 s Undo is the only step, also for a pinned memory. |
 
 The amended row SEC-24b (Q13):
 
@@ -917,7 +980,8 @@ PR #611 must reserve new numbers with `adr-next.sh` before it merges.
 | The purge breaks the U9 promise to users. | Loss of trust. | The hub and the docs say which memories the job can purge, and when. M13 changes the requirement text first. |
 | The job uses power or blocks an ask. | Battery drain or a slow ask. | Idle start, power rules, short transactions and a stop on the talk key. |
 | The keychain key is lost. | All memories are lost (MEM-09a). | The hub names the loss. Export is the backup. v1 sync can rebuild. |
-| #574 is not done. | Slice 1 cannot pin. | The ticket is part of slice 0 and slice 1. |
+| #574 is not done. | Slice 1 cannot pin, add, edit or rate. | The tickets are part of slice 0 and slice 1. |
+| No confirm click on Delete. | A slip deletes a pinned memory. | The 8 s Undo. The row stays until the Undo time ends. |
 | A model writer costs money. | Charges in the home workspace. | Off until slice 4, a call cap and a token cap, and the data panel line. |
 | A memory crosses workspaces. | Data from workspace A reaches workspace B. | One folder per MOG, Genie answers never shared, and the PR #617 consent rules. |
 
@@ -949,6 +1013,14 @@ PR #611 must reserve new numbers with `adr-next.sh` before it merges.
   - A thumbs up from the user in the hub moves a quarantined memory to `active` and rated up.
   - The thumbs-up action needs a #574 UI action ticket. So no brain or agent caller can release an item.
   - MEM-59 and MEM-60 are new. The SEC-24b row changes (12.1).
+- **Q14. Slice 1 scope (2026-11-22).** The owner said: "orient towards minimal friction for the end user, maximum utility, and the agency to go back and change things… memory has to be, obviously, editable by the user."
+  - Hub Add and hub Edit move from slice 3 into slice 1 (6.6).
+  - An edit counts as a thumbs up. It runs the secret check and the quarantine check again. It clears `released_at` and the embedding.
+  - Delete and thumbs down need no confirm click, also for pinned memories. The 8 s Undo is the safety.
+  - Each user-only write needs a #574 ticket with a purpose (`Pin`, `Rate`, `Edit`) that binds its content.
+  - `mem.item.rate` and `mem.item.edit` are Rust-only. A caller reaches them only with a ticket.
+  - Migration 0003 adds `released_at` and the origin `added`. FTS covers the title, the summary and the body.
+  - Deferred: search and the New filter (slice 2); pin and unpin, tags and move to `MEMORY.md` (slice 3); the pop-up Remember button (slice 4).
 - **Next work.** Build slice 0 (contract, ADRs and migration 0003) at the contract gate. Then build slice 1.
 
 ### 15.2 Still open
