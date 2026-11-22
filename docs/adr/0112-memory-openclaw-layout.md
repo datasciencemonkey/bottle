@@ -41,11 +41,12 @@ files on disk.
    optional `#<slug>`. The date must be a real calendar date. Rust refuses each other path.
 5. **The slugs and the day.**
    - The core computes the slug and the `note_day` (the `Slug` and `Day` params). A caller that
-     sends either gets `invalid_args`. The day is the local calendar day of the write time at the
-     device offset; tests inject the offset.
+     sends either gets `invalid_args`. The day is today's local calendar day on the core's own
+     clock and device offset, never the caller's time; tests inject the clock.
    - An item slug is the lower-case ASCII form of its title (else its summary, else its body), 64
      characters or less. An edit computes the slug again from the new title.
-   - A clash in the same file adds `-<first 6 hex of the item id>`.
+   - A clash in the same file adds `-<first 6 hex of the item id>`. If that clashes too, the
+     slug is its first 39 characters and the full 32-hex id.
    - A unique index on `(mog_id, layer, note_day, slug)` keeps one address for one row.
    - A MOG slug is the slug of the MOG name. A clash adds `-<first 6 of the MOG id>`.
 6. **The renderer.**

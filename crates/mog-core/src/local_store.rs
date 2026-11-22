@@ -98,19 +98,36 @@ pub fn mem_local_exec(
 }
 
 /// The user-only memory writes (ADR 0113). The app host calls this only after it redeemed a
-/// ticket of the right purpose for these exact params: `mem.item.rate` and `mem.item.edit`
-/// (Rust-only groups) and a pinned `mem.item.write`. Any other id is `invalid_args`. Errors are
-/// the same fixed codes as [`mem_local_exec`].
+/// ticket for these exact params: the `proof` comes only from
+/// [`crate::action_ticket::ActionTickets::redeem`], and its purpose must fit the id:
+/// - Rate: `mem.item.rate` (a Rust-only group). The core adds `mintedAt` from the proof, so
+///   the rate changes only a row that no write touched after the click (security review M1);
+/// - Edit: `mem.item.edit` (a Rust-only group);
+/// - Pin: `mem.item.write` with `pinned: true`.
+///
+/// Any other id, a purpose that does not fit, or a caller-sent `mintedAt` is `invalid_args`.
+/// Errors are the same fixed codes as [`mem_local_exec`].
 pub fn exec_ticketed(
     store: &dyn LocalStore,
     stmt_id: &str,
-    params: serde_json::Value,
+    mut params: serde_json::Value,
+    proof: &crate::action_ticket::Redeemed,
 ) -> CoreResult<serde_json::Value> {
-    if !matches!(
-        stmt_id,
-        "mem.item.rate" | "mem.item.edit" | "mem.item.write"
-    ) {
+    use crate::action_ticket::Purpose;
+    let obj = params
+        .as_object_mut()
+        .ok_or_else(|| refused("invalid_args"))?;
+    if obj.contains_key("mintedAt") {
         return Err(refused("invalid_args"));
+    }
+    let pinned = obj.get("pinned") == Some(&serde_json::Value::Bool(true));
+    match (proof.purpose(), stmt_id) {
+        (Purpose::Rate, "mem.item.rate") => {
+            obj.insert("mintedAt".into(), proof.minted_at_ms().into());
+        }
+        (Purpose::Edit, "mem.item.edit") => {}
+        (Purpose::Pin, "mem.item.write") if pinned => {}
+        _ => return Err(refused("invalid_args")),
     }
     store
         .exec(stmt_id, params)

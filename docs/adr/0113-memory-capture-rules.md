@@ -19,21 +19,30 @@ of a user action crossed from the brain (#574).
    and the agent. There is no `proposed` status. Each new item goes into today's note of its MOG
    (ADR 0112, MEM-43).
 2. **The secret check refuses the write** (MEM-44).
-   - R10 checks the title, the summary and the body of each write and each edit: the 7 rule-7
-     patterns and the memory patterns (password forms, GitHub, Slack, API and cloud keys).
-   - It also checks the NFKC form without zero-width code points.
+   - R10 checks the title, the summary, the body and each tag of each write and each edit: the
+     7 rule-7 patterns and the memory patterns (password forms, GitHub, Slack, API and cloud
+     keys).
+   - It also checks the NFKC form without the default-ignorable code points, and the fields run
+     together, so a token split across two fields is found.
+   - The check is best effort against a hostile brain. It finds the known credential shapes, not
+     every way to spell a secret.
    - A match raises `CoreError::SecretRefused` before any SQL runs. The IPC answer is
      `secret_refused`. R10 stores nothing, and the error holds no text. The SQL also checks the
      core param `secretCheck = 0` as a second guard.
 3. **Instruction-like text is saved as `quarantined`** (SEC-24a, ADR 0089; owner ruling
    2026-11-21, "Quarantine, thumbs up releases").
-   - R10 checks the title, the summary and the body together. On a hit the item is saved as
+   - R10 checks the title, the summary, the body and the tags together. On a hit the item is saved as
      `quarantined`. The core check is the only one on a pin: the brain sends no flag.
    - The hub shows the item with a mark and its body as plain text. Genie and the agent never see
      it (SEC-24b), and it gets no embed job.
    - **Release.** A thumbs up from the user in the hub releases it: status `active`, rating 1,
      `reviewed_at` and `released_at` are set, and the embed job is queued (SEC-24c). The hub then
      shows "You released this".
+   - **The release is bound to what the user saw.** The ticket keeps its wall-clock mint time,
+     and the core adds it as `mintedAt` (a caller that sends it is refused). The rate changes
+     only a row with `updated_at < mintedAt`; every writer sets `updated_at` in ms on the SQLite
+     clock. So a write between the click and the release makes the release change nothing.
+   - An automatic write never rewrites the words of a quarantined row either.
    - **An edit re-quarantines** (MEM-46). An edit runs the check again. Instruction text sets
      `quarantined` and clears `released_at`, also on an item that the user released before.
      Clean text sets `active`, also on a quarantined or stale item.
@@ -61,6 +70,12 @@ of a user action crossed from the brain (#574).
      after a redeem. `mem_local_exec` refuses them with `invalid_args`.
    - A pin with no ticket gets `invalid_args`. A ticket on any other call gets `invalid_args`.
    - An AI or agent write never pins. The table refuses origin `pin` or `added` without a pin.
+   - A user pin carries no tags in slice 1; a pin ticket refuses a write that has them.
+   - `exec_ticketed` takes the proof that only a redeem makes, and runs only the write that
+     fits its purpose.
+   - Expiry runs on the host's monotonic clock. A voice ticket needs a UUID MOG in the call's
+     tags, or the host mints none.
+   - The note day comes from the core clock, never from the caller's `seenAt`.
 5. **The user's words win** (MEM-47). A later automatic write never rewrites the title, the
    summary or the body of a pinned or reviewed row, and never quarantines it.
 6. **Feedback.**
@@ -89,6 +104,11 @@ of a user action crossed from the brain (#574).
 
 ## Consequences
 
+- A card or hub `click` counts as the user's own only because the view code is app-owned and
+  the gateway lets only view windows send `view_emit`.
+- A rendered body cannot open a comment (`<!--` becomes `&lt;!--`). A body that the user did not
+  write (Genie, an agent, a legacy row) is a block quote, so it cannot fake the heading or the
+  meta line of a pinned item.
 - A card ticket binds the MOG, not the text. A faulty brain could use one real click to pin other
   text in that MOG within 60 s.
 - R4 reports no lease owner for a segment, so the voice ticket binds the MOG that the brain named

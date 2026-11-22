@@ -66,14 +66,73 @@ impl Trigger {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct Ticket {
     id: String,
     /// `None` only for a voice ticket whose MOG the host could not tell (see `mint_voice`).
     mog_id: Option<String>,
     trigger: Trigger,
     binding: Option<[u8; 32]>,
+    /// On the host's monotonic clock (the `now_ms` of each call).
     expires_at_ms: u64,
+    /// The wall clock at mint, in epoch ms: a Rate redeem may only change a row that no write
+    /// touched after the click (security review M1).
+    minted_at_wall_ms: i64,
+}
+
+/// The proof of one redeemed ticket. Only [`ActionTickets::redeem`] makes one, so
+/// `local_store::exec_ticketed` cannot run without a redeem.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Redeemed {
+    trigger: Trigger,
+    minted_at_wall_ms: i64,
+}
+
+impl Redeemed {
+    pub fn trigger(&self) -> Trigger {
+        self.trigger
+    }
+
+    pub fn purpose(&self) -> Purpose {
+        self.trigger.purpose()
+    }
+
+    /// The wall clock at mint, in epoch ms.
+    pub fn minted_at_ms(&self) -> i64 {
+        self.minted_at_wall_ms
+    }
+
+    /// A proof for a unit test of the catalog, with a chosen mint time.
+    #[cfg(test)]
+    pub(crate) fn for_test(trigger: Trigger, minted_at_wall_ms: i64) -> Self {
+        Self {
+            trigger,
+            minted_at_wall_ms,
+        }
+    }
+}
+
+impl std::fmt::Debug for Redeemed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Redeemed")
+            .field("trigger", &self.trigger)
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for Ticket {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // No id: a ticket id in a log could be replayed.
+        f.debug_struct("Ticket")
+            .field("trigger", &self.trigger)
+            .finish_non_exhaustive()
+    }
+}
+
+fn wall_now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
 /// Why a ticket was refused. The host answers `invalid_args` for each one; the reason is for
@@ -117,6 +176,11 @@ fn binding_of(trigger: Trigger, p: &Value) -> Option<Option<Value>> {
         (Some(o), Some(w)) => o == w,
         (None, Some(_)) => false,
     };
+    // In slice 1 the user never types tags on a pin, so a pin carries none (review M2).
+    let user_pin = matches!(trigger, Trigger::Ui | Trigger::Voice | Trigger::HubAdd);
+    if user_pin && !absent(p, "tags") {
+        return None;
+    }
     match trigger {
         Trigger::Ui => origin_ok(None).then_some(None),
         Trigger::Voice => {
@@ -195,6 +259,7 @@ impl ActionTickets {
             trigger,
             binding: binding.as_ref().map(hash),
             expires_at_ms: now_ms.saturating_add(TICKET_TTL_MS),
+            minted_at_wall_ms: wall_now_ms(),
         });
         id
     }
@@ -252,7 +317,8 @@ impl ActionTickets {
     }
 
     /// Use the ticket `id` for a write of `purpose` with `params` in `mog_id`. The ticket is gone
-    /// after this call, also when it is refused, so it can never be tried twice.
+    /// after this call, also when it is refused, so it can never be tried twice. `now_ms` is on
+    /// the host's monotonic clock, as at mint.
     pub fn redeem(
         &self,
         id: &str,
@@ -260,7 +326,7 @@ impl ActionTickets {
         purpose: Purpose,
         params: &Value,
         now_ms: u64,
-    ) -> Result<Trigger, Refusal> {
+    ) -> Result<Redeemed, Refusal> {
         let t = {
             let mut open = self.lock();
             let at = open
@@ -282,7 +348,10 @@ impl ActionTickets {
         if want.as_ref().map(hash) != t.binding {
             return Err(Refusal::WrongBinding);
         }
-        Ok(t.trigger)
+        Ok(Redeemed {
+            trigger: t.trigger,
+            minted_at_wall_ms: t.minted_at_wall_ms,
+        })
     }
 
     /// The number of open tickets (for tests).
@@ -383,7 +452,8 @@ mod tests {
         let t = ActionTickets::new();
         t.mint_ui(T1.into(), MOG_A, 1_000);
         assert_eq!(
-            t.redeem(T1, MOG_A, Purpose::Pin, &pin("x"), 2_000),
+            t.redeem(T1, MOG_A, Purpose::Pin, &pin("x"), 2_000)
+                .map(|r| r.trigger()),
             Ok(Trigger::Ui)
         );
         assert_eq!(
@@ -467,7 +537,8 @@ mod tests {
                 Purpose::Pin,
                 &pin("the mart refreshes at six"),
                 1
-            ),
+            )
+            .map(|r| r.trigger()),
             Ok(Trigger::Voice)
         );
         // A voice pin has no title or body of its own.
@@ -481,7 +552,8 @@ mod tests {
         // With no lease MOG the ticket fits any MOG, but only the spoken text.
         t.mint_voice(T1.into(), None, "x", 0);
         assert_eq!(
-            t.redeem(T1, MOG_B, Purpose::Pin, &json!({"text": "x"}), 1),
+            t.redeem(T1, MOG_B, Purpose::Pin, &json!({"text": "x"}), 1)
+                .map(|r| r.trigger()),
             Ok(Trigger::Voice)
         );
     }
@@ -491,7 +563,8 @@ mod tests {
         let t = ActionTickets::new();
         t.mint_hub_add(T1.into(), MOG_A, "fact", "", "Mart at six", 0);
         assert_eq!(
-            t.redeem(T1, MOG_A, Purpose::Pin, &add("fact", "", "Mart at six"), 1),
+            t.redeem(T1, MOG_A, Purpose::Pin, &add("fact", "", "Mart at six"), 1)
+                .map(|r| r.trigger()),
             Ok(Trigger::HubAdd)
         );
         for p in [
@@ -529,7 +602,8 @@ mod tests {
         let rate = |item: &str| json!({ "mogId": MOG_A, "itemId": item });
         t.mint_hub_rate(T1.into(), MOG_A, ITEM, 0);
         assert_eq!(
-            t.redeem(T1, MOG_A, Purpose::Rate, &rate(ITEM), 1),
+            t.redeem(T1, MOG_A, Purpose::Rate, &rate(ITEM), 1)
+                .map(|r| r.trigger()),
             Ok(Trigger::HubRate)
         );
         t.mint_hub_rate(T1.into(), MOG_A, ITEM, 0);
@@ -561,7 +635,8 @@ mod tests {
         let t = ActionTickets::new();
         t.mint_hub_edit(T1.into(), MOG_A, ITEM, "fact", "T", "B", 0);
         assert_eq!(
-            t.redeem(T1, MOG_A, Purpose::Edit, &edit(ITEM, "fact", "T", "B"), 1),
+            t.redeem(T1, MOG_A, Purpose::Edit, &edit(ITEM, "fact", "T", "B"), 1)
+                .map(|r| r.trigger()),
             Ok(Trigger::HubEdit)
         );
         for p in [
@@ -577,6 +652,44 @@ mod tests {
                 "{p}"
             );
         }
+    }
+
+    /// Security review M2: a user pin carries no tags in slice 1.
+    #[test]
+    fn a_user_pin_ticket_refuses_tags() {
+        let t = ActionTickets::new();
+        let with_tags = |mut p: Value| {
+            p["tags"] = json!(["x"]);
+            p
+        };
+        t.mint_ui(T1.into(), MOG_A, 0);
+        assert_eq!(
+            t.redeem(T1, MOG_A, Purpose::Pin, &with_tags(pin("x")), 1),
+            Err(Refusal::WrongBinding)
+        );
+        t.mint_voice(T1.into(), Some(MOG_A), "x", 0);
+        assert_eq!(
+            t.redeem(T1, MOG_A, Purpose::Pin, &with_tags(pin("x")), 1),
+            Err(Refusal::WrongBinding)
+        );
+        t.mint_hub_add(T1.into(), MOG_A, "fact", "", "b", 0);
+        assert_eq!(
+            t.redeem(T1, MOG_A, Purpose::Pin, &with_tags(add("fact", "", "b")), 1),
+            Err(Refusal::WrongBinding)
+        );
+    }
+
+    #[test]
+    fn a_redeem_reports_the_mint_time_and_no_debug_shows_the_id() {
+        let t = ActionTickets::new();
+        let before = wall_now_ms();
+        t.mint_ui(T1.into(), MOG_A, 0);
+        let r = t.redeem(T1, MOG_A, Purpose::Pin, &pin("x"), 1).unwrap();
+        assert!(r.minted_at_ms() >= before && r.minted_at_ms() <= wall_now_ms());
+        assert_eq!(r.purpose(), Purpose::Pin);
+        t.mint_ui(T1.into(), MOG_A, 0);
+        let shown = format!("{r:?} {t:?}");
+        assert!(!shown.contains(T1) && !shown.contains(MOG_A), "{shown}");
     }
 
     #[test]
