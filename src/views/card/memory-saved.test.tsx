@@ -212,4 +212,36 @@ describe('memory slice 1: card and pop-up', () => {
     await advance(REMEMBER_WAIT_MS + 100);
     expect(btn.disabled).toBe(false);
   });
+
+  it('memory.remember carries the exchange op id of this card as requestId', async () => {
+    const el = await mount();
+    const other = '00000000-0000-4000-8000-0000000000aa';
+    await tauri.emitTo(`card-${ID}`, 'card:update', {
+      ...answered,
+      blurbs: [{ ...answered.blurbs[0], id: `genie:${other}` }, ask],
+    });
+    await act(
+      async () => void (el.querySelector('[data-action="remember"]') as HTMLElement).click(),
+    );
+    const sent = clicks().filter((c) => c.payload['action'] === 'memory.remember');
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.payload['requestId']).toBe(other);
+  });
+
+  it('memory.undo carries the UUID itemId from memory:saved, and a save with no itemId has no Undo', async () => {
+    const el = await mount();
+    await tauri.emitTo(`card-${ID}`, 'card:update', answered);
+    await saved({ outcome: 'saved' });
+    expect(el.querySelector('[data-action="memory-undo"]')).toBeNull();
+    await saved({ outcome: 'saved', itemId: ITEM });
+    await act(
+      async () => void (el.querySelector('[data-action="memory-undo"]') as HTMLElement).click(),
+    );
+    const sent = clicks().filter((c) => c.payload['action'] === 'memory.undo');
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.payload['itemId']).toBe(ITEM);
+    expect(sent[0]?.payload['itemId']).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+  });
 });

@@ -358,12 +358,12 @@ export function GenieCard({ mogId, card, onSize, identity, saved = NO_SAVED }: G
     return () => clearTimeout(t);
   }, [remember]);
   const doRemember = useCallback(() => {
-    if (remembering || workingRef.current) return;
+    // The brain links the memory to the exchange by this id: no op id, no click.
+    if (remembering || workingRef.current || !opId) return;
     setRemember('sending');
-    void emitView(mogId, 'click', {
-      action: 'memory.remember',
-      requestId: opId ?? crypto.randomUUID(),
-    }).catch(() => setRemember('idle'));
+    void emitView(mogId, 'click', { action: 'memory.remember', requestId: opId }).catch(() =>
+      setRemember('idle'),
+    );
   }, [mogId, opId, remembering]);
 
   // The show time starts when the outcome shows; the working pill never fades.
