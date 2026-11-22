@@ -17,7 +17,7 @@ import {
 } from '../../shared/hub-mogs';
 import { FORGET_OPEN_TARGET } from '../../shared/forget-view';
 import { MOG_PALETTE, paletteColorOf } from '../../shared/mog-palette';
-import { emitView } from '../view-ipc';
+import { askBrain, emitView } from '../view-ipc';
 
 function send(action: MogAction): void {
   void emitView(HUB_SCOPE, 'click', action).catch(() => undefined);
@@ -46,7 +46,7 @@ function useHubMogs(): { list: HubMogList | null; seq: number } {
       if (gone) u();
       else {
         off = u;
-        send({ action: 'mogs.ready' });
+        askBrain(HUB_SCOPE, 'click', { action: 'mogs.ready' });
       }
     });
     return () => {

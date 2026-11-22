@@ -60,6 +60,14 @@ function MogDot({ row }: { row: ConversationRow }) {
   );
 }
 
+/**
+ * While the hub has no list, it asks again after these waits (0.5, 1, 2 and 4 s; the asks go at
+ * 0.5, 1.5, 3.5 and 7.5 s). The brain may not listen yet, or the store may be locked.
+ */
+export const LIST_RETRY_BACKOFF_MS: readonly number[] = [500, 1000, 2000, 4000];
+/** After this many ms with no list, the skeleton gives way to a message with Try again. */
+export const LIST_GIVE_UP_MS = 10_000;
+
 function askForList(): void {
   void emitView(CONVERSATIONS_VIEW_ID, 'click', { action: 'conversations.ready' }).catch(
     () => undefined,
@@ -178,7 +186,30 @@ function useConversations(onOpen: () => void) {
       for (const u of offs) u();
     };
   }, []);
-  return { list, selectedId, setSelectedId };
+  // Never wait on a skeleton forever: ask again with a backoff while there is no list, and give up
+  // after LIST_GIVE_UP_MS. A list that arrives at any point ends both (the effect cleans up).
+  const [timedOut, setTimedOut] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const waiting = list === null;
+  useEffect(() => {
+    if (!waiting) return;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    let at = 0;
+    for (const wait of LIST_RETRY_BACKOFF_MS) {
+      at += wait;
+      timers.push(setTimeout(askForList, at));
+    }
+    timers.push(setTimeout(() => setTimedOut(true), LIST_GIVE_UP_MS));
+    return () => {
+      for (const t of timers) clearTimeout(t);
+    };
+  }, [waiting, attempt]);
+  const tryAgain = useCallback(() => {
+    setTimedOut(false);
+    setAttempt((n) => n + 1);
+    askForList();
+  }, []);
+  return { list, selectedId, setSelectedId, timedOut: waiting && timedOut, tryAgain };
 }
 
 function KeyNumbers({ items }: { items: ConversationRow['keyNumbers'] }) {
@@ -365,11 +396,12 @@ function Detail({
   );
 }
 
-function Message({ title, line }: { title: string; line?: string }) {
+function Message({ title, line, action }: { title: string; line?: string; action?: ReactNode }) {
   return (
     <div className="conv-message" role="status">
       <p className="conv-message-title">{title}</p>
       {line && <p className="conv-message-line">{line}</p>}
+      {action}
     </div>
   );
 }
@@ -386,7 +418,7 @@ export function Conversations({
   /** #145: the reply composer of the selected thread's detail, or no composer at all. */
   composer?: ((thread: ThreadComposerThread) => ReactNode) | undefined;
 }) {
-  const { list, selectedId, setSelectedId } = useConversations(onOpen);
+  const { list, selectedId, setSelectedId, timedOut, tryAgain } = useConversations(onOpen);
   const listRef = useRef<HTMLDivElement>(null);
   const detailRef = useRef<HTMLElement | null>(null);
   const baseId = useId();
@@ -447,7 +479,19 @@ export function Conversations({
   const groups = groupByDay(entries, now());
 
   let body;
-  if (list === null) {
+  if (list === null && timedOut) {
+    body = (
+      <Message
+        title="Bottle cannot read your saved conversations right now."
+        line="Your history is still on this device. Try again in a moment."
+        action={
+          <button type="button" className="conv-message-action" onClick={tryAgain}>
+            Try again
+          </button>
+        }
+      />
+    );
+  } else if (list === null) {
     // ui-1: a visible skeleton instead of a blank aria-busy div (the ui-audit "loading" finding).
     body = (
       <div className="conv-message conv-message--loading" aria-busy="true">
@@ -459,6 +503,11 @@ export function Conversations({
       <Message
         title="Bottle cannot read your saved conversations right now."
         line="Your history is still on this device. Try again in a moment."
+        action={
+          <button type="button" className="conv-message-action" onClick={tryAgain}>
+            Try again
+          </button>
+        }
       />
     );
   } else if (entries.length === 0) {

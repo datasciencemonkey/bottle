@@ -92,3 +92,30 @@ describe('store gate (ADR 0105)', () => {
     expect(STORE_TEXT.retry).toBe('Try again');
   });
 });
+
+describe('store gate onOpen', () => {
+  it('runs each listener when the store opens, and stops after the returned off', async () => {
+    const { gate } = armed(false);
+    const cb = vi.fn();
+    const off = gate.onOpen(cb);
+    await gate.run(async () => 1);
+    expect(cb).toHaveBeenCalledTimes(1);
+    off();
+    const gate2 = armed(false).gate;
+    const cb2 = vi.fn();
+    gate2.onOpen(cb2)();
+    await gate2.run(async () => 1);
+    expect(cb2).not.toHaveBeenCalled();
+  });
+
+  it('does not run on a refused key, and runs after Try again succeeds', async () => {
+    const { gate } = armed(false);
+    const cb = vi.fn();
+    gate.onOpen(cb);
+    await expect(gate.run(async () => Promise.reject(FAIL))).rejects.toEqual(FAIL);
+    expect(cb).not.toHaveBeenCalled();
+    gate.retry();
+    await gate.run(async () => 1);
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+});

@@ -12,7 +12,7 @@ import {
   type HubRecording,
   type RecordingAction,
 } from '../../shared/recording-view';
-import { emitView } from '../view-ipc';
+import { askBrain, emitView } from '../view-ipc';
 
 /** Send one recording action to the brain. A refused call is dropped. */
 export function sendRecording(action: RecordingAction): void {
@@ -46,7 +46,11 @@ export function useHubEvent(
   }, [name, onPayload, onListening]);
 }
 
-const askModel = () => sendRecording({ action: 'recording.ready' });
+/** Ask for a model. A refusal (the brain not up yet) is tried again with a backoff. */
+export const askRecording = (action: RecordingAction): void =>
+  askBrain(RECORDING_VIEW_ID, 'click', action);
+
+const askModel = () => askRecording({ action: 'recording.ready' });
 
 /** The settings and Record control model, or `undefined` before the brain answers. */
 export function useHubRecording(): HubRecording | undefined {

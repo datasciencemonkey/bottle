@@ -18,7 +18,7 @@ import {
   CLI_VIEW_ID,
   type CliInstallModel,
 } from '../../shared/cli-view';
-import { emitView } from '../view-ipc';
+import { askBrain, emitView } from '../view-ipc';
 
 const ask = (target: string) =>
   void emitView(CLI_VIEW_ID, 'click', { target }).catch(() => undefined);
@@ -40,7 +40,7 @@ export function CliInstallStep() {
       if (gone) u();
       else off = u;
     });
-    ask(CLI_SETUP_TARGET);
+    askBrain(CLI_VIEW_ID, 'click', { target: CLI_SETUP_TARGET });
     return () => {
       gone = true;
       off?.();

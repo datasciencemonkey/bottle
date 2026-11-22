@@ -53,3 +53,14 @@ export async function isHubFocused(
     return false;
   }
 }
+
+/** Whether the hub window exists (it is built at start and a close only hides it). */
+export async function hubExists(
+  find: (label: string) => Promise<unknown | null> = (label) => Window.getByLabel(label),
+): Promise<boolean> {
+  try {
+    return (await find('hub')) !== null;
+  } catch {
+    return false;
+  }
+}

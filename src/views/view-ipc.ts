@@ -186,6 +186,26 @@ export function emitView(mogId: MogId, kind: ViewEmitKind, payload?: unknown): P
   return call('view_emit', payload === undefined ? { mogId, kind } : { mogId, kind, payload });
 }
 
+/** The waits before each new try of `askBrain`, in ms. */
+export const ASK_BRAIN_BACKOFF_MS: readonly number[] = [500, 1000, 2000, 4000];
+
+/**
+ * Ask the brain for a model (`ready`, `check`). The core refuses `view_emit` while the brain has
+ * no Channel yet, which happens at launch when the hub loads first. So a refused ask tries again
+ * after 0.5, 1, 2 and 4 seconds, then stops. It never rejects. An ask the brain took is not
+ * repeated.
+ */
+export function askBrain(mogId: MogId, kind: ViewEmitKind, payload?: unknown): void {
+  let n = 0;
+  const attempt = () => {
+    emitView(mogId, kind, payload).catch(() => {
+      const wait = ASK_BRAIN_BACKOFF_MS[n++];
+      if (wait !== undefined) setTimeout(attempt, wait);
+    });
+  };
+  attempt();
+}
+
 /**
  * Subscribe to a brain-to-view event while the component is mounted. `onPayload` must be stable.
  * `onListening` (stable too) runs once the listener is registered, for example to send `ready`.
@@ -219,7 +239,7 @@ export function useViewEvent(
  * its state again. No payload. A refusal is dropped: the view sends `ready` again on a reload.
  */
 export function sendViewReady(mogId: MogId): void {
-  void emitView(mogId, 'ready').catch(() => undefined);
+  askBrain(mogId, 'ready');
 }
 
 /**
@@ -274,7 +294,7 @@ export function useHubNotice(): HubNotice | null {
       if (gone) u();
       else {
         off = u;
-        void emitView(HUB_SCOPE, 'click', { action: 'notice.ready' }).catch(() => undefined);
+        askBrain(HUB_SCOPE, 'click', { action: 'notice.ready' });
       }
     });
     return () => {
