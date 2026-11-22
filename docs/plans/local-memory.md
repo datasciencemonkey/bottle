@@ -1,9 +1,9 @@
 # Plan: local file-system memories (capture, consolidate, recall)
 
-- Status: draft plan for the owner. The owner accepts nothing in this plan yet.
+- Status: draft plan. The owner decided Q1, Q2, Q4 and Q7 on 2026-11-21 (Section 15.1). The other questions stay open.
 - Date: 2026-11-21
 - Author: planner agent (branch `chore/plan-memory`)
-- Language: drafted to STE100 rules. A script checked the sentence lengths. Nobody did the official dictionary check.
+- Language: drafted to STE100 rules. A script checked the sentence lengths. Verbatim quotes of the owner are exempt. Nobody did the official dictionary check.
 - Scope: a plan and requirements. This document changes no app code.
 - New ADRs: ADR 0112, ADR 0113, ADR 0114, ADR 0115 (Section 13). The script `adr-next.sh` gave the numbers.
 - Live calls: none. No Databricks call and no model call ran for this plan.
@@ -13,25 +13,27 @@
 
 The owner wants Bottle to keep memories on the device. Bottle forms them from user actions. A background job cleans them up. Later, Bottle can share them.
 
-1. A **memory** is one typed item: a fact, a preference, a definition, a decision or a person and context.
+1. A **memory** is one typed item: a fact, a preference, a definition, a decision, an open question or a kept Genie answer.
 2. Each memory has the shape of one Markdown file with frontmatter. An index file lists the memories.
-3. The recommended home is the existing encrypted SQLCipher store. Bottle shows it as a virtual folder `/memories`.
+3. The home is the existing encrypted SQLCipher store (decided, Q1). Bottle shows it as a virtual folder `/memories`. Export gives real `.md` files.
 4. The user, the hub and the agent memory tool see files. The disk holds only the encrypted store.
 5. Slice 1 is small: the store, the "Remember this" pin and a hub Memory list with Delete.
 6. Then come recall in the ask path, the consolidation job, automatic capture and the agent memory tool.
 7. Every write passes the quarantine check and a new secret check in Rust.
 8. The user can see, edit, undo and delete each memory. Wipe and Forget cover memories.
 9. The consolidation job runs in Rust, on idle, with a power policy. It uses rules only at first.
+   It can remove stale, unused, unpinned memories. A removed memory stays in "Recently removed" for 30 d, with Restore (decided, Q2).
+   The job never removes a pinned memory.
 10. A share to Genie (UC Pages) or to another MOG is later. This plan names the hook points only.
 
-The top open question for the owner is the storage and privacy option (Section 4, Q1).
+The owner chose option (c) for storage (Q1). The next work is slice 0 (contract, ADRs and migration) at the contract gate, then slice 1.
 
 ## 1. Glossary
 
 | Term | Definition in this plan |
 |---|---|
 | Memory | One typed item that Bottle keeps for the user. It has a kind, a title, a summary, a body and frontmatter. |
-| Kind | The type of a memory: `fact`, `preference`, `definition`, `decision`, `person`, `open_question` or `genie_answer`. |
+| Kind | The type of a memory: `fact`, `preference`, `definition`, `decision`, `open_question` or `genie_answer`. |
 | Memory file | The Markdown form of one memory: YAML frontmatter, then a Markdown body. |
 | Index file | `index.md` in a folder. It has one line for each active memory in that folder. |
 | Virtual folder | The path tree `/memories/...` that Bottle computes from store rows. No real folder exists. |
@@ -39,7 +41,12 @@ The top open question for the owner is the storage and privacy option (Section 4
 | Store row | One row of the `memory_item` table. One store row is one memory. |
 | MOG folder | The folder of one MOG, `/memories/<mog-slug>/`. One MOG is one CLI profile and one workspace. |
 | Shared folder | `/memories/shared/`. It holds memories that belong to no workspace, such as preferences. |
-| Status | The state of a memory: `proposed`, `active`, `stale`, `superseded`, `retracted` or `quarantined`. |
+| Status | The state of a memory: `proposed`, `active`, `stale`, `removed`, `superseded`, `retracted` or `quarantined`. |
+| Removed | A status. The job took the memory out of use. The hub shows it in "Recently removed" for 30 d. |
+| Recently removed | The hub list of `removed` memories, with Restore. |
+| Purge | The permanent delete of a `removed` memory after 30 d. Only the job purges. |
+| Suggested to remove | The hub list of `stale` memories. The user can delete each one now, or keep it. |
+| Suggested to add | The hub list of `proposed` memories. The user approves, edits or rejects each one. |
 | Proposed | A status. A writer made the memory, but the user did not approve it. Recall does not use it. |
 | Stale | A status. The consolidation job found no use for a long time. Recall does not use it. Bottle keeps it. |
 | Pin | A user mark on a memory. A pinned memory never goes stale. Only a user action makes a pin (MEM-28b). |
@@ -68,7 +75,7 @@ The top open question for the owner is the storage and privacy option (Section 4
 | ADR | Architecture decision record. Each ADR is a file in `docs/adr/`. |
 | Wipe | The Settings action that deletes user content by age (ADR 0087, MEM-33a). |
 | Forget | The action that deletes named items, a session or a MOG with the items that cite them (ADR 0081). |
-| U9 | The binding rule "Bottle deletes no user content on its own". Only Wipe and Forget delete. |
+| U9 | The binding rule "Bottle deletes no user content on its own". This plan amends it for removed memories (M13). |
 | AI Gateway | The Databricks route `/ai-gateway/mlflow/v1/...` of a workspace. Bottle reaches models only through it. |
 | FTS5 | The SQLite full-text search module. The local store already has `memory_item_fts`. |
 
@@ -101,7 +108,7 @@ The top open question for the owner is the storage and privacy option (Section 4
 Two facts drive this plan:
 
 - Bottle already has a governed, encrypted memory table with quarantine, Forget and Wipe. A second store adds risk with no gain.
-- U9 forbids an automatic delete. So the consolidation job can change a status, but it cannot delete.
+- U9 forbids an automatic delete. The owner amends U9 for memories (Q2, M13). The job removes first, and purges only after 30 d.
 
 ## 3. External patterns (official documents, fetched 2026-11-21)
 
@@ -145,7 +152,7 @@ Fit for Bottle:
 - R-1. Bottle tells the user that local history is encrypted (ADR 0105). Memories are history.
 - R-2. Bottle never writes a token to disk, logs, test output or an agent transcript (`AGENTS.md` section 6).
 - R-3. Every write passes the quarantine check in Rust (ADR 0089). A quarantined item never reaches a model (SEC-24b).
-- R-4. Only Wipe and Forget delete user content (U9, MEM-33a). Each delete is atomic with its citing rows (ADR 0081).
+- R-4. Only Wipe, Forget and the memory purge of M13 delete user content. Each delete is atomic with its citing rows (ADR 0081).
 - R-5. Every statement filters by `mog_id` (MEM-01). The brain never sends SQL (MEM-34b).
 - R-6. Logs carry no content (SEC-16c).
 
@@ -195,7 +202,11 @@ How the user views and edits memories in option (c):
 - The export dialog says that the files have no encryption (MEM-38b).
 - An import of edited files is a later item. It runs each file through the same write checks.
 
-### 4.5 Recommendation
+### 4.5 Decision (owner, 2026-11-21)
+
+The owner chose option (c). Export gives real `.md` files and the index files on request.
+
+The reasons for option (c):
 
 Use option (c). It keeps every rule in 4.1 with code that is on main. The "file system" is the shape that the user and the models see, not the bytes on disk. If the owner wants real editable files, the export gives them on request.
 
@@ -209,11 +220,22 @@ Use option (c). It keeps every rule in 4.1 with code that is on main. The "file 
 | `preference` | How the user wants Bottle to act or write. | "Show amounts in EUR." | shared |
 | `definition` | The meaning of a business term or metric. | "An active user logged in this month." | MOG |
 | `decision` | A choice that a team made, with its date. | "Q3 churn uses the new formula." | MOG |
-| `person` | A person and their context at work. No special-category data. | "Pat owns the finance space." | MOG |
 | `open_question` | A question that has no answer yet. | "Which table holds refunds?" | MOG |
 | `genie_answer` | A Genie answer that the user kept. It has the exchange link. | "Churn in Q3 was 4.2 %." | MOG |
 
-The kinds `preference`, `definition` and `person` are new. The current kind `entity` becomes `person` in the migration.
+The kinds `preference` and `definition` are new. The owner dropped the `person` kind for now (Q7).
+
+The kind `entity` goes away. Migration 0003 must handle the old `entity` rows by these rules:
+
+- The migration must change each `entity` row to the kind `fact`.
+- The migration must set the status of each such row to `proposed`.
+- The migration must add the tag `legacy-entity` to each such row.
+- A `quarantined` `entity` row must stay `quarantined`.
+
+The reason: an `entity` row can hold data about a person. As a `proposed` memory, recall and the agent never see it. The user sees it in "Suggested to add" and decides. No user data is lost (U9).
+
+- The `bottle-mcp` list `AGENT_ITEM_TYPES` must drop `entity`.
+- A writer must not make a memory with a person as its subject.
 
 ### 5.2 Memory file format
 
@@ -269,7 +291,6 @@ Rules for the format:
     facts/<slug>.md
     definitions/<slug>.md
     decisions/<slug>.md
-    people/<slug>.md
     open-questions/<slug>.md
     answers/<slug>.md
 ```
@@ -319,7 +340,8 @@ Rules for the format:
 - The secret check must cover Databricks tokens, JWTs, cloud access keys, private key blocks and `password=` forms.
 - A pin must need a valid, unused action ticket (#574).
 - The agent and a model writer must never pin.
-- A model writer must write only `proposed` memories. Q4 asks the owner about this default.
+- A model writer must write only `proposed` memories (decided, Q4).
+- A `proposed` memory must become `active` only after the user approves it.
 - A deterministic write from a user action must write an `active` memory.
 - Each write from a card or a voice command must show "Saved to memory" with Undo for 8 s.
 - Undo must run `mem.forget.items` for that one memory. This is a user action, so U9 holds.
@@ -337,7 +359,7 @@ Rules for the format:
 4. Each candidate must quote one line of the notes as evidence.
 5. Rust checks each quote against the notes. Rust drops a candidate with no match.
 6. Rust writes each candidate as `proposed`, with `recording_id` and confidence 0.6 to 0.8.
-7. The hub shows the candidates under "Proposed". The user approves, edits or rejects each one.
+7. The hub shows the candidates under "Suggested to add". The user approves, edits or rejects each one.
 
 ## 7. The consolidation job
 
@@ -359,14 +381,42 @@ Rules for the format:
 |---|---|---|
 | Exact dedup | Two memories in one folder have the same normalized summary. | The older one becomes `superseded` by the newer one. Pins win over age. |
 | Near match | Two memories share 90 % or more of their FTS tokens. | Bottle shows a "Merge?" card in the hub. The job changes nothing. |
-| Stale-out | An unpinned `active` memory has no recall use and no edit for 90 d. | The status becomes `stale`. |
+| Stale-out | An unpinned `active` memory has no recall use and no edit for 90 d. | The status becomes `stale`. The hub shows it in "Suggested to remove". |
 | Revive | The user opens or searches a `stale` memory and selects "Keep". | The status becomes `active` again. |
 | Re-scan | The quarantine pattern version changed (for example after #543). | Each memory gets the new check. A hit becomes `quarantined`. A check never lowers a quarantine. |
 | Proposed age | A `proposed` memory has no user action for 30 d. | The status becomes `stale`. |
+| Remove | See the rules of 7.2a. | The status becomes `removed`. The hub shows it in "Recently removed". |
+| Purge | A `removed` memory has had that status for 30 d, with no Restore. | The job deletes the row through a Forget step. |
 | Cap | A folder is over its cap (5.4). | Automatic capture stops. The hub shows "Memory is full". Nothing is deleted. |
 | Index | Any change in a folder. | Rust rebuilds the index file and runs the FTS5 `optimize` command. |
 
-U9 rule: the job must never delete a row. It changes only `status`, `superseded_by` and the index. Q2 asks the owner if the job can delete stale memories after a long time.
+### 7.2a Remove and purge rules (decided, Q2)
+
+The owner said that Bottle must delete irrelevant memories, and must show them to the user to delete or add. So the job removes memories in two steps: remove, then purge.
+
+The job must remove a memory only if each of these conditions is true:
+
+- The memory must not be pinned.
+- The memory must have the status `stale`.
+- The memory must have had the status `stale` for 90 d or more.
+- The memory must have no recall use in the last 180 d.
+- The user must not have edited the memory in the last 180 d.
+- The memory must not be cited by a Page record of the hydration plan.
+
+Each other memory stays. Pinned memories are never removed by the job. A pin always wins over each rule of this section.
+
+Further rules:
+
+- A removed memory must keep all of its fields.
+- Recall, the index files and the memory tool must not use a `removed` memory.
+- "Restore" must set the status that the memory had before the remove.
+- The job must purge a memory only after 30 d with the status `removed`.
+- A purge must use the Forget step for items, so FTS rows and embed jobs go too (ADR 0081).
+- A purge must write one `forget_log` row with the scope `purge` and the item ids only.
+- The job must purge 200 memories or less in one run.
+- Wipe and Forget must also delete `removed` memories, as other memories.
+
+The user stays in control. Each memory that the job removes goes through "Suggested to remove" for 90 d first. Then it waits 30 d in "Recently removed". So a memory leaves the device 120 d or more after it first shows as a suggestion.
 
 ### 7.3 Model use (later, off by default)
 
@@ -379,7 +429,7 @@ U9 rule: the job must never delete a row. It changes only `status`, `superseded_
 
 ### 7.4 Logs
 
-- Each run must write one log line with counts only: for example `event=memory.consolidate deduped=2 staled=5 rescanned=40 ms=310`.
+- Each run must write one log line with counts only: for example `event=memory.consolidate deduped=2 staled=5 removed=3 purged=1 rescanned=40 ms=310`.
 - A log line must never hold a title, a summary, a body, a tag or a path.
 
 ## 8. Recall
@@ -437,7 +487,12 @@ The agent memory tool fits the later tool loop of the MOG-to-MOG plan (PR #617, 
 - The area must let the user delete a memory. Delete runs `mem.forget.items` after a confirm click.
 - The area must let the user pin a memory.
 - The area must let the user unpin a memory. A pin click mints an action ticket.
-- The area must have a "Proposed" list with Approve, Edit and Reject for each memory.
+- The area must have a "Suggested to add" list. It shows the `proposed` memories with Approve, Edit and Reject.
+- The area must have a "Suggested to remove" list. It shows the `stale` memories with Delete now and Keep.
+- Delete now must run `mem.forget.items` for that memory after a confirm click.
+- Keep must set the status `active` and reset the 90 d count.
+- The area must have a "Recently removed" list. It shows the `removed` memories with Restore and the purge date.
+- The "Recently removed" list must also have Delete now.
 - Reject must run `mem.forget.items` for that memory, because the user asked for the delete.
 - The area must show the source, the origin and a link to the exchange or the recording.
 - The area must have "Export" (MEM-38a) with the no-encryption warning (MEM-38b).
@@ -473,7 +528,8 @@ The agent memory tool fits the later tool loop of the MOG-to-MOG plan (PR #617, 
 - Migration 0003, the new catalog ids, the interface types and the action ticket command. Each new command answers `not_implemented`.
 - AC-0.1: `cargo test` and `pnpm test` pass. The catalog test lists the new ids.
 - AC-0.2: Migration 0003 runs on a store from 0002 and keeps every row. The test checks the count and the FTS rows.
-- AC-0.3: The migration maps each `entity` row to `person`.
+- AC-0.3: The migration changes each `entity` row to kind `fact`, status `proposed` and tag `legacy-entity`. A quarantined row stays quarantined.
+- AC-0.4: The new table refuses the kinds `entity` and `person`.
 
 ### Slice 1: local memory store, "Remember this" and the hub list (small and useful)
 
@@ -514,10 +570,14 @@ Not in slice 1: recall, edit, search, export, the shared folder, automatic captu
 
 ### Slice 3: the consolidation job (rules only)
 
-- ADR 0114. The Rust worker, the power policy, the steps of 7.2 and "Tidy up now".
+- ADR 0114. The Rust worker, the power policy, the steps of 7.2, the remove and purge rules of 7.2a and "Tidy up now".
 - The hub edit (origin `correction`) and the "Merge?" cards.
+- The hub lists "Suggested to remove" and "Recently removed" with Restore.
 - AC-3.1: With a simulated clock, a 91 d unused unpinned memory becomes `stale`. A pinned one stays `active`.
-- AC-3.2: The job deletes no row. A row count test before and after a run proves it.
+- AC-3.1a: A memory `stale` for 91 d with no recall in 180 d becomes `removed`. A pinned memory with the same history stays.
+- AC-3.1b: A `removed` memory is purged after 30 d. Restore before that sets its old status again.
+- AC-3.1c: A purge leaves no row, FTS row or embed job. It writes one `forget_log` row with the scope `purge`.
+- AC-3.2: The job deletes only rows that meet the purge rule. A row count test before and after a run proves it.
 - AC-3.3: The job does not start on battery under 50 % or in Low Power Mode. A test double gives the power state.
 - AC-3.4: The job stops within 100 ms of a talk-key press.
 - AC-3.5: A pattern version change quarantines a memory that matches the new pattern.
@@ -525,9 +585,9 @@ Not in slice 1: recall, edit, search, export, the shared folder, automatic captu
 
 ### Slice 4: automatic capture
 
-- Slice 4 updates ADR 0113 with the final status default (Q4).
+- Slice 4 uses the `proposed` default of ADR 0113 (decided, Q4).
 - "Keep" on Genie answer cards, the dictation words option and the call-notes writer of 6.3.
-- The hub "Proposed" list and the export.
+- The hub "Suggested to add" list and the export.
 - AC-4.1: A finished recording with notes gives up to 10 `proposed` memories, each with a quote that matches the notes.
 - AC-4.2: Bottle sends no transcript text to the model. The request body test checks this.
 - AC-4.3: The writer request uses the home profile and `/ai-gateway/mlflow/v1/chat/completions`.
@@ -551,7 +611,7 @@ Not in slice 1: recall, edit, search, export, the shared folder, automatic captu
 
 | ID | Flag | File(s) | Change | Slice |
 |---|---|---|---|---|
-| M1 | CONTRACT + SCHEMA | `local_store/migrations/0003_memory_files.sql` | Rebuild `memory_item` with the new kinds and statuses. Add `title`, `body_md`, `tags`, `origin`, `slug`, `profile`, `recording_id`, `last_used_at`, `use_count`, `stale_at`. Map `entity` to `person`. Keep the FTS and vec triggers. | 0 |
+| M1 | CONTRACT + SCHEMA | `local_store/migrations/0003_memory_files.sql` | Rebuild `memory_item` with the new kinds and statuses. Add `title`, `body_md`, `tags`, `origin`, `slug`, `profile`, `recording_id`, `last_used_at`, `use_count`, `stale_at`. Add the status `removed` and the columns `removed_at` and `status_before_removed`. Drop the kinds `entity` and `person`. Change old `entity` rows to `fact`, `proposed`, tag `legacy-entity` (5.1). Keep the FTS and vec triggers. | 0 |
 | M2 | CONTRACT | `local_store/catalog.rs`, `src/brain/components/memory-store.ts` | New brain ids: `mem.item.list`, `mem.item.search`, `mem.item.edit`, `mem.item.set_status`, `mem.index.get`, `mem.item.export`. New Rust-only ids: `mem.consolidate.*`. | 0, 2, 3 |
 | M3 | CONTRACT | `src/shared/interfaces.ts` | `MemoryHit['type']` and `MemoryDraft` get the new kinds, `title`, `body`, `tags` and `origin`. `MemoryDraft` gets the #533 link fields. | 0 |
 | M4 | CONTRACT | `src-tauri/src/ipc.rs`, `crates/mog-core/src/ipc.rs`, `src/shared/ipc.ts` | The action ticket of #574: a host-minted, single-use ticket bound to one MOG. `mem_local_exec` accepts `pinned: true` only with it. | 0 |
@@ -563,16 +623,62 @@ Not in slice 1: recall, edit, search, export, the shared folder, automatic captu
 | M10 | CONTRACT | `src/shared/ipc.ts`, `crates/mog-core/src/ipc.rs` | A Rust handler for the `memory` function inside `agent_model_step` (PR #617 C9). | 5 |
 | M11 | SCOPE | `AGENTS.md` section 1 | Lift "memory recall" (FTS5 only) from the out-of-scope list. Embeddings stay out. | 2 |
 | M12 | REQUIREMENT | `research/final-requirements.md` | New rows for this plan: kinds, statuses, caps, secret check, consolidation job and memory tool. Amend MEM-28a and MEM-29a for the `proposed` status. | 0 |
-| M13 | REQUIREMENT | `research/final-requirements.md` (U9, MEM-33a) | Only if the owner says yes to Q2: let the job delete stale memories after a set time. | 3 |
+| M13 | REQUIREMENT (decided, Q2) | `research/final-requirements.md` (U9, MEM-33a, Section 9.2), `AGENTS.md` | Amend U9 and MEM-33a for the memory remove and purge of 7.2a. Add the rows of 12.1. | 0 (text), 3 (code) |
+
+### 12.1 M13: the requirement change for U9 and MEM-33a
+
+The new text of U9:
+
+> Bottle deletes no user content on its own, with one exception. The memory consolidation job can remove and then purge memories by the rules of MEM-42 to MEM-50. All other user content is deleted only by Wipe or Forget.
+
+The new text of MEM-33a. The first sentence changes, and the rest of the row stays:
+
+> The WipeService must delete user content only when the user selects Wipe in Settings, except the memory purge of MEM-47.
+
+The acceptance text of MEM-33a gets this addition: "A memory purge by MEM-47 is not a Wipe."
+
+The new requirement rows (priority M, milestone MVP-D, use case UC2):
+
+| ID | Requirement | Acceptance |
+|---|---|---|
+| MEM-42 | The consolidation job must never remove or purge a pinned memory. | A pinned memory with no use for 400 d stays `active`. |
+| MEM-43 | The job must set `stale` on an unpinned `active` memory with no recall use and no edit for 90 d. | The simulated clock test passes. |
+| MEM-44 | The consolidation job must remove a memory only if it meets each condition of Table MEM-REMOVE. | A memory that fails one condition stays. |
+| MEM-45 | A `removed` memory must not appear in recall, in an index file or in a memory tool result. | The recall, index and tool tests find no `removed` memory. |
+| MEM-46 | The hub must show each `removed` memory in "Recently removed" with Restore and its purge date. | Restore sets the status from before the remove. |
+| MEM-47 | The consolidation job must purge a memory only after 30 d with the status `removed`. | A memory at 29 d stays. A memory at 31 d is gone. |
+| MEM-48 | A purge must delete the memory row, its FTS row and its embed job in one transaction. | `mem.recall.fts` no longer finds the text. |
+| MEM-49 | A purge must write one `forget_log` row with the scope `purge` and the item ids only. | The row holds no text. |
+| MEM-50 | The hub must show "Suggested to remove" (`stale` memories) and "Suggested to add" (`proposed` memories). | Each list has its actions of Section 9.1. |
+| MEM-51 | A model writer must write each memory with the status `proposed`. | No model write gives an `active` memory. |
+| MEM-52 | A `proposed` memory must become `active` only after a user approval in the hub. | Recall never returns a `proposed` memory. |
+
+**Table MEM-REMOVE (conditions for a remove, MEM-44).**
+
+| Condition | Value |
+|---|---|
+| Pin | Not pinned. |
+| Status | `stale` for 90 d or more. |
+| Recall use | None in the last 180 d. |
+| User edit | None in the last 180 d. |
+| Page record | No Page record cites the memory. |
+
+Section 9.2 of the requirements gets one new row: "Removed memories: purged by the consolidation job 30 d after the remove (MEM-47)."
 
 ## 13. New ADRs
 
 - **ADR 0112: Local memories as a virtual folder on the SQLCipher store.** It records option (c) and the file format. It also records the folder layout, the path grammar, the caps, the export and migration 0003.
-- **ADR 0113: Memory capture rules.** The write triggers, the deterministic and the model writers, the `proposed` status, the action ticket, the secret check and Undo.
-- **ADR 0114: The memory consolidation job.** The Rust worker, idle and power rules, the steps, the U9 rule and the content-free log.
+- **ADR 0113: Memory capture rules.** The write triggers and the writers. It also records the `proposed` status (decided), the action ticket, the secret check and Undo.
+- **ADR 0114: The memory consolidation job.** The Rust worker, idle and power rules, the steps, the remove and purge rules (M13) and the content-free log.
 - **ADR 0115: Memory recall in the ask path and the agent memory tool.** It records the RecallGate with FTS5 and the provenance chip. It also records the `memory` function with the `memory_20250818` command shape.
 
-Note: the hydration plan (PR #611) names ADR 0109 to ADR 0112 for its own work. Those numbers are not in the reservation file, and ADR 0109 is on main. That plan must reserve new numbers.
+Note on ADR numbers: the hydration plan (PR #611) names ADR 0109 to ADR 0112 for its own work. Those numbers are not free.
+
+- ADR 0109 is on main (recording upload in parts).
+- ADR 0110 and ADR 0111 belong to the MOG-to-MOG plan (PR #617).
+- ADR 0112 to ADR 0115 belong to this plan.
+
+PR #611 must reserve new numbers with `adr-next.sh` before it merges.
 
 ## 14. Risks
 
@@ -582,24 +688,36 @@ Note: the hydration plan (PR #611) names ADR 0109 to ADR 0112 for its own work. 
 | The owner wants real files on disk (option a). | Plain text leaks to backups, indexers and other apps. | Keep option (c). Give real files only through Export with the warning. |
 | A memory holds injection text. | The agent obeys it. | Quarantine on each write and each re-scan. Tool results are data. Model writes are `proposed`. Fix #543. |
 | A memory holds a token or a password. | A secret is on disk. | The R10 secret check refuses the write. Tests use fake values only. |
-| A `person` memory holds personal data. | Privacy harm. | No special-category data (MEM-29c). The hub shows each person memory. Q7 asks the owner. |
+| An old `entity` row holds data about a person. | Privacy harm. | The `person` kind is dropped (Q7). Old rows become `proposed` with the tag `legacy-entity`, so no recall uses them until the user approves. |
 | Keyword recall gives poor hits. | Noise on the card. | Show 3 hits or less. Never stop the Genie ask in slice 2. Measure on a golden set. |
-| U9 blocks the cleanup that the owner wants. | Memory grows with no limit. | `stale` status, caps and "Memory is full". Q2 asks the owner. |
+| The job removes a memory that the user needs. | Lost know-how. | Pins are never removed. 90 d in "Suggested to remove", then 30 d in "Recently removed" with Restore. |
+| The purge breaks the U9 promise to users. | Loss of trust. | The hub and the docs say which memories the job can purge, and when. M13 changes the requirement text first. |
 | The job uses power or blocks an ask. | Battery drain or a slow ask. | Idle start, power rules, short transactions and a stop on the talk key. |
 | The keychain key is lost. | All memories are lost (MEM-09a). | The hub names the loss. Export is the backup. v1 sync can rebuild. |
 | #574 is not done. | Slice 1 cannot pin. | The ticket is part of slice 0 and slice 1. |
 | A model writer costs money. | Charges in the home workspace. | Off until slice 4, a call cap and a token cap, and the data panel line. |
 | A memory crosses workspaces. | Data from workspace A reaches workspace B. | One folder per MOG, Genie answers never shared, and the PR #617 consent rules. |
 
-## 15. Open questions for the owner
+## 15. Questions for the owner
 
-- **Q1 (top). Storage and privacy.** Do you accept option (c), the encrypted store with a virtual folder? Or do you want (a) plain files or (b) encrypted files?
-- Q2. U9 says that only Wipe and Forget delete. Can the consolidation job delete stale memories after a set time, for example 365 d?
+### 15.1 Decided on 2026-11-21
+
+- **Q1. Storage and privacy: option (c).** Memories live in the encrypted SQLCipher store. Bottle shows them as the virtual folder `/memories`. Export gives real `.md` files.
+- **Q2. Cleanup with removal.** The owner said: "yeah we should be able to delete memories that are irrelevant and also show them to the user to delete or add."
+  - The job removes only unpinned, stale, unused memories by Table MEM-REMOVE (7.2a).
+  - A removed memory stays 30 d in "Recently removed" with Restore. Then the job purges it.
+  - The hub shows "Suggested to remove" and "Suggested to add".
+  - Pinned memories are never removed by the job.
+  - This amends U9 and MEM-33a (M13, Section 12.1).
+- **Q4. Model writes.** A model-written memory has the status `proposed`. It needs the user's approval.
+- **Q7. The `person` kind.** It is dropped for now. Old `entity` rows become `fact`, `proposed`, tag `legacy-entity` (5.1).
+- **Next work.** Build slice 0 (contract, ADRs and migration 0003) at the contract gate. Then build slice 1.
+
+### 15.2 Still open
+
 - Q3. Do you lift "memory recall" (keyword only) from the out-of-scope list for slice 2? Embeddings stay out.
-- Q4. Must model-written memories wait for your approval (`proposed`), or become `active` with Undo?
 - Q5. Do you accept a shared folder across MOGs (a reserved MOG id)? Which kinds can go in it?
 - Q6. Can the consolidation job use a model to merge memories later, with the caps of 7.3?
-- Q7. Do you want the `person` kind at all? It holds data about colleagues.
 - Q8. Must Wipe delete pinned memories, as it does today?
 - Q9. Do you want "answer from memory" (no Genie call) later, after a golden set passes?
 - Q10. Must dictation words become memories, or stay a separate setting?
