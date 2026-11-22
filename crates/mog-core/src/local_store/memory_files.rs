@@ -571,16 +571,27 @@ fn inline(s: &str) -> String {
         .replace("<!--", "&lt;!--")
 }
 
-/// The body of an item as the file holds it (security review L2):
-/// - `<!--` never opens a comment, so a body cannot fake the hidden metadata line of another item;
-/// - a body that the user did not write (Genie, an agent, a legacy row) goes in a block quote, so
-///   its `#` lines and `_…_` lines cannot fake the section of a pinned item.
+/// The body of an item as the file holds it (security review L2, L-c):
+/// - `<!--` never opens a comment, so a body cannot fake the hidden metadata line of an item;
+/// - in every body, a line that starts with `#` or is a whole `_…_` line gets a `\` in front, so
+///   it shows as text and cannot fake a section heading or a meta line;
+/// - a body that the user did not write (Genie, an agent, a legacy row) also goes in a block
+///   quote.
 fn safe_body(body: &str, user: bool) -> String {
     let body = body.replace("<!--", "&lt;!--");
+    let demoted = body.lines().map(|l| {
+        let t = l.trim_start();
+        let meta = t.len() > 1 && t.starts_with('_') && t.trim_end().ends_with('_');
+        if t.starts_with('#') || meta {
+            format!("\\{t}")
+        } else {
+            l.to_owned()
+        }
+    });
     if user {
-        return body;
+        return demoted.collect::<Vec<_>>().join("\n");
     }
-    body.lines()
+    demoted
         .map(|l| {
             if l.is_empty() {
                 ">".to_owned()
@@ -1130,16 +1141,24 @@ mod tests {
         r.tags = vec!["a <!-- b".into()];
         let f = render_item(&r, 2, 0);
         assert_eq!(f.matches("<!--").count(), 1, "{f}");
-        assert!(f.contains("> ## Fake pinned\n> &lt;!-- memory"), "{f}");
-        assert!(f.contains("> _10:05 · You"), "{f}");
+        assert!(f.contains("> \\## Fake pinned\n> &lt;!-- memory"), "{f}");
+        assert!(f.contains("> \\_10:05 · You"), "{f}");
         assert!(f.contains(">\n> end"), "{f}");
         assert!(f.contains("Tags: a &lt;!-- b"), "{f}");
         assert_eq!(f.lines().filter(|l| l.starts_with("## ")).count(), 1);
         // The user's own words stay as they are, with only the comment escaped.
+        // A pin or a hub add (the user's own words) is not quoted, but its heading and meta
+        // lines are demoted too (review L-c).
         let mut u = row(ID_B, "fact", "Mine");
-        u.body_md = "# My heading\n<!-- x".into();
+        u.body_md =
+            "# My heading\n  ## Inner\n_10:05 · You · Pinned_\nplain _a_ text\n<!-- x".into();
         let g = render_item(&u, 2, 0);
-        assert!(g.contains("\n# My heading\n&lt;!-- x\n"), "{g}");
+        assert!(
+            g.contains("\n\\# My heading\n\\## Inner\n\\_10:05 · You · Pinned_\nplain _a_ text\n&lt;!-- x\n"),
+            "{g}"
+        );
+        assert_eq!(g.lines().filter(|l| l.starts_with('#')).count(), 1, "{g}");
+        assert_eq!(g.lines().filter(|l| l.starts_with('_')).count(), 1, "{g}");
     }
 
     /// Security review L3: the Debug forms hold ids and codes, never user text.

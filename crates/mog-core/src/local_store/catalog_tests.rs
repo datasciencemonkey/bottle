@@ -1591,6 +1591,45 @@ mod memory_s1 {
         assert_eq!(get(&s, ITEM_1), Value::Null);
     }
 
+    /// Security review L-a: `tags` is a list of at most 8 strings of at most 64 characters. Any
+    /// other shape is refused before any SQL, so no tag skips the secret check.
+    #[test]
+    fn la_tags_must_be_a_short_list_of_short_strings() {
+        let (_t, s) = store("la-tags");
+        let bad = Err(CoreError::InvalidStatementParams { component: "R10" });
+        let secret_obj = json!({ "k": fake_token() });
+        for tags in [
+            json!([secret_obj]),
+            json!([[fake_token()]]),
+            json!([1, 2]),
+            json!("one"),
+            json!({ "a": "b" }),
+            json!(vec!["x"; 9]),
+            json!(["y".repeat(65)]),
+            json!([null]),
+        ] {
+            let r = with_day_clock(0, T0, || {
+                s.exec(
+                    "mem.item.write",
+                    write(ITEM_1, json!({ "tags": tags.clone() })),
+                )
+            });
+            assert_eq!(r, bad, "{tags}");
+        }
+        assert_eq!(col(&s, "SELECT count(*) FROM memory_item"), 0);
+        with_day_clock(0, T0, || {
+            exec(
+                &s,
+                "mem.item.write",
+                write(ITEM_1, json!({ "tags": ["a", "b".repeat(64)] })),
+            );
+        });
+        assert_eq!(
+            get(&s, ITEM_1)["tags"],
+            json!(format!("[\"a\",\"{}\"]", "b".repeat(64)))
+        );
+    }
+
     /// Security review L1: a token split across two fields is still found.
     #[test]
     fn l1_a_secret_split_across_fields_is_refused() {

@@ -43,6 +43,8 @@ of a user action crossed from the brain (#574).
      only a row with `updated_at < mintedAt`; every writer sets `updated_at` in ms on the SQLite
      clock. So a write between the click and the release makes the release change nothing.
    - An automatic write never rewrites the words of a quarantined row either.
+   - Known limit (review L-b, a follow-up issue): the guard compares wall-clock times. A
+     snapshot of the row version at mint would not depend on the clocks agreeing.
    - **An edit re-quarantines** (MEM-46). An edit runs the check again. Instruction text sets
      `quarantined` and clears `released_at`, also on an item that the user released before.
      Clean text sets `active`, also on a quarantined or stale item.
@@ -106,9 +108,12 @@ of a user action crossed from the brain (#574).
 
 - A card or hub `click` counts as the user's own only because the view code is app-owned and
   the gateway lets only view windows send `view_emit`.
-- A rendered body cannot open a comment (`<!--` becomes `&lt;!--`). A body that the user did not
-  write (Genie, an agent, a legacy row) is a block quote, so it cannot fake the heading or the
-  meta line of a pinned item.
+- A rendered body cannot open a comment (`<!--` becomes `&lt;!--`). In every body, a line that
+  starts with `#` or is a whole `_…_` line gets a `\` in front, so no body can fake a section
+  heading or a meta line. A body that the user did not write (Genie, an agent, a legacy row) is
+  also a block quote.
+- `tags` must be a list of at most 8 strings of at most 64 characters; any other shape gets
+  `invalid_args` before any SQL.
 - A card ticket binds the MOG, not the text. A faulty brain could use one real click to pin other
   text in that MOG within 60 s.
 - R4 reports no lease owner for a segment, so the voice ticket binds the MOG that the brain named

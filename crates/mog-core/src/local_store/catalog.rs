@@ -81,6 +81,15 @@ pub enum ParamType {
     /// Free text for an FTS5 `MATCH`. The core keeps only its words and quotes each one, so the
     /// text can never be FTS5 syntax (MEM-34b). At least one word is required.
     FtsTerms,
+    /// A list of at most `max_items` strings, each of at most `max_chars` characters, stored as
+    /// JSON text. Any other shape (an object, a nested list, a number) is refused, so each tag
+    /// reaches the secret check and the quarantine as a string.
+    Tags {
+        /// The most items.
+        max_items: usize,
+        /// The most characters of one item.
+        max_chars: usize,
+    },
     /// Set by the core, never by the caller: 1 if the text params named in `of` must be
     /// quarantined (SEC-24a, [`super::quarantine::is_quarantined`]), else 0. A caller that sends
     /// this key is refused, so no item write can skip the check (#114, ADR 0089).
@@ -392,6 +401,11 @@ const SOURCE_UTTERANCE_IDS: Param = opt("sourceUtteranceIds", json(65_536));
 const QUARANTINED: Param = opt("quarantined", BOOL);
 /// The three text fields of a write, as the core checks them (ADR 0113).
 const WRITE_TEXTS: &[&str] = &["title", "text", "body"];
+/// The tags of a memory: at most 8, each at most 64 characters (migration 0003 caps the count).
+const TAGS: ParamType = ParamType::Tags {
+    max_items: 8,
+    max_chars: 64,
+};
 /// The fields that the secret check and the quarantine read: the texts and each tag string
 /// (security review M2).
 const CHECKED_TEXTS: &[&str] = &["title", "text", "body", "tags"];
@@ -478,7 +492,7 @@ const ITEM_UPSERT: Stmt = Stmt {
         opt("text", text(600)),
         opt("title", text(80)),
         opt("body", text(4_000)),
-        opt("tags", json(1_024)),
+        opt("tags", TAGS),
         opt("origin", CODE),
         opt("profile", text(128)),
         req("source", CODE),
@@ -1087,7 +1101,7 @@ const ITEM_WRITE: Group = Group {
         opt("text", text(600)),
         opt("title", text(80)),
         opt("body", text(4_000)),
-        opt("tags", json(1_024)),
+        opt("tags", TAGS),
         opt("origin", CODE),
         opt("profile", text(128)),
         req("source", CODE),
@@ -1587,6 +1601,20 @@ fn bind_value(ty: ParamType, v: &Value) -> CoreResult<SqlValue> {
             SqlValue::Text(s)
         }
         ParamType::FtsTerms => SqlValue::Text(fts_terms(&text(v)?).ok_or_else(bad)?),
+        ParamType::Tags {
+            max_items,
+            max_chars,
+        } => {
+            let items = v.as_array().ok_or_else(bad)?;
+            if items.len() > max_items
+                || !items
+                    .iter()
+                    .all(|t| t.as_str().is_some_and(|t| t.chars().count() <= max_chars))
+            {
+                return Err(bad());
+            }
+            SqlValue::Text(serde_json::to_string(v).map_err(|_| bad())?)
+        }
         // Never bound from a caller value: `check_params` computes it.
         ParamType::Quarantine { .. }
         | ParamType::Secret { .. }
