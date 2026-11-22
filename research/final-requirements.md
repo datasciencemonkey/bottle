@@ -493,7 +493,9 @@ export type CaptureMode = 'ptt'|'hands_free'|'session';
 export interface SessionPolicy { checkInAtMin: 55; softCapMin: 60; extendMin: 30; silenceNudgeMin: 5; silenceStopMin: 15; hardCapMin: number /*60..480, default 240*/; lockStopMin: 10; holdMaxSec: 120; handsFreeMaxMin: 5 }
 export interface CaptureState { owner?: MogId; mode?: CaptureMode; recording: boolean; paused: boolean; sessionId?: string; startedAt?: number; directedTo?: MogId; othersTrack: 'off'|'ok'|'zero_buffers' }
 export interface SegmentRef { segmentId: string; mogId: MogId; sessionId?: string; track: Track; tStartMs: number; tEndMs: number; final: boolean; directedTo?: MogId }
-export interface Transcript { segmentId: string; text: string; raw: string; lang?: string; provider: 'local_parakeet'|'dbx_gemini'|'dbx_whisper'; model: string; runtime: string; latencyMs: number }
+export interface Transcript { segmentId: string; text: string; raw: string; lang?: string; provider: 'local_parakeet'|'dbx_gemini'|'dbx_whisper'; model: string; runtime: string; latencyMs: number; remember?: { ticket: string; text: string } }
+/** `memory:saved` (ADR 0113): the outcome of a card or voice "remember". Content-free. */
+export interface MemorySaved { mogId: MogId; itemId?: string; outcome: 'saved'|'quarantined'|'secret_refused'|'failed'; undoMs: number }
 
 // ---------- router (D25, D30, D63; schema in Appendix D) ----------
 export type Intent = 'question'|'memory_question'|'context'|'command'|'dictation'|'noise';   // dictation = UC1 (B5)
@@ -516,8 +518,14 @@ export interface MemoryService {
   forget(scope: { sessionId?: string; mogId?: MogId; itemIds?: string[] }): Promise<{ local: number; remotePending: number; pitrWindowS: number }>;
   mode(): 'local'|'local_synced'|'sync_paused'; syncStatus(): { pending: number; lastOk?: string };   // MVP = 'local' (B2)
 }
-export interface MemoryHit { itemId: string; type: 'decision'|'fact'|'entity'|'open_question'|'genie_answer'; text: string; score: number; sem?: number; workspaceId?: string; spaceId?: string; ageH: number }
-export interface MemoryDraft { mogId: MogId; type: MemoryHit['type']; text: string; source: 'you'|'others'|'genie'|'agent'; sessionId?: string; workspaceHost?: string; workspaceId?: string; pinned?: boolean }
+// Local memory slice 1 (ADR 0112, ADR 0113): the kinds, layers, statuses, origins and rating.
+export type MemoryKind = 'fact'|'preference'|'definition'|'decision'|'open_question'|'genie_answer';
+export type MemoryLayer = 'user'|'durable'|'daily';
+export type MemoryStatus = 'active'|'stale'|'superseded'|'resolved'|'retracted'|'quarantined'|'removed';
+export type MemoryOrigin = 'pin'|'added'|'kept_answer'|'correction'|'dictation_word'|'call_notes'|'flush'|'agent'|'dream'|'merge'|'legacy';
+export type MemoryRating = -1|0|1;
+export interface MemoryHit { itemId: string; type: MemoryKind; text: string; score: number; sem?: number; workspaceId?: string; spaceId?: string; ageH: number }
+export interface MemoryDraft { mogId: MogId; type: MemoryKind; text: string; title?: string; body?: string; tags?: string[]; origin?: MemoryOrigin; source: 'you'|'others'|'genie'|'agent'; sessionId?: string; workspaceHost?: string; workspaceId?: string; pinned?: boolean }
 export interface GenieExchange { requestId: string; mogId: MogId; ref: ExchangeRef; questionUser: string; questionSent: string; status: OperationState; answerMd?: string; keyNumbers: unknown[]; deepLink: string; homeWorkspace: boolean; splitGroupId?: string }
 
 // ---------- main agent (B4) ----------

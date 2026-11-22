@@ -385,6 +385,50 @@ pub struct Transcript {
     pub model: String,
     pub runtime: String,
     pub latency_ms: u64,
+    /// Local memory slice 1 (ADR 0113): Rust found "remember this: ..." in its own transcript.
+    /// The brain stores `text` as a pinned memory with `ticket` and does not paste.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remember: Option<RememberHit>,
+}
+
+/// The voice "remember" of one transcript (ADR 0113). Its `Debug` holds no text.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RememberHit {
+    /// A host-minted Pin ticket bound to `text`.
+    pub ticket: String,
+    /// The body to remember, as Rust parsed it.
+    pub text: String,
+}
+
+impl std::fmt::Debug for RememberHit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RememberHit")
+            .field("text_chars", &self.text.chars().count())
+            .finish_non_exhaustive()
+    }
+}
+
+/// The outcome of a card or voice "remember" (`memory:saved`, ADR 0113). Content-free.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MemorySaved {
+    pub mog_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_id: Option<String>,
+    pub outcome: MemorySavedOutcome,
+    /// How long the Undo shows, in ms.
+    pub undo_ms: u64,
+}
+
+/// What a "remember" did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MemorySavedOutcome {
+    Saved,
+    Quarantined,
+    SecretRefused,
+    Failed,
 }
 
 impl std::fmt::Debug for Transcript {
@@ -399,6 +443,7 @@ impl std::fmt::Debug for Transcript {
             .field("model", &self.model)
             .field("runtime", &self.runtime)
             .field("latency_ms", &self.latency_ms)
+            .field("remember", &self.remember.is_some())
             .finish()
     }
 }

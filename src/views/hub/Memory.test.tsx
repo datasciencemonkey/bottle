@@ -246,7 +246,12 @@ describe('hub Memory area', () => {
     await click(options(el)[0] ?? null);
     await click(q(el, '[data-action="thumbs-up"]'));
     expect(src.actions('memory.rate')).toEqual([
-      { action: 'memory.rate', mogId: MOG_A, itemId: MODEL.folders[0]?.rows[0]?.itemId },
+      {
+        action: 'memory.rate',
+        requestId: expect.any(String),
+        mogId: MOG_A,
+        itemId: MODEL.folders[0]?.rows[0]?.itemId,
+      },
     ]);
     expect(options(el)[0]?.querySelector('[data-mark="new"]')).toBeNull();
     expect(q(el, '[data-action="thumbs-up"]')?.hasAttribute('disabled')).toBe(true);
@@ -259,7 +264,7 @@ describe('hub Memory area', () => {
     await click(q(el, '[data-action="thumbs-up"]'));
     const row = MODEL.folders[0]?.rows[2] as MemoryFileRow;
     expect(src.actions('memory.rate')).toEqual([
-      { action: 'memory.rate', mogId: MOG_A, itemId: row.itemId },
+      { action: 'memory.rate', requestId: expect.any(String), mogId: MOG_A, itemId: row.itemId },
     ]);
     expect(options(el)[2]?.querySelector('[data-mark="quarantined"]')).toBeNull();
     expect(q(el, '[data-memory-quarantine-note]')).toBeNull();

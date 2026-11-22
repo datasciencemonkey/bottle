@@ -481,6 +481,7 @@ fn sec_03_each_ipc_error_maps_to_a_fixed_code() {
         IpcError::SttInstallBusy { command: s() },
         IpcError::SttModelsDirUnavailable { command: s() },
         IpcError::SttSetupUnavailable { command: s() },
+        IpcError::SecretRefused { command: s() },
     ];
     assert_eq!(all.len(), ERROR_CODES.len(), "one code per variant");
     for e in &all {

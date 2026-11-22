@@ -14,6 +14,7 @@ pub mod link_host;
 #[cfg(target_os = "macos")]
 pub mod macos_panel;
 pub mod mcp_host;
+pub mod memory_host;
 pub mod mog_config_host;
 pub mod mog_drag;
 pub mod mog_look_host;

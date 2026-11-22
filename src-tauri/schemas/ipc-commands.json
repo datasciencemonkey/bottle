@@ -832,6 +832,14 @@
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
+        "actionTicket": {
+          "description": "hub add, a rating, a release or an edit. The brain never makes one.",
+          "title": "574 (ADR 0113): a host-minted user-action ticket. The host redeems it before a pin, a",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "params": {
           "additionalProperties": true,
           "type": "object"
@@ -852,6 +860,14 @@
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
+        "actionTicket": {
+          "description": "hub add, a rating, a release or an edit. The brain never makes one.",
+          "title": "574 (ADR 0113): a host-minted user-action ticket. The host redeems it before a pin, a",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "params": {
           "additionalProperties": true,
           "type": "object"
@@ -2445,6 +2461,7 @@
     "config_limit_reached",
     "secret_named_key",
     "token_like_value",
+    "secret_refused",
     "genie_beta_mcp_rejected",
     "genie_space_mcp_rejected",
     "genie_one_sse_rejected",
@@ -2579,6 +2596,11 @@
       "direction": "core_to_brain",
       "name": "view:input",
       "specName": "view.input"
+    },
+    {
+      "direction": "brain_to_view",
+      "name": "memory:saved",
+      "specName": "memory.saved"
     },
     {
       "direction": "core_to_brain",

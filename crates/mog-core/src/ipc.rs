@@ -285,6 +285,10 @@ pub enum IpcError {
     TokenLikeValue {
         command: String,
     },
+    /// Local memory (ADR 0113): the secret check refused a memory write. No row was stored.
+    SecretRefused {
+        command: String,
+    },
     /// `config_*` (#379): a config URL names the beta Genie MCP (G-03). The `mog_config` code `genie_beta_mcp_rejected`.
     GenieBetaMcpRejected {
         command: String,
@@ -559,6 +563,9 @@ impl std::fmt::Display for IpcError {
                 f,
                 "{command}: a config key or value looks like a token (MB-02)"
             ),
+            IpcError::SecretRefused { command } => {
+                write!(f, "{command}: a memory looks like it holds a secret")
+            }
             IpcError::GenieBetaMcpRejected { command } => {
                 write!(f, "{command}: a config URL names the beta Genie MCP (G-03)")
             }
@@ -1074,6 +1081,10 @@ args!(MemExecArgs {
     /// A statement ID of the fixed catalog (R9, R10). Never SQL text.
     stmt_id: String,
     params: JsonObject,
+    /// #574 (ADR 0113): a host-minted user-action ticket. The host redeems it before a pin, a
+    /// hub add, a rating, a release or an edit. The brain never makes one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    action_ticket: Option<String>,
 });
 args!(
     /// The args of `mem_wipe` (#525): the wire name of one `wipe::WipeScope`.

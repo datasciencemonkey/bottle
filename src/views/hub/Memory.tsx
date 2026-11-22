@@ -300,7 +300,12 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
 
   const rate = useCallback(() => {
     if (!sel?.mogId || !row) return;
-    source.send({ action: 'memory.rate', mogId: sel.mogId, itemId: row.itemId });
+    source.send({
+      action: 'memory.rate',
+      requestId: crypto.randomUUID(),
+      mogId: sel.mogId,
+      itemId: row.itemId,
+    });
     setRated((s) => new Set([...s, row.itemId]));
   }, [sel, row, source]);
 

@@ -84,6 +84,8 @@ export interface MemoryFileRow {
   rating: -1 | 0 | 1;
   /** Epoch ms of the last rating or edit. */
   reviewedAt?: number;
+  /** Epoch ms: the user released this item from quarantine ("You released this"). */
+  releasedAt?: number;
   /** Epoch ms. */
   createdAt: number;
   /** Epoch ms. */
@@ -133,8 +135,57 @@ export interface MemoryFileView {
 export type MemoryAction =
   | { action: 'memory.ready' }
   | { action: 'memory.file'; mogId: string; path: string }
-  | { action: 'memory.rate'; mogId: string; itemId: string }
+  | { action: 'memory.item'; mogId: string; itemId: string }
+  | {
+      action: 'memory.add';
+      requestId: string;
+      mogId: string;
+      kind: EditableKind;
+      title: string;
+      body: string;
+    }
+  | {
+      action: 'memory.edit';
+      requestId: string;
+      mogId: string;
+      itemId: string;
+      kind: MemoryKindName;
+      title: string;
+      body: string;
+    }
+  | { action: 'memory.rate'; requestId: string; mogId: string; itemId: string }
   | { action: 'memory.delete'; mogId: string; itemId: string };
+
+/** The caps of a user write (ADR 0113, migration 0003). */
+export const TITLE_MAX = 80;
+export const BODY_MAX = 4_000;
+
+/** The kinds a user can pick when they add or edit an item. A Genie answer stays one. */
+export const EDITABLE_KINDS = ['fact', 'definition', 'decision', 'open_question'] as const;
+export type EditableKind = (typeof EDITABLE_KINDS)[number];
+
+/** Brain to hub: the raw fields of one item, for the editor (`memory.item`). */
+export const HUB_MEMORY_ITEM_EVENT = 'hub:memory.item';
+export interface MemoryItemFields {
+  mogId: string;
+  itemId: string;
+  kind: MemoryKindName;
+  title: string;
+  body: string;
+  status: MemoryStatusName;
+  pinned: boolean;
+  releasedAt?: number;
+}
+
+/** Brain to hub: the result of one add, edit or rating, by `requestId`. Content-free. */
+export const HUB_MEMORY_RESULT_EVENT = 'hub:memory.result';
+export interface MemoryResult {
+  requestId: string;
+  ok: boolean;
+  code?: 'secret_refused' | 'invalid' | 'failed';
+  itemId?: string;
+  status?: 'active' | 'quarantined';
+}
 
 /** The files of one MOG folder: MEMORY.md first, then the daily notes, newest first. */
 export interface MemoryFileEntry {

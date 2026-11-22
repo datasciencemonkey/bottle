@@ -168,7 +168,13 @@ export const EVENTS = {
   'card.update': { name: 'card:update', direction: 'brain_to_view' },
   /** Not in 4.5 (ADR 0040): mic frames for the MOG level meter (UX-06a), sent to `mog-<owner>`. */
   'mog.level': { name: 'mog:level', direction: 'brain_to_view' },
+  /**
+   * Payload `{ from, input, actionTicket? }`. `actionTicket` (ADR 0113): the host minted a #574
+   * ticket for this click (a card "remember", a hub add, edit or rating).
+   */
   'view.input': { name: 'view:input', direction: 'core_to_brain' },
+  /** Local memory slice 1 (ADR 0113): payload `MemorySaved`, content-free, to one card. */
+  'memory.saved': { name: 'memory:saved', direction: 'brain_to_view' },
   /**
    * Not in 4.5 (lamp-alive): where one MOG's eyes look. Payload `{ mogId, dx, dy }`, a vector in
    * the unit disc from the eye centre. Never a pointer position. The brain passes `{ dx, dy }` on
@@ -368,7 +374,8 @@ export interface CommandArgs {
     stream?: Channel<unknown>;
     tags: Tags;
   };
-  mem_local_exec: { stmtId: string; params: JsonObject };
+  /** `actionTicket`: a host-minted #574 ticket the brain passes on, never makes (ADR 0113). */
+  mem_local_exec: { stmtId: string; params: JsonObject; actionTicket?: string };
   /** #525 (ADR 0087): the confirm click of the hub Wipe dialog (MEM-33a). */
   mem_wipe: { scope: 'older_than_30d' | 'older_than_90d' | 'everything' };
   mem_remote_exec: { stmtId: string; params: JsonObject };
@@ -464,6 +471,8 @@ export const IPC_ERROR_CODES = [
   'config_limit_reached',
   'secret_named_key',
   'token_like_value',
+  // Local memory (ADR 0113): the secret check refused a memory write. No row was stored.
+  'secret_refused',
   /** `config_write` G-03 refusals of a rejected Genie backend URL (#28, #379). */
   'genie_beta_mcp_rejected',
   'genie_space_mcp_rejected',
