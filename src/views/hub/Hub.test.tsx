@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { render, tauri, viewEmits } from '../test-tauri';
+import { PERMISSION_EVENT, PERMISSION_TEXT } from '../../shared/permission-view';
+import { HUB_RECORDINGS_EVENT } from '../../shared/recording-view';
 import { Hub } from './Hub';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('../test-tauri')).coreModule);
@@ -127,6 +129,7 @@ describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
 
   const toggle = (el: HTMLElement) => el.querySelector<HTMLButtonElement>('[data-sidebar-toggle]');
   const items = (el: HTMLElement) => [...el.querySelectorAll<HTMLElement>('[data-sidebar-item]')];
+  const home = (el: HTMLElement) => el.querySelector('section[aria-label="Home"]') as HTMLElement;
   const conv = (el: HTMLElement) =>
     el.querySelector('section[aria-label="Conversations"]') as HTMLElement;
   // `.click()` alone never dispatches `pointerdown` (review of #602, finding 2): a real click is
@@ -136,27 +139,105 @@ describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
     b?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
   };
 
-  it('[#103] the sidebar is hidden by default; the hub opens on Conversations', async () => {
+  it('[#103] the sidebar is hidden by default; the hub opens on Home', async () => {
     const { el } = await render(<Hub />);
     expect(el.querySelector('[data-sidebar]')).toBeNull();
-    expect(conv(el).hidden).toBe(false);
-    expect(el.querySelector('.hub-area-title')?.textContent).toBe('Conversations');
+    expect(home(el).hidden).toBe(false);
+    expect(conv(el).hidden).toBe(true);
+    expect(el.querySelector('.hub-area-title')?.textContent).toBe('Home');
     // The product header stays a direct child of main (AT-37).
     expect(el.querySelector('main > h1')?.textContent).toBe('Bottle');
     expect(el.querySelector('main > p')?.textContent).toBe('Databricks Labs / experimental');
   });
 
-  it('[#103] the toggle opens the sidebar with Conversations, MOGs, Recordings and Settings', async () => {
+  it('[home] Home shows the lamp, the wordmark and the punchline, with no buttons', async () => {
+    const { el } = await render(<Hub />);
+    const h = home(el);
+    expect(h.querySelector('img')?.getAttribute('alt')).toContain('peeking out of its lamp');
+    expect(h.querySelector('[data-home-wordmark]')?.textContent).toBe('Bottle');
+    expect(h.querySelector('[data-home-punchline]')?.textContent).toBe('Ship in a bottle.');
+    expect(h.querySelectorAll('button, a, [role="button"]')).toHaveLength(0);
+    // Clicking the wordmark does nothing: the area stays Home.
+    await act(async () => realClick(h.querySelector<HTMLElement>('[data-home-wordmark]')));
+    expect(home(el).hidden).toBe(false);
+    expect(el.querySelector('.hub-area-title')?.textContent).toBe('Home');
+  });
+
+  it('[home] the setup steps show on Home while one is pending', async () => {
+    const { el } = await render(<Hub />);
+    expect(el.querySelector('[data-setup-region] [data-notice]')).toBeNull();
+    await tauri.emitTo('hub', PERMISSION_EVENT, {
+      needs: [{ permission: 'input_monitoring', action: 'allow' }],
+    });
+    expect(home(el).hidden).toBe(false);
+    const pending = el.querySelector('[data-setup-region] [data-permission="input_monitoring"]');
+    expect(pending?.textContent).toContain(PERMISSION_TEXT.input_monitoring.need);
+    // The landing stays under it; the pending step is not hidden by Home.
+    expect(home(el).querySelector('[data-home-wordmark]')).not.toBeNull();
+  });
+
+  it('[home] the landing fades in by default', async () => {
+    const { el } = await render(<Hub />);
+    expect(el.querySelector('.hub-home-stage')?.getAttribute('data-motion')).toBe('fade');
+  });
+
+  it('[#103] the toggle opens the sidebar with Home, MOGs, Conversations, Recordings, Settings', async () => {
     const { el } = await render(<Hub />);
     await act(async () => toggle(el)?.click());
     expect(el.querySelector('[data-sidebar]')).not.toBeNull();
     expect(items(el).map((b) => b.textContent)).toEqual([
-      'Conversations',
+      'Home',
       'MOGs',
+      'Conversations',
       'Recordings',
       'Settings',
     ]);
     expect(items(el)[0]?.getAttribute('aria-current')).toBe('page');
+  });
+
+  it('[home] Cmd+B and Cmd+\\ toggle the sidebar on Home', async () => {
+    const { el } = await render(<Hub />);
+    const key = (k: string) =>
+      act(async () => {
+        document.dispatchEvent(
+          new KeyboardEvent('keydown', { key: k, metaKey: true, bubbles: true }),
+        );
+      });
+    await key('b');
+    expect(el.querySelector('[data-sidebar]')).not.toBeNull();
+    await key('\\');
+    expect(el.querySelector('[data-sidebar]')).toBeNull();
+  });
+
+  it('[home] each purpose open lands on its own area, not Home', async () => {
+    const list = { mogs: [], unreadable: [], runningCount: 0, maxRunning: 3 };
+    const area = (el: HTMLElement) => el.querySelector('.hub-area-title')?.textContent;
+    // Open in Bottle (card or MOG menu): Conversations.
+    const a = await render(<Hub />);
+    await tauri.emitTo('hub', 'hub:conversations.open', {});
+    expect(area(a.el)).toBe('Conversations');
+    // Change workspace (an Edit ask): MOGs.
+    const b = await render(<Hub />);
+    await tauri.emit('hub:mogs', { ...list, openEdit: { mogId: A, token: 1 } });
+    expect(area(b.el)).toBe('MOGs');
+    // The talk key with no MOG (a hub:mogs notice): MOGs.
+    const c = await render(<Hub />);
+    await tauri.emit('hub:mogs', { ...list, notice: { kind: 'info', text: 'Create a MOG' } });
+    expect(area(c.el)).toBe('MOGs');
+    // Choose where to save (the recordings banner): Settings.
+    const d = await render(<Hub />);
+    await act(async () => d.el.querySelector<HTMLButtonElement>('[data-sidebar-toggle]')?.click());
+    await act(async () =>
+      d.el.querySelector<HTMLButtonElement>('[data-sidebar-item="recordings"]')?.click(),
+    );
+    await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, {
+      rows: [],
+      storageProblem: { reason: 'No My Files on this workspace.', canUpload: false },
+    });
+    await act(async () =>
+      d.el.querySelector<HTMLButtonElement>('[data-recording-banner-action]')?.click(),
+    );
+    expect(area(d.el)).toBe('Settings');
   });
 
   it('[#103] picking an area switches it and keeps the content column stable', async () => {

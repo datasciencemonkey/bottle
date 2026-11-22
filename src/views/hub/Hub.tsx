@@ -27,6 +27,7 @@ import { DataPanel } from './DataDisclosures';
 import { DictationNotices } from './DictationNotices';
 import { ForgetDialogHost } from './ForgetDialogHost';
 import { HubSidebar, sidebarWidth } from './HubSidebar';
+import { Home } from './Home';
 import { LegalNotice } from './LegalNotice';
 import { MicPreference } from './MicPreference';
 import { MogList } from './MogList';
@@ -143,8 +144,8 @@ function SettingsArea({
 }
 
 export function Hub() {
-  // ui-1 (#97, #103): Conversations is the area the hub opens on; the Setup region (above) shows
-  // first-run steps on every area, so the old "home" area's special-casing is gone.
+  // The hub opens on Home (the launch screen); the Setup region (above) shows first-run steps on
+  // every area, so a pending step is never hidden. A purpose open switches area (below).
   const [view, setView] = useState<HubView>(DEFAULT_HUB_VIEW);
   const showConversations = useCallback(() => setView('conversations'), []);
   const [mogs, setMogs] = useState<ReadonlyMap<MogId, MogViewState>>(new Map());
@@ -281,6 +282,7 @@ export function Hub() {
               compact
             />
           )}
+          <Home hidden={view !== 'home'} />
           <Conversations
             active={view === 'conversations'}
             onOpen={showConversations}
