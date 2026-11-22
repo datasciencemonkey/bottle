@@ -124,6 +124,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     row("mcp_call", B),
     row("dbx_http", B),
     row("mem_local_exec", B),
+    // #525 (ADR 0087): the confirm click of the hub Wipe dialog, through the brain (MEM-33a).
+    row("mem_wipe", B),
     v1("mem_remote_exec", B),
     v1("mem_remote_status", BH),
     row("config_list", BH),
@@ -1073,6 +1075,10 @@ args!(MemExecArgs {
     stmt_id: String,
     params: JsonObject,
 });
+args!(
+    /// The args of `mem_wipe` (#525): the wire name of one `wipe::WipeScope`.
+    MemWipeArgs { scope: String }
+);
 args!(ConfigIdArgs { id: String });
 args!(ConfigWriteArgs {
     id: String,
@@ -1332,6 +1338,7 @@ macro_rules! for_command {
             "mcp_call" => Some($f::<McpCallArgs>()),
             "dbx_http" => Some($f::<DbxHttpArgs>()),
             "mem_local_exec" | "mem_remote_exec" => Some($f::<MemExecArgs>()),
+            "mem_wipe" => Some($f::<MemWipeArgs>()),
             "config_read" | "config_delete" => Some($f::<ConfigIdArgs>()),
             "config_write" => Some($f::<ConfigWriteArgs>()),
             "hotkeys_set" => Some($f::<HotkeysSetArgs>()),

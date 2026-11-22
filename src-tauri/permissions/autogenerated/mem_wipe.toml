@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-mem-wipe"
+description = "Enables the mem_wipe command without any pre-configured scope."
+commands.allow = ["mem_wipe"]
+
+[[permission]]
+identifier = "deny-mem-wipe"
+description = "Denies the mem_wipe command without any pre-configured scope."
+commands.deny = ["mem_wipe"]

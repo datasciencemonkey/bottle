@@ -24,7 +24,8 @@ import {
   type GenieOneThreadDelete,
 } from './forget-flow';
 import { conversationOf, type ForgetConversation } from './memory-service';
-import { NotImplementedError } from '../errors';
+import { call } from '../../shared/ipc';
+import { storeGate, type StoreGate } from '../store-gate';
 import type { MogId } from '../../shared/interfaces';
 import { isWipeScope, type WipeDialogModel, type WipeScope } from '../../shared/wipe-view';
 
@@ -40,15 +41,45 @@ export interface WipeCore {
   wipe(scope: WipeScope): Promise<WipeCoreResult>;
 }
 
+/** A Wipe that failed, with a short reason that is safe to show: a fixed text, never content. */
+export class WipeFailed extends Error {
+  override readonly name = 'WipeFailed';
+  readonly reason: string | undefined;
+  constructor(reason: string | undefined) {
+    super('wipe failed');
+    this.reason = reason;
+  }
+}
+
+/** The fixed reason for an IPC failure code (no content). Undefined: no safe specific reason. */
+export function wipeReasonOf(code: unknown, locked: boolean): string | undefined {
+  if (locked) return "The store is locked \u2014 open Bottle's hub and try again.";
+  switch (code) {
+    case 'host_failed':
+    case 'consent_storage_failed':
+      return 'The local store could not be used.';
+    case 'not_implemented':
+      return 'Wipe is not available in this build.';
+    default:
+      return undefined;
+  }
+}
+
 /**
- * The R14 WipeService over IPC. TODO(#525): `mem_wipe` is not in the contract yet, so this
- * refuses before any call, and the dialog says that nothing changed. When #525 lands, it sends
- * `call('mem_wipe', { scope })` and answers the reply.
+ * The R14 WipeService over IPC: `mem_wipe { scope }` (#525). It goes through the one store gate
+ * (ADR 0105): a refused key store fails at once with no second key read. A failure throws
+ * {@link WipeFailed} with a fixed reason; nothing in it comes from the store.
  */
-export function createIpcWipeCore(): WipeCore {
+export function createIpcWipeCore(gate: StoreGate = storeGate): WipeCore {
   return {
-    async wipe(_scope) {
-      throw new NotImplementedError('WipeService', 'wipe', 525);
+    async wipe(scope) {
+      try {
+        return await gate.run(() => call('mem_wipe', { scope }));
+      } catch (e) {
+        const code =
+          typeof e === 'object' && e !== null ? (e as { error?: unknown }).error : undefined;
+        throw new WipeFailed(wipeReasonOf(code, gate.view().state === 'off'));
+      }
     },
   };
 }
@@ -67,6 +98,12 @@ const CONFIRM: Record<WipeScope, { title: string; what: string }> = {
     what: `Delete ${CONTENT} older than 90 days`,
   },
   everything: { title: 'Wipe everything', what: `Delete all of ${CONTENT}` },
+};
+
+const EMPTY: Record<WipeScope, string> = {
+  older_than_30d: 'Nothing to wipe. No data is older than 30 days.',
+  older_than_90d: 'Nothing to wipe. No data is older than 90 days.',
+  everything: 'Nothing to wipe.',
 };
 
 const GENIE_ALSO = ' Bottle also deletes the Genie conversations of these answers where it can.';
@@ -118,12 +155,15 @@ export class WipeFlow {
   async confirm(scope: WipeScope, alsoGenie: boolean): Promise<WipeDialogModel> {
     const base = this.dialog(scope, alsoGenie);
     const { local, conversations } = await this.core.wipe(scope);
+    const empty = local === 0 && conversations.length === 0;
     const result: NonNullable<WipeDialogModel['result']> = {
       local,
       deletedConversations: 0,
       notices: [],
     };
-    if (alsoGenie) {
+    if (empty) {
+      result.emptyText = EMPTY[scope];
+    } else if (alsoGenie) {
       const byMog = new Map<MogId, ForgetConversation[]>();
       for (const r of conversations) {
         const row = rowOf(r);

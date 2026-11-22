@@ -7,6 +7,8 @@ import { join, relative, resolve, sep } from 'node:path';
 import type { WipeDialogModel, WipeScope, WipeSettingsModel } from '../shared/wipe-view';
 import { asWipeDialogModel, asWipeSettingsModel, WIPE_VIEW_ID } from '../shared/wipe-view';
 import { BrainBus, type ViewInput } from './bus';
+import { GenieOneDeleteUtility } from './components/genie-one-delete';
+import { WipeFailed, WipeFlow } from './components/wipe-flow';
 import { clearingDictationWords } from './wipe-dictation-words';
 import { WipeDialogController, wireWipe } from './wipe-wiring';
 
@@ -135,6 +137,19 @@ describe('Wipe wiring (#124)', () => {
     expect(r.sent[2]).toBeNull();
   });
 
+  it('[MEM-33a] a failure with a fixed reason adds that reason to the friendly text', async () => {
+    const r = rig({
+      confirm: async () => {
+        throw new WipeFailed("The store is locked \u2014 open Bottle's hub and try again.");
+      },
+    });
+    await r.click({ target: 'wipe_open', scope: 'older_than_90d', alsoGenie: false });
+    await r.click({ target: 'wipe_confirm', scope: 'older_than_90d' });
+    expect(r.sent[1]?.text).toBe(
+      "Bottle could not wipe your data. Nothing on this computer changed. Try again. The store is locked \u2014 open Bottle's hub and try again.",
+    );
+  });
+
   it('[G-45b] the Delete in Genie One click opens that thread link of the done dialog only', async () => {
     const r = rig();
     await r.click({ target: 'genie_one_delete', conversationId: CID }, MOG);
@@ -221,6 +236,10 @@ describe('Wipe wiring (#124)', () => {
     const callers = files(src).filter((f) => /\bmem_wipe\b|\.wipe\(/.test(code(f)));
     expect(callers.map((f) => relative(src, f).split(sep).join('/')).sort()).toEqual([
       'brain/components/wipe-flow.ts',
+      // The contract table names the command; it calls nothing.
+      'shared/ipc.ts',
+      // The harness class table names every command.
+      'test-support/cloud-calls.ts',
     ]);
     const wiring = readFileSync(resolve(import.meta.dirname, 'wipe-wiring.ts'), 'utf8');
     expect(wiring.match(/flow\.confirm\(/g)).toHaveLength(1);
@@ -229,6 +248,36 @@ describe('Wipe wiring (#124)', () => {
     const index = readFileSync(resolve(import.meta.dirname, 'components', 'index.ts'), 'utf8');
     expect(index).toContain('wireWipe(');
     expect(index).not.toMatch(/\.confirm\(|\.wipe\(/);
+  });
+});
+
+describe('the real flow through the dictation-words wrapper', () => {
+  const run = async (scope: WipeScope, reply: { local: number; conversations: unknown[] }) => {
+    const clear = vi.fn();
+    const flow = clearingDictationWords(
+      new WipeFlow({
+        core: { wipe: async () => reply },
+        genieOne: new GenieOneDeleteUtility(),
+      }),
+      clear,
+    );
+    return { done: await flow.confirm(scope, false), clear };
+  };
+
+  it('each scope completes through the wrapper; only everything clears the words', async () => {
+    for (const scope of ['older_than_30d', 'older_than_90d', 'everything'] as const) {
+      const { done, clear } = await run(scope, { local: 4, conversations: [] });
+      expect(done.phase).toBe('done');
+      expect(done.result?.local).toBe(4);
+      expect(clear).toHaveBeenCalledTimes(scope === 'everything' ? 1 : 0);
+    }
+  });
+
+  it('an empty older-than wipe succeeds as "Nothing to wipe" and keeps the words', async () => {
+    const { done, clear } = await run('older_than_90d', { local: 0, conversations: [] });
+    expect(done.phase).toBe('done');
+    expect(done.result?.emptyText).toContain('Nothing to wipe');
+    expect(clear).not.toHaveBeenCalled();
   });
 });
 

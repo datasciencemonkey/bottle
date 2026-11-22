@@ -37,6 +37,7 @@ const SPEC_COMMANDS: &[(&str, &[WindowClass])] = {
         ("mcp_call", &[B]),
         ("dbx_http", &[B]),
         ("mem_local_exec", &[B]),
+        ("mem_wipe", &[B]),
         ("mem_remote_exec", &[B]),
         ("mem_remote_status", &[B, H]),
         ("config_list", &[B, H]),

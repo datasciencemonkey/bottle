@@ -43,6 +43,7 @@
     "allow-mem-local-exec",
     "allow-mem-remote-exec",
     "allow-mem-remote-status",
+    "allow-mem-wipe",
     "allow-config-list",
     "allow-config-read",
     "allow-config-write",

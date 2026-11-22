@@ -875,6 +875,21 @@
       "title": "NoArgs",
       "type": "object"
     },
+    "mem_wipe": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "The args of `mem_wipe` (#525): the wire name of one `wipe::WipeScope`.",
+      "properties": {
+        "scope": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope"
+      ],
+      "title": "MemWipeArgs",
+      "type": "object"
+    },
     "model_invoke": {
       "$defs": {
         "ModelRole": {
@@ -2082,6 +2097,13 @@
     },
     {
       "name": "mem_local_exec",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "mem_wipe",
       "phase": "MVP-D",
       "windows": [
         "brain"

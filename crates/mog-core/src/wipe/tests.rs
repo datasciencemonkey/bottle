@@ -1021,6 +1021,50 @@ fn mem_33a_sec_15a_mem_wipe_runs_the_wipe_then_the_expiries_and_answers_ids_only
 }
 
 #[test]
+fn mem_33a_525_an_empty_store_wipes_to_zero_for_every_scope() {
+    let t = TempDir::new("33a-empty");
+    let s = Arc::new(SqlCipherLocalStore::new(
+        t.0.join("memory"),
+        Arc::new(MemoryKeyVault::new()),
+    ));
+    s.open().expect("open");
+    add_mog(&s, MOG_A);
+    let svc = service(&s, &clock());
+    for scope in ["older_than_30d", "older_than_90d", "everything"] {
+        let out = mem_wipe(&svc, json!({ "scope": scope })).expect("an empty wipe succeeds");
+        assert_eq!(out, json!({"local": 0, "conversations": []}), "{scope}");
+    }
+}
+
+/// A vault whose key store refuses and that counts every read (ADR 0105, the locked store).
+struct RefusingVault(AtomicUsize);
+
+impl crate::local_store::key_vault::KeyVault for RefusingVault {
+    fn load(&self) -> CoreResult<Option<crate::local_store::key_vault::LocalKey>> {
+        self.0.fetch_add(1, Ordering::Relaxed);
+        Err(CoreError::KeychainUnavailable { component: "R10" })
+    }
+    fn store(&self, _key: &crate::local_store::key_vault::LocalKey) -> CoreResult<()> {
+        Err(CoreError::KeychainUnavailable { component: "R10" })
+    }
+}
+
+#[test]
+fn mem_33a_525_a_locked_store_answers_host_failed_with_one_key_read_per_call() {
+    let t = TempDir::new("33a-locked");
+    let vault = Arc::new(RefusingVault(AtomicUsize::new(0)));
+    let s = Arc::new(SqlCipherLocalStore::new(t.0.join("memory"), vault.clone()));
+    let svc = service(&s, &clock());
+    assert_eq!(
+        mem_wipe(&svc, json!({"scope": "older_than_90d"})),
+        Err(CoreError::IpcRefused {
+            code: "host_failed"
+        })
+    );
+    assert_eq!(vault.0.load(Ordering::Relaxed), 1, "one read for one call");
+}
+
+#[test]
 fn mem_33a_the_stub_still_reports_not_implemented() {
     let s = StubWipeService;
     assert!(matches!(

@@ -37,6 +37,7 @@ export const CALL_CLASS = {
   mcp_call: 'cloud',
   dbx_http: 'cloud',
   mem_local_exec: 'local',
+  mem_wipe: 'local',
   mem_remote_exec: 'cloud',
   mem_remote_status: 'cloud', // v1 Lakebase status
   config_list: 'local',
