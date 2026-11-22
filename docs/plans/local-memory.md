@@ -5,7 +5,7 @@
 - Author: planner agent (branch `chore/plan-memory`)
 - Language: drafted to STE100 rules. A script checked the sentence lengths. Nobody did the official dictionary check.
 - Scope: a plan and requirements. This document changes no app code.
-- New ADRs (numbers reserved with `adr-next.sh`): ADR 0112, ADR 0113, ADR 0114, ADR 0115 (Section 12).
+- New ADRs: ADR 0112, ADR 0113, ADR 0114, ADR 0115 (Section 13). The script `adr-next.sh` gave the numbers.
 - Live calls: none. No Databricks call and no model call ran for this plan.
 - Example names are placeholders: `profile-a`, `MOG A`, `<host-a>`.
 
@@ -19,7 +19,7 @@ The owner wants Bottle to keep memories on the device. Bottle forms them from us
 4. The user, the hub and the agent memory tool see files. The disk holds only the encrypted store.
 5. Slice 1 is small: the store, the "Remember this" pin and a hub Memory list with Delete.
 6. Then come recall in the ask path, the consolidation job, automatic capture and the agent memory tool.
-7. Every write goes through the quarantine check and a new secret check in Rust.
+7. Every write passes the quarantine check and a new secret check in Rust.
 8. The user can see, edit, undo and delete each memory. Wipe and Forget cover memories.
 9. The consolidation job runs in Rust, on idle, with a power policy. It uses rules only at first.
 10. A share to Genie (UC Pages) or to another MOG is later. This plan names the hook points only.
@@ -57,6 +57,15 @@ The top open question for the owner is the storage and privacy option (Section 4
 | Peer MOG | Another MOG of the same user, with its own profile and workspace (PR #617). |
 | Brain | The hidden TypeScript window (`src/brain`). It owns flow and UI state. It never holds a token. |
 | Hub | The main window of Bottle. This plan adds the Memory area to it. |
+| MOG | A small floating assistant window that Bottle creates and manages. |
+| Genie One | The Databricks chat assistant that answers questions (ADR 0097). |
+| Card | The Bottle window part that shows an answer from Genie One. |
+| Frontmatter | The block of YAML fields at the top of a memory file. |
+| Slug | The short lower-case name of a memory in its path. |
+| Hit | One memory that recall returns for a question. |
+| Outbox | The local queue of rows that the v1 SyncWorker sends (MEM-10a, MEM-11a). |
+| Slice | One delivery step of this plan (Section 11). |
+| ADR | Architecture decision record. Each ADR is a file in `docs/adr/`. |
 | Wipe | The Settings action that deletes user content by age (ADR 0087, MEM-33a). |
 | Forget | The action that deletes named items, a session or a MOG with the items that cite them (ADR 0081). |
 | U9 | The binding rule "Bottle deletes no user content on its own". Only Wipe and Forget delete. |
@@ -135,7 +144,7 @@ Fit for Bottle:
 
 - R-1. Bottle tells the user that local history is encrypted (ADR 0105). Memories are history.
 - R-2. Bottle never writes a token to disk, logs, test output or an agent transcript (`AGENTS.md` section 6).
-- R-3. Every write goes through the quarantine check in Rust (ADR 0089). A quarantined item never reaches a model (SEC-24b).
+- R-3. Every write passes the quarantine check in Rust (ADR 0089). A quarantined item never reaches a model (SEC-24b).
 - R-4. Only Wipe and Forget delete user content (U9, MEM-33a). Each delete is atomic with its citing rows (ADR 0081).
 - R-5. Every statement filters by `mog_id` (MEM-01). The brain never sends SQL (MEM-34b).
 - R-6. Logs carry no content (SEC-16c).
@@ -155,7 +164,7 @@ Bottle writes one `.md` file for each memory under the app data folder. The fold
 
 ### 4.3 Option (b): files encrypted at rest with the keychain key
 
-Bottle writes one encrypted file for each memory (AES-256-GCM). The key comes from the keychain item of ADR 0105, through a key derivation step. The user views and edits a memory only in the hub, or through an explicit export.
+Bottle writes one encrypted file for each memory (AES-256-GCM). Bottle derives the key from the keychain item of ADR 0105. The user views and edits a memory only in the hub, or through an explicit export.
 
 | For | Against |
 |---|---|
@@ -239,11 +248,12 @@ An active user is a user who logged in at least once in the calendar month.
 Rules for the format:
 
 - The frontmatter must use only the fields of this list.
-- Rust must compute the frontmatter from the store columns. The frontmatter text is not stored.
+- Rust must compute the frontmatter from the store columns. Rust does not store the frontmatter text.
 - The `title` must have 1 to 80 characters.
 - The `text` column (the summary line) must have 1 to 600 characters, as today.
 - The body must have 4,000 characters or less.
-- The `tags` list must have 8 tags or less, each with 32 characters or less.
+- The `tags` list must have 8 tags or less.
+- Each tag must have 32 characters or less.
 - The `profile` field holds the CLI profile name. It must never hold a token or a host credential.
 
 ### 5.3 Virtual folder layout
@@ -264,13 +274,13 @@ Rules for the format:
     answers/<slug>.md
 ```
 
-- The `<mog-slug>` comes from the MOG name. Rust must make it unique on the device.
-- The `<slug>` comes from the title, in lower case with hyphens. Rust must add a short id suffix on a clash.
-- A path must match the fixed grammar `/memories/(shared|<mog-slug>)/<kind-folder>/<slug>.md`. Rust must refuse each other path.
+- Rust makes the `<mog-slug>` from the MOG name. Rust must keep it unique on the device.
+- Rust makes the `<slug>` from the title, in lower case with hyphens. Rust must add a short id suffix on a clash.
+- A path must match the fixed grammar `/memories/(shared|<mog-slug>)/<kind-folder>/<slug>.md`. Rust must refuse any other path.
 - The shared folder must hold only `preference` memories in the first slices. Q5 asks the owner about more kinds.
-- A Genie answer must never go to the shared folder. It belongs to one workspace (D60).
+- A Genie answer must never enter the shared folder. It belongs to one workspace (D60).
 - Each line of an index file has the form `- [<title>](<kind-folder>/<slug>.md) — <summary, 80 chars or less>`.
-- An index file must have 200 lines or less and 25 KB or less. Pinned memories come first, then by `last_used`.
+- An index file must have 200 lines or less. An index file must have 25 KB or less. Pinned memories come first, then by `last_used`.
 
 ### 5.4 Size caps
 
@@ -313,7 +323,8 @@ Rules for the format:
 - A deterministic write from a user action must write an `active` memory.
 - Each write from a card or a voice command must show "Saved to memory" with Undo for 8 s.
 - Undo must run `mem.forget.items` for that one memory. This is a user action, so U9 holds.
-- A model writer must use the home profile of the MOG and the route `POST /ai-gateway/mlflow/v1/chat/completions`.
+- A model writer must use the home profile of the MOG.
+- A model writer must use the route `POST /ai-gateway/mlflow/v1/chat/completions`.
 - A model writer must use a `json_schema` response format (MEM-29a).
 - A model writer must never write special-category data. Others-track text becomes "a participant" (MEM-29c).
 - Each write must record the source, the origin and the workspace fields (MEM-31). This closes #538 for agent writes.
@@ -324,7 +335,7 @@ Rules for the format:
 2. Rust sends the notes text, not the transcript, to the notes model of the recording settings.
 3. The prompt asks for up to 10 candidates of the kinds `definition`, `decision`, `fact` and `open_question`.
 4. Each candidate must quote one line of the notes as evidence.
-5. Rust checks each quote against the notes. A candidate with no match is dropped.
+5. Rust checks each quote against the notes. Rust drops a candidate with no match.
 6. Rust writes each candidate as `proposed`, with `recording_id` and confidence 0.6 to 0.8.
 7. The hub shows the candidates under "Proposed". The user approves, edits or rejects each one.
 
@@ -338,7 +349,7 @@ Rules for the format:
 - The job must run at most once in 24 h. The user can also click "Tidy up now" in the hub.
 - On battery, the job must start only with 50 % charge or more.
 - In macOS Low Power Mode, the job must not start.
-- The job must stop at once when capture starts or the talk key goes down. It resumes at the next idle.
+- The job must stop at once when capture starts or the user presses the talk key. It resumes at the next idle.
 - Each run must take 2 s of CPU or less for 2,000 memories. A run that needs more continues at the next idle.
 - The job must run each change in its own short transaction, so an ask never waits more than 50 ms.
 
@@ -386,27 +397,29 @@ U9 rule: the job must never delete a row. It changes only `status`, `superseded_
 - In slice 2, Bottle must not add memory text to the Genie question. A context preamble needs the ContextGate (#152).
 - The card must show each hit with the provenance chip "From your memory · <age>".
 - A click on the chip must open the memory in the hub.
-- A hit that arrives after the gate closes must show as a chip and must not stop the ask (MEM-16c).
-- Each recall use must update `last_used` and add one to `use_count`.
+- A hit that arrives after the gate closes must show as a chip. Such a hit must not stop the ask (MEM-16c).
+- Each recall use must update `last_used`.
+- Each recall use must add one to `use_count`.
 
-"Answer from memory" (Genie is not called) stays later. It needs the golden set with precision 0.95 or more (MEM-17a). Q9 asks the owner about it.
+"Answer from memory" (Bottle does not call Genie) stays later. It needs the golden set with precision 0.95 or more (MEM-17a). Q9 asks the owner about it.
 
 ### 8.2 The agent memory tool (slice 5)
 
 The agent memory tool fits the later tool loop of the MOG-to-MOG plan (PR #617, Section 7.10, contract C9).
 
 - The tool must be a Chat Completions function named `memory` with the 6 commands of `memory_20250818`.
-- Rust must own the tool. The brain loop must send each call to Rust and must not touch the store.
+- Rust must own the tool. The brain loop must send each call to Rust. The brain loop must not touch the store.
 - The tool must see only the folder of the asking MOG and the shared folder.
 - The tool must never show a `quarantined` memory (SEC-24b).
-- `view` must return at most 16,000 characters and must accept `view_range`.
+- `view` must return at most 16,000 characters.
+- `view` must accept `view_range`.
 - `create`, `str_replace` and `insert` must make a `proposed` memory, or a `proposed` new version of a memory.
 - `delete` must mark the memory `retracted` only if the agent made it and it is still `proposed`. Each other `delete` must return an error.
 - `rename` must change only the title and the slug. It must not move a memory to another MOG folder.
 - Each tool call must write one content-free action log entry (ADR 0085).
 - The tool result is data, never instructions (RTR-03c). The agent cannot add memory text to a Genie ask (ADR 0085).
 - The route-only planner of PR #617 must never see a memory (MTM-03, MTM-08).
-- A peer MOG's memory must never go to the model of another workspace without consent.
+- A peer MOG's memory must never reach the model of another workspace without consent.
 - That consent is the synthesis consent of PR #617 Section 7.5.
 - The `bottle-mcp` tools `memory.recall` and `memory.write` must use the same R10 code as the memory tool.
 
@@ -422,7 +435,8 @@ The agent memory tool fits the later tool loop of the MOG-to-MOG plan (PR #617, 
 - The area must show a memory as a file: its path, its frontmatter fields and its rendered body.
 - The area must let the user edit the title, the body, the kind and the tags. An edit runs the write rules of 6.2.
 - The area must let the user delete a memory. Delete runs `mem.forget.items` after a confirm click.
-- The area must let the user pin and unpin a memory. A pin click mints an action ticket.
+- The area must let the user pin a memory.
+- The area must let the user unpin a memory. A pin click mints an action ticket.
 - The area must have a "Proposed" list with Approve, Edit and Reject for each memory.
 - Reject must run `mem.forget.items` for that memory, because the user asked for the delete.
 - The area must show the source, the origin and a link to the exchange or the recording.
@@ -511,11 +525,11 @@ Not in slice 1: recall, edit, search, export, the shared folder, automatic captu
 
 ### Slice 4: automatic capture
 
-- ADR 0113 is updated with the final status default (Q4).
+- Slice 4 updates ADR 0113 with the final status default (Q4).
 - "Keep" on Genie answer cards, the dictation words option and the call-notes writer of 6.3.
 - The hub "Proposed" list and the export.
 - AC-4.1: A finished recording with notes gives up to 10 `proposed` memories, each with a quote that matches the notes.
-- AC-4.2: No transcript text goes to the model. The request body test checks this.
+- AC-4.2: Bottle sends no transcript text to the model. The request body test checks this.
 - AC-4.3: The writer request uses the home profile and `/ai-gateway/mlflow/v1/chat/completions`.
 - AC-4.4: With the dictation words option off, no dictation word becomes a memory.
 - AC-4.5: Export writes a zip with one `.md` file for each memory and the index files. The warning shows first.
@@ -582,7 +596,7 @@ Note: the hydration plan (PR #611) names ADR 0109 to ADR 0112 for its own work. 
 - **Q1 (top). Storage and privacy.** Do you accept option (c), the encrypted store with a virtual folder? Or do you want (a) plain files or (b) encrypted files?
 - Q2. U9 says that only Wipe and Forget delete. Can the consolidation job delete stale memories after a set time, for example 365 d?
 - Q3. Do you lift "memory recall" (keyword only) from the out-of-scope list for slice 2? Embeddings stay out.
-- Q4. Must model-written memories wait for your approval (`proposed`), or go `active` with Undo?
+- Q4. Must model-written memories wait for your approval (`proposed`), or become `active` with Undo?
 - Q5. Do you accept a shared folder across MOGs (a reserved MOG id)? Which kinds can go in it?
 - Q6. Can the consolidation job use a model to merge memories later, with the caps of 7.3?
 - Q7. Do you want the `person` kind at all? It holds data about colleagues.
