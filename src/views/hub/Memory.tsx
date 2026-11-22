@@ -5,7 +5,9 @@
  * - The list: the items of the selected file. A new (not yet rated) item has a "New" badge; a
  *   quarantined one has a mark.
  * - The view: the whole rendered file, or the selected item's section, as Rust renders it.
- * - Feedback: thumbs up (`memory.rate`); thumbs down deletes. Delete needs a confirm click. Both
+ * - Feedback: thumbs up (`memory.rate`); thumbs down deletes. A thumbs up on a quarantined item
+ *   releases it (owner ruling 2026-11-21): the host checks a ticket of this click, so only the
+ *   user can do it. Delete needs a confirm click. Both
  *   deletes show "Memory deleted" with Undo for 8 s, and the view sends `memory.delete` only
  *   when the 8 s end, so Undo needs no new write. If the area goes away in the 8 s, the delete
  *   goes at once: the user asked for it.
@@ -207,7 +209,16 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
         ...f,
         rows: f.rows
           .filter((r) => r.itemId !== pending?.itemId)
-          .map((r) => (rated.has(r.itemId) ? { ...r, rating: 1 as const, reviewedAt: 0 } : r)),
+          .map((r) =>
+            rated.has(r.itemId)
+              ? {
+                  ...r,
+                  rating: 1 as const,
+                  reviewedAt: 0,
+                  status: r.status === 'quarantined' ? ('active' as const) : r.status,
+                }
+              : r,
+          ),
       })),
     [model, pending, rated],
   );
@@ -465,7 +476,8 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
             {row?.status === 'quarantined' && (
               <p className="mem-note" role="note" data-memory-quarantine-note>
                 This memory reads like an instruction to an assistant. Bottle keeps it, but never
-                gives it to Genie or the agent.
+                gives it to Genie or the agent. If you trust it, click Useful: then it is a normal
+                memory.
               </p>
             )}
             {parts ? (

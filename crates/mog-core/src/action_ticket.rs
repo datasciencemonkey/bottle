@@ -8,6 +8,12 @@
 //! - `Voice`: the host's own transcript of the user's speech holds "remember this: <text>"
 //!   ([`remember_body`]). The ticket binds the SHA-256 of `<text>`, so the pin must hold exactly
 //!   the words the user said.
+//! - `HubRate`: the hub sends a thumbs up (`memory.rate`) on one item. The ticket binds the item
+//!   id. With it, and only with it, the host lets the thumbs up release a `quarantined` item to
+//!   `active` (owner ruling 2026-11-21, "Quarantine, thumbs up releases"; SEC-24b amended).
+//!
+//! Each ticket has a [`Purpose`], so a pin ticket can never release an item and a release ticket
+//! can never pin.
 //!
 //! A ticket is single-use, bound to one MOG, and expires after [`TICKET_TTL_MS`]. [`ActionTickets::redeem`]
 //! takes it out of the map before the write runs, so a replay is refused. The map holds at
@@ -30,6 +36,26 @@ pub enum Trigger {
     Ui,
     /// The voice command "remember this: <text>".
     Voice,
+    /// A thumbs up on one item in the hub.
+    HubRate,
+}
+
+/// What a ticket allows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Purpose {
+    /// A "remember this" pin (`mem.item.write` with `pinned: true`).
+    Pin,
+    /// A thumbs up that may release a quarantined item (`mem.item.rate`).
+    Rate,
+}
+
+impl Trigger {
+    fn purpose(self) -> Purpose {
+        match self {
+            Trigger::Ui | Trigger::Voice => Purpose::Pin,
+            Trigger::HubRate => Purpose::Rate,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -49,6 +75,7 @@ pub enum Refusal {
     Expired,
     WrongMog,
     WrongText,
+    WrongPurpose,
 }
 
 /// The open tickets of the process.
@@ -105,6 +132,11 @@ impl ActionTickets {
         self.mint(id, mog_id, Trigger::Voice, Some(text), now_ms)
     }
 
+    /// A ticket for a hub thumbs up on the item `item_id` of `mog_id`.
+    pub fn mint_rate(&self, id: String, mog_id: &str, item_id: &str, now_ms: u64) -> String {
+        self.mint(id, mog_id, Trigger::HubRate, Some(item_id), now_ms)
+    }
+
     /// Use the ticket `id` for a pin of `text` in `mog_id`. The ticket is gone after this call,
     /// also when it is refused, so it can never be tried twice.
     pub fn redeem(
@@ -112,6 +144,28 @@ impl ActionTickets {
         id: &str,
         mog_id: &str,
         text: &str,
+        now_ms: u64,
+    ) -> Result<Trigger, Refusal> {
+        self.redeem_for(Purpose::Pin, id, mog_id, text, now_ms)
+    }
+
+    /// Use the ticket `id` for a thumbs up on `item_id` in `mog_id`.
+    pub fn redeem_rate(
+        &self,
+        id: &str,
+        mog_id: &str,
+        item_id: &str,
+        now_ms: u64,
+    ) -> Result<Trigger, Refusal> {
+        self.redeem_for(Purpose::Rate, id, mog_id, item_id, now_ms)
+    }
+
+    fn redeem_for(
+        &self,
+        purpose: Purpose,
+        id: &str,
+        mog_id: &str,
+        bound: &str,
         now_ms: u64,
     ) -> Result<Trigger, Refusal> {
         let mut open = self.lock();
@@ -124,11 +178,14 @@ impl ActionTickets {
         if t.expires_at_ms <= now_ms {
             return Err(Refusal::Expired);
         }
+        if t.trigger.purpose() != purpose {
+            return Err(Refusal::WrongPurpose);
+        }
         if t.mog_id != mog_id {
             return Err(Refusal::WrongMog);
         }
         if let Some(h) = t.text_sha256 {
-            if h != sha256(text) {
+            if h != sha256(bound) {
                 return Err(Refusal::WrongText);
             }
         }
@@ -262,6 +319,28 @@ mod tests {
             t.redeem(T2, MOG_A, "the mart refreshes at six", 1),
             Ok(Trigger::Voice)
         );
+    }
+
+    #[test]
+    fn a_rate_ticket_is_bound_to_its_item_and_its_purpose() {
+        let t = ActionTickets::new();
+        let item = "33333333-0000-4000-8000-000000000003";
+        t.mint_rate(T1.into(), MOG_A, item, 0);
+        assert_eq!(t.redeem_rate(T1, MOG_A, item, 1), Ok(Trigger::HubRate));
+        t.mint_rate(T1.into(), MOG_A, item, 0);
+        assert_eq!(
+            t.redeem_rate(T1, MOG_A, "44444444-0000-4000-8000-000000000004", 1),
+            Err(Refusal::WrongText)
+        );
+        // A rate ticket never pins, and a pin ticket never releases.
+        t.mint_rate(T1.into(), MOG_A, item, 0);
+        assert_eq!(t.redeem(T1, MOG_A, item, 1), Err(Refusal::WrongPurpose));
+        t.mint_ui(T2.into(), MOG_A, 0);
+        assert_eq!(
+            t.redeem_rate(T2, MOG_A, item, 1),
+            Err(Refusal::WrongPurpose)
+        );
+        assert_eq!(t.open_count(), 0);
     }
 
     #[test]

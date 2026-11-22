@@ -252,6 +252,19 @@ describe('hub Memory area', () => {
     expect(q(el, '[data-action="thumbs-up"]')?.hasAttribute('disabled')).toBe(true);
   });
 
+  it('thumbs up on a quarantined item releases it in the view', async () => {
+    const { src, el } = await setup();
+    await click(options(el)[2] ?? null);
+    expect(q(el, '[data-memory-quarantine-note]')).not.toBeNull();
+    await click(q(el, '[data-action="thumbs-up"]'));
+    const row = MODEL.folders[0]?.rows[2] as MemoryFileRow;
+    expect(src.actions('memory.rate')).toEqual([
+      { action: 'memory.rate', mogId: MOG_A, itemId: row.itemId },
+    ]);
+    expect(options(el)[2]?.querySelector('[data-mark="quarantined"]')).toBeNull();
+    expect(q(el, '[data-memory-quarantine-note]')).toBeNull();
+  });
+
   it('AC-1.8 Delete needs a confirm click and runs after the Undo time', async () => {
     vi.useFakeTimers();
     const { src, el } = await setup();
