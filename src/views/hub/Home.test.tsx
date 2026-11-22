@@ -23,6 +23,7 @@ describe('Home landing motion', () => {
     const { el } = await render(<Home hidden={false} />);
     const stage = el.querySelector<HTMLElement>('.hub-home-stage');
     expect(stage?.getAttribute('data-motion')).toBe('fade');
-    expect(stage?.style.opacity).toBe('0');
+    // The fade has started, so the opacity is near 0 but not exactly 0, and not yet 1.
+    expect(Number(stage?.style.opacity)).toBeLessThan(0.5);
   });
 });

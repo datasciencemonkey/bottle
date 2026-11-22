@@ -5,6 +5,7 @@
  * `hub:conversations` and runs no store statement (ARC-2). All values are plainly fake.
  */
 import { act, useEffect } from 'react';
+import type { Root } from 'react-dom/client';
 import { render, tauri, viewEmits } from '../test-tauri';
 import { Conversations } from './Conversations';
 import type { ConversationRow } from '../../shared/hub-conversations';
@@ -67,8 +68,16 @@ async function mount(
   const r = await render(
     <Conversations active={active} onOpen={onOpen} now={() => NOW} composer={composer as never} />,
   );
+  mounted.push(r.root);
   return { ...r, onOpen };
 }
+
+// A view left mounted by an earlier test keeps its real retry timers (0.5 to 7.5 s) and fires
+// `conversations.ready` into a later test, which counts those asks. Unmount after each test.
+const mounted: Root[] = [];
+afterEach(async () => {
+  for (const r of mounted.splice(0)) await act(async () => r.unmount());
+});
 
 describe('hub Conversations (#103)', () => {
   beforeEach(() => tauri.reset());
