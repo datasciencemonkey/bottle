@@ -710,20 +710,18 @@ export class LocalMemoryService implements MemoryService {
     const r = await this.store.exec('mem.item.list', { mogId });
     return { rows: r.rows, ...(typeof r.folder === 'string' ? { folder: r.folder } : {}) };
   }
-  readonly #registered = new Set<MogId>();
   /**
-   * Register the MOG row once per session, before a list or a pin. A MOG gets its store row
-   * with its first Genie exchange, so before that `mem.item.list` and `mem.item.write` refuse it.
-   * The upsert is idempotent; the name is the same call that the exchange history makes.
+   * Register the MOG row before a list or a pin. A MOG gets its store row with its first Genie
+   * exchange, so before that `mem.item.list` and `mem.item.write` refuse it. A Forget of the MOG
+   * or a Wipe deletes the row again, so there is no cache: the upsert is safe to repeat, and it
+   * is the same call that the exchange history makes.
    */
   async ensureMog(m: { mogId: MogId; name: string; backendKind: string }): Promise<void> {
-    if (this.#registered.has(m.mogId)) return;
     await this.registerMog({
       mogId: m.mogId,
       displayName: m.name.trim() === '' ? 'MOG' : m.name,
       backendKind: m.backendKind,
     });
-    this.#registered.add(m.mogId);
   }
   /** One rendered file or item section (`mem.file.get`). */
   async readFile(mogId: MogId, path: string): Promise<Pick<MemoryFileView, 'text'> | undefined> {

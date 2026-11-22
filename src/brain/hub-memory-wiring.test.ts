@@ -131,6 +131,7 @@ function setup(opts: { fail?: unknown; changes?: number; status?: string } = {})
     sent,
     click,
     wiring,
+    forgetMogRow: (id: string) => void registered.delete(id),
     writes: () =>
       calls.filter(
         (c) =>
@@ -174,8 +175,8 @@ describe('hub Memory wiring: reads', () => {
     const s = setup();
     await s.click({ action: 'memory.ready' });
     await s.click({ action: 'memory.ready' });
-    // Registered once per session, not on each list.
-    expect(s.calls.filter((c) => c.stmtId === 'mem.mog.upsert')).toHaveLength(2);
+    // No cache: each list registers each MOG again, so a Forget of the MOG row heals itself.
+    expect(s.calls.filter((c) => c.stmtId === 'mem.mog.upsert')).toHaveLength(4);
     const ops = (
       s.sent[0]?.payload as { folders: { mogId: string; folder: string; rows: unknown[] }[] }
     ).folders[1];
@@ -185,6 +186,22 @@ describe('hub Memory wiring: reads', () => {
       'tkt',
     );
     expect(result(s.sent)).toEqual([{ requestId: 'r9', ok: true, itemId: NEW, status: 'active' }]);
+  });
+
+  it('after the MOG row is forgotten, the list and a hub add work again', async () => {
+    const s = setup();
+    await s.click({ action: 'memory.ready' });
+    s.forgetMogRow(MOG);
+    await s.click({ action: 'memory.ready' });
+    const last = s.sent.filter((e) => e.event === 'hub:memory').at(-1)?.payload as {
+      folders: { mogId: string }[];
+    };
+    expect(last.folders.map((f) => f.mogId)).toContain(MOG);
+    await s.click(
+      { action: 'memory.add', requestId: 'r8', mogId: MOG, kind: 'fact', title: 'T', body: 'B' },
+      'tkt',
+    );
+    expect(result(s.sent)).toEqual([{ requestId: 'r8', ok: true, itemId: NEW, status: 'active' }]);
   });
 
   it('one MOG that fails to list does not hide the others', async () => {
