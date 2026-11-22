@@ -48,6 +48,7 @@ import { paletteColorOf } from '../../shared/mog-palette';
 import { emitView, type CardUpdate } from '../view-ipc';
 import { LINK_OPEN, openInDatabricksUrl } from '../../shared/link-trust';
 import { SafeMarkdown } from './safe-markdown';
+import { MemorySavedLive, NO_SAVED, type MemorySavedApi } from './memory-saved';
 
 /** The card fade at its time; a double-click fades faster. */
 export const FADE_MS = 300;
@@ -64,6 +65,11 @@ export const TABLE_MORE_HINT = 'Open in Bottle to see them all';
 export const SHOW_MORE_LABEL = 'Show more';
 export const SHOW_LESS_LABEL = 'Show less';
 export const CLOSE_LABEL = 'Close';
+/** Memory slice 1 (S1): one click keeps this answer in today's note of the MOG. */
+export const REMEMBER_LABEL = 'Remember this';
+export const REMEMBERED_LABEL = 'In today’s note';
+/** A click that gets no answer from the brain frees the button after this time. */
+export const REMEMBER_WAIT_MS = 10_000;
 /** A press that moves more than this before release is a drag, not a click (review round 2). */
 export const DRAG_SLOP_PX = 4;
 /** `var(--mog-leading)` is 1.45 (`tokens.css`); 14px is `var(--mog-text-md)`'s usual size. */
@@ -185,9 +191,11 @@ export interface GenieCardProps {
    * it), so this only labels it; undefined before the brain answers shows no label.
    */
   identity?: { name: string; colorVariant?: string } | undefined;
+  /** Memory slice 1: the `memory:saved` line of this window (`useMemorySaved` in CardView). */
+  saved?: MemorySavedApi;
 }
 
-export function GenieCard({ mogId, card, onSize, identity }: GenieCardProps) {
+export function GenieCard({ mogId, card, onSize, identity, saved = NO_SAVED }: GenieCardProps) {
   const accent = identity && paletteColorOf(identity.colorVariant, mogId).hex;
   const newest = card.blurbs[0];
   const blurbId = newest?.id ?? '';
@@ -244,6 +252,9 @@ export function GenieCard({ mogId, card, onSize, identity }: GenieCardProps) {
   // The answer clamps to a short summary by default (ANSWER_CLAMP_LINES); "Show more" expands it
   // to its own bounded scroll region (genie-card.css), "Show less" clamps it again. A new answer
   // always starts collapsed.
+  // Memory S1: idle, a click waiting for the brain, or kept (the answer is in today's note).
+  const [remember, setRemember] = useState<'idle' | 'sending' | 'kept'>('idle');
+  const remembering = remember === 'sending';
   const [expanded, setExpanded] = useState(false);
   const [canExpand, setCanExpand] = useState(false);
   const [moreBelow, setMoreBelow] = useState(false);
@@ -259,6 +270,18 @@ export function GenieCard({ mogId, card, onSize, identity }: GenieCardProps) {
   if (prevBlurbId.current !== blurbId) {
     prevBlurbId.current = blurbId;
     if (expanded) setExpanded(false);
+    if (remember !== 'idle') setRemember('idle');
+  }
+  // A new memory:saved line settles the click: kept after a save, back to idle otherwise.
+  const [seenLine, setSeenLine] = useState(saved.line);
+  if (seenLine !== saved.line) {
+    setSeenLine(saved.line);
+    const o = saved.line?.outcome;
+    // Only a click of this card marks it: a voice save leaves the answer card alone.
+    if (remember === 'sending') {
+      if (o === 'saved' || o === 'quarantined') setRemember('kept');
+      else if (o !== undefined) setRemember('idle');
+    }
   }
   useLayoutEffect(() => {
     const el = answerRef.current;
@@ -322,6 +345,29 @@ export function GenieCard({ mogId, card, onSize, identity }: GenieCardProps) {
     },
     [end],
   );
+
+  // Memory S1: "Saved to today's note · Undo". The card stays for the Undo time, so the user can
+  // still click Undo. A pointer or MOG hold keeps its own say (`arm` runs only when none holds).
+  const line = saved.line;
+  useEffect(() => {
+    if (!line || workingRef.current || visRef.current === 'gone') return;
+    timer.current.left = Math.max(timer.current.left, line.ms + AFTER_HOVER_MS);
+    if (!holds.current.pointer && !holds.current.mog) arm(timer.current.left);
+  }, [line, arm]);
+  // A click the brain never answers does not lock the button for good.
+  useEffect(() => {
+    if (remember !== 'sending') return;
+    const t = setTimeout(() => setRemember('idle'), REMEMBER_WAIT_MS);
+    return () => clearTimeout(t);
+  }, [remember]);
+  const doRemember = useCallback(() => {
+    // The brain links the memory to the exchange by this id: no op id, no click.
+    if (remembering || workingRef.current || !opId) return;
+    setRemember('sending');
+    void emitView(mogId, 'click', { action: 'memory.remember', requestId: opId }).catch(() =>
+      setRemember('idle'),
+    );
+  }, [mogId, opId, remembering]);
 
   // The show time starts when the outcome shows; the working pill never fades.
   useEffect(() => {
@@ -406,7 +452,7 @@ export function GenieCard({ mogId, card, onSize, identity }: GenieCardProps) {
   useLayoutEffect(() => {
     if (!onSize) return;
     fitted.current = Promise.resolve(measure());
-  }, [onSize, measure, kind, text, card.sections, card.blurbs, retry, vis]);
+  }, [onSize, measure, kind, text, card.sections, card.blurbs, retry, vis, saved.line]);
 
   // The pill grows into the card: the same element animates from its old size and corners to
   // the new ones. The motion waits until the window has its new height.
@@ -664,6 +710,28 @@ export function GenieCard({ mogId, card, onSize, identity }: GenieCardProps) {
                     <ExternalLink size={11} strokeWidth={2} aria-hidden="true" />
                   </a>
                 )}
+                {kind === 'answer' &&
+                  (remember === 'kept' ? (
+                    <span className="genie-remembered" data-remembered>
+                      {REMEMBERED_LABEL}
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="genie-remember"
+                      data-action="remember"
+                      aria-label="Remember this answer in today’s note"
+                      disabled={remembering}
+                      onDoubleClick={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (e.detail > 1) return;
+                        doRemember();
+                      }}
+                    >
+                      {REMEMBER_LABEL}
+                    </button>
+                  ))}
                 {(kind === 'answer' || kind === 'message') && canExpand && (
                   <button
                     type="button"
@@ -681,6 +749,7 @@ export function GenieCard({ mogId, card, onSize, identity }: GenieCardProps) {
             )}
             <span className="genie-when">now</span>
           </footer>
+          <MemorySavedLive line={saved.line} onUndo={saved.undo} />
         </div>
       )}
     </div>
