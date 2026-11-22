@@ -238,6 +238,8 @@ describe('Wipe wiring (#124)', () => {
       'brain/components/wipe-flow.ts',
       // The contract table names the command; it calls nothing.
       'shared/ipc.ts',
+      // The harness class table names every command.
+      'test-support/cloud-calls.ts',
     ]);
     const wiring = readFileSync(resolve(import.meta.dirname, 'wipe-wiring.ts'), 'utf8');
     expect(wiring.match(/flow\.confirm\(/g)).toHaveLength(1);

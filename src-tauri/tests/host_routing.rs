@@ -369,6 +369,7 @@ fn arc_3_cap_02a_g_04a_window_ops_capture_start_and_mcp_call_run_off_the_main_th
                         | "agent_send"
                         | "stt_transcribe"
                         | "mem_local_exec"
+                        | "mem_wipe"
                         // #555: T7 runs `databricks auth describe` per profile once R5 lands.
                         | "profiles_list"
                         // #161: `cli_install` downloads and checks the CLI.
@@ -798,6 +799,7 @@ fn arc_3_cap_02a_g_04a_schedule_runs_window_ops_capture_start_and_mcp_call_on_a_
                     | "agent_send"
                     | "stt_transcribe"
                     | "mem_local_exec"
+                    | "mem_wipe"
                     | "profiles_list"
                     | "cli_install"
                     | "profile_login"
