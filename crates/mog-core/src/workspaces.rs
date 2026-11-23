@@ -32,19 +32,16 @@ use crate::ipc::{
 use crate::ipc_gateway::GatewayComponents;
 use crate::mog_config::MogConfigStore;
 use crate::profile_service::ProfileService;
-use crate::recording_cloud::settings_store::is_endpoint_name;
 use crate::token_broker::{CliTokenBroker, TokenBroker};
 use crate::types::{
-    AgentSettings, MogId, Profile, ProfileName, TokenState, WorkspaceList, WorkspaceRow,
-    WorkspaceSignIn,
+    AgentSettings, EndpointName, GenieCallBudget, MogId, Profile, ProfileName, TokenState,
+    WorkspaceList, WorkspaceRow, WorkspaceSignIn,
 };
 
 /// The file name in the app config dir.
 pub const FILE_NAME: &str = "workspaces.json";
 /// The schema version of the file.
 pub const SCHEMA_VERSION: u32 = 1;
-/// The default D2 budget (Genie calls per question).
-pub const DEFAULT_BUDGET: u8 = 10;
 /// The default D9 agent model endpoint.
 pub const DEFAULT_ENDPOINT: &str = "databricks-claude-sonnet-5-5";
 /// The sign-in probes that run at once.
@@ -130,8 +127,8 @@ struct Entry {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AgentData {
     cross_workspace_data: bool,
-    genie_call_budget: u8,
-    endpoint: String,
+    genie_call_budget: GenieCallBudget,
+    endpoint: EndpointName,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -146,9 +143,8 @@ struct Data {
 
 impl Data {
     fn valid(&self) -> bool {
+        // The budget and the endpoint name are checked when the file is parsed.
         self.schema_version == SCHEMA_VERSION
-            && [5, 10, 20].contains(&self.agent.genie_call_budget)
-            && is_endpoint_name(&self.agent.endpoint)
     }
 
     fn entry(&self, profile: &str) -> Option<&Entry> {
@@ -326,8 +322,9 @@ impl WorkspaceStore {
             workspaces,
             agent: AgentData {
                 cross_workspace_data: false,
-                genie_call_budget: DEFAULT_BUDGET,
-                endpoint: DEFAULT_ENDPOINT.to_owned(),
+                genie_call_budget: GenieCallBudget::DEFAULT,
+                endpoint: EndpointName::try_from(DEFAULT_ENDPOINT.to_owned())
+                    .expect("the default endpoint is a valid name"),
             },
         })
     }
@@ -526,16 +523,9 @@ impl WorkspaceStore {
         self.render(&data, false)
     }
 
-    /// `workspace_settings_write`: D1, D2 and the agent endpoint. A bad value changes nothing.
+    /// `workspace_settings_write`: D1, D2 and the agent endpoint. The argument types hold only
+    /// valid values, so a bad value never gets here.
     pub fn settings_write(&self, a: &WorkspaceSettingsWriteArgs) -> CoreResult<WorkspaceList> {
-        if a.genie_call_budget
-            .is_some_and(|b| ![5, 10, 20].contains(&b))
-            || a.agent_endpoint
-                .as_deref()
-                .is_some_and(|e| !is_endpoint_name(e))
-        {
-            return Err(refused("invalid_args"));
-        }
         let data = {
             let _g = self.guard();
             let mut data = self.load()?;
@@ -546,7 +536,7 @@ impl WorkspaceStore {
                 data.agent.genie_call_budget = v;
             }
             if let Some(v) = &a.agent_endpoint {
-                data.agent.endpoint.clone_from(v);
+                data.agent.endpoint = v.clone();
             }
             self.save(&data)?;
             data

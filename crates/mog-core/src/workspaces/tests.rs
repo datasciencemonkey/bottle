@@ -354,6 +354,14 @@ fn ready(s: &Scratch) -> WorkspaceStore {
     )
 }
 
+fn ep(s: &str) -> EndpointName {
+    EndpointName::try_from(s.to_owned()).unwrap()
+}
+
+fn budget(n: u8) -> GenieCallBudget {
+    GenieCallBudget::try_from(n).unwrap()
+}
+
 fn code(e: CoreError) -> &'static str {
     match e {
         CoreError::IpcRefused { code } => code,
@@ -456,37 +464,31 @@ fn settings_write_stores_d1_d2_and_the_endpoint_and_a_bad_value_changes_nothing(
         AgentSettings {
             cross_workspace_data: false,
             cross_workspace_locked: false,
-            genie_call_budget: 10,
-            endpoint: "databricks-claude-sonnet-5-5".to_owned(),
+            genie_call_budget: GenieCallBudget::DEFAULT,
+            endpoint: ep("databricks-claude-sonnet-5-5"),
         }
     );
-    let before = fs::read(s.file()).unwrap();
-    for bad in [
-        WorkspaceSettingsWriteArgs {
-            cross_workspace_data: Some(true),
-            genie_call_budget: Some(7),
-            agent_endpoint: None,
-        },
-        WorkspaceSettingsWriteArgs {
-            cross_workspace_data: Some(true),
-            genie_call_budget: None,
-            agent_endpoint: Some("a b/c".to_owned()),
-        },
-    ] {
-        assert_eq!(code(w.settings_write(&bad).unwrap_err()), "invalid_args");
-    }
-    assert_eq!(fs::read(s.file()).unwrap(), before);
+    // A bad budget or endpoint cannot be built, and the command refuses it on the wire.
+    assert!(GenieCallBudget::try_from(7).is_err());
+    assert!(EndpointName::try_from("a b/c".to_owned()).is_err());
+    let bad = w.call("workspace_settings_write", json!({"genieCallBudget": 7}));
+    assert_eq!(code(bad.unwrap_err()), "invalid_args");
+    let bad = w.call(
+        "workspace_settings_write",
+        json!({"agentEndpoint": "a b/c"}),
+    );
+    assert_eq!(code(bad.unwrap_err()), "invalid_args");
     let l = w
         .settings_write(&WorkspaceSettingsWriteArgs {
             cross_workspace_data: Some(true),
-            genie_call_budget: Some(20),
-            agent_endpoint: Some("my-endpoint".to_owned()),
+            genie_call_budget: Some(budget(20)),
+            agent_endpoint: Some(ep("my-endpoint")),
         })
         .unwrap();
     assert_eq!(
         (
             l.agent.cross_workspace_data,
-            l.agent.genie_call_budget,
+            l.agent.genie_call_budget.get(),
             l.agent.endpoint.as_str()
         ),
         (true, 20, "my-endpoint")
@@ -495,12 +497,12 @@ fn settings_write_stores_d1_d2_and_the_endpoint_and_a_bad_value_changes_nothing(
     let l = w
         .settings_write(&WorkspaceSettingsWriteArgs {
             cross_workspace_data: None,
-            genie_call_budget: Some(5),
+            genie_call_budget: Some(budget(5)),
             agent_endpoint: None,
         })
         .unwrap();
     assert!(l.agent.cross_workspace_data);
-    assert_eq!(l.agent.endpoint, "my-endpoint");
+    assert_eq!(l.agent.endpoint.as_str(), "my-endpoint");
 }
 
 // ---------- the allow-list ----------
