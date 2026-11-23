@@ -85,7 +85,7 @@ describe('dictation Copy card sink', () => {
     }
   });
 
-  it('[UX-2.9] a target_changed paste reads "Not pasted: the app changed" with Copy', async () => {
+  it('[AC-2.9] a target_changed paste reads "Not pasted: the app changed" with Copy', async () => {
     const { sink, sent } = setup();
     await sink.onDone({ route: 'insert_failed', reason: 'target_changed', text: SENTENCE }, owned);
     expect(texts(sent.at(-1))).toEqual([`${SENTENCE}\nNot pasted: the app changed`]);

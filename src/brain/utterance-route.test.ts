@@ -95,7 +95,7 @@ describe('utterance route (#59)', () => {
     });
   });
 
-  it('[UX-2.9] a target_changed paste keeps the text for Copy and the Ask Genie chip of the same text', async () => {
+  it('[AC-2.9] a target_changed paste keeps the text for Copy and the Ask Genie chip of the same text', async () => {
     const { d, inserted } = deps(dictation(), 'target_changed');
     const r = await routeUtterance(utterance(), d);
     expect(r).toMatchObject({
