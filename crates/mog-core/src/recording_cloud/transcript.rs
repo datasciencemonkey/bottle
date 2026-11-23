@@ -73,8 +73,14 @@ pub struct BottleGap {
     pub dur_s: f64,
 }
 
-/// A gap of at least this many seconds gets a marker line in the markdown.
+/// A hold of at least this many seconds gets a marker line in the markdown. The hold is the gap
+/// without the gate tail ([`crate::recording_capture::tap::GATE_TAIL_MS`]).
 pub const MARKER_MIN_S: f64 = 1.0;
+
+/// The length of the hold in a gap: the gap without the gate tail.
+fn hold_s(g: &BottleGap) -> f64 {
+    (g.dur_s - crate::recording_capture::tap::GATE_TAIL_MS as f64 / 1_000.0).max(0.0)
+}
 
 /// The gaps of all parts, with absolute times. A part starts where the parts before it end.
 pub fn bottle_gaps(parts: &[super::job::PartEntry]) -> Vec<BottleGap> {
@@ -183,13 +189,20 @@ pub fn speaker_name(label: &str) -> String {
     }
 }
 
+/// The transcript text for the notes model: no marker line (ADR 0118 decision 12).
+pub fn render_markdown_for_model(doc: &TranscriptDoc) -> String {
+    let mut d = doc.clone();
+    d.bottle_gaps.clear();
+    render_markdown(&d)
+}
+
 /// `<name>.transcript.md`: one turn per run of one speaker, `**Speaker N** [hh:mm:ss]`, turns
 /// separated by a blank line.
 pub fn render_markdown(doc: &TranscriptDoc) -> String {
     let mut markers: Vec<&BottleGap> = doc
         .bottle_gaps
         .iter()
-        .filter(|g| g.dur_s >= MARKER_MIN_S)
+        .filter(|g| hold_s(g) >= MARKER_MIN_S - 1e-6)
         .collect();
     markers.sort_by(|a, b| a.start_s.total_cmp(&b.start_s));
     let mut markers = markers.into_iter().peekable();
@@ -206,7 +219,7 @@ pub fn render_markdown(doc: &TranscriptDoc) -> String {
         }
     };
     let marker = |out: &mut String, g: &BottleGap| {
-        let d = g.dur_s as u64;
+        let d = hold_s(g) as u64;
         out.push_str(&format!(
             "\n*You spoke to Bottle ({}:{:02})* [{}]\n",
             d / 60,

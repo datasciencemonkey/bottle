@@ -277,9 +277,10 @@ pub trait CaptureEvents: Send + Sync {
     fn stopped(&self, stopped: &Stopped);
     /// A PTT overlay was granted on top of a session lease (a directed segment, ADR 0118).
     /// `capture.state` keeps showing the session lease then, so this internal hook is the one
-    /// way a buffer learns the overlay's own lease. It is no contract field. The default does
-    /// nothing. It runs before the `capture.state` event of the same change.
-    fn overlay_granted(&self, _lease: &Lease) {}
+    /// way a buffer learns the overlay's own lease. It is no contract field. It has no default
+    /// body: a wrapper that does not forward it would hide the lease from the buffers behind
+    /// it. It runs before the `capture.state` event of the same change.
+    fn overlay_granted(&self, lease: &Lease);
 }
 
 /// A `capture_start` request.

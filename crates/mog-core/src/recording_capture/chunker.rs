@@ -29,6 +29,9 @@ pub struct PartFile {
     pub samples: u64,
     /// Where the part starts in the recording, in ms.
     pub offset_ms: u64,
+    /// The mic ranges of this part that the talk-key gate zeroed (ADR 0118), in 16 kHz
+    /// samples from the part start. Empty when no hold happened.
+    pub held: Vec<super::session::HeldRange>,
 }
 
 impl PartFile {
@@ -252,6 +255,7 @@ impl PartWriter {
             path,
             samples: 0,
             offset_ms: self.written * 1_000 / u64::from(SAMPLE_RATE),
+            held: Vec::new(),
         };
         self.current = Some((writer, part));
         Ok(())

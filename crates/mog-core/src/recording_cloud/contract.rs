@@ -654,6 +654,7 @@ impl CloudAdapter {
                 .map(|p| LocalPart {
                     path: p.path.clone(),
                     duration_s: p.duration_s,
+                    held: Vec::new(),
                 })
                 .collect(),
         };

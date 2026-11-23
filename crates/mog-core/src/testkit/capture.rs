@@ -143,6 +143,8 @@ impl RecordingCaptureEvents {
 }
 
 impl CaptureEvents for RecordingCaptureEvents {
+    fn overlay_granted(&self, _lease: &crate::capture::Lease) {}
+
     fn state(&self, state: &CaptureState) {
         self.states
             .lock()

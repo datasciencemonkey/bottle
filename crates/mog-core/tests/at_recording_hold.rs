@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use mog_core::audio_device::level::TeeSink;
+use mog_core::audio_device::level::{LevelCaptureEvents, LevelGate, LevelOut, TeeSink};
 use mog_core::audio_device::ptt_buffer::{PttBuffer, PttCaptureEvents, Utterance, UtteranceSink};
 use mog_core::audio_device::system::{RecordingDevice, SystemAudioDevice};
 use mog_core::audio_device::{DataFn, FaultFn, FrameSink, Interleaved, MicFrame, MicHost};
@@ -20,8 +20,8 @@ use mog_core::capture::{
 use mog_core::clock::{SimClock, SimWallClock};
 use mog_core::recording_capture::chunker::{PartFile, PartFormat};
 use mog_core::recording_capture::session::{
-    read_held_sidecar, FinishedRecording, HeldRange, PartsHandoff, RecordingCaptureError,
-    RecordingSession, SessionConfig, Snapshot, StartOptions, StopCause,
+    FinishedRecording, HeldRange, PartsHandoff, RecordingCaptureError, RecordingSession,
+    SessionConfig, Snapshot, StartOptions, StopCause,
 };
 use mog_core::recording_capture::tap::{GateCaptureEvents, RecordingTap, GATE_TAIL_MS};
 use mog_core::recording_cloud::cloud::{merge_local_parts, LocalPart};
@@ -79,8 +79,11 @@ impl FakeHost {
 }
 
 #[derive(Default)]
-struct Handoff(Mutex<Vec<FinishedRecording>>);
+struct Handoff(Mutex<Vec<FinishedRecording>>, Mutex<Vec<PartFile>>);
 impl PartsHandoff for Handoff {
+    fn part_ready(&self, _id: &str, part: &PartFile) {
+        self.1.lock().unwrap().push(part.clone());
+    }
     fn finished(&self, rec: FinishedRecording) {
         self.0.lock().unwrap().push(rec);
     }
@@ -101,6 +104,7 @@ impl UtteranceSink for Utterances {
 #[derive(Default)]
 struct Fwd(Mutex<Option<Arc<RecordingSession>>>);
 impl CaptureEvents for Fwd {
+    fn overlay_granted(&self, _lease: &mog_core::capture::Lease) {}
     fn state(&self, _state: &CaptureState) {}
     fn stopped(&self, stopped: &Stopped) {
         let s = self.0.lock().unwrap().clone();
@@ -110,11 +114,19 @@ impl CaptureEvents for Fwd {
     }
 }
 
-type Chain = PttCaptureEvents<GateCaptureEvents<FwdRef>>;
+type Chain = GateCaptureEvents<LevelCaptureEvents<PttCaptureEvents<FwdRef>>>;
+
+struct NoLevel;
+impl LevelOut for NoLevel {
+    fn level(&self, _dbfs: f32) {}
+}
 
 struct FwdRef(Arc<Fwd>);
 
 impl CaptureEvents for FwdRef {
+    fn overlay_granted(&self, lease: &mog_core::capture::Lease) {
+        self.0.overlay_granted(lease);
+    }
     fn state(&self, state: &CaptureState) {
         self.0.state(state);
     }
@@ -159,7 +171,7 @@ fn temp_dir() -> PathBuf {
 fn rig(part_max_samples: Option<u64>) -> Rig {
     let clock = Arc::new(SimClock::new());
     let wall = SimWallClock::at(1_763_544_600_000);
-    let tap = RecordingTap::new(clock.clone());
+    let tap = RecordingTap::with_queue_blocks(clock.clone(), 8_192);
     let mic = FakeMic::default();
     let sys = FakeHost::default();
     let h = sys.clone();
@@ -172,9 +184,13 @@ fn rig(part_max_samples: Option<u64>) -> Rig {
     let fwd = Arc::new(Fwd::default());
     let utterances = Arc::new(Utterances::default());
     let ptt = PttBuffer::new(utterances.clone());
-    let chain: Chain = PttCaptureEvents::new(
-        GateCaptureEvents::new(FwdRef(fwd.clone()), tap.clone()),
-        ptt.clone(),
+    // The host order, with the gate outermost: Gate -> Level -> Ptt -> relay.
+    let chain: Chain = GateCaptureEvents::new(
+        LevelCaptureEvents::new(
+            PttCaptureEvents::new(FwdRef(fwd.clone()), ptt.clone()),
+            LevelGate::new(Arc::new(NoLevel)),
+        ),
+        tap.clone(),
     );
     let core = Arc::new(CaptureCore::new(
         Box::new(RecordingDevice::new(
@@ -239,9 +255,6 @@ impl Rig {
             });
             self.sys.play(&vec![SYS_AMP; 960], 2, 48_000);
             self.clock.advance(Duration::from_millis(10));
-            // Real time is not simulated: let the writer thread keep up, so the bounded
-            // queue never drops a block.
-            std::thread::sleep(Duration::from_millis(1));
         }
     }
 
@@ -410,13 +423,20 @@ fn ac_6_6_end_to_end_the_recorded_mic_is_silent_in_the_hold_and_the_call_goes_on
     r.play(2_000);
     let done = r.finish();
     let s = decode(&done.parts[0].path);
-    // Mic + system outside the hold; system only inside (and in the 250 ms tail).
-    assert!((mean(&s, 0.5, 1.8) - level(MIC_AMP + SYS_AMP)).abs() < 60);
+    // Blocks are 10 ms, so the edges are exact: key-down at sample 32 000, the hold ends at
+    // 64 000, and the tail ends 250 ms later at 68 000.
+    let both = level(MIC_AMP + SYS_AMP);
+    let sys = level(SYS_AMP);
+    let near = |a: i32, b: i32| (a - b).abs() <= 1;
+    assert!(s[1_000..32_000].iter().all(|v| near(*v, both)), "before");
     assert!(
-        (mean(&s, 2.3, 3.9) - level(SYS_AMP)).abs() < 60,
-        "AC-6.6, AC-6.7"
+        s[32_000..68_000].iter().all(|v| near(*v, sys)),
+        "AC-6.6, AC-6.7: every sample from key-down to the end of the tail"
     );
-    assert!((mean(&s, 4.5, 5.9) - level(MIC_AMP + SYS_AMP)).abs() < 60);
+    assert!(
+        s[68_000..s.len() - 400].iter().all(|v| near(*v, both)),
+        "after"
+    );
 }
 
 // ---------- AC-6.8 ----------
@@ -486,6 +506,7 @@ fn manifest_of(done: &FinishedRecording) -> JobManifest {
         .map(|p| LocalPart {
             path: p.path.clone(),
             duration_s: p.samples as f64 / 16_000.0,
+            held: p.held.clone(),
         })
         .collect();
     merge_local_parts(&mut m, &parts);
@@ -570,8 +591,7 @@ fn ac_6_11_each_part_has_its_held_ranges_in_job_json() {
     r.play(3_000);
     let done = r.finish();
     assert!(done.parts.len() >= 3, "{}", done.parts.len());
-    let per_part = read_held_sidecar(done.parts[0].path.parent().unwrap());
-    assert_eq!(per_part.len(), done.parts.len());
+    let per_part: Vec<Vec<HeldRange>> = done.parts.iter().map(|p| p.held.clone()).collect();
     let one = |v: &Vec<HeldRange>| {
         assert_eq!(v.len(), 1, "{v:?}");
         v[0]
@@ -591,6 +611,12 @@ fn ac_6_11_each_part_has_its_held_ranges_in_job_json() {
     // The manifest has them, per part, under `heldRanges`.
     let m = manifest_of(&done);
     assert_eq!(m.parts[1].held_ranges, per_part[1]);
+    // Each part that closed while the call ran carried its own ranges at `part_ready`.
+    let live = r.handoff.1.lock().unwrap();
+    assert!(live.len() >= 2, "{}", live.len());
+    for (l, f) in live.iter().zip(&done.parts) {
+        assert_eq!(l.held, f.held, "part {}", l.index);
+    }
     let json = serde_json::to_string(&m).unwrap();
     assert!(
         json.contains("heldRanges") && json.contains("startSamples"),
@@ -603,12 +629,17 @@ fn ac_6_11_each_part_has_its_held_ranges_in_job_json() {
 }
 
 #[test]
-fn ac_6_11_a_recording_with_no_hold_writes_no_sidecar_and_no_held_ranges() {
+fn ac_6_11_a_recording_with_no_hold_has_no_held_ranges() {
     let mut r = rig(None);
     r.session.start(opts()).unwrap();
     r.play(1_000);
     let done = r.finish();
-    assert!(read_held_sidecar(done.parts[0].path.parent().unwrap()).is_empty());
+    assert!(done.parts.iter().all(|p| p.held.is_empty()));
+    assert!(std::fs::read_dir(&done.dir).unwrap().all(|e| e
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .ends_with(".flac")));
     let json = serde_json::to_string(&manifest_of(&done)).unwrap();
     assert!(!json.contains("heldRanges"));
     assert_eq!(r.handoff.0.lock().unwrap().len(), 1);
@@ -638,14 +669,78 @@ fn ac_6_14_with_the_knob_off_nothing_in_this_slice_opens_the_mic() {
 }
 
 #[test]
-fn a_new_recording_does_not_inherit_a_stuck_gate() {
+fn a_live_overlay_at_arm_keeps_the_gate_closed_until_it_stops_and_the_tail_ends() {
     let clock = Arc::new(SimClock::new());
-    let tap = RecordingTap::new(clock);
+    let tap = RecordingTap::new(clock.clone());
+    // The overlay was granted between the session lease and the arm; the key is down.
     tap.talk_key_down();
     tap.overlay_lease(true);
     let _rx = tap.arm();
+    assert!(tap.mic_gated(), "arm does not clear live state");
+    // The host syncs the physical key at arm: it is up now.
+    tap.resync_key(false);
+    clock.advance(Duration::from_secs(10));
+    assert!(tap.mic_gated(), "the overlay lease still lives");
+    tap.overlay_lease(false);
+    assert!(tap.mic_gated(), "the tail");
+    clock.advance(Duration::from_millis(GATE_TAIL_MS));
+    assert!(!tap.mic_gated());
+    // resync_key(true) closes it again.
+    tap.resync_key(true);
+    assert!(tap.mic_gated());
+}
+
+#[test]
+fn a_late_overlay_grant_after_its_stop_does_not_stick_the_gate() {
+    let clock = Arc::new(SimClock::new());
+    let tap = RecordingTap::new(clock.clone());
+    let _rx = tap.arm();
+    let events = GateCaptureEvents::new(FwdRef(Arc::new(Fwd::default())), tap.clone());
+    let lease = mog_core::capture::Lease {
+        id: 9,
+        mog_id: "mog-a".into(),
+        mode: CaptureMode::Ptt,
+    };
+    // Out of order: the stop first, the grant late.
+    events.stopped(&Stopped {
+        lease_id: 9,
+        mog_id: "mog-a".into(),
+        mode: CaptureMode::Ptt,
+        reason: mog_core::capture::StopReason::Released,
+    });
+    events.overlay_granted(&lease);
+    assert!(!tap.mic_gated(), "no live lease, so no gate");
+    // A normal order closes it and the stop starts the tail.
+    let lease = mog_core::capture::Lease { id: 10, ..lease };
+    events.overlay_granted(&lease);
+    assert!(tap.mic_gated());
+    events.stopped(&Stopped {
+        lease_id: 10,
+        mog_id: "mog-a".into(),
+        mode: CaptureMode::Ptt,
+        reason: mog_core::capture::StopReason::Released,
+    });
+    clock.advance(Duration::from_millis(GATE_TAIL_MS));
     assert!(!tap.mic_gated());
 }
 
 #[allow(dead_code)]
 fn _types(_: &PartFile) {}
+
+#[test]
+fn the_one_second_marker_limit_counts_the_hold_without_the_tail() {
+    let mut r = rig(None);
+    r.session.start(opts()).unwrap();
+    r.play(1_000);
+    hold(&mut r, 800);
+    r.play(1_000);
+    hold(&mut r, 1_000);
+    r.play(500);
+    let done = r.finish();
+    let gaps = bottle_gaps(&manifest_of(&done).parts);
+    assert_eq!(gaps.len(), 2);
+    // 0.8 s hold: the range is 1.05 s with the tail, but there is no marker.
+    let md = render_markdown(&doc(gaps, &[(0.2, "1", "Hi.")]));
+    assert_eq!(md.matches("You spoke to Bottle").count(), 1, "{md}");
+    assert!(md.contains("(0:01)"), "{md}");
+}

@@ -48,6 +48,7 @@ pub struct Block {
 struct Shared {
     tx: Mutex<Option<SyncSender<Block>>>,
     clock: Arc<dyn MonotonicClock>,
+    queue_blocks: usize,
     last_system_sound_ms: AtomicU64,
     dropped: AtomicU64,
     /// The talk key is physically down.
@@ -67,10 +68,17 @@ pub struct RecordingTap {
 impl RecordingTap {
     /// A disarmed tap whose silence stamps use `clock`.
     pub fn new(clock: Arc<dyn MonotonicClock>) -> Self {
+        Self::with_queue_blocks(clock, QUEUE_BLOCKS)
+    }
+
+    /// As [`RecordingTap::new`], with a queue of `queue_blocks` blocks. Tests that feed audio
+    /// faster than real time use a long queue, so the writer thread never makes them drop.
+    pub fn with_queue_blocks(clock: Arc<dyn MonotonicClock>, queue_blocks: usize) -> Self {
         Self {
             shared: Arc::new(Shared {
                 tx: Mutex::new(None),
                 clock,
+                queue_blocks,
                 last_system_sound_ms: AtomicU64::new(0),
                 dropped: AtomicU64::new(0),
                 key_down: AtomicBool::new(false),
@@ -99,15 +107,15 @@ impl RecordingTap {
     /// Arm the tap for a new recording: from now on frames go to the returned receiver. The
     /// silence stamp starts at now. An earlier arm is replaced (its receiver ends).
     pub fn arm(&self) -> Receiver<Block> {
-        let (tx, rx) = mpsc::sync_channel(QUEUE_BLOCKS);
+        let (tx, rx) = mpsc::sync_channel(self.shared.queue_blocks);
         self.shared
             .last_system_sound_ms
             .store(now_ms(&*self.shared.clock), Ordering::SeqCst);
         self.shared.dropped.store(0, Ordering::SeqCst);
-        // No hold can be live at a start (the host refuses a PTT while a recording starts), so
-        // a flag left over from an earlier recording must not keep the new one silent.
-        self.shared.key_down.store(false, Ordering::SeqCst);
-        self.shared.lease_live.store(false, Ordering::SeqCst);
+        // Only the tail resets. The flags are live state: an overlay lease that was granted
+        // between the session lease and this arm, or a key that is down now, must keep the
+        // gate closed (a stale `true` only silences the mic; a stale `false` would leak).
+        // `lease_live` clears on that lease's stop. The host syncs the key with `resync_key`.
         self.shared.closed_until_ms.store(0, Ordering::SeqCst);
         *self
             .shared
@@ -137,6 +145,17 @@ impl RecordingTap {
     /// an overlay lease is live.
     pub fn talk_key_up(&self) {
         self.end_hold(&self.shared.key_down);
+    }
+
+    /// Set the physical state of the talk key from the host, for example at `arm` time or
+    /// after an event tap was disabled and enabled again. `false` acts as [`Self::talk_key_up`]
+    /// (with the tail), `true` as [`Self::talk_key_down`].
+    pub fn resync_key(&self, down: bool) {
+        if down {
+            self.talk_key_down();
+        } else {
+            self.talk_key_up();
+        }
     }
 
     /// A PTT overlay lease on the recording went live (`true`) or ended (`false`). The gate
@@ -230,14 +249,26 @@ impl FrameSink for TapSink {
     }
 }
 
+/// How many ended overlay leases the gate wrapper remembers, so a late `overlay_granted` of a
+/// lease that has stopped (the events come after the locks are released) cannot close the gate
+/// for good.
+const ENDED_MEMORY: usize = 16;
+
+#[derive(Default)]
+struct OverlayState {
+    live: Option<crate::capture::LeaseNo>,
+    ended: std::collections::VecDeque<crate::capture::LeaseNo>,
+}
+
 /// Wraps [`CaptureEvents`] and drives the mic gate from the overlay lease (ADR 0118): the
 /// internal `overlay_granted` hook closes it, and the stop of that lease starts the tail.
 /// The key-down side is the host's [`RecordingTap::talk_key_down`] call. The event goes on to
-/// the inner sink.
+/// the inner sink. Put it outermost in the host chain, so the gate closes before any other
+/// sink hears of the lease.
 pub struct GateCaptureEvents<E> {
     inner: E,
     tap: RecordingTap,
-    overlay: Mutex<Option<crate::capture::LeaseNo>>,
+    overlay: Mutex<OverlayState>,
 }
 
 impl<E: crate::capture::CaptureEvents> GateCaptureEvents<E> {
@@ -246,7 +277,7 @@ impl<E: crate::capture::CaptureEvents> GateCaptureEvents<E> {
         Self {
             inner,
             tap,
-            overlay: Mutex::new(None),
+            overlay: Mutex::new(OverlayState::default()),
         }
     }
 
@@ -262,19 +293,31 @@ impl<E: crate::capture::CaptureEvents> crate::capture::CaptureEvents for GateCap
     }
 
     fn stopped(&self, stopped: &crate::capture::Stopped) {
-        let mut o = self.overlay.lock().unwrap_or_else(PoisonError::into_inner);
-        if *o == Some(stopped.lease_id) {
-            *o = None;
-            self.tap.overlay_lease(false);
+        {
+            let mut o = self.overlay.lock().unwrap_or_else(PoisonError::into_inner);
+            if !o.ended.contains(&stopped.lease_id) {
+                if o.ended.len() >= ENDED_MEMORY {
+                    o.ended.pop_front();
+                }
+                o.ended.push_back(stopped.lease_id);
+            }
+            if o.live == Some(stopped.lease_id) {
+                o.live = None;
+                self.tap.overlay_lease(false);
+            }
         }
-        drop(o);
         self.inner.stopped(stopped);
     }
 
     fn overlay_granted(&self, lease: &crate::capture::Lease) {
-        // Closed before the inner sinks hear of the lease.
-        *self.overlay.lock().unwrap_or_else(PoisonError::into_inner) = Some(lease.id);
-        self.tap.overlay_lease(true);
+        {
+            let mut o = self.overlay.lock().unwrap_or_else(PoisonError::into_inner);
+            // A grant that arrives after the stop of its lease must not close the gate.
+            if !o.ended.contains(&lease.id) {
+                o.live = Some(lease.id);
+                self.tap.overlay_lease(true);
+            }
+        }
         self.inner.overlay_granted(lease);
     }
 }

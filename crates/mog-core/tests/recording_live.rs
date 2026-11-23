@@ -225,6 +225,7 @@ impl LocalAudio for LocalFake {
             .map(|path| LocalPart {
                 path,
                 duration_s: 0.0,
+                held: Vec::new(),
             })
             .collect();
         v.sort_by(|a, b| a.path.cmp(&b.path));
@@ -317,6 +318,7 @@ impl Rig {
         LocalPart {
             path,
             duration_s: stitch::duration_s(&self.bytes[i]).unwrap(),
+            held: Vec::new(),
         }
     }
 
@@ -606,6 +608,7 @@ fn rec_parts_crash_recovery_resumes_the_parts_left_on_disk() {
     let p3 = LocalPart {
         path: p3path.clone(),
         duration_s: 0.0,
+        held: Vec::new(),
     };
     let uploads_before = r
         .vol

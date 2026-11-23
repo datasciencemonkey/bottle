@@ -108,7 +108,9 @@ impl GateTrack {
             match (gated, self.open) {
                 (true, None) => self.open = Some(self.out_pos),
                 (false, Some(start)) => {
-                    self.ranges.push((start, self.out_pos - start));
+                    if self.out_pos > start {
+                        self.ranges.push((start, self.out_pos - start));
+                    }
                     self.open = None;
                 }
                 _ => {}
@@ -142,9 +144,21 @@ impl Mixer {
     /// [`Mixer::flush`]: it closes a range that is still open.
     pub fn finish_ranges(&mut self) -> Vec<(u64, u64)> {
         if let Some(start) = self.gate.open.take() {
-            self.gate.ranges.push((start, self.gate.out_pos - start));
+            if self.gate.out_pos > start {
+                self.gate.ranges.push((start, self.gate.out_pos - start));
+            }
         }
         std::mem::take(&mut self.gate.ranges)
+    }
+
+    /// The gated ranges so far, with a range that is still open cut at the output so far.
+    /// For a part that closes while the call goes on.
+    pub fn ranges_so_far(&self) -> Vec<(u64, u64)> {
+        let mut r = self.gate.ranges.clone();
+        if let Some(start) = self.gate.open.filter(|s| self.gate.out_pos > *s) {
+            r.push((start, self.gate.out_pos - start));
+        }
+        r
     }
 
     /// Add one mono block of `track` at `rate` Hz.

@@ -553,6 +553,7 @@ impl PartsHandoff for Handoff {
 #[derive(Default)]
 struct Events(Mutex<Option<Arc<RecordingSession>>>);
 impl CaptureEvents for Events {
+    fn overlay_granted(&self, _lease: &mog_core::capture::Lease) {}
     fn state(&self, _state: &CaptureState) {}
     fn stopped(&self, stopped: &Stopped) {
         let s = self.0.lock().unwrap().clone();

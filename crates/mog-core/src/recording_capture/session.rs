@@ -316,24 +316,6 @@ pub struct HeldRange {
     pub len_samples: u64,
 }
 
-/// The file in the recording temp dir that lists the gated ranges per part. It exists only
-/// when a hold happened. The cloud side reads it when it builds the job manifest.
-pub const HELD_SIDECAR: &str = "held-ranges.json";
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct HeldSidecar {
-    parts: Vec<Vec<HeldRange>>,
-}
-
-/// The gated ranges per part (in part order) that [`RecordingSession::stop`] wrote to `dir`.
-/// Empty when there was no hold or the file is not readable (fail open to "no markers").
-pub fn read_held_sidecar(dir: &std::path::Path) -> Vec<Vec<HeldRange>> {
-    std::fs::read(dir.join(HELD_SIDECAR))
-        .ok()
-        .and_then(|b| serde_json::from_slice::<HeldSidecar>(&b).ok())
-        .map_or_else(Vec::new, |h| h.parts)
-}
-
 /// Cut ranges (absolute start, length) at the part borders. Part `i` spans the samples of
 /// the parts before it and its own.
 fn split_ranges(parts: &[PartFile], ranges: &[(u64, u64)]) -> Vec<Vec<HeldRange>> {
@@ -671,12 +653,10 @@ impl RecordingSession {
             // A write error: hand off what was finished (the open part may be cut short).
             Ok(Err(_)) | Err(_) => (existing_parts(&active.dir), Vec::new()),
         };
+        let mut parts = parts;
         let per_part = split_ranges(&parts, &held);
-        if per_part.iter().any(|r| !r.is_empty()) {
-            // Numbers only. A failed write loses the markers, never the recording.
-            if let Ok(b) = serde_json::to_vec(&HeldSidecar { parts: per_part }) {
-                let _ = std::fs::write(active.dir.join(HELD_SIDECAR), b);
-            }
+        for (part, ranges) in parts.iter_mut().zip(per_part) {
+            part.held = ranges;
         }
         let job = lock(&self.jobs).remove(&active.info.id).unwrap_or_default();
         let rec = FinishedRecording {
@@ -805,8 +785,13 @@ fn write_loop(
         out.clear();
         mixer.drain(&mut out);
         parts.write(&out)?;
-        for part in &parts.finished()[sent..] {
-            on_part(part);
+        for k in sent..parts.finished().len() {
+            // The part is closed: its ranges are final (an open range is cut at its end).
+            let mut part = parts.finished()[k].clone();
+            if let Some(h) = split_ranges(&parts.finished()[..=k], &mixer.ranges_so_far()).pop() {
+                part.held = h;
+            }
+            on_part(&part);
         }
         sent = parts.finished().len();
     }
@@ -837,6 +822,7 @@ fn existing_parts(dir: &std::path::Path) -> Vec<PartFile> {
                 file_name,
                 samples: 0,
                 offset_ms: 0,
+                held: Vec::new(),
             })
         })
         .collect();
