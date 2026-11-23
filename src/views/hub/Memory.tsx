@@ -64,6 +64,7 @@ import {
 import { NO_LINKS } from '../../shared/link-trust';
 import { paletteColorOf } from '../../shared/mog-palette';
 import { SafeMarkdown } from '../card/safe-markdown';
+import { FORGET_OPEN_TARGET } from '../../shared/forget-view';
 import { Button } from '../ui/button';
 import { emitView } from '../view-ipc';
 import { MemoryForm, type MemoryFormValues } from './MemoryForm';
@@ -286,6 +287,8 @@ export interface MemoryAreaProps {
   source?: MemorySource;
   /** The clock for the day labels. Tests pass a fixed one. */
   now?: () => number;
+  /** The MOG the "Forget memory…" button asks the brain to forget (MEM-32a). None: no button. */
+  forgetMogId?: string | undefined;
 }
 
 /** What the right pane shows instead of the file: the add form or the edit form. */
@@ -295,7 +298,12 @@ type Compose =
 
 let toastKey = 0;
 
-export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }: MemoryAreaProps) {
+export function MemoryArea({
+  active,
+  source = ipcMemorySource,
+  now = Date.now,
+  forgetMogId,
+}: MemoryAreaProps) {
   const reduce = useReducedMotion();
   const [model, setModel] = useState<HubMemory | undefined>(undefined);
   const [view, setView] = useState<MemoryFileView | undefined>(undefined);
@@ -1070,6 +1078,24 @@ export function MemoryArea({ active, source = ipcMemorySource, now = Date.now }:
 
   return (
     <section className="mem" hidden={!active} aria-label="Memory" data-memory-area>
+      {forgetMogId !== undefined && (
+        <div className="mem-head">
+          {/* MEM-32a: the brain opens the Forget dialog for this MOG (ForgetDialogHost). */}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            data-forget-open
+            onClick={() =>
+              void emitView(forgetMogId, 'click', { target: FORGET_OPEN_TARGET }).catch(
+                () => undefined,
+              )
+            }
+          >
+            Forget memory…
+          </Button>
+        </div>
+      )}
       {body}
       <div role="status" className="mem-toast-live">
         {toastText !== undefined && (

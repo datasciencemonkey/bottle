@@ -1,13 +1,12 @@
 // @vitest-environment jsdom
 /**
- * #123: the hub hosts the Forget dialog and opens it from the MOG list (MEM-32a, MEM-32d, ARC-5).
+ * #123: the hub hosts the Forget dialog the brain opens (MEM-32a, MEM-32d, ARC-5).
  * Every value here is fake.
  */
 import { act } from 'react';
 import type { ForgetDialogModel } from '../../shared/forget-view';
-import { render, tauri, viewEmits } from '../test-tauri';
+import { render, tauri } from '../test-tauri';
 import { ForgetDialogHost } from './ForgetDialogHost';
-import { MogList } from './MogList';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('../test-tauri')).coreModule);
 vi.mock('@tauri-apps/api/event', async () => (await import('../test-tauri')).eventModule);
@@ -45,34 +44,6 @@ describe('hub Forget dialog (#123)', () => {
     expect(el.querySelector('[data-forget-dialog]')).not.toBeNull();
     await tauri.emitTo('hub', 'hub:forget_dialog', null);
     expect(el.querySelector('[data-forget-dialog]')).toBeNull();
-    act(() => root.unmount());
-  });
-
-  it('[MEM-32a] each MOG row has Forget memory, which sends forget_open with the MOG id', async () => {
-    const { el, root } = await render(<MogList />);
-    await tauri.emitTo('hub', 'hub:mogs', {
-      mogs: [
-        {
-          mogId: A,
-          name: 'Sales',
-          home: 'sales-ws',
-          persona: '',
-          running: false,
-          colorVariant: 'coral',
-        },
-      ],
-      unreadable: [],
-      runningCount: 0,
-      maxRunning: 8,
-    });
-    const btn = el.querySelector<HTMLButtonElement>('button[data-forget-open]');
-    expect(btn?.getAttribute('aria-label')).toBe('Forget the memory of Sales');
-    await act(async () => btn?.click());
-    expect(viewEmits()).toContainEqual({
-      mogId: A,
-      kind: 'click',
-      payload: { target: 'forget_open' },
-    });
     act(() => root.unmount());
   });
 });

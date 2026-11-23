@@ -32,7 +32,7 @@ const cont = (el: HTMLElement) =>
 const noticeEmits = () =>
   inputEmits().filter(
     (e) =>
-      (e as { payload?: { action?: unknown } }).payload?.action !== 'mogs.ready' &&
+      (e as { payload?: { action?: unknown } }).payload?.action !== 'workspaces.ready' &&
       !['cli', 'permissions', 'conversations', 'recording', 'store'].includes(
         (e as { mogId?: string }).mogId ?? '',
       ),
