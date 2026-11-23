@@ -49,6 +49,8 @@ export const WORKSPACE_TEXT = {
   home_always_available: 'Your home workspace is always on.',
   needs_available: 'Turn this workspace on first.',
   no_home: 'Choose a home workspace first.',
+  choose_home: 'Choose a home workspace in Settings → Workspace.',
+  settings: 'Your workspaces are in Settings → Workspace.',
   signed_in: 'Signed in again.',
   login_cancelled: 'The sign-in was cancelled.',
   timeout: 'The sign-in did not finish in 5 minutes.',
@@ -104,6 +106,11 @@ export interface WorkspacesDeps {
 export interface Workspaces {
   /** The last list that the Rust store gave, if any. */
   last(): WorkspaceList | undefined;
+  /**
+   * "Change workspace…": send the list with a notice that is new each time, so the hub switches
+   * to Settings → Workspace. The text differs by one invisible character per open.
+   */
+  showSettings(): Promise<void>;
   /** Read the list from the store, keep it and send it to the hub. */
   refresh(opts?: { refresh?: boolean; notice?: HubWorkspaceList['notice'] }): Promise<void>;
   /** The home profile, or undefined with no home. A failed read gives the last list's home. */
@@ -126,6 +133,7 @@ const supportedRow = (r: WorkspaceRow) => r.signIn !== 'unsupported' && r.signIn
 
 export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
   let last: WorkspaceList | undefined;
+  let zw = false;
   /** Serialises the actions, so two clicks never write at once. */
   let queue: Promise<unknown> = Promise.resolve();
   const serial = <T>(fn: () => Promise<T>): Promise<T> => {
@@ -221,12 +229,19 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
       },
     };
     if (l.home === null) {
-      const candidates = l.workspaces.filter((r) => r.available && supportedRow(r));
-      if (candidates.length >= 2) {
-        out.homePick = {
-          suggested: await suggest(candidates),
-          candidates: candidates.map((r) => r.profile),
-        };
+      // An old home that is missing or unsupported still counts as a pending decision, but only
+      // supported rows can be the home.
+      const old = l.workspaces.filter((r) => r.mogIds.length > 0);
+      const candidates = old.filter(supportedRow);
+      if (old.length >= 2) {
+        if (candidates.length >= 2) {
+          out.homePick = {
+            suggested: await suggest(candidates),
+            candidates: candidates.map((r) => r.profile),
+          };
+        } else if (!extra.notice) {
+          out.notice = { kind: 'info', text: WORKSPACE_TEXT.choose_home };
+        }
       }
     }
     if (extra.busyProfile !== undefined) out.busyProfile = extra.busyProfile;
@@ -397,27 +412,38 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
         await publish(last, { notice: noticeOf(e) });
       }
     },
+    async showSettings() {
+      zw = !zw;
+      const text = WORKSPACE_TEXT.settings + (zw ? '\u200b' : '');
+      const l = last ?? (await fetchList().catch(() => undefined));
+      await publish(l, { notice: { kind: 'info', text } });
+    },
     async home() {
-      try {
-        return (await fetchList()).home ?? undefined;
-      } catch {
-        return last?.home ?? undefined;
-      }
+      // The cache is read again after a write and on `workspaces.ready` only.
+      const l = last ?? (await fetchList().catch(() => undefined));
+      return l?.home ?? undefined;
     },
     async dataMogId(profile) {
       const l = last ?? (await fetchList().catch(() => undefined));
       return l?.workspaces.find((r) => r.profile === profile)?.mogIds[0];
     },
     async lampMogId() {
-      const l = await fetchList().catch(() => last);
+      const l = last ?? (await fetchList().catch(() => undefined));
       return l?.lampMogId ?? undefined;
     },
     async homeIdentity(lampMogId) {
-      const l = await fetchList().catch(() => last);
+      const l = last ?? (await fetchList().catch(() => undefined));
       const home = l?.workspaces.find((r) => r.isHome);
       const homeMog = home?.mogIds[0];
       if (home && homeMog === undefined) return { name: home.profile, home: home.profile };
-      return configIdentity(homeMog ?? lampMogId);
+      const id = await configIdentity(homeMog ?? lampMogId);
+      if (!home && id) {
+        // With no home the lamp names no workspace.
+        const rest = { ...id };
+        delete rest.home;
+        return rest;
+      }
+      return id;
     },
     pickHome: (profile) =>
       serial(async () => {
@@ -430,13 +456,11 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
         try {
           const l = await fetchList(true);
           const row = l.workspaces.find((r) => r.profile === profile);
-          const pending = l.workspaces.filter(
-            (r) => r.available && supportedRow(r) && r.profile !== profile,
-          );
+          // Any other row with a MOG is an old home, even one that is missing or unsupported.
+          const oldHomes = l.workspaces.filter((r) => r.profile !== profile && r.mogIds.length > 0);
           // The first Connect with no home is home. A home that waits for the user's pick
-          // (two or more candidates) stays open: Bottle never overrides it. A later connection
-          // stays off.
-          if (row && supportedRow(row) && l.home === null && pending.length < 2) {
+          // stays open: Bottle never overrides it. A later connection stays off.
+          if (row && supportedRow(row) && l.home === null && oldHomes.length === 0) {
             keep(await withConfig(row, (mogId) => deps.makeHome(profile, mogId)));
             deps.onChanged?.();
           }

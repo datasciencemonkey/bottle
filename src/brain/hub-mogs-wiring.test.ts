@@ -70,8 +70,8 @@ describe('hub MOG wiring (#26)', () => {
     await vi.waitFor(() => expect(sent).toHaveLength(2));
   });
 
-  it('[MB-01] runs edit, start, stop and set_color from the hub', async () => {
-    wireHubMogs(bus, m, send);
+  it('[MB-01] runs edit, start (the lamp only) and set_color from the hub; stop is retired', async () => {
+    wireHubMogs(bus, m, send, undefined, async () => id(1));
     await vi.waitFor(() => expect(sent).toHaveLength(1));
     await m.create({ name: 'Sales', home: 'p' });
     const step = async (payload: unknown) => {
@@ -81,9 +81,13 @@ describe('hub MOG wiring (#26)', () => {
       return last();
     };
     await step({ action: 'mog.edit', mogId: id(1), name: 'Ops', home: 'q', persona: 'Hi' });
-    expect(last()?.mogs[0]).toMatchObject({ name: 'Ops', home: 'q', persona: 'Hi' });
+    // ADR 0117: the home field of a MOG edit is retired; the home stays as it was.
+    expect(last()?.mogs[0]).toMatchObject({ name: 'Ops', home: 'p', persona: 'Hi' });
+    await m.create({ name: 'Other', home: 'p' });
+    expect((await step({ action: 'mog.start', mogId: id(2) }))?.notice?.text).toBe(RETIRED_TEXT);
     expect((await step({ action: 'mog.start', mogId: id(1) }))?.runningCount).toBe(1);
-    expect((await step({ action: 'mog.stop', mogId: id(1) }))?.runningCount).toBe(0);
+    expect((await step({ action: 'mog.stop', mogId: id(1) }))?.notice?.text).toBe(RETIRED_TEXT);
+    expect(last()?.runningCount).toBe(1);
     // #ui-4: the row swatch picker.
     const recoloured = await step({ action: 'mog.set_color', mogId: id(1), colorVariant: 'teal' });
     expect(recoloured?.mogs.find((r) => r.mogId === id(1))?.colorVariant).toBe('teal');
@@ -107,7 +111,7 @@ describe('hub MOG wiring (#26)', () => {
   });
 
   it('[MB-03b] a start over the cap sends the exact cap text as an error notice', async () => {
-    wireHubMogs(bus, m, send);
+    wireHubMogs(bus, m, send, undefined, async () => id(2));
     await m.create({ name: 'A', home: 'p' });
     await m.create({ name: 'B', home: 'p' });
     await m.start(id(1));

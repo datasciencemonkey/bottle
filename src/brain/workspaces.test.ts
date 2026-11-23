@@ -553,10 +553,65 @@ describe('workspaces: the first Connect (ADR 0117, FLAG 5)', () => {
     expect(r.last()?.homePick?.candidates).toEqual(['a', 'b']);
   });
 
+  it('two old homes, one of them missing, then Connect C: make_home is not called', async () => {
+    const r = rig(
+      workspaceList(null, [
+        { profile: 'a', mogIds: [id(1)], available: true },
+        { profile: 'b', mogIds: [id(2)], available: true, signIn: 'missing' },
+        { profile: 'c' },
+      ]),
+    );
+    await r.ws.connected('c');
+    expect(r.names()).not.toContain('make_home');
+    expect(r.last()?.home).toBeNull();
+    // Only one old home can be the home: the hub gets a notice, not a pick of one.
+    expect(r.last()?.homePick).toBeUndefined();
+    expect(r.last()?.notice).toEqual({ kind: 'info', text: WORKSPACE_TEXT.choose_home });
+  });
+
+  it('connected(a) with the old homes a and b does not call make_home', async () => {
+    const r = rig(
+      workspaceList(null, [
+        { profile: 'a', mogIds: [id(1)], available: true },
+        { profile: 'b', mogIds: [id(2)], available: true },
+      ]),
+    );
+    await r.ws.connected('a');
+    expect(r.names()).not.toContain('make_home');
+    expect(r.last()?.homePick?.candidates).toEqual(['a', 'b']);
+  });
+
   it('an unsupported profile never becomes home', async () => {
     const r = rig(workspaceList(null, [{ profile: 'pat', signIn: 'unsupported' }]));
     await r.ws.connected('pat');
     expect(r.names()).not.toContain('make_home');
+  });
+});
+
+describe('workspaces: Settings notice and cache (ADR 0117)', () => {
+  it('showSettings sends the list with a notice that differs on each open', async () => {
+    const r = rig(workspaceList('home', [{ profile: 'home', mogIds: [id(1)] }]));
+    await r.ws.showSettings();
+    await r.ws.showSettings();
+    await r.ws.showSettings();
+    const texts = r.sent.map((l) => l.notice?.text);
+    expect(texts).toHaveLength(3);
+    for (let i = 1; i < 3; i++) expect(texts[i]).not.toBe(texts[i - 1]);
+    for (const t of texts) expect(t?.replace('\u200b', '')).toBe(WORKSPACE_TEXT.settings);
+  });
+
+  it('the cache is read again only after a write or on workspaces.ready', async () => {
+    const r = rig(workspaceList('home', [{ profile: 'home', mogIds: [id(1)] }]));
+    await r.ws.refresh();
+    const reads = () => r.calls.filter((c) => c[0] === 'list').length;
+    const n = reads();
+    await r.ws.home();
+    await r.ws.lampMogId();
+    await r.ws.dataMogId('home');
+    await r.ws.homeIdentity(id(1)).catch(() => undefined);
+    expect(reads()).toBe(n);
+    await r.ws.act({ action: 'workspaces.ready' });
+    expect(reads()).toBe(n + 1);
   });
 });
 

@@ -36,6 +36,7 @@ async function act(
   // the caller can push the fresh identity to an open MOG and its card (`talkTarget.reidentify`
   // in `components/index.ts`), not only update the hub row.
   onIdentityChanged?: (mogId: string) => void,
+  lampMogId?: () => Promise<string | undefined>,
 ): Promise<HubNoticeLine | undefined> {
   switch (a.action) {
     case 'mogs.ready':
@@ -46,8 +47,11 @@ async function act(
     case 'mog.duplicate':
     case 'mog.delete':
       return { kind: 'info', text: RETIRED_TEXT };
+    case 'mog.stop':
+      return { kind: 'info', text: RETIRED_TEXT };
     case 'mog.edit':
-      await m.edit(a.mogId, { name: a.name, home: a.home, persona: a.persona });
+      // ADR 0117: the home is chosen in Settings → Workspace, never on a MOG.
+      await m.edit(a.mogId, { name: a.name, persona: a.persona });
       onIdentityChanged?.(a.mogId);
       return undefined;
     case 'mog.set_color':
@@ -55,10 +59,9 @@ async function act(
       onIdentityChanged?.(a.mogId);
       return undefined;
     case 'mog.start':
+      // Only the lamp starts.
+      if (a.mogId !== (await lampMogId?.())) return { kind: 'info', text: RETIRED_TEXT };
       await m.start(a.mogId);
-      return undefined;
-    case 'mog.stop':
-      await m.stop(a.mogId);
       return undefined;
   }
 }
@@ -115,6 +118,7 @@ export function wireHubMogs(
   manager: MogManager,
   send: (list: HubMogList) => Promise<unknown> = sendHubMogs,
   onIdentityChanged?: (mogId: string) => void,
+  lampMogId?: () => Promise<string | undefined>,
 ): HubMogsDisposer {
   let live = true;
   // #ui-4 (review #603, MEDIUM finding): held the same way `hub-conversations-wiring.ts` holds
@@ -143,7 +147,7 @@ export function wireHubMogs(
     void (async () => {
       let notice: HubNoticeLine | undefined;
       try {
-        notice = await act(manager, action, onIdentityChanged);
+        notice = await act(manager, action, onIdentityChanged, lampMogId);
       } catch (e) {
         // A MogManagerError holds fixed text only; any other error gets a fixed text.
         notice = {

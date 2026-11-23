@@ -171,7 +171,13 @@ export function startBrain(): Brain {
     // #26: the hub MOG list and actions (MB-01). #ui-4 (review #603, finding 3): a successful
     // edit or colour pick re-reads that MOG's identity and pushes it to its open MOG and card
     // (`talkTarget.reidentify`, below), so neither keeps a stale name or colour until restart.
-    wireHubMogs(bus, components.T1, undefined, (mogId) => talkTarget.reidentify(mogId));
+    wireHubMogs(
+      bus,
+      components.T1,
+      undefined,
+      (mogId) => talkTarget.reidentify(mogId),
+      () => workspaces.lampMogId(),
+    );
     // ADR 0117: the one MOG with workspaces. The brain keeps the last `WorkspaceList`, sends the
     // hub Settings → Workspace list and runs the hub workspace actions. A change of the home
     // workspace, or of its name or colour, pushes the new identity to the lamp.
@@ -217,12 +223,23 @@ export function startBrain(): Brain {
         })
       : undefined;
     if (hubMemory) storeGate.onOpen(() => void hubMemory.push());
+    // ADR 0117: a remember writes to the data MOG of the home workspace (`mogIds[0]`); with no
+    // home it uses the lamp id.
+    const homeData = async (lamp: MogId): Promise<MogId> => {
+      const home = await workspaces.home();
+      return (home ? await workspaces.dataMogId(home) : undefined) ?? lamp;
+    };
     const rememberFlow = memorySvc
       ? createRememberFlow({
           memory: memorySvc,
           store: memorySvc.store,
-          send: sendMemorySaved,
-          showCard: (mogId) => call('window_card_show', { mogId }),
+          // ADR 0117: the card is on the lamp; the data is in the home workspace's MOG.
+          send: async (mogId, saved) => {
+            const lamp = (await workspaces.lampMogId()) ?? mogId;
+            return sendMemorySaved(lamp, { ...saved, mogId: lamp });
+          },
+          showCard: async (mogId) =>
+            call('window_card_show', { mogId: (await workspaces.lampMogId()) ?? mogId }),
           ensureMog: async (mogId) => {
             const m = (await components.T1.list()).mogs.find((x) => x.mogId === mogId);
             if (m)
@@ -369,7 +386,10 @@ export function startBrain(): Brain {
         showCard: (mogId) => call('window_card_show', { mogId }),
         // The card's "Change workspace…": the same path as the right-click "Change home
         // workspace…": show the hub on that MOG's Edit form.
-        changeWorkspace: () => void showHub(),
+        changeWorkspace: () => {
+          void showHub();
+          void workspaces.showSettings();
+        },
         hostOf: async (profile) => (await ipcListProfiles()).find((p) => p.name === profile)?.host,
       }),
       // #557: an ask or a press with no home profile opens the picker; the user picks, then the
@@ -480,12 +500,19 @@ export function startBrain(): Brain {
       // user to take).
       remember: (mogId, requestId, ticket) =>
         rememberFlow
-          ? void rememberFlow.card(mogId, requestId, ticket).catch(() => undefined)
+          ? void homeData(mogId)
+              .then((d) => rememberFlow.card(d, requestId, ticket))
+              .catch(() => undefined)
           : memoryUnavailable(mogId),
       undoRemember: (mogId, itemId) =>
-        void rememberFlow?.undo(mogId, itemId).catch(() => undefined),
+        void homeData(mogId)
+          .then((d) => rememberFlow?.undo(d, itemId))
+          .catch(() => undefined),
       closeMog: (mogId) => void components.T1.stop(mogId).catch(() => undefined),
-      changeHome: () => void showHub(),
+      changeHome: () => {
+        void showHub();
+        void workspaces.showSettings();
+      },
     });
     // #ui-4 (review #603, findings 1 and 4): the MOG right-click menu's native popup. A MOG
     // view may only listen and call `view_emit` (ARC-4); the brain holds `core:menu:*` and
@@ -583,7 +610,9 @@ export function startBrain(): Brain {
         // ADR 0113: Rust parsed "remember this"; the brain saves it and pastes nothing.
         onRemember: (r, owned) =>
           rememberFlow
-            ? void rememberFlow.voice(owned.mogId, r.text, r.ticket).catch(() => undefined)
+            ? void homeData(owned.mogId)
+                .then((d) => rememberFlow.voice(d, r.text, r.ticket))
+                .catch(() => undefined)
             : memoryUnavailable(owned.mogId),
         // #498, MOG-05b, MOG-06d: a Copy or a failed insertion reaches the Copy card.
         onDone: (r, owned) => void dictation.onDone(r, owned).catch(() => undefined),
