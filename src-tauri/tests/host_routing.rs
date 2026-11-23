@@ -410,7 +410,8 @@ fn mog_06a_insert_text_goes_to_the_paste_component() {
     let insert = FakeInsert::default();
     let mut c = comps("brain", &brain, None, None);
     c.insert = Some(&insert);
-    let args = json!({"mogId": "00000000-0000-4000-8000-0000000000a1", "text": "a\nb"});
+    let args =
+        json!({"mogId": "00000000-0000-4000-8000-0000000000a1", "text": "a\nb", "leaseId": "1"});
     assert_eq!(
         route(c, "insert_text", args.clone()),
         Ok(json!({"result": "inserted"}))
@@ -427,7 +428,7 @@ fn mog_06a_insert_text_without_a_paste_host_is_host_failed() {
     let got = route(
         comps("brain", &brain, None, None),
         "insert_text",
-        json!({"mogId": "00000000-0000-4000-8000-0000000000a1", "text": "x"}),
+        json!({"mogId": "00000000-0000-4000-8000-0000000000a1", "text": "x", "leaseId": "1"}),
     );
     assert_eq!(got, err("host_failed"));
 }
