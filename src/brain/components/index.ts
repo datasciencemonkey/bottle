@@ -29,7 +29,7 @@ import {
   wireWorkspaces,
 } from '../workspaces';
 import { ipcRecordingApi, wireRecording } from '../recording-wiring';
-import { sendHubSnapshot, wireHubMogs } from '../hub-mogs-wiring';
+import { wireHubMogs } from '../hub-mogs-wiring';
 import {
   sendHubConversations,
   sendHubConversationsOpen,
@@ -316,7 +316,12 @@ export function startBrain(): Brain {
       lastUsed: () => talkTarget.lastUsed(),
       openWindow: (mogId) => call('window_mog_open', { mogId }),
       showHub: () => showHub(),
-      notify: (notice) => sendHubSnapshot(components.T1, notice),
+      // ADR 0117: the hub lists workspaces, not MOGs. A notice goes with the workspace list; the
+      // push with no notice first makes each notice new to the hub, so it shows each time.
+      notify: async (notice) => {
+        await workspaces.refresh();
+        if (notice) await workspaces.refresh({ notice });
+      },
     });
     // MOG-13a (#73): the MOG that captures an utterance owns its request and its answer.
     const owner = createRequestOwner({

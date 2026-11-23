@@ -50,6 +50,7 @@ export const WORKSPACE_TEXT = {
   needs_available: 'Turn this workspace on first.',
   no_home: 'Choose a home workspace first.',
   choose_home: 'Choose a home workspace in Settings → Workspace.',
+  storage_failed: 'Bottle could not read your workspaces. Try again.',
   settings: 'Your workspaces are in Settings → Workspace.',
   signed_in: 'Signed in again.',
   login_cancelled: 'The sign-in was cancelled.',
@@ -98,6 +99,8 @@ export interface WorkspacesDeps {
   /** Send the list to the hub window only. */
   send(list: HubWorkspaceList): Promise<unknown>;
   newId(): MogId;
+  /** The lowest config id (`config_list`): the lamp when the workspace list cannot be read. */
+  fallbackLampMogId?(): Promise<MogId | undefined>;
   now(): number;
   /** The lamp's identity changed or the home moved: push the identity to the lamp. */
   onChanged?(): void;
@@ -408,7 +411,26 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
         const l = await fetchList(opts?.refresh);
         await publish(l, opts?.notice ? { notice: opts.notice } : undefined);
       } catch (e) {
-        await publish(last, { notice: noticeOf(e) });
+        // A list that cannot be read shows its own text; an action keeps the generic one.
+        const notice: NonNullable<HubWorkspaceList['notice']> =
+          codeOf(e) === 'workspace_storage_failed'
+            ? { kind: 'error', text: WORKSPACE_TEXT.storage_failed }
+            : noticeOf(e);
+        if (last) await publish(last, { notice });
+        else
+          // Nothing was ever read: the hub still gets an empty list with the reason.
+          await deps
+            .send({
+              rows: [],
+              home: null,
+              agent: {
+                crossWorkspaceData: false,
+                crossWorkspaceLocked: false,
+                genieCallBudget: 10,
+              },
+              notice,
+            })
+            .catch(() => undefined);
       }
     },
     async showSettings() {
@@ -429,7 +451,8 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
     },
     async lampMogId() {
       const l = last ?? (await fetchList().catch(() => undefined));
-      return l?.lampMogId ?? undefined;
+      // A failed list must not kill the lamp: fall back to the lowest config id.
+      return l?.lampMogId ?? (await deps.fallbackLampMogId?.().catch(() => undefined));
     },
     async homeIdentity(lampMogId) {
       const l = last ?? (await fetchList().catch(() => undefined));
@@ -484,6 +507,7 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
 
 /** The production deps: `call`, the config client, the local store and `emitTo('hub', …)`. */
 export function ipcWorkspacesDeps(onChanged?: () => void): WorkspacesDeps {
+  const configs = ipcMogConfigClient();
   return {
     list: (refresh) => call('workspace_list', refresh === undefined ? {} : { refresh }),
     setAvailable: (profile, available, mogId) =>
@@ -496,10 +520,14 @@ export function ipcWorkspacesDeps(onChanged?: () => void): WorkspacesDeps {
       call('workspace_make_home', { profile, ...(mogId !== undefined ? { mogId } : {}) }),
     settingsWrite: (args) => call('workspace_settings_write', args),
     reauth: (profile) => call('profile_reauth', { profile }),
-    configs: ipcMogConfigClient(),
+    configs,
     store: new IpcLocalMemoryStore(),
     send: (list) => emitTo('hub', HUB_WORKSPACES_EVENT, list),
     newId: () => crypto.randomUUID(),
+    fallbackLampMogId: async () => {
+      const ids = (await configs.list()).items.map((i) => i.id).sort();
+      return ids[0];
+    },
     now: () => Date.now(),
     ...(onChanged ? { onChanged } : {}),
   };

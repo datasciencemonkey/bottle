@@ -588,6 +588,23 @@ describe('workspaces: the first Connect (ADR 0117, FLAG 5)', () => {
   });
 });
 
+describe('workspaces: a failed list (ADR 0117)', () => {
+  it('a failed list keeps the lamp (lowest config id) and tells the hub with a fixed notice', async () => {
+    const r = rig(workspaceList('home', [{ profile: 'home', mogIds: [id(1)] }]));
+    r.deps.list = async () =>
+      Promise.reject({ error: 'workspace_storage_failed', reason: '/secret' });
+    r.deps.fallbackLampMogId = async () => id(3);
+    expect(await r.ws.lampMogId()).toBe(id(3));
+    await r.ws.refresh();
+    expect(r.last()).toMatchObject({
+      rows: [],
+      home: null,
+      notice: { kind: 'error', text: WORKSPACE_TEXT.storage_failed },
+    });
+    expect(JSON.stringify(r.last())).not.toContain('secret');
+  });
+});
+
 describe('workspaces: Settings notice and cache (ADR 0117)', () => {
   it('showSettings sends the list with no notice, then with the plain settings notice, on each open', async () => {
     const r = rig(workspaceList('home', [{ profile: 'home', mogIds: [id(1)] }]));
