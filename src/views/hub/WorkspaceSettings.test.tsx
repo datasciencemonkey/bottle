@@ -460,6 +460,12 @@ describe('Settings → Workspace', () => {
     await tauri.emitTo('hub', HUB_WORKSPACES_EVENT, err);
     const first = el.querySelector('[role="alert"]');
     expect(first?.textContent).toBe('Could not sign in to Old.');
+    // The same notice sent again is the same alert (not read twice).
+    await tauri.emitTo('hub', HUB_WORKSPACES_EVENT, { ...err, notice: { ...err.notice } });
+    expect(el.querySelector('[role="alert"]')).toBe(first);
+    // Once it clears, the same text is a new alert.
+    await tauri.emitTo('hub', HUB_WORKSPACES_EVENT, LIST);
+    expect(el.querySelector('[role="alert"]')).toBeNull();
     await tauri.emitTo('hub', HUB_WORKSPACES_EVENT, err);
     const second = el.querySelector('[role="alert"]');
     expect(second?.textContent).toBe('Could not sign in to Old.');

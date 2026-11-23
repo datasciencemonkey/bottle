@@ -45,6 +45,11 @@ import { WipeSettings } from './WipeSettings';
 import { useHubWorkspaces, WorkspaceSettings } from './WorkspaceSettings';
 import type { HubWorkspaceList } from '../../shared/hub-workspaces';
 
+/** Smooth scrolling, unless the user asked for reduced motion. */
+function scrollBehavior(): ScrollBehavior {
+  return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+}
+
 /** #145: the reply composer of a thread's detail, the genie-followup hub→brain seam. */
 const threadComposer = (thread: Parameters<typeof ThreadComposer>[0]['thread']) => (
   <ThreadComposer thread={thread} />
@@ -162,7 +167,7 @@ export function Hub() {
         setView('settings');
         requestAnimationFrame(() => {
           const h = document.getElementById('workspace-settings-title');
-          h?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+          h?.scrollIntoView?.({ block: 'start', behavior: scrollBehavior() });
           h?.focus({ preventScroll: true });
         });
       },
@@ -182,7 +187,7 @@ export function Hub() {
     // After the view shows: move to the section, and focus its heading for screen readers.
     requestAnimationFrame(() => {
       const h = document.getElementById('recording-settings-title');
-      h?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+      h?.scrollIntoView?.({ block: 'start', behavior: scrollBehavior() });
       h?.focus({ preventScroll: true });
     });
   }, [pickView]);

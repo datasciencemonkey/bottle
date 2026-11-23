@@ -458,12 +458,14 @@ export function WorkspaceSettings({
   onChoose?: () => void;
 }) {
   const notice = list?.notice;
-  // Each notice that arrives is a new alert, even with the same text (read again).
-  const [seen, setSeen] = useState(notice);
+  // A changed notice is a new alert. The same notice sent again is not; once the notice clears,
+  // the same text is new again.
+  const noticeKey = notice ? `${notice.kind}|${notice.text}` : '';
+  const [seen, setSeen] = useState(noticeKey);
   const [seq, setSeq] = useState(0);
-  if (notice !== seen) {
-    setSeen(notice);
-    if (notice) setSeq((n) => n + 1);
+  if (noticeKey !== seen) {
+    setSeen(noticeKey);
+    if (noticeKey !== '') setSeq((n) => n + 1);
   }
   const noHome = list !== undefined && list.home === null && list.rows.length > 0;
   return (

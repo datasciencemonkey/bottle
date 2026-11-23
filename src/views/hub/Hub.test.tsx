@@ -77,6 +77,38 @@ describe('V1 hub view', () => {
     expect(settings()?.hidden).toBe(false);
   });
 
+  it('[ADR 0117] a notice scrolls smoothly, or with auto under prefers-reduced-motion', async () => {
+    const run = async (reduce: boolean) => {
+      document.body.innerHTML = '';
+      vi.stubGlobal('matchMedia', (q: string) => ({
+        matches: reduce && q.includes('reduce'),
+        media: q,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+        addListener: () => undefined,
+        removeListener: () => undefined,
+      }));
+      const scroll = vi.fn();
+      Element.prototype.scrollIntoView = scroll;
+      await render(<Hub />);
+      await tauri.emit(HUB_WORKSPACES_EVENT, {
+        rows: [],
+        home: null,
+        agent: AGENT,
+        notice: { kind: 'info', text: reduce ? 'a' : 'b' },
+      });
+      await act(async () => new Promise((r) => requestAnimationFrame(() => r(undefined))));
+      return scroll.mock.calls.at(-1)?.[0] as { behavior: string } | undefined;
+    };
+    try {
+      expect((await run(false))?.behavior).toBe('smooth');
+      expect((await run(true))?.behavior).toBe('auto');
+    } finally {
+      vi.unstubAllGlobals();
+      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+
   it('[ADR 0117] Workspace is the first section of Settings', async () => {
     const { el } = await render(<Hub />);
     const first = el.querySelector('[data-hub-view="settings"]')?.firstElementChild;
