@@ -160,9 +160,12 @@ export function asHubWorkspaceList(p: unknown): HubWorkspaceList | undefined {
       return undefined;
     }
     const candidates = pick['candidates'];
-    if (!candidates.every(isProfile)) return undefined;
+    // The dialog shows only when the user must pick from 2 or more, and it preselects one of them.
+    if (!candidates.every(isProfile) || candidates.length < 2) return undefined;
+    if (!candidates.includes(pick['suggested'])) return undefined;
     out.homePick = { suggested: pick['suggested'], candidates: candidates as string[] };
   }
+  // `busyProfile` and `notice` are hints for the view: a bad value is dropped, not fatal.
   if (isProfile(p['busyProfile'])) out.busyProfile = p['busyProfile'];
   const n = p['notice'];
   if (isObj(n) && (n['kind'] === 'error' || n['kind'] === 'info') && isStr(n['text'])) {

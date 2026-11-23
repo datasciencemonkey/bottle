@@ -1496,3 +1496,62 @@ fn w_07c_w_07h_profile_login_rows_reach_the_login_component_from_the_brain_and_t
         );
     }
 }
+
+/// ADR 0117: `profile_reauth` reaches the login component from the brain only; each
+/// `workspace_*` command reaches the workspaces component, and with no component it answers
+/// `host_failed`. The managed stub answers `not_implemented` until slice 1.
+#[test]
+fn adr_0117_workspace_rows_reach_their_components_and_fail_closed() {
+    let c = FakeLogin::default();
+    assert_eq!(
+        login_call("brain", Some(&c), "profile_reauth", json!({"profile": "p"})),
+        Ok(json!({}))
+    );
+    assert_eq!(
+        *c.0.lock().unwrap(),
+        vec![("profile_reauth".to_owned(), json!({"profile": "p"}))]
+    );
+    assert_eq!(
+        login_call("hub", Some(&c), "profile_reauth", json!({"profile": "p"})),
+        err("window_not_allowed")
+    );
+    let rows = [
+        ("workspace_list", json!({"refresh": true})),
+        (
+            "workspace_set_available",
+            json!({"profile": "p", "available": true}),
+        ),
+        ("workspace_make_home", json!({"profile": "p"})),
+        ("workspace_settings_write", json!({"genieCallBudget": 10})),
+    ];
+    let stub = bottle_lib::workspaces_host::WorkspacesHost;
+    for (command, args) in rows {
+        let brain = FakeBrain::default();
+        let none = HostComponents::none("brain", &brain);
+        assert_eq!(
+            route(none, command, args.clone()),
+            err("host_failed"),
+            "{command}"
+        );
+        let brain = FakeBrain::default();
+        let with_stub = HostComponents {
+            workspaces: Some(&stub),
+            ..HostComponents::none("brain", &brain)
+        };
+        assert_eq!(
+            route(with_stub, command, args.clone()),
+            err("not_implemented"),
+            "{command}"
+        );
+        let brain = FakeBrain::default();
+        let hub = HostComponents {
+            workspaces: Some(&stub),
+            ..HostComponents::none("hub", &brain)
+        };
+        assert_eq!(
+            route(hub, command, args),
+            err("window_not_allowed"),
+            "{command}"
+        );
+    }
+}

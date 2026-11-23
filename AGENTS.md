@@ -28,7 +28,7 @@ Binding decisions for the MVP:
   permission that was never asked (Input Monitoring, then Accessibility). A denied permission shows a hub and
   pop-up notice with one button (Open Settings) and, for Input Monitoring, "reopen Bottle".
 
-- **Direct Genie path.** Ask Genie is one direct Genie One MCP call (JSON-RPC over HTTPS). No agent, no Claude Agent
+- **Direct Genie path.** Until the MOG agent lands (ADR 0117), Ask Genie is one direct Genie One MCP call (JSON-RPC over HTTPS). No agent, no Claude Agent
   SDK, no Python bridge and no generic fetch layer sits in the middle. The parts on main: TokenBroker (R6),
   McpTransport (R8, tool allowlist `genie_ask`, `genie_poll_response`, `genie_get_query_result`,
   `genie_cancel_response`), PollActor and GenieBridge (T8). See ADR 0097.
@@ -40,10 +40,10 @@ Binding decisions for the MVP:
   SHA-256 checked, user-only folder, no admin) (#161). Then a "Connect a workspace" form runs `databricks auth login`
   in the background (#162).
 - **Design.** Minimal, calm UI on the shared tokens in `src/views/tokens.css`. The pop-up is small and theme-aligned.
-- **One MOG with workspaces (ADR 0117, owner decision 2026-11-23).** Bottle runs one MOG. Each connected
+- **One MOG with workspaces (ADR 0117, owner decision 2026-11-23; slice 1 in progress).** Bottle moves to one MOG. Each connected
   Databricks CLI profile is a workspace of that MOG. The user switches each workspace on or off in Settings →
   Workspace. The home workspace is always on. A new connection starts off. Bottle never picks the home for the user.
-- **The MOG agent (in progress, plan `docs/plans/mog-to-mog-agent.md`).** ⌥G becomes agentic: a tool loop in the brain
+- **The MOG agent (planned; plan in draft PR #617, ADR 0117 written in slice 1).** ⌥G becomes agentic: a tool loop in the brain
   over a Rust model step on the home profile's AI Gateway. It asks the Genie of each switched-on workspace. This loop
   is the only agent in scope. It is not R16 or `bottle-mcp`.
 

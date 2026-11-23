@@ -71,7 +71,31 @@ describe('hub-workspaces shape checks (ADR 0117)', () => {
     expect(asHubWorkspaceList(pick)?.homePick).toEqual(pick.homePick);
   });
 
+  it('drops unknown fields at every level', () => {
+    const extra = {
+      ...list,
+      x: 1,
+      rows: [{ ...row, secret: 'no' }],
+      agent: { ...list.agent, extra: true },
+    };
+    expect(asHubWorkspaceList(extra)).toEqual(list);
+  });
+
+  it('refuses a bad home pick', () => {
+    const base = { ...list, home: null };
+    expect(
+      asHubWorkspaceList({ ...base, homePick: { suggested: 'x', candidates: ['a', 'b'] } }),
+    ).toBeUndefined();
+    expect(
+      asHubWorkspaceList({ ...base, homePick: { suggested: 'a', candidates: ['a'] } }),
+    ).toBeUndefined();
+    expect(
+      asHubWorkspaceList({ ...base, homePick: { suggested: 'a', candidates: ['a', ''] } }),
+    ).toBeUndefined();
+  });
+
   it('refuses a list with a bad row, budget or sign-in state', () => {
+    expect(asHubWorkspaceList({ ...list, rows: [{ ...row, profile: '' }] })).toBeUndefined();
     expect(asHubWorkspaceList({ ...list, rows: [{ ...row, signIn: 'maybe' }] })).toBeUndefined();
     expect(
       asHubWorkspaceList({ ...list, agent: { ...list.agent, genieCallBudget: 3 } }),
