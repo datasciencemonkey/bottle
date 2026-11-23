@@ -63,5 +63,7 @@ Until UX slice 2 lands, Rust accepts the `leaseId` and does not check it yet.
 - The recording knob, the consent notice and the Rust knob check do not change.
 - The mic closes when the recording and the hold both end.
 - A user who changes apps during a hold gets Copy instead of a paste. This is the safe direction.
+- On Windows, all UWP apps (Calculator, Settings, Sticky Notes) run under one frame host process. Bottle
+  cannot tell them apart, so a dictation into them gets Copy instead of a paste.
 - A downgrade to a build from before this ADR cannot read a settings file with `heldNoteShown`. It reads the
   recording settings as the defaults (knob off, consent asked again). This fails safe. The release notes say so.
