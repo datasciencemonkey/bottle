@@ -5,14 +5,42 @@
 # the requirements and the mascot stay in repo-checks.yml.
 #
 # Runner policy (ADR 0045): GitHub's hosted macOS queue held runs for hours,
-# so no job runs on macOS. Every event runs on windows-2025 and ubuntu-24.04 (package: Windows
-# only; Linux is not a product target). The macOS gate is local: run scripts/pre-push.sh on a Mac
-# (Apple Silicon) before each push. scripts/package-macos.sh builds, signs and notarizes the DMG
-# (NFR-15a). A macOS-only break is caught only by that local run.
+# so no job runs on macOS. Two rules keep the hosted-runner load low:
+#   1. A pull request that changes only docs skips App CI. The pull_request trigger lists the
+#      paths that start a run: every path except docs, markdown and requirements.html, plus the
+#      docs and markdown files that tests read (the requirements, the notices, docs/tests,
+#      docs/release, docs/evidence, docs/admin, docs/user, docs/spikes, docs/shots). Push to
+#      main, the nightly schedule and dispatch always run everything. repo-checks.yml still runs
+#      on every pull request.
+#   2. The Ubuntu leg of the checks job runs on push to main, the nightly schedule and dispatch,
+#      not on a pull request. A pull request runs the checks job on windows-2025 only.
+# The offline build, golden set and package jobs are unchanged: offline build and golden set
+# run on windows-2025 and ubuntu-24.04 on every event; package is Windows only (Linux is not a
+# product target). The macOS gate is local: run scripts/pre-push.sh on a Mac (Apple Silicon)
+# before each push. scripts/package-macos.sh builds, signs and notarizes the DMG (NFR-15a). A
+# macOS-only break is caught only by that local run.
 name: App CI
 
 on:
   pull_request:
+    # Order matters: a later pattern overrides an earlier one. A pull request runs App CI when
+    # at least one changed file ends up included. (`paths-ignore` cannot re-include the files
+    # that tests read, such as research/final-requirements.md, so `paths` with `!` is used.)
+    paths:
+      - "**"
+      - "!docs/**"
+      - "!research/**"
+      - "!**/*.md"
+      - "!requirements.html"
+      - "research/final-requirements.md"
+      - "THIRD_PARTY_NOTICES.md"
+      - "docs/tests/**"
+      - "docs/release/**"
+      - "docs/evidence/**"
+      - "docs/admin/**"
+      - "docs/user/**"
+      - "docs/spikes/**"
+      - "docs/shots/**"
   push:
     branches: [main]
   schedule:
@@ -42,7 +70,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-2025]
+        os: ${{ github.event_name == 'pull_request' && fromJSON('["windows-2025"]') || fromJSON('["ubuntu-24.04","windows-2025"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:

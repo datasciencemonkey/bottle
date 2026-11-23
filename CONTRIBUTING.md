@@ -74,7 +74,7 @@ App CI has no macOS runner (ADR 0045). On a Mac, run `scripts/pre-push.sh` befor
 ln -sf ../../scripts/pre-push.sh "$(git rev-parse --git-common-dir)/hooks/pre-push"
 ```
 
-CI runs these commands on Windows (`windows-2025`) and Linux (`ubuntu-24.04`) for each PR, on push to main, nightly and on dispatch, in `.github/workflows/app-ci.yml`. It also builds offline from the lockfiles (AT-37) and packages an unsigned debug NSIS installer with a SHA-256 file. The Windows signing step runs only when the `WINDOWS_*` secrets exist. On a Mac, `scripts/package-macos.sh` builds the DMG and its SHA-256 file. It signs and notarizes the DMG only when the `APPLE_*` secrets exist (NFR-15a).
+CI runs these commands on Windows (`windows-2025`) for each PR, and on Windows and Linux (`ubuntu-24.04`) on push to main, nightly and on dispatch, in `.github/workflows/app-ci.yml`. A PR that changes only docs, research notes, markdown or `requirements.html` skips App CI; `repo-checks.yml` still runs. It also builds offline from the lockfiles (AT-37) and packages an unsigned debug NSIS installer with a SHA-256 file. The Windows signing step runs only when the `WINDOWS_*` secrets exist. On a Mac, `scripts/package-macos.sh` builds the DMG and its SHA-256 file. It signs and notarizes the DMG only when the `APPLE_*` secrets exist (NFR-15a).
 
 ## Pull requests and the merge gate
 

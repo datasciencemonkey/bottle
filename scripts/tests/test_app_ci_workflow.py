@@ -1,6 +1,7 @@
 """Tests for the app CI workflow and the pinned lockfiles (NFR-13a, NFR-15a/b, SEC-26, AT-37, #227).
 
-App CI runs on Windows and Linux on every event. macOS is not in CI: GitHub's hosted macOS queue
+App CI runs on Windows and Linux on every event, except that the Ubuntu leg of the checks job skips pull
+requests and a docs-only pull request skips App CI. macOS is not in CI: GitHub's hosted macOS queue
 held runs for hours, so the developer runs scripts/pre-push.sh on a Mac before each push, and
 scripts/package-macos.sh builds, signs and notarizes the DMG (ADR 0045).
 
@@ -42,8 +43,10 @@ def all_runs(wf):
     return "\n".join(runs(j) for j in wf["jobs"].values())
 
 
-# The matrix is chosen per event: `github.event_name == 'pull_request' && '<PR JSON>' || '<other JSON>'`.
-EVENT_MATRIX = re.compile(r"github\.event_name == 'pull_request' && '(\[.*?\])' \|\| '(\[.*?\])'")
+# The matrix is chosen per event:
+# `github.event_name == 'pull_request' && fromJSON('<PR JSON>') || fromJSON('<other JSON>')`.
+EVENT_MATRIX = re.compile(
+    r"github\.event_name == 'pull_request' && fromJSON\('(\[.*?\])'\) \|\| fromJSON\('(\[.*?\])'\)")
 EVENTS = ("pull_request", "push", "schedule", "workflow_dispatch")
 MATRIX_JOBS = ("checks", "offline-build", "golden-set", "package")
 
@@ -67,12 +70,74 @@ def matrix_oses(job, event=None):
     return {e.get("os") for ev in ([event] if event else EVENTS) for e in matrix_entries(job, ev)}
 
 
-def test_nfr_13a_app_ci_runs_on_windows_and_linux_on_every_event(app_ci):
-    """[NFR-13a] On every event the checks, offline build and golden set jobs run on Windows and Linux."""
+def test_nfr_13a_app_ci_runs_on_windows_and_linux_except_ubuntu_checks_on_pull_requests(app_ci):
+    """[NFR-13a] Offline build and golden set run on Windows and Linux on every event. Checks does too,
+    except that a pull request runs it on Windows only (ADR 0045)."""
     for event in EVENTS:
-        for name in ("checks", "offline-build", "golden-set"):
+        for name in ("offline-build", "golden-set"):
             oses = matrix_oses(app_ci["jobs"][name], event)
             assert oses == CI_OSES, f"{name} on {event} runs on {oses}, not {CI_OSES}"
+        oses = matrix_oses(app_ci["jobs"]["checks"], event)
+        expected = {"windows-2025"} if event == "pull_request" else CI_OSES
+        assert oses == expected, f"checks on {event} runs on {oses}, not {expected}"
+
+
+def test_nfr_13a_checks_keeps_its_job_name_pattern(app_ci):
+    """[NFR-13a] The checks job name stays `Checks (<os>)`."""
+    assert app_ci["jobs"]["checks"]["name"] == "Checks (${{ matrix.os }})"
+
+
+def pr_paths(app_ci):
+    on = app_ci.get("on", app_ci.get(True))
+    return on["pull_request"]["paths"]
+
+
+def pr_runs_for(app_ci, changed):
+    """True when a pull request that changes only `changed` starts App CI (GitHub `paths` rules)."""
+    def match(pattern, path):
+        regex = re.escape(pattern).replace(r"\*\*/", "(?:.*/)?").replace(r"\*\*", ".*").replace(r"\*", "[^/]*")
+        return re.fullmatch(regex, path) is not None
+
+    def included(path):
+        result = False
+        for pattern in pr_paths(app_ci):
+            if match(pattern.lstrip("!"), path):
+                result = not pattern.startswith("!")
+        return result
+
+    return any(included(p) for p in changed)
+
+
+def test_nfr_13a_docs_only_pull_requests_skip_app_ci(app_ci):
+    """[NFR-13a] A pull request that changes only docs, research, markdown or requirements.html skips App CI."""
+    on = app_ci.get("on", app_ci.get(True))
+    assert "paths-ignore" not in on["pull_request"], "paths and paths-ignore cannot be mixed"
+    for changed in (["docs/adr/0045-ci-macos-local.md"], ["docs/VISION.md"], ["research/message-board.md"],
+                    ["README.md", "AGENTS.md"], ["crates/mog-core/README.md"], ["requirements.html"]):
+        assert not pr_runs_for(app_ci, changed), f"a PR that changes only {changed} must skip App CI"
+
+
+def test_nfr_13a_pull_requests_run_app_ci_for_code_and_files_that_tests_read(app_ci):
+    """[NFR-13a] Code, workflows and the docs files that tests read still start App CI on a pull request."""
+    for changed in (["src/main.ts"], ["crates/mog-core/src/lib.rs"], [".github/workflows/app-ci.yml"],
+                    ["docs/user/where-your-data-goes.md"], ["research/final-requirements.md"],
+                    ["THIRD_PARTY_NOTICES.md"], ["docs/tests/TEST-LEDGER.md"],
+                    ["docs/release/RELEASE-CHECKLIST.md"], ["docs/spikes/SP-01.md"],
+                    ["docs/VISION.md", "src/main.ts"]):
+        assert pr_runs_for(app_ci, changed), f"a PR that changes {changed} must run App CI"
+
+
+def test_nfr_13a_paths_filter_applies_to_pull_requests_only(app_ci):
+    """[NFR-13a] Push to main, the schedule and dispatch have no path filter, so they run everything."""
+    on = app_ci.get("on", app_ci.get(True))
+    assert on["push"] == {"branches": ["main"]}
+    assert on["schedule"] and on["workflow_dispatch"] is None
+    for trigger in ("push", "schedule", "workflow_dispatch"):
+        value = on[trigger]
+        assert not isinstance(value, dict) or not {"paths", "paths-ignore"} & set(value)
+    repo = yaml.safe_load((WORKFLOWS / "repo-checks.yml").read_text(encoding="utf-8"))
+    assert "pull_request" in repo.get("on", repo.get(True)), "repo-checks.yml must run on every pull request"
+    assert repo.get("on", repo.get(True))["pull_request"] is None, "repo-checks.yml must have no path filter"
 
 
 def test_nfr_13a_app_ci_has_no_macos_runner(app_ci):
