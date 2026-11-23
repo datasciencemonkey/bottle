@@ -2,7 +2,7 @@ import { core } from './test-core';
 import { fakeWindows, memoryConfigs, sequentialIds } from '../test-support/mog-doubles';
 import { BrainBus } from './bus';
 import { createMogManager, type MogManager } from './components/mog-manager';
-import { sendHubMogs, sendHubSnapshot, wireHubMogs } from './hub-mogs-wiring';
+import { RETIRED_TEXT, sendHubMogs, sendHubSnapshot, wireHubMogs } from './hub-mogs-wiring';
 import type { HubMogList } from '../shared/hub-mogs';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('./test-core')).coreModule);
@@ -70,39 +70,40 @@ describe('hub MOG wiring (#26)', () => {
     await vi.waitFor(() => expect(sent).toHaveLength(2));
   });
 
-  it('[MB-01] runs create, edit, duplicate, start, stop and delete from the hub', async () => {
+  it('[MB-01] runs edit, start, stop and set_color from the hub', async () => {
     wireHubMogs(bus, m, send);
     await vi.waitFor(() => expect(sent).toHaveLength(1));
+    await m.create({ name: 'Sales', home: 'p' });
     const step = async (payload: unknown) => {
       const n = sent.length;
       input(payload);
       await vi.waitFor(() => expect(sent.length).toBeGreaterThan(n));
       return last();
     };
-    expect((await step({ action: 'mog.create', name: 'Sales', home: 'p' }))?.mogs).toEqual([
-      {
-        mogId: id(1),
-        name: 'Sales',
-        home: 'p',
-        persona: '',
-        running: false,
-        colorVariant: 'coral',
-      },
-    ]);
     await step({ action: 'mog.edit', mogId: id(1), name: 'Ops', home: 'q', persona: 'Hi' });
     expect(last()?.mogs[0]).toMatchObject({ name: 'Ops', home: 'q', persona: 'Hi' });
-    expect((await step({ action: 'mog.duplicate', mogId: id(1) }))?.mogs).toHaveLength(2);
     expect((await step({ action: 'mog.start', mogId: id(1) }))?.runningCount).toBe(1);
     expect((await step({ action: 'mog.stop', mogId: id(1) }))?.runningCount).toBe(0);
     // #ui-4: the row swatch picker.
     const recoloured = await step({ action: 'mog.set_color', mogId: id(1), colorVariant: 'teal' });
     expect(recoloured?.mogs.find((r) => r.mogId === id(1))?.colorVariant).toBe('teal');
-    const del = await step({ action: 'mog.delete', mogId: id(2), confirmed: true });
-    expect(del?.mogs.map((r) => r.name)).toEqual(['Ops']);
-    expect(del?.notice).toEqual({
-      kind: 'info',
-      text: 'Deleted Ops copy. Its memory and history stay until you use Wipe in Settings.',
-    });
+  });
+
+  it('[ADR 0117] the hub MOG create, duplicate and delete actions are retired: nothing changes', async () => {
+    wireHubMogs(bus, m, send);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    await m.create({ name: 'Sales', home: 'p' });
+    for (const payload of [
+      { action: 'mog.create', name: 'New', home: 'p' },
+      { action: 'mog.duplicate', mogId: id(1) },
+      { action: 'mog.delete', mogId: id(1), confirmed: true },
+    ]) {
+      const n = sent.length;
+      input(payload);
+      await vi.waitFor(() => expect(sent.length).toBeGreaterThan(n));
+      expect(last()?.notice).toEqual({ kind: 'info', text: RETIRED_TEXT });
+      expect(last()?.mogs.map((r) => r.name)).toEqual(['Sales']);
+    }
   });
 
   it('[MB-03b] a start over the cap sends the exact cap text as an error notice', async () => {
@@ -169,8 +170,7 @@ describe('hub MOG wiring (#26)', () => {
     const changed: string[] = [];
     wireHubMogs(bus, m, send, (mogId) => changed.push(mogId));
     await vi.waitFor(() => expect(sent).toHaveLength(1));
-    input({ action: 'mog.create', name: 'Ops', home: 'p' });
-    await vi.waitFor(() => expect(sent).toHaveLength(2));
+    await m.create({ name: 'Ops', home: 'p' });
     input({ action: 'mog.edit', mogId: id(1), name: 'Ops EU', home: 'p', persona: '' });
     await vi.waitFor(() => expect(changed).toEqual([id(1)]));
     input({ action: 'mog.set_color', mogId: id(1), colorVariant: 'teal' });

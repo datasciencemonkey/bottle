@@ -111,6 +111,11 @@ export interface ConnectDeps {
   cancel: (profile: string) => Promise<unknown>;
   /** `profiles_list`: names, hosts and auth types only. */
   profiles: () => Promise<Profile[]>;
+  /**
+   * ADR 0117: the user's sign-in of `profile` ended well. The first Connect with no home makes
+   * that profile home; a later connection stays off. A fault never changes the connected step.
+   */
+  onConnected?: ((profile: string) => unknown) | undefined;
   /** Default: `emitTo('hub', CONNECT_EVENT, model)`. */
   send?: (model: ConnectModel) => Promise<unknown>;
   /** Runs `fn` after `ms`; returns the cancel. Default: `setTimeout`. Tests inject their own. */
@@ -191,6 +196,13 @@ export function wireConnectWorkspace(bus: BrainBus, deps: ConnectDeps): () => vo
     try {
       await deps.login(h, profile, clientId === undefined ? undefined : { clientId });
       running = false;
+      if (deps.onConnected) {
+        try {
+          void Promise.resolve(deps.onConnected(profile)).catch(() => undefined);
+        } catch {
+          // The workspace list shows the real state.
+        }
+      }
       show({ step: 'connected', host: h, profile });
       // The confirmation clears by itself; Done closes it sooner.
       cancelClose?.();

@@ -26,6 +26,8 @@ vi.mock('../utterance-wiring', async (orig) => {
 });
 
 const MOG = '00000000-0000-4000-8000-0000000000a9';
+import { workspaceList } from '../../test-support/workspace-list';
+
 const HOME = 'fake-home';
 const HOST = 'example.cloud.databricks.test';
 
@@ -56,6 +58,7 @@ const asks = () =>
 function host(store: (a: Exec) => Promise<unknown>) {
   core.invoke.mockImplementation(async (cmd, args) => {
     if (cmd === 'config_read') return { json: { name: 'Fake Finance', binding: { home: HOME } } };
+    if (cmd === 'workspace_list') return workspaceList(HOME);
     if (cmd === 'profiles_list')
       return [{ name: HOME, host: HOST, authType: 'databricks-cli', supported: true }];
     if (cmd === 'mcp_call') return Promise.reject({ error: 'not_implemented' });

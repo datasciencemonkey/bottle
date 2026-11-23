@@ -1,13 +1,15 @@
 /**
- * The router input of a MOG from its home profile and the profile list (#163, ADR 0092).
+ * The router input of the one MOG from the home profile and the profile list (#163, ADR 0092,
+ * ADR 0117).
  *
- * - The home profile is `mog.binding.home` (Appendix F), which the user chose: typed in the
- *   hub MOG form, or clicked on the pick card (`profile-pick.ts`). Bottle never picks one.
+ * - The home profile is `WorkspaceList.home` (`workspaces.ts`), which the user chose: clicked in
+ *   the hub dialog, on the pick card (`profile-pick.ts`), or made by their first Connect. With
+ *   no home the input has `NO_HOME`, which gives the pick card. Bottle never picks one.
  * - W-03a: only the `profiles_list` profiles that Bottle supports go to the router.
  * - A home that the CLI does not list is no home: the router model cannot run on it, so the
  *   RTR-15c heuristic decides and a question shows the pick card.
  * - When the list itself fails (the host does not serve `profiles_list` yet, TODO(#17)), the
- *   home that the user typed stays in use.
+ *   home of the workspace list stays in use.
  * - It never returns undefined, so every utterance is routed (RTR-01b).
  * It holds profile names and hosts only, never a token.
  */
@@ -18,8 +20,10 @@ import { ipcMogConfigClient } from './components/mog-manager';
 import { NO_HOME } from './offline-intent';
 
 export interface HomeProfileDeps {
-  /** The name and the home profile of a MOG (`config_read`). */
-  readMog(mogId: MogId): Promise<{ name: string; home: ProfileName }>;
+  /** The name of a MOG (`config_read`). */
+  readMog(mogId: MogId): Promise<{ name: string }>;
+  /** The home profile (`WorkspaceList.home`), or undefined with no home. */
+  home(): Promise<ProfileName | undefined>;
   /** `profiles_list` (T7, R5). */
   listProfiles(): Promise<Profile[]>;
 }
@@ -48,13 +52,11 @@ export async function ipcListProfiles(): Promise<Profile[]> {
   return r;
 }
 
-export function ipcHomeProfileDeps(): HomeProfileDeps {
+export function ipcHomeProfileDeps(home: () => Promise<ProfileName | undefined>): HomeProfileDeps {
   const configs = ipcMogConfigClient();
   return {
-    readMog: async (mogId) => {
-      const c = await configs.read(mogId);
-      return { name: c.name, home: c.binding.home };
-    },
+    readMog: async (mogId) => ({ name: (await configs.read(mogId)).name }),
+    home,
     listProfiles: ipcListProfiles,
   };
 }
@@ -63,12 +65,15 @@ export function createHomeProfiles(deps: HomeProfileDeps): HomeProfiles {
   const homes = new Map<MogId, ProfileName>();
   return {
     async routerInput(mogId) {
-      const [mog, listed] = await Promise.all([
+      const [mog, typed, listed] = await Promise.all([
         deps.readMog(mogId).catch(() => undefined),
+        deps.home().then(
+          (h) => h?.trim() ?? '',
+          () => '',
+        ),
         deps.listProfiles().catch(() => undefined),
       ]);
       const supported = (listed ?? []).filter((p) => p.supported);
-      const typed = mog?.home.trim() ?? '';
       const home =
         typed !== '' && (listed === undefined || supported.some((p) => p.name === typed))
           ? typed
