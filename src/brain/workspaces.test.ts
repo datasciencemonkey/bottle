@@ -589,15 +589,17 @@ describe('workspaces: the first Connect (ADR 0117, FLAG 5)', () => {
 });
 
 describe('workspaces: Settings notice and cache (ADR 0117)', () => {
-  it('showSettings sends the list with a notice that differs on each open', async () => {
+  it('showSettings sends the list with no notice, then with the plain settings notice, on each open', async () => {
     const r = rig(workspaceList('home', [{ profile: 'home', mogIds: [id(1)] }]));
     await r.ws.showSettings();
     await r.ws.showSettings();
-    await r.ws.showSettings();
-    const texts = r.sent.map((l) => l.notice?.text);
-    expect(texts).toHaveLength(3);
-    for (let i = 1; i < 3; i++) expect(texts[i]).not.toBe(texts[i - 1]);
-    for (const t of texts) expect(t?.replace('\u200b', '')).toBe(WORKSPACE_TEXT.settings);
+    expect(r.sent.map((l) => l.notice?.text)).toEqual([
+      undefined,
+      WORKSPACE_TEXT.settings,
+      undefined,
+      WORKSPACE_TEXT.settings,
+    ]);
+    expect(WORKSPACE_TEXT.settings).toBe('Your workspaces are in Settings → Workspace.');
   });
 
   it('the cache is read again only after a write or on workspaces.ready', async () => {

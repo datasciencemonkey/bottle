@@ -12,6 +12,7 @@ import {
   createMogManager,
   ipcMogConfigClient,
   ipcMogWindowClient,
+  HOST_MAX_RUNNING_MOGS,
   MAX_RUNNING_MOGS_DEFAULT,
   MogManagerError,
   type MogManager,
@@ -276,21 +277,17 @@ describe('T1 MogManager: any number of MOGs (MB-03a)', () => {
 });
 
 describe('T1 MogManager: the running cap (MB-03b)', () => {
-  it('[MB-03b] [AT-01] the 9th start shows "8 MOGs are running. Stop one to start <name>."', async () => {
-    expect(MAX_RUNNING_MOGS_DEFAULT).toBe(8);
-    for (let i = 1; i <= 9; i++) await m.create({ name: `M${i}`, home: 'p' });
-    for (let i = 1; i <= 8; i++) await m.start(id(i));
-    await m.create({ name: 'Ninth', home: 'p' });
-    const e = await rejection(m.start(id(10)));
-    expect([e.code, e.message]).toEqual([
-      'cap_reached',
-      '8 MOGs are running. Stop one to start Ninth.',
-    ]);
-    expect(windows.calls.filter(([op]) => op === 'open')).toHaveLength(8);
-    expect(m.runningCount()).toBe(8);
+  it('[MB-03b] [AT-01] [ADR 0117] the default cap is the host cap of 1: a second start is refused', async () => {
+    expect(MAX_RUNNING_MOGS_DEFAULT).toBe(1);
+    expect(MAX_RUNNING_MOGS_DEFAULT).toBeLessThanOrEqual(HOST_MAX_RUNNING_MOGS);
+    for (let i = 1; i <= 2; i++) await m.create({ name: `M${i}`, home: 'p' });
+    await m.start(id(1));
+    const e = await rejection(m.start(id(2)));
+    expect([e.code, e.message]).toEqual(['cap_reached', '1 MOG is running. Stop it to start M2.']);
+    expect(windows.calls.filter(([op]) => op === 'open')).toHaveLength(1);
     await m.stop(id(1));
-    await m.start(id(10));
-    expect(m.runState(id(10))).toBe('running');
+    await m.start(id(2));
+    expect(m.runState(id(2))).toBe('running');
   });
 
   it('[MB-03b] [ADR 0117] the cap follows app.maxRunningMogs and stays within the host cap of 1', async () => {
@@ -300,9 +297,9 @@ describe('T1 MogManager: the running cap (MB-03b)', () => {
     await one.start(id(1));
     const e = await rejection(one.start(id(2)));
     expect(e.message).toBe('1 MOG is running. Stop it to start M2.');
-    expect(manager({ maxRunningMogs: 12 }).maxRunning).toBe(8);
-    expect(manager({ maxRunningMogs: 0 }).maxRunning).toBe(8);
-    expect(manager({ maxRunningMogs: 2.5 }).maxRunning).toBe(8);
+    expect(manager({ maxRunningMogs: 12 }).maxRunning).toBe(1);
+    expect(manager({ maxRunningMogs: 0 }).maxRunning).toBe(1);
+    expect(manager({ maxRunningMogs: 2.5 }).maxRunning).toBe(1);
   });
 
   it('[MB-03b] a mog_cap_reached refusal of the Rust host gives the same text', async () => {

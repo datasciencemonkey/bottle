@@ -223,23 +223,12 @@ export function startBrain(): Brain {
         })
       : undefined;
     if (hubMemory) storeGate.onOpen(() => void hubMemory.push());
-    // ADR 0117: a remember writes to the data MOG of the home workspace (`mogIds[0]`); with no
-    // home it uses the lamp id.
-    const homeData = async (lamp: MogId): Promise<MogId> => {
-      const home = await workspaces.home();
-      return (home ? await workspaces.dataMogId(home) : undefined) ?? lamp;
-    };
     const rememberFlow = memorySvc
       ? createRememberFlow({
           memory: memorySvc,
           store: memorySvc.store,
-          // ADR 0117: the card is on the lamp; the data is in the home workspace's MOG.
-          send: async (mogId, saved) => {
-            const lamp = (await workspaces.lampMogId()) ?? mogId;
-            return sendMemorySaved(lamp, { ...saved, mogId: lamp });
-          },
-          showCard: async (mogId) =>
-            call('window_card_show', { mogId: (await workspaces.lampMogId()) ?? mogId }),
+          send: sendMemorySaved,
+          showCard: (mogId) => call('window_card_show', { mogId }),
           ensureMog: async (mogId) => {
             const m = (await components.T1.list()).mogs.find((x) => x.mogId === mogId);
             if (m)
@@ -500,14 +489,10 @@ export function startBrain(): Brain {
       // user to take).
       remember: (mogId, requestId, ticket) =>
         rememberFlow
-          ? void homeData(mogId)
-              .then((d) => rememberFlow.card(d, requestId, ticket))
-              .catch(() => undefined)
+          ? void rememberFlow.card(mogId, requestId, ticket).catch(() => undefined)
           : memoryUnavailable(mogId),
       undoRemember: (mogId, itemId) =>
-        void homeData(mogId)
-          .then((d) => rememberFlow?.undo(d, itemId))
-          .catch(() => undefined),
+        void rememberFlow?.undo(mogId, itemId).catch(() => undefined),
       closeMog: (mogId) => void components.T1.stop(mogId).catch(() => undefined),
       changeHome: () => {
         void showHub();
@@ -610,9 +595,7 @@ export function startBrain(): Brain {
         // ADR 0113: Rust parsed "remember this"; the brain saves it and pastes nothing.
         onRemember: (r, owned) =>
           rememberFlow
-            ? void homeData(owned.mogId)
-                .then((d) => rememberFlow.voice(d, r.text, r.ticket))
-                .catch(() => undefined)
+            ? void rememberFlow.voice(owned.mogId, r.text, r.ticket).catch(() => undefined)
             : memoryUnavailable(owned.mogId),
         // #498, MOG-05b, MOG-06d: a Copy or a failed insertion reaches the Copy card.
         onDone: (r, owned) => void dictation.onDone(r, owned).catch(() => undefined),

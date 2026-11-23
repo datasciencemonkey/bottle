@@ -150,7 +150,7 @@ describe('hub MOG wiring (#26)', () => {
       mogs: [],
       unreadable: [],
       runningCount: 0,
-      maxRunning: 8,
+      maxRunning: 1,
       notice: { kind: 'error', text: 'Bottle cannot read the MOG list.' },
     });
   });

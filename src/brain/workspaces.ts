@@ -107,8 +107,8 @@ export interface Workspaces {
   /** The last list that the Rust store gave, if any. */
   last(): WorkspaceList | undefined;
   /**
-   * "Change workspace…": send the list with a notice that is new each time, so the hub switches
-   * to Settings → Workspace. The text differs by one invisible character per open.
+   * "Change workspace…": send the list with no notice, then with the plain settings notice, so
+   * the hub switches to Settings → Workspace each time.
    */
   showSettings(): Promise<void>;
   /** Read the list from the store, keep it and send it to the hub. */
@@ -133,7 +133,6 @@ const supportedRow = (r: WorkspaceRow) => r.signIn !== 'unsupported' && r.signIn
 
 export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
   let last: WorkspaceList | undefined;
-  let zw = false;
   /** Serialises the actions, so two clicks never write at once. */
   let queue: Promise<unknown> = Promise.resolve();
   const serial = <T>(fn: () => Promise<T>): Promise<T> => {
@@ -413,10 +412,11 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
       }
     },
     async showSettings() {
-      zw = !zw;
-      const text = WORKSPACE_TEXT.settings + (zw ? '\u200b' : '');
+      // Two pushes: the hub resets its notice key on a push with no notice, so the second push
+      // is always a new notice.
       const l = last ?? (await fetchList().catch(() => undefined));
-      await publish(l, { notice: { kind: 'info', text } });
+      await publish(l);
+      await publish(l, { notice: { kind: 'info', text: WORKSPACE_TEXT.settings } });
     },
     async home() {
       // The cache is read again after a write and on `workspaces.ready` only.
