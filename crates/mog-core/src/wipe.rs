@@ -161,11 +161,41 @@ impl WipeService for StubWipeService {
     }
 }
 
+/// The agent session host, as Wipe sees it (slice 2a, plan A3.7): every Wipe scope ends the
+/// session, kills the Genie Code process and deletes GENIE_HOME.
+pub trait AgentWipeHook: Send + Sync {
+    /// End the session and wait until GENIE_HOME is gone. It never fails: a Wipe goes on.
+    fn end_for_wipe(&self);
+}
+
+/// A hook that is bound after the Wipe service is built (the host builds the Wipe service
+/// before the session host). Until it is bound, it does nothing.
+#[derive(Default)]
+pub struct AgentWipeSlot {
+    hook: std::sync::OnceLock<Arc<dyn AgentWipeHook>>,
+}
+
+impl AgentWipeSlot {
+    /// Bind the session host. The first call wins.
+    pub fn bind(&self, hook: Arc<dyn AgentWipeHook>) {
+        let _ = self.hook.set(hook);
+    }
+}
+
+impl AgentWipeHook for AgentWipeSlot {
+    fn end_for_wipe(&self) {
+        if let Some(h) = self.hook.get() {
+            h.end_for_wipe();
+        }
+    }
+}
+
 /// R14 on the R10 local store.
 pub struct LocalWipeService {
     store: Arc<SqlCipherLocalStore>,
     clock: Arc<dyn WallClock>,
     expiries: Vec<Arc<dyn SecurityExpiry>>,
+    agent: Option<Arc<dyn AgentWipeHook>>,
 }
 
 impl LocalWipeService {
@@ -175,7 +205,14 @@ impl LocalWipeService {
             store,
             clock,
             expiries: Vec::new(),
+            agent: None,
         }
+    }
+
+    /// End the agent session on every Wipe (slice 2a).
+    pub fn with_agent_hook(mut self, h: Arc<dyn AgentWipeHook>) -> Self {
+        self.agent = Some(h);
+        self
     }
 
     /// Add a content-free security expiry. They run in the order they were added.
@@ -207,6 +244,11 @@ fn conversation_of(mog_id: &str, r: &Value) -> Option<WipeConversation> {
 
 impl WipeService for LocalWipeService {
     fn wipe(&self, scope: WipeScope) -> CoreResult<WipeReport> {
+        // Plan A3.7: each scope ends the agent session first. The transcript of a session lives
+        // only in memory and in GENIE_HOME, so no scope may leave it.
+        if let Some(h) = &self.agent {
+            h.end_for_wipe();
+        }
         let cutoff = scope.cutoff_ms(self.clock.now_ms());
         self.store.core_transaction(|tx| {
             let mut report = WipeReport::default();

@@ -113,6 +113,33 @@ fn is_auth_error(e: &CoreError) -> bool {
     )
 }
 
+/// The model alias of a profile name: lower case, `[a-z0-9-]` only, at most 40 characters.
+fn alias_slug(name: &str) -> String {
+    let mut out = String::new();
+    for c in name.chars() {
+        let c = c.to_ascii_lowercase();
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    let t = out.trim_matches('-');
+    let t: String = t.chars().take(40).collect();
+    let t = t.trim_matches('-').to_owned();
+    if t.is_empty() {
+        "ws".to_owned()
+    } else {
+        t
+    }
+}
+
+impl crate::agent_run::session::WorkspaceView for WorkspaceStore {
+    fn snapshot(&self) -> CoreResult<crate::agent_run::session::Snapshot> {
+        self.catalog_snapshot()
+    }
+}
+
 // ---------- the file ----------
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -578,6 +605,66 @@ impl WorkspaceStore {
             data
         };
         self.render(&data, false)
+    }
+
+    /// The agent session snapshot (slice 2a): the catalog with model aliases, D1, D2 and the agent
+    /// profile with its host. It probes nothing. The catalog holds home and each available
+    /// profile that T7 supports, home first. A model alias is the profile name in lower case with
+    /// every other character turned into `-`, and a repeat gets `-2`, `-3`. The model never sees
+    /// the profile name itself in the prompt, only the alias and a display name.
+    pub fn catalog_snapshot(&self) -> CoreResult<crate::agent_run::session::Snapshot> {
+        let data = {
+            let _g = self.guard();
+            self.load()?
+        };
+        let t7 = self
+            .profiles
+            .profiles(false)
+            .map_err(|_| refused("host_failed"))?;
+        let agent_profile = data.agent.run_profile.clone().or_else(|| data.home.clone());
+        let mut names: Vec<&str> = t7
+            .iter()
+            .filter(|p| p.supported && data.allows(&p.name))
+            .map(|p| p.name.as_str())
+            .collect();
+        names.sort_by(|a, b| {
+            let (ha, hb) = (
+                data.home.as_deref() == Some(*a),
+                data.home.as_deref() == Some(*b),
+            );
+            hb.cmp(&ha).then(a.cmp(b))
+        });
+        let mut used: Vec<String> = Vec::new();
+        let mut catalog = Vec::new();
+        for name in names {
+            let base = alias_slug(name);
+            let mut alias = base.clone();
+            let mut n = 2;
+            while used.contains(&alias) {
+                alias = format!("{base}-{n}");
+                n += 1;
+            }
+            used.push(alias.clone());
+            catalog.push(crate::agent_run::seam::CatalogEntry {
+                alias,
+                profile: name.to_owned(),
+                name: name.to_owned(),
+                is_home: data.home.as_deref() == Some(name),
+                is_agent_workspace: agent_profile.as_deref() == Some(name),
+            });
+        }
+        let agent_host = agent_profile.as_deref().and_then(|ap| {
+            t7.iter()
+                .find(|p| p.name == ap && p.supported)
+                .map(|p| p.host.clone())
+        });
+        Ok(crate::agent_run::session::Snapshot {
+            catalog,
+            cross_workspace: data.agent.cross_workspace_data,
+            budget: data.agent.genie_call_budget.get(),
+            agent_profile,
+            agent_host,
+        })
     }
 
     /// `workspace_settings_write`: D1, D2 and the agent endpoint. The argument types hold only

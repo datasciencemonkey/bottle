@@ -11,6 +11,7 @@
 //! | `HubAdd` | a hub `memory.add` click | `Pin` | `["add", kind, title, body]` |
 //! | `HubRate` | a hub `memory.rate` click | `Rate` | `[itemId]` |
 //! | `HubEdit` | a hub `memory.edit` click | `Edit` | `["edit", itemId, kind, title, body]` |
+//! | `AgentChip` | a card `agent-more:` or `agent-resend:` chip click | `Ask` | the MOG only |
 //!
 //! The binding is the SHA-256 of the compact JSON array. At redeem time the ticket builds the
 //! array again from the write params (`itemType` is the kind), so the write must hold exactly
@@ -43,6 +44,9 @@ pub enum Trigger {
     HubRate,
     /// An edit saved in the hub.
     HubEdit,
+    /// A click on a card `agent-more:` or `agent-resend:` chip (slice 2a): the user asks the
+    /// agent again.
+    AgentChip,
 }
 
 /// What a ticket allows.
@@ -54,6 +58,8 @@ pub enum Purpose {
     Rate,
     /// `mem.item.edit`.
     Edit,
+    /// `agent_turn_submit` (slice 2a).
+    Ask,
 }
 
 impl Trigger {
@@ -62,6 +68,7 @@ impl Trigger {
             Trigger::Ui | Trigger::Voice | Trigger::HubAdd => Purpose::Pin,
             Trigger::HubRate => Purpose::Rate,
             Trigger::HubEdit => Purpose::Edit,
+            Trigger::AgentChip => Purpose::Ask,
         }
     }
 }
@@ -183,6 +190,8 @@ fn binding_of(trigger: Trigger, p: &Value) -> Option<Option<Value>> {
     }
     match trigger {
         Trigger::Ui => origin_ok(None).then_some(None),
+        // An Ask ticket binds the MOG only: the host does not know the question text.
+        Trigger::AgentChip => Some(None),
         Trigger::Voice => {
             if !absent(p, "title") || !absent(p, "body") || !origin_ok(None) {
                 return None;
@@ -287,6 +296,11 @@ impl ActionTickets {
     ) -> String {
         let b = json!(["add", kind, title, body]);
         self.mint(id, Some(mog_id), Trigger::HubAdd, Some(b), now_ms)
+    }
+
+    /// A card `agent-more:` or `agent-resend:` chip click of `mog_id` (slice 2a).
+    pub fn mint_ask(&self, id: String, mog_id: &str, now_ms: u64) -> String {
+        self.mint(id, Some(mog_id), Trigger::AgentChip, None, now_ms)
     }
 
     /// A hub thumbs up on `item_id`.
@@ -459,6 +473,33 @@ mod tests {
         assert_eq!(
             t.redeem(T1, MOG_A, Purpose::Pin, &pin("x"), 2_000),
             Err(Refusal::Unknown)
+        );
+    }
+
+    #[test]
+    fn an_ask_ticket_binds_the_mog_and_the_ask_purpose_only() {
+        let t = ActionTickets::new();
+        t.mint_ask(T1.into(), MOG_A, 1_000);
+        // The wrong MOG, and the wrong purpose, use the ticket up.
+        assert_eq!(
+            t.redeem(T1, MOG_B, Purpose::Ask, &Value::Null, 1_001),
+            Err(Refusal::WrongMog)
+        );
+        t.mint_ask(T1.into(), MOG_A, 1_000);
+        assert_eq!(
+            t.redeem(T1, MOG_A, Purpose::Pin, &pin("x"), 1_001),
+            Err(Refusal::WrongPurpose)
+        );
+        t.mint_ask(T1.into(), MOG_A, 1_000);
+        let r = t
+            .redeem(T1, MOG_A, Purpose::Ask, &Value::Null, 1_001)
+            .unwrap();
+        assert_eq!(r.purpose(), Purpose::Ask);
+        // A pin ticket never works for an ask.
+        t.mint_ui(T1.into(), MOG_A, 1_000);
+        assert_eq!(
+            t.redeem(T1, MOG_A, Purpose::Ask, &Value::Null, 1_001),
+            Err(Refusal::WrongPurpose)
         );
     }
 

@@ -602,6 +602,89 @@ fn settings_write_sets_keeps_and_clears_the_agent_run_profile() {
     assert!(l["agent"]["runProfile"].is_null());
 }
 
+/// Slice 2a: the agent session snapshot.
+#[test]
+fn catalog_snapshot_gives_home_first_with_aliases_and_the_agent_profile_and_host() {
+    let s = Scratch::new();
+    let cfg = s.configs();
+    for (id, name, home) in [
+        ("a", "A", "Sales Prod"),
+        ("b", "B", "sales-prod"),
+        ("c", "C", "fin"),
+    ] {
+        put_config(&cfg, id, name, home);
+    }
+    let w = WorkspaceStore::new(
+        &s.0,
+        cfg,
+        Arc::new(FakeT7(vec![
+            profile("Sales Prod", true),
+            profile("sales-prod", true),
+            profile("fin", true),
+            profile("pat", false),
+        ])),
+    );
+    w.make_home("fin", None).unwrap();
+    let snap = w.catalog_snapshot().unwrap();
+    let got: Vec<(&str, &str, bool, bool)> = snap
+        .catalog
+        .iter()
+        .map(|c| {
+            (
+                c.alias.as_str(),
+                c.profile.as_str(),
+                c.is_home,
+                c.is_agent_workspace,
+            )
+        })
+        .collect();
+    // Home first, then by name; an unsupported profile is not in the catalog; two profiles that
+    // slug to one alias get -2.
+    assert_eq!(
+        got,
+        [
+            ("fin", "fin", true, true),
+            ("sales-prod", "Sales Prod", false, false),
+            ("sales-prod-2", "sales-prod", false, false),
+        ]
+    );
+    assert_eq!(snap.agent_profile.as_deref(), Some("fin"));
+    assert_eq!(snap.agent_host.as_deref(), Some("https://fin.example.test"));
+    assert_eq!((snap.cross_workspace, snap.budget), (false, 10));
+    // The agent runs on another profile: it keeps its place in the catalog and is marked.
+    w.call(
+        "workspace_settings_write",
+        json!({"runProfile": "sales-prod"}),
+    )
+    .unwrap();
+    let snap = w.catalog_snapshot().unwrap();
+    assert_eq!(snap.agent_profile.as_deref(), Some("sales-prod"));
+    assert_eq!(
+        snap.catalog.iter().filter(|c| c.is_agent_workspace).count(),
+        1
+    );
+    // A workspace switched off leaves the catalog.
+    w.set_available("Sales Prod", false, None).unwrap();
+    assert_eq!(w.catalog_snapshot().unwrap().catalog.len(), 2);
+    // No home and no run profile: no agent profile.
+    let s2 = Scratch::new();
+    let none = WorkspaceStore::new(
+        &s2.0,
+        s2.configs(),
+        Arc::new(FakeT7(vec![profile("x", true)])),
+    );
+    let snap = none.catalog_snapshot().unwrap();
+    assert!(snap.agent_profile.is_none() && snap.agent_host.is_none() && snap.catalog.is_empty());
+}
+
+#[test]
+fn alias_slugs_are_safe_short_and_never_empty() {
+    assert_eq!(alias_slug("Sales (EU)"), "sales-eu");
+    assert_eq!(alias_slug("--"), "ws");
+    assert_eq!(alias_slug(&"a".repeat(80)).len(), 40);
+    assert_eq!(alias_slug("ÄÖ"), "ws");
+}
+
 // ---------- the allow-list ----------
 
 #[test]

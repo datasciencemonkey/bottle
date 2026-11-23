@@ -1,0 +1,59 @@
+check_for_update_on_startup = false
+model_provider = "databricks"
+model = "genie-code-cli-primary"
+approval_policy = "never"
+sandbox_mode = "read-only"
+web_search = "disabled"
+
+[memories]
+generate_memories = false
+use_memories = false
+
+[model_providers.databricks]
+name = "Unity Gateway"
+base_url = "https://example-ws.cloud.databricks.com/ai-gateway/clients/genie-cli/openai/v1"
+wire_api = "responses"
+
+[model_providers.databricks.auth]
+command = "/opt/bottle/bin/databricks"
+args = ["auth", "token", "--profile", "sales", "--timeout", "15s", "--output", "text"]
+timeout_ms = 60000
+refresh_interval_ms = 900000
+
+[features]
+shell_tool = false
+unified_exec_tty = false
+shell_snapshot = false
+view_image = false
+multi_agent = false
+apps = false
+plugins = false
+remote_plugin = false
+browser_use = false
+browser_use_external = false
+in_app_browser = false
+computer_use = false
+image_generation = false
+goals = false
+hooks = false
+tool_suggest = false
+skill_search = false
+skill_mcp_dependency_install = false
+daemon_auto_start = false
+multi_agent_v2 = false
+collaboration_modes = false
+request_permissions_tool = false
+default_mode_request_user_input = false
+
+[mcp_servers.bottle]
+command = "/Applications/Bottle.app/Contents/MacOS/bottle"
+args = ["--agent-mcp-shim"]
+env_vars = ["BOTTLE_SHIM_SOCKET", "BOTTLE_SHIM_SECRET"]
+enabled_tools = ["ask_genie"]
+required = true
+startup_timeout_sec = 30
+tool_timeout_sec = 600
+default_tools_approval_mode = "approve"
+
+[mcp_servers.bottle.tools.ask_genie]
+approval_mode = "approve"
