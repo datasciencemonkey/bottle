@@ -3,6 +3,7 @@ import { act } from 'react';
 import { render, tauri, viewEmits } from '../test-tauri';
 import { PERMISSION_EVENT, PERMISSION_TEXT } from '../../shared/permission-view';
 import { HUB_RECORDINGS_EVENT } from '../../shared/recording-view';
+import { HUB_WORKSPACES_EVENT } from '../../shared/hub-workspaces';
 import { Hub } from './Hub';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('../test-tauri')).coreModule);
@@ -10,8 +11,7 @@ vi.mock('@tauri-apps/api/event', async () => (await import('../test-tauri')).eve
 vi.mock('@tauri-apps/api/window', async () => (await import('../test-tauri')).windowModule);
 
 const A = '00000000-0000-4000-8000-00000000000a';
-const B = '00000000-0000-4000-8000-00000000000b';
-const overlays = { attention: false, recording: false, offline: false, localOnly: false };
+const AGENT = { crossWorkspaceData: false, crossWorkspaceLocked: false, genieCallBudget: 10 };
 
 describe('V1 hub view', () => {
   beforeEach(() => tauri.reset());
@@ -41,26 +41,97 @@ describe('V1 hub view', () => {
     expect(el.querySelector('[data-notice="dictation_unshown"]')).toBeNull();
   });
 
-  it('[#568] a hub list with a notice, or with an Edit ask, shows the MOGs area', async () => {
+  it('[ADR 0117] a workspace list with a notice shows Settings; one without does not', async () => {
     const { el } = await render(<Hub />);
-    const mogsArea = () => el.querySelector<HTMLElement>('[data-hub-view="mogs"]');
-    expect(mogsArea()?.hidden).toBe(true);
-    const list = { mogs: [], unreadable: [], runningCount: 0, maxRunning: 3 };
-    // A list with neither a notice nor an Edit ask does not move the hub.
-    await tauri.emit('hub:mogs', list);
-    expect(mogsArea()?.hidden).toBe(true);
-    await tauri.emit('hub:mogs', {
-      ...list,
-      notice: { kind: 'info', text: 'Create a MOG to start' },
-    });
-    expect(mogsArea()?.hidden).toBe(false);
+    const settings = () => el.querySelector<HTMLElement>('[data-hub-view="settings"]');
+    expect(settings()?.hidden).toBe(true);
+    const list = { rows: [], home: null, agent: AGENT };
+    await tauri.emit(HUB_WORKSPACES_EVENT, list);
+    expect(settings()?.hidden).toBe(true);
+    await tauri.emit(HUB_WORKSPACES_EVENT, { ...list, notice: { kind: 'info', text: 'Saved' } });
+    expect(settings()?.hidden).toBe(false);
+    expect(el.querySelector('[data-workspace-notice]')?.textContent).toBe('Saved');
   });
 
-  it('[GL-5] an Edit ask shows the MOGs area', async () => {
+  it('[ADR 0117] only a NEW workspace notice moves the hub, and it focuses the Workspace heading', async () => {
+    // Other tests leave their hubs in the document; the heading is found by id.
+    document.body.innerHTML = '';
     const { el } = await render(<Hub />);
-    const list = { mogs: [], unreadable: [], runningCount: 0, maxRunning: 3 };
-    await tauri.emit('hub:mogs', { ...list, openEdit: { mogId: A, token: 1 } });
-    expect(el.querySelector<HTMLElement>('[data-hub-view="mogs"]')?.hidden).toBe(false);
+    const settings = () => el.querySelector<HTMLElement>('[data-hub-view="settings"]');
+    const list = { rows: [], home: null, agent: AGENT };
+    const note = { kind: 'info', text: 'Saved' };
+    await tauri.emit(HUB_WORKSPACES_EVENT, { ...list, notice: note });
+    await act(async () => new Promise((r) => requestAnimationFrame(() => r(undefined))));
+    expect(settings()?.hidden).toBe(false);
+    expect(document.activeElement?.id).toBe('workspace-settings-title');
+    // The user goes elsewhere; a republish of the same notice leaves them there.
+    await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-toggle]')?.click());
+    await act(async () =>
+      el.querySelector<HTMLButtonElement>('[data-sidebar-item="conversations"]')?.click(),
+    );
+    expect(settings()?.hidden).toBe(true);
+    await tauri.emit(HUB_WORKSPACES_EVENT, { ...list, notice: note });
+    expect(settings()?.hidden).toBe(true);
+    // A different notice moves the hub again.
+    await tauri.emit(HUB_WORKSPACES_EVENT, { ...list, notice: { kind: 'error', text: 'No' } });
+    expect(settings()?.hidden).toBe(false);
+  });
+
+  it('[ADR 0117] a notice scrolls smoothly, or with auto under prefers-reduced-motion', async () => {
+    const run = async (reduce: boolean) => {
+      document.body.innerHTML = '';
+      vi.stubGlobal('matchMedia', (q: string) => ({
+        matches: reduce && q.includes('reduce'),
+        media: q,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+        addListener: () => undefined,
+        removeListener: () => undefined,
+      }));
+      const scroll = vi.fn();
+      Element.prototype.scrollIntoView = scroll;
+      await render(<Hub />);
+      await tauri.emit(HUB_WORKSPACES_EVENT, {
+        rows: [],
+        home: null,
+        agent: AGENT,
+        notice: { kind: 'info', text: reduce ? 'a' : 'b' },
+      });
+      await act(async () => new Promise((r) => requestAnimationFrame(() => r(undefined))));
+      return scroll.mock.calls.at(-1)?.[0] as { behavior: string } | undefined;
+    };
+    try {
+      expect((await run(false))?.behavior).toBe('smooth');
+      expect((await run(true))?.behavior).toBe('auto');
+    } finally {
+      vi.unstubAllGlobals();
+      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+
+  it('[ADR 0117] Workspace is the first section of Settings', async () => {
+    const { el } = await render(<Hub />);
+    const first = el.querySelector('[data-hub-view="settings"]')?.firstElementChild;
+    expect(first?.getAttribute('data-view')).toBe('workspace-settings');
+  });
+
+  it('[MEM-32a] the Memory area has Forget memory… for the lamp MOG, sent through view_emit', async () => {
+    const { el } = await render(<Hub />);
+    const btn = () => el.querySelector<HTMLButtonElement>('[data-memory-area] [data-forget-open]');
+    // No MOG has reported yet: no button.
+    expect(btn()).toBeNull();
+    await tauri.emit('mog:view_state', {
+      mogId: A,
+      mood: 'idle',
+      overlays: { attention: false, recording: false, offline: false, localOnly: false },
+    });
+    expect(btn()?.textContent).toBe('Forget memory…');
+    await act(async () => btn()?.click());
+    expect(viewEmits()).toContainEqual({
+      mogId: A,
+      kind: 'click',
+      payload: { target: 'forget_open' },
+    });
   });
 
   it('[V1] shows the product name and the Labs label', async () => {
@@ -69,53 +140,20 @@ describe('V1 hub view', () => {
     expect(el.textContent).toContain('Databricks Labs / experimental');
   });
 
-  it('[V1] subscribes to mog:view_state and lists each MOG with its mood', async () => {
-    // ui-1 (#97, #103): the live MOG chips moved into the "mogs" area, not shown by default.
+  it('[ADR 0117] the hub has no MOG list: no live chips, no mogs area, one ready ping', async () => {
     const { el } = await render(<Hub />);
-    expect(tauri.listeners('mog:view_state')).toBe(1);
-    await tauri.emit('mog:view_state', { mogId: A, mood: 'idle', overlays });
-    await tauri.emit('mog:view_state', { mogId: B, mood: 'processing', overlays });
-    await tauri.emit('mog:view_state', { mogId: A, mood: 'sleeping', overlays });
-    await tauri.emit('mog:view_state', { mogId: 7 });
-    await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-toggle]')?.click());
-    await act(async () =>
-      el.querySelector<HTMLButtonElement>('[data-sidebar-item="mogs"]')?.click(),
-    );
-    const rows = [...el.querySelectorAll('li[data-mog]')].map((li) => [
-      li.getAttribute('data-mog'),
-      li.getAttribute('data-mood'),
-    ]);
-    expect(rows).toEqual([
-      [A, 'sleeping'],
-      [B, 'processing'],
-    ]);
-  });
-
-  it('[V1] [ARC-2] sends a MOG selection only through view_emit', async () => {
-    const { el } = await render(<Hub />);
-    await tauri.emit('mog:view_state', { mogId: A, mood: 'idle', overlays });
-    await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-toggle]')?.click());
-    await act(async () =>
-      el.querySelector<HTMLButtonElement>('[data-sidebar-item="mogs"]')?.click(),
-    );
-    await act(async () => (el.querySelector(`li[data-mog="${A}"] button`) as HTMLElement).click());
-    // The hub notice (#27, MB-08a) and the MOG list (#26) ask the brain with hub-scope emits
-    // (notice.ready, mogs.ready), the CLI step asks with id `cli` (#161), the permission notice
-    // with id `permissions` (ADR 0101), the connect panel with id `connect` (`ready`) and Conversations with id `conversations` (#103); the
-    // sidebar area switches are local state (no emit); the MOG selection is the rest.
-    expect(viewEmits()).toContainEqual({
-      mogId: 'hub',
-      kind: 'click',
-      payload: { action: 'notice.ready' },
+    await tauri.emit('mog:view_state', {
+      mogId: A,
+      mood: 'idle',
+      overlays: { attention: false, recording: false, offline: false, localOnly: false },
     });
+    expect(el.querySelector('[data-hub-view="mogs"]')).toBeNull();
+    expect(el.querySelector('.hub-live')).toBeNull();
     expect(
       viewEmits().filter(
-        (e) =>
-          !['hub', 'cli', 'permissions', 'conversations', 'recording', 'store', 'connect'].includes(
-            (e as { mogId: string }).mogId,
-          ),
+        (e) => (e as { payload?: { action?: string } }).payload?.action === 'workspaces.ready',
       ),
-    ).toEqual([{ mogId: A, kind: 'click' }]);
+    ).toHaveLength(1);
   });
 });
 
@@ -181,13 +219,12 @@ describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
     expect(el.querySelector('.hub-home-stage')?.getAttribute('data-motion')).toBe('fade');
   });
 
-  it('[#103] the toggle opens the sidebar with Home, MOGs, Conversations, Recordings, Memory, Settings', async () => {
+  it('[#103] the toggle opens the sidebar with Home, Conversations, Recordings, Memory, Settings', async () => {
     const { el } = await render(<Hub />);
     await act(async () => toggle(el)?.click());
     expect(el.querySelector('[data-sidebar]')).not.toBeNull();
     expect(items(el).map((b) => b.textContent)).toEqual([
       'Home',
-      'MOGs',
       'Conversations',
       'Recordings',
       'Memory',
@@ -211,20 +248,20 @@ describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
   });
 
   it('[home] each purpose open lands on its own area, not Home', async () => {
-    const list = { mogs: [], unreadable: [], runningCount: 0, maxRunning: 3 };
     const area = (el: HTMLElement) => el.querySelector('.hub-area-title')?.textContent;
     // Open in Bottle (card or MOG menu): Conversations.
     const a = await render(<Hub />);
     await tauri.emitTo('hub', 'hub:conversations.open', {});
     expect(area(a.el)).toBe('Conversations');
-    // Change workspace (an Edit ask): MOGs.
+    // A workspace notice (a switch or sign-in result): Settings.
     const b = await render(<Hub />);
-    await tauri.emit('hub:mogs', { ...list, openEdit: { mogId: A, token: 1 } });
-    expect(area(b.el)).toBe('MOGs');
-    // The talk key with no MOG (a hub:mogs notice): MOGs.
-    const c = await render(<Hub />);
-    await tauri.emit('hub:mogs', { ...list, notice: { kind: 'info', text: 'Create a MOG' } });
-    expect(area(c.el)).toBe('MOGs');
+    await tauri.emit(HUB_WORKSPACES_EVENT, {
+      rows: [],
+      home: null,
+      agent: AGENT,
+      notice: { kind: 'error', text: 'Sign-in failed' },
+    });
+    expect(area(b.el)).toBe('Settings');
     // Choose where to save (the recordings banner): Settings.
     const d = await render(<Hub />);
     await act(async () => d.el.querySelector<HTMLButtonElement>('[data-sidebar-toggle]')?.click());
@@ -245,9 +282,8 @@ describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
     const { el } = await render(<Hub />);
     await act(async () => toggle(el)?.click());
     await act(async () => items(el)[1]?.click());
-    expect(el.querySelector('.hub-area-title')?.textContent).toBe('MOGs');
-    expect(conv(el).hidden).toBe(true);
-    expect(el.querySelector('[data-hub-view="mogs"]')).not.toBeNull();
+    expect(el.querySelector('.hub-area-title')?.textContent).toBe('Conversations');
+    expect(conv(el).hidden).toBe(false);
   });
 
   it('[#103] Esc hides the sidebar; a pin keeps it open across Esc', async () => {
@@ -273,7 +309,7 @@ describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
   it('[LOW review #602] Esc does not close the sidebar while the Wipe dialog is open', async () => {
     const { el } = await render(<Hub />);
     await act(async () => toggle(el)?.click());
-    await act(async () => items(el)[3]?.click());
+    await act(async () => items(el)[2]?.click());
     // Picking an area closes an unpinned overlay (review of #602 "also fix"); reopen it so this
     // test can check whether Esc leaves it open while the dialog is up.
     await act(async () => toggle(el)?.click());
@@ -296,7 +332,7 @@ describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
   it('[#103] an open from a double-click shows Conversations', async () => {
     const { el } = await render(<Hub />);
     await act(async () => toggle(el)?.click());
-    await act(async () => items(el)[3]?.click());
+    await act(async () => items(el)[2]?.click());
     expect(conv(el).hidden).toBe(true);
     await tauri.emitTo('hub', 'hub:conversations.open', {});
     expect(conv(el).hidden).toBe(false);
@@ -319,7 +355,7 @@ describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
     await act(async () => toggle(el)?.click());
     await act(async () => items(el)[1]?.click());
     expect(el.querySelector('[data-sidebar]')).toBeNull();
-    expect(el.querySelector('.hub-area-title')?.textContent).toBe('MOGs');
+    expect(el.querySelector('.hub-area-title')?.textContent).toBe('Conversations');
   });
 
   // review of #602 ("also fix"): a pin keeps the sidebar open across an area pick too.
@@ -353,7 +389,7 @@ describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
   it('[review #602] switching areas keeps Settings mounted (the Wipe choice survives)', async () => {
     const { el } = await render(<Hub />);
     await act(async () => toggle(el)?.click());
-    await act(async () => items(el)[3]?.click());
+    await act(async () => items(el)[2]?.click());
     const radios = () => [...el.querySelectorAll<HTMLElement>('[role="radio"]')];
     await act(async () => radios()[2]?.click());
     expect(radios()[2]?.getAttribute('aria-checked')).toBe('true');
@@ -361,7 +397,7 @@ describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
     await act(async () => items(el)[0]?.click());
     expect(el.querySelector('[data-hub-view="settings"]')).not.toBeNull();
     await act(async () => toggle(el)?.click());
-    await act(async () => items(el)[3]?.click());
+    await act(async () => items(el)[2]?.click());
     expect(radios()[2]?.getAttribute('aria-checked')).toBe('true');
   });
 });
@@ -369,7 +405,7 @@ describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
 describe('V1 hub view: call recording (ADR 0103)', () => {
   beforeEach(() => tauri.reset());
 
-  // ui-1 (#97, #103): Recordings is a sidebar item now, like MOGs and Settings, not a button in
+  // ui-1 (#97, #103): Recordings is a sidebar item now, like Conversations and Settings, not a button in
   // the old always-visible HubNav; its settings section lives inside the Settings area.
   it('[REC-V15] the hub has a Recordings area and a Call recording settings section', async () => {
     const { el } = await render(<Hub />);

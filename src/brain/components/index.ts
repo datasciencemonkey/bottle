@@ -22,8 +22,14 @@ import { wireCliInstall, wireCliSettings } from '../cli-wiring';
 import { cliPlatform } from '../../shared/cli-view';
 import { wireConnectWorkspace } from '../connect-wiring';
 import { recordingProfile } from '../recording-profile';
+import {
+  createWorkspaces,
+  ipcWorkspacesDeps,
+  lampOnlyManager,
+  wireWorkspaces,
+} from '../workspaces';
 import { ipcRecordingApi, wireRecording } from '../recording-wiring';
-import { sendHubSnapshot, wireHubMogs } from '../hub-mogs-wiring';
+import { wireHubMogs } from '../hub-mogs-wiring';
 import {
   sendHubConversations,
   sendHubConversationsOpen,
@@ -68,7 +74,7 @@ import { storeGate } from '../store-gate';
 import { isTauriMac, wireStoreGate } from '../store-wiring';
 import { STORE_EVENT } from '../../shared/store-view';
 import { wirePermissions } from '../permission-wiring';
-import { NO_HOME, withOfflineFallback } from '../offline-intent';
+import { withOfflineFallback } from '../offline-intent';
 import { createProfilePick } from '../profile-pick';
 import { createRequestOwner, sendOwnedCard } from '../request-owner';
 import { wireTalkNoMog } from '../talk-no-mog';
@@ -165,9 +171,22 @@ export function startBrain(): Brain {
     // #26: the hub MOG list and actions (MB-01). #ui-4 (review #603, finding 3): a successful
     // edit or colour pick re-reads that MOG's identity and pushes it to its open MOG and card
     // (`talkTarget.reidentify`, below), so neither keeps a stale name or colour until restart.
-    const hubMogs = wireHubMogs(bus, components.T1, undefined, (mogId) =>
-      talkTarget.reidentify(mogId),
+    wireHubMogs(
+      bus,
+      components.T1,
+      undefined,
+      (mogId) => talkTarget.reidentify(mogId),
+      () => workspaces.lampMogId(),
     );
+    // ADR 0117: the one MOG with workspaces. The brain keeps the last `WorkspaceList`, sends the
+    // hub Settings → Workspace list and runs the hub workspace actions. A change of the home
+    // workspace, or of its name or colour, pushes the new identity to the lamp.
+    const workspaces = createWorkspaces(
+      ipcWorkspacesDeps(
+        () => void workspaces.lampMogId().then((id) => id && talkTarget.reidentify(id)),
+      ),
+    );
+    wireWorkspaces(bus, workspaces);
     // #103 (#40): the hub Conversations list. The brain reads the saved exchanges of each MOG
     // (`mem.exchange.recent`) and sends them to the hub; the hub view runs no store statement.
     const conversations = wireHubConversations(bus, {
@@ -224,7 +243,12 @@ export function startBrain(): Brain {
       void sendMemorySaved(mogId, { mogId, outcome: 'failed', undoMs: 0 }).catch(() => undefined);
     // #40 (AT-09): one local-history writer, shared by a direct ask and a thread follow-up, so
     // each saved exchange refreshes the hub Conversations list the same way.
-    const recordGenieExchange = ipcGenieHistory(components.T10, () => void conversations.refresh());
+    // ADR 0117: the card stays on the lamp; the row goes to the data MOG of the answering profile.
+    const recordGenieExchange = ipcGenieHistory(
+      components.T10,
+      () => void conversations.refresh(),
+      (profile) => workspaces.dataMogId(profile),
+    );
     // genie-followup (#145, #103): a follow-up from the thread composer or from a ⌥G press while
     // the hub is focused on a thread (item 4, wired below with `insertionOn`/`onAsk`). It never
     // touches a MOG card: the status goes to the hub, and the MOG and the profile that own the
@@ -276,19 +300,28 @@ export function startBrain(): Brain {
       login: (host, name, opts) => components.T7.login(host, name, opts),
       cancel: (profile) => call('profile_login_cancel', { profile }),
       profiles: () => call('profiles_list', {}),
+      // ADR 0117: the first Connect with no home makes that profile home. A later one stays off.
+      onConnected: (profile) => workspaces.connected(profile),
     });
     // MB-06a, MB-06b, UX-28: the talk-key target, its marker and its toast (#73). It is wired
     // before the capture lifecycle, so a `hotkey:ptt` down updates the target first.
-    const talkTarget = createAppTalkTarget();
+    // ADR 0117: the target is always the lamp, which shows the home workspace's name and colour.
+    const talkTarget = createAppTalkTarget((mogId) => workspaces.homeIdentity(mogId));
     wireTalkTarget(bus, talkTarget);
     // #562 (MB-06a): a press with no open MOG starts the last-used MOG, or the hub says
     // "Create a MOG to start".
     wireTalkNoMog(bus, {
-      manager: components.T1,
+      // ADR 0117: the press starts the lamp only.
+      manager: lampOnlyManager(components.T1, () => workspaces.lampMogId()),
       lastUsed: () => talkTarget.lastUsed(),
       openWindow: (mogId) => call('window_mog_open', { mogId }),
       showHub: () => showHub(),
-      notify: (notice) => sendHubSnapshot(components.T1, notice),
+      // ADR 0117: the hub lists workspaces, not MOGs. A notice goes with the workspace list; the
+      // push with no notice first makes each notice new to the hub, so it shows each time.
+      notify: async (notice) => {
+        await workspaces.refresh();
+        if (notice) await workspaces.refresh({ notice });
+      },
     });
     // MOG-13a (#73): the MOG that captures an utterance owns its request and its answer.
     const owner = createRequestOwner({
@@ -347,9 +380,9 @@ export function startBrain(): Brain {
         showCard: (mogId) => call('window_card_show', { mogId }),
         // The card's "Change workspace…": the same path as the right-click "Change home
         // workspace…": show the hub on that MOG's Edit form.
-        changeWorkspace: (mogId) => {
+        changeWorkspace: () => {
           void showHub();
-          hubMogs.openEdit(mogId);
+          void workspaces.showSettings();
         },
         hostOf: async (profile) => (await ipcListProfiles()).find((p) => p.name === profile)?.host,
       }),
@@ -385,18 +418,10 @@ export function startBrain(): Brain {
       scheduler: { at: timeoutScheduler(moodClock) },
     });
     wireCaptureMood(bus, captureMood);
-    // ADR 0103, recording-profile.ts: the one workspace of a call recording, shared by every
-    // cloud-bound recording command and the record key (⌥R), so they all reach the same
-    // workspace. Bottle never picks between workspaces: no MOG with a home is `no_profile`;
-    // two or more different homes is `profiles_differ`.
-    const recordingHomeProfile = () =>
-      recordingProfile({
-        mogs: async () => (await components.T1.list()).mogs.map((m) => m.mogId),
-        home: async (id) => {
-          const p = (await homes.routerInput(id)).profile;
-          return p === NO_HOME ? undefined : p;
-        },
-      });
+    // ADR 0103, ADR 0117, recording-profile.ts: the one workspace of a call recording is the
+    // home workspace, shared by every cloud-bound recording command and the record key (⌥R).
+    // Bottle never picks one: with no home it is `no_profile`.
+    const recordingHomeProfile = () => recordingProfile({ home: () => workspaces.home() });
     // ADR 0103: call recording. The hub sends clicks; the brain calls the `recording_*`
     // commands, relays `recording.state` and `recording.job` to the hub, and shows REC and the
     // answer-ready moment on the MOG through the one mood publisher. The core checks the knob
@@ -474,9 +499,9 @@ export function startBrain(): Brain {
       undoRemember: (mogId, itemId) =>
         void rememberFlow?.undo(mogId, itemId).catch(() => undefined),
       closeMog: (mogId) => void components.T1.stop(mogId).catch(() => undefined),
-      changeHome: (mogId) => {
+      changeHome: () => {
         void showHub();
-        hubMogs.openEdit(mogId);
+        void workspaces.showSettings();
       },
     });
     // #ui-4 (review #603, findings 1 and 4): the MOG right-click menu's native popup. A MOG
@@ -502,14 +527,19 @@ export function startBrain(): Brain {
     });
     // #163 (RTR-15c, W-07d): the home profile of each MOG. #557: a press on Ask Genie with no
     // home profile opens the profile picker. The user picks; Bottle never picks.
-    const homes = createHomeProfiles(ipcHomeProfileDeps());
+    const homes = createHomeProfiles(ipcHomeProfileDeps(() => workspaces.home()));
     const insertionOn = () => true;
     const route = withOfflineFallback(ipcUtteranceDeps());
     const pick = createProfilePick({
       stackFor,
       showCard: (mogId) => call('window_card_show', { mogId }),
       listProfiles: ipcListProfiles,
-      saveHome: (mogId, profile) => components.T1.edit(mogId, { home: profile }),
+      // ADR 0117: the pick makes that workspace the home. The router input is read again, so
+      // the ask gate finds the new target when the press goes on.
+      saveHome: async (mogId, profile) => {
+        await workspaces.pickHome(profile);
+        await homes.routerInput(mogId);
+      },
     });
     // #14: the PTT and hands-free lifecycle. Every start goes through the T12 consent gate.
     const lifecycle = createCaptureLifecycle({
@@ -521,10 +551,10 @@ export function startBrain(): Brain {
       onRecordToggle: ({ mogId }) =>
         void createRecordToggle({
           call,
-          // recording-profile.ts: the same shared-home profile the hub Record control uses, so
-          // ⌥R and the hub always reach the same workspace. No open MOG: no profile. Otherwise
-          // `recordingHomeProfile` throws `{ error: 'no_profile' }` or `{ error:
-          // 'profiles_differ' }`, which `createRecordToggle`'s catch forwards to `onRefused`.
+          // recording-profile.ts: the same home profile the hub Record control uses, so ⌥R and
+          // the hub always reach the same workspace. No open MOG: no profile. With no home,
+          // `recordingHomeProfile` throws `{ error: 'no_profile' }`, which
+          // `createRecordToggle`'s catch forwards to `onRefused`.
           home: mogId === '' ? async () => undefined : recordingHomeProfile,
           onRefused: (error) => {
             if (mogId !== '') captureMood.refused(mogId, error);
@@ -591,6 +621,7 @@ export function startBrain(): Brain {
       if (!ok) return;
       void emitTo('hub', STORE_EVENT, storeGate.view()).catch(() => undefined);
       void conversations.push();
+      void workspaces.refresh();
     });
     brain = { components, bus, talkTarget, conversations, ready: subscribed };
   }

@@ -24,9 +24,9 @@ import { MOG_CONFIG_DEFAULTS, type MogConfig } from './mog-config';
 import { MOG_PALETTE, nextVariant } from '../../shared/mog-palette';
 
 /** Appendix F `app.maxRunningMogs` default (D44, MB-03b). */
-export const MAX_RUNNING_MOGS_DEFAULT = 8;
-/** The cap of the Rust host (`windows::MAX_ACTIVE_MOGS`). The brain cap never passes it. */
-export const HOST_MAX_RUNNING_MOGS = 8;
+export const MAX_RUNNING_MOGS_DEFAULT = 1;
+/** The cap of the Rust host (`windows::MAX_ACTIVE_MOGS`, ADR 0117: one MOG). The brain cap never passes it. */
+export const HOST_MAX_RUNNING_MOGS = 1;
 
 const NAME_MAX = 64;
 const PERSONA_MAX = 2000;

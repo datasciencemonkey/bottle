@@ -26,6 +26,8 @@ vi.mock('../utterance-wiring', async (orig) => {
 });
 
 const MOG = '00000000-0000-4000-8000-0000000005a3';
+import { workspaceList } from '../../test-support/workspace-list';
+
 const HOME = 'fake-home';
 
 let deps: UtteranceHandlerDeps | undefined;
@@ -49,6 +51,7 @@ const genieAsks = () =>
 function hostWithStubR5() {
   core.invoke.mockImplementation(async (cmd) => {
     if (cmd === 'config_read') return { json: { name: 'Finance', binding: { home: HOME } } };
+    if (cmd === 'workspace_list') return workspaceList(HOME);
     if (cmd === 'mcp_call') return Promise.reject({ error: 'not_implemented' });
     return {};
   });

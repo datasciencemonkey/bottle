@@ -5,7 +5,7 @@
  *   pasted or on the Copy card. A press on Ask Genie with no home profile opens this picker.
  * - W-07d (picker part): it lists the `profiles_list` profiles that Bottle supports as chips
  *   (Appendix E "Choose profile"). The user clicks one. Bottle never picks, not even when only
- *   one profile is listed. Only the name is saved, as `mog.binding.home`.
+ *   one profile is listed. ADR 0117: the pick makes that workspace the home (`workspace_make_home`).
  * - B1: the picker never sends. After the user saves a pick, `then` runs once: the ask gate
  *   sends the pressed text (the press was the confirmation).
  * - Every chip acts only on a click (UX-20c).
@@ -20,7 +20,7 @@ export interface ProfilePickDeps {
   showCard(mogId: MogId): Promise<unknown>;
   /** `profiles_list` (T7). */
   listProfiles(): Promise<Profile[]>;
-  /** Save the user's pick as the home profile (T1 `edit`, `config_write`). */
+  /** Make the user's pick the home workspace (`workspaces.pickHome`). */
   saveHome(mogId: MogId, profile: ProfileName): Promise<unknown>;
 }
 
@@ -67,11 +67,11 @@ export function createProfilePick(deps: ProfilePickDeps): ProfilePick {
         waiting.delete(mogId);
         note(
           mogId,
-          'Bottle cannot list your Databricks CLI profiles. Sign in with `databricks auth login`, then set the home profile of this MOG in the hub.',
+          'Bottle cannot list your Databricks CLI profiles. Sign in with `databricks auth login`, then choose your home workspace in the hub.',
         );
         return;
       }
-      note(mogId, 'Which workspace? Click the home profile for this MOG.');
+      note(mogId, 'Which workspace? Click your home workspace.');
       const stack = deps.stackFor(mogId);
       const idOf = (p: Profile) => `pick-${mogId}-use-${p.name}`;
       for (const p of supported) {

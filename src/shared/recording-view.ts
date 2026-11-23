@@ -130,11 +130,8 @@ export const RECORDING_ERRORS = {
     action: { label: 'Open Settings', target: 'settings' },
   },
   no_profile: {
-    text: 'Set a home profile on a MOG first, then try again.',
+    text: 'Choose a home workspace in Settings → Workspace first, then try again.',
     action: { label: 'Open Settings', target: 'settings' },
-  },
-  profiles_differ: {
-    text: 'Your MOGs use different workspaces. Recording needs one workspace for now.',
   },
   recording_busy: { text: 'A recording is already running.' },
   mic_busy: { text: 'The mic is in use. Finish the dictation, then record.' },

@@ -144,6 +144,40 @@ describe('Connect a workspace: sign-in (W-07c, W-07g, W-07h, W-15)', () => {
     expect(last()).toEqual({ step: 'connected', host: HOST, profile: 'bottle-acme-prod' });
   });
 
+  it('[ADR 0117] a finished sign-in tells onConnected the profile once; a failed one does not', async () => {
+    const onConnected = vi.fn();
+    const ok = setup({ onConnected });
+    click(ok.bus, { target: 'connect_url', url: `${HOST}/browse?o=1` });
+    await flush();
+    click(ok.bus, { target: 'connect_start', profile: 'bottle-acme-prod' });
+    await flush();
+    expect(onConnected).toHaveBeenCalledTimes(1);
+    expect(onConnected).toHaveBeenCalledWith('bottle-acme-prod');
+    const failedCb = vi.fn();
+    const bad = setup({
+      onConnected: failedCb,
+      login: vi.fn(async () => Promise.reject({ error: 'timeout' })),
+    });
+    click(bad.bus, { target: 'connect_url', url: `${HOST}/browse?o=1` });
+    await flush();
+    click(bad.bus, { target: 'connect_start', profile: 'bottle-acme-prod' });
+    await flush();
+    expect(failedCb).not.toHaveBeenCalled();
+  });
+
+  it('[ADR 0117] a throwing onConnected never changes the connected step', async () => {
+    const { bus, last } = setup({
+      onConnected: () => {
+        throw new Error('x');
+      },
+    });
+    click(bus, { target: 'connect_url', url: `${HOST}/browse?o=1` });
+    await flush();
+    click(bus, { target: 'connect_start', profile: 'bottle-acme-prod' });
+    await flush();
+    expect(last()).toMatchObject({ step: 'connected' });
+  });
+
   it('[W-15] a custom OAuth client ID goes to profile_login', async () => {
     const { bus, deps } = setup();
     click(bus, { target: 'connect_url', url: HOST });

@@ -287,9 +287,8 @@ pub fn run() {
     builder
         .manage(ipc::BrainChannel::default())
         .manage(ipc::HubChannel::default())
-        // ADR 0117: the `workspace_*` component. The contract-PR stub answers `not_implemented`;
-        // slice 1 (S1-A) replaces it with the workspace store.
-        .manage(workspaces_host::WorkspacesHost)
+        // ADR 0117: the `workspace_*` component. `workspaces_host::install` fills it in `setup`.
+        .manage(workspaces_host::WorkspacesHost::default())
         // #574 (ADR 0113): the one ticket store for user-only memory writes. `ipc.rs` reads it
         // with `try_state`; `memory_host` mints and redeems.
         .manage(std::sync::Arc::new(
@@ -386,6 +385,9 @@ pub fn run() {
             cli_host::install(handle);
             // T7 for `profiles_list` and the R7/R8 profile hosts (#17). Before R8, which uses it.
             profiles_host::install(handle);
+            // ADR 0117: the workspace store (`workspace_*`) and the allow-list that R8 takes. After
+            // the MOG config store and T7, before R8.
+            workspaces_host::install(handle);
             // R5 launch check on a worker (W-02d) and `cli_status`. A missing CLI never fails the
             // start.
             cli_host::start(handle);

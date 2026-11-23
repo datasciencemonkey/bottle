@@ -53,7 +53,8 @@ fn drag(dx: f64, dy: f64) -> Vec<Verdict> {
 
 #[test]
 fn at_01_mog_01a_mog_01b_mog_02_two_mogs_open_as_two_transparent_never_key_panels() {
-    let mut ledger = WindowLedger::default();
+    // The ledger can hold more than the app cap of 1 (ADR 0117), so use an explicit cap.
+    let mut ledger = WindowLedger::new(8);
     let mut labels = Vec::new();
     for id in [MOG_A, MOG_B] {
         let OpenOutcome::Opened(kind) = ledger.open_mog(id).expect("open") else {
@@ -191,8 +192,9 @@ fn at_01_mb_14_the_hub_does_not_save_the_duplicate_binding() {
 // ---------- The running cap (MB-03b, window part) ----------
 
 #[test]
-fn at_01_the_9th_mog_window_is_refused_at_the_cap_of_8() {
-    assert_eq!(MAX_ACTIVE_MOGS, 8);
+fn at_01_the_2nd_mog_window_is_refused_at_the_cap_of_1() {
+    // ADR 0117: one MOG. AC-1.9.
+    assert_eq!(MAX_ACTIVE_MOGS, 1);
     let mut ledger = WindowLedger::default();
     let ids = mog_ids(MAX_ACTIVE_MOGS + 1);
     for id in &ids[..MAX_ACTIVE_MOGS] {
@@ -200,9 +202,9 @@ fn at_01_the_9th_mog_window_is_refused_at_the_cap_of_8() {
     }
     assert_eq!(
         ledger.open_mog(&ids[MAX_ACTIVE_MOGS]),
-        Err(WindowError::CapReached { cap: 8 })
+        Err(WindowError::CapReached { cap: 1 })
     );
-    // Stop one, then the 9th starts.
+    // Stop it, then the next starts.
     assert!(ledger.close_mog(&ids[0]));
     assert!(matches!(
         ledger.open_mog(&ids[MAX_ACTIVE_MOGS]),

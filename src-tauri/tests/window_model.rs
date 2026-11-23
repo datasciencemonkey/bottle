@@ -1,5 +1,5 @@
 //! #8: the window model. MOG-08a (view capabilities), ARC-3 (R11 WindowHost lifecycle and
-//! the cap of 8 MOGs) and ARC-4 (each window label gets exactly one capability).
+//! the cap of 1 MOG) and ARC-4 (each window label gets exactly one capability).
 
 use bottle_lib::window_host::{OpenOutcome, WindowError, WindowLedger};
 use bottle_lib::windows::{WindowKind, MAX_ACTIVE_MOGS};
@@ -158,12 +158,12 @@ fn arc_3_window_host_opens_mog_windows_up_to_the_cap() {
             Ok(OpenOutcome::Opened(WindowKind::Mog(id(n))))
         );
     }
-    assert_eq!(ledger.active_mogs(), 8);
+    assert_eq!(ledger.active_mogs(), 1);
     assert_eq!(
         ledger.open_mog(&id(99)),
-        Err(WindowError::CapReached { cap: 8 })
+        Err(WindowError::CapReached { cap: 1 })
     );
-    assert_eq!(ledger.active_mogs(), 8);
+    assert_eq!(ledger.active_mogs(), 1);
 }
 
 #[test]
@@ -283,16 +283,14 @@ mod host {
     }
 
     #[test]
-    fn arc_3_host_enforces_the_cap_of_8() {
+    fn arc_3_host_enforces_the_cap_of_1() {
         let (app, host) = setup();
-        for n in 0..8 {
-            host.open_mog_window(&format!("m{n}")).unwrap();
-        }
+        host.open_mog_window("m0").unwrap();
         assert_eq!(
-            host.open_mog_window("m9"),
-            Err(WindowError::CapReached { cap: 8 })
+            host.open_mog_window("m1"),
+            Err(WindowError::CapReached { cap: 1 })
         );
-        assert!(!exists(&app, "mog-m9"));
+        assert!(!exists(&app, "mog-m1"));
     }
 
     #[test]
@@ -307,13 +305,11 @@ mod host {
     #[test]
     fn arc_3_host_frees_the_slot_of_a_destroyed_window() {
         let (app, host) = setup();
-        for n in 0..8 {
-            host.open_mog_window(&format!("m{n}")).unwrap();
-        }
+        host.open_mog_window("m0").unwrap();
         app.get_webview_window("mog-m0").unwrap().destroy().unwrap();
         // lib.rs calls this from `WindowEvent::Destroyed`.
         host.window_destroyed("mog-m0");
-        assert_eq!(host.active_mogs(), 7);
+        assert_eq!(host.active_mogs(), 0);
         host.open_mog_window("m8").unwrap();
         assert!(exists(&app, "mog-m8"));
     }

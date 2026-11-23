@@ -24,6 +24,8 @@ vi.mock('../utterance-wiring', async (orig) => {
   return { ...real, createUtteranceHandler: vi.fn(real.createUtteranceHandler) };
 });
 
+import { workspaceList } from '../../test-support/workspace-list';
+
 const MOG = '00000000-0000-4000-8000-0000000000a1';
 const SENTENCE = 'Hi Sam, the deck is attached and I will send the numbers tomorrow.';
 const NO_CLOUD = ['model_invoke', 'agent_start', 'agent_send', 'mcp_call'] as const;
@@ -80,6 +82,7 @@ describe('startBrain utterance routing (#163)', () => {
     core.invoke.mockImplementation(async (cmd) => {
       if (cmd === 'config_read')
         return { json: { name: 'Finance', binding: { home: 'fake-home' } } };
+      if (cmd === 'workspace_list') return workspaceList('fake-home');
       if (cmd === 'insert_text' && insert === 'ok') return { result: 'inserted' };
       return Promise.reject({ error: 'not_implemented' });
     });
@@ -108,6 +111,8 @@ describe('startBrain utterance routing (#163)', () => {
   it('[#557] [RTR-15c] [B1] [W-07d] a no-home question gets the Ask Genie chip; a press lists the profiles and sends nothing', async () => {
     core.invoke.mockImplementation(async (cmd) => {
       if (cmd === 'config_read') return Promise.reject({ error: 'config_not_found' });
+      // AC-1.10: no home. One listed profile is still never picked for the user.
+      if (cmd === 'workspace_list') return workspaceList(null);
       if (cmd === 'profiles_list')
         return [
           {
@@ -158,6 +163,7 @@ describe('startBrain utterance routing (#163)', () => {
     core.invoke.mockImplementation(async (cmd) => {
       if (cmd === 'config_read')
         return { json: { name: 'Finance', binding: { home: 'fake-home' } } };
+      if (cmd === 'workspace_list') return workspaceList('fake-home');
       if (cmd === 'profiles_list')
         return [
           {

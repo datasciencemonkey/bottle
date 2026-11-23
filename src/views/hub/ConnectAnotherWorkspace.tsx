@@ -1,5 +1,5 @@
 /**
- * Settings → "Connect another workspace…" (#162 follow-up, W-07e; review of #602: the "Connect
+ * Settings → Workspace → "Connect another workspace…" (#162 follow-up, W-07e; review of #602: the "Connect
  * a workspace" panel showing on every hub page even with a working profile).
  *
  * `ConnectWorkspace.tsx` now renders nothing until the brain opens it (no model, or the brain's
@@ -8,7 +8,8 @@
  * `connect_open` click the view's old always-visible button used to send (`view_emit`, id
  * `connect`, ARC-2, MOG-08a). The brain (`connect-wiring.ts`) then opens the flow with
  * `inline: true`, and it shows right under this row (a second `ConnectWorkspace`, with Cancel
- * and Done), with focus on its first field. There is exactly one entry point for `connect_open`
+ * and Done), with focus on its first field. The row has no heading of its own: it sits at the
+ * bottom of the Workspace section (`WorkspaceSettings.tsx`). There is exactly one entry point for `connect_open`
  * in the hub: this row. W-07e also asks for disconnecting a profile; that is not done here.
  */
 import { CONNECT_VIEW_ID } from '../../shared/connect-view';
@@ -32,12 +33,7 @@ function showOpenFirstRunFlow() {
 
 export function ConnectAnotherWorkspace() {
   return (
-    <section
-      data-view="connect-another-workspace"
-      aria-labelledby="connect-another-workspace-title"
-      className="hub-section"
-    >
-      <h2 id="connect-another-workspace-title">Workspace</h2>
+    <div data-view="connect-another-workspace">
       <SettingsGroup className="mt-[var(--mog-space-3)]">
         <SettingsRow
           label="Connect another workspace…"
@@ -63,6 +59,6 @@ export function ConnectAnotherWorkspace() {
       {/* The flow shows here, under the row that opened it (the brain sets `inline`), not in the
           setup region at the top of the page, which is out of sight from this row. */}
       <ConnectWorkspace placement="settings" />
-    </section>
+    </div>
   );
 }

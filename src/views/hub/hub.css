@@ -194,11 +194,6 @@
     margin-bottom: var(--mog-space-2);
   }
 
-  .hub-mogs {
-    border-top: 0;
-    padding-top: var(--mog-space-1);
-  }
-
   /* Controls. */
   .hub button,
   .hub summary,
@@ -325,272 +320,6 @@
 
   .hub-check label {
     cursor: pointer;
-  }
-
-  /* Live moods: a row of quiet chips (empty until a MOG window reports). */
-  .hub-live {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin: 0 0 8px;
-    padding: 0;
-    list-style: none;
-  }
-
-  .hub-live:empty {
-    display: none;
-  }
-
-  .hub-live li {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .hub .hub-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    min-height: 24px;
-    padding: 0 10px;
-    border-color: transparent;
-    border-radius: var(--mog-radius-pill);
-    background: rgb(255 255 255 / 5%);
-    font-size: var(--mog-text-sm);
-  }
-
-  .hub-mood-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: var(--mog-text-muted);
-  }
-
-  .hub-live [data-mood='listening'] .hub-mood-dot,
-  .hub-live [data-mood='processing'] .hub-mood-dot {
-    background: var(--mog-eye);
-  }
-
-  .hub-live [data-mood='error'] .hub-mood-dot {
-    background: var(--mog-lamp);
-  }
-
-  /* The MOG list: rows on one raised surface, separated by hairlines. */
-  .hub-rows {
-    margin: 8px 0 16px;
-    padding: 0;
-    list-style: none;
-    border-radius: var(--mog-radius-md);
-    background: var(--mog-surface-raised);
-  }
-
-  .hub-rows:empty {
-    display: none;
-  }
-
-  .hub-row {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 4px 10px;
-    min-height: 48px;
-    padding: 8px 12px 8px 16px;
-  }
-
-  .hub-row + .hub-row {
-    border-top: 1px solid rgb(255 255 255 / 6%);
-  }
-
-  .hub-row-name {
-    font-weight: 600;
-  }
-
-  .hub-row-state {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    color: var(--mog-text-muted);
-    font-size: var(--mog-text-sm);
-  }
-
-  .hub-row-state::before {
-    content: '';
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: currentColor;
-    opacity: 0.6;
-  }
-
-  .hub-row[data-running='true'] .hub-row-state::before {
-    background: var(--mog-eye);
-    opacity: 1;
-  }
-
-  .hub-row-actions {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px;
-    margin-left: auto;
-  }
-
-  /* "More": the less used row actions in a small menu under the button. */
-  .hub-more {
-    position: relative;
-  }
-
-  .hub-more summary {
-    display: inline-flex;
-    align-items: center;
-    min-height: 28px;
-    padding: 0 10px;
-    border-radius: var(--mog-radius-sm);
-    color: var(--mog-text-muted);
-    cursor: pointer;
-    list-style: none;
-  }
-
-  .hub-more summary::-webkit-details-marker {
-    display: none;
-  }
-
-  .hub-more summary:hover,
-  .hub-more[open] summary {
-    color: var(--mog-text);
-    background: rgb(255 255 255 / 6%);
-  }
-
-  .hub-more-items {
-    position: absolute;
-    top: calc(100% + 4px);
-    right: 0;
-    z-index: 5;
-    display: flex;
-    flex-direction: column;
-    min-width: 168px;
-    padding: 4px;
-    border: 1px solid var(--mog-edge);
-    border-radius: var(--mog-radius-md);
-    background: var(--mog-surface-raised);
-    box-shadow: var(--mog-shadow);
-  }
-
-  .hub .hub-more-items button {
-    justify-content: flex-start;
-    border-color: transparent;
-    text-align: left;
-  }
-
-  .hub .hub-more-items button:last-child {
-    color: var(--mog-lid);
-  }
-
-  /* #ui-4: the row colour picker. The swatch shows this MOG's current accent colour; opening it
-     offers the fixed palette, same shape as "More" above. */
-  .hub-color-picker {
-    position: relative;
-    flex: none;
-  }
-
-  .hub-color-picker summary {
-    display: inline-flex;
-    padding: 4px;
-    border-radius: var(--mog-radius-sm);
-    cursor: pointer;
-    list-style: none;
-  }
-
-  .hub-color-picker summary::-webkit-details-marker {
-    display: none;
-  }
-
-  .hub-color-picker summary:hover,
-  .hub-color-picker[open] summary {
-    background: rgb(255 255 255 / 6%);
-  }
-
-  .hub-color-options {
-    position: absolute;
-    top: calc(100% + 4px);
-    left: 0;
-    z-index: 5;
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 6px;
-    padding: 8px;
-    border: 1px solid var(--mog-edge);
-    border-radius: var(--mog-radius-md);
-    background: var(--mog-surface-raised);
-    box-shadow: var(--mog-shadow);
-  }
-
-  .hub-color-dot {
-    width: 18px;
-    height: 18px;
-    border: 1px solid rgb(255 255 255 / 25%);
-    border-radius: 50%;
-    padding: 0;
-    cursor: pointer;
-  }
-
-  .hub-color-options .hub-color-dot[aria-pressed='true'] {
-    box-shadow:
-      0 0 0 2px var(--mog-surface-raised),
-      0 0 0 4px var(--mog-focus);
-  }
-
-  .hub-color-dot:focus-visible {
-    outline: 2px solid var(--mog-focus);
-    outline-offset: 2px;
-  }
-
-  /* The edit form opens under its row. */
-  .hub-edit {
-    flex-basis: 100%;
-    display: grid;
-    grid-template-columns: max-content 1fr;
-    align-items: center;
-    gap: 8px 12px;
-    margin: 8px 0 4px;
-    padding: 12px;
-    border-radius: var(--mog-radius-sm);
-    background: rgb(0 0 0 / 18%);
-  }
-
-  .hub-edit label {
-    color: var(--mog-text-muted);
-  }
-
-  .hub-edit label:has(+ textarea) {
-    align-self: start;
-    padding-top: 5px;
-  }
-
-  .hub-edit textarea {
-    align-self: stretch;
-  }
-
-  .hub-edit .hub-actions {
-    grid-column: 2;
-    margin-top: 4px;
-  }
-
-  /* The create form: one line. */
-  .hub-create {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .hub-create label {
-    color: var(--mog-text-muted);
-  }
-
-  .hub-create input {
-    flex: 1 1 140px;
   }
 
   /* Modal confirmations (aria-modal): centred over a scrim. */
@@ -2263,9 +1992,17 @@
   .mem {
     position: relative;
     display: flex;
+    flex-direction: column;
     margin: 0 -32px;
     margin-left: calc(var(--mog-space-6) * -1);
     border-top: 1px solid var(--mog-edge);
+  }
+
+  .mem-head {
+    display: flex;
+    justify-content: flex-end;
+    padding: var(--mog-space-2) var(--mog-space-4);
+    border-bottom: 1px solid var(--mog-edge);
   }
 
   .mem-panes {

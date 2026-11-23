@@ -20,7 +20,6 @@ function setup() {
   const target = createTalkTarget({
     send: () => undefined,
     setActive: async () => undefined,
-    after: () => () => undefined,
   });
   let n = 0;
   const cards: { mogId: string; update: unknown }[] = [];

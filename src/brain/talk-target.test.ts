@@ -26,38 +26,15 @@ const NAMES: Record<string, string> = { [A]: 'Sales', [B]: 'Ops', [C]: 'Finance'
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
-/** A fake clock for `after`: `advance(ms)` runs the callbacks that fall due. */
-function fakeTimers() {
-  let now = 0;
-  let jobs: { at: number; fn: () => void; live: boolean }[] = [];
-  return {
-    after(ms: number, fn: () => void) {
-      const job = { at: now + ms, fn, live: true };
-      jobs.push(job);
-      return () => {
-        job.live = false;
-      };
-    },
-    advance(ms: number) {
-      now += ms;
-      const due = jobs.filter((j) => j.live && j.at <= now);
-      jobs = jobs.filter((j) => !due.includes(j));
-      for (const j of due) j.fn();
-    },
-  };
-}
-
 async function setup() {
   const sent: MogTargetView[] = [];
   const active: string[] = [];
-  const timers = fakeTimers();
   const target = createTalkTarget({
     send: (v) => void sent.push(v),
     setActive: async (id) => void active.push(id),
-    after: timers.after,
     identityOf: async (id) => (NAMES[id] ? { name: NAMES[id] } : undefined),
   });
-  return { target, sent, active, timers };
+  return { target, sent, active };
 }
 
 /** The last view sent to each MOG. */
@@ -107,7 +84,7 @@ describe('T1 talk-key target in the brain (#73)', () => {
   });
 
   it('[MB-06a] a closed target falls back to the last-interacted open MOG', async () => {
-    const { target, sent } = await setup();
+    const { target } = await setup();
     await openAll(target, A, B, C);
     target.interacted(A);
     target.interacted(C);
@@ -116,7 +93,6 @@ describe('T1 talk-key target in the brain (#73)', () => {
     expect(target.current()).toBe(C);
     target.closed(C);
     expect(target.current()).toBe(A);
-    expect(marked(sent)).toEqual([A]);
     target.closed(A);
     expect(target.current()).toBe(B);
     target.closed(B);
@@ -162,43 +138,25 @@ describe('T1 talk-key target in the brain (#73)', () => {
     expect(active).toEqual([]);
   });
 
-  it('[MB-06b] key-down shows a toast with the target MOG name for 1.2 s', async () => {
-    const { target, sent, timers } = await setup();
-    await openAll(target, A, B);
+  it('[ADR 0117] key-down shows no toast and no marker: the target is always the lamp', async () => {
+    const { target, sent } = await setup();
+    await openAll(target, A);
     sent.length = 0;
     target.pttDown(A);
+    expect(lastViews(sent)[A]).toEqual({ mogId: A, name: 'Sales', target: false, toast: false });
     expect(TARGET_TOAST_MS).toBe(1200);
-    expect(lastViews(sent)[A]).toEqual({ mogId: A, name: 'Sales', target: true, toast: true });
-    timers.advance(TARGET_TOAST_MS - 1);
-    expect(lastViews(sent)[A]?.toast).toBe(true);
-    timers.advance(1);
-    expect(lastViews(sent)[A]).toEqual({ mogId: A, name: 'Sales', target: true, toast: false });
-    // The toast is only on the target MOG.
-    expect(sent.some((v) => v.mogId !== A && v.toast)).toBe(false);
+    expect(sent.some((v) => v.target || v.toast)).toBe(false);
   });
 
-  it('[MB-06b] a second key-down during the toast shows it for 1.2 s from the new press', async () => {
-    const { target, sent, timers } = await setup();
-    await openAll(target, A);
-    target.pttDown(A);
-    timers.advance(1000);
-    target.pttDown(A);
-    timers.advance(1000);
-    expect(lastViews(sent)[A]?.toast).toBe(true);
-    timers.advance(200);
-    expect(lastViews(sent)[A]?.toast).toBe(false);
-  });
-
-  it('[UX-28] the marker moves with the target: one MOG has it, the old target loses it', async () => {
+  it('[ADR 0117] [UX-28] no view ever shows the marker, while the brain target still moves', async () => {
     const { target, sent } = await setup();
     await openAll(target, A, B, C);
-    expect(marked(sent)).toEqual([C]);
     target.interacted(A);
     await flush();
-    expect(marked(sent)).toEqual([A]);
-    expect(lastViews(sent)[C]).toEqual({ mogId: C, name: 'Finance', target: false, toast: false });
     target.pttDown(B);
-    expect(marked(sent)).toEqual([B]);
+    expect(target.current()).toBe(B);
+    expect(marked(sent)).toEqual([]);
+    expect(sent.some((v) => v.target || v.toast)).toBe(false);
   });
 
   it('[UX-28] a reloaded MOG view gets its marker state again', async () => {
@@ -209,7 +167,7 @@ describe('T1 talk-key target in the brain (#73)', () => {
     target.viewReady(B);
     expect(sent).toEqual([
       { mogId: A, name: 'Sales', target: false, toast: false },
-      { mogId: B, name: 'Ops', target: true, toast: false },
+      { mogId: B, name: 'Ops', target: false, toast: false },
     ]);
   });
 
@@ -218,7 +176,6 @@ describe('T1 talk-key target in the brain (#73)', () => {
     const t = createTalkTarget({
       send: (v) => void sent.push(v),
       setActive: async () => undefined,
-      after: () => () => undefined,
       identityOf: async () => {
         throw new Error('no store');
       },
@@ -226,7 +183,7 @@ describe('T1 talk-key target in the brain (#73)', () => {
     t.viewReady(A);
     await flush();
     t.pttDown(A);
-    expect(lastViews(sent)[A]).toEqual({ mogId: A, name: 'MOG', target: true, toast: true });
+    expect(lastViews(sent)[A]).toEqual({ mogId: A, name: 'MOG', target: false, toast: false });
   });
 
   /** A tracker whose `mog_set_active` is refused, as before #439 routes it. */
@@ -237,7 +194,6 @@ describe('T1 talk-key target in the brain (#73)', () => {
       setActive: async () => {
         throw { error: 'not_implemented' };
       },
-      after: () => () => undefined,
     });
     return { t, sent };
   }
@@ -252,7 +208,6 @@ describe('T1 talk-key target in the brain (#73)', () => {
     expect(t.interacted(A)).toBe(true);
     await flush();
     expect(t.current()).toBe(B);
-    expect(marked(sent)).toEqual([B]);
     expect(sent.slice(before).some((v) => v.mogId === A && v.target)).toBe(false);
   });
 
@@ -262,7 +217,6 @@ describe('T1 talk-key target in the brain (#73)', () => {
     const t = createTalkTarget({
       send: (v) => void sent.push(v),
       setActive: () => new Promise<void>((ok) => (answer = ok)),
-      after: () => () => undefined,
     });
     t.viewReady(A);
     t.viewReady(B);
@@ -270,11 +224,9 @@ describe('T1 talk-key target in the brain (#73)', () => {
     t.interacted(A);
     await flush();
     expect(t.current()).toBe(B);
-    expect(marked(sent)).toEqual([B]);
     answer();
     await flush();
     expect(t.current()).toBe(A);
-    expect(marked(sent)).toEqual([A]);
   });
 
   it('[MB-06a] [UX-28] a late mog_set_active answer does not move the target back to an older MOG', async () => {
@@ -284,7 +236,6 @@ describe('T1 talk-key target in the brain (#73)', () => {
     const t = createTalkTarget({
       send: (v) => void sent.push(v),
       setActive: () => new Promise<void>((ok) => void answers.push(ok)),
-      after: () => () => undefined,
     });
     t.viewReady(A);
     t.viewReady(B);
@@ -296,19 +247,17 @@ describe('T1 talk-key target in the brain (#73)', () => {
     answers.splice(0).forEach((ok) => ok());
     await flush();
     expect(t.current()).toBe(B);
-    expect(marked(sent)).toEqual([B]);
     // Rust has A next: when B closes, the target falls back to A, not to C.
     t.closed(B);
     expect(t.current()).toBe(A);
   });
 
   it('[MB-06a] [UX-28] a card load or focus moves the marker at once: Rust sees it too', async () => {
-    const { t, sent } = refused();
+    const { t } = refused();
     t.viewReady(A);
     t.viewReady(B);
     expect(t.interacted(A, 'focus')).toBe(true);
     expect(t.current()).toBe(A);
-    expect(marked(sent)).toEqual([A]);
   });
 
   it('[ui-4] [#603] reidentify forgets the cached identity and pushes the new colour to the open MOG', async () => {
@@ -320,7 +269,6 @@ describe('T1 talk-key target in the brain (#73)', () => {
     const t = createTalkTarget({
       send: (v) => void sent.push(v),
       setActive: async () => undefined,
-      after: () => () => undefined,
       identityOf: async (id) => (id === A ? { ...identity } : undefined),
     });
     t.viewReady(A);
@@ -339,7 +287,6 @@ describe('T1 talk-key target in the brain (#73)', () => {
     const t = createTalkTarget({
       send: (v) => void sent.push(v),
       setActive: async () => undefined,
-      after: () => () => undefined,
       identityOf: async (id) => {
         calls.push(id);
         return { name: 'Sales' };
@@ -358,7 +305,6 @@ describe('T1 talk-key target in the brain (#73)', () => {
     const t = createTalkTarget({
       send: (v) => void sent.push(v),
       setActive: async () => undefined,
-      after: () => () => undefined,
       identityOf: async (id) =>
         id === A ? { name: 'Sales', colorVariant: 'teal', home: 'sales-ws' } : undefined,
     });
@@ -367,7 +313,7 @@ describe('T1 talk-key target in the brain (#73)', () => {
     expect(sent.at(-1)).toEqual({
       mogId: A,
       name: 'Sales',
-      target: true,
+      target: false,
       toast: false,
       colorVariant: 'teal',
       home: 'sales-ws',
@@ -435,7 +381,6 @@ describe('wiring of the talk-key target (#73)', () => {
       setActive: async () => {
         throw { error: 'not_implemented' };
       },
-      after: () => () => undefined,
     });
     const bus = new BrainBus();
     wireTalkTarget(bus, t);
@@ -446,10 +391,8 @@ describe('wiring of the talk-key target (#73)', () => {
     bus.dispatch(input(`card-${A}`, A, 'chip_click', { chipId: 'x' }));
     await flush();
     expect(t.current()).toBe(B);
-    expect(marked(sent)).toEqual([B]);
     bus.dispatch(input(`card-${A}`, A, 'click', { action: VIEW_FOCUS }));
     expect(t.current()).toBe(A);
-    expect(marked(sent)).toEqual([A]);
   });
 
   it('[MB-06a] input from a MOG view the brain missed (brain restart) opens and targets it', async () => {
@@ -471,7 +414,7 @@ describe('wiring of the talk-key target (#73)', () => {
     bus.dispatch(ptt(A, 'cancel'));
     expect(sent).toEqual([]);
     bus.dispatch(ptt(A, 'down'));
-    expect(sent).toEqual([{ mogId: A, name: 'Sales', target: true, toast: true }]);
+    expect(sent).toEqual([{ mogId: A, name: 'Sales', target: false, toast: false }]);
   });
 
   it('[MB-06a] [MB-06b] hotkey:ptt down for a MOG the brain missed (brain restart) opens and targets it', async () => {
@@ -483,8 +426,7 @@ describe('wiring of the talk-key target (#73)', () => {
     await flush();
     expect(target.current()).toBe(C);
     expect(target.isOpen(C)).toBe(true);
-    expect(lastViews(sent)[C]).toMatchObject({ mogId: C, target: true, toast: true });
-    expect(marked(sent)).toEqual([C]);
+    expect(lastViews(sent)[C]).toMatchObject({ mogId: C, target: false, toast: false });
   });
 
   it('[MB-06a] a press with no open MOG (empty mogId, #562) opens and targets nothing', async () => {
@@ -497,14 +439,14 @@ describe('wiring of the talk-key target (#73)', () => {
   });
 
   it('[UX-28] [ARC-5] [ui-4] sends the target view to its own MOG and card windows only', async () => {
-    const view = { mogId: A, name: 'Sales', target: true, toast: false };
+    const view = { mogId: A, name: 'Sales', target: false, toast: false };
     await sendMogTarget(view);
     expect(core.emitTo).toHaveBeenCalledWith(`mog-${A}`, MOG_TARGET_EVENT, view);
     expect(core.emitTo).toHaveBeenCalledWith(`card-${A}`, MOG_TARGET_EVENT, view);
     expect(core.emitTo).toHaveBeenCalledTimes(2);
     expect(core.emit).not.toHaveBeenCalled();
     await expect(
-      sendMogTarget({ mogId: 'a b', name: 'x', target: true, toast: false }),
+      sendMogTarget({ mogId: 'a b', name: 'x', target: false, toast: false }),
     ).rejects.toThrow();
   });
 
