@@ -1198,6 +1198,10 @@ pub struct RecordingSettings {
     pub notes_endpoint: EndpointName,
     pub preset_instructions: Instructions,
     pub length_min: LengthMin,
+    /// ADR 0118: the one-time "Your call can still hear you." note was shown. A settings file
+    /// from before ADR 0118 has no such field, so it reads as false.
+    #[serde(default)]
+    pub held_note_shown: bool,
 }
 
 impl Default for RecordingSettings {
@@ -1210,6 +1214,7 @@ impl Default for RecordingSettings {
             notes_endpoint: EndpointName(RECORDING_DEFAULT_ENDPOINT.to_owned()),
             preset_instructions: Instructions(RECORDING_DEFAULT_INSTRUCTIONS.to_owned()),
             length_min: LengthMin::default(),
+            held_note_shown: false,
         }
     }
 }
@@ -1233,6 +1238,8 @@ pub struct RecordingSettingsPatch {
     pub preset_instructions: Option<Instructions>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub length_min: Option<LengthMin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_note_shown: Option<bool>,
 }
 
 impl RecordingSettings {
@@ -1246,6 +1253,7 @@ impl RecordingSettings {
             notes_endpoint,
             preset_instructions,
             length_min,
+            held_note_shown,
         } = patch;
         if let Some(v) = enabled {
             self.enabled = v;
@@ -1267,6 +1275,9 @@ impl RecordingSettings {
         }
         if let Some(v) = length_min {
             self.length_min = v;
+        }
+        if let Some(v) = held_note_shown {
+            self.held_note_shown = v;
         }
         self
     }

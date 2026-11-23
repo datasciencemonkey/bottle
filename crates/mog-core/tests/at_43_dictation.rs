@@ -33,7 +33,7 @@ const MOG: &str = "00000000-0000-4000-8000-0000000000a1";
 fn at_43_mog_06b_only_the_brain_may_call_insert_text() {
     let spec = ipc::command("insert_text").expect("insert_text is in the 4.5 table");
     assert_eq!(spec.windows, [WindowClass::Brain]);
-    let args = json!({"mogId": MOG, "text": "hello"});
+    let args = json!({"mogId": MOG, "text": "hello", "leaseId": "1"});
     for label in ["hub", "mog-a1", "card-a1"] {
         let err = ipc::handle(label, "insert_text", args.clone()).unwrap_err();
         assert!(
@@ -56,7 +56,7 @@ fn at_43_mog_06b_insert_text_takes_no_key_or_submit_field() {
         "keystrokes",
         "sendKeys",
     ] {
-        let mut args = json!({"mogId": MOG, "text": "hello"});
+        let mut args = json!({"mogId": MOG, "text": "hello", "leaseId": "1"});
         args[extra] = json!(true);
         let err = ipc::handle("brain", "insert_text", args).unwrap_err();
         assert!(
@@ -70,7 +70,7 @@ fn at_43_mog_06b_insert_text_takes_no_key_or_submit_field() {
 fn at_43_mog_06b_multi_line_text_is_one_argument() {
     // A multi-line text passes the gateway as one string, not as lines with a key between them:
     // the checks accept it (the R11 component pastes it), and the parsed text keeps every newline.
-    let args = json!({"mogId": MOG, "text": "line one\nline two\n"});
+    let args = json!({"mogId": MOG, "text": "line one\nline two\n", "leaseId": "1"});
     let err = ipc::handle("brain", "insert_text", args.clone()).unwrap_err();
     assert!(matches!(err, IpcError::NotImplemented { .. }), "{err:?}");
     let a: InsertTextArgs = serde_json::from_value(args).unwrap();
@@ -79,7 +79,7 @@ fn at_43_mog_06b_multi_line_text_is_one_argument() {
     let err = ipc::handle(
         "brain",
         "insert_text",
-        json!({"mogId": MOG, "text": ["line one", "line two"]}),
+        json!({"mogId": MOG, "text": ["line one", "line two"], "leaseId": "1"}),
     )
     .unwrap_err();
     assert!(matches!(err, IpcError::InvalidArgs { .. }), "{err:?}");
@@ -159,7 +159,7 @@ fn at_43_mog_06a_mog_06c_paste_inserts_with_no_enter_and_restores_the_clipboard(
         .dispatch(
             "brain",
             "insert_text",
-            json!({"mogId": MOG, "text": "line one\nline two"}),
+            json!({"mogId": MOG, "text": "line one\nline two", "leaseId": "1"}),
         )
         .unwrap();
     assert_eq!(reply, json!({"result": "inserted"}));
@@ -192,6 +192,10 @@ fn at_43_mog_06a_mog_06c_paste_inserts_with_no_enter_and_restores_the_clipboard(
     );
     // A view window still cannot reach it.
     assert!(gw
-        .dispatch("mog-a1", "insert_text", json!({"mogId": MOG, "text": "x"}))
+        .dispatch(
+            "mog-a1",
+            "insert_text",
+            json!({"mogId": MOG, "text": "x", "leaseId": "1"})
+        )
         .is_err());
 }

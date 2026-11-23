@@ -1014,6 +1014,9 @@ args!(SttTranscribeArgs {
 args!(InsertTextArgs {
     mog_id: MogId,
     text: String,
+    // ADR 0118 (UX slice 2): the capture lease of the hold. Rust pastes only into the app
+    // that had the focus when that lease was granted; else `target_changed`.
+    lease_id: LeaseRef,
 });
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

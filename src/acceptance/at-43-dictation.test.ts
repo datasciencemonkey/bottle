@@ -40,6 +40,7 @@ const input = (captureMode: CaptureMode): RouterInput => ({
 const utterance = (forceAsk: boolean): Utterance => ({
   mogId: MOG,
   text: SENTENCE,
+  leaseId: 'lease-1',
   forceAsk,
   insertionOn: true,
   input: input('ptt'),

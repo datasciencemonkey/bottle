@@ -58,6 +58,7 @@ export function createUtteranceHandler(
         {
           mogId: owned.mogId,
           text: u.text,
+          leaseId: u.segment.leaseId,
           forceAsk: u.forceAsk,
           insertionOn: deps.insertionOn(owned.mogId),
           input: { ...input, speakerTrack: 'you', captureMode: u.mode },

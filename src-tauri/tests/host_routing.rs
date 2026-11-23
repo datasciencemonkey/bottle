@@ -650,7 +650,7 @@ fn sec_03_every_rejection_is_only_an_error_code() {
         (
             "brain",
             "insert_text",
-            json!({"mogId": "a1", "text": SECRET}),
+            json!({"mogId": "a1", "text": SECRET, "leaseId": "1"}),
         ),
         // a view that speaks for another MOG
         (

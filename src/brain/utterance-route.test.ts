@@ -28,6 +28,7 @@ const input: RouterInput = {
 const utterance = (over: Partial<Utterance> = {}): Utterance => ({
   mogId: MOG,
   text: SENTENCE,
+  leaseId: 'lease-1',
   forceAsk: false,
   insertionOn: true,
   input,

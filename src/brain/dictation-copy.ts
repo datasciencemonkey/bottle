@@ -34,6 +34,7 @@ const REASONS: Record<InsertFailure, string> = {
   no_focus: 'no text field has focus',
   secure_field: 'the field is a password field',
   host_failed: 'Bottle could not reach the app',
+  target_changed: 'the app changed after you started',
 };
 
 /** The `<reason>` of the Appendix E line "Could not insert: <reason>" (MOG-06d). */
