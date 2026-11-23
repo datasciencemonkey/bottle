@@ -515,3 +515,34 @@ fn rec_layout_file_link_names_the_file_and_opens_the_strict_folder_link() {
         );
     }
 }
+
+#[test]
+fn adr_0118_a_settings_file_from_before_held_note_loads_and_saves_with_the_flag_off() {
+    use mog_core::recording::RecordingSettingsStore;
+    let dir = std::env::temp_dir().join(format!("bottle-rec-held-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(SETTINGS_FILE);
+    let old = json!({
+        "enabled": true,
+        "consentAck": true,
+        "storage": {"kind": "volume", "root": "/Volumes/c/s/v"},
+        "transcribeEndpoint": "databricks-gemini-3-8-flash",
+        "notesEndpoint": "databricks-claude-sonnet-5-5",
+        "presetInstructions": "Write short notes in Markdown.",
+        "lengthMin": 45
+    });
+    std::fs::write(&path, serde_json::to_vec(&old).unwrap()).unwrap();
+    let store = JsonSettingsStore::new(&path);
+    let s = store.load().unwrap();
+    assert!(
+        s.enabled && s.consent_ack && !s.held_note_shown,
+        "the old file keeps its choices"
+    );
+    store.save(&s).unwrap();
+    let on_disk: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(on_disk["heldNoteShown"], json!(false));
+    assert_eq!(on_disk["lengthMin"], json!(45));
+    let _ = std::fs::remove_dir_all(&dir);
+}

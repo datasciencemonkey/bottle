@@ -84,7 +84,7 @@ describe('the utterance hook of the capture lifecycle (#59, #73)', () => {
     await s.handle(captured());
     expect(s.calls).toEqual(['route', 'insert_text']);
     expect(s.routed[0]).toMatchObject({ text: SENTENCE, mogId: A });
-    expect(s.inserted).toEqual([{ mogId: A, text: SENTENCE }]);
+    expect(s.inserted).toEqual([{ mogId: A, text: SENTENCE, leaseId: 'lease-1' }]);
     // ADR 0098: the pop-up's Ask Genie fallback of the exact dictated text. T3 releases the owner.
     expect(s.asks).toHaveLength(1);
     expect(s.asks[0]).toMatchObject({

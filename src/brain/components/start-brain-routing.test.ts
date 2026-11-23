@@ -91,7 +91,14 @@ describe('startBrain utterance routing (#163)', () => {
     expect(input.profile).toBe('fake-home');
     const dictate = () =>
       routeUtterance(
-        { mogId: MOG, text: SENTENCE, leaseId: 'lease-1', forceAsk: false, insertionOn: d.insertionOn(MOG), input },
+        {
+          mogId: MOG,
+          text: SENTENCE,
+          leaseId: 'lease-1',
+          forceAsk: false,
+          insertionOn: d.insertionOn(MOG),
+          input,
+        },
         d.route,
       );
     expect(await dictate()).toMatchObject({ route: 'chip', dictated: { route: 'inserted' } });

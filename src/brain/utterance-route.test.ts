@@ -69,7 +69,9 @@ describe('utterance route (#59)', () => {
     const r = await routeUtterance(utterance(), d);
     expect(r).toMatchObject({ route: 'chip', dictated: { route: 'inserted' } });
     expect(calls).toEqual(['route', 'insert_text']);
-    expect(inserted).toEqual([{ mogId: MOG, text: 'Hi Sam, the deck is attached.' }]);
+    expect(inserted).toEqual([
+      { mogId: MOG, text: 'Hi Sam, the deck is attached.', leaseId: 'lease-1' },
+    ]);
   });
 
   it('[RTR-01c] an empty cleaned text inserts the STT text', async () => {
@@ -115,7 +117,7 @@ describe('utterance route (#59)', () => {
         dictated: { route: 'inserted' },
       });
       expect(calls).toEqual(['route', 'insert_text']);
-      expect(inserted).toEqual([{ mogId: MOG, text: asked }]);
+      expect(inserted).toEqual([{ mogId: MOG, text: asked, leaseId: 'lease-1' }]);
       // The fallback chip holds the exact text that was dictated, not a rewritten question.
       if (r.route !== 'chip') throw new Error('not a chip');
       expect(r.decision.genie_question).toBe(asked);
@@ -132,7 +134,7 @@ describe('utterance route (#59)', () => {
       if (r.route !== 'chip') throw new Error('not a chip');
       expect(r.decision.genie_question).toBe(SENTENCE);
       expect(calls).toEqual(['route', 'insert_text']);
-      expect(inserted).toEqual([{ mogId: MOG, text: SENTENCE }]);
+      expect(inserted).toEqual([{ mogId: MOG, text: SENTENCE, leaseId: 'lease-1' }]);
     }
   });
 

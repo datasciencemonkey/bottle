@@ -39,9 +39,11 @@ text goes to the wrong app.
 ### The paste target lock
 
 16. `insert_text` takes the `leaseId` of the capture that made the text.
-17. When R2 grants a talk-key or hands-free lease, Rust records the app that has the focus.
+17. At the talk-key down, or the hands-free start, Rust records the app that has the focus. R2 binds that
+    record to the lease at grant. With no record, the paste fails closed.
 18. If the focused app at paste time is not that app, `insert_text` answers `target_changed`.
-19. A `target_changed` answer writes nothing to the clipboard and sends no key event.
+19. A `target_changed` answer sends no key event. Before the clipboard write, it writes nothing.
+    During the settle wait, Rust restores the clipboard by the ADR 0048 rules.
 20. An unknown or expired lease, or a lease of another MOG, also answers `target_changed`.
 21. The app record never crosses IPC and never goes into a log.
 
@@ -61,3 +63,5 @@ Until UX slice 2 lands, Rust accepts the `leaseId` and does not check it yet.
 - The recording knob, the consent notice and the Rust knob check do not change.
 - The mic closes when the recording and the hold both end.
 - A user who changes apps during a hold gets Copy instead of a paste. This is the safe direction.
+- A downgrade to a build from before this ADR cannot read a settings file with `heldNoteShown`. It reads the
+  recording settings as the defaults (knob off, consent asked again). This fails safe. The release notes say so.

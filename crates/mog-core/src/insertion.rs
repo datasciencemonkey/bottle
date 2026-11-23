@@ -47,7 +47,7 @@ pub enum InsertOutcome {
     /// The focused field is a secure (password) field.
     SecureField,
     /// ADR 0118 (UX slice 2): the focused app is not the app that had the focus when the
-    /// capture lease was granted. Nothing was pasted and the clipboard is unchanged.
+    /// capture lease was granted. No key event was sent; the clipboard is as ADR 0048 restores it.
     TargetChanged,
 }
 
