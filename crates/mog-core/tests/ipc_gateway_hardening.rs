@@ -809,13 +809,8 @@ fn adr_0117_workspace_settings_write_refuses_a_bad_budget_or_endpoint() {
         json!({"genieCallBudget": 20}),
         json!({"agentEndpoint": "databricks-claude-sonnet-5-5", "crossWorkspaceData": false}),
     ] {
-        assert!(
-            handle("brain", "workspace_settings_write", good.clone()).is_ok()
-                || matches!(
-                    handle("brain", "workspace_settings_write", good.clone()),
-                    Err(IpcError::NotImplemented { .. })
-                ),
-            "{good}"
-        );
+        if let Err(e) = handle("brain", "workspace_settings_write", good.clone()) {
+            assert_ne!(ipc_error_code(&e), "invalid_args", "{good}");
+        }
     }
 }

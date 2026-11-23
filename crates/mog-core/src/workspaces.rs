@@ -44,9 +44,9 @@ pub const FILE_NAME: &str = "workspaces.json";
 pub const SCHEMA_VERSION: u32 = 1;
 /// The default D9 agent model endpoint.
 pub const DEFAULT_ENDPOINT: &str = "databricks-claude-sonnet-5-5";
-/// The sign-in probes that run at once.
+/// The sign-in probes that run at once, across all calls.
 pub const PROBE_PARALLEL: usize = 4;
-/// One probe waits at most this long.
+/// One `workspace_list` call waits at most this long for its probes.
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 /// The largest file that is read.
 const MAX_FILE_BYTES: usize = 256 * 1024;
@@ -107,7 +107,7 @@ fn is_auth_error(e: &CoreError) -> bool {
     matches!(
         e,
         CoreError::Unavailable {
-            reason: "login_required" | "auth_expired" | "token_unusable" | "token_reply_invalid",
+            reason: "login_required" | "auth_expired" | "token_unusable",
             ..
         }
     )
@@ -208,6 +208,49 @@ fn atomic_write(dir: &Path, path: &Path, bytes: &[u8]) -> CoreResult<()> {
     Ok(())
 }
 
+/// A counting semaphore with a deadline: the slots of the sign-in probes.
+struct Slots {
+    free: Mutex<usize>,
+    freed: std::sync::Condvar,
+}
+
+impl Slots {
+    fn new(n: usize) -> Arc<Self> {
+        Arc::new(Self {
+            free: Mutex::new(n),
+            freed: std::sync::Condvar::new(),
+        })
+    }
+
+    /// Take a slot, or give up at `deadline`.
+    fn acquire(&self, deadline: Instant) -> bool {
+        let mut free = self.free.lock().unwrap_or_else(|p| p.into_inner());
+        while *free == 0 {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return false;
+            }
+            free = self
+                .freed
+                .wait_timeout(free, left)
+                .unwrap_or_else(|p| p.into_inner())
+                .0;
+        }
+        *free -= 1;
+        true
+    }
+}
+
+/// Gives the slot back when the probe thread ends, on every path.
+struct SlotGuard(Arc<Slots>);
+
+impl Drop for SlotGuard {
+    fn drop(&mut self) {
+        *self.0.free.lock().unwrap_or_else(|p| p.into_inner()) += 1;
+        self.0.freed.notify_one();
+    }
+}
+
 // ---------- the store ----------
 
 /// The `workspaces.json` store and the `workspace_*` component.
@@ -218,6 +261,7 @@ pub struct WorkspaceStore {
     /// R6, bound after R8 is built (R8 needs this store as its gate first).
     sign_in: OnceLock<Arc<dyn SignInSource>>,
     probe_timeout: Duration,
+    slots: Arc<Slots>,
     /// One read-modify-write at a time.
     lock: Mutex<()>,
 }
@@ -242,6 +286,7 @@ impl WorkspaceStore {
             profiles,
             sign_in: OnceLock::new(),
             probe_timeout: PROBE_TIMEOUT,
+            slots: Slots::new(PROBE_PARALLEL),
             lock: Mutex::new(()),
         }
     }
@@ -301,7 +346,8 @@ impl WorkspaceStore {
                 .push(item.id.clone());
         }
         let lamp_mog_id = list.items.iter().map(|i| i.id.clone()).min();
-        let home = (groups.len() == 1)
+        // FLAG 5: an unreadable config may hide another home, so no home is picked then.
+        let home = (groups.len() == 1 && list.unreadable.is_empty())
             .then(|| groups.keys().next().cloned())
             .flatten();
         let workspaces = groups
@@ -438,27 +484,33 @@ impl WorkspaceStore {
             .filter(|(_, r)| r.sign_in == WorkspaceSignIn::Unknown)
             .map(|(i, _)| i)
             .collect();
-        for batch in todo.chunks(PROBE_PARALLEL) {
-            let (tx, rx) = mpsc::channel();
-            for &i in batch {
-                let (tx, source) = (tx.clone(), source.clone());
-                let (profile, host) = (rows[i].profile.clone(), rows[i].host.clone());
-                std::thread::spawn(move || {
-                    let _ = tx.send((i, source.probe(&profile, &host)));
-                });
+        // One deadline for the whole call. A slot goes back only when its probe thread really
+        // returns, even late, so no more than PROBE_PARALLEL probes ever run at once.
+        let deadline = Instant::now() + self.probe_timeout;
+        let (tx, rx) = mpsc::channel();
+        let mut started = 0;
+        for &i in &todo {
+            if !self.slots.acquire(deadline) {
+                break;
             }
-            drop(tx);
-            let deadline = Instant::now() + self.probe_timeout;
-            for _ in batch {
-                let left = deadline.saturating_duration_since(Instant::now());
-                match rx.recv_timeout(left) {
-                    Ok((i, Ok(()))) => rows[i].sign_in = WorkspaceSignIn::SignedIn,
-                    Ok((i, Err(e))) if is_auth_error(&e) => {
-                        rows[i].sign_in = WorkspaceSignIn::Expired;
-                    }
-                    Ok(_) => {}
-                    Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => break,
+            started += 1;
+            let (tx, source, slots) = (tx.clone(), source.clone(), self.slots.clone());
+            let (profile, host) = (rows[i].profile.clone(), rows[i].host.clone());
+            std::thread::spawn(move || {
+                let _slot = SlotGuard(slots);
+                let _ = tx.send((i, source.probe(&profile, &host)));
+            });
+        }
+        drop(tx);
+        for _ in 0..started {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match rx.recv_timeout(left) {
+                Ok((i, Ok(()))) => rows[i].sign_in = WorkspaceSignIn::SignedIn,
+                Ok((i, Err(e))) if is_auth_error(&e) => {
+                    rows[i].sign_in = WorkspaceSignIn::Expired;
                 }
+                Ok(_) => {}
+                Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => break,
             }
         }
     }

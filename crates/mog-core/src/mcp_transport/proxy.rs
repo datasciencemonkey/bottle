@@ -65,6 +65,7 @@ use crate::ipc::JsonObject;
 use crate::loopback::{LoopbackRequest, LoopbackResponse};
 use crate::token_guard::scrub_json;
 use crate::types::{TagApp, TagOp, Tags};
+use crate::workspaces::WorkspaceGate;
 
 /// The HTTP path of the proxy endpoint.
 pub const PROXY_PATH: &str = "/mcp";
@@ -124,6 +125,9 @@ pub struct GenieProxyDeps {
     /// G-11a..c, G-12b: the in-flight agent asks. Clones of these deps share it, so one deps
     /// value for the whole host counts the asks of every session.
     pub asks: Arc<AgentAsks>,
+    /// ADR 0117 (FLAG 7): the workspace allow-list. With a gate, a `genie_ask` for a profile that
+    /// is neither home nor available is refused (`workspace_not_available`) before any send.
+    pub gate: Option<Arc<dyn WorkspaceGate>>,
 }
 
 impl fmt::Debug for GenieProxyDeps {
@@ -142,7 +146,14 @@ impl GenieProxyDeps {
             targets,
             call_timeout: None,
             asks: Arc::new(AgentAsks::default()),
+            gate: None,
         }
+    }
+
+    /// The same deps with the workspace allow-list `gate` (ADR 0117, FLAG 7).
+    pub fn with_gate(mut self, gate: Option<Arc<dyn WorkspaceGate>>) -> Self {
+        self.gate = gate;
+        self
     }
 
     /// The same deps with the ask ledger on `clock` (for the G-12b give-up time).
@@ -404,6 +415,17 @@ impl GenieProxy {
             Ok(t) => t,
             Err(code) => return refuse(code),
         };
+        // ADR 0117, FLAG 7: an ask goes only to the home or an available workspace. Before the
+        // in-flight ledger, so a refused ask takes no place and sends nothing.
+        if tool_kind(contract.name) == Kind::Ask
+            && self
+                .deps
+                .gate
+                .as_ref()
+                .is_some_and(|g| !g.allows(&target.profile))
+        {
+            return refuse("workspace_not_available");
+        }
         // G-06b, G-07a: the MOG's warehouse only; the agent's `_meta` is never read.
         let meta: Option<JsonObject> = target
             .warehouse_id

@@ -156,10 +156,14 @@ pub fn install(handle: &tauri::AppHandle<tauri::Wry>) -> CoreResult<()> {
         None => Arc::new(StubCliRunner),
     };
     // ADR 0117: `genie_ask` only for home and available profiles. A missing workspace host is
-    // not managed in the app; then R8 has no gate (host tests only).
+    // not managed in the app; then the gate is empty and allows nothing (fail closed). Only the
+    // test builders have no gate.
     let workspaces = handle.try_state::<WorkspacesHost>();
-    let gate = workspaces.as_ref().map(|w| w.gate());
-    let host = build_with_gate(bucket, hosts, cli, gate)?;
+    let gate = match &workspaces {
+        Some(w) => w.gate(),
+        None => WorkspacesHost::default().gate(),
+    };
+    let host = build_with_gate(bucket, hosts, cli, Some(gate))?;
     if let Some(w) = &workspaces {
         w.bind_sign_in(host.sign_in_source());
     }

@@ -32,6 +32,7 @@ use mog_core::http_transport::Pause;
 use mog_core::mcp_transport::proxy::{GenieProxyDeps, GenieTarget, GenieTargets};
 use mog_core::mcp_transport::{McpCall, McpLimits, McpSeams, McpTransport, ReqwestMcpTransport};
 use mog_core::request_identity::{BottleIdentity, TAGS_HEADER};
+use mog_core::workspaces::WorkspaceGate;
 use serde_json::{json, Value};
 
 /// A wait bound for a broken run only; every wait ends on an event first.
@@ -181,7 +182,12 @@ impl Rig {
     }
 }
 
-fn rig_with(s: &FakeMcp, warehouse: Option<&str>, targets: Option<Arc<dyn GenieTargets>>) -> Rig {
+fn rig_with(
+    s: &FakeMcp,
+    warehouse: Option<&str>,
+    targets: Option<Arc<dyn GenieTargets>>,
+    gate: Option<Arc<dyn WorkspaceGate>>,
+) -> Rig {
     let broker = Arc::new(FakeBroker::default());
     let hosts = Hosts::one(&s.origin());
     let pause = Arc::new(SimPause::default());
@@ -222,7 +228,9 @@ fn rig_with(s: &FakeMcp, warehouse: Option<&str>, targets: Option<Arc<dyn GenieT
         .with_audit(log.clone())
         .with_approvals(approvals.clone())
         .with_genie_proxy(
-            GenieProxyDeps::new(transport, targets).with_ask_clock(Arc::new(pause.clock.clone())),
+            GenieProxyDeps::new(transport, targets)
+                .with_ask_clock(Arc::new(pause.clock.clone()))
+                .with_gate(gate),
         );
     let server = BottleMcpServer::start(MOG, &deps).expect("the session listeners bind");
     Rig {
@@ -239,7 +247,7 @@ fn rig_with(s: &FakeMcp, warehouse: Option<&str>, targets: Option<Arc<dyn GenieT
 }
 
 fn rig(s: &FakeMcp) -> Rig {
-    rig_with(s, None, None)
+    rig_with(s, None, None, None)
 }
 
 /// What the proxy answered: the HTTP status, the JSON body and every raw byte.
@@ -469,7 +477,7 @@ fn rtr_29d_rule_5_the_agent_cannot_pick_the_profile() {
 #[test]
 fn g_06b_g_07a_warehouse_comes_from_the_mog_and_the_agent_meta_is_dropped() {
     let s = genie_one(|_| None);
-    let r = rig_with(&s, Some("abc123"), None);
+    let r = rig_with(&s, Some("abc123"), None, None);
     let ask = r.rpc(json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call",
         "params": {"name": "genie_ask", "arguments": ask_args(),
                    "_meta": {"warehouse_id": "evil", "progressToken": 5}}}));
@@ -675,7 +683,7 @@ fn rtr_27_upstream_failures_reach_the_harness_as_content_free_codes() {
 #[test]
 fn rtr_27_a_mog_without_a_genie_target_sends_nothing() {
     let s = genie_one(|_| None);
-    let r = rig_with(&s, None, Some(Arc::new(NoTarget)));
+    let r = rig_with(&s, None, Some(Arc::new(NoTarget)), None);
     let text = r.call("genie_ask", ask_args()).tool_error_text();
     assert_eq!(text, "genie_target_unavailable");
     assert!(s.seen().is_empty());
@@ -1004,4 +1012,50 @@ fn rtr_29b_g_11a_a_capped_ask_keeps_its_approval() {
     r.call("genie_cancel_response", cancel);
     assert_eq!(r.rpc_unapproved(ask).result()["isError"], json!(false));
     assert_eq!(asks_sent(&s), 3);
+}
+
+// ---------- ADR 0117, FLAG 7: the workspace allow-list ----------
+
+/// A gate that allows a fixed set of profiles.
+#[derive(Debug)]
+struct Allow(Vec<&'static str>);
+
+impl WorkspaceGate for Allow {
+    fn allows(&self, profile: &str) -> bool {
+        self.0.contains(&profile)
+    }
+}
+
+#[test]
+fn adr_0117_an_agent_ask_for_a_profile_that_is_not_available_sends_nothing_and_keeps_its_approval()
+{
+    let s = running_genie("completed");
+    let r = rig_with(&s, None, None, Some(Arc::new(Allow(vec![]))));
+    let ask = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+                     "params": {"name": "genie_ask", "arguments": ask_args()}});
+    assert_eq!(
+        r.rpc(ask.clone()).tool_error_text(),
+        "workspace_not_available"
+    );
+    assert_eq!(asks_sent(&s), 0, "nothing was sent");
+    assert!(tool_calls(&s).is_empty());
+    // The approval is not used up, and no in-flight place was taken.
+    assert!(r.approvals.take(MOG, QUESTION));
+    r.approvals.approve(MOG, QUESTION);
+    // Polls and cancels of calls in flight are not gated.
+    assert_eq!(
+        r.call("genie_poll_response", poll_args()).result()["isError"],
+        json!(false)
+    );
+}
+
+#[test]
+fn adr_0117_an_agent_ask_for_an_available_profile_goes_through() {
+    let s = running_genie("completed");
+    let r = rig_with(&s, None, None, Some(Arc::new(Allow(vec![PROFILE]))));
+    assert_eq!(
+        r.call("genie_ask", ask_args()).result()["isError"],
+        json!(false)
+    );
+    assert_eq!(asks_sent(&s), 1);
 }

@@ -175,6 +175,19 @@ fn migration_never_changes_an_old_config_and_writes_a_private_file() {
 }
 
 #[test]
+fn flag_5_an_unreadable_config_means_no_home_is_picked() {
+    let s = Scratch::new();
+    put_config(&s.configs(), "a", "A", "p1");
+    // A config file that does not pass the checks may hide a second home.
+    fs::write(s.0.join("mogs/bad.json"), b"{ not a config").unwrap();
+    let w = store(&s, vec![profile("p1", true)]);
+    let l = w.list(false).unwrap();
+    assert_eq!(l.home, None);
+    assert_eq!(l.workspaces.len(), 1);
+    assert_eq!(l.lamp_mog_id.as_deref(), Some("a"));
+}
+
+#[test]
 fn an_existing_file_is_not_migrated_again() {
     let s = Scratch::new();
     put_config(&s.configs(), "a", "A", "p1");
@@ -325,6 +338,49 @@ fn refresh_runs_at_most_four_probes_at_once() {
     assert_eq!(r6.probed.lock().unwrap().len(), 9);
     let peak = r6.peak.load(Ordering::SeqCst);
     assert!((1..=PROBE_PARALLEL).contains(&peak), "peak {peak}");
+}
+
+#[test]
+fn probes_slower_than_the_timeout_never_run_more_than_four_at_once_across_calls() {
+    let s = Scratch::new();
+    let names: Vec<String> = (0..10).map(|i| format!("p{i}")).collect();
+    let w = store(&s, names.iter().map(|n| profile(n, true)).collect())
+        .with_probe_timeout(Duration::from_millis(30));
+    let r6 = Arc::new(FakeR6 {
+        delay: Duration::from_millis(250),
+        ..FakeR6::default()
+    });
+    w.bind_sign_in(r6.clone());
+    let started = Instant::now();
+    // Each call ends at its one deadline, and its late probes keep their slots.
+    for _ in 0..3 {
+        let l = w.list(true).unwrap();
+        assert!(l
+            .workspaces
+            .iter()
+            .all(|r| r.sign_in == WorkspaceSignIn::Unknown));
+    }
+    assert!(
+        started.elapsed() < Duration::from_millis(900),
+        "{:?}",
+        started.elapsed()
+    );
+    // Let the late probes return.
+    std::thread::sleep(Duration::from_millis(700));
+    let peak = r6.peak.load(Ordering::SeqCst);
+    assert!((1..=PROBE_PARALLEL).contains(&peak), "peak {peak}");
+}
+
+#[test]
+fn a_network_style_token_reply_error_is_not_expired() {
+    let s = Scratch::new();
+    let w = store(&s, vec![profile("p", true)]);
+    w.bind_sign_in(Arc::new(FakeR6 {
+        answers: HashMap::from([("p".to_owned(), Err("token_reply_invalid"))]),
+        ..FakeR6::default()
+    }));
+    let l = w.list(true).unwrap();
+    assert_eq!(row(&l, "p").sign_in, WorkspaceSignIn::Unknown);
 }
 
 #[test]

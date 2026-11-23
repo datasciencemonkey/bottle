@@ -43,7 +43,8 @@ this change.
 1. Read every readable MOG config. Group the configs by `binding.home`, with the ids sorted.
 2. Each group becomes one available workspace (AC-1.1, AC-1.3).
 3. `lampMogId` is the lowest config id.
-4. `home` is set only if exactly one distinct profile exists. Otherwise `home` is `null`.
+4. `home` is set only if exactly one distinct profile exists and every config file was readable. Otherwise
+   `home` is `null`: an unreadable config may hide another home.
 5. The old configs are not modified. The agent settings start at D1 off, D2 10 and the endpoint
    `databricks-claude-sonnet-5-5`.
 
@@ -61,20 +62,26 @@ user's own connect). `workspace_make_home` needs a supported profile and sets it
 
 - `McpCallComponent` takes an optional `WorkspaceGate`. For tool `genie_ask` it asks `allows(profile)` before it
   builds the call, so R8 sends nothing for a refused profile. The check is on the component, so it holds on every
-  path (with or without an `agentCall` marker, any meta or timeout).
+  brain path (with or without an `agentCall` marker, any meta or timeout).
+- The agent's Genie proxy (`GenieProxyDeps::with_gate`) asks the same gate for `genie_ask`, before the in-flight
+  ledger, and gives the user's approval back. In the app, the agent host takes the gate when slice 2 wires it.
 - `allows` is true for the home profile and for a profile that is switched on. A profile that is in the CLI config
   but has no entry (a new connection) is off. With no home, only the available profiles are allowed.
 - It fails closed: a store that cannot be read allows nothing, and a host with no store allows nothing.
 - Polls, cancels and query results of calls that are in flight still run (they are other tools). `tools/list` is
-  not gated.
+  not gated. In slice 1 polls and query results are not gated at all. This is an accepted risk for now: before
+  the agent slices give the model these tools, they will be gated by recorded (profile, conversation) pairs.
 - The refusal code is `workspace_not_available` (AC-1.7).
 
 ### Sign-in state
 
 `workspace_list` merges the T7 profiles with the store. The state comes from R6 `token_state` (a cache that reads
 `unknown` until the first token use). With `refresh`, the store probes each supported `unknown` profile with
-`with_token` on an empty closure (so no token leaves R6): at most 4 at a time, 10 s each. A token failure that
-means "log in again" is `expired`. Any other failure, or a timeout, leaves the row `unknown`.
+`with_token` on an empty closure (so no token leaves R6). A counting semaphore holds the probes to 4 at a time. A
+slot comes back only when its probe thread returns, even late. One `workspace_list` call has one overall deadline
+of 10 s. A row whose probe is not done then stays `unknown`. A token failure that means "log in again" is
+`expired`. Any other failure, or a timeout, leaves the row `unknown`. Until R6 separates network errors from
+sign-in errors, `expired` means "the CLI could not give a token".
 
 ### Host order
 
@@ -106,4 +113,5 @@ means "log in again" is `expired`. Any other failure, or a timeout, leaves the r
 
 - One lamp. The old MOGs are workspaces with their name, colour, history and memory.
 - The agent loop (slices 2 to 4) can rely on the allow-list in R8 and on the agent settings in the same file.
-- Old MOGs that had a second window no longer start at launch (the brain opens only `lampMogId`).
+- No MOG window opens at launch. The brain opens the lamp (`lampMogId`) only on the talk key or a hub action,
+  because one window is the cap.
