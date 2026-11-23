@@ -21,5 +21,7 @@ GitHub-hosted `macos-15` runners held App CI jobs in the queue for hours. An ear
 - A macOS regression is caught only by the local run of `scripts/pre-push.sh`. The developer must run it on a Mac before each push and paste its summary into the PR.
 - No CI artifact contains a DMG. The release gate (rel-03, #170) must run `scripts/package-macos.sh` on a Mac with the Apple secrets.
 - The Ubuntu checks leg runs after merge (push to main) and nightly, so a Linux-only break can reach main. The fix is a follow-up PR.
+- A PR with more than 300 changed files can skip App CI; run it by dispatch.
+- The offline build and golden set still build on Linux for each PR.
 - The Linux leg adds coverage for the shared Rust and TS code. It does not test AppKit or the Windows hook code.
 - To bring macOS back to CI, add a macOS runner to the matrices in `app-ci.yml`, and restore the macOS sign and notarize steps from `scripts/package-macos.sh`. Then update the tests in `scripts/tests/test_app_ci_workflow.py`.

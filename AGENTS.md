@@ -157,7 +157,9 @@ Rules of the boundary:
   `REVIEW: APPROVED` with `Head: <sha>`, or its findings. After a rebase, get a new approval or post a range-diff
   note that shows only context changed.
 - **Merging:** only the orchestrator merges. Agents never merge. The merge gate requires an approval on the head,
-  green Windows CI (a docs-only PR has no App CI run; Linux runs on main and nightly), a passing local macOS squash suite, and no file overlap with recent main changes.
+  green App CI on the head (Windows Checks, and the Windows and Linux offline build and golden set; Linux
+  Checks run on push to main and nightly; a docs-only PR has no App CI run), a passing local macOS squash
+  suite, and no file overlap with recent main changes.
 - **Contract files** (owned by the contract lead; change them only in a PR that the lead authorizes):
   `src/shared/ipc.ts`, `src/shared/interfaces.ts`, `crates/mog-core/src/types.rs`, `crates/mog-core/src/ipc.rs`,
   `src-tauri/src/ipc.rs`, `src-tauri/schemas/`, and migrations.

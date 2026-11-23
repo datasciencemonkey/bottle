@@ -113,7 +113,7 @@ def test_nfr_13a_docs_only_pull_requests_skip_app_ci(app_ci):
     on = app_ci.get("on", app_ci.get(True))
     assert "paths-ignore" not in on["pull_request"], "paths and paths-ignore cannot be mixed"
     for changed in (["docs/adr/0045-ci-macos-local.md"], ["docs/VISION.md"], ["research/message-board.md"],
-                    ["README.md", "AGENTS.md"], ["crates/mog-core/README.md"], ["requirements.html"]):
+                    ["README.md", "AGENTS.md"], ["requirements.html"]):
         assert not pr_runs_for(app_ci, changed), f"a PR that changes only {changed} must skip App CI"
 
 
@@ -125,6 +125,16 @@ def test_nfr_13a_pull_requests_run_app_ci_for_code_and_files_that_tests_read(app
                     ["docs/release/RELEASE-CHECKLIST.md"], ["docs/spikes/SP-01.md"],
                     ["docs/VISION.md", "src/main.ts"]):
         assert pr_runs_for(app_ci, changed), f"a PR that changes {changed} must run App CI"
+
+
+def test_nfr_13a_every_markdown_file_in_a_code_folder_triggers_app_ci(app_ci):
+    """[NFR-13a] No tracked .md file under scripts, src, tests, crates or src-tauri skips App CI."""
+    out = subprocess.run(["git", "ls-files", "scripts", "src", "tests", "crates", "src-tauri"], cwd=ROOT,
+                         capture_output=True, text=True, check=True).stdout.splitlines()
+    md = [f for f in out if f.endswith(".md")]
+    assert md, "no markdown fixture found; the test checks nothing"
+    skipped = [f for f in md if not pr_runs_for(app_ci, [f])]
+    assert not skipped, f"these files would skip App CI: {skipped}"
 
 
 def test_nfr_13a_paths_filter_applies_to_pull_requests_only(app_ci):

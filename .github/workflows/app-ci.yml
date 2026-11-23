@@ -7,8 +7,9 @@
 # Runner policy (ADR 0045): GitHub's hosted macOS queue held runs for hours,
 # so no job runs on macOS. Two rules keep the hosted-runner load low:
 #   1. A pull request that changes only docs skips App CI. The pull_request trigger lists the
-#      paths that start a run: every path except docs, markdown and requirements.html, plus the
-#      docs and markdown files that tests read (the requirements, the notices, docs/tests,
+#      paths that start a run: every path except docs, research, markdown and requirements.html, plus
+#      the code folders (scripts, src, tests, crates, src-tauri) and the docs and markdown files
+#      that tests read (the requirements, the notices, docs/tests,
 #      docs/release, docs/evidence, docs/admin, docs/user, docs/spikes, docs/shots). Push to
 #      main, the nightly schedule and dispatch always run everything. repo-checks.yml still runs
 #      on every pull request.
@@ -32,6 +33,11 @@ on:
       - "!research/**"
       - "!**/*.md"
       - "!requirements.html"
+      - "scripts/**"
+      - "src/**"
+      - "tests/**"
+      - "crates/**"
+      - "src-tauri/**"
       - "research/final-requirements.md"
       - "THIRD_PARTY_NOTICES.md"
       - "docs/tests/**"
