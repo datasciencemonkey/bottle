@@ -65,6 +65,7 @@ pub mod token_guard;
 pub mod types;
 pub mod window_host;
 pub mod wipe;
+pub mod workspaces;
 
 /// The crate version, so hosts can check which core they link.
 pub fn core_version() -> &'static str {

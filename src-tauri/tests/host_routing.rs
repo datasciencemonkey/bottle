@@ -287,7 +287,8 @@ fn arc_3_mb_03b_window_errors_map_to_ipc_codes() {
 }
 
 #[test]
-fn mb_03b_the_ninth_mog_window_is_refused_with_mog_cap_reached() {
+fn mb_03b_the_second_mog_window_is_refused_with_mog_cap_reached() {
+    // ADR 0117, AC-1.9: one MOG.
     use tauri::test::mock_app;
     let app = mock_app();
     let host = TauriWindowHost::new(app.handle().clone());
@@ -299,11 +300,9 @@ fn mb_03b_the_ninth_mog_window_is_refused_with_mog_cap_reached() {
             json!({ "mogId": id }),
         )
     };
-    for n in 0..8 {
-        assert_eq!(open(format!("m{n}")), Ok(json!({})));
-    }
-    assert_eq!(open("m9".into()), err("mog_cap_reached"));
-    assert_eq!(host.active_mogs(), 8);
+    assert_eq!(open("m0".into()), Ok(json!({})));
+    assert_eq!(open("m1".into()), err("mog_cap_reached"));
+    assert_eq!(host.active_mogs(), 1);
 }
 
 #[test]
@@ -1499,7 +1498,7 @@ fn w_07c_w_07h_profile_login_rows_reach_the_login_component_from_the_brain_and_t
 
 /// ADR 0117: `profile_reauth` reaches the login component from the brain only; each
 /// `workspace_*` command reaches the workspaces component, and with no component it answers
-/// `host_failed`. The managed stub answers `not_implemented` until slice 1.
+/// `host_failed`. The real store answers each row (slice 1).
 #[test]
 fn adr_0117_workspace_rows_reach_their_components_and_fail_closed() {
     let c = FakeLogin::default();
@@ -1524,7 +1523,22 @@ fn adr_0117_workspace_rows_reach_their_components_and_fail_closed() {
         ("workspace_make_home", json!({"profile": "p"})),
         ("workspace_settings_write", json!({"genieCallBudget": 10})),
     ];
-    let stub = bottle_lib::workspaces_host::WorkspacesHost;
+    let dir = std::env::temp_dir().join(format!("bottle-host-routing-ws-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let store = mog_core::workspaces::WorkspaceStore::new(
+        &dir,
+        std::sync::Arc::new(mog_core::mog_config::MogConfigStore::new(dir.join("mogs"))),
+        std::sync::Arc::new(OneProfile),
+    );
+    let stub = bottle_lib::workspaces_host::WorkspacesHost::with_store(std::sync::Arc::new(store));
+    // The real store answers each row: a list, a refused switch (a new connection needs a
+    // `mogId`), the first home and the settings.
+    let want = [
+        ("workspace_list", true),
+        ("workspace_set_available", false),
+        ("workspace_make_home", true),
+        ("workspace_settings_write", true),
+    ];
     for (command, args) in rows {
         let brain = FakeBrain::default();
         let none = HostComponents::none("brain", &brain);
@@ -1538,11 +1552,13 @@ fn adr_0117_workspace_rows_reach_their_components_and_fail_closed() {
             workspaces: Some(&stub),
             ..HostComponents::none("brain", &brain)
         };
-        assert_eq!(
-            route(with_stub, command, args.clone()),
-            err("not_implemented"),
-            "{command}"
-        );
+        let ok = want.iter().find(|w| w.0 == command).unwrap().1;
+        let out = route(with_stub, command, args.clone());
+        if ok {
+            assert!(out.is_ok(), "{command}: {out:?}");
+        } else {
+            assert_eq!(out, err("invalid_args"), "{command}");
+        }
         let brain = FakeBrain::default();
         let hub = HostComponents {
             workspaces: Some(&stub),
@@ -1553,5 +1569,21 @@ fn adr_0117_workspace_rows_reach_their_components_and_fail_closed() {
             err("window_not_allowed"),
             "{command}"
         );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A fake T7 with one supported profile `p`.
+struct OneProfile;
+
+impl mog_core::workspaces::ProfileSource for OneProfile {
+    fn profiles(&self, _refresh: bool) -> CoreResult<Vec<mog_core::types::Profile>> {
+        Ok(vec![mog_core::types::Profile {
+            name: "p".to_owned(),
+            host: "https://p.example.test".to_owned(),
+            auth_type: "databricks-cli".to_owned(),
+            supported: true,
+            workspace_id: None,
+        }])
     }
 }

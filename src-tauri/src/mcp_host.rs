@@ -25,12 +25,14 @@ use mog_core::ipc_gateway::GatewayComponents;
 use mog_core::mcp_transport::{McpCallComponent, ReqwestMcpTransport};
 use mog_core::profile_login::LoginVerifier;
 use mog_core::token_broker::{CliTokenBroker, ScimMe, TokenBroker};
+use mog_core::workspaces::{SignInSource, WorkspaceGate};
 use serde_json::Value;
 use tauri::Manager;
 
 use crate::cli_host::SharedCli;
 use crate::profiles_host::ProfilesHost;
 use crate::rate_bucket_host::SharedRateBucket;
+use crate::workspaces_host::WorkspacesHost;
 
 /// The `mcp_call` component of the app: R8 over R6, with the R7 that serves the R6 SCIM seam.
 pub struct McpHost {
@@ -69,6 +71,17 @@ pub fn build_with(
     hosts: Arc<dyn ProfileHosts>,
     cli: Arc<dyn CliRunner>,
 ) -> CoreResult<McpHost> {
+    build_with_gate(bucket, hosts, cli, None)
+}
+
+/// [`build_with`] with the workspace allow-list of R8 (ADR 0117, FLAG 7). With a gate, R8
+/// refuses `genie_ask` for a profile that is neither home nor available.
+pub fn build_with_gate(
+    bucket: Arc<dyn RateBucket>,
+    hosts: Arc<dyn ProfileHosts>,
+    cli: Arc<dyn CliRunner>,
+    gate: Option<Arc<dyn WorkspaceGate>>,
+) -> CoreResult<McpHost> {
     let mono = Arc::new(SystemClock::new());
     let broker = Arc::new(CliTokenBroker::new(
         cli,
@@ -86,7 +99,7 @@ pub fn build_with(
     let r6 = broker.clone();
     let transport = Arc::new(ReqwestMcpTransport::new(hosts, broker, bucket)?);
     Ok(McpHost {
-        component: McpCallComponent::new(transport),
+        component: McpCallComponent::with_gate(transport, gate),
         broker: r6,
         _scim: scim,
     })
@@ -106,6 +119,11 @@ impl McpHost {
     /// The one R6 of the app, for another R7 (the recording cloud host, ADR 0103). The token
     /// stays inside R6: callers get only `with_token` and `workspace_id`.
     pub fn token_broker(&self) -> Arc<dyn TokenBroker> {
+        self.broker.clone()
+    }
+
+    /// R6 as the sign-in source of the workspace list (ADR 0117). It gives no token.
+    pub fn sign_in_source(&self) -> Arc<dyn SignInSource> {
         self.broker.clone()
     }
 
@@ -137,6 +155,18 @@ pub fn install(handle: &tauri::AppHandle<tauri::Wry>) -> CoreResult<()> {
         Some(r5) => r5.0.clone(),
         None => Arc::new(StubCliRunner),
     };
-    handle.manage(build_with(bucket, hosts, cli)?);
+    // ADR 0117: `genie_ask` only for home and available profiles. A missing workspace host is
+    // not managed in the app; then the gate is empty and allows nothing (fail closed). Only the
+    // test builders have no gate.
+    let workspaces = handle.try_state::<WorkspacesHost>();
+    let gate = match &workspaces {
+        Some(w) => w.gate(),
+        None => WorkspacesHost::default().gate(),
+    };
+    let host = build_with_gate(bucket, hosts, cli, Some(gate))?;
+    if let Some(w) = &workspaces {
+        w.bind_sign_in(host.sign_in_source());
+    }
+    handle.manage(host);
     Ok(())
 }

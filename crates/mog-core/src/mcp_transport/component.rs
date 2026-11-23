@@ -5,6 +5,7 @@
 //! [`McpTransport::call_tool`], which refuses every tool not on the G-06a allowlist.
 //! The Tauri host routes `mcp_call` here (#467, `src-tauri/src/mcp_host.rs`).
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -13,17 +14,31 @@ use super::{McpCall, McpTransport};
 use crate::error::{CoreError, CoreResult};
 use crate::ipc::McpCallArgs;
 use crate::ipc_gateway::GatewayComponents;
+use crate::workspaces::WorkspaceGate;
 
 /// The `mcp_call` component over one R8.
 #[derive(Debug, Clone)]
 pub struct McpCallComponent<T> {
     transport: T,
+    /// ADR 0117 (FLAG 7): the allow-list for `genie_ask`. `None` allows every profile.
+    gate: Option<Arc<dyn WorkspaceGate>>,
 }
 
 impl<T: McpTransport> McpCallComponent<T> {
     /// The component over `transport`.
     pub fn new(transport: T) -> Self {
-        Self { transport }
+        Self {
+            transport,
+            gate: None,
+        }
+    }
+
+    /// The component with the workspace allow-list `gate` (ADR 0117, FLAG 7). With a gate,
+    /// `genie_ask` for a profile that is neither home nor available is refused with
+    /// `workspace_not_available` before any send, on every path. Polls, cancels and query
+    /// results of calls already in flight are not gated.
+    pub fn with_gate(transport: T, gate: Option<Arc<dyn WorkspaceGate>>) -> Self {
+        Self { transport, gate }
     }
 }
 
@@ -45,6 +60,9 @@ impl<T: McpTransport> GatewayComponents for McpCallComponent<T> {
                 "isError": false,
                 "httpStatus": 200,
             }));
+        }
+        if a.tool == "genie_ask" && self.gate.as_ref().is_some_and(|g| !g.allows(&a.profile)) {
+            return Err(refused("workspace_not_available"));
         }
         let mut call = McpCall::new(&a.profile, &a.tool, a.args, &a.tags);
         if let Some(m) = &a.meta {

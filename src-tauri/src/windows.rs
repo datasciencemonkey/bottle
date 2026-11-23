@@ -8,8 +8,8 @@
 
 use std::time::Duration;
 
-/// ARC-3 / MB-03b: at most 8 MOG windows are active by default.
-pub const MAX_ACTIVE_MOGS: usize = 8;
+/// ARC-3 / MB-03b, ADR 0117: one MOG window is active. Each workspace is a profile of that MOG.
+pub const MAX_ACTIVE_MOGS: usize = 1;
 
 /// ARC-3 / MOG-18b: a hidden card window is destroyed after 5 min.
 pub const CARD_HIDDEN_TTL: Duration = Duration::from_secs(5 * 60);
