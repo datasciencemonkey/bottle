@@ -690,7 +690,7 @@ describe('ipcRecordingApi: the typed recording_* contract (ADR 0103)', () => {
     await expect(api.list()).rejects.toEqual({ error: 'no_profile' });
     expect(core.invoke).not.toHaveBeenCalled();
     expect(RECORDING_ERRORS.no_profile.text).toBe(
-      'Set a home profile on a MOG first, then try again.',
+      'Choose a home workspace in Settings → Workspace first, then try again.',
     );
   });
 
