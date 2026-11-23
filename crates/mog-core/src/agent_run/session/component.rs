@@ -101,13 +101,27 @@ pub trait AgentEnv: Send + Sync {
 }
 
 /// What the shim needs to find its session.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ShimLaunch {
     pub command: PathBuf,
     pub args: Vec<String>,
     /// The variables of the shim, with values. They reach the server only through its
     /// environment. `config.toml` gets the names.
     pub env: Vec<(String, String)>,
+}
+
+impl std::fmt::Debug for ShimLaunch {
+    /// Shows the names of the variables, never a value (one of them is the shim secret).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ShimLaunch")
+            .field("command", &self.command)
+            .field("args", &self.args)
+            .field(
+                "env",
+                &self.env.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(),
+            )
+            .finish()
+    }
 }
 
 pub trait ShimProvider: Send + Sync {
@@ -540,9 +554,7 @@ impl Engine {
                     new_session = true;
                 }
             }
-            if let Err(code) = self.ensure_session(&snap) {
-                return Err(code);
-            }
+            self.ensure_session(&snap)?;
             self.live = Some(Live::new(turn, now));
             position = 0;
             self.pump();

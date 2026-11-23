@@ -290,9 +290,12 @@ pub fn run() {
         .manage(ipc::HubChannel::default())
         // ADR 0117: the `workspace_*` component. `workspaces_host::install` fills it in `setup`.
         .manage(workspaces_host::WorkspacesHost::default())
-        // Slice 2a: the agent component. The contract-PR stub answers `not_implemented`; the
-        // session host lane replaces it.
-        .manage(agent_session_host::AgentSessionHost)
+        // Slice 2a: the agent component. `agent_session_host::install` fills it in `setup`.
+        .manage(agent_session_host::AgentSessionHost::default())
+        // Slice 2a: the ⌥G latch. `hotkey_host` arms it at each ⌥G up; the agent host redeems it.
+        .manage(std::sync::Arc::new(
+            mog_core::agent_run::session::approval::AskLatch::new(),
+        ))
         // #574 (ADR 0113): the one ticket store for user-only memory writes. `ipc.rs` reads it
         // with `try_state`; `memory_host` mints and redeems.
         .manage(std::sync::Arc::new(
@@ -407,6 +410,8 @@ pub fn run() {
             // R16 for `agent_*` (#307): the one shared AgentHost. If its loopback model proxy
             // cannot bind, the app still runs; `agent_*` then answer `host_failed`.
             let _ = agent_host::install(handle);
+            // Slice 2a: the one Genie Code session host, on T7, R5, R6 and the workspace store.
+            agent_session_host::install(handle);
             let host = app.state::<TauriWindowHost<tauri::Wry>>();
             for kind in startup_windows(demo) {
                 // MOG and card windows go through R11, so the cap and the ledger hold.
@@ -443,6 +448,8 @@ pub fn run() {
                 {
                     recording.shutdown();
                 }
+                // Slice 2a: kill the Genie Code process group and delete GENIE_HOME.
+                agent_session_host::shutdown(app);
                 // R2: stop every capture, so the mic closes, and end the cap timer (#425).
                 if let Some(capture) = app.try_state::<capture_host::CaptureHost>() {
                     capture.shutdown();

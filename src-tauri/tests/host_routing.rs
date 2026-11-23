@@ -1591,8 +1591,8 @@ fn adr_0117_workspace_rows_reach_their_components_and_fail_closed() {
 }
 
 /// Slice 2a: the eight `genie_code_*`, `agent_turn_*` and `agent_session_*` commands reach the
-/// agent session component from the brain only. The contract stub answers `not_implemented`,
-/// and with no component they answer `host_failed`.
+/// agent session component from the brain only. With no component they answer `host_failed`, and
+/// the real component answers `host_failed` too until `install` fills it.
 #[test]
 fn slice_2a_agent_rows_reach_their_component_from_the_brain_only() {
     let id = "0123456789abcdef0123456789abcdef";
@@ -1612,12 +1612,25 @@ fn slice_2a_agent_rows_reach_their_component_from_the_brain_only() {
         ("agent_session_state", json!({})),
         ("agent_session_end", json!({"reason": "new_session"})),
     ];
-    let stub = bottle_lib::agent_session_host::AgentSessionHost;
+    // The real component, before `install` fills it, answers `host_failed` (it is managed from
+    // the start, so a command never finds no component).
+    let empty = bottle_lib::agent_session_host::AgentSessionHost::default();
+    let stub = mog_core::ipc_gateway::NoComponents;
     for (command, args) in rows {
         let brain = FakeBrain::default();
         let none = HostComponents::none("brain", &brain);
         assert_eq!(
             route(none, command, args.clone()),
+            err("host_failed"),
+            "{command}"
+        );
+        let brain = FakeBrain::default();
+        let with_empty = HostComponents {
+            agent_session: Some(&empty),
+            ..HostComponents::none("brain", &brain)
+        };
+        assert_eq!(
+            route(with_empty, command, args.clone()),
             err("host_failed"),
             "{command}"
         );

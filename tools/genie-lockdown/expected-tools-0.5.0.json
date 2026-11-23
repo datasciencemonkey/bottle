@@ -1,0 +1,30 @@
+[
+ [
+  "custom",
+  "apply_patch"
+ ],
+ [
+  "function",
+  "list_mcp_resource_templates"
+ ],
+ [
+  "function",
+  "list_mcp_resources"
+ ],
+ [
+  "function",
+  "read_mcp_resource"
+ ],
+ [
+  "function",
+  "request_user_input"
+ ],
+ [
+  "mcp__bottle",
+  "ask_genie"
+ ],
+ [
+  "namespace",
+  "mcp__bottle"
+ ]
+]

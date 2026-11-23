@@ -61,6 +61,19 @@ pub fn mint_for_view(
     now_ms: u64,
 ) -> Option<String> {
     let tickets = tickets?;
+    // Slice 2a: a click on the card chip `agent-more:<opId>` or `agent-resend:<opId>` is the
+    // user's own ask. The ticket binds the MOG of the card only.
+    if str_at(args, "kind") == Some("chip_click") {
+        let card_mog = from.strip_prefix("card-")?;
+        let chip = str_at(args.get("payload")?, "chipId")?;
+        let is_ask = ["agent-more:", "agent-resend:"]
+            .iter()
+            .any(|p| chip.strip_prefix(p).is_some_and(|op| !op.is_empty()));
+        if !is_ask || str_at(args, "mogId")? != card_mog || !is_uuid(card_mog) {
+            return None;
+        }
+        return Some(tickets.mint_ask(new_ticket_id()?, card_mog, now_ms));
+    }
     if str_at(args, "kind") != Some("click") {
         return None;
     }
@@ -295,6 +308,47 @@ mod tests {
         assert!(mint_for_view(&format!("card-{MOG_A}"), &hover, Some(&t), T0).is_none());
         assert!(mint_for_view(&format!("card-{MOG_A}"), &card_click(MOG_A), None, T0).is_none());
         assert_eq!(t.open_count(), 1);
+    }
+
+    fn chip_click(mog: &str, chip: &str) -> Value {
+        json!({"mogId": mog, "kind": "chip_click", "payload": {"chipId": chip}})
+    }
+
+    #[test]
+    fn slice_2a_the_agent_more_and_resend_chips_mint_an_ask_ticket_for_their_own_card() {
+        use mog_core::action_ticket::Purpose;
+        let t = ActionTickets::new();
+        let card = format!("card-{MOG_A}");
+        for chip in ["agent-more:op-1", "agent-resend:op-2"] {
+            let id = mint_for_view(&card, &chip_click(MOG_A, chip), Some(&t), T0).unwrap();
+            assert!(t
+                .redeem(&id, MOG_A, Purpose::Ask, &Value::Null, T0 + 1)
+                .is_ok());
+            assert!(t
+                .redeem(&id, MOG_A, Purpose::Ask, &Value::Null, T0 + 1)
+                .is_err());
+        }
+        // A ticket for the Ask purpose never writes memory.
+        let id = mint_for_view(&card, &chip_click(MOG_A, "agent-more:op-1"), Some(&t), T0).unwrap();
+        assert!(t
+            .redeem(&id, MOG_A, Purpose::Pin, &json!({"text": "x"}), T0 + 1)
+            .is_err());
+        // Other chips, an empty op id, another card, the hub and no store: nothing.
+        for (from, chip) in [
+            (card.as_str(), "agent-stop:abc"),
+            (card.as_str(), "agent-open:abc"),
+            (card.as_str(), "agent-more:"),
+            (card.as_str(), "c1"),
+            (&format!("card-{MOG_B}"), "agent-more:op-1"),
+            ("hub", "agent-more:op-1"),
+            (&format!("mog-{MOG_A}"), "agent-more:op-1"),
+        ] {
+            assert!(
+                mint_for_view(from, &chip_click(MOG_A, chip), Some(&t), T0).is_none(),
+                "{from} {chip}"
+            );
+        }
+        assert!(mint_for_view(&card, &chip_click(MOG_A, "agent-more:op-1"), None, T0).is_none());
     }
 
     #[test]

@@ -36,6 +36,20 @@ impl WorkspaceGate for HostGate {
     }
 }
 
+/// The agent session host's view of the store.
+struct HostView(Arc<OnceLock<Arc<WorkspaceStore>>>);
+
+impl mog_core::agent_run::session::WorkspaceView for HostView {
+    fn snapshot(&self) -> CoreResult<mog_core::agent_run::session::Snapshot> {
+        match self.0.get() {
+            Some(s) => s.catalog_snapshot(),
+            None => Err(CoreError::IpcRefused {
+                code: "host_failed",
+            }),
+        }
+    }
+}
+
 impl WorkspacesHost {
     /// A host over `store`.
     pub fn with_store(store: Arc<WorkspaceStore>) -> Self {
@@ -52,6 +66,12 @@ impl WorkspacesHost {
     /// The allow-list for R8. It allows nothing until a store is set.
     pub fn gate(&self) -> Arc<dyn WorkspaceGate> {
         Arc::new(HostGate(self.store.clone()))
+    }
+
+    /// The store as the agent session host's workspace view (slice 2a). It fails with
+    /// `host_failed` until a store is set.
+    pub fn view(&self) -> Arc<dyn mog_core::agent_run::session::WorkspaceView> {
+        Arc::new(HostView(self.store.clone()))
     }
 
     /// Bind R6 to the store, for the sign-in column and the probe.

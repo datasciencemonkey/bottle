@@ -361,10 +361,12 @@ impl SessionGuard for FakeGuard {
     }
 }
 
+type NetCallback = Box<dyn Fn(bool) + Send + Sync>;
+
 #[derive(Default)]
 struct FakeNet {
     offline: AtomicBool,
-    cb: Mutex<Option<Box<dyn Fn(bool) + Send + Sync>>>,
+    cb: Mutex<Option<NetCallback>>,
 }
 
 impl NetWatch for FakeNet {
@@ -1057,7 +1059,6 @@ fn ac_2a_24_remote_control_other_than_disabled_ends_the_session() {
         "remoteControl/status/changed",
         json!({ "status": "disabled" }),
     );
-    assert!(s.quiet() || true);
     assert_ne!(r.host.session_state().state, AgentSessionPhase::None);
     s.notify(
         "remoteControl/status/changed",
@@ -1681,13 +1682,12 @@ fn the_gateway_commands_round_trip_through_json() {
     s.start_turn("st-1");
     let st = call("agent_session_state", json!({})).unwrap();
     assert_eq!(st["state"], "busy");
-    assert_eq!(
-        call("agent_turn_result", json!({ "turnId": tid }))
-            .unwrap_err()
-            .to_string()
-            .is_empty(),
-        false
-    );
+    assert!(matches!(
+        call("agent_turn_result", json!({ "turnId": tid })),
+        Err(crate::error::CoreError::IpcRefused {
+            code: "agent_turn_unknown"
+        })
+    ));
     call("agent_turn_stop", json!({ "turnId": tid })).unwrap();
     s.recv_req("turn/interrupt");
     s.complete("st-1", "interrupted", None);
@@ -1720,4 +1720,84 @@ fn nothing_in_a_debug_output_of_the_host_or_the_events_holds_the_question() {
     assert!(!shown.contains("SECRET-ANSWER"), "{shown}");
     let res = r.host.turn_result(&acc.turn_id).unwrap();
     assert!(!format!("{res:?}").contains("SECRET-ANSWER"));
+}
+
+// ---------- the recorded genie 0.5.0 transcripts ----------
+
+const FIXTURE_TURN: &str =
+    include_str!("../../../tests/fixtures/genie-0.5.0/appserver-ephemeral-turn.jsonl");
+const FIXTURE_APPROVAL: &str =
+    include_str!("../../../tests/fixtures/genie-0.5.0/appserver-approval-request.jsonl");
+
+#[test]
+fn fixture_folder_name_follows_the_pin() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(format!("genie-{}", crate::agent_run::pin::GENIE_PINNED));
+    assert!(dir.is_dir(), "no fixtures for the pinned version: {dir:?}");
+    assert!(dir.join("README.md").is_file());
+}
+
+#[test]
+fn fixture_the_recorded_turn_replays_to_an_answered_turn_with_the_recorded_tokens() {
+    let lines: Vec<Value> = FIXTURE_TURN
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    // The tokens that the recording reports: the sum of `last` input and output.
+    let want: u64 = lines
+        .iter()
+        .filter(|m| m["method"] == "thread/tokenUsage/updated")
+        .map(|m| {
+            m["params"]["tokenUsage"]["last"]["inputTokens"]
+                .as_u64()
+                .unwrap()
+                + m["params"]["tokenUsage"]["last"]["outputTokens"]
+                    .as_u64()
+                    .unwrap()
+        })
+        .sum();
+    assert!(want > 0);
+    let r = Rig::new();
+    let acc = r.submit("recorded").unwrap();
+    let s = r.spawner.next();
+    // The recording was made with the same request ids as Bottle uses: 1, 2 and 3.
+    s.recv_req("initialize");
+    s.send(lines[0].clone());
+    s.send(lines[1].clone());
+    assert_eq!(s.recv()["method"], "initialized");
+    s.recv_req("thread/start");
+    for l in &lines[2..6] {
+        s.send(l.clone());
+    }
+    s.recv_req("turn/start");
+    for l in &lines[6..] {
+        s.send(l.clone());
+    }
+    let (o, calls, tokens) = r.events.ended(&acc.turn_id);
+    assert_eq!(
+        (o, calls, tokens),
+        (AgentTurnOutcome::Answered, 0, Some(want))
+    );
+    // The final message of the recording is plain text, not the schema JSON: hidden.
+    assert_eq!(
+        r.host.turn_result(&acc.turn_id).unwrap().answer_kind,
+        AgentAnswerKind::Hidden
+    );
+}
+
+#[test]
+fn fixture_the_recorded_approval_request_is_refused_and_ends_the_session() {
+    let r = Rig::new();
+    let (s, t) = r.first_turn("q");
+    let mut b = FIXTURE_APPROVAL.trim().as_bytes().to_vec();
+    b.push(b'\n');
+    if let Some(tx) = s.out.lock().unwrap().as_ref() {
+        tx.send(b).unwrap();
+    }
+    let refusal = s.recv();
+    assert_eq!(refusal["id"], 0);
+    assert!(refusal["error"].is_object());
+    assert_eq!(r.events.session_ended(0), AgentSessionEndReason::Lockdown);
+    assert_eq!(r.events.ended(&t).0, AgentTurnOutcome::Lockdown);
 }

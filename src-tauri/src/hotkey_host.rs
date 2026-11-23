@@ -340,6 +340,8 @@ pub struct PttForwarder<B: BrainSink, S: StatusSink> {
     /// The MOG of the press that a `cancel` just ended, for a `RecordToggle` (ADR 0103).
     toggle: Option<String>,
     key_down: Option<KeyDownHook>,
+    /// Slice 2a: the ⌥G latch that approves one `agent_turn_submit`.
+    ask_latch: Option<Arc<mog_core::agent_run::session::approval::AskLatch>>,
 }
 
 impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
@@ -353,7 +355,17 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
             last: None,
             toggle: None,
             key_down: None,
+            ask_latch: None,
         }
+    }
+
+    /// Arm `latch` at each ⌥G up (slice 2a): the brain then needs no ticket to ask the agent.
+    pub fn with_ask_latch(
+        mut self,
+        latch: Option<Arc<mog_core::agent_run::session::approval::AskLatch>>,
+    ) -> Self {
+        self.ask_latch = latch;
+        self
     }
 
     /// Run `hook` at each talk-key down (CAP-51c: the R4 model preload, in parallel with the
@@ -395,6 +407,9 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
                     let mut payload = ptt_payload(&mog, phase);
                     if ask {
                         payload["ask"] = json!(true);
+                        if let Some(latch) = &self.ask_latch {
+                            latch.arm(&mog, crate::memory_host::now_ms());
+                        }
                     }
                     // `false` means no brain listens yet; the press is dropped.
                     let _ = self.brain.deliver(events::HOTKEY_PTT, payload);
@@ -1035,7 +1050,11 @@ where
     spawn_forwarder(
         rx,
         PttForwarder::new(Arc::clone(&target), app.clone(), BrainStatus(app.clone()))
-            .with_key_down(r4_preload(app.clone())),
+            .with_key_down(r4_preload(app.clone()))
+            .with_ask_latch(
+                app.try_state::<Arc<mog_core::agent_run::session::approval::AskLatch>>()
+                    .map(|l| Arc::clone(l.inner())),
+            ),
     )?;
     let sink: Arc<dyn HotkeySink> = Arc::new(sink);
     let (service, permissions) = factory(settings.talk_binding(), Arc::clone(&sink));
@@ -1268,6 +1287,23 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn slice_2a_an_ask_up_arms_the_latch_once_and_a_plain_up_does_not() {
+        use mog_core::agent_run::session::approval::AskLatch;
+        let latch = Arc::new(AskLatch::new());
+        let target = Arc::new(PttTarget::default());
+        target.set("a1");
+        let (f, _brain, _) = forwarder(&target);
+        let mut f = f.with_ask_latch(Some(Arc::clone(&latch)));
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Down));
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Up));
+        assert!(!latch.take("a1", crate::memory_host::now_ms()));
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Down));
+        f.on_output(HotkeyOutput::PttAskUp);
+        assert!(latch.take("a1", crate::memory_host::now_ms()));
+        assert!(!latch.take("a1", crate::memory_host::now_ms()));
     }
 
     #[test]

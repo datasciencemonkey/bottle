@@ -31,7 +31,7 @@ use mog_core::clock::{SystemWallClock, WallClock};
 use mog_core::consent::{prepare_device_records, ConsentRetention};
 use mog_core::error::{CoreError, CoreResult};
 use mog_core::local_store::key_vault::{os_key_vault, KeyVault};
-use mog_core::wipe::{LocalWipeService, SecurityExpiry, WipeService};
+use mog_core::wipe::{AgentWipeHook, AgentWipeSlot, LocalWipeService, SecurityExpiry, WipeService};
 use tauri::{Manager, Runtime};
 
 /// Open the records in `dir` and put the store and the records in managed state. On an error
@@ -45,9 +45,13 @@ pub fn install_with<R: Runtime>(
     let (store, records) =
         prepare_device_records(dir, vault, Arc::clone(&clock), ConsentRetention::default())?;
     let records = Arc::new(records);
+    // Slice 2a (plan A3.7): every Wipe scope first ends the agent session and deletes GENIE_HOME.
+    // The slot is empty until `agent_session_host::install` binds the session host.
+    let agent_slot = Arc::new(AgentWipeSlot::default());
     let wipe = Arc::new(
         LocalWipeService::new(Arc::clone(&store), clock)
-            .with_expiry(Arc::clone(&records) as Arc<dyn SecurityExpiry>),
+            .with_expiry(Arc::clone(&records) as Arc<dyn SecurityExpiry>)
+            .with_agent_hook(Arc::clone(&agent_slot) as Arc<dyn AgentWipeHook>),
     );
     // 9.2: the content-free expiries run once, right after the first open (ADR 0105). A failure
     // leaves the records for the next run. The hook holds the service weakly: no cycle.
@@ -60,6 +64,7 @@ pub fn install_with<R: Runtime>(
     app.manage(store);
     app.manage(records);
     app.manage(wipe);
+    app.manage(agent_slot);
     Ok(())
 }
 
