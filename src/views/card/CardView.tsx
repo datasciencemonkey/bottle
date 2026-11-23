@@ -304,9 +304,15 @@ export function CardView({ mogId }: { mogId: MogId }) {
     newest !== undefined &&
     popup.id !== closedPopup &&
     !(echo && shown === card);
+  // A stacked pop-up that fades or closes leaves the pill alone: fit the window to the new height.
+  const stackFrame = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    if (!stack || !stackFrame.current) return;
+    void onSize(stackFrame.current.getBoundingClientRect().height);
+  }, [stack, popupOn, onSize]);
   if ((genie && newest) || (stack && pending && pillCard))
     return (
-      <section aria-label="MOG card" className="card card-genie">
+      <section ref={stackFrame} aria-label="MOG card" className="card card-genie">
         <GenieCard
           key={(genie ? newest : pending)?.id ?? ''}
           mogId={mogId}

@@ -116,7 +116,7 @@ function useWindowEvent(name: string, fn: (payload: unknown) => void) {
 }
 
 /** The stage line with its change motion: the old line leaves while the new one comes in. */
-function Stage({ text }: { text: string }) {
+function Stage({ text, live }: { text: string; live?: string | undefined }) {
   const [shown, setShown] = useState({ text, leaving: undefined as string | undefined });
   if (text !== shown.text) setShown({ text, leaving: shown.text });
   useEffect(() => {
@@ -128,7 +128,7 @@ function Stage({ text }: { text: string }) {
     <span className="genie-stage-slot">
       {/* One stable live region, so a screen reader reads each new stage once. */}
       <span className="genie-sr" data-genie-live aria-live="polite">
-        {shown.text}
+        {live ?? shown.text}
       </span>
       {shown.leaving !== undefined && (
         <span className="genie-stage" data-leaving aria-hidden="true">
@@ -589,9 +589,11 @@ export function GenieCard({ mogId, card, onSize, identity, saved = NO_SAVED }: G
       )}
       {kind === 'working' && (
         <>
-          {ready && <span className="genie-ready-dot" aria-hidden="true" />}
-          <Stage text={line1} />
-          {!ready && <Timer />}
+          <Stage
+            text={line1}
+            live={ready && identity ? `${identity.name}: ${ANSWER_READY}` : undefined}
+          />
+          {ready ? <span className="genie-ready-dot" aria-hidden="true" /> : <Timer />}
         </>
       )}
       {kind !== 'working' && (
