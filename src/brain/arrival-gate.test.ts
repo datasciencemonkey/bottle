@@ -370,5 +370,42 @@ describe('arrival gate (UX slice 1)', () => {
       await wrap(async () => 'hello')(segment);
       expect(told).toEqual(['x', 'x', 'x']);
     });
+
+    it('a final segment of another lease (a session) does not re-arm the paste wait', () => {
+      const r = rig();
+      r.gate.onCaptureState(HF_ON);
+      r.arrival('a');
+      r.gate.onCaptureState(HF_OFF);
+      r.tick(300);
+      r.gate.segmentFinal(seg('s-session', 'session-1'));
+      r.tick(ARRIVAL_DELAY_MS - 300);
+      expect(r.log).toEqual(['a']);
+    });
+
+    it('[AC-1.5] an Esc stop of hands-free drops its segments: 1,200 ms after the end', () => {
+      const r = rig();
+      r.gate.onCaptureState(HF_ON);
+      r.gate.segmentFinal(seg('s1', 'hf-1'));
+      r.arrival('a');
+      // Esc comes first, then the end state.
+      r.gate.handsFreeDiscarded();
+      r.gate.onCaptureState(HF_OFF);
+      r.tick(ARRIVAL_DELAY_MS);
+      expect(r.log).toEqual(['a']);
+    });
+
+    it('[AC-1.5] an Esc stop that comes after the end state also applies 1,200 ms later', () => {
+      const r = rig();
+      r.gate.onCaptureState(HF_ON);
+      r.gate.segmentFinal(seg('s1', 'hf-1'));
+      r.arrival('a');
+      r.gate.onCaptureState(HF_OFF);
+      r.tick(100);
+      r.gate.handsFreeDiscarded();
+      r.tick(ARRIVAL_DELAY_MS - 100 - 1);
+      expect(r.log).toEqual([]);
+      r.tick(1);
+      expect(r.log).toEqual(['a']);
+    });
   });
 });

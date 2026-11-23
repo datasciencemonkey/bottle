@@ -744,11 +744,18 @@ describe('Genie card links (#523)', () => {
       await tauri.emitTo(`card-${ID}`, 'card:update', working('Asking Genie'));
       await advance(5_000);
       expect(el.querySelector('[data-genie-timer]')).not.toBeNull();
+      await tauri.emitTo(`card-${ID}`, 'mog:target', {
+        mogId: ID,
+        name: 'Sales',
+        target: true,
+        toast: false,
+        colorVariant: 'teal',
+      });
       await tauri.emitTo(`card-${ID}`, 'card:update', working(ANSWER_READY));
       const pill = el.querySelector('[data-genie="working"]');
       expect(pill?.hasAttribute('data-ready')).toBe(true);
       expect(pill?.querySelector('[data-genie-stage]')?.textContent).toBe(ANSWER_READY);
-      expect(pill?.querySelector('[data-genie-live]')?.textContent).toBe(ANSWER_READY);
+      expect(pill?.querySelector('[data-genie-live]')?.textContent).toBe('Sales: Answer ready');
       expect(pill?.querySelector('.genie-ready-dot')).not.toBeNull();
       expect(pill?.querySelector('[data-genie-timer]')).toBeNull();
       // The ready pill never fades and takes no focus (AC-1.14).
@@ -756,6 +763,27 @@ describe('Genie card links (#523)', () => {
       expect(el.querySelector('[data-genie="working"]')).not.toBeNull();
       expect(done()).toBe(0);
       expect(document.activeElement).toBe(document.body);
+    });
+
+    it('[AC-1.2] the ready pill keeps the width of the working pill as an inline min-width', async () => {
+      const real = HTMLElement.prototype.getBoundingClientRect;
+      HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+        const w = this.classList.contains('genie-working') ? 231 : 0;
+        return { ...real.call(this), width: w } as DOMRect;
+      };
+      try {
+        const el = await mount();
+        await tauri.emitTo(`card-${ID}`, 'card:update', working('Running the query'));
+        await advance(8_000);
+        const pill = el.querySelector('[data-genie="working"]') as HTMLElement;
+        expect(pill.style.minWidth).toBe('');
+        await tauri.emitTo(`card-${ID}`, 'card:update', working(ANSWER_READY));
+        expect((el.querySelector('[data-genie="working"]') as HTMLElement).style.minWidth).toBe(
+          '231px',
+        );
+      } finally {
+        HTMLElement.prototype.getBoundingClientRect = real;
+      }
     });
 
     it('[AC-1.12] a dictation pop-up shows under the pending pill and does not replace it', async () => {

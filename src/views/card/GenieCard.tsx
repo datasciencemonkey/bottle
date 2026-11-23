@@ -229,6 +229,8 @@ export function GenieCard({ mogId, card, onSize, identity, saved = NO_SAVED }: G
   const [vis, setVis] = useState<Vis>('shown');
   const ref = useRef<HTMLDivElement>(null);
   const holds = useRef({ pointer: false, mog: false });
+  // UX slice 1: the width of the working pill, so the ready pill keeps it (the timer was in it).
+  const workWidth = useRef(0);
   // The point of the last `mousedown` on the card, so `openInBottle` can tell a click from a
   // press-drag-release (review round 2, finding "also fix if cheap"): a drag never opens the hub.
   const pressPos = useRef<{ x: number; y: number } | null>(null);
@@ -242,6 +244,20 @@ export function GenieCard({ mogId, card, onSize, identity, saved = NO_SAVED }: G
   const timer = useRef<{ handle?: ReturnType<typeof setTimeout>; due: number; left: number }>({
     due: 0,
     left: showMs,
+  });
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || kind !== 'working') return;
+    if (!ready) workWidth.current = el.getBoundingClientRect().width;
+    el.style.minWidth = ready && workWidth.current > 0 ? `${workWidth.current}px` : '';
+    if (ready || typeof ResizeObserver === 'undefined') return;
+    // The timer comes in after 3 s and grows the pill without a render of this component.
+    const ro = new ResizeObserver(() => {
+      workWidth.current = el.getBoundingClientRect().width;
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
   });
 
   // The window fits the content's final size first, so the grow motion is never cut (used below,

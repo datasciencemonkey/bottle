@@ -13,6 +13,10 @@
  *   releases the arrivals of a newer one. A hold that never ends has two safety nets: the state
  *   of its lease (`recording: false`) and `MAX_HOLD_MS`.
  *
+ * Known limits: an `up` with no final segment from R2 (a tap, an empty hold) waits up to the 5 s
+ * cap (AC-1.6). Follow-up idea: an idle `capture:state` with no pending segment calls
+ * `resolve(false)`, once the R2 order of that state and the segment is confirmed.
+ *
  * Slice 2a lane T1 must reuse this gate and not build its own. The clock and the scheduler are
  * injected: tests move a simulated clock.
  */
@@ -65,6 +69,11 @@ export interface ArrivalGate {
   pasteResolved(pasted: boolean, seg?: GateSegment): void;
   /** The start of the hold was refused: no paste follows. */
   refused(): void;
+  /**
+   * Esc stopped hands-free and dropped its audio: no paste follows for its segments.
+   * Call it before or after the end state; the order does not matter.
+   */
+  handsFreeDiscarded(): void;
   /** True while a hold runs or the delay after it has not ended. */
   isHeld(): boolean;
   /** Run `fn` now when nothing holds, or later, in order, when the hold and its delay end. */
@@ -196,13 +205,24 @@ export function createArrivalGate(deps: ArrivalGateDeps): ArrivalGate {
       if (pending.size >= MAX_PENDING) pending.delete(pending.keys().next().value as string);
       pending.set(seg.segmentId, seg.leaseId);
       // A segment after the end of the hold, inside its delay: a paste follows after all.
-      if (settling && !settling.expectPaste && leaseCounts(seg)) {
+      // Only a segment of the settling lease counts, so a session segment never re-arms the wait.
+      if (
+        settling &&
+        !settling.expectPaste &&
+        settling.lease !== undefined &&
+        seg.leaseId === settling.lease
+      ) {
         clearTimers();
         settling.expectPaste = true;
         at(Math.max(deps.clock.now(), settling.upAt + ARRIVAL_CAP_MS), flush);
       }
     },
     pasteResolved: resolve,
+    handsFreeDiscarded() {
+      for (const [id, l] of pending) if (hfLease === undefined || l === hfLease) pending.delete(id);
+      if (settling?.expectPaste && (hfLease === undefined || settling.lease === hfLease))
+        resolve(false);
+    },
     refused() {
       if (holding()) refusedHold = true;
       else if (settling) resolve(false);

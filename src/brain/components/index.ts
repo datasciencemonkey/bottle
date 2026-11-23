@@ -355,6 +355,11 @@ export function startBrain(): Brain {
       if (seg?.final === true && typeof seg.segmentId === 'string')
         arrivalGate.segmentFinal({ segmentId: seg.segmentId, leaseId: seg.leaseId });
     });
+    // Esc in a card stops hands-free and drops its audio: no paste follows.
+    onViewInput(bus, (input) => {
+      if (input.kind === 'cancel' && input.from === `card-${input.mogId}`)
+        arrivalGate.handsFreeDiscarded();
+    });
     const stacks = new Map<MogId, CardStack>();
     /** #573: the newest Genie request of each MOG, for a double-click on the MOG. */
     const lastGenieOp = new Map<MogId, string>();
