@@ -183,14 +183,14 @@ describe('a dictated question (#557, ADR 0096)', () => {
     expect(s.asks).toEqual([]);
   });
 
-  it('[AC-1.4] [UX-1] signals paste resolved with true after an inserted dictation', async () => {
+  it('[AC-1.4] signals paste resolved with true after an inserted dictation', async () => {
     const seen: boolean[] = [];
     const s = setup(dictation, { onPasteResolved: (p) => void seen.push(p) });
     await s.handle(captured());
     expect(seen).toEqual([true]);
   });
 
-  it('[AC-1.5] [UX-1] signals paste resolved with false for an ⌥G ask and a refused paste', async () => {
+  it('[AC-1.5] signals paste resolved with false for an ⌥G ask and a refused paste', async () => {
     const seen: boolean[] = [];
     const ask = setup(dictation, { onPasteResolved: (p) => void seen.push(p) });
     await ask.handle(captured({ forceAsk: true }));
@@ -205,7 +205,7 @@ describe('a dictated question (#557, ADR 0096)', () => {
     expect(seen).toEqual([false, false]);
   });
 
-  it('[AC-1.5] [UX-1] signals false when the route fails or the MOG is closed', async () => {
+  it('[AC-1.5] signals false when the route fails or the MOG is closed', async () => {
     const seen: boolean[] = [];
     const failed = setup(dictation, {
       routerInput: async () => Promise.reject(new Error('boom')),
