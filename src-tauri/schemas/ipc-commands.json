@@ -1122,6 +1122,20 @@
       "title": "ProfileArgs",
       "type": "object"
     },
+    "profile_reauth": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile"
+      ],
+      "title": "ProfileArgs",
+      "type": "object"
+    },
     "profile_select": {
       "$defs": {
         "SelectScope": {
@@ -1919,6 +1933,116 @@
       ],
       "title": "WindowMogOpenArgs",
       "type": "object"
+    },
+    "workspace_list": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "`workspace_list` (ADR 0117). `refresh` probes each profile whose sign-in state is unknown.",
+      "properties": {
+        "refresh": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "title": "WorkspaceListArgs",
+      "type": "object"
+    },
+    "workspace_make_home": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "`workspace_make_home` (ADR 0117).",
+      "properties": {
+        "mogId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "profile": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile"
+      ],
+      "title": "WorkspaceMakeHomeArgs",
+      "type": "object"
+    },
+    "workspace_set_available": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "`workspace_set_available` (ADR 0117). `mog_id` names the config of a new connection.",
+      "properties": {
+        "available": {
+          "type": "boolean"
+        },
+        "mogId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "profile": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile",
+        "available"
+      ],
+      "title": "WorkspaceSetAvailableArgs",
+      "type": "object"
+    },
+    "workspace_settings_write": {
+      "$defs": {
+        "EndpointName": {
+          "pattern": "^[A-Za-z0-9_-]{1,128}$",
+          "type": "string"
+        },
+        "GenieCallBudget": {
+          "enum": [
+            5,
+            10,
+            20
+          ],
+          "type": "integer"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "`workspace_settings_write` (ADR 0117): D1, the D2 Genie call budget (5, 10 or 20) and\nthe D9 agent endpoint name.",
+      "properties": {
+        "agentEndpoint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EndpointName"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "crossWorkspaceData": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "genieCallBudget": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GenieCallBudget"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "title": "WorkspaceSettingsWriteArgs",
+      "type": "object"
     }
   },
   "commands": [
@@ -2436,6 +2560,41 @@
       "windows": [
         "brain"
       ]
+    },
+    {
+      "name": "profile_reauth",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "workspace_list",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "workspace_set_available",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "workspace_make_home",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "workspace_settings_write",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
     }
   ],
   "errors": [
@@ -2481,6 +2640,9 @@
     "invalid_tool_args",
     "invalid_meta",
     "profile_invalid",
+    "workspace_not_available",
+    "home_always_available",
+    "workspace_storage_failed",
     "poll_inflight",
     "agent_unknown_mog",
     "agent_unavailable",

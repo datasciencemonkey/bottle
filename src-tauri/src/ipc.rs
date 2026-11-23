@@ -294,6 +294,9 @@ pub struct HostComponents<'a> {
     /// `link_open` (#523): `mog_core::link_open::LinkOpenComponent`. `None` when T7 is not
     /// managed: `host_failed`.
     pub links: Option<&'a dyn GatewayComponents>,
+    /// The `workspace_*` commands (ADR 0117): `workspaces_host::WorkspacesHost`. `None` when it
+    /// is not managed: `host_failed`.
+    pub workspaces: Option<&'a dyn GatewayComponents>,
 }
 
 fn refused(e: IpcError) -> CoreError {
@@ -362,6 +365,7 @@ impl<'a> HostComponents<'a> {
             recording: None,
             stt_model: None,
             links: None,
+            workspaces: None,
         }
     }
 }
@@ -561,7 +565,8 @@ impl GatewayComponents for HostComponents<'_> {
                 .ok_or_else(|| host_failed(command))?
                 .call(command, args),
             // #162: "Connect a workspace". Its codes cross as themselves (`ERROR_CODES`).
-            "profile_login" | "profile_login_cancel" => self
+            // ADR 0117: `profile_reauth` signs an existing profile in again, on the login host.
+            "profile_login" | "profile_login_cancel" | "profile_reauth" => self
                 .login
                 .ok_or_else(|| host_failed(command))?
                 .call(command, args),
@@ -582,6 +587,14 @@ impl GatewayComponents for HostComponents<'_> {
             // the profile's workspace host) before the OS opener runs.
             "link_open" => self
                 .links
+                .ok_or_else(|| host_failed(command))?
+                .call(command, args),
+            // ADR 0117: the workspace list, its switches, the home and the agent settings.
+            "workspace_list"
+            | "workspace_set_available"
+            | "workspace_make_home"
+            | "workspace_settings_write" => self
+                .workspaces
                 .ok_or_else(|| host_failed(command))?
                 .call(command, args),
             // Each feature issue wires its R1-R17 component here.
@@ -660,6 +673,11 @@ pub fn runs_off_main_thread(command: &str) -> bool {
                 | "profiles_list"
                 | "cli_install"
                 | "profile_login"
+                // ADR 0117: the re-sign-in waits for the browser; the list can probe profiles.
+                | "profile_reauth"
+                | "workspace_list"
+                | "workspace_set_available"
+                | "workspace_make_home"
                 // #413, #45: the install can run for minutes over the network (487 MB).
                 | "stt_model_install"
                 // #413, PR #600 review: verify SHA-256s ~670 MB with no network IO.
@@ -777,6 +795,8 @@ fn route_from<R: Runtime>(
     let stt_model = webview.try_state::<crate::stt_model_host::SttModelHost>();
     // `try_state`: `lib.rs` manages the link opener after T7 (#523).
     let links = webview.try_state::<std::sync::Arc<mog_core::link_open::LinkOpenComponent>>();
+    // `try_state`: `lib.rs` manages the workspace component (ADR 0117).
+    let workspaces = webview.try_state::<crate::workspaces_host::WorkspacesHost>();
     let components = HostComponents {
         from: label,
         brain: &brain,
@@ -817,6 +837,9 @@ fn route_from<R: Runtime>(
         links: links
             .as_ref()
             .map(|l| l.inner().as_ref() as &dyn GatewayComponents),
+        workspaces: workspaces
+            .as_ref()
+            .map(|w| w.inner() as &dyn GatewayComponents),
     };
     route(components, command, args)
 }

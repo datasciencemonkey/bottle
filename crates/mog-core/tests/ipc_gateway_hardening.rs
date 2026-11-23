@@ -133,6 +133,11 @@ fn sample(command: &str) -> (&'static str, Value) {
             )
         }
         "link_open" => json!({"profile": "p", "url": "https://example.cloud.databricks.com/x"}),
+        "profile_reauth" => json!({"profile": "p"}),
+        "workspace_list" => json!({"refresh": true}),
+        "workspace_set_available" => json!({"profile": "p", "available": true}),
+        "workspace_make_home" => json!({"profile": "p"}),
+        "workspace_settings_write" => json!({"genieCallBudget": 10}),
         other => panic!("no sample for {other}"),
     };
     ("brain", args)
@@ -446,6 +451,9 @@ fn sec_03_each_ipc_error_maps_to_a_fixed_code() {
         IpcError::InvalidToolArgs { command: s() },
         IpcError::InvalidMeta { command: s() },
         IpcError::ProfileInvalid { command: s() },
+        IpcError::WorkspaceNotAvailable { command: s() },
+        IpcError::HomeAlwaysAvailable { command: s() },
+        IpcError::WorkspaceStorageFailed { command: s() },
         IpcError::PollInflight { command: s() },
         IpcError::AgentUnknownMog { command: s() },
         IpcError::AgentUnavailable { command: s() },
@@ -779,4 +787,35 @@ fn sec_16c_sec_03_the_hub_notice_text_never_reaches_the_gateway_log() {
         ]
     );
     assert!(lines.iter().all(|l| !l.contains(marker)));
+}
+
+/// ADR 0117 D2 and D9: the schema types refuse a budget other than 5, 10 or 20, and an endpoint
+/// that is not an endpoint name (for example a URL).
+#[test]
+fn adr_0117_workspace_settings_write_refuses_a_bad_budget_or_endpoint() {
+    use mog_core::ipc::handle;
+    for bad in [
+        json!({"genieCallBudget": 7}),
+        json!({"genieCallBudget": 0}),
+        json!({"genieCallBudget": 256}),
+        json!({"agentEndpoint": "https://x.example.com/serving"}),
+        json!({"agentEndpoint": ""}),
+    ] {
+        let err = handle("brain", "workspace_settings_write", bad.clone()).unwrap_err();
+        assert_eq!(ipc_error_code(&err), "invalid_args", "{bad}");
+    }
+    for good in [
+        json!({"genieCallBudget": 5}),
+        json!({"genieCallBudget": 20}),
+        json!({"agentEndpoint": "databricks-claude-sonnet-5-5", "crossWorkspaceData": false}),
+    ] {
+        assert!(
+            handle("brain", "workspace_settings_write", good.clone()).is_ok()
+                || matches!(
+                    handle("brain", "workspace_settings_write", good.clone()),
+                    Err(IpcError::NotImplemented { .. })
+                ),
+            "{good}"
+        );
+    }
 }

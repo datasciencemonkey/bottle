@@ -376,6 +376,11 @@ fn arc_3_cap_02a_g_04a_window_ops_capture_start_and_mcp_call_run_off_the_main_th
                         | "cli_install"
                         // #162: `databricks auth login` can wait up to 5 min (W-07c).
                         | "profile_login"
+                        // ADR 0117: the re-sign-in waits for the browser; the list can probe.
+                        | "profile_reauth"
+                        | "workspace_list"
+                        | "workspace_set_available"
+                        | "workspace_make_home"
                         // #413, #45: the install can download 487 MB before it checks hashes.
                         | "stt_model_install"
                         // #413, PR #600 review: verify SHA-256s ~670 MB with no network IO.
@@ -803,6 +808,10 @@ fn arc_3_cap_02a_g_04a_schedule_runs_window_ops_capture_start_and_mcp_call_on_a_
                     | "profiles_list"
                     | "cli_install"
                     | "profile_login"
+                    | "profile_reauth"
+                    | "workspace_list"
+                    | "workspace_set_available"
+                    | "workspace_make_home"
                     | "stt_model_install"
                     | "stt_model_verify"
             );
@@ -1483,6 +1492,65 @@ fn w_07c_w_07h_profile_login_rows_reach_the_login_component_from_the_brain_and_t
         assert_eq!(
             login_call("hub", None, command, args),
             err("host_failed"),
+            "{command}"
+        );
+    }
+}
+
+/// ADR 0117: `profile_reauth` reaches the login component from the brain only; each
+/// `workspace_*` command reaches the workspaces component, and with no component it answers
+/// `host_failed`. The managed stub answers `not_implemented` until slice 1.
+#[test]
+fn adr_0117_workspace_rows_reach_their_components_and_fail_closed() {
+    let c = FakeLogin::default();
+    assert_eq!(
+        login_call("brain", Some(&c), "profile_reauth", json!({"profile": "p"})),
+        Ok(json!({}))
+    );
+    assert_eq!(
+        *c.0.lock().unwrap(),
+        vec![("profile_reauth".to_owned(), json!({"profile": "p"}))]
+    );
+    assert_eq!(
+        login_call("hub", Some(&c), "profile_reauth", json!({"profile": "p"})),
+        err("window_not_allowed")
+    );
+    let rows = [
+        ("workspace_list", json!({"refresh": true})),
+        (
+            "workspace_set_available",
+            json!({"profile": "p", "available": true}),
+        ),
+        ("workspace_make_home", json!({"profile": "p"})),
+        ("workspace_settings_write", json!({"genieCallBudget": 10})),
+    ];
+    let stub = bottle_lib::workspaces_host::WorkspacesHost;
+    for (command, args) in rows {
+        let brain = FakeBrain::default();
+        let none = HostComponents::none("brain", &brain);
+        assert_eq!(
+            route(none, command, args.clone()),
+            err("host_failed"),
+            "{command}"
+        );
+        let brain = FakeBrain::default();
+        let with_stub = HostComponents {
+            workspaces: Some(&stub),
+            ..HostComponents::none("brain", &brain)
+        };
+        assert_eq!(
+            route(with_stub, command, args.clone()),
+            err("not_implemented"),
+            "{command}"
+        );
+        let brain = FakeBrain::default();
+        let hub = HostComponents {
+            workspaces: Some(&stub),
+            ..HostComponents::none("hub", &brain)
+        };
+        assert_eq!(
+            route(hub, command, args),
+            err("window_not_allowed"),
             "{command}"
         );
     }
