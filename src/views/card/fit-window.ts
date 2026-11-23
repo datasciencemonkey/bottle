@@ -112,17 +112,22 @@ export function applyCardSide(side: CardSide, doc: Document = document): void {
  * window again (the fit runs again when the card changes, `CardView.tsx`).
  */
 export function measureCompactWidth(doc: Document = document): number | undefined {
-  const pill = doc.querySelector<HTMLElement>('.popup, .genie-working');
-  if (!pill) return undefined;
-  const prev = pill.style.maxWidth;
-  pill.style.maxWidth = 'none';
-  // The layout width with its fraction: not `offsetWidth`, which rounds down and cut the last
-  // letter, and not the box under a transform, because the pill fades and scales in. The used
-  // `width` of a border-box is the whole pill. `getBoundingClientRect` is the fallback.
-  const used = parseFloat(getComputedStyle(pill).width);
-  const w = Number.isFinite(used) && used > 0 ? used : pill.getBoundingClientRect().width;
-  pill.style.maxWidth = prev;
-  return w;
+  const pills = Array.from(doc.querySelectorAll<HTMLElement>('.popup, .genie-working'));
+  if (pills.length === 0) return undefined;
+  // UX slice 1: a pill and a pop-up can show together. The window takes the wider one.
+  let widest = 0;
+  for (const pill of pills) {
+    const prev = pill.style.maxWidth;
+    pill.style.maxWidth = 'none';
+    // The layout width with its fraction: not `offsetWidth`, which rounds down and cut the last
+    // letter, and not the box under a transform, because the pill fades and scales in. The used
+    // `width` of a border-box is the whole pill. `getBoundingClientRect` is the fallback.
+    const used = parseFloat(getComputedStyle(pill).width);
+    const w = Number.isFinite(used) && used > 0 ? used : pill.getBoundingClientRect().width;
+    pill.style.maxWidth = prev;
+    widest = Math.max(widest, w);
+  }
+  return widest;
 }
 
 /**

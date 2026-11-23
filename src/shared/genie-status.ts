@@ -12,6 +12,12 @@
 /** The first status line, from the send until Genie reports a stage. */
 export const ASKING_GENIE = 'Asking Genie';
 
+/**
+ * UX slice 1: the pill text while an answer waits for the user's talk-key hold to end. The card
+ * view shows it as the "ready" pill (no timer); the brain replaces it with the answer later.
+ */
+export const ANSWER_READY = 'Answer ready';
+
 /** The fixed stage lines, by the prefix of the newest Genie step. The first match wins. */
 const STAGES: readonly (readonly [RegExp, string])[] = [
   [/^\s*(writing|generating|drafting)\s+(the\s+)?(sql|query)\b/i, 'Writing the query'],

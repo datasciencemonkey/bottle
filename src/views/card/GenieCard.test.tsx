@@ -4,7 +4,13 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { act } from 'react';
 import type { Root } from 'react-dom/client';
-import { AFTER_HOVER_MS, FAILURE_SHOW_MS, answerShowMs } from '../../shared/genie-status';
+import {
+  AFTER_HOVER_MS,
+  ANSWER_READY,
+  FAILURE_SHOW_MS,
+  answerShowMs,
+} from '../../shared/genie-status';
+import { FADE_AFTER_MS, FADE_OUT_MS } from './Popup';
 import { inputEmits, render, tauri } from '../test-tauri';
 import type { CardUpdate } from '../view-ipc';
 import { CardView } from './CardView';
@@ -723,5 +729,85 @@ describe('Genie card links (#523)', () => {
     expect(el.querySelector('.genie-answer-body tbody td:last-child')?.textContent).toBe(
       new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(1220042.3509332137),
     );
+  });
+
+  describe('UX slice 1: ready pill and stacked pop-up', () => {
+    const dictation = { id: 'd1', text: 'Quick update before the board deck', completed: true };
+    const stacked = (text: string) => ({
+      mogId: ID,
+      blurbs: [dictation, { id: G, text, pinned: false, completed: false }, ask],
+      chips: [{ id: 'ask_genie:d1', label: 'Ask Genie' }],
+    });
+
+    it('[AC-1.2] "Answer ready" shows as the ready pill with no timer, and never takes focus', async () => {
+      const el = await mount();
+      await tauri.emitTo(`card-${ID}`, 'card:update', working('Asking Genie'));
+      await advance(5_000);
+      expect(el.querySelector('[data-genie-timer]')).not.toBeNull();
+      await tauri.emitTo(`card-${ID}`, 'card:update', working(ANSWER_READY));
+      const pill = el.querySelector('[data-genie="working"]');
+      expect(pill?.hasAttribute('data-ready')).toBe(true);
+      expect(pill?.querySelector('[data-genie-stage]')?.textContent).toBe(ANSWER_READY);
+      expect(pill?.querySelector('[data-genie-live]')?.textContent).toBe(ANSWER_READY);
+      expect(pill?.querySelector('.genie-ready-dot')).not.toBeNull();
+      expect(pill?.querySelector('[data-genie-timer]')).toBeNull();
+      // The ready pill never fades and takes no focus (AC-1.14).
+      await advance(60_000);
+      expect(el.querySelector('[data-genie="working"]')).not.toBeNull();
+      expect(done()).toBe(0);
+      expect(document.activeElement).toBe(document.body);
+    });
+
+    it('[AC-1.12] a dictation pop-up shows under the pending pill and does not replace it', async () => {
+      const el = await mount();
+      await tauri.emitTo(`card-${ID}`, 'card:update', stacked('Running the query'));
+      const pill = el.querySelector('[data-genie="working"]');
+      const popup = el.querySelector('[data-popup]');
+      expect(pill?.querySelector('[data-genie-stage]')?.textContent).toBe('Running the query');
+      expect(popup?.textContent).toContain('Quick update before the board deck');
+      // The pill comes first, the pop-up under it, in the one card section.
+      expect(pill?.parentElement).toBe(popup?.parentElement);
+      expect(pill?.compareDocumentPosition(popup as Node)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+      expect(document.activeElement).toBe(document.body);
+    });
+
+    it('[AC-1.12] the pill keeps its timer when the pop-up comes (no remount)', async () => {
+      const el = await mount();
+      await tauri.emitTo(`card-${ID}`, 'card:update', working('Asking Genie'));
+      await advance(4_000);
+      expect(el.querySelector('[data-genie-timer]')?.textContent).toBe('0:04');
+      await tauri.emitTo(`card-${ID}`, 'card:update', stacked('Asking Genie'));
+      await advance(1_000);
+      expect(el.querySelector('[data-genie-timer]')?.textContent).toBe('0:05');
+      expect(el.querySelector('[data-popup]')).not.toBeNull();
+    });
+
+    it('[AC-1.12] a pop-up that fades leaves the pill and does not hide the card window', async () => {
+      const el = await mount();
+      await tauri.emitTo(`card-${ID}`, 'card:update', {
+        ...stacked('Running the query'),
+        chips: [],
+      });
+      expect(el.querySelector('[data-popup]')).not.toBeNull();
+      await advance(FADE_AFTER_MS);
+      await advance(FADE_OUT_MS);
+      expect(el.querySelector('[data-popup]')).toBeNull();
+      expect(el.querySelector('[data-genie="working"]')).not.toBeNull();
+      // The pop-up sends no `cancel`: the brain would hide the whole card.
+      expect(inputEmits().filter((e) => (e as { kind: string }).kind === 'cancel')).toEqual([]);
+    });
+
+    it('with no pending Genie request the pop-up alone still sends cancel when it fades', async () => {
+      const el = await mount();
+      await tauri.emitTo(`card-${ID}`, 'card:update', {
+        mogId: ID,
+        blurbs: [dictation],
+        chips: [],
+      });
+      await advance(FADE_AFTER_MS);
+      await advance(FADE_OUT_MS);
+      expect(el.querySelector('[data-popup]')).toBeNull();
+      expect(inputEmits().filter((e) => (e as { kind: string }).kind === 'cancel')).toHaveLength(1);
+    });
   });
 });

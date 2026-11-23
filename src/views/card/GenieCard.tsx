@@ -35,6 +35,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import type { MogId } from '../../shared/interfaces';
 import {
   AFTER_HOVER_MS,
+  ANSWER_READY,
   CARD_DISMISS_EVENT,
   CARD_DONE,
   CARD_MOG_HOVER_EVENT,
@@ -221,6 +222,8 @@ export function GenieCard({ mogId, card, onSize, identity, saved = NO_SAVED }: G
   const changeWorkspace = card.chips.find((c) => c.id === `workspace:${blurbId}`);
   const kind = working ? 'working' : answer ? 'answer' : retry ? 'failure' : 'message';
   const text = newest?.text ?? '';
+  // UX slice 1: an answer is waiting for the talk-key hold to end. The pill says so, with no timer.
+  const ready = working && text.split('\n')[0] === ANSWER_READY;
   const showMs = kind === 'failure' ? FAILURE_SHOW_MS : answerShowMs(answer?.md ?? text);
 
   const [vis, setVis] = useState<Vis>('shown');
@@ -566,6 +569,7 @@ export function GenieCard({ mogId, card, onSize, identity, saved = NO_SAVED }: G
       ref={ref}
       className={`genie genie-${kind}`}
       data-genie={kind}
+      data-ready={ready ? '' : undefined}
       data-state={vis}
       style={accent ? ({ '--mog-id-color': accent } as CSSProperties) : undefined}
       onMouseEnter={() => hold('pointer', true)}
@@ -585,8 +589,9 @@ export function GenieCard({ mogId, card, onSize, identity, saved = NO_SAVED }: G
       )}
       {kind === 'working' && (
         <>
+          {ready && <span className="genie-ready-dot" aria-hidden="true" />}
           <Stage text={line1} />
-          <Timer />
+          {!ready && <Timer />}
         </>
       )}
       {kind !== 'working' && (

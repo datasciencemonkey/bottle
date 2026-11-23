@@ -12,7 +12,7 @@ import type { ChipView } from './card-chips';
 import type { SectionInput } from './card-sections';
 import { createGenieBridge } from './components/genie-bridge';
 import { GIVE_UP_MS } from './components/poll-actor';
-import { ASKING_GENIE } from '../shared/genie-status';
+import { ANSWER_READY, ASKING_GENIE } from '../shared/genie-status';
 import {
   CHANGE_WORKSPACE_LABEL,
   GENIE_DATA_FLOW_TEXT,
@@ -488,5 +488,150 @@ describe('genie direct send: the MOG shows the work and the answer (#573)', () =
       keyNumbers: ['8,800 tables', '150 catalogs'],
     });
     expect(phases).toEqual(['working', 'answered']);
+  });
+
+  describe('UX slice 1: the arrival gate', () => {
+    const ANSWER: AskEvent = {
+      t: 'answer',
+      md: 'Churn was 4.2%.',
+      incomplete: false,
+      keyNumbers: [{ text: '4.2%' }],
+      deepLink: '',
+      queryItems: [],
+    };
+    const FAILED: AskEvent = { t: 'failed', code: 'OFFLINE', userText: 'x', retry: 'none' };
+
+    /** A gate double: `held` decides; held functions wait in `waiting` until `release`. */
+    function gateDouble(held: boolean) {
+      let h = held;
+      const waiting: Array<() => void> = [];
+      return {
+        arrivals: {
+          isHeld: () => h,
+          whenClear: (fn: () => void) => (h ? void waiting.push(fn) : fn()),
+        },
+        release() {
+          h = false;
+          for (const fn of waiting.splice(0)) fn();
+        },
+        waiting,
+      };
+    }
+
+    it('[AC-1.2] [AC-1.3] an answer in a hold changes only the pill to "Answer ready"', async () => {
+      const c = fakeCard();
+      const g = gateDouble(true);
+      const phases: string[] = [];
+      const shows: string[] = [];
+      const ends: GenieEnd[] = [];
+      const send = createGenieDirectSend({
+        genie: fakeBridge([ANSWER]).bridge,
+        cardFor: () => c.card,
+        newOpId: () => OP,
+        arrivals: g.arrivals,
+        onPhase: (_m, p) => void phases.push(p),
+        showCard: (m) => void shows.push(m),
+        onEnd: (x) => void ends.push(x),
+      });
+      let done = false;
+      const p = send(turn()).then(() => (done = true));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(c.log.map((x) => x.text)).toEqual([ASKING_GENIE, ANSWER_READY]);
+      expect(c.log.every((x) => !x.completed)).toBe(true);
+      // Only the clearing at the send: no sections, no outcome blurb, no show, no mood phase.
+      expect(c.expanded).toEqual([undefined]);
+      expect(shows).toEqual([]);
+      expect(phases).toEqual(['working']);
+      expect(ends).toEqual([]);
+      expect(done).toBe(false);
+
+      g.release();
+      await p;
+      expect(shows).toEqual([MOG]);
+      expect(phases).toEqual(['working', 'answered']);
+      expect(c.log.at(-1)).toMatchObject({ text: 'Churn was 4.2%.', completed: true });
+      expect(c.expanded.at(-1)).toMatchObject({ answerMd: 'Churn was 4.2%.' });
+      expect(ends).toHaveLength(1);
+    });
+
+    it('[AC-1.9] the pill of the own ask shows at once, in a hold', () => {
+      const c = fakeCard();
+      const g = gateDouble(true);
+      const send = createGenieDirectSend({
+        genie: fakeBridge([ANSWER]).bridge,
+        cardFor: () => c.card,
+        newOpId: () => OP,
+        arrivals: g.arrivals,
+      });
+      void send(turn());
+      expect(c.log.map((x) => x.text)).toEqual([ASKING_GENIE]);
+    });
+
+    it('[AC-1.10] two held answers apply in arrival order, and the newest shows on the card', async () => {
+      const c = fakeCard();
+      const g = gateDouble(true);
+      const order: string[] = [];
+      let n = 0;
+      const send = createGenieDirectSend({
+        genie: {
+          submit(req) {
+            const md = `answer ${++n}`;
+            return {
+              opId: req.opId,
+              events: (async function* () {
+                yield { ...ANSWER, md } as AskEvent;
+              })(),
+            };
+          },
+        },
+        cardFor: () => c.card,
+        newOpId: () => `op-${n + 1}`,
+        arrivals: g.arrivals,
+        onPhase: (_m, p, op) => void (p !== 'working' && order.push(op)),
+      });
+      const both = Promise.all([send(turn()), send(turn())]);
+      await new Promise((r) => setTimeout(r, 0));
+      expect(order).toEqual([]);
+      g.release();
+      await both;
+      expect(order).toEqual(['op-1', 'op-2']);
+      expect(c.log.at(-1)?.text).toBe('answer 2');
+    });
+
+    it('[AC-1.11] a failure waits for the gate too, and keeps the working pill', async () => {
+      const c = fakeCard();
+      const g = gateDouble(true);
+      const phases: string[] = [];
+      const send = createGenieDirectSend({
+        genie: fakeBridge([FAILED]).bridge,
+        cardFor: () => c.card,
+        newOpId: () => OP,
+        arrivals: g.arrivals,
+        onPhase: (_m, p) => void phases.push(p),
+        showCard: () => undefined,
+      });
+      const p = send(turn());
+      await new Promise((r) => setTimeout(r, 0));
+      expect(c.log.map((x) => x.text)).toEqual([ASKING_GENIE]);
+      expect(c.controls.size).toBe(0);
+      expect(phases).toEqual(['working']);
+      g.release();
+      await p;
+      expect(phases).toEqual(['working', 'failed']);
+      expect(c.controls.size).toBe(1);
+    });
+
+    it('with no hold the arrival applies at once, with no "Answer ready" pill', async () => {
+      const c = fakeCard();
+      const g = gateDouble(false);
+      const send = createGenieDirectSend({
+        genie: fakeBridge([ANSWER]).bridge,
+        cardFor: () => c.card,
+        newOpId: () => OP,
+        arrivals: g.arrivals,
+      });
+      await send(turn());
+      expect(c.log.map((x) => x.text)).toEqual([ASKING_GENIE, 'Churn was 4.2%.']);
+    });
   });
 });

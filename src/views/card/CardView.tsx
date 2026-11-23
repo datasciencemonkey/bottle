@@ -228,6 +228,20 @@ export function CardView({ mogId }: { mogId: MogId }) {
   const shown = kept && (!newest || newest.id === kept.blurbs[0]?.id) ? kept : card;
   // #573: the window takes the height of the pop-up or the Genie card (`fit-window.ts`).
   const genie = card !== undefined && isGenieBlurbId(newest?.id);
+  // UX slice 1: a pending Genie pill stays when a newer pop-up (a dictation) comes. The pill is
+  // on top and the pop-up under it, in the one card window. A closed stacked pop-up leaves the pill.
+  const [closedPopup, setClosedPopup] = useState<string | undefined>(undefined);
+  const pending = useMemo(
+    () => card?.blurbs.find((b) => isGenieBlurbId(b.id) && !b.completed),
+    [card],
+  );
+  const pillCard = useMemo(
+    () =>
+      card && pending && !genie
+        ? { ...card, blurbs: [pending, ...card.blurbs.filter((b) => b !== pending)] }
+        : card,
+    [card, pending, genie],
+  );
   // lamp-alive: the card sits close to its MOG on either side; `data-side` on the page mirrors
   // the tail (card.css) toward the MOG.
   const fit = useMemo(() => createWindowFit(tauriCardWindow, { onSide: applyCardSide }), []);
@@ -283,17 +297,34 @@ export function CardView({ mogId }: { mogId: MogId }) {
     newest.id.startsWith('ask:') &&
     !newest.text.includes('\n') &&
     !card?.chips.some((c) => c.id === `ask_genie:${newest.id.slice(4)}`);
-  if (genie && newest)
+  const stack = !genie && !panel && pending !== undefined && pillCard !== undefined;
+  const popup = stack ? shown?.blurbs[0] : undefined;
+  const popupOn =
+    popup !== undefined &&
+    newest !== undefined &&
+    popup.id !== closedPopup &&
+    !(echo && shown === card);
+  if ((genie && newest) || (stack && pending && pillCard))
     return (
       <section aria-label="MOG card" className="card card-genie">
         <GenieCard
-          key={newest.id}
+          key={(genie ? newest : pending)?.id ?? ''}
           mogId={mogId}
-          card={card}
+          card={(genie ? card : pillCard) as CardUpdate}
           onSize={onSize}
           identity={identity}
           saved={saved}
         />
+        {!genie && popupOn && shown && popup && (
+          <Popup
+            key={popup.id}
+            mogId={mogId}
+            card={shown}
+            saved={saved}
+            stacked
+            onClose={() => setClosedPopup(popup.id)}
+          />
+        )}
         {probe}
       </section>
     );

@@ -2,7 +2,8 @@
  * The registry of the hidden TS brain components T1-T15 of 4.3 (ARC-2, MOG-08b).
  * `startBrain()` constructs each component once; all domain state lives in these objects.
  */
-import type { MogId } from '../../shared/interfaces';
+import type { CaptureState, MogId } from '../../shared/interfaces';
+import { createArrivalGate } from '../arrival-gate';
 import { call } from '../../shared/ipc';
 import { createAskGate, wireAskGate } from '../ask-gate';
 import {
@@ -332,6 +333,21 @@ export function startBrain(): Brain {
     // #498: the card stack of each MOG, made on first use. TODO(#374): drop a stack when its MOG
     // closes.
     const cardClock = createSystemClock();
+    // UX slice 1: no Ask Genie arrival opens the card while the talk key is held (or hands-free
+    // listens); it applies 1.2 s after the paste of the hold.
+    const arrivalGate = createArrivalGate({
+      clock: cardClock,
+      schedule: timeoutScheduler(cardClock),
+    });
+    bus.on(EVENTS['hotkey.ptt'].name, (p) => {
+      const e = asPttEvent(p, 0);
+      if (e) arrivalGate.onPtt(e);
+    });
+    bus.on(EVENTS['capture.state'].name, (p) => {
+      if (typeof p !== 'object' || p === null) return;
+      const s = p as CaptureState;
+      arrivalGate.setHandsFree(s.recording === true && s.mode === 'hands_free');
+    });
     const stacks = new Map<MogId, CardStack>();
     /** #573: the newest Genie request of each MOG, for a double-click on the MOG. */
     const lastGenieOp = new Map<MogId, string>();
@@ -378,6 +394,7 @@ export function startBrain(): Brain {
           captureMood.ask(mogId, phase);
         },
         showCard: (mogId) => call('window_card_show', { mogId }),
+        arrivals: arrivalGate,
         // The card's "Change workspace…": the same path as the right-click "Change home
         // workspace…": show the hub on that MOG's Edit form.
         changeWorkspace: () => {
@@ -604,6 +621,8 @@ export function startBrain(): Brain {
             : memoryUnavailable(owned.mogId),
         // #498, MOG-05b, MOG-06d: a Copy or a failed insertion reaches the Copy card.
         onDone: (r, owned) => void dictation.onDone(r, owned).catch(() => undefined),
+        // UX slice 1: the paste ended (or none came): the held arrivals follow 1.2 s later.
+        onPasteResolved: (pasted) => arrivalGate.pasteResolved(pasted),
       }),
     });
     wireCaptureLifecycle(bus, lifecycle, createSystemClock().now);

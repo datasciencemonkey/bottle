@@ -145,6 +145,36 @@
   animation: genie-stage-out 120ms cubic-bezier(0.4, 0, 1, 1) forwards;
 }
 
+/* UX slice 1: "Answer ready". The gold spark dot of the lamp replaces the timer; the text is
+   solid, with no sweep, because nothing is working now. The card opens after the hold. */
+.genie-ready-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--mog-spark);
+  box-shadow: 0 0 6px 0 var(--mog-spark);
+}
+
+.genie-working[data-ready] {
+  min-width: 0;
+}
+
+.genie-working[data-ready] .genie-stage {
+  -webkit-mask-image: none;
+  mask-image: none;
+  animation: genie-stage-in 180ms var(--mog-ease-out) both;
+}
+
+/* UX slice 1: a pop-up under the pill, in the same window. It never covers the pill. */
+.card-genie .popup {
+  margin-top: 8px;
+}
+
+html[data-side='left'] .card-genie .popup {
+  margin-left: auto;
+}
+
 .genie-timer {
   flex: none;
   margin-left: auto;
@@ -541,6 +571,11 @@
 
   .genie-stage[data-leaving] {
     display: none;
+  }
+
+  /* Ready is still: no breathing, no fade. */
+  .genie-working[data-ready] .genie-stage {
+    animation: none;
   }
 
   .genie-body {
