@@ -272,27 +272,27 @@ fn code(r: mog_core::error::CoreResult<Value>) -> &'static str {
 }
 
 #[test]
-fn adr_0103_no_dictation_while_a_recording_runs() {
+fn adr_0118_during_a_recording_hands_free_is_refused_and_ptt_is_an_overlay() {
     let r = rig();
     r.rec.set_enabled(true, &Asker::default());
     r.rec.session().start(opts()).unwrap();
-    for mode in ["ptt", "hands_free"] {
-        assert_eq!(
-            code(
-                r.capture
-                    .call("capture_start", json!({"mogId": "mog-a1", "mode": mode}))
-            ),
-            "recording_in_progress",
-            "{mode}"
-        );
-    }
-    // No overlay lease: R2 still has only the recording's lease, and the recording runs.
-    let v = serde_json::to_value(r.capture.service().status()).unwrap();
-    assert_eq!(v["mode"], json!("session"));
-    assert_eq!(v["owner"], json!("bottle-recording"));
-    // The recording's stop works, and then dictation is free again.
-    r.rec.session().stop(StopCause::User).unwrap();
-    r.capture
+    // AC-6.2: hands-free still answers `recording_in_progress`.
+    assert_eq!(
+        code(r.capture.call(
+            "capture_start",
+            json!({"mogId": "mog-a1", "mode": "hands_free"})
+        )),
+        "recording_in_progress"
+    );
+    // AC-6.1: a PTT is granted. The recording's lease stays the primary one.
+    let ptt = r
+        .capture
         .call("capture_start", json!({"mogId": "mog-a1", "mode": "ptt"}))
-        .expect("PTT after the recording");
+        .expect("a PTT is an overlay on the recording");
+    assert_eq!(ptt["mode"], json!("session"));
+    assert!(ptt["leaseId"].is_string());
+    // AC-6.12: the recording runs on.
+    assert!(r.rec.session().is_recording());
+    // The recording's stop works.
+    r.rec.session().stop(StopCause::User).unwrap();
 }

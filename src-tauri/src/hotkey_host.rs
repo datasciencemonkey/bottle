@@ -42,10 +42,11 @@ use mog_core::insertion::NoteKind;
 use mog_core::ipc::{events, PermissionKind, WindowClass};
 use mog_core::keyboard_env::{self, CopilotKeyFlag, MemoryCopilotKeyFlag, WithCopilotFlag};
 use mog_core::recording::RecordingSettingsStore;
+use mog_core::recording_capture::tap::RecordingTap;
 use mog_core::types::{TalkKeyReason, TalkKeyState, TalkKeyStatus};
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex, MutexGuard};
+use std::sync::{mpsc, Arc, Mutex, MutexGuard, OnceLock};
 use std::thread::JoinHandle;
 use tauri::{AppHandle, Manager, Runtime};
 
@@ -329,7 +330,68 @@ fn target_note(kind: NoteKind) -> KeyDownHook {
 
 /// A warm-up that runs at each talk-key down, before the brain hears of it: the R4 model
 /// preload (CAP-51c, #46) and the paste target note (ADR 0118). It must not block.
+/// The mic gate hook (ADR 0118) also has this shape, at each end of a press ([`gate_up`]).
 pub type KeyDownHook = Box<dyn Fn() + Send>;
+
+/// ADR 0118: the talk key side of the mic gate in the call recording tap. The app builds one
+/// at launch and manages it. `install_capture` attaches the tap later. Before that, the hooks
+/// do nothing. Only the hotkey forwarder calls it: no IPC command reaches it, so the brain
+/// cannot open the gate. `OnceLock::get` is one atomic load, so a hook takes no lock and
+/// allocates nothing.
+#[derive(Clone, Default)]
+pub struct TalkGate {
+    tap: Arc<OnceLock<RecordingTap>>,
+    /// The key state that the hooks last saw, for the resync at a recording start.
+    down: Arc<AtomicBool>,
+}
+
+impl TalkGate {
+    /// Attach the recording tap, once. The key state seen so far goes to it (a key that went down
+    /// before the attach must close the gate).
+    pub fn attach(&self, tap: RecordingTap) {
+        if self.tap.set(tap).is_ok() {
+            self.resync();
+        }
+    }
+
+    fn down(&self) {
+        self.down.store(true, Ordering::SeqCst);
+        if let Some(tap) = self.tap.get() {
+            tap.talk_key_down();
+        }
+    }
+
+    fn up(&self) {
+        self.down.store(false, Ordering::SeqCst);
+        if let Some(tap) = self.tap.get() {
+            tap.talk_key_up();
+        }
+    }
+
+    /// Give the tap the key state that the hooks saw. It only closes the gate, never opens it: a
+    /// key-up that a hook is about to report must not race a late `false`. Every end of a press
+    /// (up, cancel, a paused talk key, an engine reset) already reports `up`. Call it at the
+    /// start of a recording, which is before `RecordingTap::arm`.
+    pub fn resync(&self) {
+        if let Some(tap) = self.tap.get() {
+            if self.down.load(Ordering::SeqCst) {
+                tap.resync_key(true);
+            }
+        }
+    }
+}
+
+/// ADR 0118: the key-down hook that closes the mic gate. It runs first, so the gate closes
+/// before the preload, the target note and the brain. No lock, no IPC call, no allocation.
+fn gate_down(gate: TalkGate) -> KeyDownHook {
+    Box::new(move || gate.down())
+}
+
+/// ADR 0118: the hook for each end of a press (up, cancel, ask up, a paused talk key). The gate
+/// stays closed for the tail after it.
+fn gate_up(gate: TalkGate) -> KeyDownHook {
+    Box::new(move || gate.up())
+}
 
 /// Turns R1 outputs into brain items and status changes.
 ///
@@ -349,6 +411,8 @@ pub struct PttForwarder<B: BrainSink, S: StatusSink> {
     key_down: Vec<KeyDownHook>,
     /// Hooks for the `double_tap` that starts hands-free (ADR 0118): not the R4 preload.
     double_tap: Vec<KeyDownHook>,
+    /// Hooks for each end of a press (ADR 0118: the mic gate). They run before the brain hears it.
+    key_up: Vec<KeyDownHook>,
 }
 
 impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
@@ -363,6 +427,7 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
             toggle: None,
             key_down: Vec::new(),
             double_tap: Vec::new(),
+            key_up: Vec::new(),
         }
     }
 
@@ -377,6 +442,13 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
     /// because tap 2's own grant uses up the note of its key-down).
     pub fn with_double_tap(mut self, hook: KeyDownHook) -> Self {
         self.double_tap.push(hook);
+        self
+    }
+
+    /// Run `hook` at each end of a press: an up, a cancel (a chord such as ⌥R, a tap, a reset),
+    /// an ask up, and a paused talk key (the event tap is off or Secure Event Input is on).
+    pub fn with_key_up(mut self, hook: KeyDownHook) -> Self {
+        self.key_up.push(hook);
         self
     }
 
@@ -400,6 +472,9 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
                         self.held.clone()
                     }
                     PttPhase::Up | PttPhase::Cancel => {
+                        for hook in &self.key_up {
+                            hook();
+                        }
                         self.last = self.held.take();
                         self.toggle = (phase == PttPhase::Cancel)
                             .then(|| self.last.clone())
@@ -422,7 +497,13 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
                     let _ = self.brain.deliver(events::HOTKEY_PTT, payload);
                 }
             }
-            HotkeyOutput::TalkKeyPaused => self.status.status(HotkeyStatus::Paused),
+            HotkeyOutput::TalkKeyPaused => {
+                // The key-up of a paused talk key can be lost: close the hold now (ADR 0118).
+                for hook in &self.key_up {
+                    hook();
+                }
+                self.status.status(HotkeyStatus::Paused)
+            }
             HotkeyOutput::TalkKeyRestored => self.status.status(HotkeyStatus::Restored),
             HotkeyOutput::FallbackChordUnavailable => {
                 self.status.status(HotkeyStatus::ChordUnavailable)
@@ -1053,10 +1134,21 @@ where
         + 'static,
 {
     let target = Arc::new(PttTarget::default());
+    let gate = match app.try_state::<TalkGate>() {
+        Some(g) => g.inner().clone(),
+        None => {
+            let g = TalkGate::default();
+            app.manage(g.clone());
+            g
+        }
+    };
     let (sink, rx) = queue();
     spawn_forwarder(
         rx,
         PttForwarder::new(Arc::clone(&target), app.clone(), BrainStatus(app.clone()))
+            // ADR 0118: the mic gate closes first, before the brain hears the press.
+            .with_key_down(gate_down(gate.clone()))
+            .with_key_up(gate_up(gate))
             .with_key_down(r4_preload(app.clone()))
             .with_key_down(target_note(NoteKind::KeyDown))
             .with_double_tap(target_note(NoteKind::HandsFreeStart)),
@@ -1251,6 +1343,117 @@ mod tests {
             f.on_output(HotkeyOutput::Ptt(phase));
         }
         assert_eq!(*order.lock().unwrap(), ["down", "down", "double"]);
+    }
+
+    fn gated_tap() -> (TalkGate, RecordingTap, mog_core::clock::SimClock) {
+        let clock = mog_core::clock::SimClock::new();
+        let tap = RecordingTap::new(Arc::new(clock.clone()));
+        let gate = TalkGate::default();
+        gate.attach(tap.clone());
+        (gate, tap, clock)
+    }
+
+    const TAIL: std::time::Duration = std::time::Duration::from_millis(300);
+
+    #[test]
+    fn ux6h_the_gate_closes_at_key_down_before_the_brain_hears_the_press() {
+        let target = Arc::new(PttTarget::default());
+        target.set("a1");
+        let (f, brain, _) = forwarder(&target);
+        let (gate, tap, clock) = gated_tap();
+        let seen_at_brain = Arc::new(Mutex::new(None));
+        let (t, s) = (tap.clone(), Arc::clone(&seen_at_brain));
+        let mut f = f
+            .with_key_down(gate_down(gate))
+            // Added after the gate hook: it sees what the gate did.
+            .with_key_down(Box::new(move || *s.lock().unwrap() = Some(t.mic_gated())));
+        assert!(!tap.mic_gated());
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Down));
+        assert_eq!(*seen_at_brain.lock().unwrap(), Some(true));
+        // Held for any length of time: still closed.
+        clock.advance(TAIL * 10);
+        assert!(tap.mic_gated());
+        assert_eq!(brain.items(), vec![ptt("a1", "down")]);
+    }
+
+    #[test]
+    fn ux6h_every_end_of_a_press_ends_the_hold_and_starts_the_tail() {
+        let ends = [
+            vec![HotkeyOutput::Ptt(PttPhase::Up)],
+            // ⌥G, then the key up.
+            vec![HotkeyOutput::PttAskUp],
+            // A tap, a cancel by another key, and ⌥R (the cancel comes before the toggle).
+            vec![
+                HotkeyOutput::Ptt(PttPhase::Cancel),
+                HotkeyOutput::RecordToggle,
+            ],
+            // The event tap is off, or Secure Event Input is on: the key-up can be lost.
+            vec![HotkeyOutput::TalkKeyPaused],
+        ];
+        for end in ends {
+            let target = Arc::new(PttTarget::default());
+            target.set("a1");
+            let (f, _, _) = forwarder(&target);
+            let (gate, tap, clock) = gated_tap();
+            let mut f = f
+                .with_key_down(gate_down(gate.clone()))
+                .with_key_up(gate_up(gate));
+            f.on_output(HotkeyOutput::Ptt(PttPhase::Down));
+            clock.advance(TAIL);
+            assert!(tap.mic_gated(), "held");
+            for o in &end {
+                f.on_output(*o);
+            }
+            assert!(tap.mic_gated(), "the tail runs after {end:?}");
+            clock.advance(TAIL);
+            assert!(!tap.mic_gated(), "open 250 ms after {end:?}");
+        }
+    }
+
+    #[test]
+    fn ux6h_a_key_down_before_the_tap_attaches_closes_the_gate_at_the_attach() {
+        let gate = TalkGate::default();
+        let (down, up) = (gate_down(gate.clone()), gate_up(gate.clone()));
+        down();
+        down();
+        let clock = mog_core::clock::SimClock::new();
+        let tap = RecordingTap::new(Arc::new(clock.clone()));
+        gate.attach(tap.clone());
+        assert!(tap.mic_gated());
+        up();
+        clock.advance(TAIL);
+        assert!(!tap.mic_gated());
+        // The resync at a recording start only closes. A key that is up stays up.
+        gate.resync();
+        assert!(!tap.mic_gated());
+        down();
+        gate.resync();
+        assert!(tap.mic_gated());
+    }
+
+    #[test]
+    fn ux6h_the_app_install_adds_the_gate_hooks_first() {
+        let src = include_str!("hotkey_host.rs");
+        let install = &src[src
+            .find("    let (sink, rx) = queue();")
+            .expect("the install")..];
+        let install = &install[..install
+            .find("let sink: Arc<dyn HotkeySink>")
+            .expect("its end")];
+        let squashed: String = install.chars().filter(|c| !c.is_whitespace()).collect();
+        let gate = squashed
+            .find(".with_key_down(gate_down(gate.clone()))")
+            .expect("the gate down hook");
+        assert!(squashed.contains(".with_key_up(gate_up(gate))"));
+        for later in [
+            ".with_key_down(r4_preload(app.clone()))",
+            ".with_key_down(target_note(NoteKind::KeyDown))",
+        ] {
+            assert!(
+                gate < squashed.find(later).expect(later),
+                "gate first: {later}"
+            );
+        }
     }
 
     struct NoText;

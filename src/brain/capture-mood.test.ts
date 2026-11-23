@@ -6,6 +6,8 @@ import type { CaptureState } from '../shared/interfaces';
 import { createSimScheduler } from '../test-support/sim-scheduler';
 import { BLURB_REVEAL_MS, ERROR_MS, MOOD_HOLD_MS, SUCCESS_MS } from './components/mood-mapper';
 import {
+  HELD_NOTE_MS,
+  HELD_NOTE_TEXT,
   PENDING_ASK_MS,
   REFUSAL_REASONS,
   REFUSAL_TEXT,
@@ -118,7 +120,7 @@ describe('capture mood: a refused start is never silent (#551)', () => {
     for (const [err, want] of cases) expect(refusalReason(err)).toBe(want);
   });
 
-  it('[ADR-0103] a talk-key hold during a recording shows "Recording in progress"', () => {
+  it('[ADR-0103] [ADR-0118] a hands-free start during a recording shows "Recording in progress"', () => {
     expect(refusalReason({ error: 'recording_in_progress' })).toBe('recording_in_progress');
     expect(REFUSAL_TEXT.recording_in_progress.text).toBe('Recording in progress');
     const { cm, last } = setup();
@@ -251,5 +253,60 @@ describe('capture mood: the ⌥G key-up (#573)', () => {
     cm.ask(A, 'pending');
     await s.runUntil(1000 + PENDING_ASK_MS);
     expect(last(A)?.mood).toBe('idle');
+  });
+});
+
+describe('capture mood: the talk key during a call recording (ADR 0118)', () => {
+  const kindsOf = (v: { badges?: { kind: string }[] } | undefined) => v?.badges?.map((b) => b.kind);
+
+  it('[AC-6.15] a hold during a recording shows "Call only", and the end of the hold clears it', () => {
+    const { cm, last } = setup();
+    cm.callRecording(true, [A]);
+    cm.hold(A, true);
+    expect(last(A)?.badges).toEqual([
+      expect.objectContaining({ kind: 'call_only', text: 'Call only', hoverOnly: false }),
+    ]);
+    cm.hold(A, false);
+    expect(last(A)?.badges).toBeUndefined();
+  });
+
+  it('[AC-6.15] a hold with no recording shows no "Call only" badge', () => {
+    const { cm, last } = setup();
+    cm.hold(A, true);
+    expect(last(A)?.badges).toBeUndefined();
+    // The recording starts during the hold: the badge follows, and goes with the recording.
+    cm.callRecording(true, [A]);
+    expect(kindsOf(last(A))).toEqual(['call_only']);
+    cm.callRecording(false);
+    expect(last(A)?.badges).toBeUndefined();
+  });
+
+  it('[AC-6.15] the badge is for the MOG of the hold only', () => {
+    const { cm, last } = setup();
+    cm.callRecording(true, [A, B]);
+    cm.hold(A, true);
+    expect(kindsOf(last(A))).toEqual(['call_only']);
+    expect(last(B)?.badges).toBeUndefined();
+  });
+
+  it('[AC-6.16] the held note shows for 6 s and then goes', async () => {
+    const { s, cm, last } = setup();
+    cm.callRecording(true, [A]);
+    cm.hold(A, true);
+    cm.heldNote(A);
+    expect(HELD_NOTE_TEXT).toBe('Your call can still hear you.');
+    expect(last(A)?.badges?.map((b) => b.text)).toEqual(['Call only', HELD_NOTE_TEXT]);
+    await s.runUntil(1000 + HELD_NOTE_MS);
+    expect(kindsOf(last(A))).toEqual(['call_only']);
+    cm.hold(A, false);
+    expect(last(A)?.badges).toBeUndefined();
+  });
+
+  it('a refusal and the "Call only" badge show together', () => {
+    const { cm, last } = setup();
+    cm.callRecording(true, [A]);
+    cm.hold(A, true);
+    cm.refused(A, { error: 'recording_in_progress' });
+    expect(kindsOf(last(A))).toEqual(['capture_refused', 'call_only']);
   });
 });

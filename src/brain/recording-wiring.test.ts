@@ -19,7 +19,10 @@ import {
 import { BrainBus } from './bus';
 import { core } from './test-core';
 import {
+  createHeldNote,
   ipcRecordingApi,
+  recSettingsOf,
+  settingsPatchOf,
   turnsOf,
   wireRecording,
   type RecDetail,
@@ -709,5 +712,85 @@ describe('ipcRecordingApi: the typed recording_* contract (ADR 0103)', () => {
     expect(states).toEqual([{ phase: 'idle' }]);
     expect(jobs).toEqual([{ id: 'a', name: 'n', startedAt: 5, durationS: 60, status: 'done' }]);
     expect('onRecordToggle' in api).toBe(false);
+  });
+});
+
+describe('the held note (ADR 0118)', () => {
+  const setupNote = (start: Partial<RecSettings> = {}) => {
+    const fake = fakeApi(start);
+    const mood = { heldNote: vi.fn() };
+    const note = createHeldNote({ api: fake.api, mood });
+    return { fake, mood, note };
+  };
+
+  it('[AC-6.16] the first hold in a recording shows the note and stores heldNoteShown', async () => {
+    const { fake, mood, note } = setupNote();
+    fake.pushState({ phase: 'recording' });
+    note.held('a1');
+    await flush();
+    expect(mood.heldNote).toHaveBeenCalledTimes(1);
+    expect(mood.heldNote).toHaveBeenCalledWith('a1');
+    expect(fake.current().heldNoteShown).toBe(true);
+  });
+
+  it('[AC-6.17] a second hold, in the same or a later recording, shows no note', async () => {
+    const { fake, mood, note } = setupNote();
+    fake.pushState({ phase: 'recording' });
+    note.held('a1');
+    note.held('a1');
+    await flush();
+    note.held('a1');
+    fake.pushState({ phase: 'idle' });
+    fake.pushState({ phase: 'recording' });
+    note.held('a1');
+    await flush();
+    expect(mood.heldNote).toHaveBeenCalledTimes(1);
+  });
+
+  it('[AC-6.17] a stored heldNoteShown keeps the note away after a restart', async () => {
+    const { fake, mood, note } = setupNote({ heldNoteShown: true });
+    fake.pushState({ phase: 'recording' });
+    note.held('a1');
+    await flush();
+    expect(mood.heldNote).not.toHaveBeenCalled();
+    expect(fake.api.writeSettings).not.toHaveBeenCalled();
+  });
+
+  it('a hold with no recording shows no note and keeps the flag', async () => {
+    const { fake, mood, note } = setupNote();
+    note.held('a1');
+    fake.pushState({ phase: 'stopping' });
+    note.held('a1');
+    await flush();
+    expect(mood.heldNote).not.toHaveBeenCalled();
+    expect(fake.current().heldNoteShown).toBeUndefined();
+  });
+
+  it('a recording that is already on when the brain starts counts', async () => {
+    const fake = fakeApi();
+    fake.api.state.mockResolvedValue({ phase: 'recording' });
+    const mood = { heldNote: vi.fn() };
+    const note = createHeldNote({ api: fake.api, mood });
+    await flush();
+    note.held('a1');
+    await flush();
+    expect(mood.heldNote).toHaveBeenCalledTimes(1);
+  });
+
+  it('the settings map keeps heldNoteShown, and a stale false never resets it', () => {
+    const wire = {
+      enabled: true,
+      consentAck: true,
+      storage: null,
+      transcribeEndpoint: 'a',
+      notesEndpoint: 'b',
+      presetInstructions: 'c',
+      lengthMin: 60,
+      heldNoteShown: true,
+    };
+    expect(recSettingsOf(wire).heldNoteShown).toBe(true);
+    expect(recSettingsOf({ ...wire, heldNoteShown: false }).heldNoteShown).toBeUndefined();
+    expect(settingsPatchOf(recSettingsOf(wire)).heldNoteShown).toBe(true);
+    expect('heldNoteShown' in settingsPatchOf(settings())).toBe(false);
   });
 });

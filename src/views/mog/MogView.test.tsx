@@ -398,6 +398,41 @@ describe('V2 MOG view', () => {
     expect(shown(el)).toEqual([]);
   });
 
+  it('[ADR-0118] [AC-6.15] [AC-6.16] "Call only" is a note, and the held note is announced as a status', async () => {
+    const { m } = fakeMascot();
+    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    await tauri.emit('mog:view_state', {
+      mogId: ID,
+      mood: 'listening',
+      overlays,
+      badges: [
+        {
+          kind: 'call_only',
+          text: 'Call only',
+          label:
+            'Call only. The call recording gets silence from your mic while you hold the talk key',
+          hoverOnly: false,
+        },
+        {
+          kind: 'call_note',
+          text: 'Your call can still hear you.',
+          label: 'Your call can still hear you.',
+          hoverOnly: false,
+        },
+      ],
+    });
+    const only = el.querySelector('[data-badge="call_only"]') as HTMLElement;
+    expect(only.getAttribute('role')).toBe('note');
+    expect(only.querySelector('[data-badge-text]')?.textContent).toBe('Call only');
+    const note = el.querySelector('[data-badge="call_note"]') as HTMLElement;
+    expect(note.getAttribute('role')).toBe('status');
+    expect(note.querySelector('[data-badge-text]')?.textContent).toBe(
+      'Your call can still hear you.',
+    );
+    // No action: neither badge is a button.
+    expect(el.querySelectorAll('.badges button')).toHaveLength(0);
+  });
+
   it('[UX-39b] [AT-12] badges never change the mood the view renders', async () => {
     const { m, calls } = fakeMascot();
     await render(<MogView mogId={ID} createMascot={() => m} />);

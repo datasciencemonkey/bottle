@@ -128,13 +128,19 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
     let device: Box<dyn mog_core::capture::AudioDevice> = Box::new(
         mog_core::audio_device::system::RecordingDevice::new(device, system),
     );
-    let host = capture_host::CaptureHost::with_stt(
+    // ADR 0118: the mic gate of the tap. The talk key hooks close it at key-down; the gate
+    // wrapper (outermost in the host's event chain) closes it for an overlay lease.
+    if let Some(gate) = handle.try_state::<hotkey_host::TalkGate>() {
+        gate.attach(tap.clone());
+    }
+    let host = capture_host::CaptureHost::with_stt_gated(
         device,
         std::sync::Arc::clone(&clock),
         std::sync::Arc::clone(&relay),
         levels,
         ptt,
         stt.engine().clone(),
+        tap.clone(),
     )?;
     // ADR 0103: a muted mic must not end a call recording, so the session holds the mic's
     // zero-buffer watch while it records.
@@ -186,12 +192,30 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
         },
     )?;
     let recording = std::sync::Arc::new(recording);
+    // The session calls this hook when a start begins (before `RecordingTap::arm`) and when the
+    // recording ends. At the start, the talk key state that the hooks saw goes to the tap, so a
+    // key that is down when the recording starts keeps the gate closed (ADR 0118).
     #[cfg(any(target_os = "macos", target_os = "windows"))]
-    if let Some(hold) = mic_hold {
-        recording
-            .session()
-            .set_active_hook(std::sync::Arc::new(move |on| hold.set(on)));
-    }
+    let hold_mic = move |on: bool| {
+        if let Some(hold) = &mic_hold {
+            hold.set(on);
+        }
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let hold_mic = |_on: bool| {};
+    let key_gate = handle
+        .try_state::<hotkey_host::TalkGate>()
+        .map(|g| g.inner().clone());
+    recording
+        .session()
+        .set_active_hook(std::sync::Arc::new(move |on| {
+            if on {
+                if let Some(gate) = &key_gate {
+                    gate.resync();
+                }
+            }
+            hold_mic(on);
+        }));
     // Sleep stops a recording and finalizes it. Without the OS watch the app still runs.
     let _ = recording.watch_sleep(&*mog_core::token_events::os_session_source());
     // `recording.state` goes to the brain at each start, stop and system audio change.

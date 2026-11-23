@@ -786,3 +786,27 @@ body,
       mog-answer-soft 2400ms ease-in-out 480ms infinite alternate;
   }
 }
+
+/* ADR 0118: the badge "Call only" while the talk key is held during a call recording, and the
+   one-time note "Your call can still hear you.". The badge keeps the pill shape of the other
+   badges and takes the accent as its rim, so it reads as a state, not a warning. The note can
+   be wider than the window, so it wraps and stays inside it. */
+.badges [data-badge='call_only'] {
+  border-color: var(--mog-overlay-text);
+}
+
+.badges [data-badge='call_note'] {
+  max-width: 100%;
+  box-sizing: border-box;
+  justify-content: center;
+  text-align: center;
+  font-weight: 400;
+  border-radius: var(--mog-radius-md);
+  animation: mog-toast-in 160ms var(--mog-ease-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .badges [data-badge='call_note'] {
+    animation: none;
+  }
+}

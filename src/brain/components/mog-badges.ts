@@ -6,6 +6,8 @@
  *   target (SC-5 step 3). The host is in the accessible label.
  * - `stt` (UX-38): "STT: local" or "STT: Databricks <model>", on hover and in the card footer.
  * - `hop`, `offline`, `sync` (UX-39a): shown while their state applies.
+ * - `call_only` (ADR 0118): shown while the talk key is held during a call recording. The
+ *   recording gets silence for the mic then, so the words go to Bottle only.
  *
  * Badges are orthogonal to the mood (UX-39b): this function takes no mood source and returns
  * no mood, and `mapMood` takes none of these inputs. Each badge has text and an accessible
@@ -18,7 +20,7 @@
 import type { BackendBinding, ProfileName, Transcript } from '../../shared/interfaces';
 import type { Lifecycle } from './mood-mapper';
 
-export type BadgeKind = 'identity' | 'stt' | 'hop' | 'offline' | 'sync';
+export type BadgeKind = 'identity' | 'stt' | 'hop' | 'offline' | 'sync' | 'call_only';
 
 /** One badge. The view renders `text` with `label` as its accessible name. */
 export interface MogBadge {
@@ -69,6 +71,8 @@ export interface BadgeSources {
   };
   lifecycle: Lifecycle;
   sync?: 'off' | 'on' | 'paused';
+  /** ADR 0118: the talk key is held during a call recording. */
+  callOnly?: boolean;
 }
 
 /** UX-15: "Genie One", "Genie: <agent>" or "<app name>". */
@@ -101,7 +105,15 @@ function sttLabel(stt: SttUse): string {
       : 'Speech to text runs on Databricks';
 }
 
-/** The badges of one MOG, in a fixed order: identity, STT, hop, offline, sync. */
+/** ADR 0118: the badge while the talk key is held during a call recording. Not hover-only. */
+export const CALL_ONLY_BADGE: MogBadge = {
+  kind: 'call_only',
+  text: 'Call only',
+  label: 'Call only. The call recording gets silence from your mic while you hold the talk key',
+  hoverOnly: false,
+};
+
+/** The badges of one MOG, in a fixed order: identity, STT, hop, offline, sync, call only. */
 export function mapBadges(src: BadgeSources): MogBadge[] {
   const hop = src.hop;
   const profile = hop?.profile ?? src.profile;
@@ -154,5 +166,6 @@ export function mapBadges(src: BadgeSources): MogBadge[] {
       action: 'open_setup',
     });
   }
+  if (src.callOnly) out.push(CALL_ONLY_BADGE);
   return out;
 }

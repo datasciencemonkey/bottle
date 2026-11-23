@@ -67,6 +67,8 @@ export interface RecSettings {
   volumePath?: string;
   /** The My Files root once the probe found it and Bottle saved it. */
   myFilesRoot?: string;
+  /** ADR 0118: the one-time note "Your call can still hear you." was shown. Never set back. */
+  heldNoteShown?: boolean;
 }
 
 /** The core recording state (`recording.state`). */
@@ -239,6 +241,66 @@ function rowOf(r: RecSummary): RecordingRow {
   if ((r.status === 'recording' || r.status === 'uploading') && r.errorKind === 'network')
     row.waitingNetwork = true;
   return row;
+}
+
+/** The MOG side of the one-time held note (`capture-mood.ts`). */
+export interface HeldNoteMood {
+  heldNote(mogId: string): void;
+}
+
+/**
+ * ADR 0118: the first talk-key hold in a call recording shows the note "Your call can still hear
+ * you." once, and keeps `heldNoteShown` in the recording settings so it never shows again. The
+ * call app hears the user while they talk to Bottle; Bottle cannot mute the call.
+ *
+ * `held` takes a hold start. It does nothing outside a recording, or after the first note. The
+ * flag is set in memory first, so two quick holds show one note; the write that stores it runs
+ * after. A failed read leaves the flag unknown, which shows no note (fail quiet, not twice).
+ */
+export function createHeldNote(deps: {
+  api: Pick<RecordingApi, 'readSettings' | 'writeSettings' | 'state' | 'onState'>;
+  mood: HeldNoteMood;
+}): { held(mogId: string): void; off(): void } {
+  const { api, mood } = deps;
+  let recording = false;
+  let shown: boolean | undefined;
+  let reading: Promise<void> | undefined;
+  const off = api.onState((s) => {
+    recording = s.phase === 'recording';
+  });
+  void api
+    .state()
+    .then((s) => {
+      recording = recording || s.phase === 'recording';
+    })
+    .catch(() => undefined);
+  const load = (): Promise<void> =>
+    (reading ??= api
+      .readSettings()
+      .then((s) => {
+        shown ??= s.heldNoteShown === true;
+      })
+      .catch(() => {
+        reading = undefined;
+      }));
+  return {
+    held(mogId) {
+      if (!recording || shown === true) return;
+      void load().then(async () => {
+        // The recording may have ended while the settings were read.
+        if (!recording || shown !== false) return;
+        shown = true;
+        mood.heldNote(mogId);
+        try {
+          const base = await api.readSettings();
+          await api.writeSettings({ ...base, heldNoteShown: true });
+        } catch {
+          // The note shows again after a restart. That is better than a lost first note.
+        }
+      });
+    },
+    off,
+  };
 }
 
 /** Wire the hub recording section, control and list. Returns the unsubscribe. */
@@ -741,6 +803,7 @@ export function recSettingsOf(s: RecordingSettings): RecSettings {
   };
   if (s.storage?.kind === 'volume') r.volumePath = s.storage.root;
   else if (s.storage?.kind === 'my_files') r.myFilesRoot = s.storage.root;
+  if (s.heldNoteShown) r.heldNoteShown = true;
   return r;
 }
 
@@ -756,6 +819,8 @@ export function settingsPatchOf(s: RecSettings): RecordingSettingsPatch {
   };
   if (s.volumePath) p.storage = { kind: 'volume', root: s.volumePath };
   else if (s.myFilesRoot) p.storage = { kind: 'my_files', root: s.myFilesRoot };
+  // Only the held note sets it, and only to true: a stale copy must never reset it.
+  if (s.heldNoteShown) p.heldNoteShown = true;
   return p;
 }
 

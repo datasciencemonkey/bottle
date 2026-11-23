@@ -337,4 +337,11 @@ describe('UX-39b: badges are orthogonal to the mood', () => {
     typed({ ...src, stt: home.stt });
     expect(mapMood(A, src, T).mood).toBe('idle');
   });
+
+  it('[ADR-0118] [AC-6.15] "Call only" shows while the talk key is held in a recording, with a label', () => {
+    expect(kinds(mapBadges(home))).not.toContain('call_only');
+    const b = byKind(mapBadges({ ...home, callOnly: true }), 'call_only');
+    expect(b).toMatchObject({ text: 'Call only', hoverOnly: false });
+    expect(b?.label.startsWith(b.text)).toBe(true);
+  });
 });

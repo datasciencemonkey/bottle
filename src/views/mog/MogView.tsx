@@ -292,7 +292,13 @@ export function MogView({
                   {body}
                 </button>
               ) : (
-                <span key={key} role="note" data-badge={b.kind} aria-label={b.label}>
+                <span
+                  key={key}
+                  // ADR 0118: the one-time held note is announced when it appears.
+                  role={b.kind === 'call_note' ? 'status' : 'note'}
+                  data-badge={b.kind}
+                  aria-label={b.label}
+                >
                   {body}
                 </span>
               );
