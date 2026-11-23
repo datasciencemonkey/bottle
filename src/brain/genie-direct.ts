@@ -16,9 +16,10 @@
  *   First the sections or Try again, then `showCard` (awaited), then the outcome blurb and
  *   `onPhase('answered' | 'failed')`: the card shows next to the MOG even if it was hidden while
  *   Genie worked, and it changes from the pill to the card in one update.
- * - UX slice 1: this whole update is an arrival, and it goes through the arrival gate. While the
+ * - UX slice 1: this card update is an arrival, and it goes through the arrival gate. While the
  *   talk key is held it waits (the pill reads "Answer ready" for an answer), and it applies
- *   1.2 s after the paste of the hold. The returned promise resolves after the update.
+ *   1.2 s after the paste of the hold. The returned promise resolves after the update. The
+ *   history write (#40) is no arrival: it runs at the terminal event.
  *
  * No failure is sent again by itself (G-15b). A failure shows [Try again]; only a click on it
  * sends the same question again, as a new request. TODO(#86): the footer and the deep link.
@@ -136,6 +137,19 @@ export function createGenieDirectSend(deps: GenieDirectDeps): (turn: AgentTurn) 
       const host =
         end.t === 'answer' ? await deps.hostOf?.(turn.target).catch(() => undefined) : undefined;
       const outcome = end;
+      // #40: the history write is not an arrival: it runs at the terminal event, and a fault in it never reaches the card.
+      try {
+        deps.onEnd?.({
+          opId,
+          mogId: turn.mogId,
+          profile: turn.target,
+          question: turn.question,
+          end: outcome,
+          ...accepted,
+        });
+      } catch {
+        // The history logs its own fixed code; the answer on the card stays as it is.
+      }
       const apply = async (): Promise<void> => {
         // The answer sections and the Try again control go on while the blurb still works, so the
         // card goes from the status pill to the answer or failure card in one step.
@@ -179,19 +193,6 @@ export function createGenieDirectSend(deps: GenieDirectDeps): (turn: AgentTurn) 
         }
         card.add(outcomeBlurbInput(id, outcome));
         safely(() => deps.onPhase?.(turn.mogId, phaseOf(outcome), opId));
-        // #40: the history write comes after the card, and a fault in it never reaches the card.
-        try {
-          deps.onEnd?.({
-            opId,
-            mogId: turn.mogId,
-            profile: turn.target,
-            question: turn.question,
-            end: outcome,
-            ...accepted,
-          });
-        } catch {
-          // The history logs its own fixed code; the answer on the card stays as it is.
-        }
       };
       const arrivals = deps.arrivals;
       // The pill tells the user an answer is ready, and the card waits for the key-up.

@@ -43,9 +43,10 @@ export interface UtteranceHandlerDeps {
   onRemember?(r: RememberRoute, owned: OwnedUtterance): void;
   /**
    * UX slice 1: the route of an utterance ended. `pasted` is true when `insert_text` inserted the
-   * text. The arrival gate applies held arrivals 1.2 s later. It runs on every end, also a fault.
+   * text. `segment` names the hold's lease, so a late resolve never frees a newer hold. The
+   * arrival gate applies held arrivals 1.2 s later. It runs on every end, also a fault.
    */
-  onPasteResolved?(pasted: boolean): void;
+  onPasteResolved?(pasted: boolean, segment: { segmentId: string; leaseId: string }): void;
 }
 
 const isAsk = (r: UtteranceRoute): r is AskRoute => r.route === 'ask' || r.route === 'chip';
@@ -56,7 +57,7 @@ export function createUtteranceHandler(
   return async (u) => {
     const owned = deps.owner.begin(u.mogId);
     if (!owned) {
-      deps.onPasteResolved?.(false);
+      deps.onPasteResolved?.(false, u.segment);
       return;
     }
     let handedOff = false;
@@ -91,7 +92,7 @@ export function createUtteranceHandler(
       // A failed route sends nothing and inserts nothing (B1). The capture lifecycle goes on.
     } finally {
       if (!handedOff) deps.owner.release(owned.utteranceId);
-      deps.onPasteResolved?.(pasted);
+      deps.onPasteResolved?.(pasted, u.segment);
     }
   };
 }

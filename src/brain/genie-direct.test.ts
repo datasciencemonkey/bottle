@@ -252,7 +252,7 @@ describe('genie direct send: the end of each request goes to the local history (
     queryItems: [],
   };
 
-  it('[AT-09] [G-21b] calls onEnd once, after the card, with the exact question and the ids', async () => {
+  it('[AT-09] [G-21b] calls onEnd once, at the terminal event (it is no arrival), with the exact question and the ids', async () => {
     const c = fakeCard();
     const b = fakeBridge([{ t: 'accepted', conversationId: 'c1', responseId: 'r1' }, answer]);
     const ends: GenieEnd[] = [];
@@ -261,8 +261,7 @@ describe('genie direct send: the end of each request goes to the local history (
       cardFor: () => c.card,
       newOpId: () => OP,
       onEnd: (x) => {
-        // The card already shows the answer when the history write starts.
-        expect(c.log.at(-1)?.completed).toBe(true);
+        // The history write is no arrival: it does not wait for the card update (UX slice 1).
         ends.push(x);
       },
     });
@@ -518,7 +517,7 @@ describe('genie direct send: the MOG shows the work and the answer (#573)', () =
       };
     }
 
-    it('[AC-1.2] [AC-1.3] an answer in a hold changes only the pill to "Answer ready"', async () => {
+    it('[AC-1.2] [AC-1.3] an answer in a hold changes only the pill to "Answer ready" (the history write still runs)', async () => {
       const c = fakeCard();
       const g = gateDouble(true);
       const phases: string[] = [];
@@ -542,7 +541,8 @@ describe('genie direct send: the MOG shows the work and the answer (#573)', () =
       expect(c.expanded).toEqual([undefined]);
       expect(shows).toEqual([]);
       expect(phases).toEqual(['working']);
-      expect(ends).toEqual([]);
+      // #40: the history write is no arrival. It runs at the terminal event.
+      expect(ends).toHaveLength(1);
       expect(done).toBe(false);
 
       g.release();

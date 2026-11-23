@@ -4,6 +4,7 @@
  * `mcp_call` of the R5 stub ends the request at once, so the failure is the arrival here.
  */
 import { core } from '../test-core';
+import { NOTICE_VERSION } from '../../shared/hub-notice';
 import { routerDecision } from '../../test-support/model-invoke';
 import { createUtteranceHandler, type UtteranceHandlerDeps } from '../utterance-wiring';
 
@@ -79,6 +80,38 @@ function press(chipId: string) {
   });
 }
 
+/** The host as above, with the first-run notice accepted: a talk-key start is not refused. */
+function hostAcceptingNotice() {
+  core.invoke.mockImplementation(async (cmd) => {
+    if (cmd === 'config_read') return { json: { name: 'Finance', binding: { home: HOME } } };
+    if (cmd === 'workspace_list') return workspaceList(HOME);
+    if (cmd === 'mcp_call') return Promise.reject({ error: 'not_implemented' });
+    if (cmd === 'consent_records_list')
+      return {
+        records: [
+          {
+            recordId: 'rec-1',
+            kind: 'notice',
+            noticeVersion: NOTICE_VERSION,
+            sessionId: null,
+            acceptedAt: 1,
+          },
+        ],
+      };
+    if (cmd === 'capture_start')
+      return {
+        owner: MOG,
+        mode: 'ptt',
+        recording: true,
+        paused: false,
+        othersTrack: 'off',
+        leaseId: 'lease-gate',
+      };
+    return {};
+  });
+}
+
+const SEG = { segmentId: 'seg-gate', leaseId: 'lease-gate' };
 const ptt = (phase: string, extra: object = {}) =>
   brain?.bus.dispatch({ event: 'hotkey:ptt', payload: { mogId: MOG, phase, ...extra } });
 /** `window_card_show` calls after the offer chip: the arrivals only. */
@@ -98,7 +131,7 @@ describe('startBrain arrival gate (UX slice 1)', () => {
   afterEach(() => vi.useRealTimers());
 
   it('[AC-1.1] [AC-1.5] an arrival in a talk-key hold waits, then applies 1.2 s after the key-up of an ask', async () => {
-    hostWithStubR5();
+    hostAcceptingNotice();
     brain?.talkTarget.viewReady(MOG);
     await offer('What was churn last quarter?', 'utt-gate-1');
     await settle();
@@ -123,7 +156,7 @@ describe('startBrain arrival gate (UX slice 1)', () => {
   });
 
   it('[AC-1.4] a held arrival waits for the paste, then 1.2 s more', async () => {
-    hostWithStubR5();
+    hostAcceptingNotice();
     brain?.talkTarget.viewReady(MOG);
     await offer('What was churn last quarter?', 'utt-gate-2');
     await settle();
@@ -136,7 +169,7 @@ describe('startBrain arrival gate (UX slice 1)', () => {
     await vi.advanceTimersByTimeAsync(3_000);
     expect(shows()).toBe(0);
     // The route of the dictation ended with an insertion.
-    deps?.onPasteResolved?.(true);
+    deps?.onPasteResolved?.(true, SEG);
     await vi.advanceTimersByTimeAsync(1_199);
     expect(shows()).toBe(0);
     await vi.advanceTimersByTimeAsync(1);
@@ -144,7 +177,7 @@ describe('startBrain arrival gate (UX slice 1)', () => {
   });
 
   it('[AC-1.6] with no paste the arrival applies 5 s after the key-up', async () => {
-    hostWithStubR5();
+    hostAcceptingNotice();
     brain?.talkTarget.viewReady(MOG);
     await offer('What was churn last quarter?', 'utt-gate-3');
     await settle();
@@ -184,8 +217,50 @@ describe('startBrain arrival gate (UX slice 1)', () => {
       event: 'capture:state',
       payload: { mode: 'hands_free', recording: false, paused: false, othersTrack: 'off' },
     });
-    deps?.onPasteResolved?.(false);
+    deps?.onPasteResolved?.(false, SEG);
     await vi.advanceTimersByTimeAsync(1_200);
+    expect(shows()).toBe(1);
+  });
+
+  it('[AC-1.5] a final segment with empty STT text applies 1.2 s after the key-up', async () => {
+    hostAcceptingNotice();
+    brain?.talkTarget.viewReady(MOG);
+    await offer('What was churn last quarter?', 'utt-gate-5');
+    await settle();
+    base = commands().filter((c) => c === 'window_card_show').length;
+    vi.useFakeTimers();
+    ptt('down');
+    press('ask_genie:utt-gate-5');
+    await vi.advanceTimersByTimeAsync(50);
+    ptt('up');
+    // The segment is final, and the STT step gives no text (no utterance reaches the route).
+    brain?.bus.dispatch({
+      event: 'capture:segment',
+      payload: { segmentId: 'seg-empty', mogId: MOG, leaseId: 'lease-gate', final: true },
+    });
+    await vi.advanceTimersByTimeAsync(1_199);
+    expect(shows()).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(shows()).toBe(1);
+  });
+
+  it('[AC-1.5] a refused start applies 1.2 s after the key-up, not 5 s', async () => {
+    hostWithStubR5();
+    brain?.talkTarget.viewReady(MOG);
+    await offer('What was churn last quarter?', 'utt-gate-6');
+    await settle();
+    base = commands().filter((c) => c === 'window_card_show').length;
+    vi.useFakeTimers();
+    ptt('down');
+    press('ask_genie:utt-gate-6');
+    await vi.advanceTimersByTimeAsync(50);
+    // The first-run notice is not accepted here, so the consent gate refuses the start.
+    // The refusal shows its own card; count only what comes after it.
+    base = commands().filter((c) => c === 'window_card_show').length;
+    ptt('up');
+    await vi.advanceTimersByTimeAsync(1_199);
+    expect(shows()).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
     expect(shows()).toBe(1);
   });
 });
