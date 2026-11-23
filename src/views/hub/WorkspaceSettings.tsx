@@ -12,14 +12,7 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { EllipsisIcon, Loader2Icon } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
-import {
-  useEffect,
-  useId,
-  useRef,
-  useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type RefObject,
-} from 'react';
+import { useEffect, useId, useRef, useState, type RefObject } from 'react';
 import {
   asHubWorkspaceList,
   HUB_SCOPE,
@@ -30,8 +23,15 @@ import {
   type WorkspaceAction,
 } from '../../shared/hub-workspaces';
 import { Button } from '../ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '../ui/dropdown-menu';
 import { Input } from '../ui/input';
 import { Switch } from '../ui/switch';
+import { cn } from '../ui/utils';
 import { DomainPicker } from '../DomainPicker';
 import { askBrain, emitView, type MogViewState } from '../view-ipc';
 import { ConnectAnotherWorkspace } from './ConnectAnotherWorkspace';
@@ -75,6 +75,12 @@ export function useHubWorkspaces(): HubWorkspaceList | undefined {
   return list;
 }
 
+/** Why a row cannot be turned on or made home (M7). */
+const UNUSABLE_REASON: Partial<Record<HubSignIn, string>> = {
+  unsupported: 'Bottle cannot use this profile type.',
+  missing: 'This profile is not in ~/.databrickscfg.',
+};
+
 const STATUS_TEXT: Record<HubSignIn, string> = {
   signed_in: 'Signed in',
   expired: 'Expired',
@@ -86,7 +92,7 @@ const STATUS_TEXT: Record<HubSignIn, string> = {
 /** A row the brain cannot use: no switch to turn on, no home to make. */
 const unusable = (r: HubWorkspaceRow) => r.signIn === 'unsupported' || r.signIn === 'missing';
 
-/** The "…" menu of a row: Rename and Colour. Arrow keys move, Escape closes. */
+/** The "…" menu of a row: Rename and Colour (shadcn DropdownMenu, in a portal: never clipped). */
 function RowMenu({
   name,
   disabled,
@@ -100,96 +106,66 @@ function RowMenu({
   onColour: () => void;
   buttonRef: RefObject<HTMLButtonElement | null>;
 }) {
-  const [open, setOpen] = useState(false);
-  const wrap = useRef<HTMLDivElement>(null);
-  const items = useRef<(HTMLButtonElement | null)[]>([]);
-  const menuId = useId();
-
-  useEffect(() => {
-    if (!open) return;
-    items.current[0]?.focus();
-    const away = (e: PointerEvent) => {
-      if (wrap.current && !wrap.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('pointerdown', away);
-    return () => document.removeEventListener('pointerdown', away);
-  }, [open]);
-
-  const onKey = (e: ReactKeyboardEvent) => {
-    if (!open) return;
-    const els = items.current.filter((x): x is HTMLButtonElement => x !== null);
-    const i = els.indexOf(document.activeElement as HTMLButtonElement);
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      e.stopPropagation();
-      setOpen(false);
-      buttonRef.current?.focus();
-    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-      e.preventDefault();
-      const n = els.length;
-      els[(i + (e.key === 'ArrowDown' ? 1 : n - 1) + n) % n]?.focus();
-    } else if (e.key === 'Tab') {
-      setOpen(false);
-    }
-  };
-  const choose = (fn: () => void) => () => {
-    setOpen(false);
-    fn();
-  };
+  // A chosen item opens a panel that takes focus itself: Radix must not return focus to the
+  // trigger when the menu closes.
+  const chosen = useRef(false);
   return (
-    <div ref={wrap} className="relative" onKeyDown={onKey}>
-      <Button
-        ref={buttonRef as never}
-        type="button"
-        variant="ghost"
-        size="icon"
-        className="size-8"
-        aria-label={`Options for ${name}`}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-controls={open ? menuId : undefined}
-        disabled={disabled}
-        data-row-menu
-        onClick={() => setOpen((o) => !o)}
-      >
-        <EllipsisIcon className="size-4" />
-      </Button>
-      {open && (
-        <div
-          id={menuId}
-          role="menu"
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          ref={buttonRef}
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="size-8"
           aria-label={`Options for ${name}`}
-          className="absolute right-0 top-[calc(100%+4px)] z-10 flex min-w-32 flex-col rounded-[var(--radius-md)] border border-border bg-popover p-1 shadow-md"
+          disabled={disabled}
+          data-row-menu
         >
-          {(
-            [
-              ['Rename', onRename],
-              ['Colour', onColour],
-            ] as const
-          ).map(([label, fn], i) => (
-            <button
-              key={label}
-              ref={(el) => {
-                items.current[i] = el;
-              }}
-              type="button"
-              role="menuitem"
-              data-slot="menu-item"
-              className="rounded-sm px-3 py-1.5 text-left text-[var(--mog-text-md)] outline-none hover:bg-accent focus-visible:bg-accent"
-              onClick={choose(fn)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
+          <EllipsisIcon className="size-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        aria-label={`Options for ${name}`}
+        onCloseAutoFocus={(e) => {
+          if (chosen.current) e.preventDefault();
+          chosen.current = false;
+        }}
+      >
+        <DropdownMenuItem
+          onSelect={() => {
+            chosen.current = true;
+            onRename();
+          }}
+        >
+          Rename
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onSelect={() => {
+            chosen.current = true;
+            onColour();
+          }}
+        >
+          Colour
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
 function RenameForm({ row, onDone }: { row: HubWorkspaceRow; onDone: () => void }) {
   const [name, setName] = useState(row.name);
   const id = useId();
+  const input = useRef<HTMLInputElement>(null);
+  // A frame later: the menu that opened this form is still closing and would drop focus.
+  useEffect(() => {
+    const f = requestAnimationFrame(() => {
+      input.current?.focus();
+      input.current?.select();
+    });
+    return () => cancelAnimationFrame(f);
+  }, []);
   const trimmed = name.trim();
   const valid = trimmed.length > 0 && trimmed.length <= NAME_MAX;
   return (
@@ -219,7 +195,7 @@ function RenameForm({ row, onDone }: { row: HubWorkspaceRow; onDone: () => void 
         id={id}
         value={name}
         maxLength={NAME_MAX}
-        autoFocus
+        ref={input}
         className="h-8 max-w-64"
         aria-invalid={!valid}
         onChange={(e) => setName(e.target.value)}
@@ -239,29 +215,43 @@ type Panel = 'rename' | 'colour' | 'confirm' | undefined;
 function WorkspaceRow({ row, busy }: { row: HubWorkspaceRow; busy: boolean }) {
   const [panel, setPanel] = useState<Panel>(undefined);
   const reduce = useReducedMotion();
+  const li = useRef<HTMLLIElement>(null);
   const menuBtn = useRef<HTMLButtonElement>(null);
   const makeHomeBtn = useRef<HTMLButtonElement>(null);
   const cancelBtn = useRef<HTMLButtonElement>(null);
+  const questionId = useId();
 
   // Focus the safe choice when the confirm opens.
   useEffect(() => {
     if (panel === 'confirm') cancelBtn.current?.focus();
   }, [panel]);
-  // The row became home (or stopped being home): drop an open confirm.
+  // A Colour panel closes on a pointer press outside the row.
+  useEffect(() => {
+    if (panel !== 'colour') return;
+    const away = (e: PointerEvent) => {
+      if (li.current && !li.current.contains(e.target as Node)) setPanel(undefined);
+    };
+    document.addEventListener('pointerdown', away);
+    return () => document.removeEventListener('pointerdown', away);
+  }, [panel]);
+  // The row became home (or stopped being home), or the brain started work on it: drop any panel.
   const [wasHome, setWasHome] = useState(row.isHome);
   if (wasHome !== row.isHome) {
     setWasHome(row.isHome);
     setPanel(undefined);
   }
+  if (busy && panel !== undefined) setPanel(undefined);
 
   // WCAG 2.4.3: a closing panel gives focus back to the control that opened it.
   const closeTo = (focus: RefObject<HTMLButtonElement | null>) => {
     setPanel(undefined);
     requestAnimationFrame(() => focus.current?.focus());
   };
+  const reason = UNUSABLE_REASON[row.signIn];
 
   return (
     <li
+      ref={li}
       data-workspace-row={row.profile}
       data-home={String(row.isHome)}
       data-busy={String(busy)}
@@ -275,13 +265,19 @@ function WorkspaceRow({ row, busy }: { row: HubWorkspaceRow; busy: boolean }) {
             <RenameForm row={row} onDone={() => closeTo(menuBtn)} />
           ) : (
             <span className="flex min-w-0 items-center gap-[var(--mog-space-2)]">
-              <span data-workspace-name className="truncate text-[var(--mog-text-md)] font-medium">
+              <span
+                data-workspace-name
+                className={cn(
+                  'truncate text-[var(--mog-text-md)] font-medium',
+                  reason !== undefined && 'text-muted-foreground',
+                )}
+              >
                 {row.name}
               </span>
               {row.isHome && (
                 <span
                   data-home-badge
-                  className="shrink-0 rounded-full bg-primary px-2 py-px text-[var(--mog-text-xs)] font-medium text-primary-foreground"
+                  className="shrink-0 rounded-full border border-border px-[var(--mog-space-2)] py-px text-[var(--mog-text-xs)] font-medium text-foreground"
                 >
                   Home
                 </span>
@@ -290,18 +286,25 @@ function WorkspaceRow({ row, busy }: { row: HubWorkspaceRow; busy: boolean }) {
           )}
           <span className="flex min-w-0 flex-wrap items-center gap-x-[var(--mog-space-2)] text-[var(--mog-text-xs)] text-muted-foreground">
             {row.host !== '' && (
-              <span data-workspace-host className="truncate">
-                {row.host}
-              </span>
+              <>
+                <span data-workspace-host className="truncate">
+                  {row.host}
+                </span>
+                <span aria-hidden="true">·</span>
+              </>
             )}
             <span
               data-workspace-status={row.signIn}
               className={row.signIn === 'expired' ? 'text-foreground' : undefined}
             >
-              {row.host !== '' && <span aria-hidden="true">· </span>}
               {STATUS_TEXT[row.signIn]}
             </span>
           </span>
+          {reason !== undefined && (
+            <span data-workspace-reason className="text-[var(--mog-text-xs)] text-muted-foreground">
+              {reason}
+            </span>
+          )}
         </div>
         <div className="flex shrink-0 items-center gap-[var(--mog-space-2)]">
           {busy && (
@@ -325,30 +328,41 @@ function WorkspaceRow({ row, busy }: { row: HubWorkspaceRow; busy: boolean }) {
               Sign in…
             </Button>
           )}
-          {!row.isHome && panel !== 'confirm' && (
+          {!row.isHome && (
             <Button
               ref={makeHomeBtn}
               type="button"
               variant="outline"
               size="sm"
-              disabled={busy || unusable(row)}
-              aria-label={`Make ${row.name} home`}
+              disabled={busy || unusable(row) || panel === 'confirm'}
+              aria-label={`Make home: ${row.name}`}
+              aria-expanded={panel === 'confirm'}
               data-make-home
               onClick={() => setPanel('confirm')}
             >
               Make home
             </Button>
           )}
-          {!row.isHome && (
-            <Switch
-              checked={row.available}
-              disabled={busy || (!row.available && unusable(row))}
-              aria-label={`Available to your MOG: ${row.name}`}
-              onCheckedChange={(available) =>
-                send({ action: 'workspace.set_available', profile: row.profile, available })
-              }
-            />
-          )}
+          <span
+            data-availability
+            className="flex items-center gap-[var(--mog-space-2)] text-[var(--mog-text-xs)] text-muted-foreground"
+          >
+            {row.isHome ? (
+              <span>Always on</span>
+            ) : (
+              <>
+                <span aria-hidden="true">Available to your MOG</span>
+                <Switch
+                  checked={row.available}
+                  disabled={busy || (!row.available && unusable(row))}
+                  aria-label={`Available to your MOG: ${row.name}`}
+                  onCheckedChange={(available) =>
+                    send({ action: 'workspace.set_available', profile: row.profile, available })
+                  }
+                />
+              </>
+            )}
+          </span>
           <RowMenu
             name={row.name}
             disabled={busy}
@@ -365,7 +379,7 @@ function WorkspaceRow({ row, busy }: { row: HubWorkspaceRow; busy: boolean }) {
           initial={reduce ? false : { opacity: 0, y: -4 }}
           animate={{ opacity: 1, y: 0 }}
           transition={reduce ? { duration: 0 } : { duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-          className="mt-[var(--mog-space-3)] rounded-[var(--radius-md)] bg-muted/50 p-[var(--mog-space-3)]"
+          className="mt-[var(--mog-space-3)] rounded-[var(--radius-md)] border border-border/60 bg-card p-[var(--mog-space-3)]"
           onKeyDown={(e) => {
             if (e.key === 'Escape') {
               e.stopPropagation();
@@ -374,22 +388,19 @@ function WorkspaceRow({ row, busy }: { row: HubWorkspaceRow; busy: boolean }) {
           }}
         >
           {panel === 'confirm' ? (
-            <>
-              <p className="text-[var(--mog-text-md)]">
+            <div role="group" aria-labelledby={questionId}>
+              <p id={questionId} className="text-[var(--mog-text-md)]">
                 {`Make ${row.name} your home? Plain questions go there first.`}
               </p>
               <div className="mt-[var(--mog-space-3)] flex gap-[var(--mog-space-2)]">
                 <Button
                   type="button"
                   size="sm"
+                  disabled={busy}
                   data-confirm-home
                   onClick={() => {
-                    send({
-                      action: 'workspace.make_home',
-                      profile: row.profile,
-                      confirmed: true,
-                    });
-                    setPanel(undefined);
+                    send({ action: 'workspace.make_home', profile: row.profile, confirmed: true });
+                    closeTo(menuBtn);
                   }}
                 >
                   Make home
@@ -405,17 +416,29 @@ function WorkspaceRow({ row, busy }: { row: HubWorkspaceRow; busy: boolean }) {
                   Cancel
                 </Button>
               </div>
-            </>
+            </div>
           ) : (
-            <WorkspaceColor
-              name={row.name}
-              profile={row.profile}
-              colorVariant={row.colorVariant}
-              onPick={(colorVariant) => {
-                send({ action: 'workspace.edit', profile: row.profile, colorVariant });
-                closeTo(menuBtn);
-              }}
-            />
+            <div className="flex items-center justify-between gap-[var(--mog-space-3)]">
+              <WorkspaceColor
+                autoFocus
+                name={row.name}
+                profile={row.profile}
+                colorVariant={row.colorVariant}
+                onPick={(colorVariant) => {
+                  send({ action: 'workspace.edit', profile: row.profile, colorVariant });
+                  closeTo(menuBtn);
+                }}
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                data-colour-done
+                onClick={() => closeTo(menuBtn)}
+              >
+                Done
+              </Button>
+            </div>
           )}
         </motion.div>
       )}
@@ -426,28 +449,74 @@ function WorkspaceRow({ row, busy }: { row: HubWorkspaceRow; busy: boolean }) {
 export function WorkspaceSettings({
   list,
   homeDomains = [],
+  onChoose,
 }: {
   list: HubWorkspaceList | undefined;
   /** MOG states that carry the home domain picker (PG-18, PG-20). */
   homeDomains?: readonly MogViewState[];
+  /** Reopens the home pick dialog. */
+  onChoose?: () => void;
 }) {
   const notice = list?.notice;
+  // Each notice that arrives is a new alert, even with the same text (read again).
+  const [seen, setSeen] = useState(notice);
+  const [seq, setSeq] = useState(0);
+  if (notice !== seen) {
+    setSeen(notice);
+    if (notice) setSeq((n) => n + 1);
+  }
+  const noHome = list !== undefined && list.home === null && list.rows.length > 0;
   return (
     <section
       data-view="workspace-settings"
       aria-labelledby="workspace-settings-title"
       className="hub-section"
     >
-      <h2 id="workspace-settings-title">Workspace</h2>
-      {/* A polite live region: always in the page, so a new notice is read when it appears. */}
+      <h2 id="workspace-settings-title" tabIndex={-1}>
+        Workspace
+      </h2>
+      {/* A polite live region, always in the page, so a new info notice is read when it shows. */}
       <p
         role="status"
         aria-live="polite"
         data-workspace-notice={notice?.kind ?? 'none'}
-        className={notice?.kind === 'error' ? 'hub-error' : 'hub-muted'}
+        className="hub-muted"
       >
-        {notice?.text ?? ''}
+        {notice?.kind === 'info' ? notice.text : ''}
       </p>
+      {notice?.kind === 'error' && (
+        <p role="alert" key={seq} className="hub-error">
+          {notice.text}
+        </p>
+      )}
+      {noHome && (
+        <div
+          data-no-home
+          className="mt-[var(--mog-space-3)] flex items-center justify-between gap-[var(--mog-space-3)] rounded-[var(--radius-md)] border border-border/60 bg-card px-[var(--mog-space-4)] py-[var(--mog-space-3)]"
+        >
+          <div className="flex flex-col gap-[var(--mog-space-1)]">
+            <span className="text-[var(--mog-text-md)] font-medium">Choose a home workspace</span>
+            <span className="text-[var(--mog-text-xs)] text-muted-foreground">
+              Plain questions go to your home workspace first.
+            </span>
+          </div>
+          {list.homePick && onChoose && (
+            <Button type="button" size="sm" data-choose-home onClick={onChoose}>
+              Choose…
+            </Button>
+          )}
+        </div>
+      )}
+      {list === undefined && (
+        <p data-workspaces-loading className="hub-muted mt-[var(--mog-space-3)]">
+          Checking your workspaces…
+        </p>
+      )}
+      {list !== undefined && list.rows.length === 0 && (
+        <p data-workspaces-empty className="hub-muted mt-[var(--mog-space-3)]">
+          No workspaces yet. Connect one below.
+        </p>
+      )}
       {list && list.rows.length > 0 && (
         <SettingsGroup className="mt-[var(--mog-space-3)]">
           <ul aria-label="Workspaces" className="m-0 list-none divide-y divide-border/60 p-0">

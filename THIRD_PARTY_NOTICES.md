@@ -690,7 +690,7 @@ SOFTWARE.
 
 ### Adapted files
 
-`src/views/ui/button.tsx`, `tooltip.tsx`, `checkbox.tsx`, `switch.tsx`, `radio-group.tsx`,
+`src/views/ui/button.tsx`, `dropdown-menu.tsx`, `tooltip.tsx`, `checkbox.tsx`, `switch.tsx`, `radio-group.tsx`,
 `collapsible.tsx`, `input.tsx`, `textarea.tsx`, `utils.ts` (`cn()`) — each copied from the matching page of
 ui.shadcn.com/docs/components/ and adapted for `verbatimModuleSyntax`/`exactOptionalPropertyTypes`.
 `src/views/hub/HubSidebar.tsx` and `use-hub-sidebar.ts` are hand-written (shadcn's Sidebar
@@ -705,7 +705,7 @@ stays.
 
 Source: https://github.com/radix-ui/primitives. Bottle depends on these npm packages (not copied
 in; versions pinned in `package.json`): `@radix-ui/react-checkbox` 1.4.1, `-collapsible` 1.2.1,
-`-radio-group` 1.5.1, `-slot` 1.5.0, `-switch` 1.4.1 and `-tooltip` 1.4.1 sit behind the
+`-dropdown-menu` 2.2.1, `-radio-group` 1.5.1, `-slot` 1.5.0, `-switch` 1.4.1 and `-tooltip` 1.4.1 sit behind the
 shadcn/ui components in `src/views/ui/`; `-dialog` 1.3.1 backs `src/views/WipeDialog.tsx`
 directly (its focus trap and Escape-to-close), with no `src/views/ui/dialog.tsx` copy-in.
 

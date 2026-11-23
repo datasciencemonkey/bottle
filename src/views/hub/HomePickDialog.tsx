@@ -3,7 +3,7 @@
  * silently). It shows only while the brain sends `homePick`. `suggested` starts selected, and the
  * pick is sent as `workspace.pick_home`. Built on Radix's Dialog like `WipeDialog`: focus trap,
  * Escape to close, focus back to where it was. It renders inline (no portal) with the existing
- * `.hub-dialog` surface. Escape hides it until the brain sends a different pick.
+ * `.hub-dialog` surface. Escape and Not now hide it; the Workspace section offers "Choose…" to reopen it.
  */
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { useId, useState } from 'react';
@@ -14,20 +14,24 @@ import { emitView } from '../view-ipc';
 
 type HomePick = NonNullable<HubWorkspaceList['homePick']>;
 
-/** Names for the candidate profiles (the profile name when the row is unknown). */
+/**
+ * `open` and `onDismiss` are the caller's: the hub keeps the dismissed state, so the Workspace
+ * section's "Choose…" button can open the dialog again. `names` maps a profile to its name.
+ */
 export function HomePickDialog({
   homePick,
   names,
+  open,
+  onDismiss,
 }: {
   homePick: HomePick | undefined;
-  names?: ReadonlyMap<string, string>;
+  names?: ReadonlyMap<string, string> | undefined;
+  open: boolean;
+  onDismiss: () => void;
 }) {
-  const key = homePick ? `${homePick.suggested}|${homePick.candidates.join(',')}` : '';
-  const [dismissed, setDismissed] = useState('');
-  if (!homePick || dismissed === key) return null;
-  return (
-    <PickBody key={key} homePick={homePick} names={names} onDismiss={() => setDismissed(key)} />
-  );
+  if (!homePick || !open) return null;
+  const key = `${homePick.suggested}|${homePick.candidates.join(',')}`;
+  return <PickBody key={key} homePick={homePick} names={names} onDismiss={onDismiss} />;
 }
 
 function PickBody({
@@ -94,6 +98,9 @@ function PickBody({
         <div className="hub-actions">
           <Button type="button" data-home-pick-use onClick={use}>
             Use as home
+          </Button>
+          <Button type="button" variant="outline" data-home-pick-later onClick={onDismiss}>
+            Not now
           </Button>
         </div>
       </DialogPrimitive.Content>

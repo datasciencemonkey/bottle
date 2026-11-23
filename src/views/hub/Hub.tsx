@@ -1,6 +1,6 @@
 /** V1 hub view (thin): shows the hub areas, Settings → Workspace included, and sends input with view_emit. */
 import { PanelLeftIcon } from 'lucide-react';
-import { useCallback, useEffect, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { HUB_WORKSPACES_EVENT, asHubWorkspaceList } from '../../shared/hub-workspaces';
@@ -99,23 +99,25 @@ function SettingsArea({
   recording,
   workspaces,
   homeDomains,
+  onChoose,
 }: {
   hidden: boolean;
   recording: HubRecording | undefined;
   workspaces: HubWorkspaceList | undefined;
   homeDomains: readonly MogViewState[];
+  onChoose: () => void;
 }) {
   return (
     <section data-hub-view="settings" aria-label="Settings" hidden={hidden}>
+      {/* ADR 0117: one row for each workspace, with the switch "Available to your MOG". It ends
+          with the "Connect another workspace…" row (#162 follow-up, W-07e), the one deliberate
+          way to open "Connect a workspace" again once a usable profile exists. */}
+      <WorkspaceSettings list={workspaces} homeDomains={homeDomains} onChoose={onChoose} />
       <MicPreference />
       <DictationWords />
       <RecordingSettings model={recording} />
       <WipeSettings />
       <CliSettings />
-      {/* ADR 0117: one row for each workspace, with the switch "Available to your MOG". It ends
-          with the "Connect another workspace…" row (#162 follow-up, W-07e), the one deliberate
-          way to open "Connect a workspace" again once a usable profile exists. */}
-      <WorkspaceSettings list={workspaces} homeDomains={homeDomains} />
       <DataPanel />
       <About />
     </section>
@@ -139,6 +141,7 @@ export function Hub() {
     },
     [sidebar],
   );
+  const lastNotice = useRef('');
   // A workspace list that carries a notice (a result of a switch, a sign-in or a pick) shows
   // Settings, where the Workspace section and its notice live.
   useEffect(() => {
@@ -147,8 +150,21 @@ export function Hub() {
     void listen<unknown>(
       HUB_WORKSPACES_EVENT,
       (e) => {
-        const l = asHubWorkspaceList(e.payload);
-        if (l?.notice !== undefined) setView('settings');
+        const n = asHubWorkspaceList(e.payload)?.notice;
+        if (n === undefined) {
+          lastNotice.current = '';
+          return;
+        }
+        // Only a new notice moves the hub (a republish of the same one does not).
+        const key = `${n.kind}|${n.text}`;
+        if (key === lastNotice.current) return;
+        lastNotice.current = key;
+        setView('settings');
+        requestAnimationFrame(() => {
+          const h = document.getElementById('workspace-settings-title');
+          h?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+          h?.focus({ preventScroll: true });
+        });
       },
       { target: getCurrentWindow().label },
     ).then((u) => {
@@ -181,6 +197,11 @@ export function Hub() {
   const notice = useHubNotice();
   const workspaces = useHubWorkspaces();
   const homeDomains = [...mogs.values()].filter((m) => m.homeDomain !== undefined);
+  const hp = workspaces?.homePick;
+  const pickKey = hp ? `${hp.suggested}|${hp.candidates.join(',')}` : '';
+  // The key of the pick the user hid. A different pick shows again; "Choose…" clears it.
+  const [pickDismissed, setPickDismissed] = useState('');
+  const onChoose = useCallback(() => setPickDismissed(''), []);
   const pickNames = new Map((workspaces?.rows ?? []).map((r) => [r.profile, r.name] as const));
 
   // MB-08a, MB-08b: until the brain reports the current notice as accepted, the hub shows only
@@ -270,7 +291,7 @@ export function Hub() {
             onOpen={showConversations}
             composer={threadComposer}
           />
-          <MemoryArea active={view === 'memory'} />
+          <MemoryArea active={view === 'memory'} forgetMogId={[...mogs.keys()][0]} />
           <Recordings
             active={view === 'recordings'}
             onOpenSettings={openRecordingSettings}
@@ -281,10 +302,16 @@ export function Hub() {
             recording={recording}
             workspaces={workspaces}
             homeDomains={homeDomains}
+            onChoose={onChoose}
           />
           <ForgetDialogHost />
           {/* ADR 0117 (FLAG 5): the one-time home pick shows over every area while it is set. */}
-          <HomePickDialog homePick={workspaces?.homePick} names={pickNames} />
+          <HomePickDialog
+            homePick={workspaces?.homePick}
+            names={pickNames}
+            open={pickKey !== pickDismissed}
+            onDismiss={() => setPickDismissed(pickKey)}
+          />
         </div>
       </div>
     </main>

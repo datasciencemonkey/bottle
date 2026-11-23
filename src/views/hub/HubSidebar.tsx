@@ -2,7 +2,7 @@
  * The hub's collapsible sidebar (ui-1, #97, #103; course-corrected to hidden-by-default, see
  * use-hub-sidebar.ts). The panel is `position: fixed; inset-y-0; left-0` (ui-1, review of #602
  * round 3, blocker 2): a full-window-height rail pinned to the window itself, not to any
- * ancestor box, so it never scrolls away with a tall Settings/MOGs area and its own top row (the
+ * ancestor box, so it never scrolls away with a tall Settings area and its own top row (the
  * pin button) always starts at the window's true top edge, not below the "Bottle" header. Before
  * this it was `position: absolute; top: 0; h-full` inside `.hub-body` (hub.css): that box sits
  * below the header in the document, and grows to the page's own (unbounded) height, so the panel

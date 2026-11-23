@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /** The one-time "Choose your home workspace" dialog (ADR 0117, FLAG 5). Every value is fake. */
-import { act } from 'react';
+import { act, useState } from 'react';
 import { HUB_SCOPE, HUB_WORKSPACES_EVENT } from '../../shared/hub-workspaces';
 import { inputEmits as allEmits, render, tauri } from '../test-tauri';
 import { Hub } from './Hub';
@@ -24,16 +24,48 @@ const act2 = (fn: () => void) => act(async () => fn());
 const dlg = () => document.querySelector<HTMLElement>('[data-home-pick-dialog]');
 const radios = () => [...document.querySelectorAll<HTMLElement>('[role="radio"]')];
 
-beforeEach(() => tauri.reset());
+beforeEach(() => {
+  tauri.reset();
+  document.body.innerHTML = '';
+});
+
+/** The hub keeps the dismissed state; this wrapper does the same. */
+function Wrapped({
+  homePick,
+  names,
+  dismissed = vi.fn(),
+}: {
+  homePick: Parameters<typeof HomePickDialog>[0]['homePick'];
+  names?: ReadonlyMap<string, string>;
+  dismissed?: () => void;
+}) {
+  const [open, setOpen] = useState(true);
+  return (
+    <>
+      <button type="button" data-reopen onClick={() => setOpen(true)}>
+        reopen
+      </button>
+      <HomePickDialog
+        homePick={homePick}
+        names={names}
+        open={open}
+        onDismiss={() => {
+          dismissed();
+          setOpen(false);
+        }}
+      />
+    </>
+  );
+}
 
 describe('HomePickDialog', () => {
   it('shows nothing without homePick', async () => {
-    await render(<HomePickDialog homePick={undefined} />);
+    await render(<Wrapped homePick={undefined} />);
     expect(dlg()).toBeNull();
   });
 
   it('shows the title, the one line, a radio list with the suggestion selected, and Use as home', async () => {
-    const { root } = await render(<HomePickDialog homePick={PICK} names={NAMES} />);
+    const { root } = await render(<Wrapped homePick={PICK} names={NAMES} />);
     expect(dlg()?.getAttribute('role')).toBe('dialog');
     expect(dlg()?.querySelector('h2')?.textContent).toBe('Choose your home workspace');
     expect(dlg()?.textContent).toContain(
@@ -49,7 +81,7 @@ describe('HomePickDialog', () => {
   });
 
   it('Use as home sends the suggested profile, or the one the user picked', async () => {
-    const { root } = await render(<HomePickDialog homePick={PICK} names={NAMES} />);
+    const { root } = await render(<Wrapped homePick={PICK} names={NAMES} />);
     const use = () => dlg()?.querySelector<HTMLElement>('[data-home-pick-use]');
     await act2(() => use()?.click());
     expect(inputEmits()).toEqual([
@@ -76,7 +108,7 @@ describe('HomePickDialog', () => {
         <button type="button" data-outside>
           outside
         </button>
-        <HomePickDialog homePick={PICK} names={NAMES} />
+        <Wrapped homePick={PICK} names={NAMES} />
       </>,
     );
     expect(dlg()?.contains(document.activeElement)).toBe(true);
@@ -93,6 +125,39 @@ describe('HomePickDialog', () => {
     expect(
       document.querySelector('[data-outside]')?.closest('[aria-hidden="true"]'),
     ).not.toBeNull();
+    act(() => root.unmount());
+  });
+
+  it('Tab from the last button wraps to the first stop, inside the dialog', async () => {
+    const { root } = await render(<Wrapped homePick={PICK} names={NAMES} />);
+    const tab = () =>
+      act2(() => {
+        document.activeElement?.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: 'Tab',
+            shiftKey: false,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      });
+    const later = dlg()?.querySelector<HTMLElement>('[data-home-pick-later]') as HTMLElement;
+    expect(later.textContent).toBe('Not now');
+    later.focus();
+    await tab();
+    expect(document.activeElement).toBe(radios()[1]);
+    act(() => root.unmount());
+  });
+
+  it('Not now hides the dialog, sends nothing, and the host can reopen it', async () => {
+    const dismissed = vi.fn();
+    const { root } = await render(<Wrapped homePick={PICK} names={NAMES} dismissed={dismissed} />);
+    await act2(() => dlg()?.querySelector<HTMLElement>('[data-home-pick-later]')?.click());
+    expect(dlg()).toBeNull();
+    expect(dismissed).toHaveBeenCalledTimes(1);
+    expect(inputEmits()).toEqual([]);
+    await act2(() => document.querySelector<HTMLElement>('[data-reopen]')?.click());
+    expect(dlg()).not.toBeNull();
     act(() => root.unmount());
   });
 
@@ -122,6 +187,13 @@ describe('HomePickDialog', () => {
     });
     expect(el.querySelector('[data-home-pick-dialog]')).toBeNull();
     expect(inputEmits()).toEqual([]);
+    // "Choose…" in the Workspace section opens the same dialog again.
+    await act2(() => el.querySelector<HTMLElement>('[data-choose-home]')?.click());
+    expect(el.querySelector('[data-home-pick-dialog]')).not.toBeNull();
+    await act2(() => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(el.querySelector('[data-home-pick-dialog]')).toBeNull();
     await tauri.emitTo('hub', HUB_WORKSPACES_EVENT, {
       rows,
       home: null,

@@ -48,8 +48,24 @@ const key = (el: Element | null, k: string) =>
   });
 const li = (el: HTMLElement, p: string) =>
   el.querySelector<HTMLElement>(`[data-workspace-row="${p}"]`) as HTMLElement;
-const byText = (root: ParentNode, sel: string, text: string) =>
-  [...root.querySelectorAll<HTMLElement>(sel)].find((b) => b.textContent === text);
+
+/** Radix opens a menu on pointerdown (button 0). */
+const openMenu = (row: HTMLElement) =>
+  act2(() => {
+    row
+      .querySelector('[data-row-menu]')
+      ?.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }));
+  });
+const menuItem = (text: string) =>
+  [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+    (i) => i.textContent === text,
+  );
+const settle = () => act(async () => new Promise((r) => requestAnimationFrame(() => r(undefined))));
+const typeInto = (input: HTMLInputElement, v: string) =>
+  act2(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, v);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
 
 function Host() {
   return <WorkspaceSettings list={useHubWorkspaces()} />;
@@ -123,6 +139,63 @@ describe('Settings → Workspace', () => {
     expect(li(el, 'x').querySelector('[data-workspace-host]')).toBeNull();
   });
 
+  it('shows "Not checked yet" for an unknown status and the reasons for unusable rows', async () => {
+    const { el } = await mount({
+      ...LIST,
+      rows: [
+        ...ROWS,
+        row({ profile: 'u', signIn: 'unknown' }),
+        row({ profile: 'm', signIn: 'unsupported' }),
+        row({ profile: 'x', signIn: 'missing', host: '' }),
+      ],
+    });
+    expect(li(el, 'u').querySelector('[data-workspace-status]')?.textContent).toBe(
+      'Not checked yet',
+    );
+    expect(li(el, 'm').querySelector('[data-workspace-reason]')?.textContent).toBe(
+      'Bottle cannot use this profile type.',
+    );
+    expect(li(el, 'x').querySelector('[data-workspace-reason]')?.textContent).toBe(
+      'This profile is not in ~/.databrickscfg.',
+    );
+    expect(li(el, 'm').querySelector('[data-workspace-name]')?.className).toContain(
+      'text-muted-foreground',
+    );
+    expect(li(el, 'ops').querySelector('[data-workspace-reason]')).toBeNull();
+  });
+
+  it('a missing row that is still available can be switched off', async () => {
+    const { el } = await mount({
+      ...LIST,
+      rows: [...ROWS, row({ profile: 'x', signIn: 'missing', host: '', available: true })],
+    });
+    const sw = li(el, 'x').querySelector<HTMLButtonElement>('[role="switch"]');
+    expect(sw?.disabled).toBe(false);
+    await click(sw);
+    expect(hubClicks()).toEqual([
+      { action: 'workspace.set_available', profile: 'x', available: false },
+    ]);
+  });
+
+  it('an expired home row has Sign in… and still no switch', async () => {
+    const { el } = await mount({
+      ...LIST,
+      rows: [{ ...(ROWS[0] as HubWorkspaceRow), signIn: 'expired' }, ...ROWS.slice(1)],
+    });
+    const home = li(el, 'sales');
+    expect(home.querySelector('[role="switch"]')).toBeNull();
+    await click(home.querySelector('[data-sign-in]'));
+    expect(hubClicks()).toEqual([{ action: 'workspace.sign_in', profile: 'sales' }]);
+  });
+
+  it('shows "Available to your MOG" beside each switch and "Always on" on home', async () => {
+    const { el } = await mount();
+    expect(li(el, 'ops').querySelector('[data-availability]')?.textContent).toContain(
+      'Available to your MOG',
+    );
+    expect(li(el, 'sales').querySelector('[data-availability]')?.textContent).toBe('Always on');
+  });
+
   it('the home row has a Home badge and no switch and no Make home; others have both', async () => {
     const { el } = await mount();
     const home = li(el, 'sales');
@@ -191,6 +264,7 @@ describe('Settings → Workspace', () => {
     await click(ops.querySelector('[data-cancel-home]'));
     expect(ops.textContent).not.toContain('your home?');
     expect(emits()).toEqual([]);
+    await settle();
     await click(ops.querySelector('[data-make-home]'));
     await click(ops.querySelector('[data-confirm-home]'));
     expect(hubClicks()).toEqual([
@@ -208,75 +282,145 @@ describe('Settings → Workspace', () => {
     expect(emits()).toEqual([]);
   });
 
-  it('the row menu has Rename and Colour; arrows move, Escape closes and returns focus', async () => {
+  it('the row menu is a portal menu with Rename and Colour (not clipped by the group)', async () => {
+    const { el } = await mount({ ...LIST, rows: [ROWS[0] as HubWorkspaceRow] });
+    const home = li(el, 'sales');
+    const btn = home.querySelector<HTMLButtonElement>('[data-row-menu]') as HTMLButtonElement;
+    expect(btn.getAttribute('aria-label')).toBe('Options for Sales');
+    expect(btn.getAttribute('aria-expanded')).toBe('false');
+    await openMenu(home);
+    expect(btn.getAttribute('aria-expanded')).toBe('true');
+    const menu = document.querySelector('[role="menu"]');
+    expect(menu).not.toBeNull();
+    // Rendered outside the overflow-hidden settings group.
+    expect(el.contains(menu)).toBe(false);
+    expect([...document.querySelectorAll('[role="menuitem"]')].map((i) => i.textContent)).toEqual([
+      'Rename',
+      'Colour',
+    ]);
+  });
+
+  it('the menu opens from the keyboard and Escape returns focus to its button', async () => {
     const { el } = await mount();
     const ops = li(el, 'ops');
     const btn = ops.querySelector<HTMLButtonElement>('[data-row-menu]') as HTMLButtonElement;
-    expect(btn.getAttribute('aria-label')).toBe('Options for Ops');
-    expect(btn.getAttribute('aria-expanded')).toBe('false');
-    await click(btn);
-    expect(btn.getAttribute('aria-expanded')).toBe('true');
-    const items = [...ops.querySelectorAll<HTMLElement>('[role="menuitem"]')];
-    expect(items.map((i) => i.textContent)).toEqual(['Rename', 'Colour']);
-    expect(document.activeElement).toBe(items[0]);
-    await key(items[0] ?? null, 'ArrowDown');
-    expect(document.activeElement).toBe(items[1]);
-    await key(items[1] ?? null, 'ArrowDown');
-    expect(document.activeElement).toBe(items[0]);
-    await key(items[0] ?? null, 'Escape');
-    expect(ops.querySelector('[role="menu"]')).toBeNull();
+    btn.focus();
+    await key(btn, 'ArrowDown');
+    expect(document.querySelector('[role="menu"]')).not.toBeNull();
+    expect(document.activeElement).toBe(menuItem('Rename'));
+    await key(document.activeElement, 'ArrowDown');
+    // Radix moves roving focus on a timer.
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(document.activeElement).toBe(menuItem('Colour'));
+    await key(document.activeElement, 'Escape');
+    await settle();
+    expect(document.querySelector('[role="menu"]')).toBeNull();
     expect(document.activeElement).toBe(btn);
   });
 
   it('Rename edits inline (max 64), Enter sends workspace.edit with the trimmed name', async () => {
     const { el } = await mount();
     const ops = li(el, 'ops');
-    await click(ops.querySelector('[data-row-menu]'));
-    await click(byText(ops, '[role="menuitem"]', 'Rename'));
+    await openMenu(ops);
+    await click(menuItem('Rename'));
     const input = ops.querySelector<HTMLInputElement>('form input') as HTMLInputElement;
     expect(input.maxLength).toBe(64);
     expect(input.value).toBe('Ops');
+    await settle();
     expect(document.activeElement).toBe(input);
-    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
-    await act2(() => {
-      set?.call(input, '  Operations  ');
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-    });
+    await typeInto(input, '  Operations  ');
     await act2(() => (ops.querySelector('form') as HTMLFormElement).requestSubmit());
     expect(hubClicks()).toEqual([{ action: 'workspace.edit', profile: 'ops', name: 'Operations' }]);
     expect(ops.querySelector('form')).toBeNull();
+    await settle();
+    expect(document.activeElement).toBe(ops.querySelector('[data-row-menu]'));
   });
 
   it('Rename with an empty name cannot save; Escape cancels and sends nothing', async () => {
     const { el } = await mount();
     const ops = li(el, 'ops');
-    await click(ops.querySelector('[data-row-menu]'));
-    await click(byText(ops, '[role="menuitem"]', 'Rename'));
+    await openMenu(ops);
+    await click(menuItem('Rename'));
     const input = ops.querySelector<HTMLInputElement>('form input') as HTMLInputElement;
-    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
-    await act2(() => {
-      set?.call(input, '   ');
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-    });
+    await typeInto(input, '   ');
     expect(ops.querySelector<HTMLButtonElement>('form button[type="submit"]')?.disabled).toBe(true);
     await key(input, 'Escape');
     expect(ops.querySelector('form')).toBeNull();
     expect(emits()).toEqual([]);
   });
 
-  it('Colour shows the palette and a pick emits workspace.edit with colorVariant', async () => {
+  it('Colour focuses the pressed swatch; a pick emits workspace.edit and returns focus', async () => {
     const { el } = await mount();
     const ops = li(el, 'ops');
-    await click(ops.querySelector('[data-row-menu]'));
-    await click(byText(ops, '[role="menuitem"]', 'Colour'));
+    await openMenu(ops);
+    await click(menuItem('Colour'));
     const group = ops.querySelector('[role="group"]');
     expect(group?.getAttribute('aria-label')).toBe('Colour for Ops');
-    expect(group?.querySelector('[aria-pressed="true"]')?.getAttribute('data-color')).toBe('teal');
+    await settle();
+    const pressed = group?.querySelector('[aria-pressed="true"]');
+    expect(pressed?.getAttribute('data-color')).toBe('teal');
+    expect(document.activeElement).toBe(pressed);
     await click(group?.querySelector('[data-color="violet"]'));
     expect(hubClicks()).toEqual([
       { action: 'workspace.edit', profile: 'ops', colorVariant: 'violet' },
     ]);
-    expect(ops.querySelector('[role="group"]')).toBeNull();
+    expect(ops.querySelector('[data-row-panel]')).toBeNull();
+    await settle();
+    expect(document.activeElement).toBe(ops.querySelector('[data-row-menu]'));
+  });
+
+  it('the Colour panel has Done and closes on a pointer press outside the row', async () => {
+    const { el } = await mount();
+    const ops = li(el, 'ops');
+    await openMenu(ops);
+    await click(menuItem('Colour'));
+    await click(ops.querySelector('[data-colour-done]'));
+    expect(ops.querySelector('[data-row-panel]')).toBeNull();
+    await settle();
+    expect(document.activeElement).toBe(ops.querySelector('[data-row-menu]'));
+    await openMenu(ops);
+    await click(menuItem('Colour'));
+    expect(ops.querySelector('[data-row-panel="colour"]')).not.toBeNull();
+    await act2(() => {
+      document.body.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+    });
+    expect(ops.querySelector('[data-row-panel]')).toBeNull();
+    expect(emits()).toEqual([]);
+  });
+
+  it('Make home: Cancel returns focus to Make home, which stays but is disabled while open', async () => {
+    const { el } = await mount();
+    const ops = li(el, 'ops');
+    const mh = ops.querySelector<HTMLButtonElement>('[data-make-home]') as HTMLButtonElement;
+    await click(mh);
+    expect(mh.disabled).toBe(true);
+    expect(mh.getAttribute('aria-label')).toBe('Make home: Ops');
+    const grp = ops.querySelector('[data-row-panel="confirm"] [role="group"]');
+    expect(grp?.getAttribute('aria-labelledby')).toBeTruthy();
+    expect(document.getElementById(grp?.getAttribute('aria-labelledby') ?? '')?.textContent).toBe(
+      'Make Ops your home? Plain questions go there first.',
+    );
+    await click(ops.querySelector('[data-cancel-home]'));
+    await settle();
+    expect(mh.disabled).toBe(false);
+    expect(document.activeElement).toBe(mh);
+  });
+
+  it('after the Make home confirm, focus returns to the row menu button', async () => {
+    const { el } = await mount();
+    const ops = li(el, 'ops');
+    await click(ops.querySelector('[data-make-home]'));
+    await click(ops.querySelector('[data-confirm-home]'));
+    await settle();
+    expect(document.activeElement).toBe(ops.querySelector('[data-row-menu]'));
+  });
+
+  it('an open panel closes when the row turns busy', async () => {
+    const { el } = await mount();
+    await click(li(el, 'ops').querySelector('[data-make-home]'));
+    expect(li(el, 'ops').querySelector('[data-row-panel]')).not.toBeNull();
+    await tauri.emitTo('hub', HUB_WORKSPACES_EVENT, { ...LIST, busyProfile: 'ops' });
+    expect(li(el, 'ops').querySelector('[data-row-panel]')).toBeNull();
   });
 
   it('keeps the Connect another workspace… row at the bottom, with the hint line', async () => {
@@ -299,18 +443,71 @@ describe('Settings → Workspace', () => {
     );
   });
 
-  it('puts a notice in a polite live region that is always in the page', async () => {
+  it('an info notice shows in a polite live region; an error in a new alert each time', async () => {
     const { el } = await mount();
     const live = el.querySelector('[role="status"][aria-live="polite"][data-workspace-notice]');
-    expect(live).not.toBeNull();
     expect(live?.textContent).toBe('');
     await tauri.emitTo('hub', HUB_WORKSPACES_EVENT, {
       ...LIST,
-      notice: { kind: 'error', text: 'Could not sign in to Old.' },
+      notice: { kind: 'info', text: 'Sales is now your home.' },
     });
-    const same = el.querySelector('[role="status"][aria-live="polite"][data-workspace-notice]');
-    expect(same).toBe(live);
-    expect(same?.textContent).toBe('Could not sign in to Old.');
+    expect(el.querySelector('[role="status"][aria-live="polite"][data-workspace-notice]')).toBe(
+      live,
+    );
+    expect(live?.textContent).toBe('Sales is now your home.');
+    expect(el.querySelector('[role="alert"]')).toBeNull();
+    const err = { ...LIST, notice: { kind: 'error', text: 'Could not sign in to Old.' } };
+    await tauri.emitTo('hub', HUB_WORKSPACES_EVENT, err);
+    const first = el.querySelector('[role="alert"]');
+    expect(first?.textContent).toBe('Could not sign in to Old.');
+    await tauri.emitTo('hub', HUB_WORKSPACES_EVENT, err);
+    const second = el.querySelector('[role="alert"]');
+    expect(second?.textContent).toBe('Could not sign in to Old.');
+    expect(second).not.toBe(first);
+  });
+
+  it('shows a loading line, then the empty line, then the rows', async () => {
+    const { el } = await render(<Host />);
+    expect(el.querySelector('[data-workspaces-loading]')?.textContent).toBe(
+      'Checking your workspaces…',
+    );
+    await tauri.emitTo('hub', HUB_WORKSPACES_EVENT, { rows: [], home: null, agent: AGENT });
+    expect(el.querySelector('[data-workspaces-loading]')).toBeNull();
+    expect(el.querySelector('[data-workspaces-empty]')?.textContent).toBe(
+      'No workspaces yet. Connect one below.',
+    );
+    expect(el.querySelector('[data-no-home]')).toBeNull();
+    await tauri.emitTo('hub', HUB_WORKSPACES_EVENT, LIST);
+    expect(el.querySelector('[data-workspaces-empty]')).toBeNull();
+  });
+
+  it('without a home it shows "Choose a home workspace" with Choose… only when a pick exists', async () => {
+    const onChoose = vi.fn();
+    const { root, el } = await render(
+      <WorkspaceSettings
+        onChoose={onChoose}
+        list={{
+          ...LIST,
+          home: null,
+          rows: ROWS.map((r) => ({ ...r, isHome: false })),
+          homePick: { suggested: 'ops', candidates: ['sales', 'ops'] },
+        }}
+      />,
+    );
+    roots.push(root);
+    expect(el.querySelector('[data-no-home]')?.textContent).toContain('Choose a home workspace');
+    await click(el.querySelector('[data-choose-home]'));
+    expect(onChoose).toHaveBeenCalledTimes(1);
+    await act2(() =>
+      root.render(
+        <WorkspaceSettings
+          onChoose={onChoose}
+          list={{ ...LIST, home: null, rows: ROWS.map((r) => ({ ...r, isHome: false })) }}
+        />,
+      ),
+    );
+    expect(el.querySelector('[data-no-home]')).not.toBeNull();
+    expect(el.querySelector('[data-choose-home]')).toBeNull();
   });
 
   it('ignores a payload that fails the shape check', async () => {

@@ -5,6 +5,7 @@
  * `workspace.edit` with `colorVariant`. Colours are the `--mog-palette-<id>` tokens, never a raw
  * hex (ADR 0106).
  */
+import { useEffect, useRef } from 'react';
 import { MOG_PALETTE, paletteColorOf } from '../../shared/mog-palette';
 import { cn } from '../ui/utils';
 
@@ -37,15 +38,28 @@ export function WorkspaceColor({
   profile,
   colorVariant,
   onPick,
+  autoFocus = false,
 }: {
   name: string;
   profile: string;
   colorVariant: string;
   onPick: (colorVariant: string) => void;
+  /** Focus the pressed swatch on mount (the panel opened from a menu). */
+  autoFocus?: boolean;
 }) {
+  const group = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!autoFocus) return;
+    // A frame later: the menu that opened this panel is still closing and would drop focus.
+    const f = requestAnimationFrame(() =>
+      group.current?.querySelector<HTMLElement>('[aria-pressed="true"]')?.focus(),
+    );
+    return () => cancelAnimationFrame(f);
+  }, [autoFocus]);
   const current = paletteColorOf(colorVariant, profile);
   return (
     <div
+      ref={group}
       role="group"
       aria-label={`Colour for ${name}`}
       data-workspace-color

@@ -53,6 +53,55 @@ describe('V1 hub view', () => {
     expect(el.querySelector('[data-workspace-notice]')?.textContent).toBe('Saved');
   });
 
+  it('[ADR 0117] only a NEW workspace notice moves the hub, and it focuses the Workspace heading', async () => {
+    // Other tests leave their hubs in the document; the heading is found by id.
+    document.body.innerHTML = '';
+    const { el } = await render(<Hub />);
+    const settings = () => el.querySelector<HTMLElement>('[data-hub-view="settings"]');
+    const list = { rows: [], home: null, agent: AGENT };
+    const note = { kind: 'info', text: 'Saved' };
+    await tauri.emit(HUB_WORKSPACES_EVENT, { ...list, notice: note });
+    await act(async () => new Promise((r) => requestAnimationFrame(() => r(undefined))));
+    expect(settings()?.hidden).toBe(false);
+    expect(document.activeElement?.id).toBe('workspace-settings-title');
+    // The user goes elsewhere; a republish of the same notice leaves them there.
+    await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-toggle]')?.click());
+    await act(async () =>
+      el.querySelector<HTMLButtonElement>('[data-sidebar-item="conversations"]')?.click(),
+    );
+    expect(settings()?.hidden).toBe(true);
+    await tauri.emit(HUB_WORKSPACES_EVENT, { ...list, notice: note });
+    expect(settings()?.hidden).toBe(true);
+    // A different notice moves the hub again.
+    await tauri.emit(HUB_WORKSPACES_EVENT, { ...list, notice: { kind: 'error', text: 'No' } });
+    expect(settings()?.hidden).toBe(false);
+  });
+
+  it('[ADR 0117] Workspace is the first section of Settings', async () => {
+    const { el } = await render(<Hub />);
+    const first = el.querySelector('[data-hub-view="settings"]')?.firstElementChild;
+    expect(first?.getAttribute('data-view')).toBe('workspace-settings');
+  });
+
+  it('[MEM-32a] the Memory area has Forget memory… for the lamp MOG, sent through view_emit', async () => {
+    const { el } = await render(<Hub />);
+    const btn = () => el.querySelector<HTMLButtonElement>('[data-memory-area] [data-forget-open]');
+    // No MOG has reported yet: no button.
+    expect(btn()).toBeNull();
+    await tauri.emit('mog:view_state', {
+      mogId: A,
+      mood: 'idle',
+      overlays: { attention: false, recording: false, offline: false, localOnly: false },
+    });
+    expect(btn()?.textContent).toBe('Forget memory…');
+    await act(async () => btn()?.click());
+    expect(viewEmits()).toContainEqual({
+      mogId: A,
+      kind: 'click',
+      payload: { target: 'forget_open' },
+    });
+  });
+
   it('[V1] shows the product name and the Labs label', async () => {
     const { el } = await render(<Hub />);
     expect(el.querySelector('h1')?.textContent).toBe('Bottle');
