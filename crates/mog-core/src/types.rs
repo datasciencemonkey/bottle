@@ -873,6 +873,48 @@ pub struct WorkspaceRow {
     pub sign_in: WorkspaceSignIn,
 }
 
+/// D2 "Genie calls per question" (ADR 0117): 5, 10 or 20. Rust checks it when it parses, and
+/// the JSON Schema has the same rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "u8", into = "u8")]
+pub struct GenieCallBudget(u8);
+
+impl GenieCallBudget {
+    /// The allowed values.
+    pub const VALUES: [u8; 3] = [5, 10, 20];
+    /// The owner's default (D8).
+    pub const DEFAULT: GenieCallBudget = GenieCallBudget(10);
+    pub fn get(self) -> u8 {
+        self.0
+    }
+}
+
+impl TryFrom<u8> for GenieCallBudget {
+    type Error = &'static str;
+    fn try_from(v: u8) -> Result<Self, Self::Error> {
+        if Self::VALUES.contains(&v) {
+            Ok(Self(v))
+        } else {
+            Err("not a valid GenieCallBudget")
+        }
+    }
+}
+
+impl From<GenieCallBudget> for u8 {
+    fn from(v: GenieCallBudget) -> u8 {
+        v.0
+    }
+}
+
+impl JsonSchema for GenieCallBudget {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "GenieCallBudget".into()
+    }
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({ "type": "integer", "enum": [5, 10, 20] })
+    }
+}
+
 /// The agent settings (ADR 0117 D1, D2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -882,9 +924,9 @@ pub struct AgentSettings {
     /// SEC-28b: an admin lock forces D1 off. Always false until slice 3.
     pub cross_workspace_locked: bool,
     /// D2 "Genie calls per question": 5, 10 or 20. Default 10.
-    pub genie_call_budget: u8,
+    pub genie_call_budget: GenieCallBudget,
     /// D9: the agent's model endpoint name. Default `databricks-claude-sonnet-5-5`.
-    pub endpoint: String,
+    pub endpoint: EndpointName,
 }
 
 /// The answer of every `workspace_*` command.

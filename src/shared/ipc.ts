@@ -460,10 +460,6 @@ export interface CommandArgs {
   };
 }
 
-/**
- * Every code a rejection can carry (`mog_core::ipc_gateway::ERROR_CODES`). A test checks this
- * list against the generated schema document.
- */
 // ---------- workspaces (ADR 0117) ----------
 
 /** D2 "Genie calls per question". */
@@ -493,6 +489,10 @@ export interface WorkspaceList {
   agent: AgentSettings;
 }
 
+/**
+ * Every code a rejection can carry (`mog_core::ipc_gateway::ERROR_CODES`). A test checks this
+ * list against the generated schema document.
+ */
 export const IPC_ERROR_CODES = [
   'unknown_command',
   'window_not_allowed',
