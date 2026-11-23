@@ -63,6 +63,9 @@ pub const MOG_LEVEL: &str = "mog:level";
 /// `{ mogId, dx, dy }`: a unit-disc vector from the eye centre, never a pointer position.
 /// The brain passes `{ dx, dy }` on to that one MOG view as `mog:look`. Not in the 4.5 list.
 pub const MOG_LOOK: &str = "mog:look";
+/// Local memory slice 1 (ADR 0113): the outcome of a card or voice "remember". Payload:
+/// `types::MemorySaved`, content-free. Not in 4.5.
+pub const MEMORY_SAVED: &str = "memory:saved";
 /// `view_emit` arrives in the brain under this name.
 pub const VIEW_INPUT: &str = "view:input";
 /// ADR 0103: the record key (⌥R) in a talk-key hold, with the knob on. Payload:
@@ -107,6 +110,11 @@ pub const ALL: &[EventSpec] = &[
         direction: Direction::BrainToView,
     },
     core(VIEW_INPUT, "view.input"),
+    EventSpec {
+        name: MEMORY_SAVED,
+        spec_name: "memory.saved",
+        direction: Direction::BrainToView,
+    },
     core(MOG_LOOK, "mog.look"),
     core(HOTKEY_RECORD_TOGGLE, "hotkey.record_toggle"),
     core(RECORDING_STATE, "recording.state"),

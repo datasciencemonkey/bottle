@@ -13,6 +13,7 @@
  */
 import type { MogId, SegmentRef } from '../shared/interfaces';
 import type { CardUpdate } from '../shared/ipc';
+import type { Transcribed } from './capture-lifecycle';
 import { SttFailure, type SttProvider } from './components/stt-provider';
 
 /** The card update that shows an STT failure on the MOG. */
@@ -26,11 +27,12 @@ export function createLifecycleTranscriber(
   showCard: (mogId: MogId, update: CardUpdate) => Promise<unknown>,
   /** Dictation words: fixes the text before the route, so dictation and ⌥G both get it. */
   correct: (text: string) => string = (t) => t,
-): (seg: SegmentRef) => Promise<string> {
+): (seg: SegmentRef) => Promise<Transcribed> {
   return async (seg) => {
     try {
-      const { text } = await stt.transcribe(seg, { app: 'bottle', mog: seg.mogId, op: 'asr' });
-      return correct(text);
+      const t = await stt.transcribe(seg, { app: 'bottle', mog: seg.mogId, op: 'asr' });
+      // ADR 0113: `remember` is Rust's. Its text is never corrected or touched here.
+      return t.remember ? { text: correct(t.text), remember: t.remember } : correct(t.text);
     } catch (e) {
       const f =
         e instanceof SttFailure ? e : new SttFailure('could_not_transcribe', seg.segmentId, false);

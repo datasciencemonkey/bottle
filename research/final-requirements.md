@@ -493,7 +493,9 @@ export type CaptureMode = 'ptt'|'hands_free'|'session';
 export interface SessionPolicy { checkInAtMin: 55; softCapMin: 60; extendMin: 30; silenceNudgeMin: 5; silenceStopMin: 15; hardCapMin: number /*60..480, default 240*/; lockStopMin: 10; holdMaxSec: 120; handsFreeMaxMin: 5 }
 export interface CaptureState { owner?: MogId; mode?: CaptureMode; recording: boolean; paused: boolean; sessionId?: string; startedAt?: number; directedTo?: MogId; othersTrack: 'off'|'ok'|'zero_buffers' }
 export interface SegmentRef { segmentId: string; mogId: MogId; sessionId?: string; track: Track; tStartMs: number; tEndMs: number; final: boolean; directedTo?: MogId }
-export interface Transcript { segmentId: string; text: string; raw: string; lang?: string; provider: 'local_parakeet'|'dbx_gemini'|'dbx_whisper'; model: string; runtime: string; latencyMs: number }
+export interface Transcript { segmentId: string; text: string; raw: string; lang?: string; provider: 'local_parakeet'|'dbx_gemini'|'dbx_whisper'; model: string; runtime: string; latencyMs: number; remember?: { ticket: string; text: string } }
+/** `memory:saved` (ADR 0113): the outcome of a card or voice "remember". Content-free. */
+export interface MemorySaved { mogId: MogId; itemId?: string; outcome: 'saved'|'quarantined'|'secret_refused'|'failed'; undoMs: number }
 
 // ---------- router (D25, D30, D63; schema in Appendix D) ----------
 export type Intent = 'question'|'memory_question'|'context'|'command'|'dictation'|'noise';   // dictation = UC1 (B5)
@@ -516,8 +518,14 @@ export interface MemoryService {
   forget(scope: { sessionId?: string; mogId?: MogId; itemIds?: string[] }): Promise<{ local: number; remotePending: number; pitrWindowS: number }>;
   mode(): 'local'|'local_synced'|'sync_paused'; syncStatus(): { pending: number; lastOk?: string };   // MVP = 'local' (B2)
 }
-export interface MemoryHit { itemId: string; type: 'decision'|'fact'|'entity'|'open_question'|'genie_answer'; text: string; score: number; sem?: number; workspaceId?: string; spaceId?: string; ageH: number }
-export interface MemoryDraft { mogId: MogId; type: MemoryHit['type']; text: string; source: 'you'|'others'|'genie'|'agent'; sessionId?: string; workspaceHost?: string; workspaceId?: string; pinned?: boolean }
+// Local memory slice 1 (ADR 0112, ADR 0113): the kinds, layers, statuses, origins and rating.
+export type MemoryKind = 'fact'|'preference'|'definition'|'decision'|'open_question'|'genie_answer';
+export type MemoryLayer = 'user'|'durable'|'daily';
+export type MemoryStatus = 'active'|'stale'|'superseded'|'resolved'|'retracted'|'quarantined'|'removed';
+export type MemoryOrigin = 'pin'|'added'|'kept_answer'|'correction'|'dictation_word'|'call_notes'|'flush'|'agent'|'dream'|'merge'|'legacy';
+export type MemoryRating = -1|0|1;
+export interface MemoryHit { itemId: string; type: MemoryKind; text: string; score: number; sem?: number; workspaceId?: string; spaceId?: string; ageH: number }
+export interface MemoryDraft { mogId: MogId; type: MemoryKind; text: string; title?: string; body?: string; tags?: string[]; origin?: MemoryOrigin; source: 'you'|'others'|'genie'|'agent'; sessionId?: string; workspaceHost?: string; workspaceId?: string; pinned?: boolean }
 export interface GenieExchange { requestId: string; mogId: MogId; ref: ExchangeRef; questionUser: string; questionSent: string; status: OperationState; answerMd?: string; keyNumbers: unknown[]; deepLink: string; homeWorkspace: boolean; splitGroupId?: string }
 
 // ---------- main agent (B4) ----------
@@ -1165,7 +1173,7 @@ Binding change B2: the MVP memory store is one local encrypted SQLite file for e
 | MEM-32c | M | MVP-D | When the user selects Forget, the bridge must delete the Genie conversations that the MOG created where an API permits it. | Else the dialog offers "Delete in Genie One". | T · AT-16 | D36, D76 | UC2 |
 | MEM-32d | M | MVP-D | The Forget dialog must link to the Genie One memory review. | The link opens the review page. | T · AT-16 | D61 | UC2 |
 | MEM-32e | C | v1 | If Lakebase sync is on, the Forget dialog must show the PITR window (172800 s). | The value comes from the project. | T · AT-16 | D72 | UC2 |
-| MEM-33a | M | MVP-D | The WipeService must delete user content only when the user selects Wipe in Settings. The options are: older than 30 d, older than 90 d, everything. | No transcript, answer, memory item or dictation history row is deleted without a Wipe action; each option deletes only the matching rows; "everything" leaves an empty store. | T · AT-16 | U9 | ALL |
+| MEM-33a | M | MVP-D | The WipeService must delete user content only when the user selects Wipe in Settings, except the memory purge of MEM-50. The options are: older than 30 d, older than 90 d, everything. | No transcript, answer, memory item or dictation history row is deleted without a Wipe action; each option deletes only the matching rows; "everything" leaves an empty store. A memory purge by MEM-50 is not a Wipe. | T · AT-16 | U9 | ALL |
 | MEM-33b | C | v1 | When the user selects Wipe, the WipeService must apply the same selection in Lakebase on the next connection under an advisory lock. | The matching remote rows are gone after the next connection. | T · AT-16 | U9, MEM-X3 | UC2 |
 | MEM-34a | M | MVP-D | The Rust core must run only statements from the fixed catalogs. | `mem_local_exec` rejects an unknown `stmtId`. | T · AT-17 | D33, MEM-C1 | ALL |
 | MEM-34b | M | MVP-D | The brain must never send SQL. | No IPC payload contains SQL text. | T · AT-17 | D33 | ALL |
@@ -1182,6 +1190,13 @@ Binding change B2: the MVP memory store is one local encrypted SQLite file for e
 | MEM-39b | C | v2 | MemoryService must not call `/api/2.0/agents/memory-stores` before v2. | No call goes to that path. | I · AT-22 | D14, MEM-M1 | UC2 |
 | MEM-40 | C | v1 | PolicyStore must let the admin select a pooled shared project with per-user schema and `FORCE ROW LEVEL SECURITY`. | RLS blocks reads of the rows of other users. | T · AT-18 | MEM-T2 | UC2 |
 | MEM-41 | M | MVP-D | MemoryService must operate with no Lakebase project in the MVP. | AT-31 and AT-32 pass on a workspace without Lakebase. | T · AT-35 | B2 | UC2 |
+| MEM-42 | M | MVP-D | R10 must show the memory items as the virtual folder `/memories` of ADR 0112: `USER.md`, `<mog-slug>/MEMORY.md` and `<mog-slug>/memory/<YYYY-MM-DD>.md`. | `mem.file.get` renders each file from the rows. A path outside the grammar gets `invalid_args`. | T · AT-28 | ADR 0112 | UC2 |
+| MEM-43 | M | MVP-D | R10 must put each new memory item into the daily note of its MOG for the local day of the write. | The core sets `note_day` from the write time. A caller that sends `noteDay` gets `invalid_args`. | T · AT-28 | ADR 0112 | UC2 |
+| MEM-44 | M | MVP-D | R10 must refuse a memory write or edit that holds a token, a key or a password. | The answer is `secret_refused`. No row and no outbox job is stored. The error holds no text. | T · AT-17 | ADR 0113, 4.6 rule 7 | UC2 |
+| MEM-45 | M | MVP-D | A pin, a hub add, a rating and an edit must each need a host-minted user-action ticket. | A call with no ticket, a used ticket, an expired ticket, or a ticket of another purpose, MOG or content gets `invalid_args`. | T · AT-28 | #574, MEM-28b, ADR 0113 | UC2 |
+| MEM-46 | M | MVP-D | A user edit must set the rating to 1 and must run the quarantine check again. | Instruction text sets `quarantined`, also on a released item. Clean text sets `active`. The embedding is cleared. | T · AT-17 | ADR 0113 | UC2 |
+| MEM-47 | M | MVP-D | A later automatic write must not change the title, the summary or the body of a pinned or reviewed memory item. | The upsert keeps the user's words. | T · AT-28 | ADR 0113 | UC2 |
+| MEM-50 | C | v1 | The memory cleanup job can move a daily item that the user did not rate to "Recently removed" after about 30 d, and can purge it 30 d later. Slice 3 sets the rules. | Slice 3 adds the acceptance. | — | ADR 0112, U9 | UC2 |
 
 ### 5.8 PG: Unity Catalog Pages (ontology hydration, UC3)
 
@@ -1261,7 +1276,8 @@ Binding change B3: Bottle detects business definitions in transcripts and propos
 | SEC-22b | M | MVP-D | The release process must get a brand review sign-off before an external release. | The sign-off exists before release. | I · AT-37 | D64 | ALL |
 | SEC-23 | M | MVP-D | The app must write a content-free audit entry for each ask, context send, Page call, agent action and sync. | Entries hold IDs, sizes and hashes only. | I · AT-08 | Kimi SEC-017, B3, B4 | ALL |
 | SEC-24a | M | MVP-D | The MemoryWriter must quarantine items with imperative text that targets the assistant. | Patterns such as "ignore previous" quarantine the item. | T · AT-17 | SG-INJ-7 | UC3 |
-| SEC-24b | M | MVP-D | The ContextAssembler and the `memory.recall` tool must not give quarantined items to Genie or to the main agent. | Quarantined items never appear in a preamble or a tool result. | T · AT-17 | SG-INJ-7, B4 | UC3 |
+| SEC-24b | M | MVP-D | The ContextAssembler and the `memory.recall` tool must not give quarantined items to Genie or to the main agent. | Quarantined items never appear in a preamble or a tool result. A quarantined item that the user rates up is no longer quarantined (SEC-24c). | T · AT-17 | SG-INJ-7, B4 | UC3 |
+| SEC-24c | M | MVP-D | A quarantined item that the user rates up in the hub must become `active`. Only a host ticket of the user's click can release it. | A thumbs up with a valid ticket sets `active`, rating 1 and `released_at`. A call with no ticket changes nothing. | T · AT-17 | SG-INJ-7, ADR 0113 | UC3 |
 | SEC-25a | M | MVP-D | The card must render answers as a sanitized markdown subset with no HTML and no remote images. | A test answer with HTML shows as text. | T · AT-17 | SG-INJ-8, GL-7.4 | UC2 |
 | SEC-25b | M | MVP-D | The card must show links only to the profile host or `AllowedAppUrls`. | Links show the full URL and never open by themselves. | T · AT-17 | SG-INJ-8 | UC2 |
 | SEC-26 | S | MVP-D | An adversarial golden set of 30 or more utterances and agent prompts must run in CI with content-free violation counters. | 0 actions are triggered. | T · AT-17 | SG-INJ-11, B4 | ALL |
@@ -1908,7 +1924,7 @@ These answers come from the user. They settle the `CONFIRM WITH USER` badges in 
 | U6 | D10, D39, COL-34 | **Reuse the Databricks CLI OAuth client**, hardened: no stored tokens, a token for each request, Bottle tags and User-Agent; `--client-id` is optional for admins. |
 | U7 | D21, COL-02 | No mobile or web client. |
 | U8 | D15, D60, COL-29, COL-50 | Memory keeps a distilled summary, key numbers and the deep link; the full answer stays only on the device; transcripts stay local; utterance upsert stays opt-in. |
-| U9 | D36, D72, COL-30 | **No automatic deletion of user content.** Settings has a Wipe button with three options: older than 30 d, older than 90 d, everything. Supersedes the purge periods of D36 and the 30 d answer period of D60. Content-free security data keeps its expiry. |
+| U9 | D36, D72, COL-30 | **No automatic deletion of user content, with one exception.** The memory cleanup job can remove and then purge memory items by the rules of MEM-50. All other user content is deleted only by Wipe or Forget. Settings has a Wipe button with three options: older than 30 d, older than 90 d, everything. Supersedes the purge periods of D36 and the 30 d answer period of D60. Content-free security data keeps its expiry. |
 | U10 | D9, D46, COL-20 | "Poll Genie for feedback" means progress polling, re-polls, memory and chips. |
 | U11 | B4, RTR-21a, ARC-7 | **One shared agent runtime** with one session for each MOG. |
 | U12 | B3, PG-18..PG-20 | **A home domain for each MOG** in each workspace; the user can change it for one draft in the review card. |
@@ -2143,7 +2159,7 @@ COL-01..COL-46 is the collision-analyst consolidated register (merging C1-C52, a
 | V9 | A settings knob turns on passing context to Genie. | D7, D29, B5 | G-28..G-37c, G-51..G-54, UX-24b | Covered (default off, preview and approval) |
 | V10 | Meeting recording: 60 min default until a human overrides, or something more sensible. | D5, D27, D53, D71 | CAP-74a..CAP-84b, Section 7 | Covered |
 | V11 | Each MOG hooks to Genie MCP, a Genie agent, or a custom agent. | D6, D28, D62, D74, D75 | G-01, G-39, G-41a..G-43c, G-48 | Partial by phase: MVP = `genie_one_mcp`; others v1 |
-| V12 | Memory in Lakebase as agentic memory for fast lookup. | D12-D15, D34, D35, D37, D51, D60, D72, **B2** | MEM-01..MEM-41 | **Changed by B2:** MVP memory is local SQLite; Lakebase is optional v1 sync (SP-12, SP-21) |
+| V12 | Memory in Lakebase as agentic memory for fast lookup. | D12-D15, D34, D35, D37, D51, D60, D72, **B2** | MEM-01..MEM-50 | **Changed by B2:** MVP memory is local SQLite; Lakebase is optional v1 sync (SP-12, SP-21) |
 | V13 | The MOG can poll Genie for feedback. | D9, D31, D46, D55, D56 | G-07a..G-20b, G-38a, G-40a, G-40b | Partial: no feedback API on Genie One MCP; UC on D9 |
 | V14 | Jump between Genie across workspaces on top of the Databricks CLI. | D10, D11, D37, D39 | W-01a..W-21b | Covered (split v1) |
 | V15 | Borrow from Sathish's antigravity plugin. | D2, D22, D33 | W-02a..W-16c, G-05a, G-14, SEC-21a | Covered (port with MIT notice) |
@@ -2176,7 +2192,7 @@ The Diagrams column names only diagrams whose SVG shows the group. "Text only" m
 | G-01..G-27b, G-38a..G-50 | UC2 | SC-1, SC-3, SC-5, SC-6 | F1, F2, F5, F6 | genie-ask-poll-sequence, workspace-hopping, system-context |
 | G-28..G-37c, G-51..G-54 | UC3 | SC-3, SC-7 | F3 | workspace-hopping (cross-workspace block only); the full UC3 flow is text only |
 | W-01a..W-21b | UC2, ALL | SC-5, SC-6 | F5, F6 | workspace-hopping, system-context, deployment-trust-boundaries |
-| MEM-01..MEM-41 | UC2, MTG | SC-1, SC-3, SC-4, SC-5 | F1, F2, F4 | memory-flow, workspace-hopping |
+| MEM-01..MEM-50 | UC2, MTG | SC-1, SC-3, SC-4, SC-5 | F1, F2, F4 | memory-flow, workspace-hopping |
 | PG-01..PG-17 | UC3 | SC-8 | F7 | text only |
 | SEC-01..SEC-07b | ALL | all | all | deployment-trust-boundaries, components |
 | SEC-08a..SEC-14b, SEC-32a | MTG | SC-3 | F2 | meeting-stop-policy (recording indicator, stop), deployment-trust-boundaries (consent, never-crosses box) |
@@ -2225,7 +2241,7 @@ By use case (a row can carry two UC values): UC1 95, UC2 350, UC3 50, MTG 118, A
 | AT-14 | MB-06a, MB-06b, MOG-13a, MOG-13b, MOG-14a, MOG-14b, CAP-01a, CAP-01b, CAP-05a, CAP-05b, CAP-16a, CAP-16b, CAP-46a, CAP-46b, UX-06a, UX-06b, UX-07 |
 | AT-15 | MB-11a, MB-11b, MB-12a, MB-12b, MOG-10a, MOG-10b, MOG-11a, MOG-11b, CAP-18, G-13a, G-13b, G-16a, G-16b, G-16c, UX-40 |
 | AT-16 | G-45a, G-45b, G-49, MEM-09a, MEM-09b, MEM-09c, MEM-11d, MEM-12a, MEM-12b, MEM-25a, MEM-25b, MEM-25c, MEM-26, MEM-32a, MEM-32b, MEM-32c, MEM-32d, MEM-32e, MEM-33a, MEM-33b, MEM-38a, MEM-38b, SEC-14a, SEC-14b, SEC-15a, SEC-15b, SEC-15c, SEC-31, ADM-14 |
-| AT-17 | MB-02, MB-13, MOG-08a, MOG-08b, CAP-02a, CAP-02b, CAP-31a, CAP-31b, RTR-03a, RTR-03b, RTR-14, RTR-19, RTR-20a, RTR-20b, G-36, G-47, W-01a, W-01b, W-04a, W-04b, W-09, MEM-08b, MEM-34a, MEM-34b, SEC-01, SEC-02a, SEC-02b, SEC-03, SEC-04a, SEC-04b, SEC-05a, SEC-05b, SEC-07a, SEC-07b, SEC-16a, SEC-16b, SEC-16c, SEC-24a, SEC-24b, SEC-25a, SEC-25b, SEC-26, SEC-27, SEC-30, NFR-18a, NFR-18b, NFR-18c, ADM-19 |
+| AT-17 | MB-02, MB-13, MOG-08a, MOG-08b, CAP-02a, CAP-02b, CAP-31a, CAP-31b, RTR-03a, RTR-03b, RTR-14, RTR-19, RTR-20a, RTR-20b, G-36, G-47, W-01a, W-01b, W-04a, W-04b, W-09, MEM-08b, MEM-34a, MEM-34b, SEC-01, SEC-02a, SEC-02b, SEC-03, SEC-04a, SEC-04b, SEC-05a, SEC-05b, SEC-07a, SEC-07b, SEC-16a, SEC-16b, SEC-16c, SEC-24a, SEC-24b, SEC-24c, SEC-25a, SEC-25b, SEC-26, SEC-27, SEC-30, NFR-18a, MEM-44, MEM-46, NFR-18b, NFR-18c, ADM-19 |
 | AT-18 | MEM-05a, MEM-05b, MEM-06, MEM-07b, MEM-10a, MEM-10b, MEM-11a, MEM-11b, MEM-11c, MEM-13, MEM-20a, MEM-20b, MEM-20c, MEM-24a, MEM-24b, MEM-35a, MEM-35b, MEM-35c, MEM-37, MEM-40 |
 | AT-19 | CAP-12a, CAP-12b, CAP-12c, CAP-34 |
 | AT-20 | UX-02a, UX-02b, UX-08a, UX-08b, UX-19a, UX-19b, UX-20a, UX-20b, UX-20c, UX-23a, UX-23b, UX-28, UX-30, UX-31a, UX-31b, UX-32a, UX-32b, UX-33, UX-34a, UX-34b, UX-34c, UX-35 |
@@ -2236,7 +2252,7 @@ By use case (a row can carry two UC values): UC1 95, UC2 350, UC3 50, MTG 118, A
 | AT-25 | CAP-74a, CAP-74b, CAP-76a, CAP-76b, CAP-76c, CAP-77a, CAP-77b, CAP-78a, CAP-78b, CAP-81a, CAP-81b, CAP-81c |
 | AT-26 | CAP-07a, CAP-07b, CAP-08a, CAP-08b, CAP-09a, CAP-09b, CAP-10a, CAP-10b, CAP-24a, CAP-24b, CAP-24c, CAP-24d |
 | AT-27 | CAP-15a, CAP-15b, CAP-15c, CAP-15d, RTR-06, RTR-07, RTR-08, RTR-12a, RTR-12b |
-| AT-28 | MEM-27a, MEM-27b, MEM-28a, MEM-28b, MEM-29a, MEM-29b, MEM-29c, MEM-30a, MEM-30b, MEM-30c |
+| AT-28 | MEM-27a, MEM-27b, MEM-28a, MEM-28b, MEM-29a, MEM-29b, MEM-29c, MEM-30a, MEM-30b, MEM-30c, MEM-42, MEM-43, MEM-45, MEM-47 |
 | AT-29 | CAP-26a, CAP-26b, CAP-27a, CAP-27b, CAP-28, CAP-29a, CAP-29b, CAP-30a, CAP-30b, NFR-07, NFR-12 |
 | AT-30 | MB-05, CAP-35a, CAP-35b, CAP-36, CAP-37, CAP-38a, CAP-38b, CAP-39a, CAP-39b, CAP-39c, CAP-40a, CAP-40b, CAP-41, CAP-42, CAP-43a, CAP-43b, CAP-45, UX-37a, UX-37b, NFR-08a, NFR-08b |
 | AT-31 | CAP-03, RTR-04a, RTR-04b, G-44 |

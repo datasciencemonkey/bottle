@@ -81,13 +81,101 @@ pub enum ParamType {
     /// Free text for an FTS5 `MATCH`. The core keeps only its words and quotes each one, so the
     /// text can never be FTS5 syntax (MEM-34b). At least one word is required.
     FtsTerms,
-    /// Set by the core, never by the caller: 1 if the text param named `of` must be quarantined
-    /// (SEC-24a, [`super::quarantine::is_quarantined`]), else 0. A caller that sends this key is
-    /// refused, so no item write can skip the check (#114, ADR 0089).
-    Quarantine {
-        /// The name of the text param that the core checks.
-        of: &'static str,
+    /// A list of at most `max_items` strings, each of at most `max_chars` characters, stored as
+    /// JSON text. Any other shape (an object, a nested list, a number) is refused, so each tag
+    /// reaches the secret check and the quarantine as a string.
+    Tags {
+        /// The most items.
+        max_items: usize,
+        /// The most characters of one item.
+        max_chars: usize,
     },
+    /// Set by the core, never by the caller: 1 if the text params named in `of` must be
+    /// quarantined (SEC-24a, [`super::quarantine::is_quarantined`]), else 0. A caller that sends
+    /// this key is refused, so no item write can skip the check (#114, ADR 0089).
+    Quarantine {
+        /// The names of the text params that the core checks, together.
+        of: &'static [&'static str],
+    },
+    /// Set by the core, never by the caller (ADR 0113): if a text param named in `of` holds a
+    /// token, a key or a password ([`super::secret_check::has_secret`]), the whole call is refused
+    /// with [`CoreError::SecretRefused`] before any SQL runs. Otherwise it binds 0, and the SQL
+    /// checks `= 0` as a second guard.
+    Secret {
+        /// The names of the text params that the core checks.
+        of: &'static [&'static str],
+    },
+    /// Set by the core, never by the caller (ADR 0112): the slug of the first param in `of` that
+    /// is not empty ([`super::memory_files::slugify`]). The SQL adds the clash suffix.
+    Slug {
+        /// The names of the text params, in order.
+        of: &'static [&'static str],
+    },
+    /// Set by the core, never by the caller (ADR 0112): today's local calendar day
+    /// `YYYY-MM-DD` on the core's own clock and device offset (or those of [`with_day_clock`]).
+    /// It never reads a caller's time, so the brain cannot file an item under another day.
+    Day,
+}
+
+impl ParamType {
+    /// True for a param that the core computes and a caller may never send.
+    pub fn is_core_computed(self) -> bool {
+        matches!(
+            self,
+            ParamType::Quarantine { .. }
+                | ParamType::Secret { .. }
+                | ParamType::Slug { .. }
+                | ParamType::Day
+        )
+    }
+}
+
+thread_local! {
+    /// The `(offset east of UTC in seconds, now in epoch ms)` of [`with_day_clock`] on this
+    /// thread, if any.
+    static DAY_CLOCK: std::cell::Cell<Option<(i32, i64)>> = const { std::cell::Cell::new(None) };
+}
+
+/// Restores the clock of the thread when it drops, also on a panic.
+struct DayClockGuard(Option<(i32, i64)>);
+
+impl Drop for DayClockGuard {
+    fn drop(&mut self) {
+        DAY_CLOCK.with(|c| c.set(self.0));
+    }
+}
+
+/// Run `f` with the `Day` params computed at `now_ms` and `offset_s` seconds east of UTC,
+/// instead of the wall clock and the device offset. For tests; it holds for this thread only,
+/// and the old clock comes back when `f` returns or panics.
+pub fn with_day_clock<T>(offset_s: i32, now_ms: i64, f: impl FnOnce() -> T) -> T {
+    let _guard = DayClockGuard(DAY_CLOCK.with(|c| c.replace(Some((offset_s, now_ms)))));
+    f()
+}
+
+fn wall_now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+}
+
+/// The core clock of a `Day` param: `(offset east of UTC in seconds, now in epoch ms)`.
+fn day_clock() -> (i32, i64) {
+    use chrono::{Offset, TimeZone};
+    DAY_CLOCK.with(std::cell::Cell::get).unwrap_or_else(|| {
+        let now = wall_now_ms();
+        let offset = chrono::Local
+            .timestamp_millis_opt(now)
+            .single()
+            .map_or(0, |t| t.offset().fix().local_minus_utc());
+        (offset, now)
+    })
+}
+
+/// The offset east of UTC, in seconds, that a `Day` param uses now: for the times of day in a
+/// rendered note.
+pub fn current_day_offset() -> i32 {
+    day_clock().0
 }
 
 /// One named parameter.
@@ -311,27 +399,80 @@ const EXCHANGE_BY_SESSION: Stmt = Stmt {
 const SOURCE_SESSION_IDS: Param = opt("sourceSessionIds", json(8_192));
 const SOURCE_UTTERANCE_IDS: Param = opt("sourceUtteranceIds", json(65_536));
 const QUARANTINED: Param = opt("quarantined", BOOL);
-const TEXT_QUARANTINE: Param = req("textQuarantine", ParamType::Quarantine { of: "text" });
+/// The three text fields of a write, as the core checks them (ADR 0113).
+const WRITE_TEXTS: &[&str] = &["title", "text", "body"];
+/// The tags of a memory: at most 8, each at most 64 characters (migration 0003 caps the count).
+const TAGS: ParamType = ParamType::Tags {
+    max_items: 8,
+    max_chars: 64,
+};
+/// The fields that the secret check and the quarantine read: the texts and each tag string
+/// (security review M2).
+const CHECKED_TEXTS: &[&str] = &["title", "text", "body", "tags"];
+const TEXT_QUARANTINE: Param = req(
+    "textQuarantine",
+    ParamType::Quarantine { of: CHECKED_TEXTS },
+);
+const SECRET_CHECK: Param = req("secretCheck", ParamType::Secret { of: CHECKED_TEXTS });
+const SLUG: Param = req("slug", ParamType::Slug { of: WRITE_TEXTS });
+const NOTE_DAY: Param = req("noteDay", ParamType::Day);
 
 /// Rust-only (#102 note, MEM-10a): the brain writes an item only with `mem.item.write`, which runs
 /// this step and the embed job in one transaction. So no brain item write skips the outbox.
+///
+/// Slice 1 (ADR 0112, ADR 0113): each new item goes into today's daily note of its MOG. `text`
+/// (the summary) or `body` is required: the title falls back to the start of the text, the
+/// summary to the start of the body. A pin is rated 1 and reviewed at once (a user action). The
+/// slug gets `-<first 6 hex of the item id>` when another live item of the same note has it.
+/// The conflict path never rewrites the text, the title or the body of a pinned or reviewed row:
+/// the user's words win over a later automatic mention.
 const ITEM_UPSERT: Stmt = Stmt {
     id: "mem.item.upsert",
     sql: "INSERT INTO memory_item (item_id, mog_id, item_type, text, source, confidence, status, \
           pinned, sensitivity, source_session_ids, source_utterance_ids, workspace_host, \
           workspace_id, space_id, source_exchange_id, first_seen_at, last_seen_at, row_hlc, \
-          origin_device_id) \
-          VALUES (:itemId, :mogId, :itemType, :text, :source, :confidence, \
+          origin_device_id, title, body_md, tags, origin, layer, note_day, slug, rating, \
+          reviewed_at, profile, updated_at) \
+          SELECT :itemId, :mogId, :itemType, coalesce(:text, substr(:body, 1, 600)), :source, \
+          :confidence, \
           CASE WHEN max(:textQuarantine, coalesce(:quarantined, 0)) = 1 \
           THEN 'quarantined' ELSE 'active' END, \
           coalesce(:pinned, 0), coalesce(:sensitivity, 'normal'), \
           coalesce(:sourceSessionIds, '[]'), coalesce(:sourceUtteranceIds, '[]'), \
           :workspaceHost, :workspaceId, :spaceId, :sourceExchangeId, :seenAt, :seenAt, :rowHlc, \
-          :deviceId) \
-          ON CONFLICT (item_id) DO UPDATE SET text = excluded.text, \
-          confidence = excluded.confidence, pinned = max(memory_item.pinned, excluded.pinned), \
-          status = CASE WHEN excluded.status = 'quarantined' THEN 'quarantined' \
-          ELSE memory_item.status END, \
+          :deviceId, coalesce(nullif(trim(:title), ''), substr(coalesce(:text, :body), 1, 80)), \
+          coalesce(:body, ''), coalesce(:tags, '[]'), \
+          coalesce(:origin, CASE WHEN :source = 'agent' THEN 'agent' ELSE 'legacy' END), \
+          'daily', :noteDay, \
+          CASE WHEN NOT EXISTS (SELECT 1 FROM memory_item c WHERE c.mog_id = :mogId \
+          AND c.layer = 'daily' AND c.note_day = :noteDay AND c.slug = :slug \
+          AND c.item_id <> :itemId AND c.deleted_at IS NULL) THEN :slug \
+          WHEN NOT EXISTS (SELECT 1 FROM memory_item d WHERE d.mog_id = :mogId \
+          AND d.layer = 'daily' AND d.note_day = :noteDay \
+          AND d.slug = :slug || '-' || lower(substr(replace(:itemId, '-', ''), 1, 6)) \
+          AND d.item_id <> :itemId AND d.deleted_at IS NULL) \
+          THEN :slug || '-' || lower(substr(replace(:itemId, '-', ''), 1, 6)) \
+          ELSE rtrim(substr(:slug, 1, 39), '-') || '-' || lower(replace(:itemId, '-', '')) END, \
+          coalesce(:pinned, 0), CASE WHEN coalesce(:pinned, 0) = 1 THEN :seenAt END, :profile, \
+          CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) \
+          FROM mog WHERE mog_id = :mogId AND :secretCheck = 0 \
+          AND coalesce(:text, :body) IS NOT NULL \
+          ON CONFLICT (item_id) DO UPDATE SET \
+          text = CASE WHEN max(memory_item.pinned, memory_item.reviewed_at IS NOT NULL, \
+          memory_item.status = 'quarantined') = 1 \
+          THEN memory_item.text ELSE excluded.text END, \
+          title = CASE WHEN max(memory_item.pinned, memory_item.reviewed_at IS NOT NULL, \
+          memory_item.status = 'quarantined') = 1 \
+          THEN memory_item.title ELSE excluded.title END, \
+          body_md = CASE WHEN max(memory_item.pinned, memory_item.reviewed_at IS NOT NULL, \
+          memory_item.status = 'quarantined') = 1 \
+          THEN memory_item.body_md ELSE excluded.body_md END, \
+          confidence = max(memory_item.confidence, excluded.confidence), \
+          pinned = max(memory_item.pinned, excluded.pinned), \
+          rating = max(memory_item.rating, excluded.rating), \
+          reviewed_at = coalesce(memory_item.reviewed_at, excluded.reviewed_at), \
+          status = CASE WHEN excluded.status = 'quarantined' AND memory_item.pinned = 0 \
+          AND memory_item.reviewed_at IS NULL THEN 'quarantined' ELSE memory_item.status END, \
           source_session_ids = (SELECT json_group_array(value) FROM (SELECT value \
           FROM json_each(memory_item.source_session_ids) UNION \
           SELECT value FROM json_each(excluded.source_session_ids))), \
@@ -342,13 +483,18 @@ const ITEM_UPSERT: Stmt = Stmt {
           excluded.source_exchange_id), \
           last_seen_at = max(memory_item.last_seen_at, excluded.last_seen_at), \
           mention_count = memory_item.mention_count + 1, row_hlc = excluded.row_hlc, \
-          updated_at = CAST(strftime('%s','now') AS INTEGER) * 1000 \
+          updated_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) \
           WHERE memory_item.mog_id = excluded.mog_id",
     params: &[
         req("itemId", UUID),
         MOG_ID,
         req("itemType", CODE),
-        req("text", text(600)),
+        opt("text", text(600)),
+        opt("title", text(80)),
+        opt("body", text(4_000)),
+        opt("tags", TAGS),
+        opt("origin", CODE),
+        opt("profile", text(128)),
         req("source", CODE),
         req("confidence", REAL),
         opt("pinned", BOOL),
@@ -361,6 +507,9 @@ const ITEM_UPSERT: Stmt = Stmt {
         SOURCE_UTTERANCE_IDS,
         QUARANTINED,
         TEXT_QUARANTINE,
+        SECRET_CHECK,
+        SLUG,
+        NOTE_DAY,
         req("seenAt", MS),
         ROW_HLC,
         DEVICE_ID,
@@ -371,7 +520,9 @@ const ITEM_UPSERT: Stmt = Stmt {
 
 const ITEM_GET: Stmt = Stmt {
     id: "mem.item.get",
-    sql: "SELECT item_id AS itemId, item_type AS type, text, source, confidence, status, pinned, \
+    sql: "SELECT item_id AS itemId, item_type AS type, title, text, body_md AS bodyMd, tags, \
+          origin, layer, note_day AS noteDay, source, confidence, status, pinned, rating, \
+          reviewed_at AS reviewedAt, released_at AS releasedAt, \
           sensitivity, workspace_host AS workspaceHost, workspace_id AS workspaceId, \
           space_id AS spaceId, mention_count AS mentionCount, first_seen_at AS firstSeenAt, \
           last_seen_at AS lastSeenAt, source_session_ids AS sourceSessionIds, \
@@ -381,6 +532,141 @@ const ITEM_GET: Stmt = Stmt {
     kind: Kind::Query,
     access: Access::Brain,
 };
+
+/// The columns of a memory file row (`memory_files::MemoryRow::from_json`).
+macro_rules! file_row_cols {
+    () => {
+        "SELECT item_id AS itemId, item_type AS kind, layer, note_day AS noteDay, title, text, \
+         body_md AS bodyMd, slug, status, pinned, source, origin, tags, confidence, \
+         workspace_host AS workspaceHost, workspace_id AS workspaceId, profile, \
+         source_exchange_id AS exchangeId, recording_id AS recordingId, \
+         first_seen_at AS createdAt, updated_at AS updatedAt, last_used_at AS lastUsedAt, \
+         rating, reviewed_at AS reviewedAt, released_at AS releasedAt FROM memory_item "
+    };
+}
+
+/// Rust-only: the rows behind the `mem.item.list` handler (ADR 0112). Only items in use.
+const ITEM_LIST_ROWS: Stmt = Stmt {
+    id: "mem.item.list_rows",
+    sql: concat!(
+        file_row_cols!(),
+        "WHERE mog_id = :mogId AND deleted_at IS NULL \
+         AND status IN ('active','stale','quarantined') \
+         ORDER BY pinned DESC, coalesce(last_used_at, updated_at) DESC, item_id LIMIT :limit"
+    ),
+    params: &[MOG_ID, req("limit", LIMIT)],
+    kind: Kind::Query,
+    access: Access::Core,
+};
+
+/// Rust-only: the rows of one file behind the `mem.file.get` handler (ADR 0112).
+const ITEM_FILE_ROWS: Stmt = Stmt {
+    id: "mem.item.file_rows",
+    sql: concat!(
+        file_row_cols!(),
+        "WHERE mog_id = :mogId AND layer = :layer \
+         AND coalesce(note_day, '') = coalesce(:noteDay, '') AND deleted_at IS NULL \
+         AND status IN ('active','stale','quarantined') ORDER BY first_seen_at, item_id LIMIT 2000"
+    ),
+    params: &[MOG_ID, req("layer", CODE), opt("noteDay", text(10))],
+    kind: Kind::Query,
+    access: Access::Core,
+};
+
+/// Rust-only: the display name of one MOG, for the headings of its files.
+const MOG_NAME: Stmt = Stmt {
+    id: "mem.mog.name",
+    sql: "SELECT display_name AS name FROM mog WHERE mog_id = :mogId",
+    params: &[MOG_ID],
+    kind: Kind::Query,
+    access: Access::Core,
+};
+
+/// The wall clock of the Rate ticket's mint. `exec_ticketed` sets it from the redeemed ticket;
+/// a caller that sends it is refused (security review M1).
+const MINTED_AT: Param = req("mintedAt", MS);
+
+/// Rust-only, only with a hub Rate ticket (ADR 0113): a thumbs up. Rating 1, reviewed now,
+/// confidence at least 0.9, and the item in use: a stale item and a quarantined item become
+/// `active`; a quarantined one gets `released_at` (SEC-24c). SQLite reads every `SET`
+/// expression from the old row, so `released_at` sees the old status. Only a row that no write
+/// touched after the click changes (`updated_at < mintedAt`, all writers set `updated_at` in ms
+/// on the SQLite clock), so the brain cannot swap the text between the click and the release.
+const ITEM_RATE: Stmt = Stmt {
+    id: "mem.item.rate_row",
+    sql: "UPDATE memory_item SET rating = 1, reviewed_at = :now, \
+          confidence = max(confidence, 0.9), \
+          released_at = CASE WHEN status = 'quarantined' THEN :now ELSE released_at END, \
+          stale_at = NULL, status = 'active', row_hlc = :rowHlc, \
+          updated_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) \
+          WHERE mog_id = :mogId AND item_id = :itemId AND deleted_at IS NULL \
+          AND status IN ('active','stale','quarantined') AND updated_at < :mintedAt",
+    params: &[
+        MOG_ID,
+        req("itemId", UUID),
+        req("now", MS),
+        ROW_HLC,
+        MINTED_AT,
+    ],
+    kind: Kind::Write,
+    access: Access::Core,
+};
+
+/// The text fields of an edit.
+const EDIT_TEXTS: &[&str] = &["title", "body"];
+
+/// Rust-only, only with a hub Edit ticket (ADR 0113): the user's edit of the kind, the title and
+/// the body. The summary is the start of the body. The quarantine check runs again: instruction
+/// text goes back into quarantine even on a released item; clean text makes the item `active`.
+/// The edit rates the item 1, clears the embedding (the vec row goes with it, 0003 trigger) and
+/// marks a source other than `you` as `confirmed`. A Genie answer stays one, no item becomes one,
+/// and no edit makes a preference (USER.md is slice 2).
+const ITEM_EDIT: Stmt = Stmt {
+    id: "mem.item.edit_row",
+    sql: "UPDATE memory_item SET item_type = :itemType, title = :title, body_md = :body, \
+          text = substr(:body, 1, 600), \
+          slug = CASE WHEN NOT EXISTS (SELECT 1 FROM memory_item c WHERE c.mog_id = :mogId \
+          AND c.layer = memory_item.layer \
+          AND coalesce(c.note_day, '') = coalesce(memory_item.note_day, '') \
+          AND c.slug = :slug AND c.item_id <> :itemId AND c.deleted_at IS NULL) THEN :slug \
+          WHEN NOT EXISTS (SELECT 1 FROM memory_item d WHERE d.mog_id = :mogId \
+          AND d.layer = memory_item.layer \
+          AND coalesce(d.note_day, '') = coalesce(memory_item.note_day, '') \
+          AND d.slug = :slug || '-' || lower(substr(replace(:itemId, '-', ''), 1, 6)) \
+          AND d.item_id <> :itemId AND d.deleted_at IS NULL) \
+          THEN :slug || '-' || lower(substr(replace(:itemId, '-', ''), 1, 6)) \
+          ELSE rtrim(substr(:slug, 1, 39), '-') || '-' || lower(replace(:itemId, '-', '')) END, \
+          status = CASE WHEN :textQuarantine = 1 THEN 'quarantined' ELSE 'active' END, \
+          released_at = NULL, stale_at = NULL, rating = 1, reviewed_at = :now, \
+          confidence = max(confidence, 0.9), \
+          source = CASE WHEN source = 'you' THEN 'you' ELSE 'confirmed' END, \
+          embedding = NULL, embedding_model = NULL, embedding_dims = NULL, embedded_at = NULL, \
+          row_hlc = :rowHlc, updated_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) \
+          WHERE mog_id = :mogId AND item_id = :itemId AND deleted_at IS NULL \
+          AND status IN ('active','stale','quarantined') AND :secretCheck = 0 \
+          AND trim(:title) <> '' AND trim(:body) <> '' AND :itemType <> 'preference' \
+          AND (:itemType = 'genie_answer') = (item_type = 'genie_answer')",
+    params: &[
+        MOG_ID,
+        req("itemId", UUID),
+        req("itemType", CODE),
+        req("title", text(80)),
+        req("body", text(4_000)),
+        req("textQuarantine", ParamType::Quarantine { of: EDIT_TEXTS }),
+        req("secretCheck", ParamType::Secret { of: EDIT_TEXTS }),
+        req("slug", ParamType::Slug { of: &["title"] }),
+        req("now", MS),
+        ROW_HLC,
+    ],
+    kind: Kind::Write,
+    access: Access::Core,
+};
+
+/// The ids that `mem_local_exec` answers with a Rust handler over [`memory_files`] (ADR 0112),
+/// not with one statement. Both are reads for the brain.
+///
+/// [`memory_files`]: super::memory_files
+pub const HANDLERS: &[&str] = &["mem.item.list", "mem.file.get"];
 
 const RECALL_FTS: Stmt = Stmt {
     id: "mem.recall.fts",
@@ -812,7 +1098,12 @@ const ITEM_WRITE: Group = Group {
         req("itemId", UUID),
         MOG_ID,
         req("itemType", CODE),
-        req("text", text(600)),
+        opt("text", text(600)),
+        opt("title", text(80)),
+        opt("body", text(4_000)),
+        opt("tags", TAGS),
+        opt("origin", CODE),
+        opt("profile", text(128)),
         req("source", CODE),
         req("confidence", REAL),
         opt("pinned", BOOL),
@@ -825,12 +1116,50 @@ const ITEM_WRITE: Group = Group {
         SOURCE_UTTERANCE_IDS,
         QUARANTINED,
         TEXT_QUARANTINE,
+        SECRET_CHECK,
+        SLUG,
+        NOTE_DAY,
         req("seenAt", MS),
         ROW_HLC,
         DEVICE_ID,
         req("now", MS),
     ],
     access: Access::Brain,
+};
+
+/// A thumbs up and its embed job (a released or revived item is `active` now). Rust-only: the
+/// host runs it only after it redeems a hub Rate ticket (`local_store::exec_ticketed`).
+const ITEM_RATE_GROUP: Group = Group {
+    id: "mem.item.rate",
+    steps: &[&ITEM_RATE, &OUTBOX_ENQUEUE_ITEM_EMBED],
+    params: &[
+        MOG_ID,
+        req("itemId", UUID),
+        req("now", MS),
+        ROW_HLC,
+        MINTED_AT,
+    ],
+    access: Access::Core,
+};
+
+/// An edit and the new embed job of an `active` result. Rust-only: the host runs it only after
+/// it redeems a hub Edit ticket.
+const ITEM_EDIT_GROUP: Group = Group {
+    id: "mem.item.edit",
+    steps: &[&ITEM_EDIT, &OUTBOX_ENQUEUE_ITEM_EMBED],
+    params: &[
+        MOG_ID,
+        req("itemId", UUID),
+        req("itemType", CODE),
+        req("title", text(80)),
+        req("body", text(4_000)),
+        req("textQuarantine", ParamType::Quarantine { of: EDIT_TEXTS }),
+        req("secretCheck", ParamType::Secret { of: EDIT_TEXTS }),
+        req("slug", ParamType::Slug { of: &["title"] }),
+        req("now", MS),
+        ROW_HLC,
+    ],
+    access: Access::Core,
 };
 
 /// The params of every Forget group: the log row's id, time and device.
@@ -930,6 +1259,8 @@ const WIPE_EVERYTHING: Group = Group {
 /// The atomic groups. Their IDs never equal a statement ID.
 pub const GROUPS: &[Group] = &[
     ITEM_WRITE,
+    ITEM_RATE_GROUP,
+    ITEM_EDIT_GROUP,
     FORGET_ITEMS,
     FORGET_SESSION,
     FORGET_MOG,
@@ -966,6 +1297,23 @@ pub const WIPE_MOG_LIST: DeviceStmt = DeviceStmt {
           each delete is MOG-scoped",
 };
 
+/// The MOG ids and names of the device, for unique MOG folder slugs (ADR 0112). Names and ids
+/// only; the handlers that read it run MOG-scoped statements for the rows.
+pub const MOG_NAMES: DeviceStmt = DeviceStmt {
+    stmt: Stmt {
+        id: "mem.mog.names",
+        sql: "SELECT mog_id AS mogId, display_name AS name FROM mog ORDER BY mog_id",
+        params: &[],
+        kind: Kind::Query,
+        access: Access::Core,
+    },
+    why: "a MOG folder name must be unique on the device (ADR 0112); it reads MOG ids and \
+          display names only",
+};
+
+/// The device-wide statements that [`super::LocalStore::device_rows`] may run.
+pub const DEVICE_STMTS: &[&DeviceStmt] = &[&WIPE_MOG_LIST, &MOG_NAMES];
+
 /// The group with this exact ID.
 pub fn find_group(id: &str) -> Option<&'static Group> {
     GROUPS.iter().find(|g| g.id == id)
@@ -976,6 +1324,7 @@ pub fn access_of(id: &str) -> Option<Access> {
     find(id)
         .map(|s| s.access)
         .or_else(|| find_group(id).map(|g| g.access))
+        .or_else(|| HANDLERS.contains(&id).then_some(Access::Brain))
 }
 
 /// The whole local catalog. `mem_local_exec` and `LocalStore::exec` run nothing else.
@@ -988,6 +1337,11 @@ pub const STATEMENTS: &[Stmt] = &[
     EXCHANGE_BY_SESSION,
     ITEM_UPSERT,
     ITEM_GET,
+    ITEM_LIST_ROWS,
+    ITEM_FILE_ROWS,
+    MOG_NAME,
+    ITEM_RATE,
+    ITEM_EDIT,
     RECALL_FTS,
     FORGET_SESSION_CONVERSATIONS,
     FORGET_MOG_CONVERSATIONS,
@@ -1247,8 +1601,25 @@ fn bind_value(ty: ParamType, v: &Value) -> CoreResult<SqlValue> {
             SqlValue::Text(s)
         }
         ParamType::FtsTerms => SqlValue::Text(fts_terms(&text(v)?).ok_or_else(bad)?),
+        ParamType::Tags {
+            max_items,
+            max_chars,
+        } => {
+            let items = v.as_array().ok_or_else(bad)?;
+            if items.len() > max_items
+                || !items
+                    .iter()
+                    .all(|t| t.as_str().is_some_and(|t| t.chars().count() <= max_chars))
+            {
+                return Err(bad());
+            }
+            SqlValue::Text(serde_json::to_string(v).map_err(|_| bad())?)
+        }
         // Never bound from a caller value: `check_params` computes it.
-        ParamType::Quarantine { .. } => return Err(bad()),
+        ParamType::Quarantine { .. }
+        | ParamType::Secret { .. }
+        | ParamType::Slug { .. }
+        | ParamType::Day => return Err(bad()),
     })
 }
 
@@ -1268,6 +1639,17 @@ pub fn validate_params(
     check_params(decl, params)
 }
 
+/// The string values of the params named in `of`, in order. A missing or non-string one is left
+/// out (its own type check refuses a non-string value).
+fn texts<'a>(obj: &'a Map<String, Value>, of: &'a [&'a str]) -> impl Iterator<Item = &'a str> {
+    // A list param (`tags`) gives each of its strings.
+    of.iter().filter_map(|k| obj.get(*k)).flat_map(|v| match v {
+        Value::String(s) => vec![s.as_str()],
+        Value::Array(a) => a.iter().filter_map(Value::as_str).collect(),
+        _ => Vec::new(),
+    })
+}
+
 /// Check `params` against `decl` with no `mogId` rule: for the device-wide [`CONSENT`]
 /// statements, which run only from `mog_core::consent`. [`validate_params`] adds the MEM-01 rule.
 pub fn check_params(decl: &[Param], params: &Value) -> CoreResult<Vec<(&'static str, SqlValue)>> {
@@ -1277,14 +1659,36 @@ pub fn check_params(decl: &[Param], params: &Value) -> CoreResult<Vec<(&'static 
     }
     decl.iter()
         .map(|p| match (p.ty, obj.get(p.name)) {
-            // SEC-24a: the core sets the quarantine; a caller that sends the key is refused.
-            (ParamType::Quarantine { .. }, Some(_)) => Err(bad()),
+            // SEC-24a, ADR 0112, ADR 0113: the core sets these; a caller that sends one is
+            // refused.
+            (ty, Some(_)) if ty.is_core_computed() => Err(bad()),
             (ParamType::Quarantine { of }, None) => {
-                let t = obj.get(of).and_then(Value::as_str).unwrap_or("");
+                let t = texts(obj, of).collect::<Vec<_>>().join("\n");
                 Ok((
                     p.name,
-                    SqlValue::Integer(i64::from(super::quarantine::is_quarantined(t))),
+                    SqlValue::Integer(i64::from(super::quarantine::is_quarantined(&t))),
                 ))
+            }
+            (ParamType::Secret { of }, None) => {
+                // Each field, and the fields run together: a token split across two fields is
+                // found too (security review L1).
+                let joined: String = texts(obj, of).collect();
+                if super::secret_check::any_secret(texts(obj, of))
+                    || super::secret_check::has_secret(&joined)
+                {
+                    Err(CoreError::SecretRefused { component: ID })
+                } else {
+                    Ok((p.name, SqlValue::Integer(0)))
+                }
+            }
+            (ParamType::Slug { of }, None) => {
+                let first = texts(obj, of).find(|t| !t.trim().is_empty()).unwrap_or("");
+                Ok((p.name, SqlValue::Text(super::memory_files::slugify(first))))
+            }
+            (ParamType::Day, None) => {
+                let (offset, now) = day_clock();
+                let day = super::memory_files::day_of(now, offset).ok_or_else(bad)?;
+                Ok((p.name, SqlValue::Text(day)))
             }
             (_, None | Some(Value::Null)) if p.required => Err(bad()),
             (_, None | Some(Value::Null)) => Ok((p.name, SqlValue::Null)),

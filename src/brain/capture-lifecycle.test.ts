@@ -7,6 +7,7 @@ import {
   wireCaptureLifecycle,
   type CaptureControl,
   type CaptureLifecycleDeps,
+  type Transcribed,
   type Utterance,
 } from './capture-lifecycle';
 import type { PttEvent } from './ptt';
@@ -85,7 +86,7 @@ function rig(opts: { holdStart?: boolean; config?: CaptureLifecycleDeps['config'
   const toggles: { mogId: string; liveAtToggle: number }[] = [];
   const utterances: Utterance[] = [];
   const transcribed: SegmentRef[] = [];
-  const texts = new Map<string, string>();
+  const texts = new Map<string, Transcribed>();
   const deps: CaptureLifecycleDeps = {
     control,
     transcribe: async (seg) => {
@@ -203,6 +204,17 @@ describe('capture lifecycle: PTT (#14)', () => {
     r.texts.set('s1', '   ');
     await r.lc.onSegment(r.seg('1'));
     expect(r.utterances).toEqual([]);
+  });
+
+  it('[ADR 0113] a remember order of the transcript reaches the utterance', async () => {
+    const r = rig();
+    r.ptt('down', 0);
+    await r.flush();
+    r.ptt('up', 900);
+    r.texts.set('s1', { text: 'remember this: a', remember: { ticket: 't1', text: 'a' } });
+    await r.lc.onSegment(r.seg('1'));
+    expect(r.utterances[0]?.remember).toEqual({ ticket: 't1', text: 'a' });
+    expect(r.utterances[0]).toMatchObject({ text: 'remember this: a' });
   });
 
   it('[CAP-12a] a segment of a lease the lifecycle did not start is ignored', async () => {

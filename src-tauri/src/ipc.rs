@@ -169,8 +169,12 @@ pub fn brain_message(event: &str, payload: Value) -> Value {
 }
 
 /// The `view:input` payload for a `view_emit` call from window `from`.
-pub fn view_input_payload(from: &str, args: Value) -> Value {
-    json!({ "from": from, "input": args })
+pub fn view_input_payload(from: &str, args: Value, action_ticket: Option<String>) -> Value {
+    match action_ticket {
+        // ADR 0113: a host-minted #574 ticket for a user click rides beside the input.
+        Some(t) => json!({ "from": from, "input": args, "actionTicket": t }),
+        None => json!({ "from": from, "input": args }),
+    }
 }
 
 /// Check the invoke envelope `{ args }` and return the arguments.
@@ -266,6 +270,9 @@ pub struct HostComponents<'a> {
     /// R10 for `mem_local_exec` (#426): the one managed `SqlCipherLocalStore` that the consent
     /// records and R14 WipeService share. `None` when it is not managed: `host_failed`.
     pub mem: Option<&'a dyn mog_core::local_store::LocalStore>,
+    /// #574 (ADR 0113): the one `ActionTickets` of the process, for user-only memory writes.
+    /// `None` when it is not managed: no ticket is minted and each such write is refused.
+    pub tickets: Option<&'a mog_core::action_ticket::ActionTickets>,
     /// R14 for `mem_wipe` (#525, ADR 0087): the managed `LocalWipeService` over the same R10
     /// store. `None` when it is not managed: `host_failed`.
     pub wipe: Option<&'a dyn mog_core::wipe::WipeService>,
@@ -347,6 +354,7 @@ impl<'a> HostComponents<'a> {
             agent: None,
             stt: None,
             mem: None,
+            tickets: None,
             wipe: None,
             profiles: None,
             cli: None,
@@ -370,27 +378,27 @@ impl HostComponents<'_> {
         let stt = self.stt.ok_or_else(|| host_failed(command))?;
         // R4's reasons (`stt_segment_unknown`, `stt_model_missing`, `stt_engine_failed`) are not
         // in `ERROR_CODES`, so each crosses as the content-free `host_failed` (SEC-03).
-        let transcript = stt
+        let mut transcript = stt
             .transcribe(&a.segment_id)
             .map_err(|_| host_failed(command))?;
+        // ADR 0113: Rust's own grammar finds the voice "remember", never the brain's.
+        crate::memory_host::attach_remember(
+            &mut transcript,
+            &a,
+            self.tickets,
+            crate::memory_host::now_ms(),
+        );
         serde_json::to_value(transcript).map_err(|_| host_failed(command))
     }
 
     /// #426: the brain's R10 call. `mem_local_exec` refuses an unknown or Rust-only (`Access::Core`)
     /// `stmtId`, so the brain cannot run a Wipe step. Never `LocalStore::exec` here (#37 review).
     fn mem_local_exec(&self, command: &str, args: Value) -> CoreResult<Value> {
-        // MEM-28b (security-lead, PR #540 review): a pin needs a user action, and no proof of one
-        // crosses from the brain. So the host refuses every pin. TODO(#574): a host-minted
-        // user-action ticket for "remember this".
-        if args
-            .get("params")
-            .and_then(|p| p.get("pinned"))
-            .is_some_and(|pin| pin != &Value::Bool(false) && !pin.is_null())
-        {
-            return Err(invalid_args(command));
-        }
+        // MEM-28b, #574 (ADR 0113): a pin, a hub add, a rating, a release or an edit needs a
+        // host-minted user-action ticket. `memory_host` redeems it, and refuses each such write
+        // that has none.
         let store = self.mem.ok_or_else(|| host_failed(command))?;
-        mog_core::local_store::mem_local_exec(store, args)
+        crate::memory_host::gate_mem_exec(self.tickets, store, args, crate::memory_host::now_ms())
     }
 
     fn windows(&self, command: &str) -> CoreResult<&dyn WindowHost> {
@@ -429,7 +437,13 @@ impl GatewayComponents for HostComponents<'_> {
                 if crate::mog_look_host::hide_notice(self.from, &args) {
                     return Ok(json!({}));
                 }
-                let item = view_input_payload(self.from, args);
+                let ticket = crate::memory_host::mint_for_view(
+                    self.from,
+                    &args,
+                    self.tickets,
+                    crate::memory_host::now_ms(),
+                );
+                let item = view_input_payload(self.from, args, ticket);
                 if self.brain.relay(events::VIEW_INPUT, item) {
                     Ok(json!({}))
                 } else {
@@ -748,6 +762,8 @@ fn route_from<R: Runtime>(
     let mem = webview.try_state::<std::sync::Arc<mog_core::local_store::SqlCipherLocalStore>>();
     // `try_state`: `consent_host::install` manages R14 over the same store (#525).
     let wipe = webview.try_state::<std::sync::Arc<mog_core::wipe::LocalWipeService>>();
+    // `try_state`: `lib.rs` manages the one ticket store (ADR 0113).
+    let tickets = webview.try_state::<std::sync::Arc<mog_core::action_ticket::ActionTickets>>();
     // `try_state`: `profiles_host::install` manages T7; without it `profiles_list` answers
     // `host_failed` (#555).
     let profiles = webview.try_state::<crate::profiles_host::ProfilesHost>();
@@ -781,6 +797,7 @@ fn route_from<R: Runtime>(
         mem: mem
             .as_ref()
             .map(|m| m.inner().as_ref() as &dyn mog_core::local_store::LocalStore),
+        tickets: tickets.as_ref().map(|t| t.inner().as_ref()),
         wipe: wipe
             .as_ref()
             .map(|w| w.inner().as_ref() as &dyn mog_core::wipe::WipeService),
@@ -897,7 +914,7 @@ mod tests {
     fn arc_5_view_input_goes_to_the_brain_channel_as_view_input() {
         let msg = brain_message(
             events::VIEW_INPUT,
-            view_input_payload("mog-a1", json!({"mogId": "a1", "kind": "poked"})),
+            view_input_payload("mog-a1", json!({"mogId": "a1", "kind": "poked"}), None),
         );
         assert_eq!(
             msg,
@@ -1395,14 +1412,22 @@ mod tests {
             ),
             "route_from reads the managed store"
         );
+        // ADR 0113: the route goes through the ticket gate, which calls mem_local_exec.
         assert!(
-            ipc.contains("mog_core::local_store::mem_local_exec("),
-            "the route calls mem_local_exec, never LocalStore::exec (#37 review)"
+            ipc.contains("crate::memory_host::gate_mem_exec("),
+            "the route calls the memory_host ticket gate"
         );
+        let gate = production_code(&std::fs::read_to_string(src.join("memory_host.rs")).unwrap());
         assert!(
-            !ipc.contains(".exec("),
-            "the host never runs a statement itself"
+            gate.contains("mog_core::local_store::mem_local_exec("),
+            "the gate calls mem_local_exec, never LocalStore::exec (#37 review)"
         );
+        for code in [&ipc, &gate] {
+            assert!(
+                !code.contains(".exec("),
+                "the host never runs a statement itself"
+            );
+        }
         // No other host file builds a second store.
         for entry in std::fs::read_dir(&src).unwrap() {
             let path = entry.unwrap().path();

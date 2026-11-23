@@ -1043,6 +1043,7 @@
   }
 
   .hub--wide .conv,
+  .hub--wide .mem,
   .hub--wide .rec-area {
     flex: 1;
     min-height: 0;
@@ -2255,5 +2256,508 @@
     .rec-consent {
       animation: none;
     }
+  }
+
+  /* Memory (local memory plan 9.1): tree 220 px, list 280 px, the file fills the rest. The same
+     frame as Conversations: each pane scrolls on its own, and the frame bleeds to the edges. */
+  .mem {
+    position: relative;
+    display: flex;
+    margin: 0 -32px;
+    margin-left: calc(var(--mog-space-6) * -1);
+    border-top: 1px solid var(--mog-edge);
+  }
+
+  .mem-panes {
+    display: grid;
+    flex: 1;
+    grid-template-columns: 220px 280px minmax(0, 1fr);
+    min-height: 0;
+  }
+
+  .mem-tree,
+  .mem-list {
+    min-height: 0;
+    overflow-y: auto;
+    padding: 12px 8px 24px 12px;
+    overscroll-behavior: contain;
+  }
+
+  .mem-tree,
+  .mem-list-pane {
+    border-right: 1px solid var(--mog-edge);
+  }
+
+  .mem-list-pane {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .mem-list {
+    flex: 1;
+    padding-top: 6px;
+  }
+
+  .mem-list-head {
+    display: flex;
+    padding: 10px 8px 0 12px;
+  }
+
+  .mem-list-head > button {
+    flex: 1;
+  }
+
+  .mem-tree ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .mem-tree [role='group'] {
+    margin: 0 0 6px 10px;
+  }
+
+  .mem-tree-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 10px;
+    border: 0;
+    border-radius: var(--mog-radius-sm);
+    background: transparent;
+    color: var(--mog-text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color 120ms var(--mog-ease-out);
+  }
+
+  .mem-tree-row--kind {
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-sm);
+  }
+
+  .mem-tree-row:hover,
+  .mem-row:hover {
+    background: color-mix(in srgb, var(--mog-surface-raised) 50%, transparent);
+  }
+
+  .mem-tree [aria-selected='true'] > .mem-tree-row,
+  .mem-row[aria-selected='true'] {
+    background: var(--mog-surface-raised);
+    color: var(--mog-text);
+  }
+
+  .hub .mem-tree [role='tree']:focus-visible,
+  .hub .mem-list:focus-visible {
+    box-shadow: none;
+  }
+
+  .mem-tree [role='tree']:focus-visible [aria-selected='true'] > .mem-tree-row,
+  .mem-list:focus-visible .mem-row[aria-selected='true'] {
+    box-shadow: var(--mog-focus-ring);
+  }
+
+  .mem-tree-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mem-count {
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-xs);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .mem-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex: none;
+  }
+
+  .mem-row {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 8px 12px;
+    border-radius: var(--mog-radius-sm);
+    cursor: pointer;
+    transition: background-color 120ms var(--mog-ease-out);
+  }
+
+  .mem-row-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    overflow: hidden;
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mem-pin {
+    flex: none;
+    color: var(--mog-accent);
+  }
+
+  .mem-row-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-xs);
+  }
+
+  .mem-row-path {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mem-mark {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    flex: none;
+    padding: 0 6px;
+    border: 1px solid var(--mog-edge);
+    border-radius: var(--mog-radius-pill);
+    font-size: var(--mog-text-xs);
+    line-height: 1.6;
+  }
+
+  .mem-tree-folder {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 14px 0 4px;
+    padding: 0 10px;
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-xs);
+    font-weight: var(--mog-weight-semibold);
+  }
+
+  .mem-tree-folder-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mem-tree-add {
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--mog-radius-sm);
+    background: transparent;
+    color: var(--mog-text-muted);
+    cursor: pointer;
+    opacity: 0.5;
+    transition:
+      opacity 120ms ease-out,
+      background-color 120ms ease-out;
+  }
+
+  .mem-tree li:hover > .mem-tree-folder .mem-tree-add,
+  .mem-tree-add:hover,
+  .mem-tree-add:focus-visible {
+    opacity: 1;
+  }
+
+  .mem-tree-add:hover {
+    background: var(--mog-surface-raised);
+    color: var(--mog-text);
+  }
+
+  .mem-tree [role='tree'] > .mem-tree-file {
+    margin-bottom: 4px;
+  }
+
+  .mem-mark--new {
+    border-color: color-mix(in srgb, var(--mog-accent) 45%, transparent);
+    color: var(--mog-accent);
+  }
+
+  .mem-spacer {
+    flex: 1;
+  }
+
+  .mem-mark--quarantined {
+    border-color: var(--mog-note-border);
+    background: var(--mog-note-bg);
+    color: var(--mog-note-text);
+  }
+
+  .mem-file {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .mem-doc {
+    display: flex;
+    flex-direction: column;
+    gap: var(--mog-space-4);
+    max-width: 68ch;
+    padding: 20px 28px 32px;
+  }
+
+  .mem-path {
+    color: var(--mog-text-muted);
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    font-size: var(--mog-text-xs);
+    word-break: break-all;
+  }
+
+  .hub .mem-doc-title {
+    margin: 6px 0 4px;
+    font-size: var(--mog-text-lg);
+    font-weight: var(--mog-weight-semibold);
+    line-height: var(--mog-leading-tight);
+  }
+
+  .hub .mem-doc-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 12px;
+    margin: 0;
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-xs);
+  }
+
+  .hub .mem-note {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 12px;
+    margin: 0;
+    padding: 10px 12px;
+    border: 1px solid var(--mog-note-border);
+    border-radius: var(--mog-radius-sm);
+    background: var(--mog-note-bg);
+    color: var(--mog-note-text);
+    font-size: var(--mog-text-sm);
+  }
+
+  .mem-doc-body {
+    line-height: var(--mog-leading-relaxed);
+  }
+
+  .mem-plain {
+    margin: 0;
+    font: inherit;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .mem-front summary {
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-sm);
+    cursor: pointer;
+  }
+
+  .mem-front dl {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 4px 16px;
+    margin: 10px 0 0;
+    font-size: var(--mog-text-xs);
+  }
+
+  .mem-field {
+    display: contents;
+  }
+
+  .mem-field dt {
+    color: var(--mog-text-muted);
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  }
+
+  .mem-field dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .mem-doc-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-top: var(--mog-space-3);
+    border-top: 1px solid var(--mog-edge);
+  }
+
+  .mem-empty {
+    gap: 8px;
+  }
+
+  .mem-empty-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .mem-form-title {
+    margin: 0;
+    color: var(--mog-text);
+    font-size: var(--mog-text-lg);
+    font-weight: var(--mog-weight-semibold);
+  }
+
+  .mem-form {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .mem-form-label {
+    color: var(--mog-text);
+    font-size: var(--mog-text-sm);
+    font-weight: var(--mog-weight-medium);
+  }
+
+  .mem-form-hint {
+    margin-left: 4px;
+    color: var(--mog-text-muted);
+    font-weight: var(--mog-weight-regular);
+  }
+
+  .mem-form-body {
+    min-height: 132px;
+    resize: vertical;
+    line-height: var(--mog-leading-relaxed);
+  }
+
+  .mem-form-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 6px;
+  }
+
+  .mem-form-col {
+    display: flex;
+    flex: 1 1 220px;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .mem-form-col--kind {
+    flex: 0 1 180px;
+  }
+
+  .mem-select {
+    appearance: none;
+    height: 36px;
+    padding: 0 30px 0 10px;
+    border: 1px solid var(--mog-control-border);
+    border-radius: var(--mog-radius-sm);
+    background-color: var(--mog-surface-raised);
+    background-image:
+      linear-gradient(45deg, transparent 50%, var(--mog-text-muted) 50%),
+      linear-gradient(135deg, var(--mog-text-muted) 50%, transparent 50%);
+    background-position:
+      calc(100% - 17px) 15px,
+      calc(100% - 12px) 15px;
+    background-size:
+      5px 5px,
+      5px 5px;
+    background-repeat: no-repeat;
+    color-scheme: dark light;
+    color: var(--mog-text);
+    font: inherit;
+    font-size: var(--mog-text-sm);
+  }
+
+  .mem-form-fixed {
+    display: flex;
+    align-items: center;
+    height: 36px;
+    color: var(--mog-text-muted);
+    font-size: var(--mog-text-sm);
+  }
+
+  .mem-form-error {
+    margin: 6px 0 0;
+    padding: 8px 10px;
+    border: 1px solid color-mix(in srgb, var(--mog-destructive-text) 45%, transparent);
+    border-radius: var(--mog-radius-sm);
+    color: var(--mog-destructive-text);
+    font-size: var(--mog-text-sm);
+  }
+
+  .mem-form-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  .mem-kbd {
+    margin-left: 6px;
+    padding: 0 5px;
+    border: 1px solid color-mix(in srgb, currentcolor 35%, transparent);
+    border-radius: var(--mog-radius-sm);
+    font: inherit;
+    font-size: var(--mog-text-xs);
+    opacity: 0.75;
+  }
+
+  .mem-message {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-width: 52ch;
+    margin: 0;
+    padding: 32px;
+    color: var(--mog-text-muted);
+  }
+
+  .mem-message--quiet {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    font-size: var(--mog-text-sm);
+  }
+
+  .mem-empty-title {
+    color: var(--mog-text);
+    font-weight: var(--mog-weight-semibold);
+  }
+
+  .mem-toast-live {
+    position: absolute;
+    right: 0;
+    bottom: 20px;
+    left: 0;
+    display: flex;
+    justify-content: center;
+    pointer-events: none;
+  }
+
+  .mem-toast {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    pointer-events: auto;
+    padding: 4px 6px 4px 14px;
+    border: 1px solid var(--mog-edge);
+    border-radius: var(--mog-radius-pill);
+    background: var(--mog-surface-raised);
+    box-shadow: var(--mog-shadow);
+    font-size: var(--mog-text-sm);
   }
 } /* @layer hub-legacy */

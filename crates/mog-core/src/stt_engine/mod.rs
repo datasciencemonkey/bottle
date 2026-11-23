@@ -806,6 +806,7 @@ impl Worker {
                     model: self.shared.identity.model.clone(),
                     runtime: self.shared.identity.runtime.clone(),
                     latency_ms: u64::try_from(latency.as_millis()).unwrap_or(u64::MAX),
+                    remember: None,
                 })
             }
         };

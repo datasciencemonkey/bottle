@@ -4,9 +4,10 @@
  * (rec-lead's area, ADR 0103, #595) joined once its own PR landed (merge of origin/main into
  * ui-1, review of #602); 'workspaces' (the CLI path/version move, a later PR) stays out of
  * `NAV_ITEMS` until its own PR lands, so the type is ready but the sidebar does not show an
- * empty area.
+ * empty area. 'memory' is the local memory area (local memory plan 9.1, ADR 0112).
  */
 import {
+  BrainIcon,
   DiscAlbumIcon,
   HouseIcon,
   MessageSquareIcon,
@@ -15,7 +16,8 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 
-export type HubView = 'home' | 'conversations' | 'mogs' | 'workspaces' | 'recordings' | 'settings';
+export type HubView =
+  'home' | 'conversations' | 'memory' | 'mogs' | 'workspaces' | 'recordings' | 'settings';
 
 export interface NavItem {
   readonly id: HubView;
@@ -28,6 +30,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { id: 'mogs', label: 'MOGs', icon: SparklesIcon },
   { id: 'conversations', label: 'Conversations', icon: MessageSquareIcon },
   { id: 'recordings', label: 'Recordings', icon: DiscAlbumIcon },
+  { id: 'memory', label: 'Memory', icon: BrainIcon },
   { id: 'settings', label: 'Settings', icon: SettingsIcon },
 ];
 

@@ -43,6 +43,7 @@ fn transcript(segment_id: &str) -> Transcript {
         model: LOCAL_STT_MODEL.to_owned(),
         runtime: LOCAL_STT_RUNTIME.to_owned(),
         latency_ms: 42,
+        remember: None,
     }
 }
 

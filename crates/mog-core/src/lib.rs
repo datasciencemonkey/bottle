@@ -5,6 +5,7 @@
 //! links this crate; `mog-core-ffi` exposes the same command and event envelope through
 //! a C ABI. There is one module per component (R1-R14, R16, R17); R15 is `mog-core-ffi`.
 
+pub mod action_ticket;
 pub mod agent_guard;
 pub mod agent_host;
 pub mod app_settings;

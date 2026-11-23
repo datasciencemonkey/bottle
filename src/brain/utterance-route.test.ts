@@ -252,4 +252,22 @@ describe('utterance route (#59)', () => {
     );
     expect((await routeUtterance(utterance(), ipcUtteranceDeps())).route).toBe('chip');
   });
+
+  it('[ADR 0113] a remember order is not pasted, not routed and not sent to the model', async () => {
+    const { d, calls, inserted } = deps(dictation());
+    const r = await routeUtterance(
+      utterance({ remember: { ticket: 'tkt', text: 'Renewal is in March' } }),
+      d,
+    );
+    expect(r).toEqual({ route: 'remember', ticket: 'tkt', text: 'Renewal is in March' });
+    expect(calls).toEqual([]);
+    expect(inserted).toEqual([]);
+  });
+
+  it('[ADR 0113] the brain has no remember grammar: the words alone dictate', async () => {
+    const { d, calls } = deps(dictation({ cleaned_text: 'remember this: a' }));
+    const r = await routeUtterance(utterance({ text: 'remember this: a' }), d);
+    expect(r.route).toBe('chip');
+    expect(calls).toEqual(['route', 'insert_text']);
+  });
 });

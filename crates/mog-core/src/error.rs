@@ -72,6 +72,12 @@ pub enum CoreError {
         /// The component ID, for example `"R10"`.
         component: &'static str,
     },
+    /// Local memory (ADR 0113): the secret check found a token, a key or a password in a memory
+    /// write. Nothing was stored, and the error holds no text.
+    SecretRefused {
+        /// The component ID, for example `"R10"`.
+        component: &'static str,
+    },
 }
 
 impl CoreError {
@@ -89,6 +95,7 @@ impl CoreError {
             CoreError::MogIdRequired { .. } => "mog_id_required",
             CoreError::UnknownStatement { .. } => "unknown_statement",
             CoreError::InvalidStatementParams { .. } => "invalid_statement_params",
+            CoreError::SecretRefused { .. } => "secret_refused",
         }
     }
 }
@@ -129,6 +136,12 @@ impl fmt::Display for CoreError {
             }
             CoreError::InvalidStatementParams { component } => {
                 write!(f, "{component} got params that do not match the statement")
+            }
+            CoreError::SecretRefused { component } => {
+                write!(
+                    f,
+                    "{component} refused a memory that looks like it holds a secret"
+                )
             }
         }
     }

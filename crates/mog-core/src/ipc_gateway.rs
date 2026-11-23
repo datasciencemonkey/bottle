@@ -106,6 +106,8 @@ pub const ERROR_CODES: &[&str] = &[
     "config_limit_reached",
     "secret_named_key",
     "token_like_value",
+    // Local memory (ADR 0113): the secret check refused a memory write. No row was stored.
+    "secret_refused",
     "genie_beta_mcp_rejected",
     "genie_space_mcp_rejected",
     "genie_one_sse_rejected",
@@ -198,6 +200,7 @@ pub fn ipc_error_code(e: &IpcError) -> &'static str {
         IpcError::ConfigLimitReached { .. } => "config_limit_reached",
         IpcError::SecretNamedKey { .. } => "secret_named_key",
         IpcError::TokenLikeValue { .. } => "token_like_value",
+        IpcError::SecretRefused { .. } => "secret_refused",
         IpcError::GenieBetaMcpRejected { .. } => "genie_beta_mcp_rejected",
         IpcError::GenieSpaceMcpRejected { .. } => "genie_space_mcp_rejected",
         IpcError::GenieOneSseRejected { .. } => "genie_one_sse_rejected",

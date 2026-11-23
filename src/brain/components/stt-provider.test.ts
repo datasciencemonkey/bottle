@@ -119,6 +119,22 @@ describe('T4 SttProvider (#52)', () => {
       expect(cloudCalls(core.invoke.mock.calls)).toEqual([]);
     });
 
+    it('[ADR 0113] the remember order of Rust stays on the transcript, only if whole', async () => {
+      const reply = (remember: unknown) =>
+        core.invoke.mockImplementation(async (cmd: string) =>
+          cmd === 'stt_transcribe' ? { ...transcript('local_parakeet', {}), remember } : {},
+        );
+      reply({ ticket: 'tkt', text: 'a fact' });
+      expect((await createSttProvider().transcribe(seg, tags)).remember).toEqual({
+        ticket: 'tkt',
+        text: 'a fact',
+      });
+      reply({ ticket: 'x'.repeat(257), text: 'a fact' });
+      expect((await createSttProvider().transcribe(seg, tags)).remember).toBeUndefined();
+      reply({ ticket: 'tkt' });
+      expect((await createSttProvider().transcribe(seg, tags)).remember).toBeUndefined();
+    });
+
     it('[CAP-47a] Databricks ASR runs after the opt-in, with the user profile and the default model', async () => {
       useCore();
       const stt = createSttProvider({ config: ipcSttConfig(ASR_ON) });

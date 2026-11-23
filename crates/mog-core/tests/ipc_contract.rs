@@ -279,6 +279,8 @@ fn arc_5_event_names_are_valid_tauri_names() {
         // #285 (ADR 0040): mic frames for the MOG level meter (UX-06a).
         "mog.level",
         "view.input",
+        // Local memory slice 1 (ADR 0113): the content-free outcome of a "remember".
+        "memory.saved",
         // lamp-alive: where one MOG's eyes look.
         "mog.look",
         // ADR 0103: the record key toggle, the recording state and the job status.
@@ -301,7 +303,7 @@ fn arc_5_core_events_go_to_the_brain_and_view_events_come_from_it() {
     use events::Direction::*;
     for e in events::ALL {
         let expected = match e.spec_name {
-            "mog.view_state" | "card.update" | "mog.level" => BrainToView,
+            "mog.view_state" | "card.update" | "mog.level" | "memory.saved" => BrainToView,
             _ => CoreToBrain,
         };
         assert_eq!(e.direction, expected, "{}", e.spec_name);

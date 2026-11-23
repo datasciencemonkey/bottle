@@ -172,4 +172,14 @@ describe('a dictated question (#557, ADR 0096)', () => {
     expect(order).toEqual(['ask:chip', 'done:inserted']);
     expect(done[0]).toMatchObject({ route: 'inserted' });
   });
+
+  it('[ADR 0113] a remember order goes to onRemember, the owner is released and nothing is pasted', async () => {
+    const got: unknown[] = [];
+    const s = setup(dictation, { onRemember: (r, owned) => void got.push([r, owned.mogId]) });
+    await s.handle(captured({ remember: { ticket: 'tkt', text: 'a fact' } }));
+    expect(got).toEqual([[{ route: 'remember', ticket: 'tkt', text: 'a fact' }, A]]);
+    expect(s.calls).toEqual([]);
+    expect(s.inserted).toEqual([]);
+    expect(s.asks).toEqual([]);
+  });
 });

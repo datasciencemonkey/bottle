@@ -181,7 +181,7 @@ describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
     expect(el.querySelector('.hub-home-stage')?.getAttribute('data-motion')).toBe('fade');
   });
 
-  it('[#103] the toggle opens the sidebar with Home, MOGs, Conversations, Recordings, Settings', async () => {
+  it('[#103] the toggle opens the sidebar with Home, MOGs, Conversations, Recordings, Memory, Settings', async () => {
     const { el } = await render(<Hub />);
     await act(async () => toggle(el)?.click());
     expect(el.querySelector('[data-sidebar]')).not.toBeNull();
@@ -190,6 +190,7 @@ describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
       'MOGs',
       'Conversations',
       'Recordings',
+      'Memory',
       'Settings',
     ]);
     expect(items(el)[0]?.getAttribute('aria-current')).toBe('page');

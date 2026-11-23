@@ -63,7 +63,15 @@ export interface Utterance {
   forceAsk: boolean;
   segment: SegmentRef;
   mode: CaptureMode;
+  /**
+   * ADR 0113: Rust parsed "remember this …" from its own transcript. `ticket` is the host's;
+   * `text` is what to save. The brain pastes nothing and parses nothing.
+   */
+  remember?: { ticket: string; text: string };
 }
+
+/** What the STT step gives: the text, and the "remember" order if Rust found one. */
+export type Transcribed = string | { text: string; remember?: { ticket: string; text: string } };
 
 /** The capture settings of one MOG (Appendix F `mog.capture.*`). */
 export interface LifecycleConfig {
@@ -74,7 +82,7 @@ export interface LifecycleConfig {
 export interface CaptureLifecycleDeps {
   control: CaptureControl;
   /** The STT step of one segment: T4 SttProvider (#52) over `stt_transcribe` (host route TODO(#514)). */
-  transcribe(segment: SegmentRef): Promise<string>;
+  transcribe(segment: SegmentRef): Promise<Transcribed>;
   /** Fired once for each kept final segment with a non-empty text. */
   onUtterance(u: Utterance): void | Promise<void>;
   /**
@@ -347,7 +355,9 @@ export function createCaptureLifecycle(deps: CaptureLifecycleDeps): CaptureLifec
       // One utterance per final segment: a non-final ref, or a repeat, goes nowhere.
       if (!seg.final || info.sent.has(seg.segmentId)) return;
       info.sent.add(seg.segmentId);
-      const text = await deps.transcribe(seg);
+      const done = await deps.transcribe(seg);
+      const { text, remember } =
+        typeof done === 'string' ? { text: done, remember: undefined } : done;
       if (text.trim() === '') return;
       await deps.onUtterance({
         mogId: info.mogId,
@@ -355,6 +365,7 @@ export function createCaptureLifecycle(deps: CaptureLifecycleDeps): CaptureLifec
         forceAsk: info.forceAsk,
         segment: seg,
         mode: info.mode,
+        ...(remember !== undefined ? { remember } : {}),
       });
     },
   };

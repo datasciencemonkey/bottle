@@ -10,11 +10,11 @@ Requirement rows with at least one passing test, per milestone.
 
 | Milestone | Requirement rows | With passing test |
 |---|---|---|
-| MVP-D | 562 | 0 |
+| MVP-D | 569 | 0 |
 | MVP-M | 117 | 0 |
-| v1 | 86 | 0 |
+| v1 | 87 | 0 |
 | v2 | 4 | 0 |
-| Total | 769 | 0 |
+| Total | 777 | 0 |
 
 ## Ledger
 

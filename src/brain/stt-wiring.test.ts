@@ -119,4 +119,21 @@ describe('the capture lifecycle STT step (#52)', () => {
       chips: [],
     });
   });
+
+  it('[ADR 0113] the remember order of Rust goes on, its text untouched', async () => {
+    const stt = t4({
+      segmentId: seg.segmentId,
+      text: 'remember this: Sam',
+      raw: 'remember this: Sam',
+      provider: 'local_parakeet',
+      model: 'm',
+      runtime: 'r',
+      latencyMs: 1,
+      remember: { ticket: 'tkt', text: 'Sam' },
+    });
+    expect(await createLifecycleTranscriber(stt, vi.fn(), (t) => t.toUpperCase())(seg)).toEqual({
+      text: 'REMEMBER THIS: SAM',
+      remember: { ticket: 'tkt', text: 'Sam' },
+    });
+  });
 });

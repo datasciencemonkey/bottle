@@ -290,7 +290,8 @@
    lives on `.genie-foot` itself (below), not here: a per-button margin-top with none on
    `.genie-when` ("now") shifted "now" about 4px above the button baseline (review round 2,
    finding "also fix if cheap"). */
-.genie-toggle {
+.genie-toggle,
+.genie-remember {
   appearance: none;
   flex: none;
   margin: 0;
@@ -309,12 +310,14 @@
     text-decoration-color 120ms ease-out;
 }
 
-.genie-toggle:hover {
+.genie-toggle:hover,
+.genie-remember:hover {
   color: var(--mog-text);
   text-decoration-color: currentColor;
 }
 
-.genie-toggle:focus-visible {
+.genie-toggle:focus-visible,
+.genie-remember:focus-visible {
   outline: none;
   border-radius: var(--mog-radius-sm);
   box-shadow: var(--mog-focus-ring);

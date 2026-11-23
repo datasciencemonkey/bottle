@@ -48,6 +48,8 @@ import {
 import { createGenieDirectSend } from '../genie-direct';
 import { createGenieFollowup } from '../genie-followup';
 import { wireGenieCard } from '../genie-card-wiring';
+import { wireHubMemory } from '../hub-memory-wiring';
+import { createRememberFlow, sendMemorySaved } from '../remember-flow';
 import { wireLinkOpen } from '../link-open-wiring';
 import { createAppMogContextMenu } from '../mog-context-menu';
 import { createThreadFocus, routeAskToFocusedThread, wireThreadFollowup } from '../thread-focus';
@@ -56,7 +58,7 @@ import { asPttEvent } from '../ptt';
 import { createRecordToggle } from '../record-toggle';
 import { emitTo } from '@tauri-apps/api/event';
 import { EVENTS } from '../../shared/ipc';
-import { ipcGenieHistory } from '../genie-history';
+import { ipcGenieHistory, MOG_BACKEND_KIND } from '../genie-history';
 import { createHomeProfiles, ipcHomeProfileDeps, ipcListProfiles } from '../home-profile';
 import { LevelRouter, subscribeLevels, wireLevelStream } from '../level-stream';
 import { wireMogLook } from '../mog-look-relay';
@@ -84,6 +86,7 @@ import { createGenieBridge } from './genie-bridge';
 import { ForgetFlow, isForgetMemory } from './forget-flow';
 import { GenieOneDeleteUtility } from './genie-one-delete';
 import { createMemoryService } from './memory-service';
+import { LocalMemoryService } from './memory-service';
 import { IpcLocalMemoryStore } from './memory-store';
 import { createMogManager } from './mog-manager';
 import { createMoodMapper } from './mood-mapper';
@@ -184,6 +187,41 @@ export function startBrain(): Brain {
     // the brain also sends the list by itself when the store opens (ADR 0105), and once it
     // listens (below).
     storeGate.onOpen(() => void conversations.push());
+    // Local memory slice 1 (ADR 0112, ADR 0113): the hub Memory folders, the card "remember" and
+    // the voice "remember". The host mints the tickets; the brain only passes them on.
+    const memorySvc = components.T10 instanceof LocalMemoryService ? components.T10 : undefined;
+    const hubMemory = memorySvc
+      ? wireHubMemory(bus, {
+          memory: memorySvc,
+          mogs: async () =>
+            (await components.T1.list()).mogs.map((m) => ({
+              mogId: m.mogId,
+              name: m.name,
+              colorVariant: m.colorVariant,
+              backendKind: MOG_BACKEND_KIND,
+            })),
+          hubPresent: () => hubExists(),
+        })
+      : undefined;
+    if (hubMemory) storeGate.onOpen(() => void hubMemory.push());
+    const rememberFlow = memorySvc
+      ? createRememberFlow({
+          memory: memorySvc,
+          store: memorySvc.store,
+          send: sendMemorySaved,
+          showCard: (mogId) => call('window_card_show', { mogId }),
+          ensureMog: async (mogId) => {
+            const m = (await components.T1.list()).mogs.find((x) => x.mogId === mogId);
+            if (m)
+              await memorySvc.ensureMog({ mogId, name: m.name, backendKind: MOG_BACKEND_KIND });
+          },
+          // A save or an Undo changes the store: the hub list is stale.
+          onChanged: () => void hubMemory?.push(),
+        })
+      : undefined;
+    // Without a memory service the card still hears back: nothing is saved.
+    const memoryUnavailable = (mogId: MogId) =>
+      void sendMemorySaved(mogId, { mogId, outcome: 'failed', undoMs: 0 }).catch(() => undefined);
     // #40 (AT-09): one local-history writer, shared by a direct ask and a thread follow-up, so
     // each saved exchange refreshes the hub Conversations list the same way.
     const recordGenieExchange = ipcGenieHistory(components.T10, () => void conversations.refresh());
@@ -429,6 +467,12 @@ export function startBrain(): Brain {
       // workspace…" shows the hub and opens that MOG's own Edit form, where the home field is
       // (review #603, MEDIUM finding: it used to show only the hub, with no next step for the
       // user to take).
+      remember: (mogId, requestId, ticket) =>
+        rememberFlow
+          ? void rememberFlow.card(mogId, requestId, ticket).catch(() => undefined)
+          : memoryUnavailable(mogId),
+      undoRemember: (mogId, itemId) =>
+        void rememberFlow?.undo(mogId, itemId).catch(() => undefined),
       closeMog: (mogId) => void components.T1.stop(mogId).catch(() => undefined),
       changeHome: (mogId) => {
         void showHub();
@@ -523,6 +567,11 @@ export function startBrain(): Brain {
               if (!took) askGate.onAsk(r, owned);
             });
         },
+        // ADR 0113: Rust parsed "remember this"; the brain saves it and pastes nothing.
+        onRemember: (r, owned) =>
+          rememberFlow
+            ? void rememberFlow.voice(owned.mogId, r.text, r.ticket).catch(() => undefined)
+            : memoryUnavailable(owned.mogId),
         // #498, MOG-05b, MOG-06d: a Copy or a failed insertion reaches the Copy card.
         onDone: (r, owned) => void dictation.onDone(r, owned).catch(() => undefined),
       }),
