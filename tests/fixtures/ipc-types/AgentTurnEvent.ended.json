@@ -1,0 +1,7 @@
+{
+  "kind": "ended",
+  "turnId": "0123456789abcdef0123456789abcdef",
+  "outcome": "answered",
+  "calls": 2,
+  "tokens": 16400
+}

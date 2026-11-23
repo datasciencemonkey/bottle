@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-genie-code-status"
+description = "Enables the genie_code_status command without any pre-configured scope."
+commands.allow = ["genie_code_status"]
+
+[[permission]]
+identifier = "deny-genie-code-status"
+description = "Denies the genie_code_status command without any pre-configured scope."
+commands.deny = ["genie_code_status"]

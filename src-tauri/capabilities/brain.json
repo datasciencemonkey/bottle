@@ -80,6 +80,14 @@
     "allow-workspace-list",
     "allow-workspace-set-available",
     "allow-workspace-make-home",
-    "allow-workspace-settings-write"
+    "allow-workspace-settings-write",
+    "allow-genie-code-status",
+    "allow-genie-code-install",
+    "allow-agent-turn-submit",
+    "allow-agent-turn-stop",
+    "allow-agent-turn-call",
+    "allow-agent-turn-result",
+    "allow-agent-session-state",
+    "allow-agent-session-end"
   ]
 }

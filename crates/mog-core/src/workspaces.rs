@@ -129,6 +129,9 @@ struct AgentData {
     cross_workspace_data: bool,
     genie_call_budget: GenieCallBudget,
     endpoint: EndpointName,
+    /// Slice 2a: the profile the agent runs on. Written only when it is not home.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    run_profile: Option<ProfileName>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -371,6 +374,7 @@ impl WorkspaceStore {
                 genie_call_budget: GenieCallBudget::DEFAULT,
                 endpoint: EndpointName::try_from(DEFAULT_ENDPOINT.to_owned())
                     .expect("the default endpoint is a valid name"),
+                run_profile: None,
             },
         })
     }
@@ -459,6 +463,7 @@ impl WorkspaceStore {
                 cross_workspace_locked: false,
                 genie_call_budget: data.agent.genie_call_budget,
                 endpoint: data.agent.endpoint.clone(),
+                run_profile: data.agent.run_profile.clone(),
             },
         })
     }
@@ -589,6 +594,9 @@ impl WorkspaceStore {
             }
             if let Some(v) = &a.agent_endpoint {
                 data.agent.endpoint = v.clone();
+            }
+            if let Some(v) = &a.run_profile {
+                data.agent.run_profile = v.clone();
             }
             self.save(&data)?;
             data

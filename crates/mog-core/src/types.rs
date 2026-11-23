@@ -718,6 +718,8 @@ pub enum CardSection {
         stt_badge: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         deep_link: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workspace_host: Option<String>,
     },
     DataFlow {
         text: String,
@@ -730,6 +732,9 @@ pub enum CardSection {
 pub struct CardUpdate {
     pub mog_id: MogId,
     pub blurbs: Vec<CardBlurbView>,
+    /// Slice 2a chip ids of an agent turn: `agent-stop:<turnId>`, `agent-more:<opId>` and
+    /// `agent-resend:<turnId>` (the host mints an Ask ticket for the last two) and
+    /// `agent-open:<turnId>` (opens the hub Agent area).
     pub chips: Vec<CardChip>,
     /// Chips after the 4th (UX-20a).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -748,6 +753,9 @@ pub struct CardUpdate {
     pub page_domain: Option<DomainPickerView>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pages_checklist: Option<PagesChecklistView>,
+    /// Slice 2a: the live agent turn in compact form, with "Open in Agent".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_turn: Option<AgentTurnView>,
 }
 
 /// The `mog.level` payload: one mic level sample (UX-06a). `owner` is the MOG that owns the
@@ -927,6 +935,9 @@ pub struct AgentSettings {
     pub genie_call_budget: GenieCallBudget,
     /// D9: the agent's model endpoint name. Default `databricks-claude-sonnet-5-5`.
     pub endpoint: EndpointName,
+    /// Slice 2a: the profile the agent runs on. `None` means home. Required and nullable.
+    #[serde(deserialize_with = "nullable")]
+    pub run_profile: Option<ProfileName>,
 }
 
 /// The answer of every `workspace_*` command.
@@ -940,6 +951,453 @@ pub struct WorkspaceList {
     /// Home first, then by profile.
     pub workspaces: Vec<WorkspaceRow>,
     pub agent: AgentSettings,
+}
+
+// ---------- the MOG agent on one live Genie Code session (slice 2a) ----------
+
+/// The state of the Genie Code binary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GenieCodeBinary {
+    Ready,
+    NotInstalled,
+    WrongVersion,
+    Installing,
+    UnsupportedOs,
+}
+
+/// The state of the profile the agent runs on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentProfileState {
+    Ready,
+    NotU2m,
+    SignedOut,
+    Missing,
+    NotEligible,
+    NoHome,
+}
+
+/// `genie_code_status` and `genie_code_install`. Content-free.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GenieCodeStatus {
+    pub binary: GenieCodeBinary,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// The pinned Genie Code version.
+    pub pinned: String,
+    /// Required and nullable.
+    #[serde(deserialize_with = "nullable")]
+    pub agent_profile: Option<ProfileName>,
+    pub agent_profile_state: AgentProfileState,
+}
+
+/// One workspace in the catalog of a session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentWorkspace {
+    pub workspace_id: String,
+    pub profile: ProfileName,
+    pub name: String,
+    pub is_home: bool,
+    pub is_agent_workspace: bool,
+}
+
+/// The reply of `agent_turn_submit`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentTurnAccepted {
+    pub turn_id: String,
+    pub session_id: String,
+    /// 0 is the live turn.
+    pub position: u32,
+    pub new_session: bool,
+    pub budget: GenieCallBudget,
+    pub cross_workspace: bool,
+    pub catalog: Vec<AgentWorkspace>,
+}
+
+/// The state of one Genie call of an agent turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentCallState {
+    Queued,
+    Asking,
+    Answered,
+    NoAnswer,
+    Failed,
+    Timeout,
+    SignedOut,
+    Stopped,
+}
+
+/// The `mcp_call` reply, as `CommandReturns['mcp_call']` has it.
+#[derive(Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpCallReply {
+    pub structured_content: serde_json::Value,
+    pub text: String,
+    pub is_error: bool,
+    pub http_status: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpc_error: Option<serde_json::Value>,
+}
+
+impl std::fmt::Debug for McpCallReply {
+    /// Shows only the status and the error flag: no server text.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpCallReply")
+            .field("http_status", &self.http_status)
+            .field("is_error", &self.is_error)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Why a reply is hidden from the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentWithheld {
+    InjectionSuspected,
+}
+
+/// `agent_turn_call`: the question and the reply of one Genie call, for the card and history.
+#[derive(Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentTurnCall {
+    pub call_id: String,
+    pub turn_id: String,
+    pub workspace_id: String,
+    pub profile: ProfileName,
+    pub question: String,
+    pub state: AgentCallState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply: Option<McpCallReply>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub withheld: Option<AgentWithheld>,
+}
+
+impl std::fmt::Debug for AgentTurnCall {
+    /// The question and the reply are user content: `Debug` shows ids and the state only.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentTurnCall")
+            .field("call_id", &self.call_id)
+            .field("turn_id", &self.turn_id)
+            .field("state", &self.state)
+            .finish_non_exhaustive()
+    }
+}
+
+/// How the answer of a turn was made.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentAnswerKind {
+    Note,
+    Combined,
+    Hidden,
+}
+
+/// One source of an agent answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentSource {
+    pub workspace_id: String,
+    pub call_id: String,
+    pub turn_id: String,
+}
+
+/// The token counts of one turn. Counts only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentUsage {
+    pub input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub output_tokens: u64,
+    pub reasoning_tokens: u64,
+}
+
+/// `agent_turn_result`.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentTurnResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<String>,
+    pub answer_kind: AgentAnswerKind,
+    pub sources: Vec<AgentSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<AgentUsage>,
+}
+
+impl std::fmt::Debug for AgentTurnResult {
+    /// The answer is user content: `Debug` shows its size only.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentTurnResult")
+            .field("answer_kind", &self.answer_kind)
+            .field(
+                "answer",
+                &format_args!(
+                    "<redacted {} chars>",
+                    self.answer.as_deref().map_or(0, |a| a.chars().count())
+                ),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+/// Why the one Genie Code session ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSessionEndReason {
+    NewSession,
+    Quit,
+    Wipe,
+    ProfileChanged,
+    D1Changed,
+    CatalogChanged,
+    Tainted,
+    Idle,
+    Crashed,
+    Lockdown,
+    HardTimeout,
+}
+
+/// The phase of the one Genie Code session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSessionPhase {
+    None,
+    Starting,
+    Idle,
+    Busy,
+    Ending,
+}
+
+/// `agent_session_state`: for the hub panel at open. Counts only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentSessionState {
+    pub state: AgentSessionPhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Unix ms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<u64>,
+    /// Required and nullable.
+    #[serde(deserialize_with = "nullable")]
+    pub agent_profile: Option<ProfileName>,
+    pub turns: u32,
+    pub queued: u32,
+    pub tokens: u64,
+}
+
+/// The `agent.session` payload (core to brain only, content-free).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum AgentSessionEvent {
+    Started {
+        session_id: String,
+    },
+    Ended {
+        session_id: String,
+        reason: AgentSessionEndReason,
+    },
+}
+
+/// Why a tool call of the model was refused. Model-facing codes, content-free.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRefusal {
+    WorkspaceNotAvailable,
+    BudgetReached,
+    CrossWorkspaceOff,
+    InvalidArgs,
+}
+
+/// How an agent turn ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentTurnOutcome {
+    Answered,
+    Stopped,
+    Removed,
+    Timeout,
+    Offline,
+    SignedOut,
+    NotEligible,
+    Failed,
+    Lockdown,
+    Refusals,
+    SessionEnded,
+}
+
+/// The `agent.turn` payload (core to brain only, content-free).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum AgentTurnEvent {
+    Queued {
+        turn_id: String,
+        position: u32,
+    },
+    Started {
+        turn_id: String,
+    },
+    Thinking {
+        turn_id: String,
+    },
+    Call {
+        turn_id: String,
+        call_id: String,
+        workspace_id: String,
+        state: AgentCallState,
+        used: u32,
+        budget: u32,
+    },
+    Refused {
+        turn_id: String,
+        code: AgentRefusal,
+        used: u32,
+    },
+    Slow {
+        turn_id: String,
+    },
+    Ended {
+        turn_id: String,
+        outcome: AgentTurnOutcome,
+        calls: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tokens: Option<u64>,
+    },
+}
+
+/// A workspace name and colour on the card and in the hub.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentWsChip {
+    pub name: String,
+    /// `mog.ui.variant` (`src/shared/mog-palette.ts`). Never a raw hex.
+    pub color_variant: String,
+}
+
+/// The state of one Genie call row on the card and in the hub.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentCallViewState {
+    Queued,
+    Asking,
+    Ready,
+    NoAnswer,
+    NeedsYou,
+    Failed,
+    Stopped,
+}
+
+/// One Genie call row of an agent turn view.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentCallView {
+    pub call_id: String,
+    pub workspace: AgentWsChip,
+    pub question: String,
+    pub state: AgentCallViewState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<u64>,
+}
+
+/// One folded part (one Genie answer) of an agent turn view.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentPartView {
+    pub call_id: String,
+    pub workspace: AgentWsChip,
+    pub sections: Vec<CardSection>,
+    /// "From an earlier answer".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_earlier: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_shown_to_agent: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folded: Option<bool>,
+}
+
+/// The state of an agent turn view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentTurnViewState {
+    Queued,
+    Planning,
+    Running,
+    Slow,
+    Done,
+    Stopped,
+    TimedOut,
+    Offline,
+    Failed,
+    /// The turn ended `signed_out` and the question is kept (UX slice 5).
+    NeedsYou,
+}
+
+/// Whether the summary of a turn is one note or a combined answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSummaryKind {
+    Note,
+    Combined,
+}
+
+/// The summary of an agent turn view.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentSummaryView {
+    pub md: String,
+    pub kind: AgentSummaryKind,
+    pub workspaces: Vec<AgentWsChip>,
+}
+
+/// One agent turn as the card and the hub Agent panel show it.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentTurnView {
+    pub turn_id: String,
+    pub question: String,
+    pub state: AgentTurnViewState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<u32>,
+    pub used: u32,
+    pub budget: u32,
+    pub agent_workspace: AgentWsChip,
+    pub calls: Vec<AgentCallView>,
+    pub parts: Vec<AgentPartView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<AgentSummaryView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<u64>,
+    /// When the user saw the answer, Unix ms (UX slice 4, Activity).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seen_at: Option<u64>,
+}
+
+impl std::fmt::Debug for AgentTurnView {
+    /// The question and the answer are user content: `Debug` shows the id and the state only.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentTurnView")
+            .field("turn_id", &self.turn_id)
+            .field("state", &self.state)
+            .finish_non_exhaustive()
+    }
 }
 
 // ---------- call recording (ADR 0103) ----------

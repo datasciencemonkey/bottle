@@ -4,6 +4,7 @@
 //! secrets and I/O stay in `mog-core` (section 4.4). The IPC command surface is in `ipc` (#223).
 
 pub mod agent_host;
+pub mod agent_session_host;
 pub mod capture_host;
 pub mod cli_host;
 pub mod consent_host;
@@ -289,6 +290,9 @@ pub fn run() {
         .manage(ipc::HubChannel::default())
         // ADR 0117: the `workspace_*` component. `workspaces_host::install` fills it in `setup`.
         .manage(workspaces_host::WorkspacesHost::default())
+        // Slice 2a: the agent component. The contract-PR stub answers `not_implemented`; the
+        // session host lane replaces it.
+        .manage(agent_session_host::AgentSessionHost)
         // #574 (ADR 0113): the one ticket store for user-only memory writes. `ipc.rs` reads it
         // with `try_state`; `memory_host` mints and redeems.
         .manage(std::sync::Arc::new(

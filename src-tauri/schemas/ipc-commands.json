@@ -21,6 +21,37 @@
       "title": "AgentSendArgs",
       "type": "object"
     },
+    "agent_session_end": {
+      "$defs": {
+        "AgentSessionEndRequest": {
+          "description": "Why the brain ends the session. Rust ends it itself on quit, Wipe and a setting change.",
+          "enum": [
+            "new_session"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "`agent_session_end`.",
+      "properties": {
+        "reason": {
+          "$ref": "#/$defs/AgentSessionEndRequest"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "title": "AgentSessionEndArgs",
+      "type": "object"
+    },
+    "agent_session_state": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "No arguments.",
+      "title": "NoArgs",
+      "type": "object"
+    },
     "agent_start": {
       "$defs": {
         "Harness": {
@@ -86,6 +117,137 @@
         "result"
       ],
       "title": "AgentToolResultArgs",
+      "type": "object"
+    },
+    "agent_turn_call": {
+      "$defs": {
+        "AgentCallId": {
+          "pattern": "^c-[0-9a-f]{8}$",
+          "type": "string"
+        },
+        "AgentId": {
+          "pattern": "^[0-9a-f]{32}$",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "`agent_turn_call`: the question and the reply of one Genie call.",
+      "properties": {
+        "callId": {
+          "$ref": "#/$defs/AgentCallId"
+        },
+        "turnId": {
+          "$ref": "#/$defs/AgentId"
+        }
+      },
+      "required": [
+        "turnId",
+        "callId"
+      ],
+      "title": "AgentTurnCallArgs",
+      "type": "object"
+    },
+    "agent_turn_result": {
+      "$defs": {
+        "AgentId": {
+          "pattern": "^[0-9a-f]{32}$",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "`agent_turn_result`.",
+      "properties": {
+        "turnId": {
+          "$ref": "#/$defs/AgentId"
+        }
+      },
+      "required": [
+        "turnId"
+      ],
+      "title": "AgentTurnResultArgs",
+      "type": "object"
+    },
+    "agent_turn_stop": {
+      "$defs": {
+        "AgentId": {
+          "pattern": "^[0-9a-f]{32}$",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "`agent_turn_stop`: a live turn is interrupted, a queued turn is removed.",
+      "properties": {
+        "turnId": {
+          "$ref": "#/$defs/AgentId"
+        }
+      },
+      "required": [
+        "turnId"
+      ],
+      "title": "AgentTurnStopArgs",
+      "type": "object"
+    },
+    "agent_turn_submit": {
+      "$defs": {
+        "AgentAskMode": {
+          "description": "How the user asked: a new question, a question to other workspaces, or a follow-up in the\nopen session.",
+          "enum": [
+            "ask",
+            "ask_others",
+            "follow_up"
+          ],
+          "type": "string"
+        },
+        "AgentOpId": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "AgentQuestion": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "`agent_turn_submit`. It needs the talk-key latch or an Ask ticket. `question` is user\ncontent: the `Debug` output redacts it (SEC-16c).",
+      "properties": {
+        "actionTicket": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentAskMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mogId": {
+          "type": "string"
+        },
+        "opId": {
+          "$ref": "#/$defs/AgentOpId"
+        },
+        "question": {
+          "$ref": "#/$defs/AgentQuestion"
+        }
+      },
+      "required": [
+        "mogId",
+        "opId",
+        "question"
+      ],
+      "title": "AgentTurnSubmitArgs",
       "type": "object"
     },
     "app_setting_read": {
@@ -636,6 +798,36 @@
         "tags"
       ],
       "title": "DbxHttpArgs",
+      "type": "object"
+    },
+    "genie_code_install": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "`genie_code_install`. Must be `true`: the user gave consent. Rust downloads the pinned\nsource and checks the pinned SHA-256.",
+      "properties": {
+        "consent": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "consent"
+      ],
+      "title": "GenieCodeInstallArgs",
+      "type": "object"
+    },
+    "genie_code_status": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "`genie_code_status`. `recheck` clears the `not_eligible` cache.",
+      "properties": {
+        "recheck": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "title": "GenieCodeStatusArgs",
       "type": "object"
     },
     "hotkeys_set": {
@@ -2039,6 +2231,13 @@
               "type": "null"
             }
           ]
+        },
+        "runProfile": {
+          "description": "Slice 2a: the profile the agent runs on. Absent changes nothing; `null` means home.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "title": "WorkspaceSettingsWriteArgs",
@@ -2595,6 +2794,62 @@
       "windows": [
         "brain"
       ]
+    },
+    {
+      "name": "genie_code_status",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "genie_code_install",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "agent_turn_submit",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "agent_turn_stop",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "agent_turn_call",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "agent_turn_result",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "agent_session_state",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "agent_session_end",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
     }
   ],
   "errors": [
@@ -2676,7 +2931,24 @@
     "stt_download_cancelled",
     "stt_install_busy",
     "stt_models_dir_unavailable",
-    "stt_setup_unavailable"
+    "stt_setup_unavailable",
+    "ask_not_approved",
+    "agent_queue_full",
+    "agent_turn_unknown",
+    "agent_session_unavailable",
+    "agent_rate_limited",
+    "genie_code_missing",
+    "genie_code_version",
+    "agent_profile_unsupported",
+    "agent_signed_out",
+    "agent_not_eligible",
+    "agent_offline",
+    "agent_timeout",
+    "agent_failed",
+    "agent_lockdown_violation",
+    "agent_refusals",
+    "install_failed",
+    "checksum_mismatch"
   ],
   "events": [
     {
@@ -2783,6 +3055,16 @@
       "direction": "core_to_brain",
       "name": "recording:job",
       "specName": "recording.job"
+    },
+    {
+      "direction": "core_to_brain",
+      "name": "agent:session",
+      "specName": "agent.session"
+    },
+    {
+      "direction": "core_to_brain",
+      "name": "agent:turn",
+      "specName": "agent.turn"
     }
   ]
 }

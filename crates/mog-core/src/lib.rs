@@ -8,6 +8,7 @@
 pub mod action_ticket;
 pub mod agent_guard;
 pub mod agent_host;
+pub mod agent_run;
 pub mod app_settings;
 pub mod audio_device;
 pub mod audit;

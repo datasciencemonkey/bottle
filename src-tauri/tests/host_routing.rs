@@ -380,6 +380,12 @@ fn arc_3_cap_02a_g_04a_window_ops_capture_start_and_mcp_call_run_off_the_main_th
                         | "workspace_list"
                         | "workspace_set_available"
                         | "workspace_make_home"
+                        // Slice 2a: the binary check, the install, the server and its process.
+                        | "genie_code_status"
+                        | "genie_code_install"
+                        | "agent_turn_submit"
+                        | "agent_turn_stop"
+                        | "agent_session_end"
                         // #413, #45: the install can download 487 MB before it checks hashes.
                         | "stt_model_install"
                         // #413, PR #600 review: verify SHA-256s ~670 MB with no network IO.
@@ -811,6 +817,11 @@ fn arc_3_cap_02a_g_04a_schedule_runs_window_ops_capture_start_and_mcp_call_on_a_
                     | "workspace_list"
                     | "workspace_set_available"
                     | "workspace_make_home"
+                    | "genie_code_status"
+                    | "genie_code_install"
+                    | "agent_turn_submit"
+                    | "agent_turn_stop"
+                    | "agent_session_end"
                     | "stt_model_install"
                     | "stt_model_verify"
             );
@@ -1571,6 +1582,83 @@ fn adr_0117_workspace_rows_reach_their_components_and_fail_closed() {
         );
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Slice 2a: the eight `genie_code_*`, `agent_turn_*` and `agent_session_*` commands reach the
+/// agent session component from the brain only. The contract stub answers `not_implemented`,
+/// and with no component they answer `host_failed`.
+#[test]
+fn slice_2a_agent_rows_reach_their_component_from_the_brain_only() {
+    let id = "0123456789abcdef0123456789abcdef";
+    let rows = [
+        ("genie_code_status", json!({"recheck": true})),
+        ("genie_code_install", json!({"consent": true})),
+        (
+            "agent_turn_submit",
+            json!({"mogId": "m", "opId": "op-1", "question": "How many?"}),
+        ),
+        ("agent_turn_stop", json!({"turnId": id})),
+        (
+            "agent_turn_call",
+            json!({"turnId": id, "callId": "c-0123abcd"}),
+        ),
+        ("agent_turn_result", json!({"turnId": id})),
+        ("agent_session_state", json!({})),
+        ("agent_session_end", json!({"reason": "new_session"})),
+    ];
+    let stub = bottle_lib::agent_session_host::AgentSessionHost;
+    for (command, args) in rows {
+        let brain = FakeBrain::default();
+        let none = HostComponents::none("brain", &brain);
+        assert_eq!(
+            route(none, command, args.clone()),
+            err("host_failed"),
+            "{command}"
+        );
+        let brain = FakeBrain::default();
+        let with_stub = HostComponents {
+            agent_session: Some(&stub),
+            ..HostComponents::none("brain", &brain)
+        };
+        assert_eq!(
+            route(with_stub, command, args.clone()),
+            err("not_implemented"),
+            "{command}"
+        );
+        for label in ["hub", "mog-m1", "card-m1"] {
+            let brain = FakeBrain::default();
+            let other = HostComponents {
+                agent_session: Some(&stub),
+                ..HostComponents::none(label, &brain)
+            };
+            assert_eq!(
+                route(other, command, args.clone()),
+                err("window_not_allowed"),
+                "{command} from {label}"
+            );
+        }
+    }
+}
+
+/// Slice 2a: the commands that wait on a process or the network leave the main thread.
+#[test]
+fn slice_2a_slow_agent_commands_run_off_the_main_thread() {
+    for c in [
+        "genie_code_status",
+        "genie_code_install",
+        "agent_turn_submit",
+        "agent_turn_stop",
+        "agent_session_end",
+    ] {
+        assert!(runs_off_main_thread(c), "{c}");
+    }
+    for c in [
+        "agent_turn_call",
+        "agent_turn_result",
+        "agent_session_state",
+    ] {
+        assert!(!runs_off_main_thread(c), "{c}");
+    }
 }
 
 /// A fake T7 with one supported profile `p`.

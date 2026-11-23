@@ -1,0 +1,9 @@
+{
+  "state": "busy",
+  "sessionId": "fedcba9876543210fedcba9876543210",
+  "startedAt": 1763251200000,
+  "agentProfile": "DEFAULT",
+  "turns": 3,
+  "queued": 1,
+  "tokens": 48000
+}

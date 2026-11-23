@@ -1,0 +1,72 @@
+{
+  "turnId": "0123456789abcdef0123456789abcdef",
+  "question": "What was revenue in sales and finance?",
+  "state": "done",
+  "used": 2,
+  "budget": 10,
+  "agentWorkspace": {
+    "name": "Sales",
+    "colorVariant": "teal"
+  },
+  "calls": [
+    {
+      "callId": "c-0123abcd",
+      "workspace": {
+        "name": "Sales",
+        "colorVariant": "teal"
+      },
+      "question": "Revenue last quarter?",
+      "state": "ready",
+      "startedAt": 1763251200000,
+      "endedAt": 1763251204000
+    },
+    {
+      "callId": "c-4567ef01",
+      "workspace": {
+        "name": "Finance",
+        "colorVariant": "amber"
+      },
+      "question": "Churn last quarter?",
+      "state": "needs_you"
+    }
+  ],
+  "parts": [
+    {
+      "callId": "c-0123abcd",
+      "workspace": {
+        "name": "Sales",
+        "colorVariant": "teal"
+      },
+      "sections": [
+        {
+          "id": "answer",
+          "md": "**4.2 M**"
+        },
+        {
+          "id": "footer",
+          "workspaceHost": "https://example.cloud.databricks.com"
+        }
+      ],
+      "fromEarlier": true,
+      "notShownToAgent": false,
+      "folded": true
+    }
+  ],
+  "summary": {
+    "md": "Revenue was 4.2 M.",
+    "kind": "combined",
+    "workspaces": [
+      {
+        "name": "Sales",
+        "colorVariant": "teal"
+      },
+      {
+        "name": "Finance",
+        "colorVariant": "amber"
+      }
+    ]
+  },
+  "notice": "Still working…",
+  "tokens": 16400,
+  "seenAt": 1763251300000
+}

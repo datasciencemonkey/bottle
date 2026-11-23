@@ -137,6 +137,16 @@ export const COMMANDS = {
   workspace_set_available: B,
   workspace_make_home: B,
   workspace_settings_write: B,
+  // Slice 2a (the MOG agent on one live Genie Code session). All brain-only: the hub uses
+  // `view_emit` only (ARC-4).
+  genie_code_status: B,
+  genie_code_install: B,
+  agent_turn_submit: B,
+  agent_turn_stop: B,
+  agent_turn_call: B,
+  agent_turn_result: B,
+  agent_session_state: B,
+  agent_session_end: B,
 } as const satisfies Record<string, Spec>;
 
 export type CommandName = keyof typeof COMMANDS;
@@ -200,6 +210,10 @@ export const EVENTS = {
   'recording.state': { name: 'recording:state', direction: 'core_to_brain' },
   /** Not in 4.5 (ADR 0103): one job status changed. Payload: `RecordingSummary`. */
   'recording.job': { name: 'recording:job', direction: 'core_to_brain' },
+  /** Slice 2a: the one Genie Code session started or ended. Payload: `AgentSessionEvent`, content-free. */
+  'agent.session': { name: 'agent:session', direction: 'core_to_brain' },
+  /** Slice 2a: one agent turn moved. Payload: `AgentTurnEvent`, content-free. */
+  'agent.turn': { name: 'agent:turn', direction: 'core_to_brain' },
 } as const;
 
 export type EventName = (typeof EVENTS)[keyof typeof EVENTS]['name'];
@@ -457,7 +471,33 @@ export interface CommandArgs {
     crossWorkspaceData?: boolean;
     genieCallBudget?: GenieCallBudget;
     agentEndpoint?: string;
+    /** Slice 2a: the profile the agent runs on. `null` means home. Absent changes nothing. */
+    runProfile?: ProfileName | null;
   };
+  /** `recheck` clears the `not_eligible` cache. */
+  genie_code_status: { recheck?: boolean };
+  /** Pinned source plus SHA-256. */
+  genie_code_install: { consent: true };
+  /**
+   * Needs the talk-key latch or an Ask ticket. Starts a session if none is open. `question` is
+   * 1 to 1,000 characters and `opId` at most 64. Refusals: invalid_args, ask_not_approved,
+   * agent_queue_full, agent_rate_limited, agent_session_unavailable, genie_code_missing,
+   * genie_code_version, agent_profile_unsupported, agent_signed_out, agent_not_eligible.
+   */
+  agent_turn_submit: {
+    mogId: MogId;
+    opId: string;
+    question: string;
+    mode?: 'ask' | 'ask_others' | 'follow_up';
+    actionTicket?: string;
+  };
+  /** A live turn: interrupt and cancel its calls. A queued turn: remove it. */
+  agent_turn_stop: { turnId: string };
+  agent_turn_call: { turnId: string; callId: string };
+  agent_turn_result: { turnId: string };
+  agent_session_state: NoArgs;
+  /** The New session button. Rust ends the session itself on quit, Wipe and a setting change. */
+  agent_session_end: { reason: 'new_session' };
 }
 
 // ---------- workspaces (ADR 0117) ----------
@@ -480,6 +520,8 @@ export interface AgentSettings {
   crossWorkspaceLocked: boolean;
   genieCallBudget: GenieCallBudget;
   endpoint: string;
+  /** Slice 2a: the profile the agent runs on. `null` means home. */
+  runProfile: ProfileName | null;
 }
 /** The answer of every `workspace_*` command. */
 export interface WorkspaceList {
@@ -487,6 +529,182 @@ export interface WorkspaceList {
   lampMogId: MogId | null;
   workspaces: WorkspaceRow[];
   agent: AgentSettings;
+}
+
+// ---------- the MOG agent on one live Genie Code session (slice 2a; Rust mirror in `mog_core::types`) ----------
+
+export type GenieCodeBinary =
+  'ready' | 'not_installed' | 'wrong_version' | 'installing' | 'unsupported_os';
+export type AgentProfileState =
+  'ready' | 'not_u2m' | 'signed_out' | 'missing' | 'not_eligible' | 'no_home';
+/** The state of the Genie Code binary and of the profile the agent runs on. Content-free. */
+export interface GenieCodeStatus {
+  binary: GenieCodeBinary;
+  version?: string;
+  /** The pinned Genie Code version. */
+  pinned: string;
+  agentProfile: ProfileName | null;
+  agentProfileState: AgentProfileState;
+}
+
+/** One workspace in the catalog of a session. */
+export interface AgentWorkspace {
+  workspaceId: string;
+  profile: ProfileName;
+  name: string;
+  isHome: boolean;
+  isAgentWorkspace: boolean;
+}
+export interface AgentTurnAccepted {
+  turnId: string;
+  sessionId: string;
+  /** 0 is the live turn. */
+  position: number;
+  newSession: boolean;
+  budget: GenieCallBudget;
+  crossWorkspace: boolean;
+  catalog: AgentWorkspace[];
+}
+
+export type AgentCallState =
+  'queued' | 'asking' | 'answered' | 'no_answer' | 'failed' | 'timeout' | 'signed_out' | 'stopped';
+/** One Genie call of a turn: the question and the reply, for the card and the history. */
+export interface AgentTurnCall {
+  callId: string;
+  turnId: string;
+  workspaceId: string;
+  profile: ProfileName;
+  question: string;
+  state: AgentCallState;
+  reply?: CommandReturns['mcp_call'];
+  withheld?: 'injection_suspected';
+}
+export interface AgentTurnResult {
+  answer?: string;
+  answerKind: 'note' | 'combined' | 'hidden';
+  sources: { workspaceId: string; callId: string; turnId: string }[];
+  usage?: {
+    inputTokens: number;
+    cachedInputTokens: number;
+    outputTokens: number;
+    reasoningTokens: number;
+  };
+}
+
+export type AgentSessionEndReason =
+  | 'new_session'
+  | 'quit'
+  | 'wipe'
+  | 'profile_changed'
+  | 'd1_changed'
+  | 'catalog_changed'
+  | 'tainted'
+  | 'idle'
+  | 'crashed'
+  | 'lockdown'
+  | 'hard_timeout';
+export interface AgentSessionState {
+  state: 'none' | 'starting' | 'idle' | 'busy' | 'ending';
+  sessionId?: string;
+  startedAt?: number;
+  agentProfile: ProfileName | null;
+  turns: number;
+  queued: number;
+  tokens: number;
+}
+
+/** `agent.session` payload (core to brain only, content-free). */
+export type AgentSessionEvent =
+  | { kind: 'started'; sessionId: string }
+  | { kind: 'ended'; sessionId: string; reason: AgentSessionEndReason };
+
+/** `agent.turn` payload (core to brain only, content-free). */
+export type AgentTurnEvent =
+  | { kind: 'queued'; turnId: string; position: number }
+  | { kind: 'started'; turnId: string }
+  | { kind: 'thinking'; turnId: string }
+  | {
+      kind: 'call';
+      turnId: string;
+      callId: string;
+      workspaceId: string;
+      state: AgentCallState;
+      used: number;
+      budget: number;
+    }
+  | {
+      kind: 'refused';
+      turnId: string;
+      code: 'workspace_not_available' | 'budget_reached' | 'cross_workspace_off' | 'invalid_args';
+      used: number;
+    }
+  | { kind: 'slow'; turnId: string }
+  | {
+      kind: 'ended';
+      turnId: string;
+      outcome:
+        | 'answered'
+        | 'stopped'
+        | 'removed'
+        | 'timeout'
+        | 'offline'
+        | 'signed_out'
+        | 'not_eligible'
+        | 'failed'
+        | 'lockdown'
+        | 'refusals'
+        | 'session_ended';
+      calls: number;
+      tokens?: number;
+    };
+
+// Card and hub views of an agent turn (brain to view).
+export interface AgentWsChip {
+  name: string;
+  colorVariant: string;
+}
+export interface AgentCallView {
+  callId: string;
+  workspace: AgentWsChip;
+  question: string;
+  state: 'queued' | 'asking' | 'ready' | 'no_answer' | 'needs_you' | 'failed' | 'stopped';
+  startedAt?: number;
+  endedAt?: number;
+}
+export interface AgentPartView {
+  callId: string;
+  workspace: AgentWsChip;
+  sections: CardSection[];
+  fromEarlier?: boolean;
+  notShownToAgent?: boolean;
+  folded?: boolean;
+}
+export interface AgentTurnView {
+  turnId: string;
+  question: string;
+  /** `needs_you`: the turn ended `signed_out` and the question is kept (UX slice 5). */
+  state:
+    | 'queued'
+    | 'planning'
+    | 'running'
+    | 'slow'
+    | 'done'
+    | 'stopped'
+    | 'timed_out'
+    | 'offline'
+    | 'failed'
+    | 'needs_you';
+  position?: number;
+  used: number;
+  budget: number;
+  agentWorkspace: AgentWsChip;
+  calls: AgentCallView[];
+  parts: AgentPartView[];
+  summary?: { md: string; kind: 'note' | 'combined'; workspaces: AgentWsChip[] };
+  notice?: string;
+  tokens?: number;
+  /** When the user saw the answer, in Unix ms (UX slice 4, Activity). */
+  seenAt?: number;
 }
 
 /**
@@ -593,6 +811,28 @@ export const IPC_ERROR_CODES = [
   'stt_models_dir_unavailable',
   /** `stt_model_install`: no `local-stt` feature in this build (#534, #414). */
   'stt_setup_unavailable',
+  /**
+   * `agent_turn_*`, `agent_session_*` and `genie_code_*` (slice 2a). Model-facing only, never an
+   * IPC code: budget_reached, cross_workspace_off, no_active_turn, run_stopped.
+   */
+  'ask_not_approved',
+  'agent_queue_full',
+  'agent_turn_unknown',
+  'agent_session_unavailable',
+  'agent_rate_limited',
+  'genie_code_missing',
+  'genie_code_version',
+  'agent_profile_unsupported',
+  'agent_signed_out',
+  'agent_not_eligible',
+  'agent_offline',
+  'agent_timeout',
+  'agent_failed',
+  'agent_lockdown_violation',
+  'agent_refusals',
+  /** `genie_code_install`: the download or the SHA-256 check failed. */
+  'install_failed',
+  'checksum_mismatch',
 ] as const;
 
 export type IpcErrorCode = (typeof IPC_ERROR_CODES)[number];
@@ -696,6 +936,11 @@ export type CardSection =
 export interface CardUpdate {
   mogId: MogId;
   blurbs: CardBlurbView[];
+  /**
+   * Slice 2a chip ids of an agent turn: `agent-stop:<turnId>`, `agent-more:<opId>` and
+   * `agent-resend:<turnId>` (the host mints an Ask ticket for the last two) and
+   * `agent-open:<turnId>` (opens the hub Agent area).
+   */
   chips: { id: string; label: string }[];
   /** Chips after the 4th (UX-20a): the view shows them in the expanded card. */
   overflowChips?: { id: string; label: string }[];
@@ -708,6 +953,8 @@ export interface CardUpdate {
   /** The domain of the Page draft in review (PG-19). */
   pageDomain?: DomainPickerView;
   pagesChecklist?: PagesChecklistView;
+  /** Slice 2a: the live agent turn in compact form, with "Open in Agent". */
+  agentTurn?: AgentTurnView;
 }
 
 /** Why a capture lease stopped (ADR 0055). Mirrors `mog_core::types::CaptureStopReason`. */
@@ -1012,6 +1259,14 @@ export interface CommandReturns {
   workspace_set_available: WorkspaceList;
   workspace_make_home: WorkspaceList;
   workspace_settings_write: WorkspaceList;
+  genie_code_status: GenieCodeStatus;
+  genie_code_install: GenieCodeStatus;
+  agent_turn_submit: AgentTurnAccepted;
+  agent_turn_stop: Empty;
+  agent_turn_call: AgentTurnCall;
+  agent_turn_result: AgentTurnResult;
+  agent_session_state: AgentSessionState;
+  agent_session_end: Empty;
 }
 
 /** Call a command. A refused call rejects with an `IpcError` (a code only). */

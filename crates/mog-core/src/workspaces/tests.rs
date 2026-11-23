@@ -522,6 +522,7 @@ fn settings_write_stores_d1_d2_and_the_endpoint_and_a_bad_value_changes_nothing(
             cross_workspace_locked: false,
             genie_call_budget: GenieCallBudget::DEFAULT,
             endpoint: ep("databricks-claude-sonnet-5-5"),
+            run_profile: None,
         }
     );
     // A bad budget or endpoint cannot be built, and the command refuses it on the wire.
@@ -539,6 +540,7 @@ fn settings_write_stores_d1_d2_and_the_endpoint_and_a_bad_value_changes_nothing(
             cross_workspace_data: Some(true),
             genie_call_budget: Some(budget(20)),
             agent_endpoint: Some(ep("my-endpoint")),
+            run_profile: None,
         })
         .unwrap();
     assert_eq!(
@@ -555,10 +557,33 @@ fn settings_write_stores_d1_d2_and_the_endpoint_and_a_bad_value_changes_nothing(
             cross_workspace_data: None,
             genie_call_budget: Some(budget(5)),
             agent_endpoint: None,
+            run_profile: None,
         })
         .unwrap();
     assert!(l.agent.cross_workspace_data);
     assert_eq!(l.agent.endpoint.as_str(), "my-endpoint");
+}
+
+/// Slice 2a: `runProfile` absent changes nothing, a name sets it and `null` goes back to home.
+#[test]
+fn settings_write_sets_keeps_and_clears_the_agent_run_profile() {
+    let s = Scratch::new();
+    let w = ready(&s);
+    assert_eq!(w.list(false).unwrap().agent.run_profile, None);
+    let l = w
+        .call("workspace_settings_write", json!({"runProfile": "other"}))
+        .unwrap();
+    assert_eq!(l["agent"]["runProfile"], "other");
+    let l = w
+        .call("workspace_settings_write", json!({"genieCallBudget": 5}))
+        .unwrap();
+    assert_eq!(l["agent"]["runProfile"], "other");
+    let l = w
+        .call("workspace_settings_write", json!({"runProfile": null}))
+        .unwrap();
+    assert!(l["agent"]["runProfile"].is_null());
+    let bad = w.call("workspace_settings_write", json!({"runProfile": 5}));
+    assert_eq!(code(bad.unwrap_err()), "invalid_args");
 }
 
 // ---------- the allow-list ----------

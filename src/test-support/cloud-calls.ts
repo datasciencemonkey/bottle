@@ -87,6 +87,16 @@ export const CALL_CLASS = {
   workspace_set_available: 'local',
   workspace_make_home: 'local',
   workspace_settings_write: 'local',
+  // Slice 2a: the status probe runs the local binary; the install downloads the pinned build;
+  // a turn reaches the model and the workspaces through the agent session.
+  genie_code_status: 'local',
+  genie_code_install: 'cloud',
+  agent_turn_submit: 'cloud',
+  agent_turn_stop: 'local',
+  agent_turn_call: 'local',
+  agent_turn_result: 'local',
+  agent_session_state: 'local',
+  agent_session_end: 'local',
 } as const satisfies Record<keyof typeof COMMANDS, CallClass>;
 
 /** The command arguments of an invoke log entry: `call()` sends them as `{ args }` (ADR 0003). */

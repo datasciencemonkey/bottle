@@ -1,0 +1,12 @@
+{
+  "home": null,
+  "lampMogId": null,
+  "workspaces": [],
+  "agent": {
+    "crossWorkspaceData": true,
+    "crossWorkspaceLocked": false,
+    "genieCallBudget": 20,
+    "endpoint": "databricks-claude-sonnet-5-5",
+    "runProfile": "finance"
+  }
+}

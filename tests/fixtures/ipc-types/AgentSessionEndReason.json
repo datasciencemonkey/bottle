@@ -1,0 +1,13 @@
+[
+  "new_session",
+  "quit",
+  "wipe",
+  "profile_changed",
+  "d1_changed",
+  "catalog_changed",
+  "tainted",
+  "idle",
+  "crashed",
+  "lockdown",
+  "hard_timeout"
+]

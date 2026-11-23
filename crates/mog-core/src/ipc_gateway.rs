@@ -175,6 +175,26 @@ pub const ERROR_CODES: &[&str] = &[
     // The host-side code for a build with no `local-stt` feature (#534, #414): the hub shows
     // "Local speech setup is not available in this build yet."
     "stt_setup_unavailable",
+    // Slice 2a (the MOG agent on one live Genie Code session). `timeout` and `offline` also apply.
+    // The model-facing codes `budget_reached`, `cross_workspace_off`, `no_active_turn` and
+    // `run_stopped` are Rust strings in tool results, never IPC codes.
+    "ask_not_approved",
+    "agent_queue_full",
+    "agent_turn_unknown",
+    "agent_session_unavailable",
+    "agent_rate_limited",
+    "genie_code_missing",
+    "genie_code_version",
+    "agent_profile_unsupported",
+    "agent_signed_out",
+    "agent_not_eligible",
+    "agent_offline",
+    "agent_timeout",
+    "agent_failed",
+    "agent_lockdown_violation",
+    "agent_refusals",
+    "install_failed",
+    "checksum_mismatch",
 ];
 
 /// The fixed, content-free code of an [`IpcError`] (its serde tag). It never holds the
@@ -261,6 +281,23 @@ pub fn ipc_error_code(e: &IpcError) -> &'static str {
         IpcError::SttInstallBusy { .. } => "stt_install_busy",
         IpcError::SttModelsDirUnavailable { .. } => "stt_models_dir_unavailable",
         IpcError::SttSetupUnavailable { .. } => "stt_setup_unavailable",
+        IpcError::AskNotApproved { .. } => "ask_not_approved",
+        IpcError::AgentQueueFull { .. } => "agent_queue_full",
+        IpcError::AgentTurnUnknown { .. } => "agent_turn_unknown",
+        IpcError::AgentSessionUnavailable { .. } => "agent_session_unavailable",
+        IpcError::AgentRateLimited { .. } => "agent_rate_limited",
+        IpcError::GenieCodeMissing { .. } => "genie_code_missing",
+        IpcError::GenieCodeVersion { .. } => "genie_code_version",
+        IpcError::AgentProfileUnsupported { .. } => "agent_profile_unsupported",
+        IpcError::AgentSignedOut { .. } => "agent_signed_out",
+        IpcError::AgentNotEligible { .. } => "agent_not_eligible",
+        IpcError::AgentOffline { .. } => "agent_offline",
+        IpcError::AgentTimeout { .. } => "agent_timeout",
+        IpcError::AgentFailed { .. } => "agent_failed",
+        IpcError::AgentLockdownViolation { .. } => "agent_lockdown_violation",
+        IpcError::AgentRefusals { .. } => "agent_refusals",
+        IpcError::InstallFailed { .. } => "install_failed",
+        IpcError::ChecksumMismatch { .. } => "checksum_mismatch",
     }
 }
 

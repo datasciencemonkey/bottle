@@ -297,6 +297,9 @@ pub struct HostComponents<'a> {
     /// The `workspace_*` commands (ADR 0117): `workspaces_host::WorkspacesHost`. `None` when it
     /// is not managed: `host_failed`.
     pub workspaces: Option<&'a dyn GatewayComponents>,
+    /// The `genie_code_*`, `agent_turn_*` and `agent_session_*` commands (slice 2a):
+    /// `agent_session_host::AgentSessionHost`. `None` when it is not managed: `host_failed`.
+    pub agent_session: Option<&'a dyn GatewayComponents>,
 }
 
 fn refused(e: IpcError) -> CoreError {
@@ -366,6 +369,7 @@ impl<'a> HostComponents<'a> {
             stt_model: None,
             links: None,
             workspaces: None,
+            agent_session: None,
         }
     }
 }
@@ -597,6 +601,19 @@ impl GatewayComponents for HostComponents<'_> {
                 .workspaces
                 .ok_or_else(|| host_failed(command))?
                 .call(command, args),
+            // Slice 2a: the Genie Code binary and the one live agent session. Its codes cross as
+            // themselves (`ERROR_CODES`).
+            "genie_code_status"
+            | "genie_code_install"
+            | "agent_turn_submit"
+            | "agent_turn_stop"
+            | "agent_turn_call"
+            | "agent_turn_result"
+            | "agent_session_state"
+            | "agent_session_end" => self
+                .agent_session
+                .ok_or_else(|| host_failed(command))?
+                .call(command, args),
             // Each feature issue wires its R1-R17 component here.
             "capture_start" | "capture_stop" | "capture_pause" | "capture_resume"
             | "capture_status" | "capture_stop_all" | "capture_subscribe" => {
@@ -678,6 +695,13 @@ pub fn runs_off_main_thread(command: &str) -> bool {
                 | "workspace_list"
                 | "workspace_set_available"
                 | "workspace_make_home"
+                // Slice 2a: the status runs the binary, the install downloads it, a submit can
+                // start the server and a stop or an end waits up to 5 s for the process.
+                | "genie_code_status"
+                | "genie_code_install"
+                | "agent_turn_submit"
+                | "agent_turn_stop"
+                | "agent_session_end"
                 // #413, #45: the install can run for minutes over the network (487 MB).
                 | "stt_model_install"
                 // #413, PR #600 review: verify SHA-256s ~670 MB with no network IO.
@@ -797,6 +821,8 @@ fn route_from<R: Runtime>(
     let links = webview.try_state::<std::sync::Arc<mog_core::link_open::LinkOpenComponent>>();
     // `try_state`: `lib.rs` manages the workspace component (ADR 0117).
     let workspaces = webview.try_state::<crate::workspaces_host::WorkspacesHost>();
+    // `try_state`: `lib.rs` manages the agent session component (slice 2a).
+    let agent_session = webview.try_state::<crate::agent_session_host::AgentSessionHost>();
     let components = HostComponents {
         from: label,
         brain: &brain,
@@ -840,6 +866,9 @@ fn route_from<R: Runtime>(
         workspaces: workspaces
             .as_ref()
             .map(|w| w.inner() as &dyn GatewayComponents),
+        agent_session: agent_session
+            .as_ref()
+            .map(|a| a.inner() as &dyn GatewayComponents),
     };
     route(components, command, args)
 }

@@ -190,6 +190,16 @@ pub const COMMANDS: &[CommandSpec] = &[
     row("workspace_set_available", B),
     row("workspace_make_home", B),
     row("workspace_settings_write", B),
+    // Slice 2a (the MOG agent on one live Genie Code session). All brain-only: the hub uses
+    // `view_emit` only (ARC-4).
+    row("genie_code_status", B),
+    row("genie_code_install", B),
+    row("agent_turn_submit", B),
+    row("agent_turn_stop", B),
+    row("agent_turn_call", B),
+    row("agent_turn_result", B),
+    row("agent_session_state", B),
+    row("agent_session_end", B),
 ];
 
 /// The row of a command, if it exists.
@@ -527,6 +537,75 @@ pub enum IpcError {
     SttSetupUnavailable {
         command: String,
     },
+    // Slice 2a (the MOG agent on one live Genie Code session).
+    /// `agent_turn_submit`: no talk-key latch and no valid Ask ticket approved the question.
+    AskNotApproved {
+        command: String,
+    },
+    /// `agent_turn_submit`: 1 live turn and 3 waiting turns are in the queue.
+    AgentQueueFull {
+        command: String,
+    },
+    /// `agent_turn_*`: no turn with this ID is in the session.
+    AgentTurnUnknown {
+        command: String,
+    },
+    /// `agent_turn_submit`: the Genie Code session cannot start or is ending.
+    AgentSessionUnavailable {
+        command: String,
+    },
+    /// `agent_turn_submit`: more than 6 turns a minute.
+    AgentRateLimited {
+        command: String,
+    },
+    /// `agent_turn_submit`: the Genie Code binary is not installed.
+    GenieCodeMissing {
+        command: String,
+    },
+    /// `agent_turn_submit`: the Genie Code binary is not the pinned version.
+    GenieCodeVersion {
+        command: String,
+    },
+    /// `agent_turn_submit`: the agent profile does not use U2M sign-in.
+    AgentProfileUnsupported {
+        command: String,
+    },
+    /// `agent_turn_submit`: the agent profile must sign in again.
+    AgentSignedOut {
+        command: String,
+    },
+    /// `agent_turn_submit`: the workspace does not offer Genie Code to this user.
+    AgentNotEligible {
+        command: String,
+    },
+    /// The agent turn ended because the device is offline.
+    AgentOffline {
+        command: String,
+    },
+    /// The agent turn ended at the 10 minute limit.
+    AgentTimeout {
+        command: String,
+    },
+    /// The agent turn failed.
+    AgentFailed {
+        command: String,
+    },
+    /// The session ended because the server broke a lockdown rule.
+    AgentLockdownViolation {
+        command: String,
+    },
+    /// The turn ended after repeated refused tool calls.
+    AgentRefusals {
+        command: String,
+    },
+    /// `genie_code_install`: the download or the unpack failed.
+    InstallFailed {
+        command: String,
+    },
+    /// `genie_code_install`: the SHA-256 of the download is not the pinned one.
+    ChecksumMismatch {
+        command: String,
+    },
 }
 
 impl std::fmt::Display for IpcError {
@@ -707,6 +786,52 @@ impl std::fmt::Display for IpcError {
             IpcError::SttSetupUnavailable { command } => {
                 write!(f, "{command}: this build has no local-stt feature")
             }
+            IpcError::AskNotApproved { command } => write!(
+                f,
+                "{command}: a talk-key latch or an Ask ticket did not approve this question"
+            ),
+            IpcError::AgentQueueFull { command } => write!(f, "{command}: the agent queue is full"),
+            IpcError::AgentTurnUnknown { command } => write!(f, "{command}: no such agent turn"),
+            IpcError::AgentSessionUnavailable { command } => {
+                write!(f, "{command}: the agent session is not available")
+            }
+            IpcError::AgentRateLimited { command } => {
+                write!(f, "{command}: too many agent turns a minute")
+            }
+            IpcError::GenieCodeMissing { command } => {
+                write!(f, "{command}: Genie Code is not installed")
+            }
+            IpcError::GenieCodeVersion { command } => {
+                write!(f, "{command}: Genie Code is not the pinned version")
+            }
+            IpcError::AgentProfileUnsupported { command } => {
+                write!(f, "{command}: the agent profile is not a U2M profile")
+            }
+            IpcError::AgentSignedOut { command } => {
+                write!(f, "{command}: the agent profile is signed out")
+            }
+            IpcError::AgentNotEligible { command } => write!(
+                f,
+                "{command}: the agent profile is not eligible for Genie Code"
+            ),
+            IpcError::AgentOffline { command } => {
+                write!(f, "{command}: the agent turn ended offline")
+            }
+            IpcError::AgentTimeout { command } => write!(f, "{command}: the agent turn timed out"),
+            IpcError::AgentFailed { command } => write!(f, "{command}: the agent turn failed"),
+            IpcError::AgentLockdownViolation { command } => {
+                write!(f, "{command}: the agent session broke the lockdown")
+            }
+            IpcError::AgentRefusals { command } => {
+                write!(f, "{command}: the agent turn ended after repeated refusals")
+            }
+            IpcError::InstallFailed { command } => {
+                write!(f, "{command}: the Genie Code install failed")
+            }
+            IpcError::ChecksumMismatch { command } => write!(
+                f,
+                "{command}: the Genie Code download does not match its SHA-256"
+            ),
             IpcError::Offline { command } => {
                 write!(f, "{command}: the host did not accept a connection")
             }
@@ -935,8 +1060,24 @@ args!(
         genie_call_budget: Option<crate::types::GenieCallBudget>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         agent_endpoint: Option<crate::types::EndpointName>,
+        /// Slice 2a: the profile the agent runs on. Absent changes nothing; `null` means home.
+        #[serde(
+            default,
+            deserialize_with = "present_or_null",
+            skip_serializing_if = "Option::is_none"
+        )]
+        run_profile: Option<Option<ProfileName>>,
     }
 );
+
+/// A field that may be absent (no change), `null` (clear) or a value (set).
+fn present_or_null<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(d).map(Some)
+}
 args!(ProfileLoginArgs {
     /// The workspace that `databricks auth login --host` opens. Not a request target.
     workspace_url: String,
@@ -1346,6 +1487,186 @@ args!(
     }
 );
 
+// ---------- the MOG agent on one live Genie Code session (slice 2a) ----------
+
+/// A string with a fixed wire rule, also stated in the JSON Schema. `check` is the rule.
+macro_rules! checked_string {
+    ($(#[$m:meta])* $name:ident, $schema:tt, $check:expr) => {
+        $(#[$m])*
+        #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+        #[serde(try_from = "String", into = "String")]
+        pub struct $name(String);
+
+        impl JsonSchema for $name {
+            fn schema_name() -> std::borrow::Cow<'static, str> {
+                stringify!($name).into()
+            }
+            fn json_schema(_: &mut schemars::SchemaGenerator) -> Schema {
+                schemars::json_schema!($schema)
+            }
+        }
+
+        impl $name {
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl TryFrom<String> for $name {
+            type Error = &'static str;
+            fn try_from(s: String) -> Result<Self, Self::Error> {
+                let ok: fn(&str) -> bool = $check;
+                if ok(&s) {
+                    Ok($name(s))
+                } else {
+                    Err(concat!("not a valid ", stringify!($name)))
+                }
+            }
+        }
+
+        impl From<$name> for String {
+            fn from(v: $name) -> String {
+                v.0
+            }
+        }
+    };
+}
+
+/// The wire rule of an agent turn ID and an agent session ID.
+pub const AGENT_ID_PATTERN: &str = "^[0-9a-f]{32}$";
+/// The wire rule of an agent Genie call ID.
+pub const AGENT_CALL_ID_PATTERN: &str = "^c-[0-9a-f]{8}$";
+/// The most characters of one agent question.
+pub const AGENT_QUESTION_MAX_CHARS: usize = 1000;
+/// The most characters of an `opId`.
+pub const AGENT_OP_ID_MAX_CHARS: usize = 64;
+
+fn is_lower_hex(s: &str) -> bool {
+    s.bytes()
+        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+checked_string!(
+    #[derive(Debug)]
+    /// A turn ID or a session ID of the agent: 32 lowercase hex characters.
+    AgentId,
+    { "type": "string", "pattern": AGENT_ID_PATTERN },
+    |s| s.len() == 32 && is_lower_hex(s)
+);
+checked_string!(
+    #[derive(Debug)]
+    /// An agent Genie call ID: `c-` and 8 lowercase hex characters.
+    AgentCallId,
+    { "type": "string", "pattern": AGENT_CALL_ID_PATTERN },
+    |s| s.strip_prefix("c-").is_some_and(|h| h.len() == 8 && is_lower_hex(h))
+);
+checked_string!(
+    /// The question of one agent turn: 1 to 1,000 characters. User content.
+    AgentQuestion,
+    { "type": "string", "minLength": 1, "maxLength": AGENT_QUESTION_MAX_CHARS },
+    |s| (1..=AGENT_QUESTION_MAX_CHARS).contains(&s.chars().count())
+);
+checked_string!(
+    #[derive(Debug)]
+    /// The operation ID of one agent turn: 1 to 64 characters.
+    AgentOpId,
+    { "type": "string", "minLength": 1, "maxLength": AGENT_OP_ID_MAX_CHARS },
+    |s| (1..=AGENT_OP_ID_MAX_CHARS).contains(&s.chars().count())
+);
+
+impl std::fmt::Debug for AgentQuestion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "AgentQuestion(<redacted {} chars>)",
+            self.0.chars().count()
+        )
+    }
+}
+
+/// How the user asked: a new question, a question to other workspaces, or a follow-up in the
+/// open session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentAskMode {
+    Ask,
+    AskOthers,
+    FollowUp,
+}
+
+args!(
+    /// `genie_code_status`. `recheck` clears the `not_eligible` cache.
+    GenieCodeStatusArgs {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        recheck: Option<bool>,
+    }
+);
+args!(
+    /// `genie_code_install`. Must be `true`: the user gave consent. Rust downloads the pinned
+    /// source and checks the pinned SHA-256.
+    GenieCodeInstallArgs { consent: bool }
+);
+
+/// `agent_turn_submit`. It needs the talk-key latch or an Ask ticket. `question` is user
+/// content: the `Debug` output redacts it (SEC-16c).
+#[derive(Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct AgentTurnSubmitArgs {
+    pub mog_id: MogId,
+    pub op_id: AgentOpId,
+    pub question: AgentQuestion,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<AgentAskMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_ticket: Option<String>,
+}
+
+impl std::fmt::Debug for AgentTurnSubmitArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentTurnSubmitArgs")
+            .field("mog_id", &self.mog_id)
+            .field("mode", &self.mode)
+            .field(
+                "question",
+                &format_args!(
+                    "<redacted {} chars>",
+                    self.question.as_str().chars().count()
+                ),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+args!(
+    /// `agent_turn_stop`: a live turn is interrupted, a queued turn is removed.
+    AgentTurnStopArgs { turn_id: AgentId }
+);
+args!(
+    /// `agent_turn_call`: the question and the reply of one Genie call.
+    AgentTurnCallArgs {
+        turn_id: AgentId,
+        call_id: AgentCallId,
+    }
+);
+args!(
+    /// `agent_turn_result`.
+    AgentTurnResultArgs { turn_id: AgentId }
+);
+
+/// Why the brain ends the session. Rust ends it itself on quit, Wipe and a setting change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSessionEndRequest {
+    // The New session button.
+    NewSession,
+}
+args!(
+    /// `agent_session_end`.
+    AgentSessionEndArgs {
+        reason: AgentSessionEndRequest
+    }
+);
+
 args!(TelemetrySpanArgs {
     name: String,
     start_ms: u64,
@@ -1402,6 +1723,14 @@ macro_rules! for_command {
             "workspace_set_available" => Some($f::<WorkspaceSetAvailableArgs>()),
             "workspace_make_home" => Some($f::<WorkspaceMakeHomeArgs>()),
             "workspace_settings_write" => Some($f::<WorkspaceSettingsWriteArgs>()),
+            "genie_code_status" => Some($f::<GenieCodeStatusArgs>()),
+            "genie_code_install" => Some($f::<GenieCodeInstallArgs>()),
+            "agent_turn_submit" => Some($f::<AgentTurnSubmitArgs>()),
+            "agent_turn_stop" => Some($f::<AgentTurnStopArgs>()),
+            "agent_turn_call" => Some($f::<AgentTurnCallArgs>()),
+            "agent_turn_result" => Some($f::<AgentTurnResultArgs>()),
+            "agent_session_state" => Some($f::<NoArgs>()),
+            "agent_session_end" => Some($f::<AgentSessionEndArgs>()),
             "profile_login" => Some($f::<ProfileLoginArgs>()),
             "profile_select" => Some($f::<ProfileSelectArgs>()),
             "capture_start" => Some($f::<CaptureStartArgs>()),
@@ -1511,6 +1840,15 @@ pub fn handle(window_label: &str, command_name: &str, args: Value) -> Result<Han
     let validate = for_command!(spec.name, check).expect("every row has an argument type");
     validate(spec.name, args.clone())?;
     match spec.name {
+        "genie_code_install" => {
+            let a: GenieCodeInstallArgs = parse(spec.name, args)?;
+            if !a.consent {
+                return Err(IpcError::InvalidArgs {
+                    command: spec.name.to_owned(),
+                    reason: "consent must be true".to_owned(),
+                });
+            }
+        }
         "cli_install" => {
             let a: CliInstallArgs = parse(spec.name, args)?;
             if !a.consent {

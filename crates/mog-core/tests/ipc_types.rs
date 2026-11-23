@@ -8,13 +8,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use mog_core::types::{
-    AppSetting, AppSettingKey, CaptureMode, CaptureState, CardUpdate, ConsentRecordKind,
-    ConsentRecordView, Intent, MicHealth, MicLevelFrame, MogId, MogViewState, Mood, NetStatus,
-    OthersTrack, Profile, ProfileInfo, ProfileName, RecordToggle, RecordingDetail,
-    RecordingErrorKind, RecordingSettings, RecordingState, RecordingStatus, RecordingSummary,
-    RouterCommand, RouterDecision, SegmentRef, SessionPolicy, StorageProbe, TagApp, TagOp, Tags,
-    TalkKeyReason, TalkKeyState, TalkKeyStatus, TokenState, TokenStatus, Track, Transcript,
-    TranscriptProvider,
+    AgentCallState, AgentSessionEndReason, AgentSessionEvent, AgentSessionState, AgentTurnAccepted,
+    AgentTurnCall, AgentTurnEvent, AgentTurnResult, AgentTurnView, AppSetting, AppSettingKey,
+    CaptureMode, CaptureState, CardUpdate, ConsentRecordKind, ConsentRecordView, GenieCodeStatus,
+    Intent, MicHealth, MicLevelFrame, MogId, MogViewState, Mood, NetStatus, OthersTrack, Profile,
+    ProfileInfo, ProfileName, RecordToggle, RecordingDetail, RecordingErrorKind, RecordingSettings,
+    RecordingState, RecordingStatus, RecordingSummary, RouterCommand, RouterDecision, SegmentRef,
+    SessionPolicy, StorageProbe, TagApp, TagOp, Tags, TalkKeyReason, TalkKeyState, TalkKeyStatus,
+    TokenState, TokenStatus, Track, Transcript, TranscriptProvider, WorkspaceList,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -99,6 +100,18 @@ fn round_trip_by_name(type_name: &str, json: &Value) -> Result<Value, String> {
         "RecordingErrorKind" => round_trip::<Vec<RecordingErrorKind>>(json),
         "StorageProbe" => round_trip::<StorageProbe>(json),
         "RecordToggle" => round_trip::<RecordToggle>(json),
+        // Slice 2a: the MOG agent on one live Genie Code session, and the workspace list (ADR 0117).
+        "GenieCodeStatus" => round_trip::<GenieCodeStatus>(json),
+        "AgentTurnAccepted" => round_trip::<AgentTurnAccepted>(json),
+        "AgentTurnCall" => round_trip::<AgentTurnCall>(json),
+        "AgentTurnResult" => round_trip::<AgentTurnResult>(json),
+        "AgentSessionState" => round_trip::<AgentSessionState>(json),
+        "AgentSessionEvent" => round_trip::<AgentSessionEvent>(json),
+        "AgentTurnEvent" => round_trip::<AgentTurnEvent>(json),
+        "AgentTurnView" => round_trip::<AgentTurnView>(json),
+        "WorkspaceList" => round_trip::<WorkspaceList>(json),
+        "AgentCallState" => round_trip::<Vec<AgentCallState>>(json),
+        "AgentSessionEndReason" => round_trip::<Vec<AgentSessionEndReason>>(json),
         other => panic!("fixture for unknown type {other}: add it to round_trip_by_name"),
     }
 }
@@ -127,6 +140,15 @@ const STRUCTS: &[&str] = &[
     "RecordingDetail",
     "StorageProbe",
     "RecordToggle",
+    "GenieCodeStatus",
+    "AgentTurnAccepted",
+    "AgentTurnCall",
+    "AgentTurnResult",
+    "AgentSessionState",
+    "AgentSessionEvent",
+    "AgentTurnEvent",
+    "AgentTurnView",
+    "WorkspaceList",
 ];
 
 #[test]
@@ -177,6 +199,17 @@ fn every_ipc_type_has_a_fixture() {
         "RecordingErrorKind",
         "StorageProbe",
         "RecordToggle",
+        "GenieCodeStatus",
+        "AgentTurnAccepted",
+        "AgentTurnCall",
+        "AgentTurnResult",
+        "AgentSessionState",
+        "AgentSessionEvent",
+        "AgentTurnEvent",
+        "AgentTurnView",
+        "WorkspaceList",
+        "AgentCallState",
+        "AgentSessionEndReason",
     ] {
         assert!(names.iter().any(|n| n == t), "no fixture for {t}");
     }

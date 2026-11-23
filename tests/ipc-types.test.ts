@@ -19,9 +19,21 @@ import type {
   Transcript,
 } from '../src/shared/interfaces';
 import type {
+  AgentCallState,
+  AgentSessionEndReason,
+  AgentSessionEvent,
+  AgentSessionState,
+  AgentTurnAccepted,
+  AgentTurnCall,
+  AgentTurnEvent,
+  AgentTurnResult,
+  AgentTurnView,
   AppSetting,
   AppSettingKey,
   CardUpdate,
+  GenieCodeStatus,
+  WorkspaceList,
+  WorkspaceRow,
   ConsentRecordKind,
   ConsentRecordView,
   MicLevelFrame,
@@ -273,7 +285,272 @@ const CARD_UPDATE = {
   sttBadge: 'STT: local',
 } satisfies CardUpdate;
 
+// Slice 2a: the MOG agent on one live Genie Code session, and the workspace list (ADR 0117).
+const TURN_A = '0123456789abcdef0123456789abcdef';
+const TURN_B = 'fedcba9876543210fedcba9876543210';
+const SALES = { name: 'Sales', colorVariant: 'teal' };
+const FINANCE = { name: 'Finance', colorVariant: 'amber' };
+const AGENT_CALL_STATES = [
+  'queued',
+  'asking',
+  'answered',
+  'no_answer',
+  'failed',
+  'timeout',
+  'signed_out',
+  'stopped',
+] as const satisfies AgentCallState[];
+const AGENT_END_REASONS = [
+  'new_session',
+  'quit',
+  'wipe',
+  'profile_changed',
+  'd1_changed',
+  'catalog_changed',
+  'tainted',
+  'idle',
+  'crashed',
+  'lockdown',
+  'hard_timeout',
+] as const satisfies AgentSessionEndReason[];
+const AGENT_TURN_VIEW = {
+  turnId: TURN_A,
+  question: 'What was revenue in sales and finance?',
+  state: 'done',
+  used: 2,
+  budget: 10,
+  agentWorkspace: SALES,
+  calls: [
+    {
+      callId: 'c-0123abcd',
+      workspace: SALES,
+      question: 'Revenue last quarter?',
+      state: 'ready',
+      startedAt: 1763251200000,
+      endedAt: 1763251204000,
+    },
+    {
+      callId: 'c-4567ef01',
+      workspace: FINANCE,
+      question: 'Churn last quarter?',
+      state: 'needs_you',
+    },
+  ],
+  parts: [
+    {
+      callId: 'c-0123abcd',
+      workspace: SALES,
+      sections: [
+        { id: 'answer', md: '**4.2 M**' },
+        { id: 'footer', workspaceHost: 'https://example.cloud.databricks.com' },
+      ],
+      fromEarlier: true,
+      notShownToAgent: false,
+      folded: true,
+    },
+  ],
+  summary: { md: 'Revenue was 4.2 M.', kind: 'combined', workspaces: [SALES, FINANCE] },
+  notice: 'Still working…',
+  tokens: 16400,
+  seenAt: 1763251300000,
+} satisfies AgentTurnView;
+const AGENT_TURN_VIEW_MIN = {
+  turnId: TURN_B,
+  question: 'And last year?',
+  state: 'queued',
+  position: 1,
+  used: 0,
+  budget: 10,
+  agentWorkspace: SALES,
+  calls: [],
+  parts: [],
+} satisfies AgentTurnView;
+const WORKSPACE_ROW = {
+  profile: 'DEFAULT',
+  host: 'https://example.cloud.databricks.com',
+  mogIds: [MOG],
+  available: true,
+  isHome: true,
+  signIn: 'signed_in',
+} satisfies WorkspaceRow;
+const agentTyped: Record<string, unknown> = {
+  GenieCodeStatus: {
+    binary: 'ready',
+    version: '0.5.0',
+    pinned: '0.5.0',
+    agentProfile: 'DEFAULT',
+    agentProfileState: 'ready',
+  } satisfies GenieCodeStatus,
+  'GenieCodeStatus.minimal': {
+    binary: 'not_installed',
+    pinned: '0.5.0',
+    agentProfile: null,
+    agentProfileState: 'no_home',
+  } satisfies GenieCodeStatus,
+  AgentTurnAccepted: {
+    turnId: TURN_A,
+    sessionId: TURN_B,
+    position: 0,
+    newSession: true,
+    budget: 10,
+    crossWorkspace: false,
+    catalog: [
+      {
+        workspaceId: '1234567890123456',
+        profile: 'DEFAULT',
+        name: 'Sales',
+        isHome: true,
+        isAgentWorkspace: true,
+      },
+    ],
+  } satisfies AgentTurnAccepted,
+  AgentTurnCall: {
+    callId: 'c-0123abcd',
+    turnId: TURN_A,
+    workspaceId: '1234567890123456',
+    profile: 'DEFAULT',
+    question: 'Revenue last quarter?',
+    state: 'answered',
+    reply: {
+      structuredContent: { rows: [['EMEA', '4.2 M']] },
+      text: 'EMEA 4.2 M',
+      isError: false,
+      httpStatus: 200,
+    },
+  } satisfies AgentTurnCall,
+  'AgentTurnCall.withheld': {
+    callId: 'c-4567ef01',
+    turnId: TURN_A,
+    workspaceId: '1234567890123456',
+    profile: 'DEFAULT',
+    question: 'Churn?',
+    state: 'answered',
+    withheld: 'injection_suspected',
+  } satisfies AgentTurnCall,
+  'AgentTurnCall.minimal': {
+    callId: 'c-89abcdef',
+    turnId: TURN_B,
+    workspaceId: '1234567890123456',
+    profile: 'DEFAULT',
+    question: 'Margin?',
+    state: 'queued',
+  } satisfies AgentTurnCall,
+  AgentTurnResult: {
+    answer: 'Revenue was 4.2 M.',
+    answerKind: 'note',
+    sources: [{ workspaceId: '1234567890123456', callId: 'c-0123abcd', turnId: TURN_A }],
+    usage: { inputTokens: 15658, cachedInputTokens: 12000, outputTokens: 420, reasoningTokens: 0 },
+  } satisfies AgentTurnResult,
+  'AgentTurnResult.minimal': { answerKind: 'hidden', sources: [] } satisfies AgentTurnResult,
+  AgentSessionState: {
+    state: 'busy',
+    sessionId: TURN_B,
+    startedAt: 1763251200000,
+    agentProfile: 'DEFAULT',
+    turns: 3,
+    queued: 1,
+    tokens: 48000,
+  } satisfies AgentSessionState,
+  'AgentSessionState.minimal': {
+    state: 'none',
+    agentProfile: null,
+    turns: 0,
+    queued: 0,
+    tokens: 0,
+  } satisfies AgentSessionState,
+  'AgentSessionEvent.started': { kind: 'started', sessionId: TURN_B } satisfies AgentSessionEvent,
+  'AgentSessionEvent.ended': {
+    kind: 'ended',
+    sessionId: TURN_B,
+    reason: 'd1_changed',
+  } satisfies AgentSessionEvent,
+  'AgentTurnEvent.queued': { kind: 'queued', turnId: TURN_A, position: 1 } satisfies AgentTurnEvent,
+  'AgentTurnEvent.call': {
+    kind: 'call',
+    turnId: TURN_A,
+    callId: 'c-0123abcd',
+    workspaceId: '1234567890123456',
+    state: 'asking',
+    used: 1,
+    budget: 10,
+  } satisfies AgentTurnEvent,
+  'AgentTurnEvent.refused': {
+    kind: 'refused',
+    turnId: TURN_A,
+    code: 'cross_workspace_off',
+    used: 1,
+  } satisfies AgentTurnEvent,
+  'AgentTurnEvent.slow': { kind: 'slow', turnId: TURN_A } satisfies AgentTurnEvent,
+  'AgentTurnEvent.ended': {
+    kind: 'ended',
+    turnId: TURN_A,
+    outcome: 'answered',
+    calls: 2,
+    tokens: 16400,
+  } satisfies AgentTurnEvent,
+  'AgentTurnEvent.ended.minimal': {
+    kind: 'ended',
+    turnId: TURN_A,
+    outcome: 'session_ended',
+    calls: 0,
+  } satisfies AgentTurnEvent,
+  AgentTurnView: AGENT_TURN_VIEW,
+  'AgentTurnView.minimal': AGENT_TURN_VIEW_MIN,
+  'AgentTurnView.needsYou': {
+    turnId: TURN_B,
+    question: 'And last year?',
+    state: 'needs_you',
+    used: 0,
+    budget: 10,
+    agentWorkspace: SALES,
+    calls: [],
+    parts: [],
+  } satisfies AgentTurnView,
+  'CardUpdate.agentTurn': {
+    mogId: MOG,
+    blurbs: [],
+    chips: [
+      { id: `agent-stop:${TURN_A}`, label: 'Stop' },
+      { id: 'agent-more:op-1', label: 'Ask more' },
+      { id: `agent-resend:${TURN_A}`, label: 'Send again' },
+      { id: `agent-open:${TURN_A}`, label: 'Open in Agent' },
+    ],
+    agentTurn: AGENT_TURN_VIEW,
+  } satisfies CardUpdate,
+  WorkspaceList: {
+    home: 'DEFAULT',
+    lampMogId: MOG,
+    workspaces: [WORKSPACE_ROW],
+    agent: {
+      crossWorkspaceData: false,
+      crossWorkspaceLocked: false,
+      genieCallBudget: 10,
+      endpoint: 'databricks-claude-sonnet-5-5',
+      runProfile: null,
+    },
+  } satisfies WorkspaceList,
+  'WorkspaceList.runProfile': {
+    home: null,
+    lampMogId: null,
+    workspaces: [],
+    agent: {
+      crossWorkspaceData: true,
+      crossWorkspaceLocked: false,
+      genieCallBudget: 20,
+      endpoint: 'databricks-claude-sonnet-5-5',
+      runProfile: 'finance',
+    },
+  } satisfies WorkspaceList,
+  AgentCallState: AGENT_CALL_STATES,
+  AgentSessionEndReason: AGENT_END_REASONS,
+};
+const agentUnionsListed: [
+  Equal<(typeof AGENT_CALL_STATES)[number], AgentCallState>,
+  Equal<(typeof AGENT_END_REASONS)[number], AgentSessionEndReason>,
+] = [true, true];
+
 const typed: Record<string, unknown> = {
+  ...agentTyped,
   MogViewState: VIEW_STATE,
   'MogViewState.minimal': {
     mogId: OTHER_MOG,
@@ -607,6 +884,7 @@ describe('IPC type fixtures', () => {
 
   it('each union fixture lists every value of its TS union', () => {
     expect(everyUnionValueListed.every(Boolean)).toBe(true);
+    expect(agentUnionsListed.every(Boolean)).toBe(true);
   });
 
   it.each(files)('%s equals its typed twin', (file) => {

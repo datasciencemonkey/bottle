@@ -9,10 +9,23 @@ const row = {
   available: true,
   isHome: true,
 };
+const genieCode = {
+  binary: 'ready',
+  version: '0.5.0',
+  pinned: '0.5.0',
+  agentProfile: null,
+  agentProfileState: 'ready',
+};
 const list = {
   rows: [row],
   home: 'sales',
-  agent: { crossWorkspaceData: false, crossWorkspaceLocked: false, genieCallBudget: 10 },
+  agent: {
+    crossWorkspaceData: false,
+    crossWorkspaceLocked: false,
+    genieCallBudget: 10,
+    runProfile: null,
+    genieCode,
+  },
 };
 
 describe('hub-workspaces shape checks (ADR 0117)', () => {
@@ -47,6 +60,31 @@ describe('hub-workspaces shape checks (ADR 0117)', () => {
     ).toBeDefined();
   });
 
+  it('accepts the slice 2a agent actions', () => {
+    expect(asWorkspaceAction({ action: 'workspace.agent_profile', profile: 'fin', x: 1 })).toEqual({
+      action: 'workspace.agent_profile',
+      profile: 'fin',
+    });
+    expect(asWorkspaceAction({ action: 'workspace.agent_profile', profile: null })).toEqual({
+      action: 'workspace.agent_profile',
+      profile: null,
+    });
+    expect(asWorkspaceAction({ action: 'genie_code.install', consent: true })).toEqual({
+      action: 'genie_code.install',
+      consent: true,
+    });
+    expect(asWorkspaceAction({ action: 'genie_code.recheck', y: 2 })).toEqual({
+      action: 'genie_code.recheck',
+    });
+  });
+
+  it('refuses a bad agent action', () => {
+    expect(asWorkspaceAction({ action: 'workspace.agent_profile' })).toBeUndefined();
+    expect(asWorkspaceAction({ action: 'workspace.agent_profile', profile: '' })).toBeUndefined();
+    expect(asWorkspaceAction({ action: 'genie_code.install' })).toBeUndefined();
+    expect(asWorkspaceAction({ action: 'genie_code.install', consent: false })).toBeUndefined();
+  });
+
   it('refuses bad shapes', () => {
     expect(asWorkspaceAction({ action: 'workspace.make_home', profile: 'p' })).toBeUndefined();
     expect(asWorkspaceAction({ action: 'workspace.budget', genieCallBudget: 7 })).toBeUndefined();
@@ -69,6 +107,17 @@ describe('hub-workspaces shape checks (ADR 0117)', () => {
       homePick: { suggested: 'sales', candidates: ['sales', 'fin'] },
     };
     expect(asHubWorkspaceList(pick)?.homePick).toEqual(pick.homePick);
+  });
+
+  it('accepts a list from before the agent state: runProfile and genieCode are optional', () => {
+    const old = {
+      crossWorkspaceData: false,
+      crossWorkspaceLocked: false,
+      genieCallBudget: 10,
+    };
+    const got = asHubWorkspaceList({ ...list, agent: old });
+    expect(got?.agent).toEqual(old);
+    expect(got?.agent).not.toHaveProperty('runProfile');
   });
 
   it('drops unknown fields at every level', () => {
@@ -101,5 +150,11 @@ describe('hub-workspaces shape checks (ADR 0117)', () => {
       asHubWorkspaceList({ ...list, agent: { ...list.agent, genieCallBudget: 3 } }),
     ).toBeUndefined();
     expect(asHubWorkspaceList({ ...list, home: 5 })).toBeUndefined();
+    expect(
+      asHubWorkspaceList({ ...list, agent: { ...list.agent, runProfile: 5 } }),
+    ).toBeUndefined();
+    expect(
+      asHubWorkspaceList({ ...list, agent: { ...list.agent, genieCode: { binary: 'ready' } } }),
+    ).toBeUndefined();
   });
 });

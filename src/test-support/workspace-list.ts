@@ -32,6 +32,7 @@ export function workspaceList(
       crossWorkspaceLocked: false,
       genieCallBudget: 10,
       endpoint: 'databricks-claude-sonnet-5-5',
+      runProfile: null,
     },
     ...over,
   };
