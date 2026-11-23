@@ -3,6 +3,10 @@
 //! Bottle runs only this version, and only a binary whose SHA-256 matches. The digests were taken
 //! from the owner's installed 0.5.0 copy on 2026-11-23. Any other version or digest is
 //! `genie_code_version`. Re-run the lockdown canaries before changing this file.
+//!
+//! The installer must check the SHA-256 of both binaries (`genie` and `genie-code-mode-host`)
+//! after the unpack and before the first exec. The official install source is an open owner
+//! question: this file holds no URL.
 
 /// The only Genie Code CLI version Bottle runs.
 pub const GENIE_PINNED: &str = "0.5.0";

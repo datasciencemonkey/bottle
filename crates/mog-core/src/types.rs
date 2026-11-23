@@ -997,6 +997,7 @@ pub struct GenieCodeStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentWorkspace {
+    /// The model alias of the workspace (`CatalogEntry.alias`), not a Databricks workspace ID.
     pub workspace_id: String,
     pub profile: ProfileName,
     pub name: String,
@@ -1054,6 +1055,18 @@ impl std::fmt::Debug for McpCallReply {
     }
 }
 
+impl From<&crate::mcp_transport::McpReply> for McpCallReply {
+    fn from(r: &crate::mcp_transport::McpReply) -> Self {
+        McpCallReply {
+            structured_content: r.structured_content.clone(),
+            text: r.text.clone(),
+            is_error: r.is_error,
+            http_status: r.http_status,
+            rpc_error: r.rpc_error.clone(),
+        }
+    }
+}
+
 /// Why a reply is hidden from the user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -1067,6 +1080,7 @@ pub enum AgentWithheld {
 pub struct AgentTurnCall {
     pub call_id: String,
     pub turn_id: String,
+    /// The model alias (`CatalogEntry.alias`), not a Databricks workspace ID.
     pub workspace_id: String,
     pub profile: ProfileName,
     pub question: String,
@@ -1101,6 +1115,7 @@ pub enum AgentAnswerKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentSource {
+    /// The model alias (`CatalogEntry.alias`), not a Databricks workspace ID.
     pub workspace_id: String,
     pub call_id: String,
     pub turn_id: String,
@@ -1257,6 +1272,7 @@ pub enum AgentTurnEvent {
     Call {
         turn_id: String,
         call_id: String,
+        /// The model alias (`CatalogEntry.alias`), not a Databricks workspace ID.
         workspace_id: String,
         state: AgentCallState,
         used: u32,
@@ -1302,7 +1318,7 @@ pub enum AgentCallViewState {
 }
 
 /// One Genie call row of an agent turn view.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentCallView {
     pub call_id: String,
@@ -1315,8 +1331,18 @@ pub struct AgentCallView {
     pub ended_at: Option<u64>,
 }
 
+impl std::fmt::Debug for AgentCallView {
+    /// The question is user content: `Debug` shows the id and the state only.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentCallView")
+            .field("call_id", &self.call_id)
+            .field("state", &self.state)
+            .finish_non_exhaustive()
+    }
+}
+
 /// One folded part (one Genie answer) of an agent turn view.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentPartView {
     pub call_id: String,
@@ -1329,6 +1355,16 @@ pub struct AgentPartView {
     pub not_shown_to_agent: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub folded: Option<bool>,
+}
+
+impl std::fmt::Debug for AgentPartView {
+    /// The sections are answer text: `Debug` shows the id and the section count only.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentPartView")
+            .field("call_id", &self.call_id)
+            .field("sections", &self.sections.len())
+            .finish_non_exhaustive()
+    }
 }
 
 /// The state of an agent turn view.
@@ -1357,12 +1393,25 @@ pub enum AgentSummaryKind {
 }
 
 /// The summary of an agent turn view.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentSummaryView {
     pub md: String,
     pub kind: AgentSummaryKind,
     pub workspaces: Vec<AgentWsChip>,
+}
+
+impl std::fmt::Debug for AgentSummaryView {
+    /// The summary is model text about user data: `Debug` shows its size only.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentSummaryView")
+            .field("kind", &self.kind)
+            .field(
+                "md",
+                &format_args!("<redacted {} chars>", self.md.chars().count()),
+            )
+            .finish_non_exhaustive()
+    }
 }
 
 /// One agent turn as the card and the hub Agent panel show it.

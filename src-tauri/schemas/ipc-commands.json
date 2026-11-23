@@ -192,6 +192,11 @@
     },
     "agent_turn_submit": {
       "$defs": {
+        "AgentActionTicket": {
+          "maxLength": 36,
+          "minLength": 1,
+          "type": "string"
+        },
         "AgentAskMode": {
           "description": "How the user asked: a new question, a question to other workspaces, or a follow-up in the\nopen session.",
           "enum": [
@@ -217,9 +222,13 @@
       "description": "`agent_turn_submit`. It needs the talk-key latch or an Ask ticket. `question` is user\ncontent: the `Debug` output redacts it (SEC-16c).",
       "properties": {
         "actionTicket": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentActionTicket"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "mode": {

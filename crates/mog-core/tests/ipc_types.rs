@@ -471,3 +471,60 @@ fn sec_32a_consent_record_view_session_id_is_required_and_nullable_and_holds_no_
         );
     }
 }
+
+/// Slice 2a: `McpCallReply` copies every field of an `McpReply` and has the `mcp_call` wire shape.
+#[test]
+fn slice_2a_mcp_call_reply_mirrors_the_mcp_reply() {
+    use mog_core::mcp_transport::McpReply;
+    use mog_core::types::McpCallReply;
+    let r = McpReply {
+        structured_content: serde_json::json!({"rows": [["a", 1]]}),
+        text: "a 1".to_owned(),
+        is_error: true,
+        http_status: 500,
+        rpc_error: Some(serde_json::json!({"code": -32000})),
+    };
+    let mirrored = McpCallReply::from(&r);
+    assert_eq!(serde_json::to_value(&mirrored).unwrap(), r.to_ipc_json());
+    let ok = McpReply {
+        rpc_error: None,
+        ..r
+    };
+    assert_eq!(
+        serde_json::to_value(McpCallReply::from(&ok)).unwrap(),
+        ok.to_ipc_json()
+    );
+}
+
+/// Slice 2a, SEC-16c: the `Debug` output of the agent views never holds a question or an answer.
+#[test]
+fn slice_2a_agent_view_debug_redacts_user_text() {
+    use mog_core::types::{AgentCallView, AgentPartView, AgentSummaryView, AgentTurnView};
+    let chip = serde_json::json!({"name": "Sales", "colorVariant": "teal"});
+    let call: AgentCallView = serde_json::from_value(serde_json::json!({
+        "callId": "c-0123abcd", "workspace": chip, "question": "SECRET-Q", "state": "ready"
+    }))
+    .unwrap();
+    let part: AgentPartView = serde_json::from_value(serde_json::json!({
+        "callId": "c-0123abcd", "workspace": chip, "sections": [{"id": "answer", "md": "SECRET-A"}]
+    }))
+    .unwrap();
+    let summary: AgentSummaryView = serde_json::from_value(serde_json::json!({
+        "md": "SECRET-S", "kind": "note", "workspaces": [chip]
+    }))
+    .unwrap();
+    let turn: AgentTurnView = serde_json::from_value(serde_json::json!({
+        "turnId": "0123456789abcdef0123456789abcdef", "question": "SECRET-T", "state": "done",
+        "used": 0, "budget": 5, "agentWorkspace": chip, "calls": [call], "parts": [part],
+        "summary": summary
+    }))
+    .unwrap();
+    for shown in [
+        format!("{call:?}"),
+        format!("{part:?}"),
+        format!("{summary:?}"),
+        format!("{turn:?}"),
+    ] {
+        assert!(!shown.contains("SECRET"), "{shown}");
+    }
+}

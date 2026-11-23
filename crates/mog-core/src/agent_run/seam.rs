@@ -43,9 +43,35 @@ pub struct SessionSpec {
     pub cross_workspace: bool,
 }
 
-/// The secret of the shim `hello`. `Debug` shows nothing of it.
-#[derive(Clone, PartialEq, Eq)]
+/// The secret of the shim `hello`. `Debug` shows nothing of it, and it has no `PartialEq`: use
+/// [`RunSecret::matches`]. It is zeroed when dropped (a volatile write per byte, so the
+/// compiler keeps it).
+#[derive(Clone)]
 pub struct RunSecret(pub [u8; 32]);
+
+impl RunSecret {
+    /// A constant-time compare with `other`. False for a length other than 32.
+    pub fn matches(&self, other: &[u8]) -> bool {
+        if other.len() != self.0.len() {
+            return false;
+        }
+        let diff = self
+            .0
+            .iter()
+            .zip(other)
+            .fold(0u8, |acc, (a, b)| acc | (a ^ b));
+        std::hint::black_box(diff) == 0
+    }
+}
+
+impl Drop for RunSecret {
+    fn drop(&mut self) {
+        for b in self.0.iter_mut() {
+            // SAFETY: `b` is a valid, aligned, exclusive reference to one byte.
+            unsafe { std::ptr::write_volatile(b, 0) };
+        }
+    }
+}
 
 impl fmt::Debug for RunSecret {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -93,6 +119,7 @@ pub trait SessionGuard: Send + Sync {
 /// The network state from ARC-F7 `NetStatus`.
 pub trait NetWatch: Send + Sync {
     fn online(&self) -> bool;
+    /// Call once, at build. There is no way to unsubscribe.
     fn subscribe(&self, f: Box<dyn Fn(bool) + Send + Sync>);
 }
 
@@ -126,6 +153,17 @@ mod tests {
         let s = RunSecret([0xab; 32]);
         let shown = format!("{s:?}");
         assert!(!shown.contains("ab") && !shown.contains("171"), "{shown}");
+    }
+
+    #[test]
+    fn the_run_secret_compares_in_full_and_only_to_32_bytes() {
+        let s = RunSecret([7; 32]);
+        assert!(s.matches(&[7; 32]));
+        let mut other = [7u8; 32];
+        other[31] = 8;
+        assert!(!s.matches(&other));
+        assert!(!s.matches(&[7; 31]));
+        assert!(!s.matches(&[7; 33]));
     }
 
     #[test]

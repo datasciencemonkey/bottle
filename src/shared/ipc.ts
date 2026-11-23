@@ -480,7 +480,8 @@ export interface CommandArgs {
   genie_code_install: { consent: true };
   /**
    * Needs the talk-key latch or an Ask ticket. Starts a session if none is open. `question` is
-   * 1 to 1,000 characters and `opId` at most 64. Refusals: invalid_args, ask_not_approved,
+   * 1 to 1,000 Unicode code points (the minimum is checked after trimming white space), `opId`
+   * 1 to 64 and `actionTicket` 1 to 36. Refusals: invalid_args, ask_not_approved,
    * agent_queue_full, agent_rate_limited, agent_session_unavailable, genie_code_missing,
    * genie_code_version, agent_profile_unsupported, agent_signed_out, agent_not_eligible.
    */
@@ -549,6 +550,7 @@ export interface GenieCodeStatus {
 
 /** One workspace in the catalog of a session. */
 export interface AgentWorkspace {
+  /** The model alias (`CatalogEntry.alias`), not a Databricks workspace ID. */
   workspaceId: string;
   profile: ProfileName;
   name: string;
@@ -627,6 +629,7 @@ export type AgentTurnEvent =
       kind: 'call';
       turnId: string;
       callId: string;
+      /** The model alias (`CatalogEntry.alias`), not a Databricks workspace ID. */
       workspaceId: string;
       state: AgentCallState;
       used: number;

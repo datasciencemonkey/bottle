@@ -1561,10 +1561,22 @@ checked_string!(
     |s| s.strip_prefix("c-").is_some_and(|h| h.len() == 8 && is_lower_hex(h))
 );
 checked_string!(
-    /// The question of one agent turn: 1 to 1,000 characters. User content.
+    /// The question of one agent turn: 1 to 1,000 Unicode code points. The minimum is checked
+    /// after trimming the white space at both ends. User content.
     AgentQuestion,
     { "type": "string", "minLength": 1, "maxLength": AGENT_QUESTION_MAX_CHARS },
-    |s| (1..=AGENT_QUESTION_MAX_CHARS).contains(&s.chars().count())
+    |s| s.chars().count() <= AGENT_QUESTION_MAX_CHARS && !s.trim().is_empty()
+);
+
+/// The most characters of an action ticket (a UUID v4, `action_ticket::new_ticket_id`).
+pub const AGENT_ACTION_TICKET_MAX_CHARS: usize = 36;
+
+checked_string!(
+    /// A host-minted action ticket: 1 to 36 characters (a UUID v4).
+    #[derive(Debug)]
+    AgentActionTicket,
+    { "type": "string", "minLength": 1, "maxLength": AGENT_ACTION_TICKET_MAX_CHARS },
+    |s| (1..=AGENT_ACTION_TICKET_MAX_CHARS).contains(&s.chars().count())
 );
 checked_string!(
     #[derive(Debug)]
@@ -1618,7 +1630,7 @@ pub struct AgentTurnSubmitArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<AgentAskMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub action_ticket: Option<String>,
+    pub action_ticket: Option<AgentActionTicket>,
 }
 
 impl std::fmt::Debug for AgentTurnSubmitArgs {

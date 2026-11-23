@@ -584,6 +584,22 @@ fn settings_write_sets_keeps_and_clears_the_agent_run_profile() {
     assert!(l["agent"]["runProfile"].is_null());
     let bad = w.call("workspace_settings_write", json!({"runProfile": 5}));
     assert_eq!(code(bad.unwrap_err()), "invalid_args");
+    // An unknown, an unsupported and a flag-like name are refused, and the value stays.
+    w.call("workspace_settings_write", json!({"runProfile": "other"}))
+        .unwrap();
+    for name in ["nope", "pat", "-x", "--profile"] {
+        let bad = w.call("workspace_settings_write", json!({"runProfile": name}));
+        assert_eq!(code(bad.unwrap_err()), "profile_invalid", "{name}");
+    }
+    assert_eq!(
+        w.list(false).unwrap().agent.run_profile.as_deref(),
+        Some("other")
+    );
+    // Home is stored as "not set".
+    let l = w
+        .call("workspace_settings_write", json!({"runProfile": "home"}))
+        .unwrap();
+    assert!(l["agent"]["runProfile"].is_null());
 }
 
 // ---------- the allow-list ----------

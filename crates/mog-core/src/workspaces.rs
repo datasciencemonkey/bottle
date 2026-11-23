@@ -583,6 +583,14 @@ impl WorkspaceStore {
     /// `workspace_settings_write`: D1, D2 and the agent endpoint. The argument types hold only
     /// valid values, so a bad value never gets here.
     pub fn settings_write(&self, a: &WorkspaceSettingsWriteArgs) -> CoreResult<WorkspaceList> {
+        // The run profile must be a known, supported profile. A name that starts with `-` is
+        // never a profile: it could become a CLI flag in `--profile <P>`.
+        if let Some(Some(p)) = &a.run_profile {
+            if p.starts_with('-') {
+                return Err(refused("profile_invalid"));
+            }
+            self.supported(p)?;
+        }
         let data = {
             let _g = self.guard();
             let mut data = self.load()?;
@@ -596,7 +604,8 @@ impl WorkspaceStore {
                 data.agent.endpoint = v.clone();
             }
             if let Some(v) = &a.run_profile {
-                data.agent.run_profile = v.clone();
+                // Home is stored as "not set".
+                data.agent.run_profile = v.clone().filter(|p| data.home.as_deref() != Some(p));
             }
             self.save(&data)?;
             data

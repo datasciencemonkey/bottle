@@ -701,6 +701,9 @@ pub fn runs_off_main_thread(command: &str) -> bool {
                 | "genie_code_install"
                 | "agent_turn_submit"
                 | "agent_turn_stop"
+                | "agent_turn_call"
+                | "agent_turn_result"
+                | "agent_session_state"
                 | "agent_session_end"
                 // #413, #45: the install can run for minutes over the network (487 MB).
                 | "stt_model_install"

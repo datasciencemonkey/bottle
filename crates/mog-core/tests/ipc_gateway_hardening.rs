@@ -860,6 +860,18 @@ fn slice_2a_agent_args_refuse_bad_values() {
         ),
         (
             "agent_turn_submit",
+            json!({"mogId": "m", "opId": "o", "question": " \n\t "}),
+        ),
+        (
+            "agent_turn_submit",
+            json!({"mogId": "m", "opId": "o", "question": "q", "actionTicket": ""}),
+        ),
+        (
+            "agent_turn_submit",
+            json!({"mogId": "m", "opId": "o", "question": "q", "actionTicket": "t".repeat(37)}),
+        ),
+        (
+            "agent_turn_submit",
             json!({"mogId": "m", "opId": "o", "question": q1001}),
         ),
         (
@@ -925,6 +937,10 @@ fn slice_2a_agent_args_refuse_bad_values() {
         (
             "agent_turn_call",
             json!({"turnId": TURN, "callId": "c-0123abcd"}),
+        ),
+        (
+            "agent_turn_submit",
+            json!({"mogId": "m", "opId": "o", "question": " q ", "actionTicket": "t".repeat(36)}),
         ),
         ("workspace_settings_write", json!({"runProfile": null})),
         ("workspace_settings_write", json!({"runProfile": "p"})),

@@ -385,6 +385,9 @@ fn arc_3_cap_02a_g_04a_window_ops_capture_start_and_mcp_call_run_off_the_main_th
                         | "genie_code_install"
                         | "agent_turn_submit"
                         | "agent_turn_stop"
+                        | "agent_turn_call"
+                        | "agent_turn_result"
+                        | "agent_session_state"
                         | "agent_session_end"
                         // #413, #45: the install can download 487 MB before it checks hashes.
                         | "stt_model_install"
@@ -821,6 +824,9 @@ fn arc_3_cap_02a_g_04a_schedule_runs_window_ops_capture_start_and_mcp_call_on_a_
                     | "genie_code_install"
                     | "agent_turn_submit"
                     | "agent_turn_stop"
+                    | "agent_turn_call"
+                    | "agent_turn_result"
+                    | "agent_session_state"
                     | "agent_session_end"
                     | "stt_model_install"
                     | "stt_model_verify"
@@ -1642,22 +1648,18 @@ fn slice_2a_agent_rows_reach_their_component_from_the_brain_only() {
 
 /// Slice 2a: the commands that wait on a process or the network leave the main thread.
 #[test]
-fn slice_2a_slow_agent_commands_run_off_the_main_thread() {
+fn slice_2a_agent_commands_run_off_the_main_thread() {
     for c in [
         "genie_code_status",
         "genie_code_install",
         "agent_turn_submit",
         "agent_turn_stop",
-        "agent_session_end",
-    ] {
-        assert!(runs_off_main_thread(c), "{c}");
-    }
-    for c in [
         "agent_turn_call",
         "agent_turn_result",
         "agent_session_state",
+        "agent_session_end",
     ] {
-        assert!(!runs_off_main_thread(c), "{c}");
+        assert!(runs_off_main_thread(c), "{c}");
     }
 }
 

@@ -87,9 +87,9 @@ export const CALL_CLASS = {
   workspace_set_available: 'local',
   workspace_make_home: 'local',
   workspace_settings_write: 'local',
-  // Slice 2a: the status probe runs the local binary; the install downloads the pinned build;
+  // Slice 2a: the status can run `auth token` (cloud); the install downloads the pinned build;
   // a turn reaches the model and the workspaces through the agent session.
-  genie_code_status: 'local',
+  genie_code_status: 'cloud',
   genie_code_install: 'cloud',
   agent_turn_submit: 'cloud',
   agent_turn_stop: 'local',
