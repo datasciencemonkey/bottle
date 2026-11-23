@@ -81,9 +81,9 @@ describe('Recordings area (hub)', () => {
     await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, {
       rows: [],
       unavailable: true,
-      error: RECORDING_ERRORS.profiles_differ,
+      error: RECORDING_ERRORS.no_profile,
     });
-    expect(el.textContent).toContain(RECORDING_ERRORS.profiles_differ.text);
+    expect(el.textContent).toContain(RECORDING_ERRORS.no_profile.text);
   });
 
   it('[REC-V12] an empty list says how to record', async () => {
