@@ -72,6 +72,7 @@ fn temp_parts(tag: &str, n: usize) -> (PathBuf, Vec<LocalPart>) {
             LocalPart {
                 path,
                 duration_s: 30.0,
+                held: Vec::new(),
             }
         })
         .collect();
@@ -698,6 +699,7 @@ fn rec_retry_upload_with_temp_audio_gone_is_audio_missing() {
     let gone = LocalPart {
         path: PathBuf::from("/nonexistent/bottle/x.opus"),
         duration_s: 30.0,
+        held: Vec::new(),
     };
     let out = service(&http).retry(P, &job(vec![gone]), &mut |_| {});
     assert_eq!(out.error_kind, Some(ErrorKind::AudioMissing));
@@ -710,4 +712,64 @@ fn rec_link_uses_profile_host_and_workspace_id() {
     let url = service(&http).link(P, ROOT, NAME).unwrap();
     assert!(url.starts_with("https://dbc-fake.cloud.databricks.com/explore/data/volumes/main/team/audio?o=1234567890&volumePath="));
     assert!(http.seen().is_empty(), "the link needs no call");
+}
+
+// ---------- ADR 0118: the talk key during a recording ----------
+
+const MARKER: &str = "You spoke to Bottle";
+
+#[test]
+fn adr_0118_the_marker_is_in_the_user_files_but_never_in_the_notes_prompt() {
+    let (dir, mut parts) = temp_parts("held", 1);
+    parts[0].held = vec![mog_core::recording_capture::session::HeldRange {
+        start_samples: 16_000,
+        len_samples: 32_000,
+    }];
+    let http = Arc::new(ScriptedHttp::new());
+    files_ok(&http);
+    http.json(MODEL, 200, gemini(LINES));
+    http.json(MODEL, 200, claude("## Summary\nShort call."));
+    let out = service(&http).run(P, &job(parts), &mut |_| {});
+    assert_eq!(out.status, Status::Done, "{out:?}");
+    // The job manifest carries the ranges of its part.
+    let jj = last_upload_json(&http, ".job.json");
+    assert_eq!(jj["parts"][0]["heldRanges"][0]["startSamples"], 16_000);
+    // The user's transcript has the marker and the gap.
+    let tj = last_upload_json(&http, ".transcript.json");
+    assert_eq!(tj["bottleGaps"][0]["startS"], 1.0);
+    assert_eq!(tj["bottleGaps"][0]["durS"], 2.0);
+    let md = uploads(&http)
+        .into_iter()
+        .rev()
+        .find(|(p, _)| p.ends_with(".transcript.md"))
+        .unwrap();
+    assert!(String::from_utf8(md.1).unwrap().contains(MARKER));
+    // The models never see it: not the transcribe call, not the notes call.
+    for c in http.seen_on(MODEL) {
+        assert!(!c.json.as_ref().unwrap().to_string().contains(MARKER));
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn adr_0118_a_retry_from_writing_notes_keeps_the_marker_out_of_the_prompt() {
+    let http = Arc::new(ScriptedHttp::new());
+    let mut failed = manifest(NAME, "2026-11-19T14:05:00Z", "failed");
+    failed["error_stage"] = json!("writing_notes");
+    http.bytes("files.download", &serde_json::to_vec(&failed).unwrap());
+    let tj = json!({"version":1,"id":"r1","name":NAME,"started_at":"2026-11-19T14:05:00Z","duration_s":9.0,
+        "instructions":"Write short notes.","parts":[],
+        "segments":[{"start":0.0,"end":1.0,"speaker":"1","text":"Hi.","part":1},
+                    {"start":6.0,"end":7.0,"speaker":"2","text":"Bye.","part":1}],
+        "bottleGaps":[{"startS":3.0,"durS":2.0}]});
+    http.bytes("files.download", &serde_json::to_vec(&tj).unwrap());
+    http.json(MODEL, 200, claude("## Summary\nOK"));
+    files_ok(&http);
+    let out = service(&http).retry(P, &job(vec![]), &mut |_| {});
+    assert_eq!(out.status, Status::Done, "{out:?}");
+    let calls = http.seen_on(MODEL);
+    assert_eq!(calls.len(), 1);
+    let body = calls[0].json.as_ref().unwrap().to_string();
+    assert!(body.contains("Bye."));
+    assert!(!body.contains(MARKER), "{body}");
 }

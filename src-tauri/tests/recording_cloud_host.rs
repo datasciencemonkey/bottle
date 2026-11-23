@@ -41,6 +41,7 @@ fn rec(dir: &std::path::Path, id: &str, profile: Option<&str>, parts: usize) -> 
                     path,
                     samples: 16_000 * 30,
                     offset_ms: 0,
+                    held: Vec::new(),
                 }
             })
             .collect(),

@@ -769,6 +769,7 @@ struct ReentrantEvents {
 }
 
 impl CaptureEvents for ReentrantEvents {
+    fn overlay_granted(&self, _lease: &mog_core::capture::Lease) {}
     fn state(&self, _state: &CaptureState) {
         if let Some(svc) = self.svc.get().and_then(Weak::upgrade) {
             self.seen.lock().unwrap().push(svc.status().owner);
@@ -972,6 +973,7 @@ struct PanicsOnStop {
 }
 
 impl CaptureEvents for PanicsOnStop {
+    fn overlay_granted(&self, _lease: &mog_core::capture::Lease) {}
     fn state(&self, _state: &CaptureState) {}
     fn stopped(&self, _stopped: &Stopped) {
         if self.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
@@ -1135,6 +1137,7 @@ struct HostSink {
 }
 
 impl CaptureEvents for HostSink {
+    fn overlay_granted(&self, _lease: &mog_core::capture::Lease) {}
     fn state(&self, state: &CaptureState) {
         if state.paused && self.panic_on_paused_state.swap(false, AtOrd::SeqCst) {
             panic!("sink panic on a paused state");

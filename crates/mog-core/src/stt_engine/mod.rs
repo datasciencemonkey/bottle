@@ -54,7 +54,7 @@ pub use vad::{
 use crate::audio_device::normalize::normalize_peak;
 use crate::audio_device::ptt_buffer::{Utterance, UtteranceSink};
 use crate::audio_device::sink::{FrameSink, MicFrame, SinkEvent};
-use crate::capture::{parse_lease, CaptureEvents, LeaseNo, StopReason, Stopped};
+use crate::capture::{parse_lease, CaptureEvents, Lease, LeaseNo, StopReason, Stopped};
 use crate::clock::{MonotonicClock, SystemClock};
 use crate::stt::{LOCAL_STT_MODEL, LOCAL_STT_RUNTIME};
 use crate::types::{CaptureMode, CaptureState, MogId, Transcript, TranscriptProvider};
@@ -848,6 +848,17 @@ impl FrameSink for SttFrameSink {
     }
 }
 
+/// The overlay lease of [`SttCaptureEvents`], and the overlay leases that have stopped (a late
+/// `overlay_granted` of a stopped lease must not begin a take).
+#[derive(Debug, Default)]
+struct SttOverlay {
+    live: Option<LeaseNo>,
+    ended: std::collections::VecDeque<LeaseNo>,
+}
+
+/// How many stopped overlay leases R4 remembers.
+const OVERLAY_ENDED_MEMORY: usize = 16;
+
 /// Wraps the R2 [`CaptureEvents`] and drives R4: a granted PTT or hands-free state begins (and
 /// preloads, CAP-51c) its take, any other state stops the frames, and a stop commits or drops
 /// the take. Then the event goes to the inner sink.
@@ -855,12 +866,18 @@ impl FrameSink for SttFrameSink {
 pub struct SttCaptureEvents<E> {
     inner: E,
     engine: LocalSttEngine,
+    /// The PTT overlay lease on a session lease (ADR 0118), from the `overlay_granted` hook.
+    overlay: std::sync::Mutex<SttOverlay>,
 }
 
 impl<E: CaptureEvents> SttCaptureEvents<E> {
     /// Wrap `inner`.
     pub fn new(inner: E, engine: LocalSttEngine) -> Self {
-        Self { inner, engine }
+        Self {
+            inner,
+            engine,
+            overlay: std::sync::Mutex::new(SttOverlay::default()),
+        }
     }
 
     /// The wrapped sink.
@@ -875,7 +892,24 @@ impl<E: CaptureEvents> CaptureEvents for SttCaptureEvents<E> {
         let mode = state
             .mode
             .filter(|m| matches!(m, CaptureMode::Ptt | CaptureMode::HandsFree));
+        let overlay = {
+            let mut o = self
+                .overlay
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // The state shows the session lease while a directed PTT overlay lives.
+            if state.mode == Some(CaptureMode::Session)
+                && state.directed_to.is_some()
+                && state.recording
+            {
+                o.live
+            } else {
+                o.live = None;
+                None
+            }
+        };
         match (lease, mode) {
+            _ if overlay.is_some() => {}
             (Some(lease), Some(mode)) if state.recording && !state.paused => {
                 let owner = state.owner.as_deref().unwrap_or_default();
                 self.engine.begin(lease, owner, mode);
@@ -886,8 +920,38 @@ impl<E: CaptureEvents> CaptureEvents for SttCaptureEvents<E> {
     }
 
     fn stopped(&self, stopped: &Stopped) {
+        {
+            let mut o = self
+                .overlay
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !o.ended.contains(&stopped.lease_id) {
+                if o.ended.len() >= OVERLAY_ENDED_MEMORY {
+                    o.ended.pop_front();
+                }
+                o.ended.push_back(stopped.lease_id);
+            }
+            if o.live == Some(stopped.lease_id) {
+                o.live = None;
+            }
+        }
         self.engine.commit(stopped.lease_id, stopped.reason);
         self.inner.stopped(stopped);
+    }
+
+    fn overlay_granted(&self, lease: &Lease) {
+        {
+            let mut o = self
+                .overlay
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // A grant after the stop of its lease begins no take.
+            if !o.ended.contains(&lease.id) {
+                o.live = Some(lease.id);
+                self.engine.begin(lease.id, &lease.mog_id, CaptureMode::Ptt);
+            }
+        }
+        self.inner.overlay_granted(lease);
     }
 }
 
