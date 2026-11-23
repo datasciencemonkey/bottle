@@ -32,7 +32,7 @@ use mog_core::audio_device::ptt_buffer::{NoUtteranceSink, PttBuffer, PttCaptureE
 use mog_core::audio_device::{FailureLink, FrameSink, MicDevice, MicHost};
 use mog_core::capture::{
     parse_lease, AudioDevice, AudioSource, CaptureCore, CaptureError, CaptureEvents,
-    CaptureRequest, CaptureService, DeviceError, LeaseNo, Stopped,
+    CaptureRequest, CaptureService, DeviceError, Lease, LeaseNo, Stopped,
 };
 use mog_core::clock::MonotonicClock;
 use mog_core::error::{CoreError, CoreResult};
@@ -76,6 +76,10 @@ impl<E: CaptureEvents> CaptureEvents for ObservedEvents<E> {
         for o in observers {
             o(stopped);
         }
+    }
+
+    fn overlay_granted(&self, lease: &Lease) {
+        self.inner.overlay_granted(lease);
     }
 }
 
@@ -230,6 +234,10 @@ impl CaptureEvents for BrainCaptureEvents {
             let _ = (self.relay)(events::CAPTURE_STOPPED, payload);
         }
     }
+
+    /// ADR 0118: the brain reads `capture.state`, which keeps the session lease. It has no use
+    /// for the overlay lease, so this is a no-op.
+    fn overlay_granted(&self, _lease: &Lease) {}
 }
 
 // ---------- R4 results ----------
@@ -379,6 +387,13 @@ impl<E: CaptureEvents> CaptureEvents for SttEvents<E> {
         match self {
             SttEvents::On(e) => e.stopped(stopped),
             SttEvents::Off(e) => e.stopped(stopped),
+        }
+    }
+
+    fn overlay_granted(&self, lease: &Lease) {
+        match self {
+            SttEvents::On(e) => e.overlay_granted(lease),
+            SttEvents::Off(e) => e.overlay_granted(lease),
         }
     }
 }
