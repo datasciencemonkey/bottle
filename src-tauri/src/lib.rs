@@ -26,6 +26,7 @@ pub mod stt_model_host;
 pub mod webview_media;
 pub mod window_host;
 pub mod windows;
+pub mod workspaces_host;
 
 use tauri::Manager;
 use window_host::TauriWindowHost;
@@ -286,6 +287,9 @@ pub fn run() {
     builder
         .manage(ipc::BrainChannel::default())
         .manage(ipc::HubChannel::default())
+        // ADR 0117: the `workspace_*` component. The contract-PR stub answers `not_implemented`;
+        // slice 1 (S1-A) replaces it with the workspace store.
+        .manage(workspaces_host::WorkspacesHost)
         // #574 (ADR 0113): the one ticket store for user-only memory writes. `ipc.rs` reads it
         // with `try_state`; `memory_host` mints and redeems.
         .manage(std::sync::Arc::new(

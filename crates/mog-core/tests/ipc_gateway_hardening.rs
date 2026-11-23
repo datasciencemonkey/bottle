@@ -133,6 +133,11 @@ fn sample(command: &str) -> (&'static str, Value) {
             )
         }
         "link_open" => json!({"profile": "p", "url": "https://example.cloud.databricks.com/x"}),
+        "profile_reauth" => json!({"profile": "p"}),
+        "workspace_list" => json!({"refresh": true}),
+        "workspace_set_available" => json!({"profile": "p", "available": true}),
+        "workspace_make_home" => json!({"profile": "p"}),
+        "workspace_settings_write" => json!({"genieCallBudget": 10}),
         other => panic!("no sample for {other}"),
     };
     ("brain", args)
@@ -446,6 +451,9 @@ fn sec_03_each_ipc_error_maps_to_a_fixed_code() {
         IpcError::InvalidToolArgs { command: s() },
         IpcError::InvalidMeta { command: s() },
         IpcError::ProfileInvalid { command: s() },
+        IpcError::WorkspaceNotAvailable { command: s() },
+        IpcError::HomeAlwaysAvailable { command: s() },
+        IpcError::WorkspaceStorageFailed { command: s() },
         IpcError::PollInflight { command: s() },
         IpcError::AgentUnknownMog { command: s() },
         IpcError::AgentUnavailable { command: s() },

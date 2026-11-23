@@ -81,6 +81,12 @@ export const CALL_CLASS = {
   stt_model_verify: 'local', // hashes the files on disk only; never a request
   stt_model_cancel: 'local',
   link_open: 'local', // opens the browser; Bottle itself sends nothing
+  // ADR 0117: the re-sign-in and the sign-in probe reach the workspace; the rest is local.
+  profile_reauth: 'cloud',
+  workspace_list: 'cloud',
+  workspace_set_available: 'local',
+  workspace_make_home: 'local',
+  workspace_settings_write: 'local',
 } as const satisfies Record<keyof typeof COMMANDS, CallClass>;
 
 /** The command arguments of an invoke log entry: `call()` sends them as `{ args }` (ADR 0003). */

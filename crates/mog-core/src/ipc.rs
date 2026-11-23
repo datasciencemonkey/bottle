@@ -183,6 +183,13 @@ pub const COMMANDS: &[CommandSpec] = &[
     // `view_emit` click, the brain checks the URL against its workspace, and Rust checks it again
     // (https, the profile's workspace host) before the OS opener runs. No view can call it.
     row("link_open", B),
+    // ADR 0117 (one MOG with workspaces): the brain re-signs a profile in and keeps the
+    // workspace list, its "Available to your MOG" switches, the home and the agent settings.
+    row("profile_reauth", B),
+    row("workspace_list", B),
+    row("workspace_set_available", B),
+    row("workspace_make_home", B),
+    row("workspace_settings_write", B),
 ];
 
 /// The row of a command, if it exists.
@@ -363,6 +370,19 @@ pub enum IpcError {
     },
     /// `mcp_call` (#479): R8 `profile_invalid`: the profile name is empty.
     ProfileInvalid {
+        command: String,
+    },
+    /// `mcp_call` and the `workspace_*` commands (ADR 0117): the profile is not switched on
+    /// for the MOG, so Bottle sends nothing to it.
+    WorkspaceNotAvailable {
+        command: String,
+    },
+    /// `workspace_set_available` (ADR 0117): the home workspace is always available.
+    HomeAlwaysAvailable {
+        command: String,
+    },
+    /// The `workspace_*` commands (ADR 0117): `workspaces.json` could not be read or written.
+    WorkspaceStorageFailed {
         command: String,
     },
     /// `mcp_call` (#479): R8 `poll_inflight`: a poll is already open for this conversation (G-07b, ARC-F1).
@@ -732,6 +752,15 @@ impl std::fmt::Display for IpcError {
             IpcError::ProfileInvalid { command } => {
                 write!(f, "{command}: the profile name is empty")
             }
+            IpcError::WorkspaceNotAvailable { command } => {
+                write!(f, "{command}: the workspace is not available to the MOG")
+            }
+            IpcError::HomeAlwaysAvailable { command } => {
+                write!(f, "{command}: the home workspace is always available")
+            }
+            IpcError::WorkspaceStorageFailed { command } => {
+                write!(f, "{command}: the workspace settings could not be stored")
+            }
             IpcError::PollInflight { command } => {
                 write!(
                     f,
@@ -872,6 +901,42 @@ args!(ProfilesListArgs {
 args!(ProfileArgs {
     profile: ProfileName
 });
+args!(
+    /// `workspace_list` (ADR 0117). `refresh` probes each profile whose sign-in state is unknown.
+    WorkspaceListArgs {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refresh: Option<bool>,
+    }
+);
+args!(
+    /// `workspace_set_available` (ADR 0117). `mog_id` names the config of a new connection.
+    WorkspaceSetAvailableArgs {
+        profile: ProfileName,
+        available: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mog_id: Option<MogId>,
+    }
+);
+args!(
+    /// `workspace_make_home` (ADR 0117).
+    WorkspaceMakeHomeArgs {
+        profile: ProfileName,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mog_id: Option<MogId>,
+    }
+);
+args!(
+    /// `workspace_settings_write` (ADR 0117): D1, the D2 Genie call budget (5, 10 or 20) and
+    /// the D9 agent endpoint name.
+    WorkspaceSettingsWriteArgs {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cross_workspace_data: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        genie_call_budget: Option<u8>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_endpoint: Option<String>,
+    }
+);
 args!(ProfileLoginArgs {
     /// The workspace that `databricks auth login --host` opens. Not a request target.
     workspace_url: String,
@@ -1330,7 +1395,13 @@ macro_rules! for_command {
             "consent_records_list" => Some($f::<NoArgs>()),
             "cli_install" => Some($f::<CliInstallArgs>()),
             "profiles_list" => Some($f::<ProfilesListArgs>()),
-            "profile_status" | "profile_login_cancel" => Some($f::<ProfileArgs>()),
+            "profile_status" | "profile_login_cancel" | "profile_reauth" => {
+                Some($f::<ProfileArgs>())
+            }
+            "workspace_list" => Some($f::<WorkspaceListArgs>()),
+            "workspace_set_available" => Some($f::<WorkspaceSetAvailableArgs>()),
+            "workspace_make_home" => Some($f::<WorkspaceMakeHomeArgs>()),
+            "workspace_settings_write" => Some($f::<WorkspaceSettingsWriteArgs>()),
             "profile_login" => Some($f::<ProfileLoginArgs>()),
             "profile_select" => Some($f::<ProfileSelectArgs>()),
             "capture_start" => Some($f::<CaptureStartArgs>()),
@@ -1440,6 +1511,27 @@ pub fn handle(window_label: &str, command_name: &str, args: Value) -> Result<Han
     let validate = for_command!(spec.name, check).expect("every row has an argument type");
     validate(spec.name, args.clone())?;
     match spec.name {
+        // ADR 0117 D2: the Genie call budget is 5, 10 or 20.
+        "workspace_settings_write" => {
+            let a: WorkspaceSettingsWriteArgs = parse(spec.name, args)?;
+            if a.genie_call_budget
+                .is_some_and(|b| ![5, 10, 20].contains(&b))
+            {
+                return Err(IpcError::InvalidArgs {
+                    command: spec.name.to_owned(),
+                    reason: "genieCallBudget must be 5, 10 or 20".to_owned(),
+                });
+            }
+            if a.agent_endpoint
+                .as_deref()
+                .is_some_and(|e| !crate::recording_cloud::settings_store::is_endpoint_name(e))
+            {
+                return Err(IpcError::InvalidArgs {
+                    command: spec.name.to_owned(),
+                    reason: "agentEndpoint is not an endpoint name".to_owned(),
+                });
+            }
+        }
         "cli_install" => {
             let a: CliInstallArgs = parse(spec.name, args)?;
             if !a.consent {

@@ -376,6 +376,11 @@ fn arc_3_cap_02a_g_04a_window_ops_capture_start_and_mcp_call_run_off_the_main_th
                         | "cli_install"
                         // #162: `databricks auth login` can wait up to 5 min (W-07c).
                         | "profile_login"
+                        // ADR 0117: the re-sign-in waits for the browser; the list can probe.
+                        | "profile_reauth"
+                        | "workspace_list"
+                        | "workspace_set_available"
+                        | "workspace_make_home"
                         // #413, #45: the install can download 487 MB before it checks hashes.
                         | "stt_model_install"
                         // #413, PR #600 review: verify SHA-256s ~670 MB with no network IO.
@@ -803,6 +808,10 @@ fn arc_3_cap_02a_g_04a_schedule_runs_window_ops_capture_start_and_mcp_call_on_a_
                     | "profiles_list"
                     | "cli_install"
                     | "profile_login"
+                    | "profile_reauth"
+                    | "workspace_list"
+                    | "workspace_set_available"
+                    | "workspace_make_home"
                     | "stt_model_install"
                     | "stt_model_verify"
             );

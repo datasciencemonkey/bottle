@@ -75,6 +75,11 @@
     "allow-recording-retry",
     "allow-recording-open",
     "allow-recording-open-system-audio-settings",
-    "allow-link-open"
+    "allow-link-open",
+    "allow-profile-reauth",
+    "allow-workspace-list",
+    "allow-workspace-set-available",
+    "allow-workspace-make-home",
+    "allow-workspace-settings-write"
   ]
 }

@@ -127,6 +127,10 @@ pub const ERROR_CODES: &[&str] = &[
     "invalid_tool_args",
     "invalid_meta",
     "profile_invalid",
+    // ADR 0117 (one MOG with workspaces).
+    "workspace_not_available",
+    "home_always_available",
+    "workspace_storage_failed",
     "poll_inflight",
     // `agent_*` (#307): the R16 `AgentError::code` values, so the brain sees each one.
     "agent_unknown_mog",
@@ -220,6 +224,9 @@ pub fn ipc_error_code(e: &IpcError) -> &'static str {
         IpcError::InvalidToolArgs { .. } => "invalid_tool_args",
         IpcError::InvalidMeta { .. } => "invalid_meta",
         IpcError::ProfileInvalid { .. } => "profile_invalid",
+        IpcError::WorkspaceNotAvailable { .. } => "workspace_not_available",
+        IpcError::HomeAlwaysAvailable { .. } => "home_always_available",
+        IpcError::WorkspaceStorageFailed { .. } => "workspace_storage_failed",
         IpcError::PollInflight { .. } => "poll_inflight",
         IpcError::AgentUnknownMog { .. } => "agent_unknown_mog",
         IpcError::AgentUnavailable { .. } => "agent_unavailable",

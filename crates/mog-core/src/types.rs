@@ -844,6 +844,62 @@ where
     Option::<T>::deserialize(d)
 }
 
+// ---------- workspaces (ADR 0117) ----------
+
+/// The sign-in state of one workspace profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceSignIn {
+    SignedIn,
+    Expired,
+    Unknown,
+    Unsupported,
+    Missing,
+}
+
+/// One Databricks CLI profile as a workspace of the one MOG.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceRow {
+    pub profile: ProfileName,
+    /// The workspace host. "" when `sign_in` is `Missing`.
+    pub host: String,
+    /// The old MOG configs of this profile. `[0]` owns the name and colour. Empty for a new
+    /// connection.
+    pub mog_ids: Vec<MogId>,
+    /// "Available to your MOG". Always true for home.
+    pub available: bool,
+    pub is_home: bool,
+    pub sign_in: WorkspaceSignIn,
+}
+
+/// The agent settings (ADR 0117 D1, D2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentSettings {
+    /// D1 "Combine across workspaces". Default false.
+    pub cross_workspace_data: bool,
+    /// SEC-28b: an admin lock forces D1 off. Always false until slice 3.
+    pub cross_workspace_locked: bool,
+    /// D2 "Genie calls per question": 5, 10 or 20. Default 10.
+    pub genie_call_budget: u8,
+    /// D9: the agent's model endpoint name. Default `databricks-claude-sonnet-5-5`.
+    pub endpoint: String,
+}
+
+/// The answer of every `workspace_*` command.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceList {
+    /// The home profile. None until the user picks one.
+    pub home: Option<ProfileName>,
+    /// The config id of the one MOG lamp.
+    pub lamp_mog_id: Option<MogId>,
+    /// Home first, then by profile.
+    pub workspaces: Vec<WorkspaceRow>,
+    pub agent: AgentSettings,
+}
+
 // ---------- call recording (ADR 0103) ----------
 
 /// The default notes model of a new install (ADR 0103). A Settings value.

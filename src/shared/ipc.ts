@@ -131,6 +131,12 @@ export const COMMANDS = {
   stt_model_cancel: { windows: ['hub'], phase: 'MVP-D' },
   /** #523: brain only. Rust opens an https link on the profile's workspace host in the browser. */
   link_open: B,
+  // ADR 0117 (one MOG with workspaces).
+  profile_reauth: B,
+  workspace_list: B,
+  workspace_set_available: B,
+  workspace_make_home: B,
+  workspace_settings_write: B,
 } as const satisfies Record<string, Spec>;
 
 export type CommandName = keyof typeof COMMANDS;
@@ -439,12 +445,54 @@ export interface CommandArgs {
   stt_model_verify: NoArgs;
   stt_model_cancel: NoArgs;
   link_open: { profile: ProfileName; url: string };
+  /**
+   * ADR 0117: runs `databricks auth login --profile <p>` on the profile's own host. Refusals:
+   * profile_invalid, login_cancelled, timeout, cli_failed, auth_expired, no_grant, offline.
+   */
+  profile_reauth: { profile: ProfileName };
+  workspace_list: { refresh?: boolean };
+  workspace_set_available: { profile: ProfileName; available: boolean; mogId?: MogId };
+  workspace_make_home: { profile: ProfileName; mogId?: MogId };
+  workspace_settings_write: {
+    crossWorkspaceData?: boolean;
+    genieCallBudget?: GenieCallBudget;
+    agentEndpoint?: string;
+  };
 }
 
 /**
  * Every code a rejection can carry (`mog_core::ipc_gateway::ERROR_CODES`). A test checks this
  * list against the generated schema document.
  */
+// ---------- workspaces (ADR 0117) ----------
+
+/** D2 "Genie calls per question". */
+export type GenieCallBudget = 5 | 10 | 20;
+export type WorkspaceSignIn = 'signed_in' | 'expired' | 'unknown' | 'unsupported' | 'missing';
+/** One Databricks CLI profile as a workspace of the one MOG. `mogIds[0]` owns its name and colour. */
+export interface WorkspaceRow {
+  profile: ProfileName;
+  host: string;
+  mogIds: MogId[];
+  available: boolean;
+  isHome: boolean;
+  signIn: WorkspaceSignIn;
+}
+/** D1, the SEC-28b admin lock, D2 and the D9 agent endpoint. */
+export interface AgentSettings {
+  crossWorkspaceData: boolean;
+  crossWorkspaceLocked: boolean;
+  genieCallBudget: GenieCallBudget;
+  endpoint: string;
+}
+/** The answer of every `workspace_*` command. */
+export interface WorkspaceList {
+  home: ProfileName | null;
+  lampMogId: MogId | null;
+  workspaces: WorkspaceRow[];
+  agent: AgentSettings;
+}
+
 export const IPC_ERROR_CODES = [
   'unknown_command',
   'window_not_allowed',
@@ -494,6 +542,10 @@ export const IPC_ERROR_CODES = [
   'invalid_tool_args',
   'invalid_meta',
   'profile_invalid',
+  // ADR 0117 (one MOG with workspaces).
+  'workspace_not_available',
+  'home_always_available',
+  'workspace_storage_failed',
   /** `mcp_call`: a poll is already open for the conversation (ARC-F1, G-07b, #31). */
   'poll_inflight',
   /**
@@ -955,6 +1007,11 @@ export interface CommandReturns {
   stt_model_verify: SttModelStatus;
   stt_model_cancel: { cancelled: boolean };
   link_open: Empty;
+  profile_reauth: Empty;
+  workspace_list: WorkspaceList;
+  workspace_set_available: WorkspaceList;
+  workspace_make_home: WorkspaceList;
+  workspace_settings_write: WorkspaceList;
 }
 
 /** Call a command. A refused call rejects with an `IpcError` (a code only). */

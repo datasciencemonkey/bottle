@@ -88,6 +88,11 @@ const SPEC_COMMANDS: &[(&str, &[WindowClass])] = {
         ("stt_model_verify", &[H]),
         ("stt_model_cancel", &[H]),
         ("link_open", &[B]),
+        ("profile_reauth", &[B]),
+        ("workspace_list", &[B]),
+        ("workspace_set_available", &[B]),
+        ("workspace_make_home", &[B]),
+        ("workspace_settings_write", &[B]),
     ]
 };
 

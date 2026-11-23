@@ -40,11 +40,17 @@ Binding decisions for the MVP:
   SHA-256 checked, user-only folder, no admin) (#161). Then a "Connect a workspace" form runs `databricks auth login`
   in the background (#162).
 - **Design.** Minimal, calm UI on the shared tokens in `src/views/tokens.css`. The pop-up is small and theme-aligned.
+- **One MOG with workspaces (ADR 0117, owner decision 2026-11-23).** Bottle runs one MOG. Each connected
+  Databricks CLI profile is a workspace of that MOG. The user switches each workspace on or off in Settings →
+  Workspace. The home workspace is always on. A new connection starts off. Bottle never picks the home for the user.
+- **The MOG agent (in progress, plan `docs/plans/mog-to-mog-agent.md`).** ⌥G becomes agentic: a tool loop in the brain
+  over a Rust model step on the home profile's AI Gateway. It asks the Genie of each switched-on workspace. This loop
+  is the only agent in scope. It is not R16 or `bottle-mcp`.
 
 ### Out of scope for now ("we'll consider later")
 
-UC Pages, Lakebase sync, memory recall and embeddings, the main agent and `bottle-mcp` tools,
-workspace hop and split questions, mascot artwork work, admin/MDM, telemetry export, audit log, cloud ASR for dictation (call recording uses cloud transcription, ADR 0103), Linux,
+UC Pages, Lakebase sync, memory recall and embeddings, the R16 main agent and `bottle-mcp` tools,
+mascot artwork work, admin/MDM, telemetry export, audit log, cloud ASR for dictation (call recording uses cloud transcription, ADR 0103), Linux,
 signed public installers, and most spikes. Code for some of these is already on main. Leave it alone unless an MVP
 change needs it. Do not open new issues for this work. The non-core issues are being closed with "We'll consider this
 later".
