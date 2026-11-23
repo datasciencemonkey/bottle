@@ -1996,14 +1996,32 @@
       "type": "object"
     },
     "workspace_settings_write": {
+      "$defs": {
+        "EndpointName": {
+          "pattern": "^[A-Za-z0-9_-]{1,128}$",
+          "type": "string"
+        },
+        "GenieCallBudget": {
+          "enum": [
+            5,
+            10,
+            20
+          ],
+          "type": "integer"
+        }
+      },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "description": "`workspace_settings_write` (ADR 0117): D1, the D2 Genie call budget (5, 10 or 20) and\nthe D9 agent endpoint name.",
       "properties": {
         "agentEndpoint": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EndpointName"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "crossWorkspaceData": {
@@ -2013,12 +2031,13 @@
           ]
         },
         "genieCallBudget": {
-          "format": "uint8",
-          "maximum": 255,
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GenieCallBudget"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },

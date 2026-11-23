@@ -932,9 +932,9 @@ args!(
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cross_workspace_data: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        genie_call_budget: Option<u8>,
+        genie_call_budget: Option<crate::types::GenieCallBudget>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        agent_endpoint: Option<String>,
+        agent_endpoint: Option<crate::types::EndpointName>,
     }
 );
 args!(ProfileLoginArgs {
@@ -1511,27 +1511,6 @@ pub fn handle(window_label: &str, command_name: &str, args: Value) -> Result<Han
     let validate = for_command!(spec.name, check).expect("every row has an argument type");
     validate(spec.name, args.clone())?;
     match spec.name {
-        // ADR 0117 D2: the Genie call budget is 5, 10 or 20.
-        "workspace_settings_write" => {
-            let a: WorkspaceSettingsWriteArgs = parse(spec.name, args)?;
-            if a.genie_call_budget
-                .is_some_and(|b| ![5, 10, 20].contains(&b))
-            {
-                return Err(IpcError::InvalidArgs {
-                    command: spec.name.to_owned(),
-                    reason: "genieCallBudget must be 5, 10 or 20".to_owned(),
-                });
-            }
-            if a.agent_endpoint
-                .as_deref()
-                .is_some_and(|e| !crate::recording_cloud::settings_store::is_endpoint_name(e))
-            {
-                return Err(IpcError::InvalidArgs {
-                    command: spec.name.to_owned(),
-                    reason: "agentEndpoint is not an endpoint name".to_owned(),
-                });
-            }
-        }
         "cli_install" => {
             let a: CliInstallArgs = parse(spec.name, args)?;
             if !a.consent {
