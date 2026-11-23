@@ -36,6 +36,7 @@ use mog_core::capture::{
 };
 use mog_core::clock::MonotonicClock;
 use mog_core::error::{CoreError, CoreResult};
+use mog_core::insertion::{now_ms, TargetTable};
 use mog_core::ipc::{
     events, CaptureLeaseArgs, CaptureMode, CaptureStartArgs, CaptureSubscribeArgs, ChannelRef,
     IpcError, MogId,
@@ -191,6 +192,8 @@ impl LeaseOwners {
 pub struct BrainCaptureEvents {
     relay: BrainRelay,
     owners: Arc<Mutex<LeaseOwners>>,
+    /// ADR 0118: the paste targets. A stop starts the 10 min end of its entry.
+    targets: &'static TargetTable,
 }
 
 impl CaptureEvents for BrainCaptureEvents {
@@ -203,6 +206,7 @@ impl CaptureEvents for BrainCaptureEvents {
 
     fn stopped(&self, stopped: &Stopped) {
         lock(&self.owners).stopped(stopped.lease_id);
+        self.targets.stopped(stopped.lease_id, now_ms());
         if let Ok(payload) = serde_json::to_value(CaptureStopped::from(stopped)) {
             let _ = (self.relay)(events::CAPTURE_STOPPED, payload);
         }
@@ -582,6 +586,8 @@ pub struct CaptureTicket {
 pub struct CaptureHost {
     service: Arc<CaptureCore>,
     owners: Arc<Mutex<LeaseOwners>>,
+    /// ADR 0118: the paste target of each PTT and hands-free lease.
+    targets: &'static TargetTable,
     timer: CapTimer,
     /// Bumped by every `capture_stop_all` and by `shutdown`.
     panic_gen: AtomicU64,
@@ -633,7 +639,15 @@ impl CaptureHost {
         levels: HostLevels,
         ptt: PttBuffer,
     ) -> std::io::Result<Self> {
-        Self::build(device, clock, relay, levels, ptt, None)
+        Self::build(
+            device,
+            clock,
+            relay,
+            levels,
+            ptt,
+            None,
+            mog_core::insertion::targets(),
+        )
     }
 
     /// As [`CaptureHost::with_audio`], with R4 SttEngine `stt` in the event chain (#46,
@@ -648,7 +662,15 @@ impl CaptureHost {
         ptt: PttBuffer,
         stt: LocalSttEngine,
     ) -> std::io::Result<Self> {
-        Self::build(device, clock, relay, levels, ptt, Some(stt))
+        Self::build(
+            device,
+            clock,
+            relay,
+            levels,
+            ptt,
+            Some(stt),
+            mog_core::insertion::targets(),
+        )
     }
 
     fn build(
@@ -658,11 +680,13 @@ impl CaptureHost {
         levels: HostLevels,
         ptt: PttBuffer,
         stt: Option<LocalSttEngine>,
+        targets: &'static TargetTable,
     ) -> std::io::Result<Self> {
         let owners: Arc<Mutex<LeaseOwners>> = Arc::default();
         let brain = BrainCaptureEvents {
             relay,
             owners: Arc::clone(&owners),
+            targets,
         };
         let brain = match stt {
             Some(engine) => SttEvents::On(SttCaptureEvents::new(brain, engine)),
@@ -681,6 +705,7 @@ impl CaptureHost {
         Ok(Self {
             service,
             owners,
+            targets,
             timer,
             panic_gen: AtomicU64::new(0),
             pause_seq: AtomicU64::new(0),
@@ -743,6 +768,7 @@ impl CaptureHost {
         self.closed.store(true, Ordering::SeqCst);
         self.panic_gen.fetch_add(1, Ordering::SeqCst);
         self.service.stop_all();
+        self.targets.clear();
         self.timer.shutdown();
     }
 
@@ -779,7 +805,10 @@ impl CaptureHost {
             // MB-05: the decision never waits for the device.
             "capture_stop_all" => {
                 self.panic_gen.fetch_add(1, Ordering::SeqCst);
-                to_value(command, &self.service.stop_all())
+                let stopped = self.service.stop_all();
+                // ADR 0118: no paste target outlives a stop-all.
+                self.targets.clear();
+                to_value(command, &stopped)
             }
             "capture_subscribe" => {
                 // The gateway checked both Channel references.
@@ -873,6 +902,8 @@ impl CaptureHost {
             // cancels during its open.
             return Err(capture_error(command, CaptureError::UnknownLease));
         }
+        // ADR 0118: the key-down note must be fresh at this call, not at the end of the open.
+        let asked_at = now_ms();
         let lease = self
             .service
             .start(CaptureRequest {
@@ -882,6 +913,14 @@ impl CaptureHost {
             })
             .map_err(|e| capture_error(command, e))?;
         lock(&self.owners).granted(lease.id, lease.mog_id.clone());
+        // ADR 0118 (UX slice 2): a PTT or hands-free lease gets the app that the talk-key down
+        // noted (security requirement 1). With no note, the record is pid 0 and the paste fails
+        // closed. A session lease never gets here. A hands-free session keeps its target.
+        if matches!(a.mode, CaptureMode::Ptt | CaptureMode::HandsFree)
+            && lock(&self.owners).owner(lease.id).is_some()
+        {
+            self.targets.bind(lease.id, &lease.mog_id, asked_at);
+        }
         if self.overtaken(ticket, None) {
             // A `capture_stop_all` ran while R2 granted the lease: it wins (MB-05). The answer is
             // the one R2 gives a start that `stop_all` cancels during its open.
@@ -924,6 +963,101 @@ mod tests {
         owners.stopped(4);
         assert_eq!(owners.owner(4), None);
         assert!(owners.gone.is_empty() && owners.live.is_empty());
+    }
+
+    /// A host over its own target table, so tests do not share leases through the process table.
+    fn host_with_targets() -> (CaptureHost, &'static TargetTable) {
+        let targets: &'static TargetTable = Box::leak(Box::new(TargetTable::new()));
+        let fake = mog_core::testkit::capture::FakeAudioDevice::new();
+        let clock = mog_core::clock::SimClock::new();
+        let levels = HostLevels::new(Arc::new(|_: &ChannelRef| Some(Arc::new(NoLevelOut) as _)));
+        let ptt = PttBuffer::new(Arc::new(NoUtteranceSink));
+        let host = CaptureHost::build(
+            Box::new(fake),
+            Arc::new(clock),
+            Arc::new(|_: &str, _| true),
+            levels,
+            ptt,
+            None,
+            targets,
+        )
+        .unwrap();
+        (host, targets)
+    }
+
+    fn start_args(mog: &str, mode: &str) -> Value {
+        json!({"mogId": mog, "mode": mode})
+    }
+
+    fn note(targets: &TargetTable, app: mog_core::insertion::AppId) {
+        let g = targets.begin_note(now_ms());
+        targets.finish_note(g, app);
+    }
+
+    fn lease_of(reply: &Value) -> String {
+        reply["leaseId"].as_str().unwrap().to_owned()
+    }
+
+    #[test]
+    fn ux2_ac_2_1_a_granted_ptt_or_hands_free_lease_binds_the_noted_app() {
+        use mog_core::insertion::AppId;
+        let app = AppId::new(4242, 1);
+        let (h, targets) = host_with_targets();
+        let mog = "a1";
+        note(targets, app);
+        let ptt = lease_of(&h.call("capture_start", start_args(mog, "ptt")).unwrap());
+        assert_eq!(targets.expected(&ptt, mog, now_ms()), app);
+        // The next grant has no new note: the note is used once, so the record is pid 0.
+        let _ = h.call("capture_stop", json!({"mogId": mog, "leaseId": ptt}));
+        let hf = lease_of(
+            &h.call("capture_start", start_args(mog, "hands_free"))
+                .unwrap(),
+        );
+        assert!(targets.expected(&hf, mog, now_ms()).is_none(), "no note");
+        let _ = h.call("capture_stop", json!({"mogId": mog, "leaseId": hf}));
+        note(targets, app);
+        let hf = lease_of(
+            &h.call("capture_start", start_args(mog, "hands_free"))
+                .unwrap(),
+        );
+        assert_eq!(targets.expected(&hf, mog, now_ms()), app);
+        // Another MOG cannot use the lease (security requirement 2).
+        assert!(targets.expected(&hf, "b2", now_ms()).is_none());
+        h.shutdown();
+    }
+
+    #[test]
+    fn ux2_a_session_start_binds_no_record() {
+        use mog_core::insertion::AppId;
+        let (h, targets) = host_with_targets();
+        note(targets, AppId::new(4242, 1));
+        assert!(h
+            .call("capture_start", start_args("a1", "session"))
+            .is_err());
+        assert!(targets.is_empty());
+        h.shutdown();
+    }
+
+    #[test]
+    fn ux2_stop_all_and_shutdown_clear_the_table_and_a_stop_ends_the_entry_later() {
+        use mog_core::insertion::AppId;
+        let app = AppId::new(4242, 1);
+        let (h, targets) = host_with_targets();
+        note(targets, app);
+        let l = lease_of(&h.call("capture_start", start_args("a1", "ptt")).unwrap());
+        // A stop keeps the entry for 10 min (a dictation may paste after the key-up).
+        h.call("capture_stop", json!({"mogId": "a1", "leaseId": l}))
+            .unwrap();
+        assert_eq!(targets.expected(&l, "a1", now_ms()), app);
+        note(targets, app);
+        let l2 = lease_of(&h.call("capture_start", start_args("a1", "ptt")).unwrap());
+        h.call("capture_stop_all", json!({})).unwrap();
+        assert!(targets.is_empty());
+        assert!(targets.expected(&l2, "a1", now_ms()).is_none());
+        note(targets, app);
+        let l3 = lease_of(&h.call("capture_start", start_args("a1", "ptt")).unwrap());
+        h.shutdown();
+        assert!(targets.expected(&l3, "a1", now_ms()).is_none());
     }
 
     fn host() -> CaptureHost {

@@ -338,6 +338,12 @@ pub fn run() {
             }
             // R11: a window that closes outside the host frees its ledger slot.
             if let tauri::WindowEvent::Destroyed = event {
+                // ADR 0118: a closed MOG keeps no paste target.
+                if let Some(windows::WindowKind::Mog(id)) =
+                    windows::WindowKind::from_label(window.label())
+                {
+                    mog_core::insertion::targets().clear_mog(&id);
+                }
                 if let Some(host) = window.try_state::<TauriWindowHost<tauri::Wry>>() {
                     host.window_destroyed(window.label());
                 }

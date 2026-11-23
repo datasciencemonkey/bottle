@@ -16,7 +16,8 @@
 
 use mog_core::error::CoreResult;
 use mog_core::insertion::{
-    is_enter_key, paste_chord, Focus, InsertHost, InsertTextComponent, KeyStroke,
+    is_enter_key, paste_chord, AppId, Focus, InsertHost, InsertTextComponent, KeyStroke,
+    TargetTable,
 };
 use mog_core::ipc::{self, InsertTextArgs, IpcError, WindowClass};
 use mog_core::ipc_gateway::{hardened_gateway_with, IpcGateway, NoLog};
@@ -116,6 +117,9 @@ impl InsertHost for Desk {
     fn focus_target(&self) -> u64 {
         1
     }
+    fn focused_app_pid(&self) -> AppId {
+        AppId::new(100, 0)
+    }
     fn snapshot_clipboard(&self) -> CoreResult<String> {
         Ok(self.clipboard.lock().unwrap().clone())
     }
@@ -154,7 +158,15 @@ fn at_43_mog_06a_mog_06c_paste_inserts_with_no_enter_and_restores_the_clipboard(
         formats: Mutex::new(Vec::new()),
     };
     let platform = ClipboardPlatform::MacOs;
-    let gw = hardened_gateway_with(NoLog, InsertTextComponent::new(&desk, Some(platform)));
+    // ADR 0118: lease 1 of this MOG was granted while the app of the desk had the focus.
+    let targets: &'static TargetTable = Box::leak(Box::new(TargetTable::new()));
+    let note = targets.begin_note(0);
+    targets.finish_note(note, AppId::new(100, 0));
+    targets.bind(1, MOG, 1);
+    let gw = hardened_gateway_with(
+        NoLog,
+        InsertTextComponent::with_targets(&desk, Some(platform), targets),
+    );
     let reply = gw
         .dispatch(
             "brain",
@@ -198,4 +210,50 @@ fn at_43_mog_06a_mog_06c_paste_inserts_with_no_enter_and_restores_the_clipboard(
             json!({"mogId": MOG, "text": "x", "leaseId": "1"})
         )
         .is_err());
+}
+
+/// ADR 0118, decision 21 and security requirement 10: no IPC command sets or reads a paste
+/// target. No argument of any command is a pid, an app or a target.
+#[test]
+fn ux2_no_ipc_command_takes_a_pid_or_a_target_argument() {
+    fn names(v: &serde_json::Value, out: &mut Vec<String>) {
+        match v {
+            serde_json::Value::Object(m) => {
+                if let Some(serde_json::Value::Object(props)) = m.get("properties") {
+                    out.extend(props.keys().cloned());
+                }
+                m.values().for_each(|c| names(c, out));
+            }
+            serde_json::Value::Array(a) => a.iter().for_each(|c| names(c, out)),
+            _ => {}
+        }
+    }
+    let schemas = ipc::schemas();
+    assert!(schemas.contains_key("insert_text"));
+    for (command, schema) in schemas {
+        let mut props = Vec::new();
+        names(&schema, &mut props);
+        for p in props {
+            let banned = [
+                "pid",
+                "processid",
+                "apppid",
+                "appid",
+                "targetpid",
+                "targetapp",
+                "frontmost",
+                "focusedapp",
+                "pasteTarget",
+            ];
+            assert!(
+                !banned.iter().any(|b| b.eq_ignore_ascii_case(&p)),
+                "{command} has the argument {p}"
+            );
+        }
+    }
+    // insert_text itself: only the MOG, the text and the lease.
+    let mut props = Vec::new();
+    names(&ipc::schemas()["insert_text"], &mut props);
+    props.sort();
+    assert_eq!(props, ["leaseId", "mogId", "text"]);
 }

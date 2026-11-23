@@ -2,7 +2,12 @@
 import type { MogId } from '../shared/interfaces';
 import { routerDecision } from '../test-support/model-invoke';
 import { createCardStack, type CardStackUpdate } from './card-stack';
-import { copyReasonText, createDictationSink, type DictationSinkDeps } from './dictation-copy';
+import {
+  copyLineText,
+  copyReasonText,
+  createDictationSink,
+  type DictationSinkDeps,
+} from './dictation-copy';
 
 const A = '00000000-0000-4000-8000-0000000000a1';
 const SENTENCE = 'Hi Sam, the deck is attached and I will send the numbers tomorrow.';
@@ -78,6 +83,16 @@ describe('dictation Copy card sink', () => {
       expect(text).toContain(`Could not insert: ${copyReasonText(reason)}`);
       expect(labels(sent.at(-1))).toEqual(['Copy']);
     }
+  });
+
+  it('[UX-2.9] a target_changed paste reads "Not pasted: the app changed" with Copy', async () => {
+    const { sink, sent } = setup();
+    await sink.onDone({ route: 'insert_failed', reason: 'target_changed', text: SENTENCE }, owned);
+    expect(texts(sent.at(-1))).toEqual([`${SENTENCE}\nNot pasted: the app changed`]);
+    expect(texts(sent.at(-1))[0]).not.toContain('Could not insert');
+    expect(labels(sent.at(-1))).toEqual(['Copy']);
+    expect(copyLineText('target_changed')).toBe('Not pasted: the app changed');
+    expect(copyLineText('no_focus')).toBe('Could not insert: no text field has focus');
   });
 
   it('[MOG-06d] each failure reason has its own text', () => {

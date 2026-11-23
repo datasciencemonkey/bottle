@@ -320,8 +320,14 @@ fn r4_preload<R: Runtime>(app: AppHandle<R>) -> KeyDownHook {
     })
 }
 
+/// ADR 0118 (UX slice 2): the key-down hook that notes the app that has the focus, for the paste
+/// target lock. R2 binds the note to the lease at the grant. The read runs on its own thread.
+fn target_note() -> KeyDownHook {
+    Box::new(mog_core::insertion::note_os_focus_at_key_down)
+}
+
 /// A warm-up that runs at each talk-key down, before the brain hears of it: the R4 model
-/// preload (CAP-51c, #46). It must not block.
+/// preload (CAP-51c, #46) and the paste target note (ADR 0118). It must not block.
 pub type KeyDownHook = Box<dyn Fn() + Send>;
 
 /// Turns R1 outputs into brain items and status changes.
@@ -339,7 +345,7 @@ pub struct PttForwarder<B: BrainSink, S: StatusSink> {
     last: Option<String>,
     /// The MOG of the press that a `cancel` just ended, for a `RecordToggle` (ADR 0103).
     toggle: Option<String>,
-    key_down: Option<KeyDownHook>,
+    key_down: Vec<KeyDownHook>,
 }
 
 impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
@@ -352,14 +358,14 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
             held: None,
             last: None,
             toggle: None,
-            key_down: None,
+            key_down: Vec::new(),
         }
     }
 
     /// Run `hook` at each talk-key down (CAP-51c: the R4 model preload, in parallel with the
-    /// brain's other warm-ups).
+    /// brain's other warm-ups). Each call adds a hook; they run in the order added.
     pub fn with_key_down(mut self, hook: KeyDownHook) -> Self {
-        self.key_down = Some(hook);
+        self.key_down.push(hook);
         self
     }
 
@@ -374,7 +380,7 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
             HotkeyOutput::Ptt(phase) => {
                 let mog = match phase {
                     PttPhase::Down => {
-                        if let Some(hook) = &self.key_down {
+                        for hook in &self.key_down {
                             hook();
                         }
                         // #562 (ADR 0095): an empty ID is a press with no open MOG.
@@ -1035,7 +1041,8 @@ where
     spawn_forwarder(
         rx,
         PttForwarder::new(Arc::clone(&target), app.clone(), BrainStatus(app.clone()))
-            .with_key_down(r4_preload(app.clone())),
+            .with_key_down(r4_preload(app.clone()))
+            .with_key_down(target_note()),
     )?;
     let sink: Arc<dyn HotkeySink> = Arc::new(sink);
     let (service, permissions) = factory(settings.talk_binding(), Arc::clone(&sink));
@@ -1188,6 +1195,25 @@ mod tests {
         assert_eq!(brain.items()[0], ptt("a1", "down"));
     }
 
+    #[test]
+    fn ux2_two_key_down_hooks_both_run_at_each_press_in_order() {
+        let target = Arc::new(PttTarget::default());
+        target.set("a1");
+        let (f, _brain, _) = forwarder(&target);
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let (a, b) = (Arc::clone(&order), Arc::clone(&order));
+        let mut f = f
+            .with_key_down(Box::new(move || a.lock().unwrap().push("preload")))
+            .with_key_down(Box::new(move || b.lock().unwrap().push("note")));
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Down));
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Up));
+        f.on_output(HotkeyOutput::Ptt(PttPhase::Down));
+        assert_eq!(
+            *order.lock().unwrap(),
+            ["preload", "note", "preload", "note"]
+        );
+    }
+
     struct NoText;
     impl mog_core::stt_engine::Recognizer for NoText {
         fn transcribe(&mut self, _samples: &[f32]) -> String {
@@ -1248,6 +1274,10 @@ mod tests {
         assert!(
             squashed.contains(".with_key_down(r4_preload(app.clone()))"),
             "the app forwarder preloads R4 at key-down: {squashed}"
+        );
+        assert!(
+            squashed.contains(".with_key_down(target_note())"),
+            "the app forwarder notes the paste target at key-down: {squashed}"
         );
     }
 

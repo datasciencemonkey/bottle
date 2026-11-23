@@ -17,7 +17,9 @@
 //!
 //! None of these calls needs the main thread, so `insert_text` can run on a worker.
 
-use super::{mac_keys, mac_saved_item, mac_snapshot_is_concealed, Focus, InsertHost, KeyStroke};
+use super::{
+    mac_keys, mac_saved_item, mac_snapshot_is_concealed, AppId, Focus, InsertHost, KeyStroke,
+};
 use crate::error::{CoreError, CoreResult};
 use crate::window_host::{ClipboardBackend, ClipboardPlatform, ClipboardWriter, MacPasteboard};
 use objc2::rc::{autoreleasepool, Retained};
@@ -164,6 +166,21 @@ impl<B: ClipboardBackend + Copy> InsertHost for MacInsertHost<B> {
         // SAFETY: `focused` is a live CF object. CFHash agrees with CFEqual for AX elements.
         let hash = unsafe { CFHash(focused.0) } as u64;
         (u64::from(pid as u32) << 32) ^ hash
+    }
+
+    fn focused_app_pid(&self) -> AppId {
+        // ADR 0118: one source, the pid of the system-wide AX focused element, as in the focus
+        // checks. Never `NSWorkspace.frontmostApplication`. An AX error is no app: fail closed.
+        let Ok(focused) = focused_element() else {
+            return AppId::NONE;
+        };
+        let mut pid = 0i32;
+        // SAFETY: `focused` is a live AXUIElement and `pid` an out pointer.
+        let err = unsafe { AXUIElementGetPid(focused.0, &mut pid) };
+        match u32::try_from(pid) {
+            Ok(pid) if err == AX_SUCCESS => AppId::new(pid, 0),
+            _ => AppId::NONE,
+        }
     }
 
     fn snapshot_clipboard(&self) -> CoreResult<MacSnapshot> {

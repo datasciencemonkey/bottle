@@ -19,8 +19,8 @@
 //!   with `SendInput` and the virtual key `VK_V` (layout independent).
 
 use super::{
-    win_edit, windows_control_focus, windows_snapshot_is_concealed, windows_write_order, Focus,
-    InsertHost, KeyStroke, WIN_CAN_INCLUDE_IN_HISTORY, WIN_CAN_UPLOAD_TO_CLOUD,
+    win_edit, windows_control_focus, windows_snapshot_is_concealed, windows_write_order, AppId,
+    Focus, InsertHost, KeyStroke, WIN_CAN_INCLUDE_IN_HISTORY, WIN_CAN_UPLOAD_TO_CLOUD,
     WIN_EXCLUDE_FROM_MONITOR,
 };
 use crate::error::{CoreError, CoreResult};
@@ -41,7 +41,8 @@ use windows_sys::Win32::System::Memory::{
     GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE,
 };
 use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+    GetCurrentProcess, GetProcessTimes, OpenProcess, OpenProcessToken,
+    PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
@@ -203,6 +204,39 @@ fn focused_window() -> Option<windows_sys::Win32::Foundation::HWND> {
     }
 }
 
+/// The process of the focused window and its creation time (ADR 0118): a reused pid has another
+/// creation time, so it is another app. `None` on a null window or any failed call.
+fn focused_app() -> Option<AppId> {
+    // SAFETY: every handle is checked before use; the process handle is closed.
+    unsafe {
+        let window = focused_window()?;
+        let mut pid = 0u32;
+        if GetWindowThreadProcessId(window, &mut pid) == 0 || pid == 0 {
+            return None;
+        }
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.is_null() {
+            return None;
+        }
+        let zero = windows_sys::Win32::Foundation::FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+        let ok = GetProcessTimes(process, &mut created, &mut exited, &mut kernel, &mut user);
+        CloseHandle(process);
+        if ok == 0 {
+            return None;
+        }
+        Some(AppId::new(pid, filetime_ticks(created)))
+    }
+}
+
+/// A `FILETIME` as one 64-bit tick count.
+fn filetime_ticks(t: windows_sys::Win32::Foundation::FILETIME) -> u64 {
+    (u64::from(t.dwHighDateTime) << 32) | u64::from(t.dwLowDateTime)
+}
+
 impl<B: ClipboardBackend + Copy> InsertHost for WindowsInsertHost<B> {
     type Snapshot = WindowsSnapshot;
 
@@ -249,6 +283,10 @@ impl<B: ClipboardBackend + Copy> InsertHost for WindowsInsertHost<B> {
 
     fn focus_target(&self) -> u64 {
         focused_window().map_or(0, |w| w as usize as u64)
+    }
+
+    fn focused_app_pid(&self) -> AppId {
+        focused_app().unwrap_or(AppId::NONE)
     }
 
     fn snapshot_clipboard(&self) -> CoreResult<WindowsSnapshot> {
@@ -458,6 +496,16 @@ unsafe fn process_integrity_level(process: HANDLE) -> Result<u32, u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ux2_filetime_ticks_join_the_two_halves() {
+        use windows_sys::Win32::Foundation::FILETIME;
+        let t = FILETIME {
+            dwLowDateTime: 0x89AB_CDEF,
+            dwHighDateTime: 0x0123_4567,
+        };
+        assert_eq!(filetime_ticks(t), 0x0123_4567_89AB_CDEF);
+    }
 
     #[test]
     fn mog_06a_elevated_or_denied_foreground_blocks_input() {

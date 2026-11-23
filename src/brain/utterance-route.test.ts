@@ -95,6 +95,17 @@ describe('utterance route (#59)', () => {
     });
   });
 
+  it('[UX-2.9] a target_changed paste keeps the text for Copy and the Ask Genie chip of the same text', async () => {
+    const { d, inserted } = deps(dictation(), 'target_changed');
+    const r = await routeUtterance(utterance(), d);
+    expect(r).toMatchObject({
+      route: 'chip',
+      decision: { genie_question: SENTENCE },
+      dictated: { route: 'insert_failed', reason: 'target_changed', text: SENTENCE },
+    });
+    expect(inserted).toHaveLength(1);
+  });
+
   it('[RTR-01c] with insertion off a dictation goes to Copy and never to insert_text', async () => {
     const { d, calls } = deps(dictation());
     expect(await routeUtterance(utterance({ insertionOn: false }), d)).toMatchObject({
