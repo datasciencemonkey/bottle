@@ -186,6 +186,21 @@ pub fn windows_control_focus(class: &str, style: u32, password_char: usize) -> F
     }
 }
 
+/// The app of a Windows foreground process (ADR 0118). A UWP app window belongs to the process
+/// `ApplicationFrameHost.exe`, which hosts every UWP app: its pid names no one app, so a paste
+/// check on it would pass for a switch from one UWP app to another. It fails closed: NONE. An
+/// unreadable image name fails closed too. The rule is a pure function, so its tests run on every OS.
+pub fn windows_app_id(pid: u32, created: u64, image_path: Option<&str>) -> AppId {
+    let Some(path) = image_path else {
+        return AppId::NONE;
+    };
+    let name = path.rsplit(['\\', '/']).next().unwrap_or(path);
+    if name.eq_ignore_ascii_case("ApplicationFrameHost.exe") {
+        return AppId::NONE;
+    }
+    AppId::new(pid, created)
+}
+
 /// The wait between the clipboard write and the chord (Handy `paste_delay_ms` default).
 pub const SETTLE_BEFORE_PASTE: Duration = Duration::from_millis(60);
 /// How long the modifier stays down after the V key (Handy keeps 100 ms, Handy #165).
@@ -1185,6 +1200,28 @@ mod tests {
             InsertOutcome::TargetChanged
         );
         assert!(f.log().is_empty() && g.log().is_empty());
+    }
+
+    #[test]
+    fn ux2_m2_the_uwp_frame_host_and_an_unreadable_image_fail_closed() {
+        let ok = windows_app_id(10, 5, Some(r"C:\Windows\System32\notepad.exe"));
+        assert_eq!(ok, AppId::new(10, 5));
+        for host in [
+            r"C:\Windows\System32\ApplicationFrameHost.exe",
+            r"c:\windows\system32\applicationframehost.EXE",
+            "ApplicationFrameHost.exe",
+        ] {
+            assert!(windows_app_id(10, 5, Some(host)).is_none(), "{host}");
+        }
+        assert!(windows_app_id(10, 5, None).is_none());
+        // A fake host that reports it never matches, so the paste fails closed with no write.
+        let mut f = Fake::new("earlier");
+        f.app = windows_app_id(10, 5, Some("ApplicationFrameHost.exe"));
+        assert_eq!(
+            insert_text(&f, ClipboardPlatform::Windows, "x", AppId::new(10, 5)).unwrap(),
+            InsertOutcome::TargetChanged
+        );
+        assert!(f.log().is_empty());
     }
 
     #[test]

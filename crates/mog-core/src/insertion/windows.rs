@@ -19,9 +19,9 @@
 //!   with `SendInput` and the virtual key `VK_V` (layout independent).
 
 use super::{
-    win_edit, windows_control_focus, windows_snapshot_is_concealed, windows_write_order, AppId,
-    Focus, InsertHost, KeyStroke, WIN_CAN_INCLUDE_IN_HISTORY, WIN_CAN_UPLOAD_TO_CLOUD,
-    WIN_EXCLUDE_FROM_MONITOR,
+    win_edit, windows_app_id, windows_control_focus, windows_snapshot_is_concealed,
+    windows_write_order, AppId, Focus, InsertHost, KeyStroke, WIN_CAN_INCLUDE_IN_HISTORY,
+    WIN_CAN_UPLOAD_TO_CLOUD, WIN_EXCLUDE_FROM_MONITOR,
 };
 use crate::error::{CoreError, CoreResult};
 use crate::window_host::{ClipboardBackend, ClipboardFormat, ClipboardPlatform, ClipboardWriter};
@@ -41,7 +41,7 @@ use windows_sys::Win32::System::Memory::{
     GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE,
 };
 use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, GetProcessTimes, OpenProcess, OpenProcessToken,
+    GetCurrentProcess, GetProcessTimes, OpenProcess, OpenProcessToken, QueryFullProcessImageNameW,
     PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
@@ -223,12 +223,20 @@ fn focused_app() -> Option<AppId> {
             dwHighDateTime: 0,
         };
         let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
-        let ok = GetProcessTimes(process, &mut created, &mut exited, &mut kernel, &mut user);
+        let times = GetProcessTimes(process, &mut created, &mut exited, &mut kernel, &mut user);
+        let mut image = [0u16; 1024];
+        let mut len = image.len() as u32;
+        let named = QueryFullProcessImageNameW(process, 0, image.as_mut_ptr(), &mut len);
         CloseHandle(process);
-        if ok == 0 {
+        if times == 0 {
             return None;
         }
-        Some(AppId::new(pid, filetime_ticks(created)))
+        let image = (named != 0).then(|| String::from_utf16_lossy(&image[..len as usize]));
+        Some(windows_app_id(
+            pid,
+            filetime_ticks(created),
+            image.as_deref(),
+        ))
     }
 }
 

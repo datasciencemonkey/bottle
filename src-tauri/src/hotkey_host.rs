@@ -346,6 +346,8 @@ pub struct PttForwarder<B: BrainSink, S: StatusSink> {
     /// The MOG of the press that a `cancel` just ended, for a `RecordToggle` (ADR 0103).
     toggle: Option<String>,
     key_down: Vec<KeyDownHook>,
+    /// Hooks for the `double_tap` that starts hands-free (ADR 0118): not the R4 preload.
+    double_tap: Vec<KeyDownHook>,
 }
 
 impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
@@ -359,6 +361,7 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
             last: None,
             toggle: None,
             key_down: Vec::new(),
+            double_tap: Vec::new(),
         }
     }
 
@@ -366,6 +369,13 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
     /// brain's other warm-ups). Each call adds a hook; they run in the order added.
     pub fn with_key_down(mut self, hook: KeyDownHook) -> Self {
         self.key_down.push(hook);
+        self
+    }
+
+    /// Run `hook` at each `double_tap` (ADR 0118: the paste target note of the hands-free start,
+    /// because tap 2's own grant uses up the note of its key-down).
+    pub fn with_double_tap(mut self, hook: KeyDownHook) -> Self {
+        self.double_tap.push(hook);
         self
     }
 
@@ -395,7 +405,12 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
                             .flatten();
                         self.last.clone()
                     }
-                    PttPhase::DoubleTap => self.last.take(),
+                    PttPhase::DoubleTap => {
+                        for hook in &self.double_tap {
+                            hook();
+                        }
+                        self.last.take()
+                    }
                 };
                 if let Some(mog) = mog {
                     let mut payload = ptt_payload(&mog, phase);
@@ -1042,7 +1057,8 @@ where
         rx,
         PttForwarder::new(Arc::clone(&target), app.clone(), BrainStatus(app.clone()))
             .with_key_down(r4_preload(app.clone()))
-            .with_key_down(target_note()),
+            .with_key_down(target_note())
+            .with_double_tap(target_note()),
     )?;
     let sink: Arc<dyn HotkeySink> = Arc::new(sink);
     let (service, permissions) = factory(settings.talk_binding(), Arc::clone(&sink));
@@ -1214,6 +1230,28 @@ mod tests {
         );
     }
 
+    #[test]
+    fn ux2_h1_the_double_tap_runs_the_double_tap_hooks_only() {
+        let target = Arc::new(PttTarget::default());
+        target.set("a1");
+        let (f, _brain, _) = forwarder(&target);
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let (a, b) = (Arc::clone(&order), Arc::clone(&order));
+        let mut f = f
+            .with_key_down(Box::new(move || a.lock().unwrap().push("down")))
+            .with_double_tap(Box::new(move || b.lock().unwrap().push("double")));
+        for phase in [
+            PttPhase::Down,
+            PttPhase::Up,
+            PttPhase::Down,
+            PttPhase::Up,
+            PttPhase::DoubleTap,
+        ] {
+            f.on_output(HotkeyOutput::Ptt(phase));
+        }
+        assert_eq!(*order.lock().unwrap(), ["down", "down", "double"]);
+    }
+
     struct NoText;
     impl mog_core::stt_engine::Recognizer for NoText {
         fn transcribe(&mut self, _samples: &[f32]) -> String {
@@ -1278,6 +1316,10 @@ mod tests {
         assert!(
             squashed.contains(".with_key_down(target_note())"),
             "the app forwarder notes the paste target at key-down: {squashed}"
+        );
+        assert!(
+            squashed.contains(".with_double_tap(target_note())"),
+            "and at the double tap that starts hands-free: {squashed}"
         );
     }
 

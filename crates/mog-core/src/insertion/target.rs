@@ -74,10 +74,17 @@ struct Note {
     app: Option<AppId>,
 }
 
+/// The app of an entry: known, or the read of note `gen` still runs when the lease is granted.
+#[derive(Clone, Copy)]
+enum Bound {
+    Done(AppId),
+    Pending(u64),
+}
+
 struct Entry {
     lease: LeaseNo,
     mog: String,
-    app: AppId,
+    app: Bound,
     hard_deadline: u64,
     stopped_at: Option<u64>,
 }
@@ -137,21 +144,30 @@ impl TargetTable {
     /// The read of note `gen` ended with `app` ([`AppId::NONE`] on an error). A newer press
     /// has made the note stale: then this does nothing.
     pub fn finish_note(&self, gen: u64, app: AppId) {
-        if let Some(n) = self.lock().note.as_mut().filter(|n| n.gen == gen) {
+        let mut g = self.lock();
+        if let Some(n) = g.note.as_mut().filter(|n| n.gen == gen) {
             n.app = Some(app);
+        }
+        // An entry bound while this read ran gets its result now (it holds the note, not a value).
+        for e in g.entries.iter_mut() {
+            if matches!(e.app, Bound::Pending(n) if n == gen) {
+                e.app = Bound::Done(app);
+            }
         }
     }
 
     /// Bind the note of the last key down to `lease` of `mog`, at the grant. The note is used
-    /// once, and only if it is done and not older than [`NOTE_FRESH_MS`]; else the entry holds
-    /// [`AppId::NONE`] and every paste for it fails closed.
+    /// once, and only if it is not older than [`NOTE_FRESH_MS`]. A note whose read still runs
+    /// is bound as pending: [`TargetTable::finish_note`] fills it, and until then every paste
+    /// fails closed. With no fresh note the entry holds [`AppId::NONE`] and fails closed.
     pub fn bind(&self, lease: LeaseNo, mog: &str, now: u64) {
         let mut g = self.lock();
         let app = match g.note.take() {
-            Some(Note {
-                at, app: Some(app), ..
-            }) if now.saturating_sub(at) <= NOTE_FRESH_MS => app,
-            _ => AppId::NONE,
+            Some(Note { at, app, gen }) if now.saturating_sub(at) <= NOTE_FRESH_MS => match app {
+                Some(app) => Bound::Done(app),
+                None => Bound::Pending(gen),
+            },
+            _ => Bound::Done(AppId::NONE),
         };
         g.entries.retain(|e| !e.expired(now) && e.lease != lease);
         while g.entries.len() >= TABLE_MAX {
@@ -196,7 +212,11 @@ impl TargetTable {
             .iter()
             .find(|e| e.lease == lease)
             .filter(|e| !e.expired(now) && e.mog == mog)
-            .map_or(AppId::NONE, |e| e.app)
+            .map_or(AppId::NONE, |e| match e.app {
+                Bound::Done(app) => app,
+                // The read has not ended: fail closed.
+                Bound::Pending(_) => AppId::NONE,
+            })
     }
 
     /// How many entries the table holds.
@@ -235,6 +255,7 @@ mod tests {
     use super::*;
 
     const A: AppId = AppId::new(4242, 9);
+    const OTHER: AppId = AppId::new(5151, 9);
     const MOG: &str = "00000000-0000-4000-8000-0000000000a1";
 
     fn noted(t: &TargetTable, app: AppId, at: u64) {
@@ -258,9 +279,36 @@ mod tests {
         noted(&t, A, 0);
         t.bind(2, MOG, NOTE_FRESH_MS + 1);
         assert!(t.expected("2", MOG, NOTE_FRESH_MS + 2).is_none());
-        t.begin_note(10);
+    }
+
+    #[test]
+    fn ux2_m1_a_note_in_flight_at_grant_is_bound_and_filled_when_the_read_ends() {
+        let t = TargetTable::new();
+        let g = t.begin_note(10);
         t.bind(3, MOG, 20);
-        assert!(t.expected("3", MOG, 21).is_none(), "read still running");
+        assert!(t.expected("3", MOG, 21).is_none(), "pending: fail closed");
+        t.finish_note(g, A);
+        assert_eq!(t.expected("3", MOG, 22), A, "filled by the read");
+    }
+
+    #[test]
+    fn ux2_m1_a_new_press_does_not_fill_an_entry_of_an_older_note() {
+        let t = TargetTable::new();
+        let old = t.begin_note(10);
+        t.bind(3, MOG, 11);
+        let new = t.begin_note(12);
+        t.finish_note(new, OTHER);
+        assert!(t.expected("3", MOG, 13).is_none(), "still the older read");
+        t.finish_note(old, A);
+        assert_eq!(t.expected("3", MOG, 14), A);
+    }
+
+    #[test]
+    fn ux2_m1_a_read_that_never_ends_stays_closed() {
+        let t = TargetTable::new();
+        t.begin_note(10);
+        t.bind(3, MOG, 11);
+        assert!(t.expected("3", MOG, 10_000_000).is_none());
     }
 
     #[test]

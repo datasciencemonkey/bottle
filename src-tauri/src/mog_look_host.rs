@@ -31,6 +31,9 @@ pub const VIEW_HIDDEN: &str = "view.hidden";
 /// If `input` (the `view_emit` arguments of window `from`) is the hide notice of a MOG view, tell
 /// the gate and return `true`; the caller then does not relay it.
 pub fn hide_notice(from: &str, input: &serde_json::Value) -> bool {
+    // ADR 0118: every `view_emit` passes here first, so this is also where the host sees the
+    // mascot click that starts hands-free with no key-down (it notes the focused app).
+    crate::capture_host::note_mascot_click(from, input);
     let Some(id) = from.strip_prefix("mog-") else {
         return false;
     };

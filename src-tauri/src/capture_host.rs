@@ -155,6 +155,25 @@ fn to_value<T: serde::Serialize>(command: &str, v: &T) -> CoreResult<Value> {
 
 // ---------- lease owners ----------
 
+/// ADR 0118: the mascot click of a MOG view starts hands-free with no key-down, so it notes the
+/// focused app itself. `from` is the label of the window that sent `view_emit`, `args` its
+/// arguments. The test is the brain's `isMascotClick` (`capture-lifecycle.ts`): a `click` of a
+/// `mog-*` window with no payload. The note read runs on its own thread.
+pub fn note_mascot_click(from: &str, args: &Value) -> bool {
+    let mascot = is_mascot_click(from, args);
+    if mascot {
+        mog_core::insertion::note_os_focus_at_key_down();
+    }
+    mascot
+}
+
+/// A `click` of a `mog-*` window with no payload (the brain's `isMascotClick`).
+fn is_mascot_click(from: &str, args: &Value) -> bool {
+    from.starts_with("mog-")
+        && args.get("kind").and_then(Value::as_str) == Some("click")
+        && args.get("payload").is_none_or(Value::is_null)
+}
+
 /// The owner MOG of each live lease. The sink removes a lease when it stops. A stop can arrive
 /// before `capture_start` records its grant (a `stop_all` or a cap on another thread), so such
 /// a lease is kept in `gone` and the grant then records nothing.
@@ -920,6 +939,10 @@ impl CaptureHost {
             && lock(&self.owners).owner(lease.id).is_some()
         {
             self.targets.bind(lease.id, &lease.mog_id, asked_at);
+            // A stop that ran between the owner check and the bind found no entry to mark.
+            if lock(&self.owners).owner(lease.id).is_none() {
+                self.targets.stopped(lease.id, now_ms());
+            }
         }
         if self.overtaken(ticket, None) {
             // A `capture_stop_all` ran while R2 granted the lease: it wins (MB-05). The answer is
@@ -1007,14 +1030,11 @@ mod tests {
         note(targets, app);
         let ptt = lease_of(&h.call("capture_start", start_args(mog, "ptt")).unwrap());
         assert_eq!(targets.expected(&ptt, mog, now_ms()), app);
-        // The next grant has no new note: the note is used once, so the record is pid 0.
+        // The note is used once: a grant with no new note gets pid 0 (fail closed).
         let _ = h.call("capture_stop", json!({"mogId": mog, "leaseId": ptt}));
-        let hf = lease_of(
-            &h.call("capture_start", start_args(mog, "hands_free"))
-                .unwrap(),
-        );
-        assert!(targets.expected(&hf, mog, now_ms()).is_none(), "no note");
-        let _ = h.call("capture_stop", json!({"mogId": mog, "leaseId": hf}));
+        let again = lease_of(&h.call("capture_start", start_args(mog, "ptt")).unwrap());
+        assert!(targets.expected(&again, mog, now_ms()).is_none(), "no note");
+        let _ = h.call("capture_stop", json!({"mogId": mog, "leaseId": again}));
         note(targets, app);
         let hf = lease_of(
             &h.call("capture_start", start_args(mog, "hands_free"))
@@ -1023,6 +1043,60 @@ mod tests {
         assert_eq!(targets.expected(&hf, mog, now_ms()), app);
         // Another MOG cannot use the lease (security requirement 2).
         assert!(targets.expected(&hf, "b2", now_ms()).is_none());
+        h.shutdown();
+    }
+
+    #[test]
+    fn ux2_h1_a_double_tap_hands_free_start_gets_its_own_note() {
+        use mog_core::insertion::AppId;
+        let app = AppId::new(4242, 1);
+        let (h, targets) = host_with_targets();
+        let grant =
+            |mode: &str| lease_of(&h.call("capture_start", start_args("a1", mode)).unwrap());
+        let release = |l: &str| {
+            let _ = h.call("capture_stop", json!({"mogId": "a1", "leaseId": l}));
+        };
+        // down, up, down, up, double_tap: each down and the double tap note the focused app.
+        note(targets, app);
+        let tap1 = grant("ptt");
+        release(&tap1);
+        note(targets, app);
+        let tap2 = grant("ptt");
+        release(&tap2);
+        note(targets, app); // the double_tap hook
+        let hf = grant("hands_free");
+        assert_eq!(targets.expected(&hf, "a1", now_ms()), app);
+        h.shutdown();
+    }
+
+    #[test]
+    fn ux2_h1_a_mascot_click_notes_the_app_for_the_hands_free_start() {
+        use mog_core::insertion::AppId;
+        let app = AppId::new(4242, 1);
+        let click = json!({"kind": "click", "mogId": "a1"});
+        assert!(is_mascot_click("mog-a1", &click));
+        assert!(is_mascot_click(
+            "mog-a1",
+            &json!({"kind": "click", "payload": null})
+        ));
+        for (from, args) in [
+            ("card-a1", click.clone()),
+            ("hub", click.clone()),
+            (
+                "mog-a1",
+                json!({"kind": "click", "payload": {"action": "view.hidden"}}),
+            ),
+            ("mog-a1", json!({"kind": "cancel"})),
+        ] {
+            assert!(!is_mascot_click(from, &args), "{from} {args}");
+        }
+        let (h, targets) = host_with_targets();
+        note(targets, app); // what `note_mascot_click` starts
+        let hf = lease_of(
+            &h.call("capture_start", start_args("a1", "hands_free"))
+                .unwrap(),
+        );
+        assert_eq!(targets.expected(&hf, "a1", now_ms()), app);
         h.shutdown();
     }
 

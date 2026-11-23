@@ -45,6 +45,7 @@ extern "C" {
     fn AXIsProcessTrusted() -> u8;
     fn AXUIElementCreateSystemWide() -> CFTypeRef;
     fn AXUIElementGetPid(element: CFTypeRef, pid: *mut i32) -> i32;
+    fn AXUIElementSetMessagingTimeout(element: CFTypeRef, seconds: f32) -> i32;
     fn AXUIElementCopyAttributeValue(
         element: CFTypeRef,
         attribute: CFTypeRef,
@@ -61,6 +62,9 @@ extern "C" {
     fn IsSecureEventInputEnabled() -> u8;
 }
 
+/// The longest wait for an AX reply. A hung app must not hold the paste or the key hook for the
+/// 6 s default of AX (ADR 0118). A timeout is an AX error: the paste fails closed.
+const AX_TIMEOUT_SECS: f32 = 0.25;
 const AX_SUCCESS: i32 = 0;
 const AX_NO_VALUE: i32 = -25212;
 /// `kAXErrorFailure`.
@@ -114,6 +118,8 @@ fn focused_element() -> Result<Owned, i32> {
     if system.0.is_null() {
         return Err(AX_FAILURE);
     }
+    // SAFETY: `system` is a live system-wide AXUIElement; this sets the process-wide timeout.
+    unsafe { AXUIElementSetMessagingTimeout(system.0, AX_TIMEOUT_SECS) };
     ax_attribute(system.0, "AXFocusedUIElement")
 }
 
