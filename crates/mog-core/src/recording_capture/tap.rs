@@ -9,10 +9,15 @@
 //! and `try_send` a copy of the block into a bounded queue. A full queue drops the block and
 //! counts it ([`RecordingTap::dropped`]), so memory stays bounded if the writer falls behind.
 //!
+//! **Mic gate (ADR 0118).** While a talk key is down or a PTT overlay lease is live, and for
+//! [`GATE_TAIL_MS`] after both end, the mic sink sends zeros of the same length to the mixer
+//! (the timeline stays aligned) and marks the block `gated`. The PTT buffer and R4 are
+//! siblings in the host's tee and still get the real frames. Only Rust calls the gate API.
+//!
 //! The system sink also stamps the last block with sound on the injected clock. The session
 //! reads it for the CAP-10a 5 s zero-buffer check.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, PoisonError, TryLockError};
 
@@ -24,6 +29,9 @@ use super::mixer::Track;
 /// How many blocks wait for the writer at most (about 2.5 s of 10 ms blocks per track).
 pub const QUEUE_BLOCKS: usize = 512;
 
+/// How long the mic gate stays closed after the talk key and the overlay lease have ended.
+pub const GATE_TAIL_MS: u64 = 250;
+
 /// One copied block of mono audio.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Block {
@@ -31,8 +39,10 @@ pub struct Block {
     pub track: Track,
     /// The block's sample rate in Hz.
     pub rate: u32,
-    /// Mono samples.
+    /// Mono samples. All zero when `gated`.
     pub samples: Vec<f32>,
+    /// The mic gate was closed: the real samples never left the sink (ADR 0118).
+    pub gated: bool,
 }
 
 struct Shared {
@@ -40,6 +50,12 @@ struct Shared {
     clock: Arc<dyn MonotonicClock>,
     last_system_sound_ms: AtomicU64,
     dropped: AtomicU64,
+    /// The talk key is physically down.
+    key_down: AtomicBool,
+    /// A PTT overlay lease on the recording is live.
+    lease_live: AtomicBool,
+    /// The gate stays closed until this clock time (ms): the 250 ms tail.
+    closed_until_ms: AtomicU64,
 }
 
 /// The arm slot and the sinks. Clones share one slot.
@@ -57,6 +73,9 @@ impl RecordingTap {
                 clock,
                 last_system_sound_ms: AtomicU64::new(0),
                 dropped: AtomicU64::new(0),
+                key_down: AtomicBool::new(false),
+                lease_live: AtomicBool::new(false),
+                closed_until_ms: AtomicU64::new(0),
             }),
         }
     }
@@ -85,6 +104,11 @@ impl RecordingTap {
             .last_system_sound_ms
             .store(now_ms(&*self.shared.clock), Ordering::SeqCst);
         self.shared.dropped.store(0, Ordering::SeqCst);
+        // No hold can be live at a start (the host refuses a PTT while a recording starts), so
+        // a flag left over from an earlier recording must not keep the new one silent.
+        self.shared.key_down.store(false, Ordering::SeqCst);
+        self.shared.lease_live.store(false, Ordering::SeqCst);
+        self.shared.closed_until_ms.store(0, Ordering::SeqCst);
         *self
             .shared
             .tx
@@ -103,6 +127,42 @@ impl RecordingTap {
             .take();
     }
 
+    /// The talk key went down (ADR 0118). The host calls it at key-down, before the brain hears
+    /// the press, so no first syllable reaches the recording. It never blocks.
+    pub fn talk_key_down(&self) {
+        self.shared.key_down.store(true, Ordering::SeqCst);
+    }
+
+    /// The talk key came up. The gate stays closed for [`GATE_TAIL_MS`] more, and longer while
+    /// an overlay lease is live.
+    pub fn talk_key_up(&self) {
+        self.end_hold(&self.shared.key_down);
+    }
+
+    /// A PTT overlay lease on the recording went live (`true`) or ended (`false`). The gate
+    /// stays closed [`GATE_TAIL_MS`] after the end, unless the key is still down.
+    pub fn overlay_lease(&self, live: bool) {
+        if live {
+            self.shared.lease_live.store(true, Ordering::SeqCst);
+        } else {
+            self.end_hold(&self.shared.lease_live);
+        }
+    }
+
+    /// The tail is set before the flag clears, so no frame can see both open (fail closed).
+    fn end_hold(&self, flag: &AtomicBool) {
+        let until = now_ms(&*self.shared.clock).saturating_add(GATE_TAIL_MS);
+        self.shared
+            .closed_until_ms
+            .fetch_max(until, Ordering::SeqCst);
+        flag.store(false, Ordering::SeqCst);
+    }
+
+    /// The mic gate is closed now: the recording gets zeros for the mic.
+    pub fn mic_gated(&self) -> bool {
+        self.shared.gated()
+    }
+
     /// The clock time (ms) of the last system audio block with sound, or of the arm.
     pub fn last_system_sound_ms(&self) -> u64 {
         self.shared.last_system_sound_ms.load(Ordering::SeqCst)
@@ -111,6 +171,14 @@ impl RecordingTap {
     /// Blocks dropped since the arm because the queue was full.
     pub fn dropped(&self) -> u64 {
         self.shared.dropped.load(Ordering::SeqCst)
+    }
+}
+
+impl Shared {
+    fn gated(&self) -> bool {
+        self.key_down.load(Ordering::SeqCst)
+            || self.lease_live.load(Ordering::SeqCst)
+            || now_ms(&*self.clock) < self.closed_until_ms.load(Ordering::SeqCst)
     }
 }
 
@@ -140,10 +208,18 @@ impl FrameSink for TapSink {
                 .last_system_sound_ms
                 .fetch_max(now_ms(&*self.shared.clock), Ordering::SeqCst);
         }
+        // The gate is read on the mic track only. A closed gate sends zeros, never the samples.
+        let gated = self.track == Track::Mic && self.shared.gated();
+        let samples = if gated {
+            vec![0.0; frame.samples.len()]
+        } else {
+            frame.samples.to_vec()
+        };
         let block = Block {
             track: self.track,
             rate: frame.sample_rate,
-            samples: frame.samples.to_vec(),
+            samples,
+            gated,
         };
         match tx.try_send(block) {
             Ok(()) | Err(TrySendError::Disconnected(_)) => {}
@@ -151,5 +227,54 @@ impl FrameSink for TapSink {
                 self.shared.dropped.fetch_add(1, Ordering::Relaxed);
             }
         }
+    }
+}
+
+/// Wraps [`CaptureEvents`] and drives the mic gate from the overlay lease (ADR 0118): the
+/// internal `overlay_granted` hook closes it, and the stop of that lease starts the tail.
+/// The key-down side is the host's [`RecordingTap::talk_key_down`] call. The event goes on to
+/// the inner sink.
+pub struct GateCaptureEvents<E> {
+    inner: E,
+    tap: RecordingTap,
+    overlay: Mutex<Option<crate::capture::LeaseNo>>,
+}
+
+impl<E: crate::capture::CaptureEvents> GateCaptureEvents<E> {
+    /// Wrap `inner`.
+    pub fn new(inner: E, tap: RecordingTap) -> Self {
+        Self {
+            inner,
+            tap,
+            overlay: Mutex::new(None),
+        }
+    }
+
+    /// The wrapped sink.
+    pub fn inner(&self) -> &E {
+        &self.inner
+    }
+}
+
+impl<E: crate::capture::CaptureEvents> crate::capture::CaptureEvents for GateCaptureEvents<E> {
+    fn state(&self, state: &crate::types::CaptureState) {
+        self.inner.state(state);
+    }
+
+    fn stopped(&self, stopped: &crate::capture::Stopped) {
+        let mut o = self.overlay.lock().unwrap_or_else(PoisonError::into_inner);
+        if *o == Some(stopped.lease_id) {
+            *o = None;
+            self.tap.overlay_lease(false);
+        }
+        drop(o);
+        self.inner.stopped(stopped);
+    }
+
+    fn overlay_granted(&self, lease: &crate::capture::Lease) {
+        // Closed before the inner sinks hear of the lease.
+        *self.overlay.lock().unwrap_or_else(PoisonError::into_inner) = Some(lease.id);
+        self.tap.overlay_lease(true);
+        self.inner.overlay_granted(lease);
     }
 }

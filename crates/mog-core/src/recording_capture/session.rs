@@ -40,7 +40,7 @@ use crate::token_events::SessionEvent;
 use crate::types::{CaptureMode, MogId};
 
 use super::chunker::{create_private_dir, PartFile, PartFormat, PartWriter};
-use super::mixer::Mixer;
+use super::mixer::{Mixer, Track};
 use super::tap::{Block, RecordingTap};
 use super::PART_MAX_SAMPLES;
 
@@ -298,7 +298,63 @@ struct Active {
     dir: PathBuf,
     started_mono: u64,
     ends_mono: u64,
-    writer: JoinHandle<std::io::Result<Vec<PartFile>>>,
+    writer: JoinHandle<std::io::Result<Written>>,
+}
+
+/// What the writer thread returns: the parts and the gated ranges (mixer samples from the
+/// recording start).
+type Written = (Vec<PartFile>, Vec<(u64, u64)>);
+
+/// A range of mic audio that the gate zeroed (ADR 0118), in 16 kHz mixer samples counted from
+/// the start of its part. No audio and no text is in it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeldRange {
+    /// The first gated sample, from the part start.
+    pub start_samples: u64,
+    /// The number of gated samples.
+    pub len_samples: u64,
+}
+
+/// The file in the recording temp dir that lists the gated ranges per part. It exists only
+/// when a hold happened. The cloud side reads it when it builds the job manifest.
+pub const HELD_SIDECAR: &str = "held-ranges.json";
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct HeldSidecar {
+    parts: Vec<Vec<HeldRange>>,
+}
+
+/// The gated ranges per part (in part order) that [`RecordingSession::stop`] wrote to `dir`.
+/// Empty when there was no hold or the file is not readable (fail open to "no markers").
+pub fn read_held_sidecar(dir: &std::path::Path) -> Vec<Vec<HeldRange>> {
+    std::fs::read(dir.join(HELD_SIDECAR))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<HeldSidecar>(&b).ok())
+        .map_or_else(Vec::new, |h| h.parts)
+}
+
+/// Cut ranges (absolute start, length) at the part borders. Part `i` spans the samples of
+/// the parts before it and its own.
+fn split_ranges(parts: &[PartFile], ranges: &[(u64, u64)]) -> Vec<Vec<HeldRange>> {
+    let mut at = 0u64;
+    parts
+        .iter()
+        .map(|p| {
+            let (lo, hi) = (at, at + p.samples);
+            at = hi;
+            ranges
+                .iter()
+                .filter_map(|&(start, len)| {
+                    let (a, b) = (start.max(lo), (start + len).min(hi));
+                    (b > a).then(|| HeldRange {
+                        start_samples: a - lo,
+                        len_samples: b - a,
+                    })
+                })
+                .collect()
+        })
+        .collect()
 }
 
 #[derive(Default)]
@@ -610,11 +666,18 @@ impl RecordingSession {
         lock(&self.state).stopping = false;
         let duration_ms = self.now_ms().saturating_sub(active.started_mono);
         let system_audio = self.system_state(&active.info);
-        let parts = match active.writer.join() {
-            Ok(Ok(parts)) => parts,
+        let (parts, held) = match active.writer.join() {
+            Ok(Ok(done)) => done,
             // A write error: hand off what was finished (the open part may be cut short).
-            Ok(Err(_)) | Err(_) => existing_parts(&active.dir),
+            Ok(Err(_)) | Err(_) => (existing_parts(&active.dir), Vec::new()),
         };
+        let per_part = split_ranges(&parts, &held);
+        if per_part.iter().any(|r| !r.is_empty()) {
+            // Numbers only. A failed write loses the markers, never the recording.
+            if let Ok(b) = serde_json::to_vec(&HeldSidecar { parts: per_part }) {
+                let _ = std::fs::write(active.dir.join(HELD_SIDECAR), b);
+            }
+        }
         let job = lock(&self.jobs).remove(&active.info.id).unwrap_or_default();
         let rec = FinishedRecording {
             profile: job.profile,
@@ -731,10 +794,13 @@ fn write_loop(
     mut mixer: Mixer,
     mut parts: PartWriter,
     on_part: PartSink,
-) -> std::io::Result<Vec<PartFile>> {
+) -> std::io::Result<Written> {
     let mut out = Vec::new();
     let mut sent = 0;
     for block in rx {
+        if block.track == Track::Mic {
+            mixer.mark_mic(block.gated);
+        }
         mixer.push(block.track, &block.samples, block.rate);
         out.clear();
         mixer.drain(&mut out);
@@ -747,7 +813,8 @@ fn write_loop(
     out.clear();
     mixer.flush(&mut out);
     parts.write(&out)?;
-    parts.finish()
+    let ranges = mixer.finish_ranges();
+    Ok((parts.finish()?, ranges))
 }
 
 /// The part files in `dir`, by name, after a failed write (best effort).

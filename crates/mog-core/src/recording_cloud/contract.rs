@@ -847,6 +847,7 @@ impl RecordingCloud for CloudAdapter {
                         part: s.part,
                     })
                     .collect(),
+                bottle_gaps: Vec::new(),
             };
             let tj = serde_json::to_vec_pretty(&doc).map_err(|_| RecordingErrorKind::Internal)?;
             w(transcript_json_file(name), &tj)?;

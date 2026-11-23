@@ -5,6 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::errors::{ErrorKind, Stage};
+pub use crate::recording_capture::session::HeldRange;
 
 /// The status of a recording.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,6 +35,10 @@ pub struct PartEntry {
     /// It is in the volume.
     #[serde(default)]
     pub uploaded: bool,
+    /// The mic ranges of this part that the talk-key gate zeroed (ADR 0118), in 16 kHz
+    /// samples from the part start. Numbers only.
+    #[serde(default, rename = "heldRanges", skip_serializing_if = "Vec::is_empty")]
+    pub held_ranges: Vec<HeldRange>,
 }
 
 impl PartEntry {
@@ -43,6 +48,7 @@ impl PartEntry {
             file: file.to_owned(),
             duration_s,
             uploaded: false,
+            held_ranges: Vec::new(),
         }
     }
 }

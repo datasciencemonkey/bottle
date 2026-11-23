@@ -404,6 +404,7 @@ fn rec_transcript_markdown_merges_turns_with_timestamps() {
                 part: 1,
             },
         ],
+        bottle_gaps: vec![],
     };
     let md = render_markdown(&doc);
     assert_eq!(

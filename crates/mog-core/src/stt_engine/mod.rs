@@ -54,7 +54,7 @@ pub use vad::{
 use crate::audio_device::normalize::normalize_peak;
 use crate::audio_device::ptt_buffer::{Utterance, UtteranceSink};
 use crate::audio_device::sink::{FrameSink, MicFrame, SinkEvent};
-use crate::capture::{parse_lease, CaptureEvents, LeaseNo, StopReason, Stopped};
+use crate::capture::{parse_lease, CaptureEvents, Lease, LeaseNo, StopReason, Stopped};
 use crate::clock::{MonotonicClock, SystemClock};
 use crate::stt::{LOCAL_STT_MODEL, LOCAL_STT_RUNTIME};
 use crate::types::{CaptureMode, CaptureState, MogId, Transcript, TranscriptProvider};
@@ -855,12 +855,18 @@ impl FrameSink for SttFrameSink {
 pub struct SttCaptureEvents<E> {
     inner: E,
     engine: LocalSttEngine,
+    /// The PTT overlay lease on a session lease (ADR 0118), from the `overlay_granted` hook.
+    overlay: std::sync::Mutex<Option<LeaseNo>>,
 }
 
 impl<E: CaptureEvents> SttCaptureEvents<E> {
     /// Wrap `inner`.
     pub fn new(inner: E, engine: LocalSttEngine) -> Self {
-        Self { inner, engine }
+        Self {
+            inner,
+            engine,
+            overlay: std::sync::Mutex::new(None),
+        }
     }
 
     /// The wrapped sink.
@@ -875,7 +881,24 @@ impl<E: CaptureEvents> CaptureEvents for SttCaptureEvents<E> {
         let mode = state
             .mode
             .filter(|m| matches!(m, CaptureMode::Ptt | CaptureMode::HandsFree));
+        let overlay = {
+            let mut o = self
+                .overlay
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // The state shows the session lease while a directed PTT overlay lives.
+            if state.mode == Some(CaptureMode::Session)
+                && state.directed_to.is_some()
+                && state.recording
+            {
+                *o
+            } else {
+                *o = None;
+                None
+            }
+        };
         match (lease, mode) {
+            _ if overlay.is_some() => {}
             (Some(lease), Some(mode)) if state.recording && !state.paused => {
                 let owner = state.owner.as_deref().unwrap_or_default();
                 self.engine.begin(lease, owner, mode);
@@ -888,6 +911,15 @@ impl<E: CaptureEvents> CaptureEvents for SttCaptureEvents<E> {
     fn stopped(&self, stopped: &Stopped) {
         self.engine.commit(stopped.lease_id, stopped.reason);
         self.inner.stopped(stopped);
+    }
+
+    fn overlay_granted(&self, lease: &Lease) {
+        *self
+            .overlay
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(lease.id);
+        self.engine.begin(lease.id, &lease.mog_id, CaptureMode::Ptt);
+        self.inner.overlay_granted(lease);
     }
 }
 

@@ -49,6 +49,8 @@ struct Input {
     resampler: Option<Resampler>,
     buf: VecDeque<f32>,
     scratch: Vec<f32>,
+    /// 16 kHz samples pushed in since the start.
+    total: u64,
 }
 
 impl Input {
@@ -57,6 +59,7 @@ impl Input {
             resampler: None,
             buf: VecDeque::new(),
             scratch: Vec::new(),
+            total: 0,
         }
     }
 
@@ -69,6 +72,7 @@ impl Input {
         if let Some(r) = self.resampler.as_mut() {
             r.process(samples, &mut self.scratch);
         }
+        self.total += self.scratch.len() as u64;
         self.buf.extend(self.scratch.iter().copied());
     }
 }
@@ -78,6 +82,40 @@ pub struct Mixer {
     max_lag: usize,
     mic: Input,
     system: Input,
+    gate: GateTrack,
+}
+
+/// Follows the gated mic samples (ADR 0118) from the mic queue to the output timeline. The
+/// two tracks pair up in queue order, so a mic sample can leave later than its index; the
+/// ranges are therefore counted in output samples, at the moment the mixer emits them.
+#[derive(Default)]
+struct GateTrack {
+    /// Gate changes by index of the first mic sample after the change.
+    marks: VecDeque<(u64, bool)>,
+    last_mark: bool,
+    mic_emitted: u64,
+    out_pos: u64,
+    open: Option<u64>,
+    ranges: Vec<(u64, u64)>,
+}
+
+impl GateTrack {
+    fn mic_sample(&mut self) {
+        while self.marks.front().is_some_and(|m| m.0 <= self.mic_emitted) {
+            let Some((_, gated)) = self.marks.pop_front() else {
+                break;
+            };
+            match (gated, self.open) {
+                (true, None) => self.open = Some(self.out_pos),
+                (false, Some(start)) => {
+                    self.ranges.push((start, self.out_pos - start));
+                    self.open = None;
+                }
+                _ => {}
+            }
+        }
+        self.mic_emitted += 1;
+    }
 }
 
 impl Mixer {
@@ -87,7 +125,26 @@ impl Mixer {
             max_lag,
             mic: Input::new(),
             system: Input::new(),
+            gate: GateTrack::default(),
         }
+    }
+
+    /// Say whether the next mic block is gated (zeros that the tap sent for a closed gate).
+    /// Call it before [`Mixer::push`] of each mic block.
+    pub fn mark_mic(&mut self, gated: bool) {
+        if gated != self.gate.last_mark {
+            self.gate.last_mark = gated;
+            self.gate.marks.push_back((self.mic.total, gated));
+        }
+    }
+
+    /// The gated ranges so far as (start, length) in output samples. Call it after
+    /// [`Mixer::flush`]: it closes a range that is still open.
+    pub fn finish_ranges(&mut self) -> Vec<(u64, u64)> {
+        if let Some(start) = self.gate.open.take() {
+            self.gate.ranges.push((start, self.gate.out_pos - start));
+        }
+        std::mem::take(&mut self.gate.ranges)
     }
 
     /// Add one mono block of `track` at `rate` Hz.
@@ -126,9 +183,16 @@ impl Mixer {
     fn emit(&mut self, n: usize, out: &mut Vec<f32>) {
         out.reserve(n);
         for _ in 0..n {
-            let a = self.mic.buf.pop_front().unwrap_or(0.0);
+            let a = match self.mic.buf.pop_front() {
+                Some(v) => {
+                    self.gate.mic_sample();
+                    v
+                }
+                None => 0.0,
+            };
             let b = self.system.buf.pop_front().unwrap_or(0.0);
             out.push(soft_clip(a + b));
+            self.gate.out_pos += 1;
         }
     }
 }

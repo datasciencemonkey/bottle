@@ -36,7 +36,7 @@ use super::model::{notes_request, parse_transcript, reply_text, sniff, transcrib
 use super::settings_store::{is_endpoint_name, valid_instructions, Storage};
 use super::stitch;
 use super::transcript::{
-    merge_parts, render_markdown, PartInfo, PartInput, PartTranscript, TranscriptDoc,
+    bottle_gaps, merge_parts, render_markdown, PartInfo, PartInput, PartTranscript, TranscriptDoc,
 };
 
 /// The model route (Unity Gateway chat, NFR-21a).
@@ -226,6 +226,23 @@ pub fn merge_local_parts(m: &mut JobManifest, parts: &[LocalPart]) {
     }
     m.parts.sort_by(|a, b| a.file.cmp(&b.file));
     m.duration_s = m.parts.iter().map(|p| p.duration_s).sum();
+    apply_held_ranges(m, parts);
+}
+
+/// Put the gated mic ranges that the capture wrote next to the parts (ADR 0118) into the
+/// manifest. They match by part order. A count that does not match gives no ranges, so a
+/// marker never lands in the wrong part.
+fn apply_held_ranges(m: &mut JobManifest, parts: &[LocalPart]) {
+    let Some(dir) = parts.first().and_then(|l| l.path.parent()) else {
+        return;
+    };
+    let held = crate::recording_capture::session::read_held_sidecar(dir);
+    if held.len() != m.parts.len() {
+        return;
+    }
+    for (entry, ranges) in m.parts.iter_mut().zip(held) {
+        entry.held_ranges = ranges;
+    }
 }
 
 impl RecordingCloudService {
@@ -549,6 +566,7 @@ impl RecordingCloudService {
             &job.notes_endpoint,
             &self.now(),
         );
+        apply_held_ranges(&mut m, &job.parts);
         match self.check_job(job) {
             Ok(root) => self.run_from_stage(p, &root, job, m, Stage::Uploading, on),
             Err(k) => {
@@ -920,6 +938,7 @@ impl RecordingCloudService {
             instructions: job.instructions.clone(),
             parts: merged.parts,
             segments: merged.segments,
+            bottle_gaps: bottle_gaps(&m.parts),
         };
         let f = ErrorKind::TranscribeFailed;
         let tj = serde_json::to_vec_pretty(&doc).map_err(|_| at(f))?;

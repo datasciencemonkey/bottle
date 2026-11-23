@@ -62,6 +62,37 @@ pub struct Segment {
     pub part: u32,
 }
 
+/// A gap in the recording where the user spoke to Bottle (ADR 0118). The mic was gated, so
+/// the audio holds silence for the mic there. Times only; no text.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BottleGap {
+    /// Start in seconds from the recording start.
+    pub start_s: f64,
+    /// Length in seconds.
+    pub dur_s: f64,
+}
+
+/// A gap of at least this many seconds gets a marker line in the markdown.
+pub const MARKER_MIN_S: f64 = 1.0;
+
+/// The gaps of all parts, with absolute times. A part starts where the parts before it end.
+pub fn bottle_gaps(parts: &[super::job::PartEntry]) -> Vec<BottleGap> {
+    let rate = f64::from(crate::recording_capture::SAMPLE_RATE);
+    let mut offset = 0.0;
+    let mut gaps = Vec::new();
+    for p in parts {
+        for r in &p.held_ranges {
+            gaps.push(BottleGap {
+                start_s: offset + r.start_samples as f64 / rate,
+                dur_s: r.len_samples as f64 / rate,
+            });
+        }
+        offset += p.duration_s;
+    }
+    gaps
+}
+
 /// The merged parts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Merged {
@@ -128,6 +159,9 @@ pub struct TranscriptDoc {
     pub parts: Vec<PartInfo>,
     /// The segments.
     pub segments: Vec<Segment>,
+    /// Where the user spoke to Bottle (ADR 0118).
+    #[serde(default, rename = "bottleGaps", skip_serializing_if = "Vec::is_empty")]
+    pub bottle_gaps: Vec<BottleGap>,
 }
 
 /// `hh:mm:ss` of a time in seconds (floor).
@@ -152,21 +186,51 @@ pub fn speaker_name(label: &str) -> String {
 /// `<name>.transcript.md`: one turn per run of one speaker, `**Speaker N** [hh:mm:ss]`, turns
 /// separated by a blank line.
 pub fn render_markdown(doc: &TranscriptDoc) -> String {
-    let mut turns: Vec<(&str, f64, Vec<&str>)> = Vec::new();
+    let mut markers: Vec<&BottleGap> = doc
+        .bottle_gaps
+        .iter()
+        .filter(|g| g.dur_s >= MARKER_MIN_S)
+        .collect();
+    markers.sort_by(|a, b| a.start_s.total_cmp(&b.start_s));
+    let mut markers = markers.into_iter().peekable();
+    let mut out = format!("# Call {}\n", doc.name);
+    let mut turn: Option<(&str, f64, Vec<&str>)> = None;
+    let flush = |out: &mut String, turn: &mut Option<(&str, f64, Vec<&str>)>| {
+        if let Some((sp, start, texts)) = turn.take() {
+            out.push_str(&format!(
+                "\n**{}** [{}]\n{}\n",
+                speaker_name(sp),
+                fmt_hms(start),
+                texts.join(" ")
+            ));
+        }
+    };
+    let marker = |out: &mut String, g: &BottleGap| {
+        let d = g.dur_s as u64;
+        out.push_str(&format!(
+            "\n*You spoke to Bottle ({}:{:02})* [{}]\n",
+            d / 60,
+            d % 60,
+            fmt_hms(g.start_s)
+        ));
+    };
     for s in doc.segments.iter().filter(|s| !s.text.is_empty()) {
-        match turns.last_mut() {
+        // A marker ends the run of the turn before it, so it stands at its start time.
+        while let Some(g) = markers.next_if(|g| g.start_s <= s.start) {
+            flush(&mut out, &mut turn);
+            marker(&mut out, g);
+        }
+        match turn.as_mut() {
             Some((sp, _, texts)) if *sp == s.speaker => texts.push(&s.text),
-            _ => turns.push((&s.speaker, s.start, vec![&s.text])),
+            _ => {
+                flush(&mut out, &mut turn);
+                turn = Some((&s.speaker, s.start, vec![&s.text]));
+            }
         }
     }
-    let mut out = format!("# Call {}\n", doc.name);
-    for (sp, start, texts) in turns {
-        out.push_str(&format!(
-            "\n**{}** [{}]\n{}\n",
-            speaker_name(sp),
-            fmt_hms(start),
-            texts.join(" ")
-        ));
+    flush(&mut out, &mut turn);
+    for g in markers {
+        marker(&mut out, g);
     }
     out
 }
