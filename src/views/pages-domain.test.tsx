@@ -14,7 +14,7 @@ vi.mock('@tauri-apps/api/core', async () => (await import('./test-tauri')).coreM
 vi.mock('@tauri-apps/api/event', async () => (await import('./test-tauri')).eventModule);
 vi.mock('@tauri-apps/api/window', async () => (await import('./test-tauri')).windowModule);
 
-/** The emits of the pickers: drop `ready` (#507), the hub-scope `notice.ready` (#27) and `mogs.ready` (#26), the CLI step ask (#161) and the permission notice ask (ADR 0101). */
+/** The emits of the pickers: drop `ready` (#507), the hub-scope `notice.ready` (#27) and `workspaces.ready` (ADR 0117), the CLI step ask (#161) and the permission notice ask (ADR 0101). */
 const viewEmits = () =>
   allViewEmits().filter(
     (e) =>
@@ -70,10 +70,10 @@ describe('domain picker views', () => {
 
   it('[PG-18] [PG-20] the hub MOG row shows the home domain and sends a pick via view_emit', async () => {
     const { el } = await mount(<Hub />);
-    // ui-1 (#97, #103): the live MOG chips moved into the "mogs" area, not shown by default.
+    // ADR 0117: the home domain picker sits in Settings → Workspace (the "mogs" area is gone).
     await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-toggle]')?.click());
     await act(async () =>
-      el.querySelector<HTMLButtonElement>('[data-sidebar-item="mogs"]')?.click(),
+      el.querySelector<HTMLButtonElement>('[data-sidebar-item="settings"]')?.click(),
     );
     await tauri.emit('mog:view_state', {
       mogId: ID,
@@ -95,10 +95,10 @@ describe('domain picker views', () => {
 
   it('[PG-18] [PG-20] a current domain that is not in the list shows a placeholder, so every option can be picked', async () => {
     const { el } = await mount(<Hub />);
-    // ui-1 (#97, #103): the live MOG chips moved into the "mogs" area, not shown by default.
+    // ADR 0117: the home domain picker sits in Settings → Workspace (the "mogs" area is gone).
     await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-toggle]')?.click());
     await act(async () =>
-      el.querySelector<HTMLButtonElement>('[data-sidebar-item="mogs"]')?.click(),
+      el.querySelector<HTMLButtonElement>('[data-sidebar-item="settings"]')?.click(),
     );
     await tauri.emit('mog:view_state', {
       mogId: ID,
@@ -117,10 +117,10 @@ describe('domain picker views', () => {
 
   it('[PG-20] without the domain list the hub offers a paste field and sends the raw text', async () => {
     const { el } = await mount(<Hub />);
-    // ui-1 (#97, #103): the live MOG chips moved into the "mogs" area, not shown by default.
+    // ADR 0117: the home domain picker sits in Settings → Workspace (the "mogs" area is gone).
     await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-toggle]')?.click());
     await act(async () =>
-      el.querySelector<HTMLButtonElement>('[data-sidebar-item="mogs"]')?.click(),
+      el.querySelector<HTMLButtonElement>('[data-sidebar-item="settings"]')?.click(),
     );
     await tauri.emit('mog:view_state', {
       mogId: ID,
@@ -149,10 +149,10 @@ describe('domain picker views', () => {
 
   it('[PG-20] the picker shows the error text that the brain sends', async () => {
     const { el } = await mount(<Hub />);
-    // ui-1 (#97, #103): the live MOG chips moved into the "mogs" area, not shown by default.
+    // ADR 0117: the home domain picker sits in Settings → Workspace (the "mogs" area is gone).
     await act(async () => el.querySelector<HTMLButtonElement>('[data-sidebar-toggle]')?.click());
     await act(async () =>
-      el.querySelector<HTMLButtonElement>('[data-sidebar-item="mogs"]')?.click(),
+      el.querySelector<HTMLButtonElement>('[data-sidebar-item="settings"]')?.click(),
     );
     await tauri.emit('mog:view_state', {
       mogId: ID,

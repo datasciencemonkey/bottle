@@ -1,37 +1,34 @@
-/** V1 hub view (thin): lists the MOGs the brain reports and sends selections with view_emit. */
+/** V1 hub view (thin): shows the hub areas, Settings → Workspace included, and sends input with view_emit. */
 import { PanelLeftIcon } from 'lucide-react';
 import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { HUB_MOGS_EVENT, asHubMogList } from '../../shared/hub-mogs';
-import type { MogId } from '../../shared/interfaces';
+import { HUB_WORKSPACES_EVENT, asHubWorkspaceList } from '../../shared/hub-workspaces';
 import type { HubRecording } from '../../shared/recording-view';
-import { DomainPicker } from '../DomainPicker';
 import {
   acceptNotice,
   asMogViewState,
-  emitView,
   useHubNotice,
   useViewEvent,
   type MogViewState,
 } from '../view-ipc';
+import type { MogId } from '../../shared/interfaces';
 import { About } from './About';
 import { Button } from '../ui/button';
 import { CliInstallStep } from './CliInstallStep';
 import { CliSettings } from './CliSettings';
 import { DictationWords } from './DictationWords';
-import { ConnectAnotherWorkspace } from './ConnectAnotherWorkspace';
 import { ConnectWorkspace } from './ConnectWorkspace';
 import { Conversations } from './Conversations';
 import { MemoryArea } from './Memory';
 import { DataPanel } from './DataDisclosures';
 import { DictationNotices } from './DictationNotices';
 import { ForgetDialogHost } from './ForgetDialogHost';
+import { HomePickDialog } from './HomePickDialog';
 import { HubSidebar, sidebarWidth } from './HubSidebar';
 import { Home } from './Home';
 import { LegalNotice } from './LegalNotice';
 import { MicPreference } from './MicPreference';
-import { MogList } from './MogList';
 import { DEFAULT_HUB_VIEW, NAV_ITEMS, type HubView } from './nav';
 import { PermissionNotices } from './PermissionNotices';
 import { RecIndicator, RecordControl } from './RecordControl';
@@ -45,6 +42,8 @@ import { ThreadComposer } from './ThreadComposer';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
 import { useHubSidebar } from './use-hub-sidebar';
 import { WipeSettings } from './WipeSettings';
+import { useHubWorkspaces, WorkspaceSettings } from './WorkspaceSettings';
+import type { HubWorkspaceList } from '../../shared/hub-workspaces';
 
 /** #145: the reply composer of a thread's detail, the genie-followup hub→brain seam. */
 const threadComposer = (thread: Parameters<typeof ThreadComposer>[0]['thread']) => (
@@ -89,31 +88,6 @@ function SetupRegion() {
 }
 
 /**
- * The 'mogs' area: the live mood chips, the MOG list and its dialogs (#26, #103). Stays mounted
- * with `hidden` (review of #602), like `Conversations`, rather than unmounting on `view !==
- * 'mogs'`: an unmount would have dropped any open MogList form on a sidebar nav click.
- */
-function MogsArea({ hidden, mogs }: { hidden: boolean; mogs: ReadonlyMap<MogId, MogViewState> }) {
-  return (
-    <section data-hub-view="mogs" hidden={hidden}>
-      <ul aria-label="MOGs" className="hub-live">
-        {[...mogs].map(([id, s]) => (
-          <li key={id} data-mog={id} data-mood={s.mood}>
-            <button type="button" className="hub-chip" onClick={() => void emitView(id, 'click')}>
-              <span className="hub-mood-dot" aria-hidden="true" />
-              MOG {id.slice(0, 8)} <span className="hub-muted">({s.mood})</span>
-            </button>
-            {s.homeDomain && <DomainPicker mogId={id} picker={s.homeDomain} />}
-          </li>
-        ))}
-      </ul>
-      <MogList />
-      <ForgetDialogHost />
-    </section>
-  );
-}
-
-/**
  * The 'settings' area (#97, #103): one grouped, consistently spaced settings pane. Stays
  * mounted with `hidden` (review of #602), like `Conversations`: unmounting on `view !==
  * 'settings'` dropped the Wipe scope choice and closed an open Wipe dialog mid-confirm as soon
@@ -123,9 +97,13 @@ function MogsArea({ hidden, mogs }: { hidden: boolean; mogs: ReadonlyMap<MogId, 
 function SettingsArea({
   hidden,
   recording,
+  workspaces,
+  homeDomains,
 }: {
   hidden: boolean;
   recording: HubRecording | undefined;
+  workspaces: HubWorkspaceList | undefined;
+  homeDomains: readonly MogViewState[];
 }) {
   return (
     <section data-hub-view="settings" aria-label="Settings" hidden={hidden}>
@@ -134,10 +112,10 @@ function SettingsArea({
       <RecordingSettings model={recording} />
       <WipeSettings />
       <CliSettings />
-      {/* #162 follow-up (W-07e, review of #602): the one deliberate way to open "Connect a
-          workspace" again once a usable profile exists, now that the setup region's step stays
-          hidden until the brain opens it. */}
-      <ConnectAnotherWorkspace />
+      {/* ADR 0117: one row for each workspace, with the switch "Available to your MOG". It ends
+          with the "Connect another workspace…" row (#162 follow-up, W-07e), the one deliberate
+          way to open "Connect a workspace" again once a usable profile exists. */}
+      <WorkspaceSettings list={workspaces} homeDomains={homeDomains} />
       <DataPanel />
       <About />
     </section>
@@ -161,16 +139,16 @@ export function Hub() {
     },
     [sidebar],
   );
-  // #568 and "Change workspace…": a list push that carries a notice or an Edit ask (a talk key
-  // with no MOG, a card's "Change workspace…") shows the MOGs area, where both live.
+  // A workspace list that carries a notice (a result of a switch, a sign-in or a pick) shows
+  // Settings, where the Workspace section and its notice live.
   useEffect(() => {
     let off: (() => void) | undefined;
     let gone = false;
     void listen<unknown>(
-      HUB_MOGS_EVENT,
+      HUB_WORKSPACES_EVENT,
       (e) => {
-        const l = asHubMogList(e.payload);
-        if (l && (l.notice !== undefined || l.openEdit !== undefined)) setView('mogs');
+        const l = asHubWorkspaceList(e.payload);
+        if (l?.notice !== undefined) setView('settings');
       },
       { target: getCurrentWindow().label },
     ).then((u) => {
@@ -192,15 +170,18 @@ export function Hub() {
       h?.focus({ preventScroll: true });
     });
   }, [pickView]);
-  const control = recording?.control;
-  const live = control?.phase === 'recording' || control?.phase === 'stopping';
-
   const onState = useCallback((p: unknown) => {
     const s = asMogViewState(p);
     if (s) setMogs((m) => new Map(m).set(s.mogId, s));
   }, []);
+  const control = recording?.control;
+  const live = control?.phase === 'recording' || control?.phase === 'stopping';
+
   useViewEvent('mog.view_state', onState);
   const notice = useHubNotice();
+  const workspaces = useHubWorkspaces();
+  const homeDomains = [...mogs.values()].filter((m) => m.homeDomain !== undefined);
+  const pickNames = new Map((workspaces?.rows ?? []).map((r) => [r.profile, r.name] as const));
 
   // MB-08a, MB-08b: until the brain reports the current notice as accepted, the hub shows only
   // the notice. A new version gets a fresh, unchecked notice (`key`).
@@ -233,7 +214,7 @@ export function Hub() {
 
   // TODO(#43): the onboarding wizard.
   // Conversations, Memory and Recordings are full-height list+detail layouts (`hub--wide`);
-  // MOGs and Settings keep the comfortable reading width (hub.css).
+  // Home and Settings keep the comfortable reading width (hub.css).
   const wide = view === 'conversations' || view === 'memory' || view === 'recordings';
   return (
     <main className={wide ? 'hub hub--wide' : 'hub'} style={hubBodyStyle}>
@@ -255,8 +236,8 @@ export function Hub() {
                     size="icon"
                     // No elevated z-index (ui-1, review of #602 round 4, blocker 2): the
                     // earlier `relative z-30` kept the toggle clickable above an open overlay,
-                    // but the toggle sits where the sidebar's own first nav item ("MOGs") does,
-                    // so a click there closed the sidebar instead of opening MOGs. The panel
+                    // but the toggle sits where the sidebar's own first nav item does,
+                    // so a click there closed the sidebar instead of opening that item. The panel
                     // (z-20 in HubSidebar.tsx) now simply covers the toggle while it is open, the
                     // way a native macOS sidebar covers whatever is under it — Esc, an outside
                     // click and the panel's own collapse/pin buttons still close it.
@@ -295,8 +276,15 @@ export function Hub() {
             onOpenSettings={openRecordingSettings}
             header={<RecordControl model={recording} onOpenSettings={openRecordingSettings} />}
           />
-          <MogsArea hidden={view !== 'mogs'} mogs={mogs} />
-          <SettingsArea hidden={view !== 'settings'} recording={recording} />
+          <SettingsArea
+            hidden={view !== 'settings'}
+            recording={recording}
+            workspaces={workspaces}
+            homeDomains={homeDomains}
+          />
+          <ForgetDialogHost />
+          {/* ADR 0117 (FLAG 5): the one-time home pick shows over every area while it is set. */}
+          <HomePickDialog homePick={workspaces?.homePick} names={pickNames} />
         </div>
       </div>
     </main>
