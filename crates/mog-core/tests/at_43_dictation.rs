@@ -16,11 +16,12 @@
 
 use mog_core::error::CoreResult;
 use mog_core::insertion::{
-    is_enter_key, paste_chord, AppId, Focus, InsertHost, InsertTextComponent, KeyStroke,
+    is_enter_key, paste_chord, AppId, Focus, InsertHost, InsertTextComponent, KeyStroke, NoteKind,
     TargetTable,
 };
 use mog_core::ipc::{self, InsertTextArgs, IpcError, WindowClass};
 use mog_core::ipc_gateway::{hardened_gateway_with, IpcGateway, NoLog};
+use mog_core::types::CaptureMode;
 use mog_core::window_host::{
     clipboard_formats, ClipboardBackend, ClipboardFormat, ClipboardPlatform, ClipboardWriter,
 };
@@ -160,9 +161,9 @@ fn at_43_mog_06a_mog_06c_paste_inserts_with_no_enter_and_restores_the_clipboard(
     let platform = ClipboardPlatform::MacOs;
     // ADR 0118: lease 1 of this MOG was granted while the app of the desk had the focus.
     let targets: &'static TargetTable = Box::leak(Box::new(TargetTable::new()));
-    let note = targets.begin_note(0);
+    let note = targets.begin_note(NoteKind::KeyDown, 0);
     targets.finish_note(note, AppId::new(100, 0));
-    targets.bind(1, MOG, 1);
+    targets.bind(1, MOG, CaptureMode::Ptt, 1);
     let gw = hardened_gateway_with(
         NoLog,
         InsertTextComponent::with_targets(&desk, Some(platform), targets),

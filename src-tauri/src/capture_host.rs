@@ -36,7 +36,7 @@ use mog_core::capture::{
 };
 use mog_core::clock::MonotonicClock;
 use mog_core::error::{CoreError, CoreResult};
-use mog_core::insertion::{now_ms, TargetTable};
+use mog_core::insertion::{now_ms, NoteKind, TargetTable};
 use mog_core::ipc::{
     events, CaptureLeaseArgs, CaptureMode, CaptureStartArgs, CaptureSubscribeArgs, ChannelRef,
     IpcError, MogId,
@@ -162,7 +162,7 @@ fn to_value<T: serde::Serialize>(command: &str, v: &T) -> CoreResult<Value> {
 pub fn note_mascot_click(from: &str, args: &Value) -> bool {
     let mascot = is_mascot_click(from, args);
     if mascot {
-        mog_core::insertion::note_os_focus_at_key_down();
+        mog_core::insertion::note_os_focus_at_key_down(NoteKind::HandsFreeStart);
     }
     mascot
 }
@@ -938,7 +938,7 @@ impl CaptureHost {
         if matches!(a.mode, CaptureMode::Ptt | CaptureMode::HandsFree)
             && lock(&self.owners).owner(lease.id).is_some()
         {
-            self.targets.bind(lease.id, &lease.mog_id, asked_at);
+            self.targets.bind(lease.id, &lease.mog_id, a.mode, asked_at);
             // A stop that ran between the owner check and the bind found no entry to mark.
             if lock(&self.owners).owner(lease.id).is_none() {
                 self.targets.stopped(lease.id, now_ms());
@@ -1012,8 +1012,8 @@ mod tests {
         json!({"mogId": mog, "mode": mode})
     }
 
-    fn note(targets: &TargetTable, app: mog_core::insertion::AppId) {
-        let g = targets.begin_note(now_ms());
+    fn note(targets: &TargetTable, kind: NoteKind, app: mog_core::insertion::AppId) {
+        let g = targets.begin_note(kind, now_ms());
         targets.finish_note(g, app);
     }
 
@@ -1027,7 +1027,7 @@ mod tests {
         let app = AppId::new(4242, 1);
         let (h, targets) = host_with_targets();
         let mog = "a1";
-        note(targets, app);
+        note(targets, NoteKind::KeyDown, app);
         let ptt = lease_of(&h.call("capture_start", start_args(mog, "ptt")).unwrap());
         assert_eq!(targets.expected(&ptt, mog, now_ms()), app);
         // The note is used once: a grant with no new note gets pid 0 (fail closed).
@@ -1035,7 +1035,7 @@ mod tests {
         let again = lease_of(&h.call("capture_start", start_args(mog, "ptt")).unwrap());
         assert!(targets.expected(&again, mog, now_ms()).is_none(), "no note");
         let _ = h.call("capture_stop", json!({"mogId": mog, "leaseId": again}));
-        note(targets, app);
+        note(targets, NoteKind::HandsFreeStart, app);
         let hf = lease_of(
             &h.call("capture_start", start_args(mog, "hands_free"))
                 .unwrap(),
@@ -1057,15 +1057,34 @@ mod tests {
             let _ = h.call("capture_stop", json!({"mogId": "a1", "leaseId": l}));
         };
         // down, up, down, up, double_tap: each down and the double tap note the focused app.
-        note(targets, app);
+        note(targets, NoteKind::KeyDown, app);
         let tap1 = grant("ptt");
         release(&tap1);
-        note(targets, app);
+        note(targets, NoteKind::KeyDown, app);
         let tap2 = grant("ptt");
         release(&tap2);
-        note(targets, app); // the double_tap hook
+        note(targets, NoteKind::HandsFreeStart, app); // the double_tap hook
         let hf = grant("hands_free");
         assert_eq!(targets.expected(&hf, "a1", now_ms()), app);
+        h.shutdown();
+    }
+
+    #[test]
+    fn ux2_race_a_late_tap_2_ptt_grant_does_not_take_the_double_tap_note() {
+        use mog_core::insertion::AppId;
+        let (app, app_hf) = (AppId::new(4242, 1), AppId::new(5151, 1));
+        let (h, targets) = host_with_targets();
+        let grant =
+            |mode: &str| lease_of(&h.call("capture_start", start_args("a1", mode)).unwrap());
+        // R1 sends the double tap with the key-up of tap 2: its note comes before tap 2's grant.
+        note(targets, NoteKind::KeyDown, app);
+        note(targets, NoteKind::HandsFreeStart, app_hf);
+        let tap2 = grant("ptt");
+        h.call("capture_stop", json!({"mogId": "a1", "leaseId": tap2}))
+            .unwrap();
+        let hf = grant("hands_free");
+        assert_eq!(targets.expected(&tap2, "a1", now_ms()), app);
+        assert_eq!(targets.expected(&hf, "a1", now_ms()), app_hf);
         h.shutdown();
     }
 
@@ -1091,7 +1110,7 @@ mod tests {
             assert!(!is_mascot_click(from, &args), "{from} {args}");
         }
         let (h, targets) = host_with_targets();
-        note(targets, app); // what `note_mascot_click` starts
+        note(targets, NoteKind::HandsFreeStart, app); // what `note_mascot_click` starts
         let hf = lease_of(
             &h.call("capture_start", start_args("a1", "hands_free"))
                 .unwrap(),
@@ -1104,7 +1123,7 @@ mod tests {
     fn ux2_a_session_start_binds_no_record() {
         use mog_core::insertion::AppId;
         let (h, targets) = host_with_targets();
-        note(targets, AppId::new(4242, 1));
+        note(targets, NoteKind::KeyDown, AppId::new(4242, 1));
         assert!(h
             .call("capture_start", start_args("a1", "session"))
             .is_err());
@@ -1117,18 +1136,18 @@ mod tests {
         use mog_core::insertion::AppId;
         let app = AppId::new(4242, 1);
         let (h, targets) = host_with_targets();
-        note(targets, app);
+        note(targets, NoteKind::KeyDown, app);
         let l = lease_of(&h.call("capture_start", start_args("a1", "ptt")).unwrap());
         // A stop keeps the entry for 10 min (a dictation may paste after the key-up).
         h.call("capture_stop", json!({"mogId": "a1", "leaseId": l}))
             .unwrap();
         assert_eq!(targets.expected(&l, "a1", now_ms()), app);
-        note(targets, app);
+        note(targets, NoteKind::KeyDown, app);
         let l2 = lease_of(&h.call("capture_start", start_args("a1", "ptt")).unwrap());
         h.call("capture_stop_all", json!({})).unwrap();
         assert!(targets.is_empty());
         assert!(targets.expected(&l2, "a1", now_ms()).is_none());
-        note(targets, app);
+        note(targets, NoteKind::KeyDown, app);
         let l3 = lease_of(&h.call("capture_start", start_args("a1", "ptt")).unwrap());
         h.shutdown();
         assert!(targets.expected(&l3, "a1", now_ms()).is_none());

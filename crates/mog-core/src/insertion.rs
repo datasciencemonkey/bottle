@@ -29,7 +29,7 @@ mod target;
 #[cfg(windows)]
 mod windows;
 
-pub use target::{now_ms, targets, AppId, TargetTable};
+pub use target::{now_ms, targets, AppId, NoteKind, TargetTable};
 
 #[cfg(target_os = "macos")]
 pub use macos::MacInsertHost;
@@ -318,9 +318,10 @@ fn target_matches<H: InsertHost>(host: &H, expected: AppId) -> bool {
 /// ([`TargetTable::bind`]). The handle is for tests; the hook drops it.
 pub fn note_focus_at_key_down<H: InsertHost + 'static>(
     table: &'static TargetTable,
+    kind: NoteKind,
     host: H,
 ) -> Option<std::thread::JoinHandle<()>> {
-    let gen = table.begin_note(now_ms());
+    let gen = table.begin_note(kind, now_ms());
     std::thread::Builder::new()
         .name("bottle-target-note".into())
         .spawn(move || table.finish_note(gen, host.focused_app_pid()))
@@ -329,11 +330,11 @@ pub fn note_focus_at_key_down<H: InsertHost + 'static>(
 
 /// [`note_focus_at_key_down`] over the OS host of this build. A build with no paste host notes
 /// nothing, so every paste there fails closed.
-pub fn note_os_focus_at_key_down() {
+pub fn note_os_focus_at_key_down(kind: NoteKind) {
     #[cfg(target_os = "macos")]
-    let _ = note_focus_at_key_down(targets(), <MacInsertHost>::default());
+    let _ = note_focus_at_key_down(targets(), kind, <MacInsertHost>::default());
     #[cfg(windows)]
-    let _ = note_focus_at_key_down(targets(), <WindowsInsertHost>::default());
+    let _ = note_focus_at_key_down(targets(), kind, <WindowsInsertHost>::default());
 }
 
 /// Paste `text` into the focused app (MOG-06a), with the chord only (MOG-06b), and put the
@@ -496,6 +497,7 @@ pub fn os_component() -> InsertTextComponent<WindowsInsertHost> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::CaptureMode;
 
     #[derive(Debug, Clone, PartialEq)]
     enum Ev {
@@ -806,9 +808,9 @@ mod tests {
     /// A table of its own with lease 1 of `MOG` bound to `app`.
     fn table_with(app: AppId) -> &'static TargetTable {
         let t: &'static TargetTable = Box::leak(Box::new(TargetTable::new()));
-        let g = t.begin_note(now_ms());
+        let g = t.begin_note(NoteKind::KeyDown, now_ms());
         t.finish_note(g, app);
-        t.bind(1, MOG, now_ms());
+        t.bind(1, MOG, CaptureMode::Ptt, now_ms());
         t
     }
 
@@ -1259,7 +1261,7 @@ mod tests {
         }
         // No record (no note at grant): pid 0, fail closed.
         let none = Box::leak(Box::new(TargetTable::new()));
-        none.bind(1, MOG, now_ms());
+        none.bind(1, MOG, CaptureMode::Ptt, now_ms());
         let c = comp(Fake::new("e"), none);
         assert_eq!(
             c.call("insert_text", args("1")).unwrap(),
@@ -1293,12 +1295,15 @@ mod tests {
         let t: &'static TargetTable = Box::leak(Box::new(TargetTable::new()));
         let mut f = Fake::new("e");
         f.app = APP;
-        note_focus_at_key_down(t, f).unwrap().join().unwrap();
-        t.bind(3, MOG, now_ms());
+        note_focus_at_key_down(t, NoteKind::KeyDown, f)
+            .unwrap()
+            .join()
+            .unwrap();
+        t.bind(3, MOG, CaptureMode::Ptt, now_ms());
         assert_eq!(t.expected("3", MOG, now_ms()), APP);
         // A hook that is still reading binds nothing: fail closed.
-        t.begin_note(now_ms());
-        t.bind(4, MOG, now_ms());
+        t.begin_note(NoteKind::KeyDown, now_ms());
+        t.bind(4, MOG, CaptureMode::Ptt, now_ms());
         assert!(t.expected("4", MOG, now_ms()).is_none());
     }
 }

@@ -31,8 +31,10 @@ pub const VIEW_HIDDEN: &str = "view.hidden";
 /// If `input` (the `view_emit` arguments of window `from`) is the hide notice of a MOG view, tell
 /// the gate and return `true`; the caller then does not relay it.
 pub fn hide_notice(from: &str, input: &serde_json::Value) -> bool {
-    // ADR 0118: every `view_emit` passes here first, so this is also where the host sees the
-    // mascot click that starts hands-free with no key-down (it notes the focused app).
+    // ADR 0118: this is NOT a hide notice. `ipc.rs` (a contract file) calls `hide_notice` for
+    // every `view_emit` before it relays the call, so it is the one host tap on a mascot click,
+    // which starts hands-free with no key-down. The call notes the focused app for that start.
+    // A source-scan test pins it (`ux2_the_mascot_click_note_is_wired_in_hide_notice`).
     crate::capture_host::note_mascot_click(from, input);
     let Some(id) = from.strip_prefix("mog-") else {
         return false;
@@ -131,6 +133,18 @@ pub fn spawn_look_poller(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn ux2_the_mascot_click_note_is_wired_in_hide_notice() {
+        let src = include_str!("mog_look_host.rs");
+        let body = &src[src.find("pub fn hide_notice").expect("hide_notice")..];
+        let body = &body[..body.find("\n}\n").expect("its end")];
+        let squashed: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(
+            squashed.contains("note_mascot_click(from,input)"),
+            "hide_notice must note the focused app at a mascot click: {squashed}"
+        );
+    }
 
     #[test]
     fn the_hide_notice_of_a_mog_view_is_taken_and_wakes_the_gate() {

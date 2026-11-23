@@ -38,6 +38,7 @@ use mog_core::hotkey_core::{
     PttPhase, UserAction,
 };
 use mog_core::hotkey_windows::{forward_to_engine, HookSignal};
+use mog_core::insertion::NoteKind;
 use mog_core::ipc::{events, PermissionKind, WindowClass};
 use mog_core::keyboard_env::{self, CopilotKeyFlag, MemoryCopilotKeyFlag, WithCopilotFlag};
 use mog_core::recording::RecordingSettingsStore;
@@ -322,8 +323,8 @@ fn r4_preload<R: Runtime>(app: AppHandle<R>) -> KeyDownHook {
 
 /// ADR 0118 (UX slice 2): the key-down hook that notes the app that has the focus, for the paste
 /// target lock. R2 binds the note to the lease at the grant. The read runs on its own thread.
-fn target_note() -> KeyDownHook {
-    Box::new(mog_core::insertion::note_os_focus_at_key_down)
+fn target_note(kind: NoteKind) -> KeyDownHook {
+    Box::new(move || mog_core::insertion::note_os_focus_at_key_down(kind))
 }
 
 /// A warm-up that runs at each talk-key down, before the brain hears of it: the R4 model
@@ -1057,8 +1058,8 @@ where
         rx,
         PttForwarder::new(Arc::clone(&target), app.clone(), BrainStatus(app.clone()))
             .with_key_down(r4_preload(app.clone()))
-            .with_key_down(target_note())
-            .with_double_tap(target_note()),
+            .with_key_down(target_note(NoteKind::KeyDown))
+            .with_double_tap(target_note(NoteKind::HandsFreeStart)),
     )?;
     let sink: Arc<dyn HotkeySink> = Arc::new(sink);
     let (service, permissions) = factory(settings.talk_binding(), Arc::clone(&sink));
@@ -1314,11 +1315,11 @@ mod tests {
             "the app forwarder preloads R4 at key-down: {squashed}"
         );
         assert!(
-            squashed.contains(".with_key_down(target_note())"),
+            squashed.contains(".with_key_down(target_note(NoteKind::KeyDown))"),
             "the app forwarder notes the paste target at key-down: {squashed}"
         );
         assert!(
-            squashed.contains(".with_double_tap(target_note())"),
+            squashed.contains(".with_double_tap(target_note(NoteKind::HandsFreeStart))"),
             "and at the double tap that starts hands-free: {squashed}"
         );
     }
