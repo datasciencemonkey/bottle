@@ -165,7 +165,7 @@ export interface RecordingWireDeps {
 export const NOTES_READY_TEXT = 'Your call notes are ready.';
 
 /** The refusals of `recordingProfile`: they have their own plain words. */
-const PROFILE_CODES: ReadonlySet<string> = new Set(['no_profile', 'profiles_differ']);
+const PROFILE_CODES: ReadonlySet<string> = new Set(['no_profile']);
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
 const codeOf = (e: unknown): string =>

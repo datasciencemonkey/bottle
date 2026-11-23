@@ -13,6 +13,10 @@
  *   the deep link, and the conversation and response ids of the `accepted` event.
  * - Status: an answer or a clarify is COMPLETED, then FAILED, UNCERTAIN, ABANDONED and
  *   CANCEL_REQUESTED (T10 maps them to the table status).
+ * - ADR 0117: the card stays on the lamp, but the exchange is stored under the data MOG id of
+ *   the profile that answered (`mogIds[0]` of its workspace row, `dataMogId`). With no such id
+ *   (a profile with no config yet) it falls back to the lamp's id. History and memory stay in
+ *   the folders of the old MOGs.
  * - The target is the MOG's home profile (no hop yet), so the row is a home-workspace row.
  * - The direct path sends no context preamble, so the sent question is the user's question.
  * - A failed write never rejects and never touches the card. The log gets only the fixed line
@@ -60,6 +64,8 @@ export interface GenieHistoryDeps {
   memory: ExchangeMemory;
   /** The MOG's name (`config_read`). */
   mogName(mogId: MogId): Promise<string>;
+  /** `mogIds[0]` of the profile's workspace row, or undefined (`workspaces.dataMogId`). */
+  dataMogId?(profile: ProfileName): Promise<MogId | undefined>;
   /** The workspace host of a profile (`profiles_list`), or undefined if it is not listed. */
   hostOf(profile: ProfileName): Promise<string | undefined>;
   log: Pick<BrainLog, 'event'>;
@@ -90,11 +96,11 @@ const STATUS: Record<TerminalAskEvent['t'], OperationState> = {
   cancel_requested: 'CANCEL_REQUESTED',
 };
 
-function exchangeOf(x: GenieEnd, host: string): GenieExchange {
+function exchangeOf(x: GenieEnd, host: string, mogId: MogId): GenieExchange {
   const e = x.end;
   return {
     requestId: x.opId,
-    mogId: x.mogId,
+    mogId,
     ref: {
       backend: 'genie_one_mcp',
       profile: x.profile,
@@ -125,16 +131,17 @@ export function createGenieHistory(deps: GenieHistoryDeps): (x: GenieEnd) => Pro
     // A Set iterates in insertion order, so the first id is the oldest.
     if (done.size > RECENT_OPS_MAX) done.delete(done.values().next().value as string);
     try {
+      const dataMogId = (await deps.dataMogId?.(x.profile).catch(() => undefined)) ?? x.mogId;
       const [name, host] = await Promise.all([
-        deps.mogName(x.mogId).catch(() => ''),
+        deps.mogName(dataMogId).catch(() => ''),
         deps.hostOf(x.profile).catch(() => undefined),
       ]);
       await deps.memory.registerMog({
-        mogId: x.mogId,
+        mogId: dataMogId,
         displayName: name.trim() === '' ? MOG_NAME_FALLBACK : name,
         backendKind: MOG_BACKEND_KIND,
       });
-      await deps.memory.recordExchange(exchangeOf(x, host ?? ''));
+      await deps.memory.recordExchange(exchangeOf(x, host ?? '', dataMogId));
     } catch {
       deps.log.event('memory.write', { ok: 0 });
     }
@@ -148,12 +155,14 @@ export function createGenieHistory(deps: GenieHistoryDeps): (x: GenieEnd) => Pro
 export function ipcGenieHistory(
   memory: MemoryService,
   saved?: () => void,
+  dataMogId?: (profile: ProfileName) => Promise<MogId | undefined>,
 ): ((x: GenieEnd) => void) | undefined {
   if (!isExchangeMemory(memory)) return undefined;
   const configs = ipcMogConfigClient();
   const record = createGenieHistory({
     memory,
     mogName: async (mogId) => (await configs.read(mogId)).name,
+    ...(dataMogId ? { dataMogId } : {}),
     hostOf: async (profile) =>
       (await ipcListProfiles()).find((p: Profile) => p.name === profile)?.host,
     log: createBrainLog(),

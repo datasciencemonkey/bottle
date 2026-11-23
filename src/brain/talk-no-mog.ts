@@ -6,7 +6,7 @@
  * as the hub Start does (`window_mog_open`). Then it sends each phase of the press again on the
  * bus with the ID of that MOG. So the talk-key target, the T12 consent gate and the capture
  * lease rules apply as for any other press. With no MOG at all, the hub shows
- * "Create a MOG to start" and no capture starts. A hub that is closed (Bottle keeps running)
+ * "Connect a workspace to start" and no capture starts. A hub that is closed (Bottle keeps running)
  * opens first on the MOGs area (#568), so the press always has a visible result. This needs no
  * contract change: the brain already shows the hub with the Tauri window API (`hub-window.ts`).
  *
@@ -22,7 +22,7 @@ import type { BrainBus } from './bus';
 import { MogManagerError, type MogManager } from './components/mog-manager';
 
 /** The hub toast for a talk-key press when no MOG exists. */
-export const NO_MOG_TEXT = 'Create a MOG to start';
+export const NO_MOG_TEXT = 'Connect a workspace to start';
 
 const PTT = EVENTS['hotkey.ptt'].name;
 const PHASES: ReadonlySet<string> = new Set(['down', 'up', 'cancel', 'double_tap']);

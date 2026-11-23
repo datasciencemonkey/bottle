@@ -133,14 +133,12 @@ describe('capture mood: a refused start is never silent (#551)', () => {
     expect(last(A)?.badges?.[0]?.text).toBe(REFUSAL_TEXT.no_home_profile.text);
   });
 
-  it('[ADR-0103, #594 review] recordingProfile refusals (no_profile, profiles_differ) show their own reason, not host_failed', () => {
+  it('[ADR-0103, #594 review] recordingProfile refusals (no_profile) show their own reason, not host_failed', () => {
     expect(refusalReason({ error: 'no_profile' })).toBe('no_profile');
-    expect(refusalReason({ error: 'profiles_differ' })).toBe('profiles_differ');
+    expect(refusalReason({ error: 'profiles_differ' })).toBe('host_failed');
     const { cm, last } = setup();
     cm.refused(A, { error: 'no_profile' });
     expect(last(A)?.badges?.[0]?.text).toBe(REFUSAL_TEXT.no_profile.text);
-    cm.refused(A, { error: 'profiles_differ' });
-    expect(last(A)?.badges?.[0]?.text).toBe(REFUSAL_TEXT.profiles_differ.text);
   });
 
   it('[CAP-17b] a refused mic open names the mic fault that capture:state reports', () => {

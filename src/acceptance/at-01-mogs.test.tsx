@@ -52,10 +52,11 @@ describe('AT-01 create two MOGs (TS part)', () => {
       { name: 'Ops', home: 'ops-ws' },
     ];
     for (const d of defs) {
-      const s = await before.create(d);
-      await before.start(s.mogId);
+      await before.create(d);
     }
-    expect(before.runningCount()).toBe(2);
+    // ADR 0117: one MOG runs at most, so only the lamp starts.
+    await before.start(A);
+    expect(before.runningCount()).toBe(1);
     // The restart is a new MogManager on the same store; no MOG runs after it.
     const after: MogDefinition[] = (await createMogManager({ configs, windows }).list()).mogs;
     expect(after.map((d) => [d.mogId, d.binding.home])).toEqual([
@@ -66,17 +67,17 @@ describe('AT-01 create two MOGs (TS part)', () => {
     for (const c of configs.files.values()) expect(SECRET.test(JSON.stringify(c))).toBe(false);
   });
 
-  it('[AT-01] [MB-03b] the 9th start shows "8 MOGs are running. Stop one to start <name>."', async () => {
+  it('[AT-01] [MB-03b] [ADR 0117] the 2nd start shows "1 MOG is running. Stop it to start <name>."', async () => {
     const m = createMogManager({
       configs: memoryConfigs(),
       windows: fakeWindows(),
       newId: sequentialIds(),
     });
     const ids: MogId[] = [];
-    for (let i = 1; i <= 9; i++) ids.push((await m.create({ name: `MOG ${i}`, home: 'p' })).mogId);
-    for (const id of ids.slice(0, 8)) await m.start(id);
-    await expect(m.start(ids[8] ?? '')).rejects.toThrow(
-      /^8 MOGs are running\. Stop one to start MOG 9\.$/,
+    for (let i = 1; i <= 2; i++) ids.push((await m.create({ name: `MOG ${i}`, home: 'p' })).mogId);
+    await m.start(ids[0] ?? '');
+    await expect(m.start(ids[1] ?? '')).rejects.toThrow(
+      /^1 MOG is running\. Stop it to start MOG 2\.$/,
     );
   });
 

@@ -87,16 +87,12 @@ describe('the ⌥R record toggle with no home profile (ADR 0103)', () => {
  * `createRecordToggle`'s `home()` to a real `recordingProfile` call, the same composition
  * `onRecordToggle` uses in `components/index.ts`.
  */
-function rigWithHomes(homes: Record<string, string | undefined>) {
+function rigWithHomes(home: string | undefined) {
   const calls: string[] = [];
   const args: unknown[] = [];
   const refused: unknown[] = [];
   const toggle = createRecordToggle({
-    home: () =>
-      recordingProfile({
-        mogs: async () => Object.keys(homes),
-        home: async (id) => homes[id],
-      }),
+    home: () => recordingProfile({ home: async () => home }),
     call: async (command, a) => {
       calls.push(command);
       args.push(a);
@@ -109,23 +105,16 @@ function rigWithHomes(homes: Record<string, string | undefined>) {
 }
 
 describe("⌥R shares the hub Record control's recordingProfile (ADR 0103, REC-H15, #594 review)", () => {
-  it('two MOGs with different homes: ⌥R does not start a recording, the same as the hub', async () => {
-    const r = rigWithHomes({ a: 'ws1', b: 'ws2' });
-    await r.toggle();
-    expect(r.calls).toEqual(['recording_state']);
-    expect(r.refused).toEqual([{ error: 'profiles_differ' }]);
-  });
-
-  it('the pressed MOG has no home; the other MOGs share one: ⌥R starts, as the hub does', async () => {
-    const r = rigWithHomes({ pressed: undefined, other: 'ws1' });
+  it('[AC-1.8] with a home workspace, ⌥R starts with the home profile, the same as the hub', async () => {
+    const r = rigWithHomes('ws1');
     await r.toggle();
     expect(r.calls).toEqual(['recording_state', 'recording_start']);
     expect(r.args[1]).toEqual({ profile: 'ws1' });
     expect(r.refused).toEqual([]);
   });
 
-  it('no MOG anywhere has a home: ⌥R refuses with no_profile, not the generic no_home_profile', async () => {
-    const r = rigWithHomes({ a: undefined });
+  it('no home workspace: ⌥R refuses with no_profile, not the generic no_home_profile', async () => {
+    const r = rigWithHomes(undefined);
     await r.toggle();
     expect(r.calls).toEqual(['recording_state']);
     expect(r.refused).toEqual([{ error: 'no_profile' }]);

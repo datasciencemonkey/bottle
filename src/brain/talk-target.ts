@@ -1,5 +1,9 @@
 /**
- * T1 talk-key target in the brain (#73, MB-06a, MB-06b, UX-28, ADR 0058).
+ * T1 talk-key target in the brain (#73, MB-06a, ADR 0058, ADR 0117).
+ *
+ * ADR 0117 (one MOG): the target is always the lamp, so the view never shows the target marker
+ * or the target toast. `MogTargetView` keeps both fields (frozen shared file); they are always
+ * false. The tracking below stays so Rust and the brain agree on the open MOG.
  *
  * The brain keeps the open MOGs in the order of their last interaction. The target is the
  * first one. Rust keeps the same list (`PttTarget` in `src-tauri/src/hotkey_host.rs`) and
@@ -16,8 +20,7 @@
  *   same two signals. Other card input, except hover, waits for `mog_set_active` as a MOG click
  *   does. A card never proves that its MOG window is open (#305 note B).
  * - When the target MOG closes, the target moves to the most recently interacted open MOG.
- * - A `hotkey:ptt` down for an open MOG makes it the target (Rust latched it) and shows the
- *   toast with its name for 1.2 s (MB-06b).
+ * - A `hotkey:ptt` down for an open MOG makes it the target (Rust latched it).
  *
  * TODO(#439): `mog_set_active` answers `not_implemented` until the contract routes it, so a
  * MOG click does not move the target yet. The event name and the ready signal move into the
@@ -33,7 +36,6 @@ import {
   isViewFocus,
   isViewReady,
   MOG_TARGET_EVENT,
-  TARGET_TOAST_MS,
   type MogTargetView,
 } from '../shared/mog-target';
 import { onViewInput, viewLabel, type BrainBus } from './bus';
@@ -55,8 +57,6 @@ export interface TalkTargetDeps {
   send: (view: MogTargetView) => unknown;
   /** Tell Rust the new target (`mog_set_active`). A refusal leaves the target as it is. */
   setActive: (mogId: MogId) => Promise<unknown>;
-  /** Run `fn` after `ms`; the result cancels it. */
-  after: (ms: number, fn: () => void) => () => void;
   /** The name, colour and home workspace of a MOG. A failure shows "MOG" and no colour or home. */
   identityOf?: (mogId: MogId) => Promise<MogIdentity | undefined>;
 }
@@ -108,8 +108,6 @@ export function createTalkTarget(deps: TalkTargetDeps): TalkTarget {
   const identities = new Map<MogId, MogIdentity>();
   /** The last MOG at the front of `mru`. It stays after the MOG closes (#562). */
   let last: MogId | undefined;
-  let toastFor: MogId | undefined;
-  let cancelToast: (() => void) | undefined;
 
   const current = () => mru[0];
   const isOpen = (id: MogId) => mru.includes(id);
@@ -118,8 +116,9 @@ export function createTalkTarget(deps: TalkTargetDeps): TalkTarget {
     return {
       mogId: id,
       name: identity?.name ?? DEFAULT_NAME,
-      target: current() === id,
-      toast: toastFor === id && current() === id,
+      // ADR 0117: one MOG, so no marker and no toast.
+      target: false,
+      toast: false,
       ...(identity?.colorVariant !== undefined ? { colorVariant: identity.colorVariant } : {}),
       ...(identity?.home !== undefined ? { home: identity.home } : {}),
     };
@@ -209,13 +208,6 @@ export function createTalkTarget(deps: TalkTargetDeps): TalkTarget {
     pttDown(id) {
       if (!isOpen(id)) return false;
       front(id);
-      cancelToast?.();
-      toastFor = id;
-      cancelToast = deps.after(TARGET_TOAST_MS, () => {
-        cancelToast = undefined;
-        toastFor = undefined;
-        if (isOpen(id)) send(id);
-      });
       send(id);
       return true;
     },
@@ -224,11 +216,6 @@ export function createTalkTarget(deps: TalkTargetDeps): TalkTarget {
       if (at < 0) return;
       const wasTarget = at === 0;
       mru.splice(at, 1);
-      if (toastFor === id) {
-        cancelToast?.();
-        cancelToast = undefined;
-        toastFor = undefined;
-      }
       // Clear the marker of a view that may still be there (a close in progress).
       send(id);
       const next = current();
@@ -330,10 +317,6 @@ export function createAppTalkTarget(
   return createTalkTarget({
     send: sendMogTarget,
     setActive: (mogId) => call('mog_set_active', { mogId }),
-    after: (ms, fn) => {
-      const t = setTimeout(fn, ms);
-      return () => clearTimeout(t);
-    },
     identityOf,
   });
 }

@@ -124,7 +124,7 @@ describe('talk key with no running MOG (#562)', () => {
     expect(r.notices).toEqual([{ kind: 'info', text: NO_MOG_TEXT }]);
     // #568: the hub window shows first (it may be closed), then the notice goes to it.
     expect(r.order).toEqual(['showHub', 'notify']);
-    expect(NO_MOG_TEXT).toBe('Create a MOG to start');
+    expect(NO_MOG_TEXT).toBe('Connect a workspace to start');
     expect(r.windows.calls).toEqual([]);
     expect(r.starts).toEqual([]);
     expect(r.stops()).toEqual([]);

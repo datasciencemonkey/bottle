@@ -1,6 +1,9 @@
 /**
  * The brain side of the hub MOG list (#26, MB-01, MB-03a, MB-03b).
  *
+ * ADR 0117: the hub MOG create, duplicate and delete actions are retired. The workspace list
+ * (`workspaces.ts`) is the hub's list now.
+ *
  * The brain sends the list to the hub only (ARC-5). The hub sends `mogs.ready` when it opens and
  * one MOG action per user action. Only the hub window can run a MOG action. After each action the
  * brain sends the list again, with the result text of the action as `notice`.
@@ -23,6 +26,9 @@ export function sendHubMogs(list: HubMogList): Promise<void> {
   return emitTo('hub', HUB_MOGS_EVENT, list);
 }
 
+/** The answer to a retired MOG action (ADR 0117). */
+export const RETIRED_TEXT = 'Bottle has one MOG. Add a workspace with Connect in Settings.';
+
 async function act(
   m: MogManager,
   a: MogAction,
@@ -30,38 +36,33 @@ async function act(
   // the caller can push the fresh identity to an open MOG and its card (`talkTarget.reidentify`
   // in `components/index.ts`), not only update the hub row.
   onIdentityChanged?: (mogId: string) => void,
+  lampMogId?: () => Promise<string | undefined>,
 ): Promise<HubNoticeLine | undefined> {
   switch (a.action) {
     case 'mogs.ready':
       return undefined;
+    // ADR 0117: one MOG. Create, duplicate and delete are retired. A workspace is added with
+    // Connect and removed with the Databricks CLI.
     case 'mog.create':
-      await m.create({ name: a.name, home: a.home });
-      return undefined;
+    case 'mog.duplicate':
+    case 'mog.delete':
+      return { kind: 'info', text: RETIRED_TEXT };
+    case 'mog.stop':
+      return { kind: 'info', text: RETIRED_TEXT };
     case 'mog.edit':
-      await m.edit(a.mogId, { name: a.name, home: a.home, persona: a.persona });
+      // ADR 0117: the home is chosen in Settings → Workspace, never on a MOG.
+      await m.edit(a.mogId, { name: a.name, persona: a.persona });
       onIdentityChanged?.(a.mogId);
       return undefined;
     case 'mog.set_color':
       await m.edit(a.mogId, { colorVariant: a.colorVariant });
       onIdentityChanged?.(a.mogId);
       return undefined;
-    case 'mog.duplicate':
-      await m.duplicate(a.mogId);
-      return undefined;
     case 'mog.start':
+      // Only the lamp starts.
+      if (a.mogId !== (await lampMogId?.())) return { kind: 'info', text: RETIRED_TEXT };
       await m.start(a.mogId);
       return undefined;
-    case 'mog.stop':
-      await m.stop(a.mogId);
-      return undefined;
-    case 'mog.delete': {
-      const name = (await m.list()).mogs.find((s) => s.mogId === a.mogId)?.name ?? 'the MOG';
-      await m.remove(a.mogId, { confirmed: true });
-      return {
-        kind: 'info',
-        text: `Deleted ${name}. Its memory and history stay until you use Wipe in Settings.`,
-      };
-    }
   }
 }
 
@@ -117,6 +118,7 @@ export function wireHubMogs(
   manager: MogManager,
   send: (list: HubMogList) => Promise<unknown> = sendHubMogs,
   onIdentityChanged?: (mogId: string) => void,
+  lampMogId?: () => Promise<string | undefined>,
 ): HubMogsDisposer {
   let live = true;
   // #ui-4 (review #603, MEDIUM finding): held the same way `hub-conversations-wiring.ts` holds
@@ -145,7 +147,7 @@ export function wireHubMogs(
     void (async () => {
       let notice: HubNoticeLine | undefined;
       try {
-        notice = await act(manager, action, onIdentityChanged);
+        notice = await act(manager, action, onIdentityChanged, lampMogId);
       } catch (e) {
         // A MogManagerError holds fixed text only; any other error gets a fixed text.
         notice = {

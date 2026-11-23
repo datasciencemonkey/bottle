@@ -19,6 +19,7 @@ import {
 } from './genie-history';
 
 const MOG = '0f8b1a52-6c1e-4d0a-9a51-3a3d2f6f0a40' as MogId;
+const DATA_MOG = '1a2b3c4d-6c1e-4d0a-9a51-3a3d2f6f0a41' as MogId;
 const OP = '41111111-2222-4333-8444-555555555540';
 const PROFILE = 'fake-profile' as ProfileName;
 const HOST = 'example.cloud.databricks.test';
@@ -46,7 +47,8 @@ function rig(answer: Answer = () => ({ rows: [{ changes: 1 }] })) {
   };
   const record = createGenieHistory({
     memory,
-    mogName: async () => 'Fake Finance',
+    mogName: async (id) => (id === DATA_MOG ? 'Fake Lab' : 'Fake Finance'),
+    dataMogId: async (p) => (p === 'lab-profile' ? DATA_MOG : undefined),
     hostOf: async (p) => (p === PROFILE ? HOST : undefined),
     log,
   });
@@ -109,6 +111,20 @@ describe('genie history: one local exchange row per Ask Genie request (#40)', ()
     // The card shows `keyNumbers.map(k => k.text)`: the stored rows hold the same texts.
     expect((p.keyNumbers as { text: string }[]).map((k) => k.text)).toEqual(['4.2 %', '$1.3M']);
     expect(typeof p.questionSentSha256).toBe('string');
+  });
+
+  it('[AC-1.11] [ADR 0117] an answer is stored under the data MOG id of the profile that answered, not the lamp', async () => {
+    const { store, record } = rig();
+    await record(answered({ profile: 'lab-profile' as ProfileName }));
+    expect(ids(store)).toEqual(['mem.mog.upsert', 'mem.exchange.upsert']);
+    expect(store.calls[0]?.params).toMatchObject({ mogId: DATA_MOG, displayName: 'Fake Lab' });
+    expect(exchange(store)).toMatchObject({ mogId: DATA_MOG, profileName: 'lab-profile' });
+  });
+
+  it('[AC-1.11] a profile with no data MOG falls back to the lamp id', async () => {
+    const { store, record } = rig();
+    await record(answered({ profile: PROFILE }));
+    expect(exchange(store)).toMatchObject({ mogId: MOG });
   });
 
   it('[AT-09] [G-21b] one request gives one exchange write, even when it ends twice', async () => {

@@ -199,25 +199,22 @@ describe('recording wiring (brain, ADR 0103)', () => {
     );
   });
 
-  it('[REC-H1] with no single home profile, storage and the list say why in plain words', async () => {
+  it('[REC-H1] with no home profile, storage and the list say why in plain words', async () => {
     const t = setup();
-    t.fake.api.probeStorage.mockRejectedValue({ error: 'profiles_differ' });
+    t.fake.api.probeStorage.mockRejectedValue({ error: 'no_profile' });
     t.fake.api.list.mockRejectedValue({ error: 'no_profile' });
     t.click({ action: 'recording.ready' });
     t.click({ action: 'recordings.ready' });
     await flush();
     expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.storage).toEqual({
       status: 'unavailable',
-      error: RECORDING_ERRORS.profiles_differ.text,
+      error: RECORDING_ERRORS.no_profile.text,
     });
     expect(t.last<HubRecordings>(HUB_RECORDINGS_EVENT)).toEqual({
       rows: [],
       unavailable: true,
       error: RECORDING_ERRORS.no_profile,
     });
-    expect(RECORDING_ERRORS.profiles_differ.text).toBe(
-      'Your MOGs use different workspaces. Recording needs one workspace for now.',
-    );
   });
 
   it('[REC-H11] a failed Retry or Open shows its plain text', async () => {

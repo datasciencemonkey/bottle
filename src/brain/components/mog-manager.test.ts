@@ -12,6 +12,7 @@ import {
   createMogManager,
   ipcMogConfigClient,
   ipcMogWindowClient,
+  HOST_MAX_RUNNING_MOGS,
   MAX_RUNNING_MOGS_DEFAULT,
   MogManagerError,
   type MogManager,
@@ -276,33 +277,29 @@ describe('T1 MogManager: any number of MOGs (MB-03a)', () => {
 });
 
 describe('T1 MogManager: the running cap (MB-03b)', () => {
-  it('[MB-03b] [AT-01] the 9th start shows "8 MOGs are running. Stop one to start <name>."', async () => {
-    expect(MAX_RUNNING_MOGS_DEFAULT).toBe(8);
-    for (let i = 1; i <= 9; i++) await m.create({ name: `M${i}`, home: 'p' });
-    for (let i = 1; i <= 8; i++) await m.start(id(i));
-    await m.create({ name: 'Ninth', home: 'p' });
-    const e = await rejection(m.start(id(10)));
-    expect([e.code, e.message]).toEqual([
-      'cap_reached',
-      '8 MOGs are running. Stop one to start Ninth.',
-    ]);
-    expect(windows.calls.filter(([op]) => op === 'open')).toHaveLength(8);
-    expect(m.runningCount()).toBe(8);
+  it('[MB-03b] [AT-01] [ADR 0117] the default cap is the host cap of 1: a second start is refused', async () => {
+    expect(MAX_RUNNING_MOGS_DEFAULT).toBe(1);
+    expect(MAX_RUNNING_MOGS_DEFAULT).toBeLessThanOrEqual(HOST_MAX_RUNNING_MOGS);
+    for (let i = 1; i <= 2; i++) await m.create({ name: `M${i}`, home: 'p' });
+    await m.start(id(1));
+    const e = await rejection(m.start(id(2)));
+    expect([e.code, e.message]).toEqual(['cap_reached', '1 MOG is running. Stop it to start M2.']);
+    expect(windows.calls.filter(([op]) => op === 'open')).toHaveLength(1);
     await m.stop(id(1));
-    await m.start(id(10));
-    expect(m.runState(id(10))).toBe('running');
+    await m.start(id(2));
+    expect(m.runState(id(2))).toBe('running');
   });
 
-  it('[MB-03b] the cap follows app.maxRunningMogs and stays within the host cap of 8', async () => {
-    const three = manager({ maxRunningMogs: 3 });
-    expect(three.maxRunning).toBe(3);
-    for (let i = 1; i <= 4; i++) await three.create({ name: `M${i}`, home: 'p' });
-    for (let i = 1; i <= 3; i++) await three.start(id(i));
-    const e = await rejection(three.start(id(4)));
-    expect(e.message).toBe('3 MOGs are running. Stop one to start M4.');
-    expect(manager({ maxRunningMogs: 12 }).maxRunning).toBe(8);
-    expect(manager({ maxRunningMogs: 0 }).maxRunning).toBe(8);
-    expect(manager({ maxRunningMogs: 2.5 }).maxRunning).toBe(8);
+  it('[MB-03b] [ADR 0117] the cap follows app.maxRunningMogs and stays within the host cap of 1', async () => {
+    const one = manager({ maxRunningMogs: 1 });
+    expect(one.maxRunning).toBe(1);
+    for (let i = 1; i <= 2; i++) await one.create({ name: `M${i}`, home: 'p' });
+    await one.start(id(1));
+    const e = await rejection(one.start(id(2)));
+    expect(e.message).toBe('1 MOG is running. Stop it to start M2.');
+    expect(manager({ maxRunningMogs: 12 }).maxRunning).toBe(1);
+    expect(manager({ maxRunningMogs: 0 }).maxRunning).toBe(1);
+    expect(manager({ maxRunningMogs: 2.5 }).maxRunning).toBe(1);
   });
 
   it('[MB-03b] a mog_cap_reached refusal of the Rust host gives the same text', async () => {
@@ -312,19 +309,16 @@ describe('T1 MogManager: the running cap (MB-03b)', () => {
     await mm.create({ name: 'B', home: 'p' });
     host.open.add('other');
     const e = await rejection(mm.start(id(1)));
-    expect([e.code, e.message]).toEqual([
-      'cap_reached',
-      '8 MOGs are running. Stop one to start A.',
-    ]);
+    expect([e.code, e.message]).toEqual(['cap_reached', '1 MOG is running. Stop it to start A.']);
     expect(mm.runState(id(1))).toBe('stopped');
   });
 
   it('[MB-03b] starts at the same time never pass the cap', async () => {
-    const two = manager({ maxRunningMogs: 2 });
+    const two = manager({ maxRunningMogs: 1 });
     for (let i = 1; i <= 3; i++) await two.create({ name: `M${i}`, home: 'p' });
     const results = await Promise.allSettled([1, 2, 3].map((i) => two.start(id(i))));
-    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(2);
-    expect(two.runningCount()).toBe(2);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(two.runningCount()).toBe(1);
   });
 });
 
