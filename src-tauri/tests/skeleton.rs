@@ -111,7 +111,7 @@ fn arc_3_card_is_floating_and_key_capable() {
 fn arc_3_mog_and_card_open_on_demand_not_at_start() {
     let starts = bottle_lib::startup_windows(false);
     assert_eq!(starts, vec![WindowKind::Brain, WindowKind::Hub]);
-    assert_eq!(MAX_ACTIVE_MOGS, 8);
+    assert_eq!(MAX_ACTIVE_MOGS, 1);
 }
 
 #[test]

@@ -287,7 +287,8 @@ fn arc_3_mb_03b_window_errors_map_to_ipc_codes() {
 }
 
 #[test]
-fn mb_03b_the_ninth_mog_window_is_refused_with_mog_cap_reached() {
+fn mb_03b_the_second_mog_window_is_refused_with_mog_cap_reached() {
+    // ADR 0117, AC-1.9: one MOG.
     use tauri::test::mock_app;
     let app = mock_app();
     let host = TauriWindowHost::new(app.handle().clone());
@@ -299,11 +300,9 @@ fn mb_03b_the_ninth_mog_window_is_refused_with_mog_cap_reached() {
             json!({ "mogId": id }),
         )
     };
-    for n in 0..8 {
-        assert_eq!(open(format!("m{n}")), Ok(json!({})));
-    }
-    assert_eq!(open("m9".into()), err("mog_cap_reached"));
-    assert_eq!(host.active_mogs(), 8);
+    assert_eq!(open("m0".into()), Ok(json!({})));
+    assert_eq!(open("m1".into()), err("mog_cap_reached"));
+    assert_eq!(host.active_mogs(), 1);
 }
 
 #[test]

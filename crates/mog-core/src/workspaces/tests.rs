@@ -1,0 +1,673 @@
+//! Tests of the workspace store, the allow-list and the `workspace_*` component (ADR 0117).
+//! Fake T7 and R6 only: no CLI, no token, no network, no real profile.
+
+use super::*;
+use crate::mcp_transport::{McpCall, McpCallComponent, McpReply, McpTransport};
+use crate::types::Tags;
+use serde_json::json;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// A fresh directory under the OS temp dir, removed on drop. It holds only test files.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new() -> Self {
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let p = std::env::temp_dir().join(format!(
+            "bottle-workspaces-test-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&p);
+        Self(p)
+    }
+    fn configs(&self) -> Arc<MogConfigStore> {
+        Arc::new(MogConfigStore::new(self.0.join("mogs")))
+    }
+    fn file(&self) -> PathBuf {
+        self.0.join(FILE_NAME)
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn obj(v: Value) -> crate::ipc::JsonObject {
+    match v {
+        Value::Object(m) => m.into_iter().collect(),
+        _ => panic!("not an object"),
+    }
+}
+
+fn put_config(configs: &MogConfigStore, id: &str, name: &str, home: &str) {
+    configs
+        .write(
+            id,
+            &obj(json!({"schemaVersion": 1, "name": name, "binding": {"home": home}})),
+        )
+        .unwrap();
+}
+
+struct FakeT7(Vec<Profile>);
+
+impl ProfileSource for FakeT7 {
+    fn profiles(&self, _refresh: bool) -> CoreResult<Vec<Profile>> {
+        Ok(self.0.clone())
+    }
+}
+
+fn profile(name: &str, supported: bool) -> Profile {
+    Profile {
+        name: name.to_owned(),
+        host: format!("https://{name}.example.test"),
+        auth_type: if supported { "databricks-cli" } else { "" }.to_owned(),
+        supported,
+        workspace_id: None,
+    }
+}
+
+/// A fake R6: a cached state and a probe answer for each profile.
+#[derive(Default)]
+struct FakeR6 {
+    states: HashMap<String, TokenState>,
+    answers: HashMap<String, Result<(), &'static str>>,
+    probed: Mutex<Vec<String>>,
+    running: AtomicUsize,
+    peak: AtomicUsize,
+    delay: Duration,
+}
+
+impl SignInSource for FakeR6 {
+    fn state(&self, profile: &str) -> TokenState {
+        self.states
+            .get(profile)
+            .copied()
+            .unwrap_or(TokenState::Unknown)
+    }
+    fn probe(&self, profile: &str, _host: &str) -> CoreResult<()> {
+        let now = self.running.fetch_add(1, Ordering::SeqCst) + 1;
+        self.peak.fetch_max(now, Ordering::SeqCst);
+        std::thread::sleep(self.delay);
+        self.running.fetch_sub(1, Ordering::SeqCst);
+        self.probed.lock().unwrap().push(profile.to_owned());
+        match self.answers.get(profile) {
+            Some(Err(reason)) => Err(CoreError::Unavailable {
+                component: "R6",
+                reason,
+            }),
+            _ => Ok(()),
+        }
+    }
+}
+
+fn store(s: &Scratch, t7: Vec<Profile>) -> WorkspaceStore {
+    WorkspaceStore::new(&s.0, s.configs(), Arc::new(FakeT7(t7)))
+}
+
+fn row<'a>(l: &'a WorkspaceList, p: &str) -> &'a WorkspaceRow {
+    l.workspaces.iter().find(|r| r.profile == p).unwrap()
+}
+
+// ---------- migration ----------
+
+#[test]
+fn ac_1_1_three_configs_on_three_profiles_give_three_available_workspaces_and_one_lamp() {
+    let s = Scratch::new();
+    let cfg = s.configs();
+    put_config(&cfg, "c3", "Three", "p3");
+    put_config(&cfg, "c1", "One", "p1");
+    put_config(&cfg, "c2", "Two", "p2");
+    let w = store(
+        &s,
+        vec![
+            profile("p1", true),
+            profile("p2", true),
+            profile("p3", true),
+        ],
+    );
+    let l = w.list(false).unwrap();
+    assert_eq!(l.workspaces.len(), 3);
+    assert!(l.workspaces.iter().all(|r| r.available));
+    assert_eq!(l.lamp_mog_id.as_deref(), Some("c1"));
+    // FLAG 5: three old homes, so no home is picked.
+    assert_eq!(l.home, None);
+    assert!(l.workspaces.iter().all(|r| !r.is_home));
+}
+
+#[test]
+fn ac_1_3_two_configs_on_one_profile_give_one_workspace_with_both_ids_sorted() {
+    let s = Scratch::new();
+    let cfg = s.configs();
+    put_config(&cfg, "b", "B", "p1");
+    put_config(&cfg, "a", "A", "p1");
+    let w = store(&s, vec![profile("p1", true)]);
+    let l = w.list(false).unwrap();
+    assert_eq!(l.workspaces.len(), 1);
+    assert_eq!(l.workspaces[0].mog_ids, ["a", "b"]);
+    // Exactly one distinct profile: it is the home.
+    assert_eq!(l.home.as_deref(), Some("p1"));
+    assert!(l.workspaces[0].is_home && l.workspaces[0].available);
+}
+
+#[test]
+fn migration_never_changes_an_old_config_and_writes_a_private_file() {
+    let s = Scratch::new();
+    let cfg = s.configs();
+    put_config(&cfg, "a", "A", "p1");
+    let before = fs::read(s.0.join("mogs/a.json")).unwrap();
+    store(&s, vec![profile("p1", true)]).list(false).unwrap();
+    assert_eq!(fs::read(s.0.join("mogs/a.json")).unwrap(), before);
+    let data: Value = serde_json::from_slice(&fs::read(s.file()).unwrap()).unwrap();
+    assert_eq!(data["schemaVersion"], 1);
+    assert_eq!(data["agent"]["crossWorkspaceData"], false);
+    assert_eq!(data["agent"]["genieCallBudget"], 10);
+    assert_eq!(data["agent"]["endpoint"], "databricks-claude-sonnet-5-5");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(s.file()).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+}
+
+#[test]
+fn an_existing_file_is_not_migrated_again() {
+    let s = Scratch::new();
+    put_config(&s.configs(), "a", "A", "p1");
+    let w = store(&s, vec![profile("p1", true), profile("p2", true)]);
+    w.list(false).unwrap();
+    put_config(&s.configs(), "b", "B", "p2");
+    let l = w.list(false).unwrap();
+    assert!(row(&l, "p2").mog_ids.is_empty());
+    assert!(!row(&l, "p2").available);
+}
+
+#[test]
+fn a_corrupt_file_is_an_error_and_is_kept() {
+    let s = Scratch::new();
+    fs::create_dir_all(&s.0).unwrap();
+    fs::write(s.file(), b"{ not json").unwrap();
+    let w = store(&s, vec![profile("p1", true)]);
+    assert_eq!(
+        w.list(false).unwrap_err(),
+        CoreError::IpcRefused {
+            code: "workspace_storage_failed"
+        }
+    );
+    assert_eq!(
+        w.set_available("p1", true, Some("a")).unwrap_err(),
+        CoreError::IpcRefused {
+            code: "workspace_storage_failed"
+        }
+    );
+    assert_eq!(fs::read(s.file()).unwrap(), b"{ not json");
+    // The gate fails closed.
+    assert!(!w.allows("p1"));
+}
+
+// ---------- the list ----------
+
+#[test]
+fn ac_1_5_a_new_supported_profile_shows_with_the_switch_off() {
+    let s = Scratch::new();
+    put_config(&s.configs(), "a", "A", "p1");
+    let w = store(&s, vec![profile("p1", true), profile("new", true)]);
+    let l = w.list(false).unwrap();
+    let r = row(&l, "new");
+    assert!(!r.available && !r.is_home && r.mog_ids.is_empty());
+    assert_eq!(l.workspaces[0].profile, "p1", "home first");
+}
+
+#[test]
+fn sign_in_comes_from_the_cached_r6_state_and_t7() {
+    let s = Scratch::new();
+    let cfg = s.configs();
+    for (id, p) in [
+        ("a", "ok"),
+        ("b", "old"),
+        ("c", "unk"),
+        ("d", "pat"),
+        ("e", "gone"),
+    ] {
+        put_config(&cfg, id, id, p);
+    }
+    let w = store(
+        &s,
+        vec![
+            profile("ok", true),
+            profile("old", true),
+            profile("unk", true),
+            profile("pat", false),
+        ],
+    );
+    let r6 = FakeR6 {
+        states: HashMap::from([
+            ("ok".to_owned(), TokenState::Expiring),
+            ("old".to_owned(), TokenState::LoginRequired),
+        ]),
+        ..FakeR6::default()
+    };
+    w.bind_sign_in(Arc::new(r6));
+    let l = w.list(false).unwrap();
+    assert_eq!(row(&l, "ok").sign_in, WorkspaceSignIn::SignedIn);
+    assert_eq!(row(&l, "old").sign_in, WorkspaceSignIn::Expired);
+    assert_eq!(row(&l, "unk").sign_in, WorkspaceSignIn::Unknown);
+    assert_eq!(row(&l, "pat").sign_in, WorkspaceSignIn::Unsupported);
+    let gone = row(&l, "gone");
+    assert_eq!(
+        (gone.sign_in, gone.host.as_str()),
+        (WorkspaceSignIn::Missing, "")
+    );
+}
+
+#[test]
+fn refresh_probes_only_unknown_profiles_and_maps_an_auth_error_to_expired() {
+    let s = Scratch::new();
+    let cfg = s.configs();
+    for (id, p) in [("a", "ok"), ("b", "old"), ("c", "cached"), ("d", "off")] {
+        put_config(&cfg, id, id, p);
+    }
+    let w = store(
+        &s,
+        vec![
+            profile("ok", true),
+            profile("old", true),
+            profile("cached", true),
+            profile("off", true),
+            profile("pat", false),
+        ],
+    );
+    let r6 = Arc::new(FakeR6 {
+        states: HashMap::from([("cached".to_owned(), TokenState::Valid)]),
+        answers: HashMap::from([
+            ("old".to_owned(), Err("login_required")),
+            ("off".to_owned(), Err("offline")),
+        ]),
+        ..FakeR6::default()
+    });
+    w.bind_sign_in(r6.clone());
+    let l = w.list(true).unwrap();
+    assert_eq!(row(&l, "ok").sign_in, WorkspaceSignIn::SignedIn);
+    assert_eq!(row(&l, "old").sign_in, WorkspaceSignIn::Expired);
+    assert_eq!(row(&l, "cached").sign_in, WorkspaceSignIn::SignedIn);
+    // A network failure is no proof of an expired sign-in.
+    assert_eq!(row(&l, "off").sign_in, WorkspaceSignIn::Unknown);
+    let mut probed = r6.probed.lock().unwrap().clone();
+    probed.sort();
+    assert_eq!(probed, ["off", "ok", "old"]);
+    // Without refresh nothing is probed.
+    let r6b = Arc::new(FakeR6::default());
+    w.bind_sign_in(r6b.clone()); // the first bind wins, so r6b stays unused
+    w.list(false).unwrap();
+    assert_eq!(r6.probed.lock().unwrap().len(), 3);
+    assert!(r6b.probed.lock().unwrap().is_empty());
+}
+
+#[test]
+fn refresh_runs_at_most_four_probes_at_once() {
+    let s = Scratch::new();
+    let names: Vec<String> = (0..9).map(|i| format!("p{i}")).collect();
+    let w = store(&s, names.iter().map(|n| profile(n, true)).collect());
+    let r6 = Arc::new(FakeR6 {
+        delay: Duration::from_millis(40),
+        ..FakeR6::default()
+    });
+    w.bind_sign_in(r6.clone());
+    let l = w.list(true).unwrap();
+    assert!(l
+        .workspaces
+        .iter()
+        .all(|r| r.sign_in == WorkspaceSignIn::SignedIn));
+    assert_eq!(r6.probed.lock().unwrap().len(), 9);
+    let peak = r6.peak.load(Ordering::SeqCst);
+    assert!((1..=PROBE_PARALLEL).contains(&peak), "peak {peak}");
+}
+
+#[test]
+fn a_slow_probe_times_out_and_leaves_the_row_unknown() {
+    let s = Scratch::new();
+    let w = store(&s, vec![profile("slow", true)]).with_probe_timeout(Duration::from_millis(30));
+    w.bind_sign_in(Arc::new(FakeR6 {
+        delay: Duration::from_millis(400),
+        ..FakeR6::default()
+    }));
+    let l = w.list(true).unwrap();
+    assert_eq!(row(&l, "slow").sign_in, WorkspaceSignIn::Unknown);
+}
+
+// ---------- switches and home ----------
+
+fn ready(s: &Scratch) -> WorkspaceStore {
+    // One old MOG on `home`: home is set. `other` is a new connection.
+    put_config(&s.configs(), "a", "A", "home");
+    store(
+        s,
+        vec![
+            profile("home", true),
+            profile("other", true),
+            profile("pat", false),
+        ],
+    )
+}
+
+fn code(e: CoreError) -> &'static str {
+    match e {
+        CoreError::IpcRefused { code } => code,
+        other => panic!("not an IPC refusal: {other:?}"),
+    }
+}
+
+#[test]
+fn ac_1_6_home_off_is_refused_and_the_disk_is_unchanged() {
+    let s = Scratch::new();
+    let w = ready(&s);
+    w.list(false).unwrap();
+    let before = fs::read(s.file()).unwrap();
+    assert_eq!(
+        code(w.set_available("home", false, None).unwrap_err()),
+        "home_always_available"
+    );
+    assert_eq!(fs::read(s.file()).unwrap(), before);
+}
+
+#[test]
+fn a_new_connection_needs_a_mog_id_bound_to_its_profile_to_switch_on() {
+    let s = Scratch::new();
+    let w = ready(&s);
+    w.list(false).unwrap();
+    put_config(&s.configs(), "n", "Other", "other");
+    put_config(&s.configs(), "x", "Wrong", "elsewhere");
+    let before = fs::read(s.file()).unwrap();
+    // No mogId, a missing config and a config of another profile are all refused.
+    for id in [None, Some("nope"), Some("x")] {
+        assert_eq!(
+            code(w.set_available("other", true, id).unwrap_err()),
+            "invalid_args"
+        );
+    }
+    // A PAT profile and an unknown profile are `profile_invalid`.
+    for p in ["pat", "unknown"] {
+        assert_eq!(
+            code(w.set_available(p, true, Some("n")).unwrap_err()),
+            "profile_invalid"
+        );
+    }
+    assert_eq!(
+        fs::read(s.file()).unwrap(),
+        before,
+        "a refused write changes nothing"
+    );
+    let l = w.set_available("other", true, Some("n")).unwrap();
+    let r = row(&l, "other");
+    assert!(r.available);
+    assert_eq!(r.mog_ids, ["n"]);
+    // Off again keeps the ids; on again needs no mogId.
+    let l = w.set_available("other", false, None).unwrap();
+    assert!(!row(&l, "other").available);
+    let l = w.set_available("other", true, None).unwrap();
+    assert!(row(&l, "other").available);
+}
+
+#[test]
+fn make_home_needs_a_supported_profile_and_sets_it_available() {
+    let s = Scratch::new();
+    let w = ready(&s);
+    w.list(false).unwrap();
+    let before = fs::read(s.file()).unwrap();
+    assert_eq!(
+        code(w.make_home("pat", None).unwrap_err()),
+        "profile_invalid"
+    );
+    assert_eq!(
+        code(w.make_home("gone", None).unwrap_err()),
+        "profile_invalid"
+    );
+    assert_eq!(fs::read(s.file()).unwrap(), before);
+    let l = w.make_home("other", None).unwrap();
+    assert_eq!(l.home.as_deref(), Some("other"));
+    assert!(row(&l, "other").available && row(&l, "other").is_home);
+    assert!(!row(&l, "home").is_home);
+    assert_eq!(l.workspaces[0].profile, "other", "home first");
+}
+
+#[test]
+fn the_first_connect_with_no_home_makes_the_new_profile_home_and_the_lamp() {
+    let s = Scratch::new();
+    let w = store(&s, vec![profile("first", true)]);
+    assert_eq!(w.list(false).unwrap().home, None);
+    put_config(&s.configs(), "n", "First", "first");
+    let l = w.make_home("first", Some("n")).unwrap();
+    assert_eq!(l.home.as_deref(), Some("first"));
+    assert_eq!(l.lamp_mog_id.as_deref(), Some("n"));
+    assert_eq!(row(&l, "first").mog_ids, ["n"]);
+}
+
+#[test]
+fn settings_write_stores_d1_d2_and_the_endpoint_and_a_bad_value_changes_nothing() {
+    let s = Scratch::new();
+    let w = ready(&s);
+    let l = w.list(false).unwrap();
+    assert_eq!(
+        l.agent,
+        AgentSettings {
+            cross_workspace_data: false,
+            cross_workspace_locked: false,
+            genie_call_budget: 10,
+            endpoint: "databricks-claude-sonnet-5-5".to_owned(),
+        }
+    );
+    let before = fs::read(s.file()).unwrap();
+    for bad in [
+        WorkspaceSettingsWriteArgs {
+            cross_workspace_data: Some(true),
+            genie_call_budget: Some(7),
+            agent_endpoint: None,
+        },
+        WorkspaceSettingsWriteArgs {
+            cross_workspace_data: Some(true),
+            genie_call_budget: None,
+            agent_endpoint: Some("a b/c".to_owned()),
+        },
+    ] {
+        assert_eq!(code(w.settings_write(&bad).unwrap_err()), "invalid_args");
+    }
+    assert_eq!(fs::read(s.file()).unwrap(), before);
+    let l = w
+        .settings_write(&WorkspaceSettingsWriteArgs {
+            cross_workspace_data: Some(true),
+            genie_call_budget: Some(20),
+            agent_endpoint: Some("my-endpoint".to_owned()),
+        })
+        .unwrap();
+    assert_eq!(
+        (
+            l.agent.cross_workspace_data,
+            l.agent.genie_call_budget,
+            l.agent.endpoint.as_str()
+        ),
+        (true, 20, "my-endpoint")
+    );
+    // A later partial write keeps the rest.
+    let l = w
+        .settings_write(&WorkspaceSettingsWriteArgs {
+            cross_workspace_data: None,
+            genie_call_budget: Some(5),
+            agent_endpoint: None,
+        })
+        .unwrap();
+    assert!(l.agent.cross_workspace_data);
+    assert_eq!(l.agent.endpoint, "my-endpoint");
+}
+
+// ---------- the allow-list ----------
+
+#[test]
+fn the_gate_allows_home_and_available_only() {
+    let s = Scratch::new();
+    let w = ready(&s);
+    assert!(w.allows("home"));
+    assert!(!w.allows("other"), "a new connection is off");
+    assert!(!w.allows("unknown"));
+    put_config(&s.configs(), "n", "Other", "other");
+    w.set_available("other", true, Some("n")).unwrap();
+    assert!(w.allows("other"));
+    w.set_available("other", false, None).unwrap();
+    assert!(!w.allows("other"));
+}
+
+#[test]
+fn with_no_home_the_gate_refuses_only_the_profiles_that_are_not_available() {
+    let s = Scratch::new();
+    let cfg = s.configs();
+    put_config(&cfg, "a", "A", "p1");
+    put_config(&cfg, "b", "B", "p2");
+    let w = store(
+        &s,
+        vec![
+            profile("p1", true),
+            profile("p2", true),
+            profile("p3", true),
+        ],
+    );
+    assert_eq!(w.list(false).unwrap().home, None);
+    assert!(w.allows("p1") && w.allows("p2"));
+    assert!(!w.allows("p3"));
+}
+
+/// A fake R8 that counts every send.
+#[derive(Default)]
+struct CountingR8(AtomicUsize);
+
+impl McpTransport for CountingR8 {
+    fn call_tool(&self, _call: McpCall<'_>) -> CoreResult<McpReply> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(McpReply {
+            structured_content: Value::Null,
+            text: String::new(),
+            is_error: false,
+            http_status: 200,
+            rpc_error: None,
+        })
+    }
+    fn list_tools(&self, _profile: &str, _tags: &Tags) -> CoreResult<Vec<Value>> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(Vec::new())
+    }
+}
+
+fn mcp_args(profile: &str, tool: &str, extra: Value) -> Value {
+    let mut a = json!({
+        "profile": profile,
+        "server": "genie_one",
+        "tool": tool,
+        "args": {"question": "canary?"},
+        "opId": "op-1",
+        "tags": {"app": "bottle", "mog": "00000000-0000-4000-8000-0000000000b7", "op": "genie"}
+    });
+    for (k, v) in extra.as_object().unwrap() {
+        a[k] = v.clone();
+    }
+    a
+}
+
+#[test]
+fn ac_1_7_genie_ask_for_a_switched_off_profile_is_refused_before_any_send_on_every_path() {
+    let s = Scratch::new();
+    let w = Arc::new(ready(&s));
+    let r8 = Arc::new(CountingR8::default());
+    let comp = McpCallComponent::with_gate(r8.clone(), Some(w.clone()));
+    let refusal = CoreError::IpcRefused {
+        code: "workspace_not_available",
+    };
+    // Plain, with an agent-call marker, with a warehouse meta and with a timeout.
+    for extra in [
+        json!({}),
+        json!({"meta": {"agentCall": true}}),
+        json!({"meta": {"warehouse_id": "w1"}, "timeoutMs": 5000}),
+    ] {
+        let a = mcp_args("other", "genie_ask", extra);
+        assert_eq!(comp.call("mcp_call", a).unwrap_err(), refusal);
+    }
+    assert_eq!(r8.0.load(Ordering::SeqCst), 0, "R8 sent nothing");
+    // Home and a switched-on profile go through.
+    assert!(comp
+        .call("mcp_call", mcp_args("home", "genie_ask", json!({})))
+        .is_ok());
+    put_config(&s.configs(), "n", "Other", "other");
+    w.set_available("other", true, Some("n")).unwrap();
+    assert!(comp
+        .call("mcp_call", mcp_args("other", "genie_ask", json!({})))
+        .is_ok());
+    assert_eq!(r8.0.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn polls_cancels_and_listing_for_a_switched_off_profile_still_go_through() {
+    let s = Scratch::new();
+    let w = Arc::new(ready(&s));
+    let r8 = Arc::new(CountingR8::default());
+    let comp = McpCallComponent::with_gate(r8.clone(), Some(w));
+    for tool in [
+        "genie_poll_response",
+        "genie_cancel_response",
+        "genie_get_query_result",
+    ] {
+        assert!(
+            comp.call("mcp_call", mcp_args("other", tool, json!({})))
+                .is_ok(),
+            "{tool}"
+        );
+    }
+    assert!(comp
+        .call("mcp_call", mcp_args("other", "tools/list", json!({})))
+        .is_ok());
+    assert_eq!(r8.0.load(Ordering::SeqCst), 4);
+}
+
+#[test]
+fn a_component_without_a_gate_allows_every_profile() {
+    let r8 = Arc::new(CountingR8::default());
+    let comp = McpCallComponent::new(r8.clone());
+    assert!(comp
+        .call("mcp_call", mcp_args("any", "genie_ask", json!({})))
+        .is_ok());
+}
+
+// ---------- the component ----------
+
+#[test]
+fn the_component_answers_a_workspace_list_and_refuses_other_commands() {
+    let s = Scratch::new();
+    let w = ready(&s);
+    let v = w.call("workspace_list", json!({})).unwrap();
+    assert_eq!(v["home"], "home");
+    assert_eq!(v["agent"]["genieCallBudget"], 10);
+    assert_eq!(v["workspaces"][0]["signIn"], "unknown");
+    assert_eq!(
+        w.call(
+            "workspace_set_available",
+            json!({"profile": "home", "available": false})
+        )
+        .unwrap_err(),
+        CoreError::IpcRefused {
+            code: "home_always_available"
+        }
+    );
+    assert_eq!(
+        w.call("workspace_list", json!({"refresh": "yes"}))
+            .unwrap_err(),
+        CoreError::IpcRefused {
+            code: "invalid_args"
+        }
+    );
+    assert_eq!(
+        w.call("profile_login", json!({})).unwrap_err(),
+        CoreError::IpcRefused {
+            code: "not_implemented"
+        }
+    );
+}

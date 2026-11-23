@@ -283,22 +283,19 @@ fn mog_18b_a_shown_card_is_never_reaped() {
 fn mog_18b_host_destroys_a_hidden_card_after_5_min_and_makes_it_again_on_show() {
     let (_app, host, rec, clock) = host();
     host.open_mog_window("m1").unwrap();
-    host.open_mog_window("m2").unwrap();
     host.show_card("m1").unwrap();
-    host.show_card("m2").unwrap();
     host.hide_card("m1").unwrap();
     clock.advance(CARD_HIDDEN_TTL - Duration::from_secs(1));
     assert_eq!(host.reap_hidden_cards(), 0);
     clock.advance(Duration::from_secs(1));
-    assert_eq!(host.reap_hidden_cards(), 1, "only the hidden card goes");
+    assert_eq!(host.reap_hidden_cards(), 1, "the hidden card goes");
     assert_eq!(host.card_state("m1"), Some(CardState::Closing));
-    assert_eq!(host.card_state("m2"), Some(CardState::Shown));
     // A show while the old WebView is still closing must not adopt the dying window.
     assert_eq!(host.show_card("m1"), Err(WindowError::Closing));
     // lib.rs feeds `WindowEvent::Destroyed` to the host.
     host.window_destroyed("card-m1");
     assert_eq!(host.card_state("m1"), Some(CardState::Absent));
-    assert_eq!(host.active_mogs(), 2, "reaping a card keeps its MOG");
+    assert_eq!(host.active_mogs(), 1, "reaping a card keeps its MOG");
     host.show_card("m1").unwrap();
     assert_eq!(rec.count("style card-m1"), 2, "a new card window is made");
 }
@@ -395,7 +392,8 @@ fn arc_3_ledger_ignores_the_destroyed_event_it_expects() {
 
 #[test]
 fn arc_3_a_mog_destroyed_outside_the_host_takes_its_card() {
-    let mut ledger = WindowLedger::default();
+    // The ledger can hold more than the app cap of 1 (ADR 0117).
+    let mut ledger = WindowLedger::new(2);
     ledger.open_mog("m1").unwrap();
     ledger.open_mog("m2").unwrap();
     ledger.show_card("m1").unwrap();
