@@ -191,8 +191,12 @@ describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
   it('[home] Home shows the lamp, the wordmark and the punchline, with no buttons', async () => {
     const { el } = await render(<Hub />);
     const h = home(el);
-    expect(h.querySelector('img')?.getAttribute('alt')).toContain('peeking out of its lamp');
-    expect(h.querySelector('[data-home-wordmark]')?.textContent).toBe('Bottle');
+    expect(h.querySelector('[data-home-art][role="img"]')?.getAttribute('aria-label')).toContain(
+      'peeking out of its lamp',
+    );
+    expect(h.querySelector('[data-home-wordmark] .sr-only')?.textContent).toBe('Bottle');
+    // The hub header keeps the page's one h1; Home adds none.
+    expect(el.querySelectorAll('h1')).toHaveLength(1);
     expect(h.querySelector('[data-home-punchline]')?.textContent).toBe('Ship in a bottle.');
     expect(h.querySelectorAll('button, a, [role="button"]')).toHaveLength(0);
     // Clicking the wordmark does nothing: the area stays Home.
@@ -214,9 +218,10 @@ describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
     expect(home(el).querySelector('[data-home-wordmark]')).not.toBeNull();
   });
 
-  it('[home] the landing fades in by default', async () => {
+  it('[home] the landing plays its entrance by default', async () => {
     const { el } = await render(<Hub />);
-    expect(el.querySelector('.hub-home-stage')?.getAttribute('data-motion')).toBe('fade');
+    expect(home(el).getAttribute('data-motion')).toBe('full');
+    expect(home(el).getAttribute('data-phase')).toBe('intro');
   });
 
   it('[#103] the toggle opens the sidebar with Home, Conversations, Agent, Recordings, Memory, Settings', async () => {
