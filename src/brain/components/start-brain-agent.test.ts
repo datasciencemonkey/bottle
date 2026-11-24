@@ -1,7 +1,7 @@
 /**
  * startBrain, slice 2a: the real wiring of the agent client, the card and the direct path. A
- * question that names another workspace goes to the live Genie Code session; the fallback and the
- * notes must show on the card, behind the arrival gate (H4, M6).
+ * question goes to the orchestrator when it is ready (ADR 0122); the fallback and the notes must
+ * show on the card, behind the arrival gate (H4, M6).
  */
 import { core } from '../test-core';
 import { routerDecision } from '../../test-support/model-invoke';
@@ -56,13 +56,20 @@ function host(over: Record<string, () => unknown> = {}) {
     if (cmd === 'config_read') return { json: { name: 'Finance', binding: { home: HOME } } };
     if (cmd === 'workspace_list')
       return workspaceList(HOME, [{ profile: HOME }, { profile: 'fake-fin', available: true }]);
-    if (cmd === 'genie_code_status')
+    if (cmd === 'orchestrator_status')
+      return { state: 'ready', model: 'system.ai.claude-haiku-5-5' };
+    if (cmd === 'orchestrator_models')
       return {
-        binary: 'ready',
-        version: '0.5.0',
-        pinned: '0.5.0',
-        agentProfile: HOME,
-        agentProfileState: 'ready',
+        models: [
+          {
+            id: 'system.ai.claude-haiku-5-5',
+            label: 'Claude Haiku 5.5',
+            tested: true,
+            tools: true,
+          },
+        ],
+        selected: 'system.ai.claude-haiku-5-5',
+        defaultModel: 'system.ai.claude-haiku-5-5',
       };
     if (cmd === 'agent_turn_submit')
       return {
@@ -83,7 +90,7 @@ function host(over: Record<string, () => unknown> = {}) {
   });
 }
 
-/** The hub opens: the brain reads the workspace list and the Genie Code status (the routing cache). */
+/** The hub opens: the brain reads the workspace list and the orchestrator status (the routing cache). */
 async function prime() {
   brain?.talkTarget.viewReady(MOG);
   brain?.bus.dispatch({
@@ -91,6 +98,13 @@ async function prime() {
     payload: {
       from: 'hub',
       input: { mogId: 'hub', kind: 'click', payload: { action: 'workspaces.ready' } },
+    },
+  });
+  brain?.bus.dispatch({
+    event: 'view:input',
+    payload: {
+      from: 'hub',
+      input: { mogId: 'hub', kind: 'click', payload: { action: 'orchestrator.ready' } },
     },
   });
   await settle();
@@ -118,7 +132,7 @@ describe('startBrain: the agent, the card and the direct fallback (slice 2a)', (
   beforeEach(() => core.reset());
   afterEach(() => vi.useRealTimers());
 
-  it('[AC-2a.2] a question that names another workspace goes to the agent, and the card shows the turn', async () => {
+  it('[AC-2a.2] with the orchestrator ready a question goes to the agent, and the card shows the turn', async () => {
     host();
     await prime();
     await ask(Q, 'u-agent-1');
@@ -150,6 +164,15 @@ describe('startBrain: the agent, the card and the direct fallback (slice 2a)', (
     turnEvent({ kind: 'slow', turnId: T1 });
     await settle();
     expect(cards().at(-1)?.agentTurn).toBeUndefined();
+  });
+
+  it('[R-6] with the orchestrator not reachable a question goes direct to home, with no agent turn', async () => {
+    host({ orchestrator_status: () => ({ state: 'unreachable', model: 'system.ai.x' }) });
+    await prime();
+    await ask(Q, 'u-agent-direct');
+    await settle();
+    expect(commands().filter((c) => c === 'agent_turn_submit')).toEqual([]);
+    expect(genieAsks()).toHaveLength(1);
   });
 
   it('[H1] a New session that ends a waiting turn asks home never', async () => {

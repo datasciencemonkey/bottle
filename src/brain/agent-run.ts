@@ -1,5 +1,5 @@
 /**
- * Slice 2a: the brain client of the one live Genie Code session (plan Amendment 2, Part B).
+ * Slice 2a: the brain client of the one live orchestrator session (plan Amendment 2, Part B).
  *
  * - `submit` sends one ⌥G question with `agent_turn_submit` and an `opId`. The core needs the
  *   ⌥G latch or an Ask ticket, and it starts a session if none is open.
@@ -51,7 +51,7 @@ import type { GenieEnd } from './genie-history';
 import type { GeniePhase, PartFence } from './genie-direct';
 import type { BrainLog } from './log';
 
-/** The mode of a submit. `ask_others` is the click on the R-8 chip. */
+/** The mode of a submit. An `ask_others` turn never asks home again. */
 export type AgentMode = NonNullable<CommandArgs['agent_turn_submit']['mode']>;
 
 /** The IPC functions of the client, one for each command. */
@@ -124,7 +124,7 @@ interface TurnRec {
   parts: Map<string, AgentPartView>;
   fetched: Set<string>;
   pending: Set<Promise<unknown>>;
-  /** The mode of the submit: an `ask_others` turn never asks home again (R-9). */
+  /** The mode of the submit: an `ask_others` turn never asks home again. */
   mode: AgentMode;
   /** Terminal pulls that failed once: the turn retries them once when it ends. */
   failedPulls: Set<string>;
@@ -297,7 +297,7 @@ export interface AgentClient {
   newSession(): Promise<void>;
   /** Read the session state again (the panel header). */
   refreshSession(): Promise<void>;
-  /** The turns that hub Conversations shows now (the genie code status is the caller's). */
+  /** The turns that hub Conversations shows now (the orchestrator status is the caller's). */
   panel(): Panel;
   /** The turn view of `turnId`, if the client holds it. */
   turn(turnId: string): AgentTurnView | undefined;
@@ -636,7 +636,7 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
         : {}),
     };
     // AC-2a.11: an agent that never asked a workspace falls back to one direct home call. An
-    // `ask_others` turn already asked home (R-9): it shows the reason and asks nothing more.
+    // `ask_others` turn already asked home: it shows the reason and asks nothing more.
     const why = e.calls === 0 ? whyOfOutcome(out) : undefined;
     const id = r.view.turnId;
     if (why && r.mode === 'ask_others') {
@@ -799,7 +799,7 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
         const code = codeOf(e);
         const why = whyOfRefusal(code);
         if (why && mode === 'ask_others') {
-          // Home was asked already (R-9): say why the others were not, and ask nothing more.
+          // Home was asked already: say why the others were not, and ask nothing more.
           deps.note?.(turn.mogId, fallbackNotice(why, deps.names(), false));
           return;
         }

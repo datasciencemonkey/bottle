@@ -34,7 +34,6 @@ import { ANSWER_READY, ASKING_GENIE, genieBlurbId, genieStage } from '../shared/
 import type { ArrivalGate } from './arrival-gate';
 import type { CardStack } from './card-stack';
 import { isTerminal, type TerminalAskEvent } from './components/ask-events';
-import type { ChipView } from './card-chips';
 import type { GenieEnd } from './genie-history';
 import { WORKSPACE_CODES } from './components/genie-errors';
 import { outcomeBlurbInput } from './outcome-blurb';
@@ -47,9 +46,6 @@ export const TRY_AGAIN_LABEL = 'Try again';
 
 /** The text link beside Try again when the workspace is the likely cause (VPN, proxy, network). */
 export const CHANGE_WORKSPACE_LABEL = 'Change workspace…';
-
-/** R-8 (slice 2a): the chip on a direct answer that sends the same question to the agent. */
-export const ASK_OTHERS_LABEL = 'Ask other workspaces too';
 
 /** The request phases that the MOG mood shows (`capture-mood.ts`). */
 export type GeniePhase = 'working' | 'answered' | 'failed' | 'cancelled';
@@ -84,12 +80,6 @@ export interface GenieDirectDeps {
    * only the pill to "Answer ready" (an answer) and the card update waits for `whenClear`.
    */
   arrivals?: Pick<ArrivalGate, 'isHeld' | 'whenClear'> | undefined;
-  /**
-   * R-8 (slice 2a): the chip "Ask other workspaces too" for an answered direct request, or
-   * undefined when the agent cannot run. The chip id is `agent-more:<opId>`. A click goes to the
-   * agent wiring (R-9), which holds the question.
-   */
-  offerOthers?: ((turn: AgentTurn, opId: string) => ChipView | undefined) | undefined;
 }
 
 /**
@@ -100,7 +90,7 @@ export type PartFence = (replay: (again: PartFence) => void) => boolean;
 
 /** The options of one send. */
 export interface DirectSendOptions {
-  /** The fallback reason of slice 2a, one line: "Genie Code is not installed. Asked sales only." */
+  /** The fallback reason of slice 2a, one line: "The orchestrator model is not reachable. Asked sales only." */
   notice?: string | undefined;
   /** The fallback of an agent turn: its row joins the turn (`split_group_id` = the turn UUID). */
   splitGroupId?: string | undefined;
@@ -139,8 +129,6 @@ export function createGenieDirectSend(deps: GenieDirectDeps): GenieDirectSend {
       // A mood or window fault never stops the request or changes the card.
     }
   };
-  /** The chip owner of each MOG's newest R-8 chip, so a new request takes the old one away. */
-  const moreOwner = new Map<MogId, string>();
   /** The send number of the newest request that put its answer on each MOG's card (M4). */
   const answerSeq = new Map<MogId, number>();
   /** The number of the newest request that started on each MOG. */
@@ -170,9 +158,6 @@ export function createGenieDirectSend(deps: GenieDirectDeps): GenieDirectSend {
     let shown = ASKING_GENIE;
     card.add({ id, text: shown });
     card.setExpanded(undefined);
-    const oldMore = moreOwner.get(turn.mogId);
-    if (oldMore !== undefined) card.clearControls?.(oldMore);
-    moreOwner.delete(turn.mogId);
     if (deps.onPhase) safely(() => deps.onPhase?.(turn.mogId, 'working', opId));
     return (async () => {
       let end: TerminalAskEvent | undefined;
@@ -270,19 +255,6 @@ export function createGenieDirectSend(deps: GenieDirectDeps): GenieDirectSend {
             card.clearControls?.(owner);
             safely(() => send(turn, opts));
           });
-        }
-        if (outcome.t === 'answer' && card.setControls) {
-          let more: ChipView | undefined;
-          try {
-            more = deps.offerOthers?.(turn, opId);
-          } catch {
-            // A fault in the chip offer never changes the card. `safely` cannot return a value.
-          }
-          if (more) {
-            const owner = `more:${id}`;
-            moreOwner.set(turn.mogId, owner);
-            card.setControls(owner, [more]);
-          }
         }
         // R11 places the card first, then the outcome goes on it, so the view grows the card from
         // its final place (no race between the view fit and the R11 move).
