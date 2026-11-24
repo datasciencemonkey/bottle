@@ -66,9 +66,11 @@ describe('bundle graph (build time)', () => {
     expect([...graph.keys()].sort()).toEqual(['brain', 'card', 'hub', 'mog']);
   });
 
-  it('[MOG-08b] [AT-17] maps each T1..T15 component to the brain bundle', () => {
+  it('[MOG-08b] [AT-17] maps each T1..T15 component (T5 is removed) to the brain bundle', () => {
     const modules = componentModules();
-    expect([...modules.keys()]).toEqual(Array.from({ length: 15 }, (_, i) => `T${i + 1}`));
+    expect([...modules.keys()]).toEqual(
+      Array.from({ length: 15 }, (_, i) => `T${i + 1}`).filter((id) => id !== 'T5'),
+    );
     const brain = graph.get('brain') ?? new Set();
     for (const [id, path] of modules) expect(brain.has(path), `${id} ${path}`).toBe(true);
   });
