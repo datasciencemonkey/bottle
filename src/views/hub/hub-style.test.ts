@@ -52,6 +52,63 @@ describe('hub and MOG chrome styling (#561)', () => {
     expect(recArea).not.toMatch(/--hub-sidebar-width/);
   });
 
+  // Owner review 2026-11-24: the Memory frame bled 32px under `.hub-content`'s clip on the right
+  // (the Forget button and the file pane were cut off) and 32px past the header on the left.
+  it('[memory layout] `.mem` has no bleed and follows its own width', () => {
+    const css = read('hub.css').replace(/\/\*[\s\S]*?\*\//g, '');
+    const mem = /(?:^|\n)\s*\.mem\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(mem).not.toMatch(/margin[^;]*-\d/);
+    expect(mem).not.toMatch(/margin[^;]*\*\s*-1/);
+    expect(mem).toMatch(/margin:\s*0;/);
+    expect(mem).toMatch(/min-width:\s*0/);
+    expect(mem).toMatch(/container:\s*mem\s*\/\s*inline-size/);
+    // The toolbar ends on the header's right edge: no side padding.
+    const head = /(?:^|\n)\s*\.mem-head\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(head).toMatch(/padding:\s*var\(--mog-space-2\)\s+0;/);
+    // The panes regroup under 760px (two columns) and 520px (one).
+    expect(css).toMatch(/@container mem \(width < 760px\)/);
+    expect(css).toMatch(/@container mem \(width < 520px\)/);
+  });
+
+  it('[memory layout] titles end in an ellipsis and paths never break inside a word', () => {
+    const css = read('hub.css').replace(/\/\*[\s\S]*?\*\//g, '');
+    // Every block of exactly this selector, joined (a selector can have more than one block).
+    const rule = (sel: string) =>
+      [
+        ...css.matchAll(
+          new RegExp(`(?:^|\\n)\\s*${sel.replace(/[.]/g, '\\.')}\\s*\\{([^}]*)\\}`, 'g'),
+        ),
+      ]
+        .map((m) => m[1])
+        .join('\n');
+    const text = rule('.mem-row-text');
+    for (const d of [
+      /min-width:\s*0/,
+      /overflow:\s*hidden/,
+      /text-overflow:\s*ellipsis/,
+      /white-space:\s*nowrap/,
+    ])
+      expect(text).toMatch(d);
+    for (const sel of [
+      '.mem-row-title',
+      '.mem-row',
+      '.mem-tree-name',
+      '.mem-list-pane',
+      '.mem-file',
+    ])
+      expect(rule(sel), sel).toMatch(/min-width:\s*0/);
+    const path = rule('.mem-path');
+    expect(path).toMatch(/overflow-wrap:\s*anywhere/);
+    expect(path).not.toMatch(/word-break:\s*break-all/);
+  });
+
+  it('[memory layout] the tree buttons beat the generic `.hub button` box', () => {
+    const css = read('hub.css').replace(/\/\*[\s\S]*?\*\//g, '');
+    // `.hub button:not([data-slot])` is (0,2,1): a bare `.mem-tree-row` (0,1,0) lost to it.
+    expect(css).toMatch(/\.hub button\.mem-tree-row\s*\{[^}]*border:\s*0/);
+    expect(css).toMatch(/\.hub button\.mem-tree-add\s*\{[^}]*min-height:\s*0[^}]*padding:\s*0/);
+  });
+
   it('[blocker 2, review #602 round 3] the sidebar is a fixed, full-window-height rail', () => {
     const tsx = read('HubSidebar.tsx');
     // `position: fixed` + `inset-y-0` (not `absolute`/`top-0`/`h-full` inside `.hub-body`, which

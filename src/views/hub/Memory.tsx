@@ -14,6 +14,9 @@
  * - Add (S3) and edit (S4): `MemoryForm`. A write is a `requestId` request; the answer is
  *   `hub:memory.result`. A secret keeps the text in the form. A saved add or edit shows Undo for 8 s:
  *   undo of an add sends `memory.delete`, undo of an edit sends `memory.edit` with the old fields.
+ * - A file read that gets no answer in {@link FILE_TIMEOUT_MS} shows an error with Try again. The
+ *   brain drops a failed read with no reply (`hub:memory.file` has no error shape), so without
+ *   this bound the pane said "Loading the file…" for ever. A late reply still shows the file.
  * The view reaches the brain only through a {@link MemorySource}; tests pass a local one.
  */
 import { listen } from '@tauri-apps/api/event';
@@ -30,6 +33,7 @@ import {
   UserIcon,
 } from 'lucide-react';
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -195,6 +199,9 @@ interface Toast {
 export const SECRET_MESSAGE = 'Not saved: this looks like a key or password.';
 /** A write that gets no answer from the brain ends after this time. */
 export const WRITE_TIMEOUT_MS = 15_000;
+/** A file read that gets no answer from the brain shows an error with Try again after this time. */
+export const FILE_TIMEOUT_MS = 10_000;
+export const FILE_FAILED_MESSAGE = 'Bottle could not open this file.';
 export const QUARANTINE_MESSAGE =
   'Genie and the agent will not see this, because it reads like an instruction.';
 const FAILED_MESSAGE = 'Bottle could not save this. Try again.';
@@ -275,6 +282,35 @@ function fileLabel(path: string | undefined, nowMs: number): string {
   return name.endsWith('.md') && /^\d{4}-/.test(name) ? dayLabel(name.slice(0, -3), nowMs) : name;
 }
 
+/**
+ * A memory path with a line-break chance after each `/` and before the `#` of an item. A narrow
+ * pane breaks the path between its parts (`/memories/sales/` `memory/2026-11-21.md`), never inside
+ * a folder name or a date; `overflow-wrap: anywhere` in hub.css is the fallback for one long part.
+ * The text stays whole, so a copy gives the exact path.
+ */
+function PathText({ path }: { path: string }) {
+  const parts: string[] = [];
+  let at = 0;
+  for (let i = 1; i < path.length; i += 1) {
+    const c = path[i];
+    if (c === '#' || path[i - 1] === '/') {
+      parts.push(path.slice(at, i));
+      at = i;
+    }
+  }
+  parts.push(path.slice(at));
+  return (
+    <>
+      {parts.map((p, i) => (
+        <Fragment key={i}>
+          {i > 0 && <wbr />}
+          {p}
+        </Fragment>
+      ))}
+    </>
+  );
+}
+
 const fileDomId = (path: string) => `mem-file-${path}`;
 const itemDomId = (id: string) => `mem-item-${id}`;
 
@@ -321,6 +357,11 @@ export function MemoryArea({
   const [toast, setToast] = useState<Toast | undefined>(undefined);
   /** The new item to select once the list has it. */
   const [want, setWant] = useState<string | undefined>(undefined);
+  /** The path whose read got no answer in {@link FILE_TIMEOUT_MS}. */
+  const [stalled, setStalled] = useState<string | undefined>(undefined);
+  /** Try again on a stalled read: a new value sends the read again. */
+  const [fileTry, setFileTry] = useState(0);
+  const viewRef = useRef<MemoryFileView | undefined>(undefined);
   const pendingRef = useRef<Pending | undefined>(undefined);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const requests = useRef(new Map<string, (r: MemoryResult) => void>());
@@ -333,6 +374,9 @@ export function MemoryArea({
   useEffect(() => {
     pendingRef.current = pending;
   }, [pending]);
+  useEffect(() => {
+    viewRef.current = view;
+  }, [view]);
 
   useEffect(
     () =>
@@ -453,11 +497,31 @@ export function MemoryArea({
   const itemFields = row && fields?.itemId === row.itemId ? fields : undefined;
   const releasedAt = row?.releasedAt ?? itemFields?.releasedAt;
 
-  // Ask for the rendered file or item each time the selection changes.
+  // Ask for the rendered file or item each time the selection or the list changes. A MOG file
+  // that has no answer in FILE_TIMEOUT_MS shows an error with Try again (`stalled`). USER.md
+  // (no MOG) has no reader yet, so it never waits: its pane says so instead.
   useEffect(() => {
     if (!active || !sel || !viewPath) return;
     source.send({ action: 'memory.file', mogId: sel.mogId, path: viewPath });
-  }, [active, sel, viewPath, source]);
+    if (!sel.mogId) return;
+    const timer = setTimeout(() => {
+      if (viewRef.current?.path !== viewPath) setStalled(viewPath);
+    }, FILE_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [active, sel, viewPath, source, fileTry]);
+
+  // The selected file stays in view when the tree scrolls (a short tree pane, the arrow keys).
+  const selPath = sel?.path;
+  useEffect(() => {
+    if (!active || !selPath) return;
+    const li = treeRef.current?.querySelector<HTMLElement>(`[data-file="${CSS.escape(selPath)}"]`);
+    li?.scrollIntoView?.({ block: 'nearest' });
+  }, [active, selPath]);
+
+  const retryFile = useCallback(() => {
+    setStalled(undefined);
+    setFileTry((n) => n + 1);
+  }, []);
 
   // Ask for the raw fields of the selected item (the editor and the Released mark).
   const rowId = row?.itemId;
@@ -853,7 +917,9 @@ export function MemoryArea({
                       data-color={c.id}
                       aria-hidden="true"
                     />
-                    <span className="mem-tree-folder-name">{f.mogName}</span>
+                    <span className="mem-tree-folder-name" title={f.mogName}>
+                      {f.mogName}
+                    </span>
                     <button
                       type="button"
                       tabIndex={-1}
@@ -917,6 +983,7 @@ export function MemoryArea({
                 id={itemDomId(r.itemId)}
                 role="option"
                 aria-selected={r.itemId === itemId}
+                title={r.title}
                 className="mem-row"
                 data-item={r.itemId}
                 data-status={r.status}
@@ -929,7 +996,7 @@ export function MemoryArea({
                   {r.pinned && (
                     <PinIcon className="mem-pin size-3" aria-label="Pinned" role="img" />
                   )}
-                  {r.title}
+                  <span className="mem-row-text">{r.title}</span>
                 </span>
                 <span className="mem-row-meta">
                   <Marks row={r} />
@@ -967,9 +1034,11 @@ export function MemoryArea({
                     {heading}
                   </h3>
                 )}
-                <code className="mem-path" data-memory-path>
-                  {viewPath}
-                </code>
+                {viewPath && (
+                  <code className="mem-path" data-memory-path>
+                    <PathText path={viewPath} />
+                  </code>
+                )}
                 {row && (
                   <p className="mem-doc-meta">
                     <span>{SOURCE_LABEL[row.source] ?? row.source}</span>
@@ -1014,8 +1083,28 @@ export function MemoryArea({
                     </dl>
                   </details>
                 </>
+              ) : sel?.path === USER_FILE_PATH ? (
+                <p className="mem-message mem-message--quiet mem-message--pane">
+                  Shared preferences come in a later version.
+                </p>
+              ) : stalled === viewPath ? (
+                <div className="mem-file-error" role="alert" data-memory-file-error>
+                  <p>{FILE_FAILED_MESSAGE}</p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={retryFile}
+                    data-action="retry-file"
+                  >
+                    Try again
+                  </Button>
+                </div>
               ) : (
-                <p className="mem-message mem-message--quiet" data-memory-file-loading>
+                <p
+                  className="mem-message mem-message--quiet mem-message--pane"
+                  data-memory-file-loading
+                >
                   Loading the file…
                 </p>
               )}
@@ -1043,27 +1132,29 @@ export function MemoryArea({
                     <ThumbsDownIcon aria-hidden="true" />
                     Not useful
                   </Button>
-                  <span className="mem-spacer" />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={!itemFields}
-                    onClick={openEdit}
-                    data-action="edit"
-                  >
-                    <PencilIcon aria-hidden="true" />
-                    {itemFields ? 'Edit' : 'Loading…'}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={startDelete}
-                    data-action="delete"
-                  >
-                    Delete
-                  </Button>
+                  {/* Edit and Delete wrap as one group, on the right, in a narrow pane. */}
+                  <span className="mem-doc-actions-end">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={!itemFields}
+                      onClick={openEdit}
+                      data-action="edit"
+                    >
+                      <PencilIcon aria-hidden="true" />
+                      {itemFields ? 'Edit' : 'Loading…'}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={startDelete}
+                      data-action="delete"
+                    >
+                      Delete
+                    </Button>
+                  </span>
                 </footer>
               )}
             </article>
