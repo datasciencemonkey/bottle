@@ -484,7 +484,6 @@ describe('the fallback to the direct home path (AC-2a.11)', () => {
     ['timeout', 'The agent timed out. Asked Sales only.', 'timed_out'],
     ['offline', 'Offline. Asked Sales only.', 'offline'],
     ['failed', 'The agent could not run. Asked Sales only.', 'failed'],
-    ['not_eligible', 'Genie Code is not available in Sales. Asked Sales only.', 'failed'],
   ] as const)(
     'a turn that ends `%s` before any call asks home once',
     async (outcome, notice, state) => {
@@ -660,5 +659,154 @@ describe('bad input and the log', () => {
       expect(l).not.toMatch(/churn|secret|fake question|Sales|Finance/i);
       expect(l).toMatch(/agent\.turn/);
     }
+  });
+});
+
+describe('review fixes (H1 to H3, M1, M2, L2, L6)', () => {
+  const submitTwo = async (r: ReturnType<typeof rig>) => {
+    r.script.submit.push(accepted(T1), accepted(T2, { position: 1, newSession: false }));
+    await r.client.submit(turn('First?'), 'ask');
+    await r.client.submit(turn('Second?'), 'ask');
+  };
+
+  it.each(['new_session', 'wipe', 'quit'] as const)(
+    '[H1] a %s ends live and waiting turns with session_ended: no direct call, no history row',
+    async (reason) => {
+      const r = rig();
+      await submitTwo(r);
+      r.client.onSessionEvent({ kind: 'ended', sessionId: 'd'.repeat(32), reason });
+      r.ev({ kind: 'ended', turnId: T1, outcome: 'session_ended', calls: 0 });
+      r.ev({ kind: 'ended', turnId: T2, outcome: 'session_ended', calls: 0 });
+      await r.settle();
+      expect(r.directs).toEqual([]);
+      expect(r.history).toEqual([]);
+    },
+  );
+
+  it.each(['lockdown', 'refusals', 'session_ended', 'signed_out', 'not_eligible'] as const)(
+    '[H1] [L4] a %s end before any call asks home never',
+    async (outcome) => {
+      const r = rig();
+      r.script.submit.push(accepted(T1));
+      await r.client.submit(turn(), 'ask');
+      r.ev({ kind: 'ended', turnId: T1, outcome, calls: 0 });
+      await r.settle();
+      expect(r.directs).toEqual([]);
+    },
+  );
+
+  it('[H2] an ask_others turn that ends before any call shows the notice and asks home no more', async () => {
+    const r = rig();
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn('Plain?'), 'ask_others', 't');
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'failed', calls: 0 });
+    await r.settle();
+    expect(r.directs).toEqual([]);
+    expect(r.client.panel().earlier[0]?.notice).toBe('The agent could not run.');
+  });
+
+  it('[H2] a refused ask_others submit shows only a note', async () => {
+    const r = rig();
+    r.script.submit.push({ error: 'genie_code_missing' });
+    await r.client.submit(turn('Plain?'), 'ask_others', 't');
+    expect(r.directs).toEqual([]);
+    expect(r.notes).toEqual(['Genie Code is not installed.']);
+  });
+
+  it('[H3] a call that ends after its turn ended updates its row only, never the state', async () => {
+    const r = rig();
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn(), 'ask');
+    r.script.details.set(`${T1}:${C1}`, detail(T1, C1, SALES, 'asking'));
+    r.ev(callEv(T1, C1, SALES, 'asking'));
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'offline', calls: 1 });
+    await r.settle();
+    r.script.details.set(`${T1}:${C1}`, detail(T1, C1, SALES, 'answered'));
+    r.ev(callEv(T1, C1, SALES, 'answered', 1));
+    r.ev({ kind: 'slow', turnId: T1 });
+    r.ev({ kind: 'started', turnId: T1 });
+    r.ev({ kind: 'thinking', turnId: T1 });
+    r.ev({ kind: 'queued', turnId: T1, position: 2 });
+    r.ev({ kind: 'refused', turnId: T1, code: 'budget_reached', used: 9 });
+    await r.settle();
+    const p = r.client.panel();
+    expect(p.live).toBeUndefined();
+    expect(p.earlier[0]).toMatchObject({ state: 'offline', used: 1 });
+    expect(p.earlier[0]?.calls[0]?.state).toBe('ready');
+    expect(p.earlier[0]?.parts).toHaveLength(1);
+  });
+
+  it('[M1] clear() forgets what a crash left on screen', async () => {
+    const r = rig();
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn(), 'ask');
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'failed', calls: 1 });
+    await r.settle();
+    r.client.onSessionEvent({ kind: 'ended', sessionId: 'd'.repeat(32), reason: 'crashed' });
+    expect(r.client.panel().earlier).toHaveLength(1);
+    r.client.clear();
+    expect(r.client.panel().earlier).toEqual([]);
+    expect(r.dropped).toEqual([T1]);
+  });
+
+  it('[M2] a turn that a Wipe cleared while it finished is not put back', async () => {
+    const r = rig();
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn(), 'ask');
+    r.script.details.set(`${T1}:${C1}`, detail(T1, C1, SALES, 'answered'));
+    r.script.result = {
+      answerKind: 'note',
+      answer: 'Note.',
+      sources: [{ workspaceId: 'ws-a', callId: C1, turnId: T1 }],
+    };
+    r.ev(callEv(T1, C1, SALES, 'answered'));
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 1 });
+    // The Wipe comes while the pulls run.
+    r.client.onSessionEvent({ kind: 'ended', sessionId: 'd'.repeat(32), reason: 'wipe' });
+    const shownBefore = r.shown.length;
+    const phasesBefore = r.phases.length;
+    await r.settle();
+    expect(r.client.panel().earlier).toEqual([]);
+    expect(r.followUp.isOpen()).toBe(false);
+    expect(r.phases.length).toBe(phasesBefore);
+    expect(r.shown.length).toBe(shownBefore);
+    expect(r.history).toEqual([]);
+  });
+
+  it('[L2] a failed pull is tried once more when the turn ends', async () => {
+    const r = rig();
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn(), 'ask');
+    r.ev(callEv(T1, C1, SALES, 'answered')); // no detail yet: the pull fails
+    await r.settle();
+    expect(r.history).toEqual([]);
+    r.script.details.set(`${T1}:${C1}`, detail(T1, C1, SALES, 'answered'));
+    r.script.result = { answerKind: 'hidden', sources: [] };
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 1 });
+    await r.settle();
+    expect(r.history).toHaveLength(1);
+    expect(r.client.panel().earlier[0]?.parts).toHaveLength(1);
+  });
+
+  it('[L6] a refused event with an unknown code is dropped', async () => {
+    const r = rig();
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn(), 'ask');
+    r.client.onTurnEvent({ kind: 'refused', turnId: T1, code: 'weird', used: 7 });
+    expect(r.client.panel().live?.used).toBe(0);
+    r.client.onTurnEvent({ kind: 'refused', turnId: T1, code: 'budget_reached', used: 7 });
+    expect(r.client.panel().live?.used).toBe(7);
+  });
+
+  it('[M1] New session with no session open clears what a crash left', async () => {
+    const r = rig();
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn(), 'ask');
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'failed', calls: 1 });
+    await r.settle();
+    r.client.onSessionEvent({ kind: 'ended', sessionId: 'd'.repeat(32), reason: 'crashed' });
+    r.script.session = sessionOf({ state: 'none', turns: 0 });
+    await r.client.newSession();
+    expect(r.client.panel().earlier).toEqual([]);
   });
 });

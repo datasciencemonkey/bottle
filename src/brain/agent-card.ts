@@ -45,6 +45,8 @@ export const CHIP = {
   resend: 'agent-resend:',
   open: 'agent-open:',
   settings: 'agent-settings:',
+  /** A waiting turn under the live one on the card: the label is its question. */
+  queued: 'agent-queued:',
 } as const;
 
 /** The id of an agent chip, split into its kind and its argument, or undefined. */
@@ -145,13 +147,13 @@ const LIVE: ReadonlySet<AgentTurnView['state']> = new Set(['planning', 'running'
 export const isOpenTurn = (t: Pick<AgentTurnView, 'state'>): boolean =>
   t.state === 'queued' || LIVE.has(t.state);
 
-/** The chips of the compact card. */
+/** The chips of the compact card (the turn that owns it). */
 export function cardChips(t: AgentTurnView): ChipView[] {
   const chips: ChipView[] = [];
-  if (t.state === 'queued') chips.push({ id: `${CHIP.stop}${t.turnId}`, label: REMOVE_LABEL });
-  else if (LIVE.has(t.state)) chips.push({ id: `${CHIP.stop}${t.turnId}`, label: STOP_LABEL });
   if (t.state === 'needs_you')
     chips.push({ id: `${CHIP.settings}${t.turnId}`, label: SETTINGS_LABEL });
+  else if (t.state === 'queued') chips.push({ id: `${CHIP.stop}${t.turnId}`, label: REMOVE_LABEL });
+  else if (LIVE.has(t.state)) chips.push({ id: `${CHIP.stop}${t.turnId}`, label: STOP_LABEL });
   chips.push({ id: `${CHIP.open}${t.turnId}`, label: OPEN_IN_AGENT_LABEL });
   return chips;
 }
@@ -168,27 +170,32 @@ export type FallbackWhy =
   | 'offline'
   | 'failed';
 
-export function fallbackNotice(why: FallbackWhy, ws: { agent: string; home: string }): string {
-  const asked = `Asked ${ws.home} only.`;
+export function fallbackNotice(
+  why: FallbackWhy,
+  ws: { agent: string; home: string },
+  /** False for an "Ask other workspaces too" turn: home was asked already, so the line says no more. */
+  askedHome = true,
+): string {
+  const asked = askedHome ? ` Asked ${ws.home} only.` : '';
   switch (why) {
     case 'not_installed':
-      return `Genie Code is not installed. ${asked}`;
+      return `Genie Code is not installed.${asked}`;
     case 'installing':
-      return `Genie Code is still installing. ${asked}`;
+      return `Genie Code is still installing.${asked}`;
     case 'unsupported_os':
-      return `Genie Code is not available on this Mac yet. ${asked}`;
+      return `Genie Code is not available on this Mac yet.${asked}`;
     case 'wrong_version':
-      return `Genie Code is not the version that Bottle needs. ${asked}`;
+      return `Genie Code is not the version that Bottle needs.${asked}`;
     case 'not_available':
-      return `Genie Code is not available in ${ws.agent}. ${asked}`;
+      return `Genie Code is not available in ${ws.agent}.${asked}`;
     case 'signed_out':
-      return `Your sign-in to ${ws.agent} expired. ${asked}`;
+      return `Your sign-in to ${ws.agent} expired.${asked}`;
     case 'timeout':
-      return `The agent timed out. ${asked}`;
+      return `The agent timed out.${asked}`;
     case 'offline':
-      return `Offline. ${asked}`;
+      return `Offline.${asked}`;
     case 'failed':
-      return `The agent could not run. ${asked}`;
+      return `The agent could not run.${asked}`;
   }
 }
 
@@ -244,13 +251,10 @@ export function whyOfOutcome(outcome: string): FallbackWhy | undefined {
       return 'timeout';
     case 'offline':
       return 'offline';
-    case 'not_eligible':
-      return 'not_available';
     case 'failed':
-    case 'lockdown':
-    case 'refusals':
-    case 'session_ended':
       return 'failed';
+    // A session end (New session, Wipe, quit, a setting change) and a lockdown or refusals stop
+    // are never a reason to ask home: nothing falls back (AC-2a.11 names timeout, offline, failed).
     default:
       return undefined;
   }
@@ -281,16 +285,33 @@ export interface AgentCardDeps {
 }
 
 export interface AgentCard {
-  /** Show this turn on the card of `mogId`. The newest turn of the MOG owns the card. */
+  /** A turn of `mogId` changed. The card shows the live turn, with the waiting turns under it. */
   show(mogId: MogId, turn: AgentTurnView): void;
-  /** The user closed the card, or a direct ask took it. */
+  /** A turn left (removed, or cleared by a new session). */
+  drop(mogId: MogId, turnId: string): void;
+  /** The user closed the card: the turn on it never opens it again. */
   close(mogId: MogId): void;
+  /** A direct ask or a note takes the card: no turn of this MOG opens it again. */
+  takeover(mogId: MogId): void;
   /** The turn on the card of `mogId`, if any. */
   shown(mogId: MogId): string | undefined;
 }
 
+/** The dismissed turns that the card remembers. */
+const DISMISSED_MAX = 64;
+
 export function createAgentCard(deps: AgentCardDeps): AgentCard {
-  const onCard = new Map<MogId, string>();
+  /** The turns of each MOG, in the order they came, with their last view. */
+  const turns = new Map<MogId, Map<string, AgentTurnView>>();
+  /** The turn that owns the card of each MOG now. */
+  const owner = new Map<MogId, string>();
+  /** The last turn that owned the card, so a finished answer stays until the user closes it. */
+  const lastOwner = new Map<MogId, string>();
+  const dismissed = new Set<string>();
+  const dismiss = (id: string) => {
+    dismissed.add(id);
+    if (dismissed.size > DISMISSED_MAX) dismissed.delete(dismissed.values().next().value as string);
+  };
   const run = (fn: () => void) => {
     const safe = () => {
       try {
@@ -302,31 +323,85 @@ export function createAgentCard(deps: AgentCardDeps): AgentCard {
     if (deps.arrivals) deps.arrivals.whenClear(safe);
     else safe();
   };
+  /** The live turn owns the card. With none, the answer that was on it, then the newest waiting turn. */
+  function pick(mogId: MogId): AgentTurnView | undefined {
+    const all = [...(turns.get(mogId)?.values() ?? [])].filter((t) => !dismissed.has(t.turnId));
+    const live = all.find((t) => isOpenTurn(t) && t.state !== 'queued');
+    if (live) return live;
+    const last = all.find((t) => t.turnId === lastOwner.get(mogId));
+    if (last && !isOpenTurn(last)) return last;
+    return [...all].reverse().find((t) => t.state === 'queued');
+  }
+  const anyOpen = () => [...owner.values()].length > 0;
+  function publish(mogId: MogId) {
+    const stack = deps.stackFor(mogId);
+    const t = pick(mogId);
+    const before = owner.get(mogId);
+    if (!t) {
+      owner.delete(mogId);
+      if (before !== undefined) {
+        stack.setAgentTurn(undefined);
+        stack.clearControls('agent');
+        deps.onCardOpen?.(anyOpen());
+      }
+      return;
+    }
+    owner.set(mogId, t.turnId);
+    lastOwner.set(mogId, t.turnId);
+    const waiting = [...(turns.get(mogId)?.values() ?? [])].filter(
+      (w) => w.state === 'queued' && w.turnId !== t.turnId && !dismissed.has(w.turnId),
+    );
+    stack.setAgentTurn(t);
+    stack.setControls('agent', [
+      ...cardChips(t),
+      ...waiting.map((w) => ({ id: `${CHIP.queued}${w.turnId}`, label: w.question })),
+    ]);
+    if (before !== t.turnId) {
+      try {
+        void Promise.resolve(deps.showCard(mogId)).catch(() => undefined);
+      } catch {
+        // The card stays hidden; the state still goes on it.
+      }
+    }
+    deps.onCardOpen?.(true);
+  }
+  const later = (mogId: MogId) => run(() => publish(mogId));
   return {
     show(mogId, turn) {
-      onCard.set(mogId, turn.turnId);
-      run(() => {
-        // An older update that waited behind a hold never covers a newer turn.
-        if (onCard.get(mogId) !== turn.turnId) return;
-        const stack = deps.stackFor(mogId);
-        stack.setAgentTurn(turn);
-        stack.setControls('agent', cardChips(turn));
-        try {
-          void Promise.resolve(deps.showCard(mogId)).catch(() => undefined);
-        } catch {
-          // The card stays hidden; the state still goes on it.
-        }
-        deps.onCardOpen?.(true);
-      });
+      if (dismissed.has(turn.turnId)) return;
+      const m = turns.get(mogId) ?? new Map<string, AgentTurnView>();
+      m.set(turn.turnId, turn);
+      turns.set(mogId, m);
+      later(mogId);
+    },
+    drop(mogId, turnId) {
+      turns.get(mogId)?.delete(turnId);
+      if (lastOwner.get(mogId) === turnId) lastOwner.delete(mogId);
+      later(mogId);
     },
     close(mogId) {
-      if (!onCard.delete(mogId)) return;
-      const stack = deps.stackFor(mogId);
-      stack.setAgentTurn(undefined);
-      stack.clearControls('agent');
-      deps.onCardOpen?.(onCard.size > 0);
+      const id = owner.get(mogId);
+      if (id === undefined) return;
+      dismiss(id);
+      // Taking a card away is no arrival: it does not wait for the gate.
+      try {
+        publish(mogId);
+      } catch {
+        deps.onFault?.();
+      }
     },
-    shown: (mogId) => onCard.get(mogId),
+    takeover(mogId) {
+      for (const id of turns.get(mogId)?.keys() ?? []) dismiss(id);
+      const had = owner.has(mogId);
+      lastOwner.delete(mogId);
+      if (!had) return;
+      try {
+        publish(mogId);
+      } catch {
+        deps.onFault?.();
+      }
+    },
+    shown: (mogId) => owner.get(mogId),
   };
 }
 
@@ -364,6 +439,8 @@ export function wireAgentChips(bus: BrainBus, deps: AgentChipDeps): () => void {
         return deps.openSettings();
       case 'more':
         return deps.askOthers(input.mogId, chip.arg, input.actionTicket);
+      case 'queued':
+        return;
       case 'resend':
         // UX slice 5 plugs in here: the kept question goes again with a host-minted ticket.
         return;

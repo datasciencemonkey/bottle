@@ -117,6 +117,10 @@ interface TurnRec {
   parts: Map<string, AgentPartView>;
   fetched: Set<string>;
   pending: Set<Promise<unknown>>;
+  /** The mode of the submit: an `ask_others` turn never asks home again (R-9). */
+  mode: AgentMode;
+  /** Terminal pulls that failed once: the turn retries them once when it ends. */
+  failedPulls: Set<string>;
   /** Set when the turn ended; the order of `earlier`. */
   endedSeq?: number;
   ended: boolean;
@@ -144,6 +148,12 @@ const CALL_STATES: readonly string[] = [
   'timeout',
   'signed_out',
   'stopped',
+];
+const REFUSED_CODES: readonly string[] = [
+  'workspace_not_available',
+  'budget_reached',
+  'cross_workspace_off',
+  'invalid_args',
 ];
 const OUTCOMES: readonly string[] = [
   'answered',
@@ -188,10 +198,11 @@ export function asTurnEvent(p: unknown): AgentTurnEvent | undefined {
         budget,
       };
     }
-    case 'refused':
-      return isCount(p['used'])
-        ? { kind: 'refused', turnId, code: p['code'] as never, used: p['used'] }
-        : undefined;
+    case 'refused': {
+      const code = p['code'];
+      if (!REFUSED_CODES.includes(code as string) || !isCount(p['used'])) return undefined;
+      return { kind: 'refused', turnId, code: code as never, used: p['used'] };
+    }
     case 'ended': {
       if (!OUTCOMES.includes(p['outcome'] as string) || !isCount(p['calls'])) return undefined;
       const tokens = p['tokens'];
@@ -247,6 +258,8 @@ export interface AgentClient {
   submit(turn: AgentTurn, mode: AgentMode, actionTicket?: string): Promise<void>;
   onTurnEvent(payload: unknown): void;
   onSessionEvent(payload: unknown): void;
+  /** Wipe: forget every finished turn, also those that a crash left on screen. */
+  clear(): void;
   /** Stop the live turn, or remove a waiting one. */
   stop(turnId: string): Promise<void>;
   /** The New session button. */
@@ -320,8 +333,11 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       d = await deps.api.callDetail(r.view.turnId, callId);
     } catch {
       fault();
+      if (terminal) r.failedPulls.add(callId);
       return;
     }
+    // A turn that a Wipe or a new session cleared writes no row and shows nothing.
+    if (recs.get(r.view.turnId) !== r) return;
     const row = r.view.calls.find((c) => c.callId === callId);
     if (row && d.question !== '' && row.question !== d.question) {
       r.view = {
@@ -336,6 +352,7 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
     r.fetched.add(callId);
     const ws = r.catalog.get(d.workspaceId);
     const host = await deps.hostOf(d.profile).catch(() => undefined);
+    if (recs.get(r.view.turnId) !== r) return;
     const part = partOf(d, {
       chip: deps.chipOf(d.profile),
       host,
@@ -439,8 +456,9 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       calls,
       used: e.used,
       budget: e.budget,
-      state: r.view.state === 'slow' ? 'slow' : 'running',
-    };
+      // A call that ends after its turn ended (offline, timeout) changes its row only.
+      ...(r.ended ? {} : { state: r.view.state === 'slow' ? 'slow' : 'running' }),
+    } as AgentTurnView;
     update(r);
     // The question comes with the first sight of the call; the reply when it ends.
     if (!known || isTerminalCall(e.state)) track(r, pullCall(r, e.callId, isTerminalCall(e.state)));
@@ -485,20 +503,33 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
           }
         : {}),
     };
-    // AC-2a.11: an agent that never asked a workspace falls back to one direct home call.
+    // AC-2a.11: an agent that never asked a workspace falls back to one direct home call. An
+    // `ask_others` turn already asked home (R-9): it shows the reason and asks nothing more.
     const why = e.calls === 0 ? whyOfOutcome(out) : undefined;
-    if (why && !r.fellBack) {
+    const id = r.view.turnId;
+    if (why && r.mode === 'ask_others') {
+      r.view = { ...r.view, notice: fallbackNotice(why, names, false) };
+      update(r);
+    } else if (why && !r.fellBack) {
       r.fellBack = true;
       const notice = fallbackNotice(why, names);
       r.view = { ...r.view, notice };
       update(r);
       await deps.direct(r.origin, notice).catch(fault);
+      if (recs.get(id) !== r) return;
     } else {
       update(r);
     }
     // The calls that ended just before the turn finish their pulls first.
     await Promise.allSettled([...r.pending]);
+    if (recs.get(id) !== r) return;
+    // A pull that failed once is tried once more.
+    const again = [...r.failedPulls];
+    r.failedPulls.clear();
+    for (const c of again) await pullCall(r, c, true);
+    if (recs.get(id) !== r) return;
     if (out === 'answered') await summarise(r);
+    if (recs.get(id) !== r) return;
     syncParts(r);
     update(r);
     // A fallback has its own phases: the direct call shows its own outcome.
@@ -556,6 +587,8 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
   }
 
   function apply(r: TurnRec, e: AgentTurnEvent) {
+    // After `ended` only a late call of that turn counts (its open calls keep polling).
+    if (r.ended && e.kind !== 'call') return;
     switch (e.kind) {
       case 'queued':
         r.view = { ...r.view, state: 'queued', position: e.position };
@@ -608,6 +641,11 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       } catch (e) {
         const code = codeOf(e);
         const why = whyOfRefusal(code);
+        if (why && mode === 'ask_others') {
+          // Home was asked already (R-9): say why the others were not, and ask nothing more.
+          deps.note?.(turn.mogId, fallbackNotice(why, deps.names(), false));
+          return;
+        }
         if (why) {
           await deps.direct(turn, fallbackNotice(why, deps.names()));
           return;
@@ -628,6 +666,8 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
         parts: new Map(),
         fetched: new Set(),
         pending: new Set(),
+        mode,
+        failedPulls: new Set(),
         ended: false,
         fellBack: false,
       };
@@ -671,13 +711,16 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       changed();
       void refresh();
     },
+    clear: clearAll,
     async stop(turnId) {
       if (!recs.has(turnId)) return;
       await deps.api.stop(turnId).catch(fault);
     },
     async newSession() {
       await deps.api.endSession().catch(fault);
-      void refresh();
+      await refresh();
+      // With no session open there is no `agent:session` event: the content goes now (M1).
+      if (session.state === 'none') clearAll();
     },
     refreshSession: refresh,
     panel() {
@@ -699,6 +742,13 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
     },
     turn: (turnId) => recs.get(turnId)?.view,
   };
+
+  /** Wipe, or New session with no session open: nothing stays, also what a crash left on screen. */
+  function clearAll() {
+    for (const [id, r] of recs) if (r.ended) forget(id, r);
+    stale = false;
+    changed();
+  }
 
   function forget(id: string, r: TurnRec) {
     recs.delete(id);

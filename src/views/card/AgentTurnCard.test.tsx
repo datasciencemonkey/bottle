@@ -180,7 +180,11 @@ describe('CardView with an agent turn', () => {
     await tauri.emit('card:update', {
       mogId: MOG,
       blurbs: [{ id: 'ask:u1', text: '"Compare churn?"', completed: true }],
-      chips: [...chips, { id: 'copy-x', label: 'Copy' }],
+      chips: [
+        ...chips,
+        { id: 'copy-x', label: 'Copy' },
+        { id: 'agent-more:op-old', label: 'Ask other workspaces too' },
+      ],
       agentTurn: view(),
     });
     expect(el.querySelector('[data-agent-card]')).not.toBeNull();

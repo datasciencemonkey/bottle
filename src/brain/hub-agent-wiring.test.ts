@@ -2,7 +2,12 @@
 import { HUB_SCOPE, asHubAgentView, type HubAgentView } from '../shared/hub-agent';
 import type { GenieCodeStatus } from '../shared/ipc';
 import { BrainBus } from './bus';
-import { OPEN_NOTICE, wireHubAgent, type HubAgentWiringDeps } from './hub-agent-wiring';
+import {
+  OPEN_NOTICE,
+  clearingAgentPanel,
+  wireHubAgent,
+  type HubAgentWiringDeps,
+} from './hub-agent-wiring';
 
 const T1 = 'a'.repeat(32);
 const READY: GenieCodeStatus = {
@@ -85,10 +90,66 @@ describe('hub Agent panel wiring', () => {
     expect(r.sent.at(-1)?.notice).toBeUndefined();
   });
 
-  it('sends nothing before the Genie Code status is known, and a failed send never rejects', async () => {
+  it('[L5] with no Genie Code status the panel still draws, with a placeholder', async () => {
     const r = rig(null);
     await r.wiring.push();
-    expect(r.sent).toEqual([]);
+    expect(r.sent).toHaveLength(1);
+    expect(asHubAgentView(r.sent[0])?.genieCode.binary).toBe('not_installed');
+  });
+
+  it('[L1] the open notice waits 10 s for a hub that is not listening, then expires', async () => {
+    let t = 1_000;
+    const bus = new BrainBus();
+    const sent: HubAgentView[] = [];
+    const base = rig();
+    const w = wireHubAgent(bus, {
+      client: {
+        panel: () => ({
+          session: { state: 'none', agentProfile: null, turns: 0, queued: 0, tokens: 0 },
+          waiting: [],
+          earlier: [],
+        }),
+        stop: async () => undefined,
+        newSession: async () => undefined,
+        refreshSession: async () => undefined,
+      },
+      genieCode: () => READY,
+      send: async (v) => void sent.push(v),
+      openSettings: () => undefined,
+      now: () => t,
+    });
+    await w.open();
+    // One push with no notice first, so a listening hub sees the notice as new each time.
+    expect(sent.map((v) => v.notice?.text)).toEqual([undefined, OPEN_NOTICE]);
+    t += 10_001;
+    bus.dispatch({
+      event: 'view:input',
+      payload: {
+        from: 'hub',
+        input: { mogId: HUB_SCOPE, kind: 'click', payload: { action: 'agent.ready' } },
+      },
+    });
+    await flush();
+    expect(sent.at(-1)?.notice).toBeUndefined();
+    expect(base.sent).toEqual([]);
+  });
+
+  it('[M1] a Wipe clears the panel content, and a failed Wipe does not', async () => {
+    const calls: string[] = [];
+    const ok = clearingAgentPanel(
+      { dialog: () => ({}) as never, confirm: async () => ({}) as never },
+      () => void calls.push('clear'),
+    );
+    await ok.confirm('everything', false);
+    const bad = clearingAgentPanel(
+      { dialog: () => ({}) as never, confirm: () => Promise.reject(new Error('no')) },
+      () => void calls.push('bad'),
+    );
+    await bad.confirm('everything', false).catch(() => undefined);
+    expect(calls).toEqual(['clear']);
+  });
+
+  it('a failed send never rejects', async () => {
     const bus = new BrainBus();
     const w = wireHubAgent(bus, {
       client: {

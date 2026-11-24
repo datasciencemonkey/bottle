@@ -57,7 +57,12 @@ import { createGenieDirectSend } from '../genie-direct';
 import { createAgentCard, wireAgentChips } from '../agent-card';
 import { createAgentClient, ipcAgentApi } from '../agent-run';
 import { createAskRouter, createFollowUpWindow } from '../agent-route';
-import { sendHubAgent, wireHubAgent, type HubAgentWiring } from '../hub-agent-wiring';
+import {
+  clearingAgentPanel,
+  sendHubAgent,
+  wireHubAgent,
+  type HubAgentWiring,
+} from '../hub-agent-wiring';
 import { MOG_PALETTE } from '../../shared/mog-palette';
 import { asLinkOpenClick, bareHost } from '../../shared/link-trust';
 import { createGenieFollowup } from '../genie-followup';
@@ -290,8 +295,13 @@ export function startBrain(): Brain {
     // #124 (MEM-33a, SEC-15c, U9): Settings -> Wipe. The hub dialog runs the R14 Wipe only on the
     // user's confirm click. TODO(#525): the default core sends `mem_wipe` once it is in the
     // contract; until then a Wipe fails safe and the dialog says that nothing changed.
+    // Slice 2a: every Wipe scope ends the agent session, so the panel content goes too.
+    const agentClear: { fn?: () => void } = {};
     wireWipe(bus, {
-      flow: clearingDictationWords(new WipeFlow({ genieOne: new GenieOneDeleteUtility() })),
+      flow: clearingAgentPanel(
+        clearingDictationWords(new WipeFlow({ genieOne: new GenieOneDeleteUtility() })),
+        () => agentClear.fn?.(),
+      ),
       settings: async () => retentionSettings(await readAdminPolicy()),
     });
     // #16 (W-02a, W-02c, W-02d): the hub Settings show the CLI path and version from T7.
@@ -434,6 +444,14 @@ export function startBrain(): Brain {
         home: home?.name ?? 'your home workspace',
       };
     };
+    /** A one-line pop-up (queue full, "Not sent."): it takes the card and waits for the hold gate. */
+    const showNote = (mogId: MogId, text: string) => {
+      agentCard.takeover(mogId);
+      arrivalGate.whenClear(() => {
+        stackFor(mogId).add({ id: `agent-note:${crypto.randomUUID()}`, text, completed: true });
+        void call('window_card_show', { mogId }).catch(() => undefined);
+      });
+    };
     const agentClient = createAgentClient({
       api: ipcAgentApi(),
       chipOf: (profile) => {
@@ -449,21 +467,24 @@ export function startBrain(): Brain {
       newId: () => crypto.randomUUID(),
       wallNow: () => Date.now(),
       ...(recordGenieExchange ? { recordCall: recordGenieExchange } : {}),
-      direct: (turn, notice) => directSend(turn, { notice }),
+      // The direct answer takes the card: the agent card must not cover it.
+      direct: (turn, notice) => {
+        agentCard.takeover(turn.mogId);
+        return directSend(turn, { notice });
+      },
       showTurn: (mogId, view) => agentCard.show(mogId, view),
-      dropTurn: (mogId, turnId) => {
-        if (agentCard.shown(mogId) === turnId) agentCard.close(mogId);
-      },
-      note: (mogId, text) => {
-        stackFor(mogId).add({ id: `agent-note:${crypto.randomUUID()}`, text, completed: true });
-        void call('window_card_show', { mogId }).catch(() => undefined);
-      },
+      dropTurn: (mogId, turnId) => agentCard.drop(mogId, turnId),
+      note: showNote,
       phase: (mogId, phase) => captureMood.ask(mogId, phase),
       followUp,
       onChange: () => void hubRef.current?.push(),
       log: agentLog,
     });
     const hubRef: { current?: HubAgentWiring } = {};
+    agentClear.fn = () => {
+      agentClient.clear();
+      void hubRef.current?.push();
+    };
     bus.on(EVENTS['agent.turn'].name, (p) => agentClient.onTurnEvent(p));
     bus.on(EVENTS['agent.session'].name, (p) => agentClient.onSessionEvent(p));
     const askRouter = createAskRouter({
@@ -475,10 +496,9 @@ export function startBrain(): Brain {
       followUp,
       agent: agentClient,
       direct: directSend,
-      closeAgentCard: (mogId) => agentCard.close(mogId),
+      closeAgentCard: (mogId) => agentCard.takeover(mogId),
       removeChip: (mogId, opId) => stackFor(mogId).clearControls(`more:${genieBlurbId(opId)}`),
-      note: (mogId, text) =>
-        stackFor(mogId).add({ id: `agent-note:${crypto.randomUUID()}`, text, completed: true }),
+      note: showNote,
       refreshGenieCode: () => void workspaces.refreshGenieCode(),
     });
     // The hub Agent panel: the live turn, the waiting turns and the earlier turns, in memory only.
@@ -583,7 +603,9 @@ export function startBrain(): Brain {
     // and asks Rust to open it (Rust checks it a third time).
     wireLinkOpen(bus, {
       resolve: async (input, requestId) => {
-        // Slice 2a: a link in an agent answer is for the workspace that answered. The click names a
+        // Slice 2a (L3): a link in an agent answer opens under the workspace whose host the URL
+        // names (not under the workspace that answered). It must be the host of a workspace that
+        // the user switched on; `trustedUrl` and Rust check it again. The click names a
         // host; it counts only if it is the host of a workspace that the user switched on (the
         // trust rule then checks the URL against that host again).
         const ofAgentAnswer = async (): Promise<{ profile: string; host: string } | undefined> => {

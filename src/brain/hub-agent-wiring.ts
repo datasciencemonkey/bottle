@@ -14,9 +14,32 @@ import { asAgentAction, HUB_AGENT_EVENT, HUB_SCOPE, type HubAgentView } from '..
 import type { GenieCodeStatus } from '../shared/ipc';
 import type { AgentClient } from './agent-run';
 import { onViewInput, type BrainBus } from './bus';
+import type { WipeDialogDeps } from './wipe-wiring';
 
 /** The line that goes with a card "Open in Agent": it also moves the hub to its Agent area. */
 export const OPEN_NOTICE = 'Showing your Genie Code session.';
+
+/** A Wipe of any scope ends the agent session (`wipe.rs`): the panel content goes with it. */
+export function clearingAgentPanel(
+  flow: WipeDialogDeps['flow'],
+  clear: () => void,
+): WipeDialogDeps['flow'] {
+  return {
+    dialog: (scope, alsoGenie) => flow.dialog(scope, alsoGenie),
+    async confirm(scope, alsoGenie) {
+      const done = await flow.confirm(scope, alsoGenie);
+      clear();
+      return done;
+    },
+  };
+}
+
+const PLACEHOLDER: GenieCodeStatus = {
+  binary: 'not_installed',
+  pinned: '',
+  agentProfile: null,
+  agentProfileState: 'no_home',
+};
 
 export interface HubAgentWiringDeps {
   client: Pick<AgentClient, 'panel' | 'stop' | 'newSession' | 'refreshSession'>;
@@ -26,7 +49,11 @@ export interface HubAgentWiringDeps {
   send(view: HubAgentView): Promise<unknown>;
   /** Show the hub on Settings → Workspace. */
   openSettings(): void;
+  now?(): number;
 }
+
+/** How long a hub that is not listening yet may still get the open notice. */
+export const OPEN_PENDING_MS = 10_000;
 
 export interface HubAgentWiring {
   /** Send the panel as it is now. Never rejects. */
@@ -36,17 +63,17 @@ export interface HubAgentWiring {
 }
 
 export function wireHubAgent(bus: BrainBus, deps: HubAgentWiringDeps): HubAgentWiring {
-  let pendingOpen = false;
-  const build = (notice?: HubAgentView['notice']): HubAgentView | undefined => {
-    const genieCode = deps.genieCode();
-    if (!genieCode) return undefined;
+  /** A hub that is not listening yet gets the open notice with its `agent.ready`, for 10 s. */
+  let pendingOpenUntil = 0;
+  const now = deps.now ?? Date.now;
+  const build = (notice?: HubAgentView['notice']): HubAgentView => {
+    // L5: with no status yet (a read that failed) the panel still draws, with a placeholder.
+    const genieCode = deps.genieCode() ?? PLACEHOLDER;
     return { ...deps.client.panel(), genieCode, ...(notice ? { notice } : {}) };
   };
   const push = async (notice?: HubAgentView['notice']): Promise<void> => {
-    const v = build(notice);
-    if (!v) return;
     try {
-      await deps.send(v);
+      await deps.send(build(notice));
     } catch {
       // No hub is open. The hub asks again with `agent.ready` when it opens.
     }
@@ -57,8 +84,9 @@ export function wireHubAgent(bus: BrainBus, deps: HubAgentWiringDeps): HubAgentW
     if (!a) return;
     switch (a.action) {
       case 'agent.ready': {
-        const notice = pendingOpen ? ({ kind: 'info', text: OPEN_NOTICE } as const) : undefined;
-        pendingOpen = false;
+        const notice =
+          now() < pendingOpenUntil ? ({ kind: 'info', text: OPEN_NOTICE } as const) : undefined;
+        pendingOpenUntil = 0;
         return void deps.client.refreshSession().then(() => push(notice));
       }
       case 'agent.stop':
@@ -73,8 +101,9 @@ export function wireHubAgent(bus: BrainBus, deps: HubAgentWiringDeps): HubAgentW
   return {
     push: () => push(),
     async open() {
-      // A hub that is not listening yet gets the notice with its `agent.ready`.
-      pendingOpen = true;
+      pendingOpenUntil = now() + OPEN_PENDING_MS;
+      // A push with no notice first makes the next notice new to a hub that listens already.
+      await push();
       await push({ kind: 'info', text: OPEN_NOTICE });
     },
   };

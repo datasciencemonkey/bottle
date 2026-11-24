@@ -24,6 +24,15 @@ import { Popup } from './Popup';
 import { useMemorySaved } from './memory-saved';
 import { NO_LINKS, SafeMarkdown } from './safe-markdown';
 
+/**
+ * The chips of the agent card: the turn's own (Stop or Remove, Open Settings, Open in Agent) and
+ * the waiting turns. An `agent-more:` chip of an older direct answer never shows here (M5).
+ */
+const isAgentCardChip = (c: { id: string }) =>
+  ['agent-stop:', 'agent-open:', 'agent-settings:', 'agent-queued:'].some((p) =>
+    c.id.startsWith(p),
+  );
+
 /** The MOG ID of the debug demo card (`DEMO_ID` in `src-tauri/src/lib.rs`). */
 const DEMO_ID = 'demo';
 
@@ -322,7 +331,7 @@ export function CardView({ mogId }: { mogId: MogId }) {
           key={agentTurn.turnId}
           mogId={mogId}
           turn={agentTurn}
-          chips={card?.chips.filter((c) => c.id.startsWith('agent-')) ?? []}
+          chips={card?.chips.filter(isAgentCardChip) ?? []}
           onSize={onSize}
           identity={identity}
         />

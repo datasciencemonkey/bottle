@@ -114,7 +114,7 @@ describe('chips', () => {
     });
   });
 
-  it('a finished turn keeps Open in Agent only; needs_you adds Open Settings', () => {
+  it('a finished turn keeps Open in Agent only; needs_you leads with Open Settings', () => {
     expect(cardChips(view({ state: 'done' }))).toEqual([
       { id: `agent-open:${T1}`, label: 'Open in Agent' },
     ]);
@@ -159,7 +159,11 @@ describe('notices', () => {
     expect(whyOfOutcome('answered')).toBeUndefined();
     expect(whyOfOutcome('stopped')).toBeUndefined();
     expect(whyOfOutcome('signed_out')).toBeUndefined();
-    expect(whyOfOutcome('lockdown')).toBe('failed');
+    expect(whyOfOutcome('lockdown')).toBeUndefined();
+    expect(whyOfOutcome('refusals')).toBeUndefined();
+    expect(whyOfOutcome('session_ended')).toBeUndefined();
+    expect(whyOfOutcome('not_eligible')).toBeUndefined();
+    expect(whyOfOutcome('failed')).toBe('failed');
   });
 });
 
@@ -240,14 +244,73 @@ describe('the card controller and the arrival gate (UX slice 1)', () => {
     expect(r.shown).toEqual([MOG]);
   });
 
-  it('an older update that waited behind a hold never covers a newer turn', () => {
+  it('[M3] the live turn owns the card; a waiting turn is a row under it, never the card', () => {
+    const r = rig();
+    const live = view({ turnId: 'a'.repeat(32), state: 'running' });
+    const q = view({ turnId: 'b'.repeat(32), state: 'queued', question: 'Later?' });
+    r.card.show(MOG, live);
+    r.card.show(MOG, q);
+    r.card.show(MOG, { ...live, used: 2 });
+    expect(r.card.shown(MOG)).toBe('a'.repeat(32));
+    expect(r.s.turns.every((t) => t?.turnId === 'a'.repeat(32))).toBe(true);
+    expect(r.s.controls.get('agent')).toContainEqual({
+      id: `agent-queued:${'b'.repeat(32)}`,
+      label: 'Later?',
+    });
+    // The live turn ends: its answer stays until the user closes it, then the waiting turn shows.
+    r.card.show(MOG, { ...live, state: 'done' });
+    expect(r.card.shown(MOG)).toBe('a'.repeat(32));
+    r.card.show(MOG, { ...q, state: 'planning' });
+    expect(r.card.shown(MOG)).toBe('b'.repeat(32));
+  });
+
+  it('[M3] with nothing live, the newest waiting turn shows as Queued', () => {
+    const r = rig();
+    r.card.show(MOG, view({ turnId: 'a'.repeat(32), state: 'queued' }));
+    r.card.show(MOG, view({ turnId: 'b'.repeat(32), state: 'queued' }));
+    expect(r.card.shown(MOG)).toBe('b'.repeat(32));
+  });
+
+  it('[M3] an update that waits behind a hold lands as one state', () => {
     const r = rig();
     r.gate.onPtt({ phase: 'down' });
     r.card.show(MOG, view({ turnId: 'a'.repeat(32), state: 'queued' }));
     r.card.show(MOG, view({ turnId: 'b'.repeat(32), state: 'planning' }));
     r.gate.onPtt({ phase: 'cancel' });
     r.tick(ARRIVAL_DELAY_MS);
-    expect(r.s.turns.map((t) => t?.turnId)).toEqual(['b'.repeat(32)]);
+    expect(r.s.turns.at(-1)?.turnId).toBe('b'.repeat(32));
+    expect(r.card.shown(MOG)).toBe('b'.repeat(32));
+  });
+
+  it('[M4] a turn that the user closed never shows the card again, and R-13 stays closed', () => {
+    const r = rig();
+    r.card.show(MOG, view());
+    r.card.close(MOG);
+    const shows = r.shown.length;
+    r.card.show(MOG, view({ used: 2 }));
+    r.card.show(MOG, view({ state: 'done' }));
+    expect(r.shown.length).toBe(shows);
+    expect(r.card.shown(MOG)).toBeUndefined();
+    expect(r.open.at(-1)).toBe(false);
+    // A new turn is not dismissed.
+    r.card.show(MOG, view({ turnId: 'c'.repeat(32) }));
+    expect(r.card.shown(MOG)).toBe('c'.repeat(32));
+  });
+
+  it('[H4] a takeover by a direct answer clears the card at once and keeps later events off it', () => {
+    const r = rig();
+    r.card.show(MOG, view());
+    r.card.takeover(MOG);
+    expect(r.s.log.at(-1)).toBe('turn:none');
+    r.card.show(MOG, view({ state: 'done' }));
+    expect(r.card.shown(MOG)).toBeUndefined();
+  });
+
+  it('a dropped turn leaves the card', () => {
+    const r = rig();
+    r.card.show(MOG, view({ state: 'queued' }));
+    r.card.drop(MOG, T1);
+    expect(r.card.shown(MOG)).toBeUndefined();
   });
 
   it('close clears the turn and the chips, and tells the follow-up window', () => {
