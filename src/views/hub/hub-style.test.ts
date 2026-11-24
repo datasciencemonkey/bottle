@@ -70,6 +70,31 @@ describe('hub and MOG chrome styling (#561)', () => {
     expect(css).toMatch(/@container mem \(width < 520px\)/);
   });
 
+  // Owner review 2026-11-24, sweep: no hub frame may bleed past the content column's right edge.
+  // `.hub-content` clips there (`overflow-y: auto`), so a bleed is cut off and scrolls sideways.
+  it('[overflow sweep] no hub rule has a negative right or full-width negative margin', () => {
+    const css = read('hub.css').replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(css).not.toMatch(/margin:\s*0\s+-\d/);
+    expect(css).not.toMatch(/margin-right:\s*(?:-\d|calc\([^;]*\*\s*-1\))/);
+    for (const sel of ['.conv', '.rec-area', '.mem']) {
+      const body = new RegExp(`(?:^|\\n)\\s*\\${sel}\\s*\\{([^}]*)\\}`).exec(css)?.[1] ?? '';
+      expect(body, sel).toMatch(/margin:\s*0;/);
+      expect(body, sel).toMatch(/min-width:\s*0/);
+      expect(body, sel).toMatch(/container:\s*\w+\s*\/\s*inline-size/);
+    }
+    // The table hack that kept a table inside the old bleed is gone with it.
+    expect(css).not.toMatch(/\.conv-answer:has\(\.md-table-block\)\s*\{[^}]*margin-right/);
+    // The list column gives way in a narrow frame, in Conversations and Recordings.
+    expect(css).toMatch(
+      /@container conv \(width < 640px\)\s*\{\s*\.conv \.conv-panes\s*\{\s*grid-template-columns:\s*clamp\(/,
+    );
+    expect(css).toMatch(
+      /@container rec \(width < 640px\)\s*\{\s*\.rec-area \.rec-panes\s*\{\s*grid-template-columns:\s*clamp\(/,
+    );
+    // The Record bar keeps its 32px start and no padding past the header's right edge.
+    expect(css).toMatch(/\.rec-bar\s*\{[^}]*padding:\s*14px 0 14px 32px/);
+  });
+
   it('[memory layout] titles end in an ellipsis and paths never break inside a word', () => {
     const css = read('hub.css').replace(/\/\*[\s\S]*?\*\//g, '');
     // Every block of exactly this selector, joined (a selector can have more than one block).

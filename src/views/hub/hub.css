@@ -782,9 +782,12 @@
     display: none;
   }
 
+  /* No right bleed (owner review 2026-11-24): a `-32px` right margin put the last 32px of the
+     frame under `.hub-content`'s clip, so the detail pane was cut off at the window edge and the
+     column scrolled sideways. The frame ends on the area header's right edge, as `.mem` does. */
   .conv {
     display: flex;
-    margin: 0 -32px;
+    margin: 0;
     /* Review of #602 round 3, blocker 1: this used to also subtract `--hub-sidebar-width`,
        which cancelled `.hub-content`'s whole padding-left (the base 32px *and* the pinned
        sidebar's own width), landing `.conv` back at `left: 0` — under the 220px/56px panel
@@ -794,6 +797,20 @@
        place as the gap before `.conv` starts. */
     margin-left: calc(var(--mog-space-6) * -1);
     border-top: 1px solid var(--mog-edge);
+    min-width: 0;
+    container: conv / inline-size;
+  }
+
+  /* A narrow frame (a small window or a pinned sidebar): the 280px list gives way to 180px, so
+     the thread keeps a reading width, and a long date in its meta line may wrap. */
+  @container conv (width < 640px) {
+    .conv .conv-panes {
+      grid-template-columns: clamp(180px, 40%, 280px) minmax(0, 1fr);
+    }
+
+    .conv .conv-meta-part {
+      white-space: normal;
+    }
   }
 
   .conv-panes {
@@ -1021,9 +1038,6 @@
      the full width of the pane, so a wide table is not squeezed to the reading measure. */
   .conv-answer:has(.md-table-block) {
     max-width: none;
-    /* `.conv` bleeds 32px past the content column (`margin: 0 -32px`), where the window clips it:
-       keep the table's right edge and its border inside the visible area. */
-    margin-right: 32px;
   }
 
   .hub .conv-open {
@@ -1556,15 +1570,27 @@
   }
 
   /* The Recordings area: a bar with the Record control, then the list and the detail. */
+  /* The left bleed only, like `.conv`: the right `-32px` sat under `.hub-content`'s clip (owner
+     review 2026-11-24). The bar keeps its 32px start; its end is the header's right edge. */
   .rec-area {
     display: flex;
     flex-direction: column;
-    margin: 0 -32px;
+    margin: 0;
+    margin-left: calc(var(--mog-space-6) * -1);
     border-top: 1px solid var(--mog-edge);
+    min-width: 0;
+    container: rec / inline-size;
+  }
+
+  /* The same narrow-frame rule as Conversations. */
+  @container rec (width < 640px) {
+    .rec-area .rec-panes {
+      grid-template-columns: clamp(180px, 40%, 280px) minmax(0, 1fr);
+    }
   }
 
   .rec-bar {
-    padding: 14px 32px;
+    padding: 14px 0 14px 32px;
     border-bottom: 1px solid rgb(255 255 255 / 6%);
   }
 

@@ -121,6 +121,35 @@ describe('Settings → Workspace', () => {
     );
   });
 
+  // Owner review 2026-11-24: shrink-0 controls beside a squeezed text column cut the host to
+  // "…", pushed "· status" to a second line, and ran past the card's edge in a narrow window.
+  it('[layout] the controls wrap as one group under the text; the host keeps its status line', async () => {
+    const { el } = await mount();
+    const row = li(el, 'old');
+    const line = row.querySelector('[data-workspace-row-line]') as HTMLElement;
+    expect(line.className).toContain('flex-wrap');
+    const text = line.querySelector('[data-workspace-text]') as HTMLElement;
+    // A floor for the text column: below it the controls go to their own line.
+    expect(text.className).toMatch(/flex-\[1_1_15rem\]/);
+    expect(text.className).toContain('min-w-0');
+    const controls = line.querySelector('[data-workspace-controls]') as HTMLElement;
+    expect(controls.className).not.toContain('shrink-0');
+    expect(controls.className).toContain('flex-wrap');
+    expect(controls.className).toContain('ml-auto');
+    expect(controls.className).toContain('max-w-full');
+    expect(controls.querySelector('[data-sign-in]')).not.toBeNull();
+    expect(controls.querySelector('[data-make-home]')).not.toBeNull();
+    // The host gives way with an ellipsis and has the whole host as a tooltip; the status never wraps.
+    const host = row.querySelector('[data-workspace-host]') as HTMLElement;
+    expect(host.className).toContain('truncate');
+    expect(host.className).toContain('min-w-0');
+    expect(host.getAttribute('title')).toBe('old.cloud.databricks.com');
+    const status = row.querySelector('[data-workspace-status]') as HTMLElement;
+    expect(status.className).toContain('whitespace-nowrap');
+    expect(status.className).toContain('shrink-0');
+    expect(status.parentElement?.className).not.toContain('flex-wrap');
+  });
+
   it('shows the four status texts', async () => {
     const { el } = await mount({
       ...LIST,

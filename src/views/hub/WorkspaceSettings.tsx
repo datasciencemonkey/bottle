@@ -258,9 +258,19 @@ function WorkspaceRow({ row, busy }: { row: HubWorkspaceRow; busy: boolean }) {
       aria-busy={busy}
       className="px-[var(--mog-space-4)] py-[var(--mog-space-3)]"
     >
-      <div className="flex items-center gap-[var(--mog-space-3)]">
+      {/* One line when it fits. Else the controls wrap, as one right-aligned group, to a line of
+          their own under the name and host (owner review 2026-11-24): shrink-0 controls beside
+          a squeezed text column cut the host to "…", pushed its status to a second line, and
+          ran past the card's edge in a narrow window. The text column never goes under 15rem. */}
+      <div
+        data-workspace-row-line
+        className="flex flex-wrap items-center gap-x-[var(--mog-space-3)] gap-y-[var(--mog-space-2)]"
+      >
         <ColorDot colorVariant={row.colorVariant} profile={row.profile} />
-        <div className="flex min-w-0 flex-1 flex-col gap-[var(--mog-space-1)]">
+        <div
+          data-workspace-text
+          className="flex min-w-0 flex-[1_1_15rem] flex-col gap-[var(--mog-space-1)]"
+        >
           {panel === 'rename' ? (
             <RenameForm row={row} onDone={() => closeTo(menuBtn)} />
           ) : (
@@ -284,18 +294,25 @@ function WorkspaceRow({ row, busy }: { row: HubWorkspaceRow; busy: boolean }) {
               )}
             </span>
           )}
-          <span className="flex min-w-0 flex-wrap items-center gap-x-[var(--mog-space-2)] text-[var(--mog-text-xs)] text-muted-foreground">
+          {/* The host gives way (an ellipsis, the whole host as a tooltip); "· status" never
+              wraps away from it. */}
+          <span className="flex min-w-0 items-center gap-x-[var(--mog-space-2)] text-[var(--mog-text-xs)] text-muted-foreground">
             {row.host !== '' && (
               <>
-                <span data-workspace-host className="truncate">
+                <span data-workspace-host className="min-w-0 truncate" title={row.host}>
                   {row.host}
                 </span>
-                <span aria-hidden="true">·</span>
+                <span aria-hidden="true" className="shrink-0">
+                  ·
+                </span>
               </>
             )}
             <span
               data-workspace-status={row.signIn}
-              className={row.signIn === 'expired' ? 'text-foreground' : undefined}
+              className={cn(
+                'shrink-0 whitespace-nowrap',
+                row.signIn === 'expired' && 'text-foreground',
+              )}
             >
               {STATUS_TEXT[row.signIn]}
             </span>
@@ -306,7 +323,10 @@ function WorkspaceRow({ row, busy }: { row: HubWorkspaceRow; busy: boolean }) {
             </span>
           )}
         </div>
-        <div className="flex shrink-0 items-center gap-[var(--mog-space-2)]">
+        <div
+          data-workspace-controls
+          className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-[var(--mog-space-2)]"
+        >
           {busy && (
             <span role="status" aria-label={`Working on ${row.name}`} data-busy-spinner>
               <Loader2Icon
@@ -345,7 +365,7 @@ function WorkspaceRow({ row, busy }: { row: HubWorkspaceRow; busy: boolean }) {
           )}
           <span
             data-availability
-            className="flex items-center gap-[var(--mog-space-2)] text-[var(--mog-text-xs)] text-muted-foreground"
+            className="flex items-center gap-[var(--mog-space-2)] whitespace-nowrap text-[var(--mog-text-xs)] text-muted-foreground"
           >
             {row.isHome ? (
               <span>Always on</span>
