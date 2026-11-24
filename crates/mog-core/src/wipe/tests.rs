@@ -1078,3 +1078,53 @@ fn mem_33a_the_stub_still_reports_not_implemented() {
         })
     );
 }
+
+/// ADR 0121: an agent turn row (`genie_agent`, no conversation id, a thread root in
+/// `split_group_id`) is a plain exchange row for Wipe. Age Wipe and Wipe everything delete it,
+/// and it gives no remote conversation to delete.
+#[test]
+fn adr_0121_wipe_removes_agent_turn_rows() {
+    let (_t, s) = seeded("0121-wipe");
+    let turn = request_id("f1");
+    let root = request_id("f3");
+    for (tag, at) in [("f1", NOW), ("f2", NOW - 100 * DAY)] {
+        let req = request_id(tag);
+        exec(
+            &s,
+            "mem.exchange.upsert",
+            json!({"mogId": MOG_A, "exchangeId": exchange_id(tag), "requestId": req,
+                   "backendKind": "genie_agent", "profileName": "test-profile",
+                   "workspaceHost": "example.cloud.databricks.com", "workspaceId": 1234,
+                   "homeWorkspace": true, "conversationId": null,
+                   "questionUser": "What drove Q3?", "questionSentSha256": "0".repeat(64),
+                   "status": "completed", "finalAnswerMd": "Note from your MOG",
+                   "splitGroupId": root, "askedAt": at, "rowHlc": 1,
+                   "deviceId": "test-device"}),
+        );
+    }
+    let turns = "SELECT count(*) FROM genie_exchange WHERE backend_kind = 'genie_agent'";
+    let before = count(&s, turns);
+    let c = clock();
+    let r = wipe(&s, WipeScope::OlderThan90Days);
+    assert!(r.local >= 1);
+    assert!(count(&s, turns) < before, "the old turn row goes");
+    assert_eq!(
+        count(
+            &s,
+            &format!(
+                "SELECT count(*) FROM genie_exchange WHERE request_id = '{}'",
+                request_id("f2")
+            )
+        ),
+        0
+    );
+    assert_eq!(
+        count(
+            &s,
+            &format!("SELECT count(*) FROM genie_exchange WHERE request_id = '{turn}'")
+        ),
+        1
+    );
+    service(&s, &c).wipe(WipeScope::Everything).expect("wipe");
+    assert_eq!(count(&s, turns), 0);
+}

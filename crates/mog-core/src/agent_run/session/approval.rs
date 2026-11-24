@@ -116,6 +116,22 @@ mod tests {
     }
 
     #[test]
+    fn a_hub_thread_ticket_redeems_as_ask_once_for_its_mog_only() {
+        let (a, now) = approvals();
+        a.tickets.mint_hub_thread("h1".into(), MOG, 1_000);
+        assert!(a.redeem(MOG, Some("h1")));
+        assert!(!a.redeem(MOG, Some("h1")));
+        a.tickets.mint_hub_thread("h2".into(), MOG, 1_000);
+        assert!(!a.redeem("ffffffffffffffffffffffffffffffff", Some("h2")));
+        a.tickets.mint_hub_thread("h3".into(), MOG, 1_000);
+        now.store(
+            1_000 + crate::action_ticket::TICKET_TTL_MS,
+            Ordering::SeqCst,
+        );
+        assert!(!a.redeem(MOG, Some("h3")));
+    }
+
+    #[test]
     fn an_ask_ticket_works_once_for_its_mog_only() {
         let (a, _) = approvals();
         a.tickets.mint_ask("t1".into(), MOG, 1_000);

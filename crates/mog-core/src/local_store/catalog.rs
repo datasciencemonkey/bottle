@@ -268,7 +268,8 @@ const MOG_UPSERT: Stmt = Stmt {
 // with no answer (a late `pending` event, a resume) never clears `final_answer_md`, the summary,
 // the key numbers or the deep link (MEM-26, U9), and never moves a finished status back to
 // `pending` or `uncertain`. No statement sets `expires_at`: an exchange has
-// no TTL. Only Forget (one exchange, a user action) and Wipe (R14, Core) delete one.
+// no TTL. Only Forget (one exchange, a user action), the hub Conversations delete
+// (`mem.exchange.delete`, ADR 0121, local only) and Wipe (R14, Core) delete one.
 
 const EXCHANGE_UPSERT: Stmt = Stmt {
     id: "mem.exchange.upsert",
@@ -355,12 +356,38 @@ const EXCHANGE_RECENT: Stmt = Stmt {
           workspace_host AS workspaceHost, question_user AS questionUser, \
           key_numbers AS keyNumbers, final_answer_md AS finalAnswerMd, \
           deep_link AS deepLink, conversation_id AS conversationId, \
+          backend_kind AS backendKind, split_group_id AS splitGroupId, \
           asked_at AS askedAt, completed_at AS completedAt \
           FROM genie_exchange \
           WHERE mog_id = :mogId AND deleted_at IS NULL \
           ORDER BY asked_at DESC, exchange_id DESC LIMIT :limit",
     params: &[MOG_ID, req("limit", LIMIT)],
     kind: Kind::Query,
+    access: Access::Brain,
+};
+
+/// Delete the named exchanges of one MOG, for the hub Conversations "Delete" (ADR 0121). It is a
+/// local delete only: it writes no `forget_log` row and calls no remote service. The brain sends
+/// 1 to 200 request ids; `Tags` checks the list is at most 200 strings of at most 36 characters.
+/// A value that is no request id matches no row. A citing `memory_item` keeps its row, because
+/// `source_exchange_id` is `SET NULL`. The correlated `EXISTS` repeats the `mog_id` filter, so
+/// the MEM-01 guard sees one in each `SELECT`.
+const EXCHANGE_DELETE: Stmt = Stmt {
+    id: "mem.exchange.delete",
+    sql: "DELETE FROM genie_exchange WHERE mog_id = :mogId AND EXISTS \
+          (SELECT 1 FROM json_each(:requestIds) j \
+          WHERE genie_exchange.mog_id = :mogId AND j.value = genie_exchange.request_id)",
+    params: &[
+        MOG_ID,
+        req(
+            "requestIds",
+            ParamType::Tags {
+                max_items: 200,
+                max_chars: 36,
+            },
+        ),
+    ],
+    kind: Kind::Write,
     access: Access::Brain,
 };
 
@@ -1335,6 +1362,7 @@ pub const STATEMENTS: &[Stmt] = &[
     EXCHANGE_RECENT,
     EXCHANGE_DEPENDENTS,
     EXCHANGE_BY_SESSION,
+    EXCHANGE_DELETE,
     ITEM_UPSERT,
     ITEM_GET,
     ITEM_LIST_ROWS,
